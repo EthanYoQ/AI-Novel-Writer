@@ -58,6 +58,26 @@ describe('single global generation cutover using synthetic roots only', () => {
     expect(fs.existsSync(appData)).toBe(false)
     expect(() => resolveGlobalDataRoots(roots.userData, 'relative', {}, home)).toThrow('GLOBAL_APP_DATA_PATH_REQUIRED')
   })
+  it('does not query the OS default when an explicit canonical root is configured', () => {
+    const roots = fixture()
+    const unavailableAppData = vi.fn(() => { throw new Error('Failed to get appData path') })
+    expect(resolveGlobalDataRoots(roots.userData, unavailableAppData, {
+      AI_NOVEL_LEGACY_SOURCE_HOME: roots.legacySource,
+      AI_NOVEL_APP_DATA_HOME: roots.canonicalTarget,
+    }).canonicalTarget).toBe(roots.canonicalTarget)
+    expect(unavailableAppData).not.toHaveBeenCalled()
+    expect(fs.existsSync(roots.canonicalTarget)).toBe(false)
+    expect(() => resolveGlobalDataRoots(roots.userData, unavailableAppData, {})).toThrow('Failed to get appData path')
+    expect(unavailableAppData).toHaveBeenCalledTimes(1)
+  })
+  it('queries Electron once and validates its lazy default without inventing a home fallback', () => {
+    const roots = fixture(), appData = path.join(path.dirname(roots.userData), 'electron-app-data')
+    const resolveAppData = vi.fn(() => appData)
+    expect(resolveGlobalDataRoots(roots.userData, resolveAppData, {}).canonicalTarget).toBe(path.join(appData, 'ai-novel-writer'))
+    expect(resolveAppData).toHaveBeenCalledTimes(1)
+    expect(() => resolveGlobalDataRoots(roots.userData, () => 'relative', {})).toThrow('GLOBAL_APP_DATA_PATH_REQUIRED')
+    expect(fs.existsSync(appData)).toBe(false)
+  })
   it('refuses a default canonical root that overlaps Electron userData before creating files', () => {
     const roots = fixture(), appData = path.dirname(roots.userData)
     const userData = path.join(appData, 'ai-novel-writer')

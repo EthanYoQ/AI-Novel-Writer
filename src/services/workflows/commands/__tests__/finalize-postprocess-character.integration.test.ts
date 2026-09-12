@@ -5,7 +5,8 @@ import { createHash } from 'node:crypto'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../../../../electron/database'
+import { closeProjectDatabase, getProjectDb } from '../../../../../electron/database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../../../test/helpers/canonical-project-fixture'
 import { CharacterRepository } from '../../../../../electron/repositories/character-repository'
 import { CharacterRosterRepository } from '../../../../../electron/repositories/character-roster-repository'
 import { PostProcessRepository } from '../../../../../electron/repositories/post-process-repository'

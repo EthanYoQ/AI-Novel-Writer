@@ -2,9 +2,17 @@ import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../database'
+import { closeLegacyNormalizationFixture as closeProjectDatabase, getLegacyNormalizationFixtureDb as getProjectDb, openLegacyNormalizationFixture } from '../../test/helpers/legacy-baseline-fixture'
+
+// Historical normalization regressions use an explicit fixture handle. Production
+// rejects these unqualified old roots; canonical activation is tested separately.
+vi.mock('../database', async () => {
+  const actual = await vi.importActual<typeof import('../database')>('../database')
+  const fixture = await import('../../test/helpers/legacy-baseline-fixture')
+  return { ...actual, getProjectDb: fixture.getLegacyNormalizationFixtureDb, getCurrentProjectPath: fixture.getLegacyNormalizationFixturePath }
+})
 import { ProjectCoreRepository } from '../repositories/project-core-repository'
 
 const require = createRequire(import.meta.url)
@@ -24,11 +32,11 @@ describe('project writing language persistence', () => {
     const coreOutline = 'The sign reads “夜航 Café” — déjà vu.'
     const premise = '夜航 Café stays open; Mara asks, “Why now?”'
 
-    initProjectDatabase(projectRoot)
+    openLegacyNormalizationFixture(projectRoot)
     ProjectCoreRepository.init(projectName, 'en-US')
     ProjectCoreRepository.update({ coreOutline, premise })
     closeProjectDatabase()
-    initProjectDatabase(projectRoot)
+    openLegacyNormalizationFixture(projectRoot)
 
     const reopened = ProjectCoreRepository.get()
     expect(reopened).toMatchObject({ projectName, writingLanguage: 'en-US', coreOutline, premise })
@@ -40,12 +48,12 @@ describe('project writing language persistence', () => {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-writing-language-new-'))
     roots.push(projectRoot)
 
-    initProjectDatabase(projectRoot)
+    openLegacyNormalizationFixture(projectRoot)
     ProjectCoreRepository.init('English novel', 'en-US')
     expect(ProjectCoreRepository.get()).toMatchObject({ writingLanguage: 'en-US' })
 
     closeProjectDatabase()
-    initProjectDatabase(projectRoot)
+    openLegacyNormalizationFixture(projectRoot)
     expect(ProjectCoreRepository.get()).toMatchObject({ writingLanguage: 'en-US' })
   })
 
@@ -85,12 +93,12 @@ describe('project writing language persistence', () => {
     `)
     legacyDb.close()
 
-    initProjectDatabase(projectRoot)
+    openLegacyNormalizationFixture(projectRoot)
     expect(ProjectCoreRepository.get()).toMatchObject({ writingLanguage: 'zh-CN' })
 
     ProjectCoreRepository.update({ writingLanguage: 'en-US' } as never)
     closeProjectDatabase()
-    initProjectDatabase(projectRoot)
+    openLegacyNormalizationFixture(projectRoot)
 
     expect(ProjectCoreRepository.get()).toMatchObject({ writingLanguage: 'en-US' })
     expect(getProjectDb()!.prepare(
@@ -99,7 +107,7 @@ describe('project writing language persistence', () => {
 
     ProjectCoreRepository.update({ writingLanguage: 'zh-CN' })
     closeProjectDatabase()
-    initProjectDatabase(projectRoot)
+    openLegacyNormalizationFixture(projectRoot)
     expect(ProjectCoreRepository.get()).toMatchObject({ writingLanguage: 'zh-CN' })
   })
 })

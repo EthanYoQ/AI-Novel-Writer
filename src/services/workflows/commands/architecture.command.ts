@@ -1,3 +1,4 @@
+import { CANONICAL_PROJECT_DIRECTORY } from '../../../shared/project-format'
 import {
   BaseWorkflowCommand,
   injectWritingSkillIntoSession,
@@ -922,7 +923,7 @@ async function loadPartialData(
   const result = await ipc.invokeWithProjectSession(
     projectSession,
     'fs:read-json',
-    `${projectPath}/.vela/partial_arch.json`,
+    `${projectPath}/${CANONICAL_PROJECT_DIRECTORY}/partial_arch.json`,
     projectPath,
   )
   if (result.success && result.data) return result.data as PartialArchData
@@ -939,7 +940,7 @@ export async function savePartialData(
   const result = await ipc.invokeWithProjectSession(
     projectSession,
     'fs:write-json',
-    `${projectPath}/.vela/partial_arch.json`,
+    `${projectPath}/${CANONICAL_PROJECT_DIRECTORY}/partial_arch.json`,
     data,
     projectPath,
   )
@@ -2364,7 +2365,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
         await ipc.invokeWithProjectSession(
           projectSession,
           'fs:write-file',
-          `${expectedProjectPath}/.vela/partial_arch.json`,
+          `${expectedProjectPath}/${CANONICAL_PROJECT_DIRECTORY}/partial_arch.json`,
           '{}',
           expectedProjectPath,
         ),
@@ -2399,7 +2400,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     const readResult = await ipc.invokeWithProjectSession(
       projectSession,
       'fs:read-json',
-      `${expectedProjectPath}/.vela/partial_arch.json`,
+      `${expectedProjectPath}/${CANONICAL_PROJECT_DIRECTORY}/partial_arch.json`,
       expectedProjectPath,
     )
     if (!readResult.success || !readResult.data) {

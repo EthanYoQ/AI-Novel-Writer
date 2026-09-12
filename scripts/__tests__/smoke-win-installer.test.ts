@@ -586,7 +586,10 @@ describe('Windows installer smoke contract', () => {
         modelFingerprint: 'upgrade-fixture/non-2048-768',
         distanceMetric: 'l2',
       }
-      await expect(getEmbeddingSpaces(projectRoot)).resolves.toMatchObject({
+      // The standalone legacy fixture still validates native queries before and
+      // after its explicit normalization. Ordinary canonical business APIs must
+      // refuse this unqualified old root instead of granting migration authority.
+      expect(JSON.parse(readFileSync(join(projectRoot, '.vela', 'embedding-spaces.json'), 'utf8'))).toMatchObject({
         activeGeneration: 1,
         spaces: [expect.objectContaining({
           ...identity,
@@ -595,12 +598,9 @@ describe('Windows installer smoke contract', () => {
           status: 'active',
         })],
       })
-      await expect(search(projectRoot, '升级夹具知识库', vector, 5, identity)).resolves.toEqual([
-        expect.objectContaining({
-          fileName: '升级知识库.txt',
-          text: '升级夹具知识库：轨道港航标失真记录必须保留并可检索。',
-        }),
-      ])
+      await expect(getEmbeddingSpaces(projectRoot)).rejects.toThrow('PROJECT_DATA_NOT_READY')
+      // This legacy search facade projects an unavailable store as an empty result.
+      await expect(search(projectRoot, '升级夹具知识库', vector, 5, identity)).resolves.toEqual([])
       closeConnection(projectRoot)
 
       applyExpectedDraftUnitMigration(projectRoot)

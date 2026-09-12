@@ -1,3 +1,4 @@
+import { CANONICAL_PROJECT_DIRECTORY } from '../../shared/project-format'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Sparkles, CheckCircle2, Circle, RefreshCw, FileText, BookOpen, AlertTriangle, FolderTree, Eye, Copy } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
@@ -130,7 +131,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       const partialResult = await ipc.invokeWithProjectSession(
         projectSession,
         'fs:read-json',
-        `${projectPath}/.vela/partial_arch.json`,
+        `${projectPath}/${CANONICAL_PROJECT_DIRECTORY}/partial_arch.json`,
         projectPath,
       )
       const partial = partialResult?.success === true

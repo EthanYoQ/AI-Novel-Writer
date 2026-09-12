@@ -1,3 +1,4 @@
+import { CANONICAL_PROJECT_DIRECTORY } from '../../shared/project-format'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import type { WritingLanguage } from '../../shared/writing-language'
 import {
@@ -28,7 +29,7 @@ export type FrozenWritingSkillSnapshot = Readonly<Partial<Record<WritingSkillSta
 const EMPTY_BINDINGS: WritingSkillBindingFile = { version: 1, bindings: {} }
 
 function bindingPath(projectPath: string): string {
-  return `${projectPath.replace(/[\\/]$/, '')}/.vela/writing-skills.json`
+  return `${projectPath.replace(/[\\/]$/, '')}/${CANONICAL_PROJECT_DIRECTORY}/writing-skills.json`
 }
 
 function parseBindings(value: unknown): WritingSkillBindingFile {

@@ -15,6 +15,7 @@ import {
 } from '../../src/shared/writing-language'
 import {
   closeProjectDatabase,
+  createProjectDatabase,
   getCurrentProjectPath,
   getProjectDb,
   initProjectDatabase,
@@ -30,6 +31,10 @@ import { sanitizeProjectName } from './project-path'
 import { projectStoragePreflightFailure } from '../services/project-storage-preflight'
 
 function projectRootSelectionFailure(error: unknown) {
+  if (error instanceof Error && ['PROJECT_MIGRATION_NOT_QUALIFIED', 'PROJECT_MIGRATION_DUAL_ROOT', 'PROJECT_MIGRATION_RECOVERY_REQUIRED'].includes(error.message)) {
+    return { errorCode: 'PROJECT_ROOT_REQUIRED' as const,
+      error: '项目格式转换尚未具备安全迁移条件，已保留原项目且未写入。请保留当前文件，等待受验证的迁移入口。' }
+  }
   if (
     typeof error === 'object'
     && error !== null
@@ -361,6 +366,7 @@ export function registerProjectController() {
         const projectDir = createdProject.rootPath
 
         fs.mkdirSync(path.join(projectDir, DIR_PROMPTS), { recursive: true })
+        createProjectDatabase(projectDir)
         initProjectDatabase(projectDir)
         ProjectCoreRepository.init(projectName, resolveWritingLanguage(config.writingLanguage))
         ProjectCoreRepository.update({
@@ -464,7 +470,7 @@ export function registerProjectController() {
       }
 
       try {
-        // Probe 是只读的：普通目录不能因一次打开被初始化成项目。
+        // Read-only probe; the compatibility adoption method now rejects unqualified legacy migration.
         const trustedProject = projectAccess.adoptLegacyProject(
           projectAccess.probeExistingProject(projectPath),
         )
@@ -568,15 +574,17 @@ export function registerProjectController() {
           rollbackError = restoreError
           databaseState = failedDatabaseState()
         }
+        const selectionFailure = projectStoragePreflightFailure(error) ?? projectRootSelectionFailure(error)
+        const primaryMessage = selectionFailure?.error ?? String(error)
         const errorMessage = rollbackError
-          ? `${String(error)}；回滚失败：${String(rollbackError)}`
-          : String(error)
+          ? `${primaryMessage}；回滚失败：${String(rollbackError)}`
+          : primaryMessage
         return {
           success: false,
           project: null,
           requestToken,
           ...databaseState,
-          ...(projectStoragePreflightFailure(error) ?? projectRootSelectionFailure(error) ?? {}),
+          ...(selectionFailure ?? {}),
           error: errorMessage,
         }
       }

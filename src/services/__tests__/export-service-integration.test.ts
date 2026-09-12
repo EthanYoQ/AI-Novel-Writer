@@ -21,11 +21,8 @@ vi.mock('electron', () => ({
 }))
 
 import { registerExternalFileGrantController } from '../../../electron/controllers/external-file-grant-controller'
-import {
-  closeProjectDatabase,
-  getProjectDb,
-  initProjectDatabase,
-} from '../../../electron/database'
+import { closeProjectDatabase, getProjectDb } from '../../../electron/database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import { FinalizationRepository } from '../../../electron/repositories/finalization-repository'
 import { ExternalFileGrantService } from '../../../electron/services/external-file-grant-service'
 import { nodeTestSecureFileSystem } from '../../../test/helpers/node-test-secure-file-system'

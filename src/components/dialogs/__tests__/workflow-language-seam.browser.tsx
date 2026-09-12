@@ -222,7 +222,7 @@ describe('workflow launch language seams', () => {
               case 'fs:check-exists':
                 return false
               case 'fs:list-dir':
-                if (args[0] === `${currentProject.path}/.vela/skills`) return []
+                if (args[0] === `${currentProject.path}/.ai-novel/skills`) return []
                 throw new Error(`Unexpected IPC channel: ${channel}`)
               case 'db:project-core-update':
                 persistedPremise = String((args[0] as { premise?: string }).premise ?? '')

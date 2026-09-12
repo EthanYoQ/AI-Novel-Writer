@@ -1,5 +1,6 @@
 import path from 'node:path'
 import type { AppFailure } from '../../src/shared/ipc-channels'
+import { CANONICAL_PROJECT_DIRECTORY, CANONICAL_PROJECT_DATABASE } from '../../src/shared/project-format'
 
 export const PROJECT_STORAGE_PATH_UNSUPPORTED = 'PROJECT_STORAGE_PATH_UNSUPPORTED' as const
 
@@ -7,11 +8,12 @@ const WINDOWS_NATIVE_PATH_LIMIT = 259
 const LANCE_DATA_FILE_PLACEHOLDER = `${'0'.repeat(56)}.lance`
 const PROJECT_CORE_STORAGE_RELATIVE_PATHS = [
   path.win32.join('.vela', 'vela.db-wal'),
+  path.win32.join(CANONICAL_PROJECT_DIRECTORY, `${CANONICAL_PROJECT_DATABASE}-wal`),
 ] as const
 const PROJECT_KNOWLEDGE_STORAGE_RELATIVE_PATHS = [
-  path.win32.join('.vela', `embedding-spaces.json.${'0'.repeat(36)}.tmp`),
+  path.win32.join(CANONICAL_PROJECT_DIRECTORY, `embedding-spaces.json.${'0'.repeat(36)}.tmp`),
   path.win32.join(
-    '.vela',
+    CANONICAL_PROJECT_DIRECTORY,
     'lancedb',
     'chunks__space_2147483647.lance',
     'data',
@@ -94,6 +96,15 @@ export function assertProjectStoragePathSupported(
 ): void {
   assertDerivedStoragePathsSupported(projectRoot, PROJECT_CORE_STORAGE_RELATIVE_PATHS, 'project', options)
   assertDerivedStoragePathsSupported(projectRoot, PROJECT_KNOWLEDGE_STORAGE_RELATIVE_PATHS, 'knowledge-base', options)
+}
+
+/** Temporary and isolated roots can exceed the final layout length on Windows. */
+export function assertProjectMigrationPathsSupported(projectRoot: string, options: ProjectStoragePreflightOptions = {}): void {
+  const migrationRoot = path.win32.join('.ai-novel-migration', `${'0'.repeat(36)}.vector-snapshot`)
+  assertDerivedStoragePathsSupported(projectRoot, [
+    path.win32.join('.ai-novel', 'project.db-wal'),
+    path.win32.join(migrationRoot, 'lancedb', 'chunks__space_2147483647.lance', 'data', LANCE_DATA_FILE_PLACEHOLDER),
+  ], 'project', options)
 }
 
 export function assertProjectCoreStoragePathSupported(

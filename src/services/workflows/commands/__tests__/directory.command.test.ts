@@ -180,7 +180,7 @@ function taskRange(task: GenerationTask): [number, number] {
 function stubIpcInvoke(handler: (channel: string, ...args: unknown[]) => unknown) {
   const invoke = vi.fn((channel: string, ...args: unknown[]) => Promise.resolve(
     channel === 'prompt:load-global' ? { templates: [], diagnostics: [] }
-      : channel === 'fs:check-exists' && String(args[0]).endsWith('/.vela/prompts') ? false
+      : channel === 'fs:check-exists' && String(args[0]).endsWith('/.ai-novel/prompts') ? false
         : channel === 'db:draft-authority-sequence' ? authoritySequenceResult
         : handler(channel, ...args),
   ))

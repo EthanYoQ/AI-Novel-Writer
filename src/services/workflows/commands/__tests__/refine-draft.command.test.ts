@@ -141,7 +141,7 @@ function stubIpc(
       invoke: (channel: string, ...args: unknown[]) => (
         channel === 'prompt:load-global'
           ? Promise.resolve({ templates: [], diagnostics: [] })
-          : channel === 'fs:check-exists' && String(args[0]).endsWith('/.vela/prompts')
+          : channel === 'fs:check-exists' && String(args[0]).endsWith('/.ai-novel/prompts')
             ? projectPromptDirectoryExists?.() ?? Promise.resolve(false)
             : invoke(channel, ...args)
       ),

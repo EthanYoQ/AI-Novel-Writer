@@ -12,7 +12,8 @@ vi.mock('electron', () => ({
   },
 }))
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
+import { closeProjectDatabase, getProjectDb } from '../../database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import { addChunks, closeConnection, listDocuments } from '../../vector-store'
 import { removeDocument, searchKnowledgeFTS } from '../../knowledge-base'
 import { DraftRepository } from '../../repositories/draft-repository'

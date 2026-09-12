@@ -157,7 +157,7 @@ function stubVelaIpc(invoke: (channel: string, ...args: unknown[]) => Promise<un
       invoke: (channel: string, ...args: unknown[]) => (
         channel === 'prompt:load-global'
           ? Promise.resolve({ templates: [], diagnostics: [] })
-          : channel === 'fs:check-exists' && String(args[0]).endsWith('/.vela/prompts')
+          : channel === 'fs:check-exists' && String(args[0]).endsWith('/.ai-novel/prompts')
             ? Promise.resolve(false)
             : invoke(channel, ...args)
       ),

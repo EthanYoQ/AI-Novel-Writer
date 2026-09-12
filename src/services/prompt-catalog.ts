@@ -1,3 +1,4 @@
+import { CANONICAL_PROJECT_DIRECTORY } from '../shared/project-format'
 import type { PromptLoadDiagnostic, ProjectSessionContext } from '../shared/ipc-channels'
 import { sameProjectSessionContext } from '../shared/project-session-context'
 import { ipc } from './ipc-client'
@@ -348,7 +349,7 @@ export const ipcPromptPersistence: PromptPersistence = {
   },
 
   async loadProject(projectSession) {
-    const dirPath = `${projectSession.projectPath}/.vela/prompts`
+    const dirPath = `${projectSession.projectPath}/${CANONICAL_PROJECT_DIRECTORY}/prompts`
     const exists = await ipc.invokeWithProjectSession(
       projectSession,
       'fs:check-exists',
@@ -405,7 +406,7 @@ export const ipcPromptPersistence: PromptPersistence = {
   },
 
   async saveProject(projectSession, template) {
-    const dirPath = `${projectSession.projectPath}/.vela/prompts`
+    const dirPath = `${projectSession.projectPath}/${CANONICAL_PROJECT_DIRECTORY}/prompts`
     const exists = await ipc.invokeWithProjectSession(
       projectSession,
       'fs:check-exists',
@@ -416,7 +417,7 @@ export const ipcPromptPersistence: PromptPersistence = {
       requireIpcSuccess(await ipc.invokeWithProjectSession(
         projectSession,
         'fs:mkdir',
-        `${projectSession.projectPath}/.vela`,
+        `${projectSession.projectPath}/${CANONICAL_PROJECT_DIRECTORY}`,
         projectSession.projectPath,
       ), '创建项目配置目录')
       requireIpcSuccess(await ipc.invokeWithProjectSession(
@@ -463,8 +464,8 @@ export const ipcPromptPersistence: PromptPersistence = {
 
   async deleteProject(projectSession, key, writingLanguage = 'zh-CN') {
     const language = resolveWritingLanguage(writingLanguage)
-    const filePaths = [`${projectSession.projectPath}/.vela/prompts/${key}.${language}.json`]
-    if (language === 'zh-CN') filePaths.push(`${projectSession.projectPath}/.vela/prompts/${key}.json`)
+    const filePaths = [`${projectSession.projectPath}/${CANONICAL_PROJECT_DIRECTORY}/prompts/${key}.${language}.json`]
+    if (language === 'zh-CN') filePaths.push(`${projectSession.projectPath}/${CANONICAL_PROJECT_DIRECTORY}/prompts/${key}.json`)
     for (const filePath of filePaths) {
       const exists = await ipc.invokeWithProjectSession(
         projectSession,

@@ -1,10 +1,10 @@
+import { openCanonicalProjectFixture } from '../../test/helpers/canonical-project-fixture'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { closeProjectDatabase, initProjectDatabase } from '../database'
+import { closeProjectDatabase } from '../database'
 import { chunkText } from '../embedding'
 import { importReferenceText } from '../knowledge-base'
 import { ImportRunRepository } from '../repositories/import-run-repository'
@@ -68,8 +68,8 @@ function authorizedReference(content: string, sourceIdentity: string) {
 
 beforeEach(() => {
   authorizedRunIndex = 0
-  projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-reference-receipt-'))
-  initProjectDatabase(projectPath)
+  projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-reference-receipt-'))
+  openCanonicalProjectFixture(projectPath)
 })
 
 afterEach(() => {

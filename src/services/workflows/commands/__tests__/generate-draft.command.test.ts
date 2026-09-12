@@ -367,7 +367,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     let recoveryCandidateSequence = 0
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
-      if (channel === 'fs:check-exists' && String(args[0]).endsWith('/.vela/prompts')) return false
+      if (channel === 'fs:check-exists' && String(args[0]).endsWith('/.ai-novel/prompts')) return false
       if (channel === 'db:project-core-get') {
         return {
           premise: options.premise ?? '故事前提',

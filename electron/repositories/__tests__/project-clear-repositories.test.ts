@@ -1,3 +1,4 @@
+import { prepareCanonicalStorageFixture } from '../../../test/helpers/canonical-project-fixture'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRequire } from 'node:module'
 import fs from 'node:fs'
@@ -13,7 +14,8 @@ import { ProjectClearRepository } from '../project-clear-repository'
 import { ProjectCoreRepository } from '../project-core-repository'
 import type { CharacterRosterCommitRequest } from '../../../src/shared/character-roster'
 
-vi.mock('../../database', () => ({
+vi.mock('../../database', async importOriginal => ({
+  ...await importOriginal<typeof import('../../database')>(),
   getCurrentProjectPath: vi.fn(),
   getProjectDb: vi.fn(),
 }))
@@ -224,7 +226,7 @@ describe('project clear repositories', () => {
   it('removes generated root chapter txt files when generated text is cleared', () => {
     const db = createMockDb()
     const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-clear-'))
-    fs.mkdirSync(path.join(projectPath, '.vela'), { recursive: true })
+    prepareCanonicalStorageFixture(projectPath)
     const generatedFile = path.join(projectPath, '第1章 夜航.txt')
     const generatedFileWithoutTitle = path.join(projectPath, '第2章.txt')
     const userFile = path.join(projectPath, '参考小说.txt')
@@ -240,7 +242,7 @@ describe('project clear repositories', () => {
       expect(fs.existsSync(generatedFile)).toBe(false)
       expect(fs.existsSync(generatedFileWithoutTitle)).toBe(false)
       expect(fs.existsSync(userFile)).toBe(true)
-      expect(fs.existsSync(path.join(projectPath, '.vela', 'trash'))).toBe(true)
+      expect(fs.existsSync(path.join(projectPath, '.ai-novel', 'trash'))).toBe(true)
       expect(result.physicalFilesDeleted).toBe(2)
     } finally {
       fs.rmSync(projectPath, { recursive: true, force: true })
@@ -254,7 +256,7 @@ describe('project clear repositories', () => {
       transaction: vi.fn(() => () => { throw new Error('db failed') }),
     }
     const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-clear-rollback-'))
-    fs.mkdirSync(path.join(projectPath, '.vela'), { recursive: true })
+    prepareCanonicalStorageFixture(projectPath)
     const generatedFile = path.join(projectPath, '第3章 回滚.txt')
     fs.writeFileSync(generatedFile, 'chapter three')
     vi.mocked(getProjectDb).mockReturnValue(db as never)

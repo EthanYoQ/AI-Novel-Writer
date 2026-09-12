@@ -81,8 +81,8 @@ describe('project custom prompt session ownership', () => {
     ['zh-CN', true],
     ['en-US', false],
   ] as const)('%s project save migrates the untagged file only for Chinese', async (writingLanguage, migratesLegacy) => {
-    const legacyPath = `${sessionA.projectPath}/.vela/prompts/first_chapter_draft.json`
-    const localizedPath = `${sessionA.projectPath}/.vela/prompts/first_chapter_draft.${writingLanguage}.json`
+    const legacyPath = `${sessionA.projectPath}/.ai-novel/prompts/first_chapter_draft.json`
+    const localizedPath = `${sessionA.projectPath}/.ai-novel/prompts/first_chapter_draft.${writingLanguage}.json`
     const files = new Map<string, string>([[legacyPath, '{invalid json']])
     vi.mocked(ipc.invoke).mockResolvedValue({ templates: [], diagnostics: [] } as never)
     vi.mocked(ipc.invokeWithProjectSession).mockImplementation((async (
@@ -92,7 +92,7 @@ describe('project custom prompt session ownership', () => {
     ) => {
       if (channel === 'fs:check-exists') {
         const target = String(args[0])
-        return target.endsWith('/.vela/prompts') || files.has(target)
+        return target.endsWith('/.ai-novel/prompts') || files.has(target)
       }
       if (channel === 'fs:list-dir') return [...files.keys()].map(filePath => ({
         name: filePath.slice(filePath.lastIndexOf('/') + 1),
@@ -134,7 +134,7 @@ describe('project custom prompt session ownership', () => {
       if (channel === 'fs:list-dir') {
         return [{
           name: 'first_chapter_draft.json',
-          path: `${session.projectPath}/.vela/prompts/first_chapter_draft.json`,
+          path: `${session.projectPath}/.ai-novel/prompts/first_chapter_draft.json`,
           isDir: false,
           size: 1,
           modifiedAt: '',
@@ -173,7 +173,7 @@ describe('project custom prompt session ownership', () => {
       if (channel === 'fs:list-dir') {
         return [{
           name: 'first_chapter_draft.json',
-          path: `${session.projectPath}/.vela/prompts/first_chapter_draft.json`,
+          path: `${session.projectPath}/.ai-novel/prompts/first_chapter_draft.json`,
           isDir: false,
           size: 1,
           modifiedAt: '',
@@ -211,14 +211,14 @@ describe('project custom prompt session ownership', () => {
         return [
           {
             name: 'first_chapter_draft.json',
-            path: `${session.projectPath}/.vela/prompts/first_chapter_draft.json`,
+            path: `${session.projectPath}/.ai-novel/prompts/first_chapter_draft.json`,
             isDir: false,
             size: 1,
             modifiedAt: '',
           },
           {
             name: 'next_chapter_draft.json',
-            path: `${session.projectPath}/.vela/prompts/next_chapter_draft.json`,
+            path: `${session.projectPath}/.ai-novel/prompts/next_chapter_draft.json`,
             isDir: false,
             size: 1,
             modifiedAt: '',
@@ -240,7 +240,7 @@ describe('project custom prompt session ownership', () => {
     expect(ipc.invokeWithProjectSession).toHaveBeenCalledWith(
       sessionA,
       'fs:check-exists',
-      `${sessionA.projectPath}/.vela/prompts`,
+      `${sessionA.projectPath}/.ai-novel/prompts`,
       sessionA.projectPath,
     )
     expect(vi.mocked(ipc.invokeWithProjectSession).mock.calls.every(([owner]) => (
@@ -259,7 +259,7 @@ describe('project custom prompt session ownership', () => {
       if (channel === 'fs:list-dir') {
         return [{
           name: 'first_chapter_draft.json',
-          path: `${session.projectPath}/.vela/prompts/first_chapter_draft.json`,
+          path: `${session.projectPath}/.ai-novel/prompts/first_chapter_draft.json`,
           isDir: false,
           size: 1,
           modifiedAt: '',

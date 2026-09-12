@@ -5,7 +5,8 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
+import { closeProjectDatabase, getProjectDb } from '../../database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import { ProjectCoreRepository } from '../project-core-repository'
 import { ImportRunRepository } from '../import-run-repository'
 import { BlueprintRepository, type BlueprintData } from '../blueprint-repository'
@@ -66,7 +67,7 @@ function moveRunToStyle(): void {
 
 function tamperOffline(sql: string): void {
   closeProjectDatabase()
-  const offline = new Database(path.join(root, '.vela', 'vela.db'))
+  const offline = new Database(path.join(root, '.ai-novel', 'project.db'))
   offline.exec(sql)
   offline.close()
   initProjectDatabase(root)

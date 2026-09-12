@@ -1,8 +1,12 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { backfillVectors, importText, searchKnowledge, searchKnowledgeFTS } from '../knowledge-base'
 import { closeConnection, getEmbeddingSpaces } from '../vector-store'
+import { createProjectDatabase } from '../database'
+import { activateCanonicalProjectData, deactivateProjectData } from './project-data-locator'
+import { CANONICAL_PROJECT_DIRECTORY, createCanonicalProjectManifest } from '../../src/shared/project-format'
 
 const RELEASE_SMOKE_ARGUMENT_PREFIX = '--ai-novel-release-smoke='
 
@@ -127,6 +131,13 @@ export async function runReleaseVectorSmoke(token: string): Promise<ReleaseVecto
   fs.mkdirSync(projectB)
   reportReleaseVectorSmokeStage('temporary-projects-created')
   try {
+    for (const project of [projectA, projectB]) {
+      const storage = path.join(project, CANONICAL_PROJECT_DIRECTORY)
+      fs.mkdirSync(storage)
+      fs.writeFileSync(path.join(storage, 'project.json'), JSON.stringify(createCanonicalProjectManifest({ projectId: randomUUID(), createdAt: new Date().toISOString() })), { flag: 'wx' })
+      createProjectDatabase(project)
+      activateCanonicalProjectData(project)
+    }
     const model768 = releaseSmokeModel(token, 768)
     reportReleaseVectorSmokeStage('import-a')
     const importedA = await importText(
@@ -202,6 +213,8 @@ export async function runReleaseVectorSmoke(token: string): Promise<ReleaseVecto
     reportReleaseVectorSmokeStage('cleanup')
     closeConnection(projectA)
     closeConnection(projectB)
+    deactivateProjectData(projectA)
+    deactivateProjectData(projectB)
     fs.rmSync(root, { recursive: true, force: true })
   }
 }

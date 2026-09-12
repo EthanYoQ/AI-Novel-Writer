@@ -107,9 +107,11 @@ function installIpc(): void {
           return { premise: currentPremise, worldbuilding: formalWorldbuilding }
         }
         if (channel === 'fs:read-json') {
+          expect(args[0]).toBe(`${projectPath}/.ai-novel/partial_arch.json`)
           return { success: true, data: structuredClone(partialFile) }
         }
         if (channel === 'fs:write-json') {
+          expect(args[0]).toBe(`${projectPath}/.ai-novel/partial_arch.json`)
           partialWriteCount += 1
           partialFile = structuredClone(args[1] as Record<string, unknown>)
           return { success: true }

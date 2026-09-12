@@ -4,6 +4,7 @@ import path from 'node:path'
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { ensureCharacterRosterSchema } from './character-roster-schema'
 import { clearBlueprintFactsWithinTransaction } from './blueprint-repository'
+import { getProjectDataRoot } from '../services/project-data-locator'
 
 export type ProjectClearScope = 'creativeFields' | 'blueprints' | 'generatedText'
 
@@ -37,8 +38,7 @@ function moveGeneratedFilesToTrash(projectPath: string): MovedFile[] {
     if (files.length === 0) return []
 
     const trashDir = path.join(
-        projectPath,
-        '.vela',
+        getProjectDataRoot(projectPath),
         'trash',
         `clear-${new Date().toISOString().replace(/[:.]/g, '-')}`,
     )

@@ -43,7 +43,7 @@ describe('project skill directory loading', () => {
     expect(mocks.invokeWithProjectSession).toHaveBeenCalledWith(
       expect.objectContaining({ projectId: 'project-1', leaseId: 'lease-1' }),
       'fs:check-exists',
-      'C:/novels/project-1/.vela/skills',
+      'C:/novels/project-1/.ai-novel/skills',
       currentProject.path,
     )
   })

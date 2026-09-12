@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { initProjectDatabase, getProjectDb, closeProjectDatabase } from '../../database'
+import { getProjectDb, closeProjectDatabase } from '../../database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import { BlueprintRepository } from '../../repositories/blueprint-repository'
 import storageContract from '../../../docs/research/novel-quality-modernization/s01-storage-contract.json'
 import {
-  MIGRATION_LANE, createMigrationRegistry, migrationRegistry,
+  MIGRATION_LANE, createMigrationRegistry,
   type MigrationImplementation, type SchemaWriter,
 } from '../registry'
 import { migrateSchema, probeSchema, verifySchema } from '../runner'
+
+// Deliberately empty fixture registry; production uses getDesktopMigrationRegistry().
+const migrationRegistry = createMigrationRegistry()
 
 class FixtureDatabase implements SchemaWriter {
   version = 0
@@ -65,7 +69,7 @@ describe('desktop single schema lane', () => {
       const db = getProjectDb()!
       // The existing legacy read entry also creates two known blueprint ledgers lazily.
       expect(BlueprintRepository.listPendingCharacterSyncOperations()).toEqual([])
-      expect(db.pragma('user_version', { simple: true })).toBe(0)
+      expect(db.pragma('user_version', { simple: true })).toBe(1)
       const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[]
       const fields = tables.flatMap(({ name }) => {
         const columns = db.pragma(`table_info(${name})`) as { name: string }[]
@@ -117,7 +121,7 @@ describe('desktop single schema lane', () => {
     expect(db.version).toBe(0)
   })
 
-  it('does not accept a bare version 0 in the empty production registry', () => {
+  it('does not accept a bare version 0 in the empty fixture registry', () => {
     const db = new FixtureDatabase()
     expect(() => probeSchema(db, migrationRegistry)).toThrow('UNRECOGNIZED_SCHEMA')
     expect(db.writes).toBe(0)

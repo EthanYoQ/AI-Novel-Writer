@@ -1,3 +1,4 @@
+import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import os from 'node:os'
@@ -16,7 +17,7 @@ const temporaryRoots: string[] = []
 function makeProjectRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-project-access-'))
   temporaryRoots.push(root)
-  fs.mkdirSync(path.join(root, '.vela'), { recursive: true })
+  fs.mkdirSync(path.dirname(path.join(root, PROJECT_MANIFEST_RELATIVE_PATH)), { recursive: true })
   fs.writeFileSync(
     path.join(root, PROJECT_MANIFEST_RELATIVE_PATH),
     JSON.stringify({
@@ -24,6 +25,8 @@ function makeProjectRoot(): string {
       kind: 'ai-novel-project',
       projectId: '11111111-1111-4111-8111-111111111111',
       createdAt: '2026-07-26T00:00:00.000Z',
+      storageFormat: 'ai-novel',
+      storageVersion: 1,
     }),
     'utf8',
   )
@@ -35,19 +38,7 @@ function makeLegacyProjectRoot(): string {
   temporaryRoots.push(root)
   fs.mkdirSync(path.join(root, '.vela'), { recursive: true })
   const database = new Database(path.join(root, '.vela', 'vela.db'))
-  database.exec(`
-    CREATE TABLE project_core (
-      id TEXT PRIMARY KEY,
-      project_name TEXT NOT NULL,
-      genre TEXT DEFAULT '',
-      total_chapters INTEGER DEFAULT 100,
-      character_states TEXT DEFAULT ''
-    );
-    CREATE TABLE blueprints (chapter_number INTEGER PRIMARY KEY);
-    CREATE TABLE characters (name TEXT PRIMARY KEY);
-    CREATE TABLE contents (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
-    CREATE TABLE drafts (id INTEGER PRIMARY KEY, chapter_number INTEGER NOT NULL, content_id INTEGER NOT NULL);
-  `)
+  initializeLegacyBaselineSchema(database)
   database.close()
   return root
 }
@@ -65,6 +56,17 @@ function makeUnrelatedSqliteRoot(): string {
 function inventory(root: string): string[] {
   return fs.readdirSync(root, { recursive: true, encoding: 'utf8' }).sort()
 }
+
+describe('canonical migration admission boundary', () => {
+  it('does not admit target-installed before switched even when its manifest is valid', () => {
+    const root = makeProjectRoot(), access = new ProjectAccessService()
+    const control = path.join(root, '.ai-novel-migration'); fs.mkdirSync(control)
+    fs.writeFileSync(path.join(control, 'journal.json'), JSON.stringify({ version: 1, projectId: '11111111-1111-4111-8111-111111111111', phase: 'target-installed' }))
+    const before = inventory(root)
+    expect(() => access.probeExistingProject(root)).toThrow('PROJECT_MIGRATION_RECOVERY_REQUIRED')
+    expect(inventory(root)).toEqual(before)
+  })
+})
 
 function trustedProject(access: ProjectAccessService, root: string): TrustedProject {
   const probed = access.probeExistingProject(root)
@@ -271,7 +273,7 @@ describe('ProjectAccessService project session seam', () => {
     expect(() => access.probeExistingProject(home)).toThrow('用户主目录')
   })
 
-  it('recognizes only a trusted legacy SQLite fingerprint without writing during probe, then adopts idempotently', () => {
+  it('recognizes only a trusted legacy SQLite fingerprint without writing during probe, then refuses unqualified adoption', () => {
     const root = makeLegacyProjectRoot()
     const access = new ProjectAccessService({
       homePath: path.join(os.tmpdir(), 'not-the-project-home'),
@@ -290,10 +292,9 @@ describe('ProjectAccessService project session seam', () => {
     if (legacy.kind !== 'legacy') throw new Error('Expected a legacy project probe')
     expect(inventory(root)).toEqual(beforeProbe)
     expect(fs.readFileSync(databasePath)).toEqual(beforeBytes)
-    const adopted = access.adoptLegacyProject(legacy)
-    expect(adopted).toMatchObject({ kind: 'manifest', rootPath: legacy.rootPath })
+    expect(() => access.adoptLegacyProject(legacy)).toThrow('PROJECT_MIGRATION_NOT_QUALIFIED')
     expect(fs.readFileSync(databasePath)).toEqual(beforeBytes)
-    expect(access.adoptLegacyProject(access.probeExistingProject(root))).toEqual(adopted)
+    expect(inventory(root)).toEqual(beforeProbe)
   })
 
   it('rejects an unrelated SQLite file that merely uses the legacy database filename', () => {
@@ -323,12 +324,12 @@ describe('ProjectAccessService project session seam', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-escaped-root-'))
     temporaryRoots.push(root)
     const externalProject = makeProjectRoot()
-    fs.symlinkSync(path.join(externalProject, '.vela'), path.join(root, '.vela'), 'junction')
+    fs.symlinkSync(path.join(externalProject, '.ai-novel'), path.join(root, '.ai-novel'), 'junction')
     const access = new ProjectAccessService({
       homePath: path.join(os.tmpdir(), 'not-the-project-home'),
     })
 
-    expect(() => access.probeExistingProject(root)).toThrow('项目清单越界')
+    expect(() => access.probeExistingProject(root)).toThrow('项目存储目录越界')
   })
 
   it('authorizes deletion only for the active leased project root', () => {
@@ -368,4 +369,26 @@ describe('ProjectAccessService project session seam', () => {
     expect(() => access.probeExistingProject(path.parse(home).root))
       .toThrow('磁盘根目录')
   })
+})
+
+it('legacy discovery with WAL and no SHM leaves the source inventory and bytes unchanged', () => {
+  const root = makeLegacyProjectRoot(), file = path.join(root, '.vela', 'vela.db')
+  const seed = path.join(root, 'seed.db'), db = new Database(seed)
+  try {
+    db.pragma('journal_mode = WAL'); db.pragma('wal_autocheckpoint = 0')
+    initializeLegacyBaselineSchema(db)
+    db.prepare('INSERT INTO contents(body) VALUES (?)').run('WAL-only author text')
+    fs.copyFileSync(seed, file); fs.copyFileSync(seed + '-wal', file + '-wal')
+  } finally { db.close(); fs.unlinkSync(seed) }
+  const snapshot = () => fs.readdirSync(path.dirname(file)).sort().map(name => [name, fs.readFileSync(path.join(path.dirname(file), name)).toString('base64')])
+  const before = snapshot()
+  expect(new ProjectAccessService().probeExistingProject(root)).toMatchObject({ kind: 'legacy' })
+  expect(snapshot()).toEqual(before)
+  expect(fs.existsSync(file + '-shm')).toBe(false)
+})
+it('refuses a switched journal supplied through an external directory junction', () => {
+  const root = makeProjectRoot(), external = makeProjectRoot()
+  fs.writeFileSync(path.join(external, 'journal.json'), JSON.stringify({ version: 1, phase: 'switched', projectId: '11111111-1111-4111-8111-111111111111' }))
+  fs.symlinkSync(external, path.join(root, '.ai-novel-migration'), 'junction')
+  expect(() => new ProjectAccessService().probeExistingProject(root)).toThrow('PROJECT_MIGRATION_RECOVERY_REQUIRED')
 })

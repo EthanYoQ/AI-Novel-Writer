@@ -9,6 +9,8 @@ import { Field, FixedSizeList as ArrowFixedSizeList, Float32, Int32, Utf8, Schem
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
+import { getProjectDataRoot } from './services/project-data-locator'
+import { CANONICAL_PROJECT_DIRECTORY } from '../src/shared/project-format'
 
 // ===== 类型定义 =====
 
@@ -116,24 +118,43 @@ const DEFAULT_DISTANCE_METRIC = 'l2'
 // ===== 连接池（按项目路径缓存） =====
 
 const connectionPool = new Map<string, lancedb.Connection>()
+// Exposing a Connection also permits independently owned Tables. Closing the pool
+// cannot prove those handles were released; migration requires a fresh process.
+const connectionExposure = new Set<string>()
+const migrationFences = new Set<string>()
+function migrationProjectKey(projectPath: string): string {
+  const resolved = path.resolve(projectPath)
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
+export function closeVectorStoreForMigration(projectPath: string): { closed: true; release: () => void } {
+  const key = migrationProjectKey(projectPath)
+  if (connectionExposure.has(key) || [...legacyMigrationInFlight.keys()].some(root => migrationProjectKey(root) === key)
+    || migrationFences.has(key)) throw new Error('VECTOR_MIGRATION_BUSY_OR_HANDLES_UNPROVEN')
+  migrationFences.add(key)
+  let released = false
+  return { closed: true, release: () => { if (!released) { released = true; migrationFences.delete(key) } } }
+}
 const legacyMigrationInFlight = new Map<string, Promise<{ success: boolean; migrated: number; error?: string }>>()
 const embeddingTableCreationOwners = new Set<string>()
 
 function databasePath(projectPath: string): string {
-  return path.join(projectPath, '.vela', 'lancedb')
+  return path.join(getProjectDataRoot(projectPath), 'lancedb')
 }
 
 function registryPath(projectPath: string): string {
-  return path.join(projectPath, '.vela', EMBEDDING_REGISTRY_FILE)
+  return path.join(getProjectDataRoot(projectPath), EMBEDDING_REGISTRY_FILE)
 }
 
 function legacyMigrationJournalPath(projectPath: string): string {
-  return path.join(projectPath, '.vela', LEGACY_MIGRATION_JOURNAL_FILE)
+  return path.join(getProjectDataRoot(projectPath), LEGACY_MIGRATION_JOURNAL_FILE)
 }
 
 /** 获取 LanceDB 连接（惰性创建） */
 export async function getConnection(projectPath: string): Promise<lancedb.Connection> {
+  if (migrationFences.has(migrationProjectKey(projectPath))) throw new Error('VECTOR_MIGRATION_FENCED')
   const dbPath = databasePath(projectPath)
+  connectionExposure.add(migrationProjectKey(projectPath))
   const cached = connectionPool.get(dbPath)
   if (cached) return cached
 
@@ -145,7 +166,8 @@ export async function getConnection(projectPath: string): Promise<lancedb.Connec
 
 /** 关闭指定项目的连接 */
 export function closeConnection(projectPath: string): void {
-  const dbPath = databasePath(projectPath)
+  // Closing a cached handle must still work after its DB session was revoked.
+  const dbPath = path.join(path.resolve(projectPath), CANONICAL_PROJECT_DIRECTORY, 'lancedb')
   const connection = connectionPool.get(dbPath)
   connectionPool.delete(dbPath)
   connection?.close()
@@ -1872,7 +1894,7 @@ async function rollbackLegacyMigrationDocuments(projectPath: string, journal: Le
 }
 
 async function migrateFromJSONOnce(projectPath: string): Promise<{ success: boolean; migrated: number; error?: string }> {
-  const jsonPath = path.join(projectPath, '.vela', 'vectors.json')
+  const jsonPath = path.join(getProjectDataRoot(projectPath), 'vectors.json')
   const journalPath = legacyMigrationJournalPath(projectPath)
   if (!fs.existsSync(jsonPath)) {
     if (fs.existsSync(journalPath)) {
@@ -1997,6 +2019,7 @@ async function migrateFromJSONOnce(projectPath: string): Promise<{ success: bool
  */
 export async function migrateFromJSON(projectPath: string): Promise<{ success: boolean; migrated: number; error?: string }> {
   const key = path.resolve(projectPath)
+  if (migrationFences.has(migrationProjectKey(projectPath))) throw new Error('VECTOR_MIGRATION_FENCED')
   const running = legacyMigrationInFlight.get(key)
   if (running) return running
   const migration = migrateFromJSONOnce(projectPath)

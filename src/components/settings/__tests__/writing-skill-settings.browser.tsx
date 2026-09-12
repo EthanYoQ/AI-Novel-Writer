@@ -106,7 +106,7 @@ describe('writing skill settings', () => {
     })
     await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith(
       'fs:write-file',
-      'C:/novels/skill-project/.vela/writing-skills.json',
+      'C:/novels/skill-project/.ai-novel/writing-skills.json',
       expect.stringContaining('builtin:natural-prose-refinement'),
       'C:/novels/skill-project',
       expect.objectContaining({ projectId: 'skill-project', leaseId: 'skill-project-lease' }),

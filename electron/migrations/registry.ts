@@ -88,5 +88,5 @@ export function createMigrationRegistry(
   })
 }
 
-/** No business DDL or production fingerprint is installed by S01. */
-export const migrationRegistry = createMigrationRegistry()
+// Installed business steps live exclusively in desktop-registry.ts. Tests can
+// construct an empty registry with the same factory without a second runtime lane.

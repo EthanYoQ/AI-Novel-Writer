@@ -4,11 +4,16 @@ import { STORAGE_ENVIRONMENT } from '../../src/shared/project-storage'
 
 export interface GlobalDataRoots { legacySource: string; canonicalTarget: string; userData: string }
 /** Resolving names never creates a directory or reads author configuration. */
-export function resolveGlobalDataRoots(userData: string, appData: string, env: Record<string, string | undefined> = process.env, home = os.homedir()): GlobalDataRoots {
-  if (!path.isAbsolute(appData)) throw new Error('GLOBAL_APP_DATA_PATH_REQUIRED')
+export function resolveGlobalDataRoots(userData: string, appData: string | (() => string), env: Record<string, string | undefined> = process.env, home = os.homedir()): GlobalDataRoots {
+  let canonicalTarget = env[STORAGE_ENVIRONMENT.canonicalTarget]?.trim()
+  if (!canonicalTarget) {
+    const resolvedAppData = typeof appData === 'function' ? appData() : appData
+    if (!path.isAbsolute(resolvedAppData)) throw new Error('GLOBAL_APP_DATA_PATH_REQUIRED')
+    canonicalTarget = path.join(resolvedAppData, 'ai-novel-writer')
+  }
   return {
     legacySource: path.resolve(env[STORAGE_ENVIRONMENT.legacySource]?.trim() || env[STORAGE_ENVIRONMENT.legacySourceCompatibility]?.trim() || path.join(home, '.vela')),
-    canonicalTarget: path.resolve(env[STORAGE_ENVIRONMENT.canonicalTarget]?.trim() || path.join(appData, 'ai-novel-writer')),
+    canonicalTarget: path.resolve(canonicalTarget),
     userData: path.resolve(userData),
   }
 }

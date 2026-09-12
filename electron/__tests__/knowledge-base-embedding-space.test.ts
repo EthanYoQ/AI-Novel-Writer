@@ -1,5 +1,5 @@
+import { prepareCanonicalStorageFixture } from '../../test/helpers/canonical-project-fixture'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -44,8 +44,9 @@ describe('知识库嵌入空间回填', () => {
   })
 
   it('通过主进程知识库生产缝逐字节保存并读回混合 UTF-8 参照文本', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-utf8-roundtrip-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-utf8-roundtrip-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const content = 'The sign reads “夜航 Café” — déjà vu. 招牌写着“回家”。'
     const fileName = 'Chapter 1 夜航 Café.txt'
     generateEmbeddingsMock.mockResolvedValue([[0.1, 0.2, 0.3]])
@@ -68,9 +69,25 @@ describe('知识库嵌入空间回填', () => {
     expect(Buffer.from(restored, 'utf8')).toEqual(Buffer.from(content, 'utf8'))
   })
 
-  it('imports planning material as FTS-only without calling an embedding provider', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-planning-local-'))
+  it.each(['vectors.json', 'vectors.json.migration-journal.json'])('rechecks a newly appeared %s after a successful knowledge-base operation', async name => {
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-late-barrier-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
+    const model = { baseUrl: 'https://example.invalid', apiKey: '', modelName: 'unused' }
+    await expect(importText('合成原文', 'before.txt', projectPath, 'openai', model, { mode: 'fts-only' })).resolves.toMatchObject({ success: true })
+    const before = await listDocuments(projectPath)
+    const pending = path.join(projectPath, '.ai-novel', name)
+    fs.writeFileSync(pending, '{}')
+    await expect(importText('不得新增', 'after.txt', projectPath, 'openai', model, { mode: 'fts-only' })).resolves.toMatchObject({ success: false, errorCode: 'LEGACY_VECTOR_MIGRATION_BLOCKED' })
+    expect(await listDocuments(projectPath)).toEqual(before)
+    expect(fs.readFileSync(pending, 'utf8')).toBe('{}')
+    expect(generateEmbeddingsMock).not.toHaveBeenCalled()
+  })
+
+  it('imports planning material as FTS-only without calling an embedding provider', async () => {
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-planning-local-'))
+    projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const content = '林晓是一名数据调查员。'
 
     await expect(importText(content, '人物设定.md', projectPath, 'openai', {
@@ -86,8 +103,9 @@ describe('知识库嵌入空间回填', () => {
   })
 
   it('keeps the first finalized chapter FTS-only when local planning material already awaits an explicit rebuild', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-planning-then-finalize-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-planning-then-finalize-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const model = {
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'configured-key',
@@ -124,8 +142,9 @@ describe('知识库嵌入空间回填', () => {
   })
 
   it('写作检索的 FTS 与语义路径都按 corpus kind 排除参照语料', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-writing-corpus-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-writing-corpus-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const vector = [0.1, 0.2, 0.3]
     const model = {
       baseUrl: 'https://embedding.example/v1',
@@ -196,8 +215,9 @@ describe('知识库嵌入空间回填', () => {
   })
 
   it('ranks every lexical match before topK so a late explicit planning hint is retained', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-planning-ranking-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-planning-ranking-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const model = {
       baseUrl: 'https://embedding.example/v1',
       apiKey: 'test-key-not-persisted',
@@ -242,8 +262,9 @@ describe('知识库嵌入空间回填', () => {
   })
 
   it('回填按模型实际 1536 维建空间并激活，不重建 chunks 全文表', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-backfill-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-backfill-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     expect(await addChunks(projectPath, 'fts-document', 'fts.txt', ['待回填的全文正文']))
       .toEqual({ success: true, chunkCount: 1 })
 
@@ -273,8 +294,9 @@ describe('知识库嵌入空间回填', () => {
   })
 
   it('同一模型指纹从满 768 维空间变为 1536 维时，探测实际响应并完整建立新代际', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-dimension-rebuild-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-dimension-rebuild-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const identity = {
       modelFingerprint: 'openai|https://embedding.example/v1|same-model',
       distanceMetric: 'l2',
@@ -318,8 +340,9 @@ describe('知识库嵌入空间回填', () => {
   })
 
   it('同一模型指纹变更维度的重建失败时，旧 active 代际、表和查询结果保持不变', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-dimension-rebuild-failure-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-dimension-rebuild-failure-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const identity = {
       modelFingerprint: 'openai|https://embedding.example/v1|same-model',
       distanceMetric: 'l2',
@@ -358,8 +381,9 @@ describe('知识库嵌入空间回填', () => {
   })
 
   it('回填响应包含非法数值时在 Arrow 前失败，全文表和 FTS 保持可用', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-backfill-invalid-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-backfill-invalid-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     expect(await addChunks(projectPath, 'fts-document', 'fts.txt', ['仍需保留的全文正文']))
       .toEqual({ success: true, chunkCount: 1 })
     const db = await getConnection(projectPath)
@@ -381,8 +405,9 @@ describe('知识库嵌入空间回填', () => {
   })
 
   it('导入遇到无效 Embedding 响应时返回可理解错误且不打开 LanceDB', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-import-invalid-response-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-import-invalid-response-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     generateEmbeddingsMock.mockRejectedValue(new EmbeddingResponseValidationError(
       'OpenAI',
       '第 1 个向量的第 2 个值不是有限数字（收到 null）',
@@ -397,12 +422,13 @@ describe('知识库嵌入空间回填', () => {
       error: 'OpenAI Embedding 响应无效：第 1 个向量的第 2 个值不是有限数字（收到 null）',
     })
 
-    expect(fs.existsSync(path.join(projectPath, '.vela', 'lancedb'))).toBe(false)
+    expect(fs.existsSync(path.join(projectPath, '.ai-novel', 'lancedb'))).toBe(false)
   })
 
   it('文件导入遇到无效 Embedding 响应时不打开 LanceDB', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-file-invalid-response-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-file-invalid-response-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const filePath = path.join(projectPath, 'invalid.txt')
     fs.writeFileSync(filePath, '不应写入数据库的文件正文', 'utf8')
     generateEmbeddingsMock.mockRejectedValue(new EmbeddingResponseValidationError(
@@ -419,12 +445,13 @@ describe('知识库嵌入空间回填', () => {
       error: expect.stringMatching(/OpenAI Embedding 响应无效.*第 2 个值.*null/),
     })
 
-    expect(fs.existsSync(path.join(projectPath, '.vela', 'lancedb'))).toBe(false)
+    expect(fs.existsSync(path.join(projectPath, '.ai-novel', 'lancedb'))).toBe(false)
   })
 
   it('importText 遇到 reindex_required 时不先删除同名旧文档', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-import-conflict-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-import-conflict-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const oldSpace = {
       modelFingerprint: 'openai|https://embedding.example/v1|model-a',
       distanceMetric: 'l2',
@@ -456,11 +483,12 @@ describe('知识库嵌入空间回填', () => {
   })
 
   it('嵌入空间元数据损坏时回填与缺失统计显式失败，不伪报 0 条成功', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-corrupt-registry-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-corrupt-registry-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     expect(await addChunks(projectPath, 'fts-document', 'fts.txt', ['无法静默吞掉的全文正文']))
       .toEqual({ success: true, chunkCount: 1 })
-    fs.writeFileSync(path.join(projectPath, '.vela', 'embedding-spaces.json'), '{invalid json', 'utf8')
+    fs.writeFileSync(path.join(projectPath, '.ai-novel', 'embedding-spaces.json'), '{invalid json', 'utf8')
     const space = { modelFingerprint: 'openai|https://embedding.example/v1|model-1536', distanceMetric: 'l2' }
 
     await expect(getChunksForBackfill(projectPath, 10, space)).rejects.toThrow(/嵌入空间元数据/)
@@ -477,10 +505,26 @@ describe('知识库嵌入空间回填', () => {
     expect(generateEmbeddingsMock).not.toHaveBeenCalled()
   })
 
-  it('旧 vectors.json 迁移失败时阻断导入、回填和检索，修正前不创建新空间', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-migration-barrier-'))
+  it('合法旧JSON也不由普通检索自动迁移，原字节和旧根保持不变', async () => {
+    const projectPath = fs.mkdtempSync(path.resolve('.runtime/.cache/ai-novel-kb-no-auto-migrate-'))
     projects.push(projectPath)
-    const velaPath = path.join(projectPath, '.vela')
+    prepareCanonicalStorageFixture(projectPath)
+    const source = path.join(projectPath, '.ai-novel', 'vectors.json')
+    const bytes = Buffer.from(JSON.stringify({ documents: [], entries: [] }) + '\n')
+    fs.writeFileSync(source, bytes)
+    await expect(searchKnowledgeFTS('铜钥匙', projectPath)).rejects.toThrow(/旧向量.*迁移|迁移.*未完成/)
+    expect(fs.readFileSync(source)).toEqual(bytes)
+    expect(fs.existsSync(`${source}.migrated`)).toBe(false)
+    expect(fs.existsSync(path.join(projectPath, '.ai-novel', 'lancedb'))).toBe(false)
+    expect(fs.existsSync(path.join(projectPath, '.vela'))).toBe(false)
+    expect(generateEmbeddingsMock).not.toHaveBeenCalled()
+  })
+
+  it('旧 vectors.json 迁移失败时阻断导入、回填和检索，修正前不创建新空间', async () => {
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-migration-barrier-'))
+    projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
+    const velaPath = path.join(projectPath, '.ai-novel')
     fs.mkdirSync(velaPath, { recursive: true })
     const vector = Array.from({ length: 768 }, (_, index) => index / 768)
     fs.writeFileSync(path.join(velaPath, 'vectors.json'), JSON.stringify({
@@ -513,8 +557,9 @@ describe('知识库嵌入空间回填', () => {
   })
 
   it('active 代际后 FTS-only 增量导入会先撤销 active，搜索仍能命中新文档并且全量重建后才重新激活', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-fts-increment-invalidate-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-fts-increment-invalidate-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const space = {
       modelFingerprint: 'openai|https://embedding.example/v1|model-768',
       distanceMetric: 'l2',
@@ -569,8 +614,9 @@ describe('知识库嵌入空间回填', () => {
   })
 
   it('FTS-only 增量后回填失败保持 no-active，旧向量表不被破坏且 FTS 仍包含新增文档', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-fts-increment-failure-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-fts-increment-failure-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const space = {
       modelFingerprint: 'openai|https://embedding.example/v1|model-768',
       distanceMetric: 'l2',
@@ -617,8 +663,9 @@ describe('知识库嵌入空间回填', () => {
   })
 
   it('无法先持久化 active 降级时拒绝写入 FTS-only canonical，旧代际保持完整', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-kb-fts-increment-registry-failure-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-kb-fts-increment-registry-failure-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const space = {
       modelFingerprint: 'openai|https://embedding.example/v1|model-768',
       distanceMetric: 'l2',
