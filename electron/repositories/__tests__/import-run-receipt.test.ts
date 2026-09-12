@@ -43,7 +43,7 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true })
 })
 
-function prepareStyleReceipt() {
+function prepareStyleReceipt(generationRunHandle?: import('../../../src/services/generation/generation-runtime').MainGenerationRunHandle) {
   const started = ImportRunRepository.startOrResume('receipt-run', 'renderer-a')
   moveRunToStyle()
   ImportRunRepository.prepareEffectReceipt({
@@ -52,7 +52,7 @@ function prepareStyleReceipt() {
     batchId: 'done',
     effectKey: 'writing-style',
     kind: 'project-writing-style',
-    payload: { writingStyle: 'Frozen generated style' },
+    payload: { writingStyle: 'Frozen generated style', ...(generationRunHandle ? { generationRunHandle } : {}) },
   }, started.execution)
   return started.execution
 }
@@ -64,6 +64,23 @@ function moveRunToStyle(): void {
     WHERE id = 'receipt-run'
   `).run()
 }
+
+it('keeps a generated style bound through durable preparation and guards only new effects', () => {
+  const handle = { projectId: 'project', epoch: 'epoch', rootActionId: 'root', runId: 'generation' }
+  const execution = prepareStyleReceipt(handle)
+  expect(() => ImportRunRepository.commitEffectReceipt('receipt-run', 'style', 'done', execution)).toThrow('GENERATION_GUARD_REQUIRED')
+  expect(() => ImportRunRepository.commitEffectReceipt('receipt-run', 'style', 'done', execution, Date.now(), () => { throw new Error('GENERATION_SOURCE_CHANGED') })).toThrow('GENERATION_SOURCE_CHANGED')
+  expect(ProjectCoreRepository.get()?.writingStyle).toBe('')
+  expect(ImportRunRepository.getEffectReceipt('receipt-run', 'style', 'done')?.state).toBe('prepared')
+  const committed = ImportRunRepository.commitEffectReceipt('receipt-run', 'style', 'done', execution, Date.now(), actual => {
+    expect(getProjectDb()!.inTransaction).toBe(true)
+    expect(actual).toEqual(handle)
+  })
+  expect(committed.receipt.state).toBe('committed')
+  ProjectCoreRepository.update({ writingStyle: '作者后来编辑的文风' })
+  ImportRunRepository.commitEffectReceipt('receipt-run', 'style', 'done', execution, Date.now(), () => { throw new Error('must not reapply') })
+  expect(ProjectCoreRepository.get()?.writingStyle).toBe('作者后来编辑的文风')
+})
 
 function tamperOffline(sql: string): void {
   closeProjectDatabase()

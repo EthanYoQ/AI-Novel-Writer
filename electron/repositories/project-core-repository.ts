@@ -87,6 +87,7 @@ export type ProjectCoreSynopsisExpected = Pick<ProjectCoreData,
 export interface ProjectCoreSynopsisCommitRequest {
     synopsis: string
     expected: ProjectCoreSynopsisExpected
+    generationRunHandle?: import('../../src/services/generation/generation-runtime').MainGenerationRunHandle
 }
 
 /** 数据库行 → 前端数据 */

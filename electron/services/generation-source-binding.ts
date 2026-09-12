@@ -8,6 +8,7 @@ import type { ContextSnapshot, SourceRef } from '../../src/shared/source-ref';
 import { inspectWritingSkillMarkdown, WRITING_SKILL_STAGES, type WritingSkillStage } from '../../src/shared/writing-skills';
 import type { WritingLanguage } from '../../src/shared/writing-language';
 import type { RunBinding } from '../repositories/generation-run-repository';
+import type { GenerationAuthorInput } from '../../src/shared/generation-owner-contract';
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>;
 export interface GenerationSourceBindingInput {
     projectId: string;
@@ -16,8 +17,10 @@ export interface GenerationSourceBindingInput {
     chapterNumber?: number;
     selectedDraftIds: readonly number[];
     selectedFinalizedDraftIds: readonly number[];
+    selectedBlueprintChapterNumbers?: readonly number[];
     promptKeys: readonly string[];
     skillStages: readonly WritingSkillStage[];
+    authorInputs?: readonly GenerationAuthorInput[];
     modelReceipt: SafeGenerationModelReceipt;
     policy: Readonly<Record<string, unknown>>;
     outputContract: string | Readonly<Record<string, unknown>>;
@@ -91,11 +94,33 @@ function readFile(root: string, relative: string, optional = false): Buffer | nu
     return fs.readFileSync(absolute);
 }
 function without(row: Record<string, unknown>, excluded: readonly string[]): Record<string, unknown> { return Object.fromEntries(Object.entries(row).filter(([key]) => !excluded.includes(key))); }
+function freezeAuthorInputs(value: unknown): GenerationAuthorInput[] {
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || value.length > 64) fail('GENERATION_AUTHOR_INPUT_INVALID');
+    let bytes = 0;
+    const ids = new Set<string>();
+    return value.map(item => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)
+            || Object.keys(item).some(key => key !== 'id' && key !== 'text')
+            || typeof item.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/.test(item.id)
+            || ids.has(item.id) || typeof item.text !== 'string')
+            fail('GENERATION_AUTHOR_INPUT_INVALID');
+        ids.add(item.id);
+        bytes += Buffer.byteLength(item.text, 'utf8');
+        if (bytes > 8 * 1024 * 1024) fail('GENERATION_AUTHOR_INPUT_TOO_LARGE');
+        return { id: item.id, text: item.text };
+    });
+}
 export function buildGenerationSourceBinding(deps: GenerationSourceBindingDependencies, input: GenerationSourceBindingInput): GenerationSourceBindingResult {
     if (!deps.db.open || !input.projectId || !input.epoch || !input.operation)
         fail('GENERATION_SOURCE_BINDING_INVALID');
     if (!Array.isArray(input.promptKeys) || input.promptKeys.length === 0)
         fail('GENERATION_PROMPT_SELECTION_REQUIRED');
+    const authorInputs = freezeAuthorInputs(input.authorInputs);
+    const blueprintChapters = input.selectedBlueprintChapterNumbers ?? [];
+    if (!Array.isArray(blueprintChapters) || blueprintChapters.length > 10_000 || new Set(blueprintChapters).size !== blueprintChapters.length
+        || blueprintChapters.some(chapter => !Number.isSafeInteger(chapter) || chapter < 1))
+        fail('GENERATION_BLUEPRINT_SELECTION_INVALID');
     if (input.chapterNumber !== undefined && (!Number.isSafeInteger(input.chapterNumber) || input.chapterNumber < 1))
         fail('GENERATION_CHAPTER_INVALID');
     for (const ids of [input.selectedDraftIds, input.selectedFinalizedDraftIds])
@@ -118,6 +143,8 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         materials.push({ ref, text });
         contextSources.push({ ref, slot, reason });
     };
+    for (const item of authorInputs)
+        add(`author-action:${item.id}`, 0, item.text, 'author-constraint', 'explicit immutable author input for this action; not a database or file identity');
     // SQLite supplies one read transaction; filesystem selections are read twice below.
     const facts = deps.db.transaction(() => {
         const raw = deps.db.prepare("SELECT * FROM project_core WHERE id='main'").get() as Record<string, unknown> | undefined;
@@ -133,6 +160,13 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
                 fail('GENERATION_CHAPTER_MISSING');
             brief = without(row, ['created_at', 'updated_at', 'notes', 'notes_updated_at']);
             add(`blueprint:${input.chapterNumber}`, 0, stable(brief), 'author-constraint', 'selected chapter brief');
+        }
+        for (const chapter of blueprintChapters) {
+            if (chapter === input.chapterNumber) continue;
+            const row = deps.db.prepare('SELECT * FROM blueprints WHERE chapter_number=?').get(chapter) as Record<string, unknown> | undefined;
+            // A requested empty slot is evidence too: later creation must invalidate this snapshot.
+            add(`blueprint:${chapter}`, 0, stable(row ? without(row, ['created_at', 'updated_at', 'notes', 'notes_updated_at']) : null),
+                'author-constraint', 'explicit planning range; current row or absent slot');
         }
         for (const [ids, finalized] of [[input.selectedDraftIds, false], [input.selectedFinalizedDraftIds, true]] as const)
             for (const id of ids) {
@@ -237,10 +271,10 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     }
     if (deps.db.pragma('data_version', { simple: true }) !== dataVersion || deps.db.prepare('SELECT total_changes()').pluck().get() !== changes)
         fail('GENERATION_SOURCE_CHANGED_DURING_SNAPSHOT');
-    const sourceManifest = { version: 1, operation: input.operation, ...(input.chapterNumber !== undefined ? { chapterNumber: input.chapterNumber } : {}), selectedDraftIds: [...input.selectedDraftIds], selectedFinalizedDraftIds: [...input.selectedFinalizedDraftIds], promptKeys: [...input.promptKeys], skillStages: [...input.skillStages], modelReceipt, policy: input.policy, outputContract: input.outputContract };
+    const sourceManifest = { version: 1, operation: input.operation, ...(input.chapterNumber !== undefined ? { chapterNumber: input.chapterNumber } : {}), selectedDraftIds: [...input.selectedDraftIds], selectedFinalizedDraftIds: [...input.selectedFinalizedDraftIds], ...(blueprintChapters.length ? { selectedBlueprintChapterNumbers: [...blueprintChapters] } : {}), promptKeys: [...input.promptKeys], skillStages: [...input.skillStages], ...(authorInputs.length ? { authorInputs } : {}), modelReceipt, policy: input.policy, outputContract: input.outputContract };
     const contextHash = hash(stable(contextSources.map(({ ref, ...entry }) => ({ ...entry, ref: without(ref as unknown as Record<string, unknown>, ['epoch']) }))));
     const context: ContextSnapshot = { projectId: input.projectId, epoch: input.epoch, id: `context:${contextHash}`, hash: contextHash, sources: contextSources, omissions: [], estimate: { methodVersion: 'utf8-bytes-v1', inputUnits: materials.reduce((sum, item) => sum + Buffer.byteLength(item.text), 0) } };
-    const fingerprint = { chapterBriefHash: hash(stable(facts.brief)), authorGuidanceHash: hash(stable(facts.core)), dependencyHash: hash(stable(materials.filter(item => /^(draft|finalized):/.test(item.ref.sourceId)).map(item => ({ ...item.ref, epoch: undefined })))), contextSnapshotHash: contextHash, templateHash: hash(stable(assets)), skillSnapshotHash: hash(stable(skills)), modelLeaseRevision: hash(stable(modelReceipt)), policyHash: hash(stable(input.policy)), outputContractHash: hash(stable(input.outputContract)) };
+    const fingerprint = { chapterBriefHash: hash(stable(facts.brief)), authorGuidanceHash: hash(stable(authorInputs.length ? [facts.core, authorInputs] : facts.core)), dependencyHash: hash(stable(materials.filter(item => /^(draft|finalized):/.test(item.ref.sourceId)).map(item => ({ ...item.ref, epoch: undefined })))), contextSnapshotHash: contextHash, templateHash: hash(stable(assets)), skillSnapshotHash: hash(stable(skills)), modelLeaseRevision: hash(stable(modelReceipt)), policyHash: hash(stable(input.policy)), outputContractHash: hash(stable(input.outputContract)) };
     return { binding: { projectId: input.projectId, epoch: input.epoch, fingerprint, contextSnapshotId: context.id, sourceRefs: materials.map(item => item.ref), sourceManifest }, context, materials };
 }
 export function rebuildGenerationSourceBinding(deps: GenerationSourceBindingDependencies, previous: RunBinding, nextEpoch: string, modelReceipt?: SafeGenerationModelReceipt, policy?: Readonly<Record<string, unknown>>, outputContract?: GenerationSourceBindingInput['outputContract']): GenerationSourceBindingResult {

@@ -37,6 +37,11 @@ const originalDefaultModelId = useLLMStore.getState().defaultModelId
 describe('planning material character extraction', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.stubGlobal('window', { aiNovelAPI: { invoke: vi.fn(async (channel: string) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    }) } })
     context.data = {}
     context.cancelled = false
     useProjectStore.setState({
@@ -52,6 +57,8 @@ describe('planning material character extraction', () => {
 
   it('keeps extracted candidates uncommitted until the confirmation command runs', async () => {
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
       if (channel === 'db:character-roster-read') {
         return { status: 'ready', revision: 4, entries: [] }
       }
@@ -117,7 +124,11 @@ describe('planning material character extraction', () => {
   })
 
   it('does not commit extracted candidates after confirmation is cancelled', async () => {
-    const invoke = vi.fn()
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
     vi.stubGlobal('window', {
       aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
     })
@@ -139,6 +150,7 @@ describe('planning material character extraction', () => {
       { fileName: '人物设定.md', text: '周岚是配角。' },
     ]).execute({ step: {}, context, callbacks })
     context.cancelled = true
+    invoke.mockClear()
 
     await expect(new CommitPlanningMaterialCharactersCommand().execute({ step: {}, context, callbacks }))
       .rejects.toThrow('工作流已取消')
@@ -159,6 +171,8 @@ describe('planning material character extraction', () => {
     'accepts %s and stages normalized cards without committing them',
     async (responseFormat) => {
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
       if (channel === 'db:character-roster-read') {
         return { status: 'ready', revision: 4, entries: [] }
       }
@@ -281,6 +295,8 @@ describe('planning material character extraction', () => {
 
   it('preserves complementary facts when one character appears in two material chunks', async () => {
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
       if (channel === 'db:character-roster-read') {
         return { status: 'ready', revision: 4, entries: [] }
       }
@@ -421,7 +437,11 @@ describe('planning material character extraction', () => {
     ['missing', { name: '林晓' }],
     ['unsupported', { name: '林晓', role: 'mentor' }],
   ] as const)('rejects a %s character role before committing the roster', async (_case, card) => {
-    const invoke = vi.fn()
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
     vi.stubGlobal('window', {
       aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
     })
@@ -562,8 +582,8 @@ describe('planning material character extraction', () => {
     expect(observedSourceIds.at(-1)).toBe('32:1')
   })
 
-  it('rejects the 17-call minimum boundary before sending any material', async () => {
-    const generateStream = vi.fn()
+  it('does not impose a private 16-call cap and preserves owner failure without candidates', async () => {
+    const generateStream = vi.fn(async (_messages, callbacks) => { callbacks.onError?.('owner refused'); return 'synthetic-request' })
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const materials = Array.from({ length: 33 }, (_, index) => ({
       fileName: `资料-${index + 1}.md`,
@@ -571,9 +591,9 @@ describe('planning material character extraction', () => {
     }))
 
     await expect(new ExtractPlanningMaterialCharactersCommand(materials)
-      .execute({ step: {}, context, callbacks })).rejects.toThrow('至少需要 17 次模型调用')
+      .execute({ step: {}, context, callbacks })).rejects.toThrow('角色卡提取失败')
 
-    expect(generateStream).not.toHaveBeenCalled()
+    expect(generateStream).toHaveBeenCalledOnce()
     expect(context.data).not.toHaveProperty('planningMaterialCharacterCandidates')
   })
 

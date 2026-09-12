@@ -251,7 +251,7 @@ describe('GenerateWorldBuildingCommand 截断恢复', () => {
     const result = await new GenerateWorldBuildingCommand(
       snapshot,
       createWorkflowRuntimeDependencies(),
-      { resumeWorldBuilding: true },
+      { resumeWorldBuilding: true, resumeHandle: { projectId: projectSession.projectId, epoch: projectSession.leaseId, rootActionId: '合成恢复根', runId: '合成恢复运行' } },
     ).execute({ step: {}, context: reopenedContext, callbacks: callbacks() })
 
     expect(resumeCalls).toHaveBeenCalledTimes(1)
@@ -325,7 +325,7 @@ describe('GenerateWorldBuildingCommand 截断恢复', () => {
     await expect(new GenerateWorldBuildingCommand(
       changedSnapshot,
       createWorkflowRuntimeDependencies(),
-      { resumeWorldBuilding: true },
+      { resumeWorldBuilding: true, resumeHandle: { projectId: projectSession.projectId, epoch: projectSession.leaseId, rootActionId: '合成恢复根', runId: '合成恢复运行' } },
     ).execute({ step: {}, context: { ...context(), data: {} }, callbacks: callbacks() }))
       .rejects.toThrow('旧候选不能续到新上下文')
 

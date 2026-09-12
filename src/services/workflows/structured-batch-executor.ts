@@ -92,6 +92,7 @@ export type StructuredBatchResult<TOutput> =
     }
   | {
       ok: false
+      validatedItems: readonly TOutput[]
       failure: StructuredBatchFailure
       receipt: StructuredBatchReceipt
     }
@@ -141,6 +142,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
       if (!Number.isInteger(input.limits.maxBatchItems) || input.limits.maxBatchItems < 1) {
         return {
           ok: false,
+          validatedItems: [],
           failure: {
             code: 'limit_exceeded',
             reason: 'invalid_limit',
@@ -153,6 +155,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
       if (!Number.isInteger(maxCompactSingleFallbacks) || maxCompactSingleFallbacks < 0) {
         return {
           ok: false,
+          validatedItems: [],
           failure: {
             code: 'limit_exceeded',
             reason: 'invalid_limit',
@@ -506,7 +509,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
         } else {
           failure = { code: 'generation_failed', reason: 'server_error', message: '结构化生成失败' }
         }
-        return { ok: false, failure, receipt }
+        return { ok: false, failure, receipt, validatedItems: [...validated] }
       }
     },
   }

@@ -31,6 +31,40 @@ function fixture() {
     return { root, db, input, deps, build: () => buildGenerationSourceBinding(deps, input) };
 }
 describe('main rebuilt generation sources', () => {
+    it('retains explicit empty guidance as distinct from a missing author input', () => {
+        const f = fixture(), absent = f.build();
+        f.input.authorInputs = [{ id: 'directory:pacing-guidance', text: '' }];
+        const empty = f.build();
+        expect(empty.binding.sourceManifest.authorInputs).toEqual([{ id: 'directory:pacing-guidance', text: '' }]);
+        expect(empty.binding.fingerprint.authorGuidanceHash).not.toBe(absent.binding.fingerprint.authorGuidanceHash);
+        expect(rebuildGenerationSourceBinding(f.deps, empty.binding, 'next').binding.sourceManifest.authorInputs).toEqual([{ id: 'directory:pacing-guidance', text: '' }]);
+    });
+    it('freezes explicit author input IDs, order and exact bytes independently of later renderer buffers', () => {
+        const f = fixture();
+        f.input.authorInputs = [{ id: 'material:1', text: ' 原始资料\r\n ' }, { id: 'guidance', text: '保留人物姓名。' }];
+        const original = f.build();
+        expect(original.materials[0]).toMatchObject({ text: ' 原始资料\r\n ', ref: { sourceId: 'author-action:material:1', contentHash: hash(' 原始资料\r\n ') } });
+        f.input.authorInputs[0].text = '作者改了输入';
+        const rebuilt = rebuildGenerationSourceBinding(f.deps, original.binding, 'next');
+        expect(compareGenerationSourceBindings(original.binding, rebuilt.binding)).toBe(true);
+        expect(f.build().binding.fingerprint.authorGuidanceHash).not.toBe(original.binding.fingerprint.authorGuidanceHash);
+        f.input.authorInputs = [{ id: 'renamed', text: ' 原始资料\r\n ' }, { id: 'guidance', text: '保留人物姓名。' }];
+        expect(f.build().context.hash).not.toBe(original.context.hash);
+        f.input.authorInputs = [{ id: 'guidance', text: '保留人物姓名。' }, { id: 'material:1', text: ' 原始资料\r\n ' }];
+        expect(f.build().context.hash).not.toBe(original.context.hash);
+    });
+    it.each([null, [{ id: '', text: '正文' }], [{ id: 'a', text: '正文' }, { id: 'a', text: '正文' }], [{ id: 'a', text: 42 }], [{ id: 'a', text: '正文', artifactId: 'recovery' }]])('rejects malformed author action input %j', value => {
+        const f = fixture(); f.input.authorInputs = value as unknown as GenerationSourceBindingInput['authorInputs'];
+        expect(() => f.build()).toThrow('GENERATION_AUTHOR_INPUT_INVALID');
+    });
+    it('binds explicitly selected blueprint rows and empty planning slots', () => {
+        const f = fixture(); f.input.selectedBlueprintChapterNumbers = [2, 3];
+        const original = f.build();
+        expect(original.materials.filter(item => item.ref.sourceId === 'blueprint:2')).toHaveLength(1);
+        expect(original.materials.find(item => item.ref.sourceId === 'blueprint:3')?.text).toBe('null');
+        f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(3,'作者新建第三章')");
+        expect(compareGenerationSourceBindings(original.binding, f.build().binding)).toBe(false);
+    });
     it('reads exact selected prose and current finalized authority without unselected drafts or private paths', () => { const f = fixture(), result = f.build(); expect(result.materials.find(item => item.ref.sourceId === 'draft:1')?.text).toBe('原文\r\n汉字。'); expect(result.materials.some(item => item.text === '未选草稿')).toBe(false); expect(result.binding.sourceRefs.map(ref => ref.sourceId)).toEqual(['project-core:main', 'blueprint:2', 'draft:1', 'finalized:3:final-3']); expect(JSON.stringify(result.binding.sourceManifest)).not.toContain(f.root); });
     it('keeps binding hashes stable across epoch and timestamp/log-only changes', () => { const f = fixture(), a = f.build(); f.db.exec("UPDATE project_core SET updated_at='later';UPDATE drafts SET updated_at='later';UPDATE blueprints SET notes='cache',notes_updated_at='later'"); const b = rebuildGenerationSourceBinding(f.deps, a.binding, 'next'); expect(b.binding.epoch).toBe('next'); expect(compareGenerationSourceBindings(a.binding, b.binding)).toBe(true); });
     it.each(['core', 'brief', 'draft', 'model', 'policy', 'output'])('detects changed %s before resume', kind => { const f = fixture(), a = f.build(); if (kind === 'core')

@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3'
 import { isDeepStrictEqual } from 'node:util'
 import type { BeginGenerationRequest, ExecuteGenerationRequest } from '../../src/shared/generation-owner-contract'
+import { generationOutputContract, type GenerationAuthorInput } from '../../src/shared/generation-owner-contract'
 import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot } from '../../src/services/generation/generation-runtime'
 import type { ModelProfile, ModelExecutionLeaseReceipt, LLMFinishReason } from '../../src/shared/ipc-channels'
 import { tokenLiability } from '../../src/shared/generation-contract'
@@ -11,6 +12,7 @@ import { assertSemanticGenerationTask, buildMainGenerationPlan, MAIN_GENERATION_
 import { LLMFactory } from '../llm/llm-factory'
 import type { GenerationTask } from '../../src/services/generation/generation-harness'
 import type { ProviderUsageEvidence } from '../llm/provider.interface'
+import type { BlueprintRangeCommitReceipt } from '../repositories/blueprint-repository'
 
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>
 export function safeGenerationModelReceipt(receipt: ModelExecutionLeaseReceipt): SafeGenerationModelReceipt {
@@ -130,15 +132,39 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     assertCurrent()
     if (!selection || typeof selection.operation !== 'string' || !/^[a-z0-9][a-z0-9:_-]{0,127}$/u.test(selection.operation)
       || !Array.isArray(selection.promptKeys) || selection.promptKeys.length === 0
+      || Object.hasOwn(selection, 'parentRootActionId') && (typeof selection.parentRootActionId !== 'string' || !selection.parentRootActionId.trim())
       || typeof selection.uiActionNonce !== 'string' || !selection.uiActionNonce.trim() || selection.uiActionNonce.length > 256
-      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'promptKeys', 'skillStages', 'output', 'parentRootActionId'].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
+      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId'].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
+    generationOutputContract(selection)
+    const continuation = selection.continueDirectoryOperationId === undefined ? undefined
+      : repository.listDirectoryProgress().find(item => item.operationId === selection.continueDirectoryOperationId)
+    if (selection.continueDirectoryOperationId !== undefined && (!continuation?.remainingRange || selection.parentRootActionId
+      || selection.output !== 'structured-data'
+      // Selected rows also include preceding chapters consumed as source dependencies.
+      // The formal target is separately authorized by the durable remainingRange.
+      || Array.from({ length: continuation.remainingRange.endChapter - continuation.remainingRange.startChapter + 1 }, (_, index) => continuation.remainingRange!.startChapter + index)
+        .some(chapter => !selection.selectedBlueprintChapterNumbers?.includes(chapter)))) throw new Error('GENERATION_DIRECTORY_CONTINUATION_INVALID')
+    if (continuation) {
+      const originalInputs = repository.get(continuation.sourceHandle.runId).binding.sourceManifest.authorInputs as GenerationAuthorInput[] | undefined
+      for (const id of ['directory:author-config', 'directory:pacing-guidance']) {
+        const original = originalInputs?.find(input => input.id === id)
+        if (!original || !isDeepStrictEqual(original, selection.authorInputs?.find(input => input.id === id)))
+          throw new Error('GENERATION_DIRECTORY_AUTHOR_INPUT_CHANGED')
+      }
+    }
     const lease = deps.leases.begin(selection.modelId)
     try {
       const binding = deps.buildBinding(selection, safeGenerationModelReceipt(lease))
       if (binding.projectId !== deps.projectId || binding.epoch !== deps.epoch) throw new Error('GENERATION_BINDING_INVALID')
-      const run = service.open({ ...binding, operation: selection.operation, uiActionNonce: selection.uiActionNonce,
+      const run = deps.database.transaction(() => {
+      if (continuation && !continuation.continuationHandle) repository.activateRootForCommittedStage(continuation.sourceHandle.rootActionId, binding)
+      const next = service.open({ ...binding, operation: selection.operation, uiActionNonce: selection.uiActionNonce,
         frozenInputHash: textHash(JSON.stringify([binding.fingerprint, binding.contextSnapshotId, selection.output])),
-        budget: MAIN_GENERATION_POLICY.budget, parentRootActionId: selection.parentRootActionId })
+        budget: MAIN_GENERATION_POLICY.budget, parentRootActionId: continuation?.sourceHandle.rootActionId ?? selection.parentRootActionId })
+      if (continuation?.continuationHandle && continuation.continuationHandle.runId !== next.runId) throw new Error('GENERATION_DIRECTORY_CONTINUATION_EXISTS')
+      if (continuation && !continuation.continuationHandle) repository.bindDirectoryContinuation(continuation.operationId, handleOf(next))
+      return next
+      }).immediate()
       if (run.binding.epoch === deps.epoch && !runLeases.has(run.runId)) runLeases.set(run.runId, lease.leaseId)
       else deps.leases.close(lease.leaseId)
       return viewOf(run)
@@ -150,7 +176,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const finishReason: LLMFinishReason = receipt.failureCode ? 'error'
       : ['stop', 'length', 'content_filter', 'error', 'unknown'].includes(stored ?? '') ? stored as LLMFinishReason : 'unknown'
     const evidence = frozenModel.capabilityEvidence
-    const details = { purpose: task.purpose, model: { id: frozenModel.modelId, configurationRevision: frozenModel.modelRevision, endpointFingerprint: frozenModel.endpointFingerprint },
+    const details = { purpose: task.purpose,
+      ...(receipt.artifact ? { visibleArtifact: { artifactId: receipt.artifact.artifactId, attemptId: receipt.attempt.attemptId,
+        revision: receipt.artifact.revision, textHash: receipt.artifact.textHash } } : {}),
+      model: { id: frozenModel.modelId, configurationRevision: frozenModel.modelRevision, endpointFingerprint: frozenModel.endpointFingerprint },
       capabilities: { contextWindowTokens: evidence.contextWindowTokens, maxOutputTokens: evidence.maxOutputTokens,
         reasoning: evidence.reasoning, structuredOutput: evidence.structuredOutput, usage: evidence.usage, source: evidence.source },
       budget: { attempt: budget.attempts.findIndex(attempt => attempt.attemptId === receipt.attempt.attemptId) + 1,
@@ -166,7 +195,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const run = requireRun(request.handle, true)
     assertSemanticGenerationTask(request.task)
     const task = structuredClone(request.task)
-    if (task.output !== run.binding.sourceManifest.outputContract) throw new Error('GENERATION_OUTPUT_CONTRACT_CHANGED')
+    const contract = run.binding.sourceManifest.outputContract
+    const composite = contract as { primary?: string; overrides?: { purpose: string; output: string }[] }
+    const expectedOutput = typeof contract === 'string' ? contract : composite.overrides?.find(item => item.purpose === task.purpose)?.output ?? composite.primary
+    if (task.output !== expectedOutput) throw new Error('GENERATION_OUTPUT_CONTRACT_CHANGED')
     const requestHash = textHash(JSON.stringify([task, run.binding.fingerprint.modelLeaseRevision, run.binding.fingerprint.policyHash]))
     const key = JSON.stringify([run.runId, request.invocationNonce])
     const inFlight = pending.get(key)
@@ -213,7 +245,46 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       return viewOf(resumed)
     } catch (error) { deps.leases.close(lease.leaseId); throw error }
   }
-  return { begin, execute, resume, list, read: (handle: MainGenerationRunHandle) => viewOf(requireRun(handle)),
+  const assertSourcesCurrent = (handle: MainGenerationRunHandle, blueprintRange?: { startChapter: number; endChapter: number }) => {
+      const run = requireRun(handle, true)
+      if (repository.budget(run.rootActionId).root.status === 'cancelled') throw new Error('GENERATION_ACTION_CANCELLED')
+      if (blueprintRange) {
+        const continued = repository.listDirectoryProgress().find(item => item.continuationHandle?.runId === run.runId)
+        if (continued && !isDeepStrictEqual(continued.remainingRange, blueprintRange)) throw new Error('GENERATION_DIRECTORY_CONTINUATION_RANGE_CHANGED')
+        const selected = run.binding.sourceManifest.selectedBlueprintChapterNumbers as number[] | undefined
+        if (!selected || !Number.isSafeInteger(blueprintRange.startChapter) || !Number.isSafeInteger(blueprintRange.endChapter)
+          || blueprintRange.startChapter < 1 || blueprintRange.endChapter < blueprintRange.startChapter
+          || blueprintRange.endChapter - blueprintRange.startChapter >= 10000
+          || Array.from({ length: blueprintRange.endChapter - blueprintRange.startChapter + 1 }, (_, index) => blueprintRange.startChapter + index).some(chapter => !selected.includes(chapter)))
+          throw new Error('GENERATION_FORMAL_RANGE_NOT_SELECTED')
+      }
+      const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
+      if (!isDeepStrictEqual(current, run.binding)) throw new Error('GENERATION_SOURCE_CHANGED')
+    }
+  return { begin, execute, resume, list, assertSourcesCurrent, read: (handle: MainGenerationRunHandle) => viewOf(requireRun(handle)),
+    listDirectoryProgress: () => { assertCurrent(); return repository.listDirectoryProgress().map(progress => ({ ...progress,
+      authorInputs: structuredClone(repository.get(progress.sourceHandle.runId).binding.sourceManifest.authorInputs as GenerationAuthorInput[] | undefined) })) },
+    recordDirectoryCommit: (handle: MainGenerationRunHandle, requestedRange: { startChapter: number; endChapter: number }, receipt: BlueprintRangeCommitReceipt) => {
+      requireRun(handle, true)
+      const existing = repository.listDirectoryProgress().find(item => item.operationId === receipt.operationId)
+      if (existing) {
+        if (existing.payloadHash !== receipt.payloadHash || existing.sourceHandle.runId !== handle.runId || !isDeepStrictEqual(existing.requestedRange, requestedRange)) throw new Error('GENERATION_DIRECTORY_PROGRESS_CONFLICT')
+        return existing
+      }
+      const progress = { operationId: receipt.operationId, payloadHash: receipt.payloadHash, sourceHandle: handle,
+        requestedRange, committedRange: { startChapter: receipt.startChapter, endChapter: receipt.endChapter },
+        remainingRange: receipt.endChapter < requestedRange.endChapter ? { startChapter: receipt.endChapter + 1, endChapter: requestedRange.endChapter } : null }
+      repository.recordDirectoryProgress(progress)
+      return progress
+    },
+    composeVisible: (handle: MainGenerationRunHandle, artifactIds: string[], expectedTextHash: string) => {
+      assertSourcesCurrent(handle)
+      return repository.composeVisible(handle.runId, artifactIds, expectedTextHash)
+    },
+    readVisibleComposition: (handle: MainGenerationRunHandle) => {
+      const run = requireRun(handle), composition = repository.readVisibleComposition(run.runId)
+      return composition ? { ...composition, authorInputs: structuredClone(run.binding.sourceManifest.authorInputs as GenerationAuthorInput[] | undefined) } : null
+    },
     pause: (handle: MainGenerationRunHandle) => { const run = requireRun(handle, true); service.pause(run.rootActionId); return viewOf(repository.get(run.runId)) },
     cancel: (handle: MainGenerationRunHandle) => { const run = requireRun(handle); service.cancel(run.rootActionId); return viewOf(repository.get(run.runId)) },
     restart: (handle: MainGenerationRunHandle, selection: BeginGenerationRequest) => {

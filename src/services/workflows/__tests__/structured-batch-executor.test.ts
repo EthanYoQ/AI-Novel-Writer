@@ -1701,3 +1701,13 @@ describe('StructuredBatchExecutor seam', () => {
     })
   })
 })
+it('failure exposes only fully validated items, never the later JSON fragment', async () => {
+  const executor = createStructuredBatchExecutor({ contract: blueprintContract, session: createSession(async request => request.items[0] === 1
+    ? { status: 'completed', content: blueprintJson([1]), requestedTokens: 100 }
+    : { status: 'incomplete', reason: 'unknown', content: '{"blueprints":[{"chapterNumber":2', requestedTokens: 100 }) })
+  const result = await executor.execute({ items: [1, 2], limits: { maxBatchItems: 1 } })
+  expect(result.ok).toBe(false)
+  if (result.ok) throw new Error('Expected failed second batch')
+  expect(result.validatedItems).toEqual([{ chapterNumber: 1, title: '第1章' }])
+  expect(result.receipt.calls).toBe(2)
+})

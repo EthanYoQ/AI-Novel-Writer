@@ -1,6 +1,7 @@
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import type Database from 'better-sqlite3'
 import type { GenerationOwnerChannels } from '../../src/shared/generation-owner-contract'
+import { generationOutputContract } from '../../src/shared/generation-owner-contract'
 import type { ModelProfile, ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { getBuiltinPromptTemplate } from '../../src/services/builtin-prompt-templates'
@@ -13,14 +14,29 @@ import { ModelExecutionLeaseRegistry } from '../services/model-execution-lease'
 import { createMainGenerationOwner } from '../services/main-generation-owner'
 import { MAIN_GENERATION_POLICY } from '../services/main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../services/generation-source-binding'
+import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
+import type { BlueprintRangeCommitReceipt } from '../repositories/blueprint-repository'
+
+type Owner = ReturnType<typeof createMainGenerationOwner>
+const owners = new Map<Database.Database, { owner: Owner; session: ProjectSessionContext; subscribers: Set<WebContents> }>()
+/** Called synchronously inside the same SQLite transaction as the formal effect. */
+export function assertGenerationSourcesCurrent(handle: MainGenerationRunHandle, blueprintRange?: { startChapter: number; endChapter: number }): void {
+  const database = getProjectDb()
+  const entry = database && owners.get(database)
+  if (!entry) throw new Error('GENERATION_OWNER_REQUIRED')
+  entry.owner.assertSourcesCurrent(handle, blueprintRange)
+}
+export function recordGenerationDirectoryCommit(handle: MainGenerationRunHandle, requestedRange: { startChapter: number; endChapter: number }, receipt: BlueprintRangeCommitReceipt) {
+  const database = getProjectDb(), entry = database && owners.get(database)
+  if (!entry || !database?.inTransaction) throw new Error('GENERATION_DIRECTORY_TRANSACTION_REQUIRED')
+  return entry.owner.recordDirectoryCommit(handle, requestedRange, receipt)
+}
 
 export function registerGenerationController(options: {
   modelExecutionLeases: ModelExecutionLeaseRegistry
   loadModel: (id: string) => ModelProfile | null
   applyProxyConfig: () => void
 }) {
-  type Owner = ReturnType<typeof createMainGenerationOwner>
-  const owners = new Map<Database.Database, { owner: Owner; session: ProjectSessionContext; subscribers: Set<WebContents> }>()
   onProjectDatabaseBeforeClose(({ database }) => {
     const entry = owners.get(database)
     if (entry) { entry.owner.suspendForProjectClose(); owners.delete(database) }
@@ -50,7 +66,7 @@ export function registerGenerationController(options: {
           if (getProjectDb() !== database) throw new Error('GENERATION_DATABASE_CHANGED') },
         leases: options.modelExecutionLeases, loadModel: options.loadModel, beforeDispatch: options.applyProxyConfig,
         buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(sourceDependencies, { ...selection,
-          projectId: captured.projectId, epoch: captured.leaseId, modelReceipt, policy: MAIN_GENERATION_POLICY, outputContract: selection.output }).binding,
+          projectId: captured.projectId, epoch: captured.leaseId, modelReceipt, policy: MAIN_GENERATION_POLICY, outputContract: generationOutputContract(selection) }).binding,
         rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDependencies, previous, captured.leaseId,
           modelReceipt, MAIN_GENERATION_POLICY).binding,
         onSnapshot: snapshot => { for (const subscriber of subscribers) {
@@ -83,7 +99,10 @@ export function registerGenerationController(options: {
   register('generation:begin', 1, (owner, request) => owner.begin(request))
   register('generation:execute', 1, (owner, request) => owner.execute(request))
   register('generation:read', 1, (owner, handle) => owner.read(handle))
+  register('generation:compose-visible', 3, (owner, handle, ids, hash) => owner.composeVisible(handle, ids, hash))
+  register('generation:read-visible-composition', 1, (owner, handle) => owner.readVisibleComposition(handle))
   register('generation:list', 0, owner => owner.list())
+  register('generation:list-directory-progress', 0, owner => owner.listDirectoryProgress())
   register('generation:pause', 1, (owner, handle) => owner.pause(handle))
   register('generation:cancel', 1, (owner, handle) => owner.cancel(handle))
   register('generation:resume', 1, (owner, handle) => owner.resume(handle))

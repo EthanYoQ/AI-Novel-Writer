@@ -1,16 +1,18 @@
+import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
 import {
   BaseWorkflowCommand,
   injectWritingSkillIntoSession,
   type CommandExecuteParams,
+  type WorkflowGenerationRuntimeDependencies,
 } from './base-command'
 import type { BlueprintRangeCommitReceipt } from '../../../../electron/repositories/blueprint-repository'
 import { composePromptSystemRole, resolvePromptTemplate } from '../../prompt-templates'
 import { DirectoryPromptBuilder } from '../../prompts/prompt-builder'
-import { createGenerationRuntime, type GenerationRuntime } from '../../generation/generation-runtime'
 import type { GenerationTask } from '../../generation/generation-harness'
 import {
   createStructuredBatchExecutor,
   type StructuredBatchContract,
+  type StructuredBatchFailure,
 } from '../structured-batch-executor'
 import {
   DirectoryWorkflowParams,
@@ -42,10 +44,19 @@ import { readAuthoritativeNextChapter } from '../../authoritative-chapter-sequen
 import { localizeNovelConfigFacts } from '../../../shared/novel-config-localization'
 import { normalizeChapterWordsTarget } from '../chapter-creation-parameters'
 
-type CreateDirectoryGenerationRuntime = typeof createGenerationRuntime
+type CreateDirectoryGenerationRuntime = NonNullable<WorkflowGenerationRuntimeDependencies['createRuntime']>
 
 export interface GenerateDirectoryCommandDependencies {
   createRuntime?: CreateDirectoryGenerationRuntime
+}
+
+/** A failed run may still have one atomically adopted, fully validated prefix. */
+export class DirectoryPartialCommitError extends Error {
+  readonly code = 'DIRECTORY_PARTIAL_COMMIT'
+  constructor(readonly commitReceipt: BlueprintRangeCommitReceipt, readonly remainingRange: { startChapter: number; endChapter: number }, readonly generationFailure: StructuredBatchFailure, message: string) {
+    super(message)
+    this.name = 'DirectoryPartialCommitError'
+  }
 }
 
 export class DirectoryPostCommitSyncError extends Error {
@@ -334,18 +345,16 @@ function observeWorkflowCancellation(context: CommandExecuteParams['context']): 
 }
 
 export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBlueprint[]> {
-  private readonly createRuntime: CreateDirectoryGenerationRuntime
 
   constructor(
     private params: DirectoryWorkflowParams,
     private projectSnapshot: DirectoryWorkflowProjectSnapshot,
     dependencies: GenerateDirectoryCommandDependencies = {},
   ) {
-    super()
-    this.createRuntime = dependencies.createRuntime ?? createGenerationRuntime
+    super(dependencies.createRuntime ? { createRuntime: dependencies.createRuntime } : undefined)
   }
 
-  async execute({ context, callbacks }: CommandExecuteParams): Promise<ChapterBlueprint[]> {
+  async execute({ context, callbacks, step }: CommandExecuteParams): Promise<ChapterBlueprint[]> {
     const projectSession = requireWorkflowProjectSession(context)
     const writingLanguage = workflowWritingLanguage(context)
     const architecture = context.data.architecture as string
@@ -386,9 +395,6 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
     ))
     const chapterCount = endChapter - startChapter + 1
     const costPlan = planBlueprintGenerationCost(chapterCount)
-    if (costPlan.exceedsHardLimit) {
-      throw new DirectoryCostLimitError(chapterCount)
-    }
     const chapterNumbers = Array.from(
       { length: chapterCount },
       (_, index) => startChapter + index,
@@ -488,13 +494,11 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
       ),
     }
 
+    return this.executeWithGenerationRuntime('structured', { context, callbacks, step }, async () => {
     const cancellation = observeWorkflowCancellation(context)
-    let runtime: GenerationRuntime | null = null
     try {
-      runtime = await this.createRuntime({
-        budget: costPlan.runtimeBudget,
-      })
-      const batchResult = await runtime.execute(async ({ session }) => {
+      const batchResult = await (async () => {
+        const session = this.requireGenerationExecution().session
         const planningSession = injectWritingSkillIntoSession(session, context, 'planning')
         if (context.writingSkills?.planning) {
           callbacks.log(workflowUiText(
@@ -517,8 +521,28 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
           },
           signal: cancellation.signal,
         })
-      })
+      })()
       if (!batchResult.ok) {
+        this.assertNotCancelled(context)
+        const prefix = [...batchResult.validatedItems]
+        if (prefix.length) {
+          if (prefix.some((item, index) => item.chapterNumber !== startChapter + index)) throw new Error('DIRECTORY_VALIDATED_PREFIX_NOT_CONTIGUOUS')
+          const prefixEnd = startChapter + prefix.length - 1
+          const receipt = await commitDirectoryBlueprintRange(prefix, expectedProjectPath,
+            { mode: 'replace-range', startChapter, endChapter: prefixEnd },
+            `directory-${context.runId}-${startChapter}-${prefixEnd}-partial`, context.projectSession, context.mainGenerationRunHandle, { startChapter, endChapter })
+          context.data.blueprintCommitReceipt = receipt
+          context.data.newBlueprints = [...receipt.snapshot]
+          context.data.remainingBlueprintRange = { startChapter: prefixEnd + 1, endChapter }
+          if (context.cancelled) throw new DirectoryPostCommitCancellationError(receipt)
+          try {
+            await retryDirectoryCharacterSync(receipt.characterSyncOperation.operationId, expectedProjectPath, context.projectSession)
+          } catch { throw new DirectoryPostCommitSyncError(receipt) }
+          throw new DirectoryPartialCommitError(receipt, { startChapter: prefixEnd + 1, endChapter }, batchResult.failure, workflowUiText(context,
+            `已保存第 ${startChapter}–${prefixEnd} 章完整蓝图；第 ${prefixEnd + 1}–${endChapter} 章未完成。原运行的候选与失败原因已保留。`,
+            `Saved complete blueprints for chapters ${startChapter}–${prefixEnd}; chapters ${prefixEnd + 1}–${endChapter} remain incomplete. The original run retains its candidates and failure reason.`,
+          ))
+        }
         const generationSummary = directoryGenerationFailureSummary(batchResult.receipt.attempts)
         callbacks.log(workflowUiText(
           context,
@@ -549,6 +573,8 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         },
         `directory-${context.runId}-${startChapter}-${endChapter}`,
         context.projectSession,
+        context.mainGenerationRunHandle,
+        { startChapter, endChapter },
       )
       const newBlueprints = [...commitReceipt.snapshot]
       context.data.blueprintCommitReceipt = commitReceipt
@@ -577,7 +603,13 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
       return newBlueprints
     } finally {
       cancellation.dispose()
-      await runtime?.close().catch(() => {})
     }
+    }, {
+      continueDirectoryOperationId: this.params.continueDirectoryOperationId,
+      resumeHandle: context.data.directoryResumeHandle as MainGenerationRunHandle | undefined,
+      selectedBlueprintChapterNumbers: [...new Set([...chapterNumbers, ...existingBlueprints.map(item => item.chapterNumber)])],
+      operation: 'chapter-blueprint-directory', promptKeys: ['chapter_blueprint_chunk'], skillStages: ['planning'], output: 'structured-data',
+      authorInputs: [{ id: 'directory:pacing-guidance', text: typeof context.data.pacingGuidance === 'string' ? context.data.pacingGuidance : '' }, { id: 'directory:author-config', text: JSON.stringify(novelConfig) }, { id: 'directory:requested-range', text: JSON.stringify({ mode: this.params.mode, startChapter, endChapter }) }],
+    })
   }
 }

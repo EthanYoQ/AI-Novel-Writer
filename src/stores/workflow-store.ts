@@ -134,6 +134,9 @@ export type StepExecutor = (
 
 /** 工作流上下文（共享数据） */
 export interface WorkflowContext {
+  /** Main-issued identities; stage changes keep the root budget, recovery keeps the exact run. */
+  mainGenerationRootHandle?: import('../services/generation/generation-runtime').MainGenerationRunHandle
+  mainGenerationRunHandle?: import('../services/generation/generation-runtime').MainGenerationRunHandle
   /** 本次运行的稳定身份，供事件消费者排除其他并发任务。 */
   runId: string
   /** 工作流启动时冻结的项目身份。 */

@@ -23,6 +23,11 @@ import {
 } from '../bounded-completion'
 import { workflowUiText, workflowWritingLanguage } from '../workflow-project-session'
 import type { WritingSkillStage } from '../../../shared/writing-skills'
+import { ipc } from '../../ipc-client'
+import type { VisibleCompositionReceipt } from '../../../shared/generation-owner-contract'
+import { composeVisibleContinuation } from '../../../shared/visible-continuation'
+import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationSelection, type WorkflowMainGenerationRequest, type WorkflowMainGenerationRuntime } from '../workflow-main-generation'
+export type { WorkflowMainGenerationSelection } from '../workflow-main-generation'
 
 export interface CommandExecuteParams {
   step: unknown
@@ -124,11 +129,11 @@ export const WORKFLOW_GENERATION_BUDGETS = Object.freeze({
 })
 
 export interface WorkflowGenerationRuntimeDependencies {
-  createRuntime(options: CreateGenerationRuntimeOptions): Promise<GenerationRuntime>
+  createRuntime(options: CreateGenerationRuntimeOptions, main?: WorkflowMainGenerationRequest): Promise<GenerationRuntime>
 }
 
 const DEFAULT_GENERATION_DEPENDENCIES: WorkflowGenerationRuntimeDependencies = {
-  createRuntime: options => createGenerationRuntime(options),
+  createRuntime: (options, main) => main ? createWorkflowMainGenerationRuntime(main) : createGenerationRuntime(options),
 }
 
 interface ActiveGenerationExecution {
@@ -136,6 +141,8 @@ interface ActiveGenerationExecution {
   session: GenerationSession
   signal: AbortSignal
   loggedWritingSkillStages: Set<WritingSkillStage>
+  runtime: GenerationRuntime
+  mainOwned: boolean
 }
 
 function observeWorkflowCancellation(context: WorkflowContext): {
@@ -179,6 +186,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     intent: WorkflowGenerationIntent,
     params: CommandExecuteParams,
     operation: () => Promise<T>,
+    selection?: WorkflowMainGenerationSelection,
   ): Promise<T> {
     if (this.activeGenerationExecution) {
       throw new Error('同一个工作流命令不能并发或嵌套启动生成运行时。')
@@ -190,13 +198,15 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       const runtime = await this.generationDependencies.createRuntime({
         budget: WORKFLOW_GENERATION_BUDGETS[intent],
         ...(generationModelId ? { modelId: generationModelId } : {}),
-      })
+      }, selection ? { context: params.context, callbacks: params.callbacks, selection } : undefined)
       return await runtime.execute(async ({ session }) => {
         this.activeGenerationExecution = {
           context: params.context,
           session,
           signal: cancellation.signal,
           loggedWritingSkillStages: new Set(),
+          runtime,
+          mainOwned: (runtime as Partial<WorkflowMainGenerationRuntime>).mainOwned === true,
         }
         try {
           this.assertNotCancelled(params.context)
@@ -217,6 +227,21 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       throw new Error('生成调用必须位于命令执行期 GenerationRuntime 内。')
     }
     return this.activeGenerationExecution
+  }
+
+  /** After a verified formal batch commit, freeze a new stage under the same root. */
+  protected async advanceMainGenerationRun(selection: WorkflowMainGenerationSelection): Promise<void> {
+    const execution = this.requireGenerationExecution()
+    const runtime = execution.runtime as Partial<WorkflowMainGenerationRuntime>
+    if (!execution.mainOwned || !runtime.advance) throw new Error('GENERATION_WORKFLOW_ADVANCE_UNAVAILABLE')
+    await runtime.advance(selection)
+  }
+
+  protected async readMainVisibleComposition(): Promise<VisibleCompositionReceipt | null> {
+    const execution = this.requireGenerationExecution()
+    const handle = execution.context.mainGenerationRunHandle
+    if (!execution.mainOwned || !handle) throw new Error('GENERATION_COMPOSITION_HANDLE_REQUIRED')
+    return ipc.invokeWithProjectSession(execution.context.projectSession, 'generation:read-visible-composition', handle)
   }
 
   /** 获取 LLM 大模型连接代理（支持取消） */
@@ -318,6 +343,25 @@ export abstract class BaseWorkflowCommand<TResult = string> {
   ): Promise<string> {
     const uiText = (zhCNText: string, enUSText: string) => workflowUiText(options.context, zhCNText, enUSText)
     const seed = options.seedText?.trim() || ''
+    const mainOwned = this.requireGenerationExecution().mainOwned
+    const prior = mainOwned ? await this.readMainVisibleComposition() : null
+    if (mainOwned && seed !== (prior?.text ?? '')) throw new Error('GENERATION_COMPOSITION_SEED_MISMATCH')
+    let composedText = prior?.text ?? ''
+    const artifactIds = [...(prior?.artifactIds ?? [])]
+    const persistComposition = async (completion: LLMCompletion) => {
+      if (!mainOwned || !completion.content.trim() || !['stop', 'length'].includes(completion.finishReason)) return
+      const artifact = completion.receipt.visibleArtifact
+      const handle = options.context.mainGenerationRunHandle
+      if (!artifact || !handle) throw new Error('GENERATION_COMPOSITION_ARTIFACT_REQUIRED')
+      const next = composedText ? composeVisibleContinuation(composedText, completion.content) : completion.content.trim()
+      // A repeated response remains an independent artifact and is not acknowledged as continuation progress.
+      if (composedText && (next.match(/[\p{L}\p{N}]/gu)?.length ?? 0) <= (composedText.match(/[\p{L}\p{N}]/gu)?.length ?? 0)) return
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(next))
+      const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+      const receipt = await ipc.invokeWithProjectSession(options.context.projectSession, 'generation:compose-visible', handle, [...artifactIds, artifact.artifactId], hash)
+      if (receipt.text !== next || receipt.textHash !== hash) throw new Error('GENERATION_COMPOSITION_RECEIPT_MISMATCH')
+      artifactIds.push(artifact.artifactId); composedText = receipt.text
+    }
     let continuationCount = 0
     let initial: { content: string; finishReason: LLMFinishReason }
     let initialReceipt: LLMCompletion['receipt'] | undefined
@@ -333,6 +377,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       )
       initial = first
       initialReceipt = first.receipt
+      await persistComposition(first)
     }
     const prefix = options.taskLabel ? `${options.taskLabel} ` : ''
     options.callbacks.log(uiText(
@@ -368,6 +413,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
           options.llmOptions,
           options.context,
         )
+        await persistComposition(next)
         options.callbacks.log(uiText(
           `  自动续写第 ${continuationCount} 轮响应：finishReason=${next.finishReason}`,
           `  Automatic continuation response ${continuationCount}: finishReason=${next.finishReason}`,
@@ -423,7 +469,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       this.reportGenerationPromptBudget(callbacks, outcome.receipt)
       this.assertNotCancelled(context)
       const content = this.stripThinkingTags(outcome.content)
-      callbacks.appendText(content)
+      if (!execution.mainOwned) callbacks.appendText(content)
       callbacks.setProgress(90)
       return {
         content,

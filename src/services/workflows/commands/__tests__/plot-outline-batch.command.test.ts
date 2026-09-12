@@ -234,7 +234,7 @@ function makeCommand(options?: { resumeSynopsis?: boolean; synopsisRange?: { fro
     ['synopsis'],
     snapshot(),
     createWorkflowRuntimeDependencies(),
-    options,
+    { ...options, ...(options?.resumeSynopsis ? { resumeHandle: { projectId: 'main', epoch: 'lease-main', rootActionId: '合成恢复根', runId: '合成恢复运行' } } : {}) },
   )
 }
 

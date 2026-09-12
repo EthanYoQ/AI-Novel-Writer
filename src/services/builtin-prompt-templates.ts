@@ -1,4 +1,5 @@
 import type { Locale } from '../i18n/types'
+import { getPlanningMaterialExtractionTemplate } from '../shared/planning-material-prompts'
 import { resolveWritingLanguage, type WritingLanguage } from '../shared/writing-language'
 import { EN_US_BUILTIN_PROMPTS, isCoreLocalizedBuiltinPromptKey, type PromptLanguageTemplate } from './prompt-language'
 
@@ -41,6 +42,7 @@ export const EDITABLE_PROMPT_KEYS: string[] = [
   'refine_chapter',
   'consistency_check',
   'analyze_writing_style',
+  'planning_material_character_extraction',
   'refine_from_review',
   'generate_chapter_notes',
   'update_character_cards',
@@ -93,6 +95,8 @@ export const PROMPT_VARIABLE_DESCRIPTIONS_EN: Readonly<Record<string, string>> =
   chapter_content: 'Chapter content',
   review_focus: 'Review areas requested by the author (optional)',
   sample_text: 'Writing sample (3–5 chapters)',
+  requested_ids: 'Required material chunk identifiers',
+  sources: 'Original author material chunks',
   review_report: 'Review report',
   novel_architecture: 'Complete story architecture',
   chapter_list: 'Existing chapter blueprint list',
@@ -163,6 +167,14 @@ export function pruneEmptyOptionalPromptSections(content: string): string {
 
 /** 全部内置 Prompt 模板 */
 export const BUILTIN_PROMPTS: PromptTemplate[] = [
+  {
+    key: 'planning_material_character_extraction',
+    name: '创作资料角色提取',
+    description: '从作者明确提供的原始资料提取待确认角色',
+    ...getPlanningMaterialExtractionTemplate('zh-CN'),
+    variables: { requested_ids: '必须覆盖的资料块标识', sources: '作者提供的原始资料块' },
+    requiredContextVariables: ['requested_ids', 'sources'],
+  },
 
   {
     key: 'assistant_writing_identity',
@@ -1472,6 +1484,7 @@ export function getBuiltinPromptTemplate(
   const builtin = BUILTIN_PROMPTS.find(template => template.key === key)
   if (!builtin) return undefined
   if (resolveWritingLanguage(writingLanguage) !== 'en-US') return builtin
+  if (key === 'planning_material_character_extraction') return { ...builtin, ...getPlanningMaterialExtractionTemplate('en-US'), name: 'Planning material character extraction', description: 'Extract character candidates from explicit author material' }
   if (key === 'assistant_writing_identity') return { ...builtin, ...EN_US_ASSISTANT_IDENTITY }
   const translated: PromptLanguageTemplate | undefined = EN_US_BUILTIN_PROMPTS[
     key as keyof typeof EN_US_BUILTIN_PROMPTS

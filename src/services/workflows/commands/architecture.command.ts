@@ -1,3 +1,4 @@
+import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
 import { CANONICAL_PROJECT_DIRECTORY } from '../../../shared/project-format'
 import {
   BaseWorkflowCommand,
@@ -44,7 +45,14 @@ import {
 
 // --- 基础工具库 ---
 
+function stepAuthorInputs(context: WorkflowContext, key: string, config: Readonly<NovelConfig>): { id: string; text: string }[] {
+  const value = (context.data.stepGuidance as Record<string, unknown> | undefined)?.[key]
+  return [{ id: 'architecture:author-config', text: JSON.stringify(config) }, ...(typeof value === 'string' ? [{ id: `architecture:step-guidance:${key}`, text: value }] : [])]
+}
+
 interface PartialArchData {
+  world_building_generation_handle?: MainGenerationRunHandle
+  synopsis_generation_handle?: MainGenerationRunHandle
   premise_result?: string
   character_dynamics_result?: string
   character_state_result?: string
@@ -954,14 +962,12 @@ async function writeArchToDb(
   runId: string,
   projectSession: ProjectSessionContext,
   fallbackError: string,
+  generationRunHandle?: MainGenerationRunHandle,
 ): Promise<void> {
   const cleanContent = stripThinkingTags(content)
-  const result = await ipc.invokeWithProjectSession(
-    projectSession,
-    'db:project-core-update',
-    { [key]: cleanContent },
-    expectedProjectPath,
-  )
+  const result = generationRunHandle
+    ? await ipc.invokeWithProjectSession(projectSession, 'db:project-core-commit-generated', { data: { [key]: cleanContent }, generationRunHandle }, expectedProjectPath)
+    : await ipc.invokeWithProjectSession(projectSession, 'db:project-core-update', { [key]: cleanContent }, expectedProjectPath)
   if (!result.success) {
     throw new Error(result.error || fallbackError)
   }
@@ -991,15 +997,20 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
 
   async execute(params: CommandExecuteParams): Promise<string> {
     assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context), params.context)
-    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params))
+    const expectedConfig = structuredClone(useProjectStore.getState().currentProject!.novelConfig)
+    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params, expectedConfig), {
+      authorInputs: [{ id: 'config:author-config', text: JSON.stringify(expectedConfig) }, { id: 'config:author-idea', text: this.idea }, { id: 'config:requested-size', text: JSON.stringify({ totalChapters: this.totalChapters, wordsPerChapter: this.wordsPerChapter }) }],
+      operation: 'generate-global-config', promptKeys: ['generate_global_config'], skillStages: ['planning'], output: 'structured-data',
+      outputOverrides: [{ purpose: 'generate-global-guidance-replacement', output: 'visible-text' }],
+    })
   }
 
-  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
+  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams, expectedConfig: NovelConfig): Promise<string> {
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const projectSession = requireWorkflowProjectSession(context)
     const writingLanguage = workflowWritingLanguage(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
-    const existingConfig = { ...(useProjectStore.getState().currentProject?.novelConfig ?? {}) }
+    const existingConfig = expectedConfig
     callbacks.log(text(
       '正在调度配置专家 AI，准备解析您的脑洞...',
       'Preparing the configuration model to structure your story idea...',
@@ -1133,7 +1144,15 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
         'The current project changed, so the generated configuration was not applied.',
       ))
     }
-    this.onGenerated(mergeExpandedNovelConfig(existingConfig, parsed))
+    const generatedConfig = mergeExpandedNovelConfig(existingConfig, parsed)
+    const mainOwned = this.requireGenerationExecution().mainOwned
+    if (mainOwned) {
+      const handle = context.mainGenerationRunHandle
+      if (!handle) throw new Error('GENERATION_COMMIT_HANDLE_REQUIRED')
+      const committed = await useProjectStore.getState().commitGeneratedNovelConfig(generatedConfig, expectedConfig, projectSession, handle)
+      if (!committed) throw new Error('GENERATION_CONFIG_COMMIT_FAILED')
+    }
+    this.onGenerated(generatedConfig)
     this.assertNotCancelled(context)
     if (!sameProjectSessionContext(
       projectSession,
@@ -1144,7 +1163,7 @@ export class GenerateConfigCommand extends BaseWorkflowCommand<string> {
         'The current project changed, so the generated configuration was not saved.',
       ))
     }
-    const saved = await useProjectStore.getState().saveProject(projectSession)
+    const saved = mainOwned || await useProjectStore.getState().saveProject(projectSession)
     this.assertNotCancelled(context)
 
     if (saved) {
@@ -1173,7 +1192,10 @@ export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
 
   async execute(params: CommandExecuteParams): Promise<string> {
     assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context), params.context)
-    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params))
+    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params), {
+      authorInputs: stepAuthorInputs(params.context, 'premise', this.snapshot.novelConfig),
+      operation: 'generate-core-seed', promptKeys: ['premise'], skillStages: ['planning'], output: 'visible-text',
+    })
   }
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
@@ -1229,6 +1251,7 @@ export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
       context.runId,
       projectSession,
       text('故事架构写入数据库失败', 'Failed to write story architecture to the database.'),
+      this.requireGenerationExecution().mainOwned ? context.mainGenerationRunHandle : undefined,
     )
     this.assertNotCancelled(context)
 
@@ -1294,7 +1317,10 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
 
   async execute(params: CommandExecuteParams): Promise<string> {
     assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context), params.context)
-    return this.executeWithGenerationRuntime('character-architecture', params, () => this.executeWithinGeneration(params))
+    return this.executeWithGenerationRuntime('character-architecture', params, () => this.executeWithinGeneration(params), {
+      authorInputs: stepAuthorInputs(params.context, 'characters', this.snapshot.novelConfig),
+      operation: 'character-architecture', promptKeys: ['character_dynamics'], skillStages: ['planning'], output: 'structured-data',
+    })
   }
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
@@ -1587,6 +1613,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
         schemaVersion: candidate.schemaVersion as typeof CHARACTER_ROSTER_SCHEMA_VERSION,
         entries: candidate.entries as CharacterRosterEntry[],
         intent: 'architecture_generation',
+        ...(this.requireGenerationExecution().mainOwned ? { generationRunHandle: context.mainGenerationRunHandle } : {}),
       } satisfies CharacterRosterCommitRequest,
       expectedProjectPath,
     )
@@ -1652,14 +1679,29 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
   constructor(
     private snapshot: ArchitectureProjectSnapshot,
     generationDependencies?: WorkflowGenerationRuntimeDependencies,
-    private readonly options: { resumeWorldBuilding?: boolean } = {},
+    private readonly options: { resumeWorldBuilding?: boolean; resumeHandle?: MainGenerationRunHandle } = {},
   ) {
     super(generationDependencies)
   }
 
   async execute(params: CommandExecuteParams): Promise<string> {
     assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context), params.context)
-    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params))
+    if (this.options.resumeWorldBuilding && !this.options.resumeHandle) throw new Error(workflowUiText(params.context,
+      '旧候选没有持久运行记录，仍可查看或复制；请明确重新开始生成。',
+      'This legacy candidate has no persistent run record. It remains available to view or copy; explicitly restart generation.',
+    ))
+    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params), {
+      authorInputs: stepAuthorInputs(params.context, 'worldbuilding', this.snapshot.novelConfig),
+      operation: 'generate-world-building', promptKeys: ['world_building'], skillStages: ['planning'], output: 'visible-text',
+      ...(this.options.resumeWorldBuilding ? { resumeHandle: this.options.resumeHandle } : {}),
+      onRunOpened: async handle => {
+        const session = requireWorkflowProjectSession(params.context)
+        const partial = (params.context.data.partial as PartialArchData) || await loadPartialData(this.snapshot.expectedProjectPath, session)
+        partial.world_building_generation_handle = handle
+        await savePartialData(this.snapshot.expectedProjectPath, partial, session, 'Save generation run navigation')
+        params.context.data.partial = partial
+      },
+    })
   }
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
@@ -1701,7 +1743,9 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
     let expectedDbHash = synopsisFactsFingerprint([core?.worldbuilding || ''])
 
     if (resumeRequested) {
-      seedText = recoverableWorldBuildingCandidate(partial)
+      seedText = this.requireGenerationExecution().mainOwned
+        ? (await this.readMainVisibleComposition())?.text ?? ''
+        : recoverableWorldBuildingCandidate(partial)
       if (!seedText
         || partial.world_building_step_guidance === undefined
         || !partial.world_building_facts_fingerprint
@@ -1712,6 +1756,8 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
           'No recoverable worldbuilding candidate was found. The formal worldbuilding remains unchanged; regenerate instead.',
         ))
       }
+      if (this.requireGenerationExecution().mainOwned && typeof (context.data.stepGuidance as Record<string, unknown> | undefined)?.worldbuilding === 'string'
+        && requestedStepGuidance !== partial.world_building_step_guidance) throw new Error(text('作者步骤指导已变化，旧候选不能自动续写。', 'The author step guidance changed; the old candidate cannot be resumed automatically.'))
       stepGuidance = partial.world_building_step_guidance
       expectedDbHash = partial.world_building_db_hash
       if (synopsisFactsFingerprint([core?.worldbuilding || '']) !== expectedDbHash) {
@@ -1733,6 +1779,10 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
         '故事前提、小说配置或世界观模板自候选保存后已变化，旧候选不能续到新上下文；候选仍可查看或复制。',
         'The premise, novel configuration, or worldbuilding template changed after the candidate was saved, so the old candidate cannot be continued into the new context. The candidate remains available to view or copy.',
       ))
+    }
+
+    if (this.requireGenerationExecution().mainOwned && !resumeRequested) {
+      await this.persistWorldBuildingCandidate(projectSession, expectedProjectPath, context, '', factsFingerprint, expectedDbHash, stepGuidance)
     }
 
     const promptBuilder = new ArchitecturePromptBuilder(template, writingLanguage)
@@ -1874,6 +1924,7 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
       context.runId,
       projectSession,
       text('故事架构写入数据库失败', 'Failed to write story architecture to the database.'),
+      this.requireGenerationExecution().mainOwned ? context.mainGenerationRunHandle : undefined,
     )
     this.assertNotCancelled(context)
 
@@ -1912,7 +1963,8 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
     const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
-    partial.world_building_partial_result = candidate
+    if (this.requireGenerationExecution().mainOwned) delete partial.world_building_partial_result
+    else partial.world_building_partial_result = candidate
     partial.world_building_incomplete = true
     partial.world_building_facts_fingerprint = factsFingerprint
     partial.world_building_db_hash = dbHash
@@ -1936,6 +1988,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     private readonly options: {
       /** 从上次中断点续写当前批次（需要有效检查点：incomplete=true 且指纹匹配）。 */
       resumeSynopsis?: boolean
+      resumeHandle?: MainGenerationRunHandle
       /** 本次生成范围 [from..to]；缺省 = 第 1 章到全书（显式覆盖重写）。 */
       synopsisRange?: PlotOutlineChapterRange | null
     } = {},
@@ -1945,7 +1998,22 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
 
   async execute(params: CommandExecuteParams): Promise<string> {
     assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context), params.context)
-    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params))
+    if (this.options.resumeSynopsis && !this.options.resumeHandle) throw new Error(workflowUiText(params.context,
+      '旧候选没有持久运行记录，仍可查看或复制；请明确重新开始生成。',
+      'This legacy candidate has no persistent run record. It remains available to view or copy; explicitly restart generation.',
+    ))
+    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params), {
+      authorInputs: stepAuthorInputs(params.context, 'synopsis', this.snapshot.novelConfig),
+      operation: 'generate-plot-outline', promptKeys: ['synopsis'], skillStages: ['planning'], output: 'visible-text',
+      ...(this.options.resumeSynopsis ? { resumeHandle: this.options.resumeHandle } : {}),
+      onRunOpened: async handle => {
+        const session = requireWorkflowProjectSession(params.context)
+        const partial = (params.context.data.partial as PartialArchData) || await loadPartialData(this.snapshot.expectedProjectPath, session)
+        partial.synopsis_generation_handle = handle
+        await savePartialData(this.snapshot.expectedProjectPath, partial, session, 'Save generation run navigation')
+        params.context.data.partial = partial
+      },
+    })
   }
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
@@ -2055,6 +2123,8 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
           'This legacy plot-outline checkpoint lacks complete input binding, so its source facts cannot be proven to match the current project and it cannot be continued automatically. The checkpoint and database prose remain preserved; regenerate from chapter 1.',
         ))
       }
+      if (this.requireGenerationExecution().mainOwned && typeof (context.data.stepGuidance as Record<string, unknown> | undefined)?.synopsis === 'string'
+        && requestedStepGuidance !== partial.synopsis_step_guidance) throw new Error(text('作者步骤指导已变化，旧候选不能自动续写。', 'The author step guidance changed; the old candidate cannot be resumed automatically.'))
       effectiveStepGuidance = partial.synopsis_step_guidance
       const expectedCheckpointFingerprint = synopsisInputsFingerprint(
         sourceExpected,
@@ -2068,6 +2138,10 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
           'The source facts (premise / characters / worldbuilding / chapter count, etc.) changed after the interruption, so the old checkpoint cannot be continued into the new context. Regenerate the plot outline from “Generate story architecture”.',
         ))
       }
+      if (this.requireGenerationExecution().mainOwned) {
+        if (partial.synopsis_db_hash !== synopsisFactsFingerprint([sourceExpected.synopsis])) throw new Error(text('正式大纲已变化，不能采用旧候选。', 'The formal outline changed; the old candidate cannot be adopted.'))
+        seedText = (await this.readMainVisibleComposition())?.text ?? ''
+      } else {
       seedText = assertCheckpointDbMirrorCurrent(
         partial,
         sourceExpected.synopsis,
@@ -2075,6 +2149,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
         totalChapters,
         text,
       )
+      }
       if (seedText.length < MIN_SYNOPSIS_PARTIAL_PERSIST_CHARS) {
         throw new Error(text(
           '中断检查点内容过短，无法安全续写。请从「AI 生成故事架构」重新生成。',
@@ -2204,6 +2279,10 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       promptBuilder.build(),
       synopsisBatchInstruction(writingLanguage, from, to, totalChapters),
     ].filter(Boolean).join('\n\n')
+
+    if (this.requireGenerationExecution().mainOwned && !resumeRequested) {
+      await this.persistInterruptedSynopsis(projectSession, expectedProjectPath, context, '', { from, to }, factsFingerprint, effectiveStepGuidance, sourceExpected)
+    }
 
     // ===== 有界生成：seed 续写 + 自动续写；任何失败先交出已合并文本 =====
     let interruptedContent = ''
@@ -2440,7 +2519,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     const result = await ipc.invokeWithProjectSession(
       projectSession,
       'db:project-core-synopsis-commit',
-      { synopsis: stripThinkingTags(synopsis), expected },
+      { synopsis: stripThinkingTags(synopsis), expected, ...(this.requireGenerationExecution().mainOwned ? { generationRunHandle: context.mainGenerationRunHandle } : {}) },
       expectedProjectPath,
     )
     if (!result.success) {
@@ -2495,7 +2574,8 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
     const previousPartial = { ...partial }
-    partial.synopsis_result = partialText
+    if (this.requireGenerationExecution().mainOwned) delete partial.synopsis_result
+    else partial.synopsis_result = partialText
     partial.synopsis_incomplete = true
     partial.synopsis_covered_to = range.from - 1
     partial.synopsis_range = { from: range.from, to: range.to }
@@ -2508,7 +2588,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       sourceExpected.totalChapters,
       partial,
     )
-    partial.synopsis_db_hash = synopsisFactsFingerprint([dbOutlineText])
+    partial.synopsis_db_hash = synopsisFactsFingerprint([this.requireGenerationExecution().mainOwned ? sourceExpected.synopsis : dbOutlineText])
     context.data.partial = partial
     this.assertNotCancelled(context)
     await savePartialData(
@@ -2518,6 +2598,8 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       text('保存中断的情节大纲检查点', 'Save the interrupted plot-outline checkpoint'),
       text('保存中断的情节大纲检查点失败', 'Failed to save the interrupted plot-outline checkpoint.'),
     )
+    // Main owns interrupted candidate text; formal synopsis remains unchanged.
+    if (this.requireGenerationExecution().mainOwned) return
     if (context.cancelled) {
       await this.rollbackSynopsisCheckpoint(
         expectedProjectPath,

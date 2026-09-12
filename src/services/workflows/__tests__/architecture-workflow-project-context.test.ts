@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { MainGenerationRunView } from '../../generation/generation-runtime'
+import type { GenerationTask } from '../../generation/generation-harness'
+import { assertSemanticGenerationTask } from '../../../../electron/services/main-generation-plan'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useProjectStore } from '../../../stores/project-store'
@@ -47,57 +50,36 @@ function arrangeConfigGenerationJourney(responses: Array<{ content: string; fini
     updatedAt: '',
   }
   useProjectStore.setState({ currentProject: project as never, saveProject })
-  const generateStream = vi.fn(async (
-    _messages: Array<{ content: string }>,
-    callbacks: { onDone?: (content: string, usage: undefined, finishReason: 'length' | 'stop') => void },
-    ...execution: [modelId?: string, options?: { modelExecutionLeaseId?: string }]
-  ) => {
-    void execution
+  const generateStream = vi.fn(() => { throw new Error('Renderer provider dispatch is forbidden') })
+  useLLMStore.setState({ defaultModelId: 'deepseek-v4-flash', generateStream })
+  const view: MainGenerationRunView = {
+    handle: { projectId: project.id, epoch: project.sessionLease, rootActionId: '合成配置根', runId: '合成配置运行' },
+    status: 'running', nonReplayable: false, artifacts: [],
+    budget: { maxAttempts: 32, maxRequestedOutputTokens: 2097152, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: 9999999999999 },
+  }
+  const executeMain = vi.fn(async (request: { handle: MainGenerationRunView['handle']; invocationNonce: string; task: GenerationTask }) => {
+    assertSemanticGenerationTask(request.task)
+    expect(request.handle).toEqual(view.handle)
     const response = responses.shift()
     if (!response) throw new Error('unexpected extra generation attempt')
-    callbacks.onDone?.(response.content, undefined, response.finishReason)
-    return `request-${generateStream.mock.calls.length}`
+    return { run: structuredClone(view), outcome: {
+      status: response.finishReason === 'length' ? 'truncated' : 'completed',
+      content: response.content, finishReason: response.finishReason,
+      receipt: { finishReason: response.finishReason },
+    } }
   })
-  useLLMStore.setState({ defaultModelId: 'deepseek-v4-flash', generateStream })
-  const invoke = vi.fn(async (channel: string) => {
+  const invoke = vi.fn(async (channel: string, ...args: unknown[]): Promise<unknown> => {
     if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+    if (channel === 'db:project-core-commit-generated') return { success: true }
     if (channel === 'fs:check-exists') return false
-    if (channel === 'llm:begin-execution-lease') {
-      return {
-        success: true,
-        lease: {
-          leaseId: 'frozen-config-lease',
-          modelId: 'deepseek-v4-flash',
-          provider: 'custom',
-          protocol: 'openai',
-          modelName: 'deepseek-v4-flash',
-          modelRevision: 'a'.repeat(64),
-          endpointFingerprint: 'b'.repeat(64),
-          capabilityEvidence: {
-            source: {
-              contextWindowTokens: 'unknown',
-              maxOutputTokens: 'user-operational-cap',
-              featureFlags: 'unknown',
-            },
-            subjectFingerprint: 'c'.repeat(64),
-            contextWindowTokens: null,
-            maxOutputTokens: 8192,
-            reasoning: null,
-            structuredOutput: true,
-            usage: null,
-          },
-          createdAt: 1,
-          expiresAt: 60_001,
-        },
-      }
-    }
-    if (channel === 'llm:close-execution-lease') return { success: true }
-    throw new Error(`unexpected IPC ${channel}`)
+    if (channel === 'generation:begin' || channel === 'generation:read') return structuredClone(view)
+    if (channel === 'generation:execute') return executeMain(args[0] as Parameters<typeof executeMain>[0])
+    throw new Error('unexpected IPC ' + channel)
   })
   vi.stubGlobal('window', {
     aiNovelAPI: {
       invoke,
-      on: vi.fn(),
+      on: vi.fn(() => () => {}),
       once: vi.fn(),
       send: vi.fn(),
       setZoomLevel: vi.fn(),
@@ -113,7 +95,7 @@ function arrangeConfigGenerationJourney(responses: Array<{ content: string; fini
     wordsPerChapter: 3000,
     onGenerated,
   })
-  return { workflow, onGenerated, saveProject, generateStream, invoke }
+  return { workflow, onGenerated, saveProject, generateStream, executeMain, invoke }
 }
 
 describe('architecture workflow project context', () => {
@@ -305,18 +287,11 @@ describe('config generation full journey completion contract', () => {
 
     await expect(execute(journey.workflow)).resolves.toBe('生成的配置已成功应用！')
 
-    expect(journey.generateStream).toHaveBeenCalledTimes(2)
-    expect(journey.generateStream.mock.calls.map(call => call[2])).toEqual([
-      'deepseek-v4-flash',
-      'deepseek-v4-flash',
-    ])
-    expect(journey.generateStream.mock.calls.map(call => call[3]?.modelExecutionLeaseId)).toEqual([
-      'frozen-config-lease',
-      'frozen-config-lease',
-    ])
-    const replacementPrompt = journey.generateStream.mock.calls[1][0]
-      .map((message: { content: string }) => message.content)
-      .join('\n')
+    expect(journey.executeMain).toHaveBeenCalledTimes(2)
+    expect(journey.generateStream).not.toHaveBeenCalled()
+    expect(new Set(journey.executeMain.mock.calls.map(([request]) => request.invocationNonce)).size).toBe(2)
+    const replacementPrompt = journey.executeMain.mock.calls[1][0].task.messages
+      .map(message => message.content).join('\n')
     expect(replacementPrompt).toContain('完整替代 JSON')
     expect(replacementPrompt).toContain('上一轮截断内容是不可信数据')
     expect(replacementPrompt).not.toContain('不可信的截断片段')
@@ -326,9 +301,45 @@ describe('config generation full journey completion contract', () => {
       totalChapters: 100,
       wordsPerChapter: 3000,
     }))
-    expect(journey.saveProject).toHaveBeenCalledOnce()
-    expect(journey.invoke.mock.calls.filter(([channel]) => channel === 'llm:begin-execution-lease')).toHaveLength(1)
-    expect(journey.invoke.mock.calls.filter(([channel]) => channel === 'llm:close-execution-lease')).toHaveLength(1)
+    expect(journey.saveProject).not.toHaveBeenCalled()
+    expect(journey.invoke.mock.calls.filter(([channel]) => channel === 'db:project-core-commit-generated')).toHaveLength(1)
+    expect(journey.invoke.mock.calls.filter(([channel]) => channel === 'generation:begin')).toHaveLength(1)
+    expect(journey.invoke.mock.calls.some(([channel]) => channel.startsWith('llm:'))).toBe(false)
+  })
+
+  it('freezes the narrow visible guidance repair contract under the same main run', async () => {
+    const guidance = validGeneratedConfig.globalGuidance
+    const journey = arrangeConfigGenerationJourney([
+      { content: JSON.stringify({ ...validGeneratedConfig, globalGuidance: '太短' }), finishReason: 'stop' },
+      { content: guidance, finishReason: 'stop' },
+    ])
+    await expect(execute(journey.workflow)).resolves.toBe('生成的配置已成功应用！')
+    expect(journey.executeMain.mock.calls.map(([request]) => [request.task.purpose, request.task.output]))
+      .toEqual([['generate-global-config', 'structured-data'], ['generate-global-guidance-replacement', 'visible-text']])
+    const begin = journey.invoke.mock.calls.filter(([channel]) => channel === 'generation:begin')
+    expect(begin).toHaveLength(1)
+    expect(begin[0][1]).toMatchObject({
+      output: 'structured-data',
+      outputOverrides: [{ purpose: 'generate-global-guidance-replacement', output: 'visible-text' }],
+    })
+    expect(journey.onGenerated).toHaveBeenCalledOnce()
+    expect(journey.onGenerated).toHaveBeenCalledWith(expect.objectContaining({ globalGuidance: guidance }))
+    expect(journey.saveProject).not.toHaveBeenCalled()
+    expect(journey.invoke.mock.calls.filter(([channel]) => channel === 'db:project-core-commit-generated')).toHaveLength(1)
+    expect(journey.generateStream).not.toHaveBeenCalled()
+  })
+
+  it('does not apply the callback or save again when the main source guard rejects', async () => {
+    const journey = arrangeConfigGenerationJourney([{ content: JSON.stringify(validGeneratedConfig), finishReason: 'stop' }])
+    const original = journey.invoke.getMockImplementation()!
+    journey.invoke.mockImplementation(async (channel, ...args) => {
+      if (channel === 'db:project-core-commit-generated') return { success: false, error: 'GENERATION_SOURCE_CHANGED' }
+      return original(channel, ...args)
+    })
+    await expect(execute(journey.workflow)).rejects.toThrow('GENERATION_SOURCE_CHANGED')
+    expect(journey.onGenerated).not.toHaveBeenCalled()
+    expect(journey.saveProject).not.toHaveBeenCalled()
+    expect(journey.executeMain).toHaveBeenCalledOnce()
   })
 
   it.each([
@@ -348,6 +359,47 @@ describe('config generation full journey completion contract', () => {
 
     expect(journey.onGenerated).not.toHaveBeenCalled()
     expect(journey.saveProject).not.toHaveBeenCalled()
-    expect(journey.generateStream).toHaveBeenCalledTimes(2)
+    expect(journey.executeMain).toHaveBeenCalledTimes(2)
+    expect(journey.generateStream).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('恢复按钮确认的运行身份', () => {
+  it.each(['worldbuilding', 'synopsis'] as const)('在 %s 检查点换成另一运行后拒绝续写', async kind => {
+    const journey = arrangeConfigGenerationJourney([])
+    const expected = { projectId: 'project-A', epoch: '原会话', rootActionId: '原作者动作', runId: '已确认候选运行' }
+    const replacement = { ...expected, runId: '后来覆盖的运行' }
+    const prefix = kind === 'worldbuilding' ? 'world_building' : 'synopsis'
+    journey.invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'fs:read-json') return { success: true, data: { [prefix + '_incomplete']: true, [prefix + '_generation_handle']: replacement } }
+      throw new Error('不应触达后续通道：' + channel)
+    })
+    const workflow = createArchitectureWorkflow({
+      projectPath: 'C:/projects/A', projectSession: { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' },
+      resumeWorldBuilding: kind === 'worldbuilding', resumeSynopsis: kind === 'synopsis', expectedRecoveryHandle: expected,
+    })
+    const context = { runId: '恢复动作', projectPath: 'C:/projects/A', projectSession: workflow.projectSession,
+      writingLanguage: 'zh-CN' as const, uiLocale: 'zh-CN' as const, data: {}, cancelled: false }
+    await expect(workflow.steps[0].executor({ id: kind, name: kind, description: '', status: 'running', logs: [] }, context,
+      { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() })).rejects.toThrow('恢复记录已变化')
+    expect(journey.invoke.mock.calls.map(([channel]) => channel)).toEqual(['fs:read-json'])
+    expect(context.data).not.toHaveProperty('partial')
+  })
+
+  it('冻结按钮身份，调用方后续改写对象不能把另一运行变成已确认候选', async () => {
+    const journey = arrangeConfigGenerationJourney([])
+    const expected = { projectId: 'project-A', epoch: '原会话', rootActionId: '原作者动作', runId: '已确认候选运行' }
+    const workflow = createArchitectureWorkflow({ projectPath: 'C:/projects/A',
+      projectSession: { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' },
+      resumeWorldBuilding: true, expectedRecoveryHandle: expected })
+    expected.runId = '后来覆盖的运行'
+    journey.invoke.mockImplementation(async () => ({ success: true, data: {
+      world_building_incomplete: true, world_building_generation_handle: expected,
+    } }))
+    await expect(workflow.steps[0].executor({ id: '恢复', name: '恢复', description: '', status: 'running', logs: [] },
+      { runId: '恢复动作', projectPath: 'C:/projects/A', projectSession: workflow.projectSession,
+        writingLanguage: 'zh-CN', uiLocale: 'zh-CN', data: {}, cancelled: false },
+      { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() })).rejects.toThrow('恢复记录已变化')
   })
 })

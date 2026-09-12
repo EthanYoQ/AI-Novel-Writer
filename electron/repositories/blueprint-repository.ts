@@ -52,6 +52,9 @@ export interface BlueprintData {
 export type BlueprintRangeCommitMode = 'full' | 'replace-range'
 
 export interface BlueprintRangeCommitRequest {
+    /** Optional while legacy import consumers await S06D/S12; generated planning supplies it. */
+    generationRunHandle?: import('../../src/services/generation/generation-runtime').MainGenerationRunHandle
+    generationRequestedRange?: { startChapter: number; endChapter: number }
     mode: BlueprintRangeCommitMode
     operationId: string
     startChapter: number
@@ -60,6 +63,7 @@ export interface BlueprintRangeCommitRequest {
 }
 
 export interface BlueprintRangeCommitReceipt {
+    generationProgress?: import('../../src/shared/generation-owner-contract').DirectoryGenerationProgress
     mode: BlueprintRangeCommitMode
     operationId: string
     payloadHash: string
@@ -560,7 +564,7 @@ export class BlueprintRepository {
     }
 
     /** 完整逻辑范围只提交一次，并在同一事务内回读验证后返回收据。 */
-    static commitRange(request: BlueprintRangeCommitRequest): BlueprintRangeCommitReceipt {
+    static commitRange(request: BlueprintRangeCommitRequest, assertGenerationSources?: () => void): BlueprintRangeCommitReceipt {
         assertExactRange(request)
         const db = requireProjectDb()
         ensureBlueprintCommitSchema(db)
@@ -603,6 +607,9 @@ export class BlueprintRepository {
                 }
             }
 
+            // An acknowledged operation is read-only on replay. New effects must
+            // revalidate frozen sources inside this same write transaction.
+            assertGenerationSources?.()
             if (request.mode === 'full') {
                 db.prepare(
                     'DELETE FROM blueprints WHERE chapter_number < ? OR chapter_number > ?',
@@ -672,7 +679,7 @@ export class BlueprintRepository {
                 characterSyncOperation,
             }
         })
-        return tx()
+        return tx.immediate()
     }
 
     /** Lists durable post-commit work that can be resumed after an app restart. */

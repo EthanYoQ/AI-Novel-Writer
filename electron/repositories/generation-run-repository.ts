@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
+import type { VisibleCompositionReceipt, DirectoryGenerationProgress } from '../../src/shared/generation-owner-contract';
+import { composeVisibleContinuation, VISIBLE_CONTINUATION_VERSION } from '../../src/shared/visible-continuation';
 import { getProjectDb } from '../database';
 import { assertReservation, assertAttemptTransition, rootActionIdempotencyKey, type RootAction, type RootBudget, type PhysicalAttempt, type VisibleArtifact, type ProviderUsagePolicy } from '../../src/shared/generation-contract';
 import { isContentHash, sameProjectEpoch, type FrozenInputFingerprint, type SourceRef, type ProjectEpoch } from '../../src/shared/source-ref';
@@ -193,6 +195,124 @@ export class GenerationRunRepository {
             receipt.attempt.status = 'dispatch-marked';
             this.db().prepare('UPDATE generation_attempts SET attempt_json=? WHERE attempt_id=?').run(encode(receipt.attempt), attemptId);
             this.db().prepare('UPDATE generation_roots SET active_since_ms=COALESCE(active_since_ms,?) WHERE root_action_id=?').run(this.now(), receipt.run.rootActionId);
+        });
+    }
+    private visibleComposition(runId: string, artifactIds: string[]): VisibleCompositionReceipt {
+        if (!Array.isArray(artifactIds) || !artifactIds.length || artifactIds.length > 32
+            || artifactIds.some(id => typeof id !== 'string' || !id) || new Set(artifactIds).size !== artifactIds.length)
+            fail('GENERATION_COMPOSITION_INVALID');
+        let text = '', previousOrdinal = -1;
+        const sources: VisibleCompositionReceipt['sources'] = [];
+        for (const artifactId of artifactIds) {
+            const row = this.db().prepare('SELECT a.attempt_id,a.run_id,a.status,t.rowid AS ordinal FROM generation_artifacts a JOIN generation_attempts t ON t.attempt_id=a.attempt_id WHERE a.artifact_id=?').get(artifactId) as {
+                attempt_id: string; run_id: string; status: string; ordinal: number;
+            } | undefined;
+            if (!row || row.run_id !== runId || row.status === 'discarded' || row.ordinal <= previousOrdinal)
+                fail('GENERATION_COMPOSITION_SOURCE_INVALID');
+            const receipt = this.receipt(row.attempt_id), artifact = receipt.artifact!;
+            if (!['settled', 'unknown'].includes(receipt.attempt.status) || !artifact.text.trim())
+                fail('GENERATION_COMPOSITION_SOURCE_NOT_TERMINAL');
+            if (!['stop', 'length'].includes(receipt.result?.finishReason ?? ''))
+                fail('GENERATION_COMPOSITION_SOURCE_UNTRUSTED');
+            const next = sources.length ? composeVisibleContinuation(text, artifact.text) : artifact.text.trim();
+            if (sources.length && (next.match(/[\p{L}\p{N}]/gu)?.length ?? 0) <= (text.match(/[\p{L}\p{N}]/gu)?.length ?? 0))
+                fail('GENERATION_COMPOSITION_NO_PROGRESS');
+            text = next; previousOrdinal = row.ordinal;
+            sources.push({ artifactId, revision: artifact.revision, textHash: artifact.textHash });
+        }
+        return { algorithm: VISIBLE_CONTINUATION_VERSION, text, textHash: textHash(text), artifactIds: [...artifactIds], sources };
+    }
+    listDirectoryProgress(): DirectoryGenerationProgress[] {
+        const rows = this.db().prepare('SELECT run_id,usage_receipt_json FROM generation_attempts ORDER BY rowid').all() as { run_id: string; usage_receipt_json: string }[];
+        return rows.flatMap(row => {
+            const stored = JSON.parse(row.usage_receipt_json).directoryProgress as DirectoryGenerationProgress | undefined;
+            if (!stored) return [];
+            const completeHandle = (handle: DirectoryGenerationProgress['sourceHandle']) => handle && typeof handle === 'object'
+                && Object.keys(handle).length === 4 && ['projectId', 'epoch', 'rootActionId', 'runId'].every(key => typeof handle[key as keyof typeof handle] === 'string' && handle[key as keyof typeof handle].trim());
+            if (!completeHandle(stored.sourceHandle) || stored.sourceHandle.runId !== row.run_id
+                || stored.sourceHandle.epoch !== JSON.parse(row.usage_receipt_json).artifactIdentity?.epoch || !stored.requestedRange || !stored.committedRange
+                || ![stored.requestedRange.startChapter, stored.requestedRange.endChapter, stored.committedRange.startChapter, stored.committedRange.endChapter].every(value => Number.isSafeInteger(value) && value > 0)
+                || stored.requestedRange.endChapter < stored.requestedRange.startChapter
+                || stored.requestedRange.endChapter - stored.requestedRange.startChapter >= 10000
+                || stored.committedRange.endChapter < stored.committedRange.startChapter) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+            const run = this.get(stored.sourceHandle.runId);
+            const selected = run.binding.sourceManifest.selectedBlueprintChapterNumbers as number[] | undefined;
+            if (!selected || Array.from({ length: stored.requestedRange.endChapter - stored.requestedRange.startChapter + 1 }, (_, index) => stored.requestedRange.startChapter + index).some(chapter => !selected.includes(chapter)))
+                fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+            const committed = this.db().prepare('SELECT payload_hash,start_chapter,end_chapter FROM blueprint_commit_operations WHERE operation_id=?').get(stored.operationId) as { payload_hash: string; start_chapter: number; end_chapter: number } | undefined;
+            if (!committed || committed.payload_hash !== stored.payloadHash || run.rootActionId !== stored.sourceHandle.rootActionId
+                || run.binding.projectId !== stored.sourceHandle.projectId || committed.start_chapter !== stored.committedRange.startChapter
+                || committed.end_chapter !== stored.committedRange.endChapter || stored.requestedRange.startChapter !== committed.start_chapter
+                || stored.requestedRange.endChapter < committed.end_chapter
+                || !isDeepStrictEqual(stored.remainingRange, committed.end_chapter < stored.requestedRange.endChapter
+                    ? { startChapter: committed.end_chapter + 1, endChapter: stored.requestedRange.endChapter } : null)) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+            if (stored.continuationHandle) {
+                if (!completeHandle(stored.continuationHandle)) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+                const child = this.get(stored.continuationHandle.runId);
+                if (child.rootActionId !== run.rootActionId || child.binding.projectId !== run.binding.projectId
+                    || stored.continuationHandle.rootActionId !== child.rootActionId || stored.continuationHandle.projectId !== child.binding.projectId
+                    || child.runId === run.runId) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+                stored.continuationHandle = { ...stored.continuationHandle, epoch: child.binding.epoch };
+            }
+            return [stored];
+        });
+    }
+    recordDirectoryProgress(progress: DirectoryGenerationProgress): void {
+        if (!this.db().inTransaction) fail('GENERATION_DIRECTORY_TRANSACTION_REQUIRED');
+        const existing = this.listDirectoryProgress().find(item => item.operationId === progress.operationId);
+        if (existing) {
+            if (!isDeepStrictEqual(existing, progress)) fail('GENERATION_DIRECTORY_PROGRESS_CONFLICT');
+            return;
+        }
+        const run = this.get(progress.sourceHandle.runId);
+        if (run.binding.sourceManifest.outputContract !== 'structured-data') fail('GENERATION_DIRECTORY_OUTPUT_INVALID');
+        const row = this.db().prepare('SELECT attempt_id,usage_receipt_json FROM generation_attempts WHERE run_id=? ORDER BY rowid DESC LIMIT 1').get(progress.sourceHandle.runId) as { attempt_id: string; usage_receipt_json: string } | undefined;
+        if (!row || JSON.parse(row.usage_receipt_json).directoryProgress) fail('GENERATION_DIRECTORY_PROGRESS_CONFLICT');
+        if (!['settled', 'unknown'].includes(this.receipt(row.attempt_id).attempt.status)) fail('GENERATION_DIRECTORY_ATTEMPT_NOT_TERMINAL');
+        this.db().prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(encode({ ...JSON.parse(row.usage_receipt_json), directoryProgress: progress }), row.attempt_id);
+        this.listDirectoryProgress();
+    }
+    activateRootForCommittedStage(rootId: string, project: ProjectEpoch): void {
+        if (!this.db().inTransaction) fail('GENERATION_DIRECTORY_TRANSACTION_REQUIRED');
+        const budget = this.budget(rootId);
+        if (budget.root.projectId !== project.projectId || !['active', 'paused'].includes(budget.root.status) || budget.blockedCode
+            || budget.attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status))) fail('GENERATION_DIRECTORY_CONTINUATION_BLOCKED');
+        budget.root.epoch = project.epoch; budget.root.status = 'active';
+        this.db().prepare('UPDATE generation_roots SET action_json=? WHERE root_action_id=?').run(encode(budget.root), rootId);
+    }
+    bindDirectoryContinuation(operationId: string, handle: DirectoryGenerationProgress['sourceHandle']): void {
+        const rows = this.db().prepare('SELECT attempt_id,usage_receipt_json FROM generation_attempts').all() as { attempt_id: string; usage_receipt_json: string }[];
+        const row = rows.find(row => JSON.parse(row.usage_receipt_json).directoryProgress?.operationId === operationId);
+        if (!row || !this.db().inTransaction) fail('GENERATION_DIRECTORY_PROGRESS_INVALID');
+        const receipt = JSON.parse(row.usage_receipt_json);
+        if (receipt.directoryProgress.continuationHandle) fail('GENERATION_DIRECTORY_CONTINUATION_EXISTS');
+        receipt.directoryProgress.continuationHandle = handle;
+        this.db().prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(encode(receipt), row.attempt_id);
+    }
+    readVisibleComposition(runId: string): VisibleCompositionReceipt | null {
+        const rows = this.db().prepare('SELECT usage_receipt_json FROM generation_attempts WHERE run_id=? ORDER BY rowid DESC').all(runId) as { usage_receipt_json: string }[];
+        for (const row of rows) {
+            const stored = JSON.parse(row.usage_receipt_json).visibleComposition as Omit<VisibleCompositionReceipt, 'text'> | undefined;
+            if (!stored) continue;
+            const current = this.visibleComposition(runId, stored.artifactIds);
+            if (stored.algorithm !== current.algorithm || stored.textHash !== current.textHash || !isDeepStrictEqual(stored.sources, current.sources))
+                fail('GENERATION_COMPOSITION_INTEGRITY_FAILED');
+            return current;
+        }
+        return null;
+    }
+    composeVisible(runId: string, artifactIds: string[], expectedTextHash: string): VisibleCompositionReceipt {
+        return this.transaction(() => {
+            const run = this.get(runId);
+            if (run.binding.sourceManifest.outputContract !== 'visible-text') fail('GENERATION_COMPOSITION_OUTPUT_INVALID');
+            const next = this.visibleComposition(runId, artifactIds), previous = this.readVisibleComposition(runId);
+            if (next.textHash !== expectedTextHash) fail('GENERATION_COMPOSITION_HASH_MISMATCH');
+            if (previous && previous.artifactIds.some((id, index) => next.artifactIds[index] !== id)) fail('GENERATION_COMPOSITION_REGRESSION');
+            const row = this.db().prepare('SELECT t.attempt_id,t.usage_receipt_json FROM generation_attempts t JOIN generation_artifacts a ON a.attempt_id=t.attempt_id WHERE a.artifact_id=?').get(artifactIds.at(-1)) as { attempt_id: string; usage_receipt_json: string };
+            const { text: visibleText, ...stored } = next;
+            void visibleText;
+            this.db().prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(encode({ ...JSON.parse(row.usage_receipt_json), visibleComposition: stored }), row.attempt_id);
+            return next;
         });
     }
     settle(attemptId: string, usage: GenerationUsageReceipt | null, finishReason: string | null = null): GenerationExecutionReceipt {

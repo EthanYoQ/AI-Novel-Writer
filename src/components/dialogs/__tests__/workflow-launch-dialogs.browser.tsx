@@ -41,6 +41,7 @@ beforeEach(() => {
   document.body.append(container)
   root = createRoot(container)
   invoke = vi.fn(async (channel: string) => {
+    if (channel === 'generation:list-directory-progress') return []
     if (channel === 'db:blueprint-character-sync-list-pending') return []
     if (channel === 'db:blueprint-get-all') {
       return blueprintChapterNumbers.map(chapterNumber => ({ chapterNumber }))
@@ -361,6 +362,7 @@ describe('workflow launch dialogs', () => {
       updatedAt: '2026-01-01 00:00:00',
     }
     invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:list-directory-progress') return []
       if (channel === 'db:blueprint-get-all') return []
       if (channel === 'db:draft-authority-sequence') return {
         status: 'empty',
@@ -404,4 +406,39 @@ describe('workflow launch dialogs', () => {
     expect(onConfirm).not.toHaveBeenCalled()
     await expect.element(page.getByRole('button', { name: '开始生成' })).toBeEnabled()
   })
+})
+
+
+it('shows the committed directory chain endpoint and resumes only its explicit remaining receipt', async () => {
+  const handle = { projectId: project.id, epoch: '上次会话', rootActionId: '原作者动作', runId: '最初运行' }
+  const nextHandle = { ...handle, runId: '后续运行' }
+  const original = invoke.getMockImplementation() as (channel: string, ...args: unknown[]) => Promise<unknown>
+  invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+    if (channel === 'generation:list-directory-progress') return [
+      { operationId: '父提交', payloadHash: 'a'.repeat(64), sourceHandle: handle,
+        requestedRange: { startChapter: 1, endChapter: 200 }, committedRange: { startChapter: 1, endChapter: 160 },
+        remainingRange: { startChapter: 161, endChapter: 200 }, continuationHandle: nextHandle },
+      { operationId: '末端提交', payloadHash: 'b'.repeat(64), sourceHandle: nextHandle,
+        requestedRange: { startChapter: 161, endChapter: 200 }, committedRange: { startChapter: 161, endChapter: 180 },
+        remainingRange: { startChapter: 181, endChapter: 200 } },
+    ]
+    return original(channel, ...args)
+  })
+  const onConfirm = vi.fn(async () => {})
+  await act(async () => root.render(<DirectoryConfigDialog isOpen onClose={() => {}} existingCount={180} onConfirm={onConfirm} />))
+  await expect.element(page.getByText('已保存第 161–180 章蓝图。')).toBeVisible()
+  await expect.element(page.getByRole('button', { name: '继续第 161–200 章（沿用原预算）' })).not.toBeInTheDocument()
+  await act(async () => page.getByRole('button', { name: '继续第 181–200 章（沿用原预算）' }).click())
+  expect(onConfirm).toHaveBeenCalledWith({ mode: 'append', continueDirectoryOperationId: '末端提交' })
+})
+
+
+it('submits a 200-chapter intent to the owner without a private UI limit', async () => {
+  useProjectStore.setState({ currentProject: { ...project, novelConfig: { ...project.novelConfig, totalChapters: 200 } } as never })
+  const onConfirm = vi.fn(async () => {})
+  await act(async () => root.render(<DirectoryConfigDialog isOpen onClose={() => {}} existingCount={0} onConfirm={onConfirm} />))
+  await act(async () => page.getByRole('spinbutton').nth(0).fill('200'))
+  await expect.element(page.getByRole('button', { name: '开始生成' })).toBeEnabled()
+  await act(async () => page.getByRole('button', { name: '开始生成' }).click())
+  expect(onConfirm).toHaveBeenCalledWith({ mode: 'full', count: 200, pacingGuidance: undefined })
 })

@@ -1,3 +1,5 @@
+import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
+import { composePromptSystemRole, resolvePromptTemplate, renderPrompt } from '../../prompt-templates'
 import type { PlanningMaterial } from '../../knowledge-service'
 import { ipc } from '../../ipc-client'
 import { characterRosterEntriesFromCards } from '../../character-roster-client'
@@ -20,7 +22,6 @@ import { requireWorkflowProjectSession, workflowUiText, workflowWritingLanguage 
 import {
   BaseWorkflowCommand,
   injectWritingSkillIntoSession,
-  WORKFLOW_GENERATION_BUDGETS,
   type CommandExecuteParams,
   type WorkflowGenerationRuntimeDependencies,
 } from './base-command'
@@ -257,7 +258,11 @@ export class ExtractPlanningMaterialCharactersCommand extends BaseWorkflowComman
   }
 
   async execute(params: CommandExecuteParams): Promise<string> {
-    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params))
+    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params), {
+      operation: 'planning-material-character-extraction', promptKeys: ['planning_material_character_extraction'], skillStages: ['planning'], output: 'structured-data',
+      onRunOpened: async handle => { params.context.data.planningMaterialGenerationHandle = Object.freeze({ ...handle }) },
+      authorInputs: this.materials.map((material, index) => ({ id: `planning-material:${index}`, text: JSON.stringify({ fileName: material.fileName, text: material.text }) })),
+    })
   }
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
@@ -274,15 +279,10 @@ export class ExtractPlanningMaterialCharactersCommand extends BaseWorkflowComman
       context.data[PLANNING_MATERIAL_CHARACTER_CANDIDATES] = []
       return formatCandidatePreview([], context)
     }
-    const minimumCalls = Math.ceil(chunks.length / MATERIAL_EXTRACTION_BATCH_SIZE)
-    const callCap = WORKFLOW_GENERATION_BUDGETS.structured.maxAttempts
-    if (minimumCalls > callCap) {
-      throw new Error(text(
-        `所选资料会生成 ${chunks.length} 个分块，按每批 ${MATERIAL_EXTRACTION_BATCH_SIZE} 块至少需要 ${minimumCalls} 次模型调用，超过本次上限 ${callCap} 次。尚未发送任何资料；请减少本次选择后分批提取。`,
-        `The selected material produces ${chunks.length} chunks and needs at least ${minimumCalls} model calls at ${MATERIAL_EXTRACTION_BATCH_SIZE} chunks per batch, exceeding this run's ${callCap}-call limit. No material was sent; reduce the selection and extract it in separate runs.`,
-      ))
-    }
     callbacks.log(text('正在从创作资料中提取角色卡...', 'Extracting character cards from the planning material...'))
+
+    const template = await resolvePromptTemplate('planning_material_character_extraction', projectSession, writingLanguage)
+    if (!template) throw new Error('PLANNING_MATERIAL_TEMPLATE_MISSING')
 
     const contract: StructuredBatchContract<MaterialChunk, MaterialExtraction> = {
       buildTask: ({ items }) => {
@@ -296,22 +296,8 @@ export class ExtractPlanningMaterialCharactersCommand extends BaseWorkflowComman
           purpose: 'planning-material-character-extraction',
           output: 'structured-data',
           messages: [
-            {
-              role: 'system',
-              content: promptLanguageText(
-                writingLanguage,
-                '你从作者资料中提取明确出现的小说角色。不得虚构新角色或改写作者事实。只输出严格 JSON。',
-                'Extract only fiction characters explicitly present in the author material. Do not invent characters or rewrite author facts. Output strict JSON only.',
-              ),
-            },
-            {
-              role: 'user',
-              content: promptLanguageText(
-                writingLanguage,
-                `为每个资料块返回且只返回一个结果，sourceId 必须完整覆盖 ${JSON.stringify(requestedIds)}。只写入资料明确陈述的事实；资料中明确陈述的每条角色事实都必须写入对应支持字段。每张角色卡必须有 name 和 role。资料未明确给出的可选字段必须省略，不得猜测、补齐或用空值占位。relationships 使用 {"target":"姓名","relation":"关系"} 数组；role 只能是 protagonist、antagonist、supporting、minor。\n输出合同（删除资料未明确给出的可选字段）：{"results":[{"sourceId":"精确资料块 ID","characterCards":[{"name":"姓名","role":"supporting","gender":"明确性别","age":"明确年龄","appearance":"明确外貌","personality":"明确性格","background":"明确经历、职业、背景或秘密","abilities":"明确能力","motivation":"明确动机","relationships":[{"target":"姓名","relation":"明确关系"}],"arc":"明确角色弧光","notes":"其他明确事实"}]}]}\n\n${sources}`,
-                `Return exactly one result for every material chunk and cover these sourceId values exactly: ${JSON.stringify(requestedIds)}. Include only facts explicitly stated in the material. Every explicit character fact in the material must be included in the corresponding supported field. Every character card must have name and role. Omit optional fields that are not explicitly stated; do not guess, fill gaps, or emit empty placeholders. relationships is an array of {"target":"name","relation":"relationship"}; role must be protagonist, antagonist, supporting, or minor.\nOutput contract (remove optional fields not explicitly stated in the material): {"results":[{"sourceId":"exact material chunk ID","characterCards":[{"name":"name","role":"supporting","gender":"explicit gender","age":"explicit age","appearance":"explicit appearance","personality":"explicit personality","background":"explicit history, occupation, background, or secret","abilities":"explicit abilities","motivation":"explicit motivation","relationships":[{"target":"name","relation":"explicit relationship"}],"arc":"explicit character arc","notes":"other explicit facts"}]}]}\n\n${sources}`,
-              ),
-            },
+            { role: 'system', content: composePromptSystemRole(template, writingLanguage) },
+            { role: 'user', content: renderPrompt(template, { requested_ids: JSON.stringify(requestedIds), sources }, writingLanguage) },
           ],
         }
       },
@@ -400,6 +386,8 @@ export class CommitPlanningMaterialCharactersCommand extends BaseWorkflowCommand
       ))
     }
     this.assertNotCancelled(context)
+    const generationRunHandle = context.data.planningMaterialGenerationHandle as MainGenerationRunHandle | undefined
+    if (context.mainGenerationRunHandle && !generationRunHandle) throw new Error('PLANNING_MATERIAL_GENERATION_HANDLE_REQUIRED')
     const commit = await ipc.invokeWithProjectSession(
       projectSession,
       'db:character-roster-commit',
@@ -409,6 +397,7 @@ export class CommitPlanningMaterialCharactersCommand extends BaseWorkflowCommand
         schemaVersion: CHARACTER_ROSTER_SCHEMA_VERSION,
         entries,
         intent: 'novel_import',
+        ...(generationRunHandle ? { generationRunHandle } : {}),
       } satisfies CharacterRosterCommitRequest,
       projectSession.projectPath,
     )

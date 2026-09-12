@@ -11,11 +11,12 @@ import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Label } from '../ui/Label'
 import { Textarea } from '../ui/Textarea'
+import type { DirectoryGenerationProgress } from '../../shared/generation-owner-contract'
+import { terminalDirectoryProgress } from '../../services/workflows/directory-workflow'
 import type { DirectoryWorkflowParams } from '../../services/workflows/directory-workflow'
 import {
   DEFAULT_BLUEPRINT_GENERATION_COUNT,
   getBlueprintBatchAdvice,
-  MAX_BLUEPRINT_CHAPTERS_PER_TASK,
   planBlueprintGenerationCost,
 } from '../../services/workflows/blueprint-batch-policy'
 import {
@@ -93,6 +94,23 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
   const [highestBlueprintChapter, setHighestBlueprintChapter] = useState<number | null>(null)
   const [authorityError, setAuthorityError] = useState<string | null>(null)
   const [authorityLoading, setAuthorityLoading] = useState(false)
+  const [directoryProgress, setDirectoryProgress] = useState<DirectoryGenerationProgress[]>([])
+  const [progressError, setProgressError] = useState<string | null>(null)
+  const [progressSessionKey, setProgressSessionKey] = useState('')
+  useEffect(() => {
+    if (!isOpen || !currentProject) return
+    const session = captureProjectSession(currentProject)
+    if (!session) return
+    let disposed = false
+    void ipc.invokeWithProjectSession(session, 'generation:list-directory-progress').then(all => {
+      if (disposed || !isProjectSessionCurrent(session)) return
+      setProgressSessionKey(session.projectId + ':' + session.leaseId); setProgressError(null)
+      const terminals = all.map(item => terminalDirectoryProgress(item, all))
+      setDirectoryProgress([...new Map(terminals.map(item => [item.operationId, item])).values()])
+    }).catch(error => { if (!disposed && isProjectSessionCurrent(session)) { setDirectoryProgress([]); setProgressSessionKey(session.projectId + ':' + session.leaseId); setProgressError(error instanceof Error ? error.message : String(error)) } })
+    return () => { disposed = true }
+  }, [currentProject, isOpen])
+
 
   useEffect(() => {
     if (!isOpen || !currentProject) return
@@ -279,19 +297,10 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
       params = { mode: 'append', startChapter: start, count: Math.max(1, end - start + 1) }
     }
 
-    const costPlan = planBlueprintGenerationCost(requestedChapterCount(params, total, frozenAppendStart))
-    if (costPlan.exceedsHardLimit) {
-      toast.warning(text(
-        `当前范围超过单次任务安全成本上限，请拆成每段不超过 ${MAX_BLUEPRINT_CHAPTERS_PER_TASK} 章的范围。`,
-        `This range exceeds the safe cost limit. Split it into ranges of no more than ${MAX_BLUEPRINT_CHAPTERS_PER_TASK} chapters.`,
-      ))
-      return
-    }
-
     if (!isProjectSessionCurrent(projectSession)) return
     setIsConfirming(true)
     try {
-      await onConfirm({ ...params, pacingGuidance: pacingGuidance.trim() || undefined })
+      await onConfirm({ ...params, pacingGuidance: pacingGuidance || undefined })
       setLaunchError(null)
       onClose()
       toast.info(text('已提交：正在生成章节蓝图...', 'Submitted: generating chapter blueprints...'))
@@ -320,6 +329,30 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
         </DialogHeader>
 
         <div className="px-5 py-4 space-y-4">
+          {progressSessionKey === currentProject.id + ':' + currentProject.sessionLease && progressError && <p role="alert" className="text-xs">{progressError}</p>}
+          {(progressSessionKey === currentProject.id + ':' + currentProject.sessionLease ? directoryProgress : []).map(progress => (
+            <div key={progress.operationId} className="rounded-lg border p-3 text-xs">
+              <p>{text(
+                '已保存第 ' + progress.committedRange.startChapter + '–' + progress.committedRange.endChapter + ' 章蓝图。',
+                'Blueprints for chapters ' + progress.committedRange.startChapter + '–' + progress.committedRange.endChapter + ' are saved.',
+              )}</p>
+              {progress.remainingRange ? (
+                <Button variant="outline" className="mt-2" disabled={isConfirming} onClick={async () => {
+                  const session = captureProjectSession(currentProject)
+                  if (!session || !isProjectSessionCurrent(session)) return
+                  setIsConfirming(true)
+                  try {
+                    await onConfirm({ mode: 'append', continueDirectoryOperationId: progress.operationId })
+                    setLaunchError(null); onClose()
+                  } catch (error) { setLaunchError(error instanceof Error ? error.message : String(error)) }
+                  finally { setIsConfirming(false) }
+                }}>
+                  {text('继续第 ' + progress.remainingRange.startChapter + '–' + progress.remainingRange.endChapter + ' 章（沿用原预算）',
+                    'Continue chapters ' + progress.remainingRange.startChapter + '–' + progress.remainingRange.endChapter + ' (same budget)')}
+                </Button>
+              ) : <p>{text('该范围已完成。', 'This range is complete.')}</p>}
+            </div>
+          ))}
           {(isRecoveryLoading || pendingCharacterSyncs.length > 0 || recoveryError) && (
             <div
               className="rounded-lg border px-3 py-2.5 text-xs"
@@ -436,8 +469,8 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
                 getBlueprintBatchAdvice('en-US', previewCost.chapterCount),
               )}
               {previewCost.exceedsHardLimit && text(
-                ` 当前范围超过单次任务安全成本上限，请拆成每段不超过 ${MAX_BLUEPRINT_CHAPTERS_PER_TASK} 章。`,
-                ` This exceeds the safe per-task cost limit; split it into ranges of no more than ${MAX_BLUEPRINT_CHAPTERS_PER_TASK} chapters.`,
+                ' 大范围可能耗尽本次预算；已验证的连续蓝图会保存，剩余范围保持未完成。',
+                ' Large ranges may exhaust this action’s budget. Validated consecutive blueprints are saved; the rest remain incomplete.',
               )}
             </p>
           </div>

@@ -744,6 +744,10 @@ export interface DatabaseChannels {
     args: [data: Partial<ProjectCoreData>, expectedProjectPath: string]
     return: { success: boolean; error?: string }
   }
+  'db:project-core-commit-generated': {
+    args: [request: { data: Partial<ProjectCoreData>; generationRunHandle: import('../services/generation/generation-runtime').MainGenerationRunHandle }, expectedProjectPath: string]
+    return: { success: boolean; error?: string }
+  }
   'db:project-core-synopsis-commit': {
     args: [request: ProjectCoreSynopsisCommitRequest, expectedProjectPath: string]
     return: { success: boolean; error?: string }
