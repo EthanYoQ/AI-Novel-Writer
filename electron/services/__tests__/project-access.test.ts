@@ -38,7 +38,7 @@ function makeLegacyProjectRoot(): string {
   temporaryRoots.push(root)
   fs.mkdirSync(path.join(root, '.vela'), { recursive: true })
   const database = new Database(path.join(root, '.vela', 'vela.db'))
-  initializeLegacyBaselineSchema(database)
+  database.transaction(() => initializeLegacyBaselineSchema(database))()
   database.close()
   return root
 }
@@ -376,7 +376,7 @@ it('legacy discovery with WAL and no SHM leaves the source inventory and bytes u
   const seed = path.join(root, 'seed.db'), db = new Database(seed)
   try {
     db.pragma('journal_mode = WAL'); db.pragma('wal_autocheckpoint = 0')
-    initializeLegacyBaselineSchema(db)
+    db.transaction(() => initializeLegacyBaselineSchema(db))()
     db.prepare('INSERT INTO contents(body) VALUES (?)').run('WAL-only author text')
     fs.copyFileSync(seed, file); fs.copyFileSync(seed + '-wal', file + '-wal')
   } finally { db.close(); fs.unlinkSync(seed) }

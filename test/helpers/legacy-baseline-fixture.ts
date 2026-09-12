@@ -15,7 +15,7 @@ export function openLegacyNormalizationFixture(projectPath: string): void {
   const root = path.join(projectPath, '.vela'); fs.mkdirSync(root, { recursive: true })
   fixtureDb = new Database(path.join(root, 'vela.db'))
   fixtureDb.pragma('foreign_keys = ON')
-  initializeLegacyBaselineSchema(fixtureDb)
+  fixtureDb.transaction(() => initializeLegacyBaselineSchema(fixtureDb!))()
   fixturePath = projectPath
 }
 export function closeLegacyNormalizationFixture(): void {

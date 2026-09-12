@@ -11,15 +11,29 @@ import { closeConnection, closeVectorStoreForMigration, getConnection, search } 
 
 let root: string
 const projectPaths: string[] = []
+const pendingCases: Promise<void>[] = []
+// Vitest can time out a case without cancelling its native operations. Keep the
+// full case alive until teardown so its handles never race directory removal or
+// the next case's root. The original test timeout still fails the test.
+function nativeCase<T>(operation: (value: T) => Promise<void>): (value: T) => Promise<void> {
+  return value => {
+    const pending = operation(value)
+    pendingCases.push(pending)
+    return pending
+  }
+}
 beforeEach(() => {
+  if (pendingCases.length) throw new Error('PREVIOUS_NATIVE_CASE_NOT_SETTLED')
   fs.mkdirSync(path.resolve('.runtime/.cache'), { recursive: true })
   root = fs.mkdtempSync(path.resolve('.runtime/.cache/vector-migration-'))
 })
-afterEach(() => {
+afterEach(async () => {
+  await Promise.allSettled(pendingCases)
+  pendingCases.length = 0
   for (const project of projectPaths.splice(0)) closeConnection(project)
   vi.restoreAllMocks()
   fs.rmSync(root, { recursive: true, force: true })
-})
+}, 10_000)
 function fingerprint(directory: string): string {
   const parts: string[] = []
   const walk = (dir: string) => { for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a,b) => a.name.localeCompare(b.name))) {
@@ -49,7 +63,7 @@ async function copied(vectors = true) {
   await seed(source, vectors); fs.cpSync(source, copy, { recursive: true })
   return { source, copy }
 }
-it.each([false, true])('保全已删除源PDF的全文和全部向量代际：vectors=%s', async vectors => {
+it.each([false, true])('保全已删除源PDF的全文和全部向量代际：vectors=%s', nativeCase(async vectors => {
   const { source, copy } = await copied(vectors)
   const before = fingerprint(source)
   const connect = vi.spyOn(lance, 'connect')
@@ -67,8 +81,8 @@ it.each([false, true])('保全已删除源PDF的全文和全部向量代际：ve
   expect(fingerprint(source)).toBe(before)
   // Exact roots can be renamed after all migration-owned table/connection handles close.
   fs.renameSync(copy, copy + '-closed')
-})
-it('禁止把原根当副本，未知半迁移保全并拒绝', async () => {
+}))
+it('禁止把原根当副本，未知半迁移保全并拒绝', nativeCase(async () => {
   const { source, copy } = await copied(false)
   await expect(exportVectorStoreForMigration({ storageRoot: source, originalSourceRoot: source })).rejects.toThrow('COPY_REQUIRED')
   fs.writeFileSync(path.join(source, 'vectors.json.migration-journal.json'), '{未完成')
@@ -76,14 +90,14 @@ it('禁止把原根当副本，未知半迁移保全并拒绝', async () => {
   const before = fingerprint(source)
   await expect(exportVectorStoreForMigration({ storageRoot: copy, originalSourceRoot: source })).rejects.toThrow('LEGACY_PENDING')
   expect(fingerprint(source)).toBe(before)
-})
-it('空向量资产不创建目录，不连接LanceDB', async () => {
+}))
+it('空向量资产不创建目录，不连接LanceDB', nativeCase(async () => {
   const source = path.join(root, '原根'), copy = path.join(root, '副本'); fs.mkdirSync(source); fs.mkdirSync(copy)
   const connect = vi.spyOn(lance, 'connect')
   expect((await exportVectorStoreForMigration({ storageRoot: copy, originalSourceRoot: source })).summary.tableCount).toBe(0)
   expect(connect).not.toHaveBeenCalled(); expect(fs.readdirSync(source)).toEqual([]); expect(fs.readdirSync(copy)).toEqual([])
-})
-it('拒绝损坏registry、快照篡改以及已有目标，原数据不改', async () => {
+}))
+it('拒绝损坏registry、快照篡改以及已有目标，原数据不改', nativeCase(async () => {
   const { source, copy } = await copied()
   const snapshot = await exportVectorStoreForMigration({ storageRoot: copy, originalSourceRoot: source })
   const target = path.join(root, '目标'); fs.mkdirSync(target)
@@ -94,8 +108,8 @@ it('拒绝损坏registry、快照篡改以及已有目标，原数据不改', as
   registry.activeGeneration = 9
   const bad = Buffer.from(JSON.stringify(registry)); fs.writeFileSync(path.join(source, 'embedding-spaces.json'), bad); fs.writeFileSync(path.join(copy, 'embedding-spaces.json'), bad)
   await expect(exportVectorStoreForMigration({ storageRoot: copy, originalSourceRoot: source })).rejects.toThrow('ACTIVE_POINTER_INVALID')
-})
-it('quiesce对曾暴露的连接拒绝证明，未开户fence阻止新连接', async () => {
+}))
+it('quiesce对曾暴露的连接拒绝证明，未开户fence阻止新连接', nativeCase(async () => {
   const project = path.join(root, '从未开户'); fs.mkdirSync(project)
   const fence = closeVectorStoreForMigration(project)
   await expect(getConnection(project)).rejects.toThrow('FENCED')
@@ -104,9 +118,9 @@ it('quiesce对曾暴露的连接拒绝证明，未开户fence阻止新连接', a
   prepareCanonicalStorageFixture(project)
   projectPaths.push(project); await getConnection(project); closeConnection(project)
   expect(() => closeVectorStoreForMigration(project)).toThrow('HANDLES_UNPROVEN')
-})
+}))
 
-it('副本与原根不一致或原根读期变动均拒绝，不返回可安装快照', async () => {
+it('副本与原根不一致或原根读期变动均拒绝，不返回可安装快照', nativeCase(async () => {
   const { source, copy } = await copied(false)
   fs.writeFileSync(path.join(copy, 'embedding-spaces.json'), '{}')
   await expect(exportVectorStoreForMigration({ storageRoot: copy, originalSourceRoot: source })).rejects.toThrow('COPY_MISMATCH')
@@ -117,8 +131,8 @@ it('副本与原根不一致或原根读期变动均拒绝，不返回可安装�
     return Reflect.apply(realConnect, lance, args)
   })
   await expect(exportVectorStoreForMigration({ storageRoot: copy, originalSourceRoot: source })).rejects.toThrow('SOURCE_CHANGED')
-})
-it('未知表不被静默抛弃，失败后副本句柄仍释放', async () => {
+}))
+it('未知表不被静默抛弃，失败后副本句柄仍释放', nativeCase(async () => {
   const { source, copy } = await copied(false)
   const connection = await lance.connect(path.join(source, 'lancedb'))
   const table = await connection.createTable('unknown_records', [{ id: '必须保全', text: '作者资料' }]); table.close(); connection.close()
@@ -127,9 +141,9 @@ it('未知表不被静默抛弃，失败后副本句柄仍释放', async () => {
   await expect(exportVectorStoreForMigration({ storageRoot: copy, originalSourceRoot: source })).rejects.toThrow('UNKNOWN_TABLE')
   expect(fingerprint(source)).toBe(before)
   fs.renameSync(copy, copy + '-failed-closed')
-})
+}))
 
-it.each(['nullable', 'metadata'] as const)('嵌套向量字段%s篡改不能沿用原快照哈希', async mutation => {
+it.each(['nullable', 'metadata'] as const)('嵌套向量字段%s篡改不能沿用原快照哈希', nativeCase(async mutation => {
   const { source, copy } = await copied()
   const before = fingerprint(source)
   const snapshot = await exportVectorStoreForMigration({ storageRoot: copy, originalSourceRoot: source })
@@ -144,4 +158,4 @@ it.each(['nullable', 'metadata'] as const)('嵌套向量字段%s篡改不能沿�
   await expect(importVectorStoreForMigration({ targetStorageRoot: target, snapshot })).rejects.toThrow(mutation === 'nullable' ? 'HASH_MISMATCH' : 'SCHEMA_METADATA_UNSUPPORTED')
   expect(fs.readdirSync(target)).toEqual([])
   expect(fingerprint(source)).toBe(before)
-})
+}))
