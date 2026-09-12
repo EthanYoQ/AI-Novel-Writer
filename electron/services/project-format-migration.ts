@@ -9,6 +9,7 @@ import { CANONICAL_PROJECT_DATABASE, parseCanonicalProjectManifest } from '../..
 export interface ProjectSqliteEvidence {
   schemaVersion: number; fingerprint: string
   domain: { tableCounts: Record<string, number>; authorContentHash: string }
+  preIdentityDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
 }
 export interface ProjectMigrationDependencies<VectorSnapshot = unknown> {
   probeSqlite(databasePath: string): ProjectSqliteEvidence
@@ -200,7 +201,7 @@ export async function migrateProjectFormat<V>(options: {
       }
       fs.mkdirSync(staging); fs.mkdirSync(vectorCopy)
       const targetSchema = await deps.backupSqlite(path.join(source, 'vela.db'), path.join(staging, deps.databaseName))
-      if (targetSchema.schemaVersion !== CURRENT_DESKTOP_SCHEMA_VERSION || !isDeepStrictEqual(targetSchema.domain, journal.sourceSchema.domain)) fail('PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED')
+      if (targetSchema.schemaVersion !== CURRENT_DESKTOP_SCHEMA_VERSION || !isDeepStrictEqual(journal.sourceSchema.schemaVersion < 3 && targetSchema.schemaVersion === 3 ? targetSchema.preIdentityDomain : targetSchema.domain, journal.sourceSchema.domain)) fail('PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED')
       checkpoint('sqlite-backed-up')
       for (const name of ASSETS) if (entryExists(path.join(source, name))) { copyAsset(path.join(source, name), path.join(staging, name)); checkpoint(`asset:${name}`) }
       for (const name of VECTOR_ASSETS) if (entryExists(path.join(source, name))) copyAsset(path.join(source, name), path.join(vectorCopy, name))

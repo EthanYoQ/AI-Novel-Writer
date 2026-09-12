@@ -26,7 +26,8 @@ function fixture() {
   put(path.join(legacy, 'chapter_creation_log.json'), '{"chapterNumber":3,"userGuidance":"作者上次参数"}')
   put(path.join(legacy, 'unknown.txt'), 'preserved only')
   const evidence = (database: string, schemaVersion: number): ProjectSqliteEvidence => ({ schemaVersion, fingerprint: `fixture-schema-${schemaVersion}`,
-    domain: { tableCounts: { contents: 1 }, authorContentHash: createHash('sha256').update(fs.readFileSync(database)).digest('hex') } })
+    domain: { tableCounts: { contents: 1 }, authorContentHash: createHash('sha256').update(fs.readFileSync(database)).digest('hex') },
+    ...(schemaVersion === 3 ? { preIdentityDomain: { tableCounts: { contents: 1 }, authorContentHash: createHash('sha256').update(fs.readFileSync(database)).digest('hex') } } : {}) })
   // This suite validates coordination with deterministic adapters; real SQLite/WAL/Lance tests are separate.
   const dependencies: ProjectMigrationDependencies<{ empty: true }> = {
     databaseName: 'project.db', closeHandles: async () => {},
@@ -77,7 +78,8 @@ describe('fixture-only project physical cutover', () => {
   it.each(['prepared', 'sqlite-backed-up', 'asset:prompts', 'verified', 'legacy-renamed', 'legacy-isolated', 'target-renamed', 'target-installed', 'switched'])('recovers after %s using physical facts', async stage => {
     const options = fixture()
     expect(await migrateProjectFormat({ ...options, checkpoint: current => { if (current === stage) throw new Error('fixture interruption') } })).toMatchObject({ state: 'blocked' })
-    expect(await migrateProjectFormat(options)).toMatchObject({ state: 'ready' })
+    const recovered = await migrateProjectFormat(options)
+    expect(recovered, recovered.state === 'blocked' ? recovered.code : 'ready').toMatchObject({ state: 'ready' })
     expect(fs.existsSync(options.legacy)).toBe(false)
   })
   it('rejects unknown dual roots and changed source after verification', async () => {
@@ -143,7 +145,7 @@ describe('fixture-only project physical cutover', () => {
     expect(await migrateProjectFormat(options)).toMatchObject({ state: 'blocked' })
     expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel-migration'))).toBe(false)
     const next = fixture(), backup = next.dependencies.backupSqlite
-    next.dependencies.backupSqlite = async (...args) => { const result = await backup(...args); return { ...result, domain: { ...result.domain, authorContentHash: 'wrong' } } }
+    next.dependencies.backupSqlite = async (...args) => { const result = await backup(...args); return { ...result, preIdentityDomain: { ...result.domain, authorContentHash: 'wrong' } } }
     expect(await migrateProjectFormat(next)).toMatchObject({ code: 'PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED' })
     expect(fs.existsSync(next.legacy)).toBe(true)
   })
@@ -238,4 +240,17 @@ it('rechecks restored physical state without overwriting later author edits', as
   expect(fs.readFileSync(path.join(options.legacy, 'vela.db'), 'utf8')).toBe('later author edit')
   fs.renameSync(options.legacy, path.join(options.projectRoot, 'moved-source'))
   expect(await migrateProjectFormat(options)).toMatchObject({ code: 'PROJECT_MIGRATION_RESTORE_CONFLICT' })
+})
+
+it.each(['missing-old-projection', 'changed-current-domain'] as const)('refuses %s in a schema3 conversion receipt', async mode => {
+  const options = fixture(), backup = options.dependencies.backupSqlite
+  options.dependencies.backupSqlite = async (...args) => {
+    const result = await backup(...args)
+    if (mode === 'missing-old-projection') { const copy = { ...result }; delete copy.preIdentityDomain; return copy }
+    return { ...result, domain: { ...result.domain, authorContentHash: 'wrong-current-domain' } }
+  }
+  const result = await migrateProjectFormat(options)
+  expect(result).toMatchObject({ state: 'blocked', code: mode === 'missing-old-projection' ? 'PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED' : 'PROJECT_MIGRATION_SQLITE_VERIFICATION_FAILED' })
+  expect(fs.existsSync(options.legacy)).toBe(true)
+  expect(fs.existsSync(path.join(options.projectRoot, '.ai-novel'))).toBe(false)
 })

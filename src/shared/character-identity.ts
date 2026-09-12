@@ -80,3 +80,46 @@ export function decideDerivedPatch(current: CharacterFieldSnapshot, patch: Deriv
 export function rejectedCharacterProposalKey(patch: DerivedCharacterPatch): string {
   return JSON.stringify([patch.projectId, patch.characterId, patch.field, patch.source.contentHash, patch.valueHash])
 }
+
+import type { SourceRef } from './source-ref'
+
+export interface ScopedCharacterAlias {
+  characterId: string
+  name: string
+  projectId: string
+  sourceKey: string
+  validFrom: number
+  validThrough: number | null
+}
+export type ScopedCharacterResolution =
+  | { status: 'resolved'; characterId: string }
+  | { status: 'ambiguous'; candidateIds: string[] }
+  | { status: 'unresolved'; candidateIds: string[] }
+export interface CharacterLookup { name: string; projectId: string; sourceKey?: string; revision: number }
+/** Names alone are never proof of identity. Matching is exact, scoped and versioned. */
+export function resolveScopedCharacterIdentity(aliases: readonly ScopedCharacterAlias[], lookup: CharacterLookup): ScopedCharacterResolution {
+  const nonempty = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
+  const revision = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0
+  if (!lookup || !nonempty(lookup.name) || !nonempty(lookup.projectId) || !revision(lookup.revision)
+    || lookup.sourceKey !== undefined && !nonempty(lookup.sourceKey) || !Array.isArray(aliases)
+    || aliases.some(alias => !alias || !nonempty(alias.characterId) || !nonempty(alias.name) || !nonempty(alias.projectId)
+      || !nonempty(alias.sourceKey) || !revision(alias.validFrom)
+      || alias.validThrough !== null && (!revision(alias.validThrough) || alias.validThrough < alias.validFrom))) throw new Error('INVALID_CHARACTER_LOOKUP')
+  const candidates = [...new Set(aliases.filter(alias => alias.name === lookup.name && alias.projectId === lookup.projectId
+    && alias.validFrom <= lookup.revision && (alias.validThrough === null || lookup.revision <= alias.validThrough)
+    && (!lookup.sourceKey || alias.sourceKey === lookup.sourceKey)).map(alias => alias.characterId))].sort()
+  if (candidates.length > 1) return { status: 'ambiguous', candidateIds: candidates }
+  if (candidates.length === 1 && lookup.sourceKey) return { status: 'resolved', characterId: candidates[0] }
+  return { status: 'unresolved', candidateIds: candidates }
+}
+export type CharacterStaticProvenance =
+  | { kind: 'legacy'; sourceKey: string }
+  | { kind: 'author'; source: SourceRef }
+  | { kind: 'generated' | 'derived'; source: SourceRef; modelRevision: string }
+export interface CharacterApproval {
+  operationId: string
+  expectedRevision: number
+  source: CharacterStaticProvenance
+  /** Main-process explicit author action, never inferred from generated text. */
+  action: 'author-edit' | 'adopt-generated' | 'adopt-import' | 'confirm-identity'
+}

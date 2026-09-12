@@ -16,14 +16,14 @@ import { backupProjectSqlite, probeProjectSqlite, upgradeProjectSqlite } from '.
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const roots: string[] = []
 const unsubscribers: Array<() => void> = []
-function fixture(version: 1 | 2 = 1) {
+function fixture(version: 1 | 'current' = 1) {
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/s05-m01')
   fs.mkdirSync(base, { recursive: true })
   const root = fs.mkdtempSync(path.join(base, '项目-')); roots.push(root)
   const data = path.join(root, '.ai-novel'); fs.mkdirSync(data)
   fs.writeFileSync(path.join(data, 'project.json'), JSON.stringify(createCanonicalProjectManifest({ projectId: randomUUID(), createdAt: new Date().toISOString() })))
   const file = path.join(data, 'project.db')
-  if (version === 2) createProjectDatabase(root)
+  if (version === 'current') createProjectDatabase(root)
   else {
     const db = new Database(file)
     try { initializeLegacyBaselineSchema(db); migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), 1) } finally { db.close() }
@@ -46,15 +46,15 @@ it('真实version1文件经唯一M01升级，关闭重开不重跑且正文不�
   expect(getProjectDb()!.prepare('SELECT body FROM contents').pluck().get()).toBe('铜钥匙\r\n作者原文')
   expect(getProjectDb()!.prepare('SELECT count(*) FROM generation_runs').pluck().get()).toBe(0)
   closeProjectDatabase()
-  const upgraded = probeProjectSqlite({ databasePath: f.file }); expect(upgraded.domain).toEqual(before.domain)
+  const upgraded = probeProjectSqlite({ databasePath: f.file }); expect(upgraded.preIdentityDomain).toEqual(before.domain)
   initProjectDatabase(f.root); closeProjectDatabase()
   expect(probeProjectSqlite({ databasePath: f.file })).toEqual(upgraded)
 })
-it('新建项目与S04备份默认均到当前2，M00可显式停在1', async () => {
-  const f = fixture(2); expect(probeProjectSqlite({ databasePath: f.file }).schemaVersion).toBe(2)
+it('新建项目与S04备份默认均到当前schema，M00可显式停在1', async () => {
+  const f = fixture('current'); expect(probeProjectSqlite({ databasePath: f.file }).schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
   const old = fixture(); const bytes = fs.readFileSync(old.file)
   const result = await backupProjectSqlite({ sourceDatabasePath: old.file, targetDatabasePath: path.join(old.root, '副本.db') })
-  expect(result.schemaVersion).toBe(2); expect(fs.readFileSync(old.file)).toEqual(bytes)
+  expect(result.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION); expect(fs.readFileSync(old.file)).toEqual(bytes)
 })
 it.each(['unknown', 'higher', 'missing-manifest'] as const)('%s在任何迁移写入前拒绝，源字节不变', mode => {
   const f = fixture()
@@ -71,10 +71,10 @@ it('M01途中失败整步回滚，真实文件版本与schema/正文均未污染
   expect(() => upgradeProjectSqlite({ databasePath: f.file, registry: failed })).toThrow('合成磁盘失败')
   expect(fs.readFileSync(f.file)).toEqual(before)
   expect(probeProjectSqlite({ databasePath: f.file }).schemaVersion).toBe(1)
-  initProjectDatabase(f.root); expect(getProjectDb()!.pragma('user_version', { simple: true })).toBe(2)
+  initProjectDatabase(f.root); expect(getProjectDb()!.pragma('user_version', { simple: true })).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
 })
 it('beforeClose同步持久动作先于句柄关闭与locator撤销', () => {
-  const f = fixture(2); initProjectDatabase(f.root)
+  const f = fixture('current'); initProjectDatabase(f.root)
   const called = vi.fn(({ database, projectPath }) => {
     expect(projectPath).toBe(f.root); expect(getCurrentProjectPath()).toBe(f.root); expect(database.open).toBe(true)
     database.prepare('UPDATE drafts SET word_count=778').run()
@@ -84,7 +84,7 @@ it('beforeClose同步持久动作先于句柄关闭与locator撤销', () => {
   const db = new Database(f.file, { readonly: true }); try { expect(db.prepare('SELECT word_count FROM drafts').pluck().get()).toBe(778) } finally { db.close() }
 })
 it('异步beforeClose或同步失败不能冒认flush完成/关闭成功', () => {
-  const f = fixture(2); initProjectDatabase(f.root)
+  const f = fixture('current'); initProjectDatabase(f.root)
   const remove = onProjectDatabaseBeforeClose(() => Promise.resolve()); unsubscribers.push(remove)
   expect(() => closeProjectDatabase()).toThrow('MUST_BE_SYNCHRONOUS'); expect(getProjectDb()!.open).toBe(true)
   remove()

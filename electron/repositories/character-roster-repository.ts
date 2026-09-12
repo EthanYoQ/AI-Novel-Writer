@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID as randomUUIDForIdentity } from 'node:crypto'
 import type BetterSqlite3 from 'better-sqlite3'
 
 import {
@@ -20,8 +20,9 @@ import {
   type CharacterStateFieldProvenance,
 } from '../../src/shared/character-roster'
 import type { FinalizedSourceIdentity } from '../../src/shared/finalized-continuity'
+import { isContentHash } from '../../src/shared/source-ref'
 import { getProjectDb } from '../database'
-import { CharacterRepository, type CharacterData } from './character-repository'
+import { CharacterRepository, hasCharacterIdentitySchema, type CharacterData } from './character-repository'
 import { ensureCharacterRosterSchema } from './character-roster-schema'
 import { CHARACTER_ROLE_LABELS, normalizeCharacterRole } from '../../src/shared/character-role'
 import { DEFAULT_WRITING_LANGUAGE, type WritingLanguage } from '../../src/shared/writing-language'
@@ -890,9 +891,10 @@ export class CharacterRosterRepository {
     return readSnapshot(db)
   }
 
-  static commit(candidate: CharacterRosterCommitRequest): CharacterRosterCommitReceipt {
+  static commit(candidate: CharacterRosterCommitRequest, assertGenerationSources?: () => void): CharacterRosterCommitReceipt {
     const db = requiredDb()
     ensureCharacterRosterSchema(db)
+    if (hasCharacterIdentitySchema(db)) throw new Error('CHARACTER_ID_WRITE_REQUIRED')
     const request = normalizeRequest(candidate)
     const requestPayloadHash = payloadHash(request)
 
@@ -920,6 +922,7 @@ export class CharacterRosterRepository {
         }
       }
 
+      assertGenerationSources?.()
       const meta = readMeta(db)
       if (request.expectedRevision !== meta.revision) {
         throw new Error('角色名单 revision 已过期，已拒绝覆盖')
@@ -1050,6 +1053,144 @@ export class CharacterRosterRepository {
         idempotent: false,
         snapshot,
       }
-    })()
+    }).immediate()
   }
+}
+
+export interface CharacterIdentityChange {
+  characterId: string
+  /** Static edits leave all cs_* dynamic provenance untouched. */
+  fields: Partial<Pick<CharacterData, 'name' | 'role' | 'gender' | 'age' | 'appearance' | 'personality' | 'background' | 'abilities' | 'motivation' | 'arc' | 'notes'>>
+}
+export interface CharacterIdentityCommitRequest {
+  approval: import('../../src/shared/character-identity').CharacterApproval
+  changes: CharacterIdentityChange[]
+  creations: { selectionKey: string; fields: CharacterIdentityChange['fields'] & { name: string } }[]
+  retireIds: string[]
+  relationships: { sourceCharacterId?: string; sourceSelectionKey?: string; targetCharacterId?: string; targetSelectionKey?: string; relation: string }[]
+  resolutions: { proposalId: string; characterId: string }[]
+}
+export interface CharacterIdentityCommitReceipt {
+  approval: import('../../src/shared/character-identity').CharacterApproval
+  operationId: string
+  revision: number
+  created: { selectionKey: string; characterId: string }[]
+  idempotent: boolean
+}
+/** Only the main approval boundary supplies authorize. Legacy name-only commits never reach this API. */
+export function commitCharacterIdentities(
+  db: BetterSqlite3.Database,
+  request: CharacterIdentityCommitRequest,
+  authorize: (request: CharacterIdentityCommitRequest) => boolean = () => false,
+): CharacterIdentityCommitReceipt {
+  if (!hasCharacterIdentitySchema(db)) throw new Error('CHARACTER_ID_SCHEMA_REQUIRED')
+  const encoded = JSON.stringify(request), digest = createHash('sha256').update(encoded).digest('hex')
+  return db.transaction(() => {
+    if (!authorize(request)) throw new Error('CHARACTER_APPROVAL_REQUIRED')
+    if (JSON.stringify(request) !== encoded) throw new Error('CHARACTER_APPROVAL_MUTATED')
+    const previous = db.prepare('SELECT payload_hash,receipt_json FROM character_identity_approvals WHERE operation_id=?').get(request.approval.operationId) as { payload_hash: string; receipt_json: string } | undefined
+    if (previous) {
+      if (previous.payload_hash !== digest) throw new Error('CHARACTER_APPROVAL_NONCE_CONFLICT')
+      return { ...JSON.parse(previous.receipt_json), idempotent: true } as CharacterIdentityCommitReceipt
+    }
+    const current = (db.prepare("SELECT revision FROM character_identity_meta WHERE id='main'").get() as { revision: number }).revision
+    if (current !== request.approval.expectedRevision) throw new Error('CHARACTER_ID_REVISION_CONFLICT')
+    if (!request.approval.operationId || !request.approval.source || !['author-edit', 'adopt-generated', 'adopt-import', 'confirm-identity'].includes(request.approval.action)) throw new Error('CHARACTER_APPROVAL_INVALID')
+    const allowedSources = {
+      'author-edit': ['author'],
+      'adopt-generated': ['generated'],
+      'adopt-import': ['generated', 'derived'],
+      'confirm-identity': ['author'],
+    } as const
+    if (request.approval.source.kind === 'legacy'
+      || !(allowedSources[request.approval.action] as readonly string[]).includes(request.approval.source.kind)) throw new Error('CHARACTER_PROVENANCE_INVALID')
+    const provenance = request.approval.source
+    const ref = provenance.source
+    if (!ref || typeof ref.projectId !== 'string' || !ref.projectId.trim() || typeof ref.epoch !== 'string' || !ref.epoch.trim() || typeof ref.sourceId !== 'string' || !ref.sourceId.trim() || !Number.isSafeInteger(ref.revision) || ref.revision < 0 || !isContentHash(ref.contentHash)
+      || (provenance.kind === 'generated' || provenance.kind === 'derived') && !isContentHash(provenance.modelRevision)) throw new Error('CHARACTER_PROVENANCE_INVALID')
+    const revision = current + 1
+    const attributedSource = { ...request.approval.source, approvalId: request.approval.operationId }
+    const source = JSON.stringify(attributedSource)
+    if (request.resolutions.length && request.approval.action !== 'confirm-identity') throw new Error('CHARACTER_ID_CONFIRMATION_REQUIRED')
+    const created: CharacterIdentityCommitReceipt['created'] = []
+    const allowed = new Set(['name', 'role', 'gender', 'age', 'appearance', 'personality', 'background', 'abilities', 'motivation', 'arc', 'notes'])
+    const validateFields = (fields: CharacterIdentityChange['fields']) => {
+      for (const [key, value] of Object.entries(fields)) if (!allowed.has(key) || typeof value !== 'string' || key === 'name' && !value.trim()) throw new Error('CHARACTER_FIELDS_INVALID')
+    }
+    const unique = (ids: string[]) => { if (ids.some(id => !id) || new Set(ids).size !== ids.length) throw new Error('CHARACTER_ID_DUPLICATE') }
+    unique(request.changes.map(change => change.characterId)); unique(request.creations.map(creation => creation.selectionKey)); unique(request.retireIds)
+    if (request.retireIds.some(id => request.changes.some(change => change.characterId === id))) throw new Error('CHARACTER_ID_CONFLICT')
+    const active = (id: string) => {
+      const row = db.prepare('SELECT * FROM characters WHERE character_id=? AND retired=0').get(id) as Record<string, unknown> | undefined
+      if (!row) throw new Error('CHARACTER_ID_UNKNOWN')
+      return row
+    }
+    for (const creation of request.creations) {
+      validateFields(creation.fields)
+      if (typeof creation.fields.name !== 'string' || !creation.fields.name.trim()) throw new Error('CHARACTER_FIELDS_INVALID')
+      const id = randomUUIDForIdentity(), keys = Object.keys(creation.fields)
+      db.prepare(`INSERT INTO characters(character_id,static_provenance,identity_revision,${keys.join(',')}) VALUES(?,?,?,${keys.map(() => '?').join(',')})`).run(id, source, revision, ...Object.values(creation.fields))
+      db.prepare('INSERT INTO character_aliases VALUES(?,?,?,?,NULL)').run(id, creation.fields.name, request.approval.operationId, revision)
+      created.push({ selectionKey: creation.selectionKey, characterId: id })
+    }
+    for (const change of request.changes) {
+      const row = active(change.characterId); validateFields(change.fields)
+      const keys = Object.keys(change.fields)
+      if (keys.length) {
+        // Field provenance is merged so adopting generated text never relabels untouched author fields.
+        const prior = JSON.parse(row.static_provenance as string) as Record<string, unknown>
+        const provenance = { ...prior, fields: { ...(prior.fields as Record<string, unknown> | undefined), ...Object.fromEntries(keys.map(key => [key, attributedSource])) } }
+        db.prepare(`UPDATE characters SET ${keys.map(key => `${key}=?`).join(',')},static_provenance=?,identity_revision=? WHERE character_id=?`).run(...Object.values(change.fields), JSON.stringify(provenance), revision, change.characterId)
+      }
+      if (change.fields.name !== undefined && change.fields.name !== row.name) {
+        db.prepare('UPDATE character_aliases SET valid_through=? WHERE character_id=? AND valid_through IS NULL').run(current, change.characterId)
+        db.prepare('INSERT INTO character_aliases VALUES(?,?,?,?,NULL)').run(change.characterId, change.fields.name, request.approval.operationId, revision)
+      }
+    }
+    for (const id of request.retireIds) { active(id); db.prepare('UPDATE characters SET retired=1,identity_revision=? WHERE character_id=?').run(revision, id); db.prepare('UPDATE character_aliases SET valid_through=? WHERE character_id=? AND valid_through IS NULL').run(current, id) }
+    const receipt: CharacterIdentityCommitReceipt = { approval: structuredClone(request.approval), operationId: request.approval.operationId, revision, created, idempotent: false }
+    db.prepare('INSERT INTO character_identity_approvals VALUES(?,?,?)').run(request.approval.operationId, digest, JSON.stringify(receipt))
+    const endpoint = (id: string | undefined, selectionKey: string | undefined) => {
+      if (Boolean(id) === Boolean(selectionKey)) throw new Error('CHARACTER_RELATIONSHIP_ID_REQUIRED')
+      const resolved = id ?? created.find(item => item.selectionKey === selectionKey)?.characterId
+      if (!resolved) throw new Error('CHARACTER_RELATIONSHIP_ID_REQUIRED')
+      return resolved
+    }
+    const relationKeys = new Set<string>()
+    for (const relationship of request.relationships) {
+      const fromId = endpoint(relationship.sourceCharacterId, relationship.sourceSelectionKey), toId = endpoint(relationship.targetCharacterId, relationship.targetSelectionKey)
+      const from = active(fromId), to = active(toId), relationKey = JSON.stringify([fromId,toId,relationship.relation])
+      if (!relationship.relation.trim() || fromId === toId || relationKeys.has(relationKey)) throw new Error('CHARACTER_RELATIONSHIP_INVALID')
+      relationKeys.add(relationKey)
+      db.prepare('INSERT INTO character_relationships VALUES(?,?,?,?,?,?,?,?)').run(randomUUIDForIdentity(), fromId, toId, relationship.relation, from.name, to.name, source, request.approval.operationId)
+    }
+    for (const resolution of request.resolutions) {
+      active(resolution.characterId)
+      const proposal = db.prepare('SELECT resolved_character_id,owner_character_id,raw_value FROM character_identity_proposals WHERE proposal_id=?').get(resolution.proposalId) as { resolved_character_id: string | null; owner_character_id: string | null; raw_value: string } | undefined
+      if (!proposal || proposal.resolved_character_id) throw new Error('CHARACTER_PROPOSAL_CONFLICT')
+      db.prepare('UPDATE character_identity_proposals SET resolved_character_id=?,approval_id=? WHERE proposal_id=?').run(resolution.characterId, request.approval.operationId, resolution.proposalId)
+      if (proposal.owner_character_id) {
+        let parsed: unknown
+        try { parsed = JSON.parse(proposal.raw_value) } catch { parsed = null }
+        if (parsed && typeof parsed === 'object' && 'relation' in parsed && typeof parsed.relation === 'string' && parsed.relation.trim()) {
+          const from = active(proposal.owner_character_id), to = active(resolution.characterId)
+          if (proposal.owner_character_id === resolution.characterId) throw new Error('CHARACTER_RELATIONSHIP_INVALID')
+          db.prepare('INSERT INTO character_relationships VALUES(?,?,?,?,?,?,?,?)').run(randomUUIDForIdentity(), proposal.owner_character_id, resolution.characterId, parsed.relation, from.name, to.name, source, request.approval.operationId)
+        }
+      }
+    }
+    db.prepare("UPDATE character_identity_meta SET revision=? WHERE id='main'").run(revision)
+    return receipt
+  })()
+}
+
+export function readCharacterIdentitySnapshot(db: BetterSqlite3.Database) {
+  if (!hasCharacterIdentitySchema(db)) throw new Error('CHARACTER_ID_SCHEMA_REQUIRED')
+  return db.transaction(() => ({
+    revision: (db.prepare("SELECT revision FROM character_identity_meta WHERE id='main'").get() as { revision: number }).revision,
+    characters: db.prepare('SELECT * FROM characters ORDER BY character_id').all(),
+    aliases: db.prepare('SELECT * FROM character_aliases ORDER BY character_id,name,valid_from').all(),
+    relationships: db.prepare('SELECT * FROM character_relationships ORDER BY relationship_id').all(),
+    proposals: db.prepare('SELECT * FROM character_identity_proposals ORDER BY proposal_id').all(),
+  }))()
 }
