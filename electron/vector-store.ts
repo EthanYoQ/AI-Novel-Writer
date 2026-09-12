@@ -362,6 +362,7 @@ async function inferLegacyRegistry(
   const registry = emptyRegistry()
   if (tableNames.includes(TABLE_NAME)) {
     const legacyTable = await db.openTable(TABLE_NAME)
+    try {
     const dimension = await vectorDimensionFromTable(legacyTable)
     if (dimension !== undefined) {
       registry.activeGeneration = 0
@@ -375,6 +376,7 @@ async function inferLegacyRegistry(
         createdAt: new Date().toISOString(),
       })
     }
+    } finally { legacyTable.close() }
   }
   return registry
 }
@@ -1247,6 +1249,7 @@ export async function searchWithScope(
         const active = activeSpace(registry)
         if (active && tableNames.includes(active.tableName) && requestMatchesActiveSpace(active, queryVector, embeddingSpace)) {
           const vectorTable = await db.openTable(active.tableName)
+          try {
           let query = vectorTable.search(queryVector).limit(topK)
           const vectorFilters: string[] = []
           if (scopeFilter && await tableSupportsField(vectorTable, 'chapterNumber')) {
@@ -1265,14 +1268,16 @@ export async function searchWithScope(
               fileName: row.fileName,
             }))
           }
+          } finally { vectorTable.close() }
         }
       } catch (error) {
         console.warn('[Vela VectorStore] 向量检索降级为全文检索:', error)
       }
     }
 
+    let canonicalTable: lancedb.Table | undefined
     try {
-      const canonicalTable = await db.openTable(TABLE_NAME)
+      canonicalTable = await db.openTable(TABLE_NAME)
       const rawTerms = queryText.match(/[\p{L}\p{N}-]+/gu) ?? []
       const meaningfulTerms = rawTerms.filter(term => Array.from(term).length >= 2)
       const searchTerms = [...new Map(
@@ -1315,6 +1320,8 @@ export async function searchWithScope(
     } catch (error) {
       console.warn('[Vela VectorStore] 纯文本检索失败:', error)
       return []
+    } finally {
+      canonicalTable?.close()
     }
   } catch (error) {
     console.error('[Vela VectorStore] 检索失败:', error)
