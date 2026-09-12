@@ -102,24 +102,27 @@ export type WorkflowGenerationIntent = 'structured' | 'text' | 'character-archit
  */
 export const WORKFLOW_GENERATION_BUDGETS = Object.freeze({
   structured: Object.freeze({
-    maxAttempts: 16,
+    maxAttempts: 20,
     maxRequestedOutputTokens: 131_072,
     maxRequestedOutputTokensPerAttempt: 8192,
-    deadlineMs: 10 * 60_000,
+    deadlineMs: 18 * 60_000,
   }),
   text: Object.freeze({
-    maxAttempts: 8,
+    maxAttempts: 12,
     maxRequestedOutputTokens: 65_536,
     maxRequestedOutputTokensPerAttempt: 8192,
-    deadlineMs: 20 * 60_000,
+    deadlineMs: 24 * 60_000,
   }),
   'character-architecture': Object.freeze({
     // Worst recoverable path: manifest replacements, bounded detail batches,
-    // and one syntax-only repair on a slow provider.
-    maxAttempts: 12,
-    maxRequestedOutputTokens: 98_304,
+    // and one syntax-only repair on a slow provider. Local models (e.g. llama.cpp
+    // over an OpenAI-compatible endpoint) are single-slot and ~55s/batch, so the
+    // shipped 20-minute deadline killed long runs; widened here but still inside
+    // the GENERATION_ABSOLUTE_BUDGET_LIMITS ceiling.
+    maxAttempts:20,
+    maxRequestedOutputTokens: 147_456,
     maxRequestedOutputTokensPerAttempt: 8192,
-    deadlineMs: 20 * 60_000,
+    deadlineMs: 60 * 60_000,
   }),
 })
 

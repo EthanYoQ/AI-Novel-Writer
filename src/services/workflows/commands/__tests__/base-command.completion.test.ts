@@ -181,10 +181,10 @@ describe('BaseWorkflowCommand completion boundary', () => {
 
     expect(completeWithLease.mock.calls[0]?.[0].plan.maxOutputTokens).toBe(expectedRequest)
     expect(WORKFLOW_GENERATION_BUDGETS['character-architecture']).toEqual({
-      maxAttempts: 12,
-      maxRequestedOutputTokens: 98_304,
+      maxAttempts: 20,
+      maxRequestedOutputTokens: 147_456,
       maxRequestedOutputTokensPerAttempt: 8192,
-      deadlineMs: 20 * 60_000,
+      deadlineMs: 60 * 60_000,
     })
     expect(12 * WORKFLOW_GENERATION_BUDGETS['character-architecture'].maxRequestedOutputTokensPerAttempt).toBe(98_304)
   })

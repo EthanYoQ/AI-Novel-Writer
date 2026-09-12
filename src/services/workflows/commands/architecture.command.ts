@@ -239,7 +239,7 @@ const CHINESE_CHAPTER_DIGITS: Readonly<Record<string, number>> = Object.freeze({
 const CHINESE_CHAPTER_UNITS: Readonly<Record<string, number>> = Object.freeze({ 十: 10, 百: 100, 千: 1000 })
 const CHAPTER_NUMBER_TOKEN = '[0-9零〇一二两三四五六七八九十百千]+'
 const ZH_CHAPTER_TITLE_RE = new RegExp(
-  `^[\\t ]*(?:#{1,6}[\\t ]+|[-*+][\\t ]+)?第(${CHAPTER_NUMBER_TOKEN})(?:[–—-](${CHAPTER_NUMBER_TOKEN}))?章(?=[\\t ]*(?:[:：.．—-]|$))`,
+  `^[\\t ]*(?:#{1,6}[\\t ]+|[-*+][\\t ]+|\*{1,2})?第(${CHAPTER_NUMBER_TOKEN})(?:[–—-](${CHAPTER_NUMBER_TOKEN}))?章(?=[\\t ]*(?:[:：.．—-]|$))`,
   'gmu',
 )
 const EN_CHAPTER_TITLE_RE = /^[\t ]*(?:#{1,6}[\t ]+|[-*+][\t ]+)?Chapters?[\t ]+(\d+)(?:[\t ]*[–—-][\t ]*(\d+))?(?=[\t ]*(?:[:.：—-]|$))/gimu
@@ -310,6 +310,13 @@ function assertPlotOutlineTitleCoverage(
       const remaining = seedPriorCounts.get(key) ?? 0
       if (remaining > 0) seedPriorCounts.set(key, remaining - 1)
       else invalid.push(`${range.from}-${range.to}`)
+      continue
+    }
+    if (range.from > to) {
+      // Headings entirely beyond this batch (e.g. a "later overview" span the model
+      // wrote as "第N章" titles instead of the one-line overview the prompt asked for).
+      // They are not part of this batch's coverage, so ignore them rather than failing
+      // the whole outline — the model is told these do not count toward the batch.
       continue
     }
     if (range.from < from || range.to > to || range.from > range.to) {
