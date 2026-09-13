@@ -389,6 +389,7 @@ describe('InferBlueprintsPerChapterCommand', () => {
           characterSyncInput: snapshot,
         }
       }
+      if (channel === 'character-proposal:stage') return { proposalBatchId: 'import-proposal', revision: 0, status: 'pending-approval', items: [], source: { kind: 'directory', operationId: 'import-sync' } }
       if (channel === 'db:character-roster-read') {
         return {
           status: 'ready',
@@ -447,6 +448,8 @@ describe('InferBlueprintsPerChapterCommand', () => {
     expect(generationPrompt).toContain('每项必须含非空 from、to、relation')
     expect(generationPrompt).not.toContain('relationshipHints（无关系时为空数组）')
     expect(invoke.mock.calls.map(([channel]) => channel)).toContain('db:blueprint-character-sync-complete')
+    expect(invoke.mock.calls.map(([channel]) => channel)).toContain('character-proposal:stage')
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:character-roster-commit')
   })
 })
 
@@ -842,5 +845,69 @@ describe('InferGlobalSettingsCommand', () => {
       callbacks,
     })).rejects.toThrow(/全局事实事务失败/)
     expect(useProjectStore.getState().currentProject?.novelConfig.genre).toBe('玄幻')
+  })
+})
+
+describe('M02 text-import proposal receipts', () => {
+  function proposalReceipt(request: import('../../../../shared/import-global-facts').ImportGlobalFactsRequest) {
+    return { operationId: request.operationId, payloadHash: 'f'.repeat(64), idempotent: false, core: structuredClone(request.core),
+      characterProposal: { proposalBatchId: 'import-proposal', sourceHash: 'a'.repeat(64) }, proposalSource: structuredClone(request) }
+  }
+  function arrange(mutate?: (receipt: ReturnType<typeof proposalReceipt>) => void) {
+    const invoke = stubIpcInvoke((channel, request) => {
+      if (channel === 'kb:search') return []
+      if (channel === 'db:character-roster-read') return { status: 'ready', revision: 7, entries: [] }
+      if (channel === 'db:import-global-facts-commit') {
+        const receipt = proposalReceipt(request as import('../../../../shared/import-global-facts').ImportGlobalFactsRequest)
+        mutate?.(receipt)
+        return { success: true, receipt }
+      }
+      throw new Error(`unexpected IPC ${channel}`)
+    })
+    useLLMStore.setState({ defaultModelId: 'model-a', generateStream: vi.fn(async (_messages, streamCallbacks) => {
+      streamCallbacks.onDone?.(JSON.stringify(validInference()), undefined, 'stop'); return 'candidate-request'
+    }) })
+    return invoke
+  }
+  it('records source-exact proposals and does not report candidate count as created characters', async () => {
+    const invoke = arrange(), context = createContext()
+    await new InferGlobalSettingsCommand().execute({ step: {}, context, callbacks })
+    expect(context.data.importGlobalFactsReceipt).toMatchObject({ characterProposal: { proposalBatchId: 'import-proposal' } })
+    expect(context.data.importGlobalInferenceCandidate).toBe(JSON.stringify(validInference()))
+    expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith(expect.stringContaining('3 条角色提议已原子保存'))
+    expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith(expect.stringContaining('尚未创建角色'))
+    expect(invoke.mock.calls.some(([channel]) => channel === 'character-proposal:approve' || channel === 'db:character-roster-commit')).toBe(false)
+  })
+  it.each(['missing-entry', 'same-name-changed-field', 'changed-dynamic', 'changed-relationship', 'reordered', 'changed-operation', 'changed-core', 'mixed-lanes', 'invalid-hash'] as const)(
+    'rejects %s instead of accepting name-only coverage', async mutation => {
+      arrange(receipt => {
+        const entries = receipt.proposalSource.characterEntries
+        if (mutation === 'missing-entry') entries.pop()
+        if (mutation === 'same-name-changed-field') entries[0].notes = '另一来源的备注'
+        if (mutation === 'changed-dynamic') entries[0].currentState!.updatedAtChapter = 99
+        if (mutation === 'changed-relationship') entries[0].relationships.push({ target: entries[1].name, relation: '伪造关系' })
+        if (mutation === 'reordered') entries.reverse()
+        if (mutation === 'changed-operation') receipt.proposalSource.operationId = 'other'
+        if (mutation === 'changed-core') receipt.core.premise = 'other'
+        if (mutation === 'mixed-lanes') Object.assign(receipt, { roster: { snapshot: { status: 'ready', entries } } })
+        if (mutation === 'invalid-hash') receipt.characterProposal.sourceHash = 'invalid'
+      })
+      const context = createContext()
+      await expect(new InferGlobalSettingsCommand().execute({ step: {}, context, callbacks })).rejects.toThrow('提交收据无效或覆盖不完整')
+      expect(context.data.importGlobalFactsReceipt).toBeUndefined()
+      expect(context.data.importGlobalInferenceCandidate).toBe(JSON.stringify(validInference()))
+    },
+  )
+  it('retains a same-name raw candidate and rejects it without merging or writing formal facts', async () => {
+    const invoke = arrange(), context = createContext(), ambiguous = validInference()
+    ambiguous.characterCards[1].name = ambiguous.characterCards[0].name
+    ambiguous.characterCards[1].notes = '不同来源的独立事实'
+    const raw = JSON.stringify(ambiguous)
+    useLLMStore.setState({ generateStream: vi.fn(async (_messages, streamCallbacks) => {
+      streamCallbacks.onDone?.(raw, undefined, 'stop'); return 'ambiguous-candidate'
+    }) })
+    await expect(new InferGlobalSettingsCommand().execute({ step: {}, context, callbacks })).rejects.toThrow('duplicate_item')
+    expect(context.data.importGlobalInferenceCandidate).toBe(raw)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:import-global-facts-commit')).toBe(false)
   })
 })

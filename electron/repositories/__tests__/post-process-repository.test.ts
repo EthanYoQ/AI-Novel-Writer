@@ -53,6 +53,14 @@ function createCriticalRun(): string {
 }
 
 describe('PostProcessRepository retry receipts', () => {
+  it.each(['finalization:missing-receipt', 'finalization:'])('rejects a reserved receipt key without finalized source proof: %s', triggerSourceId => {
+    expect(() => PostProcessRepository.createRun({ triggerSourceType: 'chapter_finalize', triggerSourceId,
+      sourceLabel: '未证明的后处理', steps: [{ key: 'kb_import', label: '导入知识库', critical: true }] }))
+      .toThrow('POST_PROCESS_FINALIZATION_SOURCE_REQUIRED')
+    expect(db.prepare('SELECT COUNT(*) FROM post_process_runs').pluck().get()).toBe(0)
+    expect(db.prepare('SELECT COUNT(*) FROM post_process_steps').pluck().get()).toBe(0)
+  })
+
   it('rejects an unknown success step without refreshing the run summary', () => {
     const runId = createCriticalRun()
 

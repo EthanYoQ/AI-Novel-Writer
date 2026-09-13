@@ -86,6 +86,8 @@ export interface MainGenerationSnapshot extends MainGenerationRunHandle {
   text: string
   textHash: string
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'unknown'
+  /** Main-verified settled stop/length artifact; status alone never authorizes composition. */
+  compositionEligible?: boolean
 }
 export interface MainGenerationRunView {
   candidates?: readonly (MainGenerationSnapshot & { fingerprint: FrozenInputFingerprint; nonReplayable: true })[]

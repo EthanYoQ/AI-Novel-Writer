@@ -223,8 +223,7 @@ function parseImportEndpointCorrectionDelta(
 
 function requireImportGlobalFactsReceipt(
   candidate: ImportGlobalFactsReceipt | undefined,
-  operationId: string,
-  expectedCharacterNames: readonly string[],
+  expected: ImportGlobalFactsRequest,
   text: UiText,
 ): ImportGlobalFactsReceipt {
   const committedNames = new Set(candidate?.roster?.snapshot?.entries
@@ -232,13 +231,23 @@ function requireImportGlobalFactsReceipt(
     .filter(Boolean))
   if (
     !candidate
-    || candidate.operationId !== operationId
+    || candidate.operationId !== expected.operationId
     || !SHA256_HEX.test(candidate.payloadHash)
     || typeof candidate.idempotent !== 'boolean'
     || !candidate.core
-    || !candidate.roster?.snapshot
-    || candidate.roster.snapshot.status !== 'ready'
-    || expectedCharacterNames.some(name => !committedNames.has(name.trim()))
+    || (candidate.characterProposal !== undefined
+      ? candidate.roster !== undefined
+        || !isRecord(candidate.characterProposal)
+        || typeof candidate.characterProposal.proposalBatchId !== 'string'
+        || !candidate.characterProposal.proposalBatchId.trim()
+        || typeof candidate.characterProposal.sourceHash !== 'string'
+        || !SHA256_HEX.test(candidate.characterProposal.sourceHash)
+        || !deepJsonEqual(candidate.proposalSource, expected)
+        || !deepJsonEqual(candidate.core, expected.core)
+      : candidate.proposalSource !== undefined
+        || !candidate.roster?.snapshot
+        || candidate.roster.snapshot.status !== 'ready'
+        || expected.characterEntries.some(entry => !committedNames.has(entry.name.trim())))
   ) throw new Error(text(
     '导入全局事实提交收据无效或覆盖不完整',
     'The imported global-facts commit receipt is invalid or incomplete.',
@@ -528,6 +537,9 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     ))
 
     // ===== 解析 JSON 结果 =====
+    // Keep the exact visible candidate even when the legacy name-based contract
+    // rejects ambiguity. This is not a formal fact or an adoption authorization.
+    context.data.importGlobalInferenceCandidate = rawResult
     const inferResult = await this.decodeImportInferenceWithEndpointRecovery(rawResult, callbacks, context)
 
     const roster = await ipc.invokeWithProjectSession(
@@ -603,8 +615,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
     }
     const commitReceipt = requireImportGlobalFactsReceipt(
       rawCommitReceipt,
-      operationId,
-      inferResult.characterCards.map(card => card.name),
+      commitRequest,
       text,
     )
     context.data.importGlobalFactsReceipt = commitReceipt
@@ -648,11 +659,19 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
         + `Central advantage: ${authoritativeNovelConfig.goldenFinger || none}\n`
         + `Protagonist: ${authoritativeNovelConfig.protagonistProfile || none}`,
     )
-    const committedCharacterCount = commitReceipt.roster.snapshot.entries.length
-    callbacks.log(text(
-      `小说配置、非角色架构与 ${committedCharacterCount} 张角色卡已原子提交`,
-      `The novel configuration, non-character architecture, and ${committedCharacterCount} character ${committedCharacterCount === 1 ? 'card was' : 'cards were'} committed atomically`,
-    ))
+    if (commitReceipt.characterProposal) {
+      const proposalCount = commitReceipt.proposalSource.characterEntries.length
+      callbacks.log(text(
+        `小说配置、非角色架构与 ${proposalCount} 条角色提议已原子保存；提议保留待采用，尚未创建角色。`,
+        `The novel configuration, non-character architecture, and ${proposalCount} character proposals were saved atomically. Proposals remain pending adoption; no characters were created.`,
+      ))
+    } else {
+      const committedCharacterCount = commitReceipt.roster.snapshot.entries.length
+      callbacks.log(text(
+        `小说配置、非角色架构与 ${committedCharacterCount} 张角色卡已原子提交`,
+        `The novel configuration, non-character architecture, and ${committedCharacterCount} character ${committedCharacterCount === 1 ? 'card was' : 'cards were'} committed atomically`,
+      ))
+    }
 
     callbacks.setProgress(90)
     this.notifyRefresh(['fileTree', 'characterCards'], context.projectPath, requireWorkflowProjectSession(context))

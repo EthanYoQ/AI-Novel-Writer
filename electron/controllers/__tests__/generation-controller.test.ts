@@ -7,6 +7,7 @@ type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>
 const mocks = vi.hoisted(() => ({ handlers: new Map<string, Handler>(), globalRoot: '' }))
 vi.mock('electron', () => ({ ipcMain: { handle: (channel: string, handler: Handler) => mocks.handlers.set(channel, handler) } }))
 vi.mock('../../services/app-data-locator', () => ({ getGlobalDataRoot: () => mocks.globalRoot }))
+vi.mock('../kb-controller', () => ({ getEmbeddingConfig: () => null }))
 import { registerGenerationController } from '../generation-controller'
 import { registerDatabaseController } from '../db-controller'
 import { ProjectCoreRepository } from '../../repositories/project-core-repository'
@@ -14,6 +15,8 @@ import { getProjectDataRoot } from '../../services/project-data-locator'
 import { ModelExecutionLeaseRegistry } from '../../services/model-execution-lease'
 import { projectAccess } from '../../services/project-access'
 import { createProjectDatabase, initProjectDatabase, closeProjectDatabase, getProjectDb } from '../../database'
+import { textHash } from '../../repositories/generation-run-repository'
+import { knowledgeBaseLoader } from '../../services/knowledge-base-loader'
 
 const model: ModelProfile = { id: 'fixture', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1',
   baseUrl: 'https://api.openai.com/v1', apiKey: 'synthetic-only', maxTokens: 1024, temperature: 0.7, purposes: ['generation'] }
@@ -40,15 +43,162 @@ afterEach(() => { closeProjectDatabase(); projectAccess.invalidateCurrentSession
 function invoke<C extends keyof GenerationOwnerChannels>(channel: C, ...args: GenerationOwnerChannels[C]['args']) {
   return mocks.handlers.get(channel)!({ sender }, ...args, { ...session }) as Promise<GenerationOwnerChannels[C]['return']>
 }
-function stream() {
+function stream(content = '中文候选') {
   const fetch = vi.fn(async () => ({ ok: true, body: new ReadableStream({ start(controller) {
-    controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"中文候选"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'))
+    controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`))
     controller.close()
   } }) }))
   vi.stubGlobal('fetch', fetch)
   return fetch
 }
 describe('generation public IPC with actual project authority and SQLite', () => {
+  const draftInputs = [{ id: 'draft:target-units', text: '10' }]
+  async function prepareDraft() {
+    getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'灯塔')")
+    const preparation = await invoke('generation:prepare-draft-context', { chapterNumber: 1, modelId: model.id,
+      promptKeys: request.promptKeys, skillStages: [], authorInputs: draftInputs, query: '灯塔', selectedDraftIds: [] })
+    const selection = { ...request, operation: 'chapter-draft', chapterNumber: 1, authorInputs: draftInputs,
+      selectedBlueprintChapterNumbers: [1, 2, 3, 4, 5, 6], preparationId: preparation.preparationId }
+    return { preparation, selection }
+  }
+  async function seedKnowledge() {
+    const lance = await import('@lancedb/lancedb')
+    const connection = await lance.connect(path.join(getProjectDataRoot(session.projectPath), 'lancedb'))
+    const chunks = await connection.createTable('chunks', [{ id: '灯塔片段', docId: '原始资料', text: '灯塔位于旧城北岸。', fileName: '设定资料.md', chunkIndex: 0, totalChunks: 1, corpusKind: 'project-knowledge' }])
+    const documents = await connection.createTable('documents', [{ id: '原始资料', fileName: '设定资料.md', chunkCount: 1, corpusKind: 'project-knowledge' }])
+    chunks.close(); documents.close(); connection.close()
+  }
+  async function selectedSourceFixture() {
+    const database = getProjectDb()!
+    database.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'北岸'),(2,'灯塔'),(3,'港口')")
+    const create = async (version: number) => {
+      const result = await mocks.handlers.get('db:draft-create')!({ sender }, { chapterNumber: 1, version,
+        source: 'write', content: `作者前章版本${version}`, wordCount: 7 }, session.projectPath, session) as { success: boolean; id: number }
+      expect(result.success).toBe(true)
+      return result.id
+    }
+    const selectedId = await create(1), archivedId = await create(2)
+    database.prepare("UPDATE drafts SET status='archived' WHERE id=?").run(archivedId)
+    const prepareRequest = { chapterNumber: 2, modelId: model.id, promptKeys: ['next_chapter_draft'],
+      skillStages: [], authorInputs: draftInputs, query: '灯塔', selectedDraftIds: [selectedId] }
+    const selectionFor = (preparationId: string): BeginGenerationRequest => ({ ...request, chapterNumber: 2,
+      promptKeys: prepareRequest.promptKeys, authorInputs: draftInputs, selectedDraftIds: [selectedId],
+      operation: 'chapter-draft', uiActionNonce: '明确开始', selectedBlueprintChapterNumbers: [2, 3, 4, 5, 6, 7], preparationId })
+    const editSource = () => database.prepare('UPDATE contents SET body=? WHERE id=(SELECT content_id FROM drafts WHERE id=?)').run('作者后来改写的前章', selectedId)
+    return { selectedId, prepareRequest, selectionFor, editSource }
+  }
+  it('requires an issued preparation and rejects source changes before opening a drafting root', async () => {
+    const fetch = stream()
+    await expect(invoke('generation:begin', { ...request, operation: 'chapter-draft', chapterNumber: 1 })).rejects.toThrow('GENERATION_DRAFT_PREPARATION_REQUIRED')
+    const { selection } = await prepareDraft()
+    await expect(invoke('generation:begin', { ...selection, preparationId: '伪造凭据' })).rejects.toThrow('GENERATION_DRAFT_PREPARATION_REQUIRED')
+    getProjectDb()!.exec("UPDATE project_core SET global_guidance='作者修改后的指导'")
+    await expect(invoke('generation:begin', selection)).rejects.toThrow('GENERATION_DRAFT_PREPARATION_CHANGED')
+    expect(fetch).not.toHaveBeenCalled()
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(0)
+  })
+  it.each(['edit', 'omit'] as const)('cannot replace a prepared source hidden behind an archived version: %s', async change => {
+    const fetch = stream(), fixture = await selectedSourceFixture()
+    const prepared = await invoke('generation:prepare-draft-context', fixture.prepareRequest)
+    expect(prepared.selectedDrafts[0].content).toBe('作者前章版本1')
+    const selection = fixture.selectionFor(prepared.preparationId)
+    if (change === 'edit') fixture.editSource()
+    else selection.selectedDraftIds = []
+    await expect(invoke('generation:begin', selection)).rejects.toThrow('GENERATION_DRAFT_PREPARATION_CHANGED')
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(0)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  it('checks the selected source across asynchronous knowledge preparation', async () => {
+    const fixture = await selectedSourceFixture(), knowledgeBase = await knowledgeBaseLoader.load()
+    vi.spyOn(knowledgeBaseLoader, 'load').mockImplementationOnce(async () => {
+      fixture.editSource()
+      return knowledgeBase
+    })
+    await expect(invoke('generation:prepare-draft-context', fixture.prepareRequest)).rejects.toThrow('GENERATION_DRAFT_PREPARATION_CHANGED')
+  })
+  it('keeps the original root active when a restart preparation is rejected', async () => {
+    const fixture = await selectedSourceFixture()
+    const prepared = await invoke('generation:prepare-draft-context', fixture.prepareRequest)
+    const originalSelection = fixture.selectionFor(prepared.preparationId)
+    const run = await invoke('generation:begin', originalSelection)
+    const before = getProjectDb()!.prepare('SELECT * FROM generation_roots').all()
+    fixture.editSource()
+    await expect(invoke('generation:restart', run.handle, { ...originalSelection, uiActionNonce: '明确重新开始' })).rejects.toThrow('GENERATION_DRAFT_PREPARATION_CHANGED')
+    expect(getProjectDb()!.prepare('SELECT * FROM generation_roots').all()).toEqual(before)
+    const context = await invoke('generation:read-context', { handle: run.handle })
+    expect(context.selectedDraftIds).toEqual([fixture.selectedId])
+    expect(context.selectedDrafts).toBeUndefined()
+  })
+  it('rejects source edits while knowledge preparation is awaiting its reader', async () => {
+    const fetch = stream(), knowledgeBase = await knowledgeBaseLoader.load()
+    vi.spyOn(knowledgeBaseLoader, 'load').mockImplementationOnce(async () => {
+      getProjectDb()!.exec("UPDATE project_core SET global_guidance='读取资料期间的作者修改'")
+      return knowledgeBase
+    })
+    await expect(prepareDraft()).rejects.toThrow('GENERATION_DRAFT_PREPARATION_CHANGED')
+    expect(fetch).not.toHaveBeenCalled()
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(0)
+  })
+  it.each(['begin', 'restart'] as const)('rechecks prepared knowledge at %s before changing generation roots', async action => {
+    await seedKnowledge()
+    const fetch = stream(), old = action === 'restart' ? await invoke('generation:begin', request) : null
+    const { selection } = await prepareDraft()
+    const beforeRoots = getProjectDb()!.prepare('SELECT * FROM generation_roots').all()
+    if (old) {
+      await expect(invoke('generation:restart', old.handle, { ...selection, uiActionNonce: '重新开始', preparationId: undefined })).rejects.toThrow('GENERATION_DRAFT_PREPARATION_REQUIRED')
+      await expect(invoke('generation:restart', old.handle, { ...selection, uiActionNonce: '重新开始', preparationId: '伪造凭据' })).rejects.toThrow('GENERATION_DRAFT_PREPARATION_REQUIRED')
+    }
+    const lance = await import('@lancedb/lancedb')
+    const connection = await lance.connect(path.join(getProjectDataRoot(session.projectPath), 'lancedb'))
+    const table = await connection.openTable('chunks')
+    await table.update({ where: "id='灯塔片段'", values: { text: '准备后作者修改：灯塔在东岸。' } })
+    table.close(); connection.close()
+    const operation = old ? invoke('generation:restart', old.handle, { ...selection, uiActionNonce: '重新开始' }) : invoke('generation:begin', selection)
+    await expect(operation).rejects.toThrow('GENERATION_KNOWLEDGE_SOURCE_STALE')
+    expect(getProjectDb()!.prepare('SELECT * FROM generation_roots').all()).toEqual(beforeRoots)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  it('persists the main knowledge snapshot and reads a saved acknowledgement without new generation after reopen', async () => {
+    await seedKnowledge()
+    const fetch = stream('林岚沿着旧城门的青石路走向灯塔。')
+    const { selection, preparation } = await prepareDraft()
+    expect(preparation.knowledgeSnapshot.items[0]?.documentId).toBe('原始资料')
+    preparation.knowledgeSnapshot.items.length = 0
+    const run = await invoke('generation:begin', selection)
+    const result = await invoke('generation:execute', { handle: run.handle, invocationNonce: '正文', task: { purpose: 'chapter-draft', output: 'visible-text', messages: [{ role: 'user', content: '保留灯塔设定，继续故事。' }] } })
+    await invoke('generation:compose-visible', run.handle, [result.run.artifacts[0].artifactId], textHash(result.outcome.content), 'draft-visible-v1')
+    const commit = { handle: run.handle, expectedCompositionHash: textHash(result.outcome.content), chapterNumber: 1, source: 'write' as const }
+    const saved = await invoke('generation:commit-draft', commit)
+    expect((await invoke('generation:read-context', { handle: run.handle })).knowledgeSnapshot?.items).toHaveLength(1)
+    const projectPath = session.projectPath
+    closeProjectDatabase(); projectAccess.invalidateCurrentSession()
+    const project = projectAccess.probeExistingProject(projectPath)
+    if (project.kind !== 'manifest') throw new Error('合成项目清单缺失')
+    initProjectDatabase(projectPath)
+    const lease = projectAccess.beginSession(project)
+    session = { projectId: project.projectId, projectPath, leaseId: lease.leaseId }
+    getProjectDb()!.exec("UPDATE project_core SET global_guidance='保存后作者修改'")
+    expect(await invoke('generation:commit-draft', commit)).toEqual(saved)
+    expect((await invoke('generation:read-context', { handle: run.handle })).savedDraft).toEqual(saved)
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+  it('retains generated prose when its knowledge source changes before saving', async () => {
+    await seedKnowledge()
+    stream('林岚在灯塔前停下，仔细检查那扇紧闭的木门。')
+    const { selection } = await prepareDraft()
+    const run = await invoke('generation:begin', selection)
+    const result = await invoke('generation:execute', { handle: run.handle, invocationNonce: '正文', task: { purpose: 'chapter-draft', output: 'visible-text', messages: [{ role: 'user', content: '根据资料继续故事。' }] } })
+    await invoke('generation:compose-visible', run.handle, [result.run.artifacts[0].artifactId], textHash(result.outcome.content), 'draft-visible-v1')
+    const lance = await import('@lancedb/lancedb')
+    const connection = await lance.connect(path.join(getProjectDataRoot(session.projectPath), 'lancedb'))
+    const table = await connection.openTable('chunks')
+    await table.update({ where: "id='灯塔片段'", values: { text: '作者修订：灯塔位于东岸。' } })
+    table.close(); connection.close()
+    await expect(invoke('generation:commit-draft', { handle: run.handle, expectedCompositionHash: textHash(result.outcome.content), chapterNumber: 1, source: 'write' })).rejects.toThrow('GENERATION_KNOWLEDGE_SOURCE_STALE')
+    expect((await invoke('generation:read', run.handle)).artifacts[0].text).toBe(result.outcome.content)
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(0)
+  })
   it.each(['core', 'template'])('rejects a changed %s at the actual formal commit channel and keeps the candidate', async source => {
     stream()
     const template = path.join(getProjectDataRoot(session.projectPath), 'prompts/first_chapter_draft.json')

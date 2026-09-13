@@ -367,6 +367,15 @@ function assertCommittedEffectSchema(kind: ImportRunEffectKind, payload: unknown
     return
   }
   if (kind === 'project-global-facts') {
+    if (isRecord(effectReceipt.characterProposal)) {
+      if (!exactKeys(effectReceipt, ['operationId', 'payloadHash', 'idempotent', 'core', 'characterProposal', 'proposalSource'])
+        || effectReceipt.operationId !== payload.operationId || typeof effectReceipt.payloadHash !== 'string' || !SHA256.test(effectReceipt.payloadHash)
+        || typeof effectReceipt.idempotent !== 'boolean' || !isRecord(effectReceipt.core) || !canonicalEqual(effectReceipt.proposalSource, payload)
+        || !exactKeys(effectReceipt.characterProposal, ['proposalBatchId', 'sourceHash'])
+        || typeof effectReceipt.characterProposal.proposalBatchId !== 'string' || !/^cpb:[a-f0-9]{64}$/.test(effectReceipt.characterProposal.proposalBatchId)
+        || typeof effectReceipt.characterProposal.sourceHash !== 'string' || !SHA256.test(effectReceipt.characterProposal.sourceHash)) throw new Error()
+      return
+    }
     if (
       !exactKeys(effectReceipt, ['operationId', 'payloadHash', 'idempotent', 'core', 'roster'])
       || effectReceipt.operationId !== payload.operationId
@@ -420,6 +429,13 @@ function assertCompletedBlueprintSyncOperation(operation: Record<string, unknown
 
   if (completion.status === 'already-satisfied') {
     if (!exactKeys(completion, ['blueprintCommitOperationId', 'operationId', 'status'])) throw new Error()
+    return
+  }
+  if (completion.status === 'proposal-staged') {
+    if (!exactKeys(completion, ['blueprintCommitOperationId', 'operationId', 'status', 'proposalReceipt'])
+      || !isRecord(completion.proposalReceipt) || !exactKeys(completion.proposalReceipt, ['proposalBatchId', 'sourceHash'])
+      || typeof completion.proposalReceipt.proposalBatchId !== 'string' || !/^cpb:[a-f0-9]{64}$/.test(completion.proposalReceipt.proposalBatchId)
+      || typeof completion.proposalReceipt.sourceHash !== 'string' || !SHA256.test(completion.proposalReceipt.sourceHash)) throw new Error()
     return
   }
   if (

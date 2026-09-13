@@ -658,6 +658,7 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       {
         stopOnFailure: this.params.stopOnFailure,
         onlyFailed: this.params.onlyFailed,
+        finalizedSource: this.params.finalizedSource,
         cancellation: context,
         projectSession,
       },

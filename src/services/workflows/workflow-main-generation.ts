@@ -48,9 +48,10 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
     displayed.set(snapshot.artifactId, snapshot.text)
   }
   const cancel = () => {
-    if (!cancelPromise && inner) cancelPromise = inner.cancel().catch(error => { cancelFailure = error })
+    if (!cancelPromise && view) cancelPromise = transport.cancel(view.handle).catch(error => { cancelFailure = error })
     return cancelPromise
   }
+  context.requestMainGenerationCancellation = async () => { await cancel(); if (cancelFailure) throw cancelFailure }
   const open = async (selection: WorkflowMainGenerationSelection) => {
     if (closed || context.cancelled) throw new Error('GENERATION_WORKFLOW_CANCELLED')
     const { resumeHandle, onRunOpened, ...intent } = selection
@@ -61,11 +62,11 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
       view = stored.nonReplayable ? await transport.resume(projectSession, resumeHandle) : stored
     } else {
       const parent = intent.continueDirectoryOperationId ? undefined : context.mainGenerationRootHandle
-      if (parent && (parent.projectId !== projectSession.projectId || parent.epoch !== projectSession.leaseId))
+      if (parent && (parent.projectId !== projectSession.projectId || !intent.batchId && parent.epoch !== projectSession.leaseId))
         throw new Error('GENERATION_WORKFLOW_RESUME_REQUIRED')
       view = await transport.begin(projectSession, { ...intent, selectedDraftIds: intent.selectedDraftIds ?? [],
         selectedFinalizedDraftIds: intent.selectedFinalizedDraftIds ?? [], modelId,
-        uiActionNonce: `${context.runId}:${intent.operation}`,
+        uiActionNonce: `${context.runId}:${intent.operation}${intent.operation === 'chapter-draft' ? `:${intent.chapterNumber}` : ''}`,
         ...(parent ? { parentRootActionId: parent.rootActionId } : {}) })
     }
     context.mainGenerationRootHandle = Object.freeze({ ...view.handle })

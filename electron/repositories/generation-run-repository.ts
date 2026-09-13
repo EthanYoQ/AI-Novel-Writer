@@ -1,8 +1,10 @@
 import { isDeepStrictEqual } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import type { VisibleCompositionReceipt, DirectoryGenerationProgress } from '../../src/shared/generation-owner-contract';
+import type { VisibleCompositionReceipt, VisibleCompositionAlgorithm, DirectoryGenerationProgress } from '../../src/shared/generation-owner-contract';
 import { composeVisibleContinuation, VISIBLE_CONTINUATION_VERSION } from '../../src/shared/visible-continuation';
+import { composeDraftVisibleContinuation, sanitizeDraftText } from '../../src/shared/draft-visible-text';
+import { countDraftUnits } from '../../src/shared/draft-units';
 import { getProjectDb } from '../database';
 import { assertReservation, assertAttemptTransition, rootActionIdempotencyKey, type RootAction, type RootBudget, type PhysicalAttempt, type VisibleArtifact, type ProviderUsagePolicy } from '../../src/shared/generation-contract';
 import { isContentHash, sameProjectEpoch, type FrozenInputFingerprint, type SourceRef, type ProjectEpoch } from '../../src/shared/source-ref';
@@ -142,7 +144,7 @@ export class GenerationRunRepository {
             fail('GENERATION_INVOCATION_CONFLICT');
         return this.receipt(row.attempt_id);
     }
-    reserve(runId: string, nonce: string, requestHash: string, reservedTokens: number, requestedOutputTokens: number, usagePolicy?: ProviderUsagePolicy): GenerationExecutionReceipt {
+    reserve(runId: string, nonce: string, requestHash: string, reservedTokens: number, requestedOutputTokens: number, usagePolicy?: ProviderUsagePolicy, purpose?: string): GenerationExecutionReceipt {
         return this.transaction(() => {
             const prior = this.findInvocation(runId, nonce, requestHash);
             if (prior)
@@ -158,7 +160,7 @@ export class GenerationRunRepository {
             assertReservation(budget.root, budget.policy, budget.attempts, attempt, budget.activeElapsedMs);
             this.db().prepare('INSERT INTO generation_attempts VALUES(?,?,?,?,?,?,?)').run(attempt.attemptId, attempt.reservationId, runId, run.rootActionId, encode(attempt), encode({ requestHash, usagePolicy: usagePolicy ?? null }), nonce);
             const artifact: VisibleArtifact = { artifactId: randomUUID(), attemptId: attempt.attemptId, rootActionId: run.rootActionId, projectId: run.binding.projectId, epoch: run.binding.epoch, fingerprint: run.binding.fingerprint, revision: 0, text: '', textHash: textHash('') };
-            this.db().prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(encode({ requestHash, usagePolicy: usagePolicy ?? null, artifactIdentity: { artifactId: artifact.artifactId, epoch: artifact.epoch, fingerprint: artifact.fingerprint } }), attempt.attemptId);
+            this.db().prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(encode({ requestHash, usagePolicy: usagePolicy ?? null, ...(purpose ? { purpose } : {}), artifactIdentity: { artifactId: artifact.artifactId, epoch: artifact.epoch, fingerprint: artifact.fingerprint } }), attempt.attemptId);
             this.db().prepare('INSERT INTO generation_artifacts VALUES(?,?,?,?,?,?)').run(artifact.artifactId, attempt.attemptId, runId, encode(artifact), 0, 'partial');
             return this.receipt(attempt.attemptId);
         });
@@ -197,7 +199,8 @@ export class GenerationRunRepository {
             this.db().prepare('UPDATE generation_roots SET active_since_ms=COALESCE(active_since_ms,?) WHERE root_action_id=?').run(this.now(), receipt.run.rootActionId);
         });
     }
-    private visibleComposition(runId: string, artifactIds: string[]): VisibleCompositionReceipt {
+    private visibleComposition(runId: string, artifactIds: string[], algorithm: VisibleCompositionAlgorithm = VISIBLE_CONTINUATION_VERSION): VisibleCompositionReceipt {
+        if (!['visible-append-v1', 'draft-visible-v1'].includes(algorithm)) fail('GENERATION_COMPOSITION_ALGORITHM_INVALID');
         if (!Array.isArray(artifactIds) || !artifactIds.length || artifactIds.length > 32
             || artifactIds.some(id => typeof id !== 'string' || !id) || new Set(artifactIds).size !== artifactIds.length)
             fail('GENERATION_COMPOSITION_INVALID');
@@ -214,13 +217,18 @@ export class GenerationRunRepository {
                 fail('GENERATION_COMPOSITION_SOURCE_NOT_TERMINAL');
             if (!['stop', 'length'].includes(receipt.result?.finishReason ?? ''))
                 fail('GENERATION_COMPOSITION_SOURCE_UNTRUSTED');
-            const next = sources.length ? composeVisibleContinuation(text, artifact.text) : artifact.text.trim();
+            const next = algorithm === 'draft-visible-v1'
+                ? sources.length ? composeDraftVisibleContinuation(text, artifact.text) : sanitizeDraftText(artifact.text)
+                : sources.length ? composeVisibleContinuation(text, artifact.text) : artifact.text.trim();
+            if (!next.trim()) fail('GENERATION_COMPOSITION_NO_PROGRESS');
+            if (algorithm === 'draft-visible-v1' && sources.length && receipt.result?.finishReason === 'length'
+                && countDraftUnits(next) - countDraftUnits(text) < 300) fail('GENERATION_COMPOSITION_NO_PROGRESS');
             if (sources.length && (next.match(/[\p{L}\p{N}]/gu)?.length ?? 0) <= (text.match(/[\p{L}\p{N}]/gu)?.length ?? 0))
                 fail('GENERATION_COMPOSITION_NO_PROGRESS');
             text = next; previousOrdinal = row.ordinal;
             sources.push({ artifactId, revision: artifact.revision, textHash: artifact.textHash });
         }
-        return { algorithm: VISIBLE_CONTINUATION_VERSION, text, textHash: textHash(text), artifactIds: [...artifactIds], sources };
+        return { algorithm, text, textHash: textHash(text), artifactIds: [...artifactIds], sources };
     }
     listDirectoryProgress(): DirectoryGenerationProgress[] {
         const rows = this.db().prepare('SELECT run_id,usage_receipt_json FROM generation_attempts ORDER BY rowid').all() as { run_id: string; usage_receipt_json: string }[];
@@ -294,18 +302,19 @@ export class GenerationRunRepository {
         for (const row of rows) {
             const stored = JSON.parse(row.usage_receipt_json).visibleComposition as Omit<VisibleCompositionReceipt, 'text'> | undefined;
             if (!stored) continue;
-            const current = this.visibleComposition(runId, stored.artifactIds);
+            const current = this.visibleComposition(runId, stored.artifactIds, stored.algorithm);
             if (stored.algorithm !== current.algorithm || stored.textHash !== current.textHash || !isDeepStrictEqual(stored.sources, current.sources))
                 fail('GENERATION_COMPOSITION_INTEGRITY_FAILED');
             return current;
         }
         return null;
     }
-    composeVisible(runId: string, artifactIds: string[], expectedTextHash: string): VisibleCompositionReceipt {
+    composeVisible(runId: string, artifactIds: string[], expectedTextHash: string, algorithm: VisibleCompositionAlgorithm = VISIBLE_CONTINUATION_VERSION): VisibleCompositionReceipt {
         return this.transaction(() => {
             const run = this.get(runId);
             if (run.binding.sourceManifest.outputContract !== 'visible-text') fail('GENERATION_COMPOSITION_OUTPUT_INVALID');
-            const next = this.visibleComposition(runId, artifactIds), previous = this.readVisibleComposition(runId);
+            const next = this.visibleComposition(runId, artifactIds, algorithm), previous = this.readVisibleComposition(runId);
+            if (previous && previous.algorithm !== algorithm) fail('GENERATION_COMPOSITION_ALGORITHM_CHANGED');
             if (next.textHash !== expectedTextHash) fail('GENERATION_COMPOSITION_HASH_MISMATCH');
             if (previous && previous.artifactIds.some((id, index) => next.artifactIds[index] !== id)) fail('GENERATION_COMPOSITION_REGRESSION');
             const row = this.db().prepare('SELECT t.attempt_id,t.usage_receipt_json FROM generation_attempts t JOIN generation_artifacts a ON a.attempt_id=t.attempt_id WHERE a.artifact_id=?').get(artifactIds.at(-1)) as { attempt_id: string; usage_receipt_json: string };

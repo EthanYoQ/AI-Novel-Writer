@@ -1,3 +1,4 @@
+import { assertKnowledgeSourceIdle, withKnowledgeSourceGate } from './services/knowledge-source-gate'
 /**
  * Vela 向量数据库封装 — 基于 LanceDB
  *
@@ -128,6 +129,7 @@ function migrationProjectKey(projectPath: string): string {
 }
 
 export function closeVectorStoreForMigration(projectPath: string): { closed: true; release: () => void } {
+  assertKnowledgeSourceIdle(path.join(path.resolve(projectPath), CANONICAL_PROJECT_DIRECTORY))
   const key = migrationProjectKey(projectPath)
   if (connectionExposure.has(key) || [...legacyMigrationInFlight.keys()].some(root => migrationProjectKey(root) === key)
     || migrationFences.has(key)) throw new Error('VECTOR_MIGRATION_BUSY_OR_HANDLES_UNPROVEN')
@@ -153,6 +155,11 @@ function legacyMigrationJournalPath(projectPath: string): string {
 /** 获取 LanceDB 连接（惰性创建） */
 export async function getConnection(projectPath: string): Promise<lancedb.Connection> {
   if (migrationFences.has(migrationProjectKey(projectPath))) throw new Error('VECTOR_MIGRATION_FENCED')
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => getConnectionInternal(projectPath))
+}
+
+async function getConnectionInternal(projectPath: string): Promise<lancedb.Connection> {
+  if (migrationFences.has(migrationProjectKey(projectPath))) throw new Error('VECTOR_MIGRATION_FENCED')
   const dbPath = databasePath(projectPath)
   connectionExposure.add(migrationProjectKey(projectPath))
   const cached = connectionPool.get(dbPath)
@@ -166,6 +173,7 @@ export async function getConnection(projectPath: string): Promise<lancedb.Connec
 
 /** 关闭指定项目的连接 */
 export function closeConnection(projectPath: string): void {
+  assertKnowledgeSourceIdle(path.join(path.resolve(projectPath), CANONICAL_PROJECT_DIRECTORY))
   // Closing a cached handle must still work after its DB session was revoked.
   const dbPath = path.join(path.resolve(projectPath), CANONICAL_PROJECT_DIRECTORY, 'lancedb')
   const connection = connectionPool.get(dbPath)
@@ -295,7 +303,7 @@ function emptyRegistry(): EmbeddingSpaceRegistry {
   return { version: 1, activeGeneration: null, spaces: [] }
 }
 
-function validateRegistry(value: unknown): EmbeddingSpaceRegistry {
+export function validateRegistry(value: unknown): EmbeddingSpaceRegistry {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('嵌入空间元数据损坏，未修改现有向量表')
   }
@@ -399,6 +407,10 @@ async function loadOrRegisterLegacyRegistry(
 
 /** 读取当前元数据；旧 2048 表会在这里安全登记为 legacy 空间。 */
 export async function getEmbeddingSpaces(projectPath: string): Promise<EmbeddingSpaceRegistry> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => getEmbeddingSpacesInternal(projectPath))
+}
+
+async function getEmbeddingSpacesInternal(projectPath: string): Promise<EmbeddingSpaceRegistry> {
   const db = await getConnection(projectPath)
   const registry = await loadOrRegisterLegacyRegistry(projectPath, db, await db.tableNames())
   return {
@@ -796,6 +808,13 @@ export async function activatePlannedEmbeddingSpace(
   projectPath: string,
   plan: EmbeddingRebuildPlan,
 ): Promise<{ success: boolean; error?: string }> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => activatePlannedEmbeddingSpaceInternal(projectPath, plan))
+}
+
+async function activatePlannedEmbeddingSpaceInternal(
+  projectPath: string,
+  plan: EmbeddingRebuildPlan,
+): Promise<{ success: boolean; error?: string }> {
   if (plan.mode !== 'activate') {
     return { success: false, error: '当前嵌入空间不允许直接激活' }
   }
@@ -824,6 +843,14 @@ export async function activatePlannedEmbeddingSpace(
  * after the new generation has passed completeness and query probes.
  */
 export async function rebuildPlannedEmbeddingSpace(
+  projectPath: string,
+  plan: EmbeddingRebuildPlan,
+  updates: Array<{ id: string; vector: number[] }>,
+): Promise<{ success: boolean; count: number; error?: string }> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => rebuildPlannedEmbeddingSpaceInternal(projectPath, plan, updates))
+}
+
+async function rebuildPlannedEmbeddingSpaceInternal(
   projectPath: string,
   plan: EmbeddingRebuildPlan,
   updates: Array<{ id: string; vector: number[] }>,
@@ -996,6 +1023,24 @@ export async function addChunks(
   },
   embeddingSpace?: EmbeddingSpaceIdentity,
 ): Promise<{ success: boolean; chunkCount: number; error?: string }> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => addChunksInternal(projectPath, docId, fileName, chunks, vectors, filePath, metadata, embeddingSpace))
+}
+
+async function addChunksInternal(
+  projectPath: string,
+  docId: string,
+  fileName: string,
+  chunks: string[],
+  vectors?: number[][],
+  filePath?: string,
+  metadata?: {
+    chapterNumber?: number
+    chapterTitle?: string
+    corpusKind?: KnowledgeCorpusKind
+    replacementMode?: 'by-file-name' | 'stable-id'
+  },
+  embeddingSpace?: EmbeddingSpaceIdentity,
+): Promise<{ success: boolean; chunkCount: number; error?: string }> {
   if (!validateChunks(chunks)) {
     return { success: false, chunkCount: 0, error: '文本块为空或格式无效' }
   }
@@ -1105,6 +1150,10 @@ export async function addChunks(
 
 /** 删除文档及其在所有嵌入空间中的块，不删除任何表。 */
 export async function removeDocument(projectPath: string, docId: string): Promise<boolean> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => removeDocumentInternal(projectPath, docId))
+}
+
+async function removeDocumentInternal(projectPath: string, docId: string): Promise<boolean> {
   try {
     const db = await getConnection(projectPath)
     const tableNames = await db.tableNames()
@@ -1157,6 +1206,10 @@ export async function removeDocument(projectPath: string, docId: string): Promis
  * 清空整个项目知识库。该函数是用户明确触发的清空操作，因而会删除所有代际。
  */
 export async function clearAll(projectPath: string): Promise<boolean> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => clearAllInternal(projectPath))
+}
+
+async function clearAllInternal(projectPath: string): Promise<boolean> {
   try {
     const db = await getConnection(projectPath)
     const tableNames = await db.tableNames()
@@ -1224,6 +1277,18 @@ export async function search(
 
 /** 支持章节范围限定的检索入口。 */
 export async function searchWithScope(
+  projectPath: string,
+  queryText: string,
+  queryVector?: number[],
+  topK: number = 5,
+  chapterScope?: [number, number],
+  embeddingSpace?: EmbeddingSpaceIdentity,
+  excludedCorpusKinds: readonly KnowledgeCorpusKind[] = [],
+): Promise<SearchResult[]> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => searchWithScopeInternal(projectPath, queryText, queryVector, topK, chapterScope, embeddingSpace, excludedCorpusKinds))
+}
+
+async function searchWithScopeInternal(
   projectPath: string,
   queryText: string,
   queryVector?: number[],
@@ -1330,6 +1395,10 @@ export async function searchWithScope(
 }
 
 export async function listDocuments(projectPath: string): Promise<DocumentInfo[]> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => listDocumentsInternal(projectPath))
+}
+
+async function listDocumentsInternal(projectPath: string): Promise<DocumentInfo[]> {
   try {
     const db = await getConnection(projectPath)
     if (!(await db.tableNames()).includes(DOCS_TABLE_NAME)) return []
@@ -1370,6 +1439,13 @@ export function hashCanonicalChunkSet(chunks: readonly string[]): string {
 
 /** Validate both the document commit row and every canonical chunk for a stable import. */
 export async function getDocumentIntegrity(
+  projectPath: string,
+  docId: string,
+): Promise<DocumentIntegrity | null> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => getDocumentIntegrityInternal(projectPath, docId))
+}
+
+async function getDocumentIntegrityInternal(
   projectPath: string,
   docId: string,
 ): Promise<DocumentIntegrity | null> {
@@ -1484,6 +1560,10 @@ export async function getDocumentIntegrity(
 }
 
 export async function getStats(projectPath: string): Promise<KBStats> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => getStatsInternal(projectPath))
+}
+
+async function getStatsInternal(projectPath: string): Promise<KBStats> {
   try {
     const db = await getConnection(projectPath)
     const tableNames = await db.tableNames()
@@ -1541,6 +1621,13 @@ export async function getChunksWithoutVectors(
   projectPath: string,
   embeddingSpace?: EmbeddingSpaceIdentity,
 ): Promise<{ count: number }> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => getChunksWithoutVectorsInternal(projectPath, embeddingSpace))
+}
+
+async function getChunksWithoutVectorsInternal(
+  projectPath: string,
+  embeddingSpace?: EmbeddingSpaceIdentity,
+): Promise<{ count: number }> {
   const db = await getConnection(projectPath)
   const tableNames = await db.tableNames()
   if (!tableNames.includes(TABLE_NAME)) return { count: 0 }
@@ -1569,6 +1656,14 @@ export async function getChunksForBackfill(
  * drop 旧表，且只有完整覆盖 canonical 表后才可能切换 active。
  */
 export async function updateChunkVectors(
+  projectPath: string,
+  updates: Array<{ id: string; vector: number[] }>,
+  embeddingSpace?: EmbeddingSpaceIdentity,
+): Promise<{ success: boolean; count: number; error?: string }> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => updateChunkVectorsInternal(projectPath, updates, embeddingSpace))
+}
+
+async function updateChunkVectorsInternal(
   projectPath: string,
   updates: Array<{ id: string; vector: number[] }>,
   embeddingSpace?: EmbeddingSpaceIdentity,
@@ -2025,6 +2120,11 @@ async function migrateFromJSONOnce(projectPath: string): Promise<{ success: bool
  * 在任意写入前验证完整源文件，并以持久 journal 回滚中断批次，避免重试重复写入。
  */
 export async function migrateFromJSON(projectPath: string): Promise<{ success: boolean; migrated: number; error?: string }> {
+  if (migrationFences.has(migrationProjectKey(projectPath))) throw new Error('VECTOR_MIGRATION_FENCED')
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => migrateFromJSONInternal(projectPath))
+}
+
+async function migrateFromJSONInternal(projectPath: string): Promise<{ success: boolean; migrated: number; error?: string }> {
   const key = path.resolve(projectPath)
   if (migrationFences.has(migrationProjectKey(projectPath))) throw new Error('VECTOR_MIGRATION_FENCED')
   const running = legacyMigrationInFlight.get(key)

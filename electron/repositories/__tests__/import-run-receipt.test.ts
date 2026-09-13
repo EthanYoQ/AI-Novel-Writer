@@ -10,13 +10,22 @@ import { openCanonicalProjectFixture as initProjectDatabase } from '../../../tes
 import { ProjectCoreRepository } from '../project-core-repository'
 import { ImportRunRepository } from '../import-run-repository'
 import { BlueprintRepository, type BlueprintData } from '../blueprint-repository'
-import { CharacterRosterRepository } from '../character-roster-repository'
+import { CharacterProposalService } from '../../services/character-proposal-service'
+import { proveCharacterProposal } from '../../services/generation-character-proposal-proof'
+import { GenerationRunRepository } from '../generation-run-repository'
+import { projectAccess } from '../../services/project-access'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
 
 let root = ''
 const content = 'reference'
+function stageDirectory(operationId: string) {
+  const db = getProjectDb()!, project = projectAccess.probeExistingProject(root)
+  if (project.kind !== 'manifest') throw new Error('test project identity missing')
+  return new CharacterProposalService(db, project.projectId, source => proveCharacterProposal(db,
+    new GenerationRunRepository(() => db), project.projectId, source, false, () => {})).stage({ kind: 'directory', operationId })
+}
 
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-import-receipt-'))
@@ -166,16 +175,7 @@ describe('import-run durable effect receipt', () => {
     const operation = BlueprintRepository.getCommittedRangeOperation('import-blueprints-receipt-run-1-1')
     expect(operation?.characterSyncOperation.status).toBe('pending')
 
-    CharacterRosterRepository.commit({
-      operationId: operation!.characterSyncOperation.operationId,
-      expectedRevision: 0,
-      schemaVersion: 1,
-      intent: 'blueprint_sync',
-      entries: [{
-        name: 'Protagonist', role: 'supporting', gender: '', age: '', appearance: '',
-        personality: '', background: '', abilities: '', motivation: '', relationships: [], arc: '', notes: '',
-      }],
-    })
+    stageDirectory(operation!.characterSyncOperation.operationId)
     expect(BlueprintRepository.completeCharacterSyncOperation(
       operation!.characterSyncOperation.operationId,
     ).status).toBe('completed')
@@ -193,18 +193,8 @@ describe('import-run durable effect receipt', () => {
       })
   })
 
-  it('rejects an offline-forged committed sync receipt without its roster operation proof', () => {
+  it('rejects an offline-forged completion without its proposal staging evidence', () => {
     prepareCommittedBlueprintReceipt()
-    CharacterRosterRepository.commit({
-      operationId: 'different-roster-operation',
-      expectedRevision: 0,
-      schemaVersion: 1,
-      intent: 'blueprint_sync',
-      entries: [{
-        name: 'Protagonist', role: 'supporting', gender: '', age: '', appearance: '',
-        personality: '', background: '', abilities: '', motivation: '', relationships: [], arc: '', notes: '',
-      }],
-    })
     tamperOffline(`
       UPDATE blueprint_character_sync_operations
       SET status = 'completed',
@@ -227,7 +217,7 @@ describe('import-run durable effect receipt', () => {
       .toThrow(/receipt.*损坏|收据.*损坏/i)
   })
 
-  it('accepts an already-satisfied receipt when blueprints need no existing-roster relationship update', () => {
+  it('rejects an already-satisfied claim without a durable proposal under the ID schema', () => {
     prepareCommittedBlueprintReceipt()
     tamperOffline(`
       UPDATE blueprint_character_sync_operations
@@ -241,8 +231,8 @@ describe('import-run durable effect receipt', () => {
       WHERE operation_id = 'blueprint-sync-import-blueprints-receipt-run-1-1'
     `)
 
-    expect(ImportRunRepository.getEffectReceipt('receipt-run', 'blueprints', '1-1-52367a66'))
-      .toMatchObject({ state: 'committed' })
+    expect(() => ImportRunRepository.getEffectReceipt('receipt-run', 'blueprints', '1-1-52367a66'))
+      .toThrow(/receipt.*损坏|收据.*损坏/i)
   })
 
   it('freezes generated output before effect commit and atomically commits effect with checkpoint after reopen', () => {

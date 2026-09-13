@@ -46,7 +46,7 @@ afterEach(() => {
 })
 
 describe('ImportGlobalFactsRepository transaction seam', () => {
-  it('commits config, non-character architecture and roster as one read-back receipt', () => {
+  it('commits core and source-preserving character proposals in one transaction', () => {
     const receipt = ImportGlobalFactsRepository.commit(request())
 
     expect(receipt).toMatchObject({
@@ -58,23 +58,24 @@ describe('ImportGlobalFactsRepository transaction seam', () => {
         coreOutline: '阿Q由自尊走向幻灭', worldSetting: '辛亥前后的江南乡村',
         protagonistProfile: '阿Q，贫困而善于精神胜利',
       },
-      roster: { snapshot: { status: 'ready', entries: expect.arrayContaining([
-        expect.objectContaining({ name: '阿Q', role: 'protagonist' }),
-      ]) } },
+      characterProposal: { proposalBatchId: expect.stringMatching(/^cpb:[a-f0-9]{64}$/), sourceHash: expect.stringMatching(/^[a-f0-9]{64}$/) },
+      proposalSource: request(),
     })
     expect(ProjectCoreRepository.get()).toMatchObject({
       genre: '现实', premise: '个人与社会冲突',
       coreOutline: '阿Q由自尊走向幻灭', worldSetting: '辛亥前后的江南乡村',
       protagonistProfile: '阿Q，贫困而善于精神胜利',
-      charactersArch: expect.stringContaining('阿Q'),
+      charactersArch: '',
     })
-    expect(CharacterRosterRepository.read()).toMatchObject({ revision: 1, status: 'ready' })
+    expect(CharacterRosterRepository.read()).toMatchObject({ revision: 0, status: 'empty' })
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
+    expect(getProjectDb()!.prepare("SELECT COUNT(*) FROM character_identity_proposals WHERE source_key LIKE 'character-proposal-v1:%'").pluck().get()).toBe(1)
   })
 
-  it('rolls back core, roster and operation ledger when the roster candidate is invalid', () => {
+  it('rolls back core and the operation ledger when durable proposal staging fails', () => {
     getProjectDb()!.exec(`
       CREATE TRIGGER reject_imported_roster
-      BEFORE INSERT ON characters
+      BEFORE INSERT ON character_identity_proposals
       BEGIN SELECT RAISE(ABORT, 'injected roster failure'); END;
     `)
 
@@ -91,6 +92,7 @@ describe('ImportGlobalFactsRepository transaction seam', () => {
     const replay = ImportGlobalFactsRepository.commit(request())
 
     expect(replay).toEqual({ ...first, idempotent: true })
-    expect(CharacterRosterRepository.read().revision).toBe(1)
+    expect(CharacterRosterRepository.read().revision).toBe(0)
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM character_identity_proposals').pluck().get()).toBe(1)
   })
 })

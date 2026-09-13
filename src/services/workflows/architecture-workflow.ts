@@ -181,7 +181,16 @@ export function createArchitectureWorkflow(
     },
   ]
 
-  const finalSteps = allSteps.filter(s => sel.includes(s.key as never))
+  const finalSteps = allSteps.filter(s => sel.includes(s.key as never)).flatMap(step => step.key === 'characters'
+    ? [step, {
+      name: text('确认采用角色提议', 'Confirm character adoption'), key: 'adopt-characters',
+      description: text('按预览采用明确身份，未明确的候选继续保留', 'Adopt clear identities from the preview and keep unresolved candidates'),
+      requiresConfirmation: true,
+      executor: async (step: unknown, context: WorkflowContext, callbacks: StepCallbacks) => {
+        const { AdoptGeneratedCharactersCommand } = await import('./commands/architecture.command')
+        return new AdoptGeneratedCharactersCommand().execute({ step, context, callbacks })
+      },
+    }] : [step])
 
   return {
     type: 'architecture_generation',

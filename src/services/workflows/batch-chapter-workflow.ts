@@ -1,3 +1,6 @@
+import { useProjectStore } from '../../stores/project-store'
+import type { GenerationBatchProgress } from '../../shared/generation-owner-contract'
+import { hashAuthorText } from '../../shared/source-ref'
 import { parseResourceUri } from '../../shared/project-paths'
 import { workflowResourceKey, type WorkflowContext, type WorkflowDefinition, type WorkflowStep, type StepCallbacks } from '../../stores/workflow-store'
 import { ipc } from '../ipc-client'
@@ -6,7 +9,8 @@ import type { ChapterInfo } from './chapter-workflow'
 import type { ChapterBlueprint } from './directory-workflow'
 import { GenerateDraftCommand } from './commands/generate-draft.command'
 import type { SelectedCandidateDraft } from './chapter-materials'
-import { FinalizeChapterCommand } from './commands/finalize-chapter.command'
+import { FinalizeChapterCommand, RunFinalizePostProcessCommand } from './commands/finalize-chapter.command'
+import { retryFinalizationPublication } from '../finalization-client'
 import type { Locale } from '../../i18n/types'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectPathKey } from '../../shared/project-session-context'
@@ -37,6 +41,8 @@ export interface BatchChapterWorkflowParams {
   chapterWordsTarget?: number
   /** 点击开始时冻结；草稿待审与自动定稿在同一批次内不得混用。 */
   completionMode: BatchChapterCompletionMode
+  /** Exact main-issued batch identity selected for recovery. */
+  resumeBatchId?: string
 }
 
 export interface BatchChapterWorkflowDefinition extends WorkflowDefinition {
@@ -46,6 +52,8 @@ export interface BatchChapterWorkflowDefinition extends WorkflowDefinition {
   chapterWordsTarget: number
   /** 随定义冻结的批量完成模式，供启动收据与 UI 验证。 */
   completionMode: BatchChapterCompletionMode
+  /** Exact main-issued batch identity selected for recovery. */
+  resumeBatchId?: string
 }
 
 /** 将 UI 或外部输入收敛到安全的 1–10 章范围。 */
@@ -160,9 +168,45 @@ async function runOneBatchChapter(
   step: WorkflowStep,
   context: WorkflowContext,
   callbacks: StepCallbacks,
-  draftReviewCandidates: Map<number, SelectedCandidateDraft>,
+  batchState: { batchId?: string; params: BatchChapterWorkflowParams },
 ): Promise<string> {
   const projectSession = requireWorkflowProjectSession(context)
+  let progress: GenerationBatchProgress
+  if (batchState.batchId) {
+    progress = await ipc.invokeWithProjectSession(projectSession, 'generation:read-batch', { batchId: batchState.batchId })
+  } else {
+    const config = useProjectStore.getState().currentProject?.novelConfig
+    if (!config) throw new Error('GENERATION_BATCH_AUTHOR_CONFIG_REQUIRED')
+    progress = await ipc.invokeWithProjectSession(projectSession, 'generation:begin-batch', {
+      uiActionNonce: `${context.runId}:batch`, modelId: batchState.params.generationModelId,
+      mode: completionMode, range: { startChapter: batchStartChapterNumber,
+        endChapter: batchStartChapterNumber + normalizeBatchChapterCount(batchState.params.chapterCount) - 1 },
+      targetUnits: chapterWordsTarget, promptKeys: ['first_chapter_draft', 'next_chapter_draft'], skillStages: ['drafting'],
+      authorInputs: [{ id: 'draft:author-config', text: JSON.stringify(config) },
+        { id: 'draft:target-units', text: String(chapterWordsTarget) }],
+    })
+    batchState.batchId = progress.batchId
+  }
+  if (progress.mode !== completionMode || progress.targetUnits !== chapterWordsTarget
+    || progress.range.startChapter !== batchStartChapterNumber
+    || progress.range.endChapter !== batchStartChapterNumber + normalizeBatchChapterCount(batchState.params.chapterCount) - 1)
+    throw new Error('GENERATION_BATCH_INTENT_MISMATCH')
+  context.mainGenerationRootHandle = Object.freeze({ ...progress.rootHandle })
+  context.data.generationBatchId = progress.batchId
+  const saved = progress.completedChapters.find(item => item.chapterNumber === chapterNumber)
+  if (saved && (progress.nextChapterNumber === null || progress.nextChapterNumber > chapterNumber))
+    return localeText(uiLocale, `第${chapterNumber}章已保存，未重复生成。`, `Chapter ${chapterNumber} was already saved and was not generated again.`)
+  if (progress.nextChapterNumber !== chapterNumber) throw new Error('GENERATION_BATCH_CHAPTER_ORDER_MISMATCH')
+  const selectedCandidates: SelectedCandidateDraft[] = []
+  const predecessor = completionMode === 'draft_review'
+    ? progress.completedChapters.find(item => item.chapterNumber === chapterNumber - 1) : undefined
+  if (predecessor) {
+    const stored = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-full', predecessor.draftId, projectPath)
+    if (!stored || stored.version !== predecessor.version || await hashAuthorText(stored.content) !== predecessor.contentHash)
+      throw new Error('GENERATION_BATCH_PREDECESSOR_CHANGED')
+    selectedCandidates.push({ chapterNumber: predecessor.chapterNumber, draftId: predecessor.draftId,
+      version: predecessor.version, content: stored.content })
+  }
   // 草稿待审模式不会把本批次前一章变成定稿事实；首章仍遵守外部连续性门禁，
   // 后续章只重复校验蓝图/角色等全局前置条件。
   const guardedChapterNumber = completionMode === 'draft_review' && chapterNumber > batchStartChapterNumber
@@ -186,7 +230,7 @@ async function runOneBatchChapter(
       `No blueprint was found for Chapter ${chapterNumber}. Batch writing stopped.`,
     ))
   }
-  if (existingDraft) {
+  if (existingDraft && (!saved || existingDraft.id !== saved.draftId)) {
     throw new Error(localeText(
       uiLocale,
       `第${chapterNumber}章已有草稿，批量创作不会覆盖既有内容`,
@@ -208,13 +252,19 @@ async function runOneBatchChapter(
     ))
   callbacks.setProgress(5)
 
-  const draftContent = await new GenerateDraftCommand(chapterInfo, {
-    selectedCandidateDrafts: completionMode === 'draft_review'
-      ? [...draftReviewCandidates.values()]
-      : [],
+  const savedDraft = saved ? await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-full', saved.draftId, projectPath) : null
+  if (saved && (!savedDraft || savedDraft.version !== saved.version || await hashAuthorText(savedDraft.content) !== saved.contentHash))
+    throw new Error('GENERATION_BATCH_SAVED_DRAFT_CHANGED')
+  const draftContent = savedDraft?.content ?? await new GenerateDraftCommand(chapterInfo, {
+    batchId: progress.batchId, selectedCandidateDrafts: selectedCandidates,
+    ...(progress.currentChapterRunHandle ? { resumeHandle: progress.currentChapterRunHandle } : {}),
   }).execute({ step, context, callbacks })
+  if (saved) {
+    context.data.draftId = saved.draftId
+    context.data.draftVersion = saved.version
+    context.data.draftPath = `ai-novel://draft/${saved.draftId}`
+  }
   throwIfCancelled(context, uiLocale)
-
   if (completionMode === 'draft_review') {
     const draftId = Number(context.data.draftId)
     const version = Number(context.data.draftVersion)
@@ -225,12 +275,9 @@ async function runOneBatchChapter(
         `Chapter ${chapterNumber} was saved, but its draft identity could not be frozen. Batch writing stopped.`,
       ))
     }
-    draftReviewCandidates.set(chapterNumber, Object.freeze({
-      chapterNumber,
-      draftId,
-      version,
-      content: draftContent,
-    }))
+    const committed = await ipc.invokeWithProjectSession(projectSession, 'generation:read-batch', { batchId: progress.batchId })
+    if (!committed.completedChapters.some(item => item.chapterNumber === chapterNumber && item.draftId === draftId && item.version === version))
+      throw new Error('GENERATION_BATCH_DRAFT_RECEIPT_REQUIRED')
     callbacks.setProgress(100)
     return localeText(
       uiLocale,
@@ -250,7 +297,8 @@ async function runOneBatchChapter(
     ))
   }
 
-  const snapshot = await captureBatchFinalizationSnapshot(
+  const existingFinalizationId = saved?.pendingFinalizationId ?? saved?.finalizationId
+  const snapshot = existingFinalizationId ? undefined : await captureBatchFinalizationSnapshot(
     draftPath,
     draftContent,
     chapterNumber,
@@ -260,7 +308,22 @@ async function runOneBatchChapter(
   )
   throwIfCancelled(context, uiLocale)
 
-  await new FinalizeChapterCommand({
+  if (existingFinalizationId) {
+    if (saved?.pendingFinalizationId) {
+      const publication = await retryFinalizationPublication(existingFinalizationId, projectSession)
+      if (!publication.success) throw new Error(publication.error || 'GENERATION_BATCH_PUBLICATION_PENDING')
+    }
+    if (!saved?.postProcessComplete) {
+      const project = useProjectStore.getState().currentProject
+      if (!project) throw new Error('GENERATION_BATCH_PROJECT_REQUIRED')
+      await new RunFinalizePostProcessCommand({
+        project, chapterNumber, chapterTitle: chapterInfo.title, draftContent, draftId: saved!.draftId,
+        finalizedSource: { draftId: saved!.draftId, chapterNumber, finalizationId: existingFinalizationId, contentHash: saved!.contentHash },
+        sourceLabel: localeText(uiLocale, `第${chapterNumber}章定稿`, `Chapter ${chapterNumber} finalization`),
+        stopOnFailure: true, chapterEntities: chapterInfo.characters,
+      }).execute({ step, context, callbacks })
+    }
+  } else await new FinalizeChapterCommand({
     draftPath,
     draftContent,
     chapterNumber,
@@ -269,6 +332,13 @@ async function runOneBatchChapter(
     eventSource: 'batch',
     ...(snapshot ? { snapshot } : {}),
   }).execute({ step, context, callbacks })
+
+  const finalized = await ipc.invokeWithProjectSession(projectSession, 'generation:read-batch', { batchId: progress.batchId })
+  const finalizationId = finalized.completedChapters.find(item => item.chapterNumber === chapterNumber)?.finalizationId
+  if (!finalizationId) throw new Error('GENERATION_BATCH_FINALIZATION_RECEIPT_REQUIRED')
+  await ipc.invokeWithProjectSession(projectSession, 'generation:confirm-batch-finalization', {
+    batchId: progress.batchId, chapterNumber, finalizationId,
+  })
 
   callbacks.setProgress(100)
   return localeText(
@@ -303,7 +373,7 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
   const completionMode = normalizeCompletionMode(params.completionMode)
   const chapterWordsTarget = normalizeChapterWordsTarget(params.chapterWordsTarget)
   const endChapterNumber = startChapterNumber + chapterCount - 1
-  const draftReviewCandidates = new Map<number, SelectedCandidateDraft>()
+  const batchState = { batchId: params.resumeBatchId, params }
   const chapterResourceKeys = Array.from({ length: chapterCount }, (_, index) => (
     workflowResourceKey('chapter', startChapterNumber + index)
   ))
@@ -372,7 +442,7 @@ export function createBatchChapterWorkflow(params: BatchChapterWorkflowParams): 
           step,
           context,
           callbacks,
-          draftReviewCandidates,
+          batchState,
         ),
       }
     }),

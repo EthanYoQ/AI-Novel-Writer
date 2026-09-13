@@ -86,6 +86,31 @@ async function canWriteIncrementalVectors(projectPath: string): Promise<boolean>
 
 // ===== 导出函数（保持旧签名，IPC 层零改动） =====
 
+/** One initial retrieval; later generation guards re-read identities without another embedding request. */
+export async function captureWritingKnowledgeSnapshot(query: string, projectPath: string,
+  configuration: { protocol: 'openai' | 'gemini'; model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions } } | null) {
+  await ensureMigration(projectPath)
+  let queryVector: number[] | undefined
+  if (configuration?.model.apiKey && query.trim()) {
+    try {
+      const [vector] = await generateEmbeddings([query], configuration.protocol, configuration.model, configuration.model.embeddingOptions?.batchSize)
+      if (vector?.length) queryVector = vector
+    } catch { /* The established no-embedding path still uses canonical full-text search. */ }
+  }
+  const { captureGenerationKnowledge } = await import('./services/generation-knowledge-source')
+  const { withKnowledgeSourceGate } = await import('./services/knowledge-source-gate')
+  const projectStorageRoot = getProjectDataRoot(projectPath)
+  return withKnowledgeSourceGate(projectStorageRoot, async () => {
+    try {
+      return await captureGenerationKnowledge({ projectStorageRoot, query, topK: 5, queryVector,
+        ...(queryVector && configuration ? { embeddingSpace: embeddingSpaceFor(configuration.protocol, configuration.model) } : {}) })
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== 'GENERATION_KNOWLEDGE_SPACE_NOT_MATCHED') throw error
+      return captureGenerationKnowledge({ projectStorageRoot, query, topK: 5 })
+    }
+  })
+}
+
 /**
  * 导入文档到知识库（单文件，从磁盘读取）
  * 始终建立 FTS 索引；空库或已有 active 空间时可增量生成向量

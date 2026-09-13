@@ -8,6 +8,10 @@ import { createHash } from 'node:crypto'
 import { getProjectDb } from '../database'
 import { ensureBaselineBlueprintTables } from '../migrations/baseline-blueprint-schema'
 import { CharacterRosterRepository } from './character-roster-repository'
+import { hasCharacterIdentitySchema } from './character-repository'
+import { findCharacterProposalEvidence } from '../services/character-proposal-service'
+import { proveCharacterProposal } from '../services/generation-character-proposal-proof'
+import { GenerationRunRepository } from './generation-run-repository'
 import { blueprintCharacterSyncFactError } from '../../src/shared/blueprint-character-sync-evidence'
 import type { BlueprintNewCharacterCandidate } from '../../src/shared/blueprint-semantic-contract'
 
@@ -81,7 +85,8 @@ export interface BlueprintRangeCommitReceipt {
 export interface BlueprintCharacterSyncCompletionReceipt {
     blueprintCommitOperationId: string
     operationId: string
-    status: 'committed' | 'already-satisfied'
+    status: 'committed' | 'already-satisfied' | 'proposal-staged'
+    proposalReceipt?: import('../../src/shared/character-proposal').CharacterProposalStageEvidence
     /** Hash/revision evidence only; the authoritative roster snapshot stays in its fact tables. */
     rosterReceipt?: {
         operationId: string
@@ -352,6 +357,11 @@ function authoritativeCharacterSyncCompletionReceipt(
     db: NonNullable<ReturnType<typeof getProjectDb>>,
     operation: BlueprintCharacterSyncOperation,
 ): BlueprintCharacterSyncCompletionReceipt {
+    if (hasCharacterIdentitySchema(db)) {
+        const proposalReceipt = findCharacterProposalEvidence(db, { kind: 'directory', operationId: operation.operationId },
+          (projectId, source) => proveCharacterProposal(db, new GenerationRunRepository(() => db), projectId, source, false, () => {}))
+        return { blueprintCommitOperationId: operation.blueprintCommitOperationId, operationId: operation.operationId, status: 'proposal-staged', proposalReceipt }
+    }
     const roster = CharacterRosterRepository.read()
     if (roster.status !== 'ready' && roster.status !== 'empty') {
         throw new Error('角色名单当前不可验证，已拒绝完成蓝图角色同步')

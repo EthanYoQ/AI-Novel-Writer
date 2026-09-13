@@ -1,6 +1,6 @@
 # S00 实际环境与证据边界
 
-核对日期：2026-09-13（Asia/Shanghai）。本轮采用 Program v3；实施代理为 Astra/Medium，主集成者为 Astra/Xhigh。冻结计划中的旧模型文字保留，不能覆盖最新调度要求。
+核对日期：2026-09-13（Asia/Shanghai）。本轮采用 Program v3。用户已解除子代理固定使用 Astra/Medium 的限制：主集成者按任务复杂度分配模型和推理强度，最低 Terra/Xhigh；主集成者为 Astra/Xhigh。此前 Astra/Medium 的执行和审查收据保留历史事实，后续任务遵循新下限。冻结计划中的旧模型文字保留，不能覆盖最新调度要求。
 
 ## 开发树与基线
 

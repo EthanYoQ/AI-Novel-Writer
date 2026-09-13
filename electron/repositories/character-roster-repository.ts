@@ -816,9 +816,24 @@ function deriveRosterStatus(
   }
 }
 
+function identityProjectionEntries(db: BetterSqlite3.Database): CharacterRosterEntry[] {
+  const relationships = db.prepare(`SELECT r.source_character_id,c.name,r.relation FROM character_relationships r
+    JOIN characters c ON c.character_id=r.target_character_id WHERE c.retired=0 ORDER BY r.relationship_id`).all() as { source_character_id: string; name: string; relation: string }[]
+  const activeIds = new Set((db.prepare('SELECT character_id FROM characters WHERE retired=0').all() as { character_id: string }[]).map(row => row.character_id))
+  return sortedEntries(CharacterRepository.getAll(db).filter(character => activeIds.has(character.characterId!)).map(character => ({ ...entryFromCharacter(character),
+    relationships: relationships.filter(item => item.source_character_id === character.characterId).map(item => ({ target: item.name, relation: item.relation })) })))
+}
+/** Compatibility prose is derived from ID facts and never acts as an identity write source. */
+export function refreshCharacterIdentityProjection(db: BetterSqlite3.Database): void {
+  if (!db.inTransaction || !hasCharacterIdentitySchema(db)) throw new Error('CHARACTER_ID_TRANSACTION_REQUIRED')
+  const entries = identityProjectionEntries(db), writingLanguage = db.prepare("SELECT writing_language FROM project_core WHERE id='main'").pluck().get() === 'en-US' ? 'en-US' : DEFAULT_WRITING_LANGUAGE
+  const projection = renderCharacterRosterMarkdown(entries, writingLanguage)
+  db.prepare("UPDATE project_core SET characters_arch=? WHERE id='main'").run(projection)
+  db.prepare("UPDATE character_roster_meta SET revision=revision+1,migration_state='ready',projection_hash=?,fact_hash=?,updated_at=datetime('now') WHERE id='main'").run(hashText(projection), fullFactHash(entries))
+}
 function readSnapshot(db: BetterSqlite3.Database): CharacterRosterSnapshot {
   const meta = readMeta(db)
-  const entries = sortedEntries(CharacterRepository.getAll().map(entryFromCharacter))
+  const entries = hasCharacterIdentitySchema(db) ? identityProjectionEntries(db) : sortedEntries(CharacterRepository.getAll().map(entryFromCharacter))
   const writingLanguage = ProjectCoreRepository.get()?.writingLanguage ?? DEFAULT_WRITING_LANGUAGE
   const currentProjection = readCurrentProjection(db)
   const localizedProjection = renderCharacterRosterMarkdown(entries, writingLanguage)

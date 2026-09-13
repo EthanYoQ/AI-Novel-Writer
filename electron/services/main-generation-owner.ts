@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3'
+import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
-import type { BeginGenerationRequest, ExecuteGenerationRequest } from '../../src/shared/generation-owner-contract'
+import type { BeginGenerationRequest, ExecuteGenerationRequest, BeginGenerationBatchRequest, GenerationDraftCommitRequest, GenerationRecoveryContext, VisibleCompositionAlgorithm } from '../../src/shared/generation-owner-contract'
 import { generationOutputContract, type GenerationAuthorInput } from '../../src/shared/generation-owner-contract'
 import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot } from '../../src/services/generation/generation-runtime'
 import type { ModelProfile, ModelExecutionLeaseReceipt, LLMFinishReason } from '../../src/shared/ipc-channels'
@@ -13,6 +14,12 @@ import { LLMFactory } from '../llm/llm-factory'
 import type { GenerationTask } from '../../src/services/generation/generation-harness'
 import type { ProviderUsageEvidence } from '../llm/provider.interface'
 import type { BlueprintRangeCommitReceipt } from '../repositories/blueprint-repository'
+import { GenerationDraftEffects, assertGenerationBatchIntent } from './generation-draft-effects'
+import { CharacterProposalService } from './character-proposal-service'
+import { proveCharacterProposal } from './generation-character-proposal-proof'
+import { compareGenerationSourceBindings } from './generation-source-binding'
+import type { GenerationKnowledgeSnapshot } from '../../src/shared/generation-knowledge'
+import type { PrepareDraftContextRequest, PreparedDraftContext } from '../../src/shared/generation-owner-contract'
 
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>
 export function safeGenerationModelReceipt(receipt: ModelExecutionLeaseReceipt): SafeGenerationModelReceipt {
@@ -26,7 +33,7 @@ export interface MainGenerationOwnerDependencies {
   assertCurrent: () => void
   leases: ModelExecutionLeaseRegistry
   loadModel: (id: string) => ModelProfile | null
-  buildBinding: (selection: BeginGenerationRequest, model: SafeGenerationModelReceipt) => RunBinding
+  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot }, model: SafeGenerationModelReceipt) => RunBinding
   rebuildBinding: (previous: RunBinding, model: SafeGenerationModelReceipt) => RunBinding
   beforeDispatch?: () => void
   onSnapshot?: (snapshot: MainGenerationSnapshot) => void
@@ -56,9 +63,11 @@ async function dispatchProvider(value: unknown, options: Parameters<GenerationRu
 /** One owner per captured database/session. No renderer budget, lease or hash is authoritative. */
 export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies) {
   const repository = new GenerationRunRepository(() => deps.database)
+  const draftEffects = new GenerationDraftEffects(deps.database, repository)
   const runLeases = new Map<string, string>()
   const volatileReceipts = new Map<string, GenerationExecutionReceipt>()
   const pending = new Map<string, { hash: string; promise: Promise<MainGenerationExecuteReceipt> }>()
+  const preparations = new Map<string, { binding: RunBinding; knowledgeSnapshot: GenerationKnowledgeSnapshot }>()
   let closed = false
   const assertCurrent = () => {
     if (closed || !deps.database.open) throw new Error('GENERATION_OWNER_CLOSED')
@@ -85,8 +94,12 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const status = !terminal ? 'running' : receipt.failureCode ? 'failed' : receipt.result?.finishReason === 'stop' ? 'completed'
       : receipt.attempt.status === 'cancelled-before-dispatch' || receipt.budget.root.status === 'cancelled' ? 'cancelled'
         : receipt.result?.finishReason ? 'failed' : 'unknown'
+    // Unknown usage liability can coexist with a persisted, trusted stop/length result.
+    const compositionEligible = ['settled', 'unknown'].includes(receipt.attempt.status) && !receipt.failureCode
+      && receipt.budget.root.status !== 'cancelled' && ['stop', 'length'].includes(receipt.result?.finishReason ?? '')
+      && Boolean(artifact.text.trim()) && deps.database.prepare("SELECT 1 FROM generation_artifacts WHERE artifact_id=? AND status<>'discarded'").pluck().get(artifact.artifactId) === 1
     return { ...handleOf(receipt.run), epoch: artifact.epoch, artifactId: artifact.artifactId, attemptId: artifact.attemptId,
-      revision: artifact.revision, durableRevision: artifact.revision, text: artifact.text, textHash: artifact.textHash, status }
+      revision: artifact.revision, durableRevision: artifact.revision, text: artifact.text, textHash: artifact.textHash, status, compositionEligible }
   }
   const service = createGenerationRunService({ repository, dispatch: deps.dispatch ?? dispatchProvider,
     validateRecovery: async (previous, next) => {
@@ -128,14 +141,71 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const rows = deps.database.prepare('SELECT run_id FROM generation_runs ORDER BY created_at_ms DESC, rowid DESC').all() as { run_id: string }[]
     return rows.map(row => repository.get(row.run_id)).filter(run => run.binding.projectId === deps.projectId).map(viewOf)
   }
-  const begin = (selection: BeginGenerationRequest): MainGenerationRunView => {
+  const preparationProjection = (binding: RunBinding, excludeKnowledge = false) => ({
+    manifest: Object.fromEntries(Object.entries(binding.sourceManifest).filter(([key]) => !['selectedDraftIds', 'selectedFinalizedDraftIds', ...(excludeKnowledge ? ['knowledgeSnapshot'] : [])].includes(key))),
+    fingerprint: Object.fromEntries(Object.entries(binding.fingerprint).filter(([key]) => !['contextSnapshotHash', 'dependencyHash'].includes(key))),
+    sources: binding.sourceRefs.filter(ref => !/^(draft|finalized):/.test(ref.sourceId) && (!excludeKnowledge || !/^(kb:|knowledge-selection$)/.test(ref.sourceId))),
+  })
+  const preparationMatches = (previous: RunBinding, current: RunBinding, excludeKnowledge = false) =>
+    isDeepStrictEqual(preparationProjection(previous, excludeKnowledge), preparationProjection(current, excludeKnowledge))
+    && previous.sourceRefs.filter(ref => /^(draft|finalized):/.test(ref.sourceId))
+      .every(ref => isDeepStrictEqual(ref, current.sourceRefs.find(candidate => candidate.sourceId === ref.sourceId)))
+  const preparedKnowledge = (preparationId: string): GenerationKnowledgeSnapshot => {
+    assertCurrent()
+    const prepared = preparations.get(preparationId)
+    if (!prepared) throw new Error('GENERATION_DRAFT_PREPARATION_REQUIRED')
+    return structuredClone(prepared.knowledgeSnapshot)
+  }
+  const draftPreparationBinding = (request: PrepareDraftContextRequest, knowledgeSnapshot?: GenerationKnowledgeSnapshot): RunBinding => {
+    assertCurrent()
+    if (!request || typeof request.query !== 'string' || knowledgeSnapshot && request.query !== knowledgeSnapshot.query
+      || Object.keys(request).some(key => !['chapterNumber', 'modelId', 'promptKeys', 'skillStages', 'authorInputs', 'query', 'selectedDraftIds', 'batchId'].includes(key))) throw new Error('GENERATION_DRAFT_PREPARATION_INVALID')
+    const model = deps.loadModel(request.modelId)
+    if (!model) throw new Error('GENERATION_MODEL_MISSING')
+    const receipt = safeGenerationModelReceipt(createModelExecutionLeaseReceipt(model, { leaseId: 'read-only-evidence', createdAt: 0, expiresAt: 0 }))
+    const selection = { operation: 'chapter-draft', uiActionNonce: 'prepare-only', modelId: request.modelId, chapterNumber: request.chapterNumber,
+      selectedDraftIds: request.selectedDraftIds, selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: Array.from({ length: 6 }, (_, index) => request.chapterNumber + index),
+      promptKeys: request.promptKeys, skillStages: request.skillStages, authorInputs: request.authorInputs, output: 'visible-text' as const,
+      ...(request.batchId ? { batchId: request.batchId } : {}), ...(knowledgeSnapshot ? { knowledgeSnapshot: structuredClone(knowledgeSnapshot) } : {}) }
+    return deps.buildBinding(selection, receipt)
+  }
+  const prepareDraftContext = (request: PrepareDraftContextRequest, knowledgeSnapshot: GenerationKnowledgeSnapshot, beforeKnowledgeRead?: RunBinding): PreparedDraftContext => {
+    const { binding, selectedDrafts } = deps.database.transaction(() => {
+      const binding = draftPreparationBinding(request, knowledgeSnapshot)
+      if (beforeKnowledgeRead && !preparationMatches(beforeKnowledgeRead, binding, true)) throw new Error('GENERATION_DRAFT_PREPARATION_CHANGED')
+      const selectedDrafts = request.selectedDraftIds.map(draftId => {
+        const row = deps.database.prepare('SELECT d.chapter_number,d.version,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(draftId) as { chapter_number: number; version: number; body: string }
+        return { draftId, chapterNumber: row.chapter_number, version: row.version, contentHash: textHash(row.body), content: row.body }
+      })
+      return { binding, selectedDrafts }
+    })()
+    const preparationId = randomUUID()
+    if (preparations.size >= 64) preparations.delete(preparations.keys().next().value!)
+    preparations.set(preparationId, { binding, knowledgeSnapshot: structuredClone(knowledgeSnapshot) })
+    return { preparationId, knowledgeSnapshot: structuredClone(knowledgeSnapshot), selectedDrafts }
+  }
+  const begin = (selection: BeginGenerationRequest, batchInitialization = false): MainGenerationRunView => {
     assertCurrent()
     if (!selection || typeof selection.operation !== 'string' || !/^[a-z0-9][a-z0-9:_-]{0,127}$/u.test(selection.operation)
       || !Array.isArray(selection.promptKeys) || selection.promptKeys.length === 0
       || Object.hasOwn(selection, 'parentRootActionId') && (typeof selection.parentRootActionId !== 'string' || !selection.parentRootActionId.trim())
       || typeof selection.uiActionNonce !== 'string' || !selection.uiActionNonce.trim() || selection.uiActionNonce.length > 256
-      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId'].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
+      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId'].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
     generationOutputContract(selection)
+    if (selection.batchIntent && !batchInitialization) throw new Error('GENERATION_BATCH_INTENT_MAIN_ONLY')
+    const batch = selection.batchId ? draftEffects.readBatch(selection.batchId, deps.projectId) : undefined
+    if (batch) {
+      if (selection.parentRootActionId !== batch.rootHandle.rootActionId || selection.operation !== 'chapter-draft'
+        || selection.chapterNumber !== batch.nextChapterNumber || selection.batchIntent || selection.continueDirectoryOperationId
+        || batch.completedChapters.some(item => item.chapterNumber === selection.chapterNumber)) throw new Error('GENERATION_BATCH_PROGRESS_CONFLICT')
+      const predecessor = batch.completedChapters.find(item => item.chapterNumber === selection.chapterNumber! - 1)
+      if (selection.selectedDraftIds.some(id => id !== predecessor?.draftId || batch.mode !== 'draft_review')) throw new Error('GENERATION_BATCH_LINEAGE_INVALID')
+      if (predecessor && batch.mode === 'draft_review' && !selection.selectedDraftIds.includes(predecessor.draftId)) throw new Error('GENERATION_BATCH_LINEAGE_INVALID')
+      if (predecessor && batch.mode === 'auto_finalize' && !selection.selectedFinalizedDraftIds.includes(predecessor.draftId)) throw new Error('GENERATION_BATCH_LINEAGE_INVALID')
+      for (const input of batch.authorInputs) {
+        if (!isDeepStrictEqual(input, selection.authorInputs?.find(item => item.id === input.id))) throw new Error('GENERATION_BATCH_AUTHOR_INPUT_CHANGED')
+      }
+    }
     const continuation = selection.continueDirectoryOperationId === undefined ? undefined
       : repository.listDirectoryProgress().find(item => item.operationId === selection.continueDirectoryOperationId)
     if (selection.continueDirectoryOperationId !== undefined && (!continuation?.remainingRange || selection.parentRootActionId
@@ -154,14 +224,19 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     }
     const lease = deps.leases.begin(selection.modelId)
     try {
-      const binding = deps.buildBinding(selection, safeGenerationModelReceipt(lease))
+      const prepared = selection.preparationId ? preparations.get(selection.preparationId) : undefined
+      if (selection.preparationId && (!prepared || selection.operation !== 'chapter-draft')) throw new Error('GENERATION_DRAFT_PREPARATION_REQUIRED')
+      const binding = deps.buildBinding({ ...selection, ...(prepared ? { knowledgeSnapshot: prepared.knowledgeSnapshot } : {}) }, safeGenerationModelReceipt(lease))
+      if (prepared && !preparationMatches(prepared.binding, binding)) throw new Error('GENERATION_DRAFT_PREPARATION_CHANGED')
       if (binding.projectId !== deps.projectId || binding.epoch !== deps.epoch) throw new Error('GENERATION_BINDING_INVALID')
       const run = deps.database.transaction(() => {
+      if (batch) repository.activateRootForCommittedStage(batch.rootHandle.rootActionId, binding)
       if (continuation && !continuation.continuationHandle) repository.activateRootForCommittedStage(continuation.sourceHandle.rootActionId, binding)
       const next = service.open({ ...binding, operation: selection.operation, uiActionNonce: selection.uiActionNonce,
         frozenInputHash: textHash(JSON.stringify([binding.fingerprint, binding.contextSnapshotId, selection.output])),
         budget: MAIN_GENERATION_POLICY.budget, parentRootActionId: continuation?.sourceHandle.rootActionId ?? selection.parentRootActionId })
       if (continuation?.continuationHandle && continuation.continuationHandle.runId !== next.runId) throw new Error('GENERATION_DIRECTORY_CONTINUATION_EXISTS')
+      if (batch?.currentChapterRunHandle && batch.currentChapterRunHandle.runId !== next.runId) throw new Error('GENERATION_BATCH_RECOVERY_REQUIRED')
       if (continuation && !continuation.continuationHandle) repository.bindDirectoryContinuation(continuation.operationId, handleOf(next))
       return next
       }).immediate()
@@ -220,7 +295,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const receipt = await service.execute({ runId: run.runId, invocationNonce: request.invocationNonce, requestHash,
       providerRequest: { model, task, plan } satisfies ProviderRequest, reservedTokens: plan.reservedTokens,
       requestedOutputTokens: plan.requestedOutputTokens, inputUpperBoundTokens: plan.inputUpperBoundTokens,
-      reasoningUpperBoundTokens: plan.reasoningUpperBoundTokens, usagePolicy: plan.usagePolicy })
+      reasoningUpperBoundTokens: plan.reasoningUpperBoundTokens, usagePolicy: plan.usagePolicy, purpose: task.purpose })
     if (receipt.failureCode || receipt.unsavedTail) volatileReceipts.set(receipt.attempt.attemptId, receipt)
     assertCurrent()
     const snapshot = snapshotOf(receipt)
@@ -261,7 +336,59 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
       if (!isDeepStrictEqual(current, run.binding)) throw new Error('GENERATION_SOURCE_CHANGED')
     }
-  return { begin, execute, resume, list, assertSourcesCurrent, read: (handle: MainGenerationRunHandle) => viewOf(requireRun(handle)),
+  const readContext = (handle: MainGenerationRunHandle): GenerationRecoveryContext => {
+    const run = requireRun(handle), manifest = run.binding.sourceManifest, composition = repository.readVisibleComposition(run.runId)
+    const saved = draftEffects.readCommit(run.runId)
+    const selectedDrafts = (manifest.selectedDraftIds as number[] ?? []).map(draftId => {
+      const row = deps.database.prepare('SELECT d.chapter_number,d.version,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(draftId) as { chapter_number: number; version: number; body: string } | undefined
+      const ref = run.binding.sourceRefs.find(source => source.sourceId === `draft:${draftId}`)
+      return row && ref && row.version === ref.revision && textHash(row.body) === ref.contentHash
+        ? { draftId, chapterNumber: row.chapter_number, version: row.version, contentHash: ref.contentHash, content: row.body } : null
+    })
+    const rows = deps.database.prepare('SELECT attempt_id,usage_receipt_json FROM generation_attempts WHERE run_id=? ORDER BY rowid').all(run.runId) as { attempt_id: string; usage_receipt_json: string }[]
+    const last = composition ? deps.database.prepare('SELECT attempt_id FROM generation_artifacts WHERE artifact_id=?').pluck().get(composition.artifactIds.at(-1)) as string : undefined
+    return { modelId: modelReceipt(run.binding).modelId, handle: handleOf(run), operation: manifest.operation as string, chapterNumber: manifest.chapterNumber as number | undefined,
+      authorInputs: structuredClone(manifest.authorInputs as GenerationAuthorInput[] ?? []),
+      selectedDraftIds: structuredClone(manifest.selectedDraftIds as number[] ?? []), selectedFinalizedDraftIds: structuredClone(manifest.selectedFinalizedDraftIds as number[] ?? []),
+      selectedBlueprintChapterNumbers: structuredClone(manifest.selectedBlueprintChapterNumbers as number[] ?? []), composition,
+      lastCompositionFinishReason: last ? repository.receipt(last).result?.finishReason ?? null : null,
+      attemptedPurposes: rows.map(row => JSON.parse(row.usage_receipt_json).purpose ?? 'unknown'),
+      ...(saved ? { savedDraft: { success: true as const, id: saved.id, version: saved.version, content: saved.content, contentHash: saved.contentHash } } : {}),
+      ...(manifest.knowledgeSnapshot ? { knowledgeSnapshot: structuredClone(manifest.knowledgeSnapshot) as GenerationKnowledgeSnapshot } : {}),
+      ...(selectedDrafts.every(item => item !== null) ? { selectedDrafts } : {}),
+      ...(manifest.batchId ? { batchId: manifest.batchId as string } : {}) }
+  }
+  const readBatch = (batchId: string) => { assertCurrent(); return draftEffects.readBatch(batchId, deps.projectId) }
+  const characters = new CharacterProposalService(deps.database, deps.projectId, (source, forWrite) => {
+    assertCurrent(); return proveCharacterProposal(deps.database, repository, deps.projectId, source, forWrite, (handle, committedBlueprintChapters) => {
+      const run = requireRun(handle)
+      const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
+      const projection = (binding: RunBinding) => ({ sourceManifest: binding.sourceManifest,
+        fingerprint: Object.fromEntries(Object.entries(binding.fingerprint).filter(([key]) => !['contextSnapshotHash', 'chapterBriefHash'].includes(key))),
+        sources: binding.sourceRefs.filter(ref => !committedBlueprintChapters?.some(chapter => ref.sourceId === `blueprint:${chapter}`))
+          .map(({ epoch: _epoch, ...ref }) => { void _epoch; return ref }) })
+      const matches = committedBlueprintChapters ? isDeepStrictEqual(projection(run.binding), projection(current)) : compareGenerationSourceBindings(run.binding, current)
+      if (repository.budget(run.rootActionId).root.status === 'cancelled' || !matches) throw new Error('CHARACTER_PROPOSAL_SOURCE_CHANGED')
+    })
+  })
+  return { begin: (selection: BeginGenerationRequest) => begin(selection), execute, resume, list, assertSourcesCurrent,
+    characterProposals: characters,
+    readContext, readBatch, prepareDraftContext, preparedKnowledge, draftPreparationBinding,
+    beginBatch: (request: BeginGenerationBatchRequest) => {
+      assertGenerationBatchIntent(request)
+      const { mode, range, targetUnits, ...intent } = request
+      const run = begin({ ...intent, operation: 'batch-chapters', selectedDraftIds: [], selectedFinalizedDraftIds: [],
+        output: 'visible-text', batchIntent: { mode, range, targetUnits } }, true)
+      return readBatch(run.handle.runId)
+    },
+    listBatches: () => { assertCurrent(); return list().filter(item => repository.get(item.handle.runId).binding.sourceManifest.batchIntent).map(item => readBatch(item.handle.runId)) },
+    confirmBatchFinalization: (request: { batchId: string; chapterNumber: number; finalizationId: string }) => {
+      const batch = readBatch(request.batchId)
+      if (!batch.completedChapters.some(item => item.chapterNumber === request.chapterNumber && item.finalizationId === request.finalizationId && item.postProcessComplete)) throw new Error('GENERATION_BATCH_FINALIZATION_REQUIRED')
+      return batch
+    },
+    commitDraft: (request: GenerationDraftCommitRequest) => { requireRun(request.handle); return draftEffects.commit(request, () => assertSourcesCurrent(request.handle)) },
+    read: (handle: MainGenerationRunHandle) => viewOf(requireRun(handle)),
     listDirectoryProgress: () => { assertCurrent(); return repository.listDirectoryProgress().map(progress => ({ ...progress,
       authorInputs: structuredClone(repository.get(progress.sourceHandle.runId).binding.sourceManifest.authorInputs as GenerationAuthorInput[] | undefined) })) },
     recordDirectoryCommit: (handle: MainGenerationRunHandle, requestedRange: { startChapter: number; endChapter: number }, receipt: BlueprintRangeCommitReceipt) => {
@@ -277,9 +404,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       repository.recordDirectoryProgress(progress)
       return progress
     },
-    composeVisible: (handle: MainGenerationRunHandle, artifactIds: string[], expectedTextHash: string) => {
+    composeVisible: (handle: MainGenerationRunHandle, artifactIds: string[], expectedTextHash: string, algorithm?: VisibleCompositionAlgorithm) => {
       assertSourcesCurrent(handle)
-      return repository.composeVisible(handle.runId, artifactIds, expectedTextHash)
+      if (algorithm === 'draft-visible-v1' && requireRun(handle).binding.sourceManifest.operation !== 'chapter-draft') throw new Error('GENERATION_COMPOSITION_ALGORITHM_INVALID')
+      return repository.composeVisible(handle.runId, artifactIds, expectedTextHash, algorithm)
     },
     readVisibleComposition: (handle: MainGenerationRunHandle) => {
       const run = requireRun(handle), composition = repository.readVisibleComposition(run.runId)
@@ -290,8 +418,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     restart: (handle: MainGenerationRunHandle, selection: BeginGenerationRequest) => {
       const old = requireRun(handle)
       if (selection.parentRootActionId || selection.uiActionNonce === repository.budget(old.rootActionId).root.uiActionNonce) throw new Error('GENERATION_RESTART_NEW_NONCE_REQUIRED')
+      // Admit the replacement before cancelling; rejected sources must leave the original resumable.
+      const next = begin(selection)
       service.cancel(old.rootActionId)
-      return begin(selection)
+      return next
     },
     discardCandidate: (handle: MainGenerationRunHandle, artifactId: string) => {
       const run = requireRun(handle)
@@ -302,6 +432,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       return viewOf(run)
     },
     suspendForProjectClose: () => {
+      preparations.clear()
       if (closed) return
       service.suspendForProjectClose()
       closed = true

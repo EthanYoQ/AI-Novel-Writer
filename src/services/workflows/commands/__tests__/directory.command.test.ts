@@ -1318,7 +1318,7 @@ describe('GenerateDirectoryCommand', () => {
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
   })
 
-  it('synchronizes character candidates only after the committed blueprint receipt exists', async () => {
+  it('stages character proposals only after the committed blueprint receipt exists', async () => {
     const committed = blueprint(1, {
       characters: ['林岚', '周砚'],
       newCharacterCandidates: [{ name: '周砚', role: 'supporting' }],
@@ -1327,7 +1327,7 @@ describe('GenerateDirectoryCommand', () => {
     const invoke = stubIpcInvoke(successfulCommitHandler({
       snapshot: [committed],
       other: (channel, ...args) => {
-        if (channel === 'db:character-roster-read') {
+        if (channel === 'character-proposal:stage') {
           return { status: 'empty', revision: 0, entries: [] }
         }
         if (channel === 'db:character-roster-commit') {
@@ -1359,20 +1359,14 @@ describe('GenerateDirectoryCommand', () => {
     await command.execute({ step: {}, context, callbacks: stepCallbacks() })
 
     const committedAt = invoke.mock.calls.findIndex(([channel]) => channel === 'db:blueprint-commit-range')
-    const syncAt = invoke.mock.calls.findIndex(([channel]) => channel === 'db:character-roster-read')
+    const syncAt = invoke.mock.calls.findIndex(([channel]) => channel === 'character-proposal:stage')
     expect(committedAt).toBeGreaterThanOrEqual(0)
     expect(syncAt).toBeGreaterThan(committedAt)
-    expect(invoke).toHaveBeenCalledWith(
-      'db:character-roster-commit',
-      expect.objectContaining({
-        intent: 'blueprint_sync',
-        entries: [expect.objectContaining({
-          name: '周砚',
-        })],
-      }),
-      projectSnapshot.expectedProjectPath,
-      context.projectSession,
-    )
+    expect(invoke).toHaveBeenCalledWith('character-proposal:stage', {
+      source: { kind: 'directory', operationId: 'blueprint-sync-directory-test-run-1-1' },
+    }, context.projectSession)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:character-roster-commit')).toBe(false)
+
     expect(context.data.blueprintCommitReceipt).toMatchObject({ chapterNumbers: [1] })
     expect(context.data.blueprintCharacterSyncReceipt).toMatchObject({
       blueprintCommitOperationId: 'directory-test-run-1-1',
@@ -1381,7 +1375,7 @@ describe('GenerateDirectoryCommand', () => {
     })
   })
 
-  it('reports an explicit committed receipt when post-commit character synchronization fails', async () => {
+  it('reports an explicit committed receipt when post-commit proposal staging fails', async () => {
     const committed = blueprint(1, {
       characters: ['林岚', '周砚'],
       relationshipHints: [{ from: '林岚', to: '周砚', relation: '追查' }],
@@ -1389,7 +1383,7 @@ describe('GenerateDirectoryCommand', () => {
     stubIpcInvoke(successfulCommitHandler({
       snapshot: [committed],
       other: channel => {
-        if (channel === 'db:character-roster-read') throw new Error('同步故障')
+        if (channel === 'character-proposal:stage') throw new Error('同步故障')
         return { success: true }
       },
     }))
@@ -1422,7 +1416,7 @@ describe('GenerateDirectoryCommand', () => {
     expect((failure as Error).message).toContain('蓝图已提交')
   })
 
-  it('retries character synchronization from the committed receipt without regenerating blueprints', async () => {
+  it('retries proposal staging from the committed receipt without regenerating blueprints', async () => {
     const committed = blueprint(1, {
       characters: ['林岚', '周砚'],
       relationshipHints: [{ from: '林岚', to: '周砚', relation: '追查' }],
@@ -1431,7 +1425,7 @@ describe('GenerateDirectoryCommand', () => {
     stubIpcInvoke(successfulCommitHandler({
       snapshot: [committed],
       other: (channel, ...args) => {
-        if (channel === 'db:character-roster-read') {
+        if (channel === 'character-proposal:stage') {
           rosterReads += 1
           if (rosterReads === 1) throw new Error('首次同步故障')
           return { status: 'empty', revision: 0, entries: [] }

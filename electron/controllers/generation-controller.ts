@@ -1,6 +1,7 @@
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import type Database from 'better-sqlite3'
 import type { GenerationOwnerChannels } from '../../src/shared/generation-owner-contract'
+import type { CharacterProposalChannels } from '../../src/shared/character-proposal'
 import { generationOutputContract } from '../../src/shared/generation-owner-contract'
 import type { ModelProfile, ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
@@ -16,9 +17,15 @@ import { MAIN_GENERATION_POLICY } from '../services/main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../services/generation-source-binding'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import type { BlueprintRangeCommitReceipt } from '../repositories/blueprint-repository'
+import type { GenerationKnowledgeSnapshot } from '../../src/shared/generation-knowledge'
+import { withKnowledgeSourceGate } from '../services/knowledge-source-gate'
+import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
+import { getEmbeddingConfig } from './kb-controller'
 
 type Owner = ReturnType<typeof createMainGenerationOwner>
+type OwnerChannels = GenerationOwnerChannels & CharacterProposalChannels
 const owners = new Map<Database.Database, { owner: Owner; session: ProjectSessionContext; subscribers: Set<WebContents> }>()
+const ownerSessions = new WeakMap<Owner, ProjectSessionContext>()
 /** Called synchronously inside the same SQLite transaction as the formal effect. */
 export function assertGenerationSourcesCurrent(handle: MainGenerationRunHandle, blueprintRange?: { startChapter: number; endChapter: number }): void {
   const database = getProjectDb()
@@ -75,37 +82,81 @@ export function registerGenerationController(options: {
         } },
       })
       entry = { owner, session: captured, subscribers }
+      ownerSessions.set(owner, captured)
       owners.set(database, entry)
     }
     entry.subscribers.add(event.sender)
     return entry.owner
   }
-  function register<C extends keyof GenerationOwnerChannels>(channel: C, arity: number,
-    handler: (owner: Owner, ...args: GenerationOwnerChannels[C]['args']) => GenerationOwnerChannels[C]['return'] | Promise<GenerationOwnerChannels[C]['return']>) {
+  const guardKnowledge = async <T>(owner: Owner, snapshot: GenerationKnowledgeSnapshot | undefined, operation: () => T | Promise<T>): Promise<T> => {
+    if (!snapshot) return operation()
+    const session = ownerSessions.get(owner)!
+    const projectStorageRoot = getProjectDataRoot(session.projectPath)
+    return withKnowledgeSourceGate(projectStorageRoot, async () => {
+      const { verifyGenerationKnowledge } = await import('../services/generation-knowledge-source')
+      await verifyGenerationKnowledge({ projectStorageRoot, snapshot })
+      projectAccess.assertCurrentProjectContext(session, getCurrentProjectPath())
+      return operation()
+    })
+  }
+  function register<C extends keyof OwnerChannels>(channel: C, arity: number,
+    handler: (owner: Owner, ...args: OwnerChannels[C]['args']) => OwnerChannels[C]['return'] | Promise<OwnerChannels[C]['return']>) {
     ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
       try {
         const session = raw.pop()
-        if (!isProjectSessionContext(session) || raw.length !== arity) throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
-        const result = await handler(authorizedOwner(session, event), ...raw as GenerationOwnerChannels[C]['args'])
+        if (!isProjectSessionContext(session) || raw.length !== arity && !(channel === 'generation:compose-visible' && raw.length === 3)) throw new Error('GENERATION_PROJECT_SESSION_REQUIRED')
+        const result = await handler(authorizedOwner(session, event), ...raw as OwnerChannels[C]['args'])
         projectAccess.assertCurrentProjectContext(session, getCurrentProjectPath())
         return result
       } catch (error) {
-        const code = error instanceof Error && /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN)_[A-Z_]+$/u.test(error.message)
+        const code = error instanceof Error && /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER)_[A-Z_]+$/u.test(error.message)
           ? error.message : 'GENERATION_REQUEST_FAILED'
         throw new Error(code)
       }
     })
   }
-  register('generation:begin', 1, (owner, request) => owner.begin(request))
-  register('generation:execute', 1, (owner, request) => owner.execute(request))
+  register('generation:prepare-draft-context', 1, async (owner, request) => {
+    const baseline = owner.draftPreparationBinding(request)
+    const session = ownerSessions.get(owner)!
+    const kb = await knowledgeBaseLoader.load()
+    const knowledge = await kb.captureWritingKnowledgeSnapshot(request.query, session.projectPath, getEmbeddingConfig())
+    return guardKnowledge(owner, knowledge, () => owner.prepareDraftContext(request, knowledge, baseline))
+  })
+  register('generation:begin', 1, (owner, request) => {
+    if (request.operation === 'chapter-draft' && !request.preparationId) throw new Error('GENERATION_DRAFT_PREPARATION_REQUIRED')
+    return guardKnowledge(owner, request.preparationId ? owner.preparedKnowledge(request.preparationId) : undefined, () => owner.begin(request))
+  })
+  register('character-proposal:stage', 1, (owner, request) => owner.characterProposals.stage(request.source))
+  register('character-proposal:read', 1, (owner, request) => owner.characterProposals.read(request.proposalBatchId))
+  register('character-proposal:approve', 1, (owner, request) => owner.characterProposals.approve(request))
+  register('character-proposal:cancel', 1, (owner, request) => owner.characterProposals.cancel(request.proposalBatchId))
+  register('character-identity:read', 0, owner => owner.characterProposals.identitySnapshot())
+  register('generation:execute', 1, async (owner, request) => {
+    const context = owner.readContext(request.handle)
+    // Release the short KB guard after dispatch starts; author edits during generation remain possible.
+    const started = await guardKnowledge(owner, context.knowledgeSnapshot, () => ({ result: owner.execute(request) }))
+    return started.result
+  })
   register('generation:read', 1, (owner, handle) => owner.read(handle))
-  register('generation:compose-visible', 3, (owner, handle, ids, hash) => owner.composeVisible(handle, ids, hash))
+  register('generation:compose-visible', 4, (owner, handle, ids, hash, algorithm) => owner.composeVisible(handle, ids, hash, algorithm))
+  register('generation:commit-draft', 1, (owner, request) => {
+    const context = owner.readContext(request.handle)
+    return guardKnowledge(owner, context.savedDraft ? undefined : context.knowledgeSnapshot, () => owner.commitDraft(request))
+  })
+  register('generation:read-context', 1, (owner, request) => owner.readContext(request.handle))
+  register('generation:begin-batch', 1, (owner, request) => owner.beginBatch(request))
+  register('generation:read-batch', 1, (owner, request) => owner.readBatch(request.batchId))
+  register('generation:list-batches', 0, owner => owner.listBatches())
+  register('generation:confirm-batch-finalization', 1, (owner, request) => owner.confirmBatchFinalization(request))
   register('generation:read-visible-composition', 1, (owner, handle) => owner.readVisibleComposition(handle))
   register('generation:list', 0, owner => owner.list())
   register('generation:list-directory-progress', 0, owner => owner.listDirectoryProgress())
   register('generation:pause', 1, (owner, handle) => owner.pause(handle))
   register('generation:cancel', 1, (owner, handle) => owner.cancel(handle))
-  register('generation:resume', 1, (owner, handle) => owner.resume(handle))
-  register('generation:restart', 2, (owner, handle, request) => owner.restart(handle, request))
+  register('generation:resume', 1, (owner, handle) => guardKnowledge(owner, owner.readContext(handle).knowledgeSnapshot, () => owner.resume(handle)))
+  register('generation:restart', 2, (owner, handle, request) => {
+    if (request.operation === 'chapter-draft' && !request.preparationId) throw new Error('GENERATION_DRAFT_PREPARATION_REQUIRED')
+    return guardKnowledge(owner, request.preparationId ? owner.preparedKnowledge(request.preparationId) : undefined, () => owner.restart(handle, request))
+  })
   register('generation:discard-candidate', 2, (owner, handle, artifactId) => owner.discardCandidate(handle, artifactId))
 }

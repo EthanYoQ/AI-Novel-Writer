@@ -103,8 +103,8 @@ export class CharacterRepository {
     }
 
     /** 获取所有角色（按角色定位排序：主角→配角→反派→龙套） */
-    static getAll(): CharacterData[] {
-        const db = getProjectDb()
+    static getAll(capturedDatabase?: import('better-sqlite3').Database): CharacterData[] {
+        const db = capturedDatabase ?? getProjectDb()
         if (!db) return []
 
         const rows = db.prepare(`

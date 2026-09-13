@@ -1,3 +1,6 @@
+import { decodeCharacterIdentityManifest, decodeCharacterDetails, validateCharacterDetail, type CharacterIdentitySlot, type CharacterDetailOutput } from '../../../shared/character-proposal-parser'
+import type { CharacterProposalBatch } from '../../../shared/character-proposal'
+import { defaultCharacterProposalRelationships, defaultCharacterProposalSelections, formatCharacterProposalPreview } from '../character-proposal-preview'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
 import { CANONICAL_PROJECT_DIRECTORY } from '../../../shared/project-format'
 import {
@@ -23,16 +26,11 @@ import {
 } from '../workflow-project-session'
 import { characterArchitecturePrompts, promptLanguageText } from '../../prompt-language'
 import { stripThinkingTags } from '../workflow-utils'
-import type { WorkflowContext } from '../../../stores/workflow-store'
+import type { WorkflowContext, StepCallbacks } from '../../../stores/workflow-store'
+import type { GenerationAttemptReceipt } from '../../generation/generation-harness'
 import type { NovelConfig, ProjectSessionContext } from '../../../shared/ipc-channels'
 import type { ProjectCoreSynopsisExpected } from '../../../../electron/repositories/project-core-repository'
 import type { WritingLanguage } from '../../../shared/writing-language'
-import {
-  CHARACTER_ROSTER_SCHEMA_VERSION,
-  CHARACTER_ROSTER_ROLES,
-  type CharacterRosterCommitRequest,
-  type CharacterRosterEntry,
-} from '../../../shared/character-roster'
 import { createStructuredBatchExecutor, type StructuredBatchContract } from '../structured-batch-executor'
 import { localizeNovelConfigFacts } from '../../../shared/novel-config-localization'
 import {
@@ -712,196 +710,11 @@ function decodeCompleteNovelConfig(
  * 不可由设置页模板覆盖的结构契约。用户仍可调整角色创作指导，但角色身份
  * 不再依赖 Markdown 标题或后续第二次模型提取。
  */
-interface CharacterIdentitySlot {
-  slotId: string
-  name: string
-  role: CharacterRosterEntry['role']
-  narrativeDuty: string
-  relations: Array<{ targetSlotId: string; relation: string }>
-}
-
-interface CharacterDetailOutput extends Omit<CharacterRosterEntry, 'relationships'> {
-  slotId: string
-  relationships?: unknown
-}
-
 const MIN_CHARACTER_SLOTS = 3
 const MAX_CHARACTER_SLOTS = 8
 const CHARACTER_DETAIL_BATCH_SIZE = 3
-const CHARACTER_DETAIL_DESCRIPTION_MAX_CHARS = 120
-const CHARACTER_STATE_TEXT_MAX_CHARS = 80
-const CHARACTER_DETAIL_DESCRIPTION_FIELDS = [
-  'appearance', 'personality', 'background', 'abilities', 'motivation', 'arc', 'notes',
-] as const
-const CHARACTER_STATE_TEXT_FIELDS = [
-  'location', 'powerLevel', 'physicalState', 'mentalState', 'keyItems', 'recentEvents',
-] as const
 const MAX_CHARACTER_STRUCTURED_CONTEXT_UTF8_BYTES = 32_768
-
-function promptUtf8Bytes(value: string): number {
-  return new TextEncoder().encode(value).byteLength
-}
-
-function findCompleteJsonObjectEnd(source: string, start: number): number | undefined {
-  let depth = 0
-  let inString = false
-  let escaped = false
-  for (let index = start; index < source.length; index += 1) {
-    const char = source[index]
-    if (inString) {
-      if (escaped) {
-        escaped = false
-      } else if (char === '\\') {
-        escaped = true
-      } else if (char === '"') {
-        inString = false
-      }
-      continue
-    }
-
-    if (char === '"') {
-      inString = true
-    } else if (char === '{') {
-      depth += 1
-    } else if (char === '}') {
-      depth -= 1
-      if (depth === 0) return index
-      if (depth < 0) return undefined
-    }
-  }
-  return undefined
-}
-
-function extractSingleCompleteJsonObject(content: string): string {
-  const source = stripThinkingTags(content).trim()
-  const candidates: string[] = []
-  let searchFrom = 0
-  while (searchFrom < source.length) {
-    const start = source.indexOf('{', searchFrom)
-    if (start === -1) break
-    const end = findCompleteJsonObjectEnd(source, start)
-    if (end === undefined) throw new Error('AI 返回包含截断 JSON 对象片段')
-
-    const candidate = source.slice(start, end + 1)
-    try {
-      if (isRecord(JSON.parse(candidate))) candidates.push(candidate)
-    } catch {
-      // Keep scanning for the one complete JSON object; malformed candidates
-      // are not repaired or accepted.
-    }
-    searchFrom = end + 1
-  }
-
-  if (candidates.length === 1) return candidates[0]
-  if (candidates.length > 1) throw new Error('AI 返回包含多个完整 JSON 对象，无法确定唯一结构化结果')
-  throw new Error('AI 返回未包含一个完整 JSON 对象')
-}
-
-function decodeCharacterIdentityManifest(content: string): CharacterIdentitySlot[] {
-  const parsed = JSON.parse(extractSingleCompleteJsonObject(content)) as { slots?: unknown }
-  if (!Array.isArray(parsed.slots)) throw new Error('角色身份清单缺少 slots')
-  if (parsed.slots.length < MIN_CHARACTER_SLOTS || parsed.slots.length > MAX_CHARACTER_SLOTS) {
-    throw new Error(`角色身份清单必须包含 ${MIN_CHARACTER_SLOTS}–${MAX_CHARACTER_SLOTS} 个角色`)
-  }
-  const slots = parsed.slots.map((candidate, index) => {
-    if (!isRecord(candidate)) throw new Error(`角色身份清单第 ${index + 1} 项无效`)
-    const relations = candidate.relations
-    if (!Array.isArray(relations)) throw new Error(`角色身份清单第 ${index + 1} 项缺少关系列表`)
-    const slotId = normalizeCharacterSlotId(candidate.slotId)
-    if (
-      slotId === undefined
-      || typeof candidate.name !== 'string' || !candidate.name.trim()
-      || typeof candidate.role !== 'string' || !CHARACTER_ROSTER_ROLES.includes(candidate.role as CharacterRosterEntry['role'])
-      || typeof candidate.narrativeDuty !== 'string' || !candidate.narrativeDuty.trim()
-    ) throw new Error(`角色身份清单第 ${index + 1} 项字段不完整`)
-    return {
-      slotId,
-      name: candidate.name.trim(),
-      role: candidate.role as CharacterRosterEntry['role'],
-      narrativeDuty: candidate.narrativeDuty.trim(),
-      relations: relations.map((relation, relationIndex) => {
-        const targetSlotId = isRecord(relation)
-          ? normalizeCharacterSlotId(relation.targetSlotId)
-          : undefined
-        if (!isRecord(relation)
-          || targetSlotId === undefined
-          || typeof relation.relation !== 'string' || !relation.relation.trim()) {
-          throw new Error(`角色身份清单第 ${index + 1} 项关系 ${relationIndex + 1} 无效`)
-        }
-        return { targetSlotId, relation: relation.relation.trim() }
-      }),
-    }
-  })
-  const slotIds = new Set(slots.map(slot => slot.slotId))
-  const names = new Set(slots.map(slot => slot.name))
-  if (slotIds.size !== slots.length || names.size !== slots.length) throw new Error('角色身份清单包含重复 slotId 或姓名')
-  if (!slots.some(slot => slot.role === 'protagonist')) throw new Error('角色身份清单必须至少包含一个主角')
-  for (const slot of slots) {
-    for (const relation of slot.relations) {
-      if (!slotIds.has(relation.targetSlotId) || relation.targetSlotId === slot.slotId) {
-        throw new Error('角色身份清单关系端点不闭合或存在自指')
-      }
-    }
-  }
-  return slots
-}
-
-function normalizeCharacterSlotId(value: unknown): string | undefined {
-  if (typeof value === 'string') return value.trim() || undefined
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
-    ? String(value)
-    : undefined
-}
-
-function validateCharacterDetail(output: CharacterDetailOutput): string | undefined {
-  const slotId = typeof output.slotId === 'string' && output.slotId.trim() ? output.slotId.trim() : 'unknown'
-  const invalid = (field: string, reason: string) => `角色详情 slotId=${slotId} 字段 ${field} ${reason}`
-  for (const field of [
-    'slotId', 'name', 'gender', 'age', 'appearance', 'personality', 'background',
-    'abilities', 'motivation', 'arc', 'notes',
-  ] as const) {
-    const value = output[field]
-    if (typeof value !== 'string' || !value.trim()) return invalid(field, '必须是非空文本')
-  }
-  for (const field of CHARACTER_DETAIL_DESCRIPTION_FIELDS) {
-    if (Array.from(output[field].trim()).length > CHARACTER_DETAIL_DESCRIPTION_MAX_CHARS) {
-      return invalid(field, `不得超过 ${CHARACTER_DETAIL_DESCRIPTION_MAX_CHARS} 字符`)
-    }
-  }
-  if (!CHARACTER_ROSTER_ROLES.includes(output.role)) return invalid('role', '不是允许的定位')
-  if (output.relationships !== undefined) return invalid('relationships', '不得出现')
-  if (output.currentState === undefined) return invalid('currentState', '必填')
-  {
-    if (!isRecord(output.currentState)) return invalid('currentState', '必须是对象')
-    for (const field of CHARACTER_STATE_TEXT_FIELDS) {
-      const value = output.currentState[field]
-      if (typeof value !== 'string' || !value.trim()) return invalid(`currentState.${field}`, '必须是非空文本')
-      if (Array.from(value.trim()).length > CHARACTER_STATE_TEXT_MAX_CHARS) {
-        return invalid(`currentState.${field}`, `不得超过 ${CHARACTER_STATE_TEXT_MAX_CHARS} 字符`)
-      }
-    }
-    if (!Number.isSafeInteger(output.currentState.updatedAtChapter) || output.currentState.updatedAtChapter < 0) {
-      return invalid('currentState.updatedAtChapter', '必须是非负整数')
-    }
-  }
-  return undefined
-}
-
-function normalizeDetailStringList(value: unknown, separator: string): unknown {
-  if (typeof value === 'string') return value.trim()
-  if (!Array.isArray(value) || value.length === 0) return value
-  const normalized: string[] = []
-  for (const item of value) {
-    if (typeof item !== 'string' || !item.trim()) return value
-    normalized.push(item.trim())
-  }
-  return normalized.join(separator)
-}
-
-function normalizeBoundedDetailText(value: unknown, maxChars: number): unknown {
-  if (typeof value !== 'string') return value
-  return Array.from(value.trim()).slice(0, maxChars).join('')
-}
+function promptUtf8Bytes(value: string): number { return new TextEncoder().encode(value).byteLength }
 
 export interface ArchitectureProjectSnapshot {
   expectedProjectPath: string
@@ -1276,43 +1089,19 @@ export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
 }
 
 export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
+  private readonly artifactReferences: Array<NonNullable<GenerationAttemptReceipt['visibleArtifact']> & { purpose?: string; finishReason: string }> = []
+
+  protected override reportGenerationPromptBudget(callbacks: StepCallbacks, receipt: GenerationAttemptReceipt): void {
+    super.reportGenerationPromptBudget(callbacks, receipt)
+    if (receipt.visibleArtifact) this.artifactReferences.push({ ...receipt.visibleArtifact,
+      purpose: receipt.purpose, finishReason: receipt.finishReason })
+  }
+
   constructor(
     private snapshot: ArchitectureProjectSnapshot,
     generationDependencies?: WorkflowGenerationRuntimeDependencies,
   ) {
     super(generationDependencies)
-  }
-
-  private assertCommittedRosterReadable(
-    receipt: { snapshot?: { entries?: Array<{ name?: unknown }>; renderedMarkdown?: unknown } } | undefined,
-    candidateEntries: unknown,
-    text: UiText,
-  ): asserts receipt is { snapshot: { entries: Array<{ name: string }>; renderedMarkdown: string } } {
-    const snapshot = receipt?.snapshot
-    if (!snapshot || !Array.isArray(snapshot.entries) || snapshot.entries.length === 0 || typeof snapshot.renderedMarkdown !== 'string' || !snapshot.renderedMarkdown.trim()) {
-      throw new Error(text(
-        '角色名单提交后未能回读角色卡和角色图谱，未将本步骤标记为成功',
-        'Character cards and the character graph could not be read back after commit, so this step was not marked complete.',
-      ))
-    }
-
-    if (!Array.isArray(candidateEntries)) return
-    const candidateNames = candidateEntries
-      .map(entry => (
-        entry && typeof entry === 'object' && typeof (entry as { name?: unknown }).name === 'string'
-          ? (entry as { name: string }).name.trim()
-          : ''
-      ))
-      .filter(Boolean)
-    const committedNames = new Set(snapshot.entries
-      .map(entry => typeof entry.name === 'string' ? entry.name.trim() : '')
-      .filter(Boolean))
-    if (candidateNames.length === 0 || candidateNames.some(name => !committedNames.has(name))) {
-      throw new Error(text(
-        '角色名单提交回读不完整，未将本步骤标记为成功',
-        'The committed character roster readback was incomplete, so this step was not marked complete.',
-      ))
-    }
   }
 
   async execute(params: CommandExecuteParams): Promise<string> {
@@ -1416,6 +1205,8 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       },
       context,
     )
+    context.data.characterManifestArtifacts = this.artifactReferences.map(reference => ({ ...reference }))
+    const manifestArtifact = this.artifactReferences.at(-1)
     let manifest: CharacterIdentitySlot[]
     try {
       manifest = decodeCharacterIdentityManifest(manifestRaw)
@@ -1498,47 +1289,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       },
       inputKey: slot => slot.slotId,
       outputKey: entry => entry.slotId,
-      decode: (content) => {
-        const parsed = JSON.parse(extractSingleCompleteJsonObject(content)) as { entries?: unknown }
-        if (!Array.isArray(parsed.entries)) throw new Error(text(
-          '角色详情响应缺少 entries',
-          'The character-detail response is missing entries.',
-        ))
-        return parsed.entries.map((candidate) => {
-          if (!isRecord(candidate)) return candidate as unknown as CharacterDetailOutput
-          const age = candidate.age
-          const normalizedCandidate = { ...candidate }
-          for (const field of CHARACTER_DETAIL_DESCRIPTION_FIELDS) {
-            normalizedCandidate[field] = normalizeBoundedDetailText(
-              candidate[field],
-              CHARACTER_DETAIL_DESCRIPTION_MAX_CHARS,
-            )
-          }
-          let currentState: unknown = candidate.currentState
-          if (isRecord(candidate.currentState)) {
-            const normalizedState: Record<string, unknown> = {
-              ...candidate.currentState,
-              keyItems: normalizeDetailStringList(candidate.currentState.keyItems, '、'),
-              recentEvents: normalizeDetailStringList(candidate.currentState.recentEvents, '；'),
-              // Architecture generation describes the pre-chapter baseline. A
-              // model-supplied future chapter must never become persisted fact.
-              updatedAtChapter: 0,
-            }
-            for (const field of CHARACTER_STATE_TEXT_FIELDS) {
-              normalizedState[field] = normalizeBoundedDetailText(
-                normalizedState[field],
-                CHARACTER_STATE_TEXT_MAX_CHARS,
-              )
-            }
-            currentState = normalizedState
-          }
-          return {
-            ...normalizedCandidate,
-            ...(typeof age === 'number' && Number.isFinite(age) ? { age: String(age) } : {}),
-            currentState,
-          } as unknown as CharacterDetailOutput
-        })
-      },
+      decode: decodeCharacterDetails,
       validateItem: (entry) => {
         const basicError = validateCharacterDetail(entry)
         if (basicError) return basicError
@@ -1558,6 +1309,8 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       limits: { maxBatchItems: CHARACTER_DETAIL_BATCH_SIZE },
       signal: generationExecution.signal,
     })
+    context.data.characterDetailArtifacts = detailExecution.receipt.attempts.flatMap(receipt => receipt.visibleArtifact
+      ? [{ ...receipt.visibleArtifact, purpose: receipt.purpose, finishReason: receipt.finishReason }] : [])
     if (!detailExecution.ok) {
       const diagnostic = detailExecution.failure.diagnostic
       const attempts = detailExecution.receipt.attempts.length > 0
@@ -1584,94 +1337,42 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
         'Character details did not fully cover the frozen identity manifest.',
       ))
     }
-    const entries = detailExecution.items.map((detail) => {
-      const entry: Record<string, unknown> = { ...detail }
-      delete entry.slotId
-      entry.relationships = manifestById.get(detail.slotId)!.relations.map(relation => ({
-        target: manifestById.get(relation.targetSlotId)!.name,
-        relation: relation.relation,
-      }))
-      return entry as unknown as CharacterRosterEntry
+    this.assertNotCancelled(context)
+    assertArchitectureProjectSessionCurrent(projectSession, context)
+    const handle = context.mainGenerationRunHandle
+    const detailArtifacts = (detailExecution.receipt.acceptedArtifacts ?? []).map(({ artifact }) => artifact)
+    if (!handle || !manifestArtifact || detailArtifacts.length === 0) throw new Error('CHARACTER_PROPOSAL_GENERATION_ARTIFACT_REQUIRED')
+    const artifacts = [...new Map([manifestArtifact, ...detailArtifacts].map(artifact => [artifact.artifactId,
+      { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash }])).values()]
+    const batch = await ipc.invokeWithProjectSession(projectSession, 'character-proposal:stage', {
+      source: { kind: 'generation', inputKind: 'architecture', handle, artifacts, manifestArtifactId: manifestArtifact.artifactId },
     })
-    const candidate = { schemaVersion: CHARACTER_ROSTER_SCHEMA_VERSION, entries }
+    context.data.characterProposalBatch = batch
+    callbacks.setProgress(100)
+    callbacks.log(text('角色提议已保存，等待明确采用；尚未写入正式角色。', 'Character proposals saved for explicit adoption; no formal characters were written.'))
+    return formatCharacterProposalPreview(batch, text)
+  }
+}
+
+export class AdoptGeneratedCharactersCommand extends BaseWorkflowCommand<string> {
+  async execute({ context, callbacks }: CommandExecuteParams): Promise<string> {
+    const session = requireWorkflowProjectSession(context)
+    assertArchitectureProjectSessionCurrent(session, context)
     this.assertNotCancelled(context)
-    assertArchitectureProjectSessionCurrent(projectSession, context)
-    const currentRoster = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:character-roster-read',
-      expectedProjectPath,
-    )
-    this.assertNotCancelled(context)
-    assertArchitectureProjectSessionCurrent(projectSession, context)
-
-    const commitResult = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:character-roster-commit',
-      {
-        operationId: context.runId,
-        expectedRevision: currentRoster.revision,
-        schemaVersion: candidate.schemaVersion as typeof CHARACTER_ROSTER_SCHEMA_VERSION,
-        entries: candidate.entries as CharacterRosterEntry[],
-        intent: 'architecture_generation',
-        ...(this.requireGenerationExecution().mainOwned ? { generationRunHandle: context.mainGenerationRunHandle } : {}),
-      } satisfies CharacterRosterCommitRequest,
-      expectedProjectPath,
-    )
-    if (!commitResult.success) {
-      throw new Error(commitResult.error || text(
-        '角色名单提交失败，未保存角色图谱或角色卡',
-        'The character-roster commit failed, so the character graph and cards were not saved.',
-      ))
-    }
-    this.assertCommittedRosterReadable(commitResult.receipt, candidate.entries, text)
-    const renderedMarkdown = commitResult.receipt.snapshot.renderedMarkdown
-    const characterCount = commitResult.receipt.snapshot.entries.length
-
-    // 事务 receipt 是取消边界：提交成功后不再把已保存的角色事实误报为零写入取消。
-    if (context.cancelled) {
-      this.notifyRefresh(['characterCards'], expectedProjectPath, projectSession)
-      callbacks.log(text(
-        `角色图谱与 ${characterCount} 张角色卡已生成；后续工作流已取消`,
-        `The character graph and ${characterCount} character cards were generated; the remaining workflow was cancelled.`,
-      ))
-      return renderedMarkdown
-    }
-
-    this.notifyRefresh(['characterCards'], expectedProjectPath, projectSession)
-
-    const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
-    if (context.cancelled) {
-      callbacks.log(text(
-        `角色图谱与 ${characterCount} 张角色卡已生成；后续工作流已取消`,
-        `The character graph and ${characterCount} character cards were generated; the remaining workflow was cancelled.`,
-      ))
-      return renderedMarkdown
-    }
-    partial.character_dynamics_result = renderedMarkdown
-    context.data.partial = partial
-    try {
-      await savePartialData(
-        expectedProjectPath,
-        partial,
-        projectSession,
-        text('保存架构生成检查点', 'Save architecture-generation checkpoint'),
-        text('保存架构生成检查点失败', 'Failed to save the architecture-generation checkpoint.'),
-      )
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      callbacks.log(
-        text(
-          `[警告] 角色图谱与 ${characterCount} 张角色卡已保存，但检查点保存失败：${detail}。当前流程可继续；若中断，将无法从此步骤恢复。`,
-          `[Warning] The character graph and ${characterCount} character cards were saved, but the checkpoint failed: ${detail}. The workflow can continue, but it cannot resume from this step after an interruption.`,
-        ),
-      )
-    }
-
-    callbacks.log(text(
-      `角色图谱与 ${characterCount} 张角色卡已生成`,
-      `The character graph and ${characterCount} character cards were generated.`,
-    ))
-    return renderedMarkdown
+    const shown = context.data.characterProposalBatch as CharacterProposalBatch | undefined
+    if (!shown) throw new Error('CHARACTER_PROPOSAL_PREVIEW_REQUIRED')
+    if (shown.status === 'cancelled') throw new Error('CHARACTER_PROPOSAL_CANCELLED')
+    if (shown.status === 'approved') return formatCharacterProposalPreview(shown, (zh, en) => workflowUiText(context, zh, en))
+    const result = await ipc.invokeWithProjectSession(session, 'character-proposal:approve', {
+      proposalBatchId: shown.proposalBatchId, expectedRevision: shown.revision,
+      operationId: `character-adoption:${context.runId}`, selections: defaultCharacterProposalSelections(shown),
+      relationships: defaultCharacterProposalRelationships(shown),
+    })
+    context.data.characterProposalBatch = result.batch
+    this.notifyRefresh(['characterCards'], session.projectPath, session)
+    const text = (zh: string, en: string) => workflowUiText(context, zh, en)
+    callbacks.log(text('角色采用决策已保存；身份未明确的提议继续保留。', 'Character decisions saved; unresolved proposals remain available.'))
+    return formatCharacterProposalPreview(result.batch, text)
   }
 }
 

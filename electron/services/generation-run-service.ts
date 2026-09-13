@@ -39,6 +39,7 @@ export interface ExecuteGenerationRequest {
     inputUpperBoundTokens: number;
     reasoningUpperBoundTokens: number;
     usagePolicy: ProviderUsagePolicy;
+    purpose?: string;
 }
 export interface GenerationRunServiceDependencies {
     repository: GenerationRunRepository;
@@ -103,7 +104,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 throw new Error('GENERATION_LIABILITY_UNBOUNDED');
             let receipt: GenerationExecutionReceipt;
             try {
-                receipt = deps.repository.reserve(request.runId, request.invocationNonce, requestHash, request.reservedTokens, request.requestedOutputTokens, policy);
+                receipt = deps.repository.reserve(request.runId, request.invocationNonce, requestHash, request.reservedTokens, request.requestedOutputTokens, policy, request.purpose);
             }
             catch (error) {
                 if (!/BUDGET|RESERVATION|EPOCH|DISPATCH|INVOCATION/.test(error instanceof Error ? error.message : '')) {

@@ -53,6 +53,40 @@ beforeEach(() => {
 })
 
 describe('workflow pause at a safe step boundary', () => {
+  it('自动模式也等待明确采用，重复确认不会重复执行', async () => {
+    const executor = vi.fn(async () => '已采用')
+    const pending = useWorkflowStore.getState().startWorkflow({
+      runId: 'explicit-adoption', type: 'architecture_generation', title: '采用角色候选', projectPath,
+      projectSession: frozenSession(),
+      steps: [{ name: '采用', description: '确认后采用', executor, requiresConfirmation: true }],
+    })
+    await vi.waitFor(() => expect(useWorkflowStore.getState().waitingRuns['explicit-adoption']?.waitingForConfirm).toBe(true))
+    expect(executor).not.toHaveBeenCalled()
+    useWorkflowStore.getState().confirmContinue('explicit-adoption')
+    useWorkflowStore.getState().confirmContinue('explicit-adoption')
+    await pending
+    expect(executor).toHaveBeenCalledOnce()
+    expect(useWorkflowStore.getState().history[0].status).toBe('completed')
+  })
+
+  it('等待采用期间取消不会执行采用步骤', async () => {
+    const executor = vi.fn(async () => '不应执行')
+    const cancelMain = vi.fn().mockResolvedValue(undefined)
+    const pending = useWorkflowStore.getState().startWorkflow({
+      runId: 'cancel-adoption', type: 'architecture_generation', title: '采用角色候选', projectPath,
+      projectSession: frozenSession(),
+      steps: [{ name: '生成完成', description: '主运行已结束本次物理请求', executor: async (_step, context) => {
+        context.requestMainGenerationCancellation = cancelMain
+      } }, { name: '采用', description: '确认后采用', executor, requiresConfirmation: true }],
+    })
+    await vi.waitFor(() => expect(useWorkflowStore.getState().waitingRuns['cancel-adoption']?.waitingForConfirm).toBe(true))
+    useWorkflowStore.getState().cancelWorkflow('cancel-adoption')
+    useWorkflowStore.getState().confirmContinue('cancel-adoption')
+    await pending
+    expect(executor).not.toHaveBeenCalled()
+    expect(cancelMain).toHaveBeenCalledOnce()
+  })
+
   it('reuses an active caller-supplied run id without mutating the first workflow', async () => {
     let releaseFirst!: () => void
     const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve })

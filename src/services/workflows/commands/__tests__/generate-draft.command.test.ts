@@ -14,6 +14,8 @@ import {
   type GenerationRuntime,
   type GenerationRuntimeEnvironment,
   type GenerationRuntimeScope,
+  type MainGenerationRunHandle,
+  type MainGenerationRunView,
 } from '../../../generation/generation-runtime'
 import type {
   GenerationAttemptReceipt,
@@ -22,6 +24,8 @@ import type {
 } from '../../../generation/generation-harness'
 import { EN_US_BUILTIN_PROMPTS } from '../../../prompt-language'
 import { BUILTIN_PROMPTS } from '../../../prompt-templates'
+import { composeDraftVisibleContinuation, DRAFT_VISIBLE_TEXT_VERSION } from '../../../../shared/draft-visible-text'
+import { appendVisibleTextContinuation } from '../../bounded-completion'
 import {
   DRAFT_GENERATION_BUDGET,
   GenerateDraftCommand,
@@ -33,6 +37,17 @@ import {
 } from '../generate-draft.command'
 
 describe('generate draft command text cleanup', () => {
+  it('主进程正文投影保持旧续接规则且不改原始片段', () => {
+    const first = `<think>内部推理</think>\n${'林舟守在海港等待潮汐。'.repeat(12)}\n\n未完待续`
+    const second = `${'林舟守在海港等待潮汐。'.repeat(8)}\n\n钟楼终于亮起灯。`
+    const original = [first, second]
+    const oldProjection = sanitizeDraftText(appendVisibleTextContinuation(sanitizeDraftText(first), sanitizeDraftText(second)))
+    expect(DRAFT_VISIBLE_TEXT_VERSION).toBe('draft-visible-v1')
+    expect(composeDraftVisibleContinuation(first, second)).toBe(oldProjection)
+    expect([first, second]).toEqual(original)
+    expect(composeDraftVisibleContinuation(first, second)).not.toContain('内部推理')
+    expect(composeDraftVisibleContinuation(first, second)).toContain('钟楼终于亮起灯。')
+  })
   it.each(['```', '~~~'])('keeps quoted chapter examples inside %s fences verbatim', (fence) => {
     const synopsis = `全局说明\n${fence}text\n## 第1章：示例\n作者不可丢事实甲\n## 第2章：示例\n作者不可丢事实乙\n${fence}\n全局尾部`
     expect(synopsisForDraftChapter(synopsis, 2)).toBe(synopsis)
@@ -310,6 +325,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
   function setup(options: {
     runtime: Pick<ReturnType<typeof fakeRuntime>, 'createRuntime' | 'complete' | 'execute' | 'close'>
+    mainDefault?: boolean
+    resumeHandle?: MainGenerationRunHandle
     wordsPerChapter?: number
     wordsTarget?: number
     premise?: string
@@ -365,7 +382,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     sourceDraft?: { id: number; version: number }
   }) {
     let recoveryCandidateSequence = 0
-    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]): Promise<unknown> => {
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists' && String(args[0]).endsWith('/.ai-novel/prompts')) return false
       if (channel === 'db:project-core-get') {
@@ -444,6 +461,12 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
           ? { id: 77, content: options.previousFinalizedContent }
           : null
       }
+      if (channel === 'generation:prepare-draft-context') return {
+        preparationId: '合成准备', selectedDrafts: options.selectedCandidateDrafts ?? [],
+        knowledgeSnapshot: { version: 1, state: 'empty', storageState: 'absent',
+          query: (args[0] as { query: string }).query, topK: 5, canonicalRevision: null, documentsRevision: null,
+          items: options.knowledgeResults ?? [] },
+      }
       if (channel === 'kb:search-writing-context') return options.knowledgeResults ?? []
       if (channel === 'db:character-get-all') return options.characterCards ?? []
       if (channel === 'db:character-roster-read') return {
@@ -469,7 +492,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     vi.stubGlobal('window', {
       aiNovelAPI: {
         invoke,
-        on: vi.fn(),
+        on: vi.fn(() => () => {}),
         once: vi.fn(),
         send: vi.fn(),
         setZoomLevel: vi.fn(),
@@ -529,7 +552,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       userGuidance: options.userGuidance,
       knowledgeQueryHint: options.knowledgeQueryHint,
     }, {
-      dependencies: { createRuntime: options.runtime.createRuntime },
+      ...(options.mainDefault ? {} : { dependencies: { createRuntime: options.runtime.createRuntime } }),
+      resumeHandle: options.resumeHandle,
       selectedCandidateDrafts: options.selectedCandidateDrafts,
     })
     return { invoke, context, callbacks, command }
@@ -539,6 +563,128 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(invoke).not.toHaveBeenCalledWith('db:draft-next-version', expect.anything(), expect.anything())
     expect(invoke).not.toHaveBeenCalledWith('db:draft-create', expect.anything(), expect.anything())
   }
+
+  it.each([{ target: 900, edit: false }, { target: 2000, edit: false }, { target: 3000, edit: false }, { target: 900, edit: true }])('真实默认 facade 字数 $target，作者改稿 $edit，仅main组合与原子保存', async ({ target, edit }) => {
+    const legacy = fakeOutcomes()
+    const f = setup({ runtime: legacy, wordsTarget: target, mainDefault: true })
+    f.context.generationModelId = '合成模型'
+    const handle: MainGenerationRunHandle = { projectId: f.context.projectSession.projectId,
+      epoch: f.context.projectSession.leaseId, rootActionId: '合成根', runId: '合成正文' }
+    const raw = `<think>推理不可成为正文</think>${'潮'.repeat(target)}。`
+    const text = sanitizeDraftText(raw)
+    const hash = (value: string) => createHash('sha256').update(value).digest('hex')
+    const view: MainGenerationRunView = { handle, status: 'running', nonReplayable: false, artifacts: [],
+      budget: { maxAttempts: 32, maxRequestedOutputTokens: 2000000, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: Date.now() + 3600000 } }
+    const original = f.invoke.getMockImplementation()!
+    f.invoke.mockImplementation(async (channel, ...args) => {
+      if (channel === 'generation:begin' || channel === 'generation:read') return view
+      if (channel === 'generation:execute') {
+        if (edit) useProjectStore.setState(state => ({ currentProject: { ...state.currentProject!,
+          novelConfig: { ...state.currentProject!.novelConfig, worldSetting: '作者刚补写的世界设定' } } }))
+        const result = outcome(raw, 'stop')
+        result.receipt.visibleArtifact = { artifactId: '正文片', attemptId: '物理请求', revision: 1, textHash: hash(raw) }
+        return { outcome: result, run: view }
+      }
+      if (channel === 'generation:compose-visible') {
+        expect(args.slice(0, 4)).toEqual([handle, ['正文片'], hash(text), 'draft-visible-v1'])
+        return { algorithm: 'draft-visible-v1', artifactIds: ['正文片'], text, textHash: hash(text), sources: [] }
+      }
+      if (channel === 'generation:commit-draft') return { success: true, id: 17, version: 2, content: text, contentHash: hash(text) }
+      return original(channel, ...args)
+    })
+    if (edit) {
+      await expect(f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })).rejects.toThrow('GENERATION_DRAFT_AUTHOR_CONFIG_CHANGED')
+      expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:commit-draft')).toBe(false)
+      expect(f.callbacks.replaceText).toHaveBeenLastCalledWith(text)
+    } else await expect(f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })).resolves.toBe(text)
+    expect(legacy.createRuntime).not.toHaveBeenCalled()
+    expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:execute')).toHaveLength(1)
+    expect(f.invoke.mock.calls.some(([channel]) => channel === 'db:draft-create' || channel === 'db:draft-next-version' || channel === 'db:recovery-candidate-record')).toBe(false)
+  })
+
+  it.each(['stop', 'length', 'saved-ack-lost'] as const)('默认恢复沿精确组合与 %s 终态，不重发初始正文', async (state) => {
+    const finishReason = state === 'saved-ack-lost' ? 'stop' : state
+    const handle: MainGenerationRunHandle = { projectId: 'generation-runtime', epoch: state === 'saved-ack-lost' ? '已关闭旧会话' : 'lease-generation-runtime', rootActionId: '原根', runId: '原正文' }
+    const f = setup({ runtime: fakeOutcomes(), mainDefault: true, resumeHandle: handle, wordsTarget: 900 })
+    f.context.generationModelId = '合成模型'
+    const seed = '潮'.repeat(finishReason === 'stop' ? 900 : 500)
+    const addition = '灯'.repeat(500) + '。'
+    const expected = finishReason === 'stop' ? seed : composeDraftVisibleContinuation(seed, addition)
+    const hash = (text: string) => createHash('sha256').update(text).digest('hex')
+    const view: MainGenerationRunView = { handle, status: 'running', nonReplayable: false, artifacts: [],
+      budget: { maxAttempts: 32, maxRequestedOutputTokens: 2000000, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: Date.now() + 3600000 } }
+    const original = f.invoke.getMockImplementation()!
+    f.invoke.mockImplementation(async (channel, ...args) => {
+      if (channel === 'generation:read') return view
+      if (channel === 'generation:read-context') return { handle, operation: 'chapter-draft', chapterNumber: 1,
+        authorInputs: [
+          { id: 'draft:chapter-info', text: JSON.stringify({ chapterNumber: 1, title: '第一章', role: '开端', purpose: '建立冲突', characters: [], keyEvents: '开端' }) },
+          { id: 'draft:author-config', text: JSON.stringify(useProjectStore.getState().currentProject!.novelConfig) },
+          { id: 'draft:target-units', text: '900' },
+        ], selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1, 2, 3, 4, 5, 6],
+        knowledgeSnapshot: { version: 1, state: 'empty', storageState: 'absent', query: '第一章 开端', topK: 5, canonicalRevision: null, documentsRevision: null, items: [] },
+        composition: { algorithm: 'draft-visible-v1', text: seed, textHash: hash(seed), artifactIds: ['原片'], sources: [] },
+        lastCompositionFinishReason: finishReason, attemptedPurposes: ['chapter-draft'],
+        ...(state === 'saved-ack-lost' ? { savedDraft: { success: true, id: 18, version: 1, content: expected, contentHash: hash(expected) } } : {}) }
+      if (channel === 'generation:execute') {
+        expect((args[0] as { task: GenerationTask }).task.purpose).toBe('chapter-draft-continuation')
+        const result = outcome(addition, 'stop')
+        result.receipt.visibleArtifact = { artifactId: '续片', attemptId: '续请求', revision: 1, textHash: hash(addition) }
+        return { outcome: result, run: view }
+      }
+      if (channel === 'generation:compose-visible') {
+        expect(args[1]).toEqual(['原片', '续片'])
+        return { algorithm: 'draft-visible-v1', artifactIds: ['原片', '续片'], text: expected, textHash: hash(expected), sources: [] }
+      }
+      if (channel === 'generation:commit-draft') return { success: true, id: 18, version: 1, content: expected, contentHash: hash(expected) }
+      return original(channel, ...args)
+    })
+    await expect(f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })).resolves.toBe(expected)
+    expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:execute')).toHaveLength(finishReason === 'stop' ? 0 : 1)
+    expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:begin' || channel === 'db:draft-create')).toBe(false)
+    if (state === 'saved-ack-lost') {
+      expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:read' || channel === 'generation:resume')).toBe(false)
+      expect(f.invoke.mock.calls.some(([channel]) => ['generation:commit-draft', 'generation:prepare-draft-context', 'kb:search-writing-context', 'db:draft-get-latest'].includes(channel))).toBe(false)
+    }
+  })
+
+  it('main续写低增量片段保持独立，不进入确认组合或正式草稿', async () => {
+    const f = setup({ runtime: fakeOutcomes(), mainDefault: true, wordsTarget: 3000 })
+    f.context.generationModelId = '合成模型'
+    const handle: MainGenerationRunHandle = { projectId: f.context.projectSession.projectId, epoch: f.context.projectSession.leaseId,
+      rootActionId: '唯一根', runId: '正文运行' }
+    const view: MainGenerationRunView = { handle, status: 'running', nonReplayable: false, artifacts: [],
+      budget: { maxAttempts: 32, maxRequestedOutputTokens: 2000000, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: Date.now() + 3600000 } }
+    const fragments = ['潮'.repeat(1500), '灯'.repeat(100), '钟'.repeat(2000) + '。']
+    const hash = (text: string) => createHash('sha256').update(text).digest('hex')
+    let attempt = 0, composed = ''
+    const purposes: string[] = []
+    const original = f.invoke.getMockImplementation()!
+    f.invoke.mockImplementation(async (channel, ...args) => {
+      if (channel === 'generation:begin' || channel === 'generation:read') return view
+      if (channel === 'generation:execute') {
+        purposes.push((args[0] as { task: GenerationTask }).task.purpose)
+        const raw = fragments[attempt]
+        const result = outcome(raw, attempt === 2 ? 'stop' : 'length')
+        result.receipt.visibleArtifact = { artifactId: `片${attempt}`, attemptId: `请求${attempt}`, revision: 1, textHash: hash(raw) }
+        attempt += 1
+        return { outcome: result, run: view }
+      }
+      if (channel === 'generation:compose-visible') {
+        const ids = args[1] as string[]
+        expect(ids).not.toContain('片1')
+        composed = ids.reduce((text, id) => composeDraftVisibleContinuation(text, fragments[Number(id.slice(1))]), '')
+        return { algorithm: 'draft-visible-v1', text: composed, textHash: hash(composed), artifactIds: ids, sources: [] }
+      }
+      if (channel === 'generation:commit-draft') return { success: true, id: 21, version: 1, content: composed, contentHash: hash(composed) }
+      return original(channel, ...args)
+    })
+    const result = await f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
+    expect(result).not.toContain('灯')
+    expect(purposes).toEqual(['chapter-draft', 'chapter-draft-continuation', 'chapter-draft-no-progress-recovery'])
+    expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:compose-visible')).toHaveLength(2)
+    expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:begin')).toHaveLength(1)
+  })
 
   it('persists visible prose from an interrupted stream before returning the error', async () => {
     const runtime = fakeRuntime((_attempt, _task, options) => {
@@ -909,7 +1055,9 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       8192,
       8192,
     ])
-    expect(createRuntime).toHaveBeenCalledWith({ budget: DRAFT_GENERATION_BUDGET })
+    expect(createRuntime).toHaveBeenCalledWith({ budget: DRAFT_GENERATION_BUDGET }, expect.objectContaining({
+      context, callbacks: expect.objectContaining({ replaceText: expect.any(Function) }), selection: expect.objectContaining({ operation: 'chapter-draft', output: 'visible-text' }),
+    }))
     expect(invoke).toHaveBeenCalledWith(
       'db:draft-create',
       expect.objectContaining({ content: expect.stringContaining('续') }),
@@ -928,7 +1076,9 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(runtime.createRuntime).toHaveBeenCalledWith({
       budget: DRAFT_GENERATION_BUDGET,
       modelId: 'grok-selected-model',
-    })
+    }, expect.objectContaining({
+      context, callbacks: expect.objectContaining({ replaceText: expect.any(Function) }), selection: expect.objectContaining({ operation: 'chapter-draft', output: 'visible-text' }),
+    }))
   })
 
   it('injects verbatim finalized excerpts without promoting mixed fact indexes to manuscript truth', async () => {

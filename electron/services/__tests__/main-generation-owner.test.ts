@@ -16,6 +16,9 @@ import type { BeginGenerationRequest } from '../../../src/shared/generation-owne
 import { generationOutputContract } from '../../../src/shared/generation-owner-contract'
 import { textHash } from '../../repositories/generation-run-repository'
 import { composeVisibleContinuation } from '../../../src/shared/visible-continuation'
+import { sanitizeDraftText } from '../../../src/shared/draft-visible-text'
+import { FinalizationRepository } from '../../repositories/finalization-repository'
+import { PostProcessRepository } from '../../repositories/post-process-repository'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
 import { getProjectDb } from '../../database'
@@ -194,6 +197,7 @@ describe('explicit visible continuation composition', () => {
     const run = f.owner.begin(f.begin)
     const result = await f.owner.execute({ handle: run.handle, invocationNonce: 'untrusted', task })
     expect(result.run.artifacts[0].text).toBe('不能自动续写的原始前缀')
+    expect(result.run.artifacts[0].compositionEligible).toBe(false)
     expect(() => f.owner.composeVisible(run.handle, [result.outcome.receipt.visibleArtifact!.artifactId], textHash(result.outcome.content))).toThrow('GENERATION_COMPOSITION_SOURCE_UNTRUSTED')
     expect(f.owner.readVisibleComposition(run.handle)).toBeNull()
   })
@@ -210,6 +214,7 @@ describe('explicit visible continuation composition', () => {
     const run = f.owner.begin({ ...f.begin, authorInputs: [{ id: 'step-guidance', text: '  保留中文原要求\n' }] })
     const first = await f.owner.execute({ handle: run.handle, invocationNonce: 'first', task })
     const firstId = first.outcome.receipt.visibleArtifact!.artifactId
+    expect(first.run.artifacts[0]).toMatchObject({ status: 'failed', compositionEligible: true })
     expect(f.owner.readVisibleComposition(run.handle)).toBeNull()
     const single = f.owner.composeVisible(run.handle, [firstId], textHash(first.outcome.content.trim()))
     expect(single.text).toBe(first.outcome.content.trim())
@@ -340,6 +345,150 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     expect(reopened.read(resumed.handle).artifacts).toHaveLength(1)
     expect(reopened.read(resumed.handle).candidates).toHaveLength(2)
     expect(dispatch).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('durable character proposals from actual generation artifacts', () => {
+  async function proposed() {
+    const output = JSON.stringify({ results: ['1:1', '2:1'].map(sourceId => ({ sourceId, characterCards: [{ name: '林岚', role: 'supporting', notes: `来源${sourceId}` }] })) })
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: output }); return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch)
+    const run = f.owner.begin({ ...f.begin, operation: 'planning-material-character-extraction', output: 'structured-data',
+      promptKeys: ['planning_material_character_extraction'], authorInputs: [0, 1].map(index => ({ id: `planning-material:${index}`, text: JSON.stringify({ fileName: `资料${index}.txt`, text: '作者资料原文' }) })) })
+    const execution = await f.owner.execute({ handle: run.handle, invocationNonce: 'extract', task: { ...task, purpose: 'planning-material-character-extraction', output: 'structured-data' } })
+    const artifact = execution.run.artifacts[0]!
+    const source = { kind: 'generation' as const, inputKind: 'planning-material' as const, handle: run.handle,
+      artifacts: [{ artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash }] }
+    return { ...f, fixture: f, source, dispatch }
+  }
+  it('stages equal names separately and writes IDs only after an explicit decision', async () => {
+    const f = await proposed(), batch = f.owner.characterProposals.stage(f.source)
+    expect(batch.items).toHaveLength(2)
+    expect(new Set(batch.items.map(item => item.selectionKey)).size).toBe(2)
+    expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
+    const request = { proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision, operationId: 'adopt-cards',
+      selections: batch.items.map(item => ({ selectionKey: item.selectionKey, action: 'create' as const })) }
+    const approved = f.owner.characterProposals.approve(request)
+    expect(approved.created).toHaveLength(2)
+    expect(new Set(approved.created.map(item => item.characterId)).size).toBe(2)
+    expect(f.owner.characterProposals.approve(request)).toEqual(approved)
+    expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(2)
+    expect(f.owner.characterProposals.identitySnapshot().characters.every(item => item.provenance.kind === 'generated')).toBe(true)
+    expect(f.dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('reopens pending proposals without generating again and adopts the exact historical source', async () => {
+    const f = await proposed(), batch = f.owner.characterProposals.stage(f.source), reopened = f.reopen()
+    expect(reopened.characterProposals.read(batch.proposalBatchId)).toEqual(batch)
+    expect(reopened.characterProposals.approve({ proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision,
+      operationId: 'adopt-reopened', selections: batch.items.map(item => ({ selectionKey: item.selectionKey, action: 'create' })) }).created).toHaveLength(2)
+    expect(f.dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('preserves cancelled proposals and refuses adoption after source drift or artifact tampering', async () => {
+    const f = await proposed(), batch = f.owner.characterProposals.stage(f.source)
+    expect(() => f.owner.characterProposals.stage({ ...f.source, artifacts: [{ ...f.source.artifacts[0]!, textHash: '0'.repeat(64) }] })).toThrow('CHARACTER_PROPOSAL_ARTIFACT_INVALID')
+    f.db.exec("UPDATE project_core SET global_guidance='作者的新约束'")
+    expect(() => f.owner.characterProposals.approve({ proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision,
+      operationId: 'stale', selections: batch.items.map(item => ({ selectionKey: item.selectionKey, action: 'create' })) })).toThrow('CHARACTER_PROPOSAL_SOURCE_CHANGED')
+    expect(f.owner.characterProposals.cancel(batch.proposalBatchId).status).toBe('cancelled')
+    expect(f.owner.characterProposals.read(batch.proposalBatchId).items).toHaveLength(2)
+    expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
+  })
+})
+
+describe('main draft persistence and batch lineage', () => {
+  const authorInputs = [{ id: 'draft:target-units', text: '10' }]
+  const draftText = '清晨的街道渐渐苏醒，林岚带着昨日的线索走向城门。'
+  function drafting() {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: `${draftText}\n点我继续生成后续内容` })
+      return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch)
+    return { ...f, fixture: f, dispatch }
+  }
+  async function generate(f: ReturnType<typeof drafting>, selection: BeginGenerationRequest) {
+    const run = f.owner.begin(selection)
+    const execution = await f.owner.execute({ handle: run.handle, invocationNonce: `draft:${selection.chapterNumber}`, task })
+    const raw = execution.run.artifacts[0]!
+    const visible = sanitizeDraftText(raw.text)
+    f.owner.composeVisible(run.handle, [raw.artifactId], textHash(visible), 'draft-visible-v1')
+    return { run, raw, request: { handle: run.handle, chapterNumber: selection.chapterNumber!, source: 'write' as const,
+      expectedCompositionHash: textHash(visible), ...(selection.batchId ? { batchId: selection.batchId } : {}) } }
+  }
+  it('preserves the raw artifact and reopens one saved draft after a lost acknowledgement', async () => {
+    const f = drafting(), generated = await generate(f, { ...f.begin, authorInputs })
+    const saved = f.owner.commitDraft(generated.request)
+    expect(saved.content).toBe(draftText)
+    expect(f.owner.read(generated.run.handle).artifacts[0]!.text).toContain('点我继续生成后续内容')
+    const reopened = f.reopen()
+    expect(reopened.commitDraft(generated.request)).toEqual(saved)
+    expect(reopened.readContext(generated.run.handle)).toMatchObject({ savedDraft: saved, attemptedPurposes: ['chapter-draft'] })
+    expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+    expect(f.dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('refuses a formal save after a structured character fact changes', async () => {
+    const f = drafting(), generated = await generate(f, { ...f.begin, authorInputs })
+    f.db.exec("INSERT INTO characters(character_id,name) VALUES('author-character','新角色')")
+    expect(() => f.owner.commitDraft(generated.request)).toThrow('GENERATION_SOURCE_CHANGED')
+    expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(0)
+    expect(f.owner.readVisibleComposition(generated.run.handle)?.text).toBe(draftText)
+  })
+  it.each(['项目指导', '剧情线', '角色关系'])('preserves the candidate and refuses a save after %s changes', async source => {
+    const f = drafting()
+    if (source === '角色关系') f.db.exec("INSERT INTO characters(character_id,name) VALUES('甲','林岚'),('乙','周平'); INSERT INTO character_identity_approvals VALUES('作者确认','合成摘要','{}')")
+    const generated = await generate(f, { ...f.begin, authorInputs })
+    if (source === '项目指导') {
+      const directory = path.join(f.root, 'project', 'prompts')
+      fs.mkdirSync(directory, { recursive: true })
+      fs.writeFileSync(path.join(directory, '作者指导.md'), '作者新增的本项目要求')
+    } else if (source === '剧情线') {
+      f.db.exec("INSERT INTO narrative_thread_plans(title,type,target_start_chapter,target_end_chapter,author_intent) VALUES('城门之谜','主线',1,2,'逐步揭开真相')")
+    } else {
+      f.db.exec("INSERT INTO character_relationships VALUES('关系一','甲','乙','同伴','林岚','周平','{}','作者确认')")
+    }
+    expect(() => f.owner.commitDraft(generated.request)).toThrow('GENERATION_SOURCE_CHANGED')
+    expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(0)
+    expect(f.owner.readVisibleComposition(generated.run.handle)?.text).toBe(draftText)
+  })
+  it('keeps chapter lineage, pending recovery identity and the original batch root', async () => {
+    const f = drafting()
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 10,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const selection = { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId }
+    const first = await generate(f, selection), saved = f.owner.commitDraft(first.request)
+    expect(f.owner.readBatch(batch.batchId).nextChapterNumber).toBe(2)
+    expect(() => f.owner.begin({ ...selection, chapterNumber: 2, uiActionNonce: 'chapter2' })).toThrow('GENERATION_BATCH_LINEAGE_INVALID')
+    const next = f.owner.begin({ ...selection, chapterNumber: 2, uiActionNonce: 'chapter2', selectedDraftIds: [saved.id] })
+    expect(f.owner.readBatch(batch.batchId).currentChapterRunHandle).toEqual(next.handle)
+    expect(() => f.owner.begin({ ...selection, chapterNumber: 2, uiActionNonce: 'duplicate', selectedDraftIds: [saved.id] })).toThrow('GENERATION_BATCH_RECOVERY_REQUIRED')
+    const reopened = f.reopen()
+    expect(reopened.readBatch(batch.batchId).currentChapterRunHandle).toEqual(next.handle)
+    const resumed = await reopened.resume(next.handle)
+    expect(resumed.handle.rootActionId).toBe(batch.rootHandle.rootActionId)
+    expect(resumed.ledger?.physicalRequests).toBe(1)
+  })
+  it('waits for the exact finalization postprocess before advancing an automatic batch', async () => {
+    const f = drafting()
+    const batch = f.owner.beginBatch({ mode: 'auto_finalize', range: { startChapter: 1, endChapter: 1 }, targetUnits: 10,
+      uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    const saved = f.owner.commitDraft(generated.request)
+    FinalizationRepository.commit({ finalizationId: 'finalization-one', draftId: saved.id, chapterNumber: 1, chapterTitle: '第一章', content: saved.content,
+      contentHash: saved.contentHash, contentRevision: 1, targetFileName: '第一章.txt' })
+    expect(f.owner.readBatch(batch.batchId)).toMatchObject({ nextChapterNumber: 1, completedChapters: [{ pendingFinalizationId: 'finalization-one' }] })
+    FinalizationRepository.markPublished('finalization-one')
+    expect(f.owner.readBatch(batch.batchId).nextChapterNumber).toBe(1)
+    expect(() => f.owner.confirmBatchFinalization({ batchId: batch.batchId, chapterNumber: 1, finalizationId: 'finalization-one' })).toThrow('GENERATION_BATCH_FINALIZATION_REQUIRED')
+    const post = PostProcessRepository.createRun({ triggerSourceType: 'chapter_finalize', triggerSourceId: '1', sourceLabel: '第一章',
+      finalizedSource: { finalizationId: 'finalization-one', draftId: saved.id, chapterNumber: 1, contentHash: saved.contentHash },
+      steps: [{ key: 'kb_import', label: '知识库', critical: true }, { key: 'chapter_notes', label: '章节笔记', critical: true }] })
+    PostProcessRepository.markStepOk(post, 'kb_import')
+    expect(f.owner.readBatch(batch.batchId).nextChapterNumber).toBe(1)
+    PostProcessRepository.markStepOk(post, 'chapter_notes')
+    expect(f.owner.confirmBatchFinalization({ batchId: batch.batchId, chapterNumber: 1, finalizationId: 'finalization-one' }).nextChapterNumber).toBeNull()
   })
 })
 

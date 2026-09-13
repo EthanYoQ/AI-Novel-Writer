@@ -1,0 +1,113 @@
+{
+  "slice": "S09A planning identity consumers",
+  "dependencies": {
+    "S06A": "852226db8058f171b98cee40d39bdcddb4f6be3a",
+    "S08": "ee4111e0927593956e3ff59b60ef07a07402a199"
+  },
+  "status": "READY_FOR_INDEPENDENT_REVIEW",
+  "actualModelCalls": 0,
+  "nodeProfile": "Node25 ABI141 unchanged",
+  "tests": {
+    "focused": {
+      "files": 10,
+      "passed": 218,
+      "failed": 0,
+      "log": ".runtime/.cache/novel-quality-modernization/s09a-focused-final.log"
+    },
+    "typecheck": "PASS",
+    "eslint": "PASS (19 owned paths plus changed-file delta)"
+  },
+  "proof": [
+    "Architecture manifest slots remain separate even with equal display names.",
+    "Material records retain source-local selection keys and unmodified raw values; no name concatenation.",
+    "Only fully validated executor artifacts enter staging; truncated, failed and superseded repair attempts remain outside accepted artifacts.",
+    "Main-safe parser independently validates selected artifact envelopes, coverage, slot identity and role; caller must prove actual ledger ownership and source currentness.",
+    "Architecture and material adoption steps require confirmation even in automatic workflow mode.",
+    "Approval sends exact batch/revision, explicit create/map/keep-unresolved decisions and only declared selectionKey relationship endpoints.",
+    "Cancellation/refused approval retains the shown candidate. Directory staging performs no formal character writes and retries the durable operation without regeneration."
+  ],
+  "boundaries": [
+    "This evidence covers source and deterministic Node fixtures, not manual UI acceptance, real-model behavior or integrated Electron IPC qualification.",
+    "Main source/ledger authorization, proposal persistence/approval transaction, projection refresh, import effects and blueprint completion receipts belong to the central owner.",
+    "S09C editor/store/Agent consumers are not migrated by this slice.",
+    "No frozen planning document, schema/registry, author configuration or workspace ABI was changed."
+  ],
+  "files": [
+    {
+      "path": "src/shared/character-proposal-parser.ts",
+      "sha256": "1df32a487fd4881a3c65cd421778a0afcd2642fd8c00bfc49631e791b3e9d739"
+    },
+    {
+      "path": "src/shared/__tests__/character-proposal-parser.test.ts",
+      "sha256": "09d755e729d87452c19f011c5c9c2038902924cc4568209d8846b986fa774279"
+    },
+    {
+      "path": "src/services/workflows/character-proposal-preview.ts",
+      "sha256": "d32890cb4b447d6a8035c3080114a368d086586cd6e49f4b3d54e7fbd324a670"
+    },
+    {
+      "path": "src/services/workflows/character-card-normalizer.ts",
+      "sha256": "7203fd09a22147eda184044fcba24c6ba978737470d4453e589d7191e55b7748"
+    },
+    {
+      "path": "src/services/workflows/blueprint-character-sync.ts",
+      "sha256": "89819b1d3ebc701bca930aa5bfa71948b3e3ef6b34a4fecd2cbefe3c7dc5d300"
+    },
+    {
+      "path": "src/services/workflows/directory-character-sync-recovery.ts",
+      "sha256": "9406193e09288a0c0fdbd877efad59bdc6e0c097e47eb1a9edc97376b3e5f248"
+    },
+    {
+      "path": "src/services/workflows/architecture-workflow.ts",
+      "sha256": "40b7391f5f6c53075ef7eb402f379632a75dc5e37c1d63b3c841eef125bacf58"
+    },
+    {
+      "path": "src/services/workflows/planning-material-workflow.ts",
+      "sha256": "6f4644dc21d19d5613d9d206db3c94e193d1bb194299a4ba43f8362a0242e9bd"
+    },
+    {
+      "path": "src/services/workflows/structured-batch-executor.ts",
+      "sha256": "863d2ed11087197f852a795aee8163700988bccd5bae7d114559fd396b2aef2f"
+    },
+    {
+      "path": "src/services/workflows/commands/architecture.command.ts",
+      "sha256": "ffef864943394fdb68285f57590a1b0b7b518784f32c209c0e55a74a009dd780"
+    },
+    {
+      "path": "src/services/workflows/commands/planning-material.command.ts",
+      "sha256": "04e2e6e8499709a8dd00aa7e22e676c5a24a7a2e48afbd746fb3c6d875d0783a"
+    },
+    {
+      "path": "src/services/workflows/commands/__tests__/character-proposal-runtime.fixture.ts",
+      "sha256": "30929a645d4157f13e3c3f13f1fb46d2aa14228c523b4eceb2161c10bc8ddfa3"
+    },
+    {
+      "path": "src/services/workflows/commands/__tests__/architecture.command.test.ts",
+      "sha256": "80e2eae0c75dbfa851bd69e448b6bad8c6d73aa9955a8b7759f3935a7568d479"
+    },
+    {
+      "path": "src/services/workflows/commands/__tests__/planning-material.command.test.ts",
+      "sha256": "c70e6f649384800031969bfdad44409d6dc57ff23e97b283b08c857ebbf20f78"
+    },
+    {
+      "path": "src/services/workflows/commands/__tests__/directory.command.test.ts",
+      "sha256": "b1c36a2e1c93e250a28ffb5c14a41221ec3d7d0f5f098f9acff0c6c13bfbf449"
+    },
+    {
+      "path": "src/services/workflows/__tests__/character-proposal-approval.test.ts",
+      "sha256": "6960876c6ac311f0cfd731adaec12d62a24e6071329496a9a2fefff64cd06434"
+    },
+    {
+      "path": "src/services/workflows/__tests__/blueprint-character-sync.test.ts",
+      "sha256": "facc2614974b03e19218c726fc5ac6dfbfba6bbe314c198625575b3f49f9fa61"
+    },
+    {
+      "path": "src/services/workflows/__tests__/structured-batch-executor.test.ts",
+      "sha256": "17076d506f12bb042e1d3495dc12518c4fdf7c21b80e39defd23e3bf2082d9eb"
+    },
+    {
+      "path": "src/services/workflows/__tests__/character-card-normalizer.test.ts",
+      "sha256": "22d959e98dc06e5ad5aa96b9a080aea79e880b37fcfcbf21e52a581ecec75175"
+    }
+  ]
+}

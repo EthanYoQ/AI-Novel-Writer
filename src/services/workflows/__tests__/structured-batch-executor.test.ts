@@ -1711,3 +1711,38 @@ it('failure exposes only fully validated items, never the later JSON fragment', 
   expect(result.validatedItems).toEqual([{ chapterNumber: 1, title: '第1章' }])
   expect(result.receipt.calls).toBe(2)
 })
+
+describe('accepted artifact provenance', () => {
+  it('excludes a truncated parent and records only the successful split responses with exact keys', async () => {
+    let attempt = 0
+    const base = createSession(async ({ items }) => items.length > 1
+      ? { status: 'incomplete', reason: 'output_limit', content: '{"blueprints":[', requestedTokens: 200 }
+      : { status: 'completed', content: JSON.stringify({ blueprints: items.map(chapterNumber => ({ chapterNumber, title: '完整标题' })) }), requestedTokens: 200 })
+    const result = await createStructuredBatchExecutor({ contract: blueprintContract, session: { async complete(...args) {
+      const outcome = await base.complete(...args)
+      const artifactId = `artifact-${++attempt}`
+      outcome.receipt.visibleArtifact = { artifactId, attemptId: artifactId, revision: 1, textHash: 'a'.repeat(64) }
+      return outcome
+    } } }).execute({ items: [1, 2], limits: { maxBatchItems: 2 } })
+    expect(result.ok).toBe(true)
+    expect(result.receipt.calls).toBe(3)
+    expect(result.receipt.attempts).toHaveLength(3)
+    expect(result.receipt.acceptedArtifacts?.map(item => [item.artifact.artifactId, item.itemKeys])).toEqual([
+      ['artifact-2', [1]], ['artifact-3', [2]],
+    ])
+  })
+  it('records the syntax-repaired receipt rather than its invalid predecessor', async () => {
+    let attempt = 0
+    const receipt = (artifactId: string) => ({ ...attemptReceipt(++attempt, 200, attempt * 200, 'stop'),
+      visibleArtifact: { artifactId, attemptId: artifactId, revision: 1, textHash: 'a'.repeat(64) } })
+    const complete = vi.fn(async () => ({ status: 'completed', finishReason: 'stop',
+      content: attempt === 0 ? '{"blueprints":[{"chapterNumber":1,"title":"完整标题",}]}' : '{"blueprints":[{"chapterNumber":1,"title":"完整标题"}]}',
+      receipt: receipt(attempt === 0 ? 'invalid' : 'repaired'),
+    } as GenerationOutcome))
+    const result = await createStructuredBatchExecutor({ contract: blueprintContract, session: { complete } })
+      .execute({ items: [1], limits: { maxBatchItems: 1 } })
+    expect(result.ok).toBe(true)
+    expect(result.receipt.calls).toBe(2)
+    expect(result.receipt.acceptedArtifacts?.map(item => item.artifact.artifactId)).toEqual(['repaired'])
+  })
+})

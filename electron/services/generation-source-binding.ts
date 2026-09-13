@@ -8,7 +8,8 @@ import type { ContextSnapshot, SourceRef } from '../../src/shared/source-ref';
 import { inspectWritingSkillMarkdown, WRITING_SKILL_STAGES, type WritingSkillStage } from '../../src/shared/writing-skills';
 import type { WritingLanguage } from '../../src/shared/writing-language';
 import type { RunBinding } from '../repositories/generation-run-repository';
-import type { GenerationAuthorInput } from '../../src/shared/generation-owner-contract';
+import type { GenerationAuthorInput, GenerationBatchIntent } from '../../src/shared/generation-owner-contract';
+import type { GenerationKnowledgeSnapshot } from '../../src/shared/generation-knowledge';
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>;
 export interface GenerationSourceBindingInput {
     projectId: string;
@@ -21,6 +22,9 @@ export interface GenerationSourceBindingInput {
     promptKeys: readonly string[];
     skillStages: readonly WritingSkillStage[];
     authorInputs?: readonly GenerationAuthorInput[];
+    batchId?: string;
+    batchIntent?: GenerationBatchIntent;
+    knowledgeSnapshot?: GenerationKnowledgeSnapshot;
     modelReceipt: SafeGenerationModelReceipt;
     policy: Readonly<Record<string, unknown>>;
     outputContract: string | Readonly<Record<string, unknown>>;
@@ -153,6 +157,22 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         const core = without(raw, ['created_at', 'updated_at', 'character_states', 'plot_tree_snapshot']);
         const language: WritingLanguage = core.writing_language === 'en-US' ? 'en-US' : 'zh-CN';
         add('project-core:main', 0, stable(core), 'author-constraint', 'current project settings');
+        if (input.operation === 'chapter-draft') {
+            const characters = deps.db.prepare('SELECT * FROM characters ORDER BY character_id').all() as Record<string, unknown>[];
+            add('characters:all', 0, stable(characters.map(row => without(row, ['created_at', 'updated_at']))), 'author-constraint', 'current structured character facts consumed by drafting');
+            const relationships = deps.db.prepare('SELECT * FROM character_relationships ORDER BY relationship_id').all() as Record<string, unknown>[];
+            add('character-relationships:all', 0, stable(relationships.map(row => without(row, ['created_at', 'updated_at']))), 'author-constraint', 'current identity relationships projected into character profiles');
+            const plans = deps.db.prepare('SELECT * FROM narrative_thread_plans ORDER BY id').all() as Record<string, unknown>[];
+            const events = deps.db.prepare("SELECT c.id,c.plan_id,c.draft_id,c.event_type,c.evidence,c.reason,d.chapter_number,o.chapter_title FROM narrative_thread_confirmations c JOIN drafts d ON d.id=c.draft_id AND d.status='finalized' JOIN finalization_outbox o ON o.draft_id=d.id ORDER BY d.chapter_number,c.id").all();
+            add('narrative-thread-context:all', 0, stable({ plans: plans.map(row => without(row, ['created_at', 'updated_at'])), events }), 'unconfirmed-continuity', 'author plans and confirmed event evidence used to select active narrative context');
+            const currentDraft = deps.db.prepare('SELECT d.id,d.version,d.status,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC,d.id DESC LIMIT 1').get(input.chapterNumber) ?? null;
+            add(`draft-target:${input.chapterNumber}`, 0, stable(currentDraft), 'author-constraint', 'prevent a later draft or author edit from being silently superseded');
+            const catalog = deps.db.prepare("SELECT d.id,d.chapter_number,d.version,d.status,c.body,o.finalization_id,o.content_hash,o.content_snapshot FROM drafts d JOIN contents c ON c.id=d.content_id LEFT JOIN finalization_outbox o ON o.draft_id=d.id WHERE d.chapter_number < ? AND (d.status='finalized' OR NOT EXISTS (SELECT 1 FROM drafts newer WHERE newer.chapter_number=d.chapter_number AND newer.status IN ('draft','revised','finalized') AND newer.version>d.version)) ORDER BY d.id").all(input.chapterNumber) as Record<string, unknown>[];
+            add('draft-continuity-catalog', 0, stable(catalog.map(row => ({ ...without(row, ['body', 'content_snapshot']), bodyHash: hash(String(row.body)), snapshotHash: row.content_snapshot === null ? null : hash(String(row.content_snapshot)) }))), 'unconfirmed-continuity', 'source catalog frozen before renderer selects continuity material');
+            const locators = deps.db.prepare('SELECT * FROM summary_snapshots WHERE draft_id IS NOT NULL AND chapter_number < ? ORDER BY draft_id,id').all(input.chapterNumber) as Record<string, unknown>[];
+            const watermark = deps.db.prepare("SELECT * FROM continuity_projection_meta WHERE id='main'").get();
+            add('continuity-locators', 0, stable({ rows: locators.map(row => without(row, ['created_at', 'character_states'])), watermark }), 'unconfirmed-continuity', 'derived locators and invalidation watermark; never promoted to author facts');
+        }
         let brief: Record<string, unknown> | null = null;
         if (input.chapterNumber !== undefined) {
             const row = deps.db.prepare('SELECT * FROM blueprints WHERE chapter_number=?').get(input.chapterNumber) as Record<string, unknown> | undefined;
@@ -179,6 +199,8 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
                 } | undefined;
                 if (!row || typeof row.body !== 'string')
                     fail('GENERATION_SOURCE_MISSING');
+                if (input.operation === 'chapter-draft' && row.chapter_number >= input.chapterNumber!)
+                    fail('GENERATION_DRAFT_CONTINUITY_RANGE_INVALID');
                 if (finalized) {
                     const latest = deps.db.prepare("SELECT id FROM drafts WHERE chapter_number=? AND status='finalized' ORDER BY version DESC,id DESC LIMIT 1").pluck().get(row.chapter_number);
                     const receipt = deps.db.prepare('SELECT * FROM finalization_outbox WHERE draft_id=?').get(id) as {
@@ -211,6 +233,18 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         bytes: Buffer | null;
     }[] = [];
     const observe = (root: string, relative: string, optional = false) => { const bytes = readFile(root, relative, optional); observed.push({ root, relative, bytes }); return bytes; };
+    const guidanceNames = (): string[] => {
+        const directory = path.join(deps.projectStorageRoot, 'prompts');
+        if (!fs.existsSync(directory)) return [];
+        if (!fs.lstatSync(directory).isDirectory() || fs.lstatSync(directory).isSymbolicLink()) fail('GENERATION_ASSET_UNSAFE');
+        return fs.readdirSync(directory, { withFileTypes: true }).filter(entry => !entry.isDirectory() && entry.name.endsWith('.md')).map(entry => entry.name).sort();
+    };
+    const selectedGuidance = input.operation === 'chapter-draft' ? guidanceNames() : [];
+    for (const name of selectedGuidance) {
+        const bytes = observe(deps.projectStorageRoot, `prompts/${name}`)!;
+        assets.push({ scope: 'project-guidance', identity: name, hash: hash(bytes) });
+        add(`project-guidance:${name}`, 0, bytes.toString('utf8'), 'author-constraint', 'project Markdown guidance consumed by drafting');
+    }
     for (const key of input.promptKeys) {
         const builtin = deps.readBuiltinPrompt(key, facts.language);
         if (typeof builtin !== 'string' || !builtin)
@@ -269,9 +303,14 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         if (!isDeepStrictEqual(now, file.bytes))
             fail('GENERATION_ASSET_CHANGED_DURING_SNAPSHOT');
     }
+    if (input.operation === 'chapter-draft' && !isDeepStrictEqual(selectedGuidance, guidanceNames())) fail('GENERATION_ASSET_CHANGED_DURING_SNAPSHOT');
+    if (input.knowledgeSnapshot) {
+        add('knowledge-selection', 0, stable(input.knowledgeSnapshot), 'unconfirmed-continuity', 'main-verified immutable knowledge selection and source identities');
+        for (const item of input.knowledgeSnapshot.items) add(`kb:${item.documentId}:${item.chunkId}`, item.revision, item.text, 'unconfirmed-continuity', 'verified original knowledge passage');
+    }
     if (deps.db.pragma('data_version', { simple: true }) !== dataVersion || deps.db.prepare('SELECT total_changes()').pluck().get() !== changes)
         fail('GENERATION_SOURCE_CHANGED_DURING_SNAPSHOT');
-    const sourceManifest = { version: 1, operation: input.operation, ...(input.chapterNumber !== undefined ? { chapterNumber: input.chapterNumber } : {}), selectedDraftIds: [...input.selectedDraftIds], selectedFinalizedDraftIds: [...input.selectedFinalizedDraftIds], ...(blueprintChapters.length ? { selectedBlueprintChapterNumbers: [...blueprintChapters] } : {}), promptKeys: [...input.promptKeys], skillStages: [...input.skillStages], ...(authorInputs.length ? { authorInputs } : {}), modelReceipt, policy: input.policy, outputContract: input.outputContract };
+    const sourceManifest = { version: 1, operation: input.operation, ...(input.knowledgeSnapshot ? { knowledgeSnapshot: structuredClone(input.knowledgeSnapshot) } : {}), ...(input.batchId ? { batchId: input.batchId } : {}), ...(input.batchIntent ? { batchIntent: structuredClone(input.batchIntent) } : {}), ...(input.chapterNumber !== undefined ? { chapterNumber: input.chapterNumber } : {}), selectedDraftIds: [...input.selectedDraftIds], selectedFinalizedDraftIds: [...input.selectedFinalizedDraftIds], ...(blueprintChapters.length ? { selectedBlueprintChapterNumbers: [...blueprintChapters] } : {}), promptKeys: [...input.promptKeys], skillStages: [...input.skillStages], ...(authorInputs.length ? { authorInputs } : {}), modelReceipt, policy: input.policy, outputContract: input.outputContract };
     const contextHash = hash(stable(contextSources.map(({ ref, ...entry }) => ({ ...entry, ref: without(ref as unknown as Record<string, unknown>, ['epoch']) }))));
     const context: ContextSnapshot = { projectId: input.projectId, epoch: input.epoch, id: `context:${contextHash}`, hash: contextHash, sources: contextSources, omissions: [], estimate: { methodVersion: 'utf8-bytes-v1', inputUnits: materials.reduce((sum, item) => sum + Buffer.byteLength(item.text), 0) } };
     const fingerprint = { chapterBriefHash: hash(stable(facts.brief)), authorGuidanceHash: hash(stable(authorInputs.length ? [facts.core, authorInputs] : facts.core)), dependencyHash: hash(stable(materials.filter(item => /^(draft|finalized):/.test(item.ref.sourceId)).map(item => ({ ...item.ref, epoch: undefined })))), contextSnapshotHash: contextHash, templateHash: hash(stable(assets)), skillSnapshotHash: hash(stable(skills)), modelLeaseRevision: hash(stable(modelReceipt)), policyHash: hash(stable(input.policy)), outputContractHash: hash(stable(input.outputContract)) };

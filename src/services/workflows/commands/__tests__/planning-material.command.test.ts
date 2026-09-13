@@ -1,3 +1,5 @@
+import { proposalRuntimeFixture, proposalBatchFixture } from './character-proposal-runtime.fixture'
+import type { CharacterProposalSource, CharacterProposalBatch } from '../../../../shared/character-proposal'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useLLMStore } from '../../../../stores/llm-store'
@@ -7,11 +9,10 @@ import {
   CommitPlanningMaterialCharactersCommand,
   ExtractPlanningMaterialCharactersCommand as RuntimeCommand,
 } from '../planning-material.command'
-import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
 
 class ExtractPlanningMaterialCharactersCommand extends RuntimeCommand {
   constructor(...args: ConstructorParameters<typeof RuntimeCommand>) {
-    super(args[0], workflowRuntimeDependencies)
+    super(args[0], proposalRuntimeFixture())
   }
 }
 
@@ -37,7 +38,9 @@ const originalDefaultModelId = useLLMStore.getState().defaultModelId
 describe('planning material character extraction', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.stubGlobal('window', { aiNovelAPI: { invoke: vi.fn(async (channel: string) => {
+    vi.stubGlobal('window', { aiNovelAPI: { invoke: vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       throw new Error(`Unexpected IPC channel: ${channel}`)
@@ -57,6 +60,8 @@ describe('planning material character extraction', () => {
 
   it('keeps extracted candidates uncommitted until the confirmation command runs', async () => {
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'db:character-roster-read') {
@@ -112,19 +117,17 @@ describe('planning material character extraction', () => {
     await new CommitPlanningMaterialCharactersCommand().execute({ step: {}, context, callbacks })
 
     expect(generateStream).toHaveBeenCalledOnce()
-    expect(invoke).toHaveBeenCalledWith(
-      'db:character-roster-commit',
-      expect.objectContaining({
-        intent: 'novel_import',
-        entries: [expect.objectContaining({ name: '周岚', role: 'supporting' })],
-      }),
-      projectPath,
-      projectSession,
-    )
+    expect(invoke).toHaveBeenCalledWith('character-proposal:approve', expect.objectContaining({
+      proposalBatchId: 'fixture-proposals', expectedRevision: 0,
+      selections: [{ selectionKey: '1:1:character:1', action: 'create' }],
+    }), projectSession)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:character-roster-commit')).toBe(false)
   })
 
   it('does not commit extracted candidates after confirmation is cancelled', async () => {
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       throw new Error(`Unexpected IPC channel: ${channel}`)
@@ -171,6 +174,8 @@ describe('planning material character extraction', () => {
     'accepts %s and stages normalized cards without committing them',
     async (responseFormat) => {
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'db:character-roster-read') {
@@ -293,8 +298,10 @@ describe('planning material character extraction', () => {
     },
   )
 
-  it('preserves complementary facts when one character appears in two material chunks', async () => {
+  it('preserves separate source facts when equal names appear in two material chunks', async () => {
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'db:character-roster-read') {
@@ -357,26 +364,18 @@ describe('planning material character extraction', () => {
     const preview = await command.execute({ step: {}, context, callbacks })
     await new CommitPlanningMaterialCharactersCommand().execute({ step: {}, context, callbacks })
 
-    const commitRequest = invoke.mock.calls.find(([channel]) => channel === 'db:character-roster-commit')?.[1] as {
-      entries: Array<{
-        name: string
-        background: string
-        notes: string
-        relationships: Array<{ target: string; relation: string }>
-      }>
-    }
-    const zhouLan = commitRequest.entries.filter(character => character.name === '周岚')
-    expect(preview).toContain('守馆二十年；曾负责事故善后')
-    expect(preview).toContain('隐瞒历史事故；拒绝公开幸存者名单')
-    expect(zhouLan).toEqual([expect.objectContaining({
-      background: '守馆二十年；曾负责事故善后',
-      notes: '隐瞒历史事故；拒绝公开幸存者名单',
-      relationships: [
-        { target: '林晓', relation: '事故知情人' },
-        { target: '林晓', relation: '秘密保护' },
-        { target: '林晓', relation: '共同守密' },
-      ],
-    })])
+    const zhouLan = (context.data.planningMaterialCharacterRecords as { rawCard: Record<string, unknown> }[]).map(item => item.rawCard).filter(card => card.name === '周岚')
+    expect(preview).toContain('守馆二十年')
+    expect(preview).toContain('曾负责事故善后')
+    expect(preview).not.toContain('守馆二十年；曾负责事故善后')
+    expect(zhouLan).toEqual([
+      expect.objectContaining({ background: '守馆二十年', notes: '隐瞒历史事故' }),
+      expect.objectContaining({ background: '曾负责事故善后', notes: '拒绝公开幸存者名单' }),
+    ])
+    expect(context.data.planningMaterialCharacterRecords).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceId: '1:1', selectionKey: '1:1:character:1' }),
+      expect.objectContaining({ sourceId: '1:2', selectionKey: '1:2:character:1' }),
+    ]))
     expect(generateStream).toHaveBeenCalledTimes(1)
   })
 
@@ -437,7 +436,9 @@ describe('planning material character extraction', () => {
     ['missing', { name: '林晓' }],
     ['unsupported', { name: '林晓', role: 'mentor' }],
   ] as const)('rejects a %s character role before committing the roster', async (_case, card) => {
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       throw new Error(`Unexpected IPC channel: ${channel}`)
@@ -618,5 +619,21 @@ describe('planning material character extraction', () => {
       .execute({ step: {}, context, callbacks })).resolves.toContain('未发现明确角色')
     expect(generateStream).toHaveBeenCalledOnce()
     expect(context.data).toHaveProperty('planningMaterialCharacterCandidates', [])
+  })
+})
+
+
+describe('规划材料候选来源', () => {
+  it('同名跨来源与同来源多记录各自保留，不串字段或关系', async () => {
+    const { planningMaterialCharacterRecords } = await import('../planning-material.command')
+    const first = { name: '林岚', background: '甲原文', relationships: [{ target: '顾问', relation: '导师' }] }
+    const second = { name: '林岚', background: '乙原文', relationships: '关系未明确' }
+    const records = planningMaterialCharacterRecords([
+      { sourceId: '1:1', characterCards: [first, second] },
+      { sourceId: '2:1', characterCards: [second] },
+    ])
+    expect(records.map(record => record.selectionKey)).toEqual(['1:1:character:1', '1:1:character:2', '2:1:character:1'])
+    expect(records.map(record => record.rawCard)).toEqual([first, second, second])
+    expect(records.map(record => record.sourceId)).toEqual(['1:1', '1:1', '2:1'])
   })
 })

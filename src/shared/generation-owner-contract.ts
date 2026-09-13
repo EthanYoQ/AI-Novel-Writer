@@ -1,6 +1,7 @@
 import type { GenerationTask } from '../services/generation/generation-harness'
 import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot } from '../services/generation/generation-runtime'
 import type { WritingSkillStage } from './writing-skills'
+import type { GenerationKnowledgeSnapshot } from './generation-knowledge'
 
 /** Raw text explicitly supplied for this author action, never inferred candidate text. */
 export interface GenerationAuthorInput { id: string; text: string }
@@ -16,12 +17,83 @@ export interface DirectoryGenerationProgress {
   authorInputs?: readonly GenerationAuthorInput[]
 }
 export interface VisibleCompositionReceipt {
-  algorithm: 'visible-append-v1'
+  algorithm: VisibleCompositionAlgorithm
   text: string
   textHash: string
   artifactIds: string[]
   sources: { artifactId: string; revision: number; textHash: string }[]
   authorInputs?: GenerationAuthorInput[]
+}
+export type VisibleCompositionAlgorithm = 'visible-append-v1' | 'draft-visible-v1'
+export interface GenerationDraftCommitReceipt {
+  success: true
+  id: number
+  version: number
+  contentHash: string
+  content: string
+}
+export interface GenerationDraftCommitRequest {
+  handle: MainGenerationRunHandle
+  expectedCompositionHash: string
+  chapterNumber: number
+  source: 'write'
+  batchId?: string
+}
+export interface GenerationRecoveryContext {
+  modelId: string
+  handle: MainGenerationRunHandle
+  operation: string
+  chapterNumber?: number
+  authorInputs: GenerationAuthorInput[]
+  selectedDraftIds: number[]
+  selectedFinalizedDraftIds: number[]
+  selectedBlueprintChapterNumbers: number[]
+  composition: VisibleCompositionReceipt | null
+  lastCompositionFinishReason: string | null
+  attemptedPurposes: string[]
+  savedDraft?: GenerationDraftCommitReceipt
+  batchId?: string
+  knowledgeSnapshot?: GenerationKnowledgeSnapshot
+  /** Present only when the originally selected drafts still match their frozen source references. */
+  selectedDrafts?: PreparedDraftContext['selectedDrafts']
+}
+export interface PrepareDraftContextRequest {
+  chapterNumber: number
+  modelId: string
+  promptKeys: string[]
+  skillStages: WritingSkillStage[]
+  authorInputs: GenerationAuthorInput[]
+  query: string
+  selectedDraftIds: number[]
+  batchId?: string
+}
+export interface PreparedDraftContext {
+  preparationId: string
+  knowledgeSnapshot: GenerationKnowledgeSnapshot
+  selectedDrafts: { draftId: number; chapterNumber: number; version: number; contentHash: string; content: string }[]
+}
+export interface GenerationBatchIntent {
+  mode: 'draft_review' | 'auto_finalize'
+  range: { startChapter: number; endChapter: number }
+  targetUnits: number
+}
+export interface BeginGenerationBatchRequest extends GenerationBatchIntent {
+  uiActionNonce: string
+  modelId: string
+  authorInputs: GenerationAuthorInput[]
+  promptKeys: string[]
+  skillStages: WritingSkillStage[]
+}
+export interface GenerationBatchProgress extends GenerationBatchIntent {
+  modelId: string
+  batchId: string
+  rootHandle: MainGenerationRunHandle
+  completedChapters: { chapterNumber: number; draftId: number; version: number; contentHash: string;
+    sourceRunHandle: MainGenerationRunHandle; finalizationId?: string; pendingFinalizationId?: string; postProcessComplete?: boolean }[]
+  currentChapterRunHandle?: MainGenerationRunHandle
+  /** Null only when all requested effects are confirmed; auto_finalize waits for its outbox. */
+  nextChapterNumber: number | null
+  authorInputs: GenerationAuthorInput[]
 }
 
 /** Selection and semantic intent only. Main owns identity, source hashes and budgets. */
@@ -42,6 +114,11 @@ export interface BeginGenerationRequest {
   parentRootActionId?: string
   /** Explicit next-stage navigation from an atomically committed directory range. */
   continueDirectoryOperationId?: string
+  /** Explicit batch lineage; only main creates the immutable batch intent. */
+  batchId?: string
+  batchIntent?: GenerationBatchIntent
+  /** Main-issued before asynchronous drafting context reads. */
+  preparationId?: string
 }
 export interface ExecuteGenerationRequest {
   handle: MainGenerationRunHandle
@@ -49,8 +126,15 @@ export interface ExecuteGenerationRequest {
   task: GenerationTask
 }
 export interface GenerationOwnerChannels {
+  'generation:prepare-draft-context': { args: [PrepareDraftContextRequest]; return: PreparedDraftContext }
+  'generation:commit-draft': { args: [GenerationDraftCommitRequest]; return: GenerationDraftCommitReceipt }
+  'generation:read-context': { args: [{ handle: MainGenerationRunHandle }]; return: GenerationRecoveryContext }
+  'generation:begin-batch': { args: [BeginGenerationBatchRequest]; return: GenerationBatchProgress }
+  'generation:read-batch': { args: [{ batchId: string }]; return: GenerationBatchProgress }
+  'generation:list-batches': { args: []; return: GenerationBatchProgress[] }
+  'generation:confirm-batch-finalization': { args: [{ batchId: string; chapterNumber: number; finalizationId: string }]; return: GenerationBatchProgress }
   'generation:list-directory-progress': { args: []; return: DirectoryGenerationProgress[] }
-  'generation:compose-visible': { args: [MainGenerationRunHandle, string[], string]; return: VisibleCompositionReceipt }
+  'generation:compose-visible': { args: [MainGenerationRunHandle, string[], string, VisibleCompositionAlgorithm?]; return: VisibleCompositionReceipt }
   'generation:read-visible-composition': { args: [MainGenerationRunHandle]; return: VisibleCompositionReceipt | null }
   'generation:begin': { args: [BeginGenerationRequest]; return: MainGenerationRunView }
   'generation:execute': { args: [ExecuteGenerationRequest]; return: MainGenerationExecuteReceipt }

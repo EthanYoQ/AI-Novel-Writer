@@ -1120,6 +1120,7 @@ export function registerDatabaseController() {
       triggerSourceId: string
       sourceLabel: string
       steps: Array<{ key: string; label: string; critical: boolean }>
+      finalizedSource?: import('../../src/shared/finalized-continuity').FinalizedSourceIdentity
     },
     expectedProjectPath: string,
   ) => {
