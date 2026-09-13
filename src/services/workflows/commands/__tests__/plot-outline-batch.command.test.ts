@@ -217,7 +217,7 @@ function harnessWith(
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(),
       setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn(),
     },
@@ -234,7 +234,7 @@ function makeCommand(options?: { resumeSynopsis?: boolean; synopsisRange?: { fro
     ['synopsis'],
     snapshot(),
     createWorkflowRuntimeDependencies(),
-    options,
+    { ...options, ...(options?.resumeSynopsis ? { resumeHandle: { projectId: 'main', epoch: 'lease-main', rootActionId: '合成恢复根', runId: '合成恢复运行' } } : {}) },
   )
 }
 

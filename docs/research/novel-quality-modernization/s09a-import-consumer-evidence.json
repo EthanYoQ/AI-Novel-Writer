@@ -1,0 +1,37 @@
+{
+  "slice": "S09A text-import renderer receipt consumer",
+  "status": "READY_FOR_INDEPENDENT_REVIEW",
+  "actualModelCalls": 0,
+  "tests": {
+    "focused": {
+      "files": 2,
+      "passed": 32,
+      "failed": 0,
+      "log": ".runtime/.cache/novel-quality-modernization/s09a-import-consumer.log"
+    },
+    "eslint": "PASS",
+    "typecheck": "PASS"
+  },
+  "proof": [
+    "New-lane receipt rejects missing/reordered/changed source cards, altered relationships/dynamic fields/core/operation, mixed receipt lanes and malformed source hashes.",
+    "Proposal source is compared with the exact requested payload, not a set of display names.",
+    "New-lane log states proposals saved pending adoption and zero characters created; no approval or legacy write fallback is issued.",
+    "Existing legacy roster receipt remains readable with its existing coverage check.",
+    "Current legacy inference parser rejects duplicate names rather than merging them. Exact raw visible inference remains in workflow context before validation, including rejected ambiguity."
+  ],
+  "boundaries": [
+    "Import candidate model/ledger proof is not qualified by this renderer slice. Main keeps these candidates unavailable for automatic adoption pending S06D proof.",
+    "Raw context candidate is in-memory retention, not a new durable recovery guarantee.",
+    "No import-inference-contract expansion, production database/schema changes, real-model calls or ABI changes."
+  ],
+  "files": [
+    {
+      "path": "src/services/workflows/commands/import-novel.command.ts",
+      "sha256": "20eed9fdd99d46f9d48a8facd35c3321bfbc02a2af81442b6c531343bbd831cc"
+    },
+    {
+      "path": "src/services/workflows/commands/__tests__/import-novel.command.test.ts",
+      "sha256": "fff164c01df4c6ce5357e3bc5e5d087f7dd860ba9a0cfd8d82bfa2612efab500"
+    }
+  ]
+}

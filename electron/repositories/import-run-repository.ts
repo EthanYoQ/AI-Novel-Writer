@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import { countDraftUnits } from '../../src/shared/draft-units'
 
 import {
@@ -270,7 +271,12 @@ function assertEffectPayloadSchema(kind: ImportRunEffectKind, payload: unknown):
     return
   }
   if (kind === 'project-writing-style') {
-    if (!exactKeys(payload, ['writingStyle']) || typeof payload.writingStyle !== 'string' || !payload.writingStyle.trim()) {
+    const hasGeneration = Object.hasOwn(payload, 'generationRunHandle')
+    const handle = payload.generationRunHandle
+    if (!exactKeys(payload, hasGeneration ? ['writingStyle', 'generationRunHandle'] : ['writingStyle'])
+      || typeof payload.writingStyle !== 'string' || !payload.writingStyle.trim()
+      || hasGeneration && (!isRecord(handle) || !exactKeys(handle, ['projectId', 'epoch', 'rootActionId', 'runId'])
+        || Object.values(handle).some(value => typeof value !== 'string' || !value.trim()))) {
       throw new Error()
     }
     return
@@ -361,6 +367,15 @@ function assertCommittedEffectSchema(kind: ImportRunEffectKind, payload: unknown
     return
   }
   if (kind === 'project-global-facts') {
+    if (isRecord(effectReceipt.characterProposal)) {
+      if (!exactKeys(effectReceipt, ['operationId', 'payloadHash', 'idempotent', 'core', 'characterProposal', 'proposalSource'])
+        || effectReceipt.operationId !== payload.operationId || typeof effectReceipt.payloadHash !== 'string' || !SHA256.test(effectReceipt.payloadHash)
+        || typeof effectReceipt.idempotent !== 'boolean' || !isRecord(effectReceipt.core) || !canonicalEqual(effectReceipt.proposalSource, payload)
+        || !exactKeys(effectReceipt.characterProposal, ['proposalBatchId', 'sourceHash'])
+        || typeof effectReceipt.characterProposal.proposalBatchId !== 'string' || !/^cpb:[a-f0-9]{64}$/.test(effectReceipt.characterProposal.proposalBatchId)
+        || typeof effectReceipt.characterProposal.sourceHash !== 'string' || !SHA256.test(effectReceipt.characterProposal.sourceHash)) throw new Error()
+      return
+    }
     if (
       !exactKeys(effectReceipt, ['operationId', 'payloadHash', 'idempotent', 'core', 'roster'])
       || effectReceipt.operationId !== payload.operationId
@@ -414,6 +429,13 @@ function assertCompletedBlueprintSyncOperation(operation: Record<string, unknown
 
   if (completion.status === 'already-satisfied') {
     if (!exactKeys(completion, ['blueprintCommitOperationId', 'operationId', 'status'])) throw new Error()
+    return
+  }
+  if (completion.status === 'proposal-staged') {
+    if (!exactKeys(completion, ['blueprintCommitOperationId', 'operationId', 'status', 'proposalReceipt'])
+      || !isRecord(completion.proposalReceipt) || !exactKeys(completion.proposalReceipt, ['proposalBatchId', 'sourceHash'])
+      || typeof completion.proposalReceipt.proposalBatchId !== 'string' || !/^cpb:[a-f0-9]{64}$/.test(completion.proposalReceipt.proposalBatchId)
+      || typeof completion.proposalReceipt.sourceHash !== 'string' || !SHA256.test(completion.proposalReceipt.sourceHash)) throw new Error()
     return
   }
   if (
@@ -2235,6 +2257,7 @@ export class ImportRunRepository {
     batchId: string,
     execution: ImportRunExecutionLease,
     now = Date.now(),
+    assertGenerationSources?: (handle: MainGenerationRunHandle) => void,
   ): ImportRunEffectCommitResult {
     return db().transaction(() => {
       const run = assertExecution(runId, execution, now)
@@ -2260,9 +2283,13 @@ export class ImportRunRepository {
           )
           break
         case 'project-writing-style': {
-          const payload = parseJson<{ writingStyle?: unknown }>(row.payload_json, {})
+          const payload = parseJson<{ writingStyle?: unknown; generationRunHandle?: MainGenerationRunHandle }>(row.payload_json, {})
           if (typeof payload.writingStyle !== 'string' || !payload.writingStyle.trim()) {
             throw new Error('导入文风 receipt 载荷无效')
+          }
+          if (payload.generationRunHandle) {
+            if (!assertGenerationSources) throw new Error('GENERATION_GUARD_REQUIRED')
+            assertGenerationSources(payload.generationRunHandle)
           }
           ProjectCoreRepository.update({ writingStyle: payload.writingStyle.trim() })
           effectReceipt = { writingStyle: payload.writingStyle.trim() }

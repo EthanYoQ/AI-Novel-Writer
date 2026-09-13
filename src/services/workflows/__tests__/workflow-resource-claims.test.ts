@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 
 import { workflowResourceClaimsConflict } from '../../../shared/workflow-resource-claims'
 import type { ImportPurpose, ImportRunSnapshot } from '../../../shared/import-run'
@@ -50,7 +50,7 @@ function createFinalize(chapterNumber: number) {
     projectPath: PROJECT_PATH,
     chapterNumber,
     chapterTitle: `Chapter ${chapterNumber}`,
-    draftPath: `vela://draft/${chapterNumber}`,
+    draftPath: `ai-novel://draft/${chapterNumber}`,
     draftContent: `Draft ${chapterNumber}`,
   }, PROJECT_SESSION)
 }
@@ -110,7 +110,23 @@ function createImport(
   return createImportWorkflow(params)
 }
 
+beforeEach(() => {
+  // 工作流夹具显式提供桌面桥接；未知调用仍拒绝，避免掩盖真实 IPC 缺失。
+  vi.stubGlobal('window', {
+    aiNovelAPI: {
+      invoke: vi.fn(async (channel: string) => {
+        if (channel === 'skills:list-user') return []
+        if (channel === 'fs:check-exists') return false
+        throw new Error(`测试未配置桌面调用：${channel}`)
+      }),
+      on: vi.fn(() => () => {}),
+      once: vi.fn(),
+    },
+  })
+})
+
 afterEach(() => {
+  vi.unstubAllGlobals()
   useProjectStore.setState({ currentProject: null })
   useWorkflowStore.setState({
     activeRuns: [],

@@ -93,7 +93,7 @@ beforeEach(() => {
     }
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -115,7 +115,7 @@ afterEach(async () => {
   container.remove()
   useLLMStore.setState({ defaultModelId: null, activeRequests: new Map() })
   useLocaleStore.setState({ locale: 'zh-CN' })
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
 })
 
 describe('CodeMirror editor AI generation boundary', () => {

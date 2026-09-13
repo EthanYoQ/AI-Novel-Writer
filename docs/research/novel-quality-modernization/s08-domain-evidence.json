@@ -1,0 +1,73 @@
+{
+  "specId": "S08",
+  "dependencySha": "5c5069673af4d2ef3f8c3e57ac9133e96a898255",
+  "status": "DOMAIN_AND_CENTRAL_READY_PENDING_REVIEW",
+  "migration": {
+    "id": "M02",
+    "from": 2,
+    "to": 3,
+    "owner": "S08"
+  },
+  "tests": {
+    "suites": 6,
+    "passed": 97
+  },
+  "eslint": "PASS",
+  "typecheck": "PASS",
+  "modelCalls": 0,
+  "notRun": [
+    "full application suite on schema3",
+    "cloud CI",
+    "real author migration",
+    "S09 consumer adoption",
+    "hardware power loss"
+  ],
+  "files": [
+    {
+      "path": "electron/migrations/m02-character-identity.ts",
+      "sha256": "64d03a3291621ace63ad827905d811edc06e12d89281b203c50c5770574d5d69"
+    },
+    {
+      "path": "electron/repositories/character-repository.ts",
+      "sha256": "98c6280d703f81879a4c9407b46b134e9e8704c970ff3099cb67c945ac985f77"
+    },
+    {
+      "path": "electron/repositories/character-roster-repository.ts",
+      "sha256": "7ad76650feeae4e508a7d2d1f31a0dfd61a00f2b555046188db2fa4505849ee5"
+    },
+    {
+      "path": "electron/repositories/character-roster-schema.ts",
+      "sha256": "90c2ae64a7959f2319e03d4681e7a8bc518e33cdf4af4140bfb07f8dec8ff0b0"
+    },
+    {
+      "path": "src/shared/character-identity.ts",
+      "sha256": "19854bfb2f968a6673cc91f942b52348751babc17e93480b3f8a4e269004b757"
+    },
+    {
+      "path": "electron/migrations/__tests__/m02-character-identity.test.ts",
+      "sha256": "ad5f3d0f23544c863177eee59fed8ecaafc890685f4f7c3011f46d2677784508"
+    },
+    {
+      "path": "electron/repositories/__tests__/character-identity-repository.test.ts",
+      "sha256": "914097b9819b74484e9ac1a80cbb4a1258ddadde03a83a052043899b7c15261b"
+    },
+    {
+      "path": "src/shared/__tests__/character-identity.test.ts",
+      "sha256": "19821be4f103cd7f4a275139f1b2cbbf4d7a45d1fbc05623e0602cd52de775c5"
+    },
+    {
+      "path": "docs/research/novel-quality-modernization/s08-domain-evidence.md",
+      "sha256": "b1605b32baba34e0925a7b0597788aa9edfc5a38caaee8bdaffd1d8cc4012af9"
+    },
+    {
+      "path": "electron/repositories/__tests__/character-roster-repository.test.ts",
+      "sha256": "d2d8ae1c415ae02f24268597466e709b48e1b1ac30a6afe6dce3fbc442dfe0bb"
+    }
+  ],
+  "reviewCorrections": [
+    "reject unknown/invalid action-source combinations before writes",
+    "reject invalid identity and alias version evidence in resolver",
+    "reject malformed persisted alias and identity revisions on M02 verify"
+  ],
+  "centralEvidence": "s08-schema-lane-evidence.md"
+}

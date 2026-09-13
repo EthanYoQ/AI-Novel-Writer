@@ -1,3 +1,4 @@
+import { CANONICAL_PROJECT_DIRECTORY } from '../../shared/project-format'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Sparkles, CheckCircle2, Circle, RefreshCw, FileText, BookOpen, AlertTriangle, FolderTree, Eye, Copy } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
@@ -31,11 +32,11 @@ import {
 } from '../project-session-gate'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectSessionContext } from '../../shared/project-session-context'
+import type { MainGenerationRunHandle } from '../../services/generation/generation-runtime'
+import { architectureRecoveryHandle } from '../../shared/architecture-recovery-navigation'
 import {
   hasVisiblePartialSynopsisMarker,
-  isRecoverableSynopsisCheckpoint,
   isUsableSynopsisCheckpoint,
-  recoverableWorldBuildingCandidate,
 } from '../../services/workflows/commands/architecture.command'
 
 type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
@@ -74,6 +75,10 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   const [synopsisCoveredTo, setSynopsisCoveredTo] = useState<number>(0)
   const [synopsisTotalChapters, setSynopsisTotalChapters] = useState<number>(0)
   const [synopsisBusy, setSynopsisBusy] = useState(false)
+  const [synopsisCandidate, setSynopsisCandidate] = useState('')
+  const [showSynopsisCandidate, setShowSynopsisCandidate] = useState(false)
+  const [synopsisHandle, setSynopsisHandle] = useState<MainGenerationRunHandle | null>(null)
+  const [worldHandle, setWorldHandle] = useState<MainGenerationRunHandle | null>(null)
   const [worldBuildingCandidate, setWorldBuildingCandidate] = useState('')
   const [worldBuildingBusy, setWorldBuildingBusy] = useState(false)
   const [showWorldBuildingCandidate, setShowWorldBuildingCandidate] = useState(false)
@@ -102,6 +107,10 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       setSynopsisRecoveryFailed(false)
       setSynopsisCoveredTo(0)
       setSynopsisTotalChapters(0)
+      setSynopsisCandidate('')
+      setSynopsisHandle(null)
+      setWorldHandle(null)
+      setShowSynopsisCandidate(false)
       setWorldBuildingCandidate('')
       setShowWorldBuildingCandidate(false)
       setLoading(false)
@@ -120,6 +129,9 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     let recoveryFailed = false
     let coveredTo = 0
     let recoveredWorldBuildingCandidate = ''
+    let recoveredSynopsisCandidate = ''
+    let confirmedWorldHandle: MainGenerationRunHandle | null = null
+    let confirmedSynopsisHandle: MainGenerationRunHandle | null = null
     const dbSynopsis = core?.synopsis || ''
     const totalChapters = Number(core?.totalChapters ?? currentProject?.novelConfig?.totalChapters) || 0
     const writingLanguage = (core?.writingLanguage ?? currentProject?.novelConfig?.writingLanguage) === 'en-US'
@@ -130,25 +142,39 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       const partialResult = await ipc.invokeWithProjectSession(
         projectSession,
         'fs:read-json',
-        `${projectPath}/.vela/partial_arch.json`,
+        `${projectPath}/${CANONICAL_PROJECT_DIRECTORY}/partial_arch.json`,
         projectPath,
       )
       const partial = partialResult?.success === true
         ? (partialResult as { data?: Record<string, unknown> }).data
         : undefined
-      recoveredWorldBuildingCandidate = recoverableWorldBuildingCandidate(partial)
+      recoveredWorldBuildingCandidate = partial?.world_building_incomplete === true && typeof partial.world_building_partial_result === 'string'
+        ? partial.world_building_partial_result : ''
+      recoveredSynopsisCandidate = partial?.synopsis_incomplete === true && typeof partial.synopsis_result === 'string'
+        ? partial.synopsis_result : ''
+      // A failed main read must not hide the independently readable legacy candidate.
+      for (const kind of ['worldbuilding', 'synopsis'] as const) {
+        const handle = architectureRecoveryHandle(partial, kind, projectSession.projectId)
+        if (!handle) continue
+        try {
+          const composition = await ipc.invokeWithProjectSession(projectSession, 'generation:read-visible-composition', handle)
+          if (composition?.algorithm !== 'visible-append-v1' || !composition.text) continue
+          if (kind === 'worldbuilding') {
+            recoveredWorldBuildingCandidate = composition.text
+            confirmedWorldHandle = handle
+          } else {
+            recoveredSynopsisCandidate = composition.text
+            confirmedSynopsisHandle = handle
+          }
+        } catch { /* Preserve the readable mirror; it does not authorize continuation. */ }
+      }
       const checkpointUsable = isUsableSynopsisCheckpoint(
         partial,
         dbSynopsis,
         writingLanguage,
         totalChapters,
       )
-      interrupted = checkpointUsable && isRecoverableSynopsisCheckpoint(
-        partial,
-        dbSynopsis,
-        writingLanguage,
-        totalChapters,
-      )
+      interrupted = Boolean(confirmedSynopsisHandle)
       recoveryFailed = visiblyPartial && !checkpointUsable
       coveredTo = checkpointUsable && Number(partial?.synopsis_covered_to) > 0
         ? Number(partial?.synopsis_covered_to)
@@ -177,10 +203,14 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     ) return
     setArchStatus(status)
     setWordCounts(counts)
-    setSynopsisIncomplete(interrupted && Boolean(status.synopsis))
+    setSynopsisIncomplete(interrupted)
     setSynopsisRecoveryFailed(recoveryFailed && Boolean(status.synopsis))
     setSynopsisCoveredTo(coveredTo)
     setSynopsisTotalChapters(totalChapters)
+    setSynopsisCandidate(recoveredSynopsisCandidate)
+    setSynopsisHandle(confirmedSynopsisHandle)
+    setWorldHandle(confirmedWorldHandle)
+    if (!recoveredSynopsisCandidate) setShowSynopsisCandidate(false)
     setWorldBuildingCandidate(recoveredWorldBuildingCandidate)
     if (!recoveredWorldBuildingCandidate) setShowWorldBuildingCandidate(false)
     setLoading(false)
@@ -231,7 +261,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   const openArchFile = async (f: typeof ARCH_FILES[number]) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
-    const filePath = `vela://core/${f.key}`
+    const filePath = `ai-novel://core/${f.key}`
     const tabId = createProjectArchTabId(projectKey, filePath)
     let content = ''
     try {
@@ -298,13 +328,14 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   const handleResumeSynopsis = async () => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
-    if (!isProjectSessionCurrent(projectSession) || synopsisBusy) return
+    if (!isProjectSessionCurrent(projectSession) || synopsisBusy || !synopsisHandle || loading) return
     setSynopsisBusy(true)
     try {
       await launchCreativeWorkflow({
         workflow: 'generate_architecture',
         selectedSteps: ['synopsis'],
         resumeSynopsis: true,
+        expectedRecoveryHandle: synopsisHandle,
       }, projectSession)
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
@@ -319,13 +350,14 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   const handleResumeWorldBuilding = async () => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
-    if (!isProjectSessionCurrent(projectSession) || worldBuildingBusy || !worldBuildingCandidate) return
+    if (!isProjectSessionCurrent(projectSession) || worldBuildingBusy || !worldBuildingCandidate || !worldHandle || loading) return
     setWorldBuildingBusy(true)
     try {
       await launchCreativeWorkflow({
         workflow: 'generate_architecture',
         selectedSteps: ['worldbuilding'],
         resumeWorldBuilding: true,
+        expectedRecoveryHandle: worldHandle,
       }, projectSession)
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
@@ -336,18 +368,18 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     }
   }
 
-  const copyWorldBuildingCandidate = async () => {
+  const copyCandidate = async (candidate: string) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches
       || !projectSession
       || !isProjectSessionPath(projectSession, projectKey)
       || !isProjectSessionCurrent(projectSession)
-      || !worldBuildingCandidate
+      || !candidate
     ) return
     try {
-      await navigator.clipboard.writeText(worldBuildingCandidate)
+      await navigator.clipboard.writeText(candidate)
       const { toast } = await import('../ui/Toast')
-      toast.success(text('世界观未完成候选已复制', 'Incomplete worldbuilding candidate copied.'))
+      toast.success(text('未完成候选已复制', 'Incomplete candidate copied.'))
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       const { toast } = await import('../ui/Toast')
@@ -455,6 +487,12 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
           const words = wordCounts[f.key] ?? 0
           const isCharacters = f.key === 'characters'
           const isWorldBuildingCandidate = f.key === 'worldbuilding' && Boolean(worldBuildingCandidate)
+          const isSynopsisCandidate = f.key === 'synopsis' && Boolean(synopsisCandidate)
+          const hasCandidate = isWorldBuildingCandidate || isSynopsisCandidate
+          const candidateText = isSynopsisCandidate ? synopsisCandidate : worldBuildingCandidate
+          const candidateShown = isSynopsisCandidate ? showSynopsisCandidate : showWorldBuildingCandidate
+          const candidateBusy = isSynopsisCandidate ? synopsisBusy : worldBuildingBusy
+          const candidateHandle = isSynopsisCandidate ? synopsisHandle : worldHandle
           const rosterNeedsAttention = isCharacters && rosterPresentation
             && rosterPresentation.kind !== 'ready'
             && rosterPresentation.kind !== 'empty'
@@ -466,7 +504,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
               ? 'var(--color-warning)'
               : synopsisNeedsRecovery
                 ? 'var(--color-warning)'
-                : isWorldBuildingCandidate
+                : hasCandidate
                   ? 'var(--color-warning)'
                : generated
                     ? 'var(--color-success)'
@@ -489,7 +527,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                 title={`${text('点击查看', 'Open')} — ${text(f.descZh, f.descEn)}`}
               >
                 {/* 状态图标 */}
-                {isWorldBuildingCandidate || synopsisNeedsRecovery
+                {hasCandidate || synopsisNeedsRecovery
                   ? <AlertTriangle size={18} style={{ flexShrink: 0, color: 'var(--color-warning)' }} />
                   : generated
                     ? <CheckCircle2 size={18} style={{ flexShrink: 0, color: 'var(--color-success)' }} />
@@ -545,7 +583,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                         </span>
                       )}
                     </>
-                  ) : isWorldBuildingCandidate ? (
+                  ) : hasCandidate ? (
                     <>
                       <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-yellow-500/15 text-[var(--color-warning-text)]">
                         {text(
@@ -564,18 +602,19 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                           size="sm"
                           onClick={(e) => {
                             e.stopPropagation()
-                            setShowWorldBuildingCandidate(value => !value)
+                            if (isSynopsisCandidate) setShowSynopsisCandidate(value => !value)
+                            else setShowWorldBuildingCandidate(value => !value)
                           }}
                         >
                           <Eye size={12} />
-                          {showWorldBuildingCandidate ? text('收起候选', 'Hide candidate') : text('查看候选', 'View candidate')}
+                          {candidateShown ? text('收起候选', 'Hide candidate') : text('查看候选', 'View candidate')}
                         </Button>
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={(e) => {
                             e.stopPropagation()
-                            void copyWorldBuildingCandidate()
+                            void copyCandidate(candidateText)
                           }}
                         >
                           <Copy size={12} />
@@ -583,17 +622,20 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                         </Button>
                         <Button
                           size="sm"
-                          disabled={worldBuildingBusy}
+                          disabled={candidateBusy || !candidateHandle || loading}
                           className="gap-1.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white border-none"
                           onClick={(e) => {
                             e.stopPropagation()
-                            void handleResumeWorldBuilding()
+                            void (isSynopsisCandidate ? handleResumeSynopsis() : handleResumeWorldBuilding())
                           }}
                         >
-                          <RefreshCw size={12} className={worldBuildingBusy ? 'animate-spin' : ''} />
-                          {worldBuildingBusy ? text('续写中...', 'Resuming...') : text('断点续写', 'Resume')}
+                          <RefreshCw size={12} className={candidateBusy ? 'animate-spin' : ''} />
+                          {candidateBusy ? text('续写中...', 'Resuming...') : text('断点续写', 'Resume')}
                         </Button>
                       </div>
+                      {!candidateHandle && <span role="status" className="text-xs text-[var(--color-warning-text)]">
+                        {text('此候选无法确认恢复来源，可查看或复制后重新生成。', 'Recovery source unavailable. View or copy this candidate, then generate again.')}
+                      </span>}
                     </>
                   ) : generated ? (
                     <>
@@ -700,17 +742,17 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                   )}
                 </div>
               </div>
-              {isWorldBuildingCandidate && showWorldBuildingCandidate && (
+              {hasCandidate && candidateShown && (
                 <div
                   role="status"
                   className="rounded-lg border p-3"
                   style={{ borderColor: 'var(--color-warning)', backgroundColor: 'var(--color-panel)' }}
                 >
                   <div className="text-xs font-medium mb-2" style={{ color: 'var(--color-warning-text)' }}>
-                    {text('世界观未完成候选（不会自动写入正式世界观）', 'Incomplete worldbuilding candidate (not written to formal worldbuilding)')}
+                    {text('未完成候选（不会自动写入正式内容）', 'Incomplete candidate (not written to formal content)')}
                   </div>
                   <pre className="text-xs whitespace-pre-wrap max-h-64 overflow-y-auto" style={{ color: 'var(--color-text-secondary)' }}>
-                    {worldBuildingCandidate}
+                    {candidateText}
                   </pre>
                 </div>
               )}

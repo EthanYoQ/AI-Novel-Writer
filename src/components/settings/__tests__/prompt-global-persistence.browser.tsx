@@ -46,7 +46,7 @@ describe('global prompt persistence at the settings boundary', () => {
       }
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
-    ;(window as unknown as { velaAPI: TestVelaApi }).velaAPI = {
+    ;(window as unknown as { aiNovelAPI: TestVelaApi }).aiNovelAPI = {
       invoke,
       on: () => () => {},
       once: () => {},

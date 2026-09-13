@@ -53,7 +53,7 @@ beforeEach(() => {
   useWorkflowStore.setState({ activeRuns: [], history: [] })
   setActiveProjectSessionContext(projectSession)
 
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke: vi.fn(async (channel: string) => {
@@ -83,7 +83,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   setActiveProjectSessionContext(null)
   useLocaleStore.setState(originalLocaleState)
   useProjectStore.setState(originalProjectState)

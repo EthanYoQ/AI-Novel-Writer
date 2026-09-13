@@ -146,7 +146,7 @@ const api: HarnessApi = {
   getZoomLevel: () => 0,
 }
 
-;(window as unknown as { velaAPI: HarnessApi }).velaAPI = api
+;(window as unknown as { aiNovelAPI: HarnessApi }).aiNovelAPI = api
 window.__updateHarness = harness
 useLocaleStore.setState({ locale: 'zh-CN', initialized: true })
 useEditorStore.setState({

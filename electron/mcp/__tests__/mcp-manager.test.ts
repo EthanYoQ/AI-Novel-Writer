@@ -12,6 +12,7 @@ vi.mock('electron', () => ({ app: { getPath: vi.fn(() => 'C:/REAL-HOME-MUST-NOT-
 
 type Manager = typeof import('../mcp-manager')['mcpManager']
 
+let fixtureRoot = ''
 let velaHome = ''
 let mcpManager: Manager
 
@@ -69,7 +70,8 @@ beforeEach(async () => {
   vi.resetModules()
   spawnMock.mockReset()
   velaHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-mcp-'))
-  process.env.AI_NOVEL_VELA_HOME = velaHome
+  fixtureRoot = velaHome
+    velaHome = await (await import('../../services/__tests__/global-data-fixture')).prepareGlobalDataFixture(fixtureRoot)
   mcpManager = (await import('../mcp-manager')).mcpManager
 })
 
@@ -77,7 +79,8 @@ afterEach(async () => {
   vi.useRealTimers()
   await mcpManager.disconnectAll()
   delete process.env.AI_NOVEL_VELA_HOME
-  fs.rmSync(velaHome, { recursive: true, force: true })
+    delete process.env.AI_NOVEL_APP_DATA_HOME
+  fs.rmSync(fixtureRoot, { recursive: true, force: true })
 })
 
 describe('MCP trusted configuration boundary', () => {

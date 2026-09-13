@@ -19,6 +19,12 @@ import DraftEditor from '../../editor/DraftEditor'
 import BottomPanel from '../../panels/BottomPanel'
 import ProjectTree from '../../panels/sidebar/ProjectTree'
 import BatchChapterCreationDialog from '../BatchChapterCreationDialog'
+import type { BeginGenerationRequest, BeginGenerationBatchRequest, GenerationBatchProgress, VisibleCompositionReceipt } from '../../../shared/generation-owner-contract'
+import type { MainGenerationRunHandle, MainGenerationRunView } from '../../../services/generation/generation-runtime'
+import type { GenerationOutcome } from '../../../services/generation/generation-harness'
+import { hashAuthorText } from '../../../shared/source-ref'
+import { composeDraftVisibleContinuation } from '../../../shared/draft-visible-text'
+import { countDraftUnits } from '../../../services/workflows/commands/generate-draft.command'
 
 const PROJECT_PATH = 'C:\\novels\\batch-completion-mode'
 const PROJECT_SESSION = {
@@ -209,17 +215,99 @@ function fileTree(): FileNode[] {
     path: `${PROJECT_PATH}\\drafts`,
     isDir: true,
     children: draftRecord
-      ? [{ name: '第1章 雨夜来信 v1', path: `vela://draft/${draftRecord.id}`, isDir: false }]
+      ? [{ name: '第1章 雨夜来信 v1', path: `ai-novel://draft/${draftRecord.id}`, isDir: false }]
       : [],
   }]
 }
 
 function installIpc() {
+  let batch: GenerationBatchProgress | undefined
+  const views = new Map<string, MainGenerationRunView>()
+  const selections = new Map<string, BeginGenerationRequest>()
+  const compositions = new Map<string, VisibleCompositionReceipt>()
   const listeners = new Map<string, Set<(data: unknown) => void>>()
   const emit = (channel: string, data: unknown) => {
     for (const listener of listeners.get(channel) ?? []) listener(data)
   }
   invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+    if (channel === 'generation:prepare-draft-context') {
+      const input = args[0] as { chapterNumber: number; query: string; selectedDraftIds: number[] }
+      return { preparationId: `browser-preparation-${input.chapterNumber}`,
+        knowledgeSnapshot: { version: 1, state: 'empty', storageState: 'absent', query: input.query, topK: 5, canonicalRevision: null, documentsRevision: null, items: [] },
+        selectedDrafts: await Promise.all(input.selectedDraftIds.map(async draftId => {
+          if (!draftRecord || draftRecord.id !== draftId) throw new Error('GENERATION_SOURCE_MISSING')
+          return { draftId, chapterNumber: draftRecord.chapterNumber, version: draftRecord.version, content: draftRecord.content,
+            contentHash: await hashAuthorText(draftRecord.content) }
+        })) }
+    }
+    if (channel === 'generation:begin-batch') {
+      const input = args[0] as BeginGenerationBatchRequest
+      batch = { ...input, batchId: 'browser-batch', rootHandle: { projectId: PROJECT_SESSION.projectId,
+        epoch: PROJECT_SESSION.leaseId, rootActionId: 'browser-root', runId: 'browser-batch' },
+        completedChapters: [], nextChapterNumber: input.range.startChapter }
+      return structuredClone(batch)
+    }
+    if (channel === 'generation:read-batch' || channel === 'generation:confirm-batch-finalization') {
+      if (batch?.mode === 'auto_finalize' && draftRecord?.status === 'finalized' && postProcessRunCreated
+        && postProcessSteps.filter(step => step.critical).every(step => step.ok)) {
+        const saved = batch.completedChapters.find(item => item.chapterNumber === draftRecord!.chapterNumber)!
+        saved.finalizationId = FINALIZATION_ID
+        saved.postProcessComplete = true
+        batch.nextChapterNumber = saved.chapterNumber === batch.range.endChapter ? null : saved.chapterNumber + 1
+      }
+      return structuredClone(batch)
+    }
+    if (channel === 'generation:begin') {
+      const input = args[0] as BeginGenerationRequest
+      if (!input.preparationId) throw new Error('GENERATION_DRAFT_PREPARATION_REQUIRED')
+      const handle = { ...batch!.rootHandle, runId: `browser-chapter-${input.chapterNumber}` }
+      const view: MainGenerationRunView = { handle, status: 'running', nonReplayable: false, artifacts: [],
+        budget: { maxAttempts: 32, maxRequestedOutputTokens: 2000000, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: Date.now() + 3600000 } }
+      selections.set(handle.runId, input); views.set(handle.runId, view)
+      return structuredClone(view)
+    }
+    if (channel === 'generation:read' || channel === 'generation:cancel') return structuredClone(views.get((args[0] as MainGenerationRunHandle).runId))
+    if (channel === 'generation:execute') {
+      const request = args[0] as { handle: MainGenerationRunHandle }
+      const view = views.get(request.handle.runId)!
+      const text = draftCompletions[draftCompletionIndex++] ?? DRAFT_TEXT
+      if (changeDefaultAfterFirstDraft && draftCompletionIndex === 1) useLLMStore.setState({ defaultModelId: 'changed-default-model' })
+      if (deferDraftCompletion) await new Promise<void>(resolve => pendingDraftCompletions.push(resolve))
+      const artifact = { ...view.handle, artifactId: `${view.handle.runId}:artifact`, attemptId: `${view.handle.runId}:attempt`,
+        revision: 1, durableRevision: 1, text, textHash: await hashAuthorText(text), status: 'completed' as const }
+      view.artifacts = [artifact]
+      emit('generation:snapshot', artifact)
+      const outcome: GenerationOutcome = { status: 'completed', content: text, finishReason: 'stop', receipt: {
+        model: { id: 'grok-browser', configurationRevision: 'a'.repeat(64), endpointFingerprint: 'b'.repeat(64) },
+        capabilities: { contextWindowTokens: null, maxOutputTokens: 4096, reasoning: false, structuredOutput: false, usage: false,
+          source: { contextWindowTokens: 'unknown', maxOutputTokens: 'user-operational-cap', featureFlags: 'unknown' } },
+        budget: { attempt: draftCompletionIndex, maxAttempts: 32, requestedOutputTokens: 4096,
+          cumulativeRequestedOutputTokens: draftCompletionIndex * 4096, maxRequestedOutputTokens: 2000000,
+          maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: view.budget.deadlineAt }, finishReason: 'stop',
+        visibleArtifact: { artifactId: artifact.artifactId, attemptId: artifact.attemptId, revision: 1, textHash: artifact.textHash },
+      } }
+      return { outcome, run: structuredClone(view) }
+    }
+    if (channel === 'generation:compose-visible') {
+      const handle = args[0] as MainGenerationRunHandle, ids = args[1] as string[]
+      const view = views.get(handle.runId)!
+      const text = ids.reduce((text, id) => composeDraftVisibleContinuation(text, view.artifacts.find(item => item.artifactId === id)!.text), '')
+      const receipt: VisibleCompositionReceipt = { algorithm: 'draft-visible-v1', text, textHash: await hashAuthorText(text),
+        artifactIds: ids, sources: view.artifacts.map(item => ({ artifactId: item.artifactId, revision: item.revision, textHash: item.textHash })) }
+      expect(receipt.textHash).toBe(args[2]); compositions.set(handle.runId, receipt); return receipt
+    }
+    if (channel === 'generation:commit-draft') {
+      const request = args[0] as { handle: MainGenerationRunHandle; chapterNumber: number; expectedCompositionHash: string }
+      const composition = compositions.get(request.handle.runId)!
+      expect(request.expectedCompositionHash).toBe(composition.textHash)
+      expect(selections.get(request.handle.runId)?.batchId).toBe(batch!.batchId)
+      draftRecord = { id: 101, chapterNumber: request.chapterNumber, version: 1, status: 'draft', source: 'write',
+        content: composition.text, wordCount: countDraftUnits(composition.text), createdAt: '2026-08-28T00:00:00.000Z' }
+      batch!.completedChapters.push({ chapterNumber: request.chapterNumber, draftId: 101, version: 1,
+        contentHash: composition.textHash, sourceRunHandle: request.handle })
+      if (batch!.mode === 'draft_review') batch!.nextChapterNumber = request.chapterNumber === batch!.range.endChapter ? null : request.chapterNumber + 1
+      return { success: true, id: 101, version: 1, content: composition.text, contentHash: composition.textHash }
+    }
     if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
     if (channel === 'db:draft-authority-sequence') {
       return {
@@ -399,7 +487,7 @@ function installIpc() {
     throw new Error(`Unexpected IPC channel in batch completion browser test: ${channel}`)
   })
 
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -472,7 +560,7 @@ afterEach(async () => {
   container?.remove()
   root = undefined
   container = undefined
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   disposeProjectService()
   setActiveProjectSessionContext(null)
   clearProjectCustomPrompts()
@@ -631,18 +719,16 @@ describe('batch chapter completion mode browser flow', () => {
     })
 
     const draftRequests = invoke.mock.calls
-      .filter(([channel, , request]) => (
-        channel === 'llm:generate-stream'
-        && (request as { purpose?: string } | undefined)?.purpose === 'chapter-draft'
+      .filter(([channel, request]) => (
+        channel === 'generation:execute'
+        && (request as { task?: { purpose?: string } } | undefined)?.task?.purpose === 'chapter-draft'
       ))
-      .map(([, , request]) => request as { messages: Array<{ content: string }> })
+      .map(([, request]) => (request as { task: { messages: Array<{ content: string }> } }).task)
     expect(draftRequests).toHaveLength(2)
     expect(draftRequests[1].messages.map(message => message.content).join('\n')).toContain(FIRST_DRAFT_TAIL)
-    expect(invoke.mock.calls.filter(([channel]) => channel === 'llm:begin-execution-lease'))
-      .toEqual([
-        ['llm:begin-execution-lease', 'grok-browser'],
-        ['llm:begin-execution-lease', 'grok-browser'],
-      ])
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'generation:begin').map(([, input]) => (input as BeginGenerationRequest).modelId))
+      .toEqual(['grok-browser', 'grok-browser'])
+    expect(invoke.mock.calls.some(([channel]) => channel === 'llm:begin-execution-lease')).toBe(false)
     expect(invoke.mock.calls.some(([channel]) => (
       channel === 'finalization:commit'
       || channel === 'kb:import-text'
@@ -671,7 +757,7 @@ describe('batch chapter completion mode browser flow', () => {
     })
     expect(useEditorStore.getState().tabs).toEqual([
       expect.objectContaining({
-        filePath: 'vela://draft/101',
+        filePath: 'ai-novel://draft/101',
         type: 'chapter',
         content: DRAFT_TEXT,
         savedContent: DRAFT_TEXT,
@@ -688,7 +774,8 @@ describe('batch chapter completion mode browser flow', () => {
     expect(useWorkflowStore.getState().history[0]?.steps[0]?.logs.some(log => (
       log.includes('开始第1章：生成草稿待审。')
     ))).toBe(true)
-    expect(invoke).toHaveBeenCalledWith('llm:begin-execution-lease', 'grok-browser')
+    expect(invoke).toHaveBeenCalledWith('generation:begin', expect.objectContaining({ modelId: 'grok-browser' }), PROJECT_SESSION)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'llm:begin-execution-lease')).toBe(false)
     expect(invoke.mock.calls.some(([channel]) => (
       channel === 'finalization:commit'
       || channel === 'kb:import-text'
@@ -721,7 +808,7 @@ describe('batch chapter completion mode browser flow', () => {
 
     expect(useProjectStore.getState().fileTree).toEqual(fileTree())
     expect(useEditorStore.getState().tabs.some(tab => (
-      tab.filePath === 'vela://draft/101' && tab.draftStatus !== 'finalized'
+      tab.filePath === 'ai-novel://draft/101' && tab.draftStatus !== 'finalized'
     ))).toBe(false)
     expect(useWorkflowStore.getState().history[0]).toMatchObject({
       title: '批量自动定稿 — 第1–1章',

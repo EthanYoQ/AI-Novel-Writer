@@ -137,11 +137,11 @@ function stubIpc(
   projectPromptDirectoryExists?: () => Promise<boolean>,
 ): void {
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke: (channel: string, ...args: unknown[]) => (
         channel === 'prompt:load-global'
           ? Promise.resolve({ templates: [], diagnostics: [] })
-          : channel === 'fs:check-exists' && String(args[0]).endsWith('/.vela/prompts')
+          : channel === 'fs:check-exists' && String(args[0]).endsWith('/.ai-novel/prompts')
             ? projectPromptDirectoryExists?.() ?? Promise.resolve(false)
             : invoke(channel, ...args)
       ),
@@ -155,7 +155,7 @@ function command(
   sourceDraft?: NonNullable<ConstructorParameters<typeof RefineDraftCommand>[0]['sourceDraft']>,
 ): RefineDraftCommand {
   return new RefineDraftCommand({
-    draftPath: 'vela://draft/1',
+    draftPath: 'ai-novel://draft/1',
     draftContent,
     sourceDraft,
     chapterNumber: 1,
@@ -177,7 +177,7 @@ function reviewCommand(
   overrides: Partial<ConstructorParameters<typeof RefineFromReviewCommand>[0]> = {},
 ): RefineFromReviewCommand {
   return new RefineFromReviewCommand({
-    draftPath: 'vela://draft/1',
+    draftPath: 'ai-novel://draft/1',
     draftContent,
     confirmedReviewContent: DEFAULT_CONFIRMED_REVIEW_CONTENT,
     reviewSourceId: CONFIRMATION_REVIEW_ID,
@@ -193,7 +193,7 @@ function chapterReviewCommand(
   sourceDraft?: NonNullable<ConstructorParameters<typeof ReviewChapterCommand>[0]['sourceDraft']>,
 ): ReviewChapterCommand {
   return new ReviewChapterCommand({
-    draftPath: 'vela://draft/1',
+    draftPath: 'ai-novel://draft/1',
     draftContent,
     sourceDraft,
     chapterNumber,
@@ -320,7 +320,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
       expect.objectContaining({
         name: 'Revision merge: Chapter 1',
         type: 'diff',
-        revisionPath: 'vela://revision/9',
+        revisionPath: 'ai-novel://revision/9',
       }),
     ])
   })
@@ -685,7 +685,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
       expect.objectContaining({
         name: 'Review fix: Chapter 1',
         type: 'diff',
-        revisionPath: 'vela://revision/9',
+        revisionPath: 'ai-novel://revision/9',
       }),
     ])
   })
@@ -693,7 +693,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
   it('uses the frozen English UI locale for a pre-generation confirmation error', async () => {
     const createRuntime = vi.fn<WorkflowGenerationRuntimeDependencies['createRuntime']>()
     const target = new RefineFromReviewCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: 'Original chapter.',
       chapterNumber: 1,
     }, { createRuntime })
@@ -790,7 +790,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
       })
     ))
     const command = new RefineFromReviewCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: sourceDraft,
       confirmedReviewContent: persistedConfirmation,
       reviewSourceId: CONFIRMATION_REVIEW_ID,
@@ -811,7 +811,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
       PROJECT_PATH,
       PROJECT_SESSION,
     )
-    expect(createRuntime).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'grok-selected-model' }))
+    expect(createRuntime.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ modelId: 'grok-selected-model' }))
     expect(begunModelIds).toEqual(['grok-selected-model'])
     const prompt = completeWithLease.mock.calls[0]?.[0].messages.map(message => message.content).join('\n') ?? ''
     expect(prompt).toContain('只修复这个已确认的问题。')
@@ -841,7 +841,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     })
     stubIpc(invoke)
     const command = new RefineFromReviewCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: CONFIRMED_SOURCE_DRAFT.content,
       confirmedReviewContent: DEFAULT_CONFIRMED_REVIEW_CONTENT,
       reviewSourceId: CONFIRMATION_REVIEW_ID,
@@ -991,7 +991,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     })
     stubIpc(invoke)
     const command = new RefineFromReviewCommand({
-      draftPath: 'vela://draft/1',
+      draftPath: 'ai-novel://draft/1',
       draftContent: '原稿正文。'.repeat(100),
       confirmedReviewContent: rendererContent(),
       reviewSourceId: CONFIRMATION_REVIEW_ID,

@@ -1,3 +1,21 @@
+import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
+const normalization = vi.hoisted(() => ({ db: null as import('better-sqlite3').Database | null, root: null as string | null }))
+vi.mock('../../database', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../database')>()
+  return { ...actual, getProjectDb: () => normalization.db ?? actual.getProjectDb(), getCurrentProjectPath: () => normalization.root ?? actual.getCurrentProjectPath() }
+})
+function normalizeHistoricalFixture(projectPath: string): void {
+  closeProjectDatabase()
+  const file = path.join(projectPath, '.ai-novel', 'project.db')
+  const before = fs.readFileSync(file)
+  expect(() => initProjectDatabase(projectPath)).toThrow()
+  expect(fs.readFileSync(file)).toEqual(before)
+  const FixtureDatabase = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
+  normalization.db?.close()
+  normalization.db = new FixtureDatabase(file)
+  normalization.root = projectPath
+  initializeLegacyBaselineSchema(normalization.db)
+}
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -5,7 +23,8 @@ import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
+import { closeProjectDatabase, getProjectDb } from '../../database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import { ImportRunRepository } from '../import-run-repository'
 import { FinalizedDraftImportRepository } from '../finalized-draft-import-repository'
 import {
@@ -110,7 +129,7 @@ function prepareParsedRun(
 
 function installLegacyRun(snapshots: string[], totalChapters: number): void {
   closeProjectDatabase()
-  const legacy = new Database(path.join(root, '.vela', 'vela.db'))
+  const legacy = new Database(path.join(root, '.ai-novel', 'project.db'))
   legacy.exec(`
     DROP TABLE import_runs;
     CREATE TABLE import_runs (
@@ -150,7 +169,7 @@ function installLegacyRun(snapshots: string[], totalChapters: number): void {
     content,
   ))
   legacy.close()
-  initProjectDatabase(root)
+  normalizeHistoricalFixture(root)
 }
 
 beforeEach(() => {
@@ -159,14 +178,15 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  normalization.db?.close(); normalization.db = null; normalization.root = null
   closeProjectDatabase()
   fs.rmSync(root, { recursive: true, force: true })
 })
 
 describe('ImportRunRepository', () => {
-  it('migrates the pre-purpose import-run schema before creating purpose indexes', () => {
+  it('historical fixture normalization (not production admission): the pre-purpose import-run schema before creating purpose indexes', () => {
     closeProjectDatabase()
-    const legacy = new Database(path.join(root, '.vela', 'vela.db'))
+    const legacy = new Database(path.join(root, '.ai-novel', 'project.db'))
     legacy.exec(`
       DROP TABLE import_runs;
       CREATE TABLE import_runs (
@@ -192,7 +212,7 @@ describe('ImportRunRepository', () => {
     `)
     legacy.close()
 
-    expect(() => initProjectDatabase(root)).not.toThrow()
+    expect(() => normalizeHistoricalFixture(root)).not.toThrow()
     const columns = getProjectDb()!.prepare('PRAGMA table_info(import_runs)').all() as Array<{ name: string }>
     expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
       'purpose', 'root_run_id', 'effect_namespace', 'execution_epoch', 'manifest_chapter_count',
@@ -201,7 +221,7 @@ describe('ImportRunRepository', () => {
 
   it('expands the shipped stage constraint without losing indexes or child foreign keys', () => {
     closeProjectDatabase()
-    const legacy = new Database(path.join(root, '.vela', 'vela.db'))
+    const legacy = new Database(path.join(root, '.ai-novel', 'project.db'))
     legacy.pragma('foreign_keys = OFF')
     legacy.exec(`
       DROP TABLE import_runs;
@@ -241,7 +261,7 @@ describe('ImportRunRepository', () => {
     `)
     legacy.close()
 
-    expect(() => initProjectDatabase(root)).not.toThrow()
+    expect(() => normalizeHistoricalFixture(root)).not.toThrow()
     const db = getProjectDb()!
     const schema = db.prepare(`
       SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'import_runs'
@@ -292,7 +312,7 @@ describe('ImportRunRepository', () => {
     },
   ])('migrates a $label without losing its purpose-specific state', (variant) => {
     closeProjectDatabase()
-    const legacy = new Database(path.join(root, '.vela', 'vela.db'))
+    const legacy = new Database(path.join(root, '.ai-novel', 'project.db'))
     legacy.pragma('foreign_keys = OFF')
     legacy.exec(`
       DROP TABLE import_runs;
@@ -340,7 +360,7 @@ describe('ImportRunRepository', () => {
     `)
     legacy.close()
 
-    expect(() => initProjectDatabase(root)).not.toThrow()
+    expect(() => normalizeHistoricalFixture(root)).not.toThrow()
     const db = getProjectDb()!
     const columns = db.prepare('PRAGMA table_info(import_runs)').all() as Array<{ name: string }>
     expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
@@ -363,12 +383,12 @@ describe('ImportRunRepository', () => {
     expect(db.pragma('foreign_key_check')).toEqual([])
   })
 
-  it('migrates legacy chapter rows to opaque source affiliations and stable mappings', () => {
+  it('historical fixture normalization (not production admission): legacy chapter rows to opaque source affiliations and stable mappings', () => {
     ImportRunRepository.prepare(request())
     markRunCompleted('import-run-1')
     closeProjectDatabase()
 
-    const legacy = new Database(path.join(root, '.vela', 'vela.db'))
+    const legacy = new Database(path.join(root, '.ai-novel', 'project.db'))
     legacy.pragma('foreign_keys = OFF')
     legacy.exec(`
       DROP TABLE import_source_chapter_map;
@@ -391,7 +411,7 @@ describe('ImportRunRepository', () => {
     `)
     legacy.close()
 
-    initProjectDatabase(root)
+    normalizeHistoricalFixture(root)
     const columns = getProjectDb()!.prepare('PRAGMA table_info(import_run_chapters)').all() as Array<{ name: string }>
     expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
       'source_id', 'source_chapter_number',
@@ -435,7 +455,7 @@ describe('ImportRunRepository', () => {
       .toEqual({ count: 0 })
   })
 
-  it('migrates a bounded chapter snapshot and never persists paths, grants, or credentials', () => {
+  it('historical fixture normalization (not production admission): a bounded chapter snapshot and never persists paths, grants, or credentials', () => {
     const prepared = ImportRunRepository.prepare(request())
 
     expect(prepared).toMatchObject({ classification: 'new', run: { id: 'import-run-1', stage: 'knowledge', status: 'ready' } })

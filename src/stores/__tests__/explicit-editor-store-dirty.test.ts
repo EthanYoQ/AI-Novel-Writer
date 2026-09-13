@@ -172,6 +172,56 @@ beforeEach(() => {
 })
 
 describe('explicit editor dirty integration', () => {
+  it('settles an existing guarded effect once while preserving a concurrent author style draft', async () => {
+    const original = project(), handle = { projectId: original.id, epoch: original.sessionLease!, rootActionId: 'root', runId: 'run' }
+    const pending = deferred<void>(), persistEffect = vi.fn(() => pending.promise)
+    const saving = useProjectStore.getState().commitGeneratedNovelConfig({ writingStyle: '已保存的模型文风' }, original.novelConfig, projectSession(original), handle, persistEffect)
+    useProjectStore.getState().updateNovelConfig({ writingStyle: '作者等待时的新文风' })
+    pending.resolve()
+    await expect(saving).rejects.toThrow('GENERATION_SAVED_WITH_NEWER_AUTHOR_DRAFT')
+    expect(persistEffect).toHaveBeenCalledTimes(1)
+    expect(invoke).not.toHaveBeenCalled()
+    expect(useProjectStore.getState().currentProject?.novelConfig.writingStyle).toBe('作者等待时的新文风')
+    expect(getProjectEditorDraft<ProjectData['novelConfig']>(parseProjectEditorDraftLedger(draftLedgerContent(CONFIG_DRAFT_TAB.id)), original.path)?.baseValue.writingStyle).toBe('已保存的模型文风')
+  })
+  it('keeps unrelated pre-existing author fields dirty after a generated field is committed', async () => {
+    const original = project(), handle = { projectId: original.id, epoch: original.sessionLease!, rootActionId: 'root', runId: 'run' }
+    useProjectStore.getState().updateNovelConfig({ globalGuidance: '作者尚未保存的约束' })
+    const expected = useProjectStore.getState().currentProject!.novelConfig
+    invoke.mockResolvedValue({ success: true })
+    await expect(useProjectStore.getState().commitGeneratedNovelConfig({ coreOutline: '生成的大纲' }, expected, projectSession(original), handle)).resolves.toBe(true)
+    const draft = getProjectEditorDraft(parseProjectEditorDraftLedger(draftLedgerContent(CONFIG_DRAFT_TAB.id)), original.path)
+    expect(draft?.baseValue).toMatchObject({ coreOutline: '生成的大纲', globalGuidance: '' })
+    expect(useProjectStore.getState().currentProject?.novelConfig).toMatchObject({ coreOutline: '生成的大纲', globalGuidance: '作者尚未保存的约束' })
+    useProjectStore.getState().discardNovelConfigDraft(original.path, projectSession(original))
+    expect(useProjectStore.getState().currentProject?.novelConfig).toMatchObject({ coreOutline: '生成的大纲', globalGuidance: '' })
+  })
+  it('publishes generated config only after main commit and maps the POV field', async () => {
+    const original = project(), handle = { projectId: original.id, epoch: original.sessionLease!, rootActionId: 'root', runId: 'run' }
+    const pending = deferred<{ success: boolean }>()
+    invoke.mockReturnValue(pending.promise)
+    const saving = useProjectStore.getState().commitGeneratedNovelConfig({ coreOutline: '生成的大纲', narrativePOV: 'first_person' }, original.novelConfig, projectSession(original), handle)
+    expect(useProjectStore.getState().currentProject?.novelConfig.coreOutline).toBe('原大纲')
+    expect(invoke).toHaveBeenCalledWith('db:project-core-commit-generated', { data: { coreOutline: '生成的大纲', narrativePov: 'first_person' }, generationRunHandle: handle }, original.path)
+    pending.resolve({ success: true })
+    await expect(saving).resolves.toBe(true)
+    expect(useProjectStore.getState().currentProject?.novelConfig).toMatchObject({ coreOutline: '生成的大纲', narrativePOV: 'first_person' })
+  })
+  it('preserves newer local author edits before and during a generated commit', async () => {
+    const original = project(), handle = { projectId: original.id, epoch: original.sessionLease!, rootActionId: 'root', runId: 'run' }
+    useProjectStore.getState().updateNovelConfig({ coreOutline: '作者先修改' })
+    await expect(useProjectStore.getState().commitGeneratedNovelConfig({ coreOutline: '旧生成' }, original.novelConfig, projectSession(original), handle)).rejects.toThrow('GENERATION_AUTHOR_DRAFT_CHANGED')
+    expect(invoke).not.toHaveBeenCalled()
+    useProjectStore.setState({ currentProject: original })
+    const pending = deferred<{ success: boolean }>()
+    invoke.mockReturnValue(pending.promise)
+    const saving = useProjectStore.getState().commitGeneratedNovelConfig({ coreOutline: '生成的大纲' }, original.novelConfig, projectSession(original), handle)
+    useProjectStore.getState().updateNovelConfig({ coreOutline: '作者等待时新写' })
+    pending.resolve({ success: true })
+    await expect(saving).rejects.toThrow('GENERATION_SAVED_WITH_NEWER_AUTHOR_DRAFT')
+    expect(useProjectStore.getState().currentProject?.novelConfig.coreOutline).toBe('作者等待时新写')
+    expect(getProjectEditorDraft(parseProjectEditorDraftLedger(draftLedgerContent(CONFIG_DRAFT_TAB.id)), original.path)).toBeDefined()
+  })
   it('unbinds project A character data before openProject publishes project B and loads B', async () => {
     const fileTree = deferred<[]>()
     invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {

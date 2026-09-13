@@ -31,7 +31,7 @@ it('checks project prompt diagnostics for the language selected in settings', as
     if (channel === 'fs:read-file') return { success: true, content: '{invalid json' }
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
-  ;(window as unknown as { velaAPI: { invoke: typeof invoke } }).velaAPI = { invoke }
+  ;(window as unknown as { aiNovelAPI: { invoke: typeof invoke } }).aiNovelAPI = { invoke }
   useLocaleStore.setState({ locale: 'en-US' })
   useProjectStore.setState({
     currentProject: {
@@ -72,7 +72,7 @@ it('keeps the project error visible when a later global retry succeeds', async (
     }
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
-  ;(window as unknown as { velaAPI: { invoke: typeof invoke } }).velaAPI = { invoke }
+  ;(window as unknown as { aiNovelAPI: { invoke: typeof invoke } }).aiNovelAPI = { invoke }
 
   useLocaleStore.setState({ locale: 'zh-CN' })
   useProjectStore.setState({

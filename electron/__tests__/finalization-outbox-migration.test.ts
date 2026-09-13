@@ -3,9 +3,17 @@ import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../database'
+import { closeLegacyNormalizationFixture as closeProjectDatabase, getLegacyNormalizationFixtureDb as getProjectDb, openLegacyNormalizationFixture } from '../../test/helpers/legacy-baseline-fixture'
+
+// Historical normalization regressions use an explicit fixture handle. Production
+// rejects these unqualified old roots; canonical activation is tested separately.
+vi.mock('../database', async () => {
+  const actual = await vi.importActual<typeof import('../database')>('../database')
+  const fixture = await import('../../test/helpers/legacy-baseline-fixture')
+  return { ...actual, getProjectDb: fixture.getLegacyNormalizationFixtureDb, getCurrentProjectPath: fixture.getLegacyNormalizationFixturePath }
+})
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
@@ -108,7 +116,7 @@ describe('finalization outbox migration', () => {
   it('adds and backfills the immutable content snapshot for a pre-snapshot database', () => {
     const projectRoot = makeLegacyProject()
 
-    initProjectDatabase(projectRoot)
+    openLegacyNormalizationFixture(projectRoot)
     const db = getProjectDb()
     expect(db).not.toBeNull()
     const columns = db!.prepare('PRAGMA table_info(finalization_outbox)').all() as Array<{ name: string }>
@@ -144,7 +152,7 @@ describe('finalization outbox migration', () => {
   it('does not rewrite a legitimate empty snapshot when a current-schema database reopens', () => {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-current-finalization-'))
     roots.push(projectRoot)
-    initProjectDatabase(projectRoot)
+    openLegacyNormalizationFixture(projectRoot)
     const first = getProjectDb()!
     const emptyHash = createHash('sha256').update('', 'utf8').digest('hex')
     first.prepare('INSERT INTO contents (id, body) VALUES (?, ?)').run(10, '后来变动的正文')
@@ -170,7 +178,7 @@ describe('finalization outbox migration', () => {
     )
 
     closeProjectDatabase()
-    initProjectDatabase(projectRoot)
+    openLegacyNormalizationFixture(projectRoot)
 
     expect(getProjectDb()!.prepare(`
       SELECT content_snapshot FROM finalization_outbox WHERE finalization_id = ?

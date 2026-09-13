@@ -134,6 +134,11 @@ export type StepExecutor = (
 
 /** 工作流上下文（共享数据） */
 export interface WorkflowContext {
+  /** Main-issued identities; stage changes keep the root budget, recovery keeps the exact run. */
+  mainGenerationRootHandle?: import('../services/generation/generation-runtime').MainGenerationRunHandle
+  mainGenerationRunHandle?: import('../services/generation/generation-runtime').MainGenerationRunHandle
+  /** Main adapter supplies one idempotent cancellation intent, including between stages. */
+  requestMainGenerationCancellation?: () => Promise<void>
   /** 本次运行的稳定身份，供事件消费者排除其他并发任务。 */
   runId: string
   /** 工作流启动时冻结的项目身份。 */
@@ -213,6 +218,8 @@ export interface WorkflowDefinition {
     name: string
     description: string
     executor: StepExecutor
+    /** Explicit author action is required even when the workflow runs automatically. */
+    requiresConfirmation?: boolean
   }>
   /** Persist cancellation before waiting for the current operation to yield. */
   onCancelRequested?: (context: WorkflowContext) => void | Promise<void>
@@ -669,6 +676,22 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       // 批量任务只在步骤之间暂停，避免中断一次正在进行的模型请求或后处理。
       await waitForResumeAtSafeBoundary()
 
+      if (!context.cancelled && ((stepByStep && i > 0) || definition.steps[i].requiresConfirmation)) {
+        // Register before publishing waiting state so an immediate UI confirmation cannot be lost.
+        const confirmed = new Promise<void>(resolve => { continueResolveRefs.set(run.id, resolve) })
+        updateRunById(set, run.id, { status: 'waiting' })
+        set(s => {
+          const newWaiting = { ...s.waitingRuns, [run.id]: { waitingForConfirm: true, waitingAfterStepIndex: i - 1 } }
+          return { waitingRuns: newWaiting, ...computeCompat(s.activeRuns, newWaiting) }
+        })
+        get().addLog('info', uiText(
+          context.uiLocale,
+          `[暂停] [${definition.title}] 等待确认第 ${i + 1} 步：${definition.steps[i].name}`,
+          `[Paused] [${definition.title}] Waiting for confirmation before step ${i + 1}: ${definition.steps[i].name}`,
+        ), context.uiLocale)
+        await confirmed
+        if (!context.cancelled) updateRunById(set, run.id, { status: 'running' })
+      }
       // 检查取消
       if (context.cancelled) {
         updateRunById(set, run.id, {
@@ -773,22 +796,6 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           `[Completed] [${definition.title}] Step: ${stepDef.name}`,
         ), context.uiLocale)
 
-        // 步进模式：非最后一步，且未取消 → 暂停等待用户确认
-        if (stepByStep && i < definition.steps.length - 1 && !context.cancelled) {
-          updateRunById(set, run.id, { status: 'waiting' })
-          set(s => {
-            const newWaiting = { ...s.waitingRuns, [run.id]: { waitingForConfirm: true, waitingAfterStepIndex: i } }
-            return { waitingRuns: newWaiting, ...computeCompat(s.activeRuns, newWaiting) }
-          })
-          get().addLog('info', uiText(
-            context.uiLocale,
-            `[暂停] [${definition.title}] 等待确认继续第 ${i + 2} 步：${definition.steps[i + 1].name}`,
-            `[Paused] [${definition.title}] Waiting for confirmation before step ${i + 2}: ${definition.steps[i + 1].name}`,
-          ), context.uiLocale)
-          await new Promise<void>((resolve) => { continueResolveRefs.set(run.id, resolve) })
-          if (context.cancelled) break
-          updateRunById(set, run.id, { status: 'running' })
-        }
       } catch (error) {
         const promptBudgetFailure = promptBudgetFailureFromError(error, context.uiLocale)
         const errorMsg = promptBudgetFailure?.message
@@ -932,6 +939,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       if (ctx) {
         ctx.cancelled = true
         ctx.pauseRequested = false
+        void ctx.requestMainGenerationCancellation?.().catch(error => get().addLog('error', String(error), targetRun.uiLocale))
         const persistCancellation = cancelRequestedHooks.get(runId)
         if (persistCancellation) void Promise.resolve(persistCancellation(ctx)).catch(error => {
           get().addLog('error', uiText(
@@ -982,6 +990,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         if (!run || run.status === 'completed' || run.status === 'failed') continue
         ctx.cancelled = true
         ctx.pauseRequested = false
+        void ctx.requestMainGenerationCancellation?.().catch(error => get().addLog('error', String(error), run.uiLocale))
         const persistCancellation = cancelRequestedHooks.get(id)
         if (persistCancellation) void Promise.resolve(persistCancellation(ctx)).catch(error => {
           get().addLog('error', uiText(

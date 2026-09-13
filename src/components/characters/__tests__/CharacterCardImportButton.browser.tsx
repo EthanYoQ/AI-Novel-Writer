@@ -38,7 +38,7 @@ beforeEach(async () => {
   vi.clearAllMocks()
   project.sessionLease = `lease-${++testLease}`
   invoke = vi.fn().mockResolvedValue(null)
-  Object.defineProperty(window, 'velaAPI', { configurable: true, value: { invoke, on: vi.fn(() => () => {}), once: vi.fn(), send: vi.fn() } })
+  Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: vi.fn(() => () => {}), once: vi.fn(), send: vi.fn() } })
   start = vi.fn<ReturnType<typeof useWorkflowStore.getState>['startWorkflow']>().mockResolvedValue('failed-run')
   useLocaleStore.setState({ locale: 'zh-CN', initialized: true })
   useProjectStore.setState({ currentProject: project })
@@ -55,7 +55,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   setActiveProjectSessionContext(null)
   useProjectStore.setState(originals.project)
   useLocaleStore.setState(originals.locale)

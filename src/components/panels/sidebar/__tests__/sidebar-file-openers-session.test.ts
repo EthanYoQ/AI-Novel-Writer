@@ -62,7 +62,7 @@ describe('sidebar file openers keep the original project session', () => {
       error: 'read denied',
     }))
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -83,7 +83,7 @@ describe('sidebar file openers keep the original project session', () => {
     const delayedRead = deferred<{ success: boolean; content: string }>()
     const invoke = vi.fn(async () => delayedRead.promise)
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),

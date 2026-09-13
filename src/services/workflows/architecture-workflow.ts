@@ -1,3 +1,4 @@
+import type { MainGenerationRunHandle } from '../generation/generation-runtime'
 import { workflowResourceKey, type WorkflowDefinition, type WorkflowContext, type StepCallbacks } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
@@ -15,6 +16,9 @@ import { requireWorkflowProjectSession } from './workflow-project-session'
 import type { ArchitectureProjectSnapshot } from './commands/architecture.command'
 import { localize } from '../../i18n/core'
 import type { Locale } from '../../i18n/types'
+import { ipc } from '../ipc-client'
+import { CANONICAL_PROJECT_DIRECTORY } from '../../shared/project-format'
+import { architectureRecoveryHandle } from '../../shared/architecture-recovery-navigation'
 
 // ==========================================
 // 1. 类型定义
@@ -27,6 +31,8 @@ export interface PartialArchData {
   world_building_result?: string
   world_building_partial_result?: string
   world_building_incomplete?: boolean
+  world_building_generation_handle?: import('../generation/generation-runtime').MainGenerationRunHandle
+  synopsis_generation_handle?: import('../generation/generation-runtime').MainGenerationRunHandle
   world_building_facts_fingerprint?: string
   world_building_db_hash?: string
   world_building_step_guidance?: string
@@ -49,6 +55,8 @@ export interface ArchitectureWorkflowParams {
   resumeSynopsis?: boolean
   /** 从上次输出长度中断的候选续写世界观（工作流只包含 worldbuilding 一步）。 */
   resumeWorldBuilding?: boolean
+  /** The exact run whose confirmed candidate the author selected in the UI. */
+  expectedRecoveryHandle?: MainGenerationRunHandle
 }
 
 export interface ConfigGenerationWorkflowParams {
@@ -102,6 +110,22 @@ export function createArchitectureWorkflow(
     : text('（跳过，保留已有内容）', '(Skipped; existing content is retained)')
   // 闭包捕获逐步指导，executor 中注入到 context.data
   const guidance = params.stepGuidance || {}
+  const expectedRecoveryHandle = params.expectedRecoveryHandle ? Object.freeze({ ...params.expectedRecoveryHandle }) : undefined
+  const recoveryHandle = async (context: WorkflowContext, kind: 'worldbuilding' | 'synopsis') => {
+    const session = requireWorkflowProjectSession(context)
+    const result = await ipc.invokeWithProjectSession(session, 'fs:read-json',
+      `${expectedProjectPath}/${CANONICAL_PROJECT_DIRECTORY}/partial_arch.json`, expectedProjectPath)
+    const partial = result.success ? result.data : undefined
+    const handle = architectureRecoveryHandle(partial, kind, session.projectId)
+    if (!handle) throw new Error(text('此候选缺少可恢复的运行记录，请保留或复制候选后重新生成。', 'This candidate has no recoverable run record. Keep or copy it before generating again.'))
+    if (expectedRecoveryHandle && (['projectId', 'epoch', 'rootActionId', 'runId'] as const)
+      .some(key => handle[key] !== expectedRecoveryHandle[key])) throw new Error(text(
+        '恢复记录已变化，已拒绝改用另一运行；请重新查看候选后再继续。',
+        'The recovery record changed. A different run was not substituted; review the candidate again before continuing.',
+      ))
+    context.data.partial = partial
+    return handle
+  }
 
   const allSteps = [
     {
@@ -135,6 +159,7 @@ export function createArchitectureWorkflow(
         const { GenerateWorldBuildingCommand } = await import('./commands/architecture.command')
         return new GenerateWorldBuildingCommand(projectSnapshot, undefined, {
           resumeWorldBuilding: params.resumeWorldBuilding,
+          ...(resumingWorldBuilding ? { resumeHandle: await recoveryHandle(context, 'worldbuilding') } : {}),
         }).execute({ step, context, callbacks })
       },
     },
@@ -149,13 +174,23 @@ export function createArchitectureWorkflow(
         const { GeneratePlotArchitectureCommand } = await import('./commands/architecture.command')
         return new GeneratePlotArchitectureCommand(sel, projectSnapshot, undefined, {
           resumeSynopsis: params.resumeSynopsis,
+          ...(resumingSynopsis ? { resumeHandle: await recoveryHandle(context, 'synopsis') } : {}),
           synopsisRange: params.synopsisRange ?? null,
         }).execute({ step, context, callbacks })
       },
     },
   ]
 
-  const finalSteps = allSteps.filter(s => sel.includes(s.key as never))
+  const finalSteps = allSteps.filter(s => sel.includes(s.key as never)).flatMap(step => step.key === 'characters'
+    ? [step, {
+      name: text('确认采用角色提议', 'Confirm character adoption'), key: 'adopt-characters',
+      description: text('按预览采用明确身份，未明确的候选继续保留', 'Adopt clear identities from the preview and keep unresolved candidates'),
+      requiresConfirmation: true,
+      executor: async (step: unknown, context: WorkflowContext, callbacks: StepCallbacks) => {
+        const { AdoptGeneratedCharactersCommand } = await import('./commands/architecture.command')
+        return new AdoptGeneratedCharactersCommand().execute({ step, context, callbacks })
+      },
+    }] : [step])
 
   return {
     type: 'architecture_generation',

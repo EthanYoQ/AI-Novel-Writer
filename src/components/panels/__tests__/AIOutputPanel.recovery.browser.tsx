@@ -80,7 +80,7 @@ beforeEach(() => {
   })
   clipboardWrite = vi.fn().mockResolvedValue(undefined)
   Object.assign(window, {
-    velaAPI: {
+    aiNovelAPI: {
       invoke,
       on: vi.fn(),
       once: vi.fn(),
@@ -105,7 +105,7 @@ afterEach(async () => {
   root = undefined
   container = undefined
   setActiveProjectSessionContext(null)
-  delete (window as typeof window & { velaAPI?: unknown }).velaAPI
+  delete (window as typeof window & { aiNovelAPI?: unknown }).aiNovelAPI
 })
 
 describe('AI output recovery candidates', () => {
@@ -158,7 +158,7 @@ describe('AI output recovery candidates', () => {
       await Promise.resolve()
     })
     const recoveryTab = useEditorStore.getState().tabs.find(tab => (
-      tab.filePath === 'vela://recovery/candidate-1'
+      tab.filePath === 'ai-novel://recovery/candidate-1'
     ))!
     await act(async () => useEditorStore.getState().setActiveTab(recoveryTab.id))
 

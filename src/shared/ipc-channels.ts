@@ -1,8 +1,12 @@
+import type { GenerationOwnerChannels, GenerationOwnerEvents } from './generation-owner-contract'
+import type { CharacterProposalChannels } from './character-proposal'
+import type { FinalizedCharacterGenerationChannels } from './finalized-character-generation'
 /**
  * IPC 频道定义 — 渲染进程与主进程的类型安全通信契约
  * 所有 IPC 调用都通过此文件定义频道名和参数/返回值类型
  */
 import type { Locale } from '../i18n/types'
+import type { StartupChannels } from './startup-contract'
 import type {
   CreativeStrategy,
   GenerationReasoningStage,
@@ -742,6 +746,10 @@ export interface DatabaseChannels {
     args: [data: Partial<ProjectCoreData>, expectedProjectPath: string]
     return: { success: boolean; error?: string }
   }
+  'db:project-core-commit-generated': {
+    args: [request: { data: Partial<ProjectCoreData>; generationRunHandle: import('../services/generation/generation-runtime').MainGenerationRunHandle }, expectedProjectPath: string]
+    return: { success: boolean; error?: string }
+  }
   'db:project-core-synopsis-commit': {
     args: [request: ProjectCoreSynopsisCommitRequest, expectedProjectPath: string]
     return: { success: boolean; error?: string }
@@ -993,7 +1001,7 @@ export interface DatabaseChannels {
   'db:review-next-index': { args: [baseDraftId: number, expectedProjectPath: string]; return: number }
 
   // 7. post_process
-  'db:post-process-create-run': { args: [params: { triggerSourceType: string; triggerSourceId: string; sourceLabel: string; steps: Array<{ key: string; label: string; critical: boolean }> }, expectedProjectPath: string]; return: { success: boolean; id?: string; error?: string } }
+  'db:post-process-create-run': { args: [params: { finalizedSource?: import('./finalized-continuity').FinalizedSourceIdentity; triggerSourceType: string; triggerSourceId: string; sourceLabel: string; steps: Array<{ key: string; label: string; critical: boolean }> }, expectedProjectPath: string]; return: { success: boolean; id?: string; error?: string } }
   'db:post-process-get-latest-run': { args: [sourceType: string, sourceId: string, expectedProjectPath: string]; return: PostProcessRunData | null }
   'db:post-process-get-steps': { args: [runId: string, expectedProjectPath: string]; return: PostProcessStepData[] }
   'db:post-process-mark-step-ok': { args: [runId: string, stepKey: string, expectedProjectPath: string]; return: { success: boolean; error?: string } }
@@ -1148,8 +1156,8 @@ export interface MCPChannels {
 }
 
 // ===== 合并所有频道 =====
-export type AllInvokeChannels = WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & SkinChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
-export type AllEventChannels = LLMStreamEvents & UpdateStateEvents & WindowEvents
+export type AllInvokeChannels = FinalizedCharacterGenerationChannels & CharacterProposalChannels & GenerationOwnerChannels & StartupChannels & WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & SkinChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
+export type AllEventChannels = GenerationOwnerEvents & LLMStreamEvents & UpdateStateEvents & WindowEvents
 
 /** 提取 invoke 频道名 */
 export type InvokeChannel = keyof AllInvokeChannels

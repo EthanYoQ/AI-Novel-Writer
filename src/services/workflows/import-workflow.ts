@@ -277,7 +277,7 @@ function productionDependencies(
       const style = await new AnalyzeWritingStyleCommand(
         { chapters: chapters.map(importedChapter) },
         undefined,
-        async writingStyle => { await commit({ writingStyle }) },
+        async (writingStyle, generationRunHandle) => { await commit({ writingStyle, ...(generationRunHandle ? { generationRunHandle } : {}) }) },
       )
         .execute({ step: {} as never, context, callbacks })
       if (!style.trim()) throw new Error(textForLocale(

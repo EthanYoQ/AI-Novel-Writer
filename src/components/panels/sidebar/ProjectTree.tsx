@@ -1,3 +1,4 @@
+import { formatResourceUri } from '../../../shared/project-paths'
 /**
  * ProjectTree — 项目导航树（侧边栏核心视图）
  *
@@ -222,7 +223,7 @@ export default function ProjectTree() {
     .filter(Boolean)
     .sort((a, b) => a!.chapterNumber - b!.chapterNumber)
     .map(draft => ({
-      path: `vela://manuscript/${draft!.id}`, // 诸如 vela://manuscript/42
+      path: formatResourceUri({ kind: 'manuscript', id: draft!.id }), // 诸如 ai-novel://manuscript/42
       name: `chapter_${draft!.chapterNumber}.md`, // 提供格式化的伪文件名供组件适配解析
       isDir: false,
       chapterTitle: draft!.chapterTitle,
@@ -399,7 +400,7 @@ function WorldBuildingGroup({
         <div>
           {ARCH_FILES.map(f => {
             const isGenerated = archStatus[f.key]
-            const filePath = `vela://core/${f.key}`
+            const filePath = `ai-novel://core/${f.key}`
             return (
               <ArchFileRow
                 key={f.key}
@@ -445,7 +446,7 @@ function ArchFileRow({
     if (!projectSession) return
     const projectKey = projectSession.projectPath
 
-    const { writeCoreContent } = await import('../../../services/vela-protocol')
+    const { writeCoreContent } = await import('../../../services/resource-protocol')
     const success = await writeCoreContent(filePath, '', projectSession)
     if (!isProjectSessionCurrent(projectSession)) return
     if (!success) {

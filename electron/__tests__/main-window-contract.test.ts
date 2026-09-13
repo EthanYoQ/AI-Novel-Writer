@@ -7,10 +7,10 @@ function source(file: string) {
 }
 
 describe('Electron main window chrome contract', () => {
-  it('uses the custom writer title bar instead of the native system title bar', () => {
+  it('uses native controls only for diagnostic windows and keeps the writer title bar in the normal workspace', () => {
     const main = source('electron/main.ts')
 
-    expect(main).toMatch(/frame:\s*false/)
+    expect(main).toMatch(/frame:\s*Boolean\(startupBlockedCode\)/)
     expect(main).not.toMatch(/titleBarStyle:\s*'hiddenInset'/)
   })
 

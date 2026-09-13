@@ -4,6 +4,10 @@
  * currentState 子结构已拍平为 cs_* 前缀列，杜绝 JSON 大字段。
  */
 import { getProjectDb } from '../database'
+import type Database from 'better-sqlite3'
+export function hasCharacterIdentitySchema(db: Database.Database): boolean {
+    return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='character_identity_meta'").get())
+}
 import {
     normalizeCharacterRole,
     type CharacterRole,
@@ -31,6 +35,7 @@ function parseProvenance(value: unknown): Partial<Record<CharacterStateTextField
 
 /** 角色卡完整数据（前端驼峰接口） */
 export interface CharacterData {
+    characterId?: string
     name: string
     role: CharacterRole
     gender: string
@@ -53,6 +58,7 @@ export interface CharacterRenameData {
 
 function rowToData(row: Record<string, unknown>): CharacterData {
     const data: CharacterData = {
+        ...(typeof row.character_id === 'string' ? { characterId: row.character_id } : {}),
         name: row.name as string,
         role: normalizeCharacterRole(row.role),
         gender: (row.gender as string) || '',
@@ -89,9 +95,16 @@ function rowToData(row: Record<string, unknown>): CharacterData {
 }
 
 export class CharacterRepository {
-    /** 获取所有角色（按角色定位排序：主角→配角→反派→龙套） */
-    static getAll(): CharacterData[] {
+    static getById(characterId: string): CharacterData | null {
         const db = getProjectDb()
+        if (!db) return null
+        const row = db.prepare('SELECT * FROM characters WHERE character_id=? AND retired=0').get(characterId) as Record<string, unknown> | undefined
+        return row ? rowToData(row) : null
+    }
+
+    /** 获取所有角色（按角色定位排序：主角→配角→反派→龙套） */
+    static getAll(capturedDatabase?: import('better-sqlite3').Database): CharacterData[] {
+        const db = capturedDatabase ?? getProjectDb()
         if (!db) return []
 
         const rows = db.prepare(`
@@ -110,10 +123,15 @@ export class CharacterRepository {
     }
 
     /** 获取单个角色 */
-    static getByName(name: string): CharacterData | null {
+    static getByName(name: string, sourceKey?: string): CharacterData | null {
         const db = getProjectDb()
         if (!db) return null
 
+        if (hasCharacterIdentitySchema(db)) {
+            if (!sourceKey) return null
+            const rows = db.prepare('SELECT c.* FROM characters c JOIN character_aliases a ON a.character_id=c.character_id WHERE a.name=? AND a.source_key=? AND a.valid_through IS NULL AND c.retired=0').all(name, sourceKey) as Record<string, unknown>[]
+            return rows.length === 1 ? rowToData(rows[0]) : null
+        }
         const row = db.prepare(
             'SELECT * FROM characters WHERE name = ?'
         ).get(name) as Record<string, unknown> | undefined
@@ -137,6 +155,7 @@ export class CharacterRepository {
     static upsert(data: CharacterData): void {
         const db = getProjectDb()
         if (!db) return
+        if (hasCharacterIdentitySchema(db)) throw new Error('CHARACTER_ID_WRITE_REQUIRED')
 
         const cs = data.currentState
         db.prepare(`
@@ -196,6 +215,7 @@ export class CharacterRepository {
     static saveAll(characters: CharacterData[], renames: CharacterRenameData[] = []): void {
         const db = getProjectDb()
         if (!db) throw new Error('项目数据库未打开')
+        if (hasCharacterIdentitySchema(db)) throw new Error('CHARACTER_ID_WRITE_REQUIRED')
 
         const tx = db.transaction(() => {
             const normalizedCharacters = characters.map(character => ({
@@ -307,6 +327,7 @@ export class CharacterRepository {
     static delete(name: string): void {
         const db = getProjectDb()
         if (!db) return
+        if (hasCharacterIdentitySchema(db)) throw new Error('CHARACTER_ID_WRITE_REQUIRED')
 
         db.prepare('DELETE FROM characters WHERE name = ?').run(name)
     }
@@ -315,6 +336,7 @@ export class CharacterRepository {
     static updateState(name: string, state: CharacterStateData): void {
         const db = getProjectDb()
         if (!db) return
+        if (hasCharacterIdentitySchema(db)) throw new Error('CHARACTER_ID_WRITE_REQUIRED')
 
         db.prepare(`
       UPDATE characters SET

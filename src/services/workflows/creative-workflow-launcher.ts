@@ -42,6 +42,7 @@ export type CreativeIntent =
       resumeSynopsis?: ArchitectureWorkflowParams['resumeSynopsis']
       /** 从输出长度中断的候选续写世界观。 */
       resumeWorldBuilding?: ArchitectureWorkflowParams['resumeWorldBuilding']
+      expectedRecoveryHandle?: ArchitectureWorkflowParams['expectedRecoveryHandle']
     }
   | { workflow: 'generate_blueprint'; params?: DirectoryWorkflowParams }
   | { workflow: 'review' | 'refine' | 'finalize'; chapterNumber: number }
@@ -128,6 +129,7 @@ async function definitionFor(
       synopsisRange: intent.synopsisRange ?? null,
       resumeSynopsis: intent.resumeSynopsis,
       resumeWorldBuilding: intent.resumeWorldBuilding,
+      expectedRecoveryHandle: intent.expectedRecoveryHandle,
     }, uiLocale)
   }
   if (intent.workflow === 'generate_blueprint') {

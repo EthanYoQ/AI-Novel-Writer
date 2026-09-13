@@ -1,6 +1,7 @@
 import { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from './provider.interface'
 import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 import { resolveOpenAIChatCompletionsUrl } from './openai-compatible-endpoint'
+import { VisibleStreamFilter } from './visible-stream'
 
 export class OpenAIProvider implements ILLMProvider {
   private normalizeFinishReason(reason: string | null | undefined): LLMFinishReason {
@@ -31,7 +32,7 @@ export class OpenAIProvider implements ILLMProvider {
     const body: Record<string, unknown> = {
       model: model.modelName,
       messages,
-      max_tokens: opts.maxTokens ?? model.maxTokens,
+      [opts.outputTokenParameter ?? 'max_tokens']: opts.maxTokens ?? model.maxTokens,
       stream,
     }
 
@@ -124,9 +125,10 @@ export class OpenAIProvider implements ILLMProvider {
 
   async generateStream(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMStreamOptions): Promise<void> {
     let fullText = ''
+    const visible = new VisibleStreamFilter()
     let usage: TokenUsage | undefined
     const fail = (error: string) => {
-      const visibleCandidate = this.stripThinking(fullText)
+      const visibleCandidate = opts.visibleOnly ? visible.text : this.stripThinking(fullText)
       opts.onError(error, visibleCandidate || undefined, usage)
     }
 
@@ -199,6 +201,18 @@ export class OpenAIProvider implements ILLMProvider {
         const reportedUsage = payload.usage
         if (reportedUsage !== null && typeof reportedUsage === 'object' && !Array.isArray(reportedUsage)) {
           const rawUsage = reportedUsage as Record<string, unknown>
+          const details = rawUsage.completion_tokens_details
+          const reasoning = details && typeof details === 'object' && !Array.isArray(details)
+            ? (details as Record<string, unknown>).reasoning_tokens : undefined
+          opts.onUsageEvidence?.({
+            usage: {
+              promptTokens: typeof rawUsage.prompt_tokens === 'number' ? rawUsage.prompt_tokens : null,
+              completionTokens: typeof rawUsage.completion_tokens === 'number' ? rawUsage.completion_tokens : null,
+              totalTokens: typeof rawUsage.total_tokens === 'number' ? rawUsage.total_tokens : null,
+            },
+            reasoningTokens: typeof reasoning === 'number' ? reasoning : null,
+            accounting: 'included-in-completion', totalIncludesReasoning: true, protocol: 'openai',
+          })
           if (
             typeof rawUsage.prompt_tokens === 'number'
             && typeof rawUsage.completion_tokens === 'number'
@@ -245,6 +259,14 @@ export class OpenAIProvider implements ILLMProvider {
         }
         if (delta.content !== undefined && delta.content !== null && typeof delta.content !== 'string') {
           fatalError = '响应流的 content 类型无效'
+          return
+        }
+
+        if (opts.visibleOnly) {
+          if (typeof delta.content === 'string') {
+            const chunk = visible.push(delta.content)
+            if (chunk) opts.onChunk(chunk)
+          }
           return
         }
 
@@ -331,7 +353,7 @@ export class OpenAIProvider implements ILLMProvider {
         fullText += closeTag
       }
 
-      opts.onDone(this.stripThinking(fullText), usage, finishReason)
+      opts.onDone(opts.visibleOnly ? visible.text : this.stripThinking(fullText), usage, finishReason)
     } catch (error) {
       if ((error as Error).name === 'AbortError') {
         fail('已取消生成')

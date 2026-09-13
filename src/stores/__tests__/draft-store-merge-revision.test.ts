@@ -110,10 +110,10 @@ describe('draft-store merged revision persistence', () => {
 
   it('marks the direct vela revision URI as merged after its target draft is updated', async () => {
     const result = await useDraftStore.getState().applyMergedRevision(
-      'vela://draft/ch1',
+      'ai-novel://draft/ch1',
       1,
-      'vela://draft/11',
-      'vela://revision/1',
+      'ai-novel://draft/11',
+      'ai-novel://revision/1',
       '已人工合并的修订稿',
       '原稿',
       projectPath,
@@ -149,7 +149,7 @@ describe('draft-store merged revision persistence', () => {
     const mergePending = new Promise<void>(resolve => { releaseMerge = resolve })
     editorTabs.push({
       id: 'draft-11',
-      filePath: 'vela://draft/11',
+      filePath: 'ai-novel://draft/11',
       projectKey: projectPath,
       content: '原稿',
       contentRevision: 3,
@@ -165,10 +165,10 @@ describe('draft-store merged revision persistence', () => {
     })
 
     const merging = useDraftStore.getState().applyMergedRevision(
-      'vela://draft/ch1',
+      'ai-novel://draft/ch1',
       1,
-      'vela://draft/11',
-      'vela://revision/1',
+      'ai-novel://draft/11',
+      'ai-novel://revision/1',
       '合并正文',
       '原稿',
       projectPath,

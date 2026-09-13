@@ -5,17 +5,27 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
+import { closeProjectDatabase, getProjectDb } from '../../database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import { ProjectCoreRepository } from '../project-core-repository'
 import { ImportRunRepository } from '../import-run-repository'
 import { BlueprintRepository, type BlueprintData } from '../blueprint-repository'
-import { CharacterRosterRepository } from '../character-roster-repository'
+import { CharacterProposalService } from '../../services/character-proposal-service'
+import { proveCharacterProposal } from '../../services/generation-character-proposal-proof'
+import { GenerationRunRepository } from '../generation-run-repository'
+import { projectAccess } from '../../services/project-access'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
 
 let root = ''
 const content = 'reference'
+function stageDirectory(operationId: string) {
+  const db = getProjectDb()!, project = projectAccess.probeExistingProject(root)
+  if (project.kind !== 'manifest') throw new Error('test project identity missing')
+  return new CharacterProposalService(db, project.projectId, source => proveCharacterProposal(db,
+    new GenerationRunRepository(() => db), project.projectId, source, false, () => {})).stage({ kind: 'directory', operationId })
+}
 
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-import-receipt-'))
@@ -42,7 +52,7 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true })
 })
 
-function prepareStyleReceipt() {
+function prepareStyleReceipt(generationRunHandle?: import('../../../src/services/generation/generation-runtime').MainGenerationRunHandle) {
   const started = ImportRunRepository.startOrResume('receipt-run', 'renderer-a')
   moveRunToStyle()
   ImportRunRepository.prepareEffectReceipt({
@@ -51,7 +61,7 @@ function prepareStyleReceipt() {
     batchId: 'done',
     effectKey: 'writing-style',
     kind: 'project-writing-style',
-    payload: { writingStyle: 'Frozen generated style' },
+    payload: { writingStyle: 'Frozen generated style', ...(generationRunHandle ? { generationRunHandle } : {}) },
   }, started.execution)
   return started.execution
 }
@@ -64,9 +74,26 @@ function moveRunToStyle(): void {
   `).run()
 }
 
+it('keeps a generated style bound through durable preparation and guards only new effects', () => {
+  const handle = { projectId: 'project', epoch: 'epoch', rootActionId: 'root', runId: 'generation' }
+  const execution = prepareStyleReceipt(handle)
+  expect(() => ImportRunRepository.commitEffectReceipt('receipt-run', 'style', 'done', execution)).toThrow('GENERATION_GUARD_REQUIRED')
+  expect(() => ImportRunRepository.commitEffectReceipt('receipt-run', 'style', 'done', execution, Date.now(), () => { throw new Error('GENERATION_SOURCE_CHANGED') })).toThrow('GENERATION_SOURCE_CHANGED')
+  expect(ProjectCoreRepository.get()?.writingStyle).toBe('')
+  expect(ImportRunRepository.getEffectReceipt('receipt-run', 'style', 'done')?.state).toBe('prepared')
+  const committed = ImportRunRepository.commitEffectReceipt('receipt-run', 'style', 'done', execution, Date.now(), actual => {
+    expect(getProjectDb()!.inTransaction).toBe(true)
+    expect(actual).toEqual(handle)
+  })
+  expect(committed.receipt.state).toBe('committed')
+  ProjectCoreRepository.update({ writingStyle: '作者后来编辑的文风' })
+  ImportRunRepository.commitEffectReceipt('receipt-run', 'style', 'done', execution, Date.now(), () => { throw new Error('must not reapply') })
+  expect(ProjectCoreRepository.get()?.writingStyle).toBe('作者后来编辑的文风')
+})
+
 function tamperOffline(sql: string): void {
   closeProjectDatabase()
-  const offline = new Database(path.join(root, '.vela', 'vela.db'))
+  const offline = new Database(path.join(root, '.ai-novel', 'project.db'))
   offline.exec(sql)
   offline.close()
   initProjectDatabase(root)
@@ -148,16 +175,7 @@ describe('import-run durable effect receipt', () => {
     const operation = BlueprintRepository.getCommittedRangeOperation('import-blueprints-receipt-run-1-1')
     expect(operation?.characterSyncOperation.status).toBe('pending')
 
-    CharacterRosterRepository.commit({
-      operationId: operation!.characterSyncOperation.operationId,
-      expectedRevision: 0,
-      schemaVersion: 1,
-      intent: 'blueprint_sync',
-      entries: [{
-        name: 'Protagonist', role: 'supporting', gender: '', age: '', appearance: '',
-        personality: '', background: '', abilities: '', motivation: '', relationships: [], arc: '', notes: '',
-      }],
-    })
+    stageDirectory(operation!.characterSyncOperation.operationId)
     expect(BlueprintRepository.completeCharacterSyncOperation(
       operation!.characterSyncOperation.operationId,
     ).status).toBe('completed')
@@ -175,18 +193,8 @@ describe('import-run durable effect receipt', () => {
       })
   })
 
-  it('rejects an offline-forged committed sync receipt without its roster operation proof', () => {
+  it('rejects an offline-forged completion without its proposal staging evidence', () => {
     prepareCommittedBlueprintReceipt()
-    CharacterRosterRepository.commit({
-      operationId: 'different-roster-operation',
-      expectedRevision: 0,
-      schemaVersion: 1,
-      intent: 'blueprint_sync',
-      entries: [{
-        name: 'Protagonist', role: 'supporting', gender: '', age: '', appearance: '',
-        personality: '', background: '', abilities: '', motivation: '', relationships: [], arc: '', notes: '',
-      }],
-    })
     tamperOffline(`
       UPDATE blueprint_character_sync_operations
       SET status = 'completed',
@@ -209,7 +217,7 @@ describe('import-run durable effect receipt', () => {
       .toThrow(/receipt.*损坏|收据.*损坏/i)
   })
 
-  it('accepts an already-satisfied receipt when blueprints need no existing-roster relationship update', () => {
+  it('rejects an already-satisfied claim without a durable proposal under the ID schema', () => {
     prepareCommittedBlueprintReceipt()
     tamperOffline(`
       UPDATE blueprint_character_sync_operations
@@ -223,8 +231,8 @@ describe('import-run durable effect receipt', () => {
       WHERE operation_id = 'blueprint-sync-import-blueprints-receipt-run-1-1'
     `)
 
-    expect(ImportRunRepository.getEffectReceipt('receipt-run', 'blueprints', '1-1-52367a66'))
-      .toMatchObject({ state: 'committed' })
+    expect(() => ImportRunRepository.getEffectReceipt('receipt-run', 'blueprints', '1-1-52367a66'))
+      .toThrow(/receipt.*损坏|收据.*损坏/i)
   })
 
   it('freezes generated output before effect commit and atomically commits effect with checkpoint after reopen', () => {

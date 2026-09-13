@@ -13,6 +13,7 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../../i18n', () => ({ mainText: (_locale: string, _zh: string, en: string) => en }))
 
+let fixtureRoot = ''
 let velaHome: string
 
 function handler(channel: string): IpcHandler {
@@ -51,7 +52,8 @@ describe('writing skill app-data boundary', () => {
     vi.resetModules()
     mocks.handlers.clear()
     velaHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-writing-skills-'))
-    process.env.AI_NOVEL_VELA_HOME = velaHome
+    fixtureRoot = velaHome
+    velaHome = await (await import('../../services/__tests__/global-data-fixture')).prepareGlobalDataFixture(fixtureRoot)
     vi.stubGlobal('fetch', vi.fn(async () => skillResponse()))
     const { registerAppDataController } = await import('../app-data-controller')
     registerAppDataController()
@@ -60,7 +62,8 @@ describe('writing skill app-data boundary', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     delete process.env.AI_NOVEL_VELA_HOME
-    fs.rmSync(velaHome, { recursive: true, force: true })
+    delete process.env.AI_NOVEL_APP_DATA_HOME
+    fs.rmSync(fixtureRoot, { recursive: true, force: true })
   })
 
   it('inspects a GitHub blob without writing it', async () => {

@@ -6,7 +6,12 @@
 import { createHash } from 'node:crypto'
 
 import { getProjectDb } from '../database'
+import { ensureBaselineBlueprintTables } from '../migrations/baseline-blueprint-schema'
 import { CharacterRosterRepository } from './character-roster-repository'
+import { hasCharacterIdentitySchema } from './character-repository'
+import { findCharacterProposalEvidence } from '../services/character-proposal-service'
+import { proveCharacterProposal } from '../services/generation-character-proposal-proof'
+import { GenerationRunRepository } from './generation-run-repository'
 import { blueprintCharacterSyncFactError } from '../../src/shared/blueprint-character-sync-evidence'
 import type { BlueprintNewCharacterCandidate } from '../../src/shared/blueprint-semantic-contract'
 
@@ -51,6 +56,9 @@ export interface BlueprintData {
 export type BlueprintRangeCommitMode = 'full' | 'replace-range'
 
 export interface BlueprintRangeCommitRequest {
+    /** Optional while legacy import consumers await S06D/S12; generated planning supplies it. */
+    generationRunHandle?: import('../../src/services/generation/generation-runtime').MainGenerationRunHandle
+    generationRequestedRange?: { startChapter: number; endChapter: number }
     mode: BlueprintRangeCommitMode
     operationId: string
     startChapter: number
@@ -59,6 +67,7 @@ export interface BlueprintRangeCommitRequest {
 }
 
 export interface BlueprintRangeCommitReceipt {
+    generationProgress?: import('../../src/shared/generation-owner-contract').DirectoryGenerationProgress
     mode: BlueprintRangeCommitMode
     operationId: string
     payloadHash: string
@@ -76,7 +85,8 @@ export interface BlueprintRangeCommitReceipt {
 export interface BlueprintCharacterSyncCompletionReceipt {
     blueprintCommitOperationId: string
     operationId: string
-    status: 'committed' | 'already-satisfied'
+    status: 'committed' | 'already-satisfied' | 'proposal-staged'
+    proposalReceipt?: import('../../src/shared/character-proposal').CharacterProposalStageEvidence
     /** Hash/revision evidence only; the authoritative roster snapshot stays in its fact tables. */
     rosterReceipt?: {
         operationId: string
@@ -156,35 +166,8 @@ function requireProjectDb(): NonNullable<ReturnType<typeof getProjectDb>> {
 }
 
 function ensureBlueprintCommitSchema(db: NonNullable<ReturnType<typeof getProjectDb>>): void {
+    ensureBaselineBlueprintTables(db)
     db.exec(`
-      CREATE TABLE IF NOT EXISTS blueprint_commit_operations (
-        operation_id TEXT PRIMARY KEY,
-        payload_hash TEXT NOT NULL,
-        mode TEXT NOT NULL CHECK(mode IN ('full', 'replace-range')),
-        start_chapter INTEGER NOT NULL,
-        end_chapter INTEGER NOT NULL,
-        character_sync_input TEXT NOT NULL,
-        committed_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-
-      CREATE TABLE IF NOT EXISTS blueprint_character_sync_operations (
-        operation_id TEXT PRIMARY KEY,
-        blueprint_commit_operation_id TEXT NOT NULL UNIQUE,
-        blueprint_commit_payload_hash TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'completed')),
-        start_chapter INTEGER NOT NULL,
-        end_chapter INTEGER NOT NULL,
-        character_sync_input TEXT NOT NULL,
-        completion_receipt TEXT DEFAULT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        completed_at TEXT DEFAULT NULL,
-        FOREIGN KEY (blueprint_commit_operation_id)
-          REFERENCES blueprint_commit_operations(operation_id) ON DELETE CASCADE
-      );
-      CREATE INDEX IF NOT EXISTS idx_blueprint_character_sync_status
-        ON blueprint_character_sync_operations(status, created_at);
-
       INSERT OR IGNORE INTO blueprint_character_sync_operations (
         operation_id,
         blueprint_commit_operation_id,
@@ -374,6 +357,11 @@ function authoritativeCharacterSyncCompletionReceipt(
     db: NonNullable<ReturnType<typeof getProjectDb>>,
     operation: BlueprintCharacterSyncOperation,
 ): BlueprintCharacterSyncCompletionReceipt {
+    if (hasCharacterIdentitySchema(db)) {
+        const proposalReceipt = findCharacterProposalEvidence(db, { kind: 'directory', operationId: operation.operationId },
+          (projectId, source) => proveCharacterProposal(db, new GenerationRunRepository(() => db), projectId, source, false, () => {}))
+        return { blueprintCommitOperationId: operation.blueprintCommitOperationId, operationId: operation.operationId, status: 'proposal-staged', proposalReceipt }
+    }
     const roster = CharacterRosterRepository.read()
     if (roster.status !== 'ready' && roster.status !== 'empty') {
         throw new Error('角色名单当前不可验证，已拒绝完成蓝图角色同步')
@@ -586,7 +574,7 @@ export class BlueprintRepository {
     }
 
     /** 完整逻辑范围只提交一次，并在同一事务内回读验证后返回收据。 */
-    static commitRange(request: BlueprintRangeCommitRequest): BlueprintRangeCommitReceipt {
+    static commitRange(request: BlueprintRangeCommitRequest, assertGenerationSources?: () => void): BlueprintRangeCommitReceipt {
         assertExactRange(request)
         const db = requireProjectDb()
         ensureBlueprintCommitSchema(db)
@@ -629,6 +617,9 @@ export class BlueprintRepository {
                 }
             }
 
+            // An acknowledged operation is read-only on replay. New effects must
+            // revalidate frozen sources inside this same write transaction.
+            assertGenerationSources?.()
             if (request.mode === 'full') {
                 db.prepare(
                     'DELETE FROM blueprints WHERE chapter_number < ? OR chapter_number > ?',
@@ -698,7 +689,7 @@ export class BlueprintRepository {
                 characterSyncOperation,
             }
         })
-        return tx()
+        return tx.immediate()
     }
 
     /** Lists durable post-commit work that can be resumed after an app restart. */

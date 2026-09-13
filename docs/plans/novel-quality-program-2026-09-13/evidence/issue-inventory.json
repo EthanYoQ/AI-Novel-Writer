@@ -1,0 +1,497 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-13T00:05:26+08:00",
+  "repository": "EthanYoQ/AI-Novel-Writer",
+  "readOnly": true,
+  "scope": {
+    "state": "OPEN",
+    "pullRequestsExcluded": true,
+    "issueCount": 10,
+    "evidenceRead": [
+      "all open issue bodies, labels, authors, createdAt, updatedAt, and comments",
+      "issue timeline cross-references",
+      "linked pull-request state, merge SHA, checks, and stated boundaries",
+      "latest published release target and release notes",
+      "source Discussion #215 for Issue #219"
+    ],
+    "mutationsPerformed": []
+  },
+  "repositorySnapshot": {
+    "defaultBranch": "master",
+    "defaultBranchHead": "2264390d6fb8b052cc14736d544df0cc74516649",
+    "latestRelease": {
+      "tag": "v1.1.0",
+      "publishedAt": "2026-09-08T04:35:10Z",
+      "targetCommit": "879f83521414f66019488462830c3134c77dc4f8",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v1.1.0"
+    },
+    "openIssuesExcludingPullRequests": 10,
+    "openPullRequestsObserved": [223, 225]
+  },
+  "triagePolicy": {
+    "missingInformationClosure": "Only eligible after a concrete maintainer information request remains unanswered for the project's waiting period. An old date, an incomplete report, or needs-triage alone is not evidence of an unanswered request.",
+    "completed": "Use only where the scoped work is demonstrably merged; distinguish released fixes from code-only fixes in the closure note.",
+    "notPlanned": "Use for an explicit product decision not to implement, or when a precisely linked canonical tracker retains every still-wanted requirement. Do not use it merely to reduce the open count.",
+    "duplicate": "No current open issue is safe to close as duplicate without first naming a canonical tracker that retains its uncovered scope."
+  },
+  "summary": {
+    "recommendedCloseNow": [199, 205, 211],
+    "recommendedCloseNowPublished": [199, 205],
+    "recommendedCloseNowCodeOnlyWithReleaseDisclosure": [211],
+    "recommendedKeepOpen": [187, 191, 213, 219, 221, 222, 224],
+    "currentUnansweredMaintainerInfoRequests": [],
+    "safeDuplicateClosures": [],
+    "safeNotPlannedClosures": [],
+    "openPullRequestBlockedOrUnmerged": [222, 224]
+  },
+  "issues": [
+    {
+      "number": 187,
+      "title": "工作流未完成  AI 输出达到模型最大长度，结果不完整。请提高模型最大输出 Tokens 或缩短本次任务后重试。好多功能都提示这个，ai里面最大输出token设置的384000",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/187",
+      "author": "bangjier",
+      "createdAt": "2026-09-04T09:37:25Z",
+      "updatedAt": "2026-09-12T01:26:34Z",
+      "labels": [],
+      "commentCount": 2,
+      "reportSummary": "0.9.2/macOS diagnostics show length failures in review-chapter and chapter-blueprint-directory even though the configured UI value was described as very high.",
+      "latestSubstantiveUpdate": {
+        "at": "2026-09-12T01:26:34Z",
+        "by": "xkhanhan",
+        "kind": "reporter-follow-up",
+        "summary": "After the maintainer's claim that 1.0.0 fixed the issue and after v1.1.0 was published, another user stated that the problem still reproduces.",
+        "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/187#issuecomment-5642526281"
+      },
+      "informationRequest": {
+        "present": false,
+        "latestRequestAt": null,
+        "answered": null,
+        "notes": "No maintainer comment asks the reporter for specific missing information."
+      },
+      "deliveryEvidence": [
+        {
+          "kind": "released-partial-attempt",
+          "reference": "PR #194",
+          "url": "https://github.com/EthanYoQ/AI-Novel-Writer/pull/194",
+          "state": "MERGED_AND_INCLUDED_BEFORE_V1.1.0",
+          "boundary": "The PR explicitly did not auto-close #187; a later user still reproduced the symptom."
+        },
+        {
+          "kind": "code-only-partial-fix",
+          "reference": "PR #229",
+          "url": "https://github.com/EthanYoQ/AI-Novel-Writer/pull/229",
+          "state": "MERGED_AFTER_LATEST_RELEASE",
+          "mergeCommit": "2264390d6fb8b052cc14736d544df0cc74516649",
+          "boundary": "Covers world-building truncation recovery and chapter-outline context reduction only; PR says it does not solve all #187 scenarios and is not released."
+        }
+      ],
+      "classification": ["active-reproducible", "known-fix-partial", "post-release-contradiction"],
+      "recommendation": {
+        "action": "KEEP_OPEN",
+        "stateReason": null,
+        "reason": "The newest substantive evidence contradicts the older completed claim, and the newest merged repair is both partial and unreleased.",
+        "closeCondition": "Reproduce and partition the remaining workflow-specific failure, ship a fix for the retained canonical scope, and obtain version-bound verification without a newer contradiction."
+      },
+      "canonicalTracking": "Keep #187 as the canonical cross-workflow length/truncation symptom until narrower child trackers are explicitly created and linked.",
+      "risks": [
+        "Closing now would falsely convert a current reproduction into a completed fix.",
+        "A high UI max-token value may differ from the provider's actual output cap; diagnosis must record the effective request and finish reason without exposing credentials.",
+        "PR #229 must not be described as released in v1.1.0."
+      ]
+    },
+    {
+      "number": 191,
+      "title": "能不能增加根据文本自动生成小说人物卡片功能",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/191",
+      "author": "lidochka77",
+      "createdAt": "2026-09-04T15:10:01Z",
+      "updatedAt": "2026-09-04T15:52:09Z",
+      "labels": ["enhancement"],
+      "commentCount": 1,
+      "reportSummary": "Import existing prose/outline to generate editable character cards and automatically add important information as the plot progresses.",
+      "latestSubstantiveUpdate": {
+        "at": "2026-09-04T15:51:17Z",
+        "by": "EthanYoQ",
+        "kind": "maintainer-triage",
+        "summary": "Maintainer said the request was recorded and merged into another demand, but did not name a canonical issue.",
+        "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/191#issuecomment-5543028024"
+      },
+      "informationRequest": {
+        "present": false,
+        "latestRequestAt": null,
+        "answered": null,
+        "notes": "No information was requested."
+      },
+      "deliveryEvidence": [
+        {
+          "kind": "related-release",
+          "reference": "PR #194",
+          "url": "https://github.com/EthanYoQ/AI-Novel-Writer/pull/194",
+          "state": "MERGED",
+          "boundary": "PR names #191 as related and explicitly says remaining scenarios must be assessed separately."
+        },
+        {
+          "kind": "indirect-code-only-partial",
+          "reference": "PR #212 / Issue #185",
+          "url": "https://github.com/EthanYoQ/AI-Novel-Writer/pull/212",
+          "state": "MERGED_AFTER_LATEST_RELEASE",
+          "boundary": "Adds paste/file character-card extraction and confirmation, but is not released and does not prove the requested automatic plot-progress updates."
+        }
+      ],
+      "classification": ["feature", "partial-code", "duplicate-claim-unresolved"],
+      "recommendation": {
+        "action": "KEEP_OPEN",
+        "stateReason": null,
+        "reason": "The asserted merged destination is not linked, and the auto-update portion remains uncovered.",
+        "closeCondition": "Either deliver and release the full retained scope, or link a canonical open tracker that explicitly preserves text-to-card generation, author editing, and plot-progress updates; if the latter scope is rejected, close as not planned with that decision stated."
+      },
+      "canonicalTracking": "Until an explicit replacement exists, #191 is the only open canonical tracker for the full character-card automation request.",
+      "risks": [
+        "Closing as duplicate now would orphan the automatic progress-update requirement.",
+        "Automatic character facts must not overwrite author-owned fields or promote model inferences to confirmed facts."
+      ]
+    },
+    {
+      "number": 199,
+      "title": "[Bug] 长篇情节大纲无法限制生成范围，截断后结果不可恢复",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/199",
+      "author": "EthanYoQ",
+      "createdAt": "2026-09-07T08:50:52Z",
+      "updatedAt": "2026-09-07T08:50:52Z",
+      "labels": ["bug", "needs-triage"],
+      "commentCount": 0,
+      "reportSummary": "A 200-chapter outline was attempted as one unbounded request; truncation discarded completed material and offered no safe continuation.",
+      "latestSubstantiveUpdate": {
+        "at": "2026-09-07T08:50:52Z",
+        "by": "EthanYoQ",
+        "kind": "issue-body",
+        "summary": "The body defines range selection, incomplete-state persistence, guarded resume, and explicit acceptance evidence; there is no later contradictory report."
+      },
+      "informationRequest": {
+        "present": false,
+        "latestRequestAt": null,
+        "answered": null,
+        "notes": "The body notes that model parameters were pending from the original private report, but no maintainer request was posted to an external reporter. Closure should rely on delivery evidence, not missing-info abandonment."
+      },
+      "deliveryEvidence": [
+        {
+          "kind": "released-fix",
+          "reference": "PR #201",
+          "url": "https://github.com/EthanYoQ/AI-Novel-Writer/pull/201",
+          "state": "MERGED_AND_RELEASED_IN_V1.1.0",
+          "mergeCommit": "d24a4a417a063fd6df073765fe256bbcd7bc3695",
+          "release": "v1.1.0",
+          "boundary": "Verified 1-20, reopen, then 21-40 in a synthetic 200-chapter project; did not claim all 200 chapters or literary quality."
+        }
+      ],
+      "classification": ["known-fix-published"],
+      "recommendation": {
+        "action": "CLOSE",
+        "stateReason": "completed",
+        "reason": "PR #201 implements the issue's scoped behavior, is an ancestor of the v1.1.0 release target, and the release notes explicitly advertise ranged outline generation and recovery.",
+        "closeCondition": "Can close now with links to PR #201 and v1.1.0 while preserving the tested 1-40 boundary."
+      },
+      "canonicalTracking": "After closure, PR #201 and the v1.1.0 release note are sufficient for the delivered scope; any new post-release reproduction should reopen #199 or create a narrowly versioned bug.",
+      "risks": [
+        "Do not state that a complete 200-chapter run was tested.",
+        "Do not use this fix as proof that all length failures in #187 are resolved."
+      ]
+    },
+    {
+      "number": 205,
+      "title": "Implement Plan v2: source-grounded chapter continuity and candidate context",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/205",
+      "author": "EthanYoQ",
+      "createdAt": "2026-09-07T12:31:23Z",
+      "updatedAt": "2026-09-08T02:48:32Z",
+      "labels": ["enhancement", "ready-for-agent"],
+      "commentCount": 1,
+      "reportSummary": "Internal implementation tracker for source-grounded continuity, candidate/final separation, deterministic materials, author-controlled goal review, verification, and 1.1.0 qualification.",
+      "latestSubstantiveUpdate": {
+        "at": "2026-09-08T02:48:32Z",
+        "by": "EthanYoQ",
+        "kind": "maintainer-scope-addendum",
+        "summary": "Adds goal-by-goal review, UI states, evidence anchors, test/review boundaries, and release requirements."
+      },
+      "informationRequest": {
+        "present": false,
+        "latestRequestAt": null,
+        "answered": null,
+        "notes": "No information request."
+      },
+      "deliveryEvidence": [
+        {
+          "kind": "released-fix",
+          "reference": "PR #208",
+          "url": "https://github.com/EthanYoQ/AI-Novel-Writer/pull/208",
+          "state": "MERGED_AND_IS_V1.1.0_RELEASE_TARGET",
+          "mergeCommit": "879f83521414f66019488462830c3134c77dc4f8",
+          "release": "v1.1.0",
+          "boundary": "Release notes retain the product caveat that the changes reduce drift risk but do not guarantee drift-free prose or perfect target length."
+        }
+      ],
+      "classification": ["known-fix-published", "internal-implementation-tracker"],
+      "recommendation": {
+        "action": "CLOSE",
+        "stateReason": "completed",
+        "reason": "The linked implementation was merged at the exact v1.1.0 release target and the release has qualified assets and matching notes.",
+        "closeCondition": "Can close now with PR #208 and v1.1.0 links; retain stated quality limitations."
+      },
+      "canonicalTracking": "Future continuity regressions should use versioned, behavior-specific bugs rather than keeping this finished umbrella implementation issue open.",
+      "risks": [
+        "Closure must not claim perfect continuity, literary quality, or target-length compliance.",
+        "Do not fold unrelated #187 length scenarios into this completion claim."
+      ]
+    },
+    {
+      "number": 211,
+      "title": "角色图谱保存无响应：修复真实协议路径并补角色卡粘贴导入入口",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/211",
+      "author": "EthanYoQ",
+      "createdAt": "2026-09-08T08:32:50Z",
+      "updatedAt": "2026-09-08T08:32:50Z",
+      "labels": [],
+      "commentCount": 0,
+      "reportSummary": "Confirmed 1.1.0 protocol-path bug made a read-only character graph appear editable and fail silently; scope also adds guarded paste/file character-card import.",
+      "latestSubstantiveUpdate": {
+        "at": "2026-09-08T08:32:50Z",
+        "by": "EthanYoQ",
+        "kind": "issue-body",
+        "summary": "Fully specified implementation and verification boundary; no later contradiction."
+      },
+      "informationRequest": {
+        "present": false,
+        "latestRequestAt": null,
+        "answered": null,
+        "notes": "No information request."
+      },
+      "deliveryEvidence": [
+        {
+          "kind": "code-only-fix",
+          "reference": "PR #212",
+          "url": "https://github.com/EthanYoQ/AI-Novel-Writer/pull/212",
+          "state": "MERGED_AFTER_LATEST_RELEASE",
+          "mergeCommit": "38a844506a91907733c98e5ada66401bf6847532",
+          "boundary": "Merged tests and local production-build evidence satisfy the issue's stated no-release delivery scope, but the merge commit is not in v1.1.0 and no later release exists. Real-model full-text extraction was not run."
+        }
+      ],
+      "classification": ["known-fix-code-only"],
+      "recommendation": {
+        "action": "CLOSE",
+        "stateReason": "completed",
+        "reason": "The issue explicitly scoped delivery to a reviewed Draft PR without release; that implementation is now merged. The closure note must state that the fix is on master and not in v1.1.0.",
+        "closeCondition": "Can close now if merge completion is the repository policy; if user-visible bugs are release-gated, defer closure to the next release without changing the classification."
+      },
+      "canonicalTracking": "Retain next-release inclusion and installer regression in the release checklist; do not leave #211 open merely as an implicit release tracker.",
+      "risks": [
+        "Calling the fix released would be false.",
+        "PR #212 did not validate real-model extraction quality.",
+        "The new frontend/role redesign must retain read-only graph semantics, visible save errors, input preservation, and project isolation."
+      ]
+    },
+    {
+      "number": 213,
+      "title": "[Feature] 云存档功能",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/213",
+      "author": "Charlottepyc23",
+      "createdAt": "2026-09-08T12:09:21Z",
+      "updatedAt": "2026-09-09T13:26:45Z",
+      "labels": ["enhancement", "needs-triage"],
+      "commentCount": 2,
+      "reportSummary": "Cross-device cloud archive proposal, initially using a private Gitee repository per book.",
+      "latestSubstantiveUpdate": {
+        "at": "2026-09-09T13:26:45Z",
+        "by": "BuLuoPiaoYu",
+        "kind": "community-supplement",
+        "summary": "Suggested WebDAV as an alternative cloud-backup protocol.",
+        "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/213#issuecomment-5602628672"
+      },
+      "informationRequest": {
+        "present": false,
+        "latestRequestAt": null,
+        "answered": null,
+        "notes": "No information request. Maintainer explicitly said to keep it open as a long-term roadmap item."
+      },
+      "deliveryEvidence": [],
+      "classification": ["feature", "long-term-roadmap"],
+      "recommendation": {
+        "action": "KEEP_OPEN",
+        "stateReason": null,
+        "reason": "The latest maintainer decision is to retain it for a later version, and a second user added a protocol option. There is no duplicate, implementation, or explicit not-planned decision.",
+        "closeCondition": "Close completed after a released, migration-safe sync implementation, or close not planned only after an explicit product decision with an alternative/export path documented."
+      },
+      "canonicalTracking": "Keep #213 as the canonical cloud archive/sync request unless a dedicated roadmap issue replaces it by explicit link.",
+      "risks": [
+        "Repository-token or WebDAV credentials must not enter project archives, logs, exports, or model prompts.",
+        "Two-device conflicts require generation/CAS semantics; a simple last-writer-wins JSON push can overwrite author work.",
+        "Cloud sync is outside the current frontend-skin and Vela-removal scope unless the plan explicitly expands."
+      ]
+    },
+    {
+      "number": 219,
+      "title": "基本上每次都会在生成角色图谱这个地方卡主，这次是频繁报没有生成主角，不知道是什么问题导致的<img width=\"1300\" height=\"379\" alt=\"image\" src=\"https://github.com/user-attachments/assets/a5d4805d-f8b7-4bd1-a396-27aaab4547bc\" />",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/219",
+      "author": "EthanYoQ",
+      "originalReporter": "KKKyf1",
+      "createdAt": "2026-09-10T14:27:21Z",
+      "updatedAt": "2026-09-10T14:29:26Z",
+      "labels": ["bug"],
+      "commentCount": 0,
+      "reportSummary": "Imported from Discussion #215: character-graph generation frequently stalls or reports that no protagonist was generated.",
+      "latestSubstantiveUpdate": {
+        "at": "2026-09-10T14:28:32Z",
+        "by": "EthanYoQ",
+        "kind": "source-discussion-maintainer-reply",
+        "summary": "Maintainer acknowledged the report and said the new issue was created; no diagnostic request or fix claim followed.",
+        "url": "https://github.com/EthanYoQ/AI-Novel-Writer/discussions/215#discussioncomment-14455125"
+      },
+      "informationRequest": {
+        "present": false,
+        "latestRequestAt": null,
+        "answered": null,
+        "notes": "The report lacks version/model/diagnostics, but no maintainer has actually requested them and the issue is not labeled needs-info."
+      },
+      "deliveryEvidence": [],
+      "classification": ["active-reproducible", "diagnostics-needed-not-requested"],
+      "recommendation": {
+        "action": "KEEP_OPEN",
+        "stateReason": null,
+        "reason": "It reports frequent failure and has no fix evidence. Missing fields alone do not satisfy the user's abandonment rule.",
+        "closeCondition": "First post a concrete privacy-safe request for app version, model/provider, actual finish reason, safe diagnostic, and whether retry changes the result; apply needs-info only then. Close not planned after the waiting period only if that request remains unanswered and no maintainer reproduction exists."
+      },
+      "canonicalTracking": "Keep #219 as the canonical protagonist/character-graph generation failure and connect the role-generation plan's acceptance tests to it.",
+      "risks": [
+        "The symptom may be model output, parser/contract, role identity, or persistence; a role-prompt change alone is not proof of repair.",
+        "Do not merge it into #211, which concerns protocol-path editing/import rather than missing-protagonist generation."
+      ]
+    },
+    {
+      "number": 221,
+      "title": "[Bug]",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/221",
+      "author": "nnkmn",
+      "createdAt": "2026-09-11T01:45:59Z",
+      "updatedAt": "2026-09-11T01:45:59Z",
+      "labels": ["bug", "needs-triage"],
+      "commentCount": 0,
+      "reportSummary": "On released 1.1.0/Windows/Qwen, chapter generation often adds unknown characters to the roster and chapter four contains substantial repetition from chapter three.",
+      "latestSubstantiveUpdate": {
+        "at": "2026-09-11T01:45:59Z",
+        "by": "nnkmn",
+        "kind": "issue-body",
+        "summary": "Includes version, platform, model family, repeatability, steps, project size, and a roster screenshot; logs and exact parameters are unknown."
+      },
+      "informationRequest": {
+        "present": false,
+        "latestRequestAt": null,
+        "answered": null,
+        "notes": "needs-triage means maintainer evaluation, not that an information request was sent."
+      },
+      "deliveryEvidence": [],
+      "classification": ["active-reproducible", "multi-symptom", "diagnostics-needed-not-requested"],
+      "recommendation": {
+        "action": "KEEP_OPEN",
+        "stateReason": null,
+        "reason": "The reporter supplied meaningful reproduction context and no fix exists. Two potentially independent symptoms require triage, not abandonment closure.",
+        "closeCondition": "Request privacy-safe diagnostics and separate the extra-character persistence symptom from repeated prose if they have different causes. Close completed only after both retained scopes are fixed, or close this issue as superseded only after both canonical replacements are linked."
+      },
+      "canonicalTracking": "Until split, #221 must retain both extra roster entries and cross-chapter repetition; the new role/context/quality plan should map acceptance evidence to each symptom separately.",
+      "risks": [
+        "Fixing role identity or roster admission does not prove repeated prose is fixed.",
+        "Closing for missing logs now would violate the stated policy because no request was made.",
+        "Tests must avoid importing the reporter's novel or credentials."
+      ]
+    },
+    {
+      "number": 222,
+      "title": "[Feature] 删除孤立废弃组件 ActivityBar",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/222",
+      "author": "zhiwu215",
+      "createdAt": "2026-09-11T03:23:43Z",
+      "updatedAt": "2026-09-11T03:23:43Z",
+      "labels": ["enhancement", "needs-triage"],
+      "commentCount": 0,
+      "reportSummary": "Delete unused src/components/layout/ActivityBar.tsx and its historical comment reference.",
+      "latestSubstantiveUpdate": {
+        "at": "2026-09-11T03:23:43Z",
+        "by": "zhiwu215",
+        "kind": "issue-body",
+        "summary": "Fully specifies the dead-code deletion; no missing-information request."
+      },
+      "informationRequest": {
+        "present": false,
+        "latestRequestAt": null,
+        "answered": null,
+        "notes": "No information request."
+      },
+      "deliveryEvidence": [
+        {
+          "kind": "open-pull-request",
+          "reference": "PR #223",
+          "url": "https://github.com/EthanYoQ/AI-Novel-Writer/pull/223",
+          "state": "OPEN_UNMERGED",
+          "boundary": "The PR reports no E2E run and has no check results. Current master still contains ActivityBar.tsx and the MenuItem comment."
+        }
+      ],
+      "classification": ["feature-maintenance", "dead-code", "open-pr-unmerged"],
+      "recommendation": {
+        "action": "KEEP_OPEN",
+        "stateReason": null,
+        "reason": "The requested files remain on master and the linked PR is unmerged. It is a concrete acceptance item for the modernization dead-code wave.",
+        "closeCondition": "After the integrated plan removes the component and comment and verifies no runtime/test/build consumer, close completed. If PR #223 is superseded, close the PR rather than losing this issue's canonical acceptance."
+      },
+      "canonicalTracking": "Use #222 as the canonical tracker for this exact ActivityBar removal inside the broader dead-code cleanup.",
+      "risks": [
+        "Closing not planned because a broader cleanup exists would erase a directly verifiable residual.",
+        "Merging PR #223 independently may conflict with the new frontend skin; choose one implementation owner while keeping the issue outcome."
+      ]
+    },
+    {
+      "number": 224,
+      "title": "Bug] 点击左侧工具栏或状态栏设置图标时，设置弹窗出现白屏/无法正常显示",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/224",
+      "author": "zhiwu215",
+      "createdAt": "2026-09-11T03:31:54Z",
+      "updatedAt": "2026-09-11T03:31:54Z",
+      "labels": ["bug", "needs-triage"],
+      "commentCount": 0,
+      "reportSummary": "On Windows 11 from main via pnpm dev, both settings entry points open a blank settings modal; reporter says it reproduces every time.",
+      "latestSubstantiveUpdate": {
+        "at": "2026-09-11T03:31:54Z",
+        "by": "zhiwu215",
+        "kind": "issue-body",
+        "summary": "Provides platform, installation mode, two-step reproduction, expected/actual behavior, and screenshot; no logs."
+      },
+      "informationRequest": {
+        "present": false,
+        "latestRequestAt": null,
+        "answered": null,
+        "notes": "No information request; a missing log is not an unanswered request."
+      },
+      "deliveryEvidence": [
+        {
+          "kind": "open-pull-request",
+          "reference": "PR #225",
+          "url": "https://github.com/EthanYoQ/AI-Novel-Writer/pull/225",
+          "state": "OPEN_CI_FAILED",
+          "headCommit": "cc8a18d3a1eb10f708948a0697fbec639cde485e",
+          "boundary": "PR claims focused tests/manual dev verification, but current Desktop PR CI (Windows) is failing and the PR is not merged or released."
+        }
+      ],
+      "classification": ["active-reproducible", "open-pr-failing"],
+      "recommendation": {
+        "action": "KEEP_OPEN",
+        "stateReason": null,
+        "reason": "A claimed fix exists only in an unmerged PR with failed CI. The frontend-skin replacement may supersede the patch, but not the user-visible acceptance requirement.",
+        "closeCondition": "The selected implementation must pass required checks and verify both LeftToolWindowBar and StatusBar entry points, default tab fallback, reopen/state synchronization, and actual settings content; then close completed after merge, with release status stated separately."
+      },
+      "canonicalTracking": "Keep #224 as the canonical settings-entry regression and attach it to the new skin's migration/acceptance slice even if PR #225 is abandoned.",
+      "risks": [
+        "Closing because the skin is being replaced would hide a required compatibility path.",
+        "Passing one entry point or rendering only the shell is insufficient; content and state synchronization must be tested.",
+        "Do not call PR #225 fixed while CI is failing and it remains unmerged."
+      ]
+    }
+  ]
+}
+

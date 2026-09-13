@@ -74,7 +74,7 @@ async function renderSettings(
     setDefaultModel,
     discoverModels,
   })
-  ;(window as unknown as { velaAPI: TestVelaApi }).velaAPI = {
+  ;(window as unknown as { aiNovelAPI: TestVelaApi }).aiNovelAPI = {
     invoke: vi.fn(),
     on: () => () => {},
     once: () => {},
@@ -101,7 +101,7 @@ afterEach(async () => {
   useLayoutStore.setState(originalLayoutState)
   useLLMStore.setState(originalLLMState)
   useLocaleStore.setState(originalLocaleState)
-  delete (window as unknown as { velaAPI?: TestVelaApi }).velaAPI
+  delete (window as unknown as { aiNovelAPI?: TestVelaApi }).aiNovelAPI
   vi.restoreAllMocks()
 })
 

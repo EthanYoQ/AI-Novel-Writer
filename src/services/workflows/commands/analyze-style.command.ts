@@ -1,3 +1,4 @@
+import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
 import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
 import { composePromptSystemRole, resolvePromptTemplate } from '../../prompt-templates'
@@ -28,16 +29,16 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
   constructor(
     private options: AnalyzeWritingStyleOptions = {},
     generationDependencies?: WorkflowGenerationRuntimeDependencies,
-    private readonly persistWritingStyle?: (writingStyle: string) => Promise<void>,
+    private readonly persistWritingStyle?: (writingStyle: string, generationRunHandle?: MainGenerationRunHandle) => Promise<void>,
   ) {
     super(generationDependencies)
   }
 
   async execute(params: CommandExecuteParams): Promise<string> {
-    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params))
+    return this.executeWithinGeneration(params)
   }
 
-  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
+  private async executeWithinGeneration({ context, callbacks, step }: CommandExecuteParams): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
     const writingLanguage = workflowWritingLanguage(context)
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
@@ -47,7 +48,10 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
       projectSessionContextFromProject(project),
     )) throw new Error(text('当前项目已切换，文风分析已停止', 'The project changed, so writing-style analysis stopped.'))
 
+    const expectedConfig = structuredClone(project.novelConfig)
     const sampleTexts = this.collectProvidedSamples(writingLanguage)
+    const selectedFinalizedDraftIds: number[] = []
+    const authorInputs = this.collectAuthorInputs()
 
     if (sampleTexts.length > 0) {
       callbacks.log(text(
@@ -71,6 +75,7 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
           if (meta) {
             const full = await ipc.invokeWithProjectSession(projectSession, 'db:draft-get-full', meta.id, context.projectPath)
             if (full?.content?.trim()) {
+              selectedFinalizedDraftIds.push(full.id)
               sampleTexts.push(full.content.trim().slice(0, 2000))
             }
           }
@@ -100,54 +105,71 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
     const finalPrompt = prompt.build()
 
     callbacks.log(text('调用 AI 分析文风特征...', 'Running AI writing-style analysis...'))
-    const result = await this.callLLM(
-      finalPrompt,
-      composePromptSystemRole(template, writingLanguage),
-      callbacks,
-      { purpose: 'analyze-writing-style', reasoningStage: 'review' },
-      context,
-    )
-    this.assertNotCancelled(context)
-
-    const cleanResult = this.stripThinkingTags(result).trim()
-    if (!cleanResult) {
-      callbacks.log(text('文风分析返回空结果', 'Writing-style analysis returned an empty result.'))
-      return ''
-    }
-
-    // 先持久化，成功后再更新内存态，避免 DB 保存失败时 UI 残留未落库的文风。
-    this.assertNotCancelled(context)
-    if (this.persistWritingStyle) {
-      await this.persistWritingStyle(cleanResult)
-    } else {
-      const saveResult = await ipc.invokeWithProjectSession(
-        projectSession,
-        'db:project-core-update',
-        { writingStyle: cleanResult },
-        context.projectPath,
+    return this.executeWithGenerationRuntime('text', { context, callbacks, step }, async () => {
+      const result = await this.callLLM(
+        finalPrompt,
+        composePromptSystemRole(template, writingLanguage),
+        callbacks,
+        { purpose: 'analyze-writing-style', reasoningStage: 'review' },
+        context,
       )
-      if (!saveResult.success) {
-        throw new Error(saveResult.error || text('文风特征保存失败', 'Failed to save the writing-style profile.'))
-      }
-    }
-    if (!sameProjectSessionContext(
-      projectSession,
-      projectSessionContextFromProject(useProjectStore.getState().currentProject),
-    )) {
-      throw new Error(text(
-        '当前项目已切换，文风分析结果未应用到界面',
-        'The project changed, so the writing-style result was not applied to the interface.',
-      ))
-    }
-    this.assertNotCancelled(context)
-    const { updateNovelConfig } = useProjectStore.getState()
-    updateNovelConfig({ writingStyle: cleanResult }, projectSession)
-    callbacks.log(text(
-      '文风特征已保存到小说配置',
-      'Writing-style profile saved to the novel configuration',
-    ))
+      this.assertNotCancelled(context)
 
-    return cleanResult
+      const cleanResult = this.stripThinkingTags(result).trim()
+      if (!cleanResult) {
+        callbacks.log(text('文风分析返回空结果', 'Writing-style analysis returned an empty result.'))
+        return ''
+      }
+
+      // 先持久化，成功后再更新内存态，避免 DB 保存失败时 UI 残留未落库的文风。
+      this.assertNotCancelled(context)
+      const mainOwned = this.requireGenerationExecution().mainOwned
+      if (mainOwned) {
+        const handle = context.mainGenerationRunHandle
+        if (!handle) throw new Error('GENERATION_COMMIT_HANDLE_REQUIRED')
+        const saved = await useProjectStore.getState().commitGeneratedNovelConfig(
+          { writingStyle: cleanResult }, expectedConfig, projectSession, handle,
+          this.persistWritingStyle ? () => this.persistWritingStyle!(cleanResult, handle) : undefined,
+        )
+        if (!saved) throw new Error(text('文风特征保存失败', 'Failed to save the writing-style profile.'))
+      } else if (this.persistWritingStyle) {
+        await this.persistWritingStyle(cleanResult)
+      } else {
+        const saveResult = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-update',
+          { writingStyle: cleanResult }, context.projectPath)
+        if (!saveResult.success) throw new Error(saveResult.error || text('文风特征保存失败', 'Failed to save the writing-style profile.'))
+      }
+      if (!sameProjectSessionContext(
+        projectSession,
+        projectSessionContextFromProject(useProjectStore.getState().currentProject),
+      )) {
+        throw new Error(text(
+          '当前项目已切换，文风分析结果未应用到界面',
+          'The project changed, so the writing-style result was not applied to the interface.',
+        ))
+      }
+      this.assertNotCancelled(context)
+      const { updateNovelConfig } = useProjectStore.getState()
+      if (!mainOwned) updateNovelConfig({ writingStyle: cleanResult }, projectSession)
+      callbacks.log(text(
+        '文风特征已保存到小说配置',
+        'Writing-style profile saved to the novel configuration',
+      ))
+
+      return cleanResult
+    }, { operation: 'analyze-writing-style', promptKeys: ['analyze_writing_style'], skillStages: [], output: 'visible-text', selectedFinalizedDraftIds, authorInputs })
+  }
+
+  private collectAuthorInputs(): { id: string; text: string }[] {
+    const inputs: { id: string; text: string }[] = []
+    if (this.options.sampleText?.trim()) inputs.push({ id: 'style:sample', text: this.options.sampleText })
+    this.options.sampleTexts?.forEach((text, index) => {
+      if (text.trim()) inputs.push({ id: `style:sample:${index}`, text })
+    })
+    this.pickRepresentativeChapters(this.options.chapters ?? []).forEach((chapter, index) => {
+      if (chapter.content.trim()) inputs.push({ id: `style:imported-chapter:${index}:${chapter.number}`, text: chapter.content })
+    })
+    return inputs
   }
 
   private collectProvidedSamples(writingLanguage: WritingLanguage): string[] {

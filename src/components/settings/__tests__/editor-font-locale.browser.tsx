@@ -14,7 +14,7 @@ let container: HTMLDivElement | undefined
 let root: Root | undefined
 
 beforeEach(async () => {
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke: vi.fn(async (channel: string) => {

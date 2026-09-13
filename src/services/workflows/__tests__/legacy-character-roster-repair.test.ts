@@ -110,7 +110,7 @@ function installVela(invoke: (channel: string, ...args: unknown[]) => unknown) {
     expiresAt: 61_000,
   }
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke: vi.fn((channel: string, ...args: unknown[]) => {
         if (channel === 'llm:begin-execution-lease') return Promise.resolve({ success: true, lease })
         if (channel === 'llm:close-execution-lease') return Promise.resolve({ success: true })

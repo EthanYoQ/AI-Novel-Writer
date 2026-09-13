@@ -20,3 +20,10 @@
 *.woff binary
 *.woff2 binary
 *.zip binary
+
+# Independently audited planning packages contain frozen byte-level manifests.
+# Preserve their original line endings so checkout cannot invalidate the audit.
+docs/plans/novel-quality-modernization/** -text
+docs/plans/novel-quality-program-2026-09-13/** -text
+docs/plans/novel-quality-program-v3-2026-09-13/** -text
+docs/plans/NOVEL-QUALITY-CURRENT.md -text

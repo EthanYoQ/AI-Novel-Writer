@@ -26,10 +26,13 @@ export interface ImportGlobalFactsRequest {
   characterEntries: CharacterRosterEntry[]
 }
 
-export interface ImportGlobalFactsReceipt {
+interface ImportGlobalFactsReceiptBase {
   operationId: string
   payloadHash: string
   idempotent: boolean
   core: ImportGlobalFactsCore
-  roster: CharacterRosterCommitReceipt
 }
+export type ImportGlobalFactsReceipt = ImportGlobalFactsReceiptBase & (
+  | { roster: CharacterRosterCommitReceipt; characterProposal?: never; proposalSource?: never }
+  | { roster?: never; characterProposal: import('./character-proposal').CharacterProposalStageEvidence; proposalSource: ImportGlobalFactsRequest }
+)

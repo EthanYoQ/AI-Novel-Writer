@@ -1215,3 +1215,16 @@ describe('CharacterRosterRepository public read/commit seam', () => {
     })
   })
 })
+
+it('runs the main generation source guard inside the write transaction but not on durable replay', () => {
+  const request = commitRequest()
+  const rejected = vi.fn(() => { expect(db.inTransaction).toBe(true); throw new Error('GENERATION_SOURCE_CHANGED') })
+  expect(() => CharacterRosterRepository.commit(request, rejected)).toThrow('GENERATION_SOURCE_CHANGED')
+  expect(CharacterRepository.count()).toBe(0)
+  expect(db.prepare('SELECT COUNT(*) FROM character_roster_operations').pluck().get()).toBe(0)
+  const accepted = vi.fn(() => { expect(db.inTransaction).toBe(true) })
+  CharacterRosterRepository.commit(request, accepted)
+  expect(accepted).toHaveBeenCalledTimes(1)
+  expect(CharacterRosterRepository.commit(request, rejected).idempotent).toBe(true)
+  expect(rejected).toHaveBeenCalledTimes(1)
+})

@@ -1,6 +1,8 @@
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
-import { closeProjectDatabase, getCurrentProjectPath } from '../database'
+import { closeProjectDatabase, getCurrentProjectPath, getProjectDb } from '../database'
+import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
+import { assertGenerationSourcesCurrent, recordGenerationDirectoryCommit } from './generation-controller'
 import { projectAccess } from '../services/project-access'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 
@@ -65,6 +67,7 @@ type ProjectDatabaseHandler = (event: unknown, ...args: never[]) => unknown
 const MUTATING_DATABASE_CHANNELS = new Set([
   'db:close',
   'db:project-core-update',
+  'db:project-core-commit-generated',
   'db:project-core-synopsis-commit',
   'db:import-global-facts-commit',
   'db:project-clear-generated-data',
@@ -168,13 +171,34 @@ export function registerDatabaseController() {
     }
   })
 
+  ipcMain.handle('db:project-core-commit-generated', async (
+    _event, request: { data: Partial<ProjectCoreData>; generationRunHandle: MainGenerationRunHandle }, expectedProjectPath: string,
+  ) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      const database = getProjectDb()
+      if (!database || !request.generationRunHandle) throw new Error('GENERATION_OWNER_REQUIRED')
+      database.transaction(() => {
+        assertGenerationSourcesCurrent(request.generationRunHandle)
+        ProjectCoreRepository.update(request.data)
+      }).immediate()
+      return { success: true }
+    } catch (error) { return { success: false, error: String(error) } }
+  })
+
   ipcMain.handle('db:project-core-synopsis-commit', async (
     _event,
     request: ProjectCoreSynopsisCommitRequest,
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    if (!ProjectCoreRepository.commitSynopsis(request)) {
+    const commit = () => {
+      if (request.generationRunHandle) assertGenerationSourcesCurrent(request.generationRunHandle)
+      return ProjectCoreRepository.commitSynopsis(request)
+    }
+    const database = getProjectDb()
+    if (request.generationRunHandle && !database) throw new Error('GENERATION_DATABASE_NOT_READY')
+    if (!(request.generationRunHandle ? database!.transaction(commit).immediate() : commit())) {
       return { success: false, error: '项目数据已变化，已拒绝覆盖情节大纲' }
     }
     return { success: true }
@@ -378,7 +402,7 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    return { success: true, result: ImportRunRepository.commitEffectReceipt(runId, stage, batchId, execution) }
+    return { success: true, result: ImportRunRepository.commitEffectReceipt(runId, stage, batchId, execution, Date.now(), assertGenerationSourcesCurrent) }
   })
 
   ipcMain.handle('db:import-run-start-resume', async (
@@ -518,7 +542,17 @@ export function registerDatabaseController() {
   ) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      return { success: true, receipt: BlueprintRepository.commitRange(request) }
+      if (!request.generationRunHandle) return { success: true, receipt: BlueprintRepository.commitRange(request) }
+      const database = getProjectDb(), requested = request.generationRequestedRange ?? { startChapter: request.startChapter, endChapter: request.endChapter }
+      if (!database) throw new Error('GENERATION_DATABASE_NOT_READY')
+      if (!Number.isSafeInteger(requested.startChapter) || !Number.isSafeInteger(requested.endChapter)
+        || requested.startChapter !== request.startChapter || requested.endChapter < request.endChapter || requested.endChapter - requested.startChapter >= 10000)
+        throw new Error('GENERATION_DIRECTORY_RANGE_INVALID')
+      const receipt = database.transaction(() => {
+        const committed = BlueprintRepository.commitRange(request, () => assertGenerationSourcesCurrent(request.generationRunHandle!, requested))
+        return { ...committed, generationProgress: recordGenerationDirectoryCommit(request.generationRunHandle!, requested, committed) }
+      }).immediate()
+      return { success: true, receipt }
     } catch (err) {
       return { success: false, error: String(err) }
     }
@@ -607,7 +641,8 @@ export function registerDatabaseController() {
   ) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      return { success: true, receipt: CharacterRosterRepository.commit(request) }
+      return { success: true, receipt: CharacterRosterRepository.commit(request,
+        request.generationRunHandle ? () => assertGenerationSourcesCurrent(request.generationRunHandle!) : undefined) }
     } catch (err) {
       return { success: false, error: String(err) }
     }
@@ -1085,6 +1120,7 @@ export function registerDatabaseController() {
       triggerSourceId: string
       sourceLabel: string
       steps: Array<{ key: string; label: string; critical: boolean }>
+      finalizedSource?: import('../../src/shared/finalized-continuity').FinalizedSourceIdentity
     },
     expectedProjectPath: string,
   ) => {

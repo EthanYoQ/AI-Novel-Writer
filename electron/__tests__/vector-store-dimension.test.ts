@@ -1,9 +1,9 @@
+import { prepareCanonicalStorageFixture } from '../../test/helpers/canonical-project-fixture'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { Field, FixedSizeList as ArrowFixedSizeList, Float32, Int32, Schema as ArrowSchema, Utf8 } from 'apache-arrow'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
   addChunks,
   closeConnection,
@@ -22,6 +22,8 @@ import {
 import { removeDirectoryWithWindowsRetry } from '../utils/remove-directory'
 
 type VectorConnection = Awaited<ReturnType<typeof getConnection>>
+
+beforeAll(() => { fs.mkdirSync(path.join(process.cwd(), '.runtime', '.cache'), { recursive: true }) })
 
 function embeddingTableNames(tableNames: readonly string[]): string[] {
   return tableNames.filter(tableName => tableName.startsWith('chunks__space_')).sort()
@@ -66,8 +68,9 @@ describe('知识库向量维度', () => {
   })
 
   it('closeConnection 会真正释放缓存的 LanceDB 原生连接', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-close-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-close-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const db = await getConnection(projectPath)
 
     expect(db.isOpen()).toBe(true)
@@ -77,8 +80,9 @@ describe('知识库向量维度', () => {
   })
 
   it('接受嵌入模型返回的非 2048 维有限向量', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-dimension-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-dimension-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
 
     const result = await addChunks(
       projectPath,
@@ -95,8 +99,9 @@ describe('知识库向量维度', () => {
   })
 
   it('2048 维控制组能够写入同一个公共接口', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-control-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-control-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
 
     const result = await addChunks(
       projectPath,
@@ -113,8 +118,9 @@ describe('知识库向量维度', () => {
   })
 
   it.each([1024, 1536, 3072])('接受 %d 维有限向量并可通过公共检索接口读取', async (dimension) => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), `ai-novel-vector-${dimension}-`))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), `ai-novel-vector-${dimension}-`))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const space = { modelFingerprint: `test/embedding-${dimension}`, distanceMetric: 'l2' }
     const vector = Array.from({ length: dimension }, (_, index) => index / dimension)
 
@@ -137,8 +143,9 @@ describe('知识库向量维度', () => {
   })
 
   it('FTS-only 文档不依赖向量列，仍可导入和检索', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-fts-only-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-fts-only-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
 
     expect(await addChunks(
       projectPath,
@@ -153,8 +160,9 @@ describe('知识库向量维度', () => {
   })
 
   it('替换同名文档时清理旧的文档元数据', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-superseded-document-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-superseded-document-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
 
     await expect(addChunks(
       projectPath,
@@ -175,8 +183,9 @@ describe('知识库向量维度', () => {
   })
 
   it('删除文档时按驼峰 docId 移除其 chunks', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-remove-document-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-remove-document-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
 
     await expect(addChunks(
       projectPath,
@@ -192,8 +201,9 @@ describe('知识库向量维度', () => {
   })
 
   it('重开后能发现并清理未登记代际中的 embedding-only 半写文档', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-embedding-only-crash-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-embedding-only-crash-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const vector = [0.1, 0.2, 0.3, 0.4]
     const space = { modelFingerprint: 'test/embedding-only-crash', distanceMetric: 'l2' }
     await expect(addChunks(
@@ -243,8 +253,9 @@ describe('知识库向量维度', () => {
     ['重复', 0],
     ['缺口', 2],
   ])('完整性检查拒绝 embedding 代际的%s chunk index', async (_label, corruptIndex) => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-generation-index-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-generation-index-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const vector = [0.1, 0.2, 0.3, 0.4]
     const space = { modelFingerprint: 'test/generation-index', distanceMetric: 'l2' }
     await expect(addChunks(
@@ -282,8 +293,9 @@ describe('知识库向量维度', () => {
   })
 
   it('removeDocument 在任一物理代际仍有残留时返回 false，重试后达到全代际零行', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-remove-postcondition-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-remove-postcondition-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const vector = [0.1, 0.2, 0.3, 0.4]
     const space = { modelFingerprint: 'test/remove-postcondition', distanceMetric: 'l2' }
     await expect(addChunks(
@@ -323,8 +335,9 @@ describe('知识库向量维度', () => {
   })
 
   it('任一非活跃 embedding generation 存在缺块时仍判定文档不完整', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-all-generations-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-all-generations-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const oldIdentity = { modelFingerprint: 'test/all-generations-old', distanceMetric: 'l2' }
     const nextIdentity = { modelFingerprint: 'test/all-generations-next', distanceMetric: 'l2' }
     const oldVector = [0.1, 0.2, 0.3, 0.4]
@@ -365,8 +378,9 @@ describe('知识库向量维度', () => {
   })
 
   it('在大小写敏感的 LanceDB SQL 上按章节范围检索', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-chapter-scope-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-chapter-scope-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
 
     await expect(addChunks(
       projectPath,
@@ -402,8 +416,9 @@ describe('知识库向量维度', () => {
   })
 
   it('在大小写敏感的 LanceDB SQL 上将向量检索限定在章节范围', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-chapter-scope-vector-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-chapter-scope-vector-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const embeddingSpace = { modelFingerprint: 'test/chapter-scope', distanceMetric: 'l2' }
 
     await expect(addChunks(
@@ -440,8 +455,9 @@ describe('知识库向量维度', () => {
   })
 
   it('安全登记缺少元数据的旧 2048 维 chunks 表并保持可检索', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-legacy-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-legacy-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const legacyVector = Array.from({ length: 2048 }, (_, index) => index / 2048)
     const db = await getConnection(projectPath)
     const legacySchema = new ArrowSchema([
@@ -509,10 +525,11 @@ describe('知识库向量维度', () => {
   })
 
   it('旧 vectors.json 按真实 1536 维迁移，而不是回退到固定 2048', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-migration-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-migration-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const vector = Array.from({ length: 1536 }, (_, index) => index / 1536)
-    const velaPath = path.join(projectPath, '.vela')
+    const velaPath = path.join(projectPath, '.ai-novel')
     fs.mkdirSync(velaPath, { recursive: true })
     const sourcePath = path.join(velaPath, 'vectors.json')
     fs.writeFileSync(sourcePath, JSON.stringify({
@@ -555,8 +572,9 @@ describe('知识库向量维度', () => {
   })
 
   it('迁移遇到不兼容空间时保留原 JSON、旧 active 和旧表', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-migration-failure-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-migration-failure-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const oldSpace = { modelFingerprint: 'test/migration-old', distanceMetric: 'l2' }
     const oldVector = Array.from({ length: 768 }, (_, index) => index / 768)
     expect(await addChunks(
@@ -572,7 +590,7 @@ describe('知识库向量维度', () => {
     const beforeRegistry = await getEmbeddingSpaces(projectPath)
     const db = await getConnection(projectPath)
     const beforeTables = await db.tableNames()
-    const sourcePath = path.join(projectPath, '.vela', 'vectors.json')
+    const sourcePath = path.join(projectPath, '.ai-novel', 'vectors.json')
     fs.writeFileSync(sourcePath, JSON.stringify({
       documents: [],
       entries: [{
@@ -599,8 +617,9 @@ describe('知识库向量维度', () => {
   })
 
   it('迁移预检发现不兼容的旧 chunks 表时不创建新的嵌入空间注册表', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-migration-preflight-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-migration-preflight-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const db = await getConnection(projectPath)
     const legacyVector = Array.from({ length: 768 }, (_, index) => index / 768)
     const legacySchema = new ArrowSchema([
@@ -627,7 +646,7 @@ describe('知识库向量维度', () => {
       totalChunks: 1,
       importedAt: '2026-01-01T00:00:00.000Z',
     }], { schema: legacySchema })
-    const velaPath = path.join(projectPath, '.vela')
+    const velaPath = path.join(projectPath, '.ai-novel')
     const registryPath = path.join(velaPath, 'embedding-spaces.json')
     const sourcePath = path.join(velaPath, 'vectors.json')
     fs.writeFileSync(sourcePath, JSON.stringify({
@@ -653,9 +672,10 @@ describe('知识库向量维度', () => {
   })
 
   it('两份旧 JSON 中后一份非法时不写入前一份，重试与修正后都不会重复迁移', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-migration-atomic-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-migration-atomic-'))
     projects.push(projectPath)
-    const velaPath = path.join(projectPath, '.vela')
+    prepareCanonicalStorageFixture(projectPath)
+    const velaPath = path.join(projectPath, '.ai-novel')
     fs.mkdirSync(velaPath, { recursive: true })
     const sourcePath = path.join(velaPath, 'vectors.json')
     const vector = Array.from({ length: 768 }, (_, index) => index / 768)
@@ -716,9 +736,10 @@ describe('知识库向量维度', () => {
   })
 
   it('迁移写入后若无法标记原 JSON，会回滚全部文档且修正环境后只迁移一次', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-migration-marker-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-migration-marker-'))
     projects.push(projectPath)
-    const velaPath = path.join(projectPath, '.vela')
+    prepareCanonicalStorageFixture(projectPath)
+    const velaPath = path.join(projectPath, '.ai-novel')
     fs.mkdirSync(velaPath, { recursive: true })
     const sourcePath = path.join(velaPath, 'vectors.json')
     const vector = Array.from({ length: 768 }, (_, index) => index / 768)
@@ -763,9 +784,10 @@ describe('知识库向量维度', () => {
   })
 
   it('迁移已提交但进程在删除 journal 前退出时，会用已标记源文件安全完成恢复', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-migration-commit-recovery-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-migration-commit-recovery-'))
     projects.push(projectPath)
-    const velaPath = path.join(projectPath, '.vela')
+    prepareCanonicalStorageFixture(projectPath)
+    const velaPath = path.join(projectPath, '.ai-novel')
     fs.mkdirSync(velaPath, { recursive: true })
     const sourcePath = path.join(velaPath, 'vectors.json')
     const source = {
@@ -804,8 +826,9 @@ describe('知识库向量维度', () => {
     ['Infinity 元素', [Array.from({ length: 768 }, (_, index) => index === 3 ? Number.POSITIVE_INFINITY : 0), Array.from({ length: 768 }, () => 0)]],
     ['同批次维度不一致', [Array.from({ length: 768 }, () => 0), Array.from({ length: 1024 }, () => 0)]],
   ])('在写入 Arrow 前拒绝%s，并且不留下错误维度的表', async (_label, invalidVectors) => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-invalid-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-invalid-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
 
     const invalid = await addChunks(
       projectPath,
@@ -831,8 +854,9 @@ describe('知识库向量维度', () => {
   })
 
   it('模型或维度变化要求显式重建，并在拒绝前保持旧代际 active', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-generation-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-generation-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const oldSpace = { modelFingerprint: 'test/embedding-768', distanceMetric: 'l2' }
     const newSpace = { modelFingerprint: 'test/embedding-1024', distanceMetric: 'l2' }
     const oldVector = Array.from({ length: 768 }, (_, index) => index / 768)
@@ -879,8 +903,9 @@ describe('知识库向量维度', () => {
   })
 
   it('同一维度但不同模型身份同样要求显式重建，不会混写同一表', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-model-conflict-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-model-conflict-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const oldSpace = { modelFingerprint: 'test/model-a', distanceMetric: 'l2' }
     const newSpace = { modelFingerprint: 'test/model-b', distanceMetric: 'l2' }
     const vector = Array.from({ length: 768 }, (_, index) => index / 768)
@@ -913,8 +938,9 @@ describe('知识库向量维度', () => {
   })
 
   it('显式回填完整验证新空间后才切换 active，旧表仍保留', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-rebuild-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-rebuild-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const oldSpace = { modelFingerprint: 'test/embedding-old', distanceMetric: 'l2' }
     const rebuiltSpace = { modelFingerprint: 'test/embedding-rebuilt', distanceMetric: 'l2' }
     const oldVector = Array.from({ length: 768 }, (_, index) => index / 768)
@@ -955,8 +981,9 @@ describe('知识库向量维度', () => {
   })
 
   it('候选空间含孤儿或重复块时不切换 active', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-incomplete-candidate-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-incomplete-candidate-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const oldSpace = { modelFingerprint: 'test/complete-old', distanceMetric: 'l2' }
     const candidateIdentity = { modelFingerprint: 'test/complete-candidate', distanceMetric: 'l2' }
     const oldVector = Array.from({ length: 768 }, (_, index) => index / 768)
@@ -1013,7 +1040,7 @@ describe('知识库向量维度', () => {
         corpusKind: 'unknown',
       },
     ], { schema: candidateSchema })
-    fs.writeFileSync(path.join(projectPath, '.vela', 'embedding-spaces.json'), `${JSON.stringify({
+    fs.writeFileSync(path.join(projectPath, '.ai-novel', 'embedding-spaces.json'), `${JSON.stringify({
       ...before,
       spaces: [...before.spaces, candidate],
     }, null, 2)}\n`, 'utf8')
@@ -1029,8 +1056,9 @@ describe('知识库向量维度', () => {
   })
 
   it('catalog 切换落盘失败时补偿本次 docId，旧表、registry、docs 与 canonical 不变', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-rollback-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-rollback-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const space = { modelFingerprint: 'test/rollback', distanceMetric: 'l2' }
     const vector = Array.from({ length: 768 }, (_, index) => index / 768)
     expect(await addChunks(
@@ -1086,8 +1114,9 @@ describe('知识库向量维度', () => {
     ['canonical append', (db: VectorConnection) => failCreateTableAfterSuccess(db, 'chunks', 'injected canonical append failure')],
     ['final verification', (db: VectorConnection) => failNthTableOpen(db, 'chunks', 2, 'injected final verification failure')],
   ])('首次向量导入在 %s 失败后删除本次新建代际并可复用同一 generation', async (_stage, injectFailure) => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-orphan-first-import-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-orphan-first-import-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const db = await getConnection(projectPath)
     const space = { modelFingerprint: 'test/orphan-first-import', distanceMetric: 'l2' }
     const vector = Array.from({ length: 768 }, (_, index) => index / 768)
@@ -1107,7 +1136,7 @@ describe('知识库向量维度', () => {
 
     const tableNamesAfterFailure = await db.tableNames()
     expect(embeddingTableNames(tableNamesAfterFailure)).toEqual([])
-    expect(fs.existsSync(path.join(projectPath, '.vela', 'embedding-spaces.json'))).toBe(false)
+    expect(fs.existsSync(path.join(projectPath, '.ai-novel', 'embedding-spaces.json'))).toBe(false)
     if (tableNamesAfterFailure.includes('documents')) {
       expect(await (await db.openTable('documents')).countRows()).toBe(0)
     }
@@ -1132,8 +1161,9 @@ describe('知识库向量维度', () => {
   })
 
   it('createTable 内部创建代际后失败时清理本次表并让重试复用同一 generation', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-create-owned-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-create-owned-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const db = await getConnection(projectPath)
     const space = { modelFingerprint: 'test/create-owned', distanceMetric: 'l2' }
     const vector = Array.from({ length: 768 }, (_, index) => index / 768)
@@ -1172,9 +1202,10 @@ describe('知识库向量维度', () => {
   })
 
   it('安全复用未登记的空物理代际目录，不轮换 generation', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-empty-orphan-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-empty-orphan-'))
     projects.push(projectPath)
-    const orphanDirectory = path.join(projectPath, '.vela', 'lancedb', 'chunks__space_1.lance')
+    prepareCanonicalStorageFixture(projectPath)
+    const orphanDirectory = path.join(projectPath, '.ai-novel', 'lancedb', 'chunks__space_1.lance')
     fs.mkdirSync(orphanDirectory, { recursive: true })
     const vector = Array.from({ length: 768 }, (_, index) => index / 768)
 
@@ -1195,9 +1226,10 @@ describe('知识库向量维度', () => {
   })
 
   it('保留未登记的非空物理代际目录并在重试时拒绝覆盖而非继续轮换', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-foreign-orphan-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-foreign-orphan-'))
     projects.push(projectPath)
-    const orphanDirectory = path.join(projectPath, '.vela', 'lancedb', 'chunks__space_1.lance')
+    prepareCanonicalStorageFixture(projectPath)
+    const orphanDirectory = path.join(projectPath, '.ai-novel', 'lancedb', 'chunks__space_1.lance')
     const markerPath = path.join(orphanDirectory, 'unknown-data')
     fs.mkdirSync(orphanDirectory, { recursive: true })
     fs.writeFileSync(markerPath, 'must-not-delete', 'utf8')
@@ -1225,12 +1257,13 @@ describe('知识库向量维度', () => {
     // is not a valid table. The important invariant is that the foreign
     // directory remains untouched and no new generation is allocated.
     expect(embeddingTableNames(await (await getConnection(projectPath)).tableNames())).toEqual(['chunks__space_1'])
-    expect(fs.existsSync(path.join(projectPath, '.vela', 'lancedb', 'chunks__space_2.lance'))).toBe(false)
+    expect(fs.existsSync(path.join(projectPath, '.ai-novel', 'lancedb', 'chunks__space_2.lance'))).toBe(false)
   })
 
   it('首次导入 registry 原子写重复失败不堆积孤儿表或跳 generation', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-orphan-registry-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-orphan-registry-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const db = await getConnection(projectPath)
     const space = { modelFingerprint: 'test/orphan-registry', distanceMetric: 'l2' }
     const vector = Array.from({ length: 768 }, (_, index) => index / 768)
@@ -1256,7 +1289,7 @@ describe('知识库向量维度', () => {
       expect(embeddingTableNames(tableNames)).toEqual([])
       expect(await (await db.openTable('documents')).countRows()).toBe(0)
       expect(await (await db.openTable('chunks')).countRows()).toBe(0)
-      expect(fs.existsSync(path.join(projectPath, '.vela', 'embedding-spaces.json'))).toBe(false)
+      expect(fs.existsSync(path.join(projectPath, '.ai-novel', 'embedding-spaces.json'))).toBe(false)
     }
 
     expect(createTableSpy.mock.calls
@@ -1279,8 +1312,9 @@ describe('知识库向量维度', () => {
   })
 
   it('updateChunkVectors 新代际 registry 写入重复失败时删除新表并保留旧 active', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-orphan-update-registry-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-orphan-update-registry-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const oldSpace = { modelFingerprint: 'test/orphan-update-old', distanceMetric: 'l2' }
     const newSpace = { modelFingerprint: 'test/orphan-update-new', distanceMetric: 'l2' }
     const oldVector = Array.from({ length: 768 }, (_, index) => index / 768)
@@ -1337,8 +1371,9 @@ describe('知识库向量维度', () => {
   })
 
   it('updateChunkVectors 最终验证失败时删除本次新表且重试仍使用同一 generation', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-orphan-update-verify-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-orphan-update-verify-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const oldSpace = { modelFingerprint: 'test/orphan-verify-old', distanceMetric: 'l2' }
     const newSpace = { modelFingerprint: 'test/orphan-verify-new', distanceMetric: 'l2' }
     const oldVector = Array.from({ length: 768 }, (_, index) => index / 768)
@@ -1372,8 +1407,9 @@ describe('知识库向量维度', () => {
   })
 
   it('updateChunkVectors 对预存 building 空间失败时只回滚本次行，不删除物理表或旧 active', async () => {
-    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-vector-orphan-update-existing-'))
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-orphan-update-existing-'))
     projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
     const oldSpace = { modelFingerprint: 'test/orphan-existing-old', distanceMetric: 'l2' }
     const candidateIdentity = { modelFingerprint: 'test/orphan-existing-candidate', distanceMetric: 'l2' }
     const oldVector = Array.from({ length: 768 }, (_, index) => index / 768)
@@ -1423,7 +1459,7 @@ describe('知识库向量维度', () => {
       spaces: [...oldRegistry.spaces, candidate],
     }
     fs.writeFileSync(
-      path.join(projectPath, '.vela', 'embedding-spaces.json'),
+      path.join(projectPath, '.ai-novel', 'embedding-spaces.json'),
       `${JSON.stringify(registryBeforeUpdate, null, 2)}\n`,
       'utf8',
     )

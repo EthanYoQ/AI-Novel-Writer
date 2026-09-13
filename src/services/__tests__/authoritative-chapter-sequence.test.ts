@@ -16,7 +16,7 @@ const PROJECT_SESSION: ProjectSessionContext = {
 function installSequence(result: unknown) {
   const invoke = vi.fn().mockResolvedValue(result)
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke,
       on: vi.fn(),
       once: vi.fn(),

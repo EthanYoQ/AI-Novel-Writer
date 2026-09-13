@@ -120,7 +120,7 @@ function isLegacyMigrationBlockedResult(value: unknown): boolean {
     && (value as { errorCode?: unknown }).errorCode === LEGACY_VECTOR_MIGRATION_BLOCKED
 }
 
-function getEmbeddingConfig(): { protocol: 'openai' | 'gemini'; model: { baseUrl: string; apiKey: string; modelName: string; embeddingOptions?: EmbeddingOptions } } | null {
+export function getEmbeddingConfig(): { protocol: 'openai' | 'gemini'; model: { baseUrl: string; apiKey: string; modelName: string; embeddingOptions?: EmbeddingOptions } } | null {
   const config = readJsonFile<GlobalConfig>(GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG)
   const targetModelId = config.defaultEmbeddingModelId || config.defaultModelId
   if (!targetModelId) return null

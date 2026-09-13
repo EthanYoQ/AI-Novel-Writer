@@ -1,11 +1,10 @@
+import { composeVisibleContinuation, CONTINUATION_VISIBLE_TAIL_CHARS } from '../../shared/visible-continuation'
 import type { LLMFinishReason } from '../../shared/ipc-channels'
 import type { WritingLanguage } from '../../shared/writing-language'
 import { localize, type Locale } from '../../i18n/core'
 import { promptLanguageText } from '../prompt-language'
 import { stripThinkingTags } from './workflow-utils'
 
-const CONTINUATION_VISIBLE_TAIL_CHARS = 1600
-const MIN_VISIBLE_OVERLAP_CHARS = 48
 const MAX_BOUNDED_CONTINUATIONS = 7
 const MAX_STRUCTURED_CONTINUATIONS = 2
 const MAX_TEXT_CONTINUATIONS = 3
@@ -92,26 +91,6 @@ export function redactVisibleCompletionText(text: string): string {
   return stripThinkingTags(text)
 }
 
-function removeLeadingNonWhitespaceCharacters(text: string, count: number): string {
-  if (count <= 0) return text
-  let consumed = 0
-  for (let index = 0; index < text.length; index += 1) {
-    if (!/\s/u.test(text[index])) consumed += 1
-    if (consumed >= count) return text.slice(index + 1).trimStart()
-  }
-  return ''
-}
-
-function overlappingVisiblePrefixLength(existingText: string, addition: string): number {
-  const existingTail = existingText.slice(-CONTINUATION_VISIBLE_TAIL_CHARS).replace(/\s+/gu, '')
-  const additionHead = addition.slice(0, CONTINUATION_VISIBLE_TAIL_CHARS).replace(/\s+/gu, '')
-  const maximum = Math.min(existingTail.length, additionHead.length)
-
-  for (let length = maximum; length >= MIN_VISIBLE_OVERLAP_CHARS; length -= 1) {
-    if (existingTail.slice(-length) === additionHead.slice(0, length)) return length
-  }
-  return 0
-}
 
 function visibleProseUnitCount(text: string): number {
   return text.match(/[\p{L}\p{N}]/gu)?.length ?? 0
@@ -194,9 +173,7 @@ export function appendVisibleTextContinuation(
 ): string {
   const visibleExisting = redactVisibleText(existing)
   const visibleAddition = redactVisibleText(addition)
-  const overlap = overlappingVisiblePrefixLength(visibleExisting, visibleAddition)
-  const newVisibleText = removeLeadingNonWhitespaceCharacters(visibleAddition, overlap)
-  return redactVisibleText([visibleExisting, newVisibleText].filter(Boolean).join('\n\n'))
+  return redactVisibleText(composeVisibleContinuation(visibleExisting, visibleAddition))
 }
 
 function incompleteCompletionError(

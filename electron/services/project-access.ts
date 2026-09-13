@@ -1,34 +1,18 @@
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
-import { createRequire } from 'node:module'
+import { probeProjectSqlite } from './sqlite-project-migration'
 import os from 'node:os'
 import path from 'node:path'
 import type { ProjectSessionContext } from '../../src/shared/ipc-channels'
+import { CANONICAL_PROJECT_DIRECTORY, createCanonicalProjectManifest, parseCanonicalProjectManifest } from '../../src/shared/project-format'
 import {
   assertProjectCoreStoragePathSupported,
   assertProjectStoragePathSupported,
   type ProjectStoragePreflightOptions,
 } from './project-storage-preflight'
 
-export const PROJECT_MANIFEST_RELATIVE_PATH = path.join('.vela', 'project.json')
+export const PROJECT_MANIFEST_RELATIVE_PATH = path.join(CANONICAL_PROJECT_DIRECTORY, 'project.json')
 export const PROJECT_ROOT_REQUIRED = 'PROJECT_ROOT_REQUIRED' as const
-const require = createRequire(import.meta.url)
-const Database = require('better-sqlite3') as typeof import('better-sqlite3')
-const LEGACY_REQUIRED_TABLES = new Set([
-  'project_core',
-  'blueprints',
-  'characters',
-  'contents',
-  'drafts',
-])
-const LEGACY_PROJECT_CORE_COLUMNS = new Set([
-  'id',
-  'project_name',
-  'genre',
-  'total_chapters',
-  'character_states',
-])
-
 interface ProjectManifest {
   schemaVersion: 1
   kind: 'ai-novel-project'
@@ -49,6 +33,7 @@ export interface TrustedProject {
   kind: 'manifest'
   projectId: string
   rootPath: string
+  storageFormat?: 'canonical' | 'legacy'
 }
 
 export interface LegacyProjectProbe {
@@ -163,8 +148,14 @@ export class ProjectAccessService {
   probeExistingProject(candidatePath: string): ProjectProbe {
     const rootPath = this.canonicalProjectRoot(candidatePath)
     assertProjectCoreStoragePathSupported(rootPath, this.storagePreflightOptions)
-    const manifestPath = path.join(rootPath, PROJECT_MANIFEST_RELATIVE_PATH)
+    const canonicalRoot = path.join(rootPath, CANONICAL_PROJECT_DIRECTORY)
+    const hasCanonical = fs.existsSync(canonicalRoot)
+    if (hasCanonical && fs.existsSync(path.join(rootPath, '.vela'))) throw new Error('PROJECT_MIGRATION_DUAL_ROOT')
+    const storageRoot = hasCanonical ? canonicalRoot : path.join(rootPath, '.vela')
+    if (fs.existsSync(storageRoot) && (fs.lstatSync(storageRoot).isSymbolicLink() || !fs.lstatSync(storageRoot).isDirectory())) throw new Error('项目存储目录越界或为链接，已拒绝打开')
+    const manifestPath = path.join(rootPath, hasCanonical ? PROJECT_MANIFEST_RELATIVE_PATH : path.join('.vela', 'project.json'))
     if (fs.existsSync(manifestPath) && fs.statSync(manifestPath).isFile()) {
+      if (fs.lstatSync(manifestPath).isSymbolicLink() || fs.lstatSync(manifestPath).nlink !== 1) throw new Error('项目清单为链接，已拒绝打开')
       this.assertProjectChildPath(rootPath, manifestPath, '项目清单')
       let parsed: unknown
       try {
@@ -172,18 +163,33 @@ export class ProjectAccessService {
       } catch {
         throw new Error('项目清单无法读取，已拒绝打开')
       }
-      if (!isProjectManifest(parsed)) {
+      if (hasCanonical) parseCanonicalProjectManifest(parsed)
+      else if (!isProjectManifest(parsed)) {
         throw new Error('项目清单无效，已拒绝打开')
+      }
+      const migrationJournal = path.join(rootPath, '.ai-novel-migration', 'journal.json')
+      const migrationDirectory = path.dirname(migrationJournal)
+      if (hasCanonical && fs.existsSync(migrationDirectory)) {
+        const directoryInfo = fs.lstatSync(migrationDirectory)
+        if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink()) throw new Error('PROJECT_MIGRATION_RECOVERY_REQUIRED')
+        this.assertProjectChildPath(rootPath, migrationDirectory, '迁移记录目录')
+      }
+      if (hasCanonical && fs.existsSync(migrationJournal)) {
+        const info = fs.lstatSync(migrationJournal)
+        if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) throw new Error('PROJECT_MIGRATION_RECOVERY_REQUIRED')
+        const receipt = JSON.parse(fs.readFileSync(migrationJournal, 'utf8'))
+        if (receipt.version !== 1 || receipt.phase !== 'switched' || receipt.projectId !== (parsed as ProjectManifest).projectId) throw new Error('PROJECT_MIGRATION_RECOVERY_REQUIRED')
       }
 
       return {
         kind: 'manifest',
-        projectId: parsed.projectId,
+        projectId: (parsed as ProjectManifest).projectId,
         rootPath,
+        storageFormat: hasCanonical ? 'canonical' : 'legacy',
       }
     }
 
-    if (this.hasTrustedLegacySqliteFingerprint(rootPath)) {
+    if (!hasCanonical && this.hasTrustedLegacySqliteFingerprint(rootPath)) {
       return {
         kind: 'legacy',
         rootPath,
@@ -195,21 +201,10 @@ export class ProjectAccessService {
   }
 
   adoptLegacyProject(project: ProjectProbe): TrustedProject {
-    if (project.kind === 'manifest') return project
-
+    // Compatibility entry point: adoption no longer writes a manifest during open.
     const current = this.probeExistingProject(project.rootPath)
-    if (current.kind === 'manifest') return current
-    if (current.legacyFingerprint !== 'vela-sqlite-v1') {
-      throw new Error('旧版项目指纹不受支持，已拒绝迁移')
-    }
-    try {
-      return this.writeManifest(current.rootPath)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      const adopted = this.probeExistingProject(current.rootPath)
-      if (adopted.kind === 'manifest') return adopted
-      throw new Error('旧版项目清单创建冲突，已拒绝打开')
-    }
+    if (current.kind === 'manifest' && current.storageFormat === 'canonical') return current
+    throw new Error('PROJECT_MIGRATION_NOT_QUALIFIED')
   }
 
   beginSession(project: TrustedProject): ProjectSessionLease {
@@ -324,22 +319,9 @@ export class ProjectAccessService {
     if (!fs.existsSync(databasePath) || !fs.statSync(databasePath).isFile()) return false
     try {
       if (!isContainedPath(rootPath, fs.realpathSync.native(databasePath))) return false
-      // 必须同时满足只读、fileMustExist 和项目专有结构，避免任意同名 SQLite
-      // 文件被误认作小说项目；这个探测不执行迁移或建表。
-      const database = new Database(databasePath, { readonly: true, fileMustExist: true })
-      try {
-        const tables = database.prepare(
-          "SELECT name FROM sqlite_master WHERE type = 'table'",
-        ).all() as Array<{ name: string }>
-        const tableNames = new Set(tables.map(row => row.name))
-        if (![...LEGACY_REQUIRED_TABLES].every(name => tableNames.has(name))) return false
-
-        const columns = database.prepare('PRAGMA table_info(project_core)').all() as Array<{ name: string }>
-        const columnNames = new Set(columns.map(column => column.name))
-        return [...LEGACY_PROJECT_CORE_COLUMNS].every(name => columnNames.has(name))
-      } finally {
-        database.close()
-      }
+      // The central probe opens an isolated physical copy, never the source WAL/SHM.
+      probeProjectSqlite({ databasePath })
+      return true
     } catch {
       return false
     }
@@ -348,12 +330,10 @@ export class ProjectAccessService {
   private writeManifest(rootPath: string): TrustedProject {
     const manifestPath = path.join(rootPath, PROJECT_MANIFEST_RELATIVE_PATH)
     fs.mkdirSync(path.dirname(manifestPath), { recursive: true })
-    const manifest: ProjectManifest = {
-      schemaVersion: 1,
-      kind: 'ai-novel-project',
+    const manifest = createCanonicalProjectManifest({
       projectId: randomUUID(),
       createdAt: new Date().toISOString(),
-    }
+    })
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {
       encoding: 'utf8',
       flag: 'wx',
@@ -362,6 +342,7 @@ export class ProjectAccessService {
       kind: 'manifest',
       projectId: manifest.projectId,
       rootPath,
+      storageFormat: 'canonical',
     }
   }
 

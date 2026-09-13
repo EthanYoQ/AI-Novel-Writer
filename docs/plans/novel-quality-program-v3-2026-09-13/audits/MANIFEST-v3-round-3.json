@@ -1,0 +1,123 @@
+{
+  "version": "Program-v3-round-3",
+  "status": "submitted-for-final-bounded-delta-review",
+  "changes": [
+    "Only editorProtocol and F05 receipt ABI plus two check files changed since round 2",
+    "Required input+selection action dimensions, 3 warmups and 7 raw samples, self-computed median/worst/MAD per action",
+    "15 negative contract fixtures pass, including missing selection, insufficient samples, false stability claim"
+  ],
+  "files": [
+    {
+      "path": "00-START-HERE.md",
+      "sha256": "044C9945853511636B2D86D692AAEFAEBF4438E7EF1A09E0B2F42F670F2F0221"
+    },
+    {
+      "path": "01-MASTER-PLAN.md",
+      "sha256": "FC84798303CB75057884F30F607FAE0834B224CA5188A16935EA6C0BBDF03B0B"
+    },
+    {
+      "path": "02-FRONTEND-DECISION.md",
+      "sha256": "437557F5A868175D364C5D6BE326E270FDE54530CCF3501FAAD6C34DF92E2C0F"
+    },
+    {
+      "path": "03-ISSUE-CLOSURE.md",
+      "sha256": "9FB27C39A78C6649C95224A9D84618A5204109BD4A2ACE3453104088EA9984C1"
+    },
+    {
+      "path": "04-EXECUTION-MATRIX.md",
+      "sha256": "4EA17291901FD97ED4BD5A2627FA428009209939211CEA8E4CA4ADCCE313E954"
+    },
+    {
+      "path": "05-INTEGRATION-CONTRACT.md",
+      "sha256": "6F2408CEA84C63C8F12053F0072D13F0D3EBFE3C2CFBD8EAB61FFB36487A21C8"
+    },
+    {
+      "path": "06-SPEC-INDEX.md",
+      "sha256": "9BCE0EDA1ECF9A4BF2A271B8E1ACF94B711E722037C831565F2A7F7302F21B46"
+    },
+    {
+      "path": "08-EVIDENCE-BOUNDARIES.md",
+      "sha256": "902B6EA9CE366754ECAF3C27F5F4037BF886873BE4F2237ADA15271053FA93D6"
+    },
+    {
+      "path": "09-FEATURE-UNION.md",
+      "sha256": "F9EC865DA5123B0A0A5697DEC258BD8F80C4FE98CA8834A03C8700634EC7C043"
+    },
+    {
+      "path": "10-USER-CORRECTION.md",
+      "sha256": "6B3441ABD6EC90F352DEADC3676A2A89FCCBABF4B9339183C13F58964A8770F7"
+    },
+    {
+      "path": "checks/feature-union-check.mjs",
+      "sha256": "A2385B79A7EB2059D43F0AE6E8527E3ED31A29BA11F8BD6FEB37C2E9FAC7A730"
+    },
+    {
+      "path": "checks/feature-union-check.test.mjs",
+      "sha256": "47715FECE86C174EFD900B30CF9A37EEE896C76A3DC6A416D316E36F97CBA293"
+    },
+    {
+      "path": "dag.json",
+      "sha256": "203D7BB0585C15539AE6C63D43DB6A5390D948BC3D2E5C0FC273ED16D9879826"
+    },
+    {
+      "path": "evidence/cloud-portability-delta.md",
+      "sha256": "1C8C0B744093E5F591B92C0E1FE2AFB9562AFE3AF61F4C07F3BEAAC68F925DCE"
+    },
+    {
+      "path": "evidence/donor-feature-union.md",
+      "sha256": "E955BF8AA2B0333251E7BF45AD12FA6E6CF751531EA4DDA1FA7C2502E588F33A"
+    },
+    {
+      "path": "evidence/issue-scope.md",
+      "sha256": "424B6910C776708BF2653980677C25E1B11A5F49DD71B45BB7D770574BDEA416"
+    },
+    {
+      "path": "evidence/issue-snapshot.json",
+      "sha256": "6FD070A7CA6B69FC2235C2EDBF6F0962043C40C3D8C7EFF885ED780EE6468E69"
+    },
+    {
+      "path": "feature-union.json",
+      "sha256": "08663B198C87BC802385CE015DABA4CEDE09062D9FDD04F3598CCB22C2458F47"
+    },
+    {
+      "path": "specs/B01.md",
+      "sha256": "654BA75ADCA67215258616A0F1B9F1D49EFA900F1AC6787DB46E15DD15E13961"
+    },
+    {
+      "path": "specs/B02.md",
+      "sha256": "60AF9CF9B6E620C77AF06711FA2EAD0DBE5973DA30A88CCA3B30B68AC956CC54"
+    },
+    {
+      "path": "specs/F01.md",
+      "sha256": "83C55DB2D55842ED0ED9C7BAE5D6332DEF0B1F0B2399EFE63995B50EB44F1F3F"
+    },
+    {
+      "path": "specs/F02.md",
+      "sha256": "205A64946A340C2349064DAE31462CB165DDE97D7611BAAE1578D080437CDEA5"
+    },
+    {
+      "path": "specs/F03.md",
+      "sha256": "7DE2BF8C1E7C78B0A581465A9A8F3FD657A74CDE8C356245CEF92A00DC6A0FB2"
+    },
+    {
+      "path": "specs/F04.md",
+      "sha256": "EE2B1E9B3761A88403331A42214BC02AEC3BA67E05581A66FDEC205576423801"
+    },
+    {
+      "path": "specs/F05.md",
+      "sha256": "FF017D8DE800E0C53B0F8AC0F3A6CF915AF9F4416334D319F4792831D8541899"
+    },
+    {
+      "path": "specs/G01.md",
+      "sha256": "65D5AEB316E07404965B886138C0855BF7FFF667D280E46B9047AAA45B2D5C85"
+    },
+    {
+      "path": "specs/G02.md",
+      "sha256": "CBDD284768BE3A6FC8E375839CCD5880388A3582775ED4E883CE0730A98A3BDB"
+    },
+    {
+      "path": "specs/R01.md",
+      "sha256": "BF9BE0FAD47EF80C48F1F92B2F3F9938448A01601FA0CA7136DDA6A3BAD1419E"
+    }
+  ]
+}

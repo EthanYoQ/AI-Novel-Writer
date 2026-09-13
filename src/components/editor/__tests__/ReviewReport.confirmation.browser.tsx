@@ -143,7 +143,7 @@ function installIpc(confirmationId: number, currentDraftContent: string = REVIEW
     if (channel === 'db:review-get-latest') return latestReview
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -195,9 +195,9 @@ async function renderReport(reportText = RAW_AI_REPORT) {
       <ReviewReport
         projectKey={PROJECT_PATH}
         reportText={reportText}
-        draftPath="vela://draft/1"
+        draftPath="ai-novel://draft/1"
         chapterNumber={1}
-        chapterDir="vela://draft/ch1"
+        chapterDir="ai-novel://draft/ch1"
         reviewId={41}
       />,
     )
@@ -264,7 +264,7 @@ afterEach(async () => {
   container?.remove()
   root = undefined
   container = undefined
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   setActiveProjectSessionContext(null)
   useLLMStore.setState(originalLLMState)
   useLocaleStore.setState(originalLocaleState)

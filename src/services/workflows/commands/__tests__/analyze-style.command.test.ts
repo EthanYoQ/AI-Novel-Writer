@@ -34,7 +34,7 @@ function stubIpcInvoke(updateResult: { success: boolean; error?: string } = { su
     return Promise.resolve(null)
   })
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke,
       on: vi.fn(),
       once: vi.fn(),
@@ -194,7 +194,7 @@ describe('AnalyzeWritingStyleCommand with imported samples', () => {
       return Promise.resolve(null)
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),

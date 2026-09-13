@@ -38,8 +38,14 @@ import {
 } from './services/official-homepage-navigation'
 import { configureSingleInstanceRuntime } from './services/single-instance-runtime'
 import { installWindowCloseGuard } from './controllers/window-controller'
+import { registerStartupController } from './controllers/startup-controller'
+import { resolveGlobalDataRoots } from './services/app-data-locator'
+import { runGlobalDataMigration, activateGlobalData } from './services/global-data-migration'
+import { skinService } from './services/skin-service'
+import { ensureVelaHome } from './utils/config-utils'
+import type { StartupBlockedCode, StartupMigrationNotice } from '../src/shared/startup-contract'
 
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
 
 // Electron 41 在部分 Windows 环境中无法启动受限 GPU 子进程（0xC0000135），
@@ -62,6 +68,19 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
   : RENDERER_DIST
 
 let win: BrowserWindow | null
+let startupGeneration: string | null = null
+let startupBlockedCode: StartupBlockedCode | undefined
+let startupHasSettled = false
+let ownsInstanceLock = false
+let startupMigrationNotice: StartupMigrationNotice | undefined
+
+// Qualification already supplies this Chromium profile flag. Keep the same profile
+// in Electron's locator too; ordinary launches retain their existing userData path.
+const explicitUserData = app.commandLine.getSwitchValue('user-data-dir')
+if (explicitUserData) {
+  if (!path.isAbsolute(explicitUserData)) throw new Error('USER_DATA_PATH_MUST_BE_ABSOLUTE')
+  app.setPath('userData', explicitUserData)
+}
 
 // The installed-package vector qualification is deliberately opt-in and
 // fail-closed. A command-line request without the matching environment token
@@ -81,7 +100,7 @@ const releaseSkinSmokeInvocation = releaseSkinSmokeRequested
   : undefined
 const applicationInstanceAccepted = configureSingleInstanceRuntime({
   releaseSmokeRequested,
-  requestLock: () => app.requestSingleInstanceLock(),
+  requestLock: () => { ownsInstanceLock = app.requestSingleInstanceLock(); return ownsInstanceLock },
   quit: () => app.quit(),
   onSecondInstance: listener => { app.on('second-instance', () => listener()) },
   getWindow: () => win,
@@ -127,10 +146,10 @@ function createWindow() {
     height: 900,
     minWidth: 1024,
     minHeight: 640,
-    title: mainT(app.getLocale(), 'app.windowTitle'),
+    title: startupBlockedCode ? 'AI Novel Writer' : mainT(app.getLocale(), 'app.windowTitle'),
     icon: path.join(process.env.APP_ROOT!, 'build', 'icon.png'),
     // 使用应用内自绘标题栏，避免 Windows 原生标题栏与棕色标题栏重复显示。
-    frame: false,
+    frame: Boolean(startupBlockedCode),
     backgroundColor: '#1e1e1e',
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
@@ -139,7 +158,8 @@ function createWindow() {
       contextIsolation: true,
     },
   })
-  installWindowCloseGuard(win)
+  // A diagnostic-only window has no editor and no business close responder.
+  if (!startupBlockedCode) installWindowCloseGuard(win)
 
   if (process.platform === 'darwin') {
     app.dock?.setIcon(path.join(process.env.APP_ROOT!, 'build', 'icon.png'))
@@ -196,7 +216,7 @@ app.on('window-all-closed', () => {
 
 // macOS: 点击 dock 图标重新创建窗口
 app.on('activate', () => {
-  if (!applicationInstanceAccepted || releaseSmokeRequested) return
+  if (!applicationInstanceAccepted || releaseSmokeRequested || !startupHasSettled) return
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow()
   }
@@ -215,6 +235,13 @@ app.whenReady().then(async () => {
     if (requestedSmokeModeCount !== 1 || invocationCount !== 1) {
       throw new Error('Invalid packaged smoke invocation: exactly one environment and one-time CLI token pair must match')
     }
+    if (!explicitUserData || !process.env.AI_NOVEL_APP_DATA_HOME
+      || !(process.env.AI_NOVEL_LEGACY_SOURCE_HOME || process.env.AI_NOVEL_VELA_HOME)) {
+      throw new Error('GLOBAL_SMOKE_ISOLATION_REQUIRED')
+    }
+    // The profile is isolated, but competing writers to that profile still require exclusion.
+    ownsInstanceLock = app.requestSingleInstanceLock()
+    if (!prepareGlobalRuntime()) throw new Error('GLOBAL_SMOKE_STARTUP_BLOCKED')
     reportReleaseSmokeStage(
       releaseVectorSmokeInvocation
         ? 'vector-invocation-valid'
@@ -234,9 +261,23 @@ app.whenReady().then(async () => {
     return
   }
 
-  // 先准备主进程服务和 IPC，再允许渲染层加载并发起调用。
+  registerStartupController({
+    ipc: ipcMain,
+    getTrustedSender: () => win?.webContents ?? null,
+    rendererUrl: VITE_DEV_SERVER_URL || pathToFileURL(path.join(RENDERER_DIST, 'index.html')).href,
+    getSnapshot: () => startupGeneration ? skinService.getStartupSnapshot(startupGeneration) : null,
+    getBlockedCode: () => startupBlockedCode,
+    getMigrationNotice: () => startupMigrationNotice,
+  })
+  // No ordinary renderer, default config writer, or business controller precedes this gate.
+  if (!prepareGlobalRuntime()) {
+    startupHasSettled = true
+    createWindow()
+    return
+  }
   registerIPCHandlers()
   registerMCPHandlers()
+  startupHasSettled = true
   // 更新功能失败不能阻断作者进入应用；窗口先于更新运行时创建。
   createWindow()
   const windowsUpdateEnabled = isWindowsUpdateRuntimeEnabled(app.isPackaged, VITE_DEV_SERVER_URL)
@@ -264,10 +305,38 @@ app.whenReady().then(async () => {
   })
 }).catch((error: unknown) => {
   clearReleaseSmokeTimeout()
-  console.error('[Vela] Electron 启动失败。', error)
+  console.error('[AI Novel Writer] Electron 启动失败，现有配置已保留。')
   if (releaseSmokeRequested) {
+    // Controlled qualification errors have safe fixed codes; never print config values.
+    if (error instanceof Error && /^[A-Z_]+$/.test(error.message)) console.error(error.message)
     app.exit(1)
     return
   }
+  startupBlockedCode = 'GLOBAL_DATA_BLOCKED'
+  startupHasSettled = true
   if (BrowserWindow.getAllWindows().length === 0) createWindow()
 })
+
+function prepareGlobalRuntime(): boolean {
+  const migrated = runGlobalDataMigration({
+    ...resolveGlobalDataRoots(app.getPath('userData'), () => app.getPath('appData')),
+    exclusiveAccess: ownsInstanceLock,
+  })
+  if (migrated.state !== 'ready') {
+    startupBlockedCode = migrated.code === 'GLOBAL_MODEL_CREDENTIALS_DIFFER' ? migrated.code : 'GLOBAL_DATA_BLOCKED'
+    return false
+  }
+  activateGlobalData(migrated)
+  ensureVelaHome()
+  try {
+    skinService.initialize()
+    skinService.getStartupSnapshot(migrated.globalGeneration)
+  } catch {
+    startupBlockedCode = 'SKIN_NOT_READY'
+    return false
+  }
+  startupGeneration = migrated.globalGeneration
+  startupMigrationNotice = { legacySourceIgnored: migrated.legacySourceIgnored, preservedUnknownCount: migrated.preservedUnknownCount }
+  startupBlockedCode = undefined
+  return true
+}

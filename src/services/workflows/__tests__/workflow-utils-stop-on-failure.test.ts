@@ -37,7 +37,7 @@ function stubIpcInvoke() {
     }
   })
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke,
       on: vi.fn(),
       once: vi.fn(),
@@ -133,7 +133,7 @@ describe('runPostProcessPipeline stopOnFailure', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),

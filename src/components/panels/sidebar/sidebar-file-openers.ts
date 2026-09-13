@@ -1,3 +1,4 @@
+import { canonicalResourceUri } from '../../../shared/project-paths'
 import type {
   DatabaseChannels,
   ProjectData,
@@ -47,14 +48,16 @@ function reportFileReadFailure(error: string | undefined): void {
 
 /** 打开架构文件（带 AI 生成工具栏；若 tab 已存在则刷新内容） */
 export async function openArchFile(filePath: string, name: string): Promise<void> {
+  filePath = canonicalResourceUri(filePath) ?? filePath
+  if (filePath.includes('://') && !canonicalResourceUri(filePath)) throw new Error('INVALID_RESOURCE_URI')
   const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
   if (!projectSession) return
   const projectKey = projectSession.projectPath
   const tabId = createProjectArchTabId(projectKey, filePath)
   let content = ''
-  // 支持 vela://core/ 伪协议路径，从 DB 读取架构字段
-  if (filePath.startsWith('vela://core/')) {
-    const { readCoreContent } = await import('../../../services/vela-protocol')
+  // 支持 ai-novel://core/ 伪协议路径，从 DB 读取架构字段
+  if (filePath.startsWith('ai-novel://core/')) {
+    const { readCoreContent } = await import('../../../services/resource-protocol')
     try {
       content = await readCoreContent(filePath, projectSession)
     } catch (error) {
@@ -121,17 +124,19 @@ export function openBuiltinEditor(
 
 /** 打开章节文件 */
 export async function openChapterFile(filePath: string, name: string): Promise<void> {
+  filePath = canonicalResourceUri(filePath) ?? filePath
+  if (filePath.includes('://') && !canonicalResourceUri(filePath)) throw new Error('INVALID_RESOURCE_URI')
   const projectSession = captureProjectSession(useProjectStore.getState().currentProject)
   if (!projectSession) return
   const projectKey = projectSession.projectPath
   let content = ''
   let draftMeta: DatabaseChannels['db:draft-get-meta']['return'] = null
   try {
-    if (filePath.startsWith('vela://')) {
-      const { readVelaContent } = await import('../../../services/vela-protocol')
-      content = await readVelaContent(filePath, projectSession)
+    if (filePath.startsWith('ai-novel://')) {
+      const { readResourceContent } = await import('../../../services/resource-protocol')
+      content = await readResourceContent(filePath, projectSession)
       if (!isProjectSessionCurrent(projectSession)) return
-      const draftIdMatch = filePath.match(/^vela:\/\/(?:draft|manuscript)\/(\d+)$/)
+      const draftIdMatch = filePath.match(/^ai-novel:\/\/(?:draft|manuscript)\/(\d+)$/)
       if (draftIdMatch) {
         draftMeta = await ipc.invokeWithProjectSession(
           projectSession,

@@ -1,3 +1,5 @@
+import type { DirectoryGenerationProgress } from '../../shared/generation-owner-contract'
+import type { MainGenerationRunHandle } from '../generation/generation-runtime'
 import { workflowResourceKey, type WorkflowDefinition } from '../../stores/workflow-store'
 import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
@@ -32,11 +34,48 @@ import { requireWorkflowProjectSession } from './workflow-project-session'
 export type ChapterBlueprint = BlueprintData
 
 export interface DirectoryWorkflowParams {
+  /** Exact committed progress selected by the author; no inferred latest run. */
+  continueDirectoryOperationId?: string
   mode: 'full' | 'append'
   startChapter?: number
   count?: number
   /** 节奏/风格指导（可选） */
   pacingGuidance?: string
+}
+
+/** Follow only the explicit run chain, including a run re-admitted under a new epoch. */
+export function terminalDirectoryProgress(progress: DirectoryGenerationProgress, all: readonly DirectoryGenerationProgress[]): DirectoryGenerationProgress {
+  const visited = new Set<string>()
+  let current = progress
+  for (;;) {
+    if (visited.has(current.operationId)) throw new Error('DIRECTORY_PROGRESS_CYCLE')
+    visited.add(current.operationId)
+    const handle = current.continuationHandle
+    if (!handle) return current
+    const children = all.filter(item => item.sourceHandle.projectId === handle.projectId
+      && item.sourceHandle.rootActionId === handle.rootActionId && item.sourceHandle.runId === handle.runId)
+    if (children.length > 1) throw new Error('DIRECTORY_PROGRESS_AMBIGUOUS')
+    if (!children.length) return current
+    current = children[0]
+  }
+}
+
+export async function resolveDirectoryContinuation(params: DirectoryWorkflowParams, session: ProjectSessionContext): Promise<DirectoryWorkflowParams & { resumeHandle?: MainGenerationRunHandle; authorConfig?: DirectoryWorkflowProjectSnapshot['novelConfig'] }> {
+  if (!params.continueDirectoryOperationId) return params
+  const all = await ipc.invokeWithProjectSession(session, 'generation:list-directory-progress')
+  const selected = all.find(item => item.operationId === params.continueDirectoryOperationId)
+  if (!selected || selected.sourceHandle.projectId !== session.projectId) throw new Error('DIRECTORY_PROGRESS_NOT_FOUND')
+  const terminal = terminalDirectoryProgress(selected, all)
+  if (!terminal.remainingRange) throw new Error('DIRECTORY_PROGRESS_COMPLETE')
+  const pacing = terminal.authorInputs?.find(item => item.id === 'directory:pacing-guidance')
+  const config = terminal.authorInputs?.find(item => item.id === 'directory:author-config')
+  if (!pacing || !config) throw new Error('旧目录进度缺少冻结作者输入，不能自动继续；已保存蓝图保持不变。')
+  const authorConfig: DirectoryWorkflowProjectSnapshot['novelConfig'] = JSON.parse(config.text)
+  if (!authorConfig || !Number.isSafeInteger(authorConfig.totalChapters) || authorConfig.totalChapters < terminal.remainingRange.endChapter) throw new Error('DIRECTORY_FROZEN_CONFIG_INVALID')
+  return { ...params, pacingGuidance: pacing.text, authorConfig, mode: 'append', startChapter: terminal.remainingRange.startChapter,
+    count: terminal.remainingRange.endChapter - terminal.remainingRange.startChapter + 1,
+    continueDirectoryOperationId: terminal.continuationHandle ? undefined : terminal.operationId,
+    ...(terminal.continuationHandle ? { resumeHandle: terminal.continuationHandle } : {}) }
 }
 
 export interface DirectoryWorkflowProjectSnapshot {
@@ -176,6 +215,8 @@ export async function commitDirectoryBlueprintRange(
   range: { mode: BlueprintRangeCommitMode; startChapter: number; endChapter: number },
   operationId: string,
   projectSession: ProjectSessionContext,
+  generationRunHandle?: MainGenerationRunHandle,
+  generationRequestedRange?: { startChapter: number; endChapter: number },
 ): Promise<BlueprintRangeCommitReceipt> {
   const result = await ipc.invokeWithProjectSession(
     projectSession,
@@ -186,6 +227,7 @@ export async function commitDirectoryBlueprintRange(
       startChapter: range.startChapter,
       endChapter: range.endChapter,
       blueprints,
+      ...(generationRunHandle ? { generationRunHandle, generationRequestedRange } : {}),
     },
     expectedProjectPath,
   )
@@ -325,7 +367,7 @@ export function createDirectoryWorkflow(
           context.data.architecture = parts.join('\n\n---\n\n')
           // 注入节奏指导到 context，供 Command 读取
           if (params.pacingGuidance) context.data.pacingGuidance = params.pacingGuidance
-          if (params.mode === 'append') {
+          if (params.mode === 'append' || params.continueDirectoryOperationId) {
             const existing = await loadDirectoryBlueprints(expectedProjectPath, projectSession)
             context.data.existingBlueprints = existing
             callbacks.log(text(
@@ -347,12 +389,15 @@ export function createDirectoryWorkflow(
         ),
         executor: async (_step, context, callbacks) => {
           const directoryCommand = await import('./commands/directory.command')
-          const cmd = new directoryCommand.GenerateDirectoryCommand(params, projectSnapshot)
+          const resolvedParams = await resolveDirectoryContinuation(params, projectSession)
+          context.data.directoryResumeHandle = resolvedParams.resumeHandle
+          if (params.continueDirectoryOperationId) context.data.pacingGuidance = resolvedParams.pacingGuidance
+          const cmd = new directoryCommand.GenerateDirectoryCommand(resolvedParams, resolvedParams.authorConfig ? { ...projectSnapshot, novelConfig: resolvedParams.authorConfig } : projectSnapshot)
           let blueprints: ChapterBlueprint[]
           try {
             blueprints = await cmd.execute({ step: _step, context, callbacks })
           } catch (error) {
-            if (error instanceof PromptBudgetExceededError) throw error
+            if (error instanceof PromptBudgetExceededError || error instanceof directoryCommand.DirectoryPartialCommitError) throw error
             if (error instanceof directoryCommand.DirectoryPostCommitSyncError) {
               throw new Error(text(
                 '章节蓝图已保存，但角色同步失败。请重试角色同步。',

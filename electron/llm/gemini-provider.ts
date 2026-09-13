@@ -1,5 +1,30 @@
 import { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from './provider.interface'
 import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
+import { VisibleStreamFilter } from './visible-stream'
+
+function assertVisibleStreamPayload(value: unknown): void {
+  const record = (input: unknown): input is Record<string, unknown> =>
+    typeof input === 'object' && input !== null && !Array.isArray(input)
+  const invalid = () => { throw new Error('Gemini 响应流格式无效') }
+  if (!record(value)) return invalid()
+  if ('error' in value) throw new Error('Gemini 响应流报告错误')
+  if (value.candidates === undefined) return
+  if (!Array.isArray(value.candidates)) return invalid()
+  for (const candidate of value.candidates) {
+    if (!record(candidate)) return invalid()
+    if (candidate.finishReason !== undefined && candidate.finishReason !== null
+      && typeof candidate.finishReason !== 'string') return invalid()
+    if (candidate.content === undefined) continue
+    if (!record(candidate.content)) return invalid()
+    if (candidate.content.parts === undefined) continue
+    if (!Array.isArray(candidate.content.parts)) return invalid()
+    for (const part of candidate.content.parts) {
+      if (!record(part)) return invalid()
+      if (part.text !== undefined && typeof part.text !== 'string') return invalid()
+      if (part.thought !== undefined && typeof part.thought !== 'boolean') return invalid()
+    }
+  }
+}
 
 export class GeminiProvider implements ILLMProvider {
   private applyReasoning(
@@ -113,6 +138,8 @@ export class GeminiProvider implements ILLMProvider {
   }
 
   async generateStream(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMStreamOptions): Promise<void> {
+    const visible = new VisibleStreamFilter()
+    let visibleUsage: TokenUsage | undefined
     try {
       const baseUrl = model.baseUrl.replace(/\/$/, '')
       const url = `${baseUrl}/v1beta/models/${model.modelName}:streamGenerateContent?alt=sse`
@@ -173,16 +200,20 @@ export class GeminiProvider implements ILLMProvider {
         try {
           const parsed = JSON.parse(json) as {
             candidates?: Array<{
-              content?: { parts?: Array<{ text?: string }> }
+              content?: { parts?: Array<{ text?: string; thought?: boolean }> }
                 finishReason?: string | null
             }>
-            usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number }
+            usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number; thoughtsTokenCount?: number }
           }
+          if (opts.visibleOnly) assertVisibleStreamPayload(parsed)
           const candidate = parsed.candidates?.[0]
           if (candidate?.finishReason !== undefined) {
             finishReason = this.normalizeFinishReason(candidate.finishReason)
           }
-          const chunk = candidate?.content?.parts?.[0]?.text
+          const content = opts.visibleOnly
+            ? (candidate?.content?.parts ?? []).filter(part => part.thought === undefined || part.thought === false).map(part => typeof part.text === 'string' ? part.text : '').join('')
+            : candidate?.content?.parts?.[0]?.text
+          const chunk = opts.visibleOnly ? visible.push(content ?? '') : content
           if (chunk) {
             fullText += chunk
             opts.onChunk(chunk)
@@ -193,8 +224,12 @@ export class GeminiProvider implements ILLMProvider {
               completionTokens: parsed.usageMetadata.candidatesTokenCount ?? null,
               totalTokens: parsed.usageMetadata.totalTokenCount ?? null,
             }
+            visibleUsage = usage
+            opts.onUsageEvidence?.({ usage, reasoningTokens: parsed.usageMetadata.thoughtsTokenCount ?? null,
+              accounting: 'separately-billed', totalIncludesReasoning: true, protocol: 'gemini' })
           }
-        } catch {
+        } catch (error) {
+          if (opts.visibleOnly) throw error
           // Ignore non-data SSE lines and malformed keepalives.
         }
       }
@@ -214,12 +249,12 @@ export class GeminiProvider implements ILLMProvider {
       buffer += decoder.decode()
       if (buffer.trim()) processLine(buffer)
 
-      opts.onDone(fullText, usage, finishReason)
+      opts.onDone(opts.visibleOnly ? visible.text : fullText, usage, finishReason)
     } catch (error) {
       if ((error as Error).name === 'AbortError') {
-        opts.onError('已取消生成')
+        opts.onError('已取消生成', opts.visibleOnly ? visible.text : undefined, visibleUsage)
       } else {
-        opts.onError(String(error))
+        opts.onError(String(error), opts.visibleOnly ? visible.text : undefined, visibleUsage)
       }
     }
   }

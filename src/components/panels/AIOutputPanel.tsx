@@ -1,4 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { GenerationBatchProgress, GenerationRecoveryContext } from '../../shared/generation-owner-contract'
+import type { MainGenerationRunView } from '../../services/generation/generation-runtime'
+import { createDraftRecoveryWorkflow, createBatchRecoveryWorkflow } from '../../services/workflows/draft-recovery-workflow'
 import { CheckCircle2, Loader2, Circle, Sparkles, X, ChevronRight, StopCircle, AlertTriangle, SlidersHorizontal, Copy, Pencil, Trash2 } from 'lucide-react'
 import {
   useWorkflowStore,
@@ -43,6 +46,7 @@ export default function AIOutputPanel() {
   const activeRunId = activeRun?.id
   const currentLocale = useLocaleStore(s => s.locale)
   const currentProject = useProjectStore(s => s.currentProject)
+  const mainSession = useMemo(() => projectSessionContextFromProject(currentProject), [currentProject])
   const [viewRunId, setViewRunId] = useState<string | null>(null)
   const [recoveryCandidates, setRecoveryCandidates] = useState<RecoveryCandidate[]>([])
   const [recoveryError, setRecoveryError] = useState('')
@@ -116,7 +120,7 @@ export default function AIOutputPanel() {
         `Recovery candidate · Chapter ${currentCandidate.chapterNumber} ${currentCandidate.chapterTitle}`,
       ),
       type: 'chapter',
-      filePath: `vela://recovery/${currentCandidate.candidateId}`,
+      filePath: `ai-novel://recovery/${currentCandidate.candidateId}`,
       content: currentCandidate.visibleText,
       savedContent: currentCandidate.visibleText,
       dirty: false,
@@ -208,6 +212,7 @@ export default function AIOutputPanel() {
 
       {/* 内容区 */}
       <div className="flex-1 overflow-hidden flex flex-col">
+        <MainDraftRecoverySection session={mainSession} locale={currentLocale} refreshKey={history.length} />
         {(recoveryCandidates.length > 0 || recoveryError) && (
           <RecoveryCandidateSection
             candidates={recoveryCandidates}
@@ -240,6 +245,81 @@ export default function AIOutputPanel() {
       </div>
     </div>
   )
+}
+
+function MainDraftRecoverySection({ session, locale, refreshKey }: {
+  session: ProjectSessionContext | null; locale: Locale; refreshKey: number
+}) {
+  const [runs, setRuns] = useState<Array<{ view: MainGenerationRunView; recovery: GenerationRecoveryContext }>>([])
+  const [batches, setBatches] = useState<GenerationBatchProgress[]>([])
+  const [selection, setSelection] = useState<Record<string, string[]>>({})
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    let active = true
+    if (!session) return
+    void (async () => {
+      const [views, progress] = await Promise.all([
+        ipc.invokeWithProjectSession(session, 'generation:list'),
+        ipc.invokeWithProjectSession(session, 'generation:list-batches'),
+      ])
+      const contexts = await Promise.all(views.map(async view => ({ view,
+        recovery: await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle: view.handle }),
+      })))
+      if (!active) return
+      setRuns(contexts.filter(item => item.recovery.operation === 'chapter-draft' && !item.recovery.batchId
+        && (item.recovery.composition || item.view.artifacts.length || item.view.candidates?.length || item.view.unsavedTails?.length)))
+      setBatches(progress.filter(item => item.nextChapterNumber !== null))
+      setError('')
+    })().catch(reason => { if (active) setError(reason instanceof Error ? reason.message : String(reason)) })
+    return () => { active = false }
+  }, [session, refreshKey])
+  if (!session) return null
+  const act = async (operation: () => Promise<void>) => {
+    if (busy || !sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
+    setBusy(true)
+    try { await operation(); setError('') } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { setBusy(false) }
+  }
+  const visibleRuns = runs.filter(item => item.view.handle.projectId === session.projectId)
+  const visibleBatches = batches.filter(item => item.rootHandle.projectId === session.projectId)
+  if (!visibleRuns.length && !visibleBatches.length && !error) return null
+  return <section className="max-h-80 overflow-y-auto border-b p-3 text-xs" aria-label={runText(locale, '持久正文候选', 'Saved draft candidates')}>
+    {error && <p role="alert">{error}</p>}
+    {visibleBatches.map(batch => <article key={batch.batchId} className="mb-3">
+      <p>{runText(locale, `批量正文：已保存 ${batch.completedChapters.length} 章，下一章 ${batch.nextChapterNumber}`,
+        `Batch drafts: ${batch.completedChapters.length} saved; next chapter ${batch.nextChapterNumber}`)}</p>
+      <button type="button" className="icon-btn px-2" disabled={busy} onClick={() => { void act(async () => {
+        const workflow = await createBatchRecoveryWorkflow(session, batch.batchId)
+        await useWorkflowStore.getState().startWorkflow(workflow)
+      }) }}>{runText(locale, '继续此批次', 'Continue this batch')}</button>
+    </article>)}
+    {visibleRuns.map(({ view, recovery }) => {
+      const artifacts = [...new Map([...view.artifacts, ...(view.candidates ?? [])].map(item => [item.artifactId, item])).values()]
+      const picked = selection[view.handle.runId] ?? []
+      return <article key={view.handle.runId} className="mb-3">
+        <p>{runText(locale, `第${recovery.chapterNumber}章候选`, `Chapter ${recovery.chapterNumber} candidate`)}</p>
+        {view.ledger && <p>{runText(locale, `已用 ${view.ledger.physicalRequests} 次请求`, `${view.ledger.physicalRequests} requests used`)}</p>}
+        {artifacts.map(artifact => <label key={artifact.artifactId} className="block">
+          <input type="checkbox" checked={picked.includes(artifact.artifactId)} disabled={busy || artifact.compositionEligible !== true}
+            onChange={event => setSelection(previous => ({ ...previous, [view.handle.runId]: event.target.checked
+              ? [...picked, artifact.artifactId] : picked.filter(id => id !== artifact.artifactId) }))} />
+          <span className="whitespace-pre-wrap">{artifact.text.slice(0, 180)}</span>
+          <button type="button" className="icon-btn px-2" onClick={() => { void act(() => navigator.clipboard.writeText(artifact.text)) }}>{runText(locale, '复制', 'Copy')}</button>
+        </label>)}
+        {view.unsavedTails?.map(tail => <div key={tail.attemptId}>
+          <p>{runText(locale, '尚未落盘的正文，可先复制保留：', 'Text not yet saved; copy it to preserve it:')}</p>
+          <span className="whitespace-pre-wrap">{tail.text.slice(0, 180)}</span>
+          <button type="button" className="icon-btn px-2" onClick={() => { void act(() => navigator.clipboard.writeText(tail.text)) }}>{runText(locale, '复制', 'Copy')}</button>
+        </div>)}
+        <p>{runText(locale, '勾选顺序决定续接顺序；未完成或来源冲突的片段仍可复制。', 'Selection order determines continuation order. Incomplete or conflicted text can still be copied.')}</p>
+        <button type="button" className="icon-btn px-2" disabled={busy || (!picked.length && !recovery.composition)} onClick={() => { void act(async () => {
+          const workflow = await createDraftRecoveryWorkflow(session, view.handle, picked.length ? [...picked] : undefined)
+          await useWorkflowStore.getState().startWorkflow(workflow)
+        }) }}>{runText(locale, '确认继续已选正文', 'Confirm selected draft continuation')}</button>
+      </article>
+    })}
+  </section>
 }
 
 function RecoveryCandidateSection({

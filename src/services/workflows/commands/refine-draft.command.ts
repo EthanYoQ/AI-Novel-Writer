@@ -1,3 +1,4 @@
+import { formatResourceUri } from '../../../shared/project-paths'
 import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
 import { resolvePromptTemplate } from '../../prompt-templates'
@@ -149,9 +150,9 @@ export class RefineDraftCommand extends BaseWorkflowCommand<string> {
       filePath: this.params.draftPath,
       originalContent: this.params.draftContent,
       content: cleanRefined,
-      revisionPath: `vela://revision/${createRes.id}`,
+      revisionPath: formatResourceUri({ kind: 'revision', id: createRes.id }),
       chapterNumber: this.params.chapterNumber,
-      chapterDir: `vela://draft/ch${this.params.chapterNumber}`,
+      chapterDir: `ai-novel://draft/ch${this.params.chapterNumber}`,
       projectKey: context.projectPath,
     })
 

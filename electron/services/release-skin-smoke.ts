@@ -136,6 +136,7 @@ function assertRendererBundleUsesAnimeUrl(rendererEntryPath: string): void {
 function requireIsolatedVelaHome(): void {
   const home = process.env.AI_NOVEL_VELA_HOME?.trim()
   assertSmokeResult(Boolean(home), 'AI_NOVEL_VELA_HOME must isolate the skin qualification data')
+  assertSmokeResult(Boolean(process.env.AI_NOVEL_APP_DATA_HOME?.trim()), 'AI_NOVEL_APP_DATA_HOME must isolate the canonical skin qualification data')
 }
 
 /**

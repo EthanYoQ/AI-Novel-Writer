@@ -68,6 +68,9 @@ export default defineConfig({
       '**/.workbuddy/**',
       '**/.runtime/**',
       '**/plugins/**',
+      // Frozen planning scripts retain their standalone Node entrypoints.
+      // quality-modernization-run.test.mjs executes their assertions explicitly.
+      '**/docs/plans/**',
       '**/.release/scripts/release-artifact-retention.test.mjs',
     ],
   },

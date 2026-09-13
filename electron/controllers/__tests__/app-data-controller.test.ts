@@ -24,6 +24,8 @@ vi.mock('../../utils/config-utils', () => ({
   VELA_HOME: 'C:\\vela-app-data',
   writeJsonFile: mocks.writeJsonFile,
 }))
+// This boundary-only fixture supplies an already admitted coordinator gate.
+vi.mock('../../services/app-data-locator', () => ({ assertGlobalDataReady: vi.fn() }))
 
 import { registerAppDataController } from '../app-data-controller'
 
