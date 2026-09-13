@@ -5,6 +5,7 @@ import { resolveScopedCharacterIdentity, type CharacterStaticProvenance } from '
 import { commitCharacterIdentities, refreshCharacterIdentityProjection, type CharacterIdentityCommitRequest } from '../repositories/character-roster-repository'
 import { GenerationRunRepository, textHash } from '../repositories/generation-run-repository'
 import { normalizeFinalizedCharacterProposalSource } from './finalized-character-generation-proof'
+import { readLegacyRosterGenerationProof } from './legacy-roster-generation-proof'
 
 export interface CharacterProposalProof {
   items: Omit<CharacterProposalItem, 'resolution'>[]
@@ -19,6 +20,7 @@ interface Envelope {
   batch: CharacterProposalBatch
   decision?: ApproveCharacterProposalRequest
   created?: { selectionKey: string; characterId: string }[]
+  approvalProof?: { payloadHash: string; receiptHash: string }
 }
 const fields = ['name', 'role', 'gender', 'age', 'appearance', 'personality', 'background', 'abilities', 'motivation', 'arc', 'notes'] as const
 const nonempty = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
@@ -43,6 +45,13 @@ export class CharacterProposalService {
     if (envelope.batch.status === 'approved') {
       const receipt = this.db.prepare('SELECT receipt_json FROM character_identity_approvals WHERE operation_id=?').get(envelope.batch.approvalOperationId) as { receipt_json: string } | undefined
       if (!receipt || !envelope.decision || JSON.parse(receipt.receipt_json).revision !== envelope.batch.revision) throw new Error('CHARACTER_PROPOSAL_APPROVAL_INVALID')
+      if (envelope.batch.source.kind === 'legacy-roster-generation') {
+        const row = this.db.prepare('SELECT payload_hash,receipt_json FROM character_identity_approvals WHERE operation_id=?').get(envelope.batch.approvalOperationId) as { payload_hash: string; receipt_json: string }
+        const saved = JSON.parse(row.receipt_json)
+        if (!envelope.approvalProof || row.payload_hash !== envelope.approvalProof.payloadHash || textHash(row.receipt_json) !== envelope.approvalProof.receiptHash
+          || saved.approval?.operationId !== envelope.decision.operationId || envelope.batch.approvalOperationId !== envelope.decision.operationId
+          || !isDeepStrictEqual(saved.created, envelope.created)) throw new Error('CHARACTER_PROPOSAL_APPROVAL_INVALID')
+      }
     }
     return envelope
   }
@@ -53,6 +62,11 @@ export class CharacterProposalService {
   }
   stage(source: CharacterProposalSource): CharacterProposalBatch {
     return this.db.transaction(() => {
+      if (source?.kind === 'legacy-roster-generation') {
+        source = readLegacyRosterGenerationProof(this.db, new GenerationRunRepository(() => this.db), this.projectId, source).source
+        const proposalBatchId = `cpb:${textHash(JSON.stringify([this.projectId, source]))}`
+        if (this.db.prepare('SELECT 1 FROM character_identity_proposals WHERE proposal_id=?').get(proposalBatchId)) return this.read(proposalBatchId)
+      }
       if (source?.kind === 'finalized-generation') {
         const normalized = normalizeFinalizedCharacterProposalSource(this.db, new GenerationRunRepository(() => this.db), this.projectId, source)
         source = normalized.source
@@ -104,8 +118,10 @@ export class CharacterProposalService {
       if (!proof.provenance || !['generated', 'derived'].includes(proof.provenance.kind)) throw new Error('CHARACTER_PROPOSAL_PROVENANCE_REQUIRED')
       const byKey = new Map(batch.items.map(item => [item.selectionKey, item]))
       if (request.selections.length !== byKey.size || new Set(request.selections.map(item => item.selectionKey)).size !== byKey.size) throw new Error('CHARACTER_APPROVAL_SELECTION_INVALID')
+      if (batch.source.kind === 'legacy-roster-generation' && !request.selections.some(item => item.action === 'create' || item.action === 'map'))
+        throw new Error('CHARACTER_APPROVAL_SELECTION_REQUIRED')
       const identityRequest: CharacterIdentityCommitRequest = { approval: { operationId: request.operationId, expectedRevision: request.expectedRevision,
-        source: proof.provenance, action: batch.source.kind === 'generation' && batch.source.inputKind === 'architecture' ? 'adopt-generated' : 'adopt-import' },
+        source: proof.provenance, action: batch.source.kind === 'legacy-roster-generation' || batch.source.kind === 'generation' && batch.source.inputKind === 'architecture' ? 'adopt-generated' : 'adopt-import' },
         changes: [], creations: [], retireIds: [], relationships: [], resolutions: [] }
       for (const selection of request.selections) {
         const item = byKey.get(selection.selectionKey)
@@ -133,6 +149,11 @@ export class CharacterProposalService {
       refreshCharacterIdentityProjection(this.db)
       envelope.batch = { ...batch, status: 'approved', revision: receipt.revision, approvalOperationId: request.operationId }
       envelope.decision = structuredClone(request); envelope.created = receipt.created
+      if (batch.source.kind === 'legacy-roster-generation') {
+        const row = this.db.prepare('SELECT payload_hash,receipt_json FROM character_identity_approvals WHERE operation_id=?').get(request.operationId) as { payload_hash: string; receipt_json: string } | undefined
+        if (!row) throw new Error('CHARACTER_PROPOSAL_APPROVAL_INVALID')
+        envelope.approvalProof = { payloadHash: row.payload_hash, receiptHash: textHash(row.receipt_json) }
+      }
       this.write(envelope)
       return { batch: structuredClone(envelope.batch), created: structuredClone(receipt.created) }
     }).immediate()

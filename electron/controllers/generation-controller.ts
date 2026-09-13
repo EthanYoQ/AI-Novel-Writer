@@ -9,6 +9,7 @@ import type { ImportGenerationChannels } from '../../src/shared/import-generatio
 import type { EditorInlineGenerationChannels } from '../../src/shared/editor-inline-generation'
 import type { FinalizationGenerationChannels } from '../../src/shared/finalization-generation'
 import type { GraphGenerationChannels } from '../../src/shared/graph-generation'
+import type { LegacyRosterGenerationChannels } from '../../src/shared/legacy-roster-generation'
 import { generationOutputContract } from '../../src/shared/generation-owner-contract'
 import type { ModelProfile, ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
@@ -30,7 +31,7 @@ import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { getEmbeddingConfig } from './kb-controller'
 
 type Owner = ReturnType<typeof createMainGenerationOwner>
-type OwnerChannels = GraphGenerationChannels & GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & AgentGenerationChannels & ImportGenerationChannels & EditorInlineGenerationChannels & FinalizationGenerationChannels
+type OwnerChannels = LegacyRosterGenerationChannels & GraphGenerationChannels & GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & AgentGenerationChannels & ImportGenerationChannels & EditorInlineGenerationChannels & FinalizationGenerationChannels
 const owners = new Map<Database.Database, { owner: Owner; session: ProjectSessionContext; subscribers: Set<WebContents> }>()
 const ownerSessions = new WeakMap<Owner, ProjectSessionContext>()
 /** Called synchronously inside the same SQLite transaction as the formal effect. */
@@ -126,7 +127,7 @@ export function registerGenerationController(options: {
         projectAccess.assertCurrentProjectContext(session, getCurrentProjectPath())
         return result
       } catch (error) {
-        const code = error instanceof Error && /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER)_[A-Z_]+$/u.test(error.message)
+        const code = error instanceof Error && /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER|LEGACY_ROSTER)_[A-Z_]+$/u.test(error.message)
           ? error.message : 'GENERATION_REQUEST_FAILED'
         throw new Error(code)
       }
@@ -143,7 +144,10 @@ export function registerGenerationController(options: {
     if (request.operation === 'chapter-draft' && !request.preparationId) throw new Error('GENERATION_DRAFT_PREPARATION_REQUIRED')
     return guardKnowledge(owner, request.preparationId ? owner.preparedKnowledge(request.preparationId) : undefined, () => owner.begin(request))
   })
-  register('character-proposal:stage', 1, (owner, request) => owner.characterProposals.stage(request.source))
+  register('character-proposal:stage', 1, (owner, request) => {
+    if (request.source?.kind === 'legacy-roster-generation') throw new Error('GENERATION_LEGACY_ADMISSION_REQUIRED')
+    return owner.characterProposals.stage(request.source)
+  })
   register('character-proposal:read', 1, (owner, request) => owner.characterProposals.read(request.proposalBatchId))
   register('character-proposal:approve', 1, (owner, request) => owner.approveCharacterProposal(request))
   register('character-proposal:cancel', 1, (owner, request) => owner.characterProposals.cancel(request.proposalBatchId))
@@ -160,6 +164,13 @@ export function registerGenerationController(options: {
   register('graph-generation:execute', 1, (owner, request) => owner.executeGraphGeneration(request))
   register('graph-generation:confirm', 1, (owner, request) => owner.confirmGraphGeneration(request))
   register('graph-generation:cancel', 1, (owner, request) => owner.cancelGraphGeneration(request))
+  register('legacy-roster:read-source', 0, owner => owner.readLegacyRosterSource())
+  register('legacy-roster:adopt-existing', 1, (owner, request) => owner.adoptLegacyCards(request))
+  register('legacy-roster:begin', 1, (owner, request) => owner.beginLegacyRosterGeneration(request))
+  register('legacy-roster:read', 1, (owner, request) => owner.readLegacyRosterGeneration(request))
+  register('legacy-roster:execute', 1, (owner, request) => owner.executeLegacyRosterGeneration(request))
+  register('legacy-roster:stage', 1, (owner, request) => owner.stageLegacyRosterGeneration(request))
+  register('legacy-roster:cancel', 1, (owner, request) => owner.cancelLegacyRosterGeneration(request))
   register('review-revision:prepare', 1, (owner, request) => owner.prepareReviewRevision(request))
   register('review-revision:commit-review', 1, (owner, request) => owner.commitReview(request))
   register('review-revision:commit-revision', 1, (owner, request) => owner.commitRevision(request))

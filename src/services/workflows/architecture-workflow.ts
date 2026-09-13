@@ -1,3 +1,5 @@
+import { globalEventBus } from '../../shared/event-bus'
+import type { WorkflowGenerationRuntimeDependencies } from './commands/base-command'
 import type { MainGenerationRunHandle } from '../generation/generation-runtime'
 import { workflowResourceKey, type WorkflowDefinition, type WorkflowContext, type StepCallbacks } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
@@ -343,7 +345,7 @@ export function getNarrativePOVLabel(pov: string, writingLanguage: WritingLangua
  * 启动 Markdown 提取。唯一写路径是 RepairLegacyCharacterRosterCommand 的
  * 结构化 roster commit。
  */
-export async function migrateLegacyCharacterRoster(projectPath: string): Promise<void> {
+export async function migrateLegacyCharacterRoster(projectPath: string, options: { recoveryHandle?: MainGenerationRunHandle; restart?: boolean; generationDependencies?: WorkflowGenerationRuntimeDependencies } = {}): Promise<void> {
   const text = useLocaleStore.getState().text
   const project = useProjectStore.getState().currentProject
   const projectSession = projectSessionContextFromProject(project)
@@ -355,6 +357,8 @@ export async function migrateLegacyCharacterRoster(projectPath: string): Promise
     projectSessionContextFromProject(useProjectStore.getState().currentProject),
   )) throw new Error(text('当前项目已切换，请在原项目中重试', 'The project changed. Return to the original project and try again.'))
 
+  const source = options.generationDependencies ? undefined : await ipc.invokeWithProjectSession(projectSession, 'legacy-roster:read-source')
+  const requiresAdoption = !options.generationDependencies && (!!options.recoveryHandle || source?.snapshot.migrationState !== 'legacy_cards_preserved')
   const { useWorkflowStore } = await import('../../stores/workflow-store')
   const runId = randomUUID()
   const completedRunId = await useWorkflowStore.getState().startWorkflow({
@@ -379,10 +383,21 @@ export async function migrateLegacyCharacterRoster(projectPath: string): Promise
         ) ? currentProject?.novelConfig.genre ?? '' : ''
         return new RepairLegacyCharacterRosterCommand({
           expectedProjectPath: projectPath,
-          genre,
-        }).execute({ step: _step, context, callbacks })
+          genre, ...options, expectedMode: requiresAdoption ? 'model' : 'existing',
+        }, options.generationDependencies).execute({ step: _step, context, callbacks })
       },
-    }],
+    }, ...(requiresAdoption ? [{
+      name: text('确认采用角色提议', 'Confirm character proposals'),
+      description: text('仅采用静态字段与明确关系；原始当前状态保留为候选。', 'Adopt static fields and clear relationships only; original current state remains a candidate.'),
+      requiresConfirmation: true,
+      executor: async (_step: Parameters<WorkflowDefinition['steps'][number]['executor']>[0], context: WorkflowContext, callbacks: StepCallbacks) => {
+        const { AdoptGeneratedCharactersCommand } = await import('./commands/architecture.command')
+        const result = await new AdoptGeneratedCharactersCommand().execute({ step: _step, context, callbacks })
+        const session = requireWorkflowProjectSession(context)
+        if (sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) globalEventBus.emit('ARCH_FILE_UPDATED', { fileName: 'characters.md', projectPath: session.projectPath, projectSession: session, runId: context.runId })
+        return result
+      },
+    }] : [])],
   })
   const completedRun = useWorkflowStore.getState().history.find(run => run.id === completedRunId)
   if (!completedRun || completedRun.status !== 'completed') {

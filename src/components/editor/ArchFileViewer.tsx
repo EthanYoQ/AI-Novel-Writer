@@ -1,3 +1,4 @@
+import { LegacyRosterRecoveryPanel } from './LegacyRosterRecoveryPanel'
 import { resourceWriteAllowed } from '../../shared/project-paths'
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { Save, RefreshCw, Sparkles, Loader2, AlertTriangle, FileText } from 'lucide-react'
@@ -540,6 +541,7 @@ function ArchFileViewerSession({
         </div>
       </div>
 
+      {projectMatches && stepKey === 'characters' && <LegacyRosterRecoveryPanel onRecover={handleRepairCharacterRoster} busy={extracting} />}
       {stepKey === 'characters' && rosterPresentation && (
         <div
           role="status"

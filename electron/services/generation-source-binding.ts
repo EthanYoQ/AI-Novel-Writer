@@ -23,6 +23,8 @@ import { captureFinalizationGenerationContext, finalizationSlotKey, finalization
 import type { GraphGenerationContext, GraphGenerationInput } from '../../src/shared/graph-generation';
 import { captureGraphGenerationContext, graphGenerationTask, validateGraphGenerationInput } from './graph-generation-source';
 import { provenGraphOwnEventIds } from './graph-generation';
+import type { LegacyRosterGenerationContext } from '../../src/shared/legacy-roster-generation';
+import { captureLegacyRosterGenerationContext, legacyRosterGenerationTask } from './legacy-roster-generation-context';
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>;
 export interface GenerationSourceBindingInput {
     projectId: string;
@@ -55,6 +57,8 @@ export interface GenerationSourceBindingInput {
     graphGenerationInput?: GraphGenerationInput;
     graphGenerationKey?: string;
     graphGenerationContext?: GraphGenerationContext;
+    legacyRosterKey?: string;
+    legacyRosterContext?: LegacyRosterGenerationContext;
     modelReceipt: SafeGenerationModelReceipt;
     policy: Readonly<Record<string, unknown>>;
     outputContract: string | Readonly<Record<string, unknown>>;
@@ -153,6 +157,9 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     const agentInput = input.agentInput ? validateAgentGenerationInput(input.agentInput) : undefined;
     const editorInlineInput = input.editorInlineInput ? validateEditorInlineInput(input.editorInlineInput) : undefined;
     const graphInput = input.graphGenerationInput ? validateGraphGenerationInput(input.graphGenerationInput) : undefined;
+    if (input.legacyRosterKey && (input.operation !== 'legacy-character-roster-repair' || !isDeepStrictEqual(input.promptKeys, ['legacy-roster'])
+        || input.skillStages.length || input.selectedDraftIds.length || input.selectedFinalizedDraftIds.length || input.chapterNumber !== undefined
+        || input.authorInputs?.length || graphInput)) fail('GENERATION_LEGACY_SELECTION_INVALID');
     if (graphInput && (input.operation !== ({ plot: 'plot-tree-snapshot', plan: 'narrative-thread-plan-candidate', event: 'narrative-thread-event-candidate' } as const)[graphInput.kind]
         || !input.graphGenerationKey || !isDeepStrictEqual(input.promptKeys, [`graph-${graphInput.kind}`]) || input.skillStages.length
         || input.selectedDraftIds.length || input.selectedFinalizedDraftIds.length || input.chapterNumber !== undefined || input.authorInputs?.length)) fail('GENERATION_GRAPH_SELECTION_INVALID');
@@ -186,6 +193,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     for (const item of authorInputs)
         add(`author-action:${item.id}`, 0, item.text, 'author-constraint', 'explicit immutable author input for this action; not a database or file identity');
     let graphContext: GraphGenerationContext | undefined;
+    let legacyContext: LegacyRosterGenerationContext | undefined;
     // SQLite supplies one read transaction; filesystem selections are read twice below.
     const facts = deps.db.transaction(() => {
         const raw = deps.db.prepare("SELECT * FROM project_core WHERE id='main'").get() as Record<string, unknown> | undefined;
@@ -194,6 +202,10 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         const core = without(raw, ['created_at', 'updated_at', 'character_states', 'plot_tree_snapshot']);
         const language: WritingLanguage = core.writing_language === 'en-US' ? 'en-US' : 'zh-CN';
         add('project-core:main', 0, stable(core), 'author-constraint', 'current project settings');
+        if (input.legacyRosterKey) {
+            legacyContext = captureLegacyRosterGenerationContext(deps.db, input, input.legacyRosterKey, input.legacyRosterContext);
+            add('legacy-roster-context', 0, JSON.stringify(legacyContext), 'author-constraint', 'actual preserved legacy evidence and identity baseline');
+        }
         if (graphInput) {
             graphContext = captureGraphGenerationContext(deps.db, graphInput, input, input.graphGenerationKey!, input.graphGenerationContext,
                 input.graphGenerationContext ? provenGraphOwnEventIds(deps.db, input.graphGenerationContext) : []);
@@ -299,6 +311,10 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     let agentPrompt: { selected: string; builtin: string } | undefined;
     const importPrompts: Record<string, import('../../src/services/prompt-templates').PromptTemplate> = {};
     for (const key of input.promptKeys) {
+        if (legacyContext) {
+            assets.push({ scope: 'builtin', identity: `prompt:${key}:${facts.language}`, hash: hash(JSON.stringify(legacyRosterGenerationTask(legacyContext))) });
+            continue;
+        }
         if (graphContext) {
             assets.push({ scope: 'builtin', identity: `prompt:${key}:${facts.language}`, hash: hash(JSON.stringify(graphGenerationTask(graphContext))) });
             continue;
@@ -382,6 +398,11 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         fail('GENERATION_SOURCE_CHANGED_DURING_SNAPSHOT');
     const sourceManifest = { version: 1, ...(input.finalizedCharacterContextHash ? { finalizedCharacterContextHash: input.finalizedCharacterContextHash } : {}), operation: input.operation, ...(input.knowledgeSnapshot ? { knowledgeSnapshot: structuredClone(input.knowledgeSnapshot) } : {}), ...(input.batchId ? { batchId: input.batchId } : {}), ...(input.batchIntent ? { batchIntent: structuredClone(input.batchIntent) } : {}), ...(input.chapterNumber !== undefined ? { chapterNumber: input.chapterNumber } : {}), selectedDraftIds: [...input.selectedDraftIds], selectedFinalizedDraftIds: [...input.selectedFinalizedDraftIds], ...(blueprintChapters.length ? { selectedBlueprintChapterNumbers: [...blueprintChapters] } : {}), promptKeys: [...input.promptKeys], skillStages: [...input.skillStages], ...(authorInputs.length ? { authorInputs } : {}), modelReceipt, policy: input.policy, outputContract: input.outputContract };
     if (input.reviewRevisionContext) Object.assign(sourceManifest, { reviewRevisionContext: structuredClone(input.reviewRevisionContext), reviewRevisionContextHash: hash(JSON.stringify(input.reviewRevisionContext)) });
+    if (legacyContext) {
+        const task = legacyRosterGenerationTask(legacyContext);
+        Object.assign(sourceManifest, { legacyRosterKey: legacyContext.key, legacyRosterContext: legacyContext, legacyRosterContextHash: hash(JSON.stringify(legacyContext)),
+            legacyRosterOriginEpoch: legacyContext.originEpoch, legacyRosterTask: task, legacyRosterTaskHash: hash(JSON.stringify(task)) });
+    }
     if (graphContext) {
         const task = graphGenerationTask(graphContext);
         Object.assign(sourceManifest, { graphGenerationInput: graphContext.input, graphGenerationKey: graphContext.key,

@@ -303,6 +303,13 @@ function normalizeRequest(value: unknown): CharacterRosterCommitRequest {
   }
 }
 
+/** Validate migration candidates without re-enabling the retired name-based write path. */
+export function validateLegacyRosterCandidate(value: unknown): CharacterRosterEntry[] {
+  if (!isObject(value)) throw new Error('角色名单提交请求格式无效')
+  return normalizeRequest({ operationId: 'legacy-roster-candidate-validation', expectedRevision: 0,
+    schemaVersion: value.schemaVersion, entries: value.entries, intent: 'legacy_repair', expectedLegacyMarkdown: '' }).entries
+}
+
 function canonicalEntries(entries: CharacterRosterEntry[]): CharacterRosterEntry[] {
   return [...entries]
     .map(entry => ({
@@ -839,8 +846,8 @@ export function refreshCharacterStateProjection(db: BetterSqlite3.Database): voi
 }
 function readSnapshot(db: BetterSqlite3.Database): CharacterRosterSnapshot {
   const meta = readMeta(db)
-  const entries = hasCharacterIdentitySchema(db) ? identityProjectionEntries(db) : sortedEntries(CharacterRepository.getAll().map(entryFromCharacter))
-  const writingLanguage = ProjectCoreRepository.get()?.writingLanguage ?? DEFAULT_WRITING_LANGUAGE
+  const entries = hasCharacterIdentitySchema(db) ? identityProjectionEntries(db) : sortedEntries(CharacterRepository.getAll(db).map(entryFromCharacter))
+  const writingLanguage = ProjectCoreRepository.get(db)?.writingLanguage ?? DEFAULT_WRITING_LANGUAGE
   const currentProjection = readCurrentProjection(db)
   const localizedProjection = renderCharacterRosterMarkdown(entries, writingLanguage)
   const previousLanguageProjection = renderCharacterRosterMarkdown(
@@ -906,8 +913,7 @@ function assertReadBack(
  * implementation 内。当前旧角色写入路径仍可兼容，后续 ticket 再统一收口。
  */
 export class CharacterRosterRepository {
-  static read(): CharacterRosterSnapshot {
-    const db = requiredDb()
+  static read(db = requiredDb()): CharacterRosterSnapshot {
     ensureCharacterRosterSchema(db)
     return readSnapshot(db)
   }

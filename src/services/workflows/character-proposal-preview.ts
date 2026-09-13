@@ -43,6 +43,7 @@ export function formatCharacterProposalPreview(batch: CharacterProposalBatch, te
           : text('暂不采用：身份尚未明确，候选保持可读', 'Not adopted: identity is unresolved; the candidate remains readable'),
       ...Object.entries(item.fields).flatMap(([key, value]) => key !== 'name' && typeof value === 'string' && value
         ? [`- ${labels[key] ?? key}：${key === 'role' ? text(getCharacterRoleLabels(value).zhCN, getCharacterRoleLabels(value).enUS) : value}`] : []),
+      ...(batch.source.kind === 'legacy-roster-generation' ? [text('原始当前状态仅保留为候选；本次批准不将其写入定稿状态。', 'Original current state is retained as a candidate only; approval does not adopt it as finalized state.'), JSON.stringify(item.rawValue, null, 2)] : []),
       ...item.relationships.map(relation => `- ${text('关系提议', 'Proposed relationship')}：${relation.targetName ?? batch.items.find(candidate => candidate.selectionKey === relation.targetSelectionKey)?.fields.name ?? text('待确认对象', 'Unresolved target')} · ${relation.relation}`),
     ].join('\n')),
   ].join('\n\n')

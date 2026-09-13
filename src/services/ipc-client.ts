@@ -43,6 +43,7 @@ function isProjectScopedChannel(channel: string): boolean {
     || channel.startsWith('finalized-character:')
     || channel.startsWith('finalization-generation:')
     || channel.startsWith('graph-generation:')
+    || channel.startsWith('legacy-roster:')
     || channel.startsWith('review-revision:')
     || channel.startsWith('agent-generation:')
     || channel.startsWith('import-generation:')

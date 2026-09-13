@@ -1,3 +1,4 @@
+import { LegacyRosterRecoveryPanel } from './LegacyRosterRecoveryPanel'
 import { CANONICAL_PROJECT_DIRECTORY } from '../../shared/project-format'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Sparkles, CheckCircle2, Circle, RefreshCw, FileText, BookOpen, AlertTriangle, FolderTree, Eye, Copy } from 'lucide-react'
@@ -742,6 +743,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                   )}
                 </div>
               </div>
+              {isCharacters && <LegacyRosterRecoveryPanel onRecover={handleRepairCharacterRoster} busy={extracting} />}
               {hasCandidate && candidateShown && (
                 <div
                   role="status"

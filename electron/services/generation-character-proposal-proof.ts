@@ -8,10 +8,16 @@ import type { BlueprintData } from '../repositories/blueprint-repository'
 import type { CharacterProposalProof } from './character-proposal-service'
 import type { ImportGlobalFactsReceipt } from '../../src/shared/import-global-facts'
 import { proveFinalizedCharacterGeneration } from './finalized-character-generation-proof'
+import { readLegacyRosterGenerationProof } from './legacy-roster-generation-proof'
 
 export function proveCharacterProposal(db: Database.Database, runs: GenerationRunRepository, projectId: string,
   source: CharacterProposalSource, forWrite: boolean, assertSources: (handle: MainGenerationRunHandle, committedBlueprintChapters?: number[]) => void): CharacterProposalProof {
   if (!source || typeof source !== 'object') throw new Error('CHARACTER_PROPOSAL_SOURCE_INVALID')
+  if (source.kind === 'legacy-roster-generation') {
+    const result = readLegacyRosterGenerationProof(db, runs, projectId, source)
+    if (forWrite) assertSources(result.currentHandle)
+    return result.proof
+  }
   if (source.kind === 'finalized-generation') {
     if (Object.keys(source).some(key => !['kind', 'handle', 'artifact'].includes(key))) throw new Error('CHARACTER_PROPOSAL_SOURCE_INVALID')
     const proof = proveFinalizedCharacterGeneration(db, runs, projectId, source.handle, source.artifact)

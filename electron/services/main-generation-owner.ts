@@ -39,6 +39,12 @@ import { proveFinalizedCharacterGeneration } from './finalized-character-generat
 import { parseFinalizedCharacterStateResponse } from '../../src/shared/finalized-continuity'
 import type { GraphGenerationChannels, GraphGenerationInput, GraphGenerationRecovery } from '../../src/shared/graph-generation'
 import { GraphGeneration } from './graph-generation'
+import type { LegacyRosterGenerationChannels, LegacyRosterGenerationRecovery } from '../../src/shared/legacy-roster-generation'
+import { LegacyRosterGeneration } from './legacy-roster-generation'
+import { readLegacyRosterGenerationProof } from './legacy-roster-generation-proof'
+import { readLegacyRosterGenerationContext } from './legacy-roster-generation-context'
+import { readLegacyRosterSource, adoptLegacyCards } from './legacy-roster-source'
+import { buildLegacyRosterJsonRepairTask, buildLegacyRosterReplacementTask, parseLegacyRosterJson } from '../../src/shared/legacy-roster-generation-pure'
 import { validateGraphGenerationInput, readGraphGenerationContext } from './graph-generation-source'
 const graphOperations = { plot: 'plot-tree-snapshot', plan: 'narrative-thread-plan-candidate', event: 'narrative-thread-event-candidate' } as const
 
@@ -54,7 +60,7 @@ export interface MainGenerationOwnerDependencies {
   assertCurrent: () => void
   leases: ModelExecutionLeaseRegistry
   loadModel: (id: string) => ModelProfile | null
-  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string; reviewRevisionContext?: ReviewRevisionContext; agentInput?: AgentGenerationInput; agentSession?: { key: string; roundIndex: number }; editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot; graphGenerationInput?: GraphGenerationInput; graphGenerationKey?: string }, model: SafeGenerationModelReceipt) => RunBinding
+  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string; reviewRevisionContext?: ReviewRevisionContext; agentInput?: AgentGenerationInput; agentSession?: { key: string; roundIndex: number }; editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot; graphGenerationInput?: GraphGenerationInput; graphGenerationKey?: string; legacyRosterKey?: string }, model: SafeGenerationModelReceipt) => RunBinding
   rebuildBinding: (previous: RunBinding, model: SafeGenerationModelReceipt) => RunBinding
   beforeDispatch?: () => void
   onSnapshot?: (snapshot: MainGenerationSnapshot) => void
@@ -207,16 +213,17 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     preparations.set(preparationId, { binding, knowledgeSnapshot: structuredClone(knowledgeSnapshot) })
     return { preparationId, knowledgeSnapshot: structuredClone(knowledgeSnapshot), selectedDrafts }
   }
-  const begin = (selection: (BeginGenerationRequest | AgentBeginSelection) & { editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot; graphGenerationInput?: GraphGenerationInput; graphGenerationKey?: string }, batchInitialization = false, agentInitialization = false, editorInitialization = false, finalizationInitialization = false, graphInitialization = false): MainGenerationRunView => {
+  const begin = (selection: (BeginGenerationRequest | AgentBeginSelection) & { editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot; graphGenerationInput?: GraphGenerationInput; graphGenerationKey?: string; legacyRosterKey?: string }, batchInitialization = false, agentInitialization = false, editorInitialization = false, finalizationInitialization = false, graphInitialization = false, legacyInitialization = false): MainGenerationRunView => {
     assertCurrent()
     if (!selection || typeof selection.operation !== 'string' || !/^[a-z0-9][a-z0-9:_-]{0,127}$/u.test(selection.operation)
       || !Array.isArray(selection.promptKeys) || selection.promptKeys.length === 0
       || Object.hasOwn(selection, 'parentRootActionId') && (typeof selection.parentRootActionId !== 'string' || !selection.parentRootActionId.trim())
       || typeof selection.uiActionNonce !== 'string' || !selection.uiActionNonce.trim() || selection.uiActionNonce.length > 256
-      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId', 'finalizedCharacterContextId', 'reviewRevisionContextId', 'agentWorkflowRegistrationId', 'importSlot', 'importExecution', ...(agentInitialization ? ['agentInput', 'agentSession'] : []), ...(editorInitialization ? ['editorInlineInput'] : []), ...(finalizationInitialization ? ['finalizationGenerationSlot'] : []), ...(graphInitialization ? ['graphGenerationInput', 'graphGenerationKey'] : [])].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
+      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId', 'finalizedCharacterContextId', 'reviewRevisionContextId', 'agentWorkflowRegistrationId', 'importSlot', 'importExecution', ...(agentInitialization ? ['agentInput', 'agentSession'] : []), ...(editorInitialization ? ['editorInlineInput'] : []), ...(finalizationInitialization ? ['finalizationGenerationSlot'] : []), ...(graphInitialization ? ['graphGenerationInput', 'graphGenerationKey'] : []), ...(legacyInitialization ? ['legacyRosterKey'] : [])].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
     if (selection.operation === 'editor-inline' && !editorInitialization) throw new Error('GENERATION_EDITOR_ADMISSION_REQUIRED')
     if (['finalized-chapter-notes', 'finalized-character-state'].includes(selection.operation) && !finalizationInitialization) throw new Error('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
     if (Object.values(graphOperations).includes(selection.operation as typeof graphOperations[keyof typeof graphOperations]) && !graphInitialization) throw new Error('GENERATION_GRAPH_ADMISSION_REQUIRED')
+    if (selection.operation === 'legacy-character-roster-repair' && !legacyInitialization) throw new Error('GENERATION_LEGACY_ADMISSION_REQUIRED')
     const importAdmission = imports.admit(selection)
     if (importAdmission?.existing) return viewOf(importAdmission.existing)
     if (importAdmission) selection = { ...selection, uiActionNonce: `import:${importGenerationSlotKey(selection.importSlot!)}`,
@@ -225,6 +232,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const agentWorkflow = agentInitialization ? undefined : agents.admitWorkflow(selection)
     if (selection.parentRootActionId && repository.budget(selection.parentRootActionId).root.operation === 'editor-inline') throw new Error('GENERATION_EDITOR_CHILD_FORBIDDEN')
     if (selection.parentRootActionId && Object.values(graphOperations).includes(repository.budget(selection.parentRootActionId).root.operation as typeof graphOperations[keyof typeof graphOperations])) throw new Error('GENERATION_GRAPH_CHILD_FORBIDDEN')
+    if (selection.parentRootActionId && repository.budget(selection.parentRootActionId).root.operation === 'legacy-character-roster-repair') throw new Error('GENERATION_LEGACY_CHILD_FORBIDDEN')
     if (agentWorkflow?.existing) return viewOf(repository.get(agentWorkflow.existing.runId))
     generationOutputContract(selection)
     const finalizedCharacterContextHash = finalizedCharacters.admit(selection)
@@ -319,13 +327,14 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return { outcome: finishReason === 'stop' ? { status: 'completed', content, finishReason, receipt: details }
       : { status: 'incomplete', content, finishReason, receipt: details }, run: viewOf(repository.get(receipt.run.runId)) }
   }
-  const execute = async (request: ExecuteGenerationRequest, agentExecution = false, importExecution = false, editorExecution = false, finalizationExecution = false, graphExecution = false): Promise<MainGenerationExecuteReceipt> => {
+  const execute = async (request: ExecuteGenerationRequest, agentExecution = false, importExecution = false, editorExecution = false, finalizationExecution = false, graphExecution = false, legacyExecution = false): Promise<MainGenerationExecuteReceipt> => {
     const run = requireRun(request.handle, true)
     if (run.binding.sourceManifest.operation === 'agent-round' && !agentExecution) throw new Error('GENERATION_AGENT_ADMISSION_REQUIRED')
     if (run.binding.sourceManifest.importSlot && !importExecution) throw new Error('GENERATION_IMPORT_ADMISSION_REQUIRED')
     if (run.binding.sourceManifest.operation === 'editor-inline' && !editorExecution) throw new Error('GENERATION_EDITOR_ADMISSION_REQUIRED')
     if (['finalized-chapter-notes', 'finalized-character-state'].includes(run.binding.sourceManifest.operation as string) && !finalizationExecution) throw new Error('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
     if (Object.values(graphOperations).includes(run.binding.sourceManifest.operation as typeof graphOperations[keyof typeof graphOperations]) && !graphExecution) throw new Error('GENERATION_GRAPH_ADMISSION_REQUIRED')
+    if (run.binding.sourceManifest.operation === 'legacy-character-roster-repair' && !legacyExecution) throw new Error('GENERATION_LEGACY_ADMISSION_REQUIRED')
     assertSemanticGenerationTask(request.task)
     const task = structuredClone(request.task)
     const contract = run.binding.sourceManifest.outputContract
@@ -345,6 +354,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     imports.assertMutable(run)
     finalizations.assertMutable(run)
     graphs.assertMutable(run)
+    legacyRosters.assertMutable(run)
     const operation = (async () => {
     const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
     if (!isDeepStrictEqual(current, run.binding)) throw new Error('GENERATION_SOURCE_CHANGED')
@@ -374,6 +384,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     imports.assertMutable(run)
     finalizations.assertMutable(run)
     graphs.assertMutable(run)
+    legacyRosters.assertMutable(run)
     const receipt = currentModelReceipt(run.binding)
     const next = deps.rebuildBinding(run.binding, receipt)
     const lease = deps.leases.begin(receipt.modelId)
@@ -439,6 +450,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     })
   })
   const imports = new ImportGeneration(deps.database, repository, deps.projectId)
+  const legacyRosters = new LegacyRosterGeneration(deps.database, repository, deps.projectId, characters)
   const graphs = new GraphGeneration(deps.database, repository, deps.projectId)
   const finalizations = new FinalizationGeneration(deps.database, repository, deps.projectId, characters)
   const agents = new AgentGeneration(deps.database, repository, { projectId: deps.projectId, epoch: deps.epoch }, assertCurrent, {
@@ -495,7 +507,86 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, context, effects, attemptCount: attempts.length,
       sourceStatus: current ? 'current' : 'conflict', ...(artifact && result ? { artifact, result } : {}) }
   }
+  const legacyRosterRecovery = (run: DurableGenerationRun): LegacyRosterGenerationRecovery => {
+    assertCurrent()
+    const context = readLegacyRosterGenerationContext(run), proposal = legacyRosters.proposal(run), artifact = legacyRosters.artifactFor(run)
+    let current = false
+    try { assertFinalizationSources(run); current = true } catch { /* Preserve original candidate/proposal when author facts or model change. */ }
+    return { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, context, sourceStatus: current ? 'current' : 'conflict',
+      attemptCount: deps.database.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(run.runId) as number,
+      ...(artifact ? {artifact} : {}), ...(proposal ? {proposal} : {}) }
+  }
   return { begin: (selection: BeginGenerationRequest) => begin(selection), execute: (request: ExecuteGenerationRequest) => execute(request), resume, list, assertSourcesCurrent, agents,
+    readLegacyRosterSource: () => { assertCurrent(); return readLegacyRosterSource(deps.database) },
+    adoptLegacyCards: (request: LegacyRosterGenerationChannels['legacy-roster:adopt-existing']['args'][0]) => { assertCurrent(); return adoptLegacyCards(deps.database, request) },
+    beginLegacyRosterGeneration: (request: LegacyRosterGenerationChannels['legacy-roster:begin']['args'][0]) => {
+      assertCurrent()
+      if (!request || Object.keys(request).some(key => !['modelId','uiActionNonce'].includes(key)) || typeof request.uiActionNonce !== 'string'
+        || !request.uiActionNonce.trim() || request.uiActionNonce.length > 256) throw new Error('GENERATION_LEGACY_REQUEST_INVALID')
+      const rows = deps.database.prepare("SELECT r.run_id FROM generation_runs r JOIN generation_roots g ON g.root_action_id=r.root_action_id WHERE json_extract(g.action_json,'$.projectId')=? AND json_extract(g.action_json,'$.uiActionNonce')=? AND json_extract(r.binding_json,'$.sourceManifest.legacyRosterContext') IS NOT NULL").all(deps.projectId,request.uiActionNonce) as {run_id:string}[]
+      if (rows.length > 1) throw new Error('GENERATION_NONCE_CONFLICT')
+      if (rows[0]) return legacyRosterRecovery(repository.get(rows[0].run_id))
+      const view = begin({operation:'legacy-character-roster-repair',uiActionNonce:request.uiActionNonce,modelId:request.modelId,
+        selectedDraftIds:[],selectedFinalizedDraftIds:[],promptKeys:['legacy-roster'],skillStages:[],output:'structured-data',legacyRosterKey:randomUUID()},false,false,false,false,false,true)
+      return legacyRosterRecovery(repository.get(view.handle.runId))
+    },
+    readLegacyRosterGeneration: (request: LegacyRosterGenerationChannels['legacy-roster:read']['args'][0]) => {
+      assertCurrent()
+      if (!request || Object.keys(request).some(key => key !== 'handle')) throw new Error('GENERATION_LEGACY_REQUEST_INVALID')
+      return legacyRosterRecovery(legacyRosters.require(request.handle))
+    },
+    executeLegacyRosterGeneration: async (request: LegacyRosterGenerationChannels['legacy-roster:execute']['args'][0]) => {
+      assertCurrent()
+      if (!request || Object.keys(request).some(key => key !== 'handle')) throw new Error('GENERATION_LEGACY_REQUEST_INVALID')
+      let run = legacyRosters.require(request.handle)
+      const context = readLegacyRosterGenerationContext(run), initialTask = legacyRosters.task(run)
+      let stageTask = initialTask, total = 0
+      for (const stage of ['initial','repair'] as const) {
+        let previousText: string | undefined
+        for (let ordinal = 0; ordinal < 3; ordinal++, total++) {
+          const task = previousText === undefined ? stageTask : buildLegacyRosterReplacementTask(stageTask, previousText, context.source.writingLanguage)
+          const invocationNonce = `legacy:${stage}:${ordinal}`
+          const requestHash = textHash(JSON.stringify([task,run.binding.fingerprint.modelLeaseRevision,run.binding.fingerprint.policyHash]))
+          const prior = repository.findInvocation(run.runId,invocationNonce,requestHash)
+          let result: MainGenerationExecuteReceipt
+          if (prior) result = await (pending.get(JSON.stringify([run.runId,invocationNonce]))?.promise ?? outcomeOf(volatileReceipts.get(prior.attempt.attemptId) ?? prior,task))
+          else {
+            legacyRosters.assertMutable(run)
+            if (deps.database.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(run.runId) !== total) throw new Error('GENERATION_LEGACY_ATTEMPT_CONFLICT')
+            const current = viewOf(run).nonReplayable ? await resume(handleOf(run)) : viewOf(run)
+            result = await execute({handle:current.handle,invocationNonce,task},false,false,false,false,false,true)
+          }
+          run = repository.get(run.runId)
+          const reference = result.outcome.receipt.visibleArtifact
+          const candidate = (result.run.candidates ?? result.run.artifacts).find(item => item.artifactId === reference?.artifactId)
+          if (!candidate?.compositionEligible || repository.budget(run.rootActionId).root.status === 'cancelled') return result
+          if (textHash(candidate.text) !== candidate.textHash) throw new Error('GENERATION_LEGACY_ARTIFACT_INVALID')
+          if (result.outcome.finishReason === 'length') {
+            if (ordinal === 2) return result
+            previousText = candidate.text
+            continue
+          }
+          if (result.outcome.finishReason !== 'stop' || result.outcome.status !== 'completed') return result
+          try { parseLegacyRosterJson(candidate.text); return result } catch {
+            if (stage === 'repair') return result
+            stageTask = buildLegacyRosterJsonRepairTask(candidate.text)
+            total++
+            break
+          }
+        }
+      }
+      throw new Error('GENERATION_LEGACY_ATTEMPT_CONFLICT')
+    },
+    stageLegacyRosterGeneration: (request: LegacyRosterGenerationChannels['legacy-roster:stage']['args'][0]) => {
+      assertCurrent()
+      if (!request || Object.keys(request).some(key => !['handle','artifact'].includes(key))) throw new Error('GENERATION_LEGACY_REQUEST_INVALID')
+      return legacyRosters.stage(request.handle,request.artifact,assertFinalizationSources)
+    },
+    cancelLegacyRosterGeneration: (request: LegacyRosterGenerationChannels['legacy-roster:cancel']['args'][0]) => {
+      assertCurrent()
+      if (!request || Object.keys(request).some(key => key !== 'handle')) throw new Error('GENERATION_LEGACY_REQUEST_INVALID')
+      const run = legacyRosters.require(request.handle); service.cancel(run.rootActionId); return viewOf(repository.get(run.runId))
+    },
     beginGraphGeneration: (request: GraphGenerationChannels['graph-generation:begin']['args'][0]) => {
       assertCurrent()
       if (!request || Object.keys(request).some(key => !['input', 'modelId', 'uiActionNonce'].includes(key))
@@ -526,6 +617,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const prior = repository.findInvocation(run.runId, invocationNonce, requestHash)
       if (prior) return pending.get(JSON.stringify([run.runId, invocationNonce]))?.promise ?? outcomeOf(volatileReceipts.get(prior.attempt.attemptId) ?? prior, task)
       graphs.assertMutable(run)
+      legacyRosters.assertMutable(run)
       if (deps.database.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(run.runId) !== 0) throw new Error('GENERATION_GRAPH_ATTEMPT_CONFLICT')
       const current = viewOf(run).nonReplayable ? await resume(handleOf(run)) : viewOf(run)
       return execute({ handle: current.handle, invocationNonce, task }, false, false, false, false, true)
@@ -709,7 +801,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         const batch = characters.read(request.proposalBatchId)
         if (batch.status === 'approved') return characters.approve(request)
         const source = batch.source
-        const handle = source.kind === 'finalized-generation' ? proveFinalizedCharacterGeneration(deps.database, repository, deps.projectId, source.handle, source.artifact).currentHandle : source.kind === 'generation' ? source.handle
+        const handle = source.kind === 'finalized-generation' ? proveFinalizedCharacterGeneration(deps.database, repository, deps.projectId, source.handle, source.artifact).currentHandle
+          : source.kind === 'legacy-roster-generation' ? readLegacyRosterGenerationProof(deps.database, repository, deps.projectId, source).currentHandle : source.kind === 'generation' ? source.handle
           : source.kind === 'directory' ? repository.listDirectoryProgress().find(item => item.operationId === source.operationId)?.sourceHandle : undefined
         return handle ? agents.withChildEffect(handle, () => characters.approve(request)) : characters.approve(request)
       }).immediate()
@@ -767,6 +860,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       imports.assertMutable(requireRun(handle))
       finalizations.assertMutable(requireRun(handle))
       graphs.assertMutable(requireRun(handle))
+      legacyRosters.assertMutable(requireRun(handle))
       assertSourcesCurrent(handle)
       if (algorithm === 'draft-visible-v1' && requireRun(handle).binding.sourceManifest.operation !== 'chapter-draft') throw new Error('GENERATION_COMPOSITION_ALGORITHM_INVALID')
       return repository.composeVisible(handle.runId, artifactIds, expectedTextHash, algorithm)
@@ -782,6 +876,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       imports.assertMutable(old)
       finalizations.assertMutable(old)
       graphs.assertMutable(old)
+      legacyRosters.assertMutable(old)
+      if (old.binding.sourceManifest.legacyRosterContext) throw new Error('GENERATION_LEGACY_ADMISSION_REQUIRED')
       if (old.binding.sourceManifest.graphGenerationContext) throw new Error('GENERATION_GRAPH_ADMISSION_REQUIRED')
       if (selection.parentRootActionId || selection.uiActionNonce === repository.budget(old.rootActionId).root.uiActionNonce) throw new Error('GENERATION_RESTART_NEW_NONCE_REQUIRED')
       // Admit the replacement before cancelling; rejected sources must leave the original resumable.
@@ -796,6 +892,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       imports.assertMutable(run)
       finalizations.assertMutable(run)
       graphs.assertMutable(run)
+      legacyRosters.assertMutable(run)
       const artifact = viewOf(run).candidates?.find(item => item.artifactId === artifactId)
       if (!artifact || artifact.status === 'running') throw new Error('GENERATION_CANDIDATE_NOT_DISCARDABLE')
       service.discardCandidate(artifactId)
