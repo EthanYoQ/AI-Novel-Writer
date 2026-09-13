@@ -20,6 +20,8 @@ import { proveCharacterProposal } from './generation-character-proposal-proof'
 import { compareGenerationSourceBindings } from './generation-source-binding'
 import type { GenerationKnowledgeSnapshot } from '../../src/shared/generation-knowledge'
 import type { PrepareDraftContextRequest, PreparedDraftContext } from '../../src/shared/generation-owner-contract'
+import { FinalizedCharacterGeneration } from './finalized-character-generation'
+import type { FinalizedCharacterGenerationCommit } from '../../src/shared/finalized-character-generation'
 
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>
 export function safeGenerationModelReceipt(receipt: ModelExecutionLeaseReceipt): SafeGenerationModelReceipt {
@@ -33,7 +35,7 @@ export interface MainGenerationOwnerDependencies {
   assertCurrent: () => void
   leases: ModelExecutionLeaseRegistry
   loadModel: (id: string) => ModelProfile | null
-  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot }, model: SafeGenerationModelReceipt) => RunBinding
+  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string }, model: SafeGenerationModelReceipt) => RunBinding
   rebuildBinding: (previous: RunBinding, model: SafeGenerationModelReceipt) => RunBinding
   beforeDispatch?: () => void
   onSnapshot?: (snapshot: MainGenerationSnapshot) => void
@@ -78,6 +80,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (!value || typeof value.modelId !== 'string' || !/^[a-f0-9]{64}$/u.test(value.modelRevision)) throw new Error('GENERATION_MODEL_BINDING_INVALID')
     return value
   }
+  const finalizedCharacters = new FinalizedCharacterGeneration(deps.database, repository, { projectId: deps.projectId, epoch: deps.epoch }, assertCurrent)
   const handleOf = (run: DurableGenerationRun): MainGenerationRunHandle => ({ projectId: run.binding.projectId,
     epoch: run.binding.epoch, rootActionId: run.rootActionId, runId: run.runId })
   const requireRun = (handle: MainGenerationRunHandle, execution = false) => {
@@ -190,8 +193,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       || !Array.isArray(selection.promptKeys) || selection.promptKeys.length === 0
       || Object.hasOwn(selection, 'parentRootActionId') && (typeof selection.parentRootActionId !== 'string' || !selection.parentRootActionId.trim())
       || typeof selection.uiActionNonce !== 'string' || !selection.uiActionNonce.trim() || selection.uiActionNonce.length > 256
-      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId'].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
+      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId', 'finalizedCharacterContextId'].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
     generationOutputContract(selection)
+    const finalizedCharacterContextHash = finalizedCharacters.admit(selection)
     if (selection.batchIntent && !batchInitialization) throw new Error('GENERATION_BATCH_INTENT_MAIN_ONLY')
     const batch = selection.batchId ? draftEffects.readBatch(selection.batchId, deps.projectId) : undefined
     if (batch) {
@@ -226,7 +230,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     try {
       const prepared = selection.preparationId ? preparations.get(selection.preparationId) : undefined
       if (selection.preparationId && (!prepared || selection.operation !== 'chapter-draft')) throw new Error('GENERATION_DRAFT_PREPARATION_REQUIRED')
-      const binding = deps.buildBinding({ ...selection, ...(prepared ? { knowledgeSnapshot: prepared.knowledgeSnapshot } : {}) }, safeGenerationModelReceipt(lease))
+      const binding = deps.buildBinding({ ...selection, ...(prepared ? { knowledgeSnapshot: prepared.knowledgeSnapshot } : {}),
+        ...(finalizedCharacterContextHash ? { finalizedCharacterContextHash } : {}) }, safeGenerationModelReceipt(lease))
       if (prepared && !preparationMatches(prepared.binding, binding)) throw new Error('GENERATION_DRAFT_PREPARATION_CHANGED')
       if (binding.projectId !== deps.projectId || binding.epoch !== deps.epoch) throw new Error('GENERATION_BINDING_INVALID')
       const run = deps.database.transaction(() => {
@@ -373,6 +378,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   })
   return { begin: (selection: BeginGenerationRequest) => begin(selection), execute, resume, list, assertSourcesCurrent,
     characterProposals: characters,
+    readFinalizedCharacterContext: (draftId: number) => finalizedCharacters.readContext(draftId),
+    commitFinalizedCharacterStates: (request: FinalizedCharacterGenerationCommit) => finalizedCharacters.commit(request, characters, assertSourcesCurrent),
     readContext, readBatch, prepareDraftContext, preparedKnowledge, draftPreparationBinding,
     beginBatch: (request: BeginGenerationBatchRequest) => {
       assertGenerationBatchIntent(request)
@@ -433,6 +440,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     },
     suspendForProjectClose: () => {
       preparations.clear()
+      finalizedCharacters.close()
       if (closed) return
       service.suspendForProjectClose()
       closed = true

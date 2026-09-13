@@ -4,6 +4,7 @@ import { ArchitecturePromptBuilder, ChapterPromptBuilder } from '../prompts/prom
 import { BUILTIN_PROMPTS, EDITABLE_PROMPT_KEYS, getBuiltinPromptTemplate, getPromptTemplate, renderPrompt } from '../prompt-templates'
 
 const expectedPromptVariables: Record<string, string[]> = {
+  planning_material_character_extraction: ['requested_ids', 'sources'],
   assistant_writing_identity: ['mode_instruction'],
   edit_selected_text: ['edit_instruction', 'selected_text'],
   generate_novel_config_field: ['existing_config', 'field_label', 'field_requirements'],

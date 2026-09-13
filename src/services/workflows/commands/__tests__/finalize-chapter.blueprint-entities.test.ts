@@ -1,21 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
 import { useLLMStore } from '../../../../stores/llm-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import { FinalizeChapterCommand } from '../finalize-chapter.command'
+import { WORKFLOW_GENERATION_BUDGETS } from '../base-command'
+import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
+import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationSelection } from '../../workflow-main-generation'
+import type { FinalizedCharacterContext } from '../../../../shared/finalized-continuity'
 
 const finalizationClient = vi.hoisted(() => ({
   commitFinalizationSnapshot: vi.fn(),
 }))
 
 vi.mock('../../../finalization-client', () => finalizationClient)
+vi.mock('../../workflow-main-generation', () => ({ createWorkflowMainGenerationRuntime: vi.fn() }))
 
 const PROJECT_PATH = 'C:\\novels\\blueprint-entities'
 const PROJECT_SESSION = Object.freeze({
   projectId: 'blueprint-entities',
   leaseId: 'lease-blueprint-entities',
   projectPath: PROJECT_PATH,
+})
+const CONTENT = '韩峥被洪水卷入排水井，当场死亡。'
+const CONTENT_HASH = createHash('sha256').update(CONTENT).digest('hex')
+const finalizedContext = (): FinalizedCharacterContext => ({ projectId: PROJECT_SESSION.projectId, epoch: PROJECT_SESSION.leaseId,
+  source: { draftId: 33, finalizationId: 'finalization-3', chapterNumber: 3, contentHash: CONTENT_HASH }, content: CONTENT,
+  identityRevision: 0, identityStatus: 'bound', projectionGeneration: 0, characters: [],
+  sourceOrder: { continuityEpoch: `${PROJECT_SESSION.projectId}:0`, chapterNumber: 3, authoritativeFinalizationRevision: 1 },
 })
 
 function workflowContext(uiLocale: 'zh-CN' | 'en-US' = 'zh-CN'): WorkflowContext {
@@ -38,40 +51,13 @@ function callbacks(): StepCallbacks {
   }
 }
 
-function modelLease() {
-  return {
-    leaseId: 'model-lease-blueprint-entities',
-    modelId: 'test-model',
-    provider: 'custom',
-    protocol: 'openai',
-    modelName: 'test-model',
-    modelRevision: 'a'.repeat(64),
-    endpointFingerprint: 'b'.repeat(64),
-    capabilityEvidence: {
-      source: {
-        contextWindowTokens: 'unknown',
-        maxOutputTokens: 'user-operational-cap',
-        featureFlags: 'unknown',
-      },
-      subjectFingerprint: 'c'.repeat(64),
-      contextWindowTokens: null,
-      maxOutputTokens: 8192,
-      reasoning: null,
-      structuredOutput: true,
-      usage: null,
-    },
-    createdAt: 1_000,
-    expiresAt: 61_000,
-  }
-}
-
 describe('FinalizeChapterCommand blueprint character fallback', () => {
   beforeEach(() => {
     finalizationClient.commitFinalizationSnapshot.mockResolvedValue({
       success: true,
       committed: true,
       finalizationId: 'finalization-3',
-      contentHash: 'content-hash-3',
+      contentHash: CONTENT_HASH,
       contentRevision: 5,
       draftId: 33,
       publicationStatus: 'published',
@@ -101,16 +87,37 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
 
   it('uses this chapter blueprint characters when direct finalization omits them', async () => {
     const completedSteps = new Set<string>()
+    const selections: WorkflowMainGenerationSelection[] = []
+    let sequence = 0
+    vi.mocked(createWorkflowMainGenerationRuntime).mockImplementation(async request => {
+      const runtime = await workflowRuntimeDependencies.createRuntime({ budget: WORKFLOW_GENERATION_BUDGETS.structured })
+      const select = (selection: WorkflowMainGenerationSelection) => {
+        selections.push(structuredClone(selection))
+        request.context.mainGenerationRunHandle = { projectId: PROJECT_SESSION.projectId, epoch: PROJECT_SESSION.leaseId,
+          rootActionId: 'synthetic-finalization-root', runId: `synthetic-run-${++sequence}` }
+        request.context.mainGenerationRootHandle = request.context.mainGenerationRunHandle
+      }
+      select(request.selection)
+      return { mainOwned: true, advance: async selection => { select(selection) }, close: () => runtime.close(),
+        execute: operation => runtime.execute(({ session }) => operation({ session: { budget: session.budget,
+          complete: async (task, options) => {
+            const result = await session.complete(task, options)
+            return { ...result, receipt: { ...result.receipt, visibleArtifact: { artifactId: `artifact-${++sequence}`, attemptId: 'synthetic-attempt',
+              revision: 1, textHash: createHash('sha256').update(result.content).digest('hex') } } }
+          },
+        } })),
+      }
+    })
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
         case 'prompt:load-global':
           return { templates: [], diagnostics: [] }
         case 'fs:check-exists':
           return false
-        case 'llm:begin-execution-lease':
-          return { success: true, lease: modelLease() }
-        case 'llm:close-execution-lease':
-          return { success: true }
+        case 'finalized-character:read-context':
+          return { contextId: 'synthetic-context-33', context: finalizedContext() }
+        case 'finalized-character:commit':
+          return { applied: 0, unchanged: 0, candidates: [], unresolved: [] }
         case 'db:blueprint-get':
           return { chapterNumber: 3, title: '钟楼真相', characters: ['韩峥'] }
         case 'db:post-process-get-latest-run':
@@ -146,7 +153,7 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
                 draftId: 33,
                 finalizationId: 'finalization-3',
                 chapterNumber: 3,
-                contentHash: 'content-hash-3',
+                contentHash: CONTENT_HASH,
               },
               chapterTitle: '钟楼真相',
               content: '韩峥被洪水卷入排水井，当场死亡。',
@@ -217,6 +224,8 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
       PROJECT_PATH,
       PROJECT_SESSION,
     )
+    expect(selections).toMatchObject([{ operation: 'finalized-chapter-notes', selectedFinalizedDraftIds: [33] },
+      { operation: 'finalized-character-state', selectedFinalizedDraftIds: [33], finalizedCharacterContextId: 'synthetic-context-33' }])
     const continuityCall = invoke.mock.calls.find(([channel]) => channel === 'db:continuity-save-finalized')
     expect(continuityCall?.[1]).toEqual(expect.objectContaining({
       facts: [expect.objectContaining({

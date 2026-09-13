@@ -102,7 +102,11 @@ export class CharacterProposalService {
         if (!item || !['create', 'map', 'keep-unresolved'].includes(selection.action)
           || Object.keys(selection).some(key => !['selectionKey', 'action', ...(selection.action === 'map' ? ['characterId'] : [])].includes(key))) throw new Error('CHARACTER_APPROVAL_SELECTION_INVALID')
         if (selection.action === 'create') identityRequest.creations.push({ selectionKey: item.selectionKey, fields: item.fields })
-        if (selection.action === 'map') identityRequest.changes.push({ characterId: selection.characterId, fields: item.fields })
+        // A finalized occurrence carries a historical display label, not permission to rename an existing identity.
+        if (selection.action === 'map' && batch.source.kind !== 'finalized-generation') identityRequest.changes.push({ characterId: selection.characterId, fields: item.fields })
+        if (selection.action === 'map' && batch.source.kind === 'finalized-generation'
+          && !this.identitySnapshot().characters.some(character => character.characterId === selection.characterId && !character.retired))
+          throw new Error('CHARACTER_ID_UNKNOWN')
       }
       for (const relation of request.relationships ?? []) {
         const from = request.selections.find(item => item.selectionKey === relation.sourceSelectionKey)

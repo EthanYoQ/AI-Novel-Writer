@@ -17,9 +17,11 @@
 | 独立代码审查 | 私有 `review-s00.json` | PASS-S00-scoped；9/9 独立测试、基线探针复跑、2714 项三方哈希匹配；三项 P2 修复已核验 |
 | S01 契约与迁移 lane | `s01-evidence.md`、`s01-storage-contract.json`、`docs/adr/0018-program-v3-domain-contracts.md` | 独立 36/36；现有 SQLite 实测 35 表/356 字段补全 S00 初扫；M00–M05 业务步骤尚未安装 |
 | S00 历史云端 CI | [运行 34711345619](https://github.com/EthanYoQ/AI-Novel-Writer/actions/runs/34711345619) | `1d561e1f0ff14527a65ecb625dfd618147f1df0c` Windows PR CI 成功；不代表后续切片或安装资格 |
-| S06A 最新已发布 CI | [运行 34724128298](https://github.com/EthanYoQ/AI-Novel-Writer/actions/runs/34724128298) | `852226db8058f171b98cee40d39bdcddb4f6be3a` 失败：向量 worker native 退出及 26 项分类失败，未确定 native 根因 |
+| S06A 历史 CI | [运行 34724128298](https://github.com/EthanYoQ/AI-Novel-Writer/actions/runs/34724128298) | `852226db8058f171b98cee40d39bdcddb4f6be3a` 失败：向量 worker native 退出及 26 项分类失败，未确定 native 根因 |
+| S06B/S09A 已发布 CI | [运行 34728787021](https://github.com/EthanYoQ/AI-Novel-Writer/actions/runs/34728787021) | `88c80aa57ad4de266c57ccd88bab961e567920d3` 失败：3287 项通过、21 项失败；向量 worker 在 copy-enter 后 native 退出，根因未确定；不包含 S09B |
 | S06A 结构化入口 | `s06a-integration-evidence.md`、`s06a-consumer-coverage.md` | 实际主进程来源/正式提交保护、目录同预算恢复、独立审查；保留 S06D/S09 未覆盖项 |
 | S06B / S09A | `s06b-s09a-integration-evidence.md`、`s06b-consumer-coverage.md`、`s09a-planning-consumer-evidence.json`、`s09a-import-consumer-evidence.json` | 正文准备和恢复、实际知识源与明确角色提案；3 场景 Electron 公开 IPC 验收，0 真实模型调用 |
+| S09B | `s09b-identity-continuity-evidence.md` | 定稿冻结身份、状态按字段保护、实际生成结果凭据、同名导入提案；交叉复审记录和资格边界见专属材料 |
 | G01 原问题台账 | `g01-issue-ledger.md` | 10 项正文/评论与相关 PR/Release fresh-read；逐症状验收 owner；没有当前可关闭结论 |
 
 私有文件均位于本任务 `.runtime/.cache/novel-quality-modernization/`，不进入提交。绝对执行路径、依赖和产物哈希供本机重跑使用，公开材料只包含非秘密字段和合成作品。

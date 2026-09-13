@@ -2,6 +2,7 @@ import { ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import type Database from 'better-sqlite3'
 import type { GenerationOwnerChannels } from '../../src/shared/generation-owner-contract'
 import type { CharacterProposalChannels } from '../../src/shared/character-proposal'
+import type { FinalizedCharacterGenerationChannels } from '../../src/shared/finalized-character-generation'
 import { generationOutputContract } from '../../src/shared/generation-owner-contract'
 import type { ModelProfile, ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
@@ -23,7 +24,7 @@ import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { getEmbeddingConfig } from './kb-controller'
 
 type Owner = ReturnType<typeof createMainGenerationOwner>
-type OwnerChannels = GenerationOwnerChannels & CharacterProposalChannels
+type OwnerChannels = GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels
 const owners = new Map<Database.Database, { owner: Owner; session: ProjectSessionContext; subscribers: Set<WebContents> }>()
 const ownerSessions = new WeakMap<Owner, ProjectSessionContext>()
 /** Called synchronously inside the same SQLite transaction as the formal effect. */
@@ -109,7 +110,7 @@ export function registerGenerationController(options: {
         projectAccess.assertCurrentProjectContext(session, getCurrentProjectPath())
         return result
       } catch (error) {
-        const code = error instanceof Error && /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER)_[A-Z_]+$/u.test(error.message)
+        const code = error instanceof Error && /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER)_[A-Z_]+$/u.test(error.message)
           ? error.message : 'GENERATION_REQUEST_FAILED'
         throw new Error(code)
       }
@@ -131,6 +132,8 @@ export function registerGenerationController(options: {
   register('character-proposal:approve', 1, (owner, request) => owner.characterProposals.approve(request))
   register('character-proposal:cancel', 1, (owner, request) => owner.characterProposals.cancel(request.proposalBatchId))
   register('character-identity:read', 0, owner => owner.characterProposals.identitySnapshot())
+  register('finalized-character:read-context', 1, (owner, request) => owner.readFinalizedCharacterContext(request.draftId))
+  register('finalized-character:commit', 1, (owner, request) => owner.commitFinalizedCharacterStates(request))
   register('generation:execute', 1, async (owner, request) => {
     const context = owner.readContext(request.handle)
     // Release the short KB guard after dispatch starts; author edits during generation remain possible.

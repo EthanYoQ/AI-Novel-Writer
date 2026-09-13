@@ -119,6 +119,8 @@ export interface BeginGenerationRequest {
   batchIntent?: GenerationBatchIntent
   /** Main-issued before asynchronous drafting context reads. */
   preparationId?: string
+  /** Main-issued context for identity-bound extraction from immutable finalized prose. */
+  finalizedCharacterContextId?: string
 }
 export interface ExecuteGenerationRequest {
   handle: MainGenerationRunHandle

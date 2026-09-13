@@ -92,7 +92,9 @@ describe('structured character roster static contract', () => {
     expect(projectClear).toContain("DELETE FROM characters")
     expect(projectClear).toContain("DELETE FROM character_roster_meta")
     expect(projectClear).toContain("DELETE FROM character_roster_operations")
-    expect(roster.match(/SET characters_arch\s*=/g)).toHaveLength(1)
+    // The ID projection and the guarded pre-M02 writer remain in the same repository.
+    expect(roster.match(/SET characters_arch\s*=/g)).toHaveLength(2)
+    expect(roster).toContain("if (hasCharacterIdentitySchema(db)) throw new Error('CHARACTER_ID_WRITE_REQUIRED')")
     expect(workflow).not.toContain('runArchCharacterExtract')
     expect(workflow).not.toContain('createCharacterExtractSteps')
     expect(workflow).not.toContain('runPostProcessPipeline')

@@ -7,10 +7,24 @@ import { GenerationRunRepository, textHash } from '../repositories/generation-ru
 import type { BlueprintData } from '../repositories/blueprint-repository'
 import type { CharacterProposalProof } from './character-proposal-service'
 import type { ImportGlobalFactsReceipt } from '../../src/shared/import-global-facts'
+import { proveFinalizedCharacterGeneration } from './finalized-character-generation-proof'
 
 export function proveCharacterProposal(db: Database.Database, runs: GenerationRunRepository, projectId: string,
   source: CharacterProposalSource, forWrite: boolean, assertSources: (handle: MainGenerationRunHandle, committedBlueprintChapters?: number[]) => void): CharacterProposalProof {
   if (!source || typeof source !== 'object') throw new Error('CHARACTER_PROPOSAL_SOURCE_INVALID')
+  if (source.kind === 'finalized-generation') {
+    if (Object.keys(source).some(key => !['kind', 'handle', 'artifact'].includes(key))) throw new Error('CHARACTER_PROPOSAL_SOURCE_INVALID')
+    if (forWrite) assertSources(source.handle)
+    const proof = proveFinalizedCharacterGeneration(db, runs, projectId, source.handle, source.artifact)
+    const items = proof.response.unresolved.filter(item => item.displayName.trim()).map(item => ({
+      selectionKey: item.selectionKey, sourceId: `${proof.context.source.finalizationId}:${source.artifact.artifactId}:${item.selectionKey}`,
+      fields: { name: item.displayName }, relationships: [], rawValue: structuredClone(item),
+    }))
+    const sourceHash = textHash(JSON.stringify([source, items]))
+    return { items, sourceHash, provenance: { kind: 'derived', modelRevision: proof.model.modelRevision,
+      source: { projectId, epoch: source.handle.epoch, sourceId: proof.context.source.finalizationId,
+        revision: proof.context.sourceOrder.authoritativeFinalizationRevision, contentHash: proof.context.source.contentHash } } }
+  }
   if (source.kind === 'import') {
     if (Object.keys(source).some(key => !['kind', 'operationId'].includes(key))) throw new Error('CHARACTER_PROPOSAL_SOURCE_INVALID')
     const row = db.prepare('SELECT payload_hash,receipt_json FROM import_global_fact_operations WHERE operation_id=?').get(source.operationId) as { payload_hash: string; receipt_json: string } | undefined

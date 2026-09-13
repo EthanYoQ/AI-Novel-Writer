@@ -20,6 +20,8 @@ export type CharacterProposalSource =
       artifacts: { artifactId: string; revision: number; textHash: string }[]; manifestArtifactId?: string }
   | { kind: 'directory'; operationId: string }
   | { kind: 'import'; operationId: string }
+  | { kind: 'finalized-generation'; handle: MainGenerationRunHandle;
+      artifact: { artifactId: string; revision: number; textHash: string } }
 export interface CharacterProposalStageEvidence { proposalBatchId: string; sourceHash: string }
 export interface CharacterProposalItem {
   selectionKey: string

@@ -811,7 +811,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
       PROJECT_PATH,
       PROJECT_SESSION,
     )
-    expect(createRuntime).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'grok-selected-model' }))
+    expect(createRuntime.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ modelId: 'grok-selected-model' }))
     expect(begunModelIds).toEqual(['grok-selected-model'])
     const prompt = completeWithLease.mock.calls[0]?.[0].messages.map(message => message.content).join('\n') ?? ''
     expect(prompt).toContain('只修复这个已确认的问题。')

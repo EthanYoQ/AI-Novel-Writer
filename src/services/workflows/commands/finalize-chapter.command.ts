@@ -24,11 +24,12 @@ import {
 } from '../workflow-utils'
 import type { ChapterInfo } from '../chapter-workflow'
 import type {
-  FinalizedCharacterStateCandidate,
+  FinalizedCharacterContext,
   FinalizedContinuityFact,
   FinalizedContinuityFactCategory,
   FinalizedSourceIdentity,
 } from '../../../shared/finalized-continuity'
+import { parseFinalizedCharacterStateResponse } from '../../../shared/finalized-continuity'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
 import {
   requireWorkflowProjectSession,
@@ -36,15 +37,10 @@ import {
   workflowUiText,
   workflowWritingLanguage,
 } from '../workflow-project-session'
-import {
-  CHARACTER_STATE_TEXT_FIELDS,
-  characterRosterIdentityKey,
-  type CharacterRosterCharacterState,
-  type CharacterRosterEntry,
-} from '../../../shared/character-roster'
 import { writingLanguageText } from '../../../shared/writing-language'
 import { localize } from '../../../i18n/core'
 import type { Locale } from '../../../i18n/types'
+import type { FinalizedCharacterGenerationCommit, FinalizedCharacterGenerationReceipt } from '../../../shared/finalized-character-generation'
 
 export interface FinalizeChapterParams {
   draftPath: string
@@ -66,90 +62,17 @@ export interface FinalizePostProcessGeneration {
     output: 'visible-text' | 'structured-data',
     context: WorkflowContext,
   ): Promise<string>
-}
-
-/** 容错 JSON 解析（剥离 Markdown 代码块 + 自动截取有效 JSON 边界） */
-function parseJSON<T>(text: string): T {
-  let cleanText = text.replace(/```json?\n?/gi, '').replace(/```\n?/gi, '').trim()
-  const firstBrace = cleanText.indexOf('{')
-  const lastBrace = cleanText.lastIndexOf('}')
-  if (firstBrace !== -1 && lastBrace !== -1) {
-    cleanText = cleanText.substring(firstBrace, lastBrace + 1)
-  }
-  return JSON.parse(cleanText) as T
+  characterStates?(
+    builder: { build: () => string; getSystemRole: () => string },
+    callbacks: StepCallbacks,
+    context: WorkflowContext,
+    prepared: { contextId: string; context: FinalizedCharacterContext },
+  ): Promise<FinalizedCharacterGenerationReceipt>
 }
 
 const CONTINUITY_FACT_LIMIT = 12
 const CONTINUITY_STATEMENT_LIMIT = 280
 const CONTINUITY_EVIDENCE_LIMIT = 240
-type CharacterStatePatch = Partial<Pick<CharacterRosterCharacterState, typeof CHARACTER_STATE_TEXT_FIELDS[number]>>
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-
-/**
- * Missing state fields preserve the existing fact; an explicitly supplied
- * string (including an empty string) replaces it. Chapter identity is always
- * supplied by the frozen finalization input, never trusted from the model.
- */
-function parseCharacterStateUpdates(
-  content: string,
-  roster: readonly CharacterRosterEntry[],
-  chapterNumber: number,
-): Map<string, CharacterStatePatch> {
-  const parsed = parseJSON<unknown>(content)
-  if (!isRecord(parsed)) throw new Error('角色状态响应必须是 JSON 对象')
-  if (!Object.hasOwn(parsed, 'updates')) throw new Error('角色状态响应缺少 updates 列表')
-  if (!Array.isArray(parsed.updates)) throw new Error('角色状态响应的 updates 必须是列表')
-
-  const rosterByIdentity = new Map<string, CharacterRosterEntry>()
-  for (const character of roster) {
-    const identity = characterRosterIdentityKey(character.name)
-    if (!identity || rosterByIdentity.has(identity)) {
-      throw new Error(`角色名单存在同名冲突：「${character.name}」`)
-    }
-    rosterByIdentity.set(identity, character)
-  }
-
-  const updatesByName = new Map<string, CharacterStatePatch>()
-  for (const [index, rawUpdate] of parsed.updates.entries()) {
-    if (!isRecord(rawUpdate)) throw new Error(`角色状态 updates[${index}] 格式无效`)
-    if (typeof rawUpdate.name !== 'string' || !rawUpdate.name.trim()) {
-      throw new Error(`角色状态 updates[${index}].name 必须是非空文本`)
-    }
-    const identity = characterRosterIdentityKey(rawUpdate.name)
-    const character = rosterByIdentity.get(identity)
-    if (!character) throw new Error(`角色状态更新引用了未知角色：「${rawUpdate.name.trim()}」`)
-    if (updatesByName.has(character.name)) {
-      throw new Error(`角色状态响应包含同名冲突：「${rawUpdate.name.trim()}」`)
-    }
-    if (!isRecord(rawUpdate.currentState)) {
-      throw new Error(`角色状态 updates[${index}].currentState 必须是对象`)
-    }
-
-    const patch: CharacterStatePatch = {}
-    for (const field of CHARACTER_STATE_TEXT_FIELDS) {
-      if (!Object.hasOwn(rawUpdate.currentState, field)) continue
-      const value = rawUpdate.currentState[field]
-      if (typeof value !== 'string') {
-        throw new Error(`角色状态 updates[${index}].currentState.${field} 必须是文本`)
-      }
-      patch[field] = value.trim()
-    }
-    if (Object.keys(patch).length === 0) {
-      throw new Error(`角色状态 updates[${index}].currentState 没有可更新字段`)
-    }
-    if (
-      Object.hasOwn(rawUpdate.currentState, 'updatedAtChapter')
-      && rawUpdate.currentState.updatedAtChapter !== chapterNumber
-    ) {
-      throw new Error(`角色状态 updates[${index}].currentState.updatedAtChapter 与定稿章节不一致`)
-    }
-    updatesByName.set(character.name, patch)
-  }
-  return updatesByName
-}
 
 function factCategory(statement: string): FinalizedContinuityFactCategory {
   if (/(?:角色|状态|持有|受伤|位于|死亡|身亡|牺牲|去世|character|holds?|injur|location|dead|died|deceased)/iu.test(statement)) return 'character-state'
@@ -208,8 +131,9 @@ export function buildFinalizedContinuityFacts(
   chapterNotes: string,
   finalizedContent: string,
   chapterEntities: readonly string[] = [],
+  identityContext?: FinalizedCharacterContext,
 ): FinalizedContinuityFact[] {
-  const entities = [...new Set(chapterEntities.map(entity => entity.trim()).filter(Boolean))].slice(0, 8)
+  const entities = [...new Set([...chapterEntities, ...(identityContext?.characters.map(item => item.displayNameSnapshot) ?? [])].map(entity => entity.trim()).filter(Boolean))].slice(0, 8)
   const statements = chapterNotes
     .split(/\n+|(?<=[。！？.!?])\s*/u)
     .map(statement => statement.replace(/^\s*(?:[-*•]|\d+[.)、])\s*/u, '').trim())
@@ -217,6 +141,11 @@ export function buildFinalizedContinuityFacts(
   return statements.flatMap(statement => {
     const factEntities = entities.filter(entity => statement.includes(entity))
     const evidence = evidenceExcerpt(finalizedContent, statement, factEntities)
+    const characterRefs = identityContext ? factEntities.flatMap(entity => {
+      const candidates = identityContext.characters.filter(item => item.displayNameSnapshot === entity)
+      return candidates.length === 1 ? [{ characterId: candidates[0].characterId, displayNameSnapshot: candidates[0].displayNameSnapshot }] : []
+    }) : undefined
+    if (identityContext && factEntities.some(entity => identityContext.characters.filter(item => item.displayNameSnapshot === entity).length > 1)) return []
     return evidence
       ? [{
           category: factCategory(statement),
@@ -224,6 +153,7 @@ export function buildFinalizedContinuityFacts(
           statement: statement.slice(0, CONTINUITY_STATEMENT_LIMIT),
           sourceChapter: chapterNumber,
           evidence,
+          ...(characterRefs ? { characterRefs } : {}),
         }]
       : []
   }).slice(0, CONTINUITY_FACT_LIMIT)
@@ -254,11 +184,11 @@ export function buildFinalizePostProcessSteps(
   uiLocale: Locale = 'zh-CN',
   finalizedSource?: FinalizedSourceIdentity,
   projectionGeneration?: number,
+  identityContext?: FinalizedCharacterContext,
 ): PostProcessStep[] {
   const steps: PostProcessStep[] = []
   const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
   let generatedChapterNotes: string | undefined
-  let generatedCharacterCards: string | undefined
 
   // ─── 步骤 1: 导入知识库 ───────────────────────────────────────────
   steps.push({
@@ -357,6 +287,7 @@ export function buildFinalizePostProcessSteps(
             cleanNotes,
             draftContent,
             chapterEntities,
+            identityContext,
           )
           const continuityResult = await ipc.invokeWithProjectSession(
             projectSession,
@@ -408,157 +339,37 @@ export function buildFinalizePostProcessSteps(
       },
     })
 
-  // ─── 步骤 3: 角色状态更新 ────────────────────────────────────────
+  // Model IDs refer only to the identity snapshot frozen by the original finalization.
   steps.push({
-      key: 'character_cards',
-      label: text('角色状态更新', 'Update character state'),
-      critical: false,
-      executor: async (callbacks, context) => {
-        if (!context) throw new Error('定稿后处理缺少冻结工作流上下文')
-        if (context.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
-        const projectSession = requireWorkflowProjectSession(context)
-        const writingLanguage = workflowWritingLanguage(context)
-        const cardTemplate = await resolvePromptTemplate('update_character_cards', projectSession, writingLanguage)
-        if (!cardTemplate) throw new Error(workflowUiText(
-          context,
-          '未找到角色状态模板',
-          'Character-state template not found.',
-        ))
-        // 章节定稿只更新已存在的结构化角色状态。新角色必须来自作者确认
-        // 或已提交蓝图的明确候选，不能由正文后处理模型自由创建。
-        const roster = await ipc.invokeWithProjectSession(
-          projectSession,
-          'db:character-roster-read',
-          _project.path,
-        )
-        if (roster.status !== 'ready' && roster.status !== 'empty') {
-          throw new Error(workflowUiText(
-            context,
-            '角色名单当前不可安全更新；请先完成旧项目修复或处理数据不一致状态',
-            'The character roster cannot be updated safely. Repair the legacy project or resolve its inconsistent data first.',
-          ))
-        }
-        const allChars = roster.entries
-        if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
-        const simpleCards = allChars.map((c) => ({ name: c.name, role: c.role }))
-
-        const cardBuilder = new PostProcessPromptBuilder(cardTemplate, writingLanguage)
-          .withChapterContent(draftContent.trim())
-          .withChapterNumber(chapterNumber)
-          .withExistingCardsJson(simpleCards)
-
-        const cardsResult = generatedCharacterCards ?? await generation.complete(
-          cardBuilder,
-          callbacks,
-          'structured-data',
-          context,
-        )
-        if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
-        const updatesByName = parseCharacterStateUpdates(cardsResult, allChars, chapterNumber)
-        generatedCharacterCards = cardsResult
-        let updatedCount = 0
-        const changedEntries: CharacterRosterEntry[] = []
-        const blockedCandidates: FinalizedCharacterStateCandidate[] = []
-        for (const character of allChars) {
-          const patch = updatesByName.get(character.name)
-          if (!patch) continue
-          updatedCount += 1
-          const currentState = character.currentState
-          if (!finalizedSource || finalizedSource.draftId !== finalizedDraftId) {
-            throw new Error(workflowUiText(
-              context,
-              '角色状态更新缺少冻结定稿来源收据',
-              'The character-state update is missing its frozen finalization receipt.',
-            ))
-          }
-          // Only fields actually returned by this model call carry this derived receipt.
-          const provenance: NonNullable<CharacterRosterCharacterState['provenance']> = {}
-          for (const field of CHARACTER_STATE_TEXT_FIELDS) {
-            if (!Object.hasOwn(patch, field)) continue
-            provenance[field] = { kind: 'derived', source: finalizedSource }
-            const previousValue = currentState?.[field] ?? ''
-            const previousSource = currentState?.provenance?.[field]
-            const protectedValue = previousSource?.kind === 'author'
-              || previousSource?.kind === 'legacy'
-              || Boolean(previousValue && previousSource?.kind !== 'derived')
-            if (protectedValue && patch[field] !== previousValue) {
-              blockedCandidates.push({ characterName: character.name, field, value: patch[field] ?? '' })
-            }
-          }
-          const structuredCharacter = { ...character }
-          delete structuredCharacter.legacyRelationshipNotes
-          changedEntries.push({
-            ...structuredCharacter,
-            currentState: {
-              location: patch.location ?? currentState?.location ?? '',
-              powerLevel: patch.powerLevel ?? currentState?.powerLevel ?? '',
-              physicalState: patch.physicalState ?? currentState?.physicalState ?? '',
-              mentalState: patch.mentalState ?? currentState?.mentalState ?? '',
-              keyItems: patch.keyItems ?? currentState?.keyItems ?? '',
-              recentEvents: patch.recentEvents ?? currentState?.recentEvents ?? '',
-              updatedAtChapter: chapterNumber,
-              provenance,
-            },
-          })
-        }
-
-        if (updatedCount > 0) {
-          if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
-          const result = await ipc.invokeWithProjectSession(
-            projectSession,
-            'db:character-roster-commit',
-            {
-              operationId: `chapter-progress-${context.runId}-${chapterNumber}`,
-              expectedRevision: roster.revision,
-              schemaVersion: 1,
-              intent: 'chapter_progress',
-              source: finalizedSource,
-              // chapter_progress only carries changed state for confirmed
-              // characters; it never echoes untouched legacy relationship notes.
-              entries: changedEntries,
-            },
-            _project.path,
-          )
-          if (!result.success || !result.receipt) {
-            throw new Error(result.error || workflowUiText(
-              context,
-              '角色状态未能原子提交',
-              'Character-state updates could not be committed atomically.',
-            ))
-          }
-          if (blockedCandidates.length > 0) {
-            if (projectionGeneration === undefined) {
-              throw new Error(workflowUiText(
-                context,
-                '角色状态候选缺少连续性投影水位',
-                'The character-state candidates are missing the continuity projection watermark.',
-              ))
-            }
-            const candidateResult = await ipc.invokeWithProjectSession(
-              projectSession,
-              'db:continuity-save-character-state-candidates',
-              {
-                draftId: finalizedDraftId!,
-                chapterNumber,
-                candidates: blockedCandidates,
-                projectionGeneration,
-                source: finalizedSource!,
-              },
-              _project.path,
-            )
-            requireIpcSuccess(candidateResult, text(
-              '保存角色状态原文定位候选',
-              'Save character-state prose locators',
-            ))
-          }
-          if (updatedCount > 0) callbacks.log(workflowUiText(
-            context,
-            `更新角色动态状态: ${updatedCount} 名`,
-            `Updated dynamic character state: ${updatedCount}`,
-          ))
-        }
-      },
-    })
+    key: 'character_cards',
+    label: text('角色状态更新', 'Update character state'),
+    critical: false,
+    executor: async (callbacks, context) => {
+      if (!context || context.cancelled) throw new Error('GENERATION_WORKFLOW_CANCELLED')
+      if (finalizedDraftId === undefined || !finalizedSource || !generation.characterStates) throw new Error('FINALIZED_CHARACTER_MAIN_REQUIRED')
+      const projectSession = requireWorkflowProjectSession(context)
+      const prepared = await ipc.invokeWithProjectSession(projectSession, 'finalized-character:read-context', { draftId: finalizedDraftId })
+      if (prepared.context.source.finalizationId !== finalizedSource.finalizationId || prepared.context.source.contentHash !== finalizedSource.contentHash
+        || prepared.context.source.chapterNumber !== chapterNumber || prepared.context.content !== draftContent) throw new Error('FINALIZED_CHARACTER_SOURCE_CHANGED')
+      const writingLanguage = workflowWritingLanguage(context)
+      const template = await resolvePromptTemplate('update_character_cards', projectSession, writingLanguage)
+      if (!template) throw new Error('FINALIZED_CHARACTER_TEMPLATE_REQUIRED')
+      const cards = prepared.context.characters.map(character => ({ characterId: character.characterId,
+        name: character.displayNameSnapshot, aliases: character.aliases, fields: character.fields.map(field => ({ field: field.field, value: field.value, provenance: field.provenance })) }))
+      const base = new PostProcessPromptBuilder(template, writingLanguage)
+        .withChapterContent(prepared.context.content).withChapterNumber(chapterNumber).withExistingCardsJson(cards)
+      const contract = writingLanguage === 'en-US'
+        ? 'Return one JSON object: {"updates":[{"characterId":"exact frozen ID","currentState":{"location":"value"},"evidence":{"text":"exact source quote"}}]}. Copy a quote that occurs exactly once in the unmodified chapter; its offsets will be calculated. If you supply start/end, they must be exact JS UTF-16 offsets. Only supplied dynamic fields are proposed. Do not infer identity from a name. Unknown or ambiguous people use name without characterId and remain proposals. Do not return static character facts or author provenance.'
+        : '只返回一个 JSON 对象：{"updates":[{"characterId":"冻结名单中的精确ID","currentState":{"location":"状态值"},"evidence":{"text":"原文精确引用"}}]}。引用必须在未改写正文中仅出现一次，位置由程序精确计算；若提供 start/end，必须是准确的 JS UTF-16 位置。只提议明确返回的动态字段；不可凭名字推断身份。未知或歧义人物只返回 name、不填 characterId，保留为待确认提议。不得输出静态角色事实或作者来源。'
+      const builder = { build: () => base.build() + '\n\n' + contract, getSystemRole: () => base.getSystemRole() }
+      const receipt = await generation.characterStates(builder, callbacks, context, prepared)
+      if (receipt.proposalBatchId) context.data.characterProposalBatchId = receipt.proposalBatchId
+      callbacks.log(text(
+        '角色状态已按身份核验：更新 ' + receipt.applied + ' 个字段，待确认 ' + (receipt.candidates.length + receipt.unresolved.length) + ' 项。',
+        'Character identities verified: ' + receipt.applied + ' fields updated; ' + (receipt.candidates.length + receipt.unresolved.length) + ' items await confirmation.',
+      ))
+    },
+  })
 
   return steps
 }
@@ -587,10 +398,16 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
   }
 
   async execute(params: CommandExecuteParams): Promise<PostProcessStatus> {
-    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params))
+    const projectSession = requireWorkflowProjectSession(params.context)
+    const prepared = await ipc.invokeWithProjectSession(projectSession, 'finalized-character:read-context', { draftId: this.params.draftId })
+    return this.executeWithGenerationRuntime('structured', params, () => this.executeWithinGeneration(params, prepared.context), {
+      operation: 'finalized-chapter-notes', chapterNumber: this.params.chapterNumber, selectedDraftIds: [], selectedFinalizedDraftIds: [this.params.draftId],
+      promptKeys: ['generate_chapter_notes'], skillStages: ['review'], output: 'visible-text',
+      authorInputs: [{ id: 'finalized-character-context', text: JSON.stringify(prepared.context) }],
+    })
   }
 
-  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<PostProcessStatus> {
+  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams, identityContext: FinalizedCharacterContext): Promise<PostProcessStatus> {
     const projectSession = requireWorkflowProjectSession(context)
     const finalizedSource = await ipc.invokeWithProjectSession(
       projectSession,
@@ -612,7 +429,30 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
         'The finalized manuscript source receipt is stale, so post-processing was not started.',
       ))
     }
+    let pendingCharacterCommit: FinalizedCharacterGenerationCommit | undefined
     const generation: FinalizePostProcessGeneration = {
+      characterStates: async (builder, stepCallbacks, generationContext, prepared) => {
+        this.assertNotCancelled(generationContext)
+        if (pendingCharacterCommit) return ipc.invokeWithProjectSession(requireWorkflowProjectSession(generationContext), 'finalized-character:commit', pendingCharacterCommit)
+        await this.advanceMainGenerationRun({ operation: 'finalized-character-state', chapterNumber: prepared.context.source.chapterNumber,
+          selectedDraftIds: [], selectedFinalizedDraftIds: [prepared.context.source.draftId], finalizedCharacterContextId: prepared.contextId,
+          promptKeys: ['update_character_cards'], skillStages: ['review'], output: 'structured-data',
+          authorInputs: [{ id: 'finalized-character-context', text: JSON.stringify(prepared.context) }],
+        })
+        const completion = await this.callLLMResult(builder.build(), builder.getSystemRole(), { ...stepCallbacks, appendText: () => undefined },
+          { responseFormat: { type: 'json_object' }, purpose: 'post-process', reasoningStage: 'review' }, generationContext)
+        const artifact = completion.receipt.visibleArtifact
+        if (completion.finishReason !== 'stop' || !artifact || !generationContext.mainGenerationRunHandle) throw new Error('FINALIZED_CHARACTER_ARTIFACT_REQUIRED')
+        this.assertNotCancelled(generationContext)
+        // This check only decides whether a retry may reuse the artifact. Main
+        // independently re-parses the durable artifact and verifies all writes.
+        parseFinalizedCharacterStateResponse(completion.content, prepared.context)
+        pendingCharacterCommit = {
+          contextId: prepared.contextId, handle: generationContext.mainGenerationRunHandle,
+          artifact: { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash },
+        }
+        return ipc.invokeWithProjectSession(requireWorkflowProjectSession(generationContext), 'finalized-character:commit', pendingCharacterCommit)
+      },
       complete: async (builder, stepCallbacks, output, generationContext) => this.callLLM(
         builder.build(),
         builder.getSystemRole(),
@@ -638,6 +478,7 @@ export class RunFinalizePostProcessCommand extends BaseWorkflowCommand<PostProce
       workflowUiLocale(context),
       this.params.finalizedSource,
       frozen.projectionGeneration,
+      identityContext,
     )
     const steps = this.params.stepKey
       ? allSteps.filter(step => step.key === this.params.stepKey)

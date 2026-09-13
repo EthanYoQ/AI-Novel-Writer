@@ -2,6 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GenerationOwnerChannels, BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
+import type { FinalizedCharacterGenerationChannels } from '../../../src/shared/finalized-character-generation'
+import { FinalizationRepository } from '../../repositories/finalization-repository'
 import type { ModelProfile, ProjectSessionContext } from '../../../src/shared/ipc-channels'
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>
 const mocks = vi.hoisted(() => ({ handlers: new Map<string, Handler>(), globalRoot: '' }))
@@ -40,8 +42,9 @@ beforeEach(() => {
   sender.send.mockClear()
 })
 afterEach(() => { closeProjectDatabase(); projectAccess.invalidateCurrentSession(); vi.unstubAllGlobals(); vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }) })
-function invoke<C extends keyof GenerationOwnerChannels>(channel: C, ...args: GenerationOwnerChannels[C]['args']) {
-  return mocks.handlers.get(channel)!({ sender }, ...args, { ...session }) as Promise<GenerationOwnerChannels[C]['return']>
+type TestedChannels = GenerationOwnerChannels & FinalizedCharacterGenerationChannels
+function invoke<C extends keyof TestedChannels>(channel: C, ...args: TestedChannels[C]['args']) {
+  return mocks.handlers.get(channel)!({ sender }, ...args, { ...session }) as Promise<TestedChannels[C]['return']>
 }
 function stream(content = '中文候选') {
   const fetch = vi.fn(async () => ({ ok: true, body: new ReadableStream({ start(controller) {
@@ -52,6 +55,43 @@ function stream(content = '中文候选') {
   return fetch
 }
 describe('generation public IPC with actual project authority and SQLite', () => {
+  async function finalizedCharacterFixture() {
+    const body = '林岚来到北塔。', characterId = 'character-fixture'
+    getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'北塔'); INSERT INTO characters(character_id,name) VALUES('character-fixture','林岚'); INSERT INTO contents(id,body) VALUES(1,'旧稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
+    FinalizationRepository.commit({ finalizationId: 'ipc-finalized', draftId: 1, chapterNumber: 1, chapterTitle: '北塔',
+      content: body, contentHash: textHash(body), contentRevision: 1, targetFileName: '第一章.txt' })
+    const prepared = await invoke('finalized-character:read-context', { draftId: 1 })
+    const fetch = stream(JSON.stringify({ updates: [{ characterId, currentState: { location: '北塔' }, evidence: { start: 0, end: body.length, text: body } }] }))
+    const selection: BeginGenerationRequest = { ...request, operation: 'finalized-character-state', chapterNumber: 1, selectedFinalizedDraftIds: [1],
+      output: 'structured-data', finalizedCharacterContextId: prepared.contextId, authorInputs: [{ id: 'finalized-character-context', text: JSON.stringify(prepared.context) }] }
+    return { prepared, selection, fetch, characterId }
+  }
+  it('commits finalized character state through the registered context, generation and effect IPC', async () => {
+    const f = await finalizedCharacterFixture()
+    await expect(invoke('generation:begin', { ...f.selection, finalizedCharacterContextId: 'forged' })).rejects.toThrow('GENERATION_CHARACTER_CONTEXT_REQUIRED')
+    expect(f.fetch).not.toHaveBeenCalled()
+    const run = await invoke('generation:begin', f.selection)
+    const receipt = await invoke('generation:execute', { handle: run.handle, invocationNonce: 'extract', task: {
+      purpose: 'finalized-character-state', output: 'structured-data', messages: [{ role: 'user', content: '只用冻结正文提取状态。' }],
+    } })
+    const artifact = receipt.run.artifacts.at(-1)!
+    await expect(invoke('finalized-character:commit', { contextId: f.prepared.contextId, handle: run.handle,
+      artifact: { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash } })).resolves.toMatchObject({ applied: 1, unresolved: [] })
+    expect(getProjectDb()!.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe('北塔')
+    expect(f.fetch).toHaveBeenCalledTimes(1)
+  })
+  it('reports the registered field-conflict boundary and preserves the durable candidate', async () => {
+    const f = await finalizedCharacterFixture(), run = await invoke('generation:begin', f.selection)
+    const receipt = await invoke('generation:execute', { handle: run.handle, invocationNonce: 'extract', task: {
+      purpose: 'finalized-character-state', output: 'structured-data', messages: [{ role: 'user', content: '提取状态。' }],
+    } })
+    const artifact = receipt.run.artifacts.at(-1)!
+    getProjectDb()!.prepare('UPDATE characters SET cs_location=? WHERE character_id=?').run('作者确认的新地点', f.characterId)
+    await expect(invoke('finalized-character:commit', { contextId: f.prepared.contextId, handle: run.handle,
+      artifact: { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash } })).rejects.toThrow('FINALIZED_CHARACTER_FIELD_CONFLICT')
+    expect((await invoke('generation:read', run.handle)).candidates).toHaveLength(1)
+    expect(getProjectDb()!.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe('作者确认的新地点')
+  })
   const draftInputs = [{ id: 'draft:target-units', text: '10' }]
   async function prepareDraft() {
     getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'灯塔')")

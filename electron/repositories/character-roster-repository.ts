@@ -831,6 +831,12 @@ export function refreshCharacterIdentityProjection(db: BetterSqlite3.Database): 
   db.prepare("UPDATE project_core SET characters_arch=? WHERE id='main'").run(projection)
   db.prepare("UPDATE character_roster_meta SET revision=revision+1,migration_state='ready',projection_hash=?,fact_hash=?,updated_at=datetime('now') WHERE id='main'").run(hashText(projection), fullFactHash(entries))
 }
+/** Dynamic state refreshes invalidate readers without rewriting author/static compatibility prose. */
+export function refreshCharacterStateProjection(db: BetterSqlite3.Database): void {
+  if (!db.inTransaction || !hasCharacterIdentitySchema(db)) throw new Error('CHARACTER_ID_TRANSACTION_REQUIRED')
+  db.prepare("UPDATE character_roster_meta SET revision=revision+1,fact_hash=?,updated_at=datetime('now') WHERE id='main'")
+    .run(fullFactHash(identityProjectionEntries(db)))
+}
 function readSnapshot(db: BetterSqlite3.Database): CharacterRosterSnapshot {
   const meta = readMeta(db)
   const entries = hasCharacterIdentitySchema(db) ? identityProjectionEntries(db) : sortedEntries(CharacterRepository.getAll().map(entryFromCharacter))
@@ -1181,8 +1187,11 @@ export function commitCharacterIdentities(
     }
     for (const resolution of request.resolutions) {
       active(resolution.characterId)
-      const proposal = db.prepare('SELECT resolved_character_id,owner_character_id,raw_value FROM character_identity_proposals WHERE proposal_id=?').get(resolution.proposalId) as { resolved_character_id: string | null; owner_character_id: string | null; raw_value: string } | undefined
+      const proposal = db.prepare('SELECT resolved_character_id,owner_character_id,raw_value,source_key FROM character_identity_proposals WHERE proposal_id=?').get(resolution.proposalId) as { resolved_character_id: string | null; owner_character_id: string | null; raw_value: string; source_key: string } | undefined
       if (!proposal || proposal.resolved_character_id) throw new Error('CHARACTER_PROPOSAL_CONFLICT')
+      // Generic legacy resolution cannot mutate immutable finalization snapshots or versioned proposal envelopes.
+      if (!/^legacy:(?:characters:\d+:relationships:\d+|blueprints:\d+:characters:\d+)$/u.test(proposal.source_key))
+        throw new Error('CHARACTER_PROPOSAL_KIND_INVALID')
       db.prepare('UPDATE character_identity_proposals SET resolved_character_id=?,approval_id=? WHERE proposal_id=?').run(resolution.characterId, request.approval.operationId, resolution.proposalId)
       if (proposal.owner_character_id) {
         let parsed: unknown
