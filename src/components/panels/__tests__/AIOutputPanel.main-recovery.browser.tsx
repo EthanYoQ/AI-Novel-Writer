@@ -7,6 +7,7 @@ import { useWorkflowStore } from '../../../stores/workflow-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import type { MainGenerationRunHandle, MainGenerationRunView } from '../../../services/generation/generation-runtime'
 import { createDraftRecoveryWorkflow } from '../../../services/workflows/draft-recovery-workflow'
+import { createReviewRevisionRecoveryWorkflow } from '../../../services/workflows/review-revision-recovery-workflow'
 
 const projectState = useProjectStore.getState(), workflowState = useWorkflowStore.getState(), localeState = useLocaleStore.getState()
 const oldBridge = Object.getOwnPropertyDescriptor(window, 'aiNovelAPI')
@@ -19,6 +20,57 @@ afterEach(async () => {
   if (oldBridge) Object.defineProperty(window, 'aiNovelAPI', oldBridge)
   else Reflect.deleteProperty(window, 'aiNovelAPI')
   vi.restoreAllMocks()
+})
+
+it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)('中文面板沿明确的 %s 原任务恢复，源冲突只可复制，已保存结果可直接打开', async operation => {
+  const session = { projectId: '审修海港', leaseId: '新会话', projectPath: 'C:/合成审修海港' }
+  const handle: MainGenerationRunHandle = { projectId: session.projectId, epoch: '旧会话', rootActionId: '原审稿预算', runId: operation }
+  const content = '林岚到达海港，发现了留下的信。'
+  const source = { id: 3, chapterNumber: 2, version: 1, status: 'draft', content }
+  let sourceStatus = 'conflict', saved = false
+  const view = { handle, status: 'failed', nonReplayable: true,
+    budget: { maxAttempts: 32, maxRequestedOutputTokens: 2000000, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: 9999999999999 },
+    artifacts: [{ ...handle, artifactId: '已保存片段', attemptId: '原请求', text: content, textHash: 'a'.repeat(64), revision: 1, durableRevision: 1, status: 'completed' }],
+    ledger: { physicalRequests: 3 } }
+  const recovery = () => ({ handle, modelId: '原模型', contextId: '主进程上下文', sourceStatus,
+    context: { version: 1, operation, source, sourceHash: 'a'.repeat(64), config: { wordsPerChapter: 900 }, writingLanguage: 'zh-CN', uiLocale: 'zh-CN',
+      authorInputs: [], blueprints: [], history: [], frozenGoals: { chapterNumber: 2, coverage: 'unknown', items: [] }, preflightFindings: [], characterStates: '', worldbuilding: '' },
+    attemptedPurposes: [operation], ...(saved ? { saved: { success: true, kind: operation === 'review-chapter' ? 'review' : 'revision', id: 9, index: 1,
+      content, contentHash: 'a'.repeat(64), source, revisionStatus: 'merged' } } : {}) })
+  const invoke = vi.fn(async (channel: string) => {
+    if (channel === 'generation:list') return [view]
+    if (channel === 'generation:list-batches' || channel === 'db:recovery-candidate-list') return []
+    if (channel === 'generation:read-context') return { handle, operation }
+    if (channel === 'review-revision:read-recovery') return recovery()
+    throw new Error(`Unexpected action: ${channel}`)
+  })
+  Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: () => () => {} } })
+  const startWorkflow = vi.fn().mockResolvedValue('审修恢复工作流')
+  useProjectStore.setState({ currentProject: { id: session.projectId, path: session.projectPath, name: '审修海港', sessionLease: session.leaseId, novelConfig: {} } as never })
+  useWorkflowStore.setState({ activeRuns: [], history: [], currentRun: null, startWorkflow })
+  useLocaleStore.setState({ locale: 'zh-CN' })
+  container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container)
+  await act(async () => root!.render(<AIOutputPanel />))
+  await vi.waitFor(() => expect(container!.textContent).toContain('来源已变化；候选仍可复制'))
+  const recoverButton = () => [...container!.querySelectorAll('button')].find(item => item.textContent === '恢复此审修任务')!
+  expect(recoverButton().disabled).toBe(true)
+  expect(container.textContent).toContain(content)
+  expect(container.textContent).toContain('已用 3 次请求')
+  await expect(createReviewRevisionRecoveryWorkflow(session, handle)).rejects.toThrow('GENERATION_REVIEW_SOURCE_CHANGED')
+  sourceStatus = 'current'
+  await act(async () => root!.render(<AIOutputPanel key="刷新当前源" />))
+  await vi.waitFor(() => expect(recoverButton().disabled).toBe(false))
+  await act(async () => recoverButton().click())
+  await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
+  expect(startWorkflow.mock.calls[0][0]).toMatchObject({ generationModelId: '原模型', projectSession: session, resourceKeys: ['chapter:2'] })
+  expect(invoke.mock.calls.some(([channel]) => ['generation:begin', 'generation:resume', 'generation:execute', 'db:revision-replace-pending'].includes(channel))).toBe(false)
+  saved = true; sourceStatus = 'conflict'
+  await act(async () => root!.render(<AIOutputPanel key="保存回执" />))
+  await vi.waitFor(() => expect(container!.textContent).toContain('打开已保存结果'))
+  const open = [...container.querySelectorAll('button')].find(item => item.textContent === '打开已保存结果')!
+  expect(open.disabled).toBe(false)
+  await act(async () => open.click())
+  await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledTimes(2))
 })
 
 it.each(['completed', 'failed'] as const)('中文恢复面板按明确组合资格恢复 %s 片段，不猜最新候选', async (status) => {

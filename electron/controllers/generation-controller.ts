@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3'
 import type { GenerationOwnerChannels } from '../../src/shared/generation-owner-contract'
 import type { CharacterProposalChannels } from '../../src/shared/character-proposal'
 import type { FinalizedCharacterGenerationChannels } from '../../src/shared/finalized-character-generation'
+import type { ReviewRevisionGenerationInvokeChannels } from '../../src/shared/review-revision-generation'
 import { generationOutputContract } from '../../src/shared/generation-owner-contract'
 import type { ModelProfile, ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
@@ -24,7 +25,7 @@ import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { getEmbeddingConfig } from './kb-controller'
 
 type Owner = ReturnType<typeof createMainGenerationOwner>
-type OwnerChannels = GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels
+type OwnerChannels = GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels
 const owners = new Map<Database.Database, { owner: Owner; session: ProjectSessionContext; subscribers: Set<WebContents> }>()
 const ownerSessions = new WeakMap<Owner, ProjectSessionContext>()
 /** Called synchronously inside the same SQLite transaction as the formal effect. */
@@ -134,6 +135,10 @@ export function registerGenerationController(options: {
   register('character-identity:read', 0, owner => owner.characterProposals.identitySnapshot())
   register('finalized-character:read-context', 1, (owner, request) => owner.readFinalizedCharacterContext(request.draftId))
   register('finalized-character:commit', 1, (owner, request) => owner.commitFinalizedCharacterStates(request))
+  register('review-revision:prepare', 1, (owner, request) => owner.prepareReviewRevision(request))
+  register('review-revision:commit-review', 1, (owner, request) => owner.commitReview(request))
+  register('review-revision:commit-revision', 1, (owner, request) => owner.commitRevision(request))
+  register('review-revision:read-recovery', 1, (owner, request) => owner.readReviewRevisionRecovery(request.handle))
   register('generation:execute', 1, async (owner, request) => {
     const context = owner.readContext(request.handle)
     // Release the short KB guard after dispatch starts; author edits during generation remain possible.

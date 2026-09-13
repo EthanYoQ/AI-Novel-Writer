@@ -121,6 +121,7 @@ export interface BeginGenerationRequest {
   preparationId?: string
   /** Main-issued context for identity-bound extraction from immutable finalized prose. */
   finalizedCharacterContextId?: string
+  reviewRevisionContextId?: string
 }
 export interface ExecuteGenerationRequest {
   handle: MainGenerationRunHandle

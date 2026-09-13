@@ -127,8 +127,7 @@ function rowToData(row: ProjectCoreRow): ProjectCoreData {
 
 export class ProjectCoreRepository {
     /** 获取项目配置（不存在则返回 null） */
-    static get(): ProjectCoreData | null {
-        const db = getProjectDb()
+    static get(db = getProjectDb()): ProjectCoreData | null {
         if (!db) return null
 
         const row = db.prepare(

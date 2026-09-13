@@ -22,10 +22,12 @@
 | S06A 结构化入口 | `s06a-integration-evidence.md`、`s06a-consumer-coverage.md` | 实际主进程来源/正式提交保护、目录同预算恢复、独立审查；保留 S06D/S09 未覆盖项 |
 | S06B / S09A | `s06b-s09a-integration-evidence.md`、`s06b-consumer-coverage.md`、`s09a-planning-consumer-evidence.json`、`s09a-import-consumer-evidence.json` | 正文准备和恢复、实际知识源与明确角色提案；3 场景 Electron 公开 IPC 验收，0 真实模型调用 |
 | S09B | `s09b-identity-continuity-evidence.md` | 定稿冻结身份、状态按字段保护、实际生成结果凭据、同名导入提案；交叉复审记录和资格边界见专属材料 |
+| S06C | `s06c-review-revision-evidence.md` | 审修同 root、实际源冻结、原结果恢复与保存凭据封存；SQLite/注册 IPC/Chromium 分层验证，0 真实模型调用 |
+| S09B 已发布 CI | [运行 34731373622](https://github.com/EthanYoQ/AI-Novel-Writer/actions/runs/34731373622) | `55cc523` 失败：3345 项通过、1 项旧同名导入断言失败、向量测试未完成；断言已本地适配，native 根因未明 |
 | G01 原问题台账 | `g01-issue-ledger.md` | 10 项正文/评论与相关 PR/Release fresh-read；逐症状验收 owner；没有当前可关闭结论 |
 
 私有文件均位于本任务 `.runtime/.cache/novel-quality-modernization/`，不进入提交。绝对执行路径、依赖和产物哈希供本机重跑使用，公开材料只包含非秘密字段和合成作品。
 
-S00 时点已运行当前与冻结基线的类型检查及中文计数 7/7、恢复/正文三文件回归 141/141、基线三条 command probe 3/3。后续实际运行记录在各片证据文件中；最新调度规则见 `environment-profile.md`，子代理最低 Terra/Xhigh。真实候选两臂、真实模型、Writer 153 动作、中文 IME、归档/WebDAV、升级、安装及 Release 资格仍未通过；历史本地或 CI 成功不能代替这些产品门槛。
+S00 时点已运行当前与冻结基线的类型检查及中文计数 7/7、恢复/正文三文件回归 141/141、基线三条 command probe 3/3。后续实际运行记录在各片证据文件中；最新调度组合见 `environment-profile.md`，由主集成者按任务复杂度选择。真实候选两臂、真实模型、Writer 153 动作、中文 IME、归档/WebDAV、升级、安装及 Release 资格仍未通过；历史本地或 CI 成功不能代替这些产品门槛。
 
 提交前验证 115 份冻结规划材料的 Git blob 与原字节一致。完整 `git diff --cached --check` 会指出原冻结文档已有的 Markdown 行尾双空格/EOF 空行；按用户要求保留受审字节，未改正文或屏蔽全局格式检查。排除三个冻结目录后，所有本次实施路径的同项检查退出 0。

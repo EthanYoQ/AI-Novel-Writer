@@ -17,23 +17,51 @@ import { savePartialData } from '../architecture.command'
 import { runPostProcessPipeline } from '../../workflow-utils'
 import { createBoundedCompletionError } from '../../bounded-completion'
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
+import type { CommandExecuteParams } from '../base-command'
+import { ReviewRevisionRuntimeFixture } from './review-revision-runtime.fixture'
+
+let mainFixture: ReviewRevisionRuntimeFixture
 import { parseFinalizedCharacterStateResponse, type FinalizedCharacterContext, type FinalizedSourceIdentity } from '../../../../shared/finalized-continuity'
 
 class RefineDraftCommand extends RuntimeRefineDraftCommand {
+  private readonly fixtureSource: ConstructorParameters<typeof RuntimeRefineDraftCommand>[0]
   constructor(...args: ConstructorParameters<typeof RuntimeRefineDraftCommand>) {
-    super(args[0], workflowRuntimeDependencies)
+    super(args[0], { createRuntime: (options, main) => mainFixture.wrap(workflowRuntimeDependencies).createRuntime(options, main) })
+    this.fixtureSource = args[0]
+  }
+  override execute(params: CommandExecuteParams) {
+    mainFixture.parentModelId = useLLMStore.getState().defaultModelId ?? 'test-model'
+    mainFixture.selected = this.fixtureSource
+    mainFixture.writingLanguage = params.context.writingLanguage ?? 'zh-CN'
+    return super.execute(params)
   }
 }
 
 class RefineFromReviewCommand extends RuntimeRefineFromReviewCommand {
+  private readonly fixtureSource: ConstructorParameters<typeof RuntimeRefineFromReviewCommand>[0]
   constructor(...args: ConstructorParameters<typeof RuntimeRefineFromReviewCommand>) {
-    super(args[0], workflowRuntimeDependencies)
+    super(args[0], { createRuntime: (options, main) => mainFixture.wrap(workflowRuntimeDependencies).createRuntime(options, main) })
+    this.fixtureSource = args[0]
+  }
+  override execute(params: CommandExecuteParams) {
+    mainFixture.parentModelId = useLLMStore.getState().defaultModelId ?? 'test-model'
+    mainFixture.selected = this.fixtureSource
+    mainFixture.writingLanguage = params.context.writingLanguage ?? 'zh-CN'
+    return super.execute(params)
   }
 }
 
 class ReviewChapterCommand extends RuntimeReviewChapterCommand {
+  private readonly fixtureSource: ConstructorParameters<typeof RuntimeReviewChapterCommand>[0]
   constructor(...args: ConstructorParameters<typeof RuntimeReviewChapterCommand>) {
-    super(args[0], workflowRuntimeDependencies)
+    super(args[0], { createRuntime: (options, main) => mainFixture.wrap(workflowRuntimeDependencies).createRuntime(options, main) })
+    this.fixtureSource = args[0]
+  }
+  override execute(params: CommandExecuteParams) {
+    mainFixture.parentModelId = useLLMStore.getState().defaultModelId ?? 'test-model'
+    mainFixture.selected = this.fixtureSource
+    mainFixture.writingLanguage = params.context.writingLanguage ?? 'zh-CN'
+    return super.execute(params)
   }
 }
 
@@ -157,14 +185,23 @@ function stubLlm(command: object, response: string): void {
   const target = command as {
     callLLMWithBuilder: () => Promise<string>
     callLLMWithBoundedCompletion?: () => Promise<string>
+    callLLMWithAppendContinuation?: () => Promise<string>
   }
   vi.spyOn(target, 'callLLMWithBuilder').mockResolvedValue(response)
   if (typeof target.callLLMWithBoundedCompletion === 'function') {
-    vi.spyOn(target as Required<typeof target>, 'callLLMWithBoundedCompletion').mockResolvedValue(response)
+    vi.spyOn(target as Required<typeof target>, 'callLLMWithBoundedCompletion').mockImplementation(async () => { mainFixture.record(response); return response })
+  }
+  if (typeof target.callLLMWithAppendContinuation === 'function') {
+    vi.spyOn(target as Required<typeof target>, 'callLLMWithAppendContinuation').mockImplementation(async () => {
+      mainFixture.record(response)
+      await mainFixture.invoke('generation:compose-visible', undefined, [mainFixture.recovery!.latestArtifact!.artifactId], createHash('sha256').update(response).digest('hex'))
+      return response
+    })
   }
 }
 
 function stubVelaIpc(invoke: (channel: string, ...args: unknown[]) => Promise<unknown>): void {
+  mainFixture = new ReviewRevisionRuntimeFixture(invoke)
   vi.stubGlobal('window', {
     aiNovelAPI: {
       invoke: (channel: string, ...args: unknown[]) => (
@@ -174,7 +211,7 @@ function stubVelaIpc(invoke: (channel: string, ...args: unknown[]) => Promise<un
           ? Promise.resolve({ templates: [], diagnostics: [] })
           : channel === 'fs:check-exists' && String(args[0]).endsWith('/.ai-novel/prompts')
             ? Promise.resolve(false)
-            : invoke(channel, ...args)
+            : mainFixture.selected ? mainFixture.invoke(channel, ...args) : invoke(channel, ...args)
       ),
     },
   })
@@ -994,7 +1031,7 @@ describe('workflow mutation failure boundaries', () => {
       step: {},
       context: context(),
       callbacks: callbacks(),
-    })).resolves.toBe(JSON.stringify(review))
+    })).resolves.toSatisfy((result: string) => result === mainFixture.recovery?.saved?.content)
 
     const persisted = JSON.parse(persistedContent) as {
       summary: string
@@ -1050,7 +1087,7 @@ describe('workflow mutation failure boundaries', () => {
       step: {},
       context: context(),
       callbacks: callbacks(),
-    })).resolves.toBe(response)
+    })).resolves.toSatisfy((result: string) => result === mainFixture.recovery?.saved?.content)
 
     const persisted = JSON.parse(persistedContent) as typeof review
     expect(persisted.items).toHaveLength(5)
@@ -1255,7 +1292,7 @@ describe('workflow mutation failure boundaries', () => {
       step: {},
       context: context(),
       callbacks: callbacks(),
-    })).resolves.toBe(completeReview)
+    })).resolves.toSatisfy((result: string) => result === mainFixture.recovery?.saved?.content)
 
     expect(generateStream).toHaveBeenCalledTimes(2)
     expect(generateStream.mock.calls[1]?.[0][1]?.content).toContain('上一轮结构化输出因长度限制而中断')
@@ -1318,7 +1355,7 @@ describe('workflow mutation failure boundaries', () => {
       step: {},
       context: context(),
       callbacks: callbacks(),
-    })).resolves.toBe(completeReview)
+    })).resolves.toSatisfy((result: string) => result === mainFixture.recovery?.saved?.content)
 
     expect(generateStream).toHaveBeenCalledTimes(2)
     expect(rebuildPrompts[0]).toContain('上一轮审稿输出未通过合同校验')

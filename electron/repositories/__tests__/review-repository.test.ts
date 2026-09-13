@@ -131,3 +131,20 @@ describe('ReviewRepository.create', () => {
     })
   })
 })
+
+ it('显式连接的内容读写不落入另一全局 SQLite 库', () => {
+    const wrong = new Database(db.serialize())
+    try {
+      wrong.prepare('INSERT INTO contents(body) VALUES (?)').run('错误全局库同 ID 正文')
+      const before = wrong.serialize()
+      vi.mocked(getProjectDb).mockReturnValue(wrong)
+      const result = ReviewRepository.create({ baseDraftId: 1, content: '指定库审稿',
+        expectedSource: { id: 1, chapterNumber: 1, version: 1, status: 'draft', content: '原稿' } }, db)
+      expect(ReviewRepository.getFull(result.id, db)?.content).toBe('指定库审稿')
+      expect(wrong.prepare('SELECT COUNT(*) AS count FROM reviews').get()).toEqual({ count: 0 })
+      expect(wrong.serialize()).toEqual(before)
+    } finally {
+      vi.mocked(getProjectDb).mockReturnValue(db)
+      wrong.close()
+    }
+  })

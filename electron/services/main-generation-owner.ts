@@ -22,6 +22,8 @@ import type { GenerationKnowledgeSnapshot } from '../../src/shared/generation-kn
 import type { PrepareDraftContextRequest, PreparedDraftContext } from '../../src/shared/generation-owner-contract'
 import { FinalizedCharacterGeneration } from './finalized-character-generation'
 import type { FinalizedCharacterGenerationCommit } from '../../src/shared/finalized-character-generation'
+import type { ReviewRevisionContext, PrepareReviewRevisionRequest, ReviewGenerationCommitRequest, RevisionGenerationCommitRequest } from '../../src/shared/review-revision-generation'
+import { ReviewRevisionGeneration } from './review-revision-generation'
 
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>
 export function safeGenerationModelReceipt(receipt: ModelExecutionLeaseReceipt): SafeGenerationModelReceipt {
@@ -35,7 +37,7 @@ export interface MainGenerationOwnerDependencies {
   assertCurrent: () => void
   leases: ModelExecutionLeaseRegistry
   loadModel: (id: string) => ModelProfile | null
-  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string }, model: SafeGenerationModelReceipt) => RunBinding
+  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string; reviewRevisionContext?: ReviewRevisionContext }, model: SafeGenerationModelReceipt) => RunBinding
   rebuildBinding: (previous: RunBinding, model: SafeGenerationModelReceipt) => RunBinding
   beforeDispatch?: () => void
   onSnapshot?: (snapshot: MainGenerationSnapshot) => void
@@ -81,6 +83,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return value
   }
   const finalizedCharacters = new FinalizedCharacterGeneration(deps.database, repository, { projectId: deps.projectId, epoch: deps.epoch }, assertCurrent)
+  const reviewRevisions = new ReviewRevisionGeneration(deps.database, repository, { projectId: deps.projectId, epoch: deps.epoch }, assertCurrent)
   const handleOf = (run: DurableGenerationRun): MainGenerationRunHandle => ({ projectId: run.binding.projectId,
     epoch: run.binding.epoch, rootActionId: run.rootActionId, runId: run.runId })
   const requireRun = (handle: MainGenerationRunHandle, execution = false) => {
@@ -193,9 +196,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       || !Array.isArray(selection.promptKeys) || selection.promptKeys.length === 0
       || Object.hasOwn(selection, 'parentRootActionId') && (typeof selection.parentRootActionId !== 'string' || !selection.parentRootActionId.trim())
       || typeof selection.uiActionNonce !== 'string' || !selection.uiActionNonce.trim() || selection.uiActionNonce.length > 256
-      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId', 'finalizedCharacterContextId'].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
+      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId', 'finalizedCharacterContextId', 'reviewRevisionContextId'].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
     generationOutputContract(selection)
     const finalizedCharacterContextHash = finalizedCharacters.admit(selection)
+    const reviewRevision = reviewRevisions.admit(selection)
     if (selection.batchIntent && !batchInitialization) throw new Error('GENERATION_BATCH_INTENT_MAIN_ONLY')
     const batch = selection.batchId ? draftEffects.readBatch(selection.batchId, deps.projectId) : undefined
     if (batch) {
@@ -231,11 +235,13 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const prepared = selection.preparationId ? preparations.get(selection.preparationId) : undefined
       if (selection.preparationId && (!prepared || selection.operation !== 'chapter-draft')) throw new Error('GENERATION_DRAFT_PREPARATION_REQUIRED')
       const binding = deps.buildBinding({ ...selection, ...(prepared ? { knowledgeSnapshot: prepared.knowledgeSnapshot } : {}),
-        ...(finalizedCharacterContextHash ? { finalizedCharacterContextHash } : {}) }, safeGenerationModelReceipt(lease))
+        ...(finalizedCharacterContextHash ? { finalizedCharacterContextHash } : {}),
+        ...(reviewRevision ? { reviewRevisionContext: reviewRevision.context } : {}) }, safeGenerationModelReceipt(lease))
       if (prepared && !preparationMatches(prepared.binding, binding)) throw new Error('GENERATION_DRAFT_PREPARATION_CHANGED')
       if (binding.projectId !== deps.projectId || binding.epoch !== deps.epoch) throw new Error('GENERATION_BINDING_INVALID')
       const run = deps.database.transaction(() => {
       if (batch) repository.activateRootForCommittedStage(batch.rootHandle.rootActionId, binding)
+      if (reviewRevision?.parentRootActionId) repository.activateRootForCommittedStage(reviewRevision.parentRootActionId, binding)
       if (continuation && !continuation.continuationHandle) repository.activateRootForCommittedStage(continuation.sourceHandle.rootActionId, binding)
       const next = service.open({ ...binding, operation: selection.operation, uiActionNonce: selection.uiActionNonce,
         frozenInputHash: textHash(JSON.stringify([binding.fingerprint, binding.contextSnapshotId, selection.output])),
@@ -288,6 +294,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     }
     const existing = repository.findInvocation(run.runId, request.invocationNonce, requestHash)
     if (existing && existing.attempt.status !== 'dispatch-marked' && existing.attempt.status !== 'reserved') return outcomeOf(volatileReceipts.get(existing.attempt.attemptId) ?? existing, task)
+    reviewRevisions.assertMutable(run.runId)
     const operation = (async () => {
     const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
     if (!isDeepStrictEqual(current, run.binding)) throw new Error('GENERATION_SOURCE_CHANGED')
@@ -380,6 +387,12 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     characterProposals: characters,
     readFinalizedCharacterContext: (draftId: number) => finalizedCharacters.readContext(draftId),
     commitFinalizedCharacterStates: (request: FinalizedCharacterGenerationCommit) => finalizedCharacters.commit(request, characters, assertSourcesCurrent),
+    prepareReviewRevision: (request: PrepareReviewRevisionRequest) => reviewRevisions.prepare(request),
+    commitReview: (request: ReviewGenerationCommitRequest) => reviewRevisions.commitReview(request, assertSourcesCurrent),
+    commitRevision: (request: RevisionGenerationCommitRequest) => reviewRevisions.commitRevision(request, assertSourcesCurrent),
+    readReviewRevisionRecovery: (handle: MainGenerationRunHandle) => reviewRevisions.readRecovery(handle,
+      run => compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))),
+      run => viewOf(run).candidates?.at(-1)),
     readContext, readBatch, prepareDraftContext, preparedKnowledge, draftPreparationBinding,
     beginBatch: (request: BeginGenerationBatchRequest) => {
       assertGenerationBatchIntent(request)
@@ -412,6 +425,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       return progress
     },
     composeVisible: (handle: MainGenerationRunHandle, artifactIds: string[], expectedTextHash: string, algorithm?: VisibleCompositionAlgorithm) => {
+      reviewRevisions.assertMutable(requireRun(handle).runId)
       assertSourcesCurrent(handle)
       if (algorithm === 'draft-visible-v1' && requireRun(handle).binding.sourceManifest.operation !== 'chapter-draft') throw new Error('GENERATION_COMPOSITION_ALGORITHM_INVALID')
       return repository.composeVisible(handle.runId, artifactIds, expectedTextHash, algorithm)
@@ -432,6 +446,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     },
     discardCandidate: (handle: MainGenerationRunHandle, artifactId: string) => {
       const run = requireRun(handle)
+      reviewRevisions.assertMutable(run.runId)
       const artifact = viewOf(run).candidates?.find(item => item.artifactId === artifactId)
       if (!artifact || artifact.status === 'running') throw new Error('GENERATION_CANDIDATE_NOT_DISCARDABLE')
       service.discardCandidate(artifactId)
@@ -441,6 +456,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     suspendForProjectClose: () => {
       preparations.clear()
       finalizedCharacters.close()
+      reviewRevisions.close()
       if (closed) return
       service.suspendForProjectClose()
       closed = true

@@ -898,7 +898,7 @@ describe('M02 text-import proposal receipts', () => {
       expect(context.data.importGlobalInferenceCandidate).toBe(JSON.stringify(validInference()))
     },
   )
-  it('retains a same-name raw candidate and rejects it without merging or writing formal facts', async () => {
+  it('retains same-name candidates separately in the pending proposal receipt without approving character facts', async () => {
     const invoke = arrange(), context = createContext(), ambiguous = validInference()
     ambiguous.characterCards[1].name = ambiguous.characterCards[0].name
     ambiguous.characterCards[1].notes = '不同来源的独立事实'
@@ -906,8 +906,20 @@ describe('M02 text-import proposal receipts', () => {
     useLLMStore.setState({ generateStream: vi.fn(async (_messages, streamCallbacks) => {
       streamCallbacks.onDone?.(raw, undefined, 'stop'); return 'ambiguous-candidate'
     }) })
-    await expect(new InferGlobalSettingsCommand().execute({ step: {}, context, callbacks })).rejects.toThrow('duplicate_item')
+    await expect(new InferGlobalSettingsCommand().execute({ step: {}, context, callbacks })).resolves.toBeUndefined()
     expect(context.data.importGlobalInferenceCandidate).toBe(raw)
-    expect(invoke.mock.calls.some(([channel]) => channel === 'db:import-global-facts-commit')).toBe(false)
+    const commits = invoke.mock.calls.filter(([channel]) => channel === 'db:import-global-facts-commit')
+    expect(commits).toHaveLength(1)
+    const request = commits[0][1] as import('../../../../shared/import-global-facts').ImportGlobalFactsRequest
+    expect(request.characterEntries).toEqual(ambiguous.characterCards.map(card => ({ ...card, age: String(card.age) })))
+    expect(request.characterEntries).toHaveLength(3)
+    expect(request.characterEntries.filter(entry => entry.name === ambiguous.characterCards[0].name)).toHaveLength(2)
+    expect(request.characterEntries[0].notes).not.toBe(request.characterEntries[1].notes)
+    // This checks the renderer's synthetic IPC receipt, not SQLite persistence.
+    expect(context.data.importGlobalFactsReceipt).toEqual(proposalReceipt(request))
+    expect(context.data.importGlobalFactsReceipt).not.toHaveProperty('roster')
+    expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith(expect.stringContaining('3 条角色提议已原子保存'))
+    expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith(expect.stringContaining('提议保留待采用，尚未创建角色'))
+    expect(invoke.mock.calls.some(([channel]) => channel === 'character-proposal:approve' || channel === 'db:character-roster-commit')).toBe(false)
   })
 })

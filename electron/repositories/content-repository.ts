@@ -8,8 +8,7 @@ import { getProjectDb } from '../database'
 
 export class ContentRepository {
     /** 创建一条内容记录，返回自增 ID */
-    static create(body: string): number {
-        const db = getProjectDb()
+    static create(body: string, db = getProjectDb()): number {
         if (!db) throw new Error('[ContentRepository] 数据库未连接')
 
         const result = db.prepare(`
@@ -20,8 +19,7 @@ export class ContentRepository {
     }
 
     /** 按 ID 读取正文 */
-    static getBody(id: number): string | null {
-        const db = getProjectDb()
+    static getBody(id: number, db = getProjectDb()): string | null {
         if (!db) return null
 
         const row = db.prepare(`

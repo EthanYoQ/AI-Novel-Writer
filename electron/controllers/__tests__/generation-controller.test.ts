@@ -3,6 +3,10 @@ import path from 'node:path'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GenerationOwnerChannels, BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
 import type { FinalizedCharacterGenerationChannels } from '../../../src/shared/finalized-character-generation'
+import type { ReviewRevisionGenerationInvokeChannels, ReviewRevisionOperation } from '../../../src/shared/review-revision-generation'
+import { createHumanConfirmedReviewSnapshot, serializeHumanConfirmedReviewSnapshot } from '../../../src/shared/human-confirmed-review'
+import { ipc } from '../../../src/services/ipc-client'
+import { ReviewRepository } from '../../repositories/review-repository'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
 import type { ModelProfile, ProjectSessionContext } from '../../../src/shared/ipc-channels'
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>
@@ -42,7 +46,7 @@ beforeEach(() => {
   sender.send.mockClear()
 })
 afterEach(() => { closeProjectDatabase(); projectAccess.invalidateCurrentSession(); vi.unstubAllGlobals(); vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }) })
-type TestedChannels = GenerationOwnerChannels & FinalizedCharacterGenerationChannels
+type TestedChannels = GenerationOwnerChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels
 function invoke<C extends keyof TestedChannels>(channel: C, ...args: TestedChannels[C]['args']) {
   return mocks.handlers.get(channel)!({ sender }, ...args, { ...session }) as Promise<TestedChannels[C]['return']>
 }
@@ -55,6 +59,59 @@ function stream(content = '中文候选') {
   return fetch
 }
 describe('generation public IPC with actual project authority and SQLite', () => {
+  it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)('routes %s through the renderer client, registered IPC, owner and actual formal repository', async operation => {
+    const body = '林岚到达海港，发现了留下的信。'
+    getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'海港'); INSERT INTO contents(id,body) VALUES(1,''); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,18)")
+    getProjectDb()!.prepare('UPDATE contents SET body=? WHERE id=1').run(body)
+    vi.stubGlobal('window', { aiNovelAPI: { invoke: (channel: string, ...args: unknown[]) => mocks.handlers.get(channel)!({ sender }, ...args) } })
+    const source = { id: 1, chapterNumber: 1, version: 1, status: 'draft' as const, content: body }
+    const prepare = (op: ReviewRevisionOperation, confirmation?: { reviewSourceId: number; confirmedReviewContent: string }) => ipc.invokeWithProjectSession(session, 'review-revision:prepare', {
+      operation: op, draftId: 1, expectedDraft: { chapterNumber: 1, version: 1, status: 'draft', contentHash: textHash(body) },
+      authorInputs: [], uiLocale: 'zh-CN', ...confirmation,
+    })
+    const report = JSON.stringify({ summary: '保持正文来源', items: [{ category: '连贯性', severity: 'pass', description: '正文与计划相符。' }] })
+    const runStage = async (op: ReviewRevisionOperation, prepared: Awaited<ReturnType<typeof prepare>>) => {
+      stream(op === 'review-chapter' ? report : body)
+      const run = await ipc.invokeWithProjectSession(session, 'generation:begin', { operation: op, uiActionNonce: `明确作者动作:${op}`,
+        modelId: prepared.modelId ?? model.id, chapterNumber: 1, selectedDraftIds: [1], selectedFinalizedDraftIds: [],
+        promptKeys: [op === 'review-chapter' ? 'consistency_check' : op === 'refine-draft' ? 'refine_chapter' : 'refine_from_review'],
+        skillStages: [op === 'review-chapter' ? 'review' : 'refinement'], output: op === 'review-chapter' ? 'structured-data' : 'visible-text',
+        reviewRevisionContextId: prepared.contextId, authorInputs: [{ id: 'review-revision-context', text: JSON.stringify(prepared.context) }],
+        ...(prepared.parentRootActionId ? { parentRootActionId: prepared.parentRootActionId } : {}) })
+      const result = await ipc.invokeWithProjectSession(session, 'generation:execute', { handle: run.handle, invocationNonce: `实际请求:${op}`, task: {
+        purpose: op, output: op === 'review-chapter' ? 'structured-data' : 'visible-text', messages: [{ role: 'user', content: '仅处理原稿与作者确认意见。' }],
+      } })
+      return { run, artifact: result.run.artifacts.at(-1)! }
+    }
+    let confirmation: { reviewSourceId: number; confirmedReviewContent: string } | undefined, originalRoot: string | undefined
+    if (operation === 'refine-from-review') {
+      const prepared = await prepare('review-chapter'), { run, artifact } = await runStage('review-chapter', prepared)
+      const saved = await ipc.invokeWithProjectSession(session, 'review-revision:commit-review', { contextId: prepared.contextId, handle: run.handle,
+        artifact: { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash } })
+      const snapshot = createHumanConfirmedReviewSnapshot({ sourceReviewId: saved.id, sourceDraft: source, summary: '', authorGuidance: '保留叙述视角',
+        items: [{ category: '连贯性', severity: 'warning', description: '检查信件内容', quote: '留下的信', decision: 'apply', origin: 'author' }] })!
+      const content = serializeHumanConfirmedReviewSnapshot(snapshot)
+      const row = ReviewRepository.create({ baseDraftId: 1, content, expectedSource: source }, getProjectDb())
+      confirmation = { reviewSourceId: row.id, confirmedReviewContent: content }; originalRoot = run.handle.rootActionId
+    }
+    const prepared = await prepare(operation, confirmation), { run, artifact } = await runStage(operation, prepared)
+    if (originalRoot) expect(run.handle.rootActionId).toBe(originalRoot)
+    const reference = { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash }
+    if (operation !== 'review-chapter') await ipc.invokeWithProjectSession(session, 'generation:compose-visible', run.handle, [artifact.artifactId], artifact.textHash)
+    const save = () => operation === 'review-chapter'
+      ? ipc.invokeWithProjectSession(session, 'review-revision:commit-review', { contextId: prepared.contextId, handle: run.handle, artifact: reference })
+      : ipc.invokeWithProjectSession(session, 'review-revision:commit-revision', { contextId: prepared.contextId, handle: run.handle, expectedCompositionHash: artifact.textHash })
+    const receipt = await save()
+    const table = operation === 'review-chapter' ? 'reviews' : 'revisions'
+    expect(receipt).toMatchObject({ success: true, kind: operation === 'review-chapter' ? 'review' : 'revision', source })
+    expect(getProjectDb()!.prepare(`SELECT COUNT(*) FROM ${table}`).pluck().get()).toBe(1)
+    expect(getProjectDb()!.prepare('SELECT body FROM contents WHERE id=1').pluck().get()).toBe(body)
+    getProjectDb()!.prepare('UPDATE contents SET body=? WHERE id=1').run('作者后来修改源稿')
+    expect(await save()).toEqual(receipt)
+    const recovered = await ipc.invokeWithProjectSession(session, 'review-revision:read-recovery', { handle: run.handle })
+    expect(recovered).toMatchObject({ sourceStatus: 'conflict', saved: receipt })
+    expect((await invoke('generation:read', run.handle)).ledger?.physicalRequests).toBe(originalRoot ? 2 : 1)
+  })
   async function finalizedCharacterFixture() {
     const body = '林岚来到北塔。', characterId = 'character-fixture'
     getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'北塔'); INSERT INTO characters(character_id,name) VALUES('character-fixture','林岚'); INSERT INTO contents(id,body) VALUES(1,'旧稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")

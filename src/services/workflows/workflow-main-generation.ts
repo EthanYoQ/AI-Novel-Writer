@@ -11,6 +11,8 @@ export interface WorkflowMainGenerationSelection extends Omit<BeginGenerationReq
   selectedFinalizedDraftIds?: number[]
   /** Exact persisted navigation identity. Never infer a recovery run from recency. */
   resumeHandle?: MainGenerationRunHandle
+  /** Main-issued lineage of the original review; admission verifies its durable effect. */
+  parentRootActionId?: string
   /** Persist navigation metadata before the first physical request. */
   onRunOpened?: (handle: MainGenerationRunHandle) => Promise<void>
 }
@@ -62,6 +64,8 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
       view = stored.nonReplayable ? await transport.resume(projectSession, resumeHandle) : stored
     } else {
       const parent = intent.continueDirectoryOperationId ? undefined : context.mainGenerationRootHandle
+      if (intent.parentRootActionId && parent && intent.parentRootActionId !== parent.rootActionId)
+        throw new Error('GENERATION_WORKFLOW_ROOT_CHANGED')
       if (parent && (parent.projectId !== projectSession.projectId || !intent.batchId && parent.epoch !== projectSession.leaseId))
         throw new Error('GENERATION_WORKFLOW_RESUME_REQUIRED')
       view = await transport.begin(projectSession, { ...intent, selectedDraftIds: intent.selectedDraftIds ?? [],

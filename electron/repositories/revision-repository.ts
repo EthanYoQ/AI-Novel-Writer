@@ -144,8 +144,7 @@ export class RevisionRepository {
         content: string
         wordCount: number
         expectedSource?: ExpectedDraftSource
-    }): { id: number; revisionIndex: number } {
-        const db = getProjectDb()
+    }, db = getProjectDb()): { id: number; revisionIndex: number } {
         if (!db) throw new Error('[RevisionRepository] 数据库未连接')
 
         return db.transaction(() => {
@@ -155,7 +154,7 @@ export class RevisionRepository {
         SELECT MAX(revision_index) as maxIdx FROM revisions WHERE base_draft_id = ?
       `).get(params.baseDraftId) as { maxIdx: number | null }
             const revisionIndex = (row.maxIdx ?? 0) + 1
-            const contentId = ContentRepository.create(params.content)
+            const contentId = ContentRepository.create(params.content, db)
             const result = db.prepare(`
         INSERT INTO revisions (
           base_draft_id, revision_index, revision_type,
@@ -214,8 +213,7 @@ export class RevisionRepository {
     }
 
     /** 获取修稿完整数据 */
-    static getFull(id: number): RevisionFull | null {
-        const db = getProjectDb()
+    static getFull(id: number, db = getProjectDb()): RevisionFull | null {
         if (!db) return null
 
         const row = db.prepare(
@@ -224,7 +222,7 @@ export class RevisionRepository {
 
         if (!row) return null
         const meta = rowToMeta(row)
-        const body = ContentRepository.getBody(meta.contentId)
+        const body = ContentRepository.getBody(meta.contentId, db)
         return { ...meta, content: body ?? '', sourceDraft: rowToSourceDraft(row) }
     }
 

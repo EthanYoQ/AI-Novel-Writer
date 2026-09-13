@@ -456,8 +456,7 @@ function samePersistedBlueprint(left: BlueprintData, right: BlueprintData): bool
 
 export class BlueprintRepository {
     /** 获取所有蓝图（按章节号排序） */
-    static getAll(): BlueprintData[] {
-        const db = requireProjectDb()
+    static getAll(db = requireProjectDb()): BlueprintData[] {
 
         const rows = db.prepare(
             'SELECT * FROM blueprints ORDER BY chapter_number ASC'

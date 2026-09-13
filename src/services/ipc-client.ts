@@ -41,6 +41,7 @@ function isProjectScopedChannel(channel: string): boolean {
     || channel.startsWith('character-proposal:')
     || channel.startsWith('character-identity:')
     || channel.startsWith('finalized-character:')
+    || channel.startsWith('review-revision:')
     || channel.startsWith('db:')
     || channel.startsWith('kb:')
     || channel.startsWith('chapter:')

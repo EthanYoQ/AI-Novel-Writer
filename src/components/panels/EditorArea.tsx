@@ -42,10 +42,12 @@ function ProseEditorWrapper({
   tab,
   onSave,
   unsavedOnly = false,
+  readOnly = false,
 }: {
   tab: EditorTab
   onSave?: (text: string) => Promise<void>
   unsavedOnly?: boolean
+  readOnly?: boolean
 }) {
   const [wordCount, setWordCount] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -132,10 +134,12 @@ function ProseEditorWrapper({
           key={tab.id}
           mode="prose"
           content={tab.content ?? ''}
+          editable={!readOnly}
           filePath={tab.filePath}
           hideStatusBar
           onCharCountChange={setWordCount}
           onChange={(text) => {
+            if (readOnly) return
             // 同步 ref，供保存按钮使用
             currentContentRef.current = text
             // 标记 tab.dirty
@@ -671,8 +675,13 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
           />
         )}
         {activeTab?.type === 'chapter' && activeTab.projectKey === currentProject.path
+          && activeTab.filePath?.startsWith('ai-novel://revision/') && (
+          <ProseEditorWrapper key={activeTab.id} tab={activeTab} readOnly />
+        )}
+        {activeTab?.type === 'chapter' && activeTab.projectKey === currentProject.path
           && !activeTab.filePath?.startsWith('ai-novel://draft/')
           && !activeTab.filePath?.startsWith('ai-novel://manuscript/')
+          && !activeTab.filePath?.startsWith('ai-novel://revision/')
           && !activeTab.filePath?.startsWith('ai-novel://recovery/') && (
           // 【DB 迁移备注】：终稿目前作为物理文件保存在 manuscript/ 目录是合理的（用于外部阅读器或最终打包编译导出）
           // 终稿文件（manuscript/）：用 ProseEditorWrapper（含字数信息栏）

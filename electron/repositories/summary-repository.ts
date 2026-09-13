@@ -484,8 +484,7 @@ export class SummaryRepository {
     })()
   }
 
-  static listFinalizedContinuityBefore(chapterNumber: number): FinalizedContinuityProjection[] {
-    const db = getProjectDb()
+  static listFinalizedContinuityBefore(chapterNumber: number, db = getProjectDb()): FinalizedContinuityProjection[] {
     if (!db) return []
     if (!Number.isSafeInteger(chapterNumber) || chapterNumber < 1) {
       throw new Error('连续性投影目标章节无效')

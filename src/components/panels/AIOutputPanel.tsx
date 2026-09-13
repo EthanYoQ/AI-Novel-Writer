@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { GenerationBatchProgress, GenerationRecoveryContext } from '../../shared/generation-owner-contract'
+import type { ReviewRevisionRecovery } from '../../shared/review-revision-generation'
+import { createReviewRevisionRecoveryWorkflow } from '../../services/workflows/review-revision-recovery-workflow'
 import type { MainGenerationRunView } from '../../services/generation/generation-runtime'
 import { createDraftRecoveryWorkflow, createBatchRecoveryWorkflow } from '../../services/workflows/draft-recovery-workflow'
 import { CheckCircle2, Loader2, Circle, Sparkles, X, ChevronRight, StopCircle, AlertTriangle, SlidersHorizontal, Copy, Pencil, Trash2 } from 'lucide-react'
@@ -252,6 +254,7 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
 }) {
   const [runs, setRuns] = useState<Array<{ view: MainGenerationRunView; recovery: GenerationRecoveryContext }>>([])
   const [batches, setBatches] = useState<GenerationBatchProgress[]>([])
+  const [reviewRuns, setReviewRuns] = useState<Array<{ view: MainGenerationRunView; recovery: ReviewRevisionRecovery }>>([])
   const [selection, setSelection] = useState<Record<string, string[]>>({})
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -266,14 +269,17 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
       const contexts = await Promise.all(views.map(async view => ({ view,
         recovery: await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle: view.handle }),
       })))
+      const reviewContexts = await Promise.allSettled(contexts.filter(item => ['review-chapter', 'refine-draft', 'refine-from-review'].includes(item.recovery.operation))
+        .map(async ({ view }) => ({ view, recovery: await ipc.invokeWithProjectSession(session, 'review-revision:read-recovery', { handle: view.handle }) })))
       if (!active) return
+      setReviewRuns(reviewContexts.flatMap(result => result.status === 'fulfilled' ? [result.value] : []))
       setRuns(contexts.filter(item => item.recovery.operation === 'chapter-draft' && !item.recovery.batchId
         && (item.recovery.composition || item.view.artifacts.length || item.view.candidates?.length || item.view.unsavedTails?.length)))
       setBatches(progress.filter(item => item.nextChapterNumber !== null))
-      setError('')
+      setError(reviewContexts.some(result => result.status === 'rejected') ? runText(locale, '部分审修候选暂时无法读取，其他候选仍可恢复。', 'Some review or revision candidates could not be loaded; the others remain available.') : '')
     })().catch(reason => { if (active) setError(reason instanceof Error ? reason.message : String(reason)) })
     return () => { active = false }
-  }, [session, refreshKey])
+  }, [session, refreshKey, locale])
   if (!session) return null
   const act = async (operation: () => Promise<void>) => {
     if (busy || !sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
@@ -283,9 +289,29 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
   }
   const visibleRuns = runs.filter(item => item.view.handle.projectId === session.projectId)
   const visibleBatches = batches.filter(item => item.rootHandle.projectId === session.projectId)
-  if (!visibleRuns.length && !visibleBatches.length && !error) return null
+  const visibleReviews = reviewRuns.filter(item => item.view.handle.projectId === session.projectId)
+  if (!visibleRuns.length && !visibleBatches.length && !visibleReviews.length && !error) return null
   return <section className="max-h-80 overflow-y-auto border-b p-3 text-xs" aria-label={runText(locale, '持久正文候选', 'Saved draft candidates')}>
     {error && <p role="alert">{error}</p>}
+    {visibleReviews.map(({ view, recovery }) => <article key={view.handle.runId} className="mb-3">
+      <p>{runText(locale, `第${recovery.context.source.chapterNumber}章${recovery.context.operation === 'review-chapter' ? '审稿' : '修稿'}候选`,
+        `Chapter ${recovery.context.source.chapterNumber} ${recovery.context.operation === 'review-chapter' ? 'review' : 'revision'} candidate`)}</p>
+      {view.ledger && <p>{runText(locale, `已用 ${view.ledger.physicalRequests} 次请求`, `${view.ledger.physicalRequests} requests used`)}</p>}
+      {recovery.sourceStatus === 'conflict' && !recovery.saved && <p>{runText(locale, '来源已变化；候选仍可复制，不能直接保存。', 'Sources changed; copy the candidate to preserve it. Direct saving is unavailable.')}</p>}
+      {(view.candidates ?? view.artifacts).map(artifact => <div key={artifact.artifactId}>
+        <span className="whitespace-pre-wrap">{artifact.text.slice(0, 180)}</span>
+        <button type="button" className="icon-btn px-2" onClick={() => { void act(() => navigator.clipboard.writeText(artifact.text)) }}>{runText(locale, '复制', 'Copy')}</button>
+      </div>)}
+      {view.unsavedTails?.map(tail => <div key={tail.attemptId}>
+        <span className="whitespace-pre-wrap">{tail.text.slice(0, 180)}</span>
+        <button type="button" className="icon-btn px-2" onClick={() => { void act(() => navigator.clipboard.writeText(tail.text)) }}>{runText(locale, '复制未保存文字', 'Copy unsaved text')}</button>
+      </div>)}
+      <button type="button" className="icon-btn px-2" disabled={busy || !recovery.saved && (recovery.sourceStatus !== 'current' || view.status === 'cancelled')}
+        onClick={() => { void act(async () => {
+          const workflow = await createReviewRevisionRecoveryWorkflow(session, view.handle)
+          await useWorkflowStore.getState().startWorkflow(workflow)
+        }) }}>{recovery.saved ? runText(locale, '打开已保存结果', 'Open saved result') : runText(locale, '恢复此审修任务', 'Recover this review or revision')}</button>
+    </article>)}
     {visibleBatches.map(batch => <article key={batch.batchId} className="mb-3">
       <p>{runText(locale, `批量正文：已保存 ${batch.completedChapters.length} 章，下一章 ${batch.nextChapterNumber}`,
         `Batch drafts: ${batch.completedChapters.length} saved; next chapter ${batch.nextChapterNumber}`)}</p>

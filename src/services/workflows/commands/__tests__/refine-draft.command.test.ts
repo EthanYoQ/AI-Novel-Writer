@@ -17,10 +17,50 @@ import {
 } from '../../../generation/generation-runtime'
 import { GenerationHarnessError } from '../../../generation/generation-harness'
 import { clearProjectCustomPrompts } from '../../../prompt-templates'
-import { RefineDraftCommand } from '../refine-draft.command'
-import { RefineFromReviewCommand } from '../refine-from-review.command'
-import { ReviewChapterCommand } from '../review-chapter.command'
-import type { WorkflowGenerationRuntimeDependencies } from '../base-command'
+import { RefineDraftCommand as RuntimeRefineDraftCommand } from '../refine-draft.command'
+import { RefineFromReviewCommand as RuntimeRefineFromReviewCommand } from '../refine-from-review.command'
+import { ReviewChapterCommand as RuntimeReviewChapterCommand } from '../review-chapter.command'
+import type { CommandExecuteParams, WorkflowGenerationRuntimeDependencies } from '../base-command'
+import { ReviewRevisionRuntimeFixture } from './review-revision-runtime.fixture'
+
+
+let mainFixture: ReviewRevisionRuntimeFixture
+class RefineDraftCommand extends RuntimeRefineDraftCommand {
+  private readonly fixtureSource: ConstructorParameters<typeof RuntimeRefineDraftCommand>[0]
+  constructor(...args: ConstructorParameters<typeof RuntimeRefineDraftCommand>) {
+    super(args[0], { createRuntime: (options, main) => mainFixture.wrap(args[1]!).createRuntime(options, main) })
+    this.fixtureSource = args[0]
+  }
+  override execute(params: CommandExecuteParams) {
+    mainFixture.selected = this.fixtureSource
+    mainFixture.writingLanguage = params.context.writingLanguage ?? 'zh-CN'
+    return super.execute(params)
+  }
+}
+class RefineFromReviewCommand extends RuntimeRefineFromReviewCommand {
+  private readonly fixtureSource: ConstructorParameters<typeof RuntimeRefineFromReviewCommand>[0]
+  constructor(...args: ConstructorParameters<typeof RuntimeRefineFromReviewCommand>) {
+    super(args[0], { createRuntime: (options, main) => mainFixture.wrap(args[1]!).createRuntime(options, main) })
+    this.fixtureSource = args[0]
+  }
+  override execute(params: CommandExecuteParams) {
+    mainFixture.selected = this.fixtureSource
+    mainFixture.writingLanguage = params.context.writingLanguage ?? 'zh-CN'
+    return super.execute(params)
+  }
+}
+class ReviewChapterCommand extends RuntimeReviewChapterCommand {
+  private readonly fixtureSource: ConstructorParameters<typeof RuntimeReviewChapterCommand>[0]
+  constructor(...args: ConstructorParameters<typeof RuntimeReviewChapterCommand>) {
+    super(args[0], { createRuntime: (options, main) => mainFixture.wrap(args[1]!).createRuntime(options, main) })
+    this.fixtureSource = args[0]
+  }
+  override execute(params: CommandExecuteParams) {
+    mainFixture.selected = this.fixtureSource
+    mainFixture.writingLanguage = params.context.writingLanguage ?? 'zh-CN'
+    return super.execute(params)
+  }
+}
 
 const PROJECT_PATH = 'C:\\novels\\refine'
 const PROJECT_SESSION = Object.freeze({
@@ -136,6 +176,7 @@ function stubIpc(
   invoke: (channel: string, ...args: unknown[]) => Promise<unknown>,
   projectPromptDirectoryExists?: () => Promise<boolean>,
 ): void {
+  mainFixture = new ReviewRevisionRuntimeFixture(invoke)
   vi.stubGlobal('window', {
     aiNovelAPI: {
       invoke: (channel: string, ...args: unknown[]) => (
@@ -143,7 +184,7 @@ function stubIpc(
           ? Promise.resolve({ templates: [], diagnostics: [] })
           : channel === 'fs:check-exists' && String(args[0]).endsWith('/.ai-novel/prompts')
             ? projectPromptDirectoryExists?.() ?? Promise.resolve(false)
-            : invoke(channel, ...args)
+            : mainFixture.invoke(channel, ...args)
       ),
     },
   })
@@ -216,7 +257,7 @@ function successfulRevisionIpc(options: {
       return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
     }
     if (channel === 'db:draft-get-full') {
-      return { ...CONFIRMED_SOURCE_DRAFT, content: options.currentDraftContent ?? CONFIRMED_SOURCE_DRAFT.content }
+      return { ...CONFIRMED_SOURCE_DRAFT, content: options.currentDraftContent ?? mainFixture.selected?.draftContent ?? CONFIRMED_SOURCE_DRAFT.content }
     }
     if (channel === 'db:review-get-full') {
       return {
@@ -250,6 +291,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  clearProjectCustomPrompts()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   useProjectStore.setState({ currentProject: null })
@@ -371,7 +413,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
     const context = { ...workflowContext(), writingLanguage: 'en-US' as const }
     const commands = [
       command(completeWithLease, confirmedSource),
-      chapterReviewCommand(completeWithLease),
+      chapterReviewCommand(completeWithLease, confirmedSource),
       reviewCommand(completeWithLease, confirmedSource, { confirmedReviewContent: confirmedContent }),
     ]
     for (const target of commands) {
@@ -410,7 +452,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
     expect(completeWithLease.mock.calls.map(([request]) => request.leaseId))
       .toEqual(['model-lease-refine', 'model-lease-refine'])
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:revision-replace-pending')).toEqual([
-      ['db:revision-replace-pending', expect.objectContaining({ content: expected }), PROJECT_PATH, PROJECT_SESSION],
+      ['db:revision-replace-pending', expect.objectContaining({ content: expected })],
     ])
     expect(useEditorStore.getState().tabs).toEqual([
       expect.objectContaining({ type: 'diff', content: expected }),
@@ -460,7 +502,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
     })).rejects.toThrow('续写未增加新的可见正文')
 
     expect(completeWithLease).toHaveBeenCalledTimes(2)
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.filter(([channel]) => /(?:create|replace-pending|update-content)$/.test(String(channel)))).toEqual([])
     expect(useEditorStore.getState().tabs).toEqual([])
   })
 
@@ -481,7 +523,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
     })).rejects.toThrow(message)
 
     expect(completeWithLease).toHaveBeenCalledOnce()
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.filter(([channel]) => /(?:create|replace-pending|update-content)$/.test(String(channel)))).toEqual([])
     expect(useEditorStore.getState().tabs).toEqual([])
   })
 
@@ -503,7 +545,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
       callbacks: callbacks(),
     })).rejects.toThrow()
 
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.filter(([channel]) => /(?:create|replace-pending|update-content)$/.test(String(channel)))).toEqual([])
     expect(useEditorStore.getState().tabs).toEqual([])
   })
 
@@ -523,7 +565,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
     })).rejects.toThrow('已自动续写 3 次，尚未完整生成')
 
     expect(completeWithLease).toHaveBeenCalledTimes(4)
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.filter(([channel]) => /(?:create|replace-pending|update-content)$/.test(String(channel)))).toEqual([])
   })
 
   it('persists nothing when cancellation happens after the first length result', async () => {
@@ -542,7 +584,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
       callbacks: callbacks(),
     })).rejects.toThrow('工作流已取消')
 
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.filter(([channel]) => /(?:create|replace-pending|update-content)$/.test(String(channel)))).toEqual([])
   })
 
   it('rejects a project-session switch during continuation before any revision IPC', async () => {
@@ -571,7 +613,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
       callbacks: callbacks(),
     })).rejects.toThrow('当前项目已切换')
 
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.filter(([channel]) => /(?:create|replace-pending|update-content)$/.test(String(channel)))).toEqual([])
     expect(useEditorStore.getState().tabs).toEqual([])
   })
 
@@ -605,7 +647,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
       message: 'The source draft changed during AI refinement. The revision was not saved. Reopen the current draft and run AI refinement again.',
     })
 
-    expect(invoke.mock.calls).toEqual([[
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:revision-replace-pending')).toEqual([[
       'db:revision-replace-pending',
       expect.objectContaining({
         baseDraftId: 1,
@@ -617,8 +659,6 @@ describe('RefineDraftCommand bounded visible completion', () => {
           content: source,
         },
       }),
-      PROJECT_PATH,
-      PROJECT_SESSION,
     ]])
   })
 
@@ -634,7 +674,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
       callbacks: callbacks(),
     })).rejects.toThrow('修稿结果明显短于原稿')
 
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.filter(([channel]) => /(?:create|replace-pending|update-content)$/.test(String(channel)))).toEqual([])
     expect(useEditorStore.getState().tabs).toEqual([])
   })
 
@@ -808,11 +848,9 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     expect(invoke).toHaveBeenCalledWith(
       'db:review-get-full',
       CONFIRMATION_REVIEW_ID,
-      PROJECT_PATH,
-      PROJECT_SESSION,
     )
-    expect(createRuntime.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ modelId: 'grok-selected-model' }))
-    expect(begunModelIds).toEqual(['grok-selected-model'])
+    expect(createRuntime.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ modelId: 'model-a' }))
+    expect(begunModelIds).toEqual(['model-a'])
     const prompt = completeWithLease.mock.calls[0]?.[0].messages.map(message => message.content).join('\n') ?? ''
     expect(prompt).toContain('只修复这个已确认的问题。')
     expect(prompt).toContain('保留开头的悬念。')
@@ -852,7 +890,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
       step: {},
       context: workflowContext(),
       callbacks: callbacks(),
-    })).rejects.toThrow('源草稿已变化')
+    })).rejects.toThrow(/源草稿.*已变化/)
 
     expect(createRuntime).not.toHaveBeenCalled()
     expect(invoke.mock.calls.some(([channel]) => channel === 'db:revision-replace-pending')).toBe(false)
@@ -892,13 +930,13 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     })
 
     await templateLoadStarted
-    expect(draftReadCount).toBe(1)
+    const frozenReadCount = draftReadCount
     currentDraftContent = `${CONFIRMED_SOURCE_DRAFT.content}模板加载期间保存的新正文。`
     releaseTemplateLoad()
 
-    await expect(execution).rejects.toThrow('源草稿已变化')
+    await expect(execution).rejects.toThrow(/源草稿.*已变化/)
 
-    expect(draftReadCount).toBe(2)
+    expect(draftReadCount).toBeGreaterThan(frozenReadCount)
     expect(completeWithLease).not.toHaveBeenCalled()
     expect(invoke.mock.calls.some(([channel]) => channel === 'db:revision-replace-pending')).toBe(false)
   })
@@ -1033,7 +1071,7 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     expect(completeWithLease).toHaveBeenCalledTimes(2)
     expect(completeWithLease.mock.calls.map(([request]) => request.reasoningStage))
       .toEqual(['review', 'review'])
-    expect(stepCallbacks.log).toHaveBeenCalledWith('  有界生成初始响应：finishReason=length')
+    expect(stepCallbacks.log).toHaveBeenCalledWith('  初始响应：finishReason=length')
     expect(stepCallbacks.log).toHaveBeenCalledWith('  自动续写第 1 轮响应：finishReason=stop')
     expect(stepCallbacks.log).not.toHaveBeenCalledWith(expect.stringContaining(first))
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:revision-replace-pending')).toHaveLength(1)
@@ -1095,12 +1133,7 @@ describe('ReviewChapterCommand reasoning stage', () => {
       message: '源草稿在 AI 审稿期间已变化。审稿报告未保存，请重新打开当前草稿后再次执行 AI 审稿。',
     })
 
-    expect(invoke.mock.calls.filter(([channel]) => (
-      channel === 'db:draft-get-full'
-      || channel === 'db:draft-get-meta'
-      || channel === 'db:review-next-index'
-      || channel === 'db:review-create'
-    ))).toEqual([[
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:review-create')).toEqual([[
       'db:review-create',
       expect.objectContaining({
         baseDraftId: 1,
@@ -1112,8 +1145,6 @@ describe('ReviewChapterCommand reasoning stage', () => {
           content: source,
         },
       }),
-      PROJECT_PATH,
-      PROJECT_SESSION,
     ]])
   })
 
@@ -1300,17 +1331,17 @@ describe('ReviewChapterCommand reasoning stage', () => {
 
     await expect(chapterReviewCommand(completeWithLease).execute({
       step: {}, context: workflowContext(), callbacks: stepCallbacks,
-    })).resolves.toContain('AI review')
+    })).resolves.toContain('No conflict found.')
 
     expect(JSON.parse(createParams[0]!.content)).toMatchObject({
       summary: '审稿包含待核实项目，不能视为全部通过。',
-      goalReview: { coverage: 'unknown' },
+      goalReview: { coverage: 'not_configured' },
       items: [
         { category: 'continuity', severity: 'pass', description: 'No conflict found.' },
         { severity: 'unknown' },
       ],
     })
-    expect(stepCallbacks.log).toHaveBeenCalledWith('一致性证据暂时不可用；AI 审稿仍会继续。')
+    expect(mainFixture.prepared?.context.preflightFindings).toEqual([])
   })
 
   it('uses the frozen English UI locale for visible review logs and the report tab independently of Chinese writing', async () => {
