@@ -3,6 +3,7 @@ import path from 'node:path'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GenerationOwnerChannels, BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
 import type { FinalizedCharacterGenerationChannels } from '../../../src/shared/finalized-character-generation'
+import type { FinalizationGenerationChannels } from '../../../src/shared/finalization-generation'
 import type { ReviewRevisionGenerationInvokeChannels, ReviewRevisionOperation } from '../../../src/shared/review-revision-generation'
 import { createHumanConfirmedReviewSnapshot, serializeHumanConfirmedReviewSnapshot } from '../../../src/shared/human-confirmed-review'
 import { ipc } from '../../../src/services/ipc-client'
@@ -46,7 +47,7 @@ beforeEach(() => {
   sender.send.mockClear()
 })
 afterEach(() => { closeProjectDatabase(); projectAccess.invalidateCurrentSession(); vi.unstubAllGlobals(); vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }) })
-type TestedChannels = GenerationOwnerChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels
+type TestedChannels = GenerationOwnerChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & FinalizationGenerationChannels
 function invoke<C extends keyof TestedChannels>(channel: C, ...args: TestedChannels[C]['args']) {
   return mocks.handlers.get(channel)!({ sender }, ...args, { ...session }) as Promise<TestedChannels[C]['return']>
 }
@@ -121,30 +122,26 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     const fetch = stream(JSON.stringify({ updates: [{ characterId, currentState: { location: '北塔' }, evidence: { start: 0, end: body.length, text: body } }] }))
     const selection: BeginGenerationRequest = { ...request, operation: 'finalized-character-state', chapterNumber: 1, selectedFinalizedDraftIds: [1],
       output: 'structured-data', finalizedCharacterContextId: prepared.contextId, authorInputs: [{ id: 'finalized-character-context', text: JSON.stringify(prepared.context) }] }
-    return { prepared, selection, fetch, characterId }
+    return { prepared, selection, fetch, characterId, slot: { source: prepared.context.source, stepKey: 'character_cards' as const } }
   }
   it('commits finalized character state through the registered context, generation and effect IPC', async () => {
     const f = await finalizedCharacterFixture()
-    await expect(invoke('generation:begin', { ...f.selection, finalizedCharacterContextId: 'forged' })).rejects.toThrow('GENERATION_CHARACTER_CONTEXT_REQUIRED')
+    await expect(invoke('generation:begin', { ...f.selection, finalizedCharacterContextId: 'forged' })).rejects.toThrow('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
     expect(f.fetch).not.toHaveBeenCalled()
-    const run = await invoke('generation:begin', f.selection)
-    const receipt = await invoke('generation:execute', { handle: run.handle, invocationNonce: 'extract', task: {
-      purpose: 'finalized-character-state', output: 'structured-data', messages: [{ role: 'user', content: '只用冻结正文提取状态。' }],
-    } })
+    const { view: run } = await invoke('finalization-generation:begin', { slot: f.slot, modelId: model.id })
+    const receipt = await invoke('finalization-generation:execute', { handle: run.handle })
     const artifact = receipt.run.artifacts.at(-1)!
-    await expect(invoke('finalized-character:commit', { contextId: f.prepared.contextId, handle: run.handle,
+    await expect(invoke('finalization-generation:commit', { handle: run.handle,
       artifact: { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash } })).resolves.toMatchObject({ applied: 1, unresolved: [] })
     expect(getProjectDb()!.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe('北塔')
     expect(f.fetch).toHaveBeenCalledTimes(1)
   })
   it('reports the registered field-conflict boundary and preserves the durable candidate', async () => {
-    const f = await finalizedCharacterFixture(), run = await invoke('generation:begin', f.selection)
-    const receipt = await invoke('generation:execute', { handle: run.handle, invocationNonce: 'extract', task: {
-      purpose: 'finalized-character-state', output: 'structured-data', messages: [{ role: 'user', content: '提取状态。' }],
-    } })
+    const f = await finalizedCharacterFixture(), { view: run } = await invoke('finalization-generation:begin', { slot: f.slot, modelId: model.id })
+    const receipt = await invoke('finalization-generation:execute', { handle: run.handle })
     const artifact = receipt.run.artifacts.at(-1)!
     getProjectDb()!.prepare('UPDATE characters SET cs_location=? WHERE character_id=?').run('作者确认的新地点', f.characterId)
-    await expect(invoke('finalized-character:commit', { contextId: f.prepared.contextId, handle: run.handle,
+    await expect(invoke('finalization-generation:commit', { handle: run.handle,
       artifact: { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash } })).rejects.toThrow('FINALIZED_CHARACTER_FIELD_CONFLICT')
     expect((await invoke('generation:read', run.handle)).candidates).toHaveLength(1)
     expect(getProjectDb()!.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe('作者确认的新地点')

@@ -5,9 +5,6 @@ import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow
 import { useLLMStore } from '../../../../stores/llm-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import { FinalizeChapterCommand } from '../finalize-chapter.command'
-import { WORKFLOW_GENERATION_BUDGETS } from '../base-command'
-import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
-import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationSelection } from '../../workflow-main-generation'
 import type { FinalizedCharacterContext } from '../../../../shared/finalized-continuity'
 
 const finalizationClient = vi.hoisted(() => ({
@@ -15,7 +12,6 @@ const finalizationClient = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../finalization-client', () => finalizationClient)
-vi.mock('../../workflow-main-generation', () => ({ createWorkflowMainGenerationRuntime: vi.fn() }))
 
 const PROJECT_PATH = 'C:\\novels\\blueprint-entities'
 const PROJECT_SESSION = Object.freeze({
@@ -87,29 +83,16 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
 
   it('uses this chapter blueprint characters when direct finalization omits them', async () => {
     const completedSteps = new Set<string>()
-    const selections: WorkflowMainGenerationSelection[] = []
-    let sequence = 0
-    vi.mocked(createWorkflowMainGenerationRuntime).mockImplementation(async request => {
-      const runtime = await workflowRuntimeDependencies.createRuntime({ budget: WORKFLOW_GENERATION_BUDGETS.structured })
-      const select = (selection: WorkflowMainGenerationSelection) => {
-        selections.push(structuredClone(selection))
-        request.context.mainGenerationRunHandle = { projectId: PROJECT_SESSION.projectId, epoch: PROJECT_SESSION.leaseId,
-          rootActionId: 'synthetic-finalization-root', runId: `synthetic-run-${++sequence}` }
-        request.context.mainGenerationRootHandle = request.context.mainGenerationRunHandle
-      }
-      select(request.selection)
-      return { mainOwned: true, advance: async selection => { select(selection) }, close: () => runtime.close(),
-        execute: operation => runtime.execute(({ session }) => operation({ session: { budget: session.budget,
-          complete: async (task, options) => {
-            const result = await session.complete(task, options)
-            return { ...result, receipt: { ...result.receipt, visibleArtifact: { artifactId: `artifact-${++sequence}`, attemptId: 'synthetic-attempt',
-              revision: 1, textHash: createHash('sha256').update(result.content).digest('hex') } } }
-          },
-        } })),
-      }
-    })
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
+        case 'finalization-generation:read': {
+          const slot = (args[0] as { slot: { source: unknown; stepKey: string } }).slot
+          return { view: { handle: { projectId: PROJECT_SESSION.projectId, epoch: PROJECT_SESSION.leaseId, rootActionId: 'main-root', runId: slot.stepKey }, artifacts: [], status: 'completed' },
+            modelId: 'original-main-model', context: { slot }, sourceStatus: 'current',
+            effect: slot.stepKey === 'chapter_notes' ? { success: true, stepKey: slot.stepKey, chapterNotes: '韩峥被洪水卷入排水井，当场死亡。', factCount: 1, blueprintUpdated: true }
+              : { success: true, stepKey: slot.stepKey, applied: 0, unchanged: 0, candidates: [], unresolved: [] } }
+        }
+
         case 'prompt:load-global':
           return { templates: [], diagnostics: [] }
         case 'fs:check-exists':
@@ -224,16 +207,12 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
       PROJECT_PATH,
       PROJECT_SESSION,
     )
-    expect(selections).toMatchObject([{ operation: 'finalized-chapter-notes', selectedFinalizedDraftIds: [33] },
-      { operation: 'finalized-character-state', selectedFinalizedDraftIds: [33], finalizedCharacterContextId: 'synthetic-context-33' }])
-    const continuityCall = invoke.mock.calls.find(([channel]) => channel === 'db:continuity-save-finalized')
-    expect(continuityCall?.[1]).toEqual(expect.objectContaining({
-      facts: [expect.objectContaining({
-        category: 'character-state',
-        entities: ['韩峥'],
-        statement: '韩峥被洪水卷入排水井，当场死亡。',
-      })],
-    }))
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'finalization-generation:read').map(([, request]) => request)).toEqual([
+      { slot: { source: { draftId: 33, finalizationId: 'finalization-3', chapterNumber: 3, contentHash: CONTENT_HASH }, stepKey: 'chapter_notes' } },
+      { slot: { source: { draftId: 33, finalizationId: 'finalization-3', chapterNumber: 3, contentHash: CONTENT_HASH }, stepKey: 'character_cards' } },
+    ])
+    expect(invoke.mock.calls.some(([channel]) => ['db:continuity-save-finalized', 'db:blueprint-update-notes', 'finalization-generation:begin', 'finalization-generation:execute', 'finalization-generation:commit'].includes(channel))).toBe(false)
+    expect(completedSteps).toEqual(new Set(['kb_import', 'chapter_notes', 'character_cards']))
     const visibleLogs = vi.mocked(stepCallbacks.log).mock.calls.flat().join('\n')
     expect(visibleLogs).toContain('Starting finalization and post-processing analysis')
     expect(visibleLogs).toContain('Finalized content committed to SQLite and published as a manuscript')

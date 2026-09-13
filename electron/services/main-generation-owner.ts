@@ -32,6 +32,11 @@ import type { ApproveCharacterProposalRequest } from '../../src/shared/character
 import type { AgentGenerationContext, AgentGenerationInput } from '../../src/shared/agent-generation'
 import type { EditorInlineInput, EditorInlineRecovery, EditorInlineGenerationChannels } from '../../src/shared/editor-inline-generation'
 import { validateEditorInlineInput, readEditorInlineContext, readEditorInlineTask } from './editor-inline-generation'
+import type { FinalizationGenerationChannels, FinalizationGenerationSlot, FinalizationGenerationRecovery } from '../../src/shared/finalization-generation'
+import { FinalizationGeneration } from './finalization-generation'
+import { finalizationSlotKey, readFinalizationGenerationContext } from './finalization-generation-source'
+import { proveFinalizedCharacterGeneration } from './finalized-character-generation-proof'
+import { parseFinalizedCharacterStateResponse } from '../../src/shared/finalized-continuity'
 
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>
 export function safeGenerationModelReceipt(receipt: ModelExecutionLeaseReceipt): SafeGenerationModelReceipt {
@@ -45,7 +50,7 @@ export interface MainGenerationOwnerDependencies {
   assertCurrent: () => void
   leases: ModelExecutionLeaseRegistry
   loadModel: (id: string) => ModelProfile | null
-  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string; reviewRevisionContext?: ReviewRevisionContext; agentInput?: AgentGenerationInput; agentSession?: { key: string; roundIndex: number }; editorInlineInput?: EditorInlineInput }, model: SafeGenerationModelReceipt) => RunBinding
+  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string; reviewRevisionContext?: ReviewRevisionContext; agentInput?: AgentGenerationInput; agentSession?: { key: string; roundIndex: number }; editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot }, model: SafeGenerationModelReceipt) => RunBinding
   rebuildBinding: (previous: RunBinding, model: SafeGenerationModelReceipt) => RunBinding
   beforeDispatch?: () => void
   onSnapshot?: (snapshot: MainGenerationSnapshot) => void
@@ -198,14 +203,15 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     preparations.set(preparationId, { binding, knowledgeSnapshot: structuredClone(knowledgeSnapshot) })
     return { preparationId, knowledgeSnapshot: structuredClone(knowledgeSnapshot), selectedDrafts }
   }
-  const begin = (selection: (BeginGenerationRequest | AgentBeginSelection) & { editorInlineInput?: EditorInlineInput }, batchInitialization = false, agentInitialization = false, editorInitialization = false): MainGenerationRunView => {
+  const begin = (selection: (BeginGenerationRequest | AgentBeginSelection) & { editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot }, batchInitialization = false, agentInitialization = false, editorInitialization = false, finalizationInitialization = false): MainGenerationRunView => {
     assertCurrent()
     if (!selection || typeof selection.operation !== 'string' || !/^[a-z0-9][a-z0-9:_-]{0,127}$/u.test(selection.operation)
       || !Array.isArray(selection.promptKeys) || selection.promptKeys.length === 0
       || Object.hasOwn(selection, 'parentRootActionId') && (typeof selection.parentRootActionId !== 'string' || !selection.parentRootActionId.trim())
       || typeof selection.uiActionNonce !== 'string' || !selection.uiActionNonce.trim() || selection.uiActionNonce.length > 256
-      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId', 'finalizedCharacterContextId', 'reviewRevisionContextId', 'agentWorkflowRegistrationId', 'importSlot', 'importExecution', ...(agentInitialization ? ['agentInput', 'agentSession'] : []), ...(editorInitialization ? ['editorInlineInput'] : [])].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
+      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId', 'finalizedCharacterContextId', 'reviewRevisionContextId', 'agentWorkflowRegistrationId', 'importSlot', 'importExecution', ...(agentInitialization ? ['agentInput', 'agentSession'] : []), ...(editorInitialization ? ['editorInlineInput'] : []), ...(finalizationInitialization ? ['finalizationGenerationSlot'] : [])].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
     if (selection.operation === 'editor-inline' && !editorInitialization) throw new Error('GENERATION_EDITOR_ADMISSION_REQUIRED')
+    if (['finalized-chapter-notes', 'finalized-character-state'].includes(selection.operation) && !finalizationInitialization) throw new Error('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
     const importAdmission = imports.admit(selection)
     if (importAdmission?.existing) return viewOf(importAdmission.existing)
     if (importAdmission) selection = { ...selection, uiActionNonce: `import:${importGenerationSlotKey(selection.importSlot!)}`,
@@ -261,6 +267,11 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         const existing = imports.find(selection.importSlot)
         if (existing) return existing
       }
+      if (selection.finalizationGenerationSlot) {
+        const existing = finalizations.find(selection.finalizationGenerationSlot)
+        if (existing) return existing
+        if (selection.parentRootActionId) repository.activateRootForCommittedStage(selection.parentRootActionId, binding)
+      }
       if (batch) repository.activateRootForCommittedStage(batch.rootHandle.rootActionId, binding)
       if (reviewRevision?.parentRootActionId) repository.activateRootForCommittedStage(reviewRevision.parentRootActionId, binding)
       if (agentInitialization && selection.parentRootActionId) repository.activateRootForCommittedStage(selection.parentRootActionId, binding)
@@ -302,11 +313,12 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return { outcome: finishReason === 'stop' ? { status: 'completed', content, finishReason, receipt: details }
       : { status: 'incomplete', content, finishReason, receipt: details }, run: viewOf(repository.get(receipt.run.runId)) }
   }
-  const execute = async (request: ExecuteGenerationRequest, agentExecution = false, importExecution = false, editorExecution = false): Promise<MainGenerationExecuteReceipt> => {
+  const execute = async (request: ExecuteGenerationRequest, agentExecution = false, importExecution = false, editorExecution = false, finalizationExecution = false): Promise<MainGenerationExecuteReceipt> => {
     const run = requireRun(request.handle, true)
     if (run.binding.sourceManifest.operation === 'agent-round' && !agentExecution) throw new Error('GENERATION_AGENT_ADMISSION_REQUIRED')
     if (run.binding.sourceManifest.importSlot && !importExecution) throw new Error('GENERATION_IMPORT_ADMISSION_REQUIRED')
     if (run.binding.sourceManifest.operation === 'editor-inline' && !editorExecution) throw new Error('GENERATION_EDITOR_ADMISSION_REQUIRED')
+    if (['finalized-chapter-notes', 'finalized-character-state'].includes(run.binding.sourceManifest.operation as string) && !finalizationExecution) throw new Error('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
     assertSemanticGenerationTask(request.task)
     const task = structuredClone(request.task)
     const contract = run.binding.sourceManifest.outputContract
@@ -324,6 +336,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (existing && existing.attempt.status !== 'dispatch-marked' && existing.attempt.status !== 'reserved') return outcomeOf(volatileReceipts.get(existing.attempt.attemptId) ?? existing, task)
     reviewRevisions.assertMutable(run.runId)
     imports.assertMutable(run)
+    finalizations.assertMutable(run)
     const operation = (async () => {
     const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
     if (!isDeepStrictEqual(current, run.binding)) throw new Error('GENERATION_SOURCE_CHANGED')
@@ -351,6 +364,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const resume = async (handle: MainGenerationRunHandle) => {
     const run = requireRun(handle)
     imports.assertMutable(run)
+    finalizations.assertMutable(run)
     const receipt = currentModelReceipt(run.binding)
     const next = deps.rebuildBinding(run.binding, receipt)
     const lease = deps.leases.begin(receipt.modelId)
@@ -416,6 +430,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     })
   })
   const imports = new ImportGeneration(deps.database, repository, deps.projectId)
+  const finalizations = new FinalizationGeneration(deps.database, repository, deps.projectId, characters)
   const agents = new AgentGeneration(deps.database, repository, { projectId: deps.projectId, epoch: deps.epoch }, assertCurrent, {
     begin: selection => begin(selection, false, true), read: handle => viewOf(requireRun(handle)), resume,
     execute: (handle, invocationNonce, task) => execute({ handle, invocationNonce, task }, true),
@@ -439,7 +454,97 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     try { current = repository.budget(run.rootActionId).root.status !== 'cancelled' && compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))) } catch { /* Original text remains readable after source or model changes. */ }
     return { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, context, sourceStatus: current ? 'current' : 'conflict' }
   }
+  const finalizationRecovery = (run: DurableGenerationRun): FinalizationGenerationRecovery => {
+    assertCurrent()
+    const context = readFinalizationGenerationContext(run), effect = finalizations.readEffect(run)
+    let current = false
+    try { current = repository.budget(run.rootActionId).root.status !== 'cancelled' && compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))) } catch { /* History remains readable without current source/model admission. */ }
+    return { view: viewOf(run), context, modelId: modelReceipt(run.binding).modelId, sourceStatus: current ? 'current' : 'conflict',
+      attemptCount: deps.database.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(run.runId) as number, ...(effect ? { effect } : {}) }
+  }
+  const assertFinalizationSources = (run: DurableGenerationRun) => {
+    assertCurrent()
+    if (repository.budget(run.rootActionId).root.status === 'cancelled') throw new Error('GENERATION_ACTION_CANCELLED')
+    if (!compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding)))) throw new Error('GENERATION_SOURCE_CHANGED')
+  }
   return { begin: (selection: BeginGenerationRequest) => begin(selection), execute: (request: ExecuteGenerationRequest) => execute(request), resume, list, assertSourcesCurrent, agents,
+    readFinalizationGeneration: (request: FinalizationGenerationChannels['finalization-generation:read']['args'][0]) => {
+      assertCurrent()
+      if (!request || Object.keys(request).some(key => key !== 'slot')) throw new Error('GENERATION_FINALIZATION_SLOT_INVALID')
+      const run = finalizations.find(request.slot)
+      return run ? finalizationRecovery(run) : null
+    },
+    beginFinalizationGeneration: (request: FinalizationGenerationChannels['finalization-generation:begin']['args'][0]) => {
+      assertCurrent()
+      if (!request || Object.keys(request).some(key => !['slot', 'modelId', 'parentRootActionId'].includes(key))) throw new Error('GENERATION_FINALIZATION_SLOT_INVALID')
+      const { slot } = request, prior = finalizations.find(slot)
+      if (prior) return finalizationRecovery(prior)
+      const sibling = finalizations.find({ source: slot.source, stepKey: slot.stepKey === 'chapter_notes' ? 'character_cards' : 'chapter_notes' })
+      let parentRootActionId = sibling?.rootActionId, selectedModelId = sibling ? modelReceipt(sibling.binding).modelId : request.modelId
+      if (request.parentRootActionId !== undefined) {
+        const root = repository.budget(request.parentRootActionId).root
+        if (root.operation !== 'batch-chapters' || root.projectId !== deps.projectId || parentRootActionId && parentRootActionId !== request.parentRootActionId) throw new Error('GENERATION_FINALIZATION_PARENT_INVALID')
+        const rows = deps.database.prepare('SELECT run_id FROM generation_runs WHERE root_action_id=? ORDER BY rowid').all(root.rootActionId) as { run_id: string }[]
+        const committed = rows.map(row => repository.get(row.run_id)).filter(run => run.binding.sourceManifest.operation === 'chapter-draft')
+          .map(run => ({ run, receipt: draftEffects.readCommit(run.runId) })).find(item => item.receipt?.id === slot.source.draftId)
+        if (!committed || committed.receipt?.contentHash !== slot.source.contentHash) throw new Error('GENERATION_FINALIZATION_PARENT_INVALID')
+        parentRootActionId = root.rootActionId; selectedModelId = modelReceipt(committed.run.binding).modelId
+      }
+      if (sibling && !finalizations.readEffect(sibling)) throw new Error('GENERATION_FINALIZATION_PREDECESSOR_REQUIRED')
+      const prepared = finalizedCharacters.readContext(slot.source.draftId)
+      if (!isDeepStrictEqual(prepared.context.source, slot.source)) throw new Error('GENERATION_FINALIZATION_SOURCE_CHANGED')
+      const characterStep = slot.stepKey === 'character_cards'
+      const view = begin({ operation: characterStep ? 'finalized-character-state' : 'finalized-chapter-notes', uiActionNonce: `finalization:${finalizationSlotKey(slot)}`,
+        modelId: selectedModelId, chapterNumber: slot.source.chapterNumber, selectedDraftIds: [], selectedFinalizedDraftIds: [slot.source.draftId],
+        promptKeys: [characterStep ? 'update_character_cards' : 'generate_chapter_notes'], skillStages: ['review'], output: characterStep ? 'structured-data' : 'visible-text',
+        authorInputs: [{ id: 'finalized-character-context', text: JSON.stringify(prepared.context) }],
+        ...(characterStep ? { finalizedCharacterContextId: prepared.contextId } : {}), ...(parentRootActionId ? { parentRootActionId } : {}), finalizationGenerationSlot: slot }, false, false, false, true)
+      return finalizationRecovery(repository.get(view.handle.runId))
+    },
+    executeFinalizationGeneration: async (request: FinalizationGenerationChannels['finalization-generation:execute']['args'][0]) => {
+      assertCurrent()
+      if (!request || Object.keys(request).some(key => key !== 'handle')) throw new Error('GENERATION_FINALIZATION_REQUEST_INVALID')
+      let run = finalizations.require(request.handle)
+      const initialTask = finalizations.task(run), context = readFinalizationGenerationContext(run)
+      let invalidText: string | undefined
+      for (let ordinal = 0; ordinal < 3; ordinal++) {
+        const task: GenerationTask = invalidText === undefined ? initialTask : { ...initialTask, purpose: `${initialTask.purpose}:repair:${ordinal}`,
+          messages: [...initialTask.messages, { role: 'assistant', content: invalidText }, { role: 'user', content: context.writingLanguage === 'en-US'
+            ? 'The preceding response does not satisfy the required JSON structure or exact source evidence. Return a corrected JSON object using only the original frozen source and character IDs. Do not change or invent evidence. Return {"updates":[]} when there is no supported update.'
+            : '上一份回答未满足要求的 JSON 结构或原文证据校验。请仅依据原始冻结正文和角色 ID 返回修正后的 JSON 对象，不得改写或虚构证据。没有可靠更新时返回 {"updates":[]}。' }] }
+        const invocationNonce = `finalization:${ordinal}`
+        const requestHash = textHash(JSON.stringify([task, run.binding.fingerprint.modelLeaseRevision, run.binding.fingerprint.policyHash]))
+        const prior = repository.findInvocation(run.runId, invocationNonce, requestHash)
+        let result: MainGenerationExecuteReceipt
+        if (prior) result = await (pending.get(JSON.stringify([run.runId, invocationNonce]))?.promise ?? outcomeOf(volatileReceipts.get(prior.attempt.attemptId) ?? prior, task))
+        else {
+          if (deps.database.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(run.runId) !== ordinal) throw new Error('GENERATION_FINALIZATION_ATTEMPT_CONFLICT')
+          const current = viewOf(run).nonReplayable ? await resume(handleOf(run)) : viewOf(run)
+          result = await execute({ handle: current.handle, invocationNonce, task }, false, false, false, true)
+        }
+        run = repository.get(run.runId)
+        if (context.slot.stepKey !== 'character_cards' || result.outcome.status !== 'completed' || ordinal === 2
+          || repository.budget(run.rootActionId).root.status === 'cancelled') return result
+        const reference = result.outcome.receipt?.visibleArtifact
+        const candidate = (result.run.candidates ?? result.run.artifacts).find(item => item.artifactId === reference?.artifactId)
+        if (!candidate?.compositionEligible) return result
+        if (textHash(candidate.text) !== candidate.textHash) throw new Error('GENERATION_FINALIZATION_ARTIFACT_INVALID')
+        try { parseFinalizedCharacterStateResponse(result.outcome.content, context.identity); return result } catch { invalidText = result.outcome.content }
+      }
+      throw new Error('GENERATION_FINALIZATION_ATTEMPT_CONFLICT')
+    },
+    commitFinalizationGeneration: (request: FinalizationGenerationChannels['finalization-generation:commit']['args'][0]) => {
+      assertCurrent()
+      if (!request || Object.keys(request).some(key => !['handle', 'artifact'].includes(key))) throw new Error('GENERATION_FINALIZATION_REQUEST_INVALID')
+      return finalizations.commit(request.handle, request.artifact, characters, assertFinalizationSources)
+    },
+    cancelFinalizationGeneration: (request: FinalizationGenerationChannels['finalization-generation:cancel']['args'][0]) => {
+      assertCurrent()
+      if (!request || Object.keys(request).some(key => key !== 'handle')) throw new Error('GENERATION_FINALIZATION_REQUEST_INVALID')
+      const run = finalizations.require(request.handle)
+      service.cancel(run.rootActionId)
+      return viewOf(repository.get(run.runId))
+    },
     readEditorInlineRecovery,
     cancelEditorInline: (handle: MainGenerationRunHandle) => {
       const run = requireEditorInlineRun(handle)
@@ -530,7 +635,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         const batch = characters.read(request.proposalBatchId)
         if (batch.status === 'approved') return characters.approve(request)
         const source = batch.source
-        const handle = source.kind === 'generation' || source.kind === 'finalized-generation' ? source.handle
+        const handle = source.kind === 'finalized-generation' ? proveFinalizedCharacterGeneration(deps.database, repository, deps.projectId, source.handle, source.artifact).currentHandle : source.kind === 'generation' ? source.handle
           : source.kind === 'directory' ? repository.listDirectoryProgress().find(item => item.operationId === source.operationId)?.sourceHandle : undefined
         return handle ? agents.withChildEffect(handle, () => characters.approve(request)) : characters.approve(request)
       }).immediate()
@@ -586,6 +691,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (requireRun(handle).binding.sourceManifest.operation === 'agent-round') throw new Error('GENERATION_AGENT_CONTROL_IMMUTABLE')
       reviewRevisions.assertMutable(requireRun(handle).runId)
       imports.assertMutable(requireRun(handle))
+      finalizations.assertMutable(requireRun(handle))
       assertSourcesCurrent(handle)
       if (algorithm === 'draft-visible-v1' && requireRun(handle).binding.sourceManifest.operation !== 'chapter-draft') throw new Error('GENERATION_COMPOSITION_ALGORITHM_INVALID')
       return repository.composeVisible(handle.runId, artifactIds, expectedTextHash, algorithm)
@@ -599,6 +705,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     restart: (handle: MainGenerationRunHandle, selection: BeginGenerationRequest) => {
       const old = requireRun(handle)
       imports.assertMutable(old)
+      finalizations.assertMutable(old)
       if (selection.parentRootActionId || selection.uiActionNonce === repository.budget(old.rootActionId).root.uiActionNonce) throw new Error('GENERATION_RESTART_NEW_NONCE_REQUIRED')
       // Admit the replacement before cancelling; rejected sources must leave the original resumable.
       const next = begin(selection)
@@ -610,6 +717,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (run.binding.sourceManifest.operation === 'agent-round') throw new Error('GENERATION_AGENT_CONTROL_IMMUTABLE')
       reviewRevisions.assertMutable(run.runId)
       imports.assertMutable(run)
+      finalizations.assertMutable(run)
       const artifact = viewOf(run).candidates?.find(item => item.artifactId === artifactId)
       if (!artifact || artifact.status === 'running') throw new Error('GENERATION_CANDIDATE_NOT_DISCARDABLE')
       service.discardCandidate(artifactId)

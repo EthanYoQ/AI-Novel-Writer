@@ -18,6 +18,8 @@ import type { ImportGenerationSlot } from '../../src/shared/import-generation';
 import { captureImportGenerationContext, importGenerationSlotKey } from './import-generation-source';
 import type { EditorInlineInput } from '../../src/shared/editor-inline-generation';
 import { buildEditorInlineContext, validateEditorInlineInput, editorInlineTask } from './editor-inline-generation';
+import type { FinalizationGenerationContext, FinalizationGenerationSlot } from '../../src/shared/finalization-generation';
+import { captureFinalizationGenerationContext, finalizationSlotKey, finalizationGenerationTask } from './finalization-generation-source';
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>;
 export interface GenerationSourceBindingInput {
     projectId: string;
@@ -45,6 +47,8 @@ export interface GenerationSourceBindingInput {
     editorInlineInput?: EditorInlineInput;
     /** Main freezes the initial identity for lost-response navigation across resume. */
     editorInlineOriginEpoch?: string;
+    finalizationGenerationSlot?: FinalizationGenerationSlot;
+    finalizationGenerationContext?: FinalizationGenerationContext;
     modelReceipt: SafeGenerationModelReceipt;
     policy: Readonly<Record<string, unknown>>;
     outputContract: string | Readonly<Record<string, unknown>>;
@@ -207,7 +211,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         let brief: Record<string, unknown> | null = null;
         if (input.chapterNumber !== undefined) {
             const row = deps.db.prepare('SELECT * FROM blueprints WHERE chapter_number=?').get(input.chapterNumber) as Record<string, unknown> | undefined;
-            if (!row && !input.reviewRevisionContext)
+            if (!row && !input.reviewRevisionContext && !input.finalizationGenerationSlot)
                 fail('GENERATION_CHAPTER_MISSING');
             brief = row ? without(row, ['created_at', 'updated_at', 'notes', 'notes_updated_at']) : null;
             add(`blueprint:${input.chapterNumber}`, 0, stable(brief), 'author-constraint', 'selected chapter brief');
@@ -301,7 +305,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         if (selected)
             assets.push({ scope, identity: `prompt:${key}:${facts.language}`, hash: hash(selected) });
         if (agentInput && key === 'assistant_writing_identity') agentPrompt = { selected: selected?.toString('utf8') ?? builtin, builtin };
-        if (input.importSlot || editorInlineInput) importPrompts[key] = JSON.parse(selected?.toString('utf8') ?? builtin);
+        if (input.importSlot || editorInlineInput || input.finalizationGenerationSlot) importPrompts[key] = JSON.parse(selected?.toString('utf8') ?? builtin);
     }
     const bindingsBytes = observe(deps.projectStorageRoot, 'writing-skills.json', true);
     const bindings = bindingsBytes ? JSON.parse(bindingsBytes.toString('utf8')) : { version: 1, bindings: {} };
@@ -345,6 +349,9 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     }
     const agentContext = agentInput && agentPrompt ? buildAgentGenerationContext(agentInput, facts.core, facts.language, agentPrompt.selected, agentPrompt.builtin) : undefined;
     const editorInlineContext = editorInlineInput ? buildEditorInlineContext(editorInlineInput, facts.language, importPrompts.edit_selected_text!) : undefined;
+    const finalizationContext = input.finalizationGenerationSlot ? captureFinalizationGenerationContext(deps.db, input.finalizationGenerationSlot, input, facts.language,
+        importPrompts[input.finalizationGenerationSlot.stepKey === 'chapter_notes' ? 'generate_chapter_notes' : 'update_character_cards']!, input.finalizationGenerationContext) : undefined;
+    if (finalizationContext) add('finalization-generation-context', 0, JSON.stringify(finalizationContext), 'finalized-fact', 'main captured finalization identity, original field baselines and selected prompt');
     if (editorInlineContext) add('editor-inline:author-draft', 0, JSON.stringify(editorInlineContext), 'author-constraint', 'explicit unsaved author manuscript and UTF16 selection; not a canonical document');
     const importContext = input.importSlot ? captureImportGenerationContext(deps.db, input.importSlot) : undefined;
     if (importContext) importContext.prompts = importPrompts;
@@ -355,6 +362,12 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         fail('GENERATION_SOURCE_CHANGED_DURING_SNAPSHOT');
     const sourceManifest = { version: 1, ...(input.finalizedCharacterContextHash ? { finalizedCharacterContextHash: input.finalizedCharacterContextHash } : {}), operation: input.operation, ...(input.knowledgeSnapshot ? { knowledgeSnapshot: structuredClone(input.knowledgeSnapshot) } : {}), ...(input.batchId ? { batchId: input.batchId } : {}), ...(input.batchIntent ? { batchIntent: structuredClone(input.batchIntent) } : {}), ...(input.chapterNumber !== undefined ? { chapterNumber: input.chapterNumber } : {}), selectedDraftIds: [...input.selectedDraftIds], selectedFinalizedDraftIds: [...input.selectedFinalizedDraftIds], ...(blueprintChapters.length ? { selectedBlueprintChapterNumbers: [...blueprintChapters] } : {}), promptKeys: [...input.promptKeys], skillStages: [...input.skillStages], ...(authorInputs.length ? { authorInputs } : {}), modelReceipt, policy: input.policy, outputContract: input.outputContract };
     if (input.reviewRevisionContext) Object.assign(sourceManifest, { reviewRevisionContext: structuredClone(input.reviewRevisionContext), reviewRevisionContextHash: hash(JSON.stringify(input.reviewRevisionContext)) });
+    if (finalizationContext) {
+        const task = finalizationGenerationTask(finalizationContext);
+        Object.assign(sourceManifest, { finalizationGenerationSlot: finalizationContext.slot, finalizationGenerationSlotKey: finalizationSlotKey(finalizationContext.slot),
+            finalizationGenerationContext: finalizationContext, finalizationGenerationContextHash: hash(JSON.stringify(finalizationContext)), finalizationGenerationOriginEpoch: finalizationContext.identity.epoch,
+            finalizationGenerationTask: task, finalizationGenerationTaskHash: hash(JSON.stringify(task)) });
+    }
     if (agentContext) Object.assign(sourceManifest, { agentInput, agentContext, agentContextHash: hash(JSON.stringify(agentContext)), ...(input.agentSession ? { agentSession: structuredClone(input.agentSession) } : {}) });
     if (input.agentWorkflowRegistrationId) Object.assign(sourceManifest, { agentWorkflowRegistrationId: input.agentWorkflowRegistrationId });
     if (editorInlineContext) {

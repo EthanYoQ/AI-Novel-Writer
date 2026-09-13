@@ -3,7 +3,8 @@ import { isDeepStrictEqual } from 'node:util'
 import type { ApproveCharacterProposalRequest, CharacterIdentitySnapshot, CharacterProposalBatch, CharacterProposalItem, CharacterProposalSource, CharacterStaticFields } from '../../src/shared/character-proposal'
 import { resolveScopedCharacterIdentity, type CharacterStaticProvenance } from '../../src/shared/character-identity'
 import { commitCharacterIdentities, refreshCharacterIdentityProjection, type CharacterIdentityCommitRequest } from '../repositories/character-roster-repository'
-import { textHash } from '../repositories/generation-run-repository'
+import { GenerationRunRepository, textHash } from '../repositories/generation-run-repository'
+import { normalizeFinalizedCharacterProposalSource } from './finalized-character-generation-proof'
 
 export interface CharacterProposalProof {
   items: Omit<CharacterProposalItem, 'resolution'>[]
@@ -52,6 +53,15 @@ export class CharacterProposalService {
   }
   stage(source: CharacterProposalSource): CharacterProposalBatch {
     return this.db.transaction(() => {
+      if (source?.kind === 'finalized-generation') {
+        const normalized = normalizeFinalizedCharacterProposalSource(this.db, new GenerationRunRepository(() => this.db), this.projectId, source)
+        source = normalized.source
+        // Only the dedicated main context supports historical ACKs. Legacy kinds keep their write gate.
+        if (normalized.stableFinalizationSource) {
+          const proposalBatchId = `cpb:${textHash(JSON.stringify([this.projectId, source]))}`
+          if (this.db.prepare('SELECT 1 FROM character_identity_proposals WHERE proposal_id=?').get(proposalBatchId)) return this.read(proposalBatchId)
+        }
+      }
       const proof = this.sourceProof(source, true)
       const proposalBatchId = `cpb:${textHash(JSON.stringify([this.projectId, source]))}`
       const existing = this.db.prepare('SELECT 1 FROM character_identity_proposals WHERE proposal_id=?').get(proposalBatchId)
@@ -143,6 +153,8 @@ export class CharacterProposalService {
 /** Find an exact durable source, never a latest-name or latest-proposal fallback. */
 export function findCharacterProposalEvidence(db: Database.Database, source: CharacterProposalSource,
   prove: (projectId: string, source: CharacterProposalSource) => CharacterProposalProof) {
+  if (source.kind === 'finalized-generation') source = normalizeFinalizedCharacterProposalSource(
+    db, new GenerationRunRepository(() => db), source.handle.projectId, source).source
   const rows = db.prepare("SELECT raw_value FROM character_identity_proposals WHERE source_key LIKE 'character-proposal-v1:%'").all() as { raw_value: string }[]
   const matches = rows.map(row => JSON.parse(row.raw_value) as Envelope).filter(envelope => isDeepStrictEqual(envelope.batch?.source, source))
   if (matches.length !== 1) throw new Error('CHARACTER_PROPOSAL_EVIDENCE_REQUIRED')

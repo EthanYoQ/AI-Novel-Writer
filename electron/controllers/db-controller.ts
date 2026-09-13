@@ -593,11 +593,11 @@ export function registerDatabaseController() {
     }
   })
 
-  ipcMain.handle('db:blueprint-update-notes', async (_event, chapterNumber: number, notes: string, expectedProjectPath: string) => {
+  ipcMain.handle('db:blueprint-update-notes', async (_event, _chapterNumber: number, _notes: string, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      const updated = BlueprintRepository.updateNotes(chapterNumber, notes)
-      return { success: true, updated }
+      // Derived finalization notes are committed with their artifact and ACK in one main transaction.
+      throw new Error('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
     } catch (err) {
       return { success: false, error: String(err) }
     }
@@ -734,21 +734,19 @@ export function registerDatabaseController() {
     return FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)
   })
 
-  ipcMain.handle('db:continuity-save-finalized', async (_event, request, expectedProjectPath: string) => {
+  ipcMain.handle('db:continuity-save-finalized', async (_event, _request, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      SummaryRepository.saveFinalizedContinuity(request)
-      return { success: true }
+      throw new Error('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
     } catch (err) {
       return { success: false, error: String(err) }
     }
   })
 
-  ipcMain.handle('db:continuity-save-character-state-candidates', async (_event, request, expectedProjectPath: string) => {
+  ipcMain.handle('db:continuity-save-character-state-candidates', async (_event, _request, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      SummaryRepository.saveFinalizedCharacterStateCandidates(request)
-      return { success: true }
+      throw new Error('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
     } catch (err) {
       return { success: false, error: String(err) }
     }

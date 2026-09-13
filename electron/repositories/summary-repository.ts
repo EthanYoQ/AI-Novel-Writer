@@ -352,8 +352,7 @@ export class SummaryRepository {
     }).immediate()
   }
 
-  static saveFinalizedContinuity(input: SaveFinalizedContinuityRequest): void {
-    const db = getProjectDb()
+  static saveFinalizedContinuity(input: SaveFinalizedContinuityRequest, db = getProjectDb()): void {
     if (!db) throw new Error('项目数据库未打开')
     const chapterNotes = input.chapterNotes.trim()
     const normalized = normalizedFacts(input.facts ?? [], input.chapterNumber)

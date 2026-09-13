@@ -774,8 +774,7 @@ export class BlueprintRepository {
     }
 
     /** 仅更新 notes 字段 */
-    static updateNotes(chapterNumber: number, notes: string): boolean {
-        const db = requireProjectDb()
+    static updateNotes(chapterNumber: number, notes: string, db = requireProjectDb()): boolean {
 
         const result = db.prepare(`
       UPDATE blueprints

@@ -1,6 +1,6 @@
 # S06D 当前消费者核销（源码快照）
 
-本次为source inventory，不是S06D complete或产品模型资格。原S00 inventory及s05/s06a coverage是历史起点；当前状态以私有 s06d-consumer-coverage-current.json 源码hash为准。
+本表不是S06D complete或产品模型资格。原S00 inventory及s05/s06a coverage是历史起点；私有 s06d-consumer-coverage-current.json 保留前次源码快照，定稿更新以 s06d-finalization-evidence.md 及专属冻结收据为准。
 
 | 入口 | 当前adapter | 当前有界证据 | 尚待完成 |
 |---|---|---|---|
@@ -12,7 +12,7 @@
 | Agent与start_workflow | agent-store→AgentGenerationClient→main agents；registration child同root/model | 当前actualowner、IPC、consumer有界测试 | S06D全消费者仍未核销完 |
 | import global/style/blueprints | import-novel/analyze-style→Base import slot；main execute ordinal+actual lease；prepared effectguard | 当前import owner14case与中央集成；本表不替代后续最新receipt | 最终整合freeze以root为准，不沿旧12caseauthority验收 |
 | editor选区refine/expand/continue/dialogue | CodeMirrorEditor→EditorInlineGenerationClient→main editor context/task | main5case、恢复卡4case+旧11 browser | 作者替换只本地dirty；独立root终验为准 |
-| 定稿notes/characters后处理 | finalize-chapter已有Base main selection与characters main proof | 已接main，不代表阶段durable恢复完成 | notes+blueprint双IPC非TX、contextId Map、原ACK持久/旧epoch恢复未完成；见s06d-finalization-recovery-plan |
+| 定稿notes/characters后处理 | finalize-chapter→专属main slot/context/task/effect；原attempt持久ACK | 实际SQLite、renderer及注册IPC；notes/blueprint/ACK同TX，角色字段保护与原epoch基线；详见专属证据 | scoped完成不代表真实模型/安装；旧直接派生写入与generic定稿执行已退役 |
 | 剧情树 | plot-tree-generator默认createGenerationRuntime({budget,modelId,projectSession}) | 旧合同测试不等main迁移 | NOT MIGRATED；自动保存派生snapshot需来源/ACK guard |
 | 叙事计划/事件候选 | narrative-thread-candidate-generator默认旧runtime | 旧候选parse/evidence测试不等main迁移 | NOT MIGRATED；作者确认才写plan/event，需main实际source context |
 | 旧角色Markdown修复 | use-character-roster-repair→architecture-workflow.migrateLegacyCharacterRoster→RepairLegacyCharacterRosterCommand | 实际生产动态import与callLLM已确认 | NOT MIGRATED；execute无selection走Base legacy，bounded continuation/JSON repair尚无main root。legacy_cards_preserved的adopt分支无模型，不与Markdown路径混淆 |
@@ -28,4 +28,4 @@
 
 ## 当前阻断
 
-S06D不得complete：plot、narrative候选、旧角色Markdown修复三条实际legacy生成仍待迁；定稿后处理已main但durable阶段效果/恢复未完成。CI timeout/native异常另案，不在本表抹掉。没有运行模型、没有新增生产或测试变更。
+S06D不得complete：plot、narrative候选、旧角色Markdown修复三条实际legacy生成仍待迁。定稿已完成本地有界恢复与提交保护，尚不代表模型或安装资格。旧角色两分支还调用已停用的按名字写入接口，需明确ID/proposal批准；不能仅替换模型runtime。CI timeout/native异常仍未确认根因。真实模型调用仍为0。

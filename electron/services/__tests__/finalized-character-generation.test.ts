@@ -45,7 +45,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   const dispatchSpy = vi.fn<GenerationRunServiceDependencies['dispatch']>(dispatch ?? (async (_request, options) => {
     options.onVisible({ kind: 'delta', text: response() }); return { finishReason: 'stop', usage: null }
   }))
-  const deps = { db, projectStorageRoot: root, globalDataRoot: root, readBuiltinPrompt: () => '{"prompt":"合成冻结模板"}' }
+  const deps = { db, projectStorageRoot: root, globalDataRoot: root, readBuiltinPrompt: (key: string) => JSON.stringify({ key, systemRole: '合成定稿编辑', content: '正文：{{chapter_content}} 角色：{{existing_cards_json}}' }) }
   let current = true
   const owner = createMainGenerationOwner({ database: db, projectId: 'project', epoch: 'epoch',
     assertCurrent: () => { if (!current) throw new Error('GENERATION_EPOCH_STALE') },
@@ -65,20 +65,23 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
     return { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash }
   }
   const run = async () => {
-    const view = owner.begin(selection)
-    const receipt = await owner.execute({ handle: view.handle, invocationNonce: 'extract-1', task })
-    return { handle: view.handle, artifact: artifactOf(receipt), contextId: prepared.contextId }
+    const view = owner.beginFinalizationGeneration({ slot: { source: prepared.context.source, stepKey: 'character_cards' }, modelId: model.id }).view
+    const receipt = await owner.executeFinalizationGeneration({ handle: view.handle })
+    return { handle: view.handle, artifact: artifactOf(receipt) }
   }
   return { owner, db, selection, prepared, characterId, dispatch: dispatchSpy, response, run, task, artifactOf, invalidate: () => { current = false } }
 }
 
 describe('finalized character extraction through the main owner', () => {
-  it('requires the actual opaque context before any dispatch and rejects renderer admission hashes', () => {
+  it('rejects generic finalized admission even with an issued opaque context', async () => {
     const f = fixture()
     expect(f.prepared.context.identityStatus).toBe('bound')
-    expect(() => f.owner.begin({ ...f.selection, finalizedCharacterContextId: undefined })).toThrow('GENERATION_CHARACTER_CONTEXT_REQUIRED')
+    expect(() => f.owner.begin(f.selection)).toThrow('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
+    expect(() => f.owner.begin({ ...f.selection, finalizedCharacterContextId: undefined })).toThrow('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
     expect(() => f.owner.begin({ ...f.selection, finalizedCharacterContextHash: textHash('forged') } as BeginGenerationRequest)).toThrow('GENERATION_BEGIN_INVALID')
-    expect(() => f.owner.begin({ ...f.selection, authorInputs: [{ id: 'finalized-character-context', text: '{}' }] })).toThrow('GENERATION_CHARACTER_CONTEXT_REQUIRED')
+    expect(() => f.owner.begin({ ...f.selection, authorInputs: [{ id: 'finalized-character-context', text: '{}' }] })).toThrow('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
+    const { view } = f.owner.beginFinalizationGeneration({ slot: { source: f.prepared.context.source, stepKey: 'character_cards' }, modelId: 'synthetic' })
+    await expect(f.owner.execute({ handle: view.handle, invocationNonce: 'forged-generic', task: f.task })).rejects.toThrow('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
     expect(f.dispatch).not.toHaveBeenCalled()
   })
   it('keeps immutable finalized identity snapshots outside generic legacy proposal resolution', () => {
@@ -96,51 +99,53 @@ describe('finalized character extraction through the main owner', () => {
   it('commits only the durable artifact by ID, preserves provenance and replays without another request', async () => {
     const f = fixture(), request = await f.run()
     const staticProjection = f.db.prepare("SELECT characters_arch FROM project_core WHERE id='main'").pluck().get()
-    expect(f.owner.commitFinalizedCharacterStates(request)).toMatchObject({ applied: 1, unchanged: 0, unresolved: [] })
+    expect(f.owner.commitFinalizationGeneration(request)).toMatchObject({ applied: 1, unchanged: 0, unresolved: [] })
     const row = f.db.prepare('SELECT cs_location,cs_provenance FROM characters WHERE character_id=?').get(f.characterId) as { cs_location: string; cs_provenance: string }
     expect(row.cs_location).toBe('北塔')
     expect(JSON.parse(row.cs_provenance).location).toMatchObject({ kind: 'derived', source: f.prepared.context.source })
-    expect(f.owner.commitFinalizedCharacterStates(request)).toMatchObject({ applied: 0, unchanged: 1 })
+    expect(f.owner.commitFinalizationGeneration(request)).toMatchObject({ applied: 1, unchanged: 0 })
     expect(f.db.prepare('SELECT body FROM contents WHERE id=1').pluck().get()).toBe(prose)
     expect(f.db.prepare("SELECT characters_arch FROM project_core WHERE id='main'").pluck().get()).toBe(staticProjection)
     expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
-  it('rejects a field edit made after context preparation and leaves its author value intact', () => {
+  it('rejects a field edit made after dedicated context admission and leaves its author value intact', async () => {
     const f = fixture()
+    const request = await f.run()
     f.db.prepare('UPDATE characters SET cs_location=? WHERE character_id=?').run('作者后来设置', f.characterId)
-    expect(() => f.owner.begin(f.selection)).toThrow('GENERATION_CHARACTER_CONTEXT_CHANGED')
-    expect(f.dispatch).not.toHaveBeenCalled()
+    expect(() => f.owner.commitFinalizationGeneration(request)).toThrow()
+    expect(f.db.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe('作者后来设置')
+    expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
   it('keeps a late field-conflicting artifact as a candidate without replacing author text', async () => {
     const f = fixture(), request = await f.run()
     f.db.prepare('UPDATE characters SET cs_location=? WHERE character_id=?').run('作者后来设置', f.characterId)
-    expect(() => f.owner.commitFinalizedCharacterStates(request)).toThrow('FINALIZED_CHARACTER_FIELD_CONFLICT')
+    expect(() => f.owner.commitFinalizationGeneration(request)).toThrow()
     expect(f.db.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe('作者后来设置')
     expect(f.owner.read(request.handle).candidates).toHaveLength(1)
   })
   it('rejects mismatching artifact references and contexts without changing a field', async () => {
     const f = fixture(), request = await f.run()
-    expect(() => f.owner.commitFinalizedCharacterStates({ ...request, artifact: { ...request.artifact, textHash: 'a'.repeat(64) } })).toThrow('CHARACTER_PROPOSAL_ARTIFACT_INVALID')
-    expect(() => f.owner.commitFinalizedCharacterStates({ ...request, contextId: 'not-issued' })).toThrow('GENERATION_CHARACTER_CONTEXT_REQUIRED')
-    expect(() => f.owner.commitFinalizedCharacterStates({ ...request, handle: { ...request.handle, epoch: 'other' } })).toThrow('GENERATION_CHARACTER_CONTEXT_REQUIRED')
+    expect(() => f.owner.commitFinalizationGeneration({ ...request, artifact: { ...request.artifact, textHash: 'a'.repeat(64) } })).toThrow('GENERATION_FINALIZATION_ARTIFACT_INVALID')
+    expect(() => f.owner.commitFinalizationGeneration({ ...request, contextId: 'not-issued' } as typeof request)).toThrow('GENERATION_FINALIZATION_REQUEST_INVALID')
+    expect(() => f.owner.commitFinalizationGeneration({ ...request, handle: { ...request.handle, epoch: 'other' } })).toThrow('GENERATION_RUN_IDENTITY_MISMATCH')
     expect(f.db.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe('')
   })
   it('refuses cancelled or superseded source output and retains its durable candidate', async () => {
     const f = fixture(), request = await f.run()
     f.owner.cancel(request.handle)
-    expect(() => f.owner.commitFinalizedCharacterStates(request)).toThrow('GENERATION_ACTION_CANCELLED')
+    expect(() => f.owner.commitFinalizationGeneration(request)).toThrow('GENERATION_ACTION_CANCELLED')
     expect(f.owner.read(request.handle).candidates).toHaveLength(1)
   })
   it('refuses changed finalized prose with no derived write', async () => {
     const f = fixture(), request = await f.run()
     f.db.prepare('UPDATE contents SET body=? WHERE id=1').run('作者后改定稿')
-    expect(() => f.owner.commitFinalizedCharacterStates(request)).toThrow('GENERATION_FINALIZED_SOURCE_NOT_CURRENT')
+    expect(() => f.owner.commitFinalizationGeneration(request)).toThrow('GENERATION_FINALIZED_SOURCE_NOT_CURRENT')
     expect(f.db.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe('')
   })
   it('rolls back state and provenance when storage rejects an update', async () => {
     const f = fixture(), request = await f.run()
     f.db.exec("CREATE TRIGGER reject_state BEFORE UPDATE OF cs_provenance ON characters BEGIN SELECT RAISE(ABORT,'SYNTHETIC_STORAGE_FAILURE'); END")
-    expect(() => f.owner.commitFinalizedCharacterStates(request)).toThrow('SYNTHETIC_STORAGE_FAILURE')
+    expect(() => f.owner.commitFinalizationGeneration(request)).toThrow('SYNTHETIC_STORAGE_FAILURE')
     expect(f.db.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe('')
     expect(f.owner.read(request.handle).candidates).toHaveLength(1)
   })
@@ -149,7 +154,8 @@ describe('finalized character extraction through the main owner', () => {
       options.onVisible({ kind: 'delta', text: JSON.stringify({ updates: [{ name: '林岚', currentState: { location: '北塔' }, evidence: { start: 0, end: prose.length, text: prose } }] }) })
       return { finishReason: 'stop', usage: null }
     })
-    const request = await f.run(), receipt = f.owner.commitFinalizedCharacterStates(request)
+    const request = await f.run(), receipt = f.owner.commitFinalizationGeneration(request)
+    if (receipt.stepKey !== 'character_cards') throw new Error('角色回执类型错误')
     expect(receipt).toMatchObject({ applied: 0, unresolved: [{ originalText: '林岚', reason: 'name-only' }] })
     const batch = f.owner.characterProposals.read(receipt.proposalBatchId!)
     expect(batch).toMatchObject({ status: 'pending-approval', source: { kind: 'finalized-generation' }, items: [{ fields: { name: '林岚' } }] })
@@ -169,7 +175,7 @@ describe('finalized character extraction through the main owner', () => {
       return { finishReason: kind === 'length' ? 'length' : 'stop', usage: null }
     })
     const request = await f.run()
-    expect(() => f.owner.commitFinalizedCharacterStates(request)).toThrow()
+    expect(() => f.owner.commitFinalizationGeneration(request)).toThrow()
     expect(f.db.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe('')
   })
 })

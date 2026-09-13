@@ -48,6 +48,7 @@ export class FinalizedCharacterGeneration {
     this.assertCurrent()
     if (!request || Object.keys(request).some(key => !['contextId', 'handle', 'artifact'].includes(key)))
       throw new Error('GENERATION_CHARACTER_COMMIT_INVALID')
+    if (this.runs.get(request.handle.runId).binding.sourceManifest.finalizationGenerationContext) throw new Error('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
     const context = this.contexts.get(request.contextId)
     if (!context || request.handle.projectId !== this.scope.projectId || request.handle.epoch !== this.scope.epoch)
       throw new Error('GENERATION_CHARACTER_CONTEXT_REQUIRED')

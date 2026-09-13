@@ -14,15 +14,17 @@ export function proveCharacterProposal(db: Database.Database, runs: GenerationRu
   if (!source || typeof source !== 'object') throw new Error('CHARACTER_PROPOSAL_SOURCE_INVALID')
   if (source.kind === 'finalized-generation') {
     if (Object.keys(source).some(key => !['kind', 'handle', 'artifact'].includes(key))) throw new Error('CHARACTER_PROPOSAL_SOURCE_INVALID')
-    if (forWrite) assertSources(source.handle)
     const proof = proveFinalizedCharacterGeneration(db, runs, projectId, source.handle, source.artifact)
+    if (forWrite) assertSources(proof.currentHandle)
     const items = proof.response.unresolved.filter(item => item.displayName.trim()).map(item => ({
       selectionKey: item.selectionKey, sourceId: `${proof.context.source.finalizationId}:${source.artifact.artifactId}:${item.selectionKey}`,
       fields: { name: item.displayName }, relationships: [], rawValue: structuredClone(item),
     }))
-    const sourceHash = textHash(JSON.stringify([source, items]))
+    const canonicalSource = proof.stableFinalizationSource ? { kind: source.kind, handle: proof.sourceHandle,
+      artifact: { artifactId: source.artifact.artifactId, revision: source.artifact.revision, textHash: source.artifact.textHash } } : source
+    const sourceHash = textHash(JSON.stringify([canonicalSource, items]))
     return { items, sourceHash, provenance: { kind: 'derived', modelRevision: proof.model.modelRevision,
-      source: { projectId, epoch: source.handle.epoch, sourceId: proof.context.source.finalizationId,
+      source: { projectId, epoch: proof.sourceHandle.epoch, sourceId: proof.context.source.finalizationId,
         revision: proof.context.sourceOrder.authoritativeFinalizationRevision, contentHash: proof.context.source.contentHash } } }
   }
   if (source.kind === 'import') {
