@@ -16,12 +16,6 @@ import { createBatchChapterWorkflow } from '../batch-chapter-workflow'
 import { createDirectoryWorkflow } from '../directory-workflow'
 import { createImportWorkflow } from '../import-workflow'
 
-vi.mock('../commands/legacy-character-roster-repair.command', () => ({
-  RepairLegacyCharacterRosterCommand: class {
-    async execute(): Promise<void> {}
-  },
-}))
-
 const PROJECT_PATH = 'C:\\novels\\workflow-resource-claims'
 const PROJECT_SESSION = Object.freeze({
   projectId: 'workflow-resource-claims',
@@ -114,7 +108,16 @@ beforeEach(() => {
   // 工作流夹具显式提供桌面桥接；未知调用仍拒绝，避免掩盖真实 IPC 缺失。
   vi.stubGlobal('window', {
     aiNovelAPI: {
-      invoke: vi.fn(async (channel: string) => {
+      invoke: vi.fn(async (channel: string, request: unknown) => {
+        if (channel === 'legacy-roster:read-source') return {
+          snapshot: { revision: 7, migrationState: 'legacy_cards_preserved' },
+          legacyHash: 'a'.repeat(64), identityRevision: 3, factsHash: 'b'.repeat(64),
+        }
+        if (channel === 'legacy-roster:adopt-existing') {
+          expect(request).toMatchObject({ expectedRevision: 7, expectedLegacyHash: 'a'.repeat(64), expectedIdentityRevision: 3, expectedFactsHash: 'b'.repeat(64) })
+          expect(useWorkflowStore.getState().activeRuns[0]?.resourceKeys).toContain('character-roster')
+          return { success: true, snapshot: { renderedMarkdown: '合成既有角色卡的只读图谱' } }
+        }
         if (channel === 'skills:list-user') return []
         if (channel === 'fs:check-exists') return false
         throw new Error(`测试未配置桌面调用：${channel}`)
@@ -228,6 +231,12 @@ describe('workflow factory resource claims', () => {
 
     const repair = useWorkflowStore.getState().history.find(run => run.type === 'post_process')
     expect(repair).toBeDefined()
+    expect(repair?.status).toBe('completed')
+    const channels = vi.mocked(window.aiNovelAPI!.invoke).mock.calls.map(([channel]) => channel)
+    expect(channels.filter(channel => channel === 'legacy-roster:read-source')).toHaveLength(2)
+    expect(channels.filter(channel => channel === 'legacy-roster:adopt-existing')).toHaveLength(1)
+    expect(channels).not.toContain('legacy-roster:begin')
+    expect(channels).not.toContain('db:character-roster-commit')
     expect(repair?.resourceKeys ?? []).toContain('character-roster')
     const architecture = createArchitectureWorkflow({
       projectPath: PROJECT_PATH,

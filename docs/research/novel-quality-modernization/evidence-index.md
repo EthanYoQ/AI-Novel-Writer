@@ -28,6 +28,7 @@
 | S06D 图谱与叙事候选 | `s06d-graph-evidence.md` | main实际来源、单次请求、稳定候选索引、原子确认与历史ACK；保留原派生规则，0真实模型调用 |
 | S06D 定稿恢复 | `s06d-finalization-evidence.md` | 实际来源与身份快照、同 root 有界修复、原子 effect/原 ACK、稳定 proposal 身份；独立 IPC 反例修复和资格边界见专属材料 |
 | S06D 旧角色与最终消费者 | `s06d-legacy-roster-evidence.md`、`s06d-consumer-coverage.md` | 原候选、明确 ID 批准及无模型采用；两编辑器恢复与跨项目取消保护；13 类默认入口源码核销通过，局部确定性门交接 S07/S09C |
+| S06D 最新云端 CI 与测试入口补齐 | [运行 34744690434](https://github.com/EthanYoQ/AI-Novel-Writer/actions/runs/34744690434)、私有 `s09c-ci-fixture-receipt.json` | `5024594` 失败：3750 项通过、4 项超时、1 项旧资源互斥测试漏配新 IPC、向量 worker `0xC0000409`；已补齐该测试的真实默认 command 与专用 IPC 合成夹具，原 8 项断言通过。超时和 native 根因仍未确认，不宣称 CI 已通过 |
 | G01 原问题台账 | `g01-issue-ledger.md` | 10 项正文/评论与相关 PR/Release fresh-read；逐症状验收 owner；没有当前可关闭结论 |
 
 私有文件均位于本任务 `.runtime/.cache/novel-quality-modernization/`，不进入提交。绝对执行路径、依赖和产物哈希供本机重跑使用，公开材料只包含非秘密字段和合成作品。
