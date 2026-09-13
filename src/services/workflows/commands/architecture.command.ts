@@ -1360,45 +1360,68 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       messageIndex: 1,
       finalText: JSON.stringify({ [key]: manifestContext[key] }).slice(1, -1),
     })
-    const manifestRaw = await this.callLLMWithBoundedCompletion(
-      manifestPrompt,
-      manifestSystem,
-      callbacks,
-      { mode: 'replace-structured-output', maxContinuations: 2 },
-      {
-        responseFormat: { type: 'json_object' },
-        purpose: 'character-architecture-manifest',
-        reasoningStage: 'planning',
-        writingSkillStage: 'planning',
-        promptBudget: {
-          limitUtf8Bytes: MAX_CHARACTER_STRUCTURED_CONTEXT_UTF8_BYTES,
-          sections: [
-            {
-              sectionName: 'system-instructions',
-              messageIndex: 0,
-              finalText: manifestSystem,
-            },
-            manifestSection('story-premise', 'premise'),
-            manifestSection('genre', 'genre'),
-            manifestSection('protagonist-profile', 'protagonistProfile'),
-            manifestSection('global-guidance', 'globalGuidance'),
-            manifestSection('step-guidance', 'stepGuidance'),
-            manifestSection('reference-works', 'referenceWorks'),
-          ],
+    const MANIFEST_MAX_RETRIES = 2
+    let manifestRaw: string | undefined
+    let manifest: CharacterIdentitySlot[] | undefined
+    let lastManifestError: string | undefined
+    for (let manifestAttempt = 0; manifestAttempt <= MANIFEST_MAX_RETRIES; manifestAttempt++) {
+      this.assertNotCancelled(context)
+      assertArchitectureProjectSessionCurrent(projectSession, context)
+      const currentManifestPrompt = lastManifestError
+        ? `${manifestPrompt}\n\n【上次生成校验失败】\n${lastManifestError}\n\n请严格按合同重新输出完整清单，不得遗漏主角。`
+        : manifestPrompt
+      manifestRaw = await this.callLLMWithBoundedCompletion(
+        currentManifestPrompt,
+        manifestSystem,
+        callbacks,
+        { mode: 'replace-structured-output', maxContinuations: 2 },
+        {
+          responseFormat: { type: 'json_object' },
+          purpose: 'character-architecture-manifest',
+          reasoningStage: 'planning',
+          writingSkillStage: 'planning',
+          promptBudget: {
+            limitUtf8Bytes: MAX_CHARACTER_STRUCTURED_CONTEXT_UTF8_BYTES,
+            sections: [
+              {
+                sectionName: 'system-instructions',
+                messageIndex: 0,
+                finalText: manifestSystem,
+              },
+              manifestSection('story-premise', 'premise'),
+              manifestSection('genre', 'genre'),
+              manifestSection('protagonist-profile', 'protagonistProfile'),
+              manifestSection('global-guidance', 'globalGuidance'),
+              manifestSection('step-guidance', 'stepGuidance'),
+              manifestSection('reference-works', 'referenceWorks'),
+            ],
+          },
         },
-      },
-      context,
-    )
-    let manifest: CharacterIdentitySlot[]
-    try {
-      manifest = decodeCharacterIdentityManifest(manifestRaw)
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      throw new Error(text(
-        detail,
-        'The character identity manifest was invalid, so no character data was saved.',
-      ))
+        context,
+      )
+      try {
+        manifest = decodeCharacterIdentityManifest(manifestRaw)
+        break
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        lastManifestError = detail
+        if (manifestAttempt < MANIFEST_MAX_RETRIES) {
+          callbacks.log(text(
+            `  角色身份清单校验失败（第 ${manifestAttempt + 1} 次），正在重试...（${detail}）`,
+            `  Character identity manifest validation failed (attempt ${manifestAttempt + 1}); retrying... (${detail})`,
+          ))
+          continue
+        }
+        throw new Error(text(
+          detail,
+          'The character identity manifest was invalid after retries, so no character data was saved.',
+        ))
+      }
     }
+    if (manifest === undefined) throw new Error(text(
+      '角色身份清单生成失败',
+      'Character identity manifest generation failed.',
+    ))
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
     const manifestById = new Map(manifest.map(slot => [slot.slotId, slot]))
