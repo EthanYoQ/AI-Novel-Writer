@@ -152,8 +152,7 @@ export class ProjectCoreRepository {
     }
 
     /** 更新项目配置（传入部分字段即可） */
-    static update(data: Partial<ProjectCoreData>): void {
-        const db = getProjectDb()
+    static update(data: Partial<ProjectCoreData>, db = getProjectDb()): void {
         if (!db) throw new Error('项目数据库未打开')
         if (Object.hasOwn(data, 'charactersArch')) {
             throw new Error('角色图谱由角色名单自动生成；请通过角色管理修改角色资料')

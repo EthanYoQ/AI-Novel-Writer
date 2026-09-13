@@ -4,11 +4,12 @@ import { useProjectStore } from '../../../../stores/project-store'
 import { useLocaleStore } from '../../../../stores/locale-store'
 import { useWorkflowStore } from '../../../../stores/workflow-store'
 import { runAgentLoop } from '../../agent-engine'
-import { toolRegistry } from '../../tool-registry'
+import { toolRegistry, type AgentExecutionContext } from '../../tool-registry'
+import type { AgentToolActionRef } from '../../../../shared/agent-generation'
 import { launchCreativeWorkflow } from '../../../workflows/creative-workflow-launcher'
 import { PROJECT_FACT_TARGETS } from '../../../project-fact-targets'
 import { createAgentExecutionContext } from '../project-context'
-import { startWorkflowTool } from '../start-workflow.tool'
+import { startWorkflowTool as productionStartWorkflowTool } from '../start-workflow.tool'
 import { writeFileTool } from '../write-file.tool'
 
 const projectPath = 'C:\\novels\\issue-90'
@@ -33,9 +34,35 @@ const project = {
   },
 }
 
+// This launcher test supplies a synthetic main-issued action. Real source and
+// action admission are covered by the main SQLite tests; the launcher, guards,
+// workflow registration, locale and cancellation below remain real.
+const issuedActions = new Map<string, { args: Record<string, unknown>; modelId: string }>()
+const startWorkflowTool = {
+  ...productionStartWorkflowTool,
+  execute: (args: Record<string, unknown>, context?: AgentExecutionContext) => {
+    const ref: AgentToolActionRef = { handle: { projectId: project.id, epoch: project.sessionLease,
+      rootActionId: 'synthetic-agent-root', runId: 'synthetic-agent-run' },
+      attemptId: 'synthetic-attempt', toolCallId: `synthetic-action-${issuedActions.size}` }
+    issuedActions.set(ref.toolCallId, { args: structuredClone(args), modelId: context?.selectedModelId ?? 'model' })
+    return productionStartWorkflowTool.execute(args, { ...(context ?? createAgentExecutionContext()), agentToolAction: ref })
+  },
+}
+
 function stubWorkflowIpc(overrides: Partial<Record<string, unknown>> = {}): ReturnType<typeof vi.fn> {
-  const invoke = vi.fn((channel: string) => {
+  const invoke = vi.fn((channel: string, request?: unknown) => {
     if (channel in overrides) return Promise.resolve(overrides[channel])
+    if (channel === 'agent-generation:register-workflow') {
+      const ref = (request as { ref: AgentToolActionRef }).ref
+      const issued = issuedActions.get(ref.toolCallId)
+      if (!issued) return Promise.reject(new Error('Synthetic main action missing'))
+      if (['review', 'refine', 'finalize'].includes(String(issued.args.workflow))) {
+        return Promise.reject(new Error('工作流需要明确的草稿身份'))
+      }
+      return Promise.resolve({ registrationId: `registration-${ref.toolCallId}`, workflow: issued.args.workflow,
+        chapterNumber: issued.args.chapter_number, parentHandle: ref.handle, modelId: issued.modelId,
+        state: 'registered', childHandles: [] })
+    }
     if (channel === 'db:project-core-get') {
       const longEnough = '完整架构信息'.repeat(20)
       return Promise.resolve({ premise: longEnough, charactersArch: longEnough, worldbuilding: longEnough, synopsis: longEnough })
@@ -74,6 +101,8 @@ function stubWorkflowIpc(overrides: Partial<Record<string, unknown>> = {}): Retu
 }
 
 beforeEach(() => {
+  issuedActions.clear()
+  stubWorkflowIpc()
   useLocaleStore.setState({ locale: 'zh-CN' })
   useProjectStore.setState({ currentProject: project as never })
   useWorkflowStore.setState({

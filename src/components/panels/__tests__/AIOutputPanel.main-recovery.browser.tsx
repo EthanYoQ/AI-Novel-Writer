@@ -121,3 +121,51 @@ it.each(['completed', 'failed'] as const)('中文恢复面板按明确组合资�
   expect(startWorkflow.mock.calls[0][0]).toMatchObject({ generationModelId: '原模型', projectSession: session })
   expect(invoke.mock.calls.some(([channel]) => channel === 'generation:execute' || channel === 'generation:begin')).toBe(false)
 })
+
+it.each(['unknown', 'conflict', 'cancelled'] as const)('助手恢复卡只显示可见回复并保留 %s 边界', async state => {
+  const { useAgentStore } = await import('../../../stores/agent-store')
+  const { useLayoutStore } = await import('../../../stores/layout-store')
+  const agentState = useAgentStore.getState(), layoutState = useLayoutStore.getState()
+  const session = { projectId: '助手海港', leaseId: '当前会话', projectPath: 'C:/合成助手海港' }
+  const handle: MainGenerationRunHandle = { projectId: session.projectId, epoch: '原会话', rootActionId: '原助手预算', runId: '原助手轮次' }
+  const visibleText = '林岚在海港找到了信。'
+  const view = { handle, status: state === 'cancelled' ? 'cancelled' : 'failed', artifacts: [], ledger: { physicalRequests: 2 } }
+  const recovery = { handle, modelId: '冻结原模型', context: { input: { userMessage: '检查海港设定' } },
+    sourceStatus: state === 'conflict' ? 'conflict' : 'current', run: view, nextRound: null,
+    rounds: [{ index: 0, handle, status: 'unknown', visibleText,
+      protocolText: '<tool_call>{"name":"秘密协议标记"}</tool_call>', actions: [] }] }
+  const invoke = vi.fn(async (channel: string) => {
+    if (channel === 'generation:list') return [view]
+    if (channel === 'generation:list-batches' || channel === 'db:recovery-candidate-list') return []
+    if (channel === 'generation:read-context') return { handle, operation: 'agent-round' }
+    if (channel === 'agent-generation:read') return recovery
+    throw new Error(`未配置调用：${channel}`)
+  })
+  const resumeGeneration = vi.fn().mockResolvedValue(undefined)
+  try {
+    Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: () => () => {} } })
+    useAgentStore.setState({ resumeGeneration })
+    useProjectStore.setState({ currentProject: { id: session.projectId, path: session.projectPath, name: '助手海港', sessionLease: session.leaseId, novelConfig: {} } as never })
+    useWorkflowStore.setState({ activeRuns: [], history: [], currentRun: null })
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container)
+    await act(async () => root!.render(<AIOutputPanel />))
+    await vi.waitFor(() => expect(container!.textContent).toContain(visibleText))
+    expect(container.textContent).not.toContain('秘密协议标记')
+    expect(container.textContent).not.toContain('<tool_call>')
+    expect(container.textContent).toContain('部分操作结果待确认，恢复时不会自动重做。')
+    expect(container.textContent).toContain('已用 2 次请求')
+    const button = [...container.querySelectorAll('button')].find(item => item.textContent === '恢复此助手任务')!
+    expect(button.disabled).toBe(state !== 'unknown')
+    if (state === 'conflict') expect(container.textContent).toContain('来源已变化；保留的回复仍可复制。')
+    if (state === 'cancelled') expect(container.textContent).toContain('已取消')
+    await act(async () => button.click())
+    if (state === 'unknown') {
+      await vi.waitFor(() => expect(resumeGeneration).toHaveBeenCalledExactlyOnceWith(handle))
+      expect(useLayoutStore.getState().rightView).toBe('agent')
+    } else expect(resumeGeneration).not.toHaveBeenCalled()
+    expect(invoke.mock.calls.some(([channel]) => ['agent-generation:begin', 'agent-generation:round', 'generation:execute'].includes(channel))).toBe(false)
+  } finally {
+    useAgentStore.setState(agentState, true); useLayoutStore.setState(layoutState, true)
+  }
+})

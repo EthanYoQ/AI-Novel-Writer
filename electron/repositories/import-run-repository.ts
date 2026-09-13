@@ -260,6 +260,11 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[]):
 
 function assertEffectPayloadSchema(kind: ImportRunEffectKind, payload: unknown): void {
   if (!isRecord(payload)) throw new Error()
+  const generationKeys = Object.hasOwn(payload, 'generationRunHandle') ? ['generationRunHandle'] : []
+  if (generationKeys.length) {
+    const handle = payload.generationRunHandle
+    if (!isRecord(handle) || !exactKeys(handle, ['projectId', 'epoch', 'rootActionId', 'runId']) || Object.values(handle).some(value => typeof value !== 'string' || !value.trim())) throw new Error()
+  }
   if (kind === 'author-finalized-batch') {
     if (
       !exactKeys(payload, ['operationId', 'runId', 'authorityFingerprint', 'manifestFingerprint'])
@@ -283,7 +288,7 @@ function assertEffectPayloadSchema(kind: ImportRunEffectKind, payload: unknown):
   }
   if (kind === 'project-global-facts') {
     if (
-      !exactKeys(payload, ['operationId', 'expectedRosterRevision', 'core', 'characterEntries'])
+      !exactKeys(payload, ['operationId', 'expectedRosterRevision', 'core', 'characterEntries', ...generationKeys])
       || typeof payload.operationId !== 'string'
       || !Number.isSafeInteger(payload.expectedRosterRevision)
       || !isRecord(payload.core)
@@ -293,7 +298,7 @@ function assertEffectPayloadSchema(kind: ImportRunEffectKind, payload: unknown):
     return
   }
   if (
-    !exactKeys(payload, ['mode', 'operationId', 'startChapter', 'endChapter', 'blueprints'])
+    !exactKeys(payload, ['mode', 'operationId', 'startChapter', 'endChapter', 'blueprints', ...generationKeys])
     || payload.mode !== 'replace-range'
     || typeof payload.operationId !== 'string'
     || !Number.isSafeInteger(payload.startChapter)
@@ -368,9 +373,11 @@ function assertCommittedEffectSchema(kind: ImportRunEffectKind, payload: unknown
   }
   if (kind === 'project-global-facts') {
     if (isRecord(effectReceipt.characterProposal)) {
+      const { generationRunHandle: _generationRunHandle, ...domainPayload } = payload
+      void _generationRunHandle
       if (!exactKeys(effectReceipt, ['operationId', 'payloadHash', 'idempotent', 'core', 'characterProposal', 'proposalSource'])
         || effectReceipt.operationId !== payload.operationId || typeof effectReceipt.payloadHash !== 'string' || !SHA256.test(effectReceipt.payloadHash)
-        || typeof effectReceipt.idempotent !== 'boolean' || !isRecord(effectReceipt.core) || !canonicalEqual(effectReceipt.proposalSource, payload)
+        || typeof effectReceipt.idempotent !== 'boolean' || !isRecord(effectReceipt.core) || !canonicalEqual(effectReceipt.proposalSource, domainPayload)
         || !exactKeys(effectReceipt.characterProposal, ['proposalBatchId', 'sourceHash'])
         || typeof effectReceipt.characterProposal.proposalBatchId !== 'string' || !/^cpb:[a-f0-9]{64}$/.test(effectReceipt.characterProposal.proposalBatchId)
         || typeof effectReceipt.characterProposal.sourceHash !== 'string' || !SHA256.test(effectReceipt.characterProposal.sourceHash)) throw new Error()
@@ -523,7 +530,7 @@ function assertCommittedEffectAuthority(
     return
   }
   const authoritative = kind === 'project-global-facts'
-    ? ImportGlobalFactsRepository.getCommittedOperation((payload as ImportGlobalFactsRequest).operationId)
+    ? ImportGlobalFactsRepository.readHistoricalCommittedOperation((payload as ImportGlobalFactsRequest).operationId)
     : BlueprintRepository.getCommittedRangeOperation((payload as BlueprintRangeCommitRequest).operationId)
   if (!authoritative) throw new Error()
   if (kind === 'chapter-blueprint-range') {
@@ -2207,6 +2214,7 @@ export class ImportRunRepository {
     request: ImportRunPrepareEffectReceiptRequest,
     execution: ImportRunExecutionLease,
     now = Date.now(),
+    assertGenerationSources?: (handle: MainGenerationRunHandle, slot: import('../../src/shared/import-generation').ImportGenerationSlot) => void,
   ): ImportRunEffectReceipt {
     const effectKey = request.effectKey?.trim()
     const batchId = request.batchId?.trim()
@@ -2231,6 +2239,14 @@ export class ImportRunRepository {
           || existing.payload_hash !== payload.hash
         ) throw new Error('导入 effect receipt 已绑定不同载荷')
         return rowToEffectReceipt(existing, run)
+      }
+      if (run.purpose === 'reference') {
+        const handle = (request.payload as { generationRunHandle?: MainGenerationRunHandle }).generationRunHandle
+        const hasGenerationTable = db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='generation_runs'").pluck().get()
+        const bound = hasGenerationTable && db().prepare("SELECT 1 FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.importSlot.runId')=? AND json_extract(binding_json,'$.sourceManifest.importSlot.stage')=? AND json_extract(binding_json,'$.sourceManifest.importSlot.batchId')=?")
+          .pluck().get(request.runId, request.stage, batchId)
+        if ((assertGenerationSources || bound) && !handle) throw new Error('GENERATION_IMPORT_EFFECT_HANDLE_REQUIRED')
+        if (assertGenerationSources && handle) assertGenerationSources(handle, { runId: request.runId, stage: request.stage as 'global' | 'style' | 'blueprints', batchId })
       }
       db().prepare(`
         INSERT INTO import_run_receipts (
@@ -2257,7 +2273,7 @@ export class ImportRunRepository {
     batchId: string,
     execution: ImportRunExecutionLease,
     now = Date.now(),
-    assertGenerationSources?: (handle: MainGenerationRunHandle) => void,
+    assertGenerationSources?: (handle: MainGenerationRunHandle, slot?: import('../../src/shared/import-generation').ImportGenerationSlot) => void,
   ): ImportRunEffectCommitResult {
     return db().transaction(() => {
       const run = assertExecution(runId, execution, now)
@@ -2276,6 +2292,11 @@ export class ImportRunRepository {
         }
       }
       let effectReceipt: unknown
+      const generationRunHandle = (validatedReceipt.payload as { generationRunHandle?: MainGenerationRunHandle }).generationRunHandle
+      if (generationRunHandle) {
+        if (!assertGenerationSources || !['global', 'style', 'blueprints'].includes(stage)) throw new Error('GENERATION_GUARD_REQUIRED')
+        assertGenerationSources(generationRunHandle, { runId, stage: stage as 'global' | 'style' | 'blueprints', batchId })
+      }
       switch (row.kind) {
         case 'project-global-facts':
           effectReceipt = ImportGlobalFactsRepository.commit(
@@ -2286,10 +2307,6 @@ export class ImportRunRepository {
           const payload = parseJson<{ writingStyle?: unknown; generationRunHandle?: MainGenerationRunHandle }>(row.payload_json, {})
           if (typeof payload.writingStyle !== 'string' || !payload.writingStyle.trim()) {
             throw new Error('导入文风 receipt 载荷无效')
-          }
-          if (payload.generationRunHandle) {
-            if (!assertGenerationSources) throw new Error('GENERATION_GUARD_REQUIRED')
-            assertGenerationSources(payload.generationRunHandle)
           }
           ProjectCoreRepository.update({ writingStyle: payload.writingStyle.trim() })
           effectReceipt = { writingStyle: payload.writingStyle.trim() }

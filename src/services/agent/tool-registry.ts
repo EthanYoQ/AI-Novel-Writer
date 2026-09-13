@@ -84,6 +84,10 @@ export interface ToolResult {
  * renderer active lease while they are executing.
  */
 export interface AgentExecutionContext {
+  /** Host-issued action proof; model arguments never supply generation lineage. */
+  readonly agentToolAction?: import('../../shared/agent-generation').AgentToolActionRef
+  /** Main-only Agent lifecycle adapter, attached by the active conversation host. */
+  readonly agentGeneration?: import('./agent-generation-client').AgentGenerationClient
   readonly projectSession: ProjectSessionContext | null
   /** Visible interface language frozen for this complete Agent turn. */
   readonly uiLocale: import('../../i18n/types').Locale

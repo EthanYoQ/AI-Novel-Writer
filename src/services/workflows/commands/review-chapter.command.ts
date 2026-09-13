@@ -40,7 +40,8 @@ export class ReviewChapterCommand extends ReviewRevisionCommand {
     const language = frozen.writingLanguage
     const text = (zh: string, en: string) => workflowUiText(params.context, zh, en)
     params.callbacks.log(text('准备启动一致性审查引擎...', 'Preparing the continuity review...'))
-    const template = await resolvePromptTemplate('consistency_check', requireWorkflowProjectSession(params.context), language)
+    const projectSession = requireWorkflowProjectSession(params.context)
+    const template = await resolvePromptTemplate('consistency_check', projectSession, language)
     if (!template) throw new Error(text('未找到审稿模板', 'The review prompt template was not found.'))
     const builder = new ReviewPromptBuilder(template, language)
       .withChapterContent(frozen.source.content)

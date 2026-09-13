@@ -5,6 +5,7 @@ import { createMainGenerationTransport } from '../generation/main-generation-tra
 import { createMainOwnedGenerationRuntime, type GenerationRuntime, type MainGenerationRunHandle, type MainGenerationRunView, type MainGenerationSnapshot } from '../generation/generation-runtime'
 import type { GenerationSession } from '../generation/generation-harness'
 import { requireWorkflowProjectSession } from './workflow-project-session'
+import { ipc } from '../ipc-client'
 
 export interface WorkflowMainGenerationSelection extends Omit<BeginGenerationRequest, 'uiActionNonce' | 'modelId' | 'parentRootActionId' | 'selectedDraftIds' | 'selectedFinalizedDraftIds'> {
   selectedDraftIds?: number[]
@@ -31,13 +32,15 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
   transport = createMainGenerationTransport(() => request.context.projectSession)): Promise<WorkflowMainGenerationRuntime> {
   const { context, callbacks } = request
   const projectSession = requireWorkflowProjectSession(context)
-  const modelId = context.generationModelId?.trim() || useLLMStore.getState().defaultModelId
-  if (!modelId) throw new Error('GENERATION_MODEL_REQUIRED')
+  let modelId = context.generationModelId?.trim() || useLLMStore.getState().defaultModelId
+  if (!modelId && !request.selection.importSlot && !request.selection.resumeHandle) throw new Error('GENERATION_MODEL_REQUIRED')
   let closed = false, busy = false
   let inner: Awaited<ReturnType<typeof createMainOwnedGenerationRuntime>> | undefined
   let view: MainGenerationRunView
   let cancelPromise: Promise<unknown> | undefined
   let cancelFailure: unknown
+  let importOrdinal = 0
+  let importStage = false
   const displayed = new Map<string, string>()
   const onSnapshot = (snapshot: MainGenerationSnapshot) => {
     if (closed) return
@@ -57,24 +60,41 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
   const open = async (selection: WorkflowMainGenerationSelection) => {
     if (closed || context.cancelled) throw new Error('GENERATION_WORKFLOW_CANCELLED')
     const { resumeHandle, onRunOpened, ...intent } = selection
-    if (resumeHandle) {
+    importOrdinal = 0
+    importStage = !!intent.importSlot
+    const importRecovery = intent.importSlot ? await ipc.invokeWithProjectSession(projectSession, 'import-generation:read', { slot: intent.importSlot }) : null
+    if (importRecovery) {
+      if (resumeHandle && resumeHandle.runId !== importRecovery.view.handle.runId) throw new Error('GENERATION_IMPORT_SLOT_CHANGED')
+      view = importRecovery.view
+      modelId = importRecovery.modelId
+      context.generationModelId = importRecovery.modelId
+      context.data.importGenerationContext = importRecovery.frozenContext
+    } else if (resumeHandle) {
       const stored = await transport.read(resumeHandle)
       if (context.mainGenerationRootHandle && context.mainGenerationRootHandle.rootActionId !== resumeHandle.rootActionId)
         throw new Error('GENERATION_WORKFLOW_ROOT_CHANGED')
-      view = stored.nonReplayable ? await transport.resume(projectSession, resumeHandle) : stored
+      view = stored.nonReplayable && !importStage ? await transport.resume(projectSession, resumeHandle) : stored
     } else {
+      if (!modelId) throw new Error('GENERATION_MODEL_REQUIRED')
       const parent = intent.continueDirectoryOperationId ? undefined : context.mainGenerationRootHandle
       if (intent.parentRootActionId && parent && intent.parentRootActionId !== parent.rootActionId)
         throw new Error('GENERATION_WORKFLOW_ROOT_CHANGED')
-      if (parent && (parent.projectId !== projectSession.projectId || !intent.batchId && parent.epoch !== projectSession.leaseId))
+      if (parent && (parent.projectId !== projectSession.projectId || !intent.batchId && !intent.importSlot && !context.agentWorkflowRegistrationId && parent.epoch !== projectSession.leaseId))
         throw new Error('GENERATION_WORKFLOW_RESUME_REQUIRED')
       view = await transport.begin(projectSession, { ...intent, selectedDraftIds: intent.selectedDraftIds ?? [],
         selectedFinalizedDraftIds: intent.selectedFinalizedDraftIds ?? [], modelId,
         uiActionNonce: `${context.runId}:${intent.operation}${intent.operation === 'chapter-draft' ? `:${intent.chapterNumber}` : ''}`,
+        ...(context.agentWorkflowRegistrationId ? { agentWorkflowRegistrationId: context.agentWorkflowRegistrationId } : {}),
         ...(parent ? { parentRootActionId: parent.rootActionId } : {}) })
     }
     context.mainGenerationRootHandle = Object.freeze({ ...view.handle })
     context.mainGenerationRunHandle = Object.freeze({ ...view.handle })
+    if (intent.importSlot && !importRecovery) {
+      const stored = await ipc.invokeWithProjectSession(projectSession, 'import-generation:read', { slot: intent.importSlot })
+      if (!stored || stored.view.handle.runId !== view.handle.runId) throw new Error('GENERATION_IMPORT_CONTEXT_REQUIRED')
+      context.data.importGenerationContext = stored.frozenContext
+      context.generationModelId = stored.modelId
+    }
     await onRunOpened?.(context.mainGenerationRunHandle)
     if (context.cancelled) { await transport.cancel(view.handle); throw new Error('GENERATION_WORKFLOW_CANCELLED') }
     inner = await createMainOwnedGenerationRuntime({ runHandle: view.handle, onSnapshot }, transport)
@@ -99,6 +119,16 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
       options?.signal?.addEventListener('abort', abort, { once: true })
       busy = true
       try {
+        if (importStage) {
+          const receipt = await ipc.invokeWithProjectSession(projectSession, 'import-generation:execute', { handle: view.handle, ordinal: importOrdinal++, task,
+            execution: context.data.importRunExecution as import('../../shared/import-run').ImportRunExecutionAuthority | undefined })
+          view = receipt.run
+          context.mainGenerationRunHandle = Object.freeze({ ...view.handle })
+          context.mainGenerationRootHandle = Object.freeze({ ...view.handle })
+          const artifactId = receipt.outcome.receipt.visibleArtifact?.artifactId
+          for (const snapshot of (view.candidates ?? view.artifacts).filter(snapshot => snapshot.artifactId === artifactId)) onSnapshot(snapshot)
+          return receipt.outcome
+        }
         // Keep this nonce for the entire request; transport failures never mint a retry.
         return await inner!.execute(({ session: owned }) => owned.complete(task, { invocationNonce }))
       } finally { busy = false; options?.signal?.removeEventListener('abort', abort) }

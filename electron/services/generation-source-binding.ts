@@ -12,6 +12,12 @@ import type { GenerationAuthorInput, GenerationBatchIntent } from '../../src/sha
 import type { GenerationKnowledgeSnapshot } from '../../src/shared/generation-knowledge';
 import type { ReviewRevisionContext } from '../../src/shared/review-revision-generation';
 import { captureReviewRevisionContext, reviewRevisionRequest } from './review-revision-context';
+import type { AgentGenerationInput } from '../../src/shared/agent-generation';
+import { buildAgentGenerationContext, validateAgentGenerationInput } from './agent-generation-context';
+import type { ImportGenerationSlot } from '../../src/shared/import-generation';
+import { captureImportGenerationContext, importGenerationSlotKey } from './import-generation-source';
+import type { EditorInlineInput } from '../../src/shared/editor-inline-generation';
+import { buildEditorInlineContext, validateEditorInlineInput, editorInlineTask } from './editor-inline-generation';
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>;
 export interface GenerationSourceBindingInput {
     projectId: string;
@@ -31,6 +37,14 @@ export interface GenerationSourceBindingInput {
     finalizedCharacterContextHash?: string;
     /** Main-issued inputs persisted so recovery can revalidate the original selection. */
     reviewRevisionContext?: ReviewRevisionContext;
+    /** Internal Agent admission input; never accepted through generic generation:begin. */
+    agentInput?: AgentGenerationInput;
+    agentSession?: { key: string; roundIndex: number };
+    agentWorkflowRegistrationId?: string;
+    importSlot?: ImportGenerationSlot;
+    editorInlineInput?: EditorInlineInput;
+    /** Main freezes the initial identity for lost-response navigation across resume. */
+    editorInlineOriginEpoch?: string;
     modelReceipt: SafeGenerationModelReceipt;
     policy: Readonly<Record<string, unknown>>;
     outputContract: string | Readonly<Record<string, unknown>>;
@@ -126,6 +140,8 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         fail('GENERATION_SOURCE_BINDING_INVALID');
     if (!Array.isArray(input.promptKeys) || input.promptKeys.length === 0)
         fail('GENERATION_PROMPT_SELECTION_REQUIRED');
+    const agentInput = input.agentInput ? validateAgentGenerationInput(input.agentInput) : undefined;
+    const editorInlineInput = input.editorInlineInput ? validateEditorInlineInput(input.editorInlineInput) : undefined;
     const authorInputs = freezeAuthorInputs(input.authorInputs);
     const blueprintChapters = input.selectedBlueprintChapterNumbers ?? [];
     if (!Array.isArray(blueprintChapters) || blueprintChapters.length > 10_000 || new Set(blueprintChapters).size !== blueprintChapters.length
@@ -163,6 +179,10 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         const core = without(raw, ['created_at', 'updated_at', 'character_states', 'plot_tree_snapshot']);
         const language: WritingLanguage = core.writing_language === 'en-US' ? 'en-US' : 'zh-CN';
         add('project-core:main', 0, stable(core), 'author-constraint', 'current project settings');
+        if (agentInput) {
+            const blueprints = deps.db.prepare('SELECT * FROM blueprints ORDER BY chapter_number').all() as Record<string, unknown>[];
+            add('agent-blueprints:all', 0, stable(blueprints.map(row => without(row, ['created_at', 'updated_at', 'notes_updated_at']))), 'unconfirmed-continuity', 'actual author plans guarded across Agent tool confirmations');
+        }
         if (input.reviewRevisionContext) {
             const currentContext = captureReviewRevisionContext(deps.db, reviewRevisionRequest(input.reviewRevisionContext));
             if (!isDeepStrictEqual(input.reviewRevisionContext, currentContext)) fail('GENERATION_REVIEW_CONTEXT_CHANGED');
@@ -256,6 +276,8 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         assets.push({ scope: 'project-guidance', identity: name, hash: hash(bytes) });
         add(`project-guidance:${name}`, 0, bytes.toString('utf8'), 'author-constraint', 'project Markdown guidance consumed by drafting');
     }
+    let agentPrompt: { selected: string; builtin: string } | undefined;
+    const importPrompts: Record<string, import('../../src/services/prompt-templates').PromptTemplate> = {};
     for (const key of input.promptKeys) {
         const builtin = deps.readBuiltinPrompt(key, facts.language);
         if (typeof builtin !== 'string' || !builtin)
@@ -278,6 +300,8 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         }
         if (selected)
             assets.push({ scope, identity: `prompt:${key}:${facts.language}`, hash: hash(selected) });
+        if (agentInput && key === 'assistant_writing_identity') agentPrompt = { selected: selected?.toString('utf8') ?? builtin, builtin };
+        if (input.importSlot || editorInlineInput) importPrompts[key] = JSON.parse(selected?.toString('utf8') ?? builtin);
     }
     const bindingsBytes = observe(deps.projectStorageRoot, 'writing-skills.json', true);
     const bindings = bindingsBytes ? JSON.parse(bindingsBytes.toString('utf8')) : { version: 1, bindings: {} };
@@ -319,10 +343,25 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         add('knowledge-selection', 0, stable(input.knowledgeSnapshot), 'unconfirmed-continuity', 'main-verified immutable knowledge selection and source identities');
         for (const item of input.knowledgeSnapshot.items) add(`kb:${item.documentId}:${item.chunkId}`, item.revision, item.text, 'unconfirmed-continuity', 'verified original knowledge passage');
     }
+    const agentContext = agentInput && agentPrompt ? buildAgentGenerationContext(agentInput, facts.core, facts.language, agentPrompt.selected, agentPrompt.builtin) : undefined;
+    const editorInlineContext = editorInlineInput ? buildEditorInlineContext(editorInlineInput, facts.language, importPrompts.edit_selected_text!) : undefined;
+    if (editorInlineContext) add('editor-inline:author-draft', 0, JSON.stringify(editorInlineContext), 'author-constraint', 'explicit unsaved author manuscript and UTF16 selection; not a canonical document');
+    const importContext = input.importSlot ? captureImportGenerationContext(deps.db, input.importSlot) : undefined;
+    if (importContext) importContext.prompts = importPrompts;
+    if (importContext) add(`import-manifest:${importGenerationSlotKey(importContext.slot)}`, 0, stable(importContext), 'unconfirmed-continuity', 'persisted reference import material for this exact checkpoint');
+    if (agentInput && !agentContext) fail('GENERATION_AGENT_PROMPT_REQUIRED');
+    if (agentContext) add('agent-context', 0, JSON.stringify(agentContext), 'author-constraint', 'explicit conversation and tool definitions with main-read project facts and identity template');
     if (deps.db.pragma('data_version', { simple: true }) !== dataVersion || deps.db.prepare('SELECT total_changes()').pluck().get() !== changes)
         fail('GENERATION_SOURCE_CHANGED_DURING_SNAPSHOT');
     const sourceManifest = { version: 1, ...(input.finalizedCharacterContextHash ? { finalizedCharacterContextHash: input.finalizedCharacterContextHash } : {}), operation: input.operation, ...(input.knowledgeSnapshot ? { knowledgeSnapshot: structuredClone(input.knowledgeSnapshot) } : {}), ...(input.batchId ? { batchId: input.batchId } : {}), ...(input.batchIntent ? { batchIntent: structuredClone(input.batchIntent) } : {}), ...(input.chapterNumber !== undefined ? { chapterNumber: input.chapterNumber } : {}), selectedDraftIds: [...input.selectedDraftIds], selectedFinalizedDraftIds: [...input.selectedFinalizedDraftIds], ...(blueprintChapters.length ? { selectedBlueprintChapterNumbers: [...blueprintChapters] } : {}), promptKeys: [...input.promptKeys], skillStages: [...input.skillStages], ...(authorInputs.length ? { authorInputs } : {}), modelReceipt, policy: input.policy, outputContract: input.outputContract };
     if (input.reviewRevisionContext) Object.assign(sourceManifest, { reviewRevisionContext: structuredClone(input.reviewRevisionContext), reviewRevisionContextHash: hash(JSON.stringify(input.reviewRevisionContext)) });
+    if (agentContext) Object.assign(sourceManifest, { agentInput, agentContext, agentContextHash: hash(JSON.stringify(agentContext)), ...(input.agentSession ? { agentSession: structuredClone(input.agentSession) } : {}) });
+    if (input.agentWorkflowRegistrationId) Object.assign(sourceManifest, { agentWorkflowRegistrationId: input.agentWorkflowRegistrationId });
+    if (editorInlineContext) {
+        const task = editorInlineTask(editorInlineContext);
+        Object.assign(sourceManifest, { editorInlineInput, editorInlineOriginEpoch: input.editorInlineOriginEpoch ?? input.epoch, editorInlineContext, editorInlineContextHash: hash(JSON.stringify(editorInlineContext)), editorInlineTask: task, editorInlineTaskHash: hash(JSON.stringify(task)) });
+    }
+    if (importContext) Object.assign(sourceManifest, { importSlot: importContext.slot, importSlotKey: importGenerationSlotKey(importContext.slot), importContext });
     const contextHash = hash(stable(contextSources.map(({ ref, ...entry }) => ({ ...entry, ref: without(ref as unknown as Record<string, unknown>, ['epoch']) }))));
     const context: ContextSnapshot = { projectId: input.projectId, epoch: input.epoch, id: `context:${contextHash}`, hash: contextHash, sources: contextSources, omissions: [], estimate: { methodVersion: 'utf8-bytes-v1', inputUnits: materials.reduce((sum, item) => sum + Buffer.byteLength(item.text), 0) } };
     const fingerprint = { chapterBriefHash: hash(stable(facts.brief)), authorGuidanceHash: hash(stable(authorInputs.length ? [facts.core, authorInputs] : facts.core)), dependencyHash: hash(stable(materials.filter(item => /^(draft|finalized):/.test(item.ref.sourceId)).map(item => ({ ...item.ref, epoch: undefined })))), contextSnapshotHash: contextHash, templateHash: hash(stable(assets)), skillSnapshotHash: hash(stable(skills)), modelLeaseRevision: hash(stable(modelReceipt)), policyHash: hash(stable(input.policy)), outputContractHash: hash(stable(input.outputContract)) };

@@ -127,6 +127,19 @@ function ensureLedger(): void {
 
 /** Atomic import seam for config, non-character architecture and roster facts. */
 export class ImportGlobalFactsRepository {
+  /** Historical ACK only: proves the saved operation, not the current project facts. */
+  static readHistoricalCommittedOperation(operationId: string): ImportGlobalFactsReceipt | null {
+    if (!operationId.trim()) throw new Error('导入全局事实 operationId 无效')
+    const db = getProjectDb()
+    if (!db) throw new Error('项目数据库未打开')
+    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='import_global_fact_operations'").get()) return null
+    const row = db.prepare(`
+      SELECT operation_id, payload_hash, receipt_json
+      FROM import_global_fact_operations WHERE operation_id = ?
+    `).get(operationId) as OperationRow | undefined
+    return row ? parseReceipt(row) : null
+  }
+
   /** Read-only authoritative evidence for a previously committed import operation. */
   static getCommittedOperation(operationId: string): ImportGlobalFactsReceipt | null {
     if (!operationId.trim()) throw new Error('导入全局事实 operationId 无效')

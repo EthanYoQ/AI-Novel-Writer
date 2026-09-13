@@ -488,8 +488,7 @@ export class BlueprintRepository {
     }
 
     /** 插入或更新蓝图 */
-    static upsert(data: BlueprintData): void {
-        const db = requireProjectDb()
+    static upsert(data: BlueprintData, db = requireProjectDb()): void {
 
         db.prepare(`
       INSERT INTO blueprints (

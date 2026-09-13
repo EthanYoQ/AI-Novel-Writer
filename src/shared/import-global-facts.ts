@@ -20,6 +20,7 @@ export interface ImportGlobalFactsCore {
 }
 
 export interface ImportGlobalFactsRequest {
+  generationRunHandle?: import('../services/generation/generation-runtime').MainGenerationRunHandle
   operationId: string
   expectedRosterRevision: number
   core: ImportGlobalFactsCore

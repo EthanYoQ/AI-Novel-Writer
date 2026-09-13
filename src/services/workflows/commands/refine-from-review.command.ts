@@ -48,7 +48,8 @@ export class RefineFromReviewCommand extends ReviewRevisionCommand {
     if (!confirmation?.sourceDraft || !hasIncludedReviewItems(confirmation)) throw new Error(workflowUiText(params.context,
       '缺少有效的已确认审稿清单，请重新确认。', 'A valid confirmed review checklist is required. Confirm the review again.'))
     params.callbacks.log(workflowUiText(params.context, '正在根据已确认的审稿项精准修复...', 'Revising from the confirmed review checklist...'))
-    const template = await resolvePromptTemplate('refine_from_review', requireWorkflowProjectSession(params.context), frozen.writingLanguage)
+    const projectSession = requireWorkflowProjectSession(params.context)
+    const template = await resolvePromptTemplate('refine_from_review', projectSession, frozen.writingLanguage)
     if (!template) throw new Error(workflowUiText(params.context, '未找到审稿修复模板', 'The review-based revision template was not found.'))
     const builder = new ChapterPromptBuilder(template, frozen.writingLanguage)
       .withReviewReport(renderHumanConfirmedReviewBrief(confirmation, frozen.writingLanguage))

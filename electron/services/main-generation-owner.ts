@@ -24,6 +24,14 @@ import { FinalizedCharacterGeneration } from './finalized-character-generation'
 import type { FinalizedCharacterGenerationCommit } from '../../src/shared/finalized-character-generation'
 import type { ReviewRevisionContext, PrepareReviewRevisionRequest, ReviewGenerationCommitRequest, RevisionGenerationCommitRequest } from '../../src/shared/review-revision-generation'
 import { ReviewRevisionGeneration } from './review-revision-generation'
+import { AgentGeneration, type AgentBeginSelection } from './agent-generation'
+import { ImportGeneration } from './import-generation'
+import type { ImportGenerationSlot } from '../../src/shared/import-generation'
+import { importGenerationSlotKey } from './import-generation-source'
+import type { ApproveCharacterProposalRequest } from '../../src/shared/character-proposal'
+import type { AgentGenerationContext, AgentGenerationInput } from '../../src/shared/agent-generation'
+import type { EditorInlineInput, EditorInlineRecovery, EditorInlineGenerationChannels } from '../../src/shared/editor-inline-generation'
+import { validateEditorInlineInput, readEditorInlineContext, readEditorInlineTask } from './editor-inline-generation'
 
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>
 export function safeGenerationModelReceipt(receipt: ModelExecutionLeaseReceipt): SafeGenerationModelReceipt {
@@ -37,7 +45,7 @@ export interface MainGenerationOwnerDependencies {
   assertCurrent: () => void
   leases: ModelExecutionLeaseRegistry
   loadModel: (id: string) => ModelProfile | null
-  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string; reviewRevisionContext?: ReviewRevisionContext }, model: SafeGenerationModelReceipt) => RunBinding
+  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string; reviewRevisionContext?: ReviewRevisionContext; agentInput?: AgentGenerationInput; agentSession?: { key: string; roundIndex: number }; editorInlineInput?: EditorInlineInput }, model: SafeGenerationModelReceipt) => RunBinding
   rebuildBinding: (previous: RunBinding, model: SafeGenerationModelReceipt) => RunBinding
   beforeDispatch?: () => void
   onSnapshot?: (snapshot: MainGenerationSnapshot) => void
@@ -190,13 +198,22 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     preparations.set(preparationId, { binding, knowledgeSnapshot: structuredClone(knowledgeSnapshot) })
     return { preparationId, knowledgeSnapshot: structuredClone(knowledgeSnapshot), selectedDrafts }
   }
-  const begin = (selection: BeginGenerationRequest, batchInitialization = false): MainGenerationRunView => {
+  const begin = (selection: (BeginGenerationRequest | AgentBeginSelection) & { editorInlineInput?: EditorInlineInput }, batchInitialization = false, agentInitialization = false, editorInitialization = false): MainGenerationRunView => {
     assertCurrent()
     if (!selection || typeof selection.operation !== 'string' || !/^[a-z0-9][a-z0-9:_-]{0,127}$/u.test(selection.operation)
       || !Array.isArray(selection.promptKeys) || selection.promptKeys.length === 0
       || Object.hasOwn(selection, 'parentRootActionId') && (typeof selection.parentRootActionId !== 'string' || !selection.parentRootActionId.trim())
       || typeof selection.uiActionNonce !== 'string' || !selection.uiActionNonce.trim() || selection.uiActionNonce.length > 256
-      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId', 'finalizedCharacterContextId', 'reviewRevisionContextId'].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
+      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId', 'finalizedCharacterContextId', 'reviewRevisionContextId', 'agentWorkflowRegistrationId', 'importSlot', 'importExecution', ...(agentInitialization ? ['agentInput', 'agentSession'] : []), ...(editorInitialization ? ['editorInlineInput'] : [])].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
+    if (selection.operation === 'editor-inline' && !editorInitialization) throw new Error('GENERATION_EDITOR_ADMISSION_REQUIRED')
+    const importAdmission = imports.admit(selection)
+    if (importAdmission?.existing) return viewOf(importAdmission.existing)
+    if (importAdmission) selection = { ...selection, uiActionNonce: `import:${importGenerationSlotKey(selection.importSlot!)}`,
+      ...(importAdmission.parentRootActionId ? { parentRootActionId: importAdmission.parentRootActionId, modelId: importAdmission.modelId! } : {}) }
+    if (selection.operation === 'agent-round' && !agentInitialization) throw new Error('GENERATION_AGENT_ADMISSION_REQUIRED')
+    const agentWorkflow = agentInitialization ? undefined : agents.admitWorkflow(selection)
+    if (selection.parentRootActionId && repository.budget(selection.parentRootActionId).root.operation === 'editor-inline') throw new Error('GENERATION_EDITOR_CHILD_FORBIDDEN')
+    if (agentWorkflow?.existing) return viewOf(repository.get(agentWorkflow.existing.runId))
     generationOutputContract(selection)
     const finalizedCharacterContextHash = finalizedCharacters.admit(selection)
     const reviewRevision = reviewRevisions.admit(selection)
@@ -240,8 +257,15 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (prepared && !preparationMatches(prepared.binding, binding)) throw new Error('GENERATION_DRAFT_PREPARATION_CHANGED')
       if (binding.projectId !== deps.projectId || binding.epoch !== deps.epoch) throw new Error('GENERATION_BINDING_INVALID')
       const run = deps.database.transaction(() => {
+      if (selection.importSlot) {
+        const existing = imports.find(selection.importSlot)
+        if (existing) return existing
+      }
       if (batch) repository.activateRootForCommittedStage(batch.rootHandle.rootActionId, binding)
       if (reviewRevision?.parentRootActionId) repository.activateRootForCommittedStage(reviewRevision.parentRootActionId, binding)
+      if (agentInitialization && selection.parentRootActionId) repository.activateRootForCommittedStage(selection.parentRootActionId, binding)
+      if (agentWorkflow) repository.activateRootForCommittedStage(agentWorkflow.parentRootActionId, binding)
+      if (importAdmission?.parentRootActionId) repository.activateRootForCommittedStage(importAdmission.parentRootActionId, binding)
       if (continuation && !continuation.continuationHandle) repository.activateRootForCommittedStage(continuation.sourceHandle.rootActionId, binding)
       const next = service.open({ ...binding, operation: selection.operation, uiActionNonce: selection.uiActionNonce,
         frozenInputHash: textHash(JSON.stringify([binding.fingerprint, binding.contextSnapshotId, selection.output])),
@@ -249,6 +273,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (continuation?.continuationHandle && continuation.continuationHandle.runId !== next.runId) throw new Error('GENERATION_DIRECTORY_CONTINUATION_EXISTS')
       if (batch?.currentChapterRunHandle && batch.currentChapterRunHandle.runId !== next.runId) throw new Error('GENERATION_BATCH_RECOVERY_REQUIRED')
       if (continuation && !continuation.continuationHandle) repository.bindDirectoryContinuation(continuation.operationId, handleOf(next))
+      if (selection.agentWorkflowRegistrationId) agents.recordWorkflowChild(selection.agentWorkflowRegistrationId, handleOf(next))
       return next
       }).immediate()
       if (run.binding.epoch === deps.epoch && !runLeases.has(run.runId)) runLeases.set(run.runId, lease.leaseId)
@@ -277,8 +302,11 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return { outcome: finishReason === 'stop' ? { status: 'completed', content, finishReason, receipt: details }
       : { status: 'incomplete', content, finishReason, receipt: details }, run: viewOf(repository.get(receipt.run.runId)) }
   }
-  const execute = async (request: ExecuteGenerationRequest): Promise<MainGenerationExecuteReceipt> => {
+  const execute = async (request: ExecuteGenerationRequest, agentExecution = false, importExecution = false, editorExecution = false): Promise<MainGenerationExecuteReceipt> => {
     const run = requireRun(request.handle, true)
+    if (run.binding.sourceManifest.operation === 'agent-round' && !agentExecution) throw new Error('GENERATION_AGENT_ADMISSION_REQUIRED')
+    if (run.binding.sourceManifest.importSlot && !importExecution) throw new Error('GENERATION_IMPORT_ADMISSION_REQUIRED')
+    if (run.binding.sourceManifest.operation === 'editor-inline' && !editorExecution) throw new Error('GENERATION_EDITOR_ADMISSION_REQUIRED')
     assertSemanticGenerationTask(request.task)
     const task = structuredClone(request.task)
     const contract = run.binding.sourceManifest.outputContract
@@ -295,6 +323,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const existing = repository.findInvocation(run.runId, request.invocationNonce, requestHash)
     if (existing && existing.attempt.status !== 'dispatch-marked' && existing.attempt.status !== 'reserved') return outcomeOf(volatileReceipts.get(existing.attempt.attemptId) ?? existing, task)
     reviewRevisions.assertMutable(run.runId)
+    imports.assertMutable(run)
     const operation = (async () => {
     const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
     if (!isDeepStrictEqual(current, run.binding)) throw new Error('GENERATION_SOURCE_CHANGED')
@@ -307,7 +336,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const receipt = await service.execute({ runId: run.runId, invocationNonce: request.invocationNonce, requestHash,
       providerRequest: { model, task, plan } satisfies ProviderRequest, reservedTokens: plan.reservedTokens,
       requestedOutputTokens: plan.requestedOutputTokens, inputUpperBoundTokens: plan.inputUpperBoundTokens,
-      reasoningUpperBoundTokens: plan.reasoningUpperBoundTokens, usagePolicy: plan.usagePolicy, purpose: task.purpose })
+      reasoningUpperBoundTokens: plan.reasoningUpperBoundTokens, usagePolicy: plan.usagePolicy, purpose: task.purpose,
+      ...(run.binding.sourceManifest.importSlot ? { replayTask: task } : {}),
+      ...(agentExecution ? { agentToolNames: (run.binding.sourceManifest.agentContext as AgentGenerationContext).input.tools.map(tool => tool.name) } : {}) })
     if (receipt.failureCode || receipt.unsavedTail) volatileReceipts.set(receipt.attempt.attemptId, receipt)
     assertCurrent()
     const snapshot = snapshotOf(receipt)
@@ -319,6 +350,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   }
   const resume = async (handle: MainGenerationRunHandle) => {
     const run = requireRun(handle)
+    imports.assertMutable(run)
     const receipt = currentModelReceipt(run.binding)
     const next = deps.rebuildBinding(run.binding, receipt)
     const lease = deps.leases.begin(receipt.modelId)
@@ -383,8 +415,126 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (repository.budget(run.rootActionId).root.status === 'cancelled' || !matches) throw new Error('CHARACTER_PROPOSAL_SOURCE_CHANGED')
     })
   })
-  return { begin: (selection: BeginGenerationRequest) => begin(selection), execute, resume, list, assertSourcesCurrent,
+  const imports = new ImportGeneration(deps.database, repository, deps.projectId)
+  const agents = new AgentGeneration(deps.database, repository, { projectId: deps.projectId, epoch: deps.epoch }, assertCurrent, {
+    begin: selection => begin(selection, false, true), read: handle => viewOf(requireRun(handle)), resume,
+    execute: (handle, invocationNonce, task) => execute({ handle, invocationNonce, task }, true),
+    current: (run, expected) => { try { return compareGenerationSourceBindings(expected ?? run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))) } catch { return false } },
+    capture: run => deps.rebuildBinding(run.binding, currentModelReceipt(run.binding)),
+  })
+  const requireEditorInlineRun = (handle: MainGenerationRunHandle) => {
+    assertCurrent()
+    if (!handle || Object.keys(handle).some(key => !['projectId', 'epoch', 'rootActionId', 'runId'].includes(key))
+      || handle.projectId !== deps.projectId || typeof handle.epoch !== 'string' || !handle.epoch) throw new Error('GENERATION_RUN_IDENTITY_MISMATCH')
+    const run = repository.get(handle.runId)
+    readEditorInlineContext(run)
+    if (run.binding.projectId !== handle.projectId || run.rootActionId !== handle.rootActionId
+      || handle.epoch !== run.binding.epoch && handle.epoch !== run.binding.sourceManifest.editorInlineOriginEpoch) throw new Error('GENERATION_RUN_IDENTITY_MISMATCH')
+    return run
+  }
+  const readEditorInlineRecovery = (handle: MainGenerationRunHandle): EditorInlineRecovery => {
+    const run = requireEditorInlineRun(handle)
+    const context = readEditorInlineContext(run)
+    let current = false
+    try { current = repository.budget(run.rootActionId).root.status !== 'cancelled' && compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))) } catch { /* Original text remains readable after source or model changes. */ }
+    return { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, context, sourceStatus: current ? 'current' : 'conflict' }
+  }
+  return { begin: (selection: BeginGenerationRequest) => begin(selection), execute: (request: ExecuteGenerationRequest) => execute(request), resume, list, assertSourcesCurrent, agents,
+    readEditorInlineRecovery,
+    cancelEditorInline: (handle: MainGenerationRunHandle) => {
+      const run = requireEditorInlineRun(handle)
+      service.cancel(run.rootActionId)
+      return viewOf(repository.get(run.runId))
+    },
+    beginEditorInline: (request: EditorInlineGenerationChannels['editor-inline:begin']['args'][0]) => {
+      assertCurrent()
+      if (!request || Object.keys(request).some(key => !['input', 'modelId', 'uiActionNonce'].includes(key))
+        || typeof request.uiActionNonce !== 'string' || !request.uiActionNonce.trim() || request.uiActionNonce.length > 256) throw new Error('GENERATION_EDITOR_INPUT_INVALID')
+      const input = validateEditorInlineInput(request.input)
+      const rows = deps.database.prepare("SELECT r.run_id FROM generation_runs r JOIN generation_roots g ON g.root_action_id=r.root_action_id WHERE json_extract(g.action_json,'$.operation')='editor-inline' AND json_extract(g.action_json,'$.projectId')=? AND json_extract(g.action_json,'$.uiActionNonce')=?").all(deps.projectId, request.uiActionNonce) as { run_id: string }[]
+      if (rows.length > 1) throw new Error('GENERATION_NONCE_CONFLICT')
+      if (rows[0]) {
+        const prior = repository.get(rows[0].run_id)
+        if (!isDeepStrictEqual(input, prior.binding.sourceManifest.editorInlineInput) || request.modelId !== modelReceipt(prior.binding).modelId) throw new Error('GENERATION_NONCE_CONFLICT')
+        return readEditorInlineRecovery(handleOf(prior))
+      }
+      const view = begin({ operation: 'editor-inline', uiActionNonce: request.uiActionNonce, modelId: request.modelId,
+        selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['edit_selected_text'], skillStages: [], output: 'visible-text', editorInlineInput: input }, false, false, true)
+      return readEditorInlineRecovery(view.handle)
+    },
+    executeEditorInline: async (handle: MainGenerationRunHandle) => {
+      const run = requireEditorInlineRun(handle), task = readEditorInlineTask(run)
+      const invocationNonce = 'editor-inline:0'
+      const requestHash = textHash(JSON.stringify([task, run.binding.fingerprint.modelLeaseRevision, run.binding.fingerprint.policyHash]))
+      const prior = repository.findInvocation(run.runId, invocationNonce, requestHash)
+      if (prior) {
+        const running = pending.get(JSON.stringify([run.runId, invocationNonce]))
+        return running ? running.promise : outcomeOf(volatileReceipts.get(prior.attempt.attemptId) ?? prior, task)
+      }
+      if (deps.database.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(run.runId) !== 0) throw new Error('GENERATION_EDITOR_ATTEMPT_CONFLICT')
+      const current = viewOf(run).nonReplayable ? await resume(handleOf(run)) : viewOf(run)
+      return execute({ handle: current.handle, invocationNonce, task }, false, false, true)
+    },
+    readImportGeneration: (slot: ImportGenerationSlot) => {
+      assertCurrent()
+      const run = imports.find(slot)
+      return run ? { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, frozenContext: imports.context(run) } : null
+    },
+    assertImportGenerationSources: (handle: MainGenerationRunHandle, slot?: ImportGenerationSlot, allowLegacyStyle = false) => {
+      const run = requireRun(handle)
+      // Historical standalone style runs predate the checkpoint seam.
+      if (!run.binding.sourceManifest.importSlot) {
+        if (!allowLegacyStyle || !slot || slot.stage !== 'style' || run.binding.sourceManifest.operation !== 'analyze-writing-style'
+          || !repository.budget(run.rootActionId).attempts.some(attempt => { const receipt = repository.receipt(attempt.attemptId); return receipt.run.runId === run.runId && receipt.result?.finishReason === 'stop' }))
+          throw new Error('GENERATION_IMPORT_EFFECT_SLOT_CHANGED')
+        assertSourcesCurrent(handle); return
+      }
+      if (!slot || !isDeepStrictEqual(imports.context(run).slot, slot)) throw new Error('GENERATION_IMPORT_EFFECT_SLOT_CHANGED')
+      const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
+      const attempts = repository.budget(run.rootActionId).attempts.filter(attempt => repository.receipt(attempt.attemptId).run.runId === run.runId)
+      if (repository.budget(run.rootActionId).root.status === 'cancelled' || !compareGenerationSourceBindings(run.binding, current)
+        || !attempts.length || attempts.some(attempt => {
+          const receipt = repository.receipt(attempt.attemptId), artifact = receipt.artifact
+          return receipt.result?.finishReason !== 'stop' || !artifact || !artifact.text.trim() || textHash(artifact.text) !== artifact.textHash
+            || deps.database.prepare("SELECT 1 FROM generation_artifacts WHERE artifact_id=? AND status<>'discarded'").pluck().get(artifact.artifactId) !== 1
+        }))
+        throw new Error('GENERATION_IMPORT_EFFECT_SOURCE_CHANGED')
+    },
+    executeImportGeneration: async (request: import('../../src/shared/import-generation').ImportGenerationChannels['import-generation:execute']['args'][0]) => {
+      const run = requireRun(request.handle)
+      if (!Number.isSafeInteger(request.ordinal) || request.ordinal < 0 || request.ordinal >= MAIN_GENERATION_POLICY.budget.maxPhysicalRequests) throw new Error('GENERATION_IMPORT_ORDINAL_INVALID')
+      imports.context(run)
+      const invocationNonce = `import:${request.ordinal}`
+      const prior = deps.database.prepare('SELECT attempt_id,usage_receipt_json FROM generation_attempts WHERE run_id=? AND invocation_nonce=?').get(run.runId, invocationNonce) as { attempt_id: string; usage_receipt_json: string } | undefined
+      if (prior) {
+        const usage = JSON.parse(prior.usage_receipt_json) as { replayTask?: GenerationTask; requestHash?: string }
+        if (!usage.replayTask || textHash(JSON.stringify([usage.replayTask, run.binding.fingerprint.modelLeaseRevision, run.binding.fingerprint.policyHash])) !== usage.requestHash) throw new Error('GENERATION_IMPORT_TASK_INVALID')
+        // Explicit ordinal replay reads the original request/receipt even when
+        // the caller rebuilt a template or changed its current model selection.
+        const running = pending.get(JSON.stringify([run.runId, invocationNonce]))
+        return running ? running.promise : outcomeOf(repository.receipt(prior.attempt_id), usage.replayTask)
+      }
+      const count = deps.database.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(run.runId) as number
+      if (count !== request.ordinal) throw new Error('GENERATION_IMPORT_ORDINAL_GAP')
+      imports.assertMutable(run)
+      imports.assertExecution(run, request.execution)
+      const previous = repository.budget(run.rootActionId).attempts.map(attempt => repository.receipt(attempt.attemptId)).filter(receipt => receipt.run.runId === run.runId)
+      if (previous.some(receipt => receipt.result?.finishReason !== 'stop')) throw new Error('GENERATION_IMPORT_PREVIOUS_ATTEMPT_INCOMPLETE')
+      const current = viewOf(run).nonReplayable ? await resume(request.handle) : viewOf(run)
+      return execute({ handle: current.handle, invocationNonce, task: request.task }, false, true)
+    },
     characterProposals: characters,
+    approveCharacterProposal: (request: ApproveCharacterProposalRequest) => {
+      assertCurrent()
+      return deps.database.transaction(() => {
+        const batch = characters.read(request.proposalBatchId)
+        if (batch.status === 'approved') return characters.approve(request)
+        const source = batch.source
+        const handle = source.kind === 'generation' || source.kind === 'finalized-generation' ? source.handle
+          : source.kind === 'directory' ? repository.listDirectoryProgress().find(item => item.operationId === source.operationId)?.sourceHandle : undefined
+        return handle ? agents.withChildEffect(handle, () => characters.approve(request)) : characters.approve(request)
+      }).immediate()
+    },
     readFinalizedCharacterContext: (draftId: number) => finalizedCharacters.readContext(draftId),
     commitFinalizedCharacterStates: (request: FinalizedCharacterGenerationCommit) => finalizedCharacters.commit(request, characters, assertSourcesCurrent),
     prepareReviewRevision: (request: PrepareReviewRevisionRequest) => reviewRevisions.prepare(request),
@@ -407,7 +557,15 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (!batch.completedChapters.some(item => item.chapterNumber === request.chapterNumber && item.finalizationId === request.finalizationId && item.postProcessComplete)) throw new Error('GENERATION_BATCH_FINALIZATION_REQUIRED')
       return batch
     },
-    commitDraft: (request: GenerationDraftCommitRequest) => { requireRun(request.handle); return draftEffects.commit(request, () => assertSourcesCurrent(request.handle)) },
+    commitDraft: (request: GenerationDraftCommitRequest) => {
+      requireRun(request.handle)
+      return deps.database.transaction(() => {
+        // The effect owner still validates the exact target/hash on a saved ACK.
+        if (draftEffects.readCommit(request.handle.runId)) return draftEffects.commit(request, () => { throw new Error('GENERATION_DRAFT_REPLAY_NOT_SAVED') })
+        return agents.withChildEffect(request.handle, () => draftEffects.commit(request, () => assertSourcesCurrent(request.handle)))
+      }).immediate()
+    },
+    withAgentChildEffect: <T>(handle: MainGenerationRunHandle, effect: () => T): T => { requireRun(handle); return agents.withChildEffect(handle, effect) },
     read: (handle: MainGenerationRunHandle) => viewOf(requireRun(handle)),
     listDirectoryProgress: () => { assertCurrent(); return repository.listDirectoryProgress().map(progress => ({ ...progress,
       authorInputs: structuredClone(repository.get(progress.sourceHandle.runId).binding.sourceManifest.authorInputs as GenerationAuthorInput[] | undefined) })) },
@@ -425,7 +583,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       return progress
     },
     composeVisible: (handle: MainGenerationRunHandle, artifactIds: string[], expectedTextHash: string, algorithm?: VisibleCompositionAlgorithm) => {
+      if (requireRun(handle).binding.sourceManifest.operation === 'agent-round') throw new Error('GENERATION_AGENT_CONTROL_IMMUTABLE')
       reviewRevisions.assertMutable(requireRun(handle).runId)
+      imports.assertMutable(requireRun(handle))
       assertSourcesCurrent(handle)
       if (algorithm === 'draft-visible-v1' && requireRun(handle).binding.sourceManifest.operation !== 'chapter-draft') throw new Error('GENERATION_COMPOSITION_ALGORITHM_INVALID')
       return repository.composeVisible(handle.runId, artifactIds, expectedTextHash, algorithm)
@@ -438,6 +598,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     cancel: (handle: MainGenerationRunHandle) => { const run = requireRun(handle); service.cancel(run.rootActionId); return viewOf(repository.get(run.runId)) },
     restart: (handle: MainGenerationRunHandle, selection: BeginGenerationRequest) => {
       const old = requireRun(handle)
+      imports.assertMutable(old)
       if (selection.parentRootActionId || selection.uiActionNonce === repository.budget(old.rootActionId).root.uiActionNonce) throw new Error('GENERATION_RESTART_NEW_NONCE_REQUIRED')
       // Admit the replacement before cancelling; rejected sources must leave the original resumable.
       const next = begin(selection)
@@ -446,7 +607,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     },
     discardCandidate: (handle: MainGenerationRunHandle, artifactId: string) => {
       const run = requireRun(handle)
+      if (run.binding.sourceManifest.operation === 'agent-round') throw new Error('GENERATION_AGENT_CONTROL_IMMUTABLE')
       reviewRevisions.assertMutable(run.runId)
+      imports.assertMutable(run)
       const artifact = viewOf(run).candidates?.find(item => item.artifactId === artifactId)
       if (!artifact || artifact.status === 'running') throw new Error('GENERATION_CANDIDATE_NOT_DISCARDABLE')
       service.discardCandidate(artifactId)

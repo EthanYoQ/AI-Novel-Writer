@@ -1,3 +1,4 @@
+import { frozenImportContext, importGenerationSelection } from './import-novel.command'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
 import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
@@ -35,12 +36,15 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
   }
 
   async execute(params: CommandExecuteParams): Promise<string> {
+    const selection = importGenerationSelection(params.context, 'style')
+    if (selection) return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params, true), { operation: 'analyze-writing-style', promptKeys: ['analyze_writing_style'], skillStages: [], output: 'visible-text', ...selection })
     return this.executeWithinGeneration(params)
   }
 
-  private async executeWithinGeneration({ context, callbacks, step }: CommandExecuteParams): Promise<string> {
+  private async executeWithinGeneration({ context, callbacks, step }: CommandExecuteParams, importRuntime = false): Promise<string> {
     const projectSession = requireWorkflowProjectSession(context)
-    const writingLanguage = workflowWritingLanguage(context)
+    const frozen = importRuntime ? frozenImportContext(context) : undefined
+    const writingLanguage = frozen?.core.writingLanguage ?? workflowWritingLanguage(context)
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const project = useProjectStore.getState().currentProject
     if (!project || !sameProjectSessionContext(
@@ -49,7 +53,8 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
     )) throw new Error(text('当前项目已切换，文风分析已停止', 'The project changed, so writing-style analysis stopped.'))
 
     const expectedConfig = structuredClone(project.novelConfig)
-    const sampleTexts = this.collectProvidedSamples(writingLanguage)
+    if (importRuntime && (!frozen || frozen.slot.stage !== 'style')) throw new Error('IMPORT_GENERATION_CONTEXT_REQUIRED')
+    const sampleTexts = frozen ? this.collectProvidedSamples(writingLanguage, { chapters: frozen.chapters }) : this.collectProvidedSamples(writingLanguage)
     const selectedFinalizedDraftIds: number[] = []
     const authorInputs = this.collectAuthorInputs()
 
@@ -95,7 +100,8 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
       return ''
     }
 
-    const template = await resolvePromptTemplate('analyze_writing_style', projectSession, writingLanguage)
+    const template = frozen ? frozen.prompts.analyze_writing_style
+      : await resolvePromptTemplate('analyze_writing_style', projectSession, writingLanguage)
     if (!template) throw new Error(text('未找到文风分析模板', 'The writing-style analysis prompt template was not found.'))
 
     const sampleText = sampleTexts.join('\n\n---\n\n')
@@ -105,7 +111,7 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
     const finalPrompt = prompt.build()
 
     callbacks.log(text('调用 AI 分析文风特征...', 'Running AI writing-style analysis...'))
-    return this.executeWithGenerationRuntime('text', { context, callbacks, step }, async () => {
+    const generate = async () => {
       const result = await this.callLLM(
         finalPrompt,
         composePromptSystemRole(template, writingLanguage),
@@ -157,7 +163,9 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
       ))
 
       return cleanResult
-    }, { operation: 'analyze-writing-style', promptKeys: ['analyze_writing_style'], skillStages: [], output: 'visible-text', selectedFinalizedDraftIds, authorInputs })
+    }
+    if (importRuntime) return generate()
+    return this.executeWithGenerationRuntime('text', { context, callbacks, step }, generate, { operation: 'analyze-writing-style', promptKeys: ['analyze_writing_style'], skillStages: [], output: 'visible-text', selectedFinalizedDraftIds, authorInputs })
   }
 
   private collectAuthorInputs(): { id: string; text: string }[] {
@@ -172,18 +180,18 @@ export class AnalyzeWritingStyleCommand extends BaseWorkflowCommand<string> {
     return inputs
   }
 
-  private collectProvidedSamples(writingLanguage: WritingLanguage): string[] {
+  private collectProvidedSamples(writingLanguage: WritingLanguage, options = this.options): string[] {
     const samples: string[] = []
-    if (this.options.sampleText?.trim()) {
-      samples.push(this.options.sampleText.trim().slice(0, 4000))
+    if (options.sampleText?.trim()) {
+      samples.push(options.sampleText.trim().slice(0, 4000))
     }
-    if (this.options.sampleTexts) {
-      for (const sample of this.options.sampleTexts) {
+    if (options.sampleTexts) {
+      for (const sample of options.sampleTexts) {
         if (sample.trim()) samples.push(sample.trim().slice(0, 4000))
       }
     }
-    if (this.options.chapters) {
-      const selected = this.pickRepresentativeChapters(this.options.chapters)
+    if (options.chapters) {
+      const selected = this.pickRepresentativeChapters(options.chapters)
       for (const chapter of selected) {
         if (chapter.content.trim()) {
           samples.push(promptLanguageText(

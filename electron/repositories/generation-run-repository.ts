@@ -41,6 +41,8 @@ export interface GenerationUsageReceipt {
     reasoningTokens?: number;
     actualTokens?: number;
     trusted: boolean;
+    /** Main-parsed execution control, never part of the visible novel artifact. */
+    agentResponse?: { version: 1; visibleText: string; toolCalls: { name: string; arguments: Record<string, unknown> }[] };
 }
 export interface GenerationExecutionReceipt {
     run: DurableGenerationRun;
@@ -144,7 +146,7 @@ export class GenerationRunRepository {
             fail('GENERATION_INVOCATION_CONFLICT');
         return this.receipt(row.attempt_id);
     }
-    reserve(runId: string, nonce: string, requestHash: string, reservedTokens: number, requestedOutputTokens: number, usagePolicy?: ProviderUsagePolicy, purpose?: string): GenerationExecutionReceipt {
+    reserve(runId: string, nonce: string, requestHash: string, reservedTokens: number, requestedOutputTokens: number, usagePolicy?: ProviderUsagePolicy, purpose?: string, replayTask?: import('../../src/services/generation/generation-harness').GenerationTask): GenerationExecutionReceipt {
         return this.transaction(() => {
             const prior = this.findInvocation(runId, nonce, requestHash);
             if (prior)
@@ -160,7 +162,7 @@ export class GenerationRunRepository {
             assertReservation(budget.root, budget.policy, budget.attempts, attempt, budget.activeElapsedMs);
             this.db().prepare('INSERT INTO generation_attempts VALUES(?,?,?,?,?,?,?)').run(attempt.attemptId, attempt.reservationId, runId, run.rootActionId, encode(attempt), encode({ requestHash, usagePolicy: usagePolicy ?? null }), nonce);
             const artifact: VisibleArtifact = { artifactId: randomUUID(), attemptId: attempt.attemptId, rootActionId: run.rootActionId, projectId: run.binding.projectId, epoch: run.binding.epoch, fingerprint: run.binding.fingerprint, revision: 0, text: '', textHash: textHash('') };
-            this.db().prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(encode({ requestHash, usagePolicy: usagePolicy ?? null, ...(purpose ? { purpose } : {}), artifactIdentity: { artifactId: artifact.artifactId, epoch: artifact.epoch, fingerprint: artifact.fingerprint } }), attempt.attemptId);
+            this.db().prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(encode({ requestHash, usagePolicy: usagePolicy ?? null, ...(purpose ? { purpose } : {}), ...(replayTask ? { replayTask } : {}), artifactIdentity: { artifactId: artifact.artifactId, epoch: artifact.epoch, fingerprint: artifact.fingerprint } }), attempt.attemptId);
             this.db().prepare('INSERT INTO generation_artifacts VALUES(?,?,?,?,?,?)').run(artifact.artifactId, attempt.attemptId, runId, encode(artifact), 0, 'partial');
             return this.receipt(attempt.attemptId);
         });

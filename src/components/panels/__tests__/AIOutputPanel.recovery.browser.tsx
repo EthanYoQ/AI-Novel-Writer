@@ -82,7 +82,7 @@ beforeEach(() => {
   Object.assign(window, {
     aiNovelAPI: {
       invoke,
-      on: vi.fn(),
+      on: vi.fn(() => () => {}),
       once: vi.fn(),
       send: vi.fn(),
       setZoomLevel: vi.fn(),

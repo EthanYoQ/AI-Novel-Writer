@@ -29,7 +29,8 @@ export class RefineDraftCommand extends ReviewRevisionCommand {
     const frozen = prepared.context
     const language = frozen.writingLanguage
     params.callbacks.log(workflowUiText(params.context, '正在精修章节...', 'Refining the chapter...'))
-    const template = await resolvePromptTemplate('refine_chapter', requireWorkflowProjectSession(params.context), language)
+    const projectSession = requireWorkflowProjectSession(params.context)
+    const template = await resolvePromptTemplate('refine_chapter', projectSession, language)
     if (!template) throw new Error(workflowUiText(params.context, '未找到修稿模板', 'The revision prompt template was not found.'))
     const blueprint = frozen.blueprints.find(item => item.chapterNumber === frozen.source.chapterNumber)
     const guidance = frozen.authorInputs.find(input => input.id === 'merged-guidance')?.text || frozen.config.globalGuidance || ''

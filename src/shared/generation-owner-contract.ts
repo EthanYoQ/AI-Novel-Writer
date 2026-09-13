@@ -2,6 +2,8 @@ import type { GenerationTask } from '../services/generation/generation-harness'
 import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot } from '../services/generation/generation-runtime'
 import type { WritingSkillStage } from './writing-skills'
 import type { GenerationKnowledgeSnapshot } from './generation-knowledge'
+import type { ImportGenerationSlot } from './import-generation'
+import type { ImportRunExecutionAuthority } from './import-run'
 
 /** Raw text explicitly supplied for this author action, never inferred candidate text. */
 export interface GenerationAuthorInput { id: string; text: string }
@@ -98,6 +100,9 @@ export interface GenerationBatchProgress extends GenerationBatchIntent {
 
 /** Selection and semantic intent only. Main owns identity, source hashes and budgets. */
 export interface BeginGenerationRequest {
+  importSlot?: ImportGenerationSlot
+  /** Admission authority only; never persisted in the source manifest. */
+  importExecution?: ImportRunExecutionAuthority
   operation: string
   uiActionNonce: string
   modelId: string
@@ -122,6 +127,8 @@ export interface BeginGenerationRequest {
   /** Main-issued context for identity-bound extraction from immutable finalized prose. */
   finalizedCharacterContextId?: string
   reviewRevisionContextId?: string
+  /** Main-issued registration from an actual, confirmed Agent tool action. */
+  agentWorkflowRegistrationId?: string
 }
 export interface ExecuteGenerationRequest {
   handle: MainGenerationRunHandle

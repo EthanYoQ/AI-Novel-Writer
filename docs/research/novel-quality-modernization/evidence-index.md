@@ -24,6 +24,7 @@
 | S09B | `s09b-identity-continuity-evidence.md` | 定稿冻结身份、状态按字段保护、实际生成结果凭据、同名导入提案；交叉复审记录和资格边界见专属材料 |
 | S06C | `s06c-review-revision-evidence.md` | 审修同 root、实际源冻结、原结果恢复与保存凭据封存；SQLite/注册 IPC/Chromium 分层验证，0 真实模型调用 |
 | S09B 已发布 CI | [运行 34731373622](https://github.com/EthanYoQ/AI-Novel-Writer/actions/runs/34731373622) | `55cc523` 失败：3345 项通过、1 项旧同名导入断言失败、向量测试未完成；断言已本地适配，native 根因未明 |
+| S06D 阶段性整合 | `s06d-agent-import-editor-evidence.md`、`s06d-consumer-coverage.md` | Agent、导入、编辑器实际持久运行与分层验证；定稿/剧情树/叙事线/旧版角色修复尚未迁移，S07 仍阻断 |
 | G01 原问题台账 | `g01-issue-ledger.md` | 10 项正文/评论与相关 PR/Release fresh-read；逐症状验收 owner；没有当前可关闭结论 |
 
 私有文件均位于本任务 `.runtime/.cache/novel-quality-modernization/`，不进入提交。绝对执行路径、依赖和产物哈希供本机重跑使用，公开材料只包含非秘密字段和合成作品。

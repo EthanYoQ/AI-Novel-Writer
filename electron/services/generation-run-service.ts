@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { GenerationRunRepository, type OpenGenerationRunRequest, type RunBinding, type GenerationExecutionReceipt, type GenerationUsageReceipt } from '../repositories/generation-run-repository';
 import type { ProviderUsagePolicy } from '../../src/shared/generation-contract';
+import { parseAgentResponseProtocol, projectInterruptedAgentVisibleText } from '../../src/shared/agent-response-protocol';
 export type { OpenGenerationRunRequest, RunBinding, DurableGenerationRun, GenerationExecutionReceipt, GenerationBudgetReceipt } from '../repositories/generation-run-repository';
 export interface VisibleGenerationEvent {
     kind: 'delta' | 'cumulative';
@@ -40,6 +41,10 @@ export interface ExecuteGenerationRequest {
     reasoningUpperBoundTokens: number;
     usagePolicy: ProviderUsagePolicy;
     purpose?: string;
+    /** Main-only output projection selected from the frozen Agent tool manifest. */
+    agentToolNames?: readonly string[];
+    /** The original semantic task is committed with the reservation before dispatch. */
+    replayTask?: import('../../src/services/generation/generation-harness').GenerationTask;
 }
 export interface GenerationRunServiceDependencies {
     repository: GenerationRunRepository;
@@ -104,7 +109,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 throw new Error('GENERATION_LIABILITY_UNBOUNDED');
             let receipt: GenerationExecutionReceipt;
             try {
-                receipt = deps.repository.reserve(request.runId, request.invocationNonce, requestHash, request.reservedTokens, request.requestedOutputTokens, policy, request.purpose);
+                receipt = deps.repository.reserve(request.runId, request.invocationNonce, requestHash, request.reservedTokens, request.requestedOutputTokens, policy, request.purpose, request.replayTask);
             }
             catch (error) {
                 if (!/BUDGET|RESERVATION|EPOCH|DISPATCH|INVOCATION/.test(error instanceof Error ? error.message : '')) {
@@ -120,6 +125,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 return receipt;
             const attemptId = receipt.attempt.attemptId, controller = new AbortController();
             let text = receipt.artifact!.text, durable = text, revision = receipt.artifact!.revision, storageFailed = false, streamFailed = false, terminal = false, suspended = false;
+            let agentProtocolText = '';
             const events = new Map<string, string>();
             const notify = () => { try {
                 deps.onSnapshot?.({ attemptId, visibleText: text, durableText: durable, durableRevision: revision, storageFailed });
@@ -146,7 +152,11 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 }
                 notify();
             };
-            controllers.set(attemptId, { controller, rootId: run.rootActionId, flush,
+            const retainInterruptedAgentText = () => {
+                if (request.agentToolNames && !text && !suspended)
+                    text = projectInterruptedAgentVisibleText(agentProtocolText, request.agentToolNames);
+            };
+            controllers.set(attemptId, { controller, rootId: run.rootActionId, flush: () => { retainInterruptedAgentText(); flush(); },
                 suspend: () => { receipt = deps.repository.receipt(attemptId); suspended = true; controller.abort(); } });
             let timer: ReturnType<typeof setInterval> | undefined;
             let deadline: ReturnType<typeof setTimeout> | undefined;
@@ -194,10 +204,18 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                             controller.abort();
                             return;
                         }
-                        const next = event.kind === 'cumulative' ? event.text : text + event.text;
-                        if (!next.startsWith(text) || /<\/?think\b/iu.test(next)) {
+                        const previous = request.agentToolNames ? agentProtocolText : text;
+                        const next = event.kind === 'cumulative' ? event.text : previous + event.text;
+                        if (!next.startsWith(previous) || /<\/?think\b/iu.test(next)) {
                             streamFailed = true;
                             controller.abort();
+                            return;
+                        }
+                        if (request.agentToolNames) {
+                            // Protocol may arrive as XML, DSML or raw JSON. Do not stream it
+                            // through the user-artifact channel before its role is known.
+                            agentProtocolText = next;
+                            if (Buffer.byteLength(next, 'utf8') > 8 * 1024 * 1024) { streamFailed = true; controller.abort(); }
                             return;
                         }
                         text = next;
@@ -208,10 +226,19 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 const result = await Promise.race([provider, cancelled]);
                 if (controller.signal.aborted)
                     throw new Error('GENERATION_CANCELLED');
+                let usage = streamFailed ? null : settleProviderUsage(result.usage, policy);
+                if (request.agentToolNames && result.finishReason === 'stop' && !streamFailed) {
+                    const parsed = parseAgentResponseProtocol(agentProtocolText, request.agentToolNames);
+                    text = parsed.visibleText;
+                    if (parsed.toolCalls.length > 64) throw new Error('GENERATION_AGENT_ACTION_LIMIT');
+                    usage = { ...usage!, agentResponse: { version: 1, visibleText: parsed.visibleText, toolCalls: parsed.toolCalls } };
+                }
+                else retainInterruptedAgentText();
                 flush();
-                receipt = deps.repository.settle(attemptId, streamFailed ? null : settleProviderUsage(result.usage, policy), storageFailed ? 'error' : result.finishReason);
+                receipt = deps.repository.settle(attemptId, usage, storageFailed ? 'error' : result.finishReason);
             }
             catch {
+                retainInterruptedAgentText();
                 flush();
                 try {
                     if (suspended) return { ...receipt, ...(storageFailed ? { unsavedTail: text.slice(durable.length) } : {}), failureCode: 'GENERATION_PROJECT_CLOSED' };

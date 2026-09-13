@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { GenerationBatchProgress, GenerationRecoveryContext } from '../../shared/generation-owner-contract'
 import type { ReviewRevisionRecovery } from '../../shared/review-revision-generation'
+import type { EditorInlineRecovery } from '../../shared/editor-inline-generation'
 import { createReviewRevisionRecoveryWorkflow } from '../../services/workflows/review-revision-recovery-workflow'
 import type { MainGenerationRunView } from '../../services/generation/generation-runtime'
 import { createDraftRecoveryWorkflow, createBatchRecoveryWorkflow } from '../../services/workflows/draft-recovery-workflow'
@@ -255,9 +256,22 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
   const [runs, setRuns] = useState<Array<{ view: MainGenerationRunView; recovery: GenerationRecoveryContext }>>([])
   const [batches, setBatches] = useState<GenerationBatchProgress[]>([])
   const [reviewRuns, setReviewRuns] = useState<Array<{ view: MainGenerationRunView; recovery: ReviewRevisionRecovery }>>([])
+  const [agentRuns, setAgentRuns] = useState<import('../../shared/agent-generation').AgentGenerationRecovery[]>([])
+  const [editorRuns, setEditorRuns] = useState<EditorInlineRecovery[]>([])
+  const [generationRefresh, setGenerationRefresh] = useState(0)
   const [selection, setSelection] = useState<Record<string, string[]>>({})
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (!session) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const detach = ipc.on('generation:snapshot', snapshot => {
+      if (snapshot.projectId !== session.projectId || snapshot.epoch !== session.leaseId || snapshot.status === 'running') return
+      clearTimeout(timer)
+      timer = setTimeout(() => setGenerationRefresh(value => value + 1), 100)
+    })
+    return () => { detach(); clearTimeout(timer) }
+  }, [session])
   useEffect(() => {
     let active = true
     if (!session) return
@@ -271,15 +285,21 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
       })))
       const reviewContexts = await Promise.allSettled(contexts.filter(item => ['review-chapter', 'refine-draft', 'refine-from-review'].includes(item.recovery.operation))
         .map(async ({ view }) => ({ view, recovery: await ipc.invokeWithProjectSession(session, 'review-revision:read-recovery', { handle: view.handle }) })))
+      const agentRoots = new Map(contexts.filter(item => item.recovery.operation === 'agent-round').map(item => [item.view.handle.rootActionId, item.view.handle]))
+      const agentContexts = await Promise.allSettled([...agentRoots.values()].map(handle => ipc.invokeWithProjectSession(session, 'agent-generation:read', { handle })))
+      const editorContexts = await Promise.allSettled(contexts.filter(item => item.recovery.operation === 'editor-inline')
+        .map(({ view }) => ipc.invokeWithProjectSession(session, 'editor-inline:read-recovery', { handle: view.handle })))
       if (!active) return
       setReviewRuns(reviewContexts.flatMap(result => result.status === 'fulfilled' ? [result.value] : []))
+      setAgentRuns(agentContexts.flatMap(result => result.status === 'fulfilled' ? [result.value] : []))
+      setEditorRuns(editorContexts.flatMap(result => result.status === 'fulfilled' ? [result.value] : []))
       setRuns(contexts.filter(item => item.recovery.operation === 'chapter-draft' && !item.recovery.batchId
         && (item.recovery.composition || item.view.artifacts.length || item.view.candidates?.length || item.view.unsavedTails?.length)))
       setBatches(progress.filter(item => item.nextChapterNumber !== null))
-      setError(reviewContexts.some(result => result.status === 'rejected') ? runText(locale, '部分审修候选暂时无法读取，其他候选仍可恢复。', 'Some review or revision candidates could not be loaded; the others remain available.') : '')
+      setError([...reviewContexts, ...agentContexts, ...editorContexts].some(result => result.status === 'rejected') ? runText(locale, '部分任务暂时无法读取，其他候选仍可恢复。', 'Some tasks could not be loaded; the other candidates remain available.') : '')
     })().catch(reason => { if (active) setError(reason instanceof Error ? reason.message : String(reason)) })
     return () => { active = false }
-  }, [session, refreshKey, locale])
+  }, [session, refreshKey, locale, generationRefresh])
   if (!session) return null
   const act = async (operation: () => Promise<void>) => {
     if (busy || !sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
@@ -290,9 +310,48 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
   const visibleRuns = runs.filter(item => item.view.handle.projectId === session.projectId)
   const visibleBatches = batches.filter(item => item.rootHandle.projectId === session.projectId)
   const visibleReviews = reviewRuns.filter(item => item.view.handle.projectId === session.projectId)
-  if (!visibleRuns.length && !visibleBatches.length && !visibleReviews.length && !error) return null
+  const visibleAgents = agentRuns.filter(item => item.handle.projectId === session.projectId)
+  const visibleEditors = editorRuns.filter(item => item.view.handle.projectId === session.projectId)
+  if (!visibleRuns.length && !visibleBatches.length && !visibleReviews.length && !visibleAgents.length && !visibleEditors.length && !error) return null
   return <section className="max-h-80 overflow-y-auto border-b p-3 text-xs" aria-label={runText(locale, '持久正文候选', 'Saved draft candidates')}>
     {error && <p role="alert">{error}</p>}
+    {visibleEditors.map(recovery => <article key={recovery.view.handle.runId} className="mb-3">
+      <p>{runText(locale, '编辑器选区建议', 'Editor selection suggestion')}</p>
+      <p className="whitespace-pre-wrap">{recovery.context.selectedText.slice(0, 100)}</p>
+      {recovery.view.ledger && <p>{runText(locale, `已用 ${recovery.view.ledger.physicalRequests} 次请求`, `${recovery.view.ledger.physicalRequests} requests used`)}</p>}
+      {recovery.sourceStatus === 'conflict' && <p>{runText(locale, '来源已变化；原建议仍可复制。', 'Sources changed; the original suggestion can still be copied.')}</p>}
+      {(recovery.view.candidates ?? recovery.view.artifacts).map(artifact => <div key={artifact.artifactId}>
+        <p className="whitespace-pre-wrap">{artifact.text.slice(0, 180)}</p>
+        {artifact.status !== 'completed' && <p>{runText(locale, '生成未完整完成，保留的文字仅供参考。', 'Generation is incomplete; the saved text is for reference.')}</p>}
+        <button type="button" className="icon-btn px-2" onClick={() => { void act(() => navigator.clipboard.writeText(artifact.text)) }}>{runText(locale, '复制建议', 'Copy suggestion')}</button>
+      </div>)}
+      {recovery.view.unsavedTails?.map(tail => <div key={tail.attemptId}>
+        <p className="whitespace-pre-wrap">{tail.text.slice(0, 180)}</p>
+        <button type="button" className="icon-btn px-2" onClick={() => { void act(() => navigator.clipboard.writeText(tail.text)) }}>{runText(locale, '复制未保存文字', 'Copy unsaved text')}</button>
+      </div>)}
+      <button type="button" className="icon-btn px-2" onClick={() => { void act(() => navigator.clipboard.writeText(recovery.context.documentText)) }}>{runText(locale, '复制原文稿', 'Copy original manuscript')}</button>
+      <button type="button" className="icon-btn px-2" disabled={busy || recovery.sourceStatus !== 'current' || recovery.view.status === 'cancelled'
+        || recovery.view.ledger?.physicalRequests !== 0 || Boolean(recovery.view.candidates?.length || recovery.view.artifacts.length)}
+        onClick={() => { void act(async () => {
+          await ipc.invokeWithProjectSession(session, 'editor-inline:execute', { handle: recovery.view.handle })
+          if (sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) setGenerationRefresh(value => value + 1)
+        }) }}>{runText(locale, '继续原选区任务', 'Continue original selection task')}</button>
+    </article>)}
+    {visibleAgents.map(recovery => <article key={recovery.handle.rootActionId} className="mb-3">
+      <p>{runText(locale, '助手任务', 'Assistant task')}：{recovery.context.input.userMessage.slice(0, 80)}</p>
+      {recovery.run.ledger && <p>{runText(locale, `已用 ${recovery.run.ledger.physicalRequests} 次请求`, `${recovery.run.ledger.physicalRequests} requests used`)}</p>}
+      <p className="whitespace-pre-wrap">{recovery.rounds.map(round => round.visibleText).join('\n').slice(0, 180)}</p>
+      {recovery.rounds.some(round => round.status === 'unknown' || round.actions.some(action => ['unknown', 'running'].includes(action.status)))
+        && <p>{runText(locale, '部分操作结果待确认，恢复时不会自动重做。', 'Some operation results are unknown and will not be repeated automatically.')}</p>}
+      {recovery.sourceStatus === 'conflict' && <p>{runText(locale, '来源已变化；保留的回复仍可复制。', 'Sources changed; the saved reply can still be copied.')}</p>}
+      {recovery.run.status === 'cancelled' && <p>{runText(locale, '此助手任务已取消；保留的回复仍可复制。', 'This assistant task was cancelled; the saved reply can still be copied.')}</p>}
+      <button type="button" className="icon-btn px-2" onClick={() => { void act(() => navigator.clipboard.writeText(recovery.rounds.map(round => round.visibleText).join('\n'))) }}>{runText(locale, '复制回复', 'Copy reply')}</button>
+      <button type="button" className="icon-btn px-2" disabled={busy || recovery.sourceStatus !== 'current' || recovery.run.status === 'cancelled'} onClick={() => { void act(async () => {
+        const { useAgentStore } = await import('../../stores/agent-store')
+        useLayoutStore.getState().setRightView('agent')
+        await useAgentStore.getState().resumeGeneration(recovery.handle)
+      }) }}>{runText(locale, '恢复此助手任务', 'Recover this assistant task')}</button>
+    </article>)}
     {visibleReviews.map(({ view, recovery }) => <article key={view.handle.runId} className="mb-3">
       <p>{runText(locale, `第${recovery.context.source.chapterNumber}章${recovery.context.operation === 'review-chapter' ? '审稿' : '修稿'}候选`,
         `Chapter ${recovery.context.source.chapterNumber} ${recovery.context.operation === 'review-chapter' ? 'review' : 'revision'} candidate`)}</p>

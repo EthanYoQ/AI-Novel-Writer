@@ -2,7 +2,7 @@ import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { closeProjectDatabase, getCurrentProjectPath, getProjectDb } from '../database'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
-import { assertGenerationSourcesCurrent, recordGenerationDirectoryCommit } from './generation-controller'
+import { assertGenerationSourcesCurrent, assertImportGenerationSourcesCurrent, recordGenerationDirectoryCommit, withGenerationAgentChildEffect } from './generation-controller'
 import { projectAccess } from '../services/project-access'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 
@@ -178,10 +178,10 @@ export function registerDatabaseController() {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       const database = getProjectDb()
       if (!database || !request.generationRunHandle) throw new Error('GENERATION_OWNER_REQUIRED')
-      database.transaction(() => {
+      database.transaction(() => withGenerationAgentChildEffect(request.generationRunHandle, () => {
         assertGenerationSourcesCurrent(request.generationRunHandle)
         ProjectCoreRepository.update(request.data)
-      }).immediate()
+      })).immediate()
       return { success: true }
     } catch (error) { return { success: false, error: String(error) } }
   })
@@ -198,7 +198,7 @@ export function registerDatabaseController() {
     }
     const database = getProjectDb()
     if (request.generationRunHandle && !database) throw new Error('GENERATION_DATABASE_NOT_READY')
-    if (!(request.generationRunHandle ? database!.transaction(commit).immediate() : commit())) {
+    if (!(request.generationRunHandle ? database!.transaction(() => withGenerationAgentChildEffect(request.generationRunHandle!, commit)).immediate() : commit())) {
       return { success: false, error: '项目数据已变化，已拒绝覆盖情节大纲' }
     }
     return { success: true }
@@ -390,7 +390,7 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    return { success: true, receipt: ImportRunRepository.prepareEffectReceipt(request, execution) }
+    return { success: true, receipt: ImportRunRepository.prepareEffectReceipt(request, execution, Date.now(), assertImportGenerationSourcesCurrent) }
   })
 
   ipcMain.handle('db:import-run-effect-receipt-commit', async (
@@ -402,7 +402,7 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    return { success: true, result: ImportRunRepository.commitEffectReceipt(runId, stage, batchId, execution, Date.now(), assertGenerationSourcesCurrent) }
+    return { success: true, result: ImportRunRepository.commitEffectReceipt(runId, stage, batchId, execution, Date.now(), (handle, slot) => assertImportGenerationSourcesCurrent(handle, slot, true)) }
   })
 
   ipcMain.handle('db:import-run-start-resume', async (
@@ -548,10 +548,12 @@ export function registerDatabaseController() {
       if (!Number.isSafeInteger(requested.startChapter) || !Number.isSafeInteger(requested.endChapter)
         || requested.startChapter !== request.startChapter || requested.endChapter < request.endChapter || requested.endChapter - requested.startChapter >= 10000)
         throw new Error('GENERATION_DIRECTORY_RANGE_INVALID')
-      const receipt = database.transaction(() => {
+      const commit = () => {
         const committed = BlueprintRepository.commitRange(request, () => assertGenerationSourcesCurrent(request.generationRunHandle!, requested))
         return { ...committed, generationProgress: recordGenerationDirectoryCommit(request.generationRunHandle!, requested, committed) }
-      }).immediate()
+      }
+      const receipt = database.transaction(() => BlueprintRepository.getCommittedRangeOperation(request.operationId)
+        ? commit() : withGenerationAgentChildEffect(request.generationRunHandle!, commit)).immediate()
       return { success: true, receipt }
     } catch (err) {
       return { success: false, error: String(err) }

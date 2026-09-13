@@ -4,6 +4,9 @@ import type { GenerationOwnerChannels } from '../../src/shared/generation-owner-
 import type { CharacterProposalChannels } from '../../src/shared/character-proposal'
 import type { FinalizedCharacterGenerationChannels } from '../../src/shared/finalized-character-generation'
 import type { ReviewRevisionGenerationInvokeChannels } from '../../src/shared/review-revision-generation'
+import type { AgentGenerationChannels } from '../../src/shared/agent-generation'
+import type { ImportGenerationChannels } from '../../src/shared/import-generation'
+import type { EditorInlineGenerationChannels } from '../../src/shared/editor-inline-generation'
 import { generationOutputContract } from '../../src/shared/generation-owner-contract'
 import type { ModelProfile, ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
@@ -25,7 +28,7 @@ import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { getEmbeddingConfig } from './kb-controller'
 
 type Owner = ReturnType<typeof createMainGenerationOwner>
-type OwnerChannels = GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels
+type OwnerChannels = GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & AgentGenerationChannels & ImportGenerationChannels & EditorInlineGenerationChannels
 const owners = new Map<Database.Database, { owner: Owner; session: ProjectSessionContext; subscribers: Set<WebContents> }>()
 const ownerSessions = new WeakMap<Owner, ProjectSessionContext>()
 /** Called synchronously inside the same SQLite transaction as the formal effect. */
@@ -39,6 +42,16 @@ export function recordGenerationDirectoryCommit(handle: MainGenerationRunHandle,
   const database = getProjectDb(), entry = database && owners.get(database)
   if (!entry || !database?.inTransaction) throw new Error('GENERATION_DIRECTORY_TRANSACTION_REQUIRED')
   return entry.owner.recordDirectoryCommit(handle, requestedRange, receipt)
+}
+export function withGenerationAgentChildEffect<T>(handle: MainGenerationRunHandle, effect: () => T): T {
+  const database = getProjectDb(), entry = database && owners.get(database)
+  if (!entry || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
+  return entry.owner.withAgentChildEffect(handle, effect)
+}
+export function assertImportGenerationSourcesCurrent(handle: MainGenerationRunHandle, slot?: import('../../src/shared/import-generation').ImportGenerationSlot, allowLegacyStyle = false): void {
+  const database = getProjectDb(), entry = database && owners.get(database)
+  if (!entry || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
+  entry.owner.assertImportGenerationSources(handle, slot, allowLegacyStyle)
 }
 
 export function registerGenerationController(options: {
@@ -130,7 +143,7 @@ export function registerGenerationController(options: {
   })
   register('character-proposal:stage', 1, (owner, request) => owner.characterProposals.stage(request.source))
   register('character-proposal:read', 1, (owner, request) => owner.characterProposals.read(request.proposalBatchId))
-  register('character-proposal:approve', 1, (owner, request) => owner.characterProposals.approve(request))
+  register('character-proposal:approve', 1, (owner, request) => owner.approveCharacterProposal(request))
   register('character-proposal:cancel', 1, (owner, request) => owner.characterProposals.cancel(request.proposalBatchId))
   register('character-identity:read', 0, owner => owner.characterProposals.identitySnapshot())
   register('finalized-character:read-context', 1, (owner, request) => owner.readFinalizedCharacterContext(request.draftId))
@@ -139,6 +152,20 @@ export function registerGenerationController(options: {
   register('review-revision:commit-review', 1, (owner, request) => owner.commitReview(request))
   register('review-revision:commit-revision', 1, (owner, request) => owner.commitRevision(request))
   register('review-revision:read-recovery', 1, (owner, request) => owner.readReviewRevisionRecovery(request.handle))
+  register('agent-generation:begin', 1, (owner, request) => owner.agents.begin(request))
+  register('agent-generation:read', 1, (owner, request) => owner.agents.read(request.handle))
+  register('import-generation:read', 1, (owner, request) => owner.readImportGeneration(request.slot))
+  register('import-generation:execute', 1, (owner, request) => owner.executeImportGeneration(request))
+  register('editor-inline:begin', 1, (owner, request) => owner.beginEditorInline(request))
+  register('editor-inline:read-recovery', 1, (owner, request) => owner.readEditorInlineRecovery(request.handle))
+  register('editor-inline:execute', 1, (owner, request) => owner.executeEditorInline(request.handle))
+  register('editor-inline:cancel', 1, (owner, request) => owner.cancelEditorInline(request.handle))
+  register('agent-generation:resume', 1, (owner, request) => owner.agents.resume(request.handle))
+  register('agent-generation:round', 1, (owner, request) => owner.agents.executeRound(request))
+  register('agent-generation:claim-tool', 1, (owner, request) => owner.agents.claimTool(request))
+  register('agent-generation:finish-tool', 1, (owner, request) => owner.agents.finishTool(request))
+  register('agent-generation:register-workflow', 1, (owner, request) => owner.agents.registerWorkflow(request.ref))
+  register('agent-generation:commit-domain-tool', 1, (owner, request) => owner.agents.commitDomainTool(request.ref))
   register('generation:execute', 1, async (owner, request) => {
     const context = owner.readContext(request.handle)
     // Release the short KB guard after dispatch starts; author edits during generation remain possible.

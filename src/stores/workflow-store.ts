@@ -137,6 +137,7 @@ export interface WorkflowContext {
   /** Main-issued identities; stage changes keep the root budget, recovery keeps the exact run. */
   mainGenerationRootHandle?: import('../services/generation/generation-runtime').MainGenerationRunHandle
   mainGenerationRunHandle?: import('../services/generation/generation-runtime').MainGenerationRunHandle
+  agentWorkflowRegistrationId?: string
   /** Main adapter supplies one idempotent cancellation intent, including between stages. */
   requestMainGenerationCancellation?: () => Promise<void>
   /** 本次运行的稳定身份，供事件消费者排除其他并发任务。 */
@@ -192,6 +193,8 @@ export interface WorkflowCompleteAction {
 export interface WorkflowDefinition {
   /** 可由需要同步订阅事件的调用方预先分配。 */
   runId?: string
+  /** Main-validated Agent tool registration, separate from model-editable intent. */
+  agentWorkflowRegistration?: import('../shared/agent-generation').AgentWorkflowRegistration
   type: WorkflowType
   title: string
   /** 工作流启动时冻结的项目身份。 */
@@ -635,6 +638,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
 
     // 创建执行上下文
     const context: WorkflowContext = {
+      ...(definition.agentWorkflowRegistration ? { mainGenerationRootHandle: definition.agentWorkflowRegistration.parentHandle,
+        agentWorkflowRegistrationId: definition.agentWorkflowRegistration.registrationId } : {}),
       runId: run.id,
       projectPath: definition.projectPath,
       projectSession,

@@ -100,6 +100,12 @@ export const proposeNovelConfigTool = buildAgentTool({
     const nextConfig = { ...project.novelConfig, ...proposal.changes }
     assertAgentToolActive(context)
     context?.markSideEffectStarted?.()
+    if (context?.agentToolAction) {
+      const receipt = await ipc.invokeWithProjectSession(projectSession, 'agent-generation:commit-domain-tool', { ref: context.agentToolAction })
+      if (receipt.kind !== 'config') throw new Error('GENERATION_AGENT_DOMAIN_RECEIPT_MISMATCH')
+      if (receipt.current !== false) useProjectStore.getState().updateNovelConfig(receipt.changes as Partial<NovelConfig>, projectSession)
+      return { success: true, content: text(`小说配置已更新（${Object.keys(receipt.changes).length} 个字段）`, `Novel configuration updated (${Object.keys(receipt.changes).length} fields)`) }
+    }
     const result = await ipc.invokeWithProjectSession(
       projectSession, 'project:update-config', project.id, { novelConfig: nextConfig }, project.path,
     )
