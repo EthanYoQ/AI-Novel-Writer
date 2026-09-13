@@ -10,6 +10,7 @@ import {
   type GenerationTask,
 } from '../generation/generation-harness'
 import {
+  derivePlotTreeSnapshot,
   generatePlotTree,
   parsePlotTreeSnapshot,
   PLOT_TREE_GENERATION_BUDGET,
@@ -23,6 +24,20 @@ const PROJECT_SESSION = Object.freeze({
   leaseId: 'plot-lease',
   projectPath: 'C:/novels/plot-project',
 }) satisfies ProjectSessionContext
+
+it('records model, normalized, and deterministic derivation without losing source revision', () => {
+  const input = sources()
+  const now = '2026-09-13T00:00:00.000Z'
+  const strict = derivePlotTreeSnapshot(JSON.stringify(modelResponse), input, now)
+  expect(strict.kind).toBe('model')
+  const repairable = structuredClone(modelResponse)
+  repairable.tracks[0]!.startChapter = 999
+  expect(derivePlotTreeSnapshot(JSON.stringify(repairable), input, now).kind).toBe('normalized')
+  const fallback = derivePlotTreeSnapshot('not JSON', input, now)
+  expect(fallback.kind).toBe('deterministic')
+  expect(fallback.snapshot).toMatchObject({ generatedAt: now, sourceRevision: input.sourceRevision })
+  expect(fallback).toEqual(derivePlotTreeSnapshot('not JSON', input, now))
+})
 
 function sources(): PlotTreeSourceBundle {
   const narrativeThread = {

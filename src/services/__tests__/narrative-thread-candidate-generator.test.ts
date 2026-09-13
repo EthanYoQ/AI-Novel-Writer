@@ -3,6 +3,7 @@ import type { GenerationRuntime } from '../generation/generation-runtime'
 import type { GenerationTask } from '../generation/generation-harness'
 
 import {
+  buildNarrativeThreadEventTask,
   createNarrativeThreadCandidateGenerator,
   NARRATIVE_THREAD_CANDIDATE_BUDGET,
   parseNarrativeThreadEventCandidates,
@@ -10,6 +11,23 @@ import {
 } from '../narrative-thread-candidate-generator'
 
 describe('narrative thread AI candidate boundary', () => {
+  it.each(['zh-CN', 'en-US'] as const)('pure %s event task preserves finalized bytes and omits transport identity', writingLanguage => {
+    const finalizedContent = '  林岚把日志藏进抽屉。\r\n尾行  '
+    const task = buildNarrativeThreadEventTask({ writingLanguage, draftId: 41, chapterNumber: 3,
+      finalizedContent, plan: {
+        id: 7, title: '日志', type: '伏笔', targetStartChapter: 1, targetEndChapter: 4,
+        authorIntent: '找到日志。', status: 'planted', dormantChapters: 0, overdue: false,
+        events: [], createdAt: '', updatedAt: '',
+      },
+    })
+    expect(task.messages[0].content).toContain(writingLanguage === 'zh-CN' ? '小说定稿事实审查员' : 'finalized fiction facts')
+    const payload = JSON.parse(task.messages[1].content)
+    expect(payload.finalizedContent).toBe(finalizedContent)
+    expect(payload.plan.currentStatus).toBe('planted')
+    expect(payload).not.toHaveProperty('draftId')
+    expect(task).not.toHaveProperty('modelId')
+    expect(task).not.toHaveProperty('signal')
+  })
   it.each([
     ['generatePlanCandidates', 'zh-CN', { status: 'failed', content: '', finishReason: 'error' }, '叙事线索计划候选生成未完整完成'],
     ['generatePlanCandidates', 'en-US', { status: 'failed', content: '', finishReason: 'error' }, 'Narrative-thread plan candidate generation did not complete.'],
