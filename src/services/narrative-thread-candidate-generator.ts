@@ -1,6 +1,8 @@
+import { generateGraphResult } from './graph-generation'
+import { captureProjectSession } from '../components/project-session-gate'
+import { useProjectStore } from '../stores/project-store'
 import { promptLanguageText } from './prompt-language'
 import {
-  createGenerationRuntime,
   type CreateGenerationRuntimeOptions,
   type GenerationRuntime,
 } from './generation/generation-runtime'
@@ -18,12 +20,17 @@ export interface NarrativeThreadCandidateGeneratorDependencies {
 }
 
 export function createNarrativeThreadCandidateGenerator(
-  dependencies: NarrativeThreadCandidateGeneratorDependencies = {
-    createRuntime: options => createGenerationRuntime(options),
-  },
+  dependencies?: NarrativeThreadCandidateGeneratorDependencies,
 ): NarrativeThreadCandidateGenerator {
   return {
     async generatePlanCandidates(input) {
+      if (!dependencies) {
+        const session = captureProjectSession(useProjectStore.getState().currentProject)
+        if (!session) throw new Error('GRAPH_GENERATION_PROJECT_REQUIRED')
+        const result = await generateGraphResult(session, { kind: 'plan', chapterNumber: input.blueprint.chapterNumber }, input.modelId, input.signal)
+        if (result.kind !== 'plan') throw new Error('GRAPH_GENERATION_KIND_MISMATCH')
+        return result.candidates
+      }
       const runtime = await dependencies.createRuntime({
         budget: NARRATIVE_THREAD_CANDIDATE_BUDGET,
         modelId: input.modelId,
@@ -49,6 +56,13 @@ export function createNarrativeThreadCandidateGenerator(
       }
     },
     async generateEventCandidates(input) {
+      if (!dependencies) {
+        const session = captureProjectSession(useProjectStore.getState().currentProject)
+        if (!session) throw new Error('GRAPH_GENERATION_PROJECT_REQUIRED')
+        const result = await generateGraphResult(session, { kind: 'event', planId: input.plan.id, draftId: input.draftId }, input.modelId, input.signal)
+        if (result.kind !== 'event') throw new Error('GRAPH_GENERATION_KIND_MISMATCH')
+        return result.candidates
+      }
       const runtime = await dependencies.createRuntime({
         budget: NARRATIVE_THREAD_CANDIDATE_BUDGET,
         modelId: input.modelId,

@@ -90,6 +90,7 @@ export interface MainGenerationSnapshot extends MainGenerationRunHandle {
   compositionEligible?: boolean
 }
 export interface MainGenerationRunView {
+  operation?: string
   candidates?: readonly (MainGenerationSnapshot & { fingerprint: FrozenInputFingerprint; nonReplayable: true })[]
   unsavedTails?: readonly { attemptId: string; artifactId: string; durableRevision: number; text: string; failureCode: string }[]
   ledger?: { policy: RootBudget; tokenLiability: number; physicalRequests: number; activeElapsedMs: number; blockedCode: string | null }

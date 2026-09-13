@@ -37,6 +37,10 @@ import { FinalizationGeneration } from './finalization-generation'
 import { finalizationSlotKey, readFinalizationGenerationContext } from './finalization-generation-source'
 import { proveFinalizedCharacterGeneration } from './finalized-character-generation-proof'
 import { parseFinalizedCharacterStateResponse } from '../../src/shared/finalized-continuity'
+import type { GraphGenerationChannels, GraphGenerationInput, GraphGenerationRecovery } from '../../src/shared/graph-generation'
+import { GraphGeneration } from './graph-generation'
+import { validateGraphGenerationInput, readGraphGenerationContext } from './graph-generation-source'
+const graphOperations = { plot: 'plot-tree-snapshot', plan: 'narrative-thread-plan-candidate', event: 'narrative-thread-event-candidate' } as const
 
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>
 export function safeGenerationModelReceipt(receipt: ModelExecutionLeaseReceipt): SafeGenerationModelReceipt {
@@ -50,7 +54,7 @@ export interface MainGenerationOwnerDependencies {
   assertCurrent: () => void
   leases: ModelExecutionLeaseRegistry
   loadModel: (id: string) => ModelProfile | null
-  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string; reviewRevisionContext?: ReviewRevisionContext; agentInput?: AgentGenerationInput; agentSession?: { key: string; roundIndex: number }; editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot }, model: SafeGenerationModelReceipt) => RunBinding
+  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string; reviewRevisionContext?: ReviewRevisionContext; agentInput?: AgentGenerationInput; agentSession?: { key: string; roundIndex: number }; editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot; graphGenerationInput?: GraphGenerationInput; graphGenerationKey?: string }, model: SafeGenerationModelReceipt) => RunBinding
   rebuildBinding: (previous: RunBinding, model: SafeGenerationModelReceipt) => RunBinding
   beforeDispatch?: () => void
   onSnapshot?: (snapshot: MainGenerationSnapshot) => void
@@ -145,7 +149,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       .filter(receipt => receipt.run.runId === run.runId && receipt.artifact && visibleIds.has(receipt.artifact.artifactId))
       .map(receipt => ({ ...snapshotOf(receipt)!, fingerprint: receipt.artifact!.fingerprint, nonReplayable: true as const }))
     const artifacts = candidates.filter(artifact => artifact.epoch === run.binding.epoch)
-    return { handle: handleOf(run), status: run.status as MainGenerationRunView['status'],
+    return { handle: handleOf(run), status: run.status as MainGenerationRunView['status'], operation: run.binding.sourceManifest.operation as string,
       nonReplayable: run.binding.epoch !== deps.epoch || run.status !== 'running' || !!budget.blockedCode,
       budget: { maxAttempts: budget.policy.maxPhysicalRequests, maxRequestedOutputTokens: budget.policy.maxTokenLiability,
         maxRequestedOutputTokensPerAttempt: budget.policy.maxOutputPerRequest,
@@ -203,15 +207,16 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     preparations.set(preparationId, { binding, knowledgeSnapshot: structuredClone(knowledgeSnapshot) })
     return { preparationId, knowledgeSnapshot: structuredClone(knowledgeSnapshot), selectedDrafts }
   }
-  const begin = (selection: (BeginGenerationRequest | AgentBeginSelection) & { editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot }, batchInitialization = false, agentInitialization = false, editorInitialization = false, finalizationInitialization = false): MainGenerationRunView => {
+  const begin = (selection: (BeginGenerationRequest | AgentBeginSelection) & { editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot; graphGenerationInput?: GraphGenerationInput; graphGenerationKey?: string }, batchInitialization = false, agentInitialization = false, editorInitialization = false, finalizationInitialization = false, graphInitialization = false): MainGenerationRunView => {
     assertCurrent()
     if (!selection || typeof selection.operation !== 'string' || !/^[a-z0-9][a-z0-9:_-]{0,127}$/u.test(selection.operation)
       || !Array.isArray(selection.promptKeys) || selection.promptKeys.length === 0
       || Object.hasOwn(selection, 'parentRootActionId') && (typeof selection.parentRootActionId !== 'string' || !selection.parentRootActionId.trim())
       || typeof selection.uiActionNonce !== 'string' || !selection.uiActionNonce.trim() || selection.uiActionNonce.length > 256
-      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId', 'finalizedCharacterContextId', 'reviewRevisionContextId', 'agentWorkflowRegistrationId', 'importSlot', 'importExecution', ...(agentInitialization ? ['agentInput', 'agentSession'] : []), ...(editorInitialization ? ['editorInlineInput'] : []), ...(finalizationInitialization ? ['finalizationGenerationSlot'] : [])].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
+      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId', 'finalizedCharacterContextId', 'reviewRevisionContextId', 'agentWorkflowRegistrationId', 'importSlot', 'importExecution', ...(agentInitialization ? ['agentInput', 'agentSession'] : []), ...(editorInitialization ? ['editorInlineInput'] : []), ...(finalizationInitialization ? ['finalizationGenerationSlot'] : []), ...(graphInitialization ? ['graphGenerationInput', 'graphGenerationKey'] : [])].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
     if (selection.operation === 'editor-inline' && !editorInitialization) throw new Error('GENERATION_EDITOR_ADMISSION_REQUIRED')
     if (['finalized-chapter-notes', 'finalized-character-state'].includes(selection.operation) && !finalizationInitialization) throw new Error('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
+    if (Object.values(graphOperations).includes(selection.operation as typeof graphOperations[keyof typeof graphOperations]) && !graphInitialization) throw new Error('GENERATION_GRAPH_ADMISSION_REQUIRED')
     const importAdmission = imports.admit(selection)
     if (importAdmission?.existing) return viewOf(importAdmission.existing)
     if (importAdmission) selection = { ...selection, uiActionNonce: `import:${importGenerationSlotKey(selection.importSlot!)}`,
@@ -219,6 +224,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (selection.operation === 'agent-round' && !agentInitialization) throw new Error('GENERATION_AGENT_ADMISSION_REQUIRED')
     const agentWorkflow = agentInitialization ? undefined : agents.admitWorkflow(selection)
     if (selection.parentRootActionId && repository.budget(selection.parentRootActionId).root.operation === 'editor-inline') throw new Error('GENERATION_EDITOR_CHILD_FORBIDDEN')
+    if (selection.parentRootActionId && Object.values(graphOperations).includes(repository.budget(selection.parentRootActionId).root.operation as typeof graphOperations[keyof typeof graphOperations])) throw new Error('GENERATION_GRAPH_CHILD_FORBIDDEN')
     if (agentWorkflow?.existing) return viewOf(repository.get(agentWorkflow.existing.runId))
     generationOutputContract(selection)
     const finalizedCharacterContextHash = finalizedCharacters.admit(selection)
@@ -313,12 +319,13 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return { outcome: finishReason === 'stop' ? { status: 'completed', content, finishReason, receipt: details }
       : { status: 'incomplete', content, finishReason, receipt: details }, run: viewOf(repository.get(receipt.run.runId)) }
   }
-  const execute = async (request: ExecuteGenerationRequest, agentExecution = false, importExecution = false, editorExecution = false, finalizationExecution = false): Promise<MainGenerationExecuteReceipt> => {
+  const execute = async (request: ExecuteGenerationRequest, agentExecution = false, importExecution = false, editorExecution = false, finalizationExecution = false, graphExecution = false): Promise<MainGenerationExecuteReceipt> => {
     const run = requireRun(request.handle, true)
     if (run.binding.sourceManifest.operation === 'agent-round' && !agentExecution) throw new Error('GENERATION_AGENT_ADMISSION_REQUIRED')
     if (run.binding.sourceManifest.importSlot && !importExecution) throw new Error('GENERATION_IMPORT_ADMISSION_REQUIRED')
     if (run.binding.sourceManifest.operation === 'editor-inline' && !editorExecution) throw new Error('GENERATION_EDITOR_ADMISSION_REQUIRED')
     if (['finalized-chapter-notes', 'finalized-character-state'].includes(run.binding.sourceManifest.operation as string) && !finalizationExecution) throw new Error('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
+    if (Object.values(graphOperations).includes(run.binding.sourceManifest.operation as typeof graphOperations[keyof typeof graphOperations]) && !graphExecution) throw new Error('GENERATION_GRAPH_ADMISSION_REQUIRED')
     assertSemanticGenerationTask(request.task)
     const task = structuredClone(request.task)
     const contract = run.binding.sourceManifest.outputContract
@@ -337,6 +344,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     reviewRevisions.assertMutable(run.runId)
     imports.assertMutable(run)
     finalizations.assertMutable(run)
+    graphs.assertMutable(run)
     const operation = (async () => {
     const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
     if (!isDeepStrictEqual(current, run.binding)) throw new Error('GENERATION_SOURCE_CHANGED')
@@ -365,6 +373,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const run = requireRun(handle)
     imports.assertMutable(run)
     finalizations.assertMutable(run)
+    graphs.assertMutable(run)
     const receipt = currentModelReceipt(run.binding)
     const next = deps.rebuildBinding(run.binding, receipt)
     const lease = deps.leases.begin(receipt.modelId)
@@ -430,6 +439,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     })
   })
   const imports = new ImportGeneration(deps.database, repository, deps.projectId)
+  const graphs = new GraphGeneration(deps.database, repository, deps.projectId)
   const finalizations = new FinalizationGeneration(deps.database, repository, deps.projectId, characters)
   const agents = new AgentGeneration(deps.database, repository, { projectId: deps.projectId, epoch: deps.epoch }, assertCurrent, {
     begin: selection => begin(selection, false, true), read: handle => viewOf(requireRun(handle)), resume,
@@ -467,7 +477,71 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (repository.budget(run.rootActionId).root.status === 'cancelled') throw new Error('GENERATION_ACTION_CANCELLED')
     if (!compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding)))) throw new Error('GENERATION_SOURCE_CHANGED')
   }
+  const graphRecovery = (run: DurableGenerationRun): GraphGenerationRecovery => {
+    assertCurrent()
+    const context = readGraphGenerationContext(run), effects = graphs.effects(run)
+    const attempts = deps.database.prepare('SELECT attempt_id FROM generation_attempts WHERE run_id=? ORDER BY rowid').all(run.runId) as { attempt_id: string }[]
+    if (attempts.length > 1) throw new Error('GENERATION_GRAPH_ATTEMPT_CONFLICT')
+    let artifact: GraphGenerationRecovery['artifact'], result: GraphGenerationRecovery['result']
+    if (attempts[0]) {
+      const candidate = repository.receipt(attempts[0].attempt_id).artifact
+      if (candidate) {
+        const reference = { artifactId: candidate.artifactId, revision: candidate.revision, textHash: candidate.textHash }
+        try { result = graphs.result(run, reference); artifact = reference } catch { /* Unqualified raw output remains in the run view for copying. */ }
+      }
+    }
+    let current = false
+    try { assertFinalizationSources(run); current = true } catch { /* Historical context/result does not require current sources or model. */ }
+    return { view: viewOf(run), modelId: modelReceipt(run.binding).modelId, context, effects, attemptCount: attempts.length,
+      sourceStatus: current ? 'current' : 'conflict', ...(artifact && result ? { artifact, result } : {}) }
+  }
   return { begin: (selection: BeginGenerationRequest) => begin(selection), execute: (request: ExecuteGenerationRequest) => execute(request), resume, list, assertSourcesCurrent, agents,
+    beginGraphGeneration: (request: GraphGenerationChannels['graph-generation:begin']['args'][0]) => {
+      assertCurrent()
+      if (!request || Object.keys(request).some(key => !['input', 'modelId', 'uiActionNonce'].includes(key))
+        || typeof request.uiActionNonce !== 'string' || !request.uiActionNonce.trim() || request.uiActionNonce.length > 256) throw new Error('GENERATION_GRAPH_INPUT_INVALID')
+      const input = validateGraphGenerationInput(request.input)
+      const rows = deps.database.prepare("SELECT r.run_id FROM generation_runs r JOIN generation_roots g ON g.root_action_id=r.root_action_id WHERE json_extract(g.action_json,'$.projectId')=? AND json_extract(g.action_json,'$.uiActionNonce')=? AND json_extract(r.binding_json,'$.sourceManifest.graphGenerationContext') IS NOT NULL").all(deps.projectId, request.uiActionNonce) as { run_id: string }[]
+      if (rows.length > 1) throw new Error('GENERATION_NONCE_CONFLICT')
+      if (rows[0]) {
+        const run = repository.get(rows[0].run_id)
+        if (!isDeepStrictEqual(readGraphGenerationContext(run).input, input)) throw new Error('GENERATION_NONCE_CONFLICT')
+        return graphRecovery(run)
+      }
+      const view = begin({ operation: graphOperations[input.kind], uiActionNonce: request.uiActionNonce, modelId: request.modelId,
+        selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: [`graph-${input.kind}`], skillStages: [], output: 'structured-data',
+        graphGenerationInput: input, graphGenerationKey: randomUUID() }, false, false, false, false, true)
+      return graphRecovery(repository.get(view.handle.runId))
+    },
+    readGraphGeneration: (request: GraphGenerationChannels['graph-generation:read']['args'][0]) => {
+      assertCurrent()
+      if (!request || Object.keys(request).some(key => key !== 'handle')) throw new Error('GENERATION_GRAPH_REQUEST_INVALID')
+      return graphRecovery(graphs.require(request.handle))
+    },
+    executeGraphGeneration: async (request: GraphGenerationChannels['graph-generation:execute']['args'][0]) => {
+      assertCurrent()
+      if (!request || Object.keys(request).some(key => key !== 'handle')) throw new Error('GENERATION_GRAPH_REQUEST_INVALID')
+      const run = graphs.require(request.handle), task = graphs.task(run), invocationNonce = 'graph:0'
+      const requestHash = textHash(JSON.stringify([task, run.binding.fingerprint.modelLeaseRevision, run.binding.fingerprint.policyHash]))
+      const prior = repository.findInvocation(run.runId, invocationNonce, requestHash)
+      if (prior) return pending.get(JSON.stringify([run.runId, invocationNonce]))?.promise ?? outcomeOf(volatileReceipts.get(prior.attempt.attemptId) ?? prior, task)
+      graphs.assertMutable(run)
+      if (deps.database.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(run.runId) !== 0) throw new Error('GENERATION_GRAPH_ATTEMPT_CONFLICT')
+      const current = viewOf(run).nonReplayable ? await resume(handleOf(run)) : viewOf(run)
+      return execute({ handle: current.handle, invocationNonce, task }, false, false, false, false, true)
+    },
+    confirmGraphGeneration: (request: GraphGenerationChannels['graph-generation:confirm']['args'][0]) => {
+      assertCurrent()
+      if (!request || Object.keys(request).some(key => !['handle', 'artifact', 'index'].includes(key))) throw new Error('GENERATION_GRAPH_REQUEST_INVALID')
+      return graphs.confirm(request.handle, request.artifact, request.index, assertFinalizationSources)
+    },
+    cancelGraphGeneration: (request: GraphGenerationChannels['graph-generation:cancel']['args'][0]) => {
+      assertCurrent()
+      if (!request || Object.keys(request).some(key => key !== 'handle')) throw new Error('GENERATION_GRAPH_REQUEST_INVALID')
+      const run = graphs.require(request.handle)
+      service.cancel(run.rootActionId)
+      return viewOf(repository.get(run.runId))
+    },
     readFinalizationGeneration: (request: FinalizationGenerationChannels['finalization-generation:read']['args'][0]) => {
       assertCurrent()
       if (!request || Object.keys(request).some(key => key !== 'slot')) throw new Error('GENERATION_FINALIZATION_SLOT_INVALID')
@@ -692,6 +766,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       reviewRevisions.assertMutable(requireRun(handle).runId)
       imports.assertMutable(requireRun(handle))
       finalizations.assertMutable(requireRun(handle))
+      graphs.assertMutable(requireRun(handle))
       assertSourcesCurrent(handle)
       if (algorithm === 'draft-visible-v1' && requireRun(handle).binding.sourceManifest.operation !== 'chapter-draft') throw new Error('GENERATION_COMPOSITION_ALGORITHM_INVALID')
       return repository.composeVisible(handle.runId, artifactIds, expectedTextHash, algorithm)
@@ -706,6 +781,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const old = requireRun(handle)
       imports.assertMutable(old)
       finalizations.assertMutable(old)
+      graphs.assertMutable(old)
+      if (old.binding.sourceManifest.graphGenerationContext) throw new Error('GENERATION_GRAPH_ADMISSION_REQUIRED')
       if (selection.parentRootActionId || selection.uiActionNonce === repository.budget(old.rootActionId).root.uiActionNonce) throw new Error('GENERATION_RESTART_NEW_NONCE_REQUIRED')
       // Admit the replacement before cancelling; rejected sources must leave the original resumable.
       const next = begin(selection)
@@ -718,6 +795,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       reviewRevisions.assertMutable(run.runId)
       imports.assertMutable(run)
       finalizations.assertMutable(run)
+      graphs.assertMutable(run)
       const artifact = viewOf(run).candidates?.find(item => item.artifactId === artifactId)
       if (!artifact || artifact.status === 'running') throw new Error('GENERATION_CANDIDATE_NOT_DISCARDABLE')
       service.discardCandidate(artifactId)

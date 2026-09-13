@@ -43,6 +43,7 @@ function setValue(element: HTMLInputElement | HTMLTextAreaElement, value: string
 
 function installIpc() {
   invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+    if (channel === 'generation:list') return []
     if (channel === 'db:draft-get-max-finalized-chapter') return 3
     if (channel === 'db:draft-list-all') return [{ id: 7, chapterNumber: 1, version: 1, status: 'finalized', source: 'write', contentId: 1, wordCount: 8, createdAt: '', updatedAt: '' }]
     if (channel === 'db:draft-get-full') return { id: 7, content: '门上出现刻痕。林岚没有声张。' }
@@ -883,5 +884,136 @@ describe('NarrativeThreadEditor', () => {
       },
     }))
     await vi.waitFor(() => expect(container?.textContent).toContain('已达到项目沉寂提醒阈值'))
+  })
+})
+
+describe('main-owned graph recovery', () => {
+  function fixture(sourceStatus = 'current') {
+    const handle = { projectId: 'thread-project', epoch: 'old-lease', rootActionId: 'original-root', runId: 'original-run' }
+    const candidates = ['原线索甲', '原线索乙'].map(title => ({ title, type: '伏笔', targetStartChapter: 2, targetEndChapter: 4, authorIntent: '在终章揭示。' }))
+    const recovery = { view: { handle, operation: 'narrative-thread-plan-candidate', status: 'completed', artifacts: [] },
+      context: { projectId: 'thread-project', kind: 'plan', input: { kind: 'plan', chapterNumber: 2 } },
+      modelId: '已删除的原模型', attemptCount: 1, sourceStatus,
+      artifact: { artifactId: 'original-artifact', revision: 1, textHash: 'a'.repeat(64) },
+      result: { kind: 'plan', candidates }, effects: [] as { success: boolean; kind: string; index: number; plan: { id: number } }[] }
+    const prior = invoke.getMockImplementation() as (channel: string, ...args: unknown[]) => Promise<unknown>
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:list') return [recovery.view]
+      if (channel === 'graph-generation:read') return structuredClone(recovery)
+      if (channel === 'graph-generation:confirm') {
+        const request = args[0] as { index: number }
+        const effect = { success: true, kind: 'plan', index: request.index, plan: { id: request.index + 30 } }
+        recovery.effects.push(effect)
+        return effect
+      }
+      if (channel === 'graph-generation:cancel') { recovery.view.status = 'cancelled'; recovery.sourceStatus = 'conflict'; return recovery.view }
+      return prior(channel, ...args)
+    })
+    return recovery
+  }
+  async function recover() {
+    await act(async () => root?.render(<NarrativeThreadEditor projectKey={PROJECT_PATH} />))
+    await vi.waitFor(() => expect(container?.textContent).toContain('original-run'))
+    await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent?.includes('恢复原生成'))?.click())
+    await vi.waitFor(() => expect(document.body.textContent).toContain('原线索甲'))
+  }
+  it('默认入口仅发送主进程selector，作者确认前没有正式写入', async () => {
+    const recovery = fixture()
+    const previous = invoke.getMockImplementation() as (channel: string, ...args: unknown[]) => Promise<unknown>
+    let began = false
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:list') return []
+      if (channel === 'graph-generation:begin') {
+        began = true
+        return { ...recovery, attemptCount: 0, result: undefined, artifact: undefined }
+      }
+      if (channel === 'graph-generation:execute') return { run: recovery.view, outcome: { status: 'completed', finishReason: 'stop' } }
+      return previous(channel, ...args)
+    })
+    await act(async () => root?.render(<NarrativeThreadEditor projectKey={PROJECT_PATH} />))
+    await vi.waitFor(() => expect(container?.querySelector<HTMLButtonElement>('button')?.disabled).toBe(false))
+    await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent?.includes('AI 建议伏笔'))?.click())
+    await vi.waitFor(() => expect(document.querySelector('#narrative-thread-ai-blueprint')).not.toBeNull())
+    await act(async () => Array.from(document.querySelectorAll('button')).find(button => button.textContent === '生成候选')?.click())
+    await vi.waitFor(() => expect(document.body.textContent).toContain('原线索甲'))
+    expect(began).toBe(true)
+    const request = invoke.mock.calls.find(([channel]) => channel === 'graph-generation:begin')?.[1]
+    expect(request).toEqual({ input: { kind: 'plan', chapterNumber: 2 }, modelId: 'glm', uiActionNonce: expect.any(String) })
+    expect(invoke.mock.calls.some(([channel]) => ['graph-generation:confirm', 'db:narrative-thread-plan-create'].includes(channel))).toBe(false)
+  })
+  it('恢复原模型与候选，连续确认保留原index且不走raw写接口', async () => {
+    const recovery = fixture()
+    await recover()
+    expect(container?.textContent).toContain('已删除的原模型')
+    for (const title of ['原线索甲', '原线索乙']) {
+      const section = Array.from(document.querySelectorAll('section')).find(item => item.textContent?.includes(title) && item.querySelector('button')?.textContent === '确认计划')!
+      await act(async () => section.querySelector<HTMLButtonElement>('button')!.click())
+      await vi.waitFor(() => expect(document.body.textContent).not.toContain(title))
+    }
+    const confirms = invoke.mock.calls.filter(([channel]) => channel === 'graph-generation:confirm')
+    expect(confirms.map(([, request]) => request.index)).toEqual([0, 1])
+    expect(confirms.every(([, request]) => JSON.stringify(request.artifact) === JSON.stringify(recovery.artifact))).toBe(true)
+    expect(invoke.mock.calls.some(([channel]) => ['graph-generation:begin', 'graph-generation:execute', 'db:narrative-thread-plan-create'].includes(channel))).toBe(false)
+  })
+  it('来源冲突恢复可见但确认禁用，未知请求不重发', async () => {
+    fixture('conflict')
+    await recover()
+    expect(container?.textContent).toContain('来源已变化')
+    const confirms = Array.from(document.querySelectorAll<HTMLButtonElement>('button')).filter(button => button.textContent === '确认计划')
+    expect(confirms).toHaveLength(2)
+    expect(confirms.every(button => button.disabled)).toBe(true)
+    expect(Array.from(container!.querySelectorAll<HTMLButtonElement>('button')).find(button => button.textContent === '继续原运行')?.disabled).toBe(true)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'graph-generation:execute')).toBe(false)
+  })
+  it('卸载仅detach，不取消持久运行', async () => {
+    fixture()
+    await recover()
+    await act(async () => { root?.unmount(); root = undefined })
+    expect(invoke.mock.calls.some(([channel]) => channel === 'graph-generation:cancel')).toBe(false)
+  })
+  it('关闭候选窗口只detach，随后仍能从原handle恢复', async () => {
+    fixture()
+    await recover()
+    await act(async () => Array.from(document.querySelectorAll('button')).find(button => button.textContent === '关闭')?.click())
+    await vi.waitFor(() => expect(document.body.textContent).not.toContain('原线索甲'))
+    await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent?.includes('恢复原生成'))?.click())
+    await vi.waitFor(() => expect(document.body.textContent).toContain('原线索甲'))
+    expect(invoke.mock.calls.some(([channel]) => ['graph-generation:cancel', 'graph-generation:execute', 'graph-generation:begin'].includes(channel))).toBe(false)
+  })
+  it('恢复事件候选使用main原定稿身份，连续确认原index不改用当前选择', async () => {
+    const original = fixture()
+    const recovery = { ...original,
+      view: { ...original.view, operation: 'narrative-thread-event-candidate' },
+      context: { projectId: 'thread-project', kind: 'event', input: { kind: 'event', planId: 9, draftId: 42 },
+        plan: { id: 9 }, source: { draftId: 42, chapterNumber: 7 }, contentRevision: 1 },
+      result: { kind: 'event', candidates: [
+        { type: 'planted', evidence: '原定稿证据甲', reason: '原理由甲' },
+        { type: 'progressing', evidence: '原定稿证据乙', reason: '原理由乙' },
+      ] }, effects: [] as { index: number; success: boolean; kind: string; event: { id: number } }[],
+    }
+    const prior = invoke.getMockImplementation() as (channel: string, ...args: unknown[]) => Promise<unknown>
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:list') return [recovery.view]
+      if (channel === 'graph-generation:read') return structuredClone(recovery)
+      if (channel === 'graph-generation:confirm') {
+        const request = args[0] as { index: number }
+        const effect = { index: request.index, success: true, kind: 'event', event: { id: request.index + 80 } }
+        recovery.effects.push(effect)
+        return effect
+      }
+      return prior(channel, ...args)
+    })
+    await act(async () => root?.render(<NarrativeThreadEditor projectKey={PROJECT_PATH} />))
+    await vi.waitFor(() => expect(container?.textContent).toContain('original-run'))
+    await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent?.includes('恢复原生成'))?.click())
+    await vi.waitFor(() => expect(document.body.textContent).toContain('原定稿证据甲'))
+    expect(document.body.textContent).toContain('第7章')
+    for (const evidence of ['原定稿证据甲', '原定稿证据乙']) {
+      const section = Array.from(document.querySelectorAll('section')).find(item => item.textContent?.includes(evidence) && item.querySelector('button')?.textContent === '确认事件')!
+      await act(async () => section.querySelector<HTMLButtonElement>('button')!.click())
+      await vi.waitFor(() => expect(document.body.textContent).not.toContain(evidence))
+    }
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'graph-generation:confirm').map(([, request]) => request.index)).toEqual([0, 1])
+    expect(invoke.mock.calls.some(([channel]) => ['db:narrative-thread-event-confirm', 'db:draft-get-full', 'graph-generation:execute'].includes(channel))).toBe(false)
   })
 })

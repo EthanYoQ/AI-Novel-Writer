@@ -13,19 +13,19 @@
 | import global/style/blueprints | import-novel/analyze-style→Base import slot；main execute ordinal+actual lease；prepared effectguard | 当前import owner14case与中央集成；本表不替代后续最新receipt | 最终整合freeze以root为准，不沿旧12caseauthority验收 |
 | editor选区refine/expand/continue/dialogue | CodeMirrorEditor→EditorInlineGenerationClient→main editor context/task | main5case、恢复卡4case+旧11 browser | 作者替换只本地dirty；独立root终验为准 |
 | 定稿notes/characters后处理 | finalize-chapter→专属main slot/context/task/effect；原attempt持久ACK | 实际SQLite、renderer及注册IPC；notes/blueprint/ACK同TX，角色字段保护与原epoch基线；详见专属证据 | scoped完成不代表真实模型/安装；旧直接派生写入与generic定稿执行已退役 |
-| 剧情树 | plot-tree-generator默认createGenerationRuntime({budget,modelId,projectSession}) | 旧合同测试不等main迁移 | NOT MIGRATED；自动保存派生snapshot需来源/ACK guard |
-| 叙事计划/事件候选 | narrative-thread-candidate-generator默认旧runtime | 旧候选parse/evidence测试不等main迁移 | NOT MIGRATED；作者确认才写plan/event，需main实际source context |
+| 剧情树 | graph-generation专属main context/task；来源与快照双CAS，原attempt ACK | SQLite owner、来源、renderer/Chromium及中央回归，详见s06d-graph-evidence.md | 最终独立IPC收据及后续模型/安装资格分别记录 |
+| 叙事计划/事件候选 | main实际source→固定task→作者确认stable index→同TX候选写入与ACK | 连续确认仅排除已证明的本次事件；外部变化拒绝；历史回执只读 | 候选不自动成为作者计划或事实 |
 | 旧角色Markdown修复 | use-character-roster-repair→architecture-workflow.migrateLegacyCharacterRoster→RepairLegacyCharacterRosterCommand | 实际生产动态import与callLLM已确认 | NOT MIGRATED；execute无selection走Base legacy，bounded continuation/JSON repair尚无main root。legacy_cards_preserved的adopt分支无模型，不与Markdown路径混淆 |
 
 ## LLM store 与legacy runtime核查
 
 - src/stores/llm-store.ts generate定义仍在，并发往llm:generate；本轮非测试src引用核查未发现生产消费者调用generate。不能依据CodeGraph无caller单独宣告删除；保留为未使用兼容API，IPC仍存在。不把import orchestrator参数generate、review局部generate或provider.generate误算store调用。
 - generateStream存在明确生产调用：generation-runtime.ts createDefaultEnvironment的llmStore.generateStream。旧runtime options无runHandle时才选此environment；main runHandle分支走main transport。故generateStream绝非无生产调用。
-- 非测试src中createGenerationRuntime直接调用仅plot-tree-generator、narrative-thread-candidate-generator、Base dependenciesFor/main?mainruntime:legacyruntime三处。这个“直接调用点三处”不等于“实际入口两个”：Base的legacy-character-roster-repair无selection是真实可达旧路径。正常已迁commands提供selection，fake dependency旧分支保单测兼容，但不能把全部Base旧分支说成仅测试。
+- 非测试src中createGenerationRuntime直接调用仍见于plot-tree-generator、narrative-thread-candidate-generator与Base。前两个默认入口已迁专属main，仅明确注入依赖时保留旧测试分支；Base的legacy-character-roster-repair无selection仍是真实可达旧路径，不能把全部Base旧分支说成仅测试。
 - CodeMirrorEditor仍useLLMStore只为初始defaultModelId；生成已走editor-inline client，不再store.generateStream。
 - Agent engine的generate是注入函数/hosted client，不是useLLMStore.generate；Agent标题generateTitle为纯字符串逻辑。
 - DSH/plugins按原Spec独立排除；其provider/runtime不能计作桌面S06D未迁，也不能据桌面通过宣告插件通过。
 
 ## 当前阻断
 
-S06D不得complete：plot、narrative候选、旧角色Markdown修复三条实际legacy生成仍待迁。定稿已完成本地有界恢复与提交保护，尚不代表模型或安装资格。旧角色两分支还调用已停用的按名字写入接口，需明确ID/proposal批准；不能仅替换模型runtime。CI timeout/native异常仍未确认根因。真实模型调用仍为0。
+S06D不得complete：旧角色Markdown修复仍待迁。定稿与图谱已有本地有界恢复和提交保护，尚不代表模型或安装资格。旧角色两分支还调用已停用的按名字写入接口，需明确ID/proposal批准；不能仅替换模型runtime。最新CI普通测试通过但native worker仍异常退出，根因未确认。真实模型调用仍为0。

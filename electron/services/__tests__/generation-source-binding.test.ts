@@ -11,6 +11,29 @@ const cleanups: (() => void)[] = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0))
     cleanup(); });
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
+it('graph candidates bind the actual blueprint and fixed main task across sessions without self-conflicting on confirmed plans', () => {
+    const f = fixture();
+    f.db.exec('UPDATE project_core SET total_chapters=10');
+    const input: GenerationSourceBindingInput = { ...f.input, operation: 'narrative-thread-plan-candidate', chapterNumber: undefined,
+        selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['graph-plan'], skillStages: [], graphGenerationInput: { kind: 'plan', chapterNumber: 2 }, graphGenerationKey: 'graph-key' };
+    const deps = { ...f.deps, readBuiltinPrompt: () => { throw new Error('MUST_NOT_READ_RENDERER_TEMPLATE'); } };
+    const original = buildGenerationSourceBinding(deps, input).binding;
+    f.db.exec("INSERT INTO narrative_thread_plans(title,type,target_start_chapter,target_end_chapter,author_intent) VALUES('确认候选','伏笔',2,4,'调查')");
+    const resumed = rebuildGenerationSourceBinding(deps, original, 'next-epoch').binding;
+    expect(compareGenerationSourceBindings(original, resumed)).toBe(true);
+    expect(resumed.sourceManifest.graphGenerationOriginEpoch).toBe('e');
+    expect(resumed.sourceManifest.graphGenerationContext).toEqual(original.sourceManifest.graphGenerationContext);
+    f.db.exec("UPDATE blueprints SET title='作者改名' WHERE chapter_number=2");
+    expect(compareGenerationSourceBindings(original, rebuildGenerationSourceBinding(deps, original, 'next-epoch').binding)).toBe(false);
+});
+it('graph admission rejects unrelated operation, template, and renderer context selectors', () => {
+    const f = fixture();
+    const input: GenerationSourceBindingInput = { ...f.input, operation: 'narrative-thread-plan-candidate', chapterNumber: undefined,
+        selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['graph-plan'], skillStages: [], graphGenerationInput: { kind: 'plan', chapterNumber: 2 }, graphGenerationKey: 'graph-key' };
+    for (const delta of [{ operation: 'chapter' }, { promptKeys: ['draft'] }, { selectedDraftIds: [1] }, { chapterNumber: 2 }, { authorInputs: [{ id: 'forged', text: 'text' }] }]) {
+        expect(() => buildGenerationSourceBinding(f.deps, { ...input, ...delta })).toThrow('GENERATION_GRAPH_SELECTION_INVALID');
+    }
+});
 function put(root: string, file: string, text: string) { const target = path.join(root, file); fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, text); }
 function fixture() {
     const base = path.resolve('.runtime/.cache/novel-quality-modernization/s05-sources');

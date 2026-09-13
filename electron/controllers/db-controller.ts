@@ -58,7 +58,6 @@ import { SummaryRepository } from '../repositories/summary-repository'
 import { ConsistencyExemptionRepository } from '../repositories/consistency-exemption-repository'
 import { NarrativeThreadRepository } from '../repositories/narrative-thread-repository'
 import { PlotTreeRepository } from '../repositories/plot-tree-repository'
-import { isPlotTreeSourceRevision } from '../../src/shared/plot-tree'
 import { RecoveryCandidateRepository } from '../repositories/recovery-candidate-repository'
 import type { RecoveryCandidateRecordInput } from '../../src/shared/recovery-candidate'
 
@@ -825,19 +824,13 @@ export function registerDatabaseController() {
 
   ipcMain.handle('db:plot-tree-save', async (
     _event,
-    snapshot,
-    expectedSourceRevision: string,
+    _snapshot,
+    _expectedSourceRevision: string,
     expectedProjectPath: string,
   ) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      if (!isPlotTreeSourceRevision(expectedSourceRevision)) {
-        throw new Error('剧情树来源版本无效')
-      }
-      return {
-        success: true,
-        snapshot: PlotTreeRepository.save(snapshot, expectedSourceRevision),
-      }
+      throw new Error('GENERATION_GRAPH_ADMISSION_REQUIRED')
     } catch (error) {
       const message = String(error)
       return {

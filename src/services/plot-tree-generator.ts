@@ -1,10 +1,10 @@
+import { generateGraphResult } from './graph-generation'
 import type { PlotTreeSnapshot, PlotTreeSourceBundle } from '../shared/plot-tree'
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import { buildPlotTreeTask, derivePlotTreeSnapshot, PLOT_TREE_GENERATION_BUDGET, PlotTreeIncompleteError, PlotTreeGenerationError } from '../shared/plot-tree-generation-pure'
 export * from '../shared/plot-tree-generation-pure'
 import { GenerationHarnessError } from './generation/generation-harness'
 import {
-  createGenerationRuntime,
   type CreateGenerationRuntimeOptions,
   type GenerationRuntime,
 } from './generation/generation-runtime'
@@ -23,11 +23,13 @@ export interface PlotTreeGeneratorDependencies {
 
 export async function generatePlotTree(
   input: GeneratePlotTreeInput,
-  dependencies: PlotTreeGeneratorDependencies = {
-    createRuntime: options => createGenerationRuntime(options),
-    now: () => new Date().toISOString(),
-  },
+  dependencies?: PlotTreeGeneratorDependencies,
 ): Promise<PlotTreeSnapshot> {
+  if (!dependencies) {
+    const result = await generateGraphResult(input.projectSession, { kind: 'plot' }, input.modelId, input.signal)
+    if (result.kind !== 'plot') throw new Error('GRAPH_GENERATION_KIND_MISMATCH')
+    return result.snapshot
+  }
   const task = buildPlotTreeTask(input.sources)
   const runtime = await dependencies.createRuntime({
     budget: PLOT_TREE_GENERATION_BUDGET,

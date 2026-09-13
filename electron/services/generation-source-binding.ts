@@ -20,6 +20,9 @@ import type { EditorInlineInput } from '../../src/shared/editor-inline-generatio
 import { buildEditorInlineContext, validateEditorInlineInput, editorInlineTask } from './editor-inline-generation';
 import type { FinalizationGenerationContext, FinalizationGenerationSlot } from '../../src/shared/finalization-generation';
 import { captureFinalizationGenerationContext, finalizationSlotKey, finalizationGenerationTask } from './finalization-generation-source';
+import type { GraphGenerationContext, GraphGenerationInput } from '../../src/shared/graph-generation';
+import { captureGraphGenerationContext, graphGenerationTask, validateGraphGenerationInput } from './graph-generation-source';
+import { provenGraphOwnEventIds } from './graph-generation';
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>;
 export interface GenerationSourceBindingInput {
     projectId: string;
@@ -49,6 +52,9 @@ export interface GenerationSourceBindingInput {
     editorInlineOriginEpoch?: string;
     finalizationGenerationSlot?: FinalizationGenerationSlot;
     finalizationGenerationContext?: FinalizationGenerationContext;
+    graphGenerationInput?: GraphGenerationInput;
+    graphGenerationKey?: string;
+    graphGenerationContext?: GraphGenerationContext;
     modelReceipt: SafeGenerationModelReceipt;
     policy: Readonly<Record<string, unknown>>;
     outputContract: string | Readonly<Record<string, unknown>>;
@@ -146,6 +152,10 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         fail('GENERATION_PROMPT_SELECTION_REQUIRED');
     const agentInput = input.agentInput ? validateAgentGenerationInput(input.agentInput) : undefined;
     const editorInlineInput = input.editorInlineInput ? validateEditorInlineInput(input.editorInlineInput) : undefined;
+    const graphInput = input.graphGenerationInput ? validateGraphGenerationInput(input.graphGenerationInput) : undefined;
+    if (graphInput && (input.operation !== ({ plot: 'plot-tree-snapshot', plan: 'narrative-thread-plan-candidate', event: 'narrative-thread-event-candidate' } as const)[graphInput.kind]
+        || !input.graphGenerationKey || !isDeepStrictEqual(input.promptKeys, [`graph-${graphInput.kind}`]) || input.skillStages.length
+        || input.selectedDraftIds.length || input.selectedFinalizedDraftIds.length || input.chapterNumber !== undefined || input.authorInputs?.length)) fail('GENERATION_GRAPH_SELECTION_INVALID');
     const authorInputs = freezeAuthorInputs(input.authorInputs);
     const blueprintChapters = input.selectedBlueprintChapterNumbers ?? [];
     if (!Array.isArray(blueprintChapters) || blueprintChapters.length > 10_000 || new Set(blueprintChapters).size !== blueprintChapters.length
@@ -175,6 +185,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     };
     for (const item of authorInputs)
         add(`author-action:${item.id}`, 0, item.text, 'author-constraint', 'explicit immutable author input for this action; not a database or file identity');
+    let graphContext: GraphGenerationContext | undefined;
     // SQLite supplies one read transaction; filesystem selections are read twice below.
     const facts = deps.db.transaction(() => {
         const raw = deps.db.prepare("SELECT * FROM project_core WHERE id='main'").get() as Record<string, unknown> | undefined;
@@ -183,6 +194,11 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         const core = without(raw, ['created_at', 'updated_at', 'character_states', 'plot_tree_snapshot']);
         const language: WritingLanguage = core.writing_language === 'en-US' ? 'en-US' : 'zh-CN';
         add('project-core:main', 0, stable(core), 'author-constraint', 'current project settings');
+        if (graphInput) {
+            graphContext = captureGraphGenerationContext(deps.db, graphInput, input, input.graphGenerationKey!, input.graphGenerationContext,
+                input.graphGenerationContext ? provenGraphOwnEventIds(deps.db, input.graphGenerationContext) : []);
+            add('graph-generation-context', 0, JSON.stringify(graphContext), 'author-constraint', 'main captured graph sources and original target baseline');
+        }
         if (agentInput) {
             const blueprints = deps.db.prepare('SELECT * FROM blueprints ORDER BY chapter_number').all() as Record<string, unknown>[];
             add('agent-blueprints:all', 0, stable(blueprints.map(row => without(row, ['created_at', 'updated_at', 'notes_updated_at']))), 'unconfirmed-continuity', 'actual author plans guarded across Agent tool confirmations');
@@ -283,6 +299,10 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     let agentPrompt: { selected: string; builtin: string } | undefined;
     const importPrompts: Record<string, import('../../src/services/prompt-templates').PromptTemplate> = {};
     for (const key of input.promptKeys) {
+        if (graphContext) {
+            assets.push({ scope: 'builtin', identity: `prompt:${key}:${facts.language}`, hash: hash(JSON.stringify(graphGenerationTask(graphContext))) });
+            continue;
+        }
         const builtin = deps.readBuiltinPrompt(key, facts.language);
         if (typeof builtin !== 'string' || !builtin)
             fail('GENERATION_BUILTIN_PROMPT_MISSING');
@@ -362,6 +382,12 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         fail('GENERATION_SOURCE_CHANGED_DURING_SNAPSHOT');
     const sourceManifest = { version: 1, ...(input.finalizedCharacterContextHash ? { finalizedCharacterContextHash: input.finalizedCharacterContextHash } : {}), operation: input.operation, ...(input.knowledgeSnapshot ? { knowledgeSnapshot: structuredClone(input.knowledgeSnapshot) } : {}), ...(input.batchId ? { batchId: input.batchId } : {}), ...(input.batchIntent ? { batchIntent: structuredClone(input.batchIntent) } : {}), ...(input.chapterNumber !== undefined ? { chapterNumber: input.chapterNumber } : {}), selectedDraftIds: [...input.selectedDraftIds], selectedFinalizedDraftIds: [...input.selectedFinalizedDraftIds], ...(blueprintChapters.length ? { selectedBlueprintChapterNumbers: [...blueprintChapters] } : {}), promptKeys: [...input.promptKeys], skillStages: [...input.skillStages], ...(authorInputs.length ? { authorInputs } : {}), modelReceipt, policy: input.policy, outputContract: input.outputContract };
     if (input.reviewRevisionContext) Object.assign(sourceManifest, { reviewRevisionContext: structuredClone(input.reviewRevisionContext), reviewRevisionContextHash: hash(JSON.stringify(input.reviewRevisionContext)) });
+    if (graphContext) {
+        const task = graphGenerationTask(graphContext);
+        Object.assign(sourceManifest, { graphGenerationInput: graphContext.input, graphGenerationKey: graphContext.key,
+            graphGenerationContext: graphContext, graphGenerationContextHash: hash(JSON.stringify(graphContext)), graphGenerationOriginEpoch: graphContext.originEpoch,
+            graphGenerationTask: task, graphGenerationTaskHash: hash(JSON.stringify(task)) });
+    }
     if (finalizationContext) {
         const task = finalizationGenerationTask(finalizationContext);
         Object.assign(sourceManifest, { finalizationGenerationSlot: finalizationContext.slot, finalizationGenerationSlotKey: finalizationSlotKey(finalizationContext.slot),

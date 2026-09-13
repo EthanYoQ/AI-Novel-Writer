@@ -8,6 +8,7 @@ import type { AgentGenerationChannels } from '../../src/shared/agent-generation'
 import type { ImportGenerationChannels } from '../../src/shared/import-generation'
 import type { EditorInlineGenerationChannels } from '../../src/shared/editor-inline-generation'
 import type { FinalizationGenerationChannels } from '../../src/shared/finalization-generation'
+import type { GraphGenerationChannels } from '../../src/shared/graph-generation'
 import { generationOutputContract } from '../../src/shared/generation-owner-contract'
 import type { ModelProfile, ProjectSessionContext } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
@@ -29,7 +30,7 @@ import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { getEmbeddingConfig } from './kb-controller'
 
 type Owner = ReturnType<typeof createMainGenerationOwner>
-type OwnerChannels = GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & AgentGenerationChannels & ImportGenerationChannels & EditorInlineGenerationChannels & FinalizationGenerationChannels
+type OwnerChannels = GraphGenerationChannels & GenerationOwnerChannels & CharacterProposalChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & AgentGenerationChannels & ImportGenerationChannels & EditorInlineGenerationChannels & FinalizationGenerationChannels
 const owners = new Map<Database.Database, { owner: Owner; session: ProjectSessionContext; subscribers: Set<WebContents> }>()
 const ownerSessions = new WeakMap<Owner, ProjectSessionContext>()
 /** Called synchronously inside the same SQLite transaction as the formal effect. */
@@ -154,6 +155,11 @@ export function registerGenerationController(options: {
   register('finalization-generation:execute', 1, (owner, request) => owner.executeFinalizationGeneration(request))
   register('finalization-generation:commit', 1, (owner, request) => owner.commitFinalizationGeneration(request))
   register('finalization-generation:cancel', 1, (owner, request) => owner.cancelFinalizationGeneration(request))
+  register('graph-generation:begin', 1, (owner, request) => owner.beginGraphGeneration(request))
+  register('graph-generation:read', 1, (owner, request) => owner.readGraphGeneration(request))
+  register('graph-generation:execute', 1, (owner, request) => owner.executeGraphGeneration(request))
+  register('graph-generation:confirm', 1, (owner, request) => owner.confirmGraphGeneration(request))
+  register('graph-generation:cancel', 1, (owner, request) => owner.cancelGraphGeneration(request))
   register('review-revision:prepare', 1, (owner, request) => owner.prepareReviewRevision(request))
   register('review-revision:commit-review', 1, (owner, request) => owner.commitReview(request))
   register('review-revision:commit-revision', 1, (owner, request) => owner.commitRevision(request))
