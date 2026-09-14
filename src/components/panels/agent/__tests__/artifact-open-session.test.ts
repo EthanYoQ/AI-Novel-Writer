@@ -65,7 +65,7 @@ describe('agent artifact open session ownership', () => {
   it('fails closed when a legacy artifact has no frozen project session', async () => {
     const invoke = vi.fn(async () => ({ success: true, content: 'should not be read' }))
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -91,7 +91,7 @@ describe('agent artifact open session ownership', () => {
   it('fails closed for an artifact from an older lease of the same project path', async () => {
     const invoke = vi.fn(async () => ({ success: true, content: 'stale artifact' }))
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),

@@ -1,0 +1,123 @@
+{
+  "validation": {
+    "typecheckExitCode": 0,
+    "focusedSuites": 11,
+    "failedTests": 0,
+    "diffCheckExitCode": 0,
+    "vitestExitCode": 0,
+    "passedTests": 105
+  },
+  "notRun": [
+    "actual author configuration migration",
+    "packaged Electron startup and renderer acknowledgement qualification",
+    "power-loss durability qualification"
+  ],
+  "legacyChangeDetection": "Not implemented: legacySourceIgnored is retained-source existence, not detected change",
+  "files": [
+    {
+      "sha256": "0da30166dbbc5a15615cecac58ba7515505825ce8dafdd55e34dd3ddbcc1636b",
+      "path": "electron/services/app-data-locator.ts"
+    },
+    {
+      "sha256": "518362ecdca342ccbc995c807e5efd5bb1a13382300106d7711a1ad249134286",
+      "path": "electron/services/global-data-migration.ts"
+    },
+    {
+      "sha256": "2b0b3c31d80f00614fc5aaeff8e246cf67343cfb9709fed04b2b125f4bfe29ec",
+      "path": "electron/utils/config-utils.ts"
+    },
+    {
+      "sha256": "4038032e418d59caa463a20255b24717d0c9abeff0ba3f778b7f0ea66e015b95",
+      "path": "electron/services/skin-service.ts"
+    },
+    {
+      "sha256": "72b4b3755753e795b1d6af029920f9fec79e3c0207b100280868ef3e131c0b2f",
+      "path": "electron/services/update-preferences-store.ts"
+    },
+    {
+      "sha256": "a900af18b55143677763a695753bbb49f47eb820867c8c0f24bd24d97f0f0bf8",
+      "path": "electron/mcp/mcp-manager.ts"
+    },
+    {
+      "sha256": "ab864d63c73b77bcac2a3ce3a3072101e7570c91339e03301e7aa31ca41dfe65",
+      "path": "electron/controllers/app-data-controller.ts"
+    },
+    {
+      "sha256": "0161daff2673dd3d652b104d1dee44ea1c46eeb26cbdff53e256d68c140deebf",
+      "path": "electron/services/release-skin-smoke.ts"
+    },
+    {
+      "sha256": "359c824abb99754adfdadf14d2a73d3dd245c15d934cd5d9a80b2418eea4897d",
+      "path": "electron/services/__tests__/global-data-migration.test.ts"
+    },
+    {
+      "sha256": "d42c227001db08872056dd0394167bf588777939f21543d2a543e500ddf27e1f",
+      "path": "electron/services/__tests__/global-data-fixture.ts"
+    },
+    {
+      "sha256": "4c8ba584dd30d3d8b45fc9e509cd768980d1cccb45aadaca9c2f3afc21c3819d",
+      "path": "electron/utils/__tests__/config-utils.test.ts"
+    },
+    {
+      "sha256": "352ef7096c550a03ef105904fd950d10feae4ce53d225cce282a68e04305d352",
+      "path": "electron/services/__tests__/skin-service.test.ts"
+    },
+    {
+      "sha256": "e7f96b81ef3f7c1f2e204fa4e48a178084c865bcdaedd2e4420ae2ed6bf58976",
+      "path": "electron/services/__tests__/release-skin-smoke.test.ts"
+    },
+    {
+      "sha256": "d560513aa28e20d3653b3a2702edcaa49e6285009aad9282ff0102403dbdd301",
+      "path": "electron/mcp/__tests__/mcp-manager.test.ts"
+    },
+    {
+      "sha256": "de8b64faabd2acd43679de825d1296821679719be46665b0299973add988d114",
+      "path": "electron/controllers/__tests__/app-data-controller.test.ts"
+    },
+    {
+      "sha256": "3438ac883db71067bfc37b69e30c9de12efa1fa0728849b36912fcc359215d97",
+      "path": "electron/controllers/__tests__/writing-skill-app-data.test.ts"
+    },
+    {
+      "sha256": "d9c147787f73eace39e871e923bc34fc4fecf9d4462ff890c5a9cf7c784aeaa4",
+      "path": "electron/controllers/__tests__/issue-88-global-prompt-persistence.test.ts"
+    },
+    {
+      "sha256": "a51d0d944a39a6f672170f0c2a48416f118185ebe99871ab81f3c88288e17944",
+      "path": "electron/controllers/__tests__/config-controller-corruption.test.ts"
+    },
+    {
+      "sha256": "d149fd9bd59cf28061be3cbbc5180f2e216f7bc7216f403aba367f03fa9ad55f",
+      "path": "electron/controllers/__tests__/llm-controller-config-corruption.test.ts"
+    },
+    {
+      "sha256": "aa6bb1b0826d0a4b87082a0a0f0074b819df0b1b66e073a89c667bcc7c04962a",
+      "path": "docs/research/novel-quality-modernization/s03-global-data-contract.md"
+    }
+  ],
+  "retainedExternalPaths": [],
+  "scope": "S03 domain implementation only",
+  "schemaVersion": 1,
+  "dependencies": [
+    "d72c13db638f1f2d87db3230e985411566139fca",
+    "e2af35966adae4754b18ac7553544a618fa3dc34"
+  ],
+  "rootProtection": "Synthetic sibling legacy/canonical/userData; source/userData byte preservation and writes constrained to canonical fixture root",
+  "fullRegressionDiagnostics": {
+    "rootCause": "unresolved; cannot infer environmental I/O from successful reruns",
+    "standaloneRerunPassed": 33,
+    "productionModified": false,
+    "testChange": "Failure assertion includes fixed result code; preserve synthetic fixture and safe rename errno/syscall plus filenames on failure",
+    "moderateConcurrentRuns": [
+      55,
+      55,
+      55
+    ],
+    "originalFullRun": {
+      "retainedLog": ".runtime/.cache/novel-quality-modernization/s03-full-tests.log",
+      "failureDetails": "blocked versus ready; original assertion omitted fixed failure code",
+      "suiteTests": 33,
+      "failedRecoveryTests": 2
+    }
+  }
+}

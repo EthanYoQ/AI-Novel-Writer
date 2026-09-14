@@ -23,8 +23,7 @@ function sourceRevision(
 }
 
 export class PlotTreeRepository {
-  static read(): PlotTreeSourceBundle {
-    const db = requireDb()
+  static read(db = requireDb()): PlotTreeSourceBundle {
     const core = db.prepare(`
       SELECT writing_language, synopsis, plot_tree_snapshot
       FROM project_core WHERE id = 'main'
@@ -72,7 +71,7 @@ export class PlotTreeRepository {
       title: string
       summary: string
     }>
-    const narrativeThreads = NarrativeThreadRepository.list().map(thread => ({
+    const narrativeThreads = NarrativeThreadRepository.list(db).map(thread => ({
       id: thread.id,
       title: thread.title,
       type: thread.type,
@@ -125,9 +124,8 @@ export class PlotTreeRepository {
     return bundle
   }
 
-  static save(snapshot: PlotTreeSnapshot, expectedSourceRevision: string): PlotTreeSnapshot {
-    const db = requireDb()
-    const sources = this.read()
+  static save(snapshot: PlotTreeSnapshot, expectedSourceRevision: string, db = requireDb()): PlotTreeSnapshot {
+    const sources = this.read(db)
     if (sources.sourceRevision !== expectedSourceRevision) {
       throw new Error('剧情资料在生成期间已更新')
     }
@@ -139,8 +137,8 @@ export class PlotTreeRepository {
     return validated
   }
 
-  static clear(): void {
-    const result = requireDb().prepare(`
+  static clear(db = requireDb()): void {
+    const result = db.prepare(`
       UPDATE project_core SET plot_tree_snapshot = '' WHERE id = 'main'
     `).run()
     if (result.changes !== 1) throw new Error('剧情树快照清除失败')

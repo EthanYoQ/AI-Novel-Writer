@@ -87,6 +87,7 @@ export type ProjectCoreSynopsisExpected = Pick<ProjectCoreData,
 export interface ProjectCoreSynopsisCommitRequest {
     synopsis: string
     expected: ProjectCoreSynopsisExpected
+    generationRunHandle?: import('../../src/services/generation/generation-runtime').MainGenerationRunHandle
 }
 
 /** 数据库行 → 前端数据 */
@@ -126,8 +127,7 @@ function rowToData(row: ProjectCoreRow): ProjectCoreData {
 
 export class ProjectCoreRepository {
     /** 获取项目配置（不存在则返回 null） */
-    static get(): ProjectCoreData | null {
-        const db = getProjectDb()
+    static get(db = getProjectDb()): ProjectCoreData | null {
         if (!db) return null
 
         const row = db.prepare(
@@ -152,8 +152,7 @@ export class ProjectCoreRepository {
     }
 
     /** 更新项目配置（传入部分字段即可） */
-    static update(data: Partial<ProjectCoreData>): void {
-        const db = getProjectDb()
+    static update(data: Partial<ProjectCoreData>, db = getProjectDb()): void {
         if (!db) throw new Error('项目数据库未打开')
         if (Object.hasOwn(data, 'charactersArch')) {
             throw new Error('角色图谱由角色名单自动生成；请通过角色管理修改角色资料')

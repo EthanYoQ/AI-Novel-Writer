@@ -263,7 +263,8 @@ function productionDependencies(
         `Reference Chapter ${chapter.number} is in the knowledge base${result.idempotent ? ' (already present)' : ''}.`,
       ))
     },
-    inferGlobal: async (chapters, stats, _run, commit) => {
+    inferGlobal: async (chapters, stats, run, commit) => {
+      context.data.importGenerationSlot = { runId: run.id, stage: 'global', batchId: 'done' }
       context.data.chapters = chapters.map(importedChapter)
       context.data.importRunTotalChapters = stats.totalChapters
       context.data.importRunTotalWords = stats.totalWords
@@ -272,12 +273,13 @@ function productionDependencies(
         await commit(request)
       ) as ImportGlobalFactsReceipt).execute({ step: {} as never, context, callbacks })
     },
-    analyzeStyle: async (chapters, _run, commit) => {
+    analyzeStyle: async (chapters, run, commit) => {
+      context.data.importGenerationSlot = { runId: run.id, stage: 'style', batchId: 'done' }
       const { AnalyzeWritingStyleCommand } = await import('./commands/analyze-style.command')
       const style = await new AnalyzeWritingStyleCommand(
         { chapters: chapters.map(importedChapter) },
         undefined,
-        async writingStyle => { await commit({ writingStyle }) },
+        async (writingStyle, generationRunHandle) => { await commit({ writingStyle, ...(generationRunHandle ? { generationRunHandle } : {}) }) },
       )
         .execute({ step: {} as never, context, callbacks })
       if (!style.trim()) throw new Error(textForLocale(
@@ -286,7 +288,8 @@ function productionDependencies(
         'No usable writing style was extracted, so imitation guidance cannot be created.',
       ))
     },
-    inferBlueprints: async (chapters, _checkpoint, _run, commit) => {
+    inferBlueprints: async (chapters, checkpoint, run, commit) => {
+      context.data.importGenerationSlot = { runId: run.id, stage: 'blueprints', batchId: checkpoint }
       context.data.chapters = chapters.map(importedChapter)
       context.data.novelConfigSummary = currentNovelConfigSummary(context.writingLanguage)
       const { InferBlueprintsPerChapterCommand } = await import('./commands/import-novel.command')

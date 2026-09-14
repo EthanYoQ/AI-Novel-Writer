@@ -65,7 +65,7 @@ function installIpc(steps: Array<Record<string, unknown>>, sourceLabel = 'ç¬¬1ç«
     if (channel === 'db:post-process-get-steps') return steps
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -109,7 +109,7 @@ afterEach(async () => {
   container?.remove()
   root = undefined
   container = undefined
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   setActiveProjectSessionContext(null)
   useProjectStore.setState(originalProjectState)
   useLocaleStore.setState(originalLocaleState)

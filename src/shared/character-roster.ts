@@ -132,6 +132,7 @@ export interface CharacterRosterRename {
 }
 
 export interface CharacterRosterCommitRequest {
+  generationRunHandle?: import('../services/generation/generation-runtime').MainGenerationRunHandle
   operationId: string
   expectedRevision: number
   schemaVersion: typeof CHARACTER_ROSTER_SCHEMA_VERSION

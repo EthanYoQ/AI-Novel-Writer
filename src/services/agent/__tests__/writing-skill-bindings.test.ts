@@ -34,7 +34,7 @@ describe('writing skill project bindings', () => {
     expect(invokeWithProjectSession).toHaveBeenCalledWith(
       session,
       'fs:check-exists',
-      'C:/novels/project-1/.vela/writing-skills.json',
+      'C:/novels/project-1/.ai-novel/writing-skills.json',
       session.projectPath,
     )
   })
@@ -89,7 +89,7 @@ describe('writing skill project bindings', () => {
     expect(invokeWithProjectSession).toHaveBeenLastCalledWith(
       session,
       'fs:write-file',
-      'C:/novels/project-1/.vela/writing-skills.json',
+      'C:/novels/project-1/.ai-novel/writing-skills.json',
       expect.stringContaining('"drafting": "user:scene-craft"'),
       session.projectPath,
     )

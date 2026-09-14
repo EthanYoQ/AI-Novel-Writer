@@ -26,7 +26,6 @@ import {
   searchWithScope as storeSearchWithScope,
   listDocuments as storeListDocuments,
   getStats as storeGetStats,
-  migrateFromJSON,
   getChunksWithoutVectors as storeGetChunksWithoutVectors,
   getCanonicalChunksForEmbeddingRebuild,
   getDocumentIntegrity,
@@ -40,41 +39,18 @@ import {
 import { getCurrentProjectPath, getProjectDb } from './database'
 import { ImportRunRepository } from './repositories/import-run-repository'
 import { assertRequiredExpectedProjectPath } from './utils/project-context'
+import { getProjectDataRoot } from './services/project-data-locator'
 
 // ===== 迁移状态跟踪 =====
 
-/** 已执行过迁移检查的项目路径集合 */
-const migratedProjects = new Set<string>()
-const migrationChecksInFlight = new Map<string, Promise<void>>()
-
 export { LEGACY_VECTOR_MIGRATION_BLOCKED, LegacyVectorMigrationBlockedError }
 
-/** 确保旧数据已迁移 */
+/** Recheck every operation; an earlier successful read cannot authorize a newly
+ * appeared pending migration. This check never launches a migration. */
 async function ensureMigration(projectPath: string): Promise<void> {
-  const key = path.resolve(projectPath)
-  if (migratedProjects.has(key)) return
-  const existing = migrationChecksInFlight.get(key)
-  if (existing) return await existing
-
-  const attempt = (async () => {
-    const jsonPath = path.join(projectPath, '.vela', 'vectors.json')
-    if (fs.existsSync(jsonPath)) {
-      const result = await migrateFromJSON(projectPath)
-      if (!result.success) {
-        const error = result.error ?? '旧 vectors.json 无法安全迁移'
-        console.warn('[Vela KB] 旧向量迁移已阻断知识库操作:', error)
-        throw new LegacyVectorMigrationBlockedError(error)
-      }
-    }
-    migratedProjects.add(key)
-  })()
-  migrationChecksInFlight.set(key, attempt)
-  try {
-    await attempt
-  } finally {
-    if (migrationChecksInFlight.get(key) === attempt) {
-      migrationChecksInFlight.delete(key)
-    }
+  const root = getProjectDataRoot(projectPath)
+  if (['vectors.json', 'vectors.json.migration-journal.json'].some(name => fs.existsSync(path.join(root, name)))) {
+    throw new LegacyVectorMigrationBlockedError('项目包含未完成的旧向量迁移，需要先完成项目恢复；普通检索和导入不会自动迁移旧数据。')
   }
 }
 
@@ -103,12 +79,37 @@ async function canWriteIncrementalVectors(projectPath: string): Promise<boolean>
   // A vector generation must cover every canonical chunk before it can become
   // active. If an FTS-only corpus already exists, keep incremental imports in
   // FTS until the user runs the existing explicit full rebuild.
-  if (!fs.existsSync(path.join(projectPath, '.vela', 'lancedb'))) return true
+  if (!fs.existsSync(path.join(getProjectDataRoot(projectPath), 'lancedb'))) return true
   const stats = await storeGetStats(projectPath)
   return stats.totalChunks === 0 || stats.hasVectors
 }
 
 // ===== 导出函数（保持旧签名，IPC 层零改动） =====
+
+/** One initial retrieval; later generation guards re-read identities without another embedding request. */
+export async function captureWritingKnowledgeSnapshot(query: string, projectPath: string,
+  configuration: { protocol: 'openai' | 'gemini'; model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions } } | null) {
+  await ensureMigration(projectPath)
+  let queryVector: number[] | undefined
+  if (configuration?.model.apiKey && query.trim()) {
+    try {
+      const [vector] = await generateEmbeddings([query], configuration.protocol, configuration.model, configuration.model.embeddingOptions?.batchSize)
+      if (vector?.length) queryVector = vector
+    } catch { /* The established no-embedding path still uses canonical full-text search. */ }
+  }
+  const { captureGenerationKnowledge } = await import('./services/generation-knowledge-source')
+  const { withKnowledgeSourceGate } = await import('./services/knowledge-source-gate')
+  const projectStorageRoot = getProjectDataRoot(projectPath)
+  return withKnowledgeSourceGate(projectStorageRoot, async () => {
+    try {
+      return await captureGenerationKnowledge({ projectStorageRoot, query, topK: 5, queryVector,
+        ...(queryVector && configuration ? { embeddingSpace: embeddingSpaceFor(configuration.protocol, configuration.model) } : {}) })
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== 'GENERATION_KNOWLEDGE_SPACE_NOT_MATCHED') throw error
+      return captureGenerationKnowledge({ projectStorageRoot, query, topK: 5 })
+    }
+  })
+}
 
 /**
  * 导入文档到知识库（单文件，从磁盘读取）

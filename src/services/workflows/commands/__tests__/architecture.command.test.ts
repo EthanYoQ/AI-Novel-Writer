@@ -1,3 +1,6 @@
+import { decodeCharacterDetails } from '../../../../shared/character-proposal-parser'
+import { proposalRuntimeFixture, proposalBatchFixture } from './character-proposal-runtime.fixture'
+import type { CharacterProposalSource, CharacterProposalBatch } from '../../../../shared/character-proposal'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useLLMStore } from '../../../../stores/llm-store'
@@ -31,7 +34,7 @@ class GenerateConfigCommand extends RuntimeGenerateConfigCommand {
 
 class GenerateCharactersCommand extends RuntimeGenerateCharactersCommand {
   constructor(...args: ConstructorParameters<typeof RuntimeGenerateCharactersCommand>) {
-    super(args[0], workflowRuntimeDependencies)
+    super(args[0], proposalRuntimeFixture())
   }
 }
 
@@ -208,9 +211,11 @@ function project(path: string) {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubGlobal('window', {
-    velaAPI: {
-      invoke: vi.fn(async (channel: string) => {
-        if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+    aiNovelAPI: {
+      invoke: vi.fn(async (channel: string, ...args: unknown[]) => {
+        if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
         if (channel === 'fs:check-exists') return false
         throw new Error(`Unexpected IPC channel: ${channel}`)
       }),
@@ -558,8 +563,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         return `architecture-english-request-${englishCallCount}`
       }),
     })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
+        case 'character-proposal:stage': return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
         case 'prompt:load-global':
           return { templates: [], diagnostics: [] }
         case 'fs:check-exists':
@@ -582,7 +588,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const snapshot = { expectedProjectPath: projectAPath, novelConfig } as never
 
@@ -733,7 +739,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         return 'architecture-language-request'
       }),
     })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'fs:read-json') return { success: true, data: {} }
@@ -748,7 +756,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const snapshot = { expectedProjectPath: projectAPath, novelConfig } as never
     const commands = [
@@ -780,7 +788,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
   it('preflights the character identity manifest with field attribution before any provider request', async () => {
     const generateStream = vi.fn()
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'db:project-core-get') {
@@ -789,7 +799,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const runContext = {
       ...context,
@@ -838,14 +848,16 @@ describe('GenerateCharactersCommand structured roster seam', () => {
   it('keeps a complete 12 KB author context instead of requiring the author to delete project guidance', async () => {
     const generateStream = createResponseStream([JSON.stringify({ slots: [] })])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'db:project-core-get') return { premise: 'P'.repeat(1_747) }
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const command = new GenerateCharactersCommand({
       expectedProjectPath: projectAPath,
@@ -872,7 +884,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     const authorGuidance = 'G'.repeat(25_457)
     const generateStream = createResponseStream([JSON.stringify({ slots: [] })])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'db:project-core-get') {
@@ -881,7 +895,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const command = new RuntimeGenerateCharactersCommand({
       expectedProjectPath: projectAPath,
@@ -922,7 +936,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     )).toBeLessThanOrEqual(32_768)
   })
 
-  it('generates a dual-protagonist eight-slot manifest before one atomic roster commit', async () => {
+  it('generates a dual-protagonist eight-slot manifest before staging for explicit adoption', async () => {
     const promptBudgetDiagnostic = vi.spyOn(console, 'info').mockImplementation(() => {})
     const names = ['江砚', '沈微澜', '顾沉舟', '白榆', '闻策', '唐霁', '陆衡', '乔岚']
     const manifest = {
@@ -1003,6 +1017,8 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     const expectedSnapshot = { ...readyRoster, entries: fullEntries, renderedMarkdown: '# 八人角色图谱' }
     let committedRequest: unknown
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'fs:mkdir' || channel === 'fs:write-file') return { success: true }
@@ -1017,7 +1033,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     await loadProjectCustomPrompts(context.projectSession!)
     const characterTemplate = getBuiltinPromptTemplate('character_dynamics', 'zh-CN')!
@@ -1046,7 +1062,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       novelConfig: { genre: '科幻悬疑', totalChapters: 4, wordsPerChapter: 6200 } as never,
     })
 
-    await expect(command.execute({ step: {}, context: eightContext, callbacks: stepCallbacks })).resolves.toBe('# 八人角色图谱')
+    await expect(command.execute({ step: {}, context: eightContext, callbacks: stepCallbacks })).resolves.toContain('Character proposals')
 
     expect(generateStream).toHaveBeenCalledTimes(4)
     const manifestPrompt = manifestMessages?.map(message => message.content).join('\n') ?? ''
@@ -1077,15 +1093,15 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(detailPrompt).not.toContain('若输出 currentState')
     expect(detailPrompt).toContain('keyItems 可为非空字符串或非空字符串数组')
     expect(detailPrompt).toContain('recentEvents 可为非空字符串或非空字符串数组')
-    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(1)
-    expect(committedRequest).toMatchObject({
-      intent: 'architecture_generation',
-      entries: fullEntries,
-    })
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(0)
+    expect(committedRequest).toBeUndefined()
+    const proposals = (eightContext.data as Record<string, unknown>).characterProposalBatch as CharacterProposalBatch
+    expect(proposals.items.map(item => item.fields)).toEqual(fullEntries.map(({ relationships, currentState, ...fields }) => { void relationships; void currentState; return fields }))
+    expect(proposals.items[0].relationships).toEqual(expect.arrayContaining([expect.objectContaining({ targetSelectionKey: expect.any(String) })]))
     const visibleLogs = vi.mocked(stepCallbacks.log).mock.calls.map(([message]) => message).join('\n')
     expect(visibleLogs).toContain('Generating character graph...')
     expect(visibleLogs).toContain('Initial bounded response: finishReason=stop')
-    expect(visibleLogs).toContain('The character graph and 8 character cards were generated.')
+    expect(visibleLogs).toContain('Character proposals saved for explicit adoption; no formal characters were written.')
     expect(visibleLogs).not.toMatch(/[\u3400-\u9fff]/u)
     expect(promptBudgetDiagnostic.mock.calls).toEqual(expect.arrayContaining([
       [
@@ -1108,7 +1124,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     }))
     const generateStream = createResponseStream([JSON.stringify(manifest)])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'db:project-core-get') {
@@ -1117,7 +1135,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const command = new GenerateCharactersCommand({
       expectedProjectPath: projectAPath,
@@ -1136,7 +1154,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       JSON.stringify({ schemaVersion: 1, entries: rosterEntries }),
     ])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'db:project-core-get') {
@@ -1145,7 +1165,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const command = new GenerateCharactersCommand({
       expectedProjectPath: projectAPath,
@@ -1165,14 +1185,16 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       JSON.stringify(forged),
     ])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'db:project-core-get') return { premise: '足够长的故事前提，用于验证角色详情不得伪造或覆盖身份清单中的冻结关系，任何异常关系字段都必须在提交前失败关闭。' }
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const command = new GenerateCharactersCommand({
       expectedProjectPath: projectAPath,
@@ -1183,7 +1205,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
-  it('normalizes a decimal-string initial chapter and commits the complete roster without replacing author text', async () => {
+  it('normalizes a decimal-string initial chapter and preserves the raw candidate without replacing author text', async () => {
     const fourthEntry: CharacterRosterEntry = {
       name: '叶澄',
       role: 'supporting',
@@ -1221,6 +1243,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     let committedRequest: unknown
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
+        case 'character-proposal:stage': return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
         case 'prompt:load-global': return { templates: [], diagnostics: [] }
         case 'fs:check-exists': return false
         case 'db:project-core-get': return { premise: '双主角校园故事围绕一份异常记录展开，四名角色分别承担调查、阻碍、见证与选择职责，并在同一条因果链中推进冲突。' }
@@ -1249,31 +1272,26 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const command = new GenerateCharactersCommand({
       expectedProjectPath: projectAPath,
       novelConfig: { genre: '校园悬疑', totalChapters: 4, wordsPerChapter: 2500 } as never,
     })
 
-    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe('# 四人角色图谱')
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain('角色提议')
 
     expect(generateStream).toHaveBeenCalledTimes(3)
-    expect(committedRequest).toMatchObject({
-      expectedRevision: 4,
-      intent: 'architecture_generation',
-      entries: expect.arrayContaining([
-        expect.objectContaining({
-          name: '叶澄',
-          currentState: expect.objectContaining({ updatedAtChapter: 0 }),
-        }),
-      ]),
-    })
-    expect((committedRequest as { entries: unknown[] }).entries).toHaveLength(4)
+    expect(committedRequest).toBeUndefined()
+    const proposals = context.data.characterProposalBatch as CharacterProposalBatch
+    expect(proposals.items).toHaveLength(4)
+    expect(proposals.items.find(item => item.fields.name === '叶澄')?.rawValue).toMatchObject({ detail: { currentState: { updatedAtChapter: '0' } } })
+    expect(authorAppearance).toBeTruthy()
     expect(committedEntries[0]!.appearance).toBe(authorAppearance)
+
   })
 
-  it('normalizes integer identity and relation IDs before details and one atomic roster commit', async () => {
+  it('normalizes integer identity and relation IDs before details and proposal staging', async () => {
     const numericManifest = {
       slots: rosterEntries.map((entry, index) => ({
         slotId: index + 1,
@@ -1301,8 +1319,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     ])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
 
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
+        case 'character-proposal:stage': return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
         case 'prompt:load-global':
           return { templates: [], diagnostics: [] }
         case 'fs:check-exists':
@@ -1331,7 +1350,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1352,26 +1371,16 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     })
     const result = await command.execute({ step: {}, context, callbacks })
 
-    expect(result).toBe(readyRoster.renderedMarkdown)
+    expect(result).toContain('角色提议')
     expect(generateStream).toHaveBeenCalledTimes(2)
     const manifestPrompt = generateStream.mock.calls[0]?.[0].map(message => message.content).join('\n') ?? ''
     expect(manifestPrompt).toContain('slotId 与 targetSlotId 必须是 JSON 字符串')
-    expect(invoke).toHaveBeenCalledWith(
-      'db:character-roster-commit',
-      expect.objectContaining({
-        operationId: context.runId,
-        expectedRevision: 0,
-        schemaVersion: 1,
-        entries: rosterEntries,
-        intent: 'architecture_generation',
-      }),
-      projectAPath,
-      context.projectSession,
-    )
+    expect(invoke.mock.calls.some(([channel]) => channel === 'character-proposal:stage')).toBe(true)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:character-roster-commit')).toBe(false)
     expect(domainIpcChannels(invoke)).not.toContain('db:project-core-update')
     expect(domainIpcChannels(invoke)).not.toContain('db:character-save-all')
     expect(domainIpcChannels(invoke)).not.toContain('db:post-process-create-run')
-    expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith('角色图谱与 3 张角色卡已生成')
+    expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith('角色提议已保存，等待明确采用；尚未写入正式角色。')
   })
 
   it('accepts a fenced manifest with leading prose before strict validation and one atomic roster commit', async () => {
@@ -1381,8 +1390,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     ])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
 
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
+        case 'character-proposal:stage': return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
         case 'prompt:load-global':
           return []
         case 'fs:check-exists':
@@ -1411,7 +1421,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1427,19 +1437,12 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
     })
     await expect(command.execute({ step: {}, context, callbacks }))
-      .resolves.toBe(readyRoster.renderedMarkdown)
+      .resolves.toMatch(/角色提议|Character proposals/u)
 
     expect(generateStream).toHaveBeenCalledTimes(2)
-    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(1)
-    expect(invoke).toHaveBeenCalledWith(
-      'db:character-roster-commit',
-      expect.objectContaining({
-        entries: rosterEntries,
-        intent: 'architecture_generation',
-      }),
-      projectAPath,
-      context.projectSession,
-    )
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(0)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'character-proposal:stage')).toBe(true)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:character-roster-commit')).toBe(false)
   })
 
   it('rejects a manifest response with a truncated JSON fragment after a complete object before any roster commit', async () => {
@@ -1449,8 +1452,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     ])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
 
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
+        case 'character-proposal:stage': return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
         case 'prompt:load-global':
           return []
         case 'fs:check-exists':
@@ -1479,7 +1483,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1500,15 +1504,16 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(domainIpcChannels(invoke)).not.toContain('db:character-roster-commit')
   })
 
-  it('accepts fenced detail batches with leading prose after a raw manifest before one atomic roster commit', async () => {
+  it('accepts fenced detail batches with leading prose after a raw manifest before staging for explicit adoption', async () => {
     const generateStream = createResponseStream([
       JSON.stringify(manifestFor(rosterEntries)),
       ...detailBatchResponses(rosterEntries).map(fencedJsonWithProse),
     ])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
 
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
+        case 'character-proposal:stage': return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
         case 'prompt:load-global':
           return []
         case 'fs:check-exists':
@@ -1537,7 +1542,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1553,22 +1558,15 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
     })
     await expect(command.execute({ step: {}, context, callbacks }))
-      .resolves.toBe(readyRoster.renderedMarkdown)
+      .resolves.toMatch(/角色提议|Character proposals/u)
 
     expect(generateStream).toHaveBeenCalledTimes(2)
-    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(1)
-    expect(invoke).toHaveBeenCalledWith(
-      'db:character-roster-commit',
-      expect.objectContaining({
-        entries: rosterEntries,
-        intent: 'architecture_generation',
-      }),
-      projectAPath,
-      context.projectSession,
-    )
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(0)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'character-proposal:stage')).toBe(true)
+    expect(invoke.mock.calls.some(([channel]) => channel === 'db:character-roster-commit')).toBe(false)
   })
 
-  it('does not issue checkpoint IPC after a readable roster receipt when cancellation has arrived', async () => {
+  it('preserves the staged proposal and does not write formal or checkpoint data when cancellation arrives', async () => {
     const committedThenCancelledContext: WorkflowContext = {
       ...context,
       data: {},
@@ -1576,8 +1574,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     }
     const generateStream = createResponseStream(twoStageResponses(rosterEntries))
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
+        case 'character-proposal:stage': committedThenCancelledContext.cancelled = true; return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
         case 'prompt:load-global':
           return []
         case 'fs:check-exists':
@@ -1603,7 +1602,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1619,22 +1618,22 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
     })
     await expect(command.execute({ step: {}, context: committedThenCancelledContext, callbacks }))
-      .resolves.toBe(readyRoster.renderedMarkdown)
+      .resolves.toMatch(/角色提议|Character proposals/u)
 
     expect(domainIpcChannels(invoke)).toEqual([
       'db:project-core-get',
-      'db:character-roster-read',
-      'db:character-roster-commit',
+      'character-proposal:stage',
     ])
-    expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith('角色图谱与 3 张角色卡已生成；后续工作流已取消')
+    expect(committedThenCancelledContext.data.characterProposalBatch).toBeDefined()
   })
 
-  it('keeps a committed roster successful when only its partial checkpoint write fails', async () => {
+  it('stages a proposal without invoking the legacy checkpoint writer', async () => {
     const checkpointContext: WorkflowContext = { ...context, data: {}, cancelled: false }
     const generateStream = createResponseStream(twoStageResponses(rosterEntries))
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
+        case 'character-proposal:stage': return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
         case 'prompt:load-global':
           return []
         case 'fs:check-exists':
@@ -1663,7 +1662,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1679,16 +1678,15 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
     })
     await expect(command.execute({ step: {}, context: checkpointContext, callbacks }))
-      .resolves.toBe(readyRoster.renderedMarkdown)
+      .resolves.toMatch(/角色提议|Character proposals/u)
 
-    expect(checkpointContext.data.partial).toEqual({
-      character_dynamics_result: readyRoster.renderedMarkdown,
-    })
-    expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith(expect.stringContaining('检查点保存失败'))
-    expect(vi.mocked(callbacks.log)).toHaveBeenCalledWith('角色图谱与 3 张角色卡已生成')
+    expect(checkpointContext.data.partial).toBeUndefined()
+    expect(checkpointContext.data.characterProposalBatch).toBeDefined()
+    expect(invoke.mock.calls.some(([channel]) => channel === 'fs:write-json')).toBe(false)
+
   })
 
-  it('replaces a truncated roster JSON before committing the readable roster receipt', async () => {
+  it('replaces a truncated roster JSON before staging the selected artifacts', async () => {
     const truncated = '{"slots":['
     const responses = [truncated, JSON.stringify(manifestFor(rosterEntries)), ...detailBatchResponses(rosterEntries)]
     const generateStream = vi.fn((
@@ -1708,8 +1706,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       return Promise.resolve(`truncated-character-request-${generateStream.mock.calls.length}`)
     })
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
+        case 'character-proposal:stage': return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
         case 'prompt:load-global':
           return []
         case 'fs:check-exists':
@@ -1738,7 +1737,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1754,14 +1753,15 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
     })
     await expect(command.execute({ step: {}, context, callbacks }))
-      .resolves.toBe(readyRoster.renderedMarkdown)
+      .resolves.toMatch(/角色提议|Character proposals/u)
 
     expect(generateStream).toHaveBeenCalledTimes(3)
     expect(generateStream.mock.calls.map(call => call[2])).toEqual(['model-1', 'model-1', 'model-1'])
     const continuationMessages = generateStream.mock.calls[1]?.[0] ?? []
     const continuationPrompt = continuationMessages.find(message => message.role === 'user')?.content ?? ''
     expect(continuationPrompt).toContain('返回完整 JSON，从头重建，不要只补后缀')
-    expect(domainIpcChannels(invoke)).toContain('db:character-roster-commit')
+    expect(domainIpcChannels(invoke)).toContain('character-proposal:stage')
+    expect(domainIpcChannels(invoke)).not.toContain('db:character-roster-commit')
   })
 
   it('keeps the complete protected author guidance on a length replacement request', async () => {
@@ -1777,8 +1777,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       responses.map((_, index) => index === 0 ? 'length' : 'stop'),
     )
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
+        case 'character-proposal:stage': return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
         case 'prompt:load-global':
           return []
         case 'fs:check-exists':
@@ -1807,7 +1808,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1835,7 +1836,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     })
 
     await expect(command.execute({ step: {}, context: runContext, callbacks }))
-      .resolves.toBe(readyRoster.renderedMarkdown)
+      .resolves.toMatch(/角色提议|Character proposals/u)
 
     expect(generateStream).toHaveBeenCalledTimes(3)
     const continuationPrompt = generateStream.mock.calls[1]?.[0]
@@ -1852,14 +1853,17 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         expect.objectContaining({ sectionName: 'continuation-request' }),
       ]),
     })
-    expect(domainIpcChannels(invoke)).toContain('db:character-roster-commit')
+    expect(domainIpcChannels(invoke)).toContain('character-proposal:stage')
+    expect(domainIpcChannels(invoke)).not.toContain('db:character-roster-commit')
   })
 
   it('fails the protected length replacement before an additional provider call when its complete prompt exceeds the product budget', async () => {
     vi.spyOn(console, 'info').mockImplementation(() => {})
     const generateStream = createResponseStream(['{"slots":['], ['length'])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'db:project-core-get') {
@@ -1868,7 +1872,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1919,7 +1923,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
-  it('repairs one syntactically invalid detail batch before committing the complete roster', async () => {
+  it('repairs one syntactically invalid detail batch before staging the complete proposal', async () => {
     const details = detailBatchResponses(rosterEntries)[0]!
     const malformed = details.slice(0, -2)
     const responses = [JSON.stringify(manifestFor(rosterEntries)), malformed, details]
@@ -1934,8 +1938,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       return Promise.resolve(`character-request-${generateStream.mock.calls.length}`)
     })
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
+        case 'character-proposal:stage': return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
         case 'prompt:load-global':
           return []
         case 'fs:check-exists':
@@ -1964,7 +1969,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -1980,10 +1985,11 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       novelConfig: { genre: '玄幻', totalChapters: 100, wordsPerChapter: 3000 } as never,
     })
     await expect(command.execute({ step: {}, context, callbacks }))
-      .resolves.toBe(readyRoster.renderedMarkdown)
+      .resolves.toMatch(/角色提议|Character proposals/u)
 
     expect(generateStream).toHaveBeenCalledTimes(3)
-    expect(domainIpcChannels(invoke)).toContain('db:character-roster-commit')
+    expect(domainIpcChannels(invoke)).toContain('character-proposal:stage')
+    expect(domainIpcChannels(invoke)).not.toContain('db:character-roster-commit')
   })
 
   it('rejects semantically incomplete detail coverage before any roster write', async () => {
@@ -1992,8 +1998,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       JSON.stringify({ entries: [] }),
     ])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
+        case 'character-proposal:stage': return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
         case 'prompt:load-global':
           return { templates: [], diagnostics: [] }
         case 'fs:check-exists':
@@ -2005,7 +2012,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       }
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -2033,7 +2040,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
-  it('trims and Unicode-bounds valid AI character descriptions before roster commit', async () => {
+  it('trims and Unicode-bounds valid AI character descriptions before proposal staging', async () => {
     const descriptionFields = [
       'appearance', 'personality', 'background', 'abilities', 'motivation', 'arc', 'notes',
     ] as const
@@ -2059,6 +2066,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     let committedEntries: CharacterRosterEntry[] | undefined
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
+        case 'character-proposal:stage': return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
         case 'prompt:load-global': return { templates: [], diagnostics: [] }
         case 'fs:check-exists': return false
         case 'db:project-core-get': return { premise: '这是一段足够长且包含明确冲突的故事前提，用于验证模型生成的少量超长自由描述会在严格结构验证前确定性收束。' }
@@ -2084,7 +2092,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const command = new GenerateCharactersCommand({
       expectedProjectPath: projectAPath,
@@ -2092,18 +2100,21 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     })
 
     await expect(command.execute({ step: {}, context, callbacks }))
-      .resolves.toBe(readyRoster.renderedMarkdown)
+      .resolves.toMatch(/角色提议|Character proposals/u)
     expect(generateStream).toHaveBeenCalledTimes(2)
-    const committed = committedEntries?.[0]
+    expect(committedEntries).toBeUndefined()
+    const candidate = (context.data.characterProposalBatch as CharacterProposalBatch).items[0]
+    const raw = candidate.rawValue as { detail: unknown }
+    const committed = decodeCharacterDetails(JSON.stringify({ entries: [raw.detail] }))[0]
     expect(committed).toMatchObject({
       name: rosterEntries[0]!.name,
       role: rosterEntries[0]!.role,
-      relationships: rosterEntries[0]!.relationships,
     })
     for (const field of descriptionFields) expect(committed?.[field]).toBe(boundedDescription)
     for (const field of stateFields) expect(committed?.currentState?.[field]).toBe(boundedState)
     expect(committed?.currentState?.recentEvents).toBe(Array.from(mayaRecentEvents).slice(0, 80).join(''))
-    expect(domainIpcChannels(invoke)).toContain('db:character-roster-commit')
+    expect(domainIpcChannels(invoke)).toContain('character-proposal:stage')
+    expect(domainIpcChannels(invoke)).not.toContain('db:character-roster-commit')
   })
 
   it('rejects non-finite, boolean, and null age values without echoing their content', async () => {
@@ -2112,14 +2123,16 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       invalid.entries[0].age = invalidAge
       const generateStream = createResponseStream([JSON.stringify(manifestFor(rosterEntries)), JSON.stringify(invalid)])
       useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-      const invoke = vi.fn(async (channel: string) => {
-        if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+        if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
         if (channel === 'fs:check-exists') return false
         if (channel === 'db:project-core-get') return { premise: '这是一个足够长且包含明确冲突与人物目标的故事前提，用于验证非法年龄类型必须在角色事实提交之前安全失败。' }
         throw new Error(`Unexpected IPC channel: ${channel}`)
       })
       vi.stubGlobal('window', {
-        velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+        aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
       })
       const command = new GenerateCharactersCommand({
         expectedProjectPath: projectAPath,
@@ -2140,14 +2153,16 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         state[field] = invalidValue
         const generateStream = createResponseStream([JSON.stringify(manifestFor(rosterEntries)), JSON.stringify(invalid)])
         useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-        const invoke = vi.fn(async (channel: string) => {
-          if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+        const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+          if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
           if (channel === 'fs:check-exists') return false
           if (channel === 'db:project-core-get') return { premise: '这是一个足够长且包含明确冲突与人物目标的故事前提，用于验证非法角色状态列表必须在角色事实提交之前安全失败。' }
           throw new Error(`Unexpected IPC channel: ${channel}`)
         })
         vi.stubGlobal('window', {
-          velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+          aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
         })
         const command = new GenerateCharactersCommand({
           expectedProjectPath: projectAPath,
@@ -2166,14 +2181,16 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     delete missingState.entries[0].currentState
     const generateStream = createResponseStream([JSON.stringify(manifestFor(rosterEntries)), JSON.stringify(missingState)])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'db:project-core-get') return { premise: '这是一个足够长且包含明确冲突、人物目标和世界危机的故事前提，用于验证角色详情缺少必填初始状态时必须在任何角色名单读取和提交之前失败关闭。' }
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
     })
     const command = new GenerateCharactersCommand({
       expectedProjectPath: projectAPath,
@@ -2192,7 +2209,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       malformed,
     ])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'db:project-core-get') {
@@ -2201,7 +2220,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -2234,7 +2253,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       return Promise.resolve('late-character-request')
     })
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'db:project-core-get') {
@@ -2243,7 +2264,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -2278,7 +2299,9 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       return Promise.resolve('cancelled-character-request')
     })
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
-    const invoke = vi.fn(async (channel: string) => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
       if (channel === 'fs:check-exists') return false
       if (channel === 'db:project-core-get') {
@@ -2287,7 +2310,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),

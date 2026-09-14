@@ -34,7 +34,7 @@ $script:aiNovelAcceptanceDirectory = if (-not [string]::IsNullOrWhiteSpace($env:
 } else {
   Join-Path $root ("release\{0}\qualification\acceptance" -f [string]$packageJson.version)
 }
-$smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-installer-smoke-' + [guid]::NewGuid().ToString('N'))
+$smokeRoot = Join-Path (Join-Path $root '.runtime\.cache') ('ai-novel-installer-smoke-' + [guid]::NewGuid().ToString('N'))
 $installRoot = Join-Path $smokeRoot 'installed-app'
 $velaHome = Join-Path $smokeRoot 'vela-home'
 $globalConfig = Join-Path $velaHome 'config.json'
@@ -354,14 +354,22 @@ function Invoke-AiNovelPackagedVectorSmoke {
   $stderrPath = Join-Path $smokeRoot 'packaged-vector-smoke.stderr'
   $previousReleaseSmoke = $env:AI_NOVEL_RELEASE_SMOKE
   $previousReleaseSmokeToken = $env:AI_NOVEL_RELEASE_SMOKE_TOKEN
+  $profile = New-AiNovelQualificationProfile -Root (Join-Path $smokeRoot 'qualification-vector')
+  $previousCanonicalHome = $env:AI_NOVEL_APP_DATA_HOME
+  $previousLegacySourceHome = $env:AI_NOVEL_LEGACY_SOURCE_HOME
+  $previousProfileAlias = $env:AI_NOVEL_VELA_HOME
   $evidenceSucceeded = $false
 
   try {
+    New-Item -ItemType Directory -Path $profile.userData -Force | Out-Null
+    $env:AI_NOVEL_APP_DATA_HOME = $profile.canonical
+    $env:AI_NOVEL_LEGACY_SOURCE_HOME = $profile.legacy
+    $env:AI_NOVEL_VELA_HOME = $profile.legacy
     $env:AI_NOVEL_RELEASE_SMOKE = '1'
     $env:AI_NOVEL_RELEASE_SMOKE_TOKEN = $token
     Invoke-AiNovelMonitoredExecutable `
       -Path $Path `
-      -Arguments @("--ai-novel-release-smoke=$token") `
+      -Arguments @("--user-data-dir=`"$($profile.userData)`"", "--ai-novel-release-smoke=$token") `
       -Operation 'Packaged vector qualification' `
       -StandardOutputPath $stdoutPath `
       -StandardErrorPath $stderrPath `
@@ -417,6 +425,9 @@ function Invoke-AiNovelPackagedVectorSmoke {
     throw "Packaged vector qualification failed: $($_.Exception.Message)$([Environment]::NewLine)$stderr"
   }
   finally {
+    $env:AI_NOVEL_APP_DATA_HOME = $previousCanonicalHome
+    $env:AI_NOVEL_LEGACY_SOURCE_HOME = $previousLegacySourceHome
+    $env:AI_NOVEL_VELA_HOME = $previousProfileAlias
     $env:AI_NOVEL_RELEASE_SMOKE = $previousReleaseSmoke
     $env:AI_NOVEL_RELEASE_SMOKE_TOKEN = $previousReleaseSmokeToken
     if ($evidenceSucceeded) {
@@ -437,14 +448,22 @@ function Invoke-AiNovelPackagedOfficialHomepageSmoke {
   $stderrPath = Join-Path $smokeRoot 'packaged-official-homepage-smoke.stderr'
   $previousReleaseHomepageSmoke = $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE
   $previousReleaseHomepageSmokeToken = $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN
+  $profile = New-AiNovelQualificationProfile -Root (Join-Path $smokeRoot 'qualification-officialhomepage')
+  $previousCanonicalHome = $env:AI_NOVEL_APP_DATA_HOME
+  $previousLegacySourceHome = $env:AI_NOVEL_LEGACY_SOURCE_HOME
+  $previousProfileAlias = $env:AI_NOVEL_VELA_HOME
   $evidenceSucceeded = $false
 
   try {
+    New-Item -ItemType Directory -Path $profile.userData -Force | Out-Null
+    $env:AI_NOVEL_APP_DATA_HOME = $profile.canonical
+    $env:AI_NOVEL_LEGACY_SOURCE_HOME = $profile.legacy
+    $env:AI_NOVEL_VELA_HOME = $profile.legacy
     $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE = '1'
     $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN = $token
     Invoke-AiNovelMonitoredExecutable `
       -Path $Path `
-      -Arguments @("--ai-novel-release-homepage-smoke=$token") `
+      -Arguments @("--user-data-dir=`"$($profile.userData)`"", "--ai-novel-release-homepage-smoke=$token") `
       -Operation 'Packaged official homepage qualification' `
       -StandardOutputPath $stdoutPath `
       -StandardErrorPath $stderrPath `
@@ -499,6 +518,9 @@ function Invoke-AiNovelPackagedOfficialHomepageSmoke {
     throw "Packaged official homepage qualification failed: $($_.Exception.Message)$([Environment]::NewLine)$stderr"
   }
   finally {
+    $env:AI_NOVEL_APP_DATA_HOME = $previousCanonicalHome
+    $env:AI_NOVEL_LEGACY_SOURCE_HOME = $previousLegacySourceHome
+    $env:AI_NOVEL_VELA_HOME = $previousProfileAlias
     $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE = $previousReleaseHomepageSmoke
     $env:AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN = $previousReleaseHomepageSmokeToken
     if ($evidenceSucceeded) {
@@ -519,15 +541,22 @@ function Invoke-AiNovelPackagedSkinSmoke {
   $previousReleaseSkinSmoke = $env:AI_NOVEL_RELEASE_SKIN_SMOKE
   $previousReleaseSkinSmokeToken = $env:AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN
   $previousVelaHome = $env:AI_NOVEL_VELA_HOME
+  $profile = New-AiNovelQualificationProfile -Root (Join-Path $smokeRoot 'qualification-skin')
+  $previousCanonicalHome = $env:AI_NOVEL_APP_DATA_HOME
+  $previousLegacySourceHome = $env:AI_NOVEL_LEGACY_SOURCE_HOME
+  $previousProfileAlias = $env:AI_NOVEL_VELA_HOME
   $evidenceSucceeded = $false
 
   try {
+    New-Item -ItemType Directory -Path $profile.userData -Force | Out-Null
+    $env:AI_NOVEL_APP_DATA_HOME = $profile.canonical
+    $env:AI_NOVEL_LEGACY_SOURCE_HOME = $profile.legacy
+    $env:AI_NOVEL_VELA_HOME = $profile.legacy
     $env:AI_NOVEL_RELEASE_SKIN_SMOKE = '1'
     $env:AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN = $token
-    $env:AI_NOVEL_VELA_HOME = $velaHome
     Invoke-AiNovelMonitoredExecutable `
       -Path $Path `
-      -Arguments @("--ai-novel-release-skin-smoke=$token") `
+      -Arguments @("--user-data-dir=`"$($profile.userData)`"", "--ai-novel-release-skin-smoke=$token") `
       -Operation 'Packaged skin qualification' `
       -StandardOutputPath $stdoutPath `
       -StandardErrorPath $stderrPath `
@@ -582,6 +611,9 @@ function Invoke-AiNovelPackagedSkinSmoke {
     throw "Packaged skin qualification failed: $($_.Exception.Message)$([Environment]::NewLine)$stderr"
   }
   finally {
+    $env:AI_NOVEL_APP_DATA_HOME = $previousCanonicalHome
+    $env:AI_NOVEL_LEGACY_SOURCE_HOME = $previousLegacySourceHome
+    $env:AI_NOVEL_VELA_HOME = $previousProfileAlias
     $env:AI_NOVEL_RELEASE_SKIN_SMOKE = $previousReleaseSkinSmoke
     $env:AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN = $previousReleaseSkinSmokeToken
     $env:AI_NOVEL_VELA_HOME = $previousVelaHome

@@ -1,6 +1,8 @@
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
-import { closeProjectDatabase, getCurrentProjectPath } from '../database'
+import { closeProjectDatabase, getCurrentProjectPath, getProjectDb } from '../database'
+import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
+import { assertGenerationSourcesCurrent, assertImportGenerationSourcesCurrent, recordGenerationDirectoryCommit, withGenerationAgentChildEffect } from './generation-controller'
 import { projectAccess } from '../services/project-access'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 
@@ -56,7 +58,6 @@ import { SummaryRepository } from '../repositories/summary-repository'
 import { ConsistencyExemptionRepository } from '../repositories/consistency-exemption-repository'
 import { NarrativeThreadRepository } from '../repositories/narrative-thread-repository'
 import { PlotTreeRepository } from '../repositories/plot-tree-repository'
-import { isPlotTreeSourceRevision } from '../../src/shared/plot-tree'
 import { RecoveryCandidateRepository } from '../repositories/recovery-candidate-repository'
 import type { RecoveryCandidateRecordInput } from '../../src/shared/recovery-candidate'
 
@@ -65,6 +66,7 @@ type ProjectDatabaseHandler = (event: unknown, ...args: never[]) => unknown
 const MUTATING_DATABASE_CHANNELS = new Set([
   'db:close',
   'db:project-core-update',
+  'db:project-core-commit-generated',
   'db:project-core-synopsis-commit',
   'db:import-global-facts-commit',
   'db:project-clear-generated-data',
@@ -168,13 +170,34 @@ export function registerDatabaseController() {
     }
   })
 
+  ipcMain.handle('db:project-core-commit-generated', async (
+    _event, request: { data: Partial<ProjectCoreData>; generationRunHandle: MainGenerationRunHandle }, expectedProjectPath: string,
+  ) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      const database = getProjectDb()
+      if (!database || !request.generationRunHandle) throw new Error('GENERATION_OWNER_REQUIRED')
+      database.transaction(() => withGenerationAgentChildEffect(request.generationRunHandle, () => {
+        assertGenerationSourcesCurrent(request.generationRunHandle)
+        ProjectCoreRepository.update(request.data)
+      })).immediate()
+      return { success: true }
+    } catch (error) { return { success: false, error: String(error) } }
+  })
+
   ipcMain.handle('db:project-core-synopsis-commit', async (
     _event,
     request: ProjectCoreSynopsisCommitRequest,
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    if (!ProjectCoreRepository.commitSynopsis(request)) {
+    const commit = () => {
+      if (request.generationRunHandle) assertGenerationSourcesCurrent(request.generationRunHandle)
+      return ProjectCoreRepository.commitSynopsis(request)
+    }
+    const database = getProjectDb()
+    if (request.generationRunHandle && !database) throw new Error('GENERATION_DATABASE_NOT_READY')
+    if (!(request.generationRunHandle ? database!.transaction(() => withGenerationAgentChildEffect(request.generationRunHandle!, commit)).immediate() : commit())) {
       return { success: false, error: '项目数据已变化，已拒绝覆盖情节大纲' }
     }
     return { success: true }
@@ -366,7 +389,7 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    return { success: true, receipt: ImportRunRepository.prepareEffectReceipt(request, execution) }
+    return { success: true, receipt: ImportRunRepository.prepareEffectReceipt(request, execution, Date.now(), assertImportGenerationSourcesCurrent) }
   })
 
   ipcMain.handle('db:import-run-effect-receipt-commit', async (
@@ -378,7 +401,7 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    return { success: true, result: ImportRunRepository.commitEffectReceipt(runId, stage, batchId, execution) }
+    return { success: true, result: ImportRunRepository.commitEffectReceipt(runId, stage, batchId, execution, Date.now(), (handle, slot) => assertImportGenerationSourcesCurrent(handle, slot, true)) }
   })
 
   ipcMain.handle('db:import-run-start-resume', async (
@@ -518,7 +541,19 @@ export function registerDatabaseController() {
   ) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      return { success: true, receipt: BlueprintRepository.commitRange(request) }
+      if (!request.generationRunHandle) return { success: true, receipt: BlueprintRepository.commitRange(request) }
+      const database = getProjectDb(), requested = request.generationRequestedRange ?? { startChapter: request.startChapter, endChapter: request.endChapter }
+      if (!database) throw new Error('GENERATION_DATABASE_NOT_READY')
+      if (!Number.isSafeInteger(requested.startChapter) || !Number.isSafeInteger(requested.endChapter)
+        || requested.startChapter !== request.startChapter || requested.endChapter < request.endChapter || requested.endChapter - requested.startChapter >= 10000)
+        throw new Error('GENERATION_DIRECTORY_RANGE_INVALID')
+      const commit = () => {
+        const committed = BlueprintRepository.commitRange(request, () => assertGenerationSourcesCurrent(request.generationRunHandle!, requested))
+        return { ...committed, generationProgress: recordGenerationDirectoryCommit(request.generationRunHandle!, requested, committed) }
+      }
+      const receipt = database.transaction(() => BlueprintRepository.getCommittedRangeOperation(request.operationId)
+        ? commit() : withGenerationAgentChildEffect(request.generationRunHandle!, commit)).immediate()
+      return { success: true, receipt }
     } catch (err) {
       return { success: false, error: String(err) }
     }
@@ -557,11 +592,11 @@ export function registerDatabaseController() {
     }
   })
 
-  ipcMain.handle('db:blueprint-update-notes', async (_event, chapterNumber: number, notes: string, expectedProjectPath: string) => {
+  ipcMain.handle('db:blueprint-update-notes', async (_event, _chapterNumber: number, _notes: string, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      const updated = BlueprintRepository.updateNotes(chapterNumber, notes)
-      return { success: true, updated }
+      // Derived finalization notes are committed with their artifact and ACK in one main transaction.
+      throw new Error('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
     } catch (err) {
       return { success: false, error: String(err) }
     }
@@ -607,7 +642,8 @@ export function registerDatabaseController() {
   ) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      return { success: true, receipt: CharacterRosterRepository.commit(request) }
+      return { success: true, receipt: CharacterRosterRepository.commit(request,
+        request.generationRunHandle ? () => assertGenerationSourcesCurrent(request.generationRunHandle!) : undefined) }
     } catch (err) {
       return { success: false, error: String(err) }
     }
@@ -697,21 +733,19 @@ export function registerDatabaseController() {
     return FinalizationRepository.matchesAuthoritativeExportReceipt(receipt)
   })
 
-  ipcMain.handle('db:continuity-save-finalized', async (_event, request, expectedProjectPath: string) => {
+  ipcMain.handle('db:continuity-save-finalized', async (_event, _request, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      SummaryRepository.saveFinalizedContinuity(request)
-      return { success: true }
+      throw new Error('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
     } catch (err) {
       return { success: false, error: String(err) }
     }
   })
 
-  ipcMain.handle('db:continuity-save-character-state-candidates', async (_event, request, expectedProjectPath: string) => {
+  ipcMain.handle('db:continuity-save-character-state-candidates', async (_event, _request, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      SummaryRepository.saveFinalizedCharacterStateCandidates(request)
-      return { success: true }
+      throw new Error('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
     } catch (err) {
       return { success: false, error: String(err) }
     }
@@ -790,19 +824,13 @@ export function registerDatabaseController() {
 
   ipcMain.handle('db:plot-tree-save', async (
     _event,
-    snapshot,
-    expectedSourceRevision: string,
+    _snapshot,
+    _expectedSourceRevision: string,
     expectedProjectPath: string,
   ) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      if (!isPlotTreeSourceRevision(expectedSourceRevision)) {
-        throw new Error('剧情树来源版本无效')
-      }
-      return {
-        success: true,
-        snapshot: PlotTreeRepository.save(snapshot, expectedSourceRevision),
-      }
+      throw new Error('GENERATION_GRAPH_ADMISSION_REQUIRED')
     } catch (error) {
       const message = String(error)
       return {
@@ -1085,6 +1113,7 @@ export function registerDatabaseController() {
       triggerSourceId: string
       sourceLabel: string
       steps: Array<{ key: string; label: string; critical: boolean }>
+      finalizedSource?: import('../../src/shared/finalized-continuity').FinalizedSourceIdentity
     },
     expectedProjectPath: string,
   ) => {

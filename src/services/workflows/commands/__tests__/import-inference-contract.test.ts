@@ -83,6 +83,30 @@ describe('decodeImportInferenceJson', () => {
     expectInvalidJson('下面是说明性文字，但没有结构化对象。')
   })
 
+  it('preserves separate same-name occurrences and ambiguous relationship labels for approval', () => {
+    const inference = validInference()
+    inference.characterCards[1].name = '陆舟'
+    inference.characterCards[1].background = '另一来源中的同名药师'
+    inference.characterCards[0].relationships = [{ target: '陆舟', relation: '见过另一名同名者' }] as never
+    const parsed = decodeImportInferenceJson(JSON.stringify(inference))
+    expect(parsed.characterCards).toHaveLength(3)
+    expect(parsed.characterCards.slice(0, 2).map(card => [card.name, card.background])).toEqual([
+      ['陆舟', '背景明确'], ['陆舟', '另一来源中的同名药师'],
+    ])
+    expect(parsed.characterCards[0].relationships).toEqual([{ target: '陆舟', relation: '见过另一名同名者' }])
+  })
+
+  it('does not accept model-supplied identity or author provenance as authority', () => {
+    const inference = validInference()
+    Object.assign(inference.characterCards[0], { characterId: 'claimed-existing-id', approvalId: 'claimed-approval' })
+    Object.assign(inference.characterCards[0].currentState, { provenance: { location: { kind: 'author', chapterNumber: 1 } } })
+    const parsed = decodeImportInferenceJson(JSON.stringify(inference))
+    expect(parsed.characterCards[0]).not.toHaveProperty('characterId')
+    expect(parsed.characterCards[0]).not.toHaveProperty('approvalId')
+    expect(parsed.characterCards[0].currentState).not.toHaveProperty('provenance')
+    expect(parsed.characterCards[0].currentState?.location).toBe('城中')
+  })
+
   it('rejects a malformed JSON object candidate instead of scanning past it', () => {
     const json = JSON.stringify(validInference())
 

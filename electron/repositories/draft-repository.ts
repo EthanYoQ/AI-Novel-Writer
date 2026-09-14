@@ -306,8 +306,8 @@ export class DraftRepository {
         content: string
         wordCount: number
         sourceDependencies?: DraftSourceDependency[]
-    }): number {
-        const db = getProjectDb()
+    }, capturedDatabase?: BetterSqlite3.Database): number {
+        const db = capturedDatabase ?? getProjectDb()
         if (!db) throw new Error('[DraftRepository] 数据库未连接')
 
         // 事务内原子分配 version，避免 getNextVersion + create 竞态
@@ -328,7 +328,7 @@ export class DraftRepository {
       `).get(params.chapterNumber) as { maxVer: number | null }
             const version = (row.maxVer ?? 0) + 1
 
-            const contentId = ContentRepository.create(params.content)
+            const contentId = Number(db.prepare('INSERT INTO contents(body) VALUES(?)').run(params.content).lastInsertRowid)
             const result = db.prepare(`
         INSERT INTO drafts (
           chapter_number, version, source, content_id, word_count, source_dependencies

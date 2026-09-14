@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { getProjectDb } from '../database'
 import { countDraftUnits } from '../../src/shared/draft-units'
-import { invalidateContinuityProjectionFrom } from './summary-repository'
+import { freezeFinalizedCharacterSnapshot, invalidateContinuityProjectionFrom } from './summary-repository'
 
 export type PublicationStatus = 'pending' | 'published'
 
@@ -293,6 +293,8 @@ export class FinalizationRepository {
         input.content,
         input.targetFileName,
       )
+      freezeFinalizedCharacterSnapshot(db, { draftId: input.draftId, finalizationId: input.finalizationId,
+        chapterNumber: input.chapterNumber, contentHash: input.contentHash })
 
       return {
         finalizationId: input.finalizationId,

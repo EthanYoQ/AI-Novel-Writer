@@ -1,3 +1,4 @@
+import { createGenerationRuntime } from '../../generation/generation-runtime'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useLLMStore } from '../../../stores/llm-store'
@@ -5,6 +6,7 @@ import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import type { CharacterRosterEntry, CharacterRosterSnapshot } from '../../../shared/character-roster'
 import { migrateLegacyCharacterRoster } from '../architecture-workflow'
+import { buildLegacyRosterTask, buildLegacyRosterJsonRepairTask } from '../../../shared/legacy-roster-generation-pure'
 
 const projectPath = 'C:\\novels\\legacy-roster'
 const projectSession = {
@@ -110,7 +112,7 @@ function installVela(invoke: (channel: string, ...args: unknown[]) => unknown) {
     expiresAt: 61_000,
   }
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke: vi.fn((channel: string, ...args: unknown[]) => {
         if (channel === 'llm:begin-execution-lease') return Promise.resolve({ success: true, lease })
         if (channel === 'llm:close-execution-lease') return Promise.resolve({ success: true })
@@ -182,9 +184,10 @@ describe('legacy character roster repair public workflow seam', () => {
     })
     installVela(invoke)
 
-    await migrateLegacyCharacterRoster(projectPath)
+    await migrateLegacyCharacterRoster(projectPath, { generationDependencies: { createRuntime: options => createGenerationRuntime(options) } })
 
     expect(generateStream).toHaveBeenCalledOnce()
+    expect(generateStream.mock.calls[0]?.[0]).toEqual(buildLegacyRosterTask({ legacyMarkdown: pendingLegacyRoster.legacyMarkdown!, genre: '科幻' }).messages)
     expect(invoke).toHaveBeenCalledWith(
       'db:character-roster-commit',
       expect.objectContaining({
@@ -229,9 +232,10 @@ describe('legacy character roster repair public workflow seam', () => {
     })
     installVela(invoke)
 
-    await migrateLegacyCharacterRoster(projectPath)
+    await migrateLegacyCharacterRoster(projectPath, { generationDependencies: { createRuntime: options => createGenerationRuntime(options) } })
 
     expect(generateStream).toHaveBeenCalledTimes(2)
+    expect(generateStream.mock.calls[1]?.[0]).toEqual(buildLegacyRosterJsonRepairTask(malformed).messages)
     const repairOptions = (generateStream.mock.calls as unknown as unknown[][])[1]?.[3]
     expect(repairOptions).toMatchObject({
       purpose: 'legacy-character-roster-json-repair',
@@ -259,9 +263,35 @@ describe('legacy character roster repair public workflow seam', () => {
     })
     installVela(invoke)
 
-    await expect(migrateLegacyCharacterRoster(projectPath)).rejects.toThrow('已自动续写 2 次，尚未完整生成')
+    await expect(migrateLegacyCharacterRoster(projectPath, { generationDependencies: { createRuntime: options => createGenerationRuntime(options) } })).rejects.toThrow('已自动续写 2 次，尚未完整生成')
     expect(generateStream).toHaveBeenCalledTimes(3)
     expect(invoke.mock.calls.map(([channel]) => channel).filter(channel => channel.startsWith('db:character-roster'))).toEqual(['db:character-roster-read'])
+  })
+  it('keeps the existing three initial plus three syntax-repair request ceiling in one runtime', async () => {
+    const generateStream = vi.fn((
+      _messages: Parameters<typeof originalGenerateStream>[0],
+      callbacks: Parameters<typeof originalGenerateStream>[1],
+    ) => {
+      const count = generateStream.mock.calls.length
+      callbacks.onDone?.(count === 6 ? JSON.stringify({ schemaVersion: 1, entries: repairedEntries }) : '{"schemaVersion":1,"entries":[',
+        undefined, count === 3 || count === 6 ? 'stop' : 'length')
+      return Promise.resolve(`bounded-${count}`)
+    })
+    useLLMStore.setState({ generateStream })
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:character-roster-read') return pendingLegacyRoster
+      if (channel === 'db:character-roster-commit') return { success: true, receipt: {
+        operationId: 'six-requests', payloadHash: 'hash', revision: 1, idempotent: false, snapshot: readyRoster,
+      } }
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+    installVela(invoke)
+    await migrateLegacyCharacterRoster(projectPath, { generationDependencies: { createRuntime: options => createGenerationRuntime(options) } })
+    expect(generateStream).toHaveBeenCalledTimes(6)
+    expect((generateStream.mock.calls as unknown as unknown[][]).map(call => (call[3] as { purpose: string }).purpose)).toEqual([
+      ...Array(3).fill('legacy-character-roster-repair'), ...Array(3).fill('legacy-character-roster-json-repair'),
+    ])
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:character-roster-commit')).toHaveLength(1)
   })
 
   it('adopts protected existing cards without a model call, then rebuilds only the read-only projection', async () => {
@@ -289,7 +319,7 @@ describe('legacy character roster repair public workflow seam', () => {
     })
     installVela(invoke)
 
-    await migrateLegacyCharacterRoster(projectPath)
+    await migrateLegacyCharacterRoster(projectPath, { generationDependencies: { createRuntime: options => createGenerationRuntime(options) } })
 
     expect(generateStream).not.toHaveBeenCalled()
     expect(invoke).toHaveBeenCalledWith(
@@ -317,7 +347,7 @@ describe('legacy character roster repair public workflow seam', () => {
     })
     installVela(invoke)
 
-    const execution = migrateLegacyCharacterRoster(projectPath)
+    const execution = migrateLegacyCharacterRoster(projectPath, { generationDependencies: { createRuntime: options => createGenerationRuntime(options) } })
     await vi.waitFor(() => expect(generateStream).toHaveBeenCalledOnce())
     useProjectStore.setState({
       currentProject: {
@@ -348,7 +378,7 @@ describe('legacy character roster repair public workflow seam', () => {
     })
     installVela(invoke)
 
-    const execution = migrateLegacyCharacterRoster(projectPath)
+    const execution = migrateLegacyCharacterRoster(projectPath, { generationDependencies: { createRuntime: options => createGenerationRuntime(options) } })
     await vi.waitFor(() => expect(generateStream).toHaveBeenCalledOnce())
     const runId = useWorkflowStore.getState().activeRuns[0]?.id
     expect(runId).toBeTruthy()
@@ -375,7 +405,7 @@ describe('legacy character roster repair public workflow seam', () => {
     })
     installVela(invoke)
 
-    await expect(migrateLegacyCharacterRoster(projectPath)).rejects.toThrow('角色名单不能为空')
+    await expect(migrateLegacyCharacterRoster(projectPath, { generationDependencies: { createRuntime: options => createGenerationRuntime(options) } })).rejects.toThrow('角色名单不能为空')
     expect(generateStream).toHaveBeenCalledOnce()
     expect(invoke.mock.calls.map(([channel]) => channel).filter(channel => channel.startsWith('db:character-roster'))).toEqual([
       'db:character-roster-read',

@@ -283,7 +283,7 @@ describe('project refresh context', () => {
       wordCount: 8,
       createdAt: '2026-08-29T00:00:00.000Z',
       fileName: 'draft_v1.md',
-      filePath: 'vela://draft/2',
+      filePath: 'ai-novel://draft/2',
     } as const
     useDraftStore.setState({ draftsByChapter: { 2: [projectBDraft] } })
     draftsA.resolve([{
@@ -332,8 +332,8 @@ describe('project refresh context', () => {
     expect(invoke).toHaveBeenCalledWith('db:draft-list-all', project('A').path)
     expect(invoke).not.toHaveBeenCalledWith('db:blueprint-get-all', project('A').path)
     expect(useDraftStore.getState().draftsByChapter).toMatchObject({
-      1: [{ id: 1, chapterNumber: 1, chapterTitle: '蓝镜初亮', status: 'finalized', filePath: 'vela://draft/1' }],
-      2: [{ id: 2, chapterNumber: 2, chapterTitle: '潮线回声', status: 'finalized', filePath: 'vela://draft/2' }],
+      1: [{ id: 1, chapterNumber: 1, chapterTitle: '蓝镜初亮', status: 'finalized', filePath: 'ai-novel://draft/1' }],
+      2: [{ id: 2, chapterNumber: 2, chapterTitle: '潮线回声', status: 'finalized', filePath: 'ai-novel://draft/2' }],
     })
   })
 

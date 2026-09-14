@@ -24,7 +24,7 @@ const disabledUpdateState = {
 }
 
 Object.assign(window, {
-  velaAPI: {
+  aiNovelAPI: {
     async invoke(channel: string) {
       if (channel === 'config:set') return { success: true }
       if (channel === 'update:get-state') return disabledUpdateState

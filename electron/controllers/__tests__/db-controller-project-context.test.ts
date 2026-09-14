@@ -527,7 +527,8 @@ describe('database controller project context guard', () => {
       success: true,
       receipt: { operationId: 'architecture-run-A', revision: 1 },
     })
-    expect(mocks.characterRosterCommit).toHaveBeenCalledWith(request)
+    expect(mocks.characterRosterCommit).toHaveBeenCalledOnce()
+    expect(mocks.characterRosterCommit.mock.calls[0]?.[0]).toEqual(request)
   })
 
   it('commits a finalized import against the current main-process project root exactly once', async () => {

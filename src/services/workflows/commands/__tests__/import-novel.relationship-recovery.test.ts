@@ -107,11 +107,11 @@ function withMissingEndpoint(name = '韩烁') {
 function stubIpcInvoke(handler: (channel: string, ...args: unknown[]) => unknown) {
   const invoke = vi.fn((channel: string, ...args: unknown[]) => Promise.resolve(
     channel === 'prompt:load-global' ? { templates: [], diagnostics: [] }
-      : channel === 'fs:check-exists' && String(args[0]).endsWith('/.vela/prompts') ? false
+      : channel === 'fs:check-exists' && String(args[0]).endsWith('/.ai-novel/prompts') ? false
         : handler(channel, ...args),
   ))
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke,
       on: vi.fn(),
       once: vi.fn(),

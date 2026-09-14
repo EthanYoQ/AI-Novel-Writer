@@ -3,7 +3,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { closeProjectDatabase, initProjectDatabase } from '../../database'
+import { closeProjectDatabase } from '../../database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import { ConsistencyExemptionRepository } from '../consistency-exemption-repository'
 
 let projectRoot = ''

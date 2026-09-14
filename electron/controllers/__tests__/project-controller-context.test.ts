@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   currentProjectPath: '',
   existingPaths: new Set<string>(),
   initCalls: [] as string[],
+  createCalls: [] as string[],
   createdVelaDirectories: new Set<string>(),
   failCorePaths: new Set<string>(),
   failInitPaths: new Set<string>(),
@@ -71,6 +72,8 @@ vi.mock('../../database', () => ({
   getProjectDb: () => mocks.currentProjectPath
     ? { transaction: mocks.transaction }
     : null,
+
+  createProjectDatabase: vi.fn((projectPath: string) => { mocks.createCalls.push(path.resolve(projectPath)) }),
   initProjectDatabase: vi.fn((projectPath: string) => {
     const resolved = path.resolve(projectPath)
     mocks.initCalls.push(resolved)
@@ -178,6 +181,7 @@ beforeEach(() => {
     path.join(projectD, '.vela'),
   ])
   mocks.initCalls = []
+  mocks.createCalls = []
   mocks.createdVelaDirectories = new Set()
   mocks.failCorePaths = new Set()
   mocks.failInitPaths = new Set()
@@ -302,6 +306,7 @@ describe('project controller project identity', () => {
     expect(mocks.projectAccess.probeExistingProject).toHaveBeenCalledWith(projectB)
     expect(mocks.projectAccess.adoptLegacyProject).toHaveBeenCalled()
     expect(mocks.projectAccess.beginSession).toHaveBeenCalled()
+    expect(mocks.createCalls).toEqual([])
   })
 
   it('reopens the same project with a new lease while preserving its stable ProjectId', async () => {
@@ -471,6 +476,21 @@ describe('project controller project identity', () => {
     expect(mocks.initCalls).not.toContain(ordinaryDirectory)
   })
 
+  it('preserves the actionable migration refusal instead of overwriting it with an internal code', async () => {
+    mocks.projectAccess.probeExistingProject.mockImplementationOnce(() => {
+      throw new Error('PROJECT_MIGRATION_NOT_QUALIFIED')
+    })
+    await expect(handler('project:open')({}, ordinaryDirectory, 'request-unqualified-legacy')).resolves.toMatchObject({
+      success: false,
+      errorCode: 'PROJECT_ROOT_REQUIRED',
+      error: '项目格式转换尚未具备安全迁移条件，已保留原项目且未写入。请保留当前文件，等待受验证的迁移入口。',
+      databaseRestored: true,
+      dbReady: true,
+    })
+    expect(mocks.initCalls).toEqual([projectA])
+    expect(mocks.initCalls).not.toContain(ordinaryDirectory)
+  })
+
   it('creates from a first-ever neutral runtime, returns to no database or lease, then opens explicitly', async () => {
     mocks.currentProjectPath = ''
     mocks.activeSession = null
@@ -502,6 +522,7 @@ describe('project controller project identity', () => {
       dbReady: true,
     })
 
+    expect(mocks.createCalls).toEqual([projectC])
     await expect(handler('project:open')({}, projectC, 'request-open-created-C'))
       .resolves.toMatchObject({
         success: true,

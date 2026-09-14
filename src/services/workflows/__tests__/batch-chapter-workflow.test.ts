@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 
 import {
   createBatchChapterWorkflow,
@@ -10,12 +11,16 @@ import {
 import { useProjectStore } from '../../../stores/project-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useWorkflowStore, type WorkflowContext } from '../../../stores/workflow-store'
+import type { GenerationBatchProgress, BeginGenerationBatchRequest } from '../../../shared/generation-owner-contract'
 
 const doubles = vi.hoisted(() => ({
+  batch: null as GenerationBatchProgress | null,
   guardChapterWriting: vi.fn(),
   invokeWithProjectSession: vi.fn(),
   generateDraftExecute: vi.fn(),
   finalizeChapterExecute: vi.fn(),
+  retryPublication: vi.fn(),
+  repairPostProcess: vi.fn(),
   finalizeChapterParams: [] as unknown[],
   generateDraftChapterInfos: [] as Array<{ chapterNumber: number; wordsTarget?: number }>,
   generateDraftOptions: [] as Array<{ selectedCandidateDrafts?: Array<Record<string, unknown>> }>,
@@ -27,38 +32,78 @@ vi.mock('../../workflow-guards', () => ({
 
 vi.mock('../../ipc-client', () => ({
   ipc: {
-    invokeWithProjectSession: (context: unknown, channel: string, ...args: unknown[]) => (
-      channel === 'fs:check-exists'
-        ? Promise.resolve(false)
-        : doubles.invokeWithProjectSession(context, channel, ...args)
-    ),
+    invokeWithProjectSession: async (context: unknown, channel: string, ...args: unknown[]) => {
+      if (channel === 'fs:check-exists') return false
+      if (channel === 'generation:begin-batch') {
+        const input = args[0] as BeginGenerationBatchRequest
+        doubles.batch = { ...input, batchId: '合成批次', rootHandle: { projectId: 'test-project', epoch: 'lease-test-project', rootActionId: '合成根', runId: '合成批次' },
+          completedChapters: [], nextChapterNumber: input.range.startChapter }
+        return structuredClone(doubles.batch)
+      }
+      if (channel === 'generation:read-batch' || channel === 'generation:confirm-batch-finalization') return structuredClone(doubles.batch)
+      if (channel === 'db:draft-get-full') {
+        const item = doubles.batch?.completedChapters.find(item => item.draftId === args[0])
+        if (item) return { ...item, id: item.draftId, content: 'generated draft' }
+      }
+      return doubles.invokeWithProjectSession(context, channel, ...args)
+    },
   },
 }))
 
 vi.mock('../commands/generate-draft.command', () => ({
   previousChapterEnding: (content: string) => content.slice(-1000),
   GenerateDraftCommand: class {
+    chapterNumber: number
     constructor(
       chapterInfo: { chapterNumber: number; wordsTarget?: number },
       options: { selectedCandidateDrafts?: Array<Record<string, unknown>> },
     ) {
+      this.chapterNumber = chapterInfo.chapterNumber
       doubles.generateDraftChapterInfos.push(chapterInfo)
       doubles.generateDraftOptions.push(options)
     }
 
-    execute = doubles.generateDraftExecute
+    execute = async (params: { context: WorkflowContext }) => {
+      const result = await doubles.generateDraftExecute(params)
+      const batch = doubles.batch!
+      batch.completedChapters.push({ chapterNumber: this.chapterNumber, draftId: Number(params.context.data.draftId),
+        version: Number(params.context.data.draftVersion), contentHash: createHash('sha256').update(result).digest('hex'), sourceRunHandle: batch.rootHandle })
+      if (batch.mode === 'draft_review') batch.nextChapterNumber = this.chapterNumber === batch.range.endChapter ? null : this.chapterNumber + 1
+      return result
+    }
   },
 }))
 
 vi.mock('../commands/finalize-chapter.command', () => ({
+  RunFinalizePostProcessCommand: class {
+    execute = async (params: unknown) => {
+      await doubles.repairPostProcess(params)
+      const batch = doubles.batch!
+      const item = batch.completedChapters.find(item => item.chapterNumber === batch.nextChapterNumber)!
+      item.finalizationId = item.pendingFinalizationId
+      item.pendingFinalizationId = undefined
+      item.postProcessComplete = true
+      batch.nextChapterNumber = item.chapterNumber === batch.range.endChapter ? null : item.chapterNumber + 1
+    }
+  },
   FinalizeChapterCommand: class {
+    chapterNumber: number
     constructor(params: unknown) {
+      this.chapterNumber = (params as { chapterNumber: number }).chapterNumber
       doubles.finalizeChapterParams.push(params)
     }
 
-    execute = doubles.finalizeChapterExecute
+    execute = async (params: unknown) => {
+      const result = await doubles.finalizeChapterExecute(params)
+      const batch = doubles.batch!
+      const item = batch.completedChapters.find(item => item.chapterNumber === this.chapterNumber)!
+      item.finalizationId = `定稿${this.chapterNumber}`
+      batch.nextChapterNumber = this.chapterNumber === batch.range.endChapter ? null : this.chapterNumber + 1
+      return result
+    }
   },
 }))
+vi.mock('../../finalization-client', () => ({ retryFinalizationPublication: doubles.retryPublication }))
 
 const projectPath = 'C:\\test-project'
 
@@ -92,6 +137,7 @@ function resetWorkflowState() {
 }
 
 beforeEach(() => {
+  doubles.batch = null
   vi.clearAllMocks()
   doubles.finalizeChapterParams.length = 0
   doubles.generateDraftChapterInfos.length = 0
@@ -121,6 +167,8 @@ beforeEach(() => {
     return 'generated draft'
   })
   doubles.finalizeChapterExecute.mockResolvedValue(undefined)
+  doubles.retryPublication.mockResolvedValue({ success: true })
+  doubles.repairPostProcess.mockResolvedValue(undefined)
 })
 
 describe('batch chapter workflow limits', () => {
@@ -338,8 +386,9 @@ describe('batch chapter workflow completion mode', () => {
     expect(useWorkflowStore.getState().history[0]).toMatchObject({ status: 'completed' })
     expect(doubles.generateDraftExecute).toHaveBeenCalledTimes(2)
     expect(doubles.generateDraftOptions).toEqual([
-      { selectedCandidateDrafts: [] },
+      { batchId: '合成批次', selectedCandidateDrafts: [] },
       {
+        batchId: '合成批次',
         selectedCandidateDrafts: [{
           chapterNumber: 1,
           draftId: 101,
@@ -349,6 +398,53 @@ describe('batch chapter workflow completion mode', () => {
       },
     ])
     expect(doubles.finalizeChapterExecute).not.toHaveBeenCalled()
+  })
+
+  it('第三章只显式选择同批第二章，不把更早候选扩大为前驱', async () => {
+    const workflow = createBatchChapterWorkflow({
+      projectPath,
+      projectSession: projectSession(),
+      startChapterNumber: 1,
+      chapterCount: 3,
+      generationModelId: 'grok-selected-model',
+      completionMode: 'draft_review',
+    })
+    await useWorkflowStore.getState().startWorkflow(workflow)
+    expect(useWorkflowStore.getState().history[0]).toMatchObject({ status: 'completed' })
+    expect(doubles.generateDraftOptions.map(options => options.selectedCandidateDrafts?.map(candidate => candidate.chapterNumber))).toEqual([[], [1], [2]])
+    expect(doubles.finalizeChapterExecute).not.toHaveBeenCalled()
+  })
+
+  it('重建工作流读取原批次进度，跳过已保存章并保持同一预算根', async () => {
+    const original = doubles.generateDraftExecute.getMockImplementation()!
+    doubles.generateDraftExecute.mockImplementationOnce(original).mockRejectedValueOnce(new Error('连接中断'))
+    const params: BatchChapterWorkflowParams = { projectPath, projectSession: projectSession(), startChapterNumber: 1,
+      chapterCount: 3, generationModelId: '原模型', completionMode: 'draft_review' }
+    await useWorkflowStore.getState().startWorkflow(createBatchChapterWorkflow(params))
+    expect(useWorkflowStore.getState().history[0].status).toBe('failed')
+    const root = structuredClone(doubles.batch!.rootHandle)
+    await useWorkflowStore.getState().startWorkflow(createBatchChapterWorkflow({ ...params, resumeBatchId: doubles.batch!.batchId }))
+    expect(useWorkflowStore.getState().history[0].status).toBe('completed')
+    expect(doubles.generateDraftChapterInfos.map(item => item.chapterNumber)).toEqual([1, 2, 2, 3])
+    expect(doubles.batch!.rootHandle).toEqual(root)
+    expect(doubles.batch!.completedChapters.map(item => item.chapterNumber)).toEqual([1, 2, 3])
+  })
+
+  it('定稿已提交但发布失败时只重试原outbox和后处理，不再生成或再次定稿', async () => {
+    const root = { projectId: 'test-project', epoch: '原会话', rootActionId: '原预算根', runId: '原批次' }
+    doubles.batch = { batchId: '原批次', modelId: '原模型', rootHandle: root, mode: 'auto_finalize', range: { startChapter: 1, endChapter: 1 },
+      targetUnits: 2000, authorInputs: [], nextChapterNumber: 1,
+      completedChapters: [{ chapterNumber: 1, draftId: 101, version: 1,
+        contentHash: createHash('sha256').update('generated draft').digest('hex'), sourceRunHandle: root,
+        pendingFinalizationId: '原定稿', postProcessComplete: false }] }
+    const workflow = createBatchChapterWorkflow({ projectPath, projectSession: projectSession(), startChapterNumber: 1,
+      chapterCount: 1, chapterWordsTarget: 2000, generationModelId: '原模型', completionMode: 'auto_finalize', resumeBatchId: '原批次' })
+    await useWorkflowStore.getState().startWorkflow(workflow)
+    expect(useWorkflowStore.getState().history[0].status).toBe('completed')
+    expect(doubles.generateDraftExecute).not.toHaveBeenCalled()
+    expect(doubles.finalizeChapterExecute).not.toHaveBeenCalled()
+    expect(doubles.retryPublication).toHaveBeenCalledExactlyOnceWith('原定稿', projectSession())
+    expect(doubles.repairPostProcess).toHaveBeenCalledOnce()
   })
 
   it('keeps auto-finalize failure-stop semantics and does not start a later chapter', async () => {

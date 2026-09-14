@@ -199,6 +199,8 @@ describe('createImportWorkflow', () => {
 
     expect(commandMocks.blueprintContext?.data.novelConfigSummary).toContain('Genre: Mystery')
     expect(commandMocks.blueprintContext?.data.novelConfigSummary).not.toContain('类型:')
+    expect(commandMocks.blueprintContext?.data.importGenerationSlot).toEqual({ runId: snapshot.id, stage: 'blueprints', batchId: '1-1-cccccccc' })
+    expect(commandMocks.blueprintContext?.data.importRunExecution).toMatchObject({ owner: executionOwner, epoch: 1 })
   })
 
   it('imports the frozen snapshot through the reference-only idempotent channel and checkpoints it', async () => {

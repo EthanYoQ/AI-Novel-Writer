@@ -6,6 +6,8 @@
  */
 import { getProjectDb } from '../database'
 import { randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
+import type { FinalizedSourceIdentity } from '../../src/shared/finalized-continuity'
 
 /** 跑批实例 */
 export interface PostProcessRunData {
@@ -42,6 +44,7 @@ export class PostProcessRepository {
         triggerSourceId: string
         sourceLabel: string
         steps: Array<{ key: string; label: string; critical: boolean }>
+        finalizedSource?: FinalizedSourceIdentity
     }): string {
         const db = getProjectDb()
         if (!db) throw new Error('[PostProcessRepository] 数据库未连接')
@@ -49,10 +52,26 @@ export class PostProcessRepository {
         const runId = randomUUID()
 
         const tx = db.transaction(() => {
+            let sourceId = params.triggerSourceId
+            if (!params.finalizedSource && sourceId.startsWith('finalization:'))
+                throw new Error('POST_PROCESS_FINALIZATION_SOURCE_REQUIRED')
+            if (params.finalizedSource) {
+                const source = params.finalizedSource
+                const row = db.prepare(`SELECT d.id,d.chapter_number,d.status,c.body,o.finalization_id,o.content_hash,o.content_snapshot
+                  FROM drafts d JOIN contents c ON c.id=d.content_id JOIN finalization_outbox o ON o.draft_id=d.id WHERE d.id=?`).get(source.draftId) as {
+                    id: number; chapter_number: number; status: string; body: string; finalization_id: string; content_hash: string; content_snapshot: string
+                } | undefined
+                const latest = db.prepare("SELECT id FROM drafts WHERE chapter_number=? AND status='finalized' ORDER BY version DESC,id DESC LIMIT 1").pluck().get(source.chapterNumber)
+                if (params.triggerSourceType !== 'chapter_finalize' || params.triggerSourceId !== String(source.chapterNumber)
+                  || !row || row.id !== latest || row.status !== 'finalized' || row.chapter_number !== source.chapterNumber
+                  || row.finalization_id !== source.finalizationId || row.content_hash !== source.contentHash || row.content_snapshot !== row.body
+                  || createHash('sha256').update(row.body).digest('hex') !== source.contentHash) throw new Error('POST_PROCESS_FINALIZATION_SOURCE_CHANGED')
+                sourceId = `finalization:${source.finalizationId}`
+            }
             db.prepare(`
         INSERT INTO post_process_runs (id, trigger_source_type, trigger_source_id, source_label)
         VALUES (?, ?, ?, ?)
-      `).run(runId, params.triggerSourceType, params.triggerSourceId, params.sourceLabel)
+      `).run(runId, params.triggerSourceType, sourceId, params.sourceLabel)
 
             const insertStep = db.prepare(`
         INSERT INTO post_process_steps (run_id, step_key, label, critical)
@@ -72,11 +91,16 @@ export class PostProcessRepository {
     static getLatestRun(sourceType: string, sourceId: string): PostProcessRunData | null {
         const db = getProjectDb()
         if (!db) return null
+        if (sourceType === 'chapter_finalize' && /^\d+$/.test(sourceId)
+          && db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='finalization_outbox'").get()) {
+            const current = db.prepare("SELECT o.finalization_id FROM drafts d JOIN finalization_outbox o ON o.draft_id=d.id WHERE d.chapter_number=? AND d.status='finalized' ORDER BY d.version DESC,d.id DESC LIMIT 1").pluck().get(Number(sourceId))
+            if (typeof current === 'string') sourceId = `finalization:${current}`
+        }
 
         const row = db.prepare(`
       SELECT * FROM post_process_runs
       WHERE trigger_source_type = ? AND trigger_source_id = ?
-      ORDER BY created_at DESC LIMIT 1
+      ORDER BY created_at DESC,rowid DESC LIMIT 1
     `).get(sourceType, sourceId) as Record<string, unknown> | undefined
 
         if (!row) return null

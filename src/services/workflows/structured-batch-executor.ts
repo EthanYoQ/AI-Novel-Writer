@@ -59,6 +59,8 @@ export interface StructuredBatchReceipt {
   splitCount: number
   requestedTokens: number
   attempts: readonly GenerationAttemptReceipt[]
+  /** Only fully validated responses; rejected, truncated and superseded attempts are excluded. */
+  acceptedArtifacts?: readonly { artifact: NonNullable<GenerationAttemptReceipt['visibleArtifact']>; itemKeys: readonly StructuredItemKey[] }[]
   compactSingleFallbackCount?: number
 }
 
@@ -92,6 +94,7 @@ export type StructuredBatchResult<TOutput> =
     }
   | {
       ok: false
+      validatedItems: readonly TOutput[]
       failure: StructuredBatchFailure
       receipt: StructuredBatchReceipt
     }
@@ -121,11 +124,13 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
   return {
     async execute(input) {
       const attemptReceipts: GenerationAttemptReceipt[] = []
+      const acceptedArtifacts: { artifact: NonNullable<GenerationAttemptReceipt['visibleArtifact']>; itemKeys: readonly StructuredItemKey[] }[] = []
       const receipt: StructuredBatchReceipt = {
         calls: 0,
         splitCount: 0,
         requestedTokens: 0,
         attempts: attemptReceipts,
+        acceptedArtifacts,
         compactSingleFallbackCount: 0,
       }
       const validated: TOutput[] = []
@@ -141,6 +146,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
       if (!Number.isInteger(input.limits.maxBatchItems) || input.limits.maxBatchItems < 1) {
         return {
           ok: false,
+          validatedItems: [],
           failure: {
             code: 'limit_exceeded',
             reason: 'invalid_limit',
@@ -153,6 +159,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
       if (!Number.isInteger(maxCompactSingleFallbacks) || maxCompactSingleFallbacks < 0) {
         return {
           ok: false,
+          validatedItems: [],
           failure: {
             code: 'limit_exceeded',
             reason: 'invalid_limit',
@@ -269,6 +276,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           return
         }
 
+        let candidateReceipt = outcome.receipt
         let candidateContent = outcome.content
         let syntaxRepairApplied = false
         if (isRepairableDirectJsonSyntaxFailure(candidateContent)) {
@@ -338,6 +346,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
               })
             }
             candidateContent = repaired.content
+            candidateReceipt = repaired.receipt
           }
           // 本次执行已使用过唯一一次语法修复：再次语法损坏时不再重复修复，
           // 让坏文本直接进入下方解码；解码失败路径会在预算内拆半或回退
@@ -469,6 +478,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           decoded.map(output => [contract.outputKey(output), output] as const),
         )
         validated.push(...expectedKeys.map(key => outputByKey.get(key)!))
+        if (candidateReceipt.visibleArtifact) acceptedArtifacts.push({ artifact: { ...candidateReceipt.visibleArtifact }, itemKeys: [...expectedKeys] })
       }
 
       try {
@@ -506,7 +516,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
         } else {
           failure = { code: 'generation_failed', reason: 'server_error', message: '结构化生成失败' }
         }
-        return { ok: false, failure, receipt }
+        return { ok: false, failure, receipt, validatedItems: [...validated] }
       }
     },
   }

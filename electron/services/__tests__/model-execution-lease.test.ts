@@ -33,6 +33,19 @@ function modelProfile(): ModelProfile {
 }
 
 describe('ModelExecutionLeaseRegistry', () => {
+  it('keeps credentials out of stable receipt identity while including the reasoning policy', () => {
+    const options = { leaseId: 'fixture', createdAt: 0, expiresAt: 1 }
+    const base = createModelExecutionLeaseReceipt(modelProfile(), options)
+    const credentialChange = createModelExecutionLeaseReceipt({ ...modelProfile(), apiKey: 'replacement-synthetic',
+      baseUrl: 'https://user:synthetic-password@api.deepseek.com/?key=synthetic-query#synthetic-fragment' }, options)
+    expect(credentialChange.modelRevision).toBe(base.modelRevision)
+    expect(credentialChange.endpointFingerprint).toBe(base.endpointFingerprint)
+    expect(credentialChange.capabilityEvidence.subjectFingerprint).toBe(base.capabilityEvidence.subjectFingerprint)
+    const reasoningChange = createModelExecutionLeaseReceipt({ ...modelProfile(), reasoningOverride: 'off' }, options)
+    expect(reasoningChange.modelRevision).not.toBe(base.modelRevision)
+    expect(() => createModelExecutionLeaseReceipt({ ...modelProfile(), baseUrl: 'synthetic-invalid-secret' }, options))
+      .toThrow('模型端点地址无效')
+  })
   it('reports a missing model with a stable machine-readable error code', () => {
     const registry = new ModelExecutionLeaseRegistry({ loadModel: () => null })
 

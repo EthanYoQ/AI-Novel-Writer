@@ -73,11 +73,13 @@ export const startWorkflowTool = buildAgentTool({
 
     try {
       assertAgentToolActive(context)
+      if (!context?.agentToolAction) throw new Error(text('缺少主进程签发的工具动作，工作流未启动。', 'The main-issued tool action is missing; the workflow was not started.'))
       const receipt = await launchCreativeWorkflow({
         workflow,
         ...(chapterNumber === undefined ? {} : { chapterNumber }),
       } as CreativeIntent, projectSession, {
         generationModelId,
+        ...(context?.agentToolAction ? { agentToolAction: context.agentToolAction } : {}),
         assertActive: () => assertAgentToolActive(context),
         onRegistered: context?.markSideEffectStarted,
       })

@@ -44,10 +44,12 @@ function normalizeEndpoint(baseUrl: string): string {
     const endpoint = new URL(trimmed)
     endpoint.hash = ''
     endpoint.search = ''
+    endpoint.username = ''
+    endpoint.password = ''
     endpoint.pathname = endpoint.pathname.replace(/\/+$/u, '') || '/'
     return endpoint.toString().replace(/\/$/u, '')
   } catch {
-    return trimmed.replace(/\/+$/u, '')
+    throw new Error('模型端点地址无效')
   }
 }
 
@@ -121,6 +123,7 @@ function modelRevision(model: ModelProfile): string {
     temperature: model.temperature,
     maxTokens: model.maxTokens,
     capabilities: model.capabilities ?? null,
+    reasoningOverride: model.reasoningOverride ?? 'auto',
     purposes: model.purposes,
     embeddingOptions: model.embeddingOptions ?? null,
   })

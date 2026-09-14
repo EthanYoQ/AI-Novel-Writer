@@ -20,16 +20,20 @@ export interface ImportGlobalFactsCore {
 }
 
 export interface ImportGlobalFactsRequest {
+  generationRunHandle?: import('../services/generation/generation-runtime').MainGenerationRunHandle
   operationId: string
   expectedRosterRevision: number
   core: ImportGlobalFactsCore
   characterEntries: CharacterRosterEntry[]
 }
 
-export interface ImportGlobalFactsReceipt {
+interface ImportGlobalFactsReceiptBase {
   operationId: string
   payloadHash: string
   idempotent: boolean
   core: ImportGlobalFactsCore
-  roster: CharacterRosterCommitReceipt
 }
+export type ImportGlobalFactsReceipt = ImportGlobalFactsReceiptBase & (
+  | { roster: CharacterRosterCommitReceipt; characterProposal?: never; proposalSource?: never }
+  | { roster?: never; characterProposal: import('./character-proposal').CharacterProposalStageEvidence; proposalSource: ImportGlobalFactsRequest }
+)

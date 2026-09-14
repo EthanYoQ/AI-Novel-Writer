@@ -1,3 +1,4 @@
+import { formatResourceUri } from '../shared/project-paths'
 /**
  * 草稿元数据管理（原 index.json 封装层）
  *
@@ -69,7 +70,7 @@ function mapDraftMeta(dbMeta: DB_DraftMeta): DraftMeta {
     source: dbMeta.source as 'write' | 'rewrite',
     // 虚拟字段，UI通过 parse 得到版本号或者展示
     fileName: `draft_v${dbMeta.version}.md`,
-    filePath: `vela://draft/${dbMeta.id}`, // 特殊的伪协议路径，用于 editor-store
+    filePath: formatResourceUri({ kind: 'draft', id: dbMeta.id }), // 特殊的伪协议路径，用于 editor-store
   }
 }
 

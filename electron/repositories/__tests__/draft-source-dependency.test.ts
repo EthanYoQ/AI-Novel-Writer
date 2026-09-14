@@ -1,10 +1,30 @@
+import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
+const normalization = vi.hoisted(() => ({ db: null as import('better-sqlite3').Database | null, root: null as string | null }))
+vi.mock('../../database', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../database')>()
+  return { ...actual, getProjectDb: () => normalization.db ?? actual.getProjectDb(), getCurrentProjectPath: () => normalization.root ?? actual.getCurrentProjectPath() }
+})
+function normalizeHistoricalFixture(projectPath: string): void {
+  closeProjectDatabase()
+  const file = path.join(projectPath, '.ai-novel', 'project.db')
+  const before = fs.readFileSync(file)
+  expect(() => initProjectDatabase(projectPath)).toThrow()
+  expect(fs.readFileSync(file)).toEqual(before)
+  const FixtureDatabase = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
+  normalization.db?.close()
+  normalization.db = new FixtureDatabase(file)
+  normalization.root = projectPath
+  initializeLegacyBaselineSchema(normalization.db)
+}
+import { createRequire } from 'node:module'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
+import { closeProjectDatabase, getProjectDb } from '../../database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import { DraftRepository } from '../draft-repository'
 import { FinalizationRepository } from '../finalization-repository'
 
@@ -48,6 +68,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  normalization.db?.close(); normalization.db = null; normalization.root = null
   closeProjectDatabase()
   fs.rmSync(projectRoot, { recursive: true, force: true })
 })
@@ -178,13 +199,13 @@ describe('draft source dependencies', () => {
     })).toThrow(/来源依赖已变化/u)
   })
 
-  it('migrates legacy drafts as source-unknown without claiming stale evidence', () => {
+  it('historical fixture normalization (not production admission) treats legacy drafts as source-unknown without claiming stale evidence', () => {
     const sourceId = DraftRepository.create({
       chapterNumber: 1, source: 'write', content: '旧草稿。', wordCount: 4,
     })
     getProjectDb()!.exec('ALTER TABLE drafts DROP COLUMN source_dependencies')
     closeProjectDatabase()
-    initProjectDatabase(projectRoot)
+    normalizeHistoricalFixture(projectRoot)
 
     expect(DraftRepository.getMeta(sourceId)).toMatchObject({
       sourceDependencies: [],

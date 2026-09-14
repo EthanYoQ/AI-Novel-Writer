@@ -22,6 +22,7 @@ vi.mock('../../i18n', () => ({
   mainText: (_locale: string, zh: string) => zh,
 }))
 
+let fixtureRoot = ''
 let velaHome: string
 
 function handler(channel: string): IpcHandler {
@@ -35,14 +36,16 @@ describe('global prompt app-data persistence', () => {
     vi.resetModules()
     mocks.handlers.clear()
     velaHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-issue-88-'))
-    process.env.AI_NOVEL_VELA_HOME = velaHome
+    fixtureRoot = velaHome
+    velaHome = await (await import('../../services/__tests__/global-data-fixture')).prepareGlobalDataFixture(fixtureRoot)
     const { registerAppDataController } = await import('../app-data-controller')
     registerAppDataController()
   })
 
   afterEach(() => {
     delete process.env.AI_NOVEL_VELA_HOME
-    fs.rmSync(velaHome, { recursive: true, force: true })
+    delete process.env.AI_NOVEL_APP_DATA_HOME
+    fs.rmSync(fixtureRoot, { recursive: true, force: true })
   })
 
   it('round-trips a globally saved template through the public IPC boundary', async () => {

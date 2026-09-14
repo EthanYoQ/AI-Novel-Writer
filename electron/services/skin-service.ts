@@ -12,6 +12,7 @@ import type {
   SkinState,
 } from '../../src/shared/skin-types'
 import { VELA_HOME } from '../utils/config-utils'
+import { assertGlobalDataReady } from './app-data-locator'
 
 /** Same on-disk boundary enforced by the native picker and persisted-asset reads. */
 export const MAX_SKIN_INPUT_BYTES = 20 * 1024 * 1024
@@ -56,6 +57,7 @@ class SkinServiceFailure extends Error {
 
 interface SkinManifest {
   version: 1
+  stateRevision?: number
   activeSkin: SkinId
   customSkin?: {
     assetFile: string
@@ -185,14 +187,16 @@ function customSkinFromManifest(value: unknown): SkinManifest['customSkin'] | un
 
 function parseManifest(value: unknown): SkinManifest | undefined {
   if (!isRecord(value) || value.version !== 1 || !isSkinId(value.activeSkin)) return undefined
+  if (value.stateRevision !== undefined && (!Number.isSafeInteger(value.stateRevision) || Number(value.stateRevision) < 0)) return undefined
+  const stateRevision = value.stateRevision as number | undefined
   if (value.customSkin === undefined) {
     return value.activeSkin === 'custom'
       ? undefined
-      : { version: 1, activeSkin: value.activeSkin }
+      : { version: 1, activeSkin: value.activeSkin, stateRevision }
   }
   const customSkin = customSkinFromManifest(value.customSkin)
   if (!customSkin) return undefined
-  return { version: 1, activeSkin: value.activeSkin, customSkin }
+  return { version: 1, activeSkin: value.activeSkin, customSkin, stateRevision }
 }
 
 /**
@@ -200,25 +204,39 @@ function parseManifest(value: unknown): SkinManifest | undefined {
  * confined to this service and never enter the shared IPC contract.
  */
 export class SkinService {
-  private readonly rootDirectory: string
+  private readonly explicitRoot: string | undefined
+  private startupHealthy = false
+  private skinRevision = 0
+  private get rootDirectory(): string {
+    if (this.explicitRoot) return this.explicitRoot
+    assertGlobalDataReady()
+    return path.join(VELA_HOME, 'skins')
+  }
   private readonly imageCodec: SkinImageCodec
   private state: SkinState = CLASSIC_STATE
 
   constructor(options: SkinServiceOptions = {}) {
-    this.rootDirectory = options.rootDirectory ?? path.join(VELA_HOME, 'skins')
+    this.explicitRoot = options.rootDirectory
     this.imageCodec = options.imageCodec ?? {
       createFromBuffer: bytes => nativeImage.createFromBuffer(bytes) as unknown as SkinImageLike,
     }
   }
 
   initialize(): SkinState {
+    this.startupHealthy = true
     try {
       fs.mkdirSync(path.join(this.rootDirectory, 'assets'), { recursive: true })
       this.state = this.loadPersistedState()
     } catch {
+      this.startupHealthy = false
       this.state = CLASSIC_STATE
     }
     return this.getState()
+  }
+
+  getStartupSnapshot(globalGeneration: string): { globalGeneration: string; skinRevision: number; backgroundSkin: SkinId } {
+    if (!this.startupHealthy || !globalGeneration) throw new Error('GLOBAL_SKIN_NOT_READY')
+    return { globalGeneration, skinRevision: this.skinRevision, backgroundSkin: this.state.activeSkin }
   }
 
   getState(): SkinState {
@@ -403,6 +421,7 @@ export class SkinService {
   private writeManifest(state: SkinState): void {
     const manifest: SkinManifest = {
       version: 1,
+      stateRevision: this.skinRevision + 1,
       activeSkin: state.activeSkin,
       ...(state.customSkin ? {
         customSkin: {
@@ -415,6 +434,7 @@ export class SkinService {
       path.join(this.rootDirectory, 'manifest.json'),
       JSON.stringify(manifest, null, 2),
     )
+    this.skinRevision++
   }
 
   private cleanupAsset(assetFile: string): void {
@@ -452,9 +472,11 @@ export class SkinService {
     try {
       parsed = parseManifest(JSON.parse(fs.readFileSync(manifestPath, 'utf8')))
     } catch {
+      this.startupHealthy = false
       return CLASSIC_STATE
     }
-    if (!parsed) return CLASSIC_STATE
+    if (!parsed) { this.startupHealthy = false; return CLASSIC_STATE }
+    this.skinRevision = parsed.stateRevision ?? 0
 
     let customSkin: CustomSkin | null = null
     if (parsed.customSkin) {
@@ -483,6 +505,7 @@ export class SkinService {
       }
     }
 
+    if (parsed.customSkin && !customSkin) this.startupHealthy = false
     if (parsed.activeSkin === 'custom' && !customSkin) return CLASSIC_STATE
     return {
       activeSkin: parsed.activeSkin,

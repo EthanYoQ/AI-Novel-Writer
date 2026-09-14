@@ -1,0 +1,57 @@
+{
+  "files": [
+    {
+      "path": "electron/migrations/m00-baseline.ts",
+      "sha256": "96b934f88012faf08b409fea397f6d6a3bd56d750fa7836bc71960a8dfe01abb"
+    },
+    {
+      "path": "electron/services/project-format-migration.ts",
+      "sha256": "cdad080b79a84519fa2ae30170e9eb329cb406e6a7ca68176d1bc09940c04cc3"
+    },
+    {
+      "path": "electron/services/project-access.ts",
+      "sha256": "eef8f5cf66ad4e3a78dc0e6c147e65b3b8fdf5ca66936642eb1cf3cd8adcc355"
+    },
+    {
+      "path": "electron/services/project-storage-preflight.ts",
+      "sha256": "95c73879016a7a6bce93879d7e69a3f7d6990cec6224fd709013f968595ce3ee"
+    },
+    {
+      "path": "electron/controllers/project-controller.ts",
+      "sha256": "568687d3d55510d1adc390f7cfaa90b54d53ee8384e508dc27d304ba6d16a913"
+    },
+    {
+      "path": "electron/services/__tests__/project-format-migration.test.ts",
+      "sha256": "dd189e326de3c493fdcd936727ff4bf7f9add7711938e95ffacfc843b9791e9b"
+    },
+    {
+      "path": "electron/services/__tests__/project-access.test.ts",
+      "sha256": "541257228edbd0fa50c9646c2407ce9face8c62b6a7a60880359f15b8dcd6167"
+    },
+    {
+      "path": "electron/services/__tests__/project-storage-preflight.test.ts",
+      "sha256": "82d92c701668f3c017420ded4b918dfc56811e8b27da7bf7ebe84d6c4178dabe"
+    },
+    {
+      "path": "scripts/project-migration-acceptance.mjs",
+      "sha256": "e79c4c4df5b572a14f2c9b4a16559c2009fca958d3302e5ecb5d5131fefdbe88"
+    },
+    {
+      "path": "docs/research/novel-quality-modernization/s04-domain-evidence.md",
+      "sha256": "309a0df802740cde0696f0cbbd62a3cc5da97883307d67d17190d6ae3d5e6036"
+    },
+    {
+      "sha256": "1ed0b117874b2052e9398e781779553e6d1f689d014d271a74c84d633842859b",
+      "path": "electron/controllers/__tests__/project-controller-context.test.ts"
+    }
+  ],
+  "specId": "S04",
+  "acceptanceScriptTests": 47,
+  "dependencySha": "003dc9b36a081febcb3def739e0474ae8c8d46d9",
+  "targetedTests": 81,
+  "scope": "synthetic-domain-only",
+  "schemaVersion": 1,
+  "authorProjectsEnabled": false,
+  "typecheck": "PASS integrated tsc/build; final central review includes subsequent wiring corrections",
+  "modelCalls": 0
+}
