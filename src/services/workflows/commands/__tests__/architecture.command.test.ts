@@ -836,7 +836,8 @@ describe('GenerateCharactersCommand structured roster seam', () => {
   })
 
   it('keeps a complete 12 KB author context instead of requiring the author to delete project guidance', async () => {
-    const generateStream = createResponseStream([JSON.stringify({ slots: [] })])
+    const invalidManifest = JSON.stringify({ slots: [] })
+    const generateStream = createResponseStream([invalidManifest, invalidManifest, invalidManifest])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
@@ -865,12 +866,13 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     }
 
     expect(failure).not.toMatchObject({ code: 'PROMPT_BUDGET_EXHAUSTED' })
-    expect(generateStream).toHaveBeenCalledOnce()
+    expect(generateStream).toHaveBeenCalledTimes(3)
   })
 
   it('lets a 25,457-byte author context reach a frozen large-window provider unchanged', async () => {
     const authorGuidance = 'G'.repeat(25_457)
-    const generateStream = createResponseStream([JSON.stringify({ slots: [] })])
+    const invalidManifest = JSON.stringify({ slots: [] })
+    const generateStream = createResponseStream([invalidManifest, invalidManifest, invalidManifest])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
@@ -913,7 +915,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     }
 
     expect(failure).not.toMatchObject({ code: 'PROMPT_BUDGET_EXHAUSTED' })
-    expect(generateStream).toHaveBeenCalledOnce()
+    expect(generateStream).toHaveBeenCalledTimes(3)
     const outboundMessages = generateStream.mock.calls[0]?.[0] ?? []
     expect(outboundMessages.map(message => message.content).join('\n')).toContain(authorGuidance)
     expect(outboundMessages.reduce(
@@ -1106,7 +1108,11 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       ...slot,
       role: slot.role === 'protagonist' ? 'supporting' : slot.role,
     }))
-    const generateStream = createResponseStream([JSON.stringify(manifest)])
+    const generateStream = createResponseStream([
+      JSON.stringify(manifest),
+      JSON.stringify(manifest),
+      JSON.stringify(manifest),
+    ])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
@@ -1127,14 +1133,13 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     await expect(command.execute({ step: {}, context, callbacks }))
       .rejects.toThrow('角色身份清单必须至少包含一个主角')
 
-    expect(generateStream).toHaveBeenCalledOnce()
+    expect(generateStream).toHaveBeenCalledTimes(3)
     expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
   it('fails closed when the manifest stage returns the legacy entries envelope', async () => {
-    const generateStream = createResponseStream([
-      JSON.stringify({ schemaVersion: 1, entries: rosterEntries }),
-    ])
+    const legacyEnvelope = JSON.stringify({ schemaVersion: 1, entries: rosterEntries })
+    const generateStream = createResponseStream([legacyEnvelope, legacyEnvelope, legacyEnvelope])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
@@ -1153,7 +1158,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     })
 
     await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow('角色身份清单缺少 slots')
-    expect(generateStream).toHaveBeenCalledOnce()
+    expect(generateStream).toHaveBeenCalledTimes(3)
     expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
@@ -1443,9 +1448,11 @@ describe('GenerateCharactersCommand structured roster seam', () => {
   })
 
   it('rejects a manifest response with a truncated JSON fragment after a complete object before any roster commit', async () => {
+    const truncatedManifest = `${JSON.stringify(manifestFor(rosterEntries))}\n\n{"slots":[`
     const generateStream = createResponseStream([
-      `${JSON.stringify(manifestFor(rosterEntries))}\n\n{"slots":[`,
-      ...detailResponses(rosterEntries),
+      truncatedManifest,
+      truncatedManifest,
+      truncatedManifest,
     ])
     useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
 
