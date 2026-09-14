@@ -310,7 +310,12 @@ export function resolveModelProfileCapabilities(
     || preset.protocol !== protocol
     || normalizedOfficialBaseUrl(profile.baseUrl) !== normalizedOfficialBaseUrl(preset.baseUrl)
   ) {
-    return undefined
+    // No matching built-in preset — e.g. a custom OpenAI-compatible endpoint such as a
+    // self-hosted llama.cpp or a third-party proxy. Fall back to the user-declared
+    // capabilities so these endpoints can opt into structured output / usage reporting
+    // that the preset table cannot know about. When the user has declared nothing, this
+    // still returns undefined, preserving the previous behaviour for unknown endpoints.
+    return validatedCapabilities(profile.capabilities)
   }
 
   const model = preset.models.find(candidate => candidate.name === modelName)
