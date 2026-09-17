@@ -1,3 +1,5 @@
+import { CharacterProposalSelectionPanel } from '../characters/CharacterProposalSelectionPanel'
+import { ipc } from '../../services/ipc-client'
 import { useState, useRef, useEffect, useMemo } from 'react'
 import {
   Trash2, ChevronsDown, Loader2, CheckCircle2, XCircle, Clock,
@@ -233,6 +235,19 @@ function ActiveRunPanel({
 }) {
   const text = (zhCNText: string, enUSText: string) => run.uiLocale === 'en-US' ? enUSText : zhCNText
   const [expanded, setExpanded] = useState(true)
+  const currentProject = useProjectStore(state => state.currentProject)
+  const proposalSessionCurrent = sameProjectSessionContext(run.projectSession, projectSessionContextFromProject(currentProject))
+  const [identityView, setIdentityView] = useState<{ runId: string; values: Array<{characterId: string; name: string; role?: string}> }>()
+  useEffect(() => {
+    if (!waitingForConfirm || !run.characterProposalBatch || !run.projectSession || !proposalSessionCurrent) return
+    let disposed = false
+    const session = run.projectSession
+    void ipc.invokeWithProjectSession(session, 'character-identity:read').then(snapshot => {
+      if (!disposed && sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) setIdentityView({ runId: run.id, values: snapshot.characters.filter(c => !c.retired).map(c => ({ characterId: c.characterId, name: c.fields.name, role: c.fields.role })) })
+    }).catch(() => { if (!disposed) setIdentityView(undefined) })
+    return () => { disposed = true }
+  }, [waitingForConfirm, run.id, run.characterProposalBatch, run.projectSession, proposalSessionCurrent])
+
 
   // 需要确认时自动展开
   useEffect(() => {
@@ -377,6 +392,10 @@ function ActiveRunPanel({
                   {confirmationPreview}
                 </pre>
               )}
+              {run.characterProposalBatch && run.characterProposalChoices && proposalSessionCurrent && <CharacterProposalSelectionPanel
+                batch={run.characterProposalBatch} choices={run.characterProposalChoices} disabled={identityView?.runId !== run.id}
+                identities={identityView?.runId === run.id ? identityView.values : []}
+                onChange={choices => { useWorkflowStore.getState().setCharacterProposalChoices(run.id, choices) }} />}
               <div className="flex w-full items-center gap-2">
                 <Clock size={11} style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
                 <span className="text-xs flex-1 truncate" style={{ color: 'var(--color-text-secondary)' }}>
@@ -392,6 +411,7 @@ function ActiveRunPanel({
                 </button>
                 <button
                   data-testid="workflow-confirmation-confirm"
+                  disabled={!!run.characterProposalBatch && (!proposalSessionCurrent || identityView?.runId !== run.id)}
                   onClick={onConfirm}
                   className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium flex-shrink-0"
                   style={{ backgroundColor: 'var(--color-accent)', color: '#fff' }}
@@ -418,6 +438,7 @@ function ActiveRunPanel({
             {text('下一步：', 'Next: ')}{nextStepName}
           </span>
           <button
+            disabled={!!run.characterProposalBatch && (!proposalSessionCurrent || identityView?.runId !== run.id)}
             onClick={(e) => { e.stopPropagation(); onConfirm() }}
             className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium flex-shrink-0"
             style={{ backgroundColor: 'var(--color-accent)', color: '#fff' }}

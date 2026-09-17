@@ -1,3 +1,4 @@
+import CharactersView from '../../panels/sidebar/CharactersView'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { page } from 'vitest/browser'
 import { act } from 'react'
@@ -47,6 +48,7 @@ function project(): ProjectData {
 
 function character(name: string, relationships = ''): CharacterCard {
   return {
+    characterId: `id:${name}`,
     name,
     role: 'supporting',
     gender: '',
@@ -72,13 +74,13 @@ beforeEach(() => {
     characters: [
       character('沈砺', JSON.stringify([
         {
-          target: '陆云飞',
+          target: '陆云飞', targetCharacterId: 'id:陆云飞',
           relation: '关系类型：竞争对手；矛盾张力：权力斗争；情感连接：无',
         },
       ])),
       character('陆云飞'),
     ],
-    selectedName: '沈砺',
+    selectedId: 'id:沈砺', selectedName: '沈砺',
     dataProjectKey: PROJECT_PATH,
     loadingProjectKey: null,
     lastError: null,
@@ -125,7 +127,7 @@ describe('CharacterEditor relationship field', () => {
     const unknownJson = '[{"participant":"陆云飞","status":"待确认"}]'
     useCharacterStore.setState({
       characters: [character('沈砺', unknownJson), character('陆云飞')],
-      selectedName: '沈砺',
+      selectedId: 'id:沈砺', selectedName: '沈砺',
     })
 
     await act(async () => {
@@ -147,7 +149,7 @@ describe('CharacterEditor relationship field', () => {
     useLocaleStore.setState({ locale: 'en-US' })
     useCharacterStore.setState({
       characters: [character('沈砺', unknownJson), character('陆云飞')],
-      selectedName: '沈砺',
+      selectedId: 'id:沈砺', selectedName: '沈砺',
     })
 
     await act(async () => {
@@ -215,4 +217,20 @@ describe('CharacterEditor relationship field', () => {
       }),
     )
   })
+})
+
+it('实际列表同名两人选择与编辑按ID，改名不切换另一张卡', async () => {
+ useCharacterStore.setState({ characters: [{ ...character('同名'), characterId: '甲ID', notes: '甲作者' }, { ...character('同名'), characterId: '乙ID', notes: '乙作者' }], selectedId: '甲ID', selectedName: '同名' })
+ await act(async () => root!.render(<><CharactersView /><CharacterEditor projectKey={PROJECT_PATH} /></>))
+ await act(async () => (container!.querySelector('[data-character-id="乙ID"]') as HTMLElement).click())
+ expect(useCharacterStore.getState().selectedId).toBe('乙ID')
+ await page.getByPlaceholder('输入备注...').fill('仅乙修改')
+ expect(useCharacterStore.getState().characters.map(c => c.notes)).toEqual(['甲作者', '仅乙修改'])
+ const nameInput = [...container!.querySelectorAll('input')].find(input => input.value === '同名')!
+ await act(async () => {
+   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(nameInput, '新乙名')
+   nameInput.dispatchEvent(new Event('input', { bubbles: true }))
+ })
+ expect(useCharacterStore.getState().selectedId).toBe('乙ID')
+ expect(useCharacterStore.getState().characters.map(c => c.name)).toEqual(['同名', '新乙名'])
 })

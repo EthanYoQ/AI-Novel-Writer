@@ -193,6 +193,20 @@ describe('CharacterRosterRepository public read/commit seam', () => {
     expect(upgraded.entries[0]?.currentState).not.toHaveProperty('provenance')
   })
 
+  it('keeps the persisted name-only factHash for a project without the identity schema', () => {
+    // 没有 character_identity_meta 的旧项目没有稳定角色 ID，公开 factHash
+    // 必须继续等于持久化的姓名版本，不能在只读路径上被重写成 ID 版本。
+    const committed = CharacterRosterRepository.commit(commitRequest())
+    const persisted = db
+      .prepare("SELECT fact_hash FROM character_roster_meta WHERE id = 'main'")
+      .get() as { fact_hash: string }
+    expect(committed.snapshot.factHash).toBe(persisted.fact_hash)
+
+    const reread = CharacterRosterRepository.read()
+    expect(reread.factHash).toBe(persisted.fact_hash)
+    expect(reread.status).toBe('ready')
+  })
+
   it('normalizes a finite numeric model age without widening other roster fields', () => {
     const base = commitRequest()
     const numericAge = {

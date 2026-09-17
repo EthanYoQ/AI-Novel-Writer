@@ -109,7 +109,7 @@ function assertCurrentReceipt(stored: ImportGlobalFactsReceipt): void {
     const evidence = findCharacterProposalEvidence(db, { kind: 'import', operationId: stored.operationId },
       (projectId, source) => proveCharacterProposal(db, new GenerationRunRepository(() => db), projectId, source, false, () => {}))
     if (JSON.stringify(evidence) !== JSON.stringify(stored.characterProposal)) throw new Error('导入角色提议回执已失效')
-  } else if (CharacterRosterRepository.read().factHash !== stored.roster.snapshot.factHash) throw new Error('导入角色事实已被后续修改')
+  } else if (CharacterRosterRepository.read().nameOnlyFactHash !== stored.roster.snapshot.factHash) throw new Error('导入角色事实已被后续修改')
 }
 
 function ensureLedger(): void {

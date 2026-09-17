@@ -58,6 +58,7 @@ const pendingLegacyRoster: CharacterRosterSnapshot = {
   renderedMarkdown: '',
   projectionHash: '',
   factHash: '',
+  nameOnlyFactHash: '',
   legacyMarkdown: '矿场事故后，沈砺与顾湘从互相怀疑走向共同调查。这里故意没有 Markdown 标题或角色列表。',
 }
 
@@ -70,6 +71,7 @@ const readyRoster: CharacterRosterSnapshot = {
   renderedMarkdown: '# 角色图谱\n\n## 主角：沈砺\n\n## 配角：顾湘',
   projectionHash: 'projection-hash',
   factHash: 'fact-hash',
+  nameOnlyFactHash: 'fact-hash',
   legacyMarkdown: pendingLegacyRoster.legacyMarkdown,
 }
 

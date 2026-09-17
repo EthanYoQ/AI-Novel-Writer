@@ -1,3 +1,5 @@
+import type { CharacterProposalBatch } from '../shared/character-proposal'
+import { createCharacterProposalChoices, type CharacterProposalChoices } from '../services/character-proposal-choices'
 import { create } from 'zustand'
 import { randomUUID } from '../utils/id'
 import { globalEventBus } from '../shared/event-bus'
@@ -71,6 +73,8 @@ export interface WorkflowStep {
 
 /** 工作流运行实例 */
 export interface WorkflowRun {
+  characterProposalBatch?: CharacterProposalBatch
+  characterProposalChoices?: CharacterProposalChoices
   id: string
   /** 工作流启动时冻结的项目身份。 */
   projectPath: string
@@ -322,6 +326,7 @@ interface WorkflowState {
   /** 启动一个工作流（可并发），返回 runId */
   startWorkflow: (definition: WorkflowDefinition, stepByStep?: boolean) => Promise<string>
   /** 步进模式下确认继续执行下一步（需指定 runId） */
+  setCharacterProposalChoices: (runId: string, choices: CharacterProposalChoices) => boolean
   confirmContinue: (runId?: string) => void
   /** 取消工作流（传 runId 取消指定，不传取消全部） */
   cancelWorkflow: (runId?: string) => void
@@ -416,10 +421,28 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     }
   },
 
+  setCharacterProposalChoices: (runId, choices) => {
+    const run = get().activeRuns.find(candidate => candidate.id === runId)
+    const context = activeContexts.get(runId)
+    const batch = context?.data.characterProposalBatch as CharacterProposalBatch | undefined
+    if (!run || run.status !== 'waiting' || !context || context.cancelled || !batch
+      || !sameProjectSessionContext(run.projectSession, projectSessionContextFromProject(useProjectStore.getState().currentProject))
+      || choices.proposalBatchId !== batch.proposalBatchId || choices.revision !== batch.revision) return false
+    const keys = new Set(batch.items.map(item => item.selectionKey))
+    if (choices.selections.length !== keys.size || new Set(choices.selections.map(choice => choice.selectionKey)).size !== keys.size
+      || choices.selections.some(choice => !keys.has(choice.selectionKey))) return false
+    const frozen = structuredClone(choices)
+    context.data.characterProposalChoices = frozen
+    updateRunById(set, runId, { characterProposalChoices: structuredClone(frozen) })
+    return true
+  },
+
   confirmContinue: (runId) => {
     // 如果未指定 runId，使用第一个等待中的
     const targetId = runId ?? Object.keys(get().waitingRuns).find(id => get().waitingRuns[id]?.waitingForConfirm)
     if (!targetId) return
+    const run = get().activeRuns.find(candidate => candidate.id === targetId)
+    if (run?.characterProposalBatch && !sameProjectSessionContext(run.projectSession, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
     const resolve = continueResolveRefs.get(targetId)
     if (resolve) {
       resolve()
@@ -684,7 +707,10 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       if (!context.cancelled && ((stepByStep && i > 0) || definition.steps[i].requiresConfirmation)) {
         // Register before publishing waiting state so an immediate UI confirmation cannot be lost.
         const confirmed = new Promise<void>(resolve => { continueResolveRefs.set(run.id, resolve) })
-        updateRunById(set, run.id, { status: 'waiting' })
+        const batch = context.data.characterProposalBatch as CharacterProposalBatch | undefined
+        const choices = batch ? createCharacterProposalChoices(batch) : undefined
+        if (choices) context.data.characterProposalChoices = structuredClone(choices)
+        updateRunById(set, run.id, { status: 'waiting', ...(batch && choices ? { characterProposalBatch: structuredClone(batch), characterProposalChoices: structuredClone(choices) } : {}) })
         set(s => {
           const newWaiting = { ...s.waitingRuns, [run.id]: { waitingForConfirm: true, waitingAfterStepIndex: i - 1 } }
           return { waitingRuns: newWaiting, ...computeCompat(s.activeRuns, newWaiting) }

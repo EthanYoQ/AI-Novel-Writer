@@ -20,9 +20,9 @@ export default function CharactersView() {
   const characters = useCharacterStore(s => s.characters)
   const dataProjectKey = useCharacterStore(s => s.dataProjectKey)
   const loadingProjectKey = useCharacterStore(s => s.loadingProjectKey)
-  const selectedName = useCharacterStore(s => s.selectedName)
+  const selectedId = useCharacterStore(s => s.selectedId)
   const load = useCharacterStore(s => s.load)
-  const setSelectedName = useCharacterStore(s => s.setSelectedName)
+  const setSelectedId = useCharacterStore(s => s.setSelectedId)
   const addCharacter = useCharacterStore(s => s.addCharacter)
   const identityBusy = useCharacterStore(s => s.identityBusy)
   const lastError = useCharacterStore(s => s.lastError)
@@ -88,17 +88,20 @@ export default function CharactersView() {
       <div className="flex-1 overflow-y-auto p-1">
         {filteredCharacters.map((c) => (
           <div
-            key={c.name}
+            key={c.characterId}
+            data-character-id={c.characterId}
+            role="button" tabIndex={0} aria-pressed={selectedId === c.characterId}
+            onKeyDown={event => { if (event.key === 'Enter') setSelectedId(c.characterId ?? null) }}
             className={cn(
               'px-2.5 py-1.5 rounded-md text-xs cursor-pointer mb-0.5',
-              selectedName === c.name
+              selectedId === c.characterId
                 ? 'bg-[var(--color-active)] text-[var(--color-text)]'
                 : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-hover)]'
             )}
-            onClick={() => setSelectedName(c.name)}
+            onClick={() => setSelectedId(c.characterId ?? null)}
           >
             <div className="font-medium">{c.name || text('未命名', 'Untitled')}</div>
-            <div className="text-[0.7rem] mt-0.5 opacity-60">{roleLabel(c.role)}</div>
+            <div className="text-[0.7rem] mt-0.5 opacity-60">{roleLabel(c.role)}{visibleCharacters.filter(item => item.name === c.name).length > 1 ? ` · ${c.background || c.characterId?.slice(-8)}` : ''}</div>
             {c.currentState && (
               <div className="text-[0.65rem] mt-0.5 opacity-50">
                 {text(`第${c.currentState.updatedAtChapter}章更新`, `Updated in chapter ${c.currentState.updatedAtChapter}`)}

@@ -187,6 +187,7 @@ const readyRoster: CharacterRosterSnapshot = {
   renderedMarkdown: '# 角色图谱\n\n## 主角：林舟\n\n## 配角：苏绾\n\n## 反派：顾岩',
   projectionHash: 'projection-hash',
   factHash: 'fact-hash',
+  nameOnlyFactHash: 'fact-hash',
 }
 const context: WorkflowContext = {
   runId: 'architecture-config-run',

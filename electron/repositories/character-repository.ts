@@ -52,6 +52,7 @@ export interface CharacterData {
 }
 
 export interface CharacterRenameData {
+    characterId?: string
     originalName: string
     newName: string
 }

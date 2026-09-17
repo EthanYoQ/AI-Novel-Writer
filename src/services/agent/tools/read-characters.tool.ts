@@ -14,6 +14,7 @@ export const readCharactersTool = buildAgentTool({
   inputSchema: {
     type: 'object',
     properties: {
+      character_id: { type: 'string', description: '稳定角色 ID（优先使用列表返回值）。', descriptionEn: 'Stable character ID returned by the list.' },
       character_name: {
         type: 'string',
         description: '角色名称（可选）。不填则列出所有角色。',
@@ -27,6 +28,7 @@ export const readCharactersTool = buildAgentTool({
     const text = (zhCN: string, enUS: string) => agentToolText(context, zhCN, enUS)
 
     const charName = args.character_name as string | undefined
+    const characterId = args.character_id as string | undefined
 
     try {
       const charsResult = await ipc.invokeWithProjectSession(projectSession, 'db:character-get-all', project.path)
@@ -36,14 +38,23 @@ export const readCharactersTool = buildAgentTool({
         return { success: true, content: text('⚠️ 角色池为空，暂无角色卡。建议先创建角色卡。', '⚠️ The character roster is empty. Create character cards first.') }
       }
 
-      if (charName) {
-        // 查找指定角色
-        const target = chars.find((c) =>
-          String(c.name).toLowerCase().includes(charName.toLowerCase())
-        )
+      if (characterId || charName) {
+        if (!characterId) {
+          const roster = await ipc.invokeWithProjectSession(projectSession, 'db:character-roster-read', project.path)
+          assertAgentProjectCurrent(context)
+          const revision = roster.identityRevision
+          const aliases = new Set((roster.aliases ?? []).filter(alias => alias.name === charName?.trim()
+            && typeof revision === 'number' && alias.validFrom <= revision && (alias.validThrough === null || revision <= alias.validThrough)).map(alias => alias.characterId))
+          const candidates = chars.filter(c => String(c.name).trim() === charName?.trim() || aliases.has(String(c.characterId)))
+          return { success: candidates.length > 0, content: JSON.stringify({ status: 'candidates-only', instruction: text('这是名称查询候选，不是已确认身份；请使用明确的 character_id 读取。', 'These are name-query candidates, not confirmed identities. Read with an explicit character_id.'), candidates: candidates.map(c => ({ candidateId: c.characterId, name: c.name, role: c.role })) }),
+            ...(candidates.length ? {} : { error: text('未找到角色候选。', 'No character candidates found.') }) }
+        }
+        const matches = chars.filter(c => c.characterId === characterId)
+        if (matches.length > 1) return { success: false, content: '', error: text('角色身份有歧义，未自动选择。', 'Character identity is ambiguous; none was selected.') }
+        const target = matches[0]
         if (!target) {
           const available = chars.map((c) => String(c.name)).join(', ')
-          return { success: false, content: '', error: text(`未找到角色 "${charName}"。可用角色：${available}`, `Character "${charName}" was not found. Available characters: ${available}`) }
+          return { success: false, content: '', error: text(`未找到角色 "${characterId}"。可用角色：${available}`, `Character "${characterId}" was not found. Available characters: ${available}`) }
         }
 
         const formatted = Object.entries(target)
@@ -54,8 +65,8 @@ export const readCharactersTool = buildAgentTool({
       }
 
       // 列出所有角色
-      const list = chars.map((c) => `  - ${c.name} (${c.role})`).join('\n')
-      return { success: true, content: text(`👤 角色列表（${chars.length} 个）\n${list}\n\n使用 character_name 参数可以读取具体角色的详细信息。`, `👤 Character list (${chars.length})\n${list}\n\nUse character_name to read one character in detail.`) }
+      const list = chars.map((c) => `  - ${c.name} (${c.role}) · character_id=${c.characterId ?? "unresolved"}`).join('\n')
+      return { success: true, content: text(`👤 角色列表（${chars.length} 个）\n${list}\n\n使用 character_id 参数读取确切角色；名字多义时不会自动选择。`, `👤 Character list (${chars.length})\n${list}\n\nUse character_id for an exact character. Ambiguous names are never selected automatically.`) }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       return {

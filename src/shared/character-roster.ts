@@ -35,6 +35,8 @@ export type CharacterRosterStatus =
   | 'inconsistent'
 
 export interface CharacterRosterRelationship {
+  /** Author editing on M02 requires an ID; target remains a display snapshot. */
+  targetCharacterId?: string
   target: string
   relation: string
 }
@@ -68,10 +70,11 @@ export interface CharacterRosterCharacterState {
 }
 
 /**
- * 角色名单中的一个结构化事实条目。关系以 names 为临时稳定标识；本轮不
- * 引入 UUID，后续收口 ticket 会处理手工写入和长期身份演进。
+ * Names remain readable in old candidates; M02 author edits require stable IDs.
  */
 export interface CharacterRosterEntry {
+  /** draft:<UUID> is a local author creation selection key, never a persisted ID. */
+  characterId?: string
   name: string
   role: CharacterRosterRole
   gender: string
@@ -94,6 +97,8 @@ export interface CharacterRosterEntry {
 }
 
 export interface CharacterRosterSnapshot {
+  identityRevision?: number
+  aliases?: import('./character-proposal').CharacterIdentitySnapshot['aliases']
   schemaVersion: typeof CHARACTER_ROSTER_SCHEMA_VERSION
   revision: number
   migrationState: CharacterRosterMigrationState
@@ -101,8 +106,23 @@ export interface CharacterRosterSnapshot {
   entries: CharacterRosterEntry[]
   renderedMarkdown: string
   projectionHash: string
-  /** 覆盖角色资料、结构化关系与 currentState 的完整事实哈希。 */
+  /**
+   * 覆盖角色资料、结构化关系与 currentState 的完整事实哈希。
+   * 身份 schema 项目按稳定 characterId 与关系目标 targetCharacterId 派生，
+   * 因此角色改名或同名目标重指向都会改变它；旧项目沿用姓名版本，保持兼容。
+   */
   factHash: string
+  /**
+   * 持久化在 `character_roster_meta.fact_hash` 的姓名版本哈希。
+   * 身份 schema 项目升级后公开 `factHash` 会变成 ID 版本，但按姓名写入的历史
+   * 收据（例如旧项目导入回执）只能与这个值比较；读取路径不改写它。
+   *
+   * 已知限制：同名角色之间的**纯 ID 变化**（例如 A→B 重指向同名目标）只体现在
+   * `factHash` 上，不会改变这个值，因此按姓名写入的历史收据看不到它。这是按姓名
+   * 记录回执本身的性质，不是本字段的缺陷；重放返回的是当前快照，不是历史事实。
+   * 需要区分 ID 版本历史时，应改为按 facts 契约版本记录回执，而不是重定义本字段。
+   */
+  nameOnlyFactHash: string
   /** 升级前的 characters_arch 原文，仅作迁移证据，绝不反向解析为角色名单。 */
   legacyMarkdown?: string
 }
@@ -127,11 +147,14 @@ export type CharacterRosterCommitIntent =
   | 'chapter_progress'
 
 export interface CharacterRosterRename {
+  characterId?: string
   originalName: string
   newName: string
 }
 
 export interface CharacterRosterCommitRequest {
+  /** Required by the M02 author-edit boundary, alongside roster revision. */
+  expectedIdentityRevision?: number
   generationRunHandle?: import('../services/generation/generation-runtime').MainGenerationRunHandle
   operationId: string
   expectedRevision: number
@@ -150,6 +173,7 @@ export interface CharacterRosterCommitRequest {
 }
 
 export interface CharacterRosterCommitReceipt {
+  created?: { selectionKey: string; characterId: string }[]
   operationId: string
   payloadHash: string
   /** 始终等于 snapshot.revision；幂等 replay 返回当前无写入观察，不重放历史 payload。 */

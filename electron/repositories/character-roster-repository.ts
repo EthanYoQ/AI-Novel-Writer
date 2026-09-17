@@ -310,6 +310,12 @@ export function validateLegacyRosterCandidate(value: unknown): CharacterRosterEn
     schemaVersion: value.schemaVersion, entries: value.entries, intent: 'legacy_repair', expectedLegacyMarkdown: '' }).entries
 }
 
+/** Shared scalar validation; the author boundary validates relationships by ID separately. */
+export function normalizeAuthorRosterEntry(value: unknown): CharacterRosterEntry {
+  if (!isObject(value)) throw new Error('CHARACTER_AUTHOR_ENTRY_INVALID')
+  return normalizeEntry({ ...value, relationships: [] }, true)
+}
+
 function canonicalEntries(entries: CharacterRosterEntry[]): CharacterRosterEntry[] {
   return [...entries]
     .map(entry => ({
@@ -319,6 +325,30 @@ function canonicalEntries(entries: CharacterRosterEntry[]): CharacterRosterEntry
       )),
     }))
     .sort((left, right) => compareText(left.name, right.name))
+}
+
+/**
+ * 稳定身份规范化：以 characterId、关系目标 targetCharacterId 为排序主键。
+ * 重名角色不会因为显示名相同而互相折叠，关系从同名目标 A 改指向同名目标 B
+ * 也会产生不同序列。只用于身份 schema 项目的公开事实哈希，旧项目仍走
+ * canonicalEntries 的姓名版本，保证既有 ready 项目的持久哈希不变。
+ */
+function canonicalIdentityEntries(entries: CharacterRosterEntry[]): CharacterRosterEntry[] {
+  return [...entries]
+    .map(entry => ({
+      ...entry,
+      relationships: [...entry.relationships]
+        .map(relationship => ({ ...relationship }))
+        .sort((left, right) => (
+          compareText(left.targetCharacterId ?? '', right.targetCharacterId ?? '')
+          || compareText(left.target, right.target)
+          || compareText(left.relation, right.relation)
+        )),
+    }))
+    .sort((left, right) => (
+      compareText(left.characterId ?? '', right.characterId ?? '')
+      || compareText(left.name, right.name)
+    ))
 }
 
 function hashText(value: string): string {
@@ -721,6 +751,14 @@ function fullFactHash(entries: CharacterRosterEntry[]): string {
   return hashText(JSON.stringify(canonicalEntries(entries)))
 }
 
+/**
+ * 公开事实哈希。身份 schema 项目从带稳定 ID 的事实派生，因此角色改名、
+ * 同名目标重指向都会改变它；旧项目保持 meta.fact_hash 的姓名版本不变。
+ */
+function fullIdentityFactHash(entries: CharacterRosterEntry[]): string {
+  return hashText(JSON.stringify(canonicalIdentityEntries(entries)))
+}
+
 function sortedEntries(entries: CharacterRosterEntry[]): CharacterRosterEntry[] {
   return [...entries].sort((left, right) => (
     ROLE_ORDER[left.role] - ROLE_ORDER[right.role] || compareText(left.name, right.name)
@@ -823,12 +861,14 @@ function deriveRosterStatus(
   }
 }
 
-function identityProjectionEntries(db: BetterSqlite3.Database): CharacterRosterEntry[] {
-  const relationships = db.prepare(`SELECT r.source_character_id,c.name,r.relation FROM character_relationships r
-    JOIN characters c ON c.character_id=r.target_character_id WHERE c.retired=0 ORDER BY r.relationship_id`).all() as { source_character_id: string; name: string; relation: string }[]
+function identityProjectionEntries(db: BetterSqlite3.Database, includeIds = false): CharacterRosterEntry[] {
+  const relationships = db.prepare(`SELECT r.source_character_id,r.target_character_id,c.name,r.relation FROM character_relationships r
+    JOIN characters c ON c.character_id=r.target_character_id WHERE c.retired=0 ORDER BY r.relationship_id`).all() as { source_character_id: string; target_character_id: string; name: string; relation: string }[]
   const activeIds = new Set((db.prepare('SELECT character_id FROM characters WHERE retired=0').all() as { character_id: string }[]).map(row => row.character_id))
   return sortedEntries(CharacterRepository.getAll(db).filter(character => activeIds.has(character.characterId!)).map(character => ({ ...entryFromCharacter(character),
-    relationships: relationships.filter(item => item.source_character_id === character.characterId).map(item => ({ target: item.name, relation: item.relation })) })))
+    ...(includeIds ? { characterId: character.characterId } : {}),
+    relationships: relationships.filter(item => item.source_character_id === character.characterId).map(item => ({ target: item.name, relation: item.relation,
+      ...(includeIds ? { targetCharacterId: item.target_character_id } : {}) })) })))
 }
 /** Compatibility prose is derived from ID facts and never acts as an identity write source. */
 export function refreshCharacterIdentityProjection(db: BetterSqlite3.Database): void {
@@ -846,7 +886,11 @@ export function refreshCharacterStateProjection(db: BetterSqlite3.Database): voi
 }
 function readSnapshot(db: BetterSqlite3.Database): CharacterRosterSnapshot {
   const meta = readMeta(db)
-  const entries = hasCharacterIdentitySchema(db) ? identityProjectionEntries(db) : sortedEntries(CharacterRepository.getAll(db).map(entryFromCharacter))
+  const hasIdentitySchema = hasCharacterIdentitySchema(db)
+  const entries = hasIdentitySchema ? identityProjectionEntries(db) : sortedEntries(CharacterRepository.getAll(db).map(entryFromCharacter))
+  // 身份 schema 项目额外读取带稳定 ID 的事实，用于公开 DTO 与公开事实哈希。
+  // 持久化 meta.fact_hash 仍是姓名版本，read/commit 的 ready 校验不受影响。
+  const identityEntries = hasIdentitySchema ? identityProjectionEntries(db, true) : entries
   const writingLanguage = ProjectCoreRepository.get(db)?.writingLanguage ?? DEFAULT_WRITING_LANGUAGE
   const currentProjection = readCurrentProjection(db)
   const localizedProjection = renderCharacterRosterMarkdown(entries, writingLanguage)
@@ -868,10 +912,20 @@ function readSnapshot(db: BetterSqlite3.Database): CharacterRosterSnapshot {
     revision: meta.revision,
     migrationState: meta.migration_state,
     status: deriveRosterStatus(meta, entries, renderedMarkdown, currentProjection),
-    entries,
+    entries: identityEntries,
+    ...(hasIdentitySchema ? {
+      identityRevision: db.prepare("SELECT revision FROM character_identity_meta WHERE id='main'").pluck().get() as number,
+      aliases: db.prepare(`SELECT a.character_id AS characterId,a.name,a.source_key AS sourceKey,
+        a.valid_from AS validFrom,a.valid_through AS validThrough FROM character_aliases a
+        JOIN characters c ON c.character_id=a.character_id WHERE c.retired=0
+        ORDER BY a.character_id,a.name,a.source_key,a.valid_from`).all() as NonNullable<CharacterRosterSnapshot['aliases']>,
+    } : {}),
     renderedMarkdown,
     projectionHash,
-    factHash: meta.fact_hash,
+    // 旧项目沿用持久化的姓名版本哈希；身份 schema 项目改为按稳定 ID 派生。
+    factHash: hasIdentitySchema ? fullIdentityFactHash(identityEntries) : meta.fact_hash,
+    // 该值始终是持久化的姓名版本哈希，供按姓名写入的历史收据做兼容校验。
+    nameOnlyFactHash: meta.fact_hash,
     ...(meta.legacy_markdown ? { legacyMarkdown: meta.legacy_markdown } : {}),
   }
 }

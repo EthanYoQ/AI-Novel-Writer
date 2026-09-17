@@ -18,7 +18,8 @@ import {
   BlueprintData,
   type BlueprintRangeCommitRequest,
 } from '../repositories/blueprint-repository'
-import { CharacterRepository } from '../repositories/character-repository'
+import { CharacterRepository, hasCharacterIdentitySchema } from '../repositories/character-repository'
+import { commitAuthorCharacterRoster } from '../services/character-roster-author'
 import { CharacterRosterRepository } from '../repositories/character-roster-repository'
 import type { CharacterRosterCommitRequest } from '../../src/shared/character-roster'
 import { DraftRepository } from '../repositories/draft-repository'
@@ -642,6 +643,16 @@ export function registerDatabaseController() {
   ) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      const authorDb = getProjectDb()
+      if (request.intent === 'manual_edit' && authorDb && hasCharacterIdentitySchema(authorDb)) {
+        const authorSession = projectAccess.captureCurrentSession()
+        if (!authorSession) throw new Error('CHARACTER_AUTHOR_SCOPE_REQUIRED')
+        return { success: true, receipt: commitAuthorCharacterRoster(authorDb, request,
+          { projectId: authorSession.projectId, epoch: authorSession.leaseId }, () => {
+            projectAccess.assertCurrentSession(authorSession)
+            assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+          }) }
+      }
       return { success: true, receipt: CharacterRosterRepository.commit(request,
         request.generationRunHandle ? () => assertGenerationSourcesCurrent(request.generationRunHandle!) : undefined) }
     } catch (err) {
