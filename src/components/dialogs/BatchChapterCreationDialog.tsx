@@ -287,7 +287,11 @@ function BatchChapterCreationDialogSession({ isOpen, startChapterNumber, onClose
         onClose()
       }
     }}>
-      <DialogContent className="max-h-[90vh] max-w-[520px] overflow-y-auto">
+      <DialogContent
+        className="max-h-[90vh] max-w-[520px] overflow-y-auto"
+        /* 先生：这里填的是本次批量创作的参数与模型选择，误点蒙版关掉就得重填。 */
+        onPointerDownOutside={(event) => event.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <BookOpen size={16} className="text-[var(--color-accent)]" />

@@ -131,6 +131,14 @@ describe('authoritative finalized chapter titles', () => {
         </>,
       )
     })
+    // 先生要求草稿箱 / 正文章节默认收起 —— 断言前先点开这两个折叠组。
+    // 只点「组标题行」：章节行同样是 .tree-item，点到它会切换编辑器、把标题打回回退值。
+    await act(async () => {
+      const groupTitles = ['正文章节', 'Manuscript chapters', '草稿箱', 'Draft box']
+      const headers = Array.from(container?.querySelectorAll('.tree-item') ?? [])
+        .filter(element => groupTitles.some(title => (element.textContent ?? '').trim().startsWith(title)))
+      for (const header of headers) (header as HTMLElement).click()
+    })
     await vi.waitFor(() => {
       expect(container?.textContent?.match(/旧码头的红钟/gu)).toHaveLength(2)
     })
@@ -169,6 +177,14 @@ describe('authoritative finalized chapter titles', () => {
           <ManuscriptGroup files={[manuscriptFile('项目甲标题')]} projectPath={PROJECT_PATH} />
         </>,
       )
+    })
+    // 先生要求草稿箱 / 正文章节默认收起 —— 断言前先点开这两个折叠组。
+    // 只点「组标题行」：章节行同样是 .tree-item，点到它会切换编辑器、把标题打回回退值。
+    await act(async () => {
+      const groupTitles = ['正文章节', 'Manuscript chapters', '草稿箱', 'Draft box']
+      const headers = Array.from(container?.querySelectorAll('.tree-item') ?? [])
+        .filter(element => groupTitles.some(title => (element.textContent ?? '').trim().startsWith(title)))
+      for (const header of headers) (header as HTMLElement).click()
     })
     await vi.waitFor(() => {
       expect(container?.textContent?.match(/项目甲标题/gu)).toHaveLength(2)
@@ -210,6 +226,15 @@ describe('authoritative finalized chapter titles', () => {
       )
     })
 
+    // 先生要求草稿箱 / 正文章节默认收起 —— 断言前先点开这两个折叠组。
+    // 只点「组标题行」：章节行同样是 .tree-item，点到它会切换编辑器、把标题打回回退值。
+    await act(async () => {
+      const groupTitles = ['正文章节', 'Manuscript chapters', '草稿箱', 'Draft box']
+      const headers = Array.from(container?.querySelectorAll('.tree-item') ?? [])
+        .filter(element => groupTitles.some(title => (element.textContent ?? '').trim().startsWith(title)))
+      for (const header of headers) (header as HTMLElement).click()
+    })
+
     await vi.waitFor(() => {
       expect(container?.textContent?.match(/蓝镜初亮/gu)).toHaveLength(2)
       expect(container?.textContent?.match(/潮线回声/gu)).toHaveLength(2)
@@ -237,6 +262,15 @@ describe('authoritative finalized chapter titles', () => {
           <ManuscriptGroup files={manuscriptFiles} projectPath={PROJECT_PATH} />
         </>,
       )
+    })
+
+    // 先生要求草稿箱 / 正文章节默认收起 —— 断言前先点开这两个折叠组。
+    // 只点「组标题行」：章节行同样是 .tree-item，点到它会切换编辑器、把标题打回回退值。
+    await act(async () => {
+      const groupTitles = ['正文章节', 'Manuscript chapters', '草稿箱', 'Draft box']
+      const headers = Array.from(container?.querySelectorAll('.tree-item') ?? [])
+        .filter(element => groupTitles.some(title => (element.textContent ?? '').trim().startsWith(title)))
+      for (const header of headers) (header as HTMLElement).click()
     })
 
     await vi.waitFor(() => {

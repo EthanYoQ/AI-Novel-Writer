@@ -183,7 +183,11 @@ export default function ArchitectureConfirmDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-[460px]">
+      <DialogContent
+        className="max-w-[460px]"
+        /* 先生：勾选与参数填到一半时误点蒙版，等于白配一遍。 */
+        onPointerDownOutside={(event) => event.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Wand2 size={16} className="text-[var(--color-accent)]" />
@@ -269,13 +273,14 @@ export default function ArchitectureConfirmDialog({
 
                   {/* 状态标签 */}
                   <span
-                    className={`text-[0.7rem] px-1.5 py-0.5 rounded flex-shrink-0 ${
+                    className={`v2-status-badge text-[0.7rem] px-1.5 py-0.5 rounded flex-shrink-0 ${
                       exists
                         ? isChecked
                           ? 'bg-yellow-500/15 text-[var(--color-warning-text)]'
                           : 'bg-green-500/10 text-[var(--color-success-text)]'
                         : 'bg-[rgba(var(--color-accent-rgb),0.1)] text-[var(--color-accent)]'
                     }`}
+                    data-tone={exists ? (isChecked ? 'warning' : 'success') : 'accent'}
                   >
                     {exists ? (isChecked ? text('将覆盖', 'Overwrite') : text('保留', 'Keep')) : text('待生成', 'New')}
                   </span>
@@ -385,14 +390,14 @@ export default function ArchitectureConfirmDialog({
           )}
 
           {noneSelected && (
-            <p className="text-xs px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-[var(--color-error-text)]">
+            <p className="v2-notice text-xs px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-[var(--color-error-text)]" data-tone="error">
               <AlertTriangle size={13} className="inline mr-1" />
               {text('请至少勾选一个步骤', 'Select at least one section.')}
             </p>
           )}
           {/* 前置校验失败提示 */}
           {guardError && (
-            <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg text-xs bg-yellow-500/10 border border-yellow-500/30 text-[var(--color-warning-text)]">
+            <div className="v2-notice flex items-start gap-2 px-3 py-2.5 rounded-lg text-xs bg-yellow-500/10 border border-yellow-500/30 text-[var(--color-warning-text)]" data-tone="warning">
               <AlertCircle size={13} className="flex-shrink-0 mt-0.5 text-[var(--color-warning)]" />
               <span className="whitespace-pre-line">{guardError}</span>
             </div>

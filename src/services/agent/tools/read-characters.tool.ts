@@ -47,10 +47,14 @@ export const readCharactersTool = buildAgentTool({
         }
 
         const formatted = Object.entries(target)
-          .filter(([k, v]) => v && k !== 'id')
+          .filter(([k, v]) => v && k !== 'id' && k !== 'relationshipNotes')
           .map(([k, v]) => `**${k}**: ${typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v)}`)
           .join('\n')
-        return { success: true, content: text(`👤 角色卡：${target.name}\n\n${formatted}`, `👤 Character card: ${target.name}\n\n${formatted}`) }
+        const relationshipNotes = String(target.relationshipNotes ?? '').trim()
+        const cardBody = relationshipNotes
+          ? `${formatted}\n**关系备注**: ${relationshipNotes}`
+          : formatted
+        return { success: true, content: text(`👤 角色卡：${target.name}\n\n${cardBody}`, `👤 Character card: ${target.name}\n\n${cardBody}`) }
       }
 
       // 列出所有角色

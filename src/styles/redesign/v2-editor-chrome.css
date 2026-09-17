@@ -1,0 +1,256 @@
+/* ============================================================================
+ * v2 编辑器「工具条 · 页头」换皮
+ *
+ * 目标：让各编辑器（DraftEditor / ChapterCardEditor / CharacterEditor /
+ *   WorldBuildingEditor / NovelConfigEditor / NarrativeThreadEditor）
+ *   的工具条与页头，在排版、字号、配色上完全对齐设计 demo。
+ *
+ * 标签栏不在这里：v2 的正文栏标签栏已由 EditorTabStripV2 真做了一层 demo 的 .tabbar
+ *   DOM，外观来自 shell.css 原生规则（接线见 v2-tabs.css）。本文件原先那套
+ *   「用结构选择器穿透 React 内联样式」的旧标签栏补丁，已随旧 DOM 一起删除。
+ *
+ * 数值来源：AI小说家-Demo/novel-app-demo-relation-avatars.html
+ *   .pagehead / .ph-k / h1 / .ph-d / .ph-a                   261–266 行
+ *   .edtool / .et-l b / .et-l .v / .et-r                     267–272 行
+ *   .tb-btn                                                  87–91 行（shell.css 同源）
+ *
+ * 为什么是「无层样式」：产品的工具条由 Tailwind 工具类 + cva 组件渲染，
+ *   没有稳定语义类名；本文件不归入任何 @layer，依据层叠规则优先于 Tailwind
+ *   utilities，因此无需 !important 即可压过 h-9 / px-3 / text-sm 等工具类。
+ *   全文件零 !important，也不改任何布局结构。
+ *
+ * 内联样式的处理：工具条的关键视觉写在 React 内联 style 里
+ *   （border-bottom、background-color:var(--color-*)…）。
+ *   内联声明无法被普通规则压过，故采用「局部变量重绑定」：在容器元素上重新声明
+ *   它引用的产品变量（--color-border / --color-editor-bg…），
+ *   内联的 var() 取值即随之变成 demo 令牌，且只影响该子树，不污染全站主题。
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 二、编辑器工具条（demo .edtool 267–272）
+ * 结构：各编辑器顶部 <div class="flex items-center justify-between gap-2 px-3 h-9|h-10 flex-shrink-0">
+ *   A 型（DraftEditor / CharacterEditor / WorldBuildingEditor）：h-9 + 内联 border-bottom/--color-editor-bg
+ *   B 型（ChapterCardEditor / WorldBuildingEditor 架构页）：h-10 + .border-b + 内联 borderColor/--color-sidebar
+ * ======================================================================== */
+
+/* 容器：height:42px、padding:0 16px、gap:9px、渐变 chrome1→paper、下边框 --line */
+html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-9.flex-shrink-0,
+html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-10.flex-shrink-0 {
+  height: var(--v2-h-tool);
+  padding-left: 16px;
+  padding-right: 16px;
+  gap: 9px;
+  /* demo .edtool{background:linear-gradient(180deg,var(--chrome1),var(--paper))}：
+     内联 background-color 仍存在，渐变以 background-image 叠加其上。 */
+  background-image: linear-gradient(180deg, var(--chrome1), var(--paper));
+  /* 内联 border-bottom / borderColor 统一取 demo --line */
+  --color-border: var(--line);
+}
+
+/* 左组：demo .edtool .et-l（269 行）display:flex; align-items:center; gap:9px; min-width:0 */
+html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-9.flex-shrink-0 > div:first-child,
+html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-10.flex-shrink-0 > div:first-child {
+  gap: 9px;
+  min-width: 0;
+}
+
+/* 左组标题：demo .edtool .et-l b（270 行）衬线 14px、不换行。
+   产品标题是 span.font-medium，内联/类内的 --color-text-secondary 归到 --ink。 */
+html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-9.flex-shrink-0 > div:first-child > .font-medium,
+html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-10.flex-shrink-0 > div:first-child > .font-medium {
+  font-family: var(--serif);
+  font-size: var(--v2-fs-tool);
+  font-weight: 700;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+  --color-text-secondary: var(--ink);
+  --color-text: var(--ink);
+}
+
+/* 左组版本号：demo .edtool .et-l .v（271 行）等宽 9.5px、--faint。
+   产品版本号是 text-[0.7rem] 的小字（DraftEditor 的 v{version}）。 */
+html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-9.flex-shrink-0 > div:first-child > [class*='text-[0.7rem]'],
+html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-10.flex-shrink-0 > div:first-child > [class*='text-[0.7rem]'] {
+  font-family: var(--mono);
+  font-size: var(--v2-fs-tiny);
+  color: var(--faint);
+  --color-text-muted: var(--faint);
+}
+
+/* 右组：demo .edtool .et-r（272 行）margin-left:auto; gap:8px。
+   用 + div 表示「紧跟左组的第二个分组」，避免工具条只剩一个分组时误命中左组。 */
+html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-9.flex-shrink-0 > div:first-child + div,
+html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-10.flex-shrink-0 > div:first-child + div {
+  margin-left: auto;
+  gap: 8px;
+}
+
+/* 右组内的状态小字（字数、保存态）取 demo 的辅助文字字号，与 42px 工具条同调 */
+html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-9.flex-shrink-0 > div:first-child + div > .text-xs,
+html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-10.flex-shrink-0 > div:first-child + div > .text-xs {
+  font-size: var(--v2-fs-caption);
+}
+
+/* ==========================================================================
+ * 三、编辑器页头（demo .pagehead 261–266）
+ * 结构：NovelConfigEditor 的 <div class="flex items-center justify-between mb-6">
+ *         > div > h2.text-lg + p.text-xs
+ *       NarrativeThreadEditor 的 <header class="flex flex-wrap items-center justify-between gap-3">
+ *         > h2.text-lg
+ * ======================================================================== */
+
+/* demo .pagehead{display:flex; align-items:flex-end; gap:14px; margin-bottom:16px} */
+html[data-ui='v2'] .skin-workspace-page .flex.items-center.justify-between.mb-6:has(> div > h2) {
+  align-items: flex-end;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+html[data-ui='v2'] .skin-workspace-page header:has(> h2) {
+  align-items: flex-end;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+/* demo .pagehead{display:flex; align-items:flex-end; gap:14px; margin-bottom:16px}（261 行）
+   —— 另两处「统计栏式页头」：CharacterEditor 的状态档案头、
+   ReviewReport 的报告头（标题 + 右侧统计，结构与 .pagehead .ph-a 同形）。 */
+html[data-ui='v2'] .skin-workspace-page .flex.items-center.justify-between.mb-4:has(> h3.text-base) {
+  align-items: flex-end;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+html[data-ui='v2'] .skin-workspace-page .flex.items-center.gap-4.mb-4.pb-3 {
+  align-items: flex-end;
+  gap: 14px;
+  margin-bottom: 16px;
+  /* demo --line：页头与正文之间的横线 */
+  border-bottom-color: var(--line);
+}
+
+/* demo .pagehead h1{font-family:var(--serif); font-size:21px; font-weight:700; letter-spacing:.01em}（264 行） */
+html[data-ui='v2'] .skin-workspace-page h2.text-lg,
+html[data-ui='v2'] .skin-workspace-page h3.text-base.font-bold {
+  font-family: var(--serif);
+  font-size: var(--v2-fs-title);
+  font-weight: 700;
+  line-height: var(--v2-lh-tight);
+  letter-spacing: 0.01em;
+  color: var(--ink);
+  --color-text: var(--ink);
+}
+
+/* demo .pagehead .ph-d{font-size:11.5px; color:var(--muted); margin-top:4px}（265 行） */
+html[data-ui='v2'] .skin-workspace-page h2.text-lg + p,
+html[data-ui='v2'] .skin-workspace-page .flex.items-center.justify-between.mb-4:has(> h3.text-base) > .text-xs {
+  font-size: var(--v2-fs-caption);
+  color: var(--muted);
+  margin-top: 4px;
+  line-height: var(--v2-lh-ui);
+  --color-text-muted: var(--muted);
+  --color-text-secondary: var(--muted);
+}
+
+/* demo .pagehead .ph-a{flex:none; display:flex; gap:8px; align-items:center}（266 行）
+   ——页头右侧操作区（页头容器里 h2 之后的同级分块） */
+html[data-ui='v2'] .skin-workspace-page .flex.items-center.justify-between.mb-6:has(> div > h2) > div:last-child,
+html[data-ui='v2'] .skin-workspace-page header:has(> h2) > div:last-child {
+  flex: none;
+  gap: 8px;
+  align-items: center;
+}
+
+/* ==========================================================================
+ * 四、页头钩子类（与 Index 的挂载同步；未挂载时不影响任何现有元素）
+ * 供后续把 .pagehead 语义类补到组件上时零改动生效，取值同 demo 261–266 行。
+ * ======================================================================== */
+html[data-ui='v2'] .v2-pagehead {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+html[data-ui='v2'] .v2-ph-t {
+  flex: 1;
+  min-width: 0;
+}
+
+/* demo .pagehead .ph-k{font-size:9px; letter-spacing:.22em; color:var(--seal); font-weight:700; margin-bottom:5px} */
+html[data-ui='v2'] .v2-ph-k {
+  font-size: var(--v2-fs-micro);
+  letter-spacing: var(--v2-ls-eyebrow);
+  color: var(--seal);
+  font-weight: 700;
+  margin-bottom: 5px;
+}
+
+html[data-ui='v2'] .v2-pagehead h1,
+html[data-ui='v2'] .v2-pagehead h2 {
+  font-family: var(--serif);
+  font-size: var(--v2-fs-title);
+  font-weight: 700;
+  line-height: var(--v2-lh-tight);
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+
+html[data-ui='v2'] .v2-ph-d {
+  font-size: var(--v2-fs-caption);
+  color: var(--muted);
+  margin-top: 4px;
+  line-height: var(--v2-lh-ui);
+}
+
+html[data-ui='v2'] .v2-ph-a {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* ==========================================================================
+ * 五、底层面板头（BottomPanel 的 .writer-task-table 头部）
+ * 该头部是全应用里最接近 demo .ph-k 眉标的位置（text-xs uppercase tracking-widest），
+ * 这里把标题改成朱砂眉标，并让高度与工具条同族（--v2-h-tool）。
+ * ======================================================================== */
+html[data-ui='v2'] .writer-task-table > .no-select {
+  --height-panel-header: var(--v2-h-tool);
+  --color-border: var(--line);
+  background-image: linear-gradient(180deg, var(--chrome1), var(--paper));
+}
+
+html[data-ui='v2'] .writer-task-table > .no-select .uppercase.tracking-widest {
+  font-size: var(--v2-fs-micro);
+  letter-spacing: var(--v2-ls-eyebrow);
+  color: var(--seal);
+  font-weight: 700;
+  --color-text-secondary: var(--seal);
+  --color-text-muted: var(--seal);
+}
+
+/* 面板头右侧的快捷键小字对齐 demo 的等宽辅助字（.et-l .v / .fld .hint 同族） */
+html[data-ui='v2'] .writer-task-table > .no-select [class*='text-[0.68rem]'] {
+  font-size: var(--v2-fs-micro);
+  color: var(--faint);
+  --color-text-muted: var(--faint);
+}
+
+/* ==========================================================================
+ * 六、窄窗降级：标签栏与工具条在窄窗下不再强撑横向留白
+ * ======================================================================== */
+@media (max-width: 900px) {
+  html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-9.flex-shrink-0,
+  html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-10.flex-shrink-0 {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  /* 标签栏现在是真 DOM（.tabbar > .tabs > .tab），直接收紧页签内距 */
+  html[data-ui='v2'] .tabbar > .tabs > .tab {
+    padding-left: 9px;
+    padding-right: 9px;
+  }
+}

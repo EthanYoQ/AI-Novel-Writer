@@ -4,6 +4,20 @@
  */
 import type { Locale } from '../i18n/types'
 import type {
+  CharacterAvatarChooseResponse,
+  CharacterAvatarCommitResponse,
+  CharacterAvatarReadResponse,
+  CharacterAvatarRemoveResponse,
+} from './character-avatar'
+import type {
+  ChapterWorldSettingRef,
+  WorldSettingCategoryDraft,
+  WorldSettingCategoryRecord,
+  WorldSettingDraft,
+  WorldSettingEntry,
+  WorldSettingStatus,
+} from './world-setting'
+import type {
   CreativeStrategy,
   GenerationReasoningStage,
   ReasoningOverride,
@@ -130,6 +144,32 @@ export interface SkinChannels {
   }
 }
 
+// ===== 角色自定义头像 =====
+// 头像只随角色卡的「编辑 → 保存」生效：choose 仅回传预览，commit / remove
+// 由保存成功后的那一刻调用，中途放弃编辑不会在磁盘或数据库留下痕迹。
+export interface CharacterAvatarChannels {
+  /** 打开系统图片选择器，校验图片并回传预览字节；不落盘、不写库。 */
+  'character-avatar:choose': {
+    args: [name: string]
+    return: CharacterAvatarChooseResponse
+  }
+  /** 角色卡保存成功后调用：把预览字节落盘并记入角色行的 avatar 列。 */
+  'character-avatar:commit': {
+    args: [name: string, base64: string]
+    return: CharacterAvatarCommitResponse
+  }
+  /** 读取某角色的自定义头像；没有则返回 avatar: null，界面回落到姓名首字。 */
+  'character-avatar:read': {
+    args: [name: string]
+    return: CharacterAvatarReadResponse
+  }
+  /** 角色卡保存成功后调用：删除头像文件并清空该角色行的文件名。 */
+  'character-avatar:remove': {
+    args: [name: string]
+    return: CharacterAvatarRemoveResponse
+  }
+}
+
 // ===== 窗口控制 =====
 export interface WindowChannels {
   'window:minimize': {
@@ -198,6 +238,8 @@ export type AppErrorCode =
   | 'EMBEDDING_MODEL_NOT_CONFIGURED'
   | 'PROJECT_STORAGE_PATH_UNSUPPORTED'
   | 'PROJECT_ROOT_REQUIRED'
+  /** 数据库读写失败（表不存在、磁盘异常等），与「没打开项目」区分开。 */
+  | 'DATABASE_ERROR'
 
 export interface AppFailure {
   success: false
@@ -235,6 +277,42 @@ export interface CreateProjectConfig {
   genre: string
   targetAudience: string
   writingLanguage?: WritingLanguage
+}
+
+/**
+ * 书架速览：**只读**读取另一个项目的库之后得到的资料，供首页小卡片展示。
+ *
+ * 全部字段都来自该项目的真实数据；取不到的项一律为 null，界面显示破折号，
+ * 而不是拿 0 冒充数据。它不是业务真相，永不回写。
+ */
+export interface ProjectPeekOverview {
+  path: string
+  name: string
+  genres: string[]
+  /** 核心大纲的第一句话 */
+  lede: string
+  /** 各章最新版字数之和；一章草稿都没有时为 null */
+  totalWords: number | null
+  draftedChapters: number
+  finalizedChapters: number
+  /** 该章存在 reviewed 或 finalized 版本的章数 */
+  reviewedOrBeyond: number
+  plannedChapters: number | null
+  blueprintChapters: number | null
+  characters: number
+  /** 最新确认不是 resolved / abandoned 的伏笔数 */
+  threadsPending: number | null
+  /** 核心大纲 / 世界设定 / 流派任一有值 */
+  configReady: boolean
+  /** 架构四大件任一有值 */
+  archReady: boolean
+  /** 最近改动过的那一章 */
+  focusChapterNumber: number | null
+  focusDraftId: number | null
+  focusWords: number
+  focusTargetWords: number | null
+  focusExcerpt: string
+  savedAt: string
 }
 
 export interface ProjectChannels {
@@ -293,6 +371,14 @@ export interface ProjectChannels {
   'project:recent-remove': {
     args: [projectPath: string]
     return: { success: boolean; error?: string }
+  }
+  /**
+   * 书架速览：按项目路径只读读取**另一个**项目的资料，供首页卡片展示。
+   * 它读的不是当前项目的数据，因此不占用、也不要求当前项目会话。
+   */
+  'project:peek-overview': {
+    args: [projectPath: string]
+    return: ProjectPeekOverview | null
   }
   'project:delete': {
     args: [projectPath: string, projectId: string, sessionLease: string]
@@ -569,6 +655,22 @@ export interface AppDataChannels {
   }
   'skills:install-github': {
     args: [sourceUrl: string]
+    return: { success: boolean; skill?: import('./writing-skills').InstalledWritingSkill; error?: string }
+  }
+  'skills:pick-local-file': {
+    args: []
+    return: { success: boolean; cancelled?: boolean; filePath?: string; error?: string }
+  }
+  'skills:inspect-local': {
+    args: [filePath: string]
+    return: {
+      success: boolean
+      inspection?: import('./writing-skills').LocalWritingSkillInspection
+      error?: string
+    }
+  }
+  'skills:install-local': {
+    args: [filePath: string]
     return: { success: boolean; skill?: import('./writing-skills').InstalledWritingSkill; error?: string }
   }
   'skills:uninstall-user': {
@@ -1060,6 +1162,97 @@ export interface KnowledgeBaseChannels {
   'kb:backfill-vectors': { args: [expectedProjectPath: string]; return: { success: boolean; processed: number; failed: number; error?: string; errorCode?: AppErrorCode } }
 }
 
+/**
+ * 世界观设定（结构化条目库）。
+ *
+ * 先生定的方向：作者可以自己建立、修改条目；条目还能被 @ 到助手或章节蓝图里用。
+ * 这一组通道只负责条目本身的读写，@ 与蓝图引用走各自的既有机制。
+ */
+export interface WorldSettingChannels {
+  'world-setting:list': { args: [expectedProjectPath: string]; return: AppResult<WorldSettingEntry[]> }
+  'world-setting:save': {
+    args: [draft: WorldSettingDraft, expectedProjectPath: string]
+    return: AppResult<WorldSettingEntry>
+  }
+  'world-setting:delete': { args: [id: number, expectedProjectPath: string]; return: AppResult<{ deleted: boolean }> }
+  /** 采纳（转正为事实源）/ 退回待确认。忽略候选直接走 delete。 */
+  'world-setting:set-status': {
+    args: [id: number, status: WorldSettingStatus, expectedProjectPath: string]
+    return: AppResult<WorldSettingEntry>
+  }
+  /**
+   * 分类表：作者可自建分类，所以分类不是编译期常量。
+   * 条目只存 key —— 改名与改说明都走这里，不会动到任何条目。
+   */
+  'world-setting:list-categories': { args: [expectedProjectPath: string]; return: AppResult<WorldSettingCategoryRecord[]> }
+  'world-setting:create-category': {
+    args: [draft: WorldSettingCategoryDraft, expectedProjectPath: string]
+    return: AppResult<WorldSettingCategoryRecord>
+  }
+  'world-setting:update-category': {
+    args: [key: string, draft: WorldSettingCategoryDraft, expectedProjectPath: string]
+    return: AppResult<WorldSettingCategoryRecord>
+  }
+  /** 删不掉时回 reason：builtin（内置）/ in-use（里面还有条目）。 */
+  'world-setting:remove-category': {
+    args: [key: string, expectedProjectPath: string]
+    return: AppResult<{ removed: boolean; reason?: 'builtin' | 'in-use' }>
+  }
+  /**
+   * 章节引用：写某一章时只注入这里指明的设定（先生定的路线，绝不全量）。
+   * 引用来源可为作者手动 @，也可为 AI 生成蓝图时自己提出。
+   */
+  'world-setting:list-chapter-refs': {
+    args: [chapterNumber: number, expectedProjectPath: string]
+    return: AppResult<ChapterWorldSettingRef[]>
+  }
+  'world-setting:add-chapter-ref': {
+    args: [chapterNumber: number, settingId: number, source: 'manual' | 'ai', expectedProjectPath: string]
+    return: AppResult<{ ok: boolean }>
+  }
+  'world-setting:remove-chapter-ref': {
+    args: [chapterNumber: number, settingId: number, expectedProjectPath: string]
+    return: AppResult<{ removed: boolean }>
+  }
+  /**
+   * 定稿后处理专用：把本章正文的**新进展追加**到条目上（只增不改）。
+   *
+   * 与 save 的区别：save 是覆盖式（作者编辑走它）；这个是追加式 ——
+   * 原文一个字都不动，新增内容以「（第 N 章：…）」补在后面。
+   * 因此它对 author 字段也放行：这正是「AI 不改写作者手写内容」的保护线。
+   */
+  'world-setting:append-derived': {
+    args: [id: number, update: { content?: string; summary?: string }, chapterNumber: number, expectedProjectPath: string]
+    return: AppResult<{ appended: boolean; entry: import('./world-setting').WorldSettingEntry }>
+  }
+  /**
+   * 冲突裁决队列：正文与设定打架时，AI 只报告、不裁决。
+   * 这组通道让冲突出现在作者能一键处理的地方，不必自己去设定库里逐条翻找。
+   */
+  'world-setting:list-conflicts': {
+    args: [expectedProjectPath: string]
+    return: AppResult<import('./world-setting').WorldSettingConflict[]>
+  }
+  'world-setting:record-conflict': {
+    args: [draft: import('./world-setting').WorldSettingConflictDraft, expectedProjectPath: string]
+    return: AppResult<import('./world-setting').WorldSettingConflict>
+  }
+  /** 裁决：adopted-draft = 采纳正文（追加进条目）/ kept-entry = 保留条目原文（不动内容）。 */
+  'world-setting:resolve-conflict': {
+    args: [id: number, resolution: 'adopted-draft' | 'kept-entry', expectedProjectPath: string]
+    return: AppResult<{ resolved: boolean; entry?: import('./world-setting').WorldSettingEntry | null }>
+  }
+  'world-setting:ignore-conflict': {
+    args: [id: number, expectedProjectPath: string]
+    return: AppResult<{ ignored: boolean }>
+  }
+  /** 一次处理全部未决冲突（先生要的「不用一条条看」的出口）。主进程侧用事务保证一致性。 */
+  'world-setting:resolve-all-conflicts': {
+    args: [resolution: 'adopted-draft' | 'kept-entry', expectedProjectPath: string]
+    return: AppResult<{ resolved: number; failedIds: number[] }>
+  }
+}
+
   // ===== 导入小说 =====
 export interface ImportChannels {
   'dialog:select-novel-files': {
@@ -1148,7 +1341,7 @@ export interface MCPChannels {
 }
 
 // ===== 合并所有频道 =====
-export type AllInvokeChannels = WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & SkinChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
+export type AllInvokeChannels = WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & SkinChannels & CharacterAvatarChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & WorldSettingChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
 export type AllEventChannels = LLMStreamEvents & UpdateStateEvents & WindowEvents
 
 /** 提取 invoke 频道名 */

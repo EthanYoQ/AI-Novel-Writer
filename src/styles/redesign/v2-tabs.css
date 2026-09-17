@@ -1,0 +1,89 @@
+/* ============================================================================
+ * v2 正文栏「标签栏 · 空页」接线
+ *
+ * 正文栏的标签栏由 EditorTabStripV2 渲染 demo 的 .tabbar 真实结构：
+ *
+ *     .tabbar > .tabs > .tab(.on) > svg + .tn + .tx
+ *             > .tb-side > .tb-btn
+ *
+ * 外观直接来自 shell.css 161–180 行的原生规则（demo 原样搬运），因此不再需要
+ * v2-editor-chrome.css 里那套「穿透 React 内联样式」的补丁 —— 那套规则已随旧 DOM 删除。
+ *
+ * 本文件只补 demo 没有、而产品必须有的三件事：
+ *   1. 未保存标记：demo 没有脏状态概念，产品的 .tx 里要能在「圆点 ↔ ×」之间换
+ *   2. .tb-side 的按钮规格：demo 给标签栏里的 .tb-btn 单独压到 24px
+ *   3. 空页提示：demo 的 emptyPane 用了 .empty-center / .big，但 demo 自己没有定义这两个类
+ * ========================================================================== */
+
+/* ---- 未保存标记（demo 之外的产品能力）----
+ * 平时显示朱砂圆点；悬停该标签的关闭区时才露出 ×，与经典界面的习惯一致。 */
+html[data-ui='v2'] .tab .tx .tx-dot {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+html[data-ui='v2'] .tab .tx .tx-x {
+  flex: none;
+}
+
+html[data-ui='v2'] .tab .tx[data-dirty='true'] .tx-x {
+  display: none;
+}
+
+html[data-ui='v2'] .tab .tx[data-dirty='true']:hover .tx-dot {
+  display: none;
+}
+
+html[data-ui='v2'] .tab .tx[data-dirty='true']:hover .tx-x {
+  display: block;
+}
+
+/* ---- 右侧工具区（demo 的 #tabbar .tb-btn 是 24px，顶栏的 .tb-btn 是 28px）---- */
+html[data-ui='v2'] .tabbar > .tb-side .tb-btn {
+  height: 24px;
+  padding: 0 5px;
+}
+
+/* 标签栏自身：滚动区可压缩到 0，工具区不被挤扁 */
+html[data-ui='v2'] .tabbar > .tabs {
+  min-width: 0;
+}
+
+html[data-ui='v2'] .tabbar > .tb-side {
+  background: transparent;
+}
+
+/* ---- 标签内容的通用底 ----
+ * 各「整页编辑器」（人物档案、知识库、世界观…）的根容器写的是 bg-[var(--color-bg)]。
+ * v2 的语义桥接把 --color-bg 绑成了浅米纸底（--paper2），于是人物档案会比其它面板
+ * 明显偏黄一档。先生要求「人物档案的背景也应该和其他面板一样用通用背景」，
+ * 所以在这一层把 --color-bg 拉回与 .editor 同一个面板色（shell.css 165 行）。
+ * 只影响正文栏内的页面底衬，不动任何组件的其他用途。 */
+html[data-ui='v2'] .edit-body {
+  --color-bg: var(--panel);
+}
+
+/* ---- 空页（demo emptyPane 的落点）---- */
+html[data-ui='v2'] .edit-body > .empty-center {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  color: var(--faint);
+}
+
+html[data-ui='v2'] .edit-body > .empty-center svg {
+  opacity: 0.55;
+}
+
+html[data-ui='v2'] .edit-body > .empty-center .big {
+  font-family: var(--kai);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}

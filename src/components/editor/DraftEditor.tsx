@@ -1,12 +1,14 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, type CSSProperties } from 'react'
 import { Sparkles, Search, BadgeCheck, Save, FileStack, FileText, Wrench, Check } from 'lucide-react'
 
 import { useProjectStore } from '../../stores/project-store'
 import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/editor-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
+import { useUiVersionStore, isModernShell } from '../../stores/ui-version-store'
 import CodeMirrorEditor from './CodeMirrorEditor'
 import ThreeWayMerge from './ThreeWayMerge'
+import WritingSkillBubble from './WritingSkillBubble'
 import { Button } from '../ui/Button'
 import { toast } from '../ui/Toast'
 import { confirm } from '../ui/Confirm'
@@ -77,6 +79,8 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   const currentProject = useProjectStore(s => s.currentProject)
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
+  /** 现代外壳（v2 墨纸书斋 / v3 时尚杂志）把定稿通知做成纸面右下角的印章，经典界面仍是横条。 */
+  const isV2Ui = useUiVersionStore(s => isModernShell(s.uiVersion))
   const projectMatches = currentProject?.path === projectKey
   const tabDraftStatus = editorTab?.draftStatus
   const [pendingRevisions, setPendingRevisions] = useState<RevisionEntry[]>([])
@@ -94,10 +98,26 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   // 后处理失败状态（用于控制是否展示修复按钮）
   const [hasProcessFailure, setHasProcessFailure] = useState(false)
 
+  /**
+   * currentProject 的最新值引用。
+   *
+   * project-store 的 updateNovelConfig 每次都用 {...project} 重建对象，
+   * 所以把 currentProject 写进下面的依赖数组会让「改任意配置字段」
+   * （哪怕只在输入框里敲一个数字）都重跑这里的三次 IPC 查询。
+   * 数据真正相关的键是「项目路径 + 文件路径」，改依赖为前者 + 用 ref 取最新对象。
+   */
+  const currentProjectRef = useRef(currentProject)
+  // 赋值放在 effect 里而不是 render 期（同 CodeMirrorEditor 的 updateHandlerRef 范式）：
+  // render 期写 ref 在并发渲染 / StrictMode 双调用下可能写入被丢弃的那次渲染的值。
+  // 本 effect 声明在下面的读取 effect 之前，React 按声明顺序执行，读到的必是最新对象。
+  useEffect(() => {
+    currentProjectRef.current = currentProject
+  })
+
   useEffect(() => {
     let cancelled = false
     const load = async () => {
-      const projectSession = captureProjectSession(currentProject)
+      const projectSession = captureProjectSession(currentProjectRef.current)
       if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
       const m = await parseDraftMeta(filePath, projectKey, projectSession)
       if (cancelled || !isProjectSessionCurrent(projectSession) || !m) return
@@ -125,7 +145,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
     return () => {
       cancelled = true
     }
-  }, [currentProject, filePath, projectKey])
+  }, [filePath, projectKey])
 
   const status: DraftStatus = tabDraftStatus ?? meta?.status ?? 'draft'
   const isReadonly = status === 'finalized' || status === 'archived'
@@ -144,23 +164,27 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   const [saving, setSaving] = useState(false)
   const [confirmAction, setConfirmAction] = useState<'refine' | 'review' | null>(null)
   const [userRefinePrompt, setUserRefinePrompt] = useState('')
-  // 审稿维度多选
+  // 审稿维度多选。
+  //
+  // label 是给作者看的措辞；promptLabel 是**给模型的维度名** —— 它既要参与审稿
+  // 提示词的构造，又要把模型返回的 category 匹配回本表（见 prompt-templates 里
+  // 那份示例合同）。所以改文案只动 label，promptLabel 一个字都不能动。
   const REVIEW_DIMS = [
     {
       key: 'continuity',
-      label: text('剧情连贯性', 'Story continuity'),
+      label: text('剧情的连贯性', 'Story continuity'),
       desc: text('与前文是否矛盾', 'Consistency with earlier chapters'),
       promptLabel: '剧情连贯性',
     },
     {
       key: 'logic',
-      label: text('剧情合理性', 'Story logic'),
+      label: text('剧情的合理性', 'Story logic'),
       desc: text('因果逻辑、动机、常识', 'Causality, motivation, and plausibility'),
       promptLabel: '剧情合理性',
     },
     {
       key: 'character',
-      label: text('角色状态', 'Character state'),
+      label: text('角色前后状态', 'Character state'),
       desc: text('能力/位置/情感一致性', 'Ability, location, and emotional consistency'),
       promptLabel: '角色状态',
     },
@@ -231,6 +255,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       if (currentTab) {
         useEditorStore.getState().settleTabSave(currentTab.id, saveSnapshot)
       }
+      // 先生：草稿保存成功 —— 在正文栏右上角提示一下（这里正是落盘成功的时刻）
     } finally {
       if (isProjectSessionCurrent(projectSession)) setSaving(false)
     }
@@ -673,19 +698,21 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
               />
             )}
 
-            {/* 保存按钮 */}
-            {isDirty && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => doSave(currentBodyRef.current)}
-                disabled={saving}
-                title={text('保存（⌘S）', 'Save (Ctrl+S)')}
-              >
-                <Save size={12} />
-                {saving ? text('保存中...', 'Saving...') : text('保存', 'Save')}
-              </Button>
-            )}
+            {/* 保存按钮
+                先生：未修改时显示「已保存」、改动了才显示「保存」——
+                按钮始终在位，作者扫一眼就知道当前状态，不用抢那几秒提示。
+                早先这里是 {isDirty && <按钮>}，一保存按钮整个消失，反馈无处可落。 */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => doSave(currentBodyRef.current)}
+              disabled={saving || !isDirty}
+              title={text('保存（⌘S）', 'Save (Ctrl+S)')}
+            >
+              <Save size={12} />
+              {/* 先生：不显示「保存中…」—— 保存是毫秒级的，切换文案只会让按钮变宽、抽搐 */}
+              {isDirty ? text('保存', 'Save') : text('已保存', 'Saved')}
+            </Button>
 
             {/* 状态标签 */}
             <span
@@ -828,22 +855,34 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
         )}
       </div>
 
-      {/* 后处理状态面板（仅定稿草稿显示） */}
-      {status === 'finalized' && meta && (
-        <div className="px-3 py-1.5" style={{ borderBottom: '1px solid var(--color-border)' }}>
-          <PostProcessStatusPanel
-            scope={getChapterFinalizeScope(meta.chapterNumber)}
-            onRetry={doRepairFinalize}
-            onStatusLoad={setHasProcessFailure}
-          />
-        </div>
-      )}
+      {/* 后处理状态（定稿草稿）不再占正文上方一行 —— 见正文容器右下角的印章/告警卡 */}
 
-      {/* 正文区 */}
-      <div className="flex-1 overflow-hidden relative">
+      {/* 正文区
+          纸页页眉（章节名）由 CSS 的 .cm-content::before 绘制，见 v2-editor.css；
+          这里只把章节名通过自定义属性递进去 —— 零结构改动，也避免与 CodeMirror
+          自身的滚动容器形成嵌套滚动。 */}
+      <div
+        className="flex-1 overflow-hidden relative"
+        style={meta
+          ? ({
+              ['--v2-paper-head']: JSON.stringify(
+                meta.chapterTitle || text(`第 ${meta.chapterNumber} 章`, `Chapter ${meta.chapterNumber}`),
+              ),
+            } as CSSProperties)
+          : undefined}
+      >
         <CodeMirrorEditor
           mode="prose"
           content={content}
+          paperHead={meta ? {
+            title: meta.chapterTitle || text(`第 ${meta.chapterNumber} 章`, `Chapter ${meta.chapterNumber}`),
+            subtitle: currentProject?.name
+              ? text(
+                  `${currentProject.name} · 第 ${meta.chapterNumber} 章`,
+                  `${currentProject.name} · Chapter ${meta.chapterNumber}`,
+                )
+              : '',
+          } : null}
           filePath={filePath}
           editable={!isReadonly && !isChapterBusy}
           hideStatusBar
@@ -855,7 +894,19 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
           onSave={(text) => doSave(text)}
         />
 
-
+        {/*
+          定稿后处理状态。
+          墨纸书斋里它不再占正文上方一行：全部成功时只在纸面右下角盖一枚朱砂印
+          （无底色），处理中盖淡印；只有失败时才展开成可点重试的告警卡。
+        */}
+        {status === 'finalized' && meta && (
+          <PostProcessStatusPanel
+            scope={getChapterFinalizeScope(meta.chapterNumber)}
+            onRetry={doRepairFinalize}
+            onStatusLoad={setHasProcessFailure}
+            appearance={isV2Ui ? 'seal' : 'bar'}
+          />
+        )}
       </div>
 
       {/* AI 操作确认弹窗（修稿含自定义提示词输入框） */}
@@ -880,38 +931,68 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
                 <div className="font-medium text-[var(--color-text)]">{text('本次【直接修稿】范围：', 'This direct revision will:')}</div>
                 <div>{text('1. 全文基础润色、词汇优化，增强画面与表现力。', '1. Polish the full chapter, improve wording, and strengthen imagery and expression.')}</div>
                 <div>{text('2. 可在下方指定的额外修稿要求。', '2. Follow any additional revision instructions below.')}</div>
+                {/* 修稿属于 refinement 阶段：这里挂的 Skill 会随本次提示词一起交给模型。 */}
+                <div className="mt-3">
+                  <WritingSkillBubble stage="refinement" />
+                </div>
               </>
             ) : (
               <>
                 <div>{text('将调用 AI 对本章草稿进行一致性检查，并生成审稿报告。', 'AI will check this chapter for consistency and generate a review report.')}</div>
+                {/* 审稿属于 review 阶段：与下面的检查维度并列，都是「本次要交代清楚」的事。 */}
+                <div className="mt-3">
+                  <WritingSkillBubble stage="review" />
+                </div>
                 <div className="mt-3">
                   <div className="text-xs font-medium mb-2" style={{ color: 'var(--color-text)' }}>{text('重点检查维度：', 'Review focus:')}</div>
-                  <div className="flex flex-wrap gap-2">
-                    {REVIEW_DIMS.map(d => (
-                      <label
-                        key={d.key}
-                        className="flex items-center gap-1.5 cursor-pointer select-none px-2 py-1 rounded-md text-xs"
-                        style={{
-                          border: `1px solid ${reviewDims[d.key] ? 'var(--color-accent)' : 'var(--color-border)'}`,
-                          backgroundColor: reviewDims[d.key] ? 'rgba(var(--color-accent-rgb),0.1)' : 'transparent',
-                          color: reviewDims[d.key] ? 'var(--color-accent)' : 'var(--color-text-muted)',
-                        }}
-                        onClick={() => setReviewDims(prev => ({ ...prev, [d.key]: !prev[d.key] }))}
-                      >
-                        <div
-                          className="w-3 h-3 rounded flex items-center justify-center flex-shrink-0"
+                  {/*
+                    先生：四格排成整齐的 2×2。
+                    原先用 flex-wrap，四个标签宽窄不一（「剧情连贯性」比「前后章节串联」短
+                    一个字），换行时参差得像没对齐 —— 换成等宽网格就齐了。
+                    同时把早就写好、却一直没用上的 desc 显示出来：作者一眼能看出每一维在查什么；
+                    勾选态的字色提到正文色（最亮那一档），未选才用 muted。
+                  */}
+                  <div className="grid grid-cols-2 gap-2">
+                    {REVIEW_DIMS.map(d => {
+                      const checked = reviewDims[d.key]
+                      return (
+                        <label
+                          key={d.key}
+                          className="flex items-start gap-2 cursor-pointer select-none px-2.5 py-2 rounded-lg transition-colors"
                           style={{
-                            backgroundColor: reviewDims[d.key] ? 'var(--color-accent)' : 'transparent',
-                            border: `1.5px solid ${reviewDims[d.key] ? 'var(--color-accent)' : 'var(--color-border)'}`,
+                            border: `1px solid ${checked ? 'var(--color-accent)' : 'var(--color-border)'}`,
+                            backgroundColor: checked ? 'rgba(var(--color-accent-rgb),0.08)' : 'transparent',
                           }}
+                          onClick={() => setReviewDims(prev => ({ ...prev, [d.key]: !prev[d.key] }))}
                         >
-                          {reviewDims[d.key] && (
-                            <Check size={9} strokeWidth={3} color="white" aria-hidden="true" />
-                          )}
-                        </div>
-                        {d.label}
-                      </label>
-                    ))}
+                          <div
+                            className="w-3.5 h-3.5 mt-0.5 rounded flex items-center justify-center flex-shrink-0"
+                            style={{
+                              backgroundColor: checked ? 'var(--color-accent)' : 'transparent',
+                              border: `1.5px solid ${checked ? 'var(--color-accent)' : 'var(--color-border)'}`,
+                            }}
+                          >
+                            {checked && (
+                              <Check size={9} strokeWidth={3} color="white" aria-hidden="true" />
+                            )}
+                          </div>
+                          <span className="flex min-w-0 flex-col">
+                            <span
+                              className="text-xs font-medium"
+                              style={{ color: checked ? 'var(--color-text)' : 'var(--color-text-muted)' }}
+                            >
+                              {d.label}
+                            </span>
+                            <span
+                              className="text-[0.65rem] leading-snug"
+                              style={{ color: 'var(--color-text-muted)' }}
+                            >
+                              {d.desc}
+                            </span>
+                          </span>
+                        </label>
+                      )
+                    })}
                   </div>
                 </div>
               </>

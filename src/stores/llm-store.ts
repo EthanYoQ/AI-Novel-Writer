@@ -206,15 +206,23 @@ export const useLLMStore = create<LLMState>()((set, get) => ({
 
     const unsubDone = ipc.on('llm:stream-done', (data) => {
       if (data.requestId === requestId) {
-        callbacks.onDone?.(data.fullText, data.usage, data.finishReason ?? 'unknown')
-        cleanup()
+        // cleanup 必须放在 finally：一旦调用方的 onDone 里抛错（做解析 / setState），
+        // 原来的写法会跳过 cleanup，导致 3 个 IPC 监听器与 activeRequests 条目永久泄漏。
+        try {
+          callbacks.onDone?.(data.fullText, data.usage, data.finishReason ?? 'unknown')
+        } finally {
+          cleanup()
+        }
       }
     })
 
     const unsubError = ipc.on('llm:stream-error', (data) => {
       if (data.requestId === requestId) {
-        callbacks.onError?.(data.error)
-        cleanup()
+        try {
+          callbacks.onError?.(data.error)
+        } finally {
+          cleanup()
+        }
       }
     })
 

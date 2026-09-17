@@ -1,5 +1,6 @@
-import { Sparkles, FolderOpen, Clock, BookOpen, FileUp } from 'lucide-react'
+import { Sparkles, Compass, FolderOpen, Clock, BookOpen, FileUp } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
+import { useOnboardingStore } from '../../stores/onboarding-store'
 import { APP_BRAND } from '../../shared/brand'
 import { useLocaleStore } from '../../stores/locale-store'
 import { UpdateSection } from '../updates/UpdateSection'
@@ -121,6 +122,20 @@ export default function WelcomePage({ onNewProject, onOpenProject, onImportNovel
         </div>
 
         <UpdateSection />
+
+        {/* 新手引导的手动入口：自动只弹一次，想重看随时点这里。 */}
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={() => useOnboardingStore.getState().openGuide()}
+            title={text('从配置模型开始，重看一遍上手流程', 'Walk through the setup flow again, starting from the model')}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs transition-colors"
+            style={{ color: 'var(--color-text-muted)', border: '1px solid var(--color-border)' }}
+          >
+            <Compass size={12} />
+            {text('新手引导', 'Quick start guide')}
+          </button>
+        </div>
 
         {/* 最近项目 */}
         {recentProjects.length > 0 && (

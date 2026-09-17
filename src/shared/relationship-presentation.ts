@@ -236,3 +236,161 @@ export function parseRelationshipEdges(
   const edges = structured ?? (isJsonValue(value) ? [] : parseTextRelationships(value))
   return deduplicateEdges(edges.filter((edge) => isAllowedEdge(edge, options)))
 }
+
+/** 关系备注与结构化边拆分后的结果。 */
+export interface RelationshipEditorSplit {
+  edges: RelationshipEdge[]
+  /** 无法结构化的原文行：作为「关系备注」原样保留，一个字都不丢。 */
+  notes: string
+}
+
+function normalizeNameForMatch(value: string): string {
+  return value
+    .replace(/[（(][^（()）]*[)）]/gu, '')
+    .replace(/[\s\u3000]/gu, '')
+    .toLocaleLowerCase('en-US')
+}
+
+function matchKnownName(candidate: string, names: Set<string> | null): string | null {
+  const trimmed = candidate.trim()
+  if (!trimmed) return null
+  if (!names) return trimmed
+  const normalized = normalizeNameForMatch(trimmed)
+  if (!normalized) return null
+  for (const name of names) {
+    if (normalizeNameForMatch(name) === normalized) return name
+  }
+  return null
+}
+
+function splitRelationshipTargets(text: string): string[] {
+  return text
+    .split(/[、,，]|\s+[与和及]\s+/gu)
+    .map((part) => part.trim())
+    .filter(Boolean)
+}
+
+/**
+ * 单行关系的宽容解析：识别「目标：关系」「目标 - 关系」、多目标
+ * 「甲、乙：师徒」、反序写法「师父：林岚」，以及正文式「她与林岚有旧恩」。
+ * 返回 null 表示这一行无法结构化，调用方应把它留作关系备注。
+ */
+function parseRelationshipLine(
+  line: string,
+  names: Set<string> | null,
+  selfName?: string,
+): RelationshipEdge[] | null {
+  const keep = (edges: RelationshipEdge[]): RelationshipEdge[] => (
+    edges.filter(edge => edge.target !== selfName)
+  )
+  const explicit = line.match(/^(.{1,60}?)\s*[：:]\s*(.+)$/u)
+    ?? line.match(/^(.{1,60}?)\s*[-—–]{1,2}\s*(.+)$/u)
+
+  if (explicit) {
+    const left = explicit[1].trim()
+    const right = explicit[2].trim()
+    if (!left || !right) return null
+    const targets = splitRelationshipTargets(left)
+      .map(part => matchKnownName(part, names))
+      .filter((name): name is string => Boolean(name))
+    if (targets.length > 0) {
+      const edges = keep(targets.map(target => ({ target, relation: right })))
+      return edges.length > 0 ? edges : null
+    }
+    // 反序写法：「师父：林岚」——右侧才是角色，左侧是关系说明。
+    const reversed = matchKnownName(right, names)
+    if (reversed) {
+      const edges = keep([{ target: reversed, relation: left }])
+      return edges.length > 0 ? edges : null
+    }
+    if (!names) {
+      // 没有名单可参照时，只能按「角色：关系」的书写惯例取左侧。
+      const target = targets.length > 0 ? left : splitRelationshipTargets(left)[0]
+      return target ? [{ target, relation: right }] : null
+    }
+    return null
+  }
+
+  // 无分隔符：行内出现的每个已知角色名都算目标，整行作为关系说明。
+  if (names) {
+    const normalizedLine = normalizeNameForMatch(line)
+    const hits = [...names].filter(name => (
+      name !== selfName && normalizeNameForMatch(name) && normalizedLine.includes(normalizeNameForMatch(name))
+    ))
+    if (hits.length > 0) return hits.map(target => ({ target, relation: line }))
+  }
+  return null
+}
+
+/**
+ * 把编辑框里的关系文本拆成「结构化边」与「无法结构化的原文」两部分。
+ *
+ * 这是「任意角色卡都能被拆解」的关键：能确定目标的行走结构化边（供关系图谱
+ * 与写稿注入使用），其余原文原样留作关系备注 —— 不再因为一行无法解析就把
+ * 整块关系降级成自由文本，也不会把作者的原话丢掉。
+ */
+export function splitRelationshipEditorValue(
+  value: string,
+  options: RelationshipTextOptions = {},
+): RelationshipEditorSplit {
+  const structured = parseStructuredRelationships(value)
+  const names = knownNameSet(options)
+  if (structured !== null) {
+    return {
+      edges: deduplicateEdges(structured.filter(edge => isAllowedEdge(edge, options))),
+      notes: '',
+    }
+  }
+
+  const edges: RelationshipEdge[] = []
+  const notes: string[] = []
+  for (const rawLine of value.split(/\r?\n/u)) {
+    const line = rawLine.trim()
+    if (!line) continue
+    const parsed = parseRelationshipLine(line, names, options.selfName)
+    if (parsed) edges.push(...parsed)
+    else notes.push(line)
+  }
+  return { edges: deduplicateEdges(edges), notes: notes.join('\n') }
+}
+
+/** 关系名归一化后的取值，供上层做「关系文本是否引用了名单里没有的角色」判断。 */
+export function relationshipTargetHint(line: string): string | null {
+  const explicit = line.match(/^(.{1,60}?)\s*[：:]\s*(.+)$/u)
+  const candidate = explicit ? explicit[1] : line
+  const cleaned = candidate.replace(/[（(][^（()）]*[)）]/gu, '').trim()
+  return cleaned || null
+}
+
+const UNREGISTERED_TARGET_MAX_LENGTH = 20
+
+/**
+ * 从关系文本里找出「写了关系、但那个角色还没进名单」的目标名。
+ *
+ * 只认 `名字：关系` 这种明确写法：散文式的行无法可靠切出人名，宁可漏报也不
+ * 误建一张名字错误的角色卡。返回的名字可直接用于一键建立角色卡 —— 建完之后
+ * 这些行就会自动升级成结构化关系边。
+ */
+export function unregisteredRelationshipTargets(
+  value: string,
+  options: RelationshipTextOptions = {},
+): string[] {
+  const names = knownNameSet(options)
+  if (!names) return []
+  const found: string[] = []
+  const seen = new Set<string>()
+  for (const rawLine of value.split(/\r?\n/u)) {
+    const line = rawLine.trim()
+    if (!line) continue
+    if (parseRelationshipLine(line, names, options.selfName)) continue
+    const hint = relationshipTargetHint(line)
+    if (!hint || hint === options.selfName) continue
+    if (hint.length > UNREGISTERED_TARGET_MAX_LENGTH) continue
+    if (names.has(hint)) continue
+    const key = normalizeNameForMatch(hint)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    found.push(hint)
+  }
+  return found
+}

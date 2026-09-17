@@ -1,0 +1,1678 @@
+/* ============================================================================
+ * 「时尚杂志」页面级深度覆盖（v3）
+ *
+ * 前五个文件管的是外壳、控件与浮层；本文件补上「点进去之后」的那些页面：
+ *   设置面板 · 各类编辑器工作区 · 人物关系图 · 阅读视图
+ *
+ * 为什么需要单独一层：这些页面的字号是**硬编码**的（不是令牌），
+ * 令牌杠杆够不到，必须逐条覆盖。清单来自对 v2-settings.css /
+ * v2-editors.css / v2-relation.css 的逐行扫描。
+ *
+ * 里面藏着全站最小的几处字号 —— 设置面板的眉标只有 8.5px、
+ * 版本号 9px、说明 10px。先生说的「细小得看不清」，这几处是重灾区。
+ *
+ * 特异性：这些规则原本写作 html[data-ui='v2'] 前缀（0,2,1 起，长选择器可到
+ * (0,6,1)）。本文件在同样结构上加 [data-mag]，每条都恰好多一级，稳定压过。
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 1. 设置面板
+ * ======================================================================== */
+
+/* 面板主标题（22px → 26px 衬线） */
+html[data-ui='v2'] .settings-top h2 {
+  font-size: 26px;
+}
+
+/* ==========================================================================
+ * 1. 设置面板
+ * ======================================================================== */
+
+/* 面板主标题（22px → 26px 衬线） */
+html[data-ui='v2'][data-mag] .settings-top h2 {
+  font-family: var(--serif);
+  font-weight: 700;
+  letter-spacing: var(--mag-ls-head);
+  line-height: var(--mag-lh-tight);
+}
+
+/* ★ 眉标 8.5px → 11.5px：全站最小的一处字号，配宽字距后才有眉标的样子 */
+html[data-ui='v2'] .settings-top .eyebrow {
+  font-size: 11.5px;
+}
+
+html[data-ui='v2'][data-mag] .settings-top .eyebrow {
+  letter-spacing: var(--mag-ls-kicker);
+  font-weight: 700;
+}
+
+/* 页面说明（11px → 13px） */
+html[data-ui='v2'] .settings-top p {
+  font-size: 13px;
+}
+
+html[data-ui='v2'][data-mag] .settings-top p {
+  line-height: 1.7;
+}
+
+html[data-ui='v2'][data-mag] .settings-top p {
+  margin-top: 8px;
+}
+
+/* 左侧导航栏的栏目标题（17px → 19px 衬线） */
+html[data-ui='v2'] .settings-nav-head b {
+  font-size: 19px;
+}
+
+html[data-ui='v2'][data-mag] .settings-nav-head b {
+  font-family: var(--serif);
+  font-weight: 700;
+  letter-spacing: var(--mag-ls-head);
+  line-height: 1.2;
+}
+
+/* 版本号等极小标记（9px → 11.5px） */
+html[data-ui='v2'] .settings-version,
+html[data-ui='v2'] .settings-item small {
+  font-size: 11.5px;
+}
+
+/* 设置行：标题 / 说明 / 当前值 —— 12.5/10/11 → 14/12.5/13 */
+html[data-ui='v2'] .settings-row .sr-title {
+  font-size: 14px;
+}
+
+html[data-ui='v2'][data-mag] .settings-row .sr-title {
+  font-weight: 600;
+}
+
+html[data-ui='v2'][data-mag] .settings-row .sr-title {
+  color: var(--ink);
+}
+
+html[data-ui='v2'] .settings-row .sr-sub {
+  font-size: 12.5px;
+}
+
+html[data-ui='v2'][data-mag] .settings-row .sr-sub {
+  line-height: 1.6;
+}
+
+html[data-ui='v2'][data-mag] .settings-row .sr-sub {
+  margin-top: 4px;
+}
+
+html[data-ui='v2'] .settings-row .sr-value {
+  font-size: 13px;
+}
+
+html[data-ui='v2'][data-mag] .settings-row .sr-value {
+  color: var(--ink2);
+}
+
+/* 「关于」页：正文说明与卡片（11px → 13px） */
+html[data-ui='v2'] .about-hero h3 {
+  font-size: 27px;
+}
+
+html[data-ui='v2'][data-mag] .about-hero h3 {
+  font-family: var(--serif);
+  font-weight: 700;
+  letter-spacing: var(--mag-ls-head);
+}
+
+html[data-ui='v2'] .about-copy {
+  font-size: 13px;
+}
+
+html[data-ui='v2'][data-mag] .about-copy {
+  line-height: 1.85;
+}
+
+html[data-ui='v2'] .skin-custommark {
+  font-size: 13px;
+}
+
+/* ==========================================================================
+ * 2. 编辑器工作区（人物档案 / 世界设定 / 知识库 / 叙事线索 / 审稿报告…）
+ *
+ * 这些选择器原本按 Tailwind 类名组合命中（.skin-workspace-page 下），
+ * 结构照抄并在前缀加 [data-mag]，确保对位压过。
+ * ======================================================================== */
+
+/* 工作区内的 H4 小标题（10px → 13px） */
+html[data-ui='v2'] .skin-workspace-page h4[class~='text-sm'][class~='font-semibold'][class~='mb-2'] {
+  font-size: 13.5px;
+}
+
+html[data-ui='v2'][data-mag] .skin-workspace-page h4[class~='text-sm'][class~='font-semibold'][class~='mb-2'] {
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+/* 卡片内的小标题（10px → 13px） */
+html[data-ui='v2'] .skin-workspace-page [class~='rounded-xl'][class~='border'][class~='p-4'] > h3 {
+  font-size: 13.5px;
+}
+
+html[data-ui='v2'][data-mag] .skin-workspace-page [class~='rounded-xl'][class~='border'][class~='p-4'] > h3 {
+  font-weight: 700;
+}
+
+/* 卡片右上角的浮动标记（10px → 12px） */
+html[data-ui='v2'] .skin-workspace-page [class~='absolute'][class~='right-3'][class~='top-3'][class~='rounded-md'][class~='border'] > span {
+  font-size: 12px;
+}
+
+/* 表格表头（9.5px → 12px，配宽字距） */
+html[data-ui='v2'] .skin-workspace-page table[class~='border-collapse'] thead th {
+  font-size: 12px;
+}
+
+html[data-ui='v2'][data-mag] .skin-workspace-page table[class~='border-collapse'] thead th {
+  letter-spacing: var(--mag-ls-label);
+}
+
+/* 表格单元格里的操作按钮（10.5px → 12.5px） */
+html[data-ui='v2'] .skin-workspace-page table[class~='border-collapse'] td > div > button[class~='rounded'] {
+  font-size: 12.5px;
+}
+
+/* 首行的小标签（9px → 11.5px） */
+html[data-ui='v2'] .skin-workspace-page [class~='text-[0.7rem]'][class~='px-1'][class~='py-0.5'][class~='rounded'] {
+  font-size: 11.5px;
+}
+
+/* 斜体提示语（12px → 13px） */
+html[data-ui='v2'] .skin-workspace-page [class~='text-[0.7rem]'][class~='italic'] {
+  font-size: 13px;
+}
+
+/* 成功态浅底标签（12px → 13px） */
+html[data-ui='v2'] .skin-workspace-page [class~='bg-green-500/10'] {
+  font-size: 13px;
+}
+
+/* 三方合并视图的标签（9.5px → 12px） */
+html[data-ui='v2'] .three-way-merge .twm-tag {
+  font-size: 12px;
+}
+
+/* ==========================================================================
+ * 3. 人物关系图
+ * ======================================================================== */
+
+/* 工具条按钮（9.5px → 12px）
+ * 产品里有两处定义：demo 的 .relation-tool（shell.css 内，且分多个断点
+ * 反复改写字号），以及 v2 为压过它而写高的 .relation-tools .relation-tool。
+ * 两条都要接管 —— 只写带父级的那条时，脱离工具条容器的按钮会漏网。 */
+html[data-ui='v2'] .relation-tool {
+  font-size: 12px;
+}
+
+html[data-ui='v2'] .relation-tools .relation-tool {
+  font-size: 12px;
+}
+
+/* 缩放档位按钮（10px → 12px） */
+html[data-ui='v2'] .relation-zoom button:nth-child(2) {
+  font-size: 12px;
+}
+
+/* 图例空态（12px → 13px） */
+html[data-ui='v2'] .relation-key-empty {
+  font-size: 13px;
+}
+
+html[data-ui='v2'][data-mag] .relation-key-empty {
+  line-height: 1.65;
+}
+
+/* ==========================================================================
+ * 4. 阅读与长文视图
+ * 产品在这里给的是紧凑行距，杂志版放开 —— 长文要的是呼吸，不是密度。
+ * ======================================================================== */
+html[data-ui='v2'] .v2-reading,
+html[data-ui='v2'] .reading-view {
+  font-size: var(--mag-fs-lead);
+}
+
+html[data-ui='v2'][data-mag] .v2-reading,
+html[data-ui='v2'][data-mag] .reading-view {
+  line-height: var(--mag-lh-read);
+  letter-spacing: var(--mag-ls-body);
+}
+
+/* ==========================================================================
+ * 5. 全局收口：把仍小于 11px 的文字抬到可读线以上
+ *
+ * 这是最后一道保险。产品各处零散写了一些 text-[0.6rem]（9.6px）、
+ * text-[0.65rem]（10.4px）这类任意值工具类，散落在 156 个组件里。
+ * 与其逐个追，不如统一兜住 —— 毕竟「任何字都不小于 11px」本身就是
+ * 本主题对先生的承诺。
+ * ======================================================================== */
+html[data-ui='v2'] [class*='text-[0.6rem]'],
+html[data-ui='v2'] [class*='text-[0.62rem]'],
+html[data-ui='v2'] [class*='text-[0.65rem]'],
+html[data-ui='v2'] [class*='text-[0.68rem]'] {
+  font-size: 11.5px;
+}
+
+html[data-ui='v2'][data-mag] [class*='text-[0.6rem]'],
+html[data-ui='v2'][data-mag] [class*='text-[0.62rem]'],
+html[data-ui='v2'][data-mag] [class*='text-[0.65rem]'],
+html[data-ui='v2'][data-mag] [class*='text-[0.68rem]'] {
+  line-height: 1.45;
+}
+
+html[data-ui='v2'] [class*='text-[8px]'],
+html[data-ui='v2'] [class*='text-[9px]'] {
+  font-size: 11.5px;
+}
+
+html[data-ui='v2'][data-mag] [class*='text-[8px]'],
+html[data-ui='v2'][data-mag] [class*='text-[9px]'] {
+  line-height: 1.45;
+}
+
+/* ==========================================================================
+ * 6. 全站小字收口（续）—— v2 遗留的 6~10px 硬编码字号
+ *
+ * 第 5 节兜住了「Tailwind 任意值」这条线；但还有约 80 处是 demo 原始类名上
+ * 的硬编码字号（shell.css 与 v2-*.css），令牌与工具类都够不到，只能点名覆盖。
+ * 清单来自对全部 v2 样式文件的逐行扫描，按功能族分组。
+ *
+ * 目标值分两档：
+ *   · 界面文字（列表、说明、标签、分区头）→ 11.5 ~ 12.5px，一步到位
+ *   · 图形标签（关系图节点、书架书脊）→ 9 ~ 10px，克制放大
+ *     这些字长在固定尺寸的图形里，放太大反而会溢出，得不偿失。
+ * ======================================================================== */
+
+/* ---- 6.1 知识库页 ---- */
+html[data-ui='v2'] .knowledge-mode,
+html[data-ui='v2'] .knowledge-list-head span,
+html[data-ui='v2'] .knowledge-stat span,
+html[data-ui='v2'] .knowledge-stat em,
+html[data-ui='v2'] .knowledge-note-main span,
+html[data-ui='v2'] .knowledge-doc-main span,
+html[data-ui='v2'] .knowledge-doc-date,
+html[data-ui='v2'] .knowledge-doc-open,
+html[data-ui='v2'] .knowledge-top,
+html[data-ui='v2'] .knowledge-stat.retrieval .ks-label em {
+  font-size: 12px;
+}
+
+/* ---- 6.2 故事架构 / AI 构思区 ---- */
+html[data-ui='v2'] .arch-ai-status,
+html[data-ui='v2'] .arch-ai-meta span,
+html[data-ui='v2'] .arch-ai-guides-toggle i,
+html[data-ui='v2'] .arch-ai-section-head span,
+html[data-ui='v2'] .arch-ai-selectall,
+html[data-ui='v2'] .arch-ai-sub,
+html[data-ui='v2'] .arch-ai-guide input {
+  font-size: 12px;
+}
+
+html[data-ui='v2'] .arch-ai-step-copy em {
+  font-size: 12px;
+}
+
+html[data-ui='v2'][data-mag] .arch-ai-step-copy em {
+  line-height: 1.6;
+}
+
+html[data-ui='v2'] .arch-ai-preview-title {
+  font-size: 12.5px;
+}
+
+/* ---- 6.3 稿件档案 ---- */
+html[data-ui='v2'] .archive-item b,
+html[data-ui='v2'] .archive-edit-field > span,
+html[data-ui='v2'] .archive-edit-hint {
+  font-size: 12px;
+}
+
+html[data-ui='v2'] .archive-section h3 {
+  font-size: 13.5px;
+}
+
+html[data-ui='v2'][data-mag] .archive-section h3 {
+  font-weight: 700;
+}
+
+/* ---- 6.4 工作区通用小标 ---- */
+html[data-ui='v2'] .ws-candidate-tag,
+html[data-ui='v2'] .ws-conflict-label,
+html[data-ui='v2'] .ws-pending-cat,
+html[data-ui='v2'] .ws-entry-meta,
+html[data-ui='v2'] .ws-conflict-chapter,
+html[data-ui='v2'] .wss-foot,
+html[data-ui='v2'] .st-sep,
+html[data-ui='v2'] .draft-version-row .bdg,
+html[data-ui='v2'] .draft-compare-btn,
+html[data-ui='v2'] .checkline,
+html[data-ui='v2'] .writing-pill .wp-t span,
+html[data-ui='v2'] .v2-seal-stamp > span,
+html[data-ui='v2'] .badge,
+html[data-ui='v2'] .edtool .et-l .v,
+html[data-ui='v2'] .toast i,
+html[data-ui='v2'] .tb-btn .zoom-label {
+  font-size: 11.5px;
+}
+
+/* ---- 6.5 人物 / 世界观的分区头 ---- */
+html[data-ui='v2'] .world-zone-head .czh-label,
+html[data-ui='v2'] .world-zone-head .czh-count,
+html[data-ui='v2'] .character-zone-head .czh-count,
+html[data-ui='v2'] .world-setting-placeholder .wsp-kicker,
+html[data-ui='v2'] .world-setting-placeholder .wsp-project {
+  font-size: 11.5px;
+}
+
+/* ---- 6.6 表单字段与字段说明 ---- */
+html[data-ui='v2'] .fld .fh .fk,
+html[data-ui='v2'] .fld .fh .hint,
+html[data-ui='v2'] .fld .at,
+html[data-ui='v2'] .binding label,
+html[data-ui='v2'] .binding select,
+html[data-ui='v2'] .theme-menu .tm-title,
+html[data-ui='v2'] .theme-meta span {
+  font-size: 11.5px;
+}
+
+html[data-ui='v2'][data-mag] .fld .fh .fk,
+html[data-ui='v2'][data-mag] .fld .fh .hint,
+html[data-ui='v2'][data-mag] .fld .at,
+html[data-ui='v2'][data-mag] .binding label,
+html[data-ui='v2'][data-mag] .binding select,
+html[data-ui='v2'][data-mag] .theme-menu .tm-title,
+html[data-ui='v2'][data-mag] .theme-meta span {
+  line-height: 1.5;
+}
+
+/* ---- 6.7 设置面板补充 ---- */
+html[data-ui='v2'] .settings-nav-section,
+html[data-ui='v2'] .settings-nav-head span,
+html[data-ui='v2'] .settings-note,
+html[data-ui='v2'] .settings-field label,
+html[data-ui='v2'] .settings-link,
+html[data-ui='v2'] .settings-empty,
+html[data-ui='v2'] .settings-label {
+  font-size: 11.5px;
+}
+
+html[data-ui='v2'][data-mag] .settings-nav-section {
+  letter-spacing: var(--mag-ls-label);
+}
+
+/* 设置面板「资源」区：标题 13px / 说明 10px / 元信息 9px
+   （说明与元信息是全站最后两处漏网的小字） */
+html[data-ui='v2'] .resource-desc,
+html[data-ui='v2'] .resource-meta {
+  font-size: 11.5px;
+}
+
+html[data-ui='v2'][data-mag] .resource-desc,
+html[data-ui='v2'][data-mag] .resource-meta {
+  line-height: 1.55;
+}
+
+/* ---- 6.8 AI 面板与输出区补充 ---- */
+html[data-ui='v2'] .ai-head .sub,
+html[data-ui='v2'] .ai-output-head .sub,
+html[data-ui='v2'] .ai-output-meta,
+html[data-ui='v2'] .agent-popover .ap-head,
+html[data-ui='v2'] .agent-popover .ap-row .ap-main span,
+html[data-ui='v2'] .agent-popover .ap-danger {
+  font-size: 11.5px;
+}
+
+/* ---- AI 助手顶栏的灰线：**保留，别再删**（先生 2026-09-17 第十五轮亲自定）----
+ *
+ * 经过：先生先说「删去 资料与答疑 这种 AI 助手顶栏下方的灰色线条，做到无感」，
+ * 蓝汐把两条同族线都归了零 —— `.ai-head`（shell.css:214）与
+ * `.ai-output-head`（shell.css:819，「AI 输出」视图的顶栏）。
+ * **先生重启实测后又改了口：「感觉去掉了也不好看，还是改回来吧。」**
+ * 于是两条线原样恢复：这里的归零规则整段撤掉，由 demo 基座自己说话。
+ *
+ * 为什么「无感」在**这一处**不成立（与设置页去横线、数据栏去竖条并不矛盾）：
+ * 「分组靠留白」的前提是**留白够用**。设置页标头下面有 37px 的空白垫着，
+ * 数据栏三格之间有空档；而 AI 面板头只有固定 40px 高、下面紧接消息区 ——
+ * 抽掉这条线，头部与正文立刻糊在一起。**线在这里是结构，不是装饰。**
+ * 后来者若又想"无感"它，请先看一眼那 40px。 */
+
+/* v3 下 `.ai-av`（demo 的「鲸」字方块）不渲染了，换成本文件里的刊标 svg ——
+   它是 flex 的直接子项，要显式 block 并把基线间隙收掉，否则头像会比标题矮一截。 */
+html[data-ui='v2'][data-mag] .ai-head .ai-av-logo {
+  flex: none;
+  display: block;
+}
+
+/* ---- 6.9 书架首页补充 ---- */
+html[data-ui='v2'] .v2-current-eyebrow {
+  font-size: 11.5px;
+}
+
+html[data-ui='v2'][data-mag] .v2-current-eyebrow {
+  letter-spacing: var(--mag-ls-label);
+}
+
+html[data-ui='v2'] .v2-current-stats > div > span,
+html[data-ui='v2'] .v2-current-volume,
+html[data-ui='v2'] .v2-current-flow .fstep,
+html[data-ui='v2'] .v2-current-signals,
+html[data-ui='v2'] .v2-desk-copy span,
+html[data-ui='v2'] .v2-shelf-foot {
+  font-size: 12.5px;
+}
+
+html[data-ui='v2'] .v2-current-flow .fdot {
+  font-size: 11px;
+}
+
+/* 手稿纸页眉的副标 */
+html[data-ui='v2'] .cm-lp-paperhead-sub {
+  font-size: 12px;
+}
+
+html[data-ui='v2'] .about-hero .ver {
+  font-size: 11.5px;
+}
+
+/* ---- 6.10 人物关系图 ----
+ * 面板上的文字可以大方放大；画布里的节点标签要克制（节点是固定尺寸的图形）。
+ */
+html[data-ui='v2'] .relation-top .k,
+html[data-ui='v2'] .relation-top .sub,
+html[data-ui='v2'] .relation-side-head .eyebrow,
+html[data-ui='v2'] .relation-side-head p,
+html[data-ui='v2'] .relation-legend,
+html[data-ui='v2'] .relation-hint,
+html[data-ui='v2'] .relation-meta span,
+html[data-ui='v2'] .relation-section,
+html[data-ui='v2'] .relation-panel-section h3,
+html[data-ui='v2'] .relation-detail-btn,
+html[data-ui='v2'] .relation-visual-meta .identity,
+html[data-ui='v2'] .relation-key-item,
+html[data-ui='v2'] .relation-info-grid {
+  font-size: 11.5px;
+}
+
+html[data-ui='v2'] .relation-panel-section h3 {
+  font-size: 13.5px;
+}
+
+html[data-ui='v2'][data-mag] .relation-panel-section h3 {
+  font-weight: 700;
+}
+
+/* 画布内：节点标签与连线标签，8px → 10px（+25%，明显可辨但不撑破节点） */
+html[data-ui='v2'] .relation-node .tag,
+html[data-ui='v2'] .relation-node .relation-label .role,
+html[data-ui='v2'] .relation-node.main .relation-label .role,
+html[data-ui='v2'] .relation-node[data-tier='far'] .name,
+html[data-ui='v2'] .relation-node[data-tier='satellite'] .name,
+html[data-ui='v2'] .relation-edge-label,
+html[data-ui='v2'] .relation-edge-label-html {
+  font-size: 10px;
+}
+
+html[data-ui='v2'][data-mag] .relation-node .tag,
+html[data-ui='v2'][data-mag] .relation-node .relation-label .role,
+html[data-ui='v2'][data-mag] .relation-node.main .relation-label .role,
+html[data-ui='v2'][data-mag] .relation-node[data-tier='far'] .name,
+html[data-ui='v2'][data-mag] .relation-node[data-tier='satellite'] .name,
+html[data-ui='v2'][data-mag] .relation-edge-label,
+html[data-ui='v2'][data-mag] .relation-edge-label-html {
+  line-height: 1.3;
+}
+
+/* 节点里的角色名：这个位置比较特殊，牵出一个 CSS 层叠层的陷阱。
+ *
+ * 产品用 --role-size 变量 + !important 按节点层级动态缩放字号（主节点 10px、
+ * 重要 9px、普通 8.5px，卫星与外围层级直接 display:none 让位给图谱可读性）——
+ * 这是刻意的设计，不该推翻，杂志版只把每一档整体上提 1~2px，层级递减原样保留。
+ *
+ * 【关键】这批 !important 规则写在 shell.css 的 @layer components 内。
+ * 而 CSS 规范对 !important 声明的层序是**反转**的：层内 important 优先于
+ * 无层 important 。因此「无层样式优先级最高」这条在 !important 面前不成立 ——
+ * 直接写无层 !important 会被层内的那条压掉（实测确认过）。
+ * 解法是把规则放进同一个 @layer components，靠更高的特异性取胜。
+ * 详见：https://developer.mozilla.org/docs/Web/CSS/@layer （Cascade 顺序一节） */
+@layer components {
+  html[data-ui='v2'] .relation-node .role {
+    font-size: 10px !important;
+}
+
+html[data-ui='v2'][data-mag] .relation-node .role {
+    line-height: 1.3;
+}
+
+  html[data-ui='v2'] .relation-node[data-tier='important'] .role {
+    font-size: 10.5px !important;
+  }
+
+  html[data-ui='v2'] .relation-node[data-tier='normal'] .role {
+    font-size: 10px !important;
+  }
+
+  html[data-ui='v2'] .relation-node.main .role {
+    font-size: 11px !important;
+  }
+}
+
+/* ---- 6.11 书架书脊上的小字 ----
+ * 书脊宽度只有几十像素，这里是全站最窄的排版空间：
+ * 7px → 9px 已是上限，再大就会顶出书脊。
+ */
+html[data-ui='v2'] .v6shelf .genre,
+html[data-ui='v2'] .v6shelf .author {
+  font-size: 9px;
+}
+
+html[data-ui='v2'][data-mag] .v6shelf .genre,
+html[data-ui='v2'][data-mag] .v6shelf .author {
+  letter-spacing: 0.02em;
+}
+
+html[data-ui='v2'] .v6shelf .v6tip {
+  font-size: 11px;
+}
+
+/* ==========================================================================
+ * 7. 页头（PageHead）—— 装帧重做（2026-09-16）
+ *
+ * 先生的原话：「NOVEL CONFIG · 小说配置 / 小说配置 / 定义你的小说基本信息和
+ * 写作参数，标头全都和 V2 版本一个样」。
+ *
+ * 查证属实：mag 层从未碰过 .pagehead。它一直沿用 demo 的出厂值 ——
+ * 眉标 9px（shell.css 298）、标题 21px 衬线（299）、说明 11.5px（300），
+ * 与「墨纸书斋」逐像素相同。而全站所有子菜单页头共用这个组件，
+ * 所以这一处不装帧，等于每一个页面的第一眼都没变。
+ *
+ * 杂志的栏目开篇页有三个特征，这里逐一落上：
+ *   ① 眉标前压一条短横线 —— 刊物的栏目索引不是纯文字，它有一个色标起点
+ *   ② 标题跳到 30px，与 13.5px 的正文拉开两倍以上的落差 —— 杂志味的真正来源
+ *   ③ 整块底部压一条 3px 墨线收口，页面从「一块内容」变成「一页版面」
+ * ======================================================================== */
+
+/* ---- 整块：底部墨线收口 ---- */
+html[data-ui='v2'][data-mag] .pagehead {
+  position: relative;
+  align-items: flex-end;
+  padding-bottom: 15px;
+  margin-bottom: 24px;
+  border-bottom: 3px solid var(--ink);
+}
+
+html[data-ui='v2'][data-mag] .pagehead::after {
+  content: 'Editorial';
+  position: absolute;
+  right: 0;
+  top: -26px;
+  font-family: var(--mag-font-script);
+  font-size: 76px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  color: color-mix(in srgb, var(--seal) 14%, transparent);
+  transform: rotate(-5deg);
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+}
+
+html[data-ui='v2'][data-mag] .pagehead > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---- 眉标：短横线 + 宽字距珊瑚朱小字 ---- */
+html[data-ui='v2'][data-mag] .pagehead .ph-k {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.26em;
+  color: var(--seal);
+  margin-bottom: 10px;
+}
+
+html[data-ui='v2'][data-mag] .pagehead .ph-k::before {
+  content: '';
+  flex: none;
+  width: 26px;
+  height: 3px;
+  background: var(--seal);
+}
+
+/* ---- 标题：跳到正文两倍以上，衬线、字距收紧 ---- */
+html[data-ui='v2'][data-mag] .pagehead h1 {
+  font-family: var(--serif);
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.22;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+
+/* ---- 说明：升到正文档，行高放开，压到一个舒适的行长 ---- */
+html[data-ui='v2'][data-mag] .pagehead .ph-d {
+  font-size: 13.5px;
+  line-height: 1.85;
+  color: var(--ink2);
+  margin-top: 9px;
+  max-width: 64ch;
+}
+
+/* ---- 右侧操作组：贴着标题基线，不抢标题的尺寸 ---- */
+html[data-ui='v2'][data-mag] .pagehead .ph-a {
+  gap: 9px;
+  padding-bottom: 2px;
+}
+
+/* ==========================================================================
+ * 8. 书架（v6shelf）—— 装帧重做（2026-09-16）
+ *
+ * 先生的四条意见：「书又宽又厚」「字也糊」「颜色也不鲜艳」「架子还是楠木」。
+ * 四条里两条在 CSS、两条在 JS（已同步改掉）：
+ *   · 书的宽厚 —— bookShelfSpine.ts 的刻度收到约六成
+ *   · 颜色     —— BookShelf.tsx 的 PALETTE 换成与书脊同源的栏目七色
+ *   · 楠木架子 —— 本节的 .shelf::before / ::after
+ *   · 书脊文字 —— 本节的 .title / .genre / .author
+ *   · 预览卡片 —— 本节的 .book-meta
+ * ======================================================================== */
+
+/* ---- 架子：从楠木横条换成一道实心墨线 ---- */
+html[data-ui='v2'][data-mag] .v6shelf .shelf::before {
+  left: 0;
+  right: 0;
+  bottom: 30px;
+  height: 6px;
+  border-radius: 0;
+  background: var(--ink);
+  box-shadow: none;
+}
+
+/* 架沿再压一条珊瑚朱细线 —— 与刊头、页脚是同一条「天地线」 */
+html[data-ui='v2'][data-mag] .v6shelf .shelf::after {
+  left: 0;
+  right: 0;
+  bottom: 38px;
+  height: 3px;
+  border-radius: 0;
+  background: var(--seal);
+}
+
+/* ==========================================================================
+ * 8·C 目录树与设定分类的真正类名（2026-09-17 三修）
+ *
+ * 先生说这两处「特别顽固」——悬停怎么改都看不出来。查证：**我一直改错了元素**。
+ *
+ *   · 侧栏目录（ProjectTree）渲染的类名是 **`.tree-item`**，
+ *     而 v2 那份带 `:hover` 的规则写的是 demo 的 **`.tree-row`** ——
+ *     两者根本不是同一个元素，mag 层的扫入自然一辈子也落不到真行上。
+ *   · 设定集侧栏的分类条目用的是 **`.ws-category-item`**；
+ *     内置分类那几条甚至连语义类名都没有（只有 Tailwind 的 `hover:bg-[…]`）。
+ *
+ * 这一节按**真实类名**重做，并把内置分类也纳进来（TSX 里补齐了类名）。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] :is(.tree-item, .ws-category-item) {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: var(--mag-r-hair);
+  border-left: 2px solid transparent;
+  background: transparent;
+  transition: color 180ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+/* 扫入层：目录条目与设定分类条目**共用这一条**（角色列表 `.char-row` 也是同一套，
+   见本节末尾）—— 一块淡栏目色从左缘扫到右缘，底色本身始终透明。
+   先生说目录这里「完全看不清」，所以浓度给到 28%：宁可明显，不要看不见。 */
+html[data-ui='v2'][data-mag] :is(.tree-item, .ws-category-item)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--mag-sec, var(--seal)) 28%, transparent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 240ms cubic-bezier(0.16, 0.84, 0.24, 1);
+  pointer-events: none;
+}
+
+html[data-ui='v2'][data-mag] :is(.tree-item, .ws-category-item):hover::after {
+  transform: scaleX(1);
+}
+
+/* ---- 2026-09-17 第十五轮：设定分类条目**收回**到角色列表那一套 ----
+ * 第十三轮蓝汐把它的扫入块整个撤掉（`content: none`）、只留一道细色标，
+ * 依据是那句「悬停只留细色标」；先生这一轮把话说明白了：
+ *   「我要的是交互，按钮颜色和角色列表一致。平时是白色，只有悬停、点击的
+ *     时候会变成绿色。但现在完全不对。」
+ * 实测（`_probe-v3-r15.mjs`，量的是 dist 的 computed 值）查出的**真实原因**，
+ * 与前几轮「顽固」的案子同源 —— **两处都错在匹配上**：
+ *
+ *   ① 静息态根本不是白的：下面那条选中规则写的是
+ *      `.ws-category-item[class*='bg-[']`，`[class*=]` 是**子串**匹配，
+ *      而每一个**未选中**条目的 className 里都带着
+ *      `hover:bg-[var(--color-hover)]` —— 子串 `bg-[` 命中，
+ *      于是整排分类条目被染成实心的当前栏目色（设定栏 = 松绿）。
+ *      「平时是白色」因此从未成立过。
+ *   ② 点击选中反而**褪色**：选中态写在 TSX 的内联 `--color-active`（10% 墨染）上，
+ *      内联压过一切样式表 —— 所以点下去是「绿块 → 淡灰」，与他要的正好相反。
+ *
+ * 于是：删掉那条子串误伤；选中态改用**语义类** `ws-category-item-on`
+ * （v2 那边仍走它自己的 Tailwind 类，一字未动），并把交互语言与角色列表对齐：
+ *   静息白 / 悬停扫入一片淡色 / 按下与选中才整行实心。
+ * 实心色取**当前栏目色**（`--mag-active-sec`）而不是角色列表的品牌朱砂：
+ * 设定栏的栏目色本身就是松绿 —— 也就是先生说的那抹「绿色」。 */
+
+/* 左缘色标：只留给目录条目 —— 角色列表没有色标，设定分类要跟它一致，也不该有 */
+html[data-ui='v2'][data-mag] .tree-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 0;
+  background: var(--mag-active-sec, var(--seal));
+  transition: width 240ms cubic-bezier(0.16, 0.84, 0.24, 1);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ---- 圆角：v3 一律走发丝直角（先生第十五轮实测反馈）----
+ * 「互动变了，只是依然是很圆角的框，不是我们 V3 现在的那种交接直角的框体」。
+ *
+ * 真因是**基座里那条高特异的圆角**：
+ *
+ *     v2-sidebar.css:401
+ *     html[data-ui='v2'] .sidebar-host .flex-1.overflow-y-auto
+ *       > div[class~='cursor-pointer'][class~='rounded-md'] { border-radius: 7px }   → (0,6,2)
+ *
+ * 而 mag 层给这两类条目写的 `border-radius: var(--mag-r-hair)` 只有 (0,3,1)/(0,4,1)，
+ * 压不过它。角色列表（`.char-row`）为什么没事 —— 它外面隔了一层 `.character-zone`，
+ * **不是那个容器的直接子元素**，所以躲过了这条规则。
+ * 设定分类条目恰恰是 `.flex-1.overflow-y-auto` 的直接子，于是它一直是 7px 的圆角块。
+ * V2 基座只读（不许在 v2 侧收窄），这里只能 `!important` 定音 —— 与书架
+ * `.v6shelf .spine` 兜底同一个理由。 */
+html[data-ui='v2'][data-mag] .ws-category-item {
+  border-radius: var(--mag-r-hair) !important;
+}
+
+/* 「待确认」与「待裁决冲突」两个入口同属这一族（同一个容器的直接子），
+   也被上面那条 `!important` 一并归到同一条几何上。 */
+
+html[data-ui='v2'][data-mag] .tree-item:hover::before {
+  width: 4px;
+}
+
+html[data-ui='v2'][data-mag] :is(.tree-item, .ws-category-item):hover {
+  /* v2 的 `hover:bg-[var(--color-hover)]`（白薄雾）在这里让位 */
+  background: transparent;
+  color: var(--ink);
+}
+
+/* 选中：整行实心 —— 与角色列表 `.char-row-on` 同一处理、同一几何 */
+html[data-ui='v2'][data-mag] .ws-category-item-on {
+  background: var(--mag-active-sec, var(--seal));
+  border-left-color: transparent;
+}
+
+html[data-ui='v2'][data-mag] .ws-category-item-on,
+html[data-ui='v2'][data-mag] .ws-category-item-on :is(span, b, i, em, strong) {
+  color: #FFFFFF;
+}
+
+/* 条目尾部那颗计数：它的颜色是 TSX 的内联 `--color-accent`，样式表压不过内联，
+   只有 `!important` 能定音（实心松绿底上，朱砂色的小字读不出来）。 */
+html[data-ui='v2'][data-mag] .ws-category-item-on [style*='--color-accent'] {
+  color: color-mix(in srgb, #FFFFFF 86%, var(--mag-active-sec, var(--seal))) !important;
+}
+/* ==========================================================================
+ * 8·B 书架的二修（2026-09-17）—— 先生拿着截图说：
+ *   「书籍完全看不清轮廓，书脊的字也完全看不清楚。一个个书太厚太胖，
+ *     导致互相挤压严重。」
+ *
+ * 查证：三个症状其实是**一个根因**串出来的 ——
+ *
+ *   ① **书脊的底色丢了**。v2 的 `.spine` 背景是一层半透明黑渐变
+ *      （`linear-gradient(90deg, rgba(0,0,0,.22), …)`），而 `--cover` 那个真正的
+ *      底色只垫在**部分材质**上（lacquer / old / metal 有，cloth / paper / leather 没有）。
+ *      结果那几本书脊是**透明的**，透出背后的纸色 → 看着「苍白、没有边界」。
+ *   ② 没有边界 → 相邻的书糊成一片 → 先生觉得「太厚太胖、互相挤压」。
+ *   ③ 书脊上的字沿用 v2 的 `left/right: 12px` 内缩 —— v3 的书脊宽只有
+ *      14–20px，**文字区宽度算成负数**，字根本画不出来；而且它没有竖排，
+ *      中文在一条十几像素宽的竖条里横排，本来就放不下。
+ *
+ * 三处一起修：垫底色 + 画轮廓 + 书名竖排。
+ * ======================================================================== */
+
+/* ---- ① 书的书脊：底色 + 轮廓 + 不许被导航书脊的规则波及 ----
+ *
+ * 2026-09-17 从先生的截图上追出来的**真凶**就在这一节：
+ * V3 给左侧导航书脊写的规则是裸 `.spine`（现已收窄到 `.spine.v2-spine`），
+ * 而书架每本书的书脊也叫 `.spine` —— 于是每本书被撑成 94px 宽、垫上纸白底、
+ * `::after` 还被印上竖排刊名 'AI-NOVEL-WRITER'。
+ * 先生看到的「一个个大胖子特别难看」和「书脊的字完全看不清」都是它造成的。
+ * 导航那边已经改好；下面这几条是书架侧的兜底，防止将来又被裸 `.spine` 波及。 */
+html[data-ui='v2'][data-mag] .v6shelf .spine {
+  /* 底色一定要垫上（!important 压过 texture-* 的 background 简写 —— 
+     简写会把 background-color 重置成 transparent，书的书脊就透明了 */
+  background-color: var(--cover) !important;
+  /* 轮廓：一条内描边 —— 印刷品的边界靠线，不靠投影 */
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #000 32%, transparent);
+  border-radius: 1px;
+  /* 书脊要「薄」：宽度跟着书走（v2 的 inset:0 本来就够），
+     除掉导航书脊可能带过来的固定宽度、底色板与右描边 */
+  width: auto;
+  display: block;
+  overflow: hidden;
+  padding: 0;
+  border-right: 0;
+}
+
+/* ---- ③ 书名竖排：书脊本来就是竖着读的 ---- */
+html[data-ui='v2'][data-mag] .v6shelf .title {
+  left: 0 !important;
+  right: 0 !important;
+  top: 22px;
+  bottom: 20px;
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  /* 小字号下宋体的横细竖粗会糊成一列点 —— 换无衬线，笔画等宽、边缘不虚。
+     第十五轮追加：**这上面是作者的书名**，属任意文本 —— 装饰字体在这类文本上
+     必然出现「有些字不是这个字体」的混排，改用 `--mag-font-name-ui`
+     （系统全字库的**无衬线** —— 「无衬线」与「认得出」两个要求同时满足）。 */
+  font-family: var(--mag-font-name-ui);
+  /* 先生（2026-09-17 第十三轮）：「上面的字不能用加粗，感觉会看不清，
+     字要小 1px 左右。而且字间距在 0.5px 左右拉开才好看。」
+     于是：字重回 400（细字在书脊上不糊）、字号 13px → **12px**（小 1px）、
+     字距拉 0.5px 透气。
+     第十五轮补：字号改走 `--mag-title-px`（由 `bookShelfSpine.ts` 按书名长度
+     给出 12 / 11 / 10 三档）—— 12px 仍是**标准档**，只有一列放不下的长书名
+     才会变小；书脊的宽度同时由同一个纯函数加宽，长名因此能折成两列显示全。 */
+  font-weight: 400;
+  font-size: var(--mag-title-px, 12px);
+  letter-spacing: 0.5px;
+  line-height: 1.25;
+  color: #FFFFFF;
+  text-shadow: 0 1px 1px color-mix(in srgb, #000 30%, transparent);
+}
+
+/* 长书名的书：书脊已经按列数加宽，书名这一块要**撑满**新宽度才折得出第二列 ——
+   `left/right: 0` 的作用域本来就是书脊内宽（上面那条已经写了 !important），
+   这里只补一件事：多列竖排时让浏览器允许折列（不许被 v2 的 nowrap 拦住）。 */
+html[data-ui='v2'][data-mag] .v6shelf .title {
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* 状态字（写作中 / 蓝图 / 藏书…）去掉 ——
+   先生：「上面的写作中，蓝图，藏书等提示的字可以去掉，因为字太多，会很拥挤也不美观。」
+   书脊上只留书名这一件事，其余交给预览卡片与列表。 */
+html[data-ui='v2'][data-mag] .v6shelf .genre {
+  display: none;
+}
+
+/* 架子的位置要对齐书脊 —— 先生说「V3 的书籍现在都需要集体下移 4px 才能落到书架上」：
+   书脊高度收到 194+ 之后，原来那条架沿就托不住了。整条轨下移 4px，
+   书脊底端重新落在架沿上。 */
+html[data-ui='v2'][data-mag] .v6shelf .track {
+  bottom: 44px;
+  /* 书脊恢复成十几像素的薄书之后，v2 的 28px 间距会让一排书散成一根根筷子。
+     书架上的书本来就是挨着的 —— 收成 4px，只留出 ±0.55° 微倾的余量。 */
+  gap: 4px;
+}
+
+/* 状态与作者：贴着书脊的上下两端，小字横排（竖排会挤成一列点） */
+html[data-ui='v2'][data-mag] .v6shelf .genre,
+html[data-ui='v2'][data-mag] .v6shelf .author {
+  left: 0;
+  right: 0;
+  writing-mode: horizontal-tb;
+  text-align: center;
+  font-size: 9.5px;
+  letter-spacing: 0;
+  color: color-mix(in srgb, #FFFFFF 82%, var(--cover));
+}
+
+/* 书脊上下那两道金线：v3 的书脊变窄了，线也跟着收 */
+html[data-ui='v2'][data-mag] .v6shelf .spine::after {
+  left: 3px;
+  right: 3px;
+  height: 1px;
+}
+
+html[data-ui='v2'][data-mag] .v6shelf .genre {
+  letter-spacing: 0.14em;
+  font-weight: 600;
+  opacity: 0.95;
+}
+
+html[data-ui='v2'][data-mag] .v6shelf .author {
+  letter-spacing: 0.12em;
+  opacity: 0.82;
+}
+
+/* 书脊上下那两道细线：从金线换成与封面同族的浅调 */
+html[data-ui='v2'][data-mag] .v6shelf .spine::after {
+  height: 2px;
+  opacity: 0.9;
+}
+
+/* ---- 预览卡片：从深灰胶囊换成时尚标签（直角 + 左侧珊瑚朱色条）---- */
+html[data-ui='v2'][data-mag] .v6shelf .book-meta {
+  border-radius: 0;
+  background: var(--ink);
+  color: var(--paper);
+  padding: 8px 14px;
+  font-size: 11.5px;
+  letter-spacing: 0.1em;
+  border-left: 3px solid var(--seal);
+  box-shadow: var(--mag-shadow-pop);
+}
+
+/* ---- 新书虚线卡：直角、悬停上珊瑚朱 ---- */
+html[data-ui='v2'][data-mag] .v6shelf .new {
+  border-radius: 0;
+  border-color: var(--line2);
+  color: var(--muted);
+}
+
+html[data-ui='v2'][data-mag] .v6shelf .new:hover {
+  background: color-mix(in srgb, var(--seal) 8%, transparent);
+  border-color: var(--seal);
+  color: var(--seal);
+  transform: translateY(-4px);
+}
+
+/* ==========================================================================
+ * 9. 当前项目卡 / 书架预览卡 —— 装帧重做（2026-09-16）
+ *
+ * 先生：「书架预览卡片也没重新设计成更高级的时尚的卡片」。
+ * 这张卡同时承担两个身份（当前项目 / 书架上选中某本书的预览），
+ * 是全站层次最高的一块信息，值得按「杂志的本期主打」来排：
+ *   眉标（短横线 + 珊瑚朱）→ 衬线大书名 → 导语 → 数据栏（墨线收口）
+ * 数据栏改成「数字在上、标签在下」的三栏，栏与栏用细分栏线隔开 ——
+ * 这是杂志数据页最标准的一种排法。
+ * ======================================================================== */
+
+/* ---- 眉标：与页头、首页眉标同一套语言 ---- */
+html[data-ui='v2'][data-mag] .v2-current-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.26em;
+  color: var(--seal);
+}
+
+html[data-ui='v2'][data-mag] .v2-current-eyebrow::before {
+  content: '';
+  flex: none;
+  width: 22px;
+  height: 3px;
+  background: var(--seal);
+}
+
+/* ---- 书名：衬线大字，卡片的主角 ----
+ * 字体必须走 `--mag-font-name`（纯系统全字库）而不是 `--serif`/高对比宋 ——
+ * 书名是作者的任意文本，子集化的装饰字体会缺字（先生第十五轮实测：
+ * 「魅魔小姐今天也是勇敢的圣骑士」好多字显示不出来）。 */
+html[data-ui='v2'][data-mag] .home-current-title {
+  font-family: var(--mag-font-name);
+  font-size: calc(var(--current-title-size, 30px) * 1.12);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.16;
+}
+
+/* ---- 题材：小字宽字距，压在书名右侧 ---- */
+html[data-ui='v2'][data-mag] .v2-current-genres {
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  color: var(--muted);
+}
+
+/* ---- 计划章数：衬线数字 ---- */
+html[data-ui='v2'][data-mag] .v2-current-volume {
+  font-family: Georgia, 'Songti SC', serif;
+  letter-spacing: 0.06em;
+}
+
+/* ---- 数据栏：只留墨线收口，**栏与栏之间不要再画竖条** ----
+ * 先生（2026-09-17 第十五轮）：「6,549 全书字数／第 1 章字数／已定稿章节 这一栏，
+ * 删去竖直的装饰小条，达到无感。」
+ * 撤掉的是 `.v2-current-stats > div` 的 `border-right` —— 三个读数本来就是
+ * 「数字在上、标签在下」的等宽栏，靠间距就分得清，竖线只是多余的装饰。
+ * 与同轮撤掉的设置页横线、第十轮撤掉的页头横线是同一条纪律：
+ * **分组靠留白，不靠线。** */
+html[data-ui='v2'][data-mag] .v2-current-stats {
+  border-top: 3px solid var(--ink);
+  padding-top: 16px;
+}
+
+html[data-ui='v2'][data-mag] .v2-current-stats > div {
+  border-right: 0;
+}
+
+html[data-ui='v2'][data-mag] .v2-current-stats b {
+  font-family: Georgia, 'Songti SC', serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* ---- 预览态：顶带换成靛蓝，一眼区分「这是别人的书」 ---- */
+html[data-ui='v2'][data-mag] .v2-current-card.is-preview {
+  border-top-color: var(--mag-sec-2);
+}
+
+html[data-ui='v2'][data-mag] .v2-current-card.is-preview .v2-current-eyebrow,
+html[data-ui='v2'][data-mag] .v2-current-card.is-preview .v2-current-eyebrow::before {
+  color: var(--mag-sec-2);
+  background-color: var(--mag-sec-2);
+}
+
+/* ==========================================================================
+ * 10. 设置面板 —— 装帧重做（2026-09-16）
+ *
+ * 本文件第 1 节对设置面板只做了**字号**（22→26px 衬线、眉标 8.5→11.5px…），
+ * 版式一直是 demo 原样。先生要的是「全面换新」，所以补齐三处：
+ *   ① 面板头 → 与各子菜单页头同一套：眉标前压短横线、整块底部 3px 墨线收口
+ *   ② 左侧栏目标题 → 衬线大字 + 2px 墨线，像目录页的分栏
+ *   ③ 设置行 → 行与行之间补一条细分栏线，边界靠线不靠猜
+ * 全部只动颜色、线条与留白，不改任何布局结构。
+ * ======================================================================== */
+
+html[data-ui='v2'][data-mag] .settings-top {
+  padding-bottom: 15px;
+  /* 标头下的横线已撤（先生第十五轮：「让页面无感」）——
+     这一节的 `border-bottom` 与 mag-controls.css 里那条 `!important` 是一对，
+     两处都已归零；留白（15px + 22px）自己就够分组了。 */
+  margin-bottom: 22px;
+}
+
+html[data-ui='v2'][data-mag] .settings-top .eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: var(--seal);
+}
+
+html[data-ui='v2'][data-mag] .settings-top .eyebrow::before {
+  content: '';
+  flex: none;
+  width: 26px;
+  height: 3px;
+  background: var(--seal);
+}
+
+/* 左栏「设置 / 把创作环境调成你的样子」也是标头 —— 同一轮的同一句话去掉它的线。
+   行分栏线（`.settings-row`，见下）**留着**：它管的是「一行到一行」的边界，
+   不是标头下的分隔，删了设置行会糊成一片。 */
+html[data-ui='v2'][data-mag] .settings-nav-head {
+  padding-bottom: 11px;
+  border-bottom: 0;
+}
+
+html[data-ui='v2'][data-mag] .settings-row {
+  border-bottom: 1px solid var(--line);
+}
+
+html[data-ui='v2'][data-mag] .settings-row:last-child {
+  border-bottom: 0;
+}
+
+/* ==========================================================================
+ * 11. 编辑器内部 · 关系图 · 阅读视图 · 底部面板 —— 装帧重做（2026-09-16）
+ *
+ * 第 2/3/4 节此前只做了**字号**（把 9~10px 抬到 12~13px），版式一直是 demo 原样。
+ * 这一节补上装帧 —— 仍然沿用「结构选择器」命中：这些组件没有语义类名，
+ * 只有一串 Tailwind 工具类，所以照抄它的类组合并在前缀加 [data-mag]。
+ *
+ * 四个动作：
+ *   ① 卡片直角化：圆角收到 3px、描边压到 1px、去掉投影（层次交给线与留白）
+ *   ② 标题起色标：卡片小标题左缘压一条珊瑚朱竖线 —— 与工具条、书脊同一套语言
+ *   ③ 表格分栏：表头 2px 墨线、行间 1px 细线，边界靠线不靠猜
+ *   ④ 阅读视图：顶部一条珊瑚朱色带 + 内距，长文是一页纸而不是一条流
+ *
+ * 分家纪律（先生定调）：本节的每条规则都带 [data-mag]，
+ * v1 / v2 逐像素不受影响 —— 已与改动前的备份逐行核对过。
+ * ======================================================================== */
+
+/* ---- ① 工作区卡片 ---- */
+html[data-ui='v2'][data-mag] .skin-workspace-page [class~='rounded-xl'][class~='border'] {
+  border-radius: var(--mag-r-card);
+  border-color: var(--line);
+  box-shadow: none;
+}
+
+/* ---- ② 标题起色标 ---- */
+html[data-ui='v2'][data-mag] .skin-workspace-page [class~='rounded-xl'][class~='border'][class~='p-4'] > h3 {
+  border-left: 4px solid var(--seal);
+  padding-left: 10px;
+}
+
+html[data-ui='v2'][data-mag] .skin-workspace-page h4[class~='text-sm'][class~='font-semibold'][class~='mb-2'] {
+  border-left: 3px solid var(--seal);
+  padding-left: 9px;
+}
+
+/* ---- ③ 表格：表头墨线 + 行分栏线 ---- */
+html[data-ui='v2'][data-mag] .skin-workspace-page table[class~='border-collapse'] thead th {
+  border-bottom: 2px solid var(--ink);
+}
+
+html[data-ui='v2'][data-mag] .skin-workspace-page table[class~='border-collapse'] tbody tr {
+  border-bottom: 1px solid var(--line);
+}
+
+/* ---- ④ 阅读视图：一页纸 ---- */
+html[data-ui='v2'][data-mag] .reading-view,
+html[data-ui='v2'][data-mag] .v2-reading {
+  background: var(--panel);
+  border-top: 4px solid var(--seal);
+  padding: 28px 30px 40px;
+}
+
+/* ---- 关系图：工具条压墨线 ---- */
+html[data-ui='v2'][data-mag] .relation-tools {
+  background: var(--panel);
+  border-bottom: 2px solid var(--ink);
+}
+
+html[data-ui='v2'][data-mag] .relation-tool {
+  border-radius: var(--mag-r-hair);
+}
+
+/* ---- 底部面板（任务 / 日志 / 模型）：表头压墨线 ---- */
+html[data-ui='v2'][data-mag] .writer-task-table > .no-select {
+  border-bottom: 2px solid var(--ink);
+}
+
+/* ---- 「关于」页：与页头同一套收口 ---- */
+html[data-ui='v2'][data-mag] .about-hero {
+  padding-bottom: 16px;
+  border-bottom: 3px solid var(--ink);
+}
+
+/* ==========================================================================
+ * 12. v3 深化：图标 · 对话框 · 表单 · 提示条（2026-09-16）
+ *
+ * 先生：「你可以尽可能，尽情改造一切界面 UI 内容」。
+ * 这一节收的是全站通用的「零件语言」——把散落各处的圆角、线宽、
+ * 焦点反馈统一到杂志的语法：**直角、细线、珊瑚朱一点**。
+ * 全部只动外观属性，不碰任何布局结构。
+ * ======================================================================== */
+
+/* ---- 图标线宽：杂志的线条是细的 ----
+ * Lucide 用 presentation attribute 写死 stroke-width，CSS 可合法覆盖它。 */
+html[data-ui='v2'][data-mag] .lucide {
+  stroke-width: 1.7;
+}
+
+/* 顶栏与标签页的图标再细一档 */
+html[data-ui='v2'][data-mag] .tb-btn .lucide,
+html[data-ui='v2'][data-mag] .tab .lucide {
+  stroke-width: 1.6;
+}
+
+/* ---- 对话框：全直角，像一页印刷品 ---- */
+html[data-ui='v2'][data-mag] [role='dialog'],
+html[data-ui='v2'][data-mag] [role='alertdialog'] {
+  border-radius: 0;
+}
+
+/* ---- 弹出菜单与下拉：直角 ---- */
+html[data-ui='v2'][data-mag] [role='menu'],
+html[data-ui='v2'][data-mag] [role='listbox'] {
+  border-radius: 0;
+}
+
+/* ---- 表单控件：直角 + 珊瑚朱焦点环 ---- */
+[data-ui='v2'][data-mag] input:not([type='checkbox']):not([type='radio']):not([type='range']),
+[data-ui='v2'][data-mag] textarea,
+html[data-ui='v2'][data-mag] select {
+  border-radius: 0;
+}
+
+[data-ui='v2'][data-mag] input:focus-visible,
+[data-ui='v2'][data-mag] textarea:focus-visible,
+html[data-ui='v2'][data-mag] select:focus-visible {
+  outline: 2px solid var(--seal);
+  outline-offset: -1px;
+}
+
+/* ---- 提示条：左缘一道珊瑚朱，与设置行、卡片标题同一套语言 ---- */
+html[data-ui='v2'][data-mag] .v2-notice {
+  border-radius: 0;
+  border-left: 4px solid var(--seal);
+}
+
+/* ---- 空状态：几何黑 + 放开行高 ---- */
+html[data-ui='v2'][data-mag] .v2-current-empty {
+  font-family: var(--mag-font-geo);
+  color: var(--muted);
+  line-height: 1.8;
+}
+
+/* ---- 徽章：直角，字距收紧 ---- */
+html[data-ui='v2'][data-mag] .v2-badge,
+html[data-ui='v2'][data-mag] .v2-status-badge {
+  border-radius: 0;
+  letter-spacing: 0.08em;
+}
+
+/* ---- 工具提示：直角 + Inter 小字 ---- */
+html[data-ui='v2'][data-mag] [role='tooltip'] {
+  border-radius: 0;
+  font-family: var(--mag-font-kicker);
+  letter-spacing: 0.06em;
+}
+
+/* ==========================================================================
+ * 13. 标签页 · 首页 Hero —— 收尾装帧（2026-09-16）
+ * ======================================================================== */
+
+/* ---- 标签页：底边压 2px 墨线，选中项顶条加粗到 3px ---- */
+html[data-ui='v2'][data-mag] .tabbar {
+  border-bottom: 2px solid var(--ink);
+}
+
+html[data-ui='v2'][data-mag] .tab.on::before {
+  height: 3px;
+  border-radius: 0;
+}
+
+html[data-ui='v2'][data-mag] .tab.on {
+  font-family: var(--mag-font-geo);
+}
+
+html[data-ui='v2'][data-mag] .tab .tn {
+  letter-spacing: 0.02em;
+}
+
+/* ---- 首页 Hero：底部 3px 墨线收口，整块变成「杂志封面」 ---- */
+html[data-ui='v2'][data-mag] .v2-shelf-hero {
+  padding-bottom: 24px;
+  border-bottom: 3px solid var(--ink);
+}
+
+/* 首页刊标的竖排刊名：宽字距 */
+html[data-ui='v2'][data-mag] .shlogo::after {
+  letter-spacing: 0.18em;
+}
+
+/* 桌面快捷卡的分节标题：几何黑 */
+html[data-ui='v2'][data-mag] .v2-desk-copy b {
+  font-family: var(--mag-font-geo);
+  letter-spacing: 0.04em;
+}
+
+/* 书架底部提示：Inter 小字宽字距 */
+html[data-ui='v2'][data-mag] .v6shelf .v6tip {
+  font-family: var(--mag-font-kicker);
+  letter-spacing: 0.12em;
+}
+
+/* ==========================================================================
+ * 14. 状态语汇重做（2026-09-16）
+ *     先生：「哪些红灯，绿灯，黄灯，我也以为你会提出更高明的设计感」
+ *
+ * v2 的状态指示器**全是圆点**：7px 三色球、13px 工序点、6px 在线点、
+ * 5px 脉冲点、5px 侧栏点。那是**工具软件**的语言（绿=正常、红=异常、黄=警告）。
+ *
+ * 印刷品的语言不是圆点，而是**标记（mark）**：方正的色块、描边、满/空/半。
+ * 所以 v3 把全站状态点统一换成「印签」——
+ *   · 直角方块（与全站的直角语言一致）
+ *   · 满色 = 已完成/在线；细描边空框 = 未开始；左半填充 = 进行中
+ *   · 进行中的那枚带极轻呼吸（1 ↔ .55 不透明度），看得见但不抢注意力
+ * 换成这套语汇之后，状态从「指示灯」变成「版面标记」——
+ * 这正是杂志与仪表盘的分野。
+ * ======================================================================== */
+
+@keyframes mag-seal-breath {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* ---- ① 小说之旅：三枚竖排印签 ----
+ * 组件用内联样式画的圆点，覆盖必须带 !important（内联声明优先于任何样式表）。 */
+html[data-ui='v2'][data-mag] [data-journey-state] {
+  border-radius: 0 !important;
+  width: 8px !important;
+  height: 8px !important;
+  box-sizing: border-box;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+}
+
+html[data-ui='v2'][data-mag] [data-journey-state='done'] {
+  background: var(--seal) !important;
+  box-shadow: none;
+}
+
+html[data-ui='v2'][data-mag] [data-journey-state='active'] {
+  background: linear-gradient(90deg, var(--seal) 0 50%, transparent 50%) !important;
+  box-shadow: inset 0 0 0 1.5px var(--seal);
+  animation: mag-seal-breath 1.8s ease-in-out infinite;
+}
+
+html[data-ui='v2'][data-mag] [data-journey-state='pending'] {
+  background: transparent !important;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ink) 32%, transparent);
+}
+
+/* 轨道：虚线改细点线，更利落 */
+html[data-ui='v2'][data-mag] [data-journey-link] {
+  width: 1px !important;
+  opacity: 0.4;
+  background: repeating-linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--ink) 44%, transparent) 0 2px,
+    transparent 2px 5px
+  ) !important;
+}
+
+/* ---- ② 六道工序（顶栏 .fdot）：方形印签 + Inter 数字 ---- */
+html[data-ui='v2'][data-mag] .fnode .fdot {
+  border-radius: 0;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid color-mix(in srgb, var(--ink) 28%, transparent);
+  background: transparent;
+  color: var(--ink2);
+  font-family: var(--mag-font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 9.5px;
+}
+
+html[data-ui='v2'][data-mag] .fnode.done .fdot {
+  background: var(--solid);
+  border-color: var(--solid);
+  color: #FFFFFF;
+}
+
+html[data-ui='v2'][data-mag] .fnode.now .fdot {
+  background: transparent;
+  border-color: var(--seal);
+  color: var(--seal);
+  box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--seal) 14%, transparent);
+}
+
+html[data-ui='v2'][data-mag] .flink {
+  height: 1px;
+  background: color-mix(in srgb, var(--ink) 22%, transparent);
+}
+
+html[data-ui='v2'][data-mag] .fnode .flb {
+  font-family: var(--mag-font-geo);
+  letter-spacing: 0.04em;
+}
+
+/* ---- ③ 模型在线点：方形 + 极轻呼吸 ---- */
+html[data-ui='v2'][data-mag] .modelpill .live {
+  border-radius: 0;
+  width: 6px;
+  height: 6px;
+  background: var(--green);
+  animation: mag-seal-breath 2.2s ease-in-out infinite;
+}
+
+html[data-ui='v2'][data-mag] .modelpill {
+  font-family: var(--mag-font-kicker);
+  letter-spacing: 0.06em;
+}
+
+/* ---- ④ 书脊上的任务脉冲点：方形 ---- */
+html[data-ui='v2'][data-mag] .spine .pdot {
+  border-radius: 0;
+  width: 6px;
+  height: 6px;
+  background: var(--seal);
+  animation: mag-seal-breath 1.6s ease-in-out infinite;
+}
+
+/* ---- ⑤ 侧栏头的标记点：方形 ---- */
+html[data-ui='v2'][data-mag] .side-head .dotm {
+  border-radius: 0;
+  width: 6px;
+  height: 6px;
+  background: var(--seal);
+}
+
+/* ---- ⑥ 状态徽标：直角 + 宽字距 ---- */
+html[data-ui='v2'][data-mag] .badge,
+html[data-ui='v2'][data-mag] .v2-badge {
+  border-radius: 0;
+  font-family: var(--mag-font-kicker);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+}
+
+/* ==========================================================================
+ * 15. AI 助手输入区 —— 「投稿栏」装帧（2026-09-16）
+ *     先生：「AI助手输入框位置这些都没啥变化」
+ *
+ * AgentInputBox 内部全是 Tailwind 工具类，但有 .writer-ai-panel 这个稳定钩子
+ * （见 AIOutputPanel/AIPanel 的 className），所以用它作范围限定。
+ * 杂志里「作者向编辑部交稿」的那个位置就是投稿栏：白纸、细线、右下角一个动作。
+ * 这里把输入区从「圆角卡片 + 工具按钮」改成「直角纸面 + 细线分隔」。
+ * ======================================================================== */
+
+/* 输入区的圆角全部收直 —— 只收 rounded-* 这一族，不碰布局 */
+html[data-ui='v2'][data-mag] .writer-ai-panel [class*='rounded-lg'],
+html[data-ui='v2'][data-mag] .writer-ai-panel [class*='rounded-xl'],
+html[data-ui='v2'][data-mag] .writer-ai-panel [class*='rounded-md'] {
+  border-radius: 0;
+}
+
+/* 输入控件：直角，聚焦时珊瑚朱描边 */
+html[data-ui='v2'][data-mag] .writer-ai-panel textarea,
+html[data-ui='v2'][data-mag] .writer-ai-panel [contenteditable='true'] {
+  border-radius: 0;
+  font-family: var(--mag-font-ui);
+}
+
+html[data-ui='v2'][data-mag] .writer-ai-panel textarea:focus-visible,
+html[data-ui='v2'][data-mag] .writer-ai-panel [contenteditable='true']:focus-visible {
+  outline: 2px solid var(--seal);
+  outline-offset: -2px;
+}
+
+/* 工具栏按钮：直角 + Inter 字距 */
+html[data-ui='v2'][data-mag] .writer-ai-panel button {
+  border-radius: 0;
+}
+
+html[data-ui='v2'][data-mag] .writer-ai-panel button > span {
+  font-family: var(--mag-font-kicker);
+  letter-spacing: 0.08em;
+}
+
+/* 面板底部的输入区容器：上缘一条细墨线，像投稿栏的截稿线。
+ * 2026-09-17 第十五轮：蓝汐一度按「无感」把它归零，**先生实测后要求改回来**
+ * （「感觉去掉了也不好看」）—— 恢复原样。
+ * 这条线是 v3 自己加的（基座里没有对应规则），所以**不能靠"删掉接管规则"恢复**，
+ * 必须把 `1px solid var(--line)` 原样写回。 */
+html[data-ui='v2'][data-mag] .writer-ai-panel > div:last-child {
+  border-top: 1px solid var(--line);
+}
+
+/* ==========================================================================
+ * 16. 交互反馈升级（2026-09-16）
+ *     先生：「很多交互，悬停依然是老样子」
+ *
+ * v2 的悬停是「背景变淡一点」—— 那是仪表盘的反馈：告诉你在哪儿。
+ * 杂志的悬停是**版面元素的响应**：色标生长、底色翻转、线条展开，
+ * 反馈本身就是一次小型排版动作。
+ * ======================================================================== */
+
+/* ---- 按钮：底色硬翻转，而不是亮度微调 ---- */
+html[data-ui='v2'][data-mag] .v2-btn {
+  transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+/* 主按钮：珊瑚朱 → 墨黑（时装刊的动作按钮就是黑与红的对调） */
+html[data-ui='v2'][data-mag] .v2-btn-primary:hover {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* 描边按钮：从描边变实心靛蓝 */
+html[data-ui='v2'][data-mag] .v2-btn-outline:hover {
+  background: var(--mag-sec-2);
+  border-color: var(--mag-sec-2);
+  color: #FFFFFF;
+}
+
+/* ---- 侧栏列表行的悬停语言：与按钮同一族的「扫入」（2026-09-17 重做）----
+ * 先生：「现在还有一大堆完全是 v2 的效果，包括不限于目录的鼠标悬停交互、
+ * 角色列表的悬停交互等。」
+ *
+ * 他说得对。此前这里只是把 v2 的「白薄雾」换成「墨色淡染」——底色还是会
+ * 整块一变，观感上仍是 v2 的那一套。现在换成 V3 的语法：
+ *   hover 时一块淡栏目色**从左缘扫到右缘**（240ms），与按钮的扫入同族；
+ *   左缘 3px 色标同时长出（mag-pages 上面已有 ::before 那条）。
+ * 底色本身始终保持透明 —— 「变底色」这件事在 V3 里不属于悬停。 */
+html[data-ui='v2'][data-mag] .tree-row,
+html[data-ui='v2'][data-mag] .tree-grp,
+html[data-ui='v2'][data-mag] .char-row {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background: transparent;
+  transition: color 0.18s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+html[data-ui='v2'][data-mag] .tree-row::after,
+html[data-ui='v2'][data-mag] .tree-grp::after,
+html[data-ui='v2'][data-mag] .char-row::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  /**
+   * 扫入层的浓度：**28%**（原 10% → 18% → 28%）。
+   *
+   * 先生两次说这里「看不出来」：
+   *   · 第一次（2026-09-17 上午）：「项目结构鼠标悬停完全看不出来」→ 提到 18%
+   *   · 第二次（同日下午，带截图）：「依然没任何背景变色，或许是变成了白色？浅色？
+   *     反正是完全看不清的」
+   *
+   * 实测（`_probe-tree-hover.mjs`，真鼠标 hover + 读计算样式）证明**扫入层一直都在、
+   * 也一直在动**（`scaleX` 0 → 1、色标 0 → 4px、文字 `rgb(69,67,77)` → `rgb(22,21,26)`），
+   * 问题纯粹是**太淡**：18% 的栏目色压在近白纸上，量出来是「pale beige」，
+   * 与纸几乎同色。悬停反馈的意义在于告诉用户「指针在这儿」，太淡就等于没做 ——
+   * 所以这一版直接给到 28%，宁可明显，不要看不见。
+   */
+  background: color-mix(in srgb, var(--mag-sec, var(--seal)) 28%, transparent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 240ms cubic-bezier(0.16, 0.84, 0.24, 1);
+  pointer-events: none;
+}
+
+html[data-ui='v2'][data-mag] .tree-row:hover::after,
+html[data-ui='v2'][data-mag] .tree-grp:hover::after,
+html[data-ui='v2'][data-mag] .char-row:hover::after {
+  transform: scaleX(1);
+}
+
+/* 底色一律透明：v2 的 hover:bg / --color-hover 在此被彻底接管 */
+html[data-ui='v2'][data-mag] .tree-row:hover,
+html[data-ui='v2'][data-mag] .tree-grp:hover,
+html[data-ui='v2'][data-mag] .char-row:hover {
+  background: transparent;
+}
+
+/* 角色列表行（CharactersView）：几何与目录条目对齐 —— 直角、左缘 2px 色标位 */
+html[data-ui='v2'][data-mag] .char-row {
+  border-radius: var(--mag-r-hair);
+  border-left: 2px solid transparent;
+  padding-left: 10px;
+}
+
+/* 选中：整行反白 —— 与目录条目同一处理（手指按下去、那一条压成实心） */
+/* 实心底用 --solid：--seal 在深色主题下是浅色，白字会发虚。 */
+html[data-ui='v2'][data-mag] .char-row-on {
+  background: var(--solid);
+  border-left-color: transparent;
+}
+
+html[data-ui='v2'][data-mag] .char-row-on,
+html[data-ui='v2'][data-mag] .char-row-on :is(span, b, i, em, strong) {
+  color: #FFFFFF;
+}
+
+/* ---- 侧栏目录条目：悬停时左缘长出一道珊瑚朱色标 ---- */
+html[data-ui='v2'][data-mag] .tree-row,
+html[data-ui='v2'][data-mag] .tree-grp {
+  position: relative;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+html[data-ui='v2'][data-mag] .tree-row::before,
+html[data-ui='v2'][data-mag] .tree-grp::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 0;
+  background: var(--mag-active-sec, var(--seal));
+  transition: width 240ms cubic-bezier(0.16, 0.84, 0.24, 1);
+  pointer-events: none;
+}
+
+html[data-ui='v2'][data-mag] .tree-row:hover::before,
+html[data-ui='v2'][data-mag] .tree-grp:hover::before {
+  /* 4px（原 3px）：与扫入层同拍，一起把「指针在这儿」说清楚 */
+  width: 4px;
+}
+
+html[data-ui='v2'][data-mag] .tree-row:hover,
+html[data-ui='v2'][data-mag] .tree-grp:hover {
+  color: var(--ink);
+}
+
+/* ---- 标签页：悬停时文字转墨黑，底部预演一条细线 ---- */
+html[data-ui='v2'][data-mag] .tab {
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+html[data-ui='v2'][data-mag] .tab:hover {
+  color: var(--ink);
+}
+
+/* ---- 工具按钮：悬停转珊瑚朱 ---- */
+html[data-ui='v2'][data-mag] .tb-btn {
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+html[data-ui='v2'][data-mag] .tb-btn:hover {
+  background: color-mix(in srgb, var(--seal) 10%, transparent);
+  color: var(--seal);
+}
+
+/* ---- 桌面快捷卡：悬停时顶部色带加高（不是整体抬起）---- */
+html[data-ui='v2'][data-mag] .v2-desk-card {
+  transition: border-top-width 0.16s ease, background-color 0.16s ease;
+}
+
+html[data-ui='v2'][data-mag] .v2-desk-card:hover {
+  border-top-width: 7px;
+  background: color-mix(in srgb, var(--seal) 4%, transparent);
+}
+
+/* ---- 设置条目：悬停时左缘色标长出来 ---- */
+html[data-ui='v2'][data-mag] .settings-item {
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+html[data-ui='v2'][data-mag] .settings-item:hover {
+  color: var(--ink);
+}

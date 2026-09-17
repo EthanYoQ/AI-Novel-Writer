@@ -33,7 +33,8 @@ export default function DraftBoxGroup({
 }: {
   draftsByChapter: Record<number, DraftMeta[]>
 }) {
-  const [open, setOpen] = useState(true)
+  // 先生：草稿箱不要一打开就把内容全摊开 —— 太乱，默认收起，用户要看了再点开。
+  const [open, setOpen] = useState(false)
   const text = useLocaleStore(s => s.text)
   const projectKey = useProjectStore(s => s.currentProject?.path)
   if (!projectKey) return null
@@ -62,7 +63,8 @@ export default function DraftBoxGroup({
           : <ChevronRight size={12} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
         }
         <FilePen size={14} style={{ color: 'var(--color-text-muted)' }} />
-        <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>{text('草稿箱', 'Draft box')}</span>
+        {/* 先生：草稿箱不是最重要的项，不必加黑 —— 常规字重即可 */}
+        <span className="text-[14px]" style={{ color: 'var(--color-text)', fontWeight: 400 }}>{text('草稿箱', 'Draft box')}</span>
         {activeChapterCount > 0 && (
           <span className="ml-auto text-[0.7rem]" style={{ color: 'var(--color-text-muted)' }}>
             {text(`${activeChapterCount} 章`, `${activeChapterCount} chapters`)}
@@ -108,7 +110,8 @@ function DraftChapterGroup({
 }) {
   const text = useLocaleStore(s => s.text)
   const currentProject = useProjectStore(s => s.currentProject)
-  const [open, setOpen] = useState(true)
+  // 先生：草稿箱展开后只该看到「章节名」，具体草稿要再点进这一章才看得见 —— 默认收起。
+  const [open, setOpen] = useState(false)
 
   // 将 archived 草稿折叠，只显示活跃草稿（非 archived）
   const activeDrafts = drafts.filter(d => d.status !== 'archived')
@@ -365,15 +368,18 @@ function DraftItem({
       {isFinalized && (
         <CheckCircle2 size={10} style={{ color: 'var(--color-success)', flexShrink: 0 }} />
       )}
+      {/* 删除这一稿：悬停转朱砂并加一层淡底（.draft-trash）。
+          旧的写法只留 opacity 与固定浅灰，整行 hover 的亮底会把它吞掉 ——
+          鼠标一移上去图标反而「消失」了。 */}
       <button
         type="button"
-        className="opacity-70 hover:opacity-100 rounded p-0.5"
+        className="draft-trash"
         title={text('删除这一稿', 'Delete draft')}
+        aria-label={text('删除这一稿', 'Delete draft')}
         onClick={(e) => {
           e.stopPropagation()
           deleteDraft()
         }}
-        style={{ color: 'var(--color-text-muted)' }}
       >
         <Trash2 size={10} />
       </button>

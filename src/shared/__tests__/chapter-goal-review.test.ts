@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildChapterGoalReviewPrompt, chapterGoalReviewItems, freezeChapterGoals, normalizeChapterGoalReview, parseChapterGoalReview } from '../chapter-goal-review'
+import { buildChapterGoalReviewBatchPrompt, buildChapterGoalReviewDeferredNote, buildChapterGoalReviewPrompt, chapterGoalReviewItems, freezeChapterGoals, MAX_GOAL_REVIEW_BATCHES, normalizeChapterGoalReview, parseChapterGoalReview, parseChapterGoalReviewBatch, splitChapterGoalsIntoBatches } from '../chapter-goal-review'
 
 const draft = '她合上已经装订好的相册。两人约定周三再搬设备。'
 const goals = freezeChapterGoals(3, '完成相册；约定周三搬设备')
@@ -69,7 +69,9 @@ describe('本章目标审稿合同', () => {
     expect(prompt.indexOf('3. 全部到期')).toBeLessThan(prompt.indexOf('4. 仅未提及'))
     expect(prompt).toContain(JSON.stringify(goals))
     expect(prompt).toContain('按 id、evidence、description、status 顺序')
-    expect(prompt).toContain('逐个列出目标原文中的每个当章子动作及其判断，再汇总')
+    // 先生（审稿被截断事故）：合同必须自带上限，否则项数一多就把整份报告顶到截断。
+    expect(prompt).toContain('每项不超过 120 字')
+    expect(prompt).toContain('每项最多 1 条引文')
     expect(prompt).toContain('任一 unmet → unmet；否则任一 unknown → unknown；仅全部完成 → completed')
   })
 
@@ -120,5 +122,58 @@ describe('本章目标审稿合同', () => {
     expect(parseChapterGoalReview({ ...valid, items: [{ ...valid.items[0], status: 'pass' }] })).toBeNull()
     expect(parseChapterGoalReview({ ...valid, items: [{ ...valid.items[0], evidence: [] }] })).toBeNull()
     expect(parseChapterGoalReview({ ...valid, items: [valid.items[0], valid.items[0]] })).toBeNull()
+  })
+})
+
+/**
+ * 先生（审稿截断事故）：逐项核对的输出长度正比于清单条数。条数一多，单次调用最容易
+ * 顶到模型输出上限、整份报告作废 —— 所以清单长时要拆成小批次分别核对。
+ */
+describe('长清单分批核对', () => {
+  const goalsWith = (count: number) => freezeChapterGoals(
+    1,
+    Array.from({ length: count }, (_, index) => `目标${index + 1}`).join('\n'),
+  )
+
+  it('清单短就随主审稿一次完成，不多花调用', () => {
+    expect(splitChapterGoalsIntoBatches(goalsWith(6))).toHaveLength(1)
+  })
+
+  it('清单长按批数均分，而不是硬切出一个过小的尾巴', () => {
+    const batches = splitChapterGoalsIntoBatches(goalsWith(9))
+    expect(batches.map(batch => batch.items.length)).toEqual([3, 3, 3])
+    // 拆批不得丢项、不得换序：合并回来必须与原清单逐项一致。
+    expect(batches.flatMap(batch => batch.items.map(item => item.id)))
+      .toEqual(goalsWith(9).items.map(item => item.id))
+  })
+
+  it('批数有上限：项数再多也不无限追加调用', () => {
+    const batches = splitChapterGoalsIntoBatches(goalsWith(40))
+    expect(batches).toHaveLength(MAX_GOAL_REVIEW_BATCHES)
+    expect(batches.flatMap(batch => batch.items)).toHaveLength(40)
+  })
+
+  it('分批合同只要本批的 goalReviews，且自带上限', () => {
+    const batch = splitChapterGoalsIntoBatches(goalsWith(9))[1]!
+    const prompt = buildChapterGoalReviewBatchPrompt(batch, 'zh-CN')
+    expect(prompt).toContain('只输出一个 JSON 对象：{"goalReviews":[...]}')
+    expect(prompt).toContain('只包含本批清单的项')
+    expect(prompt).toContain('每项不超过 120 字')
+    expect(prompt).toContain('每项最多 1 条引文')
+    // 只带本批的项，不夹带其它批。
+    expect(prompt).toContain('"id":"ch1:keyEvents:4"')
+    expect(prompt).not.toContain('"id":"ch1:keyEvents:1"')
+  })
+
+  it('分批模式下主审稿明确要求 goalReviews 返回空数组', () => {
+    expect(buildChapterGoalReviewDeferredNote('zh-CN')).toContain('必须返回空数组 []')
+  })
+
+  it('单批解析容错：数组、对象包装、围栏都收，坏 JSON 退空数组', () => {
+    expect(parseChapterGoalReviewBatch('[{"id":"a"}]')).toEqual([{ id: 'a' }])
+    expect(parseChapterGoalReviewBatch('{"goalReviews":[{"id":"b"}]}')).toEqual([{ id: 'b' }])
+    expect(parseChapterGoalReviewBatch('```json\n[{"id":"c"}]\n```')).toEqual([{ id: 'c' }])
+    // 解析不出来就退空数组 —— 该批的目标会被归一化标成 unknown，而不是让一批的格式问题废掉整次审稿。
+    expect(parseChapterGoalReviewBatch('not json at all')).toEqual([])
   })
 })

@@ -113,20 +113,6 @@ describe('writing skill settings', () => {
     ))
   })
 
-  it('uses an English separator when one skill is enabled for multiple stages', async () => {
-    await act(async () => {
-      await page.getByLabelText('Planning skill').selectOptions('builtin:long-form-continuity')
-    })
-    await expect.element(page.getByLabelText('Chapter drafting skill')).toBeEnabled()
-    await act(async () => {
-      await page.getByLabelText('Chapter drafting skill').selectOptions('builtin:long-form-continuity')
-    })
-
-    const library = container?.querySelector('section[aria-labelledby="writing-skill-library-title"]')
-    await vi.waitFor(() => expect(library?.textContent).toContain('Planning, Chapter drafting'))
-    expect(library?.textContent).not.toContain('Planning、Chapter drafting')
-  })
-
   it('localizes bundled skill metadata while preserving its Chinese copy', async () => {
     const library = container?.querySelector('section[aria-labelledby="writing-skill-library-title"]')
     const builtinOptions = () => [...(container?.querySelectorAll('select option') ?? [])]

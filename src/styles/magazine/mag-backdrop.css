@@ -1,0 +1,124 @@
+/* ============================================================================
+ * 栏目背景 + 栏目扫线 —— v3「时尚杂志」的常驻版面
+ *
+ * ── 先生 2026-09-16 的定调（这一层就是照它重做的）──────────────────────────
+ *   「我觉得你倒不如把你这个开篇动画弄成对应栏目的背景，因为现在这个动画太慢，
+ *     会让用户觉得卡顿。」
+ *
+ * 于是「栏目身份」从**来一下就走**变成**一直在**：
+ *
+ *   · 底色   编辑区底色 = 当前栏目色 7% 混纸 —— 切栏目 200ms 过渡，眼睛不等待
+ *   · 水印   右下角一枚出血巨号编号（attr(data-sec-no)），章节编号即栏目编号
+ *   · 色带   左缘 4px 通高栏目色带，从上下边缘出血
+ *   · 扫线   切栏目时 300ms 的一道横向色线（mag-sweep），是「脆响」不是「等待」
+ *
+ * 版面因此变成杂志的样子：**彩色是版面，白纸是内容**（.edit-body 的内容层
+ * 一律透明，让栏目色透出来；纸面白底由各编辑器自己的 .manuscript / 卡片承担）。
+ *
+ * ── 分家纪律 ────────────────────────────────────────────────────────────────
+ * 全部规则带 `html[data-ui='v2'][data-mag]`；`data-sec` / `data-sec-no` 两个属性
+ * 也只在 v3 下由 ShellV2 挂出。v2 墨纸书斋与 v1 经典界面：一条规则不匹配、
+ * 一个属性不出现 —— 逐像素不变。
+ * 本文件不定义任何令牌（`--mag-sec` 由 `data-sec` 映射到既有的 --mag-sec-N）。
+ * ========================================================================== */
+
+/* ---- 底色：当前栏目色 7% 混纸 ----
+ * 200ms：够快，快到不觉得「在等动画」；又够缓，缓到不闪。 */
+html[data-ui='v2'][data-mag] .editor[data-sec] {
+  background-color: color-mix(in srgb, var(--mag-sec) 7%, var(--paper2));
+  background-image: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--ink) 2.5%, transparent) 0 1px,
+    transparent 1px 64px
+  );
+  transition: background-color 200ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+/* 栏目键 → 栏目色标（顺序与书脊索引块、shared/section-opener.ts 同一份契约） */
+html[data-ui='v2'][data-mag] .editor[data-sec='1'] { --mag-sec: var(--mag-sec-1); }
+html[data-ui='v2'][data-mag] .editor[data-sec='2'] { --mag-sec: var(--mag-sec-2); }
+html[data-ui='v2'][data-mag] .editor[data-sec='3'] { --mag-sec: var(--mag-sec-3); }
+html[data-ui='v2'][data-mag] .editor[data-sec='4'] { --mag-sec: var(--mag-sec-4); }
+html[data-ui='v2'][data-mag] .editor[data-sec='5'] { --mag-sec: var(--mag-sec-5); }
+html[data-ui='v2'][data-mag] .editor[data-sec='6'] { --mag-sec: var(--mag-sec-6); }
+html[data-ui='v2'][data-mag] .editor[data-sec='7'] { --mag-sec: var(--mag-sec-7); }
+
+/* ---- 左缘色带：4px 通高，上下出血 ---- */
+html[data-ui='v2'][data-mag] .editor[data-sec]::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  z-index: 2;
+  background: var(--mag-sec);
+  pointer-events: none;
+  transition: background-color 200ms linear;
+}
+
+/* ---- 巨号编号水印：贴右下角，双向出血 ----
+ * 编号来自属性（attr），所以换栏目只需要换属性，不重建任何 DOM。
+ * 字号用 vw 而不是容器单位：伪元素不能查询自己所属的元素，
+ * 而 .editor 的宽度 ≈ 视口宽 - 书脊 94 - 侧栏 - 助手，用 24vw 这一档最稳。 */
+html[data-ui='v2'][data-mag] .editor[data-sec-no]::after {
+  content: attr(data-sec-no);
+  position: absolute;
+  right: -0.04em;
+  bottom: -0.05em;
+  z-index: 0;
+  font-family: var(--mag-font-num);
+  font-size: clamp(160px, 24vw, 330px);
+  font-weight: 700;
+  line-height: 0.78;
+  letter-spacing: -0.05em;
+  font-variant-numeric: tabular-nums;
+  color: var(--mag-sec);
+  opacity: 0.1;
+  pointer-events: none;
+  user-select: none;
+  transition: color 200ms linear;
+}
+
+/* ---- 「彩色是版面，白纸是内容」：
+ * 编辑区的内容层一律透明，让栏目色与巨号水印透出来。
+ * 只透明到页面根这一层 —— 再往里的纸面（.manuscript、卡片、对话气泡）
+ * 仍是原来的白，于是白纸浮在栏目色版面上，这才是杂志的版面关系。 */
+html[data-ui='v2'][data-mag] .editor .v2-editor-page,
+html[data-ui='v2'][data-mag] .edit-body,
+html[data-ui='v2'][data-mag] .edit-body > * {
+  background-color: transparent;
+}
+
+/* ---- 栏目扫线（Section Sweep）：切栏目时 300ms 的一道脆响 ----
+ * 300ms 与 src/shared/section-opener.ts 的 SECTION_SWEEP_MS（420ms 含余量）
+ * 是同一拍：CSS 管视觉，React 只管到点摘节点。 */
+html[data-ui='v2'][data-mag] .mag-sweep {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 3px;
+  z-index: 62;
+  background: var(--mag-sec);
+  pointer-events: none;
+  transform-origin: left center;
+  animation: mag-sweep 300ms cubic-bezier(0.16, 0.84, 0.24, 1) both;
+}
+
+/* 从左端扫到右端 → 停一瞬 → 淡掉。扫完的那一瞬，底色早已换好。 */
+@keyframes mag-sweep {
+  0% { transform: scaleX(0); opacity: 1; }
+  70% { transform: scaleX(1); opacity: 1; }
+  100% { transform: scaleX(1); opacity: 0; }
+}
+
+/* 减少动效：底色照换（那是信息，不是动效），只把扫线与过渡关掉 */
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui='v2'][data-mag] .editor[data-sec] {
+    transition: none;
+  }
+  html[data-ui='v2'][data-mag] .mag-sweep {
+    display: none;
+  }
+}

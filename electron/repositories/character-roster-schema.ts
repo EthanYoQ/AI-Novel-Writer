@@ -38,6 +38,11 @@ export function ensureCharacterRosterSchema(db: BetterSqlite3.Database): void {
   if (!characterColumns.some(column => column.name === 'cs_provenance')) {
     db.exec("ALTER TABLE characters ADD COLUMN cs_provenance TEXT NOT NULL DEFAULT '{}'")
   }
+  // 关系备注（作者自由文本原话）与结构化关系拆成两列：旧项目按需补列，既有
+  // characters.relationships 里的自由文本由读取路径按备注迁移，不改写原文。
+  if (!characterColumns.some(column => column.name === 'relationship_notes')) {
+    db.exec("ALTER TABLE characters ADD COLUMN relationship_notes TEXT NOT NULL DEFAULT ''")
+  }
 
   // SQLite 旧项目已经有第一版 roster 元数据时，补上完整事实哈希。不能依赖
   // CREATE TABLE IF NOT EXISTS 迁移既有表结构。

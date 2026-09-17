@@ -81,34 +81,34 @@ describe('theme store branding defaults', () => {
     installDomStubs()
   })
 
-  it('defaults to the accepted warm paper theme', async () => {
+  it('defaults to the accepted starry theme', async () => {
     const { useThemeStore } = await import('../theme-store')
 
     useThemeStore.getState().initTheme()
 
-    expect(useThemeStore.getState().theme).toBe('paper')
-    expect(useThemeStore.getState().resolvedTheme).toBe('paper')
+    expect(useThemeStore.getState().theme).toBe('galaxy')
+    expect(useThemeStore.getState().resolvedTheme).toBe('galaxy')
   })
 
-  it('uses the paper default when a historical persisted state omits the theme field', async () => {
+  it('uses the starry default when a historical persisted state omits the theme field', async () => {
     seedPersistedState({ zoom: 1, writingFont: 'lxgw-wenkai', uiFont: 'noto-sans-sc' })
     const { useThemeStore } = await import('../theme-store')
 
     useThemeStore.getState().initTheme()
 
-    expect(useThemeStore.getState().theme).toBe('paper')
-    expect(useThemeStore.getState().resolvedTheme).toBe('paper')
+    expect(useThemeStore.getState().theme).toBe('galaxy')
+    expect(useThemeStore.getState().resolvedTheme).toBe('galaxy')
   })
 
-  it('fails safely to the paper default when persisted JSON is corrupt', async () => {
+  it('fails safely to the starry default when persisted JSON is corrupt', async () => {
     localStorage.setItem('ai-novel-writer-theme', '{not-json')
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { useThemeStore } = await import('../theme-store')
 
     useThemeStore.getState().initTheme()
 
-    expect(useThemeStore.getState().theme).toBe('paper')
-    expect(useThemeStore.getState().resolvedTheme).toBe('paper')
+    expect(useThemeStore.getState().theme).toBe('galaxy')
+    expect(useThemeStore.getState().resolvedTheme).toBe('galaxy')
     consoleError.mockRestore()
   })
 

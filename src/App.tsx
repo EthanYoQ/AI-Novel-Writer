@@ -23,6 +23,17 @@ import ImportNovelDialog from './components/dialogs/ImportNovelDialog'
 import ChapterCreationDialog from './components/dialogs/ChapterCreationDialog'
 import ExportDialog from './components/dialogs/ExportDialog'
 import SettingsModal from './components/settings/SettingsModal'
+import QuickStartGuide from './components/onboarding/QuickStartGuide'
+import TroubleshootingGuide from './components/help/TroubleshootingGuide'
+import { useOnboardingStore } from './stores/onboarding-store'
+import ShellV2 from './components/layout/v2/ShellV2'
+import {
+  useUiVersionStore,
+  isModernShell,
+  isMagazine,
+  type UiVersion,
+} from './stores/ui-version-store'
+import { V2_THEME_BY_THEME } from './components/layout/v2/v2-theme'
 import { ANIME_SKIN_URL } from './components/settings/AppearanceSettings'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { actionToast } from './components/ui/ActionToast'
@@ -68,18 +79,33 @@ export function SkinBackgroundLayer({
 export function AppSkinRoot({
   theme,
   skinId,
+  uiVersion = 'v1',
   children,
 }: {
   theme: Theme
   skinId: SkinId
+  uiVersion?: UiVersion
   children: ReactNode
 }) {
+  /**
+   * 现代外壳（v2 墨纸书斋 / v3 时尚杂志）共用同一套基座样式。
+   *
+   * data-ui='v2' 在 v3 下同样挂上，这是刻意的：v2-index.css 里那 20 万字节的
+   * 组件级换装全部以 [data-ui='v2'] 为作用域，让 v3 复用它，我们就不必重写
+   * 一遍完整基座；v3 的全部差异由 mag-index.css 在更高的特异性上接管。
+   * 换句话说：data-ui 标记「基座」，data-mag 才是「杂志皮肤」的开关。
+   */
+  const modern = isModernShell(uiVersion)
+  const magazine = isMagazine(uiVersion)
   return (
     <div
       className="app-skin-root flex flex-col w-full h-full overflow-hidden"
       data-theme={theme}
       data-skin={skinId}
       data-skin-readability={skinId === 'classic' ? 'theme-default' : 'high-contrast'}
+      data-ui={modern ? 'v2' : undefined}
+      data-v2-theme={modern ? V2_THEME_BY_THEME[theme] : undefined}
+      data-mag={magazine ? '1' : undefined}
     >
       {children}
     </div>
@@ -116,6 +142,7 @@ export default function App() {
   const initSkin = useSkinStore((s) => s.init)
   const disposeSkin = useSkinStore((s) => s.dispose)
   const recoverFromImageFailure = useSkinStore((s) => s.recoverFromImageFailure)
+  const uiVersion = useUiVersionStore((s) => s.uiVersion)
 
   // 初始化：主题 + LLM 模型 + 最近项目 + 缩放级别
   useEffect(() => {
@@ -213,6 +240,46 @@ export default function App() {
     return disposeSkin
   }, [disposeSkin, initSkin])
 
+  /**
+   * 把界面版本同步到 <html> 上。
+   *
+   * v2 / v3 的令牌与覆盖样式挂在 html[data-ui="v2"]，这样 Radix Portal 到 body 的
+   * 对话框、弹出菜单、Toast 才能继承到新外壳的皮肤；只标在 App 根节点上时，
+   * Portal 出去的内容会掉回旧配色。
+   *
+   * data-mag 是「时尚杂志」这一层的总开关（见 styles/magazine/mag-index.css），
+   * 同样必须挂在 <html> 上。三个属性一起增删，避免切换时残留旧皮肤。
+   *
+   * ★ 2026-09-16（先生定位）：index.html 里那段「防闪跳」脚本会在首帧把背景色
+   * 写进 **document.body.style**（内联样式）。内联样式的优先级高于任何样式表，
+   * 于是 mag-palette.css 里那整套 `--paper2` 全被它压住 —— 表现就是
+   * 「v3 里怎么改都还是旧纸米黄」。这里在挂属性之后把它改写成
+   * `var(--color-bg)`：首帧仍由 index.html 的硬编码色兜住（那时 CSS 尚未生效），
+   * 界面挂载后则自动跟随界面版本与主题的令牌，不再压住杂志皮肤。
+   */
+  useEffect(() => {
+    const root = document.documentElement
+    if (!isModernShell(uiVersion)) {
+      root.removeAttribute('data-ui')
+      root.removeAttribute('data-v2-theme')
+      root.removeAttribute('data-mag')
+      return
+    }
+    root.setAttribute('data-ui', 'v2')
+    root.setAttribute('data-v2-theme', V2_THEME_BY_THEME[resolvedTheme])
+    if (isMagazine(uiVersion)) {
+      root.setAttribute('data-mag', '1')
+      /* ★ 交班只发生在 v3：内联底色改由令牌驱动，首帧防闪跳的硬编码到此为止。
+       * v2 必须原样 —— 它的首帧色是 index.html 里写死的 #F7F3E8，
+       * 而 v2 的 --paper2 是 #ECE5D3，两者并不相等；
+       * 若无条件改写，V2 的底色会被 v3 的开发悄悄换掉（2026-09-16 自查发现并修正）。
+       * 分家铁律：任何一把「改」，都必须先问一句它会不会碰到另一个版本。 */
+      document.body.style.backgroundColor = 'var(--color-bg)'
+    } else {
+      root.removeAttribute('data-mag')
+    }
+  }, [uiVersion, resolvedTheme])
+
   useEffect(() => {
     if (!ipc.isElectron) return
     void ipc.invoke('project:smoke-open-request').then(async (request) => {
@@ -245,16 +312,50 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
+  /**
+   * 新手引导：只有「从没走过」的用户才会在启动后自动看到它。
+   * 走完或跳过全部之后会写进 localStorage，之后只在欢迎页手动打开。
+   */
+  useEffect(() => {
+    useOnboardingStore.getState().openOnFirstRun()
+  }, [])
+
+  const sidebarNode = (
+    <ErrorBoundary fallbackLabel={text('侧边栏渲染失败', 'Sidebar failed to render')}>
+      <Sidebar />
+    </ErrorBoundary>
+  )
+  const editorNode = (
+    <ErrorBoundary fallbackLabel={text('编辑区渲染失败', 'Editor failed to render')}>
+      <EditorArea onNewProject={() => useLayoutStore.getState().openNewProject()} />
+    </ErrorBoundary>
+  )
+  const aiPanelNode = (
+    <ErrorBoundary fallbackLabel={text('AI 面板渲染失败', 'AI panel failed to render')}>
+      {rightView === 'ai-output' ? <AIOutputPanel /> : <AIPanel />}
+    </ErrorBoundary>
+  )
+
   return (
-    <AppSkinRoot theme={resolvedTheme} skinId={skinState.activeSkin}>
+    <AppSkinRoot theme={resolvedTheme} skinId={skinState.activeSkin} uiVersion={uiVersion}>
       <SkinBackgroundLayer
         skinId={skinState.activeSkin}
         backgroundUrl={skinBackgroundUrl}
         onImageError={() => void recoverFromImageFailure()}
       />
       <UpdateNotifier />
-      {/* 标题栏 */}
-      <TitleBar />
+      {isModernShell(uiVersion) ? (
+        <ShellV2
+          sidebar={sidebarNode}
+          editor={editorNode}
+          aiPanel={aiPanelNode}
+          bottom={<BottomPanel />}
+        />
+      ) : (
+        <>
+          {/* ===== v1 外壳：原样保留，便于随时一键回滚 ===== */}
+          {/* 标题栏 */}
+          <TitleBar />
 
       {/*
         主体：flex 行 = LeftBar | 纵向PanelGroup | RightBar
@@ -321,8 +422,15 @@ export default function App() {
       </div>
 
 
-      {/* 状态栏（全宽） */}
-      <StatusBar />
+          {/* 状态栏（全宽） */}
+          <StatusBar />
+        </>
+      )}
+
+      {/* 新手引导（一次性，浮层不影响两套外壳的布局） */}
+      <QuickStartGuide />
+      {/* 常见错误排查（由顶栏「帮助」下拉打开） */}
+      <TroubleshootingGuide />
 
       {/* 全局对话框 — 由 layout-store 控制开关，不再依赖 window.dispatchEvent */}
       <NewProjectDialog

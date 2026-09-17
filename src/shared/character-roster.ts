@@ -84,13 +84,16 @@ export interface CharacterRosterEntry {
   relationships: CharacterRosterRelationship[]
   arc: string
   notes: string
-  currentState?: CharacterRosterCharacterState
   /**
-   * 旧 characters.relationships 的自由文本证据。只会由 read 返回，或由
-   * manual_edit 原样回写；模型生成、导入、蓝图同步、章节推进与旧图谱修复
-   * 均不可提交此字段。
+   * 自由文本关系备注（作者的原始措辞）。
+   *
+   * 它与 relationships 结构化边**并存**、互不压制：能解析成边的部分同时写进
+   * relationships 供关系图谱与提示词使用，原文完整保留在这里供作者阅读与修改。
+   * 任何通道（手工编辑、角色卡导入、蓝图同步、架构生成、章节推进）都可以提交
+   * 本字段；自动流程不得覆盖已有的非空备注，作者可在角色档案里直接改写或清空。
    */
-  legacyRelationshipNotes?: string
+  relationshipNotes?: string
+  currentState?: CharacterRosterCharacterState
 }
 
 export interface CharacterRosterSnapshot {
@@ -109,7 +112,8 @@ export interface CharacterRosterSnapshot {
 
 /**
  * `initialize` 只允许空角色名单首次建档；正常角色架构重新生成使用
- * `architecture_generation`，并由主进程保守合并已存在的手工字段。
+ * `architecture_generation`，它以本轮生成的名单为完整事实源：未列入的旧角色
+ * 会被移除，同名条目上已存在的手工字段仍然保留。
  */
 export type CharacterRosterCommitIntent =
   | 'initialize'
@@ -137,6 +141,13 @@ export interface CharacterRosterCommitRequest {
   schemaVersion: typeof CHARACTER_ROSTER_SCHEMA_VERSION
   entries: CharacterRosterEntry[]
   intent?: CharacterRosterCommitIntent
+  /**
+   * 仅 novel_import 允许。作者已在候选面板里对同名角色做出选择（直接覆盖、或
+   * 在合并窗口里逐项确认过），因此本次提交的同名条目以**候选内容为准**：候选
+   * 非空的字段生效，候选没写的字段仍保留原值 —— 不再走「旧值一律优先」的保守
+   * 合并。未携带时保持原本的保守语义。
+   */
+  overwriteExisting?: boolean
   /** Required for chapter_progress; validated against the immutable outbox receipt. */
   source?: FinalizedSourceIdentity
   /** 仅 manual_edit 使用；由角色管理的草稿账本明确给出身份映射。 */

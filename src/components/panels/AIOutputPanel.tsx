@@ -180,64 +180,50 @@ export default function AIOutputPanel() {
 
   return (
     <div
-      className="writer-ai-panel flex flex-col h-full overflow-hidden"
+      className="writer-ai-panel ai-output-view flex flex-col h-full overflow-hidden"
     >
-      {/* 面板头部 */}
-      <div
-        className="no-select flex items-center justify-between gap-1.5 px-2 flex-shrink-0"
-        style={{
-          height: 'var(--height-panel-header)',
-          borderBottom: '1px solid var(--color-border)',
-        }}
-      >
-        <span
-          className="text-xs font-medium uppercase tracking-widest"
-          style={{ color: 'var(--color-text-muted)' }}
-        >
-          {runText(visibleLocale, 'AI 输出', 'AI output')}
-        </span>
+      {/* 面板头部（demo .ai-output-head：标题 + 副题 + 返回 AI 助手） */}
+      <div className="ai-output-head no-select">
+        <b>{runText(visibleLocale, 'AI 输出', 'AI output')}</b>
+        <span className="sub">{runText(visibleLocale, 'Agent 工作记录', 'Agent work log')}</span>
         <button
+          type="button"
           onClick={() => useLayoutStore.getState().setRightView('agent')}
           title={runText(visibleLocale, '切换回 Agent', 'Switch back to Agent')}
-          className="icon-btn"
-          style={{ width: 20, height: 20 }}
+          className="icobtn"
         >
           <X size={13} strokeWidth={1.5} />
         </button>
       </div>
 
-      {/* 内容区 */}
-      <div className="flex-1 overflow-hidden flex flex-col">
-        {(recoveryCandidates.length > 0 || recoveryError) && (
-          <RecoveryCandidateSection
-            candidates={recoveryCandidates}
-            error={recoveryError}
-            locale={currentLocale}
-            onCopy={copyRecoveryCandidate}
-            onContinue={candidate => { void continueRecoveryCandidate(candidate) }}
-            onDiscard={candidate => { void discardRecoveryCandidate(candidate) }}
-          />
-        )}
-        <div className="flex-1 overflow-hidden">
-          {viewRun ? (
-            <ActiveRunView
-              run={viewRun}
-              activeRuns={activeRuns}
-              onSwitchRun={setViewRunId}
-            />
+      {/* 恢复候选：仍常驻在滚动区之上，只换成 demo 的 entry 版式 */}
+      {(recoveryCandidates.length > 0 || recoveryError) && (
+        <RecoveryCandidateSection
+          candidates={recoveryCandidates}
+          error={recoveryError}
+          locale={currentLocale}
+          onCopy={copyRecoveryCandidate}
+          onContinue={candidate => { void continueRecoveryCandidate(candidate) }}
+          onDiscard={candidate => { void discardRecoveryCandidate(candidate) }}
+        />
+      )}
+
+      {viewRun ? (
+        <ActiveRunView
+          run={viewRun}
+          activeRuns={activeRuns}
+          onSwitchRun={setViewRunId}
+        />
+      ) : (
+        /* demo .ai-output-body：空态与历史记录都直接落在滚动区里 */
+        <div className="ai-output-body">
+          {recentHistory.length === 0 ? (
+            <EmptyState />
           ) : (
-            <div className="h-full overflow-y-auto">
-              {recentHistory.length === 0 ? (
-                <EmptyState />
-              ) : (
-                <div className="px-3 py-3">
-                  <HistoryList items={recentHistory} onSelect={setViewRunId} locale={visibleLocale} />
-                </div>
-              )}
-            </div>
+            <HistoryList items={recentHistory} onSelect={setViewRunId} locale={visibleLocale} />
           )}
         </div>
-      </div>
+      )}
     </div>
   )
 }
@@ -258,26 +244,44 @@ function RecoveryCandidateSection({
   onDiscard: (candidate: RecoveryCandidate) => void
 }) {
   return (
-    <section className="max-h-[45%] overflow-y-auto border-b px-3 py-2" style={{ borderColor: 'var(--color-border)' }}>
-      <div className="mb-2 text-xs font-medium" style={{ color: 'var(--color-text)' }}>
-        {runText(locale, '恢复候选', 'Recovery candidates')}
+    <section
+      className="ai-output-entry max-h-[45%] overflow-y-auto flex-shrink-0"
+      style={{ padding: '15px 15px 0' }}
+    >
+      {/* demo .ai-output-meta：状态点 + 标题 + 右侧标签 */}
+      <div className="ai-output-meta">
+        <span className="ai-output-dot" style={{ backgroundColor: 'var(--seal)' }} />
+        <span className="ai-output-title">
+          {runText(locale, '恢复候选', 'Recovery candidates')}
+        </span>
+        <span className="ai-output-tag">{candidates.length}</span>
       </div>
       {error && <p role="alert" className="mb-2 text-xs" style={{ color: 'var(--color-error-text)' }}>{error}</p>}
       {candidates.map(candidate => (
-        <article key={candidate.candidateId} className="mb-2 rounded-md border p-2 text-xs" style={{ borderColor: 'var(--color-border)' }}>
-          <div className="font-medium" style={{ color: 'var(--color-text)' }}>
-            {runText(
-              locale,
-              `${candidate.replacesCandidateId ? '替代候选' : '原始候选'} · 第${candidate.chapterNumber}章 ${candidate.chapterTitle}`,
-              `${candidate.replacesCandidateId ? 'Replacement candidate' : 'Original candidate'} · Chapter ${candidate.chapterNumber} ${candidate.chapterTitle}`,
-            )}
+        <article key={candidate.candidateId} className="ai-output-entry">
+          <div className="ai-output-meta">
+            <span
+              className="ai-output-dot"
+              style={{ backgroundColor: candidate.sourceCurrent ? 'var(--seal)' : 'var(--color-warning)' }}
+            />
+            <span className="ai-output-title">
+              {runText(
+                locale,
+                `${candidate.replacesCandidateId ? '替代候选' : '原始候选'} · 第${candidate.chapterNumber}章 ${candidate.chapterTitle}`,
+                `${candidate.replacesCandidateId ? 'Replacement candidate' : 'Original candidate'} · Chapter ${candidate.chapterNumber} ${candidate.chapterTitle}`,
+              )}
+            </span>
+            <span className="ai-output-tag">{candidate.failureCode || 'CANDIDATE'}</span>
           </div>
           {!candidate.sourceCurrent && (
-            <p className="mt-1" style={{ color: 'var(--color-warning-text)' }}>
+            <p className="mt-1 mb-1 text-xs" style={{ color: 'var(--color-warning-text)' }}>
               {runText(locale, '源章节已变化；可复制或放弃，但不能直接继续。', 'The source chapter changed. You can copy or discard this candidate, but cannot continue it directly.')}
             </p>
           )}
-          <div className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap" style={{ color: 'var(--color-text-secondary)' }}>
+          <div
+            className="ai-output-text max-h-24 overflow-y-auto"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
             {candidate.visibleText}
           </div>
           <div className="mt-2 flex gap-1.5">
@@ -297,9 +301,16 @@ function RecoveryCandidateSection({
 function EmptyState() {
   const text = useLocaleStore(s => s.text)
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-2 px-6" style={{ color: 'var(--color-text-muted)' }}>
-      <Sparkles size={20} style={{ opacity: 0.2 }} />
-      <span className="text-xs opacity-60">{text('暂无输出', 'No output')}</span>
+    /* demo .ai-output-empty：主行 + 弱化副行 */
+    <div className="ai-output-empty">
+      <Sparkles size={20} style={{ opacity: 0.2, display: 'block', margin: '0 auto 8px' }} />
+      <div>{text('暂无输出', 'No output')}</div>
+      <span style={{ fontSize: 10, color: 'var(--faint)' }}>
+        {text(
+          '当 AI 执行生成、检索、审稿或修稿任务时，工作结果会显示在这里。',
+          'When the AI runs a generation, retrieval, review, or revision task, its results appear here.',
+        )}
+      </span>
     </div>
   )
 }
@@ -394,7 +405,11 @@ function ActiveRunView({
     : 0
 
   return (
-    <div className="flex flex-col h-full overflow-hidden relative">
+    /* demo .ai-output-body：多任务切换 / 进度线固定在顶部，只有记录区滚动 */
+    <div
+      className="ai-output-body relative flex flex-col"
+      style={{ padding: 0, overflow: 'hidden' }}
+    >
       {/* 多任务切换（多于1个任务时显示） */}
       {activeRuns.length > 1 && (
         <div
@@ -430,56 +445,58 @@ function ActiveRunView({
         />
       </div>
 
-      {/* 滚动内容区 */}
+      {/* 滚动内容区：每条记录都是 demo 的 .ai-output-entry */}
       <div
         ref={scrollRef}
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto"
+        style={{ padding: '15px 15px 20px' }}
       >
-        {/* 步骤进度区及独立输出流 */}
-        <div className="px-2 pt-2 pb-4">
-          {run.steps.map((step, i) => (
-            <StepOutputBlock
-              key={step.id}
-              step={step}
-              index={i}
-              total={run.steps.length}
-              isActiveRun={isActive}
-              isCurrentStep={i === run.currentStepIndex}
-              locale={locale}
-            />
-          ))}
+        {run.steps.map((step, i) => (
+          <StepOutputBlock
+            key={step.id}
+            step={step}
+            index={i}
+            total={run.steps.length}
+            isActiveRun={isActive}
+            isCurrentStep={i === run.currentStepIndex}
+            locale={locale}
+          />
+        ))}
 
-          {run.status === 'failed' && (
-            <WorkflowFailureNotice
-              failureCode={run.failureCode ?? currentStep?.failureCode}
-              error={run.error || currentStep?.error}
-              promptBudgetReport={run.promptBudgetReport ?? currentStep?.promptBudgetReport}
-              projectPath={run.projectPath}
-              projectSession={run.projectSession}
-              isUnpersistedChapterDraft={
-                run.type === 'chapter_creation'
-                && run.chapterWordsTarget !== undefined
-                && !(currentStep?.result || '').trim()
-              }
-              locale={locale}
-              resumeSynopsisAvailable={resumeSynopsisAvailable}
-              resumingSynopsis={resumingSynopsis}
-              onResumeSynopsis={() => { void resumePlotOutline() }}
-            />
-          )}
+        {run.status === 'failed' && (
+          <WorkflowFailureNotice
+            failureCode={run.failureCode ?? currentStep?.failureCode}
+            error={run.error || currentStep?.error}
+            promptBudgetReport={run.promptBudgetReport ?? currentStep?.promptBudgetReport}
+            projectPath={run.projectPath}
+            projectSession={run.projectSession}
+            isUnpersistedChapterDraft={
+              run.type === 'chapter_creation'
+              && run.chapterWordsTarget !== undefined
+              && !(currentStep?.result || '').trim()
+            }
+            locale={locale}
+            resumeSynopsisAvailable={resumeSynopsisAvailable}
+            resumingSynopsis={resumingSynopsis}
+            onResumeSynopsis={() => { void resumePlotOutline() }}
+          />
+        )}
 
-          {/* 全局完成状态（所有步骤走完之后展示） */}
-          {!isActive && run.status === 'completed' && (
-            <div
-              className="flex items-center justify-center gap-1.5 pt-4 pb-2 mb-2 text-xs"
-              style={{ color: 'var(--color-success-text)', borderTop: '1px dashed var(--color-border)' }}
-            >
-              <CheckCircle2 size={12} />
-              {runText(locale, '整个工作流已全部完成', 'The workflow is complete')}
+        {/* 全局完成状态（所有步骤走完之后展示） */}
+        {!isActive && run.status === 'completed' && (
+          <section className="ai-output-entry">
+            <div className="ai-output-meta" style={{ justifyContent: 'center' }}>
+              <span className="ai-output-dot" style={{ backgroundColor: 'var(--color-success)' }} />
+              <span className="ai-output-title" style={{ color: 'var(--color-success-text)' }}>
+                {runText(locale, '整个工作流已全部完成', 'The workflow is complete')}
+              </span>
+              <span className="ai-output-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <CheckCircle2 size={12} style={{ color: 'var(--color-success)' }} />
+              </span>
             </div>
-          )}
-        </div>
+          </section>
+        )}
 
         {/* 底部操作占位符，避免滚动到底部被遮挡 */}
         {isActive && <div className="h-10 w-full flex-shrink-0" />}
@@ -555,24 +572,42 @@ function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep, local
     return () => { mounted = false }
   }, [isCurrentStep])
 
+  // 状态点 / 标题颜色沿用原有的状态分支，只是换成 demo 的圆点与标题层级
+  const dotColor =
+    isCompleted ? 'var(--color-success)' :
+    isFailed ? 'var(--color-error)' :
+    isRunning ? 'var(--color-accent)' :
+    'var(--color-border)'
+  const titleColor =
+    isRunning ? 'var(--color-text)' :
+    isCompleted ? 'var(--color-text-secondary)' :
+    isFailed ? 'var(--color-error-text)' :
+    'var(--color-text-muted)'
+
   return (
-    <div className="mb-1.5">
-      {/* 头部摘要项，点击折叠/展开 */}
+    <section className="ai-output-entry">
+      {/* demo .ai-output-meta：状态点 + 步骤名 + 右侧状态徽标/进度/展开角标 */}
       <div
         onClick={() => { if (rawText) setExpanded(!expanded) }}
-        className="flex items-center gap-2 px-2 py-1.5 rounded-md text-xs transition-colors"
+        className="ai-output-meta"
         style={{
           cursor: rawText ? 'pointer' : 'default',
+          padding: '2px 4px',
+          margin: '0 -4px 5px',
+          borderRadius: 4,
           backgroundColor: isRunning ? 'var(--color-hover)' : 'transparent',
-          color: isRunning ? 'var(--color-text)' :
-                 isCompleted ? 'var(--color-text-secondary)' :
-                 isFailed ? 'var(--color-error-text)' :
-                 'var(--color-text-muted)',
         }}
         title={rawText ? runText(locale, '点击查看该步骤的历史输出', 'View output history for this step') : undefined}
       >
-        {/* 状态图标 */}
-        <span className="flex-shrink-0 w-4 flex justify-center">
+        <span className="ai-output-dot" style={{ backgroundColor: dotColor }} />
+
+        {/* 步骤名 */}
+        <span className="ai-output-title truncate flex-1" style={{ color: titleColor, fontWeight: isRunning ? 500 : 400 }}>
+          {step.name}
+        </span>
+
+        <span className="ai-output-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          {/* 状态图标 */}
           {isCompleted && <CheckCircle2 size={11} style={{ color: 'var(--color-success)' }} />}
           {isRunning && <Loader2 size={11} className="animate-spin" style={{ color: 'var(--color-accent)' }} />}
           {isFailed && <Circle size={11} style={{ color: 'var(--color-error)', fill: 'var(--color-error)' }} />}
@@ -582,40 +617,36 @@ function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep, local
               style={{ backgroundColor: 'var(--color-border)' }}
             />
           )}
+
+          {/* 进度 */}
+          {isRunning && step.progress !== undefined && (
+            <span style={{ opacity: 0.75 }}>
+              {step.progress}%
+            </span>
+          )}
+
+          {/* 展开角标或序号 */}
+          {(rawText && !isRunning) ? (
+            <ChevronRight
+              size={11}
+              style={{
+                transition: 'transform 0.2s',
+                transform: expanded ? 'rotate(90deg)' : 'none',
+                opacity: 0.4,
+                flexShrink: 0,
+              }}
+            />
+          ) : (
+            <span style={{ opacity: 0.45 }}>
+              {index + 1}/{total}
+            </span>
+          )}
         </span>
-
-        {/* 步骤名 */}
-        <span className="truncate flex-1" style={{ fontWeight: isRunning ? 500 : 400 }}>
-          {step.name}
-        </span>
-
-        {/* 进度 */}
-        {isRunning && step.progress !== undefined && (
-          <span className="font-mono text-[0.62rem] flex-shrink-0 opacity-60">
-            {step.progress}%
-          </span>
-        )}
-
-        {/* 展开角标或序号 */}
-        {(rawText && !isRunning) ? (
-          <ChevronRight
-            size={11}
-            style={{
-              transition: 'transform 0.2s',
-              transform: expanded ? 'rotate(90deg)' : 'none',
-              opacity: 0.4,
-            }}
-          />
-        ) : (
-          <span className="font-mono text-[0.6rem] flex-shrink-0 opacity-30">
-            {index + 1}/{total}
-          </span>
-        )}
       </div>
 
-      {/* 展开的对应输出数据 */}
+      {/* 展开的对应输出数据（demo .ai-output-text：本条记录的正文） */}
       {expanded && rawText && (
-        <div className="pl-[4px] pr-1 pt-1 pb-3 text-xs w-full max-w-full break-words">
+        <div className="ai-output-text w-full max-w-full break-words">
           {/* 思维链区域 */}
           {thinking && (
             <ThinkingBlock
@@ -637,11 +668,11 @@ function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep, local
 
       {/* 如果是单一正在执行等待，则显示一个等待骨架 */}
       {!rawText && isRunning && isActiveRun && (
-        <div className="pl-[4px] pr-1 pt-1 pb-3 text-xs text-center" style={{ color: 'var(--color-text-muted)', opacity: 0.7 }}>
+        <div className="ai-output-text" style={{ color: 'var(--color-text-muted)', textAlign: 'center', opacity: 0.7 }}>
           {runText(locale, '等待指令响应...', 'Waiting for the workflow step...')}
         </div>
       )}
-    </div>
+    </section>
   )
 }
 
@@ -697,92 +728,99 @@ function WorkflowFailureNotice({
   }
 
   return (
-    <div
-      role="alert"
-      className="mt-3 mx-2 flex gap-2 rounded-md px-2.5 py-2 text-xs leading-relaxed"
-      style={{
-        color: 'var(--color-error-text)',
-        backgroundColor: 'color-mix(in srgb, var(--color-error) 10%, transparent)',
-        border: '1px solid color-mix(in srgb, var(--color-error) 35%, transparent)',
-      }}
-    >
-      <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" aria-hidden="true" />
-      <div className="min-w-0">
-        <p className="font-medium m-0">
+    /* demo .ai-output-entry：失败也是一条记录，标题在 meta，正文与操作在下方告警块内 */
+    <section className="ai-output-entry" role="alert">
+      <div className="ai-output-meta">
+        <span className="ai-output-dot" style={{ backgroundColor: 'var(--color-error)' }} />
+        <span className="ai-output-title" style={{ color: 'var(--color-error-text)' }}>
           {presentation.heading}
-        </p>
-        <p className="m-0 mt-0.5 break-words">{presentation.reason}</p>
-        {presentation.persistence && <p className="m-0 mt-1">{presentation.persistence}</p>}
-        {presentation.guidance && <p className="m-0 mt-1">{presentation.guidance}</p>}
-        {presentation.action === 'open-novel-config' && presentation.actionLabel && (
-          <button
-            type="button"
-            onClick={openNovelConfiguration}
-            disabled={!matchesCurrentProject}
-            className="mt-2 inline-flex items-center gap-1.5 rounded px-2 py-1 font-medium transition-colors"
-            style={{
-              color: 'var(--color-text)',
-              backgroundColor: 'var(--color-hover)',
-              border: '1px solid var(--color-border)',
-              opacity: matchesCurrentProject ? 1 : 0.55,
-              cursor: matchesCurrentProject ? 'pointer' : 'not-allowed',
-            }}
-          >
-            <SlidersHorizontal size={12} aria-hidden="true" />
-            {presentation.actionLabel}
-          </button>
-        )}
-        {presentation.action === 'open-novel-config' && !matchesCurrentProject && (
-          <p className="m-0 mt-1" style={{ color: 'var(--color-text-muted)' }}>
-            {locale === 'zh-CN'
-              ? '此结果属于另一项目会话。请切回该项目后再打开小说配置。'
-              : 'This result belongs to another project session. Switch back to that project before opening Novel configuration.'}
-          </p>
-        )}
-
-        {/* 断点续写：已完成部分已自动保存，点击后 AI 接着往下写 */}
-        {resumeSynopsisAvailable && (
-          <div className="mt-2">
+        </span>
+        <span className="ai-output-tag">{failureCode ?? runText(locale, '失败', 'FAILED')}</span>
+      </div>
+      <div
+        className="flex gap-2 rounded-md px-2.5 py-2 text-xs leading-relaxed"
+        style={{
+          color: 'var(--color-error-text)',
+          backgroundColor: 'color-mix(in srgb, var(--color-error) 10%, transparent)',
+          border: '1px solid color-mix(in srgb, var(--color-error) 35%, transparent)',
+        }}
+      >
+        <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" aria-hidden="true" />
+        <div className="min-w-0">
+          {/* 标题已在 meta 行（demo 的 .ai-output-title），这里不再重复 */}
+          <p className="font-medium m-0 break-words">{presentation.reason}</p>
+          {presentation.persistence && <p className="m-0 mt-1">{presentation.persistence}</p>}
+          {presentation.guidance && <p className="m-0 mt-1">{presentation.guidance}</p>}
+          {presentation.action === 'open-novel-config' && presentation.actionLabel && (
             <button
               type="button"
-              onClick={onResumeSynopsis}
-              disabled={!matchesCurrentProject || resumingSynopsis}
-              className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium shadow-sm transition-colors"
+              onClick={openNovelConfiguration}
+              disabled={!matchesCurrentProject}
+              className="mt-2 inline-flex items-center gap-1.5 rounded px-2 py-1 font-medium transition-colors"
               style={{
-                color: '#fff',
-                backgroundColor: 'var(--color-accent)',
-                border: '1px solid var(--color-accent)',
-                opacity: matchesCurrentProject ? 1 : 0.5,
+                color: 'var(--color-text)',
+                backgroundColor: 'var(--color-hover)',
+                border: '1px solid var(--color-border)',
+                opacity: matchesCurrentProject ? 1 : 0.55,
                 cursor: matchesCurrentProject ? 'pointer' : 'not-allowed',
               }}
             >
-              {resumingSynopsis
-                ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
-                : <Sparkles size={12} aria-hidden="true" />}
-              {resumingSynopsis
-                ? runText(locale, '正在从断点续写...', 'Resuming from the break point...')
-                : runText(locale, '继续生成情节大纲（断点续写）', 'Continue plot outline (resume)')}
+              <SlidersHorizontal size={12} aria-hidden="true" />
+              {presentation.actionLabel}
             </button>
-            <p className="m-0 mt-1.5" style={{ color: 'var(--color-text-muted)' }}>
-              {runText(
-                locale,
-                '已完成的部分已保存为不完整大纲，不会被覆盖；本次将让 AI 接着上次的末尾继续写。',
-                'The completed part is already saved as an incomplete outline and will not be lost; the AI will continue from where it stopped.',
-              )}
+          )}
+          {presentation.action === 'open-novel-config' && !matchesCurrentProject && (
+            <p className="m-0 mt-1" style={{ color: 'var(--color-text-muted)' }}>
+              {locale === 'zh-CN'
+                ? '此结果属于另一项目会话。请切回该项目后再打开小说配置。'
+                : 'This result belongs to another project session. Switch back to that project before opening Novel configuration.'}
             </p>
-            {!matchesCurrentProject && (
-              <p className="m-0 mt-1" style={{ color: 'var(--color-text-muted)' }}>
+          )}
+
+          {/* 上游 1.1.0 新增：情节大纲断点续写（已完成部分已自动保存，点击后 AI 接着往下写） */}
+          {resumeSynopsisAvailable && (
+            <div className="mt-2">
+              <button
+                type="button"
+                onClick={onResumeSynopsis}
+                disabled={!matchesCurrentProject || resumingSynopsis}
+                className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium shadow-sm transition-colors"
+                style={{
+                  color: '#fff',
+                  backgroundColor: 'var(--color-accent)',
+                  border: '1px solid var(--color-accent)',
+                  opacity: matchesCurrentProject ? 1 : 0.5,
+                  cursor: matchesCurrentProject ? 'pointer' : 'not-allowed',
+                }}
+              >
+                {resumingSynopsis
+                  ? <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+                  : <Sparkles size={12} aria-hidden="true" />}
+                {resumingSynopsis
+                  ? runText(locale, '正在从断点续写...', 'Resuming from the break point...')
+                  : runText(locale, '继续生成情节大纲（断点续写）', 'Continue plot outline (resume)')}
+              </button>
+              <p className="m-0 mt-1.5" style={{ color: 'var(--color-text-muted)' }}>
                 {runText(
                   locale,
-                  '此结果属于另一项目会话。请切回该项目后再续写。',
-                  'This result belongs to another project session. Switch back to that project before continuing.',
+                  '已完成的部分已保存为不完整大纲，不会被覆盖；本次将让 AI 接着上次的末尾继续写。',
+                  'The completed part is already saved as an incomplete outline and will not be lost; the AI will continue from where it stopped.',
                 )}
               </p>
-            )}
-          </div>
-        )}
+              {!matchesCurrentProject && (
+                <p className="m-0 mt-1" style={{ color: 'var(--color-text-muted)' }}>
+                  {runText(
+                    locale,
+                    '此结果属于另一项目会话。请切回该项目后再续写。',
+                    'This result belongs to another project session. Switch back to that project before continuing.',
+                  )}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+    </section>
   )
 }
 
@@ -870,37 +908,72 @@ function ThinkingBlock({ thinking, showCursor, hasContent, locale }: { thinking:
 }
 
 
-// ===== 历史列表 =====
+// ===== 历史列表（demo 里同样是 .ai-output-entry 记录流） =====
+
+/** 历史记录的状态副行文案（沿用原有「已完成 / 未完成」二分支，再区分暂停与进行中）。 */
+function runStatusLabel(locale: Locale, status: WorkflowRun['status']): string {
+  switch (status) {
+    case 'completed':
+      return runText(locale, '已完成', 'Completed')
+    case 'failed':
+      return runText(locale, '失败', 'Failed')
+    case 'paused':
+      return runText(locale, '已暂停', 'Paused')
+    case 'running':
+    case 'cancelling':
+    case 'waiting':
+      return runText(locale, '进行中', 'In progress')
+    default:
+      return runText(locale, '未开始', 'Idle')
+  }
+}
 
 function HistoryList({ items, onSelect, locale }: { items: WorkflowRun[]; onSelect: (id: string) => void; locale: Locale }) {
   return (
     <div>
       <p
-        className="text-[0.68rem] font-medium mb-2 px-1 uppercase tracking-widest"
-        style={{ color: 'var(--color-text-muted)', opacity: 0.7 }}
+        className="ai-output-meta"
+        style={{ color: 'var(--color-text-muted)', opacity: 0.7, letterSpacing: '0.14em', textTransform: 'uppercase' }}
       >
         {runText(locale, '历史', 'History')}
       </p>
-      <div className="flex flex-col gap-0.5">
+      <div className="flex flex-col">
         {items.map(run => (
-          <button
-            key={run.id}
-            onClick={() => onSelect(run.id)}
-            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors"
-            onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'var(--color-hover)' }}
-            onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent' }}
-          >
-            {run.status === 'completed'
-              ? <CheckCircle2 size={10} style={{ color: 'var(--color-success)', flexShrink: 0, opacity: 0.6 }} />
-              : <Circle size={10} style={{ color: 'var(--color-error)', flexShrink: 0, opacity: 0.6 }} />
-            }
-            <span className="text-xs truncate flex-1" style={{ color: 'var(--color-text-secondary)' }}>
-              {run.title.replace(/^[^\s]+\s/, '')}
-            </span>
-            <span className="text-[0.6rem] flex-shrink-0 font-mono opacity-30">
-              {new Date(run.createdAt).toLocaleTimeString(run.uiLocale, { hour: '2-digit', minute: '2-digit' })}
-            </span>
-          </button>
+          <section className="ai-output-entry" key={run.id}>
+            <button
+              type="button"
+              onClick={() => onSelect(run.id)}
+              className="ai-output-meta"
+              style={{
+                width: '100%',
+                textAlign: 'left',
+                background: 'transparent',
+                border: 0,
+                padding: 0,
+                cursor: 'pointer',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'var(--color-hover)' }}
+              onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent' }}
+            >
+              <span
+                className="ai-output-dot"
+                style={{ backgroundColor: run.status === 'completed' ? 'var(--color-success)' : 'var(--color-error)' }}
+              />
+              <span className="ai-output-title truncate flex-1">
+                {run.title.replace(/^[^\s]+\s/, '')}
+              </span>
+              <span className="ai-output-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                {run.status === 'completed'
+                  ? <CheckCircle2 size={10} style={{ color: 'var(--color-success)', flexShrink: 0, opacity: 0.6 }} />
+                  : <Circle size={10} style={{ color: 'var(--color-error)', flexShrink: 0, opacity: 0.6 }} />
+                }
+                <span>{new Date(run.createdAt).toLocaleTimeString(run.uiLocale, { hour: '2-digit', minute: '2-digit' })}</span>
+              </span>
+            </button>
+            <div className="ai-output-text" style={{ color: 'var(--color-text-muted)', fontSize: '10.5px' }}>
+              {runStatusLabel(locale, run.status)}
+            </div>
+          </section>
         ))}
       </div>
     </div>

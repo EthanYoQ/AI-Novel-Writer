@@ -1,0 +1,925 @@
+/* ============================================================================
+ * 「时尚杂志」控件（v3）—— 按钮 / 表单 / 菜单 / 徽章 / 设置选项
+ *
+ * 这一层管的是「先生伸手能碰到的东西」：按钮、输入框、下拉菜单、标签、开关。
+ *
+ * 三个统一动作：
+ *   ① 尺寸统一：全站按钮收敛到 30px 一档（v2 是 25px，点起来局促），
+ *      输入框 34px，菜单项 38px。三者成一套，混排时 Y 轴自然齐平。
+ *   ② 圆角统一：7 / 10 / 12px 全部收到 2~3px。印刷品是方的 ——
+ *      这是本主题与 v2「圆角卡片」气质的分水岭，也是最省力的一刀。
+ *   ③ 字重统一：菜单与按钮回到常规字重（先生早已定调「菜单文字不要加黑加粗，
+ *      那样不优雅」），只在「当前项」上才用 600 强调。
+ *
+ * 特异性说明：v2-atomic.css 靠 --v2-btn-* 令牌驱动，本文件已在令牌层接管这些
+ * 变量；此处只补令牌覆盖不到的硬编码值（圆角、悬停位移、菜单内距）。
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 1. 按钮 —— 装帧重做（2026-09-16）
+ *
+ * 先生的原话：「偷懒到按钮颜色都没给我换过」。查证属实，而且比这更糟：
+ * mag 层过去关于按钮的全部规则只有 6 条（去位移、字重 500、去主按钮阴影、
+ * 收圆角、描边色淡一档、侧栏按钮圆角），**没有一行重写底色与字色**；
+ * 而 `.v2-btn-primary` 这个类名在整个项目的 CSS 里从未被定义过 ——
+ * 它只出现在 Button.tsx 里，底色全靠继承「墨纸书斋」的旧强调色。
+ *
+ * 现在补全三档，让按钮自己说话：
+ *   实心 primary —— 珊瑚朱，全站唯一的实心强调，给「这一步就做它」
+ *   描边 outline —— 靛蓝细描边，给「可选的下一步」
+ *   幽灵 ghost   —— 无框，悬停才显形，给「辅助与次要」
+ *   紫 ai        —— 藕紫实心，AI 行动专属色，与人工动作区分开
+ * 四色都取自栏目七色，所以按钮和书脊是同一套语言。
+ * ======================================================================== */
+
+/* ==========================================================================
+ * 1·A 按钮的交互语言 —— 「刊用控件 · 扫入」（2026-09-16 二轮重做）
+ *
+ * 先生的原话：「很多按钮、鼠标悬停互动和 v2 没啥区别啊。」
+ * 查证属实，而且根因比观感更糟：本文件原有的 46 条规则全写成了
+ * `htmlhtml[data-ui='v2'][data-mag]` —— `htmlhtml` 不是任何元素的标签名，
+ * **整段规则从未匹配过任何元素**。先生看到的按钮就是 v2 的按钮，一点没变。
+ * （2026-09-16 二轮：139 处同类错误已全数修复，mag-controls 46 + mag-pages 93。）
+ *
+ * 修好之后还不够 —— v2 的按钮语言是「瞬间换底色 + 位移 1px」，
+ * 换个颜色仍然是它。这里换一套**动作**：
+ *
+ *   ① 扫入   hover 时一个实色块从**左缘**扫到右缘（260ms）—— 印刷机的滚墨
+ *   ② 呼吸   hover 时字距由 0.03em 张到 0.09em（260ms）—— 版面的呼吸，不是缩放
+ *   ③ 压印   active 时色块瞬间全填 + 下沉 1px —— 油墨压进纸里
+ *   ④ 起笔   左缘 2px 色标由中点生长到通高（260ms）—— 与书脊的栏目索引用同一套语汇
+ *
+ * 一个字都不放大缩小：这套语言全部由「线、块、字距」构成，
+ * 所以它在任何档位、任何主题下都成立。
+ * ======================================================================== */
+
+/* 两套按钮类名（.btn 是 demo 遗留，.v2-btn 是 v2 原子层）走同一套语言 */
+html[data-ui='v2'][data-mag] :is(.btn, .v2-btn) {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: var(--mag-r-hair);
+  letter-spacing: 0.03em;
+  font-weight: 500;
+  transform: none;
+  transition:
+    color 200ms cubic-bezier(0.2, 0.7, 0.3, 1),
+    letter-spacing 260ms cubic-bezier(0.16, 0.84, 0.24, 1),
+    border-color 200ms cubic-bezier(0.2, 0.7, 0.3, 1),
+    background-color 200ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+/* ① 扫入的色块：贴在按钮内部最底层（isolation 保证它落在底色之上、文字之下） */
+html[data-ui='v2'][data-mag] :is(.btn, .v2-btn)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--btn-sweep, color-mix(in srgb, var(--ink) 9%, transparent));
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 260ms cubic-bezier(0.16, 0.84, 0.24, 1);
+}
+
+html[data-ui='v2'][data-mag] :is(.btn, .v2-btn):hover::before {
+  transform: scaleX(1);
+}
+
+/* ④ 起笔的色标：左缘 2px，由中点长到通高 */
+html[data-ui='v2'][data-mag] :is(.btn, .v2-btn)::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 2px;
+  height: 0;
+  background: currentColor;
+  opacity: 0.85;
+  transform: translateY(-50%);
+  transition: height 260ms cubic-bezier(0.16, 0.84, 0.24, 1);
+}
+
+html[data-ui='v2'][data-mag] :is(.btn, .v2-btn):hover::after {
+  height: 100%;
+}
+
+/* ② 呼吸：只动字距，不动字号 —— 放大缩小会让整排按钮互相挤 */
+html[data-ui='v2'][data-mag] :is(.btn, .v2-btn):hover {
+  letter-spacing: 0.09em;
+  transform: none;
+}
+
+/* ③ 压印：色块瞬间全填 + 下沉 1px */
+html[data-ui='v2'][data-mag] :is(.btn, .v2-btn):active {
+  transform: translateY(1px);
+  transition-duration: 60ms;
+}
+
+html[data-ui='v2'][data-mag] :is(.btn, .v2-btn):active::before {
+  transform: scaleX(1);
+  transition-duration: 60ms;
+}
+
+/* 图标随文字推进：与字距呼吸同一拍，让「动」有个方向 */
+html[data-ui='v2'][data-mag] :is(.btn, .v2-btn) > svg {
+  transition: transform 260ms cubic-bezier(0.16, 0.84, 0.24, 1);
+}
+
+html[data-ui='v2'][data-mag] :is(.btn, .v2-btn):hover > svg {
+  transform: translateX(2px);
+}
+
+/* 焦点：栏目色描边（键盘用户看得见自己在哪） */
+html[data-ui='v2'][data-mag] :is(.btn, .v2-btn):focus-visible {
+  outline: 2px solid var(--mag-sec, var(--seal));
+  outline-offset: 1px;
+}
+
+/* ---- 第一档：实心主按钮：扫入更深的同色，文字保持白 ---- */
+/* 实心底用 --solid（不跟 --seal）：--seal 在「星汉」主题下是星尘蓝、
+   「夜刊」下是浅珊瑚，实心底配白字会发虚看不清。 */
+html[data-ui='v2'][data-mag] :is(.btn.primary, .v2-btn-primary) {
+  --btn-sweep: var(--solid-hover);
+  background: var(--solid);
+  color: #FFFFFF;
+  border: 1px solid var(--solid);
+  box-shadow: none;
+}
+
+html[data-ui='v2'][data-mag] :is(.btn.primary, .v2-btn-primary):hover {
+  background: var(--solid);
+  color: #FFFFFF;
+}
+
+/* ---- AI 档：藕紫实心，与人工动作区分 ---- */
+html[data-ui='v2'][data-mag] :is(.btn.ai, .v2-btn-ai) {
+  --btn-sweep: color-mix(in srgb, var(--mag-sec-5) 78%, var(--ink));
+  background: var(--mag-sec-5);
+  color: #FFFFFF;
+  border: 1px solid var(--mag-sec-5);
+  box-shadow: none;
+  filter: none;
+}
+
+html[data-ui='v2'][data-mag] :is(.btn.ai, .v2-btn-ai):hover {
+  background: var(--mag-sec-5);
+  color: #FFFFFF;
+}
+
+/* ---- 第二档：描边按钮：扫入靛蓝实心、文字转白 —— 这一档的变化最大 ---- */
+html[data-ui='v2'][data-mag] :is(.btn.outline, .v2-btn-outline) {
+  --btn-sweep: var(--mag-sec-2);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--mag-sec-2) 38%, transparent);
+  color: var(--mag-sec-2);
+}
+
+html[data-ui='v2'][data-mag] :is(.btn.outline, .v2-btn-outline):hover {
+  background: transparent;
+  border-color: var(--mag-sec-2);
+  color: #FFFFFF;
+}
+
+/* ---- 第三档：幽灵按钮：扫入极淡的墨，颜色转深 ---- */
+html[data-ui='v2'][data-mag] :is(.btn.ghost, .v2-btn-ghost) {
+  --btn-sweep: color-mix(in srgb, var(--ink) 8%, transparent);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--ink2);
+}
+
+html[data-ui='v2'][data-mag] :is(.btn.ghost, .v2-btn-ghost):hover {
+  background: transparent;
+  color: var(--ink);
+}
+
+/* ---- 危险档：删除类动作，红底白字（先生：删除才是红色）---- */
+html[data-ui='v2'][data-mag] :is(.btn.danger, .v2-btn-danger) {
+  --btn-sweep: color-mix(in srgb, var(--red) 78%, var(--ink));
+  background: var(--red);
+  color: #FFFFFF;
+  border: 1px solid var(--red);
+}
+
+html[data-ui='v2'][data-mag] .v2-btn {
+  font-weight: 500;
+  letter-spacing: 0.03em;
+}
+
+/* ==========================================================================
+ * 1·B 图标按钮 —— 与文字按钮同一族，但换一个方向：中心溢出
+ *
+ * 文字按钮是「从左缘扫入」，图标按钮是方形小件，扫入显得笨。
+ * 这里让一块栏目色的方印**从中心溢满**（scale 0→1）—— 与全站的方形印签同源。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .icon-btn {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: var(--mag-r-hair);
+  transition:
+    color 180ms cubic-bezier(0.2, 0.7, 0.3, 1),
+    background-color 180ms cubic-bezier(0.2, 0.7, 0.3, 1),
+    transform 120ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+html[data-ui='v2'][data-mag] .icon-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--mag-sec, var(--seal)) 18%, transparent);
+  transform: scale(0);
+  transition: transform 240ms cubic-bezier(0.16, 0.84, 0.24, 1);
+}
+
+html[data-ui='v2'][data-mag] .icon-btn:hover::before {
+  transform: scale(1);
+}
+
+html[data-ui='v2'][data-mag] .icon-btn:hover {
+  background: transparent;
+  color: var(--ink);
+}
+
+html[data-ui='v2'][data-mag] .icon-btn:active {
+  transform: translateY(1px);
+}
+
+/* ==========================================================================
+ * 1·C 标签页 —— 去掉 v2 的「灰底一亮」，改为底部一道栏目色线起笔
+ *
+ * v2 的标签悬停是一块灰底浮上来；杂志的标签更像刊页的索引签：
+ * 悬停时底部一条 2px 栏目色线从左缘长到右缘，底色不动。
+ * 选中项的顶线也取**当前栏目色** —— 于是标签栏与它下面的版面是同一个色系。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .tab {
+  position: relative;
+  transition:
+    color 180ms cubic-bezier(0.2, 0.7, 0.3, 1),
+    background-color 180ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+html[data-ui='v2'][data-mag] .tab::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--mag-sec, var(--seal));
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 300ms cubic-bezier(0.16, 0.84, 0.24, 1);
+}
+
+html[data-ui='v2'][data-mag] .tab:hover::after {
+  transform: scaleX(1);
+}
+
+html[data-ui='v2'][data-mag] .tab:hover {
+  background: transparent;
+  color: var(--ink);
+}
+
+html[data-ui='v2'][data-mag] .tab.on::before {
+  background: var(--mag-sec, var(--seal));
+}
+
+/* 关闭按钮：悬停转 90°（一个「叉」该有的动作）+ 极淡的红底 */
+html[data-ui='v2'][data-mag] .tab .tx svg {
+  transition: transform 220ms cubic-bezier(0.16, 0.84, 0.24, 1);
+}
+
+html[data-ui='v2'][data-mag] .tab .tx:hover {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  color: var(--redtx);
+}
+
+html[data-ui='v2'][data-mag] .tab .tx:hover svg {
+  transform: rotate(90deg);
+}
+
+/* 顶栏按钮（.tb-btn）：v2 是 28px，与正文按钮的 30px 对齐 */
+html[data-ui='v2'] .tb-btn {
+  font-size: 13px;
+}
+
+html[data-ui='v2'][data-mag] .tb-btn {
+  height: 30px;
+  gap: 7px;
+  padding: 0 9px;
+  border-radius: var(--mag-r-hair);
+}
+
+html[data-ui='v2'][data-mag] .tb-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+html[data-ui='v2'][data-mag] .tb-btn.on {
+  box-shadow: none;
+}
+
+/* 标签栏右侧的工具按钮：v2 单独压到 24px，这里回到 28px（小一号但不局促） */
+html[data-ui='v2'][data-mag] .tabbar > .tb-side .tb-btn {
+  height: 28px;
+  padding: 0 7px;
+}
+
+/* 侧栏命令按钮 */
+html[data-ui='v2'] .sidebar-host .writer-command-button {
+  font-size: 13.5px;
+}
+
+html[data-ui='v2'][data-mag] .sidebar-host .writer-command-button {
+  border-radius: var(--mag-r-hair);
+}
+
+/* ==========================================================================
+ * 2. 表单控件
+ * v2-atomic.css 已用 --v2-field-* 令牌控制字号与圆角，作用域内的
+ * input / textarea / select 会自动跟着令牌走；这里只补它的兜底尺寸。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] input:not([type='checkbox']):not([type='radio']):not([type='range']),
+html[data-ui='v2'][data-mag] select {
+  line-height: 1.45;
+}
+
+html[data-ui='v2'][data-mag] input:not([type='checkbox']):not([type='radio']):not([type='range']),
+html[data-ui='v2'][data-mag] select {
+  min-height: 34px;
+}
+
+html[data-ui='v2'][data-mag] input::placeholder,
+html[data-ui='v2'][data-mag] textarea::placeholder {
+  color: var(--faint);
+}
+
+/* 复选框 / 单选：给到 16px 的点击区，14px 的正文旁边不再显得针尖大小 */
+html[data-ui='v2'][data-mag] input[type='checkbox'],
+html[data-ui='v2'][data-mag] input[type='radio'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--seal);
+}
+
+/* ==========================================================================
+ * 3. 下拉菜单
+ *
+ * 顶栏「文件 / 编辑 / 视图」面板是先生点得最多的地方，v2 已把它放大到 15px
+ * 无层规则；杂志版沿用这一档字号（14.5px），只把圆角收到直角、
+ * 并把悬停底色换成墨色淡染 —— 深色主题下白叠加会发灰。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .tb-menu {
+  padding: 7px;
+  border-radius: var(--mag-r-card);
+  border-color: var(--line2);
+  background: var(--panel);
+  box-shadow: var(--mag-shadow-pop);
+  /* 目录页的条目编号从这里起算 */
+  counter-reset: magmenu;
+}
+
+/* 眉标：下拉菜单的第一行写成刊物目录的栏目名（CONTENTS） */
+html[data-ui='v2'][data-mag] .tb-menu::before {
+  content: '目录 · CONTENTS';
+  display: block;
+  margin: 0 4px 6px;
+  padding: 4px 7px 9px;
+  font-family: Georgia, 'Songti SC', serif;
+  font-size: 9.5px;
+  letter-spacing: 0.28em;
+  color: var(--faint);
+  border-bottom: 1px solid var(--line);
+}
+
+html[data-ui='v2'] .tb-menu button {
+  font-size: 14.5px;
+}
+
+html[data-ui='v2'][data-mag] .tb-menu button {
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
+html[data-ui='v2'][data-mag] .tb-menu button {
+  padding: 9px 16px 9px 11px;
+  gap: 11px;
+  border-radius: var(--mag-r-hair);
+}
+
+/* 条目编号：衬线小字压在左端，就是目录上的页码位 */
+html[data-ui='v2'][data-mag] .tb-menu button::before {
+  counter-increment: magmenu;
+  content: counter(magmenu, decimal-leading-zero);
+  min-width: 17px;
+  font-family: Georgia, 'Songti SC', serif;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+}
+
+html[data-ui='v2'][data-mag] .tb-menu button svg {
+  width: 16px;
+  height: 16px;
+}
+
+html[data-ui='v2'] .tb-menu button > span[class*='text-[0.7rem]'] {
+  font-size: 12.5px;
+}
+
+html[data-ui='v2'][data-mag] .tb-menu button > span[class*='text-[0.7rem]'] {
+  color: var(--muted);
+}
+
+/* 悬停：整行反白为深墨 —— 手指划过目录的那一条 */
+html[data-ui='v2'][data-mag] .tb-menu button:hover {
+  background: var(--jade2);
+  color: #FFFFFF;
+}
+
+html[data-ui='v2'][data-mag] .tb-menu button:hover::before,
+html[data-ui='v2'][data-mag] .tb-menu button:hover > span[class*='text-[0.7rem]'] {
+  color: color-mix(in srgb, #FFFFFF 62%, var(--jade2));
+}
+
+/* ==========================================================================
+ * 4. 徽章与提示条
+ * 尺寸留给组件自己（v2 已定调），这里只统一字重与直角。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .v2-badge {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+html[data-ui='v2'][data-mag] .v2-status-badge {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+html[data-ui='v2'][data-mag] .v2-notice {
+  border-radius: var(--mag-r-card);
+}
+
+/* ==========================================================================
+ * 5. 设置页：主题与界面版本选项（先生要的「界面版本」切换按钮就在这里）
+ *
+ * v2 把这排选项做成了「迷你主题卡」：min-height 76px、竖排、字号 11.5px。
+ * 杂志版保留卡片的形态（预览色块是有意义的），但把字号提到 13.5px、
+ * 高度给到 88px、圆角收到 3px，并去掉悬停位移（报纸不会跳起来）。
+ * ======================================================================== */
+html[data-ui='v2'] .appearance-theme-option,
+html[data-ui='v2'] .theme-card {
+  font-size: 13.5px;
+}
+
+html[data-ui='v2'][data-mag] .appearance-theme-option,
+html[data-ui='v2'][data-mag] .theme-card {
+  letter-spacing: 0.01em;
+}
+
+html[data-ui='v2'][data-mag] .appearance-theme-option,
+html[data-ui='v2'][data-mag] .theme-card {
+  min-height: 88px;
+  gap: 7px;
+  padding: 11px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--mag-r-card);
+}
+
+html[data-ui='v2'][data-mag] .appearance-theme-option:hover,
+html[data-ui='v2'][data-mag] .theme-card:hover {
+  transform: none;
+  border-color: color-mix(in srgb, var(--seal) 55%, transparent);
+  box-shadow: none;
+}
+
+/* 当前项：一圈实心红描边，不加阴影 */
+html[data-ui='v2'][data-mag] .appearance-theme-option--active,
+html[data-ui='v2'][data-mag] .skin-solid-surface main .appearance-theme-option[aria-pressed='true'],
+html[data-ui='v2'][data-mag] .theme-card.on {
+  border-color: var(--seal);
+  box-shadow: inset 0 0 0 1px var(--seal);
+}
+
+/* 选项里的图标与勾选跟着放大 */
+html[data-ui='v2'][data-mag] .appearance-theme-option svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ---- 界面版本组：三项单独排三列 ----
+ * 这组与「主题」组共用 .appearance-theme-grid（固定 4 列），
+ * 但界面版本只有三个选项，落在 4 列里会空出一格、左右不齐。
+ * 用 :has() 精确命中「含 data-ui-version 子项的那一组」，收成 3 列。 */
+html[data-ui='v2'][data-mag] .appearance-theme-grid:has(> [data-ui-version]) {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* ---- 四套主题的预览色块（2026-09-16 随底色重订）----
+ * 先生：「主题颜色也应该分家 —— 看见的还是以前的颜色，没变化」。
+ * 上一版只挪了几个色阶，肉眼分不出来；这一版按「一眼可辨」重排：
+ * 影棚白 / 墨版 / 烟灰 / 夜墨，四张卡的明度与冷暖都拉开了。 */
+html[data-ui='v2'][data-mag] .appearance-theme-option[data-theme='light'] {
+  background-image: linear-gradient(135deg, #FFFFFF 0 60%, #D6D9E0 61%);
+  --tp: #C8564A;
+}
+
+html[data-ui='v2'][data-mag] .appearance-theme-option[data-theme='galaxy'] {
+  background-image:
+    radial-gradient(circle at 70% 24%, #E0806E 0 1.6px, transparent 2px),
+    radial-gradient(circle at 30% 35%, #868894 0 1.4px, transparent 1.8px),
+    linear-gradient(180deg, #1E2026, #08090B);
+  --tp: #E0806E;
+  color: #F0F1F4;
+}
+
+html[data-ui='v2'][data-mag] .appearance-theme-option[data-theme='paper'] {
+  background-image: linear-gradient(135deg, #EDEEF3, #C6CAD3);
+  --tp: #C8564A;
+}
+
+html[data-ui='v2'][data-mag] .appearance-theme-option[data-theme='dark'] {
+  background-image: linear-gradient(180deg, #34353E, #191A1F);
+  --tp: #E0806E;
+  color: #F2F2F4;
+}
+
+/* ---- 图片皮肤卡 ---- */
+html[data-ui='v2'] .appearance-skin-card {
+  font-size: 13.5px;
+}
+
+html[data-ui='v2'][data-mag] .appearance-skin-card {
+  border-radius: var(--mag-r-card);
+}
+
+html[data-ui='v2'][data-mag] .appearance-skin-card:hover {
+  transform: none;
+}
+
+/* ==========================================================================
+ * 7. 设置面板 —— 大改（2026-09-16）
+ *
+ * 先生：「设置大改特改，你是自由的！」
+ *
+ * 主题卡从「一排小方块」改成**杂志的色卡封面**：
+ *   · 直角 + 竖高比例（108px），像一叠封面缩略图
+ *   · 内容下沿对齐，主题名压在色块上（杂志封面就是字压图）
+ *   · 当前项：珊瑚朱粗边 + 左上角一枚「本期」角标 —— 这是杂志的语言
+ *   · 悬停微抬 2px 并转珊瑚朱边
+ * 界面版本组共用同一套类，所以三张版本卡自动同款。
+ * ======================================================================== */
+
+html[data-ui='v2'][data-mag] .appearance-theme-option {
+  position: relative;
+  min-height: 108px;
+  padding: 14px 15px 13px;
+  border-radius: 0;
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 5px;
+  overflow: hidden;
+  text-align: left;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+html[data-ui='v2'][data-mag] .appearance-theme-option:hover {
+  border-color: var(--seal);
+  transform: translateY(-2px);
+}
+
+/* 当前项：珊瑚朱粗边 + 「本期」角标 */
+html[data-ui='v2'][data-mag] .appearance-theme-option--active {
+  border-color: var(--seal);
+  box-shadow: inset 0 0 0 2px var(--seal);
+}
+
+html[data-ui='v2'][data-mag] .appearance-theme-option--active::before {
+  content: '本期';
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 3px 9px;
+  background: var(--solid);
+  color: #FFFFFF;
+  font-family: var(--mag-font-kicker);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+}
+
+/* 卡片上的文字：宽字距、压在色块下沿 */
+html[data-ui='v2'][data-mag] .appearance-theme-option > span {
+  font-family: var(--mag-font-kicker);
+  font-size: 12.5px;
+  letter-spacing: 0.12em;
+  line-height: 1.4;
+}
+
+html[data-ui='v2'][data-mag] .appearance-theme-option svg {
+  opacity: 0.9;
+}
+
+/* 界面版本组：三张卡里的说明小字收一档，避免撑破 */
+html[data-ui='v2'][data-mag] .appearance-theme-option[data-ui-version] > span {
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+}
+
+html[data-ui='v2'][data-mag] .appearance-theme-option[data-ui-version] > span[style] {
+  font-family: var(--mag-font-geo);
+  opacity: 0.72;
+  letter-spacing: 0.06em;
+}
+
+/* 分组的说明文字：与页头导语同一档 */
+html[data-ui='v2'][data-mag] .appearance-settings > div > p {
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--ink2);
+}
+
+/* 分组标题（主题 / 界面版本 / 图片皮肤）：左缘珊瑚朱色标 —— 与编辑器卡片同款 */
+html[data-ui='v2'][data-mag] .appearance-settings h3 {
+  display: inline-block;
+  padding-left: 11px;
+  border-left: 4px solid var(--seal);
+  font-family: var(--mag-font-geo);
+  font-size: 15px;
+  letter-spacing: 0.06em;
+}
+
+/* 图片皮肤卡：直角 + 细线，悬停转珊瑚朱（与主题卡同一套规则） */
+html[data-ui='v2'][data-mag] .appearance-skin-card {
+  border-radius: 0;
+  border: 1px solid var(--line);
+  transition: border-color 0.2s ease;
+}
+
+html[data-ui='v2'][data-mag] .appearance-skin-card:hover {
+  border-color: var(--seal);
+}
+
+/* 设置行：悬停时左缘亮起一条珊瑚朱 —— 与侧栏、书脊同一套语言 */
+html[data-ui='v2'][data-mag] .settings-row {
+  position: relative;
+  padding-left: 14px;
+  transition: background-color 0.16s ease;
+}
+
+html[data-ui='v2'][data-mag] .settings-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  background: transparent;
+  transition: background-color 0.16s ease;
+}
+
+html[data-ui='v2'][data-mag] .settings-row:hover::before {
+  background: var(--seal);
+}
+
+html[data-ui='v2'][data-mag] .settings-row:hover {
+  background: color-mix(in srgb, var(--seal) 4%, transparent);
+}
+
+/* ==========================================================================
+ * 8. 设置面板 · 左栏与字段 —— 深度装帧（2026-09-16）
+ *
+ * 设置面板的左栏其实是一份「目录」：分组名 + 条目列表。
+ * 所以这里沿用目录页的语言 —— 分组宽字距、条目左缘色标、悬停亮起。
+ * 字段标签与说明小字一并收进同一套字距体系，整页看起来才像一个版面。
+ * ======================================================================== */
+
+/* 左栏分组标题：Inter 宽字距，像刊物的栏目索引 */
+html[data-ui='v2'][data-mag] .settings-nav-section {
+  font-family: var(--mag-font-kicker);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: var(--muted);
+}
+
+/* 设置条目：直角、左缘色标，悬停亮起珊瑚朱 */
+html[data-ui='v2'][data-mag] .settings-item {
+  border-radius: 0;
+  border-left: 3px solid transparent;
+  transition: background-color 0.16s ease, border-color 0.16s ease;
+}
+
+html[data-ui='v2'][data-mag] .settings-item:hover {
+  border-left-color: var(--seal);
+  background: color-mix(in srgb, var(--seal) 5%, transparent);
+}
+
+/* 字段标签：小字宽字距 */
+html[data-ui='v2'][data-mag] .settings-field label,
+html[data-ui='v2'][data-mag] .settings-label {
+  font-family: var(--mag-font-kicker);
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+/* 说明小字：行高放开，像刊物的脚注 */
+html[data-ui='v2'][data-mag] .settings-note {
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--faint);
+}
+
+/* 空状态 */
+html[data-ui='v2'][data-mag] .settings-empty {
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--muted);
+}
+
+/* 版本号：Inter 等宽数字 */
+html[data-ui='v2'][data-mag] .settings-version {
+  font-family: var(--mag-font-num);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+}
+
+/* ==========================================================================
+ * 10. 设置面板 —— 「摊开的书」结构级装帧（2026-09-16）
+ *
+ * 先生：「我还以为你会把设置面板做出书籍那种感觉呢。你太保守了。」
+ *
+ * 结构（SettingsModal.tsx 已核对）：
+ *   .settings-shell            书 —— 880×600
+ *   ├─ .settings-nav           左栏 → 做成「环衬 + 目录页」
+ *   │  ├─ .settings-nav-head   目录的栏目名
+ *   │  ├─ .settings-nav-body   条目区（分组带章节编号）
+ *   │  └─ .settings-nav-foot   版权行
+ *   └─ .settings-main          右栏 → 做成「书页」
+ *      ├─ .settings-top        页眉（章节名 + 一条墨线）
+ *      └─ .settings-content    书页正文
+ *
+ * 具体手法：
+ *   ① 全书直角 —— 印刷品没有 16px 圆角
+ *   ② 中缝装订线 —— 左栏右缘一道由浅入深的暗影，这是「书打开着」的唯一暗示
+ *   ③ 左栏比书页深一档 —— 环衬本来就是另一张纸
+ *   ④ 目录章节带 01/02… 编号（CSS counter 自动生成，分组增减都不怕）
+ *   ⑤ 书页正文左右留白加大，行宽收窄 —— 书页的版心
+ * ======================================================================== */
+
+/* ① 全书直角 + 更沉的书影（对话框 Portal 到 body，与库内规则并列时用 !important 定音） */
+html[data-ui='v2'][data-mag] .settings-shell {
+  border-radius: 0 !important;
+  box-shadow: 0 44px 96px -44px rgba(8, 9, 11, 0.55) !important;
+}
+
+/* ③ 左栏 = 环衬：比书页深一档的纸。
+ * 这里刻意用 --panel2 这个「简单令牌」而不是 color-mix ——
+ * 对话框 Portal 到 body，color-mix 里的复合令牌在该子树取值不稳（实测会落回纯白）。 */
+html[data-ui='v2'][data-mag] .settings-nav {
+  position: relative;
+  background: var(--panel2) !important;
+  background-image: none !important;
+  border-right: 0 !important;
+}
+
+/* ② 中缝装订线：左栏右缘的暗影 —— 这是「书打开着」的唯一暗示 */
+html[data-ui='v2'][data-mag] .settings-nav::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--ink) 11%, transparent)
+  );
+  pointer-events: none;
+}
+
+/* 左栏「设置」标头（目录页的栏目名）—— 与 mag-pages §10 是**同一个元素的两条规则**：
+   两处都要归零，只改一处的话另一处（源顺序靠后的那条）会把它带回来。
+   先生第十五轮：「这种标头下面的横线去掉，让页面无感。」 */
+html[data-ui='v2'][data-mag] .settings-nav-head {
+  border-bottom: 0;
+  padding-bottom: 13px;
+}
+
+html[data-ui='v2'][data-mag] .settings-nav-head b {
+  font-family: var(--mag-font-display);
+}
+
+/* ④ 目录章节编号：01 / 02 …（counter 自动，分组增减都不会错位） */
+html[data-ui='v2'][data-mag] .settings-nav-body {
+  counter-reset: mag-nav-sec;
+}
+
+html[data-ui='v2'][data-mag] .settings-nav-section {
+  counter-increment: mag-nav-sec;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--mag-font-kicker);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  color: var(--muted);
+}
+
+html[data-ui='v2'][data-mag] .settings-nav-section::before {
+  content: counter(mag-nav-sec, decimal-leading-zero);
+  font-family: var(--mag-font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--seal);
+}
+
+/* 目录条目：直角、左缘色标，悬停亮起 */
+html[data-ui='v2'][data-mag] .settings-item {
+  border-radius: 0 !important;
+  border-left: 3px solid transparent;
+  font-family: var(--mag-font-geo);
+  letter-spacing: 0.04em;
+}
+
+html[data-ui='v2'][data-mag] .settings-item:hover {
+  border-left-color: var(--seal);
+  background: color-mix(in srgb, var(--seal) 6%, transparent);
+}
+
+/* 版权行：极细字宽字距 */
+html[data-ui='v2'][data-mag] .settings-nav-foot {
+  border-top: 1px solid var(--line);
+}
+
+html[data-ui='v2'][data-mag] .settings-version {
+  font-family: var(--mag-font-num);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.12em;
+  color: var(--faint);
+}
+
+/* ⑤ 右栏 = 书页：页眉墨线 + 版心留白 */
+html[data-ui='v2'][data-mag] .settings-main {
+  background: var(--panel) !important;
+}
+
+/* 先生（2026-09-17 第十五轮）：「设置页面：GENERATION MODELS / AI 生成模型 /
+   配置用于文章生成、改写、摘要的语言模型，这种标头下面的横线去掉，让页面无感。」
+ *
+ * 这里原先压着一条 `3px solid var(--ink)` 的墨线（`!important`），
+ * 基线里 v2-settings.css 还给同一个元素留了一条 1px 的 `var(--line)` ——
+ * 两处一起归零。分组从此交给留白（`padding-bottom` + `margin-bottom`，见 mag-pages §10），
+ * 不再用线去切版面 —— 与第十轮撤掉页头横线是同一条纪律。
+ * `!important` 必须保留：要去掉的正是**基座**那条 (0,1,1)。 */
+html[data-ui='v2'][data-mag] .settings-top {
+  border-bottom: 0 !important;
+}
+
+html[data-ui='v2'][data-mag] .settings-content {
+  padding: 26px 36px 42px !important;
+}
+
+/* 关闭按钮：直角 */
+html[data-ui='v2'][data-mag] .settings-close {
+  border-radius: 0 !important;
+}
+
+html[data-ui='v2'][data-mag] .settings-close:hover {
+  background: color-mix(in srgb, var(--seal) 10%, transparent);
+  color: var(--seal);
+}
+
+/* ==========================================================================
+ * 11. 通用交互反馈
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] :focus-visible {
+  outline: 2px solid var(--seal);
+  outline-offset: 1px;
+}
+
+/* 滚动条：细、中性、不抢戏（v2 是暖褐色，在冷灰界面上会显脏） */
+html[data-ui='v2'][data-mag] ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+html[data-ui='v2'][data-mag] ::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink) 22%, transparent);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+html[data-ui='v2'][data-mag] ::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--ink) 34%, transparent);
+  background-clip: padding-box;
+}

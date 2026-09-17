@@ -59,9 +59,40 @@ function ToastContainer() {
     setToasts(prev => prev.filter(t => t.id !== id))
   }
 
+  /**
+   * 先生：「已保存」要落在**正文栏内容区的右上角**才醒目 —— 那是写完一段后
+   * 目光回落的地方；而贴整个窗口的最右侧会被右侧的 AI 助手栏占着，反而不显眼。
+   *
+   * 正文栏的右边界会随助手栏开合、侧栏折叠而变化，写死坐标必然错位，
+   * 因此这里运行时测量工作区容器（.skin-workspace-page）的位置，
+   * 把提示贴着它的右上角放；测不到就回落到窗口右上角。
+   */
+  const [rightOffset, setRightOffset] = useState(24)
+
+  useEffect(() => {
+    const update = () => {
+      const workspace = document.querySelector('.skin-workspace-page')
+      if (!workspace) {
+        setRightOffset(24)
+        return
+      }
+      const rect = workspace.getBoundingClientRect()
+      setRightOffset(Math.max(16, Math.round(window.innerWidth - rect.right + 20)))
+    }
+    update()
+    window.addEventListener('resize', update)
+    // 助手栏开合不触发 resize，用一个很轻的轮询兜住布局变化
+    const timer = window.setInterval(update, 800)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.clearInterval(timer)
+    }
+  }, [])
+
   return (
     <div
-      className="fixed bottom-10 right-5 z-[9999] flex flex-col gap-2 pointer-events-none"
+      className="fixed z-[9999] flex flex-col gap-2 pointer-events-none"
+      style={{ top: 56, right: rightOffset }}
     >
       {toasts.map(t => (
         <ToastItemView key={t.id} item={t} onRemove={remove} />

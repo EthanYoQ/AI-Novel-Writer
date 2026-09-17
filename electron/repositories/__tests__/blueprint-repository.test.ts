@@ -84,7 +84,7 @@ function createBlueprintDb(filename: string | Buffer = ':memory:'): BetterSqlite
       role TEXT DEFAULT 'supporting',
       gender TEXT DEFAULT '', age TEXT DEFAULT '', appearance TEXT DEFAULT '',
       personality TEXT DEFAULT '', background TEXT DEFAULT '', abilities TEXT DEFAULT '',
-      motivation TEXT DEFAULT '', relationships TEXT DEFAULT '', arc TEXT DEFAULT '', notes TEXT DEFAULT '',
+      motivation TEXT DEFAULT '', relationships TEXT DEFAULT '', relationship_notes TEXT DEFAULT '', arc TEXT DEFAULT '', notes TEXT DEFAULT '',
       cs_location TEXT DEFAULT '', cs_power_level TEXT DEFAULT '', cs_physical_state TEXT DEFAULT '',
       cs_mental_state TEXT DEFAULT '', cs_key_items TEXT DEFAULT '', cs_recent_events TEXT DEFAULT '',
       cs_updated_at_chapter INTEGER DEFAULT NULL,

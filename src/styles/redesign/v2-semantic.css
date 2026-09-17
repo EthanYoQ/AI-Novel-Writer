@@ -1,0 +1,156 @@
+/* ============================================================================
+ * v2 语义令牌桥接 —— 全站换装的总闸
+ *
+ * 原理：产品所有 Tailwind 类与自定义组件都引用 var(--color-*) 这套语义变量
+ *       （共 54 个），且它们定义在 index.css 的 @layer base 里。
+ *       而未分层样式在层叠顺序上优先于任何 @layer —— 与特异性无关。
+ *       所以只要在无层的 html[data-ui='v2'] 上重新赋值，全站便一次性换装，
+ *       不必逐个组件写覆盖，也不必与产品主题选择器比特异性。
+ *
+ * 取值一律指向 demo（shell.css 的 :root）已定义的墨纸令牌，因此四套主题
+ * （浅色 / 星空 / 纸质 / 黑夜）切换时，皮肤会跟着一起变。
+ *
+ * 刻意留手：--color-gold 不动。产品浅色主题里它已被有意改成黛青 #54666E
+ *       （见 index.css 注释「品牌金色→黛青」），贸然指向 demo 的金色会
+ *       把大量装饰色改掉，属于设计决策，交由先生定夺。
+ * ========================================================================== */
+
+html[data-ui='v2'] {
+  /* ===== 底与面 ===== */
+  --color-bg: var(--paper2);
+  --color-panel: var(--panel);
+  --color-raised: var(--panel2);
+  --color-sidebar: var(--paper);
+  --color-editor-bg: var(--panel);
+  /* 悬停底：浅纸上仍是原来的白薄雾；深色主题由 --v2-hover 接管
+     （见 v2-themes.css 的「深色主题的悬停染」）—— 白色叠在深底上是灰块，
+     先生看到的「悬浮交互全是灰色」就是它。未定义该令牌时回退原值。 */
+  --color-hover: var(--v2-hover, rgba(255, 255, 255, 0.55));
+  --color-active: var(--white);
+  --color-skeleton: var(--line);
+  --color-backdrop: rgba(43, 38, 28, 0.42);
+
+  /* ===== 线 ===== */
+  --color-border: var(--line);
+  --color-focus-ring: var(--seal);
+
+  /* ===== 字 ===== */
+  --color-text: var(--ink);
+  --color-text-secondary: var(--ink2);
+  --color-text-muted: var(--muted);
+
+  /* ===== 强调（朱砂）===== */
+  --color-accent: var(--seal);
+  --color-accent-hover: var(--seal-hover);
+  --color-accent-rgb: var(--seal-rgb);
+  --color-sash: var(--seal);
+  --color-sash-hover: var(--seal-hover);
+
+  /* ===== 顶栏 / 状态栏 / 活动栏（黛蓝书脊）===== */
+  --color-titlebar: var(--chrome1);
+  --color-titlebar-text: var(--ink);
+  --color-statusbar: var(--jade2);
+  --color-statusbar-text: #aeb8c0;
+  --color-activity-bar: var(--spine1);
+  --color-activity-icon: #96a2ac;
+  --color-activity-icon-active: #efd8c4;
+  --color-activity-indicator: var(--seal);
+
+  /* ===== 标签页 ===== */
+  --color-tab-bg: var(--paper2);
+  --color-tab-active: var(--panel);
+  --color-tab-border: var(--line);
+  --color-tab-indicator: var(--seal);
+
+  /* ===== 编辑器内部 ===== */
+  --color-editor-caret: var(--seal);
+  --color-editor-selection: rgba(var(--seal-rgb), 0.16);
+  --color-editor-line-highlight: transparent;
+
+  /* ===== 状态色 ===== */
+  --color-success: var(--green);
+  --color-success-text: var(--greentx);
+  --color-warning: var(--warn);
+  --color-warning-text: var(--warntx);
+  --color-error: var(--red);
+  --color-error-text: var(--redtx);
+  --color-info: var(--info);
+
+  /* ===== 提示气泡 ===== */
+  --color-tooltip-bg: #2b2820;
+  --color-tooltip-text: #f1ede0;
+
+  /* ===== 徽章 ===== */
+  --color-badge-bg: rgba(139, 136, 118, 0.13);
+  --color-badge-text: #6e6a5b;
+}
+
+/* ============================================================================
+ * 深色主题的悬停染 ——「悬浮交互不该是灰色」
+ *
+ * v2 的悬停语言是「白薄雾」：全局 --color-hover 是 rgba(255,255,255,.55)，
+ * 各文件里还写死了一批 rgba(255,255,255,.2~.65)。这套语言是为浅纸写的 ——
+ * 白雾落在浅纸上是提亮，落在深底上就是一块灰。先生看到的
+ * 「查看章节、外观、向量模型……悬浮交互全是灰色」正是它。
+ *
+ * 深色主题下统一换成**本主题强调色的淡染**：
+ *   黑夜 → 琥珀 #C88B3A（那盏夜灯）
+ *   星空 → 星尘蓝 #7FB4E0（那片星尘）
+ * 既亮得起来，又与各自的字色、底色同族 —— 迎合主题，而不是撞色。
+ *
+ * 为什么必须写在本文件（无层）：
+ *   被覆盖的原规则散在 v2-panels / v2-atomic / v2-sidebar / v2-editors /
+ *   v2-settings 五个文件里，而它们**都不在任何 @layer 内**。未分层样式优先于
+ *   所有层，所以同样的规则写进 v2-themes.css（@layer components）会被它们整体
+ *   盖掉 —— 第一版就是这么失效的，先生看到「还是白灰白灰」正是此故。
+ *
+ * 特异性：:is() 把两个深色主题并成一条，(0,4,1)，压过上面那些 (0,2,1)~(0,3,1)。
+ * 浅色 / 纸质不在此列，逐像素不变。
+ * 两处例外：draft-version-row 等三条原带 !important，这里照跟；编辑区那条
+ * [class~=...] 选择器达 (0,7,1)，已就地改为 var(--v2-hover, 原值)。
+ * ========================================================================== */
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) {
+  /* 配方：把主题强调色调进本主题的「提亮面」（--white），而不是调进透明。
+     三种配方在黑夜面板 #2E3337 上实测：
+       原白雾 rgba(255,255,255,.55) → #A1A3A5   中性亮灰（先生嫌丑的就是它）
+       调进 transparent 30%         → #5C4D38   1.56:1，色相有了但偏弱、像没反应
+       调进 --white 30%（本条）     → #665742   1.83:1，色相与明度都站得住
+     星空同理：原灰 #91959C → 本条 #324F70（深蓝），2.34:1。 */
+  --v2-hover: color-mix(in srgb, var(--seal) 30%, var(--white));
+}
+
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .tree-row:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .tree-grp:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .tree-item:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .decompose-sub .tree-row:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .arch-group:hover .tree-link,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .tab:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .settings-item:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .st-seg.click:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .statusbar .ai-task-capsule:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .arch-ai-step:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .knowledge-doc:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .prompt-head:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .agent-popover .ap-row:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .writer-task-table tr:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .v2-btn-outline:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .btn.outline:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .sbtn:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .sbtn.on,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .v6shelf .new:hover {
+  background: var(--v2-hover);
+}
+
+/* 原规则带 !important 的三条，这里必须照跟，否则压不下去。 */
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .draft-version-row:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .archive-nav-row:hover,
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .thread-nav-row:hover {
+  background: var(--v2-hover) !important;
+}
+
+/* 设置窗口整棵子树的 --color-hover 单独走同一令牌。
+ * 这里原先给黑夜设的是 var(--white) = #3C4145 —— 那仍是一块中性深灰，
+ * 正好是先生说的「设置中的外观、向量模型还是灰的」。 */
+html[data-ui='v2']:is([data-v2-theme='1'], [data-v2-theme='3']) .skin-solid-surface {
+  --color-hover: var(--v2-hover);
+}

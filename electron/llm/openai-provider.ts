@@ -2,6 +2,18 @@ import { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from 
 import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 import { resolveOpenAIChatCompletionsUrl } from './openai-compatible-endpoint'
 
+/**
+ * 单次非流式请求的超时（毫秒）。
+ * 覆盖「测试连接」等不经生成 harness 的路径 —— 那里没有会话级 deadline 兜底。
+ */
+const LLM_REQUEST_TIMEOUT_MS = 120_000
+
+/**
+ * SSE 单行缓冲上限（字符）。防止上游推送不含换行的超长数据把内存吃满。
+ * 取值足够宽松：正常模型即使一次性吐出极长的 JSON 也不会触发。
+ */
+const SSE_LINE_BUFFER_MAX_CHARS = 4 * 1024 * 1024
+
 export class OpenAIProvider implements ILLMProvider {
   private normalizeFinishReason(reason: string | null | undefined): LLMFinishReason {
     if (reason === 'stop') return 'stop'
@@ -78,6 +90,10 @@ export class OpenAIProvider implements ILLMProvider {
           'Authorization': `Bearer ${model.apiKey}`,
         },
         body: JSON.stringify(body),
+        // 单请求级超时：harness 的 deadline 是**会话级**（10~20 分钟），
+        // 而「测试连接」这类非流式调用根本不经过 harness。
+        // 端点 TCP 连上却不响应时，界面会一直卡在「测试中」直到 undici 默认超时。
+        signal: AbortSignal.timeout(LLM_REQUEST_TIMEOUT_MS),
       })
 
       if (!res.ok) {
@@ -300,6 +316,14 @@ export class OpenAIProvider implements ILLMProvider {
           if (fatalError || sawDone) break
         }
         lineBuffer = lineBuffer.slice(consumed)
+        // 分片缓冲上限：lineBuffer 只在遇到换行时消费，若上游持续推送不含换行的
+        // 超长数据（异常代理把整个响应压成一行、或服务端 keep-alive 注释流），
+        // 它会一直涨到内存耗尽。超限即判 fatal 并中止本次流。
+        if (!fatalError && !sawDone && lineBuffer.length > SSE_LINE_BUFFER_MAX_CHARS) {
+          fatalError = `响应流单行数据超出上限（${SSE_LINE_BUFFER_MAX_CHARS} 字符），已中止以免内存耗尽`
+          lineBuffer = ''
+          return
+        }
         if (final && !fatalError && !sawDone) {
           if (lineBuffer) processLine(lineBuffer)
           lineBuffer = ''
@@ -311,6 +335,18 @@ export class OpenAIProvider implements ILLMProvider {
         const { done, value } = await reader.read()
         if (done) break
         processText(decoder.decode(value, { stream: true }))
+      }
+
+      // 看到 [DONE] 就主动释放响应体，不然连接与句柄要等 GC 才回收。
+      // 注意：必须在尾部数据处理**之后**才取消（放在流循环中途会让 [DONE] 之后
+      // 同一帧里的剩余数据丢失，实测会让 onDone 收不到完整正文）。
+      // 同时要对 cancel 做存在性守卫：它并非所有 reader 实现都提供。
+      if (sawDone && typeof reader.cancel === 'function') {
+        try {
+          void reader.cancel()?.catch(() => undefined)
+        } catch {
+          // 释放失败不影响已经拿到的正文
+        }
       }
 
       if (!fatalError && !sawDone) {

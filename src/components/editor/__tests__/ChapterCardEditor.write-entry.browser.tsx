@@ -149,7 +149,7 @@ describe('ChapterCardEditor writing entry', () => {
 
     await vi.waitFor(() => {
       expect(container?.textContent).toContain('写作第10章')
-      expect(container?.textContent).toContain('批量创作')
+      expect(container?.textContent).toContain('批量写作')
     })
   })
 
@@ -168,7 +168,7 @@ describe('ChapterCardEditor writing entry', () => {
     await renderEditor()
     await vi.waitFor(() => expect(container?.textContent).toContain('暂无蓝图'))
     const addButton = Array.from(container?.querySelectorAll<HTMLButtonElement>('button') ?? [])
-      .find(button => button.title === '新建章节')
+      .find(button => button.title === '手动新建一章蓝图')
     expect(addButton).toBeDefined()
     await act(async () => addButton?.click())
 
@@ -191,7 +191,7 @@ describe('ChapterCardEditor writing entry', () => {
     await renderEditor()
     await vi.waitFor(() => expect(container?.textContent).toContain('写作第10章'))
     const addButton = Array.from(container?.querySelectorAll<HTMLButtonElement>('button') ?? [])
-      .find(button => button.title === '新建章节')
+      .find(button => button.title === '手动新建一章蓝图')
     expect(addButton).toBeDefined()
     await act(async () => addButton?.click())
 
@@ -217,7 +217,7 @@ describe('ChapterCardEditor writing entry', () => {
       expect(container?.textContent).toMatch(/第 3 章存在重复记录/u)
     })
     expect(container?.textContent).not.toContain('写作第3章')
-    expect(container?.textContent).not.toContain('批量创作')
+    expect(container?.textContent).not.toContain('批量写作')
   })
 
   it('shows Write Chapter 1 after blueprints are available and opens the chapter-creation workbench', async () => {

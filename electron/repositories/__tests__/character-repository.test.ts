@@ -64,6 +64,7 @@ beforeEach(() => {
       abilities TEXT DEFAULT '',
       motivation TEXT DEFAULT '',
       relationships TEXT DEFAULT '',
+      relationship_notes TEXT DEFAULT '',
       arc TEXT DEFAULT '',
       notes TEXT DEFAULT '',
       cs_location TEXT DEFAULT '',

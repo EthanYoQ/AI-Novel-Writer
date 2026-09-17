@@ -221,22 +221,22 @@ export async function syncBlueprintCharacterCandidates(
         name: source.name,
         role: source.role,
       })),
+    // 现有角色名并进来：新角色与已有角色之间的关系才算得成边。
+    [...allNames],
   ).map(candidate => ({
     ...characterRosterEntryFromCard(candidate),
-    relationships: (relationshipGraph.get(candidate.name) ?? [])
-      .filter(edge => !existingByKey.get(characterRosterIdentityKey(edge.target))?.legacyRelationshipNotes),
+    relationships: relationshipGraph.get(candidate.name) ?? [],
   }))
 
   const changedExisting: CharacterRosterEntry[] = []
   for (const [key, existing] of existingByKey) {
-    // 旧自由文本关系没有可靠字段级迁移；蓝图同步只能附加到已结构化的
-    // 关系列表，绝不为了“补关系”覆盖作者原文。
-    if (existing.legacyRelationshipNotes) continue
+    // 结构化边与关系备注分列存放：蓝图同步只**追加**结构化边，作者的备注原文
+    // 由深 module 按 manual-wins 保留，两者不再互相排斥，也不再需要跳过角色。
     const additions = (
       relationshipGraph.get(existing.name)
       ?? relationshipGraph.get(canonicalNameByKey.get(key) ?? '')
       ?? []
-    ).filter(edge => !existingByKey.get(characterRosterIdentityKey(edge.target))?.legacyRelationshipNotes)
+    )
     if (additions.length === 0) continue
     const mergedEdges = mergeRelationshipEdges(existing.relationships, additions)
     if (mergedEdges.length === existing.relationships.length) continue
@@ -252,9 +252,8 @@ export async function syncBlueprintCharacterCandidates(
       expectedRevision: roster.revision,
       schemaVersion: 1,
       intent: 'blueprint_sync',
-      // incremental intents never echo untouched cards back through IPC. This
-      // keeps legacy free-text relationship evidence read-only and lets the
-      // deep module merge only the changed/new structured entries.
+      // 增量意图只提交被改动/新增的条目，绝不把未改动的卡片回带：深 module
+      // 会保留既有事实（含作者手写的关系备注），只合并这些结构化边。
       entries: [...changedExisting, ...candidates],
     },
     expectedProjectPath,

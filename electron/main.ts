@@ -1,7 +1,7 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { registerIPCHandlers } from './ipc-handlers'
 import { registerMCPHandlers } from './mcp/mcp-ipc-bridge'
-import { mainT } from './i18n'
+import { mainT, mainText } from './i18n'
 import { registerUpdateController } from './controllers/update-controller'
 import { createElectronUpdaterBackend } from './services/electron-updater-adapter'
 import {
@@ -99,6 +99,34 @@ function clearReleaseSmokeTimeout(): void {
   if (releaseSmokeTimeout === undefined) return
   clearTimeout(releaseSmokeTimeout)
   releaseSmokeTimeout = undefined
+}
+
+/**
+ * 进程级异常兜底（主进程的生命线）。
+ *
+ * 为什么必须有：Node 15+ 起 `--unhandled-rejections` 默认为 `throw`，
+ * Electron 主进程同样如此 —— 任何一个没人接管的 Promise rejection 都会
+ * 被当作未捕获异常，**直接让主进程退出、窗口消失**。而本项目里存在这样的
+ * 最短路径：`controllers/llm-controller.ts` 的 `provider.generateStream(...)`
+ * 是 fire-and-forget（未 await 未 catch），一旦流式出错且此刻窗口正在关闭，
+ * provider 内部 catch 里的 `webContents.send` 会抛 "Object has been destroyed"，
+ * 该异常从 catch 块里冒出来 → rejected promise 无人接管 → 应用猝死。
+ *
+ * 兜底策略：只记录、不退出。应用继续可用，作者至少能保存作品；
+ * 真正的修复点在调用处（generateStream 已补 .catch）。
+ * release smoke 场景不接管 —— 那条链路需要 fail-closed。
+ */
+function installProcessErrorGuards(): void {
+  process.on('uncaughtException', (error: unknown) => {
+    console.error('[Vela] 未捕获异常（已兜底，应用继续运行）：', error)
+  })
+  process.on('unhandledRejection', (reason: unknown) => {
+    console.error('[Vela] 未处理的 Promise rejection（已兜底，应用继续运行）：', reason)
+  })
+}
+
+if (!releaseSmokeRequested) {
+  installProcessErrorGuards()
 }
 
 if (releaseSmokeRequested) {
@@ -199,6 +227,51 @@ app.on('activate', () => {
   if (!applicationInstanceAccepted || releaseSmokeRequested) return
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow()
+  }
+})
+
+/**
+ * 渲染进程意外消失（崩溃 / 被系统 OOM 杀掉）时给作者一个明确交代。
+ *
+ * 少了这个监听，作者看到的是「窗口还在、界面全白、点什么都没反应」，
+ * 完全无从判断发生了什么；控制台里也没有任何线索。
+ * 这里只在确实异常结束时提示，正常关闭（clean-exit）不打扰。
+ */
+app.on('render-process-gone', (_event, _webContents, details) => {
+  if (releaseSmokeRequested) return
+  console.error('[Vela] 渲染进程异常结束：', details.reason, details.exitCode)
+  if (details.reason === 'clean-exit') return
+  try {
+    const windows = BrowserWindow.getAllWindows()
+    if (windows.length === 0) return
+    dialog.showMessageBox(windows[0], {
+      type: 'error',
+      title: mainText(app.getLocale(), '界面进程异常退出', 'The interface process stopped unexpectedly'),
+      message: mainText(app.getLocale(), '界面进程异常退出，需要重新加载。', 'The interface process stopped unexpectedly and must be reloaded.'),
+      detail: mainText(
+        app.getLocale(),
+        `原因：${details.reason}（退出码 ${details.exitCode}）。\n你的作品数据保存在项目目录里，没有丢失。\n点击「重新加载」恢复使用。`,
+        `Reason: ${details.reason} (exit code ${details.exitCode}).\nYour manuscript is safe in the project folder.\nChoose "Reload" to continue.`,
+      ),
+      buttons: [mainText(app.getLocale(), '重新加载', 'Reload'), mainText(app.getLocale(), '关闭窗口', 'Close window')],
+      defaultId: 0,
+      cancelId: 1,
+    }).then(({ response }) => {
+      if (response === 0) {
+        const target = BrowserWindow.getAllWindows()[0]
+        if (!target || target.isDestroyed()) {
+          createWindow()
+          return
+        }
+        target.webContents.reload()
+      } else {
+        app.quit()
+      }
+    }).catch((error: unknown) => {
+      console.error('[Vela] 渲染进程恢复提示失败：', error)
+    })
+  } catch (error) {
+    console.error('[Vela] 处理渲染进程异常结束时出错：', error)
   }
 })
 

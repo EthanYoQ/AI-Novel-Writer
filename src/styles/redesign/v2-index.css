@@ -1,0 +1,36 @@
+/* ============================================================================
+ * v2「墨纸书斋」皮肤入口
+ *
+ * 所有 v2 样式都从这里统一挂载 —— 新增皮肤文件时只在本文件加一行 @import，
+ * 不必再动 src/main.tsx，因而不会触发整页重载（CSS 的 HMR 是原地热替换）。
+ *
+ * 顺序即层叠意图，自上而下：
+ *   1 令牌        --v2-* 尺寸与字号，供各覆盖文件引用
+ *   2 demo 基座   demo 全部样式的原样搬运 + demo 的 :root 变量
+ *   3 主题        demo 四套配色，覆盖上一步的变量
+ *   4+ 各处覆盖   组件级换装
+ *   末位          接线补充（拖拽区、窗口控制等「为了接进产品」而加的规则）
+ * ========================================================================== */
+
+@import './v2-tokens.css';
+@import './shell.css';
+@import './v2-themes.css';
+@import './v2-semantic.css';
+@import './v2-shelf.css';
+@import './v2-sidebar.css';
+@import './v2-settings.css';
+@import './v2-editor-chrome.css';
+@import './v2-tabs.css';
+@import './v2-seal.css';
+@import './v2-atomic.css';
+@import './v2-editor.css';
+@import './v2-editors.css';
+@import './v2-relation.css';
+@import './v2-reading.css';
+@import './v2-panels.css';
+@import './v2-dialog.css';
+@import './v2-overrides.css';
+/* 响应式补充（2026-09-17 第十五轮）—— 顶栏在窄窗口下的让位规矩。
+   放在最末：它要覆盖前面各文件给顶栏定的 flex 行为。
+   文件里每一条规则都包在 @media 里，宽屏下与冻结基线逐像素一致。 */
+@import './v2-responsive.css';

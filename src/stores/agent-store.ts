@@ -12,6 +12,7 @@ import { registerBuiltinTools } from '../services/agent/tools'
 import { skillRegistry, type LoadedSkill } from '../services/agent/skill-registry'
 import {
   getAllMentionTargets,
+  type MentionTarget,
   getAllSlashCommands,
   parseSlashCommand,
   parseMentions,
@@ -22,8 +23,10 @@ import type { ToolArtifact } from '../services/agent/tool-registry'
 import { createAgentExecutionContext } from '../services/agent/tools/project-context'
 import { createGenerationRuntime } from '../services/generation/generation-runtime'
 import { writingLanguageText } from '../shared/writing-language'
+import { sameProjectPathKey } from '../shared/project-session-context'
 import { useLocaleStore } from './locale-store'
 import { useProjectStore } from './project-store'
+import { useWorldSettingStore } from './world-setting-store'
 import type { Locale } from '../i18n/types'
 
 export const AGENT_GENERATION_BUDGET = Object.freeze({
@@ -32,6 +35,39 @@ export const AGENT_GENERATION_BUDGET = Object.freeze({
   maxRequestedOutputTokensPerAttempt: 8192,
   deadlineMs: 20 * 60_000,
 })
+
+// ===== @ 引用预取的硬闸门 =====
+//
+// @ 预取是直通提示词的一条路径，如果不设限，作者手打多个 @ 就能把整份架构、
+// 整章正文原样拼进去 —— 上下文会当场击穿。这三个上限是**独立于工具自身**的兜底，
+// 因为工具（如 read_architecture / read_drafts）返回的是全文，自己不做截断。
+
+/** 单条 @ 引用预取结果的字符上限（与 ReAct 循环里的工具结果上限保持一致）。 */
+const PREFETCH_ENTRY_MAX_CHARS = 3000
+
+/** 一轮对话内 @ 预取的总字节上限：超出后不再取更多，并如实告知模型与作者。 */
+const PREFETCH_TOTAL_MAX_UTF8_BYTES = 16 * 1024
+
+/** 一轮对话内 @ 引用的最大条数：超出部分不预取。 */
+const PREFETCH_MAX_ENTRIES = 8
+
+/**
+ * 按 UTF-8 字节截断，尽量不截断在字符中间（避免产生半个汉字）。
+ * 返回实际写入的字节数，供调用方累计总量。
+ */
+function truncateUtf8(text: string, maxBytes: number): { text: string; bytes: number } {
+  const encoder = new TextEncoder()
+  const total = encoder.encode(text).byteLength
+  if (total <= maxBytes) return { text, bytes: total }
+
+  let kept = text
+  while (kept.length > 0) {
+    kept = kept.slice(0, -1)
+    const bytes = encoder.encode(kept).byteLength
+    if (bytes <= maxBytes) return { text: kept, bytes }
+  }
+  return { text: '', bytes: 0 }
+}
 
 // ===== 类型定义 =====
 
@@ -68,6 +104,14 @@ export interface AgentConversation {
 
 // ===== Store 状态接口 =====
 
+/** 一轮对话内 @ 引用清单的条数上限（先生定的铁律：不允许重复 @ 同样内容）。 */
+export const PENDING_MENTION_MAX_ENTRIES = 12
+
+/** 引用清单的去重键：类别 + 值。同名但不同类别（如角色「青云」与设定「青云」）算两条。 */
+function pendingMentionKey(target: { type: string; value: string }): string {
+  return `${target.type}:${target.value}`
+}
+
 interface AgentState {
   /** 所有会话列表（最新的排在前面） */
   conversations: AgentConversation[]
@@ -103,6 +147,17 @@ interface AgentState {
   toggleHistory: () => void
   /** 设置历史面板可见性 */
   setShowHistory: (show: boolean) => void
+  /**
+   * 待发送的引用清单。
+   *
+   * 先生定的交互：**@ 是「攒引用」，不是「发消息」** ——
+   * 作者可以连续 @ 主角、配角、某条设定，凑齐了再自己决定何时发送。
+   * 引用只在按下发送那一刻才拼进消息。
+   */
+  pendingMentions: MentionTarget[]
+  addPendingMention: (target: MentionTarget) => void
+  removePendingMention: (value: string) => void
+  clearPendingMentions: () => void
   /** 设置当前会话模式 */
   setMode: (mode: AgentMode) => void
   /** 设置当前会话使用的模型 */
@@ -166,6 +221,14 @@ const generateHelpText = (locale: Locale): string => {
 }
 
 // ===== Tool 确认回调管理 =====
+
+/**
+ * 等待作者点击「确认 / 拒绝」的上限。
+ * 超时按「未回应」处理（等同拒绝），让 ReAct 循环带着明确说明继续，
+ * 而不是把整个生成悬挂在那里。给足 5 分钟，避免作者正在阅读提案时被打断。
+ */
+const TOOL_CONFIRM_TIMEOUT_MS = 5 * 60_000
+
 /** 存储待确认的 Tool 回调 */
 const pendingConfirmations = new Map<string, {
   resolve: (decision: boolean | ToolConfirmationDecision) => void
@@ -244,6 +307,23 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
   toggleHistory: () => {
     set(state => ({ showHistory: !state.showHistory }))
   },
+
+  // 引用清单初始为空：@ 只是往这里加，不触发任何对话
+  pendingMentions: [],
+
+  addPendingMention: (target) => set((state) => {
+    // 铁律：同一轮对话里不允许重复 @ 同样内容 —— 重复 @ 不该叠加成多份上下文。
+    // 按「类别 + 值」判重，同名但不同类别的内容仍是两条。
+    const key = pendingMentionKey(target)
+    if (state.pendingMentions.some(item => pendingMentionKey(item) === key)) return state
+    // 容量闸门：引用清单本身也不能无限增长（发送时会全部拼成 @ 前缀）。
+    if (state.pendingMentions.length >= PENDING_MENTION_MAX_ENTRIES) return state
+    return { pendingMentions: [...state.pendingMentions, target] }
+  }),
+  removePendingMention: (value) => set((state) => ({
+    pendingMentions: state.pendingMentions.filter(item => item.value !== value),
+  })),
+  clearPendingMentions: () => set({ pendingMentions: [] }),
 
   setShowHistory: (show) => {
     set({ showHistory: show })
@@ -429,28 +509,87 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
       // ===== P1-5: @ 提及预取 =====
       let enrichedUserMessage = content.trim()
-      const mentions = parseMentions(enrichedUserMessage, requestLocale)
+      /**
+       * 世界观设定条目也参与 @ 解析：作者写「@青云宗 这场戏怎么处理」时，
+       * 那一条设定要被预取进来（走 search_world_settings）。
+       * 只认 confirmed 条目 —— pending 候选不进上下文，这是先生定的闸门。
+       *
+       * 归属闸门：这些动态目标来自 store，而 store 只在侧栏 / @ 菜单挂载时加载，
+       * 切项目后并不会自动刷新。若它属于别的项目，就绝不能进入 @ 目标表 ——
+       * 否则作者在 B 里打一个 A 才有的名字，AI 会拿到 A 的设定当作 B 的事实。
+       */
+      const worldSettingStore = useWorldSettingStore.getState()
+      const worldSettingsBelongToCurrentProject = worldSettingStore.dataProjectPath === null
+        || (executionContext.projectSession !== null
+          && sameProjectPathKey(
+            worldSettingStore.dataProjectPath,
+            executionContext.projectSession.projectPath,
+          ))
+      const worldSettingTargets = worldSettingsBelongToCurrentProject
+        ? worldSettingStore.entries
+            .filter(entry => entry.status !== 'pending')
+            .map(entry => ({
+              type: 'world-setting' as const,
+              displayName: entry.name,
+              value: entry.name,
+            }))
+        : []
+      const mentions = parseMentions(enrichedUserMessage, requestLocale, worldSettingTargets)
       if (mentions.length > 0) {
+        // mentionsToToolCalls 内部已按「工具名 + 参数」去重：
+        // 同一轮里重复 @ 同一份内容只会预取一次（先生定的铁律）。
         const prefetchCalls = mentionsToToolCalls(mentions)
         const prefetchResults: string[] = []
+        let usedBytes = 0
+        let truncatedEntries = 0
+        let skippedEntries = 0
+
         for (const call of prefetchCalls) {
+          if (prefetchResults.length >= PREFETCH_MAX_ENTRIES) {
+            skippedEntries = prefetchCalls.length - prefetchResults.length
+            break
+          }
           const tool = toolRegistry.get(call.toolName)
-          if (tool) {
-            try {
-              const result = await tool.execute(call.args, executionContext)
-              if (result.success && result.content) {
-                prefetchResults.push(`${modelText('[预加载上下文', '[Prefetched context')} @${call.toolName}]\n${result.content}`)
-              }
-            } catch {
-              // 预取失败不阻塞主流程
+          if (!tool) continue
+          try {
+            const result = await tool.execute(call.args, executionContext)
+            if (!result.success || !result.content) continue
+
+            // 单条截断：工具返回的可能是整章正文，不能原样塞进提示词。
+            const source = `${modelText('[预加载上下文', '[Prefetched context')} @${call.toolName}]\n${result.content}`
+            const remaining = PREFETCH_TOTAL_MAX_UTF8_BYTES - usedBytes
+            if (remaining <= 0) {
+              skippedEntries = prefetchCalls.length - prefetchResults.length
+              break
             }
+            const entryLimit = Math.min(PREFETCH_ENTRY_MAX_CHARS, remaining)
+            const { text: kept, bytes } = truncateUtf8(source, entryLimit)
+            usedBytes += bytes
+            if (kept.length < source.length) truncatedEntries += 1
+            prefetchResults.push(kept)
+          } catch {
+            // 预取失败不阻塞主流程
           }
         }
+
         if (prefetchResults.length > 0) {
+          const notices: string[] = []
+          if (truncatedEntries > 0) {
+            notices.push(modelText(
+              `（有 ${truncatedEntries} 条引用的内容过长，已截断）`,
+              `(${truncatedEntries} reference(s) were truncated because the content was too long)`,
+            ))
+          }
+          if (skippedEntries > 0) {
+            notices.push(modelText(
+              `（另有 ${skippedEntries} 条引用因超出本轮上下文上限而未加载，需要时请单独询问）`,
+              `(${skippedEntries} more reference(s) were not loaded because this turn's context limit was reached; ask separately if needed)`,
+            ))
+          }
           enrichedUserMessage = `${enrichedUserMessage}\n\n---\n${modelText(
-            '以下是用户 @ 引用的上下文数据（已自动获取）：',
-            'The following context was requested with @ and fetched automatically:',
-          )}\n\n${prefetchResults.join('\n\n---\n\n')}`
+            '以下是用户 @ 引用的上下文数据（已自动获取，同一轮内重复引用只取一次）：',
+            'The following context was requested with @ and fetched automatically (duplicates within one turn are fetched once):',
+          )}\n\n${prefetchResults.join('\n\n---\n\n')}${notices.length > 0 ? `\n\n${notices.join('\n')}` : ''}`
         }
       }
 
@@ -539,9 +678,24 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
               ),
             }))
 
-            // 返回 Promise，等待用户通过 resolveToolConfirmation 响应
+            // 返回 Promise，等待用户通过 resolveToolConfirmation 响应。
+            //
+            // ⚠️ 必须有超时兜底：这段等待在 executeToolWithTimeout 之外，harness 的
+            // deadline 只覆盖 session.complete，所以它原本**没有任何时间上限**。
+            // 确认卡片弹出后，作者若切走视角、关掉对话或干脆离开，ReAct 循环、
+            // generating 状态与模型租约就会一直挂着（租约要等主进程 TTL 才回收）。
+            // 超时后按「用户未回应」处理：拒绝该操作并让循环带着明确说明继续。
             return new Promise<boolean | ToolConfirmationDecision>((resolve) => {
-              pendingConfirmations.set(toolCall.id, { resolve })
+              const timer = setTimeout(() => {
+                pendingConfirmations.delete(toolCall.id)
+                resolve(false)
+              }, TOOL_CONFIRM_TIMEOUT_MS)
+              pendingConfirmations.set(toolCall.id, {
+                resolve: (decision) => {
+                  clearTimeout(timer)
+                  resolve(decision)
+                },
+              })
             })
           },
           onDone: (fullText, toolCalls, artifacts) => {

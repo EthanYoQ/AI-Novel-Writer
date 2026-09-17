@@ -17,6 +17,7 @@ import type { ProjectSessionContext } from '../shared/ipc-channels'
 import { useProjectStore } from '../stores/project-store'
 import { useCharacterStore } from '../stores/character-store'
 import { useDraftStore } from '../stores/draft-store'
+import { useWorldSettingStore } from '../stores/world-setting-store'
 import { useEditorStore } from '../stores/editor-store'
 import { useWorkflowStore } from '../stores/workflow-store'
 import { useLocaleStore } from '../stores/locale-store'
@@ -298,6 +299,10 @@ export async function onProjectClosed(projectPath: string | null): Promise<void>
 export function disableProjectBindingsPreservingDrafts(projectPath: string | null): void {
   useCharacterStore.getState().reset()
   useDraftStore.getState().reset()
+  // 世界观设定 store 必须一起重置：AI 的 search_world_settings / read_world_setting、
+  // 世界观生成命令、以及 @ 提及解析都直接读它，且都不校验归属项目。
+  // 不重置的话，切项目后 AI 会拿**上一部作品的设定**当作当前作品的既定事实。
+  useWorldSettingStore.getState().reset()
 
   console.log('[ProjectService] 已停用项目数据绑定并保留未保存草稿:', projectPath)
 }
