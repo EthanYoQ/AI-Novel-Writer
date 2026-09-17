@@ -108,6 +108,7 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.19",
     "eslint-plugin-storybook": "^10.5.10",
+    "fast-check": "^4.10.1",
     "playwright": "^1.59.1",
     "postcss": "^8.5.18",
     "storybook": "^10.5.10",
