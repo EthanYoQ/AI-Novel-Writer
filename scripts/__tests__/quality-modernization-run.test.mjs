@@ -2,9 +2,11 @@ import { test } from 'vitest'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import process from 'node:process'
 import { spawnSync } from 'node:child_process'
-import { ROOT, CAP, hash, buildFixtureExports, validatePair, selectPhase, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash } from '../quality-modernization-run.mjs'
-import { COMMAND_PROBES } from '../quality-modernization-driver.mjs'
+import { ROOT, CAP, hash, buildFixtureExports, validatePair, selectPhase, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles } from '../quality-modernization-run.mjs'
+import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash } from '../quality-modernization-driver.mjs'
+import Database from 'better-sqlite3'
 
 const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
@@ -113,5 +115,73 @@ test('冻结执行验证拒绝adapter、Node版本/ABI、依赖、启动参数�
       const changed = structuredClone(target); mutate(changed)
       assert.throws(() => validateFrozenExecution(changed), code)
     }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('实际SQLite唯一dispatch须匹配原handle、项目epoch与实际输出上限', () => {
+  const db = new Database(':memory:')
+  db.exec('CREATE TABLE generation_runs(run_id TEXT,root_action_id TEXT,binding_json TEXT); CREATE TABLE generation_attempts(attempt_id TEXT,run_id TEXT,root_action_id TEXT,attempt_json TEXT)')
+  const session = { projectId: 'project', leaseId: 'epoch' }, handle = { projectId: 'project', epoch: 'epoch', rootActionId: 'root', runId: 'run' }
+  const body = { max_tokens: 4096 }
+  try {
+    assert.throws(() => selectOwnerDispatch(db, handle, session, body), /NON_UNIQUE/)
+    db.prepare('INSERT INTO generation_runs VALUES(?,?,?)').run('run', 'root', JSON.stringify({ projectId: 'project', epoch: 'epoch' }))
+    db.prepare('INSERT INTO generation_attempts VALUES(?,?,?,?)').run('attempt', 'run', 'root', JSON.stringify({ attemptId: 'attempt', status: 'dispatch-marked', requestedOutputTokens: 4096 }))
+    assert.equal(selectOwnerDispatch(db, handle, session, body).attemptId, 'attempt')
+    for (const delta of [{ rootActionId: 'foreign' }, { runId: 'foreign' }, { projectId: 'foreign' }, { epoch: 'old' }]) assert.throws(() => selectOwnerDispatch(db, { ...handle, ...delta }, session, body), /IDENTITY/)
+    assert.throws(() => selectOwnerDispatch(db, handle, session, { max_tokens: 4095 }), /IDENTITY/)
+    assert.throws(() => selectOwnerDispatch(db, undefined, session, body), /IDENTITY/)
+    db.exec("UPDATE generation_attempts SET attempt_json=json_set(attempt_json,'$.status','unknown')")
+    assert.throws(() => selectOwnerDispatch(db, handle, session, body), /NON_UNIQUE/)
+    db.exec("UPDATE generation_attempts SET attempt_json=json_set(attempt_json,'$.status','dispatch-marked'); INSERT INTO generation_attempts SELECT * FROM generation_attempts")
+    assert.throws(() => selectOwnerDispatch(db, handle, session, body), /NON_UNIQUE/)
+  } finally { db.close() }
+})
+
+test('campaign保留后续阶段额度，unknown与修复占原22余量且不能换账', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/campaign-test-'))
+  const file = path.join(dir, 'synthetic-ledger.jsonl')
+  const binding = { campaignId: protocol.id, mode: 'synthetic', arm: 'baseline', codeSha: 'a'.repeat(40),
+    sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64), phase: 'early-budget', milestone: 'early', caseId: '场景1/1', operation: 'directory' }
+  const record = event => updateLedger(file, event, { campaignMode: 'synthetic' })
+  const issue = (id, value = binding) => { record({ type: 'reserve', attemptId: id, binding: value }); record({ type: 'dispatch', attemptId: id }); record({ type: 'unknown', attemptId: id }) }
+  try {
+    issue('first')
+    for (let i = 0; i < 22; i++) issue(`repair${i}`)
+    assert.throws(() => issue('steals-future-capacity'), /ALLOCATION_EXHAUSTED/)
+    issue('still-available-primary-draft', { ...binding, operation: 'draft' })
+    issue('still-available-post-ui', { ...binding, milestone: 'post-ui' })
+    assert.throws(() => updateLedger(path.join(dir, 'other-real.jsonl'), { type: 'reserve', attemptId: 'new', binding: { ...binding, mode: 'real' } }, { campaignMode: 'real' }), /PATH_MISMATCH/)
+    assert.throws(() => record({ type: 'cancel', attemptId: 'first' }), /TRANSITION/)
+    const rows = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse)
+    assert.equal(rows.filter(row => row.allocation === 'failedRetryRepairReviewReserve').length, 22)
+    rows[0].allocation = 'postUiBudget'; fs.writeFileSync(file, rows.map(JSON.stringify).join('\n') + '\n')
+    assert.throws(() => record({ type: 'reserve', attemptId: 'tampered', binding }), /ALLOCATION_MISMATCH/)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('development manifest拒绝formal，协议别名不接受不存在的旧路径', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/manifest-test-'))
+  const target = path.join(dir, 'targets.json')
+  try {
+    fs.writeFileSync(target, JSON.stringify({ baseline: { schemaVersion: 2, developmentOnly: true }, candidate: { schemaVersion: 2, developmentOnly: true } }))
+    assert.throws(() => main(['dry-run', '--targets', target]), /DEVELOPMENT_TARGET_NOT_QUALIFIED/)
+    assert.throws(() => main(['--phase', 'early-budget', '--protocol', 'test/fixtures/novel-quality-modernization/protocol.json', '--dry-run', '--targets', target]), /PROTOCOL_PATH_MISMATCH/)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('formal冻结拒绝未跟踪生产源码或实际bridge，保留未跟踪截图', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/untracked-test-'))
+  try {
+    assert.equal(spawnSync('git', ['init', dir], { windowsHide: true }).status, 0)
+    fs.mkdirSync(path.join(dir, 'src/__tests__/__screenshots__'), { recursive: true })
+    fs.writeFileSync(path.join(dir, 'src/__tests__/__screenshots__/owned.png'), 'synthetic')
+    assert.doesNotThrow(() => assertCommittedProductionFiles(dir))
+    fs.writeFileSync(path.join(dir, 'src/planner.ts'), 'export const limit = 1')
+    assert.throws(() => assertCommittedProductionFiles(dir), /UNCOMMITTED_PRODUCTION_FILES/)
+    fs.unlinkSync(path.join(dir, 'src/planner.ts'))
+    fs.mkdirSync(path.join(dir, 'scripts/fixtures'), { recursive: true })
+    fs.writeFileSync(path.join(dir, 'scripts/fixtures/production.fixture.mjs'), 'export const adapter = 1')
+    assert.throws(() => assertCommittedProductionFiles(dir), /UNCOMMITTED_PRODUCTION_FILES/)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })

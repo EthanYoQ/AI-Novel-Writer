@@ -41,6 +41,7 @@ export interface ExecuteGenerationRequest {
     reasoningUpperBoundTokens: number;
     usagePolicy: ProviderUsagePolicy;
     purpose?: string;
+    budgetDecision?: import('../../src/services/generation/task-budget-planner').TaskBudgetDecision;
     /** Main-only output projection selected from the frozen Agent tool manifest. */
     agentToolNames?: readonly string[];
     /** The original semantic task is committed with the reservation before dispatch. */
@@ -109,7 +110,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 throw new Error('GENERATION_LIABILITY_UNBOUNDED');
             let receipt: GenerationExecutionReceipt;
             try {
-                receipt = deps.repository.reserve(request.runId, request.invocationNonce, requestHash, request.reservedTokens, request.requestedOutputTokens, policy, request.purpose, request.replayTask);
+                receipt = deps.repository.reserve(request.runId, request.invocationNonce, requestHash, request.reservedTokens, request.requestedOutputTokens, policy, request.purpose, request.replayTask, request.budgetDecision);
             }
             catch (error) {
                 if (!/BUDGET|RESERVATION|EPOCH|DISPATCH|INVOCATION/.test(error instanceof Error ? error.message : '')) {
@@ -237,14 +238,19 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 flush();
                 receipt = deps.repository.settle(attemptId, usage, storageFailed ? 'error' : result.finishReason);
             }
-            catch {
+            catch (error) {
                 retainInterruptedAgentText();
                 flush();
                 try {
                     if (suspended) return { ...receipt, ...(storageFailed ? { unsavedTail: text.slice(durable.length) } : {}), failureCode: 'GENERATION_PROJECT_CLOSED' };
                     const current = deps.repository.receipt(attemptId);
-                    if (current.attempt.status === 'dispatch-marked')
-                        receipt = deps.repository.settle(attemptId, null);
+                    if (current.attempt.status === 'dispatch-marked') {
+                        // Persist only stable categories, never provider text that may contain credentials or prompts.
+                        const known = error instanceof Error && /^(NETWORK_ERROR|ECONNRESET|ETIMEDOUT|FETCH_FAILED)$/.test(error.message) ? 'NETWORK_ERROR' : 'GENERATION_PROVIDER_FAILED';
+                        const failureCode = storageFailed ? 'GENERATION_STORAGE_FAILED' : timedOut ? 'ROOT_BUDGET_EXHAUSTED'
+                            : streamFailed ? 'GENERATION_STREAM_INVALID' : controller.signal.aborted ? 'GENERATION_CANCELLED' : known;
+                        receipt = deps.repository.settle(attemptId, null, null, failureCode);
+                    }
                     else
                         receipt = current;
                 }
@@ -266,7 +272,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 return { ...receipt, unsavedTail: text.slice(durable.length), failureCode: 'GENERATION_STORAGE_FAILED' };
             const finalReceipt = deps.repository.receipt(attemptId);
             if (controller.signal.aborted)
-                return { ...finalReceipt, failureCode: timedOut ? 'ROOT_BUDGET_EXHAUSTED' : 'GENERATION_CANCELLED' };
+                return { ...finalReceipt, failureCode: finalReceipt.failureCode ?? (timedOut ? 'ROOT_BUDGET_EXHAUSTED' : 'GENERATION_CANCELLED') };
             return finalReceipt;
         })();
         pending.set(key, operation);

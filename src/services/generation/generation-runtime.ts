@@ -90,6 +90,7 @@ export interface MainGenerationSnapshot extends MainGenerationRunHandle {
   compositionEligible?: boolean
 }
 export interface MainGenerationRunView {
+  budgetDiagnostics?: readonly import('./task-budget-planner').GenerationBudgetDiagnostic[]
   operation?: string
   candidates?: readonly (MainGenerationSnapshot & { fingerprint: FrozenInputFingerprint; nonReplayable: true })[]
   unsavedTails?: readonly { attemptId: string; artifactId: string; durableRevision: number; text: string; failureCode: string }[]

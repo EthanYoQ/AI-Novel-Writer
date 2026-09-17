@@ -66,6 +66,7 @@ export function buildStructuredSyntaxRepairTask(
   return {
     purpose: `${originalTask.purpose}:structured-syntax-repair`,
     reasoningStage: 'planning',
+    ...(originalTask.budgetDemand ? { budgetDemand: originalTask.budgetDemand } : {}),
     output: 'structured-data',
     messages: [
       {

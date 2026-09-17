@@ -55,6 +55,28 @@ const blueprintContract: StructuredBatchContract<number, Blueprint> = {
   validateItem: blueprint => blueprint.title.trim() ? undefined : '标题不能为空',
 }
 
+it('rebuilds capacity splits before physical calls and preserves the validated prefix for 200 items', async () => {
+  const physical: number[][] = [], prefixes: number[][] = []
+  let preflights = 0
+  const session: Pick<GenerationSession, 'complete'> = { async complete(task) {
+    const input = taskPayload(task)
+    expect(task.budgetDemand).toEqual({ kind: 'structured-items', writingLanguage: 'zh-CN', requestedItems: input.items.length })
+    if (input.items.length > 7) { preflights++; throw new Error('Error invoking remote method: TASK_BUDGET_SCOPE_SPLIT_REQUIRED:7') }
+    physical.push([...input.items]); prefixes.push(input.validatedPrefix.map(item => item.chapterNumber))
+    return { status: 'completed', finishReason: 'stop', content: JSON.stringify({ blueprints: input.items.map(chapterNumber => ({ chapterNumber, title: '完整章节' })) }),
+      receipt: attemptReceipt(physical.length, 7000, physical.length * 7000, 'stop') }
+  } }
+  const result = await createStructuredBatchExecutor({ contract: blueprintContract, session }).execute({
+    items: Array.from({ length: 200 }, (_, index) => index + 1), limits: { maxBatchItems: 200 },
+  })
+  expect(result.ok).toBe(true)
+  expect(physical.flat()).toEqual(Array.from({ length: 200 }, (_, index) => index + 1))
+  expect(new Set(physical.flat()).size).toBe(200)
+  expect(result.receipt.calls).toBe(29)
+  expect(result.receipt.splitCount).toBe(preflights)
+  expect(prefixes.at(-1)).toEqual(Array.from({ length: 196 }, (_, index) => index + 1))
+})
+
 type AttemptRequest = {
   items: readonly number[]
   validatedPrefix: readonly Blueprint[]

@@ -76,6 +76,50 @@ function syntheticStream() {
   return fetch
 }
 
+describe('S07 durable task budget diagnostics', () => {
+  it('keeps a network failure category after reopening without storing provider text', async () => {
+    const f = fixture(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: '已收到的正文' })
+      throw new Error('NETWORK_ERROR')
+    })
+    const run = f.owner.begin(f.begin)
+    const saved = await f.owner.execute({ handle: run.handle, invocationNonce: 'network-proof', task })
+    expect(saved.run.budgetDiagnostics![0]).toMatchObject({ failureCode: 'NETWORK_ERROR', actualState: 'unknown', actual: null })
+    expect(saved.run.artifacts[0]).toMatchObject({ text: '已收到的正文', compositionEligible: false })
+    expect(f.reopen().read(run.handle).budgetDiagnostics).toEqual(saved.run.budgetDiagnostics)
+  })
+  it.each([true, false])('stores the decision before dispatch and recovers actual/unknown accounting (trusted=%s)', async trusted => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      const row = f.db.prepare('SELECT attempt_json,usage_receipt_json FROM generation_attempts').get() as { attempt_json: string; usage_receipt_json: string }
+      expect(JSON.parse(row.attempt_json).status).toBe('dispatch-marked')
+      expect(JSON.parse(row.usage_receipt_json).budgetDecision).toMatchObject({ decision: 'ready', requestedQuantity: 400, policyVersion: 's07-task-budget-v1' })
+      options.onVisible({ kind: 'delta', text: '完整保留的合成正文。' })
+      return { finishReason: 'stop', usage: trusted ? { promptTokens: 100, completionTokens: 60, reasoningTokens: 20, totalTokens: 160,
+        accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true } : null }
+    })
+    const f = fixture(dispatch, true)
+    const run = f.owner.begin(f.begin)
+    const input = { ...task, budgetDemand: { kind: 'draft-units' as const, writingLanguage: 'zh-CN' as const, requestedUnits: 400, segmentable: false } }
+    const saved = await f.owner.execute({ handle: run.handle, invocationNonce: 'budget-proof', task: input })
+    const diagnostic = saved.run.budgetDiagnostics![0]
+    expect(diagnostic).toMatchObject({ plannerVersion: 's07-task-budget-v1', reservedTokens: 1048576, finishReason: 'stop',
+      actualState: trusted ? 'settled' : 'unknown', actual: trusted ? { input: 100, completion: 60, reasoning: 20, total: 160 } : null })
+    expect(saved.run.ledger?.tokenLiability).toBe(trusted ? 160 : 1048576)
+    const restored = f.reopen().read(run.handle)
+    expect(restored.budgetDiagnostics).toEqual(saved.run.budgetDiagnostics)
+    expect(dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('rejects an indivisible oversized target before any physical reservation', async () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(), f = fixture(dispatch, true)
+    const run = f.owner.begin(f.begin)
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'too-large', task: { ...task,
+      budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 5000, segmentable: false } } })).rejects.toThrow('TASK_BUDGET_CAPACITY_CONFLICT')
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(f.db.prepare('SELECT COUNT(*) FROM generation_attempts').pluck().get()).toBe(0)
+    expect(f.owner.read(run.handle).ledger?.physicalRequests).toBe(0)
+  })
+})
+
 describe('durable directory commit and remaining stage', () => {
   const directoryTask = { ...task, purpose: 'directory-batch', output: 'structured-data' as const }
   const authorInputs = [{ id: 'directory:pacing-guidance', text: '  前缓后急\r\n' }, { id: 'directory:author-config', text: '{"totalChapters":3}' }]

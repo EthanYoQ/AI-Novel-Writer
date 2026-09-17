@@ -72,15 +72,18 @@ async function dispatchProvider(value: unknown, options: Parameters<GenerationRu
   const { model, task, plan } = value as ProviderRequest
   let evidence: ProviderUsageEvidence | null = null
   let finishReason: LLMFinishReason | null = null
-  let failed = false
+  let failureCode: string | null = null
   await LLMFactory.getProvider(model).generateStream(model, task.messages.map(message => ({ ...message })), {
     ...plan.options, signal: options.signal, visibleOnly: true,
     onChunk: text => options.onVisible({ kind: 'delta', text }),
     onUsageEvidence: value => { evidence = value },
     onDone: (text, _usage, reason) => { options.onVisible({ kind: 'cumulative', text }); finishReason = reason },
-    onError: () => { failed = true },
+    onError: error => {
+      failureCode = /fetch failed|failed to fetch|network|ECONNRESET|ETIMEDOUT|无法读取响应流|完成标记前结束/iu.test(error)
+        ? 'NETWORK_ERROR' : 'GENERATION_PROVIDER_FAILED'
+    },
   })
-  if (failed || finishReason === null) throw new Error('GENERATION_PROVIDER_FAILED')
+  if (failureCode || finishReason === null) throw new Error(failureCode ?? 'GENERATION_PROVIDER_FAILED')
   const usageEvidence = evidence as ProviderUsageEvidence | null
   return { finishReason, usage: usageEvidence ? { ...usageEvidence.usage, reasoningTokens: usageEvidence.reasoningTokens,
     accounting: usageEvidence.accounting, totalIncludesReasoning: usageEvidence.totalIncludesReasoning,
@@ -155,7 +158,22 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       .filter(receipt => receipt.run.runId === run.runId && receipt.artifact && visibleIds.has(receipt.artifact.artifactId))
       .map(receipt => ({ ...snapshotOf(receipt)!, fingerprint: receipt.artifact!.fingerprint, nonReplayable: true as const }))
     const artifacts = candidates.filter(artifact => artifact.epoch === run.binding.epoch)
+    const budgetDiagnostics: NonNullable<MainGenerationRunView['budgetDiagnostics']> = budget.attempts.map(attempt => {
+      const receipt = volatileReceipts.get(attempt.attemptId) ?? repository.receipt(attempt.attemptId)
+      const usage = receipt.result?.usage
+      return {
+        attemptId: attempt.attemptId, plannerVersion: receipt.budgetDecision?.policyVersion,
+        requestedOutputTokens: receipt.budgetDecision?.requestedOutputTokens ?? attempt.requestedOutputTokens,
+        reservedTokens: attempt.reservedTokens,
+        actualState: attempt.status === 'cancelled-before-dispatch' ? 'not-dispatched' : attempt.status === 'settled' ? 'settled' : ['reserved', 'dispatch-marked'].includes(attempt.status) ? 'reserved' : 'unknown',
+        actual: usage?.trusted ? { input: usage.inputTokens ?? null, completion: usage.completionTokens ?? null,
+          reasoning: usage.reasoningTokens ?? null, total: usage.actualTokens ?? null } : null,
+        finishReason: receipt.result?.finishReason ?? null, failureCode: receipt.failureCode ?? budget.blockedCode,
+        reasons: receipt.budgetDecision?.reasons ?? [],
+      }
+    })
     return { handle: handleOf(run), status: run.status as MainGenerationRunView['status'], operation: run.binding.sourceManifest.operation as string,
+      budgetDiagnostics,
       nonReplayable: run.binding.epoch !== deps.epoch || run.status !== 'running' || !!budget.blockedCode,
       budget: { maxAttempts: budget.policy.maxPhysicalRequests, maxRequestedOutputTokens: budget.policy.maxTokenLiability,
         maxRequestedOutputTokensPerAttempt: budget.policy.maxOutputPerRequest,
@@ -368,6 +386,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       providerRequest: { model, task, plan } satisfies ProviderRequest, reservedTokens: plan.reservedTokens,
       requestedOutputTokens: plan.requestedOutputTokens, inputUpperBoundTokens: plan.inputUpperBoundTokens,
       reasoningUpperBoundTokens: plan.reasoningUpperBoundTokens, usagePolicy: plan.usagePolicy, purpose: task.purpose,
+      ...(plan.budgetDecision ? { budgetDecision: plan.budgetDecision } : {}),
       ...(run.binding.sourceManifest.importSlot ? { replayTask: task } : {}),
       ...(agentExecution ? { agentToolNames: (run.binding.sourceManifest.agentContext as AgentGenerationContext).input.tools.map(tool => tool.name) } : {}) })
     if (receipt.failureCode || receipt.unsavedTail) volatileReceipts.set(receipt.attempt.attemptId, receipt)

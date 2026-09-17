@@ -16,6 +16,8 @@ export interface GenerationMessage {
 /** A semantic generation contract. Physical provider parameters are deliberately absent. */
 export interface GenerationTask {
   purpose: string
+  /** Semantic extent only; main owns capability checks and physical reservation. */
+  budgetDemand?: import('./task-budget-planner').TaskBudgetDemand
   /** Explicit product semantics; omitted stages derive only from output shape. */
   reasoningStage?: GenerationReasoningStage
   output: GenerationOutput

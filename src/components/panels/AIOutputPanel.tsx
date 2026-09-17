@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import GenerationBudgetDiagnostics from './GenerationBudgetDiagnostics'
 import type { GenerationBatchProgress, GenerationRecoveryContext } from '../../shared/generation-owner-contract'
 import type { ReviewRevisionRecovery } from '../../shared/review-revision-generation'
 import type { EditorInlineRecovery } from '../../shared/editor-inline-generation'
@@ -318,6 +319,7 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
     {visibleEditors.map(recovery => <article key={recovery.view.handle.runId} className="mb-3">
       <p>{runText(locale, '编辑器选区建议', 'Editor selection suggestion')}</p>
       <p className="whitespace-pre-wrap">{recovery.context.selectedText.slice(0, 100)}</p>
+      <GenerationBudgetDiagnostics diagnostics={recovery.view.budgetDiagnostics} locale={locale} />
       {recovery.view.ledger && <p>{runText(locale, `已用 ${recovery.view.ledger.physicalRequests} 次请求`, `${recovery.view.ledger.physicalRequests} requests used`)}</p>}
       {recovery.sourceStatus === 'conflict' && <p>{runText(locale, '来源已变化；原建议仍可复制。', 'Sources changed; the original suggestion can still be copied.')}</p>}
       {(recovery.view.candidates ?? recovery.view.artifacts).map(artifact => <div key={artifact.artifactId}>
@@ -339,6 +341,7 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
     </article>)}
     {visibleAgents.map(recovery => <article key={recovery.handle.rootActionId} className="mb-3">
       <p>{runText(locale, '助手任务', 'Assistant task')}：{recovery.context.input.userMessage.slice(0, 80)}</p>
+      <GenerationBudgetDiagnostics diagnostics={recovery.run.budgetDiagnostics} locale={locale} />
       {recovery.run.ledger && <p>{runText(locale, `已用 ${recovery.run.ledger.physicalRequests} 次请求`, `${recovery.run.ledger.physicalRequests} requests used`)}</p>}
       <p className="whitespace-pre-wrap">{recovery.rounds.map(round => round.visibleText).join('\n').slice(0, 180)}</p>
       {recovery.rounds.some(round => round.status === 'unknown' || round.actions.some(action => ['unknown', 'running'].includes(action.status)))
@@ -355,6 +358,7 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
     {visibleReviews.map(({ view, recovery }) => <article key={view.handle.runId} className="mb-3">
       <p>{runText(locale, `第${recovery.context.source.chapterNumber}章${recovery.context.operation === 'review-chapter' ? '审稿' : '修稿'}候选`,
         `Chapter ${recovery.context.source.chapterNumber} ${recovery.context.operation === 'review-chapter' ? 'review' : 'revision'} candidate`)}</p>
+      <GenerationBudgetDiagnostics diagnostics={view.budgetDiagnostics} locale={locale} />
       {view.ledger && <p>{runText(locale, `已用 ${view.ledger.physicalRequests} 次请求`, `${view.ledger.physicalRequests} requests used`)}</p>}
       {recovery.sourceStatus === 'conflict' && !recovery.saved && <p>{runText(locale, '来源已变化；候选仍可复制，不能直接保存。', 'Sources changed; copy the candidate to preserve it. Direct saving is unavailable.')}</p>}
       {(view.candidates ?? view.artifacts).map(artifact => <div key={artifact.artifactId}>
@@ -384,7 +388,8 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
       const picked = selection[view.handle.runId] ?? []
       return <article key={view.handle.runId} className="mb-3">
         <p>{runText(locale, `第${recovery.chapterNumber}章候选`, `Chapter ${recovery.chapterNumber} candidate`)}</p>
-        {view.ledger && <p>{runText(locale, `已用 ${view.ledger.physicalRequests} 次请求`, `${view.ledger.physicalRequests} requests used`)}</p>}
+        <GenerationBudgetDiagnostics diagnostics={view.budgetDiagnostics} locale={locale} />
+      {view.ledger && <p>{runText(locale, `已用 ${view.ledger.physicalRequests} 次请求`, `${view.ledger.physicalRequests} requests used`)}</p>}
         {artifacts.map(artifact => <label key={artifact.artifactId} className="block">
           <input type="checkbox" checked={picked.includes(artifact.artifactId)} disabled={busy || artifact.compositionEligible !== true}
             onChange={event => setSelection(previous => ({ ...previous, [view.handle.runId]: event.target.checked

@@ -45,6 +45,7 @@ export interface GenerationUsageReceipt {
     agentResponse?: { version: 1; visibleText: string; toolCalls: { name: string; arguments: Record<string, unknown> }[] };
 }
 export interface GenerationExecutionReceipt {
+    budgetDecision?: import('../../src/services/generation/task-budget-planner').TaskBudgetDecision;
     run: DurableGenerationRun;
     attempt: PhysicalAttempt;
     artifact: VisibleArtifact | null;
@@ -146,7 +147,7 @@ export class GenerationRunRepository {
             fail('GENERATION_INVOCATION_CONFLICT');
         return this.receipt(row.attempt_id);
     }
-    reserve(runId: string, nonce: string, requestHash: string, reservedTokens: number, requestedOutputTokens: number, usagePolicy?: ProviderUsagePolicy, purpose?: string, replayTask?: import('../../src/services/generation/generation-harness').GenerationTask): GenerationExecutionReceipt {
+    reserve(runId: string, nonce: string, requestHash: string, reservedTokens: number, requestedOutputTokens: number, usagePolicy?: ProviderUsagePolicy, purpose?: string, replayTask?: import('../../src/services/generation/generation-harness').GenerationTask, budgetDecision?: import('../../src/services/generation/task-budget-planner').TaskBudgetDecision): GenerationExecutionReceipt {
         return this.transaction(() => {
             const prior = this.findInvocation(runId, nonce, requestHash);
             if (prior)
@@ -162,7 +163,7 @@ export class GenerationRunRepository {
             assertReservation(budget.root, budget.policy, budget.attempts, attempt, budget.activeElapsedMs);
             this.db().prepare('INSERT INTO generation_attempts VALUES(?,?,?,?,?,?,?)').run(attempt.attemptId, attempt.reservationId, runId, run.rootActionId, encode(attempt), encode({ requestHash, usagePolicy: usagePolicy ?? null }), nonce);
             const artifact: VisibleArtifact = { artifactId: randomUUID(), attemptId: attempt.attemptId, rootActionId: run.rootActionId, projectId: run.binding.projectId, epoch: run.binding.epoch, fingerprint: run.binding.fingerprint, revision: 0, text: '', textHash: textHash('') };
-            this.db().prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(encode({ requestHash, usagePolicy: usagePolicy ?? null, ...(purpose ? { purpose } : {}), ...(replayTask ? { replayTask } : {}), artifactIdentity: { artifactId: artifact.artifactId, epoch: artifact.epoch, fingerprint: artifact.fingerprint } }), attempt.attemptId);
+            this.db().prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(encode({ requestHash, usagePolicy: usagePolicy ?? null, ...(purpose ? { purpose } : {}), ...(replayTask ? { replayTask } : {}), ...(budgetDecision ? { budgetDecision } : {}), artifactIdentity: { artifactId: artifact.artifactId, epoch: artifact.epoch, fingerprint: artifact.fingerprint } }), attempt.attemptId);
             this.db().prepare('INSERT INTO generation_artifacts VALUES(?,?,?,?,?,?)').run(artifact.artifactId, attempt.attemptId, runId, encode(artifact), 0, 'partial');
             return this.receipt(attempt.attemptId);
         });
@@ -188,7 +189,10 @@ export class GenerationRunRepository {
             || !isDeepStrictEqual(visible.fingerprint, run.binding.fingerprint)
             || visible.projectId !== run.binding.projectId || visible.revision !== artifact!.revision
             || textHash(visible.text) !== visible.textHash)) fail('ARTIFACT_INTEGRITY_FAILED');
-        return { run, attempt: JSON.parse(row.attempt_json), artifact: visible, budget: this.budget(run.rootActionId), result: JSON.parse(row.usage_receipt_json).result ?? null };
+        const usage = JSON.parse(row.usage_receipt_json);
+        return { run, attempt: JSON.parse(row.attempt_json), artifact: visible, budget: this.budget(run.rootActionId), result: usage.result ?? null,
+            ...(usage.result?.failureCode ? { failureCode: usage.result.failureCode } : {}),
+            ...(usage.budgetDecision ? { budgetDecision: usage.budgetDecision } : {}) };
     }
     markDispatched(attemptId: string): void {
         this.transaction(() => {
@@ -326,7 +330,7 @@ export class GenerationRunRepository {
             return next;
         });
     }
-    settle(attemptId: string, usage: GenerationUsageReceipt | null, finishReason: string | null = null): GenerationExecutionReceipt {
+    settle(attemptId: string, usage: GenerationUsageReceipt | null, finishReason: string | null = null, failureCode?: string): GenerationExecutionReceipt {
         return this.transaction(() => {
             const receipt = this.receipt(attemptId);
             assertAttemptTransition(receipt.attempt.status, usage?.trusted ? 'settled' : 'unknown');
@@ -334,7 +338,7 @@ export class GenerationRunRepository {
             if (usage?.trusted)
                 receipt.attempt.actualTokens = usage.actualTokens;
             const old = this.db().prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(attemptId) as string;
-            this.db().prepare('UPDATE generation_attempts SET attempt_json=?,usage_receipt_json=? WHERE attempt_id=?').run(encode(receipt.attempt), encode({ ...JSON.parse(old), result: { usage, finishReason } }), attemptId);
+            this.db().prepare('UPDATE generation_attempts SET attempt_json=?,usage_receipt_json=? WHERE attempt_id=?').run(encode(receipt.attempt), encode({ ...JSON.parse(old), result: { usage, finishReason, ...(failureCode ? { failureCode } : {}) } }), attemptId);
             if (usage?.actualTokens !== undefined && usage.actualTokens > receipt.attempt.reservedTokens)
                 this.block(receipt.run.rootActionId, 'USAGE_EXCEEDED_RESERVATION');
             this.stopClockIfIdle(receipt.run.rootActionId);

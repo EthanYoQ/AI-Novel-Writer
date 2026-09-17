@@ -204,6 +204,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
         const task = {
           ...builtTask,
           reasoningStage: 'planning' as const,
+          budgetDemand: { kind: 'structured-items' as const, writingLanguage, requestedItems: items.length },
         }
         if (task.output !== 'structured-data') {
           throw new ExecutionFailure({
@@ -215,7 +216,22 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           })
         }
 
-        const outcome = await session.complete(task, { signal: input.signal })
+        let outcome: Awaited<ReturnType<GenerationSession['complete']>>
+        try {
+          outcome = await session.complete(task, { signal: input.signal })
+        } catch (error) {
+          // Electron may prefix an IPC error message. Only the main planner's
+          // bounded integer decision authorizes this pre-dispatch range split.
+          const match = error instanceof Error ? /TASK_BUDGET_SCOPE_SPLIT_REQUIRED:(\d+)(?:\b|$)/u.exec(error.message) : null
+          const selected = match ? Number(match[1]) : 0
+          if (Number.isSafeInteger(selected) && selected > 0 && selected < items.length) {
+            receipt.splitCount += 1
+            await executeBatch(items.slice(0, selected))
+            await executeBatch(items.slice(selected))
+            return
+          }
+          throw error
+        }
         recordAttempt(outcome.receipt)
         if (input.signal?.aborted) {
           throw new ExecutionFailure({
@@ -489,6 +505,13 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
         return { ok: true, items: validated, receipt }
       } catch (error) {
         if (error instanceof PromptBudgetExceededError) throw error
+        if (error instanceof Error && /TASK_BUDGET_|ROOT_BUDGET_EXHAUSTED/u.test(error.message)) {
+          const exhausted = error.message.includes('ROOT_BUDGET_EXHAUSTED')
+          const message = writingLanguage === 'zh-CN'
+            ? exhausted ? '本任务预算已用完；已完成的完整项目保留，剩余范围尚未发送。' : '完整单项与必要输入无法在当前模型或用户容量限制内生成；本次未发送，请调整容量或缩小任务。'
+            : exhausted ? 'The task budget is exhausted. Completed items are preserved; the remaining scope was not sent.' : 'A complete item and its required inputs do not fit the current model or user capacity. No request was sent; adjust capacity or reduce the task.'
+          return { ok: false, validatedItems: validated, failure: { code: 'limit_exceeded', reason: exhausted ? 'max_requested_tokens' : 'output_limit', message: `${message} (${exhausted ? 'ROOT_BUDGET_EXHAUSTED' : 'TASK_BUDGET_CAPACITY_CONFLICT'})` }, receipt }
+        }
         let failure: StructuredBatchFailure
         if (error instanceof ExecutionFailure) {
           failure = error.failure

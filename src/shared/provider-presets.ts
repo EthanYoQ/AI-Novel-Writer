@@ -10,9 +10,28 @@ export interface ModelPreset {
   name: string
   /** Model-specific capability metadata. `maxTokens` remains the legacy output limit. */
   capabilities?: ModelCapabilities
+  /** Verified capacity facts used only for budget planning, independent of feature flags. */
+  budgetCapabilities?: ModelBudgetCapabilities
   /** Provider request mapping verified against the official model documentation. */
   reasoningMapping?: VerifiedReasoningMapping
   maxTokens: number
+}
+
+/** Provider-documented capacity facts that do not imply request-feature support. */
+export interface ModelBudgetCapabilities {
+  contextWindowTokens: number
+  maxOutputTokens: number
+  evidence: {
+    sourceUrl: string
+    /** The catalog deliberately records a safe value at or below the rounded provider claim. */
+    calibration: 'conservative-provider-documentation'
+  }
+}
+
+export interface ResolvedModelBudgetCapabilities {
+  contextWindowTokens: number
+  maxOutputTokens: number
+  evidence?: ModelBudgetCapabilities['evidence']
 }
 
 /** Optional capabilities supported by a model endpoint. */
@@ -43,6 +62,10 @@ export interface ProviderPreset {
   displayName?: string
   /** 默认 API 地址 */
   baseUrl: string
+  /** Additional exact official endpoints allowed to supply budget capability evidence. */
+  budgetCapabilityBaseUrls?: string[]
+  /** Persisted provider labels accepted only for this exact budget evidence match. */
+  budgetProviderAliases?: string[]
   /** 默认调用协议：openai 兼容 或 gemini 原生 */
   protocol: string
   /** 支持的生成模型列表（含各自的 maxTokens） */
@@ -64,12 +87,97 @@ export function createProviderCatalog(): ProviderPreset[] {
     provider: 'openai',
     displayName: 'OpenAI',
     baseUrl: 'https://api.openai.com',
+    // Profiles persist the versioned endpoint; both spellings are the same
+    // official host, so only budget evidence may match through it.
+    budgetCapabilityBaseUrls: ['https://api.openai.com/v1'],
     protocol: 'openai',
     models: [
-      { name: 'gpt-4o', maxTokens: 16384 },
-      { name: 'gpt-4o-mini', maxTokens: 16384 },
-      { name: 'gpt-4-turbo', maxTokens: 4096 },
-      { name: 'gpt-3.5-turbo', maxTokens: 4096 }
+      {
+        name: 'gpt-4.1',
+        // Preserve the legacy operational default; budget evidence is separate
+        // and never advertised as request-feature support.
+        maxTokens: 16_384,
+        budgetCapabilities: {
+          contextWindowTokens: 1_047_576,
+          maxOutputTokens: 32_768,
+          evidence: {
+            sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-4.1',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+      {
+        name: 'gpt-4.1-2025-04-14',
+        maxTokens: 16_384,
+        budgetCapabilities: {
+          contextWindowTokens: 1_047_576,
+          maxOutputTokens: 32_768,
+          evidence: {
+            sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-4.1',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+      {
+        name: 'o3',
+        maxTokens: 16_384,
+        budgetCapabilities: {
+          contextWindowTokens: 200_000,
+          maxOutputTokens: 100_000,
+          evidence: {
+            sourceUrl: 'https://developers.openai.com/api/docs/models/o3',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+      {
+        name: 'gpt-4o',
+        maxTokens: 16384,
+        budgetCapabilities: {
+          contextWindowTokens: 128_000,
+          maxOutputTokens: 16_384,
+          evidence: {
+            sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-4o',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+      {
+        name: 'gpt-4o-mini',
+        maxTokens: 16384,
+        budgetCapabilities: {
+          contextWindowTokens: 128_000,
+          maxOutputTokens: 16_384,
+          evidence: {
+            sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-4o-mini',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+      {
+        name: 'gpt-4-turbo',
+        maxTokens: 4096,
+        budgetCapabilities: {
+          contextWindowTokens: 128_000,
+          maxOutputTokens: 4_096,
+          evidence: {
+            sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-4-turbo',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+      {
+        name: 'gpt-3.5-turbo',
+        maxTokens: 4096,
+        budgetCapabilities: {
+          contextWindowTokens: 16_385,
+          maxOutputTokens: 4_096,
+          evidence: {
+            sourceUrl: 'https://developers.openai.com/api/docs/models/gpt-3.5-turbo',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      }
     ],
     embeddingModels: ['text-embedding-3-small', 'text-embedding-3-large', 'text-embedding-ada-002'],
   },
@@ -105,8 +213,27 @@ export function createProviderCatalog(): ProviderPreset[] {
     provider: 'siliconflow',
     displayName: 'SiliconFlow',
     baseUrl: 'https://api.siliconflow.cn/v1',
+    budgetCapabilityBaseUrls: ['https://api.siliconflow.com/v1'],
+    budgetProviderAliases: ['openai'],
     protocol: 'openai',
-    models: [],
+    models: [
+      {
+        name: 'deepseek-ai/DeepSeek-V4-Flash',
+        // Preserve the existing operational default. The separately verified
+        // capacity is evidence for planning and does not enlarge user settings.
+        maxTokens: 16_384,
+        budgetCapabilities: {
+          // The provider page publishes rounded 1049K / 393K values. Use
+          // conservative decimal bounds rather than inventing binary limits.
+          contextWindowTokens: 1_000_000,
+          maxOutputTokens: 393_000,
+          evidence: {
+            sourceUrl: 'https://www.siliconflow.com/models/deepseek-v4-flash',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
+    ],
     embeddingModels: ['BAAI/bge-m3'],
     embeddingModelCapabilities: {
       'BAAI/bge-m3': {
@@ -284,6 +411,71 @@ function validatedCapabilities(value: unknown): ModelCapabilities | undefined {
     reasoning: candidate.reasoning,
     structuredOutput: candidate.structuredOutput,
     usage: candidate.usage,
+  }
+}
+
+function validatedBudgetCapabilities(value: unknown): ModelBudgetCapabilities | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const candidate = value as Partial<ModelBudgetCapabilities>
+  const evidence = candidate.evidence as Partial<ModelBudgetCapabilities['evidence']> | undefined
+  if (
+    !Number.isSafeInteger(candidate.contextWindowTokens)
+    || Number(candidate.contextWindowTokens) <= 0
+    || !Number.isSafeInteger(candidate.maxOutputTokens)
+    || Number(candidate.maxOutputTokens) <= 0
+    || typeof evidence?.sourceUrl !== 'string'
+    || evidence.sourceUrl.length === 0
+    || evidence.calibration !== 'conservative-provider-documentation'
+  ) return undefined
+  return {
+    contextWindowTokens: candidate.contextWindowTokens as number,
+    maxOutputTokens: candidate.maxOutputTokens as number,
+    evidence: {
+      sourceUrl: evidence.sourceUrl,
+      calibration: evidence.calibration,
+    },
+  }
+}
+
+function matchesBudgetCapabilityEndpoint(preset: ProviderPreset, baseUrl: unknown): boolean {
+  const endpoint = normalizedOfficialBaseUrl(baseUrl)
+  if (!endpoint) return false
+  return [preset.baseUrl, ...(preset.budgetCapabilityBaseUrls ?? [])]
+    .some(candidate => endpoint === normalizedOfficialBaseUrl(candidate))
+}
+
+/**
+ * Resolve capacity evidence for budget planning without making claims about
+ * reasoning, structured output, usage reporting, or other request features.
+ */
+export function resolveModelProfileBudgetCapabilities(
+  profile: ModelCapabilityProfile,
+): ResolvedModelBudgetCapabilities | undefined {
+  if (
+    typeof profile.provider !== 'string'
+    || typeof profile.protocol !== 'string'
+    || typeof profile.modelName !== 'string'
+  ) return undefined
+
+  const provider = profile.provider
+  const protocol = profile.protocol
+  const modelName = profile.modelName.trim()
+  const preset = BUILTIN_PRESETS.find(candidate => (
+    candidate.provider === provider || candidate.budgetProviderAliases?.includes(provider)
+  ) && candidate.protocol === protocol && matchesBudgetCapabilityEndpoint(candidate, profile.baseUrl))
+  if (
+    !preset
+  ) return undefined
+
+  const model = preset.models.find(candidate => candidate.name === modelName)
+  const dedicated = validatedBudgetCapabilities(model?.budgetCapabilities)
+  if (dedicated) return dedicated
+
+  const capabilities = validatedCapabilities(model?.capabilities)
+  if (!capabilities || capabilities.contextWindowTokens === null) return undefined
+  return {
+    contextWindowTokens: capabilities.contextWindowTokens,
+    maxOutputTokens: capabilities.maxOutputTokens,
   }
 }
 

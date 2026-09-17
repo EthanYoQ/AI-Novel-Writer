@@ -21,7 +21,7 @@ import { getProjectDataRoot } from '../services/project-data-locator'
 import { projectAccess } from '../services/project-access'
 import { ModelExecutionLeaseRegistry } from '../services/model-execution-lease'
 import { createMainGenerationOwner } from '../services/main-generation-owner'
-import { MAIN_GENERATION_POLICY } from '../services/main-generation-plan'
+import { MAIN_GENERATION_POLICY, TaskBudgetPreflightError } from '../services/main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../services/generation-source-binding'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import type { BlueprintRangeCommitReceipt } from '../repositories/blueprint-repository'
@@ -127,6 +127,7 @@ export function registerGenerationController(options: {
         projectAccess.assertCurrentProjectContext(session, getCurrentProjectPath())
         return result
       } catch (error) {
+        if (error instanceof TaskBudgetPreflightError) throw new Error(error.message)
         const code = error instanceof Error && /^(?:GENERATION|ROOT_BUDGET|ARTIFACT|MAIN|CHARACTER|FINALIZED_CHARACTER|LEGACY_ROSTER)_[A-Z_]+$/u.test(error.message)
           ? error.message : 'GENERATION_REQUEST_FAILED'
         throw new Error(code)

@@ -1,3 +1,4 @@
+import type { CharacterProposalChoices } from '../../character-proposal-choices'
 import { decodeCharacterIdentityManifest, decodeCharacterDetails, validateCharacterDetail, type CharacterIdentitySlot, type CharacterDetailOutput } from '../../../shared/character-proposal-parser'
 import type { CharacterProposalBatch } from '../../../shared/character-proposal'
 import { defaultCharacterProposalRelationships, defaultCharacterProposalSelections, formatCharacterProposalPreview } from '../character-proposal-preview'
@@ -1363,10 +1364,12 @@ export class AdoptGeneratedCharactersCommand extends BaseWorkflowCommand<string>
     if (!shown) throw new Error('CHARACTER_PROPOSAL_PREVIEW_REQUIRED')
     if (shown.status === 'cancelled') throw new Error('CHARACTER_PROPOSAL_CANCELLED')
     if (shown.status === 'approved') return formatCharacterProposalPreview(shown, (zh, en) => workflowUiText(context, zh, en))
+    const choices = context.data.characterProposalChoices as CharacterProposalChoices | undefined
+    if (choices && (choices.proposalBatchId !== shown.proposalBatchId || choices.revision !== shown.revision)) throw new Error('CHARACTER_PROPOSAL_CHOICES_STALE')
     const result = await ipc.invokeWithProjectSession(session, 'character-proposal:approve', {
       proposalBatchId: shown.proposalBatchId, expectedRevision: shown.revision,
-      operationId: `character-adoption:${context.runId}`, selections: defaultCharacterProposalSelections(shown),
-      relationships: defaultCharacterProposalRelationships(shown),
+      operationId: `character-adoption:${context.runId}`, selections: choices?.selections ?? defaultCharacterProposalSelections(shown),
+      relationships: choices?.relationships ?? defaultCharacterProposalRelationships(shown),
     })
     context.data.characterProposalBatch = result.batch
     this.notifyRefresh(['characterCards'], session.projectPath, session)

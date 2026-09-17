@@ -791,6 +791,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             try {
               initialOutcome = await draftingSession.complete({
                 purpose: 'chapter-draft',
+                budgetDemand: { kind: 'draft-units', writingLanguage, requestedUnits: targetChars, segmentable: false },
                 reasoningStage: 'drafting',
                 output: 'visible-text',
                 messages: [
@@ -1218,6 +1219,7 @@ ${visibleTail}`,
             : 'chapter-draft-continuation',
           reasoningStage: 'drafting',
           output: 'visible-text',
+          budgetDemand: { kind: 'draft-units', writingLanguage: params.writingLanguage, requestedUnits: Math.max(1, remaining), segmentable: false },
           messages: [
             { role: 'system', content: params.systemRole },
             { role: 'user', content: continuationPrompt },
