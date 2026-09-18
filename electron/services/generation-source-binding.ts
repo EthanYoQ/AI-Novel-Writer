@@ -216,7 +216,8 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
             add('agent-blueprints:all', 0, stable(blueprints.map(row => without(row, ['created_at', 'updated_at', 'notes_updated_at']))), 'unconfirmed-continuity', 'actual author plans guarded across Agent tool confirmations');
         }
         if (input.reviewRevisionContext) {
-            const currentContext = captureReviewRevisionContext(deps.db, reviewRevisionRequest(input.reviewRevisionContext));
+            const currentContext = captureReviewRevisionContext(deps.db, reviewRevisionRequest(input.reviewRevisionContext),
+                { projectId: input.projectId, epoch: input.epoch });
             if (!isDeepStrictEqual(input.reviewRevisionContext, currentContext)) fail('GENERATION_REVIEW_CONTEXT_CHANGED');
             add('review-revision-context', 0, JSON.stringify(currentContext), 'author-constraint', 'main-verified frozen manuscript, author decisions and review material');
         }

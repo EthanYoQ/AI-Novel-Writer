@@ -1,7 +1,8 @@
 import type Database from 'better-sqlite3'
 import { isDeepStrictEqual } from 'node:util'
 import type { ExpectedDraftSource, NovelConfig } from '../../src/shared/ipc-channels'
-import type { PrepareReviewRevisionRequest, ReviewRevisionContext } from '../../src/shared/review-revision-generation'
+import type { PrepareReviewRevisionRequest, ReviewMaterialIdentity, ReviewRevisionContext } from '../../src/shared/review-revision-generation'
+import type { ProjectEpoch } from '../../src/shared/source-ref'
 import { parseHumanConfirmedReviewSnapshot, serializeHumanConfirmedReviewSnapshot } from '../../src/shared/human-confirmed-review'
 import { freezeChapterGoals } from '../../src/shared/chapter-goal-review'
 import { findBlueprintContinuityRisks } from '../../src/shared/consistency-preflight'
@@ -27,7 +28,8 @@ export function reviewRevisionRequest(context: ReviewRevisionContext): PrepareRe
 }
 
 /** Captured DB is the authority. The returned material is also re-read on dispatch/resume/save. */
-export function captureReviewRevisionContext(db: Database.Database, request: PrepareReviewRevisionRequest): ReviewRevisionContext {
+export function captureReviewRevisionContext(db: Database.Database, request: PrepareReviewRevisionRequest,
+  identity: ProjectEpoch): ReviewRevisionContext {
   if (!request || Object.keys(request).some(key => !['operation', 'draftId', 'expectedDraft', 'reviewSourceId', 'confirmedReviewContent', 'authorInputs', 'uiLocale'].includes(key))
     || !REVIEW_REVISION_OPERATIONS.includes(request.operation) || !Number.isSafeInteger(request.draftId) || request.draftId < 1
     || !['zh-CN', 'en-US'].includes(request.uiLocale) || !request.expectedDraft
@@ -79,10 +81,16 @@ export function captureReviewRevisionContext(db: Database.Database, request: Pre
     const history = rows.map(row => {
       if (row.finalization_id && (row.content_hash !== textHash(row.body) || row.content_snapshot !== row.body))
         throw new Error('GENERATION_REVIEW_HISTORY_CHANGED')
-      const sourceIdentity = row.finalization_id ? { draftId: row.id, finalizationId: row.finalization_id, chapterNumber: row.chapter_number, contentHash: textHash(row.body) } : undefined
+      const contentHash = textHash(row.body)
+      const sourceIdentity = row.finalization_id ? { draftId: row.id, finalizationId: row.finalization_id, chapterNumber: row.chapter_number, contentHash } : undefined
       const projection = projections.find(item => item.draftId === row.id && item.sourceStatus === 'current' && isDeepStrictEqual(item.source, sourceIdentity))
+      // 只增不减：身份走共享选择契约，不改变任何现有消费方读取的字段。
+      // 有终稿 outbox 凭据的是已证明的定稿；否则是旧版定稿（legacy），两者都不是 author。
+      const materialIdentity: ReviewMaterialIdentity = { projectId: identity.projectId, epoch: identity.epoch,
+        sourceId: `finalized:${row.id}`, revision: row.id, contentHash,
+        provenance: row.finalization_id ? 'finalized' : 'legacy' }
       return { draftId: row.id, chapterNumber: row.chapter_number, chapterTitle: row.chapter_title ?? '', content: row.body,
-        ...(sourceIdentity ? { source: sourceIdentity } : {}), ...(projection ? { projection } : {}) }
+        identity: materialIdentity, ...(sourceIdentity ? { source: sourceIdentity } : {}), ...(projection ? { projection } : {}) }
     })
     const activeIds = new Set((db.prepare('SELECT character_id FROM characters WHERE retired=0').all() as { character_id: string }[]).map(row => row.character_id))
     const stateLines = CharacterRepository.getAll(db).filter(card => card.characterId && activeIds.has(card.characterId)).flatMap(card => {

@@ -6,23 +6,56 @@ import { buildChapterGoalReviewPrompt } from '../../../shared/chapter-goal-revie
 import { resolvePromptTemplate } from '../../prompt-templates'
 import { ReviewPromptBuilder } from '../../prompts/prompt-builder'
 import { promptLanguageText } from '../../prompt-language'
+import {
+  ChapterMaterialCapacityError,
+  selectReviewRevisionMaterials,
+  unknownReviewMaterialIdentity,
+  type ChapterMaterialIdentity,
+  type ReviewRevisionMaterial,
+  type ReviewRevisionMaterialAdmission,
+} from '../chapter-materials'
 import { ipc } from '../../ipc-client'
 import { requireWorkflowProjectSession, workflowUiText } from '../workflow-project-session'
 
 export interface ReviewChapterParams extends ReviewRevisionCommandSource { reviewFocus?: string }
 
-function formatHistory(frozen: ReviewRevisionContext): string {
-  const text = (zh: string, en: string) => promptLanguageText(frozen.writingLanguage, zh, en)
-  const header = text('【已确认定稿历史｜唯一已发生事实源】', '[Finalized history | the only source of events that have already happened]')
-  if (!frozen.history.length) return `${header}\n${text('（当前章节之前没有已定稿历史）', '(there is no finalized history before the current chapter)')}`
-  return [header, ...frozen.history.map(item => [
+type ReviewHistoryItem = ReviewRevisionContext['history'][number]
+
+/** 单条已定稿历史在审稿提示词里的块；措辞与接入准入层之前逐字相同。 */
+function historyBlock(item: ReviewHistoryItem, language: ReviewRevisionContext['writingLanguage']): string {
+  const text = (zh: string, en: string) => promptLanguageText(language, zh, en)
+  return [
     text(`### 第${item.chapterNumber}章 ${item.chapterTitle}`, `### Chapter ${item.chapterNumber}: ${item.chapterTitle}`),
     item.content,
     ...(item.projection?.sourceStatus === 'current' ? (item.projection.facts ?? []).map(fact => text(
       `- [${fact.category}] ${fact.statement}（来源第${fact.sourceChapter}章；证据：${fact.evidence}）`,
       `- [${fact.category}] ${fact.statement} (source: Chapter ${fact.sourceChapter}; evidence: ${fact.evidence})`,
     )) : []),
-  ].filter(Boolean).join('\n'))].join('\n\n')
+  ].filter(Boolean).join('\n')
+}
+
+/**
+ * 审稿路径的材料候选：历史原文逐字保留原有块头，身份只由主进程给出。
+ * 前一章的定稿是审稿的连续性锚点，因此是必需材料：装不下就显式失败，不静默省略。
+ *
+ * 导出是为了让 `context-entry-parity.test.ts` 驱动本入口**真实的**装配缝，
+ * 而不是在测试里另写一份近似实现。
+ */
+export function reviewHistoryMaterials(frozen: ReviewRevisionContext, current: ChapterMaterialIdentity): ReviewRevisionMaterial[] {
+  return frozen.history.map(item => ({
+    identity: item.identity ?? unknownReviewMaterialIdentity(current),
+    category: 'finalized-history',
+    required: item.chapterNumber === frozen.source.chapterNumber - 1,
+    text: historyBlock(item, frozen.writingLanguage),
+  }))
+}
+
+function formatHistory(frozen: ReviewRevisionContext, admitted: readonly ReviewRevisionMaterial[]): string {
+  const text = (zh: string, en: string) => promptLanguageText(frozen.writingLanguage, zh, en)
+  const header = text('【已确认定稿历史｜唯一已发生事实源】', '[Finalized history | the only source of events that have already happened]')
+  if (!frozen.history.length) return `${header}\n${text('（当前章节之前没有已定稿历史）', '(there is no finalized history before the current chapter)')}`
+  // 准入只决定成员；顺序仍是历史原有顺序，因此集合未变时提示词逐字节不变。
+  return [header, ...admitted.map(material => material.text)].join('\n\n')
 }
 
 export class ReviewChapterCommand extends ReviewRevisionCommand {
@@ -43,10 +76,33 @@ export class ReviewChapterCommand extends ReviewRevisionCommand {
     const projectSession = requireWorkflowProjectSession(params.context)
     const template = await resolvePromptTemplate('consistency_check', projectSession, language)
     if (!template) throw new Error(text('未找到审稿模板', 'The review prompt template was not found.'))
+    // 与写稿路径同一套准入：材料成员由合同判定，绝不按「最近/相关」自行拼凑。
+    const reviewBlueprint = frozen.blueprints.find(blueprint => blueprint.chapterNumber === frozen.source.chapterNumber)
+    let admission: ReviewRevisionMaterialAdmission
+    try {
+      admission = selectReviewRevisionMaterials({
+        current: { projectId: projectSession.projectId, epoch: projectSession.leaseId },
+        writingLanguage: language,
+        materials: reviewHistoryMaterials(frozen, { projectId: projectSession.projectId, epoch: projectSession.leaseId }),
+        relevanceTerms: [reviewBlueprint?.title ?? '', reviewBlueprint?.keyEvents ?? '', ...(reviewBlueprint?.characters ?? [])],
+      })
+    } catch (error) {
+      // 必需材料（前一章定稿）装不下：显式失败，绝不静默省略必需事实。
+      if (!(error instanceof ChapterMaterialCapacityError)) throw error
+      const blocked = error.decision.decision === 'capacity-conflict'
+        ? `${error.decision.blockingSourceId}:${error.decision.blockingReason}`
+        : error.decision.remainingRequired.join('、')
+      params.callbacks.log(text(`  必需材料超出上下文容量（${error.decision.decision}）：${blocked}`,
+        `  Required material exceeds the context capacity (${error.decision.decision}): ${blocked}`))
+      throw new Error(text(
+        '本章审稿的必需材料（前一章定稿）超出上下文容量，已停止审稿。请精简该章定稿材料后重试。',
+        'The required material for this review (the previous chapter\'s finalized manuscript) exceeds the context capacity, so the review stopped. Trim that chapter and try again.',
+      ))
+    }
     const builder = new ReviewPromptBuilder(template, language)
       .withChapterContent(frozen.source.content)
       .withCharacterStates(frozen.characterStates)
-      .withGlobalSummary(formatHistory(frozen))
+      .withGlobalSummary(formatHistory(frozen, admission.admitted))
       .withWorldBuilding(frozen.worldbuilding)
       .withReviewFocus(frozen.authorInputs.find(input => input.id === 'review-focus')?.text || '')
     const guidance = frozen.config.globalGuidance?.trim() || promptLanguageText(language, '（无作者全局创作指导）', '(no author global creative guidance)')

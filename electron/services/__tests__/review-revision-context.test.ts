@@ -16,6 +16,8 @@ vi.mock('../../database', () => ({ getProjectDb: vi.fn() }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const connections: import('better-sqlite3').Database[] = []
 afterEach(() => { connections.splice(0).forEach(db => db.close()); vi.resetAllMocks() })
+/** 与 S10A `ProjectEpoch` 同形的会话身份；主进程把当前租约交给捕获层。 */
+const MATERIAL_IDENTITY = { projectId: '合成项目', epoch: '会话-1' }
 function fixture() {
   const db = new Database(':memory:'); connections.push(db)
   initializeLegacyBaselineSchema(db)
@@ -25,8 +27,9 @@ function fixture() {
   const request: PrepareReviewRevisionRequest = { operation: 'review-chapter', draftId: 1,
     expectedDraft: { chapterNumber: 2, version: 1, status: 'draft', contentHash: textHash(' 原稿\r\n结尾 ') },
     authorInputs: [{ id: 'review-focus', text: ' 保留原文\r\n ' }], uiLocale: 'zh-CN' }
-  return { db, request, capture: () => captureReviewRevisionContext(db, request) }
+  return { db, request, capture: () => captureReviewRevisionContext(db, request, MATERIAL_IDENTITY) }
 }
+
 function confirmation(f: ReturnType<typeof fixture>) {
   const source = f.capture().source
   const original = ReviewRepository.create({ baseDraftId: 1, content: '{"summary":"原始 AI 意见"}', expectedSource: source }, f.db)
@@ -74,6 +77,9 @@ describe('审修上下文实际 SQLite 捕获', () => {
     const context = f.capture()
     expect(context.blueprints.map(row => row.chapterNumber)).toEqual([2,3,7])
     expect(context.history).toEqual([expect.objectContaining({ content: '历史正文' })])
+    // 只增不减：每条材料额外带上选择契约所需的最小身份，旧字段一字不改。
+    expect(context.history[0]!.identity).toEqual({ projectId: '合成项目', epoch: '会话-1',
+      sourceId: 'finalized:2', revision: 2, contentHash: textHash('历史正文'), provenance: 'legacy' })
     expect(context.history[0]!.projection).toBeUndefined(); expect(context.preflightFindings).toEqual([])
     f.db.exec("UPDATE blueprints SET key_events='作者新目标'")
     expect(f.capture().frozenGoals).not.toEqual(context.frozenGoals)

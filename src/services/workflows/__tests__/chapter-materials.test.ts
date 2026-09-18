@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { adjacentEvidencePassages, assembleChapterMaterials } from '../chapter-materials'
+import {
+  ChapterMaterialCapacityError,
+  adjacentEvidencePassages,
+  assembleChapterMaterials,
+  selectReviewRevisionMaterials,
+  type ReviewRevisionMaterial,
+} from '../chapter-materials'
+import type { ReviewMaterialIdentity } from '../../../shared/review-revision-generation'
 
 /** S10B-1a：该接缝现在需要项目身份并额外返回差异清单，测试里用固定身份。 */
 const assemble = (input: Omit<Parameters<typeof assembleChapterMaterials>[0], 'identity'>) =>
@@ -425,5 +432,103 @@ describe('chapter materials', () => {
     expect(bundle.text).toContain('第2章 · draft 202 · v4')
     expect(bundle.text).toContain('林岚没有交出钥匙')
     expect(bundle.text).toContain('候选正文尚未确认')
+  })
+})
+
+/**
+ * S10B-2：审稿/修稿入口与写稿路径共用同一条准入。这些断言钉住的是**共享语义**，
+ * 不是「各自能跑」：成员判定、失败码、固定内容哈希与项目会话校验都走同一个合同。
+ */
+describe('审稿/修稿入口的共享准入（selectReviewRevisionMaterials）', () => {
+  const CURRENT = { projectId: '项目', epoch: '会话' }
+  const hash = (seed: string) => seed.repeat(64).slice(0, 64)
+  const identity = (sourceId: string, contentHash: string,
+    provenance: ReviewMaterialIdentity['provenance'] = 'finalized'): ReviewMaterialIdentity =>
+    ({ ...CURRENT, sourceId, revision: 1, contentHash, provenance })
+  const material = (sourceId: string, contentHash: string, text: string,
+    over: Partial<ReviewRevisionMaterial> = {}): ReviewRevisionMaterial =>
+    ({ identity: identity(sourceId, contentHash), category: 'finalized-history', required: false, text, ...over })
+  const select = (materials: readonly ReviewRevisionMaterial[], budgetChars?: number) =>
+    selectReviewRevisionMaterials({ current: CURRENT, writingLanguage: 'zh-CN', relevanceTerms: [],
+      materials, ...(budgetChars === undefined ? {} : { budgetChars }) })
+
+  it('admits in the caller order so each entry point keeps its own rendering', () => {
+    // 合同的 included 顺序是「必需优先 + 相关度 + 规范全序」，那是写稿路径的渲染顺序。
+    // 审/修入口只按身份判定成员：这里传入逆序，admitted 必须保持逆序，不能重排历史。
+    const admission = select([
+      material('finalized:9', hash('a'), '第九章'),
+      material('finalized:1', hash('b'), '第一章'),
+    ])
+    expect(admission.admitted.map(item => item.identity.sourceId)).toEqual(['finalized:9', 'finalized:1'])
+    expect(admission.selection.decision).toBe('ready')
+  })
+
+  it('fails explicitly（与写稿路径同一错误码）when required material alone exceeds the capacity', () => {
+    let error: unknown
+    try {
+      select([material('finalized:1', hash('a'), '长'.repeat(7_000), { required: true })])
+    } catch (cause) { error = cause }
+    expect(error).toBeInstanceOf(ChapterMaterialCapacityError)
+    expect((error as ChapterMaterialCapacityError).code).toBe('CHAPTER_MATERIAL_CAPACITY_CONFLICT')
+    expect((error as ChapterMaterialCapacityError).decision).toMatchObject({
+      decision: 'capacity-conflict',
+      blockingSourceId: 'finalized:1',
+      blockingReason: 'budget',
+    })
+  })
+
+  it('lets optional material compete for the budget while the required anchor survives', () => {
+    const admission = select([
+      material('finalized:1', hash('b'), '可选'.repeat(7_000)),
+      material('finalized:2', hash('a'), '前一章定稿', { required: true }),
+    ])
+    expect(admission.admitted.map(item => item.identity.sourceId)).toEqual(['finalized:2'])
+    expect(admission.selection.omissions).toEqual([
+      { sourceId: 'finalized:1', reason: 'budget', category: 'finalized-history', required: false },
+    ])
+  })
+
+  it('never lets a material without a main-issued provenance become evidence', () => {
+    const admission = select([
+      material('future:secret-7', hash('a'), '第七章才揭晓的真相',
+        { identity: identity('future:secret-7', hash('a'), 'unknown') }),
+    ])
+    expect(admission.admitted).toEqual([])
+    expect(admission.selection.omissions).toEqual([
+      { sourceId: 'future:secret-7', reason: 'unknown-provenance', category: 'finalized-history', required: false },
+    ])
+  })
+
+  it('admits a duplicated immutable content only once', () => {
+    const admission = select([
+      material('finalized:1', hash('a'), '同一份不可变内容'),
+      material('finalized:1-mirror', hash('a'), '同一份不可变内容'),
+    ])
+    expect(admission.admitted.map(item => item.identity.sourceId)).toEqual(['finalized:1'])
+    expect(admission.selection.omissions).toEqual([
+      { sourceId: 'finalized:1-mirror', reason: 'duplicate-content', category: 'finalized-history', required: false },
+    ])
+  })
+
+  it('rejects material captured under a different project epoch', () => {
+    const admission = select([
+      material('finalized:1', hash('a'), '别的会话里的历史',
+        { identity: { ...identity('finalized:1', hash('a')), epoch: '别的会话' } }),
+    ])
+    expect(admission.admitted).toEqual([])
+    expect(admission.selection.omissions).toEqual([
+      { sourceId: 'finalized:1', reason: 'invalid-source-ref', category: 'finalized-history', required: false },
+    ])
+  })
+
+  it('reports the same required-coverage settlement the write path uses', () => {
+    // 必需锚点缺身份（主进程没给出）时按 `invalid-source-ref` 处理并整体失败，
+    // 绝不退回「静默省略必需材料」。
+    let error: unknown
+    try {
+      select([material('finalized:1', hash('a'), '前一章', { identity: identity('', '', 'unknown'), required: true })])
+    } catch (cause) { error = cause }
+    expect(error).toBeInstanceOf(ChapterMaterialCapacityError)
+    expect((error as ChapterMaterialCapacityError).decision).toMatchObject({ decision: 'capacity-conflict', blockingReason: 'invalid-source-ref' })
   })
 })

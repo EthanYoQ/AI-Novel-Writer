@@ -1,12 +1,17 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 
+import { freezeChapterGoals } from '../../../shared/chapter-goal-review'
+import type { ReviewRevisionContext } from '../../../shared/review-revision-generation'
 import {
   ChapterMaterialCapacityError,
   assembleChapterMaterials,
+  selectReviewRevisionMaterials,
   type FinalizedMaterialSource,
   type SelectedCandidateDraft,
 } from '../chapter-materials'
+import { reviewHistoryMaterials } from '../commands/review-chapter.command'
+import { refineHistoryMaterials } from '../commands/refine-draft.command'
 
 /**
  * S10B 表征护栏：把今天写稿路径拼出的提示词逐字节钉死。
@@ -119,5 +124,132 @@ describe('S10B-1b single authority', () => {
     expect(bundle.text).not.toContain('【重复】她看见灯塔。')
     // 族局部规则只是不重复发送已经发过的字节，不是一条准入裁决，因此不记省略。
     expect(bundle.omissions).toEqual([])
+  })
+})
+
+/**
+ * S10B-2 三类入口（写 / 审 / 修）的共享准入。
+ *
+ * 这三个入口的材料装配各写各的（来源族群与渲染措辞本来就不同），但**准入语义只有一套**：
+ * 三者最终都调用同一个 `selectChapterSources`，容量、固定内容哈希、必需覆盖与失败
+ * 语义因此必须逐条一致。这个套件用同一组情形驱动三个入口**真实的**装配缝，
+ * 断言的是共享规则本身，而不是「各自能跑」。
+ */
+const PARITY_IDENTITY = { projectId: '项目', epoch: '会话' }
+/** 当前章；前一章（= 本字段 - 1）的定稿是审/修入口的必需锚点。 */
+const SOURCE_CHAPTER = 5
+const REQUIRED_FITS = '必需的短材料'
+const OPTIONAL_SENTINEL = '可选材料标记'
+
+interface AdmissionOutcome {
+  /** 该入口最终让模型看到的材料文本。 */
+  readonly visibleText: string
+  /** 省略原因（合同词汇）。 */
+  readonly omissionReasons: readonly string[]
+  /** 显式失败时的稳定码与合同裁决；未失败为 null。 */
+  readonly failure: { code: string; decision: string } | null
+}
+
+function admissionOutcomeFrom(error: unknown): AdmissionOutcome {
+  if (!(error instanceof ChapterMaterialCapacityError)) throw error
+  return { visibleText: '', omissionReasons: error.decision.omissions.map(omission => omission.reason),
+    failure: { code: error.code, decision: error.decision.decision } }
+}
+
+function frozenHistoryItem(chapterNumber: number, content: string): ReviewRevisionContext['history'][number] {
+  return { draftId: chapterNumber, chapterNumber, chapterTitle: `第${chapterNumber}章`, content,
+    identity: { ...PARITY_IDENTITY, sourceId: `finalized:${chapterNumber}`, revision: chapterNumber,
+      contentHash: sha(content), provenance: 'finalized' } }
+}
+
+/** 把「一份必需材料 + 若干可选材料」映射成一份冻结上下文里的定稿历史。 */
+function frozenHistory(required: string, optional: readonly string[]): ReviewRevisionContext {
+  return {
+    version: 1, operation: 'review-chapter',
+    source: { id: 1, chapterNumber: SOURCE_CHAPTER, version: 1, status: 'draft', content: '待审正文。' },
+    sourceHash: sha('待审正文。'), config: {} as ReviewRevisionContext['config'],
+    writingLanguage: 'zh-CN', uiLocale: 'zh-CN', authorInputs: [], characterStates: '', worldbuilding: '',
+    history: [frozenHistoryItem(SOURCE_CHAPTER - 1, required),
+      ...optional.map((content, index) => frozenHistoryItem(SOURCE_CHAPTER - 2 - index, content))],
+    blueprints: [], frozenGoals: freezeChapterGoals(SOURCE_CHAPTER, null), preflightFindings: [],
+  }
+}
+
+/** 审/修共用同一条装配路径：冻结上下文 -> 本入口材料 -> 共享准入。 */
+function runFrozenEntry(kind: 'review' | 'refine', required: string, optional: readonly string[]): AdmissionOutcome {
+  const frozen = frozenHistory(required, optional)
+  const materials = kind === 'review'
+    ? reviewHistoryMaterials(frozen, PARITY_IDENTITY)
+    : refineHistoryMaterials(frozen, PARITY_IDENTITY)
+  try {
+    const admission = selectReviewRevisionMaterials({ current: PARITY_IDENTITY, writingLanguage: 'zh-CN',
+      materials, relevanceTerms: [] })
+    return { visibleText: admission.admitted.map(material => material.text).join('\n\n'),
+      omissionReasons: admission.selection.omissions.map(omission => omission.reason), failure: null }
+  } catch (error) { return admissionOutcomeFrom(error) }
+}
+
+interface EntryPoint {
+  readonly name: string
+  run(required: string, optional: readonly string[]): Promise<AdmissionOutcome> | AdmissionOutcome
+}
+
+const ENTRY_POINTS: readonly EntryPoint[] = [
+  {
+    name: '写稿 generate-draft',
+    async run(required, optional) {
+      try {
+        const bundle = await assembleChapterMaterials({
+          identity: PARITY_IDENTITY, writingLanguage: 'zh-CN',
+          authorProjectFacts: [required], characterProfiles: '', futurePlans: '',
+          references: optional.map(text => ({ text, rendered: text })),
+          finalized: [], candidates: [], relevanceTerms: [],
+        })
+        return { visibleText: bundle.text, omissionReasons: bundle.omissions.map(omission => omission.reason), failure: null }
+      } catch (error) { return admissionOutcomeFrom(error) }
+    },
+  },
+  { name: '审稿 review-chapter', run: (required, optional) => runFrozenEntry('review', required, optional) },
+  { name: '修稿 refine-draft', run: (required, optional) => runFrozenEntry('refine', required, optional) },
+]
+
+describe('S10B-2 写/审/修共享同一套准入语义', () => {
+  it.each(ENTRY_POINTS)('$name 对装不下的必需材料显式失败，绝不静默丢弃', async ({ run }) => {
+    const outcome = await run('长'.repeat(7_000), [])
+    expect(outcome.failure).toEqual({ code: 'CHAPTER_MATERIAL_CAPACITY_CONFLICT', decision: 'capacity-conflict' })
+    expect(outcome.visibleText).toBe('')
+  })
+
+  it.each(ENTRY_POINTS)('$name 整体省略超预算的可选材料，绝不截断', async ({ run }) => {
+    const outcome = await run(REQUIRED_FITS, [`${OPTIONAL_SENTINEL}${'可选'.repeat(7_000)}`])
+    expect(outcome.failure).toBeNull()
+    expect(outcome.omissionReasons).toEqual(['budget'])
+    // 必需锚点在；超预算的可选块连一个片段都没有进入材料。
+    expect(outcome.visibleText).toContain(REQUIRED_FITS)
+    expect(outcome.visibleText).not.toContain(OPTIONAL_SENTINEL)
+  })
+
+  it.each(ENTRY_POINTS)('$name 对同一份不可变内容只纳入一次', async ({ run }) => {
+    const duplicate = '同一份不可变内容'
+    const outcome = await run(REQUIRED_FITS, [duplicate, duplicate])
+    expect(outcome.failure).toBeNull()
+    expect(outcome.omissionReasons).toEqual(['duplicate-content'])
+    expect(outcome.visibleText.match(new RegExp(duplicate, 'gu'))).toHaveLength(1)
+  })
+
+  it('审稿与修稿不洗白未知来源，并按同一条规则拒绝跨会话材料', () => {
+    // 写稿路径从不构造这类候选（它的来源族群全是主进程/作者自选），所以这两条只在
+    // 冻结身份进入的审/修路径上可达；两者必须给出**完全相同**的裁决。
+    const optionalOmissions = (kind: 'review' | 'refine', over: Partial<{ provenance: 'unknown'; epoch: string }>) => {
+      const frozen = frozenHistory(REQUIRED_FITS, ['可选的另一份定稿'])
+      const materials = (kind === 'review' ? reviewHistoryMaterials : refineHistoryMaterials)(frozen, PARITY_IDENTITY)
+        .map(material => (material.required ? material : { ...material, identity: { ...material.identity, ...over } }))
+      return selectReviewRevisionMaterials({ current: PARITY_IDENTITY, writingLanguage: 'zh-CN', materials, relevanceTerms: [] })
+        .selection.omissions.filter(omission => !omission.required).map(omission => omission.reason)
+    }
+    expect(optionalOmissions('review', { provenance: 'unknown' })).toEqual(['unknown-provenance'])
+    expect(optionalOmissions('refine', { provenance: 'unknown' })).toEqual(['unknown-provenance'])
+    expect(optionalOmissions('review', { epoch: '别的会话' })).toEqual(['invalid-source-ref'])
+    expect(optionalOmissions('refine', { epoch: '别的会话' })).toEqual(['invalid-source-ref'])
   })
 })

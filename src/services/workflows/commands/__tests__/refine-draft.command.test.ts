@@ -1412,3 +1412,150 @@ describe('ReviewChapterCommand reasoning stage', () => {
       .toContain('【补充写作 Skill：Review craft】')
   })
 })
+
+describe('审稿/审稿修稿走同一条准入（S10B-2）', () => {
+  const HUGE_HISTORY = '长'.repeat(7_000)
+
+  function reviewHistoryIpc(projections: unknown[]) {
+    return vi.fn(async (channel: string) => {
+      if (channel === 'db:continuity-list-before') return projections
+      if (channel === 'kb:search' || channel === 'db:character-get-all') return []
+      if (channel === 'db:blueprint-get-all' || channel === 'db:consistency-exemption-list') return []
+      if (channel === 'db:project-core-get') return {}
+      if (channel === 'db:blueprint-get') return null
+      if (channel === 'db:review-next-index') return 1
+      if (channel === 'db:review-create') return { success: true, id: 77 }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+  }
+
+  it('stops the review with a stable error when the required previous-chapter material alone exceeds the capacity', async () => {
+    // 前一章的定稿是审稿的连续性锚点：装不下就显式失败，绝不静默省略必需事实、也不截断。
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+    stubIpc(reviewHistoryIpc([{
+      draftId: 7, chapterNumber: 1, chapterTitle: '离港', chapterNotes: HUGE_HISTORY,
+      sourceStatus: 'current', facts: [],
+    }]))
+
+    await expect(chapterReviewCommand(completeWithLease, '顾舟检查码头的潮汐钟。', 2).execute({
+      step: {}, context: workflowContext(), callbacks: callbacks(),
+    })).rejects.toThrow('审稿的必需材料（前一章定稿）超出上下文容量')
+
+    expect(completeWithLease).not.toHaveBeenCalled()
+  })
+
+  it('drops an over-budget optional history block while the required previous chapter survives verbatim', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: PASSING_REVIEW_JSON, finishReason: 'stop' })
+    stubIpc(reviewHistoryIpc([
+      { draftId: 1, chapterNumber: 1, chapterTitle: '旧章', chapterNotes: `第一章超长标记${HUGE_HISTORY}`,
+        sourceStatus: 'current', facts: [] },
+      { draftId: 2, chapterNumber: 2, chapterTitle: '近章', chapterNotes: '第二章定稿正文。',
+        sourceStatus: 'current', facts: [] },
+    ]))
+
+    await chapterReviewCommand(completeWithLease, '顾舟检查码头的潮汐钟。', 3).execute({
+      step: {}, context: workflowContext(), callbacks: callbacks(),
+    })
+
+    const request = completeWithLease.mock.calls[0]?.[0].messages
+      .map(message => message.content).join('\n') ?? ''
+    // 必需锚点在，超预算的可选块整体省略（不是截断），块头措辞不变。
+    expect(request).toContain('### 第2章 近章')
+    expect(request).toContain('第二章定稿正文。')
+    expect(request).not.toContain('第一章超长标记')
+  })
+
+  it('stops the confirmed-review revision when the confirmed checklist alone exceeds the capacity', async () => {
+    const confirmationContent = confirmedReviewContent({
+      sourceDraft: { ...CONFIRMED_SOURCE_DRAFT, content: '原稿正文。'.repeat(250) },
+      items: [{
+        category: '连续性', severity: 'error', description: '问'.repeat(7_000), decision: 'apply', origin: 'ai',
+      }],
+    })
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+    stubIpc(successfulRevisionIpc({ reviewContent: confirmationContent }))
+
+    await expect(reviewCommand(completeWithLease, CONFIRMED_SOURCE_DRAFT.content, {
+      confirmedReviewContent: confirmationContent,
+    }).execute({ step: {}, context: workflowContext(), callbacks: callbacks() }))
+      .rejects.toThrow('已确认的审稿清单超出上下文容量')
+
+    expect(completeWithLease).not.toHaveBeenCalled()
+  })
+})
+
+describe('修稿路径不再整段拼接（S10B-2）', () => {
+  const HUGE_HISTORY = '长'.repeat(7_000)
+  const SOURCE = '原稿正文。'.repeat(250)
+  const REVISION = '修订正文。'.repeat(250)
+
+  function refineCommand(completeWithLease: GenerationRuntimeEnvironment['completeWithLease'],
+    chapterNumber: number): RefineDraftCommand {
+    return new RefineDraftCommand({
+      draftPath: 'ai-novel://draft/1',
+      draftContent: SOURCE,
+      chapterNumber,
+      chapterInfo: {
+        projectPath: PROJECT_PATH, chapterNumber, title: `第${chapterNumber}章`, role: '发展',
+        purpose: '推进', keyEvents: '事件', characters: [],
+      },
+    }, runtimeDependencies(completeWithLease))
+  }
+
+  function historyIpc(projections: unknown[], chapterNumber: number) {
+    return vi.fn(async (channel: string) => {
+      if (channel === 'db:continuity-list-before') return projections
+      if (channel === 'db:draft-get-meta') return { id: 1, chapterNumber, version: 1, status: 'draft', source: 'write' }
+      if (channel === 'db:revision-replace-pending') return { success: true, id: 9, revisionIndex: 2 }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+  }
+
+  it('keeps every finalized chapter in both summary slots when the admitted set is unchanged', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: REVISION, finishReason: 'stop' })
+    stubIpc(historyIpc([
+      { draftId: 1, chapterNumber: 1, chapterTitle: '旧章', chapterNotes: '第一章定稿原文。', sourceStatus: 'current', facts: [] },
+      { draftId: 2, chapterNumber: 2, chapterTitle: '近章', chapterNotes: '第二章定稿原文。', sourceStatus: 'current', facts: [] },
+    ], 3))
+
+    await refineCommand(completeWithLease, 3).execute({ step: {}, context: workflowContext(), callbacks: callbacks() })
+
+    const prompt = completeWithLease.mock.calls[0]?.[0].messages.map(message => message.content).join('\n') ?? ''
+    expect(prompt).toContain('第一章定稿原文。')
+    // 全文摘要与近章摘要仍逐字携带同一份拼接结果。
+    expect(prompt.match(/第二章定稿原文。/gu)).toHaveLength(2)
+  })
+
+  it('omits an over-budget optional history block while the required previous chapter survives', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: REVISION, finishReason: 'stop' })
+    stubIpc(historyIpc([
+      { draftId: 1, chapterNumber: 1, chapterTitle: '旧章', chapterNotes: `第一章超长标记${HUGE_HISTORY}`,
+        sourceStatus: 'current', facts: [] },
+      { draftId: 2, chapterNumber: 2, chapterTitle: '近章', chapterNotes: '第二章定稿原文。',
+        sourceStatus: 'current', facts: [] },
+    ], 3))
+
+    await refineCommand(completeWithLease, 3).execute({ step: {}, context: workflowContext(), callbacks: callbacks() })
+
+    const prompt = completeWithLease.mock.calls[0]?.[0].messages.map(message => message.content).join('\n') ?? ''
+    expect(prompt).toContain('第二章定稿原文。')
+    expect(prompt).not.toContain('第一章超长标记')
+  })
+
+  it('stops the refinement when the required previous-chapter material alone exceeds the capacity', async () => {
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+    stubIpc(historyIpc([
+      { draftId: 2, chapterNumber: 2, chapterTitle: '近章', chapterNotes: `第二章超长标记${HUGE_HISTORY}`,
+        sourceStatus: 'current', facts: [] },
+    ], 3))
+
+    await expect(refineCommand(completeWithLease, 3).execute({
+      step: {}, context: workflowContext(), callbacks: callbacks(),
+    })).rejects.toThrow('修稿的必需材料（前一章定稿）超出上下文容量')
+
+    expect(completeWithLease).not.toHaveBeenCalled()
+  })
+})

@@ -1,9 +1,11 @@
 import type { WritingLanguage } from '../../shared/writing-language'
 import { hashAuthorText } from '../../shared/source-ref'
+import type { ReviewMaterialIdentity } from '../../shared/review-revision-generation'
 import { promptLanguageText } from '../prompt-language'
 import {
   selectChapterSources,
   type MaterialCandidate,
+  type MaterialCategory,
   type SourceOmission,
   type SourceOmissionReason,
   type SourceSelection,
@@ -120,6 +122,91 @@ const PREVIOUS_ENDING_MAX_CHARS = 1_000
 const BYTES_PER_BUDGET_CHAR: Readonly<Record<WritingLanguage, number>> = { 'zh-CN': 3, 'en-US': 1 }
 /** `SourceRef.sourceId` 里的家族前缀；渲染与省略清单都按它归类。 */
 const REQUIRED_SOURCE_ID = 'author:required'
+
+// ---- 审稿/修稿入口的准入层（S10B-2）----
+// 写稿路径在 `assembleChapterMaterials` 里把「渲染」和「准入」合在一个函数里，因为材料文本
+// 本身由它生成。审/修入口的材料文本由各自命令按**原有措辞**渲染好后传入，所以这里只做准入。
+// 成员判定的语义与写稿路径完全一致：同一份不可变内容只进一次、未知来源不得进入、
+// 必需材料装不下时显式失败——因为两条路径最终都调用同一个 `selectChapterSources`。
+
+/** 审稿/修稿入口的一条材料：主进程捕获的身份 + 该入口自己的渲染文本。 */
+export interface ReviewRevisionMaterial {
+  /** 主进程捕获的不可变来源身份；渲染层不得自行编造来源。 */
+  identity: ReviewMaterialIdentity
+  category: MaterialCategory
+  /** 必需材料装不下时整轮显式失败，绝不静默丢弃。 */
+  required: boolean
+  /** 该材料在本入口提示词里的文本（块头按各入口原有措辞由调用方给出）。 */
+  text: string
+}
+
+export interface ReviewRevisionMaterialAdmission {
+  selection: Extract<SourceSelection, { decision: 'ready' }>
+  /**
+   * 准入的材料，**保持调用方传入顺序**。
+   *
+   * 顺序是刻意的：合同的 `included` 按「必需优先 + 相关度 + 规范全序」排列，那是写稿路径
+   * 的渲染顺序。审/修入口不得因此重排历史（重排会改提示词），所以这里只按身份判定成员，
+   * 再由调用方按原有顺序渲染——准入没有真正改变集合时，提示词逐字节与接入前相同。
+   */
+  admitted: readonly ReviewRevisionMaterial[]
+}
+
+/** 材料身份键：只取合同判定「同一份不可变内容」的字段，不含渲染文本。 */
+function materialIdentityKey(identity: { sourceId: string; revision: number; contentHash: string }): string {
+  return JSON.stringify([identity.sourceId, identity.revision, identity.contentHash])
+}
+
+/**
+ * 审稿/修稿入口与写稿路径共享的准入权威。必需材料装不下时抛与写稿路径同一个
+ * `ChapterMaterialCapacityError`（稳定错误码 `CHAPTER_MATERIAL_CAPACITY_CONFLICT`），
+ * 绝不静默截断或丢掉必需材料。
+ *
+ * 本函数不读数据库、不写文件、不发请求。
+ */
+export function selectReviewRevisionMaterials(input: {
+  current: ChapterMaterialIdentity
+  writingLanguage: WritingLanguage
+  materials: readonly ReviewRevisionMaterial[]
+  relevanceTerms: readonly string[]
+  budgetChars?: number
+}): ReviewRevisionMaterialAdmission {
+  const candidates: MaterialCandidate[] = input.materials.map(material => ({
+    ref: {
+      projectId: material.identity.projectId, epoch: material.identity.epoch,
+      sourceId: material.identity.sourceId, revision: material.identity.revision,
+      contentHash: material.identity.contentHash,
+    },
+    category: material.category,
+    provenance: material.identity.provenance,
+    required: material.required,
+    text: material.text,
+  }))
+  // 容量与写稿路径同源：同一份码元预算、同一个估算器版本。
+  const selection = selectChapterSources({
+    current: input.current,
+    capacity: {
+      maxInputUnits: (input.budgetChars ?? MATERIAL_BUDGET_CHARS) * BYTES_PER_BUDGET_CHAR[input.writingLanguage],
+      methodVersion: 'utf8-bytes-v1',
+    },
+    relevanceTerms: input.relevanceTerms,
+    candidates,
+  })
+  if (selection.decision !== 'ready') throw new ChapterMaterialCapacityError(selection, input.writingLanguage)
+  const admittedKeys = new Set(selection.included.map(item => materialIdentityKey(item.ref)))
+  return {
+    selection,
+    admitted: input.materials.filter(material => admittedKeys.has(materialIdentityKey(material.identity))),
+  }
+}
+
+/**
+ * 没有主进程身份的历史材料一律按 `unknown` 来源对待：合同会以 `invalid-source-ref` /
+ * `unknown-provenance` 排除它，必需项因此显式失败。绝不用渲染层自己编的来源顶替。
+ */
+export function unknownReviewMaterialIdentity(current: ChapterMaterialIdentity): ReviewMaterialIdentity {
+  return { projectId: current.projectId, epoch: current.epoch, sourceId: '', revision: 0, contentHash: '', provenance: 'unknown' }
+}
 
 function paragraphs(content: string): string[] {
   return content.split(/\r?\n\s*\r?\n/u).map(part => part.trim()).filter(Boolean)

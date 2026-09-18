@@ -62,6 +62,7 @@ export class ReviewRevisionRuntimeFixture {
         || digest(source.content) !== request.expectedDraft.contentHash) throw new Error('源草稿已变化 / source draft changed')
       const currentConfig = useProjectStore.getState().currentProject?.novelConfig
       if (!currentConfig) throw new Error('Review runtime fixture requires a project config')
+      const project = useProjectStore.getState().currentProject!
       const config = structuredClone(currentConfig)
       const core = await this.optional<Record<string, string>>('db:project-core-get', {})
       const blueprints = await this.optional<PreparedReviewRevisionContext['context']['blueprints']>('db:blueprint-get-all', [])
@@ -75,7 +76,9 @@ export class ReviewRevisionRuntimeFixture {
         writingLanguage: config.writingLanguage ?? this.writingLanguage, uiLocale: request.uiLocale,
         authorInputs: request.authorInputs, characterStates: characters.map(c => `${c.name} (${c.role || 'unknown'})`).join('\n'),
         worldbuilding: core.worldbuilding || '', history: projections.map(p => ({ draftId: p.draftId,
-          chapterNumber: p.chapterNumber, chapterTitle: p.chapterTitle, content: p.chapterNotes, projection: p })),
+          chapterNumber: p.chapterNumber, chapterTitle: p.chapterTitle, content: p.chapterNotes, projection: p,
+          identity: { projectId: project.id, epoch: project.sessionLease ?? '', sourceId: `finalized:${p.draftId}`,
+            revision: p.draftId, contentHash: digest(p.chapterNotes), provenance: 'finalized' as const } })),
         blueprints: blueprints.filter(b => b.chapterNumber >= source.chapterNumber && b.chapterNumber <= source.chapterNumber + 5),
         frozenGoals: freezeChapterGoals(source.chapterNumber, blueprints.find(b => b.chapterNumber === source.chapterNumber)?.keyEvents ?? null),
         preflightFindings: blueprint ? findBlueprintContinuityRisks(projections, blueprint, exemptions) : [],

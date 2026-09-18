@@ -20,6 +20,22 @@ export interface PrepareReviewRevisionRequest {
   authorInputs: GenerationAuthorInput[]
   uiLocale: Locale
 }
+/**
+ * 一条材料的来源身份：主进程捕获的、S10A 选择契约所需的最小集合。
+ *
+ * 它是**只增不减**字段。渲染层只能消费主进程给出的身份，绝不自行编造来源；
+ * 缺少身份的材料不能进入上下文（必需项缺失时整体显式失败）。
+ * `provenance` 用选择契约的词汇，未知来源不得被洗成 author。
+ */
+export interface ReviewMaterialIdentity {
+  projectId: string
+  epoch: string
+  sourceId: string
+  revision: number
+  /** SHA-256 of the unmodified UTF-8 bytes of the material source. */
+  contentHash: string
+  provenance: 'finalized' | 'legacy' | 'author' | 'derived' | 'unknown'
+}
 export interface ReviewFinalizedMaterial {
   draftId: number
   chapterNumber: number
@@ -28,6 +44,8 @@ export interface ReviewFinalizedMaterial {
   source?: FinalizedSourceIdentity
   /** Only current projections may supply derived facts; other rows supply original prose. */
   projection?: FinalizedContinuityProjection
+  /** 主进程捕获的来源身份；渲染层据此做准入，不据此编造事实。 */
+  identity?: ReviewMaterialIdentity
 }
 /** Main-issued frozen prompt and normalization inputs; not a second writable fact store. */
 export interface ReviewRevisionContext {
