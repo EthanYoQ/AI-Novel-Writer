@@ -28,10 +28,59 @@ import {
   countDraftUnits,
   previousChapterEnding,
   sanitizeDraftText,
+  synopsisForDraftChapter,
   type GenerateDraftCommandDependencies,
 } from '../generate-draft.command'
 
 describe('generate draft command text cleanup', () => {
+  it.each(['```', '~~~'])('keeps quoted chapter examples inside %s fences verbatim', (fence) => {
+    const synopsis = `全局说明\n${fence}text\n## 第1章：示例\n作者不可丢事实甲\n## 第2章：示例\n作者不可丢事实乙\n${fence}\n全局尾部`
+    expect(synopsisForDraftChapter(synopsis, 2)).toBe(synopsis)
+  })
+
+  it('keeps global sections and the exact current chapter from an explicit Chinese chapter outline', () => {
+    const synopsis = `# 全书总纲
+潮门只能由守钟人开启。
+
+## 第1章：失钟
+顾舟遗失潮汐钟。
+
+## 第2章：回港
+顾舟在退潮前回到月桂港。
+
+## 第3章：潮门
+顾舟找到潮门。
+
+## 全局禁则
+潮门真相只能在终章揭晓。`
+
+    const projected = synopsisForDraftChapter(synopsis, 2)
+
+    expect(projected).toContain('潮门只能由守钟人开启')
+    expect(projected).toContain('## 第2章：回港')
+    expect(projected).toContain('潮门真相只能在终章揭晓')
+    expect(projected).not.toContain('顾舟遗失潮汐钟')
+    expect(projected).not.toContain('顾舟找到潮门')
+  })
+
+  it('keeps an ambiguous chapter outline verbatim instead of guessing which facts to drop', () => {
+    const synopsis = `## 第1章：甲
+事实甲。
+
+### 第2章：乙
+事实乙。`
+
+    expect(synopsisForDraftChapter(synopsis, 2)).toBe(synopsis)
+  })
+
+  it('does not treat ordinary prose mentioning a later chapter as a chapter heading', () => {
+    const synopsis = `全局说明：第2章发生的事将在未来改变潮门归属。
+
+普通正文仍属于全局大纲，不含 Markdown 章节标题。`
+
+    expect(synopsisForDraftChapter(synopsis, 2)).toBe(synopsis)
+  })
+
   it('removes thinking residue and continue UI prompts from draft text', () => {
     const text = sanitizeDraftText(`<think>分析过程</think>
 
@@ -265,6 +314,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     wordsTarget?: number
     premise?: string
     charactersArch?: string
+    worldbuilding?: string
+    synopsis?: string
     blueprints?: Array<{ chapterNumber: number; title: string; keyEvents: string }>
     userGuidance?: string
     globalGuidance?: string
@@ -321,8 +372,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         return {
           premise: options.premise ?? '故事前提',
           charactersArch: options.charactersArch ?? '',
-          worldbuilding: '',
-          synopsis: '',
+          worldbuilding: options.worldbuilding ?? '',
+          synopsis: options.synopsis ?? '',
         }
       }
       if (channel === 'db:blueprint-get-all') return options.blueprints ?? []
@@ -1491,6 +1542,58 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(completePrompt).toContain(coreOutline)
   })
 
+  it.each(['## ', ''])('bounds an explicit long chapter outline with heading prefix %j while retaining author facts', async (headingPrefix) => {
+    const worldbuilding = [
+      '世界规则开始：月桂港每天只有一次退潮。',
+      '港务规则必须服从潮汐钟。'.repeat(1_000),
+      '世界观尾部关键事实：顾舟不会游泳。',
+    ].join('\n')
+    const synopsis = (outsideChapterSize: number) => `# 全书总纲
+全局关键事实：潮门真相只能在终章揭晓。
+
+${headingPrefix}第1章：失钟
+第一章非当前内容开始。${'旧案延展。'.repeat(outsideChapterSize)}第一章非当前内容结束。
+
+${headingPrefix}第2章：回港
+当前章关键事实：顾舟必须在退潮前拿回潮汐钟。
+
+${headingPrefix}第3章：潮门
+第三章非当前内容开始。${'后续延展。'.repeat(outsideChapterSize)}第三章非当前内容结束。
+
+## 全局禁则
+全局尾部关键事实：任何人不得提前知道潮门来源。`
+    const run = async (outline: string) => {
+      const runtime = fakeOutcomes(outcome(`${'正文'.repeat(250)}。`, 'stop'))
+      const { context, callbacks, command } = setup({
+        runtime,
+        chapterNumber: 2,
+        wordsTarget: 500,
+        previousFinalizedContent: '第一章定稿原文。',
+        worldbuilding,
+        worldSetting: worldbuilding,
+        coreOutline: '作者核心事实：顾舟必须查清潮门来源。',
+        synopsis: outline,
+      })
+
+      await command.execute({ step: {}, context, callbacks })
+      return runtime.complete.mock.calls[0]?.[0].messages
+        .find(message => message.role === 'user')?.content ?? ''
+    }
+
+    const shortPrompt = await run(synopsis(2))
+    const longPrompt = await run(synopsis(4_000))
+
+    expect(longPrompt).toContain('全局关键事实：潮门真相只能在终章揭晓')
+    expect(longPrompt).toContain('当前章关键事实：顾舟必须在退潮前拿回潮汐钟')
+    expect(longPrompt).toContain('全局尾部关键事实：任何人不得提前知道潮门来源')
+    expect(longPrompt).toContain('世界观尾部关键事实：顾舟不会游泳')
+    expect(longPrompt).toContain('作者核心事实：顾舟必须查清潮门来源')
+    expect(longPrompt).not.toContain('第一章非当前内容开始')
+    expect(longPrompt).not.toContain('第三章非当前内容开始')
+    expect(longPrompt.length).toBe(shortPrompt.length)
+    expect(longPrompt.match(/世界观尾部关键事实：顾舟不会游泳/gu)).toHaveLength(1)
+  })
+
   it.each([
     ['zh-CN', '文风仅用于选择表达方式', '作者明确事实与指导、实际前文、本章关键因果和本章篇幅优先'],
     ['en-US', 'Writing style selects expression only', 'actual prior prose'],
@@ -2515,7 +2618,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     })
 
     await expect(command.execute({ step: {}, context, callbacks }))
-      .rejects.toThrow('AI 输出达到模型最大长度，结果不完整')
+      .rejects.toThrow('AI 输出达到本次请求长度限制，尚未完整生成')
     expect(runtime.complete).toHaveBeenCalledTimes(8)
     expectNoDraftPersistence(invoke)
   })
