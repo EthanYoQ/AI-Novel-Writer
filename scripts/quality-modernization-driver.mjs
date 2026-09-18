@@ -120,7 +120,10 @@ export function runProductionBridge(request) {
   const argv = [...(request.mode === 'synthetic' ? ['--import', pathToFileURL(guard).href] : []), path.join(target.repositoryRoot, 'node_modules/vitest/vitest.mjs'), 'run', '--config', config,
     '--reporter=json', `--outputFile=${report}`]
   const result = spawnSync(runtime.executable, argv, { cwd: target.repositoryRoot, env, encoding: 'utf8',
-    timeout: 180000, maxBuffer: 4 * 1024 * 1024, windowsHide: true })
+    // 预算次序：桥内结算守卫(480s) < 这里的 spawnSync < 子进程 vitest testTimeout。
+    // 否则子进程会在守卫到点之前被外层杀掉，unknown 终态行仍然丢失——这正是
+    // 之前 180s spawnSync 配 480s 守卫留下的缺陷。
+    timeout: 540000, maxBuffer: 4 * 1024 * 1024, windowsHide: true })
   const secret = request.mode === 'real'
     ? JSON.parse(fs.readFileSync(path.join(target.roots.config, 'models.json'), 'utf8')).find(model => model.id === target.modelId)?.apiKey : null
   const redact = value => secret ? String(value ?? '').split(secret).join('[REDACTED]') : String(value ?? '')

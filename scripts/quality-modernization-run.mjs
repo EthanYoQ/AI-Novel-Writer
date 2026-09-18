@@ -103,6 +103,32 @@ export function buildFixtureExports(source) {
     format, semanticHash, parametersHash: hash(source.modelParameters), semantic: structuredClone(source),
   }]))
 }
+/**
+ * 对账：任何已经 dispatch 但没有终态行的 attempt，补写 unknown。
+ *
+ * 子进程可能被 vitest 超时、spawnSync 超时或硬崩溃杀死，三种情况都不会执行桥内的
+ * 结算路径；但调用方进程仍然活着。这是唯一能覆盖全部死法的地方，也是账本
+ * 「每次真实发送都有终态」这条不变量的兜底。unknown 是真话：已发出、未观测到结果，
+ * 按设计不得退款。并发下若终态已写入，转移非法，视为已结算。
+ */
+export function reconcileDispatchedAttempts(file, campaignMode) {
+  if (!fs.existsSync(file)) return { reconciled: 0, dangling: 0 }
+  const rows = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+  const terminal = new Set(rows.filter(row => ['settle', 'unknown', 'cancel'].includes(row.type)).map(row => row.attemptId))
+  const dangling = [...new Set(rows.filter(row => row.type === 'dispatch' && !terminal.has(row.attemptId)).map(row => row.attemptId))]
+  let reconciled = 0
+  for (const attemptId of dangling) {
+    try { updateLedger(file, { type: 'unknown', attemptId }, { campaignMode }); reconciled += 1 }
+    catch (error) { if (!/INVALID_LEDGER_TRANSITION/u.test(String(error.message))) throw error }
+  }
+  return { reconciled, dangling: dangling.length }
+}
+
+/** 成对执行失败时先对账再抛出，保证失败路径也不留下悬空派发。 */
+function withLedgerReconciliation(ledgerPath, campaignMode, run) {
+  try { return run() } catch (error) { reconcileDispatchedAttempts(ledgerPath, campaignMode); throw error }
+}
+
 export function selectPhase(protocol, phase, milestone = 'early') {
   if (!['early', 'post-ui', 'final'].includes(milestone)) fail('INVALID_MILESTONE')
   if (!Object.hasOwn(protocol.phases, phase)) fail('INVALID_PHASE')
@@ -305,8 +331,9 @@ export function main(argv) {
     if (!scenario) fail('PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED')
     const selection = selectPhase(protocol, phase, args['--milestone'] ?? scenario.milestone)
     assertScenarioMatchesProtocol(selection, scenario)
-    const result = runProductionPhasePair(prepared.targets, { phase, development: true, mode: 'synthetic', milestone: selection.milestone,
-      semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(prepared.root, 'baseline-templates.json'), ledgerPath: path.join(prepared.root, `synthetic-ledger-${phase}.jsonl`) })
+    const developmentLedger = path.join(prepared.root, `synthetic-ledger-${phase}.jsonl`)
+    const result = withLedgerReconciliation(developmentLedger, 'synthetic', () => runProductionPhasePair(prepared.targets, { phase, development: true, mode: 'synthetic', milestone: selection.milestone,
+      semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(prepared.root, 'baseline-templates.json'), ledgerPath: developmentLedger }))
     fs.writeFileSync(path.join(prepared.root, `development-receipt-${phase}.json`), JSON.stringify(result, null, 2))
     return { ...result, evidenceRoot: prepared.root, targetsPath: prepared.path }
   }
@@ -327,8 +354,11 @@ export function main(argv) {
     if (!['synthetic', 'real'].includes(mode)) fail('EXPLICIT_PROVIDER_MODE_REQUIRED')
     if (mode === 'real' && (!targets.baseline.modelId || !targets.candidate.modelId)) fail('FROZEN_SAFE_MODEL_REQUIRED')
     const evidenceRoot = fs.mkdtempSync(path.join(CACHE, `s07-${mode}-`))
-    const result = runProductionPhasePair(targets, { phase, mode, milestone: selection.milestone, semanticPath: path.join(ROOT, protocol.fixturePath),
-      templatesPath: path.join(evidenceRoot, 'baseline-templates.json'), ledgerPath: mode === 'real' ? path.join(CACHE, 'physical-ledger.jsonl') : path.join(evidenceRoot, 'synthetic-ledger.jsonl') })
+    const pairLedgerPath = mode === 'real' ? path.join(CACHE, 'physical-ledger.jsonl') : path.join(evidenceRoot, 'synthetic-ledger.jsonl')
+    // 真实或合成的成对执行失败时先对账：子进程被杀不会执行桥内结算，
+    // 只有调用方还活着，这是保证每次发送都有终态的最后一道。
+    const result = withLedgerReconciliation(pairLedgerPath, mode, () => runProductionPhasePair(targets, { phase, mode, milestone: selection.milestone, semanticPath: path.join(ROOT, protocol.fixturePath),
+      templatesPath: path.join(evidenceRoot, 'baseline-templates.json'), ledgerPath: pairLedgerPath }))
     inspectTarget(targets.baseline); inspectTarget(targets.candidate)
     fs.writeFileSync(path.join(evidenceRoot, 'receipt.json'), JSON.stringify(result, null, 2))
     return { ...result, selection, evidenceRoot }

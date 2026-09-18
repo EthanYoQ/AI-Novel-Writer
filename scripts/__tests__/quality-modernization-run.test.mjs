@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { spawnSync } from 'node:child_process'
-import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, buildFixtureExports, validatePair, selectPhase, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles } from '../quality-modernization-run.mjs'
+import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, buildFixtureExports, validatePair, selectPhase, reconcileDispatchedAttempts, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles } from '../quality-modernization-run.mjs'
 import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, PHASE_SCENARIOS, createAttemptSupervisor, measurePromptBytes, BRIDGE_SETTLEMENT_DEADLINE_MS } from '../quality-modernization-driver.mjs'
 import Database from 'better-sqlite3'
 
@@ -274,6 +274,35 @@ test('请求规模证据只存字节数、取自真正出站的请求体，且�
   assert.ok(Number.isFinite(bridgeTimeoutMs) && Number.isFinite(fixtureTimeoutMs))
   assert.ok(BRIDGE_SETTLEMENT_DEADLINE_MS < bridgeTimeoutMs && BRIDGE_SETTLEMENT_DEADLINE_MS < fixtureTimeoutMs,
     `守护预算 ${BRIDGE_SETTLEMENT_DEADLINE_MS} 必须短于桥超时 ${bridgeTimeoutMs}/${fixtureTimeoutMs}`)
+  // 还必须有第三层：调用方 spawnSync 的预算。它若是三者中最短的，子进程会在守护到点
+  // 之前被外层杀掉，unknown 终态行照样丢失——这正是 180s spawnSync 配 480s 守卫的缺陷。
+  const spawnTimeoutMs = Number(/timeout:\s*(\d+),\s*maxBuffer:\s*4 \* 1024 \* 1024/.exec(driver)[1])
+  assert.ok(Number.isFinite(spawnTimeoutMs), '必须能解析出 spawnSync 预算')
+  assert.ok(BRIDGE_SETTLEMENT_DEADLINE_MS < spawnTimeoutMs,
+    `守护预算 ${BRIDGE_SETTLEMENT_DEADLINE_MS} 必须短于 spawnSync 预算 ${spawnTimeoutMs}`)
+  assert.ok(spawnTimeoutMs < bridgeTimeoutMs,
+    `spawnSync 预算 ${spawnTimeoutMs} 必须短于桥超时 ${bridgeTimeoutMs}，让子进程自己先失败`)
+})
+
+test('调用方对账为悬空派发补写 unknown，且重复对账不写第二行', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/reconcile-test-'))
+  const file = path.join(dir, 'physical-ledger.jsonl')
+  // 活动账本会按选定阶段校验绑定，所以这里用 early-context 的登记值。
+  const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'baseline', codeSha: 'a'.repeat(40),
+    sourceHash: 'c'.repeat(64), driverHash: 'd'.repeat(64), parityId: 'b'.repeat(64),
+    phase: 'early-context', milestone: 'early', caseId: '场景2/2', operation: '长设定第二章正文' }
+  try {
+    // 模拟子进程被超时杀死：reserve 与 dispatch 落盘，之后没有任何终态行。
+    updateLedger(file, { type: 'reserve', attemptId: '被杀', binding }, { campaignMode: 'synthetic' })
+    updateLedger(file, { type: 'dispatch', attemptId: '被杀' }, { campaignMode: 'synthetic' })
+    const first = reconcileDispatchedAttempts(file, 'synthetic')
+    assert.deepEqual(first, { reconciled: 1, dangling: 1 })
+    const rows = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+    assert.deepEqual(rows.map(row => row.type), ['reserve', 'dispatch', 'unknown'])
+    // 幂等：没有悬空派发时不再写，已有的 unknown 不被改写。
+    assert.deepEqual(reconcileDispatchedAttempts(file, 'synthetic'), { reconciled: 0, dangling: 0 })
+    assert.equal(fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).length, 3)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
 test('development manifest拒绝formal，协议别名不接受不存在的旧路径', () => {
