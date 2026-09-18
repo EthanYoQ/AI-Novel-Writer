@@ -634,7 +634,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         `The required finalized source for Chapter ${previousChapterNumber} could not be fixed, so generation stopped. Repair or re-finalize that chapter and try again.`,
       ))
     }
-    const chapterMaterials = assembleChapterMaterials({
+    const chapterMaterials = await assembleChapterMaterials({
+      identity: { projectId: projectSession.projectId, epoch: projectSession.leaseId },
       writingLanguage,
       authorProjectFacts: authoredConfigFacts,
       characterProfiles,

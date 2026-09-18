@@ -1,5 +1,7 @@
 import type { WritingLanguage } from '../../shared/writing-language'
+import { hashAuthorText } from '../../shared/source-ref'
 import { promptLanguageText } from '../prompt-language'
+import { selectChapterSources, type MaterialCandidate, type SourceSelection } from './source-selection'
 
 export interface SelectedCandidateDraft {
   chapterNumber: number
@@ -39,6 +41,29 @@ export interface ChapterMaterialBundle {
   includedFinalizedFacts: number
   consumedFinalizedSources: FinalizedMaterialSource[]
   omissions: ChapterMaterialOmission[]
+}
+
+/** 稳定准入需要的项目身份。epoch 与主进程 generation binding 一致，取会话 lease。 */
+export interface ChapterMaterialIdentity {
+  projectId: string
+  epoch: string
+}
+
+/** 传统遍历与新选择在同一输入上的来源级差异，用来量出切换到底会改什么。 */
+export interface ChapterMaterialDrift {
+  legacyIncluded: readonly string[]
+  selectionIncluded: readonly string[]
+  onlyInLegacy: readonly string[]
+  onlyInSelection: readonly string[]
+}
+
+/**
+ * S10B-1a：渲染仍由传统遍历决定（提示词不变），但同时产出稳定选择的结果与差异清单。
+ * 这两套同时存在是**临时测量**，S10B-1b 会把渲染改为跟随 selection 并删掉传统遍历。
+ */
+export interface ChapterMaterialAssembly extends ChapterMaterialBundle {
+  selection: SourceSelection
+  drift: ChapterMaterialDrift
 }
 
 const MATERIAL_BUDGET_CHARS = 6_000
@@ -117,7 +142,32 @@ function removeContainedPassages(passages: readonly string[]): string[] {
   )))
 }
 
-export function assembleChapterMaterials(input: {
+/**
+ * 定稿来源在本章的材料文本。传统遍历与稳定选择共用这一处计算；
+ * 两套各自实现一份摘取逻辑就会变成两个事实来源。
+ */
+function finalizedPassages(source: FinalizedMaterialSource, relevanceTerms: readonly string[]): {
+  passages: string[]
+  locatedEvidence: number
+} {
+  const located = adjacentEvidencePassages(source.content, source.evidence, source.includeEnding)
+  const expectedEvidence = source.evidence.filter(value => value.trim()).length
+  // A stale locator is only an index failure. Recover nearby immutable prose from
+  // the same readable source with the existing deterministic term matcher, while
+  // never injecting the old statement itself.
+  const recovered = located.locatedEvidence < expectedEvidence
+    ? relevantPassages(source.content, relevanceTerms) : []
+  return { passages: removeContainedPassages([...located.passages, ...recovered]), locatedEvidence: located.locatedEvidence }
+}
+
+/** 未定稿候选在本章的材料文本；同上，只有一处计算。 */
+function candidatePassages(candidate: SelectedCandidateDraft, isLatest: boolean,
+  relevanceTerms: readonly string[]): string[] {
+  return isLatest ? [previousChapterEnding(candidate.content)] : relevantPassages(candidate.content, relevanceTerms)
+}
+
+export async function assembleChapterMaterials(input: {
+  identity: ChapterMaterialIdentity
   writingLanguage: WritingLanguage
   authorProjectFacts: readonly string[]
   characterProfiles: string
@@ -127,15 +177,18 @@ export function assembleChapterMaterials(input: {
   candidates: readonly SelectedCandidateDraft[]
   relevanceTerms: readonly string[]
   budgetChars?: number
-}): ChapterMaterialBundle {
+}): Promise<ChapterMaterialAssembly> {
   const omissions: ChapterMaterialOmission[] = []
   const optionalBlocks: string[] = []
   const consumedFinalizedSources: FinalizedMaterialSource[] = []
   const includedFinalizedPassages: string[] = []
+  // 只记录传统遍历实际纳入的来源，用于与稳定选择做差异对比。它不参与渲染，
+  // 也不会改变任何既有分支。
+  const legacyIncluded: string[] = []
   let remaining = input.budgetChars ?? MATERIAL_BUDGET_CHARS
   let includedFinalizedFacts = 0
 
-  const includeOptional = (block: string, omission: ChapterMaterialOmission) => {
+  const includeOptional = (id: string, block: string, omission: ChapterMaterialOmission) => {
     if (!block) return false
     if (block.length > remaining) {
       omissions.push({ ...omission, reason: 'budget' })
@@ -143,6 +196,7 @@ export function assembleChapterMaterials(input: {
     }
     optionalBlocks.push(block)
     remaining -= block.length
+    legacyIncluded.push(id)
     return true
   }
 
@@ -155,32 +209,24 @@ export function assembleChapterMaterials(input: {
       })
       continue
     }
-    const passages = adjacentEvidencePassages(source.content, source.evidence, source.includeEnding)
+    const extracted = finalizedPassages(source, input.relevanceTerms)
+    const selectedPassages = extracted.passages
     const expectedEvidence = source.evidence.filter(value => value.trim()).length
-    let selectedPassages = passages.passages
-    if (passages.locatedEvidence < expectedEvidence) {
+    if (extracted.locatedEvidence < expectedEvidence) {
       omissions.push({
         source: 'finalized',
         chapterNumber: source.chapterNumber,
         reason: 'evidence-not-locatable',
       })
-      // A stale locator is only an index failure. Recover nearby immutable prose
-      // from the same readable source using the existing deterministic term
-      // matcher, while keeping the warning and never injecting the old statement.
-      selectedPassages = [
-        ...selectedPassages,
-        ...relevantPassages(source.content, input.relevanceTerms),
-      ]
     }
-    selectedPassages = removeContainedPassages(selectedPassages)
     if (selectedPassages.length === 0) continue
-    const included = includeOptional(promptLanguageText(
+    const included = includeOptional(`finalized:${source.draftId}`, promptLanguageText(
       input.writingLanguage,
       `【定稿原文 · 第${source.chapterNumber}章 · draft ${source.draftId} · 定位索引${source.sourceStatus ?? 'legacy'}】\n${selectedPassages.join('\n\n')}`,
       `[Finalized manuscript · Chapter ${source.chapterNumber} · draft ${source.draftId} · locator ${source.sourceStatus ?? 'legacy'}]\n${selectedPassages.join('\n\n')}`,
     ), { source: 'finalized', chapterNumber: source.chapterNumber, reason: 'budget' })
     if (included) {
-      includedFinalizedFacts += passages.locatedEvidence
+      includedFinalizedFacts += extracted.locatedEvidence
       consumedFinalizedSources.push(source)
       includedFinalizedPassages.push(...selectedPassages)
     }
@@ -191,29 +237,28 @@ export function assembleChapterMaterials(input: {
   const orderedCandidates = [...input.candidates].sort((left, right) => left.chapterNumber - right.chapterNumber)
   const latestCandidate = orderedCandidates.at(-1)
   for (const candidate of orderedCandidates) {
-    const passages = candidate === latestCandidate
-      ? [previousChapterEnding(candidate.content)]
-      : relevantPassages(candidate.content, input.relevanceTerms)
+    const passages = candidatePassages(candidate, candidate === latestCandidate, input.relevanceTerms)
     if (passages.length === 0) {
       omissions.push({ source: 'candidate', chapterNumber: candidate.chapterNumber, reason: 'no-relevant-passage' })
       continue
     }
-    includeOptional(promptLanguageText(
+    includeOptional(`candidate:${candidate.draftId}`, promptLanguageText(
       input.writingLanguage,
       `【未定稿候选 · 第${candidate.chapterNumber}章 · draft ${candidate.draftId} · v${candidate.version}】\n${passages.join('\n\n')}`,
       `[Unfinalized candidate · Chapter ${candidate.chapterNumber} · draft ${candidate.draftId} · v${candidate.version}]\n${passages.join('\n\n')}`,
     ), { source: 'candidate', chapterNumber: candidate.chapterNumber, reason: 'budget' })
   }
 
-  for (const reference of input.references) {
+  for (const [referenceIndex, reference] of input.references.entries()) {
     if (
       reference.deduplicateAgainstFinalized
       && reference.text.length > 0
       && includedFinalizedPassages.some(passage => passage.includes(reference.text))
     ) continue
-    includeOptional(reference.rendered, { source: 'reference', reason: 'budget' })
+    includeOptional(`reference:${referenceIndex}`, reference.rendered, { source: 'reference', reason: 'budget' })
   }
 
+  legacyIncluded.push('author:required')
   const authorFacts = [...new Set(input.authorProjectFacts.map(value => value.trim()).filter(Boolean))]
   const required = promptLanguageText(
     input.writingLanguage,
@@ -241,7 +286,59 @@ export function assembleChapterMaterials(input: {
     consumedFinalizedSources.push(endingSource)
   }
 
+  // ---- S10B-1a：稳定选择（临时并行测量，渲染仍由传统遍历决定）----
+  // 预算单位在这里是已知的混淆项：传统遍历按 UTF-16 码元，S10A 按 UTF-8 字节。
+  // 为了让差异反映"准入规则"而不是"单位换算"，这里用码元预算的 CJK 等价字节数，
+  // 单位统一留给 S10B-1b 处理并写进提交信息。
+  const selectionCandidates: MaterialCandidate[] = []
+  // 没有材料文本的来源贡献不了任何东西，旧遍历正是这样跳过的；
+  // 如果给它建候选，就会在漂移清单里冒出一个成本为 0 的假纳入。
+  const push = async (sourceId: string, text: string, category: MaterialCandidate['category'],
+    provenance: MaterialCandidate['provenance'], requiredMaterial: boolean, revision: number,
+    sourceStatus?: FinalizedMaterialSource['sourceStatus']) => {
+    if (!text.trim()) return
+    selectionCandidates.push({
+      ref: { projectId: input.identity.projectId, epoch: input.identity.epoch,
+        sourceId, revision, contentHash: await hashAuthorText(text) },
+      category, provenance, required: requiredMaterial, text,
+      ...(sourceStatus === 'stale' ? { staleLocator: false } : {}),
+    })
+  }
+  for (const source of input.finalized) {
+    if (source.sourceStatus === 'invalid') continue
+    const extracted = finalizedPassages(source, input.relevanceTerms)
+    await push(`finalized:${source.draftId}`, extracted.passages.join('\n\n'), 'finalized-history',
+      source.sourceStatus === 'legacy' ? 'legacy' : 'finalized', false, source.draftId, source.sourceStatus)
+  }
+  for (const candidate of orderedCandidates) {
+    await push(`candidate:${candidate.draftId}`, candidatePassages(candidate, candidate === latestCandidate, input.relevanceTerms).join('\n\n'),
+      'finalized-history', 'author', false, candidate.version)
+  }
+  for (const [referenceIndex, reference] of input.references.entries()) {
+    await push(`reference:${referenceIndex}`, reference.rendered, 'reference', 'author', false, 1)
+  }
+  // 必需材料（作者资料 + 角色档案 + 后续计划）是单一候选：要么整块进入，要么整轮失败。
+  await push('author:required', required, 'author', 'author', true, 1)
+  const selection = selectChapterSources({
+    current: input.identity,
+    capacity: { maxInputUnits: (input.budgetChars ?? MATERIAL_BUDGET_CHARS) * 3, methodVersion: 'utf8-bytes-v1' },
+    relevanceTerms: input.relevanceTerms,
+    candidates: selectionCandidates,
+  })
+  const selectionIncluded = selection.decision === 'ready'
+    ? [...new Set(selection.included.map(item => item.ref.sourceId))]
+    : []
+  const legacySet = new Set(legacyIncluded), selectionSet = new Set(selectionIncluded)
+  const drift: ChapterMaterialDrift = {
+    legacyIncluded: [...legacySet].sort(),
+    selectionIncluded: [...selectionSet].sort(),
+    onlyInLegacy: [...legacySet].filter(id => !selectionSet.has(id)).sort(),
+    onlyInSelection: [...selectionSet].filter(id => !legacySet.has(id)).sort(),
+  }
+
   return {
+    selection,
+    drift,
     text: [required, sourced, ...optionalBlocks, gap].filter(Boolean).join('\n\n'),
     previousEnding: latestCandidate
       ? previousChapterEnding(latestCandidate.content)

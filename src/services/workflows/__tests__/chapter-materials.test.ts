@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest'
 
 import { adjacentEvidencePassages, assembleChapterMaterials } from '../chapter-materials'
 
+/** S10B-1a：该接缝现在需要项目身份并额外返回差异清单，测试里用固定身份。 */
+const assemble = (input: Omit<Parameters<typeof assembleChapterMaterials>[0], 'identity'>) =>
+  assembleChapterMaterials({ identity: { projectId: '项目', epoch: '会话' }, ...input })
+
 describe('chapter materials', () => {
   it.each([
     {
@@ -16,14 +20,14 @@ describe('chapter materials', () => {
       expectedTiming: 'Knowledge changes, item transfers, actions, and completed states explicitly assigned to later chapters must not be moved earlier',
       expectedForeshadowing: 'foreshadowing that does not change those timings is allowed',
     },
-  ])('keeps $writingLanguage future plans verbatim while making their timing role explicit', ({
+  ])('keeps $writingLanguage future plans verbatim while making their timing role explicit', async ({
     writingLanguage,
     expectedBoundary,
     expectedTiming,
     expectedForeshadowing,
   }) => {
     const futurePlans = '第8章：林岚把钥匙交给周砚。\n第9章：周砚才得知暗门口令。'
-    const bundle = assembleChapterMaterials({
+    const bundle = await assemble({
       writingLanguage,
       authorProjectFacts: [],
       characterProfiles: '',
@@ -40,7 +44,7 @@ describe('chapter materials', () => {
     expect(bundle.text.split(futurePlans)).toHaveLength(2)
   })
 
-  it('keeps the hit paragraph and one neighbour on both sides, merging overlapping windows', () => {
+  it('keeps the hit paragraph and one neighbour on both sides, merging overlapping windows', async () => {
     const content = [
       '林岚冲进库房时仍拖着左腿。',
       '她说伤口不是坠落造成的，而是昨夜被铁钩划开。',
@@ -65,8 +69,8 @@ describe('chapter materials', () => {
     ])
   })
 
-  it('keeps required author material outside the optional budget and reports optional gaps', () => {
-    const bundle = assembleChapterMaterials({
+  it('keeps required author material outside the optional budget and reports optional gaps', async () => {
+    const bundle = await assemble({
       writingLanguage: 'zh-CN',
       authorProjectFacts: ['AUTHOR_REQUIRED_SENTINEL'],
       characterProfiles: '林岚 (protagonist)',
@@ -96,8 +100,8 @@ describe('chapter materials', () => {
     ]))
   })
 
-  it('does not count located finalized evidence when its block exceeds the material budget', () => {
-    const bundle = assembleChapterMaterials({
+  it('does not count located finalized evidence when its block exceeds the material budget', async () => {
+    const bundle = await assemble({
       writingLanguage: 'zh-CN',
       authorProjectFacts: [],
       characterProfiles: '',
@@ -124,7 +128,7 @@ describe('chapter materials', () => {
     })
   })
 
-  it('keeps the previous finalized ending dependency when its prompt block exceeds the budget', () => {
+  it('keeps the previous finalized ending dependency when its prompt block exceeds the budget', async () => {
     const source = {
       chapterNumber: 1,
       draftId: 11,
@@ -134,7 +138,7 @@ describe('chapter materials', () => {
       includeEnding: true,
       sourceIdentity: { kind: 'finalized' as const, finalizationId: 'finalization-11', contentHash: 'a'.repeat(64) },
     }
-    const bundle = assembleChapterMaterials({
+    const bundle = await assemble({
       writingLanguage: 'zh-CN',
       authorProjectFacts: [],
       characterProfiles: '',
@@ -151,9 +155,9 @@ describe('chapter materials', () => {
     expect(bundle.consumedFinalizedSources).toEqual([source])
   })
 
-  it('falls back to relevant neighbouring finalized prose when a far-chapter locator is stale', () => {
+  it('falls back to relevant neighbouring finalized prose when a far-chapter locator is stale', async () => {
     const staleStatement = '林岚因坠落受伤并把钥匙交给周砚。'
-    const bundle = assembleChapterMaterials({
+    const bundle = await assemble({
       writingLanguage: 'zh-CN',
       authorProjectFacts: [],
       characterProfiles: '',
@@ -185,7 +189,7 @@ describe('chapter materials', () => {
     })
   })
 
-  it('keeps only the containing passage when fallback prose contains a same-source evidence window', () => {
+  it('keeps only the containing passage when fallback prose contains a same-source evidence window', async () => {
     const source = {
       chapterNumber: 2,
       draftId: 22,
@@ -201,7 +205,7 @@ describe('chapter materials', () => {
       sourceStatus: 'current' as const,
       sourceIdentity: { kind: 'finalized' as const, finalizationId: 'finalization-22', contentHash: 'b'.repeat(64) },
     }
-    const bundle = assembleChapterMaterials({
+    const bundle = await assemble({
       writingLanguage: 'zh-CN',
       authorProjectFacts: ['AUTHOR_TEXT_MUST_STAY'],
       characterProfiles: '',
@@ -224,8 +228,8 @@ describe('chapter materials', () => {
     })
   })
 
-  it('keeps partially overlapping same-source passages', () => {
-    const bundle = assembleChapterMaterials({
+  it('keeps partially overlapping same-source passages', async () => {
+    const bundle = await assemble({
       writingLanguage: 'zh-CN',
       authorProjectFacts: [],
       characterProfiles: '',
@@ -254,8 +258,8 @@ describe('chapter materials', () => {
     expect(bundle.text.split('命中的事实段。')).toHaveLength(3)
   })
 
-  it('drops a KB result only when an actually included finalized passage contains its full text', () => {
-    const included = assembleChapterMaterials({
+  it('drops a KB result only when an actually included finalized passage contains its full text', async () => {
+    const included = await assemble({
       writingLanguage: 'zh-CN',
       authorProjectFacts: [],
       characterProfiles: '',
@@ -279,7 +283,7 @@ describe('chapter materials', () => {
     expect(included.text).not.toContain('[KB重复]')
     expect(included.text).toContain('[KB独有] 铜钥匙交给周砚后门外亮灯')
 
-    const finalizedOverBudget = assembleChapterMaterials({
+    const finalizedOverBudget = await assemble({
       writingLanguage: 'zh-CN',
       authorProjectFacts: [],
       characterProfiles: '',
@@ -306,8 +310,8 @@ describe('chapter materials', () => {
     })
   })
 
-  it('reports a stale locator without inventing prose when no relevance term matches', () => {
-    const bundle = assembleChapterMaterials({
+  it('reports a stale locator without inventing prose when no relevance term matches', async () => {
+    const bundle = await assemble({
       writingLanguage: 'zh-CN',
       authorProjectFacts: [],
       characterProfiles: '',
@@ -329,8 +333,8 @@ describe('chapter materials', () => {
     expect(bundle.text).toContain('finalized#2:evidence-not-locatable')
   })
 
-  it('omits a finalized source whose receipt validation failed', () => {
-    const bundle = assembleChapterMaterials({
+  it('omits a finalized source whose receipt validation failed', async () => {
+    const bundle = await assemble({
       writingLanguage: 'zh-CN',
       authorProjectFacts: [],
       characterProfiles: '',
@@ -352,8 +356,8 @@ describe('chapter materials', () => {
     expect(bundle.text).toContain('finalized#2:source-invalid')
   })
 
-  it('selects recent finalized blocks first but presents the selected history chronologically', () => {
-    const bundle = assembleChapterMaterials({
+  it('selects recent finalized blocks first but presents the selected history chronologically', async () => {
+    const bundle = await assemble({
       writingLanguage: 'zh-CN',
       authorProjectFacts: [],
       characterProfiles: '',
@@ -397,8 +401,8 @@ describe('chapter materials', () => {
     expect(bundle.text).toContain('CANDIDATE_FIRST\n\nCANDIDATE_SECOND')
   })
 
-  it('labels every selected candidate with the exact saved id and version', () => {
-    const bundle = assembleChapterMaterials({
+  it('labels every selected candidate with the exact saved id and version', async () => {
+    const bundle = await assemble({
       writingLanguage: 'zh-CN',
       authorProjectFacts: [],
       characterProfiles: '',
