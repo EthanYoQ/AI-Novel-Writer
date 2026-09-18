@@ -102,7 +102,7 @@ export async function openArchFile(filePath: string, name: string): Promise<void
 export function openBuiltinEditor(
   id: string,
   name: string,
-  type: 'chapter-card' | 'character' | 'world-building' | 'narrative-thread',
+  type: 'chapter-card' | 'character' | 'world-building' | 'narrative-thread' | 'knowledge' | 'relationship-graph' | 'world-setting',
   narrativeThreadView?: 'plot-tree' | 'plans',
   chapterNumber?: number,
 ): void {

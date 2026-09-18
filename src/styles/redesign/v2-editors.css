@@ -1,0 +1,891 @@
+/* ============================================================================
+ * v2 专业编辑器内容区换装（人物档案 / 章节蓝图 / 世界观 / 小说配置 /
+ *                          叙事线索 / 审稿报告 / 版本历史 / 三方合并 / 关系图）
+ *
+ * 分工边界（避免与同目录文件互相压盖）：
+ *   · v2-editor-chrome.css —— 编辑器「外壳」：标签栏、42px 工具条(.edtool)、页头(.pagehead)
+ *   · v2-editor.css        —— CodeMirror 纸面正文（.cm-*）
+ *   · 本文件               —— 外壳以下的内容区：纸面容器、字段与标签网格、卡片与分区标题、
+ *                             审稿条目、版本行、三方合并差异配色、关系图 canvas 与缩放条
+ *
+ * 为什么是无层样式：产品的这些页面全部由 Tailwind 工具类 + 内联 style 渲染，
+ *   没有语义类名。无层规则优先于任何 @layer（含 Tailwind utilities），
+ *   因此无需 !important 即可压过 px-3 / py-2 / rounded-md / text-xs 这些工具类。
+ *   本文件全程未使用 !important：组件写在 style="" 里的颜色一律通过
+ *   §一 的作用域变量重定向间接改写，写法里的排版属性则与内联不重叠。
+ *
+ * 选择器约定：[class~="x"] 精确匹配单个类名 token，
+ *   比 [class*="x"] 更不易误伤（例如 max-w-2xl 与 max-w-2xl-none 不会混）。
+ *   作用域一律收在 .skin-workspace-page（产品的编辑工作区容器，EditorArea.tsx:451/486/515），
+ *   因此不会外溢到侧栏、对话框、书架等其它区域。
+ *
+ * 真源：设计稿 AI小说家-Demo/novel-app-demo-relation-avatars.html
+ *   所有数值均在该文件行号处可查证，注释里逐条给出。
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 一、颜色接线：把产品的 --color-* 语义变量在编辑工作区内指向 demo 令牌
+ *
+ * 产品这些页面大量使用内联 style 的 var(--color-*)（例如
+ * style={{ color: 'var(--color-text-secondary)' }}），纯 CSS 无法逐条改写内联值，
+ * 但把变量本身在作用域内重定向即可一次性对齐 —— 这也是 demo 的调色板
+ * （shell.css :root 第 19–40 行，与 demo 原样一致）。
+ * ======================================================================== */
+
+html[data-ui='v2'] .skin-workspace-page {
+  /* 底衬与纸面 */
+  --color-bg: var(--paper2);
+  --color-editor-bg: var(--manuscript);
+  --color-panel: var(--panel);
+  --color-sidebar: var(--panel);
+  --color-raised: var(--panel2);
+
+  /* demo 的悬停语言：白薄雾（.tree-row:hover rgba(255,255,255,.65) / .tab:hover .4 /
+     .draft-version-row:hover .22，demo 123 / 167 / 761 行）
+     深色主题改由 --v2-hover 接管（v2-themes.css 的「悬停染」），浅色仍走原值。 */
+  --color-hover: var(--v2-hover, rgba(255, 255, 255, 0.22));
+  /* demo .tree-row.on{background:var(--white)}（demo 124 行） */
+  --color-active: var(--white);
+
+  /* 线 */
+  --color-border: var(--line);
+
+  /* 文字三层级（demo --ink / --ink2 / --muted） */
+  --color-text: var(--ink);
+  --color-text-secondary: var(--ink2);
+  --color-text-muted: var(--muted);
+
+  /* 强调色 = 朱砂印（demo --seal） */
+  --color-accent: var(--seal);
+  --color-accent-hover: var(--seal-hover);
+  --color-accent-rgb: var(--seal-rgb);
+  --color-gold: var(--gold2);
+
+  /* 语义状态色（demo --green/--greentx、--warn/--warntx、--red/--redtx、--info） */
+  --color-success: var(--green);
+  --color-success-text: var(--greentx);
+  --color-warning: var(--warn);
+  --color-warning-text: var(--warntx);
+  --color-error: var(--red);
+  --color-error-text: var(--redtx);
+  --color-info: var(--info);
+  --color-category-progress-text: var(--info);
+  --color-category-review-text: var(--gold2);
+
+  /* 关系图 canvas 的节点取色（RelationshipGraph.tsx:196 读 --color-role-*）；
+     demo 关系图只有「主角朱砂、其余墨玉」两级（.relation-node.main .name{color:var(--seal)}，
+     demo 894 行），这里按既有语义映射到同一套令牌。 */
+  --color-role-protagonist: var(--seal);
+  --color-role-antagonist: var(--jade);
+  --color-role-supporting: var(--green);
+  --color-role-minor: var(--muted);
+
+  /* 细节态 */
+  --color-skeleton: rgba(var(--seal-rgb), 0.06);
+  --color-focus-ring: rgba(var(--seal-rgb), 0.35);
+  --color-sash-hover: rgba(var(--seal-rgb), 0.15);
+}
+
+/* ==========================================================================
+ * 二、内容纸面容器
+ *
+ * 各页顶部宽度与内边距取自 demo 对应的 render 函数：
+ *   viewCharacter  max-width:920px;  padding:22px 28px 46px   （demo 3445）
+ *   viewReview     max-width:920px;  padding:20px 26px 44px   （demo 3211）
+ *   viewWorldEntry max-width:920px;  padding:22px 28px 46px   （demo 2673）
+ *   viewConfig     max-width:1080px; padding:26px 30px 52px   （demo 3013）
+ *   viewThreads    max-width:1180px; padding:20px 26px 44px   （demo 2725）
+ * 产品这几页分别是 max-w-2xl(672) / max-w-3xl(768) / max-w-5xl(1024)，
+ * 在 demo 里都是「宽幅纸面」，故统一放宽到 demo 的档位。
+ * ======================================================================== */
+
+/* 先生：正文栏里各子菜单的宽度要「统一一个位置」—— 标头的左边缘对齐正文内容的左边缘。
+   原先这里按 demo 各自放宽到 920 / 1080 / 1180px，导致：
+     ① 各页宽度互不相同，翻页时内容左右边界一直在跳；
+     ② 标头（统一 1024px）与内容（1180px 等）差了一百多像素，怎么都对齐不了。
+   现在四条统一到 1024px，左右内距统一 32px —— 与 .pagehead-strip 完全同一套，
+   两侧边缘就能连成一条线。各自的上下内距保留原值，不影响纵向观感。 */
+
+html[data-ui='v2'] .skin-workspace-page [class~="max-w-2xl"][class~="mx-auto"] {
+  max-width: 1024px;
+  padding: 22px 32px 46px;
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="max-w-3xl"][class~="mx-auto"] {
+  max-width: 1024px;
+  padding: 26px 32px 52px;
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="max-w-5xl"][class~="mx-auto"] {
+  max-width: 1024px;
+  padding: 20px 32px 44px;
+}
+
+/* 版本历史右栏（产品 max-w-xl）：同样收进 1024px 这一档。 */
+html[data-ui='v2'] .skin-workspace-page [class~="max-w-xl"][class~="mx-auto"] {
+  max-width: 1024px;
+  padding: 20px 32px 44px;
+}
+
+/* 编辑器左栏列表（章节列表 / 角色列表 / 世界词条列表）的底色与右边线
+   由 §一 的 --color-sidebar / --color-border 重定向给出（demo .relation-side，907 行），
+   此处不再重复书写，仅保留列表行的观感改造（见 §六）。 */
+
+/* ==========================================================================
+ * 三、字段与标签（demo .fld 250–260）
+ *   标签 12px/600（.fld .fh .fn，demo 253）
+ *   输入 12.5px、圆角 8px（.fld input，demo 255）
+ *   多行 行高 1.8、可纵向拉伸（.fld textarea，demo 258）
+ * ======================================================================== */
+
+/* Label 组件的类名组合 text-xs font-medium leading-none 在全项目唯一，
+   可安全用作钩子。文字改为 demo 的字段名层级：ink + 600 + 12px + 下间距 5px。 */
+html[data-ui='v2'] .skin-workspace-page label[class~="text-xs"][class~="font-medium"][class~="leading-none"] {
+  font-size: var(--v2-fs-label);
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 5px;          /* demo .fld .fh margin-bottom:5px（251） */
+}
+
+/* Label 内的说明小字（产品 <span class="ml-2 text-[0.7rem]"> 之类）
+   → demo .fld .fh .hint：9.5px / --faint（demo 254）。 */
+html[data-ui='v2'] .skin-workspace-page label[class~="text-xs"] > span[class~="font-normal"] {
+  font-size: var(--v2-fs-tiny);
+  font-weight: 400;
+  color: var(--faint);
+}
+
+/* 字段说明段（产品 text-xs + --color-text-muted）与 demo 的辅助字同调 */
+html[data-ui='v2'] .skin-workspace-page textarea {
+  line-height: 1.8;            /* demo .fld textarea（258） */
+  resize: vertical;
+}
+
+/* placeholder 取 demo 的浅墨：--faint */
+html[data-ui='v2'] .skin-workspace-page input::placeholder,
+html[data-ui='v2'] .skin-workspace-page textarea::placeholder {
+  color: var(--faint);
+}
+
+/* ==========================================================================
+ * 四、字段网格 → demo 档案信息网格（.archive-grid / .archive-item 767–772）
+ *
+ * 产品这几页的字段网格是 grid-cols-3/2 + gap-3，里面是「标签 + 控件」。
+ * demo 的档案网格是同一种「信息分栏」的观感：上下细线包夹、分栏之间一道竖线、
+ * 每格内缩留白。这里保留产品列数（不改布局），只把分隔线语言换成 demo 的。
+ * ======================================================================== */
+
+html[data-ui='v2'] .skin-workspace-page [class~="grid-cols-3"][class~="gap-3"] {
+  gap: 0;
+  border-top: 1px solid var(--line);       /* demo .archive-grid（767） */
+  border-bottom: 1px solid var(--line);
+  margin: 4px 0 18px;                      /* demo margin:4px 0 34px，正文页取 18px */
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="grid-cols-3"][class~="gap-3"] > * {
+  padding: 13px 16px 12px 0;               /* demo .archive-item（768） */
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="grid-cols-3"][class~="gap-3"] > *:not(:first-child) {
+  padding-left: 18px;                      /* demo .archive-item:not(:first-child)（769） */
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="grid-cols-3"][class~="gap-3"] > *:not(:last-child) {
+  border-right: 1px solid var(--line);     /* demo .archive-item（768） */
+}
+
+/* 网格里的纯文本值（人物档案的性别/年龄/定位等只读格）
+   → demo .archive-item span：衬线 15px / --ink（demo 772）。 */
+html[data-ui='v2'] .skin-workspace-page [class~="grid-cols-3"][class~="gap-3"] > * > span[class~="text-xs"],
+html[data-ui='v2'] .skin-workspace-page [class~="grid-cols-3"][class~="gap-3"] > * > span[class~="text-sm"] {
+  font-family: var(--serif);
+  font-size: 15px;
+  color: var(--ink);
+  line-height: 1.35;
+}
+
+/* ==========================================================================
+ * 五、卡片与分区标题
+ *
+ * demo 有两条层级：
+ *   ① 分区（.archive-section，773–777）——无卡面，靠下划线与朱砂眉标分区，
+ *     用于「小说配置」的各个 Section；
+ *   ② 卡片（.card，248）——panel 底 + 圆角 12px + shadow；
+ *     悬停（.hov，240）抬升 2px、描边转金。
+ * ======================================================================== */
+
+/* ① 小说配置的 Section：p-4 rounded-xl + sidebar 底 → demo .archive-section 的无卡面分区 */
+html[data-ui='v2'] .skin-workspace-page [class~="rounded-xl"][class~="border"][class~="p-4"] {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0 0 28px;                                  /* demo .archive-section（773） */
+  margin: 0 0 28px;
+  border-bottom: 1px solid rgba(210, 200, 174, 0.72); /* demo（773） */
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="rounded-xl"][class~="border"][class~="p-4"]:last-child {
+  border-bottom: 0;                                   /* demo .archive-section:last-child（774） */
+}
+
+/* 分区标题 → demo .archive-section h3：10px / 字距 .16em / 朱砂 / 700，
+   后接 30px 短线（demo 775–776）。 */
+html[data-ui='v2'] .skin-workspace-page [class~="rounded-xl"][class~="border"][class~="p-4"] > h3 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 10px;
+  letter-spacing: var(--v2-ls-label);
+  color: var(--seal);
+  font-weight: 700;
+  margin: 0 0 11px;
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="rounded-xl"][class~="border"][class~="p-4"] > h3::after {
+  content: '';
+  width: 30px;
+  height: 1px;
+  background: var(--line2);
+  display: inline-block;
+}
+
+/* 分区描述 → demo .pagehead .ph-d 同族的说明字（demo 265） */
+html[data-ui='v2'] .skin-workspace-page [class~="rounded-xl"][class~="border"][class~="p-4"] > p[class~="text-xs"] {
+  font-size: var(--v2-fs-caption);
+  color: var(--muted);
+  line-height: 1.8;
+}
+
+/* ② 通用卡片：叙事线索 section / 剧情树面板 / 审稿确认清单
+   → demo .card：panel 底 + 1px line + 圆角 12px + demo 阴影（demo 248）。 */
+html[data-ui='v2'] .skin-workspace-page [class~="rounded-lg"][class~="border"][class~="p-4"][class~="space-y-3"] {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: var(--v2-card-radius);
+  box-shadow: var(--shadow);
+}
+
+/* 可点击卡片（世界观架构文件列表）→ demo .card.hov 的悬停语言：
+   抬升 2px、描边转金、阴影加深（demo 240）。 */
+html[data-ui='v2'] .skin-workspace-page [class~="rounded-lg"][class~="border"][class~="p-4"][class~="items-center"][class~="cursor-pointer"] {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: var(--v2-card-radius);
+  box-shadow: var(--shadow);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="rounded-lg"][class~="border"][class~="p-4"][class~="items-center"][class~="cursor-pointer"]:hover {
+  transform: translateY(-2px);
+  border-color: var(--gold);
+  box-shadow: 0 10px 22px -16px rgba(40, 30, 15, 0.35);
+}
+
+/* 卡片内小标题（叙事线索的伏笔标题）→ demo 的衬线小标（.relation-item b 同族） */
+html[data-ui='v2'] .skin-workspace-page [class~="rounded-lg"][class~="border"][class~="p-4"][class~="space-y-3"] > div h3[class~="font-semibold"] {
+  font-family: var(--serif);
+  font-size: var(--v2-fs-lead);
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+}
+
+/* ==========================================================================
+ * 六、左栏列表行 → demo .tree-row（121–131）
+ *   height:31px; padding:0 11px; border-radius:7px; margin:0 7px;
+ *   .on{background:var(--white); border-left-color:var(--seal); box-shadow:var(--shadow)}
+ * 产品对应：章节蓝图 / 版本历史 / 世界观文件列表的左栏条目
+ *   （px-2.5 py-2 rounded-md text-xs cursor-pointer + bg-[var(--color-active)]）。
+ * ======================================================================== */
+
+html[data-ui='v2'] .skin-workspace-page [class~="cursor-pointer"][class~="rounded-md"][class~="text-xs"][class~="mb-0.5"] {
+  padding: 6px 11px;                       /* demo .tree-row padding:0 11px，双行内容放宽 */
+  margin: 0 7px 2px;                       /* demo margin:0 7px */
+  border-radius: 7px;
+  border-left: 2px solid transparent;
+  transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="cursor-pointer"][class~="rounded-md"][class~="text-xs"][class~="mb-0.5"]:hover {
+  background: var(--color-hover);
+}
+
+/* 选中态：产品用 bg-[var(--color-active)] 标记 → demo .tree-row.on（demo 124）
+   白底 + 朱砂左线 + 阴影。 */
+html[data-ui='v2'] .skin-workspace-page [class~="cursor-pointer"][class~="rounded-md"][class~="text-xs"][class~="mb-0.5"][class~="bg-[var(--color-active)]"] {
+  background: var(--white);
+  border-left-color: var(--seal);
+  box-shadow: var(--shadow);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* 条目里的章号：demo .tree-row .tl 与等宽数字（demo 127–128） */
+html[data-ui='v2'] .skin-workspace-page [class~="cursor-pointer"][class~="rounded-md"][class~="text-xs"][class~="mb-0.5"] [class~="font-mono"] {
+  font-family: var(--mono);
+  font-size: var(--v2-fs-tiny);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 版本历史的章节行（px-2.5 py-1.5 rounded-md text-xs）同属左栏列表，
+   与上一条共用同一套 hover 过渡（demo .tree-row 的 transition，demo 121 行）。 */
+html[data-ui='v2'] .skin-workspace-page [class~="cursor-pointer"][class~="rounded-md"][class~="text-xs"][class~="py-1.5"] {
+  border-radius: 7px;
+  border-left: 2px solid transparent;
+  transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="cursor-pointer"][class~="rounded-md"][class~="text-xs"][class~="py-1.5"]:hover {
+  background: var(--color-hover);
+}
+
+/* ==========================================================================
+ * 七、徽章 → demo .badge（241–247）
+ *   9.5px / 600 / padding:1.5px 8px / 圆角 99px，六种语义底色。
+ * 产品对应：审稿等级统计、版本类型标签、章节角色标签、线索状态标签。
+ * ======================================================================== */
+
+html[data-ui='v2'] .skin-workspace-page [class~="bg-red-500/20"],
+html[data-ui='v2'] .skin-workspace-page [class~="bg-yellow-500/20"],
+html[data-ui='v2'] .skin-workspace-page [class~="bg-green-500/20"],
+html[data-ui='v2'] .skin-workspace-page [class~="bg-blue-500/20"],
+html[data-ui='v2'] .skin-workspace-page [class~="bg-purple-500/20"] {
+  font-size: var(--v2-fs-tiny);
+  font-weight: 600;
+  padding: 1.5px 8px;
+  border-radius: var(--v2-badge-radius);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+/* 严重 = demo .badge.r（242–244 同族） */
+html[data-ui='v2'] .skin-workspace-page [class~="bg-red-500/20"] {
+  background: rgba(192, 57, 43, 0.11);
+  color: var(--redtx);
+}
+
+/* 建议 = demo .badge.w */
+html[data-ui='v2'] .skin-workspace-page [class~="bg-yellow-500/20"] {
+  background: rgba(192, 138, 45, 0.14);
+  color: var(--warntx);
+}
+
+/* 通过 / 终稿 = demo .badge.g（242） */
+html[data-ui='v2'] .skin-workspace-page [class~="bg-green-500/20"] {
+  background: rgba(78, 122, 84, 0.13);
+  color: var(--greentx);
+}
+
+/* 草稿 = demo .badge.v（246） */
+html[data-ui='v2'] .skin-workspace-page [class~="bg-blue-500/20"] {
+  background: rgba(61, 110, 143, 0.12);
+  color: var(--info);
+}
+
+/* 审稿 = demo .badge.gray（245） */
+html[data-ui='v2'] .skin-workspace-page [class~="bg-purple-500/20"] {
+  background: rgba(139, 136, 118, 0.13);
+  color: #6e6a5b;
+}
+
+/* 章节卡的小标签（text-[0.7rem] px-1 py-0.5 rounded，如「有引导 / 有要点」）
+   → demo .badge 的同族小标 */
+html[data-ui='v2'] .skin-workspace-page [class~="text-[0.7rem]"][class~="px-1"][class~="py-0.5"][class~="rounded"] {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: var(--v2-badge-radius);
+}
+
+/* ==========================================================================
+ * 八、审稿报告（demo viewReview 3211–3245）
+ *   条目：border:1px solid --line + border-left:3px solid 等级色 + 等级底色，
+ *        圆角 9px、padding 12px 15px、下间距 10px、12px / 行高 1.85（demo 3222）
+ *   引用：border-left:2px solid --line2、四角 0 7px 7px 0、
+ *        rgba(255,255,255,.55) 底、衬线斜体（demo 3225）
+ * ======================================================================== */
+
+html[data-ui='v2'] .skin-workspace-page [class~="bg-red-500/10"],
+html[data-ui='v2'] .skin-workspace-page [class~="bg-yellow-500/10"],
+html[data-ui='v2'] .skin-workspace-page [class~="bg-green-500/10"] {
+  border-radius: 9px;
+  padding: 12px 15px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  line-height: 1.85;
+}
+
+/* 等级色描边：demo 的 border-left 三道杠 + 其余三边细线 */
+html[data-ui='v2'] .skin-workspace-page [class~="bg-red-500/10"] {
+  background: rgba(192, 57, 43, 0.05);     /* demo stBg（3220） */
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--red);       /* demo stCol（3219） */
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="bg-yellow-500/10"] {
+  background: rgba(192, 138, 45, 0.06);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn);
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="bg-green-500/10"] {
+  background: rgba(78, 122, 84, 0.05);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--green);
+}
+
+/* 分类标题（产品 h4.text-sm.font-semibold）：demo 审稿报告是平铺列表、无分类标题，
+   这里降级为 demo 的分组眉标（.relation-section h3 同族：10px / 字距 .12em / --muted）。 */
+html[data-ui='v2'] .skin-workspace-page h4[class~="text-sm"][class~="font-semibold"][class~="mb-2"] {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: none;
+}
+
+/* 引用原文：产品在 style 里写死了 borderLeft 与颜色，无层规则无法压过内联，
+   故这里只做排版（字体/缩进/圆角），配色仍由内联变量提供。 */
+html[data-ui='v2'] .skin-workspace-page [class~="text-[0.7rem]"][class~="italic"] {
+  font-family: var(--serif);
+  font-size: 12px;
+  line-height: 1.85;
+  padding: 4px 12px;
+  border-radius: 0 7px 7px 0;              /* demo（3225） */
+}
+
+/* 总体评价卡 / 颜色图例卡（内联 border+bg）：只对齐圆角与字距 */
+html[data-ui='v2'] .skin-workspace-page [class~="rounded-lg"][class~="border"][class~="p-3"][class~="text-xs"] {
+  border-radius: 10px;
+  font-size: var(--v2-fs-caption);
+  line-height: 1.9;
+}
+
+/* ==========================================================================
+ * 九、版本历史行 → demo .draft-version-row（760–765）
+ *   margin:0 7px 0 0; padding:0 8px 0 12px; 无圆角、无描边盒，
+ *   仅一根 2px 透明左线（选中转朱砂）；hover 白薄雾 .22。
+ * ======================================================================== */
+
+html[data-ui='v2'] .skin-workspace-page [class~="justify-between"][class~="py-2.5"][class~="rounded-md"][class~="border"] {
+  border: 0;
+  border-left: 2px solid transparent;
+  border-bottom: 1px solid var(--line2);
+  border-radius: 0;
+  padding: 9px 10px 9px 12px;              /* demo（760） */
+  background: transparent;
+  box-shadow: none;
+  transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="justify-between"][class~="py-2.5"][class~="rounded-md"][class~="border"]:hover {
+  /* 这条选择器特异性过高，(0,4,1) 的集中覆盖压不动，故就地接 --v2-hover */
+  background: var(--v2-hover, rgba(255, 255, 255, 0.22));   /* demo .draft-version-row:hover（761） */
+  color: var(--ink2);
+}
+
+/* 版本行的行间不再留 gap（demo 是紧排列表）——作用域限定在版本历史右栏，
+   以免压到其它页面的 space-y-2 列表。 */
+html[data-ui='v2'] .skin-workspace-page [class~="max-w-xl"] [class~="space-y-2"] > * + * {
+  margin-top: 0;
+}
+
+/* 版本号、字数、时间的层级：版本号 ink，其余 muted 小字 */
+html[data-ui='v2'] .skin-workspace-page [class~="justify-between"][class~="py-2.5"] [class~="text-xs"] {
+  font-family: var(--mono);
+  font-size: var(--v2-fs-note);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+ * 十、三方合并（three-way-merge.css 的 .twm-* 钩子）
+ *   全部数值取自 demo mergeHtml（3263–3291）：
+ *     工具条 padding:9px 15px、背景 --paper
+ *     表头 6px 16px、11px/700，原稿 --redtx、合并结果 ink、修稿 --greentx，底 --paper2
+ *     正文衬线 13px、行高 2.05，底 --panel
+ *     行内边距 6px 16px，行线 rgba(128,128,128,.08)
+ *     原稿列 rgba(192,57,43,.055) + inset 3px 0 0 rgba(192,57,43,.38) + --redtx
+ *     修稿列 rgba(78,122,84,.05)  + inset 3px 0 0 rgba(78,122,84,.38) + --greentx
+ *     结果列待定 rgba(139,133,119,.05) / 已采用 rgba(78,122,84,.05)
+ *     采用按钮 28px 宽、待定 rgba(61,110,143,.1)/--info、已采用 rgba(78,122,84,.14)/--greentx
+ * ======================================================================== */
+
+html[data-ui='v2'] .three-way-merge {
+  background: var(--panel);
+  color: var(--ink);
+}
+
+html[data-ui='v2'] .three-way-merge .twm-toolbar {
+  padding: 9px 15px;                       /* demo（3264） */
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+}
+
+html[data-ui='v2'] .three-way-merge .twm-toolbar-progress {
+  font-size: var(--v2-fs-caption);
+  color: var(--ink2);
+}
+
+html[data-ui='v2'] .three-way-merge .twm-headers {
+  background: var(--paper2);               /* demo（3271） */
+  border-bottom: 1px solid var(--line);
+}
+
+html[data-ui='v2'] .three-way-merge .twm-header {
+  padding: 6px 16px;                       /* demo（3272–3274） */
+  font-size: var(--v2-fs-caption);
+  font-weight: 700;
+  color: var(--ink);
+  border-right: 1px solid var(--line);
+}
+
+html[data-ui='v2'] .three-way-merge .twm-header:first-child {
+  color: var(--redtx);
+}
+
+html[data-ui='v2'] .three-way-merge .twm-header:last-child {
+  color: var(--greentx);
+  border-right: 0;
+}
+
+html[data-ui='v2'] .three-way-merge .twm-tag {
+  font-size: 9.5px;
+  font-weight: 400;
+  padding: 0 6px;
+  border-radius: 4px;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.05);
+}
+
+html[data-ui='v2'] .three-way-merge .twm-tag.editable {
+  color: var(--info);
+  background: rgba(61, 110, 143, 0.1);
+}
+
+html[data-ui='v2'] .three-way-merge .twm-grid {
+  font-family: var(--serif);               /* demo（3275） */
+  font-size: 13px;
+  line-height: 2.05;
+}
+
+html[data-ui='v2'] .three-way-merge .twm-cell {
+  border-bottom: 1px solid rgba(128, 128, 128, 0.08);
+}
+
+/* 原稿列：红调 + 3px 内嵌左条 */
+html[data-ui='v2'] .three-way-merge .twm-cell-left {
+  background: rgba(192, 57, 43, 0.055);
+  box-shadow: inset 3px 0 0 rgba(192, 57, 43, 0.38);
+  color: var(--redtx);
+}
+
+/* 结果列：待定 → 灰雾，已采用 → 绿雾（demo 3288） */
+html[data-ui='v2'] .three-way-merge .twm-cell-center.pending {
+  background: rgba(139, 133, 119, 0.05);
+  color: var(--ink);
+}
+
+html[data-ui='v2'] .three-way-merge .twm-cell-center.adopted {
+  background: rgba(78, 122, 84, 0.05);
+  color: var(--ink);
+}
+
+/* 修稿列：绿调 + 3px 内嵌左条 */
+html[data-ui='v2'] .three-way-merge .twm-cell-right {
+  background: rgba(78, 122, 84, 0.05);
+  box-shadow: inset 3px 0 0 rgba(78, 122, 84, 0.38);
+  color: var(--greentx);
+}
+
+/* 行文本：与 demo 的三栏行内边距一致 */
+html[data-ui='v2'] .three-way-merge .twm-line-same,
+html[data-ui='v2'] .three-way-merge .twm-line-added,
+html[data-ui='v2'] .three-way-merge .twm-line-removed,
+html[data-ui='v2'] .three-way-merge .twm-line-padding,
+html[data-ui='v2'] .three-way-merge .twm-line-placeholder,
+html[data-ui='v2'] .three-way-merge .twm-editable {
+  padding: 0 16px;
+}
+
+/* 差异行的颜色与 three-way-merge.css 原值一致，这里换成 demo 的红绿原值 */
+html[data-ui='v2'] .three-way-merge .twm-line-removed {
+  background: rgba(192, 57, 43, 0.055);
+  box-shadow: inset 3px 0 0 rgba(192, 57, 43, 0.38);
+  color: var(--redtx);
+}
+
+html[data-ui='v2'] .three-way-merge .twm-line-added {
+  background: rgba(78, 122, 84, 0.05);
+  box-shadow: inset 3px 0 0 rgba(78, 122, 84, 0.38);
+  color: var(--greentx);
+}
+
+html[data-ui='v2'] .three-way-merge .twm-line-placeholder {
+  color: var(--faint);
+}
+
+html[data-ui='v2'] .three-way-merge .twm-cell.processed {
+  opacity: 0.45;                           /* demo 已采用行的淡化（3287/3289） */
+}
+
+/* 采用按钮（demo 3290）：28px 宽、无边框、方角 */
+html[data-ui='v2'] .three-way-merge .twm-adopt {
+  width: 28px;
+  background: rgba(61, 110, 143, 0.1);
+  color: var(--info);
+}
+
+html[data-ui='v2'] .three-way-merge .twm-adopt:hover {
+  background: var(--info);
+  color: var(--white);
+}
+
+html[data-ui='v2'] .three-way-merge .twm-adopt.adopted {
+  background: rgba(78, 122, 84, 0.14);
+  color: var(--greentx);
+}
+
+html[data-ui='v2'] .three-way-merge .twm-adopt.adopted:hover {
+  background: var(--red);
+  color: var(--white);
+}
+
+/* 可编辑结果列：焦点态按 demo 的墨纸语言给一道朱砂内描边 */
+html[data-ui='v2'] .three-way-merge .twm-editable:focus {
+  /* 同 484 行：特异性与集中覆盖齐平，就地接 --v2-hover（深色主题下同属交互高亮） */
+  background: var(--v2-hover, rgba(255, 255, 255, 0.4));
+  box-shadow: inset 0 0 0 1px rgba(var(--seal-rgb), 0.18);
+}
+
+/* ==========================================================================
+ * 十一、关系图（Canvas 垫片 · 已由 DOM 版取代）
+ *
+ * 历史：产品的 RelationshipGraph.tsx 是 Canvas 2D 手绘（圆 + 文字 + 直线），
+ *   纯 CSS 无法把 canvas 内部改造成 demo 的 DOM + SVG 结构，于是这里退一步，
+ *   只把 canvas 所在容器与缩放工具条换成 demo .relation-canvas / .relation-zoom
+ *   的观感（底衬、暗角、工具条尺寸与 hover 色）。
+ *
+ * 现状（先生：关系图谱移植）：v2「墨纸书斋」已改用 RelationMap.tsx —— 真正的
+ *   demo 版 DOM 图谱（视角权重化圈圈、SVG 曲线连线、右侧人物简介面板），
+ *   样式见 src/styles/redesign/v2-relation.css。Canvas 版只在 v1 经典界面继续
+ *   使用，而 v1 不带 data-ui='v2'，所以下面这些规则不会再命中任何元素。
+ *   保留它们只为不改动既有文件的既有行为；关系图谱的新样式一律写进
+ *   v2-relation.css，不要加在这里。
+ * ======================================================================== */
+
+/* 画布容器：demo .relation-canvas 的底衬 + 暗角（demo 874–878 / 1246–1247） */
+html[data-ui='v2'] .skin-workspace-page [class~="relative"][class~="h-full"][class~="overflow-hidden"]:has(> canvas[role='img']) {
+  background: var(--manuscript);
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="relative"][class~="h-full"][class~="overflow-hidden"]:has(> canvas[role='img'])::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at center, transparent 48%, rgba(80, 60, 35, 0.045) 100%); /* demo .relation-canvas::after（878） */
+}
+
+/* canvas 本体：demo 的画布光标语言（.relation-node{cursor:grab}，demo 886） */
+html[data-ui='v2'] .skin-workspace-page canvas[role='img'] {
+  cursor: grab;
+  background: transparent;
+}
+
+html[data-ui='v2'] .skin-workspace-page canvas[role='img']:active {
+  cursor: grabbing;
+}
+
+/* 缩放工具条 → demo .relation-zoom（demo 1114–1118）：
+   圆角 0、浅纸底 .94、1px line、轻阴影；按钮 29×28、左分隔线、hover 朱砂薄雾。 */
+html[data-ui='v2'] .skin-workspace-page [class~="absolute"][class~="right-3"][class~="top-3"][class~="rounded-md"][class~="border"] {
+  right: 16px;
+  top: 14px;
+  border-radius: 0;
+  background: rgba(250, 247, 238, 0.94);   /* demo（1114） */
+  border-color: var(--line);
+  box-shadow: 0 3px 10px rgba(70, 50, 30, 0.04);
+  padding: 0;
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="absolute"][class~="right-3"][class~="top-3"][class~="rounded-md"][class~="border"] > button {
+  width: 29px;
+  height: 28px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink2);
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="absolute"][class~="right-3"][class~="top-3"][class~="rounded-md"][class~="border"] > button:first-child {
+  border-left: 0;
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="absolute"][class~="right-3"][class~="top-3"][class~="rounded-md"][class~="border"] > button:hover {
+  background: rgba(var(--seal-rgb), 0.045);
+  color: var(--seal);
+}
+
+/* 中间的缩放百分比（demo 1118 的第二个按钮：46px、--muted、10px） */
+html[data-ui='v2'] .skin-workspace-page [class~="absolute"][class~="right-3"][class~="top-3"][class~="rounded-md"][class~="border"] > span {
+  min-width: 46px;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+ * 十二、剧情树 / 时间轴矩阵（demo PLOT_TREE 时间轴 2744–2757）
+ *   表头：padding:12px 0 7px、下边线 --line2、章号 9.5px/700/字距 .06em（demo 2744–2745）
+ *   事件：圆角 99px 的 pill、3px 10px 内边距、10.5px/600（demo plotPill 2716）
+ * ======================================================================== */
+
+html[data-ui='v2'] .skin-workspace-page table[class~="border-collapse"] {
+  font-size: var(--v2-fs-note);
+  color: var(--ink2);
+}
+
+html[data-ui='v2'] .skin-workspace-page table[class~="border-collapse"] th {
+  border-color: var(--line);
+  font-weight: 700;
+}
+
+html[data-ui='v2'] .skin-workspace-page table[class~="border-collapse"] thead th {
+  border-bottom: 1px solid var(--line2);   /* demo 时间轴表头（2744） */
+  padding: 12px 8px 7px;
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+}
+
+html[data-ui='v2'] .skin-workspace-page table[class~="border-collapse"] td {
+  border-color: var(--line);
+}
+
+/* 泳道左栏：线名衬线 + 类型小字（demo 2753） */
+html[data-ui='v2'] .skin-workspace-page table[class~="border-collapse"] th[class~="sticky"] span[class~="text-sm"] {
+  font-family: var(--serif);
+  font-size: var(--v2-fs-lead);
+  color: var(--ink);
+}
+
+/* 单元格里的事件卡 → demo 的事件 pill：朱砂薄雾、99px 圆角、10.5px/600 */
+html[data-ui='v2'] .skin-workspace-page table[class~="border-collapse"] td > div > button[class~="rounded"] {
+  border-radius: var(--v2-badge-radius);
+  border-color: rgba(var(--seal-rgb), 0.3);
+  background: rgba(var(--seal-rgb), 0.1);
+  color: var(--seal);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 3px 10px;
+}
+
+/* ==========================================================================
+ * 十三、差异对比（DiffViewer）
+ *   行底与行字的红 / 绿取自产品内联的 color-mix(... var(--color-error/success))，
+ *   §一 已把这两个变量换成 demo 的 --red / --green，因此差异配色自动对齐
+ *   demo 三方合并的红绿语言；这里只补列头与行距的排版。
+ * ======================================================================== */
+
+html[data-ui='v2'] .skin-workspace-page [class~="font-mono"][class~="text-xs"][class~="leading-5"] {
+  font-family: var(--mono);
+  font-size: var(--v2-fs-note);
+  line-height: 1.7;
+}
+
+/* 列头（原稿 / 修改后）：demo 合并视图表头的 6px 16px、11px/700（demo 3272） */
+html[data-ui='v2'] .skin-workspace-page [class~="px-3"][class~="py-1"][class~="text-xs"][class~="font-medium"][class~="flex-shrink-0"] {
+  padding: 6px 16px;
+  font-size: var(--v2-fs-caption);
+  font-weight: 700;
+}
+
+/* ==========================================================================
+ * 十四、空状态与辅助文字（demo .ai-output-empty 793 / .relation-hint 904）
+ * ======================================================================== */
+
+html[data-ui='v2'] .skin-workspace-page [class~="flex-col"][class~="items-center"][class~="justify-center"][class~="gap-2"],
+html[data-ui='v2'] .skin-workspace-page [class~="flex-col"][class~="items-center"][class~="justify-center"][class~="gap-3"] {
+  color: var(--muted);
+}
+
+html[data-ui='v2'] .skin-workspace-page [class~="flex-col"][class~="items-center"][class~="justify-center"][class~="gap-2"] > span[class~="text-sm"],
+html[data-ui='v2'] .skin-workspace-page [class~="flex-col"][class~="items-center"][class~="justify-center"][class~="gap-3"] > span[class~="text-sm"] {
+  font-family: var(--serif);
+  font-size: var(--v2-fs-caption);
+  line-height: 1.9;
+  letter-spacing: 0.02em;
+}
+
+/* 段落级说明文字（叙事线索/剧情树的状态提示）统一到 demo 的辅助字层级 */
+html[data-ui='v2'] .skin-workspace-page p[class~="text-xs"] {
+  font-size: var(--v2-fs-caption);
+  line-height: 1.8;
+  color: var(--muted);
+}
+
+/* 编辑器内容区的小结/进度小字（已采用 x/y 处变更之类）取等宽数字 */
+html[data-ui='v2'] .skin-workspace-page [class~="tabular-nums"] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+ * 十五、剧情树「新建计划」表单的收尾动作
+ *
+ * 先生反馈：保存按钮孤零零贴在表单左下角，跟右侧大片空白对比很突兀。
+ * demo 的表单收尾一律靠右下收束（.settings-actions 配 .spacer 撑开左留白），
+ * 这里照同一语义把动作区推到右下角。
+ *
+ * 载体是钩子类 .v2-plan-actions：它在 v1 里不匹配任何规则，只是个普通块级
+ * div，因此经典界面的排版与改动前逐像素一致（v1 保真是硬约束）。
+ * ======================================================================== */
+
+html[data-ui='v2'] .v2-plan-actions {
+  display: flex;
+  justify-content: flex-end;
+  /* 先生：保存计划按钮下移 3px —— 与上方「作者意图」文本域拉开一点呼吸 */
+  margin-top: 3px;
+}
+
+/* ==========================================================================
+ * 十六、按钮的「按下去」手感（先生：不要改按钮文字/状态）
+ *
+ * 早先的做法是保存成功后把按钮改成「已保存」并弹一下 —— 先生指出这行不通：
+ * 有些按钮点完就切换成别的按钮了（草稿的保存键一保存就随 isDirty 消失），
+ * 反馈还没来得及看就没了。
+ *
+ * 正解是把手感做在**按下的那一刻**：手指压下去时按钮轻微内缩，松开后回弹
+ * 稍慢一点（不是瞬间弹回），让人确实感觉到「这一下按到了」。瞬时反馈不依赖
+ * 任何后续状态，按钮接不接着切换都不影响这一下的体感。
+ * 居中缩放，因此不会挤动旁边的按钮。
+ * ======================================================================== */
+
+html[data-ui='v2'] .btn {
+  transition:
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+html[data-ui='v2'] .btn:active,
+html[data-ui='v2'] .v2-btn:active {
+  transform: scale(0.97);
+  /* 按下快、回弹慢：离开 :active 后由上面那条 220ms 的曲线接管 */
+  transition: transform 90ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui='v2'] .btn:active,
+  html[data-ui='v2'] .v2-btn:active {
+    transform: none;
+  }
+}
+
+

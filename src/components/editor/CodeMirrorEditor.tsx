@@ -3,15 +3,20 @@ import CodeMirror, { ReactCodeMirrorRef, EditorView, ViewUpdate } from '@uiw/rea
 import { keymap } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { languages } from '@codemirror/language-data'
-import { EditorState } from '@codemirror/state'
+import { EditorState, Prec } from '@codemirror/state'
+import { livePreview, paperHeadFacet, type PaperHead } from './live-preview'
+import { paragraphGapCaretSnap } from './paragraph-gap-caret'
 import { openSearchPanel, closeSearchPanel, search } from '@codemirror/search'
-import { Sparkles, Bold, Check } from 'lucide-react'
+import { Sparkles, Bold, Check, Tag, SquareDashed } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { createGenerationRuntime } from '../../services/generation/generation-runtime'
 import type { GenerationReasoningStage } from '../../shared/reasoning-types'
 import { countDraftUnits } from '../../shared/draft-units'
 import { useLocaleStore } from '../../stores/locale-store'
+import { useUiVersionStore, isModernShell } from '../../stores/ui-version-store'
 import { useProjectStore } from '../../stores/project-store'
+import { useWorldSettingStore } from '../../stores/world-setting-store'
+import { toast } from '../ui/Toast'
 import { getActiveProjectSessionContext } from '../../shared/project-session-context'
 import { resolveWritingLanguage } from '../../shared/writing-language'
 import { promptLanguageText } from '../../services/prompt-language'
@@ -27,6 +32,8 @@ export type CodeMirrorEditorProps = {
   placeholder?: string
   hideStatusBar?: boolean
   mode?: 'document' | 'prose'
+  /** 纸页页眉：章节名 + 「书名 · 第 N 章」；为空则不渲染页眉。 */
+  paperHead?: PaperHead | null
 }
 
 type EditorAIAction = {
@@ -51,6 +58,84 @@ const EDITOR_AI_GENERATION_BUDGET = Object.freeze({
   deadlineMs: 120_000,
 })
 
+/**
+ * markdown 的结构行：列表、引用、标题、围栏代码块。
+ * 这些行上的 Enter 要保留「续写标记」的语义（`- `、`> ` 该被带下去），
+ * 因此让位给 CodeMirror 自己的续写命令，本编辑器不插手。
+ */
+const MARKDOWN_STRUCTURE_LINE = /^\s*(?:[-*+]|\d+[.)])\s|^\s*>|^\s*#{1,6}(?:\s|$)|^\s*(?:```|~~~)/
+
+/**
+ * 普通正文段落上的 Enter —— 起一个新段落。
+ *
+ * 先生：「enter 必须两下才能正确到内容。」
+ *
+ * 两件事叠在一起，都得在这里解决：
+ *
+ * ① **段落分隔空行**。本项目的排版约定是「段落与段落之间必须保留一个空行作为分隔」
+ *    （见 services/prompt-templates.ts 的强制排版要求），AI 生成的草稿也全是这个格式。
+ *    而 markdown 语言包默认把 Enter 绑到「续写标记」命令，它只插入**一个**换行 ——
+ *    于是作者在段末按一次 Enter，得到的是「紧贴上一段的新行」，段落结构与文档其余部分
+ *    不一致，必须再按一次才凑出正确的空行 —— 正是「enter 要两下」。
+ *    所以：当前行**有内容**时插入两个换行（空行 + 新段落行）；
+ *    当前行本来就空着时只插入一个（作者是想再加一个空行）。
+ *
+ * ② **继承缩进**。那个命令还会把当前行的行首缩进复制到新行，新行里就躺着看不见的空格，
+ *    作者按 Backspace 时第一下只清掉它们、换行符还在 —— 先生报的「要按两次 Backspace」。
+ *    正文段落的缩进本来就由 CSS 的 `text-indent: 2em` 提供（行内缩进字符还会被
+ *    live-preview 隐藏），新行不需要任何行内缩进。
+ *
+ * 边界：只接管「空选区 + 非 markdown 结构行」。
+ *   · 有选区时让位 —— 默认行为会先删掉选区再换行；
+ *   · 输入法组合期间让位 —— 那时 Enter 是确认候选词，不该被改写。
+ */
+function enterPlainParagraph(target: EditorView): boolean {
+  if (target.state.readOnly) return false
+  if (target.composing) return false
+  const range = target.state.selection.main
+  if (!range.empty) return false
+  const line = target.state.doc.lineAt(range.head)
+  if (MARKDOWN_STRUCTURE_LINE.test(line.text)) return false
+  const br = target.state.lineBreak
+  const insert = line.text.trim() === '' ? br : br + br
+  target.dispatch({
+    changes: { from: range.head, insert },
+    selection: { anchor: range.head + insert.length },
+  })
+  return true
+}
+
+/**
+ * Backspace 与上面的 Enter 对称：一次删掉刚起的那一段。
+ *
+ * 先生：「删除要按两次 Backspace 才能正确返回上一段落。」
+ *
+ * Enter 一次插入了「空行 + 新段落行」两个换行，若 Backspace 只删一个，
+ * 光标会停在空行行首（而不是回到上一段末尾），作者得再按一次 —— 这就是「两次」。
+ * 因此：当光标停在**段落首行行首**、且它上面正好是「一段 + 一个空行」时，
+ * 一次删掉这两个换行，直接回到上一段末尾。其余位置一律让位给默认行为。
+ */
+function backspaceParagraphBreak(target: EditorView): boolean {
+  if (target.state.readOnly) return false
+  if (target.composing) return false
+  const { state } = target
+  const range = state.selection.main
+  if (!range.empty) return false
+  const head = range.head
+  const line = state.doc.lineAt(head)
+  // 只在行首、且该行上面是「非空段末行 + 空行」的结构上接管
+  if (head !== line.from) return false
+  if (line.number < 3) return false
+  const blank = state.doc.line(line.number - 1)
+  const paragraph = state.doc.line(line.number - 2)
+  if (blank.text.trim() !== '' || paragraph.text.trim() === '') return false
+  target.dispatch({
+    changes: { from: paragraph.to, to: head },
+    selection: { anchor: paragraph.to },
+  })
+  return true
+}
+
 export default function CodeMirrorEditor({
   content,
   editable = true,
@@ -59,6 +144,7 @@ export default function CodeMirrorEditor({
   onCharCountChange,
   placeholder,
   mode = 'document',
+  paperHead = null,
 }: CodeMirrorEditorProps) {
   const uiText = useLocaleStore(s => s.text)
   const uiLocale = useLocaleStore(s => s.locale)
@@ -114,30 +200,75 @@ export default function CodeMirrorEditor({
     }
   }, [aiResult])
 
-  const handleUpdate = useCallback((v: ViewUpdate) => {
-    if (v.docChanged) {
-      const newText = v.state.doc.toString()
-      lastEmittedContentRef.current = newText
-      onChange?.(newText)
-
-      const cnt = countDraftUnits(newText)
-      onCharCountChange?.(cnt)
+  /**
+   * 字数统计的调度器。
+   *
+   * 实测（19.6 万字的正文，蓝汐用 vitest browser 基准量过）：
+   * doc.toString() 只花 0.00ms（Text 是 rope，很快），而 countDraftUnits() 要
+   * **23.90ms** —— 它内部有 normalize + 3 次全量 replace + 2 次全量 match。
+   * 逐键调用它就是手感杀手，因此防抖到打字停稳后再算一次：
+   * 字数只是面板上的读数，慢 300ms 完全无感，但每个键都省下约 24ms。
+   */
+  const charCountTimerRef = useRef<number | null>(null)
+  const onCharCountChangeRef = useRef(onCharCountChange)
+  useEffect(() => {
+    onCharCountChangeRef.current = onCharCountChange
+  })
+  useEffect(() => () => {
+    if (charCountTimerRef.current !== null) {
+      window.clearTimeout(charCountTimerRef.current)
+      charCountTimerRef.current = null
     }
+  }, [])
 
-    if (v.selectionSet || v.docChanged || v.geometryChanged) {
-      const sel = v.state.selection.main
-      if (sel.empty || sel.to - sel.from < 1) {
-        setBubbleOpen(false)
-        setSelectionRange(null)
-      } else {
-        setSelectionRange({ from: sel.from, to: sel.to })
-        // 交由下方的 useEffect 进行精准防越界座标计算与位置同步
-        if (!aiResult) {
-          setBubbleOpen(true)
+  const scheduleCharCount = useCallback((text: string) => {
+    if (charCountTimerRef.current !== null) {
+      window.clearTimeout(charCountTimerRef.current)
+    }
+    charCountTimerRef.current = window.setTimeout(() => {
+      charCountTimerRef.current = null
+      onCharCountChangeRef.current?.(countDraftUnits(text))
+    }, 300)
+  }, [])
+
+  /**
+   * 先生（打字手感 / 标点重复上屏）：
+   * @uiw/react-codemirror 会把 onUpdate 直接塞进扩展数组，并把它列进
+   * useLayoutEffect 的依赖 —— onUpdate 的函数引用一变，整个编辑器状态就被重建。
+   * 而这段逻辑依赖 onChange（DraftEditor 是内联箭头函数，每次渲染都是新引用），
+   * 于是每次敲字都会走一遍「store 更新 → 父组件重渲染 → onUpdate 换引用 →
+   * 编辑器重建」，输入法组合被反复打断：中文标点重复上屏、手感发滞。
+   * 改法：用 ref 转发最新闭包，对 @uiw 而言 onUpdate 永远指向同一个函数。
+   */
+  const updateHandlerRef = useRef<(v: ViewUpdate) => void>(() => {})
+  useEffect(() => {
+    updateHandlerRef.current = (v: ViewUpdate) => {
+      if (v.docChanged) {
+        const newText = v.state.doc.toString()
+        lastEmittedContentRef.current = newText
+        onChange?.(newText)
+
+        // 注意：onChange 保持逐键实时（数据安全优先），只把「贵而不紧急」的
+        // 字数统计挪到防抖队列里。
+        scheduleCharCount(newText)
+      }
+
+      if (v.selectionSet || v.docChanged || v.geometryChanged) {
+        const sel = v.state.selection.main
+        if (sel.empty || sel.to - sel.from < 1) {
+          setBubbleOpen(false)
+          setSelectionRange(null)
+        } else {
+          setSelectionRange({ from: sel.from, to: sel.to })
+          // 交由下方的 useEffect 进行精准防越界座标计算与位置同步
+          if (!aiResult) {
+            setBubbleOpen(true)
+          }
         }
       }
     }
-  }, [onChange, onCharCountChange, aiResult])
+  })
+  const handleUpdate = useCallback((v: ViewUpdate) => updateHandlerRef.current(v), [])
 
   // 监听滚动与缩放，实时更新 Bubble Menu 坐标
   useEffect(() => {
@@ -233,10 +364,43 @@ export default function CodeMirrorEditor({
   }), [mode])
 
   // 构建扩展
+  /** 界面版本：实时预览（成书纸页）只在现代外壳（v2 墨纸书斋 / v3 时尚杂志）下启用，便于随时回滚。 */
+  const uiVersion = useUiVersionStore((s) => s.uiVersion)
+
+  /**
+   * 先生（打字手感 / 标点重复上屏）：
+   *
+   * paperHead 由调用方按「每次渲染新建对象字面量」的方式传入（见 DraftEditor
+   * 的 paperHead={meta ? {…} : null}）。若把它直接放进 extensions 的依赖，
+   * 父组件每次渲染都会重建整个扩展数组，而 @uiw/react-codemirror 一旦发现
+   * extensions 变化就会对编辑器做一次 reconfigure —— 打字时正文一改、父组件
+   * 就重渲染、编辑器紧接着 reconfigure，正好打断中文输入法的组合过程，
+   * 于是标点会重复上屏、手感发滞。
+   *
+   * 这里按**内容值**记忆：只有章节名或副标题真正变化时才重建扩展。
+   */
+  const paperHeadTitle = paperHead?.title ?? null
+  const paperHeadSubtitle = paperHead?.subtitle ?? ''
+  const stablePaperHead = useMemo<PaperHead | null>(
+    () => (paperHeadTitle === null ? null : { title: paperHeadTitle, subtitle: paperHeadSubtitle }),
+    [paperHeadTitle, paperHeadSubtitle],
+  )
+
   const extensions = useMemo(() => {
     const exts = [
       search({ top: true }),
       EditorView.lineWrapping,
+      /**
+       * 段落缩进键。
+       *
+       * 注意：这里**刻意不加 Prec 提权**。加了之后 Tab 会走本处理器（插入两个 em 空格
+       * U+2003），而当前的实际行为是 CodeMirror 默认缩进（两个普通半角空格）。
+       * 两者在屏幕上**看不出差别** —— live-preview 会把行首缩进空白字符隐藏掉，
+       * 缩进统一由 CSS 的 `text-indent: 2em` 提供（见 v2-editor.css）。
+       *
+       * 先生明确说过「tab 原本就是正确的」，且既有浏览器测试断言的是两个普通空格；
+       * 所以这里保持既有行为不变，不为了「与注释一致」去改动作者摸熟了的手感。
+       */
       keymap.of([
         {
           key: 'Tab',
@@ -277,13 +441,87 @@ export default function CodeMirrorEditor({
         "close": "关闭"
       } : {})
     ]
-    if (mode === 'document') {
+    // prose（正文）同样加载 markdown 语法：实时预览要靠语法树定位标记字符
+    if (mode === 'document' || mode === 'prose') {
+      /**
+       * 先生（「删除时按两次 Backspace 才会正确」）：见 enterPlainParagraph 的说明。
+       *
+       * 只在现代外壳接管 —— v1 没有 CSS 提供的段落缩进，行内那两个缩进字符是**必需的**，
+       * 在那里让 Enter 继承缩进才是正确行为，不能一并改掉。
+       *
+       * 用 Prec.high 是因为 markdown() 自己也会绑一份 Enter（默认优先级），
+       * 不提权就压不住它 —— 这一点与上面 Tab 的处理刻意不同（Tab 保持既有手感不变）。
+       */
+      if (isModernShell(uiVersion)) {
+        exts.push(Prec.high(keymap.of([
+          { key: 'Enter', run: enterPlainParagraph },
+          { key: 'Backspace', run: backspaceParagraphBreak },
+        ])))
+      }
       exts.push(markdown({ base: markdownLanguage, codeLanguages: languages }))
     }
+    // 实时预览：把 markdown 标记从视图里抹掉，编辑时直接呈现成书排版
+    if (mode === 'prose' && isModernShell(uiVersion)) {
+      exts.push(livePreview())
+    }
+    /**
+     * 先生（第四次报障）：「鼠标能把光标移动到两个段落中间，导致上下文抖动。」
+     *
+     * 段落之间那个空行就是段间距（1.2em），光标一落上去 `.cm-lp-caret-empty`
+     * 就把它展开成完整行高，下方内容被整体推下去 —— 那是为「打字不位移」设计的，
+     * 只该发生在作者主动把光标移过去的时候（Enter / 方向键），不该由鼠标点空白触发。
+     *
+     * 现代外壳专用：v1 皮肤没有压矮空行，也就没有这段间距可点。
+     */
+    if (isModernShell(uiVersion)) {
+      exts.push(paragraphGapCaretSnap())
+    }
+    // 纸页页眉由真实 DOM widget 渲染，随正文一起滚动
+    exts.push(paperHeadFacet.of(stablePaperHead))
     return exts
-  }, [mode, uiLocale])
+  }, [mode, uiLocale, uiVersion, stablePaperHead])
 
   // AI 菜单处理（流式调用，实时显示生成内容）
+  /**
+   * 先生：草稿里选中一个名词，可以直接收进世界观设定。
+   *
+   * 落点刻意是**待确认**而不是直接入库 —— 正文里冒出来的名词未必都值得立条，
+   * 让作者在待确认队列里过一眼再采纳（与 AI 生成的候选走同一条路径）。
+   * 归属分类取当前正在看的分类，作者随后可在待确认里调整。
+   */
+  const handleSaveAsWorldSetting = useCallback(async () => {
+    const view = editorRef.current?.view
+    if (!view || !selectionRange) return
+    const raw = view.state.sliceDoc(selectionRange.from, selectionRange.to).trim()
+    if (!raw) return
+    // 选区可能是「青云宗的山门」这样的片段：按标点与空白切开，取第一个词作条目名。
+    const name = raw
+      .replace(/[\s，。、；：！？"'「」『』（）()《》【】]/g, ' ')
+      .trim()
+      .split(' ')
+      .filter(Boolean)[0] ?? ''
+    if (!name) return
+
+    const store = useWorldSettingStore.getState()
+    const saved = await store.save({
+      category: store.activeCategory,
+      name: name.slice(0, 200),
+      aliases: [],
+      summary: '',
+      content: '',
+      tags: [],
+      importance: 'side',
+      source: 'manual',
+      status: 'pending',
+    })
+    if (saved) {
+      toast.success(uiText(`已加入待确认：「${name}」`, `Added to pending review: “${name}”`))
+      setBubbleOpen(false)
+    } else {
+      toast.error(uiText('收录失败，请重试', 'Could not save. Please try again.'))
+    }
+  }, [selectionRange, uiText])
+
   const handleAIAction = async (action: EditorAIAction) => {
     let runtime: Awaited<ReturnType<typeof createGenerationRuntime>> | null = null
     let requestSequence: number | null = null
@@ -344,6 +582,26 @@ export default function CodeMirrorEditor({
     }
   }
 
+  /**
+   * 先生：气泡菜单上加「全选」—— 一键选中整篇文档。
+   *
+   * 落点刻意是「整篇文档」而不是「当前可见范围」：先生要的是长文里一句话把全文圈起来
+   * （整体复制、整体处理），视线滚到哪儿都不该影响结果。
+   *
+   * 两处细节：
+   * · 选区方向照浏览器 Ctrl+A 的习惯：锚点在文首、光标在文末；
+   * · **不传 scrollIntoView** —— 全选不该把作者正在看的位置弹到文末去，
+   *   视线留在原地，只是高亮铺满全文。
+   */
+  const handleSelectAll = useCallback(() => {
+    const view = editorRef.current?.view
+    if (!view) return
+    view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } })
+    // 点击气泡时焦点已由容器的 onMouseDown preventDefault 保住，这里再兜一次：
+    // 全选之后作者多半紧接着按 Ctrl+C。
+    view.focus()
+  }, [])
+
   const handleAcceptAI = () => {
     const target = aiTargetRef.current
     if (target && aiResult && editorRef.current?.view) {
@@ -389,6 +647,13 @@ export default function CodeMirrorEditor({
     lineNumbers: false,
     foldGutter: false,
     dropCursor: false,
+    /**
+     * 先生（选了字看不到选中反馈）：此前选区交给浏览器原生绘制，全靠一条
+     * 16% 的 ::selection —— 铺在纸白上几乎没有色差。改为 CodeMirror 自绘选区
+     * （.cm-selectionBackground），选区就有了独立图层，颜色由 v2-editor.css
+     * 稳定控制，滚动与重绘时也不会闪。原生 ::selection 仍保留作兜底。
+     */
+    drawSelection: true,
     allowMultipleSelections: false,
     indentOnInput: false,
     highlightActiveLine: false,
@@ -541,6 +806,41 @@ export default function CodeMirrorEditor({
                   <div className="w-[1px] h-3 mx-1" style={{ backgroundColor: 'var(--color-border)' }} />
                 </>
               )}
+              {/*
+                先生：选中名词一键收进世界观设定。
+                刻意不放在上面的 mode === 'document' 分支里 —— 加粗只在该模式显示，
+                而「收录名词」在任何模式下都该可用，否则先生根本看不到它。
+              */}
+              <button
+                className="p-1 rounded flex items-center gap-1 transition-colors"
+                style={{ color: 'var(--color-text-secondary)' }}
+                title={uiText('把选中的名词收录为世界观设定（先进待确认队列）', 'Save the selected term as a world-setting entry (pending review)')}
+                aria-label={uiText('收录为世界观设定', 'Save as a world-setting entry')}
+                onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'var(--color-hover)')}
+                onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
+                onClick={handleSaveAsWorldSetting}
+              >
+                {/* 先生：光一个图标没人看得出能点，配上「收录」二字 */}
+                <Tag size={12} />
+                <span className="text-[10px] tracking-widest">{uiText('收录', 'Save')}</span>
+              </button>
+              {/*
+                先生：气泡菜单上加「全选」。
+                与「收录」同属「对选区本身的操作」，因此紧挨着它，用同一条分隔线与 AI 动作区隔开。
+              */}
+              <button
+                className="p-1 rounded flex items-center gap-1 transition-colors"
+                style={{ color: 'var(--color-text-secondary)' }}
+                title={uiText('选中整篇文档', 'Select the entire document')}
+                aria-label={uiText('全选', 'Select all')}
+                onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'var(--color-hover)')}
+                onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
+                onClick={handleSelectAll}
+              >
+                <SquareDashed size={12} />
+                <span className="text-[10px] tracking-widest">{uiText('全选', 'Select all')}</span>
+              </button>
+              <div className="w-[1px] h-3 mx-1" style={{ backgroundColor: 'var(--color-border)' }} />
               <div
                 className="flex items-center gap-0.5 pl-0.5 pr-1 text-[10px]"
                 style={{ color: 'var(--color-text-muted)' }}

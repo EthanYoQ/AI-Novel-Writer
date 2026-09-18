@@ -71,7 +71,7 @@ describe('character card normalizer', () => {
     expect(cards[0].name).toBe('周砚')
     expect(cards[0].role).toBe('supporting')
     expect(cards[0].abilities).toBe('调查；推理')
-    expect(cards[0].relationships).toBe('')
+    expect(cards[0].relationships).toBe('[]')
   })
 
   it('falls back to source character objects when the local model returns prose instead of JSON', () => {
@@ -87,7 +87,9 @@ describe('character card normalizer', () => {
 
     expect(cards.map((card) => card.name)).toEqual(['燕云', '陈杰波'])
     expect(cards[0].motivation).toBe('证明自己')
-    expect(cards[0].relationships).toContain('燕九鼎')
+    // 「燕九鼎」没有出现在本批角色卡里，无法成为图谱边：原文进关系备注保留，
+    // 既不丢信息，也不再让整张卡的关系降级成自由文本。
+    expect(cards[0].relationshipNotes).toContain('燕九鼎')
   })
 
   it('extracts fenced or prefixed JSON from local model output before normalizing', () => {
@@ -228,7 +230,7 @@ describe('character card normalizer', () => {
     )
   })
 
-  it('preserves free-form relationship notes that are not structured JSON', () => {
+  it('keeps unrecognised relationship text as a relationship note instead of dropping it', () => {
     const source = JSON.stringify({
       characters: [
         { name: '陈默', role: 'protagonist', relationships: '[暂无明确关系]' },
@@ -237,8 +239,13 @@ describe('character card normalizer', () => {
 
     const cards = extractCompleteCharacterCards('', source)
 
+    // 关系字段恒为结构化边数组；解析不出目标的原文进关系备注，一字不丢。
     expect(cards).toEqual([
-      expect.objectContaining({ name: '陈默', relationships: '[暂无明确关系]' }),
+      expect.objectContaining({
+        name: '陈默',
+        relationships: '[]',
+        relationshipNotes: '[暂无明确关系]',
+      }),
     ])
   })
 

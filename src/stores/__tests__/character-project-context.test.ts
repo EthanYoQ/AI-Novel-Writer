@@ -72,7 +72,7 @@ function rosterReadFromCards(cards: CharacterCard[]) {
     entries: cards.map(card => ({
       ...card,
       relationships: [],
-      ...(card.relationships.trim() ? { legacyRelationshipNotes: card.relationships.trim() } : {}),
+      ...(card.relationships.trim() ? { relationshipNotes: card.relationships.trim() } : {}),
     })),
   }
 }

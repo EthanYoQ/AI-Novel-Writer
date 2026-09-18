@@ -175,13 +175,9 @@ export class RepairLegacyCharacterRosterCommand extends BaseWorkflowCommand<stri
         operationId: context.runId,
         expectedRevision: currentSnapshot.revision,
         schemaVersion: CHARACTER_ROSTER_SCHEMA_VERSION,
-        // adoption 不信任 renderer 回传的自由文本字段；主进程会只读取已有
-        // characters 表并重建投影。这里仅提交身份集合做并发校验。
-        entries: currentSnapshot.entries.map((entry) => {
-          const structuredEntry = { ...entry }
-          delete structuredEntry.legacyRelationshipNotes
-          return structuredEntry
-        }),
+        // adoption 不信任 renderer 回传的内容；主进程只读取已有 characters 表
+        // 并重建投影，这里提交的完整条目仅用于身份集合的并发校验。
+        entries: currentSnapshot.entries.map(entry => ({ ...entry })),
         intent: 'legacy_cards_adoption',
         expectedLegacyMarkdown: currentSnapshot.legacyMarkdown ?? '',
       } satisfies CharacterRosterCommitRequest,

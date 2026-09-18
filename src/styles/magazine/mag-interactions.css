@@ -1,0 +1,656 @@
+/* ============================================================================
+ * V3 交互层（Interactions）—— 把「还是 v2 观感」的悬停成组接管
+ *
+ * ── 为什么要有这一层 ────────────────────────────────────────────────────────
+ * 先生 2026-09-17：
+ *   「现在还有一大堆完全是 v2 的效果，包括不限于目录的鼠标悬停交互、
+ *     角色列表的悬停交互等。」
+ * 查证属实。V3 到这一轮为止只重做了「按钮、图标按钮、标签页、侧栏列表行」，
+ * 而 v2 基座里有 **95 条带 :hover 的规则**，大部分还在用 v2 的语言：
+ *
+ *     · 白薄雾       hover 时浮起一层白底 / 墨底      → 观感上就是「变色」
+ *     · 浮动         translateY(-2px) + 投影          → 圆角卡片的语言，不是印刷品
+ *     · 下划线       text-decoration: underline       → 网页链接的语言
+ *
+ * V3 的语言只有四件套（全部由「线、块、字距」构成，一个缩放都不做）：
+ *
+ *     ① 扫入      一块淡栏目色从左缘扫到右缘（240ms）        —— 行的悬停
+ *     ② 起笔      左缘 2px 色标由中点长到通高（260ms）        —— 卡片与分段
+ *     ③ 中心溢满  方印从中心长满（240ms）                    —— 图标按钮
+ *     ④ 呼吸      字距 0.03em → 0.09em（260ms）              —— 文字控件
+ *
+ * 本文件按「组」接管，不做逐条补丁 —— 一处规则管一类元素，
+ * 以后再冒出同类元素时自动跟上。
+ *
+ * ── 分家纪律 ────────────────────────────────────────────────────────────────
+ * 每条规则都带 `html[data-ui='v2'][data-mag]`：v2 墨纸书斋与 v1 经典界面下
+ * 一条都不匹配，逐像素不变。本文件只覆盖「观感」，不动任何尺寸与布局 ——
+ * 行高、宽高、内距一律不碰（那些是 v2 与业务代码的契约）。
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 一、图标按钮组 → 中心溢满
+ * 各种「头部的图标按钮」散落在十几个类名里（.icobtn / .tool-btn / .draft-trash …），
+ * 它们共用同一套行为，所以成组处理。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] :is(
+  .icobtn,
+  .tool-btn,
+  .relation-tool,
+  .relation-zoom button,
+  .draft-trash,
+  .ws-cat-remove,
+  .tb-win-close,
+  .relation-detail-btn
+) {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: var(--mag-r-hair);
+  transition:
+    color 180ms cubic-bezier(0.2, 0.7, 0.3, 1),
+    background-color 180ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+html[data-ui='v2'][data-mag] :is(
+  .icobtn,
+  .tool-btn,
+  .relation-tool,
+  .relation-zoom button,
+  .draft-trash,
+  .ws-cat-remove,
+  .tb-win-close,
+  .relation-detail-btn
+)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--mag-sec, var(--seal)) 16%, transparent);
+  transform: scale(0);
+  transition: transform 240ms cubic-bezier(0.16, 0.84, 0.24, 1);
+  pointer-events: none;
+}
+
+html[data-ui='v2'][data-mag] :is(
+  .icobtn,
+  .tool-btn,
+  .relation-tool,
+  .relation-zoom button,
+  .draft-trash,
+  .ws-cat-remove,
+  .tb-win-close,
+  .relation-detail-btn
+):hover::before {
+  transform: scale(1);
+}
+
+html[data-ui='v2'][data-mag] :is(
+  .icobtn,
+  .tool-btn,
+  .relation-tool,
+  .relation-zoom button,
+  .draft-trash,
+  .ws-cat-remove,
+  .tb-win-close,
+  .relation-detail-btn
+):hover {
+  /* v2 的白底浮起 / 淡红底一律让位给「中心溢满」 */
+  background: transparent;
+  color: var(--ink);
+}
+
+/* 禁用态不响应（否则点不动的按钮看起来还能点） */
+html[data-ui='v2'][data-mag] :is(.relation-tool, .draft-trash):disabled:hover::before {
+  transform: scale(0);
+}
+
+/* 删除类按钮：溢满用红（先生定规：删除是红色的） */
+html[data-ui='v2'][data-mag] .draft-trash:hover {
+  color: var(--redtx);
+}
+
+html[data-ui='v2'][data-mag] .draft-trash:hover::before {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+}
+
+/* ==========================================================================
+ * 二、列表行组 → 扫入
+ * 版本行、终稿行、伏笔导航行、架构导航行、知识库文档…它们都是「一行一行的东西」，
+ * 所以共用 V3 的行悬停语言：色块从左缘扫进来，底色本身保持透明。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] :is(
+  .draft-version-row,
+  .final-row,
+  .thread-nav-row,
+  .archive-nav-row,
+  .knowledge-doc,
+  .cc-candidate-row,
+  .ws-candidate-row,
+  .arch-ai-step
+) {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  transition: color 180ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+html[data-ui='v2'][data-mag] :is(
+  .draft-version-row,
+  .final-row,
+  .thread-nav-row,
+  .archive-nav-row,
+  .knowledge-doc,
+  .cc-candidate-row,
+  .ws-candidate-row,
+  .arch-ai-step
+)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--mag-sec, var(--seal)) 9%, transparent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 240ms cubic-bezier(0.16, 0.84, 0.24, 1);
+  pointer-events: none;
+}
+
+html[data-ui='v2'][data-mag] :is(
+  .draft-version-row,
+  .final-row,
+  .thread-nav-row,
+  .archive-nav-row,
+  .knowledge-doc,
+  .cc-candidate-row,
+  .ws-candidate-row,
+  .arch-ai-step
+):hover::after {
+  transform: scaleX(1);
+}
+
+html[data-ui='v2'][data-mag] :is(
+  .draft-version-row,
+  .final-row,
+  .thread-nav-row,
+  .archive-nav-row,
+  .knowledge-doc,
+  .cc-candidate-row,
+  .ws-candidate-row,
+  .arch-ai-step
+):hover {
+  background: transparent;
+}
+
+/* 行尾的「打开 / 删除」在悬停整行时才出现 —— 这一条原本就有，保留行为、
+   只把它的显影交给同一拍（不再另起一套过渡） */
+html[data-ui='v2'][data-mag] .knowledge-doc:hover .knowledge-doc-open,
+html[data-ui='v2'][data-mag] .draft-version-row:hover .draft-trash,
+html[data-ui='v2'][data-mag] .final-row:hover .draft-trash {
+  transition: opacity 200ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+/* ==========================================================================
+ * 三、卡片组 → 起笔（去浮动、去投影）
+ * v2 的卡片悬停是 translateY(-2px) + 投影 —— 那是圆角卡片的语言。
+ * 印刷品不浮起来，它只是**被圈出来**：左缘长出一道色标。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] :is(.skin-card, .ws-entry-card) {
+  position: relative;
+  transition:
+    border-color 200ms cubic-bezier(0.2, 0.7, 0.3, 1),
+    transform 200ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+html[data-ui='v2'][data-mag] :is(.skin-card, .ws-entry-card):hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--mag-sec, var(--seal));
+}
+
+html[data-ui='v2'][data-mag] :is(.skin-card, .ws-entry-card)::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 0;
+  z-index: 1;
+  background: var(--mag-sec, var(--seal));
+  transform: translateY(-50%);
+  transition: height 260ms cubic-bezier(0.16, 0.84, 0.24, 1);
+}
+
+html[data-ui='v2'][data-mag] :is(.skin-card, .ws-entry-card):hover::before {
+  height: 100%;
+}
+
+/* ==========================================================================
+ * 四、文字链组 → 底线下划
+ * v2 用 text-decoration: underline（网页链接的语言）。
+ * V3 让一条 1px 线从左端划到右端 —— 与按钮的扫入同一族，但更细。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .settings-link {
+  background-image: linear-gradient(var(--seal), var(--seal));
+  background-repeat: no-repeat;
+  background-position: left bottom;
+  background-size: 0 1px;
+  transition: background-size 260ms cubic-bezier(0.16, 0.84, 0.24, 1);
+}
+
+html[data-ui='v2'][data-mag] .settings-link:hover {
+  text-decoration: none;
+  background-size: 100% 1px;
+}
+
+/* ==========================================================================
+ * 五、关系图节点 → 墨线取代投影
+ * v2 悬停是给头像加一层投影（浮起来）；V3 的图形语言里没有「浮起」，
+ * 改用**描边**：悬停一圈浅栏目色，选中一圈墨线 —— 与方形印签同一套。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .relation-node:hover .portrait {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--mag-sec, var(--seal)) 55%, transparent) !important;
+}
+
+html[data-ui='v2'][data-mag] .relation-node.selected .portrait {
+  box-shadow: inset 0 0 0 2px var(--ink) !important;
+}
+
+html[data-ui='v2'][data-mag] .relation-node.relation-focus-in .relation-label {
+  /* 保留 v2 的聚焦动画（那是信息，不是装饰） */
+  animation: v2RelationFocus 0.4s ease-out;
+}
+
+/* ==========================================================================
+ * 六、杂项：拖拽把手、主题菜单项、技能气泡、任务胶囊
+ * ======================================================================== */
+
+html[data-ui='v2'][data-mag] .grip:hover {
+  /* 拖拽把手只在悬停时亮起一条栏目色细线（v2 是整块变色） */
+  background: transparent;
+  border-left: 2px solid var(--mag-sec, var(--seal));
+}
+
+html[data-ui='v2'][data-mag] :is(.theme-menu .tm-item, .skill-bubble, .statusbar .ai-task-capsule) {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  transition: color 180ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+html[data-ui='v2'][data-mag] :is(.theme-menu .tm-item, .skill-bubble, .statusbar .ai-task-capsule)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--mag-sec, var(--seal)) 12%, transparent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 240ms cubic-bezier(0.16, 0.84, 0.24, 1);
+  pointer-events: none;
+}
+
+html[data-ui='v2'][data-mag] :is(.theme-menu .tm-item, .skill-bubble, .statusbar .ai-task-capsule):hover::after {
+  transform: scaleX(1);
+}
+
+/* ==========================================================================
+ * 七、第二批接管（2026-09-17 续）—— 扫描器量过账之后补的那一批
+ *
+ * v2 基座 95 条带 :hover 的规则，第一批接管 41 条，剩下的散在各处，
+ * 但语言还是 v2 那三种：
+ *   白薄雾（.ap-row / .prompt-head / .writer-task-table tr / .tree-link）
+ *   亮度  （.btn.ink / .btn.ok 用 filter: brightness —— 改个亮度也叫交互？）
+ *   浮动  （.hov / .v6shelf .new）
+ * 全部按四件套（扫入 / 起笔 / 中心溢满 / 下划）重做。
+ * ======================================================================== */
+/* ==========================================================================
+ * （正文）
+ *
+ * 跑了一遍扫描器把账量清楚：v2 基座 95 条带 :hover 的规则，第一批接管了 41 条，
+ * 剩下这些是第二批。它们散在各处，但语言还是 v2 那三种：
+ *   白薄雾（`.ap-row` / `.prompt-head` / `.writer-task-table tr` / `.tree-link`）
+ *   亮度  （`.btn.ink` / `.btn.ok` 用 filter: brightness —— 改个亮度也叫交互？）
+ *   浮动  （`.hov` / `.v6shelf .new`）
+ * 全部按四件套重做。
+ * ======================================================================== */
+
+/* ---- 7.1 图标按钮补充：中心溢满 ---- */
+html[data-ui='v2'][data-mag] :is(.knowledge-doc-open, .relation-character-top .rct-btn) {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: var(--mag-r-hair);
+  transition: color 180ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+html[data-ui='v2'][data-mag] :is(.knowledge-doc-open, .relation-character-top .rct-btn)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--mag-sec, var(--seal)) 16%, transparent);
+  transform: scale(0);
+  transition: transform 240ms cubic-bezier(0.16, 0.84, 0.24, 1);
+  pointer-events: none;
+}
+
+html[data-ui='v2'][data-mag] :is(.knowledge-doc-open, .relation-character-top .rct-btn):hover::before {
+  transform: scale(1);
+}
+
+html[data-ui='v2'][data-mag] :is(.knowledge-doc-open, .relation-character-top .rct-btn):hover {
+  background: transparent;
+  color: var(--ink);
+}
+
+/* ---- 7.2 列表行补充：扫入 ---- */
+html[data-ui='v2'][data-mag] :is(
+  .agent-popover .ap-row,
+  .writer-task-table tr,
+  .prompt-head,
+  .arch-group .tree-link
+) {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background: transparent;
+  transition: color 180ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+html[data-ui='v2'][data-mag] :is(
+  .agent-popover .ap-row,
+  .writer-task-table tr,
+  .prompt-head,
+  .arch-group .tree-link
+)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--mag-sec, var(--seal)) 9%, transparent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 240ms cubic-bezier(0.16, 0.84, 0.24, 1);
+  pointer-events: none;
+}
+
+html[data-ui='v2'][data-mag] :is(
+  .agent-popover .ap-row,
+  .writer-task-table tr,
+  .prompt-head,
+  .arch-group .tree-link
+):hover::after {
+  transform: scaleX(1);
+}
+
+html[data-ui='v2'][data-mag] :is(
+  .agent-popover .ap-row,
+  .writer-task-table tr,
+  .prompt-head,
+  .arch-group .tree-link
+):hover {
+  background: transparent;
+  color: var(--ink);
+}
+
+/* 架构分组的「展开器」：悬停整组时它转起来（原先只是变个颜色） */
+html[data-ui='v2'][data-mag] .arch-group:hover .tree-expander {
+  color: var(--ink);
+  transition: color 180ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+/* ---- 7.3 按钮补充档：去掉「亮度」这种伪交互 ---- */
+html[data-ui='v2'][data-mag] :is(.btn.ink, .btn.ok, .v2-danger-hover) {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  transition: color 200ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+html[data-ui='v2'][data-mag] :is(.btn.ink, .btn.ok, .v2-danger-hover)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 260ms cubic-bezier(0.16, 0.84, 0.24, 1);
+  pointer-events: none;
+}
+
+html[data-ui='v2'][data-mag] :is(.btn.ink, .btn.ok, .v2-danger-hover):hover::before {
+  transform: scaleX(1);
+}
+
+html[data-ui='v2'][data-mag] :is(.btn.ink, .btn.ok, .v2-danger-hover):hover {
+  /* 亮度变化一律让位给扫入 —— 改个亮度不该算作「交互」 */
+  filter: none;
+}
+
+html[data-ui='v2'][data-mag] .v2-danger-hover:hover::before {
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+}
+
+/* ---- 7.4 浮动类：印刷品不浮起来 ---- */
+html[data-ui='v2'][data-mag] :is(.hov, .v6shelf .new) {
+  transition:
+    border-color 200ms cubic-bezier(0.2, 0.7, 0.3, 1),
+    transform 200ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+html[data-ui='v2'][data-mag] :is(.hov, .v6shelf .new):hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--mag-sec, var(--seal));
+}
+
+/* ---- 7.5 分段控件：扫入（v2 是白薄雾 7%） ---- */
+html[data-ui='v2'][data-mag] .st-seg.click {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+html[data-ui='v2'][data-mag] .st-seg.click::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--mag-sec, var(--seal)) 14%, transparent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 220ms cubic-bezier(0.16, 0.84, 0.24, 1);
+  pointer-events: none;
+}
+
+html[data-ui='v2'][data-mag] .st-seg.click:hover {
+  background: transparent;
+}
+
+html[data-ui='v2'][data-mag] .st-seg.click:hover::after {
+  transform: scaleX(1);
+}
+
+/* ---- 7.6 顶栏模型胶囊：悬停时描边取当前栏目色（v2 是固定强调色） ---- */
+html[data-ui='v2'][data-mag] .modelpill:hover {
+  border-color: var(--mag-active-sec, var(--seal));
+}
+
+/* ---- 7.7 三方合并的采纳按钮：颜色语义保留，动作换成扫入 ---- */
+html[data-ui='v2'][data-mag] :is(.three-way-merge .twm-adopt, .three-way-merge .twm-adopt.adopted) {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+html[data-ui='v2'][data-mag] :is(.three-way-merge .twm-adopt, .three-way-merge .twm-adopt.adopted)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--ink);
+  opacity: 0.14;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 240ms cubic-bezier(0.16, 0.84, 0.24, 1);
+  pointer-events: none;
+}
+
+html[data-ui='v2'][data-mag] :is(.three-way-merge .twm-adopt, .three-way-merge .twm-adopt.adopted):hover::before {
+  transform: scaleX(1);
+}
+
+/* ---- 7.8 书架上的书：抽书是物理隐喻，保留；投影换成墨线 ----
+ * 先生的书架本来就是「把书抽出来」——那是实体动作，不属于 v2 的皮肤语言，
+ * 所以 --lift / --yaw 那套倾斜保留。要改的只有那层 drop-shadow：
+ * 印刷品不用投影分层，用线。 */
+html[data-ui='v2'][data-mag] .v6shelf .book:hover {
+  filter: none;
+  box-shadow: 0 0 0 1px var(--mag-active-sec, var(--seal));
+}
+
+/* ---- 7.9 AI 消息里的链接：底线划出来（v2 是 border-bottom 直接换色） ---- */
+html[data-ui='v2'][data-mag] .assistant-content a {
+  background-image: linear-gradient(var(--mag-active-sec, var(--seal)), var(--mag-active-sec, var(--seal)));
+  background-repeat: no-repeat;
+  background-position: left bottom;
+  background-size: 0 1px;
+  transition: background-size 240ms cubic-bezier(0.16, 0.84, 0.24, 1);
+}
+
+html[data-ui='v2'][data-mag] .assistant-content a:hover {
+  background-size: 100% 1px;
+}
+
+/* ---- 7.10 侧栏命令按钮与项目树里的按钮：扫入 ---- */
+html[data-ui='v2'][data-mag] :is(
+  .sidebar-host .writer-command-button,
+  .sidebar-host .writer-project-tree button
+) {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  transition: color 180ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+html[data-ui='v2'][data-mag] :is(
+  .sidebar-host .writer-command-button,
+  .sidebar-host .writer-project-tree button
+)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--mag-sec, var(--seal)) 12%, transparent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 240ms cubic-bezier(0.16, 0.84, 0.24, 1);
+  pointer-events: none;
+}
+
+html[data-ui='v2'][data-mag] :is(
+  .sidebar-host .writer-command-button,
+  .sidebar-host .writer-project-tree button
+):hover::after {
+  transform: scaleX(1);
+}
+
+html[data-ui='v2'][data-mag] :is(
+  .sidebar-host .writer-command-button,
+  .sidebar-host .writer-project-tree button
+):hover {
+  background: transparent;
+  color: var(--ink);
+}
+
+/* ---- 7.11 底部面板的拖拽把手：与侧栏把手同一处理（贴边一线，不整块变色） ---- */
+html[data-ui='v2'][data-mag] .v2-bottom-grip:hover {
+  background: transparent;
+  border-top: 2px solid var(--mag-sec, var(--seal));
+}
+
+/* ---- 7.12 顶栏按钮的变体：与 .tb-btn 同一族 ---- */
+html[data-ui='v2'][data-mag] .tb-btn:disabled {
+  background: transparent;
+}
+
+/* 帮助按钮用实心底（--solid）：文字是白色，透明底会看不清。
+   不跟 --seal 走 —— --seal 在「星汉」主题下是星尘蓝、「夜刊」下是浅珊瑚。 */
+html[data-ui='v2'][data-mag] .tb-btn.tb-quickstart {
+  background: var(--solid);
+  border-color: transparent;
+}
+html[data-ui='v2'][data-mag] .tb-btn.tb-quickstart:hover,
+html[data-ui='v2'][data-mag] .tb-btn.tb-quickstart.on {
+  background: var(--solid-hover);
+  border-color: transparent;
+}
+
+/* ---- 7.13 设定集的排序控件：起笔（v2 是底色与边线一起变） ---- */
+html[data-ui='v2'][data-mag] .ws-sort {
+  position: relative;
+  transition: border-color 200ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+html[data-ui='v2'][data-mag] .ws-sort::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 2px;
+  height: 0;
+  background: var(--mag-sec, var(--seal));
+  transform: translateY(-50%);
+  transition: height 240ms cubic-bezier(0.16, 0.84, 0.24, 1);
+  pointer-events: none;
+}
+
+html[data-ui='v2'][data-mag] .ws-sort:hover {
+  background: transparent;
+  border-color: var(--mag-sec, var(--seal));
+}
+
+html[data-ui='v2'][data-mag] .ws-sort:hover::before {
+  height: 100%;
+}
+
+/* ---- 7.14 工作区与实心面里的「裸按钮」：中心溢满 ----
+ * 这些按钮没有语义类名（v2 靠结构选择器 `.skin-workspace-page > button`、
+ * `.skin-solid-surface main > div:has(h2) > button` 选中它们），样式各异：
+ * 有的无边框、有的带底色。统一给一层极淡的栏目色**从中心漾开** ——
+ * 淡到不会与它们各自的底色打架，但足够说明「这里能点」。 */
+html[data-ui='v2'][data-mag] :is(
+  .skin-workspace-page > button,
+  .skin-solid-surface aside > button,
+  .skin-solid-surface main > div:has(h2) > button
+) {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  transition: color 180ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+html[data-ui='v2'][data-mag] :is(
+  .skin-workspace-page > button,
+  .skin-solid-surface aside > button,
+  .skin-solid-surface main > div:has(h2) > button
+)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--mag-sec, var(--seal)) 12%, transparent);
+  transform: scale(0);
+  transition: transform 220ms cubic-bezier(0.16, 0.84, 0.24, 1);
+  pointer-events: none;
+}
+
+html[data-ui='v2'][data-mag] :is(
+  .skin-workspace-page > button,
+  .skin-solid-surface aside > button,
+  .skin-solid-surface main > div:has(h2) > button
+):hover::before {
+  transform: scale(1);
+}

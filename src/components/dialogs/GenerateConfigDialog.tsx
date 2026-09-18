@@ -141,11 +141,10 @@ export default function GenerateConfigDialog({ isOpen, onClose, onGenerated }: P
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent 
         className="max-w-[520px]"
-        onInteractOutside={e => {
-          // 当全局 Confirm 弹窗弹出时，点击 Confirm （由于渲染在 Body）
-          // 会被 Radix 误认为是 Interact Outside。因此此时屏蔽关闭事件
-          if (confirming) e.preventDefault()
-        }}
+        /* 先生：只认明确的关闭动作 —— 灵感输入与生成勾选填到一半时误点蒙版，
+           等于白写一遍。原先只在全局 Confirm 弹出时才挡（那个 Confirm 渲染在
+           body 上，会被 Radix 误判成外部点击），现在一律不认蒙版点击。 */
+        onInteractOutside={e => e.preventDefault()}
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">

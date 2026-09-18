@@ -8,7 +8,7 @@ import PromptSettings from './PromptSettings'
 import SkillSettings from './SkillSettings'
 import AppearanceSettings from './AppearanceSettings'
 import { useLLMStore } from '../../stores/llm-store'
-import { useThemeStore, FONT_OPTIONS, type FontId } from '../../stores/theme-store'
+import { useThemeStore, FONT_OPTIONS, detectFontAvailability, type FontId } from '../../stores/theme-store'
 import type {
   DiscoveredModel,
   ModelDiscoveryErrorCode,
@@ -90,72 +90,115 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
       style={{ backgroundColor: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}
     >
       <div
-        className="relative flex w-[880px] h-[600px] rounded-2xl overflow-hidden shadow-2xl"
+        className="settings-shell relative flex w-[880px] h-[600px] rounded-2xl overflow-hidden shadow-2xl"
         style={{
           backgroundColor: 'var(--color-editor-bg)',
           border: '1px solid var(--color-border)',
         }}
       >
-        {/* 左侧导航 */}
+        {/* 左侧导航
+            先生：设置面板完全没复现 demo 的观感 —— 根因就在这里：
+            demo 的骨架是 .settings-nav / .settings-nav-head / .settings-nav-section /
+            .settings-item / .settings-nav-foot，而我们的 DOM 里一个都没有，
+            于是 v2-settings.css 那套皮肤的选择器基本命中不了，套皮等于白做。
+            这里把 demo 的骨架类名一一补齐（demo 2353-2359 行的结构），功能一行未动。 */}
         <aside
-          className="flex flex-col w-52 flex-shrink-0 py-5 gap-1"
+          className="settings-nav flex flex-col w-52 flex-shrink-0"
           style={{
             backgroundColor: 'var(--color-sidebar)',
             borderRight: '1px solid var(--color-border)',
           }}
         >
-          {/* 标题 */}
-          <div className="flex items-center gap-2 px-4 mb-4">
-            <Settings2 size={16} style={{ color: 'var(--color-accent)' }} />
-            <span className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
-              {text('设置', 'Settings')}
-            </span>
+          {/* demo .settings-nav-head：<b>设置</b> + 一行副标题 */}
+          <div className="settings-nav-head">
+            <div>
+              <b>{text('设置', 'Settings')}</b>
+              <span>{text('把创作环境调成你的样子', 'Make the workspace yours')}</span>
+            </div>
           </div>
 
-          {SETTINGS_SECTIONS.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => setSection(s.id)}
-              className={cn(
-                'flex items-center gap-2.5 mx-2 px-3 py-2.5 rounded-lg text-left text-sm transition-colors',
-                section === s.id
-                  ? 'bg-[var(--color-accent)] text-white'
-                  : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]',
-              )}
-            >
-              {s.icon}
-              {text(s.label, s.labelEn)}
-            </button>
-          ))}
+          <div className="settings-nav-body">
+            {/* demo .settings-nav-section：分组标签 */}
+            <div className="settings-nav-section">
+              {text('偏好与工作区', 'Preferences & workspace')}
+            </div>
+
+            {SETTINGS_SECTIONS.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setSection(s.id)}
+                className={cn('settings-item', section === s.id && 'on')}
+              >
+                <span className="si-ico">{s.icon}</span>
+                <b>{text(s.label, s.labelEn)}</b>
+              </button>
+            ))}
+          </div>
+
+          {/* demo .settings-nav-foot / .settings-version：品牌 + 版本号 */}
+          <div className="settings-nav-foot">
+            <div className="settings-version">
+              <span>{text('AI 小说作家', 'AI Novel Writer')}</span>
+              <span>v{__APP_VERSION__}</span>
+            </div>
+          </div>
         </aside>
 
         {/* 右侧内容区 */}
-        <main className="flex-1 flex flex-col overflow-hidden">
-          {/* 区域标题栏 */}
+        <main className="settings-main flex-1 flex flex-col overflow-hidden">
+          {/* 区域标题栏
+              先生：设置面板缺了眉标这一行（demo 里是 Appearance / 外观 / 主题与界面皮肤彼此独立…）。
+              补齐后与各子菜单的页头（PageHead）完全同源：
+              朱砂小字英文眉标 → 衬线标题 → 次要色说明。 */}
           <div
-            className="flex items-center justify-between px-6 py-4 flex-shrink-0"
-            style={{ borderBottom: '1px solid var(--color-border)' }}
+            className="settings-top flex items-center justify-between flex-shrink-0"
           >
-            <div>
-              <h2 className="text-base font-semibold" style={{ color: 'var(--color-text)' }}>
-                {(() => { const item = SETTINGS_SECTIONS.find(s => s.id === section); return item ? text(item.label, item.labelEn) : '' })()}
-              </h2>
-              <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                {(() => { const item = SETTINGS_SECTIONS.find(s => s.id === section); return item ? text(item.description, item.descriptionEn) : '' })()}
-              </p>
+            <div className="st-copy min-w-0">
+              {(() => {
+                const item = SETTINGS_SECTIONS.find(s => s.id === section)
+                return (
+                  <>
+                    <div
+                      style={{
+                        fontSize: 9,
+                        fontWeight: 700,
+                        letterSpacing: '0.22em',
+                        color: 'var(--color-accent)',
+                        marginBottom: 5,
+                      }}
+                    >
+                      {item ? item.labelEn.toUpperCase() : ''}
+                    </div>
+                    <h2
+                      style={{
+                        fontFamily: 'var(--serif)',
+                        fontSize: 16,
+                        fontWeight: 600,
+                        letterSpacing: '0.01em',
+                        color: 'var(--color-text)',
+                      }}
+                    >
+                      {item ? text(item.label, item.labelEn) : ''}
+                    </h2>
+                    <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
+                      {item ? text(item.description, item.descriptionEn) : ''}
+                    </p>
+                  </>
+                )
+              })()}
             </div>
             <button
               onClick={onClose}
               aria-label={text('关闭设置', 'Close settings')}
-              className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors hover:bg-[var(--color-hover)]"
+              className="settings-close flex items-center justify-center w-7 h-7 rounded-lg transition-colors"
               style={{ color: 'var(--color-text-muted)' }}
             >
               <X size={16} />
             </button>
           </div>
 
-          {/* 区域内容 */}
-          <div className="flex-1 overflow-y-auto px-6 py-5">
+          {/* 区域内容 —— demo .settings-content */}
+          <div className="settings-content flex-1 overflow-y-auto">
             {section === 'appearance' && <AppearanceSettings />}
             {section === 'llm' && <LLMSection purposes={['generation', 'refinement', 'summary']} purposeLabel={text('生成模型', 'generation models')} />}
             {section === 'embedding' && <LLMSection purposes={['embedding']} purposeLabel={text('向量模型', 'embedding models')} />}
@@ -410,7 +453,7 @@ function ModelCard({
         <button
           onClick={onDelete}
           title={text('删除', 'Delete')}
-          className="flex items-center justify-center w-7 h-7 rounded-lg transition-colors hover:bg-red-500/10 text-[var(--color-text-muted)] hover:text-[var(--color-error-text)]"
+          className="v2-danger-hover flex items-center justify-center w-7 h-7 rounded-lg transition-colors hover:bg-red-500/10 text-[var(--color-text-muted)] hover:text-[var(--color-error-text)]"
         >
           <Trash2 size={14} />
         </button>
@@ -1002,7 +1045,10 @@ function ModelForm({
         <Button variant="ghost" onClick={onCancel}>{text('取消', 'Cancel')}</Button>
       </div>
       {testResult && (
-        <div className={`text-xs p-2 rounded ${testResult.success ? 'bg-green-500/10 text-[var(--color-success-text)] border border-green-500/20' : 'bg-red-500/10 text-[var(--color-error-text)] border border-red-500/20'} break-all`}>
+        <div
+          className={`v2-notice text-xs p-2 rounded ${testResult.success ? 'bg-green-500/10 text-[var(--color-success-text)] border border-green-500/20' : 'bg-red-500/10 text-[var(--color-error-text)] border border-red-500/20'} break-all`}
+          data-tone={testResult.success ? 'success' : 'error'}
+        >
           {testResult.success ? text('连接成功', 'Connection succeeded') : text(`连接失败：${testResult.error}`, `Connection failed: ${testResult.error}`)}
         </div>
       )}
@@ -1138,6 +1184,15 @@ function FontSelect({
   const ref = useRef<HTMLDivElement>(null)
   const { locale, text } = useLocaleStore()
   const current = FONT_OPTIONS.find((o) => o.id === value) ?? FONT_OPTIONS[0]
+  /**
+   * 本机是否装了几款「引用系统字体」的选项（华文中宋 / 楷体）。
+   *
+   * 打包进来的字体不必探测 —— @font-face 已经保证它们在；
+   * 只有引用系统字体名的那几款才可能落空，所以只对它们探测，
+   * 并在列表里如实标注结果，不让作者以为自己选中的字体已经生效。
+   * 探测在挂载时做一次即可（探的是系统字体，不等 @font-face 加载）。
+   */
+  const [availability] = useState(() => detectFontAvailability())
 
   // 点击外部关闭
   useEffect(() => {
@@ -1219,13 +1274,31 @@ function FontSelect({
 
               {/* 字体名 + 描述 */}
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="text-xs font-medium" style={{ color: 'var(--color-text)', fontFamily: opt.family }}>
                     {text(opt.label, opt.labelEn)}
                   </span>
                   {locale === 'zh-CN' && (
                     <span className="text-[0.65rem]" style={{ color: 'var(--color-text-muted)' }}>
                       {opt.labelEn}
+                    </span>
+                  )}
+                  {/* 引用系统字体的选项：如实标注本机装没装，不让作者误以为已生效 */}
+                  {opt.probe && (
+                    <span
+                      className="text-[0.65rem] flex-shrink-0"
+                      style={{
+                        color: availability[opt.id]
+                          ? 'var(--color-success-text)'
+                          : 'var(--color-warning-text)',
+                      }}
+                    >
+                      {availability[opt.id]
+                        ? text('本机已装', 'installed')
+                        : text(
+                            `本机未装 · 回退${opt.fallbackLabel ?? ''}`,
+                            `not installed · falls back to ${opt.fallbackLabelEn ?? ''}`,
+                          )}
                     </span>
                   )}
                 </div>

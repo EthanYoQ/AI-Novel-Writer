@@ -1,0 +1,312 @@
+/* ============================================================================
+ * 人物关系图谱（v3「时尚杂志」）—— 专项装帧
+ *
+ * 先生 2026-09-17 的四条原话（这一层就是照它重做的）：
+ *
+ *   ①「整个图谱背景上面和下面颜色不一致，没有做到无感…要无感背景。」
+ *     查证属实，而且是三层叠出来的：
+ *       · `.relation-canvas` 上有一层**金色径向光晕**（v2 的「聚光灯」）
+ *       · `.relation-canvas::after` 是一层**四角暗角**（vignette）——
+ *         它就是「上下颜色不一样」的真凶：中心亮、边缘暗
+ *       · `.relation-canvas::before` 还压了一个 `inset:16px` 的淡红内框
+ *     现在三层全部撤掉：画布与页面**同底**，除了人物与线，什么也不画。
+ *
+ *   ②「重置、适应、删除全部角色关系三个按钮也很不美观。」
+ *     原来是四个无边框文字按钮平铺，第四个文案还特别长（「删除全部角色与关系」）。
+ *     现在：竖线分隔成一组刊用控件，文案收短（清空图谱），破坏性那个用红。
+ *
+ *   ③「核心/高亲密—重要关系…这些注释也互相拥挤。」
+ *     图例、提示、缩放三样各自绝对定位在底部，窗口一窄就叠。现在合成一条「页脚带」。
+ *
+ *   ④「展开的副栏头像框依然是 V2 的圆形。」
+ *     对。图谱节点头像、副栏头像都是 `border-radius: 50%`——
+ *     印刷品是方的，与肖像框、方形印签同一套语言。
+ *
+ * 另外还清掉了 v2 留下的 **PNG 图片边框**（`.relation-label.frame-*.png`）：
+ * 那是「墨纸书斋」的彩色花框，在杂志里显得又吵又旧，换成一根细线。
+ *
+ * ── 分家纪律 ────────────────────────────────────────────────────────────────
+ * 全部规则带 `html[data-ui='v2'][data-mag]`：v2 墨纸书斋与 v1 经典界面的
+ * 光晕、暗角、圆头像、花边框一概不动。
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 一、无感背景
+ * 画布与页面同底：撤掉光晕、暗角、内框，并让容器背景透明 ——
+ * 编辑区本来就有栏目色版面，图谱直接坐在它上面。
+ * ======================================================================== */
+/* 选择器用 **v3 自己的记号**（`.mg-graph-canvas` / `.mg-node-portrait` / …）。
+ *
+ * 为什么不用 `.relation-canvas` 这种 v2 已有的类名：
+ * v2 的图谱装帧当年为了压过 demo 基座，大量使用 `!important` + 深层选择器。
+ * 实测在 mag 层写 `!important` 与更长的选择器**都压不过它**（`.relation-canvas` 的背景、
+ * `.portrait` 的圆角都栽在这里）。
+ * 与其在特异性上无休止地比下去，不如让两边各用各的名字 ——
+ * 这也正是先生要的「V3 不要和 V2 有任何外观上的瓜葛」。
+ * 类名只增不改，v2 的 CSS 不认识 `mg-*`，逐像素不变。 */
+html[data-ui='v2'][data-mag] .relation-view,
+html[data-ui='v2'][data-mag] .relation-view .relation-main,
+html[data-ui='v2'][data-mag] .mg-graph-canvas {
+  background: transparent !important;
+  background-image: none !important;
+}
+
+html[data-ui='v2'][data-mag] .mg-graph-canvas::before,
+html[data-ui='v2'][data-mag] .mg-graph-canvas::after {
+  display: none !important;
+}
+
+/* 连线：与页面同底之后要自己站得住 —— 比 v2 稍实一档，但仍然是「线」不是「管道」 */
+html[data-ui='v2'][data-mag] .relation-edge {
+  stroke: color-mix(in srgb, var(--ink) 26%, transparent);
+  stroke-width: 1;
+}
+
+/* ==========================================================================
+ * 二、图谱节点：方形肖像 + 细线标签（全部走 v3 自己的类名）
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .mg-node-portrait {
+  border-radius: 0 !important;
+  border: 2px solid var(--ink) !important;
+  box-shadow: none !important;
+  background: var(--panel2) !important;
+}
+
+/* 首字标记（没有自定义头像时的那个方块）：也是方的 —— v2 把它做成圆，还是 !important。
+ * 字体第十五轮改走 `--mag-font-name-ui`：里面是**人名首字**（任意汉字），
+ * 子集化的 Lanxi 装饰字体会缺字。 */
+html[data-ui='v2'][data-mag] .mg-node-mark {
+  border-radius: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  display: grid !important;
+  place-items: center !important;
+  font-family: var(--mag-font-name-ui);
+}
+
+html[data-ui='v2'][data-mag] .relation-node:hover .relation-label {
+  filter: none;
+  border-color: var(--mag-sec, var(--seal));
+}
+
+/* 节点上的人名是作者的任意文本 —— 同样不许用子集化装饰字体（第十五轮） */
+html[data-ui='v2'][data-mag] .relation-node .name {
+  font-family: var(--mag-font-name);
+}
+
+html[data-ui='v2'][data-mag] .relation-node .role {
+  font-family: var(--mag-font-kicker);
+  letter-spacing: 0.08em;
+}
+
+/* ==========================================================================
+ * 二·B 关系图谱页头：**撑满主列**，让操作组贴住右侧简介栏
+ *   —— 2026-09-17，先生两轮反馈合起来看：
+ *   「人物 / 7 / 重置 / 适应 / 清空图谱，这些全部往右边移动 40px」
+ *   → 蓝汐只把整行右移 40px，先生回：「这几个依然没变化，现在我右边非常非常非常的空」
+ *
+ * 症结不在「移多少」，而在**页头根本没有铺满**：
+ *   · `mag-type.css` 给全站页头压了 `max-width: 1080px`（版心），
+ *     而关系视图的主列在宽窗口下有 1500px 上下；
+ *   · 页头于是只有 1080px 宽、靠左站，`.mp-aside`（期刊化读数 + 操作组）
+ *     虽然贴住页头右缘，却离右侧简介栏还差几百像素 —— 先生看到的「非常空」就是它。
+ *   · 再往右挪 40px 当然看不出变化：分母是几百像素的空白。
+ *
+ * 正解：关系图谱这一页是**一整幅画布**，不该走 1080px 版心 ——
+ * 让页头撑满 head 那一格（`grid-area: head`），操作组自然贴到简介栏左侧 36px 处。
+ * 标题因此回到左缘 36px（页头正常的版心内距），操作组则比原来右移了几百像素。
+ *
+ * 上一轮那条 `margin-left: 40px` 随之撤掉：撑满之后位移没有意义，
+ * 只会把操作组顶进简介栏。窄窗口下也无需补偿 —— 宽度就是轨道宽度。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .relation-view > .pagehead-strip {
+  /* 画布页不适用版心：撤掉 mag-type 的 1080px 截断 */
+  max-width: none;
+  width: auto;
+  margin-left: 0;
+  margin-right: 0;
+  justify-self: stretch;
+}
+
+/* ==========================================================================
+ * 三、页头右侧的三个工具：竖线分隔成一组
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .relation-tools {
+  gap: 0;
+  border: 1px solid var(--line2);
+}
+
+html[data-ui='v2'][data-mag] .relation-tool {
+  height: 26px;
+  padding: 0 10px;
+  border: 0 !important;
+  border-left: 1px solid var(--line2) !important;
+  border-radius: 0 !important;
+  font-family: var(--mag-font-geo);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  gap: 5px;
+}
+
+html[data-ui='v2'][data-mag] .relation-tools .relation-tool:first-child {
+  border-left: 0 !important;
+}
+
+html[data-ui='v2'][data-mag] .relation-tool.is-danger {
+  color: var(--redtx);
+}
+
+/* ==========================================================================
+ * 四、页脚带：图例靠左、提示靠右，缩放浮在带子上方
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .relation-foot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 9px 18px;
+  background: var(--paper);
+  /* 先生 2026-09-17：「那黑色线条根本不应该存在，太压抑版面。」
+     去掉那条上边框 —— 页脚带靠**纸色**与画布区分就够（画布是同底的版面色），
+     再加一条墨线只会把版面切成两半。 */
+  border-top: 0;
+}
+
+html[data-ui='v2'][data-mag] .relation-foot .relation-legend,
+html[data-ui='v2'][data-mag] .relation-foot .relation-hint {
+  position: static !important;
+  left: auto !important;
+  bottom: auto !important;
+  transform: none !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  white-space: nowrap;
+}
+
+html[data-ui='v2'][data-mag] .relation-foot .mg-graph-hint {
+  margin-left: auto !important;
+  font-family: var(--mag-font-kicker);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+html[data-ui='v2'][data-mag] .relation-foot .relation-legend {
+  font-family: var(--mag-font-geo);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+html[data-ui='v2'][data-mag] .relation-legend span {
+  gap: 7px;
+}
+
+/* 缩放：从右下角挪到页脚带上方，不与被压住的图例抢位置 */
+html[data-ui='v2'][data-mag] .relation-zoom {
+  bottom: 54px;
+  background: var(--paper);
+  border: 1px solid var(--line2);
+  border-radius: 0;
+}
+
+html[data-ui='v2'][data-mag] .relation-zoom button {
+  border-left: 1px solid var(--line2);
+  font-family: var(--mag-font-num);
+}
+
+html[data-ui='v2'][data-mag] .relation-zoom button:first-child {
+  border-left: 0;
+}
+
+/* 画布底部给页脚带留出位置：否则底部的节点会被带子压住 */
+html[data-ui='v2'][data-mag] .relation-canvas {
+  padding-bottom: 0;
+}
+
+/* ==========================================================================
+ * 五、右侧人物简介：方形肖像 + 杂志式分节
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .relation-side {
+  background: var(--paper);
+  border-left: 1px solid var(--line);
+}
+
+/* 肖像框的角标：杂志图片的印记（与人物档案里的肖像框同一套语言） */
+html[data-ui='v2'][data-mag] .mg-avatar-corner {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  height: 10px;
+  background: var(--mag-active-sec, var(--seal));
+}
+
+html[data-ui='v2'][data-mag] .mg-side-avatar {
+  position: relative;
+  overflow: hidden;
+}
+
+html[data-ui='v2'][data-mag] .mg-side-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* 首字：几何黑（v2 用的是 Kaiti SC 楷体，在杂志版式里格格不入）。
+ * 第十五轮：这里渲染的是**人物名的首字**（任意汉字），换系统全字库的无衬线。 */
+html[data-ui='v2'][data-mag] .mg-avatar-initial {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  font-family: var(--mag-font-name-ui);
+}
+
+/* 人物档案页上的**姓名** —— 用户的任意文本，同样不许用子集化装饰字体 */
+html[data-ui='v2'][data-mag] .relation-character-top h2 {
+  font-family: var(--mag-font-name);
+}
+
+html[data-ui='v2'][data-mag] .relation-panel-section h3 {
+  font-family: var(--mag-font-kicker);
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+html[data-ui='v2'][data-mag] .relation-visual-meta .quote {
+  font-family: var(--mag-font-read);
+  line-height: 1.85;
+}
+
+/* 关系条目：与全站列表行同一套「扫入」语言 */
+html[data-ui='v2'][data-mag] .relation-key-item {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: var(--mag-r-hair);
+}
+
+html[data-ui='v2'][data-mag] .relation-key-item::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--mag-sec, var(--seal)) 9%, transparent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 240ms cubic-bezier(0.16, 0.84, 0.24, 1);
+  pointer-events: none;
+}
+
+html[data-ui='v2'][data-mag] .relation-key-item:hover::after {
+  transform: scaleX(1);
+}

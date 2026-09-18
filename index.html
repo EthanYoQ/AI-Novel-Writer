@@ -6,29 +6,58 @@
     <title>AI小说作家 — AI Novel Writer</title>
   </head>
   <body style="margin: 0;">
-    <!-- 同步读取主题，避免加载页与主界面背景色闪跳 -->
+    <!-- 同步读取「界面版本 + 主题」，避免加载页与主界面背景色闪跳。
+         ★ 2026-09-16 修正（先生定位）：底色必须**按界面版本分家**。
+         原先只有一张表、且只读主题，导致切到 v3「时尚杂志」后仍是旧纸米黄；
+         更关键的是这行内联 background-color 会**一直留在 body 上**，
+         以「内联样式」的身份压过 mag-palette.css 里的全部底色令牌 ——
+         那正是「怎么改都还是米黄」的原因。
+         现在：v2 墨纸书斋走旧纸暖色，v3 时尚杂志走冷调。 -->
     <script>
       (function() {
-        var bgMap = { light: '#F7F3E8', galaxy: '#0A1628', paper: '#F7F3E8', dark: '#1E1E1E' };
-        var theme = 'paper';
+        /* 出厂默认 = 星空（galaxy）。
+         * 这里必须与 src/stores/theme-store.ts 的出厂默认保持一致 ——
+         * localStorage 为空（全新安装）时它就是用户看到的第一个主题；
+         * 原先写的是 'paper'，安装后第一眼会是浅色，与「默认星空」相悖。 */
+        var CLASSIC_BG = { light: '#F7F3E8', galaxy: '#050B14', paper: '#F7F3E8', dark: '#1E1E1E' };
+        /* v3 时尚杂志的对应底色 —— 与 mag-palette.css 的主题 0–3 保持一致 */
+        var MAGAZINE_BG = { light: '#FBFBFC', galaxy: '#08090B', paper: '#E2E4EA', dark: '#191A1F' };
+
+        var theme = 'galaxy';
         try {
           var raw = localStorage.getItem('ai-novel-writer-theme');
           if (raw) {
             var state = JSON.parse(raw).state || {};
             var candidate = state.resolvedTheme || state.theme;
             if (candidate === 'night') candidate = 'dark'; // 兼容旧版
-            if (Object.prototype.hasOwnProperty.call(bgMap, candidate)) {
+            if (Object.prototype.hasOwnProperty.call(CLASSIC_BG, candidate)) {
               theme = candidate;
             }
           }
         } catch(e) {}
-        
+
+        /* 界面版本：只有 v3 才是「时尚杂志」。存的是纯字符串，也兼容 JSON 包装。 */
+        var magazine = false;
+        try {
+          var rawVersion = localStorage.getItem('ai-novel-writer-ui-version');
+          if (rawVersion) {
+            var version = rawVersion;
+            try {
+              var parsed = JSON.parse(rawVersion);
+              if (parsed && parsed.state && parsed.state.uiVersion) version = parsed.state.uiVersion;
+              else if (typeof parsed === 'string') version = parsed;
+            } catch(e2) {}
+            magazine = version === 'v3';
+          }
+        } catch(e) {}
+
+        var bgMap = magazine ? MAGAZINE_BG : CLASSIC_BG;
         var bg = bgMap[theme] || bgMap.galaxy;
-        
+
         // 提前给 html 注入主题 class，确保所有全局 CSS 变量立即生效
         document.documentElement.classList.remove('light', 'dark', 'galaxy', 'paper');
         document.documentElement.classList.add(theme);
-        
+
         document.body.style.backgroundColor = bg;
         /* 将背景色注入 CSS 变量供启动加载器引用 */
         document.documentElement.style.setProperty('--loader-bg', bg);

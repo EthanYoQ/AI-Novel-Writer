@@ -21,7 +21,19 @@ import type { ChapterBlueprint } from '../directory-workflow'
 import type { FrozenDraftSourceIdentity } from '../chapter-workflow'
 import { throwIfSourceDraftChanged } from '../source-draft-changed'
 import { CHARACTER_STATE_TEXT_FIELDS } from '../../../shared/character-roster'
-import { buildChapterGoalReviewPrompt, chapterGoalReviewItems, freezeChapterGoals, normalizeChapterGoalReview } from '../../../shared/chapter-goal-review'
+import {
+  buildChapterGoalReviewBatchPrompt,
+  buildChapterGoalReviewDeferredNote,
+  buildChapterGoalReviewPrompt,
+  chapterGoalReviewItems,
+  freezeChapterGoals,
+  normalizeChapterGoalReview,
+  parseChapterGoalReviewBatch,
+  splitChapterGoalsIntoBatches,
+  type FrozenChapterGoals,
+} from '../../../shared/chapter-goal-review'
+import type { WritingLanguage } from '../../../shared/writing-language'
+import type { StepCallbacks, WorkflowContext } from '../../../stores/workflow-store'
 
 
 export interface ReviewChapterParams {
@@ -36,6 +48,16 @@ export interface ReviewChapterParams {
 const REVIEW_SUMMARY_MAX_CHARACTERS = 120
 const REVIEW_DESCRIPTION_MAX_CHARACTERS = 200
 const REVIEW_QUOTE_MAX_CHARACTERS = 160
+
+/**
+ * 审稿注入世界观设定的上限 —— 比写稿（8 条 / 2400 字）**更紧**。
+ *
+ * 原因：审稿的问题清单有 `items ≤ 10` 的硬上限，且是**共享预算**——
+ * 设定引起的误报挤进来，被挤掉的是真正的伏笔/连贯性问题。
+ * 所以审稿这边宁可少给几条，也不要稀释信噪比。
+ */
+const REVIEW_WORLD_SETTING_MAX_ENTRIES = 5
+const REVIEW_WORLD_SETTING_TOTAL_MAX_CHARS = 1600
 
 interface ReviewResultItem extends Record<string, unknown> {
   category: string
@@ -228,6 +250,18 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
 
     const characterState = await this.readCharacterStates(context.projectPath, projectSession, writingLanguage)
     const worldBuilding = await this.readWorldBuilding(context.projectPath, projectSession, writingLanguage)
+    // 本章引用的世界观条目：审稿的**对照基准**（只含作者为本章声明引用的那几条）。
+    // 读失败按「本章没有引用」处理 —— 审稿不能因为这条可选信息而整体失败。
+    let referencedWorldSettings = ''
+    try {
+      referencedWorldSettings = await this.readReferencedWorldSettings(
+        this.params.chapterNumber,
+        context.projectPath,
+        writingLanguage,
+      )
+    } catch {
+      referencedWorldSettings = ''
+    }
     const globalGuidance = novelConfig.globalGuidance?.trim() || promptLanguageText(
       writingLanguage,
       '（无作者全局创作指导）',
@@ -272,24 +306,49 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
       .withGlobalSummary(contextSummary)
       .withWorldBuilding(worldBuilding)
       .withReviewFocus(this.params.reviewFocus || '')
+    /**
+     * 目标逐项核对：清单短就随主审稿一次做完；清单长就拆成小批次分别核对。
+     *
+     * 先生（审稿截断事故）：逐项核对的输出长度正比于清单条数，条数一多，单次调用
+     * 最容易顶到模型输出上限、让整份报告作废。切批之后每批只核对几项，输出天然变短，
+     * 模型输出上限小也不再是问题。
+     */
+    const goalBatches = splitChapterGoalsIntoBatches(frozenGoals)
+    const inlineGoalReview = goalBatches.length <= 1
+
     const reviewPrompt = [
       promptBuilder.build(),
       authorGuidanceSection,
       authorConfigSection,
+      // 独立成段而不是塞进 withWorldBuilding（那是架构总纲）：
+      // 让「总纲」与「本章引用条目」各司其职，也方便日后分别追踪来源。
+      referencedWorldSettings,
       planningMaterial,
-      buildChapterGoalReviewPrompt(frozenGoals, writingLanguage),
-    ].join('\n\n')
+      inlineGoalReview
+        ? buildChapterGoalReviewPrompt(frozenGoals, writingLanguage)
+        : buildChapterGoalReviewDeferredNote(writingLanguage),
+    ].filter(Boolean).join('\n\n')
 
-    callbacks.log(text('调用 AI 审查员对本章进行多维度扫描...', 'Running the AI continuity review...'))
+    /**
+     * 先生（审稿截断事故）：这条日志要说清「要等多久、为什么慢」。
+     * 审稿是一次「大输入 + 大输出」的调用，中途没有增量进度可报 ——
+     * 若只留一句「正在扫描」，作者看着进度条长时间停在原处，会以为卡死了。
+     */
+    callbacks.log(text(
+      '调用 AI 审查员对本章进行多维度扫描（整章正文 + 目标逐项核对，输出较长，通常需要一到几分钟，请稍候）...',
+      'Running the AI continuity review (full chapter plus per-goal checks; the report is long, so this usually takes a minute or more)...',
+    ))
 
-    // 期望 JSON 格式返回；bounded 模式会在 length 时自动重建一次。
+    // 期望 JSON 格式返回；bounded 模式会在 length 时自动续写。
     // 部分模型/网关在输出上限截断时会把 finishReason 报成 stop，导致
     // 坏 JSON 直接进入解析 → 这里在合同校验失败时再补一次完整替代输出。
+    // 续写次数用满该模式的上限（MAX_STRUCTURED_CONTINUATIONS = 2）：
+    // 报告字段多、又必须逐项覆盖冻结清单，碰上输出上限较小的模型时 1 次往往不够。
     let reviewResultRaw = await this.callLLMWithBoundedCompletion(
       reviewPrompt,
       promptBuilder.getSystemRole(),
       callbacks,
-      { mode: 'replace-structured-output', maxContinuations: 1 },
+      { mode: 'replace-structured-output', maxContinuations: 2 },
       {
         responseFormat: { type: 'json_object' },
         purpose: 'review-chapter',
@@ -335,7 +394,7 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
         [rebuildInstruction, rebuildHeading, reviewPrompt, rebuildContract].join('\n\n'),
         promptBuilder.getSystemRole(),
         callbacks,
-        { mode: 'replace-structured-output', maxContinuations: 1 },
+        { mode: 'replace-structured-output', maxContinuations: 2 },
         {
           responseFormat: { type: 'json_object' },
           purpose: 'review-chapter-rebuild',
@@ -367,7 +426,18 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
     }
     this.assertNotCancelled(context)
 
-    const goalReview = normalizeChapterGoalReview(parsedResult.goalReviews, frozenGoals, draft, writingLanguage)
+    // 清单长时分批核对：每批一次小调用，输出短、不易截断；合并后交给同一套归一化。
+    const goalReviewPayload = inlineGoalReview
+      ? parsedResult.goalReviews
+      : await this.reviewChapterGoalsInBatches(
+        goalBatches,
+        draft,
+        promptBuilder.getSystemRole(),
+        writingLanguage,
+        callbacks,
+        context,
+      )
+    const goalReview = normalizeChapterGoalReview(goalReviewPayload, frozenGoals, draft, writingLanguage)
     delete parsedResult.goalReviews
     parsedResult.goalReview = goalReview
     parsedResult.items = [...(parsedResult.items ?? []), ...chapterGoalReviewItems(goalReview, writingLanguage)]
@@ -458,6 +528,64 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
     return this.stripThinkingTags(reviewResultRaw)
   }
 
+  /**
+   * 分批核对本章目标。
+   *
+   * 每批只带「正文 + 本批清单」，**不带**模板 / 架构 / 世界观设定那几大段 ——
+   * 批任务本身很小，没有理由把整套上下文再送一遍。
+   *
+   * 一批失败不废掉整次审稿：记一条日志、跳过该批，缺的项会在归一化时被标成
+   * unknown（待人工核实），作者仍拿得到其余目标结论与通用审稿项。
+   * 取消则立刻中断 —— 那是作者的意图，不能当成"这批失败"吞掉。
+   */
+  private async reviewChapterGoalsInBatches(
+    batches: readonly FrozenChapterGoals[],
+    draft: string,
+    systemRole: string,
+    writingLanguage: WritingLanguage,
+    callbacks: StepCallbacks,
+    context: WorkflowContext,
+  ): Promise<readonly unknown[]> {
+    const collected: unknown[] = []
+    const draftSection = promptLanguageText(
+      writingLanguage,
+      `【待审正文】\n${draft}`,
+      `[Draft under review]\n${draft}`,
+    )
+    for (const [index, batch] of batches.entries()) {
+      this.assertNotCancelled(context)
+      callbacks.log(workflowUiText(
+        context,
+        `本章目标核对：第 ${index + 1}/${batches.length} 批（${batch.items.length} 项）...`,
+        `Chapter goal check: batch ${index + 1}/${batches.length} (${batch.items.length} item(s))...`,
+      ))
+      try {
+        const raw = await this.callLLMWithBoundedCompletion(
+          [draftSection, buildChapterGoalReviewBatchPrompt(batch, writingLanguage)].join('\n\n'),
+          systemRole,
+          callbacks,
+          { mode: 'replace-structured-output', maxContinuations: 1 },
+          {
+            responseFormat: { type: 'json_object' },
+            purpose: `review-chapter-goals-${index + 1}`,
+            reasoningStage: 'review',
+            writingSkillStage: 'review',
+          },
+          context,
+        )
+        collected.push(...parseChapterGoalReviewBatch(raw))
+      } catch (error) {
+        if (context.cancelled) throw error
+        callbacks.log(workflowUiText(
+          context,
+          `第 ${index + 1} 批目标核对未完成：${error instanceof Error ? error.message : String(error)}。这批目标将标记为待人工核实，其余结论不受影响。`,
+          `Goal batch ${index + 1} did not complete: ${error instanceof Error ? error.message : String(error)}. Those goals will be marked for manual verification; the rest of the review is unaffected.`,
+        ))
+      }
+    }
+    return collected
+  }
+
   private async readCharacterStates(
     projectPath: string,
     projectSession: ProjectSessionContext,
@@ -494,5 +622,74 @@ export class ReviewChapterCommand extends BaseWorkflowCommand<string> {
   ): Promise<string> {
     const core = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', projectPath)
     return core?.worldbuilding || promptLanguageText(writingLanguage, '（暂无）', '(none)')
+  }
+
+  /**
+   * 本章引用的世界观设定条目 —— 只取作者在「本章引用」区声明过的那几条。
+   *
+   * 三个刻意的取舍（先生拍板）：
+   * 1. **只取本章引用的**，不取全库：写稿时 AI 看到的也只是这几条。
+   *    如果审稿能看到全库，就会出现「审稿拿写稿不知道的设定去判写稿有罪」——
+   *    审稿用自己的信息优势否定写稿，作者只会被搞糊涂。
+   * 2. **只取 confirmed**：pending 是还没经作者确认的候选，不能拿它当裁判标准。
+   * 3. **严格限量**（5 条 / 1600 字）：审稿的问题清单有 `items ≤ 10` 的硬上限，
+   *    误报挤进来会**挤掉真正重要的问题**，所以这里的量必须比写稿更克制。
+   */
+  private async readReferencedWorldSettings(
+    chapterNumber: number,
+    projectPath: string,
+    writingLanguage: NonNullable<CommandExecuteParams['context']['writingLanguage']>,
+  ): Promise<string> {
+    const refs = await ipc.invoke('world-setting:list-chapter-refs', chapterNumber, projectPath)
+    if (!Array.isArray(refs) || refs.length === 0) return ''
+    const entries = await ipc.invoke('world-setting:list', projectPath)
+    if (!Array.isArray(entries)) return ''
+    const byId = new Map<number, (typeof entries)[number]>()
+    for (const entry of entries) {
+      if (entry && typeof entry === 'object' && typeof entry.id === 'number') byId.set(entry.id, entry)
+    }
+    const blocks: string[] = []
+    let usedChars = 0
+    for (const ref of refs) {
+      if (blocks.length >= REVIEW_WORLD_SETTING_MAX_ENTRIES) break
+      if (!ref || typeof ref !== 'object' || typeof ref.settingId !== 'number') continue
+      const entry = byId.get(ref.settingId)
+      if (!entry || entry.status === 'pending') continue
+      const detail = typeof entry.content === 'string' && entry.content.trim().length > 0
+        ? entry.content.trim()
+        : (entry.summary ?? '').trim()
+      if (!detail) continue
+      const name = typeof entry.name === 'string' ? entry.name.trim() : ''
+      if (!name) continue
+      const block = `- ${name}：${detail}`
+      if (usedChars + block.length > REVIEW_WORLD_SETTING_TOTAL_MAX_CHARS) break
+      blocks.push(block)
+      usedChars += block.length
+    }
+    if (blocks.length === 0) return ''
+
+    /**
+     * 措辞是这里的关键 —— 先生特别要求防误报。
+     *
+     * 绝不能写成「以下是本章设定，请逐条核对」：
+     * 那样等于要求它逐条审，会产出大量「设定 A 没被违反」这类 filler，
+     * 白占 items 的 10 条预算，把真正的伏笔/连贯性问题挤出去。
+     * 所以定性为**对照参考**、只在明显违反时开口、且必须双引证。
+     */
+    return promptLanguageText(
+      writingLanguage,
+      `【本章引用的世界观设定（**对照参考，不是检查清单**）】
+仅当本章正文**直接、明显地**违反下列已确认条文时，才归入「剧情合理性」维度报告；
+报告时必须同时引用**正文原句**与**所违反的设定条文**。
+未被违反就不要提及，也不要新增审查维度，更不要为未违反的条目输出 pass 项。
+
+${blocks.join('\n')}`,
+      `[World-setting entries referenced by this chapter (reference only, NOT a checklist)]
+Report a problem **only** when this chapter's text directly and clearly violates one of the confirmed entries below, and file it under the "plot plausibility" dimension;
+you must quote both the **draft sentence** and the **violated entry text**.
+If an entry is not violated, do not mention it, do not add a new review dimension, and do not emit a pass item for it.
+
+${blocks.join('\n')}`,
+    )
   }
 }

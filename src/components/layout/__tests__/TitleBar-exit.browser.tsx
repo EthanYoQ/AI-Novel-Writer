@@ -101,7 +101,8 @@ describe('TitleBar native exit settlement', () => {
 
     await act(async () => closeRequested?.({ requestId: 'close-cancel' }))
     await expect.element(page.getByRole('dialog')).toBeVisible()
-    await act(async () => page.getByRole('button', { name: '取消' }).click())
+    // 「取消退出」不再单设按钮：右上角的 X（无障碍名「关闭」）就是它。
+    await act(async () => page.getByRole('button', { name: '关闭' }).click())
     expect(invoke).toHaveBeenCalledWith('window:resolve-close', 'close-cancel', 'cancel')
     expect(useEditorStore.getState().tabs[0]?.dirty).toBe(true)
 
@@ -184,13 +185,76 @@ describe('TitleBar native exit settlement', () => {
     await act(async () => root.render(<TitleBar />))
     await act(async () => closeRequested?.({ requestId: 'close-busy' }))
 
-    await act(async () => page.getByRole('button', { name: '取消' }).click())
+    await act(async () => page.getByRole('button', { name: '关闭' }).click())
 
-    await expect.element(page.getByRole('button', { name: '取消' })).toBeDisabled()
+    // 关闭（X）本身不是禁用按钮，处理期间重复点它由 exitBusy 早退挡住；
+    // 两个真正的出口必须锁死。
     await expect.element(page.getByRole('button', { name: '放弃并退出' })).toBeDisabled()
     await expect.element(page.getByRole('button', { name: '处理中...' })).toBeDisabled()
     await act(async () => cancellation.resolve({ success: true }))
     await vi.waitFor(() => expect(container.querySelector('[role="dialog"]')).toBeNull())
+  })
+
+  it('names the editor that still holds unsaved edits and jumps there on request', async () => {
+    useProjectStore.setState({
+      recentProjects: [{ name: '本机退出验证', path: PROJECT, updatedAt: '' }],
+    })
+    useEditorStore.setState({
+      tabs: [{
+        id: 'chapter-b',
+        name: '第七章 · 雪夜',
+        type: 'chapter',
+        projectKey: PROJECT,
+        content: '未保存正文',
+        dirty: true,
+      }],
+      activeTabId: null,
+    })
+    await act(async () => root.render(<TitleBar />))
+    await act(async () => closeRequested?.({ requestId: 'close-detail' }))
+
+    // 哪部作品、哪个地方 —— 两样都要说清楚，而不是笼统一句「未保存内容」
+    await expect.element(page.getByText('本机退出验证')).toBeVisible()
+    await expect.element(page.getByText('章节正文')).toBeVisible()
+    await expect.element(page.getByText('第七章 · 雪夜')).toBeVisible()
+
+    await act(async () => page.getByRole('button', { name: '前往此处' }).click())
+
+    // 去看一眼不等于要退出：先撤销关窗请求，再把人送到那条内容所在的页面
+    expect(invoke).toHaveBeenCalledWith('window:resolve-close', 'close-detail', 'cancel')
+    expect(invoke).not.toHaveBeenCalledWith('window:resolve-close', 'close-detail', 'proceed')
+    expect(useEditorStore.getState().activeTabId).toBe('chapter-b')
+    expect(useEditorStore.getState().tabs[0]?.dirty).toBe(true)
+    await vi.waitFor(() => expect(container.querySelector('[role="dialog"]')).toBeNull())
+  })
+
+  it('labels another work that still holds unsaved drafts', async () => {
+    const otherWork = 'C:\\novels\\another-work'
+    useProjectStore.setState({
+      recentProjects: [
+        { name: '本机退出验证', path: PROJECT, updatedAt: '' },
+        { name: '海上花', path: otherWork, updatedAt: '' },
+      ],
+    })
+    // 后台草稿账本：上一部作品的配置改了没保存，页面已经收起来了
+    useEditorStore.setState({
+      tabs: [],
+      draftLedgers: {
+        config: JSON.stringify({
+          version: 1,
+          projects: [{ projectKey: otherWork, baseValue: {}, draftValue: { genre: '未保存配置' } }],
+        }),
+      },
+    })
+    await act(async () => root.render(<TitleBar />))
+    await act(async () => closeRequested?.({ requestId: 'close-other-work' }))
+
+    await expect.element(page.getByText('海上花')).toBeVisible()
+    await expect.element(page.getByText(otherWork)).toBeVisible()
+    await expect.element(page.getByText('小说配置')).toBeVisible()
+    // 「另一部作品」是那条草稿的归属徽标 —— 作品名与徽标文案不同名，这里才定位唯一
+    await expect.element(page.getByText('另一部作品')).toBeVisible()
+    await expect.element(page.getByRole('button', { name: '前往此处' })).toBeVisible()
   })
 
   it('blocks native close while the current project has an active workflow', async () => {
@@ -202,7 +266,8 @@ describe('TitleBar native exit settlement', () => {
 
     await act(async () => closeRequested?.({ requestId: 'close-workflow' }))
 
-    await expect.element(page.getByText('创作任务仍在运行')).toBeVisible()
+    // h1 是弹窗标头的可见标题；sr-only 的无障碍标题同为这句，故按层级定位
+    await expect.element(page.getByRole('heading', { level: 1, name: '创作任务仍在运行' })).toBeVisible()
     await expect.element(page.getByText('请先等待当前创作任务完成，或在任务面板中取消任务后再退出。')).toBeVisible()
     expect(invoke).not.toHaveBeenCalled()
     expect(useWorkflowStore.getState().activeRuns).toHaveLength(1)

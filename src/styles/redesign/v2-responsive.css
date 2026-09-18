@@ -1,0 +1,100 @@
+/* ============================================================================
+ * V2「墨纸书斋」的响应式补充 —— 顶栏（2026-09-17 第十五轮）
+ *
+ * 先生：「给 V2 版本的顶栏也加上响应式。」（此前已给 V3 加过同一套）
+ *
+ * ── 与「V2 逐像素冻结」的关系（动手前必读）──────────────────────────────────
+ * 本文件**每一条规则都在 @media 里** —— 宽屏（>1320px）下一条都不匹配，
+ * V2 的观感与 `docs/V2-BASELINE.md` 的冻结基线逐像素一致。
+ * 这是先生本人对那条纪律的一次显式豁免：他要的是「窗口一缩小别挤成一团」，
+ * 不是「重新设计 v2」。
+ * **改这个文件时请守住这一条：不许出现任何无条件的顶栏规则。**
+ *
+ * ── 真因（与 V3 完全相同，因为顶栏本来就是同一个组件 TitleBarV2）────────────
+ * 顶栏是一条 flex 长链：
+ *   刊标 → 分隔 → 书名 → 保存态 → 六道工序 → 分隔 → 模型胶囊 → 文件 → 分隔 →
+ *   缩放×3 → 主题 → 语言 → 帮助 → 助手 → 设置 → 分隔 → 窗口控制×3
+ * 其中**只有 `.flow`（六道工序）带 `flex: 1`** —— 也就是说只有它肯让位；
+ * 而它的工序标签是 `white-space: nowrap`：窗口一窄，工序条被压到 0 宽、
+ * 内容却不肯折行，于是溢出重叠。与此同时 `.tb-btn` 一族（基座没给 flex，
+ * 默认 `0 1 auto`）也一起被挤，nowrap 的按钮文字互相压。
+ * **不是哪一处写错了，而是没有一处主动让位。**
+ *
+ * ── 处方（与 `magazine/mag-shell.css` §1·B 同一套；改一处请两处一起改）──────
+ *   ① 定规矩：控件一律 `flex: none`（永不压扁）；弹性只留给工序条与书名，
+ *      并给它们 `min-width: 0` + 溢出裁剪/省略号 —— 让位时是「收窄」不是「溢出」。
+ *   ② 分档主动收起：**先收装饰、后收信息**，功能按钮一个都不删
+ *      （收掉文字的按钮都还挂着 title 提示）。
+ *
+ * 四档断点：1320（工序文字）→ 1180（按钮文字）→ 1040（保存态与文件名）→ 900（骨架）。
+ * ========================================================================== */
+
+/* ---- 档一 ≤1320：定规矩 + 工序条先收成「点 + 线」 ---- */
+@media (max-width: 1320px) {
+  html[data-ui='v2'] .titlebar > * {
+    flex: none;               /* 默认：控件保持自身宽度，不会被压扁 */
+  }
+
+  html[data-ui='v2'] .titlebar .flow {
+    flex: 1 1 auto;           /* 工序条：唯一的主弹性块 */
+    min-width: 0;
+    overflow: hidden;         /* 压到多窄都只是裁掉，不溢出 */
+  }
+
+  html[data-ui='v2'] .titlebar .bookname {
+    flex: 0 1 auto;           /* 书名：次级弹性块（项目名长了先自己收窄） */
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  html[data-ui='v2'] .titlebar .bookname b,
+  html[data-ui='v2'] .titlebar .bookname span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;  /* 长项目名收成省略号，而不是把右边全顶出去 */
+  }
+
+  html[data-ui='v2'] .titlebar .modelpill {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 进度信息还在（点位与状态色），只是不要文字 */
+  html[data-ui='v2'] .titlebar .fnode .flb { display: none; }
+  html[data-ui='v2'] .titlebar .flink { width: 14px; }
+}
+
+/* ---- 档二 ≤1180：按钮的文字标签收掉，只留图标（title 提示仍在）---- */
+@media (max-width: 1180px) {
+  html[data-ui='v2'] .titlebar .tb-btn > span:not(.zoom-label) { display: none; }
+  /* 下拉箭头紧跟在文字标签之后 —— 用相邻兄弟选择器，才不会误伤
+     「图标在文字之前」的那些按钮（语言 / 助手 / 缩放） */
+  html[data-ui='v2'] .titlebar .tb-btn > span + svg { display: none; }
+  html[data-ui='v2'] .titlebar .tb-btn { padding: 0 7px; }
+  html[data-ui='v2'] .titlebar .fnode .fdot { width: 9px; height: 9px; }
+  html[data-ui='v2'] .titlebar .fnode .fdot svg,
+  html[data-ui='v2'] .titlebar .flink { width: 8px; }
+  html[data-ui='v2'] .titlebar { gap: 11px; }
+}
+
+/* ---- 档三 ≤1040：保存态收成图标、当前文件名收起、模型胶囊限宽 ---- */
+@media (max-width: 1040px) {
+  /* `.saved` 里的文字是裸文本节点（不是 span），只能用字号收 —— 图标尺寸由
+     `.saved svg` 单独给，不受影响 */
+  html[data-ui='v2'] .titlebar .saved { font-size: 0; gap: 0; }
+  html[data-ui='v2'] .titlebar .bookname span { display: none; }
+  html[data-ui='v2'] .titlebar .modelpill { max-width: 104px; }
+  html[data-ui='v2'] .titlebar { gap: 9px; padding-right: 12px; }
+}
+
+/* ---- 档四 ≤900：只留骨架 —— 分隔条与缩放数字撤掉、工序条整条收起 ---- */
+@media (max-width: 900px) {
+  html[data-ui='v2'] .titlebar .tbdiv { display: none; }
+  html[data-ui='v2'] .titlebar .zoom-label { display: none; }
+  html[data-ui='v2'] .titlebar .sealmark,
+  html[data-ui='v2'] .titlebar .sealmark img { height: 26px; }
+  html[data-ui='v2'] .titlebar .flow { display: none; }
+  html[data-ui='v2'] .titlebar { gap: 7px; }
+}

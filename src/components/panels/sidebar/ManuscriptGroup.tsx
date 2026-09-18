@@ -101,7 +101,8 @@ async function readChapterTitle(
 // ===== 正文章节组件 =====
 
 export default function ManuscriptGroup({ files, projectPath }: { files: ManuscriptFileNode[]; projectPath: string }) {
-  const [open, setOpen] = useState(true)
+  // 先生：正文章节不要一打开就全摊开，默认收起。
+  const [open, setOpen] = useState(false)
   const text = useLocaleStore(s => s.text)
   const currentProject = useProjectStore(s => s.currentProject)
   const [deletionState, setDeletionState] = useState<{
@@ -286,7 +287,8 @@ export default function ManuscriptGroup({ files, projectPath }: { files: Manuscr
           : <ChevronRight size={12} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
         }
         <PenTool size={14} style={{ color: 'var(--color-text-muted)' }} />
-        <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>{text('正文章节', 'Manuscript chapters')}</span>
+        {/* 先生：正文章节不是最重要的项，不必加黑 —— 常规字重即可 */}
+        <span className="text-[14px]" style={{ color: 'var(--color-text)', fontWeight: 400 }}>{text('正文章节', 'Manuscript chapters')}</span>
         {chapterFiles.length > 0 && (
           <span className="ml-auto text-[0.7rem]" style={{ color: 'var(--color-text-muted)' }}>
             {text(`${chapterFiles.length} 章`, `${chapterFiles.length} chapters`)}

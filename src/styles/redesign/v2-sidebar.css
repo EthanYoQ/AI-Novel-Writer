@@ -1,0 +1,551 @@
+/* ============================================================================
+ * v2 侧边栏换皮（纯 CSS，不改动任何组件）
+ *
+ * 真源：AI小说家-Demo/novel-app-demo-relation-avatars.html
+ *   · 侧栏 CSS   第 112–160 行（.sidebar .side-head .side-body .side-sec
+ *                 .tree-row .tree-grp .tree-sub .cdot）
+ *   · 草稿箱细节  第 561–634 行（.draft-ch .draft-version-row .draft-trash）
+ *   · 架构组      第 562 行（.arch-group .tree-expander .tree-link .arch-sub）
+ *   · 侧栏 HTML   renderSidebar() 起第 1794 行（sideHome/sideCatalog/
+ *                 sideChars/sideWorld/sideThreads/sideKnowledge）
+ *
+ * 为什么是无层样式（不包 @layer）：
+ *   产品侧栏由 Tailwind 工具类 + 内联 style 渲染，没有 demo 那套稳定类名。
+ *   依据 CSS 层叠规则，无层样式优先于任何 @layer（含 Tailwind utilities），
+ *   因此无需 !important 即可压过 h-9 / px-3 / text-xs / opacity-70 等工具类。
+ *   index.css 头部明确认可这一用法（「无层样式 — 需要最高优先级的样式」）。
+ *
+ * 作用域：每条规则都以 html[data-ui='v2'] 开头，v1 模式完全不生效。
+ *
+ * 内联 var() 的处理：
+ *   产品把颜色写成内联 style={{ color: 'var(--color-text-secondary)' }} 等，
+ *   内联声明本身无法被 CSS 覆盖，但内联 var() 会用「该元素自身的自定义属性」
+ *   求值 —— 所以本文件在侧栏根上把一批 --color-* 重指向 demo 令牌，
+ *   内联色即随之变成墨纸色板，且重定义只继承在侧栏子树内，不外溢。
+ * ========================================================================== */
+
+/* ===== 1. 侧栏容器：令牌接线 + 纸底与右边线 =====
+ * demo .sidebar 113-114：background:var(--paper); border-right:1px solid var(--line)
+ * （宽度 258px 属布局，产品由 sidebar-host 的拖动宽度决定，此处不碰。） */
+html[data-ui='v2'] .sidebar-host > .skin-workspace-panel {
+  background: var(--paper);
+  border-right: 1px solid var(--line);
+
+  /* 把产品色板接进 demo 令牌：内联 var() 也会随之改色 */
+  --color-sidebar: var(--paper);
+  --color-panel: var(--paper);
+  --color-border: var(--line);
+  --color-text: var(--ink);
+  --color-text-secondary: var(--ink2);
+  --color-text-muted: var(--muted);
+  --color-hover: color-mix(in srgb, var(--white) 65%, transparent); /* demo .tree-row:hover 123 */
+  --color-active: var(--white);                                     /* demo .tree-row.on 124 */
+  --color-accent: var(--seal);
+  --color-success: var(--green);
+  --color-success-text: var(--greentx);
+  --color-warning: var(--warn);
+  --color-warning-text: var(--warntx);
+  --color-error: var(--red);
+  --color-error-text: var(--redtx);
+}
+
+/* ===== 2. 视图标题栏 —— 先生想试「无线条无感面板」 =====
+ * 原样搬的是 demo .side-head（115-117）：36px 高、10px/700 字、下方一条 1px 横线，
+ * 外加一枚 5×5 朱砂圆点。先生觉得太"重"了，想看看去掉线条与圆点是什么观感：
+ *   · 去掉 border-bottom（那条横线）
+ *   · 去掉 ::before 的朱砂圆点
+ *   · 高度 36 → 30、字重 700 → 600，让标题退到背景里，面板靠留白自己分层
+ * 不好看的话回退很容易 —— 原值都记在这段注释里，git 里也有。 */
+html[data-ui='v2'] .sidebar-host .panel-header {
+  height: 30px;
+  gap: 8px;
+  padding: 0 14px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: var(--v2-ls-label); /* 0.16em */
+  text-transform: none;
+  color: var(--muted);
+  border-bottom: 0;
+  background: transparent;
+}
+
+/* demo .side-head .dotm 117：5×5 朱砂圆点。
+ * 先生要试「无感面板」，这枚点一并去掉 —— 需要时可从这里恢复：
+ *   content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--seal); flex: none; */
+html[data-ui='v2'] .sidebar-host .panel-header::before {
+  content: none;
+}
+
+/* ===== 3. 滚动区 → demo .side-body（118）padding:7px 0 12px ===== */
+html[data-ui='v2'] .sidebar-host > .skin-workspace-panel > .flex-1.overflow-y-auto {
+  padding-top: 7px;
+  padding-bottom: 12px;
+}
+
+/* ===== 4. 项目树容器 =====
+ * 底色与右边线已由外层容器承担，这里只去掉重复的一层，避免双线双底。 */
+html[data-ui='v2'] .sidebar-host .writer-project-tree {
+  background: transparent;
+  border-right: 0;
+  color: var(--ink2);                     /* demo .tree-row color 122 */
+  font-size: var(--v2-fs-body);           /* 12.5px */
+}
+
+/* ===== 5. 树行 → demo .tree-row（121-131）
+ * gap:8px; height:31px; padding:0 11px; border-radius:7px; margin:0 7px;
+ * font-size:12.5px; color:var(--ink2); border-left:2px solid transparent
+ * 注：padding-left 由组件内联决定（缩进层级），此处只写右padding与垂直。 */
+html[data-ui='v2'] .sidebar-host .tree-item {
+  height: 31px;
+  margin: 0 7px;
+  padding-right: 11px;
+  padding-top: 0;
+  padding-bottom: 0;
+  gap: 8px;
+  border-radius: 7px;
+  border-left: 2px solid transparent;
+  font-size: var(--v2-fs-body);           /* 12.5px */
+  color: var(--ink2);
+  transform: none;                        /* 压掉产品 .tree-item:hover 的右移 2px */
+  transition: background 0.14s, box-shadow 0.14s;
+}
+
+/* demo .tree-row:hover 123：background:rgba(255,255,255,.65)（字色不变，仍是 ink2） */
+html[data-ui='v2'] .sidebar-host .tree-item:hover {
+  background: color-mix(in srgb, var(--white) 65%, transparent);
+  color: var(--ink2);
+  transform: none;
+}
+
+/* demo .tree-row.on 124：白底 + 墨字 + 600 + 左侧朱砂竖条 + 阴影 */
+html[data-ui='v2'] .sidebar-host .tree-item.active {
+  background: var(--white);
+  color: var(--ink);
+  font-weight: 600;
+  border-left-color: var(--seal);
+  box-shadow: var(--shadow);
+}
+
+/* demo .tree-row svg 125：13×13 / stroke-width:1.7 / color:var(--muted) */
+html[data-ui='v2'] .sidebar-host .tree-item > svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 1.7;
+  color: var(--muted);
+  flex: none;
+}
+
+html[data-ui='v2'] .sidebar-host .tree-item.active > svg {
+  color: var(--seal);
+}
+
+/* ===== 6. 分组行 → demo .tree-grp（132-138）
+ * gap:7px; height:31px; padding:0 11px 0 8px; border-radius:7px; margin:0 7px;
+ * font-size:12.5px; font-weight:600; color:var(--ink)
+ * 产品把组行与叶子行都渲染成 .tree-item，只能靠行首 chevron 区分。 */
+html[data-ui='v2'] .sidebar-host .tree-item:has(> [class~='lucide-chevron-down']),
+html[data-ui='v2'] .sidebar-host .tree-item:has(> [class~='lucide-chevron-right']) {
+  font-weight: 600;                       /* demo .tree-grp 133 */
+  color: var(--ink);
+}
+
+/* demo .tree-grp svg 135：12×12 / stroke-width:2 / color:var(--muted) */
+html[data-ui='v2'] .sidebar-host .tree-item > [class~='lucide-chevron-down'],
+html[data-ui='v2'] .sidebar-host .tree-item > [class~='lucide-chevron-right'] {
+  color: var(--muted);
+  flex: none;
+}
+
+/* ===== 7. 子级虚线缩进 → demo .tree-sub（139）
+ * margin:0 7px 2px 25px; border-left:1px dashed var(--line2); padding-left:5px
+ * 产品没有 tree-sub 容器：层级由内联 padding-left 直接表达（26/30/50），
+ * 故用不占位的 ::before 画同款虚线，既补上 demo 的视觉又不改布局。 */
+html[data-ui='v2'] .tree-sub {
+  margin: 0 7px 2px 25px;
+  border-left: 1px dashed var(--line2);
+  padding-left: 5px;
+}
+
+html[data-ui='v2'] .sidebar-host .tree-item[style*='padding-left: 26px']::before,
+html[data-ui='v2'] .sidebar-host .tree-item[style*='padding-left: 30px']::before,
+html[data-ui='v2'] .sidebar-host [style*='padding-left: 50px']::before,
+html[data-ui='v2'] .sidebar-host [style*='padding-left: 54px']::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px dashed var(--line2);
+  pointer-events: none;
+}
+
+html[data-ui='v2'] .sidebar-host .tree-item[style*='padding-left: 26px']::before {
+  left: 19px;
+}
+
+html[data-ui='v2'] .sidebar-host .tree-item[style*='padding-left: 30px']::before {
+  left: 23px;
+}
+
+html[data-ui='v2'] .sidebar-host [style*='padding-left: 50px']::before,
+html[data-ui='v2'] .sidebar-host [style*='padding-left: 54px']::before {
+  left: 43px;
+}
+
+/* ===== 8. 章节状态点 → demo .cdot（154-158）
+ * .cdot{width:8px;height:8px;border-radius:50%;border:1.5px solid var(--line2)}
+ * .fin 绿 / .dft 朱砂+呼吸 / .rev 藤黄 / .rdy 金
+ * 产品侧栏没有 .cdot 类，状态改用 lucide 的 Circle / CheckCircle2 渲染；
+ * 下面对齐尺寸与描边，颜色由 --color-success 等令牌重定义带动。 */
+html[data-ui='v2'] .cdot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  border: 1.5px solid var(--line2);
+  background: transparent;
+}
+
+html[data-ui='v2'] .cdot.fin {
+  background: var(--green);
+  border-color: var(--green);
+}
+
+html[data-ui='v2'] .cdot.dft {
+  background: var(--seal);
+  border-color: var(--seal);
+  animation: pl 1.4s ease infinite;
+}
+
+html[data-ui='v2'] .cdot.rev {
+  background: var(--warn);
+  border-color: var(--warn);
+}
+
+/* 就绪态点：星空主题走星云紫（--nebula），其余三套主题没有定义该令牌，
+ * 自动回退到原来的恒星金，逐像素不变。
+ * 先生：「这个主题下有些图标背景是恒星金 #D8B563，不如换成星云的紫色。」 */
+html[data-ui='v2'] .cdot.rdy {
+  background: var(--nebula, var(--gold));
+  border-color: var(--nebula, var(--gold));
+}
+
+/* 产品的等价物：空心 Circle（未定稿）与 CheckCircle2（已定稿）压到 8px 圆点尺度。
+ * 注意：lucide-react 的别名导出沿用新名生成 class（CheckCircle2 → lucide-circle-check-big），
+ * 故把新旧几种可能的类名一并列出，避免随版本漂移而失效。
+ * 特异性高于上面的 .tree-item > svg，不会被 13px 规则夺走尺寸。 */
+html[data-ui='v2'] .sidebar-host .tree-item > [class~='lucide-circle'],
+html[data-ui='v2'] .sidebar-host .tree-item > [class~='lucide-circle-check'],
+html[data-ui='v2'] .sidebar-host .tree-item > [class~='lucide-circle-check-big'],
+html[data-ui='v2'] .sidebar-host .tree-item > [class~='lucide-check-circle-2'] {
+  width: 8px;
+  height: 8px;
+  stroke-width: 1.5;
+  flex: none;
+}
+
+/* ===== 9. 行尾徽章与进度 → demo .tree-row .bdg（128-131）/ .tree-grp .prg（137-138）
+ * font-size:9.5px; color:var(--muted); font-variant-numeric:tabular-nums
+ * 产品用 Tailwind 的 text-[0.7rem] / text-[0.65rem]（11.2/10.4px），偏大。 */
+html[data-ui='v2'] .sidebar-host [class~='text-[0.7rem]'],
+html[data-ui='v2'] .sidebar-host [class~='text-[0.65rem]'] {
+  font-size: var(--v2-fs-tiny); /* 9.5px */
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 侧栏内的说明性小字 → demo 说明文字 10.5px（--v2-fs-note） */
+html[data-ui='v2'] .sidebar-host .writer-project-tree [class~='text-xs']:not([class~='font-semibold']) {
+  font-size: var(--v2-fs-note);
+  color: var(--muted);
+}
+
+/* 项目名一行 → demo sideCatalog 1905 行：font-size:12.5px 的粗体书名 */
+html[data-ui='v2'] .sidebar-host .writer-project-tree [class~='text-xs'][class~='font-semibold'] {
+  font-size: var(--v2-fs-body); /* 12.5px */
+  color: var(--ink);
+}
+
+/* ===== 10. 草稿箱三级：章节行 / 版本行 / 删除键 ===== */
+
+/* 章节行 → demo .draft-ch（572-579）：height:30px; color:var(--ink2)；其 .cdot 7px/1px */
+html[data-ui='v2'] .sidebar-host .tree-item[style*='padding-left: 26px'] {
+  height: 30px;
+  color: var(--ink2);
+}
+
+html[data-ui='v2'] .sidebar-host .tree-item[style*='padding-left: 26px'] [class~='lucide-circle'] {
+  width: 7px;
+  height: 7px;
+  stroke-width: 1; /* demo .draft-ch .cdot border-width:1px */
+}
+
+/* 草稿章节行的折叠箭头 → demo 1926 行 icon('chevD',10)，10px 而非树行默认的 13px */
+html[data-ui='v2'] .sidebar-host .tree-item[style*='padding-left: 26px'] > [class~='lucide-chevron-down'],
+html[data-ui='v2'] .sidebar-host .tree-item[style*='padding-left: 26px'] > [class~='lucide-chevron-right'] {
+  width: 10px;
+  height: 10px;
+}
+
+/* 版本行 → demo .draft-version-row（580-608）
+ * position:relative; height:29px; margin:0 2px 0 1px; padding:0 8px 0 12px;
+ * border-radius:5px; background:transparent; box-shadow:none; color:var(--muted);
+ * border-left:2px solid transparent；.on 为白底 .6 + 朱砂竖条 + 内描边 */
+html[data-ui='v2'] .sidebar-host [style*='padding-left: 50px'][class~='cursor-pointer'] {
+  height: 29px;
+  margin: 0 2px 0 1px;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-radius: 5px;
+  border-left: 2px solid transparent;
+  color: var(--muted);
+  box-shadow: none;
+}
+
+html[data-ui='v2'] .sidebar-host [style*='padding-left: 50px'][class~='cursor-pointer']:hover {
+  background: color-mix(in srgb, var(--white) 32%, transparent); /* demo 592 */
+}
+
+html[data-ui='v2'] .sidebar-host [style*='padding-left: 50px'][class~='cursor-pointer'].active {
+  background: color-mix(in srgb, var(--white) 60%, transparent); /* demo 595 */
+  color: var(--ink);
+  border-left-color: var(--seal);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line) 55%, transparent); /* demo 598 */
+}
+
+/* 版本行文字 → demo .draft-version-row .tl（600-603）：字体 var(--sans)、11.5px */
+html[data-ui='v2'] .sidebar-host [style*='padding-left: 50px'] [class~='text-xs'] {
+  font-family: var(--sans);
+  font-size: var(--v2-fs-caption); /* 11.5px */
+}
+
+/* 行尾删除键 → demo .draft-trash（610-628）
+ * 22×22; color:rgba(118,110,95,.5); border-radius:5px; opacity:0；
+ * 悬停所在行时 opacity:.78；自身悬停转朱砂；svg 10×10 / stroke-width:1.5 */
+html[data-ui='v2'] .sidebar-host .writer-project-tree button[class~='opacity-70'] {
+  width: 22px;
+  height: 22px;
+  margin-left: 2px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--faint);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.14s, color 0.14s, background 0.14s;
+}
+
+html[data-ui='v2'] .sidebar-host .tree-item:hover button[class~='opacity-70'],
+html[data-ui='v2'] .sidebar-host [style*='padding-left: 50px']:hover button[class~='opacity-70'] {
+  opacity: 0.78;
+}
+
+html[data-ui='v2'] .sidebar-host .writer-project-tree button[class~='opacity-70']:hover {
+  opacity: 1;
+  color: var(--seal);
+  background: color-mix(in srgb, var(--seal) 6%, transparent); /* demo 624 */
+}
+
+html[data-ui='v2'] .sidebar-host .writer-project-tree button[class~='opacity-70'] svg {
+  width: 10px;
+  height: 10px;
+  stroke-width: 1.5;
+}
+
+/* ===== 11. 正文章节行（内联 padding-left:30）与归档切换行 ===== */
+html[data-ui='v2'] .sidebar-host .tree-item[style*='padding-left: 30px'] {
+  color: var(--ink2);
+}
+
+html[data-ui='v2'] .sidebar-host .writer-project-tree [style*='padding-left: 54px'] {
+  font-size: var(--v2-fs-tiny);
+  color: var(--muted);
+}
+
+/* ===== 12. 首页视图（HomeSidebarPanel）=====
+ * demo sideHome()（1805-1822）只有 side-sec 区段标题 + 一排 tree-row，
+ * 没有卡片。产品的「当前项目」块与「最近项目」行按此语汇收敛。 */
+
+/* 「最近项目」区段标题 → demo .side-sec（119-120）
+ * font-size:9.5px; letter-spacing:.16em; color:var(--faint); font-weight:700 */
+html[data-ui='v2'] .sidebar-host [style*='border-top'] > [class~='text-xs'][class~='font-medium'] {
+  font-size: var(--v2-fs-tiny);
+  font-weight: 700;
+  letter-spacing: var(--v2-ls-label);
+  color: var(--faint);
+}
+
+/* 当前项目块 → demo 卡片语汇（.card 半径 12px），底色沿用所在行的浅白 */
+html[data-ui='v2'] .sidebar-host [class~='py-2.5'][class~='rounded-lg'] {
+  border: 1px solid var(--line2);
+  border-radius: var(--v2-card-radius);
+}
+
+/* 最近项目行 → demo .tree-row：11.5px 名称 + 9.5px 路径，圆角 7px */
+html[data-ui='v2'] .sidebar-host [class~='space-y-0.5'] > div {
+  border-radius: 7px;
+  padding-left: 11px;
+  padding-right: 11px;
+}
+
+html[data-ui='v2'] .sidebar-host [class~='space-y-0.5'] > div [class~='text-xs'] {
+  font-size: var(--v2-fs-caption); /* 11.5px */
+  color: var(--ink2);
+}
+
+/* ===== 13. 角色视图（CharactersView）=====
+ * demo sideChars()（2053-2063）的条目是 height:36px 的 .tree-row + 22px 圆头像
+ * + 9px 角色标签；产品是双行列表项，故只对齐行盒、圆角与选中态。 */
+html[data-ui='v2'] .sidebar-host .flex-1.overflow-y-auto > div[class~='cursor-pointer'][class~='rounded-md'] {
+  border-radius: 7px;               /* demo .tree-row border-radius:7px */
+  border-left: 2px solid transparent;
+  font-size: var(--v2-fs-body);      /* 12.5px */
+  color: var(--ink2);
+}
+
+/* 选中态 → demo .tree-row.on（124）：白底 + 朱砂竖条 + 阴影 + 600 */
+html[data-ui='v2'] .sidebar-host [class~='bg-[var(--color-active)]'] {
+  background: var(--white);
+  color: var(--ink);
+  font-weight: 600;
+  border-left: 2px solid var(--seal);
+  box-shadow: var(--shadow);
+}
+
+html[data-ui='v2'] .sidebar-host .flex-1.overflow-y-auto > div[class~='cursor-pointer'][class~='rounded-md'] > div:first-child {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* 角色列表顶栏计数 → demo sideChars 2055 行：font-size:11.5px 的粗体 */
+html[data-ui='v2'] .sidebar-host .flex.items-center.justify-between.h-9 > [class~='text-xs'][class~='font-medium'] {
+  font-size: var(--v2-fs-caption);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* ===== 14. 侧栏用到的产品命令按钮 → demo .tb-btn（87-91）
+ * height:28px; border-radius:7px; padding:0 9px; font-size:11.5px; color:var(--ink2)
+ * hover 白底 + 1px 纸边（内联 color 由组件决定，此处不夺） */
+html[data-ui='v2'] .sidebar-host .writer-command-button {
+  border-radius: 7px;
+  font-size: var(--v2-fs-caption);
+  color: var(--ink2);
+}
+
+html[data-ui='v2'] .sidebar-host .writer-command-button:hover:not(:disabled) {
+  background: var(--white);
+  border-color: var(--line);
+}
+
+/* ===== 15. demo 正源类钩子 =====
+ * 下面三个类产品当前没有挂载，写在此处是为了「取值可指回 demo 原文」：
+ * 一旦侧栏改用 demo 类名，视觉自动一致，无需再改本文件。 */
+html[data-ui='v2'] .side-sec {
+  font-size: var(--v2-fs-tiny); /* demo 119：9.5px */
+  letter-spacing: var(--v2-ls-label);
+  color: var(--faint);
+  font-weight: 700;
+  padding: 11px 15px 4px;
+  user-select: none;
+}
+
+html[data-ui='v2'] .side-sec:first-child {
+  padding-top: 5px; /* demo 120 */
+}
+
+html[data-ui='v2'] .tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 31px;
+  padding: 0 11px;
+  border-radius: 7px;
+  margin: 0 7px;
+  cursor: pointer;
+  font-size: var(--v2-fs-body); /* demo 121：12.5px */
+  color: var(--ink2);
+  user-select: none;
+  border-left: 2px solid transparent;
+}
+
+html[data-ui='v2'] .tree-grp {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 31px;
+  padding: 0 11px 0 8px;
+  border-radius: 7px;
+  margin: 0 7px;
+  cursor: pointer;
+  font-size: var(--v2-fs-body); /* demo 132-133：12.5px / 600 / ink */
+  font-weight: 600;
+  color: var(--ink);
+  user-select: none;
+}
+
+/* demo .tree-row .bdg 128 / .tree-grp .prg 137：9.5px + 等宽数字 */
+html[data-ui='v2'] .tree-row .bdg,
+html[data-ui='v2'] .tree-grp .prg {
+  font-size: var(--v2-fs-tiny);
+  font-weight: 400;
+  color: var(--muted);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-ui='v2'] .tree-row .bdg.ok,
+html[data-ui='v2'] .tree-grp .prg.ok {
+  color: var(--greentx); /* demo 129 / 138 */
+}
+
+html[data-ui='v2'] .tree-row .bdg.warn {
+  color: var(--warntx); /* demo 130 */
+}
+
+html[data-ui='v2'] .tree-row .bdg.hot {
+  color: var(--redtx); /* demo 131 */
+}
+
+/* ==========================================================================
+ * 侧栏分类标题（角色列表的四区 / 世界观设定的分类，共用一套规格）
+ *
+ * 先生：用「CAST · 人物档案」那种朱砂小字 + 细分割线。
+ * 取值同 demo 眉标 .pagehead .ph-k（shell.css 291）：
+ * 9px / letter-spacing .22em / color --seal / weight 700。
+ * v1 的兜底样式在 shell.css 末尾（@layer components 内），两边都有一份。
+ * ======================================================================== */
+html[data-ui='v2'] .character-zone-head,
+html[data-ui='v2'] .world-zone-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 11px 0 4px;
+  padding: 0 6px 5px;
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+}
+
+html[data-ui='v2'] .character-zone:first-child .character-zone-head,
+html[data-ui='v2'] .world-zone:first-child .world-zone-head {
+  margin-top: 3px;
+}
+
+html[data-ui='v2'] .character-zone-head .czh-label,
+html[data-ui='v2'] .world-zone-head .czh-label {
+  font-size: 9px;
+  letter-spacing: .22em;
+  font-weight: 700;
+  color: var(--seal);
+}
+
+html[data-ui='v2'] .character-zone-head .czh-count,
+html[data-ui='v2'] .world-zone-head .czh-count {
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: .04em;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}

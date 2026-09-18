@@ -304,7 +304,11 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
 
   return (
     <Dialog open={isOpen} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-[480px]">
+      <DialogContent
+        className="max-w-[480px]"
+        /* 先生：生成蓝图的策略与范围都在这上面选，误点蒙版关掉就得重选。 */
+        onPointerDownOutside={(event) => event.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileText size={16} className="text-[var(--color-accent)]" />
@@ -479,12 +483,12 @@ export default function DirectoryConfigDialog({ isOpen, onClose, existingCount, 
             />
           </div>
           {launchError && (
-            <p className="whitespace-pre-line rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2.5 text-xs text-[var(--color-warning-text)]">
+            <p className="v2-notice whitespace-pre-line rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2.5 text-xs text-[var(--color-warning-text)]" data-tone="warning">
               {launchError}
             </p>
           )}
           {authorityError && (
-            <p className="whitespace-pre-line rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2.5 text-xs text-[var(--color-warning-text)]">
+            <p className="v2-notice whitespace-pre-line rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2.5 text-xs text-[var(--color-warning-text)]" data-tone="warning">
               {authorityError}
             </p>
           )}

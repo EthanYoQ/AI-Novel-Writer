@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Save, BookOpen, RefreshCw, Plus, Trash2,
-  Sparkles, PenLine, ListChecks, AlertTriangle
+  Sparkles, PenLine, Check, AlertTriangle, Layers
 } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
@@ -26,9 +26,10 @@ import { guardDirectoryGeneration } from '../../services/workflow-guards'
 import DirectoryConfigDialog from '../dialogs/DirectoryConfigDialog'
 import BatchChapterCreationDialog from '../dialogs/BatchChapterCreationDialog'
 import { Button } from '../ui/Button'
+import PagePlate from '../layout/v2/magazine/PagePlate'
+import ChapterWorldSettingRefs from './ChapterWorldSettingRefs'
 import { Input } from '../ui/Input'
 import { Textarea } from '../ui/Textarea'
-import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
 import { cn } from '../../lib/utils'
 import { toast } from '../ui/Toast'
@@ -53,20 +54,13 @@ import {
   type EditableChapterBlueprintField,
 } from './chapter-card-draft-ledger'
 import { LatestRequestGate } from './latest-request-gate'
+import GripHandle from '../layout/v2/GripHandle'
 import {
   AuthoritativeChapterSequenceError,
   readAuthoritativeNextChapter,
 } from '../../services/authoritative-chapter-sequence'
 
 const ROLES = ['建置', '铺垫', '发展', '冲突', '高潮', '转折', '收尾']
-
-const ROLE_COLORS: Record<string, string> = {
-  高潮: 'bg-red-500/20 text-[var(--color-error-text)]',
-  冲突: 'bg-orange-500/20 text-[var(--color-warning-text)]',
-  转折: 'bg-purple-500/20 text-[var(--color-category-review-text)]',
-  建置: 'bg-blue-500/20 text-[var(--color-category-progress-text)]',
-  收尾: 'bg-green-500/20 text-[var(--color-success-text)]',
-}
 
 function readDraftLedgerFromFixedTab() {
   return parseChapterCardDraftLedger(
@@ -90,6 +84,38 @@ function isCurrentProjectSession(projectSession: ProjectSessionContext): boolean
   )
 }
 
+/**
+ * 左栏（章节目录）的宽度。
+ *
+ * 章节标题长短差得很远：窄了长标题根本显示不出来，宽了又白占正文的地方。
+ * 做成可拖拽之后，默认值只负责「第一次打开时不别扭」，真正的答案由作者自己拉出来。
+ */
+const CATALOG_WIDTH_STORAGE_KEY = 'ai-novel-writer-chapter-catalog-width'
+const CATALOG_WIDTH_DEFAULT = 232
+const CATALOG_WIDTH_MIN = 180
+const CATALOG_WIDTH_MAX = 520
+
+function readStoredCatalogWidth(): number {
+  try {
+    const raw = Number(localStorage.getItem(CATALOG_WIDTH_STORAGE_KEY))
+    if (Number.isFinite(raw) && raw >= CATALOG_WIDTH_MIN && raw <= CATALOG_WIDTH_MAX) return raw
+  } catch {
+    // 隐私模式 / 存储被禁用：退回默认宽度即可，不影响使用。
+  }
+  return CATALOG_WIDTH_DEFAULT
+}
+
+/**
+ * 出场人物：按顿号、逗号、分号或空白切分。
+ *
+ * 只用于「把作者的输入解析成名单」，**绝不能**拿它去生成输入框的显示值 ——
+ * 那样作者刚敲下的分隔符会被立刻吃掉、名字还会黏成一串，这恰恰是旧实现里
+ * 「什么标点都打不进去」的成因。
+ */
+function splitCharacterNames(value: string): string[] {
+  return value.split(/[、，,;；\s]+/).filter(Boolean)
+}
+
 /** 章节蓝图编辑器 — 读写 directory.json */
 export default function ChapterCardEditor({
   projectKey,
@@ -108,6 +134,23 @@ export default function ChapterCardEditor({
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [dirtyChapterNumbers, setDirtyChapterNumbers] = useState<Set<number>>(() => new Set())
+  /** 左栏宽度：可拖拽，并记住上次取值（与项目无关，属界面偏好）。 */
+  const [catalogWidth, setCatalogWidth] = useState<number>(readStoredCatalogWidth)
+  /**
+   * 出场人物输入框的**原始文本**。名单本身存在 selected.characters 里，
+   * 但输入框必须保留作者敲下的原文（含刚打的分隔符），否则受控值一回写
+   * 就等于把刚输入的顿号擦掉 —— 旧实现正是这么做的。
+   */
+  const [charactersText, setCharactersText] = useState('')
+
+  // 宽度变化就地记住：下次打开章节蓝图，仍是作者拉出来的那个宽窄。
+  useEffect(() => {
+    try {
+      localStorage.setItem(CATALOG_WIDTH_STORAGE_KEY, String(Math.round(catalogWidth)))
+    } catch {
+      // 存不下就算了：宽度不可持久化不影响本次使用。
+    }
+  }, [catalogWidth])
   const blueprintsRef = useRef<ChapterBlueprint[]>([])
   const dirtyChapterNumbersRef = useRef<Set<number>>(new Set())
   const [dataProjectSession, setDataProjectSession] = useState<ProjectSessionContext | null>(null)
@@ -363,6 +406,21 @@ export default function ChapterCardEditor({
   }, [loadBlueprints, projectKey])
 
   const selected = projectDataReady ? blueprints[selectedIdx] ?? null : null
+
+  /**
+   * 把名单回填到输入框，但只在「外部确实改了名单」时回填。
+   *
+   * 判据是：当前文本解析出来的名字序列是否与名单一致。作者正打着的原文
+   * （哪怕末尾刚敲下一个顿号）解析结果与名单相同，就直接跳过 —— 否则每敲一个
+   * 分隔符都会被 join('、') 的结果覆盖掉，那正是旧实现「标点打不进去」的现场。
+   */
+  useEffect(() => {
+    const current = splitCharacterNames(charactersText)
+    const next = selected?.characters ?? []
+    if (current.length === next.length && current.every((name, index) => name === next[index])) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 外部名单（切章 / AI 回填 / 重载）变化时同步输入框，属受控回填
+    setCharactersText(next.join('、'))
+  }, [selected?.characters, selected?.chapterNumber, charactersText])
 
   /** 更新选中章节蓝图的字段 */
   const updateField = <K extends EditableChapterBlueprintField>(
@@ -709,90 +767,131 @@ export default function ChapterCardEditor({
     : visibleBlueprints.find(blueprint => blueprint.chapterNumber === nextWriteChapter)
   const canRecoverLegacyImportedText = projectDataReady
     && legacyImportedTextRecoveryChapter !== null
+  // demo 3111 行的「已就绪 / 未就绪」徽标：卡面主干字段齐备即视为就绪（纯展示派生，不参与任何写入）。
+  const selectedCardReady = Boolean(
+    selected
+    && selected.title.trim()
+    && selected.purpose.trim()
+    && selected.keyEvents.trim()
+    && selected.suspenseHook.trim(),
+  )
+  /**
+   * 未就绪时到底缺哪几项。
+   *
+   * 先生（群友反馈）：光看输入框猜不出哪些必填，徽标只写「未就绪」等于让作者自己试。
+   * 这里把同一份判据原样摊开，鼠标停上去就能看到还差什么 —— 它与字段旁的
+   * 「必填」标记必须说同一件事，所以共用上面那段判定。
+   */
+  const missingReadyFields = [
+    ...(selected && !selected.title.trim() ? [text('章节标题', 'Chapter title')] : []),
+    ...(selected && !selected.purpose.trim() ? [text('主角小目标', 'Protagonist goal')] : []),
+    ...(selected && !selected.keyEvents.trim() ? [text('实质冲突与转折', 'Core conflict and turning point')] : []),
+    ...(selected && !selected.suspenseHook.trim() ? [text('末尾悬念钩子', 'Ending suspense hook')] : []),
+  ]
+  // demo 里只有「下一章」可写；判断当前选中章是否就是那一章。
+  const selectedIsWritable = Boolean(
+    selected
+    && nextWritableBlueprint
+    && selected.chapterNumber === nextWritableBlueprint.chapterNumber,
+  )
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
-      {/* 顶部工具栏 */}
-      <div
-        className="flex items-center justify-between gap-2 px-3 h-10 flex-shrink-0 border-b"
-        style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-sidebar)' }}
-      >
-        <div className="flex items-center gap-1.5">
-          <BookOpen size={13} style={{ color: 'var(--color-text-muted)' }} />
-          <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>
-            {text('章节蓝图', 'Chapter blueprints')}
-            {visibleBlueprints.length > 0 && (
-              <span style={{ color: 'var(--color-text-muted)' }} className="ml-1 font-normal">
-                {text(`(${visibleBlueprints.length} 章)`, `(${visibleBlueprints.length} chapters)`)}
-              </span>
-            )}
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* ① 工具栏 — demo 3094–3097 行 .edtool */}
+      <div className="edtool">
+        <div className="et-l">
+          <BookOpen size={15} />
+          <b>{text('章节蓝图', 'Chapter blueprints')}</b>
+          <span className="v">
+            {text(`${visibleBlueprints.length} 章`, `${visibleBlueprints.length} chapters`)}
           </span>
           {visibleDirty && (
-            <span className="inline-flex items-center gap-1 text-[0.7rem]" style={{ color: 'var(--color-accent)' }}>
-              <span
-                aria-hidden="true"
-                className="h-1.5 w-1.5 rounded-full"
-                style={{ backgroundColor: 'currentColor' }}
-              />
+            <span className="badge r" title={text('有尚未保存的修改', 'There are unsaved changes')}>
               {text('未保存', 'Unsaved')}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1">
-          {/* 写作入口 — 仅下一章可写时显示 */}
+        <div className="et-r">
+          {/* 写作此章 — demo 3095 行：仅下一章可写时出现 */}
           {projectDataReady && nextWritableBlueprint && (
-            <Button
-              variant="ai"
-              size="sm"
+            <button
+              className="btn primary sm"
+              type="button"
               onClick={() => handleWriteChapter(nextWritableBlueprint)}
+              title={text('以当前蓝图信息生成草稿', 'Create a draft from this blueprint')}
             >
-              <PenLine size={12} />
+              <PenLine size={11} />
               {text(`写作第${nextWritableBlueprint.chapterNumber}章`, `Write Chapter ${nextWritableBlueprint.chapterNumber}`)}
-            </Button>
+            </button>
           )}
+          {/* 批量写作 — demo 3096 行（先生：原「批量创作」改名，并按同排按钮的规格补上小图标） */}
           {projectDataReady && nextWritableBlueprint && (
-            <Button
-              variant="outline"
-              size="sm"
+            <button
+              className="btn outline sm"
+              type="button"
               onClick={() => setShowBatchCreationDialog(true)}
-              title={text('按连续章节蓝图启动受控批量创作任务（最高10章）', 'Start a controlled batch writing task from consecutive chapter blueprints (maximum 10 chapters).')}
+              title={text('按连续章节蓝图启动受控批量写作任务（最高10章）', 'Start a controlled batch writing task from consecutive chapter blueprints (maximum 10 chapters).')}
             >
-              <ListChecks size={12} />
-              {text('批量创作', 'Batch write')}
-            </Button>
+              <Layers size={11} />
+              {text('批量写作', 'Batch write')}
+            </button>
           )}
-          {/* AI 生成蓝图 → 弹出 DirectoryConfigDialog */}
-          <Button
-            variant="ai"
-            size="sm"
+          {/* AI 生成蓝图 — demo 3097 行（弹出 DirectoryConfigDialog） */}
+          <button
+            className="btn ai sm"
+            type="button"
             onClick={() => setShowBlueprintDialog(true)}
             disabled={!projectDataReady || Boolean(authorityError)}
             title={text('AI 生成章节蓝图（选择范围和模式）', 'Generate chapter blueprints with AI (choose the range and mode)')}
           >
-            <Sparkles size={12} />
-            {text('AI 生成蓝图', 'AI generate blueprints')}
-          </Button>
-          <Button variant="ghost" size="icon" onClick={() => loadBlueprints()} title={text('重新加载', 'Reload')} disabled={loading}>
-            <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
-          </Button>
-          <Button variant="ghost" size="icon" onClick={handleAddChapter} disabled={!projectDataReady || nextWriteChapter === null || Boolean(authorityError)} title={text('新建章节', 'New chapter')}>
-            <Plus size={14} />
-          </Button>
-          <Button
-            variant="destructive"
-            size="sm"
+            <Sparkles size={11} />
+            {text('AI生成', 'AI generate')}
+          </button>
+          {/* 刷新：demo 版面里没有位置，按任务要求收进 .et-r */}
+          <button
+            className="btn ghost sm"
+            type="button"
+            onClick={() => loadBlueprints()}
+            disabled={loading}
+            title={text('重新加载', 'Reload')}
+          >
+            <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
+            {text('刷新', 'Reload')}
+          </button>
+          {/* 手动添加：与「批量创作」同一规格（先生：子菜单按钮的外框与高度要统一） */}
+          <button
+            className="btn outline sm"
+            type="button"
+            onClick={handleAddChapter}
+            disabled={!projectDataReady || nextWriteChapter === null || Boolean(authorityError)}
+            title={text('手动新建一章蓝图', 'Add a blueprint manually')}
+          >
+            <Plus size={11} />
+            {text('手动添加', 'Add manually')}
+          </button>
+          <button
+            className="btn primary sm"
+            type="button"
             onClick={handleClearAllBlueprints}
             disabled={saving || visibleBlueprints.length === 0 || !projectDataReady}
             title={text('清空全部章节蓝图', 'Clear all chapter blueprints')}
           >
-            <Trash2 size={12} />
-            {text('清空全部蓝图', 'Clear all blueprints')}
-          </Button>
-          {visibleDirty && (
-            <Button variant="outline" size="sm" onClick={handleSaveAll} disabled={saving || !projectDataReady}>
-            <Save size={12} /> {saving ? text('保存中...', 'Saving...') : text('保存全部', 'Save all')}
-            </Button>
-          )}
+            <Trash2 size={11} />
+            {text('清空全部', 'Clear all')}
+          </button>
+          {/* 保存全部：先生定的规矩 —— 保存类一律虚框，实心主色只留给删除类动作
+              （「清空全部」这类才是实框红底白字）。没有未保存改动时按钮仍常驻并显示「已保存」 */}
+          <button
+            className="btn outline sm"
+            type="button"
+            onClick={handleSaveAll}
+            disabled={saving || !projectDataReady || !visibleDirty}
+            title={visibleDirty
+              ? text('保存全部修改', 'Save all changes')
+              : text('没有未保存的修改', 'Nothing to save')}
+          >
+            <Save size={11} /> {visibleDirty ? text('保存全部', 'Save all') : text('已保存', 'Saved')}
+          </button>
         </div>
       </div>
 
@@ -854,148 +953,201 @@ export default function ChapterCardEditor({
           onClose={() => setShowBatchCreationDialog(false)}
         />
 
-      {/* 主区域：左侧列表 + 右侧编辑 */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* 左侧章节列表 */}
+      {/* ② 主体 — demo 3098 行：左栏章节流 + 右栏章卡 */}
+      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+        {/* 左栏章节流 — demo 3099–3106 行。
+            宽度交给作者拖：章节标题长短差得很远，固定 232px 既截长标题又白占正文的地方。 */}
         <div
-          className="flex flex-col flex-shrink-0 w-[200px] border-r overflow-hidden"
-          style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-sidebar)' }}
+          style={{ width: catalogWidth, flex: 'none', overflowY: 'auto', padding: '8px 5px' }}
         >
           {visibleBlueprints.length === 0 ? (
-            <div className="flex flex-col items-center justify-center flex-1 gap-3 opacity-40 p-4">
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, opacity: 0.4, padding: 16, minHeight: 180 }}>
               <BookOpen size={28} />
-              <span className="text-xs text-center">{text(
-                '暂无蓝图，可点击右上角「+」手动新建，或用「AI 生成蓝图」批量创建。',
-                'No blueprints yet. Use “+” to add one manually, or “AI generate blueprints” to create a batch.',
+              <span style={{ fontSize: 12, textAlign: 'center' }}>{text(
+                '暂无蓝图，可用工具条上的「+ 手动添加」新建，或用「AI生成」批量创建。',
+                'No blueprints yet. Use “Add manually” on the toolbar, or “AI generate” to create a batch.',
               )}</span>
             </div>
           ) : (
-          <div className="flex-1 overflow-y-auto p-1">
-            {visibleBlueprints.map((bp, idx) => (
-              <div
-                key={bp.chapterNumber}
-                className={cn(
-                  'group relative px-2.5 py-2 rounded-md text-xs cursor-pointer mb-0.5 transition-colors',
-                  selectedIdx === idx
-                    ? 'bg-[var(--color-active)] text-[var(--color-text)]'
-                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-hover)]'
-                )}
-                onClick={() => setSelectedIdx(idx)}
-              >
-                <div className="flex items-center gap-1.5">
-                  <span className="font-mono text-[0.7rem] opacity-40 flex-shrink-0">
+            visibleBlueprints.map((bp, idx) => {
+              const chapterDirty = dirtyChapterNumbers.has(bp.chapterNumber)
+              // demo 的 .cdot 状态点：产品的每行状态（未保存 / 有要点 / 有指导 / 未填写）落在同一条语义上。
+              const cdotClass = chapterDirty ? 'dft' : bp.notes ? 'fin' : bp.userGuidance ? 'rdy' : 'new'
+              const cdotTitle = chapterDirty
+                ? text('有尚未保存的修改', 'There are unsaved changes')
+                : bp.notes
+                  ? text('已生成章节要点', 'Chapter notes are available')
+                  : bp.userGuidance
+                    ? text('已有作者微操指导', 'Author guidance is available')
+                    : text('尚未填写卡面', 'This card is still empty')
+              return (
+                <div
+                  key={bp.chapterNumber}
+                  className={cn('tree-row', selectedIdx === idx && 'on')}
+                  onClick={() => setSelectedIdx(idx)}
+                  title={text(
+                    `第 ${bp.chapterNumber} 章 · ${roleLabel(bp.role)}`,
+                    `Chapter ${bp.chapterNumber} · ${roleLabel(bp.role)}`,
+                  )}
+                >
+                  <span className={cn('cdot', cdotClass)} title={cdotTitle} />
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: '9.5px', color: 'var(--faint)', width: 16, textAlign: 'right', flex: 'none' }}>
                     {bp.chapterNumber}
                   </span>
-                  <span className="font-medium truncate flex-1">{bp.title || text('未命名', 'Untitled')}</span>
+                  <span className="tl">{bp.title || text('未命名', 'Untitled')}</span>
+                  {/* 目录里只留章节名：定位（简介）收进 title 悬浮提示，不再挤在行尾 */}
                 </div>
-                <div className="flex items-center gap-1 mt-0.5">
-                  <span className={cn(
-                    'text-[0.7rem] px-1 py-0.5 rounded',
-                    ROLE_COLORS[bp.role] || 'bg-[var(--color-hover)] text-[var(--color-text-muted)]'
-                  )}>
-                    {roleLabel(bp.role)}
-                  </span>
-                  {bp.userGuidance && (
-                    <span
-                      className="text-[0.7rem] px-1 py-0.5 rounded"
-                      style={{ backgroundColor: 'rgba(var(--accent-rgb), 0.15)', color: 'var(--color-accent)' }}
-                      title={text('已有作者微操指导', 'Author guidance is available')}
-                    >
-                      {text('有指导', 'Guidance')}
-                    </span>
-                  )}
-                  {bp.notes && (
-                    <span
-                      className="text-[0.7rem] px-1 py-0.5 rounded"
-                      style={{ backgroundColor: 'rgba(34,197,94,0.15)', color: 'rgb(34,197,94)' }}
-                      title={text('已生成章节要点', 'Chapter notes are available')}
-                    >
-                      {text('有要点', 'Notes')}
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+              )
+            })
           )}
         </div>
 
-        {/* 右侧编辑区 */}
-        <div className="flex-1 overflow-y-auto">
-          {selected ? (
-            <div className="max-w-2xl mx-auto px-5 py-4">
-              {/* 编辑区头部 */}
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-bold" style={{ color: 'var(--color-text)' }}>
-                  {text(
-                    `第 ${selected.chapterNumber} 章：${selected.title || '未命名'}`,
-                    `Chapter ${selected.chapterNumber}: ${selected.title || 'Untitled'}`,
-                  )}
-                </h3>
-                <div className="flex items-center gap-1.5">
-                  {/* 仅下一章允许写作 */}
-                  {nextWritableBlueprint && selected.chapterNumber === nextWritableBlueprint.chapterNumber && (
-                    <Button
-                      variant="ai"
-                      size="sm"
-                      onClick={() => handleWriteChapter(selected)}
-                      title={text('以当前蓝图信息生成草稿', 'Create a draft from this blueprint')}
+        {/* 目录与章卡之间可拖拽：分隔感由手柄悬停显形承担，不再画固定竖线。 */}
+        <GripHandle
+          orientation="vertical"
+          title={text('拖动调整目录宽度', 'Drag to resize the chapter list')}
+          onDelta={delta => setCatalogWidth(previous => (
+            Math.min(CATALOG_WIDTH_MAX, Math.max(CATALOG_WIDTH_MIN, previous + delta))
+          ))}
+        />
+
+        {/* 右栏章卡 —— 先生：这里的标头窗口一变就跟着挪，就是因为内容容器跟标头不是同一套尺寸。
+            标头是 max-w-5xl(1024) + 左右 32px，所以内容也收敛到同一套（原为 demo 的 1160/24）。 */}
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          {/* 页头统一提到右栏内容区顶层：与其它子菜单同一位置、同一宽度（先生：整整齐齐） */}
+          {selected && (
+            <div className="pagehead-strip">
+              <PagePlate
+                section="blueprint"
+                /* 期刊化读数：章号本身就是蓝图的页码 */
+                metric={{
+                  label: text('章', 'CH'),
+                  value: String(selected.chapterNumber).padStart(2, '0'),
+                }}
+                kicker={text(`CHAPTER ${selected.chapterNumber} · 章卡`, `CHAPTER ${selected.chapterNumber}`)}
+                title={text(
+                  `第 ${selected.chapterNumber} 章：${selected.title || '未命名'}`,
+                  `Chapter ${selected.chapterNumber}: ${selected.title || 'Untitled'}`,
+                )}
+                description={text(
+                  '这一章要交代什么、谁出场、留什么钩子 —— 蓝图是正文的事实源',
+                  'What this chapter must deliver: beats, cast and the hook it leaves. The blueprint is the source of truth for the draft.',
+                )}
+                actions={(
+                  <>
+                    {selectedCardReady ? (
+                      <span className="badge g">
+                        <Check size={9} /> {text('已就绪', 'Ready')}
+                      </span>
+                    ) : (
+                      <span
+                        className="badge gray"
+                        title={missingReadyFields.length > 0
+                          ? text(
+                            `还缺：${missingReadyFields.join('、')}`,
+                            `Still missing: ${missingReadyFields.join(', ')}`,
+                          )
+                          : undefined}
+                      >
+                        {text('未就绪', 'Not ready')}
+                      </span>
+                    )}
+                    {/* 删除章节在 demo 版面里没有位置，按「最贴近的位置」并入页头动作组；
+                        样式与其它子菜单的按钮统一到 demo 的 .btn.sm */}
+                    <button
+                      className="btn outline sm"
+                      type="button"
+                      onClick={handleDeleteChapter}
+                      title={text('删除此章', 'Delete this chapter')}
                     >
-                      <PenLine size={12} /> {text('写作此章', 'Write this chapter')}
-                    </Button>
-                  )}
-                  <Button variant="destructive" size="sm" onClick={handleDeleteChapter} title={text('删除此章', 'Delete this chapter')}>
-                    <Trash2 size={12} />
-                    {text('删除此章', 'Delete chapter')}
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={handleSaveOne} disabled={saving}>
-                    <Save size={12} /> {saving ? text('保存中...', 'Saving...') : text('保存', 'Save')}
-                  </Button>
-                </div>
-              </div>
+                      <Trash2 size={11} />
+                      {text('删除此章', 'Delete chapter')}
+                    </button>
+                  </>
+                )}
+              />
+            </div>
+          )}
+          <div style={{ maxWidth: 1024, margin: '0 auto', padding: '0 32px 40px' }}>
+            {selected ? (
+              <>
+                {/*
+                  先生：作者在章节蓝图也要能 @，而且要跟助手那边一样的菜单。
+                  放在字段最上方 —— 写蓝图时先想"这章要用到哪些设定"，最顺手。
+                */}
+                <ChapterWorldSettingRefs chapterNumber={selected.chapterNumber} />
 
-              <div className="space-y-3">
-                {/* 基本信息 */}
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <Label>{text('章节号', 'Chapter number')}</Label>
-                    <Input
-                      type="number"
-                      value={selected.chapterNumber}
-                      readOnly
-                      aria-readonly="true"
-                      title={text('章节号是现有内容的稳定标识，不能在普通编辑中修改', 'The chapter number is a stable identifier and cannot be changed in ordinary editing.')}
-                    />
+                {/* 卡面字段 — demo 3112–3120 行 */}
+                <div className="fld">
+                  <div className="fh">
+                    <span className="fk">NO.</span>
+                    <span className="fn">{text('章节号', 'Chapter number')}</span>
+                    <span className="req">{text('必填', 'Required')}</span>
+                    <span className="hint">
+                      {text(
+                        '系统按定稿进度自动分配，无需手填',
+                        'Assigned automatically from the finalized sequence — nothing to fill in',
+                      )}
+                    </span>
                   </div>
-                  <div className="col-span-2">
-                    <Label>{text('章节标题', 'Chapter title')}</Label>
-                    <Input
-                      value={selected.title}
-                      onChange={e => updateField('title', e.target.value)}
-                      placeholder={text('引人入胜的章节标题', 'A compelling chapter title')}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label>{text('章节定位', 'Chapter role')}</Label>
-                    <NativeSelect value={selected.role} onChange={e => updateField('role', e.target.value)}>
-                      {ROLES.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}
-                    </NativeSelect>
-                  </div>
-                  <div>
-                    <Label>{text('出场关键人（逗号分隔）', 'Key characters (comma-separated)')}</Label>
-                    <Input
-                      value={selected.characters.join('、')}
-                      onChange={e => updateField('characters', e.target.value.split(/[,，、\s]+/).filter(Boolean))}
-                      placeholder={text('如：主角、反派A', 'For example: protagonist, antagonist A')}
-                    />
-                  </div>
+                  <Input
+                    type="number"
+                    value={selected.chapterNumber}
+                    readOnly
+                    aria-readonly="true"
+                    title={text('章节号是现有内容的稳定标识，不能在普通编辑中修改', 'The chapter number is a stable identifier and cannot be changed in ordinary editing.')}
+                  />
                 </div>
 
-                <div>
-                  <Label>{text('主角小目标（本章最想解决的事）', 'Protagonist goal (the main thing to resolve in this chapter)')}</Label>
+                <div className="fld">
+                  <div className="fh">
+                    <span className="fn">{text('章节标题', 'Chapter title')}</span>
+                    <span className="req">{text('必填', 'Required')}</span>
+                  </div>
+                  <Input
+                    value={selected.title}
+                    onChange={e => updateField('title', e.target.value)}
+                    placeholder={text('引人入胜的章节标题', 'A compelling chapter title')}
+                  />
+                </div>
+
+                <div className="fld">
+                  <div className="fh">
+                    <span className="fn">{text('章节定位', 'Chapter role')}</span>
+                  </div>
+                  <NativeSelect value={selected.role} onChange={e => updateField('role', e.target.value)}>
+                    {ROLES.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}
+                  </NativeSelect>
+                </div>
+
+                <div className="fld">
+                  <div className="fh">
+                    <span className="fn">{text('出场人物', 'Characters')}</span>
+                    <span className="opt">{text('选填', 'Optional')}</span>
+                    <span className="hint">{text('多个名字用顿号或逗号分隔', 'Separate several names with 、 or ,')}</span>
+                  </div>
+                  {/*
+                    输入框绑定的是**作者敲下的原文**，不是名单拼出来的字符串。
+                    旧实现把 value 写成名单 join 的结果、onChange 又立刻 split：于是刚打下的
+                    顿号/逗号当场被 filter 掉，名字还会黏成一串，作者根本无法手动录入第二个人。
+                    名单解析只负责写进 selected，原文留在 charactersText 里（见上面的同步 effect）。
+                  */}
+                  <Input
+                    value={charactersText}
+                    onChange={e => {
+                      setCharactersText(e.target.value)
+                      updateField('characters', splitCharacterNames(e.target.value))
+                    }}
+                    placeholder={text('如：主角、反派A', 'For example: protagonist, antagonist A')}
+                  />
+                </div>
+
+                <div className="fld">
+                  <div className="fh">
+                    <span className="fn">{text('主角小目标', 'Protagonist goal')}</span>
+                    <span className="req">{text('必填', 'Required')}</span>
+                    <span className="hint">{text('本章最想解决的事', 'The main thing to resolve in this chapter')}</span>
+                  </div>
                   <Textarea
                     value={selected.purpose}
                     onChange={e => updateField('purpose', e.target.value)}
@@ -1004,8 +1156,11 @@ export default function ChapterCardEditor({
                   />
                 </div>
 
-                <div>
-                  <Label>{text('实质冲突与转折', 'Core conflict and turning point')}</Label>
+                <div className="fld">
+                  <div className="fh">
+                    <span className="fn">{text('实质冲突与转折', 'Core conflict and turning point')}</span>
+                    <span className="req">{text('必填', 'Required')}</span>
+                  </div>
                   <Textarea
                     value={selected.keyEvents}
                     onChange={e => updateField('keyEvents', e.target.value)}
@@ -1014,8 +1169,11 @@ export default function ChapterCardEditor({
                   />
                 </div>
 
-                <div>
-                  <Label>{text('末尾悬念钩子', 'Ending suspense hook')}</Label>
+                <div className="fld">
+                  <div className="fh">
+                    <span className="fn">{text('末尾悬念钩子', 'Ending suspense hook')}</span>
+                    <span className="req">{text('必填', 'Required')}</span>
+                  </div>
                   <Textarea
                     value={selected.suspenseHook}
                     onChange={e => updateField('suspenseHook', e.target.value)}
@@ -1024,23 +1182,13 @@ export default function ChapterCardEditor({
                   />
                 </div>
 
-                {/* 作者微操指导 — 特别标注，写稿时注入为最高优先级 */}
-                <div
-                  className="p-3 rounded-lg border"
-                  style={{
-                    borderColor: 'var(--color-accent)',
-                    backgroundColor: 'rgba(var(--accent-rgb, 99 102 241), 0.06)',
-                  }}
-                >
-                  <Label className="flex items-center gap-1.5">
-                    <span>{text('作者微操指导', 'Author guidance')}</span>
-                    <span
-                      className="text-[0.7rem] font-normal"
-                      style={{ color: 'var(--color-text-muted)' }}
-                    >
-                      {text('（写稿时会作为最高优先级注入 AI — 可覆盖蓝图）', '(Used as the highest-priority instruction during drafting; it can override the blueprint.)')}
-                    </span>
-                  </Label>
+                {/* 作者微操指导 — 写稿时注入为最高优先级；这句强调按 demo 放进 .hint */}
+                <div className="fld">
+                  <div className="fh">
+                    <span className="fn">{text('作者微操指导', 'Author guidance')}</span>
+                    <span className="opt">{text('选填', 'Optional')}</span>
+                    <span className="hint">{text('写稿时最高优先级注入 AI — 可覆盖蓝图', 'Injected into the AI with the highest priority when drafting — it can override the blueprint')}</span>
+                  </div>
                   <Textarea
                     value={selected.userGuidance}
                     onChange={e => updateField('userGuidance', e.target.value)}
@@ -1049,32 +1197,23 @@ export default function ChapterCardEditor({
                       'Add an unexpected betrayal in this chapter...\nLet the antagonist reveal a weakness...\n(Leave blank to follow the blueprint exactly.)',
                     )}
                     rows={3}
-                    style={{ marginTop: 6 }}
                   />
                 </div>
-                {/* 章节要点（定稿后自动生成，也可手动编辑） */}
-                <div
-                  className="p-3 rounded-lg border"
-                  style={{
-                    borderColor: 'var(--color-border)',
-                    backgroundColor: 'rgba(34,197,94,0.04)',
-                  }}
-                >
-                  <Label className="flex items-center gap-1.5">
-                    <span>{text('章节要点', 'Chapter notes')}</span>
-                    <span
-                      className="text-[0.7rem] font-normal"
-                      style={{ color: 'var(--color-text-muted)' }}
-                    >
+
+                {/* 章节要点（定稿后自动生成，也可手动编辑）；自动生成时间保留在 .hint 里 */}
+                <div className="fld">
+                  <div className="fh">
+                    <span className="fn">{text('章节要点', 'Chapter notes')}</span>
+                    <span className="opt">{text('选填', 'Optional')}</span>
+                    <span className="hint">
                       {selected.notesUpdatedAt
                         ? text(
-                          `（定稿后自动生成 — ${new Date(selected.notesUpdatedAt).toLocaleDateString(locale)}）`,
-                          `(Generated after finalization — ${new Date(selected.notesUpdatedAt).toLocaleDateString(locale)})`,
+                          `定稿后自动生成 — ${new Date(selected.notesUpdatedAt).toLocaleDateString(locale)}`,
+                          `Generated after finalization — ${new Date(selected.notesUpdatedAt).toLocaleDateString(locale)}`,
                         )
-                        : text('（定稿后自动生成，也可手动填写）', '(Generated after finalization, or enter it manually.)')
-                      }
+                        : text('定稿后由 AI 自动回填', 'Filled in by the AI after finalization')}
                     </span>
-                  </Label>
+                  </div>
                   <Textarea
                     value={selected.notes || ''}
                     onChange={e => updateField('notes', e.target.value)}
@@ -1082,17 +1221,50 @@ export default function ChapterCardEditor({
                       '定稿后 AI 会自动填充本章要点（事件进展/角色变化/伏笔埋点），也可以提前手动输入给 AI 作参考',
                       'After finalization, AI fills these notes with plot progress, character changes, and foreshadowing. You can also enter them beforehand as AI reference.',
                     )}
-                    rows={4}
+                    rows={3}
                   />
                 </div>
+
+                {/* 底部动作行 — demo 3121 行：保存 + 写作此章（不可写时给禁用的占位按钮） */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                  {/* 先生：单章保存同样要「未修改=已保存 / 改动了=保存」，
+                      脏标记直接取该章是否在 dirtyChapterNumbers 里 */}
+                  <Button
+                    variant="outline"
+                    onClick={handleSaveOne}
+                    disabled={saving || !dirtyChapterNumbers.has(selected.chapterNumber)}
+                  >
+                    <Save size={12} /> {dirtyChapterNumbers.has(selected.chapterNumber)
+                      ? text('保存', 'Save')
+                      : text('已保存', 'Saved')}
+                  </Button>
+                  {selectedIsWritable ? (
+                    <button
+                      className="btn primary"
+                      type="button"
+                      onClick={() => handleWriteChapter(selected)}
+                      title={text('以当前蓝图信息生成草稿', 'Create a draft from this blueprint')}
+                    >
+                      <PenLine size={12} /> {text('写作此章 →', 'Write this chapter →')}
+                    </button>
+                  ) : (
+                    <button className="btn ghost" type="button" disabled>
+                      {authorityError
+                        ? text('先修复定稿章节', 'Repair the finalized chapters first')
+                        : nextWritableBlueprint
+                          ? text(`写作入口为第 ${nextWritableBlueprint.chapterNumber} 章`, `The writing entry is Chapter ${nextWritableBlueprint.chapterNumber}`)
+                          : text('先完善卡面', 'Complete this card first')}
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, opacity: 0.3, minHeight: 320 }}>
+                <BookOpen size={36} />
+                <span style={{ fontSize: 13 }}>{text('在左侧选择一章开始编辑', 'Choose a chapter on the left to start editing')}</span>
               </div>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center h-full gap-3 opacity-30">
-              <BookOpen size={36} />
-              <span className="text-sm">{text('在左侧选择一章开始编辑', 'Choose a chapter on the left to start editing')}</span>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
     </div>

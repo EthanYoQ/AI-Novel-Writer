@@ -277,7 +277,10 @@ function ModelForm({
         <Button variant="ghost" onClick={onCancel}>{text('取消', 'Cancel')}</Button>
       </div>
       {testResult && (
-        <div className={`text-xs p-2 rounded ${testResult.success ? 'bg-green-500/10 text-[var(--color-success-text)] border border-green-500/20' : 'bg-red-500/10 text-[var(--color-error-text)] border border-red-500/20'} break-all`}>
+        <div
+          className={`v2-notice text-xs p-2 rounded ${testResult.success ? 'bg-green-500/10 text-[var(--color-success-text)] border border-green-500/20' : 'bg-red-500/10 text-[var(--color-error-text)] border border-red-500/20'} break-all`}
+          data-tone={testResult.success ? 'success' : 'error'}
+        >
           {testResult.success
             ? <><CheckCircle2 size={13} className="inline mr-1" />{text('连接成功！', 'Connection succeeded!')}</>
             : <><XCircle size={13} className="inline mr-1" />{text('连接失败：{error}', 'Connection failed: {error}', { error: testResult.error ?? '' })}</>}

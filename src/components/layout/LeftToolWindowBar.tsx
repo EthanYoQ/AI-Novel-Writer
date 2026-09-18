@@ -134,10 +134,10 @@ export default function LeftToolWindowBar() {
         />
         <LeftNavButton
           icon={Globe2}
-          label={text('世界', 'World')}
+          label={text('设定', 'World')}
           active={activeRailItem === 'world'}
-          title={text('世界观', 'World building')}
-          onClick={() => setSidebarView('knowledge', 'world')}
+          title={text('设定集', 'World building')}
+          onClick={() => setSidebarView('world', 'world')}
         />
         <LeftNavButton
           icon={GitBranch}
@@ -148,7 +148,7 @@ export default function LeftToolWindowBar() {
             setSidebarView('project', 'plot-tree')
             openBuiltinEditor(
               'narrative-thread-editor',
-              text('剧情树与叙事线索', 'Plot tree & narrative threads'),
+              text('剧情树与伏笔', 'Plot tree & foreshadowing'),
               'narrative-thread',
               'plot-tree',
             )

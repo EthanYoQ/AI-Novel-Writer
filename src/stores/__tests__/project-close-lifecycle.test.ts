@@ -258,7 +258,13 @@ describe('project close lifecycle', () => {
     expect(useEditorStore.getState().tabs).toEqual([
       expect.objectContaining({ id: 'b-tab', projectKey: bPath, dirty: true }),
     ])
+    /**
+     * 账本按项目保留。收起标签只是收起显示层，未保存内容存在按 projectKey
+     * 索引的草稿账本里 —— 连同账本一起删除会让「改了没保存就切书」的内容
+     * 永久消失，而且 countUnsavedEditorItems 又把账本当未保存内容来保护。
+     */
     expect(JSON.parse(useEditorStore.getState().draftLedgers.config).projects).toEqual([
+      expect.objectContaining({ projectKey: aPath }),
       expect.objectContaining({ projectKey: bPath }),
     ])
     expect(useEditorStore.getState().activeTabId).toBe('b-tab')

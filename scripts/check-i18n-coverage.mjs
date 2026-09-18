@@ -114,8 +114,11 @@ function filesAt(target) {
   if (!fs.existsSync(target)) return []
   const stat = fs.statSync(target)
   if (stat.isFile()) return [target]
-  return fs.readdirSync(target, { withFileTypes: true }).flatMap(entry =>
-    filesAt(path.join(target, entry.name)))
+  return fs.readdirSync(target, { withFileTypes: true }).flatMap(entry => {
+    // 测试文件里的中文是断言文案，不是用户可见文案，不在 i18n 覆盖检查范围内。
+    if (entry.isDirectory() && entry.name === '__tests__') return []
+    return filesAt(path.join(target, entry.name))
+  })
 }
 
 function relativePath(root, file) {

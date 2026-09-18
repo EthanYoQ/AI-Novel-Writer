@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ModelProfile } from '../../../shared/ipc-channels'
 import {
   createGenerationHarness,
+  deriveDefaultPromptBudgetUtf8Bytes,
   type CompletionPort,
   type DefaultModelSnapshot,
 } from '../generation-harness'
@@ -816,5 +817,177 @@ describe('GenerationHarness', () => {
     expect(fingerprint).not.toContain('base-url-secret')
     expect(fingerprint).not.toContain('query-secret')
     expect(fingerprint).toContain('provider-a.example/v1')
+  })
+})
+
+/**
+ * 缺省字节闸门必须跟着模型上下文走。
+ *
+ * 先生实测报错（绑定写作 Skill 的润色修稿被拦）：
+ *   「提示词共 47,331 UTF-8 字节，超过上限 32,768 字节 …… 模型上下文：1,000,000 tokens；
+ *     估算输入：18,696 tokens；结果码：PROMPT_BUDGET_EXHAUSTED」
+ * 根因是调用方塞了一个写死的 32 KB 缺省上限 —— 与模型能力毫无关系。
+ * 现在缺省值由上下文推导，下面几条把它钉住：
+ *   · 百万级窗口：这等规模的提示词**必须放行**（这正是先生的场景）；
+ *   · 窗口未知：仍旧 32 KB 保守兜底，**与改动前完全一致**；
+ *   · 小窗口：不放宽；
+ *   · 调用方显式给的上限：照旧优先。
+ */
+describe('缺省提示词闸门跟随模型上下文', () => {
+  /** 先生那份「去 AI 味写作 Skill」的实测量级：19,276 字节。 */
+  const SKILL_CHARS = 6_400          // 6,400 个汉字 ≈ 19,200 UTF-8 字节
+  const OVERHEAD_CHARS = 9_300       // ≈ 27,900 字节，对应「模板与结构开销 28,055」
+
+  /** 复刻先生那次的请求形状：写作 Skill 段 + 模板/结构开销，合计约 47 KB。 */
+  function oversizedRefineTask() {
+    const skillText = '技'.repeat(SKILL_CHARS)
+    const overheadText = '模'.repeat(OVERHEAD_CHARS)
+    const content = `${skillText}\n${overheadText}`
+    return {
+      purpose: 'refine-draft',
+      output: 'visible-text' as const,
+      messages: [{ role: 'user' as const, content }],
+      promptBudget: {
+        // 刻意不给 limitUtf8Bytes —— 缺省闸门必须自己看着模型来
+        sections: [{
+          sectionName: 'writing-skill',
+          displayName: '去 AI 味写作 Skill',
+          messageIndex: 0,
+          finalText: skillText,
+        }],
+      },
+    }
+  }
+
+  function harnessWithContext(contextWindowTokens: number | null) {
+    const complete = vi.fn<CompletionPort['complete']>().mockResolvedValue({
+      content: '润色后的正文',
+      finishReason: 'stop',
+    })
+    const harness = createGenerationHarness({
+      modelSource: {
+        snapshotDefaultModel: () => (contextWindowTokens === null
+          ? { revision: 'unknown-window', model: model() }
+          : {
+              revision: 'known-window',
+              model: model({ maxTokens: 32_768 }),
+              modelExecutionLeaseId: 'lease-known-window',
+              endpointFingerprint: 'known-window-endpoint',
+              resolvedCapabilities: {
+                contextWindowTokens,
+                maxOutputTokens: 32_768,
+                reasoning: false,
+                structuredOutput: true,
+                usage: true,
+                source: {
+                  contextWindowTokens: 'verified-provider-preset',
+                  maxOutputTokens: 'verified-provider-preset',
+                  featureFlags: 'verified-provider-preset',
+                },
+              },
+            }),
+      },
+      completionPort: { complete },
+      policy: {
+        maxAttempts: 2,
+        maxRequestedOutputTokens: 16_384,
+        maxRequestedOutputTokensPerAttempt: 8_192,
+        deadlineMs: 60_000,
+      },
+    })
+    return { harness, complete }
+  }
+
+  it('百万 token 窗口：约 47 KB 的「Skill + 模板」提示词不再被误拦', async () => {
+    const { harness, complete } = harnessWithContext(1_000_000)
+    const diagnostic = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+
+    const outcome = await harness.openSession().complete(oversizedRefineTask())
+
+    diagnostic.mockRestore()
+    expect(complete, '这种规模必须真的发给模型，而不是被字节闸门挡下').toHaveBeenCalledOnce()
+    expect(outcome.status).toBe('completed')
+    expect(outcome.receipt.promptBudget).toMatchObject({
+      limitUtf8Bytes: 512 * 1024,
+      contextWindowTokens: 1_000_000,
+      errorCode: 'OK',
+    })
+    expect(outcome.receipt.promptBudget!.sections).toEqual(expect.arrayContaining([
+      { sectionName: 'writing-skill', displayName: '去 AI 味写作 Skill', utf8Bytes: 19_200 },
+    ]))
+  })
+
+  it('窗口未知：仍旧 32 KB 保守兜底（与改动前一致，含「可能误报」的代价）', async () => {
+    const { harness, complete } = harnessWithContext(null)
+    const diagnostic = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+
+    let failure: unknown
+    try {
+      await harness.openSession().complete(oversizedRefineTask())
+    } catch (error) {
+      failure = error
+    } finally {
+      diagnostic.mockRestore()
+    }
+
+    expect(failure).toMatchObject({
+      name: 'PromptBudgetExceededError',
+      code: 'PROMPT_BUDGET_EXHAUSTED',
+      report: { limitUtf8Bytes: 32 * 1024, contextWindowTokens: null },
+    })
+    expect(complete).not.toHaveBeenCalled()
+  })
+
+  it('小窗口不因此放宽：推导值低于 32 KB 时仍取 32 KB', async () => {
+    const { harness, complete } = harnessWithContext(8_192)
+    const diagnostic = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+
+    let failure: unknown
+    try {
+      await harness.openSession().complete(oversizedRefineTask())
+    } catch (error) {
+      failure = error
+    } finally {
+      diagnostic.mockRestore()
+    }
+
+    expect(failure).toMatchObject({
+      code: 'PROMPT_BUDGET_EXHAUSTED',
+      report: { limitUtf8Bytes: 32 * 1024, contextWindowTokens: 8_192 },
+    })
+    expect(complete).not.toHaveBeenCalled()
+  })
+
+  it('调用方显式给的上限照旧优先（刻意收紧的调用方不被推导值顶掉）', async () => {
+    const { harness, complete } = harnessWithContext(1_000_000)
+    const diagnostic = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    const task = oversizedRefineTask()
+    const explicit = {
+      ...task,
+      promptBudget: { ...task.promptBudget, limitUtf8Bytes: 33_000 },
+    }
+
+    let failure: unknown
+    try {
+      await harness.openSession().complete(explicit)
+    } catch (error) {
+      failure = error
+    } finally {
+      diagnostic.mockRestore()
+    }
+
+    expect(failure).toMatchObject({
+      code: 'PROMPT_BUDGET_EXHAUSTED',
+      report: { limitUtf8Bytes: 33_000 },
+    })
+    expect(complete).not.toHaveBeenCalled()
+  })
+
+  it('推导值的四条边界（窗口未知 / 极小 / 常规 / 百万级）', () => {
+    expect(deriveDefaultPromptBudgetUtf8Bytes(null), '窗口未知 → 保守缺省').toBe(32 * 1024)
+    expect(deriveDefaultPromptBudgetUtf8Bytes(0), '非法窗口 → 保守缺省').toBe(32 * 1024)
+    expect(deriveDefaultPromptBudgetUtf8Bytes(8_192), '小窗口 → 不低于 32 KB').toBe(32 * 1024)
+    expect(deriveDefaultPromptBudgetUtf8Bytes(128_000), '128K × 3 ÷ 2 = 192 KB').toBe(192_000)
+    expect(deriveDefaultPromptBudgetUtf8Bytes(1_000_000), '百万级 → 封顶 512 KB').toBe(512 * 1024)
   })
 })

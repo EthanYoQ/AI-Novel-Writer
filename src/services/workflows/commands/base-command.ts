@@ -45,6 +45,19 @@ type WorkflowLLMOptions = {
   writingSkillStage?: WritingSkillStage
 }
 
+/**
+ * 注入写作 Skill 时的预算策略 —— **刻意不在这一层塞缺省上限**。
+ *
+ * 字节闸门的缺省值必须跟着模型上下文走，而工作流命令看不到模型能力
+ * （那是生成运行时拿到 lease 之后才知道的事）。曾经这里写死 32 KB，代价是：
+ * 「绑定了写作 Skill 的修稿」在一百万 token 窗口的模型上被无理由拦下
+ * （先生实测：提示词 47,331 字节 / 上限 32,768，而估算输入仅 18,696 tokens）。
+ * 现在省略 `limitUtf8Bytes`，由 `deriveDefaultPromptBudgetUtf8Bytes` 按上下文推导。
+ *
+ * 但**闸门本身不能省**：不能用「当前消息实际字节数」当上限 ——
+ * 那样 total 与 limit 永远相等，`totalUtf8Bytes > effectiveLimitUtf8Bytes` 恒不成立，
+ * 预算报告永远显示 OK、实际毫无保护，是最隐蔽的一种"假闸门"。
+ */
 export function injectWritingSkillIntoTask(
   task: GenerationTask,
   context: WorkflowContext,
@@ -62,8 +75,10 @@ export function injectWritingSkillIntoTask(
     ? { ...message, content: `${block}\n\n${message.content}` }
     : message)
   const promptBudget = {
-    limitUtf8Bytes: task.promptBudget?.limitUtf8Bytes
-      ?? new TextEncoder().encode(messages.map(message => message.content).join('')).byteLength,
+    // 调用方显式收紧的上限照旧优先；没给就交给 harness 按模型上下文推导
+    ...(task.promptBudget?.limitUtf8Bytes !== undefined
+      ? { limitUtf8Bytes: task.promptBudget.limitUtf8Bytes }
+      : {}),
     sections: [
       {
         sectionName: 'writing-skill',

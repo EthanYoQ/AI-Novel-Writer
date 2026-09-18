@@ -1,0 +1,224 @@
+/* ============================================================================
+ * 「墨纸书斋」四套主题（v2）
+ *
+ * 数值原样取自 demo 的 THEME_COLORS（novel-app-demo-relation-avatars.html
+ * 第 2502–2505 行），由脚本生成，未手工改动任何一个色值。
+ * demo 原本用 applyTheme() 逐条内联注入到 documentElement；这里改成纯 CSS
+ * 属性选择器，避免换主题时产生 24 次 style 写入与一次整树重排。
+ *
+ * 兜底：未提供 data-v2-theme（或取到未知值）时回落到 shell.css :root 的浅色纸墨。
+ * ========================================================================== */
+@layer components {
+
+/* ---- 浅色 Light ---- */
+[data-ui='v2'][data-v2-theme='0'] {
+  --seal: #A93226;
+  --seal-hover: #8C2A20;
+  --paper: #F3EFE4;
+  --paper2: #ECE5D3;
+  --panel: #FAF7EE;
+  --panel2: #F6F1E3;
+  --manuscript: #FCFAF2;
+  --ink: #2A261E;
+  --ink2: #57513F;
+  --muted: #8F8876;
+  --faint: #B7AE99;
+  --line: #E0D8C2;
+  --line2: #D2C8AE;
+  --jade: #33404F;
+  --jade2: #2B3642;
+  --info: #3D6E8F;
+  --gold: #B9A34A;
+  --gold2: #8C7A2E;
+  --chrome1: #F8F5EB;
+  --chrome2: #F1ECDE;
+  --white: #FFFFFF;
+  --soft-white: #FFFDF7;
+  --spine1: #313C47;
+  --spine2: #272F38;
+  --seal-rgb: 169,50,38;
+}
+
+/* ---- 星汉 Starry（深空星空）----
+ * 色相家族承自 v1 的 .galaxy（Logo 背景 #0A1628，H≈216°）：同一条蓝，
+ * 但把明度阶梯拉开 —— 夜空要够深，星才显得亮。
+ *
+ * 与黑夜主题的分野（这是它存在的理由，不是换色深浅）：
+ *   · 底   深空蓝紫 · 有色相      vs  中性炭灰 · 无彩度
+ *   · 墨   冰白星光 #EAF2FF       vs  暖米白 #F2E8D8
+ *   · 强调 星尘蓝 #7FB4E0         vs  室内琥珀 #C88B3A
+ *   · 面   手稿纸面比面板更暗      vs  手稿纸面最亮
+ *          （写作要落进最深处，不是被灯打亮的台面）
+ *   · 星尘 天穹条带上有星         vs  纯净无物（见文件末「星汉的星尘」）
+ */
+[data-ui='v2'][data-v2-theme='1'] {
+  /* ---- 底与面：自上而下由深转浅，像地平线透出的一线微光 ---- */
+  --paper2: #050B14;       /* 应用底 · 天穹 */
+  --paper: #07101C;        /* 侧栏 / 目录栏 */
+  --panel: #0A1424;        /* 面板 */
+  --panel2: #0C1A2E;       /* 次级面 */
+  --manuscript: #091220;   /* 手稿纸面 —— 比面板更暗，写作落进最深处 */
+  --white: #112440;        /* 提亮面 · 选中 */
+  --soft-white: #0E1D34;
+
+  /* ---- 墨阶：冰白星光。不用纯白，避免深底上的眩光 ---- */
+  --ink: #EAF2FF;
+  --ink2: #B9CBE0;
+  --muted: #8497B0;
+  --faint: #5C6E88;
+
+  /* ---- 线：深蓝的星轨，含蓄到几乎看不见 ---- */
+  --line: #152543;
+  --line2: #1E3357;
+
+  /* ---- 强调：星尘蓝 ----
+     深底上悬停要「亮起来」，所以 hover 比常态更亮 ——
+     与浅色主题的压暗方向相反，这是星空的性子。 */
+  --seal: #7FB4E0;
+  --seal-hover: #9BCBF0;
+  --seal-rgb: 127,180,224;
+
+  /* ---- 深面色块：书脊、状态栏、工具条 —— 天穹以下最沉的一层 ---- */
+  --jade: #050A12;
+  --jade2: #020508;
+  --spine1: #040910;
+  --spine2: #03060A;
+  --chrome1: #0D1C31;      /* 顶栏 —— 大气层，比底色亮一档 */
+  --chrome2: #07101C;
+
+  /* ---- 语义色：深底上必须提亮才立得住 ----
+     浅纸上的深绿深红（#4E7A54 / #C0392B）落在夜空上对比不足 3:1，会糊掉。
+     黑夜主题没做这一步（沿用浅色组），星空这里补全。 */
+  --info: #7FB4E0;
+  --gold: #D8B563;         /* 恒星金 —— 全主题唯一的暖色，只给品牌与未竟之章 */
+  --gold2: #A8894A;
+
+  /* 星云紫 —— 图标底色专用 ----
+     取自先生首页壁纸 xingkong.png 的实测：该图紫色集中在 H 260–275°，亮层
+     代表 #8758B7。这里沿用同一色相 270°，明度提到 0.62 —— 壁纸实测亮值
+     L=0.53 落在蓝色壁纸上只有 2.9:1，面板上会糊；提到 0.62 后在本主题的
+     天穹底上是 5.4:1，既与壁纸呼应又跳得出来。
+     顺带解决一个真问题：本主题下 --warn(#E8B84B) 与 --gold(#D8B563) 同为
+     黄系，两个状态点几乎分不清，换成紫后四态（绿/冰蓝/黄/紫）各归其位。 */
+  --nebula: #9E72CA;
+  /* 同色低透明版 —— 给设置页那批「写死了米黄的面」用（图标底 #E9E1D1、
+     提示条 #EEE7D7）。它们不跟主题走，在深色主题下就是一块突兀的浅色，
+     先生看到的「黄色框体」正是它们。 */
+  --nebula-soft: rgba(158, 114, 202, 0.16);
+
+  --green: #5FC9A0;
+  --greentx: #7EDCB4;
+  --green-rgb: 95,201,160;
+  --red: #F0736E;
+  --redtx: #FF9089;
+  --red-rgb: 240,115,110;
+  --warn: #E8B84B;
+  --warntx: #F5CE79;
+  --warn-rgb: 232,184,75;
+
+  /* 书架首页的星空壁纸不在这里 —— 它由 v2-assets.ts 的 shelfBackgroundStyle()
+     按主题给出完整 URL。原因：那张图挂在滚动容器的**内联 style** 上，而 CSS
+     自定义属性里的相对 url() 一旦跨「样式表 → 内联声明」使用，就可能按**文档
+     基准**解析；图在 dist/assets/ 下、文档在 dist/ 根，装成 exe 用 file:// 打开
+     时整张图会消失（先生实测「安装后星空壁纸消失」即此）。 */
+}
+
+/* ---- 纸质 Paper ---- */
+[data-ui='v2'][data-v2-theme='2'] {
+  --seal: #8C6F3B;
+  --seal-hover: #72592D;
+  --paper: #EFE5D0;
+  --paper2: #E3D5B8;
+  --panel: #FCF8EE;
+  --panel2: #F1E7D2;
+  --manuscript: #FFFBEF;
+  --ink: #2E281F;
+  --ink2: #665B47;
+  --muted: #91856E;
+  --faint: #B4A88F;
+  --line: #DDD0B5;
+  --line2: #CDBE9E;
+  --jade: #3C3A32;
+  --jade2: #2F302C;
+  --info: #6D7968;
+  --gold: #B9A04D;
+  --gold2: #8D7831;
+  --chrome1: #F5EFDF;
+  --chrome2: #ECE1CB;
+  --white: #FFFEF9;
+  --soft-white: #FFFBEF;
+  --spine1: #3E403A;
+  --spine2: #30312E;
+  --seal-rgb: 140,111,59;
+}
+
+/* ---- 黑夜 Night ---- */
+[data-ui='v2'][data-v2-theme='3'] {
+  --seal: #C88B3A;
+  --seal-hover: #A9702C;
+  --paper: #25282B;
+  --paper2: #1F2326;
+  --panel: #2E3337;
+  --panel2: #34393D;
+  --manuscript: #3A3F43;
+  --ink: #F2E8D8;
+  --ink2: #D2C8B8;
+  --muted: #A7A39A;
+  --faint: #777873;
+  --line: #484D50;
+  --line2: #5A5E60;
+  --jade: #20262B;
+  --jade2: #1A2024;
+  --info: #86A9BF;
+  --gold: #D2B15D;
+  --gold2: #B38C32;
+  --chrome1: #303438;
+  --chrome2: #25292C;
+  --white: #3C4145;
+  --soft-white: #353A3E;
+  --spine1: #22282D;
+  --spine2: #171C20;
+  --seal-rgb: 200,139,58;
+}
+
+/* ============================================================================
+ * 星汉的星尘 —— 主题 1 的专属标识
+ *
+ * 没有星，星空就只是「另一个深色主题」。星尘只落在天穹条带上：
+ * 顶栏、书脊、状态栏 —— 这三条是外壳的框架，不是内容。
+ * 面板、手稿纸面、正文一概不碰：星星是气氛，不是干扰，写作的地方必须干净。
+ *
+ * 五颗一层，大小与透明度各异，平铺后看不出重复；底层渐变沿用该面自身的
+ * token（--chrome1/--paper2），所以换主题时条带底色仍然跟着走。
+ *
+ * 书脊这里必须用 .v2-spine 而不是 .spine —— 书架页的每一本书也用 .spine
+ * （见 BookShelf.tsx），而皮革/布面/纸面的封面纹理选择器
+ * （.v6shelf .texture-* .spine）与本规则特异性同为 (0,3,0)，
+ * 胜负取决于文件加载顺序。收窄到 .v2-spine 才不会被书架的纹理撞上。
+ * ========================================================================== */
+[data-ui='v2'][data-v2-theme='1'] .titlebar,
+[data-ui='v2'][data-v2-theme='1'] .v2-spine,
+[data-ui='v2'][data-v2-theme='1'] .statusbar {
+  background-image:
+    radial-gradient(1.5px 1.5px at 14px 9px, rgba(255, 255, 255, 0.9), transparent),
+    radial-gradient(1.2px 1.2px at 68px 26px, rgba(176, 210, 255, 0.7), transparent),
+    radial-gradient(1.8px 1.8px at 126px 7px, rgba(255, 255, 255, 0.75), transparent),
+    radial-gradient(1.2px 1.2px at 42px 32px, rgba(255, 255, 255, 0.5), transparent),
+    radial-gradient(1.4px 1.4px at 100px 20px, rgba(203, 227, 255, 0.6), transparent),
+    linear-gradient(180deg, var(--chrome1), var(--paper2));
+  background-size: 152px 40px, 152px 40px, 152px 40px, 152px 40px, 152px 40px, 100% 100%;
+  background-repeat: repeat, repeat, repeat, repeat, repeat, no-repeat;
+}
+
+/* 天穹底色：自上而下微微转亮，像地平线透出的一线光。
+   面板会盖住大半，它留给面板之间的缝，以及将来更通透的布局。 */
+[data-ui='v2'][data-v2-theme='1'] {
+  background-image: linear-gradient(180deg, #04070E 0%, var(--paper2) 52%, #101F38 100%);
+}
+
+/* 深色主题的悬停染不在这里 —— 它必须是「无层」样式才能压过
+ * v2-panels / v2-atomic / v2-sidebar / v2-editors / v2-settings 这些无层文件，
+ * 故统一收在 v2-semantic.css 末尾（同为无层）。本文件整体在 @layer components
+ * 内，写在这里会被上面那几个文件盖掉，等于没写。 */
+
+} /* @layer components */

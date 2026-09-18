@@ -1,0 +1,1280 @@
+/* ============================================================================
+ * v2 设置中心换皮（纯 CSS）
+ *
+ * 设计真源：AI小说家-Demo/novel-app-demo-relation-avatars.html
+ *   · 设置中心主段 ......... 392–757 行（.settings-modal … .about-card）
+ *   · 遮罩 ................. 278–279 行（.mask）
+ *   · 令牌 ................. shell.css :root（--paper/--ink/--seal …）
+ *
+ * 层级约定：本文件是【无层样式】。index.css 头部第 5–13 行明确约定
+ * 「无层样式 = 需要最高优先级的样式」，而无层规则优先于任何 @layer
+ * （含 Tailwind 的 @layer utilities），因此这里既不需要、也不使用 !important。
+ *
+ * 覆盖思路（产品 SettingsModal 的 DOM 与 demo 不同，见文末「降级清单」）：
+ *   1) 变量重映射 —— 产品的设置窗口把大量颜色写成内联
+ *      `style={{ backgroundColor:'var(--color-editor-bg)' }}`，
+ *      内联声明无法被选择器覆盖；这里改为在遮罩作用域内重定义 --color-*，
+ *      让内联值连同 Tailwind 的 bg-[var(--color-*) ] 一起倒向 demo 令牌。
+ *   2) 排版覆盖 —— 无层规则直接压过 Tailwind 的 px-6/py-4/text-sm 等。
+ *   3) 内联只设了 background-color 的元素，用 background-image 叠加 demo 渐变。
+ *
+ * 每条选择器都以 html[data-ui='v2'] 开头；同时并列 demo 原类名，
+ * 便于将来入口挂载直接复用 demo 类名标记。
+ *
+ * 定位前提：产品设置窗口没有语义类名，遮罩层靠自有类 .skin-solid-surface 锚定。
+ * 全仓检索确认该类名当前仅由 SettingsModal.tsx 第 89 行使用，故作为设置窗口
+ * 根节点是精确的。若将来别的组件复用它，把窗口尺寸那条收窄为
+ * .skin-solid-surface > div:has(> aside) 即可（本文件已在最易造成破坏的
+ * 尺寸规则上预先加了该 :has() 保险）。
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 1. 遮罩与窗口本体
+ *    demo .mask 278 · .settings-modal 393–402
+ * ========================================================================== */
+
+/* demo .mask{position:fixed;inset:0;background:rgba(43,38,28,.42)}
+ * 产品遮罩的内联 rgba(0,0,0,.6) 无法被覆盖，故用伪元素把 demo 的暖黑纱罩叠上去
+ * （见文末降级清单第 1 条），pointer-events:none 保证不挡点击。 */
+html[data-ui='v2'] .skin-solid-surface::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(43, 38, 28, 0.42);
+  pointer-events: none;
+}
+
+/* 变量重映射：把设置窗口整棵子树的 --color-* 倒向 demo 令牌。
+ * 这样内联的 backgroundColor/border 与 Tailwind 的 bg-[var(--color-*)] 同步换装。 */
+html[data-ui='v2'] .skin-solid-surface {
+  --color-editor-bg: var(--panel);        /* 窗口底 → demo --panel #FAF7EE */
+  --color-sidebar: var(--paper);          /* 左导航底 → demo --paper #F3EFE4 */
+  --color-panel: var(--panel2);           /* 卡片底 → demo --panel2 #F6F1E3 */
+  --color-raised: var(--panel);
+  --color-bg: var(--paper2);
+  --color-hover: #EEE7D7;                 /* demo .settings-note 484 行底色 */
+  --color-active: var(--paper2);
+  --color-border: var(--line);            /* demo --line #E0D8C2 */
+  --color-text: var(--ink);               /* demo --ink #2A261E */
+  --color-text-secondary: var(--ink2);    /* demo --ink2 #57513F */
+  --color-text-muted: var(--muted);       /* demo --muted #8F8876 */
+  --color-accent: var(--seal);            /* demo --seal #A93226 */
+  --color-accent-hover: var(--seal-hover);
+  --color-accent-rgb: var(--seal-rgb);
+  --color-focus-ring: rgba(var(--seal-rgb), 0.35);
+  --color-backdrop: rgba(43, 38, 28, 0.42);
+  --color-success: var(--green);
+  --color-success-text: var(--greentx);
+  --color-warning-text: var(--warntx);
+  --color-error: var(--red);
+  --color-error-text: var(--redtx);
+}
+
+/* 深色主题下设置窗口的悬停，统一由 v2-semantic.css 末尾的「悬停染」接管
+ * （必须放在无层文件里才压得住本文件；原先这里给黑夜设的 --white 是中性深灰，
+ * 正是先生说的「设置里的外观、向量模型还是灰的」）。本文件其余部分保持不变。 */
+
+/* demo .settings-modal{
+ *   width:min(1060px,94vw); height:min(720px,88vh); max-height:none;
+ *   overflow:hidden; border-radius:18px; background:var(--panel);
+ *   border:1px solid var(--line2); box-shadow:0 34px 96px -24px rgba(40,30,10,.58) }
+ * 注：真源第 398 行圆角为 18px（任务书写的 14px 是 --v2-modal-radius；
+ *     以真源为准，如需 14px 只改这一处即可）。
+ * :has(> aside) 是安全保险：只有「含左导航的弹窗」才会被套上设置窗口尺寸，
+ * 万一该类名将来被别处复用也不会被误伤。 */
+html[data-ui='v2'] .skin-solid-surface > div:has(> aside),
+html[data-ui='v2'] .settings-modal {
+  width: min(1060px, 94vw);
+  height: min(720px, 88vh);
+  max-height: none;
+  overflow: hidden;
+  border-radius: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  box-shadow: 0 34px 96px -24px rgba(40, 30, 10, 0.58);
+}
+
+/* demo .settings-modal .settings-shell{display:flex;height:100%;min-height:0} */
+html[data-ui='v2'] .settings-modal .settings-shell {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+/* ==========================================================================
+ * 2. 左侧分页导航
+ *    demo .settings-nav 404–432 · .settings-item 419–430
+ * ========================================================================== */
+
+/* demo .settings-nav{width:236px;flex:none;
+ *   background:linear-gradient(180deg,var(--paper),var(--paper2));
+ *   border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+ * 产品导航的底色是内联纯色，故用 background-image 叠加 demo 的竖向渐变。 */
+html[data-ui='v2'] .skin-solid-surface aside,
+html[data-ui='v2'] .settings-nav {
+  width: 236px;
+  flex: none;
+  background-image: linear-gradient(180deg, var(--paper), var(--paper2));
+  border-right: 1px solid var(--line);
+  padding: 0;
+}
+
+/* demo .settings-nav-head{height:84px;padding:22px 19px 15px;
+ *   border-bottom:1px solid var(--line);display:flex;align-items:flex-start;gap:10px} */
+html[data-ui='v2'] .skin-solid-surface aside > div:first-child,
+html[data-ui='v2'] .settings-nav-head {
+  height: 84px;
+  flex: none;
+  padding: 22px 19px 15px;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+/* demo .settings-nav-head b{font-family:var(--serif);font-size:17px;line-height:1.15} */
+html[data-ui='v2'] .skin-solid-surface aside > div:first-child > span,
+html[data-ui='v2'] .settings-nav-head b {
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.15;
+  font-weight: 700;
+}
+
+/* demo .settings-nav-head .sn-icon{display:none} —— 产品此处是图标，保留可见 */
+
+/* demo .settings-nav-body{padding:11px 9px 14px} */
+html[data-ui='v2'] .settings-nav-body {
+  padding: 11px 9px 14px;
+  overflow: auto;
+  min-height: 0;
+}
+
+/* demo .settings-item{width:100%;height:42px;border:0;background:transparent;
+ *   border-radius:9px;padding:0 11px;display:flex;align-items:center;gap:10px;
+ *   color:var(--ink2);text-align:left;position:relative;transition:.16s;cursor:pointer}
+ * 先生（截图圈出的红条越界 + 侧栏横向滚动条）：早期产品没有 .settings-nav-body
+ * 容器，缩进只能挂在页项上；后来补上 body（padding 11px 9px 14px）以后，
+ * 页项上的 margin:0 9px 就成了双重缩进，且 width:100% 是「父内容宽」再加两侧
+ * 外边距 —— 每项比容器宽 18px，选中红条因此右溢，nav-body 的 overflow:auto
+ * 同时被撑出横向滚动条。缩进交回 body，页项严格照 demo 的 width:100%。 */
+html[data-ui='v2'] .skin-solid-surface aside > button,
+html[data-ui='v2'] .settings-item {
+  width: 100%;
+  height: 42px;
+  flex: none;
+  border: 0;
+  background: transparent;
+  border-radius: 9px;
+  padding: 0 11px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink2);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  position: relative;
+  transition: 0.16s;
+}
+
+/* demo .settings-item:hover{background:rgba(255,255,255,.58);color:var(--ink)} */
+html[data-ui='v2'] .skin-solid-surface aside > button:hover,
+html[data-ui='v2'] .settings-item:hover {
+  background: rgba(255, 255, 255, 0.58);
+  color: var(--ink);
+}
+
+/* demo .settings-item .si-ico{width:18px;height:18px;color:var(--muted);flex:none} */
+html[data-ui='v2'] .skin-solid-surface aside > button > svg,
+html[data-ui='v2'] .settings-item .si-ico {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--muted);
+}
+
+/* 选中态：demo .settings-item.on{background:var(--seal);color:#FFF6EA;
+ *   box-shadow:0 6px 16px -12px rgba(90,30,22,.5)}
+ * 底色与图标色已由 --color-accent → --seal 的变量重映射自动达成；
+ * 产品未给选中项任何语义标记，只能按 Tailwind 的 bg-[var(--color-accent)] 类名锚定
+ * （见降级清单第 2 条；万一失配也只是少一层投影，不影响配色）。 */
+html[data-ui='v2'] .skin-solid-surface aside > button[class*="bg-\[var\(--color-accent\)\]"],
+html[data-ui='v2'] .settings-item.on {
+  background: var(--seal);
+  color: #FFF6EA;
+  box-shadow: 0 6px 16px -12px rgba(90, 30, 22, 0.5);
+}
+
+html[data-ui='v2'] .skin-solid-surface aside > button[class*="bg-\[var\(--color-accent\)\]"] > svg,
+html[data-ui='v2'] .settings-item.on .si-ico {
+  color: inherit;
+}
+
+/* demo .settings-item small{font-size:9px;color:var(--faint)}
+ *    .settings-item.on small{color:rgba(255,246,234,.74)} */
+html[data-ui='v2'] .settings-item small {
+  font-size: 9px;
+  color: var(--faint);
+}
+
+html[data-ui='v2'] .settings-item.on small {
+  color: rgba(255, 246, 234, 0.74);
+}
+
+/* demo .settings-nav-foot / .settings-version（产品无此结构，备妥备用） */
+html[data-ui='v2'] .settings-nav-foot {
+  margin-top: auto;
+  padding: 10px 10px 13px;
+  border-top: 1px solid var(--line);
+}
+
+html[data-ui='v2'] .settings-version {
+  font-size: 9px;
+  color: var(--faint);
+  display: flex;
+  justify-content: space-between;
+  padding: 0 5px;
+}
+
+/* ==========================================================================
+ * 3. 主区：页头 + 内容滚动区
+ *    demo .settings-main 434 · .settings-top 435–449 · .settings-content 450–452
+ * ========================================================================== */
+
+/* demo .settings-main{flex:1;min-width:0;min-height:0;
+ *   display:flex;flex-direction:column;background:var(--panel)} */
+html[data-ui='v2'] .skin-solid-surface main,
+html[data-ui='v2'] .settings-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background-image: linear-gradient(var(--panel), var(--panel));
+}
+
+/* demo .settings-top{height:84px;flex:none;padding:20px 27px 16px;
+ *   border-bottom:1px solid var(--line);display:flex;align-items:flex-start;gap:12px} */
+html[data-ui='v2'] .skin-solid-surface main > div:has(h2),
+html[data-ui='v2'] .settings-top {
+  height: 84px;
+  flex: none;
+  padding: 20px 27px 16px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+/* demo .settings-top .st-copy{flex:1;min-width:0} */
+html[data-ui='v2'] .skin-solid-surface main > div:has(h2) > div,
+html[data-ui='v2'] .settings-top .st-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+/* demo .settings-top .eyebrow{color:var(--seal);font-size:8.5px;
+ *   letter-spacing:.18em;font-weight:700;margin-bottom:3px}
+ * 产品的页头没有眉标元素（结构差异，见降级清单第 3 条）：
+ * 这里按 demo 原值备好规则，待组件补 .eyebrow 标记即自动生效。 */
+html[data-ui='v2'] .skin-solid-surface main > div:has(h2) .eyebrow,
+html[data-ui='v2'] .settings-top .eyebrow {
+  display: block;
+  color: var(--seal);
+  font-size: 8.5px;
+  letter-spacing: 0.18em;
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+
+/* demo .settings-top h2{font-family:var(--serif);font-size:22px;line-height:1.2;font-weight:700} */
+html[data-ui='v2'] .skin-solid-surface main > div:has(h2) h2,
+html[data-ui='v2'] .settings-top h2 {
+  font-family: var(--serif);
+  font-size: 22px;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+/* demo .settings-top p{font-size:11px;color:var(--muted);margin-top:4px} */
+html[data-ui='v2'] .skin-solid-surface main > div:has(h2) p,
+html[data-ui='v2'] .settings-top p {
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+/* demo .settings-close{width:30px;height:30px;border:0;background:transparent;
+ *   border-radius:8px;color:var(--muted)}
+ *   .settings-close:hover{background:rgba(0,0,0,.055);color:var(--ink)} */
+html[data-ui='v2'] .skin-solid-surface main > div:has(h2) > button,
+html[data-ui='v2'] .settings-close {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--muted);
+  flex: none;
+}
+
+html[data-ui='v2'] .skin-solid-surface main > div:has(h2) > button:hover,
+html[data-ui='v2'] .settings-close:hover {
+  background: rgba(0, 0, 0, 0.055);
+  color: var(--ink);
+}
+
+/* demo .settings-content{flex:1;min-height:0;overflow:auto;padding:23px 27px 32px} */
+html[data-ui='v2'] .skin-solid-surface main > div:last-child,
+html[data-ui='v2'] .settings-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 23px 27px 32px;
+}
+
+/* demo .settings-content::-webkit-scrollbar{width:10px}
+ *   .settings-content::-webkit-scrollbar-thumb{background:#CBC1A6;border-radius:99px;
+ *   border:3px solid transparent;background-clip:padding-box} */
+html[data-ui='v2'] .skin-solid-surface main > div:last-child::-webkit-scrollbar,
+html[data-ui='v2'] .settings-content::-webkit-scrollbar {
+  width: 10px;
+}
+
+html[data-ui='v2'] .skin-solid-surface main > div:last-child::-webkit-scrollbar-thumb,
+html[data-ui='v2'] .settings-content::-webkit-scrollbar-thumb {
+  background: #CBC1A6;
+  border-radius: 99px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+/* 先生（截图里圈出的右侧空白）：产品有三个设置页各自带着 v1 时代的窄列容器 ——
+ *   网络代理 .max-w-[480px] · 编辑器 .max-w-md(448) · 关于 .max-w-[600px]，
+ * 在 1060px 的 demo 面板（内容区可用 768px）里就露出 195～431px 的空白。
+ * demo 的每一页都是 <div class="settings-stack"> 直接铺满 .settings-content
+ * （demo 2414 行 settingsPageHtml 起），页面自身从不设窄列，宽度上限只由
+ * .settings-stack{max-width:860px} 统一给出。
+ * 因此这里让内容区的一级块级容器交回「铺满」语义；行内元素不受影响
+ * （PromptSettings 的 max-w-[120px] truncate 是 span，照旧截断）。 */
+html[data-ui='v2'] .settings-content > :where(div, section, form)[class*='max-w-'] {
+  max-width: none;
+}
+
+/* ==========================================================================
+ * 4. 分区标题 / 卡片 / 行 / 字段 / 网格 / 说明
+ *    demo .settings-stack 454 · .settings-section 455 · .settings-label 456
+ *         .settings-card 457–460 · .settings-row 461–469 · .settings-grid 471–473
+ *         .settings-field 473–482 · .settings-note 483–487 · .settings-actions 488–489
+ * ========================================================================== */
+
+/* demo .settings-stack{display:flex;flex-direction:column;gap:14px;max-width:860px}
+ * 产品的分页根是 Tailwind 的 max-w-3xl(768px) + space-y-7(28px)，这里压到 demo 规格。 */
+html[data-ui='v2'] .skin-solid-surface main > div:last-child > .appearance-settings,
+html[data-ui='v2'] .skin-solid-surface main > div:last-child > div > section,
+html[data-ui='v2'] .settings-stack {
+  max-width: 860px;
+}
+
+html[data-ui='v2'] .skin-solid-surface main > div:last-child > div > * + * {
+  margin-top: 14px;
+}
+
+/* demo .settings-section{display:flex;flex-direction:column;gap:8px} */
+html[data-ui='v2'] .settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* demo .settings-label{font-size:9px;letter-spacing:.14em;color:var(--muted);font-weight:700}
+ * 产品的分区标题是 <h3 class="text-sm font-semibold">，色值由内联 var(--color-text) 给定。 */
+html[data-ui='v2'] .skin-solid-surface main h3,
+html[data-ui='v2'] .settings-label {
+  font-size: var(--v2-fs-micro);
+  letter-spacing: var(--v2-ls-label);
+  font-weight: 700;
+}
+
+/* demo .settings-card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+ * 产品的卡片容器普遍是 rounded-xl（= 0.75rem = 12px，与 demo 同值）+
+ * 内联 border/background（已由变量重映射接管），这里补齐圆角令牌与溢出裁切。 */
+html[data-ui='v2'] .skin-solid-surface main [class~="rounded-xl"],
+html[data-ui='v2'] .settings-card {
+  border-radius: var(--v2-card-radius);
+  overflow: hidden;
+}
+
+/* demo .settings-card.pad{padding:16px 17px} */
+html[data-ui='v2'] .settings-card.pad {
+  padding: 16px 17px;
+}
+
+/* demo .settings-row{display:flex;align-items:center;gap:15px;min-height:60px;
+ *   padding:13px 16px;border-bottom:1px solid rgba(210,200,174,.72)}
+ *   .settings-row:last-child{border-bottom:0} */
+html[data-ui='v2'] .settings-row {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  min-height: 60px;
+  padding: 13px 16px;
+  border-bottom: 1px solid rgba(210, 200, 174, 0.72);
+}
+
+html[data-ui='v2'] .settings-row:last-child {
+  border-bottom: 0;
+}
+
+/* demo .settings-row .sr-main{flex:1;min-width:0}
+ *        .settings-row .sr-title{font-size:12.5px;font-weight:650;color:var(--ink)}
+ *        .settings-row .sr-sub{font-size:10px;color:var(--muted);line-height:1.55;margin-top:3px}
+ *        .settings-row .sr-value{font-size:11px;color:var(--ink2);white-space:nowrap}
+ *        .settings-row .sr-action{flex:none} */
+html[data-ui='v2'] .settings-row .sr-main {
+  flex: 1;
+  min-width: 0;
+}
+
+html[data-ui='v2'] .settings-row .sr-title {
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+html[data-ui='v2'] .settings-row .sr-sub {
+  font-size: 10px;
+  line-height: 1.55;
+  margin-top: 3px;
+}
+
+html[data-ui='v2'] .settings-row .sr-value {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+html[data-ui='v2'] .settings-row .sr-action {
+  flex: none;
+}
+
+/* demo .settings-inline{display:flex;align-items:center;gap:8px;flex-wrap:wrap} */
+html[data-ui='v2'] .settings-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* demo .settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+ *   .settings-grid.three{grid-template-columns:repeat(3,1fr)} */
+html[data-ui='v2'] .settings-grid,
+html[data-ui='v2'] .skin-solid-surface main [class~="grid-cols-2"] {
+  gap: 12px;
+}
+
+html[data-ui='v2'] .settings-grid.three {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+/* demo .settings-field{min-width:0}
+ *        .settings-field label{display:flex;align-items:center;gap:8px;font-size:10.5px;
+ *          color:var(--muted);margin-bottom:5px}
+ * 产品的表单控件来自 ui/Input、ui/NativeSelect、ui/Textarea 与原生控件。 */
+html[data-ui='v2'] .settings-field {
+  min-width: 0;
+}
+
+html[data-ui='v2'] .skin-solid-surface main label,
+html[data-ui='v2'] .settings-field label {
+  font-size: var(--v2-fs-note);
+  color: var(--muted);
+}
+
+/* demo .settings-field input,.settings-field select,.settings-field textarea{
+ *   width:100%;border:1px solid var(--line2);background:#FFFCF5;border-radius:8px;
+ *   padding:8px 10px;outline:none;font-size:11.5px}
+ * （#FFFCF5 即产品令牌 --soft-white） */
+html[data-ui='v2'] .skin-solid-surface main input:not([type='checkbox']):not([type='radio']),
+html[data-ui='v2'] .skin-solid-surface main select,
+html[data-ui='v2'] .skin-solid-surface main textarea,
+html[data-ui='v2'] .settings-field input,
+html[data-ui='v2'] .settings-field select,
+html[data-ui='v2'] .settings-field textarea {
+  border: 1px solid var(--line2);
+  background: var(--soft-white);
+  border-radius: var(--v2-field-radius);
+  padding: 8px 10px;
+  font-size: var(--v2-fs-caption);
+  outline: none;
+}
+
+/* demo .settings-field input:focus,…{border-color:var(--seal);box-shadow:0 0 0 2px rgba(169,50,38,.09)} */
+html[data-ui='v2'] .skin-solid-surface main input:not([type='checkbox']):not([type='radio']):focus,
+html[data-ui='v2'] .skin-solid-surface main select:focus,
+html[data-ui='v2'] .skin-solid-surface main textarea:focus {
+  border-color: var(--seal);
+  box-shadow: 0 0 0 2px rgba(var(--seal-rgb), 0.09);
+}
+
+/* demo .settings-field textarea{resize:vertical;line-height:1.7} */
+html[data-ui='v2'] .skin-solid-surface main textarea,
+html[data-ui='v2'] .settings-field textarea {
+  resize: vertical;
+  line-height: var(--v2-lh-ui);
+}
+
+/* demo .checkline input{accent-color:var(--seal)} */
+html[data-ui='v2'] .skin-solid-surface main input[type='checkbox'],
+html[data-ui='v2'] .skin-solid-surface main input[type='radio'],
+html[data-ui='v2'] .checkline input {
+  accent-color: var(--seal);
+}
+
+/* demo .toggle{width:42px;height:24px;border-radius:999px;background:#DED7C4}
+ *   .toggle:before{left:3px;top:3px;width:18px;height:18px}
+ *   .toggle.on{background:var(--seal)}
+ * 产品的 Switch 是 button[role=switch]（40×20，选中底色内联 var(--color-accent)
+ * → 已随变量重映射变朱砂；未选中内联 var(--color-border) → --line，与 demo 的
+ * #DED7C4 仅差 2 个色阶，可视为等价）。 */
+html[data-ui='v2'] .skin-solid-surface main button[role='switch'] {
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+}
+
+html[data-ui='v2'] .skin-solid-surface main button[role='switch'] > span {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--white);
+  box-shadow: 0 1px 3px rgba(40, 30, 15, 0.14);
+}
+
+/* demo .settings-note{padding:11px 13px;border-radius:9px;background:#EEE7D7;
+ *   border:1px solid var(--line);font-size:10.5px;color:var(--ink2);line-height:1.7}
+ *   .settings-note strong{font-weight:700;color:var(--ink)}
+ * 产品的提示块（px-3 py-2.5 rounded-lg）底色内联为 var(--color-hover)，
+ * 该变量已重映射为 demo 的 #EEE7D7，故此处只补内距、圆角与排印。 */
+html[data-ui='v2'] .settings-note {
+  padding: 11px 13px;
+  border-radius: 9px;
+  /* 原为写死的 demo 米黄 #EEE7D7：浅纸上好看，深色主题下就是一块突兀的
+     浅色（先生看到的「黄色提示框」）。星空主题用它自己的星云淡紫，
+     其余主题没有该令牌，自动回退原值，逐像素不变。 */
+  background: var(--nebula-soft, #EEE7D7);
+  border: 1px solid var(--line);
+  font-size: var(--v2-fs-note);
+  line-height: var(--v2-lh-ui);
+}
+
+html[data-ui='v2'] .settings-note strong {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+/* demo .settings-actions{display:flex;gap:8px;align-items:center}
+ *   .settings-actions .spacer{flex:1} */
+html[data-ui='v2'] .settings-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+html[data-ui='v2'] .settings-actions .spacer {
+  flex: 1;
+}
+
+/* demo .settings-link{border:0;background:transparent;color:var(--seal);
+ *   font-size:10.5px;padding:4px 0;cursor:pointer}
+ *   .settings-link:hover{text-decoration:underline} */
+html[data-ui='v2'] .settings-link {
+  border: 0;
+  background: transparent;
+  color: var(--seal);
+  font-size: var(--v2-fs-note);
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+html[data-ui='v2'] .settings-link:hover {
+  text-decoration: underline;
+}
+
+/* demo .settings-empty{padding:18px;text-align:center;color:var(--muted);font-size:10.5px} */
+html[data-ui='v2'] .settings-empty {
+  padding: 18px;
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--v2-fs-note);
+}
+
+/* ==========================================================================
+ * 5. 主题网格与主题卡
+ *    demo .theme-grid 660 · .theme-card 661–666 · .theme-preview 667–675
+ *         .theme-meta 676–678
+ * ========================================================================== */
+
+/* demo .theme-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+ * 产品用 minmax(0,1fr) 防溢出，视觉等价；gap 由 8px 改为 demo 的 10px。 */
+html[data-ui='v2'] .appearance-theme-grid,
+html[data-ui='v2'] .theme-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+/* demo .theme-card{border:1px solid var(--line);background:var(--panel2);
+ *   border-radius:12px;overflow:hidden;cursor:pointer;transition:.16s;min-width:0}
+ *   .theme-card:hover{transform:translateY(-2px);border-color:var(--gold);
+ *     box-shadow:0 10px 20px -18px rgba(40,30,15,.4)}
+ *   .theme-card.on{border-color:var(--seal);box-shadow:0 0 0 1px var(--seal) inset}
+ * 产品的主题选项是单行按钮（图标+名称+勾），没有独立的预览块。
+ * 这里用 demo .theme-preview 的四种背景（669–672 行原值）作为按钮自身的
+ * background-image，并按 --tp（demo 同名变量）给出预览横条，做成迷你主题卡。 */
+html[data-ui='v2'] .appearance-theme-option,
+html[data-ui='v2'] .theme-card {
+  position: relative;
+  min-width: 0;
+  min-height: 76px;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 9px 10px 10px;
+  border: 1px solid var(--line);
+  background-color: var(--panel2);
+  border-radius: var(--v2-card-radius);
+  overflow: hidden;
+  font-size: 11.5px;
+  transition: 0.16s;
+}
+
+html[data-ui='v2'] .appearance-theme-option:hover,
+html[data-ui='v2'] .theme-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--gold);
+  box-shadow: 0 10px 20px -18px rgba(40, 30, 15, 0.4);
+}
+
+/* demo .theme-card.on{border-color:var(--seal);box-shadow:0 0 0 1px var(--seal) inset} */
+html[data-ui='v2'] .appearance-theme-option--active,
+html[data-ui='v2'] .skin-solid-surface main .appearance-theme-option[aria-pressed='true'],
+html[data-ui='v2'] .theme-card.on {
+  border-color: var(--seal);
+  box-shadow: 0 0 0 1px var(--seal) inset;
+}
+
+/* demo 四种主题预览底色（669–672 行原值），映射产品的 theme id：
+ *   light→light · galaxy→starry · paper→paper · dark→night */
+html[data-ui='v2'] .appearance-theme-option[data-theme='light'],
+html[data-ui='v2'] .theme-preview.light {
+  background-image: linear-gradient(135deg, #FAF7EE 0 65%, #E9E1CE 66%);
+  --tp: #A93226;
+}
+
+html[data-ui='v2'] .appearance-theme-option[data-theme='galaxy'],
+html[data-ui='v2'] .theme-preview.starry {
+  background-image:
+    radial-gradient(circle at 70% 24%, #D6B54B 0 1.6px, transparent 2px),
+    radial-gradient(circle at 30% 35%, #A7C6E0 0 1.4px, transparent 1.8px),
+    linear-gradient(180deg, #273446, #18222D);
+  --tp: #7CB6D6;
+  color: #F2EDE2;
+}
+
+html[data-ui='v2'] .appearance-theme-option[data-theme='paper'],
+html[data-ui='v2'] .theme-preview.paper {
+  background-image:
+    repeating-linear-gradient(0deg, rgba(120, 95, 45, 0.06) 0 1px, transparent 1px 4px),
+    linear-gradient(135deg, #EFE4CC, #D8C8AA);
+  --tp: #8A6B3E;
+}
+
+html[data-ui='v2'] .appearance-theme-option[data-theme='dark'],
+html[data-ui='v2'] .theme-preview.night {
+  background-image: linear-gradient(180deg, #1D2227, #303A42);
+  --tp: #D9B769;
+  color: #F2EDE2;
+}
+
+/* demo .theme-preview::after{content:'';position:absolute;inset:0;
+ *   border-bottom:1px solid rgba(60,50,30,.1)} */
+html[data-ui='v2'] .theme-preview::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-bottom: 1px solid rgba(60, 50, 30, 0.1);
+}
+
+/* demo .theme-preview{height:76px;position:relative;overflow:hidden} */
+html[data-ui='v2'] .theme-preview {
+  height: 76px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* demo .theme-preview .tp-window{position:absolute;left:13px;right:13px;top:13px;
+ *   bottom:12px;border-radius:7px;border:1px solid rgba(255,255,255,.24);
+ *   background:rgba(255,255,255,.16)}
+ *   .theme-preview .tp-bar{left:18px;right:18px;top:18px;height:4px;border-radius:99px;
+ *     background:var(--tp);opacity:.85}
+ *   .theme-preview .tp-lines{left:18px;top:31px;width:42%;height:26px;
+ *     background:repeating-linear-gradient(180deg,rgba(80,70,50,.22) 0 2px,transparent 2px 7px);opacity:.8} */
+html[data-ui='v2'] .theme-preview .tp-window {
+  position: absolute;
+  left: 13px;
+  right: 13px;
+  top: 13px;
+  bottom: 12px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.16);
+}
+
+html[data-ui='v2'] .theme-preview .tp-bar {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  top: 18px;
+  height: 4px;
+  border-radius: 99px;
+  background: var(--tp);
+  opacity: 0.85;
+}
+
+html[data-ui='v2'] .theme-preview .tp-lines {
+  position: absolute;
+  left: 18px;
+  top: 31px;
+  width: 42%;
+  height: 26px;
+  background: repeating-linear-gradient(180deg, rgba(80, 70, 50, 0.22) 0 2px, transparent 2px 7px);
+  opacity: 0.8;
+}
+
+/* demo .theme-meta{padding:9px 10px 10px}
+ *   .theme-meta b{font-size:11.5px}
+ *   .theme-meta span{display:block;font-size:9px;color:var(--muted);margin-top:3px} */
+html[data-ui='v2'] .theme-meta {
+  padding: 9px 10px 10px;
+}
+
+html[data-ui='v2'] .theme-meta b {
+  font-size: var(--v2-fs-caption);
+}
+
+html[data-ui='v2'] .theme-meta span {
+  display: block;
+  font-size: var(--v2-fs-micro);
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+/* ==========================================================================
+ * 6. 界面皮肤网格（外观页）
+ *    demo .skin-grid 679 · .skin-card 680–682 · .skin-preview 683–690 · .skin-meta 691
+ * ========================================================================== */
+
+/* demo .skin-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:11px} */
+html[data-ui='v2'] .appearance-skin-grid,
+html[data-ui='v2'] .skin-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 11px;
+}
+
+/* demo .skin-card{border:1px solid var(--line);border-radius:12px;overflow:hidden;
+ *   background:var(--panel2);cursor:pointer;transition:.16s}
+ *   .skin-card:hover{transform:translateY(-2px);box-shadow:0 10px 20px -18px rgba(40,30,15,.4)}
+ *   .skin-card.on{border-color:var(--seal);box-shadow:0 0 0 1px var(--seal) inset} */
+html[data-ui='v2'] .appearance-skin-card,
+html[data-ui='v2'] .skin-card {
+  border: 1px solid var(--line);
+  border-radius: var(--v2-card-radius);
+  overflow: hidden;
+  background: var(--panel2);
+  transition: 0.16s;
+}
+
+html[data-ui='v2'] .appearance-skin-card:hover,
+html[data-ui='v2'] .skin-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 20px -18px rgba(40, 30, 15, 0.4);
+}
+
+html[data-ui='v2'] .appearance-skin-card--active,
+html[data-ui='v2'] .skin-card.on {
+  border-color: var(--seal);
+  box-shadow: 0 0 0 1px var(--seal) inset;
+}
+
+/* demo .skin-preview{height:102px;position:relative;overflow:hidden} */
+html[data-ui='v2'] .appearance-skin-preview,
+html[data-ui='v2'] .skin-preview {
+  height: 102px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* demo .skin-preview.classic{background:#FCFAF2}
+ *   .skin-preview.classic:before{left:10%;right:10%;top:12%;bottom:11%;
+ *     background:linear-gradient(180deg,transparent 0 23%,rgba(85,75,55,.12) 23.5% 24.5%,
+ *     transparent 25% 40%,rgba(85,75,55,.12) 40.5% 41.5%,transparent 42%);
+ *     box-shadow:0 10px 20px rgba(50,35,20,.06)} */
+html[data-ui='v2'] .appearance-skin-preview--classic,
+html[data-ui='v2'] .skin-preview.classic {
+  background-color: #FCFAF2;
+}
+
+html[data-ui='v2'] .appearance-skin-preview--classic::before,
+html[data-ui='v2'] .skin-preview.classic:before {
+  content: '';
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  top: 12%;
+  bottom: 11%;
+  background: linear-gradient(180deg, transparent 0 23%, rgba(85, 75, 55, 0.12) 23.5% 24.5%, transparent 25% 40%, rgba(85, 75, 55, 0.12) 40.5% 41.5%, transparent 42%);
+  box-shadow: 0 10px 20px rgba(50, 35, 20, 0.06);
+}
+
+/* demo .skin-preview.fantasy{background:linear-gradient(180deg,#8EC7E8 0 41%,#DCC88E 41% 100%)}
+ * 产品「动漫皮肤」用的是真实图片（内联 background-image），内联优先，
+ * 故这里的渐变只在没有图片时（custom 未导入）作为兜底显影。 */
+html[data-ui='v2'] .appearance-skin-preview--anime,
+html[data-ui='v2'] .skin-preview.fantasy {
+  background-color: #8EC7E8;
+  background-image: linear-gradient(180deg, #8EC7E8 0 41%, #DCC88E 41% 100%);
+}
+
+/* demo .skin-preview.custom{background:repeating-linear-gradient(135deg,#ECE5D3 0 8px,#F5F0E4 8px 16px)} */
+html[data-ui='v2'] .appearance-skin-preview--custom,
+html[data-ui='v2'] .skin-preview.custom {
+  background-color: #ECE5D3;
+  background-image: repeating-linear-gradient(135deg, #ECE5D3 0 8px, #F5F0E4 8px 16px);
+}
+
+/* demo .skin-custommark{position:absolute;inset:0;display:flex;align-items:center;
+ *   justify-content:center;color:var(--muted);font-size:11px} */
+html[data-ui='v2'] .skin-custommark {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* demo .skin-meta{padding:10px 11px} .skin-meta b{font-size:11.5px}
+ *   .skin-meta span{display:block;color:var(--muted);font-size:9.5px;margin-top:3px;line-height:1.45} */
+html[data-ui='v2'] .appearance-skin-copy,
+html[data-ui='v2'] .skin-meta {
+  padding: 10px 11px;
+  min-height: 0;
+  gap: 3px;
+  font-size: var(--v2-fs-caption);
+}
+
+html[data-ui='v2'] .appearance-skin-copy > span:last-child,
+html[data-ui='v2'] .appearance-skin-hint,
+html[data-ui='v2'] .skin-meta span {
+  font-size: var(--v2-fs-tiny);
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+html[data-ui='v2'] .appearance-skin-actions {
+  padding: 0 11px 11px;
+  gap: 8px;
+}
+
+/* demo 的按钮体系：.btn.sm 25px / padding 0 10px / 圆角 7px / 字号 11px
+ *   危险操作用朱砂（--seal） */
+html[data-ui='v2'] .appearance-action-button {
+  min-height: 25px;
+  padding: 0 10px;
+  border-radius: var(--v2-btn-sm-radius);
+  font-size: var(--v2-btn-sm-fs);
+}
+
+html[data-ui='v2'] .appearance-action-button--danger {
+  color: var(--seal);
+}
+
+/* demo .settings-note 的角色与产品的 appearance-notice 对应（提示条） */
+html[data-ui='v2'] .appearance-notice {
+  padding: 11px 13px;
+  border-radius: 9px;
+  background: var(--nebula-soft, #EEE7D7);
+  border: 1px solid var(--line);
+  font-size: var(--v2-fs-note);
+  line-height: var(--v2-lh-ui);
+  color: var(--ink2);
+}
+
+html[data-ui='v2'] .appearance-notice-dismiss {
+  color: var(--seal);
+  font-size: var(--v2-fs-note);
+}
+
+/* ==========================================================================
+ * 7. 模型 / Skill 资源卡 与 提示词条目
+ *    demo .resource-card 694–700 · .prompt-row 714–725 · .skill-binding 727–732
+ *    这三个角色的产品实现是 Tailwind 组合类（无同名类），此处并列 demo 原类名
+ *    备妥；产品侧靠 --color-* 重映射与上面的通用卡片/表单规则统一观感。
+ * ========================================================================== */
+
+/* demo .model-list,.skill-list{display:flex;flex-direction:column;gap:9px} */
+html[data-ui='v2'] .model-list,
+html[data-ui='v2'] .skill-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+/* demo .resource-card{border:1px solid var(--line);border-radius:12px;
+ *   background:var(--panel2);padding:14px 15px;display:flex;align-items:center;gap:13px}
+ *   .resource-card.selected{border-color:var(--seal);box-shadow:0 0 0 1px rgba(169,50,38,.18) inset} */
+html[data-ui='v2'] .resource-card {
+  border: 1px solid var(--line);
+  border-radius: var(--v2-card-radius);
+  background: var(--panel2);
+  padding: 14px 15px;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+
+html[data-ui='v2'] .resource-card.selected {
+  border-color: var(--seal);
+  box-shadow: 0 0 0 1px rgba(var(--seal-rgb), 0.18) inset;
+}
+
+/* demo .resource-ico{width:36px;height:36px;border-radius:9px;background:#E9E1D1;
+ *   border:1px solid var(--line);color:var(--ink2);flex:none} */
+html[data-ui='v2'] .resource-ico {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  /* 原为写死的 demo 米黄 #E9E1D1 —— 先生看到的「图标背景还是黄色」即此处。
+     星空主题换成星云淡紫，其余主题回退原值。 */
+  background: var(--nebula-soft, #E9E1D1);
+  border: 1px solid var(--line);
+  color: var(--ink2);
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* demo .resource-title{font-size:13px;font-weight:650}
+ *   .resource-desc{font-size:10px;color:var(--muted);margin-top:4px}
+ *   .resource-meta{font-size:9px;color:var(--faint);margin-top:5px} */
+html[data-ui='v2'] .resource-main {
+  flex: 1;
+  min-width: 0;
+}
+
+html[data-ui='v2'] .resource-title {
+  font-size: var(--v2-fs-lead);
+  font-weight: 650;
+}
+
+html[data-ui='v2'] .resource-desc {
+  font-size: var(--v2-fs-note);
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+html[data-ui='v2'] .resource-meta {
+  font-size: var(--v2-fs-micro);
+  color: var(--faint);
+  margin-top: 5px;
+}
+
+html[data-ui='v2'] .resource-end {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+}
+
+/* demo .prompt-row{border:1px solid var(--line);background:var(--panel2);
+ *   border-radius:11px;overflow:hidden}
+ *   .prompt-head{min-height:63px;padding:11px 13px;display:flex;align-items:center;gap:9px}
+ *   .prompt-body textarea{min-height:120px;border:1px solid var(--line2);border-radius:8px;
+ *     padding:9px;background:#FFFCF5;font:10.5px/1.7 var(--mono)} */
+html[data-ui='v2'] .prompt-row {
+  border: 1px solid var(--line);
+  background: var(--panel2);
+  border-radius: 11px;
+  overflow: hidden;
+}
+
+html[data-ui='v2'] .prompt-head {
+  min-height: 63px;
+  padding: 11px 13px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+html[data-ui='v2'] .prompt-main {
+  flex: 1;
+  min-width: 0;
+}
+
+html[data-ui='v2'] .prompt-main b {
+  font-size: var(--v2-fs-label);
+}
+
+html[data-ui='v2'] .prompt-main span {
+  display: block;
+  font-size: var(--v2-fs-tiny);
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+html[data-ui='v2'] .prompt-body textarea {
+  min-height: 120px;
+  background: var(--soft-white);
+  font: var(--v2-fs-note) / var(--v2-lh-ui) var(--mono);
+}
+
+/* demo .skill-binding{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+ *   .binding{background:#FBF7ED;border:1px solid var(--line);border-radius:10px;padding:11px}
+ *   .binding label{font-size:9.5px;color:var(--muted);margin-bottom:6px}
+ *   .binding select{border:1px solid var(--line2);background:#FFFDF7;border-radius:7px;
+ *     padding:7px 9px;font-size:10.5px} */
+html[data-ui='v2'] .skill-binding {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+html[data-ui='v2'] .skill-binding .binding {
+  /* 原为写死 #FBF7ED；改走 --soft-white，深色主题下才是同一档「比面板亮一点」的面 */
+  background: var(--soft-white, #FBF7ED);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px;
+}
+
+html[data-ui='v2'] .binding label {
+  display: block;
+  font-size: var(--v2-fs-tiny);
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+html[data-ui='v2'] .binding select {
+  width: 100%;
+  border: 1px solid var(--line2);
+  background: var(--soft-white, #FFFDF7);
+  border-radius: 7px;
+  padding: 7px 9px;
+  font-size: var(--v2-fs-note);
+}
+
+/* ==========================================================================
+ * 8. 关于页
+ *    demo .about-hero 734–741 · .about-copy 742 · .about-grid 743–745
+ * ========================================================================== */
+
+/* demo .about-hero{background:linear-gradient(145deg,#EEE6D4,#E4DAC5);
+ *   border:1px solid var(--line);border-radius:14px;padding:26px 20px;
+ *   text-align:center;position:relative;overflow:hidden}
+ * 产品此处的底色是内联 var(--color-sidebar)，故用 background-image 叠 demo 渐变。
+ * 用 :has(h1.brand-gradient) 精确锚定，不依赖位置。 */
+html[data-ui='v2'] .skin-solid-surface main div:has(> h1.brand-gradient),
+html[data-ui='v2'] .about-hero {
+  position: relative;
+  overflow: hidden;
+  text-align: center;
+  padding: 26px 20px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background-image: linear-gradient(145deg, #EEE6D4, #E4DAC5);
+}
+
+/* demo .about-hero:before{content:'墨纸书斋';position:absolute;right:18px;top:11px;
+ *   font-family:var(--zhuan);font-size:26px;color:rgba(169,50,38,.09)}
+ * 真源水印文本为「墨纸书斋」，恰是产品 v2 界面名（AppearanceSettings.tsx
+ * 的 UI_VERSION_OPTIONS：v2 = 墨纸书斋），故照搬成立。 */
+html[data-ui='v2'] .about-hero:before {
+  content: '墨纸书斋';
+  position: absolute;
+  right: 18px;
+  top: 11px;
+  font-family: var(--zhuan);
+  font-size: 26px;
+  color: rgba(var(--seal-rgb), 0.09);
+}
+
+/* demo .about-hero .mark{width:50px;height:50px;margin:0 auto 10px;border-radius:14px;
+ *   background:var(--jade);color:#F0E7D7;font-family:var(--serif);font-size:18px}
+ *   .about-hero h3{font-family:var(--serif);font-size:23px}
+ *   .about-hero .en{font-size:12px;color:var(--muted);margin-top:4px}
+ *   .about-hero .ver{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:9px} */
+html[data-ui='v2'] .skin-solid-surface main div:has(> h1.brand-gradient) > h1,
+html[data-ui='v2'] .about-hero h3 {
+  font-family: var(--serif);
+  font-size: 23px;
+  font-weight: 700;
+}
+
+html[data-ui='v2'] .about-hero .en {
+  font-size: var(--v2-fs-label);
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+html[data-ui='v2'] .about-hero .ver {
+  font-family: var(--mono);
+  font-size: var(--v2-fs-note);
+  color: var(--faint);
+  margin-top: 9px;
+}
+
+/* demo .about-copy{font-size:11px;color:var(--ink2);line-height:1.85} */
+html[data-ui='v2'] .about-copy {
+  font-size: 11px;
+  line-height: 1.85;
+}
+
+/* demo .about-grid{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+ *   .about-card{background:var(--panel2);border:1px solid var(--line);
+ *     border-radius:12px;padding:14px 15px}
+ *   .about-card b{font-size:11.5px} .about-card p{font-size:10px;line-height:1.7;
+ *     color:var(--muted);margin-top:5px} */
+html[data-ui='v2'] .about-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 11px;
+}
+
+html[data-ui='v2'] .about-card {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: var(--v2-card-radius);
+  padding: 14px 15px;
+}
+
+html[data-ui='v2'] .about-card b {
+  font-size: var(--v2-fs-caption);
+}
+
+html[data-ui='v2'] .about-card p {
+  font-size: var(--v2-fs-note);
+  line-height: var(--v2-lh-ui);
+  color: var(--muted);
+  margin-top: 5px;
+}
+
+/* ==========================================================================
+ * 9. 窄窗降级
+ *    demo @media(max-width:900px) 747–750 · @media(max-width:700px) 751–757
+ * ========================================================================== */
+
+@media (max-width: 900px) {
+  html[data-ui='v2'] .skin-solid-surface > div:has(> aside),
+  html[data-ui='v2'] .settings-modal {
+    width: 96vw;
+    height: 92vh;
+  }
+
+  html[data-ui='v2'] .skin-solid-surface aside,
+  html[data-ui='v2'] .settings-nav {
+    width: 205px;
+  }
+
+  html[data-ui='v2'] .appearance-theme-grid,
+  html[data-ui='v2'] .theme-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  html[data-ui='v2'] .appearance-skin-grid,
+  html[data-ui='v2'] .skin-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  html[data-ui='v2'] .skin-solid-surface aside,
+  html[data-ui='v2'] .settings-nav {
+    width: 70px;
+  }
+
+  html[data-ui='v2'] .skin-solid-surface aside > div:first-child,
+  html[data-ui='v2'] .settings-nav-head {
+    padding: 15px;
+    justify-content: center;
+  }
+
+  html[data-ui='v2'] .skin-solid-surface aside > button,
+  html[data-ui='v2'] .settings-item {
+    justify-content: center;
+    padding: 0;
+    margin: 0 5px;
+    /* 产品的导航项文字是裸文本节点（demo 是 <b>/<small>），
+     * 无法用 display:none 单独隐藏，故按 demo 700px 的意图用 font-size:0 收起文字。 */
+    font-size: 0;
+  }
+
+  html[data-ui='v2'] .skin-solid-surface aside > button > span,
+  html[data-ui='v2'] .settings-item b,
+  html[data-ui='v2'] .settings-item small {
+    display: none;
+  }
+
+  html[data-ui='v2'] .skin-solid-surface aside > button > svg,
+  html[data-ui='v2'] .settings-item .si-ico {
+    width: 20px;
+    height: 20px;
+  }
+
+  html[data-ui='v2'] .settings-nav-section {
+    display: none;
+  }
+
+  html[data-ui='v2'] .skin-solid-surface main > div:last-child,
+  html[data-ui='v2'] .settings-content {
+    padding: 17px;
+  }
+
+  html[data-ui='v2'] .skin-solid-surface main > div:has(h2),
+  html[data-ui='v2'] .settings-top {
+    padding: 16px;
+    height: 74px;
+  }
+
+  html[data-ui='v2'] .settings-grid,
+  html[data-ui='v2'] .settings-grid.three,
+  html[data-ui='v2'] .skill-binding,
+  html[data-ui='v2'] .about-grid,
+  html[data-ui='v2'] .appearance-skin-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ============================================================================
+ * 降级清单（产品结构与 demo 不同，无法逐像素复刻之处）
+ *
+ * 1. 遮罩色：demo .mask 是 rgba(43,38,28,.42)；产品的遮罩把
+ *    rgba(0,0,0,.6) 写成内联样式，内联声明高于任何选择器（除非 !important，
+ *    本文件禁用），故改用 ::before 叠一层 demo 暖黑纱罩 —— 叠加后比 demo 略深。
+ * 2. 导航选中态：产品未给选中项 aria-current/data-* 标记，只能按 Tailwind 的
+ *    bg-[var(--color-accent)] 类名锚定投影与文字色；底色已由变量重映射保证为
+ *    --seal，即使该属性选择器失配，配色依然正确。
+ * 3. 页头眉标（.eyebrow）：产品页头没有眉标元素，规则已按 demo 备好，
+ *    待组件侧补一个带 .eyebrow 的节点即自动生效（本文件不改任何 .tsx）。
+ * 4. 窗口外框：demo 用 1px var(--line2)，产品该处 border 内联 var(--color-border)，
+ *    故降级为 1px var(--line)（#E0D8C2 对 #D2C8AE，差两个色阶）。
+ * 5. 主题卡：demo 的主题卡是「76px 预览块 + meta 文字区」两段结构；产品是单行
+ *    按钮（图标+名称+勾）。这里把 demo 的四种预览渐变铺到按钮自身、并按 demo
+ *    的 --tp 变量备好 tp-window/tp-bar/tp-lines 三条装饰规则（备妥待用），
+ *    不改 DOM。
+ * 6. 左导航页脚（.settings-nav-foot/.settings-version）与 .settings-row/
+ *    .settings-note/.settings-empty/.settings-link 等类名，产品没有对应元素，
+ *    规则按 demo 原值备妥。
+ * ========================================================================== */

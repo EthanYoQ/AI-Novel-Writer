@@ -1,0 +1,302 @@
+/* ============================================================================
+ * v2 原子组件换装（按钮 / 表单 / 徽章 / 卡片）
+ *
+ * 为什么是「无层样式」：
+ *   产品的原子组件由 cva + Tailwind 组合类渲染，没有稳定类名可命中。
+ *   本文件给组件挂上 v2-* 钩子类，再用无层样式覆盖 ——
+ *   依据 CSS 层叠规则，无层样式优先于任何 @layer（含 Tailwind 的 utilities），
+ *   因此无需 !important 即可压过 h-7 / px-3 / text-xs 这些工具类。
+ *   index.css 头部也明确认可这一用法（「无层样式 — 需要最高优先级的样式」）。
+ *
+ * 安全性：v2-* 钩子类只在 html[data-ui='v2'] 下才有样式，
+ *   v1 模式下类名未定义，组件完全走原 Tailwind 值，逐像素不变。
+ * ========================================================================== */
+
+/* ===== 按钮 ===== */
+html[data-ui='v2'] .v2-btn {
+  font-size: var(--v2-btn-fs);
+  font-weight: 600;
+  transition: transform 0.15s, background 0.15s, border-color 0.15s;
+}
+
+html[data-ui='v2'] .v2-btn:hover {
+  transform: translateY(-1px);
+}
+
+html[data-ui='v2'] .v2-btn:active {
+  transform: translateY(0);
+}
+
+html[data-ui='v2'] .v2-btn:disabled {
+  transform: none;
+}
+
+html[data-ui='v2'] .v2-btn-md {
+  height: var(--v2-btn-h);
+  padding-left: var(--v2-btn-px);
+  padding-right: var(--v2-btn-px);
+  border-radius: var(--v2-btn-radius);
+}
+
+html[data-ui='v2'] .v2-btn-sm {
+  height: var(--v2-btn-sm-h);
+  padding-left: var(--v2-btn-sm-px);
+  padding-right: var(--v2-btn-sm-px);
+  border-radius: var(--v2-btn-sm-radius);
+  font-size: var(--v2-btn-sm-fs);
+}
+
+html[data-ui='v2'] .v2-btn-lg {
+  height: var(--v2-btn-lg-h);
+  padding-left: var(--v2-btn-lg-px);
+  padding-right: var(--v2-btn-lg-px);
+  border-radius: var(--v2-btn-radius);
+  font-size: var(--v2-btn-lg-fs);
+}
+
+html[data-ui='v2'] .v2-btn-icon {
+  height: var(--v2-btn-h);
+  width: var(--v2-btn-h);
+  padding: 0;
+  border-radius: var(--v2-btn-radius);
+}
+
+/* ===== 表单控件 =====
+   覆盖所有原生 input / textarea / select：v2 的字号与圆角更贴近 demo 的 .fld。 */
+html[data-ui='v2'] input:not([type='checkbox']):not([type='radio']):not([type='range']),
+html[data-ui='v2'] textarea,
+html[data-ui='v2'] select {
+  font-size: var(--v2-field-fs);
+  border-radius: var(--v2-field-radius);
+}
+
+/* 【重要修复】只改字号会让文字被裁：
+   产品常见的输入框是 h-7(28px) + py-1(4px) + 1px 描边 —— 内容盒只有 18px，
+   而 demo 的字号 12.5px 配常规行高约 18.8px，正好顶出去，于是「下拉框把字体
+   截掉一部分」（先生报的）。demo 的 .fld input 本身是 padding:7px 11px，
+   高度约 30px，宽裕得多，所以这里补上最小高度与紧凑行高。 */
+html[data-ui='v2'] input:not([type='checkbox']):not([type='radio']):not([type='range']),
+html[data-ui='v2'] select {
+  /* 先生：仍能看到「下拉框/输入框截掉文字下半部分」—— 12.5px 的字加上下内距，
+     30px 只是勉强，字号带 descender（如「键」「青」的撇捺）时就会露怯。
+     给到 34px 并配 1.4 行高，全站表单控件一次性从容。 */
+  min-height: 34px;
+  line-height: 1.4;
+}
+
+html[data-ui='v2'] textarea {
+  line-height: var(--v2-lh-ui);
+}
+
+/* 编辑器内部隐藏的输入辅助（Monaco / CodeMirror）必须豁免，
+   它们不是可见控件，改字号或边框会干扰编辑器取词与输入。 */
+html[data-ui='v2'] .monaco-editor textarea,
+html[data-ui='v2'] .cm-editor textarea,
+html[data-ui='v2'] .cm-editor input {
+  font-size: inherit;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* 聚焦态：朱砂描边 + 柔和光环，与 demo 的 .fld input:focus 一致 */
+html[data-ui='v2'] input:focus-visible,
+html[data-ui='v2'] textarea:focus-visible,
+html[data-ui='v2'] select:focus-visible {
+  outline: none;
+  border-color: var(--seal);
+  box-shadow: 0 0 0 2px rgba(var(--seal-rgb), 0.1);
+}
+
+/* ===== 徽章 ===== */
+html[data-ui='v2'] .v2-badge {
+  border-radius: var(--v2-badge-radius);
+  font-size: var(--v2-fs-tiny);
+  font-weight: 600;
+}
+
+/* ===== 状态徽标：先生定的规格「去掉加粗与亮底，只留语义色差」=====
+ *
+ * 背景交代：产品的状态徽标一直写的是 Tailwind 原色底（bg-red-500/20 这种）。
+ * 语义变量桥接只管得到 --color-*，管不到这些原色，所以它们在墨纸底色上
+ * 始终是那个鲜亮的黄/蓝/紫 —— 文字色换装了、底色没跟上。
+ *
+ * 用法：给徽标加 .v2-status-badge 与 data-tone="error|warning|success|info|review|muted"。
+ * 底色一律用 color-mix 从语义色淡染出来（10%），因此四套主题切换时会跟着一起变。
+ *
+ * v1 安全性：这两个钩子在 v1 下没有定义，元素上的 Tailwind 原色类照旧生效，
+ * 逐像素不变 —— 与 .v2-btn 完全同一套机制（见本文件头部的说明）。
+ * 无层样式优先于 @layer utilities，所以不必 !important 就能压过 bg-red-500/20。 */
+html[data-ui='v2'] .v2-status-badge {
+  font-weight: 400;
+  background: transparent;
+  /* 防「被拉宽」：故事架构的文件卡片右侧是 `flex flex-col items-end`，
+     靠 items-end 让徽标按内容宽度靠右站。万一那条 Tailwind 工具类没生效
+     （dev 下 CSS 热更的已知毛病），flex 的默认 align-items:stretch 会把徽标
+     横向拉满整行 —— 背景色一铺开，就成了「宽大的错误展示」。
+     这里把宽度钉成内容宽，交叉轴怎么变都拉不动它。
+     对横向排列的容器（如审稿报告的统计条）没有任何影响。 */
+  width: fit-content;
+  /* 【重要】内距刻意不在这里定 —— 交给组件自己的 Tailwind 类（px-1.5 / px-2 …）。
+     起因：故事架构页同一个位置上，「待生成」用的是内联 style + px-1.5，
+     而「已生成」走本钩子；钩子若自带 padding，两态一切换尺寸就会跳一下。
+     钩子只统一「加粗与底色」这两件全站该一致的事，尺寸与形状留给各个组件。 */
+}
+
+html[data-ui='v2'] .v2-status-badge[data-tone='error'] {
+  background: color-mix(in srgb, var(--color-error) 10%, transparent);
+  color: var(--color-error-text);
+}
+
+html[data-ui='v2'] .v2-status-badge[data-tone='warning'] {
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+  color: var(--color-warning-text);
+}
+
+html[data-ui='v2'] .v2-status-badge[data-tone='success'] {
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+  color: var(--color-success-text);
+}
+
+html[data-ui='v2'] .v2-status-badge[data-tone='info'] {
+  background: color-mix(in srgb, var(--color-info) 12%, transparent);
+  color: var(--color-category-progress-text);
+}
+
+/* 审阅态：底色与字色必须同色系。原来底取 --gold2（金）、字取审阅紫，
+ * 金底压紫字互相打架；星空主题改用星云紫（--nebula）后两边归一，
+ * 其余三套主题没有该令牌，自动回退到原来的金，逐像素不变。 */
+html[data-ui='v2'] .v2-status-badge[data-tone='review'] {
+  background: color-mix(in srgb, var(--nebula, var(--gold2)) 16%, transparent);
+  color: var(--color-category-review-text);
+}
+
+/* 待核实 / 未开始这类「没有结论」的态：不着色，只用墨纸的次要色 */
+html[data-ui='v2'] .v2-status-badge[data-tone='muted'] {
+  background: var(--color-badge-bg);
+  color: var(--color-badge-text);
+}
+
+/* 走产品强调色（朱砂）的那一档 */
+html[data-ui='v2'] .v2-status-badge[data-tone='accent'] {
+  background: rgba(var(--color-accent-rgb), 0.1);
+  color: var(--color-accent);
+}
+
+/* ===== 语义提示条 =====
+ *
+ * 产品的告警块写的是 bg-red-500/10 + border-red-500/20 这种原色对，
+ * 在墨纸底色上是一圈「鲜红」。用法：加 .v2-notice 与 data-tone。
+ * 这里**只改颜色、不动尺寸**（padding / 圆角 / 字号一律留给组件自己），
+ * 所以不会撑破任何既有布局。v1 下钩子无定义，逐像素不变。 */
+html[data-ui='v2'] .v2-notice[data-tone='error'] {
+  background: color-mix(in srgb, var(--color-error) 9%, transparent);
+  border-color: color-mix(in srgb, var(--color-error) 24%, transparent);
+  color: var(--color-error-text);
+}
+
+html[data-ui='v2'] .v2-notice[data-tone='warning'] {
+  background: color-mix(in srgb, var(--color-warning) 9%, transparent);
+  border-color: color-mix(in srgb, var(--color-warning) 26%, transparent);
+  color: var(--color-warning-text);
+}
+
+html[data-ui='v2'] .v2-notice[data-tone='success'] {
+  background: color-mix(in srgb, var(--color-success) 9%, transparent);
+  border-color: color-mix(in srgb, var(--color-success) 24%, transparent);
+  color: var(--color-success-text);
+}
+
+html[data-ui='v2'] .v2-notice[data-tone='info'] {
+  background: color-mix(in srgb, var(--color-info) 10%, transparent);
+  border-color: color-mix(in srgb, var(--color-info) 24%, transparent);
+  color: var(--color-category-progress-text);
+}
+
+/* ===== 语义淡底容器与进度条 =====
+ * 产品写的是 bg-amber-500/10 这种 Tailwind 原色（进度轨道、图标底板、渐变进度条），
+ * 换成从语义色淡染 —— 四套主题下都能落在同一族色上。 */
+html[data-ui='v2'] .v2-tone-soft[data-tone='warning'] {
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-warning) 26%, transparent);
+}
+
+html[data-ui='v2'] .v2-tone-soft[data-tone='info'] {
+  background: color-mix(in srgb, var(--color-info) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-info) 24%, transparent);
+}
+
+html[data-ui='v2'] .v2-tone-soft[data-tone='success'] {
+  background: color-mix(in srgb, var(--color-success) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-success) 24%, transparent);
+}
+
+html[data-ui='v2'] .v2-tone-soft[data-tone='error'] {
+  background: color-mix(in srgb, var(--color-error) 12%, transparent);
+  border-color: color-mix(in srgb, var(--color-error) 26%, transparent);
+}
+
+html[data-ui='v2'] .v2-tone-fill[data-tone='warning'] {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--color-warning) 55%, transparent), var(--color-warning));
+}
+
+html[data-ui='v2'] .v2-tone-fill[data-tone='info'] {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--color-info) 55%, transparent), var(--color-info));
+}
+
+/* ===== 危险操作的悬停底色 =====
+ * 产品写的是 hover:bg-red-500/10（Tailwind 鲜红），换成墨纸暖红的淡染。 */
+html[data-ui='v2'] .v2-danger-hover:hover {
+  background: color-mix(in srgb, var(--color-error) 10%, transparent);
+}
+
+/* ===== 面板与卡片圆角统一到 demo ===== */
+html[data-ui='v2'] .writer-panel-card,
+html[data-ui='v2'] .v2-card {
+  border-radius: var(--v2-card-radius);
+}
+
+/* ===== 按钮辉光：只在黑夜主题保留 =====
+ * 先生：「删去除了黑夜、暗色模式之外的所有按钮发光 —— 正常配色下的发光会显得很不高级。」
+ *
+ * 查证下来，「发光」实际有两个来源：
+ *   ① 悬停时阴影放大：Tailwind 的 hover:shadow-md；destructive / success 变体还带彩色阴影
+ *      （hover:shadow-[var(--color-error)]/30 这种，在浅纸上一圈红光/绿光最刺眼）
+ *   ② 悬停时整体提亮：Button 的 hover:brightness-110，以及 demo 按钮的
+ *      .btn.ink:hover{filter:brightness(1.12)} 与 .btn.ok:hover{filter:brightness(1.08)}
+ *
+ * 所以在非暗色主题下把这两样都取消。判据是「明度」而不是「哪个主题」：
+ * 深底上发光是提亮与聚焦，浅纸上一圈彩光只会显脏。
+ * **静止态那 1px 淡投影保留** —— 那是纸片层次，不是发光，去掉会让按钮贴在纸上发死。
+ * 暗色主题原样保留发光；v1 不在此选择器范围内，完全不受影响。
+ *
+ * 2026-09-15：主题 1 从浅冷调改写成「星汉」深空星空，它同样属于暗色主题 ——
+ * 而且星光本来就该发光，这里把 '1' 一并放行。 */
+html[data-ui='v2']:not([data-v2-theme='1']):not([data-v2-theme='3']) .v2-btn:hover,
+html[data-ui='v2']:not([data-v2-theme='1']):not([data-v2-theme='3']) .v2-btn:focus-visible,
+html[data-ui='v2']:not([data-v2-theme='1']):not([data-v2-theme='3']) .btn:hover {
+  box-shadow: none;
+  filter: none;
+}
+
+/* ===== 外框按钮的描边：细而淡 =====
+ * 先生：「有外框的按钮，把外框线条做细做稍微淡一点，才优雅。」
+ * 产品 Button 的 outline 变体写的是 border-[var(--color-border)]，
+ * 而 --color-border 在 v2 下桥接到 --line（#E0D8C2）满色，视觉偏重；这里压到 62%。 */
+html[data-ui='v2'] .v2-btn-outline {
+  border-width: 1px;
+  border-color: color-mix(in srgb, var(--line2) 62%, transparent);
+  color: var(--ink2);
+  background: transparent;
+}
+
+html[data-ui='v2'] .v2-btn-outline:hover {
+  border-color: color-mix(in srgb, var(--seal) 70%, transparent);
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--seal);
+}
+
+/* 图标按钮（尺寸 icon）同样只需要一圈淡描边 */
+html[data-ui='v2'] .v2-btn-icon {
+  border-radius: var(--v2-btn-radius);
+}

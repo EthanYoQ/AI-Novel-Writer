@@ -65,3 +65,9 @@ tailwind.config.js.bak
 /public/screenshot/
 /public/logos/
 *.tsbuildinfo
+
+# vitest browser 失败时自动生成的截图，不入库
+**/__screenshots__/
+
+# UI 验证用的截图产物（浏览器端渲染后与 demo 比对），不入库
+/artifacts/

@@ -29,11 +29,16 @@ export interface SlashCommand {
 /** @ 提及目标 */
 export interface MentionTarget {
   /** 提及类型 */
-  type: 'chapter' | 'character' | 'architecture' | 'blueprint' | 'knowledge' | 'file'
+  type: 'chapter' | 'character' | 'architecture' | 'blueprint' | 'knowledge' | 'file' | 'world-setting'
   /** 显示名称 */
   displayName: string
   /** 提及值（传递给 Tool） */
   value: string
+  /**
+   * 补充说明：动态目标（如某条世界观设定）用它标出归属分类，
+   * 让作者在 @ 菜单里一眼分清同名条目。
+   */
+  hint?: string
 }
 
 /** 提及解析结果 */
@@ -156,6 +161,9 @@ export function getAllMentionTargets(locale: Locale = 'zh-CN'): MentionTarget[] 
     { type: 'character', displayName: text('角色卡', 'Character cards'), value: 'characters' },
     { type: 'blueprint', displayName: text('章节蓝图', 'Chapter blueprints'), value: 'blueprints' },
     { type: 'knowledge', displayName: text('知识库', 'Knowledge base'), value: 'knowledge' },
+    // 先生定的路线：世界观设定**不做全量注入**，靠作者主动 @ 或 AI 检索按需取用。
+    // 这一项是「整类列出（摘要级）」，具体条目由 MentionMenu 动态补进来。
+    { type: 'world-setting', displayName: text('世界观设定', 'World settings'), value: 'world_settings' },
     { type: 'chapter', displayName: text('当前章节', 'Current chapter'), value: 'current_chapter' },
     { type: 'file', displayName: text('项目文件', 'Project file'), value: 'file' },
   ]
@@ -163,10 +171,17 @@ export function getAllMentionTargets(locale: Locale = 'zh-CN'): MentionTarget[] 
 
 /**
  * 模糊搜索 @ 提及目标
+ *
+ * `extraTargets` 用来并入**动态目标**（例如项目里已有的世界观设定条目）——
+ * 静态列表是编译期常量，具体条目只有运行时才知道。
  */
-export function searchMentionTargets(query: string, locale: Locale = 'zh-CN'): MentionTarget[] {
+export function searchMentionTargets(
+  query: string,
+  locale: Locale = 'zh-CN',
+  extraTargets: MentionTarget[] = [],
+): MentionTarget[] {
   const q = query.toLowerCase()
-  return getAllMentionTargets(locale).filter(t =>
+  return [...getAllMentionTargets(locale), ...extraTargets].filter(t =>
     t.displayName.toLowerCase().includes(q) ||
     t.value.toLowerCase().includes(q)
   )
@@ -174,15 +189,23 @@ export function searchMentionTargets(query: string, locale: Locale = 'zh-CN'): M
 
 /**
  * 解析输入中的 @ 提及
+ *
+ * 正则刻意在**中文标点**处收住：作者写「@青云宗，这场戏怎么写」时，
+ * 提及应当是「青云宗」而不是连同后半句一起吞进去。
  */
-export function parseMentions(input: string, locale: Locale = 'zh-CN'): ParsedMention[] {
+export function parseMentions(
+  input: string,
+  locale: Locale = 'zh-CN',
+  extraTargets: MentionTarget[] = [],
+): ParsedMention[] {
   const mentions: ParsedMention[] = []
-  const regex = /@(\S+)/g
+  const regex = /@([^\s，。、；：！？""''（）【】《》,.;:!?()[\]{}]+)/g
   let match: RegExpExecArray | null = null
+  const targets = [...getAllMentionTargets(locale), ...extraTargets]
 
   while ((match = regex.exec(input)) !== null) {
     const value = match[1]
-    const target = getAllMentionTargets(locale).find(t =>
+    const target = targets.find(t =>
       t.value === value || t.displayName === value
     )
     if (target) {
@@ -200,12 +223,18 @@ export function parseMentions(input: string, locale: Locale = 'zh-CN'): ParsedMe
 /**
  * 将提及转换为 Tool 调用上下文
  * 返回需要预先调用的 Tool 名称和参数列表
+ *
+ * ⚠️ 同一轮对话内**必须去重**（先生定的铁律）：
+ * 作者写「@故事架构 @故事架构 @故事架构」或反复点选同一条设定时，
+ * 同一份内容只允许预取一次 —— 否则同一份全文会被重复拼进提示词，
+ * 轻则白烧 token，重则直接把上下文预算击穿、让整轮请求失败。
+ * 去重键 = 工具名 + 稳定序列化的参数（同一工具不同参数仍是不同内容，要各自保留）。
  */
 export function mentionsToToolCalls(mentions: ParsedMention[]): Array<{
   toolName: string
   args: Record<string, unknown>
 }> {
-  return mentions.map(m => {
+  const calls = mentions.map(m => {
     switch (m.target.type) {
       case 'architecture':
         return { toolName: 'read_architecture', args: {} }
@@ -217,10 +246,41 @@ export function mentionsToToolCalls(mentions: ParsedMention[]): Array<{
         return { toolName: 'search_knowledge', args: { query: '' } }
       case 'chapter':
         return { toolName: 'list_chapters', args: {} }
+      case 'world-setting':
+        // 静态项「@世界观设定」→ 列出全部（摘要级）；动态项「@青云宗」→ 精确查那一条。
+        return {
+          toolName: 'search_world_settings',
+          args: { query: m.target.value === 'world_settings' ? '' : m.target.displayName },
+        }
       case 'file':
         return { toolName: 'read_file', args: { file_path: '' } }
       default:
         return { toolName: 'read_project_state', args: {} }
     }
   })
+
+  return dedupeToolCalls(calls)
+}
+
+/**
+ * 按「工具名 + 参数」去重，保留首次出现顺序。
+ * 参数键排序后序列化，保证 `{a,b}` 与 `{b,a}` 视为同一调用。
+ */
+function dedupeToolCalls(
+  calls: Array<{ toolName: string; args: Record<string, unknown> }>,
+): Array<{ toolName: string; args: Record<string, unknown> }> {
+  const seen = new Set<string>()
+  const unique: Array<{ toolName: string; args: Record<string, unknown> }> = []
+  for (const call of calls) {
+    const key = `${call.toolName}:${stableArgsKey(call.args)}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(call)
+  }
+  return unique
+}
+
+function stableArgsKey(args: Record<string, unknown>): string {
+  const keys = Object.keys(args).sort()
+  return keys.map(key => `${key}=${String(args[key])}`).join('&')
 }
