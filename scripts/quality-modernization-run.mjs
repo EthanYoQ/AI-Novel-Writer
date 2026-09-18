@@ -5,7 +5,7 @@ import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { runProductionCommandProbe, runEarlyBudgetProductionPair, productionBridgeHash, productionExecutionRuntime, PRODUCTION_BRIDGE } from './quality-modernization-driver.mjs'
+import { runProductionCommandProbe, runProductionPhasePair, productionBridgeHash, productionExecutionRuntime, PRODUCTION_BRIDGE, PHASE_SCENARIOS } from './quality-modernization-driver.mjs'
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CACHE = path.join(ROOT, '.runtime', '.cache', 'novel-quality-modernization')
@@ -16,10 +16,21 @@ const CACHE = path.join(ROOT, '.runtime', '.cache', 'novel-quality-modernization
  */
 export const PLANNED_CALL_ALLOCATION = 80
 export const DRIVER = 'scripts/real-provider-generation-qualification.mjs'
+export const PROTOCOL_PATH = path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')
+/**
+ * 账本 campaign 身份。ADR 0019（2026-09-18 用户决定）把 campaign id 从预注册协议里的
+ * `novel-quality-program-v3-80-v1` 改为 `...-uncapped-v1`，好让「80 帽时期」与现在的收据
+ * 不会混成同一 campaign；协议字节本身保持预注册原样（不改写）。这里把这个取代关系显式写下来：
+ * 账本与 bridge 都取同一个常量，不再各自硬编码一个字符串——2f259cd 只改了 bridge 一侧，
+ * 于是早门在第一次发送前就以 INVALID_CAMPAIGN_BINDING 阻断（0 真实调用，未被发现）。
+ */
+const CAMPAIGN_ID_SUPERSESSION = { 'novel-quality-program-v3-80-v1': 'novel-quality-program-v3-uncapped-v1' }
+export const campaignIdFor = protocolId => CAMPAIGN_ID_SUPERSESSION[protocolId] ?? protocolId
 export const hash = value => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex')
 export const runnerAdapterHash = () => hash(['scripts/quality-modernization-run.mjs', 'scripts/quality-modernization-driver.mjs', PRODUCTION_BRIDGE].map(file => [file, hash(fs.readFileSync(path.join(ROOT, file)))]))
 const fail = code => { throw new Error(code) }
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'))
+export const CAMPAIGN_ID = campaignIdFor(read(PROTOCOL_PATH).id)
 const inside = (root, value) => { const relative = path.relative(root, value); return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)) }
 const real = value => fs.realpathSync(value)
 function git(root, args) {
@@ -97,6 +108,16 @@ export function selectPhase(protocol, phase, milestone = 'early') {
   if (!Object.hasOwn(protocol.phases, phase)) fail('INVALID_PHASE')
   if ((phase === 'full') !== (milestone === 'final')) fail('PHASE_MILESTONE_MISMATCH')
   return { phase, milestone, ...protocol.phases[phase] }
+}
+/**
+ * 生产桥只是协议的执行者：场景登记的 caseId 与 operation id 必须逐字等于该阶段的
+ * 预注册内容。不一致时阻断，而不是跑一个不是预注册的实验。
+ */
+export function assertScenarioMatchesProtocol(selection, scenario) {
+  if (!scenario || !Array.isArray(selection.caseIds) || selection.caseIds.length !== 1
+    || selection.caseIds[0] !== scenario.caseId
+    || !Array.isArray(selection.operations) || selection.operations.length !== scenario.operations.length
+    || selection.operations.some((operation, index) => operation.id !== scenario.operations[index].id)) fail('SCENARIO_PROTOCOL_MISMATCH')
 }
 export function validatePair(targets, observations) {
   const [a, b] = [targets.baseline, targets.candidate]
@@ -204,18 +225,28 @@ export function updateLedger(file, event, options = {}) {
       if (options.campaignMode === 'real' && path.resolve(file) !== path.join(CACHE, 'physical-ledger.jsonl')) fail('CAMPAIGN_LEDGER_PATH_MISMATCH')
       const protocol = read(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json'))
       const reserved = new Map(), statuses = new Map()
+      // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
+      // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
+      // 未知阶段（例如只有 caseIds、没有 operations 的 full）在这里 fail closed。
       const validateBinding = binding => {
-        if (!binding || binding.campaignId !== protocol.id || binding.mode !== options.campaignMode
+        if (!binding || binding.campaignId !== CAMPAIGN_ID || binding.mode !== options.campaignMode
           || !['baseline', 'candidate'].includes(binding.arm) || !/^[a-f0-9]{40}$/.test(binding.codeSha)
           || ['sourceHash', 'driverHash', 'parityId'].some(key => !/^[a-f0-9]{64}$/.test(binding[key]))
-          || binding.phase !== 'early-budget' || !['early', 'post-ui'].includes(binding.milestone)
-          || binding.caseId !== '场景1/1' || !['directory', 'draft'].includes(binding.operation)) fail('INVALID_CAMPAIGN_BINDING')
+          || !['early', 'post-ui'].includes(binding.milestone)) fail('INVALID_CAMPAIGN_BINDING')
+        const phase = protocol.phases[binding.phase]
+        if (!phase || !Array.isArray(phase.operations) || !Array.isArray(phase.caseIds)
+          || !phase.caseIds.includes(binding.caseId)
+          || !phase.operations.some(operation => operation.id === binding.operation)) fail('INVALID_CAMPAIGN_BINDING')
         if (binding.arm === 'candidate' && (!binding.actual || ['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch'].some(key => typeof binding.actual[key] !== 'string' || !binding.actual[key]))) fail('ACTUAL_OWNER_ATTEMPT_REQUIRED')
       }
+      // 阶段决定首选分配桶：early 阶段用 early*，post-UI 重跑用 postUi*；
+      // 同一 (milestone, phase, caseId, arm, operation) 的重复物理发送只吃失败/修复余量。
       const allocationFor = binding => {
         const occupied = [...reserved.values()].filter(row => statuses.get(row.attemptId) !== 'cancel')
         const slot = value => `${value.milestone}:${value.phase}:${value.caseId}:${value.arm}:${value.operation}`
-        const primary = binding.milestone === 'early' ? 'earlyBudget' : 'postUiBudget'
+        const suffix = { 'early-budget': 'Budget', 'early-context': 'Context', 'early-review': 'Review' }[binding.phase]
+        if (!suffix) fail('INVALID_CAMPAIGN_BINDING')
+        const primary = `${binding.milestone === 'early' ? 'early' : 'postUi'}${suffix}`
         const allocation = occupied.some(row => slot(row.binding) === slot(binding)) ? 'failedRetryRepairReviewReserve' : primary
         if (occupied.filter(row => row.allocation === allocation).length >= protocol.allocation[allocation]) fail('CAMPAIGN_ALLOCATION_EXHAUSTED')
         return allocation
@@ -250,13 +281,13 @@ export function updateLedger(file, event, options = {}) {
 
 export function main(argv) {
   let [command = 'help', ...rest] = argv
-  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <freeze-targets|development-synthetic|baseline-probe|dry-run|early-budget|early-context|early-review|full> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real]; freeze-targets/development-synthetic: --baseline-root <existing worktree> --output <new private targets.json> [--model-id <safely provisioned id>]', physicalModelRequests: 0 }
+  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <freeze-targets|development-synthetic|baseline-probe|dry-run|early-budget|early-context|early-review|full> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real]; freeze-targets/development-synthetic: --baseline-root <existing worktree> --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
   if (command.startsWith('--')) { rest = argv; command = 'phase-options' }
   const args = {}
   for (let i = 0; i < rest.length; i++) {
     const key = rest[i]
     if (key === '--dry-run') { if (args[key]) fail('INVALID_ARGUMENT'); args[key] = true; continue }
-    if (!['--targets', '--milestone', '--mode', '--baseline-root', '--output', '--model-id', '--protocol', '--phase'].includes(key) || !rest[i + 1] || args[key]) fail('INVALID_ARGUMENT')
+    if (!['--targets', '--milestone', '--mode', '--baseline-root', '--output', '--model-id', '--protocol', '--phase', '--scenario'].includes(key) || !rest[i + 1] || args[key]) fail('INVALID_ARGUMENT')
     args[key] = rest[++i]
   }
   if (command === 'phase-options') command = args['--phase'] || fail('INVALID_PHASE')
@@ -264,11 +295,19 @@ export function main(argv) {
   const protocol = read(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json'))
   if (['freeze-targets', 'development-synthetic'].includes(command)) {
     if (!args['--baseline-root'] || !args['--output'] || args['--mode'] === 'real') fail('TARGET_PREPARATION_ARGUMENTS_REQUIRED')
+    if (command === 'freeze-targets' && args['--scenario']) fail('INVALID_ARGUMENT')
     const prepared = createProductionTargets(args['--baseline-root'], args['--output'], { development: command === 'development-synthetic', modelId: args['--model-id'] })
     if (command === 'freeze-targets') return prepared
-    const result = runEarlyBudgetProductionPair(prepared.targets, { development: true, mode: 'synthetic',
-      semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(prepared.root, 'baseline-templates.json'), ledgerPath: path.join(prepared.root, 'synthetic-ledger.jsonl') })
-    fs.writeFileSync(path.join(prepared.root, 'development-receipt.json'), JSON.stringify(result, null, 2))
+    // 零模型开发路径只跑已登记的场景；默认仍是 early-budget，逐字保持原有行为。
+    // 它永远只产出 development-only-unfrozen 收据，不构成冻结目标资格。
+    const phase = args['--scenario'] ?? 'early-budget'
+    const scenario = PHASE_SCENARIOS[phase]
+    if (!scenario) fail('PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED')
+    const selection = selectPhase(protocol, phase, args['--milestone'] ?? scenario.milestone)
+    assertScenarioMatchesProtocol(selection, scenario)
+    const result = runProductionPhasePair(prepared.targets, { phase, development: true, mode: 'synthetic', milestone: selection.milestone,
+      semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(prepared.root, 'baseline-templates.json'), ledgerPath: path.join(prepared.root, `synthetic-ledger-${phase}.jsonl`) })
+    fs.writeFileSync(path.join(prepared.root, `development-receipt-${phase}.json`), JSON.stringify(result, null, 2))
     return { ...result, evidenceRoot: prepared.root, targetsPath: prepared.path }
   }
   if (!['baseline-probe', 'dry-run', ...Object.keys(protocol.phases)].includes(command)) fail('INVALID_COMMAND')
@@ -281,12 +320,14 @@ export function main(argv) {
     validatePair(targets, observations)
     const phase = command === 'dry-run' ? 'early-budget' : command
     const selection = selectPhase(protocol, phase, args['--milestone'] || 'early')
-    if (phase !== 'early-budget') return { status: 'blocked', code: 'PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED', selection, physicalModelRequests: 0 }
+    const scenario = PHASE_SCENARIOS[phase]
+    if (!scenario) return { status: 'blocked', code: 'PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED', selection, physicalModelRequests: 0 }
+    assertScenarioMatchesProtocol(selection, scenario)
     const mode = command === 'dry-run' || args['--dry-run'] ? 'synthetic' : args['--mode']
     if (!['synthetic', 'real'].includes(mode)) fail('EXPLICIT_PROVIDER_MODE_REQUIRED')
     if (mode === 'real' && (!targets.baseline.modelId || !targets.candidate.modelId)) fail('FROZEN_SAFE_MODEL_REQUIRED')
     const evidenceRoot = fs.mkdtempSync(path.join(CACHE, `s07-${mode}-`))
-    const result = runEarlyBudgetProductionPair(targets, { mode, milestone: selection.milestone, semanticPath: path.join(ROOT, protocol.fixturePath),
+    const result = runProductionPhasePair(targets, { phase, mode, milestone: selection.milestone, semanticPath: path.join(ROOT, protocol.fixturePath),
       templatesPath: path.join(evidenceRoot, 'baseline-templates.json'), ledgerPath: mode === 'real' ? path.join(CACHE, 'physical-ledger.jsonl') : path.join(evidenceRoot, 'synthetic-ledger.jsonl') })
     inspectTarget(targets.baseline); inspectTarget(targets.candidate)
     fs.writeFileSync(path.join(evidenceRoot, 'receipt.json'), JSON.stringify(result, null, 2))

@@ -4,8 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { spawnSync } from 'node:child_process'
-import { ROOT, PLANNED_CALL_ALLOCATION, hash, buildFixtureExports, validatePair, selectPhase, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles } from '../quality-modernization-run.mjs'
-import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash } from '../quality-modernization-driver.mjs'
+import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, buildFixtureExports, validatePair, selectPhase, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles } from '../quality-modernization-run.mjs'
+import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, PHASE_SCENARIOS } from '../quality-modernization-driver.mjs'
 import Database from 'better-sqlite3'
 
 const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
@@ -38,6 +38,14 @@ test('三乘三两臂与原80帽含post-UI备份预留', () => {
   assert.equal(selectPhase(protocol, 'full', 'final').caseIds.length, 9)
   assert.equal(protocol.phases['early-budget'].operations.reduce((n, op) => n + op.minimumCalls, 0), 4)
   assert.equal(protocol.allocation.postUiBudget, 4)
+  // 生产桥只接线已登记的场景；每个场景的 caseId 与 operation id 必须逐字等于协议。
+  for (const phase of ['early-budget', 'early-context']) {
+    assert.equal(PHASE_SCENARIOS[phase].caseId, protocol.phases[phase].caseIds[0])
+    assert.deepEqual(PHASE_SCENARIOS[phase].operations.map(operation => operation.id),
+      protocol.phases[phase].operations.map(operation => operation.id))
+  }
+  assert.equal(PHASE_SCENARIOS['early-review'], undefined)
+  assert.equal(PHASE_SCENARIOS.full, undefined)
   assert.throws(() => selectPhase(protocol, 'full', 'early'), /MISMATCH/)
   assert.ok(source.deterministicCases.C16.length >= 10 && source.deterministicCases.C17.length >= 10)
 })
@@ -144,15 +152,15 @@ test('实际SQLite唯一dispatch须匹配原handle、项目epoch与实际输出�
 test('campaign保留后续阶段额度，unknown与修复占原22余量且不能换账', () => {
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/campaign-test-'))
   const file = path.join(dir, 'synthetic-ledger.jsonl')
-  const binding = { campaignId: protocol.id, mode: 'synthetic', arm: 'baseline', codeSha: 'a'.repeat(40),
-    sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64), phase: 'early-budget', milestone: 'early', caseId: '场景1/1', operation: 'directory' }
+  const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'baseline', codeSha: 'a'.repeat(40),
+    sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64), phase: 'early-budget', milestone: 'early', caseId: '场景1/1', operation: '指定范围生成' }
   const record = event => updateLedger(file, event, { campaignMode: 'synthetic' })
   const issue = (id, value = binding) => { record({ type: 'reserve', attemptId: id, binding: value }); record({ type: 'dispatch', attemptId: id }); record({ type: 'unknown', attemptId: id }) }
   try {
     issue('first')
     for (let i = 0; i < 22; i++) issue(`repair${i}`)
     assert.throws(() => issue('steals-future-capacity'), /ALLOCATION_EXHAUSTED/)
-    issue('still-available-primary-draft', { ...binding, operation: 'draft' })
+    issue('still-available-primary-draft', { ...binding, operation: '900单位正文' })
     issue('still-available-post-ui', { ...binding, milestone: 'post-ui' })
     assert.throws(() => updateLedger(path.join(dir, 'other-real.jsonl'), { type: 'reserve', attemptId: 'new', binding: { ...binding, mode: 'real' } }, { campaignMode: 'real' }), /PATH_MISMATCH/)
     assert.throws(() => record({ type: 'cancel', attemptId: 'first' }), /TRANSITION/)
@@ -161,6 +169,46 @@ test('campaign保留后续阶段额度，unknown与修复占原22余量且不能
     rows[0].allocation = 'postUiBudget'; fs.writeFileSync(file, rows.map(JSON.stringify).join('\n') + '\n')
     assert.throws(() => record({ type: 'reserve', attemptId: 'tampered', binding }), /ALLOCATION_MISMATCH/)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('early-context 按协议取 caseId/operation，额度走 earlyContext/postUiContext', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/context-campaign-test-'))
+  const file = path.join(dir, 'synthetic-ledger.jsonl')
+  const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'baseline', codeSha: 'a'.repeat(40),
+    sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
+    phase: 'early-context', milestone: 'early', caseId: '场景2/2', operation: '长设定第二章正文' }
+  const actual = { attemptId: 'attempt-1', runId: 'run-1', rootActionId: 'root-1', projectId: 'project-1', epoch: 'epoch-1' }
+  const record = event => updateLedger(file, event, { campaignMode: 'synthetic' })
+  const issue = (id, value = binding) => { record({ type: 'reserve', attemptId: id, binding: value }); record({ type: 'dispatch', attemptId: id }); record({ type: 'settle', attemptId: id }); return value }
+  try {
+    issue('ctx-baseline')
+    issue('ctx-candidate', { ...binding, arm: 'candidate', actual })
+    // 两个不同臂的槽位吃满 earlyContext 的协议分配额（2）；同槽重试只吃失败/修复余量。
+    issue('ctx-retry', binding)
+    const rows = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse).filter(row => row.type === 'reserve')
+    assert.deepEqual(rows.map(row => row.allocation), ['earlyContext', 'earlyContext', 'failedRetryRepairReviewReserve'])
+    // post-UI 重跑属于另一个桶（协议 postUiContext: 2），不与 early 混用。
+    issue('ctx-post-ui', { ...binding, milestone: 'post-ui' })
+    const postUi = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse).find(row => row.attemptId === 'ctx-post-ui')
+    assert.equal(postUi.allocation, 'postUiContext')
+    // 错 caseId、错 operation、未登记阶段（full 只有 caseIds）一律拒绝。
+    assert.throws(() => record({ type: 'reserve', attemptId: 'wrong-case', binding: { ...binding, caseId: '场景1/1' } }), /INVALID_CAMPAIGN_BINDING/)
+    assert.throws(() => record({ type: 'reserve', attemptId: 'wrong-op', binding: { ...binding, operation: 'directory' } }), /INVALID_CAMPAIGN_BINDING/)
+    assert.throws(() => record({ type: 'reserve', attemptId: 'wrong-phase', binding: { ...binding, phase: 'full', caseId: '场景2/2' } }), /INVALID_CAMPAIGN_BINDING/)
+    assert.throws(() => record({ type: 'reserve', attemptId: 'wrong-early-budget-op', binding: { ...binding, phase: 'early-budget', caseId: '场景1/1', operation: '长设定第二章正文' } }), /INVALID_CAMPAIGN_BINDING/)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('campaign id 按 ADR 0019 取代协议 id，账本与 bridge 取同一个常量', () => {
+  // 2f259cd 把 bridge 一侧的字符串改成 ...-uncapped-v1，却把协议 id 留在 ...-80-v1：
+  // 于是早门在第一次发送前就以 INVALID_CAMPAIGN_BINDING 阻断。取代关系只能写一处。
+  assert.equal(protocol.id, 'novel-quality-program-v3-80-v1')
+  assert.equal(CAMPAIGN_ID, 'novel-quality-program-v3-uncapped-v1')
+  assert.equal(CAMPAIGN_ID, campaignIdFor(protocol.id))
+  assert.equal(campaignIdFor('未登记协议'), '未登记协议')
+  const target = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
+  assert.ok(target.includes('campaignId: CAMPAIGN_ID'), 'bridge 必须共用 CAMPAIGN_ID')
+  assert.ok(!/novel-quality-program-v3-(?:80|uncapped)-v1'/.test(target), 'bridge 不再硬编码 campaign id')
 })
 
 test('development manifest拒绝formal，协议别名不接受不存在的旧路径', () => {

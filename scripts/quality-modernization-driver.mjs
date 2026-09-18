@@ -74,7 +74,40 @@ export function runProductionBridge(request) {
   return { ...receipt, command: { executable: runtime.executable, argv, cwd: target.repositoryRoot, shell: false }, receiptPath: request.receiptPath }
 }
 
-export function runEarlyBudgetProductionPair(targets, options) {
+// A phase scenario is the bridge-side counterpart of one preregistered protocol phase.
+// The protocol stays the only authority for case ids and operation ids; this map only
+// says which production commands realize them. The runner re-checks every field against
+// the selected protocol phase before opening the gate, so a drift here fails closed
+// instead of quietly running a different experiment.
+export const PHASE_SCENARIOS = Object.freeze({
+  'early-budget': Object.freeze({
+    caseId: '场景1/1',
+    sceneId: '场景1',
+    chapterNumber: 1,
+    milestone: 'early',
+    operations: Object.freeze([
+      Object.freeze({ id: '指定范围生成', kind: 'directory' }),
+      Object.freeze({ id: '900单位正文', kind: 'draft' }),
+    ]),
+  }),
+  'early-context': Object.freeze({
+    caseId: '场景2/2',
+    sceneId: '场景2',
+    chapterNumber: 2,
+    milestone: 'early',
+    operations: Object.freeze([
+      Object.freeze({ id: '长设定第二章正文', kind: 'draft' }),
+    ]),
+  }),
+})
+export function productionScenario(phase) {
+  const scenario = PHASE_SCENARIOS[phase]
+  if (!scenario) throw new Error('PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED')
+  return scenario
+}
+
+export function runProductionPhasePair(targets, options) {
+  const scenario = productionScenario(options.phase)
   const invocationId = randomUUID()
   const directoryId = invocationId.slice(0, 8)
   const executionTargets = Object.fromEntries(['baseline', 'candidate'].map(arm => {
@@ -93,18 +126,25 @@ export function runEarlyBudgetProductionPair(targets, options) {
     }
     return [arm, { ...original, isolationRoot, roots, declaredIsolationRoot: original.isolationRoot, declaredRoots: original.roots }]
   }))
-  const common = { mode: options.mode ?? 'synthetic', development: options.development === true, milestone: options.milestone ?? 'early',
-    semanticPath: options.semanticPath, templatesPath: options.templatesPath, ledgerPath: options.ledgerPath,
-    driverHash: productionBridgeHash() }
+  const common = { mode: options.mode ?? 'synthetic', development: options.development === true,
+    milestone: options.milestone ?? scenario.milestone,
+    phase: options.phase, caseId: scenario.caseId, sceneId: scenario.sceneId, chapterNumber: scenario.chapterNumber,
+    operations: scenario.operations, semanticPath: options.semanticPath, templatesPath: options.templatesPath,
+    ledgerPath: options.ledgerPath, driverHash: productionBridgeHash() }
   const prepared = ['baseline', 'candidate'].map(arm => runProductionBridge({ ...common, target: executionTargets[arm], action: 'prepare' }))
   const parityHash = prepared[0].physicalProject.parityHash
   if (prepared[1].physicalProject.parityHash !== parityHash) throw new Error('ACTUAL_PROJECT_PARITY_FAILED')
   const results = ['baseline', 'candidate'].map(arm => {
     try { return runProductionBridge({ ...common, target: executionTargets[arm], action: 'execute', parityHash }) }
-    catch (error) { return { ...(error.receiptPath && fs.existsSync(error.receiptPath) ? JSON.parse(fs.readFileSync(error.receiptPath, 'utf8')) : {}),
-      arm, status: 'failed', code: error.message, receiptPath: error.receiptPath } }
+    catch (error) {
+      // A bridge refusal is a recorded outcome, not a harness crash: keep the receipt's
+      // own reason (for example a chapter-material capacity conflict) next to the code.
+      const receipt = error.receiptPath && fs.existsSync(error.receiptPath) ? JSON.parse(fs.readFileSync(error.receiptPath, 'utf8')) : {}
+      return { ...receipt, arm, status: 'failed', code: error.message, reason: receipt.error ?? null, receiptPath: error.receiptPath }
+    }
   })
   return { status: results.every(result => result.status === 'passed') ? 'passed' : 'failed', qualification: options.development ? 'development-only-unfrozen' : `${common.mode}-production-path-only`,
+    phase: options.phase, caseId: scenario.caseId, operations: scenario.operations.map(operation => operation.id),
     physicalModelRequests: results.reduce((sum, result) => sum + (result.physicalModelRequests ?? 0), 0), syntheticDispatches: results.reduce((sum, result) => sum + (result.syntheticDispatches ?? 0), 0),
     invocationId, parityHash, prepared, results, qualityQualification: common.mode === 'real' ? 'pending-independent-oracle-review' : 'not-run' }
 }
