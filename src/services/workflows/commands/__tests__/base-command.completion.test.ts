@@ -203,7 +203,7 @@ describe('BaseWorkflowCommand completion boundary', () => {
       step: { kind: 'single' } satisfies ProbeStep,
       context,
       callbacks,
-    })).rejects.toThrow('AI 输出达到模型最大长度，结果不完整')
+    })).rejects.toThrow('AI 输出达到本次请求长度限制，尚未完整生成')
 
     expect(completeWithLease).toHaveBeenCalledOnce()
     expect(completeWithLease.mock.calls[0]?.[0].plan.maxOutputTokens).toBe(2048)
@@ -244,7 +244,7 @@ describe('BaseWorkflowCommand completion boundary', () => {
       step: { kind: 'single' } satisfies ProbeStep,
       context: { ...context, uiLocale: 'en-US', writingLanguage: 'zh-CN' },
       callbacks,
-    })).rejects.toThrow('AI output reached the model maximum length and is incomplete')
+    })).rejects.toThrow('AI output reached this request length limit and is not yet complete')
   })
 
   it('shares one frozen lease and budget across a structured continuation after the default changes', async () => {

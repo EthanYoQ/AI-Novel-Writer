@@ -25,6 +25,11 @@ export interface PartialArchData {
   character_dynamics_result?: string
   character_state_result?: string
   world_building_result?: string
+  world_building_partial_result?: string
+  world_building_incomplete?: boolean
+  world_building_facts_fingerprint?: string
+  world_building_db_hash?: string
+  world_building_step_guidance?: string
   synopsis_result?: string
   /** 情节大纲在上一次生成中被输出长度中断；synopsis_result 为已完成部分。 */
   synopsis_incomplete?: boolean
@@ -42,6 +47,8 @@ export interface ArchitectureWorkflowParams {
   synopsisRange?: { from: number; to: number } | null
   /** 从上次输出长度中断的检查点续写情节大纲（工作流只包含 synopsis 一步）。 */
   resumeSynopsis?: boolean
+  /** 从上次输出长度中断的候选续写世界观（工作流只包含 worldbuilding 一步）。 */
+  resumeWorldBuilding?: boolean
 }
 
 export interface ConfigGenerationWorkflowParams {
@@ -64,9 +71,15 @@ export function createArchitectureWorkflow(
 ): WorkflowDefinition {
   const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
   const resumingSynopsis = params.resumeSynopsis === true
+  const resumingWorldBuilding = params.resumeWorldBuilding === true
+  if (resumingSynopsis && resumingWorldBuilding) {
+    throw new Error(text('一次只能恢复一个故事架构步骤', 'Only one story-architecture step can be resumed at a time.'))
+  }
   const sel = resumingSynopsis
     ? ['synopsis' as const]
-    : params.selectedSteps ?? ['premise', 'characters', 'worldbuilding', 'synopsis']
+    : resumingWorldBuilding
+      ? ['worldbuilding' as const]
+      : params.selectedSteps ?? ['premise', 'characters', 'worldbuilding', 'synopsis']
   const expectedProjectPath = params.projectPath
   const project = useProjectStore.getState().currentProject
   const currentProjectSession = projectSessionContextFromProject(project)
@@ -114,11 +127,15 @@ export function createArchitectureWorkflow(
     {
       name: text('世界观', 'World building'),
       key: 'worldbuilding',
-      description: stepDesc('worldbuilding', '构建自带冲突引擎的世界观矩阵', 'Build a world matrix with its own conflict engine'),
+      description: resumingWorldBuilding
+        ? text('从已保存的未完成候选继续生成世界观', 'Resume worldbuilding from the saved incomplete candidate')
+        : stepDesc('worldbuilding', '构建自带冲突引擎的世界观矩阵', 'Build a world matrix with its own conflict engine'),
       executor: async (step: unknown, context: WorkflowContext, callbacks: StepCallbacks) => {
         context.data.stepGuidance = guidance
         const { GenerateWorldBuildingCommand } = await import('./commands/architecture.command')
-        return new GenerateWorldBuildingCommand(projectSnapshot).execute({ step, context, callbacks })
+        return new GenerateWorldBuildingCommand(projectSnapshot, undefined, {
+          resumeWorldBuilding: params.resumeWorldBuilding,
+        }).execute({ step, context, callbacks })
       },
     },
     {
@@ -144,7 +161,9 @@ export function createArchitectureWorkflow(
     type: 'architecture_generation',
     title: resumingSynopsis
       ? text('继续生成情节大纲（断点续写）', 'Continue plot outline (resume)')
-      : text('生成故事架构', 'Generate story architecture'),
+      : resumingWorldBuilding
+        ? text('继续生成世界观（断点续写）', 'Continue worldbuilding (resume)')
+        : text('生成故事架构', 'Generate story architecture'),
     projectPath: expectedProjectPath,
     projectSession,
     uiLocale,

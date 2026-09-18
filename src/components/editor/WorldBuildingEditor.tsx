@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Sparkles, CheckCircle2, Circle, RefreshCw, FileText, BookOpen, AlertTriangle, FolderTree } from 'lucide-react'
+import { Sparkles, CheckCircle2, Circle, RefreshCw, FileText, BookOpen, AlertTriangle, FolderTree, Eye, Copy } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
+import { useWorkflowStore } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { renderIcon } from '../panels/sidebar/sidebar-icons'
 
@@ -34,6 +35,7 @@ import {
   hasVisiblePartialSynopsisMarker,
   isRecoverableSynopsisCheckpoint,
   isUsableSynopsisCheckpoint,
+  recoverableWorldBuildingCandidate,
 } from '../../services/workflows/commands/architecture.command'
 
 type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
@@ -62,6 +64,9 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   const currentProject = useProjectStore(s => s.currentProject)
   const text = useLocaleStore(s => s.text)
   const projectMatches = currentProject?.path === projectKey
+  const latestArchitectureTerminalRunId = useWorkflowStore(state => (
+    state.history.find(run => run.type === 'architecture_generation' && run.projectPath === projectKey)?.id ?? null
+  ))
   const [archStatus, setArchStatus] = useState<Record<string, boolean>>({})
   const [wordCounts, setWordCounts] = useState<Record<string, number>>({})
   const [synopsisIncomplete, setSynopsisIncomplete] = useState(false)
@@ -69,6 +74,9 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   const [synopsisCoveredTo, setSynopsisCoveredTo] = useState<number>(0)
   const [synopsisTotalChapters, setSynopsisTotalChapters] = useState<number>(0)
   const [synopsisBusy, setSynopsisBusy] = useState(false)
+  const [worldBuildingCandidate, setWorldBuildingCandidate] = useState('')
+  const [worldBuildingBusy, setWorldBuildingBusy] = useState(false)
+  const [showWorldBuildingCandidate, setShowWorldBuildingCandidate] = useState(false)
   const [pendingSynopsisRange, setPendingSynopsisRange] = useState<{ from: number; to: number } | null>(null)
   const [loading, setLoading] = useState(true)
   const [showArchDialog, setShowArchDialog] = useState(false)
@@ -94,6 +102,8 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       setSynopsisRecoveryFailed(false)
       setSynopsisCoveredTo(0)
       setSynopsisTotalChapters(0)
+      setWorldBuildingCandidate('')
+      setShowWorldBuildingCandidate(false)
       setLoading(false)
       return
     }
@@ -109,6 +119,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     let interrupted = false
     let recoveryFailed = false
     let coveredTo = 0
+    let recoveredWorldBuildingCandidate = ''
     const dbSynopsis = core?.synopsis || ''
     const totalChapters = Number(core?.totalChapters ?? currentProject?.novelConfig?.totalChapters) || 0
     const writingLanguage = (core?.writingLanguage ?? currentProject?.novelConfig?.writingLanguage) === 'en-US'
@@ -125,6 +136,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       const partial = partialResult?.success === true
         ? (partialResult as { data?: Record<string, unknown> }).data
         : undefined
+      recoveredWorldBuildingCandidate = recoverableWorldBuildingCandidate(partial)
       const checkpointUsable = isUsableSynopsisCheckpoint(
         partial,
         dbSynopsis,
@@ -145,6 +157,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       interrupted = false
       recoveryFailed = visiblyPartial
       coveredTo = 0
+      recoveredWorldBuildingCandidate = ''
     }
     const status: Record<string, boolean> = {
       premise: (core?.premise?.length ?? 0) > 50,
@@ -168,6 +181,8 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     setSynopsisRecoveryFailed(recoveryFailed && Boolean(status.synopsis))
     setSynopsisCoveredTo(coveredTo)
     setSynopsisTotalChapters(totalChapters)
+    setWorldBuildingCandidate(recoveredWorldBuildingCandidate)
+    if (!recoveredWorldBuildingCandidate) setShowWorldBuildingCandidate(false)
     setLoading(false)
     // ✅ 只依赖 path 字符串，避免 novelConfig 等变化导致 loadStatus 重建
   }, [currentProject, projectKey, projectMatches, rosterSnapshot])
@@ -175,7 +190,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   useEffect(() => {
     const timer = setTimeout(() => { void loadStatus() }, 0)
     return () => clearTimeout(timer)
-  }, [loadStatus])
+  }, [latestArchitectureTerminalRunId, loadStatus])
 
   // 监听 EventBus 事件，刷新后处理状态面板
   useEffect(() => {
@@ -300,6 +315,46 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     }
   }
 
+  /** 从本项目保存的未完成候选继续生成世界观。 */
+  const handleResumeWorldBuilding = async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    if (!isProjectSessionCurrent(projectSession) || worldBuildingBusy || !worldBuildingCandidate) return
+    setWorldBuildingBusy(true)
+    try {
+      await launchCreativeWorkflow({
+        workflow: 'generate_architecture',
+        selectedSteps: ['worldbuilding'],
+        resumeWorldBuilding: true,
+      }, projectSession)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      const { toast } = await import('../ui/Toast')
+      toast.error(text(`续写启动失败：${detail}`, `Failed to start the continuation: ${detail}`))
+    } finally {
+      setWorldBuildingBusy(false)
+    }
+  }
+
+  const copyWorldBuildingCandidate = async () => {
+    const projectSession = captureProjectSession(currentProject)
+    if (!projectMatches
+      || !projectSession
+      || !isProjectSessionPath(projectSession, projectKey)
+      || !isProjectSessionCurrent(projectSession)
+      || !worldBuildingCandidate
+    ) return
+    try {
+      await navigator.clipboard.writeText(worldBuildingCandidate)
+      const { toast } = await import('../ui/Toast')
+      toast.success(text('世界观未完成候选已复制', 'Incomplete worldbuilding candidate copied.'))
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      const { toast } = await import('../ui/Toast')
+      toast.error(text(`复制失败：${detail}`, `Copy failed: ${detail}`))
+    }
+  }
+
   /** 续批入口：打开生成弹窗并预填下一批范围（从 coveredTo+1 起，默认带本批上限，
    * 上限可在弹窗内调整）。避免一次请求剩余全部章节再次触发超长输出。 */
   const handleContinueOutlineBatch = async () => {
@@ -399,6 +454,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
           const synopsisNeedsRecovery = f.key === 'synopsis' && synopsisRecoveryFailed
           const words = wordCounts[f.key] ?? 0
           const isCharacters = f.key === 'characters'
+          const isWorldBuildingCandidate = f.key === 'worldbuilding' && Boolean(worldBuildingCandidate)
           const rosterNeedsAttention = isCharacters && rosterPresentation
             && rosterPresentation.kind !== 'ready'
             && rosterPresentation.kind !== 'empty'
@@ -408,11 +464,13 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
             ? 'var(--color-error, #ef4444)'
             : rosterNeedsAttention
               ? 'var(--color-warning)'
-            : synopsisNeedsRecovery
-              ? 'var(--color-warning)'
-              : generated
-              ? 'var(--color-success)'
-              : 'var(--color-border)'
+              : synopsisNeedsRecovery
+                ? 'var(--color-warning)'
+                : isWorldBuildingCandidate
+                  ? 'var(--color-warning)'
+               : generated
+                    ? 'var(--color-success)'
+                    : 'var(--color-border)'
           return (
             <div key={f.key} className="space-y-2">
               <div
@@ -431,11 +489,11 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                 title={`${text('点击查看', 'Open')} — ${text(f.descZh, f.descEn)}`}
               >
                 {/* 状态图标 */}
-                {generated
-                  ? synopsisNeedsRecovery
-                    ? <AlertTriangle size={18} style={{ flexShrink: 0, color: 'var(--color-warning)' }} />
-                    : <CheckCircle2 size={18} style={{ flexShrink: 0, color: 'var(--color-success)' }} />
-                  : <Circle size={18} style={{ flexShrink: 0, color: 'var(--color-text-muted)' }} />
+                {isWorldBuildingCandidate || synopsisNeedsRecovery
+                  ? <AlertTriangle size={18} style={{ flexShrink: 0, color: 'var(--color-warning)' }} />
+                  : generated
+                    ? <CheckCircle2 size={18} style={{ flexShrink: 0, color: 'var(--color-success)' }} />
+                    : <Circle size={18} style={{ flexShrink: 0, color: 'var(--color-text-muted)' }} />
                 }
 
                 {/* 图标 */}
@@ -486,6 +544,56 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                           {words.toLocaleString()} {text('字符', 'characters')}
                         </span>
                       )}
+                    </>
+                  ) : isWorldBuildingCandidate ? (
+                    <>
+                      <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-yellow-500/15 text-[var(--color-warning-text)]">
+                        {text(
+                          generated ? '正式内容保留 · 有未完成候选' : '未完成候选 · 未写入正式内容',
+                          generated ? 'Formal content kept · incomplete candidate' : 'Incomplete candidate · not formal content',
+                        )}
+                      </span>
+                      {generated && (
+                        <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                          {words.toLocaleString()} {text('字符（正式内容）', 'characters (formal)')}
+                        </span>
+                      )}
+                      <div className="flex flex-wrap justify-end gap-1 mt-0.5">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setShowWorldBuildingCandidate(value => !value)
+                          }}
+                        >
+                          <Eye size={12} />
+                          {showWorldBuildingCandidate ? text('收起候选', 'Hide candidate') : text('查看候选', 'View candidate')}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void copyWorldBuildingCandidate()
+                          }}
+                        >
+                          <Copy size={12} />
+                          {text('复制', 'Copy')}
+                        </Button>
+                        <Button
+                          size="sm"
+                          disabled={worldBuildingBusy}
+                          className="gap-1.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white border-none"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void handleResumeWorldBuilding()
+                          }}
+                        >
+                          <RefreshCw size={12} className={worldBuildingBusy ? 'animate-spin' : ''} />
+                          {worldBuildingBusy ? text('续写中...', 'Resuming...') : text('断点续写', 'Resume')}
+                        </Button>
+                      </div>
                     </>
                   ) : generated ? (
                     <>
@@ -592,6 +700,20 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                   )}
                 </div>
               </div>
+              {isWorldBuildingCandidate && showWorldBuildingCandidate && (
+                <div
+                  role="status"
+                  className="rounded-lg border p-3"
+                  style={{ borderColor: 'var(--color-warning)', backgroundColor: 'var(--color-panel)' }}
+                >
+                  <div className="text-xs font-medium mb-2" style={{ color: 'var(--color-warning-text)' }}>
+                    {text('世界观未完成候选（不会自动写入正式世界观）', 'Incomplete worldbuilding candidate (not written to formal worldbuilding)')}
+                  </div>
+                  <pre className="text-xs whitespace-pre-wrap max-h-64 overflow-y-auto" style={{ color: 'var(--color-text-secondary)' }}>
+                    {worldBuildingCandidate}
+                  </pre>
+                </div>
+              )}
             </div>
           )
         })}
