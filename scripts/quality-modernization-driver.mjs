@@ -30,6 +30,69 @@ export function selectOwnerDispatch(db, handle, session, body) {
     || attempt.requestedOutputTokens !== (body.max_tokens ?? body.max_completion_tokens)) throw new Error('OWNER_DISPATCH_IDENTITY_MISMATCH')
   return { attemptId: row.attempt_id, runId: row.run_id, rootActionId: row.root_action_id, projectId: binding.projectId, epoch: binding.epoch }
 }
+
+/**
+ * 桥内结算守护的预算。必须明显短于桥测试自身的超时（桥配置里的 120_000），
+ * 才有余量在进程被超时杀掉之前把 unknown 落进账本并收尾。见 createAttemptSupervisor。
+ */
+export const BRIDGE_SETTLEMENT_DEADLINE_MS = 480_000
+
+/** 只测规模、不落内容：返回提示词载荷的 UTF-8 字节数，绝不含提示词原文或凭据。 */
+export function measurePromptBytes(messages) {
+  return Buffer.byteLength(JSON.stringify(messages ?? []), 'utf8')
+}
+
+/**
+ * 桥自身的结算守护：从桥开始工作起持有一个短于桥测试超时的截止时间。
+ *
+ * 桥测试的 120s 超时是进程内的 JS 计时器：它不投递任何信号，也不会先运行 finally，
+ * 所以「等网络流结束后再写 settle/unknown」在供应商卡住时永远等不到——账本里只剩
+ * reserve+dispatch，这次发送既不 settle 也不 unknown，花费不可审计，也违反了
+ * 「dispatch 之后必须 settle 或 unknown，未知不得退款」的规则。这里让桥自己持有
+ * 截止时间：
+ *   - terminal(): 幂等。同一 attemptId 只写一条 settle/unknown，重复调用是 no-op，
+ *     因此「刚写 unknown 又想把同一次发送改写为 settle」不可能发生。
+ *   - 到点: 先为所有仍未终态的尝试写 unknown（占用、不退款），再 abort 它的 fetch，
+ *     让等待方以失败结束——先落账，后失败。到点之后新登记的尝试同样立即按 unknown
+ *     收尾，绝不无限延长；dispatch 之前的取消仍然只走 cancel。
+ *   - 计时从桥开始工作算起（不是从第一次发送算起），因为超时管的是整个测试的时长。
+ *
+ * 被拒绝的方案：改用 process 信号/退出钩子收尾。测试超时是进程内计时器，不发送任何
+ * 信号，SIGTERM 处理器根本不会触发；'exit' 处理器必须同步、无法等待未决的流；而工作
+ * 进程被强杀（SIGKILL/terminate）时两者都不会运行。守护计时器活在同一个事件循环里：
+ * await 网络时事件循环是空闲的，所以它一定会跑；正常收尾时由 dispose() 明确清除。
+ */
+export function createAttemptSupervisor({ record, deadlineMs = BRIDGE_SETTLEMENT_DEADLINE_MS } = {}) {
+  if (typeof record !== 'function') throw new Error('SUPERVISOR_RECORD_REQUIRED')
+  const open = new Map()
+  const closed = new Set()
+  let expired = false
+  const terminal = (attemptId, type, extra = {}) => {
+    if (closed.has(attemptId)) return false
+    // 先写账本再记终态：写失败（例如 LEDGER_BUSY）不吞掉终态，调用方仍可重试。
+    record({ type, attemptId, ...extra })
+    closed.add(attemptId)
+    open.delete(attemptId)
+    return true
+  }
+  const failOpenAttempts = () => {
+    for (const [attemptId, controller] of [...open]) {
+      try { terminal(attemptId, 'unknown') } catch { /* 账本暂不可写也必须继续 abort，绝不回退成「未发送」 */ }
+      try { controller?.abort?.(new Error('ATTEMPT_DEADLINE_EXCEEDED')) } catch { /* ignore */ }
+    }
+  }
+  const timer = deadlineMs > 0 ? setTimeout(() => { expired = true; failOpenAttempts() }, deadlineMs) : null
+  return {
+    watch(attemptId, controller) {
+      open.set(attemptId, controller ?? null)
+      if (expired) failOpenAttempts()
+    },
+    terminal,
+    dispose: () => { if (timer !== null) clearTimeout(timer) },
+    expired: () => expired,
+    openAttempts: () => open.size,
+  }
+}
 export function runProductionBridge(request) {
   const target = request.target
   const runtime = productionExecutionRuntime(target)
@@ -43,7 +106,7 @@ export function runProductionBridge(request) {
     resolve: { alias: { vitest: path.join(target.repositoryRoot, 'node_modules/vitest/dist/index.js'),
       electron: path.join(target.repositoryRoot, 'node_modules/electron/index.js') } },
     test: { include: [PRODUCTION_BRIDGE], exclude: [], environment: 'node',
-      globals: false, maxWorkers: 1, fileParallelism: false, testTimeout: 120000 },
+      globals: false, maxWorkers: 1, fileParallelism: false, testTimeout: 600000 },
   })}\n`)
   const env = Object.fromEntries(['SystemRoot', 'WINDIR', 'PATH', 'PATHEXT', 'ComSpec'].filter(key => process.env[key]).map(key => [key, process.env[key]]))
   Object.assign(env, { QUALITY_BRIDGE_REQUEST: requestFile, QUALITY_USER_DATA: target.roots.userData,

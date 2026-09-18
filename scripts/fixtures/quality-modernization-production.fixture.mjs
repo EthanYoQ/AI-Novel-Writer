@@ -7,7 +7,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { test, vi } from 'vitest'
 import { updateLedger, CAMPAIGN_ID } from '../quality-modernization-run.mjs'
-import { selectOwnerDispatch } from '../quality-modernization-driver.mjs'
+import { selectOwnerDispatch, createAttemptSupervisor, measurePromptBytes, BRIDGE_SETTLEMENT_DEADLINE_MS } from '../quality-modernization-driver.mjs'
 
 // This adapter replaces the Electron transport, never a command/runtime/repository.
 // The final provider fetch is the sole synthetic/real response switch.
@@ -50,6 +50,11 @@ test('isolated production commands persist the selected phase operations', async
     runtime: { node: process.version, abi: process.versions.modules }, physicalModelRequests: 0, syntheticDispatches: 0,
     invocations: [], attempts: [], status: 'running' }
   const candidate = target.arm === 'candidate'
+  // 账本写入器在物理发送与守护之间共用：reserve 先占位，dispatch 先落盘再发网络。
+  const record = event => updateLedger(request.ledgerPath, event, { campaignMode: request.mode })
+  // 每个已 dispatch 的发送都由守护拥有一个短于桥测试超时的截止时间：到点时先写 unknown，
+  // 再 abort，保证超时杀进程之前账本已经有一条终态，而不是只剩 reserve+dispatch。
+  const supervisor = createAttemptSupervisor({ record })
   const originalFetch = globalThis.fetch
   globalThis.fetch = async () => { throw new Error('NETWORK_OUTSIDE_PHYSICAL_BOUNDARY') }
   let database, projectAccess, currentContext, sourceParity, countUnits
@@ -204,12 +209,19 @@ test('isolated production commands persist the selected phase operations', async
         codeSha: target.codeSha, sourceHash: target.sourceHash, driverHash: request.driverHash,
         parityId: request.parityHash, phase: request.phase, milestone: request.milestone, caseId: request.caseId,
         operation: operationId, ...(actual ? { actual } : {}) }
-      const record = event => updateLedger(request.ledgerPath, event, { campaignMode: request.mode })
       record({ type: 'reserve', attemptId, binding })
       record({ type: 'dispatch', attemptId })
+      // 发送规模证据：只记字节数，绝不记提示词原文或凭据，好让两臂在不花真实调用的前提下可比。
       const requestReceipt = { attemptId, binding, requestedOutputTokens: body.max_tokens ?? body.max_completion_tokens,
-        compiledPromptHash: sha(body.messages), systemPromptHash: sha(body.messages.filter(message => message.role === 'system')) }
+        compiledPromptHash: sha(body.messages), systemPromptHash: sha(body.messages.filter(message => message.role === 'system')),
+        composedPromptBytes: measurePromptBytes(body.messages),
+        requestBodyBytes: Buffer.byteLength(typeof options.body === 'string' ? options.body : '', 'utf8') }
       receipt.attempts.push(requestReceipt)
+      // 从 dispatch 起由守护接管：到点会先为这次发送写 unknown，再 abort 下面的 fetch。
+      const controller = new AbortController()
+      supervisor.watch(attemptId, controller)
+      const callerSignal = options?.signal
+      const signal = callerSignal ? AbortSignal.any([controller.signal, callerSignal]) : controller.signal
       try {
         if (request.mode === 'synthetic') receipt.syntheticDispatches++
         else receipt.physicalModelRequests++
@@ -218,7 +230,8 @@ test('isolated production commands persist the selected phase operations', async
           relationships: [], suspenseHook: chapter.oracle?.knowledge ?? '', userGuidance: source.template }] })
           : syntheticDraftText(countUnits, chapter.targetUnits)
         const sse = `data: ${JSON.stringify({ choices: [{ delta: { content: text }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`
-        const response = request.mode === 'synthetic' ? new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } }) : await originalFetch(url, options)
+        const response = request.mode === 'synthetic' ? new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } })
+          : await originalFetch(url, { ...options, signal })
         if (!response.ok || !response.body) throw new Error('PROVIDER_HTTP_FAILED')
         const [providerBody, ledgerBody] = response.body.tee()
         streamSettlements.push((async () => {
@@ -239,11 +252,11 @@ test('isolated production commands persist the selected phase operations', async
             }
           } catch { interrupted = true }
           finally { reader.releaseLock() }
-          record({ type: finishReason && !interrupted && !malformed ? 'settle' : 'unknown', attemptId, ...(finishReason ? { finishReason } : {}) })
+          supervisor.terminal(attemptId, finishReason && !interrupted && !malformed ? 'settle' : 'unknown', finishReason ? { finishReason } : {})
         })())
         if (request.mode === 'synthetic') requestReceipt.visibleTextHash = sha(text)
         return new Response(providerBody, { status: response.status, statusText: response.statusText, headers: response.headers })
-      } catch (error) { record({ type: 'unknown', attemptId }); throw error }
+      } catch (error) { supervisor.terminal(attemptId, 'unknown'); throw error }
     }
     globalThis.fetch = async (...args) => {
       try { return await physicalFetch(...args) }
@@ -297,11 +310,19 @@ test('isolated production commands persist the selected phase operations', async
     receipt.status = 'failed'; receipt.error = safeDiagnostic(error.message)
     throw request.mode === 'real' ? new Error('REAL_PRODUCTION_BRIDGE_FAILED') : error
   } finally {
+    // 先等流收尾、再撤守护：守护计时器仍然活着，任何仍未终态的发送都会被它写 unknown。
     await Promise.allSettled(streamSettlements)
+    supervisor.dispose()
     globalThis.fetch = originalFetch
     database?.closeProjectDatabase(); projectAccess?.invalidateCurrentSession()
     vi.unstubAllGlobals()
+    // 每臂的请求规模证据（纯数字，不含提示词原文与凭据），两臂因此可在不花真实调用时比较。
+    receipt.bridgeSettlementDeadlineMs = BRIDGE_SETTLEMENT_DEADLINE_MS
+    receipt.requestSizes = receipt.attempts.map(attempt => ({ operation: attempt.binding.operation, arm: attempt.binding.arm,
+      mode: attempt.binding.mode, attemptId: attempt.attemptId, composedPromptBytes: attempt.composedPromptBytes,
+      requestBodyBytes: attempt.requestBodyBytes }))
+    receipt.composedPromptBytes = receipt.attempts.reduce((sum, attempt) => sum + (attempt.composedPromptBytes ?? 0), 0)
     const serialized = JSON.stringify(receipt, null, 2) + '\n'
     fs.writeFileSync(request.receiptPath, secret ? serialized.split(secret).join('[REDACTED]') : serialized)
   }
-}, 120_000)
+}, 600_000)

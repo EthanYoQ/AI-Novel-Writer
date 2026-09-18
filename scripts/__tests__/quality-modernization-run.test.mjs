@@ -5,7 +5,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { spawnSync } from 'node:child_process'
 import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, buildFixtureExports, validatePair, selectPhase, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles } from '../quality-modernization-run.mjs'
-import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, PHASE_SCENARIOS } from '../quality-modernization-driver.mjs'
+import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, PHASE_SCENARIOS, createAttemptSupervisor, measurePromptBytes, BRIDGE_SETTLEMENT_DEADLINE_MS } from '../quality-modernization-driver.mjs'
 import Database from 'better-sqlite3'
 
 const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
@@ -209,6 +209,71 @@ test('campaign id 按 ADR 0019 取代协议 id，账本与 bridge 取同一个�
   const target = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
   assert.ok(target.includes('campaignId: CAMPAIGN_ID'), 'bridge 必须共用 CAMPAIGN_ID')
   assert.ok(!/novel-quality-program-v3-(?:80|uncapped)-v1'/.test(target), 'bridge 不再硬编码 campaign id')
+})
+
+test('超时守护为已 dispatch 的发送补写 unknown：只写一次、绝不退款、不伪造未发送', async () => {
+  // 桥测试的 120s 超时是进程内计时器：不投信号、不跑 finally。供应商卡住时，
+  // 「等流结束再写终态」永远等不到，账本只剩 reserve+dispatch。守护必须自己到点收尾。
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/guard-test-'))
+  const file = path.join(dir, 'synthetic-ledger.jsonl')
+  const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'baseline', codeSha: 'a'.repeat(40),
+    sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
+    phase: 'early-context', milestone: 'early', caseId: '场景2/2', operation: '长设定第二章正文' }
+  try {
+    const record = event => updateLedger(file, event, { campaignMode: 'synthetic' })
+    const supervisor = createAttemptSupervisor({ record, deadlineMs: 50 })
+    const stalled = new AbortController()
+    // 取消发生在 dispatch 之前的预留：它必须保持「未发送」，不被守护伪造成已发送。
+    record({ type: 'reserve', attemptId: 'cancelled-before-dispatch', binding })
+    record({ type: 'cancel', attemptId: 'cancelled-before-dispatch' })
+    record({ type: 'reserve', attemptId: 'stalled', binding })
+    record({ type: 'dispatch', attemptId: 'stalled' })
+    supervisor.watch('stalled', stalled)
+    assert.equal(supervisor.openAttempts(), 1)
+    // 供应商卡住：这里什么都不 resolve，只有守护到点。等待远超过期时间。
+    await new Promise(resolve => setTimeout(resolve, 200))
+    assert.equal(supervisor.expired(), true)
+    const rows = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse)
+    assert.deepEqual(rows.filter(row => row.attemptId === 'stalled').map(row => row.type), ['reserve', 'dispatch', 'unknown'])
+    assert.equal(supervisor.openAttempts(), 0)
+    // 先把 unknown 落账，再 abort 让等待方失败。
+    assert.equal(stalled.signal.aborted, true)
+    // 幂等：晚到的终态不能改写同一次发送，也不能再多落一行。
+    const before = fs.readFileSync(file, 'utf8')
+    assert.equal(supervisor.terminal('stalled', 'settle', { finishReason: 'stop' }), false)
+    assert.equal(fs.readFileSync(file, 'utf8'), before)
+    // dispatch 过的发送只能是 settle/unknown：不能取消释放，也不能重开同一 attempt。
+    assert.throws(() => record({ type: 'cancel', attemptId: 'stalled' }), /TRANSITION/)
+    assert.throws(() => record({ type: 'reserve', attemptId: 'stalled', binding }), /INVALID_RESERVATION/)
+    assert.deepEqual(rows.filter(row => row.attemptId === 'cancelled-before-dispatch').map(row => row.type), ['reserve', 'cancel'])
+    supervisor.dispose()
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('请求规模证据只存字节数、取自真正出站的请求体，且守护确实接在桥里', () => {
+  // 纯数字、可 grep：字节数必须等于该载荷的 JSON 序列化长度，多字节按真实 UTF-8 计。
+  const payload = [{ role: 'user', content: '雨停后到现场核查' }]
+  assert.equal(measurePromptBytes(payload), Buffer.byteLength(JSON.stringify(payload), 'utf8'))
+  assert.ok(measurePromptBytes([{ role: 'user', content: 'a' }]) > measurePromptBytes([{ role: 'user', content: '' }]))
+  assert.equal(measurePromptBytes(undefined), Buffer.byteLength('[]', 'utf8'))
+  const fixturePath = path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs')
+  const fixture = fs.readFileSync(fixturePath, 'utf8')
+  // 规模取自真正出站的请求体（compiled prompt 的字节数），不是模板、哈希或预算估算。
+  assert.ok(/composedPromptBytes:\s*measurePromptBytes\(body\.messages\)/.test(fixture), '收据必须记录出站提示词字节数')
+  assert.ok(fixture.includes('receipt.composedPromptBytes = receipt.attempts.reduce'), '每臂必须有一个可比较的合计字节数')
+  assert.ok(fixture.includes('requestSizes'), '每臂必须保留逐次发送的规模明细')
+  // 守护必须真的接在桥里，且失败路径也走它；否则超时仍会丢掉终态。
+  assert.ok(fixture.includes('createAttemptSupervisor({ record })'), '桥必须拥有自己的结算守护')
+  assert.ok(fixture.includes('supervisor.watch(attemptId, controller)'), '每次发送都必须登记进守护')
+  assert.ok(/supervisor\.terminal\(attemptId, 'unknown'\)/.test(fixture), '失败路径也必须经守护写终态')
+  assert.ok(!/record\(\{ type: 'unknown', attemptId \}\)/.test(fixture), '不存在绕过守护的裸 unknown 写入')
+  // 守护预算必须短于桥测试超时，否则超时仍会先杀进程。
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-driver.mjs'), 'utf8')
+  const bridgeTimeoutMs = Number(/testTimeout:\s*(\d+)/.exec(driver)[1])
+  const fixtureTimeoutMs = Number(/test\([\s\S]*\},\s*([\d_]+)\)$/.exec(fixture.trim())[1].replace(/_/g, ''))
+  assert.ok(Number.isFinite(bridgeTimeoutMs) && Number.isFinite(fixtureTimeoutMs))
+  assert.ok(BRIDGE_SETTLEMENT_DEADLINE_MS < bridgeTimeoutMs && BRIDGE_SETTLEMENT_DEADLINE_MS < fixtureTimeoutMs,
+    `守护预算 ${BRIDGE_SETTLEMENT_DEADLINE_MS} 必须短于桥超时 ${bridgeTimeoutMs}/${fixtureTimeoutMs}`)
 })
 
 test('development manifest拒绝formal，协议别名不接受不存在的旧路径', () => {
