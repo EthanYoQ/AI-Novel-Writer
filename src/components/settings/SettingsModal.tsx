@@ -39,7 +39,7 @@ import {
 
 // ==================== 分类定义 ====================
 
-type SettingsModalSection = SettingsSection | 'appearance'
+type SettingsModalSection = SettingsSection
 
 interface SectionItem {
   id: SettingsModalSection
@@ -62,6 +62,13 @@ export const SETTINGS_SECTIONS: SectionItem[] = [
   { id: 'about', label: '关于', labelEn: 'About', icon: <Info size={16} />, description: '版本、定位与本地部署说明', descriptionEn: 'Version, positioning, and local deployment' },
 ]
 
+function resolveValidSection(section: unknown): SettingsModalSection {
+  if (typeof section === 'string' && SETTINGS_SECTIONS.some(s => s.id === section)) {
+    return section as SettingsModalSection
+  }
+  return SETTINGS_SECTIONS[0]?.id ?? 'appearance'
+}
+
 // ==================== 主组件 ====================
 
 interface SettingsModalProps {
@@ -73,12 +80,12 @@ interface SettingsModalProps {
 export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const text = useLocaleStore(s => s.text)
   const requestedSection = useLayoutStore(s => s.settingsSection)
-  const [section, setSection] = useState<SettingsModalSection>(requestedSection)
+  const [section, setSection] = useState<SettingsModalSection>(() => resolveValidSection(requestedSection))
 
   useEffect(() => {
     if (!open) return
     // 在提交后同步外部请求，避免 effect 阶段同步 setState 的级联渲染。
-    const syncTimer = window.setTimeout(() => setSection(requestedSection), 0)
+    const syncTimer = window.setTimeout(() => setSection(resolveValidSection(requestedSection)), 0)
     return () => window.clearTimeout(syncTimer)
   }, [open, requestedSection])
 
