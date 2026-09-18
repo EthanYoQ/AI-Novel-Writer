@@ -3,7 +3,6 @@
   "id": "novel-quality-program-v3-80-v1",
   "status": "preregistered-no-model-results",
   "language": "zh-CN",
-  "physicalCallCap": 80,
   "phases": {
     "early-budget": {
       "caseIds": [
@@ -136,5 +135,6 @@
     "runtimeProbe": "生产runtime模拟completion，不是18章或桌面资格",
     "commandDriver": "当前未集成；S06 owners/S14A前完成；formal phases fail closed"
   },
-  "fixturePath": "test/fixtures/novel-quality-modernization/semantic-source.json"
+  "fixturePath": "test/fixtures/novel-quality-modernization/semantic-source.json",
+  "plannedCallAllocation": 80
 }

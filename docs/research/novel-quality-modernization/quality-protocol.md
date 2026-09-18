@@ -12,13 +12,21 @@
 
 顺序固定在协议中，最终同时间窗交错两臂。seed固定；主集成者看输出前生成随机匿名标签并私存映射。远端版本不能锁定则记录可能漂移。所有失败、中止、缺章、重试进入意向分析表，旧S00输出不能代替最终baseline。
 
-## 80次唯一总账
+## 唯一总账（无调用硬上限，记账不变）
+
+**2026-09-18 用户决定移除真实调用硬上限。** 原先的 80 次总帽不再拒绝请求；它降级为**计划分配额**（协议里的 `plannedCallAllocation`），用于一致性校验与汇报。这是对冻结规划 `docs/plans/novel-quality-modernization/03-CONTRACTS-AND-GATES.md` 中"不擅自扩帽"一句的**有意取代**，记录见 `docs/adr/0019-remove-real-call-hard-cap.md`。受审规划字节未被改写。
+
+计划分配（仍是分阶段设计的样本量，不是上限）：S00 0；early三门4+2+6；post-UI重跑三门4+2+6；最终18章；规划6；C16既有提取6；备份恢复继续创作4；失败/重试/修复/审稿/复核余量22，合计80。一次逻辑动作可能消耗多次物理调用；此表是可容纳的最小路径，不保证输出、自动续写或失败路径都在配额内成功。
+
+**上限是决策，记账是证据。** 硬上限移除后，账本的地位更重要而不是更轻：每一次真实发送（包括失败、unknown、重试）仍必须逐条进入同一账本，花费因此仍然完整可审计。移除的是"拒绝"，不是"记录"。
+
+正式集成必须固定 `.runtime/.cache/novel-quality-modernization/physical-ledger.jsonl` 为本次campaign唯一账本，所有owner消费它。`updateLedger`持有排他wx锁，逐条append+fsync；锁存在不抢占，残缺记录拒绝继续。reserve先占位，dispatch先落盘再发网络；仅reserve可取消释放，dispatch后settle/unknown均占位。重试用新attempt，不能复用未知请求。调用后缺失usage仍以预留保守记账；本账本仅管实验物理次数，产品token/时间预算仍需S07 C01生产账本，不能拿这个替代。
 
 最小分配：S00 0；early三门4+2+6；post-UI重跑三门4+2+6；最终18章；规划6；C16既有提取6；备份恢复继续创作4；失败/重试/修复/审稿/复核余量22，合计80。一次逻辑动作可能消耗多次物理调用；此表是可容纳的最小路径，不保证输出、自动续写或失败路径都在配额内成功。所有真实发送（包括失败/unknown）受同一80总帽，不按皮肤加样本或开新账。
 
 正式集成必须固定 `.runtime/.cache/novel-quality-modernization/physical-ledger.jsonl` 为本次campaign唯一账本，所有owner消费它。`updateLedger`持有排他wx锁，逐条append+fsync；锁存在不抢占，残缺记录拒绝继续。reserve先占位，dispatch先落盘再发网络；仅reserve可取消释放，dispatch后settle/unknown均占位。重试用新attempt，不能复用未知请求。调用后缺失usage仍以预留保守记账；本账本仅管实验物理次数，产品token/时间预算仍需S07 C01生产账本，不能拿这个替代。
 
-S07 的 early-budget 驱动在每次最终 provider fetch 前持锁 reserve→dispatch；原操作的重复物理发送消耗22次失败/修复余量，不能借用后续阶段的首次配额。真实模式唯一文件为上述 campaign 总账；合成模式使用独立、明确标注的模拟账本，不消耗真实80次。网络流结束后 settle/unknown，未知不得退款；前置失败不伪造已发送，余额不足只报 blocked/inconclusive。其他阶段仍须接入同一账本，未实现的阶段拒绝执行。
+S07 的 early-budget 驱动在每次最终 provider fetch 前持锁 reserve→dispatch；原操作的重复物理发送消耗22次失败/修复余量，不能借用后续阶段的首次配额。真实模式唯一文件为上述 campaign 总账；合成模式使用独立、明确标注的模拟账本，不消耗真实调用额度。网络流结束后 settle/unknown，未知不得退款；前置失败不伪造已发送，额度不足时仍按原设计报 blocked/inconclusive（这是结论口径，不是拒绝机制）。其他阶段仍须接入同一账本，未实现的阶段拒绝执行。
 
 获准安全参数：provider=`openai`、protocol=`openai`、endpointHost=`api.siliconflow.cn`、modelName=`deepseek-ai/DeepSeek-V4-Flash`、temperature=0.7、maxTokens=16384。配置declared context=null/output=16384/reasoning=false/structuredOutput=false/usage=false不等于实测能力；不推测结构化支持、usage或上下文上限。密钥只通过现有安全模型入口，禁止fixture/receipt/日志携带密钥或密钥hash。旧qualification driver模拟的其他模型名称仅是其自带模拟样本，绝不是正式获准provider配置。
 

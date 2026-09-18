@@ -9,7 +9,12 @@ import { runProductionCommandProbe, runEarlyBudgetProductionPair, productionBrid
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CACHE = path.join(ROOT, '.runtime', '.cache', 'novel-quality-modernization')
-export const CAP = 80
+/**
+ * 计划分配总额。用户于 2026-09-18 决定移除真实调用硬上限，因此它只用于
+ * 协议一致性校验与汇报，不再拒绝请求。账本仍然逐条记录每次占用，
+ * 花费依旧可审计；上限是决策，记账是证据。
+ */
+export const PLANNED_CALL_ALLOCATION = 80
 export const DRIVER = 'scripts/real-provider-generation-qualification.mjs'
 export const hash = value => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex')
 export const runnerAdapterHash = () => hash(['scripts/quality-modernization-run.mjs', 'scripts/quality-modernization-driver.mjs', PRODUCTION_BRIDGE].map(file => [file, hash(fs.readFileSync(path.join(ROOT, file)))]))
@@ -234,13 +239,12 @@ export function updateLedger(file, event, options = {}) {
       const previous = attempts.get(row.attemptId)
       if (row.type === 'reserve') {
         if (previous || !row.binding || !['baseline', 'candidate'].includes(row.binding.arm) || !/^[a-f0-9]{40}$/.test(row.binding.codeSha) || !/^[a-f0-9]{64}$/.test(row.binding.parityId)) fail('INVALID_RESERVATION')
-        if ([...attempts.values()].filter(item => item.type !== 'cancel').length >= CAP) fail('PHYSICAL_CALL_CAP_EXHAUSTED')
       } else if (!previous || !(previous.type === 'reserve' && ['dispatch', 'cancel'].includes(row.type) || previous.type === 'dispatch' && ['settle', 'unknown'].includes(row.type))) fail('INVALID_LEDGER_TRANSITION')
       attempts.set(row.attemptId, row)
     }
     const out = fs.openSync(file, 'a')
     try { fs.writeSync(out, JSON.stringify(event) + '\n'); fs.fsyncSync(out) } finally { fs.closeSync(out) }
-    return { occupied: [...attempts.values()].filter(item => item.type !== 'cancel').length, cap: CAP }
+    return { occupied: [...attempts.values()].filter(item => item.type !== 'cancel').length, cap: null }
   } finally { fs.closeSync(fd); fs.unlinkSync(lock) }
 }
 

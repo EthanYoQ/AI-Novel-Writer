@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { spawnSync } from 'node:child_process'
-import { ROOT, CAP, hash, buildFixtureExports, validatePair, selectPhase, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles } from '../quality-modernization-run.mjs'
+import { ROOT, PLANNED_CALL_ALLOCATION, hash, buildFixtureExports, validatePair, selectPhase, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles } from '../quality-modernization-run.mjs'
 import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash } from '../quality-modernization-driver.mjs'
 import Database from 'better-sqlite3'
 
@@ -33,7 +33,7 @@ test('help不触文件、模型或启动目标；参数拒绝', () => {
 test('三乘三两臂与原80帽含post-UI备份预留', () => {
   assert.equal(source.scenes.length, 3)
   assert.equal(source.scenes.flatMap(s => s.chapters).length * 2, 18)
-  assert.equal(Object.values(protocol.allocation).reduce((a, b) => a + b, 0), CAP)
+  assert.equal(Object.values(protocol.allocation).reduce((a, b) => a + b, 0), protocol.plannedCallAllocation)
   for (const phase of ['early-budget', 'early-context', 'early-review']) assert.equal(selectPhase(protocol, phase, 'post-ui').milestone, 'post-ui')
   assert.equal(selectPhase(protocol, 'full', 'final').caseIds.length, 9)
   assert.equal(protocol.phases['early-budget'].operations.reduce((n, op) => n + op.minimumCalls, 0), 4)
@@ -65,7 +65,7 @@ test('相交数据根拒绝，格式错误拒绝', () => {
 test('伪manifest不能跳过实际git身份检查', () => {
   assert.throws(() => inspectTarget({ schemaVersion: 1, arm: 'baseline', repositoryRoot: ROOT, codeSha: '0'.repeat(40) }), /TARGET_SHA_MISMATCH/)
 })
-test('账本未知不释放、重试新attempt、80帽、重复/并发/残记录拒绝', () => {
+test('账本未知不释放、重试新attempt、无硬上限、重复/并发/残记录拒绝', () => {
   const parent = path.join(ROOT, '.runtime/.cache/novel-quality-modernization')
   fs.mkdirSync(parent, { recursive: true })
   const dir = fs.mkdtempSync(path.join(parent, 'ledger-test-'))
@@ -74,12 +74,15 @@ test('账本未知不释放、重试新attempt、80帽、重复/并发/残记录
   try {
     updateLedger(file, { type: 'reserve', attemptId: '取消前', binding })
     updateLedger(file, { type: 'cancel', attemptId: '取消前' })
-    for (let i = 0; i < CAP; i++) {
+    for (let i = 0; i < PLANNED_CALL_ALLOCATION; i++) {
       updateLedger(file, { type: 'reserve', attemptId: `请求${i}`, binding })
       updateLedger(file, { type: 'dispatch', attemptId: `请求${i}` })
       updateLedger(file, { type: i === 0 ? 'unknown' : 'settle', attemptId: `请求${i}` })
     }
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: '超额', binding }), /CAP_EXHAUSTED/)
+    // 用户于 2026-09-18 移除真实调用硬上限：超出计划额度的请求不再被拒绝，但仍然记账。
+    const over = updateLedger(file, { type: 'reserve', attemptId: '超额', binding })
+    assert.equal(over.cap, null)
+    assert.equal(over.occupied, PLANNED_CALL_ALLOCATION + 1)
     assert.throws(() => updateLedger(file, { type: 'cancel', attemptId: '请求0' }), /TRANSITION/)
     assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: '请求0', binding }), /INVALID_RESERVATION/)
     fs.writeFileSync(`${file}.lock`, '')

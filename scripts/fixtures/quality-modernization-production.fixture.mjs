@@ -166,7 +166,7 @@ test('isolated production commands persist both early-budget operations', async 
         actual = selectOwnerDispatch(db, currentContext.mainGenerationRunHandle, session, body)
       }
       const attemptId = `${target.arm}:${actual?.attemptId ?? randomUUID()}`
-      const binding = { campaignId: 'novel-quality-program-v3-80-v1', mode: request.mode, arm: target.arm,
+      const binding = { campaignId: 'novel-quality-program-v3-uncapped-v1', mode: request.mode, arm: target.arm,
         codeSha: target.codeSha, sourceHash: target.sourceHash, driverHash: request.driverHash,
         parityId: request.parityHash, phase: 'early-budget', milestone: request.milestone, caseId: '场景1/1',
         operation: currentOperation, ...(actual ? { actual } : {}) }
