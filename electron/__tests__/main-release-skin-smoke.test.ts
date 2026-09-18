@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 
 const smokeToken = 'a'.repeat(64)
 
@@ -18,6 +20,7 @@ const mocks = vi.hoisted(() => {
   Object.assign(BrowserWindow, { getAllWindows: vi.fn(() => []) })
 
   return {
+    userData: '',
     BrowserWindow,
     registerIPCHandlers: vi.fn(),
     registerMCPHandlers: vi.fn(),
@@ -26,7 +29,10 @@ const mocks = vi.hoisted(() => {
       kind: 'packaged-skin-smoke',
     })),
     app: {
-      commandLine: { appendSwitch: vi.fn() },
+      commandLine: { appendSwitch: vi.fn(), getSwitchValue: vi.fn(() => mocks.userData) },
+      getPath: vi.fn(() => mocks.userData),
+      setPath: vi.fn(),
+      requestSingleInstanceLock: vi.fn(() => true),
       getLocale: () => 'zh-CN',
       getVersion: () => '0.7.0',
       isPackaged: true,
@@ -46,6 +52,10 @@ vi.mock('electron', () => ({
   shell: { openExternal: vi.fn() },
 }))
 vi.mock('../ipc-handlers', () => ({ registerIPCHandlers: mocks.registerIPCHandlers }))
+vi.mock('../services/skin-service', () => ({ skinService: {
+  initialize: vi.fn(),
+  getStartupSnapshot: (generation: string) => ({ globalGeneration: generation, skinRevision: 0, backgroundSkin: 'classic' }),
+} }))
 vi.mock('../mcp/mcp-ipc-bridge', () => ({ registerMCPHandlers: mocks.registerMCPHandlers }))
 vi.mock('../i18n', () => ({ mainT: () => 'AI Novel Writer' }))
 vi.mock('../controllers/update-controller', () => ({ registerUpdateController: vi.fn() }))
@@ -86,9 +96,16 @@ vi.mock('../services/official-homepage-navigation', () => ({
 
 describe('packaged skin smoke startup', () => {
   const originalArgv = process.argv
+  let fixtureRoot: string
 
   beforeEach(() => {
     vi.resetModules()
+    const fixtureBase = path.resolve('.runtime/.cache/main-release-skin-tests')
+    fs.mkdirSync(fixtureBase, { recursive: true })
+    fixtureRoot = fs.mkdtempSync(path.join(fixtureBase, 'run-'))
+    mocks.userData = path.join(fixtureRoot, 'userData')
+    vi.stubEnv('AI_NOVEL_APP_DATA_HOME', path.join(fixtureRoot, 'canonical'))
+    vi.stubEnv('AI_NOVEL_LEGACY_SOURCE_HOME', path.join(fixtureRoot, 'legacy'))
     process.argv = [...originalArgv, `--ai-novel-release-skin-smoke=${smokeToken}`]
     mocks.app.exit.mockClear()
     mocks.BrowserWindow.mockClear()
@@ -102,6 +119,8 @@ describe('packaged skin smoke startup', () => {
   afterEach(() => {
     process.argv = originalArgv
     vi.restoreAllMocks()
+    vi.unstubAllEnvs()
+    fs.rmSync(fixtureRoot, { recursive: true, force: true })
   })
 
   it('runs only the isolated skin qualification and exits with its JSON evidence', async () => {

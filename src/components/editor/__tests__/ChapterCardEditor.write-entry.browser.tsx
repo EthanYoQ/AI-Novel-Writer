@@ -90,7 +90,7 @@ function installIpc(options: {
     if (channel === 'fs:list-dir') return []
     throw new Error(`unexpected IPC ${channel}`)
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -126,7 +126,7 @@ afterEach(async () => {
   container?.remove()
   root = undefined
   container = undefined
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   useEditorStore.setState(originalEditorState)
   useLayoutStore.setState(originalLayoutState)
   useProjectStore.setState(originalProjectState)

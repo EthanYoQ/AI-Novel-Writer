@@ -79,7 +79,7 @@ beforeEach(async () => {
     leaseId: project.sessionLease!,
     projectPath: project.path,
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke: vi.fn(async (channel: string) => {
@@ -118,7 +118,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root?.unmount())
   container?.remove()
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   setActiveProjectSessionContext(null)
   useEditorStore.setState(originalEditorState)
   useLayoutStore.setState(originalLayoutState)

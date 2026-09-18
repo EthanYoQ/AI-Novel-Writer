@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { ipc } from '../ipc-client'
-import { readCoreContent, writeCoreContent } from '../vela-protocol'
+import { readCoreContent, writeCoreContent } from '../resource-protocol'
 
 vi.mock('../ipc-client', () => ({
   ipc: {
@@ -34,7 +34,7 @@ describe('vela core character roster seam', () => {
       legacyMarkdown: '不应读取的旧投影',
     } as never)
 
-    await expect(readCoreContent('vela://core/characters', projectSession))
+    await expect(readCoreContent('ai-novel://core/characters', projectSession))
       .resolves.toBe('# 角色图谱\n\n## 主角：陆舟')
     expect(ipc.invokeWithProjectSession).toHaveBeenCalledExactlyOnceWith(
       projectSession,
@@ -50,14 +50,14 @@ describe('vela core character roster seam', () => {
       legacyMarkdown: '旧角色图谱原文，供作者复制或显式修复。',
     } as never)
 
-    await expect(readCoreContent('vela://core/characters', projectSession))
+    await expect(readCoreContent('ai-novel://core/characters', projectSession))
       .resolves.toBe('旧角色图谱原文，供作者复制或显式修复。')
     expect(vi.mocked(ipc.invokeWithProjectSession).mock.calls.map(([, channel]) => channel))
       .toEqual(['db:character-roster-read'])
   })
 
   it('rejects direct character-projection writes without reaching project-core IPC', async () => {
-    await expect(writeCoreContent('vela://core/characters', '不能直接覆盖', projectSession))
+    await expect(writeCoreContent('ai-novel://core/characters', '不能直接覆盖', projectSession))
       .resolves.toBe(false)
     expect(ipc.invokeWithProjectSession).not.toHaveBeenCalled()
   })
@@ -92,7 +92,9 @@ describe('structured character roster static contract', () => {
     expect(projectClear).toContain("DELETE FROM characters")
     expect(projectClear).toContain("DELETE FROM character_roster_meta")
     expect(projectClear).toContain("DELETE FROM character_roster_operations")
-    expect(roster.match(/SET characters_arch\s*=/g)).toHaveLength(1)
+    // The ID projection and the guarded pre-M02 writer remain in the same repository.
+    expect(roster.match(/SET characters_arch\s*=/g)).toHaveLength(2)
+    expect(roster).toContain("if (hasCharacterIdentitySchema(db)) throw new Error('CHARACTER_ID_WRITE_REQUIRED')")
     expect(workflow).not.toContain('runArchCharacterExtract')
     expect(workflow).not.toContain('createCharacterExtractSteps')
     expect(workflow).not.toContain('runPostProcessPipeline')

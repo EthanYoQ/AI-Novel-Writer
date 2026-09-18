@@ -40,7 +40,7 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
   const dataProjectKey = useCharacterStore(s => s.dataProjectKey)
   const loadingProjectKey = useCharacterStore(s => s.loadingProjectKey)
   const lastError = useCharacterStore(s => s.lastError)
-  const selectedName = useCharacterStore(s => s.selectedName)
+  const selectedId = useCharacterStore(s => s.selectedId)
   const saving = useCharacterStore(s => s.saving)
   const identityBusy = useCharacterStore(s => s.identityBusy)
   const renameCharacter = useCharacterStore(s => s.renameCharacter)
@@ -66,10 +66,10 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
   // 数据由 ProjectService 统一加载，组件只消费 store 数据
 
   const selectedCard = dataReady
-    ? characters.find((c) => c.name === selectedName) || null
+    ? characters.find((c) => c.characterId === selectedId) || null
     : null
   const relationshipEditorText = selectedCard
-    ? formatRelationshipsForEditor(selectedCard.relationships, { locale })
+    ? formatRelationshipsForEditor(selectedCard.relationships, { locale, identities: characters })
     : ''
 
   const handleDelete = async () => {
@@ -80,7 +80,7 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
       { title: text('删除角色', 'Delete character'), confirmText: text('删除', 'Delete'), danger: true }
     )
     if (!ok || !isProjectSessionCurrent(projectSession)) return
-    const deleted = await deleteCharacter(selectedCard.name, projectKey)
+    const deleted = await deleteCharacter(selectedCard.characterId!, projectKey)
     if (!isProjectSessionCurrent(projectSession)) return
     if (!deleted) {
       addLog(
@@ -148,7 +148,7 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
     )
   }
 
-  const updateCurrentField = <K extends Exclude<keyof CharacterCard, 'name'>>(
+  const updateCurrentField = <K extends Exclude<keyof CharacterCard, 'name' | 'characterId'>>(
     name: string,
     key: K,
     value: CharacterCard[K],
@@ -300,7 +300,7 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
                           },
                         },
                       }
-                      updateCurrentField(selectedCard.name, 'currentState', cs)
+                      updateCurrentField(selectedCard.characterId!, 'currentState', cs)
                     }}
                     rows={2}
                     placeholder={`${label}...`}
@@ -318,34 +318,35 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
           <div className="max-w-2xl mx-auto px-6 py-4">
             <div className="space-y-3">
               <div className="grid grid-cols-3 gap-3">
-                <div><Label>{text('姓名', 'Name')}</Label><Input value={selectedCard.name} disabled={identityBusy} onChange={(e) => renameCurrentCharacter(selectedCard.name, e.target.value)} /></div>
-                <div><Label>{text('性别', 'Gender')}</Label><Input value={selectedCard.gender} onChange={(e) => updateCurrentField(selectedCard.name, 'gender', e.target.value)} /></div>
-                <div><Label>{text('年龄', 'Age')}</Label><Input value={selectedCard.age} onChange={(e) => updateCurrentField(selectedCard.name, 'age', e.target.value)} /></div>
+                <div><Label>{text('姓名', 'Name')}</Label><Input value={selectedCard.name} disabled={identityBusy} onChange={(e) => renameCurrentCharacter(selectedCard.characterId!, e.target.value)} /></div>
+                <div><Label>{text('性别', 'Gender')}</Label><Input value={selectedCard.gender} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'gender', e.target.value)} /></div>
+                <div><Label>{text('年龄', 'Age')}</Label><Input value={selectedCard.age} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'age', e.target.value)} /></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label>{text('定位', 'Role')}</Label>
-                  <NativeSelect value={selectedCard.role} onChange={(e) => updateCurrentField(selectedCard.name, 'role', e.target.value as typeof selectedCard.role)}>
+                  <NativeSelect value={selectedCard.role} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'role', e.target.value as typeof selectedCard.role)}>
                     {CHARACTER_ROLES.map(role => (
                       <option key={role} value={role}>{roleLabel(role)}</option>
                     ))}
                   </NativeSelect>
                 </div>
               </div>
-              <div><Label>{text('外貌描写', 'Appearance')}</Label><Textarea value={selectedCard.appearance} onChange={(e) => updateCurrentField(selectedCard.name, 'appearance', e.target.value)} rows={3} placeholder={text('输入外貌描写...', 'Describe appearance...')} /></div>
-              <div><Label>{text('性格特征', 'Personality')}</Label><Textarea value={selectedCard.personality} onChange={(e) => updateCurrentField(selectedCard.name, 'personality', e.target.value)} rows={3} placeholder={text('输入性格特征...', 'Describe personality...')} /></div>
-              <div><Label>{text('背景故事', 'Background')}</Label><Textarea value={selectedCard.background} onChange={(e) => updateCurrentField(selectedCard.name, 'background', e.target.value)} rows={4} placeholder={text('输入背景故事...', 'Describe background...')} /></div>
-              <div><Label>{text('能力/技能', 'Abilities / skills')}</Label><Textarea value={selectedCard.abilities} onChange={(e) => updateCurrentField(selectedCard.name, 'abilities', e.target.value)} rows={3} placeholder={text('输入能力/技能...', 'Describe abilities or skills...')} /></div>
-              <div><Label>{text('核心动机', 'Core motivation')}</Label><Textarea value={selectedCard.motivation} onChange={(e) => updateCurrentField(selectedCard.name, 'motivation', e.target.value)} rows={2} placeholder={text('输入核心动机...', 'Describe core motivation...')} /></div>
+              <div><Label>{text('外貌描写', 'Appearance')}</Label><Textarea value={selectedCard.appearance} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'appearance', e.target.value)} rows={3} placeholder={text('输入外貌描写...', 'Describe appearance...')} /></div>
+              <div><Label>{text('性格特征', 'Personality')}</Label><Textarea value={selectedCard.personality} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'personality', e.target.value)} rows={3} placeholder={text('输入性格特征...', 'Describe personality...')} /></div>
+              <div><Label>{text('背景故事', 'Background')}</Label><Textarea value={selectedCard.background} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'background', e.target.value)} rows={4} placeholder={text('输入背景故事...', 'Describe background...')} /></div>
+              <div><Label>{text('能力/技能', 'Abilities / skills')}</Label><Textarea value={selectedCard.abilities} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'abilities', e.target.value)} rows={3} placeholder={text('输入能力/技能...', 'Describe abilities or skills...')} /></div>
+              <div><Label>{text('核心动机', 'Core motivation')}</Label><Textarea value={selectedCard.motivation} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'motivation', e.target.value)} rows={2} placeholder={text('输入核心动机...', 'Describe core motivation...')} /></div>
               <div>
                 <Label>{text('关系网', 'Relationships')}</Label>
                 <Textarea
                   value={relationshipEditorText}
                   onChange={(e) => updateCurrentField(
-                    selectedCard.name,
+                    selectedCard.characterId!,
                     'relationships',
                     relationshipStorageFromEditor(e.target.value, {
-                      knownNames: characters.map((character) => character.name),
+                      identities: characters,
+                      selfCharacterId: selectedCard.characterId,
                       selfName: selectedCard.name,
                       previousStorage: selectedCard.relationships,
                     }),
@@ -357,8 +358,8 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
                   )}
                 />
               </div>
-              <div><Label>{text('成长轨迹', 'Character arc')}</Label><Textarea value={selectedCard.arc} onChange={(e) => updateCurrentField(selectedCard.name, 'arc', e.target.value)} rows={3} placeholder={text('输入成长轨迹...', 'Describe the character arc...')} /></div>
-              <div><Label>{text('备注', 'Notes')}</Label><Textarea value={selectedCard.notes} onChange={(e) => updateCurrentField(selectedCard.name, 'notes', e.target.value)} rows={2} placeholder={text('输入备注...', 'Enter notes...')} /></div>
+              <div><Label>{text('成长轨迹', 'Character arc')}</Label><Textarea value={selectedCard.arc} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'arc', e.target.value)} rows={3} placeholder={text('输入成长轨迹...', 'Describe the character arc...')} /></div>
+              <div><Label>{text('备注', 'Notes')}</Label><Textarea value={selectedCard.notes} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'notes', e.target.value)} rows={2} placeholder={text('输入备注...', 'Enter notes...')} /></div>
             </div>
           </div>
         )}

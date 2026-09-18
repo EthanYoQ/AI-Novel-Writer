@@ -17,6 +17,8 @@ const RUNNER_TIMEOUT_MS = 45_000
 export const RENDERER_SURFACE_E2E_CONTRACT = Object.freeze({
   smokeEnvironment: Object.freeze([
     'AI_NOVEL_VELA_HOME',
+    'AI_NOVEL_LEGACY_SOURCE_HOME',
+    'AI_NOVEL_APP_DATA_HOME',
     'AI_NOVEL_SMOKE_OPEN_PROJECT',
     'AI_NOVEL_SMOKE_PROJECT_MARKER',
   ]),
@@ -177,6 +179,7 @@ function createIsolatedFixture() {
   const temporaryRoot = join(repositoryRoot, '.runtime', '.cache', 'renderer-surface-runs', randomUUID())
   const projectRoot = join(temporaryRoot, 'project')
   const velaHome = join(temporaryRoot, 'vela-home')
+  const canonicalHome = join(temporaryRoot, 'canonical-home')
   const electronUserData = join(temporaryRoot, 'electron-user-data')
   const markerPath = join(temporaryRoot, 'project-opened.json')
   const manifestRoot = join(projectRoot, '.vela')
@@ -221,7 +224,7 @@ function createIsolatedFixture() {
     },
   }, null, 2)}\n`, 'utf8')
 
-  return { temporaryRoot, projectRoot, velaHome, electronUserData, markerPath }
+  return { temporaryRoot, projectRoot, velaHome, canonicalHome, electronUserData, markerPath }
 }
 
 function runProjectScript(scriptName) {
@@ -750,6 +753,8 @@ async function launchIsolatedElectron(fixture, captureDiagnostic) {
   const environment = { ...process.env }
   delete environment.ELECTRON_RUN_AS_NODE
   environment.AI_NOVEL_VELA_HOME = fixture.velaHome
+  environment.AI_NOVEL_LEGACY_SOURCE_HOME = fixture.velaHome
+  environment.AI_NOVEL_APP_DATA_HOME = fixture.canonicalHome
   environment.AI_NOVEL_SMOKE_OPEN_PROJECT = fixture.projectRoot
   environment.AI_NOVEL_SMOKE_PROJECT_MARKER = fixture.markerPath
 

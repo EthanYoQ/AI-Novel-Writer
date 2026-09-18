@@ -1,0 +1,104 @@
+{
+  "slice": "Main generation knowledge source foundation",
+  "status": "FOUNDATION_INDEPENDENTLY_REVIEWED",
+  "actualModelCalls": 0,
+  "abiChanged": false,
+  "tests": {
+    "nativeFocused": {
+      "files": 5,
+      "passed": 96,
+      "failed": 0,
+      "maxWorkers": 1,
+      "log": ".runtime/.cache/novel-quality-modernization/generation-knowledge-vector-regression.log"
+    },
+    "newSourceCases": 13,
+    "typecheck": "PASS",
+    "eslint": "PASS"
+  },
+  "contract": {
+    "root": "Caller-authorized canonical .ai-novel storage directory; not project root",
+    "capture": "captureGenerationKnowledge({projectStorageRoot,query,topK?,queryVector?,embeddingSpace?}) -> GenerationKnowledgeSnapshot",
+    "verify": "verifyGenerationKnowledge({projectStorageRoot,snapshot}) -> Promise<void>; exact original IDs, no new search or embedding",
+    "types": "src/shared/generation-knowledge.ts"
+  },
+  "proof": [
+    "Canonical chunk IDs and document IDs retained even when fileName and text are equal.",
+    "Original chunk UTF-8 hash, exact ordered document chunk-set hash and document completeness checked.",
+    "Vector hits must exactly match canonical identity, text and corpus metadata.",
+    "Snapshot uses actual canonical/documents table versions; same-name replacement and version change reject.",
+    "Read pins table snapshots and checks latest versions and registry bytes before returning; actual concurrent mutation counterexample covered.",
+    "Capture/verify do not migrate, create missing stores, register embedding spaces or call a provider; successful capture+verify physical source hash unchanged.",
+    "14 vector-store public entries including legacy lazy-write reads are serialized under the main-owned reentrant gate; 7 explicit mutators included.",
+    "Synchronous close and migration fence acquisition reject while a foreign gate scope is busy. Original migration FENCED refusal precedence preserved."
+  ],
+  "boundaries": [
+    "Main must retain/bind prepared snapshots; these functions do not authenticate a renderer-created snapshot.",
+    "Main controller must hold the shared gate across verification and its SQLite effect; this foundation alone is not cross-database atomicity.",
+    "External processes and arbitrary filesystem replacement are not excluded by an in-process mutex.",
+    "Unknown corpus remains unknown, not finalized author authority. Reference corpus is excluded to match existing writing-context retrieval.",
+    "Table-level revision comparison is intentionally conservative; unrelated canonical mutations can stale a prepared context.",
+    "Embedding query vectors may be supplied by trusted main preparation; re-verification never uses them.",
+    "No real model, production author data or ABI switch used."
+  ],
+  "gateDependency": {
+    "path": "electron/services/knowledge-source-gate.ts",
+    "owner": "central",
+    "sha256": "d3b61977dbf0dc6cc1276a0ecf3c73efcc3c53aacbdd948fad05204e534beeb7"
+  },
+  "files": [
+    {
+      "path": "electron/vector-store.ts",
+      "sha256": "a51c8ad1122b6434b78b4ca2b74b174774c8c2d5ab557625a9e8a82f17ac2137"
+    },
+    {
+      "path": "electron/services/generation-knowledge-source.ts",
+      "sha256": "02e90fddaa1e0993ee0e44f6a90093104231252368cf8c186ba4067e30fd2cdc"
+    },
+    {
+      "path": "electron/services/__tests__/generation-knowledge-source.test.ts",
+      "sha256": "009b687d983d15cc39d32c4b70b4e7d57fdd4b50fa960894363daab61cca7dad"
+    },
+    {
+      "path": "src/shared/generation-knowledge.ts",
+      "sha256": "891882a687deaa96d9799f94a2759da7c6feb78383d58931f0827bd6305e4b35"
+    }
+  ],
+  "initialSnapshot": "The tests, files and gateDependency above describe the original producer snapshot. Subsequent integration repairs are covered by independentReview below; earlier hashes are retained as historical evidence.",
+  "independentReview": {
+    "model": "Astra/Xhigh",
+    "testFiles": 4,
+    "uniqueCases": 43,
+    "actualModelCalls": 0,
+    "receiptSha256": "97fa4c0982092aa72e5d75121e72245f9f2182ad92510edb90d74b7700b792f9",
+    "files": [
+      {
+        "sha256": "fcf3fb95f8517c2c72755cf224c401bd217f62e76e81557c3e8c3d5152ef7a2d",
+        "path": "electron/services/generation-knowledge-source.ts"
+      },
+      {
+        "sha256": "891882a687deaa96d9799f94a2759da7c6feb78383d58931f0827bd6305e4b35",
+        "path": "src/shared/generation-knowledge.ts"
+      },
+      {
+        "sha256": "a51c8ad1122b6434b78b4ca2b74b174774c8c2d5ab557625a9e8a82f17ac2137",
+        "path": "electron/vector-store.ts"
+      },
+      {
+        "sha256": "0d88d73772b67120ae62842b66368fad923ca82d6435c48fd8690af15652063f",
+        "path": "electron/services/knowledge-source-gate.ts"
+      },
+      {
+        "sha256": "3d7aa9dcb1886ff3dc5455d03e7e9fc373774787cce8919665db2f7be07e005a",
+        "path": "electron/knowledge-base.ts"
+      },
+      {
+        "sha256": "a6c1602c09e5592f5296b500620fe1e5a1c44673937e3e7c207e6cb90d586a96",
+        "path": "electron/services/__tests__/generation-knowledge-source.test.ts"
+      }
+    ],
+    "failed": 0,
+    "receipt": ".runtime/.cache/novel-quality-modernization/kb-review-receipt.json",
+    "integrationEvidence": "s06b-s09a-integration-evidence.md",
+    "status": "PASS_WITH_EXPLICIT_RUNTIME_BOUNDARIES"
+  }
+}

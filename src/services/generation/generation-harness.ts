@@ -16,6 +16,8 @@ export interface GenerationMessage {
 /** A semantic generation contract. Physical provider parameters are deliberately absent. */
 export interface GenerationTask {
   purpose: string
+  /** Semantic extent only; main owns capability checks and physical reservation. */
+  budgetDemand?: import('./task-budget-planner').TaskBudgetDemand
   /** Explicit product semantics; omitted stages derive only from output shape. */
   reasoningStage?: GenerationReasoningStage
   output: GenerationOutput
@@ -163,6 +165,8 @@ export interface CompletionPort {
 }
 
 export interface GenerationAttemptReceipt {
+  /** Main's immutable durable candidate identity; absent on unmigrated legacy execution. */
+  visibleArtifact?: { artifactId: string; attemptId: string; revision: number; textHash: string }
   /** Safe semantic task label; never contains prompt, output, endpoint, or credentials. */
   purpose?: string
   model: FrozenGenerationModelIdentity
@@ -196,6 +200,8 @@ export type GenerationOutcome =
     }
 
 export interface GenerationExecutionOptions {
+  /** Required by the S05 main-owner facade; repeated values read the same durable attempt. */
+  invocationNonce?: string
   signal?: AbortSignal
   /** Provisional provider text. It is never terminal or persistence evidence. */
   onChunk?: (chunk: string) => void

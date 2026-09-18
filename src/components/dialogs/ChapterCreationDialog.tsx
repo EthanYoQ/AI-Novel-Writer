@@ -1,3 +1,4 @@
+import { CANONICAL_PROJECT_DIRECTORY } from '../../shared/project-format'
 import { useState, useEffect, useRef } from 'react'
 import { Sparkles, Play, AlertCircle } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
@@ -54,7 +55,7 @@ interface Props {
 }
 
 /** 章节创作参数持久化路径（相对于项目路径） */
-const CREATION_LOG_REL = '.vela/chapter_creation_log.json'
+const CREATION_LOG_REL = `${CANONICAL_PROJECT_DIRECTORY}/chapter_creation_log.json`
 
 function isGenerationModel(model: ModelProfile): boolean {
   return model.purposes.includes('generation')
@@ -160,7 +161,7 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
       requestToken,
       useProjectStore.getState().currentProject?.path,
     ) && isProjectSessionCurrent(projectSession)
-    /** 从项目本地 .vela/chapter_creation_log.json 读取上次参数。 */
+    /** 从项目本地 .ai-novel/chapter_creation_log.json 读取上次参数。 */
     const loadLastParams = async (nextChapterNumber: number) => {
       try {
         const result = await ipc.invokeWithProjectSession(

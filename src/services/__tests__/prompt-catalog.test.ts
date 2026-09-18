@@ -1,7 +1,8 @@
+import { ipc } from '../ipc-client'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
-import { PromptCatalog, type PromptPersistence } from '../prompt-catalog'
+import { PromptCatalog, ipcPromptPersistence, type PromptPersistence } from '../prompt-catalog'
 import type { PromptTemplate } from '../prompt-templates'
 
 const builtin: PromptTemplate = {
@@ -253,4 +254,24 @@ describe('PromptCatalog lifecycle', () => {
       source: 'builtin',
     }])
   })
+})
+
+
+it('项目提示词读取、保存和删除始终使用规范目录', async () => {
+  const calls: Array<[string, unknown]> = []
+  const adapter = vi.spyOn(ipc, 'invokeWithProjectSession').mockImplementation(async (_session, channel, ...args) => {
+    calls.push([channel, args[0]])
+    if (channel === 'fs:check-exists') return false as never
+    if (channel === 'fs:mkdir' || channel === 'fs:write-file') return { success: true } as never
+    throw new Error(`Unexpected fixture call: ${channel}`)
+  })
+  try {
+    await ipcPromptPersistence.loadProject(session)
+    await ipcPromptPersistence.saveProject(session, { ...builtin, content: '中文提示词' })
+    await ipcPromptPersistence.deleteProject(session, builtin.key)
+    expect(calls).toContainEqual(['fs:mkdir', `${session.projectPath}/.ai-novel`])
+    expect(calls).toContainEqual(['fs:write-file', `${session.projectPath}/.ai-novel/prompts/${builtin.key}.zh-CN.json`])
+    expect(calls.every(([, file]) => typeof file === 'string' && file.startsWith(`${session.projectPath}/.ai-novel`))).toBe(true)
+    expect(calls.filter(([channel]) => channel === 'fs:check-exists')).toHaveLength(5)
+  } finally { adapter.mockRestore() }
 })

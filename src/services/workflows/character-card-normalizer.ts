@@ -479,3 +479,8 @@ export function parseCharacterCardsFromModelOrSource(modelText: string, sourceTe
   const sourceCards = parseArchitectureCharacterRoster(sourceText).cards
   return normalizeCharacterCardsForPersistence(mergeModelAndSourceCards(modelCards, sourceCards))
 }
+
+/** Proposal parsing preserves separate source records. A display name is never an identity key. */
+export function parseCharacterProposalCards(modelText: string): RawCharacterCard[] {
+  return parseModelCharacterCards(modelText).map(card => structuredClone(card))
+}

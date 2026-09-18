@@ -4,6 +4,7 @@ import { parseRelationshipEdges } from '../../shared/relationship-presentation'
 import { useLocaleStore } from '../../stores/locale-store'
 
 interface CharacterNode {
+  characterId: string
   name: string
   role: string
   x: number
@@ -24,10 +25,11 @@ interface RelationshipGraphEdge {
 
 type DragState =
   | { kind: 'view'; x: number; y: number }
-  | { kind: 'node'; name: string; offsetX: number; offsetY: number }
+  | { kind: 'node'; characterId: string; offsetX: number; offsetY: number }
 
 interface RelationshipGraphProps {
   characters: Array<{
+    characterId?: string
     name: string
     role: string
     relationships: string
@@ -71,17 +73,17 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
   const text = useLocaleStore(state => state.text)
 
   const edges = useMemo<RelationshipGraphEdge[]>(() => {
-    const knownNames = characters.map((character) => character.name)
     const overviewEdges = new Map<string, RelationshipGraphEdge>()
     for (const character of characters) {
       for (const edge of parseRelationshipEdges(character.relationships, {
-        knownNames,
-        selfName: character.name,
+        identities: characters,
+        selfCharacterId: character.characterId,
       })) {
-        const key = [character.name, edge.target].sort().join('\u0000')
+        if (!character.characterId || !edge.targetCharacterId) continue
+        const key = [character.characterId, edge.targetCharacterId].sort().join('\u0000')
         const relation = {
-          from: character.name,
-          to: edge.target,
+          from: character.characterId,
+          to: edge.targetCharacterId,
           label: edge.relation,
         }
         const overviewEdge = overviewEdges.get(key)
@@ -95,8 +97,8 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
           continue
         }
         overviewEdges.set(key, {
-          from: character.name,
-          to: edge.target,
+          from: character.characterId,
+          to: edge.targetCharacterId,
           relations: [relation],
         })
       }
@@ -119,9 +121,10 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
     const radius = Math.min(w, h) * 0.6
 
     // 环形初始布局
-    nodesRef.current = characters.map((c, i) => {
+    nodesRef.current = characters.filter(c => c.characterId).map((c, i) => {
       const angle = (i / characters.length) * Math.PI * 2 - Math.PI / 2
       return {
+        characterId: c.characterId!,
         name: c.name,
         role: c.role,
         x: centerX + radius * Math.cos(angle),
@@ -157,8 +160,8 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
       // 绘制连线
       ctx.lineWidth = 1.5
       for (const edge of edges) {
-        const a = nodes.find((n) => n.name === edge.from)
-        const b = nodes.find((n) => n.name === edge.to)
+        const a = nodes.find((n) => n.characterId === edge.from)
+        const b = nodes.find((n) => n.characterId === edge.to)
         if (!a || !b) continue
 
         ctx.beginPath()
@@ -217,6 +220,10 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
         ctx.textAlign = 'center'
         ctx.textBaseline = 'middle'
         ctx.fillText(compactOverviewLabel(node.name, NODE_LABEL_MAX_CHARACTERS), node.x, node.y + 36)
+        if (nodes.filter(candidate => candidate.name === node.name).length > 1) {
+          ctx.font = '10px sans-serif'
+          ctx.fillText(node.characterId.slice(-8), node.x, node.y + 49)
+        }
       }
       ctx.restore()
     }
@@ -258,8 +265,8 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
 
       // 引力（连线间）
       for (const edge of edges) {
-        const a = nodes.find((n) => n.name === edge.from)
-        const b = nodes.find((n) => n.name === edge.to)
+        const a = nodes.find((n) => n.characterId === edge.from)
+        const b = nodes.find((n) => n.characterId === edge.to)
         if (!a || !b) continue
         const dx = b.x - a.x
         const dy = b.y - a.y
@@ -326,11 +333,15 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
     )
   }
 
+  const labelFor = (id: string) => {
+    const character = characters.find(c => c.characterId === id)
+    return character ? `${character.name}${characters.filter(c => c.name === character.name).length > 1 ? ` · ${id.slice(-8)}` : ''}` : ''
+  }
   const relationshipDetails = edges
     .flatMap(edge => edge.relations)
     .map(relation => text(
-      `${relation.from} 对 ${relation.to}：${relation.label}`,
-      `${relation.from} to ${relation.to}: ${relation.label}`,
+      `${labelFor(relation.from)} 对 ${labelFor(relation.to)}：${relation.label}`,
+      `${labelFor(relation.from)} to ${labelFor(relation.to)}: ${relation.label}`,
     ))
     .join(text('；', '; '))
   const graphLabel = relationshipDetails
@@ -402,7 +413,7 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
             node.vy = 0
             dragRef.current = {
               kind: 'node',
-              name: node.name,
+              characterId: node.characterId,
               offsetX: node.x - point.x,
               offsetY: node.y - point.y,
             }
@@ -415,7 +426,7 @@ export default function RelationshipGraph({ characters }: RelationshipGraphProps
           const drag = dragRef.current
           if (!drag) return
           if (drag.kind === 'node') {
-            const node = nodesRef.current.find(candidate => candidate.name === drag.name)
+            const node = nodesRef.current.find(candidate => candidate.characterId === drag.characterId)
             if (!node) return
             const point = pointerWorldPosition(
               event.currentTarget,

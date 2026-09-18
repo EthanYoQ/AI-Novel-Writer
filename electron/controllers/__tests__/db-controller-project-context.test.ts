@@ -34,6 +34,10 @@ const mocks = vi.hoisted(() => ({
     factHash: 'empty-fact',
   })),
   characterRosterCommit: vi.fn(),
+  authorRosterCommit: vi.fn(),
+  hasCharacterIdentitySchema: vi.fn(() => false),
+  getProjectDb: vi.fn(),
+  assertCurrentSession: vi.fn(),
   finalizedDraftImportCommit: vi.fn(),
   finalizedDraftImportPreview: vi.fn(),
   importGlobalFactsCommit: vi.fn(),
@@ -73,7 +77,7 @@ vi.mock('electron', () => ({
 vi.mock('../../database', () => ({
   closeProjectDatabase: mocks.closeProjectDatabase,
   getCurrentProjectPath: () => mocks.currentProjectPath,
-  getProjectDb: vi.fn(),
+  getProjectDb: mocks.getProjectDb,
 }))
 
 vi.mock('../../services/project-access', () => ({
@@ -81,6 +85,7 @@ vi.mock('../../services/project-access', () => ({
     invalidateCurrentSession: mocks.invalidateCurrentSession,
     assertCurrentProjectContext: mocks.assertCurrentProjectContext,
     captureCurrentSession: mocks.captureCurrentSession,
+    assertCurrentSession: mocks.assertCurrentSession,
   },
 }))
 
@@ -99,12 +104,15 @@ vi.mock('../../repositories/project-clear-repository', () => ({
 }))
 
 vi.mock('../../repositories/character-repository', () => ({
+  hasCharacterIdentitySchema: mocks.hasCharacterIdentitySchema,
   CharacterRepository: {
     getAll: mocks.characterGetAll,
     saveAll: mocks.characterSaveAll,
     delete: mocks.characterDelete,
   },
 }))
+
+vi.mock('../../services/character-roster-author', () => ({ commitAuthorCharacterRoster: mocks.authorRosterCommit }))
 
 vi.mock('../../repositories/character-roster-repository', () => ({
   CharacterRosterRepository: {
@@ -261,6 +269,10 @@ beforeAll(() => {
 beforeEach(() => {
   mocks.currentProjectPath = 'C:/projects/A'
   vi.clearAllMocks()
+  mocks.getProjectDb.mockReset()
+  mocks.hasCharacterIdentitySchema.mockReturnValue(false)
+  mocks.assertCurrentSession.mockReset()
+  mocks.authorRosterCommit.mockReset()
   mocks.assertCurrentProjectContext.mockImplementation((context: {
     projectPath?: string
   } | undefined, currentProjectPath: string) => {
@@ -278,6 +290,28 @@ beforeEach(() => {
 })
 
 describe('database controller project context guard', () => {
+  it('routes M02 author ID writes through the captured author transaction and rechecks its session', async () => {
+    const db = { synthetic: true }, receipt = { revision: 7 }
+    const request = { operationId: 'author-ID', intent: 'manual_edit', schemaVersion: 1, expectedRevision: 6, expectedIdentityRevision: 3, entries: [] }
+    mocks.getProjectDb.mockReturnValue(db); mocks.hasCharacterIdentitySchema.mockReturnValue(true)
+    mocks.authorRosterCommit.mockImplementation((actualDb, actualRequest, scope, assertCurrent) => {
+      expect(actualDb).toBe(db); expect(actualRequest).toBe(request)
+      expect(scope).toEqual({ projectId: 'project-A', epoch: 'lease-A' }); assertCurrent(); return receipt
+    })
+    expect(await handler('db:character-roster-commit')({}, request, 'C:/projects/A')).toEqual({ success: true, receipt })
+    expect(mocks.authorRosterCommit).toHaveBeenCalledTimes(1)
+    expect(mocks.assertCurrentSession).toHaveBeenCalledWith({ projectId: 'project-A', leaseId: 'lease-A', rootPath: 'C:/projects/A' })
+    expect(mocks.characterRosterCommit).not.toHaveBeenCalled()
+  })
+  it('cannot enter the old name writer when the captured M02 author session changes', async () => {
+    mocks.getProjectDb.mockReturnValue({ synthetic: true }); mocks.hasCharacterIdentitySchema.mockReturnValue(true)
+    mocks.authorRosterCommit.mockImplementation((_db, _request, _scope, assertCurrent) => {
+      mocks.currentProjectPath = 'C:/projects/B'; assertCurrent()
+    })
+    const result = await handler('db:character-roster-commit')({}, { intent: 'manual_edit' }, 'C:/projects/A')
+    expect(result).toMatchObject({ success: false })
+    expect(mocks.characterRosterCommit).not.toHaveBeenCalled()
+  })
   it('commits a synopsis only through the active project session', async () => {
     const request = synopsisCommitRequest()
     mocks.projectCoreCommitSynopsis.mockReturnValueOnce(true)
@@ -527,7 +561,8 @@ describe('database controller project context guard', () => {
       success: true,
       receipt: { operationId: 'architecture-run-A', revision: 1 },
     })
-    expect(mocks.characterRosterCommit).toHaveBeenCalledWith(request)
+    expect(mocks.characterRosterCommit).toHaveBeenCalledOnce()
+    expect(mocks.characterRosterCommit.mock.calls[0]?.[0]).toEqual(request)
   })
 
   it('commits a finalized import against the current main-process project root exactly once', async () => {

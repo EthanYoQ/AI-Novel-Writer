@@ -1,0 +1,126 @@
+{
+  "specId": "S02",
+  "dependencySha": "7143d301313b95a2df572a3b17f1d459b48d5947",
+  "status": "implemented-pending-independent-review",
+  "productionPaths": [
+    "src/shared/project-paths.ts",
+    "src/services/resource-protocol.ts",
+    "src/services/vela-protocol.ts",
+    "src/services/finalization-client.ts",
+    "src/services/draft-index.ts",
+    "src/stores/draft-store.ts",
+    "src/stores/editor-store.ts",
+    "src/components/panels/AIOutputPanel.tsx",
+    "src/components/panels/EditorArea.tsx",
+    "src/components/panels/sidebar/sidebar-file-openers.ts",
+    "src/components/panels/sidebar/ManuscriptGroup.tsx",
+    "src/components/panels/sidebar/ProjectTree.tsx",
+    "src/components/editor/DraftEditor.tsx",
+    "src/components/editor/WorldBuildingEditor.tsx",
+    "src/components/editor/ArchFileViewer.tsx",
+    "src/components/editor/VersionHistory.tsx",
+    "src/components/editor/NarrativeThreadEditor.tsx",
+    "src/services/workflows/batch-chapter-workflow.ts",
+    "src/services/workflows/chapter-workflow.ts",
+    "src/services/workflows/workflow-draft-meta.ts",
+    "src/services/workflows/commands/generate-draft.command.ts",
+    "src/services/workflows/commands/refine-draft.command.ts",
+    "src/services/workflows/commands/refine-from-review.command.ts",
+    "src/services/workflows/commands/review-chapter.command.ts"
+  ],
+  "uriTestPaths": [
+    "src/components/dialogs/__tests__/batch-chapter-completion-mode.browser.tsx",
+    "src/components/editor/__tests__/ArchFileViewer.locale.browser.tsx",
+    "src/components/editor/__tests__/DraftEditor-ai-snapshot.browser.tsx",
+    "src/components/editor/__tests__/DraftEditor-revision-source.browser.tsx",
+    "src/components/editor/__tests__/ReviewReport.confirmation.browser.tsx",
+    "src/components/editor/__tests__/VersionHistory.resource.browser.tsx",
+    "src/components/editor/__tests__/arch-file-refresh-policy.test.ts",
+    "src/components/panels/__tests__/AIOutputPanel.recovery.browser.tsx",
+    "src/components/panels/sidebar/__tests__/authoritative-chapter-title.browser.tsx",
+    "src/services/__tests__/finalization-client-session.test.ts",
+    "src/services/__tests__/finalization-snapshot.test.ts",
+    "src/services/__tests__/project-service-refresh-context.test.ts",
+    "src/services/__tests__/resource-protocol.test.ts",
+    "src/services/__tests__/vela-protocol-character-roster.test.ts",
+    "src/services/workflows/__tests__/chapter-workflow-locale.test.ts",
+    "src/services/workflows/__tests__/workflow-resource-claims.test.ts",
+    "src/services/workflows/commands/__tests__/finalize-chapter.blueprint-entities.test.ts",
+    "src/services/workflows/commands/__tests__/generate-draft.command.test.ts",
+    "src/services/workflows/commands/__tests__/mutation-failure-boundary.test.ts",
+    "src/services/workflows/commands/__tests__/refine-draft.command.test.ts",
+    "src/stores/__tests__/draft-store-merge-revision.test.ts",
+    "src/stores/__tests__/editor-store-project-tabs.test.ts",
+    "src/stores/__tests__/editor-store-save-settle.test.ts",
+    "src/stores/__tests__/project-refresh-context.test.ts"
+  ],
+  "scope": "仅URI/资源权限适配；主线程桥接和F01不列为本worker变更",
+  "sharedWiring": {
+    "owner": "integration",
+    "paths": [
+      "electron/preload.ts",
+      "electron/electron-env.d.ts",
+      "src/shared/desktop-api.ts",
+      "src/services/ipc-client.ts",
+      "electron/services/release-official-homepage-smoke.ts",
+      "scripts/windows-in-app-update-e2e-driver.mjs"
+    ],
+    "required": "aiNovelAPI only; 缺桥接拒绝，no legacy write fallback",
+    "legacyToolException": "主线程保留专用旧安装版probe-legacy-project-open的旧桥接读取"
+  },
+  "evidence": {
+    "permissionsAndBridge": {
+      "tests": 52,
+      "exit": 0
+    },
+    "chineseDraftReviewRegression": {
+      "passed": 115,
+      "excludedEnglish": 21,
+      "exit": 0
+    },
+    "latestDirtyAndMerge": {
+      "passed": 42,
+      "exit": 0
+    },
+    "typecheck": {
+      "exit": 0
+    },
+    "chineseBrowser": {
+      "path": "src/components/editor/__tests__/VersionHistory.resource.browser.tsx",
+      "passed": 1,
+      "exit": 0,
+      "port": 63513
+    },
+    "modelCalls": 0,
+    "desktopPackage": "not-run",
+    "nativeMigration": "not-run",
+    "workflowBridgeRegression": {
+      "paths": [
+        "src/stores/__tests__/workflow-store-generation-budget.test.ts",
+        "src/stores/__tests__/workflow-store-pause.test.ts",
+        "src/stores/__tests__/workflow-store-resource-conflict.test.ts",
+        "src/services/workflows/__tests__/workflow-resource-claims.test.ts"
+      ],
+      "passed": 37,
+      "exit": 0,
+      "log": ".runtime/.cache/novel-quality-modernization/s02-workflow-bridge-regression.log",
+      "scope": "既有兼容回归（含原有英文夹具），不计中文产品实验"
+    }
+  },
+  "failureHistory": [
+    {
+      "cause": "旧generate-draft测试IPC返回字符串draft-1，typed URI要求真实数据库number ID",
+      "resolution": "fixture改为id:1，未放宽生产parser；中文115项复跑通过"
+    },
+    {
+      "cause": "四组既有工作流测试没有桌面桥接；run.error明确为写作Skill快照加载失败/aiNovelAPI未就绪，步骤尚pending。显式bridge后发现需声明fs:check-exists。",
+      "resolution": "仅四测试setup提供aiNovelAPI：skills:list-user空列表、fs:check-exists false（无项目自定义Skill）、事件订阅夹具；未知invoke拒绝，afterEach恢复globals。生产预算与failclosed未改；37/37复跑通过。"
+    }
+  ],
+  "bridgeFixtureDeltaPaths": [
+    "src/stores/__tests__/workflow-store-generation-budget.test.ts",
+    "src/stores/__tests__/workflow-store-pause.test.ts",
+    "src/stores/__tests__/workflow-store-resource-conflict.test.ts",
+    "src/services/workflows/__tests__/workflow-resource-claims.test.ts"
+  ]
+}

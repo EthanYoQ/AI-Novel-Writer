@@ -15,6 +15,7 @@ import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { isDeepStrictEqual } from 'node:util'
 import { VELA_HOME } from '../utils/config-utils'
+import { assertGlobalDataReady } from '../services/app-data-locator'
 import type {
   MCPConfigLoadResult,
   MCPConnectionStatus,
@@ -117,6 +118,7 @@ class MCPManagerImpl {
 
   /** 获取 MCP 配置文件默认路径 */
   getDefaultConfigPath(): string {
+    assertGlobalDataReady()
     return join(VELA_HOME, 'mcp_config.json')
   }
 

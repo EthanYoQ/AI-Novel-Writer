@@ -844,6 +844,30 @@ function Write-AiNovelAcceptanceReceipt {
   Move-Item -LiteralPath $temporary -Destination $destination -Force
 }
 
+function New-AiNovelQualificationProfile {
+  param([Parameter(Mandatory = $true)][string]$Root, [string]$LegacySource)
+  if (-not [System.IO.Path]::IsPathRooted($Root) -or $Root -match '^[A-Za-z]:(?![\\/])') { throw 'Qualification root must be absolute.' }
+  $base = [System.IO.Path]::GetFullPath($Root)
+  if ([string]::IsNullOrWhiteSpace($LegacySource)) { $LegacySource = Join-Path $base 'legacy-source' }
+  if (-not [System.IO.Path]::IsPathRooted($LegacySource) -or $LegacySource -match '^[A-Za-z]:(?![\\/])') { throw 'Legacy source must be absolute.' }
+  $profile = [ordered]@{
+    canonical = Join-Path $base 'canonical'
+    legacy = [System.IO.Path]::GetFullPath($LegacySource)
+    userData = Join-Path $base 'chromium-profile'
+  }
+  $paths = @($profile.Values)
+  for ($left = 0; $left -lt $paths.Count; $left++) {
+    for ($right = $left + 1; $right -lt $paths.Count; $right++) {
+      $a = $paths[$left].TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+      $b = $paths[$right].TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+      if ($a.StartsWith($b, [StringComparison]::OrdinalIgnoreCase) -or $b.StartsWith($a, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Qualification canonical, legacy and userData roots must not intersect.'
+      }
+    }
+  }
+  return [pscustomobject]$profile
+}
+
 if ($LoadProbeLibrary) {
   return
 }
@@ -859,10 +883,13 @@ if ([System.IO.Path]::GetExtension($resolvedExe) -ne '.exe') {
   throw "Smoke target must be an .exe file: $resolvedExe"
 }
 
-$smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ai-novel-smoke-' + [guid]::NewGuid().ToString('N'))
+$smokeRoot = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) '.runtime\.cache') ('ai-novel-smoke-' + [guid]::NewGuid().ToString('N'))
+$qualificationProfile = New-AiNovelQualificationProfile -Root $smokeRoot -LegacySource $VelaHome
 $chromiumLog = Join-Path $smokeRoot 'chromium.log'
 New-Item -ItemType Directory -Path $smokeRoot | Out-Null
 $process = $null
+$previousCanonicalHome = $env:AI_NOVEL_APP_DATA_HOME
+$previousLegacySourceHome = $env:AI_NOVEL_LEGACY_SOURCE_HOME
 $previousVelaHome = $env:AI_NOVEL_VELA_HOME
 $previousSmokeOpenProject = $env:AI_NOVEL_SMOKE_OPEN_PROJECT
 $previousSmokeProjectMarker = $env:AI_NOVEL_SMOKE_PROJECT_MARKER
@@ -915,10 +942,10 @@ try {
     throw "Application smoke cannot start while an existing product error dialog is open: $(Format-AiNovelWindowEvidence -Windows $startupBlockingWindows)"
   }
 
-  if (-not [string]::IsNullOrWhiteSpace($VelaHome)) {
-    New-Item -ItemType Directory -Path $VelaHome -Force | Out-Null
-    $env:AI_NOVEL_VELA_HOME = $VelaHome
-  }
+  New-Item -ItemType Directory -Path $qualificationProfile.userData -Force | Out-Null
+  $env:AI_NOVEL_APP_DATA_HOME = $qualificationProfile.canonical
+  $env:AI_NOVEL_LEGACY_SOURCE_HOME = $qualificationProfile.legacy
+  $env:AI_NOVEL_VELA_HOME = $qualificationProfile.legacy
   if (-not [string]::IsNullOrWhiteSpace($ProjectPathToOpen)) {
     $env:AI_NOVEL_SMOKE_OPEN_PROJECT = (Resolve-Path -LiteralPath $ProjectPathToOpen).Path
     $env:AI_NOVEL_SMOKE_PROJECT_MARKER = $projectOpenMarker
@@ -935,7 +962,7 @@ try {
     $listener.Stop()
   }
 
-  $launchArguments = @("--user-data-dir=$smokeRoot", '--enable-logging', '--v=1', "--log-file=$chromiumLog")
+  $launchArguments = @("--user-data-dir=`"$($qualificationProfile.userData)`"", '--enable-logging', '--v=1', "--log-file=`"$chromiumLog`"")
   if ($null -ne $legacyDebuggerPort) {
     $launchArguments += "--remote-debugging-port=$legacyDebuggerPort"
   }
@@ -1170,6 +1197,8 @@ finally {
   if ($process) {
     Stop-AiNovelProcessTree -Process $process -ProcessIds $appProcessIds -StartTimeTicks $appProcessStartTimeTicks
   }
+  $env:AI_NOVEL_APP_DATA_HOME = $previousCanonicalHome
+  $env:AI_NOVEL_LEGACY_SOURCE_HOME = $previousLegacySourceHome
   $env:AI_NOVEL_VELA_HOME = $previousVelaHome
   $env:AI_NOVEL_SMOKE_OPEN_PROJECT = $previousSmokeOpenProject
   $env:AI_NOVEL_SMOKE_PROJECT_MARKER = $previousSmokeProjectMarker

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { resolveGenerationParameters } from '../generation-parameter-policy'
+import {
+  resolveGenerationCapabilityConstraints,
+  resolveGenerationParameters,
+} from '../generation-parameter-policy'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 
 const openAIModel: ModelProfile = {
@@ -17,6 +20,97 @@ const openAIModel: ModelProfile = {
 }
 
 describe('generation parameter policy', () => {
+  it('separates a verified provider limit from a larger user operational cap', () => {
+    const constraints = resolveGenerationCapabilityConstraints({
+      ...openAIModel,
+      id: 'grok-4.5',
+      provider: 'xai',
+      modelName: 'grok-4.5',
+      baseUrl: 'https://api.x.ai/v1',
+      maxTokens: 131_072,
+      capabilities: {
+        contextWindowTokens: 131_072,
+        maxOutputTokens: 131_072,
+        reasoning: true,
+        structuredOutput: true,
+        usage: true,
+      },
+    })
+
+    expect(constraints).toEqual({
+      modelContextWindowTokens: 500_000,
+      modelMaxOutputTokens: 8_192,
+      modelContextSource: 'verified-provider-preset',
+      modelOutputSource: 'verified-provider-preset',
+      userContextWindowTokens: 131_072,
+      userMaxOutputTokens: 131_072,
+    })
+  })
+
+  it('does not infer capability from a model name on an unverified endpoint', () => {
+    expect(resolveGenerationCapabilityConstraints({
+      ...openAIModel,
+      provider: 'custom',
+      modelName: 'grok-4.5',
+      baseUrl: 'https://proxy.example.test/v1',
+      maxTokens: 131_072,
+      capabilities: {
+        contextWindowTokens: 131_072,
+        maxOutputTokens: 131_072,
+        reasoning: true,
+        structuredOutput: true,
+        usage: true,
+      },
+    })).toEqual({
+      modelContextWindowTokens: null,
+      modelMaxOutputTokens: null,
+      modelContextSource: 'unknown',
+      modelOutputSource: 'unknown',
+      userContextWindowTokens: 131_072,
+      userMaxOutputTokens: 131_072,
+    })
+  })
+
+  it('keeps SiliconFlow provider evidence separate from the smaller user cap', () => {
+    expect(resolveGenerationCapabilityConstraints({
+      ...openAIModel,
+      provider: 'siliconflow',
+      modelName: 'deepseek-ai/DeepSeek-V4-Flash',
+      baseUrl: 'https://api.siliconflow.com/v1',
+      maxTokens: 16_384,
+      capabilities: {
+        contextWindowTokens: 65_536,
+        maxOutputTokens: 16_384,
+        reasoning: false,
+        structuredOutput: false,
+        usage: false,
+      },
+    })).toEqual({
+      modelContextWindowTokens: 1_000_000,
+      modelMaxOutputTokens: 393_000,
+      modelContextSource: 'verified-provider-preset',
+      modelOutputSource: 'verified-provider-preset',
+      userContextWindowTokens: 65_536,
+      userMaxOutputTokens: 16_384,
+    })
+  })
+
+  it('recognizes the approved OpenAI-compatible profile by exact SiliconFlow endpoint and slug', () => {
+    expect(resolveGenerationCapabilityConstraints({
+      ...openAIModel,
+      provider: 'openai',
+      modelName: 'deepseek-ai/DeepSeek-V4-Flash',
+      baseUrl: 'https://api.siliconflow.cn/v1',
+      maxTokens: 16_384,
+    })).toMatchObject({
+      modelContextWindowTokens: 1_000_000,
+      modelMaxOutputTokens: 393_000,
+      modelContextSource: 'verified-provider-preset',
+      modelOutputSource: 'verified-provider-preset',
+      userMaxOutputTokens: 16_384,
+    })
+  })
+
   it('forwards generic model settings without inventing a reasoning field', () => {
     expect(resolveGenerationParameters(openAIModel, {
       maxTokens: 512,

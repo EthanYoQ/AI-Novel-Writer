@@ -1,3 +1,5 @@
+import { formatResourceUri } from '../../shared/project-paths'
+import { canonicalResourceUri, parseResourceUri } from '../../shared/project-paths'
 import type { DraftMeta } from '../draft-index'
 import type { DraftStatus } from '../../shared/draft-status'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
@@ -13,7 +15,10 @@ export async function readWorkflowDraftMeta(
   expectedProjectPath: string,
   projectSession: ProjectSessionContext,
 ): Promise<DraftMeta | null> {
-  const idMatch = filePath.match(/^vela:\/\/(?:draft|manuscript)\/(\d+)$/)
+  const resource = parseResourceUri(filePath)
+  if (!resource || !['draft', 'manuscript', 'chapter'].includes(resource.kind)) return null
+  filePath = canonicalResourceUri(filePath)!
+  const idMatch = filePath.match(/^ai-novel:\/\/(?:draft|manuscript)\/(\d+)$/)
   if (idMatch) {
     const dbMeta = await ipc.invokeWithProjectSession(
       projectSession,
@@ -27,7 +32,7 @@ export async function readWorkflowDraftMeta(
       status: dbMeta.status as DraftStatus,
       source: dbMeta.source as 'write' | 'rewrite',
       fileName: `draft_v${dbMeta.version}.md`,
-      filePath: `vela://draft/${dbMeta.id}`,
+      filePath: formatResourceUri({ kind: 'draft', id: dbMeta.id }),
     } as DraftMeta
   }
 

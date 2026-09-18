@@ -1,17 +1,25 @@
+import { createMainGenerationOwner } from '../../../../../electron/services/main-generation-owner'
+import { ModelExecutionLeaseRegistry } from '../../../../../electron/services/model-execution-lease'
+import { MAIN_GENERATION_POLICY } from '../../../../../electron/services/main-generation-plan'
+import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../../../../../electron/services/generation-source-binding'
+import { generationOutputContract } from '../../../../shared/generation-owner-contract'
+import { getBuiltinPromptTemplate } from '../../../builtin-prompt-templates'
+import type { ModelProfile } from '../../../../shared/ipc-channels'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../../../../electron/database'
+import { closeProjectDatabase, getProjectDb } from '../../../../../electron/database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../../../test/helpers/canonical-project-fixture'
 import { CharacterRepository } from '../../../../../electron/repositories/character-repository'
-import { CharacterRosterRepository } from '../../../../../electron/repositories/character-roster-repository'
+import { CharacterRosterRepository, commitCharacterIdentities, refreshCharacterIdentityProjection } from '../../../../../electron/repositories/character-roster-repository'
 import { PostProcessRepository } from '../../../../../electron/repositories/post-process-repository'
 import { ProjectCoreRepository } from '../../../../../electron/repositories/project-core-repository'
 import {
   invalidateContinuityProjectionFrom,
+  freezeFinalizedCharacterSnapshot,
   SummaryRepository,
 } from '../../../../../electron/repositories/summary-repository'
 import type {
@@ -24,13 +32,52 @@ import { useLLMStore } from '../../../../stores/llm-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import { RunFinalizePostProcessCommand } from '../finalize-chapter.command'
 import { GenerateDraftCommand } from '../generate-draft.command'
-import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
+type ModelMessages = Parameters<ReturnType<typeof useLLMStore.getState>['generateStream']>[0]
 
 let projectPath = ''
 let cardResponse = '{"updates":[]}'
 let workflowContext: WorkflowContext
 let observedCharacterPrompt = ''
 let observedChapterNotesPrompt = ''
+let characterId = ''
+const selections: unknown[] = []
+const commitRequests: unknown[] = []
+let commitFailures = 0
+let changeFieldBeforeCommit = false
+let actualOwner: ReturnType<typeof createMainGenerationOwner> | undefined
+const stageByRun = new Map<string, string>()
+function owner() {
+  if (actualOwner) return actualOwner
+  const db = getProjectDb()!
+  const model: ModelProfile = { id: 'test-model', name: 'Synthetic', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1', apiKey: 'synthetic-only', baseUrl: 'https://api.openai.com/v1', temperature: 0.7, maxTokens: 2048, purposes: ['generation'] }
+  const deps = { db, projectStorageRoot: projectPath, globalDataRoot: projectPath,
+    readBuiltinPrompt: (key: string, language: 'zh-CN' | 'en-US') => JSON.stringify(getBuiltinPromptTemplate(key, language)) }
+  actualOwner = createMainGenerationOwner({ database: db, projectId: 'test', epoch: 'lease-test', assertCurrent: () => {},
+    leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model,
+    dispatch: (request, options) => new Promise((resolve, reject) => {
+      void useLLMStore.getState().generateStream((request as { task: { messages: ModelMessages } }).task.messages, {
+        onDone: (content, _usage, finishReason) => { options.onVisible({ kind: 'delta', text: content }); resolve({ finishReason, usage: null }) },
+        onError: error => reject(new Error(error)),
+      }, model.id).catch(reject)
+    }),
+    buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'test', epoch: 'lease-test', modelReceipt, policy: MAIN_GENERATION_POLICY, outputContract: generationOutputContract(selection) }).binding,
+    rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, 'lease-test', modelReceipt, MAIN_GENERATION_POLICY).binding,
+  })
+  return actualOwner
+}
+// The deterministic model double explicitly emits the seeded ID and UTF-16 evidence.
+// The production parser is never allowed to infer this mapping from a name.
+function modelFixtureResponse(content: string) {
+  let parsed: { updates?: Array<Record<string, unknown>> }
+  try { parsed = JSON.parse(content) } catch { return content }
+  if (!Array.isArray(parsed.updates)) return content
+  const source = SummaryRepository.readFinalizedSource(7)
+  if (source.status !== 'valid') throw new Error('fixture source missing')
+  return JSON.stringify({ ...parsed, updates: parsed.updates.map(update => ({ ...update,
+    ...(typeof update.name === 'string' && update.name.trim().toLowerCase() === 'lin lan' ? { characterId } : {}),
+    evidence: { start: 0, end: source.snapshot.content.length, text: source.snapshot.content },
+  })) })
+}
 
 function callbacks(): StepCallbacks {
   return {
@@ -120,15 +167,37 @@ function insertFinalizedDraft(
     INSERT INTO finalization_outbox (
       finalization_id, draft_id, chapter_number, chapter_title, content_hash,
       content_revision, content_snapshot, target_file_name, publication_status
-    ) VALUES (?, ?, ?, '', ?, 0, ?, ?, 'published')
+    ) VALUES (?, ?, ?, '', ?, 1, ?, ?, 'published')
   `).run(`finalization-${draftId}`, draftId, chapterNumber, contentHash, content, `chapter-${chapterNumber}.txt`)
 }
 
 function installRealRepositoryIpc(): void {
   vi.stubGlobal('window', {
-    velaAPI: {
+    aiNovelAPI: {
       invoke: async (channel: string, ...args: unknown[]) => {
         switch (channel) {
+          case 'finalization-generation:read': {
+            const value = owner().readFinalizationGeneration(args[0] as Parameters<ReturnType<typeof owner>['readFinalizationGeneration']>[0])
+            if (value) stageByRun.set(value.view.handle.runId, value.context.slot.stepKey)
+            return value
+          }
+          case 'finalization-generation:begin': {
+            selections.push(structuredClone(args[0]))
+            const value = owner().beginFinalizationGeneration(args[0] as Parameters<ReturnType<typeof owner>['beginFinalizationGeneration']>[0])
+            stageByRun.set(value.view.handle.runId, value.context.slot.stepKey)
+            return value
+          }
+          case 'finalization-generation:execute': { const r = await owner().executeFinalizationGeneration(args[0] as Parameters<ReturnType<typeof owner>['executeFinalizationGeneration']>[0]); return r }
+          case 'finalization-generation:cancel': return owner().cancelFinalizationGeneration(args[0] as Parameters<ReturnType<typeof owner>['cancelFinalizationGeneration']>[0])
+          case 'finalization-generation:commit': {
+            const request = args[0] as Parameters<ReturnType<typeof owner>['commitFinalizationGeneration']>[0]
+            if (stageByRun.get(request.handle.runId) === 'character_cards') {
+              commitRequests.push(structuredClone(request))
+              if (commitFailures-- > 0) throw new Error('network error: synthetic temporary commit failure')
+              if (changeFieldBeforeCommit) { changeFieldBeforeCommit = false; getProjectDb()!.prepare('UPDATE characters SET cs_location=? WHERE character_id=?').run('作者后来设置', characterId) }
+            }
+            return owner().commitFinalizationGeneration(request)
+          }
           case 'prompt:load-global':
             return { templates: [], diagnostics: [] }
           case 'fs:check-exists':
@@ -220,7 +289,7 @@ function installModel(): void {
       const system = messages.find((message: { role: string; content: string }) => message.role === 'system')?.content ?? ''
       if (system.includes('character records') || system.includes('角色档案')) {
         observedCharacterPrompt = messages.find((message: { role: string; content: string }) => message.role === 'user')?.content ?? ''
-        streamCallbacks.onDone?.(cardResponse, undefined, 'stop')
+        streamCallbacks.onDone?.(modelFixtureResponse(cardResponse), undefined, 'stop')
       } else {
         observedChapterNotesPrompt = messages.find((message: { role: string; content: string }) => message.role === 'user')?.content ?? ''
         streamCallbacks.onDone?.('Lin Lan hands the brass key to Zhou Yan.', undefined, 'stop')
@@ -232,6 +301,11 @@ function installModel(): void {
 
 function command(draftContent: string, overrides: { onlyFailed?: boolean; stepKey?: string } = {}) {
   insertFinalizedDraft(7, 2, draftContent)
+  const db = getProjectDb()!
+  if (!db.prepare('SELECT 1 FROM character_identity_proposals WHERE proposal_id=?').get('fcs:finalization-7')) {
+    db.transaction(() => freezeFinalizedCharacterSnapshot(db, { draftId: 7, finalizationId: 'finalization-7', chapterNumber: 2,
+      contentHash: createHash('sha256').update(draftContent).digest('hex') }))()
+  }
   return new RunFinalizePostProcessCommand({
     project: { path: projectPath },
     chapterNumber: 2,
@@ -246,17 +320,31 @@ function command(draftContent: string, overrides: { onlyFailed?: boolean; stepKe
     },
     sourceLabel: 'Chapter 2 finalization',
     ...overrides,
-  }, workflowRuntimeDependencies)
+  })
 }
 
 beforeEach(() => {
-  projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-finalize-character-'))
+  const cache = path.resolve('.runtime/.cache/novel-quality-modernization/s09b-finalize-consumer')
+  fs.mkdirSync(cache, { recursive: true })
+  projectPath = fs.mkdtempSync(path.join(cache, 'case-'))
+  actualOwner = undefined; stageByRun.clear(); selections.length = 0; commitRequests.length = 0; commitFailures = 0; changeFieldBeforeCommit = false
   initProjectDatabase(projectPath)
   const db = CharacterRosterRepository.read()
   expect(db.status).toBe('empty')
   const projectDb = getProjectDb()
   projectDb?.prepare("INSERT OR IGNORE INTO project_core (id, project_name, writing_language) VALUES ('main', 'Test', 'en-US')").run()
-  CharacterRosterRepository.commit(initialRosterRequest())
+  const entry = initialRosterRequest().entries[0]
+  const { currentState, relationships: _relationships, ...fields } = entry
+  void _relationships
+  const receipt = commitCharacterIdentities(projectDb!, { approval: { operationId: 'initial-roster', expectedRevision: 0,
+    action: 'author-edit', source: { kind: 'author', source: { projectId: 'test', epoch: 'lease-test', sourceId: 'author-fixture', revision: 0, contentHash: 'a'.repeat(64) } } },
+    creations: [{ selectionKey: 'initial', fields }], changes: [], retireIds: [], relationships: [], resolutions: [] }, () => true)
+  characterId = receipt.created[0].characterId
+  const provenance = Object.fromEntries(Object.entries(currentState!.provenance!).map(([field, source]) => [field,
+    { ...source, revision: 1, ...(source.kind === 'derived' ? { sourceOrder: { continuityEpoch: 'test:0', chapterNumber: 1, authoritativeFinalizationRevision: 1 } } : {}) }]))
+  projectDb!.prepare('UPDATE characters SET cs_location=?,cs_power_level=?,cs_physical_state=?,cs_mental_state=?,cs_key_items=?,cs_recent_events=?,cs_updated_at_chapter=?,cs_provenance=? WHERE character_id=?')
+    .run(currentState!.location,currentState!.powerLevel,currentState!.physicalState,currentState!.mentalState,currentState!.keyItems,currentState!.recentEvents,1,JSON.stringify(provenance),characterId)
+  projectDb!.transaction(() => refreshCharacterIdentityProjection(projectDb!))()
   workflowContext = {
     runId: 'finalize-character-run',
     projectPath,
@@ -283,6 +371,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  actualOwner?.suspendForProjectClose()
   closeProjectDatabase()
   fs.rmSync(projectPath, { recursive: true, force: true })
   vi.restoreAllMocks()
@@ -327,7 +416,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     expect(invalidatedDuringNotes).toBe(true)
     expect(staleRun.steps.chapter_notes).toMatchObject({
       ok: false,
-      error: expect.stringContaining('失效水位已推进'),
+      error: expect.stringContaining('FINALIZATION_GENERATION_SOURCE_CHANGED'),
     })
     expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]).toMatchObject({
       chapterNotes: 'Existing projection remains available only as stale material.',
@@ -345,19 +434,19 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
       onlyFailed: true,
       stepKey: 'chapter_notes',
     }).execute({ step: {}, context: workflowContext, callbacks: callbacks() })
-    expect(freshRun.steps.chapter_notes).toMatchObject({ ok: true })
+    expect(freshRun.steps.chapter_notes).toMatchObject({ ok: false })
+    expect(useLLMStore.getState().generateStream).not.toHaveBeenCalled()
     expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]).toMatchObject({
-      chapterNotes: 'Fresh notes use the advanced generation.',
-      sourceStatus: 'current',
+      chapterNotes: 'Existing projection remains available only as stale material.',
+      sourceStatus: 'stale',
     })
   })
 
   it.each([
-    ['missing updates', '{}', 'updates'],
-    ['non-array updates', '{"updates":{}}', 'updates'],
-    ['invalid member state', '{"updates":[{"name":"Lin Lan","currentState":{"location":7}}]}', 'location'],
-    ['unknown character', '{"updates":[{"name":"Zhou Yan","currentState":{"location":"harbor"}}]}', '未知角色'],
-    ['duplicate identity', '{"updates":[{"name":"Lin Lan","currentState":{"location":"harbor"}},{"name":" lin lan ","currentState":{"location":"station"}}]}', '同名冲突'],
+    ['missing updates', '{}', 'UPDATES'],
+    ['non-array updates', '{"updates":{}}', 'UPDATES'],
+    ['invalid member state', '{"updates":[{"name":"Lin Lan","currentState":{"location":7}}]}', 'FIELD'],
+    ['duplicate identity', '{"updates":[{"name":"Lin Lan","currentState":{"location":"harbor"}},{"name":" lin lan ","currentState":{"location":"station"}}]}', 'DUPLICATE_ID'],
   ])('records %s as a retryable failed step without changing the real roster', async (_label, response, errorFragment) => {
     cardResponse = response
 
@@ -407,6 +496,7 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
       step: {}, context: workflowContext, callbacks: callbacks(),
     })
 
+    expect(status.steps.chapter_notes.ok, JSON.stringify(status.steps)).toBe(true)
     expect(observedCharacterPrompt).toContain(draftContent)
     expect(observedChapterNotesPrompt).toContain(draftContent)
     expect(observedChapterNotesPrompt).toContain(
@@ -415,8 +505,10 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     expect(observedChapterNotesPrompt).toContain(
       'Do not infer missing details or require every note to contain all of these elements',
     )
-    expect(status.steps.character_cards).toMatchObject({ ok: true, attemptCount: 1 })
-    expect(CharacterRepository.getByName('Lin Lan')).toMatchObject({
+    expect(status.steps).toMatchObject({ chapter_notes: { ok: true }, character_cards: { ok: true, attemptCount: 1 } })
+    expect(selections).toMatchObject([{ slot: { stepKey: 'chapter_notes', source: { draftId: 7 } } }, { slot: { stepKey: 'character_cards', source: { draftId: 7 } } }])
+    expect(commitRequests).toEqual([expect.objectContaining({ handle: expect.objectContaining({ projectId: 'test', epoch: 'lease-test' }), artifact: expect.objectContaining({ textHash: expect.stringMatching(/^[a-f0-9]{64}$/) }) })])
+    expect(CharacterRepository.getById(characterId)).toMatchObject({
       appearance: 'author-written silver coat',
       notes: 'author static note',
       currentState: {
@@ -487,10 +579,10 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     })
 
     expect(status.steps.character_cards).toMatchObject({ ok: true })
-    expect(CharacterRepository.getByName('Lin Lan')?.currentState).toMatchObject({
+    expect(CharacterRepository.getById(characterId)?.currentState).toMatchObject({
       keyItems: 'brass key',
     })
-    expect(CharacterRosterRepository.read().revision).toBe(2)
+    expect(CharacterRosterRepository.read().revision).toBe(1)
     const frozenSource = SummaryRepository.readFinalizedSource(7)
     if (frozenSource.status !== 'valid') throw new Error('expected valid finalized source')
     SummaryRepository.saveFinalizedContinuity({
@@ -552,46 +644,13 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     workflowContext.writingLanguage = 'zh-CN'
     insertFinalizedDraft(7, 2)
     insertFinalizedDraft(8, 3)
-    const beforeChapterThree = CharacterRosterRepository.read()
-    const existing = beforeChapterThree.entries[0]
-    const chapterThree = CharacterRosterRepository.commit({
-      operationId: '第三章角色进度',
-      expectedRevision: beforeChapterThree.revision,
-      schemaVersion: 1,
-      intent: 'chapter_progress',
-      source: {
-        draftId: 8,
-        finalizationId: 'finalization-8',
-        chapterNumber: 3,
-        contentHash: createHash('sha256').update('Chapter 3 finalized content', 'utf8').digest('hex'),
-      },
-      entries: [{
-        ...existing,
-        currentState: {
-          location: '新港',
-          powerLevel: '普通人',
-          physicalState: '疲惫',
-          mentalState: '警觉',
-          keyItems: '',
-          recentEvents: '第三章已经交出黄铜钥匙',
-          updatedAtChapter: 3,
-          provenance: {
-            location: { kind: 'derived', source: {
-              draftId: 8,
-              finalizationId: 'finalization-8',
-              chapterNumber: 3,
-              contentHash: createHash('sha256').update('Chapter 3 finalized content', 'utf8').digest('hex'),
-            } },
-            recentEvents: { kind: 'derived', source: {
-              draftId: 8,
-              finalizationId: 'finalization-8',
-              chapterNumber: 3,
-              contentHash: createHash('sha256').update('Chapter 3 finalized content', 'utf8').digest('hex'),
-            } },
-          },
-        },
-      }],
-    })
+    const chapterThreeDb = getProjectDb()!
+    chapterThreeDb.transaction(() => freezeFinalizedCharacterSnapshot(chapterThreeDb, { draftId: 8, finalizationId: 'finalization-8', chapterNumber: 3,
+      contentHash: createHash('sha256').update('Chapter 3 finalized content').digest('hex') }))()
+    const contextThree = SummaryRepository.readFinalizedCharacterContext(8, { projectId: 'test', epoch: 'lease-test' })
+    SummaryRepository.commitFinalizedCharacterStates(contextThree, { updates: [{ characterId, currentState: { location: '新港', recentEvents: '第三章已经交出黄铜钥匙' },
+      evidence: { start: 0, end: contextThree.content.length, text: contextThree.content } }], unresolved: [] })
+    const chapterThree = { snapshot: CharacterRosterRepository.read() }
     cardResponse = JSON.stringify({
       updates: [{
         name: 'Lin Lan',
@@ -611,10 +670,10 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
 
     expect(status.steps.character_cards).toMatchObject({
       ok: false,
-      error: expect.stringContaining('较新章节'),
+      error: expect.stringContaining('SOURCE_CONFLICT'),
     })
     expect(CharacterRosterRepository.read()).toEqual(chapterThree.snapshot)
-    expect(CharacterRepository.getByName('Lin Lan')?.currentState).toMatchObject({
+    expect(CharacterRepository.getById(characterId)?.currentState).toMatchObject({
       location: '新港',
       keyItems: 'brass key',
       recentEvents: '第三章已经交出黄铜钥匙',
@@ -635,12 +694,68 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     })
 
     expect(observedCharacterPrompt).toContain(chineseChapter)
-    expect(status.steps.character_cards).toMatchObject({ ok: true, attemptCount: 1 })
+    expect(status.steps).toMatchObject({ chapter_notes: { ok: true }, character_cards: { ok: true, attemptCount: 1 } })
     expect(CharacterRosterRepository.read().revision).toBe(1)
   })
 
-  it('cancels before commit and safely retries only the unfinished post-process step', async () => {
+  it('retains unknown character output for explicit approval without creating or merging a character', async () => {
+    cardResponse = JSON.stringify({ updates: [{ name: 'Zhou Yan', currentState: { location: 'harbor' } }] })
+    const before = CharacterRosterRepository.read()
+    const status = await command('Zhou Yan reaches the harbor.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+    expect(status.steps.character_cards).toMatchObject({ ok: true })
+    expect(owner().characterProposals.read(workflowContext.data.characterProposalBatchId as string)).toMatchObject({
+      status: 'pending-approval',
+      items: [expect.objectContaining({ fields: expect.objectContaining({ name: 'Zhou Yan' }) })],
+    })
+    expect(CharacterRosterRepository.read()).toEqual(before)
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(1)
+    expect(commitRequests).toHaveLength(1)
+  })
+
+  it('reuses the exact durable artifact when an automatic retry repairs only persistence', async () => {
+    commitFailures = 1
+    cardResponse = JSON.stringify({ updates: [{ name: 'Lin Lan', currentState: { location: 'harbor' } }] })
+    const status = await command('Lin Lan arrives at the harbor.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+    expect(status.steps.character_cards).toMatchObject({ ok: true })
+    expect(commitRequests).toHaveLength(2)
+    expect(commitRequests[1]).toEqual(commitRequests[0])
+    expect(selections).toHaveLength(2)
+    expect(useLLMStore.getState().generateStream).toHaveBeenCalledTimes(2)
+    expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
+  })
+
+  it('keeps a permanent field conflict attached to the original artifact instead of regenerating against the edit', async () => {
+    changeFieldBeforeCommit = true
+    cardResponse = JSON.stringify({ updates: [{ name: 'Lin Lan', currentState: { location: 'harbor' } }] })
+    const status = await command('Lin Lan arrives at the harbor.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+    expect(status.steps.character_cards).toMatchObject({ ok: false, error: expect.stringContaining('FIELD_CONFLICT') })
+    expect(commitRequests).toHaveLength(3)
+    expect(commitRequests.every(request => JSON.stringify(request) === JSON.stringify(commitRequests[0]))).toBe(true)
+    expect(selections).toHaveLength(2)
+    expect(useLLMStore.getState().generateStream).toHaveBeenCalledTimes(2)
+    expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('作者后来设置')
+  })
+
+  it('repairs malformed structured output within the original durable slot and commits only the valid candidate', async () => {
+    let stateCalls = 0
+    useLLMStore.setState({ defaultModelId: 'test-model', generateStream: vi.fn(async (messages, streamCallbacks) => {
+      const isCharacter = messages.some((message: { role: string; content: string }) => message.role === 'system' && message.content.includes('character records'))
+      const content = !isCharacter ? 'Lin Lan arrives at the harbor.' : ++stateCalls === 1 ? '{"updates":{}}'
+        : modelFixtureResponse(JSON.stringify({ updates: [{ name: 'Lin Lan', currentState: { location: 'harbor' } }] }))
+      streamCallbacks.onDone?.(content, undefined, 'stop')
+      return 'synthetic-request'
+    }) })
+    const status = await command('Lin Lan arrives at the harbor.').execute({ step: {}, context: workflowContext, callbacks: callbacks() })
+    expect(status.steps.character_cards).toMatchObject({ ok: true })
+    expect(stateCalls).toBe(2)
+    expect(commitRequests).toHaveLength(1)
+    expect(selections).toHaveLength(2)
+    expect(CharacterRepository.getById(characterId)?.currentState?.location).toBe('harbor')
+  })
+
+  it('cancels before commit and retains the cancelled slot without redispatch on pipeline retry', async () => {
     insertFinalizedDraft(7, 2)
+    const before = CharacterRosterRepository.read()
     let cancelledOnce = false
     useLLMStore.setState({
       defaultModelId: 'test-model',
@@ -679,17 +794,14 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
       step: {}, context: workflowContext, callbacks: callbacks(),
     })
 
-    expect(status.steps.character_cards).toMatchObject({ ok: true, attemptCount: 1 })
-    expect(CharacterRosterRepository.read()).toMatchObject({
-      revision: 2,
-      entries: [expect.objectContaining({
-        currentState: expect.objectContaining({ location: 'harbor', keyItems: 'brass key' }),
-      })],
-    })
+    expect(status.steps).toMatchObject({ chapter_notes: { ok: true }, character_cards: { ok: false } })
+    expect(useLLMStore.getState().generateStream).not.toHaveBeenCalled()
+    expect(commitRequests).toHaveLength(0)
+    expect(CharacterRosterRepository.read()).toEqual(before)
     expect(PostProcessRepository.getLatestRun('chapter_finalize', '2')?.id).toBe(interruptedRun!.id)
   })
 
-  it('retries one selected failed step without invoking successful steps again', async () => {
+  it('retries only the selected failed effect using its original candidate without invoking any model again', async () => {
     insertFinalizedDraft(7, 2)
     cardResponse = '{}'
     const initial = await command('The brass key changes hands.').execute({
@@ -710,10 +822,11 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
       stepKey: 'character_cards',
     }).execute({ step: {}, context: workflowContext, callbacks: callbacks() })
 
-    expect(generateStream).toHaveBeenCalledOnce()
-    const messages = generateStream.mock.calls[0]?.[0] as Array<{ role: string; content: string }>
-    expect(messages.find(message => message.role === 'system')?.content).toMatch(/character records|角色档案/)
-    expect(repaired.steps.character_cards.ok).toBe(true)
+    expect(generateStream).not.toHaveBeenCalled()
+    expect(commitRequests).toHaveLength(6)
+    expect(commitRequests.every(request => JSON.stringify(request) === JSON.stringify(commitRequests[0]))).toBe(true)
+    expect(repaired.steps.character_cards.ok).toBe(false)
+    expect(CharacterRosterRepository.read().revision).toBe(1)
     expect(repaired.steps.kb_import.ok).toBe(true)
     expect(repaired.steps.chapter_notes.ok).toBe(true)
   })

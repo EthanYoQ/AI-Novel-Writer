@@ -11,7 +11,7 @@ function isConfigRecord(value: unknown): value is GlobalConfig {
   return value != null && typeof value === 'object' && !Array.isArray(value)
 }
 
-/** 将更新检查时间和延后提醒写入既有的 ~/.vela/config.json。 */
+/** Updates only the configuration in the admitted canonical global generation. */
 export class GlobalConfigUpdatePreferencesStore implements UpdatePreferencesStore {
   read(): UpdatePreferences {
     const result = tryReadJsonFile<unknown>(GLOBAL_CONFIG_PATH)

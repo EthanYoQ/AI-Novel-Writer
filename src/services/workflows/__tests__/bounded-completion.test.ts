@@ -1,3 +1,4 @@
+import { composeVisibleContinuation, VISIBLE_CONTINUATION_VERSION } from '../../../shared/visible-continuation'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -379,4 +380,23 @@ describe('bounded completion', () => {
 
     expect(requestContinuation).toHaveBeenCalledOnce()
   })
+})
+
+
+it('pure visible-append-v1 retains original UTF16 overlap and whitespace behavior', () => {
+  expect(VISIBLE_CONTINUATION_VERSION).toBe('visible-append-v1')
+  const cases: Array<[string, string, string]> = [
+    ['甲'.repeat(47), '甲'.repeat(47) + '乙', '甲'.repeat(47) + '\n\n' + '甲'.repeat(47) + '乙'],
+    ['甲'.repeat(48), '甲 '.repeat(48) + '\n  乙', '甲'.repeat(48) + '\n\n乙'],
+    ['开头' + '甲'.repeat(1600), '甲'.repeat(1600) + '尾声', '开头' + '甲'.repeat(1600) + '\n\n尾声'],
+    ['', '  雨夜\r\n', '雨夜'],
+    ['雨夜', '', '雨夜'],
+    ['甲'.repeat(48), '甲'.repeat(48), '甲'.repeat(48)],
+    ['𠮷'.repeat(24), '𠮷'.repeat(24) + '乙', '𠮷'.repeat(24) + '\n\n乙'],
+  ]
+  for (const [existing, addition, expected] of cases) {
+    expect(composeVisibleContinuation(existing, addition)).toBe(expected)
+    expect(appendVisibleTextContinuation(existing, addition)).toBe(expected)
+  }
+  expect(appendVisibleTextContinuation('<think>隐藏</think>雨夜', '<think>隐藏</think>来信')).toBe('雨夜\n\n来信')
 })

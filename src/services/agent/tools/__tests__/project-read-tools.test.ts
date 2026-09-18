@@ -55,7 +55,7 @@ describe('agent project read tools', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -113,7 +113,7 @@ describe('agent project read tools', () => {
       }
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
-    vi.stubGlobal('window', { velaAPI: { invoke } })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke } })
 
     const result = await listChaptersTool.execute({}, createAgentExecutionContext())
 
@@ -134,7 +134,7 @@ describe('agent project read tools', () => {
       if (channel === 'db:draft-list-all') throw new Error('draft list failed')
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
-    vi.stubGlobal('window', { velaAPI: { invoke } })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke } })
 
     await expect(listChaptersTool.execute({}, createAgentExecutionContext())).resolves.toMatchObject({
       success: false,
@@ -152,7 +152,7 @@ describe('agent project read tools', () => {
       error: missingFileError,
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -189,7 +189,7 @@ describe('agent project read tools', () => {
       throw new Error(`Unexpected IPC channel: ${channel}`)
     })
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),
@@ -224,7 +224,7 @@ describe('agent project read tools', () => {
       .mockResolvedValueOnce({ success: false, errorCode: 'LEGACY_VECTOR_MIGRATION_BLOCKED', error: '旧版知识库数据需要先修复' })
       .mockResolvedValueOnce({ success: false, errorCode: 'LEGACY_VECTOR_MIGRATION_BLOCKED', error: 'Legacy knowledge-base data must be repaired' })
       .mockResolvedValueOnce({ success: false, errorCode: 'LEGACY_VECTOR_MIGRATION_BLOCKED', error: '旧版知识库数据需要先修复' })
-    vi.stubGlobal('window', { velaAPI: { invoke } })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke } })
     const context = createAgentExecutionContext()
 
     await expect(searchKnowledgeTool.execute({ query: 'campus' }, context)).resolves.toMatchObject({
@@ -254,7 +254,7 @@ describe('agent project read tools', () => {
     let resolveRead: ((value: unknown) => void) | undefined
     const invoke = vi.fn(() => new Promise<unknown>((resolve) => { resolveRead = resolve }))
     vi.stubGlobal('window', {
-      velaAPI: {
+      aiNovelAPI: {
         invoke,
         on: vi.fn(),
         once: vi.fn(),

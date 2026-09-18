@@ -34,10 +34,13 @@ if [[ ! -f "$dmg" ]]; then
   exit 1
 fi
 
-smoke_root="$(mktemp -d "${TMPDIR:-/tmp}/ai-novel-macos-dmg-smoke.XXXXXX")"
+mkdir -p "$repository_root/.runtime/.cache"
+smoke_root="$(mktemp -d "$repository_root/.runtime/.cache/ai-novel-macos-dmg-smoke.XXXXXX")"
 mount_point="$smoke_root/mount"
 smoke_home="$smoke_root/home"
-skin_home="$smoke_root/vela-skin-home"
+skin_home="$smoke_root/legacy-source"
+canonical_home="$smoke_root/canonical"
+chromium_profile="$smoke_root/chromium-profile"
 mounted=0
 unmount_attempted=0
 unmount_succeeded=0
@@ -116,7 +119,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$mount_point" "$smoke_home" "$skin_home" "$qualification_directory" "$acceptance_directory"
+mkdir -p "$mount_point" "$smoke_home" "$skin_home" "$chromium_profile" "$qualification_directory" "$acceptance_directory"
 dmg_sha256="$(shasum -a 256 "$dmg" | awk '{print $1}')"
 if [[ ! "$dmg_sha256" =~ ^[a-fA-F0-9]{64}$ ]]; then
   echo "Could not calculate SHA-256 for macOS DMG: $dmg" >&2
@@ -314,14 +317,14 @@ homepage_evidence="$qualification_directory/packaged-official-homepage-smoke.jso
 skin_evidence="$qualification_directory/packaged-skin-smoke.json"
 
 run_with_timeout 'packaged vector smoke' 120 env \
-  ELECTRON_RUN_AS_NODE=1 HOME="$smoke_home" AI_NOVEL_RELEASE_SMOKE=1 AI_NOVEL_RELEASE_SMOKE_TOKEN="$token" \
+  ELECTRON_RUN_AS_NODE=1 HOME="$smoke_home" AI_NOVEL_APP_DATA_HOME="$canonical_home" AI_NOVEL_LEGACY_SOURCE_HOME="$skin_home" AI_NOVEL_VELA_HOME="$skin_home" AI_NOVEL_RELEASE_SMOKE=1 AI_NOVEL_RELEASE_SMOKE_TOKEN="$token" \
   "$executable" "$vector_runner" "--ai-novel-release-smoke=$token" > "$vector_evidence"
 run_with_timeout 'packaged official homepage smoke' 300 env \
-  HOME="$smoke_home" AI_NOVEL_RELEASE_HOMEPAGE_SMOKE=1 AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN="$token" \
-  "$executable" "--ai-novel-release-homepage-smoke=$token" > "$homepage_evidence"
+  HOME="$smoke_home" AI_NOVEL_APP_DATA_HOME="$canonical_home" AI_NOVEL_LEGACY_SOURCE_HOME="$skin_home" AI_NOVEL_VELA_HOME="$skin_home" AI_NOVEL_RELEASE_HOMEPAGE_SMOKE=1 AI_NOVEL_RELEASE_HOMEPAGE_SMOKE_TOKEN="$token" \
+  "$executable" "--user-data-dir=$chromium_profile" "--ai-novel-release-homepage-smoke=$token" > "$homepage_evidence"
 run_with_timeout 'packaged skin smoke' 120 env \
-  HOME="$smoke_home" AI_NOVEL_VELA_HOME="$skin_home" AI_NOVEL_RELEASE_SKIN_SMOKE=1 AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN="$skin_token" \
-  "$executable" "--ai-novel-release-skin-smoke=$skin_token" > "$skin_evidence"
+  HOME="$smoke_home" AI_NOVEL_APP_DATA_HOME="$canonical_home" AI_NOVEL_LEGACY_SOURCE_HOME="$skin_home" AI_NOVEL_VELA_HOME="$skin_home" AI_NOVEL_RELEASE_SKIN_SMOKE=1 AI_NOVEL_RELEASE_SKIN_SMOKE_TOKEN="$skin_token" \
+  "$executable" "--user-data-dir=$chromium_profile" "--ai-novel-release-skin-smoke=$skin_token" > "$skin_evidence"
 
 node - "$vector_evidence" "$homepage_evidence" "$skin_evidence" <<'NODE'
 const fs = require('node:fs')

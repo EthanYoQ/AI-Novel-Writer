@@ -1,13 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import os from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { GlobalConfig } from '../../src/shared/ipc-channels'
+import { VELA_HOME, assertGlobalDataReady, assertGlobalPathAccess } from '../services/app-data-locator'
+export { VELA_HOME, GLOBAL_CONFIG_PATH, MODELS_CONFIG_PATH, RECENT_PROJECTS_PATH } from '../services/app-data-locator'
 
-/** 测试和受控迁移可提供隔离目录；普通用户始终沿用 ~/.vela。 */
-export const VELA_HOME = process.env.AI_NOVEL_VELA_HOME?.trim() || path.join(os.homedir(), '.vela')
+/** Compatibility function name; only the admitted canonical generation may be created. */
 
 export function ensureVelaHome() {
+  assertGlobalDataReady()
   const dirs = [
     VELA_HOME,
     path.join(VELA_HOME, 'prompts'),
@@ -30,6 +31,7 @@ export type JsonFileReadResult<T> =
  * 对全局配置做增量写入的调用方必须在 error 时拒绝覆盖原文件。
  */
 export function tryReadJsonFile<T>(filePath: string): JsonFileReadResult<T> {
+  assertGlobalPathAccess(filePath)
   if (!fs.existsSync(filePath)) return { status: 'missing' }
   try {
     return { status: 'ok', value: JSON.parse(fs.readFileSync(filePath, 'utf-8')) as T }
@@ -42,7 +44,7 @@ export function readJsonFile<T>(filePath: string, fallback: T): T {
   const result = tryReadJsonFile<T>(filePath)
   if (result.status === 'ok') return result.value
   if (result.status === 'error') {
-    console.warn(`[Vela] 读取 ${filePath} 失败:`, result.error)
+    console.warn('[App Data] 配置不可安全读取，已保留原文件。')
   }
   return fallback
 }
@@ -78,6 +80,7 @@ function replaceFileWithRetry(temporaryPath: string, filePath: string) {
 }
 
 export function writeJsonFile(filePath: string, data: unknown) {
+  assertGlobalPathAccess(filePath)
   const directory = path.dirname(filePath)
   const temporaryPath = path.join(
     directory,
@@ -117,9 +120,6 @@ export function writeJsonFile(filePath: string, data: unknown) {
   }
 }
 
-export const GLOBAL_CONFIG_PATH = path.join(VELA_HOME, 'config.json')
-export const MODELS_CONFIG_PATH = path.join(VELA_HOME, 'models.json')
-export const RECENT_PROJECTS_PATH = path.join(VELA_HOME, 'recent-projects.json')
 
 export const DEFAULT_GLOBAL_CONFIG: GlobalConfig = {
   theme: 'dark',

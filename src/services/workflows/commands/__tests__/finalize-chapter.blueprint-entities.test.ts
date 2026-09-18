@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
 import { useLLMStore } from '../../../../stores/llm-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import { FinalizeChapterCommand } from '../finalize-chapter.command'
+import type { FinalizedCharacterContext } from '../../../../shared/finalized-continuity'
 
 const finalizationClient = vi.hoisted(() => ({
   commitFinalizationSnapshot: vi.fn(),
@@ -16,6 +18,13 @@ const PROJECT_SESSION = Object.freeze({
   projectId: 'blueprint-entities',
   leaseId: 'lease-blueprint-entities',
   projectPath: PROJECT_PATH,
+})
+const CONTENT = '韩峥被洪水卷入排水井，当场死亡。'
+const CONTENT_HASH = createHash('sha256').update(CONTENT).digest('hex')
+const finalizedContext = (): FinalizedCharacterContext => ({ projectId: PROJECT_SESSION.projectId, epoch: PROJECT_SESSION.leaseId,
+  source: { draftId: 33, finalizationId: 'finalization-3', chapterNumber: 3, contentHash: CONTENT_HASH }, content: CONTENT,
+  identityRevision: 0, identityStatus: 'bound', projectionGeneration: 0, characters: [],
+  sourceOrder: { continuityEpoch: `${PROJECT_SESSION.projectId}:0`, chapterNumber: 3, authoritativeFinalizationRevision: 1 },
 })
 
 function workflowContext(uiLocale: 'zh-CN' | 'en-US' = 'zh-CN'): WorkflowContext {
@@ -38,40 +47,13 @@ function callbacks(): StepCallbacks {
   }
 }
 
-function modelLease() {
-  return {
-    leaseId: 'model-lease-blueprint-entities',
-    modelId: 'test-model',
-    provider: 'custom',
-    protocol: 'openai',
-    modelName: 'test-model',
-    modelRevision: 'a'.repeat(64),
-    endpointFingerprint: 'b'.repeat(64),
-    capabilityEvidence: {
-      source: {
-        contextWindowTokens: 'unknown',
-        maxOutputTokens: 'user-operational-cap',
-        featureFlags: 'unknown',
-      },
-      subjectFingerprint: 'c'.repeat(64),
-      contextWindowTokens: null,
-      maxOutputTokens: 8192,
-      reasoning: null,
-      structuredOutput: true,
-      usage: null,
-    },
-    createdAt: 1_000,
-    expiresAt: 61_000,
-  }
-}
-
 describe('FinalizeChapterCommand blueprint character fallback', () => {
   beforeEach(() => {
     finalizationClient.commitFinalizationSnapshot.mockResolvedValue({
       success: true,
       committed: true,
       finalizationId: 'finalization-3',
-      contentHash: 'content-hash-3',
+      contentHash: CONTENT_HASH,
       contentRevision: 5,
       draftId: 33,
       publicationStatus: 'published',
@@ -103,14 +85,22 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
     const completedSteps = new Set<string>()
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       switch (channel) {
+        case 'finalization-generation:read': {
+          const slot = (args[0] as { slot: { source: unknown; stepKey: string } }).slot
+          return { view: { handle: { projectId: PROJECT_SESSION.projectId, epoch: PROJECT_SESSION.leaseId, rootActionId: 'main-root', runId: slot.stepKey }, artifacts: [], status: 'completed' },
+            modelId: 'original-main-model', context: { slot }, sourceStatus: 'current',
+            effect: slot.stepKey === 'chapter_notes' ? { success: true, stepKey: slot.stepKey, chapterNotes: '韩峥被洪水卷入排水井，当场死亡。', factCount: 1, blueprintUpdated: true }
+              : { success: true, stepKey: slot.stepKey, applied: 0, unchanged: 0, candidates: [], unresolved: [] } }
+        }
+
         case 'prompt:load-global':
           return { templates: [], diagnostics: [] }
         case 'fs:check-exists':
           return false
-        case 'llm:begin-execution-lease':
-          return { success: true, lease: modelLease() }
-        case 'llm:close-execution-lease':
-          return { success: true }
+        case 'finalized-character:read-context':
+          return { contextId: 'synthetic-context-33', context: finalizedContext() }
+        case 'finalized-character:commit':
+          return { applied: 0, unchanged: 0, candidates: [], unresolved: [] }
         case 'db:blueprint-get':
           return { chapterNumber: 3, title: '钟楼真相', characters: ['韩峥'] }
         case 'db:post-process-get-latest-run':
@@ -146,7 +136,7 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
                 draftId: 33,
                 finalizationId: 'finalization-3',
                 chapterNumber: 3,
-                contentHash: 'content-hash-3',
+                contentHash: CONTENT_HASH,
               },
               chapterTitle: '钟楼真相',
               content: '韩峥被洪水卷入排水井，当场死亡。',
@@ -161,7 +151,7 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
           throw new Error(`unexpected IPC: ${channel}`)
       }
     })
-    vi.stubGlobal('window', { velaAPI: { invoke } })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke } })
 
     let completionIndex = 0
     useLLMStore.setState({
@@ -180,7 +170,7 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
     })
 
     const command = new FinalizeChapterCommand({
-      draftPath: 'vela://draft/33',
+      draftPath: 'ai-novel://draft/33',
       draftContent: '旧参数正文不得被读取',
       chapterNumber: 3,
       chapterInfo: {
@@ -217,14 +207,12 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
       PROJECT_PATH,
       PROJECT_SESSION,
     )
-    const continuityCall = invoke.mock.calls.find(([channel]) => channel === 'db:continuity-save-finalized')
-    expect(continuityCall?.[1]).toEqual(expect.objectContaining({
-      facts: [expect.objectContaining({
-        category: 'character-state',
-        entities: ['韩峥'],
-        statement: '韩峥被洪水卷入排水井，当场死亡。',
-      })],
-    }))
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'finalization-generation:read').map(([, request]) => request)).toEqual([
+      { slot: { source: { draftId: 33, finalizationId: 'finalization-3', chapterNumber: 3, contentHash: CONTENT_HASH }, stepKey: 'chapter_notes' } },
+      { slot: { source: { draftId: 33, finalizationId: 'finalization-3', chapterNumber: 3, contentHash: CONTENT_HASH }, stepKey: 'character_cards' } },
+    ])
+    expect(invoke.mock.calls.some(([channel]) => ['db:continuity-save-finalized', 'db:blueprint-update-notes', 'finalization-generation:begin', 'finalization-generation:execute', 'finalization-generation:commit'].includes(channel))).toBe(false)
+    expect(completedSteps).toEqual(new Set(['kb_import', 'chapter_notes', 'character_cards']))
     const visibleLogs = vi.mocked(stepCallbacks.log).mock.calls.flat().join('\n')
     expect(visibleLogs).toContain('Starting finalization and post-processing analysis')
     expect(visibleLogs).toContain('Finalized content committed to SQLite and published as a manuscript')

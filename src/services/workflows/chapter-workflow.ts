@@ -1,3 +1,5 @@
+import { formatResourceUri } from '../../shared/project-paths'
+import { canonicalResourceUri, parseResourceUri, resourceWriteAllowed } from '../../shared/project-paths'
 import { workflowResourceKey, type WorkflowDefinition } from '../../stores/workflow-store'
 import type { DraftMeta } from '../draft-index'
 import { requireIpcSuccess } from '../ipc-result'
@@ -103,11 +105,11 @@ export interface FinalizeOnlyParams {
 // ==========================================
 
 export function getDraftDir(_projectPath: string, chapterNumber: number): string {
-  return `vela://draft/ch${chapterNumber}`
+  return `ai-novel://draft/ch${chapterNumber}`
 }
 
 export function getDraftPath(_projectPath: string, chapterNumber: number, version: number): string {
-  return `vela://draft/ch${chapterNumber}/v${version}`
+  return `ai-novel://draft/ch${chapterNumber}/v${version}`
 }
 
 const CHAPTER_CONTEXT_READ_RESOURCE_KEYS = Object.freeze([
@@ -151,12 +153,15 @@ export async function parseDraftMeta(
   expectedProjectPath: string,
   projectSession: ProjectSessionContext,
 ): Promise<DraftMeta | null> {
+  const resource = parseResourceUri(filePath)
+  if (!resource || !['draft', 'manuscript', 'chapter'].includes(resource.kind)) return null
+  filePath = canonicalResourceUri(filePath)!
   if (!sameProjectPathKey(projectSession.projectPath, expectedProjectPath)) {
     throw new Error('读取草稿元数据时项目会话与目标路径不匹配')
   }
 
-  // 优先处理 vela://draft/{id} 纯数字 ID 格式（DB 化后的标准路径）
-  const idMatch = filePath.match(/^vela:\/\/(?:draft|manuscript)\/(\d+)$/)
+  // 优先处理 ai-novel://draft/{id} 纯数字 ID 格式（DB 化后的标准路径）
+  const idMatch = filePath.match(/^ai-novel:\/\/(?:draft|manuscript)\/(\d+)$/)
   if (idMatch) {
     const draftId = parseInt(idMatch[1])
     const dbMeta = await ipc.invokeWithProjectSession(
@@ -171,11 +176,11 @@ export async function parseDraftMeta(
       status: dbMeta.status as DraftStatus,
       source: dbMeta.source as 'write' | 'rewrite',
       fileName: `draft_v${dbMeta.version}.md`,
-      filePath: `vela://draft/${dbMeta.id}`,
+      filePath: formatResourceUri({ kind: 'draft', id: dbMeta.id }),
     } as unknown as DraftMeta
   }
 
-  // 兼容旧格式 draft_v(\d+).md 和 vela://draft/ch{N}/v{V}
+  // 兼容旧格式 draft_v(\d+).md 和 ai-novel://draft/ch{N}/v{V}
   const versionMatch = filePath.match(/v(\d+)(?:\.md)?$/)
   if (!versionMatch) return null
   const version = parseInt(versionMatch[1])
@@ -201,6 +206,7 @@ export async function updateDraftStatus(
   expectedProjectPath: string,
   projectSession: ProjectSessionContext,
 ): Promise<void> {
+  if (!resourceWriteAllowed(filePath)) throw new Error('资源只读或无效')
   const meta = await parseDraftMeta(filePath, expectedProjectPath, projectSession)
   if (meta) {
     requireIpcSuccess(

@@ -100,7 +100,7 @@ describe('RelationshipGraph readable theme text', () => {
 
     await act(async () => root.render(
       <RelationshipGraph characters={[{
-        name: '林墨',
+        characterId: 'id:' + '林墨', name: '林墨',
         // 修复前该角色姓名固定使用 #54666E，在 galaxy 和 dark 面板上
         // 测得的对比度都低于 3:1。
         role: 'antagonist',
@@ -129,11 +129,11 @@ describe('RelationshipGraph readable theme text', () => {
     await act(async () => root.render(
       <RelationshipGraph characters={[
         {
-          name: '林墨',
+          characterId: 'id:' + '林墨', name: '林墨',
           role: 'protagonist',
           relationships: JSON.stringify([{ target: '周砧', relation: '共同追查' }]),
         },
-        { name: '周砧', role: 'supporting', relationships: '' },
+        { characterId: 'id:' + '周砧', name: '周砧', role: 'supporting', relationships: '' },
       ]} />,
     ))
 
@@ -148,7 +148,7 @@ describe('RelationshipGraph readable theme text', () => {
     const reverseRelation = '尊重她坚持追查真相的勇气'
     const characters = [
       {
-        name: '林墨',
+        characterId: 'id:' + '林墨', name: '林墨',
         role: 'protagonist',
         relationships: JSON.stringify([
           { target: '周砧', relation: firstRelation },
@@ -157,7 +157,7 @@ describe('RelationshipGraph readable theme text', () => {
         ]),
       },
       {
-        name: '周砧',
+        characterId: 'id:' + '周砧', name: '周砧',
         role: 'supporting',
         relationships: JSON.stringify([
           { target: '林墨', relation: reverseRelation },
@@ -192,11 +192,11 @@ describe('RelationshipGraph readable theme text', () => {
     await act(async () => root.render(
       <RelationshipGraph characters={[
         {
-          name: longName,
+          characterId: 'id:' + longName, name: longName,
           role: 'protagonist',
           relationships: JSON.stringify([{ target: '周砧', relation: longRelation }]),
         },
-        { name: '周砧', role: 'supporting', relationships: '' },
+        { characterId: 'id:' + '周砧', name: '周砧', role: 'supporting', relationships: '' },
       ]} />,
     ))
 
@@ -218,7 +218,7 @@ describe('RelationshipGraph readable theme text', () => {
     const characters = names.map((name, index) => {
       const targets = index === 0 ? names.slice(1) : [names[(index + 1) % names.length]]
       return {
-        name,
+        characterId: `id:${name}`, name,
         role: index === 0 ? 'protagonist' : 'supporting',
         relationships: JSON.stringify(targets.map(target => ({ target, relation: '推动选择' }))),
       }
@@ -245,8 +245,8 @@ describe('RelationshipGraph readable theme text', () => {
 
     await act(async () => root.render(
       <RelationshipGraph characters={[
-        { name: '林墨', role: 'protagonist', relationships: '' },
-        { name: '周砧', role: 'supporting', relationships: '' },
+        { characterId: 'id:' + '林墨', name: '林墨', role: 'protagonist', relationships: '' },
+        { characterId: 'id:' + '周砧', name: '周砧', role: 'supporting', relationships: '' },
       ]} />,
     ))
 
@@ -292,11 +292,11 @@ describe('RelationshipGraph readable theme text', () => {
     await act(async () => root.render(
       <RelationshipGraph characters={[
         {
-          name: '林墨',
+          characterId: 'id:' + '林墨', name: '林墨',
           role: 'protagonist',
           relationships: JSON.stringify([{ target: '周砧', relation: '共同追查' }]),
         },
-        { name: '周砧', role: 'supporting', relationships: '' },
+        { characterId: 'id:' + '周砧', name: '周砧', role: 'supporting', relationships: '' },
       ]} />,
     ))
 
@@ -309,7 +309,7 @@ describe('RelationshipGraph readable theme text', () => {
 
     await act(async () => root.render(
       <RelationshipGraph characters={[{
-        name: '林墨',
+        characterId: 'id:' + '林墨', name: '林墨',
         role: 'antagonist',
         relationships: '',
       }]} />,
@@ -339,11 +339,11 @@ describe('RelationshipGraph readable theme text', () => {
     await act(async () => root.render(
       <RelationshipGraph characters={[
         {
-          name: '林墨',
+          characterId: 'id:' + '林墨', name: '林墨',
           role: 'protagonist',
           relationships: JSON.stringify([{ target: '周砧', relation: '共同追查' }]),
         },
-        { name: '周砧', role: 'supporting', relationships: '' },
+        { characterId: 'id:' + '周砧', name: '周砧', role: 'supporting', relationships: '' },
       ]} />,
     ))
 
@@ -387,10 +387,10 @@ describe('RelationshipGraph readable theme text', () => {
 
     await act(async () => root.render(
       <RelationshipGraph characters={[
-        { name: '主角', role: 'protagonist', relationships: '' },
-        { name: '反派', role: 'antagonist', relationships: '' },
-        { name: '配角', role: 'supporting', relationships: '' },
-        { name: '路人', role: 'minor', relationships: '' },
+        { characterId: 'id:' + '主角', name: '主角', role: 'protagonist', relationships: '' },
+        { characterId: 'id:' + '反派', name: '反派', role: 'antagonist', relationships: '' },
+        { characterId: 'id:' + '配角', name: '配角', role: 'supporting', relationships: '' },
+        { characterId: 'id:' + '路人', name: '路人', role: 'minor', relationships: '' },
       ]} />,
     ))
 

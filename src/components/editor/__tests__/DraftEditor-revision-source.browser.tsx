@@ -98,7 +98,7 @@ beforeEach(async () => {
     if (channel === 'db:draft-get-full') return { id: 7, content: CURRENT }
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -125,7 +125,7 @@ beforeEach(async () => {
       id: 'draft-7',
       name: 'Chapter 1',
       type: 'chapter',
-      filePath: 'vela://draft/7',
+      filePath: 'ai-novel://draft/7',
       content: CURRENT,
       savedContent: CURRENT,
       dirty: false,
@@ -143,7 +143,7 @@ beforeEach(async () => {
   await act(async () => root.render(
     <DraftEditor
       tabId="draft-7"
-      filePath="vela://draft/7"
+      filePath="ai-novel://draft/7"
       content={CURRENT}
       projectKey={PROJECT_PATH}
     />,
@@ -153,7 +153,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   setActiveProjectSessionContext(null)
   useEditorStore.getState().clearTabs()
   useEditorStore.setState(originalEditorState)
@@ -186,13 +186,13 @@ describe('DraftEditor revision source binding', () => {
     const tabs = [
       {
         id: 'draft-7', name: 'Chapter 1', type: 'chapter' as const,
-        filePath: 'vela://draft/7', content: firstContent, savedContent: SOURCE,
+        filePath: 'ai-novel://draft/7', content: firstContent, savedContent: SOURCE,
         dirty: true, draftId: 7, draftStatus: 'draft' as const, chapterNumber: 1,
         projectKey: PROJECT_PATH, projectSessionLease: PROJECT_SESSION.leaseId, contentRevision: 1,
       },
       {
         id: 'draft-8', name: 'Chapter 2', type: 'chapter' as const,
-        filePath: 'vela://draft/8', content: secondContent, savedContent: '第二章旧稿。',
+        filePath: 'ai-novel://draft/8', content: secondContent, savedContent: '第二章旧稿。',
         dirty: true, draftId: 8, draftStatus: 'draft' as const, chapterNumber: 2,
         projectKey: PROJECT_PATH, projectSessionLease: PROJECT_SESSION.leaseId, contentRevision: 1,
       },
@@ -220,11 +220,11 @@ describe('DraftEditor revision source binding', () => {
     })
 
     await act(async () => root.render(
-      <DraftEditor key="draft-7" tabId="draft-7" filePath="vela://draft/7" content={firstContent} projectKey={PROJECT_PATH} />,
+      <DraftEditor key="draft-7" tabId="draft-7" filePath="ai-novel://draft/7" content={firstContent} projectKey={PROJECT_PATH} />,
     ))
     useEditorStore.getState().setActiveTab('draft-8')
     await act(async () => root.render(
-      <DraftEditor key="draft-8" tabId="draft-8" filePath="vela://draft/8" content={secondContent} projectKey={PROJECT_PATH} />,
+      <DraftEditor key="draft-8" tabId="draft-8" filePath="ai-novel://draft/8" content={secondContent} projectKey={PROJECT_PATH} />,
     ))
 
     await act(async () => saveDirtyEditorChangesForExit(PROJECT_PATH))

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 
 import { useLocaleStore } from '../locale-store'
 import { useProjectStore } from '../project-store'
@@ -33,6 +33,18 @@ function definition(
 }
 
 beforeEach(() => {
+  // 工作流夹具显式提供桌面桥接；未知调用仍拒绝，避免掩盖真实 IPC 缺失。
+  vi.stubGlobal('window', {
+    aiNovelAPI: {
+      invoke: vi.fn(async (channel: string) => {
+        if (channel === 'skills:list-user') return []
+        if (channel === 'fs:check-exists') return false
+        throw new Error(`测试未配置桌面调用：${channel}`)
+      }),
+      on: vi.fn(() => () => {}),
+      once: vi.fn(),
+    },
+  })
   useLocaleStore.setState({ locale: 'en-US' })
   useProjectStore.setState({
     currentProject: {
@@ -138,4 +150,8 @@ describe('workflow logical resource single-flight', () => {
     releaseSecond()
     await Promise.all([firstCompletion, secondCompletion])
   })
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })

@@ -32,27 +32,7 @@ function invokeForProjectSession<C extends InvokeChannel>(
  * 剥除文本中可能包含的 <think>...</think> 思维链标签
  * 用于清洗大模型在生成正文时输出的思维链，避免其被持久化写入磁盘文件
  */
-export function stripThinkingTags(text: string): string {
-  if (!text) return text
-  // 支持只有 <think> 没有闭合标签的情况。
-  const withoutPairedThinking = text.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '')
-  const orphanClosingTag = /<\/think>/i.exec(withoutPairedThinking)
-  if (!orphanClosingTag || orphanClosingTag.index === undefined) {
-    return withoutPairedThinking.replace(/<\/?think>/gi, '').trim()
-  }
-
-  const hiddenPrefix = withoutPairedThinking.slice(0, orphanClosingTag.index)
-  const visibleSuffix = withoutPairedThinking.slice(orphanClosingTag.index + orphanClosingTag[0].length)
-  // A missing opening tag is only safe to treat as hidden reasoning when its
-  // prefix identifies itself as reasoning, or when it precedes structured
-  // output. Otherwise retain ordinary prose and remove only the malformed tag.
-  const looksLikeReasoning = /^\s*(?:思考|推理|分析|reasoning|analysis)/iu.test(hiddenPrefix)
-  const hasStructuredVisibleSuffix = /^\s*(?:```(?:json)?\s*)?[{[]/iu.test(visibleSuffix)
-  const cleaned = looksLikeReasoning || hasStructuredVisibleSuffix
-    ? visibleSuffix
-    : `${hiddenPrefix}${visibleSuffix}`
-  return cleaned.replace(/<\/?think>/gi, '').trim()
-}
+export { stripDraftThinkingTags as stripThinkingTags } from '../../shared/draft-visible-text'
 
 // ===== 通用重试包装器 =====
 
@@ -212,6 +192,7 @@ export function getChapterFinalizeScope(chapterNumber: number): string {
 // ===== 流水线执行器 =====
 
 export interface PipelineOptions {
+  finalizedSource?: import('../../shared/finalized-continuity').FinalizedSourceIdentity
   /** 每步重试次数，默认 2 */
   retryCount?: number
   /** true = 只重跑失败步骤（修复模式） */
@@ -279,7 +260,8 @@ export async function runPostProcessPipeline(
       triggerSourceType: sourceType,
       triggerSourceId: sourceId,
       sourceLabel,
-      steps: steps.map(s => ({ key: s.key, label: s.label, critical: s.critical }))
+      steps: steps.map(s => ({ key: s.key, label: s.label, critical: s.critical })),
+      ...(options?.finalizedSource ? { finalizedSource: options.finalizedSource } : {})
     }, projectPath)
     if (!createRes.success || !createRes.id) {
       const error = createRes.error || text('未知错误', 'Unknown error')

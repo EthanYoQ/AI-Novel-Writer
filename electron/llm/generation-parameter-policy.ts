@@ -1,4 +1,6 @@
 import type { LLMRequest, ModelProfile } from '../../src/shared/ipc-channels'
+import type { TaskBudgetCapabilityConstraints } from '../../src/services/generation/task-budget-planner'
+import { resolveModelProfileBudgetCapabilities } from '../../src/shared/provider-presets'
 import { resolveReasoningPolicy } from '../../src/shared/reasoning-policy'
 import type {
   CreativeStrategy,
@@ -45,6 +47,34 @@ function isOfficialKimiHost(baseUrl: string): boolean {
 function validateKimiTemperature(temperature: number): void {
   if (Number.isFinite(temperature) && temperature >= 0 && temperature <= 1) return
   throw new Error('Kimi API 的 temperature 必须在 0 到 1 之间。请在模型设置中调整后重试。')
+}
+
+function positiveInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : null
+}
+
+/**
+ * Separates verified provider capability from user operational limits. The S07
+ * planner may narrow a verified limit with the latter, but never treats a large
+ * user-entered number as proof that an endpoint can serve it.
+ */
+export function resolveGenerationCapabilityConstraints(
+  model: ModelProfile,
+): TaskBudgetCapabilityConstraints {
+  const verified = resolveModelProfileBudgetCapabilities(model)
+  const modelContextWindowTokens = positiveInteger(verified?.contextWindowTokens)
+  const modelMaxOutputTokens = positiveInteger(verified?.maxOutputTokens)
+  return Object.freeze({
+    modelContextWindowTokens,
+    modelMaxOutputTokens,
+    modelContextSource: modelContextWindowTokens === null ? 'unknown' : 'verified-provider-preset',
+    modelOutputSource: modelMaxOutputTokens === null ? 'unknown' : 'verified-provider-preset',
+    userContextWindowTokens: positiveInteger(model.capabilities?.contextWindowTokens),
+    userMaxOutputTokens: positiveInteger(model.capabilities?.maxOutputTokens)
+      ?? positiveInteger(model.maxTokens),
+  })
 }
 
 /**

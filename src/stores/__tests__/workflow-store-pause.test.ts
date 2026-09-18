@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 
 import { useWorkflowStore, type WorkflowDefinition } from '../workflow-store'
 import { globalEventBus } from '../../shared/event-bus'
@@ -19,6 +19,18 @@ function frozenSession(leaseId = 'lease-test-project') {
 }
 
 beforeEach(() => {
+  // 工作流夹具显式提供桌面桥接；未知调用仍拒绝，避免掩盖真实 IPC 缺失。
+  vi.stubGlobal('window', {
+    aiNovelAPI: {
+      invoke: vi.fn(async (channel: string) => {
+        if (channel === 'skills:list-user') return []
+        if (channel === 'fs:check-exists') return false
+        throw new Error(`测试未配置桌面调用：${channel}`)
+      }),
+      on: vi.fn(() => () => {}),
+      once: vi.fn(),
+    },
+  })
   useWorkflowStore.setState({
     activeRuns: [],
     history: [],
@@ -41,6 +53,40 @@ beforeEach(() => {
 })
 
 describe('workflow pause at a safe step boundary', () => {
+  it('自动模式也等待明确采用，重复确认不会重复执行', async () => {
+    const executor = vi.fn(async () => '已采用')
+    const pending = useWorkflowStore.getState().startWorkflow({
+      runId: 'explicit-adoption', type: 'architecture_generation', title: '采用角色候选', projectPath,
+      projectSession: frozenSession(),
+      steps: [{ name: '采用', description: '确认后采用', executor, requiresConfirmation: true }],
+    })
+    await vi.waitFor(() => expect(useWorkflowStore.getState().waitingRuns['explicit-adoption']?.waitingForConfirm).toBe(true))
+    expect(executor).not.toHaveBeenCalled()
+    useWorkflowStore.getState().confirmContinue('explicit-adoption')
+    useWorkflowStore.getState().confirmContinue('explicit-adoption')
+    await pending
+    expect(executor).toHaveBeenCalledOnce()
+    expect(useWorkflowStore.getState().history[0].status).toBe('completed')
+  })
+
+  it('等待采用期间取消不会执行采用步骤', async () => {
+    const executor = vi.fn(async () => '不应执行')
+    const cancelMain = vi.fn().mockResolvedValue(undefined)
+    const pending = useWorkflowStore.getState().startWorkflow({
+      runId: 'cancel-adoption', type: 'architecture_generation', title: '采用角色候选', projectPath,
+      projectSession: frozenSession(),
+      steps: [{ name: '生成完成', description: '主运行已结束本次物理请求', executor: async (_step, context) => {
+        context.requestMainGenerationCancellation = cancelMain
+      } }, { name: '采用', description: '确认后采用', executor, requiresConfirmation: true }],
+    })
+    await vi.waitFor(() => expect(useWorkflowStore.getState().waitingRuns['cancel-adoption']?.waitingForConfirm).toBe(true))
+    useWorkflowStore.getState().cancelWorkflow('cancel-adoption')
+    useWorkflowStore.getState().confirmContinue('cancel-adoption')
+    await pending
+    expect(executor).not.toHaveBeenCalled()
+    expect(cancelMain).toHaveBeenCalledOnce()
+  })
+
   it('reuses an active caller-supplied run id without mutating the first workflow', async () => {
     let releaseFirst!: () => void
     const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve })
@@ -731,4 +777,8 @@ describe('workflow pause at a safe step boundary', () => {
     })
     expect(openResult).not.toHaveBeenCalled()
   })
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })

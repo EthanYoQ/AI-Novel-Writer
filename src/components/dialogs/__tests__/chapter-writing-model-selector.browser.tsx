@@ -76,7 +76,7 @@ function model(overrides: Partial<ModelProfile>): ModelProfile {
 }
 
 function installIpc() {
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke: vi.fn(async (channel: string, ...args: unknown[]) => {
@@ -218,7 +218,7 @@ afterEach(async () => {
   container?.remove()
   root = undefined
   container = undefined
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   setActiveProjectSessionContext(null)
   useLayoutStore.setState(originalLayoutState)
   useLLMStore.setState(originalLLMState)
