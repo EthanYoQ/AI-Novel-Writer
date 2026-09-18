@@ -1524,6 +1524,25 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     )
   })
 
+  it('stops before the provider with a clear message when required material exceeds the context capacity', async () => {
+    // 决定 1B：必需材料也受预算。装不下时命令层给出可执行提示，并把合同的裁决写进日志，
+    // 绝不静默裁掉作者资料后继续生成。
+    const runtime = fakeRuntime(() => outcome('不应到达的正文。'.repeat(200), 'stop'))
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      wordsTarget: 500,
+      coreOutline: '作者核心资料。'.repeat(3_000),
+    })
+
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toThrow('必需材料（作者资料、角色档案、后续计划）超出上下文容量')
+    expect(runtime.complete).not.toHaveBeenCalled()
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining(
+      '必需材料超出上下文容量（capacity-conflict）：author:required:budget',
+    ))
+    expectNoDraftPersistence(invoke)
+  })
+
   it('distinguishes author hard constraints from finalized state changes in English', async () => {
     let observedTask: GenerationTask | undefined
     const runtime = fakeRuntime((_attempt, task) => {
@@ -1695,7 +1714,9 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
   it.each(['## ', ''])('bounds an explicit long chapter outline with heading prefix %j while retaining author facts', async (headingPrefix) => {
     const worldbuilding = [
       '世界规则开始：月桂港每天只有一次退潮。',
-      '港务规则必须服从潮汐钟。'.repeat(1_000),
+      // 必需材料现在也受预算（决定 1B），这份世界设定会同时进入架构与作者资料，
+      // 所以长度要留在材料容量之内，同时仍然长到足以验证架构侧的精确去重。
+      '港务规则必须服从潮汐钟。'.repeat(300),
       '世界观尾部关键事实：顾舟不会游泳。',
     ].join('\n')
     const synopsis = (outsideChapterSize: number) => `# 全书总纲

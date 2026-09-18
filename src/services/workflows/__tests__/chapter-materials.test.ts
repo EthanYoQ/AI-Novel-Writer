@@ -69,15 +69,16 @@ describe('chapter materials', () => {
     ])
   })
 
-  it('keeps required author material outside the optional budget and reports optional gaps', async () => {
+  it('keeps required author material inside the budget and reports optional gaps', async () => {
+    // 决定 1B：必需材料也计入预算，先占容量；可选块只能竞争剩下的部分。
     const bundle = await assemble({
       writingLanguage: 'zh-CN',
       authorProjectFacts: ['AUTHOR_REQUIRED_SENTINEL'],
       characterProfiles: '林岚 (protagonist)',
       futurePlans: '第3章才允许交出钥匙。',
       references: [{
-        text: '过长可选资料'.repeat(30),
-        rendered: '过长可选资料'.repeat(30),
+        text: '过长可选资料'.repeat(200),
+        rendered: '过长可选资料'.repeat(200),
       }],
       finalized: [{
         chapterNumber: 1,
@@ -88,7 +89,7 @@ describe('chapter materials', () => {
       }],
       candidates: [],
       relevanceTerms: ['林岚'],
-      budgetChars: 10,
+      budgetChars: 400,
     })
 
     expect(bundle.text).toContain('AUTHOR_REQUIRED_SENTINEL')
@@ -111,12 +112,12 @@ describe('chapter materials', () => {
         chapterNumber: 1,
         draftId: 11,
         title: '拒绝',
-        content: '林岚拒绝交出钥匙。',
+        content: `林岚拒绝交出钥匙。${'很长的定稿原文'.repeat(200)}`,
         evidence: ['拒绝交出钥匙'],
       }],
       candidates: [],
       relevanceTerms: ['林岚'],
-      budgetChars: 10,
+      budgetChars: 400,
     })
 
     expect(bundle.includedFinalizedFacts).toBe(0)
@@ -133,7 +134,7 @@ describe('chapter materials', () => {
       chapterNumber: 1,
       draftId: 11,
       title: '拒绝',
-      content: '林岚拒绝交出钥匙。',
+      content: `林岚拒绝交出钥匙。${'很长的定稿原文'.repeat(100)}`,
       evidence: ['拒绝交出钥匙'],
       includeEnding: true,
       sourceIdentity: { kind: 'finalized' as const, finalizationId: 'finalization-11', contentHash: 'a'.repeat(64) },
@@ -147,7 +148,7 @@ describe('chapter materials', () => {
       finalized: [source],
       candidates: [],
       relevanceTerms: ['林岚'],
-      budgetChars: 10,
+      budgetChars: 400,
     })
 
     expect(bundle.text).not.toContain(source.content)
@@ -293,13 +294,15 @@ describe('chapter materials', () => {
         chapterNumber: 2,
         draftId: 22,
         title: '超预算',
-        content: `铜钥匙${'很长的定稿原文'.repeat(20)}`,
+        content: `铜钥匙${'很长的定稿原文'.repeat(200)}`,
         evidence: ['铜钥匙'],
         sourceStatus: 'current',
       }],
       candidates: [],
       relevanceTerms: [],
-      budgetChars: 20,
+      // 预算只够必需材料：定稿块整体被省略，因此它的段落没有进入提示词，
+      // 参考材料族的子串规则也就没有理由跳过这条参考。
+      budgetChars: 400,
     })
 
     expect(finalizedOverBudget.text).toContain('[KB保留] 铜钥匙')
@@ -356,7 +359,9 @@ describe('chapter materials', () => {
     expect(bundle.text).toContain('finalized#2:source-invalid')
   })
 
-  it('selects recent finalized blocks first but presents the selected history chronologically', async () => {
+  it('orders optional blocks by the contract and reports budget exclusions in that same order', async () => {
+    // 切换权威后不再是「新章优先」：必需材料在最前，其后按相关度、再按 sourceId 的规范全序，
+    // 预算也按同一顺序结算。这里没有相关词，所以顺序就是 sourceId 的码元顺序。
     const bundle = await assemble({
       writingLanguage: 'zh-CN',
       authorProjectFacts: [],
@@ -383,16 +388,16 @@ describe('chapter materials', () => {
         content: 'CANDIDATE_FIRST\n\nCANDIDATE_SECOND',
       }],
       relevanceTerms: [],
-      budgetChars: 6_000,
+      budgetChars: 2_000,
     })
 
-    expect(bundle.consumedFinalizedSources.map(source => source.chapterNumber)).toEqual([4, 3])
+    expect(bundle.consumedFinalizedSources.map(source => source.chapterNumber)).toEqual([3, 4])
     expect(bundle.omissions).toEqual([
-      { source: 'finalized', chapterNumber: 2, reason: 'budget' },
       { source: 'finalized', chapterNumber: 1, reason: 'budget' },
+      { source: 'finalized', chapterNumber: 2, reason: 'budget' },
     ])
     expect(bundle.includedFinalizedFacts).toBe(2)
-    const markers = ['第3章 · draft 3', '第4章 · draft 4', 'CANDIDATE_FIRST', 'REFERENCE_A', 'REFERENCE_B']
+    const markers = ['CANDIDATE_FIRST', '第3章 · draft 3', '第4章 · draft 4', 'REFERENCE_A', 'REFERENCE_B']
     const positions = markers.map(marker => bundle.text.indexOf(marker))
     expect(positions.every(position => position >= 0)).toBe(true)
     expect(positions).toEqual([...positions].sort((left, right) => left - right))

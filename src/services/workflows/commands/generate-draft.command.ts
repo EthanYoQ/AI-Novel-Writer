@@ -45,6 +45,8 @@ import type { RecoveryChapterSource } from '../../../shared/recovery-candidate'
 import { CHARACTER_STATE_TEXT_FIELDS } from '../../../shared/character-roster'
 import {
   assembleChapterMaterials,
+  ChapterMaterialCapacityError,
+  type ChapterMaterialAssembly,
   type ChapterMaterialReference,
   type FinalizedMaterialSource,
   type SelectedCandidateDraft,
@@ -634,24 +636,41 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         `The required finalized source for Chapter ${previousChapterNumber} could not be fixed, so generation stopped. Repair or re-finalize that chapter and try again.`,
       ))
     }
-    const chapterMaterials = await assembleChapterMaterials({
-      identity: { projectId: projectSession.projectId, epoch: projectSession.leaseId },
-      writingLanguage,
-      authorProjectFacts: authoredConfigFacts,
-      characterProfiles,
-      futurePlans: futureBlueprintsStr,
-      references: [
-        ...(activeThreadContext ? [{ text: activeThreadContext, rendered: activeThreadContext }] : []),
-        ...knowledgeReferences,
-      ],
-      finalized: finalizedSources,
-      candidates: selectedCandidateDrafts,
-      relevanceTerms: [
-        this.chapterInfo.title,
-        this.chapterInfo.keyEvents,
-        ...this.chapterInfo.characters,
-      ],
-    })
+    let chapterMaterials: ChapterMaterialAssembly
+    try {
+      chapterMaterials = await assembleChapterMaterials({
+        identity: { projectId: projectSession.projectId, epoch: projectSession.leaseId },
+        writingLanguage,
+        authorProjectFacts: authoredConfigFacts,
+        characterProfiles,
+        futurePlans: futureBlueprintsStr,
+        references: [
+          ...(activeThreadContext ? [{ text: activeThreadContext, rendered: activeThreadContext }] : []),
+          ...knowledgeReferences,
+        ],
+        finalized: finalizedSources,
+        candidates: selectedCandidateDrafts,
+        relevanceTerms: [
+          this.chapterInfo.title,
+          this.chapterInfo.keyEvents,
+          ...this.chapterInfo.characters,
+        ],
+      })
+    } catch (error) {
+      // 必需材料（作者资料/角色档案/后续计划）超出容量：显式失败，绝不静默裁掉。
+      if (!(error instanceof ChapterMaterialCapacityError)) throw error
+      const blocked = error.decision.decision === 'capacity-conflict'
+        ? `${error.decision.blockingSourceId}:${error.decision.blockingReason}`
+        : error.decision.remainingRequired.join('、')
+      callbacks.log(uiText(
+        `  必需材料超出上下文容量（${error.decision.decision}）：${blocked}`,
+        `  Required material exceeds the context capacity (${error.decision.decision}): ${blocked}`,
+      ))
+      throw new Error(uiText(
+        '本章必需材料（作者资料、角色档案、后续计划）超出上下文容量，已停止生成。请精简这些内容后重试。',
+        'The required material for this chapter (author facts, character profiles, future plans) exceeds the context capacity, so generation stopped. Trim it and try again.',
+      ))
+    }
     if (chapterMaterials.omissions.length > 0) {
       callbacks.log(uiText(
         `  可选材料覆盖缺口：${chapterMaterials.omissions.length} 项`,
