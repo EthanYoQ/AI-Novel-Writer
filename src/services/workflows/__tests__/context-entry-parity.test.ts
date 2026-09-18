@@ -158,7 +158,7 @@ function admissionOutcomeFrom(error: unknown): AdmissionOutcome {
 
 function frozenHistoryItem(chapterNumber: number, content: string): ReviewRevisionContext['history'][number] {
   return { draftId: chapterNumber, chapterNumber, chapterTitle: `第${chapterNumber}章`, content,
-    identity: { ...PARITY_IDENTITY, sourceId: `finalized:${chapterNumber}`, revision: chapterNumber,
+    identity: { projectId: PARITY_IDENTITY.projectId, sourceId: `finalized:${chapterNumber}`, revision: chapterNumber,
       contentHash: sha(content), provenance: 'finalized' } }
 }
 
@@ -237,9 +237,12 @@ describe('S10B-2 写/审/修共享同一套准入语义', () => {
     expect(outcome.visibleText.match(new RegExp(duplicate, 'gu'))).toHaveLength(1)
   })
 
-  it('审稿与修稿不洗白未知来源，并按同一条规则拒绝跨会话材料', () => {
-    // 写稿路径从不构造这类候选（它的来源族群全是主进程/作者自选），所以这两条只在
+  it('审稿与修稿不洗白未知来源，且同一项目的材料不再按会话租约被拒', () => {
+    // 写稿路径从不构造这类候选（它的来源族群全是主进程/作者自选），所以未知来源只在
     // 冻结身份进入的审/修路径上可达；两者必须给出**完全相同**的裁决。
+    // 会话租约**不**冻进材料身份：活跃租约由 `selectReviewRevisionMaterials` 按当前会话
+    // 补上，因此一条遗留的陈旧租约字段不会让同一项目的材料在重开后假失败
+    // （这正是 s10b-2 回归：epoch 曾是材料身份的一部分）。
     const optionalOmissions = (kind: 'review' | 'refine', over: Partial<{ provenance: 'unknown'; epoch: string }>) => {
       const frozen = frozenHistory(REQUIRED_FITS, ['可选的另一份定稿'])
       const materials = (kind === 'review' ? reviewHistoryMaterials : refineHistoryMaterials)(frozen, PARITY_IDENTITY)
@@ -249,7 +252,8 @@ describe('S10B-2 写/审/修共享同一套准入语义', () => {
     }
     expect(optionalOmissions('review', { provenance: 'unknown' })).toEqual(['unknown-provenance'])
     expect(optionalOmissions('refine', { provenance: 'unknown' })).toEqual(['unknown-provenance'])
-    expect(optionalOmissions('review', { epoch: '别的会话' })).toEqual(['invalid-source-ref'])
-    expect(optionalOmissions('refine', { epoch: '别的会话' })).toEqual(['invalid-source-ref'])
+    // 陈旧租约被忽略：准入用的是当前会话的租约，材料照常纳入。
+    expect(optionalOmissions('review', { epoch: '别的会话' })).toEqual([])
+    expect(optionalOmissions('refine', { epoch: '别的会话' })).toEqual([])
   })
 })

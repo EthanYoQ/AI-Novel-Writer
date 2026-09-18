@@ -67,7 +67,7 @@ export class RefineFromReviewCommand extends ReviewRevisionCommand {
         current,
         writingLanguage: frozen.writingLanguage,
         materials: [{
-          identity: { ...current, sourceId: `review:confirmed:${confirmation.sourceReviewId}`,
+          identity: { projectId: current.projectId, sourceId: `review:confirmed:${confirmation.sourceReviewId}`,
             revision: confirmation.sourceReviewId, contentHash: await hashAuthorText(reviewBrief),
             provenance: 'author' },
           category: 'author',

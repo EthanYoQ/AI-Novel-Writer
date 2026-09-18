@@ -26,10 +26,14 @@ export interface PrepareReviewRevisionRequest {
  * 它是**只增不减**字段。渲染层只能消费主进程给出的身份，绝不自行编造来源；
  * 缺少身份的材料不能进入上下文（必需项缺失时整体显式失败）。
  * `provenance` 用选择契约的词汇，未知来源不得被洗成 author。
+ *
+ * **它必须与会话无关**：这里绝不保存 `epoch`（会话租约）。同一项目重开后租约必然改变，
+ * 把租约冻进来源清单会让比较与准入在重开后假失败（见
+ * `generation-source-binding.ts` 跨会话比较时对 `SourceRef.epoch` 的剥离，
+ * 两者是同一条规则）。活跃租约由使用方在构造 `SourceRef` 时按当前会话补上。
  */
 export interface ReviewMaterialIdentity {
   projectId: string
-  epoch: string
   sourceId: string
   revision: number
   /** SHA-256 of the unmodified UTF-8 bytes of the material source. */

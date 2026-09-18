@@ -162,6 +162,10 @@ function materialIdentityKey(identity: { sourceId: string; revision: number; con
  * `ChapterMaterialCapacityError`（稳定错误码 `CHAPTER_MATERIAL_CAPACITY_CONFLICT`），
  * 绝不静默截断或丢掉必需材料。
  *
+ * 会话租约在这里按**当前会话**补上：冻结材料身份是会话无关的（不含 `epoch`），而
+ * `SourceRef` 必须带上活跃租约才能通过 `sameProjectEpoch`。重开同一项目后租约变化，
+ * 冻结材料仍然合法——这正是把租约放在使用点、而不是冻进来源清单的原因。
+ *
  * 本函数不读数据库、不写文件、不发请求。
  */
 export function selectReviewRevisionMaterials(input: {
@@ -173,7 +177,7 @@ export function selectReviewRevisionMaterials(input: {
 }): ReviewRevisionMaterialAdmission {
   const candidates: MaterialCandidate[] = input.materials.map(material => ({
     ref: {
-      projectId: material.identity.projectId, epoch: material.identity.epoch,
+      projectId: material.identity.projectId, epoch: input.current.epoch,
       sourceId: material.identity.sourceId, revision: material.identity.revision,
       contentHash: material.identity.contentHash,
     },
@@ -203,9 +207,10 @@ export function selectReviewRevisionMaterials(input: {
 /**
  * 没有主进程身份的历史材料一律按 `unknown` 来源对待：合同会以 `invalid-source-ref` /
  * `unknown-provenance` 排除它，必需项因此显式失败。绝不用渲染层自己编的来源顶替。
+ * 这里只给出会话无关的最小身份；活跃租约由 `selectReviewRevisionMaterials` 按当前会话补上。
  */
 export function unknownReviewMaterialIdentity(current: ChapterMaterialIdentity): ReviewMaterialIdentity {
-  return { projectId: current.projectId, epoch: current.epoch, sourceId: '', revision: 0, contentHash: '', provenance: 'unknown' }
+  return { projectId: current.projectId, sourceId: '', revision: 0, contentHash: '', provenance: 'unknown' }
 }
 
 function paragraphs(content: string): string[] {

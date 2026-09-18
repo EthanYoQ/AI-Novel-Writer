@@ -444,7 +444,7 @@ describe('审稿/修稿入口的共享准入（selectReviewRevisionMaterials）'
   const hash = (seed: string) => seed.repeat(64).slice(0, 64)
   const identity = (sourceId: string, contentHash: string,
     provenance: ReviewMaterialIdentity['provenance'] = 'finalized'): ReviewMaterialIdentity =>
-    ({ ...CURRENT, sourceId, revision: 1, contentHash, provenance })
+    ({ projectId: CURRENT.projectId, sourceId, revision: 1, contentHash, provenance })
   const material = (sourceId: string, contentHash: string, text: string,
     over: Partial<ReviewRevisionMaterial> = {}): ReviewRevisionMaterial =>
     ({ identity: identity(sourceId, contentHash), category: 'finalized-history', required: false, text, ...over })
@@ -510,10 +510,20 @@ describe('审稿/修稿入口的共享准入（selectReviewRevisionMaterials）'
     ])
   })
 
-  it('rejects material captured under a different project epoch', () => {
+  it('attaches the live session lease instead of any lease frozen into the material', () => {
+    // 冻结材料身份是会话无关的（不含 epoch）；活跃租约由 selectReviewRevisionMaterials 按
+    // **当前会话**补上。于是重开项目（租约必然改变）后同一份材料仍然合法：一条遗留的陈旧
+    // 租约字段不再把材料误判成 `invalid-source-ref`（这正是 s10b-2 回归）。
+    const staleLease = Object.assign(identity('finalized:1', hash('a')), { epoch: '别的会话' })
+    const admission = select([material('finalized:1', hash('a'), '别的会话里的历史', { identity: staleLease })])
+    expect(admission.admitted.map(item => item.identity.sourceId)).toEqual(['finalized:1'])
+    expect(admission.selection.omissions).toEqual([])
+  })
+
+  it('still rejects material captured under a different project', () => {
     const admission = select([
-      material('finalized:1', hash('a'), '别的会话里的历史',
-        { identity: { ...identity('finalized:1', hash('a')), epoch: '别的会话' } }),
+      material('finalized:1', hash('a'), '别的项目里的历史',
+        { identity: { ...identity('finalized:1', hash('a')), projectId: '别的项目' } }),
     ])
     expect(admission.admitted).toEqual([])
     expect(admission.selection.omissions).toEqual([

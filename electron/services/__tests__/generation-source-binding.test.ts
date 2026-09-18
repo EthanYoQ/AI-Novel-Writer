@@ -5,7 +5,13 @@ import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema';
+import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../../migrations/desktop-registry';
+import { migrateSchema } from '../../migrations/runner';
+import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter';
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding, compareGenerationSourceBindings, type GenerationSourceBindingInput } from '../generation-source-binding';
+import { captureReviewRevisionContext } from '../review-revision-context';
+import { textHash } from '../../repositories/generation-run-repository';
+import type { PrepareReviewRevisionRequest } from '../../../src/shared/review-revision-generation';
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3');
 const cleanups: (() => void)[] = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0))
@@ -90,6 +96,30 @@ describe('main rebuilt generation sources', () => {
     });
     it('reads exact selected prose and current finalized authority without unselected drafts or private paths', () => { const f = fixture(), result = f.build(); expect(result.materials.find(item => item.ref.sourceId === 'draft:1')?.text).toBe('原文\r\n汉字。'); expect(result.materials.some(item => item.text === '未选草稿')).toBe(false); expect(result.binding.sourceRefs.map(ref => ref.sourceId)).toEqual(['project-core:main', 'blueprint:2', 'draft:1', 'finalized:3:final-3']); expect(JSON.stringify(result.binding.sourceManifest)).not.toContain(f.root); });
     it('keeps binding hashes stable across epoch and timestamp/log-only changes', () => { const f = fixture(), a = f.build(); f.db.exec("UPDATE project_core SET updated_at='later';UPDATE drafts SET updated_at='later';UPDATE blueprints SET notes='cache',notes_updated_at='later'"); const b = rebuildGenerationSourceBinding(f.deps, a.binding, 'next'); expect(b.binding.epoch).toBe('next'); expect(compareGenerationSourceBindings(a.binding, b.binding)).toBe(true); });
+    // 回归（s10b-2）：冻结的审修上下文绝不携带会话租约，否则重开项目（新 epoch）后重建
+    // binding 会以 GENERATION_REVIEW_CONTEXT_CHANGED 假失败，审稿/修稿的续跑随之被破坏。
+    it('resumes a review/refine run after a reopen because the frozen review context carries no session lease', () => {
+        const f = fixture();
+        // 捕获走现代 schema（审修材料来自 contents/drafts/characters 等表），
+        // 这里只把已有的 legacy 基线库迁移到当前桌面版本。
+        migrateSchema(new SqliteSchemaAdapter(f.db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION);
+        const request: PrepareReviewRevisionRequest = { operation: 'review-chapter', draftId: 1,
+            expectedDraft: { chapterNumber: 2, version: 1, status: 'draft', contentHash: textHash('原文\r\n汉字。') },
+            authorInputs: [], uiLocale: 'zh-CN' };
+        // 主进程在**会话-1** 捕获；项目 id 与会话无关，租约不进身份。
+        const reviewRevisionContext = captureReviewRevisionContext(f.db, request, f.input.projectId);
+        expect(reviewRevisionContext.history[0]!.identity).toMatchObject({ projectId: 'p', sourceId: 'finalized:3', revision: 3, provenance: 'finalized' });
+        expect(reviewRevisionContext.history[0]!.identity).not.toHaveProperty('epoch');
+        const input: GenerationSourceBindingInput = { ...f.input, operation: 'review-chapter', chapterNumber: 2,
+            selectedDraftIds: [1], selectedFinalizedDraftIds: [], promptKeys: ['consistency_check'], skillStages: ['review'],
+            reviewRevisionContext };
+        const original = buildGenerationSourceBinding(f.deps, input);
+        // 项目重开：活跃租约改变（会话-2）。重建必须成功，且冻结上下文逐字节不变。
+        const resumed = rebuildGenerationSourceBinding(f.deps, original.binding, 'next-epoch');
+        expect(resumed.binding.epoch).toBe('next-epoch');
+        expect(resumed.binding.sourceManifest.reviewRevisionContext).toEqual(reviewRevisionContext);
+        expect(compareGenerationSourceBindings(original.binding, resumed.binding)).toBe(true);
+    });
     it.each(['core', 'brief', 'draft', 'model', 'policy', 'output'])('detects changed %s before resume', kind => { const f = fixture(), a = f.build(); if (kind === 'core')
         f.db.exec("UPDATE project_core SET global_guidance='changed'"); if (kind === 'brief')
         f.db.exec("UPDATE blueprints SET user_guidance='changed'"); if (kind === 'draft')

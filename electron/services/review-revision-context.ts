@@ -2,7 +2,6 @@ import type Database from 'better-sqlite3'
 import { isDeepStrictEqual } from 'node:util'
 import type { ExpectedDraftSource, NovelConfig } from '../../src/shared/ipc-channels'
 import type { PrepareReviewRevisionRequest, ReviewMaterialIdentity, ReviewRevisionContext } from '../../src/shared/review-revision-generation'
-import type { ProjectEpoch } from '../../src/shared/source-ref'
 import { parseHumanConfirmedReviewSnapshot, serializeHumanConfirmedReviewSnapshot } from '../../src/shared/human-confirmed-review'
 import { freezeChapterGoals } from '../../src/shared/chapter-goal-review'
 import { findBlueprintContinuityRisks } from '../../src/shared/consistency-preflight'
@@ -27,9 +26,15 @@ export function reviewRevisionRequest(context: ReviewRevisionContext): PrepareRe
     ...(context.confirmation ? { reviewSourceId: context.confirmation.reviewSourceId, confirmedReviewContent: context.confirmation.content } : {}) }
 }
 
-/** Captured DB is the authority. The returned material is also re-read on dispatch/resume/save. */
+/**
+ * Captured DB is the authority. The returned material is also re-read on dispatch/resume/save.
+ *
+ * Only the project id enters the captured identity: the session lease (`epoch`) is deliberately
+ * NOT an input, so the result is a pure function of `(db, request)` and therefore identical across
+ * a reopen. The live lease is attached to the `SourceRef` at the point of use instead.
+ */
 export function captureReviewRevisionContext(db: Database.Database, request: PrepareReviewRevisionRequest,
-  identity: ProjectEpoch): ReviewRevisionContext {
+  projectId: string): ReviewRevisionContext {
   if (!request || Object.keys(request).some(key => !['operation', 'draftId', 'expectedDraft', 'reviewSourceId', 'confirmedReviewContent', 'authorInputs', 'uiLocale'].includes(key))
     || !REVIEW_REVISION_OPERATIONS.includes(request.operation) || !Number.isSafeInteger(request.draftId) || request.draftId < 1
     || !['zh-CN', 'en-US'].includes(request.uiLocale) || !request.expectedDraft
@@ -86,7 +91,8 @@ export function captureReviewRevisionContext(db: Database.Database, request: Pre
       const projection = projections.find(item => item.draftId === row.id && item.sourceStatus === 'current' && isDeepStrictEqual(item.source, sourceIdentity))
       // 只增不减：身份走共享选择契约，不改变任何现有消费方读取的字段。
       // 有终稿 outbox 凭据的是已证明的定稿；否则是旧版定稿（legacy），两者都不是 author。
-      const materialIdentity: ReviewMaterialIdentity = { projectId: identity.projectId, epoch: identity.epoch,
+      // 身份**不含会话租约**：租约由使用方按当前会话补上，重开后同一份材料身份逐字段不变。
+      const materialIdentity: ReviewMaterialIdentity = { projectId,
         sourceId: `finalized:${row.id}`, revision: row.id, contentHash,
         provenance: row.finalization_id ? 'finalized' : 'legacy' }
       return { draftId: row.id, chapterNumber: row.chapter_number, chapterTitle: row.chapter_title ?? '', content: row.body,

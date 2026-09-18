@@ -77,7 +77,7 @@ export class ReviewRevisionRuntimeFixture {
         authorInputs: request.authorInputs, characterStates: characters.map(c => `${c.name} (${c.role || 'unknown'})`).join('\n'),
         worldbuilding: core.worldbuilding || '', history: projections.map(p => ({ draftId: p.draftId,
           chapterNumber: p.chapterNumber, chapterTitle: p.chapterTitle, content: p.chapterNotes, projection: p,
-          identity: { projectId: project.id, epoch: project.sessionLease ?? '', sourceId: `finalized:${p.draftId}`,
+          identity: { projectId: project.id, sourceId: `finalized:${p.draftId}`,
             revision: p.draftId, contentHash: digest(p.chapterNotes), provenance: 'finalized' as const } })),
         blueprints: blueprints.filter(b => b.chapterNumber >= source.chapterNumber && b.chapterNumber <= source.chapterNumber + 5),
         frozenGoals: freezeChapterGoals(source.chapterNumber, blueprints.find(b => b.chapterNumber === source.chapterNumber)?.keyEvents ?? null),

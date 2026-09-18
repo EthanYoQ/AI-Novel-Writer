@@ -114,7 +114,7 @@ export class ReviewRevisionGeneration {
   prepare(request: PrepareReviewRevisionRequest): PreparedReviewRevisionContext {
     this.assertCurrent()
     return this.db.transaction(() => {
-      const context = captureReviewRevisionContext(this.db, request, this.scope)
+      const context = captureReviewRevisionContext(this.db, request, this.scope.projectId)
       return this.remember(context, this.parent(context))
     })()
   }
@@ -137,7 +137,7 @@ export class ReviewRevisionGeneration {
       || !isDeepStrictEqual(selection.authorInputs, [{ id: 'review-revision-context', text: JSON.stringify(context) }])
       || selection.parentRootActionId !== prepared.parentRootActionId && context.operation === 'refine-from-review'
       || prepared.modelId && selection.modelId !== prepared.modelId) throw new Error('GENERATION_REVIEW_CONTEXT_MISMATCH')
-    if (!isDeepStrictEqual(context, captureReviewRevisionContext(this.db, reviewRevisionRequest(context), this.scope))
+    if (!isDeepStrictEqual(context, captureReviewRevisionContext(this.db, reviewRevisionRequest(context), this.scope.projectId))
       || !isDeepStrictEqual(this.parent(context), prepared.parentRootActionId ? { parentRootActionId: prepared.parentRootActionId, modelId: prepared.modelId } : {}))
       throw new Error('GENERATION_REVIEW_CONTEXT_CHANGED')
     return structuredClone(prepared)
