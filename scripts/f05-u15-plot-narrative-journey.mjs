@@ -361,7 +361,7 @@ async function main() {
   assert.equal(git('rev-parse', 'HEAD'), executionHead, 'HEAD changed during run')
   const receipt = { outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U15_A06_A07_PACKAGED_V3_SLICE',
     fullActionQualification: false, testedSha, executionHead, changedPaths, driverSha256,
-    packageReuseReason: 'Fixed history-3 package hashes match and product inputs are unchanged since the build SHA.',
+    packageReuseReason: 'Fixed package hashes match and product inputs are unchanged since the build SHA.',
     packageDir,
     artifact: { executableSha256: sha256(executablePath), asarSha256: sha256(asarPath) },
     evidenceLevel: 'packaged-electron+controlled-provider', shell: 'writer-v3',
