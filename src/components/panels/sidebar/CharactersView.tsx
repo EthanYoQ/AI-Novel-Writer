@@ -2,20 +2,26 @@
  * CharactersView — 角色管理列表视图
  */
 
-import { useMemo, useState } from 'react'
-import { Users, RefreshCw, Plus, Search } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Users, RefreshCw, Plus, Search, UserPlus } from 'lucide-react'
 import { useProjectStore } from '../../../stores/project-store'
 import { useCharacterStore } from '../../../stores/character-store'
 import { useEditorStore } from '../../../stores/editor-store'
 import { Button } from '../../ui/Button'
 import { Input } from '../../ui/Input'
 import { EmptyState } from '../../ui/EmptyState'
+import PendingDot from '../../ui/PendingDot'
 import { cn } from '../../../lib/utils'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useUiVersionStore, isModernShell } from '../../../stores/ui-version-store'
 import { openRailLandingPage } from '../../layout/v2/rail-routing'
 import { getCharacterRoleLabels, normalizeCharacterRole, type CharacterRole } from '../../../shared/character-role'
 import { CharacterCardImportButton } from '../../characters/CharacterCardImportButton'
+import CharacterCandidateReviewDialog from '../../characters/CharacterCandidateReviewDialog'
+import { useCharacterCandidateStore } from '../../../stores/character-candidate-store'
+import { usePendingUnread } from '../../../stores/pending-badge-store'
+import { captureProjectSession, isProjectSessionCurrent } from '../../project-session-gate'
+import { globalEventBus } from '../../../shared/event-bus'
 
 /**
  * 角色分区的固定顺序：主角 → 反派 → 配角 → 龙套。
@@ -63,6 +69,50 @@ export default function CharactersView() {
   const filteredCharacters = normalizedQuery
     ? visibleCharacters.filter(character => character.name.toLocaleLowerCase().includes(normalizedQuery))
     : visibleCharacters
+
+  /**
+   * 正文新角色的「待确认」队列。
+   *
+   * 定稿时模型提了名、但名单里还没有的角色会落在这里等人裁决（先生 2026-09-21
+   * 定的形态）。队列挂在项目上，所以切项目要重新读一次；读取用的会话是当场
+   * 冻结的，晚到的旧结果不会回填。
+   */
+  const [showCandidateReview, setShowCandidateReview] = useState(false)
+  const candidates = useCharacterCandidateStore(s => s.candidates)
+  const loadCandidates = useCharacterCandidateStore(s => s.load)
+  const projectSession = useMemo(() => captureProjectSession(currentProject), [currentProject])
+  /**
+   * 「有新的等着确认」的小红点（先生 2026-09-21）。
+   *
+   * 口径见 pending-badge-store：没见过的 id 才算未读，作者点开队列即消点。
+   * 点开的那一下顺手记一笔，所以红点的熄灭与「他确实看见了」是同一个动作。
+   */
+  const candidateIds = useMemo(() => candidates.map(candidate => String(candidate.id)), [candidates])
+  const { unread: hasUnreadCandidates, markSeen: markCandidatesSeen } = usePendingUnread(
+    currentProject?.path ?? null,
+    'character-candidates',
+    candidateIds,
+  )
+  useEffect(() => {
+    if (!currentProject || !projectSession) return
+    void loadCandidates(currentProject.path, projectSession)
+  }, [currentProject, projectSession, loadCandidates])
+
+  /**
+   * 定稿跑完，自动再看一眼队列。
+   *
+   * 定稿是后台任务，跑完时角色页往往正开着 —— 不主动刷这一次的话，作者得切走
+   * 再切回来才会发现「待确认」按钮冒了出来。先生要的是「入口给在角色页」，
+   * 那就不能让他满世界找入口。
+   */
+  useEffect(() => {
+    if (!currentProject || !projectSession) return
+    return globalEventBus.on('WORKFLOW_COMPLETE', (payload) => {
+      if (payload.type !== 'chapter_creation') return
+      if (!isProjectSessionCurrent(projectSession)) return
+      void loadCandidates(currentProject.path, projectSession)
+    })
+  }, [currentProject, projectSession, loadCandidates])
 
   /**
    * 先生：列表按「主角 → 反派 → 配角 → 龙套」分四个区，区内按姓名拼音 a→z。
@@ -159,12 +209,61 @@ export default function CharactersView() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* 顶部操作栏 */}
-      <div className="flex items-center justify-between px-3 h-9 flex-shrink-0 border-b border-[var(--color-border)]">
-        <span className="text-xs font-medium text-[var(--color-text)] flex items-center gap-1">
-          <Users size={13} />
-          {text(`角色列表（${visibleCharacters.length}）`, `Characters (${visibleCharacters.length})`)}
+      <div className="flex items-center px-3 h-9 flex-shrink-0 border-b border-[var(--color-border)]">
+        <span className="text-xs font-medium text-[var(--color-text)] flex items-center gap-0.5 min-w-0">
+          <Users size={13} className="flex-shrink-0" />
+          <span className="truncate">
+            {text(`角色列表（${visibleCharacters.length}）`, `Characters (${visibleCharacters.length})`)}
+          </span>
         </span>
-        <div className="flex items-center gap-0.5">
+        {/*
+          先生 2026-09-21：「在角色页给个『待确认』入口，一键采纳即建档、忽略即丢弃。」
+          队列为空时这颗按钮不出现 —— 平时它不该在那儿占位置、添噪音；
+          定稿后正文里真冒出了新角色，它自己带着数字跳出来。
+
+          先生（本轮报障）：「待选入口在角色管理栏中位置不好，挤压了角色列表这几个字。」
+          于是它从右侧那颗「操作按钮组」里搬出来，**紧贴标题右侧**摆成一枚小字入口 ——
+          形态照抄便利贴的「待选箱」（StickyNotesGroup 的同名按钮）：
+          0.7rem 小字 + 11px 图标 + 数字，鼠标悬停才染朱砂色。
+          右侧那一组（导入 / 刷新 / 新建）用 ml-auto 单独靠右，两边不再互相抢宽度。
+        */}
+        {candidates.length > 0 && (
+          <button
+            type="button"
+            className="relative flex-shrink-0 flex items-center gap-0.5 rounded px-0.5 py-0.5 text-[0.7rem] ml-0.5"
+            style={{ color: 'var(--color-text-secondary)' }}
+            title={text(
+              hasUnreadCandidates
+                ? `定稿时在正文里发现、名单里还没有的 ${candidates.length} 名新角色，等你裁决（有新的）`
+                : `定稿时在正文里发现、名单里还没有的 ${candidates.length} 名新角色，等你裁决`,
+              hasUnreadCandidates
+                ? `${candidates.length} new characters found in your finalized prose, pending your review (new)`
+                : `${candidates.length} new characters found in your finalized prose, pending your review`,
+            )}
+            onMouseEnter={event => { event.currentTarget.style.color = 'var(--color-accent)' }}
+            onMouseLeave={event => { event.currentTarget.style.color = 'var(--color-text-secondary)' }}
+            onClick={() => {
+              // 打开即「看过了」：红点与「他确实看见了」是同一个动作（见 pending-badge-store）。
+              markCandidatesSeen()
+              setShowCandidateReview(true)
+            }}
+          >
+            <UserPlus size={11} />
+            {text('待确认', 'Pending')}
+            <span className="tabular-nums">{candidates.length}</span>
+            {/* 红点绝对定位 —— 这一行在 v3 皮肤下只剩 1px 余量，不能再占宽度 */}
+            {hasUnreadCandidates && <PendingDot />}
+          </button>
+        )}
+        {/*
+          右侧那一组：导入 / 刷新 / 新建。
+          `ml-auto` 把它单独推到最右 —— 于是「入口紧贴标题」与「操作按钮靠右」
+          两件事互不干扰，中间多出来的宽度全部落在 auto margin 上。
+          v3「时尚杂志」皮肤把侧栏字号整体放大（标题从 64px 长到 79px），
+          这一行因此很紧：三个按钮之间不再留 gap（各 24px 的图标按钮本身够宽，
+          紧挨着仍好点），把省下的 4px 让给标题。
+        */}
+        <div className="ml-auto flex items-center gap-0">
           <CharacterCardImportButton projectKey={currentProject.path} compact disabled={identityBusy || !dataReady} />
           <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => load(currentProject.path)} disabled={identityBusy || loadingProjectKey !== null} title={text('刷新列表', 'Refresh list')}>
             <RefreshCw size={14} strokeWidth={2} />
@@ -208,6 +307,12 @@ export default function CharactersView() {
           </div>
         )}
       </div>
+      <CharacterCandidateReviewDialog
+        open={showCandidateReview}
+        onClose={() => setShowCandidateReview(false)}
+        projectPath={currentProject.path}
+        projectSession={projectSession}
+      />
     </div>
   )
 }

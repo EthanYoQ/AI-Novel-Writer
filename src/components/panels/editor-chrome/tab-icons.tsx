@@ -17,6 +17,7 @@ import {
   Network,
   Settings,
   Shield,
+  StickyNote,
   Users,
 } from 'lucide-react'
 import type { EditorTab } from '../../../stores/editor-store'
@@ -47,6 +48,8 @@ export function EditorTabIcon({ type, size = 12 }: { type: EditorTab['type']; si
       return <Library {...props} />
     case 'arch-file':
       return <Shield {...props} />
+    case 'sticky-note':
+      return <StickyNote {...props} />
     case 'outline':
       return <ListTree {...props} />
     default:

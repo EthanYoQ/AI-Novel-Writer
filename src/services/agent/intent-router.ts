@@ -28,8 +28,17 @@ export interface SlashCommand {
 
 /** @ 提及目标 */
 export interface MentionTarget {
-  /** 提及类型 */
-  type: 'chapter' | 'character' | 'architecture' | 'blueprint' | 'knowledge' | 'file' | 'world-setting'
+  /**
+   * 提及类型。
+   *
+   * `draft` / `manuscript`（具体某一稿 / 某一章定稿）**刻意不在
+   * `getAllMentionTargets` 的静态列表里** —— 它们是「便利贴 · AI 灵感」专用的
+   * 引用目标，由那个弹窗通过 `extraRootTargets` 传进来。
+   *
+   * 为什么不加进静态列表：助手侧的 @ 菜单会照单全收，而助手**没有读草稿的工具**，
+   * `mentionsToToolCalls` 只能把它们落到 default 分支，等于给作者一个点了没用的项。
+   */
+  type: 'chapter' | 'character' | 'architecture' | 'blueprint' | 'knowledge' | 'file' | 'world-setting' | 'draft' | 'manuscript'
   /** 显示名称 */
   displayName: string
   /** 提及值（传递给 Tool） */

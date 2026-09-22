@@ -1,4 +1,4 @@
-import { X, FileText, Settings, Users, Network, ArrowLeftRight, MoreHorizontal, BookOpen, History, ClipboardCheck, Globe, Compass, Save, ChevronLeft, ChevronRight, PenTool, Check } from 'lucide-react'
+import { X, FileText, Settings, Users, Network, ArrowLeftRight, MoreHorizontal, BookOpen, History, ClipboardCheck, Globe, Compass, Save, ChevronLeft, ChevronRight, PenTool, Check, StickyNote } from 'lucide-react'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { ContextMenu, type ContextMenuEntry } from '../ui/ContextMenu'
 import {
@@ -42,6 +42,7 @@ import { savePhysicalChapterForSession } from './editor-area-physical-save'
 import EditorTabStripV2 from './editor-chrome/EditorTabStripV2'
 import { syncRailForTab } from '../layout/v2/rail-routing'
 import { sameProjectPathKey } from '../../shared/project-session-context'
+import StickyNoteEditor from '../editor/StickyNoteEditor'
 import '../editor/novel-editor.css'
 
 // ─── 正文章节编辑器包装层（含字数信息栏） ─────────────────────────────────────────────
@@ -133,13 +134,21 @@ function ProseEditorWrapper({
         </div>
       </div>
 
-      {/* 编辑器主体 */}
-      <div className="flex-1 overflow-hidden">
+      {/*
+        编辑器主体 —— 与草稿的 DraftEditor 逐项对齐（先生：完全一样处理）。
+
+        原先这里有三处与草稿不同，正是不写字的祸根：
+          · 缺 `relative`：CodeMirror 内部那层 `absolute inset-0` 找不到定位祖先；
+          · 给 CodeMirrorEditor 传了 key：让它随 tab 身份反复重建；
+          · 没显式传 editable：与草稿走的是两条分支。
+        现在三项都照草稿来 —— 草稿怎么写，这里就怎么写。
+      */}
+      <div className="flex-1 overflow-hidden relative">
         <CodeMirrorEditor
-          key={tab.id}
           mode="prose"
           content={tab.content ?? ''}
           filePath={tab.filePath}
+          editable
           hideStatusBar
           onCharCountChange={setWordCount}
           onChange={(text) => {
@@ -624,6 +633,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
     if (type === 'world-setting') return <Compass size={14} />
     if (type === 'version-history') return <History size={14} />
     if (type === 'review-report') return <ClipboardCheck size={14} />
+    if (type === 'sticky-note') return <StickyNote size={14} />
     return <FileText size={14} />
   }
 
@@ -880,6 +890,23 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
         )}
         {activeTab?.type === 'config' && activeTab.projectKey && (
           <NovelConfigEditor key={activeTab.id} projectKey={activeTab.projectKey} />
+        )}
+        {/*
+          便利贴：先生 2026-09-20 定的做法 —— 「看下草稿箱的编辑器怎么处理的，
+          我们完全一样处理」。所以它由 StickyNoteEditor 承载，那个组件逐行照
+          DraftEditor 的编辑器部分写（顶栏结构 / 编辑区 relative / 保存按钮常驻
+          / CodeMirror 不传 key 且显式 editable），只剥掉修稿审稿定稿这些会写
+          创作事实的按钮 —— 便利贴不参与任何创作链路。
+        */}
+        {activeTab?.type === 'sticky-note'
+          && activeTab.projectKey === currentProject.path
+          && activeTab.filePath && (
+          <StickyNoteEditor
+            key={activeTab.id}
+            tabId={activeTab.id}
+            filePath={activeTab.filePath}
+            content={activeTab.content ?? ''}
+          />
         )}
         {activeTab?.type === 'outline' && (
           <div className="h-full overflow-y-auto p-6">

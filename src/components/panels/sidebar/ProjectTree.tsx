@@ -5,11 +5,12 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { ChevronRight, ChevronDown, RefreshCw, CheckCircle2, Circle, FolderOpen, Copy, FolderTree, Trash2 } from 'lucide-react'
 import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import { useDraftStore } from '../../../stores/draft-store'
+import { useStickyNoteStore } from '../../../stores/sticky-note-store'
 import { useEditorStore } from '../../../stores/editor-store'
 import { useLayoutStore } from '../../../stores/layout-store'
 import { ipc } from '../../../services/ipc-client'
@@ -33,10 +34,12 @@ import { showSidebarMenu } from './sidebar-menu'
 import { createProjectArchTabId } from '../../editor/arch-file-refresh-policy'
 import DraftBoxGroup from './DraftBoxGroup'
 import ManuscriptGroup from './ManuscriptGroup'
+import StickyNotesGroup from './StickyNotesGroup'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useUiVersionStore, isModernShell } from '../../../stores/ui-version-store'
 import { LatestRequestGate } from '../../editor/latest-request-gate'
 import { beginProjectTreeIdentityTransition } from './project-tree-refresh-policy'
+import { useActiveTabFilePath, useActiveTabType } from './sidebar-active-entry'
 import {
   captureProjectSession,
   isProjectSessionCurrent,
@@ -151,6 +154,14 @@ export default function ProjectTree() {
   const currentProject = useProjectStore(s => s.currentProject)
   const projectSessionEpoch = useProjectStore(s => s.projectSessionEpoch)
   const text = useLocaleStore(s => s.text)
+  /**
+   * 侧栏「正在看的那一行」的统一依据（见 sidebar-active-entry.ts）。
+   *
+   * 先生 2026-09-20 连测两轮：「小说配置也是没反应的」「故事架构下面的那些标题内容
+   * 也是没反应的」—— 查证：这些行**当时一行都没有选中态代码**，不是样式被谁压掉。
+   */
+  const activeTabType = useActiveTabType()
+  const activeFilePath = useActiveTabFilePath()
 
   // refreshFileTree / loadAllDrafts 在 refreshAll 内通过 getState() 调用
   // 只订阅 activeRuns
@@ -189,6 +200,13 @@ export default function ProjectTree() {
         useDraftStore.getState().loadAllDrafts(projectPath, projectSession),
         checkArchStatus(projectSession),
         getBlueprintCount(projectSession),
+        /**
+         * 便利贴跟着项目走：换一本书就换一个本子。
+         *
+         * 用 loadIfNeeded 而不是 load —— refreshAll 会被工作流进度、资源刷新
+         * 等事件频繁触发（80ms 防抖），直接 load 会把 IPC 与 loading 闪烁放大。
+         */
+        useStickyNoteStore.getState().loadIfNeeded(),
       ])
       if (
         !refreshRequestGate.current.isLatest(requestId)
@@ -422,6 +440,7 @@ export default function ProjectTree() {
         iconName="book-open"
         label={text('小说配置', 'Novel configuration')}
         emphasize
+        active={activeTabType === 'config'}
         desc={text('基础参数与写作要求', 'Core parameters and writing guidance')}
         badge={configDone ? text('已完成', 'Complete') : text('待配置', 'Pending')}
         badgeDone={configDone}
@@ -439,7 +458,18 @@ export default function ProjectTree() {
 
       {/* 2. 故事架构 — 点击标题行打开编辑器，子文件仍可单独点开 */}
       <JourneyStep state={archState} label={text('故事架构', 'Story architecture')} connect tourId="journey-arch">
-      <WorldBuildingGroup archStatus={archStatus} archDone={archDone} onCleared={refreshAll} />
+      <WorldBuildingGroup
+        archStatus={archStatus}
+        archDone={archDone}
+        onCleared={refreshAll}
+        /**
+         * 组行亮有两种情形：打开的是故事架构编辑器**本身**，
+         * 或者打开的是它下面**某一份架构文件** —— 后者同样「人在这块里」，
+         * 组行不亮就等于这一层没说话。
+         */
+        active={activeTabType === 'world-building' || activeTabType === 'arch-file'}
+        activeFilePath={activeFilePath}
+      />
       </JourneyStep>
 
       {/* 3. 章节蓝图 — 点击打开编辑器页 */}
@@ -448,6 +478,7 @@ export default function ProjectTree() {
         iconName="layout-list"
         label={text('章节蓝图', 'Chapter blueprints')}
         emphasize
+        active={activeTabType === 'chapter-card'}
         desc={text('AI 生成的章节目录，可编辑', 'Editable AI-generated chapter plans')}
         badge={blueprintCount > 0 ? text(`${blueprintCount}/${nc.totalChapters} 章`, `${blueprintCount}/${nc.totalChapters} chapters`) : text('待生成', 'Pending')}
         badgeColor={
@@ -474,6 +505,7 @@ export default function ProjectTree() {
       <LeafItem
         iconName="git-branch"
         label={text('伏笔', 'Foreshadowing')}
+        active={activeTabType === 'narrative-thread'}
         desc={text('规划埋设/回收章节，自动注入写作并提示逾期', 'Plan setup/payoff chapters, inject active threads, and flag overdue ones')}
         onClick={() => openBuiltinEditor('narrative-thread-editor', text('伏笔', 'Foreshadowing'), 'narrative-thread')}
       />
@@ -483,6 +515,9 @@ export default function ProjectTree() {
 
       {/* 5. 正文章节 — 仅显示已定稿 */}
       <ManuscriptGroup files={manuscriptFiles} projectPath={p} />
+
+      {/* 6. 便利贴 — 先生私人的灵感本子（不参与任何 AI 创作链路） */}
+      <StickyNotesGroup />
     </div>
   )
 }
@@ -494,10 +529,16 @@ function WorldBuildingGroup({
   archStatus,
   archDone,
   onCleared,
+  active,
+  activeFilePath,
 }: {
   archStatus: Record<string, boolean>
   archDone: number
   onCleared: () => void | Promise<void>
+  /** 工作区正开着故事架构编辑器（组标题行点亮）。 */
+  active: boolean
+  /** 工作区正开着的那一页路径 —— 架构文件行据此逐条认领。 */
+  activeFilePath?: string
 }) {
   const [open, setOpen] = useState(true)
   const text = useLocaleStore(s => s.text)
@@ -508,7 +549,8 @@ function WorldBuildingGroup({
     <div>
       {/* 组标题行 — 点击打开故事架构编辑器，双击展开/折叠子文件 */}
       <div
-        className="tree-item gap-1.5 cursor-pointer select-none"
+        data-level={1}
+        className={`tree-item gap-1.5 cursor-pointer select-none${active ? ' active' : ''}`}
         style={{ paddingLeft: 10 }}
         onClick={() => openBuiltinEditor('world-building-editor', text('故事架构', 'Story architecture'), 'world-building')}
         title={text('打开故事架构编辑器（可生成架构文档）', 'Open the story architecture editor')}
@@ -553,6 +595,7 @@ function WorldBuildingGroup({
                 filePath={filePath}
                 isGenerated={isGenerated}
                 onCleared={onCleared}
+                active={activeFilePath === filePath}
               />
             )
           })}
@@ -568,11 +611,14 @@ function ArchFileRow({
   filePath,
   isGenerated,
   onCleared,
+  active,
 }: {
   f: { key: string; iconName: string; label: string; desc: string }
   filePath: string
   isGenerated: boolean
   onCleared: () => void | Promise<void>
+  /** 工作区正开着这一份架构文件？ */
+  active: boolean
 }) {
   const text = useLocaleStore(s => s.text)
   const english = ARCH_FILE_EN[f.key] ?? { label: f.label, desc: f.desc }
@@ -610,8 +656,10 @@ function ArchFileRow({
 
   return (
     <div
-      className="tree-item gap-1.5 cursor-pointer select-none"
-      style={{ paddingLeft: 26 }}
+      data-level={2}
+      className={`tree-item gap-1.5 cursor-pointer select-none${active ? ' active' : ''}`}
+      /** 选中色标跟着缩进走：缩进 26 → 色标落在 16（内容左缘再往左 10px）。 */
+      style={{ paddingLeft: 26, '--row-mark-x': '16px' } as CSSProperties}
       onClick={() => openArchFile(filePath, label)}
       onContextMenu={e => showSidebarMenu([
         {

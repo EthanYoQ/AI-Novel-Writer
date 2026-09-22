@@ -9,6 +9,8 @@ import { useUiVersionStore, isModernShell } from '../../stores/ui-version-store'
 import CodeMirrorEditor from './CodeMirrorEditor'
 import ThreeWayMerge from './ThreeWayMerge'
 import WritingSkillBubble from './WritingSkillBubble'
+import ExternalAiAuditBoard, { type ExternalAiHandoffHandle } from './ExternalAiAuditBoard'
+import { REFINE_HANDOFF_CONFIG } from './external-ai-handoff-config'
 import { Button } from '../ui/Button'
 import { toast } from '../ui/Toast'
 import { confirm } from '../ui/Confirm'
@@ -29,6 +31,8 @@ import { retryFinalizationPublication } from '../../services/finalization-client
 import { captureFinalizationSnapshot } from '../../services/finalization-snapshot'
 
 import { DRAFT_STATUS_LABEL, DRAFT_STATUS_COLOR } from '../../shared/draft-status'
+import { resolveWritingLanguage } from '../../shared/writing-language'
+import { buildExternalAiRefineMaterial } from '../../services/external-ai-refine-material'
 import { countDraftUnits } from '../../shared/draft-units'
 import { PostProcessStatusPanel } from '../ui/PostProcessStatusPanel'
 import { getChapterFinalizeScope } from '../../services/workflows/workflow-utils'
@@ -93,6 +97,14 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
     revisionPath: string
     targetSnapshot: { content: string; contentRevision: number }
     staleReason: string | null
+    /**
+     * 是否来自**外部 AI 修稿**。
+     *
+     * 两边的产物性质不同：内置修稿落的是数据库里的修订记录（revisionPath），
+     * 合并完成要把结果提交回记录；外部修稿没有记录，合并结果只写回编辑器，
+     * 由先生自己保存。所以完成路径要分家。
+     */
+    external?: boolean
   } | null>(null)
 
   // 后处理失败状态（用于控制是否展示修复按钮）
@@ -163,6 +175,18 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
 
   const [saving, setSaving] = useState(false)
   const [confirmAction, setConfirmAction] = useState<'refine' | 'review' | null>(null)
+  /**
+   * 本次「确认执行」走哪条路。
+   *
+   * 先生（流程重构）：弹窗里原本混着两套语义 —— 按钮执行内部 AI，
+   * 而外部入口一碰就开浏览器。现在收成一个二选一的开关，按钮做什么由它决定。
+   */
+  const [executor, setExecutor] = useState<'internal' | 'external'>('internal')
+  /** 外部模式下选中的入口（卡片现在是选择框，可多选）。 */
+  const [selectedAiIds, setSelectedAiIds] = useState<string[]>([])
+  /** 两块外部板块的命令式出口：确认执行时由按钮调用。 */
+  const reviewBoardRef = useRef<ExternalAiHandoffHandle>(null)
+  const refineBoardRef = useRef<ExternalAiHandoffHandle>(null)
   const [userRefinePrompt, setUserRefinePrompt] = useState('')
   // 审稿维度多选。
   //
@@ -322,6 +346,39 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       return false
     }
     return true
+  }
+
+  /** 把一段正文写回编辑器（外部修稿的合并结果、以及回流都走它）。 */
+  const writeTextToEditor = (text: string) => {
+    currentBodyRef.current = text
+    useEditorStore.getState().updateTabContent(tabId, text)
+  }
+
+  /**
+   * 外部 AI 修稿的产物进来时：**不直接覆盖**，而是打开改稿差异对比。
+   *
+   * 先生说得对 —— 网页版交回的正文该先逐处比对再决定要不要采纳，
+   * 直接糊上去等于把原稿的措辞一并赌掉了。这里复用项目自带的三方合并视图：
+   * 左边原稿、右边改稿，先生一处一处挑，点了「完成合并」才写回编辑器。
+   */
+  const openExternalRefineComparison = (text: string) => {
+    const original = currentBodyRef.current
+    setMergeData({
+      originalContent: original,
+      modifiedContent: text,
+      // 外部来源没有修订记录；完成路径也不提交记录（见 handleMergeComplete）
+      revisionPath: '',
+      targetSnapshot: { content: original, contentRevision: editorTab?.contentRevision ?? 0 },
+      staleReason: null,
+      external: true,
+    })
+  }
+
+  /** 选择／取消选择某个外部入口（可选择多个，确认执行时一次打开）。 */
+  const toggleSelectedAi = (id: string) => {
+    setSelectedAiIds(current => current.includes(id)
+      ? current.filter(item => item !== id)
+      : [...current, id])
   }
 
   /** 执行 AI 修稿（含用户自定义提示词） */
@@ -570,6 +627,20 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
 
   /** 合并完成回调 —— 就地覆写原草稿（不新建版本，仅蓝图写稿时才产生新版本） */
   const handleMergeComplete = async (mergedText: string) => {
+    /*
+      外部 AI 修稿这条路先分流：它没有修订记录可提交，
+      合并结果直接写回编辑器 —— 绝不悄悄覆盖，先生自己按保存。
+    */
+    if (mergeData?.external) {
+      writeTextToEditor(mergedText)
+      setMergeData(null)
+      toast.success(text(
+        '已把合并结果写回编辑器，记得保存',
+        'Merged text written back to the editor — remember to save.',
+      ))
+      return
+    }
+
     const projectSession = captureProjectSession(currentProject)
     if (!meta || !mergeData || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     if (mergeData.staleReason) {
@@ -925,9 +996,21 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
                 : text('当前草稿', 'Current draft')}
             </DialogDescription>
           </DialogHeader>
-          <div className="px-5 py-2 text-sm space-y-1.5" style={{ color: 'var(--color-text-secondary)' }}>
+          <div
+            className="px-5 py-2 text-sm space-y-1.5 max-h-[56vh] overflow-y-auto"
+            style={{ color: 'var(--color-text-secondary)' }}
+          >
             {confirmAction === 'refine' ? (
               <>
+                <ExecutorChoice
+                  value={executor}
+                  onChange={setExecutor}
+                  internalLabel={text('内部 AI 修稿', 'Internal AI revision')}
+                  externalLabel={text('外部 AI 修稿', 'External AI revision')}
+                />
+
+                {/* 内部区：没选「内部」时整块灰掉（与外部板块同一套灰态类） */}
+                <div className={executor === 'internal' ? undefined : 'handoff-board-disabled'}>
                 <div className="font-medium text-[var(--color-text)]">{text('本次【直接修稿】范围：', 'This direct revision will:')}</div>
                 <div>{text('1. 全文基础润色、词汇优化，增强画面与表现力。', '1. Polish the full chapter, improve wording, and strengthen imagery and expression.')}</div>
                 <div>{text('2. 可在下方指定的额外修稿要求。', '2. Follow any additional revision instructions below.')}</div>
@@ -935,9 +1018,53 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
                 <div className="mt-3">
                   <WritingSkillBubble stage="refinement" />
                 </div>
+                </div>
+
+                {/*
+                  外部 AI 修稿 —— 与审稿那边是同一副骨架（同一个组件，换一份配置与装配）。
+                  卡片是**选择框**：先生选好要在哪几家改，再按弹窗底部的「确认执行」统一打开。
+                  disabled 由上面的执行方式决定：没选「外部」时整块灰掉、不可交互。
+                */}
+                <ExternalAiAuditBoard
+                  ref={refineBoardRef}
+                  config={REFINE_HANDOFF_CONFIG}
+                  disabled={executor !== 'external'}
+                  selectedEntryIds={selectedAiIds}
+                  onToggleEntry={toggleSelectedAi}
+                  chapterTitle={meta?.chapterTitle ?? ''}
+                  chapterNumber={meta?.chapterNumber}
+                  getDraftContent={() => currentBodyRef.current}
+                  getReviewContext={() => {
+                    const projectSession = captureProjectSession(currentProject)
+                    if (
+                      !projectSession
+                      || !currentProject
+                      || !isProjectSessionPath(projectSession, projectKey)
+                    ) return null
+                    return {
+                      projectSession,
+                      projectPath: projectSession.projectPath,
+                      novelConfig: { ...currentProject.novelConfig } as Record<string, unknown>,
+                      writingLanguage: resolveWritingLanguage(currentProject.novelConfig.writingLanguage),
+                      // 上面那个「附加修稿要求」输入框里的内容，一并交给对方
+                      userRefinePrompt: userRefinePrompt.trim() || undefined,
+                    }
+                  }}
+                  buildMaterial={buildExternalAiRefineMaterial}
+                  onApplyResult={openExternalRefineComparison}
+                />
               </>
             ) : (
               <>
+                <ExecutorChoice
+                  value={executor}
+                  onChange={setExecutor}
+                  internalLabel={text('内部 AI 审稿', 'Internal AI review')}
+                  externalLabel={text('外部 AI 审计', 'External AI audit')}
+                />
+
+                {/* 内部区：没选「内部」时整块灰掉 */}
+                <div className={executor === 'internal' ? undefined : 'handoff-board-disabled'}>
                 <div>{text('将调用 AI 对本章草稿进行一致性检查，并生成审稿报告。', 'AI will check this chapter for consistency and generate a review report.')}</div>
                 {/* 审稿属于 review 阶段：与下面的检查维度并列，都是「本次要交代清楚」的事。 */}
                 <div className="mt-3">
@@ -995,6 +1122,42 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
                     })}
                   </div>
                 </div>
+                </div>
+
+                {/*
+                  外部 AI 审计 —— 网页版 AI 的收藏夹。
+                  卡片是选择框：选好要在哪几家审，再按弹窗底部的「确认执行」统一打开
+                  （可以一次开好几家，材料只装配一份、只复制一次）。
+                */}
+                <ExternalAiAuditBoard
+                  ref={reviewBoardRef}
+                  disabled={executor !== 'external'}
+                  selectedEntryIds={selectedAiIds}
+                  onToggleEntry={toggleSelectedAi}
+                  chapterTitle={meta?.chapterTitle ?? ''}
+                  chapterNumber={meta?.chapterNumber}
+                  getDraftContent={() => currentBodyRef.current}
+                  /*
+                    装配完整审稿材料要用的项目上下文：**点击那一刻**现取。
+                    审稿维度沿用上方那份勾选表，与内置审稿的 reviewFocus 算法一致 ——
+                    两条路给出的「重点检查维度」必须是同一个值。
+                  */
+                  getReviewContext={() => {
+                    const projectSession = captureProjectSession(currentProject)
+                    if (
+                      !projectSession
+                      || !currentProject
+                      || !isProjectSessionPath(projectSession, projectKey)
+                    ) return null
+                    return {
+                      projectSession,
+                      projectPath: projectSession.projectPath,
+                      novelConfig: { ...currentProject.novelConfig } as Record<string, unknown>,
+                      writingLanguage: resolveWritingLanguage(currentProject.novelConfig.writingLanguage),
+                      reviewFocus: REVIEW_DIMS.filter(d => reviewDims[d.key]).map(d => d.promptLabel).join('、') || undefined,
+                    }
+                  }}
+                />
               </>
             )}
           </div>
@@ -1029,14 +1192,27 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
             <Button variant="outline" onClick={() => setConfirmAction(null)}>{text('取消', 'Cancel')}</Button>
             <Button
               variant="ai"
-              onClick={() => {
+              // 外部模式下一个都没选就无从打开 —— 按钮直接禁掉，别让先生点了没反应
+              disabled={executor === 'external' && selectedAiIds.length === 0}
+              onClick={async () => {
                 const act = confirmAction
+                if (executor === 'external') {
+                  // 外部：装配 → 复制材料 → 一次打开选中的那几家（材料只装一份、只复制一次）
+                  const board = act === 'refine' ? refineBoardRef.current : reviewBoardRef.current
+                  if (await board?.launch()) setConfirmAction(null)
+                  return
+                }
                 setConfirmAction(null)
                 if (act === 'refine') doRefine()
                 else if (act === 'review') doReview()
               }}
             >
-              {text('确认执行', 'Run')}
+              {executor === 'external'
+                ? text(
+                  `打开选中的 ${selectedAiIds.length} 个外部 AI`,
+                  `Open ${selectedAiIds.length} external AI site(s)`,
+                )
+                : text('确认执行', 'Run')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1059,10 +1235,15 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
         >
           <DialogHeader className="px-4 py-0" style={{ height: 38, display: 'flex', alignItems: 'center' }}>
             <DialogTitle className="flex items-center gap-2 text-[0.8rem]">
-              {text(
-                `修稿合并 — 第${meta?.chapterNumber ?? ''}章 ${meta?.chapterTitle || '未知标题'}`,
-                `Revision merge — Chapter ${meta?.chapterNumber ?? ''} ${meta?.chapterTitle || 'Untitled'}`,
-              )}
+              {mergeData?.external
+                ? text(
+                  `外部 AI 修稿 · 差异对比 — 第${meta?.chapterNumber ?? ''}章 ${meta?.chapterTitle || '未知标题'}`,
+                  `External AI revision · comparison — Chapter ${meta?.chapterNumber ?? ''} ${meta?.chapterTitle || 'Untitled'}`,
+                )
+                : text(
+                  `修稿合并 — 第${meta?.chapterNumber ?? ''}章 ${meta?.chapterTitle || '未知标题'}`,
+                  `Revision merge — Chapter ${meta?.chapterNumber ?? ''} ${meta?.chapterTitle || 'Untitled'}`,
+                )}
             </DialogTitle>
           </DialogHeader>
           {/* 合并视图主体 */}
@@ -1087,6 +1268,77 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  )
+}
+
+/**
+ * 执行方式二选一：内部 AI 走软件自带流程，外部 AI 交给网页版。
+ *
+ * 用 role="radio" 而不是 checkbox —— 这两条路**互斥**（先生的原话是「只能二选一」），
+ * 单选语义既符合实际，也不会出现「两个都勾着、按下去不知道执行谁」的歧义。
+ * 视觉上仍是先生要的那种「标题前的小勾圈」。
+ */
+function ExecutorChoice({
+  value,
+  onChange,
+  internalLabel,
+  externalLabel,
+}: {
+  value: 'internal' | 'external'
+  onChange: (value: 'internal' | 'external') => void
+  internalLabel: string
+  externalLabel: string
+}) {
+  const text = useLocaleStore(s => s.text)
+  const options: Array<{ key: 'internal' | 'external'; label: string }> = [
+    { key: 'internal', label: internalLabel },
+    { key: 'external', label: externalLabel },
+  ]
+
+  return (
+    <div
+      className="flex items-center gap-4 mb-3"
+      role="radiogroup"
+      aria-label={text('执行方式', 'Executor')}
+    >
+      {options.map(({ key, label }) => {
+        const active = value === key
+        return (
+          <button
+            key={key}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange(key)}
+            className="flex items-center gap-1.5 transition-colors"
+            style={{
+              fontSize: '0.8rem',
+              fontWeight: active ? 600 : 400,
+              color: active ? 'var(--color-accent)' : 'var(--color-text-secondary)',
+              background: 'transparent',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+            }}
+          >
+            <span
+              aria-hidden="true"
+              className="flex items-center justify-center rounded-full flex-shrink-0"
+              style={{
+                width: 13,
+                height: 13,
+                border: `1.5px solid ${active ? 'var(--color-accent)' : 'var(--color-border)'}`,
+              }}
+            >
+              {active && (
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--color-accent)' }} />
+              )}
+            </span>
+            {label}
+          </button>
+        )
+      })}
     </div>
   )
 }

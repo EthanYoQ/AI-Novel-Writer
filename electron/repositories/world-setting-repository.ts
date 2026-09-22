@@ -16,6 +16,7 @@ import {
 } from '../../src/shared/world-setting'
 import type {
   ChapterWorldSettingRef,
+  WorldSettingCandidateResult,
   WorldSettingConflict,
   WorldSettingConflictDraft,
   WorldSettingConflictStatus,
@@ -226,6 +227,43 @@ function projectDb(): NonNullable<ReturnType<typeof getProjectDb>> {
   return db
 }
 
+/**
+ * 名字归一与校验：空 / 超长 / 含控制字符一律判无效，返回 null。
+ *
+ * 名字进 SQL 参数没问题，但它会出现在提示词与列表中，所以要挡掉控制字符。
+ * 这个正则是**有意的安全防护**，no-control-regex 在此属误伤。
+ */
+function normalizeValidName(value: unknown): string | null {
+  const name = typeof value === 'string' ? value.trim() : ''
+  if (!name || name.length > MAX_WORLD_SETTING_NAME_LENGTH) return null
+  // eslint-disable-next-line no-control-regex -- 有意拦截控制字符，见上一行注释
+  if (/[\u0000-\u001f]/.test(name)) return null
+  return name
+}
+
+/** 一批字段的 provenance：只给真正有值的字段留标记（与 save 的插入分支同一口径）。 */
+function buildInsertProvenance(
+  draft: WorldSettingDraft,
+  values: { summary: string; content: string; aliases: string; tags: string },
+): Partial<Record<WorldSettingProvenanceField, WorldSettingFieldProvenance>> {
+  const declared = normalizeWorldSettingProvenance(draft.provenance)
+  const provenance: Partial<Record<WorldSettingProvenanceField, WorldSettingFieldProvenance>> = {}
+  for (const field of WORLD_SETTING_PROVENANCE_FIELDS) {
+    const hasValue = field === 'summary'
+      ? Boolean(values.summary.trim())
+      : field === 'content'
+        ? Boolean(values.content.trim())
+        : field === 'aliases'
+          ? values.aliases !== '[]'
+          : field === 'tags'
+            ? values.tags !== '[]'
+            : Boolean(String(draft.importance ?? '').trim())
+    if (!hasValue) continue
+    provenance[field] = declared[field] ?? { kind: 'author' }
+  }
+  return provenance
+}
+
 export class WorldSettingRepository {
   /** 全量条目：按分类、再按名称排序，界面侧不必再排一次。 */
   static getAll(): WorldSettingEntry[] {
@@ -257,12 +295,8 @@ export class WorldSettingRepository {
    * - 名字非法（空 / 超长）：返回 null，由调用方翻译成人话。
    */
   static save(draft: WorldSettingDraft): WorldSettingEntry | null {
-    const name = typeof draft?.name === 'string' ? draft.name.trim() : ''
-    if (!name || name.length > MAX_WORLD_SETTING_NAME_LENGTH) return null
-    // 名字进 SQL 参数没问题，但会出现在提示词与列表中，挡掉控制字符。
-    // 这个正则是**有意的安全防护**，no-control-regex 在此属误伤。
-    // eslint-disable-next-line no-control-regex -- 有意拦截控制字符，见上一行注释
-    if (/[\u0000-\u001f]/.test(name)) return null
+    const name = normalizeValidName(draft?.name)
+    if (!name) return null
 
     const db = projectDb()
     const category = normalizeWorldSettingCategory(draft.category)
@@ -362,20 +396,7 @@ export class WorldSettingRepository {
     }
 
     // 新条目：作者手写的默认记 author；调用方显式声明则用声明值。
-    const insertProvenance: Partial<Record<WorldSettingProvenanceField, WorldSettingFieldProvenance>> = {}
-    for (const field of WORLD_SETTING_PROVENANCE_FIELDS) {
-      const hasValue = field === 'summary'
-        ? Boolean(summary.trim())
-        : field === 'content'
-          ? Boolean(content.trim())
-          : field === 'aliases'
-            ? aliases !== '[]'
-            : field === 'tags'
-              ? tags !== '[]'
-              : Boolean(String(draft.importance ?? '').trim())
-      if (!hasValue) continue
-      insertProvenance[field] = declared[field] ?? { kind: 'author' }
-    }
+    const insertProvenance = buildInsertProvenance(draft, { summary, content, aliases, tags })
     const inserted = db.prepare(`
       INSERT INTO world_settings (category, name, aliases, summary, content, tags, importance, related, source, status, provenance)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -451,6 +472,70 @@ export class WorldSettingRepository {
     `).run(nextContent, nextSummary, JSON.stringify(provenance), id)
     const entry = WorldSettingRepository.getById(id)
     return entry ? { entry, appended: true } : null
+  }
+
+  /**
+   * 定稿后处理专用：创建一条**待确认候选** —— 只新增，绝不更新任何既有条目。
+   *
+   * 为什么必须独立成方法，而不是复用 save（review P1）：
+   * save 不带 id 时会按**精确同名**找到既有行并走 UPDATE，且 writeMode 默认
+   * `author` 会放行字段保护、UPDATE 分支又有意不写 status。于是「模型报了一个
+   * 无法唯一归属的名字」会变成「用虚构引文覆盖作者已确认的原文，且它仍是
+   * confirmed、待确认队列一条没多」—— 降级为候选这条路径反而成了绕过证据校验的后门。
+   *
+   * 这里守住三条：
+   * 1. 同名检查按**大小写折叠**（`Nova` 与 `NOVA` 并存时也算冲突），与名称解析口径一致；
+   * 2. 命中即拒绝并保留原行 —— 调用方拿 duplicate-name 去如实报告，
+   *    绝不退化成 author 权限的覆盖式写入；
+   * 3. 无命中才 INSERT，status 强制 `pending`（候选不得自己转正）。
+   *
+   * 检查与插入在同一个事务里，所以「读快照之后库里才多出同名条目」也挡得住 ——
+   * 这正是 review 点名的过期快照场景，只在 renderer 再判一次名字治不了。
+   */
+  static createCandidate(draft: WorldSettingDraft): WorldSettingCandidateResult {
+    const name = normalizeValidName(draft?.name)
+    if (!name) return { created: false, reason: 'invalid-name' }
+
+    const db = projectDb()
+    const category = normalizeWorldSettingCategory(draft.category)
+    const importance = normalizeWorldSettingImportance(draft.importance)
+    const source = normalizeWorldSettingSource(draft.source ?? 'ai')
+    const aliases = JSON.stringify(normalizeStringList(draft.aliases))
+    const tags = JSON.stringify(normalizeStringList(draft.tags))
+    const related = JSON.stringify(normalizeRelationList(draft.related))
+    const summary = typeof draft.summary === 'string' ? draft.summary : ''
+    const content = typeof draft.content === 'string' ? draft.content : ''
+    const provenance = buildInsertProvenance(draft, { summary, content, aliases, tags })
+
+    // 有意不复用 save 的 targetId 查询：那是区分大小写的精确匹配，会漏掉 Nova/NOVA 并存。
+    const findExisting = db.prepare(
+      'SELECT id, name, status FROM world_settings WHERE LOWER(TRIM(name)) = LOWER(?)',
+    )
+
+    const run = db.transaction((): WorldSettingCandidateResult => {
+      const existing = findExisting.get(name) as { id: number; name: string; status: string } | undefined
+      if (existing) {
+        return {
+          created: false,
+          reason: 'duplicate-name',
+          existingId: existing.id,
+          existingName: existing.name,
+          existingStatus: normalizeWorldSettingStatus(existing.status),
+        }
+      }
+      const inserted = db.prepare(`
+        INSERT INTO world_settings (category, name, aliases, summary, content, tags, importance, related, source, status, provenance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+      `).run(
+        category, name, aliases, summary, content, tags, importance, related, source,
+        JSON.stringify(provenance),
+      )
+      const created = WorldSettingRepository.getById(Number(inserted.lastInsertRowid))
+      if (!created) return { created: false, reason: 'invalid-name' }
+      return { created: true, entry: created }
+    })
+
+    return run()
   }
 
   /**

@@ -11,7 +11,7 @@ import type {
   CharacterStateData,
 } from '../../electron/repositories/character-repository'
 import { normalizeCharacterRole } from '../shared/character-role'
-import { characterRosterIdentityKey } from '../shared/character-roster'
+import { CHARACTER_STATE_TEXT_FIELDS, characterRosterIdentityKey } from '../shared/character-roster'
 import {
   characterCardFromRosterEntry,
   characterRosterEntriesFromCards,
@@ -50,6 +50,21 @@ export const EMPTY_CARD: CharacterCard = {
 export const EMPTY_STATE: CharacterCurrentState = {
   location: '', powerLevel: '', physicalState: '', mentalState: '',
   keyItems: '', recentEvents: '', updatedAtChapter: 0,
+}
+
+/**
+ * 「按名字建卡」时能一并带进来的东西。
+ *
+ * 只给名字时（关系文本里提到的未登记角色就是这条路径）造出来的仍是一张空卡；
+ * 正文新角色候选则会把模型在本章读到的 role 与 currentState 一起交过来 ——
+ * 那正是「采纳即建档」与「手工新建一张空卡」的区别（先生报障：新档只有名字）。
+ */
+export interface NamedCharacterSeed {
+  name: string
+  /** 未归一；交由 normalizeCharacterRole 折算（认中文标签，未知兜底为配角）。 */
+  role?: unknown
+  /** 部分字段的当前状态；缺省字段用 EMPTY_STATE 补齐。 */
+  currentState?: Partial<CharacterCurrentState> | null
 }
 
 function textField(record: Record<string, unknown>, key: string): string {
@@ -199,8 +214,13 @@ interface CharacterState {
   reset: () => void
   setSelectedName: (name: string | null) => void
   addCharacter: () => void
-  /** 按给定名字批量新建角色卡（关系文本里提到的未登记角色）。 */
-  addNamedCharacters: (names: readonly string[]) => void
+  /**
+   * 按给定名字批量新建角色卡（关系文本里提到的未登记角色、正文新角色候选）。
+   *
+   * 两种入参：纯名字字符串（只要一张空卡），或带 role / currentState 的种子
+   * （正文新角色候选走这条 —— 模型在本章读到的定位与状态一并落进卡里）。
+   */
+  addNamedCharacters: (seeds: readonly (string | NamedCharacterSeed)[]) => void
   deleteCharacter: (
     name: string,
     projectPath?: string,
@@ -430,7 +450,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
     ))
   },
 
-  addNamedCharacters: (names) => {
+  addNamedCharacters: (seeds) => {
     const projectSession = currentCharacterProjectSession()
     if (!projectSession) return
     if (
@@ -447,18 +467,37 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
     // 与手工新建同一条通道：按名字建卡、去重、跳过已在名单里的名字，并记进
     // 草稿账本（改动仍由作者按保存落盘）。
     const existing = new Set(state.characters.map(card => characterRosterIdentityKey(card.name)))
-    const fresh: string[] = []
-    for (const rawName of names) {
-      const name = rawName.trim()
+    const fresh: NamedCharacterSeed[] = []
+    for (const raw of seeds) {
+      const seed: NamedCharacterSeed = typeof raw === 'string' ? { name: raw } : raw
+      const name = (seed?.name ?? '').trim()
       if (!name) continue
       const key = characterRosterIdentityKey(name)
       if (!key || existing.has(key)) continue
       existing.add(key)
-      fresh.push(name)
+      fresh.push({ ...seed, name })
     }
     if (fresh.length === 0) return
     const before = get().characters
-    const newCards: CharacterCard[] = fresh.map(name => ({ ...EMPTY_CARD, name }))
+    const newCards: CharacterCard[] = fresh.map((seed) => {
+      const card: CharacterCard = {
+        ...EMPTY_CARD,
+        name: seed.name,
+        role: normalizeCharacterRole(seed.role),
+      }
+      /**
+       * 带状态才写 currentState —— 空状态一律不落字段。
+       *
+       * `normalizeCharacterState({})` 会给回一个「全空 + updatedAtChapter: 0」的对象，
+       * 而角色列表正是拿 updatedAtChapter 渲染「第 N 章更新」（CharactersView）——
+       * 写进去，新建的空卡就会凭空多出一句「第 0 章更新」。所以这里按**内容**判断。
+       */
+      const currentState = normalizeCharacterState(seed.currentState)
+      if (currentState && CHARACTER_STATE_TEXT_FIELDS.some(field => currentState[field] !== '')) {
+        card.currentState = currentState
+      }
+      return card
+    })
     set(s => ({
       characters: [...s.characters, ...newCards],
       selectedName: newCards[0].name,

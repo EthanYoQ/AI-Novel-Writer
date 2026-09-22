@@ -289,7 +289,7 @@ describe('workflow mutation failure boundaries', () => {
   })
 
   it('turns an unmatched world-setting update into a pending candidate instead of dropping it', async () => {
-    let savedDraft: Record<string, unknown> | undefined
+    let createdCandidate: Record<string, unknown> | undefined
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       if (channel === 'kb:import-text') return { success: true, chunkCount: 1 }
       if (channel === 'db:blueprint-update-notes') return { success: true }
@@ -297,9 +297,9 @@ describe('workflow mutation failure boundaries', () => {
       // 第 1 章的真实形态：本章没有声明引用任何设定，设定库也还是空的。
       if (channel === 'world-setting:list-chapter-refs') return []
       if (channel === 'world-setting:list') return []
-      if (channel === 'world-setting:save') {
-        savedDraft = args[0] as Record<string, unknown>
-        return { id: 11, name: '变身' }
+      if (channel === 'world-setting:create-candidate') {
+        createdCandidate = args[0] as Record<string, unknown>
+        return { created: true, entry: { id: 11, name: '变身', status: 'pending' } }
       }
       throw new Error(`unexpected IPC: ${channel}`)
     })
@@ -333,7 +333,7 @@ describe('workflow mutation failure boundaries', () => {
     // 库里完全没有「变身」这个名字：它必须降级为待确认候选。
     // 旧实现只把它记进 unresolvedNames 然后丢弃，于是作者看到「后处理 4/4 成功」，
     // 待确认队列里却一条都没有。
-    expect(savedDraft).toMatchObject({ name: '变身', status: 'pending', category: 'world' })
+    expect(createdCandidate).toMatchObject({ name: '变身', status: 'pending', category: 'world' })
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('world-setting:append-derived')
     expect(stepCallbacks.log).toHaveBeenCalledWith(expect.stringContaining('1 条新设定待确认'))
   })
@@ -391,7 +391,9 @@ describe('workflow mutation failure boundaries', () => {
 
     // 旧实现只在「本章引用」的条目里解析名字，没引用就必然匹配失败并丢弃进展。
     expect(appendedEntryId).toBe(7)
+    // 唯一命中只追加：既不退回覆盖式 save，也不该误建成新候选。
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('world-setting:save')
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('world-setting:create-candidate')
     expect(stepCallbacks.log).toHaveBeenCalledWith(expect.stringContaining('1 条已更新'))
   })
 
@@ -855,7 +857,7 @@ describe('workflow mutation failure boundaries', () => {
     expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:character-roster-read'])
   })
 
-  it('ignores model-reported new characters during finalization', async () => {
+  it('queues model-reported new characters for author review instead of creating them', async () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'db:character-roster-read') {
         return {
@@ -868,6 +870,8 @@ describe('workflow mutation failure boundaries', () => {
       // 该步骤不会写入任何东西（新实体建议依赖模型返回，此处返回空数组）。
       if (channel === 'world-setting:list-chapter-refs') return []
       if (channel === 'world-setting:list') return []
+      // 正文新角色的待确认队列 —— 与角色名单分家的一张提名单。
+      if (channel === 'db:character-candidate-queue') return { success: true, queued: 2, skipped: 0 }
       throw new Error(`unexpected IPC: ${channel}`)
     })
     stubVelaIpc(invoke)
@@ -896,7 +900,25 @@ describe('workflow mutation failure boundaries', () => {
 
     await step!.executor(callbacks(), context())
 
-    expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['db:character-roster-read'])
+    const channels = invoke.mock.calls.map(call => (call as unknown[])[0])
+
+    /**
+     * 先生 2026-09-21 定的形态：模型报的新角色**只提名、不建档**。
+     *
+     * 它被放进与角色名单彻底分家的待确认队列（character_candidates 表），由作者
+     * 在角色页裁决；**定稿过程本身一个字都不许写进角色名单** —— 那才是这个用例原本
+     * 要守的底线，现在由下面两句一起守（原来的写法是「连提名都不许有」，那等于把
+     * 提示词早就要来的 newCharacters 直接扔掉，先生正是为此提的意见）。
+     */
+    expect(channels).toEqual(['db:character-roster-read', 'db:character-candidate-queue'])
+    expect(channels).not.toContain('db:character-roster-commit')
+
+    // 提名要落到实处：名字进队列，依据取自本章正文原文；正文里没有的就留空，绝不编造。
+    const queuedCall = invoke.mock.calls.find(call => (call as unknown[])[0] === 'db:character-candidate-queue') as unknown[] | undefined
+    const queuedItems = (queuedCall?.[1] ?? []) as Array<{ name: string; evidence: string }>
+    expect(queuedItems.map(item => item.name)).toEqual(['快递员', '凭空角色'])
+    expect(queuedItems[0]?.evidence).toContain('快递员把信封放在桌上')
+    expect(queuedItems[1]?.evidence).toBe('')
   })
 
   it.each([

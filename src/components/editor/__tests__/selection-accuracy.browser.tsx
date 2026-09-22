@@ -85,6 +85,20 @@ describe('鼠标选取落点一致性', () => {
         />,
       )
     })
+    /**
+     * 等字体就绪再量坐标。
+     *
+     * 本文件第一段的首字被 `.cm-lp-dropcap-char` 放大到 3.15em（约 52px），
+     * 而「鼠标落在字符左半还是右半」这条分界就压在它的左缘上 ——
+     * 字体加载完成前后，字形宽度不同，分界跟着挪，往返检查会偶发
+     * 「第1行 offset=2("夜") → 往返得到 3」。
+     * 实测（完整套件连跑）：`document.fonts.status` 常处于 `loading`，
+     * 补上这一等之后结果才可复现。这是测量的前提，不是对断言的放宽。
+     */
+    await act(async () => {
+      await document.fonts.ready
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)))
+    })
   })
 
   afterEach(async () => {
@@ -156,8 +170,17 @@ describe('鼠标选取落点一致性', () => {
 
     const lineAt = (index: number) => container?.querySelectorAll('.cm-line')[index] as HTMLElement | undefined
     const indentOfEmpty = getComputedStyle(lineAt(1) as HTMLElement).textIndent
-    const indentOfBody = getComputedStyle(lineAt(0) as HTMLElement).textIndent
-    console.log(`诊断：空行 text-indent = ${indentOfEmpty}，正文行 = ${indentOfBody}`)
+    /**
+     * 对照行刻意取第 3 行，不取第 1 行。
+     *
+     * 第 1 行是**光标行**，而带行内缩进的光标行现在会把 CSS 缩进归零
+     * （行内那两个字符自己占 2em，见 live-preview 的 `cm-lp-indent-live` 与 v2-editor.css）——
+     * 那是「点击某段就整段横向错位两格」的修复落点。它的 text-indent 值因此是 0，
+     * 但**视觉起点仍是 2em**，与这里要守的「缩进恒定」并不冲突。
+     * 第 3 行既是正文行、又不是光标行，才是与空行同类可比的对照。
+     */
+    const indentOfBody = getComputedStyle(lineAt(2) as HTMLElement).textIndent
+    console.log(`诊断：空行 text-indent = ${indentOfEmpty}，非光标正文行 = ${indentOfBody}`)
     // 空行必须与正文行同值 —— 否则第一下敲字时缩进会从 0 跳到 2em，整行横跳
     expect(indentOfEmpty).toBe(indentOfBody)
     expect(parseFloat(indentOfEmpty)).toBeGreaterThan(0)

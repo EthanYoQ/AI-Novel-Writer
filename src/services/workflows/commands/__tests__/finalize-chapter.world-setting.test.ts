@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  classifyWorldSettingName,
   evidenceAppearsInContent,
   resolveWorldSettingEntryId,
   type WorldSettingNameCandidate,
@@ -77,5 +78,51 @@ describe('resolveWorldSettingEntryId', () => {
   it('returns null for a blank name', () => {
     const entries = [candidate(1, '青云宗')]
     expect(resolveWorldSettingEntryId('   ', entries)).toBeNull()
+  })
+})
+
+/**
+ * 三态分类是 review P1 修复的地基：歧义与无命中过去都被揉成一个 `null`，
+ * 于是共享同一条「降级为待确认候选」的路径，而那条路径会用覆盖式 save 落库。
+ * 分开之后，「歧义」不再碰存储，「无命中」才去建候选。
+ */
+describe('classifyWorldSettingName', () => {
+  it('reports ambiguous when several entries match on the same footing', () => {
+    // 重复别名：两个条目都叫「北境仙门」，报进去无从归属。
+    expect(classifyWorldSettingName('北境仙门', [
+      candidate(1, '青云宗', ['北境仙门']),
+      candidate(2, '太玄宗', ['北境仙门']),
+    ])).toEqual({ kind: 'ambiguous' })
+
+    // 大小写折叠后同名（Nova / NOVA）：review P1 的原始输入。
+    expect(classifyWorldSettingName('Nova', [
+      candidate(1, 'Nova'),
+      candidate(2, 'NOVA'),
+    ])).toEqual({ kind: 'ambiguous' })
+  })
+
+  it('reports unmatched when nothing matches exactly, including partial containment', () => {
+    // 包含关系不算命中：库里没有「商会」这条，正文引出的它是新设定，可进候选队列。
+    expect(classifyWorldSettingName('商会', [
+      candidate(1, '东城商会'),
+      candidate(2, '西城商会'),
+    ])).toEqual({ kind: 'unmatched' })
+    expect(classifyWorldSettingName('不存在的名字', [candidate(1, '青云宗')]))
+      .toEqual({ kind: 'unmatched' })
+    expect(classifyWorldSettingName('   ', [candidate(1, '青云宗')]))
+      .toEqual({ kind: 'unmatched' })
+  })
+
+  it('reports unique for a single canonical name or a single alias', () => {
+    expect(classifyWorldSettingName('青云宗', [candidate(1, '青云宗'), candidate(2, '玄阳子')]))
+      .toEqual({ kind: 'unique', id: 1 })
+    expect(classifyWorldSettingName('北境仙门', [candidate(1, '青云宗', ['北境仙门'])]))
+      .toEqual({ kind: 'unique', id: 1 })
+  })
+
+  it('keeps resolveWorldSettingEntryId compatible: only unique matches resolve to an id', () => {
+    const entries = [candidate(1, 'Nova'), candidate(2, 'NOVA')]
+    expect(classifyWorldSettingName('nova', entries)).toEqual({ kind: 'ambiguous' })
+    expect(resolveWorldSettingEntryId('nova', entries)).toBeNull()
   })
 })

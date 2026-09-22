@@ -369,9 +369,18 @@ export default function WorldSettingEditor() {
             if (!isProjectSessionCurrent(projectSession)) return
             const parsed = parseWorldSettingCandidates(rawResult, activeCategory)
             if (parsed.length === 0) {
+              /**
+               * 一条都没捞到时，**绝不说「AI 没产出值得立条的设定」**。
+               *
+               * 先生 2026-09-21：「明明是用户自己点 AI 生成出来的设定集，却被系统
+               * 判定为没有价值、直接弃用了 —— 这应该让用户自己来判断。」
+               * 原话把**解析失败**说成了**生成失败**：作者既不知道真正发生了什么，
+               * 也没人告诉他去哪儿把那几段输出拿回来。现在如实说明，并指明原文
+               * 就在右侧「AI 输出」里，整段复制就能手动立条。
+               */
               toast.info(text(
-                'AI 没有产出值得立条的设定 —— 这符合「宁缺毋滥」。可以先补些正文或故事架构再试。',
-                'The AI found nothing worth an entry, which matches "quality over quantity". Add prose or architecture and try again.',
+                '这次的输出没能解析成设定条目 —— 原文还在右侧「AI 输出」里，可以整段复制下来手动立条。',
+                'This output could not be parsed into entries. The raw text is still in the AI output panel on the right — copy it and add the entry by hand.',
               ))
               return
             }
@@ -534,9 +543,10 @@ export default function WorldSettingEditor() {
             if (!isProjectSessionCurrent(projectSession)) return
             const suggestion = parseWorldSettingEntrySuggestion(rawResult)
             if (!suggestion.summary && !suggestion.content) {
+              // 同上一处：不说「AI 没给出可用内容」，说清是解析没接住，并指明原文去处。
               toast.info(text(
-                'AI 这次没给出可用内容，补充些信息再试，或自己写更快。',
-                'The AI returned nothing usable — add some context, or just write it yourself.',
+                '这次的输出没能解析成内容 —— 原文在右侧「AI 输出」里，可以复制了直接粘进这一条。',
+                'This output could not be parsed. The raw text is in the AI output panel on the right — copy it into this entry.',
               ))
               return
             }

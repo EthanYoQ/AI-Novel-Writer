@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from '../../ui/Dialog'
 import PageHead from '../../ui/PageHead'
+import PendingDot from '../../ui/PendingDot'
 import { confirm } from '../../ui/Confirm'
 import { toast } from '../../ui/Toast'
 import { cn } from '../../../lib/utils'
@@ -33,6 +34,7 @@ import { useProjectStore } from '../../../stores/project-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { isMagazine, useUiVersionStore } from '../../../stores/ui-version-store'
 import { useWorldSettingStore } from '../../../stores/world-setting-store'
+import { usePendingUnread } from '../../../stores/pending-badge-store'
 import { getWorldSettingCategoryLabels } from '../../../shared/world-setting'
 import type { WorldSettingCategoryRecord, WorldSettingEntry } from '../../../shared/world-setting'
 import { openBuiltinEditor } from './sidebar-file-openers'
@@ -116,6 +118,32 @@ export default function WorldSettingSidebarPanel() {
     [visibleEntries],
   )
 
+  /**
+   * 「有新的等着确认」的小红点（先生 2026-09-21）：
+   *   「有新的待确认的角色，候选，设定等内容的时候，可以在待确认、候选、待选等地方
+   *     做个小红点？类似未读消息？」
+   *
+   * 口径见 pending-badge-store：只有**没见过的 id** 才亮，作者点开入口即消点。
+   * 两个队列各记一份 —— 待确认候选与待裁决冲突是两件事，别让一个的红点盖住另一个。
+   */
+  const pendingIds = useMemo(
+    () => visibleEntries
+      .filter(entry => entry.status === 'pending')
+      .map(entry => String(entry.id)),
+    [visibleEntries],
+  )
+  const { unread: hasUnreadPending, markSeen: markPendingSeen } = usePendingUnread(
+    projectPath || null,
+    'world-setting-pending',
+    pendingIds,
+  )
+  const conflictIds = useMemo(() => conflicts.map(conflict => String(conflict.id)), [conflicts])
+  const { unread: hasUnreadConflicts, markSeen: markConflictsSeen } = usePendingUnread(
+    projectPath || null,
+    'setting-conflicts',
+    conflictIds,
+  )
+
   const openCategory = (categoryKey: string) => {
     // 换分类即清空条目选中 —— 正文栏随之回到「该分类的目录」视图。
     setActiveCategory(categoryKey)
@@ -123,6 +151,8 @@ export default function WorldSettingSidebarPanel() {
   }
 
   const openPendingQueue = () => {
+    // 打开即「看过了」：红点与「他确实看见了」是同一个动作（见 pending-badge-store）。
+    markPendingSeen()
     setShowPendingQueue(true)
     openBuiltinEditor(WORLD_SETTING_TAB_ID, text('设定集', 'World building'), 'world-setting')
   }
@@ -244,12 +274,15 @@ export default function WorldSettingSidebarPanel() {
         {pendingCount > 0 && (
           <div
             className={cn(
-              'ws-category-item flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md text-xs cursor-pointer mb-1',
+              'ws-category-item relative flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md text-xs cursor-pointer mb-1',
               showPendingQueue
                 ? (magSelection ? 'ws-category-item-on' : 'bg-[var(--color-active)]')
                 : 'hover:bg-[var(--color-hover)]',
             )}
             onClick={openPendingQueue}
+            title={hasUnreadPending
+              ? text('有新的设定候选等着你确认', 'New setting candidates are waiting for your review')
+              : text('有待确认的设定候选', 'Setting candidates pending review')}
           >
             <span className="text-sm font-semibold text-[var(--color-text)] flex items-center gap-1.5">
               <Inbox size={13} />
@@ -258,6 +291,7 @@ export default function WorldSettingSidebarPanel() {
             <span className="flex-shrink-0 text-[0.68rem] tabular-nums" style={{ color: 'var(--color-accent)' }}>
               {pendingCount}
             </span>
+            {hasUnreadPending && <PendingDot />}
           </div>
         )}
 
@@ -266,8 +300,15 @@ export default function WorldSettingSidebarPanel() {
             入口立刻在这里冒出来，点开就是并排对照 + 一键裁决。 */}
         {conflicts.length > 0 && (
           <div
-            className="ws-category-item flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md text-xs cursor-pointer mb-1 hover:bg-[var(--color-hover)]"
-            onClick={() => { void loadConflicts(); setConflictDialogOpen(true) }}
+            className="ws-category-item relative flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md text-xs cursor-pointer mb-1 hover:bg-[var(--color-hover)]"
+            onClick={() => {
+              markConflictsSeen()
+              void loadConflicts()
+              setConflictDialogOpen(true)
+            }}
+            title={hasUnreadConflicts
+              ? text('有新的设定冲突等着你裁决', 'New setting conflicts are waiting')
+              : text('有待裁决的设定冲突', 'Setting conflicts pending')}
           >
             <span className="text-sm font-semibold flex items-center gap-1.5" style={{ color: 'var(--color-text)' }}>
               <AlertTriangle size={13} />
@@ -276,6 +317,7 @@ export default function WorldSettingSidebarPanel() {
             <span className="flex-shrink-0 text-[0.68rem] tabular-nums" style={{ color: 'var(--color-accent)' }}>
               {conflicts.length}
             </span>
+            {hasUnreadConflicts && <PendingDot />}
           </div>
         )}
 

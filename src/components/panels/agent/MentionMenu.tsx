@@ -24,16 +24,20 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
+  FilePen,
   FileStack,
   FileText,
   Globe2,
   Map,
+  ScrollText,
   Search,
   Users,
   type LucideIcon,
 } from 'lucide-react'
 import { searchMentionTargets, type MentionTarget } from '../../../services/agent/intent-router'
+import { ipc } from '../../../services/ipc-client'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { useUiVersionStore, isMagazine } from '../../../stores/ui-version-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { useWorldSettingStore } from '../../../stores/world-setting-store'
 import { useCharacterStore } from '../../../stores/character-store'
@@ -48,10 +52,26 @@ const mentionTargetIcons = {
   chapter: FileStack,
   file: FileText,
   'world-setting': Globe2,
+  // 便利贴 · AI 灵感专用：具体某一稿 / 某一章定稿
+  draft: FilePen,
+  manuscript: ScrollText,
 } satisfies Record<MentionTarget['type'], LucideIcon>
 
-/** 有下级可进的类别。 */
-const DRILL_DOWN_TYPES = new Set<MentionTarget['type']>(['character', 'world-setting'])
+/**
+ * 有下级可进的类别。
+ *
+ * 便利贴抽卡要能 @ 到**具体某一章**的蓝图，所以这里补上了 blueprint 一层；
+ * 又要能 @ 到**具体某一稿 / 某一章定稿**，于是再加 draft 与 manuscript 两层。
+ * 助手与章节蓝图页共用这个菜单，因而也一并获得了蓝图那一层（后两层不出现在
+ * 它们的菜单里 —— 它们的根类别里根本没有这两项）。
+ */
+const DRILL_DOWN_TYPES = new Set<MentionTarget['type']>([
+  'character',
+  'world-setting',
+  'blueprint',
+  'draft',
+  'manuscript',
+])
 
 const MENU_WIDTH = 340
 /** 菜单最高高度：再高就不好盯着输入框了。 */
@@ -79,6 +99,20 @@ interface Props {
   anchor?: MentionAnchor | null
   /** 直接进入某个类别（章节蓝图只引用设定，用 'world-setting'）。 */
   directTo?: MentionTarget['type']
+  /**
+   * 只允许引用的类别；缺省 = 不限（助手与章节蓝图页维持原样）。
+   *
+   * 便利贴的 AI 灵感用它把「故事架构 / 知识库 / 当前章节 / 项目文件」藏掉 ——
+   * 先生说那几类对攒灵感没有意义，菜单里不该出现点不动的选项。
+   */
+  allowedTypes?: readonly MentionTarget['type'][]
+  /**
+   * 额外补进来的根类别。
+   *
+   * 「草稿」「正文」就是这么进去的：它们不在 getAllMentionTargets 的静态列表里
+   * （那份列表是给助手的，而助手没有读草稿的工具），只由便利贴按需提供。
+   */
+  extraRootTargets?: readonly MentionTarget[]
 }
 
 type Level =
@@ -86,8 +120,22 @@ type Level =
   | { kind: 'categories' }                        // 世界观设定 → 分类层
   | { kind: 'items'; type: MentionTarget['type']; category?: string }
 
-export default function MentionMenu({ query, onSelect, onClose, anchor, directTo }: Props) {
+export default function MentionMenu({
+  query,
+  onSelect,
+  onClose,
+  anchor,
+  directTo,
+  allowedTypes,
+  extraRootTargets,
+}: Props) {
   const locale = useLocaleStore(state => state.locale)
+  /**
+   * 搜索框的圆角跟随界面版本：v3 时尚杂志是发丝直角，v2 墨纸书斋保留原圆角。
+   * （铁律三：这类分家必须显式判 isMagazine，不能让 v3 的改动渗回 v2。）
+   */
+  const mentionUiVersion = useUiVersionStore(state => state.uiVersion)
+  const frameRadius = isMagazine(mentionUiVersion) ? 2 : 'var(--radius-sm)'
   const text = useLocaleStore(state => state.text)
   const [search, setSearch] = useState(query)
   const [level, setLevel] = useState<Level>(
@@ -135,11 +183,93 @@ export default function MentionMenu({ query, onSelect, onClose, anchor, directTo
     [worldEntries],
   )
 
+  /**
+   * 章节蓝图条目：**只在真的进到那一层时才拉**。
+   *
+   * 蓝图没有前端 store（它由 db:blueprint-get-all 直接给），所以按需读一次。
+   * 读失败就当空列表 —— 菜单空着，好过在输入框旁边弹一个错误。
+   */
+  const [blueprintTargets, setBlueprintTargets] = useState<MentionTarget[]>([])
+
+  /**
+   * 具体某一稿 / 某一章定稿：同样**只在进到那一层时才拉**。
+   *
+   * 两者都来自同一份草稿清单（db:draft-list-all）：status='finalized' 的是正文，
+   * 其余活跃的是草稿。读失败就当空列表。
+   */
+  const [chapterTargets, setChapterTargets] = useState<{ drafts: MentionTarget[]; manuscripts: MentionTarget[] }>({
+    drafts: [],
+    manuscripts: [],
+  })
+  const mentionProjectPath = currentProject?.path
+  const atBlueprintLevel = level.kind === 'items' && level.type === 'blueprint'
+  const atDraftLevel = level.kind === 'items' && (level.type === 'draft' || level.type === 'manuscript')
+  useEffect(() => {
+    if (!atBlueprintLevel || !mentionProjectPath) return
+    let cancelled = false
+    ipc.invoke('db:blueprint-get-all', mentionProjectPath).then((rows) => {
+      if (cancelled) return
+      setBlueprintTargets((Array.isArray(rows) ? rows : []).map(row => ({
+        type: 'blueprint' as const,
+        displayName: `第${row.chapterNumber}章${row.title ? ` ${row.title}` : ''}`,
+        value: String(row.chapterNumber),
+        hint: (row.purpose || '').slice(0, 24),
+      })))
+    }).catch(() => {
+      if (!cancelled) setBlueprintTargets([])
+    })
+    return () => { cancelled = true }
+  }, [atBlueprintLevel, mentionProjectPath])
+
+  useEffect(() => {
+    if (!atDraftLevel || !mentionProjectPath) return
+    let cancelled = false
+    ipc.invoke('db:draft-list-all', mentionProjectPath).then((rows) => {
+      if (cancelled) return
+      const list = Array.isArray(rows) ? rows : []
+      const drafts: MentionTarget[] = []
+      const manuscripts: MentionTarget[] = []
+      for (const row of list) {
+        if (!row || row.status === 'archived') continue
+        const chapter = Number(row.chapterNumber)
+        if (!Number.isSafeInteger(chapter) || chapter < 1) continue
+        const title = (row.chapterTitle || '').trim()
+        const base = `第${chapter}章${title ? ` ${title}` : ''}`
+        if (row.status === 'finalized') {
+          manuscripts.push({
+            type: 'manuscript',
+            displayName: base,
+            value: String(row.id),
+          })
+        } else {
+          drafts.push({
+            type: 'draft',
+            displayName: `${base} · v${row.version}`,
+            value: String(row.id),
+            hint: row.status === 'draft' ? '' : row.status,
+          })
+        }
+      }
+      setChapterTargets({ drafts, manuscripts })
+    }).catch(() => {
+      if (!cancelled) setChapterTargets({ drafts: [], manuscripts: [] })
+    })
+    return () => { cancelled = true }
+  }, [atDraftLevel, mentionProjectPath])
+
   /** 当前层级要显示的项。 */
   const visibleItems = useMemo<MentionTarget[]>(() => {
     const q = search.trim().toLocaleLowerCase()
     if (level.kind === 'roots') {
-      return searchMentionTargets(q, locale)
+      // 额外的根类别（便利贴的「草稿」「正文」）不在静态列表里，要自己按搜索词过滤。
+      const dynamicRoots = (extraRootTargets ?? []).filter(target => (
+        !q
+        || target.displayName.toLocaleLowerCase().includes(q)
+        || target.value.toLocaleLowerCase().includes(q)
+      ))
+      const all = [...searchMentionTargets(q, locale), ...dynamicRoots]
+      // 先生说：其他引用不了的类别，干脆别出现在这个菜单里。
+      return allowedTypes ? all.filter(target => allowedTypes.includes(target.type)) : all
     }
     if (level.kind === 'categories') {
       // 分类层：只列出确实有条目的分类
@@ -165,7 +295,23 @@ export default function MentionMenu({ query, onSelect, onClose, anchor, directTo
       if (matched.length === 0 && directTo) return allCategories
       return matched
     }
+    // 条目层：具体某一稿 / 某一章定稿
+    if (level.type === 'draft' || level.type === 'manuscript') {
+      const source = level.type === 'draft' ? chapterTargets.drafts : chapterTargets.manuscripts
+      if (!q) return source
+      return source.filter(target => (
+        target.displayName.toLocaleLowerCase().includes(q)
+        || (target.hint ?? '').toLocaleLowerCase().includes(q)
+      ))
+    }
     // 条目层
+    if (level.type === 'blueprint') {
+      if (!q) return blueprintTargets
+      return blueprintTargets.filter(target => (
+        target.displayName.toLocaleLowerCase().includes(q)
+        || (target.hint ?? '').toLocaleLowerCase().includes(q)
+      ))
+    }
     const source = level.type === 'character'
       ? characterEntries.map(character => ({
           type: 'character' as const,
@@ -191,7 +337,7 @@ export default function MentionMenu({ query, onSelect, onClose, anchor, directTo
         || (target.hint ?? '').toLocaleLowerCase().includes(q)
       ))
       .slice(0, MAX_ITEMS)
-  }, [level, search, locale, confirmedWorldEntries, worldCategories, characterEntries, text, directTo])
+  }, [level, search, locale, confirmedWorldEntries, worldCategories, characterEntries, blueprintTargets, chapterTargets, extraRootTargets, allowedTypes, text, directTo])
 
   // 不再需要「search / level 变化时 setSelectedIndex(0)」的 effect：
   // 上面的筛选键派生已经承担了这次重置。
@@ -209,6 +355,18 @@ export default function MentionMenu({ query, onSelect, onClose, anchor, directTo
     }
     if (level.kind === 'roots' && target.type === 'character') {
       setLevel({ kind: 'items', type: 'character' })
+      setSearch('')
+      return
+    }
+    // 章节蓝图：进到具体章节那层再选，避免只把「章节蓝图」这个类别名塞进去。
+    if (level.kind === 'roots' && target.type === 'blueprint') {
+      setLevel({ kind: 'items', type: 'blueprint' })
+      setSearch('')
+      return
+    }
+    // 草稿 / 正文：同样要进到条目层，列出具体的每一稿、每一章。
+    if (level.kind === 'roots' && (target.type === 'draft' || target.type === 'manuscript')) {
+      setLevel({ kind: 'items', type: target.type })
       setSearch('')
       return
     }
@@ -297,12 +455,18 @@ export default function MentionMenu({ query, onSelect, onClose, anchor, directTo
   const levelLabel = level.kind === 'items'
     ? (level.type === 'character'
         ? text('角色卡', 'Character cards')
-        : level.category
-          ? text(
-              getWorldSettingCategoryLabels(level.category, worldCategories).zhCN,
-              getWorldSettingCategoryLabels(level.category, worldCategories).enUS,
-            )
-          : text('世界观设定', 'World settings'))
+        : level.type === 'blueprint'
+          ? text('章节蓝图', 'Chapter blueprints')
+          : level.type === 'draft'
+            ? text('草稿', 'Drafts')
+            : level.type === 'manuscript'
+              ? text('正文', 'Manuscript')
+              : level.category
+                ? text(
+                    getWorldSettingCategoryLabels(level.category, worldCategories).zhCN,
+                    getWorldSettingCategoryLabels(level.category, worldCategories).enUS,
+                  )
+                : text('世界观设定', 'World settings'))
     : level.kind === 'categories'
       ? text('世界观设定', 'World settings')
       : ''
@@ -327,9 +491,7 @@ export default function MentionMenu({ query, onSelect, onClose, anchor, directTo
         className="flex items-center gap-2 px-3 py-2 border-b flex-shrink-0"
         style={{ borderColor: 'var(--color-border)' }}
       >
-        {level.kind === 'roots' ? (
-          <Search size={14} className="flex-shrink-0" style={{ color: 'var(--color-text-muted)' }} aria-hidden="true" />
-        ) : (
+        {level.kind !== 'roots' && (
           /* 先生：返回做成「图标 + 文字」，一眼看得懂，不会有人找不到 */
           <button
             type="button"
@@ -344,27 +506,76 @@ export default function MentionMenu({ query, onSelect, onClose, anchor, directTo
             {text('返回', 'Back')}
           </button>
         )}
-        <input
-          autoFocus
-          value={search}
-          onChange={event => setSearch(event.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={level.kind === 'roots'
-            ? text('搜索要引用的内容…', 'Search what to reference…')
-            : text(`在「${levelLabel}」里搜索…`, `Search in “${levelLabel}”…`)}
-          aria-label={text('搜索', 'Search')}
-          className="flex-1 bg-transparent border-0 outline-none text-sm"
-          style={{ color: 'var(--color-text)', boxShadow: 'none' }}
-        />
-        {level.kind !== 'roots' && (
-          <span className="flex-shrink-0 text-[11px] tabular-nums" style={{ color: 'var(--color-text-muted)' }}>
-            {visibleItems.length}
-          </span>
-        )}
+        {/*
+          搜索框做成**一眼看得出能打字**的输入区（先生：「让人直感这里是可以输入搜索的」）：
+          一个可见的框 + 里面的放大镜。早先它是个无边框的裸 input，只在根层旁边挂一枚
+          放大镜，作者常常不知道那儿能输入。
+          框角跟随界面版本：v3 时尚杂志是发丝直角，v2 墨纸书斋保留原圆角。
+        */}
+        <div
+          className="flex items-center gap-1.5 flex-1 min-w-0"
+          style={{
+            padding: '3px 7px',
+            border: '1px solid var(--color-border)',
+            borderRadius: frameRadius,
+            backgroundColor: 'var(--color-panel)',
+          }}
+        >
+          <Search
+            size={13}
+            className="flex-shrink-0"
+            style={{ color: 'var(--color-text-muted)' }}
+            aria-hidden="true"
+          />
+          <input
+            autoFocus
+            value={search}
+            onChange={event => setSearch(event.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={level.kind === 'roots'
+              ? text('搜索要引用的内容…', 'Search what to reference…')
+              : text(`在「${levelLabel}」里搜索…`, `Search in “${levelLabel}”…`)}
+            aria-label={text('搜索', 'Search')}
+            className="flex-1 min-w-0 bg-transparent border-0 outline-none text-sm"
+            style={{ color: 'var(--color-text)', boxShadow: 'none' }}
+          />
+          {level.kind !== 'roots' && (
+            <span className="flex-shrink-0 text-[11px] tabular-nums" style={{ color: 'var(--color-text-muted)' }}>
+              {visibleItems.length}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* 清单：内部滚动 */}
-      <div ref={listRef} className="flex-1 overflow-y-auto py-1">
+      <div
+        ref={listRef}
+        className="flex-1 overflow-y-auto py-1"
+        /**
+         * 滚轮保险。
+         *
+         * 模态弹窗会锁住背景滚动（react-remove-scroll 在 document 上拦 wheel，
+         * 只放行弹窗自己那棵滚动容器），而本菜单是 Portal 到 body 的、不在白名单里 ——
+         * 那时滚轮整个失效。
+         *
+         * 手法：**先让浏览器自己滚**，下一帧发现它压根没动，才轮到我们接手。
+         * 这样两种情形都对：还在模态下我们补上，切成非模态后浏览器自己就滚了，
+         * 不会两边一起滚成两倍速。deltaY 提前取出来，免得依赖合成事件的生命周期。
+         */
+        onWheel={(event) => {
+          const list = listRef.current
+          if (!list) return
+          const before = list.scrollTop
+          const delta = event.deltaY
+          requestAnimationFrame(() => {
+            if (list.scrollTop !== before) return
+            const atTop = list.scrollTop <= 0 && delta < 0
+            const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 1 && delta > 0
+            if (atTop || atBottom) return
+            list.scrollTop += delta
+          })
+        }}
+      >
         {visibleItems.length === 0 ? (
           <div className="px-4 py-5 text-center text-sm" style={{ color: 'var(--color-text-muted)' }}>
             {level.kind !== 'roots' && loading
@@ -432,7 +643,18 @@ export default function MentionMenu({ query, onSelect, onClose, anchor, directTo
   return createPortal(
     <div
       className="fixed inset-0"
-      style={{ zIndex: 9998 }}
+      style={{
+        zIndex: 9998,
+        /**
+         * 必须显式写 auto，不能靠继承。
+         *
+         * Radix 的**模态**弹窗会给 `<body>` 设 `pointer-events: none`，只让弹窗内容
+         * 自己可交互；而本菜单是 Portal 到 body 的、不在弹窗内容里 —— 不写这一行，
+         * 鼠标就会整个穿透过去：菜单看得见、点不着，@ 之后选不了任何东西。
+         * （先生正是在便利贴的「AI 灵感」弹窗里撞上这个：那个弹窗是模态的。）
+         */
+        pointerEvents: 'auto',
+      }}
       onMouseDown={onClose}
     >
       <div onMouseDown={event => event.stopPropagation()}>{panel}</div>

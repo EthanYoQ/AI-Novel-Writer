@@ -33,8 +33,9 @@ export default function StatusBarV2() {
       <span className="st-seg" title={text(APP_BRAND.zhName, APP_BRAND.enName)}>
         <BookOpen size={10} strokeWidth={1.8} />
         <span className="bright">{text(APP_BRAND.shortName, APP_BRAND.enName)}</span>
-        {/* 先生：底栏要带上版本号，否则后续版本容易错乱（经典界面的状态栏早就有，v2 漏了）；V3 为待推送分支标识 */}
-        <span className="dim">v{__APP_VERSION__} V3</span>
+        {/* 先生：底栏要带上版本号，否则后续版本容易错乱（经典界面的状态栏早就有，v2 漏了）。
+            V3 为待推送分支标识；`-0.1` 是先生定的本次打包版本区分（2026-09-22）。 */}
+        <span className="dim">v{__APP_VERSION__} V3-0.1</span>
       </span>
 
       {currentProject && (

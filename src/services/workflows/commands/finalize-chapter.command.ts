@@ -42,6 +42,9 @@ import {
   type CharacterRosterCharacterState,
   type CharacterRosterEntry,
 } from '../../../shared/character-roster'
+import { normalizeCharacterRole } from '../../../shared/character-role'
+import type { CharacterCandidateInput } from '../../../shared/character-candidate'
+import { normalizeCharacterCandidateState } from '../../../shared/character-candidate'
 import { writingLanguageText } from '../../../shared/writing-language'
 import { localize } from '../../../i18n/core'
 import type { Locale } from '../../../i18n/types'
@@ -237,6 +240,95 @@ function parseCharacterStateUpdates(
   return updatesByName
 }
 
+/**
+ * 在正文里找该名字出现过的那一句，作为「凭什么提他」的证据。
+ *
+ * 纯本地字符串查找，**不花任何 token** —— 却能让作者一眼看出这人是在哪儿冒出来
+ * 的，而不必自己回正文里翻。找不到就留空，绝不编造。
+ */
+function locateNameEvidence(chapterContent: string, name: string): string {
+  const index = chapterContent.indexOf(name)
+  if (index < 0) return ''
+  const from = Math.max(0, index - 60)
+  const to = Math.min(chapterContent.length, index + name.length + 60)
+  return chapterContent.slice(from, to).replace(/\s+/gu, ' ').trim()
+}
+
+/**
+ * 从定稿后处理的输出里接住 `newCharacters`。
+ *
+ * ── 为什么单独一个函数，而且刻意写得宽松 ────────────────────────────────────
+ * 上面那句 parseCharacterStateUpdates 是**严格**的：状态写回一旦对不上号就必须
+ * 停下来，宁可不写也不能写错。但新角色候选是**附加信息** —— 它丢了最多是少一次
+ * 提名，绝不该把整章定稿搞失败。所以这里所有读不懂的地方都退化成「这一条不要」，
+ * 而不是抛错。
+ *
+ * ── 接上这段输出的意义 ──────────────────────────────────────────────────────
+ * 提示词早就要求模型返回 `newCharacters`（「分析并在 newCharacters 中提取本章
+ * 新出场的重要角色，不要包含路人或已死无后续影响的龙套」），模型也照做了，
+ * 可此前**没有任何代码读它** —— 那一半 token 白花，正文里冒出来的新人物既不建档、
+ * 也没人提醒作者。先生 2026-09-21 点破了这件事：「这应该让用户自己来判断」。
+ *
+ * 追记（同一天，先生第二次报障）：接住 name / role 之后，`currentState` 又被漏了一层 ——
+ * 提示词给每个新角色都写了状态（location / powerLevel / physicalState / mentalState /
+ * keyItems / recentEvents），解析器却只取名字。于是作者采纳建档后得到一张只有名字的
+ * 空卡：「新档只有名字，里面没有任何的内容？」这一处一并接住，见下面的 currentState。
+ *
+ * 所以这里只**提名**：交给待确认队列，等作者点头才建档（见 character-candidate）。
+ *
+ * 刻意 export：这条「接住 newCharacters」的契约值得被单测钉住 —— 它此前正是因为
+ * 没人读而静默失效了整整一轮。
+ */
+export function parseNewCharacterCandidates(
+  content: string,
+  roster: readonly CharacterRosterEntry[],
+  chapterContent: string,
+  chapterNumber: number,
+): CharacterCandidateInput[] {
+  let parsed: unknown
+  try {
+    parsed = parseJSON<unknown>(content)
+  } catch {
+    return []
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed.newCharacters)) return []
+
+  const rosterKeys = new Set(
+    roster
+      .map(character => characterRosterIdentityKey(character.name))
+      .filter(Boolean),
+  )
+  const seen = new Set<string>()
+  const candidates: CharacterCandidateInput[] = []
+  for (const raw of parsed.newCharacters) {
+    if (!isRecord(raw)) continue
+    const name = typeof raw.name === 'string' ? raw.name.trim() : ''
+    if (!name || name.length > 200) continue
+    const key = characterRosterIdentityKey(name)
+    // 已经在名单里的不算新人；同一次输出里重名的只留一条。
+    if (!key || rosterKeys.has(key) || seen.has(key)) continue
+    seen.add(key)
+    candidates.push({
+      name,
+      role: normalizeCharacterRole(raw.role),
+      evidence: locateNameEvidence(chapterContent, name),
+      chapterNumber,
+      /**
+       * 一并接住 `currentState`。
+       *
+       * 提示词的要求写在输出格式里：`newCharacters` 的每一项都带 location /
+       * powerLevel / physicalState / mentalState / keyItems / recentEvents /
+       * updatedAtChapter，与 `updates` 里已有角色的形状完全一致。
+       * 此前这里只读 name 与 role，把这一整块丢了 —— 作者在角色页点「采纳并建档」，
+       * 建出来的新档除名字以外一片空白（先生报障）。这份状态本来就在返回里，
+       * 接住它不花任何额外 token，只是此前没人读。
+       */
+      currentState: normalizeCharacterCandidateState(raw.currentState, chapterNumber),
+    })
+  }
+  return candidates
+}
+
 function factCategory(statement: string): FinalizedContinuityFactCategory {
   if (/(?:角色|状态|持有|受伤|位于|死亡|身亡|牺牲|去世|character|holds?|injur|location|dead|died|deceased)/iu.test(statement)) return 'character-state'
   if (/(?:时间|当日|翌日|多年|之前|之后|timeline|before|after|years?)/iu.test(statement)) return 'timeline'
@@ -325,34 +417,63 @@ export interface WorldSettingNameCandidate {
 }
 
 /**
- * 把一个模型返回的名称解析成真实条目 id，**只在无歧义时返回**。
+ * 名称解析的三种结果。
+ *
+ * 为什么必须把「歧义」与「无命中」分开（review P1）：
+ * 两者曾经都被揉成一个 `null`，于是共享同一条「降级为待确认候选」的路径 ——
+ * 而那条路径用覆盖式 save 落库，歧义名字一旦与既有条目同名，就会覆盖作者已确认的
+ * 原文。语义上它们本就不同：
+ *   · `ambiguous` —— 库里有多条可能的目标，**不能猜**，也**不是新条目**（名字早就存在）；
+ *   · `unmatched` —— 库里真的没有这个名字，才是「正文引出、库里还没有」的新设定。
+ */
+export type WorldSettingNameMatch =
+  | { kind: 'unique'; id: number }
+  | { kind: 'ambiguous' }
+  | { kind: 'unmatched' }
+
+/**
+ * 把一个模型返回的名称归类：唯一命中 / 歧义 / 无命中。
  *
  * 反例（review 点名）：库中有「东城商会」和「西城商会」，模型只报「商会」——
  * 两个名字都包含它，按长度差挑一个会把进展写进任意一条。所以这里：
- *   · 规范名称精确命中（大小写折叠）且**唯一** → 返回该条目；
- *   · **唯一**别名精确命中 → 返回该条目；
- *   · 多个条目同时命中、或只能靠包含关系命中 → 返回 null，
- *     交由作者在待确认队列里裁决，绝不靠长度差猜一个。
+ *   · 规范名称精确命中（大小写折叠）且**唯一** → unique；
+ *   · **唯一**别名精确命中 → unique；
+ *   · 多个条目同时命中（含重复别名）→ ambiguous，绝不靠长度差猜一个；
+ *   · 完全没命中 → unmatched，可进候选队列等作者确认。
+ */
+export function classifyWorldSettingName(
+  rawName: string,
+  candidates: readonly WorldSettingNameCandidate[],
+): WorldSettingNameMatch {
+  const wanted = rawName.trim()
+  if (!wanted) return { kind: 'unmatched' }
+  const folded = wanted.toLowerCase()
+
+  const nameMatches = candidates.filter(candidate => candidate.name.toLowerCase() === folded)
+  if (nameMatches.length === 1) return { kind: 'unique', id: nameMatches[0].id }
+  if (nameMatches.length > 1) return { kind: 'ambiguous' }
+
+  const aliasMatches = candidates.filter(candidate => (
+    candidate.aliases.some(alias => alias.trim().toLowerCase() === folded)
+  ))
+  if (aliasMatches.length === 1) return { kind: 'unique', id: aliasMatches[0].id }
+  if (aliasMatches.length > 1) return { kind: 'ambiguous' }
+
+  return { kind: 'unmatched' }
+}
+
+/**
+ * 把一个模型返回的名称解析成真实条目 id，**只在无歧义时返回**。
+ *
+ * 歧义与无命中都会得到 `null`；需要区分二者时用 classifyWorldSettingName ——
+ * 「歧义」绝不能当成新条目去建候选，那正是 review P1 的入口。
  */
 export function resolveWorldSettingEntryId(
   rawName: string,
   candidates: readonly WorldSettingNameCandidate[],
 ): number | null {
-  const wanted = rawName.trim()
-  if (!wanted) return null
-  const folded = wanted.toLowerCase()
-
-  const nameMatches = candidates.filter(candidate => candidate.name.toLowerCase() === folded)
-  if (nameMatches.length === 1) return nameMatches[0].id
-  if (nameMatches.length > 1) return null
-
-  const aliasMatches = candidates.filter(candidate => (
-    candidate.aliases.some(alias => alias.trim().toLowerCase() === folded)
-  ))
-  if (aliasMatches.length === 1) return aliasMatches[0].id
-
-  // 重复别名 / 包含关系 / 无命中：都不自动归属，交给作者确认。
-  return null
+  const match = classifyWorldSettingName(rawName, candidates)
+  return match.kind === 'unique' ? match.id : null
 }
 
 /** 空白/换行归一化：排版与模型回传引文在空格、换行上常有差异，归一化后再比对。 */
@@ -600,6 +721,48 @@ export function buildFinalizePostProcessSteps(
         if (context?.cancelled) throw new Error(workflowUiText(context, '工作流已取消', 'Workflow was cancelled.'))
         const updatesByName = parseCharacterStateUpdates(cardsResult, allChars, chapterNumber)
         generatedCharacterCards = cardsResult
+
+        /**
+         * 顺手接住模型这次一并给出的**新角色提名**。
+         *
+         * 提示词一直在要 `newCharacters`，但此前没人读 —— 这里把它接进待确认队列：
+         * 只提名、不建档，等作者在角色页点头（先生 2026-09-21 定的形态）。
+         *
+         * 两处刻意为之：
+         *   · 它是**附加信息**，所以入队失败只留一行日志，绝不拖垮定稿；
+         *   · 提名的依据不必回模型要 —— 直接在正文里找该名字出现过的一句，
+         *     本地字符串查找，零 token。
+         */
+        const newCharacterCandidates = parseNewCharacterCandidates(
+          cardsResult,
+          allChars,
+          draftContent,
+          chapterNumber,
+        )
+        if (newCharacterCandidates.length > 0) {
+          try {
+            const queued = await ipc.invokeWithProjectSession(
+              projectSession,
+              'db:character-candidate-queue',
+              newCharacterCandidates,
+              _project.path,
+            ) as { success?: boolean; queued?: number } | undefined
+            if (queued?.success && (queued.queued ?? 0) > 0) {
+              callbacks.log(workflowUiText(
+                context,
+                `发现 ${queued.queued} 名名单外的新角色，已放进角色栏「待确认」等你裁决`,
+                `${queued.queued} character(s) outside the roster were queued in “Pending review”`,
+              ))
+            }
+          } catch (error) {
+            callbacks.log(workflowUiText(
+              context,
+              `  新角色提名入队失败（不影响定稿）：${error}`,
+              `  Could not queue new-character candidates (finalization is unaffected): ${error}`,
+            ))
+          }
+        }
+
         let updatedCount = 0
         const changedEntries: CharacterRosterEntry[] = []
         const blockedCandidates: FinalizedCharacterStateCandidate[] = []
@@ -810,19 +973,24 @@ export function buildFinalizePostProcessSteps(
       }
 
       /**
-       * 把一个模型返回的名字解析成真实条目 id。
+       * 把一个模型返回的名字归类：唯一命中 / 歧义 / 无命中。
        *
-       * 为什么不能只用精确匹配：模型对同一个设定的措辞经常与条目名有细微差异
-       * （全半角、空格、加不加「设定」后缀、用别名）——
-       * 精确匹配一旦失手，这条进展就被**静默丢弃**，作者只会觉得"没生效"。
-       * 所以按「全等 → 别名 → 包含」三级放宽，并且**记住失手**以留下日志线索。
+       * 为什么要放宽到全等之外：模型对同一个设定的措辞常与条目名有细微差异
+       * （大小写、空格、用别名）—— 匹配失手不该让进展被**静默丢弃**，所以
+       * 「无命中」会降级为待确认候选，并**记住失手**留下日志线索。
+       * 但放宽只到「全等（折叠大小写）」为止：包含关系一律不算命中，
+       * 更不会靠长度差在多个候选里挑一个。
+       *
+       * 歧义与无命中是两件不同的事：歧义不自动归属、也**不建候选**
+       * （名字本来就存在，不是新设定）；无命中才是「正文引出、库里还没有」的新设定。
        */
-      // 名称解析只看「无歧义的规范名称或唯一别名」：歧义/包含关系一律不自动归属，
-      // 交给作者在待确认队列裁决，避免把进展写进任意一条（见 resolveWorldSettingEntryId）。
-      const resolveEntryId = (rawName: string): number | null => (
-        resolveWorldSettingEntryId(rawName, resolvableEntries)
+      const classifyEntryName = (rawName: string): WorldSettingNameMatch => (
+        classifyWorldSettingName(rawName, resolvableEntries)
       )
       const idToEntry = new Map(resolvableEntries.map(entry => [entry.id, entry]))
+      /** 因名称歧义而未自动归属的条目名（含重复别名）：只如实报告，库里一个字都不动。 */
+      const ambiguousNames = new Set<string>()
+      let ambiguousCount = 0
 
       // 记下「模型报了、但对不上任何条目」的名字，供日志排查（否则无从下手）。
       const unresolvedNames = new Set<string>()
@@ -839,8 +1007,15 @@ export function buildFinalizePostProcessSteps(
       let rejectedEvidenceCount = 0
       for (const item of proposal.updates) {
         if (!item.evidence.trim() || !item.statement.trim()) continue
-        const entryId = resolveEntryId(item.entryName)
-        if (entryId === null) {
+        const match = classifyEntryName(item.entryName)
+        if (match.kind === 'ambiguous') {
+          // 歧义绝不能当新条目去建候选：那条路径在名字撞车时会退化成一次覆盖式写入，
+          // 把模型编造的引文写进作者已确认的事实源（review P1）。这里只报告，不落库。
+          ambiguousCount += 1
+          ambiguousNames.add(item.entryName)
+          continue
+        }
+        if (match.kind === 'unmatched') {
           unresolvedNames.add(item.entryName)
           unmatchedAsCandidates.push({
             name: item.entryName,
@@ -849,6 +1024,7 @@ export function buildFinalizePostProcessSteps(
           })
           continue
         }
+        const entryId = match.id
         // 自动追加的引文必须真的出自冻结正文，否则就是模型编造，不得进事实源。
         if (!evidenceAppearsInContent(draftContent, item.evidence)) {
           rejectedEvidenceCount += 1
@@ -871,11 +1047,18 @@ export function buildFinalizePostProcessSteps(
       //    落进裁决队列，让作者在界面上并排对照后一键处理（不必自己去库里翻找）。
       let conflictCount = 0
       for (const item of proposal.conflicts) {
-        const entryId = resolveEntryId(item.entryName)
-        if (entryId === null) {
-          unresolvedNames.add(item.entryName)
+        const match = classifyEntryName(item.entryName)
+        if (match.kind !== 'unique') {
+          // 冲突登记同样不接受歧义归属：记到哪一条都不对，只报告。
+          if (match.kind === 'ambiguous') {
+            ambiguousCount += 1
+            ambiguousNames.add(item.entryName)
+          } else {
+            unresolvedNames.add(item.entryName)
+          }
           continue
         }
+        const entryId = match.id
         const entry = idToEntry.get(entryId)
         if (!entry) continue
         const recorded = await ipc.invoke(
@@ -895,6 +1078,8 @@ export function buildFinalizePostProcessSteps(
 
       // ③ 新实体 + 对不上条目的进展：都存成待确认候选，作者确认后才成为事实源。
       let pendingCount = 0
+      /** 候选名字与既有条目撞车（含大小写折叠）而被拒绝的次数 —— 如实报告，绝不虚报成功。 */
+      let candidateConflictCount = 0
       const queuedCandidateNames = new Set<string>()
       const pendingInputs = [
         ...proposal.newEntities.map(item => ({
@@ -918,8 +1103,15 @@ export function buildFinalizePostProcessSteps(
         // 但它的内容可能是本章新写的，所以转为「追加进展」而不是一丢了之。
         // 必须与 updates 走同一套无歧义解析：歧义/包含关系绝不自动归属，
         // 否则「北境仙门」这种重复别名会在这里绕过保护、写进第一条条目。
-        const existingId = resolveWorldSettingEntryId(name, resolvableEntries)
-        if (existingId !== null) {
+        const match = classifyWorldSettingName(name, resolvableEntries)
+        if (match.kind === 'ambiguous') {
+          // 重复别名/多命中：既不能自动归属，也不能当成「新条目」建候选 ——
+          // 名字早就属于别人，建候选等于把歧义偷偷变成一次覆盖式写入。
+          ambiguousCount += 1
+          ambiguousNames.add(name)
+          continue
+        }
+        if (match.kind === 'unique') {
           // 同名转追加也不能绕过证据校验 —— 引文不在正文里就绝不自动写入。
           if (!evidenceAppearsInContent(draftContent, item.evidence)) {
             rejectedEvidenceCount += 1
@@ -927,7 +1119,7 @@ export function buildFinalizePostProcessSteps(
           }
           const appended = await ipc.invoke(
             'world-setting:append-derived',
-            existingId,
+            match.id,
             { content: item.statement.trim() },
             chapterNumber,
             expectedProjectPath,
@@ -937,8 +1129,11 @@ export function buildFinalizePostProcessSteps(
           }
           continue
         }
-        const saved = await ipc.invoke(
-          'world-setting:save',
+        // 库里确实没有这个名字 → 走**只新增**的候选通道。
+        // 不能用 world-setting:save：它是覆盖式 upsert（默认 author 权限、UPDATE 又不改
+        // status），同名撞车时会改写作者已确认的条目，且 pendingCount 会虚报（review P1）。
+        const created = await ipc.invoke(
+          'world-setting:create-candidate',
           {
             category: 'world',
             name,
@@ -949,7 +1144,15 @@ export function buildFinalizePostProcessSteps(
           },
           expectedProjectPath,
         )
-        if (saved && typeof saved === 'object' && 'id' in saved) pendingCount += 1
+        // 只有真在库里建出 pending 行才计数：不做「调用成功就算新增」的虚报。
+        if (created && typeof created === 'object' && 'created' in created && created.created) {
+          pendingCount += 1
+        } else if (
+          created && typeof created === 'object' && 'reason' in created
+          && created.reason === 'duplicate-name'
+        ) {
+          candidateConflictCount += 1
+        }
       }
 
       const summaryParts: string[] = []
@@ -961,6 +1164,22 @@ export function buildFinalizePostProcessSteps(
       )
       if (pendingCount > 0) summaryParts.push(
         workflowUiText(context, `${pendingCount} 条新设定待确认`, `${pendingCount} new entries pending review`),
+      )
+      if (ambiguousCount > 0) {
+        // 名字全列出来会刷屏，但一条都不给又没法排查：给前 5 个。
+        const shownNames = Array.from(ambiguousNames).slice(0, 5).join('、')
+        summaryParts.push(workflowUiText(
+          context,
+          `${ambiguousCount} 条名称歧义、未自动归属（${shownNames}）`,
+          `${ambiguousCount} ambiguous names were not auto-assigned (${shownNames})`,
+        ))
+      }
+      if (candidateConflictCount > 0) summaryParts.push(
+        workflowUiText(
+          context,
+          `${candidateConflictCount} 条候选因同名已存在未写入`,
+          `${candidateConflictCount} candidates were skipped: the name already exists`,
+        ),
       )
       if (rejectedEvidenceCount > 0) summaryParts.push(
         workflowUiText(

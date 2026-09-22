@@ -83,10 +83,171 @@ function asTrimmedString(value: unknown, maxChars: number): string {
 }
 
 /**
+ * 按「花括号配平」把文本里每个完整的 `{...}` 抠出来。
+ *
+ * 字符串里的花括号要跳过，所以带了 inString / escaped 状态 —— 设定详情里
+ * 出现 `{}` 或转义引号是常事，按字符盲数括号会切错地方。
+ */
+function extractBalancedObjects(text: string): string[] {
+  const objects: string[] = []
+  let depth = 0
+  let start = -1
+  let inString = false
+  let escaped = false
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (char === '"') {
+      inString = true
+      continue
+    }
+    if (char === '{') {
+      if (depth === 0) start = index
+      depth += 1
+      continue
+    }
+    if (char === '}' && depth > 0) {
+      depth -= 1
+      if (depth === 0 && start !== -1) {
+        objects.push(text.slice(start, index + 1))
+        start = -1
+      }
+    }
+  }
+  return objects
+}
+
+/** 反转义一个 JSON 字符串字面量的内容；不合法时退回原文。 */
+function unescapeJsonString(value: string): string {
+  try {
+    return JSON.parse(`"${value}"`) as string
+  } catch {
+    return value
+  }
+}
+
+function looseStringField(chunk: string, field: string): string {
+  const pattern = new RegExp(`"${field}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`)
+  const match = pattern.exec(chunk)
+  return match ? unescapeJsonString(match[1]) : ''
+}
+
+function looseStringArrayField(chunk: string, field: string): string[] {
+  const pattern = new RegExp(`"${field}"\\s*:\\s*\\[([\\s\\S]*?)\\]`)
+  const match = pattern.exec(chunk)
+  if (!match) return []
+  const items: string[] = []
+  for (const item of match[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
+    const value = unescapeJsonString(item[1]).trim()
+    if (value) items.push(value)
+  }
+  return items
+}
+
+/**
+ * 整个对象也 parse 不动时（多半是里面某个字符串少了半个引号），
+ * 退到字段级：按字段名逐个把值抠出来，至少有名字与摘要的那条还能立起来。
+ */
+function looseRecordFromText(chunk: string): Record<string, unknown> {
+  const record: Record<string, unknown> = {}
+  for (const field of ['name', 'summary', 'content', 'importance', 'category', 'reason']) {
+    const value = looseStringField(chunk, field)
+    if (value) record[field] = value
+  }
+  for (const field of ['aliases', 'tags']) {
+    const list = looseStringArrayField(chunk, field)
+    if (list.length > 0) record[field] = list
+  }
+  return record
+}
+
+/**
+ * 抢救解析 —— 先生 2026-09-21 的原话：
+ * 「明明是用户自己点 AI 生成出来的设定集，却被系统判定为没有价值、直接弃用；
+ *   这应该让用户自己来判断。用户自己点的内容是需要用户自己来的。」
+ *
+ * 他说得对。原先的解析是 `indexOf('[')` 到 `lastIndexOf(']')` 再狠狠一把
+ * JSON.parse，只要输出被 max_tokens 截断（末尾缺 `]`）、或者说明文字里带个
+ * 方括号、或者模型手滑多写一个逗号，整段就判空；界面拿到空数组之后弹出
+ * 「AI 没有产出值得立条的设定」—— 把**解析失败**说成了**生成失败**，
+ * 作者等了几分钟的 token 就这么没了，还背上一句「宁缺毋滥」。
+ *
+ * 这里改成：整体读不动就逐条捞。捞到的照旧进预览弹窗，勾不勾选由作者定。
+ * 半截的最后一条（引号没闭合）天然捞不进来 —— 宁缺毋滥只用在这里：
+ * 不把垃圾塞给作者，但也绝不因为一条坏了就丢掉前面完好的几条。
+ */
+function salvageWorldSettingRecords(text: string): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = []
+  for (const chunk of extractBalancedObjects(text)) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(chunk)
+    } catch {
+      parsed = looseRecordFromText(chunk)
+    }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>
+      // 一个字段都没捞到的残缺块直接跳过，别拿空壳去凑数。
+      if (Object.keys(record).length > 0) records.push(record)
+    }
+  }
+  return records
+}
+
+/**
+ * 把模型的一段输出读成「条目对象」列表。
+ *
+ * 三条路依次退让：正规数组 → 外层包着对象的数组（{"candidates":[...]}）
+ * → 逐条抢救。合法输出走第一条，行为与从前一字不差。
+ */
+function collectWorldSettingRecords(text: string): Record<string, unknown>[] {
+  const start = text.indexOf('[')
+  const end = text.lastIndexOf(']')
+  if (start !== -1 && end > start) {
+    try {
+      const parsed = JSON.parse(text.slice(start, end + 1))
+      if (Array.isArray(parsed)) {
+        return parsed.filter(
+          (item): item is Record<string, unknown> => !!item && typeof item === 'object' && !Array.isArray(item),
+        )
+      }
+    } catch {
+      // 落到下面的退让
+    }
+  }
+
+  const objectStart = text.indexOf('{')
+  const objectEnd = text.lastIndexOf('}')
+  if (objectStart !== -1 && objectEnd > objectStart) {
+    try {
+      const parsed = JSON.parse(text.slice(objectStart, objectEnd + 1)) as Record<string, unknown>
+      const wrapped = parsed?.candidates ?? parsed?.entries ?? parsed?.settings
+      if (Array.isArray(wrapped)) {
+        return wrapped.filter(
+          (item): item is Record<string, unknown> => !!item && typeof item === 'object' && !Array.isArray(item),
+        )
+      }
+      // 模型只给了一条、没套数组：当成单条候选。
+      if (typeof parsed?.name === 'string') return [parsed]
+    } catch {
+      // 落到抢救
+    }
+  }
+
+  return salvageWorldSettingRecords(text)
+}
+
+/**
  * 解析模型返回的候选 JSON。
  *
  * 模型偶尔会套一层 Markdown 代码块或写点开场白，所以先剥壳再找第一个数组。
- * 任何解析不出来的情况都返回空数组 —— 生成失败不该让界面炸掉。
+ * 解析不出来的情况改走抢救（见 salvageWorldSettingRecords），只有确实一条
+ * 都捞不到时才返回空数组。
  */
 export function parseWorldSettingCandidates(raw: string, fallbackCategory: string): WorldSettingCandidate[] {
   if (typeof raw !== 'string' || !raw.trim()) return []
@@ -94,23 +255,11 @@ export function parseWorldSettingCandidates(raw: string, fallbackCategory: strin
   // 剥掉 ```json ... ``` 外壳
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
   if (fenced) text = fenced[1].trim()
-  // 取第一个 '[' 到最后一个 ']'（前面可能有解释性文字）
-  const start = text.indexOf('[')
-  const end = text.lastIndexOf(']')
-  if (start === -1 || end === -1 || end <= start) return []
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text.slice(start, end + 1))
-  } catch {
-    return []
-  }
-  if (!Array.isArray(parsed)) return []
 
+  const records = collectWorldSettingRecords(text)
   const seenNames = new Set<string>()
   const candidates: WorldSettingCandidate[] = []
-  for (const item of parsed) {
-    if (!item || typeof item !== 'object') continue
-    const record = item as Record<string, unknown>
+  for (const record of records) {
     const name = asTrimmedString(record.name, 200)
     if (!name || seenNames.has(name)) continue
     seenNames.add(name)
@@ -271,7 +420,9 @@ export interface WorldSettingEntrySuggestion {
 
 /**
  * 解析单条目生成的 JSON。
- * 与候选解析同样先剥壳再找对象；解析不出来返回空建议（界面据此提示失败）。
+ *
+ * 与候选解析同一套退让：先剥壳找对象，读不动就走抢救 —— 作者已经点过
+ * 那颗「AI 生成」，条目名与分类都是他自己定的，这种输出更不该被判空。
  */
 export function parseWorldSettingEntrySuggestion(raw: string): WorldSettingEntrySuggestion {
   const empty: WorldSettingEntrySuggestion = { summary: '', content: '', aliases: [], tags: [] }
@@ -279,20 +430,33 @@ export function parseWorldSettingEntrySuggestion(raw: string): WorldSettingEntry
   let text = raw.trim()
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
   if (fenced) text = fenced[1].trim()
+
+  const toSuggestion = (record: Record<string, unknown>): WorldSettingEntrySuggestion => ({
+    summary: asTrimmedString(record.summary, MAX_SUMMARY_CHARS),
+    content: asTrimmedString(record.content, MAX_CONTENT_CHARS),
+    aliases: asStringArray(record.aliases, 8),
+    tags: asStringArray(record.tags, 8),
+  })
+
   const start = text.indexOf('{')
   const end = text.lastIndexOf('}')
-  if (start === -1 || end === -1 || end <= start) return empty
-  try {
-    const parsed = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>
-    return {
-      summary: asTrimmedString(parsed.summary, MAX_SUMMARY_CHARS),
-      content: asTrimmedString(parsed.content, MAX_CONTENT_CHARS),
-      aliases: asStringArray(parsed.aliases, 8),
-      tags: asStringArray(parsed.tags, 8),
+  if (start !== -1 && end > start) {
+    try {
+      const parsed = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>
+      const direct = toSuggestion(parsed)
+      if (direct.summary || direct.content) return direct
+    } catch {
+      // 落到下面抢救
     }
-  } catch {
-    return empty
   }
+
+  for (const record of salvageWorldSettingRecords(text)) {
+    const suggestion = toSuggestion(record)
+    if (suggestion.summary || suggestion.content) return suggestion
+  }
+  // 连对象都配不平的对象（比如整段只写了一半）也要按字段再抠一次。
+  const loose = toSuggestion(looseRecordFromText(text))
+  return loose.summary || loose.content ? loose : empty
 }
 
 /**

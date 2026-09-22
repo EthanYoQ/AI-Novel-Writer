@@ -314,6 +314,41 @@ export function registerWorldSettingController(): void {
     },
   )
 
+  /**
+   * 定稿后处理专用：创建待确认候选 —— **只新增，绝不更新既有条目**。
+   *
+   * 与 save 的区别是这次修复的关键：save 不带 id 时按同名查找并覆盖那一条
+   * （writeMode 默认 author、UPDATE 又有意不改 status），于是模型报出的歧义名字
+   * 可以绕过证据校验覆盖作者已确认的事实源。候选创建在同名已存在时一律拒绝。
+   */
+  ipcMain.handle(
+    'world-setting:create-candidate',
+    (_event, draft: unknown, expectedProjectPath: unknown) => {
+      const denied = guardProject(expectedProjectPath)
+      if (denied) return denied
+      if (!draft || typeof draft !== 'object') {
+        return failure(
+          'DATABASE_ERROR',
+          text('条目内容无效，未创建候选。', 'The entry is invalid, so no candidate was created.'),
+        )
+      }
+      const name = typeof (draft as WorldSettingDraft).name === 'string'
+        ? (draft as WorldSettingDraft).name.trim()
+        : ''
+      if (!name) {
+        return failure('DATABASE_ERROR', text('条目名不能为空。', 'The entry name cannot be empty.'))
+      }
+      try {
+        return WorldSettingRepository.createCandidate(draft as WorldSettingDraft)
+      } catch (error) {
+        return failure(
+          'DATABASE_ERROR',
+          text(`创建待确认候选失败：${String(error)}`, `Could not create the pending candidate: ${String(error)}`),
+        )
+      }
+    },
+  )
+
   // ===== 冲突裁决队列 =====
 
   ipcMain.handle('world-setting:list-conflicts', (_event, expectedProjectPath: unknown) => {

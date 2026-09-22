@@ -72,6 +72,7 @@ const UNSAVED_EDITOR_TYPE_LABELS: Record<EditorTab['type'], BilingualLabel> = {
   knowledge: { zh: '知识库', en: 'Knowledge base' },
   'relationship-graph': { zh: '人物关系图谱', en: 'Relationship map' },
   'world-setting': { zh: '设定集', en: 'World building' },
+  'sticky-note': { zh: '便利贴', en: 'Sticky note' },
 }
 
 export type LocaleText = (zhCN: string, enUS: string) => string

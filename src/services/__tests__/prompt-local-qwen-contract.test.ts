@@ -140,6 +140,8 @@ const expectedPromptVariables: Record<string, string[]> = {
     'latest_chapter',
     'total_chapters',
   ],
+  // 便利贴灵感抽卡：变量清单必须与 prompt-templates.ts 里的声明逐项同序。
+  inspiration_draw: ['story_context', 'references', 'idea', 'count'],
 }
 
 const expectedJsonFields: Record<string, string[]> = {

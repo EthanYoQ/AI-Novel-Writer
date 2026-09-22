@@ -18,7 +18,9 @@ import {
 } from '../repositories/blueprint-repository'
 import { CharacterRepository } from '../repositories/character-repository'
 import { CharacterRosterRepository } from '../repositories/character-roster-repository'
+import { CharacterCandidateRepository } from '../repositories/character-candidate-repository'
 import type { CharacterRosterCommitRequest } from '../../src/shared/character-roster'
+import type { CharacterCandidateInput } from '../../src/shared/character-candidate'
 import { DraftRepository } from '../repositories/draft-repository'
 import type { DraftSourceDependency } from '../../src/shared/draft-source-dependency'
 import { FinalizedDraftImportRepository } from '../repositories/finalized-draft-import-repository'
@@ -59,6 +61,16 @@ import { PlotTreeRepository } from '../repositories/plot-tree-repository'
 import { isPlotTreeSourceRevision } from '../../src/shared/plot-tree'
 import { RecoveryCandidateRepository } from '../repositories/recovery-candidate-repository'
 import type { RecoveryCandidateRecordInput } from '../../src/shared/recovery-candidate'
+import {
+  StickyCandidateRepository,
+  StickyDrawRepository,
+  StickyFolderRepository,
+  StickyNoteRepository,
+} from '../repositories/sticky-note-repository'
+import type {
+  StickyDrawRecordRequest,
+  StickyIdeaAppendRequest,
+} from '../../src/shared/sticky-note'
 
 type ProjectDatabaseHandler = (event: unknown, ...args: never[]) => unknown
 
@@ -89,6 +101,8 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:blueprint-delete',
   'db:blueprint-clear-all',
   'db:character-roster-commit',
+  'db:character-candidate-queue',
+  'db:character-candidate-resolve',
   'db:draft-import-finalized-batch',
   'db:draft-create',
   'db:draft-update-status',
@@ -116,6 +130,19 @@ const MUTATING_DATABASE_CHANNELS = new Set([
   'db:narrative-thread-event-confirm',
   'db:plot-tree-save',
   'db:plot-tree-clear',
+  'db:sticky-note-create',
+  'db:sticky-note-rename',
+  'db:sticky-note-save-body',
+  'db:sticky-note-append',
+  'db:sticky-note-delete',
+  'db:sticky-note-move',
+  'db:sticky-folder-create',
+  'db:sticky-folder-rename',
+  'db:sticky-folder-delete',
+  'db:sticky-draw-record',
+  'db:sticky-candidate-record-many',
+  'db:sticky-candidate-use',
+  'db:sticky-candidate-clear',
 ])
 
 function registerProjectDatabaseHandler(channel: string, handler: ProjectDatabaseHandler): void {
@@ -613,6 +640,49 @@ export function registerDatabaseController() {
     }
   })
 
+  /**
+   * 正文新角色候选的三条通道。
+   *
+   * 它们只动「提名单」（character_candidates 表），**绝不碰角色名单**：
+   * 定稿时把模型提的名字排队，作者在角色页点采纳之后，才由渲染进程走上面那条
+   * roster-commit 真正建档。这条分界是刻意的 —— 模型不许自己造角色卡。
+   */
+  ipcMain.handle('db:character-candidate-queue', async (
+    _event,
+    items: CharacterCandidateInput[],
+    expectedProjectPath: string,
+  ) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      if (!Array.isArray(items)) throw new Error('角色候选入队参数无效')
+      const { queued, skipped } = CharacterCandidateRepository.enqueue(items)
+      return { success: true, queued, skipped }
+    } catch (err) {
+      return { success: false, queued: 0, skipped: 0, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('db:character-candidate-list', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return CharacterCandidateRepository.listPending()
+  })
+
+  ipcMain.handle('db:character-candidate-resolve', async (
+    _event,
+    ids: number[],
+    status: 'adopted' | 'dismissed',
+    expectedProjectPath: string,
+  ) => {
+    try {
+      assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      if (status !== 'adopted' && status !== 'dismissed') throw new Error('角色候选裁决状态无效')
+      if (!Array.isArray(ids)) throw new Error('角色候选裁决参数无效')
+      return { success: true, resolved: CharacterCandidateRepository.resolve(ids, status) }
+    } catch (err) {
+      return { success: false, resolved: 0, error: String(err) }
+    }
+  })
+
   // ============================================================
   // 4. drafts — 草稿
   // ============================================================
@@ -918,6 +988,159 @@ export function registerDatabaseController() {
     } catch (error) {
       return { success: false, error: String(error) }
     }
+  })
+
+  // ============================================================
+  // 便利贴 —— 作者私有的灵感本子
+  //
+  // 写通道已在 MUTATING_DATABASE_CHANNELS 里登记，失败会返回
+  // { success: false, error } 而不是抛出。读通道保持抛出语义，
+  // 与 db:recovery-candidate-list 一致。
+  // ============================================================
+  ipcMain.handle('db:sticky-note-list', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return StickyNoteRepository.list()
+  })
+
+  ipcMain.handle('db:sticky-note-create', async (
+    _event,
+    title: string,
+    folderId: string | null,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, note: StickyNoteRepository.create(title, folderId ?? null) }
+  })
+
+  ipcMain.handle('db:sticky-note-move', async (
+    _event,
+    noteId: string,
+    folderId: string | null,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, note: StickyNoteRepository.move(noteId, folderId ?? null) }
+  })
+
+  ipcMain.handle('db:sticky-folder-list', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return StickyFolderRepository.list()
+  })
+
+  ipcMain.handle('db:sticky-folder-create', async (
+    _event,
+    name: string,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, folder: StickyFolderRepository.create(name) }
+  })
+
+  ipcMain.handle('db:sticky-folder-rename', async (
+    _event,
+    folderId: string,
+    name: string,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, folder: StickyFolderRepository.rename(folderId, name) }
+  })
+
+  ipcMain.handle('db:sticky-folder-delete', async (
+    _event,
+    folderId: string,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    StickyFolderRepository.remove(folderId)
+    return { success: true }
+  })
+
+  ipcMain.handle('db:sticky-note-rename', async (
+    _event,
+    noteId: string,
+    title: string,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, note: StickyNoteRepository.rename(noteId, title) }
+  })
+
+  ipcMain.handle('db:sticky-note-save-body', async (
+    _event,
+    noteId: string,
+    body: string,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, note: StickyNoteRepository.saveBody(noteId, body) }
+  })
+
+  ipcMain.handle('db:sticky-note-append', async (
+    _event,
+    noteId: string,
+    requests: StickyIdeaAppendRequest[],
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, note: StickyNoteRepository.appendIdeas(noteId, requests ?? []) }
+  })
+
+  ipcMain.handle('db:sticky-note-delete', async (
+    _event,
+    noteId: string,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    StickyNoteRepository.remove(noteId)
+    return { success: true }
+  })
+
+  ipcMain.handle('db:sticky-draw-record', async (
+    _event,
+    request: StickyDrawRecordRequest,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, draw: StickyDrawRepository.record(request) }
+  })
+
+  ipcMain.handle('db:sticky-draw-get', async (_event, drawId: string, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return StickyDrawRepository.getById(drawId)
+  })
+
+  ipcMain.handle('db:sticky-candidate-list', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return {
+      candidates: StickyCandidateRepository.listPending(),
+      count: StickyCandidateRepository.countPending(),
+    }
+  })
+
+  ipcMain.handle('db:sticky-candidate-record-many', async (
+    _event,
+    drawId: string,
+    contents: string[],
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, candidates: StickyCandidateRepository.recordMany(drawId, contents ?? []) }
+  })
+
+  ipcMain.handle('db:sticky-candidate-use', async (
+    _event,
+    candidateId: string,
+    noteId: string,
+    expectedProjectPath: string,
+  ) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, ...StickyCandidateRepository.useIntoNote(candidateId, noteId) }
+  })
+
+  ipcMain.handle('db:sticky-candidate-clear', async (_event, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    return { success: true, cleared: StickyCandidateRepository.clear() }
   })
 
   ipcMain.handle('db:finalization-link-knowledge-document', async (

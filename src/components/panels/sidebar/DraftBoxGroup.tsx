@@ -2,7 +2,7 @@
  * DraftBoxGroup — 草稿箱折叠组（含章节分组和单条草稿条目）
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type CSSProperties } from 'react'
 import { ChevronRight, ChevronDown, CheckCircle2, Circle, FileText, FolderOpen, Copy, Trash2, FilePen } from 'lucide-react'
 import type { DraftMeta } from '../../../stores/draft-store'
 import { useDraftStore, readDraftBody } from '../../../stores/draft-store'
@@ -21,6 +21,9 @@ import {
   isProjectSessionPath,
 } from '../../project-session-gate'
 import { deleteFinalizedChapter } from './finalized-chapter-deletion'
+import { useActiveManuscriptSurface, useActiveTabFilePath } from './sidebar-active-entry'
+// 子项那根「贴着所属章节往下延申」的共用虚线
+import './tree-child-indent.css'
 
 const DRAFT_STATUS_EN: Record<string, string> = {
   draft: 'Draft', revising: 'Revising', reviewed: 'Reviewed', finalized: 'Finalized', archived: 'Archived',
@@ -37,6 +40,15 @@ export default function DraftBoxGroup({
   const [open, setOpen] = useState(false)
   const text = useLocaleStore(s => s.text)
   const projectKey = useProjectStore(s => s.currentProject?.path)
+  /**
+   * 「正在看的那一行」的统一依据（见 sidebar-active-entry.ts）。
+   *
+   * 先生 2026-09-20：「1级的草稿箱、2级章节……这些是没反应」——
+   * 查证：草稿箱这一整条链（组行 + 章节分组行）当时**都没有选中态代码**，
+   * 只有最底下那一稿（DraftItem）挂了 `.active`。
+   */
+  const activeFilePath = useActiveTabFilePath()
+  const activeSurface = useActiveManuscriptSurface()
   if (!projectKey) return null
 
   // 所有章节号排序
@@ -51,9 +63,10 @@ export default function DraftBoxGroup({
 
   return (
     <div>
-      {/* 草稿箱标题行 */}
+      {/* 草稿箱标题行 —— 正文栏正看着某一稿时它也要亮（折叠着同样亮） */}
       <div
-        className="tree-item gap-1.5 cursor-pointer select-none"
+        data-level={1}
+        className={`tree-item gap-1.5 cursor-pointer select-none${activeSurface === 'draft' ? ' active' : ''}`}
         style={{ paddingLeft: 10 }}
         onClick={() => setOpen(v => !v)}
         title={text('草稿箱：AI 生成后的章节草稿在此管理，定稿后进入正文章节', 'Draft box: manage AI-generated drafts here. Finalized drafts move to the manuscript.')}
@@ -88,6 +101,7 @@ export default function DraftBoxGroup({
                 chapterNumber={chNum}
                 drafts={draftsByChapter[chNum] || []}
                 projectKey={projectKey}
+                activeFilePath={activeSurface === 'draft' ? activeFilePath : undefined}
               />
             ))
           )}
@@ -103,10 +117,13 @@ function DraftChapterGroup({
   chapterNumber,
   drafts,
   projectKey,
+  activeFilePath,
 }: {
   chapterNumber: number
   drafts: DraftMeta[]
   projectKey: string
+  /** 正文栏正看着的那一稿的路径 —— 落在本章里就把本行的章节点亮。 */
+  activeFilePath?: string
 }) {
   const text = useLocaleStore(s => s.text)
   const currentProject = useProjectStore(s => s.currentProject)
@@ -146,10 +163,12 @@ function DraftChapterGroup({
 
   return (
     <div>
-      {/* 章节行 */}
+      {/* 章节行 —— 本章的某一稿正在看，这一行也亮（折叠着同样亮） */}
       <div
-        className="tree-item gap-1.5 cursor-pointer select-none"
-        style={{ paddingLeft: 26 }}
+        data-level={2}
+        className={`tree-item gap-1.5 cursor-pointer select-none${activeFilePath !== undefined && drafts.some(d => d.filePath === activeFilePath) ? ' active' : ''}`}
+        /** 选中色标跟着缩进走：缩进 26 → 色标落在 16（内容左缘再往左 10px）。 */
+        style={{ paddingLeft: 26, '--row-mark-x': '16px' } as CSSProperties}
         onClick={() => setOpen(v => !v)}
         title={displayTitle}
       >
@@ -316,17 +335,41 @@ function DraftItem({
   }
 
   const isFinalized = draft.status === 'finalized'
+  /**
+   * 这一稿正是当前打开的那一页？点亮它。
+   *
+   * 先生：「用户都不知道自己在看哪个地方的内容！」—— 侧栏得把「正在看的那个」
+   * 标出来。选择器直接返回 boolean，zustand 按值比较，不会每次都触发重渲染。
+   */
+  const isActive = useEditorStore(s => (
+    s.tabs.find(tab => tab.id === s.activeTabId)?.filePath === draft.filePath
+  ))
 
   return (
     <div
-      className="relative flex items-center gap-1.5 cursor-pointer hover:bg-[var(--color-hover)]"
+      data-level={3}
+      className={`relative flex items-center gap-1.5 cursor-pointer hover:bg-[var(--color-hover)]${isActive ? ' active' : ''}`}
+      /**
+       * 先生 2026-09-20：「如果一个便利贴没进夹子，那它本身就是和夹子共线的。
+       * 而夹子里的……应该从夹子的标题文字的最左边的位置算起，再往右边缩进去
+       * 10px 放置自己。然后这些夹子中便利贴共享夹子内的虚线。」
+       *
+       * 草稿的「夹子」是上面那一行章节：它的标题文字左缘在行内 64px
+       * （padding-left 26 + 折叠箭头 + 状态点 + 两处间距），于是
+       *   · 这一稿缩进 **74**（= 64 + 10）；
+       *   · 虚线另起一条画在 **64**，同一章的各稿共用它 —— 那就是「这一章往下延申」。
+       */
+      data-tree-child="1"
       style={{
-        paddingLeft: 50,
+        paddingLeft: 74,
+        '--tree-child-line': '64px',
+        /** 选中色标跟着缩进走：缩进 74 → 色标落在 64。 */
+        '--row-mark-x': '64px',
         paddingRight: 8,
         paddingTop: 3,
         paddingBottom: 3,
         opacity: archived ? 0.45 : 1,
-      }}
+      } as CSSProperties}
       onClick={openDraft}
       onContextMenu={e => showSidebarMenu([
         {

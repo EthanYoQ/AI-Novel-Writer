@@ -626,6 +626,22 @@
  * ===================================================================== */
 @layer components {
 
+  /* ===== 外部 AI 代劳板块的灰态 =====
+     先生（流程重构）：执行方式没选「外部」时，这一整块不许交互。
+     子元素一律 pointer-events:none，鼠标事件于是落到外层容器上 ——
+     「禁止」光标也就能正常显示（被禁元素自己不接收鼠标事件，光标不会变）。 */
+  .handoff-board-disabled {
+    cursor: not-allowed;
+  }
+
+  .handoff-board-disabled * {
+    pointer-events: none;
+  }
+
+  .handoff-board-disabled {
+    opacity: 0.55;
+  }
+
   /* ===== 分隔条（拖拽调整大小）— 白色微光风格 ===== */
   .sash {
     position: absolute;

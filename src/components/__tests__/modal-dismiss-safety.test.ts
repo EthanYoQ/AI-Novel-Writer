@@ -18,6 +18,9 @@ const PROTECTED_DIALOGS = [
   'src/components/editor/WorldSettingConflictDialog.tsx',
   'src/components/editor/ReviewReport.tsx',
   'src/components/characters/CharacterCardCandidateDialog.tsx',
+  // 正文新角色的「待确认」队列：里面是定稿时发现的提名，误关虽不丢数据，
+  // 仍按同一条规矩办 —— 只有明确按钮才算关闭。
+  'src/components/characters/CharacterCandidateReviewDialog.tsx',
   // 填到一半的参数或输入：误关就得重来
   'src/components/dialogs/ArchitectureConfirmDialog.tsx',
   'src/components/dialogs/DirectoryConfigDialog.tsx',
@@ -30,6 +33,10 @@ const PROTECTED_DIALOGS = [
   'src/components/characters/CharacterCardImportButton.tsx',
   'src/components/editor/WorldSettingChapterRefDialog.tsx',
   'src/components/panels/sidebar/WorldSettingSidebarPanel.tsx',
+  // 便利贴：抽卡要勾选底稿、写想法、定张数，等了几分钟才有的一排卡片，
+  // 点蒙版关掉一样是白等一场；待选箱关掉虽不丢内容，也按同一条规矩办。
+  'src/components/dialogs/InspirationDrawDialog.tsx',
+  'src/components/dialogs/StickyTrayDialog.tsx',
 ] as const
 
 describe('弹窗防误触契约', () => {

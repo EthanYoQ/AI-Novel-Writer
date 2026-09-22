@@ -459,6 +459,27 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
     );
 
     -- ============================================================
+    -- 正文新角色候选（定稿后从正文里发现、名单里还没有的重要具名角色）
+    --
+    -- 只存「等人裁决的提名单」，**不是事实源**：作者在角色页点采纳之后，才由
+    -- 渲染进程走既有的角色卡新增通道建档（见 character-store.addNamedCharacters）。
+    -- 与角色名单彻底分家，于是「模型提了名但作者没点头」永远不会污染角色卡。
+    -- ============================================================
+    CREATE TABLE IF NOT EXISTS character_candidates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'supporting',
+      evidence TEXT NOT NULL DEFAULT '',
+      chapter_number INTEGER NOT NULL,
+      current_state TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'adopted', 'dismissed')),
+      created_at TEXT DEFAULT (datetime('now')),
+      decided_at TEXT DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_character_candidates_status
+      ON character_candidates(status, chapter_number);
+
+    -- ============================================================
     -- 沿用表：角色状态快照
     -- ============================================================
     CREATE TABLE IF NOT EXISTS summary_snapshots (
@@ -677,11 +698,89 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    -- ============================================================
+    -- 14. 便利贴 —— 作者私有的灵感本子
+    --
+    -- 与其它所有表的根本区别：**便利贴不参与任何 AI 创作链路**。
+    -- 写稿、定稿、审稿、助手上下文一处都不读它，因此它不需要
+    -- world_settings 那套 pending/confirmed 闸门 —— 本子里没有
+    -- 「待确认的事实」，只有作者自己写给自己看的东西。
+    --
+    -- 它是项目级数据（跟着书走），但「清除项目生成内容」的范围
+    -- （project-clear-repository）刻意**不含**这三张表：那些删的都是
+    -- AI 生成物，而便利贴是先生亲手敲的。
+    -- ============================================================
+    -- 便利贴的文件夹（先生 2026-09-20）：便利贴攒多了要能收纳。
+    -- 只做一层 —— 侧栏本来就只有二百多像素宽，套两层反而是折磨。
+    CREATE TABLE IF NOT EXISTS sticky_folders (
+      folder_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS sticky_notes (
+      note_id TEXT PRIMARY KEY,
+      title TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL DEFAULT '',
+      -- 所属文件夹；NULL = 直接放在便利贴根下。文件夹删掉时这里会被清回 NULL，
+      -- 里面的便利贴**不跟着删** —— 收纳工具不该顺手毁掉作者写的东西。
+      folder_id TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_sticky_notes_created
+      ON sticky_notes(created_at);
+
+    -- 一次抽卡的输入存档。先生过两周打开待选箱时，只有这张表答得上
+    -- 「这张卡当初是在什么前提下抽出来的」。
+    CREATE TABLE IF NOT EXISTS sticky_draws (
+      draw_id TEXT PRIMARY KEY,
+      include_premise INTEGER NOT NULL DEFAULT 0 CHECK(include_premise IN (0, 1)),
+      include_characters INTEGER NOT NULL DEFAULT 0 CHECK(include_characters IN (0, 1)),
+      include_worldbuilding INTEGER NOT NULL DEFAULT 0 CHECK(include_worldbuilding IN (0, 1)),
+      include_synopsis INTEGER NOT NULL DEFAULT 0 CHECK(include_synopsis IN (0, 1)),
+      mentions TEXT NOT NULL DEFAULT '[]',
+      idea TEXT NOT NULL DEFAULT '',
+      requested_count INTEGER NOT NULL DEFAULT 1 CHECK(requested_count > 0),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- 待选箱：抽卡时没被选中的点子落在这里，可以随时找回。
+    -- status 只改不删（找回即 pending → used），照 recovery_candidates 的
+    -- 状态机范式；先生明确同意「清空待选箱」才物理删除，且不可找回。
+    CREATE TABLE IF NOT EXISTS sticky_candidates (
+      candidate_id TEXT PRIMARY KEY,
+      draw_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      ordinal INTEGER NOT NULL CHECK(ordinal > 0),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'used')),
+      note_id TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      used_at TEXT DEFAULT NULL,
+      FOREIGN KEY (draw_id) REFERENCES sticky_draws(draw_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sticky_candidates_pending
+      ON sticky_candidates(status, ordinal);
   `)
 
   const draftColumns = db.prepare('PRAGMA table_info(drafts)').all() as Array<{ name: string }>
   if (!draftColumns.some(column => column.name === 'source_dependencies')) {
     db.exec("ALTER TABLE drafts ADD COLUMN source_dependencies TEXT NOT NULL DEFAULT '[]'")
+  }
+
+  /**
+   * 便利贴文件夹：老库补归属列。
+   *
+   * 存量便利贴一律留在根下（folder_id = NULL）—— 迁移不该自作主张把它们
+   * 塞进某个文件夹里；先生自己分的那才叫分类。
+   */
+  const stickyNoteColumns = new Set(
+    (db.prepare('PRAGMA table_info(sticky_notes)').all() as Array<{ name: string }>)
+      .map(column => column.name),
+  )
+  if (!stickyNoteColumns.has('folder_id')) {
+    db.exec('ALTER TABLE sticky_notes ADD COLUMN folder_id TEXT DEFAULT NULL')
   }
 
   // Legacy candidates did not freeze the draft identity. Keep them marked
@@ -1132,6 +1231,22 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
   // 自定义头像只记文件名，图片本体存 <项目>/.vela/avatars/；旧库补列即得空头像。
   if (!characterStateColumns.has('avatar')) {
     db.exec("ALTER TABLE characters ADD COLUMN avatar TEXT NOT NULL DEFAULT ''")
+  }
+
+  /**
+   * 角色候选：旧库补 current_state 列。
+   *
+   * 提示词一直要求 `newCharacters` 带 currentState，而候选表当初没有存它的地方 ——
+   * 于是采纳建档出来的新档只有名字（先生报障）。旧库的存量候选**没有这份数据可回填**
+   * （它从来没被读出来过），一律留空串，读出来就是「这条候选没带状态」；
+   * 作者重新定稿一章即可拿到带状态的新候选。
+   */
+  const characterCandidateColumns = new Set(
+    (db.prepare('PRAGMA table_info(character_candidates)').all() as Array<{ name: string }>)
+      .map(column => column.name),
+  )
+  if (!characterCandidateColumns.has('current_state')) {
+    db.exec("ALTER TABLE character_candidates ADD COLUMN current_state TEXT NOT NULL DEFAULT ''")
   }
 
   /**

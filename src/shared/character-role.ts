@@ -26,6 +26,10 @@ const CHARACTER_ROLE_ALIASES: Readonly<Record<string, CharacterRole>> = {
   男主: 'protagonist',
   女主: 'protagonist',
   核心主角: 'protagonist',
+  // 定稿后处理那句提示词里的用词就是「主要人物」——不认它的话，模型提上来的
+  // 新角色会被一律兜底成「配角」，作者看到的是清一色错定位（2026-09-21 补）。
+  主要人物: 'protagonist',
+  主人公: 'protagonist',
   antagonist: 'antagonist',
   villain: 'antagonist',
   反派: 'antagonist',
@@ -33,9 +37,11 @@ const CHARACTER_ROLE_ALIASES: Readonly<Record<string, CharacterRole>> = {
   敌人: 'antagonist',
   supporting: 'supporting',
   support: 'supporting',
+  mentor: 'supporting',
   配角: 'supporting',
   重要配角: 'supporting',
   核心配角: 'supporting',
+  导师: 'supporting',
   minor: 'minor',
   龙套: 'minor',
   次要角色: 'minor',

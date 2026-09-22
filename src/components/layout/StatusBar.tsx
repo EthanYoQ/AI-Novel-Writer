@@ -35,7 +35,8 @@ export default function StatusBar() {
         <StatusBarSegment title={text(APP_BRAND.zhName, APP_BRAND.enName)}>
           <BookOpen size={11} />
           <span className="font-medium brand-gradient">{text(APP_BRAND.shortName, APP_BRAND.enName)}</span>
-          <span className="opacity-80 brand-gradient">v{__APP_VERSION__} V3</span>
+          {/* V3=待推送分支标识，`-0.1`=先生定的本次打包版本区分（2026-09-22），与 v2/v3 外壳状态栏保持一致 */}
+          <span className="opacity-80 brand-gradient">v{__APP_VERSION__} V3-0.1</span>
         </StatusBarSegment>
 
         {currentProject && (

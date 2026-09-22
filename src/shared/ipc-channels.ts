@@ -83,6 +83,14 @@ import type {
   ImportRunStartResult,
   ImportRunStage,
 } from './import-run'
+import type {
+  StickyCandidate,
+  StickyDraw,
+  StickyDrawRecordRequest,
+  StickyFolder,
+  StickyIdeaAppendRequest,
+  StickyNote,
+} from './sticky-note'
 
 // ===== 全局配置 =====
 export interface ConfigChannels {
@@ -208,6 +216,33 @@ export interface ModelProviderResourceChannels {
   'model-provider-resource:open': {
     args: [resource: ModelProviderResourceId]
     return: { success: boolean; error?: string }
+  }
+}
+
+// ===== 外部 AI 审计入口 =====
+export interface ExternalAiAuditChannels {
+  /**
+   * 打开作者收藏的网页版 AI 对话页（系统默认浏览器）。
+   *
+   * 与上面的模型服务商外链不同：作者可以自建入口，地址不固定，因此这里接受
+   * 渲染进程传入的 URL；安全底线由主进程的 normalizeExternalAiUrl 承担
+   * （只放行 http/https）。
+   */
+  'external-ai-audit:open': {
+    args: [url: string]
+    return: { success: boolean; error?: string }
+  }
+  /**
+   * 把审稿材料各写成一份 .md，再放进系统剪贴板的「文件列表」（CF_HDROP）。
+   *
+   * 效果等同于在资源管理器里选中这些文件按 Ctrl+C：作者到网页版 AI 的输入框
+   * 按 Ctrl+V，浏览器会把它当成「粘贴了这几个文件」→ 直接触发上传。
+   * 文件落在应用数据目录下的 external-audit/，名字与内容都由渲染进程给定，
+   * 主进程只负责校验（文件名不放行路径分隔符）与投递。
+   */
+  'external-ai-audit:copy-files': {
+    args: [files: Array<{ name: string; content: string }>]
+    return: { success: boolean; directory?: string; fileCount?: number; error?: string }
   }
 }
 
@@ -819,6 +854,11 @@ import type {
   CharacterRosterSnapshot,
 } from './character-roster'
 import type {
+  CharacterCandidateEnqueueResult,
+  CharacterCandidateInput,
+  CharacterCandidateRecord,
+} from './character-candidate'
+import type {
   FinalizedDraftImportReceipt,
   FinalizedDraftImportRequest,
 } from './finalized-draft-import'
@@ -943,6 +983,26 @@ export interface DatabaseChannels {
   'db:character-roster-commit': {
     args: [request: CharacterRosterCommitRequest, expectedProjectPath: string]
     return: { success: boolean; receipt?: CharacterRosterCommitReceipt; error?: string }
+  }
+
+  /**
+   * 正文新角色候选 —— 定稿时从正文里发现、但角色名单里还没有的重要具名角色。
+   *
+   * 与角色名单**彻底分家**：这三条通道只动那张「等人裁决的提名单」，
+   * 建档仍旧走 db:character-roster-commit（作者点了采纳之后才走）。
+   * 于是「模型提过名」永远不会自己变成角色卡。
+   */
+  'db:character-candidate-queue': {
+    args: [items: CharacterCandidateInput[], expectedProjectPath: string]
+    return: CharacterCandidateEnqueueResult
+  }
+  'db:character-candidate-list': {
+    args: [expectedProjectPath: string]
+    return: CharacterCandidateRecord[]
+  }
+  'db:character-candidate-resolve': {
+    args: [ids: number[], status: 'adopted' | 'dismissed', expectedProjectPath: string]
+    return: { success: boolean; resolved: number; error?: string }
   }
 
   // 4. drafts
@@ -1121,6 +1181,41 @@ export interface DatabaseChannels {
   'db:get-latest-summary': { args: [expectedProjectPath: string]; return: { characterStates: string; chapterNumber: number } | null }
 }
 
+// ===== 便利贴频道 =====
+/**
+ * 便利贴 —— 作者私有的灵感本子。
+ *
+ * 全部走 `db:` 前缀，因此 ipc-client 会自动把冻结的 ProjectSessionContext 附到
+ * 参数末尾，主进程侧吃同一道 `assertCurrentProjectContext` 门禁 —— 切项目那一刻
+ * 的竞态由既有机制挡住，这里不需要另造一套。
+ *
+ * 注意：这一组里**没有任何**供 AI 生成链路读取的通道。便利贴不进上下文。
+ */
+export interface StickyNoteChannels {
+  'db:sticky-note-list': { args: [expectedProjectPath: string]; return: StickyNote[] }
+  'db:sticky-note-create': { args: [title: string, folderId: string | null, expectedProjectPath: string]; return: { success: boolean; note?: StickyNote; error?: string } }
+  'db:sticky-note-rename': { args: [noteId: string, title: string, expectedProjectPath: string]; return: { success: boolean; note?: StickyNote; error?: string } }
+  'db:sticky-note-save-body': { args: [noteId: string, body: string, expectedProjectPath: string]; return: { success: boolean; note?: StickyNote; error?: string } }
+  'db:sticky-note-append': { args: [noteId: string, requests: StickyIdeaAppendRequest[], expectedProjectPath: string]; return: { success: boolean; note?: StickyNote; error?: string } }
+  'db:sticky-note-delete': { args: [noteId: string, expectedProjectPath: string]; return: { success: boolean; error?: string } }
+  /** 把便利贴挪进某个文件夹；folderId = null 即挪回根下（先生要的「拖入文件夹」）。 */
+  'db:sticky-note-move': { args: [noteId: string, folderId: string | null, expectedProjectPath: string]; return: { success: boolean; note?: StickyNote; error?: string } }
+
+  'db:sticky-folder-list': { args: [expectedProjectPath: string]; return: StickyFolder[] }
+  'db:sticky-folder-create': { args: [name: string, expectedProjectPath: string]; return: { success: boolean; folder?: StickyFolder; error?: string } }
+  'db:sticky-folder-rename': { args: [folderId: string, name: string, expectedProjectPath: string]; return: { success: boolean; folder?: StickyFolder; error?: string } }
+  /** 删文件夹**不删里面的便利贴** —— 它们回到根下。 */
+  'db:sticky-folder-delete': { args: [folderId: string, expectedProjectPath: string]; return: { success: boolean; error?: string } }
+
+  'db:sticky-draw-record': { args: [request: StickyDrawRecordRequest, expectedProjectPath: string]; return: { success: boolean; draw?: StickyDraw; error?: string } }
+  'db:sticky-draw-get': { args: [drawId: string, expectedProjectPath: string]; return: StickyDraw | null }
+
+  'db:sticky-candidate-list': { args: [expectedProjectPath: string]; return: { candidates: StickyCandidate[]; count: number } }
+  'db:sticky-candidate-record-many': { args: [drawId: string, contents: string[], expectedProjectPath: string]; return: { success: boolean; candidates?: StickyCandidate[]; error?: string } }
+  'db:sticky-candidate-use': { args: [candidateId: string, noteId: string, expectedProjectPath: string]; return: { success: boolean; note?: StickyNote; candidate?: StickyCandidate; error?: string } }
+  'db:sticky-candidate-clear': { args: [expectedProjectPath: string]; return: { success: boolean; cleared?: number; error?: string } }
+}
+
 // ===== 知识库频道 =====
 export interface KnowledgeBaseChannels {
   'kb:import-document': { args: [grantId: string, expectedProjectPath: string]; return: { success: boolean; docId?: string; chunkCount?: number; error?: string; errorCode?: AppErrorCode } }
@@ -1224,6 +1319,17 @@ export interface WorldSettingChannels {
   'world-setting:append-derived': {
     args: [id: number, update: { content?: string; summary?: string }, chapterNumber: number, expectedProjectPath: string]
     return: AppResult<{ appended: boolean; entry: import('./world-setting').WorldSettingEntry }>
+  }
+  /**
+   * 定稿后处理专用：创建**待确认候选** —— 只新增，绝不更新既有条目。
+   *
+   * 与 save 的关键区别：save 不带 id 时会按同名查找并覆盖那一条（默认 author 权限，
+   * UPDATE 不改 status）；候选创建在名字已存在（按大小写折叠）时返回 duplicate-name
+   * 并保留原行 —— 否则模型报出的歧义名字会绕过证据校验改写作者已确认的事实源。
+   */
+  'world-setting:create-candidate': {
+    args: [draft: WorldSettingDraft, expectedProjectPath: string]
+    return: AppResult<import('./world-setting').WorldSettingCandidateResult>
   }
   /**
    * 冲突裁决队列：正文与设定打架时，AI 只报告、不裁决。
@@ -1341,7 +1447,7 @@ export interface MCPChannels {
 }
 
 // ===== 合并所有频道 =====
-export type AllInvokeChannels = WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & SkinChannels & CharacterAvatarChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & WorldSettingChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
+export type AllInvokeChannels = WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ExternalAiAuditChannels & ConfigChannels & UpdateChannels & SkinChannels & CharacterAvatarChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & StickyNoteChannels & KnowledgeBaseChannels & WorldSettingChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
 export type AllEventChannels = LLMStreamEvents & UpdateStateEvents & WindowEvents
 
 /** 提取 invoke 频道名 */

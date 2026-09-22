@@ -12,8 +12,12 @@ import { CREATION_STAGE_ORDER, type CreationStage } from '../../layout/v2/creati
  * 新项目初始化走「配置」，架构生成走「架构」，目录生成走「蓝图」，
  * 章节创作与批量生成落在「草稿」，导入小说是逆向推演全流程、从「配置」起步，
  * 后处理（角色卡提取等）发生在定稿之后，归入「定稿」。
+ *
+ * **故意写成 Partial**：便利贴的 AI 灵感抽卡（inspiration_draw）不在这里登记 ——
+ * 它不是创作工序的一环，产物也不进正文。漏登记的结果正是我们要的：工序条整条
+ * 置灰，而不是被一个私人灵感任务点亮点错。（下方的 includes 判定会兜住 undefined。）
  */
-const STAGE_BY_WORKFLOW: Record<WorkflowType, CreationStage> = {
+const STAGE_BY_WORKFLOW: Partial<Record<WorkflowType, CreationStage>> = {
   new_project_setup: 'config',
   config_generation: 'config',
   novel_import: 'config',

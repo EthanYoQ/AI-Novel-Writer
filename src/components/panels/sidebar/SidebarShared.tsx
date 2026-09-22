@@ -21,6 +21,16 @@ interface LeafItemProps {
   /** 先生：只有最重要的几项（小说配置 / 章节蓝图）用略重的字重撑起层级；
    *  伏笔与叙事线索这类次要项保持常规字重，加黑反而显得吵。 */
   emphasize?: boolean
+  /** 这一项正是工作区开着的那一页？挂上 `.active`，侧栏才知道「你在看这里」。 */
+  active?: boolean
+  /**
+   * 树里的层级（1 = 顶层 / 组标题行，2 = 章节行，3 = 具体条目）。
+   *
+   * 先生 2026-09-20：「现在确实成功了，就是不太好看！特别是 3 个地方都显示的时候！
+   * 我觉得可以分 3 级。1级为 紫+白字，2级为 蓝+白字，3级为 红+白字？」
+   * 三级各自一个颜色，选中态才读得出「人在树的哪一层」，而不是三块分不出主次的色砖。
+   */
+  level?: 1 | 2 | 3
 }
 
 /** 叶子节点（无子级，带可选状态徽章） */
@@ -34,10 +44,13 @@ export function LeafItem({
   onClick,
   onContextMenu,
   emphasize = false,
+  active = false,
+  level = 1,
 }: LeafItemProps) {
   return (
     <div
-      className="tree-item gap-1.5 cursor-pointer select-none"
+      data-level={level}
+      className={`tree-item gap-1.5 cursor-pointer select-none${active ? ' active' : ''}`}
       style={{ paddingLeft: 10 }}
       onClick={onClick}
       onContextMenu={onContextMenu}

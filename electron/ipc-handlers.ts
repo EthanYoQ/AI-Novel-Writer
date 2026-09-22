@@ -10,6 +10,8 @@ import { registerImportController } from './controllers/import-controller'
 import { registerWindowController } from './controllers/window-controller'
 import { registerOfficialHomepageController } from './controllers/official-homepage-controller'
 import { registerModelProviderResourceController } from './controllers/model-provider-resource-controller'
+import { registerExternalAiAuditController } from './controllers/external-ai-audit-controller'
+import { registerExternalAiAuditFileController } from './controllers/external-ai-audit-file-controller'
 import { registerFinalizationController } from './controllers/finalization-controller'
 import { registerChapterLifecycleController } from './controllers/chapter-lifecycle-controller'
 import { registerExternalFileGrantController } from './controllers/external-file-grant-controller'
@@ -39,6 +41,8 @@ export function registerIPCHandlers() {
   registerWindowController()
   registerOfficialHomepageController()
   registerModelProviderResourceController()
+  registerExternalAiAuditController()
+  registerExternalAiAuditFileController()
   registerConfigController()
   registerAppDataController()
   registerProjectController()

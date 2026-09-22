@@ -353,6 +353,26 @@ export interface WorldSettingDraft {
   writeMode?: WorldSettingWriteMode
 }
 
+/**
+ * 创建「待确认候选」的结果。
+ *
+ * 候选创建是**只新增**的存储操作，与 save 的 upsert 语义刻意分开：
+ * 名字（按大小写折叠）已经存在时一律拒绝并保留原行，绝不退化成
+ * 「默认 author 权限的覆盖式 save」—— 否则模型报出的歧义名字会绕过证据校验，
+ * 用虚构引文改写作者已确认的事实源，而且原行仍是 confirmed、待确认队列却一条没多。
+ */
+export type WorldSettingCandidateResult =
+  | { created: true; entry: WorldSettingEntry }
+  | {
+    created: false
+    reason: 'duplicate-name'
+    /** 命中的既有行，供调用方如实报告「没写成，因为名字已经属于谁」。 */
+    existingId: number
+    existingName: string
+    existingStatus: WorldSettingStatus
+  }
+  | { created: false; reason: 'invalid-name' }
+
 /** 新建分类的输入。 */
 export interface WorldSettingCategoryDraft {
   zhCN: string

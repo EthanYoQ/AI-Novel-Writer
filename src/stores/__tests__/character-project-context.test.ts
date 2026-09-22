@@ -320,8 +320,7 @@ describe('character store project context', () => {
     })
   })
 
-  it('preserves an existing character draft ledger and blocks every write after reload fails', async () => {
-    invoke.mockResolvedValueOnce([character('A 角色')])
+  it('preserves an existing character draft ledger and blocks every write after reload fails', async () => {    invoke.mockResolvedValueOnce([character('A 角色')])
     await useCharacterStore.getState().load(PROJECT_A)
     useCharacterStore.getState().updateField('A 角色', 'notes', '未保存草稿')
     const ledgerBeforeFailure = useEditorStore.getState().draftLedgers[CHARACTER_DRAFT_TAB.id]
@@ -347,5 +346,57 @@ describe('character store project context', () => {
     expect(useEditorStore.getState().draftLedgers[CHARACTER_DRAFT_TAB.id])
       .toBe(ledgerBeforeFailure)
     expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  /**
+   * 先生（本轮报障）：「角色管理中，随着剧情推进，建立了角色新档，
+   * 但新档只有名字，里面没有任何的内容？」
+   *
+   * 建档走的就是 `addNamedCharacters` 这条通道，而它此前只会写名字 ——
+   * 正文新角色候选随提名带来的 role 与 currentState 在门口就被丢掉了。
+   * 这两个用例把「种子 → 卡片」这一段钉住：带什么进，卡里就得有什么。
+   */
+  it('builds the card from a seed: role and currentState both land in it', async () => {
+    invoke.mockResolvedValueOnce([character('原有角色')])
+    await useCharacterStore.getState().load(PROJECT_A)
+
+    useCharacterStore.getState().addNamedCharacters([{
+      name: '李莉莉',
+      role: '配角',
+      currentState: {
+        location: '校门口',
+        recentEvents: '把三眼会的事告诉了林青檀',
+        updatedAtChapter: 12,
+      },
+    }])
+
+    const added = useCharacterStore.getState().characters.find(card => card.name === '李莉莉')
+    expect(added, '候选应当真的建出卡来').toBeTruthy()
+    expect(added?.role, '定位要跟着名字一起落进卡里（中文标签要能折算）').toBe('supporting')
+    expect(added?.currentState).toEqual({
+      location: '校门口',
+      powerLevel: '',
+      physicalState: '',
+      mentalState: '',
+      keyItems: '',
+      recentEvents: '把三眼会的事告诉了林青檀',
+      updatedAtChapter: 12,
+    })
+  })
+
+  it('keeps a bare name an empty card and never invents a state block', async () => {
+    invoke.mockResolvedValueOnce([character('原有角色')])
+    await useCharacterStore.getState().load(PROJECT_A)
+
+    // 纯名字（关系文本里提到的未登记角色就走这条）：仍旧只是一张空卡
+    useCharacterStore.getState().addNamedCharacters(['张三'])
+    const bare = useCharacterStore.getState().characters.find(card => card.name === '张三')
+    expect(bare?.currentState, '没有内容就不该落 currentState').toBeUndefined()
+    expect(bare?.role).toBe('supporting')
+
+    // 空状态 `{}` 同样不许落 —— 否则角色列表会给新卡标一句「第 0 章更新」
+    useCharacterStore.getState().addNamedCharacters([{ name: '李四', currentState: {} }])
+    const emptyState = useCharacterStore.getState().characters.find(card => card.name === '李四')
+    expect(emptyState?.currentState).toBeUndefined()
   })
 })

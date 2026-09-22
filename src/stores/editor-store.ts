@@ -13,7 +13,7 @@ export interface EditorTabSaveSnapshot {
 export interface EditorTab {
   id: string
   name: string
-  type: 'chapter' | 'outline' | 'character' | 'config' | 'diff' | 'chapter-card' | 'world-building' | 'arch-file' | 'version-history' | 'review-report' | 'narrative-thread' | 'knowledge' | 'relationship-graph' | 'world-setting'
+  type: 'chapter' | 'outline' | 'character' | 'config' | 'diff' | 'chapter-card' | 'world-building' | 'arch-file' | 'version-history' | 'review-report' | 'narrative-thread' | 'knowledge' | 'relationship-graph' | 'world-setting' | 'sticky-note'
   filePath?: string
   content?: string
   /** 架构文档已持久化的基准内容，用于跨 Tab/项目切换后恢复脏状态。 */
@@ -138,6 +138,9 @@ const PROJECT_SCOPED_BUILTIN_TYPES = new Set<EditorTab['type']>([
   'narrative-thread',
   'knowledge',
   'relationship-graph',
+  // 便利贴必须是项目作用域：先生要的是「切项目，本子也跟着换」。
+  // 少了这一行，同一张便利贴的 tab 会在两本书之间串用。
+  'sticky-note',
 ])
 
 export interface EditorExitSaveHandler {

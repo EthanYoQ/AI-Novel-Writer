@@ -122,7 +122,15 @@ describe('鼠标点进段间距', () => {
     const { view, surface } = await renderEditor(CONTENT)
     const gap = lineEls(surface)[1].getBoundingClientRect()
 
-    await mouseDownAt(surface, gap.left + 20, gap.top + 3)
+    // 点在**正文文字所在的那一列**上 —— 文字左侧的缩进区现在算「框外」，
+    // 点那里是无效的（见下面那条测试）
+    const head = view.coordsAtPos(view.state.doc.line(1).from)
+    const tail = view.coordsAtPos(view.state.doc.line(1).to)
+    const clickX = tail ? Math.max(gap.left + 10, (head!.left + tail.right) / 2) : gap.left + 100
+    console.log(`[调试·点空行] 相邻行文字 left=${head?.left.toFixed(0)} right=${tail?.right.toFixed(0)}`
+      + ` 行块 left=${gap.left.toFixed(0)} 点击 x=${clickX.toFixed(0)}`)
+
+    await mouseDownAt(surface, clickX, gap.top + 3)
 
     expect(
       caretLineNumber(view),
@@ -139,7 +147,13 @@ describe('鼠标点进段间距', () => {
     const { view, surface } = await renderEditor(CONTENT)
     const gap = lineEls(surface)[1].getBoundingClientRect()
 
-    await mouseDownAt(surface, gap.left + 20, gap.bottom - 3)
+    // 同上：点正文文字所在的列，而不是它左边的缩进区
+    const head = view.coordsAtPos(view.state.doc.line(3).from)
+    const tail = view.coordsAtPos(view.state.doc.line(3).to)
+    const clickX = tail ? (head!.left + tail.right) / 2 : gap.left + 100
+
+    // y 取段间距的 3/4 处：明确在下半，且不贴着行块下缘（贴边时命中测试会偏到下一行）
+    await mouseDownAt(surface, clickX, gap.top + gap.height * 0.75)
 
     expect(caretLineNumber(view)).toBe(3)
     expect(caretOffsetInLine(view), '下半应当吸附到下一段的第一个字之前').toBe(0)
@@ -174,16 +188,224 @@ describe('鼠标点进段间距', () => {
     expect(offset, `应当落在点到的那个字附近（实测偏移 ${offset}）`).toBeLessThanOrEqual(3)
   })
 
-  it('点纸页下方的留白仍旧落到文末（那是「接着往下写」的入口，不能被吃掉）', async () => {
+  /**
+   * 先生：「鼠标只要移动出正文框，就变成点击箭头，然后拒绝任何光标相关的事件触发就行了。」
+   *
+   * 这里取代的是此前那条「点纸页下方留白落到文末」的约定 ——
+   * 那个入口曾经是「接着往下写」的捷径，但它同时也是错位光标的来源：
+   * 纸页四周的留白本来就不属于任何段落，点下去什么也不该发生。
+   * 要接着往下写，点最后一行即可（框内）。
+   */
+  it('正文框外（纸页留白）点击：不放光标，也不动版面', async () => {
     const { view, surface } = await renderEditor(CONTENT_WITH_TRAILING_BLANK)
     const paper = surface.getBoundingClientRect()
+    const before = view.state.selection.main.head
+    const topsBefore = lineEls(surface).map((el) => Math.round(el.getBoundingClientRect().top * 10) / 10)
+
+    // 左侧留白 + 下方留白（两个方向都在框外）
+    await mouseDownAt(surface, paper.left + 20, paper.bottom - 20)
+
+    console.log(`[框外点击] 光标 ${before} → ${view.state.selection.main.head}`)
+    expect(view.state.selection.main.head, '框外点击不该放光标').toBe(before)
+    expect(
+      lineEls(surface).map((el) => Math.round(el.getBoundingClientRect().top * 10) / 10),
+      '框外点击更不该改动版面',
+    ).toEqual(topsBefore)
+  })
+
+  it('正文框外点击后，框内的正常点击仍然照常放光标（没有误伤）', async () => {
+    const { view, surface } = await renderEditor(CONTENT)
+    const paper = surface.getBoundingClientRect()
+
+    // 先在框外点一下 —— 被拒
+    await mouseDownAt(surface, paper.left + 20, paper.bottom - 20)
+    // 再点正文行（框内）—— 必须正常工作
+    const target = view.state.doc.line(3).from + 2
+    const coords = view.coordsAtPos(target)!
+    await mouseDownAt(surface, coords.left + 1, (coords.top + coords.bottom) / 2)
+
+    expect(caretLineNumber(view), '框内点击必须照常生效').toBe(3)
+  })
+
+  /**
+   * 先生（补充报障）：
+   *   「这种温热的分量压在胸口，仿佛一种无声的应承。／（空）／队伍在稀疏的林木间穿行……」
+   *   鼠标在**框外**的空白、对准两个段落中间点一下，光标就跑进去了 ——
+   *   而且**恰好在段落中间的 Y 轴处**才会触发。
+   *
+   * 根因：判断「在不在正文框内」时用的是「坐标 → 位置 → 行块矩形」反推，
+   * 而**折行的段落**会让这条反推选错参照行（一段折成两三行时，
+   * 段间距那一格与上一段最后一行被混在一起），于是正好点在两段之间的 Y 上就放行了。
+   * 现在改成直接问 DOM（`elementFromPoint`），浏览器的命中测试没有这种歧义。
+   */
+  it('折行长段落之间、框外留白正中点击：无效（光标不许插进段间距）', async () => {
+    const LONG = '这种温热的分量压在胸口，仿佛一种无声的应承。'
+      + '\n\n'
+      + '队伍在稀疏的林木间穿行，午后的日头斜斜挂在西边。'
+    const { view, surface } = await renderEditor(LONG)
+    const lines = lineEls(surface)
+    // 段落折行后仍在同一个 .cm-line 里，所以这里仍是「段A / 空行 / 段B」三个元素
+    expect(lines, '折行不改变逻辑行数').toHaveLength(3)
+    expect(
+      view.lineBlockAt(0).height,
+      '前置条件：第一段确实折了行（这正是此前判断失准的场景）',
+    ).toBeGreaterThan(view.defaultLineHeight * 1.5)
+
+    const gap = lines[1].getBoundingClientRect()
+    const paper = surface.getBoundingClientRect()
+    const before = view.state.selection.main.head
+    const topsBefore = lines.map((el) => Math.round(el.getBoundingClientRect().top * 10) / 10)
+
+    // 先生说的那个 Y：段间距的**正中**
+    const middleY = (gap.top + gap.bottom) / 2
+    for (const [label, x] of [
+      ['框外左', paper.left + 20],
+      ['框外右', paper.right - 20],
+      ['框外左·更靠外', paper.left + 2],
+    ] as const) {
+      await mouseDownAt(surface, x, middleY)
+      console.log(`[折行段落·${label}] x=${x.toFixed(0)} y=${middleY.toFixed(0)}`
+        + ` → 光标 ${before} → ${view.state.selection.main.head}`)
+      expect(view.state.selection.main.head, `${label}的框外点击不该放光标`).toBe(before)
+      expect(
+        lines.map((el) => Math.round(el.getBoundingClientRect().top * 10) / 10),
+        `${label}的框外点击不该动版面`,
+      ).toEqual(topsBefore)
+    }
+  })
+
+  /**
+   * 先生（附截图）：「鼠标在正文框外边、点击在两个段落中间，就会出现一个光标 —— 这是不对的。」
+   *
+   * 截图里的红箭头指的是**正文文字左边、但仍在行块之内**的那片空白。
+   * 此前「正文框」按行块的宽度算（整栏宽），于是文字两侧的留白被当成了框内而放行；
+   * 现在按**文字本身的横向范围**算（DOM Range 包围盒），那些空白一律算框外。
+   */
+  it('正文文字两侧的留白（仍在行块内）：点击无效；文字上仍照常吸附', async () => {
+    const LONG = '这种温热的分量压在胸口，仿佛一种无声的应承。'
+      + '\n\n'
+      + '队伍在稀疏的林木间穿行，午后的日头斜斜挂在西边。'
+    const { view, surface } = await renderEditor(LONG)
+    const lines = lineEls(surface)
+    const gap = lines[1].getBoundingClientRect()
+    const middleY = (gap.top + gap.bottom) / 2
+    const lineRect = lines[0].getBoundingClientRect()
+
+    // 独立量一遍「正文文字」实际占的横向范围（与实现同法：逐文本节点量字形）
+    const textBounds = (() => {
+      let left = Number.POSITIVE_INFINITY
+      let right = Number.NEGATIVE_INFINITY
+      const walker = document.createTreeWalker(surface, NodeFilter.SHOW_TEXT)
+      let node: Node | null
+      while ((node = walker.nextNode())) {
+        const nodeText = node.textContent ?? ''
+        if (nodeText.trim() === '') continue
+        const nodeRange = document.createRange()
+        nodeRange.selectNodeContents(node)
+        for (const rect of nodeRange.getClientRects()) {
+          if (rect.width <= 0 || rect.height <= 0) continue
+          left = Math.min(left, rect.left)
+          right = Math.max(right, rect.right)
+        }
+      }
+      return { left, right }
+    })()
+    console.log(`[几何] 行块 ${lineRect.left.toFixed(0)}..${lineRect.right.toFixed(0)}`
+      + ` 文字 ${textBounds.left.toFixed(0)}..${textBounds.right.toFixed(0)}`)
+
+    const before = view.state.selection.main.head
+    const topsBefore = lines.map((el) => Math.round(el.getBoundingClientRect().top * 10) / 10)
+
+    // ① 缩进区（文字左缘之左、行块之内）—— 截图里那支箭头的落点
+    await mouseDownAt(surface, lineRect.left + 10, middleY)
+    console.log(`[缩进区] x=${(lineRect.left + 10).toFixed(0)} → 光标 ${before} → ${view.state.selection.main.head}`)
+    expect(view.state.selection.main.head, '缩进区点击不该放光标').toBe(before)
+
+    // ② 每行右侧的空档（文字右缘之右）
+    const rightGapX = Math.min(textBounds.right + 40, surface.getBoundingClientRect().right - 4)
+    await mouseDownAt(surface, rightGapX, middleY)
+    console.log(`[文字右侧空档] x=${rightGapX.toFixed(0)} → 光标 ${before} → ${view.state.selection.main.head}`)
+    expect(view.state.selection.main.head, '文字右侧空档点击不该放光标').toBe(before)
+
+    expect(
+      lines.map((el) => Math.round(el.getBoundingClientRect().top * 10) / 10),
+      '框外的点击都不该改动版面',
+    ).toEqual(topsBefore)
+
+    // ③ 对照组：点在**文字**上（同一 Y）—— 既有的「吸附到相邻段落」必须照常工作
+    const onTextX = (textBounds.left + textBounds.right) / 2
+    await mouseDownAt(surface, onTextX, middleY)
+    const landed = view.state.selection.main.head
+    const landedLine = view.state.doc.lineAt(landed).number
+    console.log(`[文字上·对照] x=${onTextX.toFixed(0)} → 光标落在第 ${landedLine} 行`)
+    expect(landedLine, '点在正文文字上时，仍应吸附到相邻段落').not.toBe(2)
+    expect(landedLine, '且应当紧邻段间距').toBeLessThanOrEqual(3)
+  })
+
+  /**
+   * 先生：「刷新后，我鼠标在编辑器框外点击，依然会让编辑器框体变色、控制其中的光标。」
+   *
+   * 「框体变色」= 编辑器被聚焦（`.cm-focused`）。原因是按下处理挂在**冒泡阶段**：
+   * CodeMirror 自己的处理在 contentDOM 上先跑完（聚焦 + 放插入点），
+   * 我们再 preventDefault 已经晚一步。现在改到**捕获阶段**并 stopPropagation。
+   */
+  it('正文框外点击：编辑器不该被聚焦（框体不该变色）', async () => {
+    const { view, surface } = await renderEditor(CONTENT)
+    const editorEl = container.querySelector<HTMLElement>('.cm-editor')!
+    const paper = surface.getBoundingClientRect()
+
+    // 先主动让步：把焦点从编辑器上移开
+    await act(async () => {
+      (document.activeElement as HTMLElement | null)?.blur()
+    })
+    await settle()
+    const focusedBefore = editorEl.classList.contains('cm-focused')
+    console.log(`[框外聚焦] 点击前 hasFocus=${view.hasFocus} cm-focused=${focusedBefore}`)
 
     await mouseDownAt(surface, paper.left + 20, paper.bottom - 20)
 
-    expect(
-      view.state.selection.main.head,
-      '纸页留白不属于任何段落，光标应当照 CodeMirror 的原意落到文末',
-    ).toBe(view.state.doc.length)
+    console.log(`[框外聚焦] 点击后 hasFocus=${view.hasFocus} cm-focused=${editorEl.classList.contains('cm-focused')}`)
+    expect(view.hasFocus, '框外点击不该让编辑器拿到焦点').toBe(false)
+    expect(editorEl.classList.contains('cm-focused'), '框体不该因框外点击而变色').toBe(false)
+  })
+
+  /**
+   * 先生：「给鼠标点击正文框外加一个功能，就是让正文框本来在工作的时候的红色提示消失吧。
+   *        不然完全没任何反应也有点奇怪。」
+   *
+   * 编辑中的朱砂光标（`.cm-cursor`）只在编辑器聚焦时显示。
+   * 框外点击作为「退出编辑」的手势：正文一概不动，只让那份工作提示消失。
+   */
+  it('正文框外点击：退出编辑状态（工作时的提示消失）', async () => {
+    const { view, surface } = await renderEditor(CONTENT)
+    const editorEl = container.querySelector<HTMLElement>('.cm-editor')!
+    const paper = surface.getBoundingClientRect()
+
+    // 先进入编辑状态
+    await act(async () => view.focus())
+    await settle()
+    expect(view.hasFocus, '前置条件：编辑器处于编辑状态').toBe(true)
+    const headBefore = view.state.selection.main.head
+
+    await mouseDownAt(surface, paper.left + 20, paper.bottom - 20)
+
+    console.log(`[框外退出编辑] hasFocus=${view.hasFocus} cm-focused=${editorEl.classList.contains('cm-focused')}`
+      + ` 光标 ${headBefore} → ${view.state.selection.main.head}`)
+    expect(view.hasFocus, '框外点击应当让编辑器退出编辑状态').toBe(false)
+    expect(editorEl.classList.contains('cm-focused'), '工作提示（聚焦态）应当消失').toBe(false)
+    expect(view.state.selection.main.head, '但正文里的光标位置一概不动').toBe(headBefore)
+  })
+
+  it('鼠标形状：正文框外是普通箭头，框内仍是文本光标', async () => {
+    const { surface } = await renderEditor(CONTENT)
+    const bodyLine = lineEls(surface)[0]
+
+    const paperCursor = getComputedStyle(surface).cursor
+    const bodyCursor = getComputedStyle(bodyLine).cursor
+    console.log(`[鼠标形状] 纸页留白=${paperCursor} 正文行=${bodyCursor}`)
+
+    expect(paperCursor, '纸页留白处应当是普通箭头 —— 那里不接受落笔').toBe('default')
+    expect(bodyCursor, '正文行内仍须是文本光标').toBe('text')
   })
 
   it('键盘仍能把光标放进空行（Enter 之后要能接着写新段落）', async () => {

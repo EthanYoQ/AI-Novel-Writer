@@ -56,40 +56,64 @@ async function renderEditor(content: string): Promise<{ view: EditorView; surfac
   return { view: view!, surface: surface! }
 }
 
-/** 量一行「第一个可见内容」的横向起点。 */
-function contentStart(line: HTMLElement): number | null {
+/** 量一行「第一个实义字」的真实横向位置（跳过行首的空白 / 缩进字符）。 */
+function glyphLeft(line: HTMLElement): number | null {
   const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT)
-  const textNode = walker.nextNode()
-  if (textNode && (textNode.textContent ?? '').length > 0) {
-    const range = document.createRange()
-    range.setStart(textNode, 0)
-    range.setEnd(textNode, 1)
-    return Math.round(range.getBoundingClientRect().left)
+  let node: Node | null
+  while ((node = walker.nextNode())) {
+    const text = node.textContent ?? ''
+    const index = text.search(/[^\s\u2003\u3000]/)
+    if (index >= 0) {
+      const range = document.createRange()
+      range.setStart(node, index)
+      range.setEnd(node, index + 1)
+      return Math.round(range.getBoundingClientRect().left)
+    }
   }
-  const firstChild = line.firstElementChild
-  if (firstChild) return Math.round(firstChild.getBoundingClientRect().left)
   return null
 }
 
 describe('换行后新行的落点', () => {
+  /**
+   * 这一条此前比较的是「两行第一个字符的 getBoundingClientRect 左缘」——
+   * 而两行的第一个字符都是**空白**（em 空格），浏览器对只含空白的 Range 给出的
+   * 矩形并不可靠；它当时能绿，只是因为两行都量到了同一个不可靠的值。
+   *
+   * 先生第六次报障后，带缩进的正文行改为**一律隐藏**行内缩进（错位修复），
+   * 于是正文行的「第一个字符」变成了实义字 —— 两个不同的东西一比，假象就露了。
+   * 这里改成守**真正要守的东西**：空行上打字的落点，与正文行文字的起点一致。
+   */
   it('does not hide the indent of an empty line (so the caret lands where the text will be)', async () => {
-    // 「缩进 + 正文」之后跟一个「缩进 + 空行」——
-    // 这两行的内容起点必须相等，否则作者会看到「光标没到位」。
-    const { view, surface } = await renderEditor(`${INDENT}第一段正文。\n${INDENT}`)
-    // 光标放在第一行（正文行），第二行是空行
-    view.dispatch({ selection: EditorSelection.single(2) })
+    const { view, surface } = await renderEditor(`第一段正文。\n\n${INDENT}第二段正文。\n${INDENT}`)
+    const lines = () => Array.from(surface.querySelectorAll<HTMLElement>('.cm-line'))
+    expect(lines(), '应当渲染出 4 行').toHaveLength(4)
 
-    const lines = Array.from(surface.querySelectorAll<HTMLElement>('.cm-line'))
-    expect(lines).toHaveLength(2)
-    const textLineStart = contentStart(lines[0])
-    const emptyLineStart = contentStart(lines[1])
-    console.log('[CARET] 正文行起点=', textLineStart, '空行起点=', emptyLineStart, '| 空行文本=', JSON.stringify(lines[1].textContent))
-
-    expect(textLineStart).not.toBeNull()
+    // 空行的缩进字符必须照常留在 DOM 里（空行没有可隐藏的标记，藏了只会让落点错位）
     expect(
-      emptyLineStart,
-      `空行(${emptyLineStart}) 与正文行(${textLineStart}) 的内容起点必须一致，否则光标会落在错位的地方`,
-    ).toBe(textLineStart)
+      lines()[3].textContent,
+      '空行的行首缩进字符不应被隐藏',
+    ).toBe(INDENT)
+
+    // 带缩进的正文行：缩进交给 CSS，文字起点就是「作者的段落左边」
+    const bodyStart = glyphLeft(lines()[2])
+    expect(bodyStart, '正文行应当量得到文字起点').not.toBeNull()
+
+    // 在那条带缩进的空行上打一个字 —— 它必须落在与正文行文字相同的位置上
+    const emptyLine = view.state.doc.line(4)
+    await act(async () => {
+      view.dispatch({
+        changes: { from: emptyLine.to, insert: '新' },
+        selection: { anchor: emptyLine.to + 1 },
+      })
+    })
+    const typedStart = glyphLeft(lines()[3])
+    console.log(`[CARET] 正文行文字起点=${bodyStart} 空行打字后首字=${typedStart}`)
+
+    expect(
+      typedStart,
+      `空行上打下的字(${typedStart}) 必须落在正文行文字的位置(${bodyStart})上 —— `
+      + '行内的缩进字符不该把字再推开两格',
+    ).toBe(bodyStart)
   })
 
   it('keeps the indent visible on a fresh empty line created by Enter', async () => {

@@ -124,6 +124,10 @@ export type WorkflowType =
   | 'config_generation'       // 智能配置生成
   | 'post_process'            // 后处理任务（角色卡提取等）
   | 'novel_import'            // 导入已有小说（逆向推演全流程）
+  // 便利贴 AI 灵感抽卡。它**不是创作工序**：产物只进作者自己的便利贴，
+  // 不写任何创作事实。单独一个类型，是为了让它与真正的写作任务在
+  // 任务面板、互斥判定上彻底分开 —— 先生可以在写稿跑批的同时顺手抽卡。
+  | 'inspiration_draw'
 
 /** 工作流步骤执行器 */
 export type StepExecutor = (

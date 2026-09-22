@@ -4,7 +4,7 @@ import { keymap } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { languages } from '@codemirror/language-data'
 import { EditorState, Prec } from '@codemirror/state'
-import { livePreview, paperHeadFacet, type PaperHead } from './live-preview'
+import { livePreview, markUserParagraph, paperHeadFacet, type PaperHead } from './live-preview'
 import { paragraphGapCaretSnap } from './paragraph-gap-caret'
 import { openSearchPanel, closeSearchPanel, search } from '@codemirror/search'
 import { Sparkles, Bold, Check, Tag, SquareDashed } from 'lucide-react'
@@ -34,6 +34,13 @@ export type CodeMirrorEditorProps = {
   mode?: 'document' | 'prose'
   /** 纸页页眉：章节名 + 「书名 · 第 N 章」；为空则不渲染页眉。 */
   paperHead?: PaperHead | null
+  /**
+   * 是否启用首字下沉（全文第一段那颗朱砂大字）。
+   *
+   * 缺省 true —— 正文与草稿的装帧一个字不动。
+   * 便利贴是攒点子用的本子，不是文章，由 StickyNoteEditor 传 false 关掉。
+   */
+  dropcap?: boolean
 }
 
 type EditorAIAction = {
@@ -88,6 +95,10 @@ const MARKDOWN_STRUCTURE_LINE = /^\s*(?:[-*+]|\d+[.)])\s|^\s*>|^\s*#{1,6}(?:\s|$
  * 边界：只接管「空选区 + 非 markdown 结构行」。
  *   · 有选区时让位 —— 默认行为会先删掉选区再换行；
  *   · 输入法组合期间让位 —— 那时 Enter 是确认候选词，不该被改写。
+ *
+ * ③ **新段落行登记为「作者起的那一格」**（先生第三次报障的收尾）：
+ *    这一行是写作落脚点，不是段间距。登记之后由 live-preview 给它固定整行高，
+ *    光标进出都不会改变它 —— 移走光标时下方段落一动不动，与 Word 的手感一致。
  */
 function enterPlainParagraph(target: EditorView): boolean {
   if (target.state.readOnly) return false
@@ -98,9 +109,11 @@ function enterPlainParagraph(target: EditorView): boolean {
   if (MARKDOWN_STRUCTURE_LINE.test(line.text)) return false
   const br = target.state.lineBreak
   const insert = line.text.trim() === '' ? br : br + br
+  const anchor = range.head + insert.length
   target.dispatch({
     changes: { from: range.head, insert },
-    selection: { anchor: range.head + insert.length },
+    selection: { anchor },
+    effects: markUserParagraph.of(anchor),
   })
   return true
 }
@@ -114,6 +127,9 @@ function enterPlainParagraph(target: EditorView): boolean {
  * 光标会停在空行行首（而不是回到上一段末尾），作者得再按一次 —— 这就是「两次」。
  * 因此：当光标停在**段落首行行首**、且它上面正好是「一段 + 一个空行」时，
  * 一次删掉这两个换行，直接回到上一段末尾。其余位置一律让位给默认行为。
+ *
+ * （段首那排行内缩进字符在**光标行是显形的** —— 见 live-preview 的缩进规则 ——
+ *  所以作者按 Backspace 删它们时看得见变化，这里不需要额外接管。）
  */
 function backspaceParagraphBreak(target: EditorView): boolean {
   if (target.state.readOnly) return false
@@ -145,6 +161,7 @@ export default function CodeMirrorEditor({
   placeholder,
   mode = 'document',
   paperHead = null,
+  dropcap = true,
 }: CodeMirrorEditorProps) {
   const uiText = useLocaleStore(s => s.text)
   const uiLocale = useLocaleStore(s => s.locale)
@@ -462,7 +479,7 @@ export default function CodeMirrorEditor({
     }
     // 实时预览：把 markdown 标记从视图里抹掉，编辑时直接呈现成书排版
     if (mode === 'prose' && isModernShell(uiVersion)) {
-      exts.push(livePreview())
+      exts.push(livePreview({ dropcap }))
     }
     /**
      * 先生（第四次报障）：「鼠标能把光标移动到两个段落中间，导致上下文抖动。」
@@ -479,7 +496,7 @@ export default function CodeMirrorEditor({
     // 纸页页眉由真实 DOM widget 渲染，随正文一起滚动
     exts.push(paperHeadFacet.of(stablePaperHead))
     return exts
-  }, [mode, uiLocale, uiVersion, stablePaperHead])
+  }, [mode, uiLocale, uiVersion, stablePaperHead, dropcap])
 
   // AI 菜单处理（流式调用，实时显示生成内容）
   /**

@@ -131,7 +131,7 @@ describe('中键与右键点进段间距', () => {
     const gapPos = view.state.doc.line(2).from
     const before = lineEls(surface).map((el) => el.getBoundingClientRect().top)
 
-    await pointerClickAt(view, surface, 1, gap.left + 20, gap.top + 3, gapPos)
+    await pointerClickAt(view, surface, 1, gap.left + 100, gap.top + 3, gapPos)
 
     console.log(`[中键] 光标落在第 ${caretLine(view)} 行，head=${view.state.selection.main.head}`)
     expect(caretLine(view), '中键点段间距不能把光标插进空行').not.toBe(2)
@@ -149,7 +149,7 @@ describe('中键与右键点进段间距', () => {
     const gap = lineEls(surface)[1].getBoundingClientRect()
     const gapPos = view.state.doc.line(2).from
 
-    await pointerClickAt(view, surface, 2, gap.left + 20, gap.bottom - 3, gapPos)
+    await pointerClickAt(view, surface, 2, gap.left + 100, gap.bottom - 3, gapPos)
 
     console.log(`[右键] 光标落在第 ${caretLine(view)} 行，head=${view.state.selection.main.head}`)
     expect(caretLine(view), '右键点段间距不能把光标插进空行').not.toBe(2)
@@ -174,7 +174,7 @@ describe('中键与右键点进段间距', () => {
         button: 1,
         buttons: 4,
         detail: 1,
-        clientX: gap.left + 20,
+        clientX: gap.left + 100,
         clientY: gap.bottom - 3,
       }))
     })
