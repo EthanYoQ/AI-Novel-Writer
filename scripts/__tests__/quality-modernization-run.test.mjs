@@ -487,7 +487,8 @@ test('协议revision和hash绑定新目标与新reserve，历史账本仅按冻�
     assert.equal(validateHistoricalLedgerBoundary(raw, boundary), 3)
     assert.throws(() => validateHistoricalLedgerBoundary(raw.replace('earlyContext', 'earlyReview'), boundary), /BOUNDARY_DRIFT/)
     assert.throws(() => validateHistoricalLedgerBoundary(raw.replaceAll('\n', '\r\n'), boundary), /BOUNDARY_DRIFT/)
-    assert.throws(() => validateHistoricalLedgerBoundary(raw.replace('\n', '\n\n'), boundary), /BOUNDARY_DRIFT/)
+    const firstLineEnd = raw.indexOf('\n') + 1
+    assert.throws(() => validateHistoricalLedgerBoundary(raw.slice(0, firstLineEnd) + '\n' + raw.slice(firstLineEnd), boundary), /BOUNDARY_DRIFT/)
     assert.throws(() => validateHistoricalLedgerBoundary(raw, { ...boundary, finalReserveAttemptIds: ['missing'] }), /EVIDENCE_MISSING/)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })

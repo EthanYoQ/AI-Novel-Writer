@@ -29,8 +29,11 @@ async function requestBytes(request: IncomingMessage): Promise<Buffer> {
   return Buffer.concat(chunks)
 }
 
-function xml(value: string): string {
-  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+function encodeDavHref(value: string): string {
+  return value.split('/').map(segment => {
+    try { return encodeURIComponent(decodeURIComponent(segment)) }
+    catch { return encodeURIComponent(segment) }
+  }).join('/')
 }
 
 class DavFixture {
@@ -120,7 +123,7 @@ class DavFixture {
       .filter(candidate => candidate.startsWith(normalized) && candidate !== normalized
         && !candidate.slice(normalized.length).replace(/\/$/u, '').includes('/'))
     return `<?xml version="1.0"?><d:multistatus xmlns:d="DAV:">${[normalized, ...children]
-      .map(href => `<d:response><d:href>${xml(href)}</d:href><d:status>HTTP/1.1 200 OK</d:status></d:response>`)
+      .map(href => `<d:response><d:href>${encodeDavHref(href)}</d:href><d:status>HTTP/1.1 200 OK</d:status></d:response>`)
       .join('')}</d:multistatus>`
   }
 }
@@ -163,6 +166,24 @@ describe('WebDavBackupService', () => {
     expect(dav.requests).toHaveLength(1)
     expect(dav.requests[0]).toMatchObject({ method: 'PROPFIND', url: '/dav/' })
     expect(dav.requests[0]!.authorization).toBe(`Basic ${Buffer.from('writer:loopback-secret').toString('base64')}`)
+  })
+
+  it('keeps hostile WebDAV hrefs encoded as URI paths, not XML or HTML markup', async () => {
+    const dav = new DavFixture(); await dav.listen()
+    dav.collections.add('/dav/<img src=x onerror=alert(1)>/')
+
+    const response = await fetch(dav.baseUrl, { method: 'PROPFIND' })
+    const body = await response.text()
+
+    expect(response.status).toBe(207)
+    expect(body).toContain('<d:href>/dav/%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E/</d:href>')
+    expect(body).not.toContain('<img')
+
+    const hostileResponse = await fetch(`${dav.baseUrl}%3Csvg%20onload%3Dalert(1)%3E/`, { method: 'PROPFIND' })
+    const hostileBody = await hostileResponse.text()
+    expect(hostileResponse.status).toBe(207)
+    expect(hostileBody).toContain('<d:href>/dav/%3Csvg%20onload%3Dalert(1)%3E/</d:href>')
+    expect(hostileBody).not.toContain('<svg')
   })
 
   it('appends, lists, and downloads two no-CAS sibling generations without using latest', async () => {
