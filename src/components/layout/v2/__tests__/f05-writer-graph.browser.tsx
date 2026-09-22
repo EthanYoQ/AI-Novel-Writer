@@ -54,7 +54,7 @@ function card(index: number): CharacterCard {
 async function render(characters: CharacterCard[]) {
   useCharacterStore.setState({ characters, dataProjectKey: path, loadingProjectKey: null, lastError: null, identityBusy: false })
   await act(async () => root.render(
-    <ShellV2 theme="paper" bottomOpen={false} titleBar={<span>图谱验证</span>} rail={<span>书脊</span>}
+    <ShellV2 variant="v3" theme="paper" bottomOpen={false} titleBar={<span>图谱验证</span>} rail={<span>书脊</span>}
       sidebar={<CharactersView />} editor={<RelationshipGraph characters={characters} onOpenCharacter={openCharacter} />}
       aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>本地写作</span>} />,
   ))
@@ -65,6 +65,7 @@ function assertWriter(actionId: string) {
   const shell = host.querySelector<HTMLElement>('[data-shell-presentation="writer"]')
   expect(shell, `${actionId}: Writer shell is absent`).not.toBeNull()
   expect(shell?.dataset.shellPresentation, `${actionId}: shell is not Writer`).toBe('writer')
+  expect(shell?.dataset.shellVariant, `${actionId}: shell is not V3`).toBe('v3')
 }
 
 beforeEach(async () => {
