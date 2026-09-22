@@ -109,7 +109,10 @@ async function main() {
   for (const directory of Object.values(profile)) fs.mkdirSync(directory, { recursive: true })
   fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U07 dirty tabs', sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 48, retainedReason: 'review packaged Writer dirty-tab receipt', cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
   let app
+  let page
   let failure
+  let cleanupError = null
+  let appClosed = false
   let currentStep = 'setup'
   let projectCreateObservation = null
   let projectCoreBefore = null
@@ -162,7 +165,7 @@ async function main() {
         return originalFetch(`http://127.0.0.1:${fixturePort}${url.pathname}`, options)
       }
     }, server.address().port)
-    const page = await app.firstWindow({ timeout: 30_000 })
+    page = await app.firstWindow({ timeout: 30_000 })
     page.setDefaultTimeout(12_000)
     assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
     await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
@@ -445,13 +448,26 @@ async function main() {
     }
   } catch (error) { failure = error }
   finally {
-    await app?.close()
+    // The held SSE keeps the workflow active; Electron's close guard correctly rejects app.quit() until it settles.
     server.closeAllConnections()
+    try {
+      if (livenessOnly && fixture.requests === 2 && page && !page.isClosed()) {
+        if (await writer(page).getAttribute('data-writer-immersive') === 'true') await page.getByRole('button', { name: '退出沉浸写作', exact: true }).click()
+        await page.locator('.writer-left-rail button[title="任务"]').click()
+        await page.locator('.writer-task-table').waitFor({ state: 'visible' })
+        await page.locator('.writer-task-table > div:first-child span.font-mono.px-1.rounded').waitFor({ state: 'detached', timeout: 30_000 })
+      }
+      await app?.close()
+      appClosed = Boolean(app)
+    } catch (error) {
+      cleanupError = String(error)
+      failure ??= error
+    }
     if (server.listening) await new Promise(resolve => server.close(resolve))
   }
   const artifactHashes = { executable: fileHash(executablePath), asar: fileHash(asarPath) }
   const verifiedActions = [...new Set(steps.map(step => step.actionId).filter(Boolean))].filter(id => id !== 'U07.A01' || steps.some(step => step.stepId === 'U07.A01-all-columns'))
-  const receipt = { outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U07_V3_PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3', testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths, packageRoot: packageDir, artifactHashes, driver: { path: scriptPath, sha256: fileHash(scriptPath) }, sourceDirty: git('status', '--porcelain').split('\n').filter(Boolean), dirtyProductPaths: git('status', '--porcelain', '--', ...productPathArgs).split('\n').filter(Boolean), profile: { canonical: profile.canonical, userData: profile.userData, projectRoot: profile.projects }, fixture: livenessOnly ? { provider: 'loopback synthetic OpenAI SSE', requests: fixture.requests, externalModelRequests: 0 } : null, steps, visualEvidence, projectCreateObservation, projectCore: { table: 'project_core', key: "id='main'", originalSha256: projectCoreBefore ? sha256(Buffer.from(projectCoreBefore)) : null, afterDiscardSha256: projectCoreAfter ? sha256(Buffer.from(projectCoreAfter)) : null, unchanged: Boolean(projectCoreBefore && projectCoreAfter && projectCoreBefore === projectCoreAfter) }, uiObservation, livenessObservation: livenessObservation && { sessionSource: livenessObservation.sessionSource, candidateKind: livenessObservation.candidateKind, task: livenessObservation.task, durableCandidate: livenessObservation.durableCandidate, providerRequests: livenessObservation.providerRequests }, scope: { mode: columnsOnly ? 'columns-only' : immersionOnly ? 'immersion-only' : livenessOnly ? 'liveness-only' : 'full', verifiedActions, unverifiedActions: ['U07.A01', 'U07.A02', 'U07.A03', 'U07.A04', 'U07.A05', 'U07.A06', 'U07.A07', 'U07.A08'].filter(id => !verifiedActions.includes(id)).concat('full F05 and release qualification') }, failedStep: failure ? currentStep : null, error: failure ? String(failure) : null }
+  const receipt = { outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U07_V3_PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3', testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths, packageRoot: packageDir, artifactHashes, driver: { path: scriptPath, sha256: fileHash(scriptPath) }, sourceDirty: git('status', '--porcelain').split('\n').filter(Boolean), dirtyProductPaths: git('status', '--porcelain', '--', ...productPathArgs).split('\n').filter(Boolean), profile: { canonical: profile.canonical, userData: profile.userData, projectRoot: profile.projects }, fixture: livenessOnly ? { provider: 'loopback synthetic OpenAI SSE', requests: fixture.requests, externalModelRequests: 0 } : null, steps, visualEvidence, projectCreateObservation, projectCore: { table: 'project_core', key: "id='main'", originalSha256: projectCoreBefore ? sha256(Buffer.from(projectCoreBefore)) : null, afterDiscardSha256: projectCoreAfter ? sha256(Buffer.from(projectCoreAfter)) : null, unchanged: Boolean(projectCoreBefore && projectCoreAfter && projectCoreBefore === projectCoreAfter) }, uiObservation, livenessObservation: livenessObservation && { sessionSource: livenessObservation.sessionSource, candidateKind: livenessObservation.candidateKind, task: livenessObservation.task, durableCandidate: livenessObservation.durableCandidate, providerRequests: livenessObservation.providerRequests }, cleanup: { appClosed, error: cleanupError }, scope: { mode: columnsOnly ? 'columns-only' : immersionOnly ? 'immersion-only' : livenessOnly ? 'liveness-only' : 'full', verifiedActions, unverifiedActions: ['U07.A01', 'U07.A02', 'U07.A03', 'U07.A04', 'U07.A05', 'U07.A06', 'U07.A07', 'U07.A08'].filter(id => !verifiedActions.includes(id)).concat('full F05 and release qualification') }, failedStep: failure ? currentStep : null, error: failure ? String(failure) : null }
   fs.writeFileSync(path.join(receiptDir, 'receipt.json'), JSON.stringify(receipt, null, 2))
   process.stdout.write(JSON.stringify({ outcome: receipt.outcome, receipt: path.join(receiptDir, 'receipt.json'), steps: steps.length }) + '\n')
   if (failure) throw failure
