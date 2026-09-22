@@ -187,6 +187,8 @@ async function main() {
     const importedDraft = importedDrafts.find(draft => draft.chapterNumber === 1 && draft.status === 'finalized')
     assert(importedDraft, 'synthetic finalized chapter was not listed')
     sourceDraftId = importedDraft.id
+    const persistedFinalized = await invoke(session.page, 'db:draft-get-full', sourceDraftId, created.projectPath, fixtureSession)
+    assert.equal(persistedFinalized?.content, finalizedText)
     const blueprint = await invoke(session.page, 'db:blueprint-upsert', { chapterNumber: 1, title: '旧站来信',
       role: '发展', purpose: '调查来信来源', keyEvents: '发现铜钥匙', characters: [] }, created.projectPath, fixtureSession)
     assert.equal(blueprint.success, true, blueprint.error)
@@ -269,7 +271,14 @@ async function main() {
     await session.page.getByRole('button', { name: '定稿线索-1' }).click()
     await session.page.getByRole('button', { name: '第 1 章定稿' }).click()
     await session.page.getByText('已定稿（只读）', { exact: true }).waitFor({ state: 'visible' })
-    await session.page.getByText(finalizedText, { exact: true }).waitFor({ state: 'visible' })
+    const finalizedEditor = session.page.locator('.writer-editor-content .cm-content[contenteditable="false"]')
+    await finalizedEditor.waitFor({ state: 'visible' })
+    const visibleFinalizedText = await finalizedEditor.evaluate(element => Array.from(element.querySelectorAll('.cm-line'), line => {
+      const copy = line.cloneNode(true)
+      copy.querySelector('.cm-lp-paperhead')?.remove()
+      return copy.textContent
+    }).join('\n'))
+    assert.equal(visibleFinalizedText, persistedFinalized.content)
     steps.push({ stepId: 'v3-plot-open-finalized-source', relatedActionId: 'U15.A06',
       coverage: 'existing-finalized-event-source-navigation',
       assertion: 'V3 tree event opened the existing finalized chapter 1 as read-only with its persisted body' })
