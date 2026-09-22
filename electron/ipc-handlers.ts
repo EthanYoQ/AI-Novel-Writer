@@ -10,11 +10,15 @@ import { registerImportController } from './controllers/import-controller'
 import { registerWindowController } from './controllers/window-controller'
 import { registerOfficialHomepageController } from './controllers/official-homepage-controller'
 import { registerModelProviderResourceController } from './controllers/model-provider-resource-controller'
+import { registerExternalAiAuditController } from './controllers/external-ai-audit-controller'
+import { registerExternalAiAuditFileController } from './controllers/external-ai-audit-file-controller'
 import { registerFinalizationController } from './controllers/finalization-controller'
 import { registerChapterLifecycleController } from './controllers/chapter-lifecycle-controller'
 import { registerExternalFileGrantController } from './controllers/external-file-grant-controller'
 import { registerAppDataController } from './controllers/app-data-controller'
 import { registerSkinController } from './controllers/skin-controller'
+import { registerCharacterAvatarController } from './controllers/character-avatar-controller'
+import { registerWorldSettingController } from './controllers/world-setting-controller'
 import { skinService } from './services/skin-service'
 
 /**
@@ -37,6 +41,8 @@ export function registerIPCHandlers() {
   registerWindowController()
   registerOfficialHomepageController()
   registerModelProviderResourceController()
+  registerExternalAiAuditController()
+  registerExternalAiAuditFileController()
   registerConfigController()
   registerAppDataController()
   registerProjectController()
@@ -48,6 +54,8 @@ export function registerIPCHandlers() {
   registerChapterLifecycleController()
   registerKBController()
   registerImportController()
+  registerCharacterAvatarController()
+  registerWorldSettingController()
 
   console.log(`[Vela IPC] 所有 Controller 已注册完成 | 全局工作区: ${VELA_HOME}`)
 }

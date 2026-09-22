@@ -171,13 +171,73 @@ function normalizeRelationshipText(text: string, names: ReadonlySet<string>, sel
   return edges
 }
 
-function normalizeRelationships(value: unknown, names: Set<string>, selfName: string): string {
+/**
+ * 关系字段拆成「结构化边」与「关系备注」两半。
+ *
+ * 能确定目标的行走结构化边（供关系图谱与写稿注入使用），其余原文——目标角色
+ * 尚未成卡、名字写法不一致、或整块是散文——原样留作关系备注。一行解析不出来
+ * 不再让整张卡的关系降级，也不会把作者的原话丢掉。
+ */
+function normalizeRelationships(
+  value: unknown,
+  names: Set<string>,
+  selfName: string,
+): { relationships: string; relationshipNotes: string } {
   const edges = normalizeCharacterRelationshipEdges(value, names, selfName)
-  if (edges.length > 0) return JSON.stringify(edges)
-  return stringifyValue(value)
+  return {
+    relationships: edges.length > 0 ? JSON.stringify(edges) : '[]',
+    relationshipNotes: relationshipNotesFromRaw(value, edges),
+  }
 }
 
-export function normalizeCharacterCardsForPersistence(rawCards: RawCard[]): CharacterData[] {
+function relationshipNotesFromRaw(
+  value: unknown,
+  edges: readonly CharacterRelationshipEdge[],
+): string {
+  const covered = new Set(edges.map(edge => `${edge.target}\u0000${edge.relation}`))
+  const leftovers: string[] = []
+  const pushEdgeText = (target: string, relation: string): void => {
+    const trimmedTarget = target.trim()
+    if (!trimmedTarget) return
+    const trimmedRelation = relation.trim() || '相关'
+    if (covered.has(`${trimmedTarget}\u0000${trimmedRelation}`)) return
+    leftovers.push(`${trimmedTarget}：${trimmedRelation}`)
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (typeof item === 'string') {
+        const line = item.trim()
+        if (line && !covered.size) leftovers.push(line)
+        continue
+      }
+      if (!item || typeof item !== 'object') continue
+      const record = item as RawCard
+      pushEdgeText(
+        stringifyValue(readField(record, RELATIONSHIP_TARGET_ALIASES)),
+        stringifyValue(readField(record, RELATIONSHIP_LABEL_ALIASES)),
+      )
+    }
+  } else if (value && typeof value === 'object') {
+    for (const [target, relation] of Object.entries(value as RawCard)) {
+      pushEdgeText(target, stringifyValue(relation))
+    }
+  } else if (typeof value === 'string') {
+    const line = value.trim()
+    if (line && edges.length === 0) leftovers.push(line)
+  }
+
+  return [...new Set(leftovers)].join('\n')
+}
+
+/**
+ * @param knownCharacterNames 项目现有角色名。关系是否成边要看**完整名单**，
+ *   只看本批候选会把「与已有角色之间的关系」误判成无主文本、留成关系备注。
+ */
+export function normalizeCharacterCardsForPersistence(
+  rawCards: RawCard[],
+  knownCharacterNames: readonly string[] = [],
+): CharacterData[] {
   const rawWithNames = rawCards
     .map((card) => ({
       card,
@@ -185,23 +245,34 @@ export function normalizeCharacterCardsForPersistence(rawCards: RawCard[]): Char
     }))
     .filter((item) => item.name)
 
-  const names = new Set(rawWithNames.map((item) => item.name))
+  const names = new Set([
+    ...rawWithNames.map((item) => item.name),
+    ...knownCharacterNames.map(name => name.trim()).filter(Boolean),
+  ])
 
-  return rawWithNames.map(({ card, name }) => ({
-    name,
-    role: normalizeRole(readField(card, CHARACTER_FIELD_ALIASES.role)),
-    gender: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.gender)),
-    age: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.age)),
-    appearance: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.appearance)),
-    personality: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.personality)),
-    background: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.background)),
-    abilities: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.abilities)),
-    motivation: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.motivation)),
-    relationships: normalizeRelationships(readField(card, CHARACTER_FIELD_ALIASES.relationships), names, name),
-    arc: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.arc)),
-    notes: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.notes)),
-    currentState: normalizeCurrentState(readField(card, CHARACTER_FIELD_ALIASES.currentState)),
-  }))
+  return rawWithNames.map(({ card, name }) => {
+    const { relationships, relationshipNotes } = normalizeRelationships(
+      readField(card, CHARACTER_FIELD_ALIASES.relationships),
+      names,
+      name,
+    )
+    return {
+      name,
+      role: normalizeRole(readField(card, CHARACTER_FIELD_ALIASES.role)),
+      gender: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.gender)),
+      age: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.age)),
+      appearance: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.appearance)),
+      personality: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.personality)),
+      background: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.background)),
+      abilities: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.abilities)),
+      motivation: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.motivation)),
+      relationships,
+      arc: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.arc)),
+      notes: stringifyValue(readField(card, CHARACTER_FIELD_ALIASES.notes)),
+      currentState: normalizeCurrentState(readField(card, CHARACTER_FIELD_ALIASES.currentState)),
+      ...(relationshipNotes ? { relationshipNotes } : {}),
+    }
+  })
 }
 
 function hasMeaningfulValue(value: unknown): boolean {
@@ -474,8 +545,15 @@ export function extractCompleteCharacterCards(modelText: string, sourceText: str
   return cards
 }
 
-export function parseCharacterCardsFromModelOrSource(modelText: string, sourceText: string): CharacterData[] {
+export function parseCharacterCardsFromModelOrSource(
+  modelText: string,
+  sourceText: string,
+  knownCharacterNames: readonly string[] = [],
+): CharacterData[] {
   const modelCards = parseModelCharacterCards(modelText)
   const sourceCards = parseArchitectureCharacterRoster(sourceText).cards
-  return normalizeCharacterCardsForPersistence(mergeModelAndSourceCards(modelCards, sourceCards))
+  return normalizeCharacterCardsForPersistence(
+    mergeModelAndSourceCards(modelCards, sourceCards),
+    knownCharacterNames,
+  )
 }

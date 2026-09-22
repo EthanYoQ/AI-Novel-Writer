@@ -9,12 +9,15 @@ import { IconBtn } from '../../ui/IconBtn'
 import { MenuItem } from '../../ui/MenuItem'
 import { useOutsideClick } from '../../../hooks/useOutsideClick'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { isMagazine, useUiVersionStore } from '../../../stores/ui-version-store'
+import MagLogo from '../../layout/v2/magazine/MagLogo'
 
 /**
  * Agent 面板顶部工具栏
  */
 export default function AgentHeader() {
   const text = useLocaleStore(s => s.text)
+  const uiVersion = useUiVersionStore(s => s.uiVersion)
   const { createConversation, toggleHistory, showHistory, getActiveConversation } = useAgentStore()
   const toggleAIPanel = useLayoutStore(s => s.toggleAIPanel)
   const [showMore, setShowMore] = useState(false)
@@ -46,23 +49,30 @@ export default function AgentHeader() {
   const isCurrentEmpty = !activeConv || activeConv.messages.filter(m => m.role !== 'system').length === 0
 
   return (
-    <div
-      className="no-select flex items-center justify-between gap-1.5 px-2 flex-shrink-0"
-      style={{
-        height: 'var(--height-panel-header)',
-        borderBottom: '1px solid var(--color-border)',
-      }}
-    >
-      {/* 标题 */}
-      <div
-        className="flex min-w-0 items-center overflow-hidden text-ellipsis whitespace-nowrap gap-1"
-        style={{ color: 'var(--color-text-secondary)', fontSize: '0.75rem', fontWeight: 500 }}
-      >
-        {text('AI 写作助手', 'AI Writing Assistant')}
+    /* demo 的 .ai-head 版式：头像 + 「AI 助手 / 资料与答疑」+ 右侧动作组 */
+    <div className="ai-head no-select">
+      {/**
+       * 头像 —— **2026-09-17 第十五轮按先生要求分家**：
+       *   · v3「时尚杂志」：换成刊标（圆角框体 + 双页 W），与刊头、首页用的是同一枚，
+       *     品牌色恒为朱砂（不跟栏目换色，见 MagLogo 的注释）。
+       *   · v2「墨纸书斋」：仍是 demo 的「鲸」字方块，一个字符都没动。
+       */}
+      {isMagazine(uiVersion)
+        ? <MagLogo size={24} className="ai-av-logo" />
+        : <span className="ai-av" aria-hidden="true">{text('鲸', 'AI')}</span>}
+
+      <div className="ai-head-title">
+        {/* 英文沿用产品既有文案（AI Writing Assistant），中文按 demo 收短为「AI 助手」 */}
+        <b>{text('AI 助手', 'AI Writing Assistant')}</b>
+        <span className="sub">{text('资料与答疑', 'Research & answers')}</span>
       </div>
 
       {/* 右侧工具按钮组 */}
-      <div className="flex items-center gap-1.5 px-0.5 flex-shrink-0">
+      <div className="agent-actions flex items-center gap-1.5 px-0.5 flex-shrink-0">
+
+        {/* ai-output 视图的入口在 AgentConversation 的「AI 工作流」，本组件不重复承载它。
+            注：本组件（含上游 1.1.0）从未有过「AI 输出 · Agent 工作记录」按钮，
+            原先那条「重复了，已移除」的注释与史实不符，已按实情改写。 */}
 
         {/* 新建对话按钮 */}
         <IconBtn
@@ -98,13 +108,10 @@ export default function AgentHeader() {
           {/* 更多菜单下拉 */}
           {showMore && (
             <div
-              className="absolute right-0 top-full mt-1 z-50 py-1 rounded-lg shadow-lg"
-              style={{
-                width: subView === 'main' ? 200 : 260,
-                backgroundColor: 'var(--color-sidebar)',
-                border: '1px solid var(--color-border)',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
-              }}
+              /* demo 的 .agent-popover（shell.css 803 行起）：纸底 + line2 描边 + 10px 圆角 +
+                 深阴影；定位仍用产品这套（相对按钮），因为 demo 是按面板头绝对定位的。 */
+              className="agent-popover absolute right-0 top-full mt-1 z-50"
+              style={{ width: subView === 'main' ? 200 : 260 }}
             >
               {/* ===== 主菜单视图 ===== */}
               {subView === 'main' && (
@@ -213,7 +220,8 @@ function MCPSubView({
           {servers.map(server => (
             <div
               key={server.id}
-              className="flex items-center gap-2 px-3 py-1.5 text-xs"
+              /* demo 的 .ap-row：32px 高 / 7px 圆角 / 悬停白雾 */
+              className="ap-row"
             >
               {/* 状态灯 */}
               <span
@@ -318,7 +326,8 @@ function SkillSubView({
             return (
               <div
                 key={skill.metadata.name}
-                className="flex items-start gap-2 px-3 py-1.5 text-xs"
+                /* 同上：与 MCP 列表保持同一套 demo 行样式 */
+                className="ap-row items-start"
               >
                 <Sparkles size={12} className="flex-shrink-0 mt-0.5" style={{ color: 'var(--color-accent)' }} />
                 <div className="flex-1 min-w-0">

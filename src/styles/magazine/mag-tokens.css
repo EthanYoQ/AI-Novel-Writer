@@ -1,0 +1,179 @@
+/* ============================================================================
+ * 令牌层 —— v2 只拿「字号」，其余全部留给 v3
+ *
+ * 先生定调（2026-09-15）：
+ *   「你要记住，你变大的是**字体大小**，但不能是**字体粗细**和**字体样式**。」
+ *
+ *   html[data-ui='v2']            → 只有**字号**令牌
+ *      --mag-fs-* 字号阶梯、--v2-fs-* 桥接、控件的字号（--v2-btn-fs 等）。
+ *      这是「把字小修好」的实质，v2 墨纸书斋与 v3 时尚杂志共用。
+ *
+ *   html[data-ui='v2'][data-mag]  → 其余一切
+ *      行高、字距、字体族、控件尺寸、版面骨架、留白、圆角、阴影。
+ *      墨纸书斋保留自己的一整套原貌：行高 1.35/1.7/1.9/2.3、字距 0.22em、
+ *      衬线 Georgia+宋体、按钮 25px、圆角 7px、顶栏 56px、书脊 60px。
+ *
+ * 教训留档：
+ *   曾经把整层令牌一起扩大给 v2，结果边框、背景、圆角、按钮高度、字重、
+ *   字族全被改了。先生两次指出——第一次是边框与按钮样式，第二次是
+ *   「首页要还原成 V2 那种细细的效果」。令牌杠杆威力大，作用域必须按性质切开：
+ *   **只有字号给 v2。** 执行工具见 scripts/normalize-magazine-scope.mjs。
+ *
+ * v1 经典界面在 <html> 上既不挂 data-ui 也不挂 data-mag，本目录规则都不匹配。
+ * ========================================================================== */
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 一、字号（v2 与 v3 共用）
+ * ════════════════════════════════════════════════════════════════════════ */
+html[data-ui='v2'] {
+  /* ---- 界面字体跟随作者的选择 ----
+   * demo 原本把界面字体写死在 --sans 上（system-ui / 苹方 / 微软雅黑），
+   * 而「设置 → 界面字体」是经 theme-store 写到 <html> 内联的 --font-sans。
+   * 两者不通，结果是作者换的界面字体在墨纸书斋下**根本不生效** ——
+   * 根元素的 font-family 走的是 --sans，跟 --font-sans 没关系。
+   * 这里把 --sans 接到 --font-sans 上（带兜底，防止 applyUiFont 尚未跑到时取值落空）：
+   * v2 与 v3 的界面字体从此跟随作者的选择，出厂默认是明朝体。 */
+  --sans: var(--font-sans, system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif);
+
+  /* ---- 字号阶梯 ----
+   * 每一档都比 v2 原值更大，且相邻档保持可辨识的落差。
+   * 设计底线：任何一档都不低于 11px —— 这是「看得清」的物理下限。
+   * 注意：只给尺寸，不碰字重、字族与字距 —— 那些是「字体样式」。 */
+  --mag-fs-kicker: 11.5px;  /* 眉标：栏目名、分节标记 */
+  --mag-fs-micro: 11.5px;   /* 极小：表格角标、页码 */
+  --mag-fs-note: 12.5px;    /* 说明：辅助文字、时间戳 */
+  --mag-fs-caption: 13px;   /* 图注：次要说明 */
+  --mag-fs-label: 13.5px;   /* 字段名：表单标签 */
+  --mag-fs-body: 14px;      /* 正文：界面主力字号 */
+  --mag-fs-lead: 15px;      /* 导语：卡片标题、列表主行 */
+  --mag-fs-tool: 16px;      /* 工具条与面板标题 */
+  --mag-fs-subhead: 19px;   /* 小标题：栏内分节 */
+  --mag-fs-title: 30px;     /* 页面大标题 */
+  --mag-fs-display: 44px;   /* 刊头 / 首页巨标题 */
+
+  /* 桥接到产品既有的 v2 令牌 —— v2-atomic / v2-sidebar 等引用方自动跟随 */
+  --v2-fs-micro: var(--mag-fs-kicker);
+  --v2-fs-tiny: var(--mag-fs-micro);
+  --v2-fs-note: var(--mag-fs-note);
+  --v2-fs-caption: var(--mag-fs-caption);
+  --v2-fs-label: var(--mag-fs-label);
+  --v2-fs-body: var(--mag-fs-body);
+  --v2-fs-lead: var(--mag-fs-lead);
+  --v2-fs-tool: var(--mag-fs-tool);
+  --v2-fs-title: var(--mag-fs-title);
+  --v2-fs-display: var(--mag-fs-display);
+
+  /* ---- 控件的字号 ----
+   * 字号属于「大小」，所以给 v2；控件的高度与内距属于尺寸，留在下面 v3 段。 */
+  --v2-btn-fs: 13px;
+  --v2-btn-sm-fs: 12.5px;
+  --v2-btn-lg-fs: 13.5px;
+  --v2-field-fs: 13.5px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 二、行高 · 字距 · 字体族（只有 v3）
+ *
+ * 这三样都属于「字体样式」，先生明确要求不动 v2。墨纸书斋继续用
+ * v2-tokens.css 与 shell.css 的原值（行高 1.35/1.7/1.9/2.3、字距 0.22em、
+ * 衬线 Georgia + 宋体）。
+ * ════════════════════════════════════════════════════════════════════════ */
+html[data-ui='v2'][data-mag] {
+  --mag-lh-tight: 1.3;
+  --mag-lh-head: 1.42;
+  --mag-lh-ui: 1.6;
+  --mag-lh-read: 1.8;
+  --mag-lh-prose: 2.0;
+
+  --v2-lh-tight: var(--mag-lh-tight);
+  --v2-lh-ui: var(--mag-lh-ui);
+  --v2-lh-read: var(--mag-lh-read);
+  --v2-lh-prose: var(--mag-lh-prose);
+
+  --mag-ls-kicker: 0.18em;
+  --mag-ls-label: 0.1em;
+  --mag-ls-head: -0.015em;
+  --mag-ls-display: -0.03em;
+  --mag-ls-body: 0.01em;
+
+  --v2-ls-eyebrow: var(--mag-ls-kicker);
+  --v2-ls-label: var(--mag-ls-label);
+
+  /* 字体族：v2 的衬线是 Georgia + 宋体；杂志版换思源宋体优先
+     （可变字重、笔画利落，接近时装刊的标题气质）。
+     这是「字体样式」，所以只给 v3。 */
+  --serif: 'Noto Serif SC', 'Source Han Serif SC', Georgia, 'Songti SC', 'STSong', serif;
+
+  /* ---- 控件尺寸 ---- */
+  --v2-btn-h: 30px;
+  --v2-btn-px: 12px;
+  --v2-btn-sm-h: 26px;
+  --v2-btn-sm-px: 10px;
+  --v2-btn-lg-h: 34px;
+  --v2-btn-lg-px: 16px;
+  --v2-field-px: 12px;
+  --v2-field-py: 8px;
+
+  /* ---- 圆角：印刷品是方的 ---- */
+  --mag-r-flat: 0px;
+  --mag-r-hair: 2px;
+  --mag-r-card: 3px;
+  --mag-r-sheet: 4px;
+  --mag-r-pill: 99px;
+
+  --v2-btn-radius: var(--mag-r-hair);
+  --v2-btn-sm-radius: var(--mag-r-hair);
+  --v2-field-radius: var(--mag-r-hair);
+  --v2-card-radius: var(--mag-r-card);
+  --v2-modal-radius: var(--mag-r-sheet);
+
+  /* ---- 版面骨架尺寸 ----
+   * 2026-09-16 装帧重做：顶栏从「工具栏」改成「刊头」，书脊从「图标条」改成
+   * 「栏目索引带」，两者的尺寸都要给足 —— 刊头要容得下彩带与期号块，
+   * 书脊要容得下竖排刊名与编号。 */
+  --mag-h-masthead: 78px;
+  --mag-h-status: 30px;
+  --mag-h-tab: 38px;
+  --mag-h-tool: 46px;
+  --mag-w-spine: 94px;
+  --mag-w-gutter: 28px;
+
+  /* ---- 装帧度量（2026-09-16 新增）----
+   * 这四个数字是本次装帧的骨架：
+   *   band    刊头顶端那条七色分段彩带的高度（栏目在哪儿，一眼可见）
+   *   secmark 栏目索引块左缘色条的宽度
+   *   bleed   选中块向右伸出的出血量 —— 整版规矩，只留这一处越界
+   *   sech    单个栏目索引块的最小高度（编号 + 竖排刊名） */
+  --mag-band: 4px;
+  --mag-secmark: 7px;
+  --mag-bleed: 5px;
+  --mag-sech: 72px;
+
+  --v2-h-title: var(--mag-h-masthead);
+  --v2-h-status: var(--mag-h-status);
+  --v2-h-tab: var(--mag-h-tab);
+  --v2-h-tool: var(--mag-h-tool);
+
+  /* demo 骨架变量（shell.css 的 :root 用的是不带 v2 前缀的名字） */
+  --h-title: var(--mag-h-masthead);
+  --h-status: var(--mag-h-status);
+  --h-tab: var(--mag-h-tab);
+  --h-tool: var(--mag-h-tool);
+  --w-spine: var(--mag-w-spine);
+
+  /* ---- 留白步长：8px 基准网格 ---- */
+  --mag-sp-1: 4px;
+  --mag-sp-2: 8px;
+  --mag-sp-3: 12px;
+  --mag-sp-4: 16px;
+  --mag-sp-5: 24px;
+  --mag-sp-6: 32px;
+  --mag-sp-7: 48px;
+
+  /* ---- 线与影：杂志用线分层级，不用影子 ---- */
+  --mag-hairline: 1px solid var(--line);
+  --mag-rule-strong: 2px solid var(--ink);
+  --mag-shadow-none: none;
+  --mag-shadow-sheet: 0 1px 2px rgba(20, 18, 24, 0.04), 0 18px 48px -32px rgba(20, 18, 24, 0.3);
+  --mag-shadow-pop: 0 2px 6px rgba(20, 18, 24, 0.06), 0 24px 60px -36px rgba(20, 18, 24, 0.36);
+}

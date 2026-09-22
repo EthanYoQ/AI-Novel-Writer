@@ -5,10 +5,12 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { ChevronRight, ChevronDown, RefreshCw, CheckCircle2, Circle, FolderOpen, Copy, FolderTree, Trash2 } from 'lucide-react'
 import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import { useDraftStore } from '../../../stores/draft-store'
+import { useStickyNoteStore } from '../../../stores/sticky-note-store'
 import { useEditorStore } from '../../../stores/editor-store'
 import { useLayoutStore } from '../../../stores/layout-store'
 import { ipc } from '../../../services/ipc-client'
@@ -32,9 +34,12 @@ import { showSidebarMenu } from './sidebar-menu'
 import { createProjectArchTabId } from '../../editor/arch-file-refresh-policy'
 import DraftBoxGroup from './DraftBoxGroup'
 import ManuscriptGroup from './ManuscriptGroup'
+import StickyNotesGroup from './StickyNotesGroup'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { useUiVersionStore, isModernShell } from '../../../stores/ui-version-store'
 import { LatestRequestGate } from '../../editor/latest-request-gate'
 import { beginProjectTreeIdentityTransition } from './project-tree-refresh-policy'
+import { useActiveTabFilePath, useActiveTabType } from './sidebar-active-entry'
 import {
   captureProjectSession,
   isProjectSessionCurrent,
@@ -49,14 +54,120 @@ const ARCH_FILE_EN: Record<string, { label: string; desc: string }> = {
   synopsis: { label: 'Plot synopsis', desc: 'Overall plot structure' },
 }
 
+/** 小说之旅的三个阶段状态：绿=已完成，橙=进行中，红=未完成。 */
+type JourneyState = 'done' | 'active' | 'pending'
+
+const JOURNEY_DOT_COLOR: Record<JourneyState, string> = {
+  done: 'var(--color-success)',
+  active: 'var(--color-warning)',
+  pending: 'var(--color-error)',
+}
+
+/**
+ * 「小说之旅」的一步：标题行左前方紧贴着的一颗三色小球，外加连到下一步的虚线。
+ *
+ * 三个小球自上而下连成一条轨道，暗示「把这三步从上到下走完，才能开始小说之旅」：
+ *   · 绿 —— 这一阶段该有的内容已经齐了；
+ *   · 橙 —— 正在做（已有进展，或对应的工作流正在跑）；
+ *   · 红 —— 还没开始。
+ *
+ * 定位全部用绝对定位、不占布局：标题行本身带左右外边距（v2 皮肤 7px / 经典 8px）
+ * 与 10px 左内边距，球就压在左内边距里、贴着整行标题，行一个字都不会被推走。
+ * 「故事架构」那行的 12px 行首槽里是折叠箭头，所以球不能放进那个槽，只能贴左边距。
+ * 小球带 data-journey-state、虚线带 data-journey-link，方便用例直接断言。
+ */
+function JourneyStep({
+  state,
+  label,
+  connect,
+  tourId,
+  children,
+}: {
+  state: JourneyState
+  label: string
+  /** 是否向下画连接虚线；最后一步不画。 */
+  connect: boolean
+  /** 新手引导的指向标记（data-tour），让引导能把这一步框出来。 */
+  tourId?: string
+  children: ReactNode
+}) {
+  const text = useLocaleStore(s => s.text)
+  const isV2 = useUiVersionStore(s => isModernShell(s.uiVersion))
+  // .tree-item 的实际盒模型：现代外壳 height 31px / margin 0 7px；经典 height 28px / margin 1px 8px。
+  // 这里的数值必须与 CSS 保持一致（杂志版也只改字号与圆角，不改行高）。
+  const rowHeight = isV2 ? 31 : 28
+  const rowInset = isV2 ? 7 : 8
+  const dotSize = 7
+  const dotLeft = rowInset + 2
+  const dotTop = Math.round((rowHeight - dotSize) / 2)
+  const lineLeft = dotLeft + Math.floor(dotSize / 2)
+  const stateLabel = state === 'done'
+    ? text('已完成', 'Complete')
+    : state === 'active'
+      ? text('进行中', 'In progress')
+      : text('未完成', 'Not started')
+  return (
+    // 定位基准用内联样式：Tailwind 的 .relative 依赖样式表加载，而这里的球与虚线
+    // 必须无条件相对本行定位，否则会跑到侧栏外面去（连线也就看不见了）。
+    <div style={{ position: 'relative' }} data-tour={tourId}>
+      {connect && (
+        <span
+          aria-hidden
+          data-journey-link
+          style={{
+            position: 'absolute',
+            left: lineLeft,
+            top: dotTop + dotSize + 2,
+            // 负值把虚线带过容器底部，正好接到下一步小球的上沿。
+            bottom: -dotTop,
+            width: 1,
+            // 用重复渐变画虚线：dash 长度与间隔可控，颜色取比边框更深的弱化文字色，
+            // 在浅米纸底上也能看清（纯 border dashed 在 v2 底下几乎看不见）。
+            background: 'repeating-linear-gradient(to bottom, var(--color-text-muted, #8F8876) 0 3px, transparent 3px 7px)',
+            opacity: 0.5,
+          }}
+        />
+      )}
+      <span
+        aria-hidden
+        data-journey-state={state}
+        title={`${label} · ${stateLabel}`}
+        style={{
+          position: 'absolute',
+          left: dotLeft,
+          top: dotTop,
+          width: dotSize,
+          height: dotSize,
+          borderRadius: '50%',
+          background: JOURNEY_DOT_COLOR[state],
+          // 让小球压在虚线上时中间留一圈底色，看起来是「节点串在线上」。
+          boxShadow: '0 0 0 2px var(--color-sidebar, var(--color-bg))',
+          zIndex: 1,
+        }}
+      />
+      {children}
+    </div>
+  )
+}
+
 export default function ProjectTree() {
   const currentProject = useProjectStore(s => s.currentProject)
   const projectSessionEpoch = useProjectStore(s => s.projectSessionEpoch)
   const text = useLocaleStore(s => s.text)
+  /**
+   * 侧栏「正在看的那一行」的统一依据（见 sidebar-active-entry.ts）。
+   *
+   * 先生 2026-09-20 连测两轮：「小说配置也是没反应的」「故事架构下面的那些标题内容
+   * 也是没反应的」—— 查证：这些行**当时一行都没有选中态代码**，不是样式被谁压掉。
+   */
+  const activeTabType = useActiveTabType()
+  const activeFilePath = useActiveTabFilePath()
 
   // refreshFileTree / loadAllDrafts 在 refreshAll 内通过 getState() 调用
   // 只订阅 activeRuns
   const activeRuns = useWorkflowStore(s => s.activeRuns)
+  /** 某类工作流是否正在跑 —— 用来把对应阶段点亮成橙色「进行中」。 */
+  const isTypeRunning = useWorkflowStore(s => s.isTypeRunning)
   // 精确订阅，避免 loadAllDrafts 执行后引用变化触发 useCallback/useEffect 循环
   const draftsByChapter = useDraftStore(s => s.draftsByChapter)
 
@@ -89,6 +200,13 @@ export default function ProjectTree() {
         useDraftStore.getState().loadAllDrafts(projectPath, projectSession),
         checkArchStatus(projectSession),
         getBlueprintCount(projectSession),
+        /**
+         * 便利贴跟着项目走：换一本书就换一个本子。
+         *
+         * 用 loadIfNeeded 而不是 load —— refreshAll 会被工作流进度、资源刷新
+         * 等事件频繁触发（80ms 防抖），直接 load 会把 IPC 与 loading 闪烁放大。
+         */
+        useStickyNoteStore.getState().loadIfNeeded(),
       ])
       if (
         !refreshRequestGate.current.isLatest(requestId)
@@ -234,6 +352,40 @@ export default function ProjectTree() {
 
   // 故事架构进度
   const archDone = ARCH_FILES.filter(f => archStatus[f.key]).length
+
+  /**
+   * 「小说之旅」三步的状态：配置 → 架构 → 蓝图。
+   *
+   * 判定只看内容有没有做出来，再加上「对应工作流是否正在跑」：
+   * 内容齐了是绿，有进展或在跑是橙，什么都没有是红。
+   * 三步都绿，作者就有了开写所需的全部底稿。
+   */
+  const journeyText = text(
+    '把这三步从上到下走完，就可以开始小说之旅了',
+    'Finish these three steps from top to bottom to begin your novel journey',
+  )
+  const newProjectSetupRunning = isTypeRunning('new_project_setup')
+  const configRunning = newProjectSetupRunning || isTypeRunning('config_generation')
+  const archRunning = newProjectSetupRunning || isTypeRunning('architecture_generation')
+  const blueprintRunning = newProjectSetupRunning || isTypeRunning('directory')
+  // 配置：核心大纲 / 主角设定 / 世界观 / 金手指 / 全局指导里有任意一项填过，就算开了个头。
+  const configStarted = Boolean(
+    nc.coreOutline?.trim()
+    || nc.protagonistProfile?.trim()
+    || nc.worldSetting?.trim()
+    || nc.goldenFinger?.trim()
+    || nc.globalGuidance?.trim(),
+  )
+  const configState: JourneyState = configDone
+    ? 'done'
+    : (configStarted || configRunning) ? 'active' : 'pending'
+  const archState: JourneyState = archDone >= ARCH_FILES.length
+    ? 'done'
+    : (archDone > 0 || archRunning) ? 'active' : 'pending'
+  const totalChapters = Math.max(0, Number(nc.totalChapters) || 0)
+  const blueprintState: JourneyState = totalChapters > 0 && blueprintCount >= totalChapters
+    ? 'done'
+    : (blueprintCount > 0 || blueprintRunning) ? 'active' : 'pending'
   const clearDisabled = activeRuns.length > 0
   const openConfigEditor = () => useEditorStore.getState().openFile({
     id: 'config',
@@ -280,10 +432,15 @@ export default function ProjectTree() {
         onCleared={refreshAll}
       />
 
+      {/* ===== 小说之旅：配置 → 架构 → 蓝图，三色小球自上而下连成一条轨道 ===== */}
+      <div title={journeyText}>
       {/* 1. 小说配置 */}
+      <JourneyStep state={configState} label={text('小说配置', 'Novel configuration')} connect tourId="journey-config">
       <LeafItem
         iconName="book-open"
         label={text('小说配置', 'Novel configuration')}
+        emphasize
+        active={activeTabType === 'config'}
         desc={text('基础参数与写作要求', 'Core parameters and writing guidance')}
         badge={configDone ? text('已完成', 'Complete') : text('待配置', 'Pending')}
         badgeDone={configDone}
@@ -297,14 +454,31 @@ export default function ProjectTree() {
           },
         ], e)}
       />
+      </JourneyStep>
 
       {/* 2. 故事架构 — 点击标题行打开编辑器，子文件仍可单独点开 */}
-      <WorldBuildingGroup archStatus={archStatus} archDone={archDone} onCleared={refreshAll} />
+      <JourneyStep state={archState} label={text('故事架构', 'Story architecture')} connect tourId="journey-arch">
+      <WorldBuildingGroup
+        archStatus={archStatus}
+        archDone={archDone}
+        onCleared={refreshAll}
+        /**
+         * 组行亮有两种情形：打开的是故事架构编辑器**本身**，
+         * 或者打开的是它下面**某一份架构文件** —— 后者同样「人在这块里」，
+         * 组行不亮就等于这一层没说话。
+         */
+        active={activeTabType === 'world-building' || activeTabType === 'arch-file'}
+        activeFilePath={activeFilePath}
+      />
+      </JourneyStep>
 
       {/* 3. 章节蓝图 — 点击打开编辑器页 */}
+      <JourneyStep state={blueprintState} label={text('章节蓝图', 'Chapter blueprints')} connect={false} tourId="journey-blueprint">
       <LeafItem
         iconName="layout-list"
         label={text('章节蓝图', 'Chapter blueprints')}
+        emphasize
+        active={activeTabType === 'chapter-card'}
         desc={text('AI 生成的章节目录，可编辑', 'Editable AI-generated chapter plans')}
         badge={blueprintCount > 0 ? text(`${blueprintCount}/${nc.totalChapters} 章`, `${blueprintCount}/${nc.totalChapters} chapters`) : text('待生成', 'Pending')}
         badgeColor={
@@ -325,12 +499,15 @@ export default function ProjectTree() {
           },
         ], e)}
       />
+      </JourneyStep>
+      </div>
 
       <LeafItem
         iconName="git-branch"
-        label={text('伏笔与叙事线索', 'Foreshadowing & narrative threads')}
+        label={text('伏笔', 'Foreshadowing')}
+        active={activeTabType === 'narrative-thread'}
         desc={text('规划埋设/回收章节，自动注入写作并提示逾期', 'Plan setup/payoff chapters, inject active threads, and flag overdue ones')}
-        onClick={() => openBuiltinEditor('narrative-thread-editor', text('伏笔与叙事线索', 'Foreshadowing & narrative threads'), 'narrative-thread')}
+        onClick={() => openBuiltinEditor('narrative-thread-editor', text('伏笔', 'Foreshadowing'), 'narrative-thread')}
       />
 
       {/* 4. 草稿箱 — 独立分区，按章节分组展示草稿 */}
@@ -338,6 +515,9 @@ export default function ProjectTree() {
 
       {/* 5. 正文章节 — 仅显示已定稿 */}
       <ManuscriptGroup files={manuscriptFiles} projectPath={p} />
+
+      {/* 6. 便利贴 — 先生私人的灵感本子（不参与任何 AI 创作链路） */}
+      <StickyNotesGroup />
     </div>
   )
 }
@@ -349,10 +529,16 @@ function WorldBuildingGroup({
   archStatus,
   archDone,
   onCleared,
+  active,
+  activeFilePath,
 }: {
   archStatus: Record<string, boolean>
   archDone: number
   onCleared: () => void | Promise<void>
+  /** 工作区正开着故事架构编辑器（组标题行点亮）。 */
+  active: boolean
+  /** 工作区正开着的那一页路径 —— 架构文件行据此逐条认领。 */
+  activeFilePath?: string
 }) {
   const [open, setOpen] = useState(true)
   const text = useLocaleStore(s => s.text)
@@ -363,7 +549,8 @@ function WorldBuildingGroup({
     <div>
       {/* 组标题行 — 点击打开故事架构编辑器，双击展开/折叠子文件 */}
       <div
-        className="tree-item gap-1.5 cursor-pointer select-none"
+        data-level={1}
+        className={`tree-item gap-1.5 cursor-pointer select-none${active ? ' active' : ''}`}
         style={{ paddingLeft: 10 }}
         onClick={() => openBuiltinEditor('world-building-editor', text('故事架构', 'Story architecture'), 'world-building')}
         title={text('打开故事架构编辑器（可生成架构文档）', 'Open the story architecture editor')}
@@ -378,7 +565,8 @@ function WorldBuildingGroup({
           }
         </span>
         <FolderTree size={14} style={{ color: 'var(--color-text-muted)' }} />
-        <span className="text-sm font-medium flex-1 min-w-0 truncate" style={{ color: 'var(--color-text)' }}>{text('故事架构', 'Story architecture')}</span>
+        {/* 先生：主标题 14.5px / 字重 550（之前 15px+600 太黑太粗） */}
+        <span className="text-[14px] flex-1 min-w-0 truncate" style={{ color: 'var(--color-text)', fontWeight: 550 }}>{text('故事架构', 'Story architecture')}</span>
         {/* 进度徽章 */}
         <span
           className="text-[0.7rem] flex-shrink-0 ml-1"
@@ -407,6 +595,7 @@ function WorldBuildingGroup({
                 filePath={filePath}
                 isGenerated={isGenerated}
                 onCleared={onCleared}
+                active={activeFilePath === filePath}
               />
             )
           })}
@@ -422,11 +611,14 @@ function ArchFileRow({
   filePath,
   isGenerated,
   onCleared,
+  active,
 }: {
   f: { key: string; iconName: string; label: string; desc: string }
   filePath: string
   isGenerated: boolean
   onCleared: () => void | Promise<void>
+  /** 工作区正开着这一份架构文件？ */
+  active: boolean
 }) {
   const text = useLocaleStore(s => s.text)
   const english = ARCH_FILE_EN[f.key] ?? { label: f.label, desc: f.desc }
@@ -464,8 +656,10 @@ function ArchFileRow({
 
   return (
     <div
-      className="tree-item gap-1.5 cursor-pointer select-none"
-      style={{ paddingLeft: 26 }}
+      data-level={2}
+      className={`tree-item gap-1.5 cursor-pointer select-none${active ? ' active' : ''}`}
+      /** 选中色标跟着缩进走：缩进 26 → 色标落在 16（内容左缘再往左 10px）。 */
+      style={{ paddingLeft: 26, '--row-mark-x': '16px' } as CSSProperties}
       onClick={() => openArchFile(filePath, label)}
       onContextMenu={e => showSidebarMenu([
         {

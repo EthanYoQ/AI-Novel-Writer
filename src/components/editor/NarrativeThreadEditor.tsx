@@ -41,11 +41,13 @@ import { useWorkflowStore } from '../../stores/workflow-store'
 import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../project-session-gate'
 import { Button } from '../ui/Button'
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from '../ui/Dialog'
 import { Input } from '../ui/Input'
 import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
+import PagePlate from '../layout/v2/magazine/PagePlate'
+import { PlateFigure, PlateThreads } from '../layout/v2/magazine/PlateFigures'
 import { Textarea } from '../ui/Textarea'
 import { toast } from '../ui/Toast'
 import { openBuiltinEditor, openChapterFile } from '../panels/sidebar/sidebar-file-openers'
@@ -120,7 +122,7 @@ function plotTreeErrorMessage(
   }
   if (error instanceof PlotTreeSourceError) {
     return text(
-      '请先添加章节蓝图、定稿或叙事线索，再生成剧情树。',
+      '请先添加章节蓝图、定稿或伏笔，再生成剧情树。',
       'Add a chapter blueprint, finalized chapter, or narrative thread before generating a plot tree.',
     )
   }
@@ -273,7 +275,7 @@ export default function NarrativeThreadEditor({
       setEventDraftId(previous => previous || finalized[0]?.id || 0)
       setAiBlueprintChapter(previous => previous || nextBlueprints[0]?.chapterNumber || 0)
     } catch {
-      if (isProjectSessionCurrent(session)) toast.error(text('加载叙事线索失败', 'Could not load narrative threads'))
+      if (isProjectSessionCurrent(session)) toast.error(text('加载伏笔失败', 'Could not load foreshadowing'))
     }
   }, [projectKey, text])
 
@@ -574,7 +576,7 @@ export default function NarrativeThreadEditor({
       setPlanCandidates(previous => previous.filter(item => item !== candidate))
       await reload()
     } catch {
-      if (isProjectSessionCurrent(session)) toast.error(text('保存叙事线索失败', 'Could not save narrative thread'))
+      if (isProjectSessionCurrent(session)) toast.error(text('保存伏笔失败', 'Could not save foreshadowing'))
     } finally {
       if (isProjectSessionCurrent(session)) setBusy(false)
     }
@@ -617,7 +619,7 @@ export default function NarrativeThreadEditor({
       setEditingId(null)
       await reload()
     } catch {
-      if (isProjectSessionCurrent(session)) toast.error(text('保存叙事线索失败', 'Could not save narrative thread'))
+      if (isProjectSessionCurrent(session)) toast.error(text('保存伏笔失败', 'Could not save foreshadowing'))
     } finally {
       if (isProjectSessionCurrent(session)) setBusy(false)
     }
@@ -632,7 +634,7 @@ export default function NarrativeThreadEditor({
       if (!result.success) throw new Error(result.error)
       if (isProjectSessionCurrent(session)) await reload()
     } catch {
-      if (isProjectSessionCurrent(session)) toast.error(text('删除叙事线索失败', 'Could not delete narrative thread'))
+      if (isProjectSessionCurrent(session)) toast.error(text('删除伏笔失败', 'Could not delete foreshadowing'))
     } finally {
       if (isProjectSessionCurrent(session)) setBusy(false)
     }
@@ -671,32 +673,58 @@ export default function NarrativeThreadEditor({
   }
 
   return (
-    <div className="h-full overflow-y-auto p-5" style={{ color: 'var(--color-text)' }}>
-      <div className="mx-auto max-w-5xl space-y-5">
-        <header className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold">{text('剧情树与叙事线索', 'Plot tree & narrative threads')}</h2>
-          <div className="flex gap-2" role="tablist" aria-label={text('剧情编辑器视图', 'Plot editor views')}>
-            <Button
-              size="sm"
-              variant={view === 'plot-tree' ? 'default' : 'outline'}
-              role="tab"
-              aria-selected={view === 'plot-tree'}
-              onClick={() => setView('plot-tree')}
-            >
-              {text('剧情树', 'Plot tree')}
-            </Button>
-            <Button
-              size="sm"
-              variant={view === 'plans' ? 'default' : 'outline'}
-              role="tab"
-              aria-selected={view === 'plans'}
-              onClick={() => setView('plans')}
-            >
-              {text('计划清单', 'Plan list')}
-            </Button>
-          </div>
-        </header>
+    <div className="h-full overflow-y-auto" style={{ color: 'var(--color-text)' }}>
+      {/* 页头统一提到内容区顶层：与其它子菜单同一位置、同一宽度（先生：整整齐齐） */}
+      <div className="pagehead-strip">
+        <PagePlate
+          section="plot-tree"
+          /* 数据图形：每一条伏笔一个方点，线型即状态 ——
+             已收实心、推进中空心、已埋半透明、计划中虚线、弃置极淡。
+             「哪些线还开着」是这一页最该被看见的一件事。 */
+          figure={(
+            <PlateFigure caption={text(
+              `伏笔 ${threads.length} 条 · 待收 ${threads.filter(thread => thread.status !== 'resolved' && thread.status !== 'abandoned').length} 条`,
+              `${threads.length} threads · ${threads.filter(thread => thread.status !== 'resolved' && thread.status !== 'abandoned').length} open`,
+            )}>
+              <PlateThreads threads={threads.map(thread => ({
+                label: thread.authorIntent || `#${thread.id}`,
+                state: thread.status,
+              }))} />
+            </PlateFigure>
+          )}
+          kicker={text('NARRATIVE · 剧情树与伏笔', 'NARRATIVE')}
+          title={text('剧情树与伏笔', 'Plot tree & foreshadowing')}
+          description={text(
+            '管理伏笔的埋设、进展与回收，并从已定稿章节梳理剧情树',
+            'Track how foreshadowing is planted, progresses and pays off, and distil the plot tree from finalized chapters.',
+          )}
+          actions={(
+            <div className="flex gap-2" role="tablist" aria-label={text('剧情编辑器视图', 'Plot editor views')}>
+              <button
+                className={`btn sm ${view === 'plot-tree' ? 'primary' : 'outline'}`}
+                type="button"
+                role="tab"
+                aria-selected={view === 'plot-tree'}
+                onClick={() => setView('plot-tree')}
+              >
+                {text('剧情树', 'Plot tree')}
+              </button>
+              <button
+                className={`btn sm ${view === 'plans' ? 'primary' : 'outline'}`}
+                type="button"
+                role="tab"
+                aria-selected={view === 'plans'}
+                onClick={() => setView('plans')}
+              >
+                {text('计划清单', 'Plan list')}
+              </button>
+            </div>
+          )}
+        />
+      </div>
 
+      {/* 先生：左右内距与其它子菜单统一 px-8，标头与正文内容的两侧边缘才对得齐 */}
+      <div className="mx-auto max-w-5xl px-8 py-5 space-y-5">
         {view === 'plot-tree' ? (
           <PlotTreeView
             key={plotSources?.snapshot?.generatedAt ?? 'empty'}
@@ -733,10 +761,16 @@ export default function NarrativeThreadEditor({
             <label><Label>{text('预计回收 / 结束章', 'Expected payoff / end chapter')}</Label><Input type="number" min={1} value={plan.targetEndChapter} onChange={event => setPlan({ ...plan, targetEndChapter: Number(event.target.value) })} /></label>
           </div>
           <label><Label>{text('作者意图 / 理由', 'Author intent / rationale')}</Label><Textarea value={plan.authorIntent} onChange={event => setPlan({ ...plan, authorIntent: event.target.value })} /></label>
-          <Button onClick={() => void savePlan()} disabled={busy || !plan.title.trim() || !plan.type.trim() || !plan.authorIntent.trim() || plan.targetEndChapter < plan.targetStartChapter}>{text('保存计划', 'Save plan')}</Button>
+          {/* 先生：保存按钮孤零零贴在表单左下角，跟右侧大片空白对比很突兀。
+              照 demo 的表单收尾动作（.settings-actions + .spacer）挪到右下角；
+              用钩子类承载，经典界面（v1）里这就是个普通块级 div，逐像素不变。 */}
+          {/* 先生定的规矩：保存类一律虚框（实心主色只留给删除类动作） */}
+          <div className="v2-plan-actions">
+            <Button variant="outline" onClick={() => void savePlan()} disabled={busy || !plan.title.trim() || !plan.type.trim() || !plan.authorIntent.trim() || plan.targetEndChapter < plan.targetStartChapter}>{text('保存计划', 'Save plan')}</Button>
+          </div>
         </section>
 
-        {threads.length === 0 && <p className="text-sm text-center py-8" style={{ color: 'var(--color-text-muted)' }}>{text('暂无伏笔或叙事线索', 'No foreshadowing or narrative threads yet')}</p>}
+        {threads.length === 0 && <p className="text-sm text-center py-8" style={{ color: 'var(--color-text-muted)' }}>{text('暂无伏笔', 'No foreshadowing yet')}</p>}
         {threads.map(thread => (
           <section
             id={`narrative-plan-${thread.id}`}
@@ -782,7 +816,7 @@ export default function NarrativeThreadEditor({
               <Input className="col-span-2" placeholder={text('确认理由', 'Confirmation rationale')} value={eventReason} onChange={event => setEventReason(event.target.value)} />
               {eventError && <p className="col-span-2 text-xs" style={{ color: 'var(--color-error-text)' }}>{eventError}</p>}
               <div className="col-span-2 flex gap-2">
-                <Button onClick={() => void saveEvent()} disabled={busy || !eventEvidence.trim() || !eventReason.trim()}>{text('保存事件', 'Save event')}</Button>
+                <Button variant="outline" onClick={() => void saveEvent()} disabled={busy || !eventEvidence.trim() || !eventReason.trim()}>{text('保存事件', 'Save event')}</Button>
                 <Button variant="ai" onClick={() => openAI('event')} disabled={busy}>
                   <Sparkles size={13} />{text('AI 识别定稿事件', 'Find finalized events with AI')}
                 </Button>
@@ -793,20 +827,33 @@ export default function NarrativeThreadEditor({
         </>}
       </div>
       <Dialog open={aiOpen} onOpenChange={open => { if (!open) closeAI() }}>
-        <DialogContent className="max-w-[620px]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><Sparkles size={15} />{aiMode === 'plan'
+        <DialogContent
+          className="max-w-[620px]"
+          /* 先生：只认明确的关闭动作。伏笔/事件候选是等模型跑完才有的，
+             作者也常要离开去补设定才能判断 —— 误点蒙版不该让它消失。 */
+          onPointerDownOutside={(event) => event.preventDefault()}
+        >
+          <DialogHeader className="app-dialog-head">
+            <DialogTitle className="sr-only">{aiMode === 'plan'
               ? text('蓝图计划候选', 'Blueprint plan candidates')
               : text('定稿事件候选', 'Finalized event candidates')}</DialogTitle>
-            <DialogDescription>{aiMode === 'plan'
-              ? text(
-                  'AI 只提出人工计划候选；确认前不会写入项目，也不会产生章节事件。',
-                  'AI proposes author-plan candidates only. Nothing is saved and no chapter event is created before confirmation.',
-                )
-              : text(
-                  'AI 只从当前绑定的定稿正文提出带原文证据的事件候选；确认前不会写入项目。',
-                  'AI proposes evidence-bound events only from the selected finalized chapter. Nothing is saved before confirmation.',
-                )}</DialogDescription>
+            <PagePlate section="plot-tree"
+              kicker={aiMode === 'plan'
+                ? text('NARRATIVE · 计划候选', 'NARRATIVE · PLAN')
+                : text('NARRATIVE · 定稿事件', 'NARRATIVE · EVENTS')}
+              title={aiMode === 'plan'
+                ? text('蓝图计划候选', 'Blueprint plan candidates')
+                : text('定稿事件候选', 'Finalized event candidates')}
+              description={aiMode === 'plan'
+                ? text(
+                    'AI 只提出人工计划候选；确认前不会写入项目，也不会产生章节事件。',
+                    'AI proposes author-plan candidates only. Nothing is saved and no chapter event is created before confirmation.',
+                  )
+                : text(
+                    'AI 只从当前绑定的定稿正文提出带原文证据的事件候选；确认前不会写入项目。',
+                    'AI proposes evidence-bound events only from the selected finalized chapter. Nothing is saved before confirmation.',
+                  )}
+            />
           </DialogHeader>
           <div className="px-6 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
             <label className="block">

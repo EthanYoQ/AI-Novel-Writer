@@ -1,0 +1,292 @@
+/* ============================================================================
+ * v2 正文纸面与排版
+ *
+ * 目标：让正文编辑区呈现 demo 的「纸面书写」观感 ——
+ *   一张米白宣纸浮在浅米底上，衬线墨字、16.5px、行高 2.3、每段首行缩进 2 字。
+ *
+ * 实现选择：纯 CSS 换皮，不改 CodeMirrorEditor.tsx 一行代码。
+ *   · 正文宽度/行高/颜色原本由 EditorView.theme() 在运行时向 <head> 尾部注入，
+ *     其加载顺序晚于本文件，故这些属性必须用 !important 才能覆盖。
+ *   · 选择器只命中 CodeMirror 自己的 .cm-* 类名（Tailwind 不会生成这些类），
+ *     因此本文件不归入 @layer 也不会压掉任何工具类，不违反 index.css 的归层约定。
+ * ========================================================================== */
+
+/* ===== 纸面下的底衬：浅米色，让纸有悬浮感 ===== */
+[data-ui='v2'] .cm-scroller {
+  background: var(--paper) !important;
+  /* 先生（编辑器字体设置失效）：这里原本写死 var(--serif)，而产品的写作字体
+   * 是由设置页经 theme-store 写到 --font-writing（内联在 <html> 上）再由
+   * CodeMirror 主题引用的 —— 写死字体族等于把设置整条链路切断。
+   * v2 只负责「排版气质」（纸张、行高、字号、缩进），字体必须听作者的设置。 */
+  font-family: var(--font-writing) !important;
+  /* demo 第 3158 行的 paperWrap 有 padding:30px 44px 44px，而产品没有这一中间层。
+   * 先生的观感反馈：「正文上面和下面都有一个小横条遮罩，不需要；正文自然地
+   * 被上面顶栏、下面底栏截掉就行，像 demo 一样。」
+   * 根因：留白若挂在滚动容器（.cm-scroller）的 border 上，border 不随内容滚动，
+   * 上下的 30px 就成了一条**永远固定**的 --paper 色横条，压在纸页顶端与底端。
+   * 而 demo 的 paperWrap 在滚动内容之内，留白会随内容一起滚走。
+   * 所以上下留白改挂 .cm-content 的 margin（见下一条），本容器只留左右。
+   * 左右仍用 border：横向不滚动，44px 定值正是纸页居中的留白。 */
+  padding: 0 !important;
+  border: 0 !important;
+  border-left-width: 44px !important;
+  border-right-width: 44px !important;
+}
+
+/* ===== 纸面本体 ===== */
+[data-ui='v2'] .cm-content {
+  /* 同上：正文必须用作者在设置里选的写作字体（--font-writing），
+   * 不能由皮肤写死 —— 皮肤提供的是默认观感与排版，不是替作者做选择。 */
+  font-family: var(--font-writing) !important;
+  /* 先生：正文与草稿的思源宋体用 300 —— 它是可变字体（100–900 全支持），
+   * 300 让纸面更轻透。作者换成别的字体时，浏览器会取最接近的字重。 */
+  font-weight: 300 !important;
+  font-size: 16.5px !important;
+  /* 行高 2.3（16.5px × 2.3 ≈ 38px）—— 先生认可的那套「最美排版」。
+   *
+   * 曾被短暂收到 1.6 想换取「打字不位移」，但先生实际使用后判定「太难看」：
+   * 1.6 时正文行与行之间的**可见空白只有 4.4px**，正文明显变密。已回退到 2.3。
+   *
+   * 于是「打字时下方内容下沉」改用另一条路解决，见文件末尾
+   * `[data-ui='v2'] .cm-line.cm-lp-caret-empty` —— 由 live-preview 把**光标所在的空行**
+   * 提前展开成完整行高，位移因此从「打字的那一刻」提前到「光标落到这一行」的那一刻。
+   *
+   * 实测账本（Chromium，16.5px 正文，口径统一为「文字之间的可见空白」，
+   * 即上一行文字底 → 下一行文字顶；汉字实高约 22px）：
+   *   行高 2.3 + 空行 20px（无光标展开）→ 行间 16px、段间 36px、打字下方位移 18.1px ✗
+   *   行高 2.3 + 空行 20px（**有光标展开**）→ 同上，但打字时位移 **0** ✓ ← 当前方案
+   *   行高 2.3 不压空行 → 行间 16px、段间 54px、位移 0 ✓（段间距太大，先生不接受）
+   *   行高 1.6 不压空行 → 行间 4.4px、段间 30.8px、位移 0 ✓（先生判定太难看） */
+  line-height: 2.3 !important;
+  color: var(--ink) !important;
+  max-width: 1080px !important;
+  /* 上下留白挂在纸页自己身上，随内容滚动：滚到顶时有 demo 那样的 30px 空白，
+   * 继续滚动时纸页直接顶到工具条下方，被顶栏自然截断，不再有固定横条。 */
+  margin: 30px auto 44px !important;
+  padding: 54px 78px 60px !important;
+  background: var(--manuscript) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 6px !important;
+  box-shadow: 0 1px 2px rgba(90, 70, 30, 0.06), 0 30px 70px -34px rgba(90, 70, 30, 0.38) !important;
+  letter-spacing: 0.01em !important;
+}
+
+/* 每一行就是一段（markdown 的硬换行才产生新 .cm-line）。
+ *
+ * 先生：段落必须空两格，而且打字时不能抖。
+ * 关键在于让缩进**恒定** —— 由 CSS 无条件提供，包括空行：
+ *   · 早先空行被 :empty 规则单独设成 text-indent:0，于是光标一敲下第一个字，
+ *     这行就从「0 缩进」变成「2em 缩进」，整行横向跳一下，文字看起来像被挤进了
+ *     本该空着的那两格里。
+ *   · 行内若还带着 Tab 敲出来的缩进字符，会与 CSS 缩进叠成四格。
+ * 所以：CSS 恒定给 2em（空行也给），行内缩进字符交给 live-preview 隐藏掉，
+ * 两者只留一份可见的缩进 —— 不跳变、不叠格。 */
+[data-ui='v2'] .cm-line {
+  text-indent: 2em !important;
+  padding: 0 !important;
+}
+
+/* ===== 空行：只压**行块**高度，绝不压**内容盒**高度 =====
+ * 段间距就是这些空行。先生认可的观感是「空行矮」（约 20px，配 38px 的正文行）。
+ *
+ * 三段历史都留在这里，改动前请先读完：
+ *
+ * 先生第一次：「段落之间的间距默认有点太高了，少一点点。」
+ *   → 用 `:has(> br:only-child)` 把空行压矮。（`:empty` 永远不命中：空行 DOM 带 <br> 子节点。）
+ *
+ * 先生第二次：「Enter 后光标没落到位置；删除要按两次 Backspace。」
+ *   → 当时压的是 `line-height`，把**内容盒**也一起压矮了。CodeMirror 把光标锚在
+ *     「光标所在行内容盒的垂直中心」上（实测偏差恒为 −1px），内容盒一变矮光标就浮起来。
+ *     所以正确做法是：**压行块 height，不压 line-height**；行块比内容盒矮，
+ *     必须 `overflow: visible` 放行，否则内容盒被裁、光标又被挤回行块中心。
+ *
+ * 先生第三次：「一打字，下方文字段落又自动下沉。」
+ *   → 根因：空行 20px、正文行 38px。在空行里敲下第一个字的那一瞬，这一行由矮变高，
+ *     把下方内容整体推下去 18.1px（实测）。曾试图靠「收紧行距」化解（段间距与行距
+ *     由同一个数决定，要不跳就得两者相等），但 1.6 的行距先生判定「太难看」，已回退。
+ *     **现在的解法是下面那条 `.cm-lp-caret-empty`：让光标所在的空行提前展开。**
+ *
+ * ⚠️ 想再单独压空行的高度，请先回读上面：压得越狠，光标落上去时下方位移越大。
+ *
+ * 这里用 `:where()` 把本规则的特异性压到 (0,2,0)，好让下面那条「光标所在的空行」
+ * (0,3,0) 能正常覆盖 `height` —— 否则 `:has()` 自带的 (0,1,1) 会把它压住。 */
+[data-ui='v2'] .cm-line:where(:empty, :has(> br:only-child)) {
+  /* 内容盒与正文行等高 —— 光标锚点按它算 */
+  line-height: 2.3 !important;
+  /* 真正压的是行块高度：段间距 = 这个值 */
+  height: 1.2em !important;
+  /* 内容盒比行块高，必须放行 */
+  overflow: visible !important;
+}
+
+/* ===== 光标所在行：CSS 缩进给行内缩进字符让位 =====
+ *
+ * 先生（第六次报障）：「左键点击、或按住左键拖选内容时，排列开始错位。」
+ *
+ * 正文里 AI 生成 / 粘贴进来的段落，段首常带一排行内缩进字符（全角或 em 空格）。
+ * live-preview 把**非光标行**的这排字符隐去、缩进交给上面的 `text-indent: 2em`；
+ * 而**光标行**保留它们可见（作者要能看见、能改）。问题就在这一行上：
+ * 行内那两个字符（2em）与 CSS 的 `text-indent`（2em）**同时生效**，
+ * 叠成四格 —— 该段文字比其余段落右移 2 格（实测 33.3px），
+ * 点一下换一行就跳一下排版，拖选时指针划过的段落挨个跳。
+ *
+ * 所以光标行必须把 text-indent 归零，缩进只由行内那两个字符提供：
+ *   非光标行（字符隐去）→ 文字起点 = 2em（CSS 给的）
+ *   光标行  （字符显形）→ 文字起点 = 2em（字符自己占的）
+ * 两边一致，光标进出这一行时一个字都不动。标记由 live-preview 打上。 */
+[data-ui='v2'] .cm-line.cm-lp-indent-live {
+  text-indent: 0 !important;
+}
+
+/* ===== 正文框外是普通箭头：那里不接受落笔 =====
+ *
+ * 先生：「鼠标只要移动出正文框，就变成点击箭头，然后拒绝任何光标相关的事件触发。」
+ *
+ * 「正文框」= 正文文字那一栏（`.cm-line` 的行块）。纸页四周的留白
+ * （左右两圈 padding、上下大片空白）此前也是 `cursor: text`，看着像能写字，
+ * 点下去又会顺着坐标映射把光标插进「两个段落之间的空行」—— 现在那里恢复成普通箭头。
+ *
+ * `cursor` 由 CodeMirrorEditor 的运行时主题写在 `.cm-scroller` / `.cm-content` 上，
+ * 加载顺序晚于本文件，所以这里必须 !important 才压得住。
+ * 拒绝落笔的那一半在 paragraph-gap-caret 的 `handlePointerDown` 里。 */
+[data-ui='v2'] .cm-scroller {
+  cursor: default !important;
+}
+
+[data-ui='v2'] .cm-content {
+  cursor: default !important;
+}
+
+[data-ui='v2'] .cm-line {
+  cursor: text;
+}
+
+/* ===== 作者按 Enter 起的新段落：整行高，光标进出都不变 =====
+ *
+ * 先生：「用户没输入任何内容，但创建的那个空段落只要一直不变即可；
+ *        用户移动走光标，那个地方依然在那就行。」
+ *
+ * 那一格是**写作落脚点**，与「段落之间的分隔空行」是两回事，虽然都长成一行空白：
+ *   · 段间距（上面那条 `:has(> br:only-child)`）压到 1.2em，恒定 20px；
+ *   · 作者起的新段落（`.cm-lp-user-paragraph`，由 live-preview 在按 Enter 时登记）
+ *     保持整行高 —— 光标在不在上面都一样。
+ * 于是移走光标时它原样待在原地，下方段落一动不动，与 Word 的手感一致。
+ * 此前它会被收回成 20px、把下方内容整体上移 18px，正是先生报的「排版错位」。
+ *
+ * （下面的 `.cm-lp-caret-empty` 仍然保留：它管的是**别的**空行 ——
+ *   光标临时停到段间距上、或在空行里删字删到空时，那一行不至于忽高忽低。） */
+[data-ui='v2'] .cm-line.cm-lp-user-paragraph {
+  height: auto !important;
+}
+
+/* ===== 光标所在的空行：提前展开成完整行高 =====
+ *
+ * 先生（第三次报障）：「enter 之后光标位置对了，但一打字，下方文字段落又自动下沉。」
+ *
+ * 上面把空行压到 20px 是「段间距小」的前提，但它比正文行矮 18px ——
+ * 在这行里敲下第一个字的那一瞬，行块由 20px 变 38px，**下方内容被整体推下去 18.1px**。
+ * CSS 无从知道「光标在哪一行」，所以由 live-preview 按光标所在行打上这个类：
+ * 光标一落到空行上，这一行就先展开成完整行高。
+ *
+ * 位移因此被提前到「光标落到这一行」的那一刻 —— 按 Enter、或点进空行，
+ * 那本来就是作者主动插入内容的时刻，版面变化符合预期；
+ * 而**打字时不再有任何位移**（这正是先生报的那个现象）。
+ */
+[data-ui='v2'] .cm-line.cm-lp-caret-empty {
+  height: auto !important;
+}
+
+/* 说明：标题行与列表行的顶格需要知道 CodeMirror 的语法高亮类名，
+   而该类名由 @lezer/highlight 运行时生成（形如 .ͼm，不可预测），
+   纯 CSS 无法稳定命中；这里先不做区分，等需要时再用 ViewPlugin 按行打标。 */
+
+/* ===== 光标与选区：朱砂色，呼应墨纸书斋 ===== */
+[data-ui='v2'] .cm-cursor,
+[data-ui='v2'] .cm-dropCursor {
+  borderLeftColor: var(--seal) !important;
+  borderLeftWidth: 2px !important;
+}
+
+/* 先生（选了字却看不到选中反馈）：
+ * 真凶在 CodeMirrorEditor 的 EditorView.theme 里 —— 运行时注入的主题把选区写成了
+ *   ".cm-selectionBackground, .cm-focused .cm-selectionBackground": { backgroundColor: var(--color-hover) !important }
+ * 它同样带 !important，且 CodeMirror 会给每条主题规则加上 .cm-editor.ͼxx 作用域类，
+ * 选择器特异性高过下面这条单类名的规则，于是选区一直显示为 --color-hover（浅灰米），
+ * 铺在纸白上几乎无色差，看起来就像「没有选中反馈」。
+ * 所以这里必须把特异性抬到 .cm-editor 这一层才能压住它，并给出一档醒目的朱砂。
+ * ::selection 留作兜底，以防哪天 drawSelection 被关掉。 */
+html[data-ui='v2'] .cm-editor .cm-selectionBackground,
+html[data-ui='v2'] .cm-editor .cm-focused .cm-selectionBackground,
+html[data-ui='v2'] .cm-content ::selection,
+html[data-ui='v2'] ::selection {
+  background: rgba(var(--seal-rgb), 0.34) !important;
+}
+
+/* 窗口失焦时收敛一档，避免抢视线；聚焦选区更实。 */
+html[data-ui='v2'] .cm-editor.cm-focused .cm-selectionBackground {
+  background: rgba(var(--seal-rgb), 0.4) !important;
+}
+
+[data-ui='v2'] .cm-activeLine {
+  background: transparent !important;
+}
+
+/* ===== 搜索/替换面板随纸面走 ===== */
+[data-ui='v2'] .cm-panels {
+  background: var(--panel) !important;
+  color: var(--ink) !important;
+  border-color: var(--line) !important;
+}
+
+[data-ui='v2'] .cm-searchMatch {
+  background: rgba(var(--seal-rgb), 0.18) !important;
+}
+
+[data-ui='v2'] .cm-searchMatch-selected {
+  background: rgba(var(--seal-rgb), 0.34) !important;
+}
+/* ===== 纸页页眉（真实 DOM widget，随正文滚动）=====
+ * 取值照 demo 第 3160 行：楷体 22px / 字距 .32em 居中，
+ * 下方衬线 10px / 字距 .3em 的「书名 · 第 N 章」。 */
+[data-ui='v2'] .cm-lp-paperhead {
+  text-align: center;
+  margin: 0 0 34px;
+  padding-top: 6px;
+  text-indent: 0;
+  user-select: none;
+}
+
+[data-ui='v2'] .cm-lp-paperhead h2 {
+  font-family: var(--kai);
+  font-weight: 400;
+  font-size: 22px;
+  letter-spacing: 0.32em;
+  color: var(--ink);
+  margin: 0;
+  padding-left: 0.32em;
+  line-height: 1.3;
+}
+
+[data-ui='v2'] .cm-lp-paperhead-sub {
+  font-family: var(--serif);
+  font-size: 10px;
+  color: var(--faint);
+  letter-spacing: 0.3em;
+  margin-top: 10px;
+  padding-left: 0.3em;
+}
+/* ===== 首字下沉 =====
+ * demo 用 .manuscript-paragraph.dropcap::first-letter；这里改用「给第一个可见
+ * 字符打标记」的方式 —— 中文段落常以全角/em 空格起笔，伪元素会把缩进空白
+ * 当成首字母，朱砂便落在空白上看不见。取值仍照 demo：3.15em / 行高 .88 /
+ * 朱砂 / 右内距 6px 7px。 */
+[data-ui='v2'] .cm-lp-dropcap-char {
+  float: left;
+  font-family: var(--serif);
+  font-size: 3.15em;
+  line-height: 0.88;
+  padding: 6px 7px 0 0;
+  color: var(--seal);
+  font-weight: 400;
+  letter-spacing: -0.04em;
+}

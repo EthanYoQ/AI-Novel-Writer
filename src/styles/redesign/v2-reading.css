@@ -1,0 +1,151 @@
+/* ============================================================================
+ * v2 阅读排版与提示类组件
+ *
+ * 重点一：.assistant-content —— AI 输出的 Markdown 渲染容器，产品里所有
+ *         AI 生成正文（助手对话、AI 输出面板、审稿报告…）都走这个类。
+ *         它是阅读场景，按 demo 的成书排版来：衬线正文、行高 1.9、段落留白。
+ * 重点二：.vela-toast-root —— 轻提示。只取 demo 的配色与形状，
+ *         位置仍留在右下角，避免与产品现有的进出场动画打架。
+ *
+ * 无层样式，优先于任何 @layer。
+ * ========================================================================== */
+
+/* ===== AI 输出正文（阅读排版）===== */
+html[data-ui='v2'] .assistant-content {
+  font-family: var(--serif);
+  font-size: var(--v2-fs-body);
+  line-height: var(--v2-lh-read);
+  color: var(--ink);
+  letter-spacing: 0.01em;
+}
+
+html[data-ui='v2'] .assistant-content p {
+  margin: 0 0 0.7em;
+}
+
+html[data-ui='v2'] .assistant-content p:last-child {
+  margin-bottom: 0;
+}
+
+html[data-ui='v2'] .assistant-content h1,
+html[data-ui='v2'] .assistant-content h2,
+html[data-ui='v2'] .assistant-content h3,
+html[data-ui='v2'] .assistant-content h4 {
+  font-family: var(--serif);
+  color: var(--ink);
+  letter-spacing: 0.015em;
+  margin: 1.1em 0 0.5em;
+}
+
+html[data-ui='v2'] .assistant-content h1 { font-size: 1.5em; }
+html[data-ui='v2'] .assistant-content h2 { font-size: 1.28em; }
+html[data-ui='v2'] .assistant-content h3 { font-size: 1.12em; }
+html[data-ui='v2'] .assistant-content h4 { font-size: 1em; }
+
+/* 行内代码与代码块 */
+html[data-ui='v2'] .assistant-content code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0.5px 5px;
+  color: var(--ink2);
+}
+
+html[data-ui='v2'] .assistant-content pre {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  line-height: 1.7;
+}
+
+html[data-ui='v2'] .assistant-content pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--ink);
+}
+
+/* 引用：朱砂细线，呼应朱砂为签 */
+html[data-ui='v2'] .assistant-content blockquote {
+  margin: 0.8em 0;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid rgba(var(--seal-rgb), 0.35);
+  color: var(--ink2);
+}
+
+/* 列表 */
+html[data-ui='v2'] .assistant-content ul,
+html[data-ui='v2'] .assistant-content ol {
+  margin: 0.6em 0;
+  padding-left: 1.4em;
+}
+
+html[data-ui='v2'] .assistant-content li {
+  margin: 0.25em 0;
+}
+
+/* 链接：朱砂 */
+html[data-ui='v2'] .assistant-content a {
+  color: var(--seal);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(var(--seal-rgb), 0.35);
+}
+
+html[data-ui='v2'] .assistant-content a:hover {
+  border-bottom-color: var(--seal);
+}
+
+/* 表格：虚线分隔，与 demo 的数据行一致 */
+html[data-ui='v2'] .assistant-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8em 0;
+  font-size: 0.95em;
+}
+
+html[data-ui='v2'] .assistant-content th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--muted);
+  font-size: var(--v2-fs-tiny);
+  letter-spacing: var(--v2-ls-label);
+  border-bottom: 1px solid var(--line2);
+  padding: 6px 8px;
+}
+
+html[data-ui='v2'] .assistant-content td {
+  border-bottom: 1px dashed var(--line);
+  padding: 6px 8px;
+}
+
+html[data-ui='v2'] .assistant-content hr {
+  border: 0;
+  border-top: 1px dashed var(--line2);
+  margin: 1.1em 0;
+}
+
+/* ===== 轻提示（demo 的 .toast：深墨底 / 10px 圆角 / 12px 字）===== */
+html[data-ui='v2'] .vela-toast-root > * {
+  background: #2b2820;
+  color: #f1ede0;
+  border-radius: 10px;
+  font-size: 12px;
+  box-shadow: 0 16px 40px -14px rgba(30, 20, 5, 0.6);
+}
+
+/* ===== 空态与骨架 ===== */
+html[data-ui='v2'] [role='status'],
+html[data-ui='v2'] .writer-shell-surface .text-\[var\(--color-text-muted\)\] {
+  color: var(--muted);
+}
+
+html[data-ui='v2'] .writer-shell-surface [class*='animate-pulse'] {
+  background-color: var(--line);
+}
+
+/* 知识库、更新卡等处的底色与边框，已由 v2-semantic.css 的语义令牌桥接自动接管，
+   此处不再用脆弱的「类名片段匹配」写法。 */

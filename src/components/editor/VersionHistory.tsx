@@ -3,7 +3,9 @@ import { History, RotateCcw, ArrowLeftRight, RefreshCw } from 'lucide-react'
 import { useEditorStore } from '../../stores/editor-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
+import { formatDbTimestamp } from '../../utils/time'
 import { Button } from '../ui/Button'
+import PagePlate from '../layout/v2/magazine/PagePlate'
 import { cn } from '../../lib/utils'
 import type { VersionRecord } from '../../services/version-service'
 import { ipc } from '../../services/ipc-client'
@@ -201,6 +203,15 @@ export default function VersionHistory({ projectKey }: { projectKey: string }) {
     final: 'bg-green-500/20 text-[var(--color-success-text)]',
   }
 
+  /** v2 状态徽标的语义档位：底色由 v2-atomic.css 从语义色淡染，四套主题切换时会跟着变。
+   *  v1 下 .v2-status-badge 没有定义，元素仍走上面那套 Tailwind 原色，逐像素不变。 */
+  const TYPE_TONES: Record<string, string> = {
+    draft: 'info',
+    refined: 'warning',
+    reviewed: 'review',
+    final: 'success',
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full gap-2 text-[var(--color-text-muted)]">
@@ -248,11 +259,25 @@ export default function VersionHistory({ projectKey }: { projectKey: string }) {
 
       {/* 右侧版本列表 */}
       <div className="flex-1 overflow-y-auto">
+        {/* 页头统一提到内容区顶层：与其它子菜单同一位置、同一宽度（先生：整整齐齐） */}
+        {selectedChapter && (
+          <div className="pagehead-strip">
+            <PagePlate
+              section="project"
+              metric={{ label: text('版本', 'VERS'), value: String(versions.length) }}
+              kicker={text('VERSIONS · 版本历史', 'VERSIONS')}
+              title={text('版本历史', 'Version history')}
+              description={text(
+                '查看当前章节的历次草稿、修稿与终稿，可对比差异或回退到任一版本',
+                'Browse every draft, revision and final pass of the chapter; compare or revert.',
+              )}
+            />
+          </div>
+        )}
         {selectedChapter ? (
-          <div className="max-w-xl mx-auto px-6 py-4">
-            <h3 className="text-sm font-bold text-[var(--color-text)] mb-3">
-              {text('版本历史', 'Version history')}
-            </h3>
+          /* 先生：正文栏里各子菜单的内容宽度统一以「剧情线」计划清单的 mx-auto max-w-5xl 为准；
+             左右内距统一 px-8，才能与上方标头的 32px 左边缘连成一条线 */
+          <div className="mx-auto max-w-5xl px-8 pb-4">
             {versions.length === 0 ? (
               <div className="text-center text-xs text-[var(--color-text-muted)] py-8">
                 {text('暂无版本记录', 'No version history')}
@@ -265,18 +290,24 @@ export default function VersionHistory({ projectKey }: { projectKey: string }) {
                     className="flex items-center justify-between px-3 py-2.5 rounded-md border border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors"
                   >
                     <div className="flex items-center gap-2">
-                      <span className={cn(
-                        'text-[0.7rem] px-1.5 py-0.5 rounded font-medium',
-                        TYPE_COLORS[ver.type] || 'bg-[var(--color-hover)]'
-                      )}>
+                      <span
+                        className={cn(
+                          'v2-status-badge text-[0.7rem] px-1.5 py-0.5 rounded font-medium',
+                          TYPE_COLORS[ver.type] || 'bg-[var(--color-hover)]'
+                        )}
+                        data-tone={TYPE_TONES[ver.type] ?? 'muted'}
+                      >
                         {TYPE_LABELS[ver.type] || ver.type}
                       </span>
                       <span className="text-xs text-[var(--color-text)]">
                         v{ver.version}
                       </span>
                       {ver.dependencies_stale && (
+                        /* 上游 1.1.0 新增的「来源已过期」；底色交给 v2 的状态徽标钩子从语义色淡染，
+                           v1 下钩子无定义，仍是上游那枚原色标。 */
                         <span
-                          className="text-[0.7rem] px-1.5 py-0.5 rounded bg-amber-500/20 text-[var(--color-warning-text)]"
+                          className="v2-status-badge text-[0.7rem] px-1.5 py-0.5 rounded bg-amber-500/20 text-[var(--color-warning-text)]"
+                          data-tone="warning"
                           title={text(
                             '此草稿生成时使用的前文来源已变化或不再是当前定稿；草稿会保留，但连续性需要复核。',
                             'A prior source used to generate this draft changed or is no longer the current final. The draft is preserved, but its continuity needs review.',
@@ -292,7 +323,15 @@ export default function VersionHistory({ projectKey }: { projectKey: string }) {
                         )}
                       </span>
                       <span className="text-[0.7rem] text-[var(--color-text-muted)]">
-                        {new Date(ver.created_at).toLocaleString(locale, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        {/* 草稿表的 created_at 是 SQLite 的 UTC 字符串，
+                            直接 new Date() 会被按本地时区解析、差出一整个时区。
+                            格式沿用这里原来的「月/日 + 时分」，只修时区不改变观感。 */}
+                        {formatDbTimestamp(ver.created_at, locale, {
+                          month: '2-digit',
+                          day: '2-digit',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
                       </span>
                     </div>
                     <div className="flex items-center gap-1">

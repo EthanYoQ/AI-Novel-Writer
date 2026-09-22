@@ -44,6 +44,27 @@ export interface RemoteWritingSkillInspection extends Omit<WritingSkillInspectio
   contentSha256: string
 }
 
+/**
+ * 本地 SKILL.md 的检查结果。
+ *
+ * 与 GitHub 来源共用同一套内容检查（`inspectWritingSkillMarkdown`）；
+ * 差别只在于「来源标识」是文件路径而非 URL，且导入时用 SHA-256 复核同一文件，
+ * 保证「检查过的内容」与「导入的内容」一致（等价于远程路径的重新下载比对）。
+ */
+export interface LocalWritingSkillInspection extends Omit<WritingSkillInspection, 'content'> {
+  fileName: string
+  filePath: string
+  contentSha256: string
+  /** 界面显示名：优先取 frontmatter 的 display_name，缺失时退回声明名/文件名。 */
+  displayName: string
+  /** 写入技能库时使用的 ASCII 标识符（技能目录名与 `user:<id>` 绑定 id 都用它）。 */
+  skillId: string
+  /** frontmatter 声明的原始名称；标识符自动生成时它就是那个中文名。 */
+  declaredName: string
+  /** 声明名不可用作标识符（例如中文），标识符由名称派生而来。 */
+  identifierGenerated: boolean
+}
+
 export interface InstalledWritingSkill {
   name: string
   source: 'user'
@@ -101,7 +122,7 @@ function suggestedStage(fields: Record<string, string>, content: string): Writin
 export function inspectWritingSkillMarkdown(raw: string): WritingSkillInspection {
   if (typeof raw !== 'string') throw new Error('SKILL.md content must be text')
   const { fields, content } = parseFrontmatter(raw)
-  const name = fields.name?.trim() || 'unnamed-writing-skill'
+  const name = fields.name?.trim() || UNNAMED_WRITING_SKILL
   const reasons = new Set<WritingSkillCompatibilityReason>()
   const byteLength = new TextEncoder().encode(raw).byteLength
   const body = content.toLowerCase()
@@ -140,6 +161,105 @@ export function inspectWritingSkillMarkdown(raw: string): WritingSkillInspection
     suggestedStage: stage,
     utf8Bytes: new TextEncoder().encode(content).byteLength,
   }
+}
+
+/** frontmatter 未声明 name 时使用的占位名。 */
+export const UNNAMED_WRITING_SKILL = 'unnamed-writing-skill'
+
+/** 技能标识符约束：技能目录名与 `user:<id>` 绑定 id 共用同一套规则。 */
+export const WRITING_SKILL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+
+export function isValidWritingSkillId(value: string): boolean {
+  return WRITING_SKILL_ID.test(value) && value !== '.' && value !== '..'
+}
+
+/** FNV-1a：只要求稳定与低碰撞，不用于安全用途（共享模块不能依赖 node:crypto）。 */
+function stableNameHash(value: string): string {
+  let hash = 0x811c9dc5
+  for (const byte of new TextEncoder().encode(value)) {
+    hash ^= byte
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash.toString(16).padStart(8, '0')
+}
+
+/**
+ * 把不可用作标识符的名称（例如中文）派生为稳定的 ASCII 标识符。
+ * 同一名称永远得到同一标识符，重复导入与卸载才对得上同一个技能。
+ * 名称里已有的 ASCII 片段会被保留：「Prose V2 润色」→「prose-v2-xxxxxxxx」。
+ */
+export function deriveWritingSkillId(declaredName: string): string {
+  const ascii = declaredName
+    .normalize('NFKD')
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/gu, '-')
+    .replace(/^[-._]+|[-._]+$/gu, '')
+    .slice(0, 48)
+  const digest = stableNameHash(declaredName)
+  return ascii ? `${ascii}-${digest}` : `skill-${digest}`
+}
+
+export interface ResolvedWritingSkillIdentity {
+  skillId: string
+  displayName: string
+  declaredName: string
+  identifierGenerated: boolean
+}
+
+/**
+ * 解析 SKILL.md 的最终身份：声明名已是合法标识符时原样沿用，
+ * 否则派生一个标识符，并把原名留给界面显示。
+ */
+export function resolveWritingSkillIdentity(
+  metadata: WritingSkillMetadata,
+): ResolvedWritingSkillIdentity {
+  const declaredName = metadata.name
+  const identifierGenerated = !isValidWritingSkillId(declaredName)
+  return {
+    declaredName,
+    identifierGenerated,
+    skillId: identifierGenerated ? deriveWritingSkillId(declaredName) : declaredName,
+    displayName: metadata.displayName ?? declaredName,
+  }
+}
+
+/**
+ * 把技能身份写回 frontmatter，供导入落库使用。
+ *
+ * 只有技能库里的副本会经过这里；作者磁盘上的源文件始终原样不动。
+ */
+export function rewriteWritingSkillIdentity(
+  raw: string,
+  identity: ResolvedWritingSkillIdentity,
+): string {
+  const frontmatter = raw.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/)
+  if (!frontmatter) {
+    return `---\nname: ${identity.skillId}\ndisplay_name: ${identity.displayName}\n---\n\n${raw.trim()}\n`
+  }
+  const eol = frontmatter[0].includes('\r\n') ? '\r\n' : '\n'
+  const body = raw.slice(frontmatter[0].length)
+  let hasName = false
+  let hasDisplayName = false
+  const lines = frontmatter[1].split(/\r?\n/).map((line) => {
+    const field = line.match(/^\s*([^:#][^:]*):\s*(.*?)\s*$/)
+    if (!field) return line
+    const key = field[1].trim().toLowerCase()
+    if (key === 'name') {
+      hasName = true
+      return `name: ${identity.skillId}`
+    }
+    if (key === 'display_name' || key === 'display-name') {
+      hasDisplayName = true
+      return `display_name: ${identity.displayName}`
+    }
+    return line
+  })
+  if (!hasName) lines.unshift(`name: ${identity.skillId}`)
+  if (!hasDisplayName) {
+    const nameIndex = lines.findIndex(line => /^\s*name\s*:/iu.test(line))
+    lines.splice(nameIndex < 0 ? 0 : nameIndex + 1, 0, `display_name: ${identity.displayName}`)
+  }
+  return `---${eol}${lines.join(eol)}${eol}---${eol}${body}`
 }
 
 function safePart(value: string, label: string): string {

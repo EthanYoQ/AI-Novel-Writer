@@ -11,6 +11,7 @@ import { searchKnowledgeTool } from './search-knowledge.tool'
 import { readArchitectureTool } from './read-architecture.tool'
 import { readBlueprintTool } from './read-blueprint.tool'
 import { readCharactersTool } from './read-characters.tool'
+import { searchWorldSettingsTool, readWorldSettingTool } from './world-setting.tool'
 import { readProjectStateTool } from './read-project-state.tool'
 import { readDraftsTool } from './read-drafts.tool'
 import { listChaptersTool } from './list-chapters.tool'
@@ -31,6 +32,9 @@ export const builtinTools = [
   readArchitectureTool,
   readBlueprintTool,
   readCharactersTool,
+  // 世界观设定：先生定的路线是「AI 按需检索」，不做全量注入
+  searchWorldSettingsTool,
+  readWorldSettingTool,
   readProjectStateTool,
   readDraftsTool,
   listChaptersTool,

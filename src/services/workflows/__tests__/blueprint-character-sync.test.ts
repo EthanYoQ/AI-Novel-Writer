@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { CharacterRosterEntry } from '../../../shared/character-roster'
-import { blueprintCharacterSyncFactError } from '../../../shared/blueprint-character-sync-evidence'
 import {
   syncBlueprintCharacterCandidates,
   type BlueprintCharacterCandidateSource,
@@ -144,8 +143,8 @@ describe('blueprint character candidate sync', () => {
     expect(commits[0].entries).toHaveLength(2)
   })
 
-  it('does not echo legacy free-text relationship evidence through a blueprint IPC request', async () => {
-    const existing = character({ legacyRelationshipNotes: '林岚与周砚的手工关系说明', relationships: [] })
+  it('appends missing structured edges to a character that carries a relationship note', async () => {
+    const existing = character({ relationshipNotes: '林岚与周砚的手工关系说明', relationships: [] })
     const second = character({ name: '周砚', relationships: [] })
     const frozenBlueprints = [
       {
@@ -158,7 +157,14 @@ describe('blueprint character candidate sync', () => {
 
     await syncBlueprintCharacterCandidates(frozenBlueprints, projectPath, projectSession, 'blueprint-sync-003')
 
-    expect(commits).toHaveLength(0)
-    expect(blueprintCharacterSyncFactError(frozenBlueprints, [existing, second])).toBeUndefined()
+    // 关系备注与结构化边并存：同步照常补齐缺失的边，作者的原话仍留在备注里。
+    expect(commits).toHaveLength(1)
+    expect(commits[0].entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: '林岚',
+        relationshipNotes: '林岚与周砚的手工关系说明',
+        relationships: [{ target: '周砚', relation: '共同追查真相' }],
+      }),
+    ]))
   })
 })

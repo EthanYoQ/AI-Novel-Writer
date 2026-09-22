@@ -13,6 +13,13 @@ import { EmbeddingResponseValidationError } from './services/embedding-response-
 
 const RELEASE_SMOKE_BASE_URL_PREFIX = 'vela-release-smoke://'
 
+/**
+ * Embedding 请求的应用层超时。
+ * 理由见下方两处 fetch 的注释：这条链路位于生成 harness 的 deadline 之外，
+ * 也接不到工作流取消信号，只能靠自己兜住。
+ */
+const EMBEDDING_REQUEST_TIMEOUT_MS = 20_000
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -265,6 +272,11 @@ export async function embedOpenAI(
       model: embeddingModel,
       input: texts,
     }),
+    // 必须有应用层超时：向量检索发生在调用大模型**之前**，不受生成 harness 的
+    // deadline 约束，工作流的「取消」也中断不了这个 await。没有超时的话，
+    // 端点 TCP 连上但不响应（代理黑洞 / 本地服务假死）就会让「检索知识库」这一步
+    // 一直挂着，作者既看不到错误、也取消不掉，表现为卡死。
+    signal: AbortSignal.timeout(EMBEDDING_REQUEST_TIMEOUT_MS),
   })
 
   if (!res.ok) {
@@ -298,6 +310,8 @@ export async function embedGemini(
       'x-goog-api-key': model.apiKey,
     },
     body: JSON.stringify({ requests }),
+    // 同 embedOpenAI：应用层超时，避免检索阶段无响应导致整条生成卡死。
+    signal: AbortSignal.timeout(EMBEDDING_REQUEST_TIMEOUT_MS),
   })
 
   if (!res.ok) {

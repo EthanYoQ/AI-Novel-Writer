@@ -1,0 +1,267 @@
+/* ============================================================================
+ * v2 外壳接线补充
+ *
+ * shell.css 是 demo 样式的原样搬运；本文件只放「为了接进产品」必须追加的规则：
+ * 拖拽区、窗口控制、底层面板容器，以及与既有组件的皮肤衔接。
+ * 保持这个分界，将来 demo 更新时可以直接替换 shell.css 而不丢接线改动。
+ * ========================================================================== */
+
+/* ===== 界面字体接线（无层规则，优先于任何 @layer） =====
+ * 先生（界面字体设置）：demo 的 shell.css 自带一套字体栈变量（--sans / --serif /
+ * --kai / --mono），而产品的「界面字体」设置是写到 --font-sans 的
+ * （theme-store → <html> 内联样式）。两套变量各走各的，于是 v2 下侧栏、菜单、
+ * 按钮、设置项这些走 --sans 的地方完全不听从设置 —— 和正文那次是同一个病根。
+ *
+ * 这里把 demo 的 --sans 接到产品变量上：皮肤规则照旧引用 --sans，取值却来自
+ * 作者的设置，界面字体设置立刻生效；未设置时回落到 demo 原本的系统无衬线栈，
+ * 所以「默认观感」依旧是皮肤的样子。
+ *
+ * 刻意不跟随的：--serif（页头标题、设置面板标题）、--kai（标签栏、首字下沉）、
+ * --mono（数字与等宽）—— 它们是皮肤的排版设计，属于观感而非「界面字体」。 */
+html[data-ui='v2'] {
+  --sans: var(--font-sans, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
+}
+
+@layer components {
+
+/* ===== 拖拽区 =====
+ * 顶栏整条处于 -webkit-app-region: drag，里面的可交互元素必须显式退出，
+ * 否则按钮点不动、输入框无法聚焦（产品既有规范：.writer-command-button 亦如此）。 */
+[data-ui='v2'] .titlebar button,
+[data-ui='v2'] .titlebar .brand,
+[data-ui='v2'] .titlebar .modelpill {
+  -webkit-app-region: no-drag;
+}
+
+/* ===== 顶栏控件微调 ===== */
+[data-ui='v2'] .tb-btn:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+[data-ui='v2'] .tb-btn:disabled:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+[data-ui='v2'] .tb-btn .zoom-label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  min-width: 30px;
+  text-align: center;
+}
+
+[data-ui='v2'] .tb-btn svg {
+  flex: none;
+}
+
+/* 窗口控制：紧贴右端，关闭键悬停转为朱砂 */
+[data-ui='v2'] .tb-win {
+  padding: 0 7px;
+}
+
+[data-ui='v2'] .tb-win-close:hover {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+
+/* ===== 主体分栏 =====
+ * 书脊固定宽度，其余三栏由 grip 拖拽，宽度存于既有 layout-store。 */
+[data-ui='v2'] .v2-panes {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+[data-ui='v2'] .sidebar-host,
+[data-ui='v2'] .aipanel-host {
+  display: flex;
+  min-width: 0;
+  flex: none;
+}
+
+[data-ui='v2'] .sidebar-host > .sidebar,
+[data-ui='v2'] .aipanel-host > .aipanel {
+  width: 100%;
+}
+
+/* ===== 底层面板（任务 / 日志 / 模型）=====
+ * demo 的界面哲学是把工程设施收进设置，但产品的底层面板是既有能力，
+ * 换壳不删功能：这里给它一个墨纸风格的容器，默认可以收起。 */
+[data-ui='v2'] .v2-bottom {
+  flex: none;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line);
+  background: var(--panel2);
+  overflow: hidden;
+}
+
+[data-ui='v2'] .v2-bottom-grip {
+  flex: none;
+  height: 4px;
+  cursor: row-resize;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+[data-ui='v2'] .v2-bottom-grip:hover {
+  background: rgba(var(--seal-rgb), 0.35);
+}
+
+/* ===== 状态栏上的 AI 任务胶囊 =====
+ * 胶囊逻辑完全沿用产品实现（AITaskCapsule），这里只把配色接到墨玉底上。 */
+[data-ui='v2'] .statusbar .ai-task-capsule {
+  color: #cfd8de;
+  max-width: 220px;
+}
+
+[data-ui='v2'] .statusbar .ai-task-capsule:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+[data-ui='v2'] .statusbar .ai-task-capsule--complete {
+  color: #9ed3a6;
+}
+
+/* ===== 书脊（左侧主导航）的常态配色 =====
+ * demo 只定义了 hover 与选中态的颜色，常态下的图标继承到 `[data-ui='v2']{color:--ink}`，
+ * 于是深墨色的图标压在深蓝黑书脊上几乎看不见（先生：「图标和字好像都是深色的」）。
+ * 这里补齐常态：图标与文字都给足亮度，hover 再抬一档，选中态仍用 demo 的暖金。 */
+[data-ui='v2'] .spine .sbtn svg {
+  color: #B6C2CB;
+  stroke-width: 1.7;
+}
+
+[data-ui='v2'] .spine .sbtn span {
+  color: #96A4AF;
+}
+
+[data-ui='v2'] .spine .sbtn:hover svg {
+  color: #DEE6EC;
+}
+
+[data-ui='v2'] .spine .sbtn:hover span {
+  color: #C9D3DB;
+}
+
+[data-ui='v2'] .spine .sbtn.on svg {
+  color: #EFD8C4;
+}
+
+[data-ui='v2'] .spine .sbtn.on span {
+  color: #EFE3D0;
+}
+
+/* ===== 外框按钮：描边做细、做淡 =====
+ * 先生：「当前状态 / 关系图谱 / 删除 等这样有外框的按钮，需要把外框线条做细做稍微淡一点，
+ * 才优雅看起来。」demo 的 .btn.outline 用 --line2（#D2C8AE）满色描边，在浅米面板上偏重；
+ * 这里把描边压到 62% 不透明度，只有 hover 才升到朱砂。 */
+[data-ui='v2'] .btn.outline {
+  border-color: color-mix(in srgb, var(--line2) 62%, transparent);
+}
+
+[data-ui='v2'] .btn.outline:hover {
+  border-color: color-mix(in srgb, var(--seal) 70%, transparent);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+/* 产品 Button 组件的 outline 变体走同一条规则（见 v2-atomic.css 的 .v2-btn-outline） */
+
+/* ===== 顶栏「文件」下拉菜单 =====
+ * 先生：顶栏图标太多看着心累，把 打开 / 新建 / 导出 / 小说拆解 / 备份 收进一个菜单，
+ * 每项都是「图标 + 文字说明」。菜单本身要退出拖拽区，否则点不动。 */
+[data-ui='v2'] .tb-file {
+  position: relative;
+  -webkit-app-region: no-drag;
+}
+
+[data-ui='v2'] .tb-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 60;
+  min-width: 188px;
+  padding: 5px;
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  border-radius: 10px;
+  box-shadow: 0 16px 36px rgba(46, 38, 22, 0.18);
+  -webkit-app-region: no-drag;
+}
+
+[data-ui='v2'] .tb-menu button {
+  border-radius: 6px;
+}
+
+} /* @layer components */
+
+/* ===== 顶栏「文件」下拉面板：整体放大 25% =====
+ * 先生：这个面板太小了，内容和字体都要加大 20~30% 才好看。
+ * 放在 @layer 之外 —— 菜单项自身的 px-3 / py-1.5 / text-xs 都在 @layer utilities 里，
+ * 层内规则压不过它们，只有无层样式才能真正盖住。
+ * 选择器限定在 .tb-menu 内，通用 MenuItem 组件与其它菜单不受影响。 */
+html[data-ui='v2'] .tb-menu {
+  min-width: 236px;   /* 原 188 → 236（+25.5%） */
+  padding: 6px;       /* 原 5 → 6 */
+}
+
+html[data-ui='v2'] .tb-menu button {
+  font-size: 15px;    /* 原 text-xs 12px → 15px（+25%） */
+  font-weight: 400;   /* 先生：菜单文字不要加黑加粗，那样不优雅 —— 明确压回常规字重 */
+  padding: 8px 15px;  /* 原 px-3 12 / py-1.5 6 → 15 / 8 */
+  gap: 10px;          /* 原 gap-2 8 → 10 */
+  border-radius: 7px;
+}
+
+html[data-ui='v2'] .tb-menu button svg {
+  width: 15px;        /* 图标跟着放大，免得小图标配大字显得单薄 */
+  height: 15px;
+}
+
+html[data-ui='v2'] .tb-menu button > span[class*='text-[0.7rem]'] {
+  font-size: 12px;    /* 快捷键小字 11.2 → 12，仍比正文小一档 */
+}
+
+/* ===== 子菜单页头的统一位置 =====
+ * 先生：各子菜单的主标题 / 副标题 / 说明要「整体统一、整整齐齐」。
+ * 原先每个页头都被自己的内容容器限制在 576–1160px 不等的居中宽度里，
+ * 左边缘根本不在一条线上。现在把页头提到内容区顶层（.pagehead-strip），
+ * 统一占满正文栏宽度、统一内边距，标题组靠左、动作组靠右上角。
+ * 放在 @layer 之外，避免被 Tailwind 工具类压掉。 */
+html[data-ui='v2'] .pagehead-strip {
+  flex: none;
+  /* 先生：标头要和「它自己下面那段正文内容」的左右边缘对齐 —— 包括最右边。
+     正文内容容器是 max-w-5xl（1024px）+ 左右 32px，页头用完全相同的宽度与内距。
+     宽度：两处都写 1024px，所以两侧边缘能连成一条线；
+     间距：底部 16px 取 demo .pagehead 的 margin-bottom。
+     【关键】居中必须两种都写 —— 各页的父容器类型不一样：
+       · 故事架构那类父级是 flex（flex flex-col），靠 align-self 居中；
+       · 知识库那类父级是普通块 + overflow-y-auto，align-self 对它完全无效，只认 margin:auto。
+     只写一种，另一半页面就会丢掉居中、贴着左边跑 —— 窗口一变宽尤其明显。 */
+  align-self: center;
+  margin: 0 auto;
+  width: 100%;
+  max-width: 1024px;
+  padding: 18px 32px 16px;
+}
+
+/* 页头动作组里的按钮 / 状态徽标统一 Y 轴高度。
+ * 先生：子菜单的按钮「外框线、设计样式、Y 轴高度、风格」要统一才严谨 ——
+ * 产品 Button 与 demo .btn 混用时高度会参差，这里按 demo 的 .btn.sm（25px）拉平。
+ * 只设高度与圆角，不动内边距，图标按钮因此仍是方的。 */
+html[data-ui='v2'] .pagehead-strip button,
+html[data-ui='v2'] .pagehead-strip .badge {
+  height: 25px;
+  min-height: 25px;
+  border-radius: 7px;
+  font-size: 11px;
+}
+
+html[data-ui='v2'] .pagehead-strip button svg {
+  width: 12px;
+  height: 12px;
+}

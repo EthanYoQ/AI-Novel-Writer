@@ -73,15 +73,18 @@ describe('角色卡导入入口', () => {
     expect(document.querySelector('textarea')?.value).toContain('旧港调查员')
   })
 
-  it('使用已有提取工作流与逐步确认，失败不丢失粘贴内容', async () => {
+  it('提取只跑一步，不再用步进模式（确认改由候选面板承担）', async () => {
     await paste('姓名：林舟')
     await click('AI 提取并预览')
     await click('发送并提取')
     expect(start).toHaveBeenCalledWith(expect.objectContaining({
       generationModelId: model.id,
       projectSession: { projectId: project.id, projectPath: project.path, leaseId: project.sessionLease },
-      steps: [expect.objectContaining({ name: '生成待确认角色卡' }), expect.objectContaining({ name: '确认并导入角色卡' })],
-    }), true)
+      steps: [expect.objectContaining({ name: '生成待确认角色卡' })],
+    }), false)
+    // 旧实现把「确认并导入角色卡」写成工作流第二步，确认于是退化成任务面板里的
+    // 一个继续按钮 —— 那正是「工作流结束了却没弹窗、内容也没落实」的成因。
+    expect(JSON.stringify(start.mock.calls[0]?.[0])).not.toContain('确认并导入角色卡')
     expect(document.querySelector('textarea')?.value).toBe('姓名：林舟')
   })
 
@@ -148,8 +151,9 @@ describe('角色卡导入入口', () => {
     root = createRoot(container)
     await act(async () => root.render(<CharacterCardImportButton projectKey={project.path} />))
     await click('粘贴 / 导入角色卡')
-    expect(document.body.textContent).not.toContain('角色.txt')
-    expect(document.querySelector('textarea')?.value).toBe('')
+    // 提取成功只交付候选，输入草稿要等确认提交（写入成功）后才清空 —— 此处应保留。
+    expect(document.body.textContent).toContain('角色.txt')
+    expect(document.querySelector('textarea')?.value).toBe('姓名：林舟')
   })
 
   it('旧任务完成时不会清空重挂载后编辑的新草稿', async () => {

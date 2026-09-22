@@ -206,18 +206,60 @@ export function registerLLMController() {
     })
     const win = BrowserWindow.fromWebContents(event.sender)
 
+    /**
+     * 安全推送：窗口或 webContents 已销毁时 send 会抛 "Object has been destroyed"。
+     * 这个异常如果发生在 provider 的 catch 块里，会变成无人接管的 rejected promise，
+     * 进而按 Node 默认语义打崩主进程（详见 main.ts 的 installProcessErrorGuards）。
+     * 所以发送前必须判活，且自身绝不让异常冒出去。
+     */
+    const safeSend = (channel: string, payload: unknown): void => {
+      try {
+        if (!win) return
+        // 判活方法做存在性守卫：这是跨实现（含测试替身）都安全的写法。
+        if (typeof win.isDestroyed === 'function' && win.isDestroyed()) return
+        if (typeof win.webContents?.isDestroyed === 'function' && win.webContents.isDestroyed()) return
+        win.webContents.send(channel, payload)
+      } catch (error) {
+        console.warn('[Vela] 流式推送失败（窗口可能已关闭）：', error)
+      }
+    }
+
     const provider = LLMFactory.getProvider(model)
-    
-    // We do not await this globally since it's streaming independently
-    provider.generateStream(model, request.messages, {
-      ...generationParameters,
+
+    /**
+     * 接管流式调用的 rejection。
+     *
+     * 为什么必须做：这是 fire-and-forget 调用，返回的 rejected promise 在 Node 里
+     * 等价于未捕获异常，会**直接结束主进程**；而 provider 内部 catch 里的
+     * webContents.send 在窗口销毁时会抛 "Object has been destroyed"，
+     * 那条异常正是从 catch 块冒出来的（最短崩溃路径）。
+     *
+     * 为什么用 try/catch + thenable 判断而不是直接 `void provider.generateStream(...).catch(...)`：
+     * provider 接口声明返回 Promise，但**运行时不保证**（测试替身、被包装过的实现都可能返回
+     * undefined），在 undefined 上挂 .catch 会抛 TypeError，反而把一次正常的流式请求变成失败。
+     */
+    const onStreamRejected = (error: unknown): void => {
+      console.error('[Vela] 流式生成异常终止：', error)
+      recordOnce({ success: false, error: error instanceof Error ? error.message : String(error) })
+      safeSend('llm:stream-error', {
+        requestId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      activeStreams.delete(requestId)
+    }
+
+    // We do not await this globally since it's streaming independently.
+    let streamReturn: unknown
+    try {
+      streamReturn = provider.generateStream(model, request.messages, {
+        ...generationParameters,
       signal: abortController.signal,
-      onChunk: (chunk: string) => win?.webContents.send('llm:stream-chunk', { requestId, chunk }),
+      onChunk: (chunk: string) => safeSend('llm:stream-chunk', { requestId, chunk }),
       onDone: (fullText: string, usage?: TokenUsage, finishReason?: LLMFinishReason) => {
         const terminalReason: LLMFinishReason = finishReason ?? 'unknown'
         const success = terminalReason === 'stop'
         recordOnce({ success, usage, error: success ? undefined : `finish:${terminalReason}` })
-        win?.webContents.send('llm:stream-done', {
+        safeSend('llm:stream-done', {
           requestId,
           fullText,
           usage,
@@ -228,18 +270,28 @@ export function registerLLMController() {
       onError: (error: string, content?: string, usage?: TokenUsage) => {
         recordOnce({ success: false, usage, error })
         if (content !== undefined) {
-          win?.webContents.send('llm:stream-done', {
+          safeSend('llm:stream-done', {
             requestId,
             fullText: content,
             usage,
             finishReason: 'error',
           })
         } else {
-          win?.webContents.send('llm:stream-error', { requestId, error })
+          safeSend('llm:stream-error', { requestId, error })
         }
         activeStreams.delete(requestId)
-      },
-    })
+        },
+      })
+    } catch (error) {
+      // provider 同步抛出（配置缺失、工厂失败等），按同一条路径收口。
+      onStreamRejected(error)
+      return { requestId, started: false, error: error instanceof Error ? error.message : String(error) }
+    }
+
+    // 只有确实返回了 thenable 才挂 catch —— 不假设返回值一定是 Promise。
+    if (streamReturn && typeof (streamReturn as { then?: unknown }).then === 'function') {
+      void (streamReturn as Promise<unknown>).catch(onStreamRejected)
+    }
 
     return { requestId, started: true }
   })

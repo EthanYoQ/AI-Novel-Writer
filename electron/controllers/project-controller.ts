@@ -1,5 +1,6 @@
 import { ipcMain, dialog } from 'electron'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { readJsonFile, writeJsonFile, RECENT_PROJECTS_PATH } from '../utils/config-utils'
 import { removeDirectoryWithWindowsRetry } from '../utils/remove-directory'
@@ -24,10 +25,11 @@ import {
   ProjectCoreRepository,
   type ProjectCoreData,
 } from '../repositories/project-core-repository'
-import { projectAccess, type ProjectSessionLease } from '../services/project-access'
+import { projectAccess, PROJECT_MANIFEST_RELATIVE_PATH, type ProjectSessionLease } from '../services/project-access'
 import { assertExpectedProjectPath, assertRequiredExpectedProjectPath } from '../utils/project-context'
 import { sanitizeProjectName } from './project-path'
 import { projectStoragePreflightFailure } from '../services/project-storage-preflight'
+import { peekProjectOverview } from '../services/project-peek'
 
 function projectRootSelectionFailure(error: unknown) {
   if (
@@ -277,6 +279,98 @@ function restoreProjectRollbackBoundary(
 
 function loadRecentProjects(): RecentProject[] {
   return readJsonFile<RecentProject[]>(RECENT_PROJECTS_PATH, [])
+}
+
+/**
+ * 项目文件夹是否还在磁盘上。
+ *
+ * 判据刻意取「目录还在」而不是「.vela/project.json 还在」：作者删掉整个小说
+ * 文件夹时两者都会消失，但清单缺失、改名或临时读不到时，只有前者仍然成立 ——
+ * 宁可多显示一个可能打不开的条目，也绝不能把作者还在写的书藏起来。
+ */
+function projectDirectoryExists(projectPath: string): boolean {
+  if (typeof projectPath !== 'string' || !projectPath.trim()) return false
+  try {
+    return fs.existsSync(projectPath)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 在常见位置里找作者磁盘上真实存在的项目（只认带 `.vela/project.json` 的目录）。
+ *
+ * 产品的「小说库」不是固定目录：作者新建项目时自己选位置，所以软件并不知道书
+ * 都放在哪。一旦最近列表被清空（例如书全被删过），书架就会空得莫名其妙 ——
+ * 这里只做一次很保守的兜底：最近列表为空时，翻一遍「文档」和「桌面」下面两层。
+ */
+function discoverProjectsOnDisk(): RecentProject[] {
+  const roots = [
+    path.join(os.homedir(), 'Documents'),
+    path.join(os.homedir(), 'Desktop'),
+  ]
+  const found: RecentProject[] = []
+  for (const root of roots) {
+    let level: string[] = [root]
+    for (let depth = 0; depth < 2; depth += 1) {
+      const next: string[] = []
+      for (const directory of level.slice(0, 200)) {
+        let entries: fs.Dirent[]
+        try {
+          entries = fs.readdirSync(directory, { withFileTypes: true })
+        } catch {
+          continue
+        }
+        for (const entry of entries) {
+          if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+          const candidate = path.join(directory, entry.name)
+          if (fs.existsSync(path.join(candidate, PROJECT_MANIFEST_RELATIVE_PATH))) {
+            let name = entry.name
+            try {
+              const manifest = JSON.parse(
+                fs.readFileSync(path.join(candidate, PROJECT_MANIFEST_RELATIVE_PATH), 'utf8'),
+              ) as { name?: unknown }
+              if (typeof manifest.name === 'string' && manifest.name.trim()) name = manifest.name.trim()
+            } catch {
+              // 清单读不出来就用目录名，不因为一个坏文件漏掉整本书
+            }
+            found.push({
+              name,
+              path: candidate,
+              updatedAt: (() => {
+                try {
+                  return fs.statSync(candidate).mtime.toISOString()
+                } catch {
+                  return new Date(0).toISOString()
+                }
+              })(),
+            })
+            continue
+          }
+          next.push(candidate)
+        }
+      }
+      level = next
+    }
+  }
+  return found
+}
+
+/**
+ * 书架与「最近项目」只返回**还真的存在**的项目 —— 作者删掉的小说不该继续摆
+ * 在书架上等一次点击才报错。
+ *
+ * 这里**只过滤显示，不写回存储**：写回是不可逆操作，一旦判据有偏差就会把作者
+ * 的项目列表永久清空（这个坑真的踩过一次）。
+ */
+function loadExistingRecentProjects(): RecentProject[] {
+  const stored = loadRecentProjects()
+  const existing = stored.filter(project => projectDirectoryExists(project.path))
+  if (existing.length > 0) return existing
+
+  // 最近列表空了（书被删过、或从来没记上），去磁盘上找一找，别让书架空着。
+  const discovered = discoverProjectsOnDisk()
+  return discovered.length > 0 ? discovered : []
 }
 
 function addRecentProject(project: RecentProject) {
@@ -697,7 +791,7 @@ export function registerProjectController() {
   })
 
   ipcMain.handle('project:recent-list', async () => {
-    return loadRecentProjects()
+    return loadExistingRecentProjects()
   })
 
   ipcMain.handle('project:recent-remove', async (_event, projectPath: string) => {
@@ -706,6 +800,18 @@ export function registerProjectController() {
       return { success: true }
     } catch (error) {
       return { success: false, error: String(error) }
+    }
+  })
+
+  /**
+   * 书架速览：只读读取另一个项目的资料。任何失败都降级成 null，
+   * 由界面显示「读不到」，绝不让一次书架点击把主进程拖进异常状态。
+   */
+  ipcMain.handle('project:peek-overview', async (_event, projectPath: string) => {
+    try {
+      return peekProjectOverview(projectPath)
+    } catch {
+      return null
     }
   })
 

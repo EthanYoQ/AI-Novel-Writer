@@ -7,6 +7,27 @@ const expectedPromptVariables: Record<string, string[]> = {
   assistant_writing_identity: ['mode_instruction'],
   edit_selected_text: ['edit_instruction', 'selected_text'],
   generate_novel_config_field: ['existing_config', 'field_label', 'field_requirements'],
+  // 世界观设定候选生成：变量清单必须与 prompt-templates.ts 里的声明**逐项同序**。
+  world_setting_candidates: [
+    'project_brief',
+    'architecture',
+    'existing_entries',
+    'category_label',
+    'category_description',
+    'category_list',
+    'known_material',
+    'target_count',
+  ],
+  // 世界观设定单条目生成：变量清单同样必须与 prompt-templates.ts 逐项同序。
+  world_setting_entry: [
+    'project_brief',
+    'architecture',
+    'category_label',
+    'category_description',
+    'entry_name',
+    'existing_draft',
+    'sibling_entries',
+  ],
   generate_global_config: ['user_idea', 'number_of_chapters', 'word_number'],
   premise: [
     'genre',
@@ -105,6 +126,8 @@ const expectedPromptVariables: Record<string, string[]> = {
   refine_from_review: ['review_report', 'draft_content', 'global_guidance', 'user_refine_prompt'],
   generate_chapter_notes: ['chapter_content', 'chapter_number', 'chapter_title'],
   update_character_cards: ['chapter_content', 'chapter_number', 'existing_cards_json'],
+  /** 定稿后把本章的世界观进展落袋：三档输出（进展 / 冲突 / 新实体）。 */
+  update_world_settings: ['chapter_content', 'chapter_number', 'referenced_entries_json'],
   infer_novel_config: ['sample_content'],
   extract_initial_characters: ['character_dynamics', 'genre'],
   infer_single_chapter_blueprint: ['chapter_content', 'chapter_number', 'chapter_title', 'novel_config_summary'],
@@ -117,6 +140,8 @@ const expectedPromptVariables: Record<string, string[]> = {
     'latest_chapter',
     'total_chapters',
   ],
+  // 便利贴灵感抽卡：变量清单必须与 prompt-templates.ts 里的声明逐项同序。
+  inspiration_draw: ['story_context', 'references', 'idea', 'count'],
 }
 
 const expectedJsonFields: Record<string, string[]> = {
@@ -148,6 +173,15 @@ const expectedJsonFields: Record<string, string[]> = {
     'keyItems',
     'recentEvents',
     'updatedAtChapter',
+  ],
+  update_world_settings: [
+    'updates',
+    'conflicts',
+    'newEntities',
+    'entryName',
+    'evidence',
+    'statement',
+    'name',
   ],
   infer_novel_config: [
     'novelConfig',

@@ -16,7 +16,7 @@ describe('LeftToolWindowBar', () => {
   it('renders visible Chinese labels for every left navigation item', () => {
     const html = renderToString(<LeftToolWindowBar />)
 
-    for (const label of ['首页', '项目', '小说', '蓝图', '角色', '世界', '剧情', '任务', '设置']) {
+    for (const label of ['首页', '项目', '小说', '蓝图', '角色', '设定', '剧情', '任务', '设置']) {
       expect(html).toContain(label)
     }
   })

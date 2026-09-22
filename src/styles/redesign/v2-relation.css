@@ -1,0 +1,484 @@
+/* ============================================================================
+ * 人物关系图谱（v2 墨纸书斋）· 终层收敛
+ *
+ * shell.css 已按 demo 的 <style> 源片段顺序，把 .relation-* 的全部样式原样搬运
+ * 过来了。本文件只做三件 demo 里没有、而产品化必需的事：
+ *
+ *   ① 主题化：demo 里写死的米纸色（rgba(250,247,238,.94) 之类）在产品的四套主题
+ *      （浅色 / 星空 / 纸质 / 黑夜）下会变成一块亮斑，这里一律换成主题变量。
+ *   ② 补齐：demo 靠内联样式或人工标注给出、而 DOM 版必须由 CSS 承担的部分 ——
+ *      首字头像字号、空态、收起面板后的单列布局、长关系标签的省略。
+ *   ③ 手感：位置变化要有过渡（换视角时圈圈滑过去），但拖动时必须立刻跟手。
+ *
+ * 本文件不写进 @layer：项目约定「无层 CSS 优先于任何 @layer」，因此无需
+ * !important 就能压过 shell.css 的 @layer components —— 只有 demo 自己写了
+ * !important 的那几条（tier 尺寸）才需要同样抬到 !important。
+ * ========================================================================== */
+
+/* ============ 版式：页头守在画布列里，右侧简介独占一列 ============
+ *
+ * 先生：图谱的标头要和「CAST · 人物档案 / 李莉莉 / 主角 · 最近更新：第 11 章」
+ * 那一套字体、字号、字重一致 —— 所以这里不另起炉灶，**直接用同一个页头**：
+ * RelationMap 里挂的是产品统一的 <PageHead> + .pagehead-strip（各子菜单同源，
+ * 见 v2-overrides.css §子菜单页头的统一位置）。
+ *
+ * 位置按先生定的两条：
+ *   ① 靠正文栏左侧、距边框 15px（不跟着其它子菜单居中在 1024px —— 图谱是一整幅画布）；
+ *   ② 「重置 / 适应 / 删除全部角色与关系」这三个按钮**不许越过右侧简介栏的地界**，
+ *      所以页头只占画布那一列，按钮组的右边缘停在侧栏左边缘往左 15px 处；
+ *      右侧简介栏则跨满两行（从页头顶部到底部），保持 demo 的全高版式。 */
+html[data-ui='v2'] .relation-view {
+  grid-template-columns: minmax(0, 1fr) 318px;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    'head side'
+    'main side';
+}
+
+html[data-ui='v2'] .relation-view > .pagehead-strip {
+  grid-area: head;
+  max-width: none;
+  margin: 0;
+  padding: 18px 15px 16px;
+  align-self: stretch;
+  justify-self: stretch;
+}
+
+html[data-ui='v2'] .relation-view > .relation-main {
+  grid-area: main;
+}
+
+html[data-ui='v2'] .relation-view > .relation-side {
+  grid-area: side;
+}
+
+/* ---------------- 页头右侧的按钮：保持 demo 的样子 ----------------
+ *
+ * 先生：这几个按钮就该按 demo 来 —— 无边框、方角、浅灰文字，悬浮才转朱砂
+ * （demo 1237–1249 / 999–1009 行的 .relation-tools / .relation-tool）。
+ * 但是它们现在住在产品的 .pagehead-strip 里，那条通用规则会把页头内的按钮
+ * 统一成 25px 高 + 7px 圆角 + 11px 字号（见 v2-overrides.css），
+ * 所以这里要抬一级特异性（.relation-tools .relation-tool）把它压回来。 */
+html[data-ui='v2'] .relation-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+html[data-ui='v2'] .relation-tools .relation-tool {
+  height: 25px;
+  min-width: 25px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-family: var(--sans);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+html[data-ui='v2'] .relation-tools .relation-tool svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+html[data-ui='v2'] .relation-tools .relation-tool:hover {
+  color: var(--seal);
+  background: transparent;
+}
+
+/* 「删除全部角色与关系」是产品动作（demo 没有这一颗）：样式仍按 demo 的
+   .relation-tool，只在不可用时变淡，不另起一套红底白字。 */
+html[data-ui='v2'] .relation-tools .relation-tool:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+html[data-ui='v2'] .relation-tools .relation-tool:disabled:hover {
+  color: var(--muted);
+  background: transparent;
+}
+
+/* 收起人物简介：页头仍在，画布占满整行。 */
+html[data-ui='v2'] .relation-view-full {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    'head'
+    'main';
+}
+
+/* demo 的窄屏规则（shell.css）里侧栏收成 280px，这里保持同样的响应式行为。 */
+@media (max-width: 980px) {
+  html[data-ui='v2'] .relation-view {
+    grid-template-columns: minmax(0, 1fr) 280px;
+  }
+}
+
+/* ---------------- 画布：空白处可拖动，光标如实说明 ---------------- */
+
+html[data-ui='v2'] .relation-canvas {
+  cursor: grab;
+  touch-action: none;
+}
+
+html[data-ui='v2'] .relation-canvas:active {
+  cursor: grabbing;
+}
+
+html[data-ui='v2'] .relation-canvas::before {
+  border-color: rgba(var(--seal-rgb), 0.045);
+}
+
+html[data-ui='v2'] .relation-stage {
+  transition: transform 0.16s ease-out;
+}
+
+/* 拖动中不要任何视图过渡，否则圈圈会黏在指针后面。 */
+html[data-ui='v2'] .relation-canvas.is-panning .relation-stage,
+html[data-ui='v2'] .relation-stage:has(.relation-node.dragging) {
+  transition: none;
+}
+
+/* ---------------- 连线与标签：改成主题色 ---------------- */
+
+html[data-ui='v2'] .relation-edge {
+  stroke: color-mix(in srgb, var(--ink) 26%, transparent);
+  stroke-width: 1px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+html[data-ui='v2'] .relation-edge.strong {
+  stroke: color-mix(in srgb, var(--seal) 62%, transparent);
+  stroke-width: 1.25px;
+}
+
+html[data-ui='v2'] .relation-edge.soft {
+  stroke: color-mix(in srgb, var(--green) 46%, transparent);
+  stroke-width: 1px;
+}
+
+html[data-ui='v2'] .relation-edge.dash {
+  stroke-dasharray: 4 5;
+}
+
+html[data-ui='v2'] .relation-edge-label-html {
+  max-width: 118px;
+  color: color-mix(in srgb, var(--ink2) 82%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+/* ---------------- 节点：尺寸按 tier 分档（demo 定稿值），补齐字号 ---------------- */
+
+/* shell.css 的 relation-tier-clarity-fix 已经定下直径：主视角 104 / 次大 82 /
+ * 中等 50 / 卫星 30 / 远点 15。这里只补上每档「姓名首字」的字号 ——
+ * 首字头像由 CSS 居中，字号不跟随直径就会在 15px 的远点里溢出。 */
+html[data-ui='v2'] .relation-node .portrait {
+  font-size: 22px;
+  color: #fff;
+}
+
+html[data-ui='v2'] .relation-node .portrait > span {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #fff;
+  font-family: var(--kai);
+  line-height: 1;
+}
+
+html[data-ui='v2'] .relation-node.main .portrait { font-size: 38px; }
+html[data-ui='v2'] .relation-node[data-tier='important'] .portrait { font-size: 30px; }
+html[data-ui='v2'] .relation-node[data-tier='normal'] .portrait { font-size: 19px; }
+html[data-ui='v2'] .relation-node[data-tier='satellite'] .portrait { font-size: 12px; }
+html[data-ui='v2'] .relation-node[data-tier='far'] .portrait { font-size: 7px; }
+
+/* ============================================================================
+ * 先生：选中的头像框「有个奇怪的发光/轮廓，不好看」—— 删去发光，
+ * 改用一枚**受主题控制**的细边框做强调（默认主题是朱砂红，换主题跟着变）。
+ *
+ * 为什么必须带 !important：shell.css 里 v1 的那几条规则带 !important，
+ * 而本文件虽然后加载，也压不过它们 —— 具体元凶有两处硬编码的半透明红光：
+ *   shell.css:1200  .relation-node.selected .portrait{
+ *                     box-shadow:0 0 0 2px rgba(174,54,47,.15), 0 5px 16px …
+ *                   }                                    ↑ 就是那圈「奇怪的发光」
+ *   shell.css:1206  .relation-node.main .portrait{box-shadow:0 0 0 6px rgba(169,50,38,.06), …}
+ *                   ↑ 主视角节点同色但更大的一圈光晕（selected 就是 main，两处都要清）
+ *
+ * 做法：先无条件抹掉一切发光（box-shadow: none!important），再由下面三条
+ * 按层级重新给回**只含投影**的立体感；选中态单独给「内描边 + 投影」。
+ * ========================================================================== */
+
+/* 1) 清掉所有节点的发光圈（含 main / important / satellite / far，以及 hover 与拖拽态）。 */
+html[data-ui='v2'] .relation-node .portrait,
+html[data-ui='v2'] .relation-node:hover .portrait,
+html[data-ui='v2'] .relation-node.main .portrait,
+html[data-ui='v2'] .relation-node[data-tier='important'] .portrait,
+html[data-ui='v2'] .relation-node[data-tier='normal'] .portrait,
+html[data-ui='v2'] .relation-node[data-tier='satellite'] .portrait,
+html[data-ui='v2'] .relation-node[data-tier='far'] .portrait,
+html[data-ui='v2'] .relation-node.dragging .portrait {
+  box-shadow: none !important;
+}
+
+/* 2) 只保留纯投影的立体感（不再有任何扩散光圈）。
+ *    inset 阴影留给选中态的描边 —— 用 inset 而不是 border 或外扩 shadow，
+ *    是因为头像直径被 shell.css 用 !important 锁死，改 border-width 会撑大尺寸，
+ *    而外扩 shadow 会盖住相邻节点。 */
+html[data-ui='v2'] .relation-node .portrait {
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--ink) 8%, transparent) !important;
+}
+
+html[data-ui='v2'] .relation-node.main .portrait {
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 13%, transparent) !important;
+}
+
+html[data-ui='v2'] .relation-node[data-tier='important'] .portrait {
+  box-shadow: 0 4px 13px color-mix(in srgb, var(--ink) 10%, transparent) !important;
+}
+
+html[data-ui='v2'] .relation-node:hover .portrait {
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--ink) 14%, transparent) !important;
+}
+
+/* 3) 选中态：一枚受主题控制的细边框（内描边，1.5px）+ 立体投影，没有发光。
+ *    颜色用 --seal：默认主题 = 朱砂红 #A93226，靛蓝/赭石/琥珀/夜墨主题各自跟随。 */
+html[data-ui='v2'] .relation-node.selected .portrait {
+  box-shadow:
+    inset 0 0 0 1.5px var(--seal),
+    0 6px 18px color-mix(in srgb, var(--ink) 13%, transparent) !important;
+}
+
+/* 拖拽中：同色描边加粗一档，仍然不发光。 */
+html[data-ui='v2'] .relation-node.dragging .portrait {
+  box-shadow:
+    inset 0 0 0 2px var(--seal),
+    0 8px 22px color-mix(in srgb, var(--ink) 16%, transparent) !important;
+  transform: scale(1.035);
+}
+
+/* 4) 页头说明里被强调的人名（先生：CAST 标头里的中心角色名用主题色）。
+ *    默认主题 = 朱砂红，换主题跟着 --seal 走；只加重一档字重，不放大字号，
+ *    免得把「小字说明」的版式顶开。 */
+html[data-ui='v2'] .ph-d .ph-em {
+  color: var(--seal);
+  font-weight: 600;
+}
+
+/* 5) 还有一个更隐蔽的「发光圈」来源：点角色时的聚焦动画。
+ *    shell.css:1146 的 @keyframes relationFocusClean 关键帧本身就是一圈扩散光晕：
+ *      @keyframes relationFocusClean{0%{box-shadow:0 0 0 0 rgba(169,50,38,0)}
+ *        45%{box-shadow:0 0 0 5px rgba(169,50,38,.10)}
+ *        100%{box-shadow:0 0 0 0 rgba(169,50,38,0)}}
+ *    它在 .relation-node.relation-focus-in 时播 0.65s（点击节点必然触发），
+ *    用 box-shadow 覆盖是拦不住的 —— 动画优先级高于普通声明，必须直接换掉动画本身。
+ *    先生：只保留一点点缩放反馈，不要任何光圈扩散。 */
+html[data-ui='v2'] .relation-node.relation-focus-in .portrait,
+html[data-ui='v2'] .relation-node.relation-focus-in .relation-label {
+  animation: v2RelationFocus .4s ease-out;
+}
+
+@keyframes v2RelationFocus {
+  0% { transform: scale(0.96); }
+  55% { transform: scale(1.025); }
+  100% { transform: scale(1); }
+}
+
+/* 换视角时圈圈滑过去（demo 的 left/top 过渡被后续补丁覆盖掉了，这里取回）。 */
+html[data-ui='v2'] .relation-node {
+  transition: left 0.34s ease, top 0.34s ease, opacity 0.22s ease, transform 0.2s ease;
+}
+
+html[data-ui='v2'] .relation-node.dragging,
+html[data-ui='v2'] .relation-node.dragging .portrait {
+  transition: none;
+}
+
+/* 先生：去掉角色节点的「发光圈」——只保留立体投影，不再有扩散光晕。
+ * main（主视角）与 selected（中心角色）其实是同一个节点，两处扩散圈都要清掉：
+ * 只删 selected 的话会回落到 main 的 0 0 0 6px 光圈上，看起来像没改。 */
+html[data-ui='v2'] .relation-node.main .portrait {
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--ink) 14%, transparent);
+}
+
+html[data-ui='v2'] .relation-node[data-tier='important'] .portrait {
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--gold) 12%, transparent),
+    0 5px 15px color-mix(in srgb, var(--ink) 11%, transparent);
+  border-color: color-mix(in srgb, var(--seal) 68%, transparent);
+}
+
+html[data-ui='v2'] .relation-node .portrait {
+  border-color: color-mix(in srgb, var(--gold) 72%, transparent);
+  background: var(--paper2);
+}
+
+html[data-ui='v2'] .relation-node[data-tier='far'] .portrait {
+  border-color: color-mix(in srgb, var(--faint) 45%, transparent);
+}
+
+html[data-ui='v2'] .relation-node.selected .portrait {
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--ink) 13%, transparent);
+}
+
+html[data-ui='v2'] .relation-node:hover .portrait {
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--ink) 14%, transparent);
+}
+
+/* ---------------- 图例 / 提示 / 缩放条 ---------------- */
+
+html[data-ui='v2'] .relation-legend {
+  gap: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+html[data-ui='v2'] .relation-legend i {
+  background: color-mix(in srgb, var(--muted) 60%, transparent);
+}
+
+html[data-ui='v2'] .relation-legend i.red { background: var(--seal); }
+html[data-ui='v2'] .relation-legend i.green { background: var(--green); }
+
+html[data-ui='v2'] .relation-hint {
+  line-height: 1.7;
+}
+
+html[data-ui='v2'] .relation-zoom {
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  border-color: var(--line);
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--ink) 4%, transparent);
+}
+
+html[data-ui='v2'] .relation-zoom button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink2);
+}
+
+html[data-ui='v2'] .relation-zoom button:nth-child(2) {
+  min-width: 46px;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-ui='v2'] .relation-zoom button:hover {
+  background: rgba(var(--seal-rgb), 0.045);
+  color: var(--seal);
+}
+
+/* ---------------- 右侧人物简介面板 ---------------- */
+
+html[data-ui='v2'] .relation-side {
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+}
+
+html[data-ui='v2'] .relation-character-top {
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+html[data-ui='v2'] .relation-character-top h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-ui='v2'] .relation-visual-avatar {
+  border-color: var(--seal);
+  background: var(--paper2);
+}
+
+html[data-ui='v2'] .relation-visual-avatar > span {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #fff;
+  font-family: var(--kai);
+  font-size: 30px;
+  line-height: 1;
+}
+
+/* 性格特征可能是一整段：面板里只露前几行，「查看详细档案」负责展开全文。 */
+html[data-ui='v2'] .relation-visual-meta .quote {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+html[data-ui='v2'] .relation-info-grid dt {
+  white-space: nowrap;
+}
+
+html[data-ui='v2'] .relation-info-grid dd {
+  overflow-wrap: anywhere;
+}
+
+html[data-ui='v2'] .relation-role-copy {
+  display: -webkit-box;
+  -webkit-line-clamp: 8;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 先生：副面板整块字号上调，空态提示同步从 10.2px 跟到 12px。 */
+html[data-ui='v2'] .relation-key-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.75;
+}
+
+html[data-ui='v2'] .relation-key-item > div {
+  min-width: 0;
+}
+
+html[data-ui='v2'] .relation-key-item b {
+  margin-right: 4px;
+}
+
+html[data-ui='v2'] .relation-detail-btn {
+  margin-top: 16px;
+  border-color: var(--line2);
+  color: var(--ink2);
+}
+
+html[data-ui='v2'] .relation-detail-btn:hover {
+  border-color: var(--seal);
+  color: var(--seal);
+  background: transparent;
+}
+
+html[data-ui='v2'] .relation-detail-btn svg {
+  flex: none;
+}
+
+/* ---------------- 无障碍：画布可聚焦但不留难看的焦点框 ---------------- */
+
+html[data-ui='v2'] .relation-canvas:focus {
+  outline: none;
+}
+
+html[data-ui='v2'] .relation-canvas:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--seal) 40%, transparent);
+  outline-offset: -3px;
+}

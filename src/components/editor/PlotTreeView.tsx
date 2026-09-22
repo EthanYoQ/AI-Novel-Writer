@@ -120,8 +120,8 @@ export default function PlotTreeView({
         )}</p>
         {stale && <p role="status" className="text-xs" style={{ color: 'var(--color-warning-text)' }}>{text('剧情资料已有更新，可刷新剧情树。', 'Plot sources have changed. Refresh the plot tree when ready.')}</p>}
         {!sourceReady && <p role="status" className="text-xs" style={{ color: 'var(--color-warning-text)' }}>{text(
-          '请先添加章节蓝图、定稿或叙事线索，再生成剧情树。',
-          'Add a chapter blueprint, finalized chapter, or narrative thread before generating a plot tree.',
+          '请先添加章节蓝图、定稿或伏笔，再生成剧情树。',
+          'Add a chapter blueprint, finalized chapter, or foreshadowing plan before generating a plot tree.',
         )}</p>}
         {storedSnapshotInvalid && <p role="alert" className="text-xs" style={{ color: 'var(--color-warning-text)' }}>{text(
           '旧剧情树快照无法安全显示，已隔离；作者资料未被修改，请重新生成。',

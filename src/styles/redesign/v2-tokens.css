@@ -1,0 +1,73 @@
+/* ============================================================================
+ * v2 排版与尺寸令牌（数值全部取自 demo）
+ *
+ * 用法：产品的 cva 组件把 Tailwind 的固定数值改成 `var(--v2-*, 原值)`，
+ * 于是 v1 走 fallback（与改动前逐像素一致），v2 只需在此覆盖变量即可全局换装。
+ * 这样既不必在几十个组件里散写 !important，也能一键回滚。
+ *
+ * 令牌挂在 html[data-ui="v2"] 上，因此 Radix Portal 到 body 的对话框、
+ * 弹出菜单同样继承得到 —— 这是把 data-ui 同步到 documentElement 的原因。
+ *
+ * 数值来源：novel-app-demo-relation-avatars.html
+ *   .btn 217-237 · .badge 241-247 · .card 248 · .fld 250-260
+ *   .pagehead 261-266 · .edtool 267-272 · .modal 280-285
+ * ========================================================================== */
+
+html[data-ui='v2'] {
+  /* ===== 按钮 ===== */
+  /* 先生：子菜单里的按钮「外框线、设计样式、Y 轴高度、风格」必须一致 ——
+     md 档直接对齐 .btn.sm，于是产品的 Button 与 demo 原生按钮完全同高。 */
+  --v2-btn-h: 25px;        /* = --v2-btn-sm-h */
+  --v2-btn-px: 10px;
+  --v2-btn-radius: 7px;
+  --v2-btn-fs: 11px;
+
+  --v2-btn-sm-h: 25px;     /* .btn.sm */
+  --v2-btn-sm-px: 10px;
+  --v2-btn-sm-radius: 7px;
+  --v2-btn-sm-fs: 11px;
+
+  /* lg 同样收敛到同一高度：子菜单里不允许出现两种按钮高度。 */
+  --v2-btn-lg-h: 25px;
+  --v2-btn-lg-px: 10px;
+  --v2-btn-lg-fs: 11px;
+
+  /* ===== 表单 ===== */
+  --v2-field-radius: 8px;  /* .fld input border-radius:8px */
+  --v2-field-px: 11px;     /* .fld input padding:7px 11px */
+  --v2-field-py: 7px;
+  --v2-field-fs: 12.5px;   /* .fld input font-size:12.5px */
+
+  /* ===== 容器 ===== */
+  --v2-card-radius: 12px;  /* .card border-radius:12px */
+  --v2-modal-radius: 14px; /* .modal border-radius:14px */
+  --v2-badge-radius: 99px; /* .badge border-radius:99px */
+
+  /* ===== 字号阶梯（demo 全文出现过的字号，集中成一套）===== */
+  --v2-fs-micro: 9px;      /* .pagehead .ph-k 眉标 */
+  --v2-fs-tiny: 9.5px;     /* .badge / .fld .hint */
+  --v2-fs-note: 10.5px;    /* 说明文字 */
+  --v2-fs-caption: 11.5px; /* .pagehead .ph-d */
+  --v2-fs-label: 12px;     /* .fld .fh .fn 字段名 */
+  --v2-fs-body: 12.5px;    /* 正文控件默认字号 */
+  --v2-fs-lead: 13.5px;    /* 卡片标题 */
+  --v2-fs-tool: 14px;      /* .edtool .et-l b */
+  --v2-fs-title: 21px;     /* .pagehead h1 */
+  --v2-fs-display: 32px;   /* .home-hero-title */
+
+  /* ===== 行高 ===== */
+  --v2-lh-tight: 1.35;
+  --v2-lh-ui: 1.7;
+  --v2-lh-read: 1.9;
+  --v2-lh-prose: 2.3;      /* .manuscript-paragraph */
+
+  /* ===== 字距（demo 的眉标与标签大量使用）===== */
+  --v2-ls-eyebrow: 0.22em;
+  --v2-ls-label: 0.16em;
+
+  /* ===== 控件高度 ===== */
+  --v2-h-tool: 42px;       /* .edtool height */
+  --v2-h-tab: 36px;
+  --v2-h-title: 56px;
+  --v2-h-status: 26px;
+}

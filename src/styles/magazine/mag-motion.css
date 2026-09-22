@@ -1,0 +1,142 @@
+/* ============================================================================
+ * V3 动效层（Motion）—— 面板开合、内容翻页、标签切换的进场编排
+ *
+ * ── 先生的口径（贯穿全程）────────────────────────────────────────────────────
+ *   「这个动画太慢，会让用户觉得卡顿。」（2026-09-16，关于 1440ms 的整幅过场）
+ * 所以这一层的铁律是：**短、轻、不挡路**。
+ *   · 时长一律 160–240ms —— 比一次眨眼还短
+ *   · 只动 opacity 与「一笔」的位移（10px 以内），不做缩放、不做大幅滑入
+ *   · 只做**进场**，不做退场（收起来就该立刻收起来，别让界面在那儿演）
+ *   · 面板本体的**宽高一律不做过渡** —— 那是拖拽调尺寸的活，
+ *     加过渡会让拖动变成「粘手」
+ *
+ * ── 三个动作 ────────────────────────────────────────────────────────────────
+ *   ① 面板起笔   侧栏/助手/底部面板出现时，贴边一线栏目色**长出来** + 内容淡入
+ *   ② 内容翻页   设置面板换一页、编辑区换一个页面时，内容从右侧滑入 10px + 淡入
+ *   ③ 全关       系统「减少动效」下这一层全部让路
+ *
+ * ── 分家纪律 ────────────────────────────────────────────────────────────────
+ * 每条规则都带 `html[data-ui='v2'][data-mag]`；v2 墨纸书斋与 v1 经典界面
+ * 一条都不匹配 —— 它们的面板与内容切换保持原来的「立刻出现」。
+ * ========================================================================== */
+
+/* ==========================================================================
+ * ① 面板起笔
+ * 三个面板容器分别是 .sidebar-host（左）、.aipanel-host（右）、.v2-bottom（下）。
+ * 容器本身由 React 在开关时挂载/卸载，所以「挂载 = 打开」——
+ * 动画写在容器上，打开时自动播一次，不需要任何 JS。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] :is(.sidebar-host, .aipanel-host, .v2-bottom) {
+  position: relative;
+  animation: mag-panel-in 180ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+/* 侧栏：左缘一道竖线从上往下长出来（与「起笔」同一族） */
+html[data-ui='v2'][data-mag] .sidebar-host::after,
+html[data-ui='v2'][data-mag] .aipanel-host::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--mag-active-sec, var(--seal));
+  pointer-events: none;
+  z-index: 3;
+  animation: mag-panel-rule-y 220ms cubic-bezier(0.16, 0.84, 0.24, 1) both;
+}
+
+html[data-ui='v2'][data-mag] .sidebar-host::after {
+  left: 0;
+  transform-origin: top center;
+}
+
+html[data-ui='v2'][data-mag] .aipanel-host::after {
+  right: 0;
+  transform-origin: bottom center;
+}
+
+/* 底部面板：上缘一道横线从左往右扫出来 */
+html[data-ui='v2'][data-mag] .v2-bottom::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background: var(--mag-active-sec, var(--seal));
+  pointer-events: none;
+  z-index: 3;
+  transform-origin: left center;
+  animation: mag-panel-rule-x 240ms cubic-bezier(0.16, 0.84, 0.24, 1) both;
+}
+
+/* ==========================================================================
+ * ② 内容翻页
+ * 设置面板换一页时，内容组件是重新挂载的（SettingsModal 按 section 条件渲染），
+ * 所以动画写在内容容器上就会跟着重播 —— 不用给 React 加 key。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .settings-content > * {
+  animation: mag-content-turn 220ms cubic-bezier(0.16, 0.84, 0.24, 1) both;
+}
+
+/* 编辑区换页面：**只淡入，不做位移** ——
+ * 里面可能是 CodeMirror，位移会让光标与滚动位置抖一下。 */
+html[data-ui='v2'][data-mag] .edit-body > * {
+  animation: mag-content-in 160ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+/* 标签栏里被选中的那一枚：底色不是「瞬间翻转」，而是轻轻坐实 */
+html[data-ui='v2'][data-mag] .tab.on {
+  animation: mag-tab-settle 180ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+/* ==========================================================================
+ * 关键帧
+ * ======================================================================== */
+@keyframes mag-panel-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes mag-panel-rule-y {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+
+@keyframes mag-panel-rule-x {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes mag-content-turn {
+  from { opacity: 0; transform: translateX(10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes mag-content-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes mag-tab-settle {
+  from { opacity: 0.6; }
+  to { opacity: 1; }
+}
+
+/* ==========================================================================
+ * ③ 减少动效：这一层全部让路
+ * 注意只关动画，不关任何**状态**（底色、色标、选中态那些是信息，不是动效）
+ * ======================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui='v2'][data-mag] :is(.sidebar-host, .aipanel-host, .v2-bottom),
+  html[data-ui='v2'][data-mag] .settings-content > *,
+  html[data-ui='v2'][data-mag] .edit-body > *,
+  html[data-ui='v2'][data-mag] .tab.on {
+    animation: none;
+  }
+
+  html[data-ui='v2'][data-mag] :is(.sidebar-host, .aipanel-host, .v2-bottom)::after {
+    animation: none;
+    transform: none;
+  }
+}

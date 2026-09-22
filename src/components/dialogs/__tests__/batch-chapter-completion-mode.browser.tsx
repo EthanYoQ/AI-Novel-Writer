@@ -396,6 +396,10 @@ function installIpc() {
         : step)
       return { success: true }
     }
+    // 定稿后处理新增的「世界观设定落袋」步骤会先问一次「本章引用了哪些设定」。
+    // 都返回空 = 本章没有引用、设定库为空 → 该步骤不写任何东西，也不阻断后续流程。
+    if (channel === 'world-setting:list-chapter-refs') return []
+    if (channel === 'world-setting:list') return []
     throw new Error(`Unexpected IPC channel in batch completion browser test: ${channel}`)
   })
 
@@ -507,6 +511,12 @@ describe('batch chapter completion mode browser flow', () => {
         2: [{ id: 202, status: 'finalized' }],
       })
     })
+    // 先生要求「正文章节」默认收起（打开就全摊开太乱）—— 断言前先点开它的组标题行
+    await act(async () => {
+      const header = Array.from(container?.querySelectorAll('.tree-item') ?? [])
+        .find(element => (element.textContent ?? '').trim().startsWith('正文章节'))
+      ;(header as HTMLElement | undefined)?.click()
+    })
     await vi.waitFor(() => {
       const manuscriptHeader = Array.from(container?.querySelectorAll('.tree-item') ?? [])
         .find(element => element.textContent?.includes('正文章节'))
@@ -589,6 +599,15 @@ describe('batch chapter completion mode browser flow', () => {
       await act(async () => pendingDraftCompletions.shift()?.())
       await vi.waitFor(() => {
         expect(useWorkflowStore.getState().history[0]?.status).toBe('completed')
+      })
+      // 先生要求草稿箱 / 正文章节默认收起 —— 断言前把这两个折叠组都点开。
+      // 用 startsWith 白名单只命中「组标题行」：章节行同样是 .tree-item，点到它会切换编辑器。
+      await act(async () => {
+        const groupTitles = ['正文章节', 'Manuscript chapters', '草稿箱', 'Draft box']
+        const headers = Array.from(
+          container?.querySelectorAll('[data-testid="project-tree"] .tree-item') ?? [],
+        ).filter(element => groupTitles.some(title => (element.textContent ?? '').trim().startsWith(title)))
+        for (const header of headers) (header as HTMLElement).click()
       })
       await vi.waitFor(() => {
         const treeText = container?.querySelector('[data-testid="project-tree"]')?.textContent ?? ''

@@ -156,11 +156,11 @@ describe('plot-tree left rail navigation', () => {
         .toMatchObject({ type: 'chapter-card', projectKey: PROJECT_B_PATH })
     })
 
+    // 新 UI（v2）的交互：在书架上换一部作品时，上一部作品留下的标签会被关掉，
+    // 免得角色 / 知识库 / 伏笔等面板跟着新书留在标签栏上、看起来像串了书
+    //（见 EditorArea 里的 staleProjects 清理，先生明确要求）。
     expect(useEditorStore.getState().tabs.filter(tab => tab.type === 'chapter-card'))
-      .toEqual(expect.arrayContaining([
-        expect.objectContaining({ projectKey: PROJECT_PATH }),
-        expect.objectContaining({ projectKey: PROJECT_B_PATH }),
-      ]))
+      .toEqual([expect.objectContaining({ projectKey: PROJECT_B_PATH })])
     expect(container?.textContent).not.toContain('此标签属于另一个项目')
   })
 
@@ -183,7 +183,7 @@ describe('plot-tree left rail navigation', () => {
 
     await act(async () => openBuiltinEditor(
       'narrative-thread-editor',
-      '伏笔与叙事线索',
+      '伏笔',
       'narrative-thread',
     ))
     await vi.waitFor(() => expect(selectedTab('计划清单')).toBe(true))

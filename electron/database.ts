@@ -11,6 +11,7 @@ import fs from 'node:fs'
 import { loadApplicationImportSourceSecret } from './services/import-source-identity-secret'
 import { countDraftUnits } from '../src/shared/draft-units'
 import { migrateDraftUnitCounts } from './services/draft-unit-migration'
+import { builtinCategoryRecords } from '../src/shared/world-setting'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
@@ -31,6 +32,10 @@ export function initProjectDatabase(projectPath: string, importSourceSecret?: Bu
   projectDb = new Database(dbPath)
   projectDb.pragma('journal_mode = WAL')
   projectDb.pragma('foreign_keys = ON')
+  // 写锁等待：WAL 下仍可能有两个连接同时写（例如后台工作流落盘与界面保存撞在一起），
+  // 没有 busy_timeout 时 SQLite 会**立即**抛 SQLITE_BUSY，作者看到的是莫名其妙的保存失败。
+  // 给 5 秒退让窗口，让后到的写请求排队而不是直接失败。
+  projectDb.pragma('busy_timeout = 5000')
 
   // 创建表结构
   createTables(projectDb, importSourceSecret)
@@ -129,9 +134,11 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       background TEXT DEFAULT '',                 -- 背景
       abilities TEXT DEFAULT '',                  -- 能力
       motivation TEXT DEFAULT '',                 -- 动机
-      relationships TEXT DEFAULT '',              -- 关系链
+      relationships TEXT DEFAULT '',              -- 关系链（结构化边 JSON 数组）
+      relationship_notes TEXT DEFAULT '',         -- 关系备注（作者的自由文本原话，与结构化边并存）
       arc TEXT DEFAULT '',                        -- 弧光
       notes TEXT DEFAULT '',                      -- 备忘录
+      avatar TEXT NOT NULL DEFAULT '',            -- 自定义头像文件名（图片本体存 <项目>/.vela/avatars/）
       cs_location TEXT DEFAULT '',                -- 当前位置
       cs_power_level TEXT DEFAULT '',             -- 修为境界
       cs_physical_state TEXT DEFAULT '',          -- 身体状态
@@ -143,6 +150,90 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
+
+    -- ============================================================
+    -- 4. world_settings — 世界观设定条目（结构化事实源）
+    -- 先生定的方向：世界观不再只是 project_core.worldbuilding 的一整段文本，
+    -- 而是可分类、可检索、可被 @ 引用的一条条设定。
+    -- ============================================================
+    CREATE TABLE IF NOT EXISTS world_settings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category TEXT NOT NULL DEFAULT 'world',   -- world/faction/geography/history/rule/race/item/concept
+      name TEXT NOT NULL,                       -- 条目名，如「青云宗」
+      aliases TEXT NOT NULL DEFAULT '[]',       -- 别名 / 别称 (JSON Array)，检索时一并命中
+      summary TEXT NOT NULL DEFAULT '',         -- 一句话摘要：列表显示 + 注入提示词优先用它
+      content TEXT NOT NULL DEFAULT '',         -- 详情正文（长文本，按需读取）
+      tags TEXT NOT NULL DEFAULT '[]',          -- 标签 (JSON Array)
+      importance TEXT NOT NULL DEFAULT 'side',  -- main/side/background，决定提示词取舍顺序
+      related TEXT NOT NULL DEFAULT '[]',       -- 关联条目 (JSON Array: [{target, relation}])
+      source TEXT NOT NULL DEFAULT 'manual',    -- manual/ai/architecture，可追溯来源
+      status TEXT NOT NULL DEFAULT 'confirmed', -- confirmed/pending：pending 不注入生成与助手上下文
+      -- 字段级来源 (JSON Object)。做这个是为了让定稿后的自动更新
+      -- **只追加作者手写过的内容、绝不改写**（与人物状态 cs_provenance 同一思路）。
+      provenance TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_world_settings_category ON world_settings(category);
+
+    -- ============================================================
+    -- 5. world_setting_categories — 世界观设定的分类表
+    -- 分类**不是封闭枚举**：内置八条在首次打开项目时写入（builtin = 1），作者可自建。
+    -- 每个分类都带一句说明 —— 它同时是 AI 生成与定稿归纳「该归哪一类」的判据。
+    -- 条目只存 key，分类改名不影响已有条目。
+    -- ============================================================
+    CREATE TABLE IF NOT EXISTS world_setting_categories (
+      key TEXT PRIMARY KEY,                     -- 内置 key，或自建的 cat_<...>
+      name_zh TEXT NOT NULL DEFAULT '',
+      name_en TEXT NOT NULL DEFAULT '',
+      description_zh TEXT NOT NULL DEFAULT '',
+      description_en TEXT NOT NULL DEFAULT '',
+      builtin INTEGER NOT NULL DEFAULT 0,       -- 1 = 内置，不可删
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ============================================================
+    -- 6. chapter_world_settings — 章节 ↔ 世界观设定的引用关系
+    --
+    -- 先生定的路线：设定**不做全量注入**，每一章只带「明确引用过」的那几条。
+    -- 引用来源有三处：作者在条目页 @ 章节、在蓝图页手动添加、AI 生成蓝图时自己提出。
+    -- 复合主键天然去重：同一章同一条设定只会有一行。
+    -- ============================================================
+    CREATE TABLE IF NOT EXISTS chapter_world_settings (
+      chapter_number INTEGER NOT NULL,
+      setting_id INTEGER NOT NULL,
+      source TEXT NOT NULL DEFAULT 'manual',   -- manual / ai，可追溯这次引用是谁提的
+      created_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (chapter_number, setting_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_chapter_world_settings_chapter ON chapter_world_settings(chapter_number);
+
+    -- ============================================================
+    -- 7. world_setting_conflicts — 正文与设定的冲突裁决队列
+    --
+    -- 定稿后 AI 能发现「正文与某条设定直接矛盾」，但**不知道该听哪边** ——
+    -- 自动改等于赌。所以这里只记录，把裁决交给作者，并且让冲突
+    -- 出现在作者能一键处理的地方（不必自己去设定库里逐条翻找）。
+    -- 两个内容快照是刻意冗余的：裁决界面要并排展示「正文说了什么」与「条目原写什么」。
+    -- ============================================================
+    CREATE TABLE IF NOT EXISTS world_setting_conflicts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chapter_number INTEGER NOT NULL,
+      setting_id INTEGER NOT NULL,
+      setting_name TEXT NOT NULL DEFAULT '',
+      setting_content_snapshot TEXT NOT NULL DEFAULT '',
+      evidence TEXT NOT NULL DEFAULT '',
+      statement TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open',        -- open / resolved / ignored
+      resolution TEXT,                            -- adopted-draft / kept-entry
+      created_at TEXT DEFAULT (datetime('now')),
+      resolved_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_world_setting_conflicts_status ON world_setting_conflicts(status);
+    CREATE INDEX IF NOT EXISTS idx_world_setting_conflicts_chapter ON world_setting_conflicts(chapter_number);
 
     -- ============================================================
     -- 4. contents — 文本内容池（正文与元数据分离）
@@ -368,6 +459,27 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
     );
 
     -- ============================================================
+    -- 正文新角色候选（定稿后从正文里发现、名单里还没有的重要具名角色）
+    --
+    -- 只存「等人裁决的提名单」，**不是事实源**：作者在角色页点采纳之后，才由
+    -- 渲染进程走既有的角色卡新增通道建档（见 character-store.addNamedCharacters）。
+    -- 与角色名单彻底分家，于是「模型提了名但作者没点头」永远不会污染角色卡。
+    -- ============================================================
+    CREATE TABLE IF NOT EXISTS character_candidates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'supporting',
+      evidence TEXT NOT NULL DEFAULT '',
+      chapter_number INTEGER NOT NULL,
+      current_state TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'adopted', 'dismissed')),
+      created_at TEXT DEFAULT (datetime('now')),
+      decided_at TEXT DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_character_candidates_status
+      ON character_candidates(status, chapter_number);
+
+    -- ============================================================
     -- 沿用表：角色状态快照
     -- ============================================================
     CREATE TABLE IF NOT EXISTS summary_snapshots (
@@ -586,11 +698,89 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    -- ============================================================
+    -- 14. 便利贴 —— 作者私有的灵感本子
+    --
+    -- 与其它所有表的根本区别：**便利贴不参与任何 AI 创作链路**。
+    -- 写稿、定稿、审稿、助手上下文一处都不读它，因此它不需要
+    -- world_settings 那套 pending/confirmed 闸门 —— 本子里没有
+    -- 「待确认的事实」，只有作者自己写给自己看的东西。
+    --
+    -- 它是项目级数据（跟着书走），但「清除项目生成内容」的范围
+    -- （project-clear-repository）刻意**不含**这三张表：那些删的都是
+    -- AI 生成物，而便利贴是先生亲手敲的。
+    -- ============================================================
+    -- 便利贴的文件夹（先生 2026-09-20）：便利贴攒多了要能收纳。
+    -- 只做一层 —— 侧栏本来就只有二百多像素宽，套两层反而是折磨。
+    CREATE TABLE IF NOT EXISTS sticky_folders (
+      folder_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS sticky_notes (
+      note_id TEXT PRIMARY KEY,
+      title TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL DEFAULT '',
+      -- 所属文件夹；NULL = 直接放在便利贴根下。文件夹删掉时这里会被清回 NULL，
+      -- 里面的便利贴**不跟着删** —— 收纳工具不该顺手毁掉作者写的东西。
+      folder_id TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_sticky_notes_created
+      ON sticky_notes(created_at);
+
+    -- 一次抽卡的输入存档。先生过两周打开待选箱时，只有这张表答得上
+    -- 「这张卡当初是在什么前提下抽出来的」。
+    CREATE TABLE IF NOT EXISTS sticky_draws (
+      draw_id TEXT PRIMARY KEY,
+      include_premise INTEGER NOT NULL DEFAULT 0 CHECK(include_premise IN (0, 1)),
+      include_characters INTEGER NOT NULL DEFAULT 0 CHECK(include_characters IN (0, 1)),
+      include_worldbuilding INTEGER NOT NULL DEFAULT 0 CHECK(include_worldbuilding IN (0, 1)),
+      include_synopsis INTEGER NOT NULL DEFAULT 0 CHECK(include_synopsis IN (0, 1)),
+      mentions TEXT NOT NULL DEFAULT '[]',
+      idea TEXT NOT NULL DEFAULT '',
+      requested_count INTEGER NOT NULL DEFAULT 1 CHECK(requested_count > 0),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- 待选箱：抽卡时没被选中的点子落在这里，可以随时找回。
+    -- status 只改不删（找回即 pending → used），照 recovery_candidates 的
+    -- 状态机范式；先生明确同意「清空待选箱」才物理删除，且不可找回。
+    CREATE TABLE IF NOT EXISTS sticky_candidates (
+      candidate_id TEXT PRIMARY KEY,
+      draw_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      ordinal INTEGER NOT NULL CHECK(ordinal > 0),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'used')),
+      note_id TEXT DEFAULT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      used_at TEXT DEFAULT NULL,
+      FOREIGN KEY (draw_id) REFERENCES sticky_draws(draw_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sticky_candidates_pending
+      ON sticky_candidates(status, ordinal);
   `)
 
   const draftColumns = db.prepare('PRAGMA table_info(drafts)').all() as Array<{ name: string }>
   if (!draftColumns.some(column => column.name === 'source_dependencies')) {
     db.exec("ALTER TABLE drafts ADD COLUMN source_dependencies TEXT NOT NULL DEFAULT '[]'")
+  }
+
+  /**
+   * 便利贴文件夹：老库补归属列。
+   *
+   * 存量便利贴一律留在根下（folder_id = NULL）—— 迁移不该自作主张把它们
+   * 塞进某个文件夹里；先生自己分的那才叫分类。
+   */
+  const stickyNoteColumns = new Set(
+    (db.prepare('PRAGMA table_info(sticky_notes)').all() as Array<{ name: string }>)
+      .map(column => column.name),
+  )
+  if (!stickyNoteColumns.has('folder_id')) {
+    db.exec('ALTER TABLE sticky_notes ADD COLUMN folder_id TEXT DEFAULT NULL')
   }
 
   // Legacy candidates did not freeze the draft identity. Keep them marked
@@ -1037,6 +1227,82 @@ function createTables(db: BetterSqlite3.Database, importSourceSecret?: Buffer) {
   )
   if (!characterStateColumns.has('cs_provenance')) {
     db.exec("ALTER TABLE characters ADD COLUMN cs_provenance TEXT NOT NULL DEFAULT '{}'")
+  }
+  // 自定义头像只记文件名，图片本体存 <项目>/.vela/avatars/；旧库补列即得空头像。
+  if (!characterStateColumns.has('avatar')) {
+    db.exec("ALTER TABLE characters ADD COLUMN avatar TEXT NOT NULL DEFAULT ''")
+  }
+
+  /**
+   * 角色候选：旧库补 current_state 列。
+   *
+   * 提示词一直要求 `newCharacters` 带 currentState，而候选表当初没有存它的地方 ——
+   * 于是采纳建档出来的新档只有名字（先生报障）。旧库的存量候选**没有这份数据可回填**
+   * （它从来没被读出来过），一律留空串，读出来就是「这条候选没带状态」；
+   * 作者重新定稿一章即可拿到带状态的新候选。
+   */
+  const characterCandidateColumns = new Set(
+    (db.prepare('PRAGMA table_info(character_candidates)').all() as Array<{ name: string }>)
+      .map(column => column.name),
+  )
+  if (!characterCandidateColumns.has('current_state')) {
+    db.exec("ALTER TABLE character_candidates ADD COLUMN current_state TEXT NOT NULL DEFAULT ''")
+  }
+
+  /**
+   * 世界观设定：旧库补 status 列。
+   * 老库里的条目都是作者手写或已确认的内容，一律按 confirmed 迁移 ——
+   * 迁移不能让既有条目忽然变成「待确认」而从生成链路里消失。
+   */
+  const worldSettingColumns = new Set(
+    (db.prepare('PRAGMA table_info(world_settings)').all() as Array<{ name: string }>).map(column => column.name),
+  )
+  if (!worldSettingColumns.has('status')) {
+    db.exec("ALTER TABLE world_settings ADD COLUMN status TEXT NOT NULL DEFAULT 'confirmed'")
+  }
+
+  /**
+   * 世界观设定：旧库补 provenance 列，并把**存量条目整体标记为作者手写**。
+   *
+   * 为什么必须标记而不是留空：provenance 空 = 可被覆盖（等同 legacy）。
+   * 而旧库里的条目都是作者在设定库里一条条敲进去的 —— 不标记它们，
+   * 日后定稿自动更新就会改写作者亲手写的内容，这正是先生要防的「搞笑」。
+   *
+   * 只标 summary / content 两个承载语义的主字段：provenance 是「部分记录」，
+   * 未记录的字段按 legacy（可更新）处理，所以漏标一个不会造成数据损坏。
+   * json_set 万一不可用（SQLite 未编入 JSON1），退化为只加列 —— 不会让迁移失败。
+   */
+  if (!worldSettingColumns.has('provenance')) {
+    db.exec("ALTER TABLE world_settings ADD COLUMN provenance TEXT NOT NULL DEFAULT '{}'")
+    try {
+      db.exec(
+        "UPDATE world_settings SET provenance = json_set('{}', '$.summary', json('{\"kind\":\"author\"}'), '$.content', json('{\"kind\":\"author\"}'))",
+      )
+    } catch {
+      // JSON1 不可用时保持空 provenance（等同 legacy），至少列已加好、不会阻塞打开项目。
+    }
+  }
+
+  /**
+   * 世界观设定的内置分类：首次打开项目时写入。
+   *
+   * 用 INSERT OR IGNORE 而不是「有则更新」—— 作者可能把「物品」改名成「法宝」，
+   * 每次开项目都覆盖回默认名等于把他的命名吃掉。只补缺，不改已有的。
+   */
+  const insertBuiltinCategory = db.prepare(`
+    INSERT OR IGNORE INTO world_setting_categories
+      (key, name_zh, name_en, description_zh, description_en, builtin, sort_order)
+    VALUES (?, ?, ?, ?, ?, 1, ?)
+  `)
+  for (const category of builtinCategoryRecords()) {
+    insertBuiltinCategory.run(
+      category.key,
+      category.zhCN,
+      category.enUS,
+      category.descriptionZhCN,
+      category.descriptionEnUS,
+      category.sortOrder,
+    )
   }
 
   // 兼容旧库：将「无 currentState」的哨兵 0 迁移为 NULL（chapter 0 合法状态不受影响）
