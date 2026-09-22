@@ -503,7 +503,7 @@ async function main() {
     let finalized, confirmed
     const finalizeDeadline = Date.now() + timeout
     while (Date.now() < finalizeDeadline) {
-      finalized = readProjectDb(context.projectPath, db => db.prepare('SELECT d.chapter_number AS chapterNumber,d.status,o.finalization_id AS finalizationId,o.publication_status AS publicationStatus FROM drafts d LEFT JOIN finalization_outbox o ON o.draft_id=d.id ORDER BY d.chapter_number').all())
+      finalized = readProjectDb(context.projectPath, db => db.prepare('SELECT d.id AS draftId,d.chapter_number AS chapterNumber,d.status,o.finalization_id AS finalizationId,o.content_hash AS contentHash,o.publication_status AS publicationStatus FROM drafts d LEFT JOIN finalization_outbox o ON o.draft_id=d.id ORDER BY d.chapter_number').all())
       confirmed = await invoke(page, 'generation:read-batch', { batchId: autoBatch.batchId }, batchSession)
       if (finalized[0]?.publicationStatus === 'published' && confirmed.completedChapters[0]?.postProcessComplete) break
       await new Promise(resolve => setTimeout(resolve, 250))
@@ -522,6 +522,7 @@ async function main() {
     assert.ok(autoAttempts.every(row => row.status === 'settled' && row.trusted === true && row.finishReason === 'stop'))
     const finalizedBody = readProjectDb(context.projectPath, db => db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=1').get().body)
     assert.equal(finalizedBody, prose)
+    assert.equal(finalized[0].contentHash, createHash('sha256').update(finalizedBody).digest('hex'))
     assert.equal(fs.readFileSync(path.join(context.projectPath, '第1章 旧港线索1.txt'), 'utf8'), `第1章 旧港线索1\n\n${finalizedBody}`)
     assert.equal(fixture.requests.filter(row => row.mode === 'auto_finalize' && row.characterStateRequest).length, 1,
       'finalized character-state request was retried or skipped')
@@ -530,6 +531,60 @@ async function main() {
     pass('U05.A05-auto-finalize', 'U05.A05', 'Writer auto-finalize confirmation produced a published chapter with complete post-processing',
       { batchId: autoBatch.batchId, chapterNumber: finalized[0].chapterNumber, finalizationId: finalized[0].finalizationId,
         postProcessComplete: confirmed.completedChapters[0].postProcessComplete })
+
+    mark('U13.A09-finalize-seal-three-states')
+    const source = { draftId: finalized[0].draftId, chapterNumber: 1,
+      finalizationId: finalized[0].finalizationId, contentHash: finalized[0].contentHash }
+    const manuscript = page.locator('.writer-project-tree .tree-item[title="点击打开 — 第1章 旧港线索1"]')
+    await manuscript.click()
+    await page.getByText('第1章定稿 完成（3/3）', { exact: true }).waitFor({ state: 'visible', timeout })
+    const successfulRun = await invoke(page, 'db:post-process-get-latest-run', 'chapter_finalize', '1', context.projectPath, context)
+    const successfulSteps = await invoke(page, 'db:post-process-get-steps', successfulRun.id, context.projectPath, context)
+    assert.equal(successfulRun.triggerSourceType, 'chapter_finalize')
+    assert.equal(successfulRun.triggerSourceId, `finalization:${source.finalizationId}`)
+    assert.equal(successfulRun.sourceLabel, '第1章定稿')
+    assert.equal(successfulRun.allCriticalPassed, true)
+    assert.deepEqual(successfulSteps.map(step => step.stepKey), ['kb_import', 'chapter_notes', 'character_cards'])
+    assert.ok(successfulSteps.every(step => step.ok && step.attemptCount > 0 && !step.errorMsg))
+
+    const injected = await invoke(page, 'db:post-process-create-run', {
+      triggerSourceType: 'chapter_finalize', triggerSourceId: '1', sourceLabel: successfulRun.sourceLabel,
+      steps: successfulSteps.map(step => ({ key: step.stepKey, label: step.label, critical: step.critical })),
+      finalizedSource: source,
+    }, context.projectPath, context)
+    assert.equal(injected.success, true, injected.error)
+    assert.ok(injected.id && injected.id !== successfulRun.id)
+    const pendingRun = await invoke(page, 'db:post-process-get-latest-run', 'chapter_finalize', '1', context.projectPath, context)
+    const pendingSteps = await invoke(page, 'db:post-process-get-steps', pendingRun.id, context.projectPath, context)
+    assert.equal(pendingRun.id, injected.id)
+    assert.equal(pendingRun.triggerSourceId, successfulRun.triggerSourceId)
+    assert.deepEqual(pendingSteps.map(step => [step.stepKey, step.ok, step.attemptCount, step.errorMsg]),
+      successfulSteps.map(step => [step.stepKey, false, 0, '']))
+    await page.locator('.writer-project-tree .tree-item').filter({ hasText: '小说配置' }).first().click()
+    await manuscript.click()
+    await page.getByText('第1章定稿 正在处理（0/3）', { exact: true }).waitFor({ state: 'visible', timeout })
+
+    const sentinel = 'U13_A09_CONTROLLED_POST_PROCESS_FAILURE'
+    const failed = await invoke(page, 'db:post-process-mark-step-failed', injected.id, pendingSteps[0].stepKey,
+      sentinel, context.projectPath, context)
+    assert.equal(failed.success, true, failed.error)
+    const failedRun = await invoke(page, 'db:post-process-get-latest-run', 'chapter_finalize', '1', context.projectPath, context)
+    const failedSteps = await invoke(page, 'db:post-process-get-steps', failedRun.id, context.projectPath, context)
+    assert.equal(failedRun.id, injected.id)
+    assert.equal(failedRun.triggerSourceId, successfulRun.triggerSourceId)
+    assert.equal(failedSteps[0].ok, false)
+    assert.equal(failedSteps[0].attemptCount, 1)
+    assert.equal(failedSteps[0].errorMsg, sentinel)
+    assert.ok(failedSteps.slice(1).every(step => !step.ok && step.attemptCount === 0 && !step.errorMsg))
+    await page.locator('.writer-project-tree .tree-item').filter({ hasText: '小说配置' }).first().click()
+    await manuscript.click()
+    await page.getByText('第1章定稿 — 1 个步骤失败', { exact: true }).click()
+    await page.getByText(successfulSteps[0].label, { exact: true }).waitFor({ state: 'visible', timeout })
+    await page.getByText(sentinel, { exact: true }).waitFor({ state: 'visible', timeout })
+    pass('U13.A09-finalize-seal-three-states', 'U13.A09',
+      'V3 DraftEditor projects the natural finalized success and controlled source-bound pending/failure SQLite runs',
+      { finalizedSource: source, naturalSuccessRunId: successfulRun.id, controlledRunId: injected.id,
+        stepKeys: successfulSteps.map(step => step.stepKey), controlledFailure: sentinel })
     }
   } catch (error) {
     failure = error
@@ -562,7 +617,7 @@ async function main() {
     if (server.listening) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
   }
   const covered = new Set(steps.filter(step => step.outcome === 'PASS').map(step => step.actionId))
-  const unverified = Array.from({ length: 8 }, (_, index) => `U05.A${String(index + 1).padStart(2, '0')}`)
+  const unverified = [...Array.from({ length: 8 }, (_, index) => `U05.A${String(index + 1).padStart(2, '0')}`), 'U13.A09']
     .filter(actionId => !covered.has(actionId))
   const receipt = { outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U05_PACKAGED_V3_PARTIAL',
     evidenceLevel: 'electron', testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths,

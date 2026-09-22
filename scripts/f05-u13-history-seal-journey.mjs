@@ -12,7 +12,7 @@ import { createServer } from 'node:http'
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const Database = createRequire(import.meta.url)('better-sqlite3')
 if (process.argv.includes('--help')) {
-  process.stdout.write('F05 U13 packaged V3 history/seal journey; pass fixed Windows package source and artifact hashes.\n')
+  process.stdout.write('F05 U13 packaged V3 HistoryList plus controlled workflow-status sub-evidence journey; pass fixed Windows package source and artifact hashes.\n')
   process.exit(0)
 }
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -86,8 +86,8 @@ async function main() {
   assert.equal(sha256(executablePath), expectedExe, 'packaged executable changed')
   assert.equal(sha256(asarPath), expectedAsar, 'packaged app changed')
   for (const directory of Object.values(profile)) fs.mkdirSync(directory, { recursive: true })
-  fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U13 history/seals', sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 24,
-    retainedReason: 'independent review of packaged V3 history and durable SQLite run identities',
+  fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U13 HistoryList/workflow-status sub-evidence', sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 24,
+    retainedReason: 'independent review of packaged V3 HistoryList and durable SQLite run identities',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
   const fixtureState = { requests: 0 }
   const server = createServer((request, response) => {
@@ -130,17 +130,17 @@ async function main() {
     assert.equal(path.resolve((await invoke(page2, 'project:get-runtime-context')).activeProjectPath), path.resolve(project.projectPath))
     await page2.getByRole('button', { name: 'AI 输出', exact: true }).click()
     await page2.locator('.writer-project-tree').getByText('章节蓝图', { exact: true }).click()
-    currentStep = 'U13.A09-pending'
-    await assertWriter(page2, 'U13.A09-pending')
+    currentStep = 'U13.workflow-status-pending'
+    await assertWriter(page2, 'U13.workflow-status-pending')
     await page2.getByRole('button', { name: '写作此章' }).click()
     await page2.getByRole('dialog').getByPlaceholder('3000').fill('100')
     await page2.getByRole('dialog').getByRole('button', { name: '开始创作' }).click()
     await page2.getByRole('button', { name: /中止生成|Stop generation/ }).waitFor({ state: 'visible' })
-    pass('u13-pending-seal', 'U13.A09', 'Writer active run exposes the pending/stop state before provider completion')
+    pass('u13-workflow-status-pending', null, 'Writer active run exposes controlled pending/stop workflow status before provider completion as sub-evidence')
     await page2.getByRole('button', { name: /中止生成|Stop generation/ }).waitFor({ state: 'hidden', timeout: 30_000 })
     assert.equal(fixtureState.requests, 1, `first generation must reach the isolated provider fixture; UI: ${(await page2.locator('body').innerText()).slice(-1600)}`)
-    await assertWriter(page2, 'U13.A09-success-history')
-    await assertWriter(page2, 'U13.A09-success-seal')
+    await assertWriter(page2, 'U13.workflow-status-success-history')
+    await assertWriter(page2, 'U13.workflow-status-success')
     await page2.getByText('合成正文', { exact: false }).first().waitFor({ state: 'visible', timeout: 5_000 })
     await page2.getByText('整个工作流已全部完成', { exact: true }).waitFor({ state: 'visible', timeout: 5_000 })
     const db = new Database(path.join(project.projectPath, '.ai-novel', 'project.db'), { readonly: true })
@@ -154,11 +154,11 @@ async function main() {
     assert.equal(successfulRuns[0].attemptStatus, 'settled')
     assert.equal(successfulRuns[0].usageTrusted, true)
     assert.equal(successfulRuns[0].finishReason, 'stop')
-    pass('u13-success-seal', 'U13.A09', 'Writer completed status, trusted settled provider attempt, visible output and persisted draft agree',
+    pass('u13-workflow-status-success', null, 'Writer completed workflow status, trusted settled provider attempt, visible output and persisted draft agree as sub-evidence',
       { status: savedDraft.status, attemptStatus: successfulRuns[0].attemptStatus, providerRequests: fixtureState.requests })
-    currentStep = 'U13.A09-failure'
+    currentStep = 'U13.workflow-status-failure'
     await page2.locator('.writer-project-tree').getByText('章节蓝图', { exact: true }).click()
-    await assertWriter(page2, 'U13.A09-failure')
+    await assertWriter(page2, 'U13.workflow-status-failure')
     await page2.getByRole('button', { name: '写作此章' }).click()
     await page2.getByRole('dialog').getByPlaceholder('3000').fill('100')
     await page2.getByRole('dialog').getByRole('button', { name: '开始创作' }).click()
@@ -168,8 +168,8 @@ async function main() {
     let draftCount
     try { draftCount = failureDb.prepare('SELECT count(*) AS count FROM drafts WHERE chapter_number=1').get().count } finally { failureDb.close() }
     assert.equal(draftCount, 1, 'failed provider request must not add another saved draft')
-    pass('u13-failure-seal', 'U13.A09', 'Writer exposes controlled provider failure without adding a draft', { providerRequests: fixtureState.requests, draftCount })
-    await assertWriter(page2, 'U13.A09-failure-history')
+    pass('u13-workflow-status-failure', null, 'Writer exposes controlled provider failure without adding a draft as sub-evidence', { providerRequests: fixtureState.requests, draftCount })
+    await assertWriter(page2, 'U13.workflow-status-failure-history')
     currentStep = 'U13.A08-select-history'
     const historyButtons = assistant(page2).getByRole('button', { name: /历史印章章节/ })
     await historyButtons.nth(1).waitFor({ state: 'visible' })
@@ -192,7 +192,7 @@ async function main() {
     assert.equal(runs.length, 2)
     assert(runs.every(run => run.operation === 'chapter-draft'))
     assert.notEqual(runs[0].runId, runs[1].runId)
-    assert.equal(runs[1].attemptStatus, 'unknown', 'failed provider attempt must not receive a trusted success seal')
+    assert.equal(runs[1].attemptStatus, 'unknown', 'failed provider attempt must not receive a trusted success status')
     assert.notEqual(runs[1].usageTrusted, true)
     const readSession = await invoke(page2, 'project:open', project.projectPath, randomUUID(), null)
     assert.equal(readSession.success, true, readSession.error)
@@ -217,8 +217,8 @@ async function main() {
       { durableRunIds: runs.map(run => run.runId), rendererHistoryCount: 0 })
   } catch (error) { failure = error }
   finally { if (app) await quit(app); if (server.listening) await new Promise(resolve => server.close(resolve)) }
-  const receipt = { schemaVersion: 1, qualification: 'F05_U13_PACKAGED_V3_HISTORY_SEALS', outcome: failure ? 'FAIL' : 'PARTIAL', evidenceLevel: 'electron', shell: 'writer', shellVariant: 'v3', testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths, artifact: { executablePath, executableSha256: sha256(executablePath), asarPath, asarSha256: sha256(asarPath) }, driver: { path: driverPath, sha256: sha256(driverPath) }, profile: { projectRoot: profile.projects, scratch }, fixture: { provider: 'loopback synthetic OpenAI SSE', requests: fixtureState.requests, externalModelRequests: 0 }, steps,
-    unverifiedActions: ['U13.A01 real model streaming', 'U13.A02 provider reasoning qualification', 'U13.A03-U13.A07', 'release default and model quality'],
+  const receipt = { schemaVersion: 1, qualification: 'F05_U13_PACKAGED_V3_HISTORY_WORKFLOW_STATUS_SUBEVIDENCE', outcome: failure ? 'FAIL' : 'PARTIAL', evidenceLevel: 'electron', shell: 'writer', shellVariant: 'v3', scope: { kind: 'controlled-workflow-status-sub-evidence', workflowStatusSteps: ['u13-workflow-status-pending', 'u13-workflow-status-success', 'u13-workflow-status-failure'], verified: ['U13.A08 same-process V3 HistoryList selection', 'durable provider attempt and body assertions', 'new-process renderer HistoryList limitation'], excludes: ['U13.A09 DraftEditor PostProcessStatusPanel finalization pending/success/failure seal'] }, testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths, artifact: { executablePath, executableSha256: sha256(executablePath), asarPath, asarSha256: sha256(asarPath) }, driver: { path: driverPath, sha256: sha256(driverPath) }, profile: { projectRoot: profile.projects, scratch }, fixture: { provider: 'loopback synthetic OpenAI SSE', requests: fixtureState.requests, externalModelRequests: 0 }, steps,
+    unverifiedActions: ['U13.A01 real model streaming', 'U13.A02 provider reasoning qualification', 'U13.A03-U13.A07', 'U13.A09 real DraftEditor PostProcessStatusPanel finalization pending/success/failure seal', 'release default and model quality'],
     limitation: 'Renderer workflow HistoryList is in-memory and empty in a new process; durable main-generation candidates remain visible without reconstructing that list',
     failedStep: failure ? currentStep : null, error: failure ? String(failure) : null }
   const receiptPath = path.join(repository, '.runtime', '.cache', 'f05-u13-history-seals', runId, 'receipt.json'); fs.mkdirSync(path.dirname(receiptPath), { recursive: true }); fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2)); process.stdout.write(`${JSON.stringify({ outcome: receipt.outcome, receipt: receiptPath, steps: steps.map(step => step.stepId), testedSha })}\n`); if (failure) throw failure
