@@ -1,8 +1,9 @@
-/* global process */
+/* global process, Buffer */
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
+import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -26,9 +27,10 @@ const fileHash = file => sha256(fs.readFileSync(file))
 const scriptPath = fileURLToPath(import.meta.url)
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
 const testedSha = packageSourceSha
-const driverSha256 = fileHash(scriptPath)
 const immersionOnly = process.argv.includes('--immersion-only')
 const columnsOnly = process.argv.includes('--columns-only')
+const livenessOnly = process.argv.includes('--liveness-only')
+assert([immersionOnly, columnsOnly, livenessOnly].filter(Boolean).length <= 1, 'journey modes are mutually exclusive')
 const productPathArgs = ['src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5']
 const changedPaths = git('diff', '--name-only', `${testedSha}..HEAD`).split('\n').filter(Boolean)
 const readProjectCore = projectPath => {
@@ -55,6 +57,22 @@ const assertActiveTab = async (page, name, actionId) => {
   assert.equal(await tab.evaluate(element => getComputedStyle(element).boxShadow !== 'none'), true, `${actionId}: ${name} tab is not active`)
 }
 const placeholder = '在此输入你的创作想法，或让 AI 根据这段话一键生成全部配置...'
+const candidateBody = `U07 失败后保留的合成正文 ${runId}。`.repeat(8)
+const runningBody = `U07 运行中可见的合成正文 ${runId}`
+const model = { id: 'u07-liveness-fixture', name: 'U07 liveness fixture', provider: 'openai', protocol: 'openai',
+  modelName: 'gpt-4.1', baseUrl: 'https://api.openai.com/v1', apiKey: 'u07-offline',
+  maxTokens: 8192, temperature: 0.7, purposes: ['generation'] }
+const fixture = { requests: 0 }
+const server = createServer((request, response) => {
+  if (request.method !== 'POST' || request.url !== '/v1/chat/completions'
+    || request.headers.authorization !== `Bearer ${model.apiKey}`) { response.writeHead(403).end(); return }
+  fixture.requests++
+  if (fixture.requests > 2) { response.writeHead(500).end('unexpected fixture request'); return }
+  response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+  const body = fixture.requests === 1 ? candidateBody : runningBody
+  response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: body } }] })}\n\n`)
+  if (fixture.requests === 1) response.end() // Visible text without [DONE] creates a durable pending recovery candidate.
+})
 const assertWriter = async (page, actionId) => {
   const shell = writer(page)
   await shell.waitFor({ state: 'visible' })
@@ -68,6 +86,23 @@ const waitHome = async page => {
   if (!await page.locator('.writer-welcome').isVisible()) await page.locator('.writer-left-rail button[title="欢迎页"]').click()
   await page.locator('.writer-shelf').waitFor({ state: 'visible' })
 }
+const startChapter = async page => {
+  await page.locator('.writer-project-tree').getByText('章节蓝图', { exact: true }).click()
+  await page.getByRole('button', { name: '写作此章' }).click()
+  await page.getByRole('dialog').getByPlaceholder('3000').fill('100')
+  await page.getByRole('dialog').getByRole('button', { name: '开始创作' }).click()
+}
+const runningSession = (projectPath, projectId) => {
+  const database = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true, readonly: true })
+  try {
+    const rows = database.prepare("SELECT run_id, binding_json FROM generation_runs WHERE status='running' ORDER BY created_at_ms DESC").all()
+    const row = rows.find(value => { const binding = JSON.parse(value.binding_json); return binding.projectId === projectId && binding.sourceManifest?.operation === 'chapter-draft' })
+    assert(row, 'running chapter-draft binding is missing')
+    const binding = JSON.parse(row.binding_json)
+    assert(binding.epoch, 'running chapter-draft binding has no project lease')
+    return { session: { projectId, projectPath, leaseId: binding.epoch }, runId: row.run_id }
+  } finally { database.close() }
+}
 
 async function main() {
   fs.mkdirSync(receiptDir, { recursive: true })
@@ -80,6 +115,7 @@ async function main() {
   let projectCoreBefore = null
   let projectCoreAfter = null
   let uiObservation = null
+  let livenessObservation = null
   const visualEvidence = []
   const captureVisual = async (page, name, target) => {
     const file = path.join(receiptDir, `v3-${name}-1440x900.png`)
@@ -116,7 +152,16 @@ async function main() {
     assert.equal(verifyPackagedBetterSqliteLoad(packageDir), 'PACKAGED_BETTER_SQLITE3_LOAD_OK')
     assert.equal(verifyPackagedLanceLoad(packageDir), 'PACKAGED_LANCEDB_LOAD_OK')
     pass('packaged-native-load', null, 'fixed package artifact hashes and packaged native bindings verified')
+    if (livenessOnly) await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
     app = await electron.launch({ executablePath, cwd: packageDir, args: [`--user-data-dir=${profile.userData}`], env, timeout: 30_000 })
+    if (livenessOnly) await app.evaluate((_, fixturePort) => {
+      const originalFetch = globalThis.fetch
+      globalThis.fetch = (input, options) => {
+        const url = new URL(String(input))
+        if (url.origin !== 'https://api.openai.com') throw new Error('U07_NETWORK_REFUSED')
+        return originalFetch(`http://127.0.0.1:${fixturePort}${url.pathname}`, options)
+      }
+    }, server.address().port)
     const page = await app.firstWindow({ timeout: 30_000 })
     page.setDefaultTimeout(12_000)
     assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
@@ -132,6 +177,18 @@ async function main() {
     projectCreateObservation = { success: project.success, stale: project.stale ?? 'absent', error: project.error ?? null, projectPath: project.projectPath ?? null }
     assert.equal(project.success, true, JSON.stringify(projectCreateObservation))
     projectCoreBefore = readProjectCore(project.projectPath)
+    if (livenessOnly) {
+      const opened = await invoke(page, 'project:open', project.projectPath, randomUUID(), null)
+      assert.equal(opened.success, true, opened.error)
+      const session = { projectId: project.projectId, projectPath: project.projectPath, leaseId: opened.project.sessionLease }
+      const roster = await invoke(page, 'db:character-roster-read', project.projectPath, session)
+      assert.equal((await invoke(page, 'db:character-roster-commit', { operationId: randomUUID(), expectedRevision: roster.revision,
+        expectedIdentityRevision: roster.identityRevision, schemaVersion: 1, intent: 'manual_edit', entries: [{ characterId: `draft:${randomUUID()}`,
+          name: '林岚', role: 'protagonist', gender: '', age: '', appearance: '', personality: '', background: '', abilities: '', motivation: '', relationships: [], arc: '', notes: '' }] }, project.projectPath, session)).success, true)
+      assert.equal((await invoke(page, 'db:blueprint-upsert', { chapterNumber: 1, title: 'U07 保全章节', role: '发展', purpose: '验证面板切换', keyEvents: '保留正文', characters: [] }, project.projectPath, session)).success, true)
+      assert.equal((await invoke(page, 'llm:save-model', model)).success, true)
+      assert.equal((await invoke(page, 'llm:set-default-model', model.id)).success, true)
+    }
     await page.evaluate(() => { const key = 'ai-novel-writer-appearance'; const old = JSON.parse(localStorage.getItem(key) ?? '{}'); localStorage.setItem(key, JSON.stringify({ ...old, shellPreference: 'writer', revision: Number(old.revision ?? 0) + 1, origin: 'author' })) })
     await page.reload()
     await assertWriter(page, 'U07.A02')
@@ -143,7 +200,61 @@ async function main() {
     await page.locator('.writer-shelf').getByRole('button', { name: '打开《U07-dirty-tabs》' }).click()
     await page.locator('.writer-project-tree').getByText('U07-dirty-tabs', { exact: true }).waitFor({ state: 'visible' })
 
-    if (!immersionOnly && !columnsOnly) {
+    if (livenessOnly) {
+      currentStep = 'U07-liveness-candidate'
+      await page.getByRole('button', { name: 'AI 输出', exact: true }).click()
+      await startChapter(page)
+      await page.locator('aside[aria-label="写作助手"]').getByText('工作流未完成', { exact: true }).waitFor({ state: 'visible', timeout: 30_000 })
+      assert.equal(fixture.requests, 1, 'first request must end without [DONE]')
+      await page.reload()
+      await waitHome(page)
+      await page.locator('.writer-shelf').getByRole('button', { name: '打开《U07-dirty-tabs》' }).click()
+      await page.locator('.writer-project-tree').getByText('U07-dirty-tabs', { exact: true }).waitFor({ state: 'visible' })
+      await page.getByRole('button', { name: 'AI 输出', exact: true }).click()
+      const assistant = page.locator('aside[aria-label="写作助手"]')
+      await assistant.locator('section').filter({ hasText: '恢复候选' }).getByText(candidateBody, { exact: true }).waitFor({ state: 'visible' })
+      await startChapter(page)
+      await assistant.getByRole('button', { name: /中止生成|Stop generation/ }).waitFor({ state: 'visible' })
+      await assistant.getByText(runningBody, { exact: false }).first().waitFor({ state: 'visible' })
+      assert.equal(fixture.requests, 2, 'second provider request must remain open')
+      const { session, runId: ledgerRunId } = runningSession(project.projectPath, project.projectId)
+      const candidates = await invoke(page, 'db:recovery-candidate-list', project.projectPath, session)
+      const candidate = candidates.find(item => item.visibleText === candidateBody)
+      assert(candidate, 'durable recovery candidate missing')
+      assert.equal(candidate.projectId, project.projectId)
+      assert.equal(candidate.status, 'pending')
+      assert.equal(candidate.sourceCurrent, true)
+      const runs = await invoke(page, 'generation:list', session)
+      const running = runs.filter(item => item.status === 'running' && item.operation === 'chapter-draft')
+      assert.equal(running.length, 1, 'exactly one chapter-draft task must be running')
+      const task = running[0]
+      assert.equal(task.handle.runId, ledgerRunId, 'generation:list must identify the same running ledger row used to read the lease')
+      assert.equal(task.handle.projectId, project.projectId)
+      assert.equal(task.handle.epoch, session.leaseId)
+      assert.notEqual(task.handle.runId, candidate.runId)
+      assert(task.handle.rootActionId && task.handle.runId)
+      livenessObservation = { sessionSource: 'running generation_runs.binding_json.epoch, confirmed by generation:list authorization and run_id', task: { ...task.handle, status: task.status }, candidate: { candidateId: candidate.candidateId,
+        runId: candidate.runId, projectId: candidate.projectId, status: candidate.status, sourceCurrent: candidate.sourceCurrent,
+        visibleText: candidate.visibleText, visibleTextSha256: sha256(candidate.visibleText) }, providerRequests: fixture.requests }
+      const assertLiveness = async label => {
+        assert.equal(fixture.requests, 2, `${label}: unexpected provider request`)
+        const context = await invoke(page, 'project:get-runtime-context')
+        assert.equal(path.resolve(context.activeProjectPath), path.resolve(project.projectPath), `${label}: active project changed`)
+        assert.equal(context.dbReady, true)
+        const listed = (await invoke(page, 'generation:list', session)).find(item => item.handle.runId === task.handle.runId)
+        assert.deepEqual({ ...listed?.handle, status: listed?.status }, livenessObservation.task, `${label}: running task identity/status changed`)
+        const recovered = (await invoke(page, 'db:recovery-candidate-list', project.projectPath, session)).find(item => item.candidateId === candidate.candidateId)
+        assert.deepEqual(recovered && { candidateId: recovered.candidateId, runId: recovered.runId,
+          projectId: recovered.projectId, status: recovered.status, sourceCurrent: recovered.sourceCurrent,
+          visibleText: recovered.visibleText, visibleTextSha256: sha256(recovered.visibleText) }, livenessObservation.candidate, `${label}: recovery candidate changed`)
+      }
+      await assertLiveness('before layout switching')
+      pass('U07-liveness-precondition', null, 'One real running main-generation task and one pending durable recovery candidate share the active project')
+      livenessObservation.assert = assertLiveness
+      await page.locator('.writer-rail-host button[title="AI Agent 面板"]').click()
+    }
+
+    if (!immersionOnly && !columnsOnly && !livenessOnly) {
     currentStep = 'U07.A02-dirty-indicator'
     await assertWriter(page, 'U07.A02')
     await page.locator('.writer-project-tree .tree-item').filter({ hasText: '小说配置' }).first().click()
@@ -244,12 +355,14 @@ async function main() {
     await bottom.waitFor({ state: 'visible' })
     await assistantInput.fill(inputMarker)
     assert.equal(await assistantInput.inputValue(), inputMarker)
+    if (livenessOnly) await livenessObservation.assert('before immersion')
     const enterImmersion = page.getByRole('button', { name: '进入沉浸写作', exact: true })
     await enterImmersion.click()
     assert.equal(await shell.getAttribute('data-writer-immersive'), 'true')
     await sidebar.waitFor({ state: 'hidden' })
     await assistant.waitFor({ state: 'hidden' })
     await bottom.waitFor({ state: 'hidden' })
+    if (livenessOnly) await livenessObservation.assert('inside immersion')
     const exitImmersion = page.getByRole('button', { name: '退出沉浸写作', exact: true })
     await exitImmersion.click()
     assert.equal(await shell.getAttribute('data-writer-immersive'), 'false')
@@ -257,16 +370,32 @@ async function main() {
     await assistant.waitFor({ state: 'visible' })
     await bottom.waitFor({ state: 'visible' })
     assert.equal(await assistantInput.inputValue(), inputMarker)
+    if (livenessOnly) await livenessObservation.assert('after immersion')
     pass('U07.A07-enter-exit-immersion', 'U07.A07', 'V3 titlebar enters immersion, hides all three panels, and exits with their visible state restored')
 
     currentStep = 'U07.A08-open-panel-preserves-input'
     await enterImmersion.click()
     assert.equal(await shell.getAttribute('data-writer-immersive'), 'true')
     await assistant.waitFor({ state: 'hidden' })
+    if (livenessOnly) await livenessObservation.assert('before Agent panel opens')
     await page.locator('.writer-rail-host button[title="AI Agent 面板"]').click()
     assert.equal(await shell.getAttribute('data-writer-immersive'), 'false')
     await assistant.waitFor({ state: 'visible' })
     assert.equal(await assistantInput.inputValue(), inputMarker, 'opening the agent panel must preserve the exact unsent input')
+    if (livenessOnly) {
+      await livenessObservation.assert('after Agent panel opens')
+      await page.locator('.writer-left-rail button[title="任务"]').click()
+      await bottom.locator('.writer-task-table .animate-spin').first().waitFor({ state: 'visible' })
+      await livenessObservation.assert('in Tasks panel')
+      await page.locator('.writer-rail-host button[title="AI 输出"]').click()
+      await assistant.getByText(candidateBody, { exact: true }).waitFor({ state: 'visible' })
+      await assistant.getByText(runningBody, { exact: false }).first().waitFor({ state: 'visible' })
+      await livenessObservation.assert('in AI Output panel')
+      await page.locator('.writer-rail-host button[title="AI Agent 面板"]').click()
+      assert.equal(await assistantInput.inputValue(), inputMarker, 'switching back from AI Output must preserve unsent input')
+      await livenessObservation.assert('back in Agent panel')
+      pass('U07-liveness-panel-switch', 'U07.A08', 'Immersion, Agent, Tasks and AI Output kept the same running task, pending durable candidate, visible text and unsent input')
+    }
     pass('U07.A08-open-panel-preserves-input', 'U07.A08', 'V3 right-rail Agent button exits immersion, opens the assistant, and preserves the exact unsent input')
     }
 
@@ -312,10 +441,14 @@ async function main() {
       pass('U07.A01-all-columns', 'U07.A01', 'All 13 current V3 left/right rail business entries were clicked and reached their visible owner; 世界观 opens the 故事架构 editor and active tab')
     }
   } catch (error) { failure = error }
-  finally { await app?.close() }
+  finally {
+    await app?.close()
+    server.closeAllConnections()
+    if (server.listening) await new Promise(resolve => server.close(resolve))
+  }
   const artifactHashes = { executable: fileHash(executablePath), asar: fileHash(asarPath) }
   const verifiedActions = [...new Set(steps.map(step => step.actionId).filter(Boolean))].filter(id => id !== 'U07.A01' || steps.some(step => step.stepId === 'U07.A01-all-columns'))
-  const receipt = { outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U07_V3_PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3', testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths, packageRoot: packageDir, artifactHashes, driver: { path: scriptPath, sha256: fileHash(scriptPath) }, sourceDirty: git('status', '--porcelain').split('\n').filter(Boolean), dirtyProductPaths: git('status', '--porcelain', '--', ...productPathArgs).split('\n').filter(Boolean), profile: { canonical: profile.canonical, userData: profile.userData, projectRoot: profile.projects }, steps, visualEvidence, projectCreateObservation, projectCore: { table: 'project_core', key: "id='main'", originalSha256: projectCoreBefore ? sha256(Buffer.from(projectCoreBefore)) : null, afterDiscardSha256: projectCoreAfter ? sha256(Buffer.from(projectCoreAfter)) : null, unchanged: Boolean(projectCoreBefore && projectCoreAfter && projectCoreBefore === projectCoreAfter) }, uiObservation, scope: { mode: columnsOnly ? 'columns-only' : immersionOnly ? 'immersion-only' : 'full', verifiedActions, unverifiedActions: ['U07.A01', 'U07.A02', 'U07.A03', 'U07.A04', 'U07.A05', 'U07.A06', 'U07.A07', 'U07.A08'].filter(id => !verifiedActions.includes(id)).concat('full F05 and release qualification') }, failedStep: failure ? currentStep : null, error: failure ? String(failure) : null }
+  const receipt = { outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U07_V3_PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3', testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths, packageRoot: packageDir, artifactHashes, driver: { path: scriptPath, sha256: fileHash(scriptPath) }, sourceDirty: git('status', '--porcelain').split('\n').filter(Boolean), dirtyProductPaths: git('status', '--porcelain', '--', ...productPathArgs).split('\n').filter(Boolean), profile: { canonical: profile.canonical, userData: profile.userData, projectRoot: profile.projects }, fixture: livenessOnly ? { provider: 'loopback synthetic OpenAI SSE', requests: fixture.requests, externalModelRequests: 0 } : null, steps, visualEvidence, projectCreateObservation, projectCore: { table: 'project_core', key: "id='main'", originalSha256: projectCoreBefore ? sha256(Buffer.from(projectCoreBefore)) : null, afterDiscardSha256: projectCoreAfter ? sha256(Buffer.from(projectCoreAfter)) : null, unchanged: Boolean(projectCoreBefore && projectCoreAfter && projectCoreBefore === projectCoreAfter) }, uiObservation, livenessObservation: livenessObservation && { sessionSource: livenessObservation.sessionSource, task: livenessObservation.task, candidate: livenessObservation.candidate, providerRequests: livenessObservation.providerRequests }, scope: { mode: columnsOnly ? 'columns-only' : immersionOnly ? 'immersion-only' : livenessOnly ? 'liveness-only' : 'full', verifiedActions, unverifiedActions: ['U07.A01', 'U07.A02', 'U07.A03', 'U07.A04', 'U07.A05', 'U07.A06', 'U07.A07', 'U07.A08'].filter(id => !verifiedActions.includes(id)).concat('full F05 and release qualification') }, failedStep: failure ? currentStep : null, error: failure ? String(failure) : null }
   fs.writeFileSync(path.join(receiptDir, 'receipt.json'), JSON.stringify(receipt, null, 2))
   process.stdout.write(JSON.stringify({ outcome: receipt.outcome, receipt: path.join(receiptDir, 'receipt.json'), steps: steps.length }) + '\n')
   if (failure) throw failure
