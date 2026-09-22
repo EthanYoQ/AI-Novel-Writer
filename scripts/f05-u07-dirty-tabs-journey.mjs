@@ -453,7 +453,7 @@ async function main() {
     try {
       if (livenessOnly && fixture.requests === 2 && page && !page.isClosed()) {
         if (await writer(page).getAttribute('data-writer-immersive') === 'true') await page.getByRole('button', { name: '退出沉浸写作', exact: true }).click()
-        await page.locator('.writer-left-rail button[title="任务"]').click()
+        if (!await page.locator('.writer-task-table').isVisible()) await page.locator('.writer-left-rail button[title="任务"]').click()
         await page.locator('.writer-task-table').waitFor({ state: 'visible' })
         await page.locator('.writer-task-table > div:first-child span.font-mono.px-1.rounded').waitFor({ state: 'detached', timeout: 30_000 })
       }
