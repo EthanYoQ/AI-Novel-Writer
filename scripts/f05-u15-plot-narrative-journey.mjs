@@ -46,6 +46,7 @@ const projectName = '合成剧情计划'
 const planTitle = `旧站来信 ${runId.slice(0, 8)}`
 const updatedTitle = `旧站回信 ${runId.slice(0, 8)}`
 const deletedTitle = `待删除线索 ${runId.slice(0, 8)}`
+const candidateTitle = `未采纳线索 ${runId.slice(0, 8)}`
 const model = { id: `u15-plot-${runId.slice(0, 8)}`, name: 'U15 isolated plot fixture', provider: 'openai',
   protocol: 'openai', modelName: 'gpt-4.1', baseUrl: 'https://api.openai.com/v1', apiKey: `u15-${runId}`,
   maxTokens: 8192, temperature: 0.7, purposes: ['generation'] }
@@ -53,6 +54,7 @@ const providerRequests = []
 let sourcePlanId
 let failNextRequest = false
 let generationFailureEvidence
+let candidateRejectionEvidence
 const provider = createServer(async (request, response) => {
   const authorized = request.method === 'POST' && request.url === '/v1/chat/completions'
     && request.headers.authorization === `Bearer ${model.apiKey}`
@@ -61,19 +63,24 @@ const provider = createServer(async (request, response) => {
   for await (const chunk of request) chunks.push(chunk)
   const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
   const facts = JSON.parse(body.messages.at(-1).content)
-  const currentPlan = facts.narrativeThreads.find(plan => plan.id === sourcePlanId)
-  assert(currentPlan, 'model request omitted the current narrative plan')
+  const isPlanCandidate = Boolean(facts.blueprint)
+  const currentPlan = isPlanCandidate ? null : facts.narrativeThreads.find(plan => plan.id === sourcePlanId)
+  if (isPlanCandidate) assert.equal(facts.blueprint.chapterNumber, 1, 'candidate request omitted the synthetic blueprint')
+  else assert(currentPlan, 'model request omitted the current narrative plan')
   const number = providerRequests.length + 1
   const responseStatus = failNextRequest ? 503 : 200
   failNextRequest = false
-  providerRequests.push({ number, path: request.url, authorized, sourcePlanId,
-    sourceTitle: currentPlan.title, sourceEvents: currentPlan.events.length, responseStatus })
+  providerRequests.push({ number, kind: isPlanCandidate ? 'plan-candidate' : 'plot', path: request.url, authorized,
+    sourcePlanId, sourceTitle: currentPlan?.title, sourceEvents: currentPlan?.events.length, responseStatus })
   if (responseStatus === 503) {
     response.writeHead(503, { 'content-type': 'application/json' })
     response.end(JSON.stringify({ error: { message: 'U15 controlled provider failure' } }))
     return
   }
-  const content = JSON.stringify({ tracks: [{ id: 'u15-main', title: `旧站主线-${number}`, role: 'main',
+  const content = isPlanCandidate
+    ? JSON.stringify({ candidates: [{ title: candidateTitle, type: '伏笔', targetStartChapter: 1,
+      targetEndChapter: 1, authorIntent: '仅供作者审阅，不自动写入。' }] })
+    : JSON.stringify({ tracks: [{ id: 'u15-main', title: `旧站主线-${number}`, role: 'main',
     startChapter: 1, endChapter: 1, summary: '隔离模型归纳的合成主线', events: [{ status: 'planned', chapterNumber: 1,
       summary: `旧站线索-${number}`, sources: [{ type: 'narrative-thread', planId: sourcePlanId }] }] }] })
   response.writeHead(200, { 'content-type': 'text/event-stream' })
@@ -164,6 +171,9 @@ async function main() {
       chapters: [{ chapterNumber: 1, title: '旧站来信', content: finalizedText,
         wordCount: [...finalizedText].length }] }, created.projectPath, fixtureSession)
     assert.equal(imported.success, true, imported.error)
+    const blueprint = await invoke(session.page, 'db:blueprint-upsert', { chapterNumber: 1, title: '旧站来信',
+      role: '发展', purpose: '调查来信来源', keyEvents: '发现铜钥匙', characters: [] }, created.projectPath, fixtureSession)
+    assert.equal(blueprint.success, true, blueprint.error)
     assert.equal((await invoke(session.page, 'llm:save-model', model)).success, true)
     assert.equal((await invoke(session.page, 'llm:set-default-model', model.id)).success, true)
     await session.page.reload()
@@ -329,6 +339,34 @@ async function main() {
     steps.push({ stepId: 'v3-plot-clear', relatedActionId: 'U15.A06', coverage: 'ui-clear-and-db-read',
       assertion: 'V3 cleared the stored tree while retaining the edited plan and its finalized event' })
 
+    phase = 'v3-narrative-candidate-reject'
+    await openProject(session.page)
+    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
+    await views.getByRole('tab', { name: '计划清单' }).click()
+    await session.page.getByRole('button', { name: 'AI 建议伏笔与线索' }).click()
+    const candidateDialog = session.page.getByRole('dialog', { name: '蓝图计划候选' })
+    await candidateDialog.getByRole('button', { name: '生成候选', exact: true }).click()
+    const candidateSection = candidateDialog.locator('section').filter({ hasText: candidateTitle })
+    await candidateSection.getByText(candidateTitle, { exact: true }).waitFor({ state: 'visible', timeout: 60_000 })
+    assert.equal(providerRequests.length, 4)
+    assert.equal(providerRequests[3].kind, 'plan-candidate')
+    assert.equal(providerRequests[3].responseStatus, 200)
+    await candidateSection.getByRole('button', { name: '拒绝候选' }).click()
+    await candidateSection.waitFor({ state: 'hidden' })
+    await candidateDialog.getByRole('button', { name: '关闭', exact: true }).click()
+    const afterRejectOpen = await invoke(session.page, 'project:open', created.projectPath, randomUUID(), created.projectPath)
+    assert.equal(afterRejectOpen.success, true, afterRejectOpen.error)
+    const afterRejectSession = { projectId: created.projectId, projectPath: created.projectPath,
+      leaseId: afterRejectOpen.project.sessionLease }
+    const afterRejectPlans = await invoke(session.page, 'db:narrative-thread-list', created.projectPath, afterRejectSession)
+    assert.deepEqual(afterRejectPlans, afterPlans, 'rejected AI candidate changed the author plan or confirmed event')
+    candidateRejectionEvidence = { requestNumber: providerRequests[3].number,
+      beforePlanReadSha256: createHash('sha256').update(JSON.stringify(afterPlans)).digest('hex'),
+      afterPlanReadSha256: createHash('sha256').update(JSON.stringify(afterRejectPlans)).digest('hex') }
+    steps.push({ stepId: 'v3-narrative-candidate-reject', relatedActionId: 'U15.A07',
+      coverage: 'ui-controlled-ai-candidate-reject-and-db-read',
+      assertion: 'V3 rejected a generated blueprint plan candidate without changing the existing author plan or confirmed event' })
+
     phase = 'restart-persistence'
     await quit()
     session = await launch()
@@ -365,11 +403,11 @@ async function main() {
     packageDir,
     artifact: { executableSha256: sha256(executablePath), asarSha256: sha256(asarPath) },
     evidenceLevel: 'packaged-electron+controlled-provider', shell: 'writer-v3',
-    fixtureProviderRequests: providerRequests, generationFailureEvidence,
+    fixtureProviderRequests: providerRequests, generationFailureEvidence, candidateRejectionEvidence,
     networkInterception: 'main-process fetch for https://api.openai.com only',
     steps: steps.map(step => ({ ...step, outcome: 'PASS' })),
     remainingGaps: ['U15.A06: blueprint/finalized source navigation and real provider not exercised',
-      'U15.A07: AI candidate generation/rejection and event evidence failure not exercised'],
+      'U15.A07: event evidence failure and real provider not exercised'],
     failedPhase: failure ? phase : null, error: failure ? String(failure) : null }
   fs.mkdirSync(receiptDir, { recursive: true })
   fs.writeFileSync(path.join(receiptDir, '.vibe-owner.json'), JSON.stringify({ owner: 'codex/f05-u15',
