@@ -67,7 +67,7 @@ function provenance() {
     return { testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths: [],
       sourceDirty: git('status', '--porcelain').split('\n').filter(Boolean),
       executableSha256: expectedExe, asarSha256: expectedAsar,
-      reuseReason: 'Fixed history-3 package hashes match and product inputs are unchanged.' }
+      reuseReason: 'Fixed package hashes match and product inputs are unchanged.' }
   }
   const testedSha = prior.build.buildSha
   const executionHead = git('rev-parse', 'HEAD')
