@@ -65,7 +65,7 @@ jobs:
         id: desktop-unit-tests
         run: |
           "started=$([DateTime]::UtcNow.ToString('o'))" >> $env:GITHUB_OUTPUT
-          pnpm test --reporter=default --reporter=./scripts/vitest-worker-diagnostics.cjs
+          pnpm test --reporter=default --reporter=./scripts/vitest-worker-diagnostics.cjs --fileParallelism=false
           exit $LASTEXITCODE
 
       - name: Read Windows application failure metadata
