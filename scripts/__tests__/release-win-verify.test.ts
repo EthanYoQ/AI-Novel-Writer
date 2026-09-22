@@ -1437,6 +1437,13 @@ internal static class ExactNsisProbeParent {
       await waitForGateStatus(statusPath, 'step-completed', 30_000)
       const rawEvidence = readFileSync(join(evidencePath, 'process-events.jsonl'), 'utf8')
       const events = rawEvidence.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>)
+      for (const event of events.filter(event => event.kind === 'process-start')) {
+        expect(event).toMatchObject({
+          captureAttemptedAt: expect.any(String),
+          captureFailureStage: '',
+          captureWin32Error: null,
+        })
+      }
       const powerShellExits = events.filter(event => {
         const identity = event.processIdentity as Record<string, unknown> | undefined
         return event.kind === 'process-exit' && identity?.processName === 'powershell'
