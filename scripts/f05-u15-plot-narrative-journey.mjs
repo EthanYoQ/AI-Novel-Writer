@@ -52,6 +52,7 @@ const model = { id: `u15-plot-${runId.slice(0, 8)}`, name: 'U15 isolated plot fi
   maxTokens: 8192, temperature: 0.7, purposes: ['generation'] }
 const providerRequests = []
 let sourcePlanId
+let sourceDraftId
 let failNextRequest = false
 let generationFailureEvidence
 let candidateRejectionEvidence
@@ -67,7 +68,13 @@ const provider = createServer(async (request, response) => {
   const isPlanCandidate = Boolean(facts.blueprint)
   const currentPlan = isPlanCandidate ? null : facts.narrativeThreads.find(plan => plan.id === sourcePlanId)
   if (isPlanCandidate) assert.equal(facts.blueprint.chapterNumber, 1, 'candidate request omitted the synthetic blueprint')
-  else assert(currentPlan, 'model request omitted the current narrative plan')
+  else {
+    assert(currentPlan, 'model request omitted the current narrative plan')
+    assert(facts.blueprints.some(blueprint => blueprint.chapterNumber === 1 && blueprint.title === '旧站来信'),
+      'plot request omitted the synthetic blueprint')
+    assert(facts.finalizedChapters.some(chapter => chapter.draftId === sourceDraftId && chapter.chapterNumber === 1),
+      'plot request omitted the synthetic finalized chapter')
+  }
   const number = providerRequests.length + 1
   const responseStatus = failNextRequest ? 503 : 200
   failNextRequest = false
@@ -83,7 +90,11 @@ const provider = createServer(async (request, response) => {
       targetEndChapter: 1, authorIntent: '仅供作者审阅，不自动写入。' }] })
     : JSON.stringify({ tracks: [{ id: 'u15-main', title: `旧站主线-${number}`, role: 'main',
     startChapter: 1, endChapter: 1, summary: '隔离模型归纳的合成主线', events: [{ status: 'planned', chapterNumber: 1,
-      summary: `旧站线索-${number}`, sources: [{ type: 'narrative-thread', planId: sourcePlanId }] }] }] })
+      summary: `旧站线索-${number}`, sources: [{ type: 'narrative-thread', planId: sourcePlanId }] },
+    { status: 'planned', chapterNumber: 1, summary: `蓝图线索-${number}`,
+      sources: [{ type: 'blueprint', chapterNumber: 1 }] },
+    { status: 'occurred', chapterNumber: 1, summary: `定稿线索-${number}`,
+      sources: [{ type: 'finalized-chapter', draftId: sourceDraftId, chapterNumber: 1 }] }] }] })
   response.writeHead(200, { 'content-type': 'text/event-stream' })
   response.write(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: 'stop' }] })}\n\n`)
   response.end('data: [DONE]\n\n')
@@ -172,6 +183,10 @@ async function main() {
       chapters: [{ chapterNumber: 1, title: '旧站来信', content: finalizedText,
         wordCount: [...finalizedText].length }] }, created.projectPath, fixtureSession)
     assert.equal(imported.success, true, imported.error)
+    const importedDrafts = await invoke(session.page, 'db:draft-list-all', created.projectPath, fixtureSession)
+    const importedDraft = importedDrafts.find(draft => draft.chapterNumber === 1 && draft.status === 'finalized')
+    assert(importedDraft, 'synthetic finalized chapter was not listed')
+    sourceDraftId = importedDraft.id
     const blueprint = await invoke(session.page, 'db:blueprint-upsert', { chapterNumber: 1, title: '旧站来信',
       role: '发展', purpose: '调查来信来源', keyEvents: '发现铜钥匙', characters: [] }, created.projectPath, fixtureSession)
     assert.equal(blueprint.success, true, blueprint.error)
@@ -238,6 +253,29 @@ async function main() {
     await planSection.getByRole('heading', { name: planTitle }).waitFor({ state: 'visible' })
     steps.push({ stepId: 'v3-plot-open-source', relatedActionId: 'U15.A06', coverage: 'event-source-navigation',
       assertion: 'V3 tree event opened its persisted narrative-plan source in the plan view' })
+
+    phase = 'v3-plot-blueprint-source-navigation'
+    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
+    await session.page.getByRole('button', { name: '蓝图线索-1' }).click()
+    await session.page.getByRole('button', { name: '第 1 章蓝图' }).click()
+    await session.page.getByRole('heading', { name: '第 1 章：旧站来信' }).waitFor({ state: 'visible' })
+    assert.equal(await session.page.getByPlaceholder('本章主角最迫切要解决的一件事...').inputValue(), '调查来信来源')
+    steps.push({ stepId: 'v3-plot-open-blueprint-source', relatedActionId: 'U15.A06',
+      coverage: 'existing-blueprint-event-source-navigation',
+      assertion: 'V3 tree event opened the existing chapter 1 blueprint and displayed its persisted purpose' })
+
+    phase = 'v3-plot-finalized-source-navigation'
+    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
+    await session.page.getByRole('button', { name: '定稿线索-1' }).click()
+    await session.page.getByRole('button', { name: '第 1 章定稿' }).click()
+    await session.page.getByText('已定稿（只读）', { exact: true }).waitFor({ state: 'visible' })
+    await session.page.getByText(finalizedText, { exact: true }).waitFor({ state: 'visible' })
+    steps.push({ stepId: 'v3-plot-open-finalized-source', relatedActionId: 'U15.A06',
+      coverage: 'existing-finalized-event-source-navigation',
+      assertion: 'V3 tree event opened the existing finalized chapter 1 as read-only with its persisted body' })
+
+    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
+    await views.getByRole('tab', { name: '计划清单' }).click()
 
     phase = 'v3-narrative-plan-update'
     await planSection.getByRole('button', { name: '编辑', exact: true }).click()
@@ -458,7 +496,7 @@ async function main() {
     fixtureProviderRequests: providerRequests, generationFailureEvidence, candidateRejectionEvidence, eventEvidenceFailure,
     networkInterception: 'main-process fetch for https://api.openai.com only',
     steps: steps.map(step => ({ ...step, outcome: 'PASS' })),
-    remainingGaps: ['U15.A06: blueprint/finalized source navigation and real provider not exercised',
+    remainingGaps: ['U15.A06: real provider not exercised',
       'U15.A07: real provider not exercised'],
     failedPhase: failure ? phase : null, error: failure ? String(failure) : null }
   fs.mkdirSync(receiptDir, { recursive: true })
