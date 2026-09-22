@@ -1,5 +1,6 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { Buffer } from 'node:buffer'
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
@@ -27,7 +28,7 @@ assert.equal(git('diff', '--name-only', `${testedSha}..${executionHead}`, '--', 
   'Product source changed since fixed package build')
 const dirtyProduct = git('status', '--porcelain', '--', 'src', 'electron', 'public', 'build',
   'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5')
-  .split('\n').filter(Boolean).filter(line => !/^\?\? src\/components\/(?:dialogs|editor|layout\/v2|panels)\/__tests__\/__screenshots__\/$/.test(line))
+  .split('\n').filter(Boolean)
 assert.deepEqual(dirtyProduct, [], 'Dirty product inputs since packaged build')
 const executablePath = path.join(packageDir, 'AI小说作家.exe')
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
@@ -50,6 +51,8 @@ const model = { id: `u15-plot-${runId.slice(0, 8)}`, name: 'U15 isolated plot fi
   maxTokens: 8192, temperature: 0.7, purposes: ['generation'] }
 const providerRequests = []
 let sourcePlanId
+let failNextRequest = false
+let generationFailureEvidence
 const provider = createServer(async (request, response) => {
   const authorized = request.method === 'POST' && request.url === '/v1/chat/completions'
     && request.headers.authorization === `Bearer ${model.apiKey}`
@@ -61,8 +64,15 @@ const provider = createServer(async (request, response) => {
   const currentPlan = facts.narrativeThreads.find(plan => plan.id === sourcePlanId)
   assert(currentPlan, 'model request omitted the current narrative plan')
   const number = providerRequests.length + 1
+  const responseStatus = failNextRequest ? 503 : 200
+  failNextRequest = false
   providerRequests.push({ number, path: request.url, authorized, sourcePlanId,
-    sourceTitle: currentPlan.title, sourceEvents: currentPlan.events.length })
+    sourceTitle: currentPlan.title, sourceEvents: currentPlan.events.length, responseStatus })
+  if (responseStatus === 503) {
+    response.writeHead(503, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ error: { message: 'U15 controlled provider failure' } }))
+    return
+  }
   const content = JSON.stringify({ tracks: [{ id: 'u15-main', title: `旧站主线-${number}`, role: 'main',
     startChapter: 1, endChapter: 1, summary: '隔离模型归纳的合成主线', events: [{ status: 'planned', chapterNumber: 1,
       summary: `旧站线索-${number}`, sources: [{ type: 'narrative-thread', planId: sourcePlanId }] }] }] })
@@ -263,7 +273,45 @@ async function main() {
     steps.push({ stepId: 'v3-plot-refresh', relatedActionId: 'U15.A06', coverage: 'ui-refresh-after-source-update',
       assertion: 'V3 refreshed the stale tree using the updated plan and confirmed finalized event' })
 
+    phase = 'v3-plot-generation-failure'
+    const beforeFailureOpen = await invoke(session.page, 'project:open', created.projectPath, randomUUID(), created.projectPath)
+    assert.equal(beforeFailureOpen.success, true, beforeFailureOpen.error)
+    const beforeFailureSession = { projectId: created.projectId, projectPath: created.projectPath,
+      leaseId: beforeFailureOpen.project.sessionLease }
+    const beforeFailureTree = await invoke(session.page, 'db:plot-tree-read', created.projectPath, beforeFailureSession)
+    assert.equal(beforeFailureTree.snapshot?.tracks[0]?.title, '旧站主线-2')
+    await openProject(session.page)
+    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
+    await session.page.getByText('旧站主线-2', { exact: true }).waitFor({ state: 'visible' })
+    failNextRequest = true
+    await session.page.getByRole('button', { name: '刷新剧情树', exact: true }).click()
+    const generationAlert = session.page.getByRole('alert').filter({ hasText: /剧情树.*失败/u })
+    await generationAlert.waitFor({ state: 'visible', timeout: 60_000 })
+    const errorText = (await generationAlert.textContent())?.trim()
+    assert(errorText)
+    assert.equal(failNextRequest, false, 'controlled failure request was not sent')
+    assert.equal(providerRequests.length, 3, 'failed generation made an unexpected number of requests')
+    assert.equal(providerRequests[2].responseStatus, 503)
+    await session.page.getByText('旧站主线-2', { exact: true }).waitFor({ state: 'visible' })
+    assert.equal(await session.page.getByText('旧站主线-3', { exact: true }).count(), 0)
+    const afterFailureOpen = await invoke(session.page, 'project:open', created.projectPath, randomUUID(), created.projectPath)
+    assert.equal(afterFailureOpen.success, true, afterFailureOpen.error)
+    const afterFailureSession = { projectId: created.projectId, projectPath: created.projectPath,
+      leaseId: afterFailureOpen.project.sessionLease }
+    const afterFailureTree = await invoke(session.page, 'db:plot-tree-read', created.projectPath, afterFailureSession)
+    assert.deepEqual(afterFailureTree, beforeFailureTree, 'failed generation overwrote the stored plot tree')
+    generationFailureEvidence = { requestNumber: providerRequests[2].number,
+      responseStatus: providerRequests[2].responseStatus, errorText,
+      beforePlotTreeReadSha256: createHash('sha256').update(JSON.stringify(beforeFailureTree)).digest('hex'),
+      afterPlotTreeReadSha256: createHash('sha256').update(JSON.stringify(afterFailureTree)).digest('hex') }
+    steps.push({ stepId: 'v3-plot-generation-failure', relatedActionId: 'U15.A06',
+      coverage: 'ui-controlled-provider-failure-and-db-read',
+      assertion: 'V3 surfaced the failed provider request, showed no false success and kept the SQLite-backed plot-tree read view unchanged' })
+
     phase = 'v3-plot-clear'
+    await openProject(session.page)
+    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
+    await session.page.getByText('旧站主线-2', { exact: true }).waitFor({ state: 'visible' })
     await session.page.getByRole('button', { name: '清除剧情树', exact: true }).click()
     await session.page.getByText('尚未生成剧情树', { exact: true }).waitFor({ state: 'visible' })
     const afterOpen = await invoke(session.page, 'project:open', created.projectPath, randomUUID(), created.projectPath)
@@ -317,9 +365,10 @@ async function main() {
     packageDir,
     artifact: { executableSha256: sha256(executablePath), asarSha256: sha256(asarPath) },
     evidenceLevel: 'packaged-electron+controlled-provider', shell: 'writer-v3',
-    fixtureProviderRequests: providerRequests, networkInterception: 'main-process fetch for https://api.openai.com only',
+    fixtureProviderRequests: providerRequests, generationFailureEvidence,
+    networkInterception: 'main-process fetch for https://api.openai.com only',
     steps: steps.map(step => ({ ...step, outcome: 'PASS' })),
-    remainingGaps: ['U15.A06: blueprint/finalized source navigation, generation failure and real provider not exercised',
+    remainingGaps: ['U15.A06: blueprint/finalized source navigation and real provider not exercised',
       'U15.A07: AI candidate generation/rejection and event evidence failure not exercised'],
     failedPhase: failure ? phase : null, error: failure ? String(failure) : null }
   fs.mkdirSync(receiptDir, { recursive: true })
