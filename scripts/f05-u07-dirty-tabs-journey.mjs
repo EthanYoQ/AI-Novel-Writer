@@ -212,44 +212,47 @@ async function main() {
       await page.locator('.writer-project-tree').getByText('U07-dirty-tabs', { exact: true }).waitFor({ state: 'visible' })
       await page.getByRole('button', { name: 'AI 输出', exact: true }).click()
       const assistant = page.locator('aside[aria-label="写作助手"]')
-      await assistant.locator('section').filter({ hasText: '恢复候选' }).getByText(candidateBody, { exact: true }).waitFor({ state: 'visible' })
+      await assistant.locator('section[aria-label="持久正文候选"]').getByText(candidateBody.slice(0, 180), { exact: true }).waitFor({ state: 'visible' })
       await startChapter(page)
       await assistant.getByRole('button', { name: /中止生成|Stop generation/ }).waitFor({ state: 'visible' })
       await assistant.getByText(runningBody, { exact: false }).first().waitFor({ state: 'visible' })
       assert.equal(fixture.requests, 2, 'second provider request must remain open')
       const { session, runId: ledgerRunId } = runningSession(project.projectPath, project.projectId)
-      const candidates = await invoke(page, 'db:recovery-candidate-list', project.projectPath, session)
-      const candidate = candidates.find(item => item.visibleText === candidateBody)
-      assert(candidate, 'durable recovery candidate missing')
-      assert.equal(candidate.projectId, project.projectId)
-      assert.equal(candidate.status, 'pending')
-      assert.equal(candidate.sourceCurrent, true)
       const runs = await invoke(page, 'generation:list', session)
+      const candidateRun = runs.find(item => item.candidates?.some(artifact => artifact.text === candidateBody))
+      const candidate = candidateRun?.candidates?.find(artifact => artifact.text === candidateBody)
+      assert(candidateRun && candidate, 'main-owned durable visible-text candidate missing')
+      assert.equal(candidateRun.handle.projectId, project.projectId)
+      assert.equal(candidate.textHash, sha256(candidateBody), 'durable artifact text hash differs from provider body')
       const running = runs.filter(item => item.status === 'running' && item.operation === 'chapter-draft')
       assert.equal(running.length, 1, 'exactly one chapter-draft task must be running')
       const task = running[0]
       assert.equal(task.handle.runId, ledgerRunId, 'generation:list must identify the same running ledger row used to read the lease')
       assert.equal(task.handle.projectId, project.projectId)
       assert.equal(task.handle.epoch, session.leaseId)
-      assert.notEqual(task.handle.runId, candidate.runId)
+      assert.notEqual(task.handle.runId, candidateRun.handle.runId)
       assert(task.handle.rootActionId && task.handle.runId)
-      livenessObservation = { sessionSource: 'running generation_runs.binding_json.epoch, confirmed by generation:list authorization and run_id', task: { ...task.handle, status: task.status }, candidate: { candidateId: candidate.candidateId,
-        runId: candidate.runId, projectId: candidate.projectId, status: candidate.status, sourceCurrent: candidate.sourceCurrent,
-        visibleText: candidate.visibleText, visibleTextSha256: sha256(candidate.visibleText) }, providerRequests: fixture.requests }
+      livenessObservation = { sessionSource: 'running generation_runs.binding_json.epoch, confirmed by generation:list authorization and run_id',
+        candidateKind: 'main-owned durable visible-text artifact, not a legacy recovery_candidates row',
+        task: { ...task.handle, status: task.status }, durableCandidate: { ...candidateRun.handle, runStatus: candidateRun.status,
+          artifactId: candidate.artifactId, artifactStatus: candidate.status, visibleText: candidate.text, textHash: candidate.textHash },
+        providerRequests: fixture.requests }
       const assertLiveness = async label => {
         assert.equal(fixture.requests, 2, `${label}: unexpected provider request`)
         const context = await invoke(page, 'project:get-runtime-context')
         assert.equal(path.resolve(context.activeProjectPath), path.resolve(project.projectPath), `${label}: active project changed`)
         assert.equal(context.dbReady, true)
-        const listed = (await invoke(page, 'generation:list', session)).find(item => item.handle.runId === task.handle.runId)
+        const currentRuns = await invoke(page, 'generation:list', session)
+        const listed = currentRuns.find(item => item.handle.runId === task.handle.runId)
         assert.deepEqual({ ...listed?.handle, status: listed?.status }, livenessObservation.task, `${label}: running task identity/status changed`)
-        const recovered = (await invoke(page, 'db:recovery-candidate-list', project.projectPath, session)).find(item => item.candidateId === candidate.candidateId)
-        assert.deepEqual(recovered && { candidateId: recovered.candidateId, runId: recovered.runId,
-          projectId: recovered.projectId, status: recovered.status, sourceCurrent: recovered.sourceCurrent,
-          visibleText: recovered.visibleText, visibleTextSha256: sha256(recovered.visibleText) }, livenessObservation.candidate, `${label}: recovery candidate changed`)
+        const recoveredRun = currentRuns.find(item => item.handle.runId === candidateRun.handle.runId)
+        const recovered = recoveredRun?.candidates?.find(artifact => artifact.artifactId === candidate.artifactId)
+        assert.deepEqual(recovered && { ...recoveredRun.handle, runStatus: recoveredRun.status,
+          artifactId: recovered.artifactId, artifactStatus: recovered.status, visibleText: recovered.text,
+          textHash: recovered.textHash }, livenessObservation.durableCandidate, `${label}: durable candidate changed`)
       }
       await assertLiveness('before layout switching')
-      pass('U07-liveness-precondition', null, 'One real running main-generation task and one pending durable recovery candidate share the active project')
+      pass('U07-liveness-precondition', null, 'One real running main-generation task and one prior main-owned durable visible-text artifact share the active project')
       livenessObservation.assert = assertLiveness
       await page.locator('.writer-rail-host button[title="AI Agent 面板"]').click()
     }
@@ -388,13 +391,13 @@ async function main() {
       await bottom.locator('.writer-task-table .animate-spin').first().waitFor({ state: 'visible' })
       await livenessObservation.assert('in Tasks panel')
       await page.locator('.writer-rail-host button[title="AI 输出"]').click()
-      await assistant.getByText(candidateBody, { exact: true }).waitFor({ state: 'visible' })
+      await assistant.locator('section[aria-label="持久正文候选"]').getByText(candidateBody.slice(0, 180), { exact: true }).waitFor({ state: 'visible' })
       await assistant.getByText(runningBody, { exact: false }).first().waitFor({ state: 'visible' })
       await livenessObservation.assert('in AI Output panel')
       await page.locator('.writer-rail-host button[title="AI Agent 面板"]').click()
       assert.equal(await assistantInput.inputValue(), inputMarker, 'switching back from AI Output must preserve unsent input')
       await livenessObservation.assert('back in Agent panel')
-      pass('U07-liveness-panel-switch', 'U07.A08', 'Immersion, Agent, Tasks and AI Output kept the same running task, pending durable candidate, visible text and unsent input')
+      pass('U07-liveness-panel-switch', 'U07.A08', 'Immersion, Agent, Tasks and AI Output kept the same running task, main-owned durable candidate, visible text and unsent input')
     }
     pass('U07.A08-open-panel-preserves-input', 'U07.A08', 'V3 right-rail Agent button exits immersion, opens the assistant, and preserves the exact unsent input')
     }
@@ -448,7 +451,7 @@ async function main() {
   }
   const artifactHashes = { executable: fileHash(executablePath), asar: fileHash(asarPath) }
   const verifiedActions = [...new Set(steps.map(step => step.actionId).filter(Boolean))].filter(id => id !== 'U07.A01' || steps.some(step => step.stepId === 'U07.A01-all-columns'))
-  const receipt = { outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U07_V3_PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3', testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths, packageRoot: packageDir, artifactHashes, driver: { path: scriptPath, sha256: fileHash(scriptPath) }, sourceDirty: git('status', '--porcelain').split('\n').filter(Boolean), dirtyProductPaths: git('status', '--porcelain', '--', ...productPathArgs).split('\n').filter(Boolean), profile: { canonical: profile.canonical, userData: profile.userData, projectRoot: profile.projects }, fixture: livenessOnly ? { provider: 'loopback synthetic OpenAI SSE', requests: fixture.requests, externalModelRequests: 0 } : null, steps, visualEvidence, projectCreateObservation, projectCore: { table: 'project_core', key: "id='main'", originalSha256: projectCoreBefore ? sha256(Buffer.from(projectCoreBefore)) : null, afterDiscardSha256: projectCoreAfter ? sha256(Buffer.from(projectCoreAfter)) : null, unchanged: Boolean(projectCoreBefore && projectCoreAfter && projectCoreBefore === projectCoreAfter) }, uiObservation, livenessObservation: livenessObservation && { sessionSource: livenessObservation.sessionSource, task: livenessObservation.task, candidate: livenessObservation.candidate, providerRequests: livenessObservation.providerRequests }, scope: { mode: columnsOnly ? 'columns-only' : immersionOnly ? 'immersion-only' : livenessOnly ? 'liveness-only' : 'full', verifiedActions, unverifiedActions: ['U07.A01', 'U07.A02', 'U07.A03', 'U07.A04', 'U07.A05', 'U07.A06', 'U07.A07', 'U07.A08'].filter(id => !verifiedActions.includes(id)).concat('full F05 and release qualification') }, failedStep: failure ? currentStep : null, error: failure ? String(failure) : null }
+  const receipt = { outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U07_V3_PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3', testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths, packageRoot: packageDir, artifactHashes, driver: { path: scriptPath, sha256: fileHash(scriptPath) }, sourceDirty: git('status', '--porcelain').split('\n').filter(Boolean), dirtyProductPaths: git('status', '--porcelain', '--', ...productPathArgs).split('\n').filter(Boolean), profile: { canonical: profile.canonical, userData: profile.userData, projectRoot: profile.projects }, fixture: livenessOnly ? { provider: 'loopback synthetic OpenAI SSE', requests: fixture.requests, externalModelRequests: 0 } : null, steps, visualEvidence, projectCreateObservation, projectCore: { table: 'project_core', key: "id='main'", originalSha256: projectCoreBefore ? sha256(Buffer.from(projectCoreBefore)) : null, afterDiscardSha256: projectCoreAfter ? sha256(Buffer.from(projectCoreAfter)) : null, unchanged: Boolean(projectCoreBefore && projectCoreAfter && projectCoreBefore === projectCoreAfter) }, uiObservation, livenessObservation: livenessObservation && { sessionSource: livenessObservation.sessionSource, candidateKind: livenessObservation.candidateKind, task: livenessObservation.task, durableCandidate: livenessObservation.durableCandidate, providerRequests: livenessObservation.providerRequests }, scope: { mode: columnsOnly ? 'columns-only' : immersionOnly ? 'immersion-only' : livenessOnly ? 'liveness-only' : 'full', verifiedActions, unverifiedActions: ['U07.A01', 'U07.A02', 'U07.A03', 'U07.A04', 'U07.A05', 'U07.A06', 'U07.A07', 'U07.A08'].filter(id => !verifiedActions.includes(id)).concat('full F05 and release qualification') }, failedStep: failure ? currentStep : null, error: failure ? String(failure) : null }
   fs.writeFileSync(path.join(receiptDir, 'receipt.json'), JSON.stringify(receipt, null, 2))
   process.stdout.write(JSON.stringify({ outcome: receipt.outcome, receipt: path.join(receiptDir, 'receipt.json'), steps: steps.length }) + '\n')
   if (failure) throw failure
