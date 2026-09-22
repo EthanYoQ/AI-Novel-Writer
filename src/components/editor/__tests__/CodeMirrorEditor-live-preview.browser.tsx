@@ -1,7 +1,9 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { markdown } from '@codemirror/lang-markdown'
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import { languages } from '@codemirror/language-data'
+import { language } from '@codemirror/language'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 
@@ -29,7 +31,39 @@ function editorText(): string {
   return container.querySelector('.cm-content')?.textContent ?? ''
 }
 
+function treeNodes(tree: ReturnType<typeof markdownLanguage.parser.parse>): string[] {
+  const nodes: string[] = []
+  tree.iterate({ enter: node => { nodes.push(`${node.name}:${node.from}-${node.to}`) } })
+  return nodes
+}
+
 describe('CodeMirror live prose preview', () => {
+  it('keeps the same Markdown syntax nodes and offsets around Han text', async () => {
+    const samples = [
+      '林岚**灯火**后续；*夜雨*。',
+      '请看[长街](https://example.com/路径?q=汉字)和`中文**代码**`。',
+      '前文 https://example.com/路径 后文 www.example.com。',
+      '# 标题汉字\n\n> 引用**重点**\n\n```md\n汉字**原样**\n```',
+      '| 人物 | 动作 |\n| --- | --- |\n| 林岚 | **奔跑** |',
+    ]
+    const reference = markdown({ base: markdownLanguage, codeLanguages: languages }).language.parser
+
+    await act(async () => root.render(<CodeMirrorEditor content={samples[0]} mode="prose" />))
+    const view = EditorView.findFromDOM(container.querySelector<HTMLElement>('.cm-editor')!)!
+    const actual = view.state.facet(language)!.parser
+
+    for (const sample of samples) {
+      expect(treeNodes(actual.parse(sample)), sample).toEqual(treeNodes(reference.parse(sample)))
+    }
+
+    await act(async () => root.render(<CodeMirrorEditor content={samples[0]} mode="document" />))
+    const documentView = EditorView.findFromDOM(container.querySelector<HTMLElement>('.cm-editor')!)!
+    const documentParser = documentView.state.facet(language)!.parser
+    for (const sample of samples) {
+      expect(treeNodes(documentParser.parse(sample)), sample).toEqual(treeNodes(reference.parse(sample)))
+    }
+  })
+
   it('renders a paper head, semantic markdown, and a body drop cap in the single editor', async () => {
     await act(async () => root.render(
       <CodeMirrorEditor

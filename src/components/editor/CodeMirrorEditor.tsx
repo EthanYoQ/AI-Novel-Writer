@@ -375,7 +375,19 @@ export default function CodeMirrorEditor({
       } : {})
     ]
     if (mode === 'document' || mode === 'prose') {
-      exts.push(markdown({ base: markdownLanguage, codeLanguages: languages }))
+      exts.push(markdown({
+        base: markdownLanguage,
+        codeLanguages: languages,
+        extensions: mode === 'prose' ? { parseInline: [{
+          name: 'HanRun',
+          before: 'Escape',
+          parse(cx, next, pos) {
+            if (next < 0x4e00 || next > 0x9fff) return -1
+            do { pos += 1 } while (pos < cx.end && cx.char(pos) >= 0x4e00 && cx.char(pos) <= 0x9fff)
+            return pos
+          },
+        }] } : undefined,
+      }))
     }
     if (mode === 'prose') exts.push(...livePreview())
     exts.push(paperHeadFacet.of(stablePaperHead))
