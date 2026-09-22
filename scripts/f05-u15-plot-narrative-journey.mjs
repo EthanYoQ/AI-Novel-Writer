@@ -353,7 +353,7 @@ async function main() {
     assert.equal(providerRequests[3].responseStatus, 200)
     await candidateSection.getByRole('button', { name: '拒绝候选' }).click()
     await candidateSection.waitFor({ state: 'hidden' })
-    await candidateDialog.getByRole('button', { name: '关闭', exact: true }).click()
+    await candidateDialog.locator('div.border-t').getByRole('button', { name: '关闭', exact: true }).click()
     const afterRejectOpen = await invoke(session.page, 'project:open', created.projectPath, randomUUID(), created.projectPath)
     assert.equal(afterRejectOpen.success, true, afterRejectOpen.error)
     const afterRejectSession = { projectId: created.projectId, projectPath: created.projectPath,
