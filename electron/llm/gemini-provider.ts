@@ -1,4 +1,4 @@
-import { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from './provider.interface'
+import { InBandReasoningStream, ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from './provider.interface'
 import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 import { VisibleStreamFilter } from './visible-stream'
 
@@ -139,6 +139,7 @@ export class GeminiProvider implements ILLMProvider {
 
   async generateStream(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMStreamOptions): Promise<void> {
     const visible = new VisibleStreamFilter()
+    const inBandReasoning = new InBandReasoningStream(opts.onReasoning)
     let visibleUsage: TokenUsage | undefined
     try {
       const baseUrl = model.baseUrl.replace(/\/$/, '')
@@ -209,6 +210,13 @@ export class GeminiProvider implements ILLMProvider {
           const candidate = parsed.candidates?.[0]
           if (candidate?.finishReason !== undefined) {
             finishReason = this.normalizeFinishReason(candidate.finishReason)
+          }
+          for (const part of candidate?.content?.parts ?? []) {
+            if (part.thought === true) {
+              if (part.text) opts.onReasoning?.(part.text)
+            } else if (typeof part.text === 'string') {
+              inBandReasoning.push(part.text)
+            }
           }
           const content = opts.visibleOnly
             ? (candidate?.content?.parts ?? []).filter(part => part.thought === undefined || part.thought === false).map(part => typeof part.text === 'string' ? part.text : '').join('')

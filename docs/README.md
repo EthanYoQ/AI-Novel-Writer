@@ -12,7 +12,8 @@
 | [`docs/product-domain.md`](product-domain.md) | 稳定产品术语、事实源和边界 | 可发布的领域词汇表；实现和规格应使用这里的名称 |
 | [`docs/adr/`](adr/) | 难以从代码恢复的架构决定、边界和取舍 | 已接受决定；后续变化应明确扩展或取代原决定 |
 | [`docs/agents/`](agents/) | Issue、领域文档和 Agent 协作规则 | 当前贡献流程；不得承载临时任务状态 |
-| [`docs/research/`](research/) | 有来源和时间边界的调研与底座选择 | 历史证据；不自动代表当前产品承诺 |
+| [`docs/plans/`](plans/) | 受审实施范围、依赖和验收合同 | Program v3 是现行总入口；冻结包不回填进度，变更由显式 delta/ADR 说明 |
+| [`docs/research/`](research/) | 调研、实施证据及实验执行说明 | 按各文件的日期和角色使用；历史回执不自动成为当前资格，活跃执行说明须与已接受 ADR 一致 |
 | [`docs/handoffs/`](handoffs/) | 指定分支或任务的交接快照 | 有日期的任务状态；完成或分支变化后可能过时 |
 | [`plugins/dsh-ai-novel-writer/`](../plugins/dsh-ai-novel-writer/) | DeepSeek Harness 插件的独立使用与开发说明 | 由插件包维护，不替代桌面版文档 |
 
@@ -21,6 +22,17 @@
 ## 已取代的决定
 
 - [`0006-unified-cross-platform-github-release.md`](adr/0006-unified-cross-platform-github-release.md) 保存最初的 Windows + macOS ARM64 发布决定，当前三目标发布与平台更新动作由 [`0016-three-target-release-and-platform-update-actions.md`](adr/0016-three-target-release-and-platform-update-actions.md) 取代。
+- [`0019-remove-real-call-hard-cap.md`](adr/0019-remove-real-call-hard-cap.md) 取代冻结实验合同的全局 80 次调用硬帽；80 保留为计划分配额，逐请求记账和产品安全限额继续有效。
+- [现行字数标准](research/novel-quality-modernization/quality-protocol.md#现行字数标准) 自 2026-09-20 起将冻结规格中的 ±20% 取代为 ±30%；旧规格与实验回执保留原字节和历史结论。
+
+## Program v3 开发入口
+
+1. [总计划入口](plans/novel-quality-program-v3-2026-09-13/00-START-HERE.md)：34 节点的范围、依赖与验收合同。旧 24 片内核 Spec 需连同 v3 覆盖合同使用，Program v2 不再负责调度。
+2. [实施证据索引](research/novel-quality-modernization/evidence-index.md)：按版本定位回执，不能把历史 PASS 当作当前整体验收。
+3. [质量实验说明](research/novel-quality-modernization/quality-protocol.md)：当前执行规则与已知协议差异。它不是实验结果报告。
+4. [现行交付合同 delta](research/novel-quality-modernization/delivery-contract-delta-2026-09-21.md)：已采纳的 F05–R01 顺序、Writer 唯一产品界面、证据层与资格失效替代条款；冻结 Spec、DAG 和 manifest 保持历史原样。执行纪律集中于 [交付执行规则](agents/delivery.md)。
+
+本机续开发快照使用 `docs/handoffs/` 下日期化文件；包含本机路径或未公开证据的文件默认仅供本地接管，不作为公共导航的必需依赖。公开提交前单独脱敏并核对链接。
 
 ## 新文档放置规则
 

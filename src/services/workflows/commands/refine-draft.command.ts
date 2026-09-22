@@ -97,6 +97,8 @@ export class RefineDraftCommand extends ReviewRevisionCommand {
       .withWordNumber(frozen.config.wordsPerChapter)
       .withWritingStyle(frozen.config.writingStyle || '')
       .withUserRefinePrompt(userPromptBlock)
-    return this.generateRevision(prepared, params, builder.build(), builder.getSystemRole())
+    const prompt = builder.build()
+    await this.bindMaterialDecision(params, admission.decision, prompt)
+    return this.generateRevision(prepared, params, prompt, builder.getSystemRole())
   }
 }

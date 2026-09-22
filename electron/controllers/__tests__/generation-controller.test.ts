@@ -1,14 +1,16 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GenerationOwnerChannels, BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
 import type { FinalizedCharacterGenerationChannels } from '../../../src/shared/finalized-character-generation'
 import type { FinalizationGenerationChannels } from '../../../src/shared/finalization-generation'
 import type { ReviewRevisionGenerationInvokeChannels, ReviewRevisionOperation } from '../../../src/shared/review-revision-generation'
-import { createHumanConfirmedReviewSnapshot, serializeHumanConfirmedReviewSnapshot } from '../../../src/shared/human-confirmed-review'
+import { createHumanConfirmedReviewSnapshot, renderHumanConfirmedReviewBrief, serializeHumanConfirmedReviewSnapshot } from '../../../src/shared/human-confirmed-review'
 import { ipc } from '../../../src/services/ipc-client'
 import { ReviewRepository } from '../../repositories/review-repository'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
+import { SummaryRepository } from '../../repositories/summary-repository'
 import type { ModelProfile, ProjectSessionContext } from '../../../src/shared/ipc-channels'
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>
 const mocks = vi.hoisted(() => ({ handlers: new Map<string, Handler>(), globalRoot: '' }))
@@ -31,13 +33,19 @@ const sender = { isDestroyed: () => false, send: vi.fn() }
 let root: string, session: ProjectSessionContext
 const request: BeginGenerationRequest = { operation: 'draft', uiActionNonce: 'click', modelId: 'fixture',
   selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['first_chapter_draft'], skillStages: [], output: 'visible-text' }
+const materialDecision = (prompt = '合成初始提示词'): NonNullable<BeginGenerationRequest['materialDecision']> => ({
+  version: 1, verdict: 'admitted', promptHash: textHash(prompt),
+  capacity: { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1', admittedUnits: 12 },
+  coverage: { required: 1, included: 1, complete: true },
+  included: [{ sourceId: 'author:required', revision: 1, contentHash: 'a'.repeat(64), category: 'author', required: true, units: 12 }],
+  omitted: [],
+})
 beforeAll(() => {
   registerGenerationController({ modelExecutionLeases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, applyProxyConfig: () => {} })
   registerDatabaseController()
 })
 beforeEach(() => {
-  const base = path.resolve('.runtime/.cache/s05-ipc')
-  fs.mkdirSync(base, { recursive: true }); root = fs.mkdtempSync(path.join(base, 'case-'))
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-s05-ipc-'))
   mocks.globalRoot = path.join(root, 'global'); fs.mkdirSync(mocks.globalRoot)
   const project = projectAccess.createProject(root, '合成小说')
   createProjectDatabase(project.rootPath); initProjectDatabase(project.rootPath)
@@ -51,9 +59,9 @@ type TestedChannels = GenerationOwnerChannels & FinalizedCharacterGenerationChan
 function invoke<C extends keyof TestedChannels>(channel: C, ...args: TestedChannels[C]['args']) {
   return mocks.handlers.get(channel)!({ sender }, ...args, { ...session }) as Promise<TestedChannels[C]['return']>
 }
-function stream(content = '中文候选') {
+function stream(content = '中文候选', reasoning?: string) {
   const fetch = vi.fn(async () => ({ ok: true, body: new ReadableStream({ start(controller) {
-    controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`))
+    controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content, ...(reasoning ? { reasoning_content: reasoning } : {}) }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`))
     controller.close()
   } }) }))
   vi.stubGlobal('fetch', fetch)
@@ -62,6 +70,7 @@ function stream(content = '中文候选') {
 describe('generation public IPC with actual project authority and SQLite', () => {
   it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)('routes %s through the renderer client, registered IPC, owner and actual formal repository', async operation => {
     const body = '林岚到达海港，发现了留下的信。'
+    const revisedBody = '林岚到达海港，发现了父亲留下的信。'
     getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'海港'); INSERT INTO contents(id,body) VALUES(1,''); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,18)")
     getProjectDb()!.prepare('UPDATE contents SET body=? WHERE id=1').run(body)
     vi.stubGlobal('window', { aiNovelAPI: { invoke: (channel: string, ...args: unknown[]) => mocks.handlers.get(channel)!({ sender }, ...args) } })
@@ -72,15 +81,29 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     })
     const report = JSON.stringify({ summary: '保持正文来源', items: [{ category: '连贯性', severity: 'pass', description: '正文与计划相符。' }] })
     const runStage = async (op: ReviewRevisionOperation, prepared: Awaited<ReturnType<typeof prepare>>) => {
-      stream(op === 'review-chapter' ? report : body)
+      stream(op === 'review-chapter' ? report : revisedBody)
+      const prompt = '仅处理原稿与作者确认意见。'
       const run = await ipc.invokeWithProjectSession(session, 'generation:begin', { operation: op, uiActionNonce: `明确作者动作:${op}`,
         modelId: prepared.modelId ?? model.id, chapterNumber: 1, selectedDraftIds: [1], selectedFinalizedDraftIds: [],
         promptKeys: [op === 'review-chapter' ? 'consistency_check' : op === 'refine-draft' ? 'refine_chapter' : 'refine_from_review'],
         skillStages: [op === 'review-chapter' ? 'review' : 'refinement'], output: op === 'review-chapter' ? 'structured-data' : 'visible-text',
         reviewRevisionContextId: prepared.contextId, authorInputs: [{ id: 'review-revision-context', text: JSON.stringify(prepared.context) }],
         ...(prepared.parentRootActionId ? { parentRootActionId: prepared.parentRootActionId } : {}) })
+      const confirmation = prepared.context.confirmation
+      const reviewBrief = confirmation ? renderHumanConfirmedReviewBrief(confirmation.snapshot, prepared.context.writingLanguage) : ''
+      const decision = confirmation
+        ? { ...materialDecision(prompt), capacity: { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1' as const, admittedUnits: Buffer.byteLength(reviewBrief) },
+          included: [{ sourceId: `review:confirmed:${confirmation.reviewSourceId}`, revision: confirmation.reviewSourceId,
+            contentHash: textHash(reviewBrief), category: 'author' as const, required: true, units: Buffer.byteLength(reviewBrief) }] }
+        : { ...materialDecision(prompt), capacity: { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1' as const, admittedUnits: 0 },
+          coverage: { required: 0, included: 0, complete: true }, included: [] }
+      const bound = await ipc.invokeWithProjectSession(session, 'generation:bind-material-decision', { handle: run.handle, materialDecision: decision })
+      expect((await ipc.invokeWithProjectSession(session, 'generation:bind-material-decision', { handle: run.handle, materialDecision: decision })).handle)
+        .toEqual(bound.handle)
+      await expect(ipc.invokeWithProjectSession(session, 'generation:bind-material-decision', { handle: run.handle,
+        materialDecision: { ...decision, promptHash: textHash('被替换的提示词') } })).rejects.toThrow('GENERATION_MATERIAL_DECISION_CONFLICT')
       const result = await ipc.invokeWithProjectSession(session, 'generation:execute', { handle: run.handle, invocationNonce: `实际请求:${op}`, task: {
-        purpose: op, output: op === 'review-chapter' ? 'structured-data' : 'visible-text', messages: [{ role: 'user', content: '仅处理原稿与作者确认意见。' }],
+        purpose: op, output: op === 'review-chapter' ? 'structured-data' : 'visible-text', messages: [{ role: 'user', content: prompt }],
       } })
       return { run, artifact: result.run.artifacts.at(-1)! }
     }
@@ -96,6 +119,7 @@ describe('generation public IPC with actual project authority and SQLite', () =>
       confirmation = { reviewSourceId: row.id, confirmedReviewContent: content }; originalRoot = run.handle.rootActionId
     }
     const prepared = await prepare(operation, confirmation), { run, artifact } = await runStage(operation, prepared)
+    if (operation !== 'review-chapter') expect(artifact.text).toBe(revisedBody)
     if (originalRoot) expect(run.handle.rootActionId).toBe(originalRoot)
     const reference = { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash }
     if (operation !== 'review-chapter') await ipc.invokeWithProjectSession(session, 'generation:compose-visible', run.handle, [artifact.artifactId], artifact.textHash)
@@ -146,13 +170,36 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     expect((await invoke('generation:read', run.handle)).candidates).toHaveLength(1)
     expect(getProjectDb()!.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe('作者确认的新地点')
   })
+  it('routes durable finalized state candidate decisions through the captured project owner', async () => {
+    const body = '林岚来到北塔。', characterId = 'candidate-character'
+    getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'北塔'); INSERT INTO characters(character_id,name,cs_location,cs_provenance) VALUES('candidate-character','林岚','作者地点','{\"location\":{\"kind\":\"author\",\"chapterNumber\":0,\"revision\":1}}'); INSERT INTO contents(id,body) VALUES(1,'旧稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
+    FinalizationRepository.commit({ finalizationId: 'ipc-state-candidate', draftId: 1, chapterNumber: 1, chapterTitle: '北塔',
+      content: body, contentHash: textHash(body), contentRevision: 1, targetFileName: '第一章.txt' })
+    const context = SummaryRepository.readFinalizedCharacterContext(1, { projectId: session.projectId, epoch: session.leaseId }, getProjectDb()!)
+    SummaryRepository.saveFinalizedContinuity({ draftId: 1, chapterNumber: 1, chapterNotes: '定稿摘要', facts: [],
+      source: context.source, projectionGeneration: context.projectionGeneration }, getProjectDb()!)
+    SummaryRepository.commitFinalizedCharacterStates(context, { updates: [{ characterId, currentState: { location: '北塔' },
+      evidence: { start: 0, end: body.length, text: body } }], unresolved: [] }, getProjectDb()!)
+
+    const [summary] = await invoke('finalized-character:list-state-candidates')
+    expect(summary).toMatchObject({ draftId: 1, characterId, field: 'location' })
+    const candidate = await invoke('finalized-character:read-state-candidate', { draftId: summary.draftId, candidateKey: summary.candidateKey })
+    const receipt = await invoke('finalized-character:decide-state-candidate', { draftId: summary.draftId,
+      candidateKey: candidate.candidateKey, characterId: candidate.characterId, field: candidate.field,
+      expectedFieldRevision: candidate.expectedFieldRevision, expectedFieldValueHash: candidate.expectedFieldValueHash,
+      operationId: 'ipc-decline-state-candidate', decision: 'decline' })
+    expect(receipt).toMatchObject({ decision: 'decline', idempotent: false })
+    expect(await invoke('finalized-character:list-state-candidates')).toEqual([])
+    expect(getProjectDb()!.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(characterId)).toBe('作者地点')
+  })
   const draftInputs = [{ id: 'draft:target-units', text: '10' }]
   async function prepareDraft() {
     getProjectDb()!.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'灯塔')")
     const preparation = await invoke('generation:prepare-draft-context', { chapterNumber: 1, modelId: model.id,
       promptKeys: request.promptKeys, skillStages: [], authorInputs: draftInputs, query: '灯塔', selectedDraftIds: [] })
     const selection = { ...request, operation: 'chapter-draft', chapterNumber: 1, authorInputs: draftInputs,
-      selectedBlueprintChapterNumbers: [1, 2, 3, 4, 5, 6], preparationId: preparation.preparationId }
+      selectedBlueprintChapterNumbers: [1, 2, 3, 4, 5, 6], preparationId: preparation.preparationId,
+      materialDecision: materialDecision() }
     return { preparation, selection }
   }
   async function seedKnowledge() {
@@ -177,7 +224,8 @@ describe('generation public IPC with actual project authority and SQLite', () =>
       skillStages: [], authorInputs: draftInputs, query: '灯塔', selectedDraftIds: [selectedId] }
     const selectionFor = (preparationId: string): BeginGenerationRequest => ({ ...request, chapterNumber: 2,
       promptKeys: prepareRequest.promptKeys, authorInputs: draftInputs, selectedDraftIds: [selectedId],
-      operation: 'chapter-draft', uiActionNonce: '明确开始', selectedBlueprintChapterNumbers: [2, 3, 4, 5, 6, 7], preparationId })
+      operation: 'chapter-draft', uiActionNonce: '明确开始', selectedBlueprintChapterNumbers: [2, 3, 4, 5, 6, 7], preparationId,
+      materialDecision: materialDecision() })
     const editSource = () => database.prepare('UPDATE contents SET body=? WHERE id=(SELECT content_id FROM drafts WHERE id=?)').run('作者后来改写的前章', selectedId)
     return { selectedId, prepareRequest, selectionFor, editSource }
   }
@@ -202,6 +250,32 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(0)
     expect(fetch).not.toHaveBeenCalled()
   })
+  it('admits a chapter draft that carries the sanitized material decision of its own admission', async () => {
+    // S10B 步骤 3：写稿入口在 prepare 之后才拿到准入裁决，所以收据必须能与已签发的
+    // preparation 并存——它不属于「准备期冻结源」，但必须被冻进运行并折进上下文指纹。
+    const fetch = stream(), fixture = await selectedSourceFixture()
+    const prepared = await invoke('generation:prepare-draft-context', fixture.prepareRequest)
+    const decision = materialDecision()
+    const run = await invoke('generation:begin', { ...fixture.selectionFor(prepared.preparationId), materialDecision: decision })
+    const binding = JSON.parse(getProjectDb()!.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(run.handle.runId) as string) as {
+      sourceManifest: Record<string, unknown>; fingerprint: { contextSnapshotHash: string }; contextSnapshotId: string }
+    expect(binding.sourceManifest.materialDecision).toEqual(decision)
+    expect(binding.sourceManifest.materialDecisionHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(binding.contextSnapshotId).toBe(`context:${binding.fingerprint.contextSnapshotHash}`)
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(1)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('rejects a prepared chapter draft that omits the material decision before opening a root', async () => {
+    const fetch = stream(), fixture = await selectedSourceFixture()
+    const prepared = await invoke('generation:prepare-draft-context', fixture.prepareRequest)
+    const selection = fixture.selectionFor(prepared.preparationId)
+    delete selection.materialDecision
+    await expect(invoke('generation:begin', selection)).rejects.toThrow('GENERATION_MATERIAL_DECISION_REQUIRED')
+    expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(0)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
   it('checks the selected source across asynchronous knowledge preparation', async () => {
     const fixture = await selectedSourceFixture(), knowledgeBase = await knowledgeBaseLoader.load()
     vi.spyOn(knowledgeBaseLoader, 'load').mockImplementationOnce(async () => {
@@ -254,12 +328,14 @@ describe('generation public IPC with actual project authority and SQLite', () =>
   })
   it('persists the main knowledge snapshot and reads a saved acknowledgement without new generation after reopen', async () => {
     await seedKnowledge()
-    const fetch = stream('林岚沿着旧城门的青石路走向灯塔。')
+    const fetch = stream('林岚沿旧城门走向灯塔。')
     const { selection, preparation } = await prepareDraft()
     expect(preparation.knowledgeSnapshot.items[0]?.documentId).toBe('原始资料')
     preparation.knowledgeSnapshot.items.length = 0
+    const prompt = '保留灯塔设定，继续故事。'
+    selection.materialDecision = materialDecision(prompt)
     const run = await invoke('generation:begin', selection)
-    const result = await invoke('generation:execute', { handle: run.handle, invocationNonce: '正文', task: { purpose: 'chapter-draft', output: 'visible-text', messages: [{ role: 'user', content: '保留灯塔设定，继续故事。' }] } })
+    const result = await invoke('generation:execute', { handle: run.handle, invocationNonce: '正文', task: { purpose: 'chapter-draft', output: 'visible-text', messages: [{ role: 'user', content: prompt }] } })
     await invoke('generation:compose-visible', run.handle, [result.run.artifacts[0].artifactId], textHash(result.outcome.content), 'draft-visible-v1')
     const commit = { handle: run.handle, expectedCompositionHash: textHash(result.outcome.content), chapterNumber: 1, source: 'write' as const }
     const saved = await invoke('generation:commit-draft', commit)
@@ -281,8 +357,10 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     await seedKnowledge()
     stream('林岚在灯塔前停下，仔细检查那扇紧闭的木门。')
     const { selection } = await prepareDraft()
+    const prompt = '根据资料继续故事。'
+    selection.materialDecision = materialDecision(prompt)
     const run = await invoke('generation:begin', selection)
-    const result = await invoke('generation:execute', { handle: run.handle, invocationNonce: '正文', task: { purpose: 'chapter-draft', output: 'visible-text', messages: [{ role: 'user', content: '根据资料继续故事。' }] } })
+    const result = await invoke('generation:execute', { handle: run.handle, invocationNonce: '正文', task: { purpose: 'chapter-draft', output: 'visible-text', messages: [{ role: 'user', content: prompt }] } })
     await invoke('generation:compose-visible', run.handle, [result.run.artifacts[0].artifactId], textHash(result.outcome.content), 'draft-visible-v1')
     const lance = await import('@lancedb/lancedb')
     const connection = await lance.connect(path.join(getProjectDataRoot(session.projectPath), 'lancedb'))
@@ -348,7 +426,7 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     expect(commit).not.toHaveBeenCalled()
   })
   it('exposes begin, execute, read, list and durable snapshot without leaking model credentials', async () => {
-    const fetch = stream(), run = await invoke('generation:begin', request)
+    const fetch = stream('中文候选', '临时推理'), run = await invoke('generation:begin', request)
     const result = await invoke('generation:execute', { handle: run.handle, invocationNonce: 'physical-one',
       task: { purpose: 'draft', output: 'visible-text', messages: [{ role: 'user', content: '中文正文' }] } })
     expect(result.outcome.content).toBe('中文候选')
@@ -356,6 +434,8 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     expect((await invoke('generation:list'))[0].handle).toEqual(run.handle)
     expect((await invoke('generation:read', run.handle)).artifacts[0].text).toBe('中文候选')
     expect(sender.send).toHaveBeenCalledWith('generation:snapshot', expect.objectContaining({ text: '中文候选', durableRevision: 1, status: 'completed' }))
+    expect(sender.send).toHaveBeenCalledWith('generation:reasoning', expect.objectContaining({ ...run.handle, text: '临时推理' }))
+    expect(JSON.stringify(result)).not.toContain('临时推理')
     expect(JSON.stringify(result)).not.toContain(model.apiKey)
     expect(fetch).toHaveBeenCalledTimes(1)
   })

@@ -27,12 +27,12 @@ it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)('中�
   const handle: MainGenerationRunHandle = { projectId: session.projectId, epoch: '旧会话', rootActionId: '原审稿预算', runId: operation }
   const content = '林岚到达海港，发现了留下的信。'
   const source = { id: 3, chapterNumber: 2, version: 1, status: 'draft', content }
-  let sourceStatus = 'conflict', saved = false
+  let sourceStatus = 'conflict', saved = false, canResume = false
   const view = { handle, status: 'failed', nonReplayable: true,
     budget: { maxAttempts: 32, maxRequestedOutputTokens: 2000000, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: 9999999999999 },
     artifacts: [{ ...handle, artifactId: '已保存片段', attemptId: '原请求', text: content, textHash: 'a'.repeat(64), revision: 1, durableRevision: 1, status: 'completed' }],
     ledger: { physicalRequests: 3 } }
-  const recovery = () => ({ handle, modelId: '原模型', contextId: '主进程上下文', sourceStatus,
+  const recovery = () => ({ handle, modelId: '原模型', contextId: '主进程上下文', sourceStatus, canResume,
     context: { version: 1, operation, source, sourceHash: 'a'.repeat(64), config: { wordsPerChapter: 900 }, writingLanguage: 'zh-CN', uiLocale: 'zh-CN',
       authorInputs: [], blueprints: [], history: [], frozenGoals: { chapterNumber: 2, coverage: 'unknown', items: [] }, preflightFindings: [], characterStates: '', worldbuilding: '' },
     attemptedPurposes: [operation], ...(saved ? { saved: { success: true, kind: operation === 'review-chapter' ? 'review' : 'revision', id: 9, index: 1,
@@ -57,13 +57,18 @@ it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)('中�
   expect(container.textContent).toContain(content)
   expect(container.textContent).toContain('已用 3 次请求')
   await expect(createReviewRevisionRecoveryWorkflow(session, handle)).rejects.toThrow('GENERATION_REVIEW_SOURCE_CHANGED')
-  sourceStatus = 'current'
+  sourceStatus = 'current'; canResume = true
   await act(async () => root!.render(<AIOutputPanel key="刷新当前源" />))
   await vi.waitFor(() => expect(recoverButton().disabled).toBe(false))
   await act(async () => recoverButton().click())
   await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
   expect(startWorkflow.mock.calls[0][0]).toMatchObject({ generationModelId: '原模型', projectSession: session, resourceKeys: ['chapter:2'] })
   expect(invoke.mock.calls.some(([channel]) => ['generation:begin', 'generation:resume', 'generation:execute', 'db:revision-replace-pending'].includes(channel))).toBe(false)
+  canResume = false
+  await act(async () => root!.render(<AIOutputPanel key="仅可复制" />))
+  await vi.waitFor(() => expect(container!.textContent).toContain('候选未通过保存校验；可复制保留，请从原稿重新发起任务。'))
+  expect(recoverButton().disabled).toBe(true)
+  await expect(createReviewRevisionRecoveryWorkflow(session, handle)).rejects.toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
   saved = true; sourceStatus = 'conflict'
   await act(async () => root!.render(<AIOutputPanel key="保存回执" />))
   await vi.waitFor(() => expect(container!.textContent).toContain('打开已保存结果'))

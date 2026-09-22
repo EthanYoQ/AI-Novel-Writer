@@ -12,6 +12,7 @@ import { useProjectStore } from '../../stores/project-store'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import {
   projectSessionContextFromProject,
+  sameProjectPathKey,
   sameProjectSessionContext,
 } from '../../shared/project-session-context'
 import { Button } from '../ui/Button'
@@ -37,8 +38,12 @@ export default function BottomPanel() {
   const bottomPanelOpen = useLayoutStore(s => s.bottomPanelOpen)
   const bottomTab = useLayoutStore(s => s.bottomTab)
   const toggleBottomPanel = useLayoutStore(s => s.toggleBottomPanel)
-  // 只订阅 activeRuns，不订阅 globalLogs 等高频字段
-  const activeRuns = useWorkflowStore(s => s.activeRuns)
+  // 只订阅任务集合，不订阅 globalLogs 等高频字段
+  const allActiveRuns = useWorkflowStore(s => s.activeRuns)
+  const allHistory = useWorkflowStore(s => s.history)
+  const currentProject = useProjectStore(s => s.currentProject)
+  const activeRuns = currentProject?.path ? allActiveRuns.filter(run => sameProjectPathKey(run.projectPath, currentProject.path)) : []
+  const history = currentProject?.path ? allHistory.filter(run => sameProjectPathKey(run.projectPath, currentProject.path)) : []
 
   // A) 懒卸载：面板关闭时保持挂载，仅视觉隐藏，避免切换时的短暂状态错乱
   const [visible, setVisible] = useState(bottomPanelOpen)
@@ -119,7 +124,7 @@ export default function BottomPanel() {
 
       {/* 内容区 */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === 'tasks'  && <TaskRunView />}
+        {activeTab === 'tasks'  && <TaskRunView activeRuns={activeRuns} history={history} />}
         {activeTab === 'log'    && <LogsView />}
         {activeTab === 'models' && <ModelsView />}
       </div>
@@ -130,11 +135,9 @@ export default function BottomPanel() {
 
 // ===== 任务视图（工作流进度主视图）— 支持多任务 =====
 
-function TaskRunView() {
+function TaskRunView({ activeRuns, history }: { activeRuns: WorkflowRun[]; history: WorkflowRun[] }) {
   const text = useLocaleStore(s => s.text)
   const locale = useLocaleStore(s => s.locale)
-  const activeRuns = useWorkflowStore(s => s.activeRuns)
-  const history = useWorkflowStore(s => s.history)
   const waitingRuns = useWorkflowStore(s => s.waitingRuns)
   const cancelWorkflow = useWorkflowStore(s => s.cancelWorkflow)
   const pauseWorkflow = useWorkflowStore(s => s.pauseWorkflow)

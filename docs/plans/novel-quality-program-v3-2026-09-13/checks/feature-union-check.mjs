@@ -1,8 +1,16 @@
 // Plan-contract checker only. Valid structure is not proof that external receipts are genuine.
+import fs from 'node:fs';
+const currentLevels = JSON.parse(fs.readFileSync(new URL('../../../research/novel-quality-modernization/feature-evidence-levels.json', import.meta.url), 'utf8'));
 const LOCAL_ARCHIVE_ACTIONS = new Set(['U16.A01', 'U16.A02', 'U16.A08', 'U16.A11', 'U16.A12']);
 export function checkFeatureUnion(plan, { mode = 'planning', owners = [], expectedSha } = {}) {
   const errors = [], seen = new Set(), steps = new Set(), groupStates = {};
   const known = new Set(owners);
+  const browserEligible = new Set(currentLevels.browserEligibleActionIds);
+  const migrationScenarios = currentLevels.migrationScenarios ?? {};
+  if (currentLevels.schemaVersion !== 1 || currentLevels.productShell !== 'writer' ||
+      JSON.stringify(currentLevels.editorShells) !== '["writer"]' || currentLevels.editorRelativeBaseline !== 'historical-classic' ||
+      browserEligible.size !== currentLevels.browserEligibleActionIds.length ||
+      JSON.stringify(Object.keys(migrationScenarios).sort()) !== '["U02.A02","U02.A07"]') errors.push('invalid current evidence-level policy');
   for (const feature of plan.features ?? []) {
     if ('status' in feature || 'evidence' in feature) errors.push(feature.id + ': independent group status/evidence forbidden');
     const actions = feature.actions ?? [];
@@ -25,9 +33,19 @@ export function checkFeatureUnion(plan, { mode = 'planning', owners = [], expect
       for (const field of plan.executionRequiredFields ?? []) {
         if (evidence[field] == null || evidence[field] === '' || (Array.isArray(evidence[field]) && !evidence[field].length)) errors.push(id + ': missing ' + field);
       }
-      if (evidence.surface !== 'writer') errors.push(id + ': must use Writer entry');
-      if (evidence.testedSha !== expectedSha) errors.push(id + ': wrong tested SHA');
-      for (const level of action.requiredEvidenceLevels ?? []) {
+      if (evidence.surface !== currentLevels.productShell) errors.push(id + ': must use Writer entry');
+      if (migrationScenarios[id] && evidence.migrationScenario !== migrationScenarios[id]) errors.push(id + ': wrong current migration scenario');
+      if (evidence.testedSha !== expectedSha) {
+        const reuse = evidence.reuseDecision;
+        if (!reuse || reuse.testedSha !== evidence.testedSha || !/^[0-9a-f]{40}$/i.test(evidence.testedSha) ||
+            !Array.isArray(reuse.changedPaths) || !reuse.changedPaths.length ||
+            !reuse.changedPaths.every(path => typeof path === 'string' && path.trim()) ||
+            typeof reuse.differences !== 'string' || !reuse.differences.trim() ||
+            typeof reuse.reason !== 'string' || !reuse.reason.trim()) errors.push(id + ': wrong tested SHA without specific reuse decision');
+      }
+      const levels = browserEligible.has(id) ? ['browser'] : action.requiredEvidenceLevels ?? [];
+      for (const level of levels) {
+        if (level === 'browser' && evidence.evidenceLevels?.includes('electron')) continue;
         if (!evidence.evidenceLevels?.includes(level)) errors.push(id + ': missing evidence level ' + level);
       }
       const step = String(evidence.receipt) + '#' + String(evidence.stepId);
@@ -36,6 +54,8 @@ export function checkFeatureUnion(plan, { mode = 'planning', owners = [], expect
     }
     groupStates[feature.id] = actions.length && actions.every(a => a.status === 'pass') ? 'pass' : 'not-qualified';
   }
+  if (seen.size !== currentLevels.actionCount) errors.push('current evidence-level policy: action count mismatch');
+  for (const id of browserEligible) if (!seen.has(id)) errors.push(id + ': unknown browser-eligible action');
   return { ok: errors.length === 0, errors, groupStates };
 }
 export function checkEditorReceipt(protocol, receipt) {
@@ -48,8 +68,10 @@ export function checkEditorReceipt(protocol, receipt) {
   if (!receipt.production || !receipt.writerLivePreview) errors.push('must use production editor with Writer preview on');
   if (!receipt.imeExactMatch || receipt.imeLossCount !== 0 || receipt.imeDuplicateCount !== 0 || !receipt.selectionUndoExact) errors.push('IME/selection/undo corruption');
   if (!Number.isInteger(receipt.rerunIndex) || receipt.rerunIndex < 0 || receipt.rerunIndex > protocol.maxRerunIndex) errors.push('invalid/excessive rerun');
+  if (!/^[0-9a-f]{40}$/i.test(receipt.baseline?.testedSha ?? '') ||
+      typeof receipt.baseline?.receipt !== 'string' || !receipt.baseline.receipt.trim()) errors.push('historical Classic baseline provenance missing');
   for (const units of protocol.units) {
-    for (const shell of ['classic','writer']) for (const action of protocol.actions) {
+    for (const shell of currentLevels.editorShells) for (const action of protocol.actions) {
       const key = units+'/'+shell+'/'+action, samples = receipt.samples?.[units]?.[shell]?.[action];
       if (!samples || !validTimes(samples.warmupSamplesMs) || samples.warmupSamplesMs.length !== protocol.warmupCount || !validTimes(samples.rawSamplesMs) || samples.rawSamplesMs.length !== protocol.sampleCount || !validTimes(samples.longTasksMs)) {
         errors.push(key+': missing action or invalid raw/warmup sample count');
@@ -62,8 +84,16 @@ export function checkEditorReceipt(protocol, receipt) {
       if (middle<=0 || mad/middle>protocol.maxMadToMedian) errors.push(key+': inconclusive unstable raw samples');
     }
     for (const action of protocol.actions) {
-      const classic = statistics[units+'/classic/'+action], writer = statistics[units+'/writer/'+action];
-      if (classic && writer && writer.medianMs > classic.medianMs*(1+protocol.writerRelativeMedianRegressionMaxPercent/100)) errors.push(units+'/'+action+': relative regression');
+      const key = units+'/historical-classic/'+action, samples = receipt.baseline?.samples?.[units]?.[action];
+      if (!samples || !validTimes(samples.warmupSamplesMs) || samples.warmupSamplesMs.length !== protocol.warmupCount ||
+          !validTimes(samples.rawSamplesMs) || samples.rawSamplesMs.length !== protocol.sampleCount || !validTimes(samples.longTasksMs)) {
+        errors.push(key+': missing baseline raw/warmup samples');
+        continue;
+      }
+      const baselineMedian = median(samples.rawSamplesMs), baselineMad = median(samples.rawSamplesMs.map(v=>Math.abs(v-baselineMedian)));
+      if (baselineMedian<=0 || baselineMad/baselineMedian>protocol.maxMadToMedian) errors.push(key+': inconclusive baseline samples');
+      const writer = statistics[units+'/writer/'+action];
+      if (writer && writer.medianMs > baselineMedian*(1+protocol.writerRelativeMedianRegressionMaxPercent/100)) errors.push(units+'/'+action+': relative regression');
     }
   }
   return { ok:errors.length===0, errors, statistics };

@@ -4,6 +4,7 @@ import {
   DRAFT_UNIT_ALGORITHM_VERSION,
   countDraftUnits,
   countLegacyDraftUnitsV1,
+  draftTargetUnitRange,
 } from '../draft-units'
 
 describe('draft unit counting', () => {
@@ -35,5 +36,10 @@ describe('draft unit counting', () => {
   it('retains the v0.9.0 algorithm only for durable replay compatibility', () => {
     expect(countLegacyDraftUnitsV1('Café')).toBe(2)
     expect(countDraftUnits('Café')).toBe(1)
+  })
+
+  it('defines the inclusive persisted draft target range', () => {
+    expect(draftTargetUnitRange(2000)).toEqual({ minimum: 1400, maximum: 2600 })
+    expect(() => draftTargetUnitRange(0)).toThrow('DRAFT_TARGET_UNITS_INVALID')
   })
 })

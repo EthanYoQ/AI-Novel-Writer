@@ -11,6 +11,8 @@ import { composeVisibleContinuation } from '../../../../shared/visible-continuat
 import { redactVisibleCompletionText } from '../../bounded-completion'
 import { useProjectStore } from '../../../../stores/project-store'
 import type { ExpectedDraftSource } from '../../../../shared/ipc-channels'
+import type { MaterialDecisionReceipt } from '../../../../shared/generation-owner-contract'
+import { buildReviewCycleRecheckReport } from '../../../../shared/review-cycle'
 
 const digest = (text: string) => createHash('sha256').update(text).digest('hex')
 type Backend = (channel: string, ...args: unknown[]) => Promise<unknown>
@@ -25,6 +27,7 @@ export class ReviewRevisionRuntimeFixture {
   prepared?: PreparedReviewRevisionContext
   recovery?: ReviewRevisionRecovery
   selections: unknown[] = []
+  materialDecisions: MaterialDecisionReceipt[] = []
   calls: Array<{ channel: string; args: unknown[] }> = []
   artifacts = new Map<string, MainGenerationSnapshot>()
   private sequence = 0
@@ -93,8 +96,17 @@ export class ReviewRevisionRuntimeFixture {
           || JSON.stringify(snapshot.sourceDraft) !== JSON.stringify(source)) throw new Error('缺少有效的已确认审稿清单 / A confirmed review checklist is required')
         frozen.confirmation = { reviewSourceId: row.id, content: row.content, originalReviewContentHash: 'a'.repeat(64), snapshot }
       }
+      if (request.reviewCycleId && request.expectedMergedHash) {
+        frozen.recheck = { version: 1, cycleId: request.reviewCycleId, comparisonVersion: 1,
+          mergedHash: request.expectedMergedHash, findingSetHash: 'b'.repeat(64), findings: [{ findingId: 'finding-1',
+            targetId: 'target-1', category: 'continuity', kind: 'objective',
+            problem: '门闩仍然敞开', expected: '门闩必须保持关闭',
+            sourceSpan: { start: 0, end: 4, unit: 'utf16-code-unit' }, occurrence: 1,
+            sourceExcerpt: source.content.slice(0, 4) }] }
+      }
       this.prepared = { contextId: 'fixture-context', context: structuredClone(frozen),
-        ...(request.operation === 'refine-from-review' ? { parentRootActionId: this.parentRootActionId, modelId: this.parentModelId } : {}) }
+        ...(request.operation === 'refine-from-review' || frozen.recheck
+          ? { parentRootActionId: this.parentRootActionId, modelId: this.parentModelId } : {}) }
       this.recovery = undefined
       return structuredClone(this.prepared)
     }
@@ -103,6 +115,12 @@ export class ReviewRevisionRuntimeFixture {
       return structuredClone(this.recovery)
     }
     if (channel === 'generation:read-visible-composition') return this.recovery?.composition ?? null
+    if (channel === 'generation:bind-material-decision') {
+      const request = args[0] as { handle: ReviewRevisionRecovery['handle']; materialDecision: MaterialDecisionReceipt }
+      this.materialDecisions.push(structuredClone(request.materialDecision))
+      return { handle: request.handle, status: 'running', nonReplayable: false, artifacts: [],
+        budget: { maxAttempts: 4, maxRequestedOutputTokens: 32_768, maxRequestedOutputTokensPerAttempt: 8_192, deadlineAt: Date.now() + 60_000 } }
+    }
     if (channel === 'generation:compose-visible') {
       const ids = args[1] as string[]
       let text = ''
@@ -119,8 +137,11 @@ export class ReviewRevisionRuntimeFixture {
       const frozen = recovery.context
       if (recovery.saved) return structuredClone(recovery.saved)
       const content = channel === 'review-revision:commit-review'
-        ? JSON.stringify(buildReviewGenerationReport({ content: recovery.latestArtifact!.text, sourceContent: frozen.source.content,
-          frozenGoals: frozen.frozenGoals, writingLanguage: frozen.writingLanguage, uiLocale: frozen.uiLocale, preflightFindings: frozen.preflightFindings }), null, 2)
+        ? JSON.stringify(frozen.recheck ? (() => { const report = buildReviewCycleRecheckReport(recovery.latestArtifact!.text,
+          frozen.source.content, frozen.recheck!, frozen.uiLocale); return { summary: report.summary, items: report.items } })()
+          : buildReviewGenerationReport({ content: recovery.latestArtifact!.text, sourceContent: frozen.source.content,
+            frozenGoals: frozen.frozenGoals, writingLanguage: frozen.writingLanguage, uiLocale: frozen.uiLocale,
+            preflightFindings: frozen.preflightFindings }), null, 2)
         : recovery.composition!.text
       const review = channel === 'review-revision:commit-review'
       const result = await this.backend(review ? 'db:review-create' : 'db:revision-replace-pending', {
@@ -157,7 +178,7 @@ export class ReviewRevisionRuntimeFixture {
       main.context.mainGenerationRunHandle = handle
       main.context.mainGenerationRootHandle = handle
       if (!this.recovery) this.recovery = { handle, context: structuredClone(this.prepared!.context), contextId: this.prepared!.contextId,
-        modelId: options.modelId ?? 'model-a', sourceStatus: 'current', attemptedPurposes: [] }
+        modelId: options.modelId ?? 'model-a', sourceStatus: 'current', canResume: true, attemptedPurposes: [] }
       await main.selection.onRunOpened?.(handle)
       const runtime = await dependencies.createRuntime(options)
       return { mainOwned: true, close: () => runtime.close(), execute: operation => runtime.execute(({ session }) => operation({ session: {

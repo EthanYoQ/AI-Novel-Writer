@@ -98,6 +98,10 @@ export function registerGenerationController(options: {
           if (subscriber.isDestroyed()) subscribers.delete(subscriber)
           else subscriber.send('generation:snapshot', snapshot)
         } },
+        onReasoning: reasoning => { for (const subscriber of subscribers) {
+          if (subscriber.isDestroyed()) subscribers.delete(subscriber)
+          else subscriber.send('generation:reasoning', reasoning)
+        } },
       })
       entry = { owner, session: captured, subscribers }
       ownerSessions.set(owner, captured)
@@ -143,18 +147,27 @@ export function registerGenerationController(options: {
   })
   register('generation:begin', 1, (owner, request) => {
     if (request.operation === 'chapter-draft' && !request.preparationId) throw new Error('GENERATION_DRAFT_PREPARATION_REQUIRED')
+    if (request.operation === 'chapter-draft' && !request.materialDecision) throw new Error('GENERATION_MATERIAL_DECISION_REQUIRED')
+    if (request.operation !== 'chapter-draft' && request.materialDecision) throw new Error('GENERATION_MATERIAL_DECISION_INVALID')
     return guardKnowledge(owner, request.preparationId ? owner.preparedKnowledge(request.preparationId) : undefined, () => owner.begin(request))
   })
+  register('generation:bind-material-decision', 1, (owner, request) =>
+    owner.bindMaterialDecision(request.handle, request.materialDecision))
   register('character-proposal:stage', 1, (owner, request) => {
     if (request.source?.kind === 'legacy-roster-generation') throw new Error('GENERATION_LEGACY_ADMISSION_REQUIRED')
     return owner.characterProposals.stage(request.source)
   })
   register('character-proposal:read', 1, (owner, request) => owner.characterProposals.read(request.proposalBatchId))
+  register('character-proposal:list-pending-finalized', 0, owner => owner.characterProposals.listPendingFinalized())
+  register('character-proposal:read-pending-finalized', 1, (owner, request) => owner.characterProposals.readPendingFinalized(request.proposalBatchId))
   register('character-proposal:approve', 1, (owner, request) => owner.approveCharacterProposal(request))
-  register('character-proposal:cancel', 1, (owner, request) => owner.characterProposals.cancel(request.proposalBatchId))
+  register('character-proposal:cancel', 1, (owner, request) => owner.characterProposals.cancel(request))
   register('character-identity:read', 0, owner => owner.characterProposals.identitySnapshot())
   register('finalized-character:read-context', 1, (owner, request) => owner.readFinalizedCharacterContext(request.draftId))
   register('finalized-character:commit', 1, (owner, request) => owner.commitFinalizedCharacterStates(request))
+  register('finalized-character:list-state-candidates', 0, owner => owner.listPendingFinalizedCharacterStateCandidates())
+  register('finalized-character:read-state-candidate', 1, (owner, request) => owner.readPendingFinalizedCharacterStateCandidate(request))
+  register('finalized-character:decide-state-candidate', 1, (owner, request) => owner.decideFinalizedCharacterStateCandidate(request))
   register('finalization-generation:read', 1, (owner, request) => owner.readFinalizationGeneration(request))
   register('finalization-generation:begin', 1, (owner, request) => owner.beginFinalizationGeneration(request))
   register('finalization-generation:execute', 1, (owner, request) => owner.executeFinalizationGeneration(request))
@@ -215,6 +228,8 @@ export function registerGenerationController(options: {
   register('generation:resume', 1, (owner, handle) => guardKnowledge(owner, owner.readContext(handle).knowledgeSnapshot, () => owner.resume(handle)))
   register('generation:restart', 2, (owner, handle, request) => {
     if (request.operation === 'chapter-draft' && !request.preparationId) throw new Error('GENERATION_DRAFT_PREPARATION_REQUIRED')
+    if (request.operation === 'chapter-draft' && !request.materialDecision) throw new Error('GENERATION_MATERIAL_DECISION_REQUIRED')
+    if (request.operation !== 'chapter-draft' && request.materialDecision) throw new Error('GENERATION_MATERIAL_DECISION_INVALID')
     return guardKnowledge(owner, request.preparationId ? owner.preparedKnowledge(request.preparationId) : undefined, () => owner.restart(handle, request))
   })
   register('generation:discard-candidate', 2, (owner, handle, artifactId) => owner.discardCandidate(handle, artifactId))

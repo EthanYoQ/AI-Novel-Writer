@@ -1,12 +1,13 @@
 import type Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
-import type { BeginGenerationRequest, ExecuteGenerationRequest, BeginGenerationBatchRequest, GenerationDraftCommitRequest, GenerationRecoveryContext, VisibleCompositionAlgorithm } from '../../src/shared/generation-owner-contract'
+import type { BeginGenerationRequest, ExecuteGenerationRequest, BeginGenerationBatchRequest, GenerationDraftCommitRequest, GenerationRecoveryContext, MaterialDecisionReceipt, VisibleCompositionAlgorithm } from '../../src/shared/generation-owner-contract'
 import { generationOutputContract, type GenerationAuthorInput } from '../../src/shared/generation-owner-contract'
 import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot } from '../../src/services/generation/generation-runtime'
 import type { ModelProfile, ModelExecutionLeaseReceipt, LLMFinishReason } from '../../src/shared/ipc-channels'
 import { tokenLiability } from '../../src/shared/generation-contract'
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
+import { getCurrentProjectPath } from '../database'
 import { ModelExecutionLeaseRegistry, createModelExecutionLeaseReceipt } from './model-execution-lease'
 import { createGenerationRunService, type GenerationRunServiceDependencies } from './generation-run-service'
 import { assertSemanticGenerationTask, buildMainGenerationPlan, MAIN_GENERATION_POLICY, type MainGenerationPlan } from './main-generation-plan'
@@ -43,6 +44,7 @@ import type { LegacyRosterGenerationChannels, LegacyRosterGenerationRecovery } f
 import { LegacyRosterGeneration } from './legacy-roster-generation'
 import { readLegacyRosterGenerationProof } from './legacy-roster-generation-proof'
 import { readLegacyRosterGenerationContext } from './legacy-roster-generation-context'
+import { readPortableRuntimeFreeze } from './portable-runtime-freeze'
 import { readLegacyRosterSource, adoptLegacyCards } from './legacy-roster-source'
 import { buildLegacyRosterJsonRepairTask, buildLegacyRosterReplacementTask, parseLegacyRosterJson } from '../../src/shared/legacy-roster-generation-pure'
 import { validateGraphGenerationInput, readGraphGenerationContext } from './graph-generation-source'
@@ -64,6 +66,7 @@ export interface MainGenerationOwnerDependencies {
   rebuildBinding: (previous: RunBinding, model: SafeGenerationModelReceipt) => RunBinding
   beforeDispatch?: () => void
   onSnapshot?: (snapshot: MainGenerationSnapshot) => void
+  onReasoning?: (event: { projectId: string; epoch: string; rootActionId: string; runId: string; attemptId: string; text: string }) => void
   dispatch?: GenerationRunServiceDependencies['dispatch']
 }
 
@@ -76,6 +79,7 @@ async function dispatchProvider(value: unknown, options: Parameters<GenerationRu
   await LLMFactory.getProvider(model).generateStream(model, task.messages.map(message => ({ ...message })), {
     ...plan.options, signal: options.signal, visibleOnly: true,
     onChunk: text => options.onVisible({ kind: 'delta', text }),
+    onReasoning: options.onReasoning,
     onUsageEvidence: value => { evidence = value },
     onDone: (text, _usage, reason) => { options.onVisible({ kind: 'cumulative', text }); finishReason = reason },
     onError: error => {
@@ -92,7 +96,8 @@ async function dispatchProvider(value: unknown, options: Parameters<GenerationRu
 
 /** One owner per captured database/session. No renderer budget, lease or hash is authoritative. */
 export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies) {
-  const repository = new GenerationRunRepository(() => deps.database)
+  const runtimeFreeze = readPortableRuntimeFreeze(getCurrentProjectPath())
+  const repository = new GenerationRunRepository(() => deps.database, Date.now, (table, recordId) => runtimeFreeze.isFrozen(table, recordId))
   const draftEffects = new GenerationDraftEffects(deps.database, repository)
   const runLeases = new Map<string, string>()
   const volatileReceipts = new Map<string, GenerationExecutionReceipt>()
@@ -134,6 +139,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       revision: artifact.revision, durableRevision: artifact.revision, text: artifact.text, textHash: artifact.textHash, status, compositionEligible }
   }
   const service = createGenerationRunService({ repository, dispatch: deps.dispatch ?? dispatchProvider,
+    onReasoning: event => deps.onReasoning?.({ projectId: deps.projectId, epoch: deps.epoch, ...event }),
     validateRecovery: async (previous, next) => {
       assertCurrent()
       const current = deps.rebuildBinding(previous, currentModelReceipt(previous))
@@ -188,10 +194,19 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const rows = deps.database.prepare('SELECT run_id FROM generation_runs ORDER BY created_at_ms DESC, rowid DESC').all() as { run_id: string }[]
     return rows.map(row => repository.get(row.run_id)).filter(run => run.binding.projectId === deps.projectId).map(viewOf)
   }
+  // S10B：'materialDecision'/'materialDecisionHash' 只在**取得准入之后**才可能出现在真正
+  // 运行的 manifest 上（prepare 阶段早于材料装配），因此与 selectedFinalizedDraftIds 同类，
+  // 不参与「准备期冻结源未变」的比对。指纹侧的 contextSnapshotHash 本就被排除。
   const preparationProjection = (binding: RunBinding, excludeKnowledge = false) => ({
-    manifest: Object.fromEntries(Object.entries(binding.sourceManifest).filter(([key]) => !['selectedDraftIds', 'selectedFinalizedDraftIds', ...(excludeKnowledge ? ['knowledgeSnapshot'] : [])].includes(key))),
+    manifest: Object.fromEntries(Object.entries(binding.sourceManifest).filter(([key]) => !['selectedDraftIds', 'selectedFinalizedDraftIds', 'materialDecision', 'materialDecisionHash', ...(excludeKnowledge ? ['knowledgeSnapshot'] : [])].includes(key))),
     fingerprint: Object.fromEntries(Object.entries(binding.fingerprint).filter(([key]) => !['contextSnapshotHash', 'dependencyHash'].includes(key))),
     sources: binding.sourceRefs.filter(ref => !/^(draft|finalized):/.test(ref.sourceId) && (!excludeKnowledge || !/^(kb:|knowledge-selection$)/.test(ref.sourceId))),
+  })
+  const materialDecisionProjection = (binding: RunBinding) => ({
+    manifest: Object.fromEntries(Object.entries(binding.sourceManifest)
+      .filter(([key]) => key !== 'materialDecision' && key !== 'materialDecisionHash')),
+    fingerprint: Object.fromEntries(Object.entries(binding.fingerprint).filter(([key]) => key !== 'contextSnapshotHash')),
+    sources: binding.sourceRefs,
   })
   const preparationMatches = (previous: RunBinding, current: RunBinding, excludeKnowledge = false) =>
     isDeepStrictEqual(preparationProjection(previous, excludeKnowledge), preparationProjection(current, excludeKnowledge))
@@ -237,7 +252,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       || !Array.isArray(selection.promptKeys) || selection.promptKeys.length === 0
       || Object.hasOwn(selection, 'parentRootActionId') && (typeof selection.parentRootActionId !== 'string' || !selection.parentRootActionId.trim())
       || typeof selection.uiActionNonce !== 'string' || !selection.uiActionNonce.trim() || selection.uiActionNonce.length > 256
-      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId', 'finalizedCharacterContextId', 'reviewRevisionContextId', 'agentWorkflowRegistrationId', 'importSlot', 'importExecution', ...(agentInitialization ? ['agentInput', 'agentSession'] : []), ...(editorInitialization ? ['editorInlineInput'] : []), ...(finalizationInitialization ? ['finalizationGenerationSlot'] : []), ...(graphInitialization ? ['graphGenerationInput', 'graphGenerationKey'] : []), ...(legacyInitialization ? ['legacyRosterKey'] : [])].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
+      || Object.keys(selection).some(key => !['operation', 'uiActionNonce', 'modelId', 'chapterNumber', 'selectedDraftIds', 'selectedFinalizedDraftIds', 'selectedBlueprintChapterNumbers', 'promptKeys', 'skillStages', 'authorInputs', 'output', 'outputOverrides', 'parentRootActionId', 'continueDirectoryOperationId', 'batchId', 'batchIntent', 'preparationId', 'finalizedCharacterContextId', 'reviewRevisionContextId', 'agentWorkflowRegistrationId', 'materialDecision', 'importSlot', 'importExecution', ...(agentInitialization ? ['agentInput', 'agentSession'] : []), ...(editorInitialization ? ['editorInlineInput'] : []), ...(finalizationInitialization ? ['finalizationGenerationSlot'] : []), ...(graphInitialization ? ['graphGenerationInput', 'graphGenerationKey'] : []), ...(legacyInitialization ? ['legacyRosterKey'] : [])].includes(key))) throw new Error('GENERATION_BEGIN_INVALID')
     if (selection.operation === 'editor-inline' && !editorInitialization) throw new Error('GENERATION_EDITOR_ADMISSION_REQUIRED')
     if (['finalized-chapter-notes', 'finalized-character-state'].includes(selection.operation) && !finalizationInitialization) throw new Error('GENERATION_FINALIZATION_ADMISSION_REQUIRED')
     if (Object.values(graphOperations).includes(selection.operation as typeof graphOperations[keyof typeof graphOperations]) && !graphInitialization) throw new Error('GENERATION_GRAPH_ADMISSION_REQUIRED')
@@ -289,6 +304,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     try {
       const prepared = selection.preparationId ? preparations.get(selection.preparationId) : undefined
       if (selection.preparationId && (!prepared || selection.operation !== 'chapter-draft')) throw new Error('GENERATION_DRAFT_PREPARATION_REQUIRED')
+      if (selection.operation === 'chapter-draft' && selection.preparationId && !selection.materialDecision)
+        throw new Error('GENERATION_MATERIAL_DECISION_REQUIRED')
       const binding = deps.buildBinding({ ...selection, ...(prepared ? { knowledgeSnapshot: prepared.knowledgeSnapshot } : {}),
         ...(finalizedCharacterContextHash ? { finalizedCharacterContextHash } : {}),
         ...(reviewRevision ? { reviewRevisionContext: reviewRevision.context } : {}) }, safeGenerationModelReceipt(lease))
@@ -355,6 +372,17 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (run.binding.sourceManifest.operation === 'legacy-character-roster-repair' && !legacyExecution) throw new Error('GENERATION_LEGACY_ADMISSION_REQUIRED')
     assertSemanticGenerationTask(request.task)
     const task = structuredClone(request.task)
+    const materialDecision = run.binding.sourceManifest.materialDecision as MaterialDecisionReceipt | undefined
+    const materialOperation = String(run.binding.sourceManifest.operation)
+    if ((!materialDecision && ['review-chapter', 'refine-draft', 'refine-from-review'].includes(materialOperation))
+      || !materialDecision && materialOperation === 'chapter-draft' && run.binding.sourceManifest.preparationId)
+      throw new Error('GENERATION_MATERIAL_DECISION_REQUIRED')
+    if (materialDecision && !repository.hasNonCancelledAttempt(run.runId)) {
+      const userMessages = task.messages.filter(message => message.role === 'user')
+      if (task.purpose !== run.binding.sourceManifest.operation || userMessages.length !== 1
+        || textHash(userMessages[0]!.content) !== materialDecision.promptHash)
+        throw new Error('GENERATION_MATERIAL_PROMPT_MISMATCH')
+    }
     const contract = run.binding.sourceManifest.outputContract
     const composite = contract as { primary?: string; overrides?: { purpose: string; output: string }[] }
     const expectedOutput = typeof contract === 'string' ? contract : composite.overrides?.find(item => item.purpose === task.purpose)?.output ?? composite.primary
@@ -417,6 +445,22 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       return viewOf(resumed)
     } catch (error) { deps.leases.close(lease.leaseId); throw error }
   }
+  const bindMaterialDecision = (handle: MainGenerationRunHandle, materialDecision: MaterialDecisionReceipt): MainGenerationRunView => {
+    const run = requireRun(handle, true)
+    const operation = run.binding.sourceManifest.operation
+    if (!['review-chapter', 'refine-draft', 'refine-from-review'].includes(String(operation)))
+      throw new Error('GENERATION_MATERIAL_DECISION_INVALID')
+    const existing = run.binding.sourceManifest.materialDecision
+    if (existing !== undefined) {
+      if (!isDeepStrictEqual(existing, materialDecision)) throw new Error('GENERATION_MATERIAL_DECISION_CONFLICT')
+      return viewOf(run)
+    }
+    const candidate = deps.rebuildBinding({ ...run.binding,
+      sourceManifest: { ...run.binding.sourceManifest, materialDecision } }, currentModelReceipt(run.binding))
+    if (!isDeepStrictEqual(materialDecisionProjection(run.binding), materialDecisionProjection(candidate)))
+      throw new Error('GENERATION_SOURCE_CHANGED')
+    return viewOf(repository.replaceUnstartedBinding(run.runId, run.binding, candidate))
+  }
   const assertSourcesCurrent = (handle: MainGenerationRunHandle, blueprintRange?: { startChapter: number; endChapter: number }) => {
       const run = requireRun(handle, true)
       if (repository.budget(run.rootActionId).root.status === 'cancelled') throw new Error('GENERATION_ACTION_CANCELLED')
@@ -436,11 +480,16 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const readContext = (handle: MainGenerationRunHandle): GenerationRecoveryContext => {
     const run = requireRun(handle), manifest = run.binding.sourceManifest, composition = repository.readVisibleComposition(run.runId)
     const saved = draftEffects.readCommit(run.runId)
+    const materialDecision = manifest.materialDecision as MaterialDecisionReceipt | undefined
+    const requiredCandidateDraftIds = new Set((materialDecision?.included ?? [])
+      .filter(item => item.required && /^candidate:\d+$/u.test(item.sourceId))
+      .map(item => Number(item.sourceId.slice('candidate:'.length))))
     const selectedDrafts = (manifest.selectedDraftIds as number[] ?? []).map(draftId => {
       const row = deps.database.prepare('SELECT d.chapter_number,d.version,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(draftId) as { chapter_number: number; version: number; body: string } | undefined
       const ref = run.binding.sourceRefs.find(source => source.sourceId === `draft:${draftId}`)
       return row && ref && row.version === ref.revision && textHash(row.body) === ref.contentHash
-        ? { draftId, chapterNumber: row.chapter_number, version: row.version, contentHash: ref.contentHash, content: row.body } : null
+        ? { draftId, chapterNumber: row.chapter_number, version: row.version, contentHash: ref.contentHash, content: row.body,
+            ...(requiredCandidateDraftIds.has(draftId) ? { required: true } : {}) } : null
     })
     const rows = deps.database.prepare('SELECT attempt_id,usage_receipt_json FROM generation_attempts WHERE run_id=? ORDER BY rowid').all(run.runId) as { attempt_id: string; usage_receipt_json: string }[]
     const last = composition ? deps.database.prepare('SELECT attempt_id FROM generation_artifacts WHERE artifact_id=?').pluck().get(composition.artifactIds.at(-1)) as string : undefined
@@ -535,7 +584,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       attemptCount: deps.database.prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(run.runId) as number,
       ...(artifact ? {artifact} : {}), ...(proposal ? {proposal} : {}) }
   }
-  return { begin: (selection: BeginGenerationRequest) => begin(selection), execute: (request: ExecuteGenerationRequest) => execute(request), resume, list, assertSourcesCurrent, agents,
+  return { begin: (selection: BeginGenerationRequest) => begin(selection), bindMaterialDecision, execute: (request: ExecuteGenerationRequest) => execute(request), resume, list, assertSourcesCurrent, agents,
     readLegacyRosterSource: () => { assertCurrent(); return readLegacyRosterSource(deps.database) },
     adoptLegacyCards: (request: LegacyRosterGenerationChannels['legacy-roster:adopt-existing']['args'][0]) => { assertCurrent(); return adoptLegacyCards(deps.database, request) },
     beginLegacyRosterGeneration: (request: LegacyRosterGenerationChannels['legacy-roster:begin']['args'][0]) => {
@@ -828,6 +877,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     },
     readFinalizedCharacterContext: (draftId: number) => finalizedCharacters.readContext(draftId),
     commitFinalizedCharacterStates: (request: FinalizedCharacterGenerationCommit) => finalizedCharacters.commit(request, characters, assertSourcesCurrent),
+    listPendingFinalizedCharacterStateCandidates: () => finalizedCharacters.listPendingStateCandidates(),
+    readPendingFinalizedCharacterStateCandidate: (request: { draftId: number; candidateKey: string }) => finalizedCharacters.readPendingStateCandidate(request),
+    decideFinalizedCharacterStateCandidate: (request: import('../../src/shared/finalized-continuity').FinalizedCharacterStateDecisionRequest) => finalizedCharacters.decideStateCandidate(request),
     prepareReviewRevision: (request: PrepareReviewRevisionRequest) => reviewRevisions.prepare(request),
     commitReview: (request: ReviewGenerationCommitRequest) => reviewRevisions.commitReview(request, assertSourcesCurrent),
     commitRevision: (request: RevisionGenerationCommitRequest) => reviewRevisions.commitRevision(request, assertSourcesCurrent),
@@ -880,7 +932,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       finalizations.assertMutable(requireRun(handle))
       graphs.assertMutable(requireRun(handle))
       legacyRosters.assertMutable(requireRun(handle))
-      assertSourcesCurrent(handle)
+      const run = requireRun(handle, true)
+      if (repository.budget(run.rootActionId).root.status === 'cancelled') throw new Error('GENERATION_ACTION_CANCELLED')
       if (algorithm === 'draft-visible-v1' && requireRun(handle).binding.sourceManifest.operation !== 'chapter-draft') throw new Error('GENERATION_COMPOSITION_ALGORITHM_INVALID')
       return repository.composeVisible(handle.runId, artifactIds, expectedTextHash, algorithm)
     },

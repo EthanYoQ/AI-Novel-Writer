@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from 'node:util'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import type { GenerationBatchIntent, GenerationBatchProgress, GenerationDraftCommitReceipt, GenerationDraftCommitRequest } from '../../src/shared/generation-owner-contract'
 import type { DraftSourceDependency } from '../../src/shared/draft-source-dependency'
-import { countDraftUnits } from '../../src/shared/draft-units'
+import { countDraftUnits, draftTargetUnitRange } from '../../src/shared/draft-units'
 import { GenerationRunRepository, textHash, type DurableGenerationRun } from '../repositories/generation-run-repository'
 import { DraftRepository } from '../repositories/draft-repository'
 
@@ -104,7 +104,10 @@ export class GenerationDraftEffects {
       if (!composition || composition.algorithm !== 'draft-visible-v1' || composition.textHash !== request.expectedCompositionHash)
         throw new Error('GENERATION_DRAFT_COMPOSITION_REQUIRED')
       const target = Number((run.binding.sourceManifest.authorInputs as { id: string; text: string }[] | undefined)?.find(item => item.id === 'draft:target-units')?.text)
-      if (!Number.isSafeInteger(target) || target < 1 || countDraftUnits(composition.text) < Math.floor(target * 0.8)) throw new Error('GENERATION_DRAFT_INCOMPLETE')
+      if (!Number.isSafeInteger(target) || target < 1) throw new Error('GENERATION_DRAFT_INCOMPLETE')
+      const units = countDraftUnits(composition.text), range = draftTargetUnitRange(target)
+      if (units < range.minimum) throw new Error('GENERATION_DRAFT_INCOMPLETE')
+      if (units > range.maximum) throw new Error('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE')
       if (request.batchId) {
         const progress = this.readBatch(request.batchId, request.handle.projectId)
         if (progress.rootHandle.rootActionId !== run.rootActionId || progress.nextChapterNumber !== request.chapterNumber
@@ -123,7 +126,7 @@ export class GenerationDraftEffects {
         dependencies.push({ kind: 'finalized', draftId: Number(finalized[1]), finalizationId: finalized[2]!, chapterNumber, contentHash: ref.contentHash })
       }
       const id = DraftRepository.create({ chapterNumber: request.chapterNumber, source: 'write', content: composition.text,
-        wordCount: countDraftUnits(composition.text), sourceDependencies: dependencies }, this.db)
+        wordCount: units, sourceDependencies: dependencies }, this.db)
       const version = this.db.prepare('SELECT version FROM drafts WHERE id=?').pluck().get(id) as number
       const receipt: GenerationDraftCommitReceipt = { success: true, id, version, contentHash: composition.textHash, content: composition.text }
       const artifact = this.db.prepare('SELECT attempt_id FROM generation_artifacts WHERE artifact_id=?').pluck().get(composition.artifactIds.at(-1)) as string

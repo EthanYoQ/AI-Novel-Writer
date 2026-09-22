@@ -6,6 +6,9 @@ import { createMainOwnedGenerationRuntime, type GenerationRuntime, type MainGene
 import type { GenerationSession } from '../generation/generation-harness'
 import { requireWorkflowProjectSession } from './workflow-project-session'
 import { ipc } from '../ipc-client'
+import { projectSessionContextFromProject, sameProjectSessionContext } from '../../shared/project-session-context'
+import { useProjectStore } from '../../stores/project-store'
+import { useWorkflowReasoningStore } from '../../stores/workflow-reasoning-store'
 
 export interface WorkflowMainGenerationSelection extends Omit<BeginGenerationRequest, 'uiActionNonce' | 'modelId' | 'parentRootActionId' | 'selectedDraftIds' | 'selectedFinalizedDraftIds'> {
   selectedDraftIds?: number[]
@@ -41,6 +44,8 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
   let cancelFailure: unknown
   let importOrdinal = 0
   let importStage = false
+  let unsubscribeReasoning: (() => void) | undefined
+  const clearReasoning = () => useWorkflowReasoningStore.getState().clear(context.runId)
   const displayed = new Map<string, string>()
   const onSnapshot = (snapshot: MainGenerationSnapshot) => {
     if (closed) return
@@ -53,6 +58,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
     displayed.set(snapshot.artifactId, snapshot.text)
   }
   const cancel = () => {
+    clearReasoning()
     if (!cancelPromise && view) cancelPromise = transport.cancel(view.handle).catch(error => { cancelFailure = error })
     return cancelPromise
   }
@@ -97,13 +103,23 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
     }
     await onRunOpened?.(context.mainGenerationRunHandle)
     if (context.cancelled) { await transport.cancel(view.handle); throw new Error('GENERATION_WORKFLOW_CANCELLED') }
+    unsubscribeReasoning = transport.subscribeReasoning?.(view.handle, event => {
+      if (closed || context.cancelled || !event.attemptId || !event.text
+        || !sameProjectSessionContext(projectSession, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
+      useWorkflowReasoningStore.getState().append(context.runId, event.attemptId, event.text)
+    })
     inner = await createMainOwnedGenerationRuntime({ runHandle: view.handle, onSnapshot }, transport)
   }
-  await open(request.selection)
+  try { await open(request.selection) }
+  catch (error) { unsubscribeReasoning?.(); clearReasoning(); throw error }
+  const unsubscribeProject = useProjectStore.subscribe(state => {
+    if (!sameProjectSessionContext(projectSession, projectSessionContextFromProject(state.currentProject))) clearReasoning()
+  })
   const cancellationTimer = setInterval(() => { if (context.cancelled) void cancel() }, 25)
   const close = async () => {
     if (closed) return
     closed = true; clearInterval(cancellationTimer)
+    unsubscribeReasoning?.(); unsubscribeProject(); clearReasoning()
     await cancelPromise
     await inner?.close()
   }
@@ -140,6 +156,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
     close,
     async advance(selection) {
       if (closed || busy || cancelPromise) throw new Error('GENERATION_WORKFLOW_ADVANCE_REFUSED')
+      unsubscribeReasoning?.(); unsubscribeReasoning = undefined; clearReasoning()
       await inner?.close(); inner = undefined
       await open(selection)
     },

@@ -26,6 +26,123 @@ const sourceDraft = Object.freeze({
 })
 
 describe('human-confirmed review snapshot contract', () => {
+  it('rejects a source with no prose units before it can become persisted revision authority', () => {
+    const input = { sourceReviewId: 42, sourceDraft: { ...sourceDraft, content: '！……🚀' }, summary: '', authorGuidance: '',
+      items: [{ category: '连续性', severity: 'warning', description: '需要修复', decision: 'apply' as const, origin: 'ai' as const }] }
+    expect(createHumanConfirmedReviewSnapshot(input)).toBeNull()
+    expect(parseHumanConfirmedReviewSnapshot(JSON.stringify({ ...input, kind: 'human-confirmed-review', schemaVersion: 1 }))).toBeNull()
+  })
+
+  it('keeps v1 ignore distinct from an explicit v2 finding waiver', () => {
+    const legacy = createHumanConfirmedReviewSnapshot({
+      sourceReviewId: 42,
+      sourceDraft,
+      summary: '',
+      authorGuidance: '',
+      items: [{
+        category: '连续性',
+        severity: 'warning',
+        description: '作者暂不采用。',
+        decision: 'ignore',
+        origin: 'ai',
+      }],
+    })!
+    expect(legacy).toMatchObject({ schemaVersion: 1 })
+    expect(legacy.items[0].decision).toBe('ignore')
+
+    const waived = createHumanConfirmedReviewSnapshot({
+      sourceReviewId: 42,
+      sourceDraft,
+      cycleId: 'cycle-1',
+      summary: '',
+      authorGuidance: '',
+      items: [{
+        findingId: 'finding-1',
+        category: '连续性',
+        severity: 'warning',
+        description: '作者明确接受并带建议完成。',
+        decision: 'waive',
+        origin: 'ai',
+      }],
+    })!
+    expect(waived).toMatchObject({ schemaVersion: 2, cycleId: 'cycle-1' })
+    expect(waived.items[0]).toMatchObject({ findingId: 'finding-1', decision: 'waive' })
+    expect(parseHumanConfirmedReviewSnapshot(serializeHumanConfirmedReviewSnapshot(waived))).toEqual(waived)
+
+    expect(createHumanConfirmedReviewSnapshot({
+      sourceReviewId: 42,
+      sourceDraft,
+      cycleId: 'cycle-1',
+      summary: '',
+      authorGuidance: '',
+      items: [{
+        category: '节奏',
+        severity: 'pass',
+        description: '已通过的项目没有 cycle finding。',
+        decision: 'ignore',
+        origin: 'ai',
+      }],
+    })).toMatchObject({ schemaVersion: 2, cycleId: 'cycle-1' })
+
+    expect(createHumanConfirmedReviewSnapshot({
+      sourceReviewId: 42,
+      sourceDraft,
+      summary: '',
+      authorGuidance: '',
+      items: [{
+        findingId: 'finding-1',
+        category: '连续性',
+        severity: 'warning',
+        description: '模型不能伪造作者豁免。',
+        decision: 'waive',
+        origin: 'ai',
+      }],
+    })).toBeNull()
+    expect(createHumanConfirmedReviewSnapshot({
+      sourceReviewId: 42,
+      sourceDraft,
+      cycleId: 'cycle-1',
+      summary: '',
+      authorGuidance: '',
+      items: [{
+        category: '连续性',
+        severity: 'warning',
+        description: '缺少 finding 身份。',
+        decision: 'waive',
+        origin: 'ai',
+      }],
+    })).toBeNull()
+    expect(createHumanConfirmedReviewSnapshot({
+      sourceReviewId: 42,
+      sourceDraft,
+      cycleId: 'cycle-1',
+      summary: '',
+      authorGuidance: '',
+      items: [{
+        category: '连续性',
+        severity: 'warning',
+        description: '未形成 finding 的普通 AI 项仍可保留。',
+        decision: 'apply',
+        origin: 'ai',
+      }],
+    })).toMatchObject({ schemaVersion: 2, cycleId: 'cycle-1' })
+    expect(createHumanConfirmedReviewSnapshot({
+      sourceReviewId: 42,
+      sourceDraft,
+      cycleId: 'cycle-1',
+      summary: '',
+      authorGuidance: '',
+      items: [{
+        findingId: 'finding-1',
+        category: '作者补充',
+        severity: 'warning',
+        description: '模型字段不能冒充作者操作。',
+        decision: 'waive',
+        origin: 'author',
+      }],
+    })).toBeNull()
+  })
+
   it('待核实目标保留身份与证据，默认忽略不进入修稿，明确纳入仍保留不确定性', () => {
     const input = {
       sourceReviewId: 42, sourceDraft, summary: '', authorGuidance: '',

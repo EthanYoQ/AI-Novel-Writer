@@ -55,6 +55,8 @@ export async function buildChapterContextSnapshot(input: ChapterContextSnapshotI
     || compareCodeUnit(left.text, right.text))
   const omissions = [...input.selection.omissions].sort((left, right) =>
     compareCodeUnit(left.sourceId, right.sourceId)
+    || left.revision - right.revision
+    || compareCodeUnit(left.contentHash, right.contentHash)
     || compareCodeUnit(left.reason, right.reason)
     || Number(left.required) - Number(right.required))
   const hash = await hashAuthorText(JSON.stringify({
@@ -68,6 +70,8 @@ export async function buildChapterContextSnapshot(input: ChapterContextSnapshotI
     })),
     omissions: omissions.map(omission => ({
       sourceId: omission.sourceId,
+      revision: omission.revision,
+      contentHash: omission.contentHash,
       reason: omission.reason,
       required: omission.required,
     })),

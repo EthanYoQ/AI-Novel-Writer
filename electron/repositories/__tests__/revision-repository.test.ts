@@ -117,7 +117,7 @@ describe('RevisionRepository.replacePending', () => {
       },
     })
 
-    expect(replacement).toEqual({ id: 1, revisionIndex: 1 })
+    expect(replacement).toEqual({ id: 1, revisionIndex: 1, discardedRevisionIds: [] })
     expect(RevisionRepository.getFull(replacement.id)).toMatchObject({
       content: '合法新修订',
       sourceDraft: {
@@ -223,6 +223,8 @@ describe('RevisionRepository.mergeIntoDraft', () => {
       status: 'revised',
       wordCount: 10,
       idempotent: false,
+      chapterNumber: 1,
+      version: 1,
     })
     expect(db.prepare(`
       SELECT drafts.status, drafts.word_count, contents.body
@@ -286,6 +288,8 @@ describe('RevisionRepository.mergeIntoDraft', () => {
       status: 'revised',
       wordCount: 10,
       idempotent: true,
+      chapterNumber: 1,
+      version: 1,
     })
 
     db.prepare('UPDATE contents SET body = ? WHERE id = 1').run('合并成功后的用户新编辑')

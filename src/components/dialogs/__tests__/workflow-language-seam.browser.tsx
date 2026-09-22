@@ -4,7 +4,9 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
+import { hashAuthorText } from '../../../shared/source-ref'
 import type { ProjectData } from '../../../shared/ipc-channels'
+import type { MainGenerationRunView } from '../../../services/generation/generation-runtime'
 import { useLayoutStore } from '../../../stores/layout-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useLocaleStore } from '../../../stores/locale-store'
@@ -174,17 +176,12 @@ describe('workflow launch language seams', () => {
       const generatedPremise = 'A production workflow preserves “夜航 Café” exactly.'
       let persistedPremise = ''
       let observedRequest = ''
-      const generateStream = vi.fn<ReturnType<typeof useLLMStore.getState>['generateStream']>(
-        async (messages, callbacks) => {
-          observedRequest = messages.map(message => message.content).join('\n')
-          callbacks.onDone?.(generatedPremise, undefined, 'stop')
-          return 'browser-provider-request'
-        },
-      )
+      let view: MainGenerationRunView | undefined
+      let generationExecutions = 0
 
       useLocaleStore.setState({ locale: uiLocale, initialized: true })
       useProjectStore.setState({ currentProject })
-      useLLMStore.setState({ defaultModelId: modelId, generateStream })
+      useLLMStore.setState({ defaultModelId: modelId })
       useWorkflowStore.setState({
         activeRuns: [],
         history: [],
@@ -224,43 +221,57 @@ describe('workflow launch language seams', () => {
               case 'fs:list-dir':
                 if (args[0] === `${currentProject.path}/.ai-novel/skills`) return []
                 throw new Error(`Unexpected IPC channel: ${channel}`)
-              case 'db:project-core-update':
-                persistedPremise = String((args[0] as { premise?: string }).premise ?? '')
+              case 'db:project-core-commit-generated':
+                expect((args[0] as { generationRunHandle: unknown }).generationRunHandle).toEqual(view?.handle)
+                persistedPremise = String((args[0] as { data: { premise?: string } }).data.premise ?? '')
                 return { success: true }
               case 'fs:read-json':
                 return { success: false, error: 'not found' }
               case 'fs:write-json':
                 return { success: true }
-              case 'llm:begin-execution-lease':
+              case 'generation:begin': {
+                const selection = args[0] as { modelId: string }
+                expect(selection.modelId).toBe(modelId)
+                view = {
+                  handle: { projectId: projectSession.projectId, epoch: projectSession.leaseId, rootActionId: 'language-root', runId: 'language-run' },
+                  status: 'running', nonReplayable: false, artifacts: [],
+                  budget: { maxAttempts: 4, maxRequestedOutputTokens: 32768, maxRequestedOutputTokensPerAttempt: 8192, deadlineAt: Date.now() + 60_000 },
+                }
+                return structuredClone(view)
+              }
+              case 'generation:read':
+                return structuredClone(view)
+              case 'generation:execute': {
+                const request = args[0] as { task: { messages: Array<{ content: string }> } }
+                observedRequest = request.task.messages.map(message => message.content).join('\n')
+                generationExecutions += 1
+                const artifact = {
+                  ...view!.handle, artifactId: 'language-artifact', attemptId: 'language-attempt',
+                  revision: 1, durableRevision: 1, text: generatedPremise,
+                  textHash: await hashAuthorText(generatedPremise), status: 'completed' as const,
+                }
+                view = { ...view!, artifacts: [artifact], status: 'completed' }
                 return {
-                  success: true,
-                  lease: {
-                    leaseId: 'browser-language-lease',
-                    modelId,
-                    provider: 'custom',
-                    protocol: 'openai',
-                    modelName: modelId,
-                    modelRevision: 'a'.repeat(64),
-                    endpointFingerprint: 'b'.repeat(64),
-                    capabilityEvidence: {
-                      source: {
-                        contextWindowTokens: 'unknown',
-                        maxOutputTokens: 'user-operational-cap',
-                        featureFlags: 'unknown',
+                  run: structuredClone(view),
+                  outcome: {
+                    status: 'completed', content: generatedPremise, finishReason: 'stop',
+                    receipt: {
+                      model: { id: modelId, configurationRevision: 'a'.repeat(64), endpointFingerprint: 'b'.repeat(64) },
+                      capabilities: {
+                        contextWindowTokens: null, maxOutputTokens: 8192, reasoning: false, structuredOutput: true, usage: false,
+                        source: { contextWindowTokens: 'unknown', maxOutputTokens: 'user-operational-cap', featureFlags: 'unknown' },
                       },
-                      subjectFingerprint: 'c'.repeat(64),
-                      contextWindowTokens: null,
-                      maxOutputTokens: 8192,
-                      reasoning: null,
-                      structuredOutput: true,
-                      usage: null,
+                      budget: {
+                        attempt: 1, maxAttempts: view!.budget.maxAttempts, requestedOutputTokens: 8192,
+                        cumulativeRequestedOutputTokens: 8192, maxRequestedOutputTokens: view!.budget.maxRequestedOutputTokens,
+                        maxRequestedOutputTokensPerAttempt: view!.budget.maxRequestedOutputTokensPerAttempt, deadlineAt: view!.budget.deadlineAt,
+                      },
+                      finishReason: 'stop',
+                      visibleArtifact: { artifactId: artifact.artifactId, attemptId: artifact.attemptId, revision: artifact.revision, textHash: artifact.textHash },
                     },
-                    createdAt: 1000,
-                    expiresAt: 61_000,
                   },
                 }
-              case 'llm:close-execution-lease':
-                return { success: true }
+              }
               default:
                 throw new Error(`Unexpected IPC channel: ${channel}`)
             }
@@ -300,7 +311,7 @@ describe('workflow launch language seams', () => {
       })
 
       const completedRun = useWorkflowStore.getState().history[0]
-      expect(completedRun).toMatchObject({
+      expect(completedRun, completedRun.error).toMatchObject({
         type: 'architecture_generation',
         writingLanguage,
         uiLocale,
@@ -315,7 +326,7 @@ describe('workflow launch language seams', () => {
         ].join('\n')
         expect(visibleLogs).not.toMatch(/[\u3400-\u9fff]/u)
       }
-      expect(generateStream).toHaveBeenCalledOnce()
+      expect(generationExecutions).toBe(1)
       expect(observedRequest).toContain(expectedPrompt)
       expect(observedRequest).not.toContain(unexpectedPrompt)
       expect(observedRequest).toContain('“夜航 Café”')

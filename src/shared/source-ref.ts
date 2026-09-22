@@ -53,6 +53,8 @@ export function mayUseCandidate(candidate: CandidateSource, admission: Candidate
 }
 export interface ContextSnapshot extends ProjectEpoch {
   id: string; hash: string
+  /** Portable receipt identity only; never an execution or author-content authority. */
+  transferAuthority?: { receiptId: string; originProjectId: string; snapshotGeneration: string }
   sources: readonly { ref: SourceRef; slot: 'finalized-fact' | 'unconfirmed-continuity' | 'author-constraint'; reason: string }[]
   omissions: readonly { sourceId: string; reason: string; required: boolean }[]
   estimate: { methodVersion: string; inputUnits: number }

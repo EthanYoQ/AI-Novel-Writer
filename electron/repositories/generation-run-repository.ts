@@ -6,6 +6,7 @@ import { composeVisibleContinuation, VISIBLE_CONTINUATION_VERSION } from '../../
 import { composeDraftVisibleContinuation, sanitizeDraftText } from '../../src/shared/draft-visible-text';
 import { countDraftUnits } from '../../src/shared/draft-units';
 import { getProjectDb } from '../database';
+import type { PortableRuntimeFreezeTable } from '../services/portable-runtime-freeze';
 import { assertReservation, assertAttemptTransition, rootActionIdempotencyKey, type RootAction, type RootBudget, type PhysicalAttempt, type VisibleArtifact, type ProviderUsagePolicy } from '../../src/shared/generation-contract';
 import { isContentHash, sameProjectEpoch, type FrozenInputFingerprint, type SourceRef, type ProjectEpoch } from '../../src/shared/source-ref';
 export interface RunBinding extends ProjectEpoch {
@@ -69,7 +70,8 @@ function binding(request: RunBinding): RunBinding {
 }
 export class GenerationRunRepository {
     private readonly database: Database.Database | null;
-    constructor(getDb: () => Database.Database | null = getProjectDb, private readonly now: () => number = Date.now) {
+    constructor(getDb: () => Database.Database | null = getProjectDb, private readonly now: () => number = Date.now,
+        private readonly isFrozen: (table: PortableRuntimeFreezeTable, recordId: string) => boolean = () => false) {
         // Capture this project's admitted handle once. A later project switch
         // must never redirect in-flight generation writes into another DB.
         this.database = getDb();
@@ -105,6 +107,13 @@ export class GenerationRunRepository {
         }[];
         return { root: JSON.parse(row.action_json), policy: JSON.parse(row.budget_json), activeElapsedMs: row.active_elapsed_ms + (row.active_since_ms === null ? 0 : Math.max(0, this.now() - row.active_since_ms)), attempts: attempts.map(row => JSON.parse(row.attempt_json)), blockedCode: row.blocked_code };
     }
+    attemptCount(runId: string): number {
+        return this.db().prepare('SELECT COUNT(*) FROM generation_attempts WHERE run_id=?').pluck().get(runId) as number;
+    }
+    hasNonCancelledAttempt(runId: string): boolean {
+        const rows = this.db().prepare('SELECT attempt_json FROM generation_attempts WHERE run_id=?').all(runId) as { attempt_json: string }[];
+        return rows.some(row => (JSON.parse(row.attempt_json) as PhysicalAttempt).status !== 'cancelled-before-dispatch');
+    }
     open(request: OpenGenerationRunRequest): DurableGenerationRun {
         const frozen = binding(request);
         return this.transaction(() => {
@@ -133,6 +142,17 @@ export class GenerationRunRepository {
             }
             const runId = randomUUID();
             this.db().prepare('INSERT INTO generation_runs VALUES(?,?,?,?,?,?)').run(runId, action.rootActionId, encode(frozen), 'running', this.now(), openKey);
+            return this.get(runId);
+        });
+    }
+    replaceUnstartedBinding(runId: string, expected: RunBinding, next: RunBinding): DurableGenerationRun {
+        const frozen = binding(next);
+        return this.transaction(() => {
+            const run = this.get(runId), budget = this.budget(run.rootActionId);
+            if (!isDeepStrictEqual(run.binding, expected)) fail('GENERATION_BINDING_CONFLICT');
+            if (run.status !== 'running' || budget.root.status !== 'active' || this.attemptCount(runId) > 0 || budget.blockedCode)
+                fail('GENERATION_MATERIAL_DECISION_TOO_LATE');
+            this.db().prepare('UPDATE generation_runs SET binding_json=? WHERE run_id=?').run(encode(frozen), runId);
             return this.get(runId);
         });
     }
@@ -403,6 +423,7 @@ export class GenerationRunRepository {
                 root_action_id: string;
             }[];
             for (const { root_action_id: id } of roots) {
+                if (this.frozenRoot(id)) continue;
                 for (const attempt of this.budget(id).attempts)
                     if (attempt.status === 'dispatch-marked') {
                         attempt.status = 'unknown';
@@ -411,6 +432,13 @@ export class GenerationRunRepository {
                 this.pause(id);
             }
         });
+    }
+    private frozenRoot(rootId: string): boolean {
+        if (this.isFrozen('generation_roots', rootId)) return true;
+        const runIds = this.db().prepare('SELECT run_id FROM generation_runs WHERE root_action_id=?').all(rootId) as { run_id: string }[];
+        if (runIds.some(row => this.isFrozen('generation_runs', row.run_id))) return true;
+        const attemptIds = this.db().prepare('SELECT attempt_id FROM generation_attempts WHERE root_action_id=?').all(rootId) as { attempt_id: string }[];
+        return attemptIds.some(row => this.isFrozen('generation_attempts', row.attempt_id));
     }
     listCandidates(): VisibleArtifact[] {
         const rows = this.db().prepare("SELECT attempt_id FROM generation_artifacts WHERE status!='discarded' ORDER BY rowid").all() as { attempt_id: string }[];

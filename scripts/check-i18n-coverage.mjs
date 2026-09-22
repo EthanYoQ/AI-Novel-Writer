@@ -410,6 +410,7 @@ export function collectI18nCoverageViolations(root = process.cwd()) {
   const scannedRendererFiles = new Set()
   for (const relative of rendererRoots) {
     for (const file of filesAt(path.join(root, relative))) {
+      if (relativePath(root, file).split('/').includes('__tests__')) continue
       if (!file.endsWith('.tsx') && !file.endsWith('.ts')) continue
       if (scannedRendererFiles.has(file)) continue
       scannedRendererFiles.add(file)

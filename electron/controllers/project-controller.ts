@@ -29,6 +29,7 @@ import { projectAccess, type ProjectSessionLease } from '../services/project-acc
 import { assertExpectedProjectPath, assertRequiredExpectedProjectPath } from '../utils/project-context'
 import { sanitizeProjectName } from './project-path'
 import { projectStoragePreflightFailure } from '../services/project-storage-preflight'
+import { projectPeekService } from '../services/project-peek'
 
 function projectRootSelectionFailure(error: unknown) {
   if (error instanceof Error && ['PROJECT_MIGRATION_NOT_QUALIFIED', 'PROJECT_MIGRATION_DUAL_ROOT', 'PROJECT_MIGRATION_RECOVERY_REQUIRED'].includes(error.message)) {
@@ -49,7 +50,7 @@ function projectRootSelectionFailure(error: unknown) {
   return null
 }
 
-interface RecentProject {
+export interface RecentProject {
   name: string
   path: string
   updatedAt: string
@@ -57,6 +58,15 @@ interface RecentProject {
 
 let latestProjectOpenRequestToken: string | null = null
 let projectOpenQueue: Promise<void> = Promise.resolve()
+const recentPreviewCapabilities = new Map<string, string>()
+
+function revokeRecentPreviewCapabilities(projectPath?: string): void {
+  for (const [capabilityId, capabilityPath] of recentPreviewCapabilities) {
+    if (projectPath && !sameRecentProjectPath(capabilityPath, projectPath)) continue
+    projectPeekService.revokeCapability(capabilityId)
+    recentPreviewCapabilities.delete(capabilityId)
+  }
+}
 
 function serializeProjectOpen<T>(operation: () => Promise<T>): Promise<T> {
   const result = projectOpenQueue.then(operation, operation)
@@ -284,7 +294,8 @@ function loadRecentProjects(): RecentProject[] {
   return readJsonFile<RecentProject[]>(RECENT_PROJECTS_PATH, [])
 }
 
-function addRecentProject(project: RecentProject) {
+/** 最近项目导航元数据的唯一写入口。 */
+export function registerRecentProject(project: RecentProject): void {
   const list = loadRecentProjects()
   const filtered = list.filter((p) => !sameRecentProjectPath(p.path, project.path))
   filtered.unshift(project)
@@ -297,7 +308,12 @@ function removeRecentProject(projectPath: string) {
   writeJsonFile(RECENT_PROJECTS_PATH, filtered)
 }
 
-export function registerProjectController() {
+export interface ProjectControllerOptions {
+  /** Called only after the project directory is confirmed absent. */
+  removeDeletedProjectBinding?(projectId: string): void
+}
+
+export function registerProjectController(options: ProjectControllerOptions = {}) {
   ipcMain.handle('project:get-runtime-context', async () => {
     const activeProjectPath = getCurrentProjectPath()
     const database = getProjectDb()
@@ -402,7 +418,7 @@ export function registerProjectController() {
           }
         }
 
-        addRecentProject({
+        registerRecentProject({
           name: projectName,
           path: projectDir,
           updatedAt,
@@ -544,7 +560,7 @@ export function registerProjectController() {
           }
         }
 
-        addRecentProject({
+        registerRecentProject({
           name: projectData.name,
           path: resolvedProjectPath,
           updatedAt: projectData.updatedAt,
@@ -556,6 +572,7 @@ export function registerProjectController() {
         )
         const session = projectAccess.beginSession(trustedProject)
         projectData.sessionLease = session.leaseId
+        revokeRecentPreviewCapabilities()
         return {
           success: true,
           project: projectData,
@@ -648,7 +665,7 @@ export function registerProjectController() {
       // 最近项目是导航便利数据，不属于项目核心提交。写入失败不能把已经
       // 已提交的数据库保存即使被误报为失败，也不能让渲染进程保留过期草稿。
       try {
-        addRecentProject({
+        registerRecentProject({
           name: data.name ?? ProjectCoreRepository.get()?.projectName ?? 'Unknown',
           path: data.path,
           updatedAt: new Date().toISOString(),
@@ -705,12 +722,39 @@ export function registerProjectController() {
   })
 
   ipcMain.handle('project:recent-list', async () => {
-    return loadRecentProjects()
+    revokeRecentPreviewCapabilities()
+    return loadRecentProjects().map(project => {
+      const capability = projectPeekService.issueCapability(project.path)
+      if (!capability) return project
+      recentPreviewCapabilities.set(capability.capabilityId, project.path)
+      return {
+        ...project,
+        previewCapabilityId: capability.capabilityId,
+        projectId: capability.projectId,
+      }
+    })
+  })
+
+  ipcMain.handle('project:peek-overview', async (_event, capabilityId: string) => {
+    if (!recentPreviewCapabilities.has(capabilityId)) return { state: 'unavailable' as const }
+    return projectPeekService.peek(capabilityId)
+  })
+
+  ipcMain.handle('project:overview-current', async (_event, context?: ProjectSessionContext) => {
+    try {
+      const active = projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
+      const database = getProjectDb()
+      if (!database) return { state: 'unavailable' as const }
+      return projectPeekService.readCurrent(active.projectId, database)
+    } catch {
+      return { state: 'unavailable' as const }
+    }
   })
 
   ipcMain.handle('project:recent-remove', async (_event, projectPath: string) => {
     try {
       removeRecentProject(projectPath)
+      revokeRecentPreviewCapabilities(projectPath)
       return { success: true }
     } catch (error) {
       return { success: false, error: String(error) }
@@ -727,6 +771,7 @@ export function registerProjectController() {
       context?: ProjectSessionContext,
     ) => {
     let resolvedPath: string
+    let deletedProjectId: string
     let deletingCurrentProject = false
     let databaseClosed = false
     try {
@@ -734,6 +779,7 @@ export function registerProjectController() {
         context,
         getCurrentProjectPath(),
       )
+      deletedProjectId = activeSession.projectId
       resolvedPath = projectAccess.authorizeDeletion({
         projectId: activeSession.projectId,
         leaseId: activeSession.leaseId,
@@ -786,6 +832,12 @@ export function registerProjectController() {
       return { success: false, directoryDeleted: false, databaseRestored, error }
     }
 
+    let bindingCleanupWarning: string | undefined
+    try {
+      options.removeDeletedProjectBinding?.(deletedProjectId)
+    } catch {
+      bindingCleanupWarning = '项目目录已删除，但本机云备份绑定暂未清理'
+    }
     projectAccess.invalidateCurrentSession()
     try {
       removeRecentProject(resolvedPath)
@@ -793,14 +845,22 @@ export function registerProjectController() {
         success: true,
         directoryDeleted: true,
         databaseRestored: false,
-        ...(deletionError ? { warning: `项目目录已删除：${String(deletionError)}` } : {}),
+        ...((deletionError || bindingCleanupWarning) ? {
+          warning: [
+            deletionError ? `项目目录已删除：${String(deletionError)}` : undefined,
+            bindingCleanupWarning,
+          ].filter(Boolean).join('；'),
+        } : {}),
       }
     } catch (recentProjectError) {
       return {
         success: true,
         directoryDeleted: true,
         databaseRestored: false,
-        warning: `项目目录已删除，但最近项目列表更新失败：${String(recentProjectError)}`,
+        warning: [
+          bindingCleanupWarning,
+          `项目目录已删除，但最近项目列表更新失败：${String(recentProjectError)}`,
+        ].filter(Boolean).join('；'),
       }
     }
     },

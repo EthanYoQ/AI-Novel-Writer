@@ -6,6 +6,7 @@ const {
   syncTabContent,
   markTabSaved,
   settleMergedRevision,
+  startWorkflow,
   editorTabs,
 } = vi.hoisted(() => ({
   invokeWithProjectSession: vi.fn(),
@@ -13,6 +14,7 @@ const {
   syncTabContent: vi.fn(),
   markTabSaved: vi.fn(),
   settleMergedRevision: vi.fn(),
+  startWorkflow: vi.fn(),
   editorTabs: [] as Array<{
     id: string
     filePath: string
@@ -52,6 +54,15 @@ vi.mock('../editor-store', () => ({
   },
 }))
 
+vi.mock('../workflow-store', () => ({
+  useWorkflowStore: { getState: () => ({ startWorkflow }) },
+  workflowResourceKey: (...parts: unknown[]) => parts.join(':'),
+}))
+
+vi.mock('../locale-store', () => ({
+  useLocaleStore: { getState: () => ({ locale: 'zh-CN' }) },
+}))
+
 import { useDraftStore } from '../draft-store'
 
 const projectPath = 'C:\\novels\\project-a'
@@ -68,6 +79,7 @@ describe('draft-store merged revision persistence', () => {
     syncTabContent.mockReset()
     markTabSaved.mockReset()
     settleMergedRevision.mockReset()
+    startWorkflow.mockReset()
     editorTabs.splice(0)
     refreshFileTree.mockResolvedValue(undefined)
 
@@ -120,7 +132,7 @@ describe('draft-store merged revision persistence', () => {
       projectSession,
     )
 
-    expect(result).toEqual({ success: true })
+    expect(result).toMatchObject({ success: true, receipt: { revisionId: 1, targetDraftId: 11 } })
     expect(invokeWithProjectSession).toHaveBeenCalledWith(
       projectSession,
       'db:revision-merge',
@@ -179,11 +191,48 @@ describe('draft-store merged revision persistence', () => {
     editorTabs[0].dirty = true
     releaseMerge()
 
-    await expect(merging).resolves.toEqual({ success: true })
+    await expect(merging).resolves.toMatchObject({ success: true, receipt: { idempotent: false } })
     expect(settleMergedRevision).toHaveBeenCalledWith(
       'draft-11',
       { content: '原稿', contentRevision: 3 },
       '合并正文',
     )
+  })
+
+  it('starts exactly one targeted recheck only when the merge receipt requires it', async () => {
+    editorTabs.push({ id: 'draft-11', filePath: 'ai-novel://draft/11', projectKey: projectPath,
+      content: '原稿', contentRevision: 2, dirty: false })
+    invokeWithProjectSession.mockImplementation(async (_session: unknown, channel: string) => {
+      if (channel === 'db:revision-merge') return { success: true, receipt: { revisionId: 1, targetDraftId: 11,
+        status: 'revised', wordCount: 4, idempotent: false, chapterNumber: 1, version: 1,
+        reviewCycle: { cycleId: 'cycle-1', mergedHash: 'a'.repeat(64), disposition: 'required' } } }
+      if (channel === 'db:draft-list') return []
+      return { success: true }
+    })
+    const result = await useDraftStore.getState().applyMergedRevision('ai-novel://draft/ch1', 1,
+      'ai-novel://draft/11', 'ai-novel://revision/1', '合并正文', '原稿', projectPath, projectSession)
+    expect(result.error).toBeUndefined()
+    expect(result).toMatchObject({ success: true, receipt: { reviewCycle: { disposition: 'required' } } })
+    expect(startWorkflow).toHaveBeenCalledTimes(1)
+    expect(startWorkflow.mock.calls[0]?.[0]).toMatchObject({ projectPath, steps: [{ name: expect.any(String) }] })
+    expect(startWorkflow.mock.calls[0]?.[1]).toBe(false)
+  })
+
+  it('reports a post-commit recheck launch failure without claiming the durable merge failed', async () => {
+    editorTabs.push({ id: 'draft-11', filePath: 'ai-novel://draft/11', projectKey: projectPath,
+      content: '原稿', contentRevision: 2, dirty: false })
+    invokeWithProjectSession.mockImplementation(async (_session: unknown, channel: string) => {
+      if (channel === 'db:revision-merge') return { success: true, receipt: { revisionId: 1, targetDraftId: 11,
+        status: 'revised', wordCount: 4, idempotent: false, chapterNumber: 1, version: 1,
+        reviewCycle: { cycleId: 'cycle-1', mergedHash: 'a'.repeat(64), disposition: 'required' } } }
+      if (channel === 'db:draft-list') return []
+      return { success: true }
+    })
+    startWorkflow.mockImplementation(() => { throw new Error('synthetic recheck launch failure') })
+
+    await expect(useDraftStore.getState().applyMergedRevision('ai-novel://draft/ch1', 1,
+      'ai-novel://draft/11', 'ai-novel://revision/1', '合并正文', '原稿', projectPath, projectSession))
+      .resolves.toMatchObject({ success: true, receipt: { reviewCycle: { disposition: 'required' } },
+        postCommitError: 'Error: synthetic recheck launch failure' })
   })
 })

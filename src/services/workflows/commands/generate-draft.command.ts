@@ -11,6 +11,7 @@ import {
 } from './base-command'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useProjectStore } from '../../../stores/project-store'
+import { hashAuthorText } from '../../../shared/source-ref'
 import { resolvePromptTemplate } from '../../prompt-templates'
 import { ChapterPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
@@ -40,7 +41,7 @@ import type { WritingLanguage } from '../../../shared/writing-language'
 import type { FinalizedContinuityProjection } from '../../../shared/finalized-continuity'
 import type { NarrativeThreadView } from '../../../shared/narrative-thread'
 import { promptLanguageText } from '../../prompt-language'
-import { countDraftUnits } from '../../../shared/draft-units'
+import { countDraftUnits, draftTargetUnitRange } from '../../../shared/draft-units'
 import type { RecoveryChapterSource } from '../../../shared/recovery-candidate'
 import { CHARACTER_STATE_TEXT_FIELDS } from '../../../shared/character-roster'
 import {
@@ -57,7 +58,6 @@ export { countDraftUnits } from '../../../shared/draft-units'
 export { previousChapterEnding } from '../chapter-materials'
 
 const CONTINUE_PROMPT_MAX_CHARS = 1600
-const MIN_TARGET_COMPLETION_RATIO = 0.8
 const MAX_AUTO_CONTINUE_ROUNDS = 7
 const NEXT_CHAPTER_HEAD_MAX_CHARS = 1200
 const CROSS_CHAPTER_REUSE_CJK_NGRAM_CHARS = 8
@@ -357,6 +357,26 @@ function recoveryFailureCode(error: unknown, cancelled: boolean): string {
   return 'GENERATION_FAILED'
 }
 
+function draftLengthOutOfRangeError(): Error & { code: string } {
+  return Object.assign(new Error('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE'), {
+    code: 'GENERATION_DRAFT_LENGTH_OUT_OF_RANGE',
+  })
+}
+
+function draftTooShortError(
+  context: CommandExecuteParams['context'],
+  units: number,
+  targetUnits: number,
+): Error {
+  return new Error(workflowUiText(
+    context,
+    `模型已声明生成结束，但正文仅约 ${units}/${targetUnits} 字，明显未达到章节目标，结果未保存。` +
+      '请提高最大输出 Tokens、降低本章目标字数，或改用输出能力更强的模型后重试。',
+    `The model reported completion, but the draft is only about ${units}/${targetUnits} units and clearly misses the chapter target, so it was not saved. ` +
+      'Increase the maximum output tokens, lower the chapter target, or use a model with greater output capacity and try again.',
+  ))
+}
+
 function recoveryChapterSource(chapter: ChapterInfo): RecoveryChapterSource {
   return {
     chapterNumber: chapter.chapterNumber,
@@ -564,8 +584,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       const unavailableContext = promptLanguageText(writingLanguage, '（知识库检索不可用）', '(knowledge-base search unavailable)')
       knowledgeReferences = [{ text: unavailableContext, rendered: unavailableContext }]
     }
-    const lowerTargetChars = Math.round(targetChars * 0.8)
-    const upperTargetChars = Math.round(targetChars * 1.2)
+    const { minimum: lowerTargetChars, maximum: upperTargetChars } = draftTargetUnitRange(targetChars)
     const promptBuilder = new ChapterPromptBuilder(template, writingLanguage)
       // ---- 缓存命中区（跨章稳定，前缀对齐）----
       .withArchitecture(architecture)
@@ -618,8 +637,13 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
     if (defaultMain && earlyRecovery?.selectedDraftIds.length && !earlyRecovery.selectedDrafts)
       throw new Error('GENERATION_DRAFT_SOURCE_CHANGED')
+    const explicitlyRequiredDraftIds = new Set(this.selectedCandidateDrafts
+      .filter(candidate => candidate.required === true).map(candidate => candidate.draftId))
     const selectedCandidateDrafts = (defaultMain ? prepared?.selectedDrafts ?? earlyRecovery?.selectedDrafts ?? [] : this.selectedCandidateDrafts)
       .filter(candidate => candidate.chapterNumber < this.chapterInfo.chapterNumber)
+      .map(candidate => explicitlyRequiredDraftIds.has(candidate.draftId) && candidate.required !== true
+        ? { ...candidate, required: true }
+        : candidate)
       .sort((left, right) => left.chapterNumber - right.chapterNumber)
     const previousChapterNumber = this.chapterInfo.chapterNumber - 1
     const hasRequiredPreviousCandidate = selectedCandidateDrafts.some(candidate => (
@@ -671,6 +695,12 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         'The required material for this chapter (author facts, character profiles, future plans) exceeds the context capacity, so generation stopped. Trim it and try again.',
       ))
     }
+    const admittedCandidateSourceIds = new Set(chapterMaterials.selection.included
+      .map(material => material.ref.sourceId)
+      .filter(sourceId => sourceId.startsWith('candidate:')))
+    if (selectedCandidateDrafts.length > 0 && admittedCandidateSourceIds.size === 0) {
+      throw new Error('GENERATION_DRAFT_REQUIRED_PREDECESSOR_NOT_ADMITTED')
+    }
     if (chapterMaterials.omissions.length > 0) {
       callbacks.log(uiText(
         `  可选材料覆盖缺口：${chapterMaterials.omissions.length} 项`,
@@ -679,8 +709,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     }
     const chapterLengthContract = promptLanguageText(
       writingLanguage,
-      `【本章篇幅合同】\n用户目标 ${targetChars} 字；可接受范围 ${lowerTargetChars}–${upperTargetChars} 字（±20%）。在此篇幅内完整落实本章蓝图中的全部作者任务和必需事件；不得为满足篇幅而删除、改写或截断这些要求，不要为凑字数增加无关内容。`,
-      `[Chapter length contract]\nThe user's target is ${targetChars} words; the acceptable range is ${lowerTargetChars}-${upperTargetChars} words (±20%). Within this length, fully realize every author task and required event in the chapter blueprint; do not delete, rewrite, or truncate those requirements to meet the range, and do not add unrelated content just to fill space.`,
+      `【本章篇幅合同】\n用户目标 ${targetChars} 字；可接受范围 ${lowerTargetChars}–${upperTargetChars} 字（±30%）。在此篇幅内完整落实本章蓝图中的全部作者任务和必需事件；不得为满足篇幅而删除、改写或截断这些要求，不要为凑字数增加无关内容。`,
+      `[Chapter length contract]\nThe user's target is ${targetChars} words; the acceptable range is ${lowerTargetChars}-${upperTargetChars} words (±30%). Within this length, fully realize every author task and required event in the chapter blueprint; do not delete, rewrite, or truncate those requirements to meet the range, and do not add unrelated content just to fill space.`,
     )
     const executionItems = [
       { zhCN: '必需事件', enUS: 'Required events', value: this.chapterInfo.keyEvents },
@@ -697,6 +727,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     const prompt = [chapterMaterials.text, promptBuilder.build(), chapterExecutionCard, chapterLengthContract]
       .filter(Boolean)
       .join('\n\n')
+    const materialDecision = { ...chapterMaterials.decision, promptHash: await hashAuthorText(prompt) }
     const previousEnding = chapterMaterials.previousEnding
 
     callbacks.log(uiText(
@@ -743,6 +774,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           selectedDraftIds: [...new Set(selectedCandidateDrafts.map(item => item.draftId))],
           selectedFinalizedDraftIds: [...new Set(chapterMaterials.consumedFinalizedSources.map(item => item.draftId))],
           selectedBlueprintChapterNumbers: Array.from({ length: 6 }, (_, index) => this.chapterInfo.chapterNumber + index),
+          // S10B 步骤 3：本次准入的脱敏收据随冻结上下文一起进主进程，并被恢复指纹绑定。
+          materialDecision,
           authorInputs: [{ id: 'draft:chapter-info', text: JSON.stringify(writerChapterInfo) },
             { id: 'draft:author-config', text: JSON.stringify(novelConfig) },
             { id: 'draft:target-units', text: String(targetChars) }],
@@ -891,6 +924,19 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         }
       }
       this.assertNotCancelled(context)
+      if (!alreadySaved) {
+        const units = countDraftUnits(cleanDraftText)
+        const range = draftTargetUnitRange(targetChars)
+        if (units < range.minimum) throw draftTooShortError(context, units, targetChars)
+        if (units > range.maximum) {
+          if (mainOwned) {
+            const handle = context.mainGenerationRunHandle
+            if (!handle) throw new Error('GENERATION_COMPOSITION_HANDLE_REQUIRED')
+            await ipc.invokeWithProjectSession(projectSession, 'generation:pause', handle)
+          }
+          throw draftLengthOutOfRangeError()
+        }
+      }
       if (!alreadySaved && hasSubstantialPreviousChapterReuse(previousEnding, cleanDraftText, writingLanguage)) {
         throw new Error(uiText(
           '新章节开头与上一章结尾存在大段重演，结果未保存。请重新生成，并让本章从上一章已完成事件之后继续。',
@@ -950,7 +996,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         const finalizedDraftIds = new Set(finalizedDependencies.map(dependency => dependency.draftId))
         const candidateDependencies: DraftSourceDependency[] = await Promise.all(
           selectedCandidateDrafts
-            .filter(candidate => !finalizedDraftIds.has(candidate.draftId))
+            .filter(candidate => admittedCandidateSourceIds.has(`candidate:${candidate.draftId}`)
+              && !finalizedDraftIds.has(candidate.draftId))
             .map(async candidate => ({
               draftId: candidate.draftId,
               contentHash: await sha256Hex(candidate.content),
@@ -1088,8 +1135,9 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
   ): boolean {
     if (rounds >= MAX_AUTO_CONTINUE_ROUNDS) return false
     const currentChars = countDraftUnits(currentText)
+    if (currentChars > draftTargetUnitRange(targetChars).maximum) return false
     if (finishReason === 'stop') {
-      return currentChars < Math.floor(targetChars * MIN_TARGET_COMPLETION_RATIO)
+      return currentChars < draftTargetUnitRange(targetChars).minimum
     }
     return finishReason === 'length'
   }
@@ -1312,6 +1360,8 @@ ${visibleTail}`,
     }
 
     this.assertNotCancelled(params.context)
+    if (lastFinishReason === 'length'
+      && countDraftUnits(draft) > draftTargetUnitRange(params.targetChars).maximum) return draft
     if (lastFinishReason !== 'stop') {
       const error = this.createIncompleteCompletionError(lastFinishReason)
       error.message = uiText(error.message, (() => {
@@ -1329,17 +1379,9 @@ ${visibleTail}`,
       throw error
     }
 
-    const lowerBound = Math.floor(params.targetChars * MIN_TARGET_COMPLETION_RATIO)
-    if (countDraftUnits(draft) < lowerBound) {
-      throw new Error(
-        uiText(
-          `模型已声明生成结束，但正文仅约 ${countDraftUnits(draft)}/${params.targetChars} 字，明显未达到章节目标，结果未保存。` +
-            '请提高最大输出 Tokens、降低本章目标字数，或改用输出能力更强的模型后重试。',
-          `The model reported completion, but the draft is only about ${countDraftUnits(draft)}/${params.targetChars} units and clearly misses the chapter target, so it was not saved. ` +
-            'Increase the maximum output tokens, lower the chapter target, or use a model with greater output capacity and try again.',
-        ),
-      )
-    }
+    const lowerBound = draftTargetUnitRange(params.targetChars).minimum
+    const draftUnits = countDraftUnits(draft)
+    if (draftUnits < lowerBound) throw draftTooShortError(params.context, draftUnits, params.targetChars)
 
     return draft
   }
@@ -1493,10 +1535,12 @@ ${visibleTail}`,
     const sources: FinalizedMaterialSource[] = []
     for (const { projection, evidence } of selected) {
       try {
+        const sourceDraftId = projection.sourceStatus === 'stale' && projection.currentFinalizedDraftId
+          ? projection.currentFinalizedDraftId : projection.draftId
         const sourceRead = await ipc.invokeWithProjectSession(
           projectSession,
           'db:continuity-read-source',
-          projection.draftId,
+          sourceDraftId,
           projectPath,
         )
         const content = sourceRead.status === 'valid'
@@ -1507,8 +1551,8 @@ ${visibleTail}`,
         if (projection.chapterNumber === currentChapter - 1 && !content.trim()) continue
         sources.push({
           chapterNumber: projection.chapterNumber,
-          draftId: projection.draftId,
-          title: projection.chapterTitle,
+          draftId: sourceDraftId,
+          title: sourceRead.status === 'valid' ? sourceRead.snapshot.chapterTitle : sourceRead.status === 'legacy' ? sourceRead.chapterTitle : projection.chapterTitle,
           content,
           evidence,
           includeEnding: projection.chapterNumber === currentChapter - 1,

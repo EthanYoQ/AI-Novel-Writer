@@ -41,6 +41,12 @@ const mocks = vi.hoisted(() => ({
     leaseId: string
   },
   leaseSequence: 0,
+  projectPeekService: {
+    issueCapability: vi.fn(),
+    revokeCapability: vi.fn(),
+    peek: vi.fn(),
+    readCurrent: vi.fn(),
+  },
 }))
 
 vi.mock('electron', () => ({
@@ -141,6 +147,10 @@ vi.mock('../../repositories/project-core-repository', () => ({
 
 vi.mock('../../services/project-access', () => ({
   projectAccess: mocks.projectAccess,
+}))
+
+vi.mock('../../services/project-peek', () => ({
+  projectPeekService: mocks.projectPeekService,
 }))
 
 import { registerProjectController } from '../project-controller'
@@ -277,9 +287,50 @@ beforeEach(() => {
   mocks.projectAccess.invalidateCurrentSession.mockImplementation(() => {
     mocks.activeSession = null
   })
+  mocks.projectPeekService.issueCapability.mockImplementation((projectPath: string) => ({
+    capabilityId: `peek-${path.basename(projectPath)}`,
+    projectId: `project-${path.basename(projectPath)}`,
+  }))
+  mocks.projectPeekService.peek.mockReturnValue({ state: 'unavailable' })
+  mocks.projectPeekService.readCurrent.mockReturnValue({ state: 'unavailable' })
 })
 
 describe('project controller project identity', () => {
+  it('issues opaque preview capabilities for valid recent projects', async () => {
+    mocks.recentProjects = [{ name: 'Project B', path: projectB, updatedAt: '2026-09-21T00:00:00.000Z' }]
+
+    await expect(handler('project:recent-list')({})).resolves.toEqual([{
+      name: 'Project B',
+      path: projectB,
+      updatedAt: '2026-09-21T00:00:00.000Z',
+      previewCapabilityId: 'peek-B',
+      projectId: 'project-B',
+    }])
+    expect(mocks.projectPeekService.issueCapability).toHaveBeenCalledWith(projectB)
+  })
+
+  it('previews only capabilities issued by the current recent-project listing', async () => {
+    mocks.recentProjects = [{ name: 'Project B', path: projectB, updatedAt: '2026-09-21T00:00:00.000Z' }]
+    mocks.projectPeekService.peek.mockReturnValue({ state: 'ready', projectId: 'project-B' })
+    await handler('project:recent-list')({})
+
+    await expect(handler('project:peek-overview')({}, 'not-issued')).resolves.toEqual({ state: 'unavailable' })
+    expect(mocks.projectPeekService.peek).not.toHaveBeenCalled()
+    await expect(handler('project:peek-overview')({}, 'peek-B')).resolves.toMatchObject({ state: 'ready' })
+    expect(mocks.projectPeekService.peek).toHaveBeenCalledWith('peek-B')
+  })
+
+  it('reads the current overview only through the validated project session', async () => {
+    mocks.projectPeekService.readCurrent.mockReturnValue({ state: 'ready', projectId: 'project-A' })
+
+    await expect(handler('project:overview-current')({}, projectSession())).resolves.toMatchObject({
+      state: 'ready',
+      projectId: 'project-A',
+    })
+    expect(mocks.projectAccess.assertCurrentProjectContext).toHaveBeenCalledWith(projectSession(), projectA)
+    expect(mocks.projectPeekService.readCurrent).toHaveBeenCalledWith('project-A', expect.any(Object))
+  })
+
   it('reports the live main-process project database context', async () => {
     await expect(handler('project:get-runtime-context')({})).resolves.toEqual({
       activeProjectPath: projectA,
@@ -1025,5 +1076,24 @@ describe('project controller project identity', () => {
         error: expect.stringContaining('当前数据库'),
       })
     expect(mocks.removeDirectoryWithWindowsRetry).not.toHaveBeenCalled()
+  })
+
+  it('cleans the local cloud binding only after the project directory deletion commits', async () => {
+    const removeDeletedProjectBinding = vi.fn()
+    registerProjectController({ removeDeletedProjectBinding })
+    mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce((target: string) => {
+      mocks.existingPaths.delete(path.resolve(target))
+    })
+
+    await expect(handler('project:delete')(
+      {},
+      projectA,
+      'project-A',
+      'lease-project-A',
+      projectSession(),
+    )).resolves.toMatchObject({ success: true, directoryDeleted: true })
+    expect(removeDeletedProjectBinding).toHaveBeenCalledWith('project-A')
+
+    registerProjectController()
   })
 })

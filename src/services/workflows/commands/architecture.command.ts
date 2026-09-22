@@ -27,6 +27,8 @@ import {
 } from '../workflow-project-session'
 import { characterArchitecturePrompts, promptLanguageText } from '../../prompt-language'
 import { stripThinkingTags } from '../workflow-utils'
+import { composeVisibleContinuation } from '../../../shared/visible-continuation'
+import { hashAuthorText } from '../../../shared/source-ref'
 import type { WorkflowContext, StepCallbacks } from '../../../stores/workflow-store'
 import type { GenerationAttemptReceipt } from '../../generation/generation-harness'
 import type { NovelConfig, ProjectSessionContext } from '../../../shared/ipc-channels'
@@ -1515,10 +1517,19 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
           llmOptions,
           context,
         )
+        const candidate = initial.content.trim()
+        if (candidate && ['stop', 'length'].includes(initial.finishReason) && this.requireGenerationExecution().mainOwned) {
+          const handle = context.mainGenerationRunHandle
+          const artifact = initial.receipt.visibleArtifact
+          if (!handle || !artifact) throw new Error('GENERATION_COMPOSITION_ARTIFACT_REQUIRED')
+          const candidateHash = await hashAuthorText(candidate)
+          const composition = await ipc.invokeWithProjectSession(projectSession, 'generation:compose-visible', handle, [artifact.artifactId], candidateHash)
+          if (composition.text !== candidate || composition.textHash !== candidateHash) throw new Error('GENERATION_COMPOSITION_RECEIPT_MISMATCH')
+        }
         if (initial.finishReason === 'stop') {
-          result = initial.content
-        } else if (initial.finishReason === 'length' && initial.content.trim()) {
-          persistedCandidate = initial.content.trim()
+          result = candidate
+        } else if (initial.finishReason === 'length' && candidate) {
+          persistedCandidate = candidate
           await this.persistWorldBuildingCandidate(
             projectSession,
             expectedProjectPath,
@@ -1803,6 +1814,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     let from: number
     let to: number
     let seedText = ''
+    let confirmedPrefix = ''
     let effectiveStepGuidance = requestedStepGuidance
 
     if (resumeRequested) {
@@ -1845,6 +1857,18 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       if (this.requireGenerationExecution().mainOwned) {
         if (partial.synopsis_db_hash !== synopsisFactsFingerprint([sourceExpected.synopsis])) throw new Error(text('正式大纲已变化，不能采用旧候选。', 'The formal outline changed; the old candidate cannot be adopted.'))
         seedText = (await this.readMainVisibleComposition())?.text ?? ''
+        if (from > 1) {
+          const heading = `# ${promptLanguageText(writingLanguage, '情节大纲', 'Plot Outline')}\n\n`
+          const completeCheckpoint = { synopsis_incomplete: false, synopsis_covered_to: from - 1 }
+          const suffix = renderSynopsisDbText('', writingLanguage, totalChapters, completeCheckpoint).slice(heading.length)
+          if (!sourceExpected.synopsis.startsWith(heading) || !sourceExpected.synopsis.endsWith(suffix)) {
+            throw new Error(text('正式大纲格式已变化，不能恢复续批。', 'The formal outline format changed, so this batch cannot be resumed.'))
+          }
+          confirmedPrefix = sourceExpected.synopsis.slice(heading.length, -suffix.length)
+          if (!confirmedPrefix || renderSynopsisDbText(confirmedPrefix, writingLanguage, totalChapters, completeCheckpoint) !== sourceExpected.synopsis) {
+            throw new Error(text('正式大纲与已确认前缀不一致，不能恢复续批。', 'The formal outline does not match the confirmed prefix, so this batch cannot be resumed.'))
+          }
+        }
       } else {
       seedText = assertCheckpointDbMirrorCurrent(
         partial,
@@ -1854,7 +1878,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
         text,
       )
       }
-      if (seedText.length < MIN_SYNOPSIS_PARTIAL_PERSIST_CHARS) {
+      if (composeVisibleContinuation(confirmedPrefix, seedText).length < MIN_SYNOPSIS_PARTIAL_PERSIST_CHARS) {
         throw new Error(text(
           '中断检查点内容过短，无法安全续写。请从「AI 生成故事架构」重新生成。',
           'The interrupted checkpoint is too short to resume safely. Regenerate from “Generate story architecture” instead.',
@@ -1936,6 +1960,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
           totalChapters,
           text,
         )
+        if (this.requireGenerationExecution().mainOwned) confirmedPrefix = seedText
         mode = 'batch'
       }
     }
@@ -1982,17 +2007,26 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     const taskPrompt = [
       promptBuilder.build(),
       synopsisBatchInstruction(writingLanguage, from, to, totalChapters),
+      confirmedPrefix
+        ? promptLanguageText(writingLanguage, `【已完成大纲前缀】\n${confirmedPrefix}`, `[Confirmed outline prefix]\n${confirmedPrefix}`)
+        : '',
     ].filter(Boolean).join('\n\n')
 
+    const previousBatchPartial = mode === 'batch' && this.requireGenerationExecution().mainOwned ? { ...partial } : undefined
     if (this.requireGenerationExecution().mainOwned && !resumeRequested) {
       await this.persistInterruptedSynopsis(projectSession, expectedProjectPath, context, '', { from, to }, factsFingerprint, effectiveStepGuidance, sourceExpected)
     }
+    const stagedBatchPartial = previousBatchPartial ? { ...partial } : undefined
+    const generationSeedText = mode === 'batch' && confirmedPrefix ? '' : seedText
+    const validationSeedText = mode === 'resume' && confirmedPrefix
+      ? composeVisibleContinuation(confirmedPrefix, seedText)
+      : seedText
 
     // ===== 有界生成：seed 续写 + 自动续写；任何失败先交出已合并文本 =====
     let interruptedContent = ''
     let merged = ''
     const runCompletion = async (): Promise<string> => {
-      merged = await this.callLLMWithAppendContinuation({
+      const generated = await this.callLLMWithAppendContinuation({
         taskPrompt,
         systemPrompt: promptBuilder.getSystemRole(),
         callbacks,
@@ -2006,10 +2040,12 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
           reasoningStage: 'planning',
           writingSkillStage: 'planning',
         },
-        seedText,
+        seedText: generationSeedText,
         maxContinuations: 3,
-        onPartialAvailable: content => { interruptedContent = content },
+        onPartialAvailable: content => { interruptedContent = composeVisibleContinuation(confirmedPrefix, content) },
       })
+      if (confirmedPrefix && !generated.trim()) throw new Error(text('情节大纲生成失败，AI 返回空内容', 'Plot outline generation failed because the AI returned empty content.'))
+      merged = composeVisibleContinuation(confirmedPrefix, generated)
       return merged
     }
 
@@ -2023,7 +2059,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       try {
         assertPlotOutlineTitleCoverage(
           partialBody,
-          seedText,
+          validationSeedText,
           from,
           to,
           text,
@@ -2058,14 +2094,24 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       merged = await runCompletion()
     } catch (error) {
       const partialText = stripThinkingTags(interruptedContent).trim()
-      const seedTrimmed = stripThinkingTags(seedText).trim()
-      const madeProgress = partialText !== seedTrimmed
+      const seedTrimmed = stripThinkingTags(composeVisibleContinuation(confirmedPrefix, generationSeedText)).trim()
+      const madeProgress = Boolean(partialText) && partialText !== seedTrimmed
       if (
         !context.cancelled
         && madeProgress
         && partialText.length >= MIN_SYNOPSIS_PARTIAL_PERSIST_CHARS
       ) {
-        await persistAndRaiseResume(partialText, error as Error, true)
+        try {
+          await persistAndRaiseResume(partialText, error as Error, true)
+        } catch (resumeError) {
+          if (resumeError instanceof NonRecoverablePlotOutlineError && previousBatchPartial && stagedBatchPartial) {
+            await this.rollbackSynopsisCheckpoint(expectedProjectPath, projectSession, context, previousBatchPartial, stagedBatchPartial)
+          }
+          throw resumeError
+        }
+      }
+      if (previousBatchPartial && stagedBatchPartial) {
+        await this.rollbackSynopsisCheckpoint(expectedProjectPath, projectSession, context, previousBatchPartial, stagedBatchPartial)
       }
       throw error
     }
@@ -2074,15 +2120,25 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       '情节大纲生成失败，AI 返回空内容',
       'Plot outline generation failed because the AI returned empty content.',
     ))
+    if (previousBatchPartial && stagedBatchPartial
+      && stripPlotOutlineProgressLine(merged).trim() === confirmedPrefix.trim()) {
+      await this.rollbackSynopsisCheckpoint(expectedProjectPath, projectSession, context, previousBatchPartial, stagedBatchPartial)
+      throw new Error(text('本批没有新增情节大纲内容，已保留上一批检查点。', 'This batch added no plot-outline content; the previous checkpoint was preserved.'))
+    }
 
     // ===== 完成校验：正文必须完整覆盖本批；附带进度行时也必须与范围一致 =====
     let confirmedBody = ''
     try {
-      assertPlotOutlineTitleCoverage(merged, seedText, from, to, text)
+      assertPlotOutlineTitleCoverage(merged, validationSeedText, from, to, text)
       assertPlotOutlineBatchComplete(merged, from, to, totalChapters, text)
       confirmedBody = stripPlotOutlineProgressLine(merged)
     } catch (error) {
-      if (error instanceof NonRecoverablePlotOutlineError) throw error
+      if (error instanceof NonRecoverablePlotOutlineError) {
+        if (previousBatchPartial && stagedBatchPartial) {
+          await this.rollbackSynopsisCheckpoint(expectedProjectPath, projectSession, context, previousBatchPartial, stagedBatchPartial)
+        }
+        throw error
+      }
       await persistAndRaiseResume(stripPlotOutlineProgressLine(merged), error as Error)
     }
     if (!confirmedBody) {
@@ -2094,7 +2150,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
     assertArchitectureProjectSessionCurrent(projectSession, context)
 
     // ===== 落盘：先写检查点（权威进度 + DB 镜像指纹），再镜像到 DB 正文 =====
-    const previousPartial = { ...partial }
+    const previousPartial = previousBatchPartial ?? { ...partial }
     partial.synopsis_result = confirmedBody
     partial.synopsis_incomplete = false
     partial.synopsis_covered_to = to

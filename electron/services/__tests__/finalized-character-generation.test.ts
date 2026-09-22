@@ -14,12 +14,14 @@ import { FinalizationRepository } from '../../repositories/finalization-reposito
 import { commitCharacterIdentities } from '../../repositories/character-roster-repository'
 import { getProjectDb } from '../../database'
 import { textHash } from '../../repositories/generation-run-repository'
+import type { GenerationRunRepository } from '../../repositories/generation-run-repository'
+import { FinalizedCharacterGeneration } from '../finalized-character-generation'
 import { generationOutputContract, type BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
 import type { MainGenerationExecuteReceipt } from '../../../src/services/generation/generation-runtime'
 
-vi.mock('../../database', () => ({ getProjectDb: vi.fn() }))
+vi.mock('../../database', () => ({ getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn(() => null) }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const cleanup: (() => void)[] = []
 afterEach(() => { for (const dispose of cleanup.splice(0)) dispose(); vi.restoreAllMocks() })
@@ -73,6 +75,20 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
 }
 
 describe('finalized character extraction through the main owner', () => {
+  it('rejects state-candidate reads after the project session becomes stale', () => {
+    const db = new Database(':memory:')
+    initializeLegacyBaselineSchema(db)
+    migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
+    cleanup.push(() => db.close())
+    let current = true
+    const service = new FinalizedCharacterGeneration(db, {} as GenerationRunRepository,
+      { projectId: 'project', epoch: 'epoch' }, () => { if (!current) throw new Error('GENERATION_EPOCH_STALE') })
+    expect(service.listPendingStateCandidates()).toEqual([])
+    current = false
+    expect(() => service.listPendingStateCandidates()).toThrow('GENERATION_EPOCH_STALE')
+    expect(() => service.readPendingStateCandidate({ draftId: 1, candidateKey: 'stale' })).toThrow('GENERATION_EPOCH_STALE')
+  })
+
   it('rejects generic finalized admission even with an issued opaque context', async () => {
     const f = fixture()
     expect(f.prepared.context.identityStatus).toBe('bound')

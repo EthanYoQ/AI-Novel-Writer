@@ -52,7 +52,10 @@ export interface GenerationRunServiceDependencies {
     dispatch: (request: unknown, options: {
         signal: AbortSignal;
         onVisible: (event: VisibleGenerationEvent) => void;
+        onReasoning?: (text: string) => void;
     }) => Promise<GenerationDispatchResult>;
+    /** Renderer-only projection. Reasoning never enters an artifact or receipt. */
+    onReasoning?: (event: { runId: string; rootActionId: string; attemptId: string; text: string }) => void;
     onSnapshot?: (event: {
         attemptId: string;
         visibleText: string;
@@ -186,7 +189,11 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                     failedRoots.add(run.rootActionId);
                 } controller.abort(); }, remaining);
                 const cancelled = new Promise<never>((_resolve, reject) => { const abort = () => reject(new Error('GENERATION_CANCELLED')); controller.signal.addEventListener('abort', abort, { once: true }); removeAbortListener = () => controller.signal.removeEventListener('abort', abort); });
-                const provider = deps.dispatch(request.providerRequest, { signal: controller.signal, onVisible: event => {
+                const provider = deps.dispatch(request.providerRequest, { signal: controller.signal, onReasoning: chunk => {
+                        if (terminal || storageFailed || controller.signal.aborted || !chunk) return;
+                        try { deps.onReasoning?.({ runId: run.runId, rootActionId: run.rootActionId, attemptId, text: chunk }); }
+                        catch { /* A display-only event cannot alter durable generation. */ }
+                    }, onVisible: event => {
                         if (terminal || storageFailed || controller.signal.aborted)
                             return;
                         if (event.eventId) {

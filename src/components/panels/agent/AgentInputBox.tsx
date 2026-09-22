@@ -16,9 +16,12 @@ import SlashCommandMenu from './SlashCommandMenu'
 import MentionMenu from './MentionMenu'
 import type { SlashCommand, MentionTarget } from '../../../services/agent/intent-router'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { useProjectStore } from '../../../stores/project-store'
+import { registerProjectTransitionDraft } from '../../../services/project-transition'
 
 /** 输入框最大高度（px），超出后框内滚动 */
 const MAX_HEIGHT = 200
+const projectInputDrafts = new Map<string, string>()
 
 /**
  * Agent 输入框组件（参考 agent1.html 第 69-155 行）
@@ -26,7 +29,13 @@ const MAX_HEIGHT = 200
  */
 export default function AgentInputBox() {
   const text = useLocaleStore(s => s.text)
-  const [inputText, setInputText] = useState('')
+  const projectKey = useProjectStore(s => s.currentProject?.path)
+  const [projectInputs, setProjectInputs] = useState(() => new Map<string, string>())
+  const inputValuesRef = useRef(new Map<string, string>())
+  const inputVersionsRef = useRef(new Map<string, number>())
+  const inputText = projectKey
+    ? (projectInputs.get(projectKey) ?? projectInputDrafts.get(projectKey) ?? '')
+    : ''
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const { generating, sendMessage, cancelGeneration, getActiveConversation, setMode, setModelId } = useAgentStore()
   const models = useLLMStore(s => s.models)
@@ -53,9 +62,48 @@ export default function AgentInputBox() {
   const [showMentionMenu, setShowMentionMenu] = useState(false)
   const [mentionQuery, setMentionQuery] = useState('')
 
+  const replaceInputText = useCallback((value: string) => {
+    if (!projectKey) return
+    inputValuesRef.current.set(projectKey, value)
+    inputVersionsRef.current.set(
+      projectKey,
+      (inputVersionsRef.current.get(projectKey) ?? 0) + 1,
+    )
+    setProjectInputs(current => new Map(current).set(projectKey, value))
+  }, [projectKey])
+
+  useEffect(() => {
+    if (!projectKey) return
+    const readInput = () => (
+      inputValuesRef.current.get(projectKey)
+      ?? projectInputDrafts.get(projectKey)
+      ?? ''
+    )
+    const unregister = registerProjectTransitionDraft({
+      projectKey,
+      isDirty: () => readInput() !== (projectInputDrafts.get(projectKey) ?? ''),
+      version: () => inputVersionsRef.current.get(projectKey) ?? 0,
+      save: () => {
+        const value = readInput()
+        if (value) projectInputDrafts.set(projectKey, value)
+        else projectInputDrafts.delete(projectKey)
+      },
+      discard: () => {
+        projectInputDrafts.delete(projectKey)
+        replaceInputText('')
+      },
+    })
+    return () => {
+      const value = readInput()
+      if (value) projectInputDrafts.set(projectKey, value)
+      else projectInputDrafts.delete(projectKey)
+      unregister()
+    }
+  }, [projectKey, replaceInputText])
+
   // 检测输入是否触发 / 或 @ 菜单
   const handleInputChange = useCallback((value: string) => {
-    setInputText(value)
+    replaceInputText(value)
 
     // 检测 / 命令
     if (value.startsWith('/')) {
@@ -82,21 +130,22 @@ export default function AgentInputBox() {
     } else {
       setShowMentionMenu(false)
     }
-  }, [])
+  }, [replaceInputText])
 
   // 选择 / 命令
   const handleSlashSelect = useCallback((cmd: SlashCommand) => {
     setShowSlashMenu(false)
     if (cmd.source === 'skill') {
       // Skill 命令：替换为 /skill-name 后面可以加参数
-      setInputText(`/${cmd.name} `)
+      replaceInputText(`/${cmd.name} `)
     } else {
       // 内置命令：直接发送
-      setInputText('')
+      if (projectKey) projectInputDrafts.delete(projectKey)
+      replaceInputText('')
       sendMessage(`/${cmd.name}`)
     }
     textareaRef.current?.focus()
-  }, [sendMessage])
+  }, [projectKey, replaceInputText, sendMessage])
 
   // 选择 @ 提及
   const handleMentionSelect = useCallback((target: MentionTarget) => {
@@ -105,10 +154,10 @@ export default function AgentInputBox() {
     const lastAt = inputText.lastIndexOf('@')
     if (lastAt >= 0) {
       const before = inputText.slice(0, lastAt)
-      setInputText(`${before}@${target.displayName} `)
+      replaceInputText(`${before}@${target.displayName} `)
     }
     textareaRef.current?.focus()
-  }, [inputText])
+  }, [inputText, replaceInputText])
 
   const contextRef = useRef<HTMLDivElement>(null)
   const modeRef = useRef<HTMLDivElement>(null)
@@ -162,9 +211,10 @@ export default function AgentInputBox() {
     }
     if (!inputText.trim()) return
     const text = inputText
-    setInputText('')
+    if (projectKey) projectInputDrafts.delete(projectKey)
+    replaceInputText('')
     await sendMessage(text)
-  }, [generating, inputText, sendMessage, cancelGeneration])
+  }, [generating, inputText, projectKey, replaceInputText, sendMessage, cancelGeneration])
 
   /** 键盘事件：Enter 发送，Shift+Enter 换行 */
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -232,14 +282,12 @@ export default function AgentInputBox() {
           <ContextMenuItem icon={<AtSign size={13} />} label={text('@提及', '@ mention')} onClick={() => {
             setShowContextMenu(false)
             // 插入 @ 字符并触发 MentionMenu
-            setInputText(prev => prev + '@')
             handleInputChange(inputText + '@')
             textareaRef.current?.focus()
           }} />
           <ContextMenuItem icon={<Workflow size={13} />} label={text('工作流命令', 'Workflow command')} onClick={() => {
             setShowContextMenu(false)
             // 插入 / 字符并触发 SlashCommandMenu
-            setInputText('/')
             handleInputChange('/')
             textareaRef.current?.focus()
           }} />

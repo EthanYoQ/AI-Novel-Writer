@@ -81,6 +81,31 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
     useLLMStore.setState({ defaultModelId: null })
   })
 
+  it('uses a positive source revision when a batch draft has no editor tab', async () => {
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:draft-get-meta') return { id: 33, version: 1, status: 'draft', source: 'write' }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke } })
+    const command = new FinalizeChapterCommand({
+      draftPath: 'ai-novel://draft/33',
+      draftContent: CONTENT,
+      chapterNumber: 3,
+      chapterInfo: {
+        projectPath: PROJECT_PATH,
+        chapterNumber: 3,
+        title: '钟楼真相',
+        role: '高潮',
+        purpose: '揭露真相',
+        keyEvents: '韩峥死亡',
+        characters: [],
+      },
+    })
+    const snapshot = await command['createBatchSnapshot'](workflowContext(), PROJECT_PATH)
+    expect(snapshot).toMatchObject({ contentRevision: 1, content: CONTENT, draftId: 33 })
+    expect(invoke).toHaveBeenCalledWith('db:draft-get-meta', 33, PROJECT_PATH, PROJECT_SESSION)
+  })
+
   it('uses this chapter blueprint characters when direct finalization omits them', async () => {
     const completedSteps = new Set<string>()
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {

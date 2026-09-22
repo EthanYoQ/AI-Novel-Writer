@@ -4,7 +4,11 @@ import type BetterSqlite3 from 'better-sqlite3'
 import { getProjectDb } from '../database'
 import type {
   FinalizedCharacterStateCandidate,
+  FinalizedCharacterStateDecisionReceipt,
+  FinalizedCharacterStateDecisionRequest,
   FinalizedCharacterContext,
+  PendingFinalizedCharacterStateCandidate,
+  PendingFinalizedCharacterStateCandidateSummary,
   FinalizedCharacterReference,
   FinalizedCharacterStateResponse,
   FinalizedCharacterStateCommitReceipt,
@@ -129,10 +133,20 @@ function parseFacts(value: string, chapterNumber: number): FinalizedContinuityFa
 function parseCharacterStateCandidates(value: string): FinalizedCharacterStateCandidate[] {
   try {
     const parsed = JSON.parse(value) as unknown
-    if (!Array.isArray(parsed)) return []
-    return parsed.flatMap((input) => {
+    const pending = Array.isArray(parsed) ? parsed
+      : parsed && typeof parsed === 'object' && (parsed as Record<string, unknown>).version === 2
+        && Array.isArray((parsed as Record<string, unknown>).pending)
+        ? (parsed as { pending: unknown[] }).pending : []
+    return pending.flatMap((input) => {
       if (!input || typeof input !== 'object') return []
       const candidate = input as Record<string, unknown>
+      const boundKeys = ['candidateKey', 'source', 'expectedFieldRevision', 'expectedFieldValueHash']
+      const hasBoundMetadata = boundKeys.some(key => Object.prototype.hasOwnProperty.call(candidate, key))
+      const hasValidBoundMetadata = typeof candidate.candidateKey === 'string' && Boolean(candidate.candidateKey)
+        && isFinalizedSource(candidate.source)
+        && Number.isSafeInteger(candidate.expectedFieldRevision) && (candidate.expectedFieldRevision as number) >= 0
+        && typeof candidate.expectedFieldValueHash === 'string' && /^[a-f0-9]{64}$/u.test(candidate.expectedFieldValueHash)
+      if (hasBoundMetadata && !hasValidBoundMetadata) return []
       return typeof candidate.characterName === 'string'
         && Boolean(candidate.characterName.trim())
         && CHARACTER_STATE_FIELDS.has(String(candidate.field))
@@ -141,18 +155,61 @@ function parseCharacterStateCandidates(value: string): FinalizedCharacterStateCa
             ...(typeof candidate.characterId === 'string' && candidate.characterId ? { characterId: candidate.characterId } : {}),
             characterName: candidate.characterName.trim(),
             field: candidate.field as CharacterStateTextField,
-            value: candidate.value.trim(),
+            value: isFinalizedSource(candidate.source) ? candidate.value : candidate.value.trim(),
             ...(candidate.evidence ? { evidence: candidate.evidence as FinalizedCharacterStateCandidate['evidence'] } : {}),
             ...(typeof candidate.selectionKey === 'string' ? { selectionKey: candidate.selectionKey } : {}),
             ...(typeof candidate.displayName === 'string' ? { displayName: candidate.displayName } : {}),
             ...(candidate.rawValue !== undefined ? { rawValue: structuredClone(candidate.rawValue) } : {}),
             ...(candidate.reason === 'author-protected' || candidate.reason === 'legacy-protected' ? { reason: candidate.reason } : {}),
+            ...(typeof candidate.candidateKey === 'string' ? { candidateKey: candidate.candidateKey } : {}),
+            ...(isFinalizedSource(candidate.source) ? { source: structuredClone(candidate.source) } : {}),
+            ...(Number.isSafeInteger(candidate.expectedFieldRevision) && (candidate.expectedFieldRevision as number) >= 0
+              ? { expectedFieldRevision: candidate.expectedFieldRevision as number } : {}),
+            ...(typeof candidate.expectedFieldValueHash === 'string' ? { expectedFieldValueHash: candidate.expectedFieldValueHash } : {}),
           }]
         : []
     })
   } catch {
     return []
   }
+}
+
+type StoredCharacterStateDecision = Omit<FinalizedCharacterStateDecisionReceipt, 'idempotent'>
+interface CharacterStateCandidateStore { version: 2; pending: FinalizedCharacterStateCandidate[]; receipts: StoredCharacterStateDecision[] }
+
+function parseCharacterStateCandidateStore(value: string): CharacterStateCandidateStore {
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (Array.isArray(parsed)) return { version: 2, pending: parseCharacterStateCandidates(value), receipts: [] }
+    if (!parsed || typeof parsed !== 'object' || (parsed as Record<string, unknown>).version !== 2
+      || !Array.isArray((parsed as Record<string, unknown>).pending)
+      || !Array.isArray((parsed as Record<string, unknown>).receipts)) return { version: 2, pending: [], receipts: [] }
+    const pending = parseCharacterStateCandidates(value)
+    const receipts = (parsed as { receipts: unknown[] }).receipts.flatMap(input => {
+      if (!input || typeof input !== 'object') return []
+      const receipt = input as Record<string, unknown>
+      return typeof receipt.candidateKey === 'string' && receipt.candidateKey
+        && typeof receipt.operationId === 'string' && receipt.operationId
+        && typeof receipt.payloadHash === 'string' && /^[a-f0-9]{64}$/u.test(receipt.payloadHash)
+        && (receipt.decision === 'accept' || receipt.decision === 'decline')
+        && isFinalizedSource(receipt.source)
+        ? [{ candidateKey: receipt.candidateKey, operationId: receipt.operationId, payloadHash: receipt.payloadHash,
+            decision: receipt.decision as StoredCharacterStateDecision['decision'], source: structuredClone(receipt.source) }]
+        : []
+    })
+    return { version: 2, pending, receipts }
+  } catch {
+    return { version: 2, pending: [], receipts: [] }
+  }
+}
+
+function isFinalizedSource(value: unknown): value is FinalizedSourceIdentity {
+  if (!value || typeof value !== 'object') return false
+  const source = value as Record<string, unknown>
+  return Number.isSafeInteger(source.draftId) && (source.draftId as number) > 0
+    && Number.isSafeInteger(source.chapterNumber) && (source.chapterNumber as number) > 0
+    && typeof source.finalizationId === 'string' && Boolean(source.finalizationId)
+    && typeof source.contentHash === 'string' && /^[a-f0-9]{64}$/u.test(source.contentHash)
 }
 
 function normalizeCharacterStateCandidates(
@@ -213,6 +270,10 @@ function sameSource(left: FinalizedSourceIdentity, right: FinalizedSourceIdentit
     && left.contentHash === right.contentHash
 }
 
+function characterStateCandidateKey(source: FinalizedSourceIdentity, characterId: string, field: CharacterStateTextField, value: string): string {
+  return `fcs-state:${sha256(JSON.stringify([source.draftId, source.finalizationId, source.contentHash, characterId, field, sha256(value)]))}`
+}
+
 function readFinalizedSourceFromDb(
   db: BetterSqlite3.Database,
   draftId: number,
@@ -259,6 +320,61 @@ function readFinalizedSourceFromDb(
     content: row.contentSnapshot,
     projectionGeneration: row.projectionGeneration,
   }
+}
+
+interface CharacterStateCandidateRow {
+  id: number
+  draftId: number
+  chapterNumber: number
+  candidates: string
+  finalizationId: string
+  contentHash: string
+  projectionGeneration: number
+}
+
+function readCurrentCharacterStateCandidateRow(db: BetterSqlite3.Database, draftId: number): CharacterStateCandidateRow {
+  const row = db.prepare(`SELECT id,draft_id AS draftId,chapter_number AS chapterNumber,
+    character_state_candidates AS candidates,source_finalization_id AS finalizationId,
+    source_content_hash AS contentHash,projection_generation AS projectionGeneration
+    FROM summary_snapshots WHERE draft_id=?`).get(draftId) as CharacterStateCandidateRow | undefined
+  const snapshot = readFinalizedSourceFromDb(db, draftId)
+  const source = row && { draftId: row.draftId, finalizationId: row.finalizationId,
+    chapterNumber: row.chapterNumber, contentHash: row.contentHash }
+  const latest = snapshot && db.prepare("SELECT id FROM drafts WHERE chapter_number=? AND status='finalized' ORDER BY version DESC,id DESC LIMIT 1")
+    .pluck().get(snapshot.source.chapterNumber) as number | undefined
+  if (!row || !snapshot || !source || !sameSource(source, snapshot.source)
+    || row.projectionGeneration !== snapshot.projectionGeneration || latest !== draftId) {
+    throw new Error('FINALIZED_CHARACTER_STATE_SOURCE_CHANGED')
+  }
+  return row
+}
+
+function pendingCharacterStateCandidate(db: BetterSqlite3.Database, row: CharacterStateCandidateRow,
+  candidate: FinalizedCharacterStateCandidate): PendingFinalizedCharacterStateCandidate | null {
+  const source = { draftId: row.draftId, finalizationId: row.finalizationId,
+    chapterNumber: row.chapterNumber, contentHash: row.contentHash }
+  if (!candidate.characterId) return null
+  const expectedKey = characterStateCandidateKey(source, candidate.characterId, candidate.field, candidate.value)
+  const hasBoundMetadata = candidate.candidateKey !== undefined || candidate.source !== undefined
+    || candidate.expectedFieldRevision !== undefined || candidate.expectedFieldValueHash !== undefined
+  if (hasBoundMetadata && (!candidate.candidateKey || !candidate.source || !sameSource(candidate.source, source)
+    || !Number.isSafeInteger(candidate.expectedFieldRevision) || candidate.expectedFieldRevision! < 0
+    || !candidate.expectedFieldValueHash || !/^[a-f0-9]{64}$/u.test(candidate.expectedFieldValueHash)
+    || candidate.candidateKey !== expectedKey)) return null
+  const frozen = readFrozenCharacterSnapshot(db, source)
+  if (!frozen || !frozen.characters.some(character => character.characterId === candidate.characterId
+    && character.displayNameSnapshot === candidate.characterName)) return null
+  if (hasBoundMetadata) return structuredClone(candidate) as PendingFinalizedCharacterStateCandidate
+  const character = db.prepare('SELECT * FROM characters WHERE character_id=? AND retired=0').get(candidate.characterId) as Record<string, unknown> | undefined
+  if (!character) return null
+  const current = stateSnapshot(character, candidate.field, { projectId: 'candidate-upgrade', epoch: 'candidate-upgrade' })
+  return { ...structuredClone(candidate), candidateKey: expectedKey, source, expectedFieldRevision: current.revision,
+    expectedFieldValueHash: current.valueHash } as PendingFinalizedCharacterStateCandidate
+}
+
+function stateDecisionPayloadHash(request: FinalizedCharacterStateDecisionRequest): string {
+  return sha256(JSON.stringify([request.draftId, request.candidateKey, request.characterId, request.field,
+    request.expectedFieldRevision, request.expectedFieldValueHash, request.operationId, request.decision]))
 }
 
 export function invalidateContinuityProjectionFrom(
@@ -333,7 +449,9 @@ export class SummaryRepository {
           if (decision === 'already-applied') { receipt.unchanged++; continue }
           if (decision === 'proposal-required') {
             if (value === actual.value) { receipt.unchanged++; continue }
-            receipt.candidates.push({ characterId: update.characterId, characterName: captured.displayNameSnapshot, displayName: captured.displayNameSnapshot,
+            receipt.candidates.push({ candidateKey: characterStateCandidateKey(context.source, update.characterId, field, value), source: structuredClone(context.source),
+              expectedFieldRevision: actual.revision, expectedFieldValueHash: actual.valueHash,
+              characterId: update.characterId, characterName: captured.displayNameSnapshot, displayName: captured.displayNameSnapshot,
               selectionKey: `state:${update.characterId}:${field}`, field, value, evidence: update.evidence, rawValue: structuredClone(update),
               reason: actual.provenance.kind === 'author' ? 'author-protected' : 'legacy-protected' })
             continue
@@ -349,6 +467,98 @@ export class SummaryRepository {
         projectionGeneration: context.projectionGeneration, source: context.source, candidates: receipt.candidates }, db)
       if (receipt.applied) refreshCharacterStateProjection(db)
       return receipt
+    }).immediate()
+  }
+
+  static listPendingFinalizedCharacterStateCandidates(database = getProjectDb()): PendingFinalizedCharacterStateCandidateSummary[] {
+    if (!database) return []
+    const rows = database.prepare("SELECT draft_id AS draftId FROM summary_snapshots WHERE character_state_candidates<>'[]'")
+      .all() as Array<{ draftId: number }>
+    return rows.flatMap(({ draftId }) => {
+      try {
+        const row = readCurrentCharacterStateCandidateRow(database, draftId)
+        return parseCharacterStateCandidateStore(row.candidates).pending.flatMap(candidate => {
+          const pending = pendingCharacterStateCandidate(database, row, candidate)
+          return pending ? [{ draftId, candidateKey: pending.candidateKey, finalizationId: pending.source.finalizationId,
+            characterId: pending.characterId, characterName: pending.characterName, field: pending.field }] : []
+        })
+      } catch {
+        return []
+      }
+    }).sort((left, right) => left.draftId - right.draftId || left.candidateKey.localeCompare(right.candidateKey))
+  }
+
+  static readPendingFinalizedCharacterStateCandidate(draftId: number, candidateKey: string,
+    database = getProjectDb()): PendingFinalizedCharacterStateCandidate {
+    if (!database || !Number.isSafeInteger(draftId) || draftId < 1 || !candidateKey?.trim()) {
+      throw new Error('FINALIZED_CHARACTER_STATE_CANDIDATE_INVALID')
+    }
+    return database.transaction(() => {
+      const row = readCurrentCharacterStateCandidateRow(database, draftId)
+      const store = parseCharacterStateCandidateStore(row.candidates)
+      const index = store.pending.findIndex(item => pendingCharacterStateCandidate(database, row, item)?.candidateKey === candidateKey)
+      if (index < 0) throw new Error('FINALIZED_CHARACTER_STATE_CANDIDATE_NOT_FOUND')
+      const candidate = pendingCharacterStateCandidate(database, row, store.pending[index])!
+      if (!store.pending[index].candidateKey) {
+        store.pending[index] = candidate
+        database.prepare('UPDATE summary_snapshots SET character_state_candidates=?,created_at=datetime(\'now\') WHERE id=?')
+          .run(JSON.stringify(store), row.id)
+      }
+      return candidate
+    }).immediate()
+  }
+
+  static decideFinalizedCharacterStateCandidate(request: FinalizedCharacterStateDecisionRequest,
+    database = getProjectDb()): FinalizedCharacterStateDecisionReceipt {
+    if (!database || !request || !Number.isSafeInteger(request.draftId) || request.draftId < 1
+      || !request.candidateKey?.trim() || !request.characterId?.trim() || !CHARACTER_STATE_FIELDS.has(request.field)
+      || !Number.isSafeInteger(request.expectedFieldRevision) || request.expectedFieldRevision < 0
+      || !/^[a-f0-9]{64}$/u.test(request.expectedFieldValueHash) || !request.operationId?.trim()
+      || request.decision !== 'accept' && request.decision !== 'decline') {
+      throw new Error('FINALIZED_CHARACTER_STATE_DECISION_INVALID')
+    }
+    const db = database
+    return db.transaction(() => {
+      const payloadHash = stateDecisionPayloadHash(request)
+      const receiptRows = db.prepare("SELECT character_state_candidates AS candidates FROM summary_snapshots WHERE character_state_candidates<>'[]'")
+        .all() as Array<{ candidates: string }>
+      const replay = receiptRows.flatMap(item => parseCharacterStateCandidateStore(item.candidates).receipts)
+        .find(receipt => receipt.operationId === request.operationId)
+      if (replay) {
+        if (replay.payloadHash !== payloadHash) throw new Error('FINALIZED_CHARACTER_STATE_OPERATION_CONFLICT')
+        return { ...structuredClone(replay), idempotent: true }
+      }
+      const row = readCurrentCharacterStateCandidateRow(db, request.draftId)
+      const store = parseCharacterStateCandidateStore(row.candidates)
+      const candidate = store.pending.map(item => pendingCharacterStateCandidate(db, row, item))
+        .find((item): item is PendingFinalizedCharacterStateCandidate => item?.candidateKey === request.candidateKey)
+      if (!candidate || candidate.characterId !== request.characterId || candidate.field !== request.field
+        || candidate.expectedFieldRevision !== request.expectedFieldRevision
+        || candidate.expectedFieldValueHash !== request.expectedFieldValueHash) {
+        throw new Error('FINALIZED_CHARACTER_STATE_CANDIDATE_NOT_FOUND')
+      }
+      if (request.decision === 'accept') {
+        const character = db.prepare('SELECT * FROM characters WHERE character_id=? AND retired=0').get(candidate.characterId) as Record<string, unknown> | undefined
+        if (!character) throw new Error('FINALIZED_CHARACTER_STATE_CANDIDATE_NOT_FOUND')
+        const current = stateSnapshot(character, candidate.field, { projectId: 'candidate-decision', epoch: 'candidate-decision' })
+        if (current.revision !== request.expectedFieldRevision || current.valueHash !== request.expectedFieldValueHash) {
+          throw new Error('FINALIZED_CHARACTER_STATE_FIELD_CONFLICT')
+        }
+        const provenance = JSON.parse(String(character.cs_provenance || '{}')) as Record<string, unknown>
+        provenance[candidate.field] = { kind: 'author', chapterNumber: candidate.source.chapterNumber, revision: current.revision + 1 }
+        const updated = db.prepare(`UPDATE characters SET ${STATE_COLUMNS[candidate.field]}=?,cs_provenance=?,
+          cs_updated_at_chapter=MAX(COALESCE(cs_updated_at_chapter,0),?),updated_at=datetime('now')
+          WHERE character_id=? AND retired=0`).run(candidate.value, JSON.stringify(provenance), candidate.source.chapterNumber, candidate.characterId)
+        if (updated.changes !== 1) throw new Error('FINALIZED_CHARACTER_STATE_FIELD_CONFLICT')
+        refreshCharacterStateProjection(db)
+      }
+      const receipt: StoredCharacterStateDecision = { candidateKey: candidate.candidateKey,
+        operationId: request.operationId, payloadHash, decision: request.decision, source: structuredClone(candidate.source) }
+      store.pending = store.pending.filter(item => item.candidateKey !== candidate.candidateKey)
+      store.receipts.push(receipt)
+      db.prepare('UPDATE summary_snapshots SET character_state_candidates=?,created_at=datetime(\'now\') WHERE id=?')
+        .run(JSON.stringify(store), row.id)
+      return { ...structuredClone(receipt), idempotent: false }
     }).immediate()
   }
 
@@ -470,16 +680,21 @@ export class SummaryRepository {
         || row.projectionGeneration !== input.projectionGeneration
       ) throw new Error('角色状态候选缺少同代定稿连续性投影')
 
+      const store = parseCharacterStateCandidateStore(row.candidates)
       const merged = new Map<string, FinalizedCharacterStateCandidate>()
       for (const candidate of [
-        ...parseCharacterStateCandidates(row.candidates),
+        ...store.pending,
         ...normalizeCharacterStateCandidates(db, input.candidates, input.source),
-      ]) merged.set(`${candidate.characterId ?? `legacy:${characterRosterIdentityKey(candidate.characterName)}`}\u0000${candidate.field}`, candidate)
+      ]) {
+        if (candidate.candidateKey && store.receipts.some(receipt => receipt.candidateKey === candidate.candidateKey)) continue
+        merged.set(`${candidate.characterId ?? `legacy:${characterRosterIdentityKey(candidate.characterName)}`}\u0000${candidate.field}`, candidate)
+      }
+      store.pending = [...merged.values()]
       db.prepare(`
         UPDATE summary_snapshots
         SET character_state_candidates = ?, created_at = datetime('now')
         WHERE draft_id = ?
-      `).run(JSON.stringify([...merged.values()]), input.draftId)
+      `).run(JSON.stringify(store), input.draftId)
     })()
   }
 
@@ -491,33 +706,43 @@ export class SummaryRepository {
     const rows = db.prepare(`
       SELECT summary_snapshots.draft_id AS draftId,
              summary_snapshots.chapter_number AS chapterNumber,
-             COALESCE(finalization_outbox.chapter_title, '') AS chapterTitle,
+             COALESCE(current_outbox.chapter_title, '') AS chapterTitle,
              summary_snapshots.chapter_notes AS chapterNotes,
              summary_snapshots.continuity_facts AS continuityFacts,
              summary_snapshots.character_state_candidates AS characterStateCandidates,
              summary_snapshots.source_finalization_id AS sourceFinalizationId,
              summary_snapshots.source_content_hash AS sourceContentHash,
              summary_snapshots.projection_generation AS projectionGeneration,
-             finalization_outbox.finalization_id AS currentFinalizationId,
-             finalization_outbox.content_hash AS currentContentHash,
-             finalization_outbox.content_snapshot AS contentSnapshot,
-             contents.body AS currentContent,
+             current_drafts.id AS currentDraftId,
+             current_drafts.status AS currentDraftStatus,
+             current_outbox.finalization_id AS currentFinalizationId,
+             current_outbox.content_hash AS currentContentHash,
+             current_outbox.content_snapshot AS contentSnapshot,
+             current_contents.body AS currentContent,
              continuity_projection_meta.generation AS currentGeneration,
              continuity_projection_meta.stale_from_chapter AS staleFromChapter
       FROM summary_snapshots
       JOIN drafts ON drafts.id = summary_snapshots.draft_id
       JOIN contents ON contents.id = drafts.content_id
-      LEFT JOIN finalization_outbox ON finalization_outbox.draft_id = drafts.id
+      LEFT JOIN drafts current_drafts ON current_drafts.chapter_number = drafts.chapter_number
+        AND current_drafts.status = 'finalized'
+        AND NOT EXISTS (
+          SELECT 1 FROM drafts newer
+          WHERE newer.chapter_number = current_drafts.chapter_number
+            AND newer.status = 'finalized'
+            AND (newer.version > current_drafts.version OR (newer.version = current_drafts.version AND newer.id > current_drafts.id))
+        )
+      LEFT JOIN contents current_contents ON current_contents.id = current_drafts.content_id
+      LEFT JOIN finalization_outbox current_outbox ON current_outbox.draft_id = current_drafts.id
       JOIN continuity_projection_meta ON continuity_projection_meta.id = 'main'
       WHERE summary_snapshots.draft_id IS NOT NULL
         AND summary_snapshots.chapter_number < ?
         AND summary_snapshots.chapter_notes <> ''
         AND drafts.status = 'finalized'
         AND NOT EXISTS (
-          SELECT 1 FROM drafts newer
-          WHERE newer.chapter_number = drafts.chapter_number
-            AND newer.status = 'finalized'
-            AND (newer.version > drafts.version OR (newer.version = drafts.version AND newer.id > drafts.id))
+          SELECT 1 FROM summary_snapshots newer_summary
+          WHERE newer_summary.chapter_number = summary_snapshots.chapter_number
+            AND newer_summary.chapter_notes <> '' AND newer_summary.id > summary_snapshots.id
         )
       ORDER BY summary_snapshots.chapter_number ASC, summary_snapshots.draft_id ASC
     `).all(chapterNumber) as Array<Omit<FinalizedContinuityProjection, 'facts' | 'characterStateCandidates' | 'source' | 'sourceStatus'> & {
@@ -526,6 +751,8 @@ export class SummaryRepository {
       sourceFinalizationId: string
       sourceContentHash: string
       projectionGeneration: number
+      currentDraftId: number | null
+      currentDraftStatus: string | null
       currentFinalizationId: string | null
       currentContentHash: string | null
       contentSnapshot: string | null
@@ -540,6 +767,10 @@ export class SummaryRepository {
         && row.currentContentHash === row.sourceContentHash
         && row.contentSnapshot === row.currentContent
         && sha256(row.currentContent) === row.currentContentHash
+      const fallbackCurrent = Number.isSafeInteger(row.currentDraftId) && row.currentDraftId! > 0
+        && row.currentDraftStatus === 'finalized' && typeof row.currentContent === 'string'
+        && typeof row.contentSnapshot === 'string' && row.contentSnapshot === row.currentContent
+        && typeof row.currentContentHash === 'string' && sha256(row.currentContent) === row.currentContentHash
       const invalidated = row.staleFromChapter !== null
         && row.chapterNumber >= row.staleFromChapter
         && row.projectionGeneration < row.currentGeneration
@@ -568,6 +799,7 @@ export class SummaryRepository {
       }
       return {
         draftId: row.draftId,
+        ...(!sourceCurrent && fallbackCurrent ? { currentFinalizedDraftId: row.currentDraftId! } : {}),
         chapterNumber: row.chapterNumber,
         chapterTitle: row.chapterTitle,
         chapterNotes: row.chapterNotes,

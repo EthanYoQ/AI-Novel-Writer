@@ -11,6 +11,16 @@ import {
   type ReviewRevisionMaterialAdmission,
 } from '../chapter-materials'
 import { requireWorkflowProjectSession, workflowUiText } from '../workflow-project-session'
+import { countDraftUnits } from '../../../shared/draft-units'
+
+function appendCompleteRevisionContract(prompt: string, source: string, writingLanguage: 'zh-CN' | 'en-US'): string {
+  const sourceUnits = countDraftUnits(source)
+  const range = { minimum: Math.floor(sourceUnits * 0.8), maximum: Math.ceil(sourceUnits * 1.2) }
+  const contract = writingLanguage === 'en-US'
+    ? `[Complete-revision hard constraint]\nThe frozen source contains ${sourceUnits} prose units. Output the complete revised chapter, between ${range.minimum} and ${range.maximum} prose units (80%-120% of the source). Preserve every unaffected paragraph or line in full. Do not summarize, excerpt, collapse repeated passages, or use placeholders. Apply only the confirmed findings. If a confirmed finding requires an action or result to occur in this chapter, the added action or result must itself satisfy the finding's target meaning and must already have happened in the prose. For a cost or loss, show the concrete consequence already lost, spent, or endured; signing, accepting responsibility, or saying that a character will pay later remains a promise and is not the cost itself. Merely reversing a negation, or stating an abstract decision, plan, promise, or commitment, does not count. Reconcile later paragraphs so they do not preserve a state that contradicts the new event. Output revision prose only.`
+    : `【完整修稿硬约束】\n冻结源稿共 ${sourceUnits} 个正文单位。必须输出修订后的完整章节，长度须在 ${range.minimum}-${range.maximum} 个正文单位之间（源稿的 80%-120%）。所有未受影响的段落或行必须完整保留；不得摘要、节选、合并重复段落或使用占位符。只处理已确认的问题。若已确认问题要求当章发生动作或结果，新增动作或结果本身必须满足该问题的目标语义，并且已经在正文中发生。对于代价或损失，必须写出已经失去、消耗或承受的具体后果；签字、认责或声称以后负责仍只是承诺，不是代价本身。简单否定翻转，或抽象的决定、计划、承诺、保证，均不算完成。必须同步修正后文，不得保留与新增事件相反的状态。最终只输出修订后正文。`
+  return `${prompt}\n\n${contract}`
+}
 
 export interface RefineFromReviewParams extends ReviewRevisionCommandSource {
   confirmedReviewContent?: string
@@ -67,8 +77,8 @@ export class RefineFromReviewCommand extends ReviewRevisionCommand {
         current,
         writingLanguage: frozen.writingLanguage,
         materials: [{
-          identity: { projectId: current.projectId, sourceId: `review:confirmed:${confirmation.sourceReviewId}`,
-            revision: confirmation.sourceReviewId, contentHash: await hashAuthorText(reviewBrief),
+          identity: { projectId: current.projectId, sourceId: `review:confirmed:${frozen.confirmation!.reviewSourceId}`,
+            revision: frozen.confirmation!.reviewSourceId, contentHash: await hashAuthorText(reviewBrief),
             provenance: 'author' },
           category: 'author',
           required: true,
@@ -87,6 +97,8 @@ export class RefineFromReviewCommand extends ReviewRevisionCommand {
       .withDraftContent(frozen.source.content)
       .withGlobalGuidance(frozen.config.globalGuidance || '')
       .withUserRefinePrompt('')
-    return this.generateRevision(prepared, params, builder.build(), builder.getSystemRole())
+    const prompt = appendCompleteRevisionContract(builder.build(), frozen.source.content, frozen.writingLanguage)
+    await this.bindMaterialDecision(params, admission.decision, prompt)
+    return this.generateRevision(prepared, params, prompt, builder.getSystemRole())
   }
 }

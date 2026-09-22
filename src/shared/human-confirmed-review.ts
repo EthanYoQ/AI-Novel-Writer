@@ -1,6 +1,7 @@
 import { writingLanguageText, type WritingLanguage } from './writing-language'
 import type { ExpectedDraftSource } from './ipc-channels'
 import { parseChapterGoalReview, type ChapterGoalReview } from './chapter-goal-review'
+import { countDraftUnits } from './draft-units'
 
 /**
  * Immutable, user-confirmed review snapshot persisted in the existing
@@ -9,8 +10,9 @@ import { parseChapterGoalReview, type ChapterGoalReview } from './chapter-goal-r
  */
 export const HUMAN_CONFIRMED_REVIEW_KIND = 'human-confirmed-review' as const
 export const HUMAN_CONFIRMED_REVIEW_SCHEMA_VERSION = 1 as const
+export const HUMAN_CONFIRMED_REVIEW_SCHEMA_VERSION_V2 = 2 as const
 
-export type HumanConfirmedReviewDecision = 'apply' | 'ignore'
+export type HumanConfirmedReviewDecision = 'apply' | 'ignore' | 'waive'
 export type HumanConfirmedReviewOrigin = 'ai' | 'author'
 
 export interface HumanConfirmedReviewItem {
@@ -21,13 +23,16 @@ export interface HumanConfirmedReviewItem {
   stableFactKey?: string
   sourceChapter?: number
   goalId?: string
+  findingId?: string
   decision: HumanConfirmedReviewDecision
   origin: HumanConfirmedReviewOrigin
 }
 
 export interface HumanConfirmedReviewSnapshot {
   kind: typeof HUMAN_CONFIRMED_REVIEW_KIND
-  schemaVersion: typeof HUMAN_CONFIRMED_REVIEW_SCHEMA_VERSION
+  schemaVersion: typeof HUMAN_CONFIRMED_REVIEW_SCHEMA_VERSION | typeof HUMAN_CONFIRMED_REVIEW_SCHEMA_VERSION_V2
+  /** Present only for v2 snapshots whose AI items are bound to review-cycle findings. */
+  cycleId?: string
   /** The immutable original AI-review row; never the confirmation row itself. */
   sourceReviewId: number
   /** AI review generation source. Missing only on legacy confirmations, which must fail closed. */
@@ -41,6 +46,7 @@ export interface HumanConfirmedReviewSnapshot {
 export interface HumanConfirmedReviewSnapshotInput {
   sourceReviewId: number
   sourceDraft: Readonly<ExpectedDraftSource>
+  cycleId?: string
   summary: string
   authorGuidance: string
   items: readonly HumanConfirmedReviewItem[]
@@ -68,6 +74,7 @@ function parseSourceDraft(value: unknown): Readonly<ExpectedDraftSource> | null 
     || !positiveSafeInteger(source.version)
     || !['draft', 'revised', 'reviewed', 'finalized', 'archived'].includes(String(source.status))
     || typeof source.content !== 'string'
+    || countDraftUnits(source.content) < 1
   ) return null
   return Object.freeze({
     id: source.id,
@@ -78,7 +85,7 @@ function parseSourceDraft(value: unknown): Readonly<ExpectedDraftSource> | null 
   })
 }
 
-function parseItem(value: unknown): HumanConfirmedReviewItem | null {
+function parseItem(value: unknown, schemaVersion: 1 | 2): HumanConfirmedReviewItem | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
   const category = nonEmptyString(record.category)
@@ -88,6 +95,7 @@ function parseItem(value: unknown): HumanConfirmedReviewItem | null {
   const stableFactKey = record.stableFactKey === undefined ? undefined : nonEmptyString(record.stableFactKey)
   const sourceChapter = record.sourceChapter
   const goalId = record.goalId === undefined ? undefined : nonEmptyString(record.goalId)
+  const findingId = record.findingId === undefined ? undefined : nonEmptyString(record.findingId)
   const decision = record.decision
   const origin = record.origin
 
@@ -95,13 +103,16 @@ function parseItem(value: unknown): HumanConfirmedReviewItem | null {
     !category
     || !severity
     || !description
-    || (decision !== 'apply' && decision !== 'ignore')
+    || (decision !== 'apply' && decision !== 'ignore' && decision !== 'waive')
     || (origin !== 'ai' && origin !== 'author')
   ) return null
   if (quote === null) return null
   if (stableFactKey === null) return null
   if (goalId === null) return null
+  if (findingId === null) return null
   if (sourceChapter !== undefined && !positiveSafeInteger(sourceChapter)) return null
+  if (schemaVersion === 1 && (findingId !== undefined || decision === 'waive')) return null
+  if (decision === 'waive' && (schemaVersion !== 2 || origin !== 'ai' || findingId === undefined)) return null
 
   return Object.freeze({
     category,
@@ -111,6 +122,7 @@ function parseItem(value: unknown): HumanConfirmedReviewItem | null {
     ...(stableFactKey === undefined ? {} : { stableFactKey }),
     ...(sourceChapter === undefined ? {} : { sourceChapter }),
     ...(goalId === undefined ? {} : { goalId }),
+    ...(findingId === undefined ? {} : { findingId }),
     decision,
     origin,
   })
@@ -125,12 +137,16 @@ export function validateHumanConfirmedReviewSnapshot(
 ): HumanConfirmedReviewSnapshot | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
+  const schemaVersion = record.schemaVersion
   if (
     record.kind !== HUMAN_CONFIRMED_REVIEW_KIND
-    || record.schemaVersion !== HUMAN_CONFIRMED_REVIEW_SCHEMA_VERSION
+    || (schemaVersion !== HUMAN_CONFIRMED_REVIEW_SCHEMA_VERSION
+      && schemaVersion !== HUMAN_CONFIRMED_REVIEW_SCHEMA_VERSION_V2)
     || !positiveSafeInteger(record.sourceReviewId)
     || !Array.isArray(record.items)
   ) return null
+  const cycleId = record.cycleId === undefined ? undefined : nonEmptyString(record.cycleId)
+  if (cycleId === null || (schemaVersion === 1 && cycleId !== undefined) || (schemaVersion === 2 && !cycleId)) return null
 
   const summary = stringValue(record.summary)
   const authorGuidance = stringValue(record.authorGuidance)
@@ -140,13 +156,14 @@ export function validateHumanConfirmedReviewSnapshot(
   const goalReview = record.goalReview === undefined ? undefined : parseChapterGoalReview(record.goalReview)
   if (goalReview === null) return null
 
-  const items = record.items.map(parseItem)
+  const items = record.items.map(item => parseItem(item, schemaVersion))
   if (items.some(item => item === null)) return null
 
   return Object.freeze({
     kind: HUMAN_CONFIRMED_REVIEW_KIND,
-    schemaVersion: HUMAN_CONFIRMED_REVIEW_SCHEMA_VERSION,
+    schemaVersion,
     sourceReviewId: record.sourceReviewId,
+    ...(cycleId ? { cycleId } : {}),
     ...(sourceDraft ? { sourceDraft } : {}),
     ...(goalReview ? { goalReview: Object.freeze({
       ...goalReview,
@@ -177,9 +194,11 @@ export function createHumanConfirmedReviewSnapshot(
   input: HumanConfirmedReviewSnapshotInput,
 ): HumanConfirmedReviewSnapshot | null {
   return validateHumanConfirmedReviewSnapshot({
-    kind: HUMAN_CONFIRMED_REVIEW_KIND,
-    schemaVersion: HUMAN_CONFIRMED_REVIEW_SCHEMA_VERSION,
     ...input,
+    kind: HUMAN_CONFIRMED_REVIEW_KIND,
+    schemaVersion: input.cycleId
+      ? HUMAN_CONFIRMED_REVIEW_SCHEMA_VERSION_V2
+      : HUMAN_CONFIRMED_REVIEW_SCHEMA_VERSION,
   })
 }
 

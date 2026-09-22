@@ -106,14 +106,6 @@ async function getDraftId(chapterNumber: number, version: number, expectedProjec
 // 草稿操作
 // ==========================================
 
-export async function addDraft(): Promise<void> {
-  // 原本是保存 index.json，现改为新建到数据库
-  // 由于这里调用方往往传入包含全字段的虚拟 draft 对象，所以需抽取必要信息
-  // 注意：旧逻辑是在 command 中自己写入了 content，再调用这里。
-  // 我们需要重写相关 command 才能正确衔接，但为了当前类型的完备，这里先搭起架子：
-  throw new Error('Please migrate command calls to ipc.invoke("db:draft-create") directly.')
-}
-
 export async function updateDraftStatus(
   chapterDir: string,
   version: number,
@@ -306,8 +298,4 @@ export async function getReviewsForVersion(
 export async function readDraftIndex() {
   // 返回空结构，因为调用者现在应该是直接查 draftsByChapter 而不是读 index
   return { chapterNumber: 0, chapterTitle: '', drafts: [], revisions: [], reviews: [] }
-}
-
-export function toDraftMeta() {
-  throw new Error('toDraftMeta is deprecated.')
 }

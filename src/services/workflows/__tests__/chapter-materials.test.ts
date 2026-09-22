@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import fc from 'fast-check'
 
+import { hashAuthorText } from '../../../shared/source-ref'
 import {
   ChapterMaterialCapacityError,
   adjacentEvidencePassages,
   assembleChapterMaterials,
+  buildMaterialDecisionReceipt,
   selectReviewRevisionMaterials,
   type ReviewRevisionMaterial,
 } from '../chapter-materials'
@@ -422,7 +425,7 @@ describe('chapter materials', () => {
       references: [],
       finalized: [],
       candidates: [
-        { chapterNumber: 1, draftId: 101, version: 2, content: '林岚藏起旧钥匙。\n\n她离开钟楼。' },
+        { chapterNumber: 1, draftId: 101, version: 2, content: '林岚藏起旧钥匙。\n\n她离开钟楼。', required: true },
         { chapterNumber: 2, draftId: 202, version: 4, content: '周砚抵达码头。\n\n林岚没有交出钥匙。' },
       ],
       relevanceTerms: ['林岚', '钥匙'],
@@ -432,6 +435,71 @@ describe('chapter materials', () => {
     expect(bundle.text).toContain('第2章 · draft 202 · v4')
     expect(bundle.text).toContain('林岚没有交出钥匙')
     expect(bundle.text).toContain('候选正文尚未确认')
+  })
+
+  it('treats one legacy predecessor candidate as required', async () => {
+    const bundle = await assemble({
+      writingLanguage: 'zh-CN', authorProjectFacts: [], characterProfiles: '', futurePlans: '（无）',
+      references: [], finalized: [], relevanceTerms: [],
+      candidates: [{ chapterNumber: 1, draftId: 101, version: 2, content: '唯一前驱结尾。' }],
+    })
+
+    expect(bundle.selection).toMatchObject({
+      decision: 'ready',
+      coverage: { required: 2, included: 2, complete: true },
+    })
+    expect(bundle.selection.decision === 'ready'
+      ? bundle.selection.included.find(item => item.ref.sourceId === 'candidate:101')?.required
+      : undefined).toBe(true)
+  })
+
+  it('fails closed when multiple predecessor candidates have no unique explicit required item', async () => {
+    await expect(assemble({
+      writingLanguage: 'zh-CN', authorProjectFacts: [], characterProfiles: '', futurePlans: '（无）',
+      references: [], finalized: [], relevanceTerms: [],
+      candidates: [
+        { chapterNumber: 1, draftId: 101, version: 1, content: '版本一。' },
+        { chapterNumber: 1, draftId: 102, version: 2, content: '版本二。' },
+      ],
+    })).rejects.toThrow('CHAPTER_MATERIAL_REQUIRED_PREDECESSOR_AMBIGUOUS')
+  })
+
+  it('keeps the explicit predecessor required while an optional candidate may lose the budget', async () => {
+    const bundle = await assemble({
+      writingLanguage: 'zh-CN', authorProjectFacts: [], characterProfiles: '', futurePlans: '（无）',
+      references: [], finalized: [], relevanceTerms: ['可选候选'], budgetChars: 600,
+      candidates: [
+        { chapterNumber: 1, draftId: 101, version: 1, content: '必需前驱。', required: true },
+        { chapterNumber: 1, draftId: 102, version: 2, content: '可选候选。'.repeat(2_000) },
+      ],
+    })
+
+    expect(bundle.selection.decision).toBe('ready')
+    expect(bundle.selection.decision === 'ready'
+      ? bundle.selection.included.map(item => item.ref.sourceId)
+      : []).toContain('candidate:101')
+    expect(bundle.selection.omissions).toContainEqual(expect.objectContaining({
+      sourceId: 'candidate:102', reason: 'budget', required: false,
+    }))
+  })
+
+  it('returns a capacity conflict instead of omitting an oversized explicit predecessor', async () => {
+    let error: unknown
+    try {
+      await assemble({
+        writingLanguage: 'zh-CN', authorProjectFacts: [], characterProfiles: '', futurePlans: '（无）',
+        references: [], finalized: [], relevanceTerms: [], budgetChars: 600,
+        candidates: [
+          { chapterNumber: 1, draftId: 101, version: 1, content: '必需前驱。'.repeat(2_000), required: true },
+          { chapterNumber: 1, draftId: 102, version: 2, content: '可选候选。' },
+        ],
+      })
+    } catch (cause) { error = cause }
+
+    expect(error).toBeInstanceOf(ChapterMaterialCapacityError)
+    expect((error as ChapterMaterialCapacityError).decision).toMatchObject({
+      decision: 'capacity-conflict', blockingSourceId: 'candidate:101', blockingReason: 'budget',
+    })
   })
 })
 
@@ -484,7 +552,7 @@ describe('审稿/修稿入口的共享准入（selectReviewRevisionMaterials）'
     ])
     expect(admission.admitted.map(item => item.identity.sourceId)).toEqual(['finalized:2'])
     expect(admission.selection.omissions).toEqual([
-      { sourceId: 'finalized:1', reason: 'budget', category: 'finalized-history', required: false },
+      { sourceId: 'finalized:1', revision: 1, contentHash: hash('b'), reason: 'budget', category: 'finalized-history', required: false },
     ])
   })
 
@@ -495,7 +563,7 @@ describe('审稿/修稿入口的共享准入（selectReviewRevisionMaterials）'
     ])
     expect(admission.admitted).toEqual([])
     expect(admission.selection.omissions).toEqual([
-      { sourceId: 'future:secret-7', reason: 'unknown-provenance', category: 'finalized-history', required: false },
+      { sourceId: 'future:secret-7', revision: 1, contentHash: hash('a'), reason: 'unknown-provenance', category: 'finalized-history', required: false },
     ])
   })
 
@@ -506,7 +574,7 @@ describe('审稿/修稿入口的共享准入（selectReviewRevisionMaterials）'
     ])
     expect(admission.admitted.map(item => item.identity.sourceId)).toEqual(['finalized:1'])
     expect(admission.selection.omissions).toEqual([
-      { sourceId: 'finalized:1-mirror', reason: 'duplicate-content', category: 'finalized-history', required: false },
+      { sourceId: 'finalized:1-mirror', revision: 1, contentHash: hash('a'), reason: 'duplicate-content', category: 'finalized-history', required: false },
     ])
   })
 
@@ -527,7 +595,7 @@ describe('审稿/修稿入口的共享准入（selectReviewRevisionMaterials）'
     ])
     expect(admission.admitted).toEqual([])
     expect(admission.selection.omissions).toEqual([
-      { sourceId: 'finalized:1', reason: 'invalid-source-ref', category: 'finalized-history', required: false },
+      { sourceId: 'finalized:1', revision: 1, contentHash: hash('a'), reason: 'invalid-source-ref', category: 'finalized-history', required: false },
     ])
   })
 
@@ -540,5 +608,181 @@ describe('审稿/修稿入口的共享准入（selectReviewRevisionMaterials）'
     } catch (cause) { error = cause }
     expect(error).toBeInstanceOf(ChapterMaterialCapacityError)
     expect((error as ChapterMaterialCapacityError).decision).toMatchObject({ decision: 'capacity-conflict', blockingReason: 'invalid-source-ref' })
+  })
+})
+
+/**
+ * S10B 步骤 3：准入裁决的**脱敏收据**。
+ *
+ * 收据是「本次到底放行了什么、排除了什么、必需覆盖是否完整、容量怎么判的」的唯一持久
+ * 记录。它必须只含编号、id、原因码与内容哈希——正文、作者文字、路径、凭据一律不进。
+ * 这些用例把收据的内容、顺序与脱敏性质钉死。
+ */
+describe('材料准入的脱敏收据（MaterialDecisionReceipt）', () => {
+  const asciiOnly = (value: unknown) => JSON.stringify(value)
+
+  function receiptFixture() {
+    return {
+      writingLanguage: 'zh-CN' as const,
+      authorProjectFacts: ['必需作者资料甲'],
+      characterProfiles: '',
+      futurePlans: '第三章：北塔揭晓',
+      references: [{ text: '参考材料正文', rendered: '【参考】参考材料正文' }],
+      finalized: [{
+        chapterNumber: 1,
+        draftId: 1,
+        title: '第1章',
+        content: '第一章正文。\n\n林岚抵达海港。',
+        evidence: ['林岚抵达海港。'],
+        sourceStatus: 'current' as const,
+      }],
+      candidates: [{ chapterNumber: 3, draftId: 30, version: 1, content: '第三章草稿。\n\n她走向北塔。' }],
+      relevanceTerms: [],
+    }
+  }
+
+  it('records every admitted source with its id, revision, content hash and unit cost', async () => {
+    const bundle = await assemble(receiptFixture())
+    const receipt = bundle.decision
+    expect(receipt.version).toBe(1)
+    expect(receipt.verdict).toBe('admitted')
+    expect(receipt.capacity).toEqual({ maxInputUnits: 6_000 * 3, methodVersion: 'utf8-bytes-v1', admittedUnits: receipt.included.reduce((sum, item) => sum + item.units, 0) })
+    expect(receipt.coverage).toEqual({ required: 2, included: 2, complete: true })
+    // 收据是来源级记录，按 (sourceId, revision, contentHash) 的码元全序排列。
+    expect(receipt.included.map(item => item.sourceId)).toEqual(['author:required', 'candidate:30', 'finalized:1', 'reference:0'])
+    expect(receipt.included.map(item => [item.sourceId, item.revision, item.required, item.category])).toEqual([
+      ['author:required', 1, true, 'author'],
+      ['candidate:30', 1, true, 'finalized-history'],
+      ['finalized:1', 1, false, 'finalized-history'],
+      ['reference:0', 1, false, 'reference'],
+    ])
+    expect(receipt.omitted).toEqual([])
+    // 哈希与字节数逐条来自**真正纳入的那份材料**，不是另算一遍。
+    if (bundle.selection.decision !== 'ready') throw new Error('unreachable')
+    const selectionById = new Map(bundle.selection.included.map(item => [item.ref.sourceId, item]))
+    for (const item of receipt.included) {
+      const material = selectionById.get(item.sourceId)!
+      expect(item.contentHash).toBe(material.ref.contentHash)
+      expect(item.contentHash).toBe(await hashAuthorText(material.text))
+      expect(item.units).toBe(new TextEncoder().encode(material.text).length)
+    }
+    // 来源级记录：同一份不可变来源在收据里只出现一次。
+    expect(new Set(receipt.included.map(item => JSON.stringify([item.sourceId, item.revision, item.contentHash]))).size)
+      .toBe(receipt.included.length)
+  })
+
+  it('carries only ids, codes and numbers — never material prose', async () => {
+    const bundle = await assemble(receiptFixture())
+    const serialized = asciiOnly(bundle.decision)
+    for (const sentence of ['必需作者资料甲', '第三章：北塔揭晓', '参考材料正文', '第一章正文。', '林岚抵达海港。', '第三章草稿。', '她走向北塔。'])
+      expect(serialized).not.toContain(sentence)
+    // 这里只做生产者格式回归；真正的脱敏边界来自 main 对 sourceId/枚举闭集的逐字段校验，
+    // 不能把“看起来像 ASCII”的正则当成隐私证明。
+    expect(serialized).toMatch(/^[\x20-\x7e]+$/)
+  })
+
+  it('reports every omission with the contract reason code and the capacity verdict it settled', async () => {
+    const bundle = await assemble({
+      ...receiptFixture(),
+      // 超预算的可选参考材料被**整条**省略，不是截断。
+      references: [{ text: '参', rendered: '参'.repeat(7_000) }],
+    })
+    expect(bundle.decision.omitted).toEqual([
+      { sourceId: 'reference:0', revision: 1, contentHash: await hashAuthorText('参'.repeat(7_000)), reason: 'budget', category: 'reference', required: false },
+    ])
+    expect(bundle.decision.coverage).toEqual({ required: 2, included: 2, complete: true })
+    expect(bundle.decision.included.map(item => item.sourceId)).not.toContain('reference:0')
+    expect(bundle.decision.capacity.admittedUnits).toBe(bundle.decision.included.reduce((sum, item) => sum + item.units, 0))
+  })
+
+  it('closes extraction and deduplication omissions with the exact source identity', async () => {
+    const bundle = await assemble({
+      writingLanguage: 'zh-CN',
+      authorProjectFacts: [],
+      characterProfiles: '',
+      futurePlans: '（无）',
+      references: [
+        { text: '铜钥匙交给周砚', rendered: '[KB重复] 铜钥匙交给周砚', deduplicateAgainstFinalized: true },
+        { text: '', rendered: '' },
+      ],
+      finalized: [
+        { chapterNumber: 1, draftId: 11, title: '交接', content: '林岚把铜钥匙交给周砚。', evidence: ['铜钥匙交给周砚'], sourceStatus: 'current' },
+        { chapterNumber: 9, draftId: 99, title: '坏来源', content: 'UNVERIFIED_PRIVATE_BODY', evidence: ['UNVERIFIED'], sourceStatus: 'invalid' },
+      ],
+      candidates: [
+        { chapterNumber: 2, draftId: 30, version: 2, content: '完全无关的旧候选。' },
+        { chapterNumber: 3, draftId: 31, version: 1, content: '目标候选结尾。', required: true },
+      ],
+      relevanceTerms: ['目标'],
+    })
+
+    expect(bundle.text).not.toContain('UNVERIFIED_PRIVATE_BODY')
+    expect(bundle.text).not.toContain('[KB重复]')
+    expect(bundle.decision.omitted).toEqual([
+      { sourceId: 'candidate:30', revision: 2, contentHash: await hashAuthorText('完全无关的旧候选。'), reason: 'no-relevant-passage', category: 'finalized-history', required: false },
+      { sourceId: 'finalized:99', revision: 99, contentHash: await hashAuthorText('UNVERIFIED_PRIVATE_BODY'), reason: 'source-invalid', category: 'finalized-history', required: false },
+      { sourceId: 'reference:0', revision: 1, contentHash: await hashAuthorText('[KB重复] 铜钥匙交给周砚'), reason: 'deduplicated-against-finalized', category: 'reference', required: false },
+      { sourceId: 'reference:1', revision: 1, contentHash: await hashAuthorText(''), reason: 'no-relevant-passage', category: 'reference', required: false },
+    ])
+  })
+
+  it('canonicalizes receipt order and UTF-8 units for every legal input permutation', () => {
+    const hash = (seed: string) => seed.repeat(64).slice(0, 64)
+    const included = [
+      { ref: { projectId: '项目', epoch: '会话', sourceId: 'reference:1', revision: 1, contentHash: hash('b') }, category: 'reference' as const, text: '🙂a', required: false, reason: 'reference material' },
+      { ref: { projectId: '项目', epoch: '会话', sourceId: 'author:required', revision: 1, contentHash: hash('a') }, category: 'author' as const, text: '汉字', required: true, reason: 'author material' },
+    ]
+    const omitted = [
+      { sourceId: 'reference:3', revision: 1, contentHash: hash('d'), reason: 'budget' as const, category: 'reference' as const, required: false },
+      { sourceId: 'reference:2', revision: 1, contentHash: hash('c'), reason: 'no-relevant-passage' as const, category: 'reference' as const, required: false },
+    ]
+    const permutations = fc.uniqueArray(fc.integer({ min: 0, max: 1 }), { minLength: 2, maxLength: 2 })
+    const expected = buildMaterialDecisionReceipt(
+      { decision: 'ready', included, omissions: [], coverage: { required: 1, included: 1, complete: true } },
+      { maxInputUnits: 100, methodVersion: 'utf8-bytes-v1' },
+      omitted,
+    )
+
+    fc.assert(fc.property(permutations, permutations, (includedOrder, omittedOrder) => {
+      const receipt = buildMaterialDecisionReceipt(
+        { decision: 'ready', included: includedOrder.map(index => included[index]!), omissions: [], coverage: { required: 1, included: 1, complete: true } },
+        { maxInputUnits: 100, methodVersion: 'utf8-bytes-v1' },
+        omittedOrder.map(index => omitted[index]!),
+      )
+      expect(receipt).toEqual(expected)
+      expect(receipt.capacity.admittedUnits).toBe(new TextEncoder().encode('🙂a').length + new TextEncoder().encode('汉字').length)
+    }), { numRuns: 50 })
+  })
+
+  it('produces the same receipt for the same admission', async () => {
+    const first = await assemble(receiptFixture())
+    const second = await assemble(receiptFixture())
+    expect(second.decision).toEqual(first.decision)
+  })
+
+  it('represents a chapter-one review with no historical materials as a complete empty admission', () => {
+    const admission = selectReviewRevisionMaterials({
+      current: { projectId: '项目', epoch: '会话' },
+      writingLanguage: 'zh-CN',
+      materials: [],
+      relevanceTerms: [],
+    })
+
+    expect(admission.decision).toEqual({
+      version: 1,
+      verdict: 'admitted',
+      capacity: { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1', admittedUnits: 0 },
+      coverage: { required: 0, included: 0, complete: true },
+      included: [],
+      omitted: [],
+    })
+  })
+
+  it('has no receipt at all for a decision that never reached a run', () => {
+    // 容量冲突在装配处就显式失败，根本没有运行被开出——不允许拿半份裁决冒充收据。
+    expect(() => buildMaterialDecisionReceipt(
+      { decision: 'capacity-conflict', blockingSourceId: 'author:required', blockingReason: 'budget', omissions: [], coverage: { required: 1, included: 0, complete: false } },
+      { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1' },
+    )).toThrow('MATERIAL_DECISION_NOT_READY')
   })
 })

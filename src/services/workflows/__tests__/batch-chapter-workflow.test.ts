@@ -9,6 +9,7 @@ import {
   type BatchChapterWorkflowParams,
 } from '../batch-chapter-workflow'
 import { useProjectStore } from '../../../stores/project-store'
+import { useEditorStore } from '../../../stores/editor-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useWorkflowStore, type WorkflowContext } from '../../../stores/workflow-store'
 import type { GenerationBatchProgress, BeginGenerationBatchRequest } from '../../../shared/generation-owner-contract'
@@ -394,6 +395,7 @@ describe('batch chapter workflow completion mode', () => {
           draftId: 101,
           version: 1,
           content: 'generated draft',
+          required: true,
         }],
       },
     ])
@@ -478,6 +480,33 @@ describe('batch chapter workflow completion mode', () => {
         expect.objectContaining({ status: 'pending' }),
       ],
     })
+  })
+
+  it('freezes a positive source revision for an opened first batch draft', async () => {
+    doubles.generateDraftExecute.mockImplementationOnce(async ({ context }: { context: WorkflowContext }) => {
+      context.data.draftPath = 'ai-novel://draft/101'
+      context.data.draftId = 101
+      context.data.draftVersion = 1
+      useEditorStore.setState({ tabs: [{
+        id: 'opened-batch-draft',
+        filePath: 'ai-novel://draft/101',
+        type: 'chapter',
+        projectKey: projectPath,
+        contentRevision: 0,
+      } as never] })
+      return 'generated draft'
+    })
+    try {
+      const workflow = createBatchChapterWorkflow({ projectPath, projectSession: projectSession(),
+        startChapterNumber: 1, chapterCount: 1, generationModelId: 'batch-model', completionMode: 'auto_finalize' })
+      await useWorkflowStore.getState().startWorkflow(workflow)
+      expect(doubles.finalizeChapterParams[0]).toMatchObject({
+        snapshot: { contentRevision: 1, content: 'generated draft', draftId: 101 },
+      })
+      expect(useEditorStore.getState().tabs[0].contentRevision).toBe(0)
+    } finally {
+      useEditorStore.setState({ tabs: [] })
+    }
   })
 
   it('stops with an English error if a later blueprint disappears before execution', async () => {

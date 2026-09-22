@@ -7,7 +7,9 @@ import {
   Import,
   Languages,
   Menu,
+  Maximize2,
   Minus,
+  Minimize2,
   Moon,
   ScrollText,
   Settings,
@@ -27,6 +29,7 @@ import { saveDirtyEditorChangesForExit } from '../../stores/editor-store'
 import { countUnsavedEditorItems } from '../../stores/editor-unsaved'
 import { discardAllEditorChanges } from '../../stores/editor-discard'
 import { useLayoutStore } from '../../stores/layout-store'
+import { useAppearanceStore } from '../../stores/appearance-bootstrap'
 import { APP_BRAND } from '../../shared/brand'
 import { ipc } from '../../services/ipc-client'
 import { useLocaleStore } from '../../stores/locale-store'
@@ -64,6 +67,9 @@ export default function TitleBar() {
   const openNewProject = useLayoutStore(s => s.openNewProject)
   const openExport = useLayoutStore(s => s.openExport)
   const openImportNovel = useLayoutStore(s => s.openImportNovel)
+  const immersive = useLayoutStore(s => s.immersive)
+  const toggleImmersion = useLayoutStore(s => s.toggleImmersion)
+  const writer = useAppearanceStore(s => s.resolvedShell === 'writer')
   const { locale, toggleLocale, t, text } = useLocaleStore()
   const [exitRequest, setExitRequest] = useState<{ requestId: string; workflowBlocked?: boolean } | null>(null)
   const [exitBusy, setExitBusy] = useState(false)
@@ -264,7 +270,7 @@ export default function TitleBar() {
 
         <div className="writer-command-divider h-5 w-px" />
 
-        <button className="writer-command-button" title={t('project.backupUnavailable')} disabled>
+        <button className="writer-command-button" title={t('common.backup')} onClick={() => openSettings('backup')}>
           <Archive size={14} strokeWidth={1.75} />
           {t('common.backup')}
         </button>
@@ -287,6 +293,16 @@ export default function TitleBar() {
       </div>
 
       <div className="flex items-center gap-1 flex-shrink-0">
+        {writer && <button
+          className="writer-command-button"
+          title={immersive ? text('退出沉浸写作', 'Exit focus mode') : text('进入沉浸写作', 'Enter focus mode')}
+          aria-label={immersive ? text('退出沉浸写作', 'Exit focus mode') : text('进入沉浸写作', 'Enter focus mode')}
+          aria-pressed={immersive}
+          onClick={toggleImmersion}
+        >
+          {immersive ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          {immersive ? text('退出沉浸', 'Exit focus') : text('沉浸写作', 'Focus')}
+        </button>}
         <button
           onClick={zoomOut}
           title={t('zoom.out')}

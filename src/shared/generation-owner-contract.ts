@@ -1,5 +1,5 @@
 import type { GenerationTask } from '../services/generation/generation-harness'
-import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot } from '../services/generation/generation-runtime'
+import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot, MainGenerationReasoningEvent } from '../services/generation/generation-runtime'
 import type { WritingSkillStage } from './writing-skills'
 import type { GenerationKnowledgeSnapshot } from './generation-knowledge'
 import type { ImportGenerationSlot } from './import-generation'
@@ -27,6 +27,69 @@ export interface VisibleCompositionReceipt {
   authorInputs?: GenerationAuthorInput[]
 }
 export type VisibleCompositionAlgorithm = 'visible-append-v1' | 'draft-visible-v1'
+/**
+ * S10B 章节材料准入裁决的脱敏收据。
+ *
+ * 只允许编号、稳定 id、原因码与内容哈希：没有材料正文、没有作者文字、没有路径、
+ * 没有凭据。渲染层是唯一能产生它的人（`buildMaterialDecisionReceipt`），主进程按固定
+ * 形状逐字段校验后原样冻进 `RunBinding.sourceManifest`，并把它的哈希折进
+ * `contextSnapshotHash`——恢复因此无法对着**另一份**准入裁决继续。
+ *
+ * `contentHash` 是渲染层选择合同冻结的来源内容哈希，与主进程 `sourceRefs` 自己读库得到的
+ * 源身份所有权分开：主进程不重算正文，只校验闭集、计数与来源身份后绑定。
+ */
+export const MATERIAL_DECISION_RECEIPT_VERSION = 1
+export const MATERIAL_DECISION_UNIT_METHOD_VERSION = 'utf8-bytes-v1' as const
+export const MATERIAL_DECISION_MAX_INPUT_UNITS = 8 * 1024 * 1024
+export const MATERIAL_DECISION_MAX_SOURCES = 1_024
+export const MATERIAL_DECISION_CATEGORIES = [
+  'author', 'finalized-history', 'future-plan', 'derived-locator', 'reference',
+] as const
+export type MaterialDecisionCategory = typeof MATERIAL_DECISION_CATEGORIES[number]
+export const MATERIAL_DECISION_OMISSION_REASONS = [
+  'unknown-provenance', 'locator-statement-not-evidence', 'candidate-not-admitted',
+  'invalid-source-ref', 'plot-tree-not-manuscript', 'duplicate-content',
+  'duplicate-source-ref', 'budget',
+  'source-invalid', 'evidence-not-locatable', 'no-relevant-passage',
+  'deduplicated-against-finalized',
+] as const
+export type MaterialDecisionOmissionReason = typeof MATERIAL_DECISION_OMISSION_REASONS[number]
+
+/** v1 只接收当前写/审/修材料装配器能铸造的稳定、非正文来源 ID。 */
+export const MATERIAL_DECISION_SOURCE_ID = /^(?:author:required|(?:finalized|candidate|review:confirmed):[1-9]\d*|reference:(?:0|[1-9]\d*))$/u
+
+export interface MaterialDecisionIncludedSource {
+  sourceId: string
+  revision: number
+  contentHash: string
+  category: MaterialDecisionCategory
+  required: boolean
+  /** 该来源实际进入材料的 UTF-8 字节数（同一来源的多个片段在此合并）。 */
+  units: number
+}
+export interface MaterialDecisionOmittedSource {
+  sourceId: string
+  revision: number
+  contentHash: string
+  /** `SourceOmissionReason` 的闭合码；调用方已在源头限定取值，这里只放码不放正文。 */
+  reason: MaterialDecisionOmissionReason
+  category: MaterialDecisionCategory
+  required: boolean
+}
+export interface MaterialDecisionReceipt {
+  version: typeof MATERIAL_DECISION_RECEIPT_VERSION
+  /** 只有「必需材料全部纳入」的裁决才会走到生成，因此收据只存在这一种容量裁决。 */
+  verdict: 'admitted'
+  /** 精确初始 user message 的 UTF-8 SHA-256；main 在首个物理请求前复核。 */
+  promptHash: string
+  /** admittedUnits 只统计被选来源块，不冒充完整 user prompt 的总字节数。 */
+  capacity: { maxInputUnits: number; methodVersion: typeof MATERIAL_DECISION_UNIT_METHOD_VERSION; admittedUnits: number }
+  coverage: { required: number; included: number; complete: boolean }
+  included: MaterialDecisionIncludedSource[]
+  omitted: MaterialDecisionOmittedSource[]
+}
+/** 渲染层完成材料选择后、最终 prompt 尚未组装时的内部裁决。 */
+export type MaterialDecisionDraft = Omit<MaterialDecisionReceipt, 'promptHash'>
 export interface GenerationDraftCommitReceipt {
   success: true
   id: number
@@ -72,7 +135,7 @@ export interface PrepareDraftContextRequest {
 export interface PreparedDraftContext {
   preparationId: string
   knowledgeSnapshot: GenerationKnowledgeSnapshot
-  selectedDrafts: { draftId: number; chapterNumber: number; version: number; contentHash: string; content: string }[]
+  selectedDrafts: { draftId: number; chapterNumber: number; version: number; contentHash: string; content: string; required?: boolean }[]
 }
 export interface GenerationBatchIntent {
   mode: 'draft_review' | 'auto_finalize'
@@ -129,6 +192,11 @@ export interface BeginGenerationRequest {
   reviewRevisionContextId?: string
   /** Main-issued registration from an actual, confirmed Agent tool action. */
   agentWorkflowRegistrationId?: string
+  /**
+   * S10B 章节材料准入裁决（脱敏收据）。写稿在 begin 时提供；审稿/修稿在运行已开出、
+   * 首个物理请求尚未产生时通过受控绑定 IPC 补入。主进程校验后冻进 sourceManifest。
+   */
+  materialDecision?: MaterialDecisionReceipt
 }
 export interface ExecuteGenerationRequest {
   handle: MainGenerationRunHandle
@@ -147,6 +215,7 @@ export interface GenerationOwnerChannels {
   'generation:compose-visible': { args: [MainGenerationRunHandle, string[], string, VisibleCompositionAlgorithm?]; return: VisibleCompositionReceipt }
   'generation:read-visible-composition': { args: [MainGenerationRunHandle]; return: VisibleCompositionReceipt | null }
   'generation:begin': { args: [BeginGenerationRequest]; return: MainGenerationRunView }
+  'generation:bind-material-decision': { args: [{ handle: MainGenerationRunHandle; materialDecision: MaterialDecisionReceipt }]; return: MainGenerationRunView }
   'generation:execute': { args: [ExecuteGenerationRequest]; return: MainGenerationExecuteReceipt }
   'generation:read': { args: [MainGenerationRunHandle]; return: MainGenerationRunView }
   'generation:list': { args: []; return: MainGenerationRunView[] }
@@ -156,7 +225,11 @@ export interface GenerationOwnerChannels {
   'generation:restart': { args: [MainGenerationRunHandle, BeginGenerationRequest]; return: MainGenerationRunView }
   'generation:discard-candidate': { args: [MainGenerationRunHandle, string]; return: MainGenerationRunView }
 }
-export interface GenerationOwnerEvents { 'generation:snapshot': MainGenerationSnapshot }
+export interface GenerationOwnerEvents {
+  'generation:snapshot': MainGenerationSnapshot
+  /** Volatile provider text for the active Writer display; never part of a run view or receipt. */
+  'generation:reasoning': MainGenerationReasoningEvent
+}
 
 export function generationOutputContract(selection: BeginGenerationRequest): string | Readonly<Record<string, unknown>> {
   const overrides = selection.outputOverrides

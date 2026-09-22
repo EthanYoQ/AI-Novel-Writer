@@ -1,5 +1,13 @@
 import type { WritingLanguage } from '../../shared/writing-language'
 import { hashAuthorText } from '../../shared/source-ref'
+import {
+  MATERIAL_DECISION_MAX_INPUT_UNITS,
+  MATERIAL_DECISION_RECEIPT_VERSION,
+  MATERIAL_DECISION_UNIT_METHOD_VERSION,
+  type MaterialDecisionIncludedSource,
+  type MaterialDecisionOmittedSource,
+  type MaterialDecisionDraft,
+} from '../../shared/generation-owner-contract'
 import type { ReviewMaterialIdentity } from '../../shared/review-revision-generation'
 import { promptLanguageText } from '../prompt-language'
 import {
@@ -16,6 +24,8 @@ export interface SelectedCandidateDraft {
   draftId: number
   version: number
   content: string
+  /** Required predecessor for this run. Omitted on the legacy single-candidate path. */
+  required?: boolean
 }
 
 export interface FinalizedMaterialSource {
@@ -108,7 +118,105 @@ export class ChapterMaterialCapacityError extends Error {
  * `selectChapterSources` 的一次裁决推出；传统遍历已经删除，不再存在第二条准入路径。
  */
 export interface ChapterMaterialAssembly extends ChapterMaterialBundle {
-  selection: SourceSelection
+  selection: Extract<SourceSelection, { decision: 'ready' }>
+  /** 脱敏准入收据：随主进程冻结上下文一起持久化，并被恢复指纹绑定。 */
+  decision: MaterialDecisionDraft
+}
+
+/**
+ * 材料准入裁决 -> 脱敏收据（S10B 步骤 3）。
+ *
+ * 收据只承载**可核对的编号**：来源 id、修订、已渲染材料的内容哈希、类别、是否必需、
+ * UTF-8 字节数、省略原因码、必需覆盖计数与容量裁决。正文、作者文字、路径与凭据一律
+ * 不进收据——「收据记明确认了什么」与「公开日志不放正文」是同一件事的两面。
+ *
+ * 只有 `ready` 裁决才配得上收据：容量冲突与拆分在调用方就已显式失败，根本不会开出
+ * 运行，也就不存在可绑定的指纹。这里因此对非 `ready` 输入直接抛错，绝不用半份裁决
+ * 冒充收据。
+ *
+ * 同一来源可能拆成多个片段进入材料（stale 定位回读、多段证据窗口），这里按
+ * `(sourceId, revision, contentHash)` 合并为一个来源条目并累加字节数，使收据记录的是
+ * **来源级**准入，而不是渲染分块。排序用码元比较的稳定全序，不依赖 locale。
+ */
+export function buildMaterialDecisionReceipt(
+  selection: SourceSelection,
+  capacity: { maxInputUnits: number; methodVersion: typeof MATERIAL_DECISION_UNIT_METHOD_VERSION },
+  additionalOmissions: readonly MaterialDecisionOmittedSource[] = [],
+): MaterialDecisionDraft {
+  if (selection.decision !== 'ready') throw new Error('MATERIAL_DECISION_NOT_READY')
+  if (!Number.isSafeInteger(capacity.maxInputUnits) || capacity.maxInputUnits < 1
+    || capacity.maxInputUnits > MATERIAL_DECISION_MAX_INPUT_UNITS)
+    throw new Error('MATERIAL_DECISION_CAPACITY_INVALID')
+  const included = new Map<string, MaterialDecisionIncludedSource>()
+  for (const material of selection.included) {
+    const key = materialIdentityKey(material.ref)
+    const units = new TextEncoder().encode(material.text).length
+    if (units < 1) throw new Error('MATERIAL_DECISION_INCLUDED_EMPTY')
+    const existing = included.get(key)
+    if (existing) {
+      if (existing.category !== material.category || existing.required !== material.required)
+        throw new Error('MATERIAL_DECISION_INCLUDED_IDENTITY_CONFLICT')
+      existing.units += units
+      continue
+    }
+    included.set(key, {
+      sourceId: material.ref.sourceId,
+      revision: material.ref.revision,
+      contentHash: material.ref.contentHash,
+      category: material.category,
+      required: material.required,
+      units,
+    })
+  }
+  const ordered = [...included.values()].sort((left, right) =>
+    compareCodeUnit(left.sourceId, right.sourceId)
+    || left.revision - right.revision
+    || compareCodeUnit(left.contentHash, right.contentHash))
+  const omitted: MaterialDecisionOmittedSource[] = [
+    ...selection.omissions.map(omission => ({
+      sourceId: omission.sourceId,
+      revision: omission.revision,
+      contentHash: omission.contentHash,
+      reason: omission.reason,
+      category: omission.category,
+      required: omission.required,
+    })),
+    ...additionalOmissions,
+  ]
+    .sort((left, right) =>
+      compareCodeUnit(left.sourceId, right.sourceId)
+      || left.revision - right.revision
+      || compareCodeUnit(left.contentHash, right.contentHash)
+      || compareCodeUnit(left.reason, right.reason)
+      || compareCodeUnit(left.category, right.category)
+      || Number(left.required) - Number(right.required))
+  const omittedEvents = omitted.map(item => `${materialIdentityKey(item)}\u0000${item.reason}`)
+  if (new Set(omittedEvents).size !== omittedEvents.length)
+    throw new Error('MATERIAL_DECISION_DUPLICATE_OMISSION')
+  const includedIdentities = new Set(ordered.map(materialIdentityKey))
+  if (omitted.some(item => includedIdentities.has(materialIdentityKey(item))
+    && item.reason !== 'locator-statement-not-evidence' && item.reason !== 'evidence-not-locatable'))
+    throw new Error('MATERIAL_DECISION_IDENTITY_CONFLICT')
+  const admittedUnits = ordered.reduce((sum, item) => sum + item.units, 0)
+  if (admittedUnits > capacity.maxInputUnits)
+    throw new Error('MATERIAL_DECISION_CAPACITY_INVALID')
+  return {
+    version: MATERIAL_DECISION_RECEIPT_VERSION,
+    verdict: 'admitted',
+    capacity: {
+      maxInputUnits: capacity.maxInputUnits,
+      methodVersion: capacity.methodVersion,
+      admittedUnits,
+    },
+    coverage: { required: selection.coverage.required, included: selection.coverage.included, complete: selection.coverage.complete },
+    included: ordered,
+    omitted,
+  }
+}
+
+/** 码元比较：与选择契约同一套全序，避免排序依赖 ICU/locale。 */
+function compareCodeUnit(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0
 }
 
 const MATERIAL_BUDGET_CHARS = 6_000
@@ -142,6 +250,7 @@ export interface ReviewRevisionMaterial {
 
 export interface ReviewRevisionMaterialAdmission {
   selection: Extract<SourceSelection, { decision: 'ready' }>
+  decision: MaterialDecisionDraft
   /**
    * 准入的材料，**保持调用方传入顺序**。
    *
@@ -187,12 +296,13 @@ export function selectReviewRevisionMaterials(input: {
     text: material.text,
   }))
   // 容量与写稿路径同源：同一份码元预算、同一个估算器版本。
+  const capacity = {
+    maxInputUnits: (input.budgetChars ?? MATERIAL_BUDGET_CHARS) * BYTES_PER_BUDGET_CHAR[input.writingLanguage],
+    methodVersion: MATERIAL_DECISION_UNIT_METHOD_VERSION,
+  }
   const selection = selectChapterSources({
     current: input.current,
-    capacity: {
-      maxInputUnits: (input.budgetChars ?? MATERIAL_BUDGET_CHARS) * BYTES_PER_BUDGET_CHAR[input.writingLanguage],
-      methodVersion: 'utf8-bytes-v1',
-    },
+    capacity,
     relevanceTerms: input.relevanceTerms,
     candidates,
   })
@@ -200,6 +310,7 @@ export function selectReviewRevisionMaterials(input: {
   const admittedKeys = new Set(selection.included.map(item => materialIdentityKey(item.ref)))
   return {
     selection,
+    decision: buildMaterialDecisionReceipt(selection, capacity),
     admitted: input.materials.filter(material => admittedKeys.has(materialIdentityKey(material.identity))),
   }
 }
@@ -332,6 +443,7 @@ export async function assembleChapterMaterials(input: {
 }): Promise<ChapterMaterialAssembly> {
   const writingLanguage = input.writingLanguage
   const omissions: ChapterMaterialOmission[] = []
+  const decisionOmissions: MaterialDecisionOmittedSource[] = []
   const candidates: MaterialCandidate[] = []
   const familyBySourceId = new Map<string, MaterialFamily>()
   const referenceCandidates: Array<{ candidate: MaterialCandidate; reference: ChapterMaterialReference }> = []
@@ -362,6 +474,24 @@ export async function assembleChapterMaterials(input: {
     familyBySourceId.set(material.sourceId, family)
     return candidate
   }
+  const recordDecisionOmission = async (input: {
+    sourceId: string
+    revision: number
+    contentHash?: string
+    text?: string
+    reason: MaterialDecisionOmittedSource['reason']
+    category: MaterialDecisionOmittedSource['category']
+    required?: boolean
+  }): Promise<void> => {
+    decisionOmissions.push({
+      sourceId: input.sourceId,
+      revision: input.revision,
+      contentHash: input.contentHash ?? await hashAuthorText(input.text ?? ''),
+      reason: input.reason,
+      category: input.category,
+      required: input.required ?? false,
+    })
+  }
 
   // ---- 必需材料（决定 1B）：作者资料 + 角色档案 + 后续计划是单一候选，----
   // ---- 装不下就整轮失败，绝不静默截断，也绝不让它挤掉别的块。            ----
@@ -390,19 +520,36 @@ export async function assembleChapterMaterials(input: {
         chapterNumber: source.chapterNumber,
         reason: 'source-invalid',
       })
+      await recordDecisionOmission({
+        sourceId: `finalized:${source.draftId}`,
+        revision: source.draftId,
+        text: source.content,
+        reason: 'source-invalid',
+        category: 'finalized-history',
+      })
       continue
     }
     const extracted = finalizedPassages(source, input.relevanceTerms)
     const expectedEvidence = source.evidence.filter(value => value.trim()).length
-    if (extracted.locatedEvidence < expectedEvidence) {
+    const hasUnlocatedEvidence = extracted.locatedEvidence < expectedEvidence
+    if (hasUnlocatedEvidence) {
       omissions.push({
         source: 'finalized',
         chapterNumber: source.chapterNumber,
         reason: 'evidence-not-locatable',
       })
     }
-    if (extracted.passages.length === 0) continue
-    await push({
+    if (extracted.passages.length === 0) {
+      await recordDecisionOmission({
+        sourceId: `finalized:${source.draftId}`,
+        revision: source.draftId,
+        text: source.content,
+        reason: hasUnlocatedEvidence ? 'evidence-not-locatable' : 'no-relevant-passage',
+        category: 'finalized-history',
+      })
+      continue
+    }
+    const selected = await push({
       family: 'finalized',
       chapterNumber: source.chapterNumber,
       locatedEvidence: extracted.locatedEvidence,
@@ -422,18 +569,45 @@ export async function assembleChapterMaterials(input: {
       // stale 定位只说明索引失效：回读到的原文照常计入材料，过时陈述本身从不进入提示词。
       ...(source.sourceStatus === 'stale' ? { staleLocator: false as const } : {}),
     })
+    if (hasUnlocatedEvidence && selected) {
+      await recordDecisionOmission({
+        sourceId: selected.ref.sourceId,
+        revision: selected.ref.revision,
+        contentHash: selected.ref.contentHash,
+        reason: 'evidence-not-locatable',
+        category: selected.category,
+      })
+    }
   }
 
   // ---- 未定稿候选 ----
   const orderedCandidates = [...input.candidates].sort((left, right) => left.chapterNumber - right.chapterNumber)
-  const latestCandidate = orderedCandidates.at(-1)
+  const explicitRequiredCandidates = orderedCandidates.filter(candidate => candidate.required === true)
+  if (orderedCandidates.length > 1 && explicitRequiredCandidates.length !== 1) {
+    throw new Error('CHAPTER_MATERIAL_REQUIRED_PREDECESSOR_AMBIGUOUS')
+  }
+  // Legacy callers supplied only the direct predecessor and had no marker. Keep
+  // that case required; larger sets must identify the one authoritative predecessor.
+  const requiredPredecessor = orderedCandidates.length === 1
+    ? orderedCandidates[0]
+    : explicitRequiredCandidates[0]
+  let requiredPredecessorMaterial: MaterialCandidate | undefined
   for (const candidate of orderedCandidates) {
-    const passages = candidatePassages(candidate, candidate === latestCandidate, input.relevanceTerms)
+    const isRequired = candidate === requiredPredecessor
+    const passages = candidatePassages(candidate, isRequired, input.relevanceTerms)
     if (passages.length === 0) {
       omissions.push({ source: 'candidate', chapterNumber: candidate.chapterNumber, reason: 'no-relevant-passage' })
+      await recordDecisionOmission({
+        sourceId: `candidate:${candidate.draftId}`,
+        revision: candidate.version,
+        text: candidate.content,
+        reason: 'no-relevant-passage',
+        category: 'finalized-history',
+        required: isRequired,
+      })
       continue
     }
-    await push({ family: 'candidate', chapterNumber: candidate.chapterNumber, locatedEvidence: 0, passages: [] }, {
+    const material = await push({ family: 'candidate', chapterNumber: candidate.chapterNumber, locatedEvidence: 0, passages: [] }, {
       sourceId: `candidate:${candidate.draftId}`,
       revision: candidate.version,
       text: promptLanguageText(
@@ -443,8 +617,18 @@ export async function assembleChapterMaterials(input: {
       ),
       category: 'finalized-history',
       provenance: 'author',
-      required: false,
+      required: isRequired,
     })
+    if (isRequired) requiredPredecessorMaterial = material
+  }
+  if (requiredPredecessor && !requiredPredecessorMaterial) {
+    throw new ChapterMaterialCapacityError({
+      decision: 'capacity-conflict',
+      blockingSourceId: `candidate:${requiredPredecessor.draftId}`,
+      blockingReason: 'invalid-source-ref',
+      omissions: [],
+      coverage: { required: 2, included: 0, complete: false },
+    }, writingLanguage)
   }
 
   // ---- 参考材料 ----
@@ -458,13 +642,22 @@ export async function assembleChapterMaterials(input: {
       required: false,
     })
     if (candidate) referenceCandidates.push({ candidate, reference })
+    else {
+      await recordDecisionOmission({
+        sourceId: `reference:${referenceIndex}`,
+        revision: 1,
+        text: reference.rendered,
+        reason: 'no-relevant-passage',
+        category: 'reference',
+      })
+    }
   }
 
   // 单位在这里统一：旧遍历按 UTF-16 码元、合同按 UTF-8 字节，容量用码元预算按写作语言
   // 主要字符集换算出的字节数表示，估算器版本与 context-snapshot 冻结的 utf8-bytes-v1 一致。
   const capacity = {
     maxInputUnits: (input.budgetChars ?? MATERIAL_BUDGET_CHARS) * BYTES_PER_BUDGET_CHAR[writingLanguage],
-    methodVersion: 'utf8-bytes-v1',
+    methodVersion: MATERIAL_DECISION_UNIT_METHOD_VERSION,
   }
 
   // ---- 参考材料族的局部子串去重（决定 2C）----
@@ -493,6 +686,13 @@ export async function assembleChapterMaterials(input: {
     if (reference.deduplicateAgainstFinalized && reference.text.length > 0
       && includedFinalizedPassages.some(passage => passage.includes(reference.text))) {
       droppedReferences.add(candidate)
+      await recordDecisionOmission({
+        sourceId: candidate.ref.sourceId,
+        revision: candidate.ref.revision,
+        contentHash: candidate.ref.contentHash,
+        reason: 'deduplicated-against-finalized',
+        category: candidate.category,
+      })
     }
   }
 
@@ -503,6 +703,23 @@ export async function assembleChapterMaterials(input: {
     relevanceTerms: input.relevanceTerms,
     candidates: candidates.filter(item => !droppedReferences.has(item)),
   })
+  if (selection.decision !== 'ready') {
+    const omission = selection.omissions.find(item => (
+      [requiredCandidate, requiredPredecessorMaterial].some(material => material
+        && item.sourceId === material.ref.sourceId
+        && item.revision === material.ref.revision
+        && item.contentHash === material.ref.contentHash)
+    ))
+    if (omission) {
+      throw new ChapterMaterialCapacityError({
+        decision: 'capacity-conflict',
+        blockingSourceId: omission.sourceId,
+        blockingReason: omission.reason,
+        omissions: selection.omissions,
+        coverage: selection.coverage,
+      }, writingLanguage)
+    }
+  }
   if (selection.decision !== 'ready') throw new ChapterMaterialCapacityError(selection, writingLanguage)
 
   // 渲染：块头沿用各族原有的模板（在构造候选时就已经套好，这里不做二次改写），
@@ -512,7 +729,9 @@ export async function assembleChapterMaterials(input: {
   const requiredBlock = requiredCandidate
     ? selection.included.find(item => item.ref.contentHash === requiredCandidate.ref.contentHash)?.text ?? ''
     : ''
-  const optionalBlocks = selection.included.filter(item => !item.required).map(item => item.text)
+  const sourcedBlocks = selection.included
+    .filter(item => item.ref.sourceId !== REQUIRED_SOURCE_ID)
+    .map(item => item.text)
 
   const selectedOmissions = selection.omissions
     .map(omission => describeSelectionOmission(omission, familyBySourceId))
@@ -535,7 +754,7 @@ export async function assembleChapterMaterials(input: {
     includedFinalizedFacts += family.locatedEvidence
   }
 
-  const endingSource = latestCandidate
+  const endingSource = requiredPredecessor
     ? undefined
     : input.finalized.find(source => source.includeEnding && source.content.trim())
   if (endingSource && !consumedFinalizedSources.some(source => source.draftId === endingSource.draftId)) {
@@ -545,9 +764,10 @@ export async function assembleChapterMaterials(input: {
 
   return {
     selection,
-    text: [requiredBlock, sourced, ...optionalBlocks, gap].filter(Boolean).join('\n\n'),
-    previousEnding: latestCandidate
-      ? previousChapterEnding(latestCandidate.content)
+    decision: buildMaterialDecisionReceipt(selection, capacity, decisionOmissions),
+    text: [requiredBlock, sourced, ...sourcedBlocks, gap].filter(Boolean).join('\n\n'),
+    previousEnding: requiredPredecessor
+      ? previousChapterEnding(requiredPredecessor.content)
       : previousChapterEnding(input.finalized.find(source => source.includeEnding)?.content ?? ''),
     includedFinalizedFacts,
     consumedFinalizedSources,

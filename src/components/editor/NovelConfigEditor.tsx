@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Save, Sparkles, Info, Loader2, RotateCcw } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
-import { registerEditorExitSaveHandler } from '../../stores/editor-store'
+import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/editor-store'
 import { useLLMStore } from '../../stores/llm-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import type { NovelConfig } from '../../shared/ipc-channels'
@@ -28,6 +28,7 @@ import {
   isProjectSessionPath,
 } from '../project-session-gate'
 import { AUDIENCE_EN, GENRE_EN } from './novel-config-labels'
+import { SaveFeedback, type SaveOutcome } from './save-feedback'
 
 /** 小说配置编辑器 — Tab 内的可视化配置面板 */
 export default function NovelConfigEditor({ projectKey }: { projectKey: string }) {
@@ -52,6 +53,7 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
   //    避免 AI 流式生成时 globalLogs 高频更新导致本组件被动重渲染
   const addLog = useWorkflowStore.getState().addLog
   const [saving, setSaving] = useState(false)
+  const [saveOutcome, setSaveOutcome] = useState<SaveOutcome>('idle')
   const [showGenerateConfig, setShowGenerateConfig] = useState(false)
   const text = useLocaleStore(s => s.text)
   const [generateSession, setGenerateSession] = useState<ReturnType<typeof captureProjectSession>>(null)
@@ -62,12 +64,15 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
   // 直接从 Store 读取配置 — 单一数据源，无需 local state 镜像
   const projectMatches = currentProject?.path === projectKey
   const config = projectMatches ? currentProject.novelConfig : null
-  const exitSaveRef = useRef<() => Promise<void>>(async () => undefined)
+  const dirty = useEditorStore(state => state.tabs.some(
+    tab => tab.type === 'config' && tab.projectKey === projectKey && tab.dirty,
+  ))
+  const exitSaveRef = useRef<(propagateFailure?: boolean) => Promise<void>>(async () => undefined)
   useEffect(() => {
     registerEditorExitSaveHandler({
       type: 'config',
       projectKey,
-      save: () => exitSaveRef.current(),
+      save: () => exitSaveRef.current(true),
     })
   }, [projectKey])
 
@@ -77,22 +82,31 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
     const projectSession = captureProjectSession(currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     updateNovelConfig({ [key]: value }, projectSession)
+    setSaveOutcome('idle')
   }
 
   /** 保存配置 — Store 已是最新数据，仅需持久化到磁盘 */
-  const handleSave = async () => {
+  const handleSave = async (propagateFailure = false) => {
     const projectSession = captureProjectSession(currentProject)
     if (!config || saving || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     setSaving(true)
+    setSaveOutcome('idle')
     try {
       const saved = await saveProject(projectSession)
       if (!isProjectSessionCurrent(projectSession)) return
       if (!saved) throw new Error(text('项目配置未能写入磁盘', 'The project configuration could not be written to disk.'))
       addLog('info', text('小说配置已保存', 'Novel configuration saved'))
+      const stillDirty = useEditorStore.getState().tabs.some(
+        tab => tab.type === 'config' && tab.projectKey === projectKey && tab.dirty,
+      )
+      setSaveOutcome(stillDirty ? 'idle' : 'saved')
     } catch (error) {
-      if (!isProjectSessionCurrent(projectSession)) return
-      console.error('[NovelConfigEditor] 保存失败:', error)
-      addLog('error', text(`保存失败：${error}`, `Save failed: ${error}`))
+      if (isProjectSessionCurrent(projectSession)) {
+        setSaveOutcome('failed')
+        console.error('[NovelConfigEditor] 保存失败:', error)
+        addLog('error', text(`保存失败：${error}`, `Save failed: ${error}`))
+      }
+      if (propagateFailure) throw error
     } finally {
       if (isProjectSessionCurrent(projectSession)) setSaving(false)
     }
@@ -185,7 +199,8 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
             <Button variant="ai" onClick={handleAIGenerate}>
               <Sparkles size={13} /> {text('AI 填充配置', 'Fill with AI')}
             </Button>
-            <Button variant="outline" onClick={handleSave} disabled={saving}>
+            <SaveFeedback dirty={dirty} saving={saving} outcome={saveOutcome} />
+            <Button variant="outline" onClick={() => { void handleSave() }} disabled={saving}>
               <Save size={13} /> {saving ? text('保存中...', 'Saving...') : text('保存', 'Save')}
             </Button>
           </div>

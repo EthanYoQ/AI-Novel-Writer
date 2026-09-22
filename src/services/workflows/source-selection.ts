@@ -35,6 +35,8 @@ const UNUSABLE_SOURCE_REASONS: readonly SourceOmissionReason[] = [
 
 export interface SourceOmission {
   sourceId: string
+  revision: number
+  contentHash: string
   reason: SourceOmissionReason
   category: MaterialCategory
   required: boolean
@@ -152,7 +154,8 @@ export function selectChapterSources(input: SourceSelectionInput): SourceSelecti
     if (!reasonByCandidate.has(candidate)) reasonByCandidate.set(candidate, reason)
   }
   const record = (candidate: MaterialCandidate, reason: SourceOmissionReason) => {
-    omissions.push({ sourceId: candidate.ref.sourceId, reason, category: candidate.category, required: candidate.required })
+    omissions.push({ sourceId: candidate.ref.sourceId, revision: candidate.ref.revision,
+      contentHash: candidate.ref.contentHash, reason, category: candidate.category, required: candidate.required })
   }
   const block = (candidate: MaterialCandidate, reason: SourceOmissionReason) => {
     record(candidate, reason)

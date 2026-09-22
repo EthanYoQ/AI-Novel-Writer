@@ -89,6 +89,11 @@ export interface MainGenerationSnapshot extends MainGenerationRunHandle {
   /** Main-verified settled stop/length artifact; status alone never authorizes composition. */
   compositionEligible?: boolean
 }
+/** Provider reasoning is sent only to the active display and has no durable run projection. */
+export interface MainGenerationReasoningEvent extends MainGenerationRunHandle {
+  attemptId: string
+  text: string
+}
 export interface MainGenerationRunView {
   budgetDiagnostics?: readonly import('./task-budget-planner').GenerationBudgetDiagnostic[]
   operation?: string
@@ -113,6 +118,7 @@ export interface MainGenerationTransport {
   list(projectSession: ProjectSessionContext): Promise<readonly MainGenerationRunView[]>
   cancel(handle: MainGenerationRunHandle): Promise<MainGenerationRunView>
   subscribe(handle: MainGenerationRunHandle, listener: (snapshot: MainGenerationSnapshot) => void): () => void
+  subscribeReasoning?: (handle: MainGenerationRunHandle, listener: (event: MainGenerationReasoningEvent) => void) => () => void
 }
 export interface MainOwnedGenerationRuntimeOptions {
   runHandle: MainGenerationRunHandle

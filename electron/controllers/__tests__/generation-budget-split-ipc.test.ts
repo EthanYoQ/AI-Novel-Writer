@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -47,8 +48,8 @@ beforeAll(() => {
 })
 
 beforeEach(() => {
-  const base = path.resolve('.runtime/.cache/novel-quality-modernization/s07-ipc-budget')
-  fs.mkdirSync(base, { recursive: true }); root = fs.mkdtempSync(path.join(base, 'case-'))
+  const base = path.join(os.tmpdir(), 'an-budget-ipc-')
+  root = fs.mkdtempSync(base)
   mocks.globalRoot = path.join(root, 'global'); fs.mkdirSync(mocks.globalRoot)
   const project = projectAccess.createProject(root, '合成小说')
   createProjectDatabase(project.rootPath); initProjectDatabase(project.rootPath)

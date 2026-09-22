@@ -347,6 +347,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     characters?: string[]
     continuity?: Array<{
       draftId: number
+      currentFinalizedDraftId?: number
       chapterNumber: number
       chapterTitle: string
       chapterNotes: string
@@ -368,6 +369,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       draftId: number
       version: number
       content: string
+      required?: boolean
     }>
     knowledgeResults?: Array<{ text: string; score: number; fileName: string }>
     keyEvents?: string
@@ -462,7 +464,10 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
           : null
       }
       if (channel === 'generation:prepare-draft-context') return {
-        preparationId: '合成准备', selectedDrafts: options.selectedCandidateDrafts ?? [],
+        preparationId: '合成准备', selectedDrafts: (options.selectedCandidateDrafts ?? []).map(candidate => ({
+          chapterNumber: candidate.chapterNumber, draftId: candidate.draftId,
+          version: candidate.version, content: candidate.content,
+        })),
         knowledgeSnapshot: { version: 1, state: 'empty', storageState: 'absent',
           query: (args[0] as { query: string }).query, topK: 5, canonicalRevision: null, documentsRevision: null,
           items: options.knowledgeResults ?? [] },
@@ -600,6 +605,76 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(legacy.createRuntime).not.toHaveBeenCalled()
     expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:execute')).toHaveLength(1)
     expect(f.invoke.mock.calls.some(([channel]) => channel === 'db:draft-create' || channel === 'db:draft-next-version' || channel === 'db:recovery-candidate-record')).toBe(false)
+  })
+
+  it('pauses an over-limit main-owned replay and reports the length code first', async () => {
+    const legacy = fakeOutcomes()
+    const replayedEnding = '潮'.repeat(500)
+    const f = setup({
+      runtime: legacy,
+      chapterNumber: 2,
+      previousFinalizedContent: replayedEnding,
+      wordsTarget: 2000,
+      wordsPerChapter: 2000,
+      mainDefault: true,
+    })
+    f.context.generationModelId = '合成模型'
+    const handle: MainGenerationRunHandle = {
+      projectId: f.context.projectSession.projectId,
+      epoch: f.context.projectSession.leaseId,
+      rootActionId: '超长根',
+      runId: '超长正文',
+    }
+    const text = `${replayedEnding}${'灯'.repeat(2101)}`
+    const hash = (value: string) => createHash('sha256').update(value).digest('hex')
+    const view: MainGenerationRunView = {
+      handle,
+      status: 'running',
+      nonReplayable: false,
+      artifacts: [],
+      budget: {
+        maxAttempts: 32,
+        maxRequestedOutputTokens: 2000000,
+        maxRequestedOutputTokensPerAttempt: 32768,
+        deadlineAt: Date.now() + 3600000,
+      },
+    }
+    const original = f.invoke.getMockImplementation()!
+    f.invoke.mockImplementation(async (channel, ...args) => {
+      if (channel === 'generation:begin' || channel === 'generation:read') return view
+      if (channel === 'generation:execute') {
+        const result = outcome(text, 'stop')
+        result.receipt.visibleArtifact = {
+          artifactId: '超长正文片',
+          attemptId: '超长物理请求',
+          revision: 1,
+          textHash: hash(text),
+        }
+        return { outcome: result, run: view }
+      }
+      if (channel === 'generation:compose-visible') {
+        return {
+          algorithm: 'draft-visible-v1',
+          artifactIds: ['超长正文片'],
+          text,
+          textHash: hash(text),
+          sources: [],
+        }
+      }
+      if (channel === 'generation:pause') return { ...view, status: 'paused' }
+      if (channel === 'generation:commit-draft') throw new Error('unexpected commit')
+      return original(channel, ...args)
+    })
+
+    await expect(f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks }))
+      .rejects.toThrow('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE')
+
+    expect(legacy.createRuntime).not.toHaveBeenCalled()
+    expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:execute')).toHaveLength(1)
+    expect(f.invoke).toHaveBeenCalledWith('generation:pause', handle, f.context.projectSession)
+    expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:commit-draft')).toBe(false)
+    expect(f.invoke.mock.calls.some(([channel]) => channel === 'db:recovery-candidate-record')).toBe(false)
+    expect(f.callbacks.replaceText).toHaveBeenLastCalledWith(text)
   })
 
   it.each(['stop', 'length', 'saved-ack-lost'] as const)('默认恢复沿精确组合与 %s 终态，不重发初始正文', async (state) => {
@@ -856,9 +931,9 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
   )
 
   it.each([
-    { target: 900, lowerBound: 720, upperBound: 1080 },
-    { target: 1400, lowerBound: 1120, upperBound: 1680 },
-  ])('sends the dynamic $target-unit ±20% length contract in the final provider request', async ({
+    { target: 900, lowerBound: 630, upperBound: 1170 },
+    { target: 1400, lowerBound: 979, upperBound: 1820 },
+  ])('sends the dynamic $target-unit ±30% length contract in the final provider request', async ({
     target,
     lowerBound,
     upperBound,
@@ -880,7 +955,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
     const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
     expect(user).toContain('【本章篇幅合同】')
-    expect(user).toContain(`用户目标 ${target} 字；可接受范围 ${lowerBound}–${upperBound} 字（±20%）`)
+    expect(user).toContain(`用户目标 ${target} 字；可接受范围 ${lowerBound}–${upperBound} 字（±30%）`)
     expect(user).toContain('在此篇幅内完整落实本章蓝图中的全部作者任务和必需事件')
     expect(user).toContain(requiredEvent)
     expect(runtime.complete).toHaveBeenCalledOnce()
@@ -915,7 +990,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(lengthContractIndex).toBeGreaterThan(authorTaskIndex)
     expect(user).toContain('【后续计划边界（只约束当前章，不是当前章任务）】')
     expect(user).toContain(futurePlan)
-    expect(user).toContain('用户目标 900 字；可接受范围 720–1080 字（±20%）')
+    expect(user).toContain('用户目标 900 字；可接受范围 630–1170 字（±30%）')
     expect(runtime.complete).toHaveBeenCalledOnce()
   })
 
@@ -1142,6 +1217,54 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     )
   })
 
+  it('sends the sanitized material decision of this exact admission into the frozen run', async () => {
+    // S10B 步骤 3：写稿路径的材料准入先于运行开启，所以本次准入的脱敏收据随 selection
+    // 一起交给主进程去冻进 sourceManifest 并被恢复指纹绑定。
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('新章正文。'.repeat(125), 'stop')
+    })
+    const previousFinalizedContent = ['作者第一章正文。', '林岚把红色钥匙收进口袋。', '上一章定稿结尾哨兵。'].join('\n\n')
+    const { context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      characters: ['林岚'],
+      wordsTarget: 500,
+      continuity: [{
+        draftId: 41,
+        chapterNumber: 1,
+        chapterTitle: '作者第一章',
+        chapterNotes: '',
+        facts: [{
+          category: 'character-state',
+          entities: ['林岚'],
+          statement: '林岚持有红色钥匙。',
+          sourceChapter: 1,
+          evidence: '林岚把红色钥匙收进口袋。',
+        }],
+      }],
+      previousFinalizedContent,
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const decision = runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision
+    expect(decision).toMatchObject({ version: 1, verdict: 'admitted', coverage: { required: 1, included: 1, complete: true } })
+    // 收据记的来源就是提示词里真正出现的那几份材料。
+    expect(decision?.included.map(item => item.sourceId)).toContain('author:required')
+    expect(decision?.included.map(item => item.sourceId)).toContain('finalized:41')
+    const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(decision?.promptHash).toBe(createHash('sha256').update(prompt).digest('hex'))
+    expect(prompt).toContain('定稿原文 · 第1章 · draft 41 · 定位索引')
+    expect(prompt).toContain('上一章定稿结尾哨兵。')
+    // 脱敏：收据只是编号、原因码与数字，没有任何材料正文。
+    const serialized = JSON.stringify(decision)
+    expect(serialized).not.toContain('上一章定稿结尾哨兵。')
+    expect(serialized).not.toContain('作者第一章正文。')
+    expect(serialized).toMatch(/^[\x20-\x7e]+$/)
+  })
+
   it('captures final provider requests without legacy characters_arch, currentState, or chapter summaries', async () => {
     const runtime = fakeOutcomes(
       outcome('初'.repeat(100), 'length', 1),
@@ -1227,6 +1350,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       previousFinalizedContent: '第二章定稿原文。',
       continuity: [{
         draftId: 51,
+        currentFinalizedDraftId: 52,
         chapterNumber: 1,
         chapterTitle: '旧伤',
         chapterNotes: 'STALE_SUMMARY_SENTINEL',
@@ -1240,7 +1364,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         }],
       }],
       continuitySourceContents: {
-        51: '林岚扶墙停下。\n\n铁钩划开了她的左腿。\n\n她拒绝把钥匙交给周砚。',
+        51: '旧摘要绑定正文，不应读取。',
+        52: '新权威正文：林岚扶墙停下。\n\n铁钩划开了她的左腿。\n\n她拒绝把钥匙交给周砚。',
       },
     })
 
@@ -1248,10 +1373,12 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
     expect(prompt).toContain('定位索引stale')
+    expect(prompt).toContain('新权威正文：林岚扶墙停下')
     expect(prompt).toContain('林岚扶墙停下')
     expect(prompt).toContain('她拒绝把钥匙交给周砚')
     expect(prompt).not.toContain('STALE_SUMMARY_SENTINEL')
     expect(prompt).not.toContain('STALE_STATEMENT_SENTINEL')
+    expect(prompt).not.toContain('旧摘要绑定正文，不应读取')
   })
 
   it('keeps a distant invalid source optional when the previous legacy source is readable', async () => {
@@ -1421,7 +1548,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(invoke).toHaveBeenCalledWith('db:draft-get-finalized', 1, projectPath, expect.anything())
   })
 
-  it('persists the exact candidate dependency chain in chapter order', async () => {
+  it('persists only the admitted candidate dependency chain', async () => {
     const runtime = fakeRuntime(() => outcome('新章正文。'.repeat(125), 'stop'))
     const chapterOne = '林岚把钥匙藏进钟楼。'
     const chapterTwo = '周砚抵达码头，林岚仍未交出钥匙。'
@@ -1430,7 +1557,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       chapterNumber: 3,
       wordsTarget: 500,
       selectedCandidateDrafts: [
-        { chapterNumber: 2, draftId: 32, version: 4, content: chapterTwo },
+        { chapterNumber: 2, draftId: 32, version: 4, content: chapterTwo, required: true },
         { chapterNumber: 1, draftId: 31, version: 2, content: chapterOne },
       ],
     })
@@ -1441,10 +1568,6 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       'db:draft-create',
       expect.objectContaining({
         sourceDependencies: [
-          {
-            draftId: 31,
-            contentHash: createHash('sha256').update(chapterOne, 'utf8').digest('hex'),
-          },
           {
             draftId: 32,
             contentHash: createHash('sha256').update(chapterTwo, 'utf8').digest('hex'),
@@ -2391,34 +2514,34 @@ ${headingPrefix}第3章：潮门
     expect(completeWithLease.mock.calls[0]?.[0].plan.maxOutputTokens).toBe(8192)
   })
 
-  it('accepts exactly 80% of the target without requesting a continuation', async () => {
-    const runtime = fakeOutcomes(outcome('正'.repeat(720), 'stop', 1))
+  it('accepts exactly 70% of the target without requesting a continuation', async () => {
+    const runtime = fakeOutcomes(outcome('正'.repeat(1400), 'stop', 1))
     const { invoke, context, callbacks, command } = setup({
       runtime,
-      wordsPerChapter: 900,
-      wordsTarget: 900,
+      wordsPerChapter: 2000,
+      wordsTarget: 2000,
     })
 
-    await expect(command.execute({ step: {}, context, callbacks })).resolves.toHaveLength(720)
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toHaveLength(1400)
 
     expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft'])
     expect(invoke).toHaveBeenCalledWith(
       'db:draft-create',
-      expect.objectContaining({ content: '正'.repeat(720), wordCount: 720 }),
+      expect.objectContaining({ content: '正'.repeat(1400), wordCount: 1400 }),
       expect.anything(),
       expect.anything(),
     )
   })
 
-  it('continues a 719-unit result before persisting the completed draft', async () => {
+  it('continues a 1399-unit result before persisting the completed draft', async () => {
     const runtime = fakeOutcomes(
-      outcome('初'.repeat(719), 'stop', 1),
+      outcome('初'.repeat(1399), 'stop', 1),
       outcome('续', 'stop', 2),
     )
     const { invoke, context, callbacks, command } = setup({
       runtime,
-      wordsPerChapter: 900,
-      wordsTarget: 900,
+      wordsPerChapter: 2000,
+      wordsTarget: 2000,
     })
 
     await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain('续')
@@ -2455,29 +2578,52 @@ ${headingPrefix}第3章：潮门
     expect(runtime.complete).toHaveBeenCalledOnce()
   })
 
-  it.each([1604, 2285])(
-    'persists a complete %i-unit result above a 1000-unit target without length repair',
-    async visibleUnits => {
-      const draft = '正'.repeat(visibleUnits)
-      const runtime = fakeOutcomes(outcome(draft, 'stop'))
-      const { invoke, context, callbacks, command } = setup({
-        runtime,
-        wordsPerChapter: 1000,
-        wordsTarget: 1000,
-      })
+  it('persists exactly the 2600-unit upper bound without length repair', async () => {
+    const draft = '正'.repeat(2600)
+    const runtime = fakeOutcomes(outcome(draft, 'stop'))
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      wordsPerChapter: 2000,
+      wordsTarget: 2000,
+    })
 
-      await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(draft)
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(draft)
 
-      expect(runtime.complete).toHaveBeenCalledOnce()
-      expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft'])
-      expect(invoke).toHaveBeenCalledWith(
-        'db:draft-create',
-        expect.objectContaining({ content: draft, wordCount: visibleUnits }),
-        expect.anything(),
-        expect.anything(),
-      )
-    },
-  )
+    expect(runtime.complete).toHaveBeenCalledOnce()
+    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft'])
+    expect(invoke).toHaveBeenCalledWith(
+      'db:draft-create',
+      expect.objectContaining({ content: draft, wordCount: 2600 }),
+      expect.anything(),
+      expect.anything(),
+    )
+  })
+
+  it('stores a 2601-unit length result as a recovery candidate without committing or retrying', async () => {
+    const draft = '正'.repeat(2601)
+    const runtime = fakeOutcomes(outcome(draft, 'length'))
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      wordsPerChapter: 2000,
+      wordsTarget: 2000,
+    })
+
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toThrow('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE')
+
+    expect(runtime.complete).toHaveBeenCalledOnce()
+    expect(invoke).toHaveBeenCalledWith(
+      'db:recovery-candidate-record',
+      expect.objectContaining({
+        visibleText: draft,
+        failureCode: 'GENERATION_DRAFT_LENGTH_OUT_OF_RANGE',
+      }),
+      expect.anything(),
+      expect.anything(),
+    )
+    expect(callbacks.replaceText).toHaveBeenLastCalledWith(draft)
+    expectNoDraftPersistence(invoke)
+  })
 
   it('continues a length result even after it has crossed 80%', async () => {
     const runtime = fakeOutcomes(
@@ -2490,9 +2636,9 @@ ${headingPrefix}第3章：潮门
     expect(runtime.complete).toHaveBeenCalledTimes(2)
   })
 
-  it('continues an over-target length candidate and commits only after a stop result', async () => {
-    const initialCandidate = `${'甲'.repeat(4000)}。`
-    const continuation = `${'乙'.repeat(2800)}。`
+  it('keeps a completed over-limit continuation as a recovery candidate instead of committing it', async () => {
+    const initialCandidate = `${'甲'.repeat(3200)}。`
+    const continuation = `${'乙'.repeat(701)}。`
     const runtime = fakeOutcomes(
       outcome(initialCandidate, 'length', 1),
       outcome(continuation, 'stop', 2),
@@ -2504,22 +2650,27 @@ ${headingPrefix}第3章：潮门
     })
 
     const completedDraft = `${initialCandidate}\n\n${continuation}`
-    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(completedDraft)
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toThrow('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE')
 
     expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual([
       'chapter-draft',
       'chapter-draft-continuation',
     ])
     expect(invoke).toHaveBeenCalledWith(
-      'db:draft-create',
-      expect.objectContaining({ content: completedDraft }),
+      'db:recovery-candidate-record',
+      expect.objectContaining({
+        visibleText: completedDraft,
+        failureCode: 'GENERATION_DRAFT_LENGTH_OUT_OF_RANGE',
+      }),
       expect.anything(),
       expect.anything(),
     )
+    expectNoDraftPersistence(invoke)
   })
 
   it('keeps an over-target length candidate visible when the shared budget cannot continue it', async () => {
-    const initialCandidate = `${'甲'.repeat(4000)}。`
+    const initialCandidate = `${'甲'.repeat(3500)}。`
     const runtime = fakeRuntime((attempt) => {
       if (attempt === 1) return outcome(initialCandidate, 'length', 1)
       throw new Error('生成会话已用尽请求次数。')
@@ -2614,8 +2765,8 @@ ${headingPrefix}第3章：潮门
       .find(message => message.role === 'user')?.content ?? ''
 
     const overTargetContinuationRuntime = fakeOutcomes(
-      outcome(`${'甲'.repeat(4000)}。`, 'length', 1),
-      outcome(`${'乙'.repeat(2800)}。`, 'stop', 2),
+      outcome(`${'甲'.repeat(3100)}。`, 'length', 1),
+      outcome(`${'乙'.repeat(400)}。`, 'stop', 2),
     )
     const overTargetContinuation = setup({
       runtime: overTargetContinuationRuntime,

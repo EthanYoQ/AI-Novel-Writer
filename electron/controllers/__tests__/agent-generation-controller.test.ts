@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentGenerationChannels, AgentGenerationInput, AgentToolActionRef } from '../../../src/shared/agent-generation'
@@ -18,7 +19,7 @@ import { ModelExecutionLeaseRegistry } from '../../services/model-execution-leas
 import { projectAccess } from '../../services/project-access'
 import { createProjectDatabase, initProjectDatabase, closeProjectDatabase, getProjectDb } from '../../database'
 
-const base = path.resolve('.runtime/.cache/novel-quality-modernization/agent-ipc-independent')
+const base = path.join(os.tmpdir(), 'an-agent-ipc-')
 const model: ModelProfile = { id: 'synthetic-ipc', name: 'Synthetic IPC', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1',
   baseUrl: 'https://api.openai.com/v1', apiKey: 'synthetic-only', maxTokens: 2048, temperature: 0.7, purposes: ['generation'] }
 const sender = { isDestroyed: () => false, send: vi.fn() }
@@ -63,7 +64,7 @@ beforeAll(() => {
   registerDatabaseController()
 })
 beforeEach(() => {
-  fs.mkdirSync(base, { recursive: true }); root = fs.mkdtempSync(path.join(base, 'case-'))
+  root = fs.mkdtempSync(base)
   mocks.globalRoot = path.join(root, 'global'); fs.mkdirSync(mocks.globalRoot)
   const project = projectAccess.createProject(root, '合成')
   createProjectDatabase(project.rootPath); initProjectDatabase(project.rootPath)
@@ -76,7 +77,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   closeProjectDatabase(); projectAccess.invalidateCurrentSession(); vi.unstubAllGlobals(); vi.restoreAllMocks()
-  if (!path.resolve(root).startsWith(base + path.sep)) throw new Error('Synthetic cleanup outside owned cache')
+  if (!path.resolve(root).startsWith(path.resolve(base))) throw new Error('Synthetic cleanup outside owned temp root')
   fs.rmSync(root, { recursive: true, force: true })
 })
 

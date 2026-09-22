@@ -8,6 +8,7 @@ import type { FrozenChapterGoals } from './chapter-goal-review'
 import type { BlueprintForPreflight, ConsistencyFinding } from './consistency-preflight'
 import type { FinalizedContinuityProjection, FinalizedSourceIdentity } from './finalized-continuity'
 import type { HumanConfirmedReviewSnapshot } from './human-confirmed-review'
+import type { ReviewCycleRecheckContext } from './review-cycle'
 
 export type ReviewRevisionOperation = 'review-chapter' | 'refine-draft' | 'refine-from-review'
 /** Asserts the author's selected version; prose and all stored facts are loaded by main. */
@@ -17,6 +18,8 @@ export interface PrepareReviewRevisionRequest {
   expectedDraft: { chapterNumber: number; version: number; status: DraftStatus; contentHash: string }
   reviewSourceId?: number
   confirmedReviewContent?: string
+  reviewCycleId?: string
+  expectedMergedHash?: string
   authorInputs: GenerationAuthorInput[]
   uiLocale: Locale
 }
@@ -68,6 +71,7 @@ export interface ReviewRevisionContext {
   frozenGoals: FrozenChapterGoals
   preflightFindings: ConsistencyFinding[]
   confirmation?: { reviewSourceId: number; content: string; originalReviewContentHash: string; snapshot: HumanConfirmedReviewSnapshot }
+  recheck?: ReviewCycleRecheckContext
 }
 export interface PreparedReviewRevisionContext {
   contextId: string
@@ -95,12 +99,16 @@ export interface ReviewRevisionCommitReceipt {
   contentHash: string
   source: ExpectedDraftSource
   revisionStatus?: 'pending' | 'merged' | 'discarded'
+  reviewCycle?: { cycleId: string; revisionStatus: 'merge-committed'; recheckCount: 0 | 1;
+    disposition: 'required' | 'not-required' | 'completed' }
 }
 export interface ReviewRevisionRecovery {
   handle: MainGenerationRunHandle
   context: ReviewRevisionContext
   modelId: string
   sourceStatus: 'current' | 'conflict'
+  /** False when a terminal candidate failed deterministic save validation and is copy-only. */
+  canResume: boolean
   contextId?: string
   saved?: ReviewRevisionCommitReceipt
   composition?: VisibleCompositionReceipt

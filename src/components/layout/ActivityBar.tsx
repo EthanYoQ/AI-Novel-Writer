@@ -12,10 +12,7 @@ import {
 } from 'lucide-react'
 import { useLayoutStore, type SidebarView } from '../../stores/layout-store'
 import { useProjectStore } from '../../stores/project-store'
-import { useEditorStore } from '../../stores/editor-store'
-import { countUnsavedEditorItemsForProject } from '../../stores/editor-unsaved'
 import { ipc } from '../../services/ipc-client'
-import { confirm } from '../../components/ui/Confirm'
 import { MenuItem } from '../../components/ui/MenuItem'
 import { useOutsideClick } from '../../hooks/useOutsideClick'
 import { useLocaleStore } from '../../stores/locale-store'
@@ -79,26 +76,6 @@ export default function ActivityBar() {
   const handleCloseProject = async () => {
     setShowProjectMenu(false)
     if (!currentProject) return
-    const { tabs, draftLedgers } = useEditorStore.getState()
-    const dirtyTabs = tabs.filter(tab => (
-      tab.dirty && tab.projectKey === currentProject.path
-    ))
-    const unsavedCount = countUnsavedEditorItemsForProject(
-      tabs,
-      draftLedgers,
-      currentProject.path,
-    )
-    if (unsavedCount > 0) {
-      const names = dirtyTabs.map(tab => tab.name).join('、')
-      const ok = await confirm(
-        `${text(
-          `当前项目有 ${unsavedCount} 项未保存修改${names ? `：${names}` : ''}，关闭后将丢失。`,
-          `This project has ${unsavedCount} unsaved item${unsavedCount === 1 ? '' : 's'}${names ? `: ${names}` : ''}; closing will discard them.`,
-        )}\n\n${text('确定要关闭当前项目吗？', 'Close the current project?')}`,
-        { title: text('关闭项目', 'Close project'), confirmText: text('放弃并关闭', 'Discard and close'), danger: true }
-      )
-      if (!ok) return
-    }
     await closeProject()
   }
 

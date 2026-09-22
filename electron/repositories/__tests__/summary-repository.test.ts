@@ -164,7 +164,7 @@ describe('finalized continuity projection', () => {
 
     expect(JSON.parse((getProjectDb()!.prepare(
       'SELECT character_state_candidates AS candidates FROM summary_snapshots WHERE draft_id = ?',
-    ).get(draft.draftId) as { candidates: string }).candidates)).toHaveLength(1)
+    ).get(draft.draftId) as { candidates: string }).candidates).pending).toHaveLength(1)
     expect(SummaryRepository.listFinalizedContinuityBefore(3)[0]).toMatchObject({
       facts: [],
       characterStateCandidates: [{

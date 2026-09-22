@@ -89,6 +89,8 @@ export interface ReviewOnlyParams {
   sourceDraft: FrozenDraftSourceIdentity
   /** 审稿维度侧重点（可选） */
   reviewFocus?: string
+  reviewCycleId?: string
+  expectedMergedHash?: string
 }
 
 export interface FinalizeOnlyParams {
@@ -401,6 +403,8 @@ export function createReviewOnlyWorkflow(
             sourceDraft: frozenParams.sourceDraft,
             chapterNumber: frozenParams.chapterNumber,
             reviewFocus: frozenParams.reviewFocus,
+            reviewCycleId: frozenParams.reviewCycleId,
+            expectedMergedHash: frozenParams.expectedMergedHash,
           })
           return cmd.execute({ step, context, callbacks })
         },

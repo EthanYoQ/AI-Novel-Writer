@@ -3,7 +3,7 @@ import CodeMirror, { ReactCodeMirrorRef, EditorView, ViewUpdate } from '@uiw/rea
 import { keymap } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { languages } from '@codemirror/language-data'
-import { EditorState } from '@codemirror/state'
+import { EditorState, Prec, type Extension } from '@codemirror/state'
 import { openSearchPanel, closeSearchPanel, search } from '@codemirror/search'
 import { Sparkles, Bold, Check } from 'lucide-react'
 import { cn } from '../../lib/utils'
@@ -14,6 +14,7 @@ import type { GenerationReasoningStage } from '../../shared/reasoning-types'
 import { countDraftUnits } from '../../shared/draft-units'
 import { useLocaleStore } from '../../stores/locale-store'
 import { getActiveProjectSessionContext } from '../../shared/project-session-context'
+import { livePreview, paperHeadFacet, type PaperHead } from './live-preview'
 
 export type CodeMirrorEditorProps = {
   content: string
@@ -27,6 +28,7 @@ export type CodeMirrorEditorProps = {
   placeholder?: string
   hideStatusBar?: boolean
   mode?: 'document' | 'prose'
+  paperHead?: PaperHead | null
 }
 
 type EditorAIAction = {
@@ -55,6 +57,7 @@ export default function CodeMirrorEditor({
   onCharCountChange,
   placeholder,
   mode = 'document',
+  paperHead = null,
 }: CodeMirrorEditorProps) {
   const uiText = useLocaleStore(s => s.text)
   const uiLocale = useLocaleStore(s => s.locale)
@@ -64,6 +67,30 @@ export default function CodeMirrorEditor({
   const lastEmittedContentRef = useRef(content)
   const [editorContent, setEditorContent] = useState(content)
   const hasEmittedInitialCount = useRef(false)
+  const composingRef = useRef(false)
+  const pendingExternalContentRef = useRef<string | null>(null)
+  const latestContentPropRef = useRef(content)
+  const charCountHandlerRef = useRef(onCharCountChange)
+  useLayoutEffect(() => {
+    latestContentPropRef.current = content
+    charCountHandlerRef.current = onCharCountChange
+  }, [content, onCharCountChange])
+
+  const handleCompositionStart = useCallback(() => {
+    composingRef.current = true
+  }, [])
+  const handleCompositionEnd = useCallback(() => {
+    composingRef.current = false
+    queueMicrotask(() => {
+      const pending = pendingExternalContentRef.current
+      if (pending === null) return
+      pendingExternalContentRef.current = null
+      if (pending !== latestContentPropRef.current) return
+      lastEmittedContentRef.current = pending
+      setEditorContent(pending)
+      charCountHandlerRef.current?.(countDraftUnits(pending))
+    })
+  }, [])
 
   // 更新内容
   useEffect(() => {
@@ -74,6 +101,11 @@ export default function CodeMirrorEditor({
     }
 
     if (content !== lastEmittedContentRef.current) {
+      if (composingRef.current) {
+        pendingExternalContentRef.current = content
+        return
+      }
+      pendingExternalContentRef.current = null
       lastEmittedContentRef.current = content
       setEditorContent(content)
       // 内容经由外部变动（例如打开新文件）
@@ -268,18 +300,45 @@ export default function CodeMirrorEditor({
     ".cm-activeLine": { backgroundColor: "transparent" },
     ".cm-selectionBackground, .cm-focused .cm-selectionBackground": { backgroundColor: "var(--color-hover) !important" },
     ".cm-line": { padding: "0" },
+    ".cm-lp-paperhead": {
+      padding: "8px 0 28px",
+      textAlign: "center",
+      color: "var(--color-text)",
+      fontFamily: "var(--font-writing)",
+    },
+    ".cm-lp-paperhead h2": { margin: "0", fontSize: "1.65em", fontWeight: "600" },
+    ".cm-lp-paperhead-sub": { marginTop: "6px", fontSize: "0.8em", color: "var(--color-text-muted)" },
+    ".cm-lp-h": { fontWeight: "600", lineHeight: "1.5" },
+    ".cm-lp-h1": { fontSize: "1.5em" },
+    ".cm-lp-h2": { fontSize: "1.3em" },
+    ".cm-lp-h3": { fontSize: "1.15em" },
+    ".cm-lp-strong": { fontWeight: "700" },
+    ".cm-lp-em": { fontStyle: "italic" },
+    ".cm-lp-dropcap-char": {
+      color: "var(--color-accent)",
+      fontSize: "2.4em",
+      fontWeight: "600",
+      lineHeight: "0.8",
+    },
   }), [mode])
+
+  const paperHeadTitle = paperHead?.title ?? null
+  const paperHeadSubtitle = paperHead?.subtitle ?? ''
+  const stablePaperHead = useMemo<PaperHead | null>(
+    () => paperHeadTitle === null ? null : { title: paperHeadTitle, subtitle: paperHeadSubtitle },
+    [paperHeadTitle, paperHeadSubtitle],
+  )
 
   // 构建扩展
   const extensions = useMemo(() => {
-    const exts = [
+    const exts: Extension[] = [
       search({ top: true }),
       EditorView.lineWrapping,
-      keymap.of([
+      ...(mode === 'prose' ? [Prec.highest(keymap.of([
         {
           key: 'Tab',
           run: (target) => {
-            if (target.state.readOnly) return false
+            if (target.state.readOnly || target.state.selection.ranges.length !== 1 || !target.state.selection.main.empty) return false
             // 插入两个 em 空格（U+2003）= 2em = 标准中文首行缩进两字符宽
             // 使用 \u2003 而非 \u3000（全角空格），因为 em 空格在任何 Unicode 字体下
             // 都精确等于 1em，不依赖 CJK 字体加载
@@ -290,7 +349,7 @@ export default function CodeMirrorEditor({
             return true
           }
         }
-      ]),
+      ]))] : []),
       // 汉化 Search / UI 文本（涵盖官方大小写所有变种）
       EditorState.phrases.of(uiLocale === 'zh-CN' ? {
         "Find": "查找",
@@ -315,11 +374,13 @@ export default function CodeMirrorEditor({
         "close": "关闭"
       } : {})
     ]
-    if (mode === 'document') {
+    if (mode === 'document' || mode === 'prose') {
       exts.push(markdown({ base: markdownLanguage, codeLanguages: languages }))
     }
+    if (mode === 'prose') exts.push(...livePreview())
+    exts.push(paperHeadFacet.of(stablePaperHead))
     return exts
-  }, [mode, uiLocale])
+  }, [mode, stablePaperHead, uiLocale])
 
   // AI 菜单处理（流式调用，实时显示生成内容）
   const handleAIAction = async (action: EditorAIAction) => {
@@ -441,6 +502,8 @@ export default function CodeMirrorEditor({
 
   return (
     <div className="relative h-full flex flex-col min-h-0"
+      onCompositionStartCapture={handleCompositionStart}
+      onCompositionEndCapture={handleCompositionEnd}
       onKeyDownCapture={(e) => {
         // 全局捕获 Ctrl+F 实现搜索框 Toggle（解决搜索框内焦点时快捷键失效的问题）
         if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
@@ -462,7 +525,7 @@ export default function CodeMirrorEditor({
         // 捕获 Cmd+S 保存
         if ((e.metaKey || e.ctrlKey) && e.key === 's') {
           e.preventDefault()
-          onSave?.(lastEmittedContentRef.current)
+          void Promise.resolve(onSave?.(lastEmittedContentRef.current)).catch(() => undefined)
         }
       }}>
       <div className="flex-1 relative min-h-0 overflow-hidden"

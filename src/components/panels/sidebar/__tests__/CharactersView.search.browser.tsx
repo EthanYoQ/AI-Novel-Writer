@@ -1,9 +1,10 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { page } from 'vitest/browser'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ProjectData } from '../../../../shared/ipc-channels'
+import { setActiveProjectSessionContext } from '../../../../shared/project-session-context'
 import { useCharacterStore, type CharacterCard } from '../../../../stores/character-store'
 import { useLocaleStore } from '../../../../stores/locale-store'
 import { useProjectStore } from '../../../../stores/project-store'
@@ -64,6 +65,8 @@ afterEach(async () => {
   useCharacterStore.setState(originalCharacterState)
   useLocaleStore.setState(originalLocaleState)
   useProjectStore.setState(originalProjectState)
+  setActiveProjectSessionContext(null)
+  delete window.aiNovelAPI
 })
 
 describe('character list search', () => {
@@ -77,5 +80,46 @@ describe('character list search', () => {
 
     await act(async () => { await search.clear() })
     expect(container.textContent).toContain('Bob Stone')
+  })
+
+  it('renders same-name avatars by stable ID and keeps them bound after a rename', async () => {
+    setActiveProjectSessionContext({
+      projectId: 'character-search', leaseId: 'character-search-lease', projectPath: PROJECT_PATH,
+    })
+    const invoke = vi.fn(async (channel: string, ids: string[]) => ({
+      success: true,
+      avatars: channel === 'character-avatar:read-batch'
+        ? ids.map((characterId, index) => ({ characterId, assetRevision: 1, mime: 'image/png', base64: btoa(`avatar-${index}`) }))
+        : [],
+    }))
+    window.aiNovelAPI = { invoke } as unknown as typeof window.aiNovelAPI
+    useCharacterStore.setState({
+      characters: [
+        { ...card('同名'), characterId: 'stable-a' },
+        { ...card('同名'), characterId: 'stable-b' },
+      ],
+    })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    const before = new Map(Array.from(container.querySelectorAll('[data-character-id]')).map(row => [
+      row.getAttribute('data-character-id'), row.querySelector('img')?.src,
+    ]))
+    expect(before.get('stable-a')).toMatch(/^blob:/)
+    expect(before.get('stable-b')).toMatch(/^blob:/)
+    expect(before.get('stable-a')).not.toBe(before.get('stable-b'))
+    expect(invoke).toHaveBeenCalledWith(
+      'character-avatar:read-batch',
+      ['stable-a', 'stable-b'],
+      expect.objectContaining({ projectId: 'character-search' }),
+    )
+
+    useCharacterStore.setState(state => ({
+      characters: state.characters.map(character => character.characterId === 'stable-b'
+        ? { ...character, name: '改名后' }
+        : character),
+    }))
+    await act(async () => { await Promise.resolve() })
+    const after = container.querySelector('[data-character-id="stable-b"] img') as HTMLImageElement
+    expect(after.alt).toBe('改名后 avatar')
+    expect(after.src).toBe(before.get('stable-b'))
   })
 })

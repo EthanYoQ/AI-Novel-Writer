@@ -390,13 +390,15 @@ function installIpc() {
     }
     if (channel === 'finalization:commit') {
       if (!draftRecord) throw new Error('Missing generated draft before finalization')
+      const snapshot = args[0] as { contentRevision: number }
+      expect(snapshot.contentRevision).toBe(1)
       draftRecord = { ...draftRecord, status: 'finalized' }
       return {
         success: true,
         committed: true,
         finalizationId: FINALIZATION_ID,
         contentHash: FINALIZED_CONTENT_HASH,
-        contentRevision: 0,
+        contentRevision: snapshot.contentRevision,
         draftId: draftRecord.id,
         publicationStatus: 'published',
       }
@@ -420,6 +422,19 @@ function installIpc() {
           projectionGeneration: 0,
         },
       } satisfies FinalizedSourceReadResult
+    }
+    if (channel === 'finalization-generation:read') {
+      const slot = (args[0] as { slot: { source: { draftId: number; finalizationId: string; chapterNumber: number; contentHash: string }; stepKey: string } }).slot
+      expect(args[1]).toEqual(PROJECT_SESSION)
+      expect(slot.source).toEqual({ draftId: 101, finalizationId: FINALIZATION_ID,
+        chapterNumber: 1, contentHash: FINALIZED_CONTENT_HASH })
+      expect(['chapter_notes', 'character_cards']).toContain(slot.stepKey)
+      return { attemptCount: 0, view: { handle: { projectId: PROJECT_SESSION.projectId,
+        epoch: PROJECT_SESSION.leaseId, rootActionId: 'browser-finalization', runId: `browser-${slot.stepKey}` },
+      status: 'completed', artifacts: [] }, modelId: 'grok-browser', context: { slot }, sourceStatus: 'current',
+      effect: slot.stepKey === 'chapter_notes'
+        ? { success: true, stepKey: 'chapter_notes', chapterNotes: '匿名信引发调查。', factCount: 1, blueprintUpdated: true }
+        : { success: true, stepKey: 'character_cards', applied: 0, unchanged: 0, candidates: [], unresolved: [] } }
     }
     if (channel === 'kb:import-text') {
       return { success: true, chunkCount: 1, docId: 'knowledge-browser-1' }
@@ -830,20 +845,8 @@ describe('batch chapter completion mode browser flow', () => {
       PROJECT_PATH,
       PROJECT_SESSION,
     )
-    expect(invoke).toHaveBeenCalledWith(
-      'db:continuity-save-finalized',
-      expect.objectContaining({
-        draftId: 101,
-        projectionGeneration: 0,
-        source: {
-          draftId: 101,
-          finalizationId: FINALIZATION_ID,
-          chapterNumber: 1,
-          contentHash: FINALIZED_CONTENT_HASH,
-        },
-      }),
-      PROJECT_PATH,
-      PROJECT_SESSION,
-    )
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'finalization-generation:read')
+      .map(([, request]) => (request as { slot: { stepKey: string } }).slot.stepKey))
+      .toEqual(['chapter_notes', 'character_cards'])
   })
 })

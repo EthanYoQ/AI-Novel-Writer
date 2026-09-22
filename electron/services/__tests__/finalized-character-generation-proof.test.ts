@@ -19,7 +19,7 @@ import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
 import type { MainGenerationExecuteReceipt } from '../../../src/services/generation/generation-runtime'
 
-vi.mock('../../database', () => ({ getProjectDb: vi.fn() }))
+vi.mock('../../database', () => ({ getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn(() => '') }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const cleanup: (() => void)[] = []
 afterEach(() => { for (const dispose of cleanup.splice(0)) dispose(); vi.restoreAllMocks() })
@@ -119,6 +119,75 @@ async function occurrence(dedicated = true) {
 }
 
 describe('finalized proposal immutable evidence and live write authority', () => {
+  it('rediscovers only pending finalized proposals after the service is reopened', async () => {
+    const f = await occurrence(), batch = f.characters.stage(f.source())
+    const otherProof = { items: [], sourceHash: textHash('import'), provenance: null }
+    const otherBatch = { proposalBatchId: 'import-batch', revision: batch.revision, status: 'pending-approval' as const,
+      source: { kind: 'import' as const, operationId: 'import' }, items: [] }
+    const otherEnvelope = JSON.stringify({ version: 1, projectId: 'project', proof: otherProof, batch: otherBatch })
+    f.db.prepare('INSERT INTO character_identity_proposals(proposal_id,owner_character_id,source_key,source_hash,raw_value,candidate_ids_json) VALUES(?,NULL,?,?,?,?)')
+      .run(otherBatch.proposalBatchId, 'character-proposal-v1:project', textHash(otherEnvelope), otherEnvelope, '[]')
+
+    const reopened = new CharacterProposalService(f.db, 'project', source => source.kind === 'import' ? otherProof : f.prove(source, false))
+    expect(reopened.listPendingFinalized()).toEqual([{ proposalBatchId: batch.proposalBatchId, revision: batch.revision,
+      finalizationId: f.prepared.context.source.finalizationId }])
+    expect(reopened.readPendingFinalized(batch.proposalBatchId)).toEqual(batch)
+  })
+
+  it('keeps same-name finalized occurrences unresolved until the author maps an explicit character ID', async () => {
+    const f = await occurrence(), batch = f.characters.stage(f.source())
+    expect(batch.items[0]?.fields.name).toBe('林岚')
+    expect(batch.items[0]?.resolution).toEqual({ status: 'unresolved', candidateIds: [] })
+  })
+
+  it('hides an old chapter finalization and rejects direct read, approve, and cancel without returning candidates', async () => {
+    const f = await occurrence(), batch = f.characters.stage(f.source())
+    f.db.exec("INSERT INTO contents(id,body) VALUES(2,'新定稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(2,1,2,'draft',2,3)")
+    FinalizationRepository.commit({ finalizationId: 'finalized-2', draftId: 2, chapterNumber: 1, chapterTitle: '新北塔',
+      content: '新定稿', contentHash: textHash('新定稿'), contentRevision: 1, targetFileName: '第一章-新版.txt' })
+    const decision = { proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision, operationId: 'stale-approve',
+      selections: [{ selectionKey: batch.items[0]!.selectionKey, action: 'map' as const, characterId: f.characterId }] }
+
+    expect(f.characters.listPendingFinalized()).toEqual([])
+    expect(() => f.characters.readPendingFinalized(batch.proposalBatchId)).toThrow('CHARACTER_PROPOSAL_SOURCE_CHANGED')
+    expect(() => f.characters.approve(decision)).toThrow('CHARACTER_PROPOSAL_SOURCE_CHANGED')
+    expect(() => f.characters.cancel({ proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision }))
+      .toThrow('CHARACTER_PROPOSAL_SOURCE_CHANGED')
+  })
+
+  it('fails closed when the finalized outbox hash changes', async () => {
+    const f = await occurrence(), batch = f.characters.stage(f.source())
+    f.db.prepare('UPDATE finalization_outbox SET content_hash=? WHERE finalization_id=?')
+      .run('0'.repeat(64), f.prepared.context.source.finalizationId)
+    expect(f.characters.listPendingFinalized()).toEqual([])
+    expect(() => f.characters.readPendingFinalized(batch.proposalBatchId)).toThrow('CHARACTER_PROPOSAL_SOURCE_CHANGED')
+  })
+
+  it('normalizes a changed finalized generation source to the public stale-source error', async () => {
+    const f = await occurrence(), batch = f.characters.stage(f.source())
+    f.updateBinding(binding => {
+      const manifest = binding.sourceManifest as Record<string, unknown>
+      const context = manifest.finalizationGenerationContext as FinalizationGenerationContext
+      context.slot.source = { ...context.slot.source, contentHash: '0'.repeat(64) }
+      manifest.finalizationGenerationContextHash = textHash(JSON.stringify(context))
+    })
+    expect(f.characters.listPendingFinalized()).toEqual([])
+    expect(() => f.characters.readPendingFinalized(batch.proposalBatchId)).toThrow('CHARACTER_PROPOSAL_SOURCE_CHANGED')
+  })
+
+  it('cancels with revision CAS, replays exactly, and stays hidden after reopen', async () => {
+    const f = await occurrence(), batch = f.characters.stage(f.source())
+    expect(() => f.characters.cancel({ proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision + 1 }))
+      .toThrow('CHARACTER_ID_REVISION_CONFLICT')
+    const cancelled = f.characters.cancel({ proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision })
+    expect(cancelled.status).toBe('cancelled')
+    expect(f.characters.cancel({ proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision })).toEqual(cancelled)
+    expect(() => f.characters.cancel({ proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision + 1 }))
+      .toThrow('CHARACTER_ID_REVISION_CONFLICT')
+    const reopened = new CharacterProposalService(f.db, 'project', f.prove)
+    expect(reopened.listPendingFinalized()).toEqual([])
+  })
+
   it('keeps the original context and provenance epoch while resolving the actual resumed run handle', async () => {
     const f = await occurrence(), original = JSON.stringify(f.prepared.context), current = f.resume()
     for (const handle of [f.request.handle, current]) {
@@ -211,6 +280,8 @@ describe('finalized proposal immutable evidence and live write authority', () =>
     f.db.prepare('UPDATE characters SET name=? WHERE character_id=?').run('作者的新名字', f.characterId)
     const request = { proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision, operationId: 'confirm',
       selections: [{ selectionKey: batch.items[0]!.selectionKey, action: 'map' as const, characterId: f.characterId }] }
+    expect(() => f.characters.approve({ ...request, expectedRevision: batch.revision + 1 }))
+      .toThrow('CHARACTER_ID_REVISION_CONFLICT')
     const first = f.characters.approve(request)
     f.blockWrites(); f.db.prepare('UPDATE characters SET cs_location=? WHERE character_id=?').run('作者后改的位置', f.characterId)
     const before = f.db.prepare('SELECT total_changes()').pluck().get(), calls = f.gate.mock.calls.length

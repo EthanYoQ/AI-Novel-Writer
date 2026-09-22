@@ -28,8 +28,8 @@ describe('S10A source selection contract', () => {
     const conflict = expectDecision(result, 'capacity-conflict')
     expect(conflict.blockingSourceId).toBe('characters:unknown')
     expect(conflict.blockingReason).toBe('unknown-provenance')
-    expect(conflict.omissions).toContainEqual({ sourceId: 'characters:unknown', reason: 'unknown-provenance',
-      category: 'author', required: true })
+    expect(conflict.omissions).toContainEqual(expect.objectContaining({ sourceId: 'characters:unknown', reason: 'unknown-provenance',
+      category: 'author', required: true }))
   })
 
   it('keeps a stale locator usable only to read back the immutable prose', () => {
@@ -38,8 +38,8 @@ describe('S10A source selection contract', () => {
         staleLocator: true, text: '旧摘要陈述', recoveredProse: ['定稿原文片段'] })] })
     const ready = expectDecision(result, 'ready')
     expect(ready.included.map(item => item.text)).toEqual(['定稿原文片段'])
-    expect(ready.omissions).toContainEqual({ sourceId: 'summary:1', reason: 'locator-statement-not-evidence',
-      category: 'derived-locator', required: false })
+    expect(ready.omissions).toContainEqual(expect.objectContaining({ sourceId: 'summary:1', reason: 'locator-statement-not-evidence',
+      category: 'derived-locator', required: false }))
   })
 
   it('never admits the plot tree as manuscript material', () => {
@@ -91,7 +91,7 @@ describe('S10A source selection contract', () => {
         material({ ref: ref('z:1', hash('c')), text: '海港相关材料' })] })
     const ready = expectDecision(result, 'ready')
     expect(ready.included.map(item => item.ref.sourceId)).toEqual(['z:1'])
-    expect(ready.omissions).toContainEqual({ sourceId: 'a:1', reason: 'budget', category: 'author', required: false })
+    expect(ready.omissions).toContainEqual(expect.objectContaining({ sourceId: 'a:1', reason: 'budget', category: 'author', required: false }))
   })
 
   it('produces the same selection for the same frozen input regardless of input order', () => {
@@ -134,8 +134,8 @@ describe('S10A frozen fixture fault matrix', () => {
     const ids = ready.included.map(item => item.ref.sourceId)
     expect(ids).toContain('finalized:1')
     expect(ids).not.toContain('finalized:1-mirror')
-    expect(ready.omissions).toContainEqual({ sourceId: 'finalized:1-mirror', reason: 'duplicate-content',
-      category: 'finalized-history', required: false })
+    expect(ready.omissions).toContainEqual(expect.objectContaining({ sourceId: 'finalized:1-mirror', reason: 'duplicate-content',
+      category: 'finalized-history', required: false }))
   })
 
   it('replays identically for the same frozen input', () => {
@@ -220,8 +220,8 @@ describe('S10A ordering does not depend on locale or input order', () => {
     const split = expectDecision(result, 'split-required')
     expect(split.remainingRequired).toEqual(['s', 's'])
     expect(split.omissions).toEqual(expect.arrayContaining([
-      { sourceId: 's', reason: 'budget', category: 'author', required: true },
-      { sourceId: 's', reason: 'unknown-provenance', category: 'author', required: true },
+      expect.objectContaining({ sourceId: 's', reason: 'budget', category: 'author', required: true }),
+      expect.objectContaining({ sourceId: 's', reason: 'unknown-provenance', category: 'author', required: true }),
     ]))
   })
 
@@ -252,8 +252,8 @@ describe('S10A ordering does not depend on locale or input order', () => {
     const split = expectDecision(result, 'split-required')
     expect(split.remainingRequired).toEqual(['s', 's'])
     expect(split.omissions).toEqual(expect.arrayContaining([
-      { sourceId: 's', reason: 'budget', category: 'author', required: true },
-      { sourceId: 's', reason: 'duplicate-source-ref', category: 'derived-locator', required: true },
+      expect.objectContaining({ sourceId: 's', reason: 'budget', category: 'author', required: true }),
+      expect.objectContaining({ sourceId: 's', reason: 'duplicate-source-ref', category: 'derived-locator', required: true }),
     ]))
   })
 
@@ -267,8 +267,8 @@ describe('S10A ordering does not depend on locale or input order', () => {
     // 该来源本身可用（能回读原文），只是装不下：应当可拆分，不是「来源不可用」的硬冲突。
     const split = expectDecision(result, 'split-required')
     expect(split.omissions).toEqual(expect.arrayContaining([
-      { sourceId: 'st', reason: 'locator-statement-not-evidence', category: 'derived-locator', required: true },
-      { sourceId: 'st', reason: 'budget', category: 'derived-locator', required: true },
+      expect.objectContaining({ sourceId: 'st', reason: 'locator-statement-not-evidence', category: 'derived-locator', required: true }),
+      expect.objectContaining({ sourceId: 'st', reason: 'budget', category: 'derived-locator', required: true }),
     ]))
   })
 
@@ -285,7 +285,7 @@ describe('S10A ordering does not depend on locale or input order', () => {
     const stale = material({ ref: ref('a:2', hash('b')), category: 'derived-locator', provenance: 'derived',
       staleLocator: true, text: '旧摘要陈述' })
     const ready = expectDecision(select([plain, stale]), 'ready')
-    expect(ready.omissions).toEqual([{ sourceId: 'a:2', reason: 'duplicate-content',
-      category: 'derived-locator', required: false }])
+    expect(ready.omissions).toEqual([expect.objectContaining({ sourceId: 'a:2', reason: 'duplicate-content',
+      category: 'derived-locator', required: false })])
   })
 })

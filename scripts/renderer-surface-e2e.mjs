@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -175,7 +175,7 @@ async function waitForFile(filePath, timeoutMs = RUNNER_TIMEOUT_MS) {
   throw new Error(`Timed out waiting for renderer smoke marker: ${filePath}`)
 }
 
-function createIsolatedFixture() {
+function createIsolatedFixture({ withProject = true } = {}) {
   const temporaryRoot = join(repositoryRoot, '.runtime', '.cache', 'renderer-surface-runs', randomUUID())
   const projectRoot = join(temporaryRoot, 'project')
   const velaHome = join(temporaryRoot, 'vela-home')
@@ -183,7 +183,7 @@ function createIsolatedFixture() {
   const electronUserData = join(temporaryRoot, 'electron-user-data')
   const markerPath = join(temporaryRoot, 'project-opened.json')
   const manifestRoot = join(projectRoot, '.vela')
-  mkdirSync(manifestRoot, { recursive: true })
+  if (withProject) mkdirSync(manifestRoot, { recursive: true })
   mkdirSync(velaHome, { recursive: true })
   mkdirSync(electronUserData, { recursive: true })
   writeFileSync(join(temporaryRoot, '.vibe-owner.json'), `${JSON.stringify({
@@ -194,7 +194,7 @@ function createIsolatedFixture() {
     ttlHours: 1,
     cleanupCommand: `Remove-Item -LiteralPath '${relative(repositoryRoot, temporaryRoot)}' -Recurse -Force`,
   }, null, 2)}\n`, 'utf8')
-  writeFileSync(join(manifestRoot, 'project.json'), `${JSON.stringify({
+  if (withProject) writeFileSync(join(manifestRoot, 'project.json'), `${JSON.stringify({
     schemaVersion: 1,
     kind: 'ai-novel-project',
     projectId: randomUUID(),
@@ -747,7 +747,7 @@ async function assertSameStateImageSkinEvidence(page, visualEvidenceDirectory, f
   return screenshots
 }
 
-async function launchIsolatedElectron(fixture, captureDiagnostic) {
+async function launchIsolatedElectron(fixture, captureDiagnostic, { openProject = true } = {}) {
   if (existsSync(fixture.markerPath)) unlinkSync(fixture.markerPath)
   const launchStartedAt = Date.now()
   const environment = { ...process.env }
@@ -755,8 +755,13 @@ async function launchIsolatedElectron(fixture, captureDiagnostic) {
   environment.AI_NOVEL_VELA_HOME = fixture.velaHome
   environment.AI_NOVEL_LEGACY_SOURCE_HOME = fixture.velaHome
   environment.AI_NOVEL_APP_DATA_HOME = fixture.canonicalHome
-  environment.AI_NOVEL_SMOKE_OPEN_PROJECT = fixture.projectRoot
-  environment.AI_NOVEL_SMOKE_PROJECT_MARKER = fixture.markerPath
+  if (openProject) {
+    environment.AI_NOVEL_SMOKE_OPEN_PROJECT = fixture.projectRoot
+    environment.AI_NOVEL_SMOKE_PROJECT_MARKER = fixture.markerPath
+  } else {
+    delete environment.AI_NOVEL_SMOKE_OPEN_PROJECT
+    delete environment.AI_NOVEL_SMOKE_PROJECT_MARKER
+  }
 
   const electronApp = await electron.launch({
     args: ['.', `--user-data-dir=${fixture.electronUserData}`],
@@ -766,7 +771,9 @@ async function launchIsolatedElectron(fixture, captureDiagnostic) {
   })
   electronApp.process().stdout?.on('data', chunk => captureDiagnostic(`[main:stdout] ${chunk}`))
   electronApp.process().stderr?.on('data', chunk => captureDiagnostic(`[main:stderr] ${chunk}`))
-  const page = await electronApp.firstWindow({ timeout: RUNNER_TIMEOUT_MS })
+  let page
+  try {
+  page = await electronApp.firstWindow({ timeout: RUNNER_TIMEOUT_MS })
   page.on('console', message => {
     if (message.type() === 'error' || message.type() === 'warning') {
       captureDiagnostic(`[renderer:${message.type()}] ${message.text()}`)
@@ -775,7 +782,8 @@ async function launchIsolatedElectron(fixture, captureDiagnostic) {
   page.on('pageerror', error => captureDiagnostic(`[renderer:pageerror] ${error.stack ?? error.message}`))
   await page.setViewportSize(RENDERER_SURFACE_E2E_CONTRACT.visualEvidence.viewport)
   await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: RUNNER_TIMEOUT_MS })
-  await waitForFile(fixture.markerPath)
+  if (openProject) await waitForFile(fixture.markerPath)
+  if (!openProject) return { electronApp, page, launchStartedAt }
   const marker = JSON.parse(readFileSync(fixture.markerPath, 'utf8'))
   assert.equal(resolve(marker.projectPath), resolve(fixture.projectRoot), 'Renderer opened a different project fixture')
   assert.ok(Date.parse(marker.openedAt ?? '') >= launchStartedAt - 1_000, 'Renderer project-open marker is stale')
@@ -783,6 +791,11 @@ async function launchIsolatedElectron(fixture, captureDiagnostic) {
   assert.equal(await page.locator('[role="dialog"]:visible').count(), 0, 'Renderer exposed a dialog after opening the project')
   assert.doesNotMatch(await page.locator('body').innerText(), /打开项目失败|Failed to open project/i)
   return { electronApp, page, launchStartedAt }
+  } catch (error) {
+    const state = await page?.evaluate(() => document.body.innerText.slice(0, 1000)).catch(() => null)
+    await electronApp.close().catch(() => {})
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\nRenderer: ${state}\nDiagnostics: ${captureDiagnostic.messages?.join('\n') ?? ''}`)
+  }
 }
 
 export async function quitElectronApp(electronApp, label) {
@@ -885,6 +898,183 @@ async function assertClassicPaperUsesSemanticSurfaces(page) {
   const chrome = await page.locator('.writer-topbar, .writer-left-rail').evaluateAll(elements => elements.map((element) => getComputedStyle(element).backgroundImage))
   assert.ok(chrome.every(backgroundImage => backgroundImage === 'none'), 'paper classic chrome must use flat paper-ink surfaces, not warm gradients')
   return { projectTree: projectTree.backgroundColor, chrome }
+}
+
+async function runWriterPreflight() {
+  const sha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repositoryRoot, encoding: 'utf8', windowsHide: true })
+  assert.equal(sha.status, 0, 'Could not identify tested SHA')
+  const buildStatus = spawnSync('git', ['status', '--porcelain'], { cwd: repositoryRoot, encoding: 'utf8', windowsHide: true })
+  assert.equal(buildStatus.status, 0, 'Could not inspect build source worktree status')
+  const driverPath = join(repositoryRoot, 'scripts', 'renderer-surface-e2e.mjs')
+  const driverSha256 = createHash('sha256').update(readFileSync(driverPath)).digest('hex')
+  const buildTargets = [join(repositoryRoot, 'dist'), join(repositoryRoot, 'dist-electron')]
+  for (const target of buildTargets) rmSync(target, { recursive: true, force: true })
+  runProjectScript('build')
+  assert.ok(existsSync(join(buildTargets[0], 'index.html')), 'Production renderer build output is missing')
+  assert.ok(existsSync(join(buildTargets[1], 'main.js')), 'Production Electron build output is missing')
+  const hashBuild = () => {
+    const hash = createHash('sha256')
+    const visit = (directory, prefix) => {
+      for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name, 'en'))) {
+        const path = join(directory, entry.name)
+        const name = `${prefix}/${entry.name}`
+        if (entry.isDirectory()) visit(path, name)
+        else {
+          assert.ok(entry.isFile(), `Unexpected build artifact: ${name}`)
+          hash.update(name).update('\0').update(readFileSync(path)).update('\0')
+        }
+      }
+    }
+    buildTargets.forEach((target, index) => visit(target, index === 0 ? 'dist' : 'dist-electron'))
+    return hash.digest('hex')
+  }
+  const artifactSha256 = hashBuild()
+  const fixture = createIsolatedFixture({ withProject: false })
+  const outputDirectory = join(repositoryRoot, '.runtime', '.cache', 'f05-preflight', randomUUID())
+  const projectName = `书房${randomUUID().slice(0, 4)}`
+  const scratchRoot = resolve(process.env.LOCALAPPDATA ?? '', 'VibeCodingScratch', 'AI-Novel')
+  assert.ok(process.env.LOCALAPPDATA, 'Writer Preflight requires LOCALAPPDATA for short Windows project paths')
+  const projectParent = join(scratchRoot, `f05-${randomUUID().slice(0, 4)}`)
+  assert.ok(relative(scratchRoot, projectParent) && !relative(scratchRoot, projectParent).startsWith('..') && !isAbsolute(relative(scratchRoot, projectParent)))
+  assert.ok(!existsSync(projectParent), 'Writer Preflight scratch path already exists')
+  mkdirSync(projectParent, { recursive: true })
+  writeJsonAtomically(join(projectParent, '.vibe-owner.json'), {
+    owner: 'codex/f05-preflight', sourceProject: repositoryRoot, createdAt: new Date().toISOString(),
+    ttlHours: 1, cleanupCommand: `Remove-Item -LiteralPath '${projectParent}' -Recurse -Force`,
+  })
+  const diagnostics = []
+  const captureDiagnostic = value => {
+    diagnostics.push(String(value))
+    if (diagnostics.length > 40) diagnostics.shift()
+  }
+  captureDiagnostic.messages = diagnostics
+  let electronApp
+  let nativeRuntimePreparationAttempted = false
+  let receipt
+  try {
+    nativeRuntimePreparationAttempted = true
+    runProjectScript('rebuild:electron')
+    let launched = await launchIsolatedElectron(fixture, captureDiagnostic, { openProject: false })
+    electronApp = launched.electronApp
+    // This ordinary Writer journey uses an explicit isolated test preference.
+    // Legacy preference migration and the release default have separate gates.
+    await launched.page.waitForFunction(() => localStorage.getItem('ai-novel-writer-appearance') !== null)
+    await launched.page.evaluate(() => {
+      const key = 'ai-novel-writer-appearance'
+      const profile = JSON.parse(localStorage.getItem(key))
+      localStorage.setItem(key, JSON.stringify({ ...profile, shellPreference: 'writer', revision: profile.revision + 1, origin: 'author' }))
+    })
+    await quitElectronApp(electronApp, 'Writer preference setup session')
+    electronApp = null
+    launched = await launchIsolatedElectron(fixture, captureDiagnostic, { openProject: false })
+    electronApp = launched.electronApp
+    let page = launched.page
+    await page.locator('.writer-shell').waitFor({ state: 'visible', timeout: RUNNER_TIMEOUT_MS })
+    assert.equal(await page.locator('.writer-shell').getAttribute('data-shell-presentation'), 'writer')
+    const steps = [{ stepId: 'writer-shell-selected', assertion: 'Isolated test profile explicitly selected Writer before ordinary UI actions; release default and legacy migration are separate gates' }]
+
+    const startupNotice = page.getByRole('button', { name: '知道了' })
+    if (await startupNotice.isVisible()) await startupNotice.click()
+    if (!await page.locator('.writer-welcome').isVisible()) await page.locator('.writer-left-rail button[title="欢迎页"]').click()
+    await page.locator('.writer-welcome').waitFor({ state: 'visible', timeout: RUNNER_TIMEOUT_MS })
+    await page.getByRole('button', { name: '新建作品' }).click()
+    const dialog = page.getByRole('dialog', { name: '新建小说项目' })
+    await dialog.waitFor({ state: 'visible', timeout: RUNNER_TIMEOUT_MS })
+    await dialog.getByPlaceholder('如：斗破苍穹').fill(projectName)
+    await dialog.getByPlaceholder('选择项目保存目录').fill(projectParent)
+    await dialog.getByRole('button', { name: '创建项目' }).click()
+    try {
+      await dialog.waitFor({ state: 'detached', timeout: RUNNER_TIMEOUT_MS })
+    } catch (error) {
+      throw new Error(`${error instanceof Error ? error.message : String(error)}\nVisible UI: ${(await page.locator('body').innerText()).slice(-1200)}\nDiagnostics: ${diagnostics.join('\n').slice(-3000)}`)
+    }
+    await page.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible', timeout: RUNNER_TIMEOUT_MS })
+    const createdProjectPath = join(projectParent, projectName)
+    assert.ok(existsSync(join(createdProjectPath, '.ai-novel', 'project.json')), 'Writer project creation did not persist a canonical project')
+    steps.push({ stepId: 'writer-create-project', actionId: 'U01.A01', assertion: 'Writer create button opened the project and persisted its canonical manifest' })
+
+    await page.locator('.writer-project-tree').getByText('小说配置', { exact: true }).click()
+    const config = page.getByPlaceholder('如：修仙/重生/末世')
+    await config.waitFor({ state: 'visible', timeout: RUNNER_TIMEOUT_MS })
+    await config.fill('雨夜长街')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await page.getByText('已保存', { exact: true }).first().waitFor({ state: 'visible', timeout: RUNNER_TIMEOUT_MS })
+    steps.push({ stepId: 'writer-config-save', relatedActionId: 'U14.A04', coverage: 'success-only', assertion: 'Writer configuration edit reached saved feedback through production save' })
+
+    await quitElectronApp(electronApp, 'Writer save session')
+    electronApp = null
+    launched = await launchIsolatedElectron(fixture, captureDiagnostic, { openProject: false })
+    electronApp = launched.electronApp
+    page = launched.page
+    await page.locator('.writer-shell').waitFor({ state: 'visible', timeout: RUNNER_TIMEOUT_MS })
+    if (await page.getByRole('button', { name: '知道了' }).isVisible()) await page.getByRole('button', { name: '知道了' }).click()
+    await page.locator('.writer-left-rail button[title="欢迎页"]').click()
+    const shelf = page.locator('.writer-shelf')
+    await shelf.getByRole('button', { name: `预览《${projectName}》` }).click()
+    await page.locator('.writer-welcome-heading h1').getByText(projectName, { exact: true }).waitFor({ state: 'visible', timeout: RUNNER_TIMEOUT_MS })
+    steps.push({ stepId: 'writer-shelf-preview', relatedActionId: 'U08.A02', coverage: 'preview-visible', assertion: 'Writer shelf preview showed the saved project name after Electron restart' })
+    await shelf.getByRole('button', { name: `打开《${projectName}》` }).click()
+    await page.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible', timeout: RUNNER_TIMEOUT_MS })
+    steps.push({ stepId: 'writer-shelf-open', actionId: 'U01.A04', assertion: 'Writer shelf opened the previewed project after Electron restart' })
+    await page.locator('.writer-left-rail button[title="项目"]').click()
+    await page.locator('.writer-project-tree').getByText('小说配置', { exact: true }).click()
+    await page.getByPlaceholder('如：修仙/重生/末世').waitFor({ state: 'visible', timeout: RUNNER_TIMEOUT_MS })
+    assert.equal(await page.getByPlaceholder('如：修仙/重生/末世').inputValue(), '雨夜长街')
+    steps.push({ stepId: 'writer-config-reopen', relatedActionId: 'U14.A04', coverage: 'persistence-after-restart', assertion: 'Writer configuration retained the saved field after Electron restart' })
+
+    const assistantDraft = page.getByPlaceholder('输入消息，@ 提及，/ 使用工作流...')
+    await assistantDraft.fill('未发送的书房提问')
+    await page.getByRole('button', { name: '进入沉浸写作' }).click()
+    assert.equal(await page.locator('.writer-shell').getAttribute('data-writer-immersive'), 'true')
+    assert.equal(await page.getByRole('button', { name: '退出沉浸写作' }).getAttribute('aria-pressed'), 'true')
+    assert.equal(await page.locator('aside[aria-label="作品资料"]').isVisible(), false)
+    assert.equal(await page.locator('aside[aria-label="写作助手"]').isVisible(), false)
+    assert.equal(await page.locator('section[aria-label="任务与日志"]').isVisible(), false)
+    assert.equal(await assistantDraft.inputValue(), '未发送的书房提问')
+    await page.getByRole('button', { name: '退出沉浸写作' }).click()
+    assert.equal(await page.locator('.writer-shell').getAttribute('data-writer-immersive'), 'false')
+    assert.equal(await page.locator('aside[aria-label="作品资料"]').isVisible(), true)
+    assert.equal(await page.locator('aside[aria-label="写作助手"]').isVisible(), true)
+    assert.equal(await page.locator('section[aria-label="任务与日志"]').isVisible(), true)
+    assert.equal(await assistantDraft.inputValue(), '未发送的书房提问')
+    steps.push({ stepId: 'writer-toggle-immersion', actionId: 'U07.A07', assertion: 'Actual Writer title-bar control entered and exited immersion without losing the mounted assistant draft' })
+    await page.getByRole('button', { name: '进入沉浸写作' }).click()
+    await page.locator('button[title="AI Agent 面板"]').click()
+    assert.equal(await page.locator('.writer-shell').getAttribute('data-writer-immersive'), 'false')
+    assert.equal(await page.locator('aside[aria-label="写作助手"]').isVisible(), true)
+    assert.equal(await assistantDraft.inputValue(), '未发送的书房提问')
+    steps.push({ stepId: 'writer-immersion-panel-exit', actionId: 'U07.A08', assertion: 'Opening the actual AI rail panel exited immersion and preserved unsent assistant input' })
+
+    receipt = { schemaVersion: 1, qualification: 'F05_DETERMINISTIC_PREFLIGHT_SLICE', testedSha: sha.stdout.trim(), sourceDirtyAtBuild: Boolean(buildStatus.stdout.trim()), buildCommand: 'pnpm run build', artifactSha256, driverSha256, shell: 'writer', evidenceLevel: 'electron', projectName, steps }
+  } finally {
+    const cleanupErrors = []
+    try {
+      await performRendererPostprocess(electronApp, fixture, nativeRuntimePreparationAttempted)
+    } catch (error) { cleanupErrors.push(error) }
+    try {
+      assert.equal(JSON.parse(readFileSync(join(projectParent, '.vibe-owner.json'), 'utf8')).owner, 'codex/f05-preflight')
+      rmSync(projectParent, { recursive: true, force: true })
+    } catch (error) { cleanupErrors.push(error) }
+    if (cleanupErrors.length) throw new AggregateError(cleanupErrors, 'Writer preflight cleanup failed; no receipt published')
+  }
+  const finalSha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repositoryRoot, encoding: 'utf8', windowsHide: true })
+  assert.equal(finalSha.status, 0, 'Could not identify final tested SHA')
+  assert.equal(finalSha.stdout.trim(), receipt.testedSha, 'HEAD changed during Writer preflight')
+  assert.equal(createHash('sha256').update(readFileSync(driverPath)).digest('hex'), driverSha256, 'Writer driver changed during preflight')
+  assert.equal(hashBuild(), artifactSha256, 'Production build artifacts changed during preflight')
+  const status = spawnSync('git', ['status', '--porcelain'], { cwd: repositoryRoot, encoding: 'utf8', windowsHide: true })
+  assert.equal(status.status, 0, 'Could not inspect source worktree status')
+  const driverStatus = spawnSync('git', ['status', '--porcelain', '--', 'scripts/renderer-surface-e2e.mjs'], { cwd: repositoryRoot, encoding: 'utf8', windowsHide: true })
+  assert.equal(driverStatus.status, 0, 'Could not inspect driver worktree status')
+  receipt.sourceDirty = receipt.sourceDirtyAtBuild || Boolean(status.stdout.trim())
+  receipt.driverDirty = Boolean(driverStatus.stdout.trim())
+  mkdirSync(outputDirectory, { recursive: true })
+  writeJsonAtomically(join(outputDirectory, '.vibe-owner.json'), {
+    owner: 'codex/f05-preflight', sourceProject: 'AI-Novel-Writer', createdAt: new Date().toISOString(),
+    ttlHours: 72, cleanupCommand: `Remove-Item -LiteralPath '${relative(repositoryRoot, outputDirectory)}' -Recurse -Force`,
+  })
+  writeJsonAtomically(join(outputDirectory, 'receipt.json'), receipt)
+  return { ...receipt, evidence: relative(repositoryRoot, join(outputDirectory, 'receipt.json')) }
 }
 
 async function runRendererSurfaceE2e() {
@@ -1030,7 +1220,7 @@ const isMain = process.argv[1]
   && resolve(process.argv[1]).toLocaleLowerCase('en-US') === resolve(scriptPath).toLocaleLowerCase('en-US')
 
 if (isMain) {
-  runRendererSurfaceE2e()
+  (process.argv.includes('--f05-preflight') ? runWriterPreflight() : runRendererSurfaceE2e())
     .then(evidence => process.stdout.write(`${JSON.stringify(evidence)}\n`))
     .catch(error => {
       console.error(error instanceof Error ? error.stack ?? error.message : String(error))

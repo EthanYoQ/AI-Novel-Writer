@@ -1,5 +1,7 @@
 import type { MainGenerationRunHandle } from '../services/generation/generation-runtime'
-import type { FinalizedCharacterContext, FinalizedCharacterStateCommitReceipt, FinalizedCharacterStateOccurrence } from './finalized-continuity'
+import type { FinalizedCharacterContext, FinalizedCharacterStateCommitReceipt, FinalizedCharacterStateDecisionReceipt,
+  FinalizedCharacterStateDecisionRequest, FinalizedCharacterStateOccurrence, PendingFinalizedCharacterStateCandidate,
+  PendingFinalizedCharacterStateCandidateSummary } from './finalized-continuity'
 
 export interface FinalizedCharacterArtifact {
   artifactId: string
@@ -18,4 +20,7 @@ export interface FinalizedCharacterGenerationReceipt extends FinalizedCharacterS
 export interface FinalizedCharacterGenerationChannels {
   'finalized-character:read-context': { args: [{ draftId: number }]; return: { contextId: string; context: FinalizedCharacterContext } }
   'finalized-character:commit': { args: [FinalizedCharacterGenerationCommit]; return: FinalizedCharacterGenerationReceipt }
+  'finalized-character:list-state-candidates': { args: []; return: PendingFinalizedCharacterStateCandidateSummary[] }
+  'finalized-character:read-state-candidate': { args: [{ draftId: number; candidateKey: string }]; return: PendingFinalizedCharacterStateCandidate }
+  'finalized-character:decide-state-candidate': { args: [FinalizedCharacterStateDecisionRequest]; return: FinalizedCharacterStateDecisionReceipt }
 }

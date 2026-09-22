@@ -17,6 +17,7 @@ export async function createReviewRevisionRecoveryWorkflow(projectSession: Proje
     || handle.projectId !== session.projectId || recovery.handle.runId !== handle.runId)
     throw new Error('GENERATION_REVIEW_RECOVERY_SCOPE_INVALID')
   if (!recovery.saved && recovery.sourceStatus !== 'current') throw new Error('GENERATION_REVIEW_SOURCE_CHANGED')
+  if (!recovery.saved && !recovery.canResume) throw new Error('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
   const params = { draftPath: formatResourceUri({ kind: 'draft', id: source.id }), draftContent: source.content,
     chapterNumber: source.chapterNumber, recoveryHandle: handle }
   const blueprint = frozen.blueprints.find(item => item.chapterNumber === source.chapterNumber)

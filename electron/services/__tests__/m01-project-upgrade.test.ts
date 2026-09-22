@@ -16,7 +16,7 @@ import { backupProjectSqlite, probeProjectSqlite, upgradeProjectSqlite } from '.
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const roots: string[] = []
 const unsubscribers: Array<() => void> = []
-function fixture(version: 1 | 'current' = 1) {
+function fixture(version: 1 | 4 | 5 | 'current' = 1) {
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/s05-m01')
   fs.mkdirSync(base, { recursive: true })
   const root = fs.mkdtempSync(path.join(base, '项目-')); roots.push(root)
@@ -26,7 +26,7 @@ function fixture(version: 1 | 'current' = 1) {
   if (version === 'current') createProjectDatabase(root)
   else {
     const db = new Database(file)
-    try { initializeLegacyBaselineSchema(db); migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), 1) } finally { db.close() }
+    try { initializeLegacyBaselineSchema(db); migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), version) } finally { db.close() }
   }
   const db = new Database(file)
   try { db.prepare('INSERT INTO contents(body) VALUES (?)').run('铜钥匙\r\n作者原文'); db.exec('INSERT INTO drafts(chapter_number,version,content_id,word_count) VALUES(1,1,1,777)') } finally { db.close() }
@@ -49,6 +49,55 @@ it('真实version1文件经唯一M01升级，关闭重开不重跑且正文不�
   const upgraded = probeProjectSqlite({ databasePath: f.file }); expect(upgraded.preIdentityDomain).toEqual(before.domain)
   initProjectDatabase(f.root); closeProjectDatabase()
   expect(probeProjectSqlite({ databasePath: f.file })).toEqual(upgraded)
+})
+it('真实version4项目从init入口执行M04并保留正文', () => {
+  const f = fixture(4)
+  expect(probeProjectSqlite({ databasePath: f.file }).schemaVersion).toBe(4)
+  initProjectDatabase(f.root)
+  expect(getProjectDb()!.pragma('user_version', { simple: true })).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
+  expect(getProjectDb()!.prepare('SELECT body FROM contents').pluck().get()).toBe('铜钥匙\r\n作者原文')
+  expect(getProjectDb()!.prepare("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='import_effect_ledger'").pluck().get()).toBe(1)
+})
+it('真实version5项目从init入口执行M05并保留正文', () => {
+  const f = fixture(5)
+  expect(probeProjectSqlite({ databasePath: f.file }).schemaVersion).toBe(5)
+  initProjectDatabase(f.root)
+  expect(getProjectDb()!.pragma('user_version', { simple: true })).toBe(6)
+  expect(getProjectDb()!.prepare('SELECT body FROM contents').pluck().get()).toBe('铜钥匙\r\n作者原文')
+  expect(getProjectDb()!.prepare("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='character_avatar_assets'").pluck().get()).toBe(1)
+})
+it('未知version4与失败M04都在写入当前schema前保留原数据', () => {
+  const unknown = fixture(4)
+  const fork = new Database(unknown.file)
+  try { fork.exec('ALTER TABLE contents ADD COLUMN unknown_m04_fork TEXT') } finally { fork.close() }
+  const forkBytes = fs.readFileSync(unknown.file)
+  expect(() => initProjectDatabase(unknown.root)).toThrow('UNRECOGNIZED_SCHEMA')
+  expect(fs.readFileSync(unknown.file)).toEqual(forkBytes)
+
+  const failed = fixture(4), registry = getDesktopMigrationRegistry(), before = fs.readFileSync(failed.file)
+  const rejected = createMigrationRegistry(registry.implementations.map(step => step.id === 'M04'
+    ? { ...step, verify: () => false }
+    : step), registry.recognizedSchemas)
+  expect(() => upgradeProjectSqlite({ databasePath: failed.file, registry: rejected }))
+    .toThrow('MIGRATION_VERIFICATION_FAILED')
+  expect(fs.readFileSync(failed.file)).toEqual(before)
+  expect(probeProjectSqlite({ databasePath: failed.file }).schemaVersion).toBe(4)
+})
+it('未知version5与失败M05都在写入当前schema前保留原数据', () => {
+  const unknown = fixture(5), fork = new Database(unknown.file)
+  try { fork.exec('ALTER TABLE contents ADD COLUMN unknown_m05_fork TEXT') } finally { fork.close() }
+  const forkBytes = fs.readFileSync(unknown.file)
+  expect(() => initProjectDatabase(unknown.root)).toThrow('UNRECOGNIZED_SCHEMA')
+  expect(fs.readFileSync(unknown.file)).toEqual(forkBytes)
+
+  const failed = fixture(5), registry = getDesktopMigrationRegistry(), before = fs.readFileSync(failed.file)
+  const rejected = createMigrationRegistry(registry.implementations.map(step => step.id === 'M05'
+    ? { ...step, verify: () => false }
+    : step), registry.recognizedSchemas)
+  expect(() => upgradeProjectSqlite({ databasePath: failed.file, registry: rejected }))
+    .toThrow('MIGRATION_VERIFICATION_FAILED')
+  expect(fs.readFileSync(failed.file)).toEqual(before)
+  expect(probeProjectSqlite({ databasePath: failed.file }).schemaVersion).toBe(5)
 })
 it('新建项目与S04备份默认均到当前schema，M00可显式停在1', async () => {
   const f = fixture('current'); expect(probeProjectSqlite({ databasePath: f.file }).schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)

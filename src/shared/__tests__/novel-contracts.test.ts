@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { hashAuthorText, validateSourceRef, mayUseCandidate, type FrozenInputFingerprint, type CandidateSource } from '../source-ref'
 import { assertReservation, assertAttemptTransition, assertVisibleSnapshot, rootActionIdempotencyKey, tokenLiability, type PhysicalAttempt, type RootAction } from '../generation-contract'
 import { resolveCharacterIdentity, assertCharacterResolution, decideDerivedPatch, rejectedCharacterProposalKey, type CharacterFieldSnapshot, type DerivedCharacterPatch } from '../character-identity'
-import { isNoopRevision, decideFindingStatus, assertSingleRecheck, findingAnchorKey, type ReviewFinding } from '../review-cycle'
+import { isNoopRevision, decideFindingStatus, assertSingleRecheck, findingAnchorKey,
+  buildReviewCycleRecheckReport, classifyFindingEvidenceChange, type ReviewCycleRecheckContext,
+  type ReviewFinding } from '../review-cycle'
 import { MIGRATION_IDS, assertDistinctStorageRoots, mayHydrateAppearance, mayReadTransferredAuthority, mayReplayTransferredExecution, type TransferReadableAuthority } from '../project-storage'
 
 const h = 'a'.repeat(64)
@@ -114,6 +116,34 @@ describe('S01共享契约（纯合成，不是生产持久化资格）', () => {
     expect(decideFindingStatus({ ...input, authorWaived: true })).toBe('author-waived')
     expect(decideFindingStatus({ ...input, mergedHash: '', findingSetHash: '', targetId: '', recheck: { ...recheck, mergedHash: '', findingSetHash: '', targetId: '' } })).toBe('unknown')
     expect(() => assertSingleRecheck({ cycleId: '审修', rootActionId: '根', sourceHash: h, findingSetHash: h, revisionStatus: 'merge-committed', mergedHash: h, recheckCount: 1 })).toThrow()
+  })
+  it('复核只准入相关证据变化，坏JSON/缺失/重复证据一律unknown', () => {
+    const finding = { findingId: '意见一', targetId: '事实一', category: '连续性', kind: 'objective' as const,
+      problem: '人物仍被写在错误地点', expected: '人物必须留在城内',
+      sourceSpan: { start: 0, end: 4, unit: 'utf16-code-unit' as const }, occurrence: 1, sourceExcerpt: '门闩仍开' }
+    const context: ReviewCycleRecheckContext = { version: 1, cycleId: '审修一', comparisonVersion: 1,
+      mergedHash: h, findingSetHash: h, findings: [finding] }
+    expect(classifyFindingEvidenceChange('甲在城内。', '甲 在城内。', finding)).toBe('unchanged')
+    expect(classifyFindingEvidenceChange('甲在城内。', '甲在城外。', finding)).toBe('changed')
+    expect(classifyFindingEvidenceChange('甲在城内。', '旁支新增。甲在城内。', finding)).toBe('unchanged')
+    const valid = buildReviewCycleRecheckReport(JSON.stringify({ summary: '已核对', items: [{ findingId: '意见一',
+      targetId: '事实一', resolved: true, evidenceQuote: '甲在城外', reason: '地点冲突已修正' }] }), '甲在城外。', context, 'zh-CN')
+    expect(valid.decisions).toEqual([{ findingId: '意见一', targetId: '事实一', status: 'resolved',
+      reviewItemIndex: 0, resolved: true }])
+    const failClosed = buildReviewCycleRecheckReport(JSON.stringify({ summary: '已核对', items: [{ findingId: '意见一',
+      targetId: '事实一', resolved: true, evidenceQuote: '甲在城外', reason: '地点冲突已修正' }] }), '甲在城外。',
+    { ...context, version: 2 }, 'zh-CN')
+    expect(failClosed.decisions).toEqual([{ findingId: '意见一', targetId: '事实一', status: 'unknown', reviewItemIndex: 0 }])
+    expect(failClosed.items[0]).toMatchObject({ severity: 'unknown', quote: '甲在城外', resolved: false })
+    const negative = buildReviewCycleRecheckReport(JSON.stringify({ summary: '仍未解决', items: [{ findingId: '意见一',
+      targetId: '事实一', resolved: false, evidenceQuote: '甲在城外', reason: '仍在错误地点' }] }), '甲在城外。',
+    { ...context, version: 2 }, 'zh-CN')
+    expect(negative.decisions).toEqual([{ findingId: '意见一', targetId: '事实一', status: 'unresolved',
+      reviewItemIndex: 0, resolved: false }])
+    for (const output of ['坏JSON', JSON.stringify({ summary: '缺项', items: [] }), JSON.stringify({ summary: '重复', items: [
+      { findingId: '意见一', targetId: '事实一', resolved: true, evidenceQuote: '甲在城外', reason: '一' },
+      { findingId: '意见一', targetId: '事实一', resolved: true, evidenceQuote: '甲在城外', reason: '二' },
+    ] })]) expect(buildReviewCycleRecheckReport(output, '甲在城外。', context, 'zh-CN').decisions[0]?.status).toBe('unknown')
   })
   it('负数反向span和伪byte单位不能形成finding锚点', () => {
     const finding: ReviewFinding = { findingId: '意见', source: { ...identity, sourceId: '章节', revision: 1, contentHash: h, span: { start: 0, end: 1, unit: 'utf16-code-unit' } }, excerptHash: h, occurrence: 1, category: '连续性', targetId: '事实', kind: 'objective', status: 'unverified' }

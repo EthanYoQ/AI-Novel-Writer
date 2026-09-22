@@ -15,7 +15,7 @@ import { generationOutputContract, type BeginGenerationRequest } from '../../../
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
 
-vi.mock('../../database', () => ({ getProjectDb: vi.fn() }))
+vi.mock('../../database', () => ({ getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn(() => null) }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const cleanup: (() => void)[] = []
 afterEach(() => { for (const dispose of cleanup.splice(0)) dispose(); vi.restoreAllMocks() })

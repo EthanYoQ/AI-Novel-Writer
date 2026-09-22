@@ -1,8 +1,62 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "novel-quality-program-v3-80-v1",
-  "status": "preregistered-no-model-results",
+  "decisionRevision": "draft-units-tolerance-30-v1",
+  "status": "approved-requires-committed-target-freeze-before-experiment",
   "language": "zh-CN",
+  "decisionPolicy": {
+    "scope": "S10B early-context",
+    "baselineRole": "frozen-reference-only",
+    "baselineTargetUnitsFailure": "reference-nonconforming only when a persisted, hash-verifiable local artifact is available for independent review; it does not automatically reject a conforming candidate",
+    "invalidReference": [
+      "provider failure",
+      "IPC failure",
+      "missing artifact",
+      "unverifiable artifact"
+    ],
+    "candidateAbsoluteGates": [
+      "draft units within 70%-130%",
+      "all required events",
+      "zero fact errors",
+      "recap rule",
+      "style review"
+    ],
+    "automatedOutcomeCeiling": "pending-independent-oracle-review",
+    "historyPolicy": "retain every failure, retry, missing result and interruption in intention-to-treat; never retrospectively reclassify or select the best run"
+  },
+  "historicalIntentionToTreat": {
+    "decisionRevision": "s10b-paired-hard-gate-v1",
+    "failedInvocations": [
+      "5b460511-b426-42e1-b8c3-903ff25668f9",
+      "f5291452-2bf6-4344-9677-d8cc75bbb7c6"
+    ],
+    "additionalFailedInvocations": [
+      {
+        "invocationId": "e8900180-945a-4211-b0c9-8427389c0625",
+        "scenarioRevision": "s10b-early-context-selection-difference-v1",
+        "disposition": "permanent-quality-failure",
+        "reason": "两位独立评审一致判定 candidate 虽通过绝对事件、事实与 recap 门，但自然度、节奏、人物动机三维均劣于 reference。"
+      },
+      {
+        "invocationId": "5a7f78fd-d0db-4b63-8564-bdce426b73f0",
+        "scenarioRevision": "s10b-early-context-selection-difference-v2",
+        "disposition": "observed-quality-failure-experiment-inconclusive",
+        "reason": "两位独立评审均判定 candidate 存在时点与节奏失败；但时点只存在于 evaluator oracle、未进入生成权威，且夹具创建作者前情后只传入可选归档候选，candidate 的准入收据没有前驱正文。保留实际质量失败，不把该对用于归因或 S10B 放行。"
+      }
+    ],
+    "disposition": "permanent historical failures; not reclassified by s10b-reference-baseline-v2"
+  },
+  "historicalLedgerBoundary": {
+    "eventCount": 222,
+    "rawBytesSha256": "00e07f37fd55e9c0c7cc304ab81c61a17df3956f0e7402cb6d3ac0c1c6fcf6d4",
+    "evidenceInvocationId": "6be2697b-e456-4f99-af73-55a1d71deff8",
+    "finalReserveAttemptIds": [
+      "baseline:4a751bcc-9d4c-4761-8c47-9ed53c9e6cc7",
+      "candidate:7aac35fc-2402-4884-a61f-ea578c7c9f28",
+      "candidate:ad4dac2a-81c6-4f67-ad4b-9a940b166305",
+      "candidate:c8658b18-4b54-4906-a883-72ab639fe02d"
+    ]
+  },
   "phases": {
     "early-budget": {
       "caseIds": [
@@ -26,14 +80,23 @@
       ]
     },
     "early-context": {
+      "scenarioRevision": "s10b-early-context-selection-difference-v3",
+      "selectionDifference": {
+        "requireDifferentPromptHash": true,
+        "requireDifferentPromptBytes": true,
+        "requireCandidateBudgetOmission": true,
+        "requireCandidateRequiredCoverage": true,
+        "requireBaselineSentCandidateOmission": true,
+        "requirePhysicalProjectParity": true
+      },
       "caseIds": [
-        "场景2/2"
+        "场景2/3"
       ],
       "minimumCalls": 2,
-      "scope": "同名身份、长设定、合法前驱与事实计划",
+      "scope": "同名身份、长设定、必需当前前驱与可选旧章候选",
       "operations": [
         {
-          "id": "长设定第二章正文",
+          "id": "长设定第三章正文",
           "callsPerArm": 1,
           "arms": 2,
           "minimumCalls": 2
@@ -41,6 +104,10 @@
       ]
     },
     "early-review": {
+      "scenarioRevision": "s11-early-review-per-attempt-deadline-v3",
+      "referenceAdjudicationRevision": "s11-reference-no-actionable-review-v1",
+      "referenceAdjudication": "additive-only: retain the original pair failure; when the baseline review request settled with a hash-verifiable all-pass artifact and the frozen driver then stopped because no actionable item existed, classify the baseline as reference-nonconforming while the candidate must still pass the complete three-operation technical chain and independent absolute quality review",
+      "recheckPolicy": "model-positive-is-pending-author-verification-v2",
       "caseIds": [
         "场景3/2"
       ],
@@ -113,7 +180,7 @@
     "blindLabels": "主集成者在看结果前生成并私存映射，评审者不接触arm/SHA"
   },
   "oracle": {
-    "units": "消费生产draft-units计数；±20%，不按byte或token代换",
+    "units": "消费生产draft-units计数；±30%，不按byte或token代换",
     "events": "每章全部必需事件；逐条标注原文span",
     "facts": "身份、时间、知情、物品、计划历史零错误",
     "recap": "非必要回顾重复前章完整事件且超过本章单位10%失败；附双章span",
@@ -130,7 +197,7 @@
   },
   "evidence": {
     "subject": "最终两臂同时间窗，candidate为S14A冻结subjectSha",
-    "postUi": "三early selector在同postUiIntegrationSha重跑，原80帽",
+    "postUi": "三early selector在同postUiIntegrationSha重跑；ADR0019取消调用硬帽，全部请求仍逐条记账",
     "failure": "保留全部失败/缺章/中断的意向分析；不挑优",
     "runtimeProbe": "生产runtime模拟completion，不是18章或桌面资格",
     "commandDriver": "当前未集成；S06 owners/S14A前完成；formal phases fail closed"

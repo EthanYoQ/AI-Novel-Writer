@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../services/app-data-locator', () => ({
   getGlobalDataGeneration: () => 'admitted-generation',
+  getGlobalDataRoot: () => 'C:\\admitted-global-data',
   assertGlobalDataReady: mocks.assertGlobalDataReady,
 }))
 vi.mock('../services/skin-service', () => ({
@@ -23,6 +24,13 @@ vi.mock('../controllers/window-controller', () => ({
 }))
 vi.mock('../controllers/config-controller', () => ({ registerConfigController: vi.fn() }))
 vi.mock('../controllers/project-controller', () => ({ registerProjectController: vi.fn() }))
+vi.mock('../controllers/project-archive-controller', () => ({ registerProjectArchiveController: vi.fn() }))
+vi.mock('../controllers/cloud-backup-controller', () => ({ registerCloudBackupController: vi.fn() }))
+vi.mock('../services/cloud-project-binding-store', () => ({
+  CloudProjectBindingStore: class {
+    removeDeletedProject = vi.fn()
+  },
+}))
 vi.mock('../controllers/fs-controller', () => ({ registerFSController: vi.fn() }))
 vi.mock('../controllers/llm-controller', () => ({ registerLLMController: vi.fn() }))
 vi.mock('../controllers/generation-controller', () => ({ registerGenerationController: vi.fn() }))
@@ -35,6 +43,7 @@ vi.mock('../controllers/finalization-controller', () => ({ registerFinalizationC
 vi.mock('../controllers/chapter-lifecycle-controller', () => ({ registerChapterLifecycleController: vi.fn() }))
 vi.mock('../controllers/external-file-grant-controller', () => ({ registerExternalFileGrantController: vi.fn() }))
 vi.mock('../controllers/app-data-controller', () => ({ registerAppDataController: vi.fn() }))
+vi.mock('../controllers/character-avatar-controller', () => ({ registerCharacterAvatarController: vi.fn() }))
 
 import { registerIPCHandlers } from '../ipc-handlers'
 

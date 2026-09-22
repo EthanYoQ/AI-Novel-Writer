@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { page } from 'vitest/browser'
 
 import '../../../index.css'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
 import RelationshipGraph from '../RelationshipGraph'
+import { GRAPH_NODE_LIMIT, layoutRelationshipWindow } from '../relationship-graph-layout'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -77,6 +80,8 @@ afterEach(async () => {
   container.remove()
   document.documentElement.classList.remove('paper', 'galaxy', 'dark')
   useLocaleStore.setState(originalLocaleState)
+  setActiveProjectSessionContext(null)
+  delete window.aiNovelAPI
   vi.restoreAllMocks()
 })
 
@@ -170,7 +175,7 @@ describe('RelationshipGraph readable theme text', () => {
 
     expect(fillTextCalls
       .filter(call => call.text !== '林墨' && call.text !== '周砧')
-      .map(call => call.text))
+      .map(call => call.text).slice(-1))
       .toEqual(['长期合作并共… +3'])
     const canvas = container.querySelector('canvas')!
     expect(canvas.getAttribute('aria-label')).toBe(
@@ -209,29 +214,112 @@ describe('RelationshipGraph readable theme text', () => {
     expect(fillTextCalls.map(call => call.text)).not.toContain(longRelation)
   })
 
-  it('keeps seven connected character nodes readable in the shipped canvas size', async () => {
-    vi.spyOn(HTMLCanvasElement.prototype, 'offsetWidth', 'get').mockReturnValue(795)
-    vi.spyOn(HTMLCanvasElement.prototype, 'offsetHeight', 'get').mockReturnValue(576)
-    vi.spyOn(HTMLCanvasElement.prototype, 'clientWidth', 'get').mockReturnValue(795)
-    vi.spyOn(HTMLCanvasElement.prototype, 'clientHeight', 'get').mockReturnValue(576)
-    const names = ['甲', '乙', '丙', '丁', '戊', '己', '庚']
-    const characters = names.map((name, index) => {
-      const targets = index === 0 ? names.slice(1) : [names[(index + 1) % names.length]]
-      return {
-        characterId: `id:${name}`, name,
-        role: index === 0 ? 'protagonist' : 'supporting',
-        relationships: JSON.stringify(targets.map(target => ({ target, relation: '推动选择' }))),
-      }
-    })
+  it('assigns five stable-ID importance grades with a switchable BFS center', () => {
+    const characters = Array.from({ length: 6 }, (_, index) => ({
+      characterId: `stable-${index}`,
+      name: `角色${index}`,
+      role: 'supporting',
+      relationships: index < 5
+        ? JSON.stringify([{ target: `角色${index + 1}`, targetCharacterId: `stable-${index + 1}`, relation: '推进' }])
+        : '',
+    }))
+    const first = layoutRelationshipWindow(characters, 'stable-0', 1200, 800)
+    expect(first.nodes.map(node => node.importance)).toEqual([5, 4, 3, 2, 1, 1])
+    const switched = layoutRelationshipWindow(characters, 'stable-5', 1200, 800)
+    expect(switched.nodes.find(node => node.characterId === 'stable-5')?.importance).toBe(5)
+    expect(switched.nodes.find(node => node.characterId === 'stable-0')?.importance).toBe(1)
+  })
+
+  it('fits 80 disconnected nodes inside the default viewport and reset restores the fitted layout', async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'offsetWidth', 'get').mockReturnValue(400)
+    vi.spyOn(HTMLCanvasElement.prototype, 'offsetHeight', 'get').mockReturnValue(300)
+    vi.spyOn(HTMLCanvasElement.prototype, 'clientWidth', 'get').mockReturnValue(400)
+    vi.spyOn(HTMLCanvasElement.prototype, 'clientHeight', 'get').mockReturnValue(300)
+    vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 400, 300))
+    const characters = Array.from({ length: GRAPH_NODE_LIMIT }, (_, index) => ({
+      characterId: `stable-${index}`,
+      name: `角色${String(index).padStart(2, '0')}`,
+      role: 'supporting',
+      relationships: '',
+    }))
 
     await act(async () => root.render(<RelationshipGraph characters={characters} />))
-    await waitForAnimationFrames(125)
+    const canvas = container.querySelector('canvas')!
+    const original = new Map(fillTextCalls.map(call => [call.text, { x: call.x, y: call.y }]))
+    fillTextCalls = []; translateCalls.mockClear(); scaleCalls.mockClear()
+    await act(async () => page.getByRole('button', { name: '适合视图' }).click())
 
-    const positions = names.map(name => fillTextCalls.filter(call => call.text === name).at(-1)!)
-    const pairDistances = positions.flatMap((position, index) => (
-      positions.slice(index + 1).map(other => Math.hypot(other.x - position.x, other.y - position.y))
-    ))
-    expect(Math.min(...pairDistances)).toBeGreaterThanOrEqual(240)
+    const assertVisible = () => {
+      const [offset, center, negativeCenter] = translateCalls.mock.calls.slice(-3)
+      const scale = scaleCalls.mock.calls.at(-1)?.[0] as number
+      expect(scale).toBeLessThan(1)
+      expect(center).toEqual([400, 300])
+      expect(negativeCenter).toEqual([-400, -300])
+      for (const call of fillTextCalls.filter(item => item.text.startsWith('角色'))) {
+        const radius = call.text === '角色00' ? 24 : 16
+        const x = Number(offset![0]) + 400 + (call.x - 400) * scale
+        const y = Number(offset![1]) + 300 + (call.y - radius - 16 - 300) * scale
+        expect(x - (radius + 8) * scale).toBeGreaterThanOrEqual(0)
+        expect(x + (radius + 8) * scale).toBeLessThanOrEqual(canvas.width)
+        expect(y - (radius + 8) * scale).toBeGreaterThanOrEqual(0)
+        expect(y + (radius + 8) * scale).toBeLessThanOrEqual(canvas.height)
+      }
+      return { offsetX: Number(offset![0]), offsetY: Number(offset![1]), scale }
+    }
+    const fitted = assertVisible()
+
+    const target = original.get('角色79')!
+    const targetRadius = 16
+    const screenX = fitted.offsetX + 400 + (target.x - 400) * fitted.scale
+    const screenY = fitted.offsetY + 300 + (target.y - targetRadius - 16 - 300) * fitted.scale
+    await act(async () => {
+      canvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1,
+        clientX: screenX / 2, clientY: screenY / 2 }))
+      canvas.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1,
+        clientX: screenX / 2 + 20, clientY: screenY / 2 + 10 }))
+    })
+    expect(fillTextCalls.filter(call => call.text === '角色79').at(-1)?.x).not.toBe(target.x)
+
+    fillTextCalls = []; translateCalls.mockClear(); scaleCalls.mockClear()
+    await act(async () => page.getByRole('button', { name: '重置图谱布局' }).click())
+    expect(fillTextCalls.find(call => call.text === '角色79')).toMatchObject(target)
+    assertVisible()
+  })
+
+  it('keeps a 1000-character graph bounded while every character remains searchable and no facts are written', async () => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      void args
+      return channel === 'character-avatar:read-batch'
+        ? { success: true, avatars: [] }
+        : { success: false }
+    })
+    window.aiNovelAPI = { invoke } as unknown as typeof window.aiNovelAPI
+    setActiveProjectSessionContext({ projectId: 'large-graph', leaseId: 'lease', projectPath: 'C:\\large' })
+    const onOpenCharacter = vi.fn()
+    const characters = Array.from({ length: 1000 }, (_, index) => ({
+      characterId: `stable-${index}`,
+      name: `角色${String(index).padStart(3, '0')}`,
+      role: index === 0 ? 'protagonist' : 'supporting',
+      relationships: index < 999
+        ? JSON.stringify([{ target: `角色${String(index + 1).padStart(3, '0')}`, targetCharacterId: `stable-${index + 1}`, relation: '相连' }])
+        : '',
+    }))
+    await act(async () => {
+      root.render(<RelationshipGraph characters={characters} onOpenCharacter={onOpenCharacter} />)
+      await Promise.resolve()
+    })
+    const canvas = container.querySelector('canvas')!
+    expect(Number(canvas.dataset.renderedNodeCount)).toBe(GRAPH_NODE_LIMIT)
+    await act(async () => page.getByRole('textbox', { name: '搜索图谱人物' }).fill('角色999'))
+    await act(async () => (container.querySelector('[data-graph-character-id="stable-999"]') as HTMLButtonElement).click())
+    expect(onOpenCharacter).toHaveBeenCalledWith('stable-999')
+    await act(async () => (container.querySelector('[aria-label="以角色999为中心"]') as HTMLButtonElement).click())
+    expect(container.textContent).toContain('中心: 角色999')
+    await act(async () => page.getByRole('button', { name: '重置图谱布局' }).click())
+    const calls = invoke.mock.calls.filter(([channel]) => channel === 'character-avatar:read-batch')
+    expect(calls.length).toBeGreaterThan(0)
+    expect(calls.every(call => Array.isArray(call[1]) && call[1].length <= GRAPH_NODE_LIMIT)).toBe(true)
+    expect(new Set(invoke.mock.calls.map(([channel]) => channel))).toEqual(new Set(['character-avatar:read-batch']))
   })
 
   it('moves one character node without moving the other node', async () => {

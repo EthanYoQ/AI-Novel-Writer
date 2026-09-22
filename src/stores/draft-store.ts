@@ -107,7 +107,8 @@ interface DraftState {
     expectedDraftContent: string,
     expectedProjectPath: string,
     expectedProjectSession?: ProjectSessionContext,
-  ) => Promise<{ success: boolean; error?: string }>
+  ) => Promise<{ success: boolean; receipt?: Awaited<ReturnType<typeof ipc.invoke<'db:revision-merge'>>>['receipt'];
+    error?: string; postCommitError?: string }>
 }
 
 export const useDraftStore = create<DraftState>()((set, get) => ({
@@ -293,6 +294,7 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
     expectedProjectSession,
   ) => {
     void chapterDir // Compatibility argument; typed DB identities now determine the merge target.
+    let committedReceipt: Awaited<ReturnType<typeof ipc.invoke<'db:revision-merge'>>>['receipt'] | undefined
     try {
       const projectSession = currentDraftProjectSession(expectedProjectPath, expectedProjectSession)
       if (!projectSession) {
@@ -320,7 +322,7 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
       const targetDraftId = draftResource.id
       const revisionId = revisionResource.id
 
-      requireIpcSuccess(
+      const merged = requireIpcSuccess(
         await ipc.invokeWithProjectSession(
           projectSession,
           'db:revision-merge',
@@ -335,7 +337,10 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
         ),
         '提交合并后的修订稿',
       )
-      if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
+      committedReceipt = merged.receipt
+      if (!isDraftProjectSessionCurrent(projectSession)) {
+        return { success: true, receipt: committedReceipt, postCommitError: staleProjectError().error }
+      }
 
       if (targetTab && editorSnapshot) {
         editorState.settleMergedRevision(targetTab.id, editorSnapshot, mergedText)
@@ -344,10 +349,33 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
       if (chapterNumber !== undefined) {
         await get().loadChapterDrafts(chapterNumber, expectedProjectPath, projectSession)
       }
-      if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
+      if (!isDraftProjectSessionCurrent(projectSession)) {
+        return { success: true, receipt: committedReceipt, postCommitError: staleProjectError().error }
+      }
 
-      return { success: true }
+      if (merged.receipt?.reviewCycle?.disposition === 'required') {
+        const { createReviewOnlyWorkflow } = await import('../services/workflows/chapter-workflow')
+        const { useWorkflowStore } = await import('./workflow-store')
+        if (!isDraftProjectSessionCurrent(projectSession)) {
+          return { success: true, receipt: committedReceipt, postCommitError: staleProjectError().error }
+        }
+        const mergedTab = useEditorStore.getState().tabs.find(tab => tab.projectKey === expectedProjectPath && tab.filePath === filePath)
+        useWorkflowStore.getState().startWorkflow(createReviewOnlyWorkflow({
+          projectPath: expectedProjectPath,
+          chapterNumber: merged.receipt.chapterNumber,
+          chapterTitle: `第${merged.receipt.chapterNumber}章`,
+          draftPath: filePath,
+          draftContent: mergedText,
+          sourceDraft: { id: merged.receipt.targetDraftId, chapterNumber: merged.receipt.chapterNumber,
+            version: merged.receipt.version, status: 'revised', contentRevision: mergedTab?.contentRevision ?? 0 },
+          reviewCycleId: merged.receipt.reviewCycle.cycleId,
+          expectedMergedHash: merged.receipt.reviewCycle.mergedHash,
+        }, projectSession), false)
+      }
+
+      return { success: true, receipt: committedReceipt }
     } catch (e) {
+      if (committedReceipt) return { success: true, receipt: committedReceipt, postCommitError: String(e) }
       return { success: false, error: String(e) }
     }
   },

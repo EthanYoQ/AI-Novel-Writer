@@ -14,7 +14,7 @@ import { retryFinalizationPublication } from '../finalization-client'
 import type { Locale } from '../../i18n/types'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectPathKey } from '../../shared/project-session-context'
-import type { FinalizationSnapshot } from '../finalization-snapshot'
+import { finalizationContentRevision, type FinalizationSnapshot } from '../finalization-snapshot'
 import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS } from '../../shared/workflow-resource-claims'
 import { requireWorkflowProjectSession } from './workflow-project-session'
 import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
@@ -149,7 +149,7 @@ async function captureBatchFinalizationSnapshot(
       chapterNumber,
       chapterTitle,
       content: draftContent,
-      contentRevision,
+      contentRevision: finalizationContentRevision(contentRevision),
     })
   } catch {
     // Editor binding is a renderer projection. Finalization can still use its
@@ -205,7 +205,7 @@ async function runOneBatchChapter(
     if (!stored || stored.version !== predecessor.version || await hashAuthorText(stored.content) !== predecessor.contentHash)
       throw new Error('GENERATION_BATCH_PREDECESSOR_CHANGED')
     selectedCandidates.push({ chapterNumber: predecessor.chapterNumber, draftId: predecessor.draftId,
-      version: predecessor.version, content: stored.content })
+      version: predecessor.version, content: stored.content, required: true })
   }
   // 草稿待审模式不会把本批次前一章变成定稿事实；首章仍遵守外部连续性门禁，
   // 后续章只重复校验蓝图/角色等全局前置条件。

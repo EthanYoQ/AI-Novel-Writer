@@ -10,8 +10,34 @@ export interface ProjectSqliteEvidence {
   schemaVersion: number; fingerprint: string
   domain: { tableCounts: Record<string, number>; authorContentHash: string }
   preIdentityDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
+  preAssetDomain?: { tableCounts: Record<string, number>; authorContentHash: string }
 }
-export interface ProjectMigrationDependencies<VectorSnapshot = unknown> {
+export interface ProjectAssetSourceEntry {
+  readonly relativePath: string
+  readonly size: number
+  readonly sha256: string
+}
+export interface ProjectAssetSourceSnapshot {
+  readonly fingerprint: string
+  readonly entries: readonly ProjectAssetSourceEntry[]
+  /** Reads only a file frozen in entries and rechecks its size/hash. */
+  read(relativePath: string): Buffer
+}
+export interface CharacterAssetMigrationAdapter<Receipt = unknown> {
+  migrate(input: {
+    sourceSnapshot: ProjectAssetSourceSnapshot
+    stagingTargetRoot: string
+    stagingDatabasePath: string
+    checkpoint(phase: string): void
+  }): Promise<Receipt>
+  verify(input: {
+    sourceSnapshot: ProjectAssetSourceSnapshot
+    stagingTargetRoot: string
+    stagingDatabasePath: string
+    receipt: Receipt
+  }): Promise<boolean>
+}
+export interface ProjectMigrationDependencies<VectorSnapshot = unknown, CharacterAssetReceipt = unknown> {
   probeSqlite(databasePath: string): ProjectSqliteEvidence
   backupSqlite(sourceDatabasePath: string, targetDatabasePath: string): Promise<ProjectSqliteEvidence>
   verifySqlite(databasePath: string): ProjectSqliteEvidence
@@ -19,6 +45,7 @@ export interface ProjectMigrationDependencies<VectorSnapshot = unknown> {
   exportVectors(storageRoot: string, originalSourceRoot: string): Promise<VectorSnapshot>
   importVectors(storageRoot: string, snapshot: VectorSnapshot): Promise<void>
   verifyVectors(storageRoot: string, snapshot: VectorSnapshot): Promise<boolean>
+  characterAssets: CharacterAssetMigrationAdapter<CharacterAssetReceipt>
   writeManifest(storageRoot: string, projectId: string, createdAt: string): void
   /** Validated canonical manifest/DB locator, supplied by the single central owner. */
   databaseName: string
@@ -27,7 +54,7 @@ export type ProjectMigrationPhase = 'prepared' | 'verified' | 'legacy-isolated' 
 interface Journal {
   version: 1; migrationId: string; projectId: string; sourceRoot: string; phase: ProjectMigrationPhase
   sourceFingerprint: string; targetFingerprint?: string; sourceSchema: ProjectSqliteEvidence
-  targetSchema?: ProjectSqliteEvidence; backupOnlyCount: number
+  targetSchema?: ProjectSqliteEvidence; characterAssets?: unknown; backupOnlyCount: number
   createdAt: string
 }
 export type ProjectMigrationResult =
@@ -111,7 +138,47 @@ function copyAsset(source: string, target: string): void {
     try { fs.writeFileSync(fd, fs.readFileSync(source)); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
   }
 }
-const ASSETS = ['prompts', 'skills', 'writing-skills.json', 'partial_arch', 'partial_arch.json', 'chapter_creation_log.json', 'avatars'] as const
+function characterAssetSnapshot(storageRoot: string): ProjectAssetSourceSnapshot {
+  const avatarRoot = path.join(storageRoot, 'avatars')
+  const entries: ProjectAssetSourceEntry[] = []
+  const files = new Map<string, string>()
+  if (entryExists(avatarRoot)) {
+    safeDirectory(avatarRoot)
+    const walk = (directory: string) => {
+      for (const name of fs.readdirSync(directory).sort()) {
+        const file = path.join(directory, name), info = fs.lstatSync(file)
+        if (info.isSymbolicLink()) fail('PROJECT_MIGRATION_REQUIRED_ASSET_LINK')
+        if (info.isDirectory()) { walk(file); continue }
+        regular(file)
+        const relativePath = path.relative(avatarRoot, file).split(path.sep).join('/')
+        const bytes = fs.readFileSync(file), sha256 = createHash('sha256').update(bytes).digest('hex')
+        entries.push(Object.freeze({ relativePath, size: bytes.byteLength, sha256 }))
+        files.set(relativePath, file)
+      }
+    }
+    walk(avatarRoot)
+  }
+  entries.sort((left, right) => left.relativePath.localeCompare(right.relativePath))
+  const fingerprint = createHash('sha256').update(JSON.stringify(entries)).digest('hex')
+  return Object.freeze({
+    fingerprint,
+    entries: Object.freeze(entries),
+    read(relativePath: string): Buffer {
+      const entry = entries.find(candidate => candidate.relativePath === relativePath), file = files.get(relativePath)
+      if (!entry || !file) fail('PROJECT_MIGRATION_SOURCE_CHANGED')
+      regular(file)
+      const bytes = fs.readFileSync(file)
+      if (bytes.byteLength !== entry.size
+        || createHash('sha256').update(bytes).digest('hex') !== entry.sha256) fail('PROJECT_MIGRATION_SOURCE_CHANGED')
+      return bytes
+    },
+  })
+}
+export const CANONICAL_RAW_PROJECT_ASSETS = Object.freeze([
+  'prompts', 'skills', 'writing-skills.json', 'partial_arch', 'partial_arch.json', 'chapter_creation_log.json',
+] as const)
+const ASSETS = CANONICAL_RAW_PROJECT_ASSETS
+const MIGRATED_ASSETS = ['avatars'] as const
 const VECTOR_ASSETS = ['lancedb', 'embedding-spaces.json', 'vectors.json', 'vectors.json.migrated', 'vectors.json.migration-journal.json'] as const
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i
 function readJournal(file: string): Journal {
@@ -123,16 +190,16 @@ function readJournal(file: string): Journal {
     || !/^[a-f0-9]{64}$/.test(value.sourceFingerprint) || !value.sourceSchema?.domain
     || typeof value.sourceRoot !== 'string' || typeof value.createdAt !== 'string' || !Number.isFinite(Date.parse(value.createdAt))
     || !Number.isSafeInteger(value.backupOnlyCount) || value.backupOnlyCount < 0
-    || Object.keys(value).some(key => !['version', 'migrationId', 'projectId', 'sourceRoot', 'phase', 'sourceFingerprint', 'targetFingerprint', 'sourceSchema', 'targetSchema', 'backupOnlyCount', 'createdAt'].includes(key))) fail('PROJECT_MIGRATION_JOURNAL_INVALID')
+    || Object.keys(value).some(key => !['version', 'migrationId', 'projectId', 'sourceRoot', 'phase', 'sourceFingerprint', 'targetFingerprint', 'sourceSchema', 'targetSchema', 'characterAssets', 'backupOnlyCount', 'createdAt'].includes(key))) fail('PROJECT_MIGRATION_JOURNAL_INVALID')
   return value
 }
-export async function migrateProjectFormat<V>(options: {
+export async function migrateProjectFormat<V, A = unknown>(options: {
   projectRoot: string; projectId: string; permit?: SyntheticProjectMigrationPermit
   /** Explicit adoption supplies identity creation time only for a manifest-less recognized source. */
   createdAt?: string
   preflightOptions?: ProjectStoragePreflightOptions
   exclusiveWriterCheck: () => boolean
-  dependencies: ProjectMigrationDependencies<V>
+  dependencies: ProjectMigrationDependencies<V, A>
   checkpoint?: (phase: string) => void
 }): Promise<ProjectMigrationResult> {
   const deps = options.dependencies
@@ -172,7 +239,7 @@ export async function migrateProjectFormat<V>(options: {
       const sourceSchema = deps.probeSqlite(path.join(source, 'vela.db'))
       journal = { version: 1, migrationId: randomUUID(), projectId: options.projectId, sourceRoot: root,
         phase: 'prepared', sourceFingerprint: treeFingerprint(source), sourceSchema, createdAt,
-        backupOnlyCount: fs.readdirSync(source).filter(name => name === 'vectors.json.migrated' || !['vela.db', 'vela.db-wal', 'vela.db-shm', 'project.json', ...ASSETS, ...VECTOR_ASSETS].includes(name)).length }
+        backupOnlyCount: fs.readdirSync(source).filter(name => name === 'vectors.json.migrated' || !['vela.db', 'vela.db-wal', 'vela.db-shm', 'project.json', ...ASSETS, ...MIGRATED_ASSETS, ...VECTOR_ASSETS].includes(name)).length }
       writeJson(journalFile, journal); checkpoint('prepared')
     }
     const staging = path.join(control, `${journal.migrationId}.staging`), backup = path.join(control, `${journal.migrationId}.legacy`)
@@ -201,8 +268,20 @@ export async function migrateProjectFormat<V>(options: {
       }
       fs.mkdirSync(staging); fs.mkdirSync(vectorCopy)
       const targetSchema = await deps.backupSqlite(path.join(source, 'vela.db'), path.join(staging, deps.databaseName))
-      if (targetSchema.schemaVersion !== CURRENT_DESKTOP_SCHEMA_VERSION || !isDeepStrictEqual(journal.sourceSchema.schemaVersion < 3 && targetSchema.schemaVersion === 3 ? targetSchema.preIdentityDomain : targetSchema.domain, journal.sourceSchema.domain)) fail('PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED')
+      if (targetSchema.schemaVersion !== CURRENT_DESKTOP_SCHEMA_VERSION || !isDeepStrictEqual(
+        journal.sourceSchema.schemaVersion < 3 ? targetSchema.preIdentityDomain : targetSchema.domain,
+        journal.sourceSchema.domain,
+      )) fail('PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED')
       checkpoint('sqlite-backed-up')
+      const sourceSnapshot = characterAssetSnapshot(source)
+      const characterAssets = await deps.characterAssets.migrate({ sourceSnapshot, stagingTargetRoot: staging,
+        stagingDatabasePath: path.join(staging, deps.databaseName), checkpoint })
+      if (!await deps.characterAssets.verify({ sourceSnapshot, stagingTargetRoot: staging,
+        stagingDatabasePath: path.join(staging, deps.databaseName), receipt: characterAssets })) fail('PROJECT_MIGRATION_CHARACTER_ASSETS_CHANGED')
+      journal.characterAssets = characterAssets
+      checkpoint('m05:journal-before')
+      writeJson(journalFile, journal)
+      checkpoint('m05:journal-after')
       for (const name of ASSETS) if (entryExists(path.join(source, name))) { copyAsset(path.join(source, name), path.join(staging, name)); checkpoint(`asset:${name}`) }
       for (const name of VECTOR_ASSETS) if (entryExists(path.join(source, name))) copyAsset(path.join(source, name), path.join(vectorCopy, name))
       const snapshot = await deps.exportVectors(vectorCopy, source)
@@ -212,15 +291,24 @@ export async function migrateProjectFormat<V>(options: {
       const manifest = parseCanonicalProjectManifest(JSON.parse(fs.readFileSync(path.join(staging, 'project.json'), 'utf8')))
       if (manifest.projectId !== journal.projectId || manifest.createdAt !== journal.createdAt
         || manifest.schemaVersion !== 1 || manifest.kind !== 'ai-novel-project' || manifest.storageFormat !== 'ai-novel' || manifest.storageVersion !== 1) fail('PROJECT_MIGRATION_IDENTITY_MISMATCH')
-      if (!isDeepStrictEqual(deps.verifySqlite(path.join(staging, deps.databaseName)), targetSchema)) fail('PROJECT_MIGRATION_SQLITE_VERIFICATION_FAILED')
+      const verifiedTargetSchema = deps.verifySqlite(path.join(staging, deps.databaseName))
+      if (verifiedTargetSchema.schemaVersion !== targetSchema.schemaVersion
+        || verifiedTargetSchema.fingerprint !== targetSchema.fingerprint
+        || !isDeepStrictEqual(verifiedTargetSchema.preAssetDomain ?? verifiedTargetSchema.domain,
+          targetSchema.preAssetDomain ?? targetSchema.domain)) fail('PROJECT_MIGRATION_SQLITE_VERIFICATION_FAILED')
       await deps.closeHandles()
       if (treeFingerprint(source) !== journal.sourceFingerprint) fail('PROJECT_MIGRATION_SOURCE_CHANGED')
-      journal.targetSchema = targetSchema; journal.targetFingerprint = treeFingerprint(staging)
+      journal.targetSchema = verifiedTargetSchema; journal.targetFingerprint = treeFingerprint(staging)
       journal.phase = 'verified'; writeJson(journalFile, journal); checkpoint('verified')
     }
     await deps.closeHandles()
     if (!options.exclusiveWriterCheck()) fail('PROJECT_MIGRATION_WRITER_NOT_EXCLUDED')
     if (!journal.targetFingerprint) fail('PROJECT_MIGRATION_TARGET_UNVERIFIED')
+    const assetSource = fs.existsSync(source) ? source : backup
+    const assetTarget = fs.existsSync(target) ? target : staging
+    if (journal.characterAssets === undefined || !fs.existsSync(assetSource) || !fs.existsSync(assetTarget)
+      || !await deps.characterAssets.verify({ sourceSnapshot: characterAssetSnapshot(assetSource), stagingTargetRoot: assetTarget,
+        stagingDatabasePath: path.join(assetTarget, deps.databaseName), receipt: journal.characterAssets as A })) fail('PROJECT_MIGRATION_CHARACTER_ASSETS_CHANGED')
     if (fs.existsSync(source)) {
       if (fs.existsSync(backup) || treeFingerprint(source) !== journal.sourceFingerprint) fail('PROJECT_MIGRATION_SOURCE_CHANGED')
       const candidate = fs.existsSync(target) ? target : staging

@@ -857,6 +857,13 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     expect(prompt).not.toContain('这个被作者忽略，不能送入模型。')
     expect(prompt).not.toContain('原始 AI 总结绝不能进入修稿提示。')
     expect(prompt).not.toContain('瞬态 UI 提示不得绕过确认快照。')
+    expect(prompt).toContain('若已确认问题要求当章发生动作或结果')
+    expect(prompt).toContain('新增动作或结果本身必须满足该问题的目标语义')
+    expect(prompt).toContain('已经失去、消耗或承受的具体后果')
+    expect(prompt).toContain('签字、认责或声称以后负责仍只是承诺')
+    expect(prompt).toContain('不得保留与新增事件相反的状态')
+    expect(prompt).toContain('简单否定翻转')
+    expect(prompt).toContain('决定、计划、承诺、保证，均不算完成')
 
     const pendingRevision = invoke.mock.calls.find(([channel]) => channel === 'db:revision-replace-pending')?.[1]
     expect(pendingRevision).toMatchObject({

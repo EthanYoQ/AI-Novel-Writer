@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProjectData } from '../../shared/ipc-channels'
 import { checkArchStatusWithWordCount, getBlueprintCount } from '../../services/architecture-service'
 import { useDraftStore } from '../draft-store'
+import { useEditorStore } from '../editor-store'
+import { useLayoutStore } from '../layout-store'
 import { useProjectStore } from '../project-store'
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }))
@@ -75,6 +77,84 @@ beforeEach(() => {
 })
 
 describe('project refresh context', () => {
+  it('preserves a Writer rail selection made while the new project tree loads', async () => {
+    const originalLayout = useLayoutStore.getState()
+    const tree = deferred<unknown[]>()
+    useProjectStore.setState({ currentProject: null })
+    useLayoutStore.setState({ sidebarView: 'project', activeRailItem: 'project' })
+    invoke.mockImplementation((channel: string, targetPath: string, requestToken: string) => {
+      if (channel === 'project:open') return Promise.resolve({
+        success: true,
+        project: project('B'),
+        requestToken,
+        activeProjectPath: targetPath,
+        databaseRestored: true,
+        dbReady: true,
+      })
+      if (channel === 'fs:list-dir') return tree.promise
+      return Promise.resolve([])
+    })
+
+    try {
+      const opening = useProjectStore.getState().openProject(project('B').path)
+      await vi.waitFor(() => {
+        expect(useProjectStore.getState().currentProject?.path).toBe(project('B').path)
+        expect(invoke).toHaveBeenCalledWith('fs:list-dir', project('B').path, project('B').path)
+      })
+      useLayoutStore.getState().setSidebarView('characters')
+      tree.resolve([])
+      await expect(opening).resolves.toBe(true)
+      expect(useLayoutStore.getState()).toMatchObject({
+        sidebarOpen: true,
+        sidebarView: 'characters',
+        activeRailItem: 'characters',
+      })
+    } finally {
+      tree.resolve([])
+      useLayoutStore.setState(originalLayout, true)
+    }
+  })
+
+  it('clears Writer immersion after a successful project-open commit', async () => {
+    const originalLayout = useLayoutStore.getState()
+    useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
+    useLayoutStore.setState({
+      sidebarOpen: false,
+      sidebarView: 'characters',
+      activeRailItem: 'characters',
+      aiPanelOpen: false,
+      bottomPanelOpen: false,
+      immersive: true,
+      preImmersivePanels: { sidebarOpen: true, aiPanelOpen: true, bottomPanelOpen: true },
+    })
+    invoke.mockImplementation((channel: string, targetPath: string, requestToken: string) => {
+      if (channel === 'project:open') return Promise.resolve({
+        success: true,
+        project: project('B'),
+        requestToken,
+        activeProjectPath: targetPath,
+        databaseRestored: true,
+        dbReady: true,
+      })
+      if (channel === 'fs:list-dir') return Promise.resolve([])
+      return Promise.resolve([])
+    })
+
+    try {
+      await expect(useProjectStore.getState().openProject(project('B').path)).resolves.toBe(true)
+      expect(useProjectStore.getState().currentProject?.path).toBe(project('B').path)
+      expect(useLayoutStore.getState()).toMatchObject({
+        sidebarOpen: true,
+        sidebarView: 'project',
+        activeRailItem: 'project',
+        immersive: false,
+        preImmersivePanels: null,
+      })
+    } finally {
+      useLayoutStore.setState(originalLayout, true)
+    }
+  })
+
   it('commits only the latest project-open request when IPC replies out of order', async () => {
     const openAResult = deferred<unknown>()
     const openBResult = deferred<unknown>()

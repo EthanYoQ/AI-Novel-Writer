@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect } from 'react'
-import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels'
 import { type Theme, useThemeStore } from './stores/theme-store'
+import { useAppearanceStore } from './stores/appearance-bootstrap'
 import { useLayoutStore } from './stores/layout-store'
 import { useLLMStore } from './stores/llm-store'
 import { useProjectStore } from './stores/project-store'
@@ -13,6 +13,7 @@ import TitleBar from './components/layout/TitleBar'
 import StatusBar from './components/layout/StatusBar'
 import LeftToolWindowBar from './components/layout/LeftToolWindowBar'
 import RightToolWindowBar from './components/layout/RightToolWindowBar'
+import ShellV2 from './components/layout/v2/ShellV2'
 import Sidebar from './components/panels/Sidebar'
 import EditorArea from './components/panels/EditorArea'
 import AIPanel from './components/panels/AIPanel'
@@ -93,10 +94,15 @@ export function AppSkinRoot({
 export default function App() {
   const initTheme = useThemeStore((s) => s.initTheme)
   const resolvedTheme = useThemeStore((s) => s.resolvedTheme)
+  const resolvedShell = useAppearanceStore((s) => s.resolvedShell)
   const initLocale = useLocaleStore((s) => s.init)
   const text = useLocaleStore((s) => s.text)
   const sidebarOpen = useLayoutStore(s => s.sidebarOpen)
+  const sidebarView = useLayoutStore(s => s.sidebarView)
+  const currentProject = useProjectStore(s => s.currentProject)
   const aiPanelOpen = useLayoutStore(s => s.aiPanelOpen)
+  const bottomPanelOpen = useLayoutStore(s => s.bottomPanelOpen)
+  const immersive = useLayoutStore(s => s.immersive)
   const rightView = useLayoutStore(s => s.rightView)
   const settingsOpen = useLayoutStore(s => s.settingsOpen)
   const closeSettings = useLayoutStore(s => s.closeSettings)
@@ -245,6 +251,12 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
+  useEffect(() => {
+    if (resolvedShell !== 'writer' && useLayoutStore.getState().immersive) {
+      useLayoutStore.getState().toggleImmersion()
+    }
+  }, [resolvedShell])
+
   return (
     <AppSkinRoot theme={resolvedTheme} skinId={skinState.activeSkin}>
       <SkinBackgroundLayer
@@ -253,76 +265,36 @@ export default function App() {
         onImageError={() => void recoverFromImageFailure()}
       />
       <UpdateNotifier />
-      {/* 标题栏 */}
-      <TitleBar />
-
-      {/*
-        主体：flex 行 = LeftBar | 纵向PanelGroup | RightBar
-        ┌───┬──────────────────────────────┬───┐
-        │   │  Sidebar | Editor | AIPanel  │   │
-        │ L │──────────────────────────────│ R │
-        │   │     BottomPanel (全宽)        │   │
-        └───┴──────────────────────────────┴───┘
-      */}
-      <div className="app-skin-main-region flex flex-1 overflow-hidden">
-
-        {/* 左侧工具窗口栏（全高，包括底部面板区域） */}
-        <LeftToolWindowBar />
-
-        {/* 纵向 PanelGroup：上层主区域 + 下层底部面板 */}
-        <PanelGroup orientation="vertical" className="flex-1">
-
-          {/* 上层：侧边栏 | 编辑区 | AI 面板（水平分割） */}
-          <Panel id="top" defaultSize={75} minSize={30}>
-            <PanelGroup orientation="horizontal" className="flex-1 h-full">
-
-              {/* 左侧边栏 */}
-              {sidebarOpen && (
-                <>
-                  <Panel id="sidebar" defaultSize={20} minSize={10}>
-                    <ErrorBoundary fallbackLabel={text('侧边栏渲染失败', 'Sidebar failed to render')}>
-                      <Sidebar />
-                    </ErrorBoundary>
-                  </Panel>
-                  <PanelResizeHandle />
-                </>
-              )}
-
-              {/* 编辑区 */}
-              <Panel id="editor" defaultSize={60} minSize={10}>
-                <ErrorBoundary fallbackLabel={text('编辑区渲染失败', 'Editor failed to render')}>
-                  <EditorArea onNewProject={() => useLayoutStore.getState().openNewProject()} />
-                </ErrorBoundary>
-              </Panel>
-
-              {/* 右侧面板（Agent 对话 / AI 输出） */}
-              {aiPanelOpen && (
-                <>
-                  <PanelResizeHandle />
-                  <Panel id="ai-panel" defaultSize={20} minSize={10}>
-                    <ErrorBoundary fallbackLabel={text('AI 面板渲染失败', 'AI panel failed to render')}>
-                      {rightView === 'ai-output' ? <AIOutputPanel /> : <AIPanel />}
-                    </ErrorBoundary>
-                  </Panel>
-                </>
-              )}
-            </PanelGroup>
-          </Panel>
-
-          {/* 下层：底部面板（铺满整个 PanelGroup 宽度）— 始终挂载，面板控制显隐 */}
-          <PanelResizeHandle />
-          <Panel id="bottom" defaultSize={25} minSize={8}>
-            <BottomPanel />
-          </Panel>
-        </PanelGroup>
-
-        {/* 右侧工具窗口栏（全高，包括底部面板区域） */}
-        <RightToolWindowBar />
-      </div>
-
-
-      {/* 状态栏（全宽） */}
-      <StatusBar />
+      <ShellV2
+        presentation={resolvedShell}
+        variant={resolvedShell === 'writer' ? 'v3' : undefined}
+        home={!currentProject || sidebarView === 'home'}
+        theme={resolvedTheme}
+        titleBar={<TitleBar />}
+        rail={<LeftToolWindowBar />}
+        sidebar={(
+          <ErrorBoundary fallbackLabel={text('侧边栏渲染失败', 'Sidebar failed to render')}>
+            <Sidebar />
+          </ErrorBoundary>
+        )}
+        editor={(
+          <ErrorBoundary fallbackLabel={text('编辑区渲染失败', 'Editor failed to render')}>
+            <EditorArea onNewProject={() => useLayoutStore.getState().openNewProject()} />
+          </ErrorBoundary>
+        )}
+        aiPanel={(
+          <ErrorBoundary fallbackLabel={text('AI 面板渲染失败', 'AI panel failed to render')}>
+            {rightView === 'ai-output' ? <AIOutputPanel /> : <AIPanel />}
+          </ErrorBoundary>
+        )}
+        bottom={<BottomPanel />}
+        statusBar={<StatusBar />}
+        rightRail={<RightToolWindowBar />}
+        sidebarOpen={sidebarOpen}
+        aiPanelOpen={aiPanelOpen}
+        bottomOpen={bottomPanelOpen}
+        immersive={immersive}
+      />
 
       {/* 全局对话框 — 由 layout-store 控制开关，不再依赖 window.dispatchEvent */}
       <NewProjectDialog

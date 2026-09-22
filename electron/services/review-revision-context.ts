@@ -12,6 +12,7 @@ import { BlueprintRepository } from '../repositories/blueprint-repository'
 import { SummaryRepository } from '../repositories/summary-repository'
 import { ConsistencyExemptionRepository } from '../repositories/consistency-exemption-repository'
 import { ReviewRepository } from '../repositories/review-repository'
+import { ReviewCycleRepository } from '../repositories/review-cycle-repository'
 import { textHash } from '../repositories/generation-run-repository'
 
 export const REVIEW_REVISION_OPERATIONS = ['review-chapter', 'refine-draft', 'refine-from-review'] as const
@@ -23,7 +24,8 @@ export function reviewRevisionRequest(context: ReviewRevisionContext): PrepareRe
     expectedDraft: { chapterNumber: context.source.chapterNumber, version: context.source.version,
       status: context.source.status, contentHash: context.sourceHash },
     authorInputs: structuredClone(context.authorInputs), uiLocale: context.uiLocale,
-    ...(context.confirmation ? { reviewSourceId: context.confirmation.reviewSourceId, confirmedReviewContent: context.confirmation.content } : {}) }
+    ...(context.confirmation ? { reviewSourceId: context.confirmation.reviewSourceId, confirmedReviewContent: context.confirmation.content } : {}),
+    ...(context.recheck ? { reviewCycleId: context.recheck.cycleId, expectedMergedHash: context.recheck.mergedHash } : {}) }
 }
 
 /**
@@ -34,8 +36,8 @@ export function reviewRevisionRequest(context: ReviewRevisionContext): PrepareRe
  * a reopen. The live lease is attached to the `SourceRef` at the point of use instead.
  */
 export function captureReviewRevisionContext(db: Database.Database, request: PrepareReviewRevisionRequest,
-  projectId: string): ReviewRevisionContext {
-  if (!request || Object.keys(request).some(key => !['operation', 'draftId', 'expectedDraft', 'reviewSourceId', 'confirmedReviewContent', 'authorInputs', 'uiLocale'].includes(key))
+  projectId: string, frozenRecheckVersion?: 1 | 2): ReviewRevisionContext {
+  if (!request || Object.keys(request).some(key => !['operation', 'draftId', 'expectedDraft', 'reviewSourceId', 'confirmedReviewContent', 'reviewCycleId', 'expectedMergedHash', 'authorInputs', 'uiLocale'].includes(key))
     || !REVIEW_REVISION_OPERATIONS.includes(request.operation) || !Number.isSafeInteger(request.draftId) || request.draftId < 1
     || !['zh-CN', 'en-US'].includes(request.uiLocale) || !request.expectedDraft
     || Object.keys(request.expectedDraft).some(key => !['chapterNumber', 'version', 'status', 'contentHash'].includes(key))
@@ -45,6 +47,9 @@ export function captureReviewRevisionContext(db: Database.Database, request: Pre
     || request.authorInputs.some(item => !item || Object.keys(item).some(key => !['id', 'text'].includes(key))
       || !allowedInputs.includes(item.id) || typeof item.text !== 'string' || Buffer.byteLength(item.text) > 8 * 1024 * 1024)) fail()
   if (request.operation !== 'refine-from-review' && (request.reviewSourceId !== undefined || request.confirmedReviewContent !== undefined)) fail()
+  const recheckRequested = request.reviewCycleId !== undefined || request.expectedMergedHash !== undefined
+  if (recheckRequested && (request.operation !== 'review-chapter' || typeof request.reviewCycleId !== 'string'
+    || !request.reviewCycleId.trim() || typeof request.expectedMergedHash !== 'string')) fail()
   return db.transaction((): ReviewRevisionContext => {
     const source = db.prepare('SELECT d.id,d.chapter_number AS chapterNumber,d.version,d.status,c.body AS content FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?')
       .get(request.draftId) as ExpectedDraftSource | undefined
@@ -52,6 +57,13 @@ export function captureReviewRevisionContext(db: Database.Database, request: Pre
     if (!source || latest !== source.id || !isDeepStrictEqual(request.expectedDraft,
       { chapterNumber: source.chapterNumber, version: source.version, status: source.status, contentHash: textHash(source.content) }))
       throw new Error('GENERATION_REVIEW_SOURCE_CHANGED')
+    let recheck: ReviewRevisionContext['recheck']
+    if (recheckRequested) {
+      const plan = ReviewCycleRepository.planRecheck(request.reviewCycleId!, db)
+      if (plan.disposition !== 'required' || !plan.context || plan.context.mergedHash !== request.expectedMergedHash
+        || textHash(source.content) !== plan.context.mergedHash) throw new Error('GENERATION_REVIEW_RECHECK_NOT_REQUIRED')
+      recheck = frozenRecheckVersion === 1 ? { ...plan.context, version: 1 } : plan.context
+    }
     const core = ProjectCoreRepository.get(db)
     if (!core) throw new Error('GENERATION_REVIEW_CONTEXT_INVALID')
     const config: NovelConfig = { genre: core.genre, subGenre: core.subGenre, targetAudience: core.targetAudience,
@@ -117,6 +129,6 @@ export function captureReviewRevisionContext(db: Database.Database, request: Pre
       worldbuilding: core.worldbuilding, history, blueprints,
       frozenGoals: freezeChapterGoals(source.chapterNumber, currentBlueprint?.keyEvents),
       preflightFindings: currentBlueprint ? findBlueprintContinuityRisks(history.flatMap(item => item.projection ? [item.projection] : []), currentBlueprint, ConsistencyExemptionRepository.list(db)) : [],
-      ...(confirmation ? { confirmation } : {}) }
+      ...(confirmation ? { confirmation } : {}), ...(recheck ? { recheck } : {}) }
   })()
 }

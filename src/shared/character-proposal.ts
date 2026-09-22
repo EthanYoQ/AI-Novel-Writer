@@ -52,6 +52,15 @@ export interface ApproveCharacterProposalRequest {
   selections: CharacterProposalDecision[]
   relationships?: { sourceSelectionKey: string; targetSelectionKey?: string; targetCharacterId?: string; relation: string }[]
 }
+export interface CancelCharacterProposalRequest {
+  proposalBatchId: string
+  expectedRevision: number
+}
+export interface PendingFinalizedCharacterProposalSummary {
+  proposalBatchId: string
+  revision: number
+  finalizationId: string
+}
 export interface CharacterIdentitySnapshot {
   revision: number
   characters: { characterId: string; fields: CharacterStaticFields; retired: boolean; revision: number;
@@ -62,7 +71,9 @@ export interface CharacterIdentitySnapshot {
 export interface CharacterProposalChannels {
   'character-proposal:stage': { args: [{ source: CharacterProposalSource }]; return: CharacterProposalBatch }
   'character-proposal:read': { args: [{ proposalBatchId: string }]; return: CharacterProposalBatch }
+  'character-proposal:list-pending-finalized': { args: []; return: PendingFinalizedCharacterProposalSummary[] }
+  'character-proposal:read-pending-finalized': { args: [{ proposalBatchId: string }]; return: CharacterProposalBatch }
   'character-proposal:approve': { args: [ApproveCharacterProposalRequest]; return: { batch: CharacterProposalBatch; created: { selectionKey: string; characterId: string }[] } }
-  'character-proposal:cancel': { args: [{ proposalBatchId: string }]; return: CharacterProposalBatch }
+  'character-proposal:cancel': { args: [CancelCharacterProposalRequest]; return: CharacterProposalBatch }
   'character-identity:read': { args: []; return: CharacterIdentitySnapshot }
 }

@@ -201,7 +201,7 @@ describe('ProjectService REFRESH_RESOURCE project identity', () => {
       draftId: 7,
       finalizationId: 'finalization-7',
       contentHash: 'hash-7',
-      contentRevision: 5,
+      contentRevision: 6,
       snapshotContent: '冻结正文',
       publicationStatus: 'published',
     })

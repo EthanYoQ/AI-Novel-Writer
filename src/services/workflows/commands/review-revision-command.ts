@@ -1,6 +1,6 @@
 import { BaseWorkflowCommand, type CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
-import type { GenerationAuthorInput } from '../../../shared/generation-owner-contract'
+import type { GenerationAuthorInput, MaterialDecisionDraft } from '../../../shared/generation-owner-contract'
 import type { PreparedReviewRevisionContext, ReviewRevisionContext, ReviewRevisionOperation, ReviewRevisionRecovery, ReviewRevisionCommitReceipt } from '../../../shared/review-revision-generation'
 import type { FrozenDraftSourceIdentity } from '../chapter-workflow'
 import { hashAuthorText } from '../../../shared/source-ref'
@@ -32,7 +32,8 @@ export abstract class ReviewRevisionCommand extends BaseWorkflowCommand<string> 
     protected readonly operation: ReviewRevisionOperation,
     protected readonly sourceParams: ReviewRevisionCommandSource,
     private readonly authorInputs: GenerationAuthorInput[],
-    private readonly confirmation: { reviewSourceId?: number; confirmedReviewContent?: string },
+    private readonly confirmation: { reviewSourceId?: number; confirmedReviewContent?: string;
+      reviewCycleId?: string; expectedMergedHash?: string },
     dependencies?: WorkflowGenerationRuntimeDependencies,
   ) { super(dependencies) }
 
@@ -56,7 +57,9 @@ export abstract class ReviewRevisionCommand extends BaseWorkflowCommand<string> 
       this.recovery = await ipc.invokeWithProjectSession(session, 'review-revision:read-recovery', { handle: recoveryHandle })
       if (this.recovery.context.operation !== this.operation) throw new Error('GENERATION_REVIEW_REVISION_OPERATION_MISMATCH')
       if (this.recovery.saved) return this.openReceipt(this.recovery.saved, this.recovery.context, params)
-      if (this.recovery.sourceStatus !== 'current' || !this.recovery.contextId) throw new Error('SOURCE_DRAFT_CHANGED')
+      if (this.recovery.sourceStatus !== 'current') throw new Error('SOURCE_DRAFT_CHANGED')
+      if (!this.recovery.canResume) throw new Error('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
+      if (!this.recovery.contextId) throw new Error('SOURCE_DRAFT_CHANGED')
       prepared = { contextId: this.recovery.contextId, context: this.recovery.context, modelId: this.recovery.modelId }
     } else {
       const source = this.sourceParams.sourceDraft ?? await this.readSelectedSource(params)
@@ -101,6 +104,15 @@ export abstract class ReviewRevisionCommand extends BaseWorkflowCommand<string> 
 
   protected abstract generateAndCommit(prepared: PreparedReviewRevisionContext, params: CommandExecuteParams): Promise<ReviewRevisionCommitReceipt>
 
+  protected async bindMaterialDecision(params: CommandExecuteParams, decision: MaterialDecisionDraft, prompt: string): Promise<void> {
+    const handle = params.context.mainGenerationRunHandle
+    if (!handle) throw new Error('GENERATION_REVIEW_REVISION_HANDLE_REQUIRED')
+    await ipc.invokeWithProjectSession(requireWorkflowProjectSession(params.context), 'generation:bind-material-decision', {
+      handle,
+      materialDecision: { ...decision, promptHash: await hashAuthorText(prompt) },
+    })
+  }
+
   private assertSession(params: CommandExecuteParams): void {
     if (!sameProjectSessionContext(requireWorkflowProjectSession(params.context), projectSessionContextFromProject(useProjectStore.getState().currentProject))) {
       throw new Error(workflowUiText(params.context, '当前项目已切换，结果未保存', 'The project changed, so the result was not saved.'))
@@ -122,6 +134,7 @@ export abstract class ReviewRevisionCommand extends BaseWorkflowCommand<string> 
     const recovery = await ipc.invokeWithProjectSession(requireWorkflowProjectSession(params.context), 'review-revision:read-recovery', { handle })
     if (recovery.context.operation !== this.operation) throw new Error('GENERATION_REVIEW_REVISION_OPERATION_MISMATCH')
     if (recovery.sourceStatus !== 'current' && !recovery.saved) throw new Error('SOURCE_DRAFT_CHANGED')
+    if (!recovery.saved && !recovery.canResume) throw new Error('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
     return recovery
   }
 

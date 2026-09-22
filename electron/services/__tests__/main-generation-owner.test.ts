@@ -23,12 +23,13 @@ import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
 import { getProjectDb } from '../../database'
 import { BlueprintRepository, type BlueprintRangeCommitRequest } from '../../repositories/blueprint-repository'
-vi.mock('../../database', () => ({ getProjectDb: vi.fn() }))
+vi.mock('../../database', () => ({ getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn(() => null) }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const cleanups: (() => void)[] = []
 afterEach(() => { vi.unstubAllGlobals(); for (const cleanup of cleanups.splice(0)) cleanup() })
 const task = { purpose: 'chapter-draft', output: 'visible-text' as const, messages: [{ role: 'user' as const, content: '保留作者事实，创作中文段落。' }] }
-function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silicon = false) {
+function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silicon = false,
+  onReasoning?: (event: { projectId: string; epoch: string; rootActionId: string; runId: string; attemptId: string; text: string }) => void) {
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/s05-owner-tests')
   fs.mkdirSync(base, { recursive: true })
   const root = fs.mkdtempSync(path.join(base, 'owner-'))
@@ -51,6 +52,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silico
     return createMainGenerationOwner({ database: capturedDb, projectId: 'project', epoch: capturedEpoch,
       assertCurrent: () => { if (!current || capturedEpoch !== epoch || capturedDb !== db) throw new Error('GENERATION_EPOCH_STALE') },
       leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch,
+      onReasoning,
       buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(sourceDeps, { ...selection, projectId: 'project', epoch: capturedEpoch,
         modelReceipt, policy: MAIN_GENERATION_POLICY, outputContract: generationOutputContract(selection) }).binding,
       rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDeps, previous, capturedEpoch, modelReceipt, MAIN_GENERATION_POLICY).binding,
@@ -221,6 +223,48 @@ it.each(['', ' ', null, 7])('rejects malformed parent root %j before creating a 
   expect(f.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(0);
 });
 
+it('freezes a valid material decision into the run and rejects a malformed one before any budget', () => {
+  // S10B 步骤 3：写稿入口把脱敏准入收据交给主进程，主进程校验后冻进 sourceManifest。
+  const f = fixture()
+  const decision: NonNullable<BeginGenerationRequest['materialDecision']> = {
+    version: 1, verdict: 'admitted', promptHash: textHash(task.messages[0].content),
+    capacity: { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1', admittedUnits: 12 },
+    coverage: { required: 1, included: 1, complete: true },
+    included: [{ sourceId: 'author:required', revision: 1, contentHash: 'a'.repeat(64), category: 'author', required: true, units: 12 }],
+    omitted: [],
+  }
+  const run = f.owner.begin({ ...f.begin, materialDecision: decision })
+  const binding = JSON.parse(f.db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(run.handle.runId) as string) as {
+    sourceManifest: Record<string, unknown>; fingerprint: { contextSnapshotHash: string }; contextSnapshotId: string
+  }
+  expect(binding.sourceManifest.materialDecision).toEqual(decision)
+  expect(binding.sourceManifest.materialDecisionHash).toMatch(/^[a-f0-9]{64}$/)
+  expect(binding.contextSnapshotId).toBe(`context:${binding.fingerprint.contextSnapshotHash}`)
+  expect(f.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(1)
+  // 非法裁决在开出任何预算/运行之前就被拒绝：形状校验先于 DB 事务。
+  expect(() => f.owner.begin({ ...f.begin, uiActionNonce: 'click:invalid',
+    materialDecision: { ...decision, verdict: 'capacity-conflict' } as unknown as BeginGenerationRequest['materialDecision'] }))
+    .toThrow('GENERATION_MATERIAL_DECISION_INVALID')
+  expect(f.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(1)
+});
+
+it('rejects prompt substitution before the first material-bound request', async () => {
+  const f = fixture()
+  const prompt = '只审查当前正文。'
+  const decision: NonNullable<BeginGenerationRequest['materialDecision']> = {
+    version: 1, verdict: 'admitted', promptHash: textHash(prompt),
+    capacity: { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1', admittedUnits: 12 },
+    coverage: { required: 1, included: 1, complete: true },
+    included: [{ sourceId: 'author:required', revision: 1, contentHash: 'a'.repeat(64), category: 'author', required: true, units: 12 }],
+    omitted: [],
+  }
+  const run = f.owner.begin({ ...f.begin, materialDecision: decision })
+  await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'wrong-prompt', task: {
+    purpose: 'chapter-draft', output: 'visible-text', messages: [{ role: 'user', content: '被替换的提示词' }],
+  } })).rejects.toThrow('GENERATION_MATERIAL_PROMPT_MISMATCH')
+  expect(f.db.prepare('SELECT COUNT(*) FROM generation_attempts').pluck().get()).toBe(0)
+});
+
 it('freezes changed sources in a distinct child run without resetting the author action budget', async () => {
   const fetch = syntheticStream(), f = fixture();
   const first = f.owner.begin(f.begin);
@@ -276,7 +320,7 @@ describe('explicit visible continuation composition', () => {
     expect(reopened.readVisibleComposition(resumed.handle)?.text).toBe(expected)
     expect(resumed.ledger?.physicalRequests).toBe(2)
   })
-  it('rejects wrong hash, foreign/reordered artifacts, regression and changed formal sources', async () => {
+  it('rejects wrong hash, foreign/reordered artifacts and regression while keeping source-drift candidates readable', async () => {
     const f = sequence(['第一段正文。', '第二段正文。', '别的动作候选。'])
     const run = f.owner.begin(f.begin)
     const first = await f.owner.execute({ handle: run.handle, invocationNonce: 'first', task })
@@ -291,8 +335,12 @@ describe('explicit visible continuation composition', () => {
     const other = await f.owner.execute({ handle: another.handle, invocationNonce: 'third', task })
     expect(() => f.owner.composeVisible(run.handle, [a, other.outcome.receipt.visibleArtifact!.artifactId], textHash(''))).toThrow('GENERATION_COMPOSITION_SOURCE_INVALID')
     f.db.exec("UPDATE project_core SET premise='作者刚修改的正式内容'")
-    expect(() => f.owner.composeVisible(run.handle, [a, b], textHash(composeVisibleContinuation(first.outcome.content, second.outcome.content)))).toThrow('GENERATION_SOURCE_CHANGED')
-    expect(f.owner.readVisibleComposition(run.handle)?.text).toBe(first.outcome.content)
+    const candidate = composeVisibleContinuation(first.outcome.content, second.outcome.content)
+    expect(f.owner.composeVisible(run.handle, [a, b], textHash(candidate)).text).toBe(candidate)
+    expect(f.owner.readVisibleComposition(run.handle)).toMatchObject({ text: candidate, textHash: textHash(candidate), artifactIds: [a, b] })
+    expect(() => f.owner.assertSourcesCurrent(run.handle)).toThrow('GENERATION_SOURCE_CHANGED')
+    f.owner.cancel(run.handle)
+    expect(() => f.owner.composeVisible(run.handle, [a, b], textHash(candidate))).toThrow('GENERATION_ACTION_CANCELLED')
   })
   it('refuses edited or discarded composition sources without hiding remaining raw candidates', async () => {
     const f = sequence(['合法候选正文。']), run = f.owner.begin(f.begin)
@@ -318,7 +366,7 @@ it('freezes a purpose-specific output exception and rejects all undeclared chang
 
 describe('main generation owner with actual SQLite and provider adapter', () => {
   it('marks before sending, preserves exact visible text and replays one durable nonce without network', async () => {
-    const fetch = syntheticStream(), f = fixture(), view = f.owner.begin(f.begin)
+    const reasoning: string[] = [], fetch = syntheticStream(), f = fixture(undefined, false, event => reasoning.push(event.text)), view = f.owner.begin(f.begin)
     fetch.mockImplementationOnce(async (...args) => {
       expect(JSON.parse(f.db.prepare('SELECT attempt_json FROM generation_attempts').pluck().get() as string).status).toBe('dispatch-marked')
       const body = JSON.parse((args[1] as RequestInit).body as string)
@@ -333,6 +381,8 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     expect(result.run.artifacts[0]).toMatchObject({ revision: 1, durableRevision: 1, status: 'completed' })
     expect(JSON.stringify(result)).not.toContain('synthetic-private-key')
     expect(JSON.stringify(result)).not.toContain('隐藏')
+    expect(reasoning).toEqual(['隐藏'])
+    expect(JSON.stringify(f.db.prepare('SELECT artifact_json FROM generation_artifacts').all())).not.toContain('隐藏')
     await f.owner.execute({ handle: view.handle, invocationNonce: 'call', task })
     expect(fetch).toHaveBeenCalledTimes(1)
     expect(f.owner.list()[0].ledger?.physicalRequests).toBe(1)
@@ -435,18 +485,18 @@ describe('durable character proposals from actual generation artifacts', () => {
     f.db.exec("UPDATE project_core SET global_guidance='作者的新约束'")
     expect(() => f.owner.characterProposals.approve({ proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision,
       operationId: 'stale', selections: batch.items.map(item => ({ selectionKey: item.selectionKey, action: 'create' })) })).toThrow('CHARACTER_PROPOSAL_SOURCE_CHANGED')
-    expect(f.owner.characterProposals.cancel(batch.proposalBatchId).status).toBe('cancelled')
+    expect(f.owner.characterProposals.cancel({ proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision }).status).toBe('cancelled')
     expect(f.owner.characterProposals.read(batch.proposalBatchId).items).toHaveLength(2)
     expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
   })
 })
 
 describe('main draft persistence and batch lineage', () => {
-  const authorInputs = [{ id: 'draft:target-units', text: '10' }]
+  const authorInputs = [{ id: 'draft:target-units', text: '20' }]
   const draftText = '清晨的街道渐渐苏醒，林岚带着昨日的线索走向城门。'
-  function drafting() {
+  function drafting(text = draftText) {
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
-      options.onVisible({ kind: 'delta', text: `${draftText}\n点我继续生成后续内容` })
+      options.onVisible({ kind: 'delta', text: `${text}\n点我继续生成后续内容` })
       return { finishReason: 'stop', usage: null }
     })
     const f = fixture(dispatch)
@@ -470,6 +520,36 @@ describe('main draft persistence and batch lineage', () => {
     expect(reopened.commitDraft(generated.request)).toEqual(saved)
     expect(reopened.readContext(generated.run.handle)).toMatchObject({ savedDraft: saved, attemptedPurposes: ['chapter-draft'] })
     expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+    expect(f.dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('keeps an oversized composition reviewable without creating a draft', async () => {
+    const f = drafting(draftText.repeat(2)), generated = await generate(f, { ...f.begin, authorInputs })
+    expect(() => f.owner.commitDraft(generated.request)).toThrow('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE')
+    expect(f.owner.readVisibleComposition(generated.run.handle)?.text).toBe(draftText.repeat(2))
+    expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(0)
+    expect(f.dispatch).toHaveBeenCalledTimes(1)
+    expect(f.owner.pause(generated.run.handle).status).toBe('paused')
+    const reopened = f.reopen()
+    const resumed = await reopened.resume(generated.run.handle)
+    expect(resumed.ledger?.physicalRequests).toBe(1)
+    expect(reopened.readVisibleComposition(resumed.handle)?.text).toBe(draftText.repeat(2))
+    expect(f.dispatch).toHaveBeenCalledTimes(1)
+  })
+  it.each([
+    [1399, 'GENERATION_DRAFT_INCOMPLETE'],
+    [1400, null],
+    [2600, null],
+    [2601, 'GENERATION_DRAFT_LENGTH_OUT_OF_RANGE'],
+  ] as const)('enforces the exact main-owned 2000-unit boundary at %i', async (units, error) => {
+    const text = '正'.repeat(units), f = drafting(text)
+    const generated = await generate(f, { ...f.begin, authorInputs: [{ id: 'draft:target-units', text: '2000' }] })
+    if (error) {
+      expect(() => f.owner.commitDraft(generated.request)).toThrow(error)
+      expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(0)
+    } else {
+      expect(f.owner.commitDraft(generated.request).content).toBe(text)
+      expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+    }
     expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
   it('refuses a formal save after a structured character fact changes', async () => {
@@ -499,13 +579,25 @@ describe('main draft persistence and batch lineage', () => {
   it('keeps chapter lineage, pending recovery identity and the original batch root', async () => {
     const f = drafting()
     f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
-    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 10,
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
       uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
     const selection = { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId }
     const first = await generate(f, selection), saved = f.owner.commitDraft(first.request)
     expect(f.owner.readBatch(batch.batchId).nextChapterNumber).toBe(2)
     expect(() => f.owner.begin({ ...selection, chapterNumber: 2, uiActionNonce: 'chapter2' })).toThrow('GENERATION_BATCH_LINEAGE_INVALID')
-    const next = f.owner.begin({ ...selection, chapterNumber: 2, uiActionNonce: 'chapter2', selectedDraftIds: [saved.id] })
+    const materialDecision: NonNullable<BeginGenerationRequest['materialDecision']> = {
+      version: 1, verdict: 'admitted', promptHash: 'b'.repeat(64),
+      capacity: { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1', admittedUnits: 24 },
+      coverage: { required: 2, included: 2, complete: true },
+      included: [
+        { sourceId: 'author:required', revision: 1, contentHash: 'a'.repeat(64), category: 'author', required: true, units: 12 },
+        { sourceId: `candidate:${saved.id}`, revision: saved.version, contentHash: saved.contentHash,
+          category: 'finalized-history', required: true, units: 12 },
+      ],
+      omitted: [],
+    }
+    const next = f.owner.begin({ ...selection, chapterNumber: 2, uiActionNonce: 'chapter2', selectedDraftIds: [saved.id], materialDecision })
+    expect(f.owner.readContext(next.handle).selectedDrafts).toMatchObject([{ draftId: saved.id, required: true }])
     expect(f.owner.readBatch(batch.batchId).currentChapterRunHandle).toEqual(next.handle)
     expect(() => f.owner.begin({ ...selection, chapterNumber: 2, uiActionNonce: 'duplicate', selectedDraftIds: [saved.id] })).toThrow('GENERATION_BATCH_RECOVERY_REQUIRED')
     const reopened = f.reopen()
@@ -514,9 +606,20 @@ describe('main draft persistence and batch lineage', () => {
     expect(resumed.handle.rootActionId).toBe(batch.rootHandle.rootActionId)
     expect(resumed.ledger?.physicalRequests).toBe(1)
   })
+  it('does not advance a batch after an oversized composition is refused', async () => {
+    const f = drafting(draftText.repeat(2))
+    f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
+    const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
+      uiActionNonce: 'oversized-batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    expect(() => f.owner.commitDraft(generated.request)).toThrow('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE')
+    expect(f.owner.readBatch(batch.batchId)).toMatchObject({ nextChapterNumber: 1, completedChapters: [] })
+    expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(0)
+    expect(f.dispatch).toHaveBeenCalledTimes(1)
+  })
   it('waits for the exact finalization postprocess before advancing an automatic batch', async () => {
     const f = drafting()
-    const batch = f.owner.beginBatch({ mode: 'auto_finalize', range: { startChapter: 1, endChapter: 1 }, targetUnits: 10,
+    const batch = f.owner.beginBatch({ mode: 'auto_finalize', range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
       uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
     const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
     const saved = f.owner.commitDraft(generated.request)

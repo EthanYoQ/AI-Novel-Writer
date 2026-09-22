@@ -15,7 +15,7 @@ import { PostProcessPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
 import { requireIpcSuccess } from '../../ipc-result'
 import { commitFinalizationSnapshot } from '../../finalization-client'
-import type { FinalizationSnapshot } from '../../finalization-snapshot'
+import { finalizationContentRevision, type FinalizationSnapshot } from '../../finalization-snapshot'
 import {
   projectSessionContextFromProject,
   sameProjectSessionContext,
@@ -551,7 +551,7 @@ export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
       chapterNumber: this.params.chapterNumber,
       chapterTitle: this.params.chapterInfo.title,
       content: this.params.draftContent,
-      contentRevision: 0,
+      contentRevision: finalizationContentRevision(undefined),
     })
   }
 }

@@ -134,6 +134,90 @@ it.each([false, true])('world restart uses only acknowledged composition (availa
   expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:begin')).toHaveLength(1)
 })
 
+it.each([false, true])('world first length composes its artifact before continuation (compose fails=%s)', async composeFails => {
+  const f = fixture(), original = f.invoke.getMockImplementation()!
+  const handle = { projectId: projectSession.projectId, epoch: projectSession.leaseId, rootActionId: '主进程根', runId: '主进程运行' }
+  const view = { handle, status: 'running', nonReplayable: false, artifacts: [], budget: { maxAttempts: 32, maxRequestedOutputTokens: 2097152, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: 9999999999999 } }
+  const first = '古城以记忆作为税收与燃料，行会核对每笔税册。'
+  const second = '王庭公开裁决争议，港口居民据此重建通行规则。'
+  const hash = async (value: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))), byte => byte.toString(16).padStart(2, '0')).join('')
+  let partial: Record<string, unknown> = {}
+  let composition: { text: string; textHash: string; artifactIds: string[] } | null = null
+  const formalWrites: unknown[] = []
+  let requests = 0
+  f.invoke.mockImplementation(async (channel, ...args) => {
+    if (channel === 'db:project-core-get') return { premise: '测绘师追查记忆税令，保护沿岸聚落免于倒悬古城的灾难。'.repeat(4), worldbuilding: '作者已确认的正式世界观。' }
+    if (channel === 'fs:read-json') return { success: true, data: structuredClone(partial) }
+    if (channel === 'fs:write-json') { partial = structuredClone(args[1] as Record<string, unknown>); return { success: true } }
+    if (channel === 'generation:begin' || channel === 'generation:read') return view
+    if (channel === 'generation:read-visible-composition') return composition
+    if (channel === 'generation:execute') {
+      const content = requests++ === 0 ? first : second
+      return { run: view, outcome: { status: 'incomplete', content, finishReason: 'length', receipt: { finishReason: 'length', visibleArtifact: { artifactId: `响应${requests}`, attemptId: `尝试${requests}`, revision: 1, textHash: await hash(content) } } } }
+    }
+    if (channel === 'generation:compose-visible') {
+      if (composeFails) throw new Error('合成拒绝')
+      const text = composeVisibleContinuation(composition?.text ?? '', composition ? second : first)
+      expect(args[2]).toBe(await hash(text))
+      composition = { text, textHash: await hash(text), artifactIds: args[1] as string[] }
+      return composition
+    }
+    if (channel === 'db:project-core-commit-generated') { formalWrites.push(args[0]); return { success: true } }
+    return original(channel, ...args)
+  })
+  const snapshot = { expectedProjectPath: projectSession.projectPath, novelConfig: {} } as never
+  const operation = new GenerateWorldBuildingCommand(snapshot).execute({ step: {}, ...f })
+  if (composeFails) await expect(operation).rejects.toThrow('合成拒绝')
+  else await expect(operation).rejects.toThrow('世界观未能完整生成')
+  expect(requests).toBe(composeFails ? 1 : 2)
+  expect((composition as { text: string } | null)?.text).toBe(composeFails ? undefined : composeVisibleContinuation(first, second))
+  if (!composeFails) {
+    const calls = f.invoke.mock.calls.map(([channel]) => channel)
+    expect(calls.indexOf('generation:compose-visible')).toBeLessThan(calls.lastIndexOf('generation:execute'))
+  }
+  expect(partial.world_building_partial_result).toBeUndefined()
+  expect(formalWrites).toEqual([])
+})
+
+it('world first stop keeps an inspectable main candidate when its source changes', async () => {
+  const f = fixture(), original = f.invoke.getMockImplementation()!
+  const project = useProjectStore.getState().currentProject!
+  const handle = { projectId: projectSession.projectId, epoch: projectSession.leaseId, rootActionId: '主进程根', runId: '主进程运行' }
+  const view = { handle, status: 'running', nonReplayable: false, artifacts: [], budget: { maxAttempts: 32, maxRequestedOutputTokens: 2097152, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: 9999999999999 } }
+  const candidate = '古城以记忆为税，港口行会负责清点税册，王庭公开裁决争议。'
+  const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(candidate))), byte => byte.toString(16).padStart(2, '0')).join('')
+  let partial: Record<string, unknown> = {}
+  let composition: { text: string; textHash: string; artifactIds: string[] } | null = null
+  const formal = '作者确认的正式世界观 B1。'
+  const formalWrites: unknown[] = []
+  f.invoke.mockImplementation(async (channel, ...args) => {
+    if (channel === 'db:project-core-get') return { premise: '测绘师追查记忆税令，保护沿岸聚落免于倒悬古城的灾难。'.repeat(4), worldbuilding: formal }
+    if (channel === 'fs:read-json') return { success: true, data: structuredClone(partial) }
+    if (channel === 'fs:write-json') { partial = structuredClone(args[1] as Record<string, unknown>); return { success: true } }
+    if (channel === 'generation:begin' || channel === 'generation:read') return view
+    if (channel === 'generation:read-visible-composition') return composition
+    if (channel === 'generation:execute') {
+      useProjectStore.setState({ currentProject: { ...project, novelConfig: { ...project.novelConfig, worldSetting: '作者在生成期间改动的设定。' } } })
+      return { run: view, outcome: { status: 'completed', content: candidate, finishReason: 'stop', receipt: { finishReason: 'stop', visibleArtifact: { artifactId: '首次响应', attemptId: '首次尝试', revision: 1, textHash: digest } } } }
+    }
+    if (channel === 'generation:compose-visible') {
+      expect(args).toEqual([handle, ['首次响应'], digest, projectSession])
+      composition = { text: candidate, textHash: digest, artifactIds: ['首次响应'] }
+      return composition
+    }
+    if (channel === 'db:project-core-commit-generated') { formalWrites.push(args[0]); return { success: true } }
+    return original(channel, ...args)
+  })
+  const snapshot = { expectedProjectPath: projectSession.projectPath, novelConfig: {} } as never
+  await expect(new GenerateWorldBuildingCommand(snapshot).execute({ step: {}, ...f })).rejects.toThrow('本次结果已保留为候选')
+  expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:begin')).toHaveLength(1)
+  expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:execute')).toHaveLength(1)
+  expect(formalWrites).toEqual([])
+  expect(partial).toMatchObject({ world_building_generation_handle: handle, world_building_incomplete: true })
+  expect(partial.world_building_partial_result).toBeUndefined()
+  expect(await f.invoke('generation:read-visible-composition', handle, projectSession)).toEqual({ text: candidate, textHash: digest, artifactIds: ['首次响应'] })
+})
+
 it.each([false, true])('synopsis restart uses only acknowledged composition (available=%s)', async acknowledged => {
   const f = fixture(), original = f.invoke.getMockImplementation()!
   const handle = { projectId: projectSession.projectId, epoch: projectSession.leaseId, rootActionId: '主进程根', runId: '主进程运行' }

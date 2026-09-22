@@ -17,7 +17,7 @@ import {
   captureProjectSession,
   isProjectSessionCurrent,
 } from '../project-session-gate'
-import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import type { ExternalDirectoryGrant, ProjectSessionContext } from '../../shared/ipc-channels'
 import { resolveWritingLanguage } from '../../shared/writing-language'
 
 interface Props {
@@ -56,11 +56,33 @@ export default function ExportDialog({ isOpen, onClose }: Props) {
         writingLanguage: resolveWritingLanguage(currentProject.novelConfig.writingLanguage),
       }),
     })
-    const destination = await ipc.invoke('dialog:select-export-directory')
+    let destination: ExternalDirectoryGrant | null
+    try {
+      destination = await ipc.invoke('dialog:select-export-directory')
+    } catch {
+      if (!isProjectSessionCurrent(projectSession)) return
+      setTaskState({
+        session: projectSession,
+        exporting: false,
+        result: { success: false, error: text('选择导出目录失败，请重试。', 'Could not choose an export folder. Try again.') },
+      })
+      return
+    }
     if (!destination || !isProjectSessionCurrent(projectSession)) return
 
     setTaskState({ session: projectSession, exporting: true, result: null })
-    const res = await exportNovel({ format, grantId: destination.grantId, includeOutline }, projectSnapshot, projectSession)
+    let res: Awaited<ReturnType<typeof exportNovel>>
+    try {
+      res = await exportNovel({ format, grantId: destination.grantId, includeOutline }, projectSnapshot, projectSession)
+    } catch {
+      if (!isProjectSessionCurrent(projectSession)) return
+      setTaskState({
+        session: projectSession,
+        exporting: false,
+        result: { success: false, error: text('导出失败，请重试。', 'Export failed. Try again.') },
+      })
+      return
+    }
     if (!isProjectSessionCurrent(projectSession)) return
     setTaskState({
       session: projectSession,

@@ -62,6 +62,14 @@ export function createMainGenerationTransport(captureSession = getActiveProjectS
       })
       return () => { if (!closed) { closed = true; unsubscribe() } }
     },
+    subscribeReasoning(handle, listener) {
+      const frozen = Object.freeze({ ...handle }); sessionFor(frozen)
+      let closed = false
+      const unsubscribe = ipc.on('generation:reasoning', event => {
+        if (!closed && handleKey(event) === handleKey(frozen)) listener(event)
+      })
+      return () => { if (!closed) { closed = true; unsubscribe() } }
+    },
   }
   return Object.assign(transport, {
     async begin(sessionInput: ProjectSessionContext, request: BeginGenerationRequest) {

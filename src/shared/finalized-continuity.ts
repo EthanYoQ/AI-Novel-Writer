@@ -64,6 +64,48 @@ export interface FinalizedCharacterStateCandidate {
   displayName?: string
   rawValue?: unknown
   reason?: 'author-protected' | 'legacy-protected'
+  /** Present on current source-bound decisions; omitted only by preserved legacy rows. */
+  candidateKey?: string
+  source?: FinalizedSourceIdentity
+  expectedFieldRevision?: number
+  expectedFieldValueHash?: string
+}
+
+export interface PendingFinalizedCharacterStateCandidate extends FinalizedCharacterStateCandidate {
+  candidateKey: string
+  characterId: string
+  source: FinalizedSourceIdentity
+  expectedFieldRevision: number
+  expectedFieldValueHash: string
+}
+
+export interface PendingFinalizedCharacterStateCandidateSummary {
+  draftId: number
+  candidateKey: string
+  finalizationId: string
+  characterId: string
+  characterName: string
+  field: CharacterStateTextField
+}
+
+export interface FinalizedCharacterStateDecisionRequest {
+  draftId: number
+  candidateKey: string
+  characterId: string
+  field: CharacterStateTextField
+  expectedFieldRevision: number
+  expectedFieldValueHash: string
+  operationId: string
+  decision: 'accept' | 'decline'
+}
+
+export interface FinalizedCharacterStateDecisionReceipt {
+  candidateKey: string
+  operationId: string
+  payloadHash: string
+  decision: 'accept' | 'decline'
+  source: FinalizedSourceIdentity
+  idempotent: boolean
 }
 
 /** Offsets count JS UTF-16 code units in the immutable, unnormalized prose. */
@@ -163,6 +205,8 @@ export function parseFinalizedCharacterStateResponse(content: string, context: F
 
 export interface FinalizedContinuityProjection {
   draftId: number
+  /** Current finalized prose to read when this derived locator is stale. */
+  currentFinalizedDraftId?: number
   chapterNumber: number
   chapterTitle: string
   chapterNotes: string

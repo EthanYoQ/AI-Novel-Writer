@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { createMainGenerationTransport } from '../main-generation-transport'
-import type { MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot } from '../generation-runtime'
+import type { MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot, MainGenerationReasoningEvent } from '../generation-runtime'
 import type { ProjectSessionContext } from '../../../shared/ipc-channels'
 import type { BeginGenerationRequest } from '../../../shared/generation-owner-contract'
 
@@ -11,13 +11,14 @@ const intent: BeginGenerationRequest = { operation: '正文', uiActionNonce: '�
 function fixture() {
   let active: ProjectSessionContext | null = { ...session }
   let listener: (snapshot: MainGenerationSnapshot) => void = () => {}
+  let reasoningListener: (event: MainGenerationReasoningEvent) => void = () => {}
   const unsubscribe = vi.fn()
   const invoke = vi.fn(async (channel: string) => channel === 'generation:list' ? [structuredClone(view)] : channel === 'generation:execute' ? { outcome: { status: 'incomplete', finishReason: 'unknown' }, run: structuredClone(view) } : structuredClone(view))
-  const on = vi.fn((_channel, callback) => { listener = callback; return unsubscribe })
+  const on = vi.fn((channel, callback) => { if (channel === 'generation:reasoning') reasoningListener = callback; else listener = callback; return unsubscribe })
   vi.stubGlobal('window', { aiNovelAPI: { invoke, on } })
   const capture = vi.fn(() => active)
   const transport = createMainGenerationTransport(capture)
-  return { transport, invoke, on, unsubscribe, capture, activate: (next: ProjectSessionContext | null) => { active = next }, emit: (value: MainGenerationSnapshot) => listener(value) }
+  return { transport, invoke, on, unsubscribe, capture, activate: (next: ProjectSessionContext | null) => { active = next }, emit: (value: MainGenerationSnapshot) => listener(value), emitReasoning: (value: MainGenerationReasoningEvent) => reasoningListener(value) }
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 it('构造及安装对象无IPC；begin显式冻结session和语义intent', async () => {
@@ -61,6 +62,16 @@ it('snapshot按完整handle筛选，退订后迟到事件不再投影', () => {
   for (const key of ['projectId', 'epoch', 'rootActionId', 'runId']) f.emit({ ...snapshot, [key]: '外来' })
   expect(received).not.toHaveBeenCalled(); f.emit(snapshot); expect(received).toHaveBeenCalledExactlyOnceWith(snapshot)
   stop(); stop(); f.emit(snapshot); expect(received).toHaveBeenCalledTimes(1); expect(f.unsubscribe).toHaveBeenCalledTimes(1)
+})
+it('临时推理只投影到匹配的运行且退订后消失', () => {
+  const f = fixture(), received = vi.fn(), stop = f.transport.subscribeReasoning!(handle, received)
+  const event: MainGenerationReasoningEvent = { ...handle, attemptId: '请求', text: '临时推理' }
+  f.emitReasoning({ ...event, runId: '外来运行' })
+  expect(received).not.toHaveBeenCalled()
+  f.emitReasoning(event)
+  expect(received).toHaveBeenCalledExactlyOnceWith(event)
+  stop(); f.emitReasoning(event)
+  expect(received).toHaveBeenCalledTimes(1)
 })
 it('transport失败不重发unknown请求，不改nonce也不另发cancel', async () => {
   const f = fixture(); f.invoke.mockRejectedValue(new Error('回包丢失'))

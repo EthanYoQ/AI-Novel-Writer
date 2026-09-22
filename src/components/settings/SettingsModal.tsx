@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import {
   X, Plus, Trash2, Check, Save, Globe, Cpu, Database,
   Type, Settings2, Zap, Eye, EyeOff, ChevronDown, MessageSquare,
-  Info, Palette, ExternalLink, RefreshCw, RotateCcw, BookOpen,
+  Info, Palette, ExternalLink, RefreshCw, RotateCcw, BookOpen, HardDriveUpload,
 } from 'lucide-react'
 import PromptSettings from './PromptSettings'
 import SkillSettings from './SkillSettings'
@@ -36,6 +36,7 @@ import {
   ModelReasoningOverrideSettings,
   ProjectCreativeStrategySettings,
 } from './ReasoningPolicySettings'
+import ProjectBackupPanel from '../backups/ProjectBackupPanel'
 
 // ==================== 分类定义 ====================
 
@@ -59,6 +60,7 @@ export const SETTINGS_SECTIONS: SectionItem[] = [
   { id: 'editor', label: '编辑器', labelEn: 'Editor', icon: <Type size={16} />, description: '字体大小、自动保存等编辑器偏好设置', descriptionEn: 'Fonts and other editor preferences' },
   { id: 'prompts', label: '提示词模板', labelEn: 'Prompt templates', icon: <MessageSquare size={16} />, description: '自定义 AI 创作各环节使用的提示词模板', descriptionEn: 'Customize guidance for each AI writing stage' },
   { id: 'skills', label: '写作 Skills', labelEn: 'Writing skills', icon: <BookOpen size={16} />, description: '检查、安装并绑定提示词型写作 Skill', descriptionEn: 'Inspect, install, and bind prompt-only writing skills' },
+  { id: 'backup', label: '项目备份', labelEn: 'Project backup', icon: <HardDriveUpload size={16} />, description: '导出本地存档，或显式绑定 WebDAV 后创建云备份', descriptionEn: 'Export local archives or explicitly bind WebDAV for cloud backups' },
   { id: 'about', label: '关于', labelEn: 'About', icon: <Info size={16} />, description: '版本、定位与本地部署说明', descriptionEn: 'Version, positioning, and local deployment' },
 ]
 
@@ -163,6 +165,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
             {section === 'editor' && <EditorSection />}
             {section === 'prompts' && <PromptSettings />}
             {section === 'skills' && <SkillSettings />}
+            {section === 'backup' && <ProjectBackupPanel />}
             {section === 'about' && <AboutSection />}
           </div>
         </main>

@@ -1,11 +1,12 @@
 import { X, FileText, Settings, Users, ArrowLeftRight, MoreHorizontal, BookOpen, History, ClipboardCheck, Globe, Save, ChevronLeft, ChevronRight, PenTool, Check } from 'lucide-react'
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react'
 import { ContextMenu, type ContextMenuEntry } from '../ui/ContextMenu'
 import {
   Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
 } from '../ui/Dialog'
 import { Button } from '../ui/Button'
 import CodeMirrorEditor from '../editor/CodeMirrorEditor'
+import { SaveFeedback, type SaveOutcome } from '../editor/save-feedback'
 import NovelConfigEditor from '../editor/NovelConfigEditor'
 import CharacterEditor from '../editor/CharacterEditor'
 import ChapterCardEditor from '../editor/ChapterCardEditor'
@@ -17,12 +18,14 @@ import ReviewReport from '../editor/ReviewReport'
 import NarrativeThreadEditor from '../editor/NarrativeThreadEditor'
 import ThreeWayMerge from '../editor/ThreeWayMerge'  // 保留引用以防其他入口使用
 import WelcomePage from '../pages/WelcomePage'
+import { WriterWelcomePage } from '../pages/v2/use-project-overview'
 import KnowledgeOverview from '../pages/KnowledgeOverview'
 import { useProjectStore } from '../../stores/project-store'
 import { registerEditorExitSaveHandler, useEditorStore, type EditorTab } from '../../stores/editor-store'
 import { discardAndCloseEditorTab } from '../../stores/editor-discard'
 import { useLayoutStore } from '../../stores/layout-store'
 import { useLocaleStore } from '../../stores/locale-store'
+import { useAppearanceStore } from '../../stores/appearance-bootstrap'
 
 
 import { ipc } from '../../services/ipc-client'
@@ -51,20 +54,28 @@ function ProseEditorWrapper({
 }) {
   const [wordCount, setWordCount] = useState(0)
   const [saving, setSaving] = useState(false)
+  const [saveOutcome, setSaveOutcome] = useState<SaveOutcome>('idle')
   const fileName = tab.name
   // 追踪当前编辑器内容，供保存按钮使用（不触发重渲染）
   const currentContentRef = useRef(tab.content ?? '')
   const text = useLocaleStore(s => s.text)
 
-  const handleSave = useCallback(async (text: string) => {
+  const handleSave = useCallback(async (content: string, propagateFailure = false) => {
     if (!onSave) return
     setSaving(true)
+    setSaveOutcome('idle')
     try {
-      await onSave(text)
+      await onSave(content)
+      const settledTab = useEditorStore.getState().tabs.find(candidate => candidate.id === tab.id)
+      setSaveOutcome(settledTab?.dirty ? 'idle' : 'saved')
+    } catch (error) {
+      setSaveOutcome('failed')
+      toast.error(error instanceof Error ? error.message : text('保存失败', 'Save failed'))
+      if (propagateFailure) throw error
     } finally {
       setSaving(false)
     }
-  }, [onSave])
+  }, [onSave, tab.id, text])
 
   useEffect(() => {
     if (!onSave) return
@@ -72,7 +83,7 @@ function ProseEditorWrapper({
       tabId: tab.id,
       type: tab.type,
       projectKey: tab.projectKey,
-      save: () => handleSave(currentContentRef.current),
+      save: () => handleSave(currentContentRef.current, true),
     })
   }, [handleSave, onSave, tab.id, tab.projectKey, tab.type])
 
@@ -113,12 +124,13 @@ function ProseEditorWrapper({
               title={text('有未保存的修改', 'Unsaved changes')}
             />
           )}
+          <SaveFeedback dirty={Boolean(tab.dirty)} saving={saving} outcome={saveOutcome} />
           {/* 保存按钮（有改动时显示） */}
           {tab.dirty && onSave && (
             <button
               className="icon-btn"
               style={{ width: 24, height: 22 }}
-              onClick={() => handleSave(currentContentRef.current)}
+              onClick={() => { void handleSave(currentContentRef.current) }}
               disabled={saving}
               title={text('保存（⌘S）', 'Save (⌘S)')}
             >
@@ -134,6 +146,7 @@ function ProseEditorWrapper({
           key={tab.id}
           mode="prose"
           content={tab.content ?? ''}
+          paperHead={{ title: fileName }}
           editable={!readOnly}
           filePath={tab.filePath}
           hideStatusBar
@@ -142,6 +155,7 @@ function ProseEditorWrapper({
             if (readOnly) return
             // 同步 ref，供保存按钮使用
             currentContentRef.current = text
+            setSaveOutcome('idle')
             // 标记 tab.dirty
             useEditorStore.getState().updateTabContent(tab.id, text)
           }}
@@ -166,6 +180,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
   const closeTab = useEditorStore(s => s.closeTab)
   const setActiveTab = useEditorStore(s => s.setActiveTab)
   const sidebarView = useLayoutStore((s) => s.sidebarView)
+  const resolvedShell = useAppearanceStore((s) => s.resolvedShell)
 
 
 
@@ -187,6 +202,15 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
 
   // 防御性兜底：tabs 有内容但 activeTabId 无效时，激活第一个 tab
   const activeTab = tabs.find((t) => t.id === activeTabId)
+  const activeTabType = activeTab?.type
+  useEffect(() => {
+    if (resolvedShell !== 'writer' || !activeTabType || useLayoutStore.getState().sidebarView !== 'project') return
+    const activeRailItem = activeTabType === 'chapter-card' ? 'blueprint'
+      : activeTabType === 'world-building' ? 'world'
+      : activeTabType === 'narrative-thread' ? 'plot-tree'
+      : activeTabType === 'character' ? 'characters' : 'project'
+    useLayoutStore.setState({ activeRailItem })
+  }, [activeTabId, activeTabType, resolvedShell])
   useEffect(() => {
     if (tabs.length > 0 && !activeTab) {
       setActiveTab(tabs[0].id)
@@ -420,9 +444,12 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
 
   // ===== 条件渲染 =====
 
-  // 侧栏为「主页」时，中间区域显示欢迎页
+  // 辅助栏目只挂载当前页面；正文工作区在其后保持挂载，避免丢失编辑器本地状态。
+  let auxiliaryPage: ReactNode = null
   if (sidebarView === 'home') {
-    return (
+    auxiliaryPage = resolvedShell === 'writer' ? (
+      <WriterWelcomePage onNewProject={() => useLayoutStore.getState().openNewProject()} />
+    ) : (
       <WelcomePage
         onNewProject={() => {
           useLayoutStore.getState().openNewProject()
@@ -438,11 +465,8 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
         }}
       />
     )
-  }
-
-  // 侧栏为「角色管理」时，中间区域固定展示角色编辑器（跳过 Tab 系统）
-  if (sidebarView === 'characters') {
-    return (
+  } else if (sidebarView === 'characters') {
+    auxiliaryPage = (
       <div
         className="skin-workspace-page w-full h-full flex flex-col overflow-hidden"
         style={{ backgroundColor: 'var(--color-editor-bg)' }}
@@ -450,34 +474,33 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
         <CharacterEditor projectKey={currentProject?.path ?? ''} />
       </div>
     )
-  }
-
-  // 侧栏为「知识库」时，中间区域固定展示向量数据库查询界面（跳过 Tab 系统）
-  if (sidebarView === 'knowledge') {
-    return <KnowledgeOverview />
+  } else if (sidebarView === 'knowledge') {
+    auxiliaryPage = <KnowledgeOverview />
   }
 
   // 未打开项目时显示欢迎页
   if (!currentProject) {
-    return (
-      <WelcomePage
-        onNewProject={onNewProject}
-        onOpenProject={async () => {
-          const folder = await ipc.invoke('dialog:select-folder')
-          if (folder) {
-            useProjectStore.getState().openProject(folder)
-          }
-        }}
-        onImportNovel={() => {
-          useLayoutStore.getState().openImportNovel()
-        }}
-      />
+    return auxiliaryPage ?? (
+      resolvedShell === 'writer'
+        ? <WriterWelcomePage onNewProject={onNewProject} />
+        : <WelcomePage
+          onNewProject={onNewProject}
+          onOpenProject={async () => {
+            const folder = await ipc.invoke('dialog:select-folder')
+            if (folder) {
+              useProjectStore.getState().openProject(folder)
+            }
+          }}
+          onImportNovel={() => {
+            useLayoutStore.getState().openImportNovel()
+          }}
+        />
     )
   }
 
   // 有项目但没有打开的 Tab
   if (tabs.length === 0) {
-    return (
+    return auxiliaryPage ?? (
       <div
         className="skin-workspace-page w-full h-full flex flex-col overflow-hidden"
         style={{ backgroundColor: 'var(--color-editor-bg)' }}
@@ -507,10 +530,13 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
   }
 
   return (
-    <div
-      className="skin-workspace-page w-full h-full flex flex-col overflow-hidden"
-      style={{ backgroundColor: 'var(--color-editor-bg)' }}
-    >
+    <>
+      <div
+        className="skin-workspace-page w-full h-full flex flex-col overflow-hidden"
+        style={{ backgroundColor: 'var(--color-editor-bg)' }}
+        hidden={auxiliaryPage !== null}
+        aria-hidden={auxiliaryPage !== null || undefined}
+      >
       {/* Tab 条：左右箭头 + 可横向滚动区域 + 三个点菜单 */}
       <div
         className="no-select flex items-center flex-shrink-0"
@@ -850,6 +876,10 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
                         if (result.success) {
                           mergeCommitted = true
                           toast.success(text('合并完成，草稿已更新', 'Merge complete; draft updated'))
+                          if (result.postCommitError) toast.warning(text(
+                            '合并已持久化，但自动复验未启动；请从审稿报告重试。',
+                            'The merge is durable, but the automatic recheck did not start. Retry it from the review report.',
+                          ))
                         } else {
                           toast.error(text(`合并失败：${result.error}`, `Merge failed: ${result.error}`))
                         }
@@ -961,6 +991,8 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+      </div>
+      {auxiliaryPage}
+    </>
   )
 }

@@ -5,6 +5,7 @@ import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { isDeepStrictEqual } from 'node:util'
 import { runProductionCommandProbe, runProductionPhasePair, productionBridgeHash, productionExecutionRuntime, PRODUCTION_BRIDGE, PHASE_SCENARIOS } from './quality-modernization-driver.mjs'
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -27,6 +28,52 @@ export const PROTOCOL_PATH = path.join(ROOT, 'docs/research/novel-quality-modern
 const CAMPAIGN_ID_SUPERSESSION = { 'novel-quality-program-v3-80-v1': 'novel-quality-program-v3-uncapped-v1' }
 export const campaignIdFor = protocolId => CAMPAIGN_ID_SUPERSESSION[protocolId] ?? protocolId
 export const hash = value => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex')
+export function currentProtocolBinding() {
+  const bytes = fs.readFileSync(PROTOCOL_PATH)
+  const protocol = JSON.parse(bytes)
+  if (typeof protocol.decisionRevision !== 'string' || !protocol.decisionRevision) fail('INVALID_PROTOCOL_REVISION')
+  return { protocolRevision: protocol.decisionRevision, protocolHash: hash(bytes) }
+}
+export function assertProtocolBinding(value) {
+  const current = currentProtocolBinding()
+  if (value?.protocolRevision !== current.protocolRevision || value?.protocolHash !== current.protocolHash) fail('PROTOCOL_DRIFT')
+  return current
+}
+export function validateHistoricalLedgerBoundary(raw, boundary) {
+  if (!boundary || !Number.isSafeInteger(boundary.eventCount) || boundary.eventCount <= 0
+    || !/^[a-f0-9]{64}$/.test(boundary.rawBytesSha256)
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(boundary.evidenceInvocationId)
+    || !Array.isArray(boundary.finalReserveAttemptIds) || boundary.finalReserveAttemptIds.length === 0) fail('INVALID_HISTORICAL_LEDGER_BOUNDARY')
+  let prefixEnd = 0
+  for (let index = 0; index < boundary.eventCount; index++) {
+    prefixEnd = raw.indexOf('\n', prefixEnd)
+    if (prefixEnd < 0) fail('HISTORICAL_LEDGER_BOUNDARY_MISSING')
+    prefixEnd++
+  }
+  const prefix = raw.slice(0, prefixEnd)
+  if (hash(prefix) !== boundary.rawBytesSha256) fail('HISTORICAL_LEDGER_BOUNDARY_DRIFT')
+  const rows = prefix.slice(0, -1).split('\n').map(line => JSON.parse(line))
+  const reserves = new Set(rows.filter(row => row?.type === 'reserve').map(row => row.attemptId))
+  if (boundary.finalReserveAttemptIds.some(attemptId => typeof attemptId !== 'string' || !reserves.has(attemptId))) fail('HISTORICAL_LEDGER_EVIDENCE_MISSING')
+  return boundary.eventCount
+}
+export function validateCampaignBinding(binding, { campaignMode, protocol, historical = false }) {
+  if (!binding || binding.campaignId !== CAMPAIGN_ID || binding.mode !== campaignMode
+    || !['baseline', 'candidate'].includes(binding.arm) || !/^[a-f0-9]{40}$/.test(binding.codeSha)
+    || ['sourceHash', 'driverHash', 'parityId'].some(key => !/^[a-f0-9]{64}$/.test(binding[key]))
+    || !['early', 'post-ui'].includes(binding.milestone)) fail('INVALID_CAMPAIGN_BINDING')
+  // The frozen prefix is authenticated byte-for-byte by its boundary hash. Its old
+  // protocol selection and allocation are historical evidence, not input to the
+  // current revision, so only the stable envelope is rechecked here.
+  if (historical) return
+  assertProtocolBinding(binding)
+  const phase = protocol.phases[binding.phase]
+  if (!phase || !Array.isArray(phase.operations) || !Array.isArray(phase.caseIds)
+    || !phase.caseIds.includes(binding.caseId)
+    || !phase.operations.some(operation => operation.id === binding.operation)) fail('INVALID_CAMPAIGN_BINDING')
+  if (binding.arm === 'candidate' && (!binding.actual || ['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch']
+    .some(key => typeof binding.actual[key] !== 'string' || !binding.actual[key]))) fail('ACTUAL_OWNER_ATTEMPT_REQUIRED')
+}
 export const runnerAdapterHash = () => hash(['scripts/quality-modernization-run.mjs', 'scripts/quality-modernization-driver.mjs', PRODUCTION_BRIDGE].map(file => [file, hash(fs.readFileSync(path.join(ROOT, file)))]))
 const fail = code => { throw new Error(code) }
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -50,6 +97,10 @@ export function assertCommittedProductionFiles(root) {
   const files = git(root, ['ls-files', '--others', '--exclude-standard', '-z', 'src', 'electron', 'scripts']).split('\0').filter(Boolean)
   const production = files.filter(file => !/(^|\/)(__tests__|test|tests|__fixtures__|__snapshots__|__screenshots__)(\/|$)|\.(test|spec|stories)\./.test(file))
   if (production.length) fail('UNCOMMITTED_PRODUCTION_FILES')
+}
+export function assertFormalTargetCandidateClean(root) {
+  if (git(root, ['diff', 'HEAD', '--name-only'])) fail('TARGET_TRACKED_DIRTY')
+  assertCommittedProductionFiles(root)
 }
 export function freezeEnvironment(repositoryRoot) {
   const dependencyNames = ['esbuild', 'vitest', 'electron', 'better-sqlite3']
@@ -125,8 +176,8 @@ export function reconcileDispatchedAttempts(file, campaignMode) {
 }
 
 /** 成对执行失败时先对账再抛出，保证失败路径也不留下悬空派发。 */
-function withLedgerReconciliation(ledgerPath, campaignMode, run) {
-  try { return run() } catch (error) { reconcileDispatchedAttempts(ledgerPath, campaignMode); throw error }
+export function withLedgerReconciliation(ledgerPath, campaignMode, run) {
+  try { return run() } finally { reconcileDispatchedAttempts(ledgerPath, campaignMode) }
 }
 
 export function selectPhase(protocol, phase, milestone = 'early') {
@@ -143,7 +194,9 @@ export function assertScenarioMatchesProtocol(selection, scenario) {
   if (!scenario || !Array.isArray(selection.caseIds) || selection.caseIds.length !== 1
     || selection.caseIds[0] !== scenario.caseId
     || !Array.isArray(selection.operations) || selection.operations.length !== scenario.operations.length
-    || selection.operations.some((operation, index) => operation.id !== scenario.operations[index].id)) fail('SCENARIO_PROTOCOL_MISMATCH')
+    || selection.operations.some((operation, index) => operation.id !== scenario.operations[index].id)
+    || (selection.scenarioRevision ?? null) !== (scenario.scenarioRevision ?? null)
+    || !isDeepStrictEqual(selection.selectionDifference ?? null, scenario.selectionDifference ?? null)) fail('SCENARIO_PROTOCOL_MISMATCH')
 }
 export function validatePair(targets, observations) {
   const [a, b] = [targets.baseline, targets.candidate]
@@ -162,6 +215,7 @@ export function inspectTarget(target) {
   if (![1, 2].includes(target.schemaVersion) || !['baseline', 'candidate'].includes(target.arm)) fail('INVALID_TARGET')
   const repositoryRoot = real(target.repositoryRoot)
   if (git(repositoryRoot, ['rev-parse', 'HEAD']) !== target.codeSha) fail('TARGET_SHA_MISMATCH')
+  if (target.schemaVersion === 2) assertProtocolBinding(target)
   if (git(repositoryRoot, ['diff', 'HEAD', '--name-only']).length) fail('TARGET_TRACKED_DIRTY')
   if (target.schemaVersion === 2) assertCommittedProductionFiles(repositoryRoot)
   const sourceHash = hashSourceTree(repositoryRoot)
@@ -193,19 +247,20 @@ export function createProductionTargets(baselineRoot, output, { development = fa
   if (!inside(CACHE, path.dirname(outputPath))) fail('TARGET_OUTPUT_NOT_NEW_PRIVATE_FILE')
   fs.mkdirSync(path.dirname(outputPath), { recursive: true })
   if (!inside(real(CACHE), real(path.dirname(outputPath))) || fs.existsSync(outputPath)) fail('TARGET_OUTPUT_NOT_NEW_PRIVATE_FILE')
-  if (!development && git(ROOT, ['diff', 'HEAD', '--name-only'])) fail('TARGET_TRACKED_DIRTY')
+  if (!development) assertFormalTargetCandidateClean(ROOT)
   if (git(baselineRoot, ['rev-parse', 'HEAD']) !== '2264390d6fb8b052cc14736d544df0cc74516649') fail('BASELINE_SHA_MISMATCH')
   if (git(baselineRoot, ['diff', 'HEAD', '--name-only'])) fail('TARGET_TRACKED_DIRTY')
   // Keep the actual project below the production Windows path limit; no bypass.
   const root = fs.mkdtempSync(path.join(CACHE, development ? 's07d-' : 's07f-'))
   const fixtureExports = buildFixtureExports(read(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
+  const protocolBinding = currentProtocolBinding()
   const targets = Object.fromEntries(['baseline', 'candidate'].map(arm => {
     const repositoryRoot = real(arm === 'baseline' ? baselineRoot : ROOT), isolationRoot = path.join(root, arm === 'baseline' ? 'b' : 'c')
     const roots = Object.fromEntries(['userData', 'config', 'project', 'legacySource'].map((key, index) => [key, path.join(isolationRoot, ['u', 'c', 'p', 'l'][index])]))
     Object.values(roots).forEach(directory => fs.mkdirSync(directory, { recursive: true }))
     const fixture = fixtureExports[arm === 'baseline' ? 'legacy' : 'canonical'], fixturePath = path.join(isolationRoot, 'semantic-fixture.json')
     fs.writeFileSync(fixturePath, JSON.stringify(fixture, null, 2))
-    const target = { schemaVersion: 2, arm, repositoryRoot, codeSha: git(repositoryRoot, ['rev-parse', 'HEAD']),
+    const target = { schemaVersion: 2, arm, repositoryRoot, codeSha: git(repositoryRoot, ['rev-parse', 'HEAD']), ...protocolBinding,
       sourceHash: hashSourceTree(repositoryRoot), executionToolsHash: hashExecutionTools(repositoryRoot), runnerAdapterHash: runnerAdapterHash(),
       isolationRoot, roots, fixture: { path: fixturePath, format: fixture.format, semanticHash: fixture.semanticHash, parametersHash: fixture.parametersHash },
       driver: { kind: 'production-command-physical-project-v2', adapterRoot: ROOT, path: PRODUCTION_BRIDGE, sha256: productionBridgeHash() },
@@ -245,48 +300,45 @@ export function updateLedger(file, event, options = {}) {
   let fd
   try { fd = fs.openSync(lock, 'wx') } catch { fail('LEDGER_BUSY') }
   try {
-    const events = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)) : []
+    const rawLedger = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
+    const events = rawLedger.split(/\r?\n/u).filter(Boolean).map(line => JSON.parse(line))
     if (options.campaignMode) {
       if (!['real', 'synthetic'].includes(options.campaignMode)) fail('INVALID_CAMPAIGN_MODE')
       if (options.campaignMode === 'real' && path.resolve(file) !== path.join(CACHE, 'physical-ledger.jsonl')) fail('CAMPAIGN_LEDGER_PATH_MISMATCH')
       const protocol = read(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json'))
       const reserved = new Map(), statuses = new Map()
+      const historicalBoundary = options.campaignMode === 'real'
+        ? protocol.historicalLedgerBoundary : options.historicalLedgerBoundary
+      const trustedHistoricalEvents = historicalBoundary
+        ? validateHistoricalLedgerBoundary(rawLedger, historicalBoundary) : 0
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
       // 未知阶段（例如只有 caseIds、没有 operations 的 full）在这里 fail closed。
-      const validateBinding = binding => {
-        if (!binding || binding.campaignId !== CAMPAIGN_ID || binding.mode !== options.campaignMode
-          || !['baseline', 'candidate'].includes(binding.arm) || !/^[a-f0-9]{40}$/.test(binding.codeSha)
-          || ['sourceHash', 'driverHash', 'parityId'].some(key => !/^[a-f0-9]{64}$/.test(binding[key]))
-          || !['early', 'post-ui'].includes(binding.milestone)) fail('INVALID_CAMPAIGN_BINDING')
-        const phase = protocol.phases[binding.phase]
-        if (!phase || !Array.isArray(phase.operations) || !Array.isArray(phase.caseIds)
-          || !phase.caseIds.includes(binding.caseId)
-          || !phase.operations.some(operation => operation.id === binding.operation)) fail('INVALID_CAMPAIGN_BINDING')
-        if (binding.arm === 'candidate' && (!binding.actual || ['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch'].some(key => typeof binding.actual[key] !== 'string' || !binding.actual[key]))) fail('ACTUAL_OWNER_ATTEMPT_REQUIRED')
-      }
       // 阶段决定首选分配桶：early 阶段用 early*，post-UI 重跑用 postUi*；
-      // 同一 (milestone, phase, caseId, arm, operation) 的重复物理发送只吃失败/修复余量。
+      // 同一 slot 的重复发送或已超出计划样本量的发送归入失败/修复余量。
+      // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
       const allocationFor = binding => {
         const occupied = [...reserved.values()].filter(row => statuses.get(row.attemptId) !== 'cancel')
         const slot = value => `${value.milestone}:${value.phase}:${value.caseId}:${value.arm}:${value.operation}`
         const suffix = { 'early-budget': 'Budget', 'early-context': 'Context', 'early-review': 'Review' }[binding.phase]
         if (!suffix) fail('INVALID_CAMPAIGN_BINDING')
         const primary = `${binding.milestone === 'early' ? 'early' : 'postUi'}${suffix}`
-        const allocation = occupied.some(row => slot(row.binding) === slot(binding)) ? 'failedRetryRepairReviewReserve' : primary
-        if (occupied.filter(row => row.allocation === allocation).length >= protocol.allocation[allocation]) fail('CAMPAIGN_ALLOCATION_EXHAUSTED')
-        return allocation
+        const repeatedSlot = occupied.some(row => slot(row.binding) === slot(binding))
+        const primaryUsed = occupied.filter(row => row.allocation === primary).length
+        return !repeatedSlot && primaryUsed < protocol.allocation[primary]
+          ? primary : 'failedRetryRepairReviewReserve'
       }
-      for (const row of events) {
+      for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
-          validateBinding(row.binding)
-          if (row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
+          const historical = index < trustedHistoricalEvents
+          validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical })
+          if (!historical && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)
         }
         statuses.set(row.attemptId, row.type)
       }
       if (event.type === 'reserve') {
-        validateBinding(event.binding)
+        validateCampaignBinding(event.binding, { campaignMode: options.campaignMode, protocol })
         event = { ...event, allocation: allocationFor(event.binding) }
       }
     }
@@ -333,6 +385,7 @@ export function main(argv) {
     assertScenarioMatchesProtocol(selection, scenario)
     const developmentLedger = path.join(prepared.root, `synthetic-ledger-${phase}.jsonl`)
     const result = withLedgerReconciliation(developmentLedger, 'synthetic', () => runProductionPhasePair(prepared.targets, { phase, development: true, mode: 'synthetic', milestone: selection.milestone,
+      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, ...currentProtocolBinding(),
       semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(prepared.root, 'baseline-templates.json'), ledgerPath: developmentLedger }))
     fs.writeFileSync(path.join(prepared.root, `development-receipt-${phase}.json`), JSON.stringify(result, null, 2))
     return { ...result, evidenceRoot: prepared.root, targetsPath: prepared.path }
@@ -357,7 +410,8 @@ export function main(argv) {
     const pairLedgerPath = mode === 'real' ? path.join(CACHE, 'physical-ledger.jsonl') : path.join(evidenceRoot, 'synthetic-ledger.jsonl')
     // 真实或合成的成对执行失败时先对账：子进程被杀不会执行桥内结算，
     // 只有调用方还活着，这是保证每次发送都有终态的最后一道。
-    const result = withLedgerReconciliation(pairLedgerPath, mode, () => runProductionPhasePair(targets, { phase, mode, milestone: selection.milestone, semanticPath: path.join(ROOT, protocol.fixturePath),
+    const result = withLedgerReconciliation(pairLedgerPath, mode, () => runProductionPhasePair(targets, { phase, mode, milestone: selection.milestone,
+      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, ...currentProtocolBinding(), semanticPath: path.join(ROOT, protocol.fixturePath),
       templatesPath: path.join(evidenceRoot, 'baseline-templates.json'), ledgerPath: pairLedgerPath }))
     inspectTarget(targets.baseline); inspectTarget(targets.candidate)
     fs.writeFileSync(path.join(evidenceRoot, 'receipt.json'), JSON.stringify(result, null, 2))
@@ -374,7 +428,8 @@ export function main(argv) {
   const selection = selectPhase(protocol, command, args['--milestone'] || (command === 'full' ? 'final' : 'early'))
   return { status: 'blocked', code: 'PRODUCTION_COMMAND_DRIVER_NOT_INTEGRATED', selection, parity, physicalModelRequests: 0, requiredOwner: 'S06A/S06B/S06C/S07/S10B/S11; 在 S14A 冻结前接入生产命令及逐物理请求账本' }
 }
+export const exitCodeForStatus = status => status === 'blocked' ? 2 : status === 'failed' ? 1 : status === 'pending-independent-oracle-review' ? 3 : 0
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try { const result = main(process.argv.slice(2)); console.log(JSON.stringify(result, null, 2)); if (result.status === 'blocked') process.exitCode = 2; else if (result.status === 'failed') process.exitCode = 1 }
+  try { const result = main(process.argv.slice(2)); console.log(JSON.stringify(result, null, 2)); process.exitCode = exitCodeForStatus(result.status) }
   catch (error) { console.error(JSON.stringify({ status: 'blocked', code: /^[A-Z_]+$/.test(error.message) ? error.message : 'INVALID_OR_UNAVAILABLE_INPUT', physicalModelRequests: null, note: 'Inspect the retained campaign/target receipts; no unverified zero-call claim.' })); process.exitCode = 2 }
 }

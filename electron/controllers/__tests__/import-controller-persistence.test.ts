@@ -63,7 +63,9 @@ function importRows() {
 beforeEach(() => {
   mocks.handlers.clear()
   mocks.showOpenDialog.mockReset()
-  parent = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-import-persist-'))
+  // Keep the project fixture below the production 85-character storage limit
+  // while respecting the platform's configured temporary directory.
+  parent = fs.mkdtempSync(path.join(os.tmpdir(), 'an-'))
   const project = projectAccess.createProject(parent, 'novel')
   const lease = projectAccess.beginSession(project)
   projectRoot = lease.rootPath

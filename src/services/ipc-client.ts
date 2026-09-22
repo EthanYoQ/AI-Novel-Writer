@@ -40,6 +40,7 @@ function isProjectScopedChannel(channel: string): boolean {
   return channel.startsWith('generation:')
     || channel.startsWith('character-proposal:')
     || channel.startsWith('character-identity:')
+    || channel.startsWith('character-avatar:')
     || channel.startsWith('finalized-character:')
     || channel.startsWith('finalization-generation:')
     || channel.startsWith('graph-generation:')
@@ -55,6 +56,7 @@ function isProjectScopedChannel(channel: string): boolean {
     || channel === 'project:save'
     || channel === 'project:update-config'
     || channel === 'project:delete'
+    || channel === 'project:overview-current'
 }
 
 function invokeWithSession<C extends InvokeChannel>(

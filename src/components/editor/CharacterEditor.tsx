@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { Save, Trash2, Users, Network, ClipboardList } from 'lucide-react'
+import { Camera, ClipboardList, Network, Save, Trash2, Users, X } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
-import { registerEditorExitSaveHandler } from '../../stores/editor-store'
+import { registerEditorExitSaveHandler, useEditorStore } from '../../stores/editor-store'
+import { CHARACTER_DRAFT_TAB, getProjectEditorDraft, parseProjectEditorDraftLedger } from '../../stores/project-editor-draft-ledger'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { confirm } from '../ui/Confirm'
 import {
@@ -28,6 +29,8 @@ import {
   isProjectSessionCurrent,
   isProjectSessionPath,
 } from '../project-session-gate'
+import { SaveFeedback, type SaveOutcome } from './save-feedback'
+import { useCharacterAvatar } from './use-character-avatar'
 
 /**
  * 角色卡编辑器 — 纯编辑区域（角色列表已移至侧栏）
@@ -42,6 +45,12 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
   const lastError = useCharacterStore(s => s.lastError)
   const selectedId = useCharacterStore(s => s.selectedId)
   const saving = useCharacterStore(s => s.saving)
+  const dirty = useEditorStore(state => state.tabs.some(
+    tab => tab.type === 'character' && tab.projectKey === projectKey && tab.dirty,
+  ) || Boolean(getProjectEditorDraft(
+    parseProjectEditorDraftLedger(state.draftLedgers[CHARACTER_DRAFT_TAB.id]), projectKey,
+  )))
+  const [saveOutcome, setSaveOutcome] = useState<SaveOutcome>('idle')
   const identityBusy = useCharacterStore(s => s.identityBusy)
   const renameCharacter = useCharacterStore(s => s.renameCharacter)
   const updateField = useCharacterStore(s => s.updateField)
@@ -68,6 +77,7 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
   const selectedCard = dataReady
     ? characters.find((c) => c.characterId === selectedId) || null
     : null
+  const avatar = useCharacterAvatar(selectedCard?.characterId ?? null, dataReady && viewMode === 'edit')
   const relationshipEditorText = selectedCard
     ? formatRelationshipsForEditor(selectedCard.relationships, { locale, identities: characters })
     : ''
@@ -93,16 +103,36 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
     }
   }
 
-  const handleSave = async () => {
+  const handleSave = async (propagateFailure = false) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    setSaveOutcome('idle')
     try {
       await saveAll(projectKey)
       if (!isProjectSessionCurrent(projectSession)) return
-      addLog('info', text(`已保存 ${characters.length} 个角色卡`, `Saved ${characters.length} character cards`))
-    } catch (error) {
+      const avatarSaved = await avatar.commitStaged()
       if (!isProjectSessionCurrent(projectSession)) return
-      addLog('error', text(`角色卡保存失败：${error}`, 'Could not save character cards.'))
+      if (!avatarSaved) {
+        setSaveOutcome('failed')
+        const failure = new Error(text(
+          '头像保存失败；其它档案内容已保存，原头像未变。',
+          'The avatar could not be saved. Other profile changes were saved and the previous avatar is unchanged.',
+        ))
+        addLog('error', failure.message)
+        if (propagateFailure) throw failure
+        return
+      }
+      addLog('info', text(`已保存 ${characters.length} 个角色卡`, `Saved ${characters.length} character cards`))
+      const stillDirty = useEditorStore.getState().tabs.some(
+        tab => tab.type === 'character' && tab.projectKey === projectKey && tab.dirty,
+      )
+      setSaveOutcome(stillDirty ? 'idle' : 'saved')
+    } catch (error) {
+      if (isProjectSessionCurrent(projectSession)) {
+        setSaveOutcome('failed')
+        addLog('error', text(`角色卡保存失败：${error}`, 'Could not save character cards.'))
+      }
+      if (propagateFailure) throw error
     }
   }
 
@@ -114,7 +144,7 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
     registerEditorExitSaveHandler({
       type: 'character',
       projectKey,
-      save: () => exitSaveRef.current(),
+      save: () => exitSaveRef.current(true),
     })
   }, [projectKey])
 
@@ -155,12 +185,14 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
   ) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    setSaveOutcome('idle')
     updateField(name, key, value)
   }
 
   const renameCurrentCharacter = (name: string, nextName: string) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
+    setSaveOutcome('idle')
     renameCharacter(name, nextName)
   }
 
@@ -229,7 +261,8 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
               <Button variant="destructive" size="sm" onClick={handleDelete} disabled={identityBusy || !dataReady}>
                 <Trash2 size={12} /> {text('删除', 'Delete')}
               </Button>
-              <Button variant="outline" size="sm" onClick={handleSave} disabled={identityBusy || !dataReady}>
+              <SaveFeedback dirty={dirty} saving={saving} outcome={saveOutcome} />
+              <Button variant="outline" size="sm" onClick={() => { void handleSave() }} disabled={identityBusy || !dataReady}>
                 <Save size={12} /> {saving ? text('保存中...', 'Saving...') : text('保存', 'Save')}
               </Button>
             </>
@@ -244,7 +277,14 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
       {/* 主体区 */}
       <div className="flex-1 overflow-y-auto relative">
         {viewMode === 'graph' ? (
-          <RelationshipGraph characters={characters} />
+          <RelationshipGraph
+            characters={characters}
+            selectedCharacterId={selectedId}
+            onOpenCharacter={(characterId) => {
+              useCharacterStore.getState().setSelectedId(characterId)
+              setViewMode('edit')
+            }}
+          />
         ) : !selectedCard ? (
           <BaseEmptyState 
             icon={<Users size={36} />} 
@@ -317,6 +357,23 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
         ) : (
           <div className="max-w-2xl mx-auto px-6 py-4">
             <div className="space-y-3">
+              <div className="flex items-center gap-3 rounded-lg border border-[var(--color-border)] p-3">
+                {avatar.avatarUrl ? (
+                  <img src={avatar.avatarUrl} alt={text(`${selectedCard.name}头像预览`, `${selectedCard.name} avatar preview`)} className="h-16 w-16 rounded-full object-cover" />
+                ) : (
+                  <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[var(--color-hover)] text-[var(--color-text-muted)]"><Users size={24} /></div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <Label>{text('角色头像', 'Character avatar')}</Label>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    <Button variant="outline" size="sm" disabled={avatar.busy} onClick={() => { void avatar.chooseAvatar() }}><Camera size={12} />{avatar.avatarUrl ? text('替换头像', 'Replace avatar') : text('选择头像', 'Choose avatar')}</Button>
+                    {avatar.avatarUrl && <Button variant="outline" size="sm" disabled={avatar.busy} onClick={avatar.stageRemoval}><Trash2 size={12} />{text('移除头像', 'Remove avatar')}</Button>}
+                    {avatar.staged && <Button variant="ghost" size="sm" disabled={avatar.busy} onClick={avatar.discardStaged}><X size={12} />{text('取消头像更改', 'Discard avatar change')}</Button>}
+                  </div>
+                  {avatar.staged && <p className="mt-1 text-[0.7rem] text-[var(--color-text-secondary)]">{text('头像更改将在保存角色档案时提交。', 'The avatar change is committed when you save the character profile.')}</p>}
+                  {avatar.notice && <p role="alert" className="mt-1 text-[0.7rem] text-[var(--color-danger)]">{avatar.notice}</p>}
+                </div>
+              </div>
               <div className="grid grid-cols-3 gap-3">
                 <div><Label>{text('姓名', 'Name')}</Label><Input value={selectedCard.name} disabled={identityBusy} onChange={(e) => renameCurrentCharacter(selectedCard.characterId!, e.target.value)} /></div>
                 <div><Label>{text('性别', 'Gender')}</Label><Input value={selectedCard.gender} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'gender', e.target.value)} /></div>

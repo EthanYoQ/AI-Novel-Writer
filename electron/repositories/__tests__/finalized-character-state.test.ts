@@ -131,6 +131,125 @@ describe('finalized character identities and derived state in the M02 database',
     expect(f.db.prepare('SELECT COUNT(*) FROM character_identity_approvals').pluck().get()).toBe(0)
   })
 
+  it('persists source-bound state decisions and applies accepted values as author edits', () => {
+    const f = fixture()
+    f.db.prepare('UPDATE characters SET cs_location=?,cs_provenance=? WHERE character_id=?')
+      .run('作者地点', JSON.stringify({ location: { kind: 'author', chapterNumber: 0, revision: 3 } }), f.ids[0])
+    f.saveNotes()
+    const context = f.context()
+    SummaryRepository.commitFinalizedCharacterStates(context, f.response(context, { location: '  北塔\n' }), f.db)
+
+    const [summary] = SummaryRepository.listPendingFinalizedCharacterStateCandidates(f.db)
+    expect(summary).toMatchObject({ draftId: 1, finalizationId: context.source.finalizationId,
+      characterId: f.ids[0], characterName: '林岚', field: 'location' })
+    const candidate = SummaryRepository.readPendingFinalizedCharacterStateCandidate(1, summary.candidateKey, f.db)
+    expect(candidate).toMatchObject({ value: '  北塔\n', expectedFieldRevision: 3, expectedFieldValueHash: hash('作者地点'), source: context.source })
+    const stored = JSON.parse(f.db.prepare('SELECT character_state_candidates FROM summary_snapshots WHERE draft_id=1').pluck().get() as string)
+    const boundKeys = new Set(['candidateKey', 'source', 'expectedFieldRevision', 'expectedFieldValueHash'])
+    const legacy = stored.pending.map((item: Record<string, unknown>) =>
+      Object.fromEntries(Object.entries(item).filter(([key]) => !boundKeys.has(key))))
+    f.db.prepare('UPDATE summary_snapshots SET character_state_candidates=? WHERE draft_id=1').run(JSON.stringify(legacy))
+    const [legacySummary] = SummaryRepository.listPendingFinalizedCharacterStateCandidates(f.db)
+    expect(legacySummary).toMatchObject({ draftId: 1, finalizationId: context.source.finalizationId,
+      characterId: f.ids[0], characterName: '林岚', field: 'location' })
+    const upgraded = SummaryRepository.readPendingFinalizedCharacterStateCandidate(1, legacySummary.candidateKey, f.db)
+    expect(upgraded).toMatchObject({ candidateKey: legacySummary.candidateKey, value: '北塔', source: context.source,
+      expectedFieldRevision: 3, expectedFieldValueHash: hash('作者地点') })
+
+    const request = { draftId: 1, candidateKey: upgraded.candidateKey, characterId: upgraded.characterId,
+      field: upgraded.field, expectedFieldRevision: upgraded.expectedFieldRevision,
+      expectedFieldValueHash: upgraded.expectedFieldValueHash, operationId: 'accept-location', decision: 'accept' as const }
+    expect(SummaryRepository.decideFinalizedCharacterStateCandidate(request, f.db)).toMatchObject({
+      operationId: 'accept-location', decision: 'accept', idempotent: false,
+    })
+    expect(f.row()).toMatchObject({ cs_location: '北塔', cs_updated_at_chapter: 1 })
+    expect(JSON.parse(f.row().cs_provenance as string).location).toEqual({ kind: 'author', chapterNumber: 1, revision: 4 })
+    expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates(f.db)).toEqual([])
+    expect(SummaryRepository.decideFinalizedCharacterStateCandidate(request, f.db)).toMatchObject({ idempotent: true })
+    expect(() => SummaryRepository.decideFinalizedCharacterStateCandidate({ ...request, decision: 'decline' }, f.db))
+      .toThrow('FINALIZED_CHARACTER_STATE_OPERATION_CONFLICT')
+  })
+
+  it.each([
+    ['candidateKey', 42], ['source', {}], ['expectedFieldRevision', 'bad'], ['expectedFieldValueHash', 'bad'],
+  ] as const)('does not reinterpret malformed bound metadata as a legacy candidate: %s', (field, value) => {
+    const f = fixture()
+    f.db.prepare('UPDATE characters SET cs_location=? WHERE character_id=?').run('作者地点', f.ids[0])
+    f.saveNotes()
+    const context = f.context()
+    SummaryRepository.commitFinalizedCharacterStates(context, f.response(context, { location: '北塔' }), f.db)
+    const stored = JSON.parse(f.db.prepare('SELECT character_state_candidates FROM summary_snapshots WHERE draft_id=1').pluck().get() as string)
+    const boundKeys = new Set(['candidateKey', 'source', 'expectedFieldRevision', 'expectedFieldValueHash'])
+    const malformed = Object.fromEntries(Object.entries(stored.pending[0] as Record<string, unknown>)
+      .filter(([key]) => !boundKeys.has(key)))
+    malformed[field] = value
+    f.db.prepare('UPDATE summary_snapshots SET character_state_candidates=? WHERE draft_id=1')
+      .run(JSON.stringify({ version: 2, pending: [malformed], receipts: [] }))
+    expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates(f.db)).toEqual([])
+  })
+
+  it('persists decline without changing the author field and hides decided candidates after reopen', () => {
+    const f = fixture()
+    f.db.prepare('UPDATE characters SET cs_power_level=? WHERE character_id=?').run('作者能力', f.ids[0])
+    f.saveNotes()
+    const context = f.context()
+    SummaryRepository.commitFinalizedCharacterStates(context, f.response(context, { powerLevel: '提议能力' }), f.db)
+    const candidate = SummaryRepository.readPendingFinalizedCharacterStateCandidate(
+      1, SummaryRepository.listPendingFinalizedCharacterStateCandidates(f.db)[0].candidateKey, f.db)
+    const request = { draftId: 1, candidateKey: candidate.candidateKey, characterId: candidate.characterId,
+      field: candidate.field, expectedFieldRevision: candidate.expectedFieldRevision,
+      expectedFieldValueHash: candidate.expectedFieldValueHash, operationId: 'decline-power', decision: 'decline' as const }
+
+    f.db.prepare('UPDATE characters SET cs_power_level=? WHERE character_id=?').run('作者后来能力', f.ids[0])
+    expect(SummaryRepository.decideFinalizedCharacterStateCandidate(request, f.db)).toMatchObject({ decision: 'decline', idempotent: false })
+    expect(f.row().cs_power_level).toBe('作者后来能力')
+    expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates(f.db)).toEqual([])
+    f.db.prepare('UPDATE finalization_outbox SET content_hash=? WHERE draft_id=1').run('0'.repeat(64))
+    expect(SummaryRepository.decideFinalizedCharacterStateCandidate(request, f.db)).toMatchObject({ idempotent: true })
+    expect(() => SummaryRepository.decideFinalizedCharacterStateCandidate({ ...request, decision: 'accept' }, f.db))
+      .toThrow('FINALIZED_CHARACTER_STATE_OPERATION_CONFLICT')
+    expect(JSON.parse((f.db.prepare('SELECT character_state_candidates FROM summary_snapshots WHERE draft_id=1').pluck().get() as string))).toMatchObject({
+      version: 2, pending: [], receipts: [expect.objectContaining({ operationId: 'decline-power', decision: 'decline' })],
+    })
+  })
+
+  it('rejects stale source and concurrent author edits without consuming the pending candidate', () => {
+    const f = fixture()
+    f.db.prepare('UPDATE characters SET cs_location=? WHERE character_id=?').run('作者地点', f.ids[0])
+    f.saveNotes()
+    const context = f.context()
+    SummaryRepository.commitFinalizedCharacterStates(context, f.response(context, { location: '北塔' }), f.db)
+    const candidate = SummaryRepository.readPendingFinalizedCharacterStateCandidate(
+      1, SummaryRepository.listPendingFinalizedCharacterStateCandidates(f.db)[0].candidateKey, f.db)
+    const request = { draftId: 1, candidateKey: candidate.candidateKey, characterId: candidate.characterId,
+      field: candidate.field, expectedFieldRevision: candidate.expectedFieldRevision,
+      expectedFieldValueHash: candidate.expectedFieldValueHash, operationId: 'accept-stale', decision: 'accept' as const }
+
+    f.db.prepare('UPDATE characters SET cs_location=?,cs_provenance=? WHERE character_id=?')
+      .run('作者并发修改', JSON.stringify({ location: { kind: 'author', chapterNumber: 1, revision: 1 } }), f.ids[0])
+    expect(() => SummaryRepository.decideFinalizedCharacterStateCandidate(request, f.db))
+      .toThrow('FINALIZED_CHARACTER_STATE_FIELD_CONFLICT')
+    expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates(f.db)).toHaveLength(1)
+
+    f.db.prepare('UPDATE finalization_outbox SET content_hash=? WHERE draft_id=1').run('0'.repeat(64))
+    expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates(f.db)).toEqual([])
+    expect(() => SummaryRepository.readPendingFinalizedCharacterStateCandidate(1, candidate.candidateKey, f.db))
+      .toThrow('FINALIZED_CHARACTER_STATE_SOURCE_CHANGED')
+    expect(() => SummaryRepository.decideFinalizedCharacterStateCandidate({ ...request, operationId: 'accept-after-stale' }, f.db))
+      .toThrow('FINALIZED_CHARACTER_STATE_SOURCE_CHANGED')
+  })
+
+  it('keeps pending state candidates isolated to their project database', () => {
+    const first = fixture()
+    first.db.prepare('UPDATE characters SET cs_location=? WHERE character_id=?').run('作者地点', first.ids[0])
+    first.saveNotes()
+    const context = first.context()
+    SummaryRepository.commitFinalizedCharacterStates(context, first.response(context, { location: '北塔' }), first.db)
+    const second = fixture()
+    expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates(first.db)).toHaveLength(1)
+    expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates(second.db)).toEqual([])
+  })
+
   it.each(['field', 'watermark', 'body', 'retired'] as const)('refuses %s changes after context capture with no partial state write', kind => {
     const f = fixture(), context = f.context(), response = f.response(context, { location: '北塔', recentEvents: '到达北塔' })
     if (kind === 'field') f.db.prepare('UPDATE characters SET cs_recent_events=? WHERE character_id=?').run('作者新值', f.ids[0])

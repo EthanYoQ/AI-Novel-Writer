@@ -14,7 +14,7 @@ function stream(events: string[]) {
 }
 function callbacks() {
   return { temperature: 0.7, maxTokens: 100, signal: new AbortController().signal, visibleOnly: true,
-    onChunk: vi.fn(), onDone: vi.fn(), onError: vi.fn(), onUsageEvidence: vi.fn() }
+    onChunk: vi.fn(), onDone: vi.fn(), onError: vi.fn(), onUsageEvidence: vi.fn(), onReasoning: vi.fn() }
 }
 afterEach(() => vi.unstubAllGlobals())
 
@@ -69,6 +69,7 @@ describe('durable owner visible-only provider boundary', () => {
     expect(options.onDone).toHaveBeenCalledExactlyOnceWith(' 甲乙 \n', { promptTokens: 10, completionTokens: 20, totalTokens: 30 }, 'stop')
     expect(options.onUsageEvidence).toHaveBeenCalledExactlyOnceWith({ usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 }, reasoningTokens: 7,
       accounting: 'included-in-completion', totalIncludesReasoning: true, protocol: 'openai' })
+    expect(options.onReasoning.mock.calls.flat().join('')).toBe('protocol secretinband secret')
   })
   it('retains only the visible prefix after a transport failure', async () => {
     stream(['data: {"choices":[{"delta":{"reasoning_content":"hidden","content":"甲 "}}]}\n\n'])
@@ -87,6 +88,29 @@ describe('durable owner visible-only provider boundary', () => {
     expect(options.onDone).toHaveBeenCalledExactlyOnceWith(' 甲乙 ', { promptTokens: 10, completionTokens: 20, totalTokens: 37 }, 'stop')
     expect(options.onUsageEvidence).toHaveBeenCalledExactlyOnceWith({ usage: { promptTokens: 10, completionTokens: 20, totalTokens: 37 }, reasoningTokens: 7,
       accounting: 'separately-billed', totalIncludesReasoning: true, protocol: 'gemini' })
+    expect(options.onReasoning.mock.calls.flat().join('')).toBe('hidden')
+  })
+  it('delivers split in-band thoughts separately and never synthesizes text from usage tokens', async () => {
+    stream([
+      'data: {"choices":[{"delta":{"content":"前<th"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"ink>秘密<em>里</em></thi"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"nk>后"},"finish_reason":"stop"}]}\n\n',
+      'data: {"choices":[],"usage":{"completion_tokens_details":{"reasoning_tokens":50}}}\n\n',
+      'data: [DONE]\n\n',
+    ])
+    const options = callbacks()
+    await new OpenAIProvider().generateStream(model, [], options)
+    expect(options.onChunk.mock.calls.flat().join('')).toBe('前后')
+    expect(options.onDone).toHaveBeenCalledWith('前后', undefined, 'stop')
+    expect(options.onReasoning.mock.calls.flat().join('')).toBe('秘密<em>里</em>')
+  })
+  it('keeps Gemini thought parts and in-band thoughts out of visible output', async () => {
+    stream(['data: {"candidates":[{"content":{"parts":[{"text":"推理","thought":true},{"text":"前<th"},{"text":"ink>内</think>后"}]},"finishReason":"STOP"}]}\n'])
+    const options = callbacks()
+    await new GeminiProvider().generateStream({ ...model, protocol: 'gemini' }, [], options)
+    expect(options.onChunk.mock.calls.flat().join('')).toBe('前后')
+    expect(options.onDone).toHaveBeenCalledWith('前后', undefined, 'stop')
+    expect(options.onReasoning.mock.calls.flat().join('')).toBe('推理内')
   })
   it('does not turn a Gemini persistence callback failure into a successful completion', async () => {
     stream(['data: {"candidates":[{"content":{"parts":[{"text":"甲"}]},"finishReason":"STOP"}]}\n'])

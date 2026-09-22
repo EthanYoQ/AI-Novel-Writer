@@ -120,6 +120,7 @@ describe('ArchFileViewer locale', () => {
     ))
     await act(async () => (container.querySelector('[title="保存（Cmd+S）"]') as HTMLButtonElement).click())
     expect(errorToast).toHaveBeenCalledWith(expect.stringContaining('磁盘已满'))
+    expect(container.textContent).toContain('保存失败')
     expect(container.textContent).toContain('未保存的故事前提')
     expect(container.querySelector('[title="有未保存的修改"]')).not.toBeNull()
     expect(useEditorStore.getState().tabs[0]).toMatchObject({ dirty: true, savedContent: '' })

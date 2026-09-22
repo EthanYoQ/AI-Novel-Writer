@@ -17,7 +17,11 @@ import {
 import { ipc } from '../../ipc-client'
 import { requireWorkflowProjectSession, workflowUiText } from '../workflow-project-session'
 
-export interface ReviewChapterParams extends ReviewRevisionCommandSource { reviewFocus?: string }
+export interface ReviewChapterParams extends ReviewRevisionCommandSource {
+  reviewFocus?: string
+  reviewCycleId?: string
+  expectedMergedHash?: string
+}
 
 type ReviewHistoryItem = ReviewRevisionContext['history'][number]
 
@@ -60,13 +64,15 @@ function formatHistory(frozen: ReviewRevisionContext, admitted: readonly ReviewR
 
 export class ReviewChapterCommand extends ReviewRevisionCommand {
   constructor(params: ReviewChapterParams, dependencies?: WorkflowGenerationRuntimeDependencies) {
-    super('review-chapter', params, params.reviewFocus ? [{ id: 'review-focus', text: params.reviewFocus }] : [], {}, dependencies)
+    super('review-chapter', params, params.reviewFocus ? [{ id: 'review-focus', text: params.reviewFocus }] : [], {
+      reviewCycleId: params.reviewCycleId, expectedMergedHash: params.expectedMergedHash,
+    }, dependencies)
   }
 
   protected async generateAndCommit(prepared: PreparedReviewRevisionContext, params: CommandExecuteParams) {
     if (this.recovery?.latestArtifact && this.recovery.latestArtifactFinishReason === 'stop') {
-      let valid = false
-      try { parseReviewGenerationResult(this.stripThinkingTags(this.recovery.latestArtifact.text)); valid = true } catch { /* Repair invalid JSON below. */ }
+      let valid = Boolean(prepared.context.recheck)
+      if (!valid) try { parseReviewGenerationResult(this.stripThinkingTags(this.recovery.latestArtifact.text)); valid = true } catch { /* Repair invalid JSON below. */ }
       if (valid) return this.commitReview(prepared, params)
     }
     const frozen = prepared.context
@@ -78,13 +84,18 @@ export class ReviewChapterCommand extends ReviewRevisionCommand {
     if (!template) throw new Error(text('未找到审稿模板', 'The review prompt template was not found.'))
     // 与写稿路径同一套准入：材料成员由合同判定，绝不按「最近/相关」自行拼凑。
     const reviewBlueprint = frozen.blueprints.find(blueprint => blueprint.chapterNumber === frozen.source.chapterNumber)
+    const reviewMaterials = frozen.recheck
+      ? []
+      : reviewHistoryMaterials(frozen, { projectId: projectSession.projectId, epoch: projectSession.leaseId })
     let admission: ReviewRevisionMaterialAdmission
     try {
       admission = selectReviewRevisionMaterials({
         current: { projectId: projectSession.projectId, epoch: projectSession.leaseId },
         writingLanguage: language,
-        materials: reviewHistoryMaterials(frozen, { projectId: projectSession.projectId, epoch: projectSession.leaseId }),
-        relevanceTerms: [reviewBlueprint?.title ?? '', reviewBlueprint?.keyEvents ?? '', ...(reviewBlueprint?.characters ?? [])],
+        materials: reviewMaterials,
+        relevanceTerms: frozen.recheck
+          ? []
+          : [reviewBlueprint?.title ?? '', reviewBlueprint?.keyEvents ?? '', ...(reviewBlueprint?.characters ?? [])],
       })
     } catch (error) {
       // 必需材料（前一章定稿）装不下：显式失败，绝不静默省略必需事实。
@@ -106,15 +117,34 @@ export class ReviewChapterCommand extends ReviewRevisionCommand {
       .withWorldBuilding(frozen.worldbuilding)
       .withReviewFocus(frozen.authorInputs.find(input => input.id === 'review-focus')?.text || '')
     const guidance = frozen.config.globalGuidance?.trim() || promptLanguageText(language, '（无作者全局创作指导）', '(no author global creative guidance)')
-    const reviewPrompt = [
+    const ordinaryReviewPrompt = [
       builder.build(),
       promptLanguageText(language, `【作者全局创作指导｜约束而非已发生事实】\n${guidance}`, `[Author global creative guidance | constraint, not established history]\n${guidance}`),
       promptLanguageText(language, `【作者确认项目配置｜约束而非已发生事实】\n${JSON.stringify(frozen.config, null, 2)}`,
         `[Author-confirmed project configuration | constraint, not established history]\n${JSON.stringify(frozen.config, null, 2)}`),
       promptLanguageText(language, '【当前及未来蓝图/计划｜非既定历史】', '[Current and future blueprints/plans | not established history]'),
       JSON.stringify(frozen.blueprints, null, 2),
+      promptLanguageText(language,
+        '【证据锚点硬约束】每个 error/warning 的 items[].quote 必须是待审正文中逐字连续、且全文仅出现一次的单一摘录；不得拼接多个位置、改写原文或包含省略号。优先选择足以证明问题的最短完整句。goalReviews[].evidence 中的每个 quote 也必须分别满足上述约束；需要多处证据时拆成多个 evidence 项，绝不可在一个 quote 中拼接。',
+        '[Strict evidence-anchor constraint] Each items[].quote for an error/warning must be one verbatim, contiguous excerpt that occurs exactly once in the draft under review. Do not combine multiple locations, rewrite the text, or include ellipses. Prefer the shortest complete sentence that proves the issue. Every quote in goalReviews[].evidence must independently satisfy the same constraint; when multiple excerpts are needed, use separate evidence entries and never combine them in one quote.'),
       buildChapterGoalReviewPrompt(frozen.frozenGoals, language),
     ].join('\n\n')
+    const reviewPrompt = frozen.recheck ? [
+      promptLanguageText(language,
+        '【一次性定向复核】只复核下列 finding，不得新增、删除、合并或改写 findingId/targetId。',
+        '[One-time targeted recheck] Recheck only the findings below. Do not add, remove, merge, or rewrite findingId/targetId.'),
+      promptLanguageText(language, '【人工合并后的正文】', '[Author-merged draft]'),
+      frozen.source.content,
+      promptLanguageText(language, '【需复核的原始证据锚点】', '[Original evidence anchors to recheck]'),
+      JSON.stringify(frozen.recheck.findings, null, 2),
+      promptLanguageText(language,
+        '判断 resolved 时必须同时核对每项 problem 与 expected（如有）；正文只是改变、移除原句或换一种错误说法，不代表问题已解决。若 finding 要求当章动作或结果，新增动作或结果本身必须满足目标语义；计划、决定、承诺、保证、签字认责或简单否定翻转都不能证明结果已经实现。对于代价或损失，证据必须写出已经失去、消耗或承受的具体后果，并且后文不得保留相反状态。仅当合并后正文中的唯一新证据确实满足原始问题语义与预期时，才可令 resolved=true。',
+        'When deciding resolved, check each finding\'s problem and expected semantics (when present). Merely changing or removing the old sentence, or restating the same error, does not resolve the finding. If a finding requires a current-chapter action or result, the added action or result must itself satisfy the target meaning; a plan, decision, promise, commitment, signature accepting responsibility, or simple negation flip is not evidence that the result was achieved. For a cost or loss, evidence must show the concrete consequence already lost, spent, or endured, and later prose must not preserve a contradictory state. Set resolved=true only when unique new evidence in the merged draft actually satisfies the original problem and expectation.'),
+      promptLanguageText(language,
+        '【硬性 JSON 合同】只输出 {"summary":"...","items":[...]}。items 必须对上述每个 finding 恰好一项，字段仅为 findingId、targetId、resolved、evidenceQuote、reason。evidenceQuote 必须逐字来自合并后正文且只能出现一次；无法确认时仍返回该 finding，并令 resolved=false，说明证据不足。不得输出 Markdown、解释或思考过程。',
+        '[Strict JSON contract] Output only {"summary":"...","items":[...]}. Include exactly one item for every finding above, with only findingId, targetId, resolved, evidenceQuote, and reason. evidenceQuote must be verbatim from the merged draft and occur exactly once. If uncertain, still return the finding with resolved=false and explain the lack of evidence. No Markdown, explanation, or reasoning.'),
+    ].join('\n\n') : ordinaryReviewPrompt
+    await this.bindMaterialDecision(params, admission.decision, reviewPrompt)
     params.callbacks.log(text('调用 AI 审查员对本章进行多维度扫描...', 'Running the AI continuity review...'))
     const attempts = this.recovery?.attemptedPurposes ?? []
     let raw: string | undefined
@@ -130,6 +160,11 @@ export class ReviewChapterCommand extends ReviewRevisionCommand {
       return this.callLLMWithBoundedCompletion(prompt, builder.getSystemRole(), params.callbacks,
         { mode: 'replace-structured-output', maxContinuations: 1 - used },
         { responseFormat: { type: 'json_object' }, purpose, reasoningStage: 'review', writingSkillStage: 'review' }, params.context)
+    }
+    if (frozen.recheck) {
+      if (this.recovery?.latestArtifact && this.recovery.latestArtifactFinishReason === 'stop') return this.commitReview(prepared, params)
+      await generate('review-chapter', reviewPrompt)
+      return this.commitReview(prepared, params)
     }
     if (raw === undefined && !needsRebuild) {
       raw = await generate('review-chapter', reviewPrompt)
@@ -165,7 +200,7 @@ export class ReviewChapterCommand extends ReviewRevisionCommand {
     const artifact = recovery.latestArtifact
     const handle = params.context.mainGenerationRunHandle
     if (!artifact || !handle || recovery.latestArtifactFinishReason !== 'stop') throw new Error('GENERATION_REVIEW_ARTIFACT_REQUIRED')
-    parseReviewGenerationResult(this.stripThinkingTags(artifact.text))
+    if (!prepared.context.recheck) parseReviewGenerationResult(this.stripThinkingTags(artifact.text))
     return ipc.invokeWithProjectSession(requireWorkflowProjectSession(params.context), 'review-revision:commit-review', {
       contextId: prepared.contextId, handle,
       artifact: { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash },

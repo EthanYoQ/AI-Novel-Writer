@@ -3,7 +3,7 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { afterEach, describe, expect, it } from 'vitest'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
-import { getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
+import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../../migrations/desktop-registry'
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { migrateSchema } from '../../migrations/runner'
 import { createMigrationRegistry } from '../../migrations/registry'
@@ -28,7 +28,7 @@ describe('M02 real SQLite source projection and admission', () => {
   it('upgrades schema2 preserving all prior fields while retaining the full new domain and stable IDs', () => {
     const f = fixture(), before = probeProjectSqlite({ databasePath: f.file })
     const after = upgradeProjectSqlite({ databasePath: f.file })
-    expect(before.schemaVersion).toBe(2); expect(after.schemaVersion).toBe(3)
+    expect(before.schemaVersion).toBe(2); expect(after.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
     expect(after.preIdentityDomain).toEqual(before.domain)
     expect(after.domain).not.toEqual(before.domain)
     expect(verifyProjectSqlite({ databasePath: f.file })).toEqual(after)
@@ -46,7 +46,7 @@ describe('M02 real SQLite source projection and admission', () => {
     try {
       const before = probeProjectSqlite({ databasePath: f.file }), target = path.join(f.root, 'copy.db')
       const result = await backupProjectSqlite({ sourceDatabasePath: f.file, targetDatabasePath: target })
-      expect(result.schemaVersion).toBe(3); expect(result.preIdentityDomain).toEqual(before.domain)
+      expect(result.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION); expect(result.preIdentityDomain).toEqual(before.domain)
       expect(verifyProjectSqlite({ databasePath: target })).toEqual(result)
       expect(['','-wal','-shm'].map(suffix => fs.readFileSync(f.file + suffix))).toEqual(bytes)
     } finally { db.close() }

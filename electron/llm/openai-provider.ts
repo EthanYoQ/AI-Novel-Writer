@@ -1,4 +1,4 @@
-import { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from './provider.interface'
+import { InBandReasoningStream, ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from './provider.interface'
 import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 import { resolveOpenAIChatCompletionsUrl } from './openai-compatible-endpoint'
 import { VisibleStreamFilter } from './visible-stream'
@@ -126,6 +126,7 @@ export class OpenAIProvider implements ILLMProvider {
   async generateStream(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMStreamOptions): Promise<void> {
     let fullText = ''
     const visible = new VisibleStreamFilter()
+    const inBandReasoning = new InBandReasoningStream(opts.onReasoning)
     let usage: TokenUsage | undefined
     const fail = (error: string) => {
       const visibleCandidate = opts.visibleOnly ? visible.text : this.stripThinking(fullText)
@@ -261,6 +262,9 @@ export class OpenAIProvider implements ILLMProvider {
           fatalError = '响应流的 content 类型无效'
           return
         }
+
+        if (delta.reasoning_content) opts.onReasoning?.(delta.reasoning_content)
+        if (typeof delta.content === 'string') inBandReasoning.push(delta.content)
 
         if (opts.visibleOnly) {
           if (typeof delta.content === 'string') {

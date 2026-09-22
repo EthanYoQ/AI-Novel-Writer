@@ -6,11 +6,13 @@ import type { BeginGenerationRequest } from '../../src/shared/generation-owner-c
 import type { PrepareReviewRevisionRequest, PreparedReviewRevisionContext, ReviewGenerationCommitRequest,
   RevisionGenerationCommitRequest, ReviewRevisionCommitReceipt, ReviewRevisionContext, ReviewRevisionRecovery } from '../../src/shared/review-revision-generation'
 import { buildReviewGenerationReport } from '../../src/shared/review-generation-report'
+import { buildReviewCycleRecheckReport, isNoopRevision } from '../../src/shared/review-cycle'
 import { countDraftUnits } from '../../src/shared/draft-units'
 import { assertMateriallyCompleteRevision } from '../../src/services/workflows/commands/refinement-completeness'
 import { GenerationRunRepository, textHash, type DurableGenerationRun } from '../repositories/generation-run-repository'
 import { ReviewRepository } from '../repositories/review-repository'
 import { RevisionRepository } from '../repositories/revision-repository'
+import { ReviewCycleRepository } from '../repositories/review-cycle-repository'
 import { captureReviewRevisionContext, reviewRevisionRequest, REVIEW_REVISION_OPERATIONS } from './review-revision-context'
 
 type ArtifactRef = ReviewGenerationCommitRequest['artifact']
@@ -72,7 +74,18 @@ export class ReviewRevisionGeneration {
     return { row, receipt, artifact }
   }
   private reviewBody(run: DurableGenerationRun, reference: ArtifactRef): string {
-    const context = this.context(run), { artifact } = this.proveArtifact(run, reference)
+    const context = this.context(run), { row, artifact } = this.proveArtifact(run, reference)
+    if (context.recheck) {
+      const attempt = this.attempts(run.runId).find(candidate => candidate.attempt_id === row.attempt_id)
+      let persistedVersion: 1 | 2 | undefined
+      try {
+        const receipt = attempt && JSON.parse(attempt.usage_receipt_json).reviewCycleRecheck
+        if (receipt?.version === 1 || receipt?.version === 2) persistedVersion = receipt.version
+      } catch { /* Invalid persisted receipts fail later proof checks; do not downgrade current policy. */ }
+      const policy = { ...context.recheck, version: persistedVersion ?? 2 } as const
+      const built = buildReviewCycleRecheckReport(artifact.text, context.source.content, policy, context.uiLocale)
+      return JSON.stringify({ summary: built.summary, items: built.items }, null, 2)
+    }
     return JSON.stringify(buildReviewGenerationReport({ content: artifact.text, sourceContent: context.source.content,
       frozenGoals: context.frozenGoals, writingLanguage: context.writingLanguage, uiLocale: context.uiLocale,
       preflightFindings: context.preflightFindings }), null, 2)
@@ -95,10 +108,29 @@ export class ReviewRevisionGeneration {
         || composition.artifactIds.at(-1) !== effect.artifact.artifactId)) throw new Error('GENERATION_REVIEW_RECEIPT_INVALID')
     const revisionStatus = 'status' in row ? row.status as ReviewRevisionCommitReceipt['revisionStatus'] : undefined
     if (revisionStatus && !['pending', 'merged', 'discarded'].includes(revisionStatus)) throw new Error('GENERATION_REVIEW_RECEIPT_INVALID')
+    const cycle = context.recheck ? ReviewCycleRepository.planRecheck(context.recheck.cycleId, this.db) : undefined
     return { effect, receipt: { success: true, kind: effect.kind, id: row.id, index: effect.index,
-      content: row.content, contentHash: effect.contentHash, source: structuredClone(context.source), ...(revisionStatus ? { revisionStatus } : {}) } }
+      content: row.content, contentHash: effect.contentHash, source: structuredClone(context.source), ...(revisionStatus ? { revisionStatus } : {}),
+      ...(context.recheck ? { reviewCycle: { cycleId: context.recheck.cycleId, revisionStatus: 'merge-committed',
+        recheckCount: cycle?.disposition === 'completed' ? 1 : 0, disposition: cycle?.disposition ?? 'required' } } : {}) } }
   }
   private parent(context: ReviewRevisionContext): { parentRootActionId?: string; modelId?: string } {
+    if (context.recheck) {
+      const plan = ReviewCycleRepository.planRecheck(context.recheck.cycleId, this.db)
+      const frozenPlan = plan.context && { ...plan.context, version: context.recheck.version }
+      if (plan.disposition !== 'required' || !frozenPlan || !isDeepStrictEqual(frozenPlan, context.recheck))
+        throw new Error('GENERATION_REVIEW_LINEAGE_UNPROVEN')
+      const matching = this.attempts().filter(row => {
+        const effect = JSON.parse(row.usage_receipt_json).reviewRevisionEffect as Effect | undefined
+        return effect?.kind === 'review' && effect.id === plan.reviewId
+      })
+      if (matching.length !== 1) throw new Error('GENERATION_REVIEW_LINEAGE_UNPROVEN')
+      const parentRun = this.runs.get(matching[0]!.run_id)
+      if (parentRun.rootActionId !== plan.rootActionId || parentRun.binding.projectId !== this.scope.projectId)
+        throw new Error('GENERATION_REVIEW_LINEAGE_UNPROVEN')
+      return { parentRootActionId: plan.rootActionId,
+        modelId: (parentRun.binding.sourceManifest.modelReceipt as { modelId: string }).modelId }
+    }
     if (!context.confirmation) return {}
     const matching = this.attempts().filter(row => {
       const effect = JSON.parse(row.usage_receipt_json).reviewRevisionEffect as Effect | undefined
@@ -135,9 +167,11 @@ export class ReviewRevisionGeneration {
       || !isDeepStrictEqual(selection.selectedDraftIds, finalized ? [] : [context.source.id])
       || !isDeepStrictEqual(selection.selectedFinalizedDraftIds, finalized ? [context.source.id] : [])
       || !isDeepStrictEqual(selection.authorInputs, [{ id: 'review-revision-context', text: JSON.stringify(context) }])
-      || selection.parentRootActionId !== prepared.parentRootActionId && context.operation === 'refine-from-review'
+      || (prepared.parentRootActionId !== undefined && selection.parentRootActionId !== prepared.parentRootActionId)
+      || (prepared.parentRootActionId === undefined && selection.parentRootActionId !== undefined)
       || prepared.modelId && selection.modelId !== prepared.modelId) throw new Error('GENERATION_REVIEW_CONTEXT_MISMATCH')
-    if (!isDeepStrictEqual(context, captureReviewRevisionContext(this.db, reviewRevisionRequest(context), this.scope.projectId))
+    if (!isDeepStrictEqual(context, captureReviewRevisionContext(this.db, reviewRevisionRequest(context), this.scope.projectId,
+      context.recheck?.version))
       || !isDeepStrictEqual(this.parent(context), prepared.parentRootActionId ? { parentRootActionId: prepared.parentRootActionId, modelId: prepared.modelId } : {}))
       throw new Error('GENERATION_REVIEW_CONTEXT_CHANGED')
     return structuredClone(prepared)
@@ -162,9 +196,35 @@ export class ReviewRevisionGeneration {
         return saved.receipt
       }
       this.assertPrepared(request.contextId, run); assertSources(request.handle)
+      const proof = this.proveArtifact(run, request.artifact)
       const content = this.reviewBody(run, request.artifact)
       const result = ReviewRepository.create({ baseDraftId: context.source.id, content, expectedSource: context.source }, this.db)
-      return this.record(run, request.artifact, { kind: 'review', id: result.id, index: result.reviewIndex, contentHash: textHash(content) })
+      const contentHash = textHash(content)
+      const receipt = this.record(run, request.artifact, { kind: 'review', id: result.id, index: result.reviewIndex, contentHash })
+      if (context.recheck) {
+        const policy = { ...context.recheck, version: 2 } as const
+        const built = buildReviewCycleRecheckReport(proof.artifact.text, context.source.content, policy, context.uiLocale)
+        const findings = built.decisions.filter(decision => decision.status !== 'unknown').map(decision => {
+          const item = built.items[decision.reviewItemIndex]!
+          const resolved = decision.status === 'resolved'
+          return { findingId: decision.findingId, targetId: decision.targetId, reviewItemIndex: decision.reviewItemIndex,
+            evidenceHash: textHash(JSON.stringify({ findingId: decision.findingId, targetId: decision.targetId,
+              reviewItemIndex: decision.reviewItemIndex, item, resolved })), resolved }
+        })
+        const attempt = this.attempts(run.runId).find(row => row.attempt_id === proof.row.attempt_id)
+        if (!attempt) throw new Error('GENERATION_REVIEW_RECEIPT_INVALID')
+        const usage = JSON.parse(attempt.usage_receipt_json)
+        this.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify({ ...usage,
+          reviewCycleRecheck: { version: policy.version, cycleId: context.recheck.cycleId,
+            comparisonVersion: context.recheck.comparisonVersion, mergedHash: context.recheck.mergedHash,
+            findingSetHash: context.recheck.findingSetHash, findings } }), attempt.attempt_id)
+        ReviewCycleRepository.commitRecheck(context.recheck.cycleId, attempt.attempt_id, this.db)
+        return this.saved(run)!.receipt
+      }
+      ReviewCycleRepository.create({ rootActionId: run.rootActionId, reviewId: result.id, reviewContentHash: contentHash,
+        source: { projectId: run.binding.projectId, epoch: run.binding.epoch, sourceId: `draft:${context.source.id}`,
+          revision: context.source.version, contentHash: textHash(context.source.content) } }, this.db)
+      return receipt
     }).immediate()
   }
   commitRevision(request: RevisionGenerationCommitRequest, assertSources: (handle: MainGenerationRunHandle) => void): ReviewRevisionCommitReceipt {
@@ -185,13 +245,24 @@ export class ReviewRevisionGeneration {
       const content = composition.text.trim()
       if (!content) throw new Error('GENERATION_REVIEW_REVISION_EMPTY')
       assertMateriallyCompleteRevision(context.source.content, content, context.config.wordsPerChapter, context.uiLocale)
+      if (isNoopRevision(context.source.content, content)) throw new Error('GENERATION_REVIEW_REVISION_NOOP')
       const result = RevisionRepository.replacePending({ baseDraftId: context.source.id,
         revisionType: context.operation === 'refine-from-review' ? 'review-fix' : 'refine',
         ...(context.confirmation ? { reviewSourceId: context.confirmation.reviewSourceId } : {}),
         userPrompt: context.confirmation?.snapshot.authorGuidance ?? context.authorInputs.find(item => item.id === 'user-prompt')?.text ?? '',
         content, wordCount: countDraftUnits(content), expectedSource: context.source }, this.db)
-      return this.record(run, artifact, { kind: 'revision', id: result.id, index: result.revisionIndex,
+      const receipt = this.record(run, artifact, { kind: 'revision', id: result.id, index: result.revisionIndex,
         contentHash: textHash(content), compositionHash: composition.textHash })
+      if (context.confirmation) {
+        const cycle = this.db.prepare('SELECT cycle_id,root_action_id FROM review_cycles WHERE review_id=?')
+          .get(context.confirmation.snapshot.sourceReviewId) as { cycle_id: string; root_action_id: string } | undefined
+        if (!cycle) throw new Error('REVIEW_CYCLE_INPUT_INVALID')
+        ReviewCycleRepository.attachGeneratedRevision({ cycleId: cycle.cycle_id, rootActionId: cycle.root_action_id,
+          confirmationReviewId: context.confirmation.reviewSourceId,
+          confirmationContentHash: textHash(context.confirmation.content), revisionId: result.id,
+          revisionContentHash: textHash(content) }, this.db)
+      }
+      return receipt
     }).immediate()
   }
   readRecovery(handle: MainGenerationRunHandle, sourcesMatch: (run: DurableGenerationRun) => boolean,
@@ -205,10 +276,18 @@ export class ReviewRevisionGeneration {
       const attempt = id && this.db.prepare('SELECT attempt_id FROM generation_artifacts WHERE artifact_id=?').pluck().get(id) as string | undefined
       return attempt ? this.runs.receipt(attempt).result?.finishReason ?? null : null
     }
+    const lastCompositionFinishReason = finish(last)
+    let canResume = current
+    if (!saved && context.operation !== 'review-chapter' && composition && lastCompositionFinishReason === 'stop') {
+      try {
+        assertMateriallyCompleteRevision(context.source.content, composition.text, context.config.wordsPerChapter, context.uiLocale)
+        if (isNoopRevision(context.source.content, composition.text.trim())) canResume = false
+      } catch { canResume = false }
+    }
     return { handle: handleOf(run), context: structuredClone(context), modelId: (run.binding.sourceManifest.modelReceipt as { modelId: string }).modelId,
-      sourceStatus: current ? 'current' : 'conflict', ...(saved ? { saved } : {}),
-      ...(current && !saved ? { contextId: this.remember(context).contextId } : {}), ...(composition ? { composition } : {}),
-      lastCompositionFinishReason: finish(last), ...(latestArtifact ? { latestArtifact, latestArtifactFinishReason: finish(latestArtifact.artifactId) } : {}),
+      sourceStatus: current ? 'current' : 'conflict', canResume, ...(saved ? { saved } : {}),
+      ...(canResume && !saved ? { contextId: this.remember(context).contextId } : {}), ...(composition ? { composition } : {}),
+      lastCompositionFinishReason, ...(latestArtifact ? { latestArtifact, latestArtifactFinishReason: finish(latestArtifact.artifactId) } : {}),
       attemptedPurposes: this.attempts(run.runId).map(row => JSON.parse(row.usage_receipt_json).purpose ?? 'unknown') }
   }
   close(): void { this.contexts.clear() }

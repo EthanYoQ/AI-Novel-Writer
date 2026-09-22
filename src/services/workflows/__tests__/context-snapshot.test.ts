@@ -89,7 +89,8 @@ describe('S10A snapshot fingerprint', () => {
   it('commits the fingerprint to the omission decision', async () => {
     const first = await buildChapterContextSnapshot({ current, selection: readyWith('甲') })
     const second = await buildChapterContextSnapshot({ current, selection: readyWith('甲', [
-      { sourceId: 'plot-tree:x', reason: 'plot-tree-not-manuscript', category: 'reference', required: false },
+      { sourceId: 'plot-tree:x', revision: 1, contentHash: ref('plot-tree:x').contentHash,
+        reason: 'plot-tree-not-manuscript', category: 'reference', required: false },
     ]) })
     expect(second.hash).not.toBe(first.hash)
   })

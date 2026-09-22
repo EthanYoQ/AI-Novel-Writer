@@ -116,6 +116,10 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
       reasoningUpperBoundTokens: decision.reasoningUpperBoundTokens, requestedOutputTokens: decision.reservedOutputTokens,
     }
   }
+  // A Silicon V4 attempt is admitted only when the root can still carry its
+  // full documented-context liability. Report exhausted root accounting before
+  // deriving a misleading non-positive per-request input capacity.
+  if (siliconV4 && remaining < 1_048_576) throw new Error('ROOT_BUDGET_EXHAUSTED')
   const requestedOutputTokens = Math.min(evidence.maxOutputTokens, budget.policy.maxOutputPerRequest,
     remaining - inputUpperBoundTokens - separateReasoning - safety,
     (context ?? remaining) - inputUpperBoundTokens - separateReasoning - safety)

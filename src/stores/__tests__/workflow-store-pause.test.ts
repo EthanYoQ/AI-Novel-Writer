@@ -174,11 +174,22 @@ describe('workflow pause at a safe step boundary', () => {
     })
   })
 
-  it('durably requests cancellation immediately and finalizes it at a paused boundary', async () => {
+  it('persists import cancellation before the next orchestrator boundary without finalizing it', async () => {
     let finishStep!: () => void
+    let persistIntent!: () => void
     const blocked = new Promise<void>((resolve) => { finishStep = resolve })
-    const requested = vi.fn(async () => undefined)
+    const persisted = new Promise<void>((resolve) => { persistIntent = resolve })
+    const requested = vi.fn(() => persisted)
     const finalized = vi.fn(async () => undefined)
+    const cancelGeneration = vi.fn(async () => undefined)
+    const terminal = vi.fn()
+    const boundary: WorkflowDefinition['steps'][number]['executor'] = vi.fn(async (_step, context) => {
+      await context.cancellationRequest
+      expect(context.cancelRequested).toBe(true)
+      expect(context.cancelled).toBe(false)
+      terminal()
+      throw new Error('Import cancelled at a safe boundary.')
+    })
     const completion = useWorkflowStore.getState().startWorkflow({
       runId: 'durable-cancel-run',
       type: 'novel_import',
@@ -188,8 +199,11 @@ describe('workflow pause at a safe step boundary', () => {
       onCancelRequested: requested,
       onCancelledAtBoundary: finalized,
       steps: [
-        { name: 'one', description: 'one', executor: async () => { await blocked } },
-        { name: 'two', description: 'two', executor: vi.fn() },
+        { name: 'one', description: 'one', executor: async (_step, context) => {
+          context.requestMainGenerationCancellation = cancelGeneration
+          await blocked
+        } },
+        { name: 'two', description: 'two', executor: boundary },
       ],
     })
     await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns[0]?.steps[0]?.status).toBe('running'))
@@ -199,9 +213,16 @@ describe('workflow pause at a safe step boundary', () => {
 
     useWorkflowStore.getState().cancelWorkflow('durable-cancel-run')
     expect(requested).toHaveBeenCalledOnce()
+    expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('cancelling')
+    await vi.waitFor(() => expect(boundary).toHaveBeenCalledOnce())
+    expect(terminal).not.toHaveBeenCalled()
+    expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('cancelling')
+    persistIntent()
     await completion
 
-    expect(finalized).toHaveBeenCalledOnce()
+    expect(terminal).toHaveBeenCalledOnce()
+    expect(cancelGeneration).not.toHaveBeenCalled()
+    expect(finalized).not.toHaveBeenCalled()
     expect(useWorkflowStore.getState().history[0]).toMatchObject({
       id: 'durable-cancel-run', status: 'failed',
     })

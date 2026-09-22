@@ -46,6 +46,18 @@ export interface DocumentInfo {
   corpusKind: KnowledgeCorpusKind
 }
 
+export interface PortableKnowledgeDocument {
+  docId: string
+  fileName: string
+  corpusKind: KnowledgeCorpusKind
+  chunks: Array<{ chunkIndex: number; text: string }>
+}
+
+export interface PortableKnowledgeSnapshot {
+  version: 1
+  documents: PortableKnowledgeDocument[]
+}
+
 /** 检索结果 */
 export interface SearchResult {
   text: string
@@ -1396,6 +1408,208 @@ async function searchWithScopeInternal(
 
 export async function listDocuments(projectPath: string): Promise<DocumentInfo[]> {
   return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => listDocumentsInternal(projectPath))
+}
+
+const PORTABLE_KNOWLEDGE_VERSION = 1 as const
+const PORTABLE_KNOWLEDGE_DATE = '1970-01-01T00:00:00.000Z'
+
+function exactPortableKeys(value: Record<string, unknown>, expected: readonly string[]): void {
+  const actual = Object.keys(value).sort()
+  const wanted = [...expected].sort()
+  if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
+    throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+  }
+}
+
+function portableRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+  return value as Record<string, unknown>
+}
+
+function portableText(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.includes('\0')) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+  return value
+}
+
+function portableFileName(value: unknown): string {
+  const fileName = portableText(value)
+  const normalized = fileName.normalize('NFKC')
+  if (fileName.length > 512 || path.posix.isAbsolute(normalized) || path.win32.isAbsolute(normalized)
+    || normalized.includes('/') || normalized.includes('\\') || /^[a-z]:/iu.test(normalized)
+    || /[<>:"|?*]/u.test(normalized) || normalized.endsWith('.') || normalized.endsWith(' ')
+    || [...normalized].some(character => character.charCodeAt(0) <= 31)
+    || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu.test(normalized)) {
+    throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+  }
+  return fileName
+}
+
+function portableCorpusKind(value: unknown): KnowledgeCorpusKind {
+  if (value !== 'reference' && value !== 'project-knowledge' && value !== 'unknown') {
+    throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+  }
+  return value
+}
+
+/** Strict non-executable projection: paths, vectors and embedding identities are not accepted. */
+export function parsePortableKnowledgeSnapshot(value: unknown): PortableKnowledgeSnapshot {
+  const source = portableRecord(value)
+  exactPortableKeys(source, ['version', 'documents'])
+  if (source.version !== PORTABLE_KNOWLEDGE_VERSION || !Array.isArray(source.documents)) {
+    throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+  }
+  const documentIds = new Set<string>()
+  const documents = source.documents.map((item) => {
+    const document = portableRecord(item)
+    exactPortableKeys(document, ['docId', 'fileName', 'corpusKind', 'chunks'])
+    const docId = portableText(document.docId)
+    const fileName = portableFileName(document.fileName)
+    const corpusKind = portableCorpusKind(document.corpusKind)
+    if (documentIds.has(docId) || !Array.isArray(document.chunks) || document.chunks.length === 0) {
+      throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+    }
+    documentIds.add(docId)
+    const chunks = document.chunks.map((item, index) => {
+      const chunk = portableRecord(item)
+      exactPortableKeys(chunk, ['chunkIndex', 'text'])
+      if (chunk.chunkIndex !== index) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+      return { chunkIndex: index, text: portableText(chunk.text) }
+    })
+    return { docId, fileName, corpusKind, chunks }
+  })
+  documents.sort((left, right) => left.docId.localeCompare(right.docId))
+  return { version: PORTABLE_KNOWLEDGE_VERSION, documents }
+}
+
+export function serializePortableKnowledgeSnapshot(snapshot: PortableKnowledgeSnapshot): Buffer {
+  return Buffer.from(`${JSON.stringify(parsePortableKnowledgeSnapshot(snapshot))}\n`, 'utf8')
+}
+
+async function readPortableKnowledgeSnapshotInternal(projectStorageRoot: string): Promise<PortableKnowledgeSnapshot> {
+  const dbPath = path.join(projectStorageRoot, 'lancedb')
+  if (!fs.existsSync(dbPath)) return { version: PORTABLE_KNOWLEDGE_VERSION, documents: [] }
+  const assertPhysicalTree = (entry: string): void => {
+    const info = fs.lstatSync(entry, { bigint: true })
+    if (info.isSymbolicLink() || path.resolve(fs.realpathSync.native(entry)) !== path.resolve(entry)) {
+      throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+    }
+    if (info.isDirectory()) {
+      for (const name of fs.readdirSync(entry)) assertPhysicalTree(path.join(entry, name))
+    } else if (!info.isFile() || info.nlink !== 1n) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+  }
+  const storageInfo = fs.lstatSync(projectStorageRoot)
+  if (!storageInfo.isDirectory() || storageInfo.isSymbolicLink()
+    || path.resolve(fs.realpathSync.native(projectStorageRoot)) !== path.resolve(projectStorageRoot)) {
+    throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+  }
+  assertPhysicalTree(dbPath)
+  const db = await lancedb.connect(dbPath)
+  try {
+    const tableNames = await db.tableNames()
+    const hasDocuments = tableNames.includes(DOCS_TABLE_NAME)
+    const hasChunks = tableNames.includes(TABLE_NAME)
+    if (!hasDocuments && !hasChunks) return { version: PORTABLE_KNOWLEDGE_VERSION, documents: [] }
+    if (!hasDocuments || !hasChunks) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+    const documentsTable = await db.openTable(DOCS_TABLE_NAME)
+    const chunksTable = await db.openTable(TABLE_NAME)
+    try {
+      const documentRows = await documentsTable.query().select(['id', 'fileName', 'chunkCount', 'corpusKind']).toArray()
+      const chunkRows = await chunksTable.query()
+        .select(['docId', 'fileName', 'text', 'chunkIndex', 'totalChunks', 'corpusKind']).toArray()
+      const grouped = new Map<string, Array<{ chunkIndex: number; text: string; fileName: string; corpusKind: KnowledgeCorpusKind; totalChunks: number }>>()
+      for (const row of chunkRows as Array<Record<string, unknown>>) {
+        const docId = portableText(row.docId)
+        const chunkIndex = row.chunkIndex
+        const totalChunks = row.totalChunks
+        if (!Number.isSafeInteger(chunkIndex) || (chunkIndex as number) < 0
+          || !Number.isSafeInteger(totalChunks) || (totalChunks as number) <= 0) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+        const values = grouped.get(docId) ?? []
+        values.push({ chunkIndex: chunkIndex as number, totalChunks: totalChunks as number,
+          text: portableText(row.text), fileName: portableFileName(row.fileName), corpusKind: portableCorpusKind(row.corpusKind) })
+        grouped.set(docId, values)
+      }
+      const documents = (documentRows as Array<Record<string, unknown>>).map((row) => {
+        const docId = portableText(row.id)
+        const fileName = portableFileName(row.fileName)
+        const corpusKind = portableCorpusKind(row.corpusKind)
+        const chunkCount = row.chunkCount
+        const rows = grouped.get(docId) ?? []
+        if (!Number.isSafeInteger(chunkCount) || chunkCount !== rows.length || rows.length === 0) {
+          throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+        }
+        rows.sort((left, right) => left.chunkIndex - right.chunkIndex)
+        if (rows.some((chunk, index) => chunk.chunkIndex !== index || chunk.totalChunks !== rows.length
+          || chunk.fileName !== fileName || chunk.corpusKind !== corpusKind)) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+        grouped.delete(docId)
+        return { docId, fileName, corpusKind, chunks: rows.map(chunk => ({ chunkIndex: chunk.chunkIndex, text: chunk.text })) }
+      })
+      if (grouped.size > 0) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+      const snapshot = parsePortableKnowledgeSnapshot({ version: PORTABLE_KNOWLEDGE_VERSION, documents })
+      assertPhysicalTree(dbPath)
+      return snapshot
+    } finally {
+      documentsTable.close()
+      chunksTable.close()
+    }
+  } finally { db.close() }
+}
+
+/** Reads documents and ordered canonical text under the same source mutation gate. */
+export async function readPortableKnowledgeSnapshot(projectStorageRoot: string): Promise<PortableKnowledgeSnapshot> {
+  return withKnowledgeSourceGate(projectStorageRoot, () => readPortableKnowledgeSnapshotInternal(projectStorageRoot))
+}
+
+/** Creates only canonical text tables. Embeddings and machine-local registry state remain stale/rebuildable. */
+export async function restorePortableKnowledgeSnapshot(
+  projectStorageRoot: string,
+  value: unknown,
+): Promise<PortableKnowledgeSnapshot> {
+  const snapshot = parsePortableKnowledgeSnapshot(value)
+  return withKnowledgeSourceGate(projectStorageRoot, async () => {
+    const dbPath = path.join(projectStorageRoot, 'lancedb')
+    if (fs.existsSync(dbPath) || fs.existsSync(path.join(projectStorageRoot, EMBEDDING_REGISTRY_FILE))) {
+      throw new Error('PORTABLE_KNOWLEDGE_TARGET_EXISTS')
+    }
+    if (snapshot.documents.length === 0) return snapshot
+    fs.mkdirSync(dbPath, { recursive: false })
+    const db = await lancedb.connect(dbPath)
+    try {
+      const documentRows: DocumentInfo[] = snapshot.documents.map(document => ({
+        id: document.docId,
+        fileName: document.fileName,
+        importedAt: PORTABLE_KNOWLEDGE_DATE,
+        chunkCount: document.chunks.length,
+        filePath: '',
+        corpusKind: document.corpusKind,
+      }))
+      const chunkRows: ChunkRecord[] = snapshot.documents.flatMap(document => document.chunks.map(chunk => ({
+        id: `portable:${createHash('sha256').update(`${document.docId}\0${chunk.chunkIndex}\0${chunk.text}`).digest('hex')}`,
+        docId: document.docId,
+        fileName: document.fileName,
+        text: chunk.text,
+        chunkIndex: chunk.chunkIndex,
+        totalChunks: document.chunks.length,
+        importedAt: PORTABLE_KNOWLEDGE_DATE,
+        corpusKind: document.corpusKind,
+      })))
+      await db.createTable(DOCS_TABLE_NAME, documentRows)
+      const chunks = await db.createTable(TABLE_NAME, recordsForSchema(chunkRows, canonicalChunkSchema()), { schema: canonicalChunkSchema() })
+      await ensureTextIndex(chunks)
+      chunks.close()
+    } finally { db.close() }
+    const rebuilt = await readPortableKnowledgeSnapshotInternal(projectStorageRoot)
+    if (serializePortableKnowledgeSnapshot(rebuilt).compare(serializePortableKnowledgeSnapshot(snapshot)) !== 0) {
+      throw new Error('PORTABLE_KNOWLEDGE_REBUILD_FAILED')
+    }
+    return rebuilt
+  })
+}
+
+export async function verifyPortableKnowledgeSnapshot(projectStorageRoot: string, value: unknown): Promise<boolean> {
+  const expected = serializePortableKnowledgeSnapshot(parsePortableKnowledgeSnapshot(value))
+  return withKnowledgeSourceGate(projectStorageRoot, async () => (
+    expected.compare(serializePortableKnowledgeSnapshot(await readPortableKnowledgeSnapshotInternal(projectStorageRoot))) === 0
+  ))
 }
 
 async function listDocumentsInternal(projectPath: string): Promise<DocumentInfo[]> {

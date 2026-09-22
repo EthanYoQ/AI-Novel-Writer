@@ -54,6 +54,19 @@ function setupSchema(): void {
   `)
 }
 
+function freezeFinalization(id: string): void {
+  const storage = path.join(projectRoot, '.ai-novel')
+  fs.mkdirSync(storage)
+  fs.writeFileSync(path.join(storage, 'portable-runtime-freeze.json'), JSON.stringify({
+    version: 1, originProjectId: '11111111-1111-4111-8111-111111111111', snapshotGeneration: 'snapshot-1',
+    nonReplayable: true, requiresRuntimeFreezeGuard: true, avatarReferenceProjections: [], records: [{
+      projectionId: `history:finalization_outbox:${id}`, table: 'finalization_outbox', recordId: id,
+      terminalState: 'pending', projection: {}, projectionHash: 'a'.repeat(64), excludedFields: [],
+      nonReplayable: true, originalReceiptVerified: false,
+    }],
+  }), { mode: 0o600 })
+}
+
 beforeEach(() => {
   db = new Database(':memory:')
   setupSchema()
@@ -69,6 +82,22 @@ afterEach(() => {
 })
 
 describe('FinalizationService publication failure seam', () => {
+  it('does not republish an imported historical finalization', async () => {
+    const failed = new FinalizationService({ createFinalizationId: () => 'finalization-1', publisher: { publish: vi.fn(async () => { throw new Error('disk unavailable') }) } })
+    await failed.finalize({ projectRoot, draftId: 17, chapterNumber: 1, chapterTitle: '第一章', content: '冻结定稿', contentRevision: 1 })
+    freezeFinalization('finalization-1')
+    const before = db.prepare('SELECT publication_status, last_error FROM finalization_outbox').get()
+    const publish = vi.fn(async () => undefined)
+    const result = await new FinalizationService({ publisher: { publish } }).retry({ projectRoot, finalizationId: 'finalization-1' })
+    const replay = await new FinalizationService({ createFinalizationId: () => 'unused', publisher: { publish } }).finalize({
+      projectRoot, draftId: 17, chapterNumber: 1, chapterTitle: '第一章', content: '冻结定稿', contentRevision: 1,
+    })
+    expect(result).toMatchObject({ success: false, committed: true, error: 'PORTABLE_RUNTIME_FROZEN' })
+    expect(replay).toMatchObject({ success: false, committed: true, error: 'PORTABLE_RUNTIME_FROZEN' })
+    expect(publish).not.toHaveBeenCalled()
+    expect(db.prepare('SELECT publication_status, last_error FROM finalization_outbox').get()).toEqual(before)
+  })
+
   it('keeps the committed finalization pending and makes it retriable when physical publication fails', async () => {
     const publish = vi.fn(async () => {
       throw new Error('disk unavailable')

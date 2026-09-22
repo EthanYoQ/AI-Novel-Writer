@@ -46,6 +46,7 @@ import { importInspectionStore } from '../services/import-inspection-store'
 import { loadApplicationImportSourceSecret } from '../services/import-source-identity-secret'
 import { RevisionRepository } from '../repositories/revision-repository'
 import { ReviewRepository } from '../repositories/review-repository'
+import { ReviewCycleRepository } from '../repositories/review-cycle-repository'
 import {
   isSourceDraftChangedError,
   SOURCE_DRAFT_CHANGED,
@@ -1080,10 +1081,21 @@ export function registerDatabaseController() {
     reviewIndex?: number
     content: string
     expectedSource?: ExpectedDraftSource
+    reviewCycleId?: string
   }, expectedProjectPath: string) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-      const created = ReviewRepository.create(params)
+      const db = getProjectDb()
+      if (!db) throw new Error('[ReviewRepository] 数据库未连接')
+      const created = db.transaction(() => {
+        const saved = ReviewRepository.create({ baseDraftId: params.baseDraftId, reviewIndex: params.reviewIndex,
+          content: params.content, expectedSource: params.expectedSource }, db)
+        if (params.reviewCycleId) ReviewCycleRepository.commitAuthorConfirmation({
+          cycleId: params.reviewCycleId,
+          confirmationReviewId: saved.id,
+        }, db)
+        return saved
+      })()
       return { success: true, id: created.id, reviewIndex: created.reviewIndex }
     } catch (err) {
       return {
@@ -1107,6 +1119,13 @@ export function registerDatabaseController() {
   ipcMain.handle('db:review-get-full', async (_event, id: number, expectedProjectPath: string) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
     return ReviewRepository.getFull(id)
+  })
+
+  ipcMain.handle('db:review-cycle-get', async (_event, reviewId: number, expectedProjectPath: string) => {
+    assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    const db = getProjectDb()
+    if (!db) return null
+    return ReviewCycleRepository.getByReviewId(reviewId, db)
   })
 
   ipcMain.handle('db:review-next-index', async (_event, baseDraftId: number, expectedProjectPath: string) => {

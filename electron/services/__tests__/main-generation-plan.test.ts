@@ -59,6 +59,12 @@ describe('main generation physical liability planning without provider calls', (
     const budget = ledger(); budget.policy.maxTokenLiability = 1048575
     expect(() => plan(silicon(), task, budget)).toThrow('ROOT_BUDGET_EXHAUSTED')
   })
+  it('classifies a third full-context Silicon reservation as exhausted root budget, not input capacity', () => {
+    const budget = ledger()
+    budget.attempts = [1, 2].map(index => ({ attemptId: `attempt-${index}`, reservationId: `reservation-${index}`,
+      rootActionId: '根', status: 'unknown' as const, reservedTokens: 1_048_576, requestedOutputTokens: 8_192 }))
+    expect(() => plan(silicon(), task, budget)).toThrow('ROOT_BUDGET_EXHAUSTED')
+  })
   it('reduces output for high input occupancy and refuses no positive capacity', () => {
     const budget = ledger(); budget.policy.maxTokenLiability = 4096
     const input = { ...task, messages: [{ role: 'user' as const, content: '雨'.repeat(1000) }] }

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "actionCount": 153,
+  "productShell": "writer",
+  "editorShells": ["writer"],
+  "editorRelativeBaseline": "historical-classic",
+  "migrationScenarios": {
+    "U02.A02": "legacy-shell-preference-to-writer",
+    "U02.A07": "legacy-shell-preference-with-project-state-to-writer"
+  },
+  "browserEligibleActionIds": [
+    "U03.A01", "U03.A02",
+    "U06.A01", "U06.A02", "U06.A06", "U06.A07",
+    "U07.A01", "U07.A04", "U07.A05", "U07.A06", "U07.A07", "U07.A08",
+    "U10.A07",
+    "U11.A01", "U11.A02", "U11.A03", "U11.A04", "U11.A05", "U11.A06", "U11.A07", "U11.A08", "U11.A13",
+    "U13.A01", "U13.A02", "U13.A03"
+  ]
+}

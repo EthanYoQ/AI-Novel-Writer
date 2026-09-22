@@ -8,6 +8,9 @@ import type { EditorInlineGenerationChannels } from './editor-inline-generation'
 import type { FinalizationGenerationChannels } from './finalization-generation'
 import type { GraphGenerationChannels } from './graph-generation'
 import type { LegacyRosterGenerationChannels } from './legacy-roster-generation'
+import type { CharacterAvatarChannels } from './character-avatar'
+import type { CloudBackupChannels } from './cloud-backup'
+import type { ProjectOverview } from './project-overview'
 /**
  * IPC 频道定义 — 渲染进程与主进程的类型安全通信契约
  * 所有 IPC 调用都通过此文件定义频道名和参数/返回值类型
@@ -24,6 +27,7 @@ import type { ModelCapabilities } from './provider-presets'
 import type { ModelProviderResourceId } from './model-provider-resources'
 import type { WritingLanguage } from './writing-language'
 import type { DraftStatus } from './draft-status'
+import type { ReviewCycleProjection } from './review-cycle'
 import type {
   RecoveryCandidate,
   RecoveryCandidateRecordInput,
@@ -248,6 +252,65 @@ export interface CreateProjectConfig {
   writingLanguage?: WritingLanguage
 }
 
+export interface PortableProjectExportRequest {
+  targetArchivePath: string
+  projectSession: ProjectSessionContext
+}
+
+export interface PortableProjectExportReceipt {
+  originProjectId: string
+  snapshotGeneration: string
+  targetSha256: string
+  targetByteSize: number
+  sourceEvidence: {
+    schemaVersion: number
+    schemaFingerprint: string
+    tableCount: number
+    fieldCount: number
+  }
+  entryCount: number
+  requiresRuntimeFreezeGuard: true
+}
+
+export interface PortableProjectRestoreRequest {
+  archivePath: string
+  targetProjectRoot: string
+}
+
+export interface PortableProjectRestoreReceipt {
+  originProjectId: string
+  targetProjectId: string
+  targetProjectRoot: string
+  snapshotGeneration: string
+  portableDatabaseSha256: string
+  requiresRuntimeFreezeGuard: true
+}
+
+export type PortableProjectOperationErrorCode =
+  | 'PORTABLE_ARCHIVE_INVALID'
+  | 'PORTABLE_ARCHIVE_LIMIT_EXCEEDED'
+  | 'PORTABLE_ARCHIVE_SOURCE_CHANGED'
+  | 'PORTABLE_ARCHIVE_SOURCE_UNSAFE'
+  | 'PORTABLE_ARCHIVE_PUBLISH_UNSUPPORTED'
+  | 'PORTABLE_ARCHIVE_TARGET_EXISTS'
+  | 'PORTABLE_ASSET_MISSING'
+  | 'PORTABLE_ASSET_UNSAFE'
+  | 'PORTABLE_CONTEXT_INVALID'
+  | 'PORTABLE_SCHEMA_UNSUPPORTED'
+  | 'PORTABLE_SOURCE_CHANGED'
+  | 'PORTABLE_TARGET_INSIDE_SOURCE'
+  | 'PORTABLE_UNSAFE_PROJECTION'
+  | 'PORTABLE_RESTORE_CANCELLED'
+  | 'PORTABLE_RESTORE_INVALID'
+  | 'PORTABLE_RESTORE_TARGET_EXISTS'
+  | 'PORTABLE_RESTORE_UNSAFE_TARGET'
+
+export type PortableProjectOperationFailure = {
+  success: false
+  error: string
+  errorCode?: PortableProjectOperationErrorCode
+}
+
 export interface ProjectChannels {
   'project:get-runtime-context': {
     args: []
@@ -299,11 +362,50 @@ export interface ProjectChannels {
   }
   'project:recent-list': {
     args: []
-    return: Array<{ name: string; path: string; updatedAt: string }>
+    return: Array<{
+      name: string
+      path: string
+      updatedAt: string
+      previewCapabilityId?: string
+      projectId?: string
+    }>
+  }
+  'project:peek-overview': {
+    args: [capabilityId: string]
+    return: ProjectOverview
+  }
+  'project:overview-current': {
+    args: []
+    return: ProjectOverview
   }
   'project:recent-remove': {
     args: [projectPath: string]
     return: { success: boolean; error?: string }
+  }
+  'project:archive-export': {
+    args: [request: PortableProjectExportRequest]
+    return: { success: true; receipt: PortableProjectExportReceipt } | PortableProjectOperationFailure
+  }
+  'project:archive-restore': {
+    args: [request: PortableProjectRestoreRequest]
+    return: {
+      success: true
+      receipt: PortableProjectRestoreReceipt
+      recentProjectUpdated: boolean
+      warning?: string
+    } | PortableProjectOperationFailure
+  }
+  'dialog:select-project-archive-export': {
+    args: [suggestedName: string]
+    return: string | null
+  }
+  'dialog:select-project-archive': {
+    args: []
+    return: string | null
+  }
+  'dialog:select-project-restore-target': {
+    args: [suggestedName: string]
+    return: string | null
   }
   'project:delete': {
     args: [projectPath: string, projectId: string, sessionLease: string]
@@ -993,6 +1095,13 @@ export interface DatabaseChannels {
         status: 'revised'
         wordCount: number
         idempotent: boolean
+        chapterNumber: number
+        version: number
+        reviewCycle?: {
+          cycleId: string
+          mergedHash: string
+          disposition: 'required' | 'not-required' | 'completed'
+        }
       }
       error?: string
     }
@@ -1001,10 +1110,11 @@ export interface DatabaseChannels {
   'db:revision-mark-discarded': { args: [id: number, expectedProjectPath: string]; return: { success: boolean; error?: string } }
 
   // 6. reviews
-  'db:review-create': { args: [params: { baseDraftId: number; reviewIndex?: number; content: string; expectedSource?: ExpectedDraftSource }, expectedProjectPath: string]; return: { success: boolean; id?: number; reviewIndex?: number; errorCode?: SourceDraftGuardErrorCode; error?: string } }
+  'db:review-create': { args: [params: { baseDraftId: number; reviewIndex?: number; content: string; expectedSource?: ExpectedDraftSource; reviewCycleId?: string }, expectedProjectPath: string]; return: { success: boolean; id?: number; reviewIndex?: number; errorCode?: SourceDraftGuardErrorCode; error?: string } }
   'db:review-list': { args: [baseDraftId: number, expectedProjectPath: string]; return: ReviewMeta[] }
   'db:review-get-latest': { args: [baseDraftId: number, expectedProjectPath: string]; return: ReviewFull | null }
   'db:review-get-full': { args: [id: number, expectedProjectPath: string]; return: ReviewFull | null }
+  'db:review-cycle-get': { args: [reviewId: number, expectedProjectPath: string]; return: ReviewCycleProjection | null }
   'db:review-next-index': { args: [baseDraftId: number, expectedProjectPath: string]; return: number }
 
   // 7. post_process
@@ -1163,7 +1273,7 @@ export interface MCPChannels {
 }
 
 // ===== 合并所有频道 =====
-export type AllInvokeChannels = LegacyRosterGenerationChannels & GraphGenerationChannels & FinalizationGenerationChannels & EditorInlineGenerationChannels & ImportGenerationChannels & AgentGenerationChannels & ReviewRevisionGenerationInvokeChannels & FinalizedCharacterGenerationChannels & CharacterProposalChannels & GenerationOwnerChannels & StartupChannels & WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & SkinChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
+export type AllInvokeChannels = LegacyRosterGenerationChannels & CharacterAvatarChannels & CloudBackupChannels & GraphGenerationChannels & FinalizationGenerationChannels & EditorInlineGenerationChannels & ImportGenerationChannels & AgentGenerationChannels & ReviewRevisionGenerationInvokeChannels & FinalizedCharacterGenerationChannels & CharacterProposalChannels & GenerationOwnerChannels & StartupChannels & WindowChannels & OfficialHomepageChannels & ModelProviderResourceChannels & ConfigChannels & UpdateChannels & SkinChannels & ProjectChannels & FileChannels & AppDataChannels & LLMChannels & DatabaseChannels & KnowledgeBaseChannels & ChapterLifecycleChannels & ImportChannels & MCPChannels
 export type AllEventChannels = GenerationOwnerEvents & LLMStreamEvents & UpdateStateEvents & WindowEvents
 
 /** 提取 invoke 频道名 */

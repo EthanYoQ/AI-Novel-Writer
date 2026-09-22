@@ -30,6 +30,7 @@ import { captureFinalizationSnapshot } from '../../services/finalization-snapsho
 import { DRAFT_STATUS_LABEL, DRAFT_STATUS_COLOR } from '../../shared/draft-status'
 import { countDraftUnits } from '../../shared/draft-units'
 import { PostProcessStatusPanel } from '../ui/PostProcessStatusPanel'
+import { SaveFeedback, type SaveOutcome } from './save-feedback'
 import { getChapterFinalizeScope } from '../../services/workflows/workflow-utils'
 import { guardRepairPostProcess } from '../../services/workflow-guards'
 import {
@@ -143,6 +144,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   const isChapterBusy = !!activeChapterRun
 
   const [saving, setSaving] = useState(false)
+  const [saveOutcome, setSaveOutcome] = useState<SaveOutcome>('idle')
   const [confirmAction, setConfirmAction] = useState<'refine' | 'review' | null>(null)
   const [userRefinePrompt, setUserRefinePrompt] = useState('')
   // 审稿维度多选
@@ -182,7 +184,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   const currentBodyRef = useRef(content)
 
   /** 保存（ai-novel://draft/ 走 DB，其他走 FS） */
-  const doSave = async (draftContent: string) => {
+  const doSave = async (draftContent: string, propagateFailure = false) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     const targetTab = useEditorStore.getState().tabs.find(
@@ -200,6 +202,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       contentRevision: targetTab.contentRevision ?? 0,
     }
     setSaving(true)
+    setSaveOutcome('idle')
     try {
       const resource = parseResourceUri(filePath)
       if (!resourceWriteAllowed(filePath) || resource?.kind !== 'draft') throw new Error('资源只读或无效')
@@ -221,7 +224,15 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       )
       if (currentTab) {
         useEditorStore.getState().settleTabSave(currentTab.id, saveSnapshot)
+        const settledTab = useEditorStore.getState().tabs.find(tab => tab.id === currentTab.id)
+        setSaveOutcome(settledTab?.dirty ? 'idle' : 'saved')
       }
+    } catch (error) {
+      if (isProjectSessionCurrent(projectSession)) {
+        setSaveOutcome('failed')
+        toast.error(error instanceof Error ? error.message : text('草稿保存失败', 'Could not save the draft'))
+      }
+      if (propagateFailure) throw error
     } finally {
       if (isProjectSessionCurrent(projectSession)) setSaving(false)
     }
@@ -236,7 +247,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       tabId,
       type: 'chapter',
       projectKey,
-      save: () => exitSaveRef.current(currentBodyRef.current),
+      save: () => exitSaveRef.current(currentBodyRef.current, true),
     })
   }, [projectKey, tabId])
 
@@ -261,7 +272,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       contentRevision: targetTab.contentRevision ?? 0,
     })
 
-    if (targetTab.dirty) await doSave(body)
+    if (targetTab.dirty) await doSave(body, true)
     if (!isProjectSessionCurrent(projectSession)) return null
     return Object.freeze({ body, sourceDraft })
   }
@@ -578,6 +589,10 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
         setMergeData(null)
         setMeta(prev => prev ? { ...prev, status: 'revised' } : prev)
         toast.success(text('合并完成，草稿已更新', 'Merge complete. The draft is updated.'))
+        if (result.postCommitError) toast.warning(text(
+          '合并已持久化，但自动复验未启动；请从审稿报告重试。',
+          'The merge is durable, but the automatic recheck did not start. Retry it from the review report.',
+        ))
         const { getPendingRevisions } = await import('../../services/draft-index')
         const pending = await getPendingRevisions(chapterDir, meta.version, projectKey)
         if (isProjectSessionCurrent(projectSession)) setPendingRevisions(pending)
@@ -664,12 +679,14 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
               />
             )}
 
+            <SaveFeedback dirty={isDirty} saving={saving} outcome={saveOutcome} />
+
             {/* 保存按钮 */}
             {isDirty && (
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => doSave(currentBodyRef.current)}
+                onClick={() => { void doSave(currentBodyRef.current) }}
                 disabled={saving}
                 title={text('保存（⌘S）', 'Save (Ctrl+S)')}
               >
@@ -841,9 +858,14 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
           onCharCountChange={setCharCount}
           onChange={(text) => {
             currentBodyRef.current = text
+            setSaveOutcome('idle')
             useEditorStore.getState().updateTabContent(tabId, text)
           }}
           onSave={(text) => doSave(text)}
+          paperHead={meta?.chapterTitle ? {
+            title: meta.chapterTitle,
+            subtitle: text(`第 ${meta.chapterNumber} 章`, `Chapter ${meta.chapterNumber}`),
+          } : undefined}
         />
 
 

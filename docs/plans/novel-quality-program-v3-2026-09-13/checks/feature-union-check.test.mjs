@@ -12,23 +12,45 @@ for (const feature of filled.features) for (const action of feature.actions) {
   for (const key of filled.executionRequiredFields) action.evidence[key] = 'synthetic-contract-fixture';
   Object.assign(action.evidence, { surface:'writer', testedSha:expectedSha, evidenceLevels:action.requiredEvidenceLevels, receipt:'synthetic-receipt', stepId:action.actionId });
 }
+filled.features[1].actions.find(action => action.actionId === 'U02.A02').evidence.migrationScenario = 'legacy-shell-preference-to-writer';
+filled.features[1].actions.find(action => action.actionId === 'U02.A07').evidence.migrationScenario = 'legacy-shell-preference-with-project-state-to-writer';
 let negativeCases = 0;
 const reject = result => { assert.equal(result.ok,false); negativeCases++; };
 const qualify = p => checkFeatureUnion(p, { mode:'qualification', owners, expectedSha });
 assert.equal(qualify(filled).ok, true); // Shape only, never a product PASS.
-let bad = clone(plan); bad.features[0].status = 'pass'; bad.features[0].actions[0] = filled.features[0].actions[0];
+let bad = clone(filled); bad.features[1].actions.find(action => action.actionId === 'U02.A07').evidence.migrationScenario = 'classic-toggle'; reject(qualify(bad));
+bad = clone(filled); delete bad.features[1].actions.find(action => action.actionId === 'U02.A02').evidence.migrationScenario; reject(qualify(bad));
+bad = clone(filled); bad.features[2].actions[0].evidence.evidenceLevels = ['browser'];
+assert.equal(qualify(bad).ok, true); // U03.A01 is ordinary navigation.
+bad = clone(filled); bad.features[0].actions[0].evidence.evidenceLevels = ['browser']; reject(qualify(bad));
+bad = clone(filled); bad.features[2].actions[0].evidence.evidenceLevels = []; reject(qualify(bad));
+const olderSha = 'b'.repeat(40), reused = clone(filled);
+reused.features[2].actions[0].evidence.testedSha = olderSha;
+reject(qualify(reused));
+reused.features[2].actions[0].evidence.reuseDecision = { testedSha:olderSha, changedPaths:['docs/agents/delivery.md'], differences:'execution wording only', reason:'Writer navigation code and browser fixture unchanged; reviewer accepted reuse' };
+assert.equal(qualify(reused).ok, true); // Shape only; reviewer must assess the claim.
+bad = clone(reused); bad.features[2].actions[0].evidence.reuseDecision.changedPaths = []; reject(qualify(bad));
+bad = clone(reused); bad.features[2].actions[0].evidence.reuseDecision.differences = ' '; reject(qualify(bad));
+bad = clone(reused); bad.features[2].actions[0].evidence.reuseDecision.reason = ''; reject(qualify(bad));
+bad = clone(reused); bad.features[2].actions[0].evidence.reuseDecision.testedSha = expectedSha; reject(qualify(bad));
+bad = clone(plan); bad.features[0].status = 'pass'; bad.features[0].actions[0] = filled.features[0].actions[0];
 reject(qualify(bad));
 bad = clone(filled); bad.features.at(-1).actions[0].owner = 'B02'; reject(qualify(bad));
 bad = clone(filled); bad.features[0].actions[0].evidence.surface = 'classic'; reject(qualify(bad));
 bad = clone(filled); bad.features[0].actions[1].actionId = bad.features[0].actions[0].actionId; reject(qualify(bad));
 bad = clone(filled); bad.features[0].actions[0].evidence.receipt = null; reject(qualify(bad));
 bad = clone(filled); bad.features[0].actions[1].evidence.stepId = bad.features[0].actions[0].evidence.stepId; reject(qualify(bad));
-const timing = { production:true, writerLivePreview:true, imeExactMatch:true, imeLossCount:0, imeDuplicateCount:0, selectionUndoExact:true, rerunIndex:0, samples:{} };
+const timing = { production:true, writerLivePreview:true, imeExactMatch:true, imeLossCount:0, imeDuplicateCount:0, selectionUndoExact:true, rerunIndex:0,
+  samples:{}, baseline:{testedSha:'b'.repeat(40),receipt:'isolated-historical-classic-receipt',samples:{}} };
 for (const units of plan.editorProtocol.units) {
   timing.samples[units]={};
-  for(const shell of ['classic','writer']) {
+  timing.baseline.samples[units]={};
+  for(const shell of ['writer']) {
     timing.samples[units][shell]={};
-    for(const action of plan.editorProtocol.actions) timing.samples[units][shell][action] = {warmupSamplesMs:[30,30,30],rawSamplesMs:[29,30,30,30,30,30,31],longTasksMs:[]};
+    for(const action of plan.editorProtocol.actions) {
+      timing.samples[units][shell][action] = {warmupSamplesMs:[30,30,30],rawSamplesMs:[29,30,30,30,30,30,31],longTasksMs:[]};
+      timing.baseline.samples[units][action] = {warmupSamplesMs:[30,30,30],rawSamplesMs:[29,30,30,30,30,30,31],longTasksMs:[]};
+    }
   }
 }
 const checkTiming = value => checkEditorReceipt(plan.editorProtocol,value);
@@ -41,6 +63,8 @@ bad = clone(timing); delete bad.samples[200000].writer.selection; reject(checkTi
 bad = clone(timing); bad.samples[3000].writer.input.rawSamplesMs.pop(); reject(checkTiming(bad));
 bad = clone(timing); bad.unstable=false; bad.samples[3000].writer.input.rawSamplesMs=[10,20,25,30,35,40,45]; reject(checkTiming(bad));
 bad = clone(timing); bad.samples[3000].writer.selection.rawSamplesMs=[40,40,40,40,40,40,40]; reject(checkTiming(bad));
-bad = clone(timing); bad.samples[3000].classic.input.warmupSamplesMs.pop(); reject(checkTiming(bad));
+bad = clone(timing); delete bad.samples[3000].writer.input; reject(checkTiming(bad));
+bad = clone(timing); bad.baseline.testedSha=''; reject(checkTiming(bad));
+bad = clone(timing); delete bad.baseline.samples[3000].input; reject(checkTiming(bad));
 bad = clone(timing); bad.samples[200000].writer.selection.longTasksMs=[70]; reject(checkTiming(bad));
 console.log(JSON.stringify({status:'PASS',scope:'plan-contract fixtures only; product checks NOT RUN',groups:plan.features.length,actions:plan.features.reduce((n,f)=>n+f.actions.length,0),negativeCases,editorActions:plan.editorProtocol.actions,samplesPerAction:plan.editorProtocol.sampleCount}));

@@ -14,6 +14,7 @@ import { appErrorMessage } from '../../i18n/app-errors'
 import { toast } from '../ui/Toast'
 import { CharacterCardImportButton } from '../characters/CharacterCardImportButton'
 import CodeMirrorEditor from './CodeMirrorEditor'
+import { SaveFeedback, type SaveOutcome } from './save-feedback'
 import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
@@ -112,6 +113,7 @@ function ArchFileViewerSession({
   const [editorContent, setEditorContent] = useState(initialContent)
 
   const [saving, setSaving] = useState(false)
+  const [saveOutcome, setSaveOutcome] = useState<SaveOutcome>('idle')
   const [loading, setLoading] = useState(false)
   const [showDialog, setShowDialog] = useState(false)
   const [checkingArch, setCheckingArch] = useState(false)
@@ -171,6 +173,7 @@ function ArchFileViewerSession({
     if (isCharacterProjection) return
     reloadGateRef.current.recordContentChange()
     setLoading(false)
+    setSaveOutcome('idle')
     currentContentRef.current = md
     const storeAction = archEditStoreAction({
       savedContent: savedContentRef.current,
@@ -192,6 +195,7 @@ function ArchFileViewerSession({
     reloadGateRef.current.invalidate()
     setLoading(false)
     setSaving(true)
+    setSaveOutcome('idle')
     try {
       if (!resourceWriteAllowed(filePath)) throw new Error('资源只读或无效')
       if (filePath.startsWith('ai-novel://core/')) {
@@ -225,13 +229,16 @@ function ArchFileViewerSession({
           setIsDirty(false)
           setRefreshBlockedMessage(null)
           useEditorStore.getState().markTabSaved(tabId, md)
+          setSaveOutcome('saved')
         } else {
           setIsDirty(true)
           useEditorStore.getState().updateTabContent(tabId, currentContentRef.current)
+          setSaveOutcome('idle')
         }
       }
     } catch (error) {
       if (isProjectSessionCurrent(projectSession)) {
+        setSaveOutcome('failed')
         toast.error(appErrorMessage(useLocaleStore.getState().locale, error))
       }
       // Exit-save must reject so the caller cannot close an unsaved document.
@@ -480,6 +487,7 @@ function ArchFileViewerSession({
           {isDirty && !saving && (
             <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: 'var(--color-warning)' }} title={text('有未保存的修改', 'Unsaved changes')} />
           )}
+          <SaveFeedback dirty={isDirty} saving={saving} outcome={saveOutcome} />
 
           {/* 刷新按钮 */}
           <Button
@@ -497,7 +505,7 @@ function ArchFileViewerSession({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => handleSave(currentContentRef.current)}
+              onClick={() => { void handleSave(currentContentRef.current) }}
               disabled={saving || !projectMatches}
               title={text('保存（Cmd+S）', 'Save (Cmd+S)')}
             >

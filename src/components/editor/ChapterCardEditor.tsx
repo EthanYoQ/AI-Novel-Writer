@@ -53,6 +53,7 @@ import {
   type EditableChapterBlueprintField,
 } from './chapter-card-draft-ledger'
 import { LatestRequestGate } from './latest-request-gate'
+import { SaveFeedback, type SaveOutcome } from './save-feedback'
 import {
   AuthoritativeChapterSequenceError,
   readAuthoritativeNextChapter,
@@ -106,6 +107,7 @@ export default function ChapterCardEditor({
   const [blueprints, setBlueprints] = useState<ChapterBlueprint[]>([])
   const [selectedIdx, setSelectedIdx] = useState<number>(0)
   const [saving, setSaving] = useState(false)
+  const [saveOutcome, setSaveOutcome] = useState<SaveOutcome>('idle')
   const [loading, setLoading] = useState(true)
   const [dirtyChapterNumbers, setDirtyChapterNumbers] = useState<Set<number>>(() => new Set())
   const blueprintsRef = useRef<ChapterBlueprint[]>([])
@@ -212,6 +214,7 @@ export default function ChapterCardEditor({
     ) return
     const nextDirty = new Set(dirtyChapterNumbersRef.current)
     nextDirty.add(chapterNumber)
+    setSaveOutcome('idle')
     persistProjectDraftState(projectKey, projectSession, nextBlueprints, nextDirty)
   }, [projectKey, projectMatches, persistProjectDraftState])
 
@@ -376,7 +379,7 @@ export default function ChapterCardEditor({
   }
 
   /** 保存当前章节蓝图 */
-  const handleSaveOne = async () => {
+  const handleSaveOne = async (propagateFailure = false) => {
     const projectSession = currentProjectSessionForPath(projectKey)
     if (
       !projectMatches
@@ -386,6 +389,7 @@ export default function ChapterCardEditor({
     ) return
     const savedSnapshots = captureBlueprintSnapshots([selected])
     setSaving(true)
+    setSaveOutcome('idle')
     try {
       await saveChapterBlueprint(selected, projectKey, projectSession)
       if (!isCurrentProjectSession(projectSession)) return
@@ -396,19 +400,22 @@ export default function ChapterCardEditor({
         savedSnapshots,
       )
       persistProjectDraftState(projectKey, projectSession, current.blueprints, nextDirty)
-    addLog('info', text(`第 ${selected.chapterNumber} 章蓝图已保存`, `Saved blueprint for Chapter ${selected.chapterNumber}`))
+      setSaveOutcome(nextDirty.size === 0 ? 'saved' : 'idle')
+      addLog('info', text(`第 ${selected.chapterNumber} 章蓝图已保存`, `Saved blueprint for Chapter ${selected.chapterNumber}`))
     } catch (err) {
       if (!isCurrentProjectSession(projectSession)) return
       const message = err instanceof Error ? err.message : String(err)
       addLog('error', text(`保存第 ${selected.chapterNumber} 章蓝图失败：${message}`, `Could not save the blueprint for Chapter ${selected.chapterNumber}.`))
       toast.error(text(`保存失败\n\n${message}`, 'Could not save the blueprint.'))
+      setSaveOutcome('failed')
+      if (propagateFailure) throw err
     } finally {
       if (isCurrentProjectSession(projectSession)) setSaving(false)
     }
   }
 
   /** 全量保存到 SQLite */
-  const handleSaveAll = async () => {
+  const handleSaveAll = async (propagateFailure = false) => {
     const projectSession = currentProjectSessionForPath(projectKey)
     if (
       !projectMatches
@@ -418,6 +425,7 @@ export default function ChapterCardEditor({
     const saveInput = blueprintsRef.current
     const savedSnapshots = captureBlueprintSnapshots(saveInput)
     setSaving(true)
+    setSaveOutcome('idle')
     try {
       await saveAllBlueprints(saveInput, projectKey, projectSession)
       if (!isCurrentProjectSession(projectSession)) return
@@ -428,12 +436,15 @@ export default function ChapterCardEditor({
         savedSnapshots,
       )
       persistProjectDraftState(projectKey, projectSession, current.blueprints, nextDirty)
+      setSaveOutcome(nextDirty.size === 0 ? 'saved' : 'idle')
       addLog('info', text(`已保存全部 ${saveInput.length} 章蓝图`, `Saved all ${saveInput.length} chapter blueprints`))
     } catch (err) {
       if (!isCurrentProjectSession(projectSession)) return
       const message = err instanceof Error ? err.message : String(err)
       addLog('error', text(`保存全部蓝图失败：${message}`, 'Could not save all chapter blueprints.'))
       toast.error(text(`保存失败\n\n${message}`, 'Could not save the blueprints.'))
+      setSaveOutcome('failed')
+      if (propagateFailure) throw err
     } finally {
       if (isCurrentProjectSession(projectSession)) setSaving(false)
     }
@@ -447,7 +458,7 @@ export default function ChapterCardEditor({
     registerEditorExitSaveHandler({
       type: 'chapter-card',
       projectKey,
-      save: () => exitSaveRef.current(),
+      save: () => exitSaveRef.current(true),
     })
   }, [projectKey])
 
@@ -737,6 +748,7 @@ export default function ChapterCardEditor({
               {text('未保存', 'Unsaved')}
             </span>
           )}
+          <SaveFeedback dirty={visibleDirty} saving={saving} outcome={saveOutcome} />
         </div>
         <div className="flex items-center gap-1">
           {/* 写作入口 — 仅下一章可写时显示 */}
@@ -789,7 +801,7 @@ export default function ChapterCardEditor({
             {text('清空全部蓝图', 'Clear all blueprints')}
           </Button>
           {visibleDirty && (
-            <Button variant="outline" size="sm" onClick={handleSaveAll} disabled={saving || !projectDataReady}>
+            <Button variant="outline" size="sm" onClick={() => { void handleSaveAll() }} disabled={saving || !projectDataReady}>
             <Save size={12} /> {saving ? text('保存中...', 'Saving...') : text('保存全部', 'Save all')}
             </Button>
           )}
@@ -948,7 +960,7 @@ export default function ChapterCardEditor({
                     <Trash2 size={12} />
                     {text('删除此章', 'Delete chapter')}
                   </Button>
-                  <Button variant="outline" size="sm" onClick={handleSaveOne} disabled={saving}>
+                  <Button variant="outline" size="sm" onClick={() => { void handleSaveOne() }} disabled={saving}>
                     <Save size={12} /> {saving ? text('保存中...', 'Saving...') : text('保存', 'Save')}
                   </Button>
                 </div>

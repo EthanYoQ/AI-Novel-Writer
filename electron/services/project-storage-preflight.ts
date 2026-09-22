@@ -6,9 +6,13 @@ export const PROJECT_STORAGE_PATH_UNSUPPORTED = 'PROJECT_STORAGE_PATH_UNSUPPORTE
 
 const WINDOWS_NATIVE_PATH_LIMIT = 259
 const LANCE_DATA_FILE_PLACEHOLDER = `${'0'.repeat(56)}.lance`
+const CHARACTER_AVATAR_FILE_PLACEHOLDER = `${'0'.repeat(20)}-${'0'.repeat(64)}.jpeg`
 const PROJECT_CORE_STORAGE_RELATIVE_PATHS = [
   path.win32.join('.vela', 'vela.db-wal'),
   path.win32.join(CANONICAL_PROJECT_DIRECTORY, `${CANONICAL_PROJECT_DATABASE}-wal`),
+] as const
+const PROJECT_CHARACTER_ASSET_RELATIVE_PATHS = [
+  path.win32.join(CANONICAL_PROJECT_DIRECTORY, 'avatars', '0'.repeat(64), CHARACTER_AVATAR_FILE_PLACEHOLDER),
 ] as const
 const PROJECT_KNOWLEDGE_STORAGE_RELATIVE_PATHS = [
   path.win32.join(CANONICAL_PROJECT_DIRECTORY, `embedding-spaces.json.${'0'.repeat(36)}.tmp`),
@@ -95,6 +99,7 @@ export function assertProjectStoragePathSupported(
   options: ProjectStoragePreflightOptions = {},
 ): void {
   assertDerivedStoragePathsSupported(projectRoot, PROJECT_CORE_STORAGE_RELATIVE_PATHS, 'project', options)
+  assertDerivedStoragePathsSupported(projectRoot, PROJECT_CHARACTER_ASSET_RELATIVE_PATHS, 'project', options)
   assertDerivedStoragePathsSupported(projectRoot, PROJECT_KNOWLEDGE_STORAGE_RELATIVE_PATHS, 'knowledge-base', options)
 }
 
@@ -103,6 +108,7 @@ export function assertProjectMigrationPathsSupported(projectRoot: string, option
   const migrationRoot = path.win32.join('.ai-novel-migration', `${'0'.repeat(36)}.vector-snapshot`)
   assertDerivedStoragePathsSupported(projectRoot, [
     path.win32.join('.ai-novel', 'project.db-wal'),
+    path.win32.join('.ai-novel-migration', `${'0'.repeat(36)}.staging`, 'avatars', '0'.repeat(64), CHARACTER_AVATAR_FILE_PLACEHOLDER),
     path.win32.join(migrationRoot, 'lancedb', 'chunks__space_2147483647.lance', 'data', LANCE_DATA_FILE_PLACEHOLDER),
   ], 'project', options)
 }

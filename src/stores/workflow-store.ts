@@ -164,6 +164,10 @@ export interface WorkflowContext {
   data: Record<string, unknown>
   /** 是否已取消 */
   cancelled: boolean
+  /** Import-only intent; the current bounded effect exits before the orchestrator applies cancellation. */
+  cancelRequested?: boolean
+  /** Import cancellation intent must be durable before its orchestrator writes the terminal boundary. */
+  cancellationRequest?: Promise<void>
   /** 是否已请求在当前步骤完成后的安全边界暂停 */
   pauseRequested?: boolean
 }
@@ -350,6 +354,10 @@ const continueResolveRefs = new Map<string, () => void>()
 const pauseResolveRefs = new Map<string, () => void>()
 const cancelRequestedHooks = new Map<string, (context: WorkflowContext) => void | Promise<void>>()
 const cancelBoundaryHooks = new Map<string, (context: WorkflowContext) => void | Promise<void>>()
+
+function isCancellationPending(context: WorkflowContext): boolean {
+  return context.cancelled || context.cancelRequested === true
+}
 
 /** 计算兼容字段的辅助函数 */
 function computeCompat(activeRuns: WorkflowRun[], waitingRuns: Record<string, { waitingForConfirm: boolean; waitingAfterStepIndex: number }>) {
@@ -677,10 +685,12 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     }
     activeContexts.set(run.id, context)
     if (definition.onCancelRequested) cancelRequestedHooks.set(run.id, definition.onCancelRequested)
-    if (definition.onCancelledAtBoundary) cancelBoundaryHooks.set(run.id, definition.onCancelledAtBoundary)
+    if (definition.type !== 'novel_import' && definition.onCancelledAtBoundary) {
+      cancelBoundaryHooks.set(run.id, definition.onCancelledAtBoundary)
+    }
 
     const waitForResumeAtSafeBoundary = async () => {
-      if (!context.pauseRequested || context.cancelled) return
+      if (!context.pauseRequested || isCancellationPending(context)) return
 
       updateRunById(set, run.id, { status: 'paused', pauseRequested: false })
       get().addLog('info', uiText(
@@ -689,7 +699,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         `[Paused] Workflow "${definition.title}" paused after the current step`,
       ), context.uiLocale)
       await new Promise<void>((resolve) => { pauseResolveRefs.set(run.id, resolve) })
-      if (!context.cancelled) {
+      if (!isCancellationPending(context)) {
         updateRunById(set, run.id, { status: 'running', pauseRequested: false })
         get().addLog('info', uiText(
           context.uiLocale,
@@ -704,7 +714,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       // 批量任务只在步骤之间暂停，避免中断一次正在进行的模型请求或后处理。
       await waitForResumeAtSafeBoundary()
 
-      if (!context.cancelled && ((stepByStep && i > 0) || definition.steps[i].requiresConfirmation)) {
+      if (!isCancellationPending(context) && ((stepByStep && i > 0) || definition.steps[i].requiresConfirmation)) {
         // Register before publishing waiting state so an immediate UI confirmation cannot be lost.
         const confirmed = new Promise<void>(resolve => { continueResolveRefs.set(run.id, resolve) })
         const batch = context.data.characterProposalBatch as CharacterProposalBatch | undefined
@@ -721,10 +731,10 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           `[Paused] [${definition.title}] Waiting for confirmation before step ${i + 1}: ${definition.steps[i].name}`,
         ), context.uiLocale)
         await confirmed
-        if (!context.cancelled) updateRunById(set, run.id, { status: 'running' })
+        if (!isCancellationPending(context)) updateRunById(set, run.id, { status: 'running' })
       }
       // 检查取消
-      if (context.cancelled) {
+      if (context.cancelled && definition.type !== 'novel_import') {
         updateRunById(set, run.id, {
           status: 'failed',
           error: uiText(context.uiLocale, '工作流已取消', 'Workflow was cancelled.'),
@@ -968,17 +978,23 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         return
       }
       if (ctx) {
-        ctx.cancelled = true
-        ctx.pauseRequested = false
-        void ctx.requestMainGenerationCancellation?.().catch(error => get().addLog('error', String(error), targetRun.uiLocale))
         const persistCancellation = cancelRequestedHooks.get(runId)
-        if (persistCancellation) void Promise.resolve(persistCancellation(ctx)).catch(error => {
-          get().addLog('error', uiText(
-            targetRun.uiLocale,
-            `[取消失败] 未能立即保存取消请求：${String(error)}`,
-            `[Cancellation failed] Could not persist the cancellation request immediately: ${String(error)}`,
-          ), targetRun.uiLocale)
-        })
+        if (persistCancellation && !ctx.cancellationRequest) {
+          ctx.cancellationRequest = Promise.resolve(persistCancellation(ctx))
+          void ctx.cancellationRequest.catch(error => {
+            get().addLog('error', uiText(
+              targetRun.uiLocale,
+              `[取消失败] 未能立即保存取消请求：${String(error)}`,
+              `[Cancellation failed] Could not persist the cancellation request immediately: ${String(error)}`,
+            ), targetRun.uiLocale)
+          })
+        }
+        if (targetRun.type === 'novel_import') ctx.cancelRequested = true
+        else ctx.cancelled = true
+        ctx.pauseRequested = false
+        if (targetRun.type !== 'novel_import') {
+          void ctx.requestMainGenerationCancellation?.().catch(error => get().addLog('error', String(error), targetRun.uiLocale))
+        }
       }
       // 如果在步进等待，解除 Promise
       const resolve = continueResolveRefs.get(runId)
@@ -1019,17 +1035,23 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       for (const [id, ctx] of activeContexts) {
         const run = get().activeRuns.find(item => item.id === id)
         if (!run || run.status === 'completed' || run.status === 'failed') continue
-        ctx.cancelled = true
-        ctx.pauseRequested = false
-        void ctx.requestMainGenerationCancellation?.().catch(error => get().addLog('error', String(error), run.uiLocale))
         const persistCancellation = cancelRequestedHooks.get(id)
-        if (persistCancellation) void Promise.resolve(persistCancellation(ctx)).catch(error => {
-          get().addLog('error', uiText(
-            run.uiLocale,
-            `[取消失败] 未能立即保存取消请求：${String(error)}`,
-            `[Cancellation failed] Could not persist the cancellation request immediately: ${String(error)}`,
-          ), run.uiLocale)
-        })
+        if (persistCancellation && !ctx.cancellationRequest) {
+          ctx.cancellationRequest = Promise.resolve(persistCancellation(ctx))
+          void ctx.cancellationRequest.catch(error => {
+            get().addLog('error', uiText(
+              run.uiLocale,
+              `[取消失败] 未能立即保存取消请求：${String(error)}`,
+              `[Cancellation failed] Could not persist the cancellation request immediately: ${String(error)}`,
+            ), run.uiLocale)
+          })
+        }
+        if (run.type === 'novel_import') ctx.cancelRequested = true
+        else ctx.cancelled = true
+        ctx.pauseRequested = false
+        if (run.type !== 'novel_import') {
+          void ctx.requestMainGenerationCancellation?.().catch(error => get().addLog('error', String(error), run.uiLocale))
+        }
         const resolve = continueResolveRefs.get(id)
         if (resolve) { resolve(); continueResolveRefs.delete(id) }
         const pauseResolve = pauseResolveRefs.get(id)

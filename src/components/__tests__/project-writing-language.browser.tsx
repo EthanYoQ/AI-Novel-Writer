@@ -7,11 +7,13 @@ import type { CreateProjectConfig, ProjectData } from '../../shared/ipc-channels
 import { setActiveProjectSessionContext } from '../../shared/project-session-context'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
+import { saveDirtyEditorChangesForExit, useEditorStore } from '../../stores/editor-store'
 import NewProjectDialog from '../dialogs/NewProjectDialog'
 import NovelConfigEditor from '../editor/NovelConfigEditor'
 
 const originalLocaleState = useLocaleStore.getState()
 const originalProjectState = useProjectStore.getState()
+const originalEditorState = useEditorStore.getState()
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -32,6 +34,7 @@ afterEach(async () => {
   container = undefined
   useLocaleStore.setState(originalLocaleState)
   useProjectStore.setState(originalProjectState)
+  useEditorStore.setState(originalEditorState, true)
   setActiveProjectSessionContext(null)
 })
 
@@ -263,5 +266,34 @@ describe('project writing language', () => {
     await expect.element(page.getByText('Scope: this project', { exact: true })).toBeVisible()
     await expect.element(page.getByText('Product default: 3 chapters', { exact: true })).toBeVisible()
     await expect.element(page.getByText('Effective now: 3 chapters', { exact: true })).toBeVisible()
+  })
+
+  it('propagates configuration save failure to the exit gate', async () => {
+    const currentProject = project('config-exit-failure', 'zh-CN')
+    const saveProject = vi.fn(async () => { throw new Error('磁盘已满') })
+    useLocaleStore.setState({ locale: 'zh-CN' })
+    useProjectStore.setState({ currentProject, saveProject: saveProject as never })
+    useEditorStore.setState({
+      tabs: [{
+        id: 'config-exit', name: '小说配置', type: 'config', projectKey: currentProject.path,
+        dirty: true,
+      }],
+      activeTabId: 'config-exit',
+      draftLedgers: {},
+    })
+    setActiveProjectSessionContext({
+      projectId: currentProject.id,
+      leaseId: currentProject.sessionLease!,
+      projectPath: currentProject.path,
+    })
+    await mount(<NovelConfigEditor projectKey={currentProject.path} />)
+
+    let failure: unknown
+    await act(async () => {
+      try { await saveDirtyEditorChangesForExit(currentProject.path) } catch (error) { failure = error }
+    })
+    expect(failure).toEqual(expect.objectContaining({ message: '磁盘已满' }))
+    expect(useEditorStore.getState().tabs[0].dirty).toBe(true)
+    expect(container?.textContent).toContain('保存失败')
   })
 })

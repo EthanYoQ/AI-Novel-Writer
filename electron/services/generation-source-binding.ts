@@ -5,10 +5,16 @@ import { isDeepStrictEqual } from 'node:util';
 import type Database from 'better-sqlite3';
 import type { ModelExecutionLeaseReceipt } from '../../src/shared/ipc-channels';
 import type { ContextSnapshot, SourceRef } from '../../src/shared/source-ref';
+import { isContentHash, isFinalizedSourceIdentity } from '../../src/shared/source-ref';
+import { CHARACTER_STATE_TEXT_FIELDS, type CharacterStateTextField } from '../../src/shared/character-roster';
+import type { FinalizedSourceIdentity } from '../../src/shared/finalized-continuity';
 import { inspectWritingSkillMarkdown, WRITING_SKILL_STAGES, type WritingSkillStage } from '../../src/shared/writing-skills';
 import type { WritingLanguage } from '../../src/shared/writing-language';
 import type { RunBinding } from '../repositories/generation-run-repository';
-import type { GenerationAuthorInput, GenerationBatchIntent } from '../../src/shared/generation-owner-contract';
+import type { GenerationAuthorInput, GenerationBatchIntent, MaterialDecisionIncludedSource, MaterialDecisionOmittedSource, MaterialDecisionReceipt } from '../../src/shared/generation-owner-contract';
+import { MATERIAL_DECISION_CATEGORIES, MATERIAL_DECISION_MAX_INPUT_UNITS, MATERIAL_DECISION_MAX_SOURCES,
+    MATERIAL_DECISION_OMISSION_REASONS, MATERIAL_DECISION_RECEIPT_VERSION, MATERIAL_DECISION_SOURCE_ID,
+    MATERIAL_DECISION_UNIT_METHOD_VERSION } from '../../src/shared/generation-owner-contract';
 import type { GenerationKnowledgeSnapshot } from '../../src/shared/generation-knowledge';
 import type { ReviewRevisionContext } from '../../src/shared/review-revision-generation';
 import { captureReviewRevisionContext, reviewRevisionRequest } from './review-revision-context';
@@ -25,6 +31,7 @@ import { captureGraphGenerationContext, graphGenerationTask, validateGraphGenera
 import { provenGraphOwnEventIds } from './graph-generation';
 import type { LegacyRosterGenerationContext } from '../../src/shared/legacy-roster-generation';
 import { captureLegacyRosterGenerationContext, legacyRosterGenerationTask } from './legacy-roster-generation-context';
+import { readPortableCurrentAuthority } from './portable-current-authority';
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>;
 export interface GenerationSourceBindingInput {
     projectId: string;
@@ -62,6 +69,11 @@ export interface GenerationSourceBindingInput {
     modelReceipt: SafeGenerationModelReceipt;
     policy: Readonly<Record<string, unknown>>;
     outputContract: string | Readonly<Record<string, unknown>>;
+    /**
+     * S10B 章节材料准入裁决的脱敏收据。渲染层是唯一作者，主进程只校验形状、
+     * 原样冻进 sourceManifest，并把它的哈希折进 contextSnapshotHash。
+     */
+    materialDecision?: MaterialDecisionReceipt;
 }
 export interface GenerationSourceBindingDependencies {
     db: Database.Database;
@@ -132,6 +144,89 @@ function readFile(root: string, relative: string, optional = false): Buffer | nu
     return fs.readFileSync(absolute);
 }
 function without(row: Record<string, unknown>, excluded: readonly string[]): Record<string, unknown> { return Object.fromEntries(Object.entries(row).filter(([key]) => !excluded.includes(key))); }
+const characterStateColumns: Record<CharacterStateTextField, string> = {
+    location: 'cs_location', powerLevel: 'cs_power_level', physicalState: 'cs_physical_state',
+    mentalState: 'cs_mental_state', keyItems: 'cs_key_items', recentEvents: 'cs_recent_events',
+};
+function currentCharacterProjection(db: Database.Database, projectId: string, originProjectId?: string): Record<string, unknown>[] {
+    const watermark = db.prepare("SELECT generation,stale_from_chapter AS staleFromChapter FROM continuity_projection_meta WHERE id='main'").get() as {
+        generation: number; staleFromChapter: number | null;
+    };
+    const currentSources = new Map((db.prepare(`
+      SELECT d.id AS draftId,d.chapter_number AS chapterNumber,d.version AS draftVersion,c.body,
+             o.finalization_id AS finalizationId,o.content_hash AS contentHash,o.content_snapshot AS contentSnapshot,
+             s.projection_generation AS projectionGeneration
+      FROM drafts d JOIN contents c ON c.id=d.content_id JOIN finalization_outbox o ON o.draft_id=d.id
+      JOIN summary_snapshots s ON s.draft_id=d.id AND s.chapter_number=d.chapter_number
+        AND s.source_finalization_id=o.finalization_id AND s.source_content_hash=o.content_hash
+      WHERE d.status='finalized' AND NOT EXISTS (
+        SELECT 1 FROM drafts newer WHERE newer.chapter_number=d.chapter_number AND newer.status='finalized'
+          AND (newer.version>d.version OR (newer.version=d.version AND newer.id>d.id))
+      )
+    `).all() as Array<FinalizedSourceIdentity & {
+        body: string; contentSnapshot: string; draftVersion: number; projectionGeneration: number;
+    }>).filter(row => typeof row.body === 'string' && typeof row.contentSnapshot === 'string'
+        && typeof row.finalizationId === 'string' && typeof row.contentHash === 'string'
+        && row.body === row.contentSnapshot && hash(row.body) === row.contentHash
+        && Number.isSafeInteger(row.draftVersion) && row.draftVersion > 0
+        && Number.isSafeInteger(row.projectionGeneration) && row.projectionGeneration >= 0
+        && row.projectionGeneration <= watermark.generation).map(row => [
+        stable([row.draftId, row.finalizationId, row.chapterNumber, row.contentHash]),
+        { draftVersion: row.draftVersion, projectionGeneration: row.projectionGeneration },
+    ] as const));
+    const currentProjects = [projectId, originProjectId].filter((value): value is string => Boolean(value));
+    return (db.prepare('SELECT * FROM characters ORDER BY character_id').all() as Record<string, unknown>[]).map(raw => {
+        const row = without(raw, ['created_at', 'updated_at']);
+        let provenance: Record<string, unknown> = {};
+        try {
+            const parsed = JSON.parse(String(row.cs_provenance || '{}')) as unknown;
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) provenance = parsed as Record<string, unknown>;
+        } catch { /* Unproved dynamic fields are omitted from this prompt projection. */ }
+        const projectedProvenance: Record<string, unknown> = {};
+        for (const field of CHARACTER_STATE_TEXT_FIELDS) {
+            const entry = provenance[field];
+            let trusted = false;
+            if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+                const value = entry as Record<string, unknown>;
+                const keys = Object.keys(value).sort();
+                const safeRevision = value.revision === undefined
+                    || Number.isSafeInteger(value.revision) && Number(value.revision) >= 0;
+                if (value.kind === 'author') trusted = (keys.join() === 'chapterNumber,kind' || keys.join() === 'chapterNumber,kind,revision')
+                    && Number.isSafeInteger(value.chapterNumber) && Number(value.chapterNumber) >= 0 && safeRevision;
+                else if (value.kind === 'legacy') trusted = (keys.join() === 'kind' || keys.join() === 'kind,revision') && safeRevision;
+                else if (value.kind === 'derived') {
+                    const source = value.source;
+                    const order = value.sourceOrder;
+                    const validSource = Boolean(source && typeof source === 'object' && !Array.isArray(source)
+                        && typeof (source as { finalizationId?: unknown }).finalizationId === 'string'
+                        && isFinalizedSourceIdentity(source as FinalizedSourceIdentity));
+                    const proof = validSource ? currentSources.get(stable([
+                        (source as FinalizedSourceIdentity).draftId, (source as FinalizedSourceIdentity).finalizationId,
+                        (source as FinalizedSourceIdentity).chapterNumber, (source as FinalizedSourceIdentity).contentHash,
+                    ])) : undefined;
+                    trusted = keys.join() === 'kind,revision,source,sourceOrder' && Number.isSafeInteger(value.revision) && Number(value.revision) > 0
+                        && Boolean(proof && order && typeof order === 'object' && !Array.isArray(order)
+                            && Object.keys(order).sort().join() === 'authoritativeFinalizationRevision,chapterNumber,continuityEpoch'
+                            && (order as Record<string, unknown>).chapterNumber === (source as FinalizedSourceIdentity).chapterNumber
+                            && (order as Record<string, unknown>).authoritativeFinalizationRevision === proof!.draftVersion
+                            && currentProjects.some(current => (order as Record<string, unknown>).continuityEpoch === `${current}:${proof!.projectionGeneration}`)
+                            && !(watermark.staleFromChapter !== null
+                                && (source as FinalizedSourceIdentity).chapterNumber >= watermark.staleFromChapter
+                                && proof!.projectionGeneration < watermark.generation));
+                }
+            }
+            trusted = trusted && typeof row[characterStateColumns[field]] === 'string';
+            if (trusted) projectedProvenance[field] = entry;
+            else delete row[characterStateColumns[field]];
+        }
+        if (Object.keys(projectedProvenance).length) row.cs_provenance = JSON.stringify(projectedProvenance);
+        else {
+            delete row.cs_provenance;
+            delete row.cs_updated_at_chapter;
+        }
+        return row;
+    });
+}
 function freezeAuthorInputs(value: unknown): GenerationAuthorInput[] {
     if (value === undefined) return [];
     if (!Array.isArray(value) || value.length > 64) fail('GENERATION_AUTHOR_INPUT_INVALID');
@@ -148,6 +243,112 @@ function freezeAuthorInputs(value: unknown): GenerationAuthorInput[] {
         if (bytes > 8 * 1024 * 1024) fail('GENERATION_AUTHOR_INPUT_TOO_LARGE');
         return { id: item.id, text: item.text };
     });
+}
+/**
+ * 材料准入收据的边界检查（S10B 步骤 3）。
+ *
+ * 渲染层是收据的唯一作者，但主进程绝不因此免检：字段名、闭合枚举、来源身份、稳定排序、
+ * 去重、容量与覆盖计数逐项闭合，越界一律 `GENERATION_MATERIAL_DECISION_INVALID`。
+ * 脱敏来自有限来源 ID/枚举合同，不把“看起来像安全字符串”的正则当成隐私证明。
+ */
+function decisionCount(value: unknown, minimum = 0, maximum = Number.MAX_SAFE_INTEGER): number {
+    if (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > maximum)
+        fail('GENERATION_MATERIAL_DECISION_INVALID');
+    return value as number;
+}
+function decisionEnum<T extends string>(value: unknown, allowed: readonly T[]): T {
+    if (typeof value !== 'string' || !allowed.includes(value as T))
+        fail('GENERATION_MATERIAL_DECISION_INVALID');
+    return value as T;
+}
+function decisionFields(value: unknown, allowed: readonly string[]): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        fail('GENERATION_MATERIAL_DECISION_INVALID');
+    const record = value as Record<string, unknown>, keys = Object.keys(record);
+    if (keys.length !== allowed.length || keys.some(key => !allowed.includes(key)))
+        fail('GENERATION_MATERIAL_DECISION_INVALID');
+    return record;
+}
+function decisionSources(value: unknown, kind: 'included' | 'omitted'): (MaterialDecisionIncludedSource | MaterialDecisionOmittedSource)[] {
+    if (!Array.isArray(value) || value.length > MATERIAL_DECISION_MAX_SOURCES)
+        fail('GENERATION_MATERIAL_DECISION_INVALID');
+    return value.map(entry => {
+        const record = decisionFields(entry, kind === 'included'
+            ? ['sourceId', 'revision', 'contentHash', 'category', 'required', 'units']
+            : ['sourceId', 'revision', 'contentHash', 'reason', 'category', 'required']);
+        if (typeof record.sourceId !== 'string' || !MATERIAL_DECISION_SOURCE_ID.test(record.sourceId) || typeof record.required !== 'boolean')
+            fail('GENERATION_MATERIAL_DECISION_INVALID');
+        const sourceId = record.sourceId, revision = decisionCount(record.revision), contentHash = record.contentHash;
+        if (typeof contentHash !== 'string' || !isContentHash(contentHash)) fail('GENERATION_MATERIAL_DECISION_INVALID');
+        const category = decisionEnum(record.category, MATERIAL_DECISION_CATEGORIES), required = record.required;
+        const suffix = Number(sourceId.slice(sourceId.lastIndexOf(':') + 1));
+        const semantic = sourceId === 'author:required'
+            ? category === 'author' && required && revision === 1
+            : sourceId.startsWith('review:confirmed:')
+                ? category === 'author' && required && revision === suffix
+                : sourceId.startsWith('finalized:')
+                    ? category === 'finalized-history' && revision === suffix
+                    : sourceId.startsWith('candidate:')
+                        ? category === 'finalized-history' && revision >= 1
+                        : sourceId.startsWith('reference:')
+                            ? category === 'reference' && !required && revision === 1
+                            : false;
+        if (!semantic) fail('GENERATION_MATERIAL_DECISION_INVALID');
+        if (kind === 'included') {
+            return { sourceId, revision, contentHash, category, required,
+                units: decisionCount(record.units, 1, MATERIAL_DECISION_MAX_INPUT_UNITS) };
+        }
+        return { sourceId, revision, contentHash,
+            reason: decisionEnum(record.reason, MATERIAL_DECISION_OMISSION_REASONS), category, required };
+    });
+}
+function compareCodeUnit(left: string, right: string): number { return left < right ? -1 : left > right ? 1 : 0; }
+function decisionIdentity(value: { sourceId: string; revision: number; contentHash: string }): string {
+    return JSON.stringify([value.sourceId, value.revision, value.contentHash]);
+}
+function compareDecisionIdentity(left: { sourceId: string; revision: number; contentHash: string }, right: { sourceId: string; revision: number; contentHash: string }): number {
+    return compareCodeUnit(left.sourceId, right.sourceId) || left.revision - right.revision || compareCodeUnit(left.contentHash, right.contentHash);
+}
+function freezeMaterialDecision(value: unknown): MaterialDecisionReceipt {
+    const record = decisionFields(value, ['version', 'verdict', 'promptHash', 'capacity', 'coverage', 'included', 'omitted']);
+    if (record.version !== MATERIAL_DECISION_RECEIPT_VERSION || record.verdict !== 'admitted')
+        fail('GENERATION_MATERIAL_DECISION_INVALID');
+    if (typeof record.promptHash !== 'string' || !isContentHash(record.promptHash))
+        fail('GENERATION_MATERIAL_DECISION_INVALID');
+    const capacity = decisionFields(record.capacity, ['maxInputUnits', 'methodVersion', 'admittedUnits']);
+    const coverage = decisionFields(record.coverage, ['required', 'included', 'complete']);
+    const frozen: MaterialDecisionReceipt = {
+        version: MATERIAL_DECISION_RECEIPT_VERSION, verdict: 'admitted', promptHash: record.promptHash,
+        capacity: { maxInputUnits: decisionCount(capacity.maxInputUnits, 1, MATERIAL_DECISION_MAX_INPUT_UNITS),
+            methodVersion: decisionEnum(capacity.methodVersion, [MATERIAL_DECISION_UNIT_METHOD_VERSION]),
+            admittedUnits: decisionCount(capacity.admittedUnits, 0, MATERIAL_DECISION_MAX_INPUT_UNITS) },
+        coverage: { required: decisionCount(coverage.required), included: decisionCount(coverage.included),
+            complete: coverage.complete === true },
+        included: decisionSources(record.included, 'included') as MaterialDecisionIncludedSource[],
+        omitted: decisionSources(record.omitted, 'omitted') as MaterialDecisionOmittedSource[],
+    };
+    const includedIdentities = frozen.included.map(decisionIdentity), omittedEvents = frozen.omitted.map(item => `${decisionIdentity(item)}\0${item.reason}`);
+    const sortedIncluded = [...frozen.included].sort(compareDecisionIdentity);
+    const sortedOmitted = [...frozen.omitted].sort((left, right) => compareDecisionIdentity(left, right)
+        || compareCodeUnit(left.reason, right.reason) || compareCodeUnit(left.category, right.category)
+        || Number(left.required) - Number(right.required));
+    const includedHashes = new Set(frozen.included.map(item => item.contentHash));
+    const requiredIdentities = new Map<string, string>();
+    for (const item of [...frozen.included, ...frozen.omitted]) if (item.required) requiredIdentities.set(decisionIdentity(item), item.contentHash);
+    const coveredRequired = [...requiredIdentities.values()].filter(contentHash => includedHashes.has(contentHash)).length;
+    const admittedUnits = frozen.included.reduce((sum, item) => sum + item.units, 0);
+    const disallowedIntersection = frozen.omitted.some(item => includedIdentities.includes(decisionIdentity(item))
+        && item.reason !== 'locator-statement-not-evidence' && item.reason !== 'evidence-not-locatable');
+    if (frozen.included.length + frozen.omitted.length > MATERIAL_DECISION_MAX_SOURCES
+        || new Set(includedIdentities).size !== includedIdentities.length
+        || new Set(omittedEvents).size !== omittedEvents.length || disallowedIntersection
+        || !isDeepStrictEqual(frozen.included, sortedIncluded) || !isDeepStrictEqual(frozen.omitted, sortedOmitted)
+        || admittedUnits !== frozen.capacity.admittedUnits || admittedUnits > frozen.capacity.maxInputUnits
+        || frozen.coverage.required !== requiredIdentities.size || frozen.coverage.included !== coveredRequired
+        || !frozen.coverage.complete || frozen.coverage.included !== frozen.coverage.required)
+        fail('GENERATION_MATERIAL_DECISION_INVALID');
+    safeMetadata(frozen);
+    return JSON.parse(stable(frozen));
 }
 export function buildGenerationSourceBinding(deps: GenerationSourceBindingDependencies, input: GenerationSourceBindingInput): GenerationSourceBindingResult {
     if (!deps.db.open || !input.projectId || !input.epoch || !input.operation)
@@ -179,6 +380,34 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         fail('GENERATION_ASSET_ID_INVALID');
     const dataVersion = deps.db.pragma('data_version', { simple: true }), changes = deps.db.prepare('SELECT total_changes()').pluck().get();
     const modelReceipt = modelProjection(input.modelReceipt);
+    const materialDecision = input.materialDecision === undefined ? undefined : freezeMaterialDecision(input.materialDecision);
+    if (materialDecision && !['chapter-draft', 'review-chapter', 'refine-draft', 'refine-from-review'].includes(input.operation))
+        fail('GENERATION_MATERIAL_DECISION_INVALID');
+    if (materialDecision && input.operation === 'chapter-draft') {
+        if (!materialDecision.included.some(item => item.sourceId === 'author:required')
+            || materialDecision.included.some(item => item.sourceId.startsWith('candidate:')
+                && !input.selectedDraftIds.includes(Number(item.sourceId.slice('candidate:'.length))))
+            || materialDecision.included.some(item => item.sourceId.startsWith('finalized:')
+                && !input.selectedFinalizedDraftIds.includes(Number(item.sourceId.slice('finalized:'.length)))))
+            fail('GENERATION_MATERIAL_DECISION_INVALID');
+    }
+    if (materialDecision && ['review-chapter', 'refine-draft'].includes(input.operation)) {
+        const admitted = new Set((input.reviewRevisionContext?.history ?? []).flatMap(item => item.identity
+            ? [decisionIdentity(item.identity)] : []));
+        if ([...materialDecision.included, ...materialDecision.omitted]
+            .some(item => !item.sourceId.startsWith('finalized:') || !admitted.has(decisionIdentity(item))))
+            fail('GENERATION_MATERIAL_DECISION_INVALID');
+    }
+    if (materialDecision && input.operation === 'refine-from-review') {
+        const reviewSourceId = input.reviewRevisionContext?.confirmation?.reviewSourceId;
+        const expected = `review:confirmed:${reviewSourceId}`;
+        if (!Number.isSafeInteger(reviewSourceId) || reviewSourceId! < 1
+            || materialDecision.included.length !== 1 || materialDecision.omitted.length !== 0
+            || materialDecision.included[0]!.sourceId !== expected || materialDecision.included[0]!.revision !== reviewSourceId)
+            fail('GENERATION_MATERIAL_DECISION_INVALID');
+    }
+    const materialDecisionHash = materialDecision ? hash(stable(materialDecision)) : undefined;
+    const transferAuthority = readPortableCurrentAuthority({ database: deps.db, projectStorageRoot: deps.projectStorageRoot, projectId: input.projectId });
     safeMetadata(input.policy);
     safeMetadata(input.outputContract);
     const materials: {
@@ -216,13 +445,12 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
             add('agent-blueprints:all', 0, stable(blueprints.map(row => without(row, ['created_at', 'updated_at', 'notes_updated_at']))), 'unconfirmed-continuity', 'actual author plans guarded across Agent tool confirmations');
         }
         if (input.reviewRevisionContext) {
-            const currentContext = captureReviewRevisionContext(deps.db, reviewRevisionRequest(input.reviewRevisionContext), input.projectId);
+            const currentContext = captureReviewRevisionContext(deps.db, reviewRevisionRequest(input.reviewRevisionContext), input.projectId, input.reviewRevisionContext.recheck?.version);
             if (!isDeepStrictEqual(input.reviewRevisionContext, currentContext)) fail('GENERATION_REVIEW_CONTEXT_CHANGED');
             add('review-revision-context', 0, JSON.stringify(currentContext), 'author-constraint', 'main-verified frozen manuscript, author decisions and review material');
         }
         if (input.operation === 'chapter-draft') {
-            const characters = deps.db.prepare('SELECT * FROM characters ORDER BY character_id').all() as Record<string, unknown>[];
-            add('characters:all', 0, stable(characters.map(row => without(row, ['created_at', 'updated_at']))), 'author-constraint', 'current structured character facts consumed by drafting');
+            add('characters:all', 0, stable(currentCharacterProjection(deps.db, input.projectId, transferAuthority?.originProjectId)), 'author-constraint', 'current structured character facts consumed by drafting');
             const relationships = deps.db.prepare('SELECT * FROM character_relationships ORDER BY relationship_id').all() as Record<string, unknown>[];
             add('character-relationships:all', 0, stable(relationships.map(row => without(row, ['created_at', 'updated_at']))), 'author-constraint', 'current identity relationships projected into character profiles');
             const plans = deps.db.prepare('SELECT * FROM narrative_thread_plans ORDER BY id').all() as Record<string, unknown>[];
@@ -396,7 +624,8 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     if (agentContext) add('agent-context', 0, JSON.stringify(agentContext), 'author-constraint', 'explicit conversation and tool definitions with main-read project facts and identity template');
     if (deps.db.pragma('data_version', { simple: true }) !== dataVersion || deps.db.prepare('SELECT total_changes()').pluck().get() !== changes)
         fail('GENERATION_SOURCE_CHANGED_DURING_SNAPSHOT');
-    const sourceManifest = { version: 1, ...(input.finalizedCharacterContextHash ? { finalizedCharacterContextHash: input.finalizedCharacterContextHash } : {}), operation: input.operation, ...(input.knowledgeSnapshot ? { knowledgeSnapshot: structuredClone(input.knowledgeSnapshot) } : {}), ...(input.batchId ? { batchId: input.batchId } : {}), ...(input.batchIntent ? { batchIntent: structuredClone(input.batchIntent) } : {}), ...(input.chapterNumber !== undefined ? { chapterNumber: input.chapterNumber } : {}), selectedDraftIds: [...input.selectedDraftIds], selectedFinalizedDraftIds: [...input.selectedFinalizedDraftIds], ...(blueprintChapters.length ? { selectedBlueprintChapterNumbers: [...blueprintChapters] } : {}), promptKeys: [...input.promptKeys], skillStages: [...input.skillStages], ...(authorInputs.length ? { authorInputs } : {}), modelReceipt, policy: input.policy, outputContract: input.outputContract };
+    const sourceManifest = { version: 1, ...(input.finalizedCharacterContextHash ? { finalizedCharacterContextHash: input.finalizedCharacterContextHash } : {}), operation: input.operation, ...(input.knowledgeSnapshot ? { knowledgeSnapshot: structuredClone(input.knowledgeSnapshot) } : {}), ...(input.batchId ? { batchId: input.batchId } : {}), ...(input.batchIntent ? { batchIntent: structuredClone(input.batchIntent) } : {}), ...(input.chapterNumber !== undefined ? { chapterNumber: input.chapterNumber } : {}), selectedDraftIds: [...input.selectedDraftIds], selectedFinalizedDraftIds: [...input.selectedFinalizedDraftIds], ...(blueprintChapters.length ? { selectedBlueprintChapterNumbers: [...blueprintChapters] } : {}), promptKeys: [...input.promptKeys], skillStages: [...input.skillStages], ...(authorInputs.length ? { authorInputs } : {}), ...(materialDecision ? { materialDecision, materialDecisionHash } : {}), modelReceipt, policy: input.policy, outputContract: input.outputContract };
+    if (transferAuthority) Object.assign(sourceManifest, { portableTransferAuthority: transferAuthority });
     if (input.reviewRevisionContext) Object.assign(sourceManifest, { reviewRevisionContext: structuredClone(input.reviewRevisionContext), reviewRevisionContextHash: hash(JSON.stringify(input.reviewRevisionContext)) });
     if (legacyContext) {
         const task = legacyRosterGenerationTask(legacyContext);
@@ -422,8 +651,17 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         Object.assign(sourceManifest, { editorInlineInput, editorInlineOriginEpoch: input.editorInlineOriginEpoch ?? input.epoch, editorInlineContext, editorInlineContextHash: hash(JSON.stringify(editorInlineContext)), editorInlineTask: task, editorInlineTaskHash: hash(JSON.stringify(task)) });
     }
     if (importContext) Object.assign(sourceManifest, { importSlot: importContext.slot, importSlotKey: importGenerationSlotKey(importContext.slot), importContext });
-    const contextHash = hash(stable(contextSources.map(({ ref, ...entry }) => ({ ...entry, ref: without(ref as unknown as Record<string, unknown>, ['epoch']) }))));
-    const context: ContextSnapshot = { projectId: input.projectId, epoch: input.epoch, id: `context:${contextHash}`, hash: contextHash, sources: contextSources, omissions: [], estimate: { methodVersion: 'utf8-bytes-v1', inputUnits: materials.reduce((sum, item) => sum + Buffer.byteLength(item.text), 0) } };
+    if (transferAuthority) {
+        const text = stable(transferAuthority);
+        contextSources.push({ ref: { projectId: input.projectId, epoch: input.epoch, sourceId: `portable-transfer:${transferAuthority.receiptId}`, revision: 0, contentHash: hash(text) },
+            slot: 'unconfirmed-continuity', reason: 'restored portable receipt identity; not prose or execution authority' });
+    }
+    const contextSourcesHash = hash(stable(contextSources.map(({ ref, ...entry }) => ({ ...entry, ref: without(ref as unknown as Record<string, unknown>, ['epoch']) }))));
+    // S10B 步骤 3：准入裁决折进冻结上下文哈希。没有裁决时逐字节保持原来的口径，
+    // 避免改动无关操作的指纹；有裁决时同一份 source 集配上不同准入也必须
+    // 得到不同的 contextSnapshotId，恢复无法悄悄换一份材料裁决继续。
+    const contextHash = materialDecisionHash ? hash(stable([contextSourcesHash, materialDecisionHash])) : contextSourcesHash;
+    const context: ContextSnapshot = { projectId: input.projectId, epoch: input.epoch, id: `context:${contextHash}`, hash: contextHash, ...(transferAuthority ? { transferAuthority } : {}), sources: contextSources, omissions: [], estimate: { methodVersion: 'utf8-bytes-v1', inputUnits: materials.reduce((sum, item) => sum + Buffer.byteLength(item.text), 0) } };
     const fingerprint = { chapterBriefHash: hash(stable(facts.brief)), authorGuidanceHash: hash(stable(authorInputs.length ? [facts.core, authorInputs] : facts.core)), dependencyHash: hash(stable(materials.filter(item => /^(draft|finalized):/.test(item.ref.sourceId)).map(item => ({ ...item.ref, epoch: undefined })))), contextSnapshotHash: contextHash, templateHash: hash(stable(assets)), skillSnapshotHash: hash(stable(skills)), modelLeaseRevision: hash(stable(modelReceipt)), policyHash: hash(stable(input.policy)), outputContractHash: hash(stable(input.outputContract)) };
     return { binding: { projectId: input.projectId, epoch: input.epoch, fingerprint, contextSnapshotId: context.id, sourceRefs: materials.map(item => item.ref), sourceManifest }, context, materials };
 }
