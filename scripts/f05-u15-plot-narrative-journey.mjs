@@ -55,6 +55,7 @@ let sourcePlanId
 let failNextRequest = false
 let generationFailureEvidence
 let candidateRejectionEvidence
+let eventEvidenceFailure
 const provider = createServer(async (request, response) => {
   const authorized = request.method === 'POST' && request.url === '/v1/chat/completions'
     && request.headers.authorization === `Bearer ${model.apiKey}`
@@ -249,12 +250,63 @@ async function main() {
     steps.push({ stepId: 'v3-narrative-plan-update', relatedActionId: 'U15.A07', coverage: 'ui-plan-update',
       assertion: 'V3 plan edit updated the persisted source identity shown in the plan list' })
 
+    phase = 'v3-narrative-event-evidence-reject'
+    const beforeInvalidOpen = await invoke(session.page, 'project:open', created.projectPath, randomUUID(), created.projectPath)
+    assert.equal(beforeInvalidOpen.success, true, beforeInvalidOpen.error)
+    const beforeInvalidSession = { projectId: created.projectId, projectPath: created.projectPath,
+      leaseId: beforeInvalidOpen.project.sessionLease }
+    const beforeInvalidPlans = await invoke(session.page, 'db:narrative-thread-list', created.projectPath, beforeInvalidSession)
+    const beforeInvalidPlanReadSha256 = createHash('sha256').update(JSON.stringify(beforeInvalidPlans)).digest('hex')
+    assert.equal(beforeInvalidPlans.length, 1)
+    assert.equal(beforeInvalidPlans[0].id, sourcePlanId)
+    assert.equal(beforeInvalidPlans[0].events.length, 0)
+    await openProject(session.page)
+    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
+    await views.getByRole('tab', { name: '计划清单' }).click()
+    const eventPlanSection = session.page.locator(`#narrative-plan-${sourcePlanId}`)
+    await eventPlanSection.getByRole('heading', { name: updatedTitle }).waitFor({ state: 'visible' })
+    await eventPlanSection.getByRole('button', { name: '确认定稿事件' }).click()
+    const eventDraftSelect = eventPlanSection.locator('select').first()
+    const selectedFinalizedDraft = await eventDraftSelect.inputValue()
+    assert(selectedFinalizedDraft, 'event form did not select a finalized chapter')
+    await eventDraftSelect.selectOption(selectedFinalizedDraft)
+    const invalidEvidence = `不存在的合成证据-${runId.slice(0, 8)}`
+    const invalidReason = '用于验证定稿证据拒绝'
+    await eventPlanSection.getByPlaceholder('粘贴该定稿章节中的短原文').fill(invalidEvidence)
+    await eventPlanSection.getByPlaceholder('确认理由').fill(invalidReason)
+    await eventPlanSection.getByRole('button', { name: '保存事件' }).click()
+    const evidenceError = eventPlanSection.getByText('请粘贴所选定稿章节中实际出现的短原文。', { exact: true })
+    await evidenceError.waitFor({ state: 'visible' })
+    const evidenceErrorText = (await evidenceError.textContent())?.trim()
+    assert.equal(evidenceErrorText, '请粘贴所选定稿章节中实际出现的短原文。')
+    assert.equal(await eventDraftSelect.inputValue(), selectedFinalizedDraft)
+    const afterInvalidOpen = await invoke(session.page, 'project:open', created.projectPath, randomUUID(), created.projectPath)
+    assert.equal(afterInvalidOpen.success, true, afterInvalidOpen.error)
+    const afterInvalidSession = { projectId: created.projectId, projectPath: created.projectPath,
+      leaseId: afterInvalidOpen.project.sessionLease }
+    const afterInvalidPlans = await invoke(session.page, 'db:narrative-thread-list', created.projectPath, afterInvalidSession)
+    const afterInvalidPlanReadSha256 = createHash('sha256').update(JSON.stringify(afterInvalidPlans)).digest('hex')
+    assert.deepEqual(afterInvalidPlans, beforeInvalidPlans, 'invalid finalized evidence changed the narrative plan or events')
+    assert.equal(afterInvalidPlans[0].events.length, 0)
+    assert.equal(afterInvalidPlanReadSha256, beforeInvalidPlanReadSha256)
+    eventEvidenceFailure = { errorText: evidenceErrorText, invalidEvidence, invalidReason, selectedFinalizedDraft,
+      beforePlanReadSha256: beforeInvalidPlanReadSha256, afterPlanReadSha256: afterInvalidPlanReadSha256,
+      beforeEventCount: beforeInvalidPlans[0].events.length, afterEventCount: afterInvalidPlans[0].events.length }
+    steps.push({ stepId: 'v3-narrative-event-evidence-reject', relatedActionId: 'U15.A07', coverage: 'ui-finalized-evidence-reject-and-db-read',
+      assertion: 'V3 rejected synthetic evidence absent from the selected finalized chapter, showed the required error, and left the plan/event read view unchanged' })
+
     phase = 'v3-narrative-event-confirm'
-    await planSection.getByRole('button', { name: '确认定稿事件' }).click()
-    await planSection.getByPlaceholder('粘贴该定稿章节中的短原文').fill('旧站来信')
-    await planSection.getByPlaceholder('确认理由').fill('定稿原文明确出现来信')
-    await planSection.getByRole('button', { name: '保存事件' }).click()
-    await planSection.getByText('第1章 · 已埋设 · 旧站来信', { exact: true }).waitFor({ state: 'visible' })
+    await openProject(session.page)
+    await session.page.locator('.writer-left-rail button[title="剧情树"]').click()
+    await views.getByRole('tab', { name: '计划清单' }).click()
+    const confirmationSection = session.page.locator(`#narrative-plan-${sourcePlanId}`)
+    await confirmationSection.getByRole('heading', { name: updatedTitle }).waitFor({ state: 'visible' })
+    await confirmationSection.getByRole('button', { name: '确认定稿事件' }).click()
+    await confirmationSection.locator('select').first().selectOption(selectedFinalizedDraft)
+    await confirmationSection.getByPlaceholder('粘贴该定稿章节中的短原文').fill('旧站来信')
+    await confirmationSection.getByPlaceholder('确认理由').fill('定稿原文明确出现来信')
+    await confirmationSection.getByRole('button', { name: '保存事件' }).click()
+    await confirmationSection.getByText('第1章 · 已埋设 · 旧站来信', { exact: true }).waitFor({ state: 'visible' })
     steps.push({ stepId: 'v3-narrative-event-confirm', relatedActionId: 'U15.A07', coverage: 'ui-finalized-evidence-confirm',
       assertion: 'V3 confirmed a short quote from the synthetic finalized chapter as a plan event' })
 
@@ -403,11 +455,11 @@ async function main() {
     packageDir,
     artifact: { executableSha256: sha256(executablePath), asarSha256: sha256(asarPath) },
     evidenceLevel: 'packaged-electron+controlled-provider', shell: 'writer-v3',
-    fixtureProviderRequests: providerRequests, generationFailureEvidence, candidateRejectionEvidence,
+    fixtureProviderRequests: providerRequests, generationFailureEvidence, candidateRejectionEvidence, eventEvidenceFailure,
     networkInterception: 'main-process fetch for https://api.openai.com only',
     steps: steps.map(step => ({ ...step, outcome: 'PASS' })),
     remainingGaps: ['U15.A06: blueprint/finalized source navigation and real provider not exercised',
-      'U15.A07: event evidence failure and real provider not exercised'],
+      'U15.A07: real provider not exercised'],
     failedPhase: failure ? phase : null, error: failure ? String(failure) : null }
   fs.mkdirSync(receiptDir, { recursive: true })
   fs.writeFileSync(path.join(receiptDir, '.vibe-owner.json'), JSON.stringify({ owner: 'codex/f05-u15',
