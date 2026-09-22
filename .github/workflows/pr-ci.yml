@@ -61,6 +61,11 @@ jobs:
       - name: Prepare and verify Node native modules
         run: pnpm run prepare:native-node
 
+      - name: Resolve Windows test temp directory
+        run: |
+          node -e "const fs = require('node:fs'); const os = require('node:os'); const original = os.tmpdir(); const physical = fs.realpathSync.native(original); fs.appendFileSync(process.env.GITHUB_ENV, 'TEMP=' + physical + '\nTMP=' + physical + '\n'); console.log('tempAlias=' + (physical.toLocaleLowerCase('en-US') !== original.toLocaleLowerCase('en-US')))"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Run complete desktop unit test suite
         id: desktop-unit-tests
         run: |
