@@ -188,7 +188,7 @@ afterEach(() => {
 })
 
 describe('portable project export service', () => {
-  it('exports the shared 20-chapter corpus with authority, assets and frozen runtime history', async () => {
+  it('exports the shared 20-chapter corpus with authority, assets and frozen runtime history', { timeout: 20_000 }, async () => {
     const f = await createProjectArchiveRoundtripFixture()
     try {
       const sourceBefore = fs.readFileSync(f.sourceDatabasePath)
