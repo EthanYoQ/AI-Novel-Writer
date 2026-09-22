@@ -1,4 +1,4 @@
-/* global process */
+/* global process, Buffer */
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
@@ -287,6 +287,15 @@ try { const row=db.prepare("SELECT c.body FROM drafts d JOIN contents c ON c.id=
   assert.equal(result.status, 0, `finalized chapter read failed: ${result.stderr || result.error || result.stdout}`)
   return JSON.parse(result.stdout.trim())
 }
+function serializedDbSha(databasePath) {
+  const script = String.raw`const Database=require('./resources/app.asar/node_modules/better-sqlite3');
+const {createHash}=require('node:crypto'); const db=new Database(process.argv[1],{readonly:true});
+try { process.stdout.write(createHash('sha256').update(db.serialize()).digest('hex')); } finally { db.close() }`
+  const result = spawnSync(executablePath, ['-e', script, databasePath], { cwd: packageDir,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8', windowsHide: true, timeout: 20_000 })
+  assert.equal(result.status, 0, `serialized database snapshot failed: ${result.stderr || result.error || result.stdout}`)
+  return result.stdout.trim()
+}
 async function upload(panel) {
   await panel.locator('input[name="cloud-disclosure"]').check()
   const before = filesWithCompletion()
@@ -431,8 +440,9 @@ async function main() {
     }
     await panelA2.locator(`input[name="restore-generation"][value="${childB.generationId}"]`).check()
     assert.equal(await panelA2.locator('input[name="restore-generation"]:checked').inputValue(), childB.generationId)
+    const originalSerializedSha = serializedDbSha(originalDb)
     const selectedBranchCopy = await restoreGeneration(resumedA.page, panelA2, childB.generationId, profiles.a.restored, `${name}-恢复副本`)
-    assert.equal(sha(originalDb), originalSha)
+    assert.equal(serializedDbSha(originalDb), originalSerializedSha, 'branch restore changed original database snapshot')
     assert.equal(finalizedChapterBody(path.join(selectedBranchCopy, '.ai-novel', 'project.db')), currentBody,
       'selected B branch did not restore its unique finalized chapter')
     assert.deepEqual(Object.fromEntries(Object.keys(branchHashes).map(key => [key,
@@ -443,18 +453,19 @@ async function main() {
     assert(freeze.records.some(record => record.table === 'generation_attempts' && record.recordId === oldRun.oldAttempt && record.nonReplayable))
     pass('U16.A09', 'V3 showed both same-parent branches, selected and restored B as a separate copy, and retained both immutable completion objects',
       { root: root.generationId, childA: childA.generationId, childB: childB.generationId,
+        originalSerializedDbSha256: originalSerializedSha,
         selectedBranchCopyDbSha256: sha(path.join(selectedBranchCopy, '.ai-novel', 'project.db')) })
     currentStep = 'U16.A11-cancel-restore'
     const cancelledParent = path.join(profiles.a.restored, 'cancelled')
     fs.mkdirSync(cancelledParent, { recursive: true })
     const beforeCancelRequests = requests.length
-    const beforeCancelSha = sha(originalDb)
+    const beforeCancelSerializedSha = serializedDbSha(originalDb)
     await panelA2.getByRole('button', { name: '恢复所选云端世代为副本' }).click()
     const cancelled = cancelRestorePicker()
     pickerEvidence.push({ kind: 'writer-control-picker-cancel', ...cancelled })
     await panelA2.getByRole('button', { name: '恢复所选云端世代为副本' }).waitFor({ state: 'visible' })
     assert.equal(fs.existsSync(path.join(cancelledParent, `${name}-恢复副本`)), false)
-    assert.equal(sha(originalDb), beforeCancelSha)
+    assert.equal(serializedDbSha(originalDb), beforeCancelSerializedSha, 'cancelled restore changed original database snapshot')
     assert.equal(requests.slice(beforeCancelRequests).some(request => request.method === 'GET' && request.pathname.endsWith('/archive.ainovel')), false)
     currentStep = 'U16.A11-corrupt-remote-restore'
     const archiveKey = filesWithCompletion().find(key => key.includes(childB.generationId)).replace('completion.json', 'archive.ainovel')
@@ -464,7 +475,7 @@ async function main() {
     const failedParent = path.join(profiles.a.restored, 'x')
     fs.mkdirSync(failedParent, { recursive: true })
     await preflight(resumedA.page, failedParent, `${name}-恢复副本`)
-    const beforeError = { original: sha(originalDb), branch: sha(path.join(selectedBranchCopy, '.ai-novel', 'project.db')) }
+    const beforeError = { originalSerialized: serializedDbSha(originalDb), branch: sha(path.join(selectedBranchCopy, '.ai-novel', 'project.db')) }
     await panelA2.getByRole('button', { name: '恢复所选云端世代为副本' }).click()
     const failedPick = { kind: 'writer-control-picker-error', title: '选择恢复副本所在文件夹', target: failedParent }
     pickerEvidence.push(failedPick)
@@ -474,7 +485,7 @@ async function main() {
       && request.pathname === archiveKey && request.authorized && request.status === 200),
     'corrupt restore never checked the selected archive')
     assert.equal(fs.existsSync(path.join(failedParent, `${name}-恢复副本`)), false)
-    assert.equal(sha(originalDb), beforeError.original)
+    assert.equal(serializedDbSha(originalDb), beforeError.originalSerialized, 'failed restore changed original database snapshot')
     assert.equal(sha(path.join(selectedBranchCopy, '.ai-novel', 'project.db')), beforeError.branch)
     assert.equal(path.resolve((await invoke(resumedA.page, 'project:get-runtime-context')).activeProjectPath), path.resolve(created.projectPath))
     files.set(archiveKey, intactArchive)
@@ -537,12 +548,13 @@ async function main() {
     assert.equal(fullAfter.content, initialBody + continued, 'saved draft lost or changed the initial body')
     const freezeAfter = JSON.parse(fs.readFileSync(freezeFile, 'utf8'))
     assert.deepEqual(freezeAfter, freeze, 'continuing in restored copy changed old runtime freeze')
-    assert.equal(sha(originalDb), originalSha, 'continuing in restored copy changed original')
+    assert.equal(serializedDbSha(originalDb), originalSerializedSha, 'continuing in restored copy changed original database snapshot')
     pass('U16.A12', 'Selected restored branch retained current finalized chapter and non-replayable old run/unknown attempt; V3 editor saved a new chapter in the copy while original and freeze stayed unchanged',
       { restoredProjectId: selectedOpen.project.id, finalizedDraftId: currentFinalized.id,
         continuedDraftId: draft2.id, oldRun: oldRun.oldRun, oldAttempt: oldRun.oldAttempt })
     detail = { root: root.generationId, childA: childA.generationId, childB: childB.generationId,
-      originalDbSha256: originalSha, copyDbSha256: sha(path.join(copy, '.ai-novel', 'project.db')) }
+      originalDbSha256: originalSha, originalSerializedDbSha256: originalSerializedSha,
+      copyDbSha256: sha(path.join(copy, '.ai-novel', 'project.db')) }
     await close(resumedA.app)
     outcome = 'PARTIAL'
   } catch (error) {
