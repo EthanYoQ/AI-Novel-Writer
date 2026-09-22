@@ -538,8 +538,8 @@ async function main() {
     const manuscript = page.locator('.writer-project-tree .tree-item[title="点击打开 — 第1章 旧港线索1"]')
     await manuscript.click()
     await page.getByText('第1章定稿 完成（3/3）', { exact: true }).waitFor({ state: 'visible', timeout })
-    const successfulRun = await invoke(page, 'db:post-process-get-latest-run', 'chapter_finalize', '1', context.projectPath, context)
-    const successfulSteps = await invoke(page, 'db:post-process-get-steps', successfulRun.id, context.projectPath, context)
+    const successfulRun = await invoke(page, 'db:post-process-get-latest-run', 'chapter_finalize', '1', context.projectPath, batchSession)
+    const successfulSteps = await invoke(page, 'db:post-process-get-steps', successfulRun.id, context.projectPath, batchSession)
     assert.equal(successfulRun.triggerSourceType, 'chapter_finalize')
     assert.equal(successfulRun.triggerSourceId, `finalization:${source.finalizationId}`)
     assert.equal(successfulRun.sourceLabel, '第1章定稿')
@@ -551,11 +551,11 @@ async function main() {
       triggerSourceType: 'chapter_finalize', triggerSourceId: '1', sourceLabel: successfulRun.sourceLabel,
       steps: successfulSteps.map(step => ({ key: step.stepKey, label: step.label, critical: step.critical })),
       finalizedSource: source,
-    }, context.projectPath, context)
+    }, context.projectPath, batchSession)
     assert.equal(injected.success, true, injected.error)
     assert.ok(injected.id && injected.id !== successfulRun.id)
-    const pendingRun = await invoke(page, 'db:post-process-get-latest-run', 'chapter_finalize', '1', context.projectPath, context)
-    const pendingSteps = await invoke(page, 'db:post-process-get-steps', pendingRun.id, context.projectPath, context)
+    const pendingRun = await invoke(page, 'db:post-process-get-latest-run', 'chapter_finalize', '1', context.projectPath, batchSession)
+    const pendingSteps = await invoke(page, 'db:post-process-get-steps', pendingRun.id, context.projectPath, batchSession)
     assert.equal(pendingRun.id, injected.id)
     assert.equal(pendingRun.triggerSourceId, successfulRun.triggerSourceId)
     assert.deepEqual(pendingSteps.map(step => [step.stepKey, step.ok, step.attemptCount, step.errorMsg]),
@@ -566,10 +566,10 @@ async function main() {
 
     const sentinel = 'U13_A09_CONTROLLED_POST_PROCESS_FAILURE'
     const failed = await invoke(page, 'db:post-process-mark-step-failed', injected.id, pendingSteps[0].stepKey,
-      sentinel, context.projectPath, context)
+      sentinel, context.projectPath, batchSession)
     assert.equal(failed.success, true, failed.error)
-    const failedRun = await invoke(page, 'db:post-process-get-latest-run', 'chapter_finalize', '1', context.projectPath, context)
-    const failedSteps = await invoke(page, 'db:post-process-get-steps', failedRun.id, context.projectPath, context)
+    const failedRun = await invoke(page, 'db:post-process-get-latest-run', 'chapter_finalize', '1', context.projectPath, batchSession)
+    const failedSteps = await invoke(page, 'db:post-process-get-steps', failedRun.id, context.projectPath, batchSession)
     assert.equal(failedRun.id, injected.id)
     assert.equal(failedRun.triggerSourceId, successfulRun.triggerSourceId)
     assert.equal(failedSteps[0].ok, false)
