@@ -287,6 +287,54 @@ async function main() {
     addPass('writer-txt', 'U15.A05',
       'V3 Writer wrote exact plain-text bytes through the production export service after process reopen.',
       { visibleResult: txtResult, artifact: artifacts.txt })
+
+    phase = 'history-stale-fixture'
+    const reopened = await invoke(session.page, 'project:open', projectPath, randomUUID(), projectPath)
+    assert.equal(reopened.success, true, reopened.error)
+    const historySession = { projectId: reopened.project.id, projectPath, leaseId: reopened.project.sessionLease }
+    const blueprint = await invoke(session.page, 'db:blueprint-upsert', {
+      chapterNumber: 4, title: '来源追踪', role: '', purpose: '', keyEvents: '', characters: [],
+      suspenseHook: '', userGuidance: '', notes: '', notesUpdatedAt: '',
+    }, projectPath, historySession)
+    assert.equal(blueprint.success, true, blueprint.error)
+    const sourceBody = '旧港来信'
+    const sourceDraft = await invoke(session.page, 'db:draft-create', {
+      chapterNumber: 3, version: 1, source: 'write', content: sourceBody, wordCount: sourceBody.length,
+    }, projectPath, historySession)
+    assert.equal(sourceDraft.success, true, sourceDraft.error)
+    const dependentBody = '依照旧港来信'
+    const dependentDraft = await invoke(session.page, 'db:draft-create', {
+      chapterNumber: 4, version: 1, source: 'write', content: dependentBody, wordCount: dependentBody.length,
+      sourceDependencies: [{ draftId: sourceDraft.id, contentHash: hashBytes(Buffer.from(sourceBody, 'utf8')) }],
+    }, projectPath, historySession)
+    assert.equal(dependentDraft.success, true, dependentDraft.error)
+    const beforeChange = await invoke(session.page, 'db:draft-list', 4, projectPath, historySession)
+    assert.equal(beforeChange.find(draft => draft.id === dependentDraft.id)?.dependenciesStale, false)
+    const changedSource = `${sourceBody}已改`
+    const updatedSource = await invoke(session.page, 'db:draft-update-content', sourceDraft.id,
+      changedSource, changedSource.length, projectPath, historySession)
+    assert.equal(updatedSource.success, true, updatedSource.error)
+    const afterChange = await invoke(session.page, 'db:draft-list', 4, projectPath, historySession)
+    assert.equal(afterChange.find(draft => draft.id === dependentDraft.id)?.dependenciesStale, true)
+    await quit()
+
+    phase = 'writer-history-stale-reopen'
+    session = await launch()
+    app = session.opened
+    await openProject(session.page)
+    await session.page.locator('.writer-left-rail button[title="版本历史"]').click()
+    await session.page.getByText('章节列表', { exact: true }).waitFor({ state: 'visible' })
+    await session.page.getByTestId('writer-editor').getByText('来源追踪').click()
+    const staleBadge = session.page.getByText('来源已过期', { exact: true })
+    await staleBadge.waitFor({ state: 'visible' })
+    assert.match(await staleBadge.getAttribute('title'), /草稿会保留.*连续性需要复核/u)
+    await session.page.screenshot({ path: path.join(receiptDir, 'writer-version-history-stale.png') })
+    addPass('writer-history-stale-reopen', 'U15.A01',
+      'A visible Writer V3 history entry reopened the project and showed the persisted dependency-stale draft without discarding it.',
+      { sourceDraftId: sourceDraft.id, dependentDraftId: dependentDraft.id,
+        sourceBeforeSha256: hashBytes(Buffer.from(sourceBody, 'utf8')),
+        sourceAfterSha256: hashBytes(Buffer.from(changedSource, 'utf8')),
+        screenshot: path.relative(repository, path.join(receiptDir, 'writer-version-history-stale.png')) })
     await quit()
 
     phase = 'real-file-grant-boundary'
@@ -327,7 +375,7 @@ async function main() {
   const receipt = {
     outcome: failure ? 'FAIL' : 'PARTIAL',
     sliceOutcome: failure ? 'FAIL' : 'PASS',
-    qualification: 'F05_U15_A03_A04_A05_PACKAGED_V3_EXPORT_SLICE',
+    qualification: 'F05_U15_A01_PARTIAL_A03_A04_A05_PACKAGED_V3_SLICE',
     fullActionQualification: false,
     testedSha,
     executionHead,
@@ -354,7 +402,7 @@ async function main() {
       reason: 'real packaged export bytes retained for independent review', ttlHours: 24 },
     artifacts,
     steps,
-    remainingGaps: ['U15.A01, U15.A02, U15.A06 and U15.A07 are outside this receipt',
+    remainingGaps: ['U15.A01 diff/revert, U15.A02, U15.A06 and U15.A07 are outside this receipt',
       'F05, U15 and release qualification remain incomplete'],
     retainedScratch: fs.existsSync(scratch) ? scratch : null,
     failedPhase: failure ? phase : null,
