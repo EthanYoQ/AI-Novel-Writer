@@ -11,7 +11,7 @@ import { _electron as electron } from 'playwright'
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 if (process.argv.includes('--help')) {
-  process.stdout.write('F05 U12.A03 V3 packaged confirmation journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256\n')
+  process.stdout.write('F05 U12.A02/A03 V3 packaged review journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256\n')
   process.exit(0)
 }
 const packageDir = option('package-dir') && path.resolve(option('package-dir'))
@@ -36,12 +36,15 @@ const profile = Object.fromEntries(['canonical', 'legacy', 'userData', 'home', '
 const receiptPath = path.join(repository, '.runtime', '.cache', 'f05-u12-confirmation', runId, 'receipt.json')
 const projectName = 'u12'
 const body = '林岚离开港口，带走了日志。第二天，她回到灯塔。'
-const report = JSON.stringify({ summary: '两项待作者判断。', items: [
+const unverifiedQuote = '第二天，她回到灯塔。'
+const report = JSON.stringify({ summary: '三项待作者判断。', items: [
   { category: '连续性', severity: 'error', description: '保留：核对林岚离开港口后的时间线。', quote: '第二天，她回到灯塔。' },
   { category: '节奏', severity: 'warning', description: '拒绝：删掉灯塔场景。', quote: '她回到灯塔。' },
+  { category: '来源核实', severity: 'unknown', description: '缺失角色标识，需核对林岚返抵灯塔的记录。',
+    quote: unverifiedQuote, sourceChapter: 1 },
 ] })
 const steps = []
-const pass = (stepId, assertion, observed) => steps.push({ stepId, actionId: 'U12.A03', outcome: 'PASS', assertion, observed })
+const pass = (stepId, assertion, observed, actionId = 'U12.A03') => steps.push({ stepId, actionId, outcome: 'PASS', assertion, observed })
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
 function reviewRows(projectPath) {
   const db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { readonly: true, fileMustExist: true })
@@ -49,6 +52,13 @@ function reviewRows(projectPath) {
     return db.prepare(`SELECT r.id, r.base_draft_id AS baseDraftId, r.review_index AS reviewIndex,
       r.source_content AS sourceContent, c.body AS content FROM reviews r JOIN contents c ON c.id=r.content_id
       ORDER BY r.review_index`).all()
+  } finally { db.close() }
+}
+function draftRow(projectPath, draftId) {
+  const db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { readonly: true, fileMustExist: true })
+  try {
+    return db.prepare(`SELECT d.id, d.chapter_number AS chapterNumber, d.version, d.status,
+      c.body AS content FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?`).get(draftId)
   } finally { db.close() }
 }
 async function launch() {
@@ -87,7 +97,7 @@ async function main() {
   assert.equal(sha256(executablePath), expectedExe, 'executable hash mismatch')
   assert.equal(sha256(asarPath), expectedAsar, 'asar hash mismatch')
   for (const directory of Object.values(profile)) fs.mkdirSync(directory, { recursive: true })
-  fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U12.A03',
+  fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U12.A02/A03',
     sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 24,
     retainedReason: 'isolated SQLite and failure evidence for independent review',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
@@ -118,20 +128,41 @@ async function main() {
     sourceReviewId = saved.id
     assert(Number.isSafeInteger(sourceReviewId) && sourceReviewId > 0)
     assert.deepEqual(reviewRows(projectPath).map(row => row.content), [report])
+    assert.deepEqual(draftRow(projectPath, draftId), sourceDraft)
+    assert(sourceDraft.content.includes(unverifiedQuote), 'review quote is not in the immutable source draft')
     pass('fixture-source', 'Production project, draft and original review repositories persist a visible source record',
       { draftId, sourceReviewId, sourceReviewSha256: createHash('sha256').update(report).digest('hex') })
     await app.close(); app = null
 
-    currentStep = 'U12.A03-v3-confirm'
+    currentStep = 'U12.A02-v3-evidence'
     ;({ app, page } = await launch())
     await openReport(page)
     const issueFields = page.locator('textarea[aria-label="审稿问题"]')
-    assert.equal(await issueFields.count(), 2, 'V3 must show both seeded review issues')
+    assert.equal(await issueFields.count(), 3, 'V3 must show all seeded review issues')
+    assert.equal(await issueFields.nth(2).inputValue(), '缺失角色标识，需核对林岚返抵灯塔的记录。')
+    const unverifiedSeverity = page.getByRole('combobox', { name: '严重程度' }).nth(2)
+    assert.equal(await unverifiedSeverity.inputValue(), 'unknown')
+    assert.equal(await unverifiedSeverity.locator('option:checked').innerText(), '待核实')
+    assert.equal(await page.getByRole('textbox', { name: '相关原文（可选）' }).nth(2).inputValue(), unverifiedQuote)
+    await page.getByText('来源：第1章', { exact: true }).waitFor({ state: 'visible' })
+    assert.equal(await page.getByText('已忽略，不会传给模型', { exact: true }).count(), 1,
+      'the unverified item must not enter revision by default')
+    assert.equal(await page.getByRole('button', { name: '明确纳入修稿', exact: true }).count(), 1)
+    assert.deepEqual(reviewRows(projectPath).map(row => row.content), [report], 'viewing changed the source review')
+    assert.deepEqual(draftRow(projectPath, draftId), sourceDraft, 'viewing changed the source draft')
+    pass('U12.A02-v3-evidence', 'V3 shows a locatable source quote as unverified and leaves the source draft and AI report unchanged',
+      { sourceReviewId, draftId, quote: unverifiedQuote, sourceChapter: 1, defaultDecision: 'ignore' }, 'U12.A02')
+
+    currentStep = 'U12.A03-v3-confirm'
     assert.equal(await issueFields.nth(1).inputValue(), '拒绝：删掉灯塔场景。')
     assert.equal(await page.getByRole('button', { name: '忽略', exact: true }).count(), 2,
       'both fixture review items must default to included')
     await page.getByRole('button', { name: '忽略', exact: true }).nth(1).click()
-    await page.getByText('已忽略，不会传给模型', { exact: true }).waitFor({ state: 'visible' })
+    await page.getByRole('heading', { name: '节奏', exact: true }).locator('..')
+      .getByText('已忽略，不会传给模型', { exact: true }).waitFor({ state: 'visible' })
+    assert.equal(await page.getByRole('heading', { name: '来源核实', exact: true }).locator('..')
+      .getByText('已忽略，不会传给模型', { exact: true }).count(), 1,
+      'unverified item must remain ignored after the author rejects the second item')
     assert.equal(await page.getByText('已纳入本次修稿', { exact: true }).count(), 1,
       'first item must remain included in the UI')
     await page.getByRole('button', { name: '确认审稿清单', exact: true }).click()
@@ -148,6 +179,7 @@ async function main() {
     assert.deepEqual(confirmation.items.map(item => [item.description, item.decision, item.origin]), [
       ['保留：核对林岚离开港口后的时间线。', 'apply', 'ai'],
       ['拒绝：删掉灯塔场景。', 'ignore', 'ai'],
+      ['缺失角色标识，需核对林岚返抵灯塔的记录。', 'ignore', 'ai'],
     ])
     assert.equal(rows[1].baseDraftId, draftId)
     assert.equal(rows[1].reviewIndex, rows[0].reviewIndex + 1)
@@ -165,17 +197,18 @@ async function main() {
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message,
       ui: (await page?.locator('body').innerText().catch(() => ''))?.slice(-2500) }
-    steps.push({ stepId: currentStep, actionId: currentStep === 'fixture-persist' ? null : 'U12.A03',
+    steps.push({ stepId: currentStep, actionId: currentStep === 'fixture-persist' ? null
+      : currentStep.startsWith('U12.A02') ? 'U12.A02' : 'U12.A03',
       outcome: 'RED', assertion: 'first failing boundary', observed: failure })
   } finally {
     await app?.close().catch(() => {})
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true })
-    const receipt = { schemaVersion: 1, qualification: 'F05_U12_A03_PACKAGED_V3_CONFIRMATION',
+    const receipt = { schemaVersion: 1, qualification: 'F05_U12_A02_A03_PACKAGED_V3_REVIEW',
       overall: failure ? 'FAIL' : 'PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3',
-      scope: ['U12.A03'], testedSha, executionHead: git('rev-parse', 'HEAD'),
+      scope: ['U12.A02', 'U12.A03'], testedSha, executionHead: git('rev-parse', 'HEAD'),
       artifact: { executablePath, executableSha256: sha256(executablePath), asarPath, asarSha256: sha256(asarPath) },
       driver: { path: driverPath, sha256: sha256(driverPath) }, profile: { scratch, projectPath },
-      steps, unverifiedActions: ['U12.A01', 'U12.A02', 'U12.A04', 'U12.A05', 'U12.A06', 'U12.A07', 'U12.A08'],
+      steps, unverifiedActions: ['U12.A01', 'U12.A04', 'U12.A05', 'U12.A06', 'U12.A07', 'U12.A08'],
       failure }
     fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
     process.stdout.write(`${JSON.stringify({ overall: receipt.overall, receipt: receiptPath,
