@@ -7,8 +7,10 @@ import '../../../../index.css'
 import type { ProjectData } from '../../../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../../../shared/project-session-context'
 import { useCharacterStore, type CharacterCard } from '../../../../stores/character-store'
+import { useEditorStore } from '../../../../stores/editor-store'
 import { useLocaleStore } from '../../../../stores/locale-store'
 import { useProjectStore } from '../../../../stores/project-store'
+import CharacterEditor from '../../../editor/CharacterEditor'
 import RelationshipGraph from '../../../editor/RelationshipGraph'
 import { GRAPH_NODE_LIMIT } from '../../../editor/relationship-graph-layout'
 import CharactersView from '../../../panels/sidebar/CharactersView'
@@ -25,6 +27,7 @@ const project = {
   characterStates: '', createdAt: '', updatedAt: '',
 } as ProjectData
 const originalCharacters = useCharacterStore.getState()
+const originalEditor = useEditorStore.getState()
 const originalProject = useProjectStore.getState()
 const originalLocale = useLocaleStore.getState()
 
@@ -89,6 +92,7 @@ beforeEach(async () => {
   window.aiNovelAPI = { invoke } as unknown as typeof window.aiNovelAPI
   setActiveProjectSessionContext({ projectId: project.id, leaseId: project.sessionLease!, projectPath: path })
   useProjectStore.setState({ ...originalProject, currentProject: project })
+  useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
   useLocaleStore.setState({ ...originalLocale, locale: 'zh-CN', initialized: true })
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
     fillStyle: '', strokeStyle: '', lineWidth: 1, font: '', textAlign: 'start', textBaseline: 'alphabetic',
@@ -103,6 +107,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
   useCharacterStore.setState(originalCharacters)
+  useEditorStore.setState(originalEditor, true)
   useProjectStore.setState(originalProject)
   useLocaleStore.setState(originalLocale)
   setActiveProjectSessionContext(null)
@@ -137,7 +142,46 @@ it('U10.A07, U11.A01/A02/A07: Writer 人物卡头像和图谱交互补充证据'
   await act(async () => page.getByRole('button', { name: '展开人物侧栏' }).click())
   assertWriter('U11.A08-callback')
   await act(async () => (host.querySelector('[data-graph-character-id="stable-5"]') as HTMLButtonElement).click())
-  expect(openCharacter).toHaveBeenCalledWith('stable-5') // U11.A08 补充证据：触发稳定 ID 回调；真实 Writer 路由/档案页仍需 Electron 验收
+  expect(openCharacter).toHaveBeenCalledWith('stable-5') // U11.A08 mock-caller 只证实稳定 ID 回调；下方 browser 用例覆盖真实路由/字段，Electron 级资格仍待验收。
+})
+
+it('U11.A08: V3 Writer 图谱打开同名角色对应的稳定 ID 档案', async () => {
+  const characters = [
+    { ...card(0), characterId: 'writer-profile-0001', name: '同名角色', notes: '档案哨兵-甲' },
+    { ...card(1), characterId: 'writer-profile-0002', name: '同名角色', notes: '档案哨兵-乙' },
+  ]
+  useCharacterStore.setState({
+    characters,
+    selectedId: 'writer-profile-0001',
+    selectedName: '同名角色',
+    dataProjectKey: path,
+    dataProjectSession: { projectId: project.id, leaseId: project.sessionLease!, projectPath: path },
+    loadingProjectKey: null,
+    lastError: null,
+    identityBusy: false,
+    rosterRevision: 1,
+  })
+
+  await act(async () => root.render(
+    <ShellV2 variant="v3" theme="paper" bottomOpen={false} titleBar={<span>图谱验证</span>} rail={<span>书脊</span>}
+      sidebar={<CharactersView />} editor={<CharacterEditor projectKey={path} />}
+      aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>本地写作</span>} />,
+  ))
+  assertWriter('U11.A08-profile-before')
+  const notesField = () => host.querySelector<HTMLTextAreaElement>('textarea[placeholder="输入备注..."]')
+  expect(notesField()?.value).toBe('档案哨兵-甲')
+
+  await act(async () => page.getByRole('button', { name: '关系图谱', exact: true }).click())
+  expect(host.querySelector('canvas')).not.toBeNull()
+  const targetCharacter = host.querySelector<HTMLButtonElement>('[data-graph-character-id="writer-profile-0002"]')!
+  expect(targetCharacter.textContent).toContain('同名角色')
+  await act(async () => targetCharacter.click())
+
+  assertWriter('U11.A08-profile-after')
+  expect(useCharacterStore.getState().selectedId).toBe('writer-profile-0002')
+  expect(notesField()?.value).toBe('档案哨兵-乙')
+  expect(notesField()?.value).not.toBe('档案哨兵-甲')
+  expect(useCharacterStore.getState().characters.map(character => character.notes)).toEqual(['档案哨兵-甲', '档案哨兵-乙'])
 })
 
 it('U11.A03/A04/A05/A06: Writer 图谱拖动、平移、缩放、适应和复位', async () => {
