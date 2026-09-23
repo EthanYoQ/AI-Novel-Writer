@@ -13,7 +13,7 @@ import { _electron as electron } from 'playwright'
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 if (process.argv.includes('--help')) {
-  process.stdout.write('F05 U12.A01-A04 V3 packaged review journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256\n')
+  process.stdout.write('F05 U12.A01-A05 V3 packaged review journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256\n')
   process.exit(0)
 }
 const packageDir = option('package-dir') && path.resolve(option('package-dir'))
@@ -92,6 +92,30 @@ function liveRows(projectPath) {
     }
   } finally { db.close() }
 }
+function formalRows(projectPath) {
+  const db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { readonly: true, fileMustExist: true })
+  try {
+    return {
+      drafts: db.prepare('SELECT d.*, c.body AS content FROM drafts d JOIN contents c ON c.id=d.content_id ORDER BY d.id').all(),
+      reviews: db.prepare('SELECT r.*, c.body AS content FROM reviews r JOIN contents c ON c.id=r.content_id ORDER BY r.id').all(),
+      revisions: db.prepare('SELECT v.*, c.body AS content FROM revisions v JOIN contents c ON c.id=v.content_id ORDER BY v.id').all(),
+      cycles: db.prepare('SELECT * FROM review_cycles ORDER BY cycle_id').all(),
+      findings: db.prepare('SELECT * FROM review_findings ORDER BY cycle_id,finding_id').all(),
+      outbox: db.prepare('SELECT * FROM finalization_outbox ORDER BY rowid').all(),
+      effects: db.prepare("SELECT attempt_id,usage_receipt_json FROM generation_attempts WHERE json_extract(usage_receipt_json,'$.reviewRevisionEffect.kind') IS NOT NULL ORDER BY rowid").all(),
+    }
+  } finally { db.close() }
+}
+function generationRows(projectPath) {
+  const db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { readonly: true, fileMustExist: true })
+  try {
+    return {
+      runs: db.prepare('SELECT run_id AS runId,root_action_id AS rootActionId,binding_json AS binding FROM generation_runs ORDER BY rowid').all(),
+      attempts: db.prepare('SELECT attempt_id AS attemptId,run_id AS runId,root_action_id AS rootActionId,attempt_json AS attempt,usage_receipt_json AS usage FROM generation_attempts ORDER BY rowid').all(),
+      artifacts: db.prepare('SELECT artifact_id AS artifactId,attempt_id AS attemptId,run_id AS runId,artifact_json AS artifact,status FROM generation_artifacts ORDER BY rowid').all(),
+    }
+  } finally { db.close() }
+}
 async function waitForRows(projectPath, select, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -155,7 +179,7 @@ async function main() {
   assert.equal(sha256(executablePath), expectedExe, 'executable hash mismatch')
   assert.equal(sha256(asarPath), expectedAsar, 'asar hash mismatch')
   for (const directory of Object.values(profile)) fs.mkdirSync(directory, { recursive: true })
-  fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U12.A01-A04',
+  fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U12.A01-A05',
     sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 24,
     retainedReason: 'isolated SQLite and failure evidence for independent review',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
@@ -179,7 +203,7 @@ async function main() {
     if (dispatch === 1) fixture.reviewFocusBound = payload.messages?.some(message =>
       typeof message.content === 'string' && message.content.includes(
         '★【作者要求重点检查的维度（如有，这些维度必须优先、深入检查）】★：\n剧情连贯性\n'))
-    const content = dispatch === 1 ? liveReport : dispatch === 2 ? revisedBody : null
+    const content = dispatch === 1 ? liveReport : dispatch === 2 ? revisedBody : dispatch === 3 ? body : null
     if (!content || payload.model !== liveModel.modelName || payload.stream !== true) {
       response.writeHead(422).end(); return
     }
@@ -379,22 +403,78 @@ async function main() {
       { reviewId: liveReview.id, confirmationReviewId: confirmedReview.id, revisionId: revision.id,
         cycleId: revised.cycles[0].cycleId, providerRequests: fixture.requests.length,
         externalModelRequests: fixture.externalModelRequests }, 'U12.A04')
+
+    currentStep = 'U12.A05-noop-negative-control'
+    const beforeNoop = formalRows(liveProjectPath)
+    const beforeGeneration = generationRows(liveProjectPath)
+    await page.getByRole('dialog', { name: /^修稿合并 — 审稿修复/ })
+      .getByRole('button', { name: '关闭', exact: true }).click()
+    await page.getByText('审稿报告：第1章', { exact: true }).click()
+    await page.getByText('已确认', { exact: true }).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: '按确认意见修稿', exact: true }).click()
+    await page.getByLabel('本次修稿模型').selectOption(liveModel.id)
+    await page.getByRole('button', { name: '开始修稿', exact: true }).click()
+    const failedNotice = page.locator('.writer-ai-panel').getByRole('alert')
+      .filter({ hasText: 'GENERATION_REVIEW_REVISION_NOOP' })
+    await failedNotice.waitFor({ state: 'visible', timeout: 60_000 })
+    assert.match(await failedNotice.innerText(), /工作流未完成.*GENERATION_REVIEW_REVISION_NOOP/s)
+    const copyOnly = page.getByRole('region', { name: '持久正文候选' }).locator('article')
+      .filter({ hasText: '候选未通过保存校验；可复制保留' })
+    await copyOnly.waitFor({ state: 'visible', timeout: 30_000 })
+    assert.equal(await copyOnly.count(), 1)
+    assert.equal(await copyOnly.getByText(body, { exact: true }).count(), 1)
+    assert.equal(await copyOnly.getByRole('button', { name: '复制', exact: true }).count(), 1)
+    assert.equal(await copyOnly.getByRole('button', { name: '恢复此审修任务' }).isDisabled(), true)
+    const afterNoop = formalRows(liveProjectPath)
+    assert.deepEqual(afterNoop, beforeNoop, 'no-op changed formal drafts, reviews, revisions, cycles, bindings, effects or outbox')
+    const afterGeneration = generationRows(liveProjectPath)
+    const newRuns = afterGeneration.runs.filter(row => !beforeGeneration.runs.some(before => before.runId === row.runId))
+    const newAttempts = afterGeneration.attempts.filter(row => !beforeGeneration.attempts.some(before => before.attemptId === row.attemptId))
+    const newArtifacts = afterGeneration.artifacts.filter(row => !beforeGeneration.artifacts.some(before => before.artifactId === row.artifactId))
+    assert.deepEqual(afterGeneration.runs.filter(row => beforeGeneration.runs.some(before => before.runId === row.runId)),
+      beforeGeneration.runs, 'no-op changed an existing generation binding')
+    assert.equal(newRuns.length, 1, 'no-op did not create exactly one fresh generation run')
+    const noOpContext = JSON.parse(newRuns[0].binding).sourceManifest
+    assert.equal(noOpContext.operation, 'refine-from-review')
+    assert.equal(noOpContext.reviewRevisionContext.confirmation.reviewSourceId, confirmedReview.id)
+    assert.deepEqual(noOpContext.reviewRevisionContext.source, liveSourceDraft)
+    assert.equal(newAttempts.length, 1, 'no-op did not retain exactly one provider attempt')
+    assert.equal(newAttempts[0].runId, newRuns[0].runId)
+    assert.equal(newAttempts[0].rootActionId, newRuns[0].rootActionId)
+    assert(['settled', 'unknown'].includes(JSON.parse(newAttempts[0].attempt).status))
+    assert.equal(JSON.parse(newAttempts[0].usage).result.finishReason, 'stop')
+    assert.equal(JSON.parse(newAttempts[0].usage).reviewRevisionEffect, undefined)
+    assert.equal(newArtifacts.length, 1, 'no-op did not retain exactly one provider artifact')
+    assert.equal(newArtifacts[0].attemptId, newAttempts[0].attemptId)
+    assert.equal(newArtifacts[0].runId, newRuns[0].runId)
+    assert.equal(JSON.parse(newArtifacts[0].artifact).text, body)
+    assert.notEqual(newArtifacts[0].status, 'discarded')
+    fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0)
+    assert.equal(fixture.externalModelRequests, 0)
+    assert.deepEqual(fixture.requests.filter(item => item.route === '/v1/chat/completions')
+      .map(item => [item.method, item.authorized]), [['POST', true], ['POST', true], ['POST', true]])
+    pass('U12.A05-noop-negative-control', 'A fresh V3 revision returned the exact source; UI failure and copy-only artifact remained while all formal rows stayed unchanged',
+      { confirmationReviewId: confirmedReview.id, preservedRevisionId: revision.id,
+        runId: newRuns[0].runId, rootActionId: newRuns[0].rootActionId,
+        attemptId: newAttempts[0].attemptId, artifactId: newArtifacts[0].artifactId,
+        externalModelRequests: fixture.externalModelRequests }, 'U12.A05')
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message,
       ui: (await page?.locator('body').innerText().catch(() => ''))?.slice(-2500) }
     steps.push({ stepId: currentStep, actionId: currentStep === 'fixture-persist' ? null
       : currentStep.startsWith('U12.A02') ? 'U12.A02'
         : currentStep.startsWith('U12.A01') ? 'U12.A01'
-          : currentStep.startsWith('U12.A04') ? 'U12.A04' : 'U12.A03',
+          : currentStep.startsWith('U12.A04') ? 'U12.A04'
+            : currentStep.startsWith('U12.A05') ? 'U12.A05' : 'U12.A03',
       outcome: 'RED', assertion: 'first failing boundary', observed: failure })
   } finally {
     if (app && failure) fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0).catch(() => 0)
     await app?.close().catch(() => {})
     if (server.listening) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true })
-    const receipt = { schemaVersion: 1, qualification: 'F05_U12_A01_A04_PACKAGED_V3_REVIEW_REVISION',
+    const receipt = { schemaVersion: 1, qualification: 'F05_U12_A01_A05_PACKAGED_V3_REVIEW_REVISION',
       overall: failure ? 'FAIL' : 'PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3',
-      scope: ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04'], testedSha, executionHead: git('rev-parse', 'HEAD'),
+      scope: ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04', 'U12.A05'], testedSha, executionHead: git('rev-parse', 'HEAD'),
       artifact: { executablePath, executableSha256: sha256(executablePath), asarPath, asarSha256: sha256(asarPath) },
       driver: { path: driverPath, sha256: sha256(driverPath) }, profile: { scratch, projectPath, liveProjectPath },
       provider: { kind: 'loopback-synthetic-openai-sse', localRequests: fixture.requests,
