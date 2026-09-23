@@ -62,7 +62,7 @@ it('真实version5项目从init入口执行M05并保留正文', () => {
   const f = fixture(5)
   expect(probeProjectSqlite({ databasePath: f.file }).schemaVersion).toBe(5)
   initProjectDatabase(f.root)
-  expect(getProjectDb()!.pragma('user_version', { simple: true })).toBe(6)
+  expect(getProjectDb()!.pragma('user_version', { simple: true })).toBe(CURRENT_DESKTOP_SCHEMA_VERSION)
   expect(getProjectDb()!.prepare('SELECT body FROM contents').pluck().get()).toBe('铜钥匙\r\n作者原文')
   expect(getProjectDb()!.prepare("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='character_avatar_assets'").pluck().get()).toBe(1)
 })

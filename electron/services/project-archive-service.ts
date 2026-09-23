@@ -69,6 +69,15 @@ const REQUIRED_JSON_PROJECTORS = new Set([
   'import_runs.source_display_json',
   'recovery_candidates.source_snapshot',
 ])
+const REVIEW_FINGERPRINT_FIELDS = [
+  'chapterBriefHash', 'authorGuidanceHash', 'dependencyHash', 'contextSnapshotHash', 'templateHash',
+  'skillSnapshotHash', 'modelLeaseRevision', 'policyHash', 'outputContractHash',
+] as const
+const REVIEW_CONTEXT_FIELDS = [
+  'version', 'operation', 'source', 'sourceHash', 'config', 'writingLanguage', 'uiLocale', 'authorInputs',
+  'characterStates', 'worldbuilding', 'history', 'blueprints', 'frozenGoals', 'preflightFindings',
+  'confirmation', 'recheck',
+] as const
 const HISTORY_ID_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   blueprint_character_sync_operations: ['operation_id'],
   blueprint_commit_operations: ['operation_id'],
@@ -367,7 +376,263 @@ function projectRecoverySource(value: unknown): Record<string, unknown> {
   return projected
 }
 
-function projectArtifact(value: unknown): Record<string, unknown> {
+function projectReviewFingerprint(value: unknown): Record<string, unknown> {
+  const fingerprint = object(value, REVIEW_FINGERPRINT_FIELDS)
+  if (Object.keys(fingerprint).length !== REVIEW_FINGERPRINT_FIELDS.length) fail('PORTABLE_UNSAFE_PROJECTION')
+  for (const key of REVIEW_FINGERPRINT_FIELDS) contentHash(fingerprint[key])
+  return fingerprint
+}
+
+function reviewArray(value: unknown): unknown[] {
+  if (!Array.isArray(value) || value.length > 10_000) fail('PORTABLE_UNSAFE_PROJECTION')
+  return value
+}
+
+function reviewTextFields(record: Record<string, unknown>, fields: readonly string[]): void {
+  for (const field of fields) if (field in record) safeString(record[field])
+}
+
+function reviewIntegerFields(record: Record<string, unknown>, fields: readonly string[]): void {
+  for (const field of fields) if (field in record) safeInteger(record[field])
+}
+
+function reviewSource(value: unknown): Record<string, unknown> {
+  const source = object(value, ['id', 'chapterNumber', 'version', 'status', 'content'])
+  if (Object.keys(source).length !== 5) fail('PORTABLE_UNSAFE_PROJECTION')
+  reviewIntegerFields(source, ['id', 'chapterNumber', 'version'])
+  reviewTextFields(source, ['status', 'content'])
+  return source
+}
+
+function reviewRecheck(value: unknown): void {
+  const recheck = object(value, ['version', 'cycleId', 'comparisonVersion', 'mergedHash', 'findingSetHash', 'findings'])
+  if (Object.keys(recheck).length !== 6 || (recheck.version !== 1 && recheck.version !== 2)) fail('PORTABLE_UNSAFE_PROJECTION')
+  safeId(recheck.cycleId)
+  safeInteger(recheck.comparisonVersion, 1)
+  contentHash(recheck.mergedHash)
+  contentHash(recheck.findingSetHash)
+  for (const value of reviewArray(recheck.findings)) {
+    const finding = object(value, ['findingId', 'targetId', 'category', 'kind', 'problem', 'expected',
+      'sourceSpan', 'occurrence', 'sourceExcerpt'])
+    reviewTextFields(finding, ['findingId', 'targetId', 'category', 'kind', 'problem', 'expected', 'sourceExcerpt'])
+    safeInteger(finding.occurrence)
+    const span = object(finding.sourceSpan, ['start', 'end', 'unit'])
+    reviewIntegerFields(span, ['start', 'end'])
+    if (span.unit !== 'utf16-code-unit') fail('PORTABLE_UNSAFE_PROJECTION')
+  }
+}
+
+function assertReviewContext(value: unknown): Record<string, unknown> {
+  const context = object(value, REVIEW_CONTEXT_FIELDS)
+  if (context.version !== 1 || !['review-chapter', 'refine-draft', 'refine-from-review'].includes(String(context.operation))) {
+    fail('PORTABLE_UNSAFE_PROJECTION')
+  }
+  reviewSource(context.source)
+  contentHash(context.sourceHash)
+  const config = object(context.config, ['writingLanguage', 'creativeStrategy',
+    'narrativeThreadDormantChapterThreshold', 'genre', 'subGenre', 'targetAudience', 'totalChapters',
+    'wordsPerChapter', 'plotStructure', 'narrativePOV', 'coreOutline', 'worldSetting', 'goldenFinger',
+    'protagonistProfile', 'globalGuidance', 'writingStyle', 'referenceWorks'])
+  reviewTextFields(config, ['writingLanguage', 'creativeStrategy', 'genre', 'subGenre', 'targetAudience',
+    'plotStructure', 'narrativePOV', 'coreOutline', 'worldSetting', 'goldenFinger', 'protagonistProfile',
+    'globalGuidance', 'writingStyle', 'referenceWorks'])
+  reviewIntegerFields(config, ['narrativeThreadDormantChapterThreshold', 'totalChapters', 'wordsPerChapter'])
+  reviewTextFields(context, ['writingLanguage', 'uiLocale', 'characterStates', 'worldbuilding'])
+  for (const value of reviewArray(context.authorInputs)) {
+    const input = object(value, ['id', 'text'])
+    reviewTextFields(input, ['id', 'text'])
+  }
+  for (const value of reviewArray(context.history)) {
+    const item = object(value, ['draftId', 'chapterNumber', 'chapterTitle', 'content', 'source', 'projection', 'identity'])
+    reviewIntegerFields(item, ['draftId', 'chapterNumber'])
+    reviewTextFields(item, ['chapterTitle', 'content'])
+    if (item.source !== undefined) {
+      const source = object(item.source, ['draftId', 'finalizationId', 'chapterNumber', 'contentHash'])
+      reviewIntegerFields(source, ['draftId', 'chapterNumber'])
+      reviewTextFields(source, ['finalizationId'])
+      contentHash(source.contentHash)
+    }
+    if (item.identity !== undefined) {
+      const identity = object(item.identity, ['projectId', 'sourceId', 'revision', 'contentHash', 'provenance'])
+      reviewTextFields(identity, ['projectId', 'sourceId', 'provenance'])
+      reviewIntegerFields(identity, ['revision'])
+      contentHash(identity.contentHash)
+    }
+    if (item.projection !== undefined) {
+      const projection = object(item.projection, ['draftId', 'currentFinalizedDraftId', 'chapterNumber',
+        'chapterTitle', 'chapterNotes', 'facts', 'characterStateCandidates', 'source', 'sourceStatus'])
+      reviewIntegerFields(projection, ['draftId', 'currentFinalizedDraftId', 'chapterNumber'])
+      reviewTextFields(projection, ['chapterTitle', 'chapterNotes', 'sourceStatus'])
+      if (projection.source !== undefined) {
+        const source = object(projection.source, ['draftId', 'finalizationId', 'chapterNumber', 'contentHash'])
+        reviewIntegerFields(source, ['draftId', 'chapterNumber'])
+        reviewTextFields(source, ['finalizationId'])
+        contentHash(source.contentHash)
+      }
+      if (projection.facts !== undefined) for (const factValue of reviewArray(projection.facts)) {
+        const fact = object(factValue, ['category', 'entities', 'statement', 'sourceChapter', 'evidence', 'characterRefs'])
+        reviewTextFields(fact, ['category', 'statement', 'evidence'])
+        reviewIntegerFields(fact, ['sourceChapter'])
+        reviewArray(fact.entities).forEach(item => safeString(item))
+        if (fact.characterRefs !== undefined) for (const refValue of reviewArray(fact.characterRefs)) {
+          const ref = object(refValue, ['characterId', 'displayNameSnapshot'])
+          reviewTextFields(ref, ['characterId', 'displayNameSnapshot'])
+        }
+      }
+      if (projection.characterStateCandidates !== undefined) {
+        for (const candidateValue of reviewArray(projection.characterStateCandidates)) {
+          const candidate = object(candidateValue, ['characterId', 'characterName', 'field', 'value', 'evidence',
+            'selectionKey', 'displayName', 'rawValue', 'reason', 'candidateKey', 'source',
+            'expectedFieldRevision', 'expectedFieldValueHash'])
+          reviewTextFields(candidate, ['characterId', 'characterName', 'field', 'value', 'selectionKey',
+            'displayName', 'reason', 'candidateKey', 'expectedFieldValueHash', 'rawValue'])
+          reviewIntegerFields(candidate, ['expectedFieldRevision'])
+          if (candidate.evidence !== undefined) {
+            const evidence = object(candidate.evidence, ['start', 'end', 'text'])
+            reviewIntegerFields(evidence, ['start', 'end'])
+            reviewTextFields(evidence, ['text'])
+          }
+          if (candidate.source !== undefined) {
+            const source = object(candidate.source, ['draftId', 'finalizationId', 'chapterNumber', 'contentHash'])
+            reviewIntegerFields(source, ['draftId', 'chapterNumber'])
+            reviewTextFields(source, ['finalizationId'])
+            contentHash(source.contentHash)
+          }
+        }
+      }
+    }
+  }
+  for (const value of reviewArray(context.blueprints)) {
+    const blueprint = object(value, ['chapterNumber', 'title', 'role', 'purpose', 'keyEvents',
+      'characters', 'suspenseHook', 'userGuidance', 'notes'])
+    reviewIntegerFields(blueprint, ['chapterNumber'])
+    reviewTextFields(blueprint, ['title', 'role', 'purpose', 'keyEvents', 'suspenseHook', 'userGuidance', 'notes'])
+    reviewArray(blueprint.characters).forEach(item => safeString(item))
+  }
+  const goals = object(context.frozenGoals, ['chapterNumber', 'coverage', 'items'])
+  reviewIntegerFields(goals, ['chapterNumber'])
+  reviewTextFields(goals, ['coverage'])
+  for (const value of reviewArray(goals.items)) reviewTextFields(object(value, ['id', 'text']), ['id', 'text'])
+  for (const value of reviewArray(context.preflightFindings)) {
+    const finding = object(value, ['stableFactKey', 'severity', 'sourceChapter', 'evidence', 'issue', 'suggestion'])
+    reviewTextFields(finding, ['stableFactKey', 'severity', 'evidence'])
+    reviewIntegerFields(finding, ['sourceChapter'])
+    for (const field of ['issue', 'suggestion']) reviewTextFields(object(finding[field], ['zhCN', 'enUS']), ['zhCN', 'enUS'])
+  }
+  if (context.confirmation !== undefined) {
+    const confirmation = object(context.confirmation, ['reviewSourceId', 'content', 'originalReviewContentHash', 'snapshot'])
+    reviewIntegerFields(confirmation, ['reviewSourceId'])
+    reviewTextFields(confirmation, ['content'])
+    contentHash(confirmation.originalReviewContentHash)
+    const snapshot = object(confirmation.snapshot, ['kind', 'schemaVersion', 'cycleId', 'sourceReviewId',
+      'sourceDraft', 'summary', 'authorGuidance', 'items', 'goalReview'])
+    reviewTextFields(snapshot, ['kind', 'cycleId', 'summary', 'authorGuidance'])
+    reviewIntegerFields(snapshot, ['schemaVersion', 'sourceReviewId'])
+    if (snapshot.sourceDraft !== undefined) reviewSource(snapshot.sourceDraft)
+    for (const value of reviewArray(snapshot.items)) {
+      const item = object(value, ['category', 'severity', 'description', 'quote', 'stableFactKey',
+        'sourceChapter', 'goalId', 'findingId', 'decision', 'origin'])
+      reviewTextFields(item, ['category', 'severity', 'description', 'quote', 'stableFactKey',
+        'goalId', 'findingId', 'decision', 'origin'])
+      reviewIntegerFields(item, ['sourceChapter'])
+    }
+    if (snapshot.goalReview !== undefined) {
+      const goalReview = object(snapshot.goalReview, ['version', 'chapterNumber', 'coverage', 'items'])
+      reviewIntegerFields(goalReview, ['version', 'chapterNumber'])
+      reviewTextFields(goalReview, ['coverage'])
+      for (const value of reviewArray(goalReview.items)) {
+        const item = object(value, ['id', 'text', 'status', 'description', 'evidence'])
+        reviewTextFields(item, ['id', 'text', 'status', 'description'])
+        for (const evidenceValue of reviewArray(item.evidence)) {
+          const evidence = object(evidenceValue, ['quote', 'start', 'end'])
+          reviewTextFields(evidence, ['quote'])
+          reviewIntegerFields(evidence, ['start', 'end'])
+        }
+      }
+    }
+  }
+  if (context.recheck !== undefined) reviewRecheck(context.recheck)
+  return context
+}
+
+function projectReviewBinding(value: unknown): Record<string, unknown> {
+  const binding = object(parseJson(value), [
+    'projectId', 'epoch', 'fingerprint', 'contextSnapshotId', 'sourceManifest', 'sourceRefs',
+  ])
+  const projected: Record<string, unknown> = {
+    projectId: safeId(binding.projectId), epoch: safeId(binding.epoch),
+    fingerprint: projectReviewFingerprint(binding.fingerprint),
+  }
+  const manifest = binding.sourceManifest as Record<string, unknown> | undefined
+  if (manifest?.reviewRevisionContext === undefined) return projected
+  const context = assertReviewContext(manifest.reviewRevisionContext)
+  const encoded = JSON.stringify(context)
+  const source = object(context.source, ['id', 'chapterNumber', 'version', 'status', 'content'])
+  if (Buffer.byteLength(encoded, 'utf8') > 16 * 1024 * 1024
+    || contentHash(context.sourceHash) !== sha256(safeString(source.content))
+    || contentHash(manifest.reviewRevisionContextHash) !== sha256(encoded)
+    || JSON.stringify(manifest.authorInputs) !== JSON.stringify([{ id: 'review-revision-context', text: encoded }])) {
+    fail('PORTABLE_UNSAFE_PROJECTION')
+  }
+  projected.sourceManifest = { operation: safeId(manifest.operation), reviewRevisionContext: context,
+    reviewRevisionContextHash: manifest.reviewRevisionContextHash, authorInputs: manifest.authorInputs }
+  return projected
+}
+
+function projectReviewArtifactRef(value: unknown): Record<string, unknown> {
+  const ref = object(value, ['artifactId', 'revision', 'textHash'])
+  return { artifactId: safeId(ref.artifactId), revision: safeInteger(ref.revision),
+    textHash: contentHash(ref.textHash) }
+}
+
+function projectReviewRecheckReceipt(value: unknown): Record<string, unknown> {
+  const receipt = object(value, ['version', 'cycleId', 'comparisonVersion', 'mergedHash', 'findingSetHash', 'findings'])
+  if (Object.keys(receipt).length !== 6 || (receipt.version !== 1 && receipt.version !== 2)) fail('PORTABLE_UNSAFE_PROJECTION')
+  return { version: receipt.version, cycleId: safeId(receipt.cycleId),
+    comparisonVersion: safeInteger(receipt.comparisonVersion, 1), mergedHash: contentHash(receipt.mergedHash),
+    findingSetHash: contentHash(receipt.findingSetHash), findings: reviewArray(receipt.findings).map(value => {
+      const finding = object(value, ['findingId', 'targetId', 'reviewItemIndex', 'evidenceHash', 'resolved'])
+      if (Object.keys(finding).length !== 5 || typeof finding.resolved !== 'boolean') fail('PORTABLE_UNSAFE_PROJECTION')
+      return { findingId: safeId(finding.findingId), targetId: safeId(finding.targetId),
+        reviewItemIndex: safeInteger(finding.reviewItemIndex), evidenceHash: contentHash(finding.evidenceHash),
+        resolved: finding.resolved }
+    }) }
+}
+
+function projectReviewUsage(value: unknown): Record<string, unknown> | null {
+  if (value === null) return null
+  const usage = parseJson(value) as Record<string, unknown>
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage) || !usage.reviewRevisionEffect) return null
+  const identity = object(usage.artifactIdentity, ['artifactId', 'epoch', 'fingerprint'])
+  const result = object(usage.result, ['usage', 'finishReason', 'failureCode'])
+  const effect = object(usage.reviewRevisionEffect, [
+    'kind', 'id', 'index', 'contentHash', 'contextHash', 'artifact', 'compositionHash',
+  ])
+  if (effect.kind !== 'review' && effect.kind !== 'revision') fail('PORTABLE_UNSAFE_PROJECTION')
+  const projected: Record<string, unknown> = {
+    artifactIdentity: { artifactId: safeId(identity.artifactId), epoch: safeId(identity.epoch),
+      fingerprint: projectReviewFingerprint(identity.fingerprint) },
+    result: { finishReason: safeId(result.finishReason) },
+    reviewRevisionEffect: { kind: effect.kind, id: safeInteger(effect.id, 1), index: safeInteger(effect.index, 1),
+      contentHash: contentHash(effect.contentHash), contextHash: contentHash(effect.contextHash),
+      artifact: projectReviewArtifactRef(effect.artifact),
+      ...(effect.kind === 'revision' ? { compositionHash: contentHash(effect.compositionHash) } : {}) },
+  }
+  if (usage.visibleComposition !== undefined) {
+    const composition = object(usage.visibleComposition, ['algorithm', 'textHash', 'artifactIds', 'sources'])
+    if (composition.algorithm !== 'visible-append-v1' || !Array.isArray(composition.artifactIds)
+      || !Array.isArray(composition.sources) || composition.artifactIds.length > 32
+      || composition.artifactIds.length !== composition.sources.length) fail('PORTABLE_UNSAFE_PROJECTION')
+    projected.visibleComposition = { algorithm: composition.algorithm, textHash: contentHash(composition.textHash),
+      artifactIds: composition.artifactIds.map(safeId), sources: composition.sources.map(projectReviewArtifactRef) }
+  }
+  if (usage.reviewCycleRecheck !== undefined) {
+    projected.reviewCycleRecheck = projectReviewRecheckReceipt(usage.reviewCycleRecheck)
+  }
+  return projected
+}
+
+function projectArtifact(value: unknown, reviewProof = false): Record<string, unknown> {
   const artifact = object(parseJson(value), [
     'artifactId', 'attemptId', 'rootActionId', 'projectId', 'epoch', 'fingerprint', 'revision', 'text', 'textHash',
   ])
@@ -378,6 +643,8 @@ function projectArtifact(value: unknown): Record<string, unknown> {
     revision: safeInteger(artifact.revision),
     text: safeString(artifact.text),
     textHash: contentHash(artifact.textHash),
+    ...(reviewProof ? { projectId: safeId(artifact.projectId), epoch: safeId(artifact.epoch),
+      fingerprint: projectReviewFingerprint(artifact.fingerprint) } : {}),
   }
 }
 
@@ -400,14 +667,15 @@ function projectGenerationAttempt(value: unknown): Record<string, unknown> {
   return projected
 }
 
-function projectGenerationAction(value: unknown): Record<string, unknown> {
+function projectGenerationAction(value: unknown, reviewProof = false): Record<string, unknown> {
   const action = object(parseJson(value), [
     'projectId', 'epoch', 'operation', 'uiActionNonce', 'frozenInputHash', 'rootActionId', 'status',
     'secretRef', 'credential', 'path', 'grantId', 'apiKey', 'token',
   ])
   const status = safeString(action.status, 64)
   if (!['active', 'paused', 'cancelled', 'sealed'].includes(status)) fail('PORTABLE_UNSAFE_PROJECTION')
-  return { rootActionId: safeId(action.rootActionId), operation: safeId(action.operation), status }
+  return { rootActionId: safeId(action.rootActionId), operation: safeId(action.operation), status,
+    ...(reviewProof ? { projectId: safeId(action.projectId), epoch: safeId(action.epoch) } : {}) }
 }
 
 function projectGenerationBudget(value: unknown): Record<string, unknown> {
@@ -451,7 +719,17 @@ function requiredProjection(key: string, value: unknown): unknown {
   }
 }
 
-function neutralValue(key: string, column: { type: string; notnull: number }, value: unknown): unknown {
+function neutralValue(key: string, column: { type: string; notnull: number }, value: unknown,
+  reviewProof = false): unknown {
+  if (reviewProof) {
+    if (key === 'generation_roots.action_json') return JSON.stringify(projectGenerationAction(value, true))
+    if (key === 'generation_runs.binding_json') return JSON.stringify(projectReviewBinding(value))
+    if (key === 'generation_attempts.usage_receipt_json') {
+      const usage = projectReviewUsage(value)
+      return usage === null ? null : JSON.stringify(usage)
+    }
+    if (key === 'generation_artifacts.artifact_json') return JSON.stringify(projectArtifact(value, true))
+  }
   if (REQUIRED_JSON_PROJECTORS.has(key)) return JSON.stringify(requiredProjection(key, value))
   if (JSON_NEUTRAL.has(key)) {
     if (value !== null) parseJson(value)
@@ -510,6 +788,10 @@ function sanitizePortableDatabase(databasePath: string): {
     db.pragma('secure_delete = ON')
     assertPortableSourceSchema(db)
     const avatarRows = readPortableCharacterAvatarRows(db)
+    const reviewRoots = new Set((db.prepare('SELECT root_action_id FROM review_cycles').all() as Array<{
+      root_action_id: string }>).map(row => row.root_action_id))
+    const reviewRuns = new Set((db.prepare('SELECT run_id,root_action_id FROM generation_runs').all() as Array<{
+      run_id: string; root_action_id: string }>).filter(row => reviewRoots.has(row.root_action_id)).map(row => row.run_id))
     for (const row of avatarRows) {
       if ('recordId' in row) safeId(row.recordId)
       if ('characterId' in row) safeId(row.characterId)
@@ -546,6 +828,8 @@ function sanitizePortableDatabase(databasePath: string): {
           ? db.prepare(`UPDATE ${quote(table)} SET ${updates.map(column => `${quote(column.name)}=?`).join(',')} WHERE rowid=?`)
           : null
         for (const row of rows) {
+          const reviewProof = table === 'generation_artifacts' ? reviewRuns.has(String(row.run_id))
+            : reviewRoots.has(String(row.root_action_id))
           if (hasProjection || hasHistory) {
             const safe = projectionForRow(table, row, columns)
             const id = recordId(table, row, Number(row.__portable_rowid__))
@@ -564,6 +848,7 @@ function sanitizePortableDatabase(databasePath: string): {
           }
           if (update) update.run(...updates.map(column => neutralValue(
             `${table}.${column.name}`, column, row[column.name],
+            reviewProof,
           )), row.__portable_rowid__)
           for (const [index, column] of columns.entries()) {
             if (policies[index]!.disposition !== 'validated-relative') continue

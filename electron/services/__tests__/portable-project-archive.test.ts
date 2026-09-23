@@ -91,7 +91,7 @@ function manifest(entries: PortableProjectManifestEntry[], overrides: Partial<Po
   const total = entries.reduce((sum, item) => sum + item.byteSize, 0)
   return {
     formatVersion: 1,
-    sourceSchemaVersion: 6,
+    sourceSchemaVersion: 7,
     originProjectId: 'origin-project',
     snapshotGeneration: 'generation-1',
     createdAt: '2026-09-20T00:00:00.000Z',

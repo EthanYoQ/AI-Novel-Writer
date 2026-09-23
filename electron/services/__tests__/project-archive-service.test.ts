@@ -7,8 +7,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { closeProjectDatabase, createProjectDatabase, initProjectDatabase } from '../../database'
 import { BlueprintRepository } from '../../repositories/blueprint-repository'
+import { verifyM03ReviewCycle, canonicalM03FindingSetHash } from '../../migrations/m03-review-cycle'
 import { createCanonicalProjectManifest } from '../../../src/shared/project-format'
+import { buildReviewGenerationReport } from '../../../src/shared/review-generation-report'
 import { extractPortableProjectArchive } from '../portable-project-archive'
+import { restorePortableProject } from '../project-restore-service'
 import {
   exportPortableProject,
   type ExportPortableProjectInput,
@@ -178,6 +181,93 @@ function seedProject(f: Fixture, secret = 'token-绝不外带'): { body: string;
   } finally { db.close() }
 }
 
+function seedMergedCycle(f: Fixture, config: Record<string, unknown> = {}, recheckReceipt?: Record<string, unknown>): {
+  cycleId: string; body: string; mergedHash: string
+} {
+  const db = new Database(f.databasePath)
+  db.pragma('foreign_keys = ON')
+  try {
+  const source = '甲推开门，雨水顺着袖口落下。'
+  const body = '甲推开门，作者手工合并了新正文。'
+  const reviewOutput = JSON.stringify({ summary: '检查完成', items: [{ category: 'continuity',
+    severity: 'warning', description: '门闩状态需确认。', quote: '甲推开门' }] })
+  const reviewBody = JSON.stringify(buildReviewGenerationReport({ content: reviewOutput, sourceContent: source,
+    frozenGoals: { chapterNumber: 1, coverage: 'not_configured', items: [] }, writingLanguage: 'zh-CN', uiLocale: 'zh-CN',
+    preflightFindings: [] }), null, 2)
+  const addContent = (value: string) => Number(db.prepare('INSERT INTO contents(body) VALUES(?)').run(value).lastInsertRowid)
+  const draftId = Number(db.prepare("INSERT INTO drafts(chapter_number,version,status,content_id) VALUES(1,1,'revised',?)")
+    .run(addContent(body)).lastInsertRowid)
+  const reviewId = Number(db.prepare(`INSERT INTO reviews(base_draft_id,review_index,source_draft_chapter_number,
+    source_draft_version,source_draft_status,source_content,content_id) VALUES(?,1,1,1,'draft',?,?)`)
+    .run(draftId, source, addContent(reviewBody)).lastInsertRowid)
+  const confirmationBody = JSON.stringify({ kind: 'human-confirmed-review', schemaVersion: 1, sourceReviewId: reviewId,
+    sourceDraft: { id: draftId, chapterNumber: 1, version: 1, status: 'draft', content: source },
+    summary: '', authorGuidance: '', items: [] }, null, 2)
+  const confirmationId = Number(db.prepare(`INSERT INTO reviews(base_draft_id,review_index,source_draft_chapter_number,
+    source_draft_version,source_draft_status,source_content,content_id) VALUES(?,2,1,1,'draft',?,?)`)
+    .run(draftId, source, addContent(confirmationBody)).lastInsertRowid)
+  const revisionBody = '甲推开门，先抖落袖口的雨水。'
+  const revisionId = Number(db.prepare(`INSERT INTO revisions(base_draft_id,revision_index,revision_type,status,
+    merged_to_draft_id,user_prompt,review_source_id,source_draft_chapter_number,source_draft_version,
+    source_draft_status,source_content,content_id) VALUES(?,1,'review-fix','merged',?,'',?,1,1,'draft',?,?)`)
+    .run(draftId, draftId, confirmationId, source, addContent(revisionBody)).lastInsertRowid)
+  const root = 'root-merge'
+  db.prepare('INSERT INTO generation_roots(root_action_id,idempotency_key,action_json,budget_json) VALUES(?,?,?,?)')
+    .run(root, 'root-key', JSON.stringify({ projectId: f.projectId, epoch: 'epoch', operation: 'review-chapter',
+      uiActionNonce: 'merge', frozenInputHash: hash(source), rootActionId: root, status: 'active' }),
+    JSON.stringify({ maxPhysicalRequests: 1, maxTokenLiability: 100, maxOutputPerRequest: 100, maxActiveElapsedMs: 1000 }))
+  const attempt = (kind: 'review' | 'revision', id: number, index: number, content: string, output: string,
+    confirmation?: object) => {
+    const attemptId = `attempt-${kind}`, runId = `run-${kind}`, artifactId = `artifact-${kind}`
+    const operation = kind === 'review' ? 'review-chapter' : 'refine-from-review'
+    const context = { version: 1, operation, sourceHash: hash(source),
+      source: { id: draftId, chapterNumber: 1, version: 1, status: 'draft', content: source },
+      config, writingLanguage: 'zh-CN', uiLocale: 'zh-CN', authorInputs: [], characterStates: '（暂无）',
+      worldbuilding: '', history: [], blueprints: [],
+      frozenGoals: { chapterNumber: 1, coverage: 'not_configured', items: [] }, preflightFindings: [],
+      ...(confirmation ? { confirmation } : {}) }
+    const fingerprint = Object.fromEntries([
+      'chapterBriefHash', 'authorGuidanceHash', 'dependencyHash', 'contextSnapshotHash', 'templateHash',
+      'skillSnapshotHash', 'modelLeaseRevision', 'policyHash', 'outputContractHash',
+    ].map((key, number) => [key, hash(`${attemptId}:${number}`)]))
+    const artifact = { artifactId, attemptId, rootActionId: root, projectId: f.projectId, epoch: 'epoch',
+      fingerprint, revision: 1, text: output, textHash: hash(output) }
+    const artifactRef = { artifactId, revision: 1, textHash: hash(output) }
+    const effect = { kind, id, index, contentHash: hash(content), contextHash: hash(JSON.stringify(context)),
+      artifact: artifactRef, ...(kind === 'revision' ? { compositionHash: hash(content) } : {}) }
+    db.prepare('INSERT INTO generation_runs(run_id,root_action_id,binding_json,status,created_at_ms,open_key) VALUES(?,?,?,?,?,?)')
+      .run(runId, root, JSON.stringify({ projectId: f.projectId, epoch: 'epoch', fingerprint,
+        sourceManifest: { operation, secretRef: 'private-credential-sentinel',
+          machinePath: 'C:\\Users\\EthanQ\\private-machine-sentinel',
+          reviewRevisionContext: context, reviewRevisionContextHash: effect.contextHash,
+          authorInputs: [{ id: 'review-revision-context', text: JSON.stringify(context) }] } }),
+      'completed', 1, `open-${kind}`)
+    db.prepare(`INSERT INTO generation_attempts(attempt_id,reservation_id,run_id,root_action_id,attempt_json,
+      usage_receipt_json,invocation_nonce) VALUES(?,?,?,?,?,?,?)`).run(attemptId, `reservation-${kind}`, runId, root,
+      JSON.stringify({ attemptId, reservationId: `reservation-${kind}`, rootActionId: root, status: 'settled',
+        reservedTokens: 100, requestedOutputTokens: 100, actualTokens: 1 }),
+      JSON.stringify({ artifactIdentity: { artifactId, epoch: 'epoch', fingerprint }, result: { usage: null, finishReason: 'stop' },
+        reviewRevisionEffect: effect, ...(kind === 'review' && recheckReceipt ? { reviewCycleRecheck: recheckReceipt } : {}),
+        ...(kind === 'revision' ? { visibleComposition: { algorithm: 'visible-append-v1',
+          textHash: hash(content), artifactIds: [artifactId], sources: [artifactRef] } } : {}) }), `nonce-${kind}`)
+    db.prepare('INSERT INTO generation_artifacts(artifact_id,attempt_id,run_id,artifact_json,revision,status) VALUES(?,?,?,?,1,?)')
+      .run(artifactId, attemptId, runId, JSON.stringify(artifact), 'partial')
+  }
+    attempt('review', reviewId, 1, reviewBody, reviewOutput)
+    attempt('revision', revisionId, 1, revisionBody, revisionBody, {
+      reviewSourceId: confirmationId, content: confirmationBody, originalReviewContentHash: hash(reviewBody),
+      snapshot: JSON.parse(confirmationBody),
+    })
+    const cycleId = 'cycle-merge'
+    db.prepare('INSERT INTO review_cycles VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(cycleId, root, reviewId,
+      hash(reviewBody), confirmationId, hash(confirmationBody), revisionId, hash(source),
+      canonicalM03FindingSetHash([]), 1, 'merge-committed', hash(body), 0, null)
+    db.prepare('INSERT INTO review_cycle_merges(cycle_id,body) VALUES(?,?)').run(cycleId, body)
+    if (!verifyM03ReviewCycle(db)) throw new Error('MERGED_CYCLE_FIXTURE_INVALID')
+    return { cycleId, body, mergedHash: hash(body) }
+  } finally { db.close() }
+}
+
 async function extract(f: Fixture) {
   return extractPortableProjectArchive({ archivePath: f.target, stagingParentPath: f.extractParent })
 }
@@ -188,6 +278,54 @@ afterEach(() => {
 })
 
 describe('portable project export service', () => {
+  it('roundtrips an immutable v7 merged cycle with its body and bound hash', { timeout: 20_000 }, async () => {
+    const f = fixture()
+    const seeded = seedMergedCycle(f)
+    await exportPortableProject(input(f))
+    const targetRoot = path.join(f.base, 'restored')
+    await restorePortableProject({ archivePath: f.target, targetProjectRoot: targetRoot })
+    const restored = new Database(path.join(targetRoot, '.ai-novel', 'project.db'), { readonly: true })
+    try {
+      expect(restored.prepare('SELECT cycle_id,body FROM review_cycle_merges').get()).toEqual({
+        cycle_id: seeded.cycleId, body: seeded.body,
+      })
+      expect(restored.prepare('SELECT merged_hash FROM review_cycles WHERE cycle_id=?').pluck().get(seeded.cycleId))
+        .toBe(seeded.mergedHash)
+      expect(hash(restored.prepare('SELECT body FROM review_cycle_merges WHERE cycle_id=?').pluck().get(seeded.cycleId) as string))
+        .toBe(seeded.mergedHash)
+      const restoredBinding = restored.prepare("SELECT binding_json FROM generation_runs WHERE run_id='run-review'")
+        .pluck().get() as string
+      expect(restoredBinding).not.toContain('private-credential-sentinel')
+      expect(restoredBinding).not.toContain('private-machine-sentinel')
+    } finally { restored.close() }
+  })
+
+  it.each([
+    ['secretRef', 'private-credential-sentinel'],
+    ['machinePath', 'C:\\Users\\EthanQ\\private-machine-sentinel'],
+  ])('fails closed for a merged cycle context containing %s', { timeout: 20_000 }, async (key, sentinel) => {
+    const f = fixture()
+    seedMergedCycle(f, { [key]: sentinel })
+    await expect(exportPortableProject(input(f))).rejects.toMatchObject({ code: 'PORTABLE_UNSAFE_PROJECTION' })
+    expect(fs.existsSync(f.target)).toBe(false)
+  })
+
+  it('rejects a secret hidden in the wrong config field while the source cycle remains valid', { timeout: 20_000 }, async () => {
+    const f = fixture()
+    seedMergedCycle(f, { text: 'private-credential-sentinel' })
+    await expect(exportPortableProject(input(f))).rejects.toMatchObject({ code: 'PORTABLE_UNSAFE_PROJECTION' })
+    expect(fs.existsSync(f.target)).toBe(false)
+  })
+
+  it('rejects extra recheck receipt content while the source cycle remains valid', { timeout: 20_000 }, async () => {
+    const f = fixture()
+    seedMergedCycle(f, {}, { version: 2, cycleId: 'cycle-merge', comparisonVersion: 1,
+      mergedHash: hash('甲推开门，作者手工合并了新正文。'), findingSetHash: canonicalM03FindingSetHash([]),
+      findings: [], text: 'C:\\Users\\EthanQ\\private-machine-sentinel' })
+    await expect(exportPortableProject(input(f))).rejects.toMatchObject({ code: 'PORTABLE_UNSAFE_PROJECTION' })
+    expect(fs.existsSync(f.target)).toBe(false)
+  })
+
   it('exports the shared 20-chapter corpus with authority, assets and frozen runtime history', { timeout: 20_000 }, async () => {
     const f = await createProjectArchiveRoundtripFixture()
     try {
@@ -262,7 +400,7 @@ describe('portable project export service', () => {
     expect(fs.readdirSync(stagingParent)).toEqual(['backup.ainovel'])
   })
 
-  it('exports canonical v6 domain data, explicit assets and F03 avatars while freezing runtime history', { timeout: 20_000 }, async () => {
+  it('exports canonical v7 domain data, explicit assets and F03 avatars while freezing runtime history', { timeout: 20_000 }, async () => {
     const f = fixture()
     const seeded = seedProject(f)
     const assets = [
@@ -280,7 +418,7 @@ describe('portable project export service', () => {
       originProjectId: f.projectId,
       snapshotGeneration: 'generation-test-1',
       requiresRuntimeFreezeGuard: true,
-      sourceEvidence: { schemaVersion: 6, tableCount: 50, fieldCount: 479 },
+      sourceEvidence: { schemaVersion: 7, tableCount: 51, fieldCount: 481 },
     })
     expect(contextCalls).toEqual(['lease-current', 'lease-current', 'lease-current'])
     expect(fs.readFileSync(f.databasePath)).toEqual(before)
@@ -289,6 +427,7 @@ describe('portable project export service', () => {
     const unpacked = await extract(f)
     expect(unpacked.manifest.declaredCompressedBytes).toBe(unpacked.manifest.declaredUncompressedBytes)
     expect(unpacked.manifest.semanticCounts['table.contents']).toBe(1)
+    expect(unpacked.manifest.semanticCounts['table.review_cycle_merges']).toBe(0)
     expect(unpacked.manifest.entries.map(entry => entry.path)).toEqual(expect.arrayContaining([
       'project.db', 'portable-runtime-freeze.json', 'knowledge/世界观.txt', 'prompts/章节提示.txt',
       'skills/悬疑.md', 'candidates/旧候选.txt', '.ai-novel/portable-transfer-authority.json',
@@ -306,7 +445,8 @@ describe('portable project export service', () => {
     })
     const portable = new Database(path.join(unpacked.stagingPath, 'project.db'), { readonly: true })
     try {
-      expect(portable.pragma('user_version', { simple: true })).toBe(6)
+      expect(portable.pragma('user_version', { simple: true })).toBe(7)
+      expect(portable.prepare('SELECT COUNT(*) FROM review_cycle_merges').pluck().get()).toBe(0)
       expect(portable.prepare('SELECT body FROM contents WHERE id=1').pluck().get()).toBe(seeded.body)
       expect(portable.prepare('SELECT relation FROM character_relationships').pluck().get()).toBe('盟友')
       expect(portable.prepare('SELECT publication_status FROM finalization_outbox').pluck().get()).toBe('pending')

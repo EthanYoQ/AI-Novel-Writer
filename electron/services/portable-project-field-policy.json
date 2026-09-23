@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "rules": {
     "D": ["preserve-domain", "signed-domain-value", "portable-domain-copy"],
     "H": ["historical-nonreplayable", "nonreplayable-history", "portable-history-projector"],
@@ -16,6 +16,7 @@
     "review_cycles", "review_findings", "import_effect_ledger",
     "character_avatar_assets", "character_avatar_unresolved"
   ],
+  "m06Tables": ["review_cycle_merges"],
   "deltaCharacterFields": ["character_id", "legacy_key", "static_provenance", "identity_revision", "retired"],
   "signedOverrides": {
     "chapter_deletion_operations.knowledge_status": "non-executable-history",
@@ -115,6 +116,7 @@
     "project_core": {"id":"D","project_name":"D","genre":"D","sub_genre":"D","target_audience":"D","total_chapters":"D","words_per_chapter":"D","writing_language":"D","creative_strategy":"D","narrative_thread_dormant_threshold":"D","plot_structure":"D","narrative_pov":"D","writing_style":"D","reference_works":"D","global_guidance":"D","golden_finger":"D","core_outline":"D","world_setting":"D","protagonist_profile":"D","premise":"D","worldbuilding":"D","characters_arch":"D","synopsis":"D","character_states":"D","plot_tree_snapshot":"D","created_at":"D","updated_at":"D"},
     "recovery_candidates": {"candidate_id":"D","run_id":"D","step_id":"D","project_id":"D","chapter_number":"D","chapter_title":"D","source_snapshot":"R","source_hash":"R","source_draft_id":"D","source_draft_version":"D","source_draft_identity_captured":"D","visible_text":"D","content_hash":"D","failure_code":"D","failure_reason":"R","status":"H","replaces_candidate_id":"D","created_at":"D","resolved_at":"D"},
     "review_cycles": {"cycle_id":"H","root_action_id":"H","review_id":"H","review_content_hash":"H","confirmation_review_id":"H","confirmation_content_hash":"H","revision_id":"H","source_hash":"H","finding_set_hash":"H","comparison_version":"H","revision_status":"H","merged_hash":"H","recheck_count":"H","recheck_attempt_id":"H"},
+    "review_cycle_merges": {"cycle_id":"H","body":"H"},
     "review_findings": {"cycle_id":"H","finding_id":"H","source_project_id":"H","source_epoch":"H","source_id":"H","source_revision":"H","source_content_hash":"H","span_start":"H","span_end":"H","span_unit":"H","excerpt_hash":"H","occurrence":"H","category":"H","target_id":"H","kind":"H","problem_text":"H","expected_text":"H","status":"H","evidence_hash":"H","confirmation_item_index":"H"},
     "reviews": {"id":"D","base_draft_id":"D","review_index":"D","source_draft_chapter_number":"D","source_draft_version":"D","source_draft_status":"D","source_content":"D","content_id":"D","created_at":"D"},
     "revisions": {"id":"D","base_draft_id":"D","revision_index":"D","revision_type":"D","status":"D","merged_to_draft_id":"D","user_prompt":"D","review_source_id":"D","source_draft_chapter_number":"D","source_draft_version":"D","source_draft_status":"D","source_content":"D","content_id":"D","word_count":"D","created_at":"D","updated_at":"D"},
