@@ -13,7 +13,7 @@ import { _electron as electron } from 'playwright'
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 if (process.argv.includes('--help')) {
-  process.stdout.write('F05 U12.A01-A05 V3 packaged review journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256\n')
+  process.stdout.write('F05 U12.A01-A06 V3 packaged review journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256\n')
   process.exit(0)
 }
 const packageDir = option('package-dir') && path.resolve(option('package-dir'))
@@ -40,6 +40,10 @@ const projectName = 'u12'
 const liveProjectName = 'u12-live'
 const body = '林岚离开港口，带走了日志。第二天，她回到灯塔。'
 const revisedBody = '林岚离开港口，把日志仔细收进背包。第二天，她回到灯塔，先核对日志上的时间，再向守塔人询问昨夜的潮汐。'
+const recheckedBody = revisedBody.replace('第二天，她回到灯塔', '第三天，她回到灯塔')
+const forbiddenReturn = '本章林岚不得返回灯塔'
+const forbiddenReturnQuote = '第二天，她回到灯塔'
+const recheckEvidence = '第三天，她回到灯塔'
 const liveModel = { id: 'f05-u12-synthetic', name: 'U12 合成流式模型', provider: 'openai', protocol: 'openai',
   modelName: 'gpt-4.1', baseUrl: 'https://api.openai.com/v1', apiKey: 'f05-u12-offline-key',
   maxTokens: 2048, temperature: 0.7, purposes: ['generation'] }
@@ -47,6 +51,10 @@ const liveReport = JSON.stringify({ summary: '核对日志和时间线。', item
   { category: '连续性', severity: 'warning', description: '核对离港与返抵灯塔的时间线。', quote: '第二天，她回到灯塔。' },
 ], goalReviews: [{ id: 'ch1:keyEvents:1', status: 'completed', description: '林岚已离开港口。',
   evidence: [{ quote: '林岚离开港口' }] }] })
+const objectiveReport = JSON.stringify({ summary: '本章返抵灯塔违反作者约束。', items: [
+  { category: '日志', severity: 'pass', description: '日志仍由林岚保管。' }],
+  goalReviews: [{ id: 'ch1:keyEvents:1', status: 'unmet', description: '林岚在本章返抵灯塔，违反不得返回的约束。',
+    evidence: [{ quote: forbiddenReturnQuote }] }] })
 const unverifiedQuote = '第二天，她回到灯塔。'
 const report = JSON.stringify({ summary: '三项待作者判断。', items: [
   { category: '连续性', severity: 'error', description: '保留：核对林岚离开港口后的时间线。', quote: '第二天，她回到灯塔。' },
@@ -77,7 +85,7 @@ function liveRows(projectPath) {
   try {
     return {
       reviews: reviewRows(projectPath),
-      cycles: db.prepare('SELECT cycle_id AS cycleId,root_action_id AS rootActionId,review_id AS reviewId,confirmation_review_id AS confirmationReviewId,revision_id AS revisionId,revision_status AS revisionStatus FROM review_cycles').all(),
+      cycles: db.prepare('SELECT cycle_id AS cycleId,root_action_id AS rootActionId,review_id AS reviewId,confirmation_review_id AS confirmationReviewId,revision_id AS revisionId,revision_status AS revisionStatus,merged_hash AS mergedHash,finding_set_hash AS findingSetHash,recheck_count AS recheckCount,recheck_attempt_id AS recheckAttemptId FROM review_cycles').all(),
       effects: db.prepare(`SELECT a.attempt_id AS attemptId,a.root_action_id AS rootActionId,
         json_extract(a.usage_receipt_json,'$.reviewRevisionEffect.kind') AS kind,
         json_extract(a.usage_receipt_json,'$.reviewRevisionEffect.id') AS id,
@@ -87,6 +95,7 @@ function liveRows(projectPath) {
       revisions: db.prepare(`SELECT v.id,v.base_draft_id AS baseDraftId,v.revision_type AS revisionType,
         v.review_source_id AS reviewSourceId,v.status,c.body AS content
         FROM revisions v JOIN contents c ON c.id=v.content_id`).all(),
+      blueprintKeyEvents: db.prepare('SELECT key_events FROM blueprints WHERE chapter_number=1').pluck().get(),
       draftStatuses: db.prepare('SELECT id,status FROM drafts').all(),
       outboxCount: db.prepare('SELECT COUNT(*) FROM finalization_outbox').pluck().get(),
     }
@@ -179,11 +188,11 @@ async function main() {
   assert.equal(sha256(executablePath), expectedExe, 'executable hash mismatch')
   assert.equal(sha256(asarPath), expectedAsar, 'asar hash mismatch')
   for (const directory of Object.values(profile)) fs.mkdirSync(directory, { recursive: true })
-  fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U12.A01-A05',
+  fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U12.A01-A06',
     sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 24,
     retainedReason: 'isolated SQLite and failure evidence for independent review',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
-  const fixture = { requests: [], externalModelRequests: 0 }
+  const fixture = { requests: [], externalModelRequests: 0, promptBoundaries: [] }
   const server = createServer(async (request, response) => {
     const authorized = request.headers.authorization === `Bearer ${liveModel.apiKey}`
     const route = request.url
@@ -200,10 +209,38 @@ async function main() {
     if (route !== '/v1/chat/completions') { response.writeHead(404).end(); return }
     const payload = JSON.parse(Buffer.concat(await Array.fromAsync(request)).toString('utf8'))
     const dispatch = fixture.requests.filter(item => item.route === '/v1/chat/completions').length
+    const prompt = Array.isArray(payload.messages) ? payload.messages.map(message => typeof message?.content === 'string'
+      ? message.content : JSON.stringify(message?.content ?? '')).join('\n') : ''
+    const messageRoles = Array.isArray(payload.messages) ? payload.messages.map(message => message?.role ?? null) : []
+    if (dispatch === 5) {
+      const finding = fixture.recheckFinding
+      const confirmedTarget = Boolean(finding && prompt.includes('【已确认纳入本次修稿的审稿项】')
+        && prompt.includes(finding.problem))
+      const previousBody = prompt.includes(revisedBody)
+      fixture.promptBoundaries.push({ dispatch, messageRoles, confirmedTarget, previousBody })
+      if (!confirmedTarget || !previousBody) { response.writeHead(422).end(); return }
+    }
+    if (dispatch === 6) {
+      const finding = fixture.recheckFinding
+      const expected = /"expected"\s*:\s*"([^"]+)"/u.exec(prompt)?.[1]
+      const recheckTarget = Boolean(finding && prompt.includes(finding.findingId) && prompt.includes(finding.targetId))
+      const findingSemantics = Boolean(finding && prompt.includes(finding.problem)
+        && expected?.includes(finding.expected))
+      const mergedBody = prompt.includes(recheckedBody)
+      fixture.promptBoundaries.push({ dispatch, messageRoles, recheckTarget, findingSemantics, mergedBody })
+      if (!recheckTarget || !findingSemantics || !mergedBody) { response.writeHead(422).end(); return }
+    }
     if (dispatch === 1) fixture.reviewFocusBound = payload.messages?.some(message =>
       typeof message.content === 'string' && message.content.includes(
         '★【作者要求重点检查的维度（如有，这些维度必须优先、深入检查）】★：\n剧情连贯性\n'))
-    const content = dispatch === 1 ? liveReport : dispatch === 2 ? revisedBody : dispatch === 3 ? body : null
+    const content = dispatch === 1 ? liveReport : dispatch === 2 ? revisedBody : dispatch === 3 ? body
+      : dispatch === 4 ? objectiveReport : dispatch === 5 ? recheckedBody
+        : dispatch === 6 && fixture.recheckFinding ? JSON.stringify({ summary: '返抵灯塔仍违反作者约束。', items: [{
+          findingId: fixture.recheckFinding.findingId, targetId: fixture.recheckFinding.targetId,
+          resolved: false, evidenceQuote: recheckEvidence, reason: '合并稿仍写明林岚在本章返抵灯塔。',
+        }] }) : null
+    if (dispatch === 4) fixture.objectiveBound = payload.messages?.some(message =>
+      typeof message.content === 'string' && message.content.includes(forbiddenReturn))
     if (!content || payload.model !== liveModel.modelName || payload.stream !== true) {
       response.writeHead(422).end(); return
     }
@@ -458,27 +495,178 @@ async function main() {
         runId: newRuns[0].runId, rootActionId: newRuns[0].rootActionId,
         attemptId: newAttempts[0].attemptId, artifactId: newArtifacts[0].artifactId,
         externalModelRequests: fixture.externalModelRequests }, 'U12.A05')
+
+    currentStep = 'U12.A06-merge-unverified-control'
+    const oldFinding = formalRows(liveProjectPath).findings
+    assert.equal(oldFinding.length, 1)
+    assert.equal(oldFinding[0].cycle_id, revised.cycles[0].cycleId)
+    assert.deepEqual([oldFinding[0].kind, oldFinding[0].status, oldFinding[0].target_id],
+      ['literary', 'unverified', null], 'the old unanchored finding cannot be a recheck positive control')
+    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
+    await page.getByRole('button', { name: '待合并(1)' }).click()
+    const oldMerge = page.getByRole('dialog', { name: /^修稿合并 — 第1章/ })
+    await oldMerge.getByRole('button', { name: '全部修稿' }).click()
+    await oldMerge.getByRole('button', { name: '完成合并' }).click()
+    const oldMerged = await waitForRows(liveProjectPath, state => state.cycles[0]?.revisionStatus === 'merge-committed'
+      && state.revisions[0]?.status === 'merged' && state.draftStatuses[0]?.status === 'revised')
+    assert.equal(draftRow(liveProjectPath, liveDraft.id).content, revisedBody)
+    assert.equal(oldMerged.cycles[0].revisionId, revision.id)
+    assert.equal(oldMerged.cycles[0].recheckCount, 0)
+    assert.equal(formalRows(liveProjectPath).findings[0].status, 'unverified')
+    await oldMerge.waitFor({ state: 'hidden' })
+    const draftSave = page.getByRole('button', { name: '保存', exact: true })
+    assert.equal(await draftSave.locator('..').locator('[title="有未保存的修改"]').count(), 1,
+      'the first merge did not leave the observed unsaved chapter tab')
+    assert.equal((await page.locator('.cm-content').innerText()).trim(), `港口灯塔\n第 1 章\n${revisedBody}`,
+      'the unsaved editor body differs from the committed first merge')
+    await draftSave.click()
+    await draftSave.waitFor({ state: 'hidden' })
+    assert.deepEqual(draftRow(liveProjectPath, liveDraft.id), { ...liveSourceDraft, status: 'revised', content: revisedBody })
+    assert.equal(formalRows(liveProjectPath).revisions[0].status, 'merged')
+
+    currentStep = 'U12.A06-objective-review'
+    await page.locator('.writer-left-rail button[title="章节蓝图"]').click()
+    const keyEventsInput = page.getByPlaceholder('主角做了什么，遭遇了什么反转，金手指怎么用的...')
+    await keyEventsInput.waitFor({ state: 'visible' })
+    assert.equal(await keyEventsInput.inputValue(), '林岚离开港口')
+    await keyEventsInput.fill(forbiddenReturn)
+    await page.getByRole('heading', { name: '第 1 章：港口灯塔' }).locator('..')
+      .getByRole('button', { name: '保存', exact: true }).click()
+    await waitForRows(liveProjectPath, state => state.blueprintKeyEvents === forbiddenReturn)
+    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
+    await page.getByRole('button', { name: 'AI 审稿', exact: true }).click()
+    await page.getByRole('heading', { name: 'AI 审稿确认' }).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: '确认执行', exact: true }).click()
+    const objectiveReviewed = await waitForRows(liveProjectPath, state => state.reviews.length === 3
+      && state.cycles.length === 2)
+    assert.equal(fixture.objectiveBound, true, 'the changed blueprint was not frozen in the production review request')
+    const objectiveReview = objectiveReviewed.reviews[2]
+    const objectiveCycle = objectiveReviewed.cycles.find(cycle => cycle.reviewId === objectiveReview.id)
+    assert(objectiveCycle, 'the objective review has no production cycle')
+    const objective = JSON.parse(objectiveReview.content)
+    assert.deepEqual(objective.goalReview.items.map(item => [item.id, item.status, item.evidence[0]?.quote]),
+      [['ch1:keyEvents:1', 'unmet', forbiddenReturnQuote]])
+    const objectiveFinding = formalRows(liveProjectPath).findings.find(finding => finding.cycle_id === objectiveCycle.cycleId)
+    assert(objectiveFinding, 'the objective review has no persisted finding')
+    assert.deepEqual([objectiveFinding.kind, objectiveFinding.status, objectiveFinding.target_id,
+      objectiveFinding.span_unit, objectiveFinding.span_start !== null, objectiveFinding.span_end !== null],
+    ['objective', 'unresolved', 'ch1:keyEvents:1', 'utf16-code-unit', true, true])
+    assert.equal(revisedBody.slice(objectiveFinding.span_start, objectiveFinding.span_end), forbiddenReturnQuote)
+    fixture.recheckFinding = { findingId: objectiveFinding.finding_id, targetId: objectiveFinding.target_id,
+      problem: objective.goalReview.items[0].description, expected: forbiddenReturn.replace(/^本章/, '') }
+
+    currentStep = 'U12.A06-objective-revision'
+    await page.getByText('人工确认修稿清单', { exact: true }).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: '明确纳入修稿', exact: true }).click()
+    await page.getByRole('button', { name: '确认审稿清单', exact: true }).click()
+    const objectiveConfirmed = await waitForRows(liveProjectPath, state => state.reviews.length === 4)
+    const objectiveConfirmation = objectiveConfirmed.reviews[3]
+    const objectiveSnapshot = JSON.parse(objectiveConfirmation.content)
+    assert.equal(objectiveSnapshot.sourceReviewId, objectiveReview.id)
+    assert.deepEqual(objectiveSnapshot.items.map(item => [item.goalId, item.decision]),
+      [[undefined, 'ignore'], ['ch1:keyEvents:1', 'apply']])
+    await page.getByRole('button', { name: '按确认意见修稿', exact: true }).click()
+    await page.getByLabel('本次修稿模型').selectOption(liveModel.id)
+    await page.getByRole('button', { name: '开始修稿', exact: true }).click()
+    const objectiveRevised = await waitForRows(liveProjectPath, state => state.revisions.length === 2
+      && state.cycles.find(cycle => cycle.cycleId === objectiveCycle.cycleId)?.revisionStatus === 'generated')
+    const objectiveRevision = objectiveRevised.revisions.find(row => row.reviewSourceId === objectiveConfirmation.id)
+    assert(objectiveRevision, 'the objective revision has no saved candidate')
+    assert.equal(objectiveRevision.status, 'pending')
+    assert.equal(objectiveRevision.content, recheckedBody)
+    assert.equal(draftRow(liveProjectPath, liveDraft.id).content, revisedBody)
+    assert.equal(formalRows(liveProjectPath).findings.find(row => row.finding_id === objectiveFinding.finding_id).status,
+      'unresolved', 'generation cannot resolve an objective finding')
+
+    currentStep = 'U12.A06-merge-and-recheck'
+    const objectiveMerge = page.getByRole('dialog', { name: /^修稿合并 — 审稿修复/ })
+    await objectiveMerge.waitFor({ state: 'visible' })
+    assert.equal((await objectiveMerge.locator('.twm-cell-left').innerText()).trim(), revisedBody,
+      'the second comparison is not based on the committed source draft')
+    await objectiveMerge.getByRole('button', { name: '全部修稿' }).click()
+    await objectiveMerge.getByRole('button', { name: '完成合并' }).click()
+    const committedRows = waitForRows(liveProjectPath, state => state.reviews.length === 5
+      && state.cycles.find(cycle => cycle.cycleId === objectiveCycle.cycleId)?.recheckCount === 1)
+    const mergeErrorToast = page.locator('#vela-toast-root span').filter({
+      hasText: /^(?:项目会话已失效，未合并修订内容|打开对比后正文已变化，未提交修订；请保存后重新打开|合并失败：|合并出错：)/,
+    })
+    const toastFailure = mergeErrorToast.waitFor({ state: 'visible', timeout: 60_000 }).then(async () => {
+      const toast = await mergeErrorToast.first().innerText()
+      const rows = liveRows(liveProjectPath)
+      const error = new Error('F05_U12_MERGE_TOAST')
+      error.diagnostic = {
+        toast, modalVisible: await objectiveMerge.isVisible(),
+        draft: draftRow(liveProjectPath, liveDraft.id), reviewCount: rows.reviews.length,
+        revisions: rows.revisions.map(row => ({ id: row.id, status: row.status })),
+        cycles: rows.cycles.map(row => ({ cycleId: row.cycleId, revisionStatus: row.revisionStatus,
+          mergedHash: row.mergedHash, recheckCount: row.recheckCount })),
+      }
+      throw error
+    }, () => committedRows)
+    const completed = await Promise.race([committedRows, toastFailure])
+    const committedCycle = completed.cycles.find(cycle => cycle.cycleId === objectiveCycle.cycleId)
+    assert.equal(committedCycle.revisionStatus, 'merge-committed')
+    assert.equal(committedCycle.revisionId, objectiveRevision.id)
+    assert.equal(committedCycle.mergedHash, createHash('sha256').update(recheckedBody).digest('hex'))
+    assert.equal(draftRow(liveProjectPath, liveDraft.id).content, recheckedBody)
+    const finalRows = formalRows(liveProjectPath)
+    const committedRevision = finalRows.revisions.find(row => row.id === objectiveRevision.id)
+    assert.equal(committedRevision.status, 'merged')
+    assert.equal(committedRevision.merged_to_draft_id, liveDraft.id)
+    const finalFinding = finalRows.findings.find(row => row.finding_id === objectiveFinding.finding_id)
+    assert.deepEqual([finalFinding.status, finalFinding.target_id, finalFinding.cycle_id],
+      ['unresolved', 'ch1:keyEvents:1', objectiveCycle.cycleId], 'merge and recheck must not mark the still-violated goal resolved')
+    const recheckAttempt = generationRows(liveProjectPath).attempts.find(row => row.attemptId === committedCycle.recheckAttemptId)
+    assert(recheckAttempt, 'formal recheck has no provider attempt')
+    const recheckReceipt = JSON.parse(recheckAttempt.usage).reviewCycleRecheck
+    assert.equal(recheckAttempt.rootActionId, committedCycle.rootActionId)
+    assert.deepEqual([recheckReceipt.cycleId, recheckReceipt.mergedHash, recheckReceipt.findingSetHash],
+      [objectiveCycle.cycleId, committedCycle.mergedHash, committedCycle.findingSetHash])
+    assert.deepEqual(recheckReceipt.findings.map(finding => [finding.findingId, finding.targetId, finding.resolved]),
+      [[objectiveFinding.finding_id, 'ch1:keyEvents:1', false]])
+    assert.equal(finalFinding.evidence_hash, recheckReceipt.findings[0].evidenceHash)
+    assert.equal(finalRows.findings.find(row => row.cycle_id === oldMerged.cycles[0].cycleId).status, 'unverified')
+    fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0)
+    assert.equal(fixture.externalModelRequests, 0)
+    assert.equal(fixture.requests.filter(item => item.route === '/v1/chat/completions').length, 6)
+    pass('U12.A06-merge-not-resolved', 'V3 merged the old unverified control and a new anchored unresolved objective; the production post-merge recheck retained unresolved with matching cycle and hashes',
+      { oldCycleId: oldMerged.cycles[0].cycleId, cycleId: objectiveCycle.cycleId,
+        findingId: objectiveFinding.finding_id, revisionId: objectiveRevision.id,
+        recheckAttemptId: committedCycle.recheckAttemptId, mergedHash: committedCycle.mergedHash,
+        findingSetHash: committedCycle.findingSetHash, recheckCount: committedCycle.recheckCount,
+        externalModelRequests: fixture.externalModelRequests }, 'U12.A06')
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message,
+      ...(error?.diagnostic ? { diagnostic: error.diagnostic } : {}),
       ui: (await page?.locator('body').innerText().catch(() => ''))?.slice(-2500) }
     steps.push({ stepId: currentStep, actionId: currentStep === 'fixture-persist' ? null
       : currentStep.startsWith('U12.A02') ? 'U12.A02'
         : currentStep.startsWith('U12.A01') ? 'U12.A01'
           : currentStep.startsWith('U12.A04') ? 'U12.A04'
-            : currentStep.startsWith('U12.A05') ? 'U12.A05' : 'U12.A03',
+            : currentStep.startsWith('U12.A05') ? 'U12.A05'
+              : currentStep.startsWith('U12.A06') ? 'U12.A06' : 'U12.A03',
       outcome: 'RED', assertion: 'first failing boundary', observed: failure })
   } finally {
     if (app && failure) fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0).catch(() => 0)
-    await app?.close().catch(() => {})
+    const closing = app?.close().catch(() => {})
+    if (closing && page) {
+      const exitDialog = page.getByRole('dialog', { name: '退出前处理未保存内容' })
+      const needsDiscard = await Promise.race([
+        closing.then(() => false),
+        exitDialog.waitFor({ state: 'visible', timeout: 10_000 }).then(() => true, () => false),
+      ])
+      if (needsDiscard) await exitDialog.getByRole('button', { name: '放弃并退出' }).click()
+    }
+    await closing
     if (server.listening) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true })
-    const receipt = { schemaVersion: 1, qualification: 'F05_U12_A01_A05_PACKAGED_V3_REVIEW_REVISION',
+    const receipt = { schemaVersion: 1, qualification: 'F05_U12_A01_A06_PACKAGED_V3_REVIEW_REVISION',
       overall: failure ? 'FAIL' : 'PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3',
-      scope: ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04', 'U12.A05'], testedSha, executionHead: git('rev-parse', 'HEAD'),
+      scope: ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04', 'U12.A05', 'U12.A06'], testedSha, executionHead: git('rev-parse', 'HEAD'),
       artifact: { executablePath, executableSha256: sha256(executablePath), asarPath, asarSha256: sha256(asarPath) },
       driver: { path: driverPath, sha256: sha256(driverPath) }, profile: { scratch, projectPath, liveProjectPath },
       provider: { kind: 'loopback-synthetic-openai-sse', localRequests: fixture.requests,
-        externalModelRequests: fixture.externalModelRequests },
+        externalModelRequests: fixture.externalModelRequests, promptBoundaries: fixture.promptBoundaries },
       steps, unverifiedActions: ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04', 'U12.A05', 'U12.A06', 'U12.A07', 'U12.A08']
         .filter(actionId => !steps.some(step => step.actionId === actionId && step.outcome === 'PASS')),
       failure }
