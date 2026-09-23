@@ -112,6 +112,17 @@ it('U07.A01 Writer 世界观入口打开当前核心的故事架构编辑器', a
   expect(activeTab?.id).toMatch(/^world-building-editor:/)
 })
 
+it('U15.A01 Writer 版本历史入口打开当前项目的版本历史', async () => {
+  useProjectStore.setState({ currentProject: project })
+  await render(<EditorArea onNewProject={vi.fn()} />)
+
+  await click(host.querySelector<HTMLButtonElement>('.writer-left-rail button[title="版本历史"]'))
+
+  const activeTab = useEditorStore.getState().tabs.find(tab => tab.id === useEditorStore.getState().activeTabId)
+  expect(activeTab).toMatchObject({ name: '版本历史', type: 'version-history', projectKey: project.path })
+  await vi.waitFor(() => expect(host.textContent).toContain('章节列表'))
+})
+
 it('U07.A04 Writer 编辑器标签前后页切换活跃正文', async () => {
   useProjectStore.setState({ currentProject: project })
   await render(<EditorArea onNewProject={vi.fn()} />)

@@ -6,6 +6,7 @@ import {
   ListTree,
   Globe2,
   GitBranch,
+  History,
   ListChecks,
   Settings,
   ScrollText,
@@ -160,6 +161,16 @@ export default function LeftToolWindowBar() {
               'narrative-thread',
               'plot-tree',
             )
+          }}
+        />
+        <LeftNavButton
+          icon={History}
+          label={text('历史', 'History')}
+          title={text('版本历史', 'Version history')}
+          onClick={() => {
+            if (!currentProject) return
+            setSidebarView('project')
+            openBuiltinEditor('version-history', text('版本历史', 'Version history'), 'version-history')
           }}
         />
       </div>
