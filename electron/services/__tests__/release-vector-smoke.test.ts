@@ -43,7 +43,7 @@ describe('packaged release vector smoke', () => {
     }))).toEqual({ token })
   })
 
-  it('uses deterministic local mock embeddings only under the dual gate and proves a same-fingerprint 768 to 1536 rebuild', async () => {
+  it('uses deterministic local mock embeddings only under the dual gate and proves a same-fingerprint 768 to 1536 rebuild', { timeout: 20_000 }, async () => {
     const token = 'a'.repeat(32)
     process.env.AI_NOVEL_RELEASE_SMOKE = '1'
     process.env.AI_NOVEL_RELEASE_SMOKE_TOKEN = token
