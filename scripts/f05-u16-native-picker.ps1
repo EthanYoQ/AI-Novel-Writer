@@ -76,6 +76,7 @@ $fileNameId = switch ($DialogTitle) {
   '导出项目存档' { 1001 }
   '选择项目存档' { 1148 }
   '选择作者原稿文件' { 1148 }
+  '选择角色头像' { 1148 }
   '选择恢复副本所在文件夹' { 1152 }
   default { throw "Unsupported picker title: $DialogTitle" }
 }

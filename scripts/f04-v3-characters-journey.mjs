@@ -1,7 +1,7 @@
 /* global process */
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import fs from 'node:fs'
@@ -29,9 +29,10 @@ const productInputs = ['src', 'electron', 'public', 'build', 'package.json', 'pn
   'vite.config.ts', 'tsconfig.json', 'electron-builder.json5']
 const changedPaths = git('diff', '--name-only', `${testedSha}..${executionHead}`).split('\n').filter(Boolean)
 const dirtyProductPaths = git('status', '--porcelain', '--untracked-files=all', '--', ...productInputs).split('\n').filter(Boolean)
+const ignoredScreenshotPaths = dirtyProductPaths.filter(line => /^\?\? src\/components\/(?:dialogs|editor|layout\/v2|panels|pages\/v2)\/__tests__\/__screenshots__\/.*\.png$/.test(line))
 assert.equal(git('diff', '--name-only', `${testedSha}..${executionHead}`, '--', ...productInputs), '',
   'product source changed since fixed package build')
-assert.deepEqual(dirtyProductPaths, [], 'product build inputs are dirty')
+assert.deepEqual(dirtyProductPaths.filter(line => !ignoredScreenshotPaths.includes(line)), [], 'product build inputs are dirty')
 assert.equal(sha256(exe), expectedExe, 'executable hash changed')
 assert.equal(sha256(asar), expectedAsar, 'bundle hash changed')
 const runId = randomUUID()
@@ -40,12 +41,26 @@ const profile = Object.fromEntries(['canonical', 'legacy', 'userData', 'home', '
   .map(name => [name, path.join(scratch, name)]))
 const receiptDir = path.join(repository, '.runtime', '.cache', 'f04-v3-characters', runId)
 const receiptPath = path.join(receiptDir, 'receipt.json')
+const nativePickerHelper = path.join(repository, 'scripts', 'f05-u16-native-picker.ps1')
 const projectName = 'V3C'
 const names = [`甲${runId.slice(0, 4)}`, `乙${runId.slice(0, 4)}`]
 const backgrounds = [`北港线人 ${runId.slice(0, 8)}`, `南站警员 ${runId.slice(0, 8)}`]
 const steps = []
 const pass = (name, observed) => steps.push({ name, outcome: 'PASS', observed })
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
+const pickerEvidence = []
+function chooseNativeAvatar(target) {
+  const result = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', nativePickerHelper,
+    '-Target', target, '-ExpectedExe', exe, '-DialogTitle', '选择角色头像'],
+  { cwd: repository, encoding: 'utf8', windowsHide: true, timeout: 30_000 })
+  assert.equal(result.status, 0, `native avatar picker: ${result.stderr || result.stdout || result.error}`)
+  const evidence = JSON.parse(result.stdout.trim())
+  assert.equal(evidence.dialogTitle, '选择角色头像')
+  assert.equal(evidence.typedExact, true)
+  assert.equal(evidence.submitted, true)
+  pickerEvidence.push(evidence)
+  return evidence
+}
 
 async function launch() {
   const env = { ...process.env, AI_NOVEL_APP_DATA_HOME: profile.canonical, AI_NOVEL_LEGACY_SOURCE_HOME: profile.legacy,
@@ -132,13 +147,14 @@ async function main() {
     const persistedAvatarFiles = fs.readdirSync(avatarRoot, { recursive: true })
       .map(name => path.join(avatarRoot, name)).filter(file => fs.statSync(file).isFile())
     assert.equal(persistedAvatarFiles.length, 1, 'expected one persisted avatar asset')
-    const persistedAvatarPath = persistedAvatarFiles[0]
-    const persistedAvatarBytes = fs.readFileSync(persistedAvatarPath)
+    let persistedAvatarPath = persistedAvatarFiles[0]
+    let persistedAvatarBytes = fs.readFileSync(persistedAvatarPath)
     assert(persistedAvatarBytes.equals(Buffer.from(avatar.avatar.base64, 'base64')), 'persisted avatar bytes differ from commit response')
     await app.close()
     app = null
 
     app = (await launch()).app
+    const editProcessPid = app.process().pid
     const profilePage = await app.firstWindow()
     const reopenedNotice = profilePage.locator('[role="status"].fixed.inset-x-0.top-10')
     if (await reopenedNotice.isVisible()) await reopenedNotice.getByRole('button', { name: '知道了', exact: true }).click()
@@ -162,6 +178,68 @@ async function main() {
     assert.equal(await profilePage.locator('.writer-editor-content .skin-workspace-page:not([hidden]) .max-w-2xl')
       .evaluate(node => getComputedStyle(node).borderTopWidth), '3px')
     await profilePage.screenshot({ path: path.join(receiptDir, 'v3-character-profile.png') })
+
+    const sourceImage = path.join(scratch, 'avatar-blue.png')
+    const blueBase64 = await profilePage.evaluate(() => {
+      const canvas = document.createElement('canvas')
+      canvas.width = canvas.height = 32
+      const draw = canvas.getContext('2d')
+      draw.fillStyle = '#1876d2'
+      draw.fillRect(0, 0, 32, 32)
+      return canvas.toDataURL('image/png').split(',')[1]
+    })
+    fs.writeFileSync(sourceImage, Buffer.from(blueBase64, 'base64'))
+    const avatarState = () => {
+      const db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true, readonly: true })
+      try {
+        const row = db.prepare('SELECT asset_revision AS revision, relative_path AS relativePath, content_hash AS contentHash FROM character_avatar_assets WHERE character_id=?').get(firstId)
+        return { row, files: fs.readdirSync(avatarRoot, { recursive: true }).map(name => path.join(avatarRoot, name))
+          .filter(file => fs.statSync(file).isFile()).map(file => ({ path: file, sha256: sha256(file) })).sort((a, b) => a.path.localeCompare(b.path)) }
+      } finally { db.close() }
+    }
+    const originalAvatar = avatarState()
+    const preview = profilePage.locator(`img[alt="${names[0]}头像预览"]`)
+    const previewHash = async () => createHash('sha256').update(Buffer.from(await preview.evaluate(async image =>
+      [...new Uint8Array(await (await fetch(image.src)).arrayBuffer())]))).digest('hex')
+    assert.equal(await previewHash(), sha256(persistedAvatarPath))
+
+    currentStep = 'u10-a01-stage-preview'
+    await profilePage.getByRole('button', { name: '替换头像', exact: true }).click()
+    chooseNativeAvatar(sourceImage)
+    await profilePage.getByRole('button', { name: '取消头像更改', exact: true }).waitFor({ state: 'visible' })
+    const stagedHash = await previewHash()
+    assert.equal(stagedHash, sha256(sourceImage), 'UI preview bytes differ from native-selected file')
+    assert.notEqual(stagedHash, sha256(persistedAvatarPath), 'chosen image did not replace UI preview')
+    assert.deepEqual(avatarState(), originalAvatar, 'preview changed SQLite or persisted avatar bytes')
+    await profilePage.screenshot({ path: path.join(receiptDir, 'v3-avatar-staged.png') })
+    steps.push({ stepId: currentStep, actionId: 'U10.A01', outcome: 'PASS',
+      assertion: 'Writer V3 native-selected avatar is visible only in staged preview; SQLite row and asset bytes are unchanged.',
+      observed: { characterId: firstId, picker: pickerEvidence.at(-1), stagedSha256: stagedHash, originalAvatar } })
+
+    currentStep = 'u10-a02-discard-stage'
+    await profilePage.getByRole('button', { name: '取消头像更改', exact: true }).click()
+    await profilePage.getByRole('button', { name: '取消头像更改', exact: true }).waitFor({ state: 'hidden' })
+    assert.equal(await previewHash(), sha256(persistedAvatarPath), 'discard did not restore original UI preview')
+    assert.deepEqual(avatarState(), originalAvatar, 'discard changed SQLite or persisted avatar bytes')
+    await profilePage.screenshot({ path: path.join(receiptDir, 'v3-avatar-discarded.png') })
+    steps.push({ stepId: currentStep, actionId: 'U10.A02', outcome: 'PASS',
+      assertion: 'Discarding the selected avatar restores the original UI preview, SQLite row and asset bytes.',
+      observed: { characterId: firstId, originalRevision: originalAvatar.row.revision, originalSha256: sha256(persistedAvatarPath) } })
+
+    currentStep = 'u10-a03-save-avatar'
+    await profilePage.getByRole('button', { name: '替换头像', exact: true }).click()
+    chooseNativeAvatar(sourceImage)
+    await profilePage.getByRole('button', { name: '取消头像更改', exact: true }).waitFor({ state: 'visible' })
+    await profilePage.getByRole('button', { name: '保存', exact: true }).last().click()
+    await profilePage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+    const committedAvatar = avatarState()
+    assert.equal(committedAvatar.row.revision, originalAvatar.row.revision + 1)
+    persistedAvatarPath = path.join(projectPath, '.ai-novel', ...committedAvatar.row.relativePath.split('/'))
+    persistedAvatarBytes = fs.readFileSync(persistedAvatarPath)
+    assert.equal(sha256(persistedAvatarPath), committedAvatar.row.contentHash)
+    assert.notEqual(committedAvatar.row.contentHash, originalAvatar.row.contentHash)
+    assert.equal(await previewHash(), committedAvatar.row.contentHash)
+    await profilePage.screenshot({ path: path.join(receiptDir, 'v3-avatar-saved.png') })
 
     currentStep = 'v3-graph-stable-id'
     await profilePage.getByText('背景故事', { exact: true }).locator('xpath=..').locator('textarea').fill(backgrounds[0])
@@ -205,6 +283,8 @@ async function main() {
     await app.close()
     app = null
     app = (await launch()).app
+    const reopenedProcessPid = app.process().pid
+    assert.notEqual(reopenedProcessPid, editProcessPid, 'avatar reopen reused Electron process')
     const identityPage = await app.firstWindow()
     const identityNotice = identityPage.locator('[role="status"].fixed.inset-x-0.top-10')
     if (await identityNotice.isVisible()) await identityNotice.getByRole('button', { name: '知道了', exact: true }).click()
@@ -274,17 +354,39 @@ async function main() {
         derivedSourceRequired: false, sourceDisplayContract: 'background note or stable-ID suffix',
         mainRosterIdentityRevision: roster.identityRevision, relationship: persistedRelationship,
         activeSameNameAliases: persistedAliases.filter(row => row.name === names[0] && row.validThrough === null).length } })
+
+    currentStep = 'u10-a03-reopen-avatar'
+    await identityPage.getByRole('button', { name: '编辑模式', exact: true }).click()
+    await firstSameName.click()
+    await identityPage.locator(`img[alt="${names[0]}头像预览"]`).waitFor({ state: 'visible' })
+    assert.equal(await identityPage.locator(`[data-character-id="${firstId}"]`).getAttribute('data-character-id'), firstId)
+    assert.equal(await identityPage.locator(`img[alt="${names[0]}头像预览"]`).evaluate(async image => {
+      const bytes = new Uint8Array(await (await fetch(image.src)).arrayBuffer())
+      const digest = await crypto.subtle.digest('SHA-256', bytes)
+      return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
+    }), committedAvatar.row.contentHash)
+    assert.deepEqual(avatarState(), committedAvatar, 'fresh process changed committed avatar')
+    await identityPage.screenshot({ path: path.join(receiptDir, 'v3-avatar-reopened.png') })
+    steps.push({ stepId: currentStep, actionId: 'U10.A03', outcome: 'PASS',
+      assertion: 'Writer V3 Save committed the native-selected avatar to a new SQLite revision and asset bytes; a fresh Electron process reopens the same stable-ID avatar.',
+      observed: { characterId: firstId, picker: pickerEvidence.at(-1), editProcessPid, reopenedProcessPid, revision: committedAvatar.row.revision,
+        relativePath: committedAvatar.row.relativePath, persistedSha256: committedAvatar.row.contentHash } })
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message }
   } finally {
     await app?.close().catch(() => {})
-    const receipt = { schemaVersion: 1, qualification: 'F05_U09_A08_U10_A07_PACKAGED_V3_CHARACTERS',
+    const verifiedActions = [...new Set(steps.filter(step => step.outcome === 'PASS' && step.actionId).map(step => step.actionId))]
+    const receipt = { schemaVersion: 1, qualification: 'F05_U09_A08_U10_A01_A02_A03_A07_PACKAGED_V3_CHARACTERS',
       outcome: failure ? 'FAIL' : 'PARTIAL', sliceOutcome: failure ? 'FAIL' : 'PASS', fullU10Qualification: false,
       fullU09Qualification: false, fullF05Qualification: false, evidenceLevel: 'electron', shell: 'writer-v3', testedSha, executionHead, changedPaths,
-      dirtyProductPaths, package: { directory: packageDir, executableSha256: sha256(exe), asarSha256: sha256(asar) },
+      dirtyProductPaths, ignoredScreenshotPaths, package: { directory: packageDir, executableSha256: sha256(exe), asarSha256: sha256(asar) },
       driver: { path: fileURLToPath(import.meta.url), sha256: sha256(fileURLToPath(import.meta.url)) },
-      evidence: { receipt: path.relative(repository, receiptPath), screenshots: ['v3-character-profile.png', 'v3-character-same-name.png', 'v3-character-same-name-graph.png'] },
-      verifiedActions: failure ? [] : ['U10.A07', 'U09.A08'], unverifiedActions: ['U09.A01-U09.A07', 'U09.A09', 'U10.A01-U10.A06', 'U10.A08', 'F05 whole-product qualification'],
+      nativePickerHelper: { path: nativePickerHelper, sha256: sha256(nativePickerHelper) }, pickerEvidence,
+      evidence: { receipt: path.relative(repository, receiptPath), screenshots: ['v3-character-profile.png', 'v3-avatar-staged.png', 'v3-avatar-discarded.png', 'v3-avatar-saved.png',
+        'v3-avatar-reopened.png', 'v3-character-same-name.png', 'v3-character-same-name-graph.png'].filter(name => fs.existsSync(path.join(receiptDir, name))) },
+      verifiedActions, unverifiedActions: ['U09.A01-U09.A07', 'U09.A09',
+        ...['U10.A01', 'U10.A02', 'U10.A03', 'U10.A07'].filter(id => !verifiedActions.includes(id)),
+        'U10.A04-U10.A06', 'U10.A08-U10.A12', 'F05 whole-product qualification'],
       projectPath, scratch, steps, failure }
     fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
     process.stdout.write(`${JSON.stringify({ outcome: receipt.outcome, sliceOutcome: receipt.sliceOutcome, testedSha,
