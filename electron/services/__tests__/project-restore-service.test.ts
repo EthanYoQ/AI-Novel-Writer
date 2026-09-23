@@ -188,7 +188,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
-describe('portable project restore service', () => {
+describe('portable project restore service', { timeout: 20_000 }, () => {
   it('restores the shared 20-chapter corpus under a new identity with exact authored assets and frozen history', async () => {
     const f = await createProjectArchiveRoundtripFixture()
     try {
@@ -518,52 +518,33 @@ describe('portable project restore service', () => {
   })
 
   it('fails closed on a damaged or linked install journal without deleting it', async () => {
-    const started = performance.now()
-    const mark = (phase: string) => console.info(`[restore-ci-phase] journal ${phase} ${Math.round(performance.now() - started)}ms`)
-    mark('damaged fixture/export start')
     const damaged = await exportedFixture()
-    mark('damaged fixture/export done')
     const damagedJournal = restoreJournalPath(damaged.targetRoot)
     fs.writeFileSync(damagedJournal, '{')
-    mark('damaged restore start')
     await expect(restorePortableProject({ archivePath: damaged.archive, targetProjectRoot: damaged.targetRoot }))
       .rejects.toThrow('PORTABLE_RESTORE_UNSAFE_TARGET')
-    mark('damaged restore done')
     expect(fs.readFileSync(damagedJournal, 'utf8')).toBe('{')
-    mark('damaged safety check done')
 
-    mark('linked fixture/export start')
     const linked = await exportedFixture()
-    mark('linked fixture/export done')
     const outside = path.join(linked.base, 'outside-journal.json')
     fs.writeFileSync(outside, '{}')
     const linkedJournal = restoreJournalPath(linked.targetRoot)
     fs.symlinkSync(outside, linkedJournal, 'file')
-    mark('linked restore start')
     await expect(restorePortableProject({ archivePath: linked.archive, targetProjectRoot: linked.targetRoot }))
       .rejects.toThrow('PORTABLE_RESTORE_UNSAFE_TARGET')
-    mark('linked restore done')
     expect(fs.readFileSync(outside, 'utf8')).toBe('{}')
     expect(fs.lstatSync(linkedJournal).isSymbolicLink()).toBe(true)
-    mark('linked safety check done')
   })
 
   it('rejects a linked target root and preserves the linked directory', async () => {
-    const started = performance.now()
-    const mark = (phase: string) => console.info(`[restore-ci-phase] linked root ${phase} ${Math.round(performance.now() - started)}ms`)
-    mark('fixture/export start')
     const f = await exportedFixture()
-    mark('fixture/export done')
     const outside = path.join(f.base, 'outside-target')
     fs.mkdirSync(outside)
     fs.writeFileSync(path.join(outside, 'keep.txt'), 'keep')
     fs.symlinkSync(outside, f.targetRoot, 'junction')
-    mark('restore start')
     await expect(restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot }))
       .rejects.toThrow('PORTABLE_RESTORE_UNSAFE_TARGET')
-    mark('restore done')
     expect(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8')).toBe('keep')
-    mark('safety check done')
   })
 
   it('has no partial final target before commit and a complete project after commit', async () => {
