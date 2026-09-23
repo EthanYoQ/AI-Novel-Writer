@@ -3,9 +3,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
+import { spawn } from 'node:child_process'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import * as lance from '@lancedb/lancedb'
-import { Field, Schema, Utf8, Int32, Float32, FixedSizeList } from 'apache-arrow'
 import { exportVectorStoreForMigration, importVectorStoreForMigration, verifyVectorStoreForMigration } from '../vector-migration-snapshot'
 import { closeConnection, closeVectorStoreForMigration, getConnection, search } from '../../vector-store'
 
@@ -66,28 +66,54 @@ function fingerprint(directory: string): string {
   } }
   walk(directory); return createHash('sha256').update(JSON.stringify(parts)).digest('hex')
 }
+const seedProcessSource = String.raw`
+import fs from 'node:fs'
+import path from 'node:path'
+import * as lance from '@lancedb/lancedb'
+import { Field, Schema, Utf8, Int32, Float32, FixedSizeList } from 'apache-arrow'
+
+const [storage, projectRoot, vectorsValue, caseIndex] = process.argv.slice(1)
+const vectors = vectorsValue === 'true'
+const nativeStage = stage => {
+  if (process.env.CI !== 'true') return
+  fs.writeSync(2, '[vector-native-stage] ' + JSON.stringify({ stage, caseIndex: Number(caseIndex),
+    pid: process.pid, monotonicNs: process.hrtime.bigint().toString() }) + '\n')
+}
+fs.mkdirSync(storage, { recursive: true })
+nativeStage('connect-enter')
+const connection = await lance.connect(path.join(storage, 'lancedb'))
+nativeStage('connect-ready')
+const fields = [new Field('id', new Utf8()), new Field('docId', new Utf8()), new Field('fileName', new Utf8()), new Field('text', new Utf8()), new Field('chunkIndex', new Int32()), new Field('totalChunks', new Int32()), new Field('importedAt', new Utf8()), new Field('corpusKind', new Utf8())]
+const chunks = [{ id: '块甲', docId: '文档甲', fileName: '已删除原稿.pdf', text: '雨夜来信：铜钥匙藏在旧钟后面。', chunkIndex: 0, totalChunks: 1, importedAt: '2026-09-13', corpusKind: 'reference' }]
+const tables = []
+try {
+  nativeStage('chunks-enter')
+  tables.push(await connection.createTable('chunks', chunks, { schema: new Schema(fields) }))
+  nativeStage('chunks-ready')
+  nativeStage('documents-enter')
+  tables.push(await connection.createTable('documents', [{ id: '文档甲', fileName: '已删除原稿.pdf', filePath: path.join(projectRoot, '已删除原稿.pdf'), importedAt: '2026-09-13', chunkCount: 1, corpusKind: 'reference' }]))
+  nativeStage('documents-ready')
+  if (vectors) {
+    nativeStage('vectors-enter')
+    for (const generation of [1, 2]) tables.push(await connection.createTable('chunks__space_' + generation, chunks.map(row => ({ ...row, vector: Array.from({ length: generation + 1 }, (_, i) => i / 4) })), { schema: new Schema([...fields, new Field('vector', new FixedSizeList(generation + 1, new Field('item', new Float32())))]) }))
+    nativeStage('vectors-ready')
+    fs.writeFileSync(path.join(storage, 'embedding-spaces.json'), JSON.stringify({ version: 1, activeGeneration: 2, spaces: [1, 2].map(generation => ({ generation, tableName: 'chunks__space_' + generation, modelFingerprint: '合成模型' + generation, vectorDimension: generation + 1, distanceMetric: 'l2', status: generation === 2 ? 'active' : 'inactive', createdAt: '2026-09-13' })) }))
+  }
+} finally {
+  nativeStage('seed-close-enter')
+  for (const table of tables) table.close()
+  connection.close()
+  nativeStage('seed-close-done')
+}
+`
 async function seed(storage: string, vectors = true) {
-  fs.mkdirSync(storage, { recursive: true })
-  nativeStage('connect-enter')
-  const connection = await lance.connect(path.join(storage, 'lancedb'))
-  nativeStage('connect-ready')
-  const fields = [new Field('id', new Utf8()), new Field('docId', new Utf8()), new Field('fileName', new Utf8()), new Field('text', new Utf8()), new Field('chunkIndex', new Int32()), new Field('totalChunks', new Int32()), new Field('importedAt', new Utf8()), new Field('corpusKind', new Utf8())]
-  const chunks = [{ id: '块甲', docId: '文档甲', fileName: '已删除原稿.pdf', text: '雨夜来信：铜钥匙藏在旧钟后面。', chunkIndex: 0, totalChunks: 1, importedAt: '2026-09-13', corpusKind: 'reference' }]
-  const tables: lance.Table[] = []
-  try {
-    nativeStage('chunks-enter')
-    tables.push(await connection.createTable('chunks', chunks, { schema: new Schema(fields) }))
-    nativeStage('chunks-ready')
-    nativeStage('documents-enter')
-    tables.push(await connection.createTable('documents', [{ id: '文档甲', fileName: '已删除原稿.pdf', filePath: path.join(root, '已删除原稿.pdf'), importedAt: '2026-09-13', chunkCount: 1, corpusKind: 'reference' }]))
-    nativeStage('documents-ready')
-    if (vectors) {
-      nativeStage('vectors-enter')
-      for (const generation of [1, 2]) tables.push(await connection.createTable(`chunks__space_${generation}`, chunks.map(row => ({ ...row, vector: Array.from({ length: generation + 1 }, (_, i) => i / 4) })), { schema: new Schema([...fields, new Field('vector', new FixedSizeList(generation + 1, new Field('item', new Float32())))]) }))
-      nativeStage('vectors-ready')
-      fs.writeFileSync(path.join(storage, 'embedding-spaces.json'), JSON.stringify({ version: 1, activeGeneration: 2, spaces: [1, 2].map(generation => ({ generation, tableName: `chunks__space_${generation}`, modelFingerprint: `合成模型${generation}`, vectorDimension: generation + 1, distanceMetric: 'l2', status: generation === 2 ? 'active' : 'inactive', createdAt: '2026-09-13' })) }))
-    }
-  } finally { nativeStage('seed-close-enter'); for (const table of tables) table.close(); connection.close(); nativeStage('seed-close-done') }
+  const child = spawn(process.execPath,
+    ['--input-type=module', '--eval', seedProcessSource, storage, root, String(vectors), String(diagnosticCase)],
+    { cwd: process.cwd(), windowsHide: true, stdio: ['ignore', 'ignore', 'inherit'] })
+  await new Promise<void>((resolve, reject) => {
+    child.once('error', reject)
+    child.once('exit', (code, signal) => code === 0 ? resolve() : reject(new Error(`VECTOR_SEED_CHILD_FAILED:${code ?? signal}`)))
+  })
 }
 async function copied(vectors = true) {
   const source = path.join(root, '原项目', '.vela'), copy = path.join(root, '只读副本')
