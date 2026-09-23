@@ -11,6 +11,7 @@ import { useEditorStore } from '../../../../stores/editor-store'
 import { useLocaleStore } from '../../../../stores/locale-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import CharacterEditor from '../../../editor/CharacterEditor'
+import { useCharacterAvatar } from '../../../editor/use-character-avatar'
 import RelationshipGraph from '../../../editor/RelationshipGraph'
 import { GRAPH_NODE_LIMIT } from '../../../editor/relationship-graph-layout'
 import CharactersView from '../../../panels/sidebar/CharactersView'
@@ -143,6 +144,46 @@ it('U10.A07, U11.A01/A02/A07: Writer 人物卡头像和图谱交互补充证据'
   assertWriter('U11.A08-callback')
   await act(async () => (host.querySelector('[data-graph-character-id="stable-5"]') as HTMLButtonElement).click())
   expect(openCharacter).toHaveBeenCalledWith('stable-5') // U11.A08 mock-caller 只证实稳定 ID 回调；下方 browser 用例覆盖真实路由/字段，Electron 级资格仍待验收。
+})
+
+it('同会话头像保存与移除后，V3 侧栏批量头像立即重读对应稳定 ID', async () => {
+  function AvatarActionProbe() {
+    const avatar = useCharacterAvatar('stable-0', true)
+    return <div data-avatar-staged={avatar.staged}>
+      <button onClick={() => { void avatar.chooseAvatar() }}>选择测试头像</button>
+      <button onClick={() => { void avatar.commitStaged() }}>提交测试头像</button>
+      <button onClick={avatar.stageRemoval}>移除测试头像</button>
+    </div>
+  }
+  let saved: { characterId: string; assetRevision: number; mime: 'image/png'; base64: string } | null = {
+    characterId: 'stable-0', assetRevision: 1, mime: 'image/png', base64: btoa('gold'),
+  }
+  invoke.mockImplementation(async (channel: string, ids: string[]) => {
+    if (channel === 'character-avatar:read-batch') return { success: true, avatars: saved && ids.includes('stable-0') ? [saved] : [] }
+    if (channel === 'character-avatar:choose') return { success: true, cancelled: false,
+      image: { characterId: 'stable-0', mime: 'image/png', base64: btoa('blue') } }
+    if (channel === 'character-avatar:commit') {
+      saved = { characterId: 'stable-0', assetRevision: 2, mime: 'image/png', base64: btoa('blue') }
+      return { success: true, avatar: saved }
+    }
+    if (channel === 'character-avatar:remove') { saved = null; return { success: true } }
+    return { success: false }
+  })
+  useCharacterStore.setState({ characters: [card(0)], dataProjectKey: path, loadingProjectKey: null, lastError: null })
+  await act(async () => root.render(
+    <ShellV2 variant="v3" theme="paper" bottomOpen={false} titleBar={<span>图谱验证</span>} rail={<span>书脊</span>}
+      sidebar={<CharactersView />} editor={<AvatarActionProbe />}
+      aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>本地写作</span>} />,
+  ))
+  const sidebarImage = () => host.querySelector<HTMLImageElement>('[data-character-id="stable-0"] img')
+  await vi.waitFor(async () => expect(await fetch(sidebarImage()!.src).then(response => response.text())).toBe('gold'))
+  await act(async () => { await page.getByRole('button', { name: '选择测试头像' }).click() })
+  await vi.waitFor(() => expect(host.querySelector('[data-avatar-staged]')?.getAttribute('data-avatar-staged')).toBe('true'))
+  await act(async () => { await page.getByRole('button', { name: '提交测试头像' }).click() })
+  await vi.waitFor(async () => expect(await fetch(sidebarImage()!.src).then(response => response.text())).toBe('blue'))
+  await act(async () => { await page.getByRole('button', { name: '移除测试头像' }).click() })
+  await act(async () => { await page.getByRole('button', { name: '提交测试头像' }).click() })
+  await vi.waitFor(() => expect(sidebarImage()).toBeNull())
 })
 
 it('U11.A08: V3 Writer 图谱打开同名角色对应的稳定 ID 档案', async () => {

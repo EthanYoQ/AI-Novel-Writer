@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CharacterAvatarChannels } from '../../shared/character-avatar'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
-import { getActiveProjectSessionContext } from '../../shared/project-session-context'
+import { getActiveProjectSessionContext, sameProjectSessionContext } from '../../shared/project-session-context'
 import { ipc } from '../../services/ipc-client'
-import { base64ToObjectUrl, revokeObjectUrl } from './use-character-avatar'
+import { base64ToObjectUrl, characterAvatarChanges, revokeObjectUrl } from './use-character-avatar'
 
 type BatchInvoke = (context: ProjectSessionContext, channel: 'character-avatar:read-batch', characterIds: string[]) =>
   Promise<CharacterAvatarChannels['character-avatar:read-batch']['return']>
@@ -20,7 +20,20 @@ export function useCharacterAvatars(characterIds: readonly string[], enabled: bo
   const idsKey = enabled ? [...new Set(characterIds)].sort().join('\u0000') : ''
   const [avatarUrls, setAvatarUrls] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
+  const [refresh, setRefresh] = useState(0)
   const urls = useRef(new Map<string, string>())
+
+  useEffect(() => {
+    if (!context || !idsKey) return
+    const onChange = (event: Event) => {
+      const changed = (event as CustomEvent<{ context: ProjectSessionContext; characterId: string }>).detail
+      if (sameProjectSessionContext(changed.context, context)
+        && sameProjectSessionContext(context, getActiveProjectSessionContext())
+        && idsKey.split('\u0000').includes(changed.characterId)) setRefresh(value => value + 1)
+    }
+    characterAvatarChanges.addEventListener('changed', onChange)
+    return () => characterAvatarChanges.removeEventListener('changed', onChange)
+  }, [context, idsKey])
 
   useEffect(() => {
     for (const url of urls.current.values()) revokeObjectUrl(url)
@@ -47,7 +60,7 @@ export function useCharacterAvatars(characterIds: readonly string[], enabled: bo
       } finally { if (!cancelled) setLoading(false) }
     })
     return () => { cancelled = true }
-  }, [context, idsKey, sessionKey])
+  }, [context, idsKey, sessionKey, refresh])
 
   useEffect(() => () => {
     for (const url of urls.current.values()) revokeObjectUrl(url)

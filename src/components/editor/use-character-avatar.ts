@@ -10,6 +10,7 @@ type AvatarInvoke = <C extends keyof CharacterAvatarChannels>(
   ...args: CharacterAvatarChannels[C]['args']
 ) => Promise<CharacterAvatarChannels[C]['return']>
 const invokeAvatar = ipc.invokeWithProjectSession as unknown as AvatarInvoke
+export const characterAvatarChanges = new EventTarget()
 
 interface StagedImage { base64: string; mime: string; url: string }
 
@@ -108,11 +109,14 @@ export function useCharacterAvatar(characterId: string | null, editing: boolean)
         revokeObjectUrl(savedRef.current); if (storedUrl) revokeObjectUrl(stagedImage.url)
         savedRef.current = nextUrl; stagedRef.current = null
         setSavedUrl(nextUrl); setAssetRevision(response.avatar.assetRevision); setStagedImage(null); setPendingRemoval(false)
+        characterAvatarChanges.dispatchEvent(new CustomEvent('changed', { detail: { context, characterId } }))
         return true
       }
       const response = await invokeAvatar(context, 'character-avatar:remove', characterId)
       if (!response.success) { setNotice(response.error.message); return false }
-      replaceSaved(null); setPendingRemoval(false); return true
+      replaceSaved(null); setPendingRemoval(false)
+      characterAvatarChanges.dispatchEvent(new CustomEvent('changed', { detail: { context, characterId } }))
+      return true
     } catch { setNotice('头像保存失败，档案其它内容已保存。'); return false } finally { setBusy(false) }
   }, [characterId, context, pendingRemoval, replaceSaved, stagedImage])
 
