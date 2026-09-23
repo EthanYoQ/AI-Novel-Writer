@@ -14,11 +14,13 @@ const a08Only = process.argv.includes('--v3-a08-only')
 const a09Only = process.argv.includes('--v3-a09-only')
 const a12Only = process.argv.includes('--v3-a12-only')
 const a10Only = process.argv.includes('--v3-a10-only')
-const v3Mode = a08Only || a09Only || a10Only || a12Only || process.argv.includes('--v3-a10-a13')
+const narrowOnly = process.argv.includes('--v3-narrow-only')
+const v3Mode = a08Only || a09Only || a10Only || a12Only || narrowOnly || process.argv.includes('--v3-a10-a13')
 const buildReceiptPath = process.argv.find(arg => arg.startsWith('--reuse-package='))?.slice('--reuse-package='.length)
-assert(v3Mode || buildReceiptPath, 'pass --reuse-package=<build receipt>, --v3-a08-only, --v3-a09-only, --v3-a10-a13, --v3-a12-only or --v3-a10-only')
+assert(v3Mode || buildReceiptPath, 'pass --reuse-package=<build receipt> or a --v3-* mode')
 const buildReceipt = buildReceiptPath ? JSON.parse(fs.readFileSync(buildReceiptPath, 'utf8')) : null
-const testedSha = v3Mode ? 'e803b10c461cddbb567ad925743b164f42af9e1a' : buildReceipt.build?.buildSha
+const testedSha = narrowOnly ? '6639f757c8d4cf2bf1d73ae4bb2a672b34a251f2'
+  : v3Mode ? 'e803b10c461cddbb567ad925743b164f42af9e1a' : buildReceipt.build?.buildSha
 if (!v3Mode) assert.equal(testedSha, 'c6fd2b5e02230d4ddd6e20d92c66bcf8a8f77010')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -29,12 +31,15 @@ const dirtyProduct = git('status', '--porcelain', '--', 'src', 'electron', 'publ
   .split('\n').filter(Boolean).filter(line => !/src\/.*\/__tests__\//.test(line))
 assert.deepEqual(dirtyProduct, [], 'dirty product input since package build')
 const packageDir = v3Mode
-  ? path.join(repository, '.runtime', '.cache', 'f05-u12-m06-package', 'e803b10c', 'win-unpacked')
+  ? narrowOnly ? path.join(repository, '.runtime', '.cache', 'f04-v3-narrow-package', '6639f757-electron-abi', 'win-unpacked')
+    : path.join(repository, '.runtime', '.cache', 'f05-u12-m06-package', 'e803b10c', 'win-unpacked')
   : path.join(repository, 'release', '1.1.0', 'win-unpacked')
 const executablePath = path.join(packageDir, 'AI小说作家.exe')
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
-assert.equal(sha256(executablePath), v3Mode ? '35f08ef5f2317f7151d6a2a0884531106a0bb2fba926cab7d09ff50b5f2e8f11' : buildReceipt.artifact.executableSha256)
-assert.equal(sha256(asarPath), v3Mode ? '6aa5c19a88481eef994df8d1e4050578e8c860d314ee8e6662656b967b2d190c' : buildReceipt.artifact.asarSha256)
+assert.equal(sha256(executablePath), narrowOnly ? '8cceb2b6143789bed0bb562bc4e8d0fdd7e2f6ae4001a34307437a6e9de25d7e'
+  : v3Mode ? '35f08ef5f2317f7151d6a2a0884531106a0bb2fba926cab7d09ff50b5f2e8f11' : buildReceipt.artifact.executableSha256)
+assert.equal(sha256(asarPath), narrowOnly ? 'ba26bf26ebdd4726f190e8ff61b70dcc2da5776a04d29f74ba865c111914058f'
+  : v3Mode ? '6aa5c19a88481eef994df8d1e4050578e8c860d314ee8e6662656b967b2d190c' : buildReceipt.artifact.asarSha256)
 const driverSha256 = sha256(fileURLToPath(import.meta.url))
 const runId = randomUUID()
 const evidenceDir = path.join(repository, '.runtime', '.cache', 'f05-u11-graph-profile', runId)
@@ -326,6 +331,104 @@ async function verifyV3Graph(page, db, setStep) {
   pass('U11.A12-delete-all-confirmation', 'U11.A12', 'Visible graph clear required explicit confirmation; cancellation wrote nothing and confirmation removed all active synthetic roles and relationships while retaining raw history',
     { beforeCount: 999, afterCount: 0, rawHistoricalRelations: db.prepare('SELECT count(*) FROM character_relationships').pluck().get() })
 }
+async function verifyV3Narrow(page, app, setStep) {
+  setStep('U11.V3-narrow-graph-entry')
+  await page.locator('.writer-left-rail button[title="角色"]').click()
+  await page.getByText('角色列表（1000）', { exact: true }).waitFor({ state: 'visible' })
+  await page.getByRole('button', { name: '关系图谱', exact: true }).click()
+  const canvas = page.locator('canvas[aria-label^="角色关系图谱"]')
+  await canvas.waitFor({ state: 'visible' })
+  const sidebar = page.getByRole('complementary', { name: '图谱人物侧栏' })
+  const search = sidebar.getByRole('textbox', { name: '搜索图谱人物' })
+  const next = sidebar.getByRole('button', { name: '下一页人物' })
+  const fit = page.getByRole('button', { name: '适合视图' })
+  const observations = []
+  for (const width of [1024, 1200, 1280, 1324, 1325, 1440]) {
+    setStep(`F04.V3-narrow-${width}`)
+    const windowSize = await app.evaluate(({ BrowserWindow }, width) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      window.setContentSize(width, 720)
+      window.webContents.setZoomFactor(1)
+      return { windowSize: window.getSize(), contentSize: window.getContentSize(), zoomFactor: window.webContents.getZoomFactor() }
+    }, width)
+    assert.deepEqual(windowSize.contentSize, [width, 720], `${width}: native content size differed`)
+    await fit.scrollIntoViewIfNeeded()
+    const layout = await page.evaluate(() => {
+    const names = ['.writer-workspace-scroll', 'canvas[aria-label^="角色关系图谱"]', 'aside[aria-label="图谱人物侧栏"]', 'input[aria-label="搜索图谱人物"]',
+      'button[aria-label="缩小关系图谱"]', 'button[aria-label="放大关系图谱"]', 'button[aria-label="适合视图"]',
+      'button[aria-label="重置图谱布局"]', 'button[aria-label="折叠人物侧栏"]', 'button[aria-label="下一页人物"]']
+    const groups = Array.from(document.querySelectorAll('.writer-topbar > div'))
+    const titlebar = Array.from(document.querySelectorAll('.writer-topbar > *, .writer-topbar button')).map(element => {
+      const rect = element.getBoundingClientRect()
+      const x = rect.left + rect.width / 2
+      const y = rect.top + rect.height / 2
+      return { name: element.className || element.tagName.toLowerCase(), group: groups.findIndex(group => group === element || group.contains(element)), title: element.getAttribute('title'),
+        text: element.textContent?.trim().slice(0, 60),
+        x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+        hit: element.contains(document.elementFromPoint(x, y)) }
+    })
+    return { viewport: { width: innerWidth, height: innerHeight },
+      actionLabelsVisible: getComputedStyle(document.querySelector('.writer-topbar-action-label')).display !== 'none',
+      titlebar, elements: Object.fromEntries(names.map(name => {
+      const element = document.querySelector(name)
+      const rect = element.getBoundingClientRect()
+      const x = rect.left + rect.width / 2
+      const y = rect.top + rect.height / 2
+      return [name, { x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+        hit: element.contains(document.elementFromPoint(x, y)), visible: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight }]
+    })) }
+    })
+    const screenshotPath = path.join(evidenceDir, `v3-narrow-${width}.png`)
+    const png = await page.screenshot({ path: screenshotPath })
+    const evidence = { windowSize, layout, screenshot: { path: screenshotPath, sha256: sha256(screenshotPath), pixels: [png.readUInt32BE(16), png.readUInt32BE(20)] }, portals: [] }
+    observations.push(evidence)
+    fs.writeFileSync(path.join(evidenceDir, 'narrow-observation.json'), JSON.stringify(observations, null, 2))
+    assert.equal(layout.viewport.width, width)
+    assert.equal(layout.actionLabelsVisible, width > 1324, `${width}: titlebar breakpoint differed`)
+    const rightGroup = layout.titlebar.find(control => control.group === 2 && !control.title)
+    assert(rightGroup, `${width}: missing right titlebar group`)
+    assert.deepEqual(layout.titlebar.filter(control => control.title && !control.hit).map(control => control.title), [],
+      `${width}: titlebar action covered`)
+    assert.deepEqual(layout.titlebar.filter(control => control.group === 1 && control.title && control.x + control.width > rightGroup.x).map(control => control.title), [],
+      `${width}: titlebar action overlaps right controls`)
+    for (const name of ['canvas[aria-label^="角色关系图谱"]', 'aside[aria-label="图谱人物侧栏"]', 'input[aria-label="搜索图谱人物"]',
+      'button[aria-label="缩小关系图谱"]', 'button[aria-label="放大关系图谱"]', 'button[aria-label="适合视图"]',
+      'button[aria-label="重置图谱布局"]', 'button[aria-label="折叠人物侧栏"]', 'button[aria-label="下一页人物"]']) {
+      assert.equal(layout.elements[name].visible, true, `${width}: ${name} crosses the window edge`)
+      assert.equal(layout.elements[name].hit, true, `${width}: ${name} is covered`)
+    }
+    await fit.click()
+    await next.click()
+    await sidebar.getByText('2 / 20 · 1000', { exact: true }).waitFor({ state: 'visible' })
+    await search.fill('角色0997')
+    await sidebar.getByText('1 / 1 · 1', { exact: true }).waitFor({ state: 'visible' })
+    assert.equal(await sidebar.getByRole('button', { name: '上一页人物' }).isDisabled(), true)
+    await search.fill('')
+    if ([1024, 1280, 1440].includes(width)) {
+      for (const title of ['导出', '新建项目']) {
+        await page.locator(`.writer-topbar button[title="${title}"]`).click()
+        const dialog = page.getByRole('dialog')
+        await dialog.waitFor({ state: 'visible' })
+        const rect = await dialog.boundingBox()
+        assert(rect && rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= width && rect.y + rect.height <= 720,
+          `${width}: ${title} portal dialog crosses the window edge`)
+        const hit = await dialog.evaluate(element => {
+          const rect = element.getBoundingClientRect()
+          return element.contains(document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2))
+        })
+        assert.equal(hit, true, `${width}: ${title} portal dialog is covered`)
+        const portalPath = path.join(evidenceDir, `v3-narrow-${width}-${title === '导出' ? 'export' : 'new'}.png`)
+        await page.screenshot({ path: portalPath })
+        evidence.portals.push({ title, rect, hit, screenshot: { path: portalPath, sha256: sha256(portalPath) } })
+        fs.writeFileSync(path.join(evidenceDir, 'narrow-observation.json'), JSON.stringify(observations, null, 2))
+        await page.keyboard.press('Escape')
+        await dialog.waitFor({ state: 'hidden' })
+      }
+    }
+    pass(`F04.V3-narrow-${width}`, 'F04', 'Native V3 titlebar actions and graph controls remain separate, visible and interactive',
+      { width, screenshot: evidence.screenshot, titlebar: layout.titlebar, graph: layout.elements, portals: evidence.portals })
+  }
+}
 async function verifyV3Proposal(page, db, fixture, setStep) {
   setStep('U11.A10-generate-proposal')
   await assertWriter(page, 'U11.A10')
@@ -509,7 +612,8 @@ async function main() {
     if (v3Mode) {
       currentStep = a08Only ? 'U11.A08-v3-graph-entry' : a09Only ? 'U11.A09-v3-graph-entry' : a10Only ? 'U11.A10-v3-architecture-entry'
         : a12Only ? 'U11.A12-v3-graph-entry' : 'U11.A13-v3-graph-entry'
-      if (a08Only) await verifyV3A08(page, db, step => { currentStep = step })
+      if (narrowOnly) await verifyV3Narrow(page, app, step => { currentStep = step })
+      else if (a08Only) await verifyV3A08(page, db, step => { currentStep = step })
       else if (a09Only) await verifyV3A09(page, db, step => { currentStep = step })
       else if (a10Only) await verifyV3Proposal(page, db, fixture, step => { currentStep = step })
       else await verifyV3Graph(page, db, step => { currentStep = step })
@@ -581,18 +685,19 @@ async function main() {
           .every(stepId => steps.some(step => step.stepId === stepId && step.outcome === 'PASS'))
       : steps.some(step => step.actionId === actionId && step.outcome === 'PASS')
     const receipt = { outcome: failure ? 'FAIL' : v3Mode ? 'PARTIAL' : 'PASS',
-      qualification: v3Mode ? a08Only ? 'F05_U11_A08_V3_PARTIAL' : a09Only ? 'F05_U11_A09_V3_PARTIAL' : a10Only ? 'F05_U11_A10_V3_PARTIAL' : a12Only ? 'F05_U11_A12_V3_PARTIAL' : 'F05_U11_A10_A13_V3_PARTIAL' : 'F05_U11_A08_A09_WRITER', evidenceLevel: 'electron',
+      qualification: v3Mode ? narrowOnly ? 'F04_V3_NARROW_GRAPH_PARTIAL' : a08Only ? 'F05_U11_A08_V3_PARTIAL' : a09Only ? 'F05_U11_A09_V3_PARTIAL' : a10Only ? 'F05_U11_A10_V3_PARTIAL' : a12Only ? 'F05_U11_A12_V3_PARTIAL' : 'F05_U11_A10_A13_V3_PARTIAL' : 'F05_U11_A08_A09_WRITER', evidenceLevel: 'electron',
       testedSha, executionHead, changedPaths, sourceDirtyPaths: git('status', '--porcelain').split('\n').filter(Boolean),
       driverSha256, buildReceipt: buildReceiptPath ? { path: buildReceiptPath, sha256: sha256(buildReceiptPath) } : null,
       fixtureSetup: a09Only ? { method: 'character-roster-commit with two stable IDs and old relation; UI alone edits relation',
         firstName, secondName, initialRelation: initialRelationship, editedRelation: relationship }
         : a08Only ? { method: 'character-roster-commit with unique names and distinct notes, then isolated SQLite rename by character_id',
         firstName, secondName, duplicateName: firstName, distinctField: 'notes', targetNotes: a08TargetNotes, otherNotes: a08OtherNotes } : null,
-      packageRoot: packageDir, shell: v3Mode ? 'writer-v3' : 'writer', mode: a08Only ? 'v3-a08-only' : a09Only ? 'v3-a09-only' : a10Only ? 'v3-a10-only' : a12Only ? 'v3-a12-only' : v3Mode ? 'v3-a10-a13' : 'legacy-a08-a09',
+      packageRoot: packageDir, shell: v3Mode ? 'writer-v3' : 'writer', mode: narrowOnly ? 'v3-narrow-only' : a08Only ? 'v3-a08-only' : a09Only ? 'v3-a09-only' : a10Only ? 'v3-a10-only' : a12Only ? 'v3-a12-only' : v3Mode ? 'v3-a10-a13' : 'legacy-a08-a09',
       artifact: { executableSha256: sha256(executablePath), asarSha256: sha256(asarPath) },
       nodeAbi: process.versions.modules, cleanupConfirmed, isolatedRoot: scratch, projectPath, failedStep: failure ? currentStep : null,
       error: failure, diagnostic: failure ? diagnostic : null, steps,
-      unverified: v3Mode ? (a08Only ? ['U11.A09', 'U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']
+      unverified: v3Mode ? (narrowOnly ? ['U11.A08', 'U11.A09', 'U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']
+        : a08Only ? ['U11.A09', 'U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']
         : a09Only ? ['U11.A08', 'U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']
           : ['U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']).filter(id => !verified(id))
         : failure ? ['U11.A08', 'U11.A09'].filter(id => !steps.some(step => step.actionId === id && step.outcome === 'PASS')) : [] }
