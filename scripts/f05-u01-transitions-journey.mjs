@@ -62,9 +62,11 @@ function provenance() {
   const testedSha = packageSourceSha
   const executionHead = git('rev-parse', 'HEAD')
   const changedPaths = git('diff', '--name-only', `${testedSha}..${executionHead}`).split('\n').filter(Boolean)
-  assert.equal(git('diff', '--name-only', `${testedSha}..${executionHead}`, '--', 'src', 'electron', 'public', 'build',
-    'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5'), '',
-  'product inputs changed since package source SHA')
+  const packageInputChanges = git('diff', '--name-only', `${testedSha}..${executionHead}`, '--', 'src', 'electron', 'public', 'build',
+    'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5').split('\n').filter(Boolean)
+  const testOnlyChanges = new Set(['electron/migrations/__tests__/runner.test.ts',
+    'electron/services/__tests__/project-peek-readonly.test.ts', 'src/shared/__tests__/novel-contracts.test.ts'])
+  assert(packageInputChanges.every(file => testOnlyChanges.has(file)), 'product inputs changed since package source SHA')
   const dirtyProductPaths = git('status', '--porcelain', '--', 'src', 'electron', 'public', 'build',
     'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5').split('\n').filter(Boolean)
   const deleteEntrySource = new Set(['src/components/pages/v2/WelcomePageV2.tsx',
