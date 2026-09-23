@@ -11,13 +11,14 @@ import { _electron as electron } from 'playwright'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const a08Only = process.argv.includes('--v3-a08-only')
+const a09Only = process.argv.includes('--v3-a09-only')
 const a12Only = process.argv.includes('--v3-a12-only')
 const a10Only = process.argv.includes('--v3-a10-only')
-const v3Mode = a08Only || a10Only || a12Only || process.argv.includes('--v3-a10-a13')
+const v3Mode = a08Only || a09Only || a10Only || a12Only || process.argv.includes('--v3-a10-a13')
 const buildReceiptPath = process.argv.find(arg => arg.startsWith('--reuse-package='))?.slice('--reuse-package='.length)
-assert(v3Mode || buildReceiptPath, 'pass --reuse-package=<build receipt>, --v3-a08-only, --v3-a10-a13, --v3-a12-only or --v3-a10-only')
+assert(v3Mode || buildReceiptPath, 'pass --reuse-package=<build receipt>, --v3-a08-only, --v3-a09-only, --v3-a10-a13, --v3-a12-only or --v3-a10-only')
 const buildReceipt = buildReceiptPath ? JSON.parse(fs.readFileSync(buildReceiptPath, 'utf8')) : null
-const testedSha = a08Only ? 'e803b10c461cddbb567ad925743b164f42af9e1a'
+const testedSha = a08Only || a09Only ? 'e803b10c461cddbb567ad925743b164f42af9e1a'
   : v3Mode ? '6cf79d36d8c9348911232b312cd852e60654f655' : buildReceipt.build?.buildSha
 if (!v3Mode) assert.equal(testedSha, 'c6fd2b5e02230d4ddd6e20d92c66bcf8a8f77010')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
@@ -28,16 +29,16 @@ assert(changedPaths.every(name => name.startsWith('scripts/') || name.includes('
 const dirtyProduct = git('status', '--porcelain', '--', 'src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml')
   .split('\n').filter(Boolean).filter(line => !/src\/.*\/__tests__\//.test(line))
 assert.deepEqual(dirtyProduct, [], 'dirty product input since package build')
-const packageDir = a08Only
+const packageDir = a08Only || a09Only
   ? path.join(repository, '.runtime', '.cache', 'f05-u12-m06-package', 'e803b10c', 'win-unpacked')
   : v3Mode
     ? path.join(repository, '.runtime', '.cache', 'f04-v3-build', 'world-rail-1')
     : path.join(repository, 'release', '1.1.0', 'win-unpacked')
 const executablePath = path.join(packageDir, 'AI小说作家.exe')
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
-assert.equal(sha256(executablePath), a08Only ? '35f08ef5f2317f7151d6a2a0884531106a0bb2fba926cab7d09ff50b5f2e8f11'
+assert.equal(sha256(executablePath), a08Only || a09Only ? '35f08ef5f2317f7151d6a2a0884531106a0bb2fba926cab7d09ff50b5f2e8f11'
   : v3Mode ? '183d7f5956495445d22c53e487232dedd20b6e29b5d9f06e15384732b72daa30' : buildReceipt.artifact.executableSha256)
-assert.equal(sha256(asarPath), a08Only ? '6aa5c19a88481eef994df8d1e4050578e8c860d314ee8e6662656b967b2d190c'
+assert.equal(sha256(asarPath), a08Only || a09Only ? '6aa5c19a88481eef994df8d1e4050578e8c860d314ee8e6662656b967b2d190c'
   : v3Mode ? 'a184d35de87eddcea44465da40b17a3727205c8e3e80455c47a9237565ebcf38' : buildReceipt.artifact.asarSha256)
 const driverSha256 = sha256(fileURLToPath(import.meta.url))
 const runId = randomUUID()
@@ -49,6 +50,7 @@ const projectName = 'U11'
 const firstName = `甲${runId.slice(0, 6)}`
 const secondName = `乙${runId.slice(0, 6)}`
 const relationship = '同盟'
+const initialRelationship = '旧识'
 const thirdName = `丙${runId.slice(0, 6)}`
 const sentinelName = `原有角色${runId.slice(0, 6)}`
 const a08TargetNotes = `U11.A08 档案哨兵甲 ${runId}`
@@ -177,6 +179,58 @@ async function verifyV3A08(page, db, setStep) {
       targetClick: { selectedTarget: targetClickSelectedTarget, selectedOther: targetClickSelectedOther, notes: targetClickNotes },
       otherClick: { selectedTarget: otherClickSelectedTarget, selectedOther: otherClickSelectedOther, notes: otherClickNotes },
       fixtureSeed: 'roster IPC with unique names, then isolated SQLite rename by character_id' })
+}
+async function verifyV3A09(page, db, setStep) {
+  setStep('U11.A09-v3-relationship-edit')
+  await assertWriter(page, 'U11.A09')
+  const rows = db.prepare('SELECT character_id, name FROM characters WHERE retired=0 AND name IN (?, ?)').all(firstName, secondName)
+  assert.equal(rows.length, 2, 'A09 fixture requires exactly two active characters')
+  const source = rows.find(row => row.name === firstName)
+  const target = rows.find(row => row.name === secondName)
+  assert(source?.character_id && target?.character_id && source.character_id !== target.character_id)
+  const relationRows = db.prepare('SELECT source_character_id, target_character_id, relation FROM character_relationships').all()
+  assert.deepEqual(relationRows, [{ source_character_id: source.character_id,
+    target_character_id: target.character_id, relation: initialRelationship }], 'A09 fixture must begin with only the old relation')
+
+  await page.locator('.writer-left-rail button[title="角色"]').click()
+  await page.getByRole('button', { name: '关系图谱', exact: true }).click()
+  await page.locator('canvas[aria-label^="角色关系图谱"]').waitFor({ state: 'visible' })
+  await page.getByRole('complementary', { name: '图谱人物侧栏' })
+    .locator(`button[data-graph-character-id="${source.character_id}"]`).click()
+  await page.getByText(`${firstName} — 编辑档案`, { exact: true }).waitFor({ state: 'visible' })
+  assert.equal(await page.locator(`[data-character-id="${source.character_id}"]`).getAttribute('aria-pressed'), 'true')
+  const field = page.locator('textarea[placeholder^="每行一位角色"]')
+  assert.equal(await field.inputValue(), `${secondName}：${initialRelationship}`)
+  await field.fill(`${secondName}：${relationship}`)
+  assert.equal(await field.inputValue(), `${secondName}：${relationship}`)
+  await page.getByText('未保存', { exact: true }).last().waitFor({ state: 'visible' })
+  await page.getByRole('button', { name: '保存', exact: true }).last().click()
+  await page.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible', timeout: 20_000 })
+  assert.deepEqual(db.prepare('SELECT source_character_id, target_character_id, relation FROM character_relationships').all(),
+    [{ source_character_id: source.character_id, target_character_id: target.character_id, relation: relationship }],
+    'UI save did not replace the old relation at the original stable IDs')
+
+  setStep('U11.A09-v3-reopen')
+  await page.reload()
+  await assertWriter(page, 'U11.A09-reopen')
+  await page.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
+  await page.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
+  await page.locator('.writer-left-rail button[title="角色"]').click()
+  await page.getByRole('button', { name: '关系图谱', exact: true }).click()
+  await page.getByRole('complementary', { name: '图谱人物侧栏' })
+    .locator(`button[data-graph-character-id="${source.character_id}"]`).click()
+  assert.equal(await page.locator(`[data-character-id="${source.character_id}"]`).getAttribute('aria-pressed'), 'true')
+  assert.equal(await field.inputValue(), `${secondName}：${relationship}`)
+  const Database = createRequire(import.meta.url)('better-sqlite3')
+  const reopenedDb = new Database(db.name, { fileMustExist: true, readonly: true })
+  try {
+    assert.deepEqual(reopenedDb.prepare('SELECT source_character_id, target_character_id, relation FROM character_relationships').all(),
+      [{ source_character_id: source.character_id, target_character_id: target.character_id, relation: relationship }])
+  } finally { reopenedDb.close() }
+  pass('U11.A09-v3-relationship-edit-and-reopen', 'U11.A09',
+    'V3 graph opened the original stable-ID profile; UI replaced its existing relation, and reopened project and SQLite agreed',
+    { sourceId: source.character_id, targetId: target.character_id,
+      fixtureRelation: initialRelationship, savedRelation: relationship, reopenedRelation: relationship })
 }
 async function verifyV3Graph(page, db, setStep) {
   await assertWriter(page, 'V3 graph')
@@ -412,18 +466,20 @@ async function main() {
     projectPath = created.projectPath
     assert.equal(path.relative(scratch, projectPath).startsWith('..'), false)
     if (v3Mode) {
-      currentStep = a10Only ? 'fixture-proposal-prerequisites' : a08Only ? 'fixture-same-name-stable-id-roster' : 'fixture-1000-character-roster'
+      currentStep = a10Only ? 'fixture-proposal-prerequisites' : a08Only ? 'fixture-same-name-stable-id-roster'
+        : a09Only ? 'fixture-two-stable-id-old-relation' : 'fixture-1000-character-roster'
       const opened = await invoke(page, 'project:open', projectPath, randomUUID(), null)
       assert.equal(opened.success, true, opened.error)
       const session = { projectId: created.projectId, projectPath, leaseId: opened.project.sessionLease }
       const roster = await invoke(page, 'db:character-roster-read', projectPath, session)
-      const names = a10Only ? [sentinelName] : a08Only ? [firstName, secondName]
+      const names = a10Only ? [sentinelName] : a08Only || a09Only ? [firstName, secondName]
         : [firstName, secondName, ...Array.from({ length: 998 }, (_, index) => `角色${String(index).padStart(4, '0')}`)]
       const entries = names.map((name, index) => ({ characterId: `draft:${randomUUID()}`, name,
         role: index === 0 ? 'protagonist' : 'supporting', gender: '', age: '', appearance: '', personality: '',
         background: '', abilities: '', motivation: '', relationships: [], arc: '',
         notes: a08Only ? index === 0 ? a08TargetNotes : a08OtherNotes : '' }))
-      if (!a10Only && !a08Only) entries[0].relationships = [{ target: secondName, targetCharacterId: entries[1].characterId, relation: relationship }]
+      if (a09Only) entries[0].relationships = [{ target: secondName, targetCharacterId: entries[1].characterId, relation: initialRelationship }]
+      else if (!a10Only && !a08Only) entries[0].relationships = [{ target: secondName, targetCharacterId: entries[1].characterId, relation: relationship }]
       const seeded = await invoke(page, 'db:character-roster-commit', { operationId: randomUUID(), expectedRevision: roster.revision,
         expectedIdentityRevision: roster.identityRevision, schemaVersion: 1, intent: 'manual_edit', entries }, projectPath, session)
       assert.equal(seeded.success, true, JSON.stringify(seeded))
@@ -456,9 +512,10 @@ async function main() {
     const Database = createRequire(import.meta.url)('better-sqlite3')
     db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true })
     if (v3Mode) {
-      currentStep = a08Only ? 'U11.A08-v3-graph-entry' : a10Only ? 'U11.A10-v3-architecture-entry'
+      currentStep = a08Only ? 'U11.A08-v3-graph-entry' : a09Only ? 'U11.A09-v3-graph-entry' : a10Only ? 'U11.A10-v3-architecture-entry'
         : a12Only ? 'U11.A12-v3-graph-entry' : 'U11.A13-v3-graph-entry'
       if (a08Only) await verifyV3A08(page, db, step => { currentStep = step })
+      else if (a09Only) await verifyV3A09(page, db, step => { currentStep = step })
       else if (a10Only) await verifyV3Proposal(page, db, fixture, step => { currentStep = step })
       else await verifyV3Graph(page, db, step => { currentStep = step })
     } else {
@@ -529,17 +586,20 @@ async function main() {
           .every(stepId => steps.some(step => step.stepId === stepId && step.outcome === 'PASS'))
       : steps.some(step => step.actionId === actionId && step.outcome === 'PASS')
     const receipt = { outcome: failure ? 'FAIL' : v3Mode ? 'PARTIAL' : 'PASS',
-      qualification: v3Mode ? a08Only ? 'F05_U11_A08_V3_PARTIAL' : a10Only ? 'F05_U11_A10_V3_PARTIAL' : a12Only ? 'F05_U11_A12_V3_PARTIAL' : 'F05_U11_A10_A13_V3_PARTIAL' : 'F05_U11_A08_A09_WRITER', evidenceLevel: 'electron',
+      qualification: v3Mode ? a08Only ? 'F05_U11_A08_V3_PARTIAL' : a09Only ? 'F05_U11_A09_V3_PARTIAL' : a10Only ? 'F05_U11_A10_V3_PARTIAL' : a12Only ? 'F05_U11_A12_V3_PARTIAL' : 'F05_U11_A10_A13_V3_PARTIAL' : 'F05_U11_A08_A09_WRITER', evidenceLevel: 'electron',
       testedSha, executionHead, changedPaths, sourceDirtyPaths: git('status', '--porcelain').split('\n').filter(Boolean),
       driverSha256, buildReceipt: buildReceiptPath ? { path: buildReceiptPath, sha256: sha256(buildReceiptPath) } : null,
-      fixtureSetup: a08Only ? { method: 'character-roster-commit with unique names and distinct notes, then isolated SQLite rename by character_id',
+      fixtureSetup: a09Only ? { method: 'character-roster-commit with two stable IDs and old relation; UI alone edits relation',
+        firstName, secondName, initialRelation: initialRelationship, editedRelation: relationship }
+        : a08Only ? { method: 'character-roster-commit with unique names and distinct notes, then isolated SQLite rename by character_id',
         firstName, secondName, duplicateName: firstName, distinctField: 'notes', targetNotes: a08TargetNotes, otherNotes: a08OtherNotes } : null,
-      packageRoot: packageDir, shell: v3Mode ? 'writer-v3' : 'writer', mode: a08Only ? 'v3-a08-only' : a10Only ? 'v3-a10-only' : a12Only ? 'v3-a12-only' : v3Mode ? 'v3-a10-a13' : 'legacy-a08-a09',
+      packageRoot: packageDir, shell: v3Mode ? 'writer-v3' : 'writer', mode: a08Only ? 'v3-a08-only' : a09Only ? 'v3-a09-only' : a10Only ? 'v3-a10-only' : a12Only ? 'v3-a12-only' : v3Mode ? 'v3-a10-a13' : 'legacy-a08-a09',
       artifact: { executableSha256: sha256(executablePath), asarSha256: sha256(asarPath) },
       nodeAbi: process.versions.modules, cleanupConfirmed, isolatedRoot: scratch, projectPath, failedStep: failure ? currentStep : null,
       error: failure, diagnostic: failure ? diagnostic : null, steps,
       unverified: v3Mode ? (a08Only ? ['U11.A09', 'U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']
-        : ['U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']).filter(id => !verified(id))
+        : a09Only ? ['U11.A08', 'U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']
+          : ['U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']).filter(id => !verified(id))
         : failure ? ['U11.A08', 'U11.A09'].filter(id => !steps.some(step => step.actionId === id && step.outcome === 'PASS')) : [] }
     const receiptPath = path.join(evidenceDir, 'receipt.json')
     fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
