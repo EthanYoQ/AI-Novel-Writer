@@ -13,7 +13,7 @@ import { _electron as electron } from 'playwright'
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 if (process.argv.includes('--help')) {
-  process.stdout.write('F05 U12.A01-A08 V3 packaged review journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256\n')
+  process.stdout.write('F05 U12.A01-A08 V3 packaged review journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256 [--diagnose-a06-lifecycle]\n')
   process.exit(0)
 }
 const packageDir = option('package-dir') && path.resolve(option('package-dir'))
@@ -36,6 +36,11 @@ const scratch = process.env.LOCALAPPDATA
 const profile = Object.fromEntries(['canonical', 'legacy', 'userData', 'home', 'appData', 'localAppData', 'projects']
   .map(name => [name, path.join(scratch, name)]))
 const receiptPath = path.join(repository, '.runtime', '.cache', 'f05-u12-confirmation', runId, 'receipt.json')
+const lifecycle = process.argv.includes('--diagnose-a06-lifecycle') ? [] : null
+const recordLifecycle = (event, details = {}) => {
+  if (lifecycle) lifecycle.push({ sequence: lifecycle.length + 1, at: new Date().toISOString(),
+    monotonicMs: Number(process.hrtime.bigint() / 1_000_000n), event, ...details })
+}
 const projectName = 'u12'
 const liveProjectName = 'u12-live'
 const candidateProjectName = 'u8'
@@ -269,7 +274,9 @@ async function main() {
     response.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`)
     response.end('data: [DONE]\n\n')
   })
-  let app, page, projectPath, sourceReviewId, draftId, failure, liveProjectPath
+  let app, page, projectPath, sourceReviewId, draftId, failure, liveProjectPath, observedProcess
+  const processState = () => ({ pid: observedProcess?.pid ?? null,
+    exitCode: observedProcess?.exitCode ?? null, signalCode: observedProcess?.signalCode ?? null })
   let currentStep = 'fixture-persist'
   try {
     ({ app, page } = await launch())
@@ -599,6 +606,31 @@ async function main() {
       'unresolved', 'generation cannot resolve an objective finding')
 
     currentStep = 'U12.A06-merge-and-recheck'
+    if (lifecycle) {
+      observedProcess = app.process()
+      recordLifecycle('observe-start', processState())
+      observedProcess.on('exit', (exitCode, signalCode) => recordLifecycle('process-exit',
+        { pid: observedProcess.pid, exitCode, signalCode }))
+      app.on('close', () => recordLifecycle('app-close', processState()))
+      page.on('close', () => recordLifecycle('page-close'))
+      page.on('crash', () => recordLifecycle('page-crash'))
+      page.on('framenavigated', frame => {
+        if (frame === page.mainFrame()) recordLifecycle('page-main-frame-navigated')
+      })
+      try {
+        const cdp = await app.context().newCDPSession(page)
+        cdp.on('Runtime.executionContextCreated', ({ context }) => recordLifecycle('renderer-context-created',
+          { contextId: context.id }))
+        cdp.on('Runtime.executionContextDestroyed', ({ executionContextId }) =>
+          recordLifecycle('renderer-context-destroyed', { contextId: executionContextId }))
+        cdp.on('Runtime.executionContextsCleared', () => recordLifecycle('renderer-contexts-cleared'))
+        cdp.on('close', () => recordLifecycle('renderer-cdp-close'))
+        await cdp.send('Runtime.enable')
+        recordLifecycle('renderer-cdp-enabled')
+      } catch (error) {
+        recordLifecycle('renderer-cdp-unavailable', { message: error?.message ?? String(error) })
+      }
+    }
     const objectiveMerge = page.getByRole('dialog', { name: /^修稿合并 — 审稿修复/ })
     await objectiveMerge.waitFor({ state: 'visible' })
     assert.equal((await objectiveMerge.locator('.twm-cell-left').innerText()).trim(), revisedBody,
@@ -646,7 +678,15 @@ async function main() {
       [[objectiveFinding.finding_id, 'ch1:keyEvents:1', false]])
     assert.equal(finalFinding.evidence_hash, recheckReceipt.findings[0].evidenceHash)
     assert.equal(finalRows.findings.find(row => row.cycle_id === oldMerged.cycles[0].cycleId).status, 'unverified')
-    fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0)
+    if (lifecycle) recordLifecycle('main-evaluate-before', processState())
+    try {
+      fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0)
+      if (lifecycle) recordLifecycle('main-evaluate-after', processState())
+    } catch (error) {
+      if (lifecycle) recordLifecycle('main-evaluate-error', { ...processState(),
+        name: error?.name, message: error?.message })
+      throw error
+    }
     assert.equal(fixture.externalModelRequests, 0)
     assert.equal(fixture.requests.filter(item => item.route === '/v1/chat/completions').length, 6)
     pass('U12.A06-merge-not-resolved', 'V3 merged the old unverified control and a new anchored unresolved objective; the production post-merge recheck retained unresolved with matching cycle and hashes',
@@ -833,6 +873,7 @@ async function main() {
         persistedCandidateTextSha256: createHash('sha256').update(revisedBody).digest('hex') }, 'U12.A08')
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message,
+      ...(lifecycle ? { stack: error?.stack } : {}),
       ...(error?.diagnostic ? { diagnostic: error.diagnostic } : {}),
       ui: (await page?.locator('body').innerText().catch(() => ''))?.slice(-2500) }
     steps.push({ stepId: currentStep, actionId: currentStep === 'fixture-persist' ? null
@@ -871,7 +912,7 @@ async function main() {
         .filter(actionId => actionId === 'U12.A08'
           ? !requiredA08Steps.every(stepId => steps.some(step => step.stepId === stepId && step.outcome === 'PASS'))
           : !steps.some(step => step.actionId === actionId && step.outcome === 'PASS')),
-      failure }
+      failure, ...(lifecycle ? { lifecycle } : {}) }
     fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
     process.stdout.write(`${JSON.stringify({ overall: receipt.overall, receipt: receiptPath,
       failedStep: failure?.step ?? null, steps: steps.map(step => step.stepId) })}\n`)
