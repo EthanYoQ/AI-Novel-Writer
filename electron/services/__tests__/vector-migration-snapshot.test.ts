@@ -109,6 +109,7 @@ try {
 `
 const copyProcessSource = String.raw`
 import fs from 'node:fs'
+import path from 'node:path'
 
 const [source, copy, caseIndex] = process.argv.slice(1)
 const nativeStage = stage => {
@@ -116,8 +117,19 @@ const nativeStage = stage => {
   fs.writeSync(2, '[vector-native-stage] ' + JSON.stringify({ stage, caseIndex: Number(caseIndex),
     pid: process.pid, monotonicNs: process.hrtime.bigint().toString() }) + '\n')
 }
+const copyFixture = (from, to) => {
+  const info = fs.lstatSync(from)
+  if (info.isDirectory()) {
+    fs.mkdirSync(to)
+    for (const name of fs.readdirSync(from)) copyFixture(path.join(from, name), path.join(to, name))
+    return
+  }
+  if (!info.isFile()) throw new Error('VECTOR_COPY_FIXTURE_UNSUPPORTED_ENTRY')
+  const fd = fs.openSync(to, 'wx', 0o600)
+  try { fs.writeFileSync(fd, fs.readFileSync(from)); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+}
 nativeStage('copy-child-enter')
-fs.cpSync(source, copy, { recursive: true })
+copyFixture(source, copy)
 nativeStage('copy-child-done')
 `
 async function seed(storage: string, vectors = true) {
@@ -129,9 +141,7 @@ async function seed(storage: string, vectors = true) {
     child.once('exit', (code, signal) => code === 0 ? resolve() : reject(new Error(`VECTOR_SEED_CHILD_FAILED:${code ?? signal}`)))
   })
 }
-async function copied(vectors = true) {
-  const source = path.join(root, '原项目', '.vela'), copy = path.join(root, '只读副本')
-  await seed(source, vectors)
+async function copyInChild(source: string, copy: string) {
   nativeStage('copy-enter')
   const child = spawn(process.execPath,
     ['--input-type=module', '--eval', copyProcessSource, source, copy, String(diagnosticCase)],
@@ -146,6 +156,11 @@ async function copied(vectors = true) {
     })
   })
   nativeStage('copy-done')
+}
+async function copied(vectors = true) {
+  const source = path.join(root, '原项目', '.vela'), copy = path.join(root, '只读副本')
+  await seed(source, vectors)
+  await copyInChild(source, copy)
   return { source, copy }
 }
 it.each([false, true])('保全已删除源PDF的全文和全部向量代际：vectors=%s', nativeCase(async vectors => {
@@ -234,10 +249,11 @@ it('副本与原根不一致或原根读期变动均拒绝，不返回可安装�
   await expect(exportVectorStoreForMigration({ storageRoot: copy, originalSourceRoot: source })).rejects.toThrow('SOURCE_CHANGED')
 }))
 it('未知表不被静默抛弃，失败后副本句柄仍释放', nativeCase(async () => {
-  const { source, copy } = await copied(false)
+  const source = path.join(root, '原项目', '.vela'), copy = path.join(root, '只读副本')
+  await seed(source, false)
   const connection = await lance.connect(path.join(source, 'lancedb'))
   const table = await connection.createTable('unknown_records', [{ id: '必须保全', text: '作者资料' }]); table.close(); connection.close()
-  fs.cpSync(source, copy, { recursive: true, force: true })
+  await copyInChild(source, copy)
   const before = fingerprint(source)
   await expect(exportVectorStoreForMigration({ storageRoot: copy, originalSourceRoot: source })).rejects.toThrow('UNKNOWN_TABLE')
   expect(fingerprint(source)).toBe(before)
