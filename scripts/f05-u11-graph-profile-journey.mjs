@@ -15,11 +15,13 @@ const a09Only = process.argv.includes('--v3-a09-only')
 const a12Only = process.argv.includes('--v3-a12-only')
 const a10Only = process.argv.includes('--v3-a10-only')
 const narrowOnly = process.argv.includes('--v3-narrow-only')
-const v3Mode = a08Only || a09Only || a10Only || a12Only || narrowOnly || process.argv.includes('--v3-a10-a13')
+const avatarOnly = process.argv.includes('--v3-avatar-batch-only')
+const fixedV3 = narrowOnly || avatarOnly
+const v3Mode = a08Only || a09Only || a10Only || a12Only || fixedV3 || process.argv.includes('--v3-a10-a13')
 const buildReceiptPath = process.argv.find(arg => arg.startsWith('--reuse-package='))?.slice('--reuse-package='.length)
 assert(v3Mode || buildReceiptPath, 'pass --reuse-package=<build receipt> or a --v3-* mode')
 const buildReceipt = buildReceiptPath ? JSON.parse(fs.readFileSync(buildReceiptPath, 'utf8')) : null
-const testedSha = narrowOnly ? '6639f757c8d4cf2bf1d73ae4bb2a672b34a251f2'
+const testedSha = fixedV3 ? '6639f757c8d4cf2bf1d73ae4bb2a672b34a251f2'
   : v3Mode ? 'e803b10c461cddbb567ad925743b164f42af9e1a' : buildReceipt.build?.buildSha
 if (!v3Mode) assert.equal(testedSha, 'c6fd2b5e02230d4ddd6e20d92c66bcf8a8f77010')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
@@ -31,14 +33,14 @@ const dirtyProduct = git('status', '--porcelain', '--', 'src', 'electron', 'publ
   .split('\n').filter(Boolean).filter(line => !/src\/.*\/__tests__\//.test(line))
 assert.deepEqual(dirtyProduct, [], 'dirty product input since package build')
 const packageDir = v3Mode
-  ? narrowOnly ? path.join(repository, '.runtime', '.cache', 'f04-v3-narrow-package', '6639f757-electron-abi', 'win-unpacked')
+  ? fixedV3 ? path.join(repository, '.runtime', '.cache', 'f04-v3-narrow-package', '6639f757-electron-abi', 'win-unpacked')
     : path.join(repository, '.runtime', '.cache', 'f05-u12-m06-package', 'e803b10c', 'win-unpacked')
   : path.join(repository, 'release', '1.1.0', 'win-unpacked')
 const executablePath = path.join(packageDir, 'AI小说作家.exe')
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
-assert.equal(sha256(executablePath), narrowOnly ? '8cceb2b6143789bed0bb562bc4e8d0fdd7e2f6ae4001a34307437a6e9de25d7e'
+assert.equal(sha256(executablePath), fixedV3 ? '8cceb2b6143789bed0bb562bc4e8d0fdd7e2f6ae4001a34307437a6e9de25d7e'
   : v3Mode ? '35f08ef5f2317f7151d6a2a0884531106a0bb2fba926cab7d09ff50b5f2e8f11' : buildReceipt.artifact.executableSha256)
-assert.equal(sha256(asarPath), narrowOnly ? 'ba26bf26ebdd4726f190e8ff61b70dcc2da5776a04d29f74ba865c111914058f'
+assert.equal(sha256(asarPath), fixedV3 ? 'ba26bf26ebdd4726f190e8ff61b70dcc2da5776a04d29f74ba865c111914058f'
   : v3Mode ? '6aa5c19a88481eef994df8d1e4050578e8c860d314ee8e6662656b967b2d190c' : buildReceipt.artifact.asarSha256)
 const driverSha256 = sha256(fileURLToPath(import.meta.url))
 const runId = randomUUID()
@@ -331,6 +333,71 @@ async function verifyV3Graph(page, db, setStep) {
   pass('U11.A12-delete-all-confirmation', 'U11.A12', 'Visible graph clear required explicit confirmation; cancellation wrote nothing and confirmation removed all active synthetic roles and relationships while retaining raw history',
     { beforeCount: 999, afterCount: 0, rawHistoricalRelations: db.prepare('SELECT count(*) FROM character_relationships').pluck().get() })
 }
+async function verifyV3AvatarBatch(page, app, db, avatarFixture, projectId, setStep) {
+  setStep('U10.A08-graph-batch-read')
+  assert.equal(db.prepare('SELECT count(*) FROM characters WHERE retired=0').pluck().get(), 1000)
+  assert.equal(new Set(avatarFixture.map(avatar => avatar.characterId)).size, 2)
+  const before = rosterFacts(db)
+  await page.locator('.writer-left-rail button[title="角色"]').click()
+  await page.getByText('角色列表（1000）', { exact: true }).waitFor({ state: 'visible' })
+  const probe = await app.evaluate(({ ipcMain }) => {
+    const channel = 'character-avatar:read-batch'
+    const handlers = ipcMain._invokeHandlers
+    if (!(handlers instanceof Map) || typeof handlers.get(channel) !== 'function') return { installed: false }
+    const original = handlers.get(channel)
+    const calls = []
+    globalThis.__u10AvatarProbe = { channel, original, calls }
+    handlers.set(channel, async (event, ids, context) => {
+      const call = { ids: [...ids], projectId: context?.projectId, leaseId: context?.leaseId,
+        projectPath: context?.projectPath }
+      calls.push(call)
+      const response = await original.call(ipcMain, event, ids, context)
+      call.success = response.success
+      call.avatars = response.avatars?.map(avatar => ({ characterId: avatar.characterId, assetRevision: avatar.assetRevision })) ?? []
+      return response
+    })
+    return { installed: true, channel, strategy: 'main IPC handler forwards production response unchanged' }
+  })
+  assert.equal(probe.installed, true, 'read-only batch observer could not attach')
+  await page.getByRole('button', { name: '关系图谱', exact: true }).click()
+  const canvas = page.locator('canvas[aria-label^="角色关系图谱"]')
+  await canvas.waitFor({ state: 'visible' })
+  const renderedNodes = Number(await canvas.getAttribute('data-rendered-node-count'))
+  const pixels = await page.waitForFunction(() => {
+    const canvas = document.querySelector('canvas[aria-label^="角色关系图谱"]')
+    if (!canvas) return false
+    const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data
+    let magenta = 0, cyan = 0
+    for (let index = 0; index < data.length; index += 4) {
+      if (data[index] > 180 && data[index + 1] < 90 && data[index + 2] > 140) magenta += 1
+      if (data[index] < 90 && data[index + 1] > 150 && data[index + 2] > 150) cyan += 1
+    }
+    return magenta > 20 && cyan > 20 ? { magenta, cyan, width: canvas.width, height: canvas.height } : false
+  }, null, { timeout: 12_000 }).then(handle => handle.jsonValue())
+  const sidebar = page.getByRole('complementary', { name: '图谱人物侧栏' })
+  await sidebar.getByRole('button', { name: '下一页人物' }).click()
+  await sidebar.getByText('2 / 20 · 1000', { exact: true }).waitFor({ state: 'visible' })
+  await sidebar.getByRole('textbox', { name: '搜索图谱人物' }).fill('角色0997')
+  await sidebar.getByText('1 / 1 · 1', { exact: true }).waitFor({ state: 'visible' })
+  const screenshotPath = path.join(evidenceDir, 'v3-avatar-batch-graph.png')
+  await page.screenshot({ path: screenshotPath })
+  const calls = await app.evaluate(() => globalThis.__u10AvatarProbe.calls)
+  const observed = { probe, fixture: avatarFixture, renderedNodes, pixels, calls,
+    screenshot: { path: screenshotPath, sha256: sha256(screenshotPath) },
+    beforeFactsSha256: createHash('sha256').update(before).digest('hex'),
+    afterFactsSha256: createHash('sha256').update(rosterFacts(db)).digest('hex') }
+  fs.writeFileSync(path.join(evidenceDir, 'avatar-batch-observation.json'), JSON.stringify(observed, null, 2))
+  assert(renderedNodes > 0 && renderedNodes <= 80, 'graph exceeded the bounded visible window')
+  assert(calls.length > 0 && calls.length <= 3, 'graph avatar IPC was missing or unbounded')
+  assert(calls.every(call => call.success && call.ids.length > 0 && call.ids.length <= 80
+    && new Set(call.ids).size === call.ids.length && call.projectId === projectId
+    && call.projectPath === path.dirname(path.dirname(db.name)) && call.leaseId),
+  'batch requests were not bounded to the active project session')
+  assert(avatarFixture.every(avatar => calls.some(call => call.avatars.some(view =>
+    view.characterId === avatar.characterId && view.assetRevision === avatar.assetRevision))), 'batch response omitted a persisted avatar')
+  assert.equal(observed.afterFactsSha256, observed.beforeFactsSha256, 'graph avatar reads wrote roster facts')
+  pass('U10.A08-graph-batch-read', 'U10.A08', 'V3 thousand-person graph used bounded production avatar batches and painted two stable-ID avatars without roster writes', observed)
+}
 async function verifyV3Narrow(page, app, setStep) {
   setStep('U11.V3-narrow-graph-entry')
   await page.locator('.writer-left-rail button[title="角色"]').click()
@@ -513,6 +580,8 @@ async function main() {
   let diagnostic = null
   let projectPath = null
   let page
+  let avatarFixture = null
+  let avatarProjectId = null
   const fixture = { requests: [] }
   const server = a10Only ? createServer(async (request, response) => {
     const authorized = request.headers.authorization === `Bearer ${model.apiKey}`
@@ -581,6 +650,30 @@ async function main() {
       const seeded = await invoke(page, 'db:character-roster-commit', { operationId: randomUUID(), expectedRevision: roster.revision,
         expectedIdentityRevision: roster.identityRevision, schemaVersion: 1, intent: 'manual_edit', entries }, projectPath, session)
       assert.equal(seeded.success, true, JSON.stringify(seeded))
+      if (avatarOnly) {
+        avatarProjectId = created.projectId
+        const FixtureDatabase = createRequire(import.meta.url)('better-sqlite3')
+        const fixtureDb = new FixtureDatabase(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true, readonly: true })
+        let ids
+        try { ids = fixtureDb.prepare('SELECT character_id,name FROM characters WHERE retired=0 AND name IN (?, ?) ORDER BY name').all(firstName, secondName) }
+        finally { fixtureDb.close() }
+        assert.equal(ids.length, 2)
+        avatarFixture = []
+        for (const [row, color] of ids.map((row, index) => [row, index === 0 ? '#ef00d7' : '#00e8e8'])) {
+          const base64 = await page.evaluate(color => {
+            const canvas = document.createElement('canvas')
+            canvas.width = canvas.height = 32
+            const context = canvas.getContext('2d')
+            context.fillStyle = color
+            context.fillRect(0, 0, 32, 32)
+            return canvas.toDataURL('image/png').split(',')[1]
+          }, color)
+          const committed = await invoke(page, 'character-avatar:commit', row.character_id, base64, session)
+          assert.equal(committed.success, true, JSON.stringify(committed.error))
+          avatarFixture.push({ characterId: row.character_id, name: row.name, color,
+            assetRevision: committed.avatar.assetRevision, sha256: createHash('sha256').update(Buffer.from(committed.avatar.base64, 'base64')).digest('hex') })
+        }
+      }
       if (a08Only) {
         const FixtureDatabase = createRequire(import.meta.url)('better-sqlite3')
         const fixtureDb = new FixtureDatabase(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true })
@@ -610,9 +703,10 @@ async function main() {
     const Database = createRequire(import.meta.url)('better-sqlite3')
     db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true })
     if (v3Mode) {
-      currentStep = a08Only ? 'U11.A08-v3-graph-entry' : a09Only ? 'U11.A09-v3-graph-entry' : a10Only ? 'U11.A10-v3-architecture-entry'
+      currentStep = avatarOnly ? 'U10.A08-v3-graph-entry' : a08Only ? 'U11.A08-v3-graph-entry' : a09Only ? 'U11.A09-v3-graph-entry' : a10Only ? 'U11.A10-v3-architecture-entry'
         : a12Only ? 'U11.A12-v3-graph-entry' : 'U11.A13-v3-graph-entry'
-      if (narrowOnly) await verifyV3Narrow(page, app, step => { currentStep = step })
+      if (avatarOnly) await verifyV3AvatarBatch(page, app, db, avatarFixture, avatarProjectId, step => { currentStep = step })
+      else if (narrowOnly) await verifyV3Narrow(page, app, step => { currentStep = step })
       else if (a08Only) await verifyV3A08(page, db, step => { currentStep = step })
       else if (a09Only) await verifyV3A09(page, db, step => { currentStep = step })
       else if (a10Only) await verifyV3Proposal(page, db, fixture, step => { currentStep = step })
@@ -664,11 +758,19 @@ async function main() {
     }
   } catch (error) {
     failure = String(error)
+    if (avatarOnly && app) diagnostic = await app.evaluate(() => globalThis.__u10AvatarProbe?.calls ?? []).catch(() => [])
     if (a10Only && page) diagnostic = { syntheticRequests: fixture.requests,
       visibleAlerts: await page.locator('[role="alert"]').allTextContents().catch(() => []),
       confirmationText: await page.getByTestId('workflow-confirmation-panel').allTextContents().catch(() => []) }
   }
   finally {
+    if (avatarOnly && app) {
+      try { await app.evaluate(({ ipcMain }) => {
+        const probe = globalThis.__u10AvatarProbe
+        if (probe) { ipcMain._invokeHandlers.set(probe.channel, probe.original); delete globalThis.__u10AvatarProbe }
+      }) }
+      catch (error) { failure = [failure, `observer cleanup: ${String(error)}`].filter(Boolean).join('; ') }
+    }
     try { db?.close() }
     catch (error) { failure = [failure, `database cleanup: ${String(error)}`].filter(Boolean).join('; ') }
     if (app) {
@@ -685,18 +787,19 @@ async function main() {
           .every(stepId => steps.some(step => step.stepId === stepId && step.outcome === 'PASS'))
       : steps.some(step => step.actionId === actionId && step.outcome === 'PASS')
     const receipt = { outcome: failure ? 'FAIL' : v3Mode ? 'PARTIAL' : 'PASS',
-      qualification: v3Mode ? narrowOnly ? 'F04_V3_NARROW_GRAPH_PARTIAL' : a08Only ? 'F05_U11_A08_V3_PARTIAL' : a09Only ? 'F05_U11_A09_V3_PARTIAL' : a10Only ? 'F05_U11_A10_V3_PARTIAL' : a12Only ? 'F05_U11_A12_V3_PARTIAL' : 'F05_U11_A10_A13_V3_PARTIAL' : 'F05_U11_A08_A09_WRITER', evidenceLevel: 'electron',
+      qualification: v3Mode ? avatarOnly ? 'F05_U10_A08_V3_PARTIAL' : narrowOnly ? 'F04_V3_NARROW_GRAPH_PARTIAL' : a08Only ? 'F05_U11_A08_V3_PARTIAL' : a09Only ? 'F05_U11_A09_V3_PARTIAL' : a10Only ? 'F05_U11_A10_V3_PARTIAL' : a12Only ? 'F05_U11_A12_V3_PARTIAL' : 'F05_U11_A10_A13_V3_PARTIAL' : 'F05_U11_A08_A09_WRITER', evidenceLevel: 'electron',
       testedSha, executionHead, changedPaths, sourceDirtyPaths: git('status', '--porcelain').split('\n').filter(Boolean),
       driverSha256, buildReceipt: buildReceiptPath ? { path: buildReceiptPath, sha256: sha256(buildReceiptPath) } : null,
       fixtureSetup: a09Only ? { method: 'character-roster-commit with two stable IDs and old relation; UI alone edits relation',
         firstName, secondName, initialRelation: initialRelationship, editedRelation: relationship }
         : a08Only ? { method: 'character-roster-commit with unique names and distinct notes, then isolated SQLite rename by character_id',
         firstName, secondName, duplicateName: firstName, distinctField: 'notes', targetNotes: a08TargetNotes, otherNotes: a08OtherNotes } : null,
-      packageRoot: packageDir, shell: v3Mode ? 'writer-v3' : 'writer', mode: narrowOnly ? 'v3-narrow-only' : a08Only ? 'v3-a08-only' : a09Only ? 'v3-a09-only' : a10Only ? 'v3-a10-only' : a12Only ? 'v3-a12-only' : v3Mode ? 'v3-a10-a13' : 'legacy-a08-a09',
+      packageRoot: packageDir, shell: v3Mode ? 'writer-v3' : 'writer', mode: avatarOnly ? 'v3-avatar-batch-only' : narrowOnly ? 'v3-narrow-only' : a08Only ? 'v3-a08-only' : a09Only ? 'v3-a09-only' : a10Only ? 'v3-a10-only' : a12Only ? 'v3-a12-only' : v3Mode ? 'v3-a10-a13' : 'legacy-a08-a09',
       artifact: { executableSha256: sha256(executablePath), asarSha256: sha256(asarPath) },
       nodeAbi: process.versions.modules, cleanupConfirmed, isolatedRoot: scratch, projectPath, failedStep: failure ? currentStep : null,
       error: failure, diagnostic: failure ? diagnostic : null, steps,
-      unverified: v3Mode ? (narrowOnly ? ['U11.A08', 'U11.A09', 'U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']
+      unverified: v3Mode ? (avatarOnly ? ['U10.A01-U10.A07', 'U11.A08-U11.A13']
+        : narrowOnly ? ['U11.A08', 'U11.A09', 'U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']
         : a08Only ? ['U11.A09', 'U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']
         : a09Only ? ['U11.A08', 'U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']
           : ['U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']).filter(id => !verified(id))
