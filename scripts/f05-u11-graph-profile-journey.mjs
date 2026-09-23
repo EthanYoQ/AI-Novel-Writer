@@ -18,8 +18,7 @@ const v3Mode = a08Only || a09Only || a10Only || a12Only || process.argv.includes
 const buildReceiptPath = process.argv.find(arg => arg.startsWith('--reuse-package='))?.slice('--reuse-package='.length)
 assert(v3Mode || buildReceiptPath, 'pass --reuse-package=<build receipt>, --v3-a08-only, --v3-a09-only, --v3-a10-a13, --v3-a12-only or --v3-a10-only')
 const buildReceipt = buildReceiptPath ? JSON.parse(fs.readFileSync(buildReceiptPath, 'utf8')) : null
-const testedSha = a08Only || a09Only ? 'e803b10c461cddbb567ad925743b164f42af9e1a'
-  : v3Mode ? '6cf79d36d8c9348911232b312cd852e60654f655' : buildReceipt.build?.buildSha
+const testedSha = v3Mode ? 'e803b10c461cddbb567ad925743b164f42af9e1a' : buildReceipt.build?.buildSha
 if (!v3Mode) assert.equal(testedSha, 'c6fd2b5e02230d4ddd6e20d92c66bcf8a8f77010')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -29,17 +28,13 @@ assert(changedPaths.every(name => name.startsWith('scripts/') || name.includes('
 const dirtyProduct = git('status', '--porcelain', '--', 'src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml')
   .split('\n').filter(Boolean).filter(line => !/src\/.*\/__tests__\//.test(line))
 assert.deepEqual(dirtyProduct, [], 'dirty product input since package build')
-const packageDir = a08Only || a09Only
+const packageDir = v3Mode
   ? path.join(repository, '.runtime', '.cache', 'f05-u12-m06-package', 'e803b10c', 'win-unpacked')
-  : v3Mode
-    ? path.join(repository, '.runtime', '.cache', 'f04-v3-build', 'world-rail-1')
-    : path.join(repository, 'release', '1.1.0', 'win-unpacked')
+  : path.join(repository, 'release', '1.1.0', 'win-unpacked')
 const executablePath = path.join(packageDir, 'AI小说作家.exe')
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
-assert.equal(sha256(executablePath), a08Only || a09Only ? '35f08ef5f2317f7151d6a2a0884531106a0bb2fba926cab7d09ff50b5f2e8f11'
-  : v3Mode ? '183d7f5956495445d22c53e487232dedd20b6e29b5d9f06e15384732b72daa30' : buildReceipt.artifact.executableSha256)
-assert.equal(sha256(asarPath), a08Only || a09Only ? '6aa5c19a88481eef994df8d1e4050578e8c860d314ee8e6662656b967b2d190c'
-  : v3Mode ? 'a184d35de87eddcea44465da40b17a3727205c8e3e80455c47a9237565ebcf38' : buildReceipt.artifact.asarSha256)
+assert.equal(sha256(executablePath), v3Mode ? '35f08ef5f2317f7151d6a2a0884531106a0bb2fba926cab7d09ff50b5f2e8f11' : buildReceipt.artifact.executableSha256)
+assert.equal(sha256(asarPath), v3Mode ? '6aa5c19a88481eef994df8d1e4050578e8c860d314ee8e6662656b967b2d190c' : buildReceipt.artifact.asarSha256)
 const driverSha256 = sha256(fileURLToPath(import.meta.url))
 const runId = randomUUID()
 const evidenceDir = path.join(repository, '.runtime', '.cache', 'f05-u11-graph-profile', runId)
