@@ -316,6 +316,12 @@ async function main() {
     assert.equal(updatedSource.success, true, updatedSource.error)
     const afterChange = await invoke(session.page, 'db:draft-list', 4, projectPath, historySession)
     assert.equal(afterChange.find(draft => draft.id === dependentDraft.id)?.dependenciesStale, true)
+    const dependentV2Body = `${dependentBody}（第二版）`
+    const dependentV2Draft = await invoke(session.page, 'db:draft-create', {
+      chapterNumber: 4, version: 2, source: 'rewrite', content: dependentV2Body,
+      wordCount: dependentV2Body.length,
+    }, projectPath, historySession)
+    assert.equal(dependentV2Draft.success, true, dependentV2Draft.error)
     await quit()
 
     phase = 'writer-history-stale-reopen'
@@ -335,6 +341,67 @@ async function main() {
         sourceBeforeSha256: hashBytes(Buffer.from(sourceBody, 'utf8')),
         sourceAfterSha256: hashBytes(Buffer.from(changedSource, 'utf8')),
         screenshot: path.relative(repository, path.join(receiptDir, 'writer-version-history-stale.png')) })
+
+    phase = 'writer-history-diff'
+    const historyEditor = session.page.getByTestId('writer-editor')
+    const versionRow = version => historyEditor.getByText(`v${version}`, { exact: true }).locator('..').locator('..')
+    await versionRow(1).getByRole('button', { name: '对比', exact: true }).click()
+    const diffDialog = session.page.getByRole('dialog', { name: /修稿合并.*v1.*当前/u })
+    await diffDialog.waitFor({ state: 'visible' })
+    await diffDialog.locator('.twm-cell-left').getByText(dependentBody, { exact: true }).waitFor({ state: 'visible' })
+    await diffDialog.locator('.twm-cell-right').getByText(dependentV2Body, { exact: true }).waitFor({ state: 'visible' })
+    const diffScreenshot = path.join(receiptDir, 'writer-version-history-diff.png')
+    await session.page.screenshot({ path: diffScreenshot })
+    addPass('writer-history-diff', 'U15.A01',
+      'The visible v1 Compare action opened a current-project-scoped diff containing the exact v1 body and latest v2 body.',
+      { projectPath, oldDraftId: dependentDraft.id, latestDraftId: dependentV2Draft.id,
+        oldBodySha256: hashBytes(Buffer.from(dependentBody, 'utf8')),
+        latestBodySha256: hashBytes(Buffer.from(dependentV2Body, 'utf8')),
+        screenshot: path.relative(repository, diffScreenshot) })
+    await diffDialog.getByRole('button', { name: '关闭', exact: true }).click()
+    await session.page.locator('.writer-editor-content .skin-workspace-page > .no-select')
+      .getByText('版本历史', { exact: true }).click()
+    await historyEditor.getByText('来源追踪').click()
+
+    phase = 'writer-history-revert'
+    await versionRow(1).getByRole('button', { name: '回退', exact: true }).click()
+    await versionRow(3).waitFor({ state: 'visible' })
+    for (const version of [1, 2, 3]) assert.equal(await versionRow(version).isVisible(), true)
+    const revertScreenshot = path.join(receiptDir, 'writer-version-history-revert.png')
+    await session.page.screenshot({ path: revertScreenshot })
+    addPass('writer-history-revert', 'U15.A01',
+      'The visible v1 Revert action retained v1 and v2 while adding a visible v3 history entry.',
+      { preservedDraftIds: [dependentDraft.id, dependentV2Draft.id], createdVersion: 3,
+        screenshot: path.relative(repository, revertScreenshot) })
+    await quit()
+
+    phase = 'writer-history-revert-persisted-reopen'
+    session = await launch()
+    app = session.opened
+    await openProject(session.page)
+    const persistenceOpen = await invoke(session.page, 'project:open', projectPath, randomUUID(), projectPath)
+    assert.equal(persistenceOpen.success, true, persistenceOpen.error)
+    const persistenceSession = {
+      projectId: persistenceOpen.project.id,
+      projectPath,
+      leaseId: persistenceOpen.project.sessionLease,
+    }
+    const persistedVersions = await invoke(session.page, 'db:draft-list', 4, projectPath, persistenceSession)
+    assert.deepEqual(persistedVersions.map(draft => draft.version), [1, 2, 3])
+    assert.equal(persistedVersions[0].id, dependentDraft.id)
+    assert.equal(persistedVersions[1].id, dependentV2Draft.id)
+    assert.notEqual(persistedVersions[2].id, dependentDraft.id)
+    assert.notEqual(persistedVersions[2].id, dependentV2Draft.id)
+    const persistedBodies = await Promise.all(persistedVersions.map(draft => (
+      invoke(session.page, 'db:draft-get-full', draft.id, projectPath, persistenceSession)
+    )))
+    assert.equal(persistedBodies[0]?.content, dependentBody)
+    assert.equal(persistedBodies[1]?.content, dependentV2Body)
+    assert.equal(persistedBodies[2]?.content, dependentBody)
+    addPass('writer-history-revert-persisted-reopen', 'U15.A01',
+      'A fresh packaged process read v1, v2 and the distinct persisted v3 through the project-scoped main IPC; v3 exactly matches v1 without overwriting either prior record.',
+      { projectPath, versions: persistedVersions.map(draft => ({ id: draft.id, version: draft.version })),
+        revertedBodySha256: hashBytes(Buffer.from(persistedBodies[2].content, 'utf8')) })
     await quit()
 
     phase = 'real-file-grant-boundary'
@@ -402,7 +469,7 @@ async function main() {
       reason: 'real packaged export bytes retained for independent review', ttlHours: 24 },
     artifacts,
     steps,
-    remainingGaps: ['U15.A01 diff/revert, U15.A02, U15.A06 and U15.A07 are outside this receipt',
+    remainingGaps: ['U15.A01 independent review, U15.A02, U15.A06 and U15.A07 are outside this receipt',
       'F05, U15 and release qualification remain incomplete'],
     retainedScratch: fs.existsSync(scratch) ? scratch : null,
     failedPhase: failure ? phase : null,
