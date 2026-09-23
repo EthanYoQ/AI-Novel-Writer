@@ -13,7 +13,7 @@ import { _electron as electron } from 'playwright'
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 if (process.argv.includes('--help')) {
-  process.stdout.write('F05 U12.A01-A07 V3 packaged review journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256\n')
+  process.stdout.write('F05 U12.A01-A08 V3 packaged review journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256\n')
   process.exit(0)
 }
 const packageDir = option('package-dir') && path.resolve(option('package-dir'))
@@ -38,6 +38,7 @@ const profile = Object.fromEntries(['canonical', 'legacy', 'userData', 'home', '
 const receiptPath = path.join(repository, '.runtime', '.cache', 'f05-u12-confirmation', runId, 'receipt.json')
 const projectName = 'u12'
 const liveProjectName = 'u12-live'
+const candidateProjectName = 'u8'
 const body = '林岚离开港口，带走了日志。第二天，她回到灯塔。'
 const revisedBody = '林岚离开港口，把日志仔细收进背包。第二天，她回到灯塔，先核对日志上的时间，再向守塔人询问昨夜的潮汐。'
 const recheckedBody = revisedBody.replace('第二天，她回到灯塔', '第三天，她回到灯塔')
@@ -185,15 +186,23 @@ async function openReport(page, name = projectName) {
 
 async function main() {
   assert.equal(git('rev-parse', testedSha), testedSha, 'tested source SHA unavailable')
+  assert.equal(git('diff', '--name-only', `${testedSha}..HEAD`, '--', 'src', 'electron', 'public', 'build',
+    'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5')
+    .split('\n').filter(name => name && !/(^|\/)(__tests__|__screenshots__)(\/|$)|\.(test|spec)\./.test(name)).length,
+  0, 'product input changed since package build')
+  const dirtyProductPaths = git('status', '--porcelain', '--untracked-files=all', '--', 'src', 'electron',
+    'public', 'build', 'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5')
+    .split('\n').filter(line => line && !/(^|\/)(__tests__|__screenshots__)(\/|$)|\.(test|spec)\./.test(line.slice(3)))
+  assert.deepEqual(dirtyProductPaths, [], 'dirty product input prevents package reuse')
   assert(fs.existsSync(executablePath) && fs.existsSync(asarPath), 'Windows package missing')
   assert.equal(sha256(executablePath), expectedExe, 'executable hash mismatch')
   assert.equal(sha256(asarPath), expectedAsar, 'asar hash mismatch')
   for (const directory of Object.values(profile)) fs.mkdirSync(directory, { recursive: true })
-  fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U12.A01-A07',
+  fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U12.A01-A08',
     sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 24,
     retainedReason: 'isolated SQLite and failure evidence for independent review',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
-  const fixture = { requests: [], externalModelRequests: 0, promptBoundaries: [] }
+  const fixture = { requests: [], externalModelRequests: 0, promptBoundaries: [], candidateReviewAccepted: false }
   const server = createServer(async (request, response) => {
     const authorized = request.headers.authorization === `Bearer ${liveModel.apiKey}`
     const route = request.url
@@ -213,6 +222,15 @@ async function main() {
     const prompt = Array.isArray(payload.messages) ? payload.messages.map(message => typeof message?.content === 'string'
       ? message.content : JSON.stringify(message?.content ?? '')).join('\n') : ''
     const messageRoles = Array.isArray(payload.messages) ? payload.messages.map(message => message?.role ?? null) : []
+    const candidateProject = prompt.includes('候选边界')
+    const candidateSourceBound = prompt.includes(body) && prompt.includes('林岚离开港口')
+    const confirmedRevision = prompt.includes('【已确认纳入本次修稿的审稿项】')
+    const candidateReview = candidateProject && candidateSourceBound && !confirmedRevision
+    const candidateRevision = fixture.candidateReviewAccepted && candidateSourceBound && confirmedRevision
+      && prompt.includes('核对离港与返抵灯塔的时间线。')
+    if (dispatch > 6) fixture.promptBoundaries.push({ dispatch,
+      candidateProject, candidateSourceBound, confirmedRevision, candidateReview, candidateRevision,
+      model: payload.model, stream: payload.stream, messageRoles })
     if (dispatch === 5) {
       const finding = fixture.recheckFinding
       const confirmedTarget = Boolean(finding && prompt.includes('【已确认纳入本次修稿的审稿项】')
@@ -239,12 +257,13 @@ async function main() {
         : dispatch === 6 && fixture.recheckFinding ? JSON.stringify({ summary: '返抵灯塔仍违反作者约束。', items: [{
           findingId: fixture.recheckFinding.findingId, targetId: fixture.recheckFinding.targetId,
           resolved: false, evidenceQuote: recheckEvidence, reason: '合并稿仍写明林岚在本章返抵灯塔。',
-        }] }) : null
+        }] }) : candidateRevision ? revisedBody : candidateReview ? liveReport : null
     if (dispatch === 4) fixture.objectiveBound = payload.messages?.some(message =>
       typeof message.content === 'string' && message.content.includes(forbiddenReturn))
     if (!content || payload.model !== liveModel.modelName || payload.stream !== true) {
       response.writeHead(422).end(); return
     }
+    if (candidateReview) fixture.candidateReviewAccepted = true
     response.writeHead(200, { 'Content-Type': 'text/event-stream' })
     response.write(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: null }] })}\n\n`)
     response.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`)
@@ -693,7 +712,7 @@ async function main() {
     const reopenedOutbox = formalRows(liveProjectPath).outbox
     assert.equal(reopenedOutbox.length, 1)
     for (const [key, value] of Object.entries(outbox)) {
-      if (key !== 'knowledge_document_id') assert.deepEqual(reopenedOutbox[0][key], value,
+      if (!['knowledge_document_id', 'updated_at'].includes(key)) assert.deepEqual(reopenedOutbox[0][key], value,
         `reopen changed committed outbox ${key}`)
     }
     assert.deepEqual(fs.readFileSync(manuscriptPath), manuscriptBytes, 'reopen changed the UTF-8 manuscript')
@@ -705,6 +724,113 @@ async function main() {
         targetFileName: outbox.target_file_name,
         manuscriptSha256: createHash('sha256').update(manuscriptBytes).digest('hex'),
         externalModelRequests: fixture.externalModelRequests }, 'U12.A07')
+
+    currentStep = 'U12.A08-failed-candidate-reopen'
+    await page.getByRole('button', { name: 'AI 输出', exact: true }).click()
+    const failedCandidate = page.getByRole('region', { name: '持久正文候选' }).locator('article')
+      .filter({ hasText: body })
+    await failedCandidate.waitFor({ state: 'visible' })
+    assert.equal(await failedCandidate.getByRole('button', { name: '复制', exact: true }).count(), 1)
+    assert.equal(await failedCandidate.getByRole('button', { name: '恢复此审修任务' }).isDisabled(), true)
+    assert.equal(generationRows(liveProjectPath).artifacts.find(row => row.artifactId === newArtifacts[0].artifactId)?.artifactId,
+      newArtifacts[0].artifactId, 'the failed no-op artifact disappeared after process reopen')
+    pass('U12.A08-failed-candidate-reopen', 'The failed no-op revision keeps its original copyable artifact after process reopen',
+      { projectId: created.projectId, runId: newRuns[0].runId, artifactId: newArtifacts[0].artifactId,
+        candidateTextSha256: createHash('sha256').update(body).digest('hex') }, 'U12.A08')
+    await app.close(); app = null
+
+    currentStep = 'U12.A08-isolated-candidate'
+    ;({ app, page } = await launch(fixturePort))
+    const candidateProject = await invoke(page, 'project:create', { path: profile.projects, name: candidateProjectName,
+      genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
+    assert.equal(candidateProject.success, true, candidateProject.error)
+    const candidateProjectPath = candidateProject.projectPath
+    const candidateOpen = await invoke(page, 'project:open', candidateProjectPath, randomUUID(), null)
+    assert.equal(candidateOpen.success, true, candidateOpen.error)
+    const candidateSession = { projectId: candidateProject.projectId, projectPath: candidateProjectPath,
+      leaseId: candidateOpen.project.sessionLease }
+    assert.equal((await invoke(page, 'db:blueprint-upsert', { chapterNumber: 1, title: '候选边界',
+      role: '发展', purpose: '保留过期候选', keyEvents: '林岚离开港口', characters: [] },
+    candidateProjectPath, candidateSession)).success, true)
+    const candidateDraft = await invoke(page, 'db:draft-create', { chapterNumber: 1, version: 1,
+      source: 'write', content: body, wordCount: body.length }, candidateProjectPath, candidateSession)
+    assert.equal(candidateDraft.success, true, candidateDraft.error)
+    await app.close(); app = null
+    ;({ app, page } = await launch(fixturePort))
+    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${candidateProjectName}》` }).click()
+    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
+    await page.getByRole('button', { name: 'AI 审稿', exact: true }).click()
+    await page.getByRole('heading', { name: 'AI 审稿确认' }).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: '确认执行', exact: true }).click()
+    await waitForRows(candidateProjectPath, rows => rows.reviews.length === 1 && rows.cycles.length === 1)
+    await page.getByText('人工确认修稿清单', { exact: true }).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: '确认审稿清单', exact: true }).click()
+    await waitForRows(candidateProjectPath, rows => rows.reviews.length === 2)
+    await page.getByRole('button', { name: '按确认意见修稿', exact: true }).click()
+    await page.getByLabel('本次修稿模型').selectOption(liveModel.id)
+    await page.getByRole('button', { name: '开始修稿', exact: true }).click()
+    const candidateRows = await waitForRows(candidateProjectPath, rows => rows.revisions.length === 1
+      && rows.cycles[0]?.revisionStatus === 'generated')
+    const candidateRevision = candidateRows.revisions[0]
+    assert.deepEqual([candidateRevision.baseDraftId, candidateRevision.status, candidateRevision.content],
+      [candidateDraft.id, 'pending', revisedBody])
+    assert.equal(candidateRows.outboxCount, 0)
+    pass('U12.A08-isolated-candidate', 'V3 generated a pending source-bound review-fix candidate in a separate project',
+      { projectId: candidateProject.projectId, draftId: candidateDraft.id, revisionId: candidateRevision.id,
+        cycleId: candidateRows.cycles[0].cycleId }, 'U12.A08')
+
+    currentStep = 'U12.A08-session-conflict'
+    const candidateMerge = page.getByRole('dialog', { name: /^修稿合并 — 审稿修复/ })
+    await candidateMerge.waitFor({ state: 'visible' })
+    await candidateMerge.getByRole('button', { name: '全部修稿' }).click()
+    const renewed = await invoke(page, 'project:open', candidateProjectPath, randomUUID(), null)
+    assert.equal(renewed.success, true, renewed.error)
+    const renewedSession = { projectId: candidateProject.projectId, projectPath: candidateProjectPath,
+      leaseId: renewed.project.sessionLease }
+    const concurrentBody = `${body} 作者另存了新句。`
+    const concurrentSave = await invoke(page, 'db:draft-update-content', candidateDraft.id, concurrentBody,
+      concurrentBody.length, candidateProjectPath, renewedSession)
+    assert.equal(concurrentSave.success, true, concurrentSave.error)
+    const beforeRejectedMerge = formalRows(candidateProjectPath)
+    const beforeRejectedGeneration = generationRows(candidateProjectPath)
+    await candidateMerge.getByRole('button', { name: '完成合并' }).click()
+    await page.locator('#vela-toast-root').getByText(/项目会话已失效|合并失败/).first()
+      .waitFor({ state: 'visible' })
+    assert.deepEqual(formalRows(candidateProjectPath), beforeRejectedMerge,
+      'stale V3 session merged or changed formal rows after a concurrent author save')
+    assert.deepEqual(generationRows(candidateProjectPath), beforeRejectedGeneration)
+    assert.equal(draftRow(candidateProjectPath, candidateDraft.id).content, concurrentBody)
+    pass('U12.A08-session-conflict', 'V3 merge attempt rejected an expired project lease after a legal concurrent draft save',
+      { projectId: candidateProject.projectId, draftId: candidateDraft.id,
+        revisionId: candidateRevision.id, preservedStatus: 'pending' }, 'U12.A08')
+    await app.close(); app = null
+
+    currentStep = 'U12.A08-stale-source-reopen'
+    ;({ app, page } = await launch(fixturePort))
+    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${candidateProjectName}》` }).click()
+    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
+    await page.getByRole('button', { name: '待合并(1)' }).click()
+    const staleMerge = page.getByRole('dialog', { name: /^修稿合并 — 第1章/ })
+    await staleMerge.getByRole('alert').getByText('当前草稿已不是该修订稿的生成时源稿，修订仍可查看但不能合并。')
+      .waitFor({ state: 'visible' })
+    assert.equal((await staleMerge.locator('.twm-cell-left').innerText()).trim(), body,
+      'stale comparison no longer shows the frozen source')
+    await staleMerge.getByRole('button', { name: '全部修稿' }).click()
+    const beforeStaleClick = formalRows(candidateProjectPath)
+    await staleMerge.getByRole('button', { name: '完成合并' }).click()
+    assert.deepEqual(formalRows(candidateProjectPath), beforeStaleClick,
+      'stale V3 merge button changed formal rows')
+    assert.equal(draftRow(candidateProjectPath, candidateDraft.id).content, concurrentBody)
+    assert.equal(formalRows(candidateProjectPath).outbox.length, 0)
+    await staleMerge.getByRole('button', { name: '关闭', exact: true }).click()
+    await page.getByRole('button', { name: '待合并(1)' }).click()
+    await staleMerge.getByRole('alert').waitFor({ state: 'visible' })
+    assert.equal(formalRows(candidateProjectPath).revisions[0].status, 'pending')
+    pass('U12.A08-stale-source-reopen', 'V3 reopened the frozen candidate, explained the stale source, and refused to write draft, review, revision or outbox on merge',
+      { projectId: candidateProject.projectId, draftId: candidateDraft.id,
+        revisionId: candidateRevision.id, sourceTextSha256: createHash('sha256').update(body).digest('hex'),
+        currentTextSha256: createHash('sha256').update(concurrentBody).digest('hex'),
+        persistedCandidateTextSha256: createHash('sha256').update(revisedBody).digest('hex') }, 'U12.A08')
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message,
       ...(error?.diagnostic ? { diagnostic: error.diagnostic } : {}),
@@ -715,7 +841,8 @@ async function main() {
           : currentStep.startsWith('U12.A04') ? 'U12.A04'
             : currentStep.startsWith('U12.A05') ? 'U12.A05'
               : currentStep.startsWith('U12.A06') ? 'U12.A06'
-                : currentStep.startsWith('U12.A07') ? 'U12.A07' : 'U12.A03',
+                : currentStep.startsWith('U12.A07') ? 'U12.A07'
+                  : currentStep.startsWith('U12.A08') ? 'U12.A08' : 'U12.A03',
       outcome: 'RED', assertion: 'first failing boundary', observed: failure })
   } finally {
     if (app && failure) fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0).catch(() => 0)
@@ -731,15 +858,19 @@ async function main() {
     await closing
     if (server.listening) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true })
-    const receipt = { schemaVersion: 1, qualification: 'F05_U12_A01_A07_PACKAGED_V3_FINALIZATION',
+    const requiredA08Steps = ['U12.A08-failed-candidate-reopen', 'U12.A08-isolated-candidate',
+      'U12.A08-session-conflict', 'U12.A08-stale-source-reopen']
+    const receipt = { schemaVersion: 1, qualification: 'F05_U12_A01_A08_PACKAGED_V3_FINALIZATION',
       overall: failure ? 'FAIL' : 'PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3',
-      scope: ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04', 'U12.A05', 'U12.A06', 'U12.A07'], testedSha, executionHead: git('rev-parse', 'HEAD'),
+      scope: ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04', 'U12.A05', 'U12.A06', 'U12.A07', 'U12.A08'], testedSha, executionHead: git('rev-parse', 'HEAD'),
       artifact: { executablePath, executableSha256: sha256(executablePath), asarPath, asarSha256: sha256(asarPath) },
       driver: { path: driverPath, sha256: sha256(driverPath) }, profile: { scratch, projectPath, liveProjectPath },
       provider: { kind: 'loopback-synthetic-openai-sse', localRequests: fixture.requests,
         externalModelRequests: fixture.externalModelRequests, promptBoundaries: fixture.promptBoundaries },
       steps, unverifiedActions: ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04', 'U12.A05', 'U12.A06', 'U12.A07', 'U12.A08']
-        .filter(actionId => !steps.some(step => step.actionId === actionId && step.outcome === 'PASS')),
+        .filter(actionId => actionId === 'U12.A08'
+          ? !requiredA08Steps.every(stepId => steps.some(step => step.stepId === stepId && step.outcome === 'PASS'))
+          : !steps.some(step => step.actionId === actionId && step.outcome === 'PASS')),
       failure }
     fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
     process.stdout.write(`${JSON.stringify({ overall: receipt.overall, receipt: receiptPath,
