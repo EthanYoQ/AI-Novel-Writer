@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import test from 'node:test'
+import { test } from 'vitest'
 
 const driver = fileURLToPath(new URL('../f05-u06-editor-journey.mjs', import.meta.url))
 
