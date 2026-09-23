@@ -13,7 +13,7 @@ import { _electron as electron } from 'playwright'
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 if (process.argv.includes('--help')) {
-  process.stdout.write('F05 U12.A01-A06 V3 packaged review journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256\n')
+  process.stdout.write('F05 U12.A01-A07 V3 packaged review journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256\n')
   process.exit(0)
 }
 const packageDir = option('package-dir') && path.resolve(option('package-dir'))
@@ -98,6 +98,7 @@ function liveRows(projectPath) {
       blueprintKeyEvents: db.prepare('SELECT key_events FROM blueprints WHERE chapter_number=1').pluck().get(),
       draftStatuses: db.prepare('SELECT id,status FROM drafts').all(),
       outboxCount: db.prepare('SELECT COUNT(*) FROM finalization_outbox').pluck().get(),
+      publicationStatuses: db.prepare('SELECT draft_id AS draftId,publication_status AS status FROM finalization_outbox').all(),
     }
   } finally { db.close() }
 }
@@ -188,7 +189,7 @@ async function main() {
   assert.equal(sha256(executablePath), expectedExe, 'executable hash mismatch')
   assert.equal(sha256(asarPath), expectedAsar, 'asar hash mismatch')
   for (const directory of Object.values(profile)) fs.mkdirSync(directory, { recursive: true })
-  fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U12.A01-A06',
+  fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U12.A01-A07',
     sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 24,
     retainedReason: 'isolated SQLite and failure evidence for independent review',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
@@ -635,6 +636,75 @@ async function main() {
         recheckAttemptId: committedCycle.recheckAttemptId, mergedHash: committedCycle.mergedHash,
         findingSetHash: committedCycle.findingSetHash, recheckCount: committedCycle.recheckCount,
         externalModelRequests: fixture.externalModelRequests }, 'U12.A06')
+
+    currentStep = 'U12.A07-finalize-and-publish'
+    await objectiveMerge.waitFor({ state: 'hidden' })
+    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
+    assert.equal((await page.locator('.cm-content').innerText()).trim(), `港口灯塔\n第 1 章\n${recheckedBody}`,
+      'V3 editor does not show the rechecked revision being finalized')
+    assert.deepEqual(liveRows(liveProjectPath).publicationStatuses, [], 'outbox existed before V3 finalization')
+    await page.getByRole('button', { name: '定稿', exact: true }).click()
+    const finalizationConfirm = page.getByRole('dialog').filter({ hasText: '确定要将第 1 章定稿吗？' })
+    await finalizationConfirm.getByRole('button', { name: '确认定稿', exact: true }).click()
+    await waitForRows(liveProjectPath, state => state.draftStatuses.some(row => row.id === liveDraft.id
+      && row.status === 'finalized') && state.publicationStatuses.some(row => row.draftId === liveDraft.id
+      && row.status === 'published'))
+    const publishedRows = formalRows(liveProjectPath)
+    const finalizedDraft = publishedRows.drafts.find(row => row.id === liveDraft.id)
+    assert.equal(finalizedDraft.status, 'finalized')
+    assert.equal(finalizedDraft.content, recheckedBody)
+    assert.equal(publishedRows.outbox.length, 1, 'finalization did not atomically retain one outbox row')
+    const outbox = publishedRows.outbox[0]
+    const contentHash = createHash('sha256').update(recheckedBody, 'utf8').digest('hex')
+    assert.equal(outbox.draft_id, liveDraft.id)
+    assert.equal(outbox.chapter_number, 1)
+    assert.equal(outbox.chapter_title, '港口灯塔')
+    assert.equal(outbox.content_snapshot, recheckedBody)
+    assert.equal(outbox.content_hash, contentHash)
+    assert(Number.isInteger(outbox.content_revision) && outbox.content_revision > 0)
+    assert.equal(outbox.publication_status, 'published')
+    assert.equal(outbox.last_error, '')
+    assert(outbox.published_at, 'published outbox has no timestamp')
+    assert.equal(path.basename(outbox.target_file_name), outbox.target_file_name)
+    const manuscriptPath = path.join(liveProjectPath, outbox.target_file_name)
+    const manuscriptBytes = fs.readFileSync(manuscriptPath)
+    const expectedManuscript = `第1章 港口灯塔\n\n${recheckedBody}`
+    assert.deepEqual(manuscriptBytes, Buffer.from(expectedManuscript, 'utf8'), 'published manuscript bytes differ')
+    await page.getByText('已定稿（只读）', { exact: true }).waitFor({ state: 'visible' })
+    await page.locator('.writer-ai-panel').getByText('整个工作流已全部完成', { exact: true })
+      .waitFor({ state: 'visible', timeout: 60_000 })
+    fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0)
+    assert.equal(fixture.externalModelRequests, 0)
+    await app.close(); app = null
+
+    currentStep = 'U12.A07-process-reopen'
+    ;({ app, page } = await launch(fixturePort))
+    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${liveProjectName}》` }).click()
+    await page.locator(`.writer-project-tree .tree-item[title="点击打开 — 第1章 港口灯塔"]`).click()
+    await page.getByText('已定稿（只读）', { exact: true }).waitFor({ state: 'visible' })
+    const reopenedBody = await page.locator('.writer-editor-content .cm-content[contenteditable="false"]')
+      .evaluate(element => Array.from(element.querySelectorAll('.cm-line'), line => {
+        const copy = line.cloneNode(true)
+        copy.querySelector('.cm-lp-paperhead')?.remove()
+        return copy.textContent
+      }).join('\n'))
+    assert.equal(reopenedBody, recheckedBody)
+    assert.equal(draftRow(liveProjectPath, liveDraft.id).status, 'finalized')
+    const reopenedOutbox = formalRows(liveProjectPath).outbox
+    assert.equal(reopenedOutbox.length, 1)
+    for (const [key, value] of Object.entries(outbox)) {
+      if (key !== 'knowledge_document_id') assert.deepEqual(reopenedOutbox[0][key], value,
+        `reopen changed committed outbox ${key}`)
+    }
+    assert.deepEqual(fs.readFileSync(manuscriptPath), manuscriptBytes, 'reopen changed the UTF-8 manuscript')
+    fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0)
+    assert.equal(fixture.externalModelRequests, 0)
+    pass('U12.A07-finalize-publish-reopen', 'V3 finalized the rechecked revision; SQLite draft and outbox, UTF-8 manuscript, and a new process agree on frozen content',
+      { draftId: liveDraft.id, finalizationId: outbox.finalization_id, contentHash,
+        contentRevision: outbox.content_revision, publicationStatus: outbox.publication_status,
+        targetFileName: outbox.target_file_name,
+        manuscriptSha256: createHash('sha256').update(manuscriptBytes).digest('hex'),
+        externalModelRequests: fixture.externalModelRequests }, 'U12.A07')
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message,
       ...(error?.diagnostic ? { diagnostic: error.diagnostic } : {}),
@@ -644,7 +714,8 @@ async function main() {
         : currentStep.startsWith('U12.A01') ? 'U12.A01'
           : currentStep.startsWith('U12.A04') ? 'U12.A04'
             : currentStep.startsWith('U12.A05') ? 'U12.A05'
-              : currentStep.startsWith('U12.A06') ? 'U12.A06' : 'U12.A03',
+              : currentStep.startsWith('U12.A06') ? 'U12.A06'
+                : currentStep.startsWith('U12.A07') ? 'U12.A07' : 'U12.A03',
       outcome: 'RED', assertion: 'first failing boundary', observed: failure })
   } finally {
     if (app && failure) fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0).catch(() => 0)
@@ -660,9 +731,9 @@ async function main() {
     await closing
     if (server.listening) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true })
-    const receipt = { schemaVersion: 1, qualification: 'F05_U12_A01_A06_PACKAGED_V3_REVIEW_REVISION',
+    const receipt = { schemaVersion: 1, qualification: 'F05_U12_A01_A07_PACKAGED_V3_FINALIZATION',
       overall: failure ? 'FAIL' : 'PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3',
-      scope: ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04', 'U12.A05', 'U12.A06'], testedSha, executionHead: git('rev-parse', 'HEAD'),
+      scope: ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04', 'U12.A05', 'U12.A06', 'U12.A07'], testedSha, executionHead: git('rev-parse', 'HEAD'),
       artifact: { executablePath, executableSha256: sha256(executablePath), asarPath, asarSha256: sha256(asarPath) },
       driver: { path: driverPath, sha256: sha256(driverPath) }, profile: { scratch, projectPath, liveProjectPath },
       provider: { kind: 'loopback-synthetic-openai-sse', localRequests: fixture.requests,
