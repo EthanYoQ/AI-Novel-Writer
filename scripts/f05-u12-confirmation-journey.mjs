@@ -1,9 +1,11 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import fs from 'node:fs'
+import { createServer } from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
@@ -11,7 +13,7 @@ import { _electron as electron } from 'playwright'
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 if (process.argv.includes('--help')) {
-  process.stdout.write('F05 U12.A02/A03 V3 packaged review journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256\n')
+  process.stdout.write('F05 U12.A01-A04 V3 packaged review journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256\n')
   process.exit(0)
 }
 const packageDir = option('package-dir') && path.resolve(option('package-dir'))
@@ -35,7 +37,16 @@ const profile = Object.fromEntries(['canonical', 'legacy', 'userData', 'home', '
   .map(name => [name, path.join(scratch, name)]))
 const receiptPath = path.join(repository, '.runtime', '.cache', 'f05-u12-confirmation', runId, 'receipt.json')
 const projectName = 'u12'
+const liveProjectName = 'u12-live'
 const body = '林岚离开港口，带走了日志。第二天，她回到灯塔。'
+const revisedBody = '林岚离开港口，把日志仔细收进背包。第二天，她回到灯塔，先核对日志上的时间，再向守塔人询问昨夜的潮汐。'
+const liveModel = { id: 'f05-u12-synthetic', name: 'U12 合成流式模型', provider: 'openai', protocol: 'openai',
+  modelName: 'gpt-4.1', baseUrl: 'https://api.openai.com/v1', apiKey: 'f05-u12-offline-key',
+  maxTokens: 2048, temperature: 0.7, purposes: ['generation'] }
+const liveReport = JSON.stringify({ summary: '核对日志和时间线。', items: [
+  { category: '连续性', severity: 'warning', description: '核对离港与返抵灯塔的时间线。', quote: '第二天，她回到灯塔。' },
+], goalReviews: [{ id: 'ch1:keyEvents:1', status: 'completed', description: '林岚已离开港口。',
+  evidence: [{ quote: '林岚离开港口' }] }] })
 const unverifiedQuote = '第二天，她回到灯塔。'
 const report = JSON.stringify({ summary: '三项待作者判断。', items: [
   { category: '连续性', severity: 'error', description: '保留：核对林岚离开港口后的时间线。', quote: '第二天，她回到灯塔。' },
@@ -61,13 +72,60 @@ function draftRow(projectPath, draftId) {
       c.body AS content FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?`).get(draftId)
   } finally { db.close() }
 }
-async function launch() {
+function liveRows(projectPath) {
+  const db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { readonly: true, fileMustExist: true })
+  try {
+    return {
+      reviews: reviewRows(projectPath),
+      cycles: db.prepare('SELECT cycle_id AS cycleId,root_action_id AS rootActionId,review_id AS reviewId,confirmation_review_id AS confirmationReviewId,revision_id AS revisionId,revision_status AS revisionStatus FROM review_cycles').all(),
+      effects: db.prepare(`SELECT a.attempt_id AS attemptId,a.root_action_id AS rootActionId,
+        json_extract(a.usage_receipt_json,'$.reviewRevisionEffect.kind') AS kind,
+        json_extract(a.usage_receipt_json,'$.reviewRevisionEffect.id') AS id,
+        json_extract(r.binding_json,'$.projectId') AS projectId
+        FROM generation_attempts a JOIN generation_runs r ON r.run_id=a.run_id
+        WHERE json_extract(a.usage_receipt_json,'$.reviewRevisionEffect.kind') IS NOT NULL`).all(),
+      revisions: db.prepare(`SELECT v.id,v.base_draft_id AS baseDraftId,v.revision_type AS revisionType,
+        v.review_source_id AS reviewSourceId,v.status,c.body AS content
+        FROM revisions v JOIN contents c ON c.id=v.content_id`).all(),
+      draftStatuses: db.prepare('SELECT id,status FROM drafts').all(),
+      outboxCount: db.prepare('SELECT COUNT(*) FROM finalization_outbox').pluck().get(),
+    }
+  } finally { db.close() }
+}
+async function waitForRows(projectPath, select, timeoutMs = 60_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const rows = liveRows(projectPath)
+    if (select(rows)) return rows
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  throw new Error('F05_U12_DURABLE_OUTCOME_TIMEOUT')
+}
+async function launch(fixturePort) {
   const env = { ...process.env, AI_NOVEL_APP_DATA_HOME: profile.canonical,
     AI_NOVEL_LEGACY_SOURCE_HOME: profile.legacy, AI_NOVEL_VELA_HOME: profile.legacy,
     HOME: profile.home, USERPROFILE: profile.home, APPDATA: profile.appData, LOCALAPPDATA: profile.localAppData }
   for (const key of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'AI_NOVEL_SMOKE_OPEN_PROJECT']) delete env[key]
   const app = await electron.launch({ executablePath, cwd: packageDir,
     args: [`--user-data-dir=${profile.userData}`], env, timeout: 30_000 })
+  if (fixturePort) await app.evaluate((_, port) => {
+    const originalFetch = globalThis.fetch
+    globalThis.__f05U12ExternalRequests = 0
+    globalThis.fetch = (input, options) => {
+      let url
+      try { url = new URL(String(input)) } catch {
+        globalThis.__f05U12ExternalRequests += 1
+        throw new Error('F05_U12_EXTERNAL_FETCH_REFUSED')
+      }
+      if (url.origin !== 'https://api.openai.com'
+        || !['/v1/chat/completions', '/v1/embeddings'].includes(url.pathname)
+        || url.search) {
+        globalThis.__f05U12ExternalRequests += 1
+        throw new Error('F05_U12_EXTERNAL_FETCH_REFUSED')
+      }
+      return originalFetch(`http://127.0.0.1:${port}${url.pathname}`, options)
+    }
+  }, fixturePort)
   const page = await app.firstWindow({ timeout: 30_000 })
   page.setDefaultTimeout(15_000)
   await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
@@ -82,10 +140,10 @@ async function launch() {
   await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
   return { app, page }
 }
-async function openReport(page) {
+async function openReport(page, name = projectName) {
   const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
   if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-  await page.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
+  await page.locator('.writer-shelf').getByRole('button', { name: `打开《${name}》` }).click()
   await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
   await page.getByRole('button', { name: /审稿报告\(/ }).click()
   await page.getByText('人工确认修稿清单', { exact: true }).waitFor({ state: 'visible' })
@@ -97,11 +155,40 @@ async function main() {
   assert.equal(sha256(executablePath), expectedExe, 'executable hash mismatch')
   assert.equal(sha256(asarPath), expectedAsar, 'asar hash mismatch')
   for (const directory of Object.values(profile)) fs.mkdirSync(directory, { recursive: true })
-  fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U12.A02/A03',
+  fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U12.A01-A04',
     sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 24,
     retainedReason: 'isolated SQLite and failure evidence for independent review',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
-  let app, page, projectPath, sourceReviewId, draftId, failure
+  const fixture = { requests: [], externalModelRequests: 0 }
+  const server = createServer(async (request, response) => {
+    const authorized = request.headers.authorization === `Bearer ${liveModel.apiKey}`
+    const route = request.url
+    fixture.requests.push({ method: request.method, route, authorized })
+    if (request.method !== 'POST' || !authorized) { response.writeHead(403).end(); return }
+    if (route === '/v1/embeddings') {
+      const payload = JSON.parse(Buffer.concat(await Array.fromAsync(request)).toString('utf8'))
+      const inputs = Array.isArray(payload.input) ? payload.input : [payload.input]
+      response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+        data: inputs.map((_, index) => ({ index, embedding: [0.1, 0.2, 0.3] })),
+      }))
+      return
+    }
+    if (route !== '/v1/chat/completions') { response.writeHead(404).end(); return }
+    const payload = JSON.parse(Buffer.concat(await Array.fromAsync(request)).toString('utf8'))
+    const dispatch = fixture.requests.filter(item => item.route === '/v1/chat/completions').length
+    if (dispatch === 1) fixture.reviewFocusBound = payload.messages?.some(message =>
+      typeof message.content === 'string' && message.content.includes(
+        '★【作者要求重点检查的维度（如有，这些维度必须优先、深入检查）】★：\n剧情连贯性\n'))
+    const content = dispatch === 1 ? liveReport : dispatch === 2 ? revisedBody : null
+    if (!content || payload.model !== liveModel.modelName || payload.stream !== true) {
+      response.writeHead(422).end(); return
+    }
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: null }] })}\n\n`)
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`)
+    response.end('data: [DONE]\n\n')
+  })
+  let app, page, projectPath, sourceReviewId, draftId, failure, liveProjectPath
   let currentStep = 'fixture-persist'
   try {
     ({ app, page } = await launch())
@@ -194,21 +281,126 @@ async function main() {
     assert.deepEqual(reviewRows(projectPath), rows, 'restart changed persisted reviews')
     pass('U12.A03-process-reopen', 'A new Electron process renders the confirmed review and retains both immutable rows',
       { sourceReviewId, confirmationReviewId: rows[1].id, reviewCount: rows.length })
+    await app.close(); app = null
+
+    currentStep = 'U12.A01-production-review'
+    await new Promise((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const fixturePort = server.address().port
+    ;({ app, page } = await launch(fixturePort))
+    const created = await invoke(page, 'project:create', { path: profile.projects, name: liveProjectName,
+      genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
+    assert.equal(created.success, true, created.error)
+    liveProjectPath = created.projectPath
+    const openedLive = await invoke(page, 'project:open', liveProjectPath, randomUUID(), null)
+    assert.equal(openedLive.success, true, openedLive.error)
+    const liveSession = { projectId: created.projectId, projectPath: liveProjectPath,
+      leaseId: openedLive.project.sessionLease }
+    assert.equal((await invoke(page, 'llm:save-model', liveModel)).success, true)
+    assert.equal((await invoke(page, 'llm:set-default-model', liveModel.id)).success, true)
+    const liveBlueprint = await invoke(page, 'db:blueprint-upsert', { chapterNumber: 1, title: '港口灯塔',
+      role: '发展', purpose: '核对审稿决定', keyEvents: '林岚离开港口', characters: [] }, liveProjectPath, liveSession)
+    assert.equal(liveBlueprint.success, true, liveBlueprint.error)
+    const liveDraft = await invoke(page, 'db:draft-create', { chapterNumber: 1, version: 1, source: 'write',
+      content: body, wordCount: body.length }, liveProjectPath, liveSession)
+    assert.equal(liveDraft.success, true, liveDraft.error)
+    const liveSourceDraft = draftRow(liveProjectPath, liveDraft.id)
+    assert.equal(liveSourceDraft.content, body)
+    fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0)
+    await app.close(); app = null
+    ;({ app, page } = await launch(fixturePort))
+    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${liveProjectName}》` }).click()
+    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
+    await page.getByRole('button', { name: 'AI 审稿', exact: true }).click()
+    await page.getByRole('heading', { name: 'AI 审稿确认' }).waitFor({ state: 'visible' })
+    const dimensionLabels = ['剧情连贯性', '剧情合理性', '角色状态', '前后章节串联']
+    const dimension = label => page.getByRole('dialog').locator('label').filter({ hasText: label })
+    for (const label of dimensionLabels) await dimension(label).click()
+    await dimension('剧情连贯性').click()
+    for (const label of dimensionLabels) assert.equal(await dimension(label).locator('svg').count(),
+      label === '剧情连贯性' ? 1 : 0, `incorrect selected review dimension: ${label}`)
+    await page.getByRole('button', { name: '确认执行', exact: true }).click()
+    const reviewed = await waitForRows(liveProjectPath, state => state.reviews.length === 1 && state.cycles.length === 1)
+    assert.equal(fixture.reviewFocusBound, true, 'selected dimension was not bound into the production review request')
+    const liveReview = reviewed.reviews[0]
+    const parsedReview = JSON.parse(liveReview.content)
+    assert.equal(parsedReview.items[0].quote, '第二天，她回到灯塔。')
+    assert.equal(parsedReview.goalReview.coverage, 'complete')
+    assert.deepEqual(parsedReview.goalReview.items.map(item => [item.id, item.status, item.evidence[0]?.quote]),
+      [['ch1:keyEvents:1', 'completed', '林岚离开港口']])
+    assert.equal(reviewed.effects.filter(effect => effect.kind === 'review' && effect.id === liveReview.id
+      && effect.projectId === created.projectId && effect.rootActionId === reviewed.cycles[0].rootActionId).length, 1)
+    assert.equal(reviewed.cycles[0].reviewId, liveReview.id)
+    assert.equal(reviewed.cycles[0].revisionStatus, 'not-generated')
+    assert.deepEqual(draftRow(liveProjectPath, liveDraft.id), liveSourceDraft)
+    pass('U12.A01-production-review', 'V3 selected review dimensions and checked the frozen chapter goal through the production owner and cycle',
+      { projectId: created.projectId, reviewId: liveReview.id, cycleId: reviewed.cycles[0].cycleId,
+        goalIds: parsedReview.goalReview.items.map(item => item.id), providerRequests: fixture.requests.length }, 'U12.A01')
+
+    currentStep = 'U12.A04-confirmed-revision'
+    assert.equal(await page.getByText('人工确认修稿清单', { exact: true }).isVisible(), true,
+      'production review did not open its confirmation report')
+    await page.getByRole('button', { name: '确认审稿清单', exact: true }).click()
+    const confirmedRows = await waitForRows(liveProjectPath, state => state.reviews.length === 2)
+    const confirmedReview = confirmedRows.reviews[1]
+    const confirmed = JSON.parse(confirmedReview.content)
+    assert.equal(confirmed.sourceReviewId, liveReview.id)
+    assert(confirmed.items.some(item => item.decision === 'apply'))
+    assert.equal(confirmedRows.reviews[0].content, liveReview.content)
+    await page.getByRole('button', { name: '按确认意见修稿', exact: true }).click()
+    await page.getByLabel('本次修稿模型').selectOption(liveModel.id)
+    await page.getByRole('button', { name: '开始修稿', exact: true }).click()
+    const revised = await waitForRows(liveProjectPath, state => state.revisions.length === 1
+      && state.cycles[0]?.revisionStatus === 'generated')
+    const revision = revised.revisions[0]
+    assert.equal(revision.baseDraftId, liveDraft.id)
+    assert.equal(revision.reviewSourceId, confirmedReview.id)
+    assert.equal(revision.revisionType, 'review-fix')
+    assert.equal(revision.status, 'pending')
+    assert.equal(revision.content, revisedBody)
+    assert.notEqual(revision.content, body)
+    assert.equal(revised.cycles[0].revisionId, revision.id)
+    assert.equal(revised.cycles[0].confirmationReviewId, confirmedReview.id)
+    assert.equal(revised.effects.filter(effect => effect.kind === 'revision' && effect.id === revision.id
+      && effect.projectId === created.projectId).length, 1)
+    assert.deepEqual(draftRow(liveProjectPath, liveDraft.id), liveSourceDraft)
+    assert.equal(revised.reviews[0].content, liveReview.content)
+    assert.equal(revised.outboxCount, 0)
+    assert.deepEqual(revised.draftStatuses, [{ id: liveDraft.id, status: 'draft' }])
+    fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0)
+    assert.equal(fixture.externalModelRequests, 0)
+    assert(fixture.requests.every(item => item.method === 'POST' && item.authorized
+      && ['/v1/chat/completions', '/v1/embeddings'].includes(item.route)))
+    assert.deepEqual(fixture.requests.filter(item => item.route === '/v1/chat/completions')
+      .map(item => [item.method, item.authorized]), [['POST', true], ['POST', true]])
+    pass('U12.A04-confirmed-revision', 'V3 author confirmation drove a controlled provider revision into a pending formal review-fix candidate',
+      { reviewId: liveReview.id, confirmationReviewId: confirmedReview.id, revisionId: revision.id,
+        cycleId: revised.cycles[0].cycleId, providerRequests: fixture.requests.length,
+        externalModelRequests: fixture.externalModelRequests }, 'U12.A04')
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message,
       ui: (await page?.locator('body').innerText().catch(() => ''))?.slice(-2500) }
     steps.push({ stepId: currentStep, actionId: currentStep === 'fixture-persist' ? null
-      : currentStep.startsWith('U12.A02') ? 'U12.A02' : 'U12.A03',
+      : currentStep.startsWith('U12.A02') ? 'U12.A02'
+        : currentStep.startsWith('U12.A01') ? 'U12.A01'
+          : currentStep.startsWith('U12.A04') ? 'U12.A04' : 'U12.A03',
       outcome: 'RED', assertion: 'first failing boundary', observed: failure })
   } finally {
+    if (app && failure) fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0).catch(() => 0)
     await app?.close().catch(() => {})
+    if (server.listening) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true })
-    const receipt = { schemaVersion: 1, qualification: 'F05_U12_A02_A03_PACKAGED_V3_REVIEW',
+    const receipt = { schemaVersion: 1, qualification: 'F05_U12_A01_A04_PACKAGED_V3_REVIEW_REVISION',
       overall: failure ? 'FAIL' : 'PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3',
-      scope: ['U12.A02', 'U12.A03'], testedSha, executionHead: git('rev-parse', 'HEAD'),
+      scope: ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04'], testedSha, executionHead: git('rev-parse', 'HEAD'),
       artifact: { executablePath, executableSha256: sha256(executablePath), asarPath, asarSha256: sha256(asarPath) },
-      driver: { path: driverPath, sha256: sha256(driverPath) }, profile: { scratch, projectPath },
-      steps, unverifiedActions: ['U12.A01', 'U12.A04', 'U12.A05', 'U12.A06', 'U12.A07', 'U12.A08'],
+      driver: { path: driverPath, sha256: sha256(driverPath) }, profile: { scratch, projectPath, liveProjectPath },
+      provider: { kind: 'loopback-synthetic-openai-sse', localRequests: fixture.requests,
+        externalModelRequests: fixture.externalModelRequests },
+      steps, unverifiedActions: ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04', 'U12.A05', 'U12.A06', 'U12.A07', 'U12.A08']
+        .filter(actionId => !steps.some(step => step.actionId === actionId && step.outcome === 'PASS')),
       failure }
     fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
     process.stdout.write(`${JSON.stringify({ overall: receipt.overall, receipt: receiptPath,
