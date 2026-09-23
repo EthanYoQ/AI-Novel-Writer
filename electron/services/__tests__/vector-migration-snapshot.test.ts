@@ -15,7 +15,8 @@ const pendingCases: Promise<void>[] = []
 let diagnosticCase = 0
 type NativeStage = 'beforeEach-enter' | 'root-ready' | 'case-enter' | 'connect-enter' | 'connect-ready'
   | 'chunks-enter' | 'chunks-ready' | 'documents-enter' | 'documents-ready' | 'vectors-enter' | 'vectors-ready'
-  | 'seed-close-enter' | 'seed-close-done' | 'copy-enter' | 'copy-done' | 'export-enter' | 'export-done'
+  | 'seed-close-enter' | 'seed-close-done' | 'copy-enter' | 'copy-wait-enter' | 'copy-wait-done'
+  | 'copy-child-enter' | 'copy-child-done' | 'copy-child-failed' | 'copy-done' | 'export-enter' | 'export-done'
   | 'import-enter' | 'import-done' | 'verify-enter' | 'verify-done' | 'sqlite-enter' | 'sqlite-done'
   | 'search-enter' | 'search-done' | 'rename-enter' | 'rename-done'
   | 'teardown-enter' | 'teardown-settled' | 'teardown-closed' | 'teardown-removed'
@@ -106,6 +107,19 @@ try {
   nativeStage('seed-close-done')
 }
 `
+const copyProcessSource = String.raw`
+import fs from 'node:fs'
+
+const [source, copy, caseIndex] = process.argv.slice(1)
+const nativeStage = stage => {
+  if (process.env.CI !== 'true') return
+  fs.writeSync(2, '[vector-native-stage] ' + JSON.stringify({ stage, caseIndex: Number(caseIndex),
+    pid: process.pid, monotonicNs: process.hrtime.bigint().toString() }) + '\n')
+}
+nativeStage('copy-child-enter')
+fs.cpSync(source, copy, { recursive: true })
+nativeStage('copy-child-done')
+`
 async function seed(storage: string, vectors = true) {
   const child = spawn(process.execPath,
     ['--input-type=module', '--eval', seedProcessSource, storage, root, String(vectors), String(diagnosticCase)],
@@ -119,7 +133,18 @@ async function copied(vectors = true) {
   const source = path.join(root, '原项目', '.vela'), copy = path.join(root, '只读副本')
   await seed(source, vectors)
   nativeStage('copy-enter')
-  fs.cpSync(source, copy, { recursive: true })
+  const child = spawn(process.execPath,
+    ['--input-type=module', '--eval', copyProcessSource, source, copy, String(diagnosticCase)],
+    { cwd: process.cwd(), windowsHide: true, stdio: ['ignore', 'ignore', 'inherit'] })
+  nativeStage('copy-wait-enter')
+  await new Promise<void>((resolve, reject) => {
+    child.once('error', reject)
+    child.once('exit', (code, signal) => {
+      nativeStage(code === 0 ? 'copy-wait-done' : 'copy-child-failed')
+      if (code === 0) resolve()
+      else reject(new Error(`VECTOR_COPY_CHILD_FAILED:${code ?? signal}`))
+    })
+  })
   nativeStage('copy-done')
   return { source, copy }
 }
