@@ -1,20 +1,29 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it } from 'vitest'
-import { page } from 'vitest/browser'
+import { page, userEvent } from 'vitest/browser'
 import ShellV2 from '../ShellV2'
 import TitleBarV2 from '../TitleBarV2'
+import TitleBar from '../../TitleBar'
 import LeftToolWindowBar from '../../LeftToolWindowBar'
 import WelcomePageV2 from '../../../pages/v2/WelcomePageV2'
 import { vi } from 'vitest'
 import { useLayoutStore } from '../../../../stores/layout-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import { useAppearanceStore } from '../../../../stores/appearance-bootstrap'
+import '../../../../index.css'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 let host: HTMLDivElement
 let root: Root
+let utilityStyles: HTMLStyleElement | undefined
+const originalBridge = Object.getOwnPropertyDescriptor(window, 'aiNovelAPI')
+let narrowStoreState: {
+  appearance: ReturnType<typeof useAppearanceStore.getState>
+  project: ReturnType<typeof useProjectStore.getState>
+  layout: ReturnType<typeof useLayoutStore.getState>
+} | undefined
 
 beforeEach(async () => {
   await page.viewport(1280, 900)
@@ -27,6 +36,100 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
+  utilityStyles?.remove()
+  utilityStyles = undefined
+  if (originalBridge) Object.defineProperty(window, 'aiNovelAPI', originalBridge)
+  else Reflect.deleteProperty(window, 'aiNovelAPI')
+  if (narrowStoreState) {
+    useAppearanceStore.setState(narrowStoreState.appearance, true)
+    useProjectStore.setState(narrowStoreState.project, true)
+    useLayoutStore.setState(narrowStoreState.layout, true)
+    narrowStoreState = undefined
+  }
+})
+
+it('V3 narrow titlebar keeps export, new, and open actions hittable', async () => {
+  narrowStoreState = {
+    appearance: useAppearanceStore.getState(),
+    project: useProjectStore.getState(),
+    layout: useLayoutStore.getState(),
+  }
+  await page.viewport(1024, 720)
+  host.style.width = '1024px'
+  host.style.height = '720px'
+  document.body.style.margin = '0'
+  // The browser test config lacks Tailwind's Vite plugin; supply only TitleBar's utility layout.
+  utilityStyles = document.createElement('style')
+  utilityStyles.textContent = `
+    .writer-topbar.flex { display: flex }
+    .writer-topbar.items-center { align-items: center }
+    .writer-topbar.gap-2 { gap: 8px }
+    .writer-topbar .flex { display: flex }
+    .writer-topbar .items-center { align-items: center }
+    .writer-topbar .gap-2 { gap: 8px }
+    .writer-topbar .gap-1 { gap: 4px }
+    .writer-topbar .flex-shrink-0 { flex-shrink: 0 }
+    .writer-topbar .min-w-0 { min-width: 0 }
+    .writer-topbar .flex-1 { flex: 1 1 0% }
+    .writer-topbar .whitespace-nowrap { white-space: nowrap }
+    .writer-topbar .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+  `
+  document.head.append(utilityStyles)
+  const invoke = vi.fn(async () => null)
+  Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: {
+    invoke, on: vi.fn(() => () => {}),
+    once: vi.fn(), send: vi.fn(),
+  } })
+  useAppearanceStore.setState({ resolvedShell: 'writer' })
+  useProjectStore.setState({ currentProject: { id: 'narrow', name: 'U11', path: 'C:/narrow', sessionLease: 'narrow', novelConfig: {} } as never })
+  await act(async () => root.render(<ShellV2 presentation="writer" variant="v3" theme="paper"
+    titleBar={<TitleBar />} rail={<span>书脊</span>} sidebar={<span>目录</span>}
+    editor={<span>正文</span>} aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>页脚</span>} />))
+
+  for (const title of ['导出', '新建项目', '打开项目']) {
+    const button = host.querySelector<HTMLButtonElement>(`.writer-topbar button[title="${title}"]`)!
+    const box = button.getBoundingClientRect()
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+    expect(button.contains(hit), `${title} is covered at ${Math.round(box.left)}px`).toBe(true)
+    expect(button.getAttribute('aria-label')).toBe(title)
+    expect(button.disabled).toBe(false)
+    expect(button.tabIndex).toBeGreaterThanOrEqual(0)
+  }
+  await act(async () => {
+    await page.getByRole('button', { name: '导出' }).click()
+    host.querySelector<HTMLButtonElement>('.writer-topbar button[title="新建项目"]')!.focus()
+    await userEvent.keyboard('{Enter}')
+    await page.getByRole('button', { name: '打开项目' }).click()
+  })
+  expect(useLayoutStore.getState()).toMatchObject({ exportOpen: true, newProjectOpen: true })
+  expect(invoke).toHaveBeenCalledWith('dialog:select-folder')
+
+  for (const width of [1200, 1280, 1320, 1324, 1325, 1440]) {
+    await act(async () => {
+      await page.viewport(width, 900)
+      host.style.width = `${width}px`
+    })
+    let allHittable = true
+    const rightControlsLeft = host.querySelector<HTMLElement>('.writer-topbar > div:last-child')!.getBoundingClientRect().left
+    for (const title of ['导出', '新建项目', '打开项目']) {
+      const button = host.querySelector<HTMLButtonElement>(`.writer-topbar button[title="${title}"]`)!
+      const box = button.getBoundingClientRect()
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+      const hittable = button.contains(hit)
+      expect.soft(hittable, `${title} is covered at width ${width}px, x=${Math.round(box.left)}`).toBe(true)
+      const separated = box.right <= rightControlsLeft
+      expect.soft(separated, `${title} overlaps right controls at width ${width}px: right=${Math.round(box.right)}, controls=${Math.round(rightControlsLeft)}`).toBe(true)
+      allHittable &&= hittable && separated
+      if (width >= 1325) expect(getComputedStyle(button.querySelector('.writer-topbar-action-label')!).display).not.toBe('none')
+    }
+    if (!allHittable) continue
+    await act(async () => {
+      await page.getByRole('button', { name: '导出' }).click()
+      host.querySelector<HTMLButtonElement>('.writer-topbar button[title="新建项目"]')!.focus()
+      await userEvent.keyboard('{Enter}')
+      await page.getByRole('button', { name: '打开项目' }).click()
+    })
+  }
 })
 
 it('V3 explicit variant keeps writer shell semantics and shared editor owner', async () => {

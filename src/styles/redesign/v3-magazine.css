@@ -331,6 +331,12 @@
 .v3-magazine-shell .v3-masthead-band span:nth-child(7) { background: var(--v3-sec-7); }
 .v3-magazine-shell .writer-title-host { border-bottom: 1px solid var(--v3-rule); }
 .v3-magazine-shell .writer-topbar { min-height: 74px; padding: 12px 20px; }
+@media (max-width: 1324px) {
+  .v3-magazine-shell .writer-topbar-project-label,
+  .v3-magazine-shell .writer-topbar-status-label,
+  .v3-magazine-shell .writer-topbar-action-label { display: none; }
+  .v3-magazine-shell .writer-topbar-action { width: 30px; flex: 0 0 30px; padding-inline: 6px; }
+}
 .v3-magazine-shell .writer-brand-mark { border-radius: 2px; }
 .v3-magazine-shell .writer-rail-host { border-right: 1px solid var(--v3-rule); overflow: visible; }
 .v3-magazine-shell .writer-left-rail { --width-left-bar: 94px; background: var(--v3-rail-surface); }
