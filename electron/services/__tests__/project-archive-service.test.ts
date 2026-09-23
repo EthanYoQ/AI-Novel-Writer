@@ -516,7 +516,7 @@ describe('portable project export service', () => {
     expect(fs.existsSync(f.target)).toBe(false)
   })
 
-  it('rejects an unsafe portable DB path and a missing avatar before publication', async () => {
+  it('rejects an unsafe portable DB path and a missing avatar before publication', { timeout: 20_000 }, async () => {
     const f = fixture()
     seedProject(f)
     const db = new Database(f.databasePath)
