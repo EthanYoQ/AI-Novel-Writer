@@ -3,10 +3,13 @@ import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
+import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+
+const Database = createRequire(import.meta.url)('better-sqlite3')
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -39,6 +42,7 @@ const receiptDir = path.join(repository, '.runtime', '.cache', 'f04-v3-character
 const receiptPath = path.join(receiptDir, 'receipt.json')
 const projectName = 'V3C'
 const names = [`甲${runId.slice(0, 4)}`, `乙${runId.slice(0, 4)}`]
+const backgrounds = [`北港线人 ${runId.slice(0, 8)}`, `南站警员 ${runId.slice(0, 8)}`]
 const steps = []
 const pass = (name, observed) => steps.push({ name, outcome: 'PASS', observed })
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
@@ -160,6 +164,7 @@ async function main() {
     await profilePage.screenshot({ path: path.join(receiptDir, 'v3-character-profile.png') })
 
     currentStep = 'v3-graph-stable-id'
+    await profilePage.getByText('背景故事', { exact: true }).locator('xpath=..').locator('textarea').fill(backgrounds[0])
     const relationship = profilePage.getByText('关系网', { exact: true }).locator('xpath=..').locator('textarea')
     await relationship.fill(`${names[1]}：同盟`)
     await profilePage.getByRole('button', { name: '保存', exact: true }).last().click()
@@ -174,6 +179,12 @@ async function main() {
     assert.equal(await profilePage.locator(`[data-character-id="${secondId}"]`).getAttribute('aria-pressed'), 'true')
     pass('v3-graph-stable-id', { sourceId: firstId, targetId: secondId, relation: '同盟' })
     await profilePage.screenshot({ path: path.join(receiptDir, 'v3-character-graph-open.png') })
+
+    currentStep = 'u09-a08-same-name-rename'
+    await profilePage.getByText('背景故事', { exact: true }).locator('xpath=..').locator('textarea').fill(backgrounds[1])
+    await profilePage.getByText('姓名', { exact: true }).locator('xpath=..').locator('input').fill(names[0])
+    await profilePage.getByRole('button', { name: '保存', exact: true }).last().click()
+    await profilePage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
 
     currentStep = 'u10-a07-writer-card-avatar-reopen'
     const reopened = await invoke(profilePage, 'project:open', projectPath, randomUUID(), projectPath)
@@ -190,17 +201,90 @@ async function main() {
       observed: { characterId: firstId, avatarWidth: 32, assetRevision: batch.avatars[0].assetRevision,
         persistedAsset: path.relative(projectPath, persistedAvatarPath).split(path.sep).join('/'),
         persistedByteSize: persistedAvatarBytes.length, persistedSha256: sha256(persistedAvatarPath) } })
+
+    await app.close()
+    app = null
+    app = (await launch()).app
+    const identityPage = await app.firstWindow()
+    const identityNotice = identityPage.locator('[role="status"].fixed.inset-x-0.top-10')
+    if (await identityNotice.isVisible()) await identityNotice.getByRole('button', { name: '知道了', exact: true }).click()
+    await identityPage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
+    await identityPage.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
+    await identityPage.locator('.writer-left-rail button[title="角色"]').click()
+    currentStep = 'u09-a08-same-name-reopen'
+    const firstSameName = identityPage.locator(`[data-character-id="${firstId}"]`)
+    const secondSameName = identityPage.locator(`[data-character-id="${secondId}"]`)
+    await firstSameName.waitFor({ state: 'visible' })
+    await secondSameName.waitFor({ state: 'visible' })
+    assert((await firstSameName.innerText()).includes(backgrounds[0]), 'first same-name card lost its source note')
+    assert((await secondSameName.innerText()).includes(backgrounds[1]), 'second same-name card lost its source note')
+    assert.equal(await identityPage.locator('[data-character-id]').filter({ hasText: names[0] }).count(), 2,
+      'same-name cards were merged in Writer list')
+    await identityPage.screenshot({ path: path.join(receiptDir, 'v3-character-same-name.png') })
+
+    await firstSameName.click()
+    await identityPage.getByRole('button', { name: '关系图谱', exact: true }).click()
+    const sameNameGraph = identityPage.locator('canvas[aria-label^="角色关系图谱"]')
+    await sameNameGraph.waitFor({ state: 'visible' })
+    const graphLabel = await sameNameGraph.getAttribute('aria-label')
+    assert(graphLabel?.includes(firstId.slice(-8)) && graphLabel.includes(secondId.slice(-8)) && graphLabel.includes('同盟'),
+      'same-name graph did not expose stable-ID endpoints')
+    await identityPage.screenshot({ path: path.join(receiptDir, 'v3-character-same-name-graph.png') })
+
+    const identityOpened = await invoke(identityPage, 'project:open', projectPath, randomUUID(), projectPath)
+    assert.equal(identityOpened.success, true, identityOpened.error)
+    const identityContext = { projectId: identityOpened.project?.id, projectPath, leaseId: identityOpened.project?.sessionLease }
+    assert(identityContext.projectId && identityContext.leaseId, 'reopened identity project session missing')
+    const roster = await invoke(identityPage, 'db:character-roster-read', projectPath, identityContext)
+    const byId = new Map(roster.entries.map(entry => [entry.characterId, entry]))
+    assert.equal(byId.get(firstId)?.name, names[0])
+    assert.equal(byId.get(secondId)?.name, names[0])
+    assert.equal(byId.get(firstId)?.background, backgrounds[0])
+    assert.equal(byId.get(secondId)?.background, backgrounds[1])
+    assert(byId.get(firstId)?.relationships.some(item => item.targetCharacterId === secondId && item.relation === '同盟'),
+      'main roster snapshot lost stable-ID relationship after same-name rename')
+
+    const db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true, readonly: true })
+    let persistedCharacters
+    let persistedAliases
+    let persistedRelationship
+    try {
+      persistedCharacters = db.prepare(`SELECT character_id AS characterId,name,background,retired FROM characters
+        WHERE character_id IN (?,?) ORDER BY character_id`).all(firstId, secondId)
+      persistedAliases = db.prepare(`SELECT character_id AS characterId,name,source_key AS sourceKey,valid_from AS validFrom,
+        valid_through AS validThrough FROM character_aliases WHERE character_id IN (?,?)
+        ORDER BY character_id,valid_from`).all(firstId, secondId)
+      persistedRelationship = db.prepare(`SELECT source_character_id AS sourceCharacterId,target_character_id AS targetCharacterId,
+        relation FROM character_relationships WHERE source_character_id=? AND target_character_id=?`).get(firstId, secondId)
+    } finally { db.close() }
+    assert.equal(persistedCharacters.length, 2, 'same-name rename merged SQLite identities')
+    assert.deepEqual(new Map(persistedCharacters.map(row => [row.characterId, row.background])),
+      new Map([[firstId, backgrounds[0]], [secondId, backgrounds[1]]]))
+    assert(persistedCharacters.every(row => row.name === names[0] && row.retired === 0), 'same-name SQLite rows were overwritten or retired')
+    assert(persistedAliases.some(row => row.characterId === secondId && row.name === names[1] && row.validThrough !== null),
+      'renamed identity lost its closed historical alias')
+    assert(persistedAliases.some(row => row.characterId === firstId && row.name === names[0] && row.validThrough === null)
+      && persistedAliases.some(row => row.characterId === secondId && row.name === names[0] && row.validThrough === null),
+    'same display name did not retain two active ID-scoped aliases')
+    assert.deepEqual(persistedRelationship,
+      { sourceCharacterId: firstId, targetCharacterId: secondId, relation: '同盟' })
+    steps.push({ stepId: currentStep, actionId: 'U09.A08', outcome: 'PASS',
+      assertion: 'Writer V3 keeps two renamed same-name cards separate by stable ID/source note after restart; main IPC and SQLite retain both backgrounds, alias history and the ID-bound relationship without merge or overwrite.',
+      observed: { displayName: names[0], ids: [firstId, secondId], sourceDisplay: backgrounds,
+        derivedSourceRequired: false, sourceDisplayContract: 'background note or stable-ID suffix',
+        mainRosterIdentityRevision: roster.identityRevision, relationship: persistedRelationship,
+        activeSameNameAliases: persistedAliases.filter(row => row.name === names[0] && row.validThrough === null).length } })
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message }
   } finally {
     await app?.close().catch(() => {})
-    const receipt = { schemaVersion: 1, qualification: 'F05_U10_A07_PACKAGED_V3_CHARACTER_CARD_AVATAR',
+    const receipt = { schemaVersion: 1, qualification: 'F05_U09_A08_U10_A07_PACKAGED_V3_CHARACTERS',
       outcome: failure ? 'FAIL' : 'PARTIAL', sliceOutcome: failure ? 'FAIL' : 'PASS', fullU10Qualification: false,
-      fullF05Qualification: false, evidenceLevel: 'electron', shell: 'writer-v3', testedSha, executionHead, changedPaths,
+      fullU09Qualification: false, fullF05Qualification: false, evidenceLevel: 'electron', shell: 'writer-v3', testedSha, executionHead, changedPaths,
       dirtyProductPaths, package: { directory: packageDir, executableSha256: sha256(exe), asarSha256: sha256(asar) },
       driver: { path: fileURLToPath(import.meta.url), sha256: sha256(fileURLToPath(import.meta.url)) },
-      evidence: { receipt: path.relative(repository, receiptPath), screenshots: ['v3-character-profile.png'] },
-      verifiedActions: failure ? [] : ['U10.A07'], unverifiedActions: ['U10.A01-U10.A06', 'U10.A08', 'F05 whole-product qualification'],
+      evidence: { receipt: path.relative(repository, receiptPath), screenshots: ['v3-character-profile.png', 'v3-character-same-name.png', 'v3-character-same-name-graph.png'] },
+      verifiedActions: failure ? [] : ['U10.A07', 'U09.A08'], unverifiedActions: ['U09.A01-U09.A07', 'U09.A09', 'U10.A01-U10.A06', 'U10.A08', 'F05 whole-product qualification'],
       projectPath, scratch, steps, failure }
     fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
     process.stdout.write(`${JSON.stringify({ outcome: receipt.outcome, sliceOutcome: receipt.sliceOutcome, testedSha,
