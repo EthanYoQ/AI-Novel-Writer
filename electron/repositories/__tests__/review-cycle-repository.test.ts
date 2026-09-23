@@ -9,6 +9,7 @@ import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema
 import { M01_GENERATION_SQL } from '../../migrations/m01-generation-runs'
 import {
   applyM03ReviewCycle,
+  applyM06ReviewCycleMerge,
   canonicalM03FindingSetHash,
   verifyM03ReviewCycle,
 } from '../../migrations/m03-review-cycle'
@@ -25,7 +26,10 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 function fixture() {
   const db = new Database(':memory:')
   db.pragma('foreign_keys=ON')
-  db.transaction(() => { initializeLegacyBaselineSchema(db); db.exec(M01_GENERATION_SQL); applyM03ReviewCycle(db) })()
+  db.transaction(() => {
+    initializeLegacyBaselineSchema(db); db.exec(M01_GENERATION_SQL)
+    applyM03ReviewCycle(db); applyM06ReviewCycleMerge(db)
+  })()
   return db
 }
 
@@ -37,6 +41,7 @@ const defaultModel = { summary: '审稿完成', items: [{ category: '文风', se
 interface SeedOptions {
   key?: string
   source?: string
+  sourceStatus?: 'draft' | 'revised'
   existingDraftId?: number
   model?: Record<string, unknown>
   frozenGoals?: FrozenChapterGoals
@@ -49,6 +54,7 @@ function seed(db: import('better-sqlite3').Database, options: SeedOptions = {}):
   call: CreateReviewCycleInput
   reviewId: number
   source: string
+  sourceStatus: 'draft' | 'revised'
   draftId: number
   reviewBody: string
   frozenGoals: FrozenChapterGoals
@@ -56,6 +62,7 @@ function seed(db: import('better-sqlite3').Database, options: SeedOptions = {}):
 } {
   const key = options.key ?? 'review'
   const source = options.source ?? '开场😀目标完成，预检证据，重复，重复。'
+  const sourceStatus = options.sourceStatus ?? 'draft'
   const frozenGoals = options.frozenGoals ?? defaultGoals
   const preflight = options.preflight ?? []
   const modelContent = JSON.stringify(options.model ?? defaultModel)
@@ -70,8 +77,8 @@ function seed(db: import('better-sqlite3').Database, options: SeedOptions = {}):
   const reviewIndex = Number(db.prepare('SELECT COALESCE(MAX(review_index),0)+1 FROM reviews WHERE base_draft_id=?')
     .pluck().get(draftId))
   const reviewId = Number(db.prepare(`INSERT INTO reviews(base_draft_id,review_index,source_draft_chapter_number,
-    source_draft_version,source_draft_status,source_content,content_id) VALUES(?,?,1,1,'draft',?,?)`)
-    .run(draftId, reviewIndex, source, reviewContentId).lastInsertRowid)
+    source_draft_version,source_draft_status,source_content,content_id) VALUES(?,?,1,1,?,?,?)`)
+    .run(draftId, reviewIndex, sourceStatus, source, reviewContentId).lastInsertRowid)
   const rootActionId = `root-${key}`
   const action = { rootActionId, projectId: 'project', epoch: 'epoch', operation: 'review-chapter',
     uiActionNonce: `nonce-${key}`, frozenInputHash: hash(`frozen-${key}`), status: 'active' }
@@ -83,7 +90,7 @@ function seed(db: import('better-sqlite3').Database, options: SeedOptions = {}):
     const runId = `run-${key}`
     const artifactId = `artifact-${key}`
     const context = { version: 1, operation: 'review-chapter', sourceHash: hash(source),
-      source: { id: draftId, chapterNumber: 1, version: 1, status: 'draft', content: source }, config: {},
+      source: { id: draftId, chapterNumber: 1, version: 1, status: sourceStatus, content: source }, config: {},
       writingLanguage: 'zh-CN', uiLocale: 'zh-CN', authorInputs: [], characterStates: '（暂无）', worldbuilding: '',
       history: [], blueprints: [], frozenGoals, preflightFindings: preflight }
     const contextHash = hash(JSON.stringify(context))
@@ -110,7 +117,7 @@ function seed(db: import('better-sqlite3').Database, options: SeedOptions = {}):
       .run(artifactId, attemptId, runId, JSON.stringify(artifact), 1, 'partial')
   }
 
-  return { reviewId, source, draftId, reviewBody: body, frozenGoals, preflight,
+  return { reviewId, source, sourceStatus, draftId, reviewBody: body, frozenGoals, preflight,
     call: { rootActionId, reviewId, reviewContentHash: hash(body), source: {
     projectId: 'project', epoch: 'epoch', sourceId: `draft:${draftId}`, revision: 1, contentHash: hash(source),
   } } }
@@ -130,7 +137,7 @@ function seedRevision(db: import('better-sqlite3').Database, base: ReturnType<ty
   const key = options.key ?? 'revision'
   const revisionContent = options.revisionContent ?? `${base.source}\n修稿补充。`
   const snapshot = options.snapshot ?? { kind: 'human-confirmed-review', schemaVersion: 1, sourceReviewId: base.reviewId,
-    sourceDraft: { id: base.draftId, chapterNumber: 1, version: 1, status: 'draft', content: base.source },
+    sourceDraft: { id: base.draftId, chapterNumber: 1, version: 1, status: base.sourceStatus, content: base.source },
     summary: '作者确认', authorGuidance: '', items: [{ category: '连续性', severity: 'warning',
       description: '本次忽略', decision: 'ignore', origin: 'ai' }] }
   const confirmationBody = JSON.stringify(snapshot, null, 2)
@@ -138,20 +145,20 @@ function seedRevision(db: import('better-sqlite3').Database, base: ReturnType<ty
   const confirmationIndex = Number(db.prepare('SELECT COALESCE(MAX(review_index),0)+1 FROM reviews WHERE base_draft_id=?')
     .pluck().get(base.draftId))
   const confirmationId = Number(db.prepare(`INSERT INTO reviews(base_draft_id,review_index,source_draft_chapter_number,
-    source_draft_version,source_draft_status,source_content,content_id) VALUES(?,?,1,1,'draft',?,?)`)
-    .run(base.draftId, confirmationIndex, base.source, confirmationContentId).lastInsertRowid)
+    source_draft_version,source_draft_status,source_content,content_id) VALUES(?,?,1,1,?,?,?)`)
+    .run(base.draftId, confirmationIndex, base.sourceStatus, base.source, confirmationContentId).lastInsertRowid)
   const revision = options.replacePending === false ? (() => {
     const revisionIndex = Number(db.prepare('SELECT COALESCE(MAX(revision_index),0)+1 FROM revisions WHERE base_draft_id=?')
       .pluck().get(base.draftId))
     const contentId = Number(db.prepare('INSERT INTO contents(body) VALUES(?)').run(revisionContent).lastInsertRowid)
     const id = Number(db.prepare(`INSERT INTO revisions(base_draft_id,revision_index,revision_type,status,user_prompt,
       review_source_id,source_draft_chapter_number,source_draft_version,source_draft_status,source_content,content_id,word_count)
-      VALUES(?,?,'review-fix','pending','',?,1,1,'draft',?,?,?)`)
-      .run(base.draftId, revisionIndex, confirmationId, base.source, contentId, revisionContent.length).lastInsertRowid)
+      VALUES(?,?,'review-fix','pending','',?,1,1,?,?,?,?)`)
+      .run(base.draftId, revisionIndex, confirmationId, base.sourceStatus, base.source, contentId, revisionContent.length).lastInsertRowid)
     return { id, revisionIndex }
   })() : RevisionRepository.replacePending({ baseDraftId: base.draftId, revisionType: 'review-fix',
     reviewSourceId: confirmationId, content: revisionContent, wordCount: revisionContent.length,
-    expectedSource: { id: base.draftId, chapterNumber: 1, version: 1, status: 'draft', content: base.source } }, db)
+    expectedSource: { id: base.draftId, chapterNumber: 1, version: 1, status: base.sourceStatus, content: base.source } }, db)
 
   const rootActionId = options.effect === 'different-root' ? `${base.call.rootActionId}-other-${key}` : base.call.rootActionId
   if (rootActionId !== base.call.rootActionId) {
@@ -163,7 +170,7 @@ function seedRevision(db: import('better-sqlite3').Database, base: ReturnType<ty
   const runId = `run-${key}`
   const artifactId = `artifact-${key}`
   const context = { version: 1, operation: 'refine-from-review', sourceHash: hash(base.source),
-    source: { id: base.draftId, chapterNumber: 1, version: 1, status: 'draft', content: base.source }, config: {},
+    source: { id: base.draftId, chapterNumber: 1, version: 1, status: base.sourceStatus, content: base.source }, config: {},
     writingLanguage: 'zh-CN', uiLocale: 'zh-CN', authorInputs: [], characterStates: '（暂无）', worldbuilding: '',
     history: [], blueprints: [], frozenGoals: base.frozenGoals, preflightFindings: base.preflight,
     confirmation: { reviewSourceId: confirmationId, content: confirmationBody,
@@ -811,6 +818,54 @@ describe('ReviewCycleRepository generated revision state', () => {
 })
 
 describe('ReviewCycleRepository merge state', () => {
+  it('keeps both cycle histories valid when the same draft is merged twice', () => {
+    const db = fixture()
+    try {
+      const first = generatedCycle(db, 'twice-first')
+      const firstText = `${first.seeded.source}\n作者第一次手工合并。`
+      const firstRequest = { revisionId: first.revision.revisionId, targetDraftId: first.seeded.draftId,
+        expectedDraftContent: first.seeded.source, mergedContent: firstText, wordCount: firstText.length }
+      expect(RevisionRepository.mergeIntoDraft(firstRequest, db).idempotent).toBe(false)
+
+      const secondSeed = seed(db, { key: 'review-twice-second', source: firstText,
+        sourceStatus: 'revised', existingDraftId: first.seeded.draftId,
+        preflight: [risk('fact:twice', '作者第一次手工合并')] })
+      const secondCycle = create(db, secondSeed.call)
+      const secondRevision = seedRevision(db, secondSeed, { key: 'revision-twice-second' })
+      secondRevision.attach.cycleId = secondCycle.cycleId
+      db.transaction(() => ReviewCycleRepository.attachGeneratedRevision(secondRevision.attach, db))()
+      const secondText = firstText.replace('作者第一次手工合并', '作者第二次手工合并')
+      expect(RevisionRepository.mergeIntoDraft({ revisionId: secondRevision.revisionId,
+        targetDraftId: secondSeed.draftId, expectedDraftContent: firstText, mergedContent: secondText,
+        wordCount: secondText.length }, db).idempotent).toBe(false)
+      expect(verifyM03ReviewCycle(db)).toBe(true)
+      expect(ReviewCycleRepository.getByReviewId(first.seeded.reviewId, db)?.mergedHash).toBe(hash(firstText))
+      expect(ReviewCycleRepository.getByReviewId(first.seeded.reviewId, db)?.recheckDisposition).toBeUndefined()
+      expect(() => ReviewCycleRepository.planRecheck(first.cycle.cycleId, db)).toThrow('REVIEW_CYCLE_CONFLICT')
+      expect(ReviewCycleRepository.planRecheck(secondCycle.cycleId, db).disposition).toBe('required')
+      db.prepare('UPDATE contents SET body=? WHERE id=(SELECT content_id FROM drafts WHERE id=?)')
+        .run(firstText, first.seeded.draftId)
+      expect(verifyM03ReviewCycle(db)).toBe(true)
+      expect(() => ReviewCycleRepository.planRecheck(first.cycle.cycleId, db)).toThrow('REVIEW_CYCLE_CONFLICT')
+    } finally { db.close() }
+  })
+
+  it('keeps a merged cycle readable after an author edit without restarting its recheck', () => {
+    const db = fixture()
+    try {
+      const item = generatedCycle(db, 'edited-after-merge')
+      const merged = `${item.seeded.source}\n作者手工合并。`
+      RevisionRepository.mergeIntoDraft({ revisionId: item.revision.revisionId,
+        targetDraftId: item.seeded.draftId, expectedDraftContent: item.seeded.source,
+        mergedContent: merged, wordCount: merged.length }, db)
+      db.prepare('UPDATE contents SET body=? WHERE id=(SELECT content_id FROM drafts WHERE id=?)')
+        .run(`${merged} 作者继续编辑。`, item.seeded.draftId)
+      expect(verifyM03ReviewCycle(db)).toBe(true)
+      expect(ReviewCycleRepository.getByReviewId(item.seeded.reviewId, db)?.mergedHash).toBe(hash(merged))
+      expect(() => ReviewCycleRepository.planRecheck(item.cycle.cycleId, db)).toThrow('REVIEW_CYCLE_CONFLICT')
+    } finally { db.close() }
+  })
+
   it('commits the real draft, revision, and cycle rows atomically through RevisionRepository.mergeIntoDraft', () => {
     const db = fixture()
     try {

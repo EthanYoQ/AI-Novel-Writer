@@ -442,15 +442,30 @@ function detachDiscardedGeneratedCycles(db: Database.Database, baseDraftId: numb
   reconcileDiscardedRevisionIds(db, rows.map(row => row.revision_id))
 }
 
-function readRecheckCycle(cycleId: string, db: Database.Database): RecheckCycleRow {
-  const cycle = db.prepare(`SELECT rc.cycle_id,rc.root_action_id,rc.review_id,rc.finding_set_hash,rc.comparison_version,
-      rc.revision_status,rc.merged_hash,rc.recheck_count,rc.recheck_attempt_id,r.source_content,c.body AS merged_body
-    FROM review_cycles rc JOIN reviews r ON r.id=rc.review_id JOIN revisions v ON v.id=rc.revision_id
+function isCurrentMergedCycle(cycleId: string, mergedHash: string, db: Database.Database): boolean {
+  const current = db.prepare(`SELECT c.body,v.revision_index,
+      (SELECT MAX(newer.revision_index) FROM revisions newer
+        WHERE newer.base_draft_id=v.base_draft_id AND newer.status='merged') AS latest_merged_index
+    FROM review_cycles rc JOIN revisions v ON v.id=rc.revision_id
     JOIN drafts d ON d.id=v.base_draft_id JOIN contents c ON c.id=d.content_id WHERE rc.cycle_id=?`)
+    .get(cycleId) as { body: string; revision_index: number; latest_merged_index: number | null } | undefined
+  return Boolean(current && current.revision_index === current.latest_merged_index
+    && hash(current.body) === mergedHash)
+}
+
+function readRecheckCycle(cycleId: string, db: Database.Database): RecheckCycleRow {
+  const snapshot = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_cycle_merges'").get())
+  const cycle = db.prepare(`SELECT rc.cycle_id,rc.root_action_id,rc.review_id,rc.finding_set_hash,rc.comparison_version,
+      rc.revision_status,rc.merged_hash,rc.recheck_count,rc.recheck_attempt_id,r.source_content,
+      ${snapshot ? 'm.body' : 'c.body'} AS merged_body
+    FROM review_cycles rc JOIN reviews r ON r.id=rc.review_id JOIN revisions v ON v.id=rc.revision_id
+    JOIN drafts d ON d.id=v.base_draft_id JOIN contents c ON c.id=d.content_id
+    ${snapshot ? 'JOIN review_cycle_merges m ON m.cycle_id=rc.cycle_id' : ''} WHERE rc.cycle_id=?`)
     .get(cycleId) as RecheckCycleRow | undefined
   if (!cycle || cycle.revision_status !== 'merge-committed' || !cycle.merged_hash
     || !HASH.test(cycle.merged_hash) || cycle.source_content === null
-    || hash(cycle.merged_body) !== cycle.merged_hash || !verifyM03ReviewCycle(db)) conflict()
+    || hash(cycle.merged_body) !== cycle.merged_hash || !isCurrentMergedCycle(cycleId, cycle.merged_hash, db)
+    || !verifyM03ReviewCycle(db)) conflict()
   return cycle
 }
 
@@ -515,7 +530,11 @@ export class ReviewCycleRepository {
       recheckCount: cycle.recheck_count, findings: persisted.map(row => ({ findingId: row.finding_id,
         reviewItemIndex: itemIndex.get(row.finding_id) ?? null, category: row.category, kind: row.kind, status: row.status,
         ...(row.target_id ? { targetId: row.target_id } : {}) })) }
-    if (cycle.revision_status === 'merge-committed') projection.recheckDisposition = this.planRecheck(cycle.cycle_id, db).disposition
+    if (cycle.revision_status === 'merge-committed') {
+      if (cycle.merged_hash && isCurrentMergedCycle(cycle.cycle_id, cycle.merged_hash, db)) {
+        projection.recheckDisposition = this.planRecheck(cycle.cycle_id, db).disposition
+      }
+    }
     return projection
   }
 
@@ -667,6 +686,9 @@ export class ReviewCycleRepository {
       const result = db.prepare(`UPDATE review_cycles SET revision_status='merge-committed',merged_hash=?
         WHERE cycle_id=? AND revision_id=? AND revision_status='generated' AND merged_hash IS NULL`)
         .run(input.mergedHash, cycle.cycle_id, input.revisionId)
+      if (result.changes === 1 && db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_cycle_merges'").get()) {
+        db.prepare('INSERT INTO review_cycle_merges(cycle_id,body) VALUES(?,?)').run(cycle.cycle_id, merged.body)
+      }
       if (result.changes !== 1 || !verifyM03ReviewCycle(db)) conflict()
       return { revisionId: input.revisionId, bound: true, cycleId: cycle.cycle_id,
         revisionStatus: 'merge-committed', idempotent: false }

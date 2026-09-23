@@ -112,6 +112,27 @@ export function applyM03ReviewCycle(db: Database.Database): void {
   db.exec(M03_REVIEW_CYCLE_SQL)
 }
 
+export const M06_REVIEW_CYCLE_MERGE_SQL = `CREATE TABLE review_cycle_merges (
+ cycle_id TEXT PRIMARY KEY REFERENCES review_cycles(cycle_id) ON DELETE CASCADE,
+ body TEXT NOT NULL
+);`
+
+/** Only a still-current, hash-matched v6 merge can supply a historical snapshot. */
+export function applyM06ReviewCycleMerge(db: Database.Database): void {
+  if (!db.inTransaction) throw new Error('REVIEW_CYCLE_MIGRATION_TRANSACTION_REQUIRED')
+  if (!verifyM03ReviewCycle(db)) throw new Error('REVIEW_CYCLE_MIGRATION_SOURCE_INVALID')
+  const merged = db.prepare(`SELECT rc.cycle_id,rc.merged_hash,c.body FROM review_cycles rc
+    JOIN revisions r ON r.id=rc.revision_id JOIN drafts d ON d.id=r.base_draft_id
+    JOIN contents c ON c.id=d.content_id WHERE rc.revision_status='merge-committed'`).all() as Array<{
+      cycle_id: string; merged_hash: string; body: string }>
+  db.exec(M06_REVIEW_CYCLE_MERGE_SQL)
+  const insert = db.prepare('INSERT INTO review_cycle_merges(cycle_id,body) VALUES(?,?)')
+  for (const row of merged) {
+    if (hash(row.body) !== row.merged_hash) throw new Error('REVIEW_CYCLE_MIGRATION_SOURCE_INVALID')
+    insert.run(row.cycle_id, row.body)
+  }
+}
+
 interface CycleRow {
   cycle_id: string; root_action_id: string; review_id: number; review_content_hash: string
   confirmation_review_id: number | null; confirmation_content_hash: string | null; revision_id: number | null
@@ -278,6 +299,11 @@ function exactSchema(db: Database.Database, table: string, columns: readonly str
 export function verifyM03ReviewCycle(db: Database.Database): boolean {
   try {
     if (db.pragma('foreign_keys', { simple: true }) !== 1 || (db.pragma('foreign_key_check') as unknown[]).length) return false
+    const mergeTable = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_cycle_merges'").get())
+    if (!mergeTable && Number(db.pragma('user_version', { simple: true })) >= 7) return false
+    if (mergeTable && !exactSchema(db, 'review_cycle_merges', ['cycle_id', 'body'], [
+      'cycle_id TEXT PRIMARY KEY REFERENCES review_cycles(cycle_id) ON DELETE CASCADE', 'body TEXT NOT NULL',
+    ])) return false
     if (!exactSchema(db, 'review_cycles', ['cycle_id', 'root_action_id', 'review_id', 'review_content_hash', 'confirmation_review_id',
       'confirmation_content_hash', 'revision_id', 'source_hash', 'finding_set_hash', 'comparison_version', 'revision_status',
       'merged_hash', 'recheck_count', 'recheck_attempt_id'], [
@@ -292,6 +318,10 @@ export function verifyM03ReviewCycle(db: Database.Database): boolean {
       "status IN ('unverified','author-waived')", "span_unit='utf16-code-unit'", "status='author-waived'",
     ])) return false
     const cycles = db.prepare('SELECT * FROM review_cycles ORDER BY cycle_id').all() as CycleRow[]
+    const snapshots = mergeTable ? new Map((db.prepare('SELECT cycle_id,body FROM review_cycle_merges').all() as Array<{
+      cycle_id: string; body: string }>).map(row => [row.cycle_id, row.body])) : null
+    if (snapshots && (snapshots.size !== cycles.filter(cycle => cycle.revision_status === 'merge-committed').length
+      || cycles.some(cycle => cycle.revision_status !== 'merge-committed' && snapshots.has(cycle.cycle_id)))) return false
     for (const cycle of cycles) {
       if (!nonempty(cycle.cycle_id) || !nonempty(cycle.root_action_id) || !integer(cycle.review_id, 1)
         || !HASH.test(cycle.review_content_hash) || !HASH.test(cycle.source_hash) || !HASH.test(cycle.finding_set_hash)
@@ -363,8 +393,10 @@ export function verifyM03ReviewCycle(db: Database.Database): boolean {
       if (cycle.revision_status === 'merge-committed') {
         if (!revision || revision.status !== 'merged' || revision.merged_to_draft_id !== revision.base_draft_id
           || revision.base_draft_id !== review.base_draft_id || !cycle.merged_hash || !HASH.test(cycle.merged_hash)) return false
-        const merged = db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(revision.merged_to_draft_id) as { body: string } | undefined
-        if (!merged || hash(merged.body) !== cycle.merged_hash) return false
+        const merged = snapshots ? { body: snapshots.get(cycle.cycle_id) } : db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?')
+          .get(revision.merged_to_draft_id) as { body: string } | undefined
+        if (!merged || typeof merged.body !== 'string' || hash(merged.body) !== cycle.merged_hash) return false
+        const mergedBody = merged.body
         if (cycle.recheck_count === 1) {
           const recheck = attempts.find(row => row.attempt_id === cycle.recheck_attempt_id)
           const recheckEffect = recheck && effect(recheck)
@@ -391,7 +423,7 @@ export function verifyM03ReviewCycle(db: Database.Database): boolean {
               problem: finding.problem_text, ...(finding.expected_text ? { expected: finding.expected_text } : {}),
               sourceSpan: { start: finding.span_start, end: finding.span_end, unit: 'utf16-code-unit' }, occurrence: finding.occurrence,
               sourceExcerpt: review.source_content!.slice(finding.span_start, finding.span_end) }
-            return classifyFindingEvidenceChange(review.source_content!, merged.body, value) === 'changed' ? [value] : []
+            return classifyFindingEvidenceChange(review.source_content!, mergedBody, value) === 'changed' ? [value] : []
           })
           for (const finding of eligible) {
             recheckEligible.add(finding.findingId)
@@ -405,11 +437,11 @@ export function verifyM03ReviewCycle(db: Database.Database): boolean {
             findingSetHash: cycle.finding_set_hash, findings: eligible }
           if (!recheckReview || !recheckMeta || !mergedDraft || recheckMeta.base_draft_id !== review.base_draft_id
             || recheckMeta.source_draft_chapter_number !== mergedDraft.chapter_number || recheckMeta.source_draft_version !== mergedDraft.version
-            || recheckMeta.source_draft_status !== mergedDraft.status || recheckReview.source_content === null
+            || recheckMeta.source_draft_status !== 'revised' || recheckReview.source_content === null
             || hash(recheckReview.source_content) !== cycle.merged_hash
             || !proveEffect(db, recheck, { kind: 'review', id: recheckEffect.id as number, index: recheckMeta.review_index,
               contentHash: hash(recheckReview.body), source: { id: review.base_draft_id, chapterNumber: mergedDraft.chapter_number,
-                version: mergedDraft.version, status: mergedDraft.status, content: recheckReview.source_content },
+                version: mergedDraft.version, status: recheckMeta.source_draft_status, content: recheckReview.source_content },
               recheck: expectedRecheck })) return false
           const report = JSON.parse(recheckReview.body) as { items?: unknown[] }
           if (receipt.cycleId !== cycle.cycle_id
@@ -505,5 +537,13 @@ export function createM03Migration(deps: {
   verifyKnownSchema: (reader: SchemaReader) => boolean
 }): MigrationImplementation {
   return { id: 'M03', from: 3, to: 4, owner: 'S11', migrate: reader => applyM03ReviewCycle(deps.database(reader)),
+    verify: reader => deps.verifyKnownSchema(reader) && verifyM03ReviewCycle(deps.database(reader)) }
+}
+
+export function createM06Migration(deps: {
+  database: (reader: SchemaReader) => Database.Database
+  verifyKnownSchema: (reader: SchemaReader) => boolean
+}): MigrationImplementation {
+  return { id: 'M06', from: 6, to: 7, owner: 'S11', migrate: reader => applyM06ReviewCycleMerge(deps.database(reader)),
     verify: reader => deps.verifyKnownSchema(reader) && verifyM03ReviewCycle(deps.database(reader)) }
 }

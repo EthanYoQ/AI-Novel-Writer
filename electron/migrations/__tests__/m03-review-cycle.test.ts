@@ -1,15 +1,20 @@
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { getProjectDb } from '../../database'
+import { FinalizationRepository } from '../../repositories/finalization-repository'
+import { ReviewCycleRepository } from '../../repositories/review-cycle-repository'
 import { initializeLegacyBaselineSchema } from '../baseline-schema'
 import { M01_GENERATION_SQL } from '../m01-generation-runs'
-import { applyM03ReviewCycle, canonicalM03FindingSetHash, createM03Migration, verifyM03ReviewCycle,
+import { applyM03ReviewCycle, applyM06ReviewCycleMerge, canonicalM03FindingSetHash, createM03Migration,
+  verifyM03ReviewCycle,
   type M03FindingDescriptor } from '../m03-review-cycle'
 import { buildReviewGenerationReport } from '../../../src/shared/review-generation-report'
 import { buildReviewCycleRecheckReport, type ReviewCycleRecheckContext } from '../../../src/shared/review-cycle'
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
+vi.mock('../../database', () => ({ getProjectDb: vi.fn() }))
 function fixture() {
   const db = new Database(':memory:')
   db.pragma('foreign_keys=ON')
@@ -329,6 +334,16 @@ describe('M03 review cycle migration', () => {
         status='resolved',evidence_hash=?,confirmation_item_index=NULL WHERE cycle_id='cycle-1'`)
         .run(start, start + excerpt.length, hash(excerpt), finding.problemText, finding.expectedText, evidenceHash)
       expect(verifyM03ReviewCycle(db)).toBe(true)
+      db.transaction(() => applyM06ReviewCycleMerge(db))()
+      vi.mocked(getProjectDb).mockReturnValue(db)
+      const finalized = `${merged} 作者定稿。`
+      FinalizationRepository.commit({ finalizationId: 'finalized-cycle-1', draftId: seeded.draftId,
+        chapterNumber: 1, chapterTitle: '第一章', content: finalized, contentHash: hash(finalized),
+        contentRevision: 1, targetFileName: '第一章.txt' })
+      expect(db.prepare('SELECT status FROM drafts WHERE id=?').pluck().get(seeded.draftId)).toBe('finalized')
+      expect(verifyM03ReviewCycle(db)).toBe(true)
+      expect(ReviewCycleRepository.getByReviewId(seeded.reviewId, db)?.recheckCount).toBe(1)
+      expect(() => ReviewCycleRepository.planRecheck('cycle-1', db)).toThrow('REVIEW_CYCLE_CONFLICT')
       db.prepare("UPDATE review_findings SET evidence_hash=? WHERE cycle_id='cycle-1'").run('c'.repeat(64))
       expect(verifyM03ReviewCycle(db)).toBe(false)
       db.prepare("UPDATE review_findings SET evidence_hash=? WHERE cycle_id='cycle-1'").run(evidenceHash)
@@ -395,6 +410,52 @@ describe('M03 review cycle migration', () => {
       expect(migration.verify({} as never)).toBe(true)
       const rejected = createM03Migration({ database: () => db, verifyKnownSchema: () => false })
       expect(rejected.verify({} as never)).toBe(false)
+    } finally { db.close() }
+  })
+})
+
+describe('M06 immutable merged cycle snapshots', () => {
+  it('migrates only a still-current proven v6 merge and verifies its history after draft edits', () => {
+    const db = fixture()
+    try {
+      db.transaction(() => applyM03ReviewCycle(db))()
+      const seeded = seedValid(db)
+      const merged = '甲推开门，作者手工合并了新正文。'
+      db.prepare('UPDATE contents SET body=? WHERE id=(SELECT content_id FROM drafts WHERE id=?)')
+        .run(merged, seeded.draftId)
+      db.prepare("UPDATE drafts SET status='revised' WHERE id=?").run(seeded.draftId)
+      db.prepare("UPDATE revisions SET status='merged',merged_to_draft_id=? WHERE id=?")
+        .run(seeded.draftId, seeded.revisionId)
+      db.prepare("UPDATE review_cycles SET revision_status='merge-committed',merged_hash=? WHERE cycle_id='cycle-1'")
+        .run(hash(merged))
+      expect(verifyM03ReviewCycle(db)).toBe(true)
+      db.transaction(() => applyM06ReviewCycleMerge(db))()
+      expect(db.prepare("SELECT body FROM review_cycle_merges WHERE cycle_id='cycle-1'").pluck().get()).toBe(merged)
+      db.prepare('UPDATE contents SET body=? WHERE id=(SELECT content_id FROM drafts WHERE id=?)')
+        .run(`${merged} 后续作者编辑。`, seeded.draftId)
+      expect(verifyM03ReviewCycle(db)).toBe(true)
+      db.prepare("UPDATE review_cycle_merges SET body='tampered' WHERE cycle_id='cycle-1'").run()
+      expect(verifyM03ReviewCycle(db)).toBe(false)
+      db.prepare("UPDATE review_cycle_merges SET body=? WHERE cycle_id='cycle-1'").run(merged)
+      db.prepare("UPDATE review_cycles SET merged_hash=? WHERE cycle_id='cycle-1'").run(hash('tampered'))
+      expect(verifyM03ReviewCycle(db)).toBe(false)
+    } finally { db.close() }
+  })
+
+  it('rejects an unprovable legacy merge without leaving a snapshot table', () => {
+    const db = fixture()
+    try {
+      db.transaction(() => applyM03ReviewCycle(db))()
+      const seeded = seedValid(db)
+      db.prepare("UPDATE revisions SET status='merged',merged_to_draft_id=? WHERE id=?")
+        .run(seeded.draftId, seeded.revisionId)
+      db.prepare("UPDATE review_cycles SET revision_status='merge-committed',merged_hash=? WHERE cycle_id='cycle-1'")
+        .run(hash('unrecoverable historical merge'))
+      expect(verifyM03ReviewCycle(db)).toBe(false)
+      expect(() => db.transaction(() => applyM06ReviewCycleMerge(db))()).toThrow('REVIEW_CYCLE_MIGRATION_SOURCE_INVALID')
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE name='review_cycle_merges'").get()).toBeUndefined()
+      expect(db.prepare("SELECT merged_hash FROM review_cycles WHERE cycle_id='cycle-1'").pluck().get())
+        .toBe(hash('unrecoverable historical merge'))
     } finally { db.close() }
   })
 })

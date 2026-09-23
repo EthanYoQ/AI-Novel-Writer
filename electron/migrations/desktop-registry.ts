@@ -2,7 +2,8 @@ import { createRequire } from 'node:module'
 import { createMigrationRegistry, type MigrationRegistry, type SchemaReader } from './registry'
 import { createM01Migration, M01_GENERATION_SQL } from './m01-generation-runs'
 import { applyM02CharacterIdentity, createM02Migration, verifyM02CharacterIdentity } from './m02-character-identity'
-import { applyM03ReviewCycle, createM03Migration, verifyM03ReviewCycle } from './m03-review-cycle'
+import { applyM03ReviewCycle, applyM06ReviewCycleMerge, createM03Migration, createM06Migration,
+  verifyM03ReviewCycle } from './m03-review-cycle'
 import { applyM04ImportEffectLedger, createM04Migration } from './m04-import-effect-ledger'
 import { applyM05CharacterAssets, createM05Migration } from './m05-character-assets'
 import { createM00Migration } from './m00-baseline'
@@ -12,7 +13,7 @@ import { SqliteSchemaAdapter, sqliteSchemaFingerprint } from './sqlite-schema-ad
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
-export const CURRENT_DESKTOP_SCHEMA_VERSION = 6
+export const CURRENT_DESKTOP_SCHEMA_VERSION = 7
 let installed: MigrationRegistry | undefined
 
 function installKnownDonorAvatarColumn(db: import('better-sqlite3').Database): void {
@@ -72,10 +73,15 @@ export function getDesktopMigrationRegistry(): MigrationRegistry {
     const m05 = createM05Migration({ database: native,
       verifyKnownSchema: db => characterAssetFingerprints.has(sqliteSchemaFingerprint(native(db)))
         && verifyM02CharacterIdentity(native(db)) && verifyM03ReviewCycle(native(db)) })
-    installed = createMigrationRegistry([m00, m01, m02, m03, m04, m05], [
+    for (const db of references) db.transaction(() => applyM06ReviewCycleMerge(db))()
+    const mergeSnapshotSchemas = schemas(7), mergeSnapshotFingerprints = new Set(mergeSnapshotSchemas.map(item => item.fingerprint))
+    const m06 = createM06Migration({ database: native,
+      verifyKnownSchema: db => mergeSnapshotFingerprints.has(sqliteSchemaFingerprint(native(db)))
+        && verifyM02CharacterIdentity(native(db)) })
+    installed = createMigrationRegistry([m00, m01, m02, m03, m04, m05, m06], [
       ...sourceSchemas, ...baselineSchemas.map(schema => ({ ...schema, version: 0 })),
       ...baselineSchemas, ...generationSchemas, ...identitySchemas,
-      ...reviewCycleSchemas, ...importEffectSchemas, ...characterAssetSchemas,
+      ...reviewCycleSchemas, ...importEffectSchemas, ...characterAssetSchemas, ...mergeSnapshotSchemas,
     ])
     return installed
   } finally { reference.close(); donor.close() }
