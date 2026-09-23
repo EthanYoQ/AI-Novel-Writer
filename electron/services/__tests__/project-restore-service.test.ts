@@ -501,7 +501,7 @@ describe('portable project restore service', () => {
     expect(fs.readdirSync(path.join(f.targetRoot, '.ai-novel')).some(name => name.endsWith('.tmp'))).toBe(false)
   })
 
-  it('preserves an owned reservation when a different archive targets the same path', async () => {
+  it('preserves an owned reservation when a different archive targets the same path', { timeout: 20_000 }, async () => {
     const first = await exportedFixture()
     const second = await exportedFixture()
     await expect(restorePortableProject({

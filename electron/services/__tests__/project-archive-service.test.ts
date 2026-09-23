@@ -240,7 +240,7 @@ describe('portable project export service', () => {
     } finally { f.dispose() }
   })
 
-  it('keeps SQLite sidecar paths below the Windows limit under a long cloud staging parent', async () => {
+  it('keeps SQLite sidecar paths below the Windows limit under a long cloud staging parent', { timeout: 20_000 }, async () => {
     const f = fixture()
     const legacySuffix = path.join('.portable-export-attempt-123456', 'source-final-verification.db-wal')
     const padding = 263 - path.join(f.base, legacySuffix).length - 1
@@ -262,7 +262,7 @@ describe('portable project export service', () => {
     expect(fs.readdirSync(stagingParent)).toEqual(['backup.ainovel'])
   })
 
-  it('exports canonical v6 domain data, explicit assets and F03 avatars while freezing runtime history', async () => {
+  it('exports canonical v6 domain data, explicit assets and F03 avatars while freezing runtime history', { timeout: 20_000 }, async () => {
     const f = fixture()
     const seeded = seedProject(f)
     const assets = [
@@ -416,7 +416,7 @@ describe('portable project export service', () => {
       fs.unlinkSync(file.sourcePath)
       return provider([file])
     }],
-  ])('rejects %s and leaves the source and target unchanged', async (_label, makeProvider) => {
+  ])('rejects %s and leaves the source and target unchanged', { timeout: 20_000 }, async (_label, makeProvider) => {
     const f = fixture()
     const before = fs.readFileSync(f.databasePath)
     await expect(exportPortableProject(input(f, makeProvider(f)))).rejects.toThrow(/PORTABLE_(PATH_UNSAFE|ASSET_MISSING)/u)

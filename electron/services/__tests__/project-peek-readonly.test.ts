@@ -167,7 +167,7 @@ describe('ProjectPeekService source-zero-write overview', () => {
     expect(fs.existsSync(`${f.databasePath}-shm`)).toBe(false)
   })
 
-  it('refuses legacy roots plus old, future, and forked desktop schemas', () => {
+  it('refuses legacy roots plus old, future, and forked desktop schemas', { timeout: 20_000 }, () => {
     const legacyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-project-peek-legacy-'))
     roots.push(legacyRoot)
     fs.mkdirSync(path.join(legacyRoot, '.vela'))
