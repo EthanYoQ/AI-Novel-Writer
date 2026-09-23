@@ -1,4 +1,4 @@
-/* global process */
+/* global process, Buffer */
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
@@ -10,13 +10,15 @@ import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const a08Only = process.argv.includes('--v3-a08-only')
 const a12Only = process.argv.includes('--v3-a12-only')
 const a10Only = process.argv.includes('--v3-a10-only')
-const v3Mode = a10Only || a12Only || process.argv.includes('--v3-a10-a13')
+const v3Mode = a08Only || a10Only || a12Only || process.argv.includes('--v3-a10-a13')
 const buildReceiptPath = process.argv.find(arg => arg.startsWith('--reuse-package='))?.slice('--reuse-package='.length)
-assert(v3Mode || buildReceiptPath, 'pass --reuse-package=<build receipt>, --v3-a10-a13, --v3-a12-only or --v3-a10-only')
+assert(v3Mode || buildReceiptPath, 'pass --reuse-package=<build receipt>, --v3-a08-only, --v3-a10-a13, --v3-a12-only or --v3-a10-only')
 const buildReceipt = buildReceiptPath ? JSON.parse(fs.readFileSync(buildReceiptPath, 'utf8')) : null
-const testedSha = v3Mode ? '6cf79d36d8c9348911232b312cd852e60654f655' : buildReceipt.build?.buildSha
+const testedSha = a08Only ? 'e803b10c461cddbb567ad925743b164f42af9e1a'
+  : v3Mode ? '6cf79d36d8c9348911232b312cd852e60654f655' : buildReceipt.build?.buildSha
 if (!v3Mode) assert.equal(testedSha, 'c6fd2b5e02230d4ddd6e20d92c66bcf8a8f77010')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -26,13 +28,17 @@ assert(changedPaths.every(name => name.startsWith('scripts/') || name.includes('
 const dirtyProduct = git('status', '--porcelain', '--', 'src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml')
   .split('\n').filter(Boolean).filter(line => !/src\/.*\/__tests__\//.test(line))
 assert.deepEqual(dirtyProduct, [], 'dirty product input since package build')
-const packageDir = v3Mode
-  ? path.join(repository, '.runtime', '.cache', 'f04-v3-build', 'world-rail-1')
-  : path.join(repository, 'release', '1.1.0', 'win-unpacked')
+const packageDir = a08Only
+  ? path.join(repository, '.runtime', '.cache', 'f05-u12-m06-package', 'e803b10c', 'win-unpacked')
+  : v3Mode
+    ? path.join(repository, '.runtime', '.cache', 'f04-v3-build', 'world-rail-1')
+    : path.join(repository, 'release', '1.1.0', 'win-unpacked')
 const executablePath = path.join(packageDir, 'AI小说作家.exe')
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
-assert.equal(sha256(executablePath), v3Mode ? '183d7f5956495445d22c53e487232dedd20b6e29b5d9f06e15384732b72daa30' : buildReceipt.artifact.executableSha256)
-assert.equal(sha256(asarPath), v3Mode ? 'a184d35de87eddcea44465da40b17a3727205c8e3e80455c47a9237565ebcf38' : buildReceipt.artifact.asarSha256)
+assert.equal(sha256(executablePath), a08Only ? '35f08ef5f2317f7151d6a2a0884531106a0bb2fba926cab7d09ff50b5f2e8f11'
+  : v3Mode ? '183d7f5956495445d22c53e487232dedd20b6e29b5d9f06e15384732b72daa30' : buildReceipt.artifact.executableSha256)
+assert.equal(sha256(asarPath), a08Only ? '6aa5c19a88481eef994df8d1e4050578e8c860d314ee8e6662656b967b2d190c'
+  : v3Mode ? 'a184d35de87eddcea44465da40b17a3727205c8e3e80455c47a9237565ebcf38' : buildReceipt.artifact.asarSha256)
 const driverSha256 = sha256(fileURLToPath(import.meta.url))
 const runId = randomUUID()
 const evidenceDir = path.join(repository, '.runtime', '.cache', 'f05-u11-graph-profile', runId)
@@ -45,6 +51,8 @@ const secondName = `乙${runId.slice(0, 6)}`
 const relationship = '同盟'
 const thirdName = `丙${runId.slice(0, 6)}`
 const sentinelName = `原有角色${runId.slice(0, 6)}`
+const a08TargetNotes = `U11.A08 档案哨兵甲 ${runId}`
+const a08OtherNotes = `U11.A08 档案哨兵乙 ${runId}`
 const model = { id: 'f05-u11-synthetic', name: 'U11 隔离合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1',
   baseUrl: 'https://api.openai.com/v1', apiKey: 'f05-u11-offline-only', maxTokens: 4096, temperature: 0.7, purposes: ['generation'] }
 const premise = '在潮汐城，守塔人发现被封存的港口档案。调查者沿钟声记录找到三条线索，必须在城门关闭前核对证人、地图和旧港的通行记录。'.repeat(2)
@@ -105,6 +113,70 @@ function rosterFacts(db) {
     relationships: db.prepare('SELECT source_character_id, target_character_id, relation FROM character_relationships ORDER BY relationship_id').all(),
     revision: db.prepare("SELECT revision FROM character_roster_meta WHERE id='main'").pluck().get(),
   })
+}
+async function verifyV3A08(page, db, setStep) {
+  setStep('U11.A08-v3-graph-to-profile')
+  await assertWriter(page, 'U11.A08')
+  const duplicateRows = db.prepare('SELECT character_id, name, notes FROM characters WHERE retired=0 AND name=? ORDER BY character_id').all(firstName)
+  assert.equal(duplicateRows.length, 2, 'A08 fixture must contain exactly two active same-name stable IDs')
+  const target = duplicateRows.find(row => row.notes === a08TargetNotes)
+  const other = duplicateRows.find(row => row.notes === a08OtherNotes)
+  assert(target?.character_id && other?.character_id && target.character_id !== other.character_id)
+  assert.equal(target.name, other.name)
+  assert.notEqual(target.notes, other.notes, 'same-name profiles need a distinct non-name sentinel field')
+
+  await page.locator('.writer-left-rail button[title="角色"]').click()
+  await page.getByText('角色列表（2）', { exact: true }).waitFor({ state: 'visible' })
+  await page.getByRole('button', { name: '关系图谱', exact: true }).click()
+  const canvas = page.locator('canvas[aria-label^="角色关系图谱"]')
+  await canvas.waitFor({ state: 'visible' })
+  const sidebar = page.getByRole('complementary', { name: '图谱人物侧栏' })
+  const targetGraphButton = sidebar.locator(`button[data-graph-character-id="${target.character_id}"]`)
+  await targetGraphButton.waitFor({ state: 'visible' })
+  assert.equal(await sidebar.locator(`button[data-graph-character-id="${other.character_id}"]`).count(), 1)
+  await targetGraphButton.click()
+  await page.getByText(`${target.name} — 编辑档案`, { exact: true }).waitFor({ state: 'visible' })
+
+  const selectedProfile = page.locator(`[data-character-id="${target.character_id}"]`)
+  const otherProfile = page.locator(`[data-character-id="${other.character_id}"]`)
+  const targetClickSelectedTarget = await selectedProfile.getAttribute('aria-pressed')
+  const targetClickSelectedOther = await otherProfile.getAttribute('aria-pressed')
+  assert.equal(targetClickSelectedTarget, 'true', 'graph click did not select its stable character ID')
+  assert.equal(targetClickSelectedOther, 'false', 'same-name profile with another stable ID was selected')
+  const notesField = page.locator('textarea[placeholder="输入备注..."]')
+  const targetClickNotes = await notesField.inputValue()
+  assert.equal(targetClickNotes, target.notes, 'opened profile notes do not match the clicked stable ID')
+  assert.notEqual(targetClickNotes, other.notes, 'opened profile notes came from the other same-name character')
+
+  await page.getByRole('button', { name: '关系图谱', exact: true }).click()
+  await canvas.waitFor({ state: 'visible' })
+  const otherGraphButton = sidebar.locator(`button[data-graph-character-id="${other.character_id}"]`)
+  await otherGraphButton.waitFor({ state: 'visible' })
+  await otherGraphButton.click()
+  await page.waitForFunction(({ targetId, otherId, otherNotes }) => {
+    const profileFor = id => Array.from(document.querySelectorAll('[data-character-id]'))
+      .find(profile => profile.getAttribute('data-character-id') === id)
+    const targetProfile = profileFor(targetId)
+    const otherProfile = profileFor(otherId)
+    const notesField = document.querySelector('textarea[placeholder="输入备注..."]')
+    return targetProfile?.getAttribute('aria-pressed') === 'false'
+      && otherProfile?.getAttribute('aria-pressed') === 'true'
+      && notesField?.value === otherNotes
+  }, { targetId: target.character_id, otherId: other.character_id, otherNotes: other.notes }, { timeout: 5_000 })
+  const otherClickSelectedTarget = await selectedProfile.getAttribute('aria-pressed')
+  const otherClickSelectedOther = await otherProfile.getAttribute('aria-pressed')
+  const otherClickNotes = await notesField.inputValue()
+  assert.equal(otherClickSelectedOther, 'true', 'second graph click did not select the other stable character ID')
+  assert.equal(otherClickSelectedTarget, 'false', 'second graph click left the first same-name profile selected')
+  assert.equal(otherClickNotes, other.notes, 'second graph click opened notes from the wrong stable character ID')
+  assert.notEqual(otherClickNotes, target.notes, 'second graph click reused the first same-name profile notes')
+  pass('U11.A08-v3-graph-to-profile', 'U11.A08',
+    'V3 graph sidebar clicks opened each same-name stable ID independently; selected IDs and distinct notes matched, with no A09 write',
+    { targetCharacterId: target.character_id, otherCharacterId: other.character_id, sharedName: target.name,
+      targetNotes: target.notes, otherNotes: other.notes,
+      targetClick: { selectedTarget: targetClickSelectedTarget, selectedOther: targetClickSelectedOther, notes: targetClickNotes },
+      otherClick: { selectedTarget: otherClickSelectedTarget, selectedOther: otherClickSelectedOther, notes: otherClickNotes },
+      fixtureSeed: 'roster IPC with unique names, then isolated SQLite rename by character_id' })
 }
 async function verifyV3Graph(page, db, setStep) {
   await assertWriter(page, 'V3 graph')
@@ -340,19 +412,35 @@ async function main() {
     projectPath = created.projectPath
     assert.equal(path.relative(scratch, projectPath).startsWith('..'), false)
     if (v3Mode) {
-      currentStep = a10Only ? 'fixture-proposal-prerequisites' : 'fixture-1000-character-roster'
+      currentStep = a10Only ? 'fixture-proposal-prerequisites' : a08Only ? 'fixture-same-name-stable-id-roster' : 'fixture-1000-character-roster'
       const opened = await invoke(page, 'project:open', projectPath, randomUUID(), null)
       assert.equal(opened.success, true, opened.error)
       const session = { projectId: created.projectId, projectPath, leaseId: opened.project.sessionLease }
       const roster = await invoke(page, 'db:character-roster-read', projectPath, session)
-      const names = a10Only ? [sentinelName] : [firstName, secondName, ...Array.from({ length: 998 }, (_, index) => `角色${String(index).padStart(4, '0')}`)]
+      const names = a10Only ? [sentinelName] : a08Only ? [firstName, secondName]
+        : [firstName, secondName, ...Array.from({ length: 998 }, (_, index) => `角色${String(index).padStart(4, '0')}`)]
       const entries = names.map((name, index) => ({ characterId: `draft:${randomUUID()}`, name,
         role: index === 0 ? 'protagonist' : 'supporting', gender: '', age: '', appearance: '', personality: '',
-        background: '', abilities: '', motivation: '', relationships: [], arc: '', notes: '' }))
-      if (!a10Only) entries[0].relationships = [{ target: secondName, targetCharacterId: entries[1].characterId, relation: relationship }]
+        background: '', abilities: '', motivation: '', relationships: [], arc: '',
+        notes: a08Only ? index === 0 ? a08TargetNotes : a08OtherNotes : '' }))
+      if (!a10Only && !a08Only) entries[0].relationships = [{ target: secondName, targetCharacterId: entries[1].characterId, relation: relationship }]
       const seeded = await invoke(page, 'db:character-roster-commit', { operationId: randomUUID(), expectedRevision: roster.revision,
         expectedIdentityRevision: roster.identityRevision, schemaVersion: 1, intent: 'manual_edit', entries }, projectPath, session)
       assert.equal(seeded.success, true, JSON.stringify(seeded))
+      if (a08Only) {
+        const FixtureDatabase = createRequire(import.meta.url)('better-sqlite3')
+        const fixtureDb = new FixtureDatabase(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true })
+        try {
+          const other = fixtureDb.prepare('SELECT character_id FROM characters WHERE retired=0 AND name=?').get(secondName)
+          assert(other?.character_id, 'A08 second stable ID missing before synthetic same-name fixture setup')
+          const renamed = fixtureDb.prepare('UPDATE characters SET name=? WHERE character_id=?').run(firstName, other.character_id)
+          assert.equal(renamed.changes, 1, 'A08 synthetic name collision did not update exactly the selected stable ID')
+          const sameNameRows = fixtureDb.prepare('SELECT character_id, notes FROM characters WHERE retired=0 AND name=?').all(firstName)
+          assert.equal(sameNameRows.length, 2)
+          assert.equal(new Set(sameNameRows.map(row => row.character_id)).size, 2)
+          assert.deepEqual(new Set(sameNameRows.map(row => row.notes)), new Set([a08TargetNotes, a08OtherNotes]))
+        } finally { fixtureDb.close() }
+      }
       if (a10Only) {
         assert.equal((await invoke(page, 'db:project-core-update', { premise }, projectPath, session)).success, true)
         assert.equal((await invoke(page, 'llm:save-model', model)).success, true)
@@ -368,8 +456,10 @@ async function main() {
     const Database = createRequire(import.meta.url)('better-sqlite3')
     db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true })
     if (v3Mode) {
-      currentStep = a10Only ? 'U11.A10-v3-architecture-entry' : a12Only ? 'U11.A12-v3-graph-entry' : 'U11.A13-v3-graph-entry'
-      if (a10Only) await verifyV3Proposal(page, db, fixture, step => { currentStep = step })
+      currentStep = a08Only ? 'U11.A08-v3-graph-entry' : a10Only ? 'U11.A10-v3-architecture-entry'
+        : a12Only ? 'U11.A12-v3-graph-entry' : 'U11.A13-v3-graph-entry'
+      if (a08Only) await verifyV3A08(page, db, step => { currentStep = step })
+      else if (a10Only) await verifyV3Proposal(page, db, fixture, step => { currentStep = step })
       else await verifyV3Graph(page, db, step => { currentStep = step })
     } else {
     currentStep = 'fixture-two-characters'
@@ -439,14 +529,17 @@ async function main() {
           .every(stepId => steps.some(step => step.stepId === stepId && step.outcome === 'PASS'))
       : steps.some(step => step.actionId === actionId && step.outcome === 'PASS')
     const receipt = { outcome: failure ? 'FAIL' : v3Mode ? 'PARTIAL' : 'PASS',
-      qualification: v3Mode ? a10Only ? 'F05_U11_A10_V3_PARTIAL' : a12Only ? 'F05_U11_A12_V3_PARTIAL' : 'F05_U11_A10_A13_V3_PARTIAL' : 'F05_U11_A08_A09_WRITER', evidenceLevel: 'electron',
+      qualification: v3Mode ? a08Only ? 'F05_U11_A08_V3_PARTIAL' : a10Only ? 'F05_U11_A10_V3_PARTIAL' : a12Only ? 'F05_U11_A12_V3_PARTIAL' : 'F05_U11_A10_A13_V3_PARTIAL' : 'F05_U11_A08_A09_WRITER', evidenceLevel: 'electron',
       testedSha, executionHead, changedPaths, sourceDirtyPaths: git('status', '--porcelain').split('\n').filter(Boolean),
       driverSha256, buildReceipt: buildReceiptPath ? { path: buildReceiptPath, sha256: sha256(buildReceiptPath) } : null,
-      packageRoot: packageDir, shell: v3Mode ? 'writer-v3' : 'writer', mode: a10Only ? 'v3-a10-only' : a12Only ? 'v3-a12-only' : v3Mode ? 'v3-a10-a13' : 'legacy-a08-a09',
+      fixtureSetup: a08Only ? { method: 'character-roster-commit with unique names and distinct notes, then isolated SQLite rename by character_id',
+        firstName, secondName, duplicateName: firstName, distinctField: 'notes', targetNotes: a08TargetNotes, otherNotes: a08OtherNotes } : null,
+      packageRoot: packageDir, shell: v3Mode ? 'writer-v3' : 'writer', mode: a08Only ? 'v3-a08-only' : a10Only ? 'v3-a10-only' : a12Only ? 'v3-a12-only' : v3Mode ? 'v3-a10-a13' : 'legacy-a08-a09',
       artifact: { executableSha256: sha256(executablePath), asarSha256: sha256(asarPath) },
       nodeAbi: process.versions.modules, cleanupConfirmed, isolatedRoot: scratch, projectPath, failedStep: failure ? currentStep : null,
       error: failure, diagnostic: failure ? diagnostic : null, steps,
-      unverified: v3Mode ? ['U11.A10', 'U11.A11', 'U11.A12', 'U11.A13'].filter(id => !verified(id))
+      unverified: v3Mode ? (a08Only ? ['U11.A09', 'U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']
+        : ['U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']).filter(id => !verified(id))
         : failure ? ['U11.A08', 'U11.A09'].filter(id => !steps.some(step => step.actionId === id && step.outcome === 'PASS')) : [] }
     const receiptPath = path.join(evidenceDir, 'receipt.json')
     fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
