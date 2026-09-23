@@ -28,10 +28,14 @@ const executionHead = git('rev-parse', 'HEAD')
 const productInputs = ['src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml',
   'vite.config.ts', 'tsconfig.json', 'electron-builder.json5']
 const changedPaths = git('diff', '--name-only', `${testedSha}..${executionHead}`).split('\n').filter(Boolean)
+const changedProductPaths = git('diff', '--name-only', `${testedSha}..${executionHead}`, '--', ...productInputs).split('\n').filter(Boolean)
+const ignoredTestOnlyPaths = changedProductPaths.filter(file => [
+  'electron/services/__tests__/project-archive-service.test.ts',
+  'electron/services/__tests__/release-vector-smoke.test.ts',
+].includes(file))
 const dirtyProductPaths = git('status', '--porcelain', '--untracked-files=all', '--', ...productInputs).split('\n').filter(Boolean)
 const ignoredScreenshotPaths = dirtyProductPaths.filter(line => /^\?\? src\/components\/(?:dialogs|editor|layout\/v2|panels|pages\/v2)\/__tests__\/__screenshots__\/.*\.png$/.test(line))
-assert.equal(git('diff', '--name-only', `${testedSha}..${executionHead}`, '--', ...productInputs), '',
-  'product source changed since fixed package build')
+assert.deepEqual(changedProductPaths.filter(file => !ignoredTestOnlyPaths.includes(file)), [], 'product source changed since fixed package build')
 assert.deepEqual(dirtyProductPaths.filter(line => !ignoredScreenshotPaths.includes(line)), [], 'product build inputs are dirty')
 assert.equal(sha256(exe), expectedExe, 'executable hash changed')
 assert.equal(sha256(asar), expectedAsar, 'bundle hash changed')
@@ -189,10 +193,10 @@ async function main() {
       return canvas.toDataURL('image/png').split(',')[1]
     })
     fs.writeFileSync(sourceImage, Buffer.from(blueBase64, 'base64'))
-    const avatarState = () => {
+    const avatarState = (characterId = firstId) => {
       const db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true, readonly: true })
       try {
-        const row = db.prepare('SELECT asset_revision AS revision, relative_path AS relativePath, content_hash AS contentHash FROM character_avatar_assets WHERE character_id=?').get(firstId)
+        const row = db.prepare('SELECT asset_revision AS revision, relative_path AS relativePath, content_hash AS contentHash, byte_size AS byteSize, mime FROM character_avatar_assets WHERE character_id=?').get(characterId)
         return { row, files: fs.readdirSync(avatarRoot, { recursive: true }).map(name => path.join(avatarRoot, name))
           .filter(file => fs.statSync(file).isFile()).map(file => ({ path: file, sha256: sha256(file) })).sort((a, b) => a.path.localeCompare(b.path)) }
       } finally { db.close() }
@@ -285,7 +289,7 @@ async function main() {
     app = (await launch()).app
     const reopenedProcessPid = app.process().pid
     assert.notEqual(reopenedProcessPid, editProcessPid, 'avatar reopen reused Electron process')
-    const identityPage = await app.firstWindow()
+    let identityPage = await app.firstWindow()
     const identityNotice = identityPage.locator('[role="status"].fixed.inset-x-0.top-10')
     if (await identityNotice.isVisible()) await identityNotice.getByRole('button', { name: '知道了', exact: true }).click()
     await identityPage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
@@ -371,22 +375,171 @@ async function main() {
       assertion: 'Writer V3 Save committed the native-selected avatar to a new SQLite revision and asset bytes; a fresh Electron process reopens the same stable-ID avatar.',
       observed: { characterId: firstId, picker: pickerEvidence.at(-1), editProcessPid, reopenedProcessPid, revision: committedAvatar.row.revision,
         relativePath: committedAvatar.row.relativePath, persistedSha256: committedAvatar.row.contentHash } })
+
+    const assetPath = row => path.join(projectPath, '.ai-novel', ...row.relativePath.split('/'))
+    const previewInfo = page => page.locator(`img[alt="${names[0]}头像预览"]`).evaluate(async image => {
+      const bytes = new Uint8Array(await (await fetch(image.src)).arrayBuffer())
+      const digest = await crypto.subtle.digest('SHA-256', bytes)
+      return { sha256: [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join(''),
+        width: image.naturalWidth, height: image.naturalHeight }
+    })
+    const reopenRolePage = async () => {
+      await app.close()
+      app = null
+      app = (await launch()).app
+      const page = await app.firstWindow()
+      const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
+      if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
+      await page.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
+      await page.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
+      await page.locator('.writer-left-rail button[title="角色"]').click()
+      return page
+    }
+
+    currentStep = 'fixture-second-avatar'
+    identityPage = await reopenRolePage()
+    await identityPage.locator(`[data-character-id="${secondId}"]`).click()
+    await identityPage.getByRole('button', { name: '选择头像', exact: true }).click()
+    chooseNativeAvatar(sourceImage)
+    await identityPage.getByRole('button', { name: '取消头像更改', exact: true }).waitFor({ state: 'visible' })
+    await identityPage.getByRole('button', { name: '保存', exact: true }).last().click()
+    await identityPage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+    const otherAvatar = avatarState(secondId).row
+    assert.equal(otherAvatar.revision, 1)
+    const otherAssetPath = assetPath(otherAvatar)
+    assert.equal(sha256(otherAssetPath), otherAvatar.contentHash)
+    await identityPage.locator(`[data-character-id="${firstId}"]`).click()
+    assert.equal((await previewInfo(identityPage)).sha256, committedAvatar.row.contentHash)
+
+    currentStep = 'u10-a04-large-compress-invalid-preserve'
+    const largeSource = path.join(scratch, 'avatar-large.png')
+    const largeBase64 = await identityPage.evaluate(() => {
+      const canvas = document.createElement('canvas')
+      canvas.width = canvas.height = 768
+      const context = canvas.getContext('2d')
+      const pixels = context.createImageData(768, 768)
+      let seed = 1
+      for (let index = 0; index < pixels.data.length; index += 4) {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+        pixels.data[index] = seed & 255
+        pixels.data[index + 1] = (seed >>> 8) & 255
+        pixels.data[index + 2] = (seed >>> 16) & 255
+        pixels.data[index + 3] = 255
+      }
+      context.putImageData(pixels, 0, 0)
+      return canvas.toDataURL('image/png').split(',')[1]
+    })
+    fs.writeFileSync(largeSource, Buffer.from(largeBase64, 'base64'))
+    const largeSourceBytes = fs.statSync(largeSource).size
+    assert(largeSourceBytes > 100_000 && largeSourceBytes < 4 * 1024 * 1024, 'large synthetic PNG is outside avatar input contract')
+    await identityPage.getByRole('button', { name: '替换头像', exact: true }).click()
+    chooseNativeAvatar(largeSource)
+    await identityPage.getByRole('button', { name: '取消头像更改', exact: true }).waitFor({ state: 'visible' })
+    assert.equal((await previewInfo(identityPage)).sha256, sha256(largeSource))
+    await identityPage.getByRole('button', { name: '保存', exact: true }).last().click()
+    await identityPage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+    const compressedAvatar = avatarState()
+    assert.equal(compressedAvatar.row.revision, committedAvatar.row.revision + 1)
+    assert.equal(sha256(assetPath(compressedAvatar.row)), compressedAvatar.row.contentHash)
+    assert.equal(fs.statSync(assetPath(compressedAvatar.row)).size, compressedAvatar.row.byteSize)
+    assert(compressedAvatar.row.byteSize < largeSourceBytes, 'large PNG was not compressed')
+    const compressedPreview = await previewInfo(identityPage)
+    assert.equal(compressedPreview.sha256, compressedAvatar.row.contentHash)
+    assert(compressedPreview.width <= 256 && compressedPreview.height <= 256 && compressedPreview.width > 0 && compressedPreview.height > 0,
+      'stored avatar exceeds the 256-pixel edge contract')
+    await identityPage.screenshot({ path: path.join(receiptDir, 'v3-avatar-compressed.png') })
+
+    const badSource = path.join(scratch, 'avatar-bad.png')
+    fs.writeFileSync(badSource, 'not an image')
+    await identityPage.getByRole('button', { name: '替换头像', exact: true }).click()
+    chooseNativeAvatar(badSource)
+    await identityPage.getByRole('alert').getByText('请选择有效的 PNG、JPEG 或 WebP 图片。', { exact: true }).waitFor({ state: 'visible' })
+    assert.deepEqual(avatarState(), compressedAvatar, 'invalid image changed SQLite or asset bytes')
+    assert.equal((await previewInfo(identityPage)).sha256, compressedAvatar.row.contentHash)
+    await identityPage.screenshot({ path: path.join(receiptDir, 'v3-avatar-invalid-preserved.png') })
+    steps.push({ stepId: currentStep, actionId: 'U10.A04', outcome: 'PASS',
+      assertion: 'V3 native selection and Save compress a valid large image within the 256-pixel bound; an invalid selected PNG shows an error and preserves the saved SQLite row and asset.',
+      observed: { characterId: firstId, validPicker: pickerEvidence.at(-2), invalidPicker: pickerEvidence.at(-1),
+        sourceBytes: largeSourceBytes, storedBytes: compressedAvatar.row.byteSize, dimensions: compressedPreview,
+        revision: compressedAvatar.row.revision, persistedSha256: compressedAvatar.row.contentHash } })
+
+    currentStep = 'u10-a05-replace-avatar'
+    await identityPage.getByRole('button', { name: '替换头像', exact: true }).click()
+    chooseNativeAvatar(sourceImage)
+    await identityPage.getByRole('button', { name: '取消头像更改', exact: true }).waitFor({ state: 'visible' })
+    await identityPage.getByRole('button', { name: '保存', exact: true }).last().click()
+    await identityPage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+    const replacedAvatar = avatarState()
+    assert.equal(replacedAvatar.row.revision, compressedAvatar.row.revision + 1)
+    assert.equal(sha256(assetPath(replacedAvatar.row)), replacedAvatar.row.contentHash)
+    assert.notEqual(replacedAvatar.row.contentHash, compressedAvatar.row.contentHash)
+    assert.equal(fs.existsSync(assetPath(compressedAvatar.row)), false, 'replaced avatar file was not reclaimed')
+    assert.equal((await previewInfo(identityPage)).sha256, replacedAvatar.row.contentHash)
+    const replaceProcessPid = app.process().pid
+    const replacementPage = await reopenRolePage()
+    const replacementReopenPid = app.process().pid
+    assert.notEqual(replacementReopenPid, replaceProcessPid, 'replacement reused Electron process')
+    const reopenedFirst = replacementPage.locator(`[data-character-id="${firstId}"]`)
+    await reopenedFirst.locator('img').waitFor({ state: 'visible' })
+    await reopenedFirst.click()
+    assert.equal((await previewInfo(replacementPage)).sha256, replacedAvatar.row.contentHash)
+    assert.deepEqual(avatarState(), replacedAvatar, 'replacement changed after process restart')
+    await replacementPage.screenshot({ path: path.join(receiptDir, 'v3-avatar-replaced-reopened.png') })
+    steps.push({ stepId: currentStep, actionId: 'U10.A05', outcome: 'PASS',
+      assertion: 'A second V3 native selection and Save increments the stable-ID revision, reclaims the old file, and reopens the new avatar in a fresh Electron process.',
+      observed: { characterId: firstId, picker: pickerEvidence.at(-1), revision: replacedAvatar.row.revision,
+        oldRelativePath: compressedAvatar.row.relativePath, newRelativePath: replacedAvatar.row.relativePath,
+        persistedSha256: replacedAvatar.row.contentHash, replaceProcessPid, replacementReopenPid } })
+
+    currentStep = 'u10-a06-remove-avatar'
+    await replacementPage.getByRole('button', { name: '移除头像', exact: true }).click()
+    await replacementPage.getByRole('button', { name: '取消头像更改', exact: true }).waitFor({ state: 'visible' })
+    assert.deepEqual(avatarState(), replacedAvatar, 'staged removal changed SQLite or asset bytes')
+    await replacementPage.getByRole('button', { name: '保存', exact: true }).last().click()
+    await replacementPage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+    assert.equal(avatarState().row, undefined, 'removed avatar kept a SQLite binding')
+    assert.equal(fs.existsSync(assetPath(replacedAvatar.row)), false, 'removed avatar file was not reclaimed')
+    assert.deepEqual(avatarState(secondId).row, otherAvatar, 'other character avatar binding changed')
+    assert.equal(sha256(otherAssetPath), otherAvatar.contentHash, 'other character avatar bytes changed')
+    await replacementPage.screenshot({ path: path.join(receiptDir, 'v3-avatar-removed.png') })
+    const removeProcessPid = app.process().pid
+    const removalPage = await reopenRolePage()
+    const removalReopenPid = app.process().pid
+    assert.notEqual(removalReopenPid, removeProcessPid, 'removal reused Electron process')
+    const removedFirst = removalPage.locator(`[data-character-id="${firstId}"]`)
+    const preservedSecond = removalPage.locator(`[data-character-id="${secondId}"]`)
+    await removedFirst.waitFor({ state: 'visible' })
+    await preservedSecond.locator('img').waitFor({ state: 'visible' })
+    assert.equal(await removedFirst.locator('img').count(), 0)
+    await removedFirst.click()
+    await removalPage.getByRole('button', { name: '选择头像', exact: true }).waitFor({ state: 'visible' })
+    assert.equal(await removalPage.locator(`img[alt="${names[0]}头像预览"]`).count(), 0)
+    assert.equal(avatarState().row, undefined)
+    assert.deepEqual(avatarState(secondId).row, otherAvatar)
+    assert.equal(sha256(otherAssetPath), otherAvatar.contentHash)
+    await removalPage.screenshot({ path: path.join(receiptDir, 'v3-avatar-removed-reopened.png') })
+    steps.push({ stepId: currentStep, actionId: 'U10.A06', outcome: 'PASS',
+      assertion: 'V3 Remove and Save clear the stable-ID binding, reclaim its asset, and persist the empty state across restart while the other character keeps its own avatar.',
+      observed: { removedCharacterId: firstId, preservedCharacterId: secondId, removedRelativePath: replacedAvatar.row.relativePath,
+        preservedRelativePath: otherAvatar.relativePath, preservedSha256: otherAvatar.contentHash, removeProcessPid, removalReopenPid } })
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message }
   } finally {
     await app?.close().catch(() => {})
     const verifiedActions = [...new Set(steps.filter(step => step.outcome === 'PASS' && step.actionId).map(step => step.actionId))]
-    const receipt = { schemaVersion: 1, qualification: 'F05_U09_A08_U10_A01_A02_A03_A07_PACKAGED_V3_CHARACTERS',
+    const receipt = { schemaVersion: 1, qualification: 'F05_U09_A08_U10_A01_A02_A03_A04_A05_A06_A07_PACKAGED_V3_CHARACTERS',
       outcome: failure ? 'FAIL' : 'PARTIAL', sliceOutcome: failure ? 'FAIL' : 'PASS', fullU10Qualification: false,
       fullU09Qualification: false, fullF05Qualification: false, evidenceLevel: 'electron', shell: 'writer-v3', testedSha, executionHead, changedPaths,
-      dirtyProductPaths, ignoredScreenshotPaths, package: { directory: packageDir, executableSha256: sha256(exe), asarSha256: sha256(asar) },
+      dirtyProductPaths, ignoredScreenshotPaths, ignoredTestOnlyPaths, package: { directory: packageDir, executableSha256: sha256(exe), asarSha256: sha256(asar) },
       driver: { path: fileURLToPath(import.meta.url), sha256: sha256(fileURLToPath(import.meta.url)) },
       nativePickerHelper: { path: nativePickerHelper, sha256: sha256(nativePickerHelper) }, pickerEvidence,
       evidence: { receipt: path.relative(repository, receiptPath), screenshots: ['v3-character-profile.png', 'v3-avatar-staged.png', 'v3-avatar-discarded.png', 'v3-avatar-saved.png',
-        'v3-avatar-reopened.png', 'v3-character-same-name.png', 'v3-character-same-name-graph.png'].filter(name => fs.existsSync(path.join(receiptDir, name))) },
+        'v3-avatar-reopened.png', 'v3-character-same-name.png', 'v3-character-same-name-graph.png',
+        'v3-avatar-compressed.png', 'v3-avatar-invalid-preserved.png', 'v3-avatar-replaced-reopened.png',
+        'v3-avatar-removed.png', 'v3-avatar-removed-reopened.png'].filter(name => fs.existsSync(path.join(receiptDir, name))) },
       verifiedActions, unverifiedActions: ['U09.A01-U09.A07', 'U09.A09',
-        ...['U10.A01', 'U10.A02', 'U10.A03', 'U10.A07'].filter(id => !verifiedActions.includes(id)),
-        'U10.A04-U10.A06', 'U10.A08-U10.A12', 'F05 whole-product qualification'],
+        ...['U10.A01', 'U10.A02', 'U10.A03', 'U10.A04', 'U10.A05', 'U10.A06', 'U10.A07'].filter(id => !verifiedActions.includes(id)),
+        'U10.A08-U10.A12', 'F05 whole-product qualification'],
       projectPath, scratch, steps, failure }
     fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
     process.stdout.write(`${JSON.stringify({ outcome: receipt.outcome, sliceOutcome: receipt.sliceOutcome, testedSha,
