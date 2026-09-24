@@ -32,7 +32,7 @@ const option = name => {
   return process.argv[index + 1]
 }
 const packageOptions = ['package-dir', 'source-sha', 'exe-sha256', 'asar-sha256', 'build-receipt']
-const candidatePackage = (performanceMode || imeMode) && packageOptions.some(name => process.argv.includes(`--${name}`))
+const candidatePackage = !historicalClassicMode && packageOptions.some(name => process.argv.includes(`--${name}`))
 assert(!candidatePackage || packageOptions.every(name => process.argv.includes(`--${name}`)),
   'candidate package override requires --package-dir --source-sha --exe-sha256 --asar-sha256 --build-receipt together')
 assert(!performanceMode || candidatePackage, '--performance requires the current merged V3 package and its build receipt')
@@ -100,7 +100,16 @@ function verifyCandidateBuildReceipt(receipt, receiptPath) {
   const sourceDirty = sourceGit('status', '--porcelain', '--untracked-files=all') !== ''
   const executionBinding = checkEditorExecutionBinding({ driverRepository:repository, sourceRoot,
     executionHead, sourceHead, testedSha, executionDirty, sourceDirty })
-  assert(executionBinding.ok, `U06 driver execution tree is not the clean U16 source: ${executionBinding.errors.join('; ')}`)
+  if (performanceMode || imeMode) {
+    assert(executionBinding.ok, `U06 driver execution tree is not the clean U16 source: ${executionBinding.errors.join('; ')}`)
+  } else {
+    const editorPaths = ['src/components/editor/CodeMirrorEditor.tsx', 'src/components/editor/DraftEditor.tsx',
+      'src/components/panels/EditorArea.tsx', 'src/styles/redesign/v3-magazine.css']
+    assert.equal(sourceDirty, false, 'candidate package source is dirty')
+    assert.equal(executionGit('diff', '--name-only', `${testedSha}..HEAD`, '--', ...editorPaths), '',
+      'editor code changed since candidate package')
+    assert.equal(executionGit('diff', '--name-only', '--', ...editorPaths), '', 'editor code is dirty')
+  }
   assert.equal(receipt.outcome, 'PARTIAL')
   assert.equal(receipt.failedStep, null)
   assert.equal(receipt.error, null)
@@ -138,7 +147,8 @@ function verifyCandidateBuildReceipt(receipt, receiptPath) {
   assert(samePath(receipt.driver?.path, path.join(sourceRoot, 'scripts', 'f05-u16-packaged-journey.mjs')), 'U16 driver path mismatch')
   assert.equal(receipt.driver?.sha256, fileHash(receipt.driver.path), 'U16 driver bytes changed')
   return { path: receiptPath, sha256: fileHash(receiptPath), executionBinding: {
-    repository, sourceRoot, executionHead, sourceHead, testedSha, clean:!executionDirty && !sourceDirty } }
+    repository, sourceRoot, executionHead, sourceHead, testedSha, clean:!executionDirty && !sourceDirty,
+    mode: performanceMode || imeMode ? 'strict' : 'editor-code-unchanged' } }
 }
 
 async function launch() {
@@ -1108,11 +1118,15 @@ async function main() {
     sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 48,
     retainedReason: 'isolated packaged editor receipt review',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
-  let app, page, projectPath, draftId, failure, exit
+  let app, page, projectPath, draftId, failure, exit, buildReceipt = null
   let currentStep = 'package'
   try {
     assert.equal(fileHash(executablePath), expectedExe)
     assert.equal(fileHash(asarPath), expectedAsar)
+    if (candidatePackage) {
+      const receiptPath = path.resolve(option('build-receipt'))
+      buildReceipt = verifyCandidateBuildReceipt(JSON.parse(fs.readFileSync(receiptPath, 'utf8')), receiptPath)
+    }
     pass('package-bytes', null, 'fixed Windows executable and asar match their source attribution')
     currentStep = 'fixture'
     ;({ app, page } = await launch())
@@ -1172,7 +1186,7 @@ async function main() {
       const line = [...element.querySelectorAll('.cm-line')].find(candidate => candidate.textContent.includes('旧港'))
       const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT)
       let node
-      while ((node = walker.nextNode()) && !node.textContent.includes('旧港')) {}
+      do { node = walker.nextNode() } while (node && !node.textContent.includes('旧港'))
       const from = node.textContent.indexOf('旧港')
       const range = document.createRange()
       range.setStart(node, from); range.collapse(true)
@@ -1221,12 +1235,29 @@ async function main() {
     assert.equal(await storedBody(projectPath, draftId), finalBody, 'saved Markdown source differs from real editor changes')
     pass('draft-units-and-save', 'U06.A07', 'visible 17-unit count agrees with exact persisted Markdown source', { draftId, units: 17 })
     await page.screenshot({ path: path.join(receiptDir, 'v3-editor-preview.png') })
+
+    currentStep = 'U06.A07-reopen'
+    exit = await quit(app)
+    assert.equal(exit.forced, false, 'saved editor did not close normally')
+    app = null
+    ;({ app, page } = await launch())
+    const reopenNotice = page.locator('[role="status"].fixed.inset-x-0.top-10')
+    if (await reopenNotice.isVisible()) await reopenNotice.getByRole('button', { name: '知道了', exact: true }).click()
+    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
+    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
+    const reopenedBody = page.locator('.writer-editor-content .cm-content[contenteditable="true"]')
+    await reopenedBody.waitFor({ state: 'visible' })
+    await reopenedBody.locator('.cm-line').filter({ hasText: '旧港码头' }).waitFor({ state: 'visible' })
+    await reopenedBody.locator('.cm-lp-strong').getByText('回声', { exact: true }).waitFor({ state: 'visible' })
+    await page.locator('.writer-editor-content').getByText('17 字', { exact: true }).waitFor({ state: 'visible' })
+    assert.equal(await storedBody(projectPath, draftId), finalBody, 'reopened SQLite draft differs from saved Markdown source')
+    pass('saved-draft-reopen', 'U06.A07', 'new packaged process reopened the exact saved draft with its V3 text and 17-unit count')
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message }
   } finally {
     if (app) try { exit = await quit(app) } catch (error) { failure ??= { step: 'exit', message: String(error) } }
     const receipt = { outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U06_PACKAGED_V3_PARTIAL',
-      testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths: git('diff', '--name-only', `${testedSha}..HEAD`).split('\n').filter(Boolean),
+      testedSha, ...(candidatePackage ? { buildReceipt } : {}), executionHead: git('rev-parse', 'HEAD'), changedPaths: git('diff', '--name-only', `${testedSha}..HEAD`).split('\n').filter(Boolean),
       sourceDirty: git('status', '--porcelain').split('\n').filter(Boolean),
       artifact: { executablePath, executableSha256: fileHash(executablePath), asarPath, asarSha256: fileHash(asarPath) },
       driver: { path: scriptPath, sha256: fileHash(scriptPath) }, profile: { ...profile, scratch }, projectPath, draftId,
