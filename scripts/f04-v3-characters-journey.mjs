@@ -467,6 +467,25 @@ async function main() {
         'a retry escaped the frozen character ID')
       assert.equal(state(lateId).location, '作者并发值')
       assert.equal(state(finalizedIds[0]).location, '北塔')
+      const taskPanel = latePage.locator('.writer-task-table')
+      if (!(await taskPanel.isVisible())) await latePage.locator('.bottom-tool-btn[title="任务"]').click()
+      await taskPanel.waitFor({ state: 'visible' })
+      const activeCount = taskPanel.locator(':scope > div:first-child > div:first-child > span.font-mono')
+      const history = taskPanel.getByText('历史任务', { exact: true }).locator('..')
+      const finalizedHistory = history.getByText('定稿 — 第2章 南站', { exact: true })
+      let taskState
+      for (let attempt = 0; attempt < 360; attempt++) {
+        taskState = { activeCount: await activeCount.count() ? (await activeCount.textContent())?.trim() : null,
+          finalizedInHistory: await finalizedHistory.isVisible() }
+        if (taskState.activeCount === null && taskState.finalizedInHistory) break
+        await new Promise(resolve => setTimeout(resolve, 250))
+      }
+      if (taskState.activeCount !== null || !taskState.finalizedInHistory) {
+        throw new Error(`A09_TASK_PANEL_NOT_QUIESCENT ${JSON.stringify({ ...taskState,
+          historyTitles: await history.locator('span.flex-1').allTextContents(),
+          completedTextVisible: await latePage.locator('.writer-ai-panel')
+            .getByText('整个工作流已全部完成', { exact: true }).isVisible() })}`)
+      }
       const staleApp = app; app = null
       await closeAppBounded(staleApp)
 
