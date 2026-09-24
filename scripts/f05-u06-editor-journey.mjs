@@ -15,10 +15,14 @@ const imeMode = process.argv.includes('--ime')
 const historicalClassicMode = process.argv.includes('--historical-classic')
 const phaseDiagnostic = process.argv.includes('--phase-diagnostic')
 const selectionDiagnostic = process.argv.includes('--selection-diagnostic')
+const pairedSelectionDiagnostic = process.argv.includes('--paired-selection-diagnostic')
 assert([performanceMode, imeMode, historicalClassicMode].filter(Boolean).length <= 1, 'choose one U06 journey mode')
 assert(!selectionDiagnostic || historicalClassicMode, 'selection diagnostic requires historical Classic mode')
 assert(!selectionDiagnostic || !phaseDiagnostic, 'selection diagnostic cannot combine with phase diagnostic')
 assert(!selectionDiagnostic || !process.argv.includes('--rerun'), 'selection diagnostic cannot be a qualification rerun')
+assert(!pairedSelectionDiagnostic || historicalClassicMode, 'paired selection diagnostic requires historical Classic mode')
+assert(!pairedSelectionDiagnostic || !phaseDiagnostic && !selectionDiagnostic && !process.argv.includes('--rerun'),
+  'paired selection diagnostic cannot combine with other diagnostics or qualification rerun')
 assert(!phaseDiagnostic || performanceMode || historicalClassicMode, 'phase diagnostic requires performance or historical Classic mode')
 assert(!phaseDiagnostic || !process.argv.includes('--rerun'), 'phase diagnostic cannot be a qualification rerun')
 const option = name => {
@@ -314,6 +318,41 @@ async function measureClassicSelectionDiagnostic(page) {
   return { idleFrameMs, ...result }
 }
 
+async function measurePairedSelectionArm(page, control) {
+  await page.evaluate(control => {
+    const editor = document.querySelector('.cm-content[contenteditable="true"]')
+    if (!editor) throw new Error('SELECTION_EDITOR_MISSING')
+    const ready = () => window.getSelection()?.toString() === '春'
+    if (ready() !== control) throw new Error('SELECTION_PAIR_PRESTATE_MISMATCH')
+    let settle, fail, started = false
+    window.__u06PairedSelectionProbe = new Promise((resolve, reject) => { settle = resolve; fail = reject })
+    const finish = (error, result) => {
+      clearTimeout(timeout)
+      document.removeEventListener('keydown', onKeydown, true)
+      if (error) fail(error)
+      else settle(result)
+    }
+    const onKeydown = event => {
+      if (started || !event.isTrusted || event.key !== 'ArrowRight' || !event.shiftKey) return
+      started = true
+      if (control) event.preventDefault()
+      const t0 = performance.now()
+      let readiness = null
+      queueMicrotask(() => { if (ready()) readiness = performance.now() })
+      requestAnimationFrame(() => {
+        const rAF1 = performance.now()
+        if (!ready()) return finish(new Error('SELECTION_PAIR_RAF1_NOT_READY'))
+        readiness ??= rAF1
+        requestAnimationFrame(() => finish(null, { t0, readiness, rAF1, rAF2: performance.now() }))
+      })
+    }
+    const timeout = setTimeout(() => finish(new Error('SELECTION_PAIR_EVENT_OR_FRAMES_TIMEOUT')), 10_000)
+    document.addEventListener('keydown', onKeydown, true)
+  }, control)
+  await page.keyboard.press('Shift+ArrowRight')
+  return page.evaluate(() => window.__u06PairedSelectionProbe)
+}
+
 async function performanceMain() {
   fs.mkdirSync(receiptDir, { recursive: true })
   for (const directory of Object.values(profile)) fs.mkdirSync(directory, { recursive: true })
@@ -493,10 +532,10 @@ async function historicalClassicMain() {
   const protocolPath = path.join(repository, 'docs/plans/novel-quality-program-v3-2026-09-13/feature-union.json')
   const protocol = JSON.parse(fs.readFileSync(protocolPath, 'utf8')).editorProtocol
   let app, failure, exit, sourceExecutionHead = null, sourceDirty = null
-  const assertSourceClean = () => assert(sourceDirty === '' || (phaseDiagnostic || selectionDiagnostic) && sourceDirty === 'M plugins/dsh-ai-novel-writer/AGENTS.md',
+  const assertSourceClean = () => assert(sourceDirty === '' || (phaseDiagnostic || selectionDiagnostic || pairedSelectionDiagnostic) && sourceDirty === 'M plugins/dsh-ai-novel-writer/AGENTS.md',
     'historical source must be clean except the preserved diagnostic-only plugin AGENTS edit')
   let currentStep = 'preflight'
-  const fixtures = {}, samples = {}, phaseSamples = {}, selectionSamples = {}, cpuProfiles = [], environment = { measuredAt: new Date().toISOString(), preview: {
+  const fixtures = {}, samples = {}, phaseSamples = {}, selectionSamples = {}, pairedSelectionSamples = [], cpuProfiles = [], environment = { measuredAt: new Date().toISOString(), preview: {
     classicLivePreviewSupported: false, writerV3LivePreviewRequired: true,
     source: 'historical Classic DraftEditor uses CodeMirror prose without livePreview extension' } }
   fs.mkdirSync(receiptDir, { recursive: true })
@@ -554,7 +593,7 @@ async function historicalClassicMain() {
     currentStep = 'fixture'
     let page
     ;({ launched: app, page } = await launchClassic())
-    for (const units of protocol.units) {
+    for (const units of pairedSelectionDiagnostic ? [3000] : protocol.units) {
       const body = ('春'.repeat(100) + '\n').repeat(units / 100).trimEnd()
       assert.equal((body.match(/春/g) ?? []).length, units)
       const created = await invokeClassic(page, 'project:create', { path: profile.projects, name: `U06-${units}`,
@@ -578,7 +617,7 @@ async function historicalClassicMain() {
     assert.equal(exit.forced, false)
     app = null
 
-    for (const units of protocol.units) {
+    for (const units of pairedSelectionDiagnostic ? [3000] : protocol.units) {
       currentStep = `U06.${units === 3000 ? 'A08' : 'A09'}`
       let markerPath, launchStartedAt
       ;({ launched: app, page, markerPath, launchStartedAt } = await launchClassic(fixtures[units].projectPath))
@@ -619,8 +658,19 @@ async function historicalClassicMain() {
       const cpuProfiler = phaseDiagnostic && units === 200000 ? await openCpuProfiler(page) : null
       if (cpuProfiler) environment.cpuProfiler = { supported: !!cpuProfiler.session, error: cpuProfiler.error ?? null }
       fixtures[units].measuredAt = new Date().toISOString()
+      if (pairedSelectionDiagnostic) {
+        for (let index = 0; index < 8; index++) {
+          await editor.click()
+          await page.keyboard.press('Control+Home')
+          const real = await measurePairedSelectionArm(page, false)
+          const control = await measurePairedSelectionArm(page, true)
+          assert.equal(await page.evaluate(() => window.getSelection()?.toString()), '春', 'control changed editor selection')
+          pairedSelectionSamples.push({ pair: index + 1, real, control })
+          await page.keyboard.press('ArrowLeft')
+        }
+      }
       if (selectionDiagnostic) selectionSamples[units] = []
-      for (let index = 0; index < (selectionDiagnostic ? protocol.sampleCount : protocol.warmupCount + protocol.sampleCount); index++) {
+      for (let index = 0; index < (pairedSelectionDiagnostic ? 0 : selectionDiagnostic ? protocol.sampleCount : protocol.warmupCount + protocol.sampleCount); index++) {
         if (selectionDiagnostic) {
           await editor.click()
           await page.keyboard.press('Control+Home')
@@ -656,11 +706,11 @@ async function historicalClassicMain() {
         }
       }
       await cpuProfiler?.session?.detach()
-      if (!phaseDiagnostic && !selectionDiagnostic) samples[units] = actionSamples
+      if (!phaseDiagnostic && !selectionDiagnostic && !pairedSelectionDiagnostic) samples[units] = actionSamples
       fixtures[units].measuredUntil = new Date().toISOString()
       assert.equal(createHash('sha256').update(storedBody(fixtures[units].projectPath, fixtures[units].draftId, true)).digest('hex'),
         fixtures[units].bodySha256, 'historical measurement changed SQLite')
-      if (!selectionDiagnostic) {
+      if (!selectionDiagnostic && !pairedSelectionDiagnostic) {
         const save = page.locator('button[title="保存（⌘S）"]')
         await save.click()
         await save.waitFor({ state: 'hidden' })
@@ -683,7 +733,18 @@ async function historicalClassicMain() {
     failure = { step: currentStep, name: error?.name, message: error?.message }
   } finally {
     if (app) try { exit = await quit(app) } catch (error) { failure ??= { step: 'exit', message: String(error) } }
-    const receipt = selectionDiagnostic ? { outcome: failure ? 'FAIL' : 'DIAGNOSTIC_ONLY', qualification: 'DIAGNOSTIC_ONLY',
+    const receipt = pairedSelectionDiagnostic ? { outcome: failure ? 'FAIL' : 'DIAGNOSTIC_ONLY', qualification: 'DIAGNOSTIC_ONLY',
+      checker: 'NOT_RUN', sampleUse: 'NOT_ELIGIBLE_FOR_EDITOR_GATE',
+      measurement: '8 predeclared pairs at 3000 units; trusted Shift+ArrowRight, same selected-text readiness predicate and two rAF endpoints; control prevents default editor mutation after real selection',
+      limitation: 'control starts with the real arm selected text already present; this is a measurement-only scheduling floor, not a strict counterfactual',
+      source: { root: sourceRoot, testedSha: sourceSha,
+        executionHead: sourceExecutionHead, clean: sourceDirty === '', sourceDirty }, candidateExecutionHead: git('rev-parse', 'HEAD'),
+      artifact: { executablePath: historicalExe, executableSha256: fs.existsSync(historicalExe) ? fileHash(historicalExe) : null,
+        expectedExecutableSha256: executableSha256, asarPath: historicalAsar,
+        asarSha256: fs.existsSync(historicalAsar) ? fileHash(historicalAsar) : null, expectedAsarSha256: asarSha256 },
+      driver: { path: scriptPath, sha256: fileHash(scriptPath), expectedSha256: driverSha256 },
+      protocol: { id: protocol.id, sha256: fileHash(protocolPath) }, profile: { ...profile, scratch }, fixtures, environment,
+      pairedSelectionSamples, failure, exit } : selectionDiagnostic ? { outcome: failure ? 'FAIL' : 'DIAGNOSTIC_ONLY', qualification: 'DIAGNOSTIC_ONLY',
       checker: 'NOT_RUN', sampleUse: 'NOT_ELIGIBLE_FOR_EDITOR_GATE',
       measurement: 'trusted keydown capture pre-state; document bubble microtask when observable; first and second rAF DOM states; adjacent idle rAF interval; not painted pixels',
       source: { root: sourceRoot, testedSha: sourceSha,
@@ -712,7 +773,7 @@ async function historicalClassicMain() {
         expectedAsarSha256: asarSha256 }, driver: { path: scriptPath, sha256: fileHash(scriptPath), expectedSha256: driverSha256 },
       protocol: { id: protocol.id, sha256: fileHash(protocolPath) }, profile: { ...profile, scratch }, fixtures, environment,
       samples, failure, exit }
-    const receiptPath = path.join(receiptDir, selectionDiagnostic ? 'selection-diagnostic-receipt.json' : phaseDiagnostic ? 'phase-diagnostic-receipt.json' : 'receipt.json')
+    const receiptPath = path.join(receiptDir, pairedSelectionDiagnostic ? 'paired-selection-diagnostic-receipt.json' : selectionDiagnostic ? 'selection-diagnostic-receipt.json' : phaseDiagnostic ? 'phase-diagnostic-receipt.json' : 'receipt.json')
     fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
     process.stdout.write(`${receiptPath}\n`)
   }

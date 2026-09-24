@@ -12,3 +12,10 @@ test('selection diagnostic rejects qualification and older diagnostic flags toge
   assert.notEqual(run.status, 0)
   assert.match(run.stderr, /selection diagnostic cannot combine with phase diagnostic/u)
 })
+
+test('paired selection diagnostic stays separate from other diagnostic modes', () => {
+  const run = spawnSync(process.execPath, [driver, '--historical-classic', '--paired-selection-diagnostic', '--phase-diagnostic'],
+    { encoding: 'utf8', windowsHide: true })
+  assert.notEqual(run.status, 0)
+  assert.match(run.stderr, /paired selection diagnostic cannot combine/u)
+})
