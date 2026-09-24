@@ -2,6 +2,14 @@
 import fs from 'node:fs';
 const currentLevels = JSON.parse(fs.readFileSync(new URL('../../../research/novel-quality-modernization/feature-evidence-levels.json', import.meta.url), 'utf8'));
 const LOCAL_ARCHIVE_ACTIONS = new Set(['U16.A01', 'U16.A02', 'U16.A08', 'U16.A11', 'U16.A12']);
+export const U06_A03_USER_DISPOSITION = Object.freeze({
+  actionId: 'U06.A03',
+  disposition: 'WAIVED_BY_USER',
+  date: '2026-09-25',
+  authority: 'explicit-user-instruction',
+  waivedCriterion: 'real Chinese IME test',
+  currentContract: 'remaining U06 actions retain their existing requirements',
+});
 export function resolveEditorProtocol(frozenProtocol, protocolId) {
   if (protocolId === 'editor-absolute-v1' && frozenProtocol.id === protocolId) return frozenProtocol;
   if (protocolId !== 'editor-interaction-v2' || frozenProtocol.id !== 'editor-absolute-v1') throw new Error('unsupported editor protocol');
@@ -47,9 +55,13 @@ export function isEditorEnvironmentInvalid(failure, attempts) {
     attempt.index === sample.index && attempt.phase === sample.phase &&
     attempt.windowEvents?.some(event => event.type === 'blur' || event.type === 'minimize'));
 }
-export function checkFeatureUnion(plan, { mode = 'planning', owners = [], expectedSha } = {}) {
-  const errors = [], seen = new Set(), steps = new Set(), groupStates = {};
+export function checkFeatureUnion(plan, { mode = 'planning', owners = [], expectedSha,
+  u06A03Disposition = U06_A03_USER_DISPOSITION } = {}) {
+  const errors = [], seen = new Set(), steps = new Set(), groupStates = {}, actionDispositions = {};
   const known = new Set(owners);
+  const waiveU06A03 = u06A03Disposition !== null && typeof u06A03Disposition === 'object' &&
+    !Array.isArray(u06A03Disposition) && Object.keys(u06A03Disposition).length === Object.keys(U06_A03_USER_DISPOSITION).length &&
+    Object.entries(U06_A03_USER_DISPOSITION).every(([key, value]) => u06A03Disposition[key] === value);
   const browserEligible = new Set(currentLevels.browserEligibleActionIds);
   const migrationScenarios = currentLevels.migrationScenarios ?? {};
   if (currentLevels.schemaVersion !== 1 || currentLevels.productShell !== 'writer' ||
@@ -71,6 +83,10 @@ export function checkFeatureUnion(plan, { mode = 'planning', owners = [], expect
       if (feature.id === 'U16' && action.owner !== (LOCAL_ARCHIVE_ACTIONS.has(id) ? 'B01' : 'B02')) errors.push(id + ': wrong archive/network owner');
       if (mode === 'planning') {
         if (action.status !== 'not-run') errors.push(id + ': planning must not claim execution');
+        continue;
+      }
+      if (id === 'U06.A03' && waiveU06A03) {
+        actionDispositions[id] = { ...U06_A03_USER_DISPOSITION, isPass: false };
         continue;
       }
       if (!expectedSha || action.status !== 'pass') errors.push(id + ': not qualified');
@@ -97,11 +113,14 @@ export function checkFeatureUnion(plan, { mode = 'planning', owners = [], expect
       if (steps.has(step)) errors.push(id + ': repeated receipt step');
       steps.add(step);
     }
-    groupStates[feature.id] = actions.length && actions.every(a => a.status === 'pass') ? 'pass' : 'not-qualified';
+    groupStates[feature.id] = actions.length && actions.every(a => a.status === 'pass' ||
+      actionDispositions[a.actionId]?.disposition === 'WAIVED_BY_USER')
+      ? (actions.some(a => actionDispositions[a.actionId]) ? 'qualified-with-user-waiver' : 'pass')
+      : 'not-qualified';
   }
   if (seen.size !== currentLevels.actionCount) errors.push('current evidence-level policy: action count mismatch');
   for (const id of browserEligible) if (!seen.has(id)) errors.push(id + ': unknown browser-eligible action');
-  return { ok: errors.length === 0, errors, groupStates };
+  return { ok: errors.length === 0, errors, groupStates, actionDispositions };
 }
 export function checkEditorReceipt(protocol, receipt) {
   if (protocol.protocolId === 'editor-interaction-v2') return checkEditorInteractionV2(protocol, receipt);

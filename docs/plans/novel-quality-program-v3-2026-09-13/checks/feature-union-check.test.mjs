@@ -25,8 +25,23 @@ filled.features[1].actions.find(action => action.actionId === 'U02.A02').evidenc
 filled.features[1].actions.find(action => action.actionId === 'U02.A07').evidence.migrationScenario = 'legacy-shell-preference-with-project-state-to-writer';
 let negativeCases = 0;
 const reject = result => { assert.equal(result.ok,false); negativeCases++; };
-const qualify = p => checkFeatureUnion(p, { mode:'qualification', owners, expectedSha });
+const qualify = (p, options = {}) => checkFeatureUnion(p, { mode:'qualification', owners, expectedSha, ...options });
 assert.equal(qualify(filled).ok, true); // Shape only, never a product PASS.
+const waivedA03 = clone(filled);
+waivedA03.features.find(feature => feature.id === 'U06').actions.find(action => action.actionId === 'U06.A03').status = 'fail';
+const historicalA03Before = JSON.stringify(waivedA03);
+const waivedA03Result = qualify(waivedA03);
+assert.equal(waivedA03Result.ok, true, 'the exact U06.A03 user waiver must not block the machine gate');
+assert.deepEqual(waivedA03Result.actionDispositions['U06.A03'], {
+  ...editorChecker.U06_A03_USER_DISPOSITION, isPass:false,
+});
+assert.equal(waivedA03Result.groupStates.U06, 'qualified-with-user-waiver');
+assert.equal(JSON.stringify(waivedA03), historicalA03Before, 'the historical A03 FAIL status must remain unchanged');
+reject(qualify(waivedA03, { u06A03Disposition:null }));
+const failedOtherU06 = clone(waivedA03);
+failedOtherU06.features.find(feature => feature.id === 'U06').actions.find(action => action.actionId === 'U06.A04').status = 'fail';
+reject(qualify(failedOtherU06));
+reject(qualify(waivedA03, { u06A03Disposition:{ ...editorChecker.U06_A03_USER_DISPOSITION, actionId:'U06.A04' } }));
 let bad = clone(filled); bad.features[1].actions.find(action => action.actionId === 'U02.A07').evidence.migrationScenario = 'classic-toggle'; reject(qualify(bad));
 bad = clone(filled); delete bad.features[1].actions.find(action => action.actionId === 'U02.A02').evidence.migrationScenario; reject(qualify(bad));
 bad = clone(filled); bad.features[2].actions[0].evidence.evidenceLevels = ['browser'];
