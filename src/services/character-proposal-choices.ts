@@ -6,6 +6,7 @@ export interface CharacterProposalChoices {
   revision: number
   selections: ApproveCharacterProposalRequest['selections']
   relationships: NonNullable<ApproveCharacterProposalRequest['relationships']>
+  edits?: NonNullable<ApproveCharacterProposalRequest['edits']>
 }
 export function createCharacterProposalChoices(batch: CharacterProposalBatch): CharacterProposalChoices {
   return { proposalBatchId: batch.proposalBatchId, revision: batch.revision,

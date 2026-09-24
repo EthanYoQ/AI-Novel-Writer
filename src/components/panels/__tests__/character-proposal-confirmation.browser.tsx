@@ -7,6 +7,7 @@ import { useProjectStore } from '../../../stores/project-store'
 import { useWorkflowStore } from '../../../stores/workflow-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { AdoptGeneratedCharactersCommand } from '../../../services/workflows/commands/architecture.command'
+import { CommitPlanningMaterialCharactersCommand } from '../../../services/workflows/commands/planning-material.command'
 import type { CharacterProposalBatch } from '../../../shared/character-proposal'
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -29,16 +30,39 @@ beforeEach(() => {
  container = document.createElement('div'); document.body.append(container); root = createRoot(container)
 })
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); setActiveProjectSessionContext(null); useProjectStore.setState({ currentProject: null }); vi.restoreAllMocks() })
-async function start() {
+async function start(proposal = batch, planning = false) {
  const pending = useWorkflowStore.getState().startWorkflow({ type: 'post_process', title: '中文角色批量采用', projectPath: session.projectPath, projectSession: session, steps: [
-  { name: '预览', description: '候选', executor: async (_step, context) => { context.data.characterProposalBatch = batch; return '候选尚未正式写入' } },
-  { name: '统一确认采用', description: '作者明确选择', requiresConfirmation: true, executor: (step, context, callbacks) => new AdoptGeneratedCharactersCommand().execute({ step, context, callbacks }) },
+  { name: '预览', description: '候选', executor: async (_step, context) => { context.data.characterProposalBatch = proposal; context.data.planningMaterialCharacterCandidates = proposal.items; return '候选尚未正式写入' } },
+  { name: '统一确认采用', description: '作者明确选择', requiresConfirmation: true, executor: (step, context, callbacks) => planning
+    ? new CommitPlanningMaterialCharactersCommand().execute({ step, context, callbacks })
+    : new AdoptGeneratedCharactersCommand().execute({ step, context, callbacks }) },
  ] })
  await act(async () => root.render(<BottomPanel />))
- await vi.waitFor(() => expect(container.querySelectorAll('select')).toHaveLength(2))
+ await vi.waitFor(() => expect(container.querySelectorAll('select[aria-label^="采用方式："]')).toHaveLength(2))
  await vi.waitFor(() => expect((container.querySelector('[data-testid="workflow-confirmation-confirm"]') as HTMLButtonElement).disabled).toBe(false))
  return { pending, runId: useWorkflowStore.getState().activeRuns[0].id }
 }
+it('V3 规划资料候选先编辑字段再确认，采用请求带作者修改', async () => {
+ const planningBatch: CharacterProposalBatch = { ...batch, source: { kind: 'generation', inputKind: 'planning-material',
+   handle: { projectId: session.projectId, epoch: session.leaseId, rootActionId: 'root', runId: 'run' }, artifacts: [] } }
+ const { pending } = await start(planningBatch, true)
+ await act(async () => {
+   const adoption = container.querySelector<HTMLSelectElement>('select[aria-label="采用方式：同名 · a"]')!
+   adoption.value = 'create'; adoption.dispatchEvent(new Event('change', { bubbles: true }))
+   container.querySelector('details summary')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+ })
+ const name = container.querySelector<HTMLInputElement>('input[aria-label="编辑候选姓名：a"]')
+ expect(name).not.toBeNull()
+ await act(async () => {
+   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, '作者改名')
+   name!.dispatchEvent(new Event('input', { bubbles: true }))
+ })
+ await act(async () => (container.querySelector('[data-testid="workflow-confirmation-confirm"]') as HTMLButtonElement).click())
+ await pending
+ expect(invoke.mock.calls.find(([channel]) => channel === 'character-proposal:approve')?.[1]).toMatchObject({
+   edits: [{ selectionKey: 'a', fields: { name: '作者改名' } }],
+ })
+})
 it('actual等待host一次选择同名乙+新建，显式关系经原批准command传送', async () => {
  const { pending } = await start(); const selects = container.querySelectorAll('select')
  expect(selects[0].value).toBe('keep-unresolved'); expect(selects[1].value).toBe('create')

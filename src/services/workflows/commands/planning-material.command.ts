@@ -1,5 +1,6 @@
 import { characterProposalMaterialChunks as materialChunks, parseMaterialExtraction as parseExtraction, type MaterialExtraction, type MaterialChunk } from '../../../shared/character-proposal-parser'
 import type { CharacterProposalBatch } from '../../../shared/character-proposal'
+import type { CharacterProposalChoices } from '../../character-proposal-choices'
 import { defaultCharacterProposalRelationships, defaultCharacterProposalSelections, formatCharacterProposalPreview } from '../character-proposal-preview'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
 import { composePromptSystemRole, resolvePromptTemplate, renderPrompt } from '../../prompt-templates'
@@ -132,7 +133,7 @@ export class ExtractPlanningMaterialCharactersCommand extends BaseWorkflowComman
     const batch = await ipc.invokeWithProjectSession(projectSession, 'character-proposal:stage', {
       source: { kind: 'generation', inputKind: 'planning-material', handle, artifacts },
     })
-    context.data.planningMaterialProposalBatch = batch
+    context.data.characterProposalBatch = batch
     context.data[PLANNING_MATERIAL_CHARACTER_CANDIDATES] = entries
     if (cards.length === 0) {
       callbacks.log(text('未发现明确角色，角色名单尚未更改', 'No explicit characters were found; the character roster is unchanged.'))
@@ -170,17 +171,20 @@ export class CommitPlanningMaterialCharactersCommand extends BaseWorkflowCommand
       return
     }
 
-    const shown = context.data.planningMaterialProposalBatch as CharacterProposalBatch | undefined
+    const shown = context.data.characterProposalBatch as CharacterProposalBatch | undefined
     if (!shown) throw new Error('CHARACTER_PROPOSAL_PREVIEW_REQUIRED')
     if (shown.status === 'cancelled') throw new Error('CHARACTER_PROPOSAL_CANCELLED')
     if (shown.status === 'approved') return
+    const choices = context.data.characterProposalChoices as CharacterProposalChoices | undefined
+    if (choices && (choices.proposalBatchId !== shown.proposalBatchId || choices.revision !== shown.revision)) throw new Error('CHARACTER_PROPOSAL_CHOICES_STALE')
     const result = await ipc.invokeWithProjectSession(projectSession, 'character-proposal:approve', {
       proposalBatchId: shown.proposalBatchId, expectedRevision: shown.revision,
       operationId: `planning-material-${context.runId}`,
-      selections: defaultCharacterProposalSelections(shown),
-      relationships: defaultCharacterProposalRelationships(shown),
+      selections: choices?.selections ?? defaultCharacterProposalSelections(shown),
+      relationships: choices?.relationships ?? defaultCharacterProposalRelationships(shown),
+      ...(choices?.edits?.length ? { edits: choices.edits } : {}),
     })
-    context.data.planningMaterialProposalBatch = result.batch
+    context.data.characterProposalBatch = result.batch
     callbacks.setProgress(100)
     callbacks.log(text(
       `角色采用决策已保存；身份未明确的提议继续保留`,

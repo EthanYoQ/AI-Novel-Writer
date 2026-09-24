@@ -4,6 +4,7 @@ import { Buffer } from 'node:buffer'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
+import { createServer } from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -14,6 +15,7 @@ const Database = createRequire(import.meta.url)('better-sqlite3')
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 const packageDir = option('package-dir')
+const u09ImportOnly = process.argv.includes('--u09-import-only')
 const packageSourceSha = option('package-source-sha')
 const expectedExe = option('exe-sha256')
 const expectedAsar = option('asar-sha256')
@@ -49,6 +51,28 @@ const nativePickerHelper = path.join(repository, 'scripts', 'f05-u16-native-pick
 const projectName = 'V3C'
 const names = [`甲${runId.slice(0, 4)}`, `乙${runId.slice(0, 4)}`]
 const backgrounds = [`北港线人 ${runId.slice(0, 8)}`, `南站警员 ${runId.slice(0, 8)}`]
+const importNames = [`候选甲${runId.slice(0, 4)}`, `候选乙${runId.slice(0, 4)}`, `候选丙${runId.slice(0, 4)}`]
+const model = { id: 'u09-local-fixture', name: 'U09 controlled fixture', provider: 'openai', protocol: 'openai',
+  modelName: 'gpt-4.1', baseUrl: 'https://api.openai.com/v1', apiKey: 'u09-offline', maxTokens: 8192,
+  temperature: 0.7, purposes: ['generation'] }
+const modelRequests = []
+let fixturePort
+const server = createServer(async (request, response) => {
+  if (request.method !== 'POST' || request.url !== '/v1/chat/completions'
+    || request.headers.authorization !== `Bearer ${model.apiKey}` || modelRequests.length >= 3) {
+    response.writeHead(403).end(); return
+  }
+  const body = JSON.parse(Buffer.concat(await Array.fromAsync(request)).toString('utf8'))
+  modelRequests.push(body)
+  const index = modelRequests.length - 1
+  const content = JSON.stringify({ results: [{ sourceId: '1:1', characterCards: [{
+    name: importNames[index], role: 'supporting', background: `模型背景${index + 1}`, notes: '合成提取',
+  }] }] })
+  response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+  response.write(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 } })}\n\n`)
+  response.end('data: [DONE]\n\n')
+})
 const steps = []
 const pass = (name, observed) => steps.push({ name, outcome: 'PASS', observed })
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
@@ -72,6 +96,14 @@ async function launch() {
     APPDATA: profile.appData, LOCALAPPDATA: profile.localAppData }
   for (const key of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'AI_NOVEL_SMOKE_OPEN_PROJECT']) delete env[key]
   const app = await electron.launch({ executablePath: exe, cwd: packageDir, args: [`--user-data-dir=${profile.userData}`], env, timeout: 30_000 })
+  if (u09ImportOnly) await app.evaluate((_, port) => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (input, options) => {
+      const url = new URL(String(input))
+      if (url.origin !== 'https://api.openai.com' || url.pathname !== '/v1/chat/completions') throw new Error('U09_EXTERNAL_NETWORK_REFUSED')
+      return originalFetch(`http://127.0.0.1:${port}${url.pathname}`, options)
+    }
+  }, fixturePort)
   const page = await app.firstWindow({ timeout: 30_000 })
   page.setDefaultTimeout(15_000)
   await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
@@ -98,12 +130,17 @@ async function addCharacter(page, name) {
 }
 
 async function main() {
+  if (u09ImportOnly) {
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
+    fixturePort = server.address().port
+  }
   fs.mkdirSync(receiptDir, { recursive: true })
   for (const directory of Object.values(profile)) fs.mkdirSync(directory, { recursive: true })
   fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F04 V3 characters synthetic journey', sourceProject: repository,
     createdAt: new Date().toISOString(), ttlHours: 48, retainedReason: 'isolated V3 packaged role evidence',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
   let app
+  let importDb
   let currentStep = 'launch'
   let failure = null
   let projectPath
@@ -115,6 +152,10 @@ async function main() {
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(created.success, true, created.error)
     projectPath = created.projectPath
+    if (u09ImportOnly) {
+      assert.equal((await invoke(page, 'llm:save-model', model)).success, true)
+      assert.equal((await invoke(page, 'llm:set-default-model', model.id)).success, true)
+    }
     await app.close()
     app = null
 
@@ -128,6 +169,93 @@ async function main() {
     await rolePage.locator('.writer-left-rail button[title="角色"]').click()
     await rolePage.getByTitle('新建角色').waitFor({ state: 'visible' })
     assert.equal(await rolePage.locator('[data-shell-variant="v3"]').count(), 1)
+    if (u09ImportOnly) {
+      importDb = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true, readonly: true })
+      const roster = () => importDb.prepare('SELECT character_id AS id,name,background,notes,static_provenance AS provenance FROM characters ORDER BY name').all()
+      const original = roster()
+      const sourceText = [
+        `【原文】${importNames[0]}在旧港发现线索。`,
+        `【大纲】${importNames[0]}负责调查失踪案。`,
+        `【世界观】旧港有严格的夜航禁令。`,
+      ].join('\n')
+      const openImport = async text => {
+        const source = rolePage.getByRole('dialog').getByRole('textbox', { name: '角色卡全文' })
+        if (!await source.isVisible()) await rolePage.getByTitle('粘贴 / 导入角色卡').click()
+        await source.fill(text)
+        await rolePage.getByRole('dialog').getByRole('button', { name: 'AI 提取并预览' }).click()
+        await rolePage.getByRole('dialog').getByRole('button', { name: '发送并提取' }).click()
+        await rolePage.locator('[data-testid="workflow-confirmation-panel"]').waitFor({ state: 'visible', timeout: 30_000 })
+        assert.equal(await rolePage.locator('[data-shell-variant="v3"]').count(), 1)
+      }
+      currentStep = 'u09-a01-extract'
+      await openImport(sourceText)
+      assert.equal(modelRequests.length, 1)
+      const sent = JSON.stringify(modelRequests[0].messages)
+      for (const text of ['【原文】', '【大纲】', '【世界观】', importNames[0]]) assert(sent.includes(text), `fixture did not receive ${text}`)
+      const panel = rolePage.locator('[data-testid="workflow-confirmation-panel"]')
+      await panel.getByText(importNames[0], { exact: false }).first().waitFor({ state: 'visible' })
+      assert.deepEqual(roster(), original, 'extraction changed canonical characters before approval')
+      steps.push({ stepId: currentStep, actionId: 'U09.A01', outcome: 'PASS',
+        assertion: 'V3 paste entry sent text, outline, and worldbuilding to the controlled endpoint and showed a candidate without writing characters.',
+        observed: { modelRequestCount: 1, sourceKinds: ['text', 'outline', 'worldbuilding'], candidateName: importNames[0] } })
+
+      currentStep = 'u09-a02-edit'
+      await panel.locator('select[aria-label^="采用方式："]').first().selectOption('create')
+      await panel.getByText('编辑导入候选', { exact: true }).click()
+      const editedName = `作者改名${runId.slice(0, 4)}`
+      const editedBackground = `作者补充背景 ${runId.slice(0, 8)}`
+      await panel.getByRole('textbox', { name: `编辑候选姓名：1:1:character:1` }).fill(editedName)
+      await panel.getByRole('textbox', { name: `编辑候选背景：1:1:character:1` }).fill(editedBackground)
+      assert.deepEqual(roster(), original, 'editing candidate changed canonical characters before approval')
+      steps.push({ stepId: currentStep, actionId: 'U09.A02', outcome: 'PASS',
+        assertion: 'V3 candidate name and background were editable before approval without changing the canonical roster.',
+        observed: { editedName, editedBackground } })
+
+      currentStep = 'u09-a03-accept'
+      await panel.locator('[data-testid="workflow-confirmation-confirm"]').click()
+      await rolePage.waitForFunction(() => {
+        const button = document.querySelector('button[title="粘贴 / 导入角色卡"]')
+        return button && !button.disabled
+      }, null, { timeout: 30_000 })
+      const accepted = roster()
+      assert.equal(accepted.length, original.length + 1)
+      const saved = accepted.find(row => row.name === editedName)
+      assert(saved && saved.background === editedBackground && saved.notes === '合成提取')
+      const provenance = JSON.parse(saved.provenance)
+      assert.equal(provenance.kind, 'generated')
+      assert.equal(provenance.fields.name.kind, 'author')
+      assert.equal(provenance.fields.background.kind, 'author')
+      assert.equal(provenance.fields.notes, undefined)
+      steps.push({ stepId: currentStep, actionId: 'U09.A03', outcome: 'PASS',
+        assertion: 'One V3 confirmation atomically adopted the candidate with author provenance only on edited fields.',
+        observed: { id: saved.id, editedName, editedBackground, uneditedNotes: saved.notes } })
+
+      currentStep = 'u09-a04-reject-cancel'
+      const rejectedSource = `${importNames[1]}是旧港配角；拒绝此人物。`
+      await openImport(rejectedSource)
+      await panel.locator('select[aria-label^="采用方式："]').first().selectOption('keep-unresolved')
+      await panel.locator('[data-testid="workflow-confirmation-confirm"]').click()
+      await rolePage.waitForFunction(() => {
+        const button = document.querySelector('button[title="粘贴 / 导入角色卡"]')
+        return button && !button.disabled
+      }, null, { timeout: 30_000 })
+      assert.deepEqual(roster(), accepted, 'rejected candidate changed original roster')
+      await rolePage.getByRole('dialog').getByRole('textbox', { name: '角色卡全文' }).waitFor({ state: 'visible' })
+      assert.equal(await rolePage.getByRole('dialog').getByRole('textbox', { name: '角色卡全文' }).inputValue(), rejectedSource,
+        'rejecting every candidate discarded the original pasted text')
+      const cancelledSource = `${importNames[2]}来自作者未采用的世界观草稿。`
+      await openImport(cancelledSource)
+      await panel.locator('[data-testid="workflow-confirmation-cancel"]').click()
+      await rolePage.getByRole('dialog').getByRole('textbox', { name: '角色卡全文' }).waitFor({ state: 'visible', timeout: 30_000 })
+      assert.equal(await rolePage.getByRole('dialog').getByRole('textbox', { name: '角色卡全文' }).inputValue(), cancelledSource)
+      assert.deepEqual(roster(), accepted, 'cancelled candidate changed original roster')
+      assert.equal(modelRequests.length, 3)
+      steps.push({ stepId: currentStep, actionId: 'U09.A04', outcome: 'PASS',
+        assertion: 'Explicit keep-unresolved and workflow cancellation preserved the accepted roster; cancellation retained pasted source text.',
+        observed: { modelRequestCount: modelRequests.length, retainedRejectedSource: rejectedSource,
+          retainedCancelledSource: cancelledSource } })
+      return
+    }
     const [firstId, secondId] = [await addCharacter(rolePage, names[0]), await addCharacter(rolePage, names[1])]
     assert.notEqual(firstId, secondId)
     pass('v3-role-entry', { names, ids: [firstId, secondId] })
@@ -584,12 +712,16 @@ async function main() {
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message }
   } finally {
+    importDb?.close()
     await app?.close().catch(() => {})
+    if (u09ImportOnly) await new Promise(resolve => server.close(resolve))
     const verifiedActions = [...new Set(steps.filter(step => step.outcome === 'PASS' && step.actionId).map(step => step.actionId))]
-    const receipt = { schemaVersion: 1, qualification: 'F05_U09_A08_U10_A01_A02_A03_A04_A05_A06_A07_A09_A10_PACKAGED_V3_CHARACTERS',
+    const receipt = { schemaVersion: 1, qualification: u09ImportOnly ? 'F05_U09_A01_A02_A03_A04_PACKAGED_V3_IMPORT' : 'F05_U09_A08_U10_A01_A02_A03_A04_A05_A06_A07_A09_A10_PACKAGED_V3_CHARACTERS',
       outcome: failure ? 'FAIL' : 'PARTIAL', sliceOutcome: failure ? 'FAIL' : 'PASS', fullU10Qualification: false,
       fullU09Qualification: false, fullF05Qualification: false, evidenceLevel: 'electron', shell: 'writer-v3', testedSha, executionHead, changedPaths,
       dirtyProductPaths, ignoredScreenshotPaths, ignoredTestOnlyPaths, package: { directory: packageDir, executableSha256: sha256(exe), asarSha256: sha256(asar) },
+      ...(u09ImportOnly ? { providerEvidence: { kind: 'controlled-loopback', realModelQualification: false,
+        requestCount: modelRequests.length } } : {}),
       driver: { path: fileURLToPath(import.meta.url), sha256: sha256(fileURLToPath(import.meta.url)) },
       nativePickerHelper: { path: nativePickerHelper, sha256: sha256(nativePickerHelper) }, pickerEvidence,
       evidence: { receipt: path.relative(repository, receiptPath), screenshots: ['v3-character-profile.png', 'v3-avatar-staged.png', 'v3-avatar-discarded.png', 'v3-avatar-saved.png',
@@ -597,7 +729,7 @@ async function main() {
         'v3-avatar-compressed.png', 'v3-avatar-invalid-preserved.png', 'v3-avatar-replaced-reopened.png',
         'v3-avatar-removed.png', 'v3-avatar-removed-reopened.png',
         'v3-avatar-same-name-identity.png', 'v3-avatar-same-name-reopened.png'].filter(name => fs.existsSync(path.join(receiptDir, name))) },
-      verifiedActions, unverifiedActions: ['U09.A01-U09.A07', 'U09.A09',
+      verifiedActions, unverifiedActions: [u09ImportOnly ? 'U09.A05-U09.A09' : 'U09.A01-U09.A07', ...(u09ImportOnly ? [] : ['U09.A09']),
         ...['U10.A01', 'U10.A02', 'U10.A03', 'U10.A04', 'U10.A05', 'U10.A06', 'U10.A07', 'U10.A09', 'U10.A10'].filter(id => !verifiedActions.includes(id)),
         'U10.A08', 'U10.A11-U10.A12', 'F05 whole-product qualification'],
       projectPath, scratch, steps, failure }

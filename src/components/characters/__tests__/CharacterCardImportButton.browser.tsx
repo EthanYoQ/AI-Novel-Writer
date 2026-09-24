@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { page } from 'vitest/browser'
 import { CharacterCardImportButton } from '../CharacterCardImportButton'
+import { toast } from '../../ui/Toast'
 import { useProjectStore } from '../../../stores/project-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useLLMStore } from '../../../stores/llm-store'
@@ -61,6 +62,7 @@ afterEach(async () => {
   useLocaleStore.setState(originals.locale)
   useLLMStore.setState(originals.llm)
   useWorkflowStore.setState(originals.workflow)
+  vi.restoreAllMocks()
 })
 
 describe('角色卡导入入口', () => {
@@ -150,6 +152,24 @@ describe('角色卡导入入口', () => {
     await click('粘贴 / 导入角色卡')
     expect(document.body.textContent).not.toContain('角色.txt')
     expect(document.querySelector('textarea')?.value).toBe('')
+  })
+
+  it('全部暂不采用后保留粘贴原文并准确提示未写入角色', async () => {
+    const warning = vi.spyOn(toast, 'warning').mockImplementation(() => {})
+    const success = vi.spyOn(toast, 'success').mockImplementation(() => {})
+    await paste('姓名：未采用的林舟')
+    start.mockImplementation(async () => {
+      useWorkflowStore.setState({ history: [{ id: 'kept', status: 'completed',
+        characterProposalChoices: { proposalBatchId: 'batch', revision: 0, relationships: [],
+          selections: [{ selectionKey: 'candidate', action: 'keep-unresolved' }] },
+      } as unknown as ReturnType<typeof useWorkflowStore.getState>['history'][number]] })
+      return 'kept'
+    })
+    await click('AI 提取并预览')
+    await click('发送并提取')
+    await vi.waitFor(() => expect(document.querySelector('textarea')?.value).toBe('姓名：未采用的林舟'))
+    expect(warning).toHaveBeenCalledWith('未采用任何角色，输入内容已保留。')
+    expect(success).not.toHaveBeenCalled()
   })
 
   it('旧任务完成时不会清空重挂载后编辑的新草稿', async () => {

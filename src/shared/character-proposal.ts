@@ -51,6 +51,8 @@ export interface ApproveCharacterProposalRequest {
   operationId: string
   selections: CharacterProposalDecision[]
   relationships?: { sourceSelectionKey: string; targetSelectionKey?: string; targetCharacterId?: string; relation: string }[]
+  /** Author changes to planning-material candidates, applied only with an explicit adoption decision. */
+  edits?: { selectionKey: string; fields: Partial<CharacterStaticFields> }[]
 }
 export interface CancelCharacterProposalRequest {
   proposalBatchId: string

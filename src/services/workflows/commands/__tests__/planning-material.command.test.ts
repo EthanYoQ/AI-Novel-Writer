@@ -107,6 +107,9 @@ describe('planning material character extraction', () => {
     expect(preview).toContain('45')
     expect(preview).toContain('守馆二十年')
     expect(preview).toContain('保护幸存者')
+    expect(context.data.characterProposalBatch).toMatchObject({
+      proposalBatchId: 'fixture-proposals', status: 'pending-approval',
+    })
     expect(invoke).not.toHaveBeenCalledWith(
       'db:character-roster-commit',
       expect.anything(),
@@ -122,6 +125,33 @@ describe('planning material character extraction', () => {
       selections: [{ selectionKey: '1:1:character:1', action: 'create' }],
     }), projectSession)
     expect(invoke.mock.calls.some(([channel]) => channel === 'db:character-roster-commit')).toBe(false)
+  })
+
+  it('submits the author choice from the confirmation panel instead of the default adoption', async () => {
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'character-proposal:stage') return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
+      if (channel === 'character-proposal:approve') return { batch: { proposalBatchId: 'fixture-proposals', revision: 1, status: 'approved', items: [] } as unknown as CharacterProposalBatch, created: [] }
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() } })
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream: vi.fn(async (_messages, streamCallbacks) => {
+      streamCallbacks.onDone?.(JSON.stringify({ results: [{ sourceId: '1:1', characterCards: [{ name: '周岚', role: 'supporting' }] }] }), undefined, 'stop')
+      return 'planning-material-request'
+    }) })
+    await new ExtractPlanningMaterialCharactersCommand([{ fileName: '人物设定.md', text: '周岚是配角。' }])
+      .execute({ step: {}, context, callbacks })
+    context.data.characterProposalChoices = {
+      proposalBatchId: 'fixture-proposals', revision: 0,
+      selections: [{ selectionKey: '1:1:character:1', action: 'keep-unresolved' }], relationships: [],
+    }
+
+    await new CommitPlanningMaterialCharactersCommand().execute({ step: {}, context, callbacks })
+
+    expect(invoke).toHaveBeenCalledWith('character-proposal:approve', expect.objectContaining({
+      selections: [{ selectionKey: '1:1:character:1', action: 'keep-unresolved' }],
+    }), projectSession)
   })
 
   it('does not commit extracted candidates after confirmation is cancelled', async () => {

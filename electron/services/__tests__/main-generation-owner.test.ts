@@ -23,6 +23,7 @@ import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
 import { getProjectDb } from '../../database'
 import { BlueprintRepository, type BlueprintRangeCommitRequest } from '../../repositories/blueprint-repository'
+import { commitCharacterIdentities } from '../../repositories/character-roster-repository'
 vi.mock('../../database', () => ({ getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn(() => null) }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const cleanups: (() => void)[] = []
@@ -444,7 +445,7 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
 
 describe('durable character proposals from actual generation artifacts', () => {
   async function proposed() {
-    const output = JSON.stringify({ results: ['1:1', '2:1'].map(sourceId => ({ sourceId, characterCards: [{ name: '林岚', role: 'supporting', notes: `来源${sourceId}` }] })) })
+    const output = JSON.stringify({ results: ['1:1', '2:1'].map(sourceId => ({ sourceId, characterCards: [{ name: '林岚', role: 'supporting', background: '模型背景', appearance: '模型外貌', notes: `来源${sourceId}` }] })) })
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
       options.onVisible({ kind: 'delta', text: output }); return { finishReason: 'stop', usage: null }
     })
@@ -471,6 +472,77 @@ describe('durable character proposals from actual generation artifacts', () => {
     expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(2)
     expect(f.owner.characterProposals.identitySnapshot().characters.every(item => item.provenance.kind === 'generated')).toBe(true)
     expect(f.dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('edits a planning-material candidate at approval with author provenance and exact replay', async () => {
+    const f = await proposed(), batch = f.owner.characterProposals.stage(f.source)
+    const originalItems = structuredClone(batch.items)
+    const request = { proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision, operationId: 'edited-cards',
+      selections: batch.items.map((item, index) => ({ selectionKey: item.selectionKey, action: index === 0 ? 'create' as const : 'keep-unresolved' as const })),
+      edits: [{ selectionKey: batch.items[0]!.selectionKey, fields: { name: '作者改名', background: '作者补充背景' } }] }
+    const approved = f.owner.characterProposals.approve(request)
+    expect(approved.created).toHaveLength(1)
+    const saved = f.db.prepare('SELECT name,background,notes,static_provenance AS provenance FROM characters').get() as {
+      name: string; background: string; notes: string; provenance: string
+    }
+    expect(saved).toMatchObject({ name: '作者改名', background: '作者补充背景', notes: '来源1:1' })
+    const provenance = JSON.parse(saved.provenance)
+    expect(provenance.kind).toBe('generated')
+    expect(provenance.fields.name.kind).toBe('author')
+    expect(provenance.fields.background.kind).toBe('author')
+    expect(provenance.fields.notes).toBeUndefined()
+    expect(f.owner.characterProposals.read(batch.proposalBatchId).items).toEqual(originalItems)
+    expect(f.owner.characterProposals.approve(request)).toEqual(approved)
+    expect(() => f.owner.characterProposals.approve({ ...request, edits: [{ selectionKey: batch.items[0]!.selectionKey,
+      fields: { name: '同 nonce 的不同改名' } }] })).toThrow('CHARACTER_APPROVAL_NONCE_CONFLICT')
+    expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(1)
+  })
+  it('maps a partially edited candidate without overwriting existing author facts', async () => {
+    const f = await proposed()
+    const seeded = commitCharacterIdentities(f.db, { approval: { operationId: 'seed-author', expectedRevision: 0,
+      action: 'author-edit', source: { kind: 'author', source: { projectId: 'project', epoch: 'epoch-1', sourceId: 'author-roster',
+        revision: 0, contentHash: textHash('作者原始角色') } } },
+      changes: [], creations: [{ selectionKey: 'seed', fields: { name: '林岚', role: 'supporting', background: '作者背景', notes: '作者笔记' } }],
+      retireIds: [], relationships: [], resolutions: [] }, () => true)
+    const existingId = seeded.created[0]!.characterId
+    const batch = f.owner.characterProposals.stage(f.source)
+    const request = { proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision, operationId: 'map-edited',
+      selections: batch.items.map((item, index) => index === 0
+        ? { selectionKey: item.selectionKey, action: 'map' as const, characterId: existingId }
+        : { selectionKey: item.selectionKey, action: 'keep-unresolved' as const }),
+      edits: [{ selectionKey: batch.items[0]!.selectionKey, fields: { age: '32' } }] }
+    const approved = f.owner.characterProposals.approve(request)
+    const row = f.db.prepare('SELECT name,age,background,appearance,notes,static_provenance AS provenance FROM characters WHERE character_id=?')
+      .get(existingId) as Record<string, string>
+    expect(row).toMatchObject({ name: '林岚', age: '32', background: '作者背景', appearance: '模型外貌', notes: '作者笔记' })
+    const provenance = JSON.parse(row.provenance)
+    expect(provenance.kind).toBe('author')
+    expect(provenance.fields.age.kind).toBe('author')
+    expect(provenance.fields.appearance.kind).toBe('generated')
+    expect(provenance.fields.background).toBeUndefined()
+    expect(provenance.fields.notes).toBeUndefined()
+    expect(f.owner.characterProposals.approve(request)).toEqual(approved)
+  })
+  it('rejects edited proposals after cancellation, source drift, or invalid target without touching characters', async () => {
+    const f = await proposed(), batch = f.owner.characterProposals.stage(f.source)
+    const base = { proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision, operationId: 'rejected-edit',
+      selections: batch.items.map(item => ({ selectionKey: item.selectionKey, action: 'create' as const })),
+      edits: [{ selectionKey: batch.items[0]!.selectionKey, fields: { name: '作者改名' } }] }
+    expect(() => f.owner.characterProposals.approve({ ...base, edits: [{ selectionKey: 'foreign', fields: { name: '伪造' } }] }))
+      .toThrow('CHARACTER_PROPOSAL_EDIT_INVALID')
+    expect(() => f.owner.characterProposals.approve({ ...base, edits: [base.edits[0]!, base.edits[0]!] }))
+      .toThrow('CHARACTER_PROPOSAL_EDIT_INVALID')
+    expect(() => f.owner.characterProposals.approve({ ...base, selections: base.selections.map((item, index) => ({
+      ...item, action: index === 0 ? 'keep-unresolved' as const : 'create' as const,
+    })) })).toThrow('CHARACTER_PROPOSAL_EDIT_INVALID')
+    expect(() => f.owner.characterProposals.approve({ ...base, expectedRevision: batch.revision + 1 }))
+      .toThrow('CHARACTER_ID_REVISION_CONFLICT')
+    expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
+    f.db.exec("UPDATE project_core SET global_guidance='作者的新约束'")
+    expect(() => f.owner.characterProposals.approve(base)).toThrow('CHARACTER_PROPOSAL_SOURCE_CHANGED')
+    expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
+    f.owner.characterProposals.cancel({ proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision })
+    expect(() => f.owner.characterProposals.approve(base)).toThrow('CHARACTER_PROPOSAL_CANCELLED')
+    expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
   })
   it('reopens pending proposals without generating again and adopts the exact historical source', async () => {
     const f = await proposed(), batch = f.owner.characterProposals.stage(f.source), reopened = f.reopen()
