@@ -7,7 +7,8 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
-import { checkEditorReceipt } from '../docs/plans/novel-quality-program-v3-2026-09-13/checks/feature-union-check.mjs'
+import { assertEditorReceipt, checkEditorExecutionBinding, checkEditorReceipt, isEditorEnvironmentInvalid,
+  recordEditorAttempt, resolveEditorProtocol } from '../docs/plans/novel-quality-program-v3-2026-09-13/checks/feature-union-check.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const performanceMode = process.argv.includes('--performance')
@@ -34,21 +35,26 @@ const packageOptions = ['package-dir', 'source-sha', 'exe-sha256', 'asar-sha256'
 const candidatePackage = (performanceMode || imeMode) && packageOptions.some(name => process.argv.includes(`--${name}`))
 assert(!candidatePackage || packageOptions.every(name => process.argv.includes(`--${name}`)),
   'candidate package override requires --package-dir --source-sha --exe-sha256 --asar-sha256 --build-receipt together')
-assert(!candidatePackage || !process.argv.includes('--rerun'), 'candidate package cannot use historical performance rerun')
+assert(!performanceMode || candidatePackage, '--performance requires the current merged V3 package and its build receipt')
+assert(!process.argv.includes('--prior-receipt') || performanceMode && process.argv.includes('--rerun'), '--prior-receipt requires --performance --rerun')
+assert(!process.argv.includes('--rerun') || performanceMode && process.argv.includes('--prior-receipt'), '--rerun requires --performance --prior-receipt <path>')
 if (candidatePackage) {
   assert.match(option('source-sha'), /^[a-f0-9]{40}$/u)
   assert.match(option('exe-sha256'), /^[a-f0-9]{64}$/u)
   assert.match(option('asar-sha256'), /^[a-f0-9]{64}$/u)
 }
 const rerunIndex = performanceMode && process.argv.includes('--rerun') ? 1 : 0
-const priorReceipt = rerunIndex ? path.join(repository, '.runtime', '.cache', 'f05-u06-editor-performance',
-  '0a2c4de3-913b-4c2a-ae31-67977f2fbfc0', 'receipt.json') : null
-const packageDir = candidatePackage ? path.resolve(option('package-dir')) : path.join(repository, '.runtime', '.cache', 'f04-v3-build', performanceMode || imeMode ? 'world-rail-1' : 's13-core-1')
+const priorReceipt = rerunIndex ? path.resolve(option('prior-receipt')) : null
+const packageDir = candidatePackage ? path.resolve(option('package-dir')) :
+  path.join(repository, '.runtime', '.cache', 'f04-v3-build', imeMode ? 'world-rail-1' : 's13-core-1')
 const executablePath = path.join(packageDir, 'AI小说作家.exe')
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
-const testedSha = candidatePackage ? option('source-sha') : performanceMode || imeMode ? '6cf79d36d8c9348911232b312cd852e60654f655' : '7110f53d5ce173d70bc0dcef90209bccb38d9fff'
-const expectedExe = candidatePackage ? option('exe-sha256') : performanceMode || imeMode ? '183d7f5956495445d22c53e487232dedd20b6e29b5d9f06e15384732b72daa30' : 'c3864b55649358e6acae5e828861dc231521f75e5bfa0422212d86b3349f6669'
-const expectedAsar = candidatePackage ? option('asar-sha256') : performanceMode || imeMode ? 'a184d35de87eddcea44465da40b17a3727205c8e3e80455c47a9237565ebcf38' : 'bf2f5c95ae8b72e377710759bfdb392cd0344f9e4c2d67fb0ef0ecbfb7b37b66'
+const testedSha = candidatePackage ? option('source-sha') : imeMode ? '6cf79d36d8c9348911232b312cd852e60654f655' :
+  '7110f53d5ce173d70bc0dcef90209bccb38d9fff'
+const expectedExe = candidatePackage ? option('exe-sha256') : imeMode ? '183d7f5956495445d22c53e487232dedd20b6e29b5d9f06e15384732b72daa30' :
+  'c3864b55649358e6acae5e828861dc231521f75e5bfa0422212d86b3349f6669'
+const expectedAsar = candidatePackage ? option('asar-sha256') : imeMode ? 'a184d35de87eddcea44465da40b17a3727205c8e3e80455c47a9237565ebcf38' :
+  'bf2f5c95ae8b72e377710759bfdb392cd0344f9e4c2d67fb0ef0ecbfb7b37b66'
 const scriptPath = fileURLToPath(import.meta.url)
 const fileHash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
@@ -81,6 +87,7 @@ function verifyCandidateBuildReceipt(receipt, receiptPath) {
   const sourceRoot = path.resolve(packageDir, '..', '..', '..')
   const samePath = (left, right) => path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase()
   const sourceGit = (...args) => execFileSync('git', args, { cwd: sourceRoot, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }).trim()
+  const executionGit = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }).trim()
   const receiptRelative = path.relative(sourceRoot, receiptPath).replaceAll('\\', '/')
   assert.match(receiptRelative, /^\.runtime\/\.cache\/f05-u16-packaged\/[0-9a-f-]{36}\/receipt\.json$/u, 'not a U16 build receipt path')
   const version = JSON.parse(fs.readFileSync(path.join(sourceRoot, 'package.json'), 'utf8')).version
@@ -88,6 +95,12 @@ function verifyCandidateBuildReceipt(receipt, receiptPath) {
   assert(samePath(sourceGit('rev-parse', '--show-toplevel'), sourceRoot), 'candidate source root mismatch')
   assert.equal(sourceGit('rev-parse', 'HEAD'), testedSha, 'candidate source HEAD mismatch')
   assert.equal(sourceGit('status', '--porcelain', '--untracked-files=all'), '', 'candidate source dirty after build')
+  const executionHead = executionGit('rev-parse', 'HEAD'), sourceHead = sourceGit('rev-parse', 'HEAD')
+  const executionDirty = executionGit('status', '--porcelain', '--untracked-files=all') !== ''
+  const sourceDirty = sourceGit('status', '--porcelain', '--untracked-files=all') !== ''
+  const executionBinding = checkEditorExecutionBinding({ driverRepository:repository, sourceRoot,
+    executionHead, sourceHead, testedSha, executionDirty, sourceDirty })
+  assert(executionBinding.ok, `U06 driver execution tree is not the clean U16 source: ${executionBinding.errors.join('; ')}`)
   assert.equal(receipt.outcome, 'PARTIAL')
   assert.equal(receipt.failedStep, null)
   assert.equal(receipt.error, null)
@@ -124,7 +137,8 @@ function verifyCandidateBuildReceipt(receipt, receiptPath) {
   assert.equal(receipt.artifact?.asarSha256, expectedAsar)
   assert(samePath(receipt.driver?.path, path.join(sourceRoot, 'scripts', 'f05-u16-packaged-journey.mjs')), 'U16 driver path mismatch')
   assert.equal(receipt.driver?.sha256, fileHash(receipt.driver.path), 'U16 driver bytes changed')
-  return { path: receiptPath, sha256: fileHash(receiptPath) }
+  return { path: receiptPath, sha256: fileHash(receiptPath), executionBinding: {
+    repository, sourceRoot, executionHead, sourceHead, testedSha, clean:!executionDirty && !sourceDirty } }
 }
 
 async function launch() {
@@ -270,6 +284,128 @@ async function measureEditorAction(page, action, editorSelector = '.writer-edito
   return result
 }
 
+async function measureEditorInteractionV2(page, action, expectedDocument, editorSelector = '.writer-editor-content .cm-content[contenteditable="true"]', diagnostic = false, cpuProfileTitle = null) {
+  await page.evaluate(({ action, expectedDocument, editorSelector, diagnostic, cpuProfileTitle }) => {
+    const editor = document.querySelector(editorSelector)
+    if (!editor) throw new Error('PERF_EDITOR_MISSING')
+    const view = editor.cmTile?.root?.view
+    if (!view?.state?.doc || !view.state.selection?.main) throw new Error('PERF_EDITOR_STATE_UNAVAILABLE')
+    const firstLine = () => {
+      const line = editor.querySelector('.cm-line')?.cloneNode(true)
+      line?.querySelector('.cm-lp-paperhead')?.remove()
+      return line?.textContent ?? ''
+    }
+    const before = view.state.selection.main
+    const nativeSelection = window.getSelection()
+    if (!document.hasFocus()) throw new Error('PERF_WINDOW_NOT_FOCUSED')
+    if (view.state.doc.toString() !== expectedDocument || before.anchor !== 0 || before.head !== 0 || nativeSelection?.toString()) {
+      throw new Error('PERF_PRESTATE_MISMATCH')
+    }
+    let settle, fail
+    window.__u06EditorProbe = new Promise((resolve, reject) => { settle = resolve; fail = reject })
+    const longTasks = []
+    const observer = PerformanceObserver.supportedEntryTypes.includes('longtask')
+      ? new PerformanceObserver(list => longTasks.push(...list.getEntries())) : null
+    observer?.observe({ entryTypes: ['longtask'] })
+    let start = null
+    let firstVisibleAt = null
+    let frameChecks = 0
+    let profileStarted = false
+    const eventType = action === 'input' ? 'beforeinput' : 'keydown'
+    const terminal = () => {
+      const selection = view.state.selection.main
+      const browserSelection = window.getSelection()
+      const documentMatches = action === 'input'
+        ? view.state.doc.toString() === `测${expectedDocument}`
+        : view.state.doc.toString() === expectedDocument
+      const caretOrSelectionMatches = action === 'input'
+        ? selection.anchor === 1 && selection.head === 1 && !!browserSelection?.isCollapsed
+        : selection.anchor === 0 && selection.head === 1 && view.state.sliceDoc(0, 1) === '春' && browserSelection?.toString() === '春'
+      const line = editor.querySelector('.cm-line')
+      const lineText = firstLine()
+      const editorRect = editor.getBoundingClientRect()
+      const lineRect = line?.getBoundingClientRect()
+      const browserRange = browserSelection?.rangeCount ? browserSelection.getRangeAt(0) : null
+      const rangeRect = browserRange?.getBoundingClientRect()
+      let nativeAnchor = null, nativeHead = null, nativeRangeStart = null, nativeRangeEnd = null
+      if (browserSelection?.anchorNode && browserSelection.focusNode) {
+        try {
+          nativeAnchor = view.posAtDOM(browserSelection.anchorNode, browserSelection.anchorOffset)
+          nativeHead = view.posAtDOM(browserSelection.focusNode, browserSelection.focusOffset)
+          if (browserRange) {
+            nativeRangeStart = view.posAtDOM(browserRange.startContainer, browserRange.startOffset)
+            nativeRangeEnd = view.posAtDOM(browserRange.endContainer, browserRange.endOffset)
+          }
+        } catch { /* an unmappable native selection is a failed terminal state */ }
+      }
+      const focused = document.hasFocus()
+      const visible = document.visibilityState === 'visible'
+      const editorStyle = getComputedStyle(editor)
+      const lineInViewport = !!lineRect && lineRect.top < innerHeight && lineRect.bottom > 0 && lineRect.left < innerWidth && lineRect.right > 0
+      const visibleDomMatches = visible && editorStyle.visibility !== 'hidden' && Number(editorStyle.opacity) > 0 &&
+        editorRect.width > 0 && editorRect.height > 0 && lineInViewport && lineRect.width > 0 && lineRect.height > 0 &&
+        (action === 'input' ? lineText.startsWith('测') : lineText.startsWith('春') && !!rangeRect && rangeRect.height > 0)
+      return { documentMatches, caretOrSelectionMatches, visibleDomMatches, secondRaf:true, nativeAnchor, nativeHead,
+        nativeRangeStart, nativeRangeEnd, focused, visible,
+        documentLength: view.state.doc.length, anchor: selection.anchor, head: selection.head, visiblePrefix: lineText.slice(0, 8) }
+    }
+    const finish = (error, end, observation) => {
+      clearTimeout(timeout)
+      document.removeEventListener(eventType, onEvent, true)
+      if (observer) {
+        longTasks.push(...observer.takeRecords())
+        observer.disconnect()
+      }
+      if (error && profileStarted) console.profileEnd(cpuProfileTitle)
+      if (error) fail(error)
+      else settle({ elapsedMs: end - start, longTasksMs: longTasks.filter(entry =>
+        entry.startTime <= end && entry.startTime + entry.duration >= start).map(entry => entry.duration),
+        trusted: true, eventType, observation,
+        ...(diagnostic ? { phase: action === 'input' ? { totalMs: end - start,
+          beforeInputToVisibleFrameMs: firstVisibleAt - start,
+          visibleFrameToNextFrameMs: end - firstVisibleAt, frameChecks } : { totalMs: end - start,
+          eventToFirstVisibleRafMs: firstVisibleAt - start,
+          firstVisibleToNextRafMs: end - firstVisibleAt, frameChecks } } : {}) })
+    }
+    const nextFrame = () => requestAnimationFrame(() => {
+      if (diagnostic) frameChecks++
+      const observed = terminal()
+      if (!observed.focused || !observed.visible) return finish(new Error('PERF_WINDOW_NOT_FOCUSED_AFTER_EVENT'))
+      if (!observed.documentMatches || !observed.caretOrSelectionMatches || !observed.visibleDomMatches) return nextFrame()
+      if (diagnostic) firstVisibleAt = performance.now()
+      if (profileStarted) { console.profileEnd(cpuProfileTitle); profileStarted = false }
+      requestAnimationFrame(() => {
+        const finalState = terminal()
+        if (!finalState.focused || !finalState.visible) return finish(new Error('PERF_WINDOW_NOT_FOCUSED_AFTER_EVENT'))
+        if (!finalState.documentMatches || !finalState.caretOrSelectionMatches || !finalState.visibleDomMatches) return nextFrame()
+        finish(null, performance.now(), { eventCapturedInRenderer:true, trustedEvent:true, targetIsEditor:true,
+          capturePhase:true, preStateMatched:true, terminal:finalState })
+      })
+    })
+    const onEvent = event => {
+      const expectedEvent = action === 'input' ? event.type === 'beforeinput' && event.data === '测' && event.inputType === 'insertText'
+        : event.type === 'keydown' && event.key === 'ArrowRight' && event.shiftKey
+      if (start !== null || !event.isTrusted || !editor.contains(event.target) || !expectedEvent) return
+      start = performance.now()
+      if (cpuProfileTitle) { console.profile(cpuProfileTitle); profileStarted = true }
+      nextFrame()
+    }
+    const timeout = setTimeout(() => finish(new Error(start === null ? `PERF_${action.toUpperCase()}_EVENT_NOT_CAPTURED`
+      : `PERF_${action.toUpperCase()}_TERMINAL_STATE_TIMEOUT`)), 10_000)
+    document.addEventListener(eventType, onEvent, true)
+  }, { action, expectedDocument, editorSelector, diagnostic, cpuProfileTitle })
+  if (action === 'input') await page.keyboard.insertText('测')
+  else await page.keyboard.press('Shift+ArrowRight')
+  const result = await page.evaluate(() => window.__u06EditorProbe)
+  assert.equal(result.trusted, true)
+  if (action === 'input') {
+    await page.keyboard.press('Control+z')
+    await page.waitForFunction(({ selector, expected }) => document.querySelector(selector)?.cmTile?.root?.view?.state?.doc.toString() === expected,
+      { selector: editorSelector, expected: expectedDocument })
+  } else await page.keyboard.press('ArrowLeft')
+  return result
+}
+
 async function measureClassicSelectionDiagnostic(page) {
   const idleFrameMs = await page.evaluate(() => new Promise(resolve =>
     requestAnimationFrame(first => requestAnimationFrame(second => resolve(second - first)))))
@@ -360,9 +496,12 @@ async function performanceMain() {
     sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 48,
     retainedReason: 'isolated packaged editor performance evidence',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
-  let app, page, failure, exit, buildReceipt = null
+  let app, page, failure, exit, buildReceipt = null, previous = null, currentSample = null
   let currentStep = 'package'
-  const samples = {}, phaseSamples = {}, cpuProfiles = [], fixtures = {}, environment = {}
+  const frozenProtocol = JSON.parse(fs.readFileSync(path.join(repository, 'docs/plans/novel-quality-program-v3-2026-09-13/feature-union.json'), 'utf8')).editorProtocol
+  const protocol = resolveEditorProtocol(frozenProtocol, 'editor-interaction-v2')
+  const samples = {}, sampleAttempts = [], phaseSamples = {}, cpuProfiles = [], fixtures = {}, environment = {}
+  let measurementConditions = null
   try {
     assert.equal(fileHash(executablePath), expectedExe)
     assert.equal(fileHash(asarPath), expectedAsar)
@@ -370,15 +509,17 @@ async function performanceMain() {
       const receiptPath = path.resolve(option('build-receipt'))
       buildReceipt = verifyCandidateBuildReceipt(JSON.parse(fs.readFileSync(receiptPath, 'utf8')), receiptPath)
     }
-    const previous = priorReceipt ? JSON.parse(fs.readFileSync(priorReceipt, 'utf8')) : null
+    previous = priorReceipt ? JSON.parse(fs.readFileSync(priorReceipt, 'utf8')) : null
     if (previous) {
+      assert.equal(previous.outcome, 'INVALID', 'only an environment INVALID may be rerun')
       assert.equal(previous.artifact.executableSha256, expectedExe)
       assert.equal(previous.artifact.asarSha256, expectedAsar)
       assert.equal(previous.testedSha, testedSha)
+      assert.equal(previous.driver.sha256, fileHash(scriptPath), 'driver changed since invalid sample')
     }
-    const protocol = JSON.parse(fs.readFileSync(path.join(repository, 'docs/plans/novel-quality-program-v3-2026-09-13/feature-union.json'), 'utf8')).editorProtocol
-    assert.equal(protocol.id, 'editor-absolute-v1')
-    ;({ app, page } = await launch())
+    const launched = await launch()
+    app = launched.app
+    page = launched.page
     for (const units of protocol.units) {
       currentStep = `fixture-${units}`
       const name = `U06-${units}`
@@ -409,14 +550,26 @@ async function performanceMain() {
       const window = BrowserWindow.getAllWindows()[0]
       window.setSize(1440, 900)
       window.webContents.setZoomLevel(0)
+      window.focus()
     })
+    await page.bringToFront()
     environment.window = await app.evaluate(({ BrowserWindow }) => {
       const window = BrowserWindow.getAllWindows()[0]
       return { width: window.getSize()[0], height: window.getSize()[1], zoomLevel: window.webContents.getZoomLevel(),
-        zoomFactor: window.webContents.getZoomFactor() }
+        zoomFactor: window.webContents.getZoomFactor(), visible: window.isVisible(), minimized: window.isMinimized(),
+        focused: window.isFocused(), webContentsFocused: window.webContents.isFocused() }
     })
-    assert.deepEqual(environment.window, { width: 1440, height: 900, zoomLevel: 0, zoomFactor: 1 })
+    assert.deepEqual(environment.window, { width: 1440, height: 900, zoomLevel: 0, zoomFactor: 1,
+      visible: true, minimized: false, focused: true, webContentsFocused: true })
+    environment.display = await page.evaluate(() => ({ devicePixelRatio: window.devicePixelRatio, width: screen.width,
+      height: screen.height, availWidth: screen.availWidth, availHeight: screen.availHeight }))
     if (previous) assert.deepEqual(environment.window, previous.environment.window)
+    await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      globalThis.__u06WindowEvents = []
+      window.on('blur', () => globalThis.__u06WindowEvents.push({ type:'blur', at:Date.now() }))
+      window.on('minimize', () => globalThis.__u06WindowEvents.push({ type:'minimize', at:Date.now() }))
+    })
     for (const units of protocol.units) {
       currentStep = `U06.${units === 3000 ? 'A08' : 'A09'}`
       await page.locator('.writer-shelf').getByRole('button', { name: `打开《U06-${units}》` }).click()
@@ -426,32 +579,65 @@ async function performanceMain() {
       await editor.locator('.cm-lp-dropcap-char').waitFor({ state: 'visible' })
       await page.locator('.writer-editor-content').getByText(`${units.toLocaleString('zh-CN')} 字`, { exact: true }).waitFor({ state: 'visible' })
       const font = await page.locator('.writer-editor-content .cm-scroller').evaluate(element => getComputedStyle(element).fontFamily)
+      const fontLoad = await editor.evaluate(async () => {
+        await document.fonts.ready
+        const faces = [...document.fonts].filter(face => face.family.replaceAll('"', '').includes('LXGW WenKai'))
+        return { check:document.fonts.check('16px "LXGW WenKai"'), faces:faces.map(face => ({ family:face.family, status:face.status })) }
+      })
+      const fontLoaded = fontLoad.check && fontLoad.faces.some(face => face.status === 'loaded')
       environment.font ??= font
       assert.equal(font, environment.font, 'font drift between fixed fixtures')
+      environment.fontLoadedByUnits ??= {}
+      environment.fontLoadedByUnits[units] = { loaded:fontLoaded, ...fontLoad }
+      assert.equal(fontLoaded, true, 'V3 LXGW WenKai font not loaded')
       if (previous) assert.equal(font, previous.environment.font)
-      if (phaseDiagnostic) {
-        const fontLoaded = await editor.evaluate(async () => {
-          await document.fonts.ready
-          return document.fonts.check('16px "LXGW WenKai"')
-        })
-        environment.fontLoadedByUnits ??= {}
-        environment.fontLoadedByUnits[units] = fontLoaded
-        assert.equal(fontLoaded, true, 'V3 LXGW WenKai font not loaded')
+      if (!measurementConditions) {
+        measurementConditions = { protocolId:protocol.protocolId, testedSha, driverSha256:fileHash(scriptPath),
+          executableSha256:expectedExe, asarSha256:expectedAsar, window:environment.window, display:environment.display, font, fontLoaded }
+        if (previous) {
+          const sameConditions = JSON.stringify(previous.measurementConditions) === JSON.stringify(measurementConditions)
+          assert(sameConditions, 'rerun test machine, window, display, font, package, driver, or protocol changed')
+        }
       }
+      await page.bringToFront()
       assert.equal(createHash('sha256').update(storedBody(fixtures[units].projectPath, fixtures[units].draftId)).digest('hex'),
         fixtures[units].bodySha256, 'fixture changed before measurement')
-      const actionSamples = { input: { warmupSamplesMs: [], rawSamplesMs: [], longTasksMs: [] },
-        selection: { warmupSamplesMs: [], rawSamplesMs: [], longTasksMs: [] } }
+      if (!phaseDiagnostic) samples[units] = { writer: {} }
       if (phaseDiagnostic) phaseSamples[units] = { warmup: [], raw: [] }
       const cpuProfiler = phaseDiagnostic && units === 200000 ? await openCpuProfiler(page) : null
       if (cpuProfiler) environment.cpuProfiler = { supported: !!cpuProfiler.session, error: cpuProfiler.error ?? null }
       for (let index = 0; index < protocol.warmupCount + protocol.sampleCount; index++) {
         for (const action of protocol.actions) {
+          const phase = index < protocol.warmupCount ? 'warmup' : 'raw'
+          currentSample = { units, action, index, phase }
           await editor.click()
           await page.keyboard.press('Control+Home')
+          const windowState = await app.evaluate(({ BrowserWindow }) => {
+            const window = BrowserWindow.getAllWindows()[0]
+            return { focused:window.isFocused(), visible:window.isVisible(), minimized:window.isMinimized(), eventCount:globalThis.__u06WindowEvents.length }
+          })
+          if (!windowState.focused || !windowState.visible || windowState.minimized) throw new Error('PERF_WINDOW_NOT_FOCUSED')
           const cpuTitle = cpuProfiler?.session && action === 'input' && index >= protocol.warmupCount ? `U06-${units}-${index}` : null
           const pendingProfile = cpuTitle ? waitForCpuProfile(cpuProfiler.session, cpuTitle).catch(error => error) : null
-          const result = await measureEditorAction(page, action, undefined, phaseDiagnostic && action === 'input', cpuTitle)
+          let result
+          try {
+            result = await measureEditorInteractionV2(page, action, fixtures[units].body, undefined,
+              phaseDiagnostic && action === 'input', cpuTitle)
+          } catch (error) {
+            if (!phaseDiagnostic) {
+              const attempt = recordEditorAttempt(samples, sampleAttempts, { ...currentSample, error })
+              attempt.windowEvents = await app.evaluate(({ start }) => globalThis.__u06WindowEvents.slice(start), { start:windowState.eventCount })
+            }
+            throw error
+          }
+          let attempt
+          if (!phaseDiagnostic) attempt = recordEditorAttempt(samples, sampleAttempts, { ...currentSample, result })
+          const windowEvents = await app.evaluate(({ start }) => globalThis.__u06WindowEvents.slice(start), { start:windowState.eventCount })
+          if (attempt) attempt.windowEvents = windowEvents
+          if (windowEvents.some(event => event.type === 'blur' || event.type === 'minimize')) {
+            if (attempt) attempt.outcome = 'INVALID'
+            throw new Error('PERF_WINDOW_NOT_FOCUSED_AFTER_EVENT')
+          }
           if (pendingProfile) {
             const profile = await pendingProfile
             if (profile instanceof Error) {
@@ -466,14 +652,10 @@ async function performanceMain() {
           }
           if (phaseDiagnostic && action === 'input') phaseSamples[units][index < protocol.warmupCount ? 'warmup' : 'raw'].push({
             ...result.phase, trusted: result.trusted, eventType: result.eventType })
-          if (!phaseDiagnostic) {
-            actionSamples[action][index < protocol.warmupCount ? 'warmupSamplesMs' : 'rawSamplesMs'].push(result.elapsedMs)
-            actionSamples[action].longTasksMs.push(...result.longTasksMs)
-          }
+          currentSample = null
         }
       }
       await cpuProfiler?.session?.detach()
-      if (!phaseDiagnostic) samples[units] = { writer: actionSamples }
       assert.equal(createHash('sha256').update(storedBody(fixtures[units].projectPath, fixtures[units].draftId)).digest('hex'),
         fixtures[units].bodySha256, 'unsaved measurements changed SQLite')
       // Undo restores the source text, but editor-store keeps the tab dirty until Save.
@@ -485,31 +667,51 @@ async function performanceMain() {
       await page.locator('.writer-shelf').waitFor({ state: 'visible' })
     }
     if (!phaseDiagnostic) {
-      const checked = checkEditorReceipt(protocol, { production: true, writerLivePreview: true,
+      const sameConditions = !!previous && JSON.stringify(previous.measurementConditions) === JSON.stringify(measurementConditions)
+      const receiptForCheck = { protocolId: protocol.protocolId,
+        measurementSource: protocol.measurementSource, production: true, writerLivePreview: true,
         imeExactMatch: false, imeLossCount: null, imeDuplicateCount: null, selectionUndoExact: false,
-        rerunIndex, samples })
+        rerunIndex, ...(previous ? { priorReceipt: { outcome:previous.outcome, invalidReason:previous.invalidReason?.message ?? '',
+          sameConditions, rerunIndex:previous.rerunIndex } } : {}), samples }
+      const checked = checkEditorReceipt(protocol, receiptForCheck)
       environment.checker = checked
+      if (!checked.ok) {
+        currentStep = 'checker'
+        assertEditorReceipt(protocol, receiptForCheck)
+      }
       for (const units of protocol.units) steps.push({ stepId: `editor-performance-${units}`, actionId: units === 3000 ? 'U06.A08' : 'U06.A09',
-        outcome: 'PARTIAL', assertion: 'packaged Writer raw input/selection samples captured; historical Classic baseline and OS IME unavailable',
+        outcome: checked.ok ? 'PASS' : 'FAIL', assertion: 'editor-interaction-v2 renderer event to complete editor/visible-DOM terminal state',
         observed: checked.statistics })
     }
   } catch (error) {
-    failure = { step: currentStep, name: error?.name, message: error?.message }
+    if (currentSample && !sampleAttempts.some(attempt => attempt.units === currentSample.units && attempt.action === currentSample.action &&
+      attempt.index === currentSample.index && attempt.phase === currentSample.phase)) {
+      recordEditorAttempt(samples, sampleAttempts, { ...currentSample, error })
+    }
+    failure = { step: currentStep, ...(currentSample ? { sample:currentSample } : {}), name: error?.name, message: error?.message }
   } finally {
     if (app) try { exit = await quit(app) } catch (error) { failure ??= { step: 'exit', message: String(error) } }
+    const invalidReason = isEditorEnvironmentInvalid(failure, sampleAttempts)
+      ? { kind:'environment', message:failure.message } : null
     const receipt = phaseDiagnostic ? { outcome: failure ? 'FAIL' : 'DIAGNOSTIC_ONLY', qualification: 'DIAGNOSTIC_ONLY',
       checker: 'NOT_RUN', sampleUse: 'NOT_ELIGIBLE_FOR_EDITOR_GATE', testedSha,
       ...(candidatePackage ? { buildReceipt } : {}), executionHead: git('rev-parse', 'HEAD'),
       measurement: 'trusted beforeinput handler to first rAF with visible .cm-line text to next rAF; DOM check, not painted pixels',
       artifact: { executablePath, executableSha256: fileHash(executablePath), asarPath, asarSha256: fileHash(asarPath) },
       driver: { path: scriptPath, sha256: fileHash(scriptPath) }, profile: { ...profile, scratch },
-      fixtures, environment, phaseSamples, cpuProfiles, failure, exit } : { outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U06_EDITOR_PERFORMANCE_PARTIAL',
-      testedSha, ...(candidatePackage ? { buildReceipt } : {}), rerunIndex, priorReceipt, priorReceiptSha256: priorReceipt ? fileHash(priorReceipt) : null,
+      fixtures, environment, phaseSamples, cpuProfiles, failure, exit } : {
+      outcome: failure ? (invalidReason ? 'INVALID' : 'FAIL') : environment.checker?.ok ? 'PASS' : 'FAIL',
+      qualification: 'F05_U06_EDITOR_INTERACTION_V2_RESPONSIVENESS',
+      testedSha, ...(candidatePackage ? { buildReceipt } : {}),
+      protocolId: 'editor-interaction-v2',
+      measurementSource: protocol.measurementSource, rerunIndex, priorReceipt, priorReceiptSha256: priorReceipt ? fileHash(priorReceipt) : null,
       executionHead: git('rev-parse', 'HEAD'), changedPaths: git('diff', '--name-only', `${testedSha}..HEAD`).split('\n').filter(Boolean),
       sourceDirty: git('status', '--porcelain').split('\n').filter(Boolean),
+      measurementConditions, invalidReason,
       artifact: { executablePath, executableSha256: fileHash(executablePath), asarPath, asarSha256: fileHash(asarPath) },
       driver: { path: scriptPath, sha256: fileHash(scriptPath) }, profile: { ...profile, scratch },
-      fixtures, environment, samples, steps, unverifiedActions: ['U06.A03', 'U06.A08', 'U06.A09'], failure, exit }
+      measurement: 'trusted user input at renderer capture to full document and caret or selection plus visible DOM state after the second rAF; conservative readiness proxy, not painted pixels',
+      fixtures, environment, samples, sampleAttempts, activeSample:currentSample, steps, unverifiedActions: ['U06.A03'], failure, exit }
     const receiptPath = path.join(receiptDir, phaseDiagnostic ? 'phase-diagnostic-receipt.json' : 'receipt.json')
     fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
     process.stdout.write(`${receiptPath}\n`)
