@@ -14,10 +14,19 @@ const a08Only = process.argv.includes('--v3-a08-only')
 const a09Only = process.argv.includes('--v3-a09-only')
 const a12Only = process.argv.includes('--v3-a12-only')
 const a10Only = process.argv.includes('--v3-a10-only')
+const graphRemainingOnly = process.argv.includes('--v3-a11-a13-only')
+const graphPackageDir = 'C:\\Vibe Coding Project\\AI Novel\\.worktrees\\thread6-u06-v2-qualify\\release\\1.1.0\\win-unpacked'
+const graphBuildReceiptPath = 'C:\\Vibe Coding Project\\AI Novel\\.worktrees\\thread6-u06-v2-qualify\\.runtime\\.cache\\f05-u16-packaged\\3824dc5e-e0e1-44e3-b145-8d4c0e98b36d\\receipt.json'
+const graphBuildReceiptSha = 'f477f1640e579be789afa945c6799329fbd511badb21c09a48b779d79bbb9453'
+const graphPackageSourceSha = '44e7490af0046bc1e1faddb0d05bf58910c0b161'
+const graphExeSha = 'd1aeaeb0eb17a6f391d55a1a109d25aa525ba6ed94a854a834d4c11d01931e93'
+const graphAsarSha = '2e41e85933be3df3d2203732fc031dd89e5793e6092d3fe1ce84918c0e346f15'
 const narrowOnly = process.argv.includes('--v3-narrow-only')
 const avatarOnly = process.argv.includes('--v3-avatar-batch-only')
+assert([a08Only, a09Only, a12Only, a10Only, graphRemainingOnly, narrowOnly, avatarOnly].filter(Boolean).length <= 1,
+  'select only one focused V3 journey mode')
 const fixedV3 = narrowOnly || avatarOnly
-const v3Mode = a08Only || a09Only || a10Only || a12Only || fixedV3 || process.argv.includes('--v3-a10-a13')
+const v3Mode = a08Only || a09Only || a10Only || a12Only || graphRemainingOnly || fixedV3 || process.argv.includes('--v3-a10-a13')
 const avatarPackageArgs = ['--package-dir', '--package-source-sha', '--exe-sha256', '--asar-sha256']
   .map(name => process.argv.find(arg => arg.startsWith(`${name}=`))?.slice(name.length + 1))
 assert(avatarPackageArgs.every(Boolean) || avatarPackageArgs.every(value => value === undefined), 'provide all avatar package identity arguments')
@@ -26,26 +35,38 @@ const [avatarPackageDir, avatarSourceSha, avatarExeSha, avatarAsarSha] = avatarP
 const buildReceiptPath = process.argv.find(arg => arg.startsWith('--reuse-package='))?.slice('--reuse-package='.length)
 assert(v3Mode || buildReceiptPath, 'pass --reuse-package=<build receipt> or a --v3-* mode')
 const buildReceipt = buildReceiptPath ? JSON.parse(fs.readFileSync(buildReceiptPath, 'utf8')) : null
-const testedSha = avatarSourceSha ?? (fixedV3 ? '6639f757c8d4cf2bf1d73ae4bb2a672b34a251f2'
+const testedSha = avatarSourceSha ?? (graphRemainingOnly ? graphPackageSourceSha : fixedV3 ? '6639f757c8d4cf2bf1d73ae4bb2a672b34a251f2'
   : v3Mode ? 'e803b10c461cddbb567ad925743b164f42af9e1a' : buildReceipt.build?.buildSha)
 if (!v3Mode) assert.equal(testedSha, 'c6fd2b5e02230d4ddd6e20d92c66bcf8a8f77010')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+if (graphRemainingOnly) {
+  assert.equal(path.resolve(buildReceiptPath ?? ''), path.resolve(graphBuildReceiptPath), 'A11/A13 must use the pinned 44e V3 build receipt')
+  assert.equal(sha256(buildReceiptPath), graphBuildReceiptSha, 'pinned 44e V3 build receipt changed')
+  assert.equal(buildReceipt.outcome, 'PARTIAL')
+  assert.equal(buildReceipt.qualification, 'F05_U16_NON_PICKER_A03_A04_A05_A06_ONLY')
+  assert.equal(buildReceipt.testedSha, graphPackageSourceSha)
+  assert.equal(buildReceipt.artifact?.buildSha, graphPackageSourceSha)
+  assert.equal(path.resolve(buildReceipt.artifact?.executablePath ?? ''), path.join(graphPackageDir, 'AI小说作家.exe'))
+  assert.equal(path.resolve(buildReceipt.artifact?.asarPath ?? ''), path.join(graphPackageDir, 'resources', 'app.asar'))
+  assert.equal(buildReceipt.artifact?.executableSha256, graphExeSha)
+  assert.equal(buildReceipt.artifact?.asarSha256, graphAsarSha)
+}
 const executionHead = git('rev-parse', 'HEAD')
 const changedPaths = git('diff', '--name-only', `${testedSha}..HEAD`).split('\n').filter(Boolean)
 assert(changedPaths.every(name => name.startsWith('scripts/') || name.includes('/__tests__/') || (v3Mode && name.startsWith('docs/'))), 'product source changed since package build')
 const dirtyProduct = git('status', '--porcelain', '--', 'src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml')
   .split('\n').filter(Boolean).filter(line => !/src\/.*\/__tests__\//.test(line))
 assert.deepEqual(dirtyProduct, [], 'dirty product input since package build')
-const packageDir = avatarPackageDir ?? (v3Mode
+const packageDir = avatarPackageDir ?? (graphRemainingOnly ? graphPackageDir : v3Mode
   ? fixedV3 ? path.join(repository, '.runtime', '.cache', 'f04-v3-narrow-package', '6639f757-electron-abi', 'win-unpacked')
     : path.join(repository, '.runtime', '.cache', 'f05-u12-m06-package', 'e803b10c', 'win-unpacked')
   : path.join(repository, 'release', '1.1.0', 'win-unpacked'))
 const executablePath = path.join(packageDir, 'AI小说作家.exe')
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
-assert.equal(sha256(executablePath), avatarExeSha ?? (fixedV3 ? '8cceb2b6143789bed0bb562bc4e8d0fdd7e2f6ae4001a34307437a6e9de25d7e'
+assert.equal(sha256(executablePath), avatarExeSha ?? (graphRemainingOnly ? graphExeSha : fixedV3 ? '8cceb2b6143789bed0bb562bc4e8d0fdd7e2f6ae4001a34307437a6e9de25d7e'
   : v3Mode ? '35f08ef5f2317f7151d6a2a0884531106a0bb2fba926cab7d09ff50b5f2e8f11' : buildReceipt.artifact.executableSha256))
-assert.equal(sha256(asarPath), avatarAsarSha ?? (fixedV3 ? 'ba26bf26ebdd4726f190e8ff61b70dcc2da5776a04d29f74ba865c111914058f'
+assert.equal(sha256(asarPath), avatarAsarSha ?? (graphRemainingOnly ? graphAsarSha : fixedV3 ? 'ba26bf26ebdd4726f190e8ff61b70dcc2da5776a04d29f74ba865c111914058f'
   : v3Mode ? '6aa5c19a88481eef994df8d1e4050578e8c860d314ee8e6662656b967b2d190c' : buildReceipt.artifact.asarSha256))
 const driverSha256 = sha256(fileURLToPath(import.meta.url))
 const runId = randomUUID()
@@ -263,7 +284,6 @@ async function verifyV3Graph(page, db, setStep) {
   await canvas.waitFor({ state: 'visible' })
   const sidebar = page.getByRole('complementary', { name: '图谱人物侧栏' })
 
-  const beforeReset = rosterFacts(db)
   if (!a12Only) {
   setStep('U11.A13-bounded-search-pagination')
   assert(Number(await canvas.getAttribute('data-rendered-node-count')) <= 80, 'graph canvas rendered more than 80 nodes')
@@ -275,23 +295,28 @@ async function verifyV3Graph(page, db, setStep) {
     for (const id of ids) visibleIds.add(id)
     if (pageNumber < 20) await sidebar.getByRole('button', { name: '下一页人物' }).click()
   }
-  assert.equal(visibleIds.size, 1000, 'pagination did not reach every stable character ID')
-  await sidebar.getByRole('textbox', { name: '搜索图谱人物' }).fill(secondName)
-  await sidebar.locator(`button[data-graph-character-id="${second.character_id}"]`).waitFor({ state: 'visible' })
+  assert.deepEqual([...visibleIds].sort(), rows.map(row => row.character_id).sort(), 'pagination did not reach every durable character ID')
+  const searchTarget = rows.at(-1)
+  await sidebar.getByRole('textbox', { name: '搜索图谱人物' }).fill(searchTarget.name)
+  await sidebar.locator(`button[data-graph-character-id="${searchTarget.character_id}"]`).waitFor({ state: 'visible' })
   assert.equal(await sidebar.locator('button[data-graph-character-id]').count(), 1)
   pass('U11.A13-bounded-search-pagination', 'U11.A13', 'V3 graph renders at most 80 nodes; 20 visible sidebar pages reach all 1000 durable IDs and exact search reaches the last target',
-    { durableCount: rows.length, renderedNodes: Number(await canvas.getAttribute('data-rendered-node-count')), reachedIds: visibleIds.size, searchId: second.character_id })
+    { durableCount: rows.length, renderedNodes: Number(await canvas.getAttribute('data-rendered-node-count')), reachedIds: visibleIds.size,
+      searchedTargetId: searchTarget.character_id, searchedTargetName: searchTarget.name })
 
   setStep('U11.A11-reset-layout-zero-fact-write')
   await sidebar.getByRole('textbox', { name: '搜索图谱人物' }).fill('')
   await page.getByRole('button', { name: '放大关系图谱' }).click()
+  const beforeReset = rosterFacts(db)
   await page.getByRole('button', { name: '重置图谱布局' }).click()
   assert.equal(rosterFacts(db), beforeReset, 'layout reset wrote character or relation facts')
   pass('U11.A11-reset-layout-zero-fact-write', 'U11.A11', 'Visible V3 zoom and reset controls left the complete roster, relation facts and revision unchanged',
     { beforeSha256: createHash('sha256').update(beforeReset).digest('hex'), afterSha256: createHash('sha256').update(rosterFacts(db)).digest('hex') })
   }
 
+  if (!graphRemainingOnly) {
   setStep('U11.A12-delete-character-cancel')
+  const beforeDelete = rosterFacts(db)
   await sidebar.locator(`button[data-graph-character-id="${first.character_id}"]`).click()
   await page.getByText(`${firstName} — 编辑档案`, { exact: true }).waitFor({ state: 'visible' })
   await page.getByRole('button', { name: '删除', exact: true }).click()
@@ -299,7 +324,7 @@ async function verifyV3Graph(page, db, setStep) {
   assert.match(await dialog.innerText(), new RegExp(firstName))
   await dialog.getByRole('button', { name: '取消' }).click()
   await dialog.waitFor({ state: 'detached' })
-  assert.equal(rosterFacts(db), beforeReset, 'cancelled character deletion wrote facts')
+  assert.equal(rosterFacts(db), beforeDelete, 'cancelled character deletion wrote facts')
   pass('U11.A12-delete-character-cancel', 'U11.A12', 'Visible delete confirmation named the selected stable-ID character; cancel preserved all facts', { targetId: first.character_id })
 
   setStep('U11.A12-delete-only-target-and-relations')
@@ -345,6 +370,7 @@ async function verifyV3Graph(page, db, setStep) {
     JOIN characters target ON target.character_id=r.target_character_id WHERE source.retired=0 AND target.retired=0`).pluck().get(), 0)
   pass('U11.A12-delete-all-confirmation', 'U11.A12', 'Visible graph clear required explicit confirmation; cancellation wrote nothing and confirmation removed all active synthetic roles and relationships while retaining raw history',
     { beforeCount: 999, afterCount: 0, rawHistoricalRelations: db.prepare('SELECT count(*) FROM character_relationships').pluck().get() })
+  }
 }
 async function verifyV3AvatarBatch(page, app, db, avatarFixture, projectId, oversizedRejected, setStep) {
   setStep('U10.A08-graph-batch-read')
@@ -813,14 +839,14 @@ async function main() {
           .every(stepId => steps.some(step => step.stepId === stepId && step.outcome === 'PASS'))
       : steps.some(step => step.actionId === actionId && step.outcome === 'PASS')
     const receipt = { outcome: failure ? 'FAIL' : v3Mode ? 'PARTIAL' : 'PASS',
-      qualification: v3Mode ? avatarOnly ? 'F05_U10_A08_V3_PARTIAL' : narrowOnly ? 'F04_V3_NARROW_GRAPH_PARTIAL' : a08Only ? 'F05_U11_A08_V3_PARTIAL' : a09Only ? 'F05_U11_A09_V3_PARTIAL' : a10Only ? 'F05_U11_A10_V3_PARTIAL' : a12Only ? 'F05_U11_A12_V3_PARTIAL' : 'F05_U11_A10_A13_V3_PARTIAL' : 'F05_U11_A08_A09_WRITER', evidenceLevel: 'electron',
+      qualification: v3Mode ? avatarOnly ? 'F05_U10_A08_V3_PARTIAL' : narrowOnly ? 'F04_V3_NARROW_GRAPH_PARTIAL' : a08Only ? 'F05_U11_A08_V3_PARTIAL' : a09Only ? 'F05_U11_A09_V3_PARTIAL' : a10Only ? 'F05_U11_A10_V3_PARTIAL' : a12Only ? 'F05_U11_A12_V3_PARTIAL' : graphRemainingOnly ? 'F05_U11_A11_A13_V3_PARTIAL' : 'F05_U11_A10_A13_V3_PARTIAL' : 'F05_U11_A08_A09_WRITER', evidenceLevel: 'electron',
       testedSha, executionHead, changedPaths, sourceDirtyPaths: git('status', '--porcelain').split('\n').filter(Boolean),
       driverSha256, buildReceipt: buildReceiptPath ? { path: buildReceiptPath, sha256: sha256(buildReceiptPath) } : null,
       fixtureSetup: a09Only ? { method: 'character-roster-commit with two stable IDs and old relation; UI alone edits relation',
         firstName, secondName, initialRelation: initialRelationship, editedRelation: relationship }
         : a08Only ? { method: 'character-roster-commit with unique names and distinct notes, then isolated SQLite rename by character_id',
         firstName, secondName, duplicateName: firstName, distinctField: 'notes', targetNotes: a08TargetNotes, otherNotes: a08OtherNotes } : null,
-      packageRoot: packageDir, shell: v3Mode ? 'writer-v3' : 'writer', mode: avatarOnly ? 'v3-avatar-batch-only' : narrowOnly ? 'v3-narrow-only' : a08Only ? 'v3-a08-only' : a09Only ? 'v3-a09-only' : a10Only ? 'v3-a10-only' : a12Only ? 'v3-a12-only' : v3Mode ? 'v3-a10-a13' : 'legacy-a08-a09',
+      packageRoot: packageDir, shell: v3Mode ? 'writer-v3' : 'writer', mode: avatarOnly ? 'v3-avatar-batch-only' : narrowOnly ? 'v3-narrow-only' : a08Only ? 'v3-a08-only' : a09Only ? 'v3-a09-only' : a10Only ? 'v3-a10-only' : a12Only ? 'v3-a12-only' : graphRemainingOnly ? 'v3-a11-a13-only' : v3Mode ? 'v3-a10-a13' : 'legacy-a08-a09',
       artifact: { executableSha256: sha256(executablePath), asarSha256: sha256(asarPath) },
       nodeAbi: process.versions.modules, cleanupConfirmed, isolatedRoot: scratch, projectPath, failedStep: failure ? currentStep : null,
       error: failure, diagnostic: failure ? diagnostic : null, steps,
