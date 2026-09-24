@@ -918,15 +918,22 @@ if ($LegacyWriterProof) {
       finally { $stream.Dispose() }
     } finally { $algorithm.Dispose() }
   }
-  if ((Get-OldWriterProofHash $resolvedExe) -ne
-      '2b2b93e5b0e06946715b3524e9dbd5277f3a0eb95f4009de6c16dc81609f951b') {
+  $verifiedBinaries = @{
+    '2b2b93e5b0e06946715b3524e9dbd5277f3a0eb95f4009de6c16dc81609f951b' = @{
+      asar = '746e621074f40ac983e2feb343c82e491da064722145670a2221279387503236'; version = '1.0.0.0'
+    }
+    '6c17e1fcc62d235feb7f5bdba5b0f355b198c5322b2f67d922874857e27f564a' = @{
+      asar = '447bb76357422adc2ca967b667bfe60c3419b1ca7ea22a0d2d08105ed398a679'; version = '1.1.0.0'
+    }
+  }
+  $verifiedBinary = $verifiedBinaries[(Get-OldWriterProofHash $resolvedExe).ToLowerInvariant()]
+  if (-not $verifiedBinary) {
     throw 'Old writer proof executable SHA256 mismatch.'
   }
-  if ((Get-OldWriterProofHash $asarPath) -ne
-      '746e621074f40ac983e2feb343c82e491da064722145670a2221279387503236') {
+  if ((Get-OldWriterProofHash $asarPath) -ne $verifiedBinary.asar) {
     throw 'Old writer proof ASAR SHA256 mismatch.'
   }
-  if ([string](Get-Item -LiteralPath $resolvedExe).VersionInfo.ProductVersion -ne '1.0.0.0') {
+  if ([string](Get-Item -LiteralPath $resolvedExe).VersionInfo.ProductVersion -ne $verifiedBinary.version) {
     throw 'Old writer proof product version mismatch.'
   }
 }
