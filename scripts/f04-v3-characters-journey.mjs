@@ -58,6 +58,12 @@ const importNames = [`候选甲${runId.slice(0, 4)}`, `候选乙${runId.slice(0,
 const finalizedNames = [`派生甲${runId.slice(0, 4)}`, `作者乙${runId.slice(0, 4)}`, `同名丙${runId.slice(0, 4)}`]
 const finalizedProse = `${finalizedNames[0]}走进北塔。${finalizedNames[1]}留在旧港。${finalizedNames[2]}站在桥上。`
 let finalizedIds = []
+const lateName = `迟到丁${runId.slice(0, 4)}`
+const lateProse = `${lateName}走进南站。`
+let lateId
+let releaseLateModel
+let signalLateModel
+const lateModelRequested = new Promise(resolve => { signalLateModel = resolve })
 const model = { id: 'u09-local-fixture', name: 'U09 controlled fixture', provider: 'openai', protocol: 'openai',
   modelName: 'gpt-4.1', baseUrl: 'https://api.openai.com/v1', apiKey: 'u09-offline', maxTokens: 8192,
   temperature: 0.7, purposes: ['generation'] }
@@ -65,19 +71,25 @@ const modelRequests = []
 let fixturePort
 const server = createServer(async (request, response) => {
   if (request.method !== 'POST' || request.url !== '/v1/chat/completions'
-    || request.headers.authorization !== `Bearer ${model.apiKey}` || modelRequests.length >= (u09FinalizedOnly ? 2 : 3)) {
+    || request.headers.authorization !== `Bearer ${model.apiKey}` || modelRequests.length >= (u09FinalizedOnly ? 6 : 3)) {
     response.writeHead(403).end(); return
   }
   const body = JSON.parse(Buffer.concat(await Array.fromAsync(request)).toString('utf8'))
   modelRequests.push(body)
   const index = modelRequests.length - 1
-  const content = u09FinalizedOnly ? index === 0 ? `${finalizedNames[0]}走进北塔。` : JSON.stringify({ updates: [
+  const content = u09FinalizedOnly ? index === 0 ? `${finalizedNames[0]}走进北塔。` : index === 2 ? lateProse : index >= 3
+    ? JSON.stringify({ updates: [{ characterId: lateId, currentState: { location: '模型旧值' }, evidence: { text: lateProse } }] })
+    : JSON.stringify({ updates: [
     { characterId: finalizedIds[0], currentState: { location: '北塔' }, evidence: { text: `${finalizedNames[0]}走进北塔。` } },
     { characterId: finalizedIds[1], currentState: { location: '旧港' }, evidence: { text: `${finalizedNames[1]}留在旧港。` } },
     { characterId: finalizedIds[2], name: finalizedNames[2], currentState: { location: '桥上' }, evidence: { text: `${finalizedNames[2]}站在桥上。` } },
   ] }) : JSON.stringify({ results: [{ sourceId: '1:1', characterCards: [{
     name: importNames[index], role: 'supporting', background: `模型背景${index + 1}`, notes: '合成提取',
   }] }] })
+  if (u09FinalizedOnly && index === 3) {
+    signalLateModel()
+    await new Promise(resolve => { releaseLateModel = resolve })
+  }
   response.writeHead(200, { 'Content-Type': 'text/event-stream' })
   response.write(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: 'stop' }],
     usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 } })}\n\n`)
@@ -329,6 +341,149 @@ async function main() {
         assertion: 'Decline receipts survived an Electron process restart and neither pending decision nor model call reappeared.',
         observed: { stateDecision: stored.receipts.find(receipt => receipt.candidateKey === proposal.candidateKey),
           identityBatchId: pendingIdentity.proposalBatchId, modelRequestCount: modelRequests.length } })
+
+      currentStep = 'u09-a08-rename-source-reopen'
+      await app.close(); app = null
+      app = (await launch()).app
+      const renamePage = await app.firstWindow()
+      const renameNotice = renamePage.locator('[role="status"].fixed.inset-x-0.top-10')
+      if (await renameNotice.isVisible()) await renameNotice.getByRole('button', { name: '知道了', exact: true }).click()
+      await renamePage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
+      await renamePage.locator('.writer-left-rail button[title="角色"]').click()
+      await renamePage.locator(`[data-character-id="${finalizedIds[0]}"]`).click()
+      await renamePage.getByTitle('查看当前进展/状态').click()
+      const locationField = page => page.getByText('当前位置/阵营', { exact: false }).locator('xpath=..')
+      assert.equal(await locationField(renamePage).locator('textarea').inputValue(), '北塔')
+      assert((await locationField(renamePage).locator('label').innerText()).includes('定稿派生'))
+      await renamePage.getByTitle('返回基础设定').click()
+      await renamePage.getByText('姓名', { exact: true }).locator('xpath=..').locator('input').fill(finalizedNames[1])
+      await renamePage.getByRole('button', { name: '保存', exact: true }).last().click()
+      await renamePage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+      await app.close(); app = null
+
+      app = (await launch()).app
+      const sameNamePage = await app.firstWindow()
+      const sameNameNotice = sameNamePage.locator('[role="status"].fixed.inset-x-0.top-10')
+      if (await sameNameNotice.isVisible()) await sameNameNotice.getByRole('button', { name: '知道了', exact: true }).click()
+      await sameNamePage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
+      await sameNamePage.locator('.writer-left-rail button[title="角色"]').click()
+      for (const [id, value, origin] of [[finalizedIds[0], '北塔', '定稿派生'], [finalizedIds[1], '作者旧港', '作者输入']]) {
+        await sameNamePage.locator(`[data-character-id="${id}"]`).click()
+        if (await sameNamePage.getByTitle('查看当前进展/状态').isVisible()) await sameNamePage.getByTitle('查看当前进展/状态').click()
+        assert.equal(await locationField(sameNamePage).locator('textarea').inputValue(), value)
+        assert((await locationField(sameNamePage).locator('label').innerText()).includes(origin), `${id} Writer source label changed`)
+      }
+      const sameNameRows = importDb.prepare('SELECT character_id AS id,name FROM characters WHERE character_id IN (?,?) ORDER BY character_id')
+        .all(finalizedIds[0], finalizedIds[1])
+      assert.equal(sameNameRows.length, 2)
+      assert(sameNameRows.every(row => row.name === finalizedNames[1]), 'same-name rename merged or changed an identity')
+      const aliases = importDb.prepare('SELECT character_id AS id,name,valid_through AS validThrough FROM character_aliases WHERE character_id IN (?,?)')
+        .all(finalizedIds[0], finalizedIds[1])
+      assert(aliases.some(row => row.id === finalizedIds[0] && row.name === finalizedNames[0] && row.validThrough !== null))
+      assert(finalizedIds.slice(0, 2).every(id => aliases.some(row => row.id === id && row.name === finalizedNames[1] && row.validThrough === null)))
+      assert.equal(JSON.parse(state(finalizedIds[0]).provenance).location.kind, 'derived')
+      assert.equal(JSON.parse(state(finalizedIds[1]).provenance).location.kind, 'author')
+      steps.push({ stepId: currentStep, actionId: 'U09.A08', outcome: 'PASS',
+        assertion: 'Writer rename to an existing display name kept two stable IDs, each field value and source label, and ID-scoped alias history after restart.',
+        observed: { ids: finalizedIds.slice(0, 2), displayName: finalizedNames[1], locations: ['北塔', '作者旧港'],
+          sourceKinds: ['derived', 'author'], aliasCount: aliases.length } })
+
+      currentStep = 'u09-a09-late-author-save'
+      await sameNamePage.getByTitle('返回基础设定').click()
+      lateId = await addCharacter(sameNamePage, lateName)
+      await app.close(); app = null
+      app = (await launch()).app
+      const secondSourcePage = await app.firstWindow()
+      const secondOpened = await invoke(secondSourcePage, 'project:open', projectPath, randomUUID(), null)
+      assert.equal(secondOpened.success, true, secondOpened.error)
+      const secondSession = { projectId: created.projectId, projectPath, leaseId: secondOpened.project?.sessionLease }
+      assert(secondSession.leaseId, 'second finalized fixture session missing')
+      const secondBlueprint = await invoke(secondSourcePage, 'db:blueprint-upsert', { chapterNumber: 2, title: '南站', role: '发展',
+        purpose: '核对迟到的角色状态', keyEvents: lateProse, characters: [] }, projectPath, secondSession)
+      assert.equal(secondBlueprint.success, true, secondBlueprint.error)
+      const secondDraft = await invoke(secondSourcePage, 'db:draft-create', { chapterNumber: 2, version: 1, source: 'write',
+        content: lateProse, wordCount: lateProse.length }, projectPath, secondSession)
+      assert.equal(secondDraft.success, true, secondDraft.error)
+      await app.close(); app = null
+
+      app = (await launch()).app
+      const latePage = await app.firstWindow()
+      const lateNotice = latePage.locator('[role="status"].fixed.inset-x-0.top-10')
+      if (await lateNotice.isVisible()) await lateNotice.getByRole('button', { name: '知道了', exact: true }).click()
+      await latePage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
+      await latePage.locator('.writer-project-tree').locator('[title*="第2章 南站 v1"]').click()
+      assert((await latePage.locator('.cm-content').innerText()).includes(lateProse), 'second Writer draft differs from fixture source')
+      await latePage.getByRole('button', { name: '定稿', exact: true }).click()
+      const secondConfirm = latePage.getByRole('dialog').filter({ hasText: '确定要将第 2 章定稿吗？' })
+      await secondConfirm.getByRole('button', { name: '确认定稿', exact: true }).click()
+      await latePage.getByText('已定稿（只读）', { exact: true }).waitFor({ state: 'visible', timeout: 60_000 })
+      let lateTimeout
+      await Promise.race([lateModelRequested, new Promise((_, reject) => {
+        lateTimeout = setTimeout(() => reject(new Error('late model request missing')), 90_000)
+      })]).finally(() => clearTimeout(lateTimeout))
+      assert.equal(modelRequests.length, 4, 'unexpected finalized model call order')
+      assert(JSON.stringify(modelRequests[3].messages).includes(lateId), 'late model request lacks frozen character ID')
+      await latePage.locator('.writer-left-rail button[title="角色"]').click()
+      await latePage.locator(`[data-character-id="${lateId}"]`).click()
+      await latePage.getByTitle('查看当前进展/状态').click()
+      await locationField(latePage).locator('textarea').fill('作者并发值')
+      await latePage.getByRole('button', { name: '保存', exact: true }).last().click()
+      await latePage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+      assert.equal(state(lateId).location, '作者并发值', 'Writer save did not persist before late response')
+      assert.equal(JSON.parse(state(lateId).provenance).location.kind, 'author')
+      const beforeRelease = { characterId: lateId, location: state(lateId).location,
+        provenance: JSON.parse(state(lateId).provenance).location, requestCount: modelRequests.length }
+      const secondOutbox = importDb.prepare('SELECT finalization_id AS finalizationId,content_hash AS contentHash FROM finalization_outbox WHERE draft_id=?')
+        .get(secondDraft.id)
+      assert(secondOutbox?.finalizationId, 'second Writer finalization outbox missing')
+      const secondSlot = { source: { draftId: secondDraft.id, chapterNumber: 2, ...secondOutbox }, stepKey: 'character_cards' }
+      releaseLateModel(); releaseLateModel = undefined
+      const failureRow = importDb.prepare(`SELECT s.ok,s.error_msg AS errorMsg,s.attempt_count AS attemptCount FROM post_process_steps s
+        JOIN post_process_runs r ON r.id=s.run_id WHERE r.trigger_source_id=? AND s.step_key='character_cards' ORDER BY s.id DESC LIMIT 1`)
+      let lateFailure
+      for (let attempt = 0; attempt < 360; attempt++) {
+        lateFailure = failureRow.get(`finalization:${secondOutbox.finalizationId}`)
+        if (lateFailure?.attemptCount) break
+        await new Promise(resolve => setTimeout(resolve, 250))
+      }
+      assert.equal(lateFailure?.ok, 0, 'late result did not fail the conflicting step')
+      assert(lateFailure.errorMsg.includes('FIELD_CONFLICT'), `late result failure missing field conflict: ${lateFailure.errorMsg}`)
+      assert.equal(modelRequests.length, 6, 'Writer did not finish its bounded conflict retries')
+      assert(modelRequests.slice(3).every(request => JSON.stringify(request.messages).includes(lateId)),
+        'a retry escaped the frozen character ID')
+      assert.equal(state(lateId).location, '作者并发值')
+      assert.equal(state(finalizedIds[0]).location, '北塔')
+      await app.close(); app = null
+
+      app = (await launch()).app
+      const lateReopenPage = await app.firstWindow()
+      const lateReopenNotice = lateReopenPage.locator('[role="status"].fixed.inset-x-0.top-10')
+      if (await lateReopenNotice.isVisible()) await lateReopenNotice.getByRole('button', { name: '知道了', exact: true }).click()
+      await lateReopenPage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
+      await lateReopenPage.locator('.writer-left-rail button[title="角色"]').click()
+      for (const [id, value, origin] of [[lateId, '作者并发值', '作者输入'], [finalizedIds[0], '北塔', '定稿派生']]) {
+        await lateReopenPage.locator(`[data-character-id="${id}"]`).click()
+        if (await lateReopenPage.getByTitle('查看当前进展/状态').isVisible()) await lateReopenPage.getByTitle('查看当前进展/状态').click()
+        assert.equal(await locationField(lateReopenPage).locator('textarea').inputValue(), value)
+        assert((await locationField(lateReopenPage).locator('label').innerText()).includes(origin))
+      }
+      const lateOpened = await invoke(lateReopenPage, 'project:open', projectPath, randomUUID(), projectPath)
+      assert.equal(lateOpened.success, true, lateOpened.error)
+      const lateSession = { projectId: created.projectId, projectPath, leaseId: lateOpened.project?.sessionLease }
+      const recovered = await invoke(lateReopenPage, 'finalization-generation:read', { slot: secondSlot }, lateSession)
+      assert.equal(recovered?.view?.artifacts?.length, 3, 'late model artifacts did not survive restart')
+      assert(recovered.view.artifacts.every(artifact => artifact.text.includes('模型旧值')),
+        'a late model artifact lost the stale proposal')
+      assert.equal(recovered.effect, undefined, 'stale result was silently committed')
+      assert.deepEqual(failureRow.get(`finalization:${secondOutbox.finalizationId}`), lateFailure)
+      assert.equal(state(lateId).location, '作者并发值')
+      assert.equal(JSON.parse(state(lateId).provenance).location.kind, 'author')
+      assert.equal(JSON.parse(state(finalizedIds[0]).provenance).location.kind, 'derived')
+      assert.equal(modelRequests.length, 6, 'reopening reran a stale model result')
+      steps.push({ stepId: currentStep, actionId: 'U09.A09', outcome: 'PASS',
+        assertion: 'Writer saved an author edit while a model response was held; the late result left a persisted field-conflict failure and artifact, and neither source or value regressed after restart.',
+        observed: { beforeRelease, finalizationId: secondOutbox.finalizationId, failure: lateFailure,
+          artifactIds: recovered.view.artifacts.map(artifact => artifact.artifactId), modelRequestCount: modelRequests.length } })
       return
     }
     if (u09ImportOnly) {
@@ -874,12 +1029,13 @@ async function main() {
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message }
   } finally {
+    releaseLateModel?.()
     importDb?.close()
     await app?.close().catch(() => {})
     if (controlledModel) await new Promise(resolve => server.close(resolve))
     const verifiedActions = [...new Set(steps.filter(step => step.outcome === 'PASS' && step.actionId).map(step => step.actionId))]
     const receipt = { schemaVersion: 1, qualification: u09ImportOnly ? 'F05_U09_A01_A02_A03_A04_PACKAGED_V3_IMPORT'
-      : u09FinalizedOnly ? 'F05_U09_A05_A06_A07_PACKAGED_V3_FINALIZED' : 'F05_U09_A08_U10_A01_A02_A03_A04_A05_A06_A07_A09_A10_PACKAGED_V3_CHARACTERS',
+      : u09FinalizedOnly ? 'F05_U09_A05_A06_A07_A08_A09_PACKAGED_V3_FINALIZED' : 'F05_U09_A08_U10_A01_A02_A03_A04_A05_A06_A07_A09_A10_PACKAGED_V3_CHARACTERS',
       outcome: failure ? 'FAIL' : 'PARTIAL', sliceOutcome: failure ? 'FAIL' : 'PASS', fullU10Qualification: false,
       fullU09Qualification: false, fullF05Qualification: false, evidenceLevel: 'electron', shell: 'writer-v3', testedSha, executionHead, changedPaths,
       dirtyProductPaths, ignoredScreenshotPaths, ignoredTestOnlyPaths, package: { directory: packageDir, executableSha256: sha256(exe), asarSha256: sha256(asar) },
@@ -892,7 +1048,8 @@ async function main() {
         'v3-avatar-compressed.png', 'v3-avatar-invalid-preserved.png', 'v3-avatar-replaced-reopened.png',
         'v3-avatar-removed.png', 'v3-avatar-removed-reopened.png',
         'v3-avatar-same-name-identity.png', 'v3-avatar-same-name-reopened.png'].filter(name => fs.existsSync(path.join(receiptDir, name))) },
-      verifiedActions, unverifiedActions: [u09ImportOnly ? 'U09.A05-U09.A09' : u09FinalizedOnly ? 'U09.A01-U09.A04, U09.A08-U09.A09' : 'U09.A01-U09.A07',
+      verifiedActions, unverifiedActions: [u09ImportOnly ? 'U09.A05-U09.A09' : u09FinalizedOnly ? 'U09.A01-U09.A04' : 'U09.A01-U09.A07',
+        ...(u09FinalizedOnly ? ['U09.A05', 'U09.A06', 'U09.A07', 'U09.A08', 'U09.A09'].filter(id => !verifiedActions.includes(id)) : []),
         ...(controlledModel ? [] : ['U09.A09']),
         ...['U10.A01', 'U10.A02', 'U10.A03', 'U10.A04', 'U10.A05', 'U10.A06', 'U10.A07', 'U10.A09', 'U10.A10'].filter(id => !verifiedActions.includes(id)),
         'U10.A08', 'U10.A11-U10.A12', 'F05 whole-product qualification'],
