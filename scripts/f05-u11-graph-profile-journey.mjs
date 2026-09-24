@@ -18,11 +18,16 @@ const narrowOnly = process.argv.includes('--v3-narrow-only')
 const avatarOnly = process.argv.includes('--v3-avatar-batch-only')
 const fixedV3 = narrowOnly || avatarOnly
 const v3Mode = a08Only || a09Only || a10Only || a12Only || fixedV3 || process.argv.includes('--v3-a10-a13')
+const avatarPackageArgs = ['--package-dir', '--package-source-sha', '--exe-sha256', '--asar-sha256']
+  .map(name => process.argv.find(arg => arg.startsWith(`${name}=`))?.slice(name.length + 1))
+assert(avatarPackageArgs.every(Boolean) || avatarPackageArgs.every(value => value === undefined), 'provide all avatar package identity arguments')
+assert(avatarOnly || avatarPackageArgs.every(value => value === undefined), 'avatar package arguments require --v3-avatar-batch-only')
+const [avatarPackageDir, avatarSourceSha, avatarExeSha, avatarAsarSha] = avatarPackageArgs
 const buildReceiptPath = process.argv.find(arg => arg.startsWith('--reuse-package='))?.slice('--reuse-package='.length)
 assert(v3Mode || buildReceiptPath, 'pass --reuse-package=<build receipt> or a --v3-* mode')
 const buildReceipt = buildReceiptPath ? JSON.parse(fs.readFileSync(buildReceiptPath, 'utf8')) : null
-const testedSha = fixedV3 ? '6639f757c8d4cf2bf1d73ae4bb2a672b34a251f2'
-  : v3Mode ? 'e803b10c461cddbb567ad925743b164f42af9e1a' : buildReceipt.build?.buildSha
+const testedSha = avatarSourceSha ?? (fixedV3 ? '6639f757c8d4cf2bf1d73ae4bb2a672b34a251f2'
+  : v3Mode ? 'e803b10c461cddbb567ad925743b164f42af9e1a' : buildReceipt.build?.buildSha)
 if (!v3Mode) assert.equal(testedSha, 'c6fd2b5e02230d4ddd6e20d92c66bcf8a8f77010')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -32,16 +37,16 @@ assert(changedPaths.every(name => name.startsWith('scripts/') || name.includes('
 const dirtyProduct = git('status', '--porcelain', '--', 'src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml')
   .split('\n').filter(Boolean).filter(line => !/src\/.*\/__tests__\//.test(line))
 assert.deepEqual(dirtyProduct, [], 'dirty product input since package build')
-const packageDir = v3Mode
+const packageDir = avatarPackageDir ?? (v3Mode
   ? fixedV3 ? path.join(repository, '.runtime', '.cache', 'f04-v3-narrow-package', '6639f757-electron-abi', 'win-unpacked')
     : path.join(repository, '.runtime', '.cache', 'f05-u12-m06-package', 'e803b10c', 'win-unpacked')
-  : path.join(repository, 'release', '1.1.0', 'win-unpacked')
+  : path.join(repository, 'release', '1.1.0', 'win-unpacked'))
 const executablePath = path.join(packageDir, 'AI小说作家.exe')
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
-assert.equal(sha256(executablePath), fixedV3 ? '8cceb2b6143789bed0bb562bc4e8d0fdd7e2f6ae4001a34307437a6e9de25d7e'
-  : v3Mode ? '35f08ef5f2317f7151d6a2a0884531106a0bb2fba926cab7d09ff50b5f2e8f11' : buildReceipt.artifact.executableSha256)
-assert.equal(sha256(asarPath), fixedV3 ? 'ba26bf26ebdd4726f190e8ff61b70dcc2da5776a04d29f74ba865c111914058f'
-  : v3Mode ? '6aa5c19a88481eef994df8d1e4050578e8c860d314ee8e6662656b967b2d190c' : buildReceipt.artifact.asarSha256)
+assert.equal(sha256(executablePath), avatarExeSha ?? (fixedV3 ? '8cceb2b6143789bed0bb562bc4e8d0fdd7e2f6ae4001a34307437a6e9de25d7e'
+  : v3Mode ? '35f08ef5f2317f7151d6a2a0884531106a0bb2fba926cab7d09ff50b5f2e8f11' : buildReceipt.artifact.executableSha256))
+assert.equal(sha256(asarPath), avatarAsarSha ?? (fixedV3 ? 'ba26bf26ebdd4726f190e8ff61b70dcc2da5776a04d29f74ba865c111914058f'
+  : v3Mode ? '6aa5c19a88481eef994df8d1e4050578e8c860d314ee8e6662656b967b2d190c' : buildReceipt.artifact.asarSha256))
 const driverSha256 = sha256(fileURLToPath(import.meta.url))
 const runId = randomUUID()
 const evidenceDir = path.join(repository, '.runtime', '.cache', 'f05-u11-graph-profile', runId)
@@ -97,8 +102,9 @@ async function addCharacter(page, name) {
 async function quit(app) {
   const pid = app.process().pid
   let timer
+  let timedOut = false
   const closed = await Promise.race([app.close().then(() => true).catch(() => false),
-    new Promise(resolve => { timer = setTimeout(() => resolve(false), 10_000) })])
+    new Promise(resolve => { timer = setTimeout(() => { timedOut = true; resolve(false) }, 10_000) })])
   clearTimeout(timer)
   if (!closed) {
     try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, encoding: 'utf8' }) }
@@ -106,10 +112,17 @@ async function quit(app) {
   }
   for (let attempt = 0; attempt < 40; attempt++) {
     try { process.kill(pid, 0) }
-    catch (error) { if (error.code === 'ESRCH') return; throw error }
+    catch (error) {
+      if (error.code === 'ESRCH') {
+        if (!closed) throw new Error(`${timedOut ? 'ELECTRON_CLOSE_TIMEOUT' : 'ELECTRON_CLOSE_FAILED'} pid=${pid}`)
+        return
+      }
+      throw error
+    }
     await new Promise(resolve => setTimeout(resolve, 100))
   }
-  throw new Error(`Electron PID ${pid} did not exit`)
+  throw new Error(timedOut ? `ELECTRON_CLOSE_TIMEOUT pid=${pid}; process still running`
+    : `Electron PID ${pid} did not exit`)
 }
 function rosterFacts(db) {
   return JSON.stringify({
@@ -333,8 +346,9 @@ async function verifyV3Graph(page, db, setStep) {
   pass('U11.A12-delete-all-confirmation', 'U11.A12', 'Visible graph clear required explicit confirmation; cancellation wrote nothing and confirmation removed all active synthetic roles and relationships while retaining raw history',
     { beforeCount: 999, afterCount: 0, rawHistoricalRelations: db.prepare('SELECT count(*) FROM character_relationships').pluck().get() })
 }
-async function verifyV3AvatarBatch(page, app, db, avatarFixture, projectId, setStep) {
+async function verifyV3AvatarBatch(page, app, db, avatarFixture, projectId, oversizedRejected, setStep) {
   setStep('U10.A08-graph-batch-read')
+  assert.deepEqual(oversizedRejected, { requestedIds: 257, errorCode: 'INVALID_CHARACTER_ID' })
   assert.equal(db.prepare('SELECT count(*) FROM characters WHERE retired=0').pluck().get(), 1000)
   assert.equal(new Set(avatarFixture.map(avatar => avatar.characterId)).size, 2)
   const before = rosterFacts(db)
@@ -386,7 +400,6 @@ async function verifyV3AvatarBatch(page, app, db, avatarFixture, projectId, setS
     screenshot: { path: screenshotPath, sha256: sha256(screenshotPath) },
     beforeFactsSha256: createHash('sha256').update(before).digest('hex'),
     afterFactsSha256: createHash('sha256').update(rosterFacts(db)).digest('hex') }
-  fs.writeFileSync(path.join(evidenceDir, 'avatar-batch-observation.json'), JSON.stringify(observed, null, 2))
   assert(renderedNodes > 0 && renderedNodes <= 80, 'graph exceeded the bounded visible window')
   assert(calls.length > 0 && calls.length <= 3, 'graph avatar IPC was missing or unbounded')
   assert(calls.every(call => call.success && call.ids.length > 0 && call.ids.length <= 80
@@ -396,6 +409,8 @@ async function verifyV3AvatarBatch(page, app, db, avatarFixture, projectId, setS
   assert(avatarFixture.every(avatar => calls.some(call => call.avatars.some(view =>
     view.characterId === avatar.characterId && view.assetRevision === avatar.assetRevision))), 'batch response omitted a persisted avatar')
   assert.equal(observed.afterFactsSha256, observed.beforeFactsSha256, 'graph avatar reads wrote roster facts')
+  observed.oversizedRejected = oversizedRejected
+  fs.writeFileSync(path.join(evidenceDir, 'avatar-batch-observation.json'), JSON.stringify(observed, null, 2))
   pass('U10.A08-graph-batch-read', 'U10.A08', 'V3 thousand-person graph used bounded production avatar batches and painted two stable-ID avatars without roster writes', observed)
 }
 async function verifyV3Narrow(page, app, setStep) {
@@ -582,6 +597,7 @@ async function main() {
   let page
   let avatarFixture = null
   let avatarProjectId = null
+  let avatarOversized = null
   const fixture = { requests: [] }
   const server = a10Only ? createServer(async (request, response) => {
     const authorized = request.headers.authorization === `Bearer ${model.apiKey}`
@@ -673,6 +689,16 @@ async function main() {
           avatarFixture.push({ characterId: row.character_id, name: row.name, color,
             assetRevision: committed.avatar.assetRevision, sha256: createHash('sha256').update(Buffer.from(committed.avatar.base64, 'base64')).digest('hex') })
         }
+        const beforeOversized = new FixtureDatabase(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true, readonly: true })
+        try {
+          const facts = rosterFacts(beforeOversized)
+          const oversized = await invoke(page, 'character-avatar:read-batch',
+            Array.from({ length: 257 }, (_, index) => `character-${index}`), session)
+          assert.equal(oversized.success, false, 'oversized avatar batch was accepted')
+          assert.equal(oversized.error.code, 'INVALID_CHARACTER_ID')
+          assert.equal(rosterFacts(beforeOversized), facts, 'oversized avatar batch wrote roster facts')
+          avatarOversized = { requestedIds: 257, errorCode: oversized.error.code }
+        } finally { beforeOversized.close() }
       }
       if (a08Only) {
         const FixtureDatabase = createRequire(import.meta.url)('better-sqlite3')
@@ -705,7 +731,7 @@ async function main() {
     if (v3Mode) {
       currentStep = avatarOnly ? 'U10.A08-v3-graph-entry' : a08Only ? 'U11.A08-v3-graph-entry' : a09Only ? 'U11.A09-v3-graph-entry' : a10Only ? 'U11.A10-v3-architecture-entry'
         : a12Only ? 'U11.A12-v3-graph-entry' : 'U11.A13-v3-graph-entry'
-      if (avatarOnly) await verifyV3AvatarBatch(page, app, db, avatarFixture, avatarProjectId, step => { currentStep = step })
+      if (avatarOnly) await verifyV3AvatarBatch(page, app, db, avatarFixture, avatarProjectId, avatarOversized, step => { currentStep = step })
       else if (narrowOnly) await verifyV3Narrow(page, app, step => { currentStep = step })
       else if (a08Only) await verifyV3A08(page, db, step => { currentStep = step })
       else if (a09Only) await verifyV3A09(page, db, step => { currentStep = step })
