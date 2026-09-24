@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type BetterSqlite3 from 'better-sqlite3'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
 import { ensureBaselineBlueprintTables } from '../../migrations/baseline-blueprint-schema'
+import { sqliteSchemaFingerprint } from '../../migrations/sqlite-schema-adapter'
 import { backupProjectSqlite, probeProjectSqlite, verifyProjectSqlite } from '../sqlite-project-migration'
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -26,11 +27,66 @@ function fixture() {
 function bytes(root: string) {
   return Object.fromEntries(fs.readdirSync(root).sort().map(name => [name, createHash('sha256').update(fs.readFileSync(path.join(root, name))).digest('hex')]))
 }
+function legacyV110Fixture() {
+  const base = path.resolve('.runtime/.cache/novel-quality-modernization/s04-sqlite')
+  fs.mkdirSync(base, { recursive: true })
+  const root = fs.mkdtempSync(path.join(base, 'legacy-v110-')); roots.push(root)
+  const source = path.join(root, 'source.db'), target = path.join(root, 'target.db')
+  const db = new Database(source); handles.push(db)
+  db.pragma('journal_mode = WAL'); db.pragma('wal_autocheckpoint = 0'); db.pragma('foreign_keys = ON')
+  db.exec(fs.readFileSync(new URL('./legacy-v110-schema.sql', import.meta.url), 'utf8'))
+  expect(sqliteSchemaFingerprint(db)).toBe('1207fd8203e31503e3cd09ba5b60a959c606ded34a8c8c7774a9e15edc8271ba')
+  db.prepare('INSERT INTO project_core(rowid,id,project_name,characters_arch) VALUES (?,?,?,?)')
+    .run(7, 'main', '旧版合成项目', '原始角色群像')
+  db.prepare('INSERT INTO characters(rowid,name,role) VALUES (?,?,?)').run(44, '乙', 'protagonist')
+  db.prepare('INSERT INTO characters(rowid,name,role) VALUES (?,?,?)').run(99, '甲', 'supporting')
+  db.prepare('INSERT INTO contents(id,body) VALUES (?,?)').run(11, '原始正文\r\n字节不变')
+  db.prepare('INSERT INTO drafts(id,chapter_number,version,content_id,word_count) VALUES (?,?,?,?,?)').run(19, 7, 1, 11, 876)
+  db.prepare("UPDATE sqlite_sequence SET seq=900 WHERE name='contents'").run()
+  db.prepare("UPDATE sqlite_sequence SET seq=500 WHERE name='drafts'").run()
+  fs.writeFileSync(path.join(root, 'avatar.png'), Buffer.from('89504e470d0a1a0a00000000', 'hex'))
+  return { db, root, source, target }
+}
 afterEach(() => {
   for (const db of handles.splice(0)) if (db.open) db.close()
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 describe('real SQLite schema probe and WAL staging backup', () => {
+  it('recognizes only the qualified v1.1.0 old writer schema0 source', () => {
+    const f = legacyV110Fixture(), before = bytes(f.root)
+    expect(probeProjectSqlite({ databasePath: f.source })).toMatchObject({
+      schemaVersion: 0, fingerprint: '1207fd8203e31503e3cd09ba5b60a959c606ded34a8c8c7774a9e15edc8271ba',
+    })
+    expect(bytes(f.root)).toEqual(before)
+  })
+  it('copies qualified v1.1.0 rows and sequence through canonical staging to schema7 without writing the source', async () => {
+    const f = legacyV110Fixture(), before = bytes(f.root)
+    const result = await backupProjectSqlite({ sourceDatabasePath: f.source, targetDatabasePath: f.target })
+    expect(result.schemaVersion).toBe(7)
+    expect(verifyProjectSqlite({ databasePath: f.target })).toEqual(result)
+    const target = new Database(f.target, { readonly: true, fileMustExist: true }); handles.push(target)
+    expect(target.prepare('SELECT rowid FROM project_core WHERE id=?').pluck().get('main')).toBe(7)
+    expect(target.prepare('SELECT id,body FROM contents').get()).toEqual({ id: 11, body: '原始正文\r\n字节不变' })
+    expect(target.prepare('SELECT id,content_id,word_count FROM drafts').get()).toEqual({ id: 19, content_id: 11, word_count: 876 })
+    expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='contents'").pluck().get()).toBe(900)
+    expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='drafts'").pluck().get()).toBe(500)
+    const identities = target.prepare('SELECT source_key,original_row_json,character_id FROM character_identity_origins ORDER BY source_key').all() as Array<{ source_key: string; original_row_json: string; character_id: string }>
+    expect(identities.map(row => [row.source_key, JSON.parse(row.original_row_json).name])).toEqual([
+      ['legacy:characters:0', '乙'], ['legacy:characters:1', '甲'],
+    ])
+    expect(new Set(identities.map(row => row.character_id)).size).toBe(2)
+    expect(bytes(f.root)).toMatchObject(before)
+  })
+  it('rejects a fork of the v1.1.0 DDL before creating staging', async () => {
+    const f = legacyV110Fixture()
+    f.db.exec('ALTER TABLE contents ADD COLUMN unknown_old_fork TEXT')
+    const before = bytes(f.root)
+    expect(() => probeProjectSqlite({ databasePath: f.source })).toThrow('UNRECOGNIZED_SCHEMA')
+    await expect(backupProjectSqlite({ sourceDatabasePath: f.source, targetDatabasePath: f.target }))
+      .rejects.toThrow('UNRECOGNIZED_SCHEMA')
+    expect(fs.existsSync(f.target)).toBe(false)
+    expect(bytes(f.root)).toEqual(before)
+  })
   it('probes a live WAL fixture without changing any source file or user_version', () => {
     const f = fixture(), before = bytes(f.root)
     expect(fs.statSync(f.source + '-wal').size).toBeGreaterThan(0)

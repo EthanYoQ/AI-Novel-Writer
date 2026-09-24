@@ -10,9 +10,11 @@ import type { MigrationRegistry } from '../migrations/registry'
 import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
 import { M02_ADDED_CHARACTER_COLUMNS, M02_AUXILIARY_TABLES } from '../migrations/m02-character-identity'
 import { M03_REVIEW_CYCLE_TABLES } from '../migrations/m03-review-cycle'
+import { initializeLegacyBaselineSchema } from '../migrations/baseline-schema'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
+const QUALIFIED_V110_SCHEMA = '1207fd8203e31503e3cd09ba5b60a959c606ded34a8c8c7774a9e15edc8271ba'
 export interface ProjectSqliteEvidence {
   schemaVersion: number
   fingerprint: string
@@ -107,13 +109,55 @@ function inspect(db: BetterSqlite3.Database, registry: MigrationRegistry, target
     ...(result.version >= 3 ? { preIdentityDomain: domain(db, domainColumns(db, true)) } : {}),
     ...(result.version >= 6 ? { preAssetDomain: domain(db, domainColumns(db, false, true)) } : {}) }
 }
+function qualifiedV110Source(db: BetterSqlite3.Database): boolean {
+  const adapter = new SqliteSchemaAdapter(db)
+  return adapter.readUserVersion() === 0 && adapter.readSchemaFingerprint() === QUALIFIED_V110_SCHEMA
+    && adapter.integrityCheck() && adapter.foreignKeyCheck()
+}
+function inspectSource(db: BetterSqlite3.Database, registry: MigrationRegistry, allowV110: boolean): ProjectSqliteEvidence {
+  return allowV110 && qualifiedV110Source(db)
+    ? { schemaVersion: 0, fingerprint: QUALIFIED_V110_SCHEMA, domain: domain(db) }
+    : inspect(db, registry)
+}
+function copyQualifiedV110(source: BetterSqlite3.Database, staging: BetterSqlite3.Database, sourceColumns: DomainColumns): void {
+  initializeLegacyBaselineSchema(staging)
+  const targetColumns = domainColumns(staging)
+  const columnSets = (tables: DomainColumns) => tables.map(({ name, columns }) => [name, [...columns].sort()])
+  if (JSON.stringify(columnSets(sourceColumns)) !== JSON.stringify(columnSets(targetColumns))) {
+    throw new Error('PROJECT_MIGRATION_LEGACY_SCHEMA_MISMATCH')
+  }
+  staging.transaction(() => {
+    staging.pragma('defer_foreign_keys = ON')
+    staging.exec('DELETE FROM character_roster_meta; DELETE FROM continuity_projection_meta; DELETE FROM text_metric_versions')
+    for (const { name, columns } of sourceColumns) {
+      const table = quoteIdentifier(name), names = columns.map(quoteIdentifier)
+      const read = source.prepare(`SELECT rowid,${names.join(',')} FROM ${table} ORDER BY rowid`).safeIntegers().raw()
+      const write = staging.prepare(`INSERT INTO ${table}(rowid,${names.join(',')}) VALUES(${Array(columns.length + 1).fill('?').join(',')})`)
+      for (const row of read.iterate() as IterableIterator<unknown[]>) write.run(...row)
+      const rowids = (db: BetterSqlite3.Database) => {
+        const digest = createHash('sha256')
+        for (const id of db.prepare(`SELECT rowid FROM ${table} ORDER BY rowid`).safeIntegers().pluck().iterate()) {
+          digest.update(`${id}\n`)
+        }
+        return digest.digest('hex')
+      }
+      if (rowids(source) !== rowids(staging)) throw new Error('PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED')
+    }
+    staging.exec('DELETE FROM sqlite_sequence')
+    const insertSequence = staging.prepare('INSERT INTO sqlite_sequence(name,seq) VALUES(?,?)')
+    for (const row of source.prepare('SELECT name,seq FROM sqlite_sequence').safeIntegers().iterate() as IterableIterator<{ name: string; seq: bigint }>) {
+      insertSequence.run(row.name, row.seq)
+    }
+    if ((staging.pragma('foreign_key_check') as unknown[]).length) throw new Error('PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED')
+  })()
+}
 export function probeProjectSqlite(options: { databasePath: string; registry?: MigrationRegistry }): ProjectSqliteEvidence {
   const snapshot = physicalSnapshot(options.databasePath)
   try {
     const db = new Database(snapshot.file, { readonly: true, fileMustExist: true })
     db.pragma('foreign_keys = ON')
     try {
-      const result = inspect(db, options.registry ?? getDesktopMigrationRegistry()); snapshot.unchanged(); return result
+      const result = inspectSource(db, options.registry ?? getDesktopMigrationRegistry(), !options.registry); snapshot.unchanged(); return result
     } finally { db.close() }
   } finally { snapshot.close() }
 }
@@ -144,14 +188,19 @@ export async function backupProjectSqlite(options: {
     source = new Database(snapshot.file, { readonly: true, fileMustExist: true })
     source.pragma('foreign_keys = ON')
     const columnsBefore = domainColumns(source)
-    const before = inspect(source, registry)
+    const legacyV110 = !options.registry && qualifiedV110Source(source)
+    const before = inspectSource(source, registry, legacyV110)
     // Reserve a new inode before the backup API can open it.
     const fd = fs.openSync(targetPath, 'wx', 0o600); fs.closeSync(fd)
-    await source.backup(targetPath)
+    if (!legacyV110) await source.backup(targetPath)
     regular(targetPath)
     const staging = new Database(targetPath, { fileMustExist: true })
     try {
       staging.pragma('foreign_keys = ON')
+      if (legacyV110) {
+        copyQualifiedV110(source, staging, columnsBefore)
+        inspect(staging, registry, 0)
+      }
       migrateSchema(new SqliteSchemaAdapter(staging), registry, options.targetVersion ?? CURRENT_DESKTOP_SCHEMA_VERSION)
       const after = inspect(staging, registry, options.targetVersion ?? CURRENT_DESKTOP_SCHEMA_VERSION)
       if (JSON.stringify(before.domain) !== JSON.stringify(domain(staging, columnsBefore))) throw new Error('PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED')
