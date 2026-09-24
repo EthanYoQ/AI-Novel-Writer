@@ -1,12 +1,22 @@
 /* eslint-env node */
 
+import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const [, , portText, projectPath, markerPath] = process.argv
+const [, , portText, projectPath, markerPath, mode] = process.argv
 const port = Number(portText)
-if (!Number.isInteger(port) || !projectPath || !markerPath) {
-  throw new Error('Usage: node probe-legacy-project-open.mjs <port> <projectPath> <markerPath>')
+if (!Number.isInteger(port) || !projectPath || !markerPath || (mode && mode !== '--draft-write-proof')) {
+  throw new Error('Usage: node probe-legacy-project-open.mjs <port> <projectPath> <markerPath> [--draft-write-proof]')
+}
+const writeProof = mode === '--draft-write-proof'
+if (writeProof) {
+  const fixtureRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '.runtime', 'cache', 's14c-old-binaries')
+  const child = relative(fixtureRoot, resolve(projectPath))
+  if (!child || child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child)) {
+    throw new Error('Draft writer proof requires an isolated old-binary fixture project')
+  }
 }
 
 const deadline = Date.now() + 20_000
@@ -36,6 +46,28 @@ await new Promise((resolvePromise, rejectPromise) => {
   }, { once: true })
 })
 
+const draftContent = writeProof ? `A11_OLD_WRITER_${randomUUID()}` : null
+const draftWrite = writeProof ? `
+  if (result.project.path !== ${JSON.stringify(resolve(projectPath))}) {
+    throw new Error('legacy project:open returned another project before draft write')
+  }
+  const context = { projectId: result.project.id, projectPath: result.project.path,
+    leaseId: result.project.sessionLease }
+  if (!context.projectId || !context.leaseId) throw new Error('legacy project:open did not return a session lease')
+  const content = ${JSON.stringify(draftContent)}
+  const created = await window.velaAPI.invoke('db:draft-create',
+    { chapterNumber: 43, version: 1, source: 'write', content, wordCount: content.length },
+    ${JSON.stringify(resolve(projectPath))}, context)
+  if (!created || !created.success || !Number.isInteger(created.id)) {
+    throw new Error(created && created.error ? created.error : 'legacy draft-create failed')
+  }
+  const readBack = await window.velaAPI.invoke('db:draft-get-full', created.id, ${JSON.stringify(resolve(projectPath))}, context)
+  if (!readBack || readBack.id !== created.id || readBack.content !== content) {
+    throw new Error('legacy draft read-back differs from the committed content')
+  }
+  return { projectPath: result.project.path, projectName: result.project.name,
+    draft: { id: created.id, chapterNumber: 43, content, readBackContent: readBack.content } }
+` : ''
 const expression = `(async () => {
   if (!window.velaAPI || typeof window.velaAPI.invoke !== 'function') {
     throw new Error('legacy preload API is unavailable')
@@ -44,6 +76,7 @@ const expression = `(async () => {
   if (!result || !result.success || !result.project) {
     throw new Error(result && result.error ? result.error : 'legacy project:open failed')
   }
+  ${draftWrite}
   return { projectPath: result.project.path, projectName: result.project.name }
 })()`
 
@@ -76,9 +109,13 @@ const proof = response.result?.result?.value
 if (!proof?.projectPath || resolve(proof.projectPath) !== resolve(projectPath)) {
   throw new Error('Legacy application opened a different project than requested')
 }
+if (writeProof && (!Number.isInteger(proof.draft?.id) || proof.draft.content !== draftContent
+  || proof.draft.readBackContent !== draftContent)) {
+  throw new Error('Legacy application did not return exact draft write/read proof')
+}
 
 writeFileSync(markerPath, `${JSON.stringify({
   ...proof,
-  verifiedBy: 'legacy-renderer-cdp-project-open',
+  verifiedBy: writeProof ? 'legacy-renderer-cdp-draft-write' : 'legacy-renderer-cdp-project-open',
   verifiedAt: new Date().toISOString(),
 }, null, 2)}\n`, 'utf8')

@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -12,6 +12,65 @@ const releaseMonitorScript = resolve('scripts/monitor-win-release-gate.ps1')
 const upgradeFixtureScript = resolve('scripts/upgrade-data-fixture.mjs')
 const electronNodeRunner = resolve('node_modules/electron/dist/electron.exe')
 const WINDOWS_POWERSHELL_INTEGRATION_TIMEOUT_MS = 30_000
+const oldWriterIt = process.platform === 'win32' && process.env.AI_NOVEL_A11_OLD_EXE && process.env.AI_NOVEL_A11_FIXTURE_PROJECT
+  ? it : it.skip
+
+oldWriterIt('rejects wrong old-writer binaries and junction paths before launching', () => {
+  const project = resolve(process.env.AI_NOVEL_A11_FIXTURE_PROJECT!)
+  const guardRoot = mkdtempSync(join(resolve(project, '..'), 'writer-guard-'))
+  const junctionTarget = mkdtempSync(join(resolve('.runtime/cache'), 'a11-junction-target-'))
+  const junctionPath = join(guardRoot, 'junction')
+  const badExe = join(guardRoot, 'wrong.exe')
+  const realExe = join(guardRoot, 'real.exe')
+  try {
+    writeFileSync(badExe, 'not the verified old binary')
+    linkSync(resolve(process.env.AI_NOVEL_A11_OLD_EXE!), realExe)
+    mkdirSync(join(guardRoot, 'resources'))
+    writeFileSync(join(guardRoot, 'resources', 'app.asar'), 'wrong asar')
+    symlinkSync(junctionTarget, junctionPath, 'junction')
+    for (const [exe, acceptance, expected] of [
+      [badExe, join(guardRoot, 'bad-exe'), /old writer proof executable SHA256 mismatch/i],
+      [realExe, join(guardRoot, 'bad-asar'), /old writer proof asar SHA256 mismatch/i],
+      [badExe, join(junctionPath, 'acceptance'), /old writer proof reparse point/i],
+    ] as const) {
+      const result = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', probeScript,
+        '-ExePath', exe, '-LegacyProjectPathToOpen', project,
+        '-VelaHome', join(guardRoot, 'vela-home'), '-AcceptanceDirectory', acceptance, '-LegacyWriterProof'],
+      { encoding: 'utf8', timeout: 30_000 })
+      expect(result.status, result.stderr || result.stdout).not.toBe(0)
+      expect(result.stderr + result.stdout).toMatch(expected)
+    }
+  } finally {
+    rmdirSync(junctionPath)
+    rmSync(guardRoot, { recursive: true, force: true })
+    rmSync(junctionTarget, { recursive: true, force: true })
+  }
+}, 120_000)
+
+oldWriterIt('an opt-in old binary writes and reads a draft in the isolated fixture', async () => {
+  const project = resolve(process.env.AI_NOVEL_A11_FIXTURE_PROJECT!)
+  const acceptance = mkdtempSync(join(resolve(project, '..'), 'acceptance-writer-'))
+  const result = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', probeScript,
+    '-ExePath', resolve(process.env.AI_NOVEL_A11_OLD_EXE!), '-LegacyProjectPathToOpen', project,
+    '-VelaHome', join(resolve(project, '..'), 'vela-home'), '-AcceptanceDirectory', acceptance,
+    '-LegacyWriterProof', '-ObservationSeconds', '15', '-PostExitQuietSeconds', '5'],
+  { encoding: 'utf8', timeout: 120_000 })
+  expect(result.status, result.stderr || result.stdout).toBe(0)
+  const proofPath = join(acceptance, 'legacy-writer.json')
+  expect(existsSync(proofPath)).toBe(true)
+  const proof = JSON.parse(readFileSync(proofPath, 'utf8'))
+  expect(proof.direct.projectPath).toBe(project)
+  expect(proof.direct.draft.id).toBeGreaterThan(0)
+  expect(proof.direct.draft.readBackContent).toBe(proof.direct.draft.content)
+  const { DatabaseSync } = await import('node:sqlite')
+  const database = new DatabaseSync(join(project, '.vela', 'vela.db'), { readOnly: true })
+  try {
+    const row = database.prepare(`SELECT d.chapter_number AS chapterNumber, hex(c.body) AS bodyHex
+      FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?`).get(proof.direct.draft.id)
+    expect(row?.chapterNumber).toBe(43)
+    expect(row?.bodyHex).toBe(Buffer.from(proof.direct.draft.content, 'utf8').toString('hex').toUpperCase())
+  } finally { database.close() }
+}, 120_000)
 
 function windowsPowerShellIt(
   name: string,
