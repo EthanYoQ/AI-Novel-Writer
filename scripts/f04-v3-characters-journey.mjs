@@ -140,6 +140,19 @@ async function launch() {
   return { app, page }
 }
 
+async function waitBounded(promise, ms, message) {
+  let timer
+  try {
+    await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms) })])
+  } finally { clearTimeout(timer) }
+}
+
+async function closeAppBounded(app) {
+  const pid = app.process().pid
+  try { await waitBounded(app.close(), 10_000, `ELECTRON_CLOSE_TIMEOUT pid=${pid}`) }
+  catch (error) { throw new Error(`ELECTRON_CLOSE_FAILED pid=${pid}: ${error?.message}`) }
+}
+
 async function addCharacter(page, name) {
   const before = new Set(await page.locator('[data-character-id]').evaluateAll(rows => rows.map(row => row.getAttribute('data-character-id'))))
   await page.getByTitle('新建角色').click()
@@ -181,7 +194,7 @@ async function main() {
       assert.equal((await invoke(page, 'llm:save-model', model)).success, true)
       assert.equal((await invoke(page, 'llm:set-default-model', model.id)).success, true)
     }
-    await app.close()
+    await closeAppBounded(app)
     app = null
 
     app = (await launch()).app
@@ -202,7 +215,7 @@ async function main() {
       await rolePage.getByText('当前位置/阵营', { exact: false }).locator('xpath=..').locator('textarea').fill('作者旧港')
       await rolePage.getByRole('button', { name: '保存', exact: true }).last().click()
       await rolePage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
-      await app.close(); app = null
+      await closeAppBounded(app); app = null
 
       app = (await launch()).app
       const sourcePage = await app.firstWindow()
@@ -218,7 +231,7 @@ async function main() {
       assert.equal(draft.success, true, draft.error)
       const draftId = draft.id
       assert(Number.isSafeInteger(draftId) && draftId > 0)
-      await app.close(); app = null
+      await closeAppBounded(app); app = null
 
       currentStep = 'u09-a05-writer-finalize'
       app = (await launch()).app
@@ -244,7 +257,7 @@ async function main() {
       const source = { draftId, chapterNumber: 1, finalizationId: outbox.finalizationId, contentHash: outbox.contentHash }
       const postSteps = importDb.prepare("SELECT step_key AS stepKey,ok FROM post_process_steps WHERE step_key IN ('chapter_notes','character_cards')").all()
       assert.deepEqual(postSteps.map(step => [step.stepKey, step.ok]).sort(), [['chapter_notes', 1], ['character_cards', 1]])
-      await app.close(); app = null
+      await closeAppBounded(app); app = null
 
       app = (await launch()).app
       const verificationPage = await app.firstWindow()
@@ -286,7 +299,7 @@ async function main() {
         { draftId, candidateKey: pendingState.candidateKey })
       assert.equal(proposal.value, '旧港')
       assert.equal(proposal.source.finalizationId, source.finalizationId)
-      await app.close(); app = null
+      await closeAppBounded(app); app = null
 
       app = (await launch()).app
       const proposalPage = await app.firstWindow()
@@ -316,7 +329,7 @@ async function main() {
         .pluck().get(pendingIdentity.proposalBatchId))
       assert.equal(identityEnvelope.batch.status, 'cancelled')
       assert.equal(state(finalizedIds[1]).location, '作者旧港')
-      await app.close(); app = null
+      await closeAppBounded(app); app = null
 
       app = (await launch()).app
       const reopenedPage = await app.firstWindow()
@@ -343,7 +356,7 @@ async function main() {
           identityBatchId: pendingIdentity.proposalBatchId, modelRequestCount: modelRequests.length } })
 
       currentStep = 'u09-a08-rename-source-reopen'
-      await app.close(); app = null
+      await closeAppBounded(app); app = null
       app = (await launch()).app
       const renamePage = await app.firstWindow()
       const renameNotice = renamePage.locator('[role="status"].fixed.inset-x-0.top-10')
@@ -359,7 +372,7 @@ async function main() {
       await renamePage.getByText('姓名', { exact: true }).locator('xpath=..').locator('input').fill(finalizedNames[1])
       await renamePage.getByRole('button', { name: '保存', exact: true }).last().click()
       await renamePage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
-      await app.close(); app = null
+      await closeAppBounded(app); app = null
 
       app = (await launch()).app
       const sameNamePage = await app.firstWindow()
@@ -391,7 +404,7 @@ async function main() {
       currentStep = 'u09-a09-late-author-save'
       await sameNamePage.getByTitle('返回基础设定').click()
       lateId = await addCharacter(sameNamePage, lateName)
-      await app.close(); app = null
+      await closeAppBounded(app); app = null
       app = (await launch()).app
       const secondSourcePage = await app.firstWindow()
       const secondOpened = await invoke(secondSourcePage, 'project:open', projectPath, randomUUID(), null)
@@ -404,7 +417,7 @@ async function main() {
       const secondDraft = await invoke(secondSourcePage, 'db:draft-create', { chapterNumber: 2, version: 1, source: 'write',
         content: lateProse, wordCount: lateProse.length }, projectPath, secondSession)
       assert.equal(secondDraft.success, true, secondDraft.error)
-      await app.close(); app = null
+      await closeAppBounded(app); app = null
 
       app = (await launch()).app
       const latePage = await app.firstWindow()
@@ -448,12 +461,14 @@ async function main() {
       }
       assert.equal(lateFailure?.ok, 0, 'late result did not fail the conflicting step')
       assert(lateFailure.errorMsg.includes('FIELD_CONFLICT'), `late result failure missing field conflict: ${lateFailure.errorMsg}`)
-      assert.equal(modelRequests.length, 6, 'Writer did not finish its bounded conflict retries')
+      assert.equal(lateFailure.attemptCount, 1, 'conflict retry created another post-process attempt')
+      assert.equal(modelRequests.length, 4, 'conflict retry dispatched another model request')
       assert(modelRequests.slice(3).every(request => JSON.stringify(request.messages).includes(lateId)),
         'a retry escaped the frozen character ID')
       assert.equal(state(lateId).location, '作者并发值')
       assert.equal(state(finalizedIds[0]).location, '北塔')
-      await app.close(); app = null
+      const staleApp = app; app = null
+      await closeAppBounded(staleApp)
 
       app = (await launch()).app
       const lateReopenPage = await app.firstWindow()
@@ -471,7 +486,8 @@ async function main() {
       assert.equal(lateOpened.success, true, lateOpened.error)
       const lateSession = { projectId: created.projectId, projectPath, leaseId: lateOpened.project?.sessionLease }
       const recovered = await invoke(lateReopenPage, 'finalization-generation:read', { slot: secondSlot }, lateSession)
-      assert.equal(recovered?.view?.artifacts?.length, 3, 'late model artifacts did not survive restart')
+      assert.equal(recovered?.attemptCount, 1, 'conflict retry created another physical attempt')
+      assert.equal(recovered?.view?.artifacts?.length, 1, 'late model artifact did not survive restart')
       assert(recovered.view.artifacts.every(artifact => artifact.text.includes('模型旧值')),
         'a late model artifact lost the stale proposal')
       assert.equal(recovered.effect, undefined, 'stale result was silently committed')
@@ -479,7 +495,9 @@ async function main() {
       assert.equal(state(lateId).location, '作者并发值')
       assert.equal(JSON.parse(state(lateId).provenance).location.kind, 'author')
       assert.equal(JSON.parse(state(finalizedIds[0]).provenance).location.kind, 'derived')
-      assert.equal(modelRequests.length, 6, 'reopening reran a stale model result')
+      assert.equal(modelRequests.length, 4, 'reopening reran a stale model result')
+      const verifiedApp = app; app = null
+      await closeAppBounded(verifiedApp)
       steps.push({ stepId: currentStep, actionId: 'U09.A09', outcome: 'PASS',
         assertion: 'Writer saved an author edit while a model response was held; the late result left a persisted field-conflict failure and artifact, and neither source or value regressed after restart.',
         observed: { beforeRelease, finalizationId: secondOutbox.finalizationId, failure: lateFailure,
@@ -1029,10 +1047,18 @@ async function main() {
   } catch (error) {
     failure = { step: currentStep, name: error?.name, message: error?.message }
   } finally {
+    const cleanupFailures = []
     releaseLateModel?.()
-    importDb?.close()
-    await app?.close().catch(() => {})
-    if (controlledModel) await new Promise(resolve => server.close(resolve))
+    try { importDb?.close() } catch (error) { cleanupFailures.push(`DATABASE_CLOSE_FAILED: ${error?.message}`) }
+    try { if (app) await closeAppBounded(app) } catch (error) { cleanupFailures.push(error?.message) }
+    try {
+      if (controlledModel) await waitBounded(new Promise(resolve => server.close(resolve)), 10_000, 'LOOPBACK_CLOSE_TIMEOUT')
+    } catch (error) { cleanupFailures.push(error?.message) }
+    if (!failure && cleanupFailures.length) failure = { step: 'cleanup', name: 'CleanupError', message: cleanupFailures[0] }
+    if (cleanupFailures.length) {
+      const a09 = steps.find(step => step.actionId === 'U09.A09')
+      if (a09) { a09.outcome = 'FAIL'; a09.cleanupFailure = cleanupFailures[0] }
+    }
     const verifiedActions = [...new Set(steps.filter(step => step.outcome === 'PASS' && step.actionId).map(step => step.actionId))]
     const receipt = { schemaVersion: 1, qualification: u09ImportOnly ? 'F05_U09_A01_A02_A03_A04_PACKAGED_V3_IMPORT'
       : u09FinalizedOnly ? 'F05_U09_A05_A06_A07_A08_A09_PACKAGED_V3_FINALIZED' : 'F05_U09_A08_U10_A01_A02_A03_A04_A05_A06_A07_A09_A10_PACKAGED_V3_CHARACTERS',
@@ -1053,7 +1079,7 @@ async function main() {
         ...(controlledModel ? [] : ['U09.A09']),
         ...['U10.A01', 'U10.A02', 'U10.A03', 'U10.A04', 'U10.A05', 'U10.A06', 'U10.A07', 'U10.A09', 'U10.A10'].filter(id => !verifiedActions.includes(id)),
         'U10.A08', 'U10.A11-U10.A12', 'F05 whole-product qualification'],
-      projectPath, scratch, steps, failure }
+      projectPath, scratch, steps, failure, ...(cleanupFailures.length ? { cleanupFailures } : {}) }
     fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
     process.stdout.write(`${JSON.stringify({ outcome: receipt.outcome, sliceOutcome: receipt.sliceOutcome, testedSha,
       driverSha256: receipt.driver.sha256, receipt: path.relative(repository, receiptPath), verifiedActions: receipt.verifiedActions })}\n`)
