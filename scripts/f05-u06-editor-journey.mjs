@@ -500,7 +500,7 @@ async function performanceMain() {
   let currentStep = 'package'
   const frozenProtocol = JSON.parse(fs.readFileSync(path.join(repository, 'docs/plans/novel-quality-program-v3-2026-09-13/feature-union.json'), 'utf8')).editorProtocol
   const protocol = resolveEditorProtocol(frozenProtocol, 'editor-interaction-v2')
-  const samples = {}, sampleAttempts = [], phaseSamples = {}, cpuProfiles = [], fixtures = {}, environment = {}
+  const samples = {}, sampleAttempts = [], phaseSamples = {}, cpuProfiles = [], fixtures = {}, fixtureBodies = {}, environment = {}
   let measurementConditions = null
   try {
     assert.equal(fileHash(executablePath), expectedExe)
@@ -525,6 +525,7 @@ async function performanceMain() {
       const name = `U06-${units}`
       const body = ('春'.repeat(100) + '\n').repeat(units / 100).trimEnd()
       assert.equal((body.match(/春/g) ?? []).length, units)
+      fixtureBodies[units] = body
       const created = await invoke(page, 'project:create', { path: profile.projects, name,
         genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
       assert.equal(created.success, true, created.error)
@@ -604,6 +605,11 @@ async function performanceMain() {
         fixtures[units].bodySha256, 'fixture changed before measurement')
       if (!phaseDiagnostic) samples[units] = { writer: {} }
       if (phaseDiagnostic) phaseSamples[units] = { warmup: [], raw: [] }
+      const expectedDocument = fixtureBodies[units]
+      assert.equal(typeof expectedDocument, 'string', 'performance fixture body is unavailable')
+      assert(expectedDocument.length > 0, 'performance fixture body is empty')
+      assert.equal(createHash('sha256').update(expectedDocument).digest('hex'), fixtures[units].bodySha256,
+        'performance fixture body differs from its recorded source hash')
       const cpuProfiler = phaseDiagnostic && units === 200000 ? await openCpuProfiler(page) : null
       if (cpuProfiler) environment.cpuProfiler = { supported: !!cpuProfiler.session, error: cpuProfiler.error ?? null }
       for (let index = 0; index < protocol.warmupCount + protocol.sampleCount; index++) {
@@ -621,7 +627,7 @@ async function performanceMain() {
           const pendingProfile = cpuTitle ? waitForCpuProfile(cpuProfiler.session, cpuTitle).catch(error => error) : null
           let result
           try {
-            result = await measureEditorInteractionV2(page, action, fixtures[units].body, undefined,
+            result = await measureEditorInteractionV2(page, action, expectedDocument, undefined,
               phaseDiagnostic && action === 'input', cpuTitle)
           } catch (error) {
             if (!phaseDiagnostic) {
