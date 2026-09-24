@@ -14,7 +14,13 @@ import { initializeLegacyBaselineSchema } from '../migrations/baseline-schema'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
+const QUALIFIED_V100_SCHEMA = '5e1ee5e03fa79bbf49694a680316ee74047f45901cd3f8affeaa0a7fda3ea414'
 const QUALIFIED_V110_SCHEMA = '1207fd8203e31503e3cd09ba5b60a959c606ded34a8c8c7774a9e15edc8271ba'
+const V100_MISSING_COLUMNS: Record<string, string[]> = {
+  characters: ['cs_provenance'], drafts: ['source_dependencies'], summary_snapshots: [
+    'character_state_candidates', 'source_finalization_id', 'source_content_hash', 'projection_generation',
+  ],
+}
 export interface ProjectSqliteEvidence {
   schemaVersion: number
   fingerprint: string
@@ -109,21 +115,26 @@ function inspect(db: BetterSqlite3.Database, registry: MigrationRegistry, target
     ...(result.version >= 3 ? { preIdentityDomain: domain(db, domainColumns(db, true)) } : {}),
     ...(result.version >= 6 ? { preAssetDomain: domain(db, domainColumns(db, false, true)) } : {}) }
 }
-function qualifiedV110Source(db: BetterSqlite3.Database): boolean {
+function qualifiedLegacySource(db: BetterSqlite3.Database): string | null {
   const adapter = new SqliteSchemaAdapter(db)
-  return adapter.readUserVersion() === 0 && adapter.readSchemaFingerprint() === QUALIFIED_V110_SCHEMA
-    && adapter.integrityCheck() && adapter.foreignKeyCheck()
+  const fingerprint = adapter.readSchemaFingerprint()
+  return adapter.readUserVersion() === 0 && [QUALIFIED_V100_SCHEMA, QUALIFIED_V110_SCHEMA].includes(fingerprint)
+    && adapter.integrityCheck() && adapter.foreignKeyCheck() ? fingerprint : null
 }
-function inspectSource(db: BetterSqlite3.Database, registry: MigrationRegistry, allowV110: boolean): ProjectSqliteEvidence {
-  return allowV110 && qualifiedV110Source(db)
-    ? { schemaVersion: 0, fingerprint: QUALIFIED_V110_SCHEMA, domain: domain(db) }
+function inspectSource(db: BetterSqlite3.Database, registry: MigrationRegistry, allowLegacy: boolean): ProjectSqliteEvidence {
+  const fingerprint = allowLegacy && qualifiedLegacySource(db)
+  return fingerprint
+    ? { schemaVersion: 0, fingerprint, domain: domain(db) }
     : inspect(db, registry)
 }
-function copyQualifiedV110(source: BetterSqlite3.Database, staging: BetterSqlite3.Database, sourceColumns: DomainColumns): void {
+function copyQualifiedLegacy(source: BetterSqlite3.Database, staging: BetterSqlite3.Database, sourceColumns: DomainColumns, fingerprint: string): void {
   initializeLegacyBaselineSchema(staging)
   const targetColumns = domainColumns(staging)
   const columnSets = (tables: DomainColumns) => tables.map(({ name, columns }) => [name, [...columns].sort()])
-  if (JSON.stringify(columnSets(sourceColumns)) !== JSON.stringify(columnSets(targetColumns))) {
+  const expectedColumns = fingerprint === QUALIFIED_V100_SCHEMA ? targetColumns
+    .filter(({ name }) => name !== 'continuity_projection_meta')
+    .map(({ name, columns }) => ({ name, columns: columns.filter(column => !V100_MISSING_COLUMNS[name]?.includes(column)) })) : targetColumns
+  if (JSON.stringify(columnSets(sourceColumns)) !== JSON.stringify(columnSets(expectedColumns))) {
     throw new Error('PROJECT_MIGRATION_LEGACY_SCHEMA_MISMATCH')
   }
   staging.transaction(() => {
@@ -188,17 +199,17 @@ export async function backupProjectSqlite(options: {
     source = new Database(snapshot.file, { readonly: true, fileMustExist: true })
     source.pragma('foreign_keys = ON')
     const columnsBefore = domainColumns(source)
-    const legacyV110 = !options.registry && qualifiedV110Source(source)
-    const before = inspectSource(source, registry, legacyV110)
+    const before = inspectSource(source, registry, !options.registry)
+    const legacySchema = !options.registry && [QUALIFIED_V100_SCHEMA, QUALIFIED_V110_SCHEMA].includes(before.fingerprint)
     // Reserve a new inode before the backup API can open it.
     const fd = fs.openSync(targetPath, 'wx', 0o600); fs.closeSync(fd)
-    if (!legacyV110) await source.backup(targetPath)
+    if (!legacySchema) await source.backup(targetPath)
     regular(targetPath)
     const staging = new Database(targetPath, { fileMustExist: true })
     try {
       staging.pragma('foreign_keys = ON')
-      if (legacyV110) {
-        copyQualifiedV110(source, staging, columnsBefore)
+      if (legacySchema) {
+        copyQualifiedLegacy(source, staging, columnsBefore, before.fingerprint)
         inspect(staging, registry, 0)
       }
       migrateSchema(new SqliteSchemaAdapter(staging), registry, options.targetVersion ?? CURRENT_DESKTOP_SCHEMA_VERSION)
