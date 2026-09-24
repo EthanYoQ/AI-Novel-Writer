@@ -50,7 +50,7 @@ test('冻结规划脚本通过原Node入口执行全部合同反例', () => {
   assert.equal(receipt.scope, 'plan-contract fixtures only; product checks NOT RUN')
   assert.equal(receipt.groups, 16)
   assert.equal(receipt.actions, 153)
-  assert.equal(receipt.negativeCases, 26)
+  assert.equal(receipt.negativeCases, 29)
 })
 function pair() {
   const exports = buildFixtureExports(source)
