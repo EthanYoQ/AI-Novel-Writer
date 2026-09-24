@@ -16,6 +16,9 @@ const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 const packageDir = option('package-dir')
 const u09ImportOnly = process.argv.includes('--u09-import-only')
+const u09FinalizedOnly = process.argv.includes('--u09-finalized-only')
+assert(!(u09ImportOnly && u09FinalizedOnly), 'choose one U09 journey mode')
+const controlledModel = u09ImportOnly || u09FinalizedOnly
 const packageSourceSha = option('package-source-sha')
 const expectedExe = option('exe-sha256')
 const expectedAsar = option('asar-sha256')
@@ -36,7 +39,7 @@ const ignoredTestOnlyPaths = changedProductPaths.filter(file => [
   'electron/services/__tests__/release-vector-smoke.test.ts',
 ].includes(file))
 const dirtyProductPaths = git('status', '--porcelain', '--untracked-files=all', '--', ...productInputs).split('\n').filter(Boolean)
-const ignoredScreenshotPaths = dirtyProductPaths.filter(line => /^\?\? src\/components\/(?:dialogs|editor|layout\/v2|panels|pages\/v2)\/__tests__\/__screenshots__\/.*\.png$/.test(line))
+const ignoredScreenshotPaths = dirtyProductPaths.filter(line => /^\?\? src\/components\/(?:characters|dialogs|editor|layout\/v2|panels|pages\/v2)\/__tests__\/__screenshots__\/.*\.png$/.test(line))
 assert.deepEqual(changedProductPaths.filter(file => !ignoredTestOnlyPaths.includes(file)), [], 'product source changed since fixed package build')
 assert.deepEqual(dirtyProductPaths.filter(line => !ignoredScreenshotPaths.includes(line)), [], 'product build inputs are dirty')
 assert.equal(sha256(exe), expectedExe, 'executable hash changed')
@@ -52,6 +55,9 @@ const projectName = 'V3C'
 const names = [`甲${runId.slice(0, 4)}`, `乙${runId.slice(0, 4)}`]
 const backgrounds = [`北港线人 ${runId.slice(0, 8)}`, `南站警员 ${runId.slice(0, 8)}`]
 const importNames = [`候选甲${runId.slice(0, 4)}`, `候选乙${runId.slice(0, 4)}`, `候选丙${runId.slice(0, 4)}`]
+const finalizedNames = [`派生甲${runId.slice(0, 4)}`, `作者乙${runId.slice(0, 4)}`, `同名丙${runId.slice(0, 4)}`]
+const finalizedProse = `${finalizedNames[0]}走进北塔。${finalizedNames[1]}留在旧港。${finalizedNames[2]}站在桥上。`
+let finalizedIds = []
 const model = { id: 'u09-local-fixture', name: 'U09 controlled fixture', provider: 'openai', protocol: 'openai',
   modelName: 'gpt-4.1', baseUrl: 'https://api.openai.com/v1', apiKey: 'u09-offline', maxTokens: 8192,
   temperature: 0.7, purposes: ['generation'] }
@@ -59,13 +65,17 @@ const modelRequests = []
 let fixturePort
 const server = createServer(async (request, response) => {
   if (request.method !== 'POST' || request.url !== '/v1/chat/completions'
-    || request.headers.authorization !== `Bearer ${model.apiKey}` || modelRequests.length >= 3) {
+    || request.headers.authorization !== `Bearer ${model.apiKey}` || modelRequests.length >= (u09FinalizedOnly ? 2 : 3)) {
     response.writeHead(403).end(); return
   }
   const body = JSON.parse(Buffer.concat(await Array.fromAsync(request)).toString('utf8'))
   modelRequests.push(body)
   const index = modelRequests.length - 1
-  const content = JSON.stringify({ results: [{ sourceId: '1:1', characterCards: [{
+  const content = u09FinalizedOnly ? index === 0 ? `${finalizedNames[0]}走进北塔。` : JSON.stringify({ updates: [
+    { characterId: finalizedIds[0], currentState: { location: '北塔' }, evidence: { text: `${finalizedNames[0]}走进北塔。` } },
+    { characterId: finalizedIds[1], currentState: { location: '旧港' }, evidence: { text: `${finalizedNames[1]}留在旧港。` } },
+    { characterId: finalizedIds[2], name: finalizedNames[2], currentState: { location: '桥上' }, evidence: { text: `${finalizedNames[2]}站在桥上。` } },
+  ] }) : JSON.stringify({ results: [{ sourceId: '1:1', characterCards: [{
     name: importNames[index], role: 'supporting', background: `模型背景${index + 1}`, notes: '合成提取',
   }] }] })
   response.writeHead(200, { 'Content-Type': 'text/event-stream' })
@@ -96,7 +106,7 @@ async function launch() {
     APPDATA: profile.appData, LOCALAPPDATA: profile.localAppData }
   for (const key of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'AI_NOVEL_SMOKE_OPEN_PROJECT']) delete env[key]
   const app = await electron.launch({ executablePath: exe, cwd: packageDir, args: [`--user-data-dir=${profile.userData}`], env, timeout: 30_000 })
-  if (u09ImportOnly) await app.evaluate((_, port) => {
+  if (controlledModel) await app.evaluate((_, port) => {
     const originalFetch = globalThis.fetch
     globalThis.fetch = (input, options) => {
       const url = new URL(String(input))
@@ -119,18 +129,21 @@ async function launch() {
 }
 
 async function addCharacter(page, name) {
+  const before = new Set(await page.locator('[data-character-id]').evaluateAll(rows => rows.map(row => row.getAttribute('data-character-id'))))
   await page.getByTitle('新建角色').click()
   await page.getByText('姓名', { exact: true }).locator('xpath=..').locator('input').fill(name)
   await page.getByRole('button', { name: '保存', exact: true }).last().click()
   await page.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
-  const row = page.locator('[data-character-id]').filter({ hasText: name })
-  const id = await row.getAttribute('data-character-id')
+  await page.waitForFunction(previous => [...document.querySelectorAll('[data-character-id]')]
+    .some(row => !previous.includes(row.getAttribute('data-character-id'))), [...before])
+  const id = (await page.locator('[data-character-id]').evaluateAll(rows => rows.map(row => row.getAttribute('data-character-id'))))
+    .find(candidate => candidate && !before.has(candidate))
   assert(id, `stable ID missing for ${name}`)
   return id
 }
 
 async function main() {
-  if (u09ImportOnly) {
+  if (controlledModel) {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
     fixturePort = server.address().port
   }
@@ -152,7 +165,7 @@ async function main() {
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(created.success, true, created.error)
     projectPath = created.projectPath
-    if (u09ImportOnly) {
+    if (controlledModel) {
       assert.equal((await invoke(page, 'llm:save-model', model)).success, true)
       assert.equal((await invoke(page, 'llm:set-default-model', model.id)).success, true)
     }
@@ -169,6 +182,155 @@ async function main() {
     await rolePage.locator('.writer-left-rail button[title="角色"]').click()
     await rolePage.getByTitle('新建角色').waitFor({ state: 'visible' })
     assert.equal(await rolePage.locator('[data-shell-variant="v3"]').count(), 1)
+    if (u09FinalizedOnly) {
+      finalizedIds = [await addCharacter(rolePage, finalizedNames[0]), await addCharacter(rolePage, finalizedNames[1]),
+        await addCharacter(rolePage, finalizedNames[2]), await addCharacter(rolePage, finalizedNames[2])]
+      await rolePage.locator(`[data-character-id="${finalizedIds[1]}"]`).click()
+      await rolePage.getByTitle('查看当前进展/状态').click()
+      await rolePage.getByText('当前位置/阵营', { exact: false }).locator('xpath=..').locator('textarea').fill('作者旧港')
+      await rolePage.getByRole('button', { name: '保存', exact: true }).last().click()
+      await rolePage.getByText('已保存', { exact: true }).last().waitFor({ state: 'visible' })
+      await app.close(); app = null
+
+      app = (await launch()).app
+      const sourcePage = await app.firstWindow()
+      const opened = await invoke(sourcePage, 'project:open', projectPath, randomUUID(), null)
+      assert.equal(opened.success, true, opened.error)
+      const session = { projectId: created.projectId, projectPath, leaseId: opened.project?.sessionLease }
+      assert(session.leaseId, 'finalized fixture session missing')
+      const blueprint = await invoke(sourcePage, 'db:blueprint-upsert', { chapterNumber: 1, title: '北塔', role: '发展',
+        purpose: '核对角色状态', keyEvents: finalizedProse, characters: [] }, projectPath, session)
+      assert.equal(blueprint.success, true, blueprint.error)
+      const draft = await invoke(sourcePage, 'db:draft-create', { chapterNumber: 1, version: 1, source: 'write',
+        content: finalizedProse, wordCount: finalizedProse.length }, projectPath, session)
+      assert.equal(draft.success, true, draft.error)
+      const draftId = draft.id
+      assert(Number.isSafeInteger(draftId) && draftId > 0)
+      await app.close(); app = null
+
+      currentStep = 'u09-a05-writer-finalize'
+      app = (await launch()).app
+      const finalPage = await app.firstWindow()
+      const finalNotice = finalPage.locator('[role="status"].fixed.inset-x-0.top-10')
+      if (await finalNotice.isVisible()) await finalNotice.getByRole('button', { name: '知道了', exact: true }).click()
+      await finalPage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
+      await finalPage.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
+      await finalPage.locator('.cm-content').waitFor({ state: 'visible' })
+      assert((await finalPage.locator('.cm-content').innerText()).includes(finalizedProse), 'Writer draft differs from fixture source')
+      await finalPage.getByRole('button', { name: '定稿', exact: true }).click()
+      const finalConfirm = finalPage.getByRole('dialog').filter({ hasText: '确定要将第 1 章定稿吗？' })
+      await finalConfirm.getByRole('button', { name: '确认定稿', exact: true }).click()
+      await finalPage.getByText('已定稿（只读）', { exact: true }).waitFor({ state: 'visible', timeout: 60_000 })
+      await finalPage.locator('.writer-ai-panel').getByText('整个工作流已全部完成', { exact: true })
+        .waitFor({ state: 'visible', timeout: 90_000 })
+
+      assert.equal(modelRequests.length, 2)
+      assert(JSON.stringify(modelRequests[1].messages).includes(finalizedIds[0]), 'model did not receive frozen character ID')
+      importDb = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true, readonly: true })
+      const outbox = importDb.prepare('SELECT finalization_id AS finalizationId,content_hash AS contentHash,content_snapshot AS content FROM finalization_outbox WHERE draft_id=?').get(draftId)
+      assert.equal(outbox.content, finalizedProse)
+      const source = { draftId, chapterNumber: 1, finalizationId: outbox.finalizationId, contentHash: outbox.contentHash }
+      const postSteps = importDb.prepare("SELECT step_key AS stepKey,ok FROM post_process_steps WHERE step_key IN ('chapter_notes','character_cards')").all()
+      assert.deepEqual(postSteps.map(step => [step.stepKey, step.ok]).sort(), [['chapter_notes', 1], ['character_cards', 1]])
+      await app.close(); app = null
+
+      app = (await launch()).app
+      const verificationPage = await app.firstWindow()
+      const verifyOpened = await invoke(verificationPage, 'project:open', projectPath, randomUUID(), null)
+      assert.equal(verifyOpened.success, true, verifyOpened.error)
+      const verifySession = { projectId: created.projectId, projectPath, leaseId: verifyOpened.project?.sessionLease }
+      assert(verifySession.leaseId, 'finalized verification session missing')
+      const verify = (channel, ...args) => invoke(verificationPage, channel, ...args, verifySession)
+      const context = await verify('finalized-character:read-context', { draftId })
+      assert.equal(context.context.identityStatus, 'bound')
+      assert.deepEqual(context.context.characters.filter(character => character.displayNameSnapshot === finalizedNames[2])
+        .map(character => character.characterId).sort(), finalizedIds.slice(2).sort())
+      const notes = await verify('finalization-generation:read', { slot: { source, stepKey: 'chapter_notes' } })
+      const characterSlot = { source, stepKey: 'character_cards' }
+      const characterStage = await verify('finalization-generation:read', { slot: characterSlot })
+      assert.equal(notes.effect?.success, true)
+      assert.equal(characterStage.effect?.success, true)
+      currentStep = 'u09-a05-derived'
+      const state = id => importDb.prepare('SELECT cs_location AS location,cs_provenance AS provenance FROM characters WHERE character_id=?').get(id)
+      const derived = state(finalizedIds[0])
+      assert.equal(derived.location, '北塔')
+      assert.deepEqual(JSON.parse(derived.provenance).location.source, source)
+      assert.equal(JSON.parse(derived.provenance).location.kind, 'derived')
+      steps.push({ stepId: currentStep, actionId: 'U09.A05', outcome: 'PASS',
+        assertion: 'Bound finalized prose applied one nonconflicting dynamic field with derived source provenance.',
+        observed: { draftId, finalizationId: source.finalizationId, characterId: finalizedIds[0], location: derived.location } })
+
+      currentStep = 'u09-a06-proposals'
+      assert.equal(state(finalizedIds[1]).location, '作者旧港')
+      assert.equal(JSON.parse(state(finalizedIds[1]).provenance).location.kind, 'author')
+      assert.equal(characterStage.effect.candidates.some(candidate => candidate.characterId === finalizedIds[1]
+        && candidate.reason === 'author-protected'), true)
+      assert.equal(characterStage.effect.unresolved.some(candidate => candidate.reason === 'ambiguous'
+        && candidate.candidateIds.length === 2), true)
+      const [pendingState] = await verify('finalized-character:list-state-candidates')
+      const [pendingIdentity] = await verify('character-proposal:list-pending-finalized')
+      assert(pendingState && pendingIdentity, 'conflict or ambiguity proposal missing')
+      const proposal = await verify('finalized-character:read-state-candidate',
+        { draftId, candidateKey: pendingState.candidateKey })
+      assert.equal(proposal.value, '旧港')
+      assert.equal(proposal.source.finalizationId, source.finalizationId)
+      await app.close(); app = null
+
+      app = (await launch()).app
+      const proposalPage = await app.firstWindow()
+      const notice = proposalPage.locator('[role="status"].fixed.inset-x-0.top-10')
+      if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
+      await proposalPage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
+      await proposalPage.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
+      await proposalPage.locator('.writer-left-rail button[title="角色"]').click()
+      await proposalPage.getByRole('region', { name: '待处理角色状态建议' }).waitFor({ state: 'visible' })
+      await proposalPage.getByRole('region', { name: '待处理定稿角色决策' }).waitFor({ state: 'visible' })
+      steps.push({ stepId: currentStep, actionId: 'U09.A06', outcome: 'PASS',
+        assertion: 'Writer showed both author-field conflict and ambiguous identity as source-bound pending decisions; author value remained intact.',
+        observed: { stateCandidateKey: proposal.candidateKey, identityBatchId: pendingIdentity.proposalBatchId,
+          authorValue: state(finalizedIds[1]).location, ambiguousCandidateIds: finalizedIds.slice(2) } })
+
+      currentStep = 'u09-a07-decline-reopen'
+      await proposalPage.getByRole('button', { name: '检查定稿状态建议' }).click()
+      await proposalPage.getByRole('button', { name: '拒绝状态建议' }).click()
+      await proposalPage.getByRole('region', { name: '待处理角色状态建议' }).waitFor({ state: 'hidden' })
+      await proposalPage.getByRole('button', { name: '检查定稿角色决策' }).click()
+      await proposalPage.getByRole('button', { name: '拒绝这些决策' }).click()
+      await proposalPage.getByRole('region', { name: '待处理定稿角色决策' }).waitFor({ state: 'hidden' })
+      const stored = JSON.parse(importDb.prepare('SELECT character_state_candidates FROM summary_snapshots WHERE draft_id=?').pluck().get(draftId))
+      assert.equal(stored.pending.length, 0)
+      assert(stored.receipts.some(receipt => receipt.candidateKey === proposal.candidateKey && receipt.decision === 'decline'))
+      const identityEnvelope = JSON.parse(importDb.prepare('SELECT raw_value FROM character_identity_proposals WHERE proposal_id=?')
+        .pluck().get(pendingIdentity.proposalBatchId))
+      assert.equal(identityEnvelope.batch.status, 'cancelled')
+      assert.equal(state(finalizedIds[1]).location, '作者旧港')
+      await app.close(); app = null
+
+      app = (await launch()).app
+      const reopenedPage = await app.firstWindow()
+      const reopenedNotice = reopenedPage.locator('[role="status"].fixed.inset-x-0.top-10')
+      if (await reopenedNotice.isVisible()) await reopenedNotice.getByRole('button', { name: '知道了', exact: true }).click()
+      await reopenedPage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
+      await reopenedPage.locator('.writer-project-tree').getByText(projectName, { exact: true }).waitFor({ state: 'visible' })
+      await reopenedPage.locator('.writer-left-rail button[title="角色"]').click()
+      await reopenedPage.getByTitle('新建角色').waitFor({ state: 'visible' })
+      assert.equal(await reopenedPage.getByRole('region', { name: '待处理角色状态建议' }).count(), 0)
+      assert.equal(await reopenedPage.getByRole('region', { name: '待处理定稿角色决策' }).count(), 0)
+      const readOpened = await invoke(reopenedPage, 'project:open', projectPath, randomUUID(), projectPath)
+      assert.equal(readOpened.success, true, readOpened.error)
+      const readSession = { projectId: created.projectId, projectPath, leaseId: readOpened.project?.sessionLease }
+      assert.deepEqual(await invoke(reopenedPage, 'finalized-character:list-state-candidates', readSession), [])
+      assert.deepEqual(await invoke(reopenedPage, 'character-proposal:list-pending-finalized', readSession), [])
+      assert.deepEqual((await invoke(reopenedPage, 'finalization-generation:read', { slot: characterSlot }, readSession)).effect,
+        characterStage.effect)
+      assert.equal(state(finalizedIds[1]).location, '作者旧港')
+      assert.equal(modelRequests.length, 2, 'reopening repeated finalized generation')
+      steps.push({ stepId: currentStep, actionId: 'U09.A07', outcome: 'PASS',
+        assertion: 'Decline receipts survived an Electron process restart and neither pending decision nor model call reappeared.',
+        observed: { stateDecision: stored.receipts.find(receipt => receipt.candidateKey === proposal.candidateKey),
+          identityBatchId: pendingIdentity.proposalBatchId, modelRequestCount: modelRequests.length } })
+      return
+    }
     if (u09ImportOnly) {
       importDb = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true, readonly: true })
       const roster = () => importDb.prepare('SELECT character_id AS id,name,background,notes,static_provenance AS provenance FROM characters ORDER BY name').all()
@@ -714,13 +876,14 @@ async function main() {
   } finally {
     importDb?.close()
     await app?.close().catch(() => {})
-    if (u09ImportOnly) await new Promise(resolve => server.close(resolve))
+    if (controlledModel) await new Promise(resolve => server.close(resolve))
     const verifiedActions = [...new Set(steps.filter(step => step.outcome === 'PASS' && step.actionId).map(step => step.actionId))]
-    const receipt = { schemaVersion: 1, qualification: u09ImportOnly ? 'F05_U09_A01_A02_A03_A04_PACKAGED_V3_IMPORT' : 'F05_U09_A08_U10_A01_A02_A03_A04_A05_A06_A07_A09_A10_PACKAGED_V3_CHARACTERS',
+    const receipt = { schemaVersion: 1, qualification: u09ImportOnly ? 'F05_U09_A01_A02_A03_A04_PACKAGED_V3_IMPORT'
+      : u09FinalizedOnly ? 'F05_U09_A05_A06_A07_PACKAGED_V3_FINALIZED' : 'F05_U09_A08_U10_A01_A02_A03_A04_A05_A06_A07_A09_A10_PACKAGED_V3_CHARACTERS',
       outcome: failure ? 'FAIL' : 'PARTIAL', sliceOutcome: failure ? 'FAIL' : 'PASS', fullU10Qualification: false,
       fullU09Qualification: false, fullF05Qualification: false, evidenceLevel: 'electron', shell: 'writer-v3', testedSha, executionHead, changedPaths,
       dirtyProductPaths, ignoredScreenshotPaths, ignoredTestOnlyPaths, package: { directory: packageDir, executableSha256: sha256(exe), asarSha256: sha256(asar) },
-      ...(u09ImportOnly ? { providerEvidence: { kind: 'controlled-loopback', realModelQualification: false,
+      ...(controlledModel ? { providerEvidence: { kind: 'controlled-loopback', realModelQualification: false,
         requestCount: modelRequests.length } } : {}),
       driver: { path: fileURLToPath(import.meta.url), sha256: sha256(fileURLToPath(import.meta.url)) },
       nativePickerHelper: { path: nativePickerHelper, sha256: sha256(nativePickerHelper) }, pickerEvidence,
@@ -729,7 +892,8 @@ async function main() {
         'v3-avatar-compressed.png', 'v3-avatar-invalid-preserved.png', 'v3-avatar-replaced-reopened.png',
         'v3-avatar-removed.png', 'v3-avatar-removed-reopened.png',
         'v3-avatar-same-name-identity.png', 'v3-avatar-same-name-reopened.png'].filter(name => fs.existsSync(path.join(receiptDir, name))) },
-      verifiedActions, unverifiedActions: [u09ImportOnly ? 'U09.A05-U09.A09' : 'U09.A01-U09.A07', ...(u09ImportOnly ? [] : ['U09.A09']),
+      verifiedActions, unverifiedActions: [u09ImportOnly ? 'U09.A05-U09.A09' : u09FinalizedOnly ? 'U09.A01-U09.A04, U09.A08-U09.A09' : 'U09.A01-U09.A07',
+        ...(controlledModel ? [] : ['U09.A09']),
         ...['U10.A01', 'U10.A02', 'U10.A03', 'U10.A04', 'U10.A05', 'U10.A06', 'U10.A07', 'U10.A09', 'U10.A10'].filter(id => !verifiedActions.includes(id)),
         'U10.A08', 'U10.A11-U10.A12', 'F05 whole-product qualification'],
       projectPath, scratch, steps, failure }

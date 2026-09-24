@@ -204,6 +204,11 @@ describe('finalized character identities and derived state in the M02 database',
     expect(SummaryRepository.decideFinalizedCharacterStateCandidate(request, f.db)).toMatchObject({ decision: 'decline', idempotent: false })
     expect(f.row().cs_power_level).toBe('作者后来能力')
     expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates(f.db)).toEqual([])
+    const reopenedContext = f.context()
+    expect(SummaryRepository.commitFinalizedCharacterStates(reopenedContext,
+      f.response(reopenedContext, { powerLevel: '提议能力' }), f.db)).toMatchObject({ applied: 0 })
+    expect(SummaryRepository.listPendingFinalizedCharacterStateCandidates(f.db)).toEqual([])
+    expect(f.row().cs_power_level).toBe('作者后来能力')
     f.db.prepare('UPDATE finalization_outbox SET content_hash=? WHERE draft_id=1').run('0'.repeat(64))
     expect(SummaryRepository.decideFinalizedCharacterStateCandidate(request, f.db)).toMatchObject({ idempotent: true })
     expect(() => SummaryRepository.decideFinalizedCharacterStateCandidate({ ...request, decision: 'accept' }, f.db))
