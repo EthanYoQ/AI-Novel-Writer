@@ -82,7 +82,7 @@ export function migrateLegacyAppearance(themeRaw: string | null, shellRaw: strin
       } catch { throw new AppearanceProfileError('LEGACY_SHELL_UNKNOWN') }
     }
     if (candidate !== 'v1' && candidate !== 'v2') throw new AppearanceProfileError('LEGACY_SHELL_UNKNOWN')
-    profile.shellPreference = candidate === 'v1' ? 'classic' : 'writer'
+    profile.shellPreference = 'writer'
   }
   return parseAppearanceProfile(JSON.stringify(profile))
 }

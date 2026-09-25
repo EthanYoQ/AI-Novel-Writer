@@ -13,8 +13,8 @@ describe('appearance preference conversion', () => {
     expect(resolveShell('writer')).toBe('writer')
     expect(resolveShell('classic', 'writer')).toBe('classic')
   })
-  it.each(['v1', '{"version":"v1"}', '{"state":{"uiVersion":"v1"},"version":0}'])('maps old Classic shape %s', raw => {
-    expect(migrateLegacyAppearance(null, raw, 'light').shellPreference).toBe('classic')
+  it.each(['v1', '{"version":"v1"}', '{"state":{"uiVersion":"v1"},"version":0}'])('migrates old Classic shape %s into Writer', raw => {
+    expect(migrateLegacyAppearance(null, raw, 'light').shellPreference).toBe('writer')
   })
   it.each(['v2', '"v2"', '{"state":{"uiVersion":"v2"}}'])('maps old Writer shape %s', raw => {
     expect(migrateLegacyAppearance(null, raw, 'light').shellPreference).toBe('writer')

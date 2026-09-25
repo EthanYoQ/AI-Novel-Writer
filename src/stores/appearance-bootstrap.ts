@@ -54,12 +54,15 @@ export function createAppearanceStore(releaseDefault: Shell = RELEASE_DEFAULT_SH
               || !['classic', 'anime', 'custom'].includes(skin.backgroundSkin)) throw new AppearanceProfileError('SKIN_SNAPSHOT_NOT_READY')
             storage = (dependencies.storage ?? (() => window.localStorage))()
             const existing = storage.getItem(APPEARANCE_STORAGE_KEY)
-            const profile = existing === null
+            const imported = existing === null
               ? migrateLegacyAppearance(storage.getItem(LEGACY_THEME_STORAGE_KEY), storage.getItem(LEGACY_UI_STORAGE_KEY),
                 (dependencies.systemTheme ?? (() => window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'))())
               : parseAppearanceProfile(existing)
-            const serialized = existing ?? JSON.stringify(profile)
-            if (existing === null) storage.setItem(APPEARANCE_STORAGE_KEY, serialized)
+            const profile = existing !== null && releaseDefault === 'writer' && imported.shellPreference === 'classic'
+              ? parseAppearanceProfile(JSON.stringify({ ...imported, shellPreference: 'writer', revision: imported.revision + 1 }))
+              : imported
+            const serialized = profile === imported && existing !== null ? existing : JSON.stringify(profile)
+            if (serialized !== existing) storage.setItem(APPEARANCE_STORAGE_KEY, serialized)
             if (storage.getItem(APPEARANCE_STORAGE_KEY) !== serialized) throw new AppearanceProfileError('APPEARANCE_READBACK_FAILED')
             const accepted = await dependencies.acknowledgeReadback({ storageKey: APPEARANCE_STORAGE_KEY,
               profileRevision: profile.revision, globalGeneration: skin.globalGeneration, skinRevision: skin.skinRevision })

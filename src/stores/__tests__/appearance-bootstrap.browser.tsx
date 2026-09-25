@@ -69,7 +69,9 @@ describe('appearance bootstrap in real browser storage', () => {
     activated.getState().update({ shellPreference: 'classic' })
     const reopened = createAppearanceStore()
     await reopened.getState().bootstrap(dependencies())
-    expect(reopened.getState().resolvedShell).toBe('classic')
+    expect(reopened.getState().resolvedShell).toBe('writer')
+    expect(reopened.getState().profile).toMatchObject({ shellPreference: 'writer', origin: 'author', revision: 3 })
+    expect(JSON.parse(localStorage.getItem(KEY)!)).toMatchObject({ shellPreference: 'writer', origin: 'author', revision: 3 })
   })
 
   it('exits both legacy writers; theme/fonts/zoom and shell write one canonical profile', async () => {
@@ -79,6 +81,8 @@ describe('appearance bootstrap in real browser storage', () => {
     const theme = createThemeStore(store)
     const shell = createUiVersionStore(store)
     await store.getState().bootstrap(dependencies())
+    expect(store.getState().resolvedShell).toBe('writer')
+    expect(shell.getState().uiVersion).toBe('v2')
     theme.getState().setTheme('galaxy')
     theme.getState().setWritingFont('noto-serif-sc')
     theme.getState().setUiFont('inter')

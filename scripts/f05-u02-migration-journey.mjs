@@ -134,16 +134,9 @@ async function migrate(name, legacyShell, expectedPreference, prepare) {
       origin: state.appearance.origin }, { shellPreference: expectedPreference, colorTheme: 'dark',
       zoom: 1.2, writingFont: 'noto-serif-sc', uiFont: 'inter', origin: 'legacy-import' })
     assert.equal(await session.page.locator('.app-skin-root').getAttribute('data-skin'), 'anime')
-    if (expectedPreference === 'writer') await writer(session.page)
+    await writer(session.page)
     steps.push({ stepId: `${name}-legacy-converted`, phase: 'migration-intermediate',
       assertion: `Electron startup converted ${legacyShell} and legacy appearance without changing their bytes or image skin`, outcome: 'PASS' })
-    if (expectedPreference === 'classic') {
-      // No current product switch is promised. Explicit test-profile selection follows the actual legacy conversion.
-      await session.page.evaluate(key => {
-        const previous = JSON.parse(localStorage.getItem(key))
-        localStorage.setItem(key, JSON.stringify({ ...previous, shellPreference: 'writer', revision: previous.revision + 1, origin: 'author' }))
-      }, appearanceKey)
-    }
   } finally { await session.app.close() }
   session = await launch(roots)
   try {
@@ -355,7 +348,7 @@ async function currentMain() {
     sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 72,
     cleanupCommand: `Remove-Item -LiteralPath '${scratchRoot}' -Recurse -Force`,
     retainReason: 'Synthetic schema0-to-schema7 Writer import evidence' }, null, 2))
-  const receipt = { outcome: 'FAIL', qualification: 'F05_U02_A07_CURRENT_SCHEMA7_ONLY', evidenceLevel: 'electron',
+  const receipt = { outcome: 'FAIL', qualification: 'F05_U02_DEFAULT_A02_A07_CURRENT', evidenceLevel: 'electron',
     shell: 'writer-v3', testedSha, buildTree: path.resolve(buildTree), executionHead: git('rev-parse', 'HEAD'),
     driverSha256, artifactHashes: { executable: expectedExeSha, asar: expectedAsarSha }, packageRoot: packageDir,
     historicalReceipt: { path: priorReceiptPath, sha256: sha256(priorReceiptPath), testedSha: prior.testedSha },
@@ -363,12 +356,45 @@ async function currentMain() {
     persistedModelCalls: null, physicalModelRequestsObservation: 'NOT_OBSERVED_BY_THIS_JOURNEY',
     releaseDefaultQualified: false, steps }
   try {
+    currentStep = 'fresh-default-and-canonical-classic'
+    const freshRoots = profile('fresh-default')
+    let fresh = await launch(freshRoots)
+    try {
+      await fresh.page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
+      const state = await stored(fresh.page)
+      assert.equal(state.appearance.shellPreference, 'unset')
+      assert.equal(state.theme, null)
+      assert.equal(state.shell, null)
+      pass('fresh-unset-v3-default', 'U02.A02', 'A fresh installed profile opens Writer V3 with an unset preference',
+        'fresh-unset-to-writer-v3')
+      const skin = await fresh.page.evaluate(() => window.aiNovelAPI.invoke('skin:execute', { type: 'activate', skinId: 'anime' }))
+      assert.equal(skin.success, true)
+      await fresh.page.evaluate(key => {
+        const previous = JSON.parse(localStorage.getItem(key))
+        localStorage.setItem(key, JSON.stringify({ ...previous, shellPreference: 'classic', colorTheme: 'dark',
+          zoom: 1.2, writingFont: 'noto-serif-sc', uiFont: 'inter', revision: previous.revision + 1, origin: 'author' }))
+      }, appearanceKey)
+    } finally { await fresh.app.close() }
+    fresh = await launch(freshRoots)
+    try {
+      await writer(fresh.page)
+      const state = await stored(fresh.page)
+      assert.deepEqual({ shellPreference: state.appearance.shellPreference, colorTheme: state.appearance.colorTheme,
+        zoom: state.appearance.zoom, writingFont: state.appearance.writingFont, uiFont: state.appearance.uiFont,
+        origin: state.appearance.origin, revision: state.appearance.revision },
+      { shellPreference: 'writer', colorTheme: 'dark', zoom: 1.2, writingFont: 'noto-serif-sc',
+        uiFont: 'inter', origin: 'author', revision: 3 })
+      assert.equal(state.theme, null)
+      assert.equal(state.shell, null)
+      pass('canonical-classic-v3-migrated', 'U02.A02', 'An existing Classic profile opens Writer V3 with authored appearance and skin retained',
+        'canonical-classic-to-writer-v3')
+    } finally { await fresh.app.close() }
     for (const name of ['v1', 'v2']) {
       const targetParent = path.join(scratchRoot, `t${name.slice(1)}`)
       assert(!fs.existsSync(targetParent), 'synthetic target parent collides with an existing profile')
     }
     for (const [name, legacyShell, preference] of [
-      ['v1', 'v1', 'classic'], ['v2', JSON.stringify({ state: { uiVersion: 'v2' }, version: 0 }), 'writer'],
+      ['v1', 'v1', 'writer'], ['v2', JSON.stringify({ state: { uiVersion: 'v2' }, version: 0 }), 'writer'],
     ]) {
       currentStep = `${name}-schema0-setup`
       let source
@@ -379,11 +405,14 @@ async function currentMain() {
     assert.equal(sha256(fileURLToPath(import.meta.url)), driverSha256, 'driver changed during run')
     const required = ['v1', 'v2'].flatMap(name => [`${name}-schema7-import`, `${name}-schema7-save`, `${name}-schema7-reopen`])
     assert(required.every(id => steps.some(step => step.stepId === id && step.outcome === 'PASS')))
+    assert(['fresh-unset-v3-default', 'canonical-classic-v3-migrated', 'v1-legacy-converted', 'v2-legacy-converted']
+      .every(id => steps.some(step => step.stepId === id && step.outcome === 'PASS')))
     receipt.persistedModelCalls = 0
     receipt.outcome = 'PARTIAL'
     receipt.sliceOutcome = 'PASS'
-    receipt.verifiedActions = ['U02.A07']
-    receipt.unverifiedActions = ['Full F05 and release-default activation are not qualified by this isolated migration journey']
+    receipt.releaseDefaultQualified = true
+    receipt.verifiedActions = ['U02.A02', 'U02.A07']
+    receipt.unverifiedActions = ['Full F05 is not qualified by this isolated migration journey']
   } catch (error) {
     receipt.failedStep = currentStep
     receipt.error = String(error)
@@ -421,7 +450,7 @@ async function main() {
   const artifactHashes = { executable: sha256(executablePath), asar: sha256(asarPath) }
   try {
     currentStep = 'v1-migration'
-    const v1 = await migrate('v1', 'v1', 'classic')
+    const v1 = await migrate('v1', 'v1', 'writer')
     currentStep = 'v1-project-state'
     await projectState(v1.roots, v1.session, v1.projectPath)
     currentStep = 'v2-migration'
