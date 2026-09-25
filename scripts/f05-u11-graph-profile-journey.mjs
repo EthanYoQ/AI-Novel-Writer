@@ -15,6 +15,7 @@ const a09Only = process.argv.includes('--v3-a09-only')
 const a12Only = process.argv.includes('--v3-a12-only')
 const a10Only = process.argv.includes('--v3-a10-only')
 const graphRemainingOnly = process.argv.includes('--v3-a11-a13-only')
+const graphPinnedPackage = graphRemainingOnly || a12Only
 const graphPackageDir = 'C:\\Vibe Coding Project\\AI Novel\\.worktrees\\thread6-u06-v2-qualify\\release\\1.1.0\\win-unpacked'
 const graphBuildReceiptPath = 'C:\\Vibe Coding Project\\AI Novel\\.worktrees\\thread6-u06-v2-qualify\\.runtime\\.cache\\f05-u16-packaged\\3824dc5e-e0e1-44e3-b145-8d4c0e98b36d\\receipt.json'
 const graphBuildReceiptSha = 'f477f1640e579be789afa945c6799329fbd511badb21c09a48b779d79bbb9453'
@@ -35,13 +36,13 @@ const [avatarPackageDir, avatarSourceSha, avatarExeSha, avatarAsarSha] = avatarP
 const buildReceiptPath = process.argv.find(arg => arg.startsWith('--reuse-package='))?.slice('--reuse-package='.length)
 assert(v3Mode || buildReceiptPath, 'pass --reuse-package=<build receipt> or a --v3-* mode')
 const buildReceipt = buildReceiptPath ? JSON.parse(fs.readFileSync(buildReceiptPath, 'utf8')) : null
-const testedSha = avatarSourceSha ?? (graphRemainingOnly ? graphPackageSourceSha : fixedV3 ? '6639f757c8d4cf2bf1d73ae4bb2a672b34a251f2'
+const testedSha = avatarSourceSha ?? (graphPinnedPackage ? graphPackageSourceSha : fixedV3 ? '6639f757c8d4cf2bf1d73ae4bb2a672b34a251f2'
   : v3Mode ? 'e803b10c461cddbb567ad925743b164f42af9e1a' : buildReceipt.build?.buildSha)
 if (!v3Mode) assert.equal(testedSha, 'c6fd2b5e02230d4ddd6e20d92c66bcf8a8f77010')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
-if (graphRemainingOnly) {
-  assert.equal(path.resolve(buildReceiptPath ?? ''), path.resolve(graphBuildReceiptPath), 'A11/A13 must use the pinned 44e V3 build receipt')
+if (graphPinnedPackage) {
+  assert.equal(path.resolve(buildReceiptPath ?? ''), path.resolve(graphBuildReceiptPath), 'A11/A12/A13 must use the pinned 44e V3 build receipt')
   assert.equal(sha256(buildReceiptPath), graphBuildReceiptSha, 'pinned 44e V3 build receipt changed')
   assert.equal(buildReceipt.outcome, 'PARTIAL')
   assert.equal(buildReceipt.qualification, 'F05_U16_NON_PICKER_A03_A04_A05_A06_ONLY')
@@ -58,15 +59,15 @@ assert(changedPaths.every(name => name.startsWith('scripts/') || name.includes('
 const dirtyProduct = git('status', '--porcelain', '--', 'src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml')
   .split('\n').filter(Boolean).filter(line => !/src\/.*\/__tests__\//.test(line))
 assert.deepEqual(dirtyProduct, [], 'dirty product input since package build')
-const packageDir = avatarPackageDir ?? (graphRemainingOnly ? graphPackageDir : v3Mode
+const packageDir = avatarPackageDir ?? (graphPinnedPackage ? graphPackageDir : v3Mode
   ? fixedV3 ? path.join(repository, '.runtime', '.cache', 'f04-v3-narrow-package', '6639f757-electron-abi', 'win-unpacked')
     : path.join(repository, '.runtime', '.cache', 'f05-u12-m06-package', 'e803b10c', 'win-unpacked')
   : path.join(repository, 'release', '1.1.0', 'win-unpacked'))
 const executablePath = path.join(packageDir, 'AI小说作家.exe')
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
-assert.equal(sha256(executablePath), avatarExeSha ?? (graphRemainingOnly ? graphExeSha : fixedV3 ? '8cceb2b6143789bed0bb562bc4e8d0fdd7e2f6ae4001a34307437a6e9de25d7e'
+assert.equal(sha256(executablePath), avatarExeSha ?? (graphPinnedPackage ? graphExeSha : fixedV3 ? '8cceb2b6143789bed0bb562bc4e8d0fdd7e2f6ae4001a34307437a6e9de25d7e'
   : v3Mode ? '35f08ef5f2317f7151d6a2a0884531106a0bb2fba926cab7d09ff50b5f2e8f11' : buildReceipt.artifact.executableSha256))
-assert.equal(sha256(asarPath), avatarAsarSha ?? (graphRemainingOnly ? graphAsarSha : fixedV3 ? 'ba26bf26ebdd4726f190e8ff61b70dcc2da5776a04d29f74ba865c111914058f'
+assert.equal(sha256(asarPath), avatarAsarSha ?? (graphPinnedPackage ? graphAsarSha : fixedV3 ? 'ba26bf26ebdd4726f190e8ff61b70dcc2da5776a04d29f74ba865c111914058f'
   : v3Mode ? '6aa5c19a88481eef994df8d1e4050578e8c860d314ee8e6662656b967b2d190c' : buildReceipt.artifact.asarSha256))
 const driverSha256 = sha256(fileURLToPath(import.meta.url))
 const runId = randomUUID()
