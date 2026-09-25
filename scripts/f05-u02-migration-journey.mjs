@@ -271,8 +271,16 @@ async function currentProjectState(name, roots, session, source) {
       }
     }, { sourceRoot: source.sourceRoot, targetParent })
     await page.getByRole('button', { name: '导入旧项目副本' }).click()
-    await page.locator('.writer-project-tree').getByText(source.sourceName, { exact: true })
-      .waitFor({ state: 'visible', timeout: 30_000 })
+    try {
+      await page.locator('.writer-project-tree').getByText(source.sourceName, { exact: true })
+        .waitFor({ state: 'visible', timeout: 30_000 })
+    } catch (error) {
+      const diagnostic = { dialogs: await session.app.evaluate(() => globalThis.__u02Dialogs).catch(error => ({ unavailable: String(error) })),
+        notices: await page.locator('[role="status"]').allInnerTexts().catch(error => ({ unavailable: String(error) })),
+        welcome: await page.locator('.writer-welcome').innerText().catch(() => null),
+        targetExists: fs.existsSync(targetRoot), targetParentEntries: fs.readdirSync(targetParent) }
+      throw new Error(`Writer import did not open project: ${JSON.stringify(diagnostic)}`, { cause: error })
+    }
     const dialogs = await session.app.evaluate(() => globalThis.__u02Dialogs)
     assert.equal(dialogs.length, 3)
     assert(fs.existsSync(path.join(targetRoot, '.ai-novel', 'project.db')))
