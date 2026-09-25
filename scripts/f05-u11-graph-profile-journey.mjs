@@ -14,6 +14,7 @@ const a08Only = process.argv.includes('--v3-a08-only')
 const a09Only = process.argv.includes('--v3-a09-only')
 const a12Only = process.argv.includes('--v3-a12-only')
 const a10Only = process.argv.includes('--v3-a10-only')
+const graphCoreOnly = process.argv.includes('--v3-a01-a07-only')
 const a10PackageDir = 'C:\\Vibe Coding Project\\AI Novel\\.worktrees\\thread6-a11-offline-qualify\\release\\1.1.0\\win-unpacked'
 const a10SourceSha = 'c4696d49a25220e7aefa6330f634bddb3217c2bc'
 const a10ExeSha = 'b35c8ddcfeeed9f33423b03149d198e17228ab0c66a28800e2f42a27e20fd0ba'
@@ -28,10 +29,10 @@ const graphExeSha = 'd1aeaeb0eb17a6f391d55a1a109d25aa525ba6ed94a854a834d4c11d019
 const graphAsarSha = '2e41e85933be3df3d2203732fc031dd89e5793e6092d3fe1ce84918c0e346f15'
 const narrowOnly = process.argv.includes('--v3-narrow-only')
 const avatarOnly = process.argv.includes('--v3-avatar-batch-only')
-assert([a08Only, a09Only, a12Only, a10Only, graphRemainingOnly, narrowOnly, avatarOnly].filter(Boolean).length <= 1,
+assert([a08Only, a09Only, a12Only, a10Only, graphCoreOnly, graphRemainingOnly, narrowOnly, avatarOnly].filter(Boolean).length <= 1,
   'select only one focused V3 journey mode')
 const fixedV3 = narrowOnly || avatarOnly
-const v3Mode = a08Only || a09Only || a10Only || a12Only || graphRemainingOnly || fixedV3 || process.argv.includes('--v3-a10-a13')
+const v3Mode = a08Only || a09Only || a10Only || graphCoreOnly || a12Only || graphRemainingOnly || fixedV3 || process.argv.includes('--v3-a10-a13')
 const avatarPackageArgs = ['--package-dir', '--package-source-sha', '--exe-sha256', '--asar-sha256']
   .map(name => process.argv.find(arg => arg.startsWith(`${name}=`))?.slice(name.length + 1))
 assert(avatarPackageArgs.every(Boolean) || avatarPackageArgs.every(value => value === undefined), 'provide all avatar package identity arguments')
@@ -40,7 +41,7 @@ const [avatarPackageDir, avatarSourceSha, avatarExeSha, avatarAsarSha] = avatarP
 const buildReceiptPath = process.argv.find(arg => arg.startsWith('--reuse-package='))?.slice('--reuse-package='.length)
 assert(v3Mode || buildReceiptPath, 'pass --reuse-package=<build receipt> or a --v3-* mode')
 const buildReceipt = buildReceiptPath ? JSON.parse(fs.readFileSync(buildReceiptPath, 'utf8')) : null
-const testedSha = avatarSourceSha ?? (a10Only ? a10SourceSha : graphPinnedPackage ? graphPackageSourceSha : fixedV3 ? '6639f757c8d4cf2bf1d73ae4bb2a672b34a251f2'
+const testedSha = avatarSourceSha ?? (a10Only || graphCoreOnly ? a10SourceSha : graphPinnedPackage ? graphPackageSourceSha : fixedV3 ? '6639f757c8d4cf2bf1d73ae4bb2a672b34a251f2'
   : v3Mode ? 'e803b10c461cddbb567ad925743b164f42af9e1a' : buildReceipt.build?.buildSha)
 if (!v3Mode) assert.equal(testedSha, 'c6fd2b5e02230d4ddd6e20d92c66bcf8a8f77010')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
@@ -63,15 +64,15 @@ assert(changedPaths.every(name => name.startsWith('scripts/') || name.includes('
 const dirtyProduct = git('status', '--porcelain', '--', 'src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml')
   .split('\n').filter(Boolean).filter(line => !/src\/.*\/__tests__\//.test(line))
 assert.deepEqual(dirtyProduct, [], 'dirty product input since package build')
-const packageDir = avatarPackageDir ?? (a10Only ? a10PackageDir : graphPinnedPackage ? graphPackageDir : v3Mode
+const packageDir = avatarPackageDir ?? (a10Only || graphCoreOnly ? a10PackageDir : graphPinnedPackage ? graphPackageDir : v3Mode
   ? fixedV3 ? path.join(repository, '.runtime', '.cache', 'f04-v3-narrow-package', '6639f757-electron-abi', 'win-unpacked')
     : path.join(repository, '.runtime', '.cache', 'f05-u12-m06-package', 'e803b10c', 'win-unpacked')
   : path.join(repository, 'release', '1.1.0', 'win-unpacked'))
 const executablePath = path.join(packageDir, 'AI小说作家.exe')
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
-assert.equal(sha256(executablePath), avatarExeSha ?? (a10Only ? a10ExeSha : graphPinnedPackage ? graphExeSha : fixedV3 ? '8cceb2b6143789bed0bb562bc4e8d0fdd7e2f6ae4001a34307437a6e9de25d7e'
+assert.equal(sha256(executablePath), avatarExeSha ?? (a10Only || graphCoreOnly ? a10ExeSha : graphPinnedPackage ? graphExeSha : fixedV3 ? '8cceb2b6143789bed0bb562bc4e8d0fdd7e2f6ae4001a34307437a6e9de25d7e'
   : v3Mode ? '35f08ef5f2317f7151d6a2a0884531106a0bb2fba926cab7d09ff50b5f2e8f11' : buildReceipt.artifact.executableSha256))
-assert.equal(sha256(asarPath), avatarAsarSha ?? (a10Only ? a10AsarSha : graphPinnedPackage ? graphAsarSha : fixedV3 ? 'ba26bf26ebdd4726f190e8ff61b70dcc2da5776a04d29f74ba865c111914058f'
+assert.equal(sha256(asarPath), avatarAsarSha ?? (a10Only || graphCoreOnly ? a10AsarSha : graphPinnedPackage ? graphAsarSha : fixedV3 ? 'ba26bf26ebdd4726f190e8ff61b70dcc2da5776a04d29f74ba865c111914058f'
   : v3Mode ? '6aa5c19a88481eef994df8d1e4050578e8c860d314ee8e6662656b967b2d190c' : buildReceipt.artifact.asarSha256))
 const driverSha256 = sha256(fileURLToPath(import.meta.url))
 const runId = randomUUID()
@@ -85,6 +86,8 @@ const secondName = `乙${runId.slice(0, 6)}`
 const relationship = '同盟'
 const initialRelationship = '旧识'
 const thirdName = `丙${runId.slice(0, 6)}`
+const fourthName = `丁${runId.slice(0, 6)}`
+const fifthName = `戊${runId.slice(0, 6)}`
 const sentinelName = `原有角色${runId.slice(0, 6)}`
 const a08TargetNotes = `U11.A08 档案哨兵甲 ${runId}`
 const a08OtherNotes = `U11.A08 档案哨兵乙 ${runId}`
@@ -152,7 +155,7 @@ async function quit(app) {
 }
 function rosterFacts(db) {
   return JSON.stringify({
-    characters: db.prepare('SELECT character_id, name, retired FROM characters ORDER BY character_id').all(),
+    characters: db.prepare('SELECT * FROM characters ORDER BY character_id').all(),
     relationships: db.prepare('SELECT source_character_id, target_character_id, relation FROM character_relationships ORDER BY relationship_id').all(),
     revision: db.prepare("SELECT revision FROM character_roster_meta WHERE id='main'").pluck().get(),
   })
@@ -542,6 +545,148 @@ async function verifyV3Narrow(page, app, setStep) {
       { width, screenshot: evidence.screenshot, titlebar: layout.titlebar, graph: layout.elements, portals: evidence.portals })
   }
 }
+async function verifyV3GraphCore(page, db, setStep) {
+  setStep('U11.A01-five-importance-tiers')
+  await assertWriter(page, 'U11.A01')
+  const names = [firstName, secondName, thirdName, fourthName, fifthName]
+  const rows = db.prepare('SELECT character_id,name FROM characters WHERE retired=0').all()
+  assert.deepEqual(new Set(rows.map(row => row.name)), new Set(names))
+  const beforeFacts = rosterFacts(db)
+  await page.locator('.writer-left-rail button[title="角色"]').click()
+  await page.getByText('角色列表（5）', { exact: true }).waitFor({ state: 'visible' })
+  await page.evaluate(() => {
+    const probe = { frame: 0, arcs: [], labels: [], lastArc: null }
+    window.__f05GraphProbe = probe
+    const proto = CanvasRenderingContext2D.prototype
+    const clear = proto.clearRect, arc = proto.arc, fillText = proto.fillText
+    const graph = context => context.canvas.matches('canvas[aria-label^="角色关系图谱"]')
+    proto.clearRect = function (...args) {
+      if (graph(this)) { probe.frame += 1; probe.arcs = []; probe.labels = []; probe.lastArc = null }
+      return clear.apply(this, args)
+    }
+    proto.arc = function (...args) {
+      if (graph(this)) {
+        const [x, y, r] = args
+        probe.lastArc = { x, y, r }
+        probe.arcs.push(probe.lastArc)
+      }
+      return arc.apply(this, args)
+    }
+    proto.fillText = function (...args) {
+      if (graph(this)) {
+        const [label] = args
+        const { a, c, d, e, f } = this.getTransform()
+        probe.labels.push({ label, arc: probe.lastArc, transform: { a, c, d, e, f } })
+      }
+      return fillText.apply(this, args)
+    }
+  })
+  await page.getByRole('button', { name: '关系图谱', exact: true }).click()
+  const canvas = page.locator('canvas[aria-label^="角色关系图谱"]')
+  await canvas.waitFor({ state: 'visible' })
+  const sidebar = page.getByRole('complementary', { name: '图谱人物侧栏' })
+  await sidebar.getByRole('button', { name: `以${firstName}为中心` }).click()
+  await page.getByText(`中心: ${firstName}`, { exact: true }).waitFor({ state: 'visible' })
+  await page.waitForFunction(expected => expected.every(name => window.__f05GraphProbe?.labels.some(item => item.label === name)), names)
+  const paint = () => page.evaluate(expected => {
+    const canvas = document.querySelector('canvas[aria-label^="角色关系图谱"]')
+    const probe = window.__f05GraphProbe
+    const rect = canvas.getBoundingClientRect(), ratio = canvas.width / rect.width
+    return { frame: probe.frame, radii: [...new Set(probe.arcs.map(item => item.r))], width: rect.width, height: rect.height,
+      left: rect.left, top: rect.top, nodes: probe.labels.filter(item => expected.includes(item.label) && item.arc).map(item => ({
+        name: item.label, x: item.arc.x, y: item.arc.y, radius: item.arc.r, scale: item.transform.a,
+        screenX: rect.left + (item.transform.a * item.arc.x + item.transform.c * item.arc.y + item.transform.e) / ratio,
+        screenY: rect.top + (item.transform.d * item.arc.y + item.transform.f) / ratio,
+      })) }
+  }, names)
+  const initial = await paint()
+  assert.equal(initial.nodes.length, 5, 'all five durable roles were not painted')
+  assert.deepEqual([16, 18, 20, 22, 24].every(radius => initial.radii.includes(radius)), true, 'five importance tiers were not painted')
+  assert.equal(Number(await canvas.getAttribute('data-rendered-node-count')), 5)
+  pass('U11.A01-five-importance-tiers', 'U11.A01', 'Writer V3 painted five stable-ID graph roles at five distinct importance radii',
+    { durableIds: rows.map(row => row.character_id), radii: initial.nodes.map(node => ({ name: node.name, radius: node.radius })) })
+
+  setStep('U11.A02-center-character')
+  await sidebar.getByRole('button', { name: `以${thirdName}为中心` }).click()
+  await page.getByText(`中心: ${thirdName}`, { exact: true }).waitFor({ state: 'visible' })
+  await page.waitForFunction(frame => window.__f05GraphProbe.frame > frame, initial.frame)
+  const centered = await paint()
+  assert.equal(centered.nodes.length, 5)
+  assert.notDeepEqual(centered.nodes.map(node => [node.name, node.x, node.y]), initial.nodes.map(node => [node.name, node.x, node.y]), 'center change did not relayout nodes')
+  pass('U11.A02-center-character', 'U11.A02', 'Visible center control relaid out the five durable roles around the selected character',
+    { centerId: rows.find(row => row.name === thirdName).character_id, centerName: thirdName })
+
+  setStep('U11.A03-drag-node')
+  const target = centered.nodes.find(node => node.name === thirdName)
+  await page.mouse.move(target.screenX, target.screenY)
+  await page.mouse.down()
+  await page.mouse.move(target.screenX + 32, target.screenY + 12, { steps: 4 })
+  await page.mouse.up()
+  const dragged = await paint()
+  const moved = dragged.nodes.find(node => node.name === thirdName)
+  assert(Math.hypot(moved.x - target.x, moved.y - target.y) > 20, 'pointer drag did not move the graph node')
+  assert.equal(rosterFacts(db), beforeFacts, 'node drag wrote roster facts')
+  pass('U11.A03-drag-node', 'U11.A03', 'Real pointer drag moved the selected painted node without changing durable facts',
+    { characterId: rows.find(row => row.name === thirdName).character_id, before: [target.x, target.y], after: [moved.x, moved.y] })
+
+  setStep('U11.A04-pan-blank-canvas')
+  const candidates = [[0.14, 0.2], [0.14, 0.8], [0.7, 0.8]].map(([x, y]) => ({ x: dragged.left + dragged.width * x, y: dragged.top + dragged.height * y }))
+  const blank = candidates.map(point => ({ ...point, gap: Math.min(...dragged.nodes.map(node => Math.hypot(point.x - node.screenX, point.y - node.screenY))) }))
+    .sort((a, b) => b.gap - a.gap)[0]
+  assert(blank.gap > 60, 'no verified blank canvas point available for panning')
+  await page.mouse.move(blank.x, blank.y)
+  await page.mouse.down()
+  await page.mouse.move(blank.x - 30, blank.y + 20, { steps: 4 })
+  await page.mouse.up()
+  const panned = await paint()
+  const pannedTarget = panned.nodes.find(node => node.name === thirdName)
+  assert(Math.abs(pannedTarget.screenX - moved.screenX + 30) < 5 && Math.abs(pannedTarget.screenY - moved.screenY - 20) < 5,
+    'blank drag did not translate the painted graph view')
+  assert.equal(pannedTarget.x, moved.x, 'blank drag moved a node instead of the view')
+  pass('U11.A04-pan-blank-canvas', 'U11.A04', 'Real pointer drag on verified blank canvas shifted the graph view and left node world positions unchanged',
+    { shift: [pannedTarget.screenX - moved.screenX, pannedTarget.screenY - moved.screenY] })
+
+  setStep('U11.A05-wheel-zoom')
+  await page.mouse.move(blank.x - 30, blank.y + 20)
+  await page.mouse.wheel(0, 100)
+  await page.waitForFunction(before => {
+    const label = document.querySelector('button[aria-label="缩小关系图谱"]')?.nextElementSibling?.textContent ?? ''
+    return Number.parseInt(label, 10) < Math.round(before * 100)
+  }, panned.nodes[0].scale)
+  const zoomed = await paint()
+  assert(zoomed.nodes[0].scale < panned.nodes[0].scale, 'real wheel did not shrink graph scale')
+  const zoomLabel = await page.getByRole('button', { name: '缩小关系图谱' }).locator('xpath=following-sibling::span[1]').innerText()
+  assert.equal(zoomLabel, `${Math.round(zoomed.nodes[0].scale * 100)}%`, 'visible zoom label disagreed with painted scale')
+  pass('U11.A05-wheel-zoom', 'U11.A05', 'Real wheel input changed canvas scale and the visible zoom percentage together',
+    { beforeScale: panned.nodes[0].scale, afterScale: zoomed.nodes[0].scale, zoomLabel })
+
+  setStep('U11.A06-fit-and-reset')
+  await page.getByRole('button', { name: '适合视图' }).click()
+  const fitted = await paint()
+  assert.notDeepEqual([fitted.nodes[0].scale, fitted.nodes[0].screenX], [zoomed.nodes[0].scale, zoomed.nodes[0].screenX], 'fit view did not adjust canvas')
+  assert(fitted.nodes.every(node => node.screenX >= fitted.left && node.screenX <= fitted.left + fitted.width
+    && node.screenY >= fitted.top && node.screenY <= fitted.top + fitted.height), 'fit view left a graph node off canvas')
+  await page.getByRole('button', { name: '重置图谱布局' }).click()
+  const reset = await paint()
+  const resetTarget = reset.nodes.find(node => node.name === thirdName)
+  assert.deepEqual([resetTarget.x, resetTarget.y], [target.x, target.y], 'reset did not restore original node position')
+  assert.equal(rosterFacts(db), beforeFacts, 'fit or reset wrote roster facts')
+  pass('U11.A06-fit-and-reset', 'U11.A06', 'Visible fit and reset controls restored the moved graph node and left durable facts unchanged',
+    { draggedPosition: [moved.x, moved.y], resetPosition: [resetTarget.x, resetTarget.y], factHash: createHash('sha256').update(beforeFacts).digest('hex') })
+
+  setStep('U11.A07-collapse-sidebar')
+  const widthBefore = (await canvas.boundingBox()).width
+  await page.getByRole('button', { name: '折叠人物侧栏' }).click()
+  await sidebar.waitFor({ state: 'detached' })
+  const widthCollapsed = (await canvas.boundingBox()).width
+  assert(widthCollapsed > widthBefore, 'collapsing graph sidebar did not give space to canvas')
+  await page.getByRole('button', { name: '展开人物侧栏' }).click()
+  await sidebar.waitFor({ state: 'visible' })
+  assert.equal(rosterFacts(db), beforeFacts, 'sidebar toggle wrote roster facts')
+  pass('U11.A07-collapse-sidebar', 'U11.A07', 'Visible graph sidebar collapsed and reopened, expanding the canvas without writing facts',
+    { widthBefore, widthCollapsed, restoredCharacters: await sidebar.locator('button[data-graph-character-id]').count() })
+}
+
 async function verifyV3Proposal(page, db, fixture, setStep) {
   setStep('U11.A10-generate-proposal')
   await assertWriter(page, 'U11.A10')
@@ -680,19 +825,22 @@ async function main() {
     projectPath = created.projectPath
     assert.equal(path.relative(scratch, projectPath).startsWith('..'), false)
     if (v3Mode) {
-      currentStep = a10Only ? 'fixture-proposal-prerequisites' : a08Only ? 'fixture-same-name-stable-id-roster'
-        : a09Only ? 'fixture-two-stable-id-old-relation' : 'fixture-1000-character-roster'
+      currentStep = a10Only ? 'fixture-proposal-prerequisites' : graphCoreOnly ? 'fixture-five-tier-graph'
+        : a08Only ? 'fixture-same-name-stable-id-roster' : a09Only ? 'fixture-two-stable-id-old-relation' : 'fixture-1000-character-roster'
       const opened = await invoke(page, 'project:open', projectPath, randomUUID(), null)
       assert.equal(opened.success, true, opened.error)
       const session = { projectId: created.projectId, projectPath, leaseId: opened.project.sessionLease }
       const roster = await invoke(page, 'db:character-roster-read', projectPath, session)
-      const names = a10Only ? [sentinelName] : a08Only || a09Only ? [firstName, secondName]
+      const names = a10Only ? [sentinelName] : graphCoreOnly ? [firstName, secondName, thirdName, fourthName, fifthName]
+        : a08Only || a09Only ? [firstName, secondName]
         : [firstName, secondName, ...Array.from({ length: 998 }, (_, index) => `角色${String(index).padStart(4, '0')}`)]
       const entries = names.map((name, index) => ({ characterId: `draft:${randomUUID()}`, name,
         role: index === 0 ? 'protagonist' : 'supporting', gender: '', age: '', appearance: '', personality: '',
         background: '', abilities: '', motivation: '', relationships: [], arc: '',
         notes: a08Only ? index === 0 ? a08TargetNotes : a08OtherNotes : '' }))
-      if (a09Only) entries[0].relationships = [{ target: secondName, targetCharacterId: entries[1].characterId, relation: initialRelationship }]
+      if (graphCoreOnly) for (let index = 0; index < 4; index++) entries[index].relationships = [
+        { target: names[index + 1], targetCharacterId: entries[index + 1].characterId, relation: relationship }]
+      else if (a09Only) entries[0].relationships = [{ target: secondName, targetCharacterId: entries[1].characterId, relation: initialRelationship }]
       else if (!a10Only && !a08Only) entries[0].relationships = [{ target: secondName, targetCharacterId: entries[1].characterId, relation: relationship }]
       const seeded = await invoke(page, 'db:character-roster-commit', { operationId: randomUUID(), expectedRevision: roster.revision,
         expectedIdentityRevision: roster.identityRevision, schemaVersion: 1, intent: 'manual_edit', entries }, projectPath, session)
@@ -760,10 +908,11 @@ async function main() {
     const Database = createRequire(import.meta.url)('better-sqlite3')
     db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true })
     if (v3Mode) {
-      currentStep = avatarOnly ? 'U10.A08-v3-graph-entry' : a08Only ? 'U11.A08-v3-graph-entry' : a09Only ? 'U11.A09-v3-graph-entry' : a10Only ? 'U11.A10-v3-architecture-entry'
+      currentStep = avatarOnly ? 'U10.A08-v3-graph-entry' : graphCoreOnly ? 'U11.A01-v3-graph-entry' : a08Only ? 'U11.A08-v3-graph-entry' : a09Only ? 'U11.A09-v3-graph-entry' : a10Only ? 'U11.A10-v3-architecture-entry'
         : a12Only ? 'U11.A12-v3-graph-entry' : 'U11.A13-v3-graph-entry'
       if (avatarOnly) await verifyV3AvatarBatch(page, app, db, avatarFixture, avatarProjectId, avatarOversized, step => { currentStep = step })
       else if (narrowOnly) await verifyV3Narrow(page, app, step => { currentStep = step })
+      else if (graphCoreOnly) await verifyV3GraphCore(page, db, step => { currentStep = step })
       else if (a08Only) await verifyV3A08(page, db, step => { currentStep = step })
       else if (a09Only) await verifyV3A09(page, db, step => { currentStep = step })
       else if (a10Only) await verifyV3Proposal(page, db, fixture, step => { currentStep = step })
@@ -844,18 +993,19 @@ async function main() {
           .every(stepId => steps.some(step => step.stepId === stepId && step.outcome === 'PASS'))
       : steps.some(step => step.actionId === actionId && step.outcome === 'PASS')
     const receipt = { outcome: failure ? 'FAIL' : v3Mode ? 'PARTIAL' : 'PASS',
-      qualification: v3Mode ? avatarOnly ? 'F05_U10_A08_V3_PARTIAL' : narrowOnly ? 'F04_V3_NARROW_GRAPH_PARTIAL' : a08Only ? 'F05_U11_A08_V3_PARTIAL' : a09Only ? 'F05_U11_A09_V3_PARTIAL' : a10Only ? 'F05_U11_A10_V3_PARTIAL' : a12Only ? 'F05_U11_A12_V3_PARTIAL' : graphRemainingOnly ? 'F05_U11_A11_A13_V3_PARTIAL' : 'F05_U11_A10_A13_V3_PARTIAL' : 'F05_U11_A08_A09_WRITER', evidenceLevel: 'electron',
+      qualification: v3Mode ? avatarOnly ? 'F05_U10_A08_V3_PARTIAL' : narrowOnly ? 'F04_V3_NARROW_GRAPH_PARTIAL' : graphCoreOnly ? 'F05_U11_A01_A07_V3_PARTIAL' : a08Only ? 'F05_U11_A08_V3_PARTIAL' : a09Only ? 'F05_U11_A09_V3_PARTIAL' : a10Only ? 'F05_U11_A10_V3_PARTIAL' : a12Only ? 'F05_U11_A12_V3_PARTIAL' : graphRemainingOnly ? 'F05_U11_A11_A13_V3_PARTIAL' : 'F05_U11_A10_A13_V3_PARTIAL' : 'F05_U11_A08_A09_WRITER', evidenceLevel: 'electron',
       testedSha, executionHead, changedPaths, sourceDirtyPaths: git('status', '--porcelain').split('\n').filter(Boolean),
       driverSha256, buildReceipt: buildReceiptPath ? { path: buildReceiptPath, sha256: sha256(buildReceiptPath) } : null,
       fixtureSetup: a09Only ? { method: 'character-roster-commit with two stable IDs and old relation; UI alone edits relation',
         firstName, secondName, initialRelation: initialRelationship, editedRelation: relationship }
         : a08Only ? { method: 'character-roster-commit with unique names and distinct notes, then isolated SQLite rename by character_id',
         firstName, secondName, duplicateName: firstName, distinctField: 'notes', targetNotes: a08TargetNotes, otherNotes: a08OtherNotes } : null,
-      packageRoot: packageDir, shell: v3Mode ? 'writer-v3' : 'writer', mode: avatarOnly ? 'v3-avatar-batch-only' : narrowOnly ? 'v3-narrow-only' : a08Only ? 'v3-a08-only' : a09Only ? 'v3-a09-only' : a10Only ? 'v3-a10-only' : a12Only ? 'v3-a12-only' : graphRemainingOnly ? 'v3-a11-a13-only' : v3Mode ? 'v3-a10-a13' : 'legacy-a08-a09',
+      packageRoot: packageDir, shell: v3Mode ? 'writer-v3' : 'writer', mode: avatarOnly ? 'v3-avatar-batch-only' : narrowOnly ? 'v3-narrow-only' : graphCoreOnly ? 'v3-a01-a07-only' : a08Only ? 'v3-a08-only' : a09Only ? 'v3-a09-only' : a10Only ? 'v3-a10-only' : a12Only ? 'v3-a12-only' : graphRemainingOnly ? 'v3-a11-a13-only' : v3Mode ? 'v3-a10-a13' : 'legacy-a08-a09',
       artifact: { executableSha256: sha256(executablePath), asarSha256: sha256(asarPath) },
       nodeAbi: process.versions.modules, cleanupConfirmed, isolatedRoot: scratch, projectPath, failedStep: failure ? currentStep : null,
       error: failure, diagnostic: failure ? diagnostic : null, steps,
       unverified: v3Mode ? (avatarOnly ? ['U10.A01-U10.A07', 'U11.A08-U11.A13']
+        : graphCoreOnly ? ['U11.A08', 'U11.A09', 'U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']
         : narrowOnly ? ['U11.A08', 'U11.A09', 'U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']
         : a08Only ? ['U11.A09', 'U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']
         : a09Only ? ['U11.A08', 'U11.A10', 'U11.A11', 'U11.A12', 'U11.A13']
