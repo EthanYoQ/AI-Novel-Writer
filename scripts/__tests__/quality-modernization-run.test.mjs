@@ -47,7 +47,7 @@ test('draft reads this arm committed blueprint into ChapterInfo before generatio
   const end = fixture.indexOf('const syntheticReview =', start)
   assert.ok(start >= 0 && end > start, 'DRAFT_BLUEPRINT_READBACK_MISSING')
   const sandbox = { assert }
-  vm.runInNewContext(`${fixture.slice(start, end)}\nthis.readCommittedDraftChapterInfo = readCommittedDraftChapterInfo`, sandbox)
+  vm.runInNewContext(`${fixture.slice(start, end)}\nthis.readCommittedDraftChapterInfo = readCommittedDraftChapterInfo; this.draftPromptIncludesCommittedBlueprint = draftPromptIncludesCommittedBlueprint`, sandbox)
   const row = { chapterNumber: 1, title: '旧港来信', role: '建置', purpose: '发现异常',
     keyEvents: '取出铜钥匙，辨认被雨浸湿的地图', characters: '["林澄","沈岸"]', suspenseHook: '辨认沉船邮戳', userGuidance: '' }
   const db = new Database(':memory:')
@@ -61,12 +61,32 @@ test('draft reads this arm committed blueprint into ChapterInfo before generatio
       characters: ['林澄', '沈岸'], keyEvents: row.keyEvents, suspenseHook: row.suspenseHook,
       userGuidance: '尚未实施的方案不得写为既成事实', wordsTarget: 900,
     })
+    const sent = { userGuidance: actual.userGuidance, suspenseHook: actual.suspenseHook,
+      keyEvents: actual.keyEvents, characters: actual.characters, purpose: actual.purpose,
+      role: actual.role, title: actual.title, chapterNumber: actual.chapterNumber }
+    const oldInfo = { ...sent, keyEvents: '发现异常；决定核查', purpose: '', suspenseHook: '' }
+    const authorMaterial = `作者材料中引用的完整预期 JSON：\n${JSON.stringify(sent)}`
+    for (const [purpose, heading, next] of [
+      ['chapter-draft', '【本章信息】', '【后续章节大纲预告】'],
+      ['chapter-draft-continuation', '【本章蓝图】', '【全局写作要求】'],
+      ['chapter-draft-no-progress-recovery', '【本章蓝图】', '【全局写作要求】'],
+    ]) {
+      const prompt = info => `${authorMaterial}\n\n${heading}\n${JSON.stringify(info, null, 4)}\n\n${next}\n后续内容`
+      assert.equal(sandbox.draftPromptIncludesCommittedBlueprint(prompt(oldInfo), actual, purpose), false,
+        `${purpose}:旁边的完整作者材料不得替代权威 ChapterInfo`)
+      assert.equal(sandbox.draftPromptIncludesCommittedBlueprint(prompt(sent), actual, purpose), true,
+        `${purpose}:合法缩进与字段顺序应通过`)
+      assert.equal(sandbox.draftPromptIncludesCommittedBlueprint(prompt({ ...sent, chapterNumber: '1' }), actual, purpose), false)
+      assert.equal(sandbox.draftPromptIncludesCommittedBlueprint(prompt({ ...sent, characters: '林澄,沈岸' }), actual, purpose), false)
+    }
     db.prepare('INSERT INTO blueprints VALUES(?,?,?,?,?,?,?,?)').run(3, '作者预置第三章', '发展', '依据证据选择',
       '留下后果', '["林澄"]', '', '本章时点：翌日清晨')
     const preset = sandbox.readCommittedDraftChapterInfo(db, { number: 3, targetUnits: 2000 }, '/this-arm/project', '本章时点：翌日清晨')
     assert.equal(preset.keyEvents, '留下后果')
     assert.equal(preset.userGuidance, '本章时点：翌日清晨')
     assert.equal(preset.wordsTarget, 2000)
+    assert.equal(sandbox.draftPromptIncludesCommittedBlueprint(
+      `前置正文\n\n【本章写作方向与核心任务】\n${JSON.stringify(preset)}\n\n【后续章节大纲预告】`, preset, 'chapter-draft'), true)
     db.prepare('UPDATE blueprints SET characters=? WHERE chapter_number=1').run('{')
     assert.throws(() => sandbox.readCommittedDraftChapterInfo(db, { number: 1, targetUnits: 900 }, '/this-arm/project', ''),
       /DRAFT_COMMITTED_BLUEPRINT_INVALID/)
@@ -844,10 +864,12 @@ test('请求规模证据只存字节数、取自真正出站的请求体，且�
 test('bridge 在记账前按 operation 校验出站权威，且只把真实 provider 失败归入 fetchFailures', () => {
   const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
   const recheckGate = fixture.indexOf("if (operationKind === 'recheck' && candidate)")
+  const draftGate = fixture.indexOf("if (operationKind === 'draft') preflight(draftPromptIncludesCommittedBlueprint(")
   const reserve = fixture.indexOf("record({ type: 'reserve', attemptId, binding })")
   const dispatch = fixture.indexOf("record({ type: 'dispatch', attemptId })")
   assert.ok(recheckGate >= 0 && recheckGate < reserve && reserve < dispatch,
     'recheck 的确定性权威校验必须在 campaign reserve/dispatch 之前完成')
+  assert.ok(draftGate >= 0 && draftGate < reserve, '正文蓝图出站校验必须先于 campaign reserve')
   assert.ok(fixture.includes('OUTBOUND_RECHECK_MERGED_DRAFT_MISSING'))
   assert.ok(fixture.includes('OUTBOUND_RECHECK_FINDING_ID_MISSING'))
   assert.ok(fixture.includes('OUTBOUND_RECHECK_TARGET_ID_MISSING'))

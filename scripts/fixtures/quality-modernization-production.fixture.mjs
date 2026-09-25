@@ -128,6 +128,22 @@ function readCommittedDraftChapterInfo(db, chapter, projectPath, chapterGuidance
     userGuidance: [...new Set([row.userGuidance.trim(), chapterGuidance.trim()].filter(Boolean))].join('\n'),
     wordsTarget: chapter.targetUnits }
 }
+function draftPromptIncludesCommittedBlueprint(userPrompt, chapterInfo, purpose) {
+  const initial = purpose === 'chapter-draft'
+  if (!initial && !['chapter-draft-continuation', 'chapter-draft-no-progress-recovery'].includes(purpose)) return false
+  const heading = initial ? chapterInfo.chapterNumber === 1 ? '【本章信息】' : '【本章写作方向与核心任务】' : '【本章蓝图】'
+  const next = initial ? '【后续章节大纲预告】' : '【全局写作要求】'
+  const marker = `\n${heading}\n`
+  const start = userPrompt.indexOf(marker)
+  if (start < 0 || userPrompt.indexOf(marker, start + marker.length) >= 0) return false
+  const end = userPrompt.indexOf(`\n${next}`, start + marker.length)
+  if (end < 0) return false
+  let sent
+  try { sent = JSON.parse(userPrompt.slice(start + marker.length, end).trim()) } catch { return false }
+  return sent && typeof sent === 'object' && !Array.isArray(sent)
+    && ['chapterNumber', 'title', 'role', 'purpose', 'characters', 'keyEvents', 'suspenseHook', 'userGuidance']
+      .every(key => Object.hasOwn(sent, key) && JSON.stringify(sent[key]) === JSON.stringify(chapterInfo[key]))
+}
 const syntheticReview = chapter => JSON.stringify({
   summary: '本章完成受阻事件，但人物只罗列选择，没有执行会造成已实现损失的处置。',
   items: [{ category: '本章目标', severity: 'error', description: '人物罗列了代价方案，却没有执行任何会造成已实现损失或牺牲的选择，未满足当章“承担代价”的目标；有效修订必须同时写明已执行的选择、已经发生的具体损失，并消除后文反证，签字认责或承诺以后负责不算代价。', quote: REVIEW_DEFECT }],
@@ -431,6 +447,8 @@ test('isolated production commands persist the selected phase operations', async
         .map(message => message.content).join('\n')
       const userMessages = body.messages.filter(message => message?.role === 'user' && typeof message.content === 'string')
       const userPromptHash = userMessages.length === 1 ? sha(userMessages[0].content) : null
+      if (operationKind === 'draft') preflight(draftPromptIncludesCommittedBlueprint(userMessages.length === 1 ? userMessages[0].content : '',
+        readCommittedDraftChapterInfo(db, chapter, project.rootPath, chapterGuidance), (actual ?? observedIpc).purpose), 'OUTBOUND_DRAFT_BLUEPRINT_MISSING')
       if (operationKind === 'recheck' && candidate) {
         const merged = db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1')
           .pluck().get(chapter.number)
