@@ -13,13 +13,14 @@ import { _electron as electron } from 'playwright'
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 if (process.argv.includes('--help')) {
-  process.stdout.write('F05 U12.A01-A08 V3 packaged review journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256 [--diagnose-a06-lifecycle]\n')
+  process.stdout.write('F05 U12.A01-A08 V3 packaged review journey: --package-dir --package-source-sha --exe-sha256 --asar-sha256 [--a06-only] [--diagnose-a06-lifecycle]\n')
   process.exit(0)
 }
 const packageDir = option('package-dir') && path.resolve(option('package-dir'))
 const testedSha = option('package-source-sha')
 const expectedExe = option('exe-sha256')
 const expectedAsar = option('asar-sha256')
+const a06Only = process.argv.includes('--a06-only')
 assert(packageDir && /^[a-f0-9]{40}$/.test(testedSha ?? '') && /^[a-f0-9]{64}$/.test(expectedExe ?? '')
   && /^[a-f0-9]{64}$/.test(expectedAsar ?? ''),
   'pass --package-dir=<win-unpacked> --package-source-sha=<sha> --exe-sha256=<hash> --asar-sha256=<hash>')
@@ -695,6 +696,7 @@ async function main() {
         recheckAttemptId: committedCycle.recheckAttemptId, mergedHash: committedCycle.mergedHash,
         findingSetHash: committedCycle.findingSetHash, recheckCount: committedCycle.recheckCount,
         externalModelRequests: fixture.externalModelRequests }, 'U12.A06')
+    if (a06Only) return
 
     currentStep = 'U12.A07-finalize-and-publish'
     await objectiveMerge.waitFor({ state: 'hidden' })
@@ -901,9 +903,9 @@ async function main() {
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true })
     const requiredA08Steps = ['U12.A08-failed-candidate-reopen', 'U12.A08-isolated-candidate',
       'U12.A08-session-conflict', 'U12.A08-stale-source-reopen']
-    const receipt = { schemaVersion: 1, qualification: 'F05_U12_A01_A08_PACKAGED_V3_FINALIZATION',
-      overall: failure ? 'FAIL' : 'PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3',
-      scope: ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04', 'U12.A05', 'U12.A06', 'U12.A07', 'U12.A08'], testedSha, executionHead: git('rev-parse', 'HEAD'),
+    const receipt = { schemaVersion: 1, qualification: a06Only ? 'F05_U12_A06_DIAGNOSTIC_ONLY' : 'F05_U12_A01_A08_PACKAGED_V3_FINALIZATION',
+      overall: failure ? 'FAIL' : a06Only ? 'DIAGNOSTIC_ONLY' : 'PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3',
+      scope: a06Only ? ['U12.A06'] : ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04', 'U12.A05', 'U12.A06', 'U12.A07', 'U12.A08'], testedSha, executionHead: git('rev-parse', 'HEAD'),
       artifact: { executablePath, executableSha256: sha256(executablePath), asarPath, asarSha256: sha256(asarPath) },
       driver: { path: driverPath, sha256: sha256(driverPath) }, profile: { scratch, projectPath, liveProjectPath },
       provider: { kind: 'loopback-synthetic-openai-sse', localRequests: fixture.requests,
