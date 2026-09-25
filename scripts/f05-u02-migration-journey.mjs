@@ -241,7 +241,7 @@ function prepareLegacyProject(name) {
 }
 
 async function currentProjectState(name, roots, session, source) {
-  const targetParent = path.join(scratchRoot, name)
+  const targetParent = path.join(scratchRoot, `t${name.slice(1)}`)
   fs.mkdirSync(targetParent)
   const targetRoot = path.join(targetParent, `${path.basename(source.sourceRoot)}-新版副本`)
   assert(targetRoot.length <= 85, 'synthetic target exceeds current Windows project path contract')
@@ -363,6 +363,10 @@ async function currentMain() {
     persistedModelCalls: null, physicalModelRequestsObservation: 'NOT_OBSERVED_BY_THIS_JOURNEY',
     releaseDefaultQualified: false, steps }
   try {
+    for (const name of ['v1', 'v2']) {
+      const targetParent = path.join(scratchRoot, `t${name.slice(1)}`)
+      assert(!fs.existsSync(targetParent), 'synthetic target parent collides with an existing profile')
+    }
     for (const [name, legacyShell, preference] of [
       ['v1', 'v1', 'classic'], ['v2', JSON.stringify({ state: { uiVersion: 'v2' }, version: 0 }), 'writer'],
     ]) {
