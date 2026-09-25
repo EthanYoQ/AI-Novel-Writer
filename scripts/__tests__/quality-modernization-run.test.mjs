@@ -179,6 +179,7 @@ test('post-UI 指定范围只允许真实 owner 的一次结构化语法修复',
 })
 
 test('syntax repair gate requires settled malformed primary output, not purpose alone', () => {
+  fs.mkdirSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization'), { recursive: true })
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/repair-proof-test-'))
   const policy = PHASE_SCENARIOS['early-budget'].attemptPolicy
   const primary = { attemptId: 'main', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: policy.primaryPurpose }
