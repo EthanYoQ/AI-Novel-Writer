@@ -13,6 +13,8 @@ import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLan
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 const testedSha = option('package-source-sha')
+const selectedAction = option('only-action')
+assert(!selectedAction || selectedAction === 'U05.A07', '--only-action currently supports only U05.A07')
 const expectedExe = option('exe-sha256')
 const expectedAsar = option('asar-sha256')
 const packageDir = option('package-dir') && path.resolve(repository, option('package-dir'))
@@ -29,7 +31,7 @@ assert.equal(git('diff', '--name-only', `${testedSha}..HEAD`, '--', 'src', 'elec
   'product input changed since package build')
 const dirtyProductPaths = git('status', '--porcelain', '--', 'src', 'electron', 'public', 'build', 'package.json',
   'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5').split('\n').filter(Boolean)
-assert(dirtyProductPaths.every(line => /^\?\? src\/components\/(?:dialogs|editor|layout\/v2|pages\/v2|panels)\/__tests__\/__screenshots__\/$/.test(line)),
+assert(dirtyProductPaths.every(line => /^\?\? src\/components\/(?:characters|dialogs|editor|layout\/v2|pages|pages\/v2|panels)\/__tests__\/__screenshots__\/$/.test(line)),
   'product source dirty beyond test screenshots')
 assert.equal(fileHash(executablePath), expectedExe)
 assert.equal(fileHash(asarPath), expectedAsar)
@@ -221,7 +223,7 @@ async function main() {
   fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel F05 U05', sourceProject: repository,
     createdAt: new Date().toISOString(), ttlHours: 48, retainedReason: 'review Writer U05 receipt',
     cleanupCommand: `Remove-Item -LiteralPath '${scratch.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
-  const fixture = { requests: [], chapters: [], mode: 'blueprint', blueprintQueue: [1], releaseFirst: null }
+  const fixture = { requests: [], chapters: [], mode: 'blueprint', blueprintQueue: [1], releaseFirst: null, releaseRetry: null }
   const server = createServer(async (request, response) => {
     const authorized = request.headers.authorization === `Bearer ${model.apiKey}`
     if (request.method !== 'POST' || !authorized) { response.writeHead(403).end(); return }
@@ -264,6 +266,7 @@ async function main() {
       fixture.chapters.push(...chapters)
     }
     if (fixture.mode === 'cancel_request') await new Promise(resolve => { fixture.releaseFirst = resolve })
+    if (fixture.mode === 'retry_request') await new Promise(resolve => { fixture.releaseRetry = resolve })
     if (fixture.mode === 'fail_request') {
       await new Promise(resolve => setTimeout(resolve, 1_500))
       response.writeHead(503).end('U05_CONTROLLED_PROVIDER_FAILURE'); return
@@ -289,6 +292,7 @@ async function main() {
     assert.equal((await invoke(page, 'llm:save-model', model)).success, true)
     assert.equal((await invoke(page, 'llm:set-default-model', model.id)).success, true)
     await selectWriter(page)
+    if (!selectedAction) {
     ;({ created: project, session: context } = await createConfiguredProject(page, projectName))
 
     mark('U05.A01-single-blueprint')
@@ -399,8 +403,10 @@ async function main() {
     pass('U05.A04-batch-review', 'U05.A04', 'V3 batch review froze mode/range/model/budget and persisted two distinct unfinalized drafts',
       { batchId: batch.batchId, range: batch.range, targetUnits: batch.targetUnits,
         draftIds: batchDrafts.map(row => row.id), requestCount: batchRequests.length })
+    }
 
     if (!process.argv.includes('--stop-after-a04')) {
+    if (!selectedAction) {
     mark('U05.A08-current-chapter-source-budget')
     const frozen = readProjectDb(context.projectPath, db => db.prepare('SELECT run_id AS runId,root_action_id AS rootActionId,binding_json AS binding FROM generation_runs').all()
       .map(row => ({ ...row, binding: JSON.parse(row.binding) }))
@@ -457,6 +463,7 @@ async function main() {
     pass('U05.A06-stop-batch', 'U05.A06', 'Writer cancel stopped the active batch before chapter 2 dispatch or write',
       { rootActionId: cancelState.roots[0].rootActionId, status: cancelState.roots[0].status,
         requests: cancelRequests.length, savedChapters: cancelState.drafts.map(row => row.chapter_number) })
+    }
 
     mark('U05.A07-failure-stops-before-next')
     ;({ created: project, session: context } = await createConfiguredProject(page, 'U05D'))
@@ -465,12 +472,13 @@ async function main() {
     await requestBlueprints(page, 2)
     await waitBlueprints(page, context, [1, 2])
     assert.deepEqual(fixture.blueprintQueue, [])
+    const a07RequestOffset = fixture.requests.length
     fixture.mode = 'fail_request'
     await batchDialog(page, 2, 'draft_review')
     await page.getByTitle('取消任务', { exact: true }).waitFor({ state: 'visible', timeout })
     await page.getByTitle('取消任务', { exact: true }).waitFor({ state: 'hidden', timeout })
-    const failedRequests = fixture.requests.filter(row => row.mode === 'fail_request')
-    assert.ok(failedRequests.length > 0)
+    const failedRequests = fixture.requests.slice(a07RequestOffset).filter(row => row.mode === 'fail_request')
+    assert.equal(failedRequests.length, 1, 'initial batch failure should make one provider request before explicit retry')
     assert.ok(failedRequests.every(row => row.synopsisChapterOne && !row.synopsisChapterTwo))
     const failedDrafts = readProjectDb(context.projectPath, db => db.prepare('SELECT chapter_number FROM drafts ORDER BY chapter_number').all())
     assert.deepEqual(failedDrafts, [])
@@ -480,9 +488,44 @@ async function main() {
     assert.deepEqual(failedRuns.map(row => row.source.chapterNumber), [1], 'failed batch opened a later chapter run')
     assert.equal(JSON.parse(failedRuns[0].attempt).status, 'unknown')
     assert.equal(JSON.parse(failedRuns[0].receipt).result?.failureCode, 'GENERATION_PROVIDER_FAILED')
-    pass('U05.A07-failure-stops-before-next', 'U05.A07', 'controlled first-chapter provider failure ended Writer batch with no later dispatch or draft',
-      { attemptedRequests: failedRequests.length, attemptedChapters: [1], savedChapters: [] })
+    const failedBatchId = failedRuns[0].source.batchId
+    assert.ok(failedBatchId, 'failed chapter run is not bound to its batch')
 
+    fixture.mode = 'retry_request'
+    await page.locator('.writer-ai-panel').getByRole('button', { name: '继续此批次', exact: true }).click()
+    const retryDeadline = Date.now() + timeout
+    while (!fixture.releaseRetry && Date.now() < retryDeadline) await new Promise(resolve => setTimeout(resolve, 100))
+    assert.equal(typeof fixture.releaseRetry, 'function', 'explicit batch retry did not reach controlled provider')
+    const retryRequests = fixture.requests.slice(a07RequestOffset).filter(row => row.mode === 'retry_request')
+    assert.equal(retryRequests.length, 1)
+    assert.ok(retryRequests[0].synopsisChapterOne && !retryRequests[0].synopsisChapterTwo,
+      'explicit retry did not target the failed first chapter')
+    assert.deepEqual(readProjectDb(context.projectPath, db => db.prepare('SELECT chapter_number FROM drafts ORDER BY chapter_number').all()), [],
+      'a draft was committed before the explicit retry response')
+    const stillBlockedRuns = readProjectDb(context.projectPath, db => db.prepare('SELECT binding_json FROM generation_runs').all()
+      .map(row => JSON.parse(row.binding_json).sourceManifest)
+      .filter(source => source.operation === 'chapter-draft'))
+    assert.ok(stillBlockedRuns.every(source => source.chapterNumber === 1), 'batch advanced while retry response was pending')
+
+    fixture.mode = 'draft_review'
+    fixture.releaseRetry()
+    fixture.releaseRetry = null
+    const resumedBatch = await waitBatch(page, context, 2, 'draft_review')
+    assert.equal(resumedBatch.batchId, failedBatchId, 'retry did not resume the original batch')
+    const resumedDrafts = await waitDrafts(page, context, 2)
+    assert.deepEqual(resumedDrafts.map(row => row.chapterNumber), [1, 2])
+    const resumedBodies = readProjectDb(context.projectPath, db => db.prepare('SELECT d.chapter_number AS chapterNumber,c.body FROM drafts d JOIN contents c ON c.id=d.content_id ORDER BY d.chapter_number').all())
+    assert.ok(resumedBodies[0].body.includes(prose) && !resumedBodies[0].body.includes(proseTwo))
+    assert.ok(resumedBodies[1].body.includes(proseTwo) && !resumedBodies[1].body.includes(prose))
+    assert.equal(fixture.requests.slice(a07RequestOffset).filter(row => row.mode === 'draft_review').length, 1,
+      'next chapter was not dispatched exactly once after the failed chapter retry succeeded')
+    pass('U05.A07-failure-stops-explicit-retry-continues', 'U05.A07',
+      'first-chapter HTTP 503 stopped before chapter 2; explicit batch retry reissued chapter 1, then continued to chapter 2',
+      { initialFailureRequests: failedRequests.length, retryRequests: retryRequests.length,
+        batchId: resumedBatch.batchId, completedChapters: resumedBatch.completedChapters.map(row => row.chapterNumber),
+        savedChapters: resumedDrafts.map(row => row.chapterNumber) })
+
+    if (!selectedAction) {
     mark('U05.A05-auto-finalize')
     ;({ created: project, session: context } = await createConfiguredProject(page, 'U05E'))
     fixture.mode = 'blueprint'
@@ -586,6 +629,7 @@ async function main() {
       { finalizedSource: source, naturalSuccessRunId: successfulRun.id, controlledRunId: injected.id,
         stepKeys: successfulSteps.map(step => step.stepKey), controlledFailure: sentinel })
     }
+    }
   } catch (error) {
     failure = error
     if (page) {
@@ -620,6 +664,7 @@ async function main() {
   const unverified = [...Array.from({ length: 8 }, (_, index) => `U05.A${String(index + 1).padStart(2, '0')}`), 'U13.A09']
     .filter(actionId => !covered.has(actionId))
   const receipt = { outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U05_PACKAGED_V3_PARTIAL',
+    selectedActions: selectedAction ? [selectedAction] : null,
     evidenceLevel: 'electron', testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths,
     reuseDecision: { testedSha, changedPaths, differences: changedPaths.join(', ') || 'none',
       reason: 'fixed verified V3 executable and asar hashes match, with no committed product-input changes since build; current driver hash is recorded' },
