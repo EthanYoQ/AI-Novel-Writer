@@ -331,7 +331,8 @@ async function currentMain() {
   const buildGit = (...args) => execFileSync('git', args, { cwd: buildTree, encoding: 'utf8' }).trim()
   assert.equal(buildGit('rev-parse', 'HEAD'), testedSha)
   assert.equal(buildGit('status', '--porcelain'), '', 'fixed package build tree must be clean')
-  assert.equal(path.resolve(packageDir), path.join(path.resolve(buildTree), 'release', '1.1.0', 'win-unpacked'))
+  const buildVersion = JSON.parse(fs.readFileSync(path.join(buildTree, 'package.json'), 'utf8')).version
+  assert.equal(path.resolve(packageDir), path.join(path.resolve(buildTree), 'release', buildVersion, 'win-unpacked'))
   assert.equal(sha256(executablePath), expectedExeSha)
   assert.equal(sha256(asarPath), expectedAsarSha)
   const productInputs = ['src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5']
