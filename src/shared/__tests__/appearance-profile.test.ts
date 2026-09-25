@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { INITIAL_APPEARANCE, migrateLegacyAppearance, parseAppearanceProfile, resolveShell } from '../appearance-profile'
 
 describe('appearance preference conversion', () => {
-  it('keeps missing shell unset across development and approved future default policies', () => {
+  it('resolves unset to the release Writer default without persisting a choice', () => {
     const profile = migrateLegacyAppearance(null, null, 'light')
     expect(profile.shellPreference).toBe('unset')
-    expect(resolveShell(profile.shellPreference)).toBe('classic')
+    expect(resolveShell(profile.shellPreference)).toBe('writer')
+    expect(resolveShell(profile.shellPreference, 'classic')).toBe('classic')
     expect(resolveShell(profile.shellPreference, 'writer')).toBe('writer')
     expect(profile.shellPreference).toBe('unset')
+    expect(resolveShell('classic')).toBe('classic')
+    expect(resolveShell('writer')).toBe('writer')
     expect(resolveShell('classic', 'writer')).toBe('classic')
   })
   it.each(['v1', '{"version":"v1"}', '{"state":{"uiVersion":"v1"},"version":0}'])('maps old Classic shape %s', raw => {
