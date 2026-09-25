@@ -2,7 +2,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
+import { spawn } from 'node:child_process'
 import { afterEach, expect, it } from 'vitest'
+import { build } from 'esbuild'
 import * as lance from '@lancedb/lancedb'
 import { Field, Int32, Schema, Utf8 } from 'apache-arrow'
 import { importLegacyProjectCopy } from '../legacy-project-copy-import'
@@ -11,7 +13,9 @@ import { readPortableRuntimeFreeze } from '../portable-runtime-freeze'
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { ChapterDeletionService } from '../chapter-deletion-service'
 import { readPortableCurrentAuthority } from '../portable-current-authority'
+import { ProjectAccessService } from '../project-access'
 import { createPortableTransferAuthority } from '../portable-transfer-authority'
+import { ProjectCoreRepository } from '../../repositories/project-core-repository'
 import { SummaryRepository } from '../../repositories/summary-repository'
 import { LLMHistoryRepository } from '../../repositories/llm-repository'
 import { PostProcessRepository } from '../../repositories/post-process-repository'
@@ -48,6 +52,76 @@ function fixture(version: 'v100' | 'v110') {
   const sourceHashes = Object.fromEntries(['vela.db', 'vela.db-wal', 'vela.db-shm', 'project.json', 'prompts/author.txt', 'skills/author.md']
     .map(name => [name, hash(path.join(legacy, name))]))
   return { source, target, legacy, sourceProjectId, sourceHashes }
+}
+
+function sourceState(f: ReturnType<typeof fixture>) {
+  const entries: [string, string][] = []
+  const visit = (directory: string) => {
+    for (const name of fs.readdirSync(directory).sort()) {
+      const file = path.join(directory, name), info = fs.lstatSync(file)
+      entries.push([path.relative(f.source, file), info.isFile() ? hash(file) : 'directory'])
+      if (info.isDirectory()) visit(file)
+    }
+  }
+  visit(f.source)
+  return entries
+}
+
+async function terminateImportAt(f: ReturnType<typeof fixture>, phase: 'sqlite-converted' | 'renamed') {
+  const entry = path.join(path.dirname(f.source), 'import-child.mjs')
+  await build({ entryPoints: [path.resolve('electron/services/legacy-project-copy-import.ts')], outfile: entry,
+    bundle: true, packages: 'external', platform: 'node', format: 'esm', target: 'node22',
+    plugins: [{ name: 'unused-electron-imports', setup(build) {
+      build.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'test-shim' }))
+      build.onLoad({ filter: /.*/, namespace: 'test-shim' }, () => ({ contents:
+        'export const app = { getPath() { throw Error("Electron-only path used") } }; export const nativeImage = {}', loader: 'js' }))
+    } }],
+  })
+  const script = `
+    import fs from 'node:fs'
+    import { pathToFileURL } from 'node:url'
+    const { entry, sourceRoot, targetRoot, phase } = JSON.parse(process.env.LEGACY_IMPORT_CHILD)
+    const pause = () => { fs.writeSync(1, 'REACHED\\n'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0) }
+    if (phase === 'renamed') {
+      const rename = fs.renameSync
+      fs.renameSync = (from, to) => { rename(from, to); if (to === targetRoot) pause() }
+    }
+    const { importLegacyProjectCopy } = await import(pathToFileURL(entry).href)
+    await importLegacyProjectCopy({ sourceRoot, targetRoot, preflightOptions: { maxNativePathCharacters: 4096 },
+      checkpoint: current => { if (current === phase) pause() } })
+    process.exitCode = 31
+  `
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: process.cwd(), env: { ...process.env, LEGACY_IMPORT_CHILD: JSON.stringify({ entry, sourceRoot: f.source, targetRoot: f.target, phase }) },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let stderr = ''
+  child.stderr.on('data', data => { stderr += String(data) })
+  const exited = new Promise<[number | null, NodeJS.Signals | null]>((resolve, reject) => {
+    child.once('error', reject)
+    child.once('exit', (code, signal) => resolve([code, signal]))
+  })
+  let stdout = ''
+  const reached = new Promise<void>(resolve => child.stdout.on('data', data => {
+    stdout += String(data)
+    if (stdout.includes('REACHED\n')) resolve()
+  }))
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let observed = false
+  try {
+    await Promise.race([
+      reached,
+      exited.then(([code, signal]) => { throw new Error(`child exited before ${phase}: ${code}/${signal} ${stderr}`) }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`child timeout at ${phase}: ${stderr}`)), 30_000) }),
+    ])
+    expect(child.exitCode).toBeNull()
+    observed = true
+  } finally {
+    if (timer) clearTimeout(timer)
+    const killed = child.exitCode === null ? child.kill() : false
+    const [, signal] = await exited
+    if (observed) { expect(killed).toBe(true); expect(signal).toBe('SIGTERM') }
+  }
 }
 afterEach(() => { closeProjectDatabase(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }) })
 
@@ -199,6 +273,33 @@ it.each(['sqlite-converted', 'assets-converted', 'history-frozen'] as const)(
       .toMatchObject({ state: 'ready', targetRoot: f.target })
   },
 )
+
+it.each(['sqlite-converted', 'renamed'] as const)('%s 子进程终止后源保留且目标可安全恢复', async phase => {
+  const f = fixture('v110'), before = sourceState(f)
+  await terminateImportAt(f, phase)
+  expect(sourceState(f)).toEqual(before)
+  const attempts = fs.readdirSync(path.dirname(f.target)).filter(name => name.startsWith('.new.legacy-import-'))
+  expect(attempts).toHaveLength(1)
+  const owner = JSON.parse(fs.readFileSync(path.join(path.dirname(f.target), attempts[0]!, '.vibe-owner.json'), 'utf8'))
+  expect(owner).toMatchObject({ owner: 'AI Novel A11 offline import', sourceProject: f.source, ttlHours: 24 })
+  expect(owner.cleanupCommand).toContain(attempts[0])
+  if (phase === 'sqlite-converted') {
+    expect(fs.existsSync(f.target)).toBe(false)
+    expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))
+      .toMatchObject({ state: 'ready', targetRoot: f.target })
+  } else {
+    expect(verifyProjectSqlite({ databasePath: path.join(f.target, '.ai-novel', 'project.db') }).schemaVersion).toBe(7)
+    const access = new ProjectAccessService(preflightOptions)
+    const trusted = access.adoptLegacyProject(access.probeExistingProject(f.target))
+    expect(trusted.projectId).not.toBe(f.sourceProjectId)
+    initProjectDatabase(trusted.rootPath)
+    expect(ProjectCoreRepository.get()?.projectName).toBe('合成旧项目')
+    closeProjectDatabase()
+    expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))
+      .toMatchObject({ state: 'blocked', code: 'LEGACY_IMPORT_TARGET_EXISTS' })
+  }
+  expect(sourceState(f)).toEqual(before)
+})
 
 it('旧候选正文保留为可读冻结历史，新项目不重放', async () => {
   const f = fixture('v110'), db = new Database(path.join(f.legacy, 'vela.db'))

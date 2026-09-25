@@ -360,6 +360,18 @@ describe('project controller project identity', () => {
     expect(mocks.createCalls).toEqual([])
   })
 
+  it('opens a complete imported target after its publish ACK is lost and adds it to recent projects', async () => {
+    await expect(handler('project:recent-list')({})).resolves.toEqual([])
+    await expect(handler('project:open')({}, projectB, 'recover-imported-B', projectA))
+      .resolves.toMatchObject({ success: true, project: { id: 'project-B', path: projectB } })
+    expect(mocks.projectAccess.probeExistingProject).toHaveBeenCalledWith(projectB)
+    expect(mocks.initCalls).toContain(projectB)
+    expect(mocks.createCalls).toEqual([])
+    await expect(handler('project:recent-list')({})).resolves.toEqual([
+      expect.objectContaining({ path: projectB, projectId: 'project-B', previewCapabilityId: 'peek-B' }),
+    ])
+  })
+
   it('reopens the same project with a new lease while preserving its stable ProjectId', async () => {
     const first = await handler('project:open')({}, projectB, 'request-open-B-1', projectA)
     const second = await handler('project:open')({}, projectB, 'request-open-B-2', projectB)
