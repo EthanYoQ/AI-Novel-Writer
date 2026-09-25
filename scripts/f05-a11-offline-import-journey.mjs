@@ -12,6 +12,7 @@ const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 const arg = name => process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
 const packageDir = arg('package-dir')
 const buildTree = arg('build-tree')
+const fieldPolicy = path.join(buildTree ?? '', 'electron', 'services', 'portable-project-field-policy.json')
 const testedSha = arg('tested-sha')
 const expectedExe = arg('exe-sha256')
 const expectedAsar = arg('asar-sha256')
@@ -36,7 +37,8 @@ const receiptPath = path.join(repository, '.runtime', '.cache', 'f05-a11-offline
 const receipt = { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_WIN_V3',
   testedSha, buildTree: path.resolve(buildTree),
   executionHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim(),
-  driverSha256: sha256(fileURLToPath(import.meta.url)), packageHashes: { exe: sha256(exe), asar: sha256(asar) },
+  driverSha256: sha256(fileURLToPath(import.meta.url)), fieldPolicySha256: sha256(fieldPolicy),
+  packageHashes: { exe: sha256(exe), asar: sha256(asar) },
   historicalSources: sources.map(source => ({ version: source.version, path: source.path,
     injectedInventoryRemovedFromScratchCopy: source.injectedInventory })), steps: [], receiptPath }
 assert.deepEqual(receipt.packageHashes, { exe: expectedExe, asar: expectedAsar })
@@ -61,20 +63,27 @@ function inventory(root) {
 }
 
 const compareSql = `import json,sqlite3,sys
-old,new=sys.argv[1:]
+old,new,policy_file=sys.argv[1:]
+policy=json.load(open(policy_file,encoding='utf-8'))['tables']
 def conn(p): return sqlite3.connect('file:'+p+'?mode=ro',uri=True)
 a,b=conn(old),conn(new)
 result={}
 tables=[r[0] for r in a.execute("select name from sqlite_master where type='table' and name not like 'sqlite_%' order by name")]
 for table in tables:
   columns=[row[1] for row in a.execute('pragma table_info('+table+')')]
+  rules=policy.get(table)
+  if not rules or any(column not in rules for column in columns): raise AssertionError(table+' policy missing')
   if table=='text_metric_versions':
     if b.execute('select count(*) from text_metric_versions').fetchone()[0]: raise AssertionError('stale metric cache transferred')
     result[table]={'sourceRows':a.execute('select count(*) from text_metric_versions').fetchone()[0],'target':'rebuild'}
     continue
+  if table=='import_legacy_identity_bridge':
+    if b.execute('select count(*) from import_legacy_identity_bridge').fetchone()[0]: raise AssertionError('machine authority transferred')
+    result[table]={'sourceRows':a.execute('select count(*) from import_legacy_identity_bridge').fetchone()[0],'target':'excluded'}
+    continue
   if table=='llm_calls':
     columns=[name for name in columns if name in ('id','prompt_tokens','completion_tokens','total_tokens','duration_ms','success','created_at')]
-  if table=='post_process_steps': columns.remove('error_msg')
+  else: columns=[name for name in columns if rules[name] in ('D','H','P')]
   quoted=','.join('"'+column+'"' for column in columns)
   rows=lambda db: sorted([tuple(str(value) if isinstance(value,bytes) else value for value in row) for row in db.execute('select '+quoted+' from "'+table+'"')],key=str)
   left,right=rows(a),rows(b)
@@ -85,7 +94,15 @@ for table in tables:
   if table=='post_process_steps':
     projected=b.execute('select error_msg,ok,attempt_count from post_process_steps').fetchall()
     if any(error!='旧版错误详情不可用' for error,ok,attempts in projected if not ok and attempts): raise AssertionError('unsafe step error projection')
+  if table=='finalization_outbox':
+    if any(error!='' for (error,) in b.execute('select last_error from finalization_outbox')): raise AssertionError('unsafe outbox error projection')
+  for name,code in rules.items():
+    if name not in [r[1] for r in a.execute('pragma table_info("'+table+'")')] or code!='X': continue
+    info=next(r for r in b.execute('pragma table_info("'+table+'")') if r[1]==name)
+    expected=None if not info[3] else (0 if any(t in info[2].upper() for t in ('INT','REAL','NUM','DEC','BOOL')) else '')
+    if any(value!=expected for (value,) in b.execute('select "'+name+'" from "'+table+'"')): raise AssertionError(table+'.'+name+' authority transferred')
   result[table]=len(left)
+result['avatarRows']=[{'path':p,'hash':h,'size':n} for p,h,n in b.execute('select relative_path,content_hash,byte_size from character_avatar_assets')]+[{'path':p,'hash':h,'size':n} for p,h,n in b.execute('select preserved_relative_path,content_hash,byte_size from character_avatar_unresolved where content_hash is not null')]
 print(json.dumps(result))`
 
 async function knowledgeSnapshot(storageRoot) {
@@ -195,8 +212,8 @@ async function verify(source) {
     assert(fs.existsSync(path.join(target, '.ai-novel', 'project.db')), 'No published target database')
     const dialogs = await session.app.evaluate(() => globalThis.__a11Dialogs)
     assert.deepEqual(dialogs.map(dialog => dialog.type), ['open', 'open', 'confirm'])
-    const counts = JSON.parse(execFileSync('python', ['-c', compareSql,
-      path.join(sourceCopy, '.vela', 'vela.db'), path.join(target, '.ai-novel', 'project.db')], { encoding: 'utf8' }))
+    const { avatarRows, ...counts } = JSON.parse(execFileSync('python', ['-c', compareSql,
+      path.join(sourceCopy, '.vela', 'vela.db'), path.join(target, '.ai-novel', 'project.db'), fieldPolicy], { encoding: 'utf8' }))
     assert.equal(counts.project_core, 1)
     for (const table of ['blueprints', 'characters', 'contents', 'drafts', 'reviews', 'revisions',
       'summary_snapshots', 'llm_calls', 'post_process_runs', 'post_process_steps']) {
@@ -205,6 +222,7 @@ async function verify(source) {
     const rawAssets = {}
     for (const [name, digest] of Object.entries(copiedBefore)) {
       if (name.startsWith('.vela/lancedb/') || name.startsWith('.vela/vela.db')
+        || name.startsWith('.vela/avatars/')
         || name === '.vela/project.json' || name === '.vela/upgrade-data-inventory.json'
         || name === '.vela/embedding-spaces.json') continue
       const targetName = name.startsWith('.vela/') ? `.ai-novel/${name.slice('.vela/'.length)}` : name
@@ -213,10 +231,26 @@ async function verify(source) {
     }
     assert(Object.keys(rawAssets).some(name => name.startsWith('.vela/prompts/')))
     assert(Object.keys(rawAssets).some(name => name.endsWith('.txt') && !name.startsWith('.vela/')))
+    const sourceAvatars = Object.entries(copiedBefore).filter(([name]) => name.startsWith('.vela/avatars/'))
+    assert.deepEqual([...new Set(avatarRows.map(row => row.hash))].sort(),
+      [...new Set(sourceAvatars.map(([, digest]) => digest))].sort(),
+      'Avatar source bytes lack a target M05 database reference')
+    for (const row of avatarRows) {
+      assert(typeof row.path === 'string' && row.path.startsWith('avatars/')
+        && !row.path.includes('\\') && !row.path.split('/').includes('..'), 'Unsafe target avatar reference')
+      const storage = path.resolve(target, '.ai-novel')
+      const file = path.resolve(storage, ...row.path.split('/'))
+      const relative = path.relative(storage, file)
+      assert(relative && relative !== '..' && !relative.startsWith(`..${path.sep}`)
+        && !path.isAbsolute(relative), 'Target avatar escaped project storage')
+      assert.equal(sha256(file), row.hash, `Avatar content changed: ${row.path}`)
+      assert.equal(fs.statSync(file).size, row.size, `Avatar size changed: ${row.path}`)
+    }
     assert.deepEqual(inventory(sourceCopy), copiedBefore, 'Scratch old source changed')
     assert.deepEqual(inventory(source.path), originalBefore, 'Historical fixture changed')
     receipt.steps.push({ version: source.version, step: 'V3 import and open', outcome: 'PASS',
-      target, copiedSourceFiles: Object.keys(copiedBefore).length, counts, rawAssets, dialogs })
+      target, copiedSourceFiles: Object.keys(copiedBefore).length, counts, rawAssets,
+      avatars: avatarRows.map(({ path: relativePath, hash }) => ({ relativePath, hash })), dialogs })
     await quit(session.app)
     session = null
 
