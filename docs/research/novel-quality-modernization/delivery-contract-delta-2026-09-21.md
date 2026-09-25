@@ -1,39 +1,41 @@
 # Program v3 现行交付合同 delta
 
-生效：2026-09-21，经用户采纳。此文件只替代下列冲突条款；冻结 Spec、DAG、manifest 与历史实验回执保持原样。其余功能、安全、样本、逐请求记账和三目标资格义务继续有效。执行规则见 [`docs/agents/delivery.md`](../../agents/delivery.md)。
+2026-09-22 用户方向：保留重构内核，停止当前 Writer 全量 F05，改接 PR #262 固定提交的 **V3 时尚杂志**。本文件合并先前提速和单一界面决定，不要求叠读冲突 delta。现行规格与计划在两名独立顾问审计关闭阻断后交接。
 
-## 顺序和汇合门
+## 当前权威入口
 
-| 冻结载体 | 现行替代条款 |
+1. [现行剩余规格](frontend-transition-specs.md)：F04 局部重开及原八个剩余 Spec；G01 贯穿。
+2. [实施计划](frontend-transition-plan.md)：核心里程碑、依赖、所有权与验证。
+3. [执行规则](../../agents/delivery.md)：模型、Skills、调试、审查和外部操作边界。
+4. [质量协议](quality-protocol.md)、protocol.json 与 .release/release-profile.json：继续拥有实验和精确发布合同。
+
+冻结 Program v3、旧内核 Spec、DAG、manifest、历史回执不改字节。当前文件只替代下列声明，其余既有功能、数据、安全、样本和发布义务不变。日期化 handoff 只证明当时状态。
+
+## 替代清单
+
+| 原载体 | 现行替代 |
 | --- | --- |
-| v3 `specs/F05.md` §7–8、`04-EXECUTION-MATRIX.md` F05/S13 行与第 67–69 行、`05-INTEGRATION-CONTRACT.md` 第 21、67、137 行、`dag.json` 的 `F05.post-ui-requalification` 和 S13 `requiredGates` | F05 先完成全部确定性 Preflight，再由主线程激活 Writer 发布默认值并完成确定性 Final；三份 post-UI 模型子门明确记作**待最终资格**，此时 F05 整体不得写 PASS。随后 S13 清理、S14A 集成审查/必要全量回归/候选冻结，再在冻结候选上执行 post-UI。S13 的执行先决条件是 F05 确定性 Final，原 DAG 的三份 post-UI 先决条件不适用。最终汇合门要求三份 post-UI、S14B、S14C、S14D 所需同候选资格齐全，缺任一项不得发布。冻结 DAG 只记录原规划，不是现行任务调度器。 |
-| 旧内核 `specs/S13.md` §依赖与 §实施步骤、v3 F05 的同 `postUiIntegrationSha` 要求 | S13 仍核对三项 early 历史门，但不等待 post-UI；其行为变更须在 S14A 冻结前合入。post-UI 绑定 S14A 实际候选 code/artifact/driver SHA。旧 early 或 F05 确定性回执不能代填 post-UI。 |
-| 旧内核 `specs/S14A.md` §实施步骤、S14B §实施步骤、S14C §实施步骤、S14D §实施步骤、v3 R01 §输入 | S14A 进行一次必要的全量回归、独立集成审查和候选冻结。post-UI 与 S14B 共用配置核验和双臂零模型 dry-run；S14C 可在隔离 profile/数据下并行。S14D 汇合真实包资格；R01 只准备或在明确授权下执行精确产物发布。 |
+| V3 00/01/02/04/05/06/09 计划、前端、执行、集成、索引、功能并集；旧执行矩阵及 DAG 相关依赖 | 现行计划及规格：核心不等旧 UI 全量 F05；核心可交接、F04 薄切片/完整接入、F05 新壳、S13 分段、最终 S14 汇合各有出口。冻结 DAG 不是当前调度器 |
+| F01/F02 的呈现与资产、F04 全文 | 现行 F04：用户选定 V3，局部复验偏好/样式/资源，保留既有核心；不整体合 donor、不整片重开 F01/F02 |
+| F05 旧 Writer 全量门、双壳比较、默认与 post-UI | 现行 F05：153 能力在最终 V3 覆盖，确定性 Final 后才能最终冻结；post-UI 于 S14A 后汇合；不保留 Classic 长期回切 |
+| S13 全部工作先等 F05/post-UI | 现行 S13：核心独立清理先做，UI 退场在接入后；完整出口仍等待确定性 Final，保留迁移/shared/baseline |
+| S14A/B/C/D、R01 的任意 tracked 变更全部资格失效 | 按消费者影响复验并保留实际 testedSha/理由；最终新包仍核验自身构建、安装、启动、hash 与来源 |
+| S14C 逐物理点真实故障及 F05 全动作原生层 | 确定性状态矩阵 + 不同恢复语义的真实关键提交点；普通展示导航 browser，native/权限/持久化事实真环境 |
+| S04/S14C、F05 U10.A11 的原地迁移、源侧 journal/旧根退役、原根永久拒写及 2026-09-24 的跨存储原子快照前置要求 | 2026-09-25 用户批准及 [ADR 0020](../../adr/0020-legacy-project-copy-import.md)：普通离线完整复制到独立新目录、原件保留，禁止 AI 重建或覆盖设定；检测源变化、校验目标完整性及 V3 生产入口仍前移 F05。不承诺并发外部写入下原子快照，不以 VSS/UAC/虚拟磁盘/持续排他阻断。S14C 验新旧隔离与目标恢复；全局配置/安装更新不变，历史 FAIL 不改判 |
+| F05/feature-union U15.A02 的完整原文查看/既有编辑导入解释缺口 | 2026-09-25 用户批准：完整原文查看、仅编辑项目副本、不回写外部原件、不用 AI 重写；仅存检索片段则明确原文不可用并提示重新导入，不拼接伪造。索引待更新等精确行为见现行规格 F05；不新增通用编辑器，冻结 action ID 与历史证据不改 |
+| F05/feature-union 的 editor-absolute-v1：历史 Classic 比较、相对 20%、MAD 10%、50/100ms 响应及 50ms long-task 硬门 | 2026-09-24 用户授权顾问制定 editor-interaction-v2，精确计时、100/250ms 预算、正确性及重跑规则见现行规格 F05；新版绝对交互取代旧基线资格。2026-09-25 用户指令豁免 U06.A03 的真实中文 IME 实测；该动作在 checker 中单独标记 `WAIVED_BY_USER` 且不作 PASS，历史 FAIL 原样保留；其他 U06 输入/保存/响应要求不变。机器消费者须显式识别新协议和此 disposition 后才可验收 |
+| R01/G02 的旧前端文案及状态 | 现行 R01/G02：只写实际 V3、资格与发布；不因替换界面/计划关闭原问题，外部操作遵守授权 |
 
-post-UI 与最终实验只有在固定案例的触发条件、断言、双臂产物和独立评审完整覆盖时，才可复用同一实际样本；未覆盖的固定案例仍执行。每个复用决定记录 case ID、双方原始 receipt、各断言对应和实际 `testedSha`。不得挑优、删除失败、追溯改判，或用模拟结果代替真实模型。candidate 字数为 ±30%；baseline、历史结果及其他性能百分比不变。80 是计划分配额，不是全局硬帽；每次真实发送、失败、unknown 与重试继续逐请求记账。
+## 机器消费者与证据
 
-## 证据层与失效
+feature-evidence-levels.json 的 productShell=writer 继续是逻辑产品壳，目标呈现为 V3；action ID 及其余层级保留，不另增产品 shell。A11 执行覆盖映射至离线完整项目导入，U15.A02 映射至现行原文/副本编辑合同；仅调整已有执行输入/检查器中直接依赖旧解释的消费者，与此无关的 migrationScenarios 保留。U06 driver/checker 通过显式 editor-interaction-v2 分派使用新合同，editor 历史基线仅归旧协议，不静默覆盖冻结 feature-union。完整 checker 仍约束最终 F05，不作为核心里程碑 gate；不新增 DAG、总账或治理平台。
 
-冻结 `feature-union.json` 的 153 个 action、Writer 必需入口和逐 action 断言不变。其旧 `requiredEvidenceLevels` 由现行 [`feature-evidence-levels.json`](feature-evidence-levels.json) 在 execution 检查时覆盖：普通展示/导航可由真实组件浏览器证明；IPC、持久化、文件授权、恢复、凭据、IME、窗口、原生模块和安装包保持必要的 Electron/打包证据。同回执可含多个不同 step，不得用不相关 action 的同一步冒充。未测、null、内部直接调用或 Classic 回执不能填 Writer 动作。
+旧 UI DOM/视觉/接线证据不能直接证明 V3；未变核心证据保留 SHA、差异和消费者理由沿用。evidence.reuseDecision 只验证记录形状，不能代审查。driver 不适配新 UI 时由 F04/F05 最小修改后再验，不改历史回执；包与 driver 各自标实际来源。
 
-## Writer 唯一产品界面
+candidate 字数继续 ±30%、draft-units v3 与既有舍入，文学参考 baseline 原代码和历史裁决不变；仅 U06 的性能 20% 门按上表取代，不作全局文本替换。模型吞吐与本地界面交互分开，不新增统一 token/s 门。80 为计划额而非硬帽；post-UI 三案例、最终 18 章、oracle/盲评、失败和唯一账本保留，不因换壳重启已完成的 early 实验，不挑优补样改判。
 
-用户于 2026-09-21 决定 Writer 是最终产品的唯一主界面。本节取代冻结 `02-FRONTEND-DECISION.md` §5、`09-FEATURE-UNION.md` 的双壳结果等价、`specs/F05.md` §1/4/6/18、`specs/S13.md` 的 Classic 长期回切/全面双壳验收，以及 R01 文案中的经典回切承诺；冻结文件和历史回执不改写。`feature-union.json` 的 `classicExpectation` 是旧计划字段，不再作为执行资格门。
+## 交接
 
-- F05 的 153 个必需动作继续全部从 Writer 实际入口验收。普通功能与开发演示在测试 profile 明确选择 Writer，并在操作前断言当前 shell 为 Writer；旧默认启动、v1/v2 偏好迁移只进入专门迁移场景，不代填 Writer 动作。测试 profile 选择不等于发布默认激活；正式 `RELEASE_DEFAULT_SHELL` 仍待确定性 Preflight 全过后修改，并单独验证 unset/new install。
-- 冻结清单中的 U02.A02 专测旧壳偏好迁移至 Writer；U02.A07 原“Writer 回切 Classic 不丢状态”由旧偏好迁移后的 **Writer 项目与编辑状态保全**替代。两项只在隔离的迁移场景验收，动作编号仍须逐项留证，旧计划标签保留原样；不得以正式产品中的 Classic 回切控件或普通 Writer 测试代填。现行机器资格字段为 `feature-evidence-levels.json` 的 `migrationScenarios` 与回执 `evidence.migrationScenario`。
-- 停止新增 Classic 专属功能和对当前候选作全面双壳共同业务比较。共享 store、command、IPC、编辑器及其他业务组件继续复用，不因旧目录名重写。旧项目、数据、主题/字体/缩放/图片皮肤与壳偏好的必要迁移仍须验证；历史 Classic baseline 在隔离环境保留，不能以当前候选的 Classic UI 冒充历史 baseline。S13 只清理确认无消费者的 Classic 专属入口和分支，不移除迁移、恢复或共享业务。
-- 冻结编辑器性能协议的 3000/200000 单位、3 次预热、7 次有效样本、IME 精确性、绝对响应阈值与相对 20% 上限仍有效；当前候选只在 Writer 测量。Classic 基线从隔离历史环境取得，保留其实际 `testedSha`、原始样本和回执，按同设备/视口/字体条件比较；不要求当前候选 Classic UI 参与交错验收，不追溯改写历史结果。现行机器执行输入由 `feature-evidence-levels.json` 指定。
-- R01 只描述实际交付的 Writer 功能和迁移边界；不得宣称 Classic 可长期回切。外观图片皮肤名 `classic` 仍指图片，不是旧界面壳。
+用户授权顾问改计划并要求两名独立 Astra/High 审计；那是历史顾问工作，不扩展后续实施模型。新派开发与审查子 Agent 仅用 `gpt-6-sol` / `gpt-6-luna`，禁止 Astra，不再派生。Superpowers 对所有模型按各 Skill 自身触发条件使用，不以本计划已审为由跳过；现行计划仍拥有产品范围和依赖，Skill 不扩大产品门或外部操作授权。
 
-旧内核 S14A §4、S14B §5、S14C §4、S14D §4 与 v3 R01 §2/7 中“任意 tracked 改动使全部资格失效”由实际影响判断取代。保留原 `testedSha` 和实际差异；只有变更触及被测行为、配置、driver、原生/构建环境或证据消费者时，才重验相应层和受影响回归。纯文档不重跑产品实验；新包必须核验新产物的构建来源、安装/启动、hash 和精确资产集合。无证据证明可沿用时状态为未资格，不能只用相同版本号或 diff 直觉继承。
-
-feature-union execution checker 对旧 `testedSha` 仅接受逐 action 的 `evidence.reuseDecision={testedSha,changedPaths,differences,reason}`；缺路径、差异、理由或 SHA 不符仍拒绝。checker 只验证声明形状，审查者必须核对实际差异及消费者后才能接受沿用，不得以填写字段代替影响判断。
-
-确定性状态/故障矩阵在适当 service/repository 层注入；真实进程中断覆盖恢复语义不同的关键提交点，数量由协议而定。旧二进制拒写/受控副本、SQLite/WAL、文件锁、safeStorage、真实 IME、native ABI 与 Windows x64/macOS ARM64/macOS x64 安装资格仍须实测。S14D 与 R01 对精确云端产物、来源和授权的要求继续有效。
-
-## 执行输入与证据保留
-
-- `feature-evidence-levels.json` 是现行 action 层级输入；execution checker 必须读取它，冻结 manifest 不回写。冻结 DAG/规划检查只证明旧合同内部一致性，不是现行依赖 PASS。
-- `quality-protocol.md` 解释现行顺序和样本复用；`protocol.json` 的固定案例、字数 revision 与物理账本语义保持现状。若实际执行器需新字段，在候选冻结前按消费者最小改动并重新核验，不为文档变更重冻历史目标。
-- 唯一当前检查点记录实际 HEAD、剩余必交项、测试与资格层次、阻断和下一步。历史 handoff 及原始失败只作其 `testedSha` 对应的证据，不当作当前 PASS。
+唯一私有检查点拥有实际 HEAD、未提交工作、阻断与下一步；计划审计通过不等于产品通过。旧审计提案、handoff 保持历史用途，不拥有当前依赖。公共文档不包含小说、秘密或本机证据路径。

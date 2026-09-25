@@ -1,5 +1,7 @@
 # Program v3 的共享契约与分阶段接入
 
+2026-09-24 部分取代：[ADR 0020](0020-legacy-project-copy-import.md) 将旧项目兼容改为新目录完整副本导入；下文 project-storage 的源侧 journal/原地隔离要求不再用于该路径，其余领域与 C17 边界保留。
+
 状态：S01领域类型与纯拒绝检查；尚未接入生产运行。依赖S00 `657ce4aa5f2e13dda4be222e256cd3faaecc9559`，S00测试入口集成 `b90b91961bd301e271f8198280c7494f6534186c`。本ADR扩充0017，不废除定稿/outbox、项目租约、Writing Skill与剧情树边界。新类型不创建数据库、IPC、网络、后台工作或第二事实源。
 
 `generation-contract`只描述根作者动作、Run、物理attempt/reservation与可见Artifact。生产main创建根ID，项目/操作/nonce/冻结输入形成幂等键；子调用与恢复继承根。reserve、dispatch-marked必须分别先持久再执行；unknown不释放，不自动重发；用量缺失按预留，实耗超估如实保留且停止后续。产品token/时间根账由S05/S07在同一事务实现，纯检查函数自身没有并发或持久保证。provider reasoning included/separate/unknown明确列出，未能约束总开销不得自动链式重试。

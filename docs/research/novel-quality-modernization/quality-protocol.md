@@ -4,7 +4,7 @@
 
 ## 现行交付顺序与复用
 
-[已采纳交付 delta](delivery-contract-delta-2026-09-21.md) 将 post-UI 模型资格放到 S14A 冻结候选后，与 S14B 共用配置核验和实际双臂零模型 dry-run。F05 先完成确定性 Preflight、Writer 默认激活和确定性 Final；三份 post-UI 子门在最终汇合前保持“待最终资格”，不能提前写 F05 整体 PASS。S13 可在这三份模型回执前执行。
+[现行剩余规格](frontend-transition-specs.md)与[实施计划](frontend-transition-plan.md)区分核心可交接和最终产品资格：当前弃用 Writer 不再收齐旧 F05，核心工作与 PR #262 V3 接入可按依赖推进。新 V3 的 F04 完成、F05 确定性 Final 及 S13 完整清理后，S14A 才冻结最终候选。三份 post-UI 在冻结后与 S14B 共用配置核验和实际双臂零模型 dry-run；在最终汇合前保持待资格，不能提前写 F05 整体 PASS。核心里程碑不代替模型、升级或发布门。
 
 post-UI 样本只在固定案例的触发条件、断言、两臂原始产物及独立评审完整覆盖最终案例时复用；逐 case 记录原 receipt、实际 `testedSha` 和断言对应。未覆盖案例照常执行。原始失败、物理账本和历史结论不改写；仅因文档变化不重跑模型。相关代码、配置或 driver 变化按实际影响重新资格。
 
@@ -123,7 +123,7 @@ node scripts/quality-modernization-run.mjs early-budget --targets .runtime/.cach
 
 C17覆盖正文/头像/知识原文保全、新项目ID与稳定领域ID、当前可读author/derived来源承接、历史候选与未知已发冻结、秘密字段及其hash排除、未知字段blocked、跨revision与恢复碰撞。C18覆盖无CAS追加、同父分叉、origin-readonly重启、latest缺失、上传后本机绑定失败。模型继续创作仅使用4次预留；其余故障优先确定性fixture，未执行不记通过。
 
-编辑绝对门仍消费Program v3 `feature-union.editor-absolute-v1`：3000/200000单位、IME、绝对/相对性能与逐action失败反例，不以模型预算扩成颜色乘积。F05三门须同postUiIntegrationSha的新收据；旧early结果不能代填。编辑具体测量器由F04/F05维护，此runner未实现UI性能资格。
+编辑交互资格自 2026-09-24 起由[现行 F05](frontend-transition-specs.md#f05--最终-v3-功能及桌面体验资格) 的 `editor-interaction-v2` 拥有；冻结 `feature-union.editor-absolute-v1` 及旧结果只供历史检查，不再要求旧 Classic 基线或相对性能门。依 2026-09-25 用户指令，U06.A03 中文 IME 实测免测、不作为阻断，记 `WAIVED_BY_USER`（非 PASS），历史 FAIL 原样保留；其余编辑、保存与响应仍必验。不以模型预算扩成颜色乘积。F05三门须同postUiIntegrationSha的新收据；旧early结果不能代填。当前 postUiIntegrationSha 取 S14A 实际冻结候选；先前确定性 Final 的沿用或受影响路径复验按现行交付 delta 执行，不要求回到旧 F05 的 SHA。编辑具体测量器由F04/F05维护，此runner未实现UI性能资格，文学模型吞吐不混入编辑响应计时。
 
 ## 后续阶段接线边界
 
