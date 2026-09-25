@@ -17,13 +17,15 @@ const testedSha = arg('tested-sha')
 const expectedExe = arg('exe-sha256')
 const expectedAsar = arg('asar-sha256')
 const supplement = arg('supplement') === '1'
+const onlyVersion = arg('only')
 const sources = [
   { version: 'v1.0.0', path: arg('legacy-v100') },
   { version: 'v1.1.0', path: arg('legacy-v110') },
 ]
 assert(packageDir && buildTree && /^[a-f0-9]{40}$/.test(testedSha ?? '')
   && /^[a-f0-9]{64}$/.test(expectedExe ?? '') && /^[a-f0-9]{64}$/.test(expectedAsar ?? '')
-  && sources.every(source => source.path), 'Specify clean build tree, fixed package SHA/hashes and both historical fixture paths')
+  && sources.every(source => source.path) && (!onlyVersion || sources.some(source => source.version === onlyVersion)),
+  'Specify clean build tree, fixed package SHA/hashes, both historical fixture paths and a known --only version')
 const buildGit = (...args) => execFileSync('git', args, { cwd: buildTree, encoding: 'utf8' }).trim()
 assert.equal(buildGit('rev-parse', 'HEAD'), testedSha, 'Build tree HEAD differs from tested SHA')
 assert.equal(buildGit('status', '--porcelain'), '', 'Build tree must be clean')
@@ -37,12 +39,14 @@ const scratch = path.join(process.env.LOCALAPPDATA, 'VibeCodingScratch', 'AI-Nov
 const receiptPath = path.join(repository, '.runtime', '.cache', 'f05-a11-offline-import', runId, 'receipt.json')
 const receipt = { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_WIN_V3',
   mode: supplement ? 'synthetic-completeness' : 'historical-baseline',
+  selectedVersions: onlyVersion ? [onlyVersion] : sources.map(source => source.version),
   testedSha, buildTree: path.resolve(buildTree),
   executionHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim(),
   driverSha256: sha256(fileURLToPath(import.meta.url)), fieldPolicySha256: sha256(fieldPolicy),
   packageHashes: { exe: sha256(exe), asar: sha256(asar) },
   historicalSources: sources.map(source => ({ version: source.version, path: source.path,
-    injectedInventoryRemovedFromScratchCopy: fs.existsSync(path.join(source.path, '.vela', 'upgrade-data-inventory.json')) })), steps: [], receiptPath }
+    injectedInventoryRemovedFromScratchCopy: fs.existsSync(path.join(source.path, '.vela', 'upgrade-data-inventory.json')) })),
+  steps: [], exitDiagnostics: [], receiptPath }
 assert.deepEqual(receipt.packageHashes, { exe: expectedExe, asar: expectedAsar })
 fs.mkdirSync(scratch, { recursive: true })
 fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'codex/thread-6/a11',
@@ -235,12 +239,52 @@ async function home(page) {
   await page.locator('.writer-welcome').waitFor({ state: 'visible' })
 }
 
-async function quit(app) {
+async function quit(app, page, version) {
   const child = app.process()
-  const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })))
+  const events = []
+  const exited = new Promise(resolve => child.once('exit', (code, signal) => {
+    events.push({ event: 'process-exit', code, signal })
+    resolve({ code, signal })
+  }))
+  app.on('close', () => events.push({ event: 'app-close' }))
+  page.on('close', () => events.push({ event: 'page-close' }))
+  page.on('crash', () => events.push({ event: 'page-crash' }))
+  await app.evaluate(({ BrowserWindow }) => {
+    globalThis.__a11WindowCloseEvents = []
+    const win = BrowserWindow.getAllWindows()[0]
+    win?.on('close', event => globalThis.__a11WindowCloseEvents.push({ event: 'window-close', defaultPrevented: event.defaultPrevented }))
+    win?.on('closed', () => globalThis.__a11WindowCloseEvents.push({ event: 'window-closed' }))
+  })
+  await page.evaluate(() => {
+    globalThis.__a11CloseRequests = []
+    window.aiNovelAPI.on('window:close-requested', ({ requestId }) => {
+      globalThis.__a11CloseRequests.push({ requestId })
+    })
+  })
+  const started = Date.now()
   await app.evaluate(({ app }) => { setTimeout(() => app.quit(), 0); return true })
-  assert.deepEqual(await Promise.race([exited, new Promise((_, reject) => setTimeout(() => reject(new Error('Electron did not exit')), 10_000))]),
-    { code: 0, signal: null })
+  let timer
+  const result = await Promise.race([exited, new Promise(resolve => { timer = setTimeout(() => resolve(null), 10_000) })])
+  clearTimeout(timer)
+  const diagnostic = { version, elapsedMs: Date.now() - started, result, events }
+  if (!result) {
+    diagnostic.windowEvents = await Promise.race([
+      app.evaluate(() => globalThis.__a11WindowCloseEvents ?? []).catch(error => ({ unavailable: String(error) })),
+      new Promise(resolve => setTimeout(() => resolve({ unavailable: 'main process did not answer' }), 1_000)),
+    ])
+    diagnostic.renderer = await Promise.race([
+      page.evaluate(() => ({ closeRequests: globalThis.__a11CloseRequests ?? [],
+        dialogs: [...document.querySelectorAll('[role="dialog"]')].map(item => item.innerText.slice(0, 700)),
+        alerts: [...document.querySelectorAll('[role="alert"]')].map(item => item.innerText.slice(0, 500)),
+        unsavedMarkers: document.querySelectorAll('[aria-label*="未保存"], [title*="未保存"], [data-dirty="true"]').length,
+        workflowBlockedDialog: document.body.innerText.includes('创作任务仍在运行'),
+      })).catch(error => ({ unavailable: String(error) })),
+      new Promise(resolve => setTimeout(() => resolve({ unavailable: 'renderer did not answer' }), 1_000)),
+    ])
+  }
+  receipt.exitDiagnostics.push(diagnostic)
+  if (!result) throw new Error('Electron did not exit')
+  assert.deepEqual(result, { code: 0, signal: null })
 }
 
 async function verify(source) {
@@ -334,7 +378,7 @@ async function verify(source) {
     receipt.steps.push({ stepId: `${source.version}-import-open`, version: source.version, step: 'V3 import and open', outcome: 'PASS',
       target, copiedSourceFiles: Object.keys(copiedBefore).length, counts, rawAssets,
       avatars: avatarRows.map(({ path: relativePath, hash }) => ({ relativePath, hash })), dialogs })
-    await quit(session.app)
+    await quit(session.app, session.page, source.version)
     session = null
 
     const knowledge = await knowledgeSnapshot(path.join(target, '.ai-novel'))
@@ -363,7 +407,7 @@ async function verify(source) {
 }
 
 try {
-  for (const source of sources) await verify(source)
+  for (const source of sources.filter(source => !onlyVersion || source.version === onlyVersion)) await verify(source)
   receipt.outcome = 'PARTIAL'
   receipt.sliceOutcome = 'PASS'
 } catch (error) {
