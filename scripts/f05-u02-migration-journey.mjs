@@ -220,7 +220,7 @@ function sourceFiles(sourceRoot) {
 }
 
 function prepareLegacyProject(name) {
-  const sourceRoot = path.join(scratchRoot, `source-${name}`)
+  const sourceRoot = path.join(scratchRoot, `s${name.slice(1)}`)
   const storage = path.join(sourceRoot, '.vela')
   fs.mkdirSync(storage, { recursive: true })
   const sourceProjectId = randomUUID()
@@ -241,9 +241,10 @@ function prepareLegacyProject(name) {
 }
 
 async function currentProjectState(name, roots, session, source) {
-  const targetParent = path.join(scratchRoot, `${name}-target`)
+  const targetParent = path.join(scratchRoot, name)
   fs.mkdirSync(targetParent)
   const targetRoot = path.join(targetParent, `${path.basename(source.sourceRoot)}-新版副本`)
+  assert(targetRoot.length <= 85, 'synthetic target exceeds current Windows project path contract')
   let page = session.page
   const open = async () => {
     await writer(page)
