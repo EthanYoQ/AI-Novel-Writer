@@ -507,6 +507,8 @@ db.commit(); db.close()`, path.join(sourceCopy, '.vela', 'vela.db')])
       session = await launch(roots)
       await home(session.page)
       requestCounts = await observeRequests(session)
+      const firstTargetBefore = inventory(target)
+      const firstProjectId = JSON.parse(fs.readFileSync(path.join(target, '.ai-novel', 'project.json'), 'utf8')).projectId
       await session.app.evaluate(({ dialog }, { sourceCopy, targetParent }) => {
         dialog.showOpenDialog = async options => {
           if (options.title === '选择旧版小说项目文件夹') return { canceled: false, filePaths: [sourceCopy] }
@@ -519,14 +521,20 @@ db.commit(); db.close()`, path.join(sourceCopy, '.vela', 'vela.db')])
         }
       }, { sourceCopy, targetParent })
       await session.page.getByRole('button', { name: '导入旧项目副本' }).click()
-      await session.page.locator('[role="status"]').filter({ hasText: 'LEGACY_IMPORT_TARGET_EXISTS' })
+      const secondTarget = `${target}-2`
+      await session.page.locator('.writer-project-tree').getByText('A11 旧源后续独立修改', { exact: true })
         .waitFor({ state: 'visible', timeout: 30_000 })
-      assert.deepEqual(inventory(target), targetBeforeOldWrite, 'Existing target was overwritten')
-      assert.deepEqual(inventory(sourceCopy), copiedAfterOldWrite, 'Scratch old source changed on blocked import')
-      assert.deepEqual(inventory(source.path), originalBefore, 'Historical source changed on blocked import')
+      const secondProjectId = JSON.parse(fs.readFileSync(path.join(secondTarget, '.ai-novel', 'project.json'), 'utf8')).projectId
+      assert.notEqual(secondProjectId, firstProjectId, 'Repeated import reused an existing identity')
+      assert.deepEqual(inventory(target), firstTargetBefore, 'Existing target was overwritten')
+      assert.deepEqual(inventory(sourceCopy), copiedAfterOldWrite, 'Scratch old source changed on repeated import')
+      assert.deepEqual(inventory(source.path), originalBefore, 'Historical source changed on repeated import')
       const requests = await requestCounts()
-      receipt.steps.push({ stepId: `${source.version}-target-conflict-blocked`, outcome: 'PASS',
-        step: 'V3 entry blocked duplicate target without changing either project', requests })
+      receipt.steps.push({ stepId: `${source.version}-duplicate-no-overwrite`, outcome: 'PASS',
+        step: 'V3 entry allocated a distinct second target without changing the first target or either old source',
+        firstTarget: target, secondTarget, firstProjectId, secondProjectId,
+        firstTargetSha256: createHash('sha256').update(JSON.stringify(firstTargetBefore)).digest('hex'),
+        secondTargetSha256: createHash('sha256').update(JSON.stringify(inventory(secondTarget))).digest('hex'), requests })
     }
   } finally { if (session) await session.app.close() }
 }
