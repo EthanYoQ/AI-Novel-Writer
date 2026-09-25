@@ -367,7 +367,14 @@ test('isolated production commands persist the selected phase operations', async
     let operationKind = null, operationId = null
     const repairPolicy = request.attemptPolicy?.milestone === request.milestone
       && request.attemptPolicy.arms?.includes(target.arm) ? request.attemptPolicy : null
-    const beforeOperationDispatch = createOperationDispatchGate({ repairPolicy, onReject: rejection => {
+    const beforeOperationDispatch = createOperationDispatchGate({ repairPolicy, readPrimaryEvidence: first => {
+      const attemptId = `${target.arm}:${first.attemptId}`
+      const matches = receipt.attempts.filter(attempt => attempt.attemptId === attemptId)
+      if (matches.length !== 1) return null
+      const events = fs.readFileSync(request.ledgerPath, 'utf8').trimEnd().split('\n')
+        .map(line => JSON.parse(line)).filter(event => event.attemptId === attemptId)
+      return { attempt: matches[0], events }
+    }, onReject: rejection => {
       localDispatchGateRejection = { ...rejection, operation: operationId, runId: currentContext?.runId,
         projectId: session.projectId, chapterNumber: request.chapterNumber }
     } })
@@ -394,6 +401,8 @@ test('isolated production commands persist the selected phase operations', async
       if (!candidate) preflight(observedIpc?.operationId === operationId
         && observedIpc.runId === currentContext.runId && observedIpc.projectId === session.projectId
         && observedIpc.epoch === session.leaseId, 'BASELINE_IPC_DISPATCH_IDENTITY_MISMATCH')
+      if (repairPolicy && operationId === repairPolicy.operationId
+        && (actual ?? observedIpc).purpose === repairPolicy.repairPurpose) await Promise.all(streamSettlements)
       // The registered extra call must carry its real product purpose before campaign reserve.
       beforeOperationDispatch(operationId, actual ?? observedIpc)
       const attemptId = `${target.arm}:${actual?.attemptId ?? observedIpc.attemptId}`

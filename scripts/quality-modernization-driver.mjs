@@ -238,8 +238,30 @@ export function productionScenario(phase) {
   return scenario
 }
 
-/** Only the registered syntax repair may add one physical request to an operation. */
-export function createOperationDispatchGate({ onReject, repairPolicy } = {}) {
+// Keep this predicate byte-for-byte equivalent to the product's direct JSON syntax test.
+const repairableDirectJsonSyntax = content => {
+  const candidate = content.trim()
+  if (!/^[{[]/u.test(candidate)) return false
+  try { JSON.parse(candidate); return false } catch { return true }
+}
+function verifiedPrimarySyntaxFailure(first, evidence, operationId) {
+  const attempt = evidence?.attempt, rows = evidence?.events
+  const identity = attempt?.binding?.actual ?? attempt?.binding?.baselineIpc
+  if (!attempt || !Array.isArray(rows) || rows.length !== 3 || !identity
+    || attempt.binding.operation !== operationId || attempt.attemptId !== rows[0]?.attemptId
+    || !attempt.attemptId.endsWith(`:${first.attemptId}`)
+    || ['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch', 'purpose'].some(key => identity[key] !== first[key])
+    || JSON.stringify(rows.map(row => row.type)) !== JSON.stringify(['reserve', 'dispatch', 'settle'])
+    || rows[1].attemptId !== attempt.attemptId || rows[2].attemptId !== attempt.attemptId
+    || rows[2].finishReason !== 'stop' || JSON.stringify(rows[0].binding) !== JSON.stringify(attempt.binding)
+    || typeof attempt.outputPath !== 'string' || !/^[a-f0-9]{64}$/.test(attempt.visibleTextHash ?? '')) return false
+  try {
+    const output = fs.readFileSync(attempt.outputPath, 'utf8')
+    return digest(output) === attempt.visibleTextHash && repairableDirectJsonSyntax(output)
+  } catch { return false }
+}
+/** Only a settled, hash-verified syntax failure may add one physical request. */
+export function createOperationDispatchGate({ onReject, repairPolicy, readPrimaryEvidence } = {}) {
   const dispatched = new Map()
   return (operationId, owner) => {
     const first = dispatched.get(operationId)
@@ -247,11 +269,15 @@ export function createOperationDispatchGate({ onReject, repairPolicy } = {}) {
     const identity = value => value && typeof value.attemptId === 'string' && value.attemptId
       && typeof value.runId === 'string' && value.runId && typeof value.projectId === 'string' && value.projectId
       && typeof value.epoch === 'string' && value.epoch
+    const hasSyntaxProof = () => {
+      try { return verifiedPrimarySyntaxFailure(first, readPrimaryEvidence?.(first), operationId) }
+      catch { return false }
+    }
     const repair = first && policyApplies && identity(first) && identity(owner)
       && first.purpose === repairPolicy.primaryPurpose && owner.purpose === repairPolicy.repairPurpose
       && first.attemptId !== owner.attemptId && first.runId === owner.runId
       && first.rootActionId === owner.rootActionId && first.projectId === owner.projectId && first.epoch === owner.epoch
-      && first.repairUsed !== true
+      && first.repairUsed !== true && hasSyntaxProof()
     if (!operationId || first && !repair || !first && policyApplies && (!identity(owner) || owner.purpose !== repairPolicy.primaryPurpose)) {
       const rejection = Object.freeze({ code: 'UNREGISTERED_ADDITIONAL_MODEL_REQUEST',
         operationId: operationId || null, reason: operationId ? 'duplicate-operation' : 'missing-operation', beforeDispatch: true })
@@ -351,10 +377,14 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
         || attempt.binding.milestone !== policy.milestone
         || arm === 'baseline' && identity(attempt).operationId !== policy.operationId))
       return 'STRUCTURED_REPAIR_OWNER_MISMATCH'
-    for (const attempt of repairMatches) {
+    for (const [index, attempt] of repairMatches.entries()) {
       if (!CONTENT_HASH.test(attempt.visibleTextHash ?? '') || typeof attempt.outputPath !== 'string')
         return 'PHYSICAL_OUTPUT_MISSING'
-      try { if (digest(fs.readFileSync(attempt.outputPath, 'utf8')) !== attempt.visibleTextHash) return 'PHYSICAL_OUTPUT_HASH_MISMATCH' }
+      try {
+        const output = fs.readFileSync(attempt.outputPath, 'utf8')
+        if (digest(output) !== attempt.visibleTextHash) return 'PHYSICAL_OUTPUT_HASH_MISMATCH'
+        if (index === 0 && !repairableDirectJsonSyntax(output)) return 'STRUCTURED_REPAIR_PRIMARY_NOT_SYNTAX_FAILURE'
+      }
       catch { return 'PHYSICAL_OUTPUT_MISSING' }
     }
     if (arm === 'candidate' && (result.ownerTerminal?.length !== result.attempts.length

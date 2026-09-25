@@ -153,11 +153,12 @@ test('post-UI 指定范围只允许真实 owner 的一次结构化语法修复',
   const gate = createOperationDispatchGate({ repairPolicy: policy, onReject: item => rejected.push(item) })
   const owner = { attemptId: 'main', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: policy.primaryPurpose }
   assert.doesNotThrow(() => gate(policy.operationId, owner))
-  assert.doesNotThrow(() => gate(policy.operationId, { ...owner, attemptId: 'repair', purpose: policy.repairPurpose }))
+  assert.throws(() => gate(policy.operationId, { ...owner, attemptId: 'repair', purpose: policy.repairPurpose }),
+    error => error.code === 'OPERATION_DISPATCH_REJECTED')
   for (const actual of [undefined, { ...owner, attemptId: 'third', purpose: policy.repairPurpose },
     { ...owner, attemptId: 'other', purpose: 'chapter-blueprint-directory:automatic-retry' }])
     assert.throws(() => gate(policy.operationId, actual), error => error.code === 'OPERATION_DISPATCH_REJECTED')
-  assert.equal(rejected.length, 3)
+  assert.equal(rejected.length, 4)
   for (const actual of [{ ...owner, attemptId: 'repair', rootActionId: 'foreign', purpose: policy.repairPurpose },
     { ...owner, attemptId: 'repair', runId: 'foreign', purpose: policy.repairPurpose }]) {
     const isolated = createOperationDispatchGate({ repairPolicy: policy })
@@ -171,9 +172,51 @@ test('post-UI 指定范围只允许真实 owner 的一次结构化语法修复',
   const baseline = createOperationDispatchGate({ repairPolicy: policy })
   const ipc = { attemptId: 'ipc-main', runId: 'bridge-run', projectId: 'project', epoch: 'epoch', purpose: policy.primaryPurpose }
   baseline(policy.operationId, ipc)
-  assert.doesNotThrow(() => baseline(policy.operationId, { ...ipc, attemptId: 'ipc-repair', purpose: policy.repairPurpose }))
+  assert.throws(() => baseline(policy.operationId, { ...ipc, attemptId: 'ipc-repair', purpose: policy.repairPurpose }),
+    error => error.code === 'OPERATION_DISPATCH_REJECTED')
   assert.throws(() => createOperationDispatchGate({ repairPolicy: policy })(policy.operationId),
     error => error.code === 'OPERATION_DISPATCH_REJECTED')
+})
+
+test('syntax repair gate requires settled malformed primary output, not purpose alone', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/repair-proof-test-'))
+  const policy = PHASE_SCENARIOS['early-budget'].attemptPolicy
+  const primary = { attemptId: 'main', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: policy.primaryPurpose }
+  const outputPath = path.join(dir, 'primary.txt')
+  const evidence = (content, terminal = 'settle', identity = primary, arm = 'candidate') => {
+    fs.writeFileSync(outputPath, content)
+    const attemptId = `${arm}:${identity.attemptId}`
+    const binding = { operation: policy.operationId, ...(arm === 'candidate' ? { actual: identity } : { baselineIpc: identity }) }
+    return { attempt: { attemptId, binding, outputPath, visibleTextHash: hash(content) },
+      events: [{ type: 'reserve', attemptId, binding },
+        { type: 'dispatch', attemptId }, { type: terminal, attemptId, finishReason: 'stop' }] }
+  }
+  const dispatch = (proof, identity = primary) => {
+    const gate = createOperationDispatchGate({ repairPolicy: policy, readPrimaryEvidence: () => proof })
+    gate(policy.operationId, identity)
+    return () => gate(policy.operationId, { ...identity, attemptId: 'repair', purpose: policy.repairPurpose })
+  }
+  try {
+    assert.throws(dispatch(evidence('{"blueprints":[]}')), /MODEL_REQUEST_REJECTED/, 'valid JSON cannot trigger repair')
+    assert.throws(dispatch(null), /MODEL_REQUEST_REJECTED/, 'missing primary output cannot trigger repair')
+    assert.throws(dispatch(evidence('{"blueprints":[', 'dispatch')), /MODEL_REQUEST_REJECTED/, 'unsettled primary cannot trigger repair')
+    const forged = evidence('{"blueprints":[')
+    forged.attempt.visibleTextHash = '0'.repeat(64)
+    assert.throws(dispatch(forged), /MODEL_REQUEST_REJECTED/, 'unverified output hash cannot trigger repair')
+    const fake = createOperationDispatchGate({ repairPolicy: policy, readPrimaryEvidence: () => evidence('{"blueprints":[') })
+    fake(policy.operationId, primary)
+    assert.throws(() => fake(policy.operationId, { ...primary, attemptId: 'fake', purpose: 'chapter-blueprint-directory:automatic-retry' }),
+      /MODEL_REQUEST_REJECTED/, 'a different retry purpose cannot use valid syntax proof')
+    const accepted = dispatch(evidence('{"blueprints":['))
+    assert.doesNotThrow(accepted, 'settled malformed JSON permits one repair')
+    assert.throws(accepted, /MODEL_REQUEST_REJECTED/, 'third physical request remains denied')
+    const ipc = { attemptId: 'ipc-main', runId: 'bridge-run', projectId: 'project', epoch: 'epoch', purpose: policy.primaryPurpose }
+    assert.doesNotThrow(dispatch(evidence('{"blueprints":[', 'settle', ipc, 'baseline'), ipc),
+      'baseline IPC purpose and request identity follow the same syntax rule')
+  } finally {
+    assert.ok(path.resolve(dir).startsWith(path.resolve(ROOT, '.runtime/.cache/novel-quality-modernization') + path.sep))
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 function earlyReviewChain(arm) {
@@ -1057,7 +1100,7 @@ test('post-UI pair accepts only one evidenced syntax repair per arm and retains 
       ['900单位正文', 'draft', 'chapter-draft'],
     ]
     const attempts = entries.map(([operation, id, purpose]) => {
-      const outputPath = path.join(dir, `${arm}-${id}.txt`), content = `${arm}-${id}-content`
+      const outputPath = path.join(dir, `${arm}-${id}.txt`), content = id === 'main' ? '{"blueprints":[' : `${arm}-${id}-content`
       fs.writeFileSync(outputPath, content)
       const identity = owner(`${arm}-${id}`, purpose, operation)
       return { attemptId: `${arm}:${identity.attemptId}`, outputPath, visibleTextHash: hash(content),
@@ -1079,6 +1122,13 @@ test('post-UI pair accepts only one evidenced syntax repair per arm and retains 
     const valid = classifyProductionPair([baseline, candidate], { mode: 'real', phase: 'early-budget' })
     assert.equal(valid.pairFailure, undefined)
     assert.equal(valid.status, 'failed', 'real product failure remains FAIL')
+    const validJson = structuredClone(candidate)
+    fs.writeFileSync(validJson.attempts[0].outputPath, '{"blueprints":[]}')
+    validJson.attempts[0].visibleTextHash = hash('{"blueprints":[]}')
+    validJson.ownerTerminal[0].textHash = validJson.attempts[0].visibleTextHash
+    assert.equal(classifyProductionPair([baseline, validJson], { mode: 'real', phase: 'early-budget' }).pairFailure,
+      'STRUCTURED_REPAIR_PRIMARY_NOT_SYNTAX_FAILURE')
+    fs.writeFileSync(candidate.attempts[0].outputPath, '{"blueprints":[')
     const wrongPurpose = structuredClone(candidate)
     wrongPurpose.attempts[1].binding.actual.purpose = 'chapter-blueprint-directory:automatic-retry'
     assert.equal(classifyProductionPair([baseline, wrongPurpose], { mode: 'real', phase: 'early-budget' }).pairFailure,
