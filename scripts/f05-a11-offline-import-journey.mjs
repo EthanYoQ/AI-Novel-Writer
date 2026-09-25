@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import * as lancedb from '@lancedb/lancedb'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const arg = name => process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
@@ -61,18 +62,51 @@ function inventory(root) {
 
 const compareSql = `import json,sqlite3,sys
 old,new=sys.argv[1:]
-tables=['project_core','contents','drafts','characters','reviews','revisions']
 def conn(p): return sqlite3.connect('file:'+p+'?mode=ro',uri=True)
 a,b=conn(old),conn(new)
 result={}
+tables=[r[0] for r in a.execute("select name from sqlite_master where type='table' and name not like 'sqlite_%' order by name")]
 for table in tables:
   columns=[row[1] for row in a.execute('pragma table_info('+table+')')]
+  if table=='text_metric_versions':
+    if b.execute('select count(*) from text_metric_versions').fetchone()[0]: raise AssertionError('stale metric cache transferred')
+    result[table]={'sourceRows':a.execute('select count(*) from text_metric_versions').fetchone()[0],'target':'rebuild'}
+    continue
+  if table=='llm_calls':
+    columns=[name for name in columns if name in ('id','prompt_tokens','completion_tokens','total_tokens','duration_ms','success','created_at')]
+  if table=='post_process_steps': columns.remove('error_msg')
   quoted=','.join('"'+column+'"' for column in columns)
-  rows=lambda db: sorted([tuple(str(value) if isinstance(value,bytes) else value for value in row) for row in db.execute('select '+quoted+' from '+table)],key=str)
+  rows=lambda db: sorted([tuple(str(value) if isinstance(value,bytes) else value for value in row) for row in db.execute('select '+quoted+' from "'+table+'"')],key=str)
   left,right=rows(a),rows(b)
   if left!=right: raise AssertionError(table+' legacy rows changed')
+  if table=='llm_calls':
+    projected=b.execute("select model_id,model_name,purpose,error_message,success from llm_calls").fetchall()
+    if any(row[:3]!=('', '旧版模型身份不可用', 'legacy') or row[3]!=( '' if row[4] else '旧版错误详情不可用') for row in projected): raise AssertionError('unsafe call history projection')
+  if table=='post_process_steps':
+    projected=b.execute('select error_msg,ok,attempt_count from post_process_steps').fetchall()
+    if any(error!='旧版错误详情不可用' for error,ok,attempts in projected if not ok and attempts): raise AssertionError('unsafe step error projection')
   result[table]=len(left)
 print(json.dumps(result))`
+
+async function knowledgeSnapshot(storageRoot) {
+  const directory = path.join(storageRoot, 'lancedb')
+  if (!fs.existsSync(directory)) return { documents: [], chunks: [], tables: [] }
+  const connection = await lancedb.connect(directory)
+  try {
+    const tables = (await connection.tableNames()).sort()
+    const read = async name => {
+      if (!tables.includes(name)) return []
+      const table = await connection.openTable(name)
+      try {
+        return (await table.query().toArray()).map(row => name === 'documents'
+          ? { id: row.id, fileName: row.fileName, chunkCount: row.chunkCount, corpusKind: row.corpusKind ?? null }
+          : { id: row.id, docId: row.docId, text: row.text, chunkIndex: row.chunkIndex, totalChunks: row.totalChunks })
+          .sort((left, right) => String(left.id).localeCompare(String(right.id)))
+      } finally { table.close() }
+    }
+    return { documents: await read('documents'), chunks: await read('chunks'), tables }
+  } finally { connection.close() }
+}
 
 async function launch(roots) {
   const env = { ...process.env, AI_NOVEL_APP_DATA_HOME: roots.canonical,
@@ -164,13 +198,34 @@ async function verify(source) {
     const counts = JSON.parse(execFileSync('python', ['-c', compareSql,
       path.join(sourceCopy, '.vela', 'vela.db'), path.join(target, '.ai-novel', 'project.db')], { encoding: 'utf8' }))
     assert.equal(counts.project_core, 1)
-    assert(counts.contents > 0 && counts.drafts > 0)
+    for (const table of ['blueprints', 'characters', 'contents', 'drafts', 'reviews', 'revisions',
+      'summary_snapshots', 'llm_calls', 'post_process_runs', 'post_process_steps']) {
+      assert(counts[table] > 0, `Historical fixture lacks ${table}`)
+    }
+    const rawAssets = {}
+    for (const [name, digest] of Object.entries(copiedBefore)) {
+      if (name.startsWith('.vela/lancedb/') || name.startsWith('.vela/vela.db')
+        || name === '.vela/project.json' || name === '.vela/upgrade-data-inventory.json'
+        || name === '.vela/embedding-spaces.json') continue
+      const targetName = name.startsWith('.vela/') ? `.ai-novel/${name.slice('.vela/'.length)}` : name
+      assert.equal(sha256(path.join(target, targetName)), digest, `Author asset changed: ${name}`)
+      rawAssets[name] = digest
+    }
+    assert(Object.keys(rawAssets).some(name => name.startsWith('.vela/prompts/')))
+    assert(Object.keys(rawAssets).some(name => name.endsWith('.txt') && !name.startsWith('.vela/')))
     assert.deepEqual(inventory(sourceCopy), copiedBefore, 'Scratch old source changed')
     assert.deepEqual(inventory(source.path), originalBefore, 'Historical fixture changed')
     receipt.steps.push({ version: source.version, step: 'V3 import and open', outcome: 'PASS',
-      target, copiedSourceFiles: Object.keys(copiedBefore).length, counts, dialogs })
+      target, copiedSourceFiles: Object.keys(copiedBefore).length, counts, rawAssets, dialogs })
     await quit(session.app)
     session = null
+
+    const knowledge = await knowledgeSnapshot(path.join(target, '.ai-novel'))
+    assert.deepEqual(knowledge, await knowledgeSnapshot(path.join(sourceCopy, '.vela')),
+      'Knowledge document/chunk text or table set changed')
+    assert(knowledge.documents.length > 0 && knowledge.chunks.length > 0)
+    receipt.steps.push({ version: source.version, step: 'Stored knowledge document and chunk text preserved',
+      outcome: 'PASS', documents: knowledge.documents.length, chunks: knowledge.chunks.length, tables: knowledge.tables })
 
     session = await launch(roots)
     await home(session.page)

@@ -96,6 +96,41 @@ function hasTransferredRuntimeAuthority(databasePath: string): boolean {
   } finally { db.close() }
 }
 
+/** A11 keeps readable call history without transferring model configuration or raw errors. */
+function captureLegacyCalls(databasePath: string) {
+  const db = new Database(databasePath, { readonly: true, fileMustExist: true })
+  try {
+    return db.prepare(`SELECT id,prompt_tokens,completion_tokens,total_tokens,duration_ms,success,created_at
+      FROM llm_calls ORDER BY id`).all() as Array<{
+      id: number; prompt_tokens: number | null; completion_tokens: number | null
+      total_tokens: number | null; duration_ms: number; success: number; created_at: string
+    }>
+  } finally { db.close() }
+}
+
+function restoreSafeLegacyDiagnostics(databasePath: string, calls: ReturnType<typeof captureLegacyCalls>): void {
+  const db = new Database(databasePath, { fileMustExist: true })
+  try {
+    db.transaction(() => {
+      const insert = db.prepare(`INSERT INTO llm_calls
+        (id,model_id,model_name,purpose,prompt_tokens,completion_tokens,total_tokens,duration_ms,success,error_message,created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      for (const call of calls) {
+        const count = (value: unknown) => value === null || (Number.isSafeInteger(value) && (value as number) >= 0)
+        if (!Number.isSafeInteger(call.id) || call.id < 1 || !count(call.prompt_tokens)
+          || !count(call.completion_tokens) || !count(call.total_tokens) || !count(call.duration_ms)
+          || ![0, 1].includes(call.success)) fail('LEGACY_IMPORT_HISTORY_INVALID')
+        insert.run(call.id, '', '旧版模型身份不可用', 'legacy',
+          call.prompt_tokens, call.completion_tokens, call.total_tokens, call.duration_ms, call.success,
+          call.success ? '' : '旧版错误详情不可用',
+          typeof call.created_at === 'string' && /^\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d$/.test(call.created_at) ? call.created_at : '')
+      }
+      db.prepare(`UPDATE post_process_steps SET error_msg='旧版错误详情不可用'
+        WHERE error_msg IS NULL AND ok=0 AND attempt_count>0`).run()
+    })()
+  } finally { db.close() }
+}
+
 /** Explicit offline import. Caller prompts the user to close the old editor/sync
  * processes, owns the new target choice, and registers the result only on ready.
  * All SQLite/Lance writes occur inside an attempt-owned copy.
@@ -190,7 +225,9 @@ export async function importLegacyProjectCopy(options: {
       // Manifest-less legacy projects have no project UUID. Start a new lineage at this
       // target identity rather than attributing historical rows to an inferred source.
       const lineageRootId = sourceProjectId ?? projectId
+      const legacyCalls = captureLegacyCalls(newDatabase)
       const { history } = sanitizePortableDatabase(newDatabase)
+      restoreSafeLegacyDiagnostics(newDatabase, legacyCalls)
       const freeze = { version: 1, originProjectId: lineageRootId, snapshotGeneration,
         nonReplayable: true, requiresRuntimeFreezeGuard: true, records: history, avatarReferenceProjections: [] }
       fs.writeFileSync(path.join(storage, 'portable-runtime-freeze.json'), JSON.stringify(freeze), { flag: 'wx' })

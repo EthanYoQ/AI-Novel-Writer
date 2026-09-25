@@ -11,6 +11,8 @@ import { ChapterDeletionService } from '../chapter-deletion-service'
 import { readPortableCurrentAuthority } from '../portable-current-authority'
 import { createPortableTransferAuthority } from '../portable-transfer-authority'
 import { SummaryRepository } from '../../repositories/summary-repository'
+import { LLMHistoryRepository } from '../../repositories/llm-repository'
+import { PostProcessRepository } from '../../repositories/post-process-repository'
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const roots: string[] = []
@@ -36,8 +38,10 @@ function fixture(version: 'v100' | 'v110') {
   fs.writeFileSync(path.join(legacy, 'project.json'), JSON.stringify({ schemaVersion: 1, kind: 'ai-novel-project', projectId: sourceProjectId, createdAt: '2026-09-01T00:00:00.000Z' }))
   fs.mkdirSync(path.join(legacy, 'prompts'))
   fs.writeFileSync(path.join(legacy, 'prompts', 'author.txt'), '作者项目级提示词')
+  fs.mkdirSync(path.join(legacy, 'skills'))
+  fs.writeFileSync(path.join(legacy, 'skills', 'author.md'), '作者项目级 Skill 原文')
   fs.writeFileSync(path.join(source, 'outline.md'), '作者目录级大纲')
-  const sourceHashes = Object.fromEntries(['vela.db', 'vela.db-wal', 'vela.db-shm', 'project.json', 'prompts/author.txt']
+  const sourceHashes = Object.fromEntries(['vela.db', 'vela.db-wal', 'vela.db-shm', 'project.json', 'prompts/author.txt', 'skills/author.md']
     .map(name => [name, hash(path.join(legacy, name))]))
   return { source, target, legacy, sourceProjectId, sourceHashes }
 }
@@ -52,6 +56,7 @@ it.each(['v100', 'v110'] as const)('%s 离线完整副本含 WAL、作者配置�
   expect(fs.existsSync(path.join(f.target, '.vela'))).toBe(false)
   expect(fs.readFileSync(path.join(f.target, 'outline.md'), 'utf8')).toBe('作者目录级大纲')
   expect(fs.readFileSync(path.join(f.target, '.ai-novel', 'prompts', 'author.txt'), 'utf8')).toBe('作者项目级提示词')
+  expect(fs.readFileSync(path.join(f.target, '.ai-novel', 'skills', 'author.md'), 'utf8')).toBe('作者项目级 Skill 原文')
   expect(verifyProjectSqlite({ databasePath: path.join(f.target, '.ai-novel', 'project.db') }).schemaVersion).toBe(7)
   const db = new Database(path.join(f.target, '.ai-novel', 'project.db'), { readonly: true })
   try {
@@ -98,6 +103,14 @@ it('旧候选正文保留为可读冻结历史，新项目不重放', async () =
       .run('old-candidate', 'old-run', 'old-step', f.sourceProjectId, 7,
         JSON.stringify({ chapterNumber: 7, title: '第七章', role: '推进', purpose: '追踪', keyEvents: '线索', characters: [] }),
         hash(path.join(f.legacy, 'project.json')), '旧候选正文', 'content-hash')
+    db.prepare(`INSERT INTO llm_calls(id,model_id,model_name,purpose,prompt_tokens,completion_tokens,
+      total_tokens,duration_ms,success,error_message,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(31, 'model?token=secret', 'C:\\private\\model', 'review', 120, 0, 120, 43, 0,
+        'C:\\private\\token-secret', '2026-09-01 12:00:00')
+    db.prepare('INSERT INTO post_process_runs(id,trigger_source_type,trigger_source_id) VALUES(?,?,?)')
+      .run('old-post-run', 'draft', '19')
+    db.prepare('INSERT INTO post_process_steps(run_id,step_key,ok,attempt_count,error_msg) VALUES(?,?,?,?,?)')
+      .run('old-post-run', 'review', 0, 1, 'C:\\private\\token-secret')
   } finally { db.close() }
   const before = Object.fromEntries(fs.readdirSync(f.legacy).filter(name => fs.lstatSync(path.join(f.legacy, name)).isFile())
     .map(name => [name, hash(path.join(f.legacy, name))]))
@@ -118,8 +131,18 @@ it('旧候选正文保留为可读冻结历史，新项目不重放', async () =
     expect(copy.prepare('SELECT publication_status FROM finalization_outbox WHERE finalization_id=?').pluck().get('old-outbox')).toBe('pending')
     expect(copy.prepare('SELECT last_error FROM finalization_outbox WHERE finalization_id=?').pluck().get('old-outbox')).not.toContain('token-secret')
     expect(copy.prepare('SELECT execution_owner FROM import_runs WHERE id=?').pluck().get('old-import')).not.toBe('old-machine-authority')
+    expect(copy.prepare('SELECT model_id,model_name,purpose,prompt_tokens,total_tokens,success,error_message FROM llm_calls WHERE id=31').get())
+      .toMatchObject({ model_id: '', model_name: '旧版模型身份不可用', purpose: 'legacy', prompt_tokens: 120,
+        total_tokens: 120, success: 0, error_message: '旧版错误详情不可用' })
+    expect(copy.prepare("SELECT error_msg FROM post_process_steps WHERE run_id='old-post-run'").pluck().get())
+      .toBe('旧版错误详情不可用')
+    expect(JSON.stringify(copy.prepare('SELECT * FROM llm_calls').all())).not.toContain('token-secret')
   }
   finally { copy.close() }
+  initProjectDatabase(f.target)
+  expect(LLMHistoryRepository.getStats()).toMatchObject({ totalCalls: 1, failedCalls: 1, totalTokens: 120 })
+  expect(LLMHistoryRepository.getHistory(1)).toMatchObject([{ modelName: '旧版模型身份不可用', success: 0 }])
+  expect(PostProcessRepository.getSteps('old-post-run')).toMatchObject([{ errorMsg: '旧版错误详情不可用', attemptCount: 1 }])
   expect(Object.fromEntries(Object.keys(before).map(name => [name, hash(path.join(f.legacy, name))]))).toEqual(before)
   expect(fs.existsSync(path.join(f.legacy, 'vela.db'))).toBe(true)
 })
