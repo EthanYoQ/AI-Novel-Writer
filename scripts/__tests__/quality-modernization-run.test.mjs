@@ -846,7 +846,7 @@ test('early-review 从生产定稿历史发送必需前章，而不是借当前�
     'early-review 必须校验必需前章已进入材料准入收据')
   assert.ok(fixture.includes('REVIEW_PROMPT_PRIVATE_FIXTURE_LEAK'), '真实出站 prompt 必须拒绝夹具元话语和私有修法泄露')
   assert.match(fixture,
-    /request\.phase === 'early-review' && operationKind === 'refine'[\s\S]*?OUTBOUND_REFINE_SOURCE_DRAFT_MISSING[\s\S]*?\} else \{[\s\S]*?OUTBOUND_ORACLE_AUTHORITY_MISSING/,
+    /request\.phase === 'early-review' && operationKind === 'refine'[\s\S]*?OUTBOUND_REFINE_SOURCE_DRAFT_MISSING[\s\S]*?\} else if \(!structuredSyntaxRepair\) \{[\s\S]*?OUTBOUND_ORACLE_AUTHORITY_MISSING/,
     '定向修稿应校验当前正文与已确认审稿绑定，不得要求重复发送不属于该 prompt 合同的全套世界观')
 })
 
