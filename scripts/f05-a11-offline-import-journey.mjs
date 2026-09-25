@@ -18,6 +18,7 @@ const expectedExe = arg('exe-sha256')
 const expectedAsar = arg('asar-sha256')
 const supplement = arg('supplement') === '1'
 const onlyVersion = arg('only')
+const finalDelta = arg('final-delta') === '1'
 const sources = [
   { version: 'v1.0.0', path: arg('legacy-v100') },
   { version: 'v1.1.0', path: arg('legacy-v110') },
@@ -26,6 +27,7 @@ assert(packageDir && buildTree && /^[a-f0-9]{40}$/.test(testedSha ?? '')
   && /^[a-f0-9]{64}$/.test(expectedExe ?? '') && /^[a-f0-9]{64}$/.test(expectedAsar ?? '')
   && sources.every(source => source.path) && (!onlyVersion || sources.some(source => source.version === onlyVersion)),
   'Specify clean build tree, fixed package SHA/hashes, both historical fixture paths and a known --only version')
+assert(!finalDelta || (supplement && onlyVersion === 'v1.1.0'), 'Final A11 delta requires one synthetic v1.1.0 source')
 const buildGit = (...args) => execFileSync('git', args, { cwd: buildTree, encoding: 'utf8' }).trim()
 assert.equal(buildGit('rev-parse', 'HEAD'), testedSha, 'Build tree HEAD differs from tested SHA')
 assert.equal(buildGit('status', '--porcelain'), '', 'Build tree must be clean')
@@ -38,7 +40,7 @@ const runId = randomUUID()
 const scratch = path.join(process.env.LOCALAPPDATA, 'VibeCodingScratch', 'AI-Novel', `a11-${runId.slice(0, 8)}`)
 const receiptPath = path.join(repository, '.runtime', '.cache', 'f05-a11-offline-import', runId, 'receipt.json')
 const receipt = { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_WIN_V3',
-  mode: supplement ? 'synthetic-completeness' : 'historical-baseline',
+  mode: finalDelta ? 'synthetic-completeness-final-delta' : supplement ? 'synthetic-completeness' : 'historical-baseline',
   selectedVersions: onlyVersion ? [onlyVersion] : sources.map(source => source.version),
   testedSha, buildTree: path.resolve(buildTree),
   executionHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim(),
@@ -180,7 +182,15 @@ async function seedSupplement(sourceCopy) {
     } finally { table.close() }
   } finally { connection.close() }
   execFileSync('python', ['-c', seedOutboxSql, path.join(sourceCopy, '.vela', 'vela.db')])
-  return { skillSha256: sha256(skill), originalSha256: sha256(original), originalDocumentId: 'upgrade-fixture-knowledge-document' }
+  let avatarSha256
+  if (finalDelta) {
+    const avatar = path.join(sourceCopy, '.vela', 'avatars', 'a11-synthetic-orphan.png')
+    fs.mkdirSync(path.dirname(avatar), { recursive: true })
+    fs.writeFileSync(avatar, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNocFD4DwAEBAHg8uuA+QAAAABJRU5ErkJggg==', 'base64'), { flag: 'wx' })
+    avatarSha256 = sha256(avatar)
+  }
+  return { skillSha256: sha256(skill), originalSha256: sha256(original),
+    originalDocumentId: 'upgrade-fixture-knowledge-document', ...(avatarSha256 ? { avatarSha256 } : {}) }
 }
 
 async function verifySupplement(target, seeded) {
@@ -237,6 +247,38 @@ async function home(page) {
   if (await migrationNotice.isVisible()) await migrationNotice.getByRole('button', { name: '知道了', exact: true }).click()
   if (!await page.locator('.writer-welcome').isVisible()) await page.locator('.writer-left-rail button[title="欢迎页"]').click()
   await page.locator('.writer-welcome').waitFor({ state: 'visible' })
+}
+
+async function observeRequests(session) {
+  let rendererRequests = 0
+  session.page.on('request', request => { if (/^https?:/i.test(request.url())) rendererRequests += 1 })
+  await session.app.evaluate(() => {
+    const originalFetch = globalThis.fetch
+    globalThis.__a11MainFetchCalls = 0
+    globalThis.fetch = (...args) => {
+      globalThis.__a11MainFetchCalls += 1
+      return originalFetch(...args)
+    }
+  })
+  return async () => {
+    const mainFetchCalls = await session.app.evaluate(() => globalThis.__a11MainFetchCalls)
+    const result = { mainFetchCalls, rendererRequests }
+    assert.deepEqual(result, { mainFetchCalls: 0, rendererRequests: 0 }, 'Unexpected network request during A11 import or reopen')
+    return result
+  }
+}
+
+const editorBody = locator => locator.evaluate(element => Array.from(element.querySelectorAll('.cm-line'), line => {
+  const copy = line.cloneNode(true)
+  copy.querySelector('.cm-lp-paperhead')?.remove()
+  return copy.textContent
+}).join('\n'))
+
+function draftBodies(target) {
+  return JSON.parse(execFileSync('python', ['-c', `import json,sqlite3,sys
+db=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)
+print(json.dumps([r[0] for r in db.execute('select body from contents')]))
+db.close()`, path.join(target, '.ai-novel', 'project.db')], { encoding: 'utf8' }))
 }
 
 async function quit(app, page, version) {
@@ -304,9 +346,11 @@ async function verify(source) {
     .map(key => [key, path.join(root, key)]))
   for (const directory of Object.values(roots)) fs.mkdirSync(directory, { recursive: true })
   let session
+  let savedBody
   try {
     session = await launch(roots)
     await home(session.page)
+    let requestCounts = finalDelta ? await observeRequests(session) : null
     await session.app.evaluate(({ dialog }, { sourceCopy, targetParent }) => {
       globalThis.__a11Dialogs = []
       dialog.showOpenDialog = async options => {
@@ -362,6 +406,11 @@ async function verify(source) {
     assert.deepEqual([...new Set(avatarRows.map(row => row.hash))].sort(),
       [...new Set(sourceAvatars.map(([, digest]) => digest))].sort(),
       'Avatar source bytes lack a target M05 database reference')
+    if (finalDelta) {
+      assert.equal(avatarRows.length, 1, 'Synthetic orphan avatar lacks its M05 target row')
+      assert(avatarRows[0].path.startsWith('avatars/unresolved/'))
+      assert.equal(avatarRows[0].hash, seeded.avatarSha256)
+    }
     for (const row of avatarRows) {
       assert(typeof row.path === 'string' && row.path.startsWith('avatars/')
         && !row.path.includes('\\') && !row.path.split('/').includes('..'), 'Unsafe target avatar reference')
@@ -378,6 +427,30 @@ async function verify(source) {
     receipt.steps.push({ stepId: `${source.version}-import-open`, version: source.version, step: 'V3 import and open', outcome: 'PASS',
       target, copiedSourceFiles: Object.keys(copiedBefore).length, counts, rawAssets,
       avatars: avatarRows.map(({ path: relativePath, hash }) => ({ relativePath, hash })), dialogs })
+    if (finalDelta) {
+      await session.page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).first().click()
+      const editor = session.page.locator('.cm-content[contenteditable="true"]')
+      await editor.waitFor({ state: 'visible' })
+      const originalBody = await editorBody(editor)
+      assert(draftBodies(target).includes(originalBody), 'Opened draft differs from imported author body')
+      assert(!originalBody.includes(' A11 目标补写'))
+      savedBody = `${originalBody} A11 目标补写`
+      await editor.click()
+      await session.page.keyboard.press('Control+End')
+      await session.page.keyboard.type(' A11 目标补写')
+      assert.equal(await editorBody(editor), savedBody)
+      await session.page.locator('[role="status"]').filter({ hasText: /^未保存$/ }).last().waitFor({ state: 'visible' })
+      await session.page.locator('button[title="保存（⌘S）"]').click()
+      await session.page.locator('[role="status"]').filter({ hasText: /^已保存$/ }).last().waitFor({ state: 'visible' })
+      assert(draftBodies(target).includes(savedBody), 'Target draft save did not persist')
+      assert.deepEqual(inventory(sourceCopy), copiedBefore)
+      assert.deepEqual(inventory(source.path), originalBefore)
+      receipt.steps.push({ stepId: `${source.version}-target-edit-save`, outcome: 'PASS',
+        step: 'V3 edited and saved imported author body without changing either old source', savedBodySha256: createHash('sha256').update(savedBody).digest('hex') })
+      const requests = await requestCounts()
+      receipt.steps.push({ stepId: `${source.version}-import-zero-network`, outcome: 'PASS',
+        step: 'No main fetch or renderer HTTP request during V3 import and target save', requests })
+    }
     await quit(session.app, session.page, source.version)
     session = null
 
@@ -396,13 +469,65 @@ async function verify(source) {
 
     session = await launch(roots)
     await home(session.page)
+    requestCounts = finalDelta ? await observeRequests(session) : null
     await session.page.locator('.writer-shelf').getByRole('button', { name: '打开《升级保留验证小说》' }).click()
     await session.page.locator('.writer-project-tree').getByText('升级保留验证小说', { exact: true })
       .waitFor({ state: 'visible', timeout: 30_000 })
+    if (finalDelta) {
+      await session.page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).first().click()
+      const editor = session.page.locator('.cm-content[contenteditable="true"]')
+      assert.equal(await editorBody(editor), savedBody)
+      assert(draftBodies(target).includes(savedBody))
+      receipt.steps.push({ stepId: `${source.version}-target-edit-reopen`, outcome: 'PASS',
+        step: 'New V3 process read the exact edited target draft', savedBodySha256: createHash('sha256').update(savedBody).digest('hex') })
+      const requests = await requestCounts()
+      receipt.steps.push({ stepId: `${source.version}-reopen-zero-network`, outcome: 'PASS',
+        step: 'No main fetch or renderer HTTP request while reopening imported copy', requests })
+    }
     assert.deepEqual(inventory(sourceCopy), copiedBefore)
     assert.deepEqual(inventory(source.path), originalBefore)
     receipt.steps.push({ stepId: `${source.version}-reopen-unchanged`, version: source.version,
       step: 'New process opens copy; both old sources unchanged', outcome: 'PASS' })
+    if (finalDelta) {
+      await quit(session.app, session.page, source.version)
+      session = null
+      const targetBeforeOldWrite = inventory(target)
+      execFileSync('python', ['-c', `import sqlite3,sys
+db=sqlite3.connect(sys.argv[1])
+updated=db.execute("update project_core set project_name='A11 旧源后续独立修改' where id='main'")
+assert updated.rowcount==1
+db.commit(); db.close()`, path.join(sourceCopy, '.vela', 'vela.db')])
+      const copiedAfterOldWrite = inventory(sourceCopy)
+      assert.notDeepEqual(copiedAfterOldWrite, copiedBefore)
+      assert.deepEqual(inventory(target), targetBeforeOldWrite, 'Old scratch source write reached target')
+      assert.deepEqual(inventory(source.path), originalBefore, 'Historical source changed during isolation check')
+      receipt.steps.push({ stepId: `${source.version}-reverse-write-isolation`, outcome: 'PASS',
+        step: 'Later write to isolated scratch old project leaves target and historical source unchanged' })
+
+      session = await launch(roots)
+      await home(session.page)
+      requestCounts = await observeRequests(session)
+      await session.app.evaluate(({ dialog }, { sourceCopy, targetParent }) => {
+        dialog.showOpenDialog = async options => {
+          if (options.title === '选择旧版小说项目文件夹') return { canceled: false, filePaths: [sourceCopy] }
+          if (options.title === '选择恢复副本所在文件夹') return { canceled: false, filePaths: [targetParent] }
+          throw new Error(`Unexpected dialog: ${options.title}`)
+        }
+        dialog.showMessageBox = async options => {
+          if (!options.message.includes('保存并关闭旧版程序')) throw new Error('Unexpected confirmation')
+          return { response: 1, checkboxChecked: false }
+        }
+      }, { sourceCopy, targetParent })
+      await session.page.getByRole('button', { name: '导入旧项目副本' }).click()
+      await session.page.locator('[role="status"]').filter({ hasText: 'LEGACY_IMPORT_TARGET_EXISTS' })
+        .waitFor({ state: 'visible', timeout: 30_000 })
+      assert.deepEqual(inventory(target), targetBeforeOldWrite, 'Existing target was overwritten')
+      assert.deepEqual(inventory(sourceCopy), copiedAfterOldWrite, 'Scratch old source changed on blocked import')
+      assert.deepEqual(inventory(source.path), originalBefore, 'Historical source changed on blocked import')
+      const requests = await requestCounts()
+      receipt.steps.push({ stepId: `${source.version}-target-conflict-blocked`, outcome: 'PASS',
+        step: 'V3 entry blocked duplicate target without changing either project', requests })
+    }
   } finally { if (session) await session.app.close() }
 }
 
