@@ -31,7 +31,7 @@ assert(!finalDelta || (supplement && onlyVersion === 'v1.1.0'), 'Final A11 delta
 const buildGit = (...args) => execFileSync('git', args, { cwd: buildTree, encoding: 'utf8' }).trim()
 assert.equal(buildGit('rev-parse', 'HEAD'), testedSha, 'Build tree HEAD differs from tested SHA')
 assert.equal(buildGit('status', '--porcelain'), '', 'Build tree must be clean')
-assert.equal(path.resolve(packageDir), path.join(path.resolve(buildTree), 'release', '1.1.0', 'win-unpacked'))
+assert.equal(path.resolve(packageDir), path.join(path.resolve(buildTree), 'release', JSON.parse(fs.readFileSync(path.join(buildTree, 'package.json'), 'utf8')).version, 'win-unpacked'))
 
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const exe = path.join(packageDir, 'AI小说作家.exe')
