@@ -226,7 +226,7 @@ test('isolated production commands persist the selected phase operations', async
     } else if (request.mode !== 'synthetic') throw new Error('INVALID_PROVIDER_MODE')
     if (request.action === 'prepare' && request.mode === 'synthetic') {
       save(path.join(target.roots.config, 'models.json'), [model])
-      save(path.join(target.roots.config, 'config.json'), { defaultModelId: model.id, theme: 'dark', locale: 'zh-CN' })
+      save(path.join(target.roots.config, 'config.json'), { theme: 'dark', locale: 'zh-CN' })
     }
     const llm = (await load('electron/controllers/llm-controller.ts')).registerLLMController()
     if (candidate) (await load('electron/controllers/generation-controller.ts')).registerGenerationController(llm)
@@ -381,7 +381,7 @@ test('isolated production commands persist the selected phase operations', async
         actual = selectOwnerDispatch(db, currentContext.mainGenerationRunHandle, session, body)
         const run = db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').get(actual.runId)
         materialDecision = JSON.parse(run.binding_json).sourceManifest?.materialDecision ?? null
-        preflight(materialDecision, 'MATERIAL_DECISION_RECEIPT_MISSING')
+        if (operationKind !== 'directory') preflight(materialDecision, 'MATERIAL_DECISION_RECEIPT_MISSING')
       }
       const attemptId = `${target.arm}:${actual?.attemptId ?? randomUUID()}`
       const promptText = body.messages.filter(message => typeof message?.content === 'string')
@@ -547,7 +547,7 @@ test('isolated production commands persist the selected phase operations', async
       operationKind = operation.kind
       operationId = operation.id
       currentContext = { runId: randomUUID(), projectPath: project.rootPath, projectSession: session, writingLanguage: 'zh-CN',
-        uiLocale: 'zh-CN', generationModelId: model.id, data: { architecture: scene.material, existingBlueprints: [] }, cancelled: false }
+        uiLocale: 'zh-CN', generationModelId: model.id, data: { architecture: authorityText, existingBlueprints: [] }, cancelled: false }
       const params = { context: currentContext, callbacks, step: { id: operationId, title: operationId } }
       const sourceDraft = latestDraft()
       let command
@@ -694,6 +694,7 @@ test('isolated production commands persist the selected phase operations', async
         if (request.mode === 'synthetic') assert.equal(terminal.textHash, attempt.visibleTextHash)
       }
     }
+    assert.equal(receipt.preflightFailures?.length ?? 0, 0, 'OUTBOUND_PREFLIGHT_FAILURES')
     receipt.status = 'passed'
   } catch (error) {
     const canProjectRecoveryCandidate = request.mode === 'real'

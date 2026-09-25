@@ -8,7 +8,7 @@ import { Buffer } from 'node:buffer'
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, currentProtocolBinding, assertProtocolBinding, validateHistoricalLedgerBoundary, validateCampaignBinding, buildFixtureExports, validatePair, selectPhase, assertScenarioMatchesProtocol, reconcileDispatchedAttempts, withLedgerReconciliation, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles, assertFormalTargetCandidateClean, createShortIsolationRoot, assertOwnedIsolationRoot, validatePhysicalLedger, registeredCampaignWorktree, developmentLedgerPath } from '../quality-modernization-run.mjs'
-import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, PHASE_SCENARIOS, classifyProductionPair,
+import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolatedRealModelConfig, PHASE_SCENARIOS, classifyProductionPair,
   adjudicateEarlyReviewReferenceNonconformance, EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION,
   readBaselineFailureEvidence, validateEarlyContextSelectionDifference,
   validateEarlyReviewChain, targetUnitsGateEvidence,
@@ -387,6 +387,22 @@ test('账本未知不释放、重试新attempt、无硬上限、重复/并发/�
 test('命令探针固定三入口；选择器不包含英文产品用例', () => {
   assert.equal(COMMAND_PROBES.length, 3)
   assert.ok(COMMAND_PROBES.every(row => !/English/.test(row.name)))
+})
+
+test('真实隔离配置只复制指定生成模型，不继承默认 embedding 模型', () => {
+  const root = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/real-config-test-'))
+  const source = path.join(root, 'source'), isolated = path.join(root, 'isolated')
+  fs.mkdirSync(source); fs.mkdirSync(isolated)
+  const profiles = [{ id: 'approved', apiKey: 'test-only-secret' }, { id: 'other', apiKey: 'other-test-secret' }]
+  const sourceConfig = { defaultModelId: 'approved', locale: 'en-US' }
+  fs.writeFileSync(path.join(source, 'models.json'), JSON.stringify(profiles))
+  fs.writeFileSync(path.join(source, 'config.json'), JSON.stringify(sourceConfig))
+  try {
+    copyIsolatedRealModelConfig({ roots: { config: source }, modelId: 'approved' }, { config: isolated })
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(isolated, 'models.json'), 'utf8')), [profiles[0]])
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(isolated, 'config.json'), 'utf8')), { locale: 'zh-CN' })
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(source, 'config.json'), 'utf8')), sourceConfig)
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 test('冻结执行验证拒绝adapter、Node版本/ABI、依赖、启动参数、native旁证篡改', () => {
   const parent = path.join(ROOT, '.runtime/.cache/novel-quality-modernization')

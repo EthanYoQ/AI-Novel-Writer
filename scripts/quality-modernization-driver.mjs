@@ -634,6 +634,15 @@ export function readBaselineFailureEvidence(receipt, receiptPath) {
   }
 }
 
+export function copyIsolatedRealModelConfig(original, roots) {
+  // Copy only the approved generation profile; a default model would also start an unregistered embedding request.
+  const models = JSON.parse(fs.readFileSync(path.join(original.roots.config, 'models.json'), 'utf8'))
+  const model = models.find(value => value.id === original.modelId)
+  if (!model?.apiKey) throw new Error('SAFE_MODEL_UNAVAILABLE')
+  fs.writeFileSync(path.join(roots.config, 'models.json'), JSON.stringify([model]), { mode: 0o600 })
+  fs.writeFileSync(path.join(roots.config, 'config.json'), JSON.stringify({ locale: 'zh-CN' }))
+}
+
 export function runProductionPhasePair(targets, options) {
   const scenario = productionScenario(options.phase)
   if ((scenario.scenarioRevision ?? null) !== (options.scenarioRevision ?? null)
@@ -648,15 +657,7 @@ export function runProductionPhasePair(targets, options) {
     const isolationRoot = path.join(original.isolationRoot, 'invocations', invocationId)
     for (const directory of [isolationRoot, ...Object.values(roots)]) if (fs.existsSync(directory)) throw new Error('INVOCATION_DIRECTORY_COLLISION')
     for (const directory of [isolationRoot, ...Object.values(roots)]) fs.mkdirSync(directory, { recursive: true })
-    if (options.mode === 'real') {
-      // The caller provisions only this isolated model store from an existing safe
-      // configuration. Never discover user profiles or print/hash secret bytes.
-      const models = JSON.parse(fs.readFileSync(path.join(original.roots.config, 'models.json'), 'utf8'))
-      const model = models.find(value => value.id === original.modelId)
-      if (!model?.apiKey) throw new Error('SAFE_MODEL_UNAVAILABLE')
-      fs.writeFileSync(path.join(roots.config, 'models.json'), JSON.stringify([model]), { mode: 0o600 })
-      fs.writeFileSync(path.join(roots.config, 'config.json'), JSON.stringify({ defaultModelId: model.id, locale: 'zh-CN' }))
-    }
+    if (options.mode === 'real') copyIsolatedRealModelConfig(original, roots)
     return [arm, { ...original, isolationRoot, roots, declaredIsolationRoot: original.isolationRoot, declaredRoots: original.roots }]
   }))
   const common = { invocationId, mode: options.mode ?? 'synthetic', development: options.development === true,
