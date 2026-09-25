@@ -14,6 +14,10 @@ const a08Only = process.argv.includes('--v3-a08-only')
 const a09Only = process.argv.includes('--v3-a09-only')
 const a12Only = process.argv.includes('--v3-a12-only')
 const a10Only = process.argv.includes('--v3-a10-only')
+const a10PackageDir = 'C:\\Vibe Coding Project\\AI Novel\\.worktrees\\thread6-a11-offline-qualify\\release\\1.1.0\\win-unpacked'
+const a10SourceSha = 'c4696d49a25220e7aefa6330f634bddb3217c2bc'
+const a10ExeSha = 'b35c8ddcfeeed9f33423b03149d198e17228ab0c66a28800e2f42a27e20fd0ba'
+const a10AsarSha = '3c422cfa08c3b10cf6c23fbce5945d8656d1e9549928cd51e5cb2893970f1554'
 const graphRemainingOnly = process.argv.includes('--v3-a11-a13-only')
 const graphPinnedPackage = graphRemainingOnly || a12Only
 const graphPackageDir = 'C:\\Vibe Coding Project\\AI Novel\\.worktrees\\thread6-u06-v2-qualify\\release\\1.1.0\\win-unpacked'
@@ -36,7 +40,7 @@ const [avatarPackageDir, avatarSourceSha, avatarExeSha, avatarAsarSha] = avatarP
 const buildReceiptPath = process.argv.find(arg => arg.startsWith('--reuse-package='))?.slice('--reuse-package='.length)
 assert(v3Mode || buildReceiptPath, 'pass --reuse-package=<build receipt> or a --v3-* mode')
 const buildReceipt = buildReceiptPath ? JSON.parse(fs.readFileSync(buildReceiptPath, 'utf8')) : null
-const testedSha = avatarSourceSha ?? (graphPinnedPackage ? graphPackageSourceSha : fixedV3 ? '6639f757c8d4cf2bf1d73ae4bb2a672b34a251f2'
+const testedSha = avatarSourceSha ?? (a10Only ? a10SourceSha : graphPinnedPackage ? graphPackageSourceSha : fixedV3 ? '6639f757c8d4cf2bf1d73ae4bb2a672b34a251f2'
   : v3Mode ? 'e803b10c461cddbb567ad925743b164f42af9e1a' : buildReceipt.build?.buildSha)
 if (!v3Mode) assert.equal(testedSha, 'c6fd2b5e02230d4ddd6e20d92c66bcf8a8f77010')
 const git = (...args) => execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim()
@@ -59,15 +63,15 @@ assert(changedPaths.every(name => name.startsWith('scripts/') || name.includes('
 const dirtyProduct = git('status', '--porcelain', '--', 'src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml')
   .split('\n').filter(Boolean).filter(line => !/src\/.*\/__tests__\//.test(line))
 assert.deepEqual(dirtyProduct, [], 'dirty product input since package build')
-const packageDir = avatarPackageDir ?? (graphPinnedPackage ? graphPackageDir : v3Mode
+const packageDir = avatarPackageDir ?? (a10Only ? a10PackageDir : graphPinnedPackage ? graphPackageDir : v3Mode
   ? fixedV3 ? path.join(repository, '.runtime', '.cache', 'f04-v3-narrow-package', '6639f757-electron-abi', 'win-unpacked')
     : path.join(repository, '.runtime', '.cache', 'f05-u12-m06-package', 'e803b10c', 'win-unpacked')
   : path.join(repository, 'release', '1.1.0', 'win-unpacked'))
 const executablePath = path.join(packageDir, 'AI小说作家.exe')
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
-assert.equal(sha256(executablePath), avatarExeSha ?? (graphPinnedPackage ? graphExeSha : fixedV3 ? '8cceb2b6143789bed0bb562bc4e8d0fdd7e2f6ae4001a34307437a6e9de25d7e'
+assert.equal(sha256(executablePath), avatarExeSha ?? (a10Only ? a10ExeSha : graphPinnedPackage ? graphExeSha : fixedV3 ? '8cceb2b6143789bed0bb562bc4e8d0fdd7e2f6ae4001a34307437a6e9de25d7e'
   : v3Mode ? '35f08ef5f2317f7151d6a2a0884531106a0bb2fba926cab7d09ff50b5f2e8f11' : buildReceipt.artifact.executableSha256))
-assert.equal(sha256(asarPath), avatarAsarSha ?? (graphPinnedPackage ? graphAsarSha : fixedV3 ? 'ba26bf26ebdd4726f190e8ff61b70dcc2da5776a04d29f74ba865c111914058f'
+assert.equal(sha256(asarPath), avatarAsarSha ?? (a10Only ? a10AsarSha : graphPinnedPackage ? graphAsarSha : fixedV3 ? 'ba26bf26ebdd4726f190e8ff61b70dcc2da5776a04d29f74ba865c111914058f'
   : v3Mode ? '6aa5c19a88481eef994df8d1e4050578e8c860d314ee8e6662656b967b2d190c' : buildReceipt.artifact.asarSha256))
 const driverSha256 = sha256(fileURLToPath(import.meta.url))
 const runId = randomUUID()
