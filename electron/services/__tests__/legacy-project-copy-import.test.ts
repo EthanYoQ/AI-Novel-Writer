@@ -169,6 +169,37 @@ it('缺失必需旧库或目标发布前中断均不留下半成品', async () =
     .toEqual(interrupted.sourceHashes)
 })
 
+it.each(['sqlite-converted', 'assets-converted', 'history-frozen'] as const)(
+  '%s 持久化后中断只清理目标 staging，同路径重试可完成', async phase => {
+    const f = fixture('v110')
+    if (phase === 'history-frozen') {
+      const db = new Database(path.join(f.legacy, 'vela.db'))
+      try {
+        db.prepare(`INSERT INTO llm_calls(id,model_id,model_name,purpose,prompt_tokens,completion_tokens,
+          total_tokens,duration_ms,success,error_message,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
+          .run(31, 'old-model', 'old-model', 'review', 1, 1, 2, 10, 1, '', '2026-09-01 12:00:00')
+      } finally { db.close() }
+    }
+    const sourceFiles = Object.keys(f.sourceHashes)
+    const sourceHashes = () => Object.fromEntries(sourceFiles.map(name => {
+      const file = path.join(f.legacy, name)
+      return [name, fs.existsSync(file) ? hash(file) : null]
+    }))
+    const before = sourceHashes()
+    let reached = false
+    const stopped = await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions,
+      checkpoint: current => { if (current === phase) { reached = true; throw new Error('synthetic interruption') } },
+    })
+    expect(reached).toBe(true)
+    expect(stopped).toMatchObject({ state: 'blocked', code: 'LEGACY_IMPORT_IO_FAILED' })
+    expect(fs.existsSync(f.target)).toBe(false)
+    expect(fs.readdirSync(path.dirname(f.target)).filter(name => name.startsWith('.new.legacy-import-'))).toEqual([])
+    expect(sourceHashes()).toEqual(before)
+    expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))
+      .toMatchObject({ state: 'ready', targetRoot: f.target })
+  },
+)
+
 it('旧候选正文保留为可读冻结历史，新项目不重放', async () => {
   const f = fixture('v110'), db = new Database(path.join(f.legacy, 'vela.db'))
   try {
