@@ -83,7 +83,7 @@ it('栏目往返保留同一正文编辑器、选区与 undo 历史', async () =
   expect(useEditorStore.getState().tabs[0]).toMatchObject({ content: '甲新乙丙', dirty: true })
 
   await act(async () => useLayoutStore.setState({ sidebarView: 'home', activeRailItem: 'home' }))
-  expect(container.textContent).toContain('新建项目')
+  expect(container.textContent).toContain('新建作品')
   const retainedWorkspace = editorNode.closest<HTMLElement>('.skin-workspace-page')!
   expect(retainedWorkspace.hidden).toBe(true)
   expect(getComputedStyle(retainedWorkspace).display).toBe('none')
