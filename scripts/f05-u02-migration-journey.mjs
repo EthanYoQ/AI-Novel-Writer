@@ -338,7 +338,7 @@ async function currentMain() {
   const productInputs = ['src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5']
   assert.equal(git('diff', '--name-only', `${testedSha}..HEAD`, '--', ...productInputs), '', 'product inputs changed since fixed package')
   const dirtyProductPaths = git('status', '--porcelain', '--', ...productInputs).split('\n').filter(Boolean)
-  assert(dirtyProductPaths.every(line => /^\?\? src\/components\/(?:characters|dialogs|editor|layout\/v2|pages|pages\/v2|panels)\/__tests__\/__screenshots__\/$/.test(line)),
+  assert(dirtyProductPaths.every(line => /^\?\? src\/(?:components\/(?:characters|dialogs|editor|layout\/v2|pages|pages\/v2|panels|startup)|stores)\/__tests__\/__screenshots__\/$/.test(line)),
     'product inputs dirty beyond test screenshots')
   const prior = JSON.parse(fs.readFileSync(priorReceiptPath, 'utf8'))
   assert.equal(prior.outcome, 'PARTIAL')
