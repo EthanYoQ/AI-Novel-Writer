@@ -80,6 +80,27 @@ it('启动后偏好写入失败保留已挂载编辑器及其未保存正文', a
   expect(editor.value).toBe('作者刚输入的新句子。')
   expect(unmounted).toBe(0)
   expect(host.querySelector('[role="alert"]')).not.toBeNull()
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('当前工作台保持原状')
+  expect(localStorage.getItem(APPEARANCE_STORAGE_KEY)).toBe('外部变化')
+})
+
+it('已挂载的真实 App 在偏好写入失败后仍呈现 V3', async () => {
+  const invoke = vi.fn(async (channel: string) => {
+    if (channel === 'config:get') return {}
+    if (channel === 'project:recent-list') return []
+    if (channel === 'llm:list-models') return []
+    if (channel === 'update:get-state') return { status: 'disabled', currentVersion: '', isReminderDeferred: false }
+    return null
+  })
+  window.aiNovelAPI = { invoke, on: () => () => {}, once: () => {}, send: () => {}, setZoomLevel: () => {}, setZoomFactor: () => {} } as unknown as NonNullable<Window['aiNovelAPI']>
+  await act(async () => root.render(<RendererStartup dependencies={dependencies()} loadWorkspace={() => import('../../../App')} />))
+  await vi.waitFor(() => expect(host.querySelector('[data-shell-presentation="writer"][data-shell-variant="v3"]')).not.toBeNull(), { timeout: 5000 })
+  const shell = host.querySelector('[data-shell-presentation="writer"][data-shell-variant="v3"]')
+  localStorage.setItem(APPEARANCE_STORAGE_KEY, '外部变化')
+  await act(async () => { expect(useAppearanceStore.getState().update({ colorTheme: 'dark' })).toBe(false) })
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('当前工作台保持原状')
+  expect(host.querySelector('[data-shell-presentation="writer"][data-shell-variant="v3"]')).toBe(shell)
+  expect(localStorage.getItem(APPEARANCE_STORAGE_KEY)).toBe('外部变化')
 })
 
 it('外观损坏时响应关闭请求，工作台接管后由业务决定未保存正文是否关闭', async () => {
@@ -90,6 +111,7 @@ it('外观损坏时响应关闭请求，工作台接管后由业务决定未保�
     on: (_channel: string, callback: (value: { requestId: string }) => void) => {
       listeners.add(callback); return () => listeners.delete(callback)
     },
+    setZoomFactor: () => {},
   } as unknown as NonNullable<Window['aiNovelAPI']>
   localStorage.setItem(APPEARANCE_STORAGE_KEY, '{corrupt')
   const dep = dependencies()

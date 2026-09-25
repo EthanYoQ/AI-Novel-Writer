@@ -34,8 +34,10 @@ export function createAppearanceStore(releaseDefault: Shell = RELEASE_DEFAULT_SH
   let inFlight: Promise<boolean> | null = null
   return create<AppearanceBootstrapState>()((set, get) => {
     const block = (error: unknown) => {
-      set({ phase: 'blocked', resolvedShell: 'classic',
-        notice: '外观偏好尚未安全加载或保存，已保留原设置。请重试；当前使用经典界面。',
+      set({ phase: 'blocked',
+        notice: get().profile
+          ? '外观偏好尚未安全保存，已保留原设置。请重试；当前工作台保持原状。'
+          : '外观偏好尚未安全加载，已保留原设置。请重试；工作台尚未加载。',
         failureCode: error instanceof AppearanceProfileError ? error.code : 'APPEARANCE_STORAGE_OR_MAIN_FAILED' })
       return false
     }

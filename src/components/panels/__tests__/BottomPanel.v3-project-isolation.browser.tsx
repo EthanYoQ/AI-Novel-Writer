@@ -52,7 +52,7 @@ it('V3 底部任务区只显示当前项目任务，切回可见且取消只作�
   document.body.append(host)
   root = createRoot(host)
   await act(async () => root?.render(
-    <ShellV2 presentation="writer" variant="v3" theme="paper" titleBar={<span>V3</span>}
+    <ShellV2 theme="paper" titleBar={<span>V3</span>}
       rail={<span>小说</span>} sidebar={<span>作品资料</span>} editor={<span>正文</span>}
       aiPanel={<span>AI 输出</span>} bottom={<BottomPanel />} statusBar={<span>本地写作</span>} />,
   ))

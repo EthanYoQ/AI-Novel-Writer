@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAppearanceStore, type AppearanceBootstrapDependencies } from '../appearance-bootstrap'
 import { createThemeStore } from '../theme-store'
-import { createUiVersionStore } from '../ui-version-store'
 import { APPEARANCE_STORAGE_KEY as KEY, LEGACY_THEME_STORAGE_KEY as THEME, LEGACY_UI_STORAGE_KEY as SHELL } from '../../shared/appearance-profile'
 
 /** Real Chromium localStorage/DOM, deterministic main transport contract fixtures only. */
@@ -27,7 +26,6 @@ describe('appearance bootstrap in real browser storage', () => {
     localStorage.setItem(SHELL, 'v2')
     const store = createAppearanceStore()
     const theme = createThemeStore(store)
-    const shell = createUiVersionStore(store)
     let release!: (value: Awaited<ReturnType<AppearanceBootstrapDependencies['waitForMainReady']>>) => void
     const ready = new Promise<Awaited<ReturnType<AppearanceBootstrapDependencies['waitForMainReady']>>>(resolve => { release = resolve })
     const setItem = vi.spyOn(Storage.prototype, 'setItem')
@@ -41,13 +39,11 @@ describe('appearance bootstrap in real browser storage', () => {
     expect(store.getState().bootstrap(dep)).toBe(pending)
     theme.getState().setTheme('light')
     expect(localStorage.getItem(KEY)).toBeNull()
-    expect(shell.getState().uiVersion).toBe('v1')
     release({ state: 'ready', globalGeneration: 'synthetic-main-generation', skinRevision: 7 })
     expect(await pending).toBe(true)
     expect(setItem.mock.calls.filter(([key]) => key === KEY)).toHaveLength(1)
     expect(ack).toHaveBeenCalledOnce()
     expect(store.getState().phase).toBe('migrated')
-    expect(shell.getState().uiVersion).toBe('v2')
     expect(theme.getState()).toMatchObject({ theme: 'dark', zoom: 1.25, writingFont: 'lxgw-wenkai' })
     expect(document.documentElement.classList.contains('dark')).toBe(true)
     expect(document.documentElement.style.getPropertyValue('--font-writing')).toContain('LXGW WenKai')
@@ -79,15 +75,12 @@ describe('appearance bootstrap in real browser storage', () => {
     localStorage.setItem(SHELL, 'v1')
     const store = createAppearanceStore()
     const theme = createThemeStore(store)
-    const shell = createUiVersionStore(store)
     await store.getState().bootstrap(dependencies())
     expect(store.getState().resolvedShell).toBe('writer')
-    expect(shell.getState().uiVersion).toBe('v2')
     theme.getState().setTheme('galaxy')
     theme.getState().setWritingFont('noto-serif-sc')
     theme.getState().setUiFont('inter')
     theme.getState().zoomIn()
-    shell.getState().setUiVersion('v2')
     expect(JSON.parse(localStorage.getItem(KEY)!)).toMatchObject({ colorTheme: 'galaxy', writingFont: 'noto-serif-sc', uiFont: 'inter', zoom: 1.3, shellPreference: 'writer' })
     expect(localStorage.getItem(THEME)).toBe(legacy)
     expect(localStorage.getItem(SHELL)).toBe('v1')
@@ -174,10 +167,13 @@ describe('appearance bootstrap in real browser storage', () => {
     const store = createAppearanceStore()
     await store.getState().bootstrap(dependencies())
     const original = localStorage.getItem(KEY)
+    const profile = store.getState().profile
+    const snapshot = store.getState().snapshot
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('fixture quota', 'QuotaExceededError') })
     expect(store.getState().update({ colorTheme: 'dark' })).toBe(false)
-    expect(store.getState().profile?.colorTheme).toBe('paper')
-    expect(store.getState().phase).toBe('blocked')
+    expect(store.getState()).toMatchObject({ phase: 'blocked', resolvedShell: 'writer', profile, snapshot })
+    expect(store.getState().notice).toContain('当前工作台保持原状')
+    expect(store.getState().notice).not.toContain('经典界面')
     expect(localStorage.getItem(KEY)).toBe(original)
     expect(store.getState().update({ shellPreference: 'writer' })).toBe(false)
   })

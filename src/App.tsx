@@ -1,6 +1,5 @@
 import { type ReactNode, useEffect } from 'react'
 import { type Theme, useThemeStore } from './stores/theme-store'
-import { useAppearanceStore } from './stores/appearance-bootstrap'
 import { useLayoutStore } from './stores/layout-store'
 import { useLLMStore } from './stores/llm-store'
 import { useProjectStore } from './stores/project-store'
@@ -88,13 +87,12 @@ export function AppSkinRoot({
 }
 
 /**
- * Vela 主应用组件
+ * 主应用组件
  * 使用 react-resizable-panels 实现可拖拽调整大小的四区布局
  */
 export default function App() {
   const initTheme = useThemeStore((s) => s.initTheme)
   const resolvedTheme = useThemeStore((s) => s.resolvedTheme)
-  const resolvedShell = useAppearanceStore((s) => s.resolvedShell)
   const initLocale = useLocaleStore((s) => s.init)
   const text = useLocaleStore((s) => s.text)
   const sidebarOpen = useLayoutStore(s => s.sidebarOpen)
@@ -131,10 +129,6 @@ export default function App() {
     loadRecentProjects()
     // 初始化 MCP Store
     useMCPStore.getState().init().catch(e => console.warn('[MCP] 初始化失败:', e))
-    if (ipc.isElectron) {
-      const savedZoom = localStorage.getItem('vela-zoom-level')
-      if (savedZoom) ipc.setZoomLevel(parseFloat(savedZoom))
-    }
     // 初始化 ProjectService — 注册全局事件监听（生命周期与 App 一致）
     import('./services/project-service').then(({ initProjectService }) => {
       initProjectService()
@@ -251,12 +245,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
-  useEffect(() => {
-    if (resolvedShell !== 'writer' && useLayoutStore.getState().immersive) {
-      useLayoutStore.getState().toggleImmersion()
-    }
-  }, [resolvedShell])
-
   return (
     <AppSkinRoot theme={resolvedTheme} skinId={skinState.activeSkin}>
       <SkinBackgroundLayer
@@ -266,8 +254,6 @@ export default function App() {
       />
       <UpdateNotifier />
       <ShellV2
-        presentation={resolvedShell}
-        variant={resolvedShell === 'writer' ? 'v3' : undefined}
         home={!currentProject || sidebarView === 'home'}
         theme={resolvedTheme}
         titleBar={<TitleBar />}

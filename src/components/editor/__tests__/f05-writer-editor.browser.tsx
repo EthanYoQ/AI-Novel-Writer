@@ -36,7 +36,7 @@ async function renderChapter(content: string) {
     activeTabId: 'chapter-1',
   })
   await act(async () => root.render(
-    <ShellV2 presentation="writer" theme="paper"
+    <ShellV2 theme="paper"
       titleBar={<span>雨夜来信</span>} rail={<span>导航</span>}
       sidebar={<span>作品资料</span>} editor={<EditorArea onNewProject={vi.fn()} />}
       aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>状态</span>} />,

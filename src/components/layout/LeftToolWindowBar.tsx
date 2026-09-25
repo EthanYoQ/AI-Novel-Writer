@@ -15,7 +15,6 @@ import {
 import { useLayoutStore, type SidebarView, type BottomTab } from '../../stores/layout-store'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { useProjectStore } from '../../stores/project-store'
-import { useAppearanceStore } from '../../stores/appearance-bootstrap'
 import { openBuiltinEditor } from '../panels/sidebar/sidebar-file-openers'
 import { useLocaleStore } from '../../stores/locale-store'
 
@@ -76,7 +75,6 @@ export default function LeftToolWindowBar() {
   const activeRailItem = useLayoutStore(s => s.activeRailItem)
   const sidebarView = useLayoutStore(s => s.sidebarView)
   const currentProject = useProjectStore(s => s.currentProject)
-  const resolvedShell = useAppearanceStore(s => s.resolvedShell)
   const setSidebarView = useLayoutStore(s => s.setSidebarView)
   const setBottomTab = useLayoutStore(s => s.setBottomTab)
   const openSettings = useLayoutStore(s => s.openSettings)
@@ -84,7 +82,7 @@ export default function LeftToolWindowBar() {
   const text = useLocaleStore(s => s.text)
 
   /** Home 按钮是否激活 */
-  const homeActive = activeRailItem === 'home' || (resolvedShell === 'writer' && !currentProject && sidebarView === 'project')
+  const homeActive = activeRailItem === 'home' || (!currentProject && sidebarView === 'project')
   const plotTreeActive = activeRailItem === 'plot-tree'
 
   return (

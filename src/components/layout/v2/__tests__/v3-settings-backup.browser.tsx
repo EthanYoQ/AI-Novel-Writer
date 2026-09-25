@@ -67,7 +67,7 @@ it('V3 rail and masthead open the sibling settings sheet with the same paper and
   const root = createRoot(host)
   try {
     await act(async () => root.render(<>
-      <ShellV2 presentation="writer" variant="v3" theme="light" titleBar={<TitleBar />}
+      <ShellV2 theme="light" titleBar={<TitleBar />}
         rail={<LeftToolWindowBar />} sidebar={<span>目录</span>} editor={<span>正文</span>}
         aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>本地写作</span>} />
       <Settings />
@@ -94,7 +94,7 @@ it('V3 rail and masthead open the sibling settings sheet with the same paper and
 
     host.dataset.theme = 'dark'
     await act(async () => root.render(<>
-      <ShellV2 presentation="writer" variant="v3" theme="dark" titleBar={<TitleBar />}
+      <ShellV2 theme="dark" titleBar={<TitleBar />}
         rail={<LeftToolWindowBar />} sidebar={<span>目录</span>} editor={<span>正文</span>}
         aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>本地写作</span>} />
       <Settings />
@@ -103,14 +103,6 @@ it('V3 rail and masthead open the sibling settings sheet with the same paper and
     expect(getComputedStyle(darkDialog).getPropertyValue('--v3-paper').trim()).toBe('#171b25')
     expect(getComputedStyle(darkDialog).backgroundColor).toBe('rgb(23, 27, 37)')
 
-    await act(async () => root.render(<>
-      <ShellV2 presentation="classic" variant="v3" theme="dark" titleBar={<TitleBar />}
-        rail={<LeftToolWindowBar />} sidebar={<span>目录</span>} editor={<span>正文</span>}
-        aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>本地写作</span>} />
-      <Settings />
-    </>))
-    const classicDialog = host.querySelector<HTMLElement>('.skin-solid-surface > div')!
-    expect(getComputedStyle(classicDialog).getPropertyValue('--v3-paper').trim()).toBe('')
   } finally {
     await act(async () => root.unmount())
     host.remove()

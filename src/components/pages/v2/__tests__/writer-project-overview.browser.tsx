@@ -83,13 +83,12 @@ afterEach(async () => {
   else Reflect.deleteProperty(window, 'aiNovelAPI')
 })
 
-it('production routes Writer to V2 while Classic keeps the existing welcome', async () => {
+it('production keeps the V3 welcome when a stale Classic shell value appears', async () => {
   await render(<EditorArea onNewProject={vi.fn()} />)
   expect(container.textContent).toContain('写作书房')
 
   await act(async () => useAppearanceStore.setState({ resolvedShell: 'classic' }))
-  expect(container.textContent).toContain('欢迎使用')
-  expect(container.textContent).not.toContain('写作书房')
+  expect(container.textContent).toContain('写作书房')
 })
 
 it('routes the V3 legacy import through a new copy and opens only the ready target', async () => {

@@ -58,7 +58,7 @@ function card(index: number): CharacterCard {
 async function render(characters: CharacterCard[]) {
   useCharacterStore.setState({ characters, dataProjectKey: path, loadingProjectKey: null, lastError: null, identityBusy: false })
   await act(async () => root.render(
-    <ShellV2 variant="v3" theme="paper" bottomOpen={false} titleBar={<span>图谱验证</span>} rail={<span>书脊</span>}
+    <ShellV2 theme="paper" bottomOpen={false} titleBar={<span>图谱验证</span>} rail={<span>书脊</span>}
       sidebar={<CharactersView />} editor={<RelationshipGraph characters={characters} onOpenCharacter={openCharacter} />}
       aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>本地写作</span>} />,
   ))
@@ -171,7 +171,7 @@ it('同会话头像保存与移除后，V3 侧栏批量头像立即重读对应�
   })
   useCharacterStore.setState({ characters: [card(0)], dataProjectKey: path, loadingProjectKey: null, lastError: null })
   await act(async () => root.render(
-    <ShellV2 variant="v3" theme="paper" bottomOpen={false} titleBar={<span>图谱验证</span>} rail={<span>书脊</span>}
+    <ShellV2 theme="paper" bottomOpen={false} titleBar={<span>图谱验证</span>} rail={<span>书脊</span>}
       sidebar={<CharactersView />} editor={<AvatarActionProbe />}
       aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>本地写作</span>} />,
   ))
@@ -204,7 +204,7 @@ it('U11.A08: V3 Writer 图谱打开同名角色对应的稳定 ID 档案', async
   })
 
   await act(async () => root.render(
-    <ShellV2 variant="v3" theme="paper" bottomOpen={false} titleBar={<span>图谱验证</span>} rail={<span>书脊</span>}
+    <ShellV2 theme="paper" bottomOpen={false} titleBar={<span>图谱验证</span>} rail={<span>书脊</span>}
       sidebar={<CharactersView />} editor={<CharacterEditor projectKey={path} />}
       aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>本地写作</span>} />,
   ))

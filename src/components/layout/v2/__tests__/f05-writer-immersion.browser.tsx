@@ -33,7 +33,7 @@ let root: Root
 
 function WriterFixture() {
   const layout = useLayoutStore()
-  return <ShellV2 presentation="writer" theme="paper" titleBar={<TitleBar />}
+  return <ShellV2 theme="paper" titleBar={<TitleBar />}
     rail={<LeftToolWindowBar />} rightRail={<RightToolWindowBar />}
     sidebar={<p>作品资料</p>} editor={<EditorArea onNewProject={vi.fn()} />}
     aiPanel={<AIPanel />}

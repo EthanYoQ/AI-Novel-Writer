@@ -60,8 +60,6 @@ async function renderWriter(editor: ReactNode = <p>正文</p>) {
   await act(async () => {
     root?.render(
       <ShellV2
-        presentation="writer"
-        variant="v3"
         theme="paper"
         titleBar={<span>Recovery project</span>}
         rail={<span>小说</span>}

@@ -32,7 +32,7 @@ function WriterFixture({ editor = <p>写作区</p> }: { editor?: React.ReactNode
   const settingsOpen = useLayoutStore(state => state.settingsOpen)
   const closeSettings = useLayoutStore(state => state.closeSettings)
   return <>
-    <ShellV2 presentation="writer" theme="paper" titleBar={<p>雨夜来信</p>}
+    <ShellV2 theme="paper" titleBar={<p>雨夜来信</p>}
       rail={<LeftToolWindowBar />} sidebar={<p>作品资料</p>} editor={editor}
       aiPanel={<textarea aria-label="助手输入" defaultValue="未发送的问题" />}
       bottom={<p>任务与日志</p>} statusBar={<StatusBar />} />

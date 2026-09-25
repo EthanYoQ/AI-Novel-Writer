@@ -17,7 +17,6 @@ import VersionHistory from '../editor/VersionHistory'
 import ReviewReport from '../editor/ReviewReport'
 import NarrativeThreadEditor from '../editor/NarrativeThreadEditor'
 import ThreeWayMerge from '../editor/ThreeWayMerge'  // 保留引用以防其他入口使用
-import WelcomePage from '../pages/WelcomePage'
 import { WriterWelcomePage } from '../pages/v2/use-project-overview'
 import KnowledgeOverview from '../pages/KnowledgeOverview'
 import { useProjectStore } from '../../stores/project-store'
@@ -25,7 +24,6 @@ import { registerEditorExitSaveHandler, useEditorStore, type EditorTab } from '.
 import { discardAndCloseEditorTab } from '../../stores/editor-discard'
 import { useLayoutStore } from '../../stores/layout-store'
 import { useLocaleStore } from '../../stores/locale-store'
-import { useAppearanceStore } from '../../stores/appearance-bootstrap'
 
 
 import { ipc } from '../../services/ipc-client'
@@ -180,7 +178,6 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
   const closeTab = useEditorStore(s => s.closeTab)
   const setActiveTab = useEditorStore(s => s.setActiveTab)
   const sidebarView = useLayoutStore((s) => s.sidebarView)
-  const resolvedShell = useAppearanceStore((s) => s.resolvedShell)
 
 
 
@@ -204,13 +201,13 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
   const activeTab = tabs.find((t) => t.id === activeTabId)
   const activeTabType = activeTab?.type
   useEffect(() => {
-    if (resolvedShell !== 'writer' || !activeTabType || useLayoutStore.getState().sidebarView !== 'project') return
+    if (!activeTabType || useLayoutStore.getState().sidebarView !== 'project') return
     const activeRailItem = activeTabType === 'chapter-card' ? 'blueprint'
       : activeTabType === 'world-building' ? 'world'
       : activeTabType === 'narrative-thread' ? 'plot-tree'
       : activeTabType === 'character' ? 'characters' : 'project'
     useLayoutStore.setState({ activeRailItem })
-  }, [activeTabId, activeTabType, resolvedShell])
+  }, [activeTabId, activeTabType])
   useEffect(() => {
     if (tabs.length > 0 && !activeTab) {
       setActiveTab(tabs[0].id)
@@ -447,24 +444,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
   // 辅助栏目只挂载当前页面；正文工作区在其后保持挂载，避免丢失编辑器本地状态。
   let auxiliaryPage: ReactNode = null
   if (sidebarView === 'home') {
-    auxiliaryPage = resolvedShell === 'writer' ? (
-      <WriterWelcomePage onNewProject={() => useLayoutStore.getState().openNewProject()} />
-    ) : (
-      <WelcomePage
-        onNewProject={() => {
-          useLayoutStore.getState().openNewProject()
-        }}
-        onOpenProject={async () => {
-          const folder = await ipc.invoke('dialog:select-folder')
-          if (folder) {
-            useProjectStore.getState().openProject(folder)
-          }
-        }}
-        onImportNovel={() => {
-          useLayoutStore.getState().openImportNovel()
-        }}
-      />
-    )
+    auxiliaryPage = <WriterWelcomePage onNewProject={() => useLayoutStore.getState().openNewProject()} />
   } else if (sidebarView === 'characters') {
     auxiliaryPage = (
       <div
@@ -480,22 +460,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
 
   // 未打开项目时显示欢迎页
   if (!currentProject) {
-    return auxiliaryPage ?? (
-      resolvedShell === 'writer'
-        ? <WriterWelcomePage onNewProject={onNewProject} />
-        : <WelcomePage
-          onNewProject={onNewProject}
-          onOpenProject={async () => {
-            const folder = await ipc.invoke('dialog:select-folder')
-            if (folder) {
-              useProjectStore.getState().openProject(folder)
-            }
-          }}
-          onImportNovel={() => {
-            useLayoutStore.getState().openImportNovel()
-          }}
-        />
-    )
+    return auxiliaryPage ?? <WriterWelcomePage onNewProject={onNewProject} />
   }
 
   // 有项目但没有打开的 Tab

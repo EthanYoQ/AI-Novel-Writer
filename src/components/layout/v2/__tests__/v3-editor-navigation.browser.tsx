@@ -35,7 +35,7 @@ afterEach(() => {
 it('V3 real editor keeps preview, dirty/undo and save through shelf navigation', async () => {
   function Fixture() {
     const home = useLayoutStore(state => state.sidebarView === 'home')
-    return <ShellV2 presentation="writer" variant="v3" theme="light" home={home}
+    return <ShellV2 theme="light" home={home}
       titleBar={<span>雨夜来信</span>} rail={<LeftToolWindowBar />}
       sidebar={<span>项目结构</span>} editor={<EditorArea onNewProject={vi.fn()} />}
       aiPanel={<span>写作助手</span>} bottom={<span>任务</span>} statusBar={<span>本地写作</span>} />

@@ -32,7 +32,7 @@ let root: Root
 
 async function render() {
   await act(async () => root.render(
-    <ShellV2 presentation="writer" theme="paper" titleBar={<span>雨夜来信</span>}
+    <ShellV2 theme="paper" titleBar={<span>雨夜来信</span>}
       rail={<span>小说</span>} sidebar={<span>作品资料</span>} editor={<span>正文</span>}
       aiPanel={<AIOutputPanel />} bottom={<span>任务</span>} statusBar={<span>本地写作</span>} />,
   ))

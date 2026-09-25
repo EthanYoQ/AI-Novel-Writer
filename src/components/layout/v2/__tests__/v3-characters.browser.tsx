@@ -76,7 +76,7 @@ it('V3 role rail opens a stable-ID profile, avatar and graph without changing th
   document.body.append(host)
   const root = createRoot(host)
   try {
-    await act(async () => root.render(<ShellV2 presentation="writer" variant="v3" theme="light"
+    await act(async () => root.render(<ShellV2 theme="light"
       titleBar={<span>角色旅程</span>} rail={<LeftToolWindowBar />} sidebar={<Sidebar />}
       editor={<EditorArea onNewProject={vi.fn()} />} aiPanel={<span>助手</span>}
       bottom={<span>任务</span>} statusBar={<span>本地写作</span>} />))

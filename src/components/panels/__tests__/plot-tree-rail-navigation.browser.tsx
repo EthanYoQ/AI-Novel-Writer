@@ -115,7 +115,6 @@ beforeEach(async () => {
   root = createRoot(container)
   await act(async () => root?.render(
     <ShellV2
-      presentation="writer"
       theme="paper"
       titleBar={<span>剧情树导航</span>}
       rail={<LeftToolWindowBar />}

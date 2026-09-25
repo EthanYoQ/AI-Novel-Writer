@@ -55,7 +55,7 @@ it('V3 可在当前生成中选择旧历史正文及终态，再返回取消入�
   document.body.append(host)
   root = createRoot(host)
   await act(async () => root?.render(
-    <ShellV2 presentation="writer" variant="v3" theme="paper" titleBar={<span>V3</span>}
+    <ShellV2 theme="paper" titleBar={<span>V3</span>}
       rail={<span>小说</span>} sidebar={<span>作品资料</span>} editor={<span>正文</span>}
       aiPanel={<AIOutputPanel />} bottom={<span>任务</span>} statusBar={<span>本地写作</span>} />,
   ))
@@ -82,7 +82,7 @@ it('V3 切换到 B 项目后不展示 A 项目历史或已选正文', async () =
   document.body.append(host)
   root = createRoot(host)
   await act(async () => root?.render(
-    <ShellV2 presentation="writer" variant="v3" theme="paper" titleBar={<span>V3</span>}
+    <ShellV2 theme="paper" titleBar={<span>V3</span>}
       rail={<span>小说</span>} sidebar={<span>作品资料</span>} editor={<span>正文</span>}
       aiPanel={<AIOutputPanel />} bottom={<span>任务</span>} statusBar={<span>本地写作</span>} />,
   ))
@@ -128,7 +128,7 @@ it('V3 1440×900 的持久正文候选文字按钮不竖排或溢出', async () 
   document.body.append(host)
   root = createRoot(host)
   await act(async () => root?.render(
-    <ShellV2 presentation="writer" variant="v3" theme="paper" titleBar={<span>V3</span>}
+    <ShellV2 theme="paper" titleBar={<span>V3</span>}
       rail={<span>小说</span>} sidebar={<span>作品资料</span>} editor={<span>正文</span>}
       aiPanel={<AIOutputPanel />} bottom={<span>任务</span>} statusBar={<span>本地写作</span>} />,
   ))

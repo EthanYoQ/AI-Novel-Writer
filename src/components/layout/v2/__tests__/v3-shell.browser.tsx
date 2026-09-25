@@ -3,7 +3,6 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { page, userEvent } from 'vitest/browser'
 import ShellV2 from '../ShellV2'
-import TitleBarV2 from '../TitleBarV2'
 import TitleBar from '../../TitleBar'
 import LeftToolWindowBar from '../../LeftToolWindowBar'
 import WelcomePageV2 from '../../../pages/v2/WelcomePageV2'
@@ -82,7 +81,7 @@ it('V3 narrow titlebar keeps export, new, and open actions hittable', async () =
   } })
   useAppearanceStore.setState({ resolvedShell: 'writer' })
   useProjectStore.setState({ currentProject: { id: 'narrow', name: 'U11', path: 'C:/narrow', sessionLease: 'narrow', novelConfig: {} } as never })
-  await act(async () => root.render(<ShellV2 presentation="writer" variant="v3" theme="paper"
+  await act(async () => root.render(<ShellV2 theme="paper"
     titleBar={<TitleBar />} rail={<span>书脊</span>} sidebar={<span>目录</span>}
     editor={<span>正文</span>} aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>页脚</span>} />))
 
@@ -137,8 +136,6 @@ it('V3 explicit variant keeps writer shell semantics and shared editor owner', a
 
   await act(async () => root.render(
     <ShellV2
-      presentation="writer"
-      variant="v3"
       theme="paper"
       titleBar={<span>书名</span>}
       rail={<span>书架</span>}
@@ -165,8 +162,6 @@ it('V3 explicit variant keeps writer shell semantics and shared editor owner', a
   editorNode!.value = '作者刚输入的正文'
   await act(async () => root.render(
     <ShellV2
-      presentation="writer"
-      variant="v3"
       theme="paper"
       titleBar={<span>书名</span>}
       rail={<span>书架</span>}
@@ -183,35 +178,12 @@ it('V3 explicit variant keeps writer shell semantics and shared editor owner', a
   expect(editorNode!.value).toBe('作者刚输入的正文')
 })
 
-it('Classic presentation does not opt into the V3 variant', async () => {
-  await act(async () => root.render(
-    <ShellV2
-      presentation="classic"
-      variant="v3"
-      theme="paper"
-      titleBar={<span>书名</span>}
-      rail={<span>书架</span>}
-      sidebar={<span>目录</span>}
-      editor={<span>正文</span>}
-      aiPanel={<span>助手</span>}
-      bottom={<span>任务</span>}
-      statusBar={<span>状态</span>}
-    />,
-  ))
-
-  const shell = host.querySelector<HTMLElement>('[data-shell-presentation="classic"]')
-  expect(shell?.dataset.shellVariant).toBeUndefined()
-  expect(shell?.classList.contains('v3-magazine-shell')).toBe(false)
-})
-
 it('V3 dark and galaxy themes keep the welcome spread and left rail readable', async () => {
   await page.viewport(1440, 900)
   host.style.height = '900px'
   for (const theme of ['dark', 'galaxy'] as const) {
     await act(async () => root.render(
       <ShellV2
-        presentation="writer"
-        variant="v3"
         theme={theme}
         titleBar={<span>刊头</span>}
         rail={<div className="writer-left-rail"><button className="left-nav-button" type="button">章节</button></div>}
@@ -275,10 +247,9 @@ it('V3 magazine masthead, real App rail and shelf retain navigation callbacks', 
   document.body.style.margin = '0'
   const preview = vi.fn()
   const open = vi.fn()
-  const home = vi.fn()
   useLayoutStore.getState().setSidebarView('home')
-  await act(async () => root.render(<ShellV2 presentation="writer" variant="v3" theme="paper"
-    titleBar={<TitleBarV2 projectName="雨夜来信" documentName="第一章" status="已保存" actions={[]} onHome={home} />}
+  await act(async () => root.render(<ShellV2 theme="paper"
+    titleBar={<span>雨夜来信 · 第一章</span>}
     rail={<LeftToolWindowBar />}
     sidebar={<div>作品资料</div>}
     editor={<WelcomePageV2 overview={{ state: 'ready', name: '雨夜来信', totalWords: 1200, finalizedChapters: 1, characters: 2 }} recentProjects={[{ id: 'novel-1', name: '雨夜来信', onPreview: preview, onOpen: open }]} onNewProject={vi.fn()} onOpenProject={vi.fn()} onImportNovel={vi.fn()} />}
@@ -302,9 +273,15 @@ it('V3 magazine masthead, real App rail and shelf retain navigation callbacks', 
 })
 
 it('V3 active project section marks the editor canvas without replacing the editor', async () => {
+  narrowStoreState = {
+    appearance: useAppearanceStore.getState(),
+    project: useProjectStore.getState(),
+    layout: useLayoutStore.getState(),
+  }
+  useProjectStore.setState({ currentProject: { id: 'active', name: '雨夜来信', path: 'C:/active', sessionLease: 'active', novelConfig: {} } as never })
   useLayoutStore.getState().setSidebarView('project')
   const editor = <textarea aria-label="合成正文" defaultValue="雨停以后，她在门边发现了一封没有署名的信。" />
-  await act(async () => root.render(<ShellV2 presentation="writer" variant="v3" theme="light"
+  await act(async () => root.render(<ShellV2 theme="light"
     titleBar={<span>刊头</span>} rail={<LeftToolWindowBar />} sidebar={<span>目录</span>}
     editor={editor} aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>页脚</span>} />))
   const paper = host.querySelector<HTMLElement>('.writer-editor')!
@@ -329,8 +306,8 @@ it('renders the V3 empty shelf at the current 1440x900 browser viewport', async 
   useLayoutStore.setState({ activeRailItem: 'project', sidebarView: 'project' })
   const priorShell = useAppearanceStore.getState().resolvedShell
   useAppearanceStore.setState({ resolvedShell: 'writer' })
-  await act(async () => root.render(<ShellV2 presentation="writer" variant="v3" theme="light" home
-    titleBar={<TitleBarV2 status="已保存" actions={[]} onHome={() => {}} />}
+  await act(async () => root.render(<ShellV2 theme="light" home
+    titleBar={<span>已保存</span>}
     rail={<LeftToolWindowBar />} sidebar={<span>目录</span>}
     editor={<WelcomePageV2 overview={{ state: 'empty' }} recentProjects={[]} onNewProject={() => {}} onOpenProject={() => {}} onImportNovel={() => {}} />}
     aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>本地写作</span>} />))
@@ -339,7 +316,7 @@ it('renders the V3 empty shelf at the current 1440x900 browser viewport', async 
   expect(host.querySelector<HTMLButtonElement>('.writer-left-rail button[title="项目"]')?.classList.contains('is-active')).toBe(false)
   await page.screenshot({ path: '../../../../../.runtime/.cache/novel-quality-modernization/v3-current-shelf-empty-browser-1440x900-css.png' })
   await act(async () => useAppearanceStore.setState({ resolvedShell: 'classic' }))
-  expect(host.querySelector<HTMLButtonElement>('.writer-left-rail button[title="欢迎页"]')?.classList.contains('is-active')).toBe(false)
-  expect(host.querySelector<HTMLButtonElement>('.writer-left-rail button[title="项目"]')?.classList.contains('is-active')).toBe(true)
+  expect(host.querySelector<HTMLButtonElement>('.writer-left-rail button[title="欢迎页"]')?.classList.contains('is-active')).toBe(true)
+  expect(host.querySelector<HTMLButtonElement>('.writer-left-rail button[title="项目"]')?.classList.contains('is-active')).toBe(false)
   await act(async () => useAppearanceStore.setState({ resolvedShell: priorShell }))
 })

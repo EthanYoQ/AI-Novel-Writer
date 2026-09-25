@@ -29,7 +29,6 @@ import { saveDirtyEditorChangesForExit } from '../../stores/editor-store'
 import { countUnsavedEditorItems } from '../../stores/editor-unsaved'
 import { discardAllEditorChanges } from '../../stores/editor-discard'
 import { useLayoutStore } from '../../stores/layout-store'
-import { useAppearanceStore } from '../../stores/appearance-bootstrap'
 import { APP_BRAND } from '../../shared/brand'
 import { ipc } from '../../services/ipc-client'
 import { useLocaleStore } from '../../stores/locale-store'
@@ -69,7 +68,6 @@ export default function TitleBar() {
   const openImportNovel = useLayoutStore(s => s.openImportNovel)
   const immersive = useLayoutStore(s => s.immersive)
   const toggleImmersion = useLayoutStore(s => s.toggleImmersion)
-  const writer = useAppearanceStore(s => s.resolvedShell === 'writer')
   const { locale, toggleLocale, t, text } = useLocaleStore()
   const [exitRequest, setExitRequest] = useState<{ requestId: string; workflowBlocked?: boolean } | null>(null)
   const [exitBusy, setExitBusy] = useState(false)
@@ -293,7 +291,7 @@ export default function TitleBar() {
       </div>
 
       <div className="flex items-center gap-1 flex-shrink-0">
-        {writer && <button
+        <button
           className="writer-command-button"
           title={immersive ? text('退出沉浸写作', 'Exit focus mode') : text('进入沉浸写作', 'Enter focus mode')}
           aria-label={immersive ? text('退出沉浸写作', 'Exit focus mode') : text('进入沉浸写作', 'Enter focus mode')}
@@ -302,7 +300,7 @@ export default function TitleBar() {
         >
           {immersive ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
           {immersive ? text('退出沉浸', 'Exit focus') : text('沉浸写作', 'Focus')}
-        </button>}
+        </button>
         <button
           onClick={zoomOut}
           title={t('zoom.out')}

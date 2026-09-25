@@ -3,8 +3,7 @@
  *
  * The existing writer nodes remain the business owner for navigation, editor
  * state, dirty tracking and save/reopen. This file is deliberately scoped to
- * ShellV2's explicit marker so Classic and the pre-V3 writer presentation keep
- * their existing contract.
+ * ShellV2's V3 marker.
  */
 .app-skin-root:has(> .v3-magazine-shell),
 .v3-magazine-shell {
