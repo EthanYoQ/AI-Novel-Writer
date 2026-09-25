@@ -247,7 +247,8 @@ export function assertScenarioMatchesProtocol(selection, scenario) {
     || !Array.isArray(selection.operations) || selection.operations.length !== scenario.operations.length
     || selection.operations.some((operation, index) => operation.id !== scenario.operations[index].id)
     || (selection.scenarioRevision ?? null) !== (scenario.scenarioRevision ?? null)
-    || !isDeepStrictEqual(selection.selectionDifference ?? null, scenario.selectionDifference ?? null)) fail('SCENARIO_PROTOCOL_MISMATCH')
+    || !isDeepStrictEqual(selection.selectionDifference ?? null, scenario.selectionDifference ?? null)
+    || !isDeepStrictEqual(selection.attemptPolicy ?? null, scenario.attemptPolicy ?? null)) fail('SCENARIO_PROTOCOL_MISMATCH')
 }
 export function validatePair(targets, observations) {
   const [a, b] = [targets.baseline, targets.candidate]
@@ -442,7 +443,8 @@ export function main(argv) {
     const developmentLedger = developmentLedgerPath(prepared.root, phase)
     if (fs.existsSync(developmentLedger)) fail('DEVELOPMENT_LEDGER_COLLISION')
     const result = withLedgerReconciliation(developmentLedger, 'synthetic', () => runProductionPhasePair(prepared.targets, { phase, development: true, mode: 'synthetic', milestone: selection.milestone,
-      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, ...currentProtocolBinding(),
+      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy,
+      ...currentProtocolBinding(),
       semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(prepared.root, 'baseline-templates.json'), ledgerPath: developmentLedger }))
     fs.writeFileSync(path.join(prepared.root, `development-receipt-${phase}.json`), JSON.stringify(result, null, 2))
     return { ...result, evidenceRoot: prepared.root, targetsPath: prepared.path }
@@ -470,7 +472,8 @@ export function main(argv) {
     // 真实或合成的成对执行失败时先对账：子进程被杀不会执行桥内结算，
     // 只有调用方还活着，这是保证每次发送都有终态的最后一道。
     const result = withLedgerReconciliation(ledgerPath, mode, () => runProductionPhasePair(targets, { phase, mode, milestone: selection.milestone,
-      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, ...currentProtocolBinding(), semanticPath: path.join(ROOT, protocol.fixturePath),
+      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy,
+      ...currentProtocolBinding(), semanticPath: path.join(ROOT, protocol.fixturePath),
       templatesPath: path.join(evidenceRoot, 'baseline-templates.json'), ledgerPath }))
     inspectTarget(targets.baseline); inspectTarget(targets.candidate)
     fs.writeFileSync(path.join(evidenceRoot, 'receipt.json'), JSON.stringify(result, null, 2))

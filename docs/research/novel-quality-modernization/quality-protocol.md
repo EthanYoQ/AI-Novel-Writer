@@ -14,7 +14,7 @@ post-UI 样本只在固定案例的触发条件、断言、两臂原始产物及
 
 本 delta 仅取代冻结内核包 `01-PLAN.md`、`03-CONTRACTS-AND-GATES.md` C06、`specs/S07.md` 与 `specs/S14B.md` 的 ±20% 字数约束，并随 Program v3 覆盖合同一起使用。冻结包字节保持不变；所有必需事件、事实、复述与独立文学评审门继续有效。旧版 baseline 仍是冻结参考，其本地字数门及失败证据按原代码的 ±20% 解释，再按本文件的参考臂裁决规则处理；不修改旧版，不把参考失败自动等同于 candidate 失败。candidate 必须通过现行绝对门。
 
-旧协议、原始产物和历史 PASS/FAIL 保留原标准，不按 ±30% 追溯改判，也不因此重启已完成的 S10B/S11。新实验必须提交并重新冻结当前 candidate、协议 hash 和 revision；已有 target 不能继续冒用。当前机器协议认证历史账本的前 222 行，既有账本不改写，新请求继续进入同一账本。此政策调整与确定性测试本身不构成最终模型质量资格。
+旧协议、原始产物和历史 PASS/FAIL 保留原标准，不按 ±30% 追溯改判，也不因此重启已完成的 S10B/S11。新实验必须提交并重新冻结当前 candidate、协议 hash 和 revision；已有 target 不能继续冒用。旧版 222 行认证边界的原始 SHA256 `00e07f37fd55e9c0c7cc304ab81c61a17df3956f0e7402cb6d3ac0c1c6fcf6d4` 保持有效；当前协议将其超集前 231 行（新增一次 post-UI 正式 FAIL 的三组 reserve→dispatch→settle）原字节认证为新边界。既有账本和该次 FAIL 不改写，新请求继续进入同一账本。此政策调整与确定性测试本身不构成最终模型质量资格。
 
 ## 冻结样本与判断
 
@@ -88,6 +88,8 @@ schemaVersion=1 的 S00 manifests 保持历史探针行为，formal 阶段仍返
 新桥位于 `scripts/fixtures/quality-modernization-production.fixture.mjs`。它实例化各目标的默认 `GenerateDirectoryCommand`、`GenerateDraftCommand`，不传 `createRuntime`、completion、repository 或 command dependencies。Electron 的传输外壳由测试桥实现，处理器、项目权限、模型租约、provider、解析、提交均调用各目标实际源码；SQLite 使用真实隔离文件。候选臂走已注册的 generation main owner，基线走其原有 renderer runtime 和注册 LLM controller。两者都在同一个最终 fetch 边界切换 synthetic/real；不存在直接 API 质量实验器。
 
 candidate 每次发送前从实际 fixture 数据库查询唯一 `dispatch-marked` attempt，并核对当前默认 command 持有的 project/epoch/root/run、attemptId 和真正输出上限；零条、多条或不匹配都拒发。收尾再核对原 attempt 的 stop、artifact 与正式 effect。已知 stop 且 usage 不可信时保留产品账本的 unknown liability，不谎称可信用量或失败退款。baseline 不伪造它没有的 main attempt，使用独立物理 ID 并绑定原实现哈希。
+
+`early-budget` 的 `s14b-post-ui-budget-syntax-repair-v1` 只让 post-UI `指定范围生成` 在两臂首发之后，各按现有产品路径增加最多一次 `chapter-blueprint-directory:structured-syntax-repair`。candidate 从唯一 SQLite owner attempt 的 `usage_receipt_json.purpose` 证明主发与修复身份，并保持原 run/root/project/epoch；baseline 从实际 `llm:generate-stream` IPC 的 requestId、purpose 与当前 run/session 证明归属，不伪造 main owner。额外请求仍逐次写入唯一物理账本和桥收据、保存每次可核验输出；缺身份、其他 retry 或第三次请求在发送前拒绝。pair 技术门允许这一次已登记修复，但实际产品失败、缺产物或独立质量门失败仍为 FAIL。全局 `draft-units-tolerance-30-v1` 字数标准与历史 FAIL 均不改判。
 
 两臂的模板输入采用对称映射：从不可变 baseline `2264390d6fb8b052cc14736d544df0cc74516649` 提取 `chapter_blueprint_chunk` 和 `first_chapter_draft` 的完整原模板；两臂作为相同的自定义作者模板读回。语义源那句无占位符的 `template` 完整写入双方 `globalGuidance`，不会用它覆盖生产模板并丢掉作者素材。模板原字节、guidance 字节、实际项目回读哈希保存在私有 receipt；各臂编译后的 system/完整 prompt 哈希另列，允许体现实现差异。角色原始名字与身份约束完整保存在作者素材及主角档案，本门不凭名字凭空创建已批准角色卡。第二、三章作者预置蓝图用于验证本次第1章范围提交没有改写范围外内容。
 

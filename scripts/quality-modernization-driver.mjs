@@ -32,7 +32,8 @@ export function selectOwnerDispatch(db, handle, session, body) {
     || binding.projectId !== session.projectId || binding.epoch !== session.leaseId
     || attempt.attemptId !== row.attempt_id
     || attempt.requestedOutputTokens !== (body.max_tokens ?? body.max_completion_tokens)) throw new Error('OWNER_DISPATCH_IDENTITY_MISMATCH')
-  return { attemptId: row.attempt_id, runId: row.run_id, rootActionId: row.root_action_id, projectId: binding.projectId, epoch: binding.epoch }
+  return { attemptId: row.attempt_id, runId: row.run_id, rootActionId: row.root_action_id,
+    projectId: binding.projectId, epoch: binding.epoch, purpose: JSON.parse(row.usage_receipt_json ?? '{}').purpose }
 }
 
 /**
@@ -191,6 +192,10 @@ export const PHASE_SCENARIOS = Object.freeze({
     sceneId: '场景1',
     chapterNumber: 1,
     milestone: 'early',
+    scenarioRevision: 's14b-post-ui-budget-syntax-repair-v1',
+    attemptPolicy: Object.freeze({ milestone: 'post-ui', arms: Object.freeze(['baseline', 'candidate']),
+      operationId: '指定范围生成', primaryPurpose: 'chapter-blueprint-directory',
+      repairPurpose: 'chapter-blueprint-directory:structured-syntax-repair', maxRepairAttempts: 1 }),
     operations: Object.freeze([
       Object.freeze({ id: '指定范围生成', kind: 'directory' }),
       Object.freeze({ id: '900单位正文', kind: 'draft' }),
@@ -233,17 +238,28 @@ export function productionScenario(phase) {
   return scenario
 }
 
-/** One registered operation may cross the provider boundary at most once. */
-export function createOperationDispatchGate({ onReject } = {}) {
-  const dispatched = new Set()
-  return operationId => {
-    if (!operationId || dispatched.has(operationId)) {
+/** Only the registered syntax repair may add one physical request to an operation. */
+export function createOperationDispatchGate({ onReject, repairPolicy } = {}) {
+  const dispatched = new Map()
+  return (operationId, owner) => {
+    const first = dispatched.get(operationId)
+    const policyApplies = repairPolicy?.operationId === operationId && repairPolicy.maxRepairAttempts === 1
+    const identity = value => value && typeof value.attemptId === 'string' && value.attemptId
+      && typeof value.runId === 'string' && value.runId && typeof value.projectId === 'string' && value.projectId
+      && typeof value.epoch === 'string' && value.epoch
+    const repair = first && policyApplies && identity(first) && identity(owner)
+      && first.purpose === repairPolicy.primaryPurpose && owner.purpose === repairPolicy.repairPurpose
+      && first.attemptId !== owner.attemptId && first.runId === owner.runId
+      && first.rootActionId === owner.rootActionId && first.projectId === owner.projectId && first.epoch === owner.epoch
+      && first.repairUsed !== true
+    if (!operationId || first && !repair || !first && policyApplies && (!identity(owner) || owner.purpose !== repairPolicy.primaryPurpose)) {
       const rejection = Object.freeze({ code: 'UNREGISTERED_ADDITIONAL_MODEL_REQUEST',
         operationId: operationId || null, reason: operationId ? 'duplicate-operation' : 'missing-operation', beforeDispatch: true })
       onReject?.(rejection)
       throw Object.assign(new Error('MODEL_REQUEST_REJECTED'), { code: 'OPERATION_DISPATCH_REJECTED' })
     }
-    dispatched.add(operationId)
+    if (repair) first.repairUsed = true
+    else dispatched.set(operationId, { ...owner })
   }
 }
 
@@ -281,30 +297,74 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
     || !result || result.mode !== mode || result.arm !== arm || result.phase !== phase
     || result.caseId !== scenario.caseId || result.protocolRevision !== protocolRevision || result.protocolHash !== protocolHash)
     return 'PAIR_BINDING_MISMATCH'
-  if (!Array.isArray(result.attempts) || result.attempts.length !== scenario.operations.length)
+  if (!Array.isArray(result.attempts))
+    return 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'
+  const policy = scenario.attemptPolicy
+  const eligible = policy && result.milestone === policy.milestone && policy.arms.includes(arm)
+  const repairMatches = eligible ? result.attempts.filter(attempt => attempt?.binding?.operation === policy.operationId) : []
+  const repairUsed = repairMatches.length === 2
+  if (result.attempts.length !== scenario.operations.length + Number(repairUsed)
+    || new Set(result.attempts.map(attempt => attempt?.attemptId)).size !== result.attempts.length)
     return 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'
   for (const operation of scenario.operations) {
     const matches = result.attempts.filter(attempt => attempt?.binding?.operation === operation.id)
-    if (matches.length !== 1) return 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'
-    const binding = matches[0].binding
-    if (binding.mode !== mode || binding.arm !== arm || binding.phase !== phase || binding.caseId !== scenario.caseId
-      || binding.invocationId !== invocationId
-      || binding.protocolRevision !== protocolRevision || binding.protocolHash !== protocolHash
-      || phase === 'early-review' && (binding.codeSha !== result.codeSha || binding.sourceHash !== result.sourceHash
-        || binding.driverHash !== result.driverHash || binding.parityId !== result.physicalProject?.parityHash))
-      return 'ATTEMPT_BINDING_MISMATCH'
-    if (phase === 'early-review' && arm === 'candidate') {
-      const actual = binding.actual
-      const persisted = result.operations?.find(item => item.operation === operation.id)
-      if (!actual || !persisted?.handle
-        || `${arm}:${actual.attemptId}` !== matches[0].attemptId || actual.runId !== persisted.handle.runId
-        || actual.rootActionId !== persisted.handle.rootActionId
-        || actual.projectId !== result.physicalProject?.projectId || actual.epoch !== result.projectEpoch)
-        return 'ACTUAL_OWNER_ATTEMPT_MISMATCH'
+    if (matches.length !== (repairUsed && operation.id === policy.operationId ? 2 : 1)) return 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'
+    for (const match of matches) {
+      const binding = match.binding
+      if (binding.mode !== mode || binding.arm !== arm || binding.phase !== phase || binding.caseId !== scenario.caseId
+        || binding.invocationId !== invocationId
+        || binding.protocolRevision !== protocolRevision || binding.protocolHash !== protocolHash
+        || phase === 'early-review' && (binding.codeSha !== result.codeSha || binding.sourceHash !== result.sourceHash
+          || binding.driverHash !== result.driverHash || binding.parityId !== result.physicalProject?.parityHash))
+        return 'ATTEMPT_BINDING_MISMATCH'
+      if (phase === 'early-review' && arm === 'candidate') {
+        const actual = binding.actual
+        const persisted = result.operations?.find(item => item.operation === operation.id)
+        if (!actual || !persisted?.handle
+          || `${arm}:${actual.attemptId}` !== match.attemptId || actual.runId !== persisted.handle.runId
+          || actual.rootActionId !== persisted.handle.rootActionId
+          || actual.projectId !== result.physicalProject?.projectId || actual.epoch !== result.projectEpoch)
+          return 'ACTUAL_OWNER_ATTEMPT_MISMATCH'
+      }
     }
   }
-  const expectedPhysical = mode === 'real' ? scenario.operations.length : 0
-  const expectedSynthetic = mode === 'synthetic' ? scenario.operations.length : 0
+  if (eligible) {
+    const identity = attempt => arm === 'candidate' ? attempt.binding.actual : attempt.binding.baselineIpc
+    const primary = identity(repairMatches[0])
+    if (!primary || primary.purpose !== policy.primaryPurpose || !primary.attemptId
+      || repairMatches[0].attemptId !== `${arm}:${primary.attemptId}`
+      || repairMatches[0].binding.milestone !== policy.milestone)
+      return 'STRUCTURED_REPAIR_OWNER_MISMATCH'
+  }
+  if (repairUsed) {
+    const identity = attempt => arm === 'candidate' ? attempt.binding.actual : attempt.binding.baselineIpc
+    const [primary, repair] = repairMatches.map(identity)
+    const persisted = result.operations?.find(item => item.operation === policy.operationId)
+    if (!repair || repair.purpose !== policy.repairPurpose
+      || !primary.attemptId || !repair.attemptId || primary.attemptId === repair.attemptId
+      || primary.runId !== repair.runId || primary.rootActionId !== repair.rootActionId
+      || primary.projectId !== repair.projectId || primary.epoch !== repair.epoch
+      || primary.projectId !== result.physicalProject?.projectId || primary.epoch !== result.projectEpoch
+      || arm === 'candidate' && (!persisted?.handle || primary.runId !== persisted.handle.runId
+        || primary.rootActionId !== persisted.handle.rootActionId)
+      || repairMatches.some(attempt => attempt.attemptId !== `${arm}:${identity(attempt).attemptId}`
+        || attempt.binding.milestone !== policy.milestone
+        || arm === 'baseline' && identity(attempt).operationId !== policy.operationId))
+      return 'STRUCTURED_REPAIR_OWNER_MISMATCH'
+    for (const attempt of repairMatches) {
+      if (!CONTENT_HASH.test(attempt.visibleTextHash ?? '') || typeof attempt.outputPath !== 'string')
+        return 'PHYSICAL_OUTPUT_MISSING'
+      try { if (digest(fs.readFileSync(attempt.outputPath, 'utf8')) !== attempt.visibleTextHash) return 'PHYSICAL_OUTPUT_HASH_MISMATCH' }
+      catch { return 'PHYSICAL_OUTPUT_MISSING' }
+    }
+    if (arm === 'candidate' && (result.ownerTerminal?.length !== result.attempts.length
+      || repairMatches.some(attempt => {
+        const terminal = result.ownerTerminal.find(item => item.attemptId === attempt.binding.actual.attemptId)
+        return !terminal?.artifactId || terminal.textHash !== attempt.visibleTextHash
+      }))) return 'ACTUAL_OWNER_ARTIFACT_MISMATCH'
+  }
+  const expectedPhysical = mode === 'real' ? result.attempts.length : 0
+  const expectedSynthetic = mode === 'synthetic' ? result.attempts.length : 0
   if (result.physicalModelRequests !== expectedPhysical || result.syntheticDispatches !== expectedSynthetic)
     return 'PHYSICAL_CALL_COUNT_MISMATCH'
   return null
@@ -653,7 +713,8 @@ export function copyIsolatedRealModelConfig(original, roots) {
 export function runProductionPhasePair(targets, options) {
   const scenario = productionScenario(options.phase)
   if ((scenario.scenarioRevision ?? null) !== (options.scenarioRevision ?? null)
-    || stableEvidence(scenario.selectionDifference ?? null) !== stableEvidence(options.selectionDifference ?? null))
+    || stableEvidence(scenario.selectionDifference ?? null) !== stableEvidence(options.selectionDifference ?? null)
+    || stableEvidence(scenario.attemptPolicy ?? null) !== stableEvidence(options.attemptPolicy ?? null))
     throw new Error('SCENARIO_PROTOCOL_MISMATCH')
   if (!options.protocolRevision || !/^[a-f0-9]{64}$/.test(options.protocolHash ?? '')
     || ['baseline', 'candidate'].some(arm => targets[arm].protocolRevision !== options.protocolRevision || targets[arm].protocolHash !== options.protocolHash)) throw new Error('PROTOCOL_BINDING_MISMATCH')
@@ -670,6 +731,7 @@ export function runProductionPhasePair(targets, options) {
   const common = { invocationId, mode: options.mode ?? 'synthetic', development: options.development === true,
     protocolRevision: options.protocolRevision, protocolHash: options.protocolHash,
     scenarioRevision: options.scenarioRevision ?? null, selectionDifference: options.selectionDifference ?? null,
+    attemptPolicy: options.attemptPolicy ?? null,
     milestone: options.milestone ?? scenario.milestone,
     phase: options.phase, caseId: scenario.caseId, sceneId: scenario.sceneId, chapterNumber: scenario.chapterNumber,
     operations: scenario.operations, semanticPath: options.semanticPath, templatesPath: options.templatesPath,

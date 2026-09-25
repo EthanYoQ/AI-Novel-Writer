@@ -76,6 +76,10 @@ test('三乘三两臂与原80帽含post-UI备份预留', () => {
   assert.equal(selectPhase(protocol, 'full', 'final').caseIds.length, 9)
   assert.equal(protocol.phases['early-budget'].operations.reduce((n, op) => n + op.minimumCalls, 0), 4)
   assert.equal(protocol.allocation.postUiBudget, 4)
+  assert.equal(protocol.decisionRevision, 'draft-units-tolerance-30-v1')
+  assert.equal(protocol.phases['early-budget'].scenarioRevision, 's14b-post-ui-budget-syntax-repair-v1')
+  assert.deepEqual(protocol.phases['early-budget'].attemptPolicy, PHASE_SCENARIOS['early-budget'].attemptPolicy)
+  assert.doesNotThrow(() => assertScenarioMatchesProtocol(selectPhase(protocol, 'early-budget', 'post-ui'), PHASE_SCENARIOS['early-budget']))
   // 生产桥只接线已登记的场景；每个场景的 caseId 与 operation id 必须逐字等于协议。
   for (const phase of ['early-budget', 'early-context', 'early-review']) {
     assert.equal(PHASE_SCENARIOS[phase].caseId, protocol.phases[phase].caseIds[0])
@@ -140,6 +144,36 @@ test('同一预注册 operation 在第二次 provider dispatch 前 fail closed',
   assert.ok(fixture.includes('invocationId: request.invocationId'), 'request identity must reach receipt and binding')
   assert.ok(driver.includes('const common = { invocationId,'), 'pair invocation must reach every bridge request')
   assert.equal(fixture.includes('receipt.localDispatchGateRejection'), false, 'local side-channel must not alter the formal receipt')
+})
+
+test('post-UI 指定范围只允许真实 owner 的一次结构化语法修复', () => {
+  const policy = { milestone: 'post-ui', arms: ['baseline', 'candidate'], operationId: '指定范围生成',
+    primaryPurpose: 'chapter-blueprint-directory', repairPurpose: 'chapter-blueprint-directory:structured-syntax-repair', maxRepairAttempts: 1 }
+  const rejected = []
+  const gate = createOperationDispatchGate({ repairPolicy: policy, onReject: item => rejected.push(item) })
+  const owner = { attemptId: 'main', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: policy.primaryPurpose }
+  assert.doesNotThrow(() => gate(policy.operationId, owner))
+  assert.doesNotThrow(() => gate(policy.operationId, { ...owner, attemptId: 'repair', purpose: policy.repairPurpose }))
+  for (const actual of [undefined, { ...owner, attemptId: 'third', purpose: policy.repairPurpose },
+    { ...owner, attemptId: 'other', purpose: 'chapter-blueprint-directory:automatic-retry' }])
+    assert.throws(() => gate(policy.operationId, actual), error => error.code === 'OPERATION_DISPATCH_REJECTED')
+  assert.equal(rejected.length, 3)
+  for (const actual of [{ ...owner, attemptId: 'repair', rootActionId: 'foreign', purpose: policy.repairPurpose },
+    { ...owner, attemptId: 'repair', runId: 'foreign', purpose: policy.repairPurpose }]) {
+    const isolated = createOperationDispatchGate({ repairPolicy: policy })
+    isolated(policy.operationId, owner)
+    assert.throws(() => isolated(policy.operationId, actual), error => error.code === 'OPERATION_DISPATCH_REJECTED')
+  }
+  const noPolicy = createOperationDispatchGate()
+  noPolicy(policy.operationId, owner)
+  assert.throws(() => noPolicy(policy.operationId, { ...owner, attemptId: 'repair', purpose: policy.repairPurpose }),
+    error => error.code === 'OPERATION_DISPATCH_REJECTED')
+  const baseline = createOperationDispatchGate({ repairPolicy: policy })
+  const ipc = { attemptId: 'ipc-main', runId: 'bridge-run', projectId: 'project', epoch: 'epoch', purpose: policy.primaryPurpose }
+  baseline(policy.operationId, ipc)
+  assert.doesNotThrow(() => baseline(policy.operationId, { ...ipc, attemptId: 'ipc-repair', purpose: policy.repairPurpose }))
+  assert.throws(() => createOperationDispatchGate({ repairPolicy: policy })(policy.operationId),
+    error => error.code === 'OPERATION_DISPATCH_REJECTED')
 })
 
 function earlyReviewChain(arm) {
@@ -432,14 +466,15 @@ test('冻结执行验证拒绝adapter、Node版本/ABI、依赖、启动参数�
 
 test('实际SQLite唯一dispatch须匹配原handle、项目epoch与实际输出上限', () => {
   const db = new Database(':memory:')
-  db.exec('CREATE TABLE generation_runs(run_id TEXT,root_action_id TEXT,binding_json TEXT); CREATE TABLE generation_attempts(attempt_id TEXT,run_id TEXT,root_action_id TEXT,attempt_json TEXT)')
+  db.exec('CREATE TABLE generation_runs(run_id TEXT,root_action_id TEXT,binding_json TEXT); CREATE TABLE generation_attempts(attempt_id TEXT,run_id TEXT,root_action_id TEXT,attempt_json TEXT,usage_receipt_json TEXT)')
   const session = { projectId: 'project', leaseId: 'epoch' }, handle = { projectId: 'project', epoch: 'epoch', rootActionId: 'root', runId: 'run' }
   const body = { max_tokens: 4096 }
   try {
     assert.throws(() => selectOwnerDispatch(db, handle, session, body), /NON_UNIQUE/)
     db.prepare('INSERT INTO generation_runs VALUES(?,?,?)').run('run', 'root', JSON.stringify({ projectId: 'project', epoch: 'epoch' }))
-    db.prepare('INSERT INTO generation_attempts VALUES(?,?,?,?)').run('attempt', 'run', 'root', JSON.stringify({ attemptId: 'attempt', status: 'dispatch-marked', requestedOutputTokens: 4096 }))
+    db.prepare('INSERT INTO generation_attempts VALUES(?,?,?,?,?)').run('attempt', 'run', 'root', JSON.stringify({ attemptId: 'attempt', status: 'dispatch-marked', requestedOutputTokens: 4096 }), JSON.stringify({ purpose: 'chapter-blueprint-directory:structured-syntax-repair' }))
     assert.equal(selectOwnerDispatch(db, handle, session, body).attemptId, 'attempt')
+    assert.equal(selectOwnerDispatch(db, handle, session, body).purpose, 'chapter-blueprint-directory:structured-syntax-repair')
     for (const delta of [{ rootActionId: 'foreign' }, { runId: 'foreign' }, { projectId: 'foreign' }, { epoch: 'old' }]) assert.throws(() => selectOwnerDispatch(db, { ...handle, ...delta }, session, body), /IDENTITY/)
     assert.throws(() => selectOwnerDispatch(db, handle, session, { max_tokens: 4095 }), /IDENTITY/)
     assert.throws(() => selectOwnerDispatch(db, undefined, session, body), /IDENTITY/)
@@ -1006,6 +1041,61 @@ test('paired classifier rejects synthetic-as-real and duplicate target attempts'
   otherInvocation.attempts[0].binding.invocationId = otherInvocation.invocationId
   assert.equal(classifyProductionPair([baseline, otherInvocation], { mode: 'real', phase: 'early-context' }).pairFailure,
     'PAIR_BINDING_MISMATCH')
+})
+
+test('post-UI pair accepts only one evidenced syntax repair per arm and retains product FAIL', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/repair-pair-test-'))
+  const policy = PHASE_SCENARIOS['early-budget'].attemptPolicy
+  const invocationId = '11111111-1111-4111-8111-111111111111'
+  const make = arm => {
+    const owner = (id, purpose, operationId) => ({ attemptId: id, runId: 'run',
+      ...(arm === 'candidate' ? { rootActionId: 'root' } : {}), projectId: 'project', epoch: 'epoch',
+      purpose, ...(arm === 'baseline' ? { operationId } : {}) })
+    const entries = [
+      [policy.operationId, 'main', policy.primaryPurpose],
+      [policy.operationId, 'repair', policy.repairPurpose],
+      ['900单位正文', 'draft', 'chapter-draft'],
+    ]
+    const attempts = entries.map(([operation, id, purpose]) => {
+      const outputPath = path.join(dir, `${arm}-${id}.txt`), content = `${arm}-${id}-content`
+      fs.writeFileSync(outputPath, content)
+      const identity = owner(`${arm}-${id}`, purpose, operation)
+      return { attemptId: `${arm}:${identity.attemptId}`, outputPath, visibleTextHash: hash(content),
+        binding: { invocationId, mode: 'real', arm, phase: 'early-budget', milestone: 'post-ui', caseId: '场景1/1',
+          protocolRevision: protocol.decisionRevision, protocolHash: protocolBinding.protocolHash, operation,
+          ...(arm === 'candidate' ? { actual: identity } : { baselineIpc: identity }) } }
+    })
+    return { invocationId, mode: 'real', arm, phase: 'early-budget', milestone: 'post-ui', caseId: '场景1/1',
+      protocolRevision: protocol.decisionRevision, protocolHash: protocolBinding.protocolHash, status: 'failed',
+      physicalModelRequests: attempts.length, syntheticDispatches: 0, attempts,
+      projectEpoch: 'epoch', physicalProject: { projectId: 'project' },
+      operations: [{ operation: policy.operationId, handle: { runId: 'run', rootActionId: 'root' } }],
+      ...(arm === 'candidate' ? { ownerTerminal: attempts.map(attempt => ({
+        attemptId: attempt.binding.actual.attemptId, artifactId: `artifact-${attempt.attemptId}`,
+        textHash: attempt.visibleTextHash })) } : {}) }
+  }
+  try {
+    const baseline = make('baseline'), candidate = make('candidate')
+    const valid = classifyProductionPair([baseline, candidate], { mode: 'real', phase: 'early-budget' })
+    assert.equal(valid.pairFailure, undefined)
+    assert.equal(valid.status, 'failed', 'real product failure remains FAIL')
+    const wrongPurpose = structuredClone(candidate)
+    wrongPurpose.attempts[1].binding.actual.purpose = 'chapter-blueprint-directory:automatic-retry'
+    assert.equal(classifyProductionPair([baseline, wrongPurpose], { mode: 'real', phase: 'early-budget' }).pairFailure,
+      'STRUCTURED_REPAIR_OWNER_MISMATCH')
+    const noOwner = structuredClone(candidate)
+    delete noOwner.attempts[1].binding.actual
+    assert.equal(classifyProductionPair([baseline, noOwner], { mode: 'real', phase: 'early-budget' }).pairFailure,
+      'STRUCTURED_REPAIR_OWNER_MISMATCH')
+    const third = structuredClone(candidate)
+    third.attempts.push(structuredClone(third.attempts[1]))
+    third.physicalModelRequests++
+    assert.equal(classifyProductionPair([baseline, third], { mode: 'real', phase: 'early-budget' }).pairFailure,
+      'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+  } finally {
+    assert.ok(path.resolve(dir).startsWith(path.resolve(ROOT, '.runtime/.cache/novel-quality-modernization') + path.sep))
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('真实桥只公开本地字数门失败，并在失败收据保留持久化观察而非 saved', () => {

@@ -47,18 +47,26 @@
     "disposition": "permanent historical failures; not reclassified by s10b-reference-baseline-v2"
   },
   "historicalLedgerBoundary": {
-    "eventCount": 222,
-    "rawBytesSha256": "00e07f37fd55e9c0c7cc304ab81c61a17df3956f0e7402cb6d3ac0c1c6fcf6d4",
-    "evidenceInvocationId": "6be2697b-e456-4f99-af73-55a1d71deff8",
+    "eventCount": 231,
+    "rawBytesSha256": "09553bc653969b4c71d7744be9e786c52e5a6129c9469f6376dfbd728f44ba2c",
+    "evidenceInvocationId": "c2e451cf-8ee6-4f5f-9a17-90693f5e8ec9",
     "finalReserveAttemptIds": [
-      "baseline:4a751bcc-9d4c-4761-8c47-9ed53c9e6cc7",
-      "candidate:7aac35fc-2402-4884-a61f-ea578c7c9f28",
-      "candidate:ad4dac2a-81c6-4f67-ad4b-9a940b166305",
-      "candidate:c8658b18-4b54-4906-a883-72ab639fe02d"
+      "baseline:f03412eb-b176-4faf-97a4-788c267040f9",
+      "baseline:b8eaaf18-ccc5-4626-a4dc-9d89f1c7a9de",
+      "candidate:3147f356-519c-4da2-b041-13755d1ac0ca"
     ]
   },
   "phases": {
     "early-budget": {
+      "scenarioRevision": "s14b-post-ui-budget-syntax-repair-v1",
+      "attemptPolicy": {
+        "milestone": "post-ui",
+        "arms": ["baseline", "candidate"],
+        "operationId": "指定范围生成",
+        "primaryPurpose": "chapter-blueprint-directory",
+        "repairPurpose": "chapter-blueprint-directory:structured-syntax-repair",
+        "maxRepairAttempts": 1
+      },
       "caseIds": [
         "场景1/1"
       ],

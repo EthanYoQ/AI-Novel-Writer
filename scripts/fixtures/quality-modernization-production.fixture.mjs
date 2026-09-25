@@ -148,7 +148,7 @@ test('isolated production commands persist the selected phase operations', async
   const load = relative => import(/* @vite-ignore */ pathToFileURL(path.join(target.repositoryRoot, relative)).href)
   const receipt = { schemaVersion: 1, invocationId: request.invocationId, arm: target.arm, mode: request.mode, action: request.action,
     protocolRevision: request.protocolRevision, protocolHash: request.protocolHash,
-    phase: request.phase, caseId: request.caseId, sceneId: request.sceneId, chapterNumber: request.chapterNumber,
+    phase: request.phase, milestone: request.milestone, caseId: request.caseId, sceneId: request.sceneId, chapterNumber: request.chapterNumber,
     operations: [], qualification: request.development ? 'development-only-unfrozen' : 'frozen-target', codeSha: target.codeSha,
     sourceHash: target.sourceHash, driverHash: request.driverHash,
     runtime: { node: process.version, abi: process.versions.modules }, physicalModelRequests: 0, syntheticDispatches: 0,
@@ -197,8 +197,13 @@ test('isolated production commands persist the selected phase operations', async
       for (const listener of transport.listeners.get(channel) ?? []) listener(...args)
     } }
     transport.sender = sender
+    let pendingBaselineIpc = null
     const invoke = async (channel, ...args) => {
       receipt.invocations.push(channel)
+      if (!candidate && channel === 'llm:generate-stream') pendingBaselineIpc = {
+        attemptId: args[0], runId: currentContext?.runId, projectId: args[1]?.projectSession?.projectId,
+        epoch: args[1]?.projectSession?.leaseId, purpose: args[1]?.purpose, operationId,
+      }
       if (channel === 'generation:bind-material-decision') {
         const decisions = receipt.materialDecisions ?? (receipt.materialDecisions = [])
         decisions.push({ operation: operationId, receipt: args[0]?.materialDecision })
@@ -360,7 +365,9 @@ test('isolated production commands persist the selected phase operations', async
     assert.equal(sha(sourceParity), request.parityHash, 'PHYSICAL_PROJECT_PARITY_CHANGED')
 
     let operationKind = null, operationId = null
-    const beforeOperationDispatch = createOperationDispatchGate({ onReject: rejection => {
+    const repairPolicy = request.attemptPolicy?.milestone === request.milestone
+      && request.attemptPolicy.arms?.includes(target.arm) ? request.attemptPolicy : null
+    const beforeOperationDispatch = createOperationDispatchGate({ repairPolicy, onReject: rejection => {
       localDispatchGateRejection = { ...rejection, operation: operationId, runId: currentContext?.runId,
         projectId: session.projectId, chapterNumber: request.chapterNumber }
     } })
@@ -374,8 +381,6 @@ test('isolated production commands persist the selected phase operations', async
       if (candidate && request.mode === 'synthetic')
         preflight(body.stream_options?.include_usage === true, 'OPENAI_USAGE_STREAM_NOT_REQUESTED')
       preflight(currentContext && operationKind, 'PHYSICAL_REQUEST_OUTSIDE_COMMAND')
-      // Reject automatic continuation/retry before it can reserve, dispatch, or reach the network.
-      beforeOperationDispatch(operationId)
       let actual
       let materialDecision = null
       if (candidate) {
@@ -384,7 +389,14 @@ test('isolated production commands persist the selected phase operations', async
         materialDecision = JSON.parse(run.binding_json).sourceManifest?.materialDecision ?? null
         if (operationKind !== 'directory') preflight(materialDecision, 'MATERIAL_DECISION_RECEIPT_MISSING')
       }
-      const attemptId = `${target.arm}:${actual?.attemptId ?? randomUUID()}`
+      const observedIpc = candidate ? null : pendingBaselineIpc
+      pendingBaselineIpc = null
+      if (!candidate) preflight(observedIpc?.operationId === operationId
+        && observedIpc.runId === currentContext.runId && observedIpc.projectId === session.projectId
+        && observedIpc.epoch === session.leaseId, 'BASELINE_IPC_DISPATCH_IDENTITY_MISMATCH')
+      // The registered extra call must carry its real product purpose before campaign reserve.
+      beforeOperationDispatch(operationId, actual ?? observedIpc)
+      const attemptId = `${target.arm}:${actual?.attemptId ?? observedIpc.attemptId}`
       const promptText = body.messages.filter(message => typeof message?.content === 'string')
         .map(message => message.content).join('\n')
       const userMessages = body.messages.filter(message => message?.role === 'user' && typeof message.content === 'string')
@@ -440,7 +452,7 @@ test('isolated production commands persist the selected phase operations', async
         protocolRevision: request.protocolRevision, protocolHash: request.protocolHash,
         codeSha: target.codeSha, sourceHash: target.sourceHash, driverHash: request.driverHash,
         parityId: request.parityHash, phase: request.phase, milestone: request.milestone, caseId: request.caseId,
-        operation: operationId, ...(actual ? { actual } : {}) }
+        operation: operationId, ...(actual ? { actual } : { baselineIpc: observedIpc }) }
       record({ type: 'reserve', attemptId, binding })
       record({ type: 'dispatch', attemptId })
       // 发送规模证据：只记字节数，绝不记提示词原文或凭据，好让两臂在不花真实调用的前提下可比。
@@ -467,6 +479,7 @@ test('isolated production commands persist the selected phase operations', async
           sentSourceIds: sentOptional.map(record => record.sourceId),
           ...(candidate ? { materialDecision } : {}) } }
       receipt.attempts.push(requestReceipt)
+      const physicalOutputPath = path.join(target.isolationRoot, `physical-output-${receipt.attempts.length}.txt`)
       // 从 dispatch 起由守护接管：到点会先为这次发送写 unknown，再 abort 下面的 fetch。
       const controller = new AbortController()
       supervisor.watch(attemptId, controller)
@@ -516,7 +529,7 @@ test('isolated production commands persist the selected phase operations', async
           : await fetchProviderResponse(originalFetch, url, { ...options, signal }, receipt.fetchFailures ??= [], safeDiagnostic)
         const [providerBody, ledgerBody] = response.body.tee()
         streamSettlements.push((async () => {
-          let finishReason = null, buffer = '', interrupted = false, malformed = false
+          let finishReason = null, buffer = '', visibleText = '', interrupted = false, malformed = false
           const reader = ledgerBody.getReader(), decoder = new TextDecoder()
           try {
             for (;;) {
@@ -527,6 +540,8 @@ test('isolated production commands persist the selected phase operations', async
               for (const line of lines) {
                 if (!line.startsWith('data:') || line.includes('[DONE]')) continue
                 try { const event = JSON.parse(line.slice(5)); const reason = event.choices?.[0]?.finish_reason
+                  const content = event.choices?.[0]?.delta?.content
+                  if (typeof content === 'string') visibleText += content
                   if (typeof reason === 'string' && reason) finishReason = reason
                 } catch { malformed = true }
               }
@@ -534,8 +549,10 @@ test('isolated production commands persist the selected phase operations', async
           } catch { interrupted = true }
           finally { reader.releaseLock() }
           supervisor.terminal(attemptId, finishReason && !interrupted && !malformed ? 'settle' : 'unknown', finishReason ? { finishReason } : {})
+          fs.writeFileSync(physicalOutputPath, visibleText)
+          requestReceipt.outputPath = physicalOutputPath
+          requestReceipt.visibleTextHash = sha(visibleText)
         })())
-        if (request.mode === 'synthetic') requestReceipt.visibleTextHash = sha(text)
         return new Response(providerBody, { status: response.status, statusText: response.statusText, headers: response.headers })
       } catch (error) { supervisor.terminal(attemptId, 'unknown'); throw error }
     }
@@ -685,15 +702,32 @@ test('isolated production commands persist the selected phase operations', async
       receipt.ownerTerminal = db.prepare('SELECT a.attempt_id,a.attempt_json,a.usage_receipt_json,g.artifact_json FROM generation_attempts a JOIN generation_artifacts g ON g.attempt_id=a.attempt_id ORDER BY a.rowid').all()
         .map(row => { const usage = JSON.parse(row.usage_receipt_json), artifact = JSON.parse(row.artifact_json)
           return { attemptId: row.attempt_id, status: JSON.parse(row.attempt_json).status, finishReason: usage.result?.finishReason,
-            trustedUsage: usage.result?.usage?.trusted === true, artifactId: artifact.artifactId, textHash: sha(artifact.text),
+            purpose: usage.purpose, trustedUsage: usage.result?.usage?.trusted === true,
+            artifactId: artifact.artifactId, textHash: sha(artifact.text),
             hasFormalEffect: Boolean(usage.directoryProgress || usage.draftCommit || usage.reviewRevisionEffect) } })
+      assert.equal(receipt.ownerTerminal.length, receipt.attempts.length, 'OWNER_ATTEMPT_COVERAGE_MISMATCH')
       for (const attempt of receipt.attempts) {
         const terminal = receipt.ownerTerminal.find(row => row.attemptId === attempt.binding.actual.attemptId)
         assert.ok(terminal && ['settled', 'unknown'].includes(terminal.status))
-        assert.equal(terminal.finishReason, 'stop'); assert.equal(terminal.hasFormalEffect, true)
+        assert.equal(terminal.finishReason, 'stop')
+        assert.equal(terminal.purpose, attempt.binding.actual.purpose)
+        assert.ok(terminal.artifactId && terminal.textHash !== sha(''), 'OWNER_ARTIFACT_MISSING')
+        const repairedDirectory = repairPolicy && attempt.binding.operation === repairPolicy.operationId
+          && attempt.binding.actual.purpose === repairPolicy.primaryPurpose
+          && receipt.attempts.some(other => other.binding.operation === repairPolicy.operationId
+            && other.binding.actual?.purpose === repairPolicy.repairPurpose)
+        assert.equal(terminal.hasFormalEffect, !repairedDirectory)
         if (request.mode === 'synthetic') assert.equal(terminal.trustedUsage, true)
-        if (request.mode === 'synthetic') assert.equal(terminal.textHash, attempt.visibleTextHash)
+        assert.equal(terminal.textHash, attempt.visibleTextHash, 'OWNER_ARTIFACT_OUTPUT_MISMATCH')
       }
+    }
+    const ledgerEvents = fs.readFileSync(request.ledgerPath, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line))
+    for (const attempt of receipt.attempts) {
+      const rows = ledgerEvents.filter(event => event.attemptId === attempt.attemptId)
+      assert.deepEqual(rows.map(event => event.type), ['reserve', 'dispatch', 'settle'], 'PHYSICAL_LEDGER_COVERAGE_MISMATCH')
+      assert.deepEqual(rows[0].binding, attempt.binding, 'PHYSICAL_LEDGER_BINDING_MISMATCH')
+      assert.ok(attempt.outputPath && attempt.visibleTextHash !== sha(''), 'PHYSICAL_OUTPUT_MISSING')
+      assert.equal(sha(fs.readFileSync(attempt.outputPath, 'utf8')), attempt.visibleTextHash, 'PHYSICAL_OUTPUT_HASH_MISMATCH')
     }
     assertNoOutboundPreflightFailures(receipt)
     receipt.status = 'passed'
