@@ -447,11 +447,6 @@ async function importTextInternal(
       }
     }
 
-    // 记录同名旧文档，但绝不能在 addChunks 的空间兼容性检查之前删除它。
-    // 否则新模型返回 reindex_required 时会损坏仍可用的旧代际。
-    const existingDocs = await storeListDocuments(projectPath)
-    const existingDoc = existingDocs.find(d => d.fileName === fileName)
-
     writeKnowledgeCopy(getProjectDataRoot(projectPath), docId, {
       content: text, indexedHash: createHash('sha256').update(text).digest('hex'), edited: false, indexDirty: false,
     })
@@ -469,10 +464,6 @@ async function importTextInternal(
     if (!result.success) {
       return { success: false, error: result.error }
     }
-    if (existingDoc) {
-      await removeDocFromStore(projectPath, existingDoc.id)
-    }
-
     return { success: true, docId, chunkCount: chunks.length }
   } catch (error) {
     return { success: false, ...migrationFailureDetails(error) }
