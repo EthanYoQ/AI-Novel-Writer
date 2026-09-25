@@ -16,9 +16,10 @@ const fieldPolicy = path.join(buildTree ?? '', 'electron', 'services', 'portable
 const testedSha = arg('tested-sha')
 const expectedExe = arg('exe-sha256')
 const expectedAsar = arg('asar-sha256')
+const supplement = arg('supplement') === '1'
 const sources = [
-  { version: 'v1.0.0', path: arg('legacy-v100'), injectedInventory: true },
-  { version: 'v1.1.0', path: arg('legacy-v110'), injectedInventory: false },
+  { version: 'v1.0.0', path: arg('legacy-v100') },
+  { version: 'v1.1.0', path: arg('legacy-v110') },
 ]
 assert(packageDir && buildTree && /^[a-f0-9]{40}$/.test(testedSha ?? '')
   && /^[a-f0-9]{64}$/.test(expectedExe ?? '') && /^[a-f0-9]{64}$/.test(expectedAsar ?? '')
@@ -35,12 +36,13 @@ const runId = randomUUID()
 const scratch = path.join(process.env.LOCALAPPDATA, 'VibeCodingScratch', 'AI-Novel', `a11-${runId.slice(0, 8)}`)
 const receiptPath = path.join(repository, '.runtime', '.cache', 'f05-a11-offline-import', runId, 'receipt.json')
 const receipt = { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_WIN_V3',
+  mode: supplement ? 'synthetic-completeness' : 'historical-baseline',
   testedSha, buildTree: path.resolve(buildTree),
   executionHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim(),
   driverSha256: sha256(fileURLToPath(import.meta.url)), fieldPolicySha256: sha256(fieldPolicy),
   packageHashes: { exe: sha256(exe), asar: sha256(asar) },
   historicalSources: sources.map(source => ({ version: source.version, path: source.path,
-    injectedInventoryRemovedFromScratchCopy: source.injectedInventory })), steps: [], receiptPath }
+    injectedInventoryRemovedFromScratchCopy: fs.existsSync(path.join(source.path, '.vela', 'upgrade-data-inventory.json')) })), steps: [], receiptPath }
 assert.deepEqual(receipt.packageHashes, { exe: expectedExe, asar: expectedAsar })
 fs.mkdirSync(scratch, { recursive: true })
 fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'codex/thread-6/a11',
@@ -125,6 +127,68 @@ async function knowledgeSnapshot(storageRoot) {
   } finally { connection.close() }
 }
 
+const syntheticOriginal = '升级知识库完整原文：第一段是合成资料。\n\n第二段只在原始 TXT 文件中，不在旧索引片段中。\n'
+const seedOutboxSql = `import hashlib,sqlite3,sys
+db=sqlite3.connect(sys.argv[1])
+assert db.execute("select name from sqlite_master where name='finalization_outbox'").fetchone()
+assert db.execute('select count(*) from finalization_outbox').fetchone()[0]==0
+draft=db.execute('select d.id,d.chapter_number,c.body from drafts d join contents c on c.id=d.content_id where d.id=73').fetchone()
+assert draft and draft[1]==43
+db.execute("insert into finalization_outbox(finalization_id,draft_id,chapter_number,chapter_title,content_hash,content_revision,content_snapshot,target_file_name,knowledge_document_id,publication_status,last_error) values(?,?,?,?,?,?,?,?,?,?,?)",
+ ('a11-synthetic-pending',draft[0],draft[1],'合成待发布',hashlib.sha256(draft[2].encode()).hexdigest(),1,draft[2],'第43章 合成待发布.txt','','pending','sk-test-synthetic at C:\\\\Users\\\\fixture\\\\secret.txt'))
+db.commit(); db.close()`
+
+async function seedSupplement(sourceCopy) {
+  const skill = path.join(sourceCopy, '.vela', 'skills', 'a11-style', 'SKILL.md')
+  fs.mkdirSync(path.dirname(skill), { recursive: true })
+  const skillBody = '---\nname: a11-style\ndescription: 合成旧版项目写作风格\nstage: drafting\n---\n\n保留角色语气，使用短段落。\n'
+  fs.writeFileSync(skill, skillBody, { flag: 'wx' })
+  const original = path.join(sourceCopy, '升级知识库.txt')
+  fs.writeFileSync(original, syntheticOriginal, { flag: 'wx' })
+  const connection = await lancedb.connect(path.join(sourceCopy, '.vela', 'lancedb'))
+  try {
+    const table = await connection.openTable('documents')
+    try {
+      const documents = await table.query().select(['id', 'fileName', 'filePath']).toArray()
+      assert.deepEqual(documents.map(({ id, fileName }) => ({ id, fileName })),
+        [{ id: 'upgrade-fixture-knowledge-document', fileName: '升级知识库.txt' }],
+        'Synthetic original must bind to the actual old-format document')
+      assert.equal(documents[0].filePath, '', 'Old document unexpectedly already has an original')
+      await table.update({ where: "id = 'upgrade-fixture-knowledge-document'", values: { filePath: original } })
+    } finally { table.close() }
+  } finally { connection.close() }
+  execFileSync('python', ['-c', seedOutboxSql, path.join(sourceCopy, '.vela', 'vela.db')])
+  return { skillSha256: sha256(skill), originalSha256: sha256(original), originalDocumentId: 'upgrade-fixture-knowledge-document' }
+}
+
+async function verifySupplement(target, seeded) {
+  const storage = path.join(target, '.ai-novel')
+  const freeze = JSON.parse(fs.readFileSync(path.join(storage, 'portable-runtime-freeze.json'), 'utf8'))
+  assert.equal(freeze.nonReplayable, true)
+  assert(freeze.records.some(record => record.table === 'finalization_outbox'
+    && record.recordId === 'a11-synthetic-pending' && record.nonReplayable === true),
+  'Synthetic pending outbox lacks a frozen history record')
+  assert.equal(sha256(path.join(storage, 'skills', 'a11-style', 'SKILL.md')), seeded.skillSha256)
+  assert.equal(sha256(path.join(target, '升级知识库.txt')), seeded.originalSha256)
+  const connection = await lancedb.connect(path.join(storage, 'lancedb'))
+  try {
+    const table = await connection.openTable('documents')
+    try {
+      const documents = await table.query().select(['id', 'filePath']).toArray()
+      assert.equal(documents.find(row => row.id === seeded.originalDocumentId)?.filePath,
+        `knowledge-copy:${seeded.originalDocumentId}`)
+    } finally { table.close() }
+  } finally { connection.close() }
+  const copyPath = path.join(storage, 'knowledge-copies',
+    `${createHash('sha256').update(seeded.originalDocumentId).digest('hex')}.json`)
+  const copy = JSON.parse(fs.readFileSync(copyPath, 'utf8'))
+  assert.equal(copy.content, syntheticOriginal)
+  assert.equal(copy.indexedHash, seeded.originalSha256)
+  assert.equal(copy.edited, false)
+  assert.equal(copy.indexDirty, true)
+  return { ...seeded, targetKnowledgeCopySha256: sha256(copyPath), knowledgeStatus: 'stale', outboxFrozen: true }
+}
+
 async function launch(roots) {
   const env = { ...process.env, AI_NOVEL_APP_DATA_HOME: roots.canonical,
     AI_NOVEL_LEGACY_SOURCE_HOME: roots.legacy, AI_NOVEL_VELA_HOME: roots.legacy,
@@ -170,11 +234,9 @@ async function verify(source) {
   fs.mkdirSync(targetParent, { recursive: true })
   const originalBefore = inventory(source.path)
   fs.cpSync(source.path, sourceCopy, { recursive: true, errorOnExist: true, force: false })
-  if (source.injectedInventory) {
-    const injected = path.join(sourceCopy, '.vela', 'upgrade-data-inventory.json')
-    assert(fs.existsSync(injected), 'Expected historical test-injected inventory')
-    fs.unlinkSync(injected)
-  }
+  const injected = path.join(sourceCopy, '.vela', 'upgrade-data-inventory.json')
+  if (fs.existsSync(injected)) fs.unlinkSync(injected)
+  const seeded = supplement ? await seedSupplement(sourceCopy) : null
   const copiedBefore = inventory(sourceCopy)
   const roots = Object.fromEntries(['canonical', 'legacy', 'userData', 'home', 'appData', 'localAppData']
     .map(key => [key, path.join(root, key)]))
@@ -215,6 +277,7 @@ async function verify(source) {
     const { avatarRows, ...counts } = JSON.parse(execFileSync('python', ['-c', compareSql,
       path.join(sourceCopy, '.vela', 'vela.db'), path.join(target, '.ai-novel', 'project.db'), fieldPolicy], { encoding: 'utf8' }))
     assert.equal(counts.project_core, 1)
+    if (supplement) assert.equal(counts.finalization_outbox, 1, 'Synthetic pending outbox was lost')
     for (const table of ['blueprints', 'characters', 'contents', 'drafts', 'reviews', 'revisions',
       'summary_snapshots', 'llm_calls', 'post_process_runs', 'post_process_steps']) {
       assert(counts[table] > 0, `Historical fixture lacks ${table}`)
@@ -248,7 +311,7 @@ async function verify(source) {
     }
     assert.deepEqual(inventory(sourceCopy), copiedBefore, 'Scratch old source changed')
     assert.deepEqual(inventory(source.path), originalBefore, 'Historical fixture changed')
-    receipt.steps.push({ version: source.version, step: 'V3 import and open', outcome: 'PASS',
+    receipt.steps.push({ stepId: `${source.version}-import-open`, version: source.version, step: 'V3 import and open', outcome: 'PASS',
       target, copiedSourceFiles: Object.keys(copiedBefore).length, counts, rawAssets,
       avatars: avatarRows.map(({ path: relativePath, hash }) => ({ relativePath, hash })), dialogs })
     await quit(session.app)
@@ -258,8 +321,14 @@ async function verify(source) {
     assert.deepEqual(knowledge, await knowledgeSnapshot(path.join(sourceCopy, '.vela')),
       'Knowledge document/chunk text or table set changed')
     assert(knowledge.documents.length > 0 && knowledge.chunks.length > 0)
-    receipt.steps.push({ version: source.version, step: 'Stored knowledge document and chunk text preserved',
+    receipt.steps.push({ stepId: `${source.version}-knowledge-index`, version: source.version, step: 'Stored knowledge document and chunk text preserved',
       outcome: 'PASS', documents: knowledge.documents.length, chunks: knowledge.chunks.length, tables: knowledge.tables })
+
+    if (seeded) {
+      const proof = await verifySupplement(target, seeded)
+      receipt.steps.push({ stepId: `${source.version}-synthetic-full-original-skill-outbox`, version: source.version,
+        step: 'Synthetic complete original, project Skill and frozen pending outbox retained', outcome: 'PASS', proof })
+    }
 
     session = await launch(roots)
     await home(session.page)
@@ -268,7 +337,8 @@ async function verify(source) {
       .waitFor({ state: 'visible', timeout: 30_000 })
     assert.deepEqual(inventory(sourceCopy), copiedBefore)
     assert.deepEqual(inventory(source.path), originalBefore)
-    receipt.steps.push({ version: source.version, step: 'New process opens copy; both old sources unchanged', outcome: 'PASS' })
+    receipt.steps.push({ stepId: `${source.version}-reopen-unchanged`, version: source.version,
+      step: 'New process opens copy; both old sources unchanged', outcome: 'PASS' })
   } finally { if (session) await session.app.close() }
 }
 

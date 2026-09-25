@@ -3,6 +3,8 @@ import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { isDeepStrictEqual } from 'node:util'
+import * as lancedb from '@lancedb/lancedb'
+import { KNOWLEDGE_COPY_MARKER, readKnowledgeCopy, writeKnowledgeCopy } from '../vector-store'
 import { m05CharacterAssetMigrationAdapter } from '../migrations/m05-character-assets'
 import { CURRENT_DESKTOP_SCHEMA_VERSION } from '../migrations/desktop-registry'
 import { CANONICAL_PROJECT_DATABASE, CANONICAL_PROJECT_DIRECTORY, createCanonicalProjectManifest, parseCanonicalProjectManifest } from '../../src/shared/project-format'
@@ -131,6 +133,49 @@ function restoreSafeLegacyDiagnostics(databasePath: string, calls: ReturnType<ty
   } finally { db.close() }
 }
 
+/** Adopt only complete originals already inside the copied legacy project. */
+async function adoptLegacyKnowledgeOriginals(sourceRoot: string, copiedRoot: string, builtRoot: string, storage: string): Promise<void> {
+  const directory = path.join(storage, 'lancedb')
+  if (!exists(directory)) return
+  const connection = await lancedb.connect(directory)
+  try {
+    if (!(await connection.tableNames()).includes('documents')) return
+    const table = await connection.openTable('documents')
+    try {
+      const rows = await table.query().select(['id', 'filePath']).toArray() as Array<{ id: string; filePath: string }>
+      const expected = new Map<string, string>()
+      for (const { id, filePath } of rows) {
+        let targetPath = ''
+        if (path.isAbsolute(filePath) && within(sourceRoot, filePath) && /\.(?:txt|md|markdown)$/iu.test(filePath)) {
+          const relative = path.relative(sourceRoot, filePath)
+          const copiedFile = path.join(copiedRoot, relative)
+          if (exists(copiedFile)) {
+            const parts = relative.split(path.sep)
+            const targetFile = parts[0]?.toLowerCase() === '.vela'
+              ? path.join(storage, ...parts.slice(1)) : path.join(builtRoot, relative)
+            const info = fs.lstatSync(copiedFile)
+            if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) fail('LEGACY_IMPORT_KNOWLEDGE_ORIGINAL_INVALID')
+            sameTree(copiedFile, targetFile)
+            const content = fs.readFileSync(copiedFile, 'utf8')
+            writeKnowledgeCopy(storage, id, { content,
+              indexedHash: createHash('sha256').update(content, 'utf8').digest('hex'), edited: false,
+              indexDirty: true })
+            targetPath = `${KNOWLEDGE_COPY_MARKER}${id}`
+            const copy = readKnowledgeCopy(storage, id)
+            if (!copy || copy.content !== content || !copy.indexDirty) fail('LEGACY_IMPORT_KNOWLEDGE_ORIGINAL_INVALID')
+          }
+        }
+        expected.set(id, targetPath)
+        if (filePath !== targetPath) await table.update({ where: `id = '${id.replaceAll("'", "''")}'`, values: { filePath: targetPath } })
+      }
+      const actual = await table.query().select(['id', 'filePath']).toArray() as Array<{ id: string; filePath: string }>
+      if (actual.length !== expected.size || actual.some(row => expected.get(row.id) !== row.filePath)) {
+        fail('LEGACY_IMPORT_KNOWLEDGE_ORIGINAL_INVALID')
+      }
+    } finally { table.close() }
+  } finally { connection.close() }
+}
+
 /** Explicit offline import. Caller prompts the user to close the old editor/sync
  * processes, owns the new target choice, and registers the result only on ready.
  * All SQLite/Lance writes occur inside an attempt-owned copy.
@@ -215,6 +260,7 @@ export async function importLegacyProjectCopy(options: {
     await importVectorStoreForMigration({ targetStorageRoot: storage, snapshot: vectors })
     const verifiedVectors = await verifyVectorStoreForMigration({ storageRoot: storage, snapshot: vectors })
     if (!isDeepStrictEqual(verifiedVectors, vectors.summary)) fail('LEGACY_IMPORT_VECTOR_INVALID')
+    await adoptLegacyKnowledgeOriginals(sourceRoot, copiedRoot, builtRoot, storage)
     checkpoint('assets-converted')
     const projectId = randomUUID()
     if (projectId === sourceProjectId) fail('LEGACY_IMPORT_IDENTITY_INVALID')

@@ -3,6 +3,8 @@ import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { afterEach, expect, it } from 'vitest'
+import * as lance from '@lancedb/lancedb'
+import { Field, Int32, Schema, Utf8 } from 'apache-arrow'
 import { importLegacyProjectCopy } from '../legacy-project-copy-import'
 import { verifyProjectSqlite } from '../sqlite-project-migration'
 import { readPortableRuntimeFreeze } from '../portable-runtime-freeze'
@@ -13,6 +15,8 @@ import { createPortableTransferAuthority } from '../portable-transfer-authority'
 import { SummaryRepository } from '../../repositories/summary-repository'
 import { LLMHistoryRepository } from '../../repositories/llm-repository'
 import { PostProcessRepository } from '../../repositories/post-process-repository'
+import { closeConnection } from '../../vector-store'
+import { listDocuments, readDocumentCopy } from '../../knowledge-base'
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const roots: string[] = []
@@ -68,6 +72,59 @@ it.each(['v100', 'v110'] as const)('%s 离线完整副本含 WAL、作者配置�
   expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions })).toMatchObject({ state: 'blocked', code: 'LEGACY_IMPORT_TARGET_EXISTS' })
 })
 
+it('旧项目根内的真实知识原文变成可读项目副本，片段不能冒充全文', async () => {
+  const f = fixture('v110')
+  const original = path.join(f.source, '创作资料.txt')
+  const outside = path.join(path.dirname(f.source), '外部资料.txt')
+  const missing = path.join(f.source, '缺失资料.txt')
+  const content = '完整原文第一段。\n\n完整原文第二段只存在于旧项目文件。'
+  fs.writeFileSync(original, content)
+  fs.writeFileSync(outside, '只在旧项目外的合成资料，不得读取或转入新项目。')
+  const connection = await lance.connect(path.join(f.legacy, 'lancedb'))
+  const tables: lance.Table[] = []
+  try {
+    const fields = [new Field('id', new Utf8()), new Field('docId', new Utf8()), new Field('fileName', new Utf8()),
+      new Field('text', new Utf8()), new Field('chunkIndex', new Int32()), new Field('totalChunks', new Int32()),
+      new Field('importedAt', new Utf8()), new Field('corpusKind', new Utf8())]
+    tables.push(await connection.createTable('chunks', [
+      { id: 'old-chunk', docId: 'old-doc', fileName: '创作资料.txt', text: '完整原文第一段。',
+        chunkIndex: 0, totalChunks: 1, importedAt: '2026-09-13', corpusKind: 'reference' },
+      { id: 'outside-chunk', docId: 'outside-doc', fileName: '外部资料.txt', text: '旧索引片段',
+        chunkIndex: 0, totalChunks: 1, importedAt: '2026-09-13', corpusKind: 'reference' },
+      { id: 'missing-chunk', docId: 'missing-doc', fileName: '缺失资料.txt', text: '旧索引片段',
+        chunkIndex: 0, totalChunks: 1, importedAt: '2026-09-13', corpusKind: 'reference' }],
+    { schema: new Schema(fields) }))
+    tables.push(await connection.createTable('documents', [
+      { id: 'old-doc', fileName: '创作资料.txt', filePath: original,
+        importedAt: '2026-09-13', chunkCount: 1, corpusKind: 'reference' },
+      { id: 'outside-doc', fileName: '外部资料.txt', filePath: outside,
+        importedAt: '2026-09-13', chunkCount: 1, corpusKind: 'reference' },
+      { id: 'missing-doc', fileName: '缺失资料.txt', filePath: missing,
+        importedAt: '2026-09-13', chunkCount: 1, corpusKind: 'reference' },
+    ]))
+  } finally { for (const table of tables) table.close(); connection.close() }
+  const originalHash = hash(original)
+  const outsideHash = hash(outside)
+  const result = await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions })
+  expect(result, JSON.stringify(result)).toMatchObject({ state: 'ready' })
+  expect(hash(original)).toBe(originalHash)
+  expect(hash(path.join(f.target, '创作资料.txt'))).toBe(originalHash)
+  expect(fs.existsSync(path.join(f.target, '外部资料.txt'))).toBe(false)
+  initProjectDatabase(f.target)
+  try {
+    const documents = await listDocuments(f.target)
+    expect(documents.find(doc => doc.id === 'old-doc')?.filePath).toBe('knowledge-copy:old-doc')
+    expect(documents.find(doc => doc.id === 'outside-doc')?.filePath).toBe('')
+    expect(documents.find(doc => doc.id === 'missing-doc')?.filePath).toBe('')
+    expect(await readDocumentCopy('old-doc', f.target)).toMatchObject({
+      available: true, content, edited: false, indexStatus: 'stale',
+    })
+    expect(await readDocumentCopy('outside-doc', f.target)).toEqual({ available: false, indexStatus: 'unavailable' })
+    expect(await readDocumentCopy('missing-doc', f.target)).toEqual({ available: false, indexStatus: 'unavailable' })
+  } finally { closeConnection(f.target) }
+  expect(hash(outside)).toBe(outsideHash)
+})
+
 it('源资料变化、未知旧资产均在发布前拒绝，旧项目保留', async () => {
   const f = fixture('v110')
   const changed = await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions,
@@ -80,6 +137,26 @@ it('源资料变化、未知旧资产均在发布前拒绝，旧项目保留', a
   expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))
     .toMatchObject({ state: 'blocked', code: 'LEGACY_IMPORT_UNMAPPED_ASSET' })
   expect(fs.existsSync(path.join(f.legacy, 'unmapped-author-notes.txt'))).toBe(true)
+})
+
+it('缺失必需旧库或目标发布前中断均不留下半成品', async () => {
+  const missing = fixture('v110')
+  fs.unlinkSync(path.join(missing.legacy, 'vela.db'))
+  expect(await importLegacyProjectCopy({ sourceRoot: missing.source, targetRoot: missing.target, preflightOptions }))
+    .toMatchObject({ state: 'blocked', code: 'LEGACY_IMPORT_UNMAPPED_ASSET' })
+  expect(fs.existsSync(missing.target)).toBe(false)
+  expect(fs.existsSync(path.join(missing.legacy, 'vela.db-wal'))).toBe(true)
+
+  const interrupted = fixture('v100')
+  let reachedVerified = false
+  expect(await importLegacyProjectCopy({ sourceRoot: interrupted.source, targetRoot: interrupted.target, preflightOptions,
+    checkpoint: phase => { if (phase === 'verified') { reachedVerified = true; throw new Error('synthetic interruption') } },
+  })).toMatchObject({ state: 'blocked', code: 'LEGACY_IMPORT_IO_FAILED' })
+  expect(reachedVerified).toBe(true)
+  expect(fs.existsSync(interrupted.target)).toBe(false)
+  expect(fs.readdirSync(path.dirname(interrupted.target)).filter(name => name.startsWith('.new.legacy-import-'))).toEqual([])
+  expect(Object.fromEntries(Object.keys(interrupted.sourceHashes).map(name => [name, hash(path.join(interrupted.legacy, name))])))
+    .toEqual(interrupted.sourceHashes)
 })
 
 it('旧候选正文保留为可读冻结历史，新项目不重放', async () => {
