@@ -787,10 +787,21 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             ? await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: context.mainGenerationRunHandle! })
             : null
           if (this.resumeHandle && !mainOwned) throw new Error('GENERATION_DRAFT_LEGACY_RESUME_REFUSED')
+          const failedBatchView = recovery && this.batchId && recovery.batchId === this.batchId
+            && !recovery.composition && !recovery.savedDraft && recovery.lastCompositionFinishReason === null
+            && recovery.attemptedPurposes.at(-1) === 'chapter-draft'
+            ? await ipc.invokeWithProjectSession(projectSession, 'generation:read', this.resumeHandle!) : null
+          const lastAttempt = failedBatchView?.budgetDiagnostics?.at(-1)
+          const retryFailedBatch = !!failedBatchView && failedBatchView.status === 'running' && !failedBatchView.nonReplayable
+            && failedBatchView.handle.runId === this.resumeHandle?.runId && (failedBatchView.ledger?.physicalRequests ?? 0) > 0
+            && !failedBatchView.ledger?.blockedCode && lastAttempt?.finishReason === null
+            && (lastAttempt.failureCode === 'GENERATION_PROVIDER_FAILED' || lastAttempt.failureCode === 'NETWORK_ERROR')
+            && ![...failedBatchView.artifacts, ...(failedBatchView.candidates ?? [])].some(artifact => artifact.text.trim())
+            && !failedBatchView.unsavedTails?.some(tail => tail.text.trim())
           if (recovery && (recovery.operation !== 'chapter-draft'
             || recovery.chapterNumber !== this.chapterInfo.chapterNumber
-            || !recovery.composition || recovery.composition.algorithm !== DRAFT_VISIBLE_TEXT_VERSION
-            || !['stop', 'length'].includes(recovery.lastCompositionFinishReason ?? '')))
+            || !retryFailedBatch && (!recovery.composition || recovery.composition.algorithm !== DRAFT_VISIBLE_TEXT_VERSION
+              || !['stop', 'length'].includes(recovery.lastCompositionFinishReason ?? ''))))
             throw new Error('GENERATION_DRAFT_RECOVERY_EVIDENCE_REQUIRED')
           const expectedInputs = [{ id: 'draft:chapter-info', text: JSON.stringify(writerChapterInfo) },
             { id: 'draft:author-config', text: JSON.stringify(novelConfig) },
@@ -834,8 +845,9 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           )
           let initialVisibleDraft: string
           let initialFinishReason: LLMCompletion['finishReason']
+          let initialFailureCode: GenerationAttemptReceipt['failureCode']
           let initialReasoning = true
-          if (recovery) {
+          if (recovery?.composition) {
             initialVisibleDraft = recovery.composition!.text
             initialFinishReason = recovery.lastCompositionFinishReason as 'stop' | 'length'
             preview.stop()
@@ -877,6 +889,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             ))
             initialVisibleDraft = sanitizeDraftText(this.stripThinkingTags(initialCompletion.content))
             initialFinishReason = initialCompletion.finishReason
+            initialFailureCode = initialOutcome.receipt.failureCode
             initialReasoning = initialOutcome.receipt.capabilities.reasoning === true
             await acknowledge(initialOutcome, initialVisibleDraft)
             }
@@ -895,6 +908,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             signal: cancellation.signal,
             initialDraft: initialVisibleDraft,
             initialFinishReason,
+            initialFailureCode,
             initialRounds: recovery?.attemptedPurposes.filter(purpose => purpose === 'chapter-draft-continuation' || purpose === 'chapter-draft-no-progress-recovery').length,
             noProgressRecoveryUsed: recovery?.attemptedPurposes.includes('chapter-draft-no-progress-recovery'),
             targetChars,
@@ -1151,6 +1165,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     initialRounds?: number
     noProgressRecoveryUsed?: boolean
     initialFinishReason: LLMCompletion['finishReason']
+    initialFailureCode?: GenerationAttemptReceipt['failureCode']
     targetChars: number
     callbacks: CommandExecuteParams['callbacks']
     context: CommandExecuteParams['context']
@@ -1172,6 +1187,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     let draft = params.initialDraft
     let rounds = params.initialRounds ?? 0
     let lastFinishReason = params.initialFinishReason
+    let lastFailureCode = params.initialFailureCode
     let noProgressRecoveryUsed = params.noProgressRecoveryUsed ?? false
     let recoveryPending = false
 
@@ -1306,6 +1322,7 @@ ${visibleTail}`,
         preview.stop()
       }
       const addition = completionFromOutcome(outcome)
+      lastFailureCode = outcome.receipt.failureCode
       logDraftAttempt(
         params.callbacks,
         params.context,
@@ -1364,6 +1381,8 @@ ${visibleTail}`,
       && countDraftUnits(draft) > draftTargetUnitRange(params.targetChars).maximum) return draft
     if (lastFinishReason !== 'stop') {
       const error = this.createIncompleteCompletionError(lastFinishReason)
+      if (lastFailureCode === 'GENERATION_PROVIDER_FAILED' || lastFailureCode === 'NETWORK_ERROR')
+        Object.assign(error, { code: lastFailureCode })
       error.message = uiText(error.message, (() => {
         switch (lastFinishReason) {
           case 'length':

@@ -12,7 +12,7 @@ import { ModelExecutionLeaseRegistry, createModelExecutionLeaseReceipt } from '.
 import { createGenerationRunService, type GenerationRunServiceDependencies } from './generation-run-service'
 import { assertSemanticGenerationTask, buildMainGenerationPlan, MAIN_GENERATION_POLICY, type MainGenerationPlan } from './main-generation-plan'
 import { LLMFactory } from '../llm/llm-factory'
-import type { GenerationTask } from '../../src/services/generation/generation-harness'
+import type { GenerationAttemptReceipt, GenerationTask } from '../../src/services/generation/generation-harness'
 import type { ProviderUsageEvidence } from '../llm/provider.interface'
 import type { BlueprintRangeCommitReceipt } from '../repositories/blueprint-repository'
 import { GenerationDraftEffects, assertGenerationBatchIntent } from './generation-draft-effects'
@@ -347,7 +347,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const finishReason: LLMFinishReason = receipt.failureCode ? 'error'
       : ['stop', 'length', 'content_filter', 'error', 'unknown'].includes(stored ?? '') ? stored as LLMFinishReason : 'unknown'
     const evidence = frozenModel.capabilityEvidence
-    const details = { purpose: task.purpose,
+    const safeFailureCode = receipt.failureCode === 'GENERATION_PROVIDER_FAILED' ? 'GENERATION_PROVIDER_FAILED'
+      : receipt.failureCode === 'NETWORK_ERROR' ? 'NETWORK_ERROR' : undefined
+    const details: GenerationAttemptReceipt = { purpose: task.purpose,
+      ...(safeFailureCode ? { failureCode: safeFailureCode } : {}),
       ...(receipt.artifact ? { visibleArtifact: { artifactId: receipt.artifact.artifactId, attemptId: receipt.attempt.attemptId,
         revision: receipt.artifact.revision, textHash: receipt.artifact.textHash } } : {}),
       model: { id: frozenModel.modelId, configurationRevision: frozenModel.modelRevision, endpointFingerprint: frozenModel.endpointFingerprint },

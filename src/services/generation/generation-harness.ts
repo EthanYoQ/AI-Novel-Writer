@@ -181,6 +181,8 @@ export interface GenerationAttemptReceipt {
     deadlineAt: number
   }
   finishReason: LLMFinishReason
+  /** Main-normalized failure category; never provider response text. */
+  failureCode?: 'GENERATION_PROVIDER_FAILED' | 'NETWORK_ERROR'
   usage?: TokenUsage
   promptBudget?: PromptBudgetReport
 }

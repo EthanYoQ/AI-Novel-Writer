@@ -327,6 +327,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     runtime: Pick<ReturnType<typeof fakeRuntime>, 'createRuntime' | 'complete' | 'execute' | 'close'>
     mainDefault?: boolean
     resumeHandle?: MainGenerationRunHandle
+    batchId?: string
     wordsPerChapter?: number
     wordsTarget?: number
     premise?: string
@@ -559,6 +560,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     }, {
       ...(options.mainDefault ? {} : { dependencies: { createRuntime: options.runtime.createRuntime } }),
       resumeHandle: options.resumeHandle,
+      batchId: options.batchId,
       selectedCandidateDrafts: options.selectedCandidateDrafts,
     })
     return { invoke, context, callbacks, command }
@@ -721,6 +723,70 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:read' || channel === 'generation:resume')).toBe(false)
       expect(f.invoke.mock.calls.some(([channel]) => ['generation:commit-draft', 'generation:prepare-draft-context', 'kb:search-writing-context', 'db:draft-get-latest'].includes(channel))).toBe(false)
     }
+  })
+
+  it.each([
+    { state: 'failed empty batch', selectedBatch: 'batch-1', recoveryBatch: 'batch-1',
+      finishReason: null, failureCode: 'GENERATION_PROVIDER_FAILED', visibleArtifact: false, allowed: true },
+    { state: 'successful but uncomposed', selectedBatch: 'batch-1', recoveryBatch: 'batch-1',
+      finishReason: 'stop', failureCode: null, visibleArtifact: false, allowed: false },
+    { state: 'non-batch', selectedBatch: undefined, recoveryBatch: undefined,
+      finishReason: null, failureCode: 'GENERATION_PROVIDER_FAILED', visibleArtifact: false, allowed: false },
+    { state: 'wrong batch', selectedBatch: 'batch-2', recoveryBatch: 'batch-1',
+      finishReason: null, failureCode: 'GENERATION_PROVIDER_FAILED', visibleArtifact: false, allowed: false },
+    { state: 'unknown termination', selectedBatch: 'batch-1', recoveryBatch: 'batch-1',
+      finishReason: null, failureCode: null, visibleArtifact: false, allowed: false },
+    { state: 'visible failed candidate', selectedBatch: 'batch-1', recoveryBatch: 'batch-1',
+      finishReason: null, failureCode: 'GENERATION_PROVIDER_FAILED', visibleArtifact: true, allowed: false },
+  ])('retries only a failed empty batch chapter on its durable handle: $state', async scenario => {
+    const handle: MainGenerationRunHandle = { projectId: 'generation-runtime', epoch: 'lease-generation-runtime',
+      rootActionId: '批次根', runId: '失败的第1章' }
+    const f = setup({ runtime: fakeOutcomes(), mainDefault: true, resumeHandle: handle,
+      batchId: scenario.selectedBatch, wordsTarget: 100 })
+    f.context.generationModelId = '合成模型'
+    const text = '潮'.repeat(100)
+    const hash = (value: string) => createHash('sha256').update(value).digest('hex')
+    const view: MainGenerationRunView = { handle, status: 'running', nonReplayable: false,
+      artifacts: scenario.visibleArtifact ? [{ ...handle, artifactId: '失败片', attemptId: '失败尝试', revision: 1,
+        durableRevision: 1, text: '保留候选', textHash: hash('保留候选'), status: 'failed', compositionEligible: false }] : [],
+      budgetDiagnostics: [{ attemptId: '失败尝试', requestedOutputTokens: 2048, reservedTokens: 2048,
+        actualState: 'unknown', actual: null, finishReason: scenario.finishReason,
+        failureCode: scenario.failureCode, reasons: [] }],
+      ledger: { policy: DRAFT_GENERATION_BUDGET as never, tokenLiability: 2048, physicalRequests: 1,
+        activeElapsedMs: 100, blockedCode: null },
+      budget: { maxAttempts: 32, maxRequestedOutputTokens: 2000000, maxRequestedOutputTokensPerAttempt: 32768,
+        deadlineAt: Date.now() + 3600000 } }
+    const original = f.invoke.getMockImplementation()!
+    f.invoke.mockImplementation(async (channel, ...args) => {
+      if (channel === 'generation:read-context') return { handle, modelId: '合成模型', operation: 'chapter-draft', chapterNumber: 1,
+        batchId: scenario.recoveryBatch, authorInputs: [
+          { id: 'draft:chapter-info', text: JSON.stringify({ chapterNumber: 1, title: '第一章', role: '开端', purpose: '建立冲突', characters: [], keyEvents: '开端' }) },
+          { id: 'draft:author-config', text: JSON.stringify(useProjectStore.getState().currentProject!.novelConfig) },
+          { id: 'draft:target-units', text: '100' },
+        ], selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1, 2, 3, 4, 5, 6],
+        knowledgeSnapshot: { version: 1, state: 'empty', storageState: 'absent', query: '第一章 开端', topK: 5,
+          canonicalRevision: null, documentsRevision: null, items: [] },
+        composition: null, lastCompositionFinishReason: scenario.finishReason, attemptedPurposes: ['chapter-draft'] }
+      if (channel === 'generation:read') return view
+      if (channel === 'generation:execute') {
+        expect((args[0] as { handle: MainGenerationRunHandle }).handle).toEqual(handle)
+        const result = outcome(text, 'stop')
+        result.receipt.visibleArtifact = { artifactId: '重试正文片', attemptId: '重试物理请求', revision: 1, textHash: hash(text) }
+        return { outcome: result, run: view }
+      }
+      if (channel === 'generation:compose-visible') return { algorithm: 'draft-visible-v1',
+        artifactIds: ['重试正文片'], text, textHash: hash(text), sources: [] }
+      if (channel === 'generation:commit-draft') return { success: true, id: 23, version: 1,
+        content: text, contentHash: hash(text) }
+      return original(channel, ...args)
+    })
+
+    const execution = f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
+    if (scenario.allowed) await expect(execution).resolves.toBe(text)
+    else await expect(execution).rejects.toThrow('GENERATION_DRAFT_RECOVERY_EVIDENCE_REQUIRED')
+    expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:execute'))
+      .toHaveLength(scenario.allowed ? 1 : 0)
+    expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:begin')).toBe(false)
   })
 
   it('main续写低增量片段保持独立，不进入确认组合或正式草稿', async () => {
@@ -2915,6 +2981,30 @@ ${headingPrefix}第3章：潮门
       expectNoDraftPersistence(invoke)
     },
   )
+
+  it('surfaces a main-owned safe provider failure code without saving a draft', async () => {
+    const failed = outcome('', 'error')
+    Object.assign(failed.receipt, { failureCode: 'GENERATION_PROVIDER_FAILED' })
+    const runtime = fakeOutcomes(failed)
+    const { invoke, context, callbacks, command } = setup({ runtime })
+
+    await expect(command.execute({ step: {}, context, callbacks }))
+      .rejects.toMatchObject({ code: 'GENERATION_PROVIDER_FAILED' })
+    expect(runtime.complete).toHaveBeenCalledOnce()
+    expectNoDraftPersistence(invoke)
+  })
+
+  it('does not turn untrusted failure text into a displayed code', async () => {
+    const failed = outcome('', 'error')
+    Object.assign(failed.receipt, { failureCode: 'provider body: synthetic-private-key' })
+    const runtime = fakeOutcomes(failed)
+    const { context, callbacks, command } = setup({ runtime })
+
+    const error = await command.execute({ step: {}, context, callbacks }).catch(value => value)
+    expect(error).toBeInstanceOf(Error)
+    expect(error).not.toHaveProperty('code')
+    expect(error.message).not.toContain('synthetic-private-key')
+  })
 
   it('rejects a no-progress continuation and leaves no draft residue', async () => {
     const runtime = fakeOutcomes(

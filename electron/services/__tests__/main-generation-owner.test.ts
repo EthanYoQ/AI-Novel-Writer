@@ -80,6 +80,13 @@ function syntheticStream() {
 }
 
 describe('S07 durable task budget diagnostics', () => {
+  it('projects only the durable safe provider failure code into the renderer receipt', async () => {
+    const f = fixture(async () => { throw new Error('GENERATION_PROVIDER_FAILED') })
+    const run = f.owner.begin(f.begin)
+    const saved = await f.owner.execute({ handle: run.handle, invocationNonce: 'provider-failure-code', task })
+    expect(saved.outcome.receipt).toMatchObject({ failureCode: 'GENERATION_PROVIDER_FAILED' })
+    expect(JSON.stringify(saved.outcome)).not.toContain('synthetic-private-key')
+  })
   it('keeps a network failure category after reopening without storing provider text', async () => {
     const f = fixture(async (_request, options) => {
       options.onVisible({ kind: 'delta', text: '已收到的正文' })
