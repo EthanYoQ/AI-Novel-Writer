@@ -13,6 +13,7 @@ const FREEZE_FILE = 'portable-runtime-freeze.json'
 const AUTHORITY_FILE = 'portable-transfer-authority.json'
 
 export type PortableRuntimeFreezeTable =
+  | 'chapter_deletion_operations'
   | 'finalization_outbox'
   | 'import_runs'
   | 'recovery_candidates'

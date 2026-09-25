@@ -104,6 +104,34 @@ function useProjectOverview() {
 export function WriterWelcomePage({ onNewProject }: { onNewProject: () => void }) {
   const { overview, recentProjects, hasCurrentProject, deletableCurrentProject } = useProjectOverview()
   const text = useLocaleStore(state => state.text)
+  const [legacyImportNotice, setLegacyImportNotice] = useState('')
+  const [legacyImportBusy, setLegacyImportBusy] = useState(false)
+  const importLegacyProject = async () => {
+    if (legacyImportBusy) return
+    setLegacyImportNotice('')
+    setLegacyImportBusy(true)
+    try {
+      const sourceRoot = await ipc.invoke('dialog:select-legacy-project')
+      if (!sourceRoot) return
+      const sourceName = sourceRoot.split(/[\\/]/).filter(Boolean).at(-1) || '旧项目'
+      const targetRoot = await ipc.invoke('dialog:select-project-restore-target', `${sourceName}-新版副本`)
+      if (!targetRoot) return
+      const result = await ipc.invoke('project:import-legacy-copy', sourceRoot, targetRoot)
+      if (result.state === 'cancelled') return
+      if (result.state === 'blocked') {
+        setLegacyImportNotice(text(`导入未完成，旧项目保持原样。原因：${result.code}`, `Import did not complete; the original project is unchanged. Reason: ${result.code}`))
+        return
+      }
+      const opened = await useProjectStore.getState().openProject(result.targetRoot).catch(() => false)
+      setLegacyImportNotice(opened
+        ? text('旧项目已导入为独立副本。两份项目的后续修改不会自动同步。', 'Legacy project imported as an independent copy. Future changes do not sync between the two projects.')
+        : text(`副本已建立，但未能自动打开。请用“打开作品”选择：${result.targetRoot}`, `The copy was created but could not be opened. Use Open project to select: ${result.targetRoot}`))
+    } catch (error) {
+      setLegacyImportNotice(text(`导入未完成：${String(error)}`, `Import did not complete: ${String(error)}`))
+    } finally {
+      setLegacyImportBusy(false)
+    }
+  }
   return <WelcomePageV2
     overview={overview}
     recentProjects={recentProjects}
@@ -113,6 +141,9 @@ export function WriterWelcomePage({ onNewProject }: { onNewProject: () => void }
         if (folder) void useProjectStore.getState().openProject(folder)
       })
     }}
+    onImportLegacyProject={() => { void importLegacyProject() }}
+    legacyImportNotice={legacyImportNotice}
+    legacyImportBusy={legacyImportBusy}
     onImportNovel={() => useLayoutStore.getState().openImportNovel()}
     onContinue={hasCurrentProject ? () => useLayoutStore.getState().setSidebarView('project') : undefined}
     onDeleteCurrentProject={deletableCurrentProject ? () => void confirmDeleteCurrentProject(deletableCurrentProject) : undefined}

@@ -10,6 +10,7 @@ import { FinalizationRepository } from '../repositories/finalization-repository'
 import { PostProcessRepository } from '../repositories/post-process-repository'
 import { knowledgeBaseLoader } from './knowledge-base-loader'
 import { removePublishedManuscript } from './manuscript-publisher'
+import { readPortableRuntimeFreeze } from './portable-runtime-freeze'
 
 export interface ChapterDeletionProjectionCleaner {
   removeManuscript(projectRoot: string, targetFileName: string): Promise<void>
@@ -57,6 +58,11 @@ function legacyKnowledgeAuthorizationRequired(
   }
 }
 
+function frozenLegacyOperation(projectRoot: string, operation: ChapterDeletionOperation): ChapterDeletionResult | null {
+  if (!readPortableRuntimeFreeze(projectRoot).isFrozen('chapter_deletion_operations', operation.operationId)) return null
+  return { success: false, committed: false, operation, error: '旧项目章节删除操作仅保留为历史，不能在新项目中重试或继续清理' }
+}
+
 export class ChapterDeletionService {
   private readonly createOperationId: () => string
   private readonly cleaner: ChapterDeletionProjectionCleaner
@@ -75,6 +81,8 @@ export class ChapterDeletionService {
       if (existing.draftId !== request.draftId || existing.chapterNumber !== request.chapterNumber) {
         return { success: false, committed: false, error: '章节删除请求与已冻结操作身份不匹配' }
       }
+      const frozen = frozenLegacyOperation(projectRoot, existing)
+      if (frozen) return frozen
       if (existing.legacyKnowledgeAuthorization === 'required') {
         return legacyKnowledgeAuthorizationRequired(existing)
       }
@@ -106,6 +114,11 @@ export class ChapterDeletionService {
     projectRoot: string,
     operationId: string,
   ): Promise<ChapterDeletionResult> {
+    const existing = ChapterDeletionRepository.get(operationId)
+    if (existing) {
+      const frozen = frozenLegacyOperation(projectRoot, existing)
+      if (frozen) return frozen
+    }
     const operation = ChapterDeletionRepository.confirmLegacyKnowledgeAbsent(operationId)
     return this.resume(projectRoot, operation.operationId)
   }
@@ -115,6 +128,8 @@ export class ChapterDeletionService {
     if (!operation) {
       return { success: false, committed: false, error: '未找到可重试的章节删除操作' }
     }
+    const frozen = frozenLegacyOperation(projectRoot, operation)
+    if (frozen) return frozen
     if (operation.legacyKnowledgeAuthorization === 'required') {
       return legacyKnowledgeAuthorizationRequired(operation)
     }
@@ -128,6 +143,8 @@ export class ChapterDeletionService {
   private async resume(projectRoot: string, operationId: string): Promise<ChapterDeletionResult> {
     let operation = ChapterDeletionRepository.get(operationId)
     if (!operation) return { success: false, committed: false, error: '章节删除操作不存在' }
+    const frozen = frozenLegacyOperation(projectRoot, operation)
+    if (frozen) return frozen
     if (operation.status === 'completed') {
       return { success: true, committed: true, operation }
     }

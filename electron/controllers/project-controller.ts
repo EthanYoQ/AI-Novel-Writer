@@ -314,6 +314,44 @@ export interface ProjectControllerOptions {
 }
 
 export function registerProjectController(options: ProjectControllerOptions = {}) {
+  ipcMain.handle('dialog:select-legacy-project', async () => {
+    const result = await dialog.showOpenDialog({
+      title: '选择旧版小说项目文件夹',
+      properties: ['openDirectory'],
+    })
+    return result.canceled ? null : result.filePaths[0] ?? null
+  })
+
+  ipcMain.handle('project:import-legacy-copy', async (_event, sourceRoot: string, targetRoot: string) => {
+    if (typeof sourceRoot !== 'string' || typeof targetRoot !== 'string') {
+      return { state: 'blocked' as const, code: 'LEGACY_IMPORT_PATH_INVALID' }
+    }
+    const confirmation = await dialog.showMessageBox({
+      type: 'warning',
+      buttons: ['取消', '开始导入'],
+      defaultId: 0,
+      cancelId: 0,
+      message: '请先保存并关闭旧版程序，以及正在同步或编辑这个项目的程序。',
+      detail: '导入期间不要重新打开或修改旧项目。应用将创建独立的新项目副本；旧项目保留，此后两份项目的修改不会自动同步。',
+    })
+    if (confirmation.response !== 1) return { state: 'cancelled' as const }
+    let result: Awaited<ReturnType<typeof import('../services/legacy-project-copy-import').importLegacyProjectCopy>>
+    try {
+      const { importLegacyProjectCopy } = await import('../services/legacy-project-copy-import')
+      result = await importLegacyProjectCopy({ sourceRoot, targetRoot })
+    } catch {
+      return { state: 'blocked' as const, code: 'LEGACY_IMPORT_IO_FAILED' }
+    }
+    if (result.state === 'ready') {
+      try {
+        registerRecentProject({ name: path.basename(sourceRoot), path: result.targetRoot, updatedAt: new Date().toISOString() })
+      } catch {
+        return { ...result, warning: 'LEGACY_IMPORT_RECENT_LIST_FAILED' }
+      }
+    }
+    return result
+  })
+
   ipcMain.handle('project:get-runtime-context', async () => {
     const activeProjectPath = getCurrentProjectPath()
     const database = getProjectDb()

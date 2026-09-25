@@ -778,7 +778,8 @@ function projectionForRow(
   return { projection, excludedFields }
 }
 
-function sanitizePortableDatabase(databasePath: string): {
+/** Shared C17 copy-only history projection. Call only on an isolated target staging DB. */
+export function sanitizePortableDatabase(databasePath: string): {
   history: HistoryProjection[]
   tableCounts: Record<string, number>
 } {

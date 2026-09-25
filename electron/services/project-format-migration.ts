@@ -138,7 +138,7 @@ function copyAsset(source: string, target: string): void {
     try { fs.writeFileSync(fd, fs.readFileSync(source)); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
   }
 }
-function characterAssetSnapshot(storageRoot: string): ProjectAssetSourceSnapshot {
+export function characterAssetSnapshot(storageRoot: string): ProjectAssetSourceSnapshot {
   const avatarRoot = path.join(storageRoot, 'avatars')
   const entries: ProjectAssetSourceEntry[] = []
   const files = new Map<string, string>()

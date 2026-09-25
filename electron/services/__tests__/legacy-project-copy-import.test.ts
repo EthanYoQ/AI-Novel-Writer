@@ -1,0 +1,196 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import { createRequire } from 'node:module'
+import { afterEach, expect, it } from 'vitest'
+import { importLegacyProjectCopy } from '../legacy-project-copy-import'
+import { verifyProjectSqlite } from '../sqlite-project-migration'
+import { readPortableRuntimeFreeze } from '../portable-runtime-freeze'
+import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
+import { ChapterDeletionService } from '../chapter-deletion-service'
+import { readPortableCurrentAuthority } from '../portable-current-authority'
+
+const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
+const roots: string[] = []
+const preflightOptions = { maxNativePathCharacters: 4096 }
+const hash = (file: string) => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+function fixture(version: 'v100' | 'v110') {
+  const base = path.resolve('.runtime/.cache/novel-quality-modernization/a11-copy-import')
+  fs.mkdirSync(base, { recursive: true })
+  const root = fs.mkdtempSync(path.join(base, 'attempt-')); roots.push(root)
+  const source = path.join(root, 'old'), target = path.join(root, 'new'), legacy = path.join(source, '.vela')
+  fs.mkdirSync(legacy, { recursive: true })
+  const seed = path.join(root, 'seed.db'), db = new Database(seed)
+  try {
+    db.pragma('journal_mode = WAL'); db.pragma('wal_autocheckpoint = 0')
+    db.exec(fs.readFileSync(new URL(`./legacy-${version}-schema.sql`, import.meta.url), 'utf8'))
+    db.prepare('INSERT INTO project_core(rowid,id,project_name,characters_arch) VALUES (?,?,?,?)')
+      .run(7, 'main', '合成旧项目', '作者明确角色群像，与正文推断不同')
+    db.prepare('INSERT INTO contents(id,body) VALUES (?,?)').run(11, '合成章节正文\r\n原字节')
+    db.prepare('INSERT INTO drafts(id,chapter_number,version,content_id,word_count) VALUES (?,?,?,?,?)').run(19, 7, 1, 11, 876)
+    for (const suffix of ['', '-wal', '-shm']) fs.copyFileSync(seed + suffix, path.join(legacy, 'vela.db') + suffix)
+  } finally { db.close() }
+  const sourceProjectId = randomUUID()
+  fs.writeFileSync(path.join(legacy, 'project.json'), JSON.stringify({ schemaVersion: 1, kind: 'ai-novel-project', projectId: sourceProjectId, createdAt: '2026-09-01T00:00:00.000Z' }))
+  fs.mkdirSync(path.join(legacy, 'prompts'))
+  fs.writeFileSync(path.join(legacy, 'prompts', 'author.txt'), '作者项目级提示词')
+  fs.writeFileSync(path.join(source, 'outline.md'), '作者目录级大纲')
+  const sourceHashes = Object.fromEntries(['vela.db', 'vela.db-wal', 'vela.db-shm', 'project.json', 'prompts/author.txt']
+    .map(name => [name, hash(path.join(legacy, name))]))
+  return { source, target, legacy, sourceProjectId, sourceHashes }
+}
+afterEach(() => { closeProjectDatabase(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }) })
+
+it.each(['v100', 'v110'] as const)('%s 离线完整副本含 WAL、作者配置和正文，源只读且新身份独立', async version => {
+  const f = fixture(version)
+  const result = await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions })
+  expect(result, JSON.stringify(result)).toMatchObject({ state: 'ready', targetRoot: f.target })
+  if (result.state !== 'ready') return
+  expect(result.projectId).not.toBe(f.sourceProjectId)
+  expect(fs.existsSync(path.join(f.target, '.vela'))).toBe(false)
+  expect(fs.readFileSync(path.join(f.target, 'outline.md'), 'utf8')).toBe('作者目录级大纲')
+  expect(fs.readFileSync(path.join(f.target, '.ai-novel', 'prompts', 'author.txt'), 'utf8')).toBe('作者项目级提示词')
+  expect(verifyProjectSqlite({ databasePath: path.join(f.target, '.ai-novel', 'project.db') }).schemaVersion).toBe(7)
+  const db = new Database(path.join(f.target, '.ai-novel', 'project.db'), { readonly: true })
+  try {
+    expect(db.prepare('SELECT characters_arch FROM project_core WHERE id=?').pluck().get('main')).toBe('作者明确角色群像，与正文推断不同')
+    expect(db.prepare('SELECT body FROM contents WHERE id=11').pluck().get()).toBe('合成章节正文\r\n原字节')
+    expect(db.prepare('SELECT content_id FROM drafts WHERE id=19').pluck().get()).toBe(11)
+  } finally { db.close() }
+  expect(Object.fromEntries(Object.keys(f.sourceHashes).map(name => [name, hash(path.join(f.legacy, name))]))).toEqual(f.sourceHashes)
+  expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions })).toMatchObject({ state: 'blocked', code: 'LEGACY_IMPORT_TARGET_EXISTS' })
+})
+
+it('源资料变化、未知旧资产均在发布前拒绝，旧项目保留', async () => {
+  const f = fixture('v110')
+  const changed = await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions,
+    checkpoint: phase => { if (phase === 'copied') fs.appendFileSync(path.join(f.legacy, 'prompts', 'author.txt'), '外部改写') },
+  })
+  expect(changed).toMatchObject({ state: 'blocked', code: 'LEGACY_IMPORT_SOURCE_CHANGED' })
+  expect(fs.existsSync(f.target)).toBe(false)
+  expect(fs.readdirSync(path.dirname(f.target)).filter(name => name.includes('.new.legacy-import-'))).toEqual([])
+  fs.writeFileSync(path.join(f.legacy, 'unmapped-author-notes.txt'), '不可静默丢弃')
+  expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))
+    .toMatchObject({ state: 'blocked', code: 'LEGACY_IMPORT_UNMAPPED_ASSET' })
+  expect(fs.existsSync(path.join(f.legacy, 'unmapped-author-notes.txt'))).toBe(true)
+})
+
+it('旧候选正文保留为可读冻结历史，新项目不重放', async () => {
+  const f = fixture('v110'), db = new Database(path.join(f.legacy, 'vela.db'))
+  try {
+    db.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(12, '旧版人工审稿原文')
+    db.prepare(`INSERT INTO reviews(id,base_draft_id,review_index,content_id,source_draft_chapter_number,
+      source_draft_version,source_draft_status,source_content) VALUES(?,?,?,?,?,?,?,?)`)
+      .run(21, 19, 1, 12, 7, 1, 'draft', '合成章节正文\r\n原字节')
+    db.prepare(`INSERT INTO finalization_outbox(finalization_id,draft_id,chapter_number,chapter_title,
+      content_hash,content_revision,content_snapshot,target_file_name,publication_status,last_error)
+      VALUES(?,?,?,?,?,1,?,?,'pending',?)`).run('old-outbox', 19, 7, '第七章',
+      createHash('sha256').update('合成章节正文\r\n原字节').digest('hex'), '合成章节正文\r\n原字节', '第七章.md', 'C:\\private\\token-secret')
+    db.prepare(`INSERT INTO import_runs(id,root_run_id,effect_namespace,source_fingerprint,manifest_fingerprint,
+      locale,stage,status,total_chapters,manifest_chapter_count,execution_owner,execution_epoch,lease_expires_at)
+      VALUES(?,?,?,?,?,'zh-CN','parsing','running',0,0,?,?,?)`)
+      .run('old-import', 'old-import', 'import:old-import', createHash('sha256').update('source').digest('hex'),
+        createHash('sha256').update('manifest').digest('hex'), 'old-machine-authority', 4, 999999999)
+    db.prepare(`INSERT INTO recovery_candidates(candidate_id,run_id,step_id,project_id,chapter_number,
+      source_snapshot,source_hash,visible_text,content_hash) VALUES(?,?,?,?,?,?,?,?,?)`)
+      .run('old-candidate', 'old-run', 'old-step', f.sourceProjectId, 7,
+        JSON.stringify({ chapterNumber: 7, title: '第七章', role: '推进', purpose: '追踪', keyEvents: '线索', characters: [] }),
+        hash(path.join(f.legacy, 'project.json')), '旧候选正文', 'content-hash')
+  } finally { db.close() }
+  const before = Object.fromEntries(fs.readdirSync(f.legacy).filter(name => fs.lstatSync(path.join(f.legacy, name)).isFile())
+    .map(name => [name, hash(path.join(f.legacy, name))]))
+  const result = await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions })
+  expect(result).toMatchObject({ state: 'ready' })
+  const frozen = readPortableRuntimeFreeze(f.target)
+  const transferred = JSON.parse(fs.readFileSync(path.join(f.target, '.ai-novel', 'portable-transfer-authority.json'), 'utf8'))
+  expect(transferred).toMatchObject({ originProjectId: f.sourceProjectId, targetProjectId: result.state === 'ready' ? result.projectId : undefined })
+  expect(frozen.isFrozen('recovery_candidates', 'old-candidate')).toBe(true)
+  expect(frozen.isFrozen('finalization_outbox', 'old-outbox')).toBe(true)
+  expect(frozen.isFrozen('import_runs', 'old-import')).toBe(true)
+  expect(() => frozen.assertMutable('recovery_candidates', 'old-candidate')).toThrow('PORTABLE_RUNTIME_FROZEN')
+  const copy = new Database(path.join(f.target, '.ai-novel', 'project.db'), { readonly: true })
+  try {
+    expect(copy.prepare('SELECT visible_text FROM recovery_candidates WHERE candidate_id=?').pluck().get('old-candidate')).toBe('旧候选正文')
+    expect(copy.prepare('SELECT body FROM contents WHERE id=(SELECT content_id FROM reviews WHERE id=21)').pluck().get()).toBe('旧版人工审稿原文')
+    expect(copy.prepare('SELECT source_content FROM reviews WHERE id=21').pluck().get()).toBe('合成章节正文\r\n原字节')
+    expect(copy.prepare('SELECT publication_status FROM finalization_outbox WHERE finalization_id=?').pluck().get('old-outbox')).toBe('pending')
+    expect(copy.prepare('SELECT last_error FROM finalization_outbox WHERE finalization_id=?').pluck().get('old-outbox')).not.toContain('token-secret')
+    expect(copy.prepare('SELECT execution_owner FROM import_runs WHERE id=?').pluck().get('old-import')).not.toBe('old-machine-authority')
+  }
+  finally { copy.close() }
+  expect(Object.fromEntries(Object.keys(before).map(name => [name, hash(path.join(f.legacy, name))]))).toEqual(before)
+  expect(fs.existsSync(path.join(f.legacy, 'vela.db'))).toBe(true)
+})
+
+it.each(['v100', 'v110'] as const)('%s 无 manifest 的旧历史启用新 lineage，旧删除操作不能重放', async version => {
+  const f = fixture(version)
+  fs.rmSync(path.join(f.legacy, 'project.json'))
+  const oldCandidateProjectId = randomUUID()
+  const source = new Database(path.join(f.legacy, 'vela.db'))
+  try {
+    source.prepare(`INSERT INTO recovery_candidates(candidate_id,run_id,step_id,project_id,chapter_number,
+      source_snapshot,source_hash,visible_text,content_hash) VALUES(?,?,?,?,?,?,?,?,?)`)
+      .run('old-candidate', 'old-run', 'old-step', oldCandidateProjectId, 7,
+        JSON.stringify({ chapterNumber: 7, title: '第七章', role: '推进', purpose: '追踪', keyEvents: '线索', characters: [] }),
+        'old-source-hash', '旧候选正文', 'old-content-hash')
+    source.prepare(`INSERT INTO chapter_deletion_operations(operation_id,draft_id,chapter_number,finalization_id,
+      target_file_name,knowledge_document_id,status) VALUES(?,?,?,?,?,?,'pending')`)
+      .run('old-deletion', 19, 7, 'old-finalization', '第七章.md', 'old-knowledge-doc')
+    source.prepare(`INSERT INTO finalization_outbox(finalization_id,draft_id,chapter_number,chapter_title,
+      content_hash,content_revision,content_snapshot,target_file_name,publication_status)
+      VALUES(?,?,?,?,?,1,?,?,'pending')`).run('old-outbox', 19, 7, '第七章',
+        createHash('sha256').update('合成章节正文\r\n原字节').digest('hex'), '合成章节正文\r\n原字节', '第七章.md')
+    source.prepare(`INSERT INTO import_runs(id,root_run_id,effect_namespace,source_fingerprint,manifest_fingerprint,
+      locale,stage,status,total_chapters,manifest_chapter_count) VALUES(?,?,?,?,?,'zh-CN','parsing','running',0,0)`)
+      .run('old-import', 'old-import', 'import:old-import', createHash('sha256').update('source').digest('hex'),
+        createHash('sha256').update('manifest').digest('hex'))
+  } finally { source.close() }
+  const sourceDatabaseHash = hash(path.join(f.legacy, 'vela.db'))
+  const result = await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions })
+  expect(result, JSON.stringify(result)).toMatchObject({ state: 'ready' })
+  if (result.state !== 'ready') return
+  expect(result.projectId).not.toBe(oldCandidateProjectId)
+  const storage = path.join(f.target, '.ai-novel')
+  const freeze = JSON.parse(fs.readFileSync(path.join(storage, 'portable-runtime-freeze.json'), 'utf8'))
+  const authority = JSON.parse(fs.readFileSync(path.join(storage, 'portable-transfer-authority.json'), 'utf8'))
+  expect(freeze.originProjectId).toBe(result.projectId)
+  expect(authority).toMatchObject({ originProjectId: result.projectId, targetProjectId: result.projectId })
+  expect(readPortableRuntimeFreeze(f.target).isFrozen('recovery_candidates', 'old-candidate')).toBe(true)
+  expect(readPortableRuntimeFreeze(f.target).isFrozen('chapter_deletion_operations', 'old-deletion')).toBe(true)
+  expect(readPortableRuntimeFreeze(f.target).isFrozen('finalization_outbox', 'old-outbox')).toBe(true)
+  expect(readPortableRuntimeFreeze(f.target).isFrozen('import_runs', 'old-import')).toBe(true)
+  initProjectDatabase(f.target)
+  const targetDb = getProjectDb()!
+  expect(readPortableCurrentAuthority({ database: targetDb, projectStorageRoot: storage, projectId: result.projectId }))
+    .toMatchObject({ originProjectId: result.projectId })
+  expect(targetDb.prepare('SELECT project_id FROM recovery_candidates WHERE candidate_id=?').pluck().get('old-candidate'))
+    .toBe(oldCandidateProjectId)
+  expect(targetDb.prepare('SELECT status FROM chapter_deletion_operations WHERE operation_id=?').pluck().get('old-deletion'))
+    .toBe('pending')
+  const calls: string[] = []
+  const service = new ChapterDeletionService({ cleaner: {
+    async removeManuscript() { calls.push('manuscript') },
+    async removeKnowledgeDocument() { calls.push('knowledge') },
+  } })
+  expect(await service.retry(f.target, 'old-deletion')).toMatchObject({ success: false, committed: false,
+    operation: { operationId: 'old-deletion' } })
+  expect(await service.confirmLegacyKnowledgeAbsent(f.target, 'old-deletion')).toMatchObject({ success: false, committed: false,
+    operation: { operationId: 'old-deletion' } })
+  expect(await service.delete(f.target, { draftId: 19, chapterNumber: 7 })).toMatchObject({ success: false, committed: false,
+    operation: { operationId: 'old-deletion' } })
+  expect(calls).toEqual([])
+  expect(targetDb.prepare('SELECT status,attempt_count FROM chapter_deletion_operations WHERE operation_id=?')
+    .get('old-deletion')).toMatchObject({ status: 'pending', attempt_count: 0 })
+  expect(hash(path.join(f.legacy, 'vela.db'))).toBe(sourceDatabaseHash)
+})
+
+it('未被角色引用的头像原字节保留为待处理资料', async () => {
+  const f = fixture('v110')
+  fs.mkdirSync(path.join(f.legacy, 'avatars'))
+  fs.writeFileSync(path.join(f.legacy, 'avatars', 'unmapped.png'), Buffer.from('89504e470d0a1a0a00000000', 'hex'))
+  expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))
+    .toMatchObject({ state: 'ready' })
+  const unresolved = path.join(f.target, '.ai-novel', 'avatars', 'unresolved')
+  expect(fs.readFileSync(path.join(unresolved, fs.readdirSync(unresolved)[0]!))).toEqual(fs.readFileSync(path.join(f.legacy, 'avatars', 'unmapped.png')))
+  expect(fs.existsSync(path.join(f.legacy, 'avatars', 'unmapped.png'))).toBe(true)
+})

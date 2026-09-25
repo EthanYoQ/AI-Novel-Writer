@@ -312,6 +312,16 @@ export type PortableProjectOperationFailure = {
 }
 
 export interface ProjectChannels {
+  'dialog:select-legacy-project': {
+    args: []
+    return: string | null
+  }
+  'project:import-legacy-copy': {
+    args: [sourceRoot: string, targetRoot: string]
+    return: { state: 'ready'; projectId: string; targetRoot: string; warning?: string }
+      | { state: 'cancelled' }
+      | { state: 'blocked'; code: string }
+  }
   'project:get-runtime-context': {
     args: []
     return: {
