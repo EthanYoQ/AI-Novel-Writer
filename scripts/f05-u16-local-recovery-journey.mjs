@@ -1,4 +1,4 @@
-/* global process */
+/* global process, Buffer */
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
@@ -7,6 +7,7 @@ import { createServer } from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
+import yauzl from 'yauzl'
 import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLanceLoad } from './verify-win-package.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -48,6 +49,29 @@ let currentStep = 'setup'
 const pass = (stepId, actionId, assertion) => steps.push({ stepId, actionId, outcome: 'PASS', assertion })
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
 const folded = value => path.win32.normalize(value).toLowerCase()
+const archiveManifest = bytes => new Promise((resolve, reject) => yauzl.fromBuffer(bytes, { lazyEntries: true }, (error, zip) => {
+  if (error || !zip) return reject(error ?? new Error('archive unavailable'))
+  zip.once('error', reject)
+  zip.once('entry', entry => {
+    if (entry.fileName !== 'manifest.json') { zip.close(); reject(new Error('archive manifest missing')); return }
+    zip.openReadStream(entry, async (streamError, stream) => {
+      if (streamError || !stream) { zip.close(); reject(streamError ?? new Error('manifest unavailable')); return }
+      try {
+        const chunks = []
+        for await (const chunk of stream) chunks.push(chunk)
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+      } catch (readError) { reject(readError) } finally { zip.close() }
+    })
+  })
+  zip.readEntry()
+}))
+const schemaVersion = databasePath => {
+  const script = "const Database=require('./resources/app.asar/node_modules/better-sqlite3');const db=new Database(process.argv[1],{readonly:true});try{process.stdout.write(String(db.pragma('user_version',{simple:true})))}finally{db.close()}"
+  const result = spawnSync(executablePath, ['-e', script, databasePath], { cwd: packageDir,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8', windowsHide: true, timeout: 20_000 })
+  assert.equal(result.status, 0, `schema read failed: ${result.stderr || result.error || result.stdout}`)
+  return Number(result.stdout.trim())
+}
 
 function provenance() {
   if (fixedPackage) {
@@ -62,9 +86,12 @@ function provenance() {
     assert.equal(git('diff', '--name-only', `${testedSha}..HEAD`, '--', ...productInputs), '',
       'product input changed since fixed package build')
     assert.equal(git('diff', '--name-only', '--', ...productInputs), '', 'product input has uncommitted changes')
+    const dirtyProductPaths = git('status', '--porcelain', '--', ...productInputs).split('\n').filter(Boolean)
+    assert(dirtyProductPaths.every(line => /^\?\? src\/components\/.+\/__tests__\/__screenshots__\/$/.test(line)),
+      'fixed package has untracked product inputs')
     assert.equal(hash(executablePath), expectedExe)
     assert.equal(hash(asarPath), expectedAsar)
-    return { testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths: [],
+    return { testedSha, executionHead: git('rev-parse', 'HEAD'), changedPaths: [], dirtyProductPaths,
       sourceDirty: git('status', '--porcelain').split('\n').filter(Boolean),
       executableSha256: expectedExe, asarSha256: expectedAsar,
       reuseReason: 'Fixed package hashes match and product inputs are unchanged.' }
@@ -223,6 +250,8 @@ async function main() {
     panel = page.getByTestId('project-backup-panel')
     await panel.getByText('本地便携存档').waitFor()
     currentStep = 'U16.A01'
+    const originalDb = path.join(created.projectPath, '.ai-novel', 'project.db')
+    const originalSha256 = hash(originalDb)
     const localArchive = path.join(profile.exports, 'local.ainovel')
     await preflight(page, 'dialog:select-project-archive-export', [name],
       { title: '导出项目存档', target: localArchive }, localArchive)
@@ -234,9 +263,14 @@ async function main() {
     assert(fs.statSync(localArchive).size > 0)
     const localSha256 = hash(localArchive)
     assert.match(await panel.getByRole('status').last().innerText(), new RegExp(localSha256))
-    const originalDb = path.join(created.projectPath, '.ai-novel', 'project.db')
-    const originalSha256 = hash(originalDb)
-    pass('v3-local-export', 'U16.A01', 'Public picker IPC preflight matched isolated target; V3 native Save selection created archive and UI receipt hash matches bytes')
+    assert.equal(hash(originalDb), originalSha256, 'local export changed original project database')
+    const localManifest = await archiveManifest(fs.readFileSync(localArchive))
+    assert.equal(localManifest.sourceSchemaVersion, 7)
+    assert.equal(localManifest.originProjectId, created.projectId)
+    assert.equal(localManifest.semanticCounts['table.review_cycle_merges'], 0)
+    assert(localManifest.entries.some(entry => entry.path === 'project.db' && entry.disposition === 'portable-database'))
+    assert.equal(schemaVersion(originalDb), 7)
+    pass('v3-local-export', 'U16.A01', 'V3 native Save created a hash-matched schema-7 archive with M06 table projection and original DB intact')
 
     currentStep = 'U16.A02'
     const localParent = path.join(profile.restored, 'local')
@@ -255,6 +289,7 @@ async function main() {
     const localCopy = path.join(localParent, `${name}-恢复副本`)
     assert(fs.existsSync(path.join(localCopy, '.ai-novel', 'project.db')))
     assert.equal(hash(originalDb), originalSha256, 'local restore changed original project database')
+    assert.equal(schemaVersion(path.join(localCopy, '.ai-novel', 'project.db')), 7)
 
     if (localOnly) {
       currentStep = 'U16.A02-reopen-copy'
@@ -355,6 +390,9 @@ async function main() {
     await generationChoice.waitFor({ state: 'visible' })
     await generationChoice.check()
     assert.equal(await panel.locator('input[name="restore-generation"]:checked').inputValue(), generationId)
+    const remoteManifest = await archiveManifest(remoteArchive)
+    assert.equal(remoteManifest.sourceSchemaVersion, 7)
+    assert.equal(remoteManifest.originProjectId, created.projectId)
 
     currentStep = 'U16.A08-cloud-restore'
     const cloudParent = path.join(profile.restored, 'cloud')
@@ -368,16 +406,18 @@ async function main() {
     await choose(panel.getByRole('button', { name: '恢复所选云端世代为副本' }), [
       { title: '选择恢复副本所在文件夹', target: cloudParent },
     ])
+    const requiredDownloads = ['completion.json', 'manifest.json', 'archive.ainovel']
+    const downloaded = file => davRequests.slice(requestsBefore).some(request => request.method === 'GET'
+      && request.pathname === `${generationPath}${file}` && request.authorized && request.status === 200)
+    const deadline = Date.now() + 60_000
+    while (!requiredDownloads.every(downloaded) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100))
+    for (const file of requiredDownloads) assert(downloaded(file), `missing authorized download of ${file}`)
+    pass('v3-select-download-generation', 'U16.A07', 'V3 selected exact generation and independently downloaded authorized hash-linked completion, manifest and schema-7 archive')
     await panel.getByRole('status').filter({ hasText: '云端世代已恢复为新副本' }).waitFor({ timeout: 60_000 })
     const cloudCopy = path.join(cloudParent, `${name}-恢复副本`)
     assert(fs.existsSync(path.join(cloudCopy, '.ai-novel', 'project.db')))
     assert.equal(hash(originalDb), beforeCloudRestoreSha256, 'cloud restore changed original project database')
-    for (const file of ['completion.json', 'manifest.json', 'archive.ainovel']) {
-      assert(davRequests.slice(requestsBefore).some(request => request.method === 'GET'
-        && request.pathname === `${generationPath}${file}` && request.authorized && request.status === 200),
-      `missing authorized download of ${file}`)
-    }
-    pass('v3-select-download-generation', 'U16.A07', 'V3 selected visible exact generation; controlled DAV served matching completion, manifest and archive')
+    assert.equal(schemaVersion(path.join(cloudCopy, '.ai-novel', 'project.db')), 7)
 
     currentStep = 'U16.A08-reopen-copy'
     const firstPid = app.process()?.pid

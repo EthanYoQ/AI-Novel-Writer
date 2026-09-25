@@ -67,9 +67,12 @@ function provenance() {
     assert.equal(git('diff', '--name-only', `${testedSha}..HEAD`, '--', ...productInputs), '',
       'product input changed since fixed package build')
     assert.equal(git('diff', '--name-only', '--', ...productInputs), '', 'product input has uncommitted changes')
+    const dirtyProductPaths = git('status', '--porcelain', '--', ...productInputs).split('\n').filter(Boolean)
+    assert(dirtyProductPaths.every(line => /^\?\? src\/components\/.+\/__tests__\/__screenshots__\/$/.test(line)),
+      'fixed package has untracked product inputs')
     assert.equal(sha(executablePath), expectedExe)
     assert.equal(sha(asarPath), expectedAsar)
-    return { testedSha, executionHead: git('rev-parse', 'HEAD'),
+    return { testedSha, executionHead: git('rev-parse', 'HEAD'), dirtyProductPaths,
       changedPaths: git('diff', '--name-only', `${testedSha}..HEAD`).split('\n').filter(Boolean),
       sourceDirty: git('status', '--porcelain').split('\n').filter(Boolean),
       executableSha256: expectedExe, asarSha256: expectedAsar, driverSha256: sha(scriptPath), helperSha256: sha(helperPath),
@@ -296,6 +299,18 @@ try { process.stdout.write(createHash('sha256').update(db.serialize()).digest('h
   assert.equal(result.status, 0, `serialized database snapshot failed: ${result.stderr || result.error || result.stdout}`)
   return result.stdout.trim()
 }
+function assertCurrentSchema(databasePath) {
+  const script = String.raw`const Database=require('./resources/app.asar/node_modules/better-sqlite3');
+const db=new Database(process.argv[1],{readonly:true});
+try { process.stdout.write(JSON.stringify({version:db.pragma('user_version',{simple:true}),
+  mergeFields:db.pragma('table_info(review_cycle_merges)').map(field=>field.name)})); } finally { db.close() }`
+  const result = spawnSync(executablePath, ['-e', script, databasePath], { cwd: packageDir,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8', windowsHide: true, timeout: 20_000 })
+  assert.equal(result.status, 0, `schema read failed: ${result.stderr || result.error || result.stdout}`)
+  const schema = JSON.parse(result.stdout.trim())
+  assert.equal(schema.version, 7)
+  assert.deepEqual(schema.mergeFields, ['cycle_id', 'body'])
+}
 async function upload(panel) {
   await panel.locator('input[name="cloud-disclosure"]').check()
   const before = filesWithCompletion()
@@ -364,6 +379,7 @@ async function main() {
     const root = await upload(panelA)
     assert.deepEqual(root.parentGenerationIds, [])
     const originalDb = path.join(created.projectPath, '.ai-novel', 'project.db')
+    assertCurrentSchema(originalDb)
     const originalSha = sha(originalDb)
     await close(a.app)
 
@@ -377,6 +393,7 @@ async function main() {
     const panelB = await openPanel(b.page, '恢复入口')
     await bind(panelB, endpoint)
     const copy = await restoreGeneration(b.page, panelB, root.generationId, profiles.b.restored, '恢复入口-恢复副本')
+    assertCurrentSchema(path.join(copy, '.ai-novel', 'project.db'))
     assert.equal(sha(originalDb), originalSha)
     const copyOpen = await invoke(b.page, 'project:open', copy, randomUUID(), null)
     assert.equal(copyOpen.success, true, copyOpen.error)
@@ -442,6 +459,7 @@ async function main() {
     assert.equal(await panelA2.locator('input[name="restore-generation"]:checked').inputValue(), childB.generationId)
     const originalSerializedSha = serializedDbSha(originalDb)
     const selectedBranchCopy = await restoreGeneration(resumedA.page, panelA2, childB.generationId, profiles.a.restored, `${name}-恢复副本`)
+    assertCurrentSchema(path.join(selectedBranchCopy, '.ai-novel', 'project.db'))
     assert.equal(serializedDbSha(originalDb), originalSerializedSha, 'branch restore changed original database snapshot')
     assert.equal(finalizedChapterBody(path.join(selectedBranchCopy, '.ai-novel', 'project.db')), currentBody,
       'selected B branch did not restore its unique finalized chapter')

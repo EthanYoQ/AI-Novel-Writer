@@ -1,4 +1,4 @@
-/* global process */
+/* global process, Buffer */
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
@@ -7,6 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { _electron as electron } from 'playwright'
+import yauzl from 'yauzl'
 import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLanceLoad } from './verify-win-package.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -88,10 +89,13 @@ function reuseFixedPackage() {
   const changedPaths = git('diff', '--name-only', `${buildSha}..HEAD`, '--', ...productInputs)
   assert.equal(changedPaths, '', 'product input changed since fixed package build')
   assert.equal(git('diff', '--name-only', '--', ...productInputs), '', 'product input has uncommitted changes')
+  const dirtyProductPaths = git('status', '--porcelain', '--', ...productInputs).split('\n').filter(Boolean)
+  assert(dirtyProductPaths.every(line => /^\?\? src\/components\/.+\/__tests__\/__screenshots__\/$/.test(line)),
+    'fixed package has untracked product inputs')
   assert.equal(sha256(asarPath), expectedAsar, 'fixed packaged asar changed')
   assert.equal(sha256(executablePath), expectedExe, 'fixed packaged executable changed')
   const dirtyPaths = sourceState().dirtyPaths
-  return { buildSha, inputSha256: null, reusedFromFixedPackage: true,
+  return { buildSha, inputSha256: null, reusedFromFixedPackage: true, dirtyProductPaths,
     dirtyPathsBefore: dirtyPaths, dirtyPathsAfter: dirtyPaths }
 }
 const driverSha256 = sha256(fileURLToPath(import.meta.url))
@@ -158,6 +162,22 @@ const dav = createServer(async (request, response) => {
 })
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
 const pass = (stepId, actionId, assertion) => steps.push({ stepId, actionId, assertion, outcome: 'PASS' })
+const archiveManifest = bytes => new Promise((resolve, reject) => yauzl.fromBuffer(bytes, { lazyEntries: true }, (error, zip) => {
+  if (error || !zip) return reject(error ?? new Error('archive unavailable'))
+  zip.once('error', reject)
+  zip.once('entry', entry => {
+    if (entry.fileName !== 'manifest.json') { zip.close(); reject(new Error('archive manifest missing')); return }
+    zip.openReadStream(entry, async (streamError, stream) => {
+      if (streamError || !stream) { zip.close(); reject(streamError ?? new Error('manifest unavailable')); return }
+      try {
+        const chunks = []
+        for await (const chunk of stream) chunks.push(chunk)
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+      } catch (readError) { reject(readError) } finally { zip.close() }
+    })
+  })
+  zip.readEntry()
+}))
 const visibleGeneration = (panel, generationId) => panel.locator(`input[name="restore-generation"][value="${generationId}"]`).waitFor({ state: 'visible', timeout: 5_000 })
 async function waitNotice(panel, expected, timeout = 30_000) {
   try { await panel.getByRole('status').filter({ hasText: expected }).waitFor({ timeout }) }
@@ -226,6 +246,15 @@ async function runProfile(profile, endpoint) {
     const created = await invoke(page, 'project:create', { path: profile.projects, name: projectName,
       genre: 'fixture', targetAudience: 'fixture', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(created.success, true, created.error)
+    if (profile.name === 'a') {
+      const opened = await invoke(page, 'project:open', created.projectPath, randomUUID(), null)
+      assert.equal(opened.success, true, opened.error)
+      const projectSession = { projectId: created.projectId, projectPath: created.projectPath,
+        leaseId: opened.project.sessionLease }
+      const seeded = await invoke(page, 'db:draft-create', { chapterNumber: 1, version: 1, source: 'write',
+        content: `云归档合成正文 ${runId}`, wordCount: 8 }, created.projectPath, projectSession)
+      assert.equal(seeded.success, true, seeded.error)
+    }
     await page.reload()
     await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
     const panel = await openBackup(page, projectName)
@@ -280,7 +309,13 @@ async function runProfile(profile, endpoint) {
       assert.deepEqual(manifest.archive, { file: 'archive.ainovel', sha256: createHash('sha256').update(archiveBytes).digest('hex'),
         byteSize: archiveBytes.length })
       assert.deepEqual(completion.archive, manifest.archive)
-      pass('a-U16.A05', 'U16.A05', 'Writer manual upload published archive and manifest with matching completion references and hashes')
+      const portable = await archiveManifest(archiveBytes)
+      assert.equal(portable.sourceSchemaVersion, 7)
+      assert.equal(portable.originProjectId, originProjectId)
+      assert.equal(portable.semanticCounts['table.drafts'], 1)
+      assert.equal(portable.semanticCounts['table.review_cycle_merges'], 0)
+      assert(portable.entries.some(entry => entry.path === 'project.db' && entry.disposition === 'portable-database'))
+      pass('a-U16.A05', 'U16.A05', 'Writer uploaded a nonempty schema-7 archive and hash-linked immutable manifest/completion')
     }
 
     currentStep = `${profile.name}:U16.A06-cloud-list`
