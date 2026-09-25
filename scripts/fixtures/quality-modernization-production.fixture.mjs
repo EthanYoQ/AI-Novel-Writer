@@ -371,6 +371,8 @@ test('isolated production commands persist the selected phase operations', async
       const attemptId = `${target.arm}:${first.attemptId}`
       const matches = receipt.attempts.filter(attempt => attempt.attemptId === attemptId)
       if (matches.length !== 1) return null
+      if (matches[0].authorityEvidence?.allFactsSent !== true
+        || JSON.stringify(matches[0].authorityEvidence.factHashes) !== JSON.stringify(authorityFacts.map(sha))) return null
       const events = fs.readFileSync(request.ledgerPath, 'utf8').trimEnd().split('\n')
         .map(line => JSON.parse(line)).filter(event => event.attemptId === attemptId)
       return { attempt: matches[0], events }
@@ -405,6 +407,9 @@ test('isolated production commands persist the selected phase operations', async
         && (actual ?? observedIpc).purpose === repairPolicy.repairPurpose) await Promise.all(streamSettlements)
       // The registered extra call must carry its real product purpose before campaign reserve.
       beforeOperationDispatch(operationId, actual ?? observedIpc)
+      const structuredSyntaxRepair = repairPolicy?.operationId === operationId
+        && repairPolicy.maxRepairAttempts === 1
+        && (actual ?? observedIpc).purpose === repairPolicy.repairPurpose
       const attemptId = `${target.arm}:${actual?.attemptId ?? observedIpc.attemptId}`
       const promptText = body.messages.filter(message => typeof message?.content === 'string')
         .map(message => message.content).join('\n')
@@ -424,7 +429,7 @@ test('isolated production commands persist the selected phase operations', async
         const activeDraft = db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC,d.id DESC LIMIT 1')
           .pluck().get(chapter.number)
         preflight(typeof activeDraft === 'string' && promptText.includes(activeDraft), 'OUTBOUND_REFINE_SOURCE_DRAFT_MISSING')
-      } else {
+      } else if (!structuredSyntaxRepair) {
         for (const fact of authorityFacts)
           preflight(promptText.includes(fact), `OUTBOUND_ORACLE_AUTHORITY_MISSING:${fact}`)
         if (request.chapterNumber > 1) {
@@ -482,7 +487,7 @@ test('isolated production commands persist the selected phase operations', async
           : request.phase === 'early-review' && operationKind === 'refine'
             ? { sourceDraftHash: sha(db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC,d.id DESC LIMIT 1')
                 .pluck().get(chapter.number)), confirmedReviewBound: candidate ? materialDecision.included.some(item => item.sourceId.startsWith('review:confirmed:')) : true }
-          : { factHashes: authorityFacts.map(sha), allFactsSent: true,
+          : { factHashes: authorityFacts.map(sha), allFactsSent: authorityFacts.every(fact => promptText.includes(fact)),
               ...(request.chapterNumber > 1 ? { predecessorHash: sha(predecessorReadbacks.find(record => record.required)?.content ?? ''), predecessorSent: true } : {}) },
         userPromptHash, optionalMaterialEvidence: { registered: registeredOptional, sent: sentOptional,
           sentSourceIds: sentOptional.map(record => record.sourceId),

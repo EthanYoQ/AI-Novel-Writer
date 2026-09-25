@@ -214,6 +214,72 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
     const ipc = { attemptId: 'ipc-main', runId: 'bridge-run', projectId: 'project', epoch: 'epoch', purpose: policy.primaryPurpose }
     assert.doesNotThrow(dispatch(evidence('{"blueprints":[', 'settle', ipc, 'baseline'), ipc),
       'baseline IPC purpose and request identity follow the same syntax rule')
+
+    const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
+    const proofStart = fixture.indexOf('readPrimaryEvidence: first => {') + 'readPrimaryEvidence: first => {'.length
+    const proofEnd = fixture.indexOf('    }, onReject:', proofStart)
+    const gateCall = fixture.indexOf('      beforeOperationDispatch(operationId, actual ?? observedIpc)')
+    const repairStart = fixture.indexOf('      const structuredSyntaxRepair =', gateCall)
+    const repairEnd = fixture.indexOf('      const attemptId =', repairStart)
+    const checkStart = fixture.indexOf("      if (operationKind === 'recheck' && candidate)")
+    const checkEnd = fixture.indexOf("      if (candidate && request.phase === 'early-context')", checkStart)
+    const reserve = fixture.indexOf("record({ type: 'reserve', attemptId, binding })", checkEnd)
+    const evidenceStart = fixture.indexOf('authorityEvidence: operationKind ===') + 'authorityEvidence: '.length
+    const evidenceEnd = fixture.indexOf('\n        userPromptHash,', evidenceStart)
+    assert.ok(proofStart > 0 && proofEnd > proofStart && gateCall > 0 && repairStart > gateCall
+      && repairEnd > repairStart && checkStart > repairEnd && checkEnd > checkStart && reserve > checkEnd
+      && evidenceStart > 0 && evidenceEnd > evidenceStart)
+    const readPrimaryEvidence = new Function('first', 'receipt', 'request', 'authorityFacts', 'sha', 'fs', 'target',
+      fixture.slice(proofStart, proofEnd))
+    const isStructuredSyntaxRepair = new Function('repairPolicy', 'operationId', 'actual', 'observedIpc',
+      `${fixture.slice(repairStart, repairEnd)}\nreturn structuredSyntaxRepair`)
+    const checkAuthority = new Function('operationKind', 'candidate', 'request', 'db', 'chapter', 'promptText',
+      'preflight', 'authorityFacts', 'predecessorReadbacks', 'naturalPredecessorText', 'scene', 'structuredSyntaxRepair',
+      fixture.slice(checkStart, checkEnd))
+    const readAuthorityEvidence = new Function('operationKind', 'candidate', 'request', 'authorityFacts', 'sha',
+      'promptText', 'structuredSyntaxRepair', 'predecessorReadbacks', 'db', 'chapter',
+      `return ${fixture.slice(evidenceStart, evidenceEnd).trim().replace(/,$/, '')}`)
+    const facts = ['fact sent', 'fact absent from repair']
+    const request = { phase: 'early-budget', chapterNumber: 1 }
+    const ledgerPath = path.join(dir, 'ledger.jsonl')
+    for (const [arm, identity] of [['baseline', ipc], ['candidate', primary]]) {
+      const proof = evidence('{"blueprints":[', 'settle', identity, arm)
+      proof.attempt.authorityEvidence = { factHashes: facts.map(hash), allFactsSent: false }
+      fs.writeFileSync(ledgerPath, proof.events.map(event => JSON.stringify(event)).join('\n') + '\n')
+      const priorReader = first => readPrimaryEvidence(first, { attempts: [proof.attempt] }, { ledgerPath }, facts,
+        hash, fs, { arm })
+      const withoutAncestry = createOperationDispatchGate({ repairPolicy: policy, readPrimaryEvidence: priorReader })
+      withoutAncestry(policy.operationId, identity)
+      assert.throws(() => withoutAncestry(policy.operationId,
+        { ...identity, attemptId: 'repair', purpose: policy.repairPurpose }), /MODEL_REQUEST_REJECTED/,
+      'a malformed output without a fully authorized primary cannot license repair')
+      proof.attempt.authorityEvidence.allFactsSent = true
+      proof.attempt.authorityEvidence.factHashes[0] = '0'.repeat(64)
+      const wrongAuthority = createOperationDispatchGate({ repairPolicy: policy, readPrimaryEvidence: priorReader })
+      wrongAuthority(policy.operationId, identity)
+      assert.throws(() => wrongAuthority(policy.operationId,
+        { ...identity, attemptId: 'repair', purpose: policy.repairPurpose }), /MODEL_REQUEST_REJECTED/)
+      proof.attempt.authorityEvidence.factHashes = facts.map(hash)
+      const authorized = createOperationDispatchGate({ repairPolicy: policy, readPrimaryEvidence: priorReader })
+      authorized(policy.operationId, identity)
+      const repairOwner = { ...identity, attemptId: 'repair', purpose: policy.repairPurpose }
+      assert.doesNotThrow(() => authorized(policy.operationId, repairOwner))
+      const ownerFor = value => [arm === 'candidate' ? value : null, arm === 'baseline' ? value : null]
+      const primaryFlag = isStructuredSyntaxRepair(policy, policy.operationId, ...ownerFor(identity))
+      const repairFlag = isStructuredSyntaxRepair(policy, policy.operationId, ...ownerFor(repairOwner))
+      assert.equal(primaryFlag, false)
+      assert.equal(repairFlag, true)
+      const check = (promptText, structuredSyntaxRepair) => checkAuthority('directory', arm === 'candidate', request,
+        null, null, promptText, createOutboundPreflightAssert([]), facts, [], () => '', {}, structuredSyntaxRepair)
+      assert.throws(() => check(facts[0], primaryFlag), /OUTBOUND_ORACLE_AUTHORITY_MISSING/,
+        'ordinary generation still needs every author fact')
+      assert.doesNotThrow(() => check(facts.join('\n'), primaryFlag))
+      assert.doesNotThrow(() => check(facts[0], repairFlag), 'authorized syntax repair is not a new author generation')
+      assert.equal(readAuthorityEvidence('directory', arm === 'candidate', request, facts, hash,
+        facts[0], repairFlag, [], null, null).allFactsSent, false)
+      assert.equal(readAuthorityEvidence('directory', arm === 'candidate', request, facts, hash,
+        facts.join('\n'), primaryFlag, [], null, null).allFactsSent, true)
+    }
   } finally {
     assert.ok(path.resolve(dir).startsWith(path.resolve(ROOT, '.runtime/.cache/novel-quality-modernization') + path.sep))
     fs.rmSync(dir, { recursive: true, force: true })
@@ -748,8 +814,8 @@ test('bridge 在记账前按 operation 校验出站权威，且只把真实 prov
   assert.ok(fixture.includes('OUTBOUND_RECHECK_MERGED_DRAFT_MISSING'))
   assert.ok(fixture.includes('OUTBOUND_RECHECK_FINDING_ID_MISSING'))
   assert.ok(fixture.includes('OUTBOUND_RECHECK_TARGET_ID_MISSING'))
-  assert.match(fixture, /if \(operationKind === 'recheck' && candidate\)[\s\S]*?\} else \{[\s\S]*?OUTBOUND_REQUIRED_PREDECESSOR_MISSING/,
-    '逐字前情校验只属于普通 review/refine，不得误套到 recheck')
+  assert.match(fixture, /if \(operationKind === 'recheck' && candidate\)[\s\S]*?\} else if \(!structuredSyntaxRepair\) \{[\s\S]*?OUTBOUND_REQUIRED_PREDECESSOR_MISSING/,
+    '逐字前情校验只属于普通生成，不得误套到 recheck 或语法修复')
   assert.ok(fixture.includes('createOutboundPreflightAssert(receipt.preflightFailures ??= [])'))
   assert.ok(fixture.includes('fetchProviderResponse(originalFetch'))
   assert.ok(fixture.includes('globalThis.fetch = physicalFetch'), '全局 fetch 不得再把本地 preflight 失败混入 fetchFailures')
