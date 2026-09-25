@@ -9,13 +9,17 @@ import { createRequire } from 'node:module'
 import { _electron as electron } from 'playwright'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const packageDir = path.join(repository, '.runtime', '.cache', 'f04-v3-build', 's13-core-1')
+const arg = name => process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
+const currentMode = process.argv.includes('--a07-current')
+const buildTree = currentMode ? arg('build-tree') : null
+const packageDir = currentMode ? (arg('package-dir') ?? '') : path.join(repository, '.runtime', '.cache', 'f04-v3-build', 's13-core-1')
 const executablePath = path.join(packageDir, 'AI小说作家.exe')
 const asarPath = path.join(packageDir, 'resources', 'app.asar')
-const packageSourceSha = '7110f53d5ce173d70bc0dcef90209bccb38d9fff'
-const expectedExeSha = 'c3864b55649358e6acae5e828861dc231521f75e5bfa0422212d86b3349f6669'
-const expectedAsarSha = 'bf2f5c95ae8b72e377710759bfdb392cd0344f9e4c2d67fb0ef0ecbfb7b37b66'
-const priorReceiptPath = path.join(repository, '.runtime', '.cache', 'f05-u02-migration', '14988078-c897-452a-92da-7bbf6e14e367', 'receipt.json')
+const packageSourceSha = currentMode ? arg('tested-sha') : '7110f53d5ce173d70bc0dcef90209bccb38d9fff'
+const expectedExeSha = currentMode ? arg('exe-sha256') : 'c3864b55649358e6acae5e828861dc231521f75e5bfa0422212d86b3349f6669'
+const expectedAsarSha = currentMode ? arg('asar-sha256') : 'bf2f5c95ae8b72e377710759bfdb392cd0344f9e4c2d67fb0ef0ecbfb7b37b66'
+const priorReceiptPath = path.join(repository, '.runtime', '.cache', 'f05-u02-migration',
+  currentMode ? 'cca73e9a-b803-4ac6-9328-2148d29be65c' : '14988078-c897-452a-92da-7bbf6e14e367', 'receipt.json')
 const Database = createRequire(import.meta.url)('better-sqlite3')
 const runId = randomUUID()
 const root = path.join(repository, '.runtime', '.cache', 'f05-u02-migration', runId)
@@ -80,13 +84,18 @@ function dbBody(projectPath) {
   try { return db.prepare('SELECT contents.body FROM drafts JOIN contents ON contents.id = drafts.content_id WHERE drafts.chapter_number = 1 AND drafts.version = 1').get().body }
   finally { db.close() }
 }
+function modelCallCount(projectPath) {
+  const db = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true, readonly: true })
+  try { return db.prepare('SELECT COUNT(*) AS count FROM llm_calls').get().count }
+  finally { db.close() }
+}
 
-async function migrate(name, legacyShell, expectedPreference) {
+async function migrate(name, legacyShell, expectedPreference, prepare) {
   const roots = profile(name)
   let projectPath
   let session = await launch(roots)
   try {
-    if (name === 'v1') {
+    if (name === 'v1' && !currentMode) {
       const result = await session.page.evaluate(({ projectParent, requestToken }) => window.aiNovelAPI.invoke('project:create',
         { path: projectParent, name: '迁移前作品', genre: '合成测试', targetAudience: '合成读者', writingLanguage: 'zh-CN' },
         requestToken), { projectParent, requestToken: randomUUID() })
@@ -112,6 +121,8 @@ async function migrate(name, legacyShell, expectedPreference) {
     }, { appearanceKey, themeKey, shellKey, themeRaw, legacyShell })
     assert.equal((await stored(session.page)).appearance, null)
   } finally { await session.app.close() }
+
+  if (prepare) prepare(roots)
 
   session = await launch(roots)
   try {
@@ -194,6 +205,184 @@ async function projectState(roots, session, projectPath) {
   } finally { await session.app.close() }
 }
 
+function sourceFiles(sourceRoot) {
+  const result = {}
+  const visit = directory => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name)
+      if (entry.isDirectory()) visit(file)
+      else if (entry.isFile()) result[path.relative(sourceRoot, file).replaceAll('\\', '/')] = sha256(file)
+      else throw new Error(`Unsafe synthetic source: ${file}`)
+    }
+  }
+  visit(sourceRoot)
+  return result
+}
+
+function prepareLegacyProject(name) {
+  const sourceRoot = path.join(scratchRoot, `source-${name}`)
+  const storage = path.join(sourceRoot, '.vela')
+  fs.mkdirSync(storage, { recursive: true })
+  const sourceProjectId = randomUUID()
+  const sourceName = `迁移前作品-${name}`
+  const sourceDatabase = path.join(storage, 'vela.db')
+  const db = new Database(sourceDatabase)
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(fs.readFileSync(path.join(repository, 'electron', 'services', '__tests__', 'legacy-v110-schema.sql'), 'utf8'))
+    db.prepare('INSERT INTO project_core(id,project_name,genre) VALUES (?,?,?)').run('main', sourceName, '合成测试')
+    db.prepare('INSERT INTO contents(body) VALUES (?)').run(initialBody)
+    db.prepare('INSERT INTO drafts(chapter_number,version,content_id,word_count) VALUES (1,1,1,?)').run(initialBody.length)
+    assert.equal(db.pragma('user_version', { simple: true }), 0)
+  } finally { db.close() }
+  fs.writeFileSync(path.join(storage, 'project.json'), JSON.stringify({ schemaVersion: 1,
+    kind: 'ai-novel-project', projectId: sourceProjectId, createdAt: new Date().toISOString() }))
+  return { sourceRoot, sourceProjectId, sourceName, sourceDatabase, before: sourceFiles(sourceRoot) }
+}
+
+async function currentProjectState(name, roots, session, source) {
+  const targetParent = path.join(scratchRoot, `${name}-target`)
+  fs.mkdirSync(targetParent)
+  const targetRoot = path.join(targetParent, `${path.basename(source.sourceRoot)}-新版副本`)
+  let page = session.page
+  const open = async () => {
+    await writer(page)
+    if (!await page.locator('.writer-shelf').isVisible()) await page.locator('.writer-left-rail button[title="欢迎页"]').click()
+    await page.locator('.writer-shelf').getByRole('button', { name: `打开《${source.sourceName}》` }).click()
+    await page.locator('.writer-project-tree').getByText(source.sourceName, { exact: true }).waitFor({ state: 'visible' })
+    const context = await page.evaluate(() => window.aiNovelAPI.invoke('project:get-runtime-context'))
+    assert.equal(path.resolve(context.activeProjectPath).toLowerCase(), path.resolve(targetRoot).toLowerCase())
+  }
+  try {
+    await writer(page)
+    if (!await page.locator('.writer-shelf').isVisible()) await page.locator('.writer-left-rail button[title="欢迎页"]').click()
+    await session.app.evaluate(({ dialog }, { sourceRoot, targetParent }) => {
+      globalThis.__u02Dialogs = []
+      dialog.showOpenDialog = async options => {
+        globalThis.__u02Dialogs.push(options.title)
+        if (options.title === '选择旧版小说项目文件夹') return { canceled: false, filePaths: [sourceRoot] }
+        if (options.title === '选择恢复副本所在文件夹') return { canceled: false, filePaths: [targetParent] }
+        throw new Error(`Unexpected dialog: ${options.title}`)
+      }
+      dialog.showMessageBox = async options => {
+        globalThis.__u02Dialogs.push(options.message)
+        if (!options.message.includes('保存并关闭旧版程序')) throw new Error('Unexpected confirmation')
+        return { response: 1, checkboxChecked: false }
+      }
+    }, { sourceRoot: source.sourceRoot, targetParent })
+    await page.getByRole('button', { name: '导入旧项目副本' }).click()
+    await page.locator('.writer-project-tree').getByText(source.sourceName, { exact: true })
+      .waitFor({ state: 'visible', timeout: 30_000 })
+    const dialogs = await session.app.evaluate(() => globalThis.__u02Dialogs)
+    assert.equal(dialogs.length, 3)
+    assert(fs.existsSync(path.join(targetRoot, '.ai-novel', 'project.db')))
+    const manifest = JSON.parse(fs.readFileSync(path.join(targetRoot, '.ai-novel', 'project.json'), 'utf8'))
+    assert.match(manifest.projectId, /^[a-f0-9-]{36}$/)
+    assert.notEqual(manifest.projectId, source.sourceProjectId)
+    assert.equal(manifest.storageFormat, 'ai-novel')
+    const db = new Database(path.join(targetRoot, '.ai-novel', 'project.db'), { readonly: true, fileMustExist: true })
+    try {
+      assert.equal(db.pragma('user_version', { simple: true }), 7)
+      assert.deepEqual(db.prepare('SELECT id,project_name FROM project_core').get(), { id: 'main', project_name: source.sourceName })
+    } finally { db.close() }
+    assert.equal(dbBody(targetRoot), initialBody)
+    assert.equal(modelCallCount(targetRoot), 0)
+    assert.deepEqual(sourceFiles(source.sourceRoot), source.before)
+    pass(`${name}-schema7-import`, 'U02.A07', 'Writer V3 imported schema0 project into schema7 with exact title, draft body and new copy identity; old source bytes stayed unchanged',
+      'legacy-shell-preference-with-project-state-to-writer')
+    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
+    let body = page.locator('.cm-content[contenteditable="true"]')
+    await body.waitFor({ state: 'visible' })
+    assert.equal(await editorBody(body), initialBody)
+    await body.click()
+    await page.keyboard.press('Control+End')
+    await page.keyboard.type(' 迁移后补写')
+    assert.equal(await editorBody(body), savedBody)
+    await page.locator('[role="status"]').filter({ hasText: /^未保存$/ }).last().waitFor({ state: 'visible' })
+    assert.equal(dbBody(targetRoot), initialBody)
+    await page.locator('button[title="保存（⌘S）"]').click()
+    await page.locator('[role="status"]').filter({ hasText: /^已保存$/ }).last().waitFor({ state: 'visible' })
+    assert.equal(dbBody(targetRoot), savedBody)
+    assert.equal(modelCallCount(targetRoot), 0)
+    assert.deepEqual(sourceFiles(source.sourceRoot), source.before)
+    pass(`${name}-schema7-save`, 'U02.A07', 'Writer V3 saved the exact edited body in the imported schema7 copy without changing the old source',
+      'legacy-shell-preference-with-project-state-to-writer')
+    await session.app.close()
+    session = await launch(roots)
+    page = session.page
+    await open()
+    await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
+    body = page.locator('.cm-content[contenteditable="true"]')
+    assert.equal(await editorBody(body), savedBody)
+    assert.equal(dbBody(targetRoot), savedBody)
+    assert.equal(modelCallCount(targetRoot), 0)
+    assert.deepEqual(sourceFiles(source.sourceRoot), source.before)
+    pass(`${name}-schema7-reopen`, 'U02.A07', 'New Writer V3 process reopened the same copy identity and exact saved body; old source bytes stayed unchanged',
+      'legacy-shell-preference-with-project-state-to-writer')
+  } finally { await session.app.close() }
+}
+
+async function currentMain() {
+  assert(buildTree && path.isAbsolute(buildTree) && path.isAbsolute(packageDir)
+    && /^[a-f0-9]{40}$/.test(testedSha ?? '') && /^[a-f0-9]{64}$/.test(expectedExeSha ?? '')
+    && /^[a-f0-9]{64}$/.test(expectedAsarSha ?? ''), 'Specify --build-tree, --package-dir, --tested-sha and fixed exe/asar SHA256')
+  const buildGit = (...args) => execFileSync('git', args, { cwd: buildTree, encoding: 'utf8' }).trim()
+  assert.equal(buildGit('rev-parse', 'HEAD'), testedSha)
+  assert.equal(buildGit('status', '--porcelain'), '', 'fixed package build tree must be clean')
+  assert.equal(path.resolve(packageDir), path.join(path.resolve(buildTree), 'release', '1.1.0', 'win-unpacked'))
+  assert.equal(sha256(executablePath), expectedExeSha)
+  assert.equal(sha256(asarPath), expectedAsarSha)
+  const productInputs = ['src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5']
+  assert.equal(git('diff', '--name-only', `${testedSha}..HEAD`, '--', ...productInputs), '', 'product inputs changed since fixed package')
+  const dirtyProductPaths = git('status', '--porcelain', '--', ...productInputs).split('\n').filter(Boolean)
+  assert(dirtyProductPaths.every(line => /^\?\? src\/components\/(?:characters|dialogs|editor|layout\/v2|pages|pages\/v2|panels)\/__tests__\/__screenshots__\/$/.test(line)),
+    'product inputs dirty beyond test screenshots')
+  const prior = JSON.parse(fs.readFileSync(priorReceiptPath, 'utf8'))
+  assert.equal(prior.outcome, 'PARTIAL')
+  assert.equal(prior.testedSha, '7110f53d5ce173d70bc0dcef90209bccb38d9fff')
+  fs.mkdirSync(root, { recursive: true })
+  fs.mkdirSync(scratchRoot, { recursive: true })
+  fs.writeFileSync(path.join(scratchRoot, '.vibe-owner.json'), JSON.stringify({ owner: 'codex/f05-u02-a07',
+    sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 72,
+    cleanupCommand: `Remove-Item -LiteralPath '${scratchRoot}' -Recurse -Force`,
+    retainReason: 'Synthetic schema0-to-schema7 Writer import evidence' }, null, 2))
+  const receipt = { outcome: 'FAIL', qualification: 'F05_U02_A07_CURRENT_SCHEMA7_ONLY', evidenceLevel: 'electron',
+    shell: 'writer-v3', testedSha, buildTree: path.resolve(buildTree), executionHead: git('rev-parse', 'HEAD'),
+    driverSha256, artifactHashes: { executable: expectedExeSha, asar: expectedAsarSha }, packageRoot: packageDir,
+    historicalReceipt: { path: priorReceiptPath, sha256: sha256(priorReceiptPath), testedSha: prior.testedSha },
+    dirtyProductPaths, sourceDirtyPaths: git('status', '--porcelain').split('\n').filter(Boolean),
+    persistedModelCalls: null, physicalModelRequestsObservation: 'NOT_OBSERVED_BY_THIS_JOURNEY',
+    releaseDefaultQualified: false, steps }
+  try {
+    for (const [name, legacyShell, preference] of [
+      ['v1', 'v1', 'classic'], ['v2', JSON.stringify({ state: { uiVersion: 'v2' }, version: 0 }), 'writer'],
+    ]) {
+      currentStep = `${name}-schema0-setup`
+      let source
+      const migrated = await migrate(name, legacyShell, preference, () => { source = prepareLegacyProject(name) })
+      currentStep = `${name}-schema7-import-save-reopen`
+      await currentProjectState(name, migrated.roots, migrated.session, source)
+    }
+    assert.equal(sha256(fileURLToPath(import.meta.url)), driverSha256, 'driver changed during run')
+    const required = ['v1', 'v2'].flatMap(name => [`${name}-schema7-import`, `${name}-schema7-save`, `${name}-schema7-reopen`])
+    assert(required.every(id => steps.some(step => step.stepId === id && step.outcome === 'PASS')))
+    receipt.persistedModelCalls = 0
+    receipt.outcome = 'PARTIAL'
+    receipt.sliceOutcome = 'PASS'
+    receipt.verifiedActions = ['U02.A07']
+    receipt.unverifiedActions = ['Full F05 and release-default activation are not qualified by this isolated migration journey']
+  } catch (error) {
+    receipt.failedStep = currentStep
+    receipt.error = String(error)
+    throw error
+  } finally {
+    const evidenceFile = path.join(root, 'receipt.json')
+    fs.writeFileSync(evidenceFile, JSON.stringify(receipt, null, 2))
+    process.stdout.write(`${JSON.stringify({ outcome: receipt.outcome, sliceOutcome: receipt.sliceOutcome ?? 'FAIL',
+      testedSha, driverSha256, receipt: path.relative(repository, evidenceFile), failedStep: receipt.failedStep })}\n`)
+  }
+}
+
 async function main() {
   assert.equal(path.isAbsolute(packageDir), true)
   assert.equal(sha256(executablePath), expectedExeSha)
@@ -251,5 +440,5 @@ async function main() {
   }
 }
 
-if (process.argv.includes('--help')) process.stdout.write('Runs isolated v1/v2 preference migration and V3 project-body retention in the fixed Windows package.\n')
-else main().catch(error => { console.error(error); process.exitCode = 1 })
+if (process.argv.includes('--help')) process.stdout.write('Runs isolated v1/v2 preference migration. Use --a07-current with --build-tree, --package-dir, --tested-sha, --exe-sha256 and --asar-sha256 for synthetic schema0-to-schema7 Writer import.\n')
+else (currentMode ? currentMain() : main()).catch(error => { console.error(error); process.exitCode = 1 })
