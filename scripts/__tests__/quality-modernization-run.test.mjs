@@ -41,6 +41,43 @@ function constructReviewSourceFixture() {
   return { text: sandbox.reviewSourceText(countDraftUnits, scene, chapter), reviewFix: sandbox.reviewFix,
     reviewRevisionFixtureVerdict: sandbox.reviewRevisionFixtureVerdict, chapter }
 }
+test('draft reads this arm committed blueprint into ChapterInfo before generation', () => {
+  const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
+  const start = fixture.indexOf('function readCommittedDraftChapterInfo(')
+  const end = fixture.indexOf('const syntheticReview =', start)
+  assert.ok(start >= 0 && end > start, 'DRAFT_BLUEPRINT_READBACK_MISSING')
+  const sandbox = { assert }
+  vm.runInNewContext(`${fixture.slice(start, end)}\nthis.readCommittedDraftChapterInfo = readCommittedDraftChapterInfo`, sandbox)
+  const row = { chapterNumber: 1, title: '旧港来信', role: '建置', purpose: '发现异常',
+    keyEvents: '取出铜钥匙，辨认被雨浸湿的地图', characters: '["林澄","沈岸"]', suspenseHook: '辨认沉船邮戳', userGuidance: '' }
+  const db = new Database(':memory:')
+  try {
+    db.exec(`CREATE TABLE blueprints (chapter_number INTEGER PRIMARY KEY,title TEXT,role TEXT,purpose TEXT,
+      key_events TEXT,characters TEXT,suspense_hook TEXT,user_guidance TEXT)`)
+    db.prepare('INSERT INTO blueprints VALUES(?,?,?,?,?,?,?,?)').run(...Object.values(row))
+    const actual = sandbox.readCommittedDraftChapterInfo(db, { number: 1, targetUnits: 900 }, '/this-arm/project', '尚未实施的方案不得写为既成事实')
+    assert.deepEqual(JSON.parse(JSON.stringify(actual)), {
+      projectPath: '/this-arm/project', chapterNumber: 1, title: '旧港来信', role: '建置', purpose: '发现异常',
+      characters: ['林澄', '沈岸'], keyEvents: row.keyEvents, suspenseHook: row.suspenseHook,
+      userGuidance: '尚未实施的方案不得写为既成事实', wordsTarget: 900,
+    })
+    db.prepare('INSERT INTO blueprints VALUES(?,?,?,?,?,?,?,?)').run(3, '作者预置第三章', '发展', '依据证据选择',
+      '留下后果', '["林澄"]', '', '本章时点：翌日清晨')
+    const preset = sandbox.readCommittedDraftChapterInfo(db, { number: 3, targetUnits: 2000 }, '/this-arm/project', '本章时点：翌日清晨')
+    assert.equal(preset.keyEvents, '留下后果')
+    assert.equal(preset.userGuidance, '本章时点：翌日清晨')
+    assert.equal(preset.wordsTarget, 2000)
+    db.prepare('UPDATE blueprints SET characters=? WHERE chapter_number=1').run('{')
+    assert.throws(() => sandbox.readCommittedDraftChapterInfo(db, { number: 1, targetUnits: 900 }, '/this-arm/project', ''),
+      /DRAFT_COMMITTED_BLUEPRINT_INVALID/)
+    db.prepare('DELETE FROM blueprints WHERE chapter_number=1').run()
+    assert.throws(() => sandbox.readCommittedDraftChapterInfo(db, { number: 1, targetUnits: 900 }, '/this-arm/project', ''),
+      /DRAFT_COMMITTED_BLUEPRINT_REQUIRED/)
+  } finally { db.close() }
+  const draftBranch = fixture.slice(fixture.indexOf("else if (operationKind === 'draft') command ="),
+    fixture.indexOf('       else {', fixture.indexOf("else if (operationKind === 'draft') command =")))
+  assert.match(draftBranch, /readCommittedDraftChapterInfo\(db, chapter, project\.rootPath, chapterGuidance\)/)
+})
 test('冻结规划脚本通过原Node入口执行全部合同反例', () => {
   const result = spawnSync(process.execPath, [
     path.join(ROOT, 'docs/plans/novel-quality-program-v3-2026-09-13/checks/feature-union-check.test.mjs'),

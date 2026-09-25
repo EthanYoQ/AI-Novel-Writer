@@ -112,6 +112,22 @@ const reviewSourceText = (countUnits, scene, chapter) => {
   assert.equal(narrative.split(REVIEW_DEFECT).length - 1, 1, 'REVIEW_SOURCE_DEFECT_COUNT_INVALID')
   return narrative
 }
+function readCommittedDraftChapterInfo(db, chapter, projectPath, chapterGuidance) {
+  const row = db.prepare(`SELECT chapter_number AS chapterNumber,title,role,purpose,key_events AS keyEvents,
+    characters,suspense_hook AS suspenseHook,user_guidance AS userGuidance
+    FROM blueprints WHERE chapter_number=?`).get(chapter.number)
+  assert.ok(row && row.chapterNumber === chapter.number, 'DRAFT_COMMITTED_BLUEPRINT_REQUIRED')
+  let characters
+  try { characters = JSON.parse(row.characters) } catch { throw new Error('DRAFT_COMMITTED_BLUEPRINT_INVALID') }
+  assert.ok([row.title, row.role, row.purpose, row.keyEvents].every(value => typeof value === 'string' && value.trim())
+    && typeof row.suspenseHook === 'string' && typeof row.userGuidance === 'string'
+    && Array.isArray(characters) && characters.every(value => typeof value === 'string' && value.trim()),
+  'DRAFT_COMMITTED_BLUEPRINT_INVALID')
+  return { projectPath, chapterNumber: row.chapterNumber, title: row.title, role: row.role, purpose: row.purpose,
+    characters, keyEvents: row.keyEvents, suspenseHook: row.suspenseHook,
+    userGuidance: [...new Set([row.userGuidance.trim(), chapterGuidance.trim()].filter(Boolean))].join('\n'),
+    wordsTarget: chapter.targetUnits }
+}
 const syntheticReview = chapter => JSON.stringify({
   summary: '本章完成受阻事件，但人物只罗列选择，没有执行会造成已实现损失的处置。',
   items: [{ category: '本章目标', severity: 'error', description: '人物罗列了代价方案，却没有执行任何会造成已实现损失或牺牲的选择，未满足当章“承担代价”的目标；有效修订必须同时写明已执行的选择、已经发生的具体损失，并消除后文反证，签字认责或承诺以后负责不算代价。', quote: REVIEW_DEFECT }],
@@ -585,9 +601,8 @@ test('isolated production commands persist the selected phase operations', async
       let command
       if (operationKind === 'directory') command = new (await load('src/services/workflows/commands/directory.command.ts')).GenerateDirectoryCommand(
           { mode: 'append', startChapter: chapter.number, count: 1 }, { expectedProjectPath: project.rootPath, novelConfig: config })
-      else if (operationKind === 'draft') command = new (await load('src/services/workflows/commands/generate-draft.command.ts')).GenerateDraftCommand({
-          projectPath: project.rootPath, chapterNumber: chapter.number, title: scene.title, wordsTarget: chapter.targetUnits,
-          characters: scene.characters, keyEvents: chapter.requiredEvents.join('；'), userGuidance: chapterGuidance },
+      else if (operationKind === 'draft') command = new (await load('src/services/workflows/commands/generate-draft.command.ts')).GenerateDraftCommand(
+          readCommittedDraftChapterInfo(db, chapter, project.rootPath, chapterGuidance),
           // 第二章必须由本臂自己的库提供前驱候选（作者前情），不能借另一臂的输出。
           predecessorReadbacks.some(record => record.marker)
             ? { selectedCandidateDrafts: predecessorReadbacks.map(({ marker, materialContentHash, sourceId, ...record }) => {
