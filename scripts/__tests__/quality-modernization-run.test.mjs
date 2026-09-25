@@ -7,7 +7,7 @@ import process from 'node:process'
 import { Buffer } from 'node:buffer'
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
-import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, currentProtocolBinding, assertProtocolBinding, validateHistoricalLedgerBoundary, validateCampaignBinding, buildFixtureExports, validatePair, selectPhase, assertScenarioMatchesProtocol, reconcileDispatchedAttempts, withLedgerReconciliation, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles, assertFormalTargetCandidateClean } from '../quality-modernization-run.mjs'
+import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, currentProtocolBinding, assertProtocolBinding, validateHistoricalLedgerBoundary, validateCampaignBinding, buildFixtureExports, validatePair, selectPhase, assertScenarioMatchesProtocol, reconcileDispatchedAttempts, withLedgerReconciliation, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles, assertFormalTargetCandidateClean, createShortIsolationRoot, assertOwnedIsolationRoot, validatePhysicalLedger } from '../quality-modernization-run.mjs'
 import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, PHASE_SCENARIOS, classifyProductionPair,
   adjudicateEarlyReviewReferenceNonconformance, EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION,
   readBaselineFailureEvidence, validateEarlyContextSelectionDifference,
@@ -311,6 +311,27 @@ test('相交数据根拒绝，格式错误拒绝', () => {
 })
 test('伪manifest不能跳过实际git身份检查', () => {
   assert.throws(() => inspectTarget({ schemaVersion: 1, arm: 'baseline', repositoryRoot: ROOT, codeSha: '0'.repeat(40) }), /TARGET_SHA_MISMATCH/)
+})
+
+test('S14A隔离根是短实体目录并核所有权，真实账本不能从本工作树新建', () => {
+  const root = createShortIsolationRoot()
+  const baseline = path.join(root, 'b')
+  const project = path.join(baseline, 'p')
+  try {
+    fs.mkdirSync(project, { recursive: true })
+    assert.equal(fs.lstatSync(root).isSymbolicLink(), false)
+    assert.equal(assertOwnedIsolationRoot(baseline, 'baseline'), fs.realpathSync.native(baseline))
+    const owner = JSON.parse(fs.readFileSync(path.join(root, '.vibe-owner.json'), 'utf8'))
+    assert.equal(owner.sourceProject, ROOT)
+    assert.equal(owner.ttl, '7 days')
+    assert.ok(owner.cleanupCommand.includes(root))
+    const longest = Math.max(...source.scenes.map(scene => path.join(fs.realpathSync.native(project), '12345678', scene.title).length))
+    if (process.platform === 'win32') assert.ok(longest <= 85, `actual project root would be ${longest} characters`)
+    assert.throws(() => assertOwnedIsolationRoot(baseline, 'candidate'), /UNOWNED_ISOLATION_ROOT/)
+    fs.writeFileSync(path.join(root, '.vibe-owner.json'), JSON.stringify({ ...owner, sourceProject: 'foreign' }))
+    assert.throws(() => assertOwnedIsolationRoot(baseline, 'baseline'), /UNOWNED_ISOLATION_ROOT/)
+    assert.throws(() => validatePhysicalLedger(path.join(root, 'physical-ledger.jsonl')), /PATH_MISMATCH/)
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 test('账本未知不释放、重试新attempt、无硬上限、重复/并发/残记录拒绝', () => {
   const parent = path.join(ROOT, '.runtime/.cache/novel-quality-modernization')

@@ -6,10 +6,12 @@ import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
+import os from 'node:os'
 import { runProductionCommandProbe, runProductionPhasePair, productionBridgeHash, productionExecutionRuntime, PRODUCTION_BRIDGE, PHASE_SCENARIOS } from './quality-modernization-driver.mjs'
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CACHE = path.join(ROOT, '.runtime', '.cache', 'novel-quality-modernization')
+const isolationParent = () => path.join(process.env.LOCALAPPDATA || (process.platform === 'win32' ? fail('LOCALAPPDATA_REQUIRED') : os.tmpdir()), 'VibeCodingScratch', 'an', 's14a')
 /**
  * 计划分配总额。用户于 2026-09-18 决定移除真实调用硬上限，因此它只用于
  * 协议一致性校验与汇报，不再拒绝请求。账本仍然逐条记录每次占用，
@@ -80,6 +82,48 @@ const read = file => JSON.parse(fs.readFileSync(file, 'utf8'))
 export const CAMPAIGN_ID = campaignIdFor(read(PROTOCOL_PATH).id)
 const inside = (root, value) => { const relative = path.relative(root, value); return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)) }
 const real = value => fs.realpathSync(value)
+const native = value => fs.realpathSync.native(value)
+const samePath = (a, b) => process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+export function createShortIsolationRoot() {
+  const parent = isolationParent()
+  fs.mkdirSync(parent, { recursive: true })
+  if (!samePath(native(parent), path.resolve(parent)) || fs.lstatSync(parent).isSymbolicLink()) fail('UNOWNED_ISOLATION_PARENT')
+  const root = fs.mkdtempSync(path.join(parent, 'q'))
+  const createdAt = new Date(), expiresAt = new Date(createdAt.getTime() + 7 * 24 * 60 * 60 * 1000)
+  fs.writeFileSync(path.join(root, '.vibe-owner.json'), JSON.stringify({ owner: 'AI Novel S14A quality runner', sourceProject: ROOT,
+    isolationRoot: root, createdAt: createdAt.toISOString(), ttl: '7 days', expiresAt: expiresAt.toISOString(),
+    retentionReason: 'S14A physical project and qualification evidence',
+    cleanupCommand: `Remove-Item -LiteralPath '${root.replaceAll("'", "''")}' -Recurse -Force` }, null, 2))
+  return root
+}
+export function assertOwnedIsolationRoot(isolationRoot, arm) {
+  const root = path.dirname(isolationRoot), parent = isolationParent()
+  if (!samePath(native(parent), path.resolve(parent)) || !samePath(native(root), path.join(native(parent), path.basename(root)))
+    || !samePath(native(isolationRoot), path.join(native(root), arm === 'baseline' ? 'b' : 'c'))
+    || !inside(native(parent), native(root)) || root === parent) fail('UNOWNED_ISOLATION_ROOT')
+  const ownerFile = path.join(root, '.vibe-owner.json')
+  if (!fs.lstatSync(ownerFile).isFile() || fs.lstatSync(ownerFile).isSymbolicLink()) fail('UNOWNED_ISOLATION_ROOT')
+  const owner = read(ownerFile)
+  if (owner.owner !== 'AI Novel S14A quality runner' || owner.sourceProject !== ROOT
+    || typeof owner.isolationRoot !== 'string' || !samePath(owner.isolationRoot, root)
+    || !Number.isFinite(Date.parse(owner.createdAt)) || !Number.isFinite(Date.parse(owner.expiresAt))
+    || owner.ttl !== '7 days') fail('UNOWNED_ISOLATION_ROOT')
+  return native(isolationRoot)
+}
+export function validatePhysicalLedger(file) {
+  if (!file || !path.isAbsolute(file)) fail('CAMPAIGN_LEDGER_PATH_MISMATCH')
+  const ledger = path.resolve(file), parent = path.dirname(ledger)
+  const ownerRoot = path.resolve(parent, '../../..')
+  if (!samePath(ledger, path.join(ownerRoot, '.runtime', '.cache', 'novel-quality-modernization', 'physical-ledger.jsonl'))
+    || !fs.existsSync(ledger) || !samePath(native(parent), parent) || !samePath(native(ledger), ledger)) fail('CAMPAIGN_LEDGER_PATH_MISMATCH')
+  const stat = fs.lstatSync(ledger)
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) fail('CAMPAIGN_LEDGER_IDENTITY_MISMATCH')
+  if (!samePath(native(path.resolve(ownerRoot, git(ownerRoot, ['rev-parse', '--git-common-dir']))),
+    native(path.resolve(ROOT, git(ROOT, ['rev-parse', '--git-common-dir']))))
+    || git(ownerRoot, ['branch', '--show-current']) !== 'codex/program-v3-autonomous-continuation') fail('CAMPAIGN_LEDGER_IDENTITY_MISMATCH')
+  validateHistoricalLedgerBoundary(fs.readFileSync(ledger, 'utf8'), read(PROTOCOL_PATH).historicalLedgerBoundary)
+  return ledger
+}
 function git(root, args) {
   const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true })
   if (result.status !== 0) fail('GIT_INSPECTION_FAILED')
@@ -231,7 +275,8 @@ export function inspectTarget(target) {
   const driver = real(path.join(target.schemaVersion === 2 ? ROOT : repositoryRoot, target.schemaVersion === 2 ? PRODUCTION_BRIDGE : DRIVER))
   if (target.schemaVersion === 1 && (!inside(repositoryRoot, driver) || hash(fs.readFileSync(driver)) !== target.driver.sha256)) fail('DRIVER_HASH_MISMATCH')
   const isolationRoot = real(target.isolationRoot)
-  if (!inside(real(CACHE), isolationRoot) || isolationRoot === real(CACHE)) fail('UNOWNED_ISOLATION_ROOT')
+  if (target.schemaVersion === 2) assertOwnedIsolationRoot(isolationRoot, target.arm)
+  else if (!inside(real(CACHE), isolationRoot) || isolationRoot === real(CACHE)) fail('UNOWNED_ISOLATION_ROOT')
   const roots = ['userData', 'config', 'project', 'legacySource'].map(key => real(target.roots[key]))
   for (const root of roots) if (!inside(isolationRoot, root) || root === isolationRoot) fail('ROOT_OUTSIDE_ISOLATION')
   for (let i = 0; i < roots.length; i++) for (let j = i + 1; j < roots.length; j++) if (inside(roots[i], roots[j]) || inside(roots[j], roots[i])) fail('ROOT_INTERSECTION')
@@ -251,13 +296,16 @@ export function createProductionTargets(baselineRoot, output, { development = fa
   if (git(baselineRoot, ['rev-parse', 'HEAD']) !== '2264390d6fb8b052cc14736d544df0cc74516649') fail('BASELINE_SHA_MISMATCH')
   if (git(baselineRoot, ['diff', 'HEAD', '--name-only'])) fail('TARGET_TRACKED_DIRTY')
   // Keep the actual project below the production Windows path limit; no bypass.
-  const root = fs.mkdtempSync(path.join(CACHE, development ? 's07d-' : 's07f-'))
-  const fixtureExports = buildFixtureExports(read(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
+  const root = createShortIsolationRoot()
+  const semanticSource = read(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json'))
+  const fixtureExports = buildFixtureExports(semanticSource)
   const protocolBinding = currentProtocolBinding()
   const targets = Object.fromEntries(['baseline', 'candidate'].map(arm => {
     const repositoryRoot = real(arm === 'baseline' ? baselineRoot : ROOT), isolationRoot = path.join(root, arm === 'baseline' ? 'b' : 'c')
     const roots = Object.fromEntries(['userData', 'config', 'project', 'legacySource'].map((key, index) => [key, path.join(isolationRoot, ['u', 'c', 'p', 'l'][index])]))
     Object.values(roots).forEach(directory => fs.mkdirSync(directory, { recursive: true }))
+    const longestProjectRoot = Math.max(...semanticSource.scenes.map(scene => path.join(native(roots.project), '12345678', scene.title).length))
+    if (process.platform === 'win32' && longestProjectRoot > 85) fail('PHYSICAL_PROJECT_PATH_TOO_LONG')
     const fixture = fixtureExports[arm === 'baseline' ? 'legacy' : 'canonical'], fixturePath = path.join(isolationRoot, 'semantic-fixture.json')
     fs.writeFileSync(fixturePath, JSON.stringify(fixture, null, 2))
     const target = { schemaVersion: 2, arm, repositoryRoot, codeSha: git(repositoryRoot, ['rev-parse', 'HEAD']), ...protocolBinding,
@@ -293,9 +341,10 @@ export function probeTarget(target) {
 // A single append-only campaign file; wx lock prevents concurrent reservations.
 // A torn final record fails closed. Dispatched/unknown attempts never release capacity.
 export function updateLedger(file, event, options = {}) {
-  fs.mkdirSync(CACHE, { recursive: true })
+  if (options.campaignMode === 'real') validatePhysicalLedger(file)
+  else fs.mkdirSync(CACHE, { recursive: true })
   const parent = real(path.dirname(file))
-  if (!inside(real(CACHE), parent) || fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink()) fail('UNOWNED_LEDGER')
+  if (options.campaignMode !== 'real' && (!inside(real(CACHE), parent) || fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink())) fail('UNOWNED_LEDGER')
   const lock = `${file}.lock`
   let fd
   try { fd = fs.openSync(lock, 'wx') } catch { fail('LEDGER_BUSY') }
@@ -304,7 +353,6 @@ export function updateLedger(file, event, options = {}) {
     const events = rawLedger.split(/\r?\n/u).filter(Boolean).map(line => JSON.parse(line))
     if (options.campaignMode) {
       if (!['real', 'synthetic'].includes(options.campaignMode)) fail('INVALID_CAMPAIGN_MODE')
-      if (options.campaignMode === 'real' && path.resolve(file) !== path.join(CACHE, 'physical-ledger.jsonl')) fail('CAMPAIGN_LEDGER_PATH_MISMATCH')
       const protocol = read(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json'))
       const reserved = new Map(), statuses = new Map()
       const historicalBoundary = options.campaignMode === 'real'
@@ -359,13 +407,13 @@ export function updateLedger(file, event, options = {}) {
 
 export function main(argv) {
   let [command = 'help', ...rest] = argv
-  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <freeze-targets|development-synthetic|baseline-probe|dry-run|early-budget|early-context|early-review|full> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real]; freeze-targets/development-synthetic: --baseline-root <existing worktree> --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
+  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <freeze-targets|development-synthetic|baseline-probe|dry-run|early-budget|early-context|early-review|full> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>]; freeze-targets/development-synthetic: --baseline-root <existing worktree> --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
   if (command.startsWith('--')) { rest = argv; command = 'phase-options' }
   const args = {}
   for (let i = 0; i < rest.length; i++) {
     const key = rest[i]
     if (key === '--dry-run') { if (args[key]) fail('INVALID_ARGUMENT'); args[key] = true; continue }
-    if (!['--targets', '--milestone', '--mode', '--baseline-root', '--output', '--model-id', '--protocol', '--phase', '--scenario'].includes(key) || !rest[i + 1] || args[key]) fail('INVALID_ARGUMENT')
+    if (!['--targets', '--milestone', '--mode', '--baseline-root', '--output', '--model-id', '--protocol', '--phase', '--scenario', '--physical-ledger'].includes(key) || !rest[i + 1] || args[key]) fail('INVALID_ARGUMENT')
     args[key] = rest[++i]
   }
   if (command === 'phase-options') command = args['--phase'] || fail('INVALID_PHASE')
@@ -406,13 +454,15 @@ export function main(argv) {
     const mode = command === 'dry-run' || args['--dry-run'] ? 'synthetic' : args['--mode']
     if (!['synthetic', 'real'].includes(mode)) fail('EXPLICIT_PROVIDER_MODE_REQUIRED')
     if (mode === 'real' && (!targets.baseline.modelId || !targets.candidate.modelId)) fail('FROZEN_SAFE_MODEL_REQUIRED')
+    if ((mode === 'real') !== Boolean(args['--physical-ledger'])) fail('PHYSICAL_LEDGER_ARGUMENT_MISMATCH')
+    const pairLedgerPath = mode === 'real' ? validatePhysicalLedger(args['--physical-ledger']) : null
     const evidenceRoot = fs.mkdtempSync(path.join(CACHE, `s07-${mode}-`))
-    const pairLedgerPath = mode === 'real' ? path.join(CACHE, 'physical-ledger.jsonl') : path.join(evidenceRoot, 'synthetic-ledger.jsonl')
+    const ledgerPath = pairLedgerPath ?? path.join(evidenceRoot, 'synthetic-ledger.jsonl')
     // 真实或合成的成对执行失败时先对账：子进程被杀不会执行桥内结算，
     // 只有调用方还活着，这是保证每次发送都有终态的最后一道。
-    const result = withLedgerReconciliation(pairLedgerPath, mode, () => runProductionPhasePair(targets, { phase, mode, milestone: selection.milestone,
+    const result = withLedgerReconciliation(ledgerPath, mode, () => runProductionPhasePair(targets, { phase, mode, milestone: selection.milestone,
       scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, ...currentProtocolBinding(), semanticPath: path.join(ROOT, protocol.fixturePath),
-      templatesPath: path.join(evidenceRoot, 'baseline-templates.json'), ledgerPath: pairLedgerPath }))
+      templatesPath: path.join(evidenceRoot, 'baseline-templates.json'), ledgerPath }))
     inspectTarget(targets.baseline); inspectTarget(targets.candidate)
     fs.writeFileSync(path.join(evidenceRoot, 'receipt.json'), JSON.stringify(result, null, 2))
     return { ...result, selection, evidenceRoot }
