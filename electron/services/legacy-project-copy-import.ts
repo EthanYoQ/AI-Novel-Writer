@@ -11,7 +11,7 @@ import { CANONICAL_RAW_PROJECT_ASSETS, characterAssetSnapshot } from './project-
 import { sanitizePortableDatabase } from './project-archive-service'
 import { readPortableRuntimeFreeze, type PortableRuntimeFreezeTable } from './portable-runtime-freeze'
 import { readPortableCurrentAuthority } from './portable-current-authority'
-import { createPortableTransferAuthority, mapPortableTransferAuthority, serializePortableTransferAuthority } from './portable-transfer-authority'
+import { createLegacyCopyTransferAuthority, mapPortableTransferAuthority, serializePortableTransferAuthority } from './portable-transfer-authority'
 import { backupProjectSqlite, probeProjectSqlite, verifyProjectSqlite } from './sqlite-project-migration'
 import { exportVectorStoreForMigration, importVectorStoreForMigration, verifyVectorStoreForMigration } from './vector-migration-snapshot'
 
@@ -196,7 +196,7 @@ export async function importLegacyProjectCopy(options: {
       fs.writeFileSync(path.join(storage, 'portable-runtime-freeze.json'), JSON.stringify(freeze), { flag: 'wx' })
       const db = new Database(newDatabase, { readonly: true, fileMustExist: true })
       try {
-        const authority = createPortableTransferAuthority({ database: db, originProjectId: lineageRootId, snapshotGeneration,
+        const authority = createLegacyCopyTransferAuthority({ database: db, originProjectId: lineageRootId, snapshotGeneration,
           portableDatabaseSha256: createHash('sha256').update(fs.readFileSync(newDatabase)).digest('hex') })
         fs.writeFileSync(path.join(storage, 'portable-transfer-authority.json'),
           serializePortableTransferAuthority(mapPortableTransferAuthority(authority, projectId)), { flag: 'wx' })

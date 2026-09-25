@@ -9,6 +9,8 @@ import { readPortableRuntimeFreeze } from '../portable-runtime-freeze'
 import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
 import { ChapterDeletionService } from '../chapter-deletion-service'
 import { readPortableCurrentAuthority } from '../portable-current-authority'
+import { createPortableTransferAuthority } from '../portable-transfer-authority'
+import { SummaryRepository } from '../../repositories/summary-repository'
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const roots: string[] = []
@@ -182,6 +184,57 @@ it.each(['v100', 'v110'] as const)('%s 无 manifest 的旧历史启用新 lineag
   expect(targetDb.prepare('SELECT status,attempt_count FROM chapter_deletion_operations WHERE operation_id=?')
     .get('old-deletion')).toMatchObject({ status: 'pending', attempt_count: 0 })
   expect(hash(path.join(f.legacy, 'vela.db'))).toBe(sourceDatabaseHash)
+})
+
+it.each(['v100', 'v110'] as const)('%s 旧版无收据定稿正文保留为 legacy，仅转移有证明的定稿', async version => {
+  const f = fixture(version)
+  const source = new Database(path.join(f.legacy, 'vela.db'))
+  try {
+    source.prepare("UPDATE drafts SET status='finalized' WHERE id=19").run()
+    source.prepare('INSERT INTO summary_snapshots(id,chapter_number,character_states) VALUES(?,?,?)')
+      .run(31, 7, '{"主角":{"location":"旧设定"}}')
+    source.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(12, '有来源收据的第八章定稿')
+    source.prepare("INSERT INTO drafts(id,chapter_number,version,content_id,status) VALUES(22,8,1,12,'finalized')").run()
+    source.prepare(`INSERT INTO finalization_outbox(finalization_id,draft_id,chapter_number,chapter_title,
+      content_hash,content_revision,content_snapshot,target_file_name,publication_status)
+      VALUES(?,?,?,?,?,1,?,?,'published')`).run('bound-finalization', 22, 8, '第八章',
+        createHash('sha256').update('有来源收据的第八章定稿').digest('hex'), '有来源收据的第八章定稿', '第八章.md')
+  } finally { source.close() }
+  const sourceHash = hash(path.join(f.legacy, 'vela.db'))
+  const result = await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions })
+  expect(result, JSON.stringify(result)).toMatchObject({ state: 'ready' })
+  if (result.state !== 'ready') return
+  const storage = path.join(f.target, '.ai-novel')
+  const authority = JSON.parse(fs.readFileSync(path.join(storage, 'portable-transfer-authority.json'), 'utf8'))
+  expect(authority.finalizations).toEqual([{
+    finalizationId: 'bound-finalization', draftId: 22, chapterNumber: 8,
+    contentHash: createHash('sha256').update('有来源收据的第八章定稿').digest('hex'),
+  }])
+  expect(authority.summarySources).toEqual([])
+  initProjectDatabase(f.target)
+  expect(SummaryRepository.readFinalizedSource(19)).toMatchObject({ status: 'legacy', content: '合成章节正文\r\n原字节' })
+  expect(getProjectDb()!.prepare('SELECT content_snapshot FROM finalization_outbox WHERE finalization_id=?').pluck().get('bound-finalization'))
+    .toBe('有来源收据的第八章定稿')
+  expect(getProjectDb()!.prepare('SELECT character_states FROM summary_snapshots WHERE id=31').pluck().get())
+    .toBe('{"主角":{"location":"旧设定"}}')
+  expect(() => createPortableTransferAuthority({ database: getProjectDb()!, originProjectId: result.projectId,
+    snapshotGeneration: randomUUID(), portableDatabaseSha256: 'a'.repeat(64) })).toThrow('PORTABLE_TRANSFER_AUTHORITY_INVALID')
+  expect(hash(path.join(f.legacy, 'vela.db'))).toBe(sourceHash)
+})
+
+it('旧定稿存在失配收据时拒绝发布，不能把坏收据降为 legacy', async () => {
+  const f = fixture('v110')
+  const source = new Database(path.join(f.legacy, 'vela.db'))
+  try {
+    source.prepare("UPDATE drafts SET status='finalized' WHERE id=19").run()
+    source.prepare(`INSERT INTO finalization_outbox(finalization_id,draft_id,chapter_number,chapter_title,
+      content_hash,content_revision,content_snapshot,target_file_name,publication_status)
+      VALUES(?,?,?,?,?,1,?,?,'published')`).run('bad-finalization', 19, 7, '第七章',
+        'a'.repeat(64), '失配正文', '第七章.md')
+  } finally { source.close() }
+  expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))
+    .toMatchObject({ state: 'blocked', code: 'PORTABLE_TRANSFER_AUTHORITY_INVALID' })
+  expect(fs.existsSync(f.target)).toBe(false)
 })
 
 it('未被角色引用的头像原字节保留为待处理资料', async () => {

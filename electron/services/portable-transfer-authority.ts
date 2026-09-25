@@ -150,7 +150,7 @@ function receiptId(input: Pick<PortableTransferAuthority,
     finalizations: input.finalizations, summarySources: input.summarySources })).slice(0, 32)}`
 }
 
-function currentness(database: Database.Database): Pick<PortableTransferAuthority, 'finalizations' | 'summarySources'> {
+function currentness(database: Database.Database, legacyCopy = false): Pick<PortableTransferAuthority, 'finalizations' | 'summarySources'> {
   const core = database.prepare('SELECT id FROM project_core').all() as Array<{ id: string }>
   if (core.length > 1 || core.some(row => row.id !== 'main')) invalid()
   const rows = database.prepare(`
@@ -162,6 +162,7 @@ function currentness(database: Database.Database): Pick<PortableTransferAuthorit
     JOIN contents c ON c.id = d.content_id
     LEFT JOIN finalization_outbox o ON o.draft_id = d.id
     WHERE d.status = 'finalized'
+      ${legacyCopy ? 'AND o.finalization_id IS NOT NULL' : ''}
       AND NOT EXISTS (
         SELECT 1 FROM drafts newer
         WHERE newer.chapter_number = d.chapter_number
@@ -211,7 +212,25 @@ export function createPortableTransferAuthority(input: {
   snapshotGeneration: string
   portableDatabaseSha256: string
 }): PortableTransferAuthority {
-  const facts = currentness(input.database)
+  return createAuthority(input, currentness(input.database))
+}
+
+/** Old finalized prose without an outbox receipt remains readable legacy content;
+ * only source-bound receipts become transferred authority. */
+export function createLegacyCopyTransferAuthority(input: {
+  database: Database.Database
+  originProjectId: string
+  snapshotGeneration: string
+  portableDatabaseSha256: string
+}): PortableTransferAuthority {
+  return createAuthority(input, currentness(input.database, true))
+}
+
+function createAuthority(input: {
+  originProjectId: string
+  snapshotGeneration: string
+  portableDatabaseSha256: string
+}, facts: Pick<PortableTransferAuthority, 'finalizations' | 'summarySources'>): PortableTransferAuthority {
   return parsePortableTransferAuthority({
     version: 1,
     originProjectId: input.originProjectId,
