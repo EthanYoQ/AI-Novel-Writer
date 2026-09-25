@@ -11,7 +11,7 @@ import { runProductionCommandProbe, runProductionPhasePair, productionBridgeHash
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CACHE = path.join(ROOT, '.runtime', '.cache', 'novel-quality-modernization')
-const isolationParent = () => path.join(process.env.LOCALAPPDATA || (process.platform === 'win32' ? fail('LOCALAPPDATA_REQUIRED') : os.tmpdir()), 'VibeCodingScratch', 'an', 's14a')
+const isolationParent = () => path.join(process.env.LOCALAPPDATA || (process.platform === 'win32' ? fail('LOCALAPPDATA_REQUIRED') : os.tmpdir()), 'VibeCodingScratch', 'an', 'a')
 /**
  * 计划分配总额。用户于 2026-09-18 决定移除真实调用硬上限，因此它只用于
  * 协议一致性校验与汇报，不再拒绝请求。账本仍然逐条记录每次占用，
