@@ -159,6 +159,21 @@ describe('知识库向量维度', () => {
     await expect(getEmbeddingSpaces(projectPath)).resolves.toEqual({ version: 1, activeGeneration: null, spaces: [] })
   })
 
+  it('检索旧 documents 表缺少 filePath 的片段', async () => {
+    const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-legacy-docs-'))
+    projects.push(projectPath)
+    prepareCanonicalStorageFixture(projectPath)
+    const db = await getConnection(projectPath)
+    const chunks = await db.createTable('chunks', [{ id: 'legacy-chunk', docId: 'legacy-document', fileName: 'legacy.txt',
+      text: '旧版资料灯塔仍可检索', chunkIndex: 0, totalChunks: 1, corpusKind: 'project-knowledge' }])
+    const documents = await db.createTable('documents', [{ id: 'legacy-document', fileName: 'legacy.txt',
+      chunkCount: 1, corpusKind: 'project-knowledge' }])
+    chunks.close(); documents.close()
+    await expect(search(projectPath, '灯塔')).resolves.toEqual([
+      expect.objectContaining({ fileName: 'legacy.txt', text: '旧版资料灯塔仍可检索' }),
+    ])
+  })
+
   it('替换同名文档时清理旧的文档元数据', async () => {
     const projectPath = fs.mkdtempSync(path.join(path.resolve('.runtime/.cache'), 'ai-novel-vector-superseded-document-'))
     projects.push(projectPath)

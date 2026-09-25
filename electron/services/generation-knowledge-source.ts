@@ -109,7 +109,7 @@ export async function captureGenerationKnowledge(input: {
   return readStable(input.projectStorageRoot, async reader => {
     const snapshot: GenerationKnowledgeSnapshot = { version: 1, state: 'empty', storageState: reader.state, query: input.query, topK, canonicalRevision: reader.canonicalRevision, documentsRevision: reader.documentsRevision, items: [] }
     if (!reader.chunks) return snapshot
-    const staleDocIds = (await reader.documents!.query().select(['id', 'filePath']).toArray())
+    const staleDocIds = (await reader.documents!.query().toArray())
       .filter(doc => !isDocumentCopyIndexCurrent(reader.root, String(doc.id), doc.filePath))
       .map(doc => string(doc.id))
     const currentCopyFilter = staleDocIds.map(id => `\`docId\` != ${quote(id)}`).join(' AND ')

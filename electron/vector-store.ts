@@ -1372,7 +1372,7 @@ async function searchWithScopeInternal(
     const tableNames = await db.tableNames()
     if (!tableNames.includes(TABLE_NAME)) return []
     const staleDocIds = tableNames.includes(DOCS_TABLE_NAME)
-      ? (await (await db.openTable(DOCS_TABLE_NAME)).query().select(['id', 'filePath']).toArray())
+      ? (await (await db.openTable(DOCS_TABLE_NAME)).query().toArray())
           .filter(row => !isDocumentCopyIndexCurrent(getProjectDataRoot(projectPath), String(row.id), row.filePath))
           .map(row => String(row.id))
       : []
