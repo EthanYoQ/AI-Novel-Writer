@@ -7,7 +7,7 @@ import process from 'node:process'
 import { Buffer } from 'node:buffer'
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
-import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, currentProtocolBinding, assertProtocolBinding, validateHistoricalLedgerBoundary, validateCampaignBinding, buildFixtureExports, validatePair, selectPhase, assertScenarioMatchesProtocol, reconcileDispatchedAttempts, withLedgerReconciliation, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles, assertFormalTargetCandidateClean, createShortIsolationRoot, assertOwnedIsolationRoot, validatePhysicalLedger } from '../quality-modernization-run.mjs'
+import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, currentProtocolBinding, assertProtocolBinding, validateHistoricalLedgerBoundary, validateCampaignBinding, buildFixtureExports, validatePair, selectPhase, assertScenarioMatchesProtocol, reconcileDispatchedAttempts, withLedgerReconciliation, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles, assertFormalTargetCandidateClean, createShortIsolationRoot, assertOwnedIsolationRoot, validatePhysicalLedger, registeredCampaignWorktree, developmentLedgerPath } from '../quality-modernization-run.mjs'
 import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, PHASE_SCENARIOS, classifyProductionPair,
   adjudicateEarlyReviewReferenceNonconformance, EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION,
   readBaselineFailureEvidence, validateEarlyContextSelectionDifference,
@@ -317,6 +317,7 @@ test('S14A隔离根是短实体目录并核所有权，真实账本不能从本�
   const root = createShortIsolationRoot()
   const baseline = path.join(root, 'b')
   const project = path.join(baseline, 'p')
+  const ledger = developmentLedgerPath(root, 'early-budget')
   try {
     fs.mkdirSync(project, { recursive: true })
     assert.equal(fs.lstatSync(root).isSymbolicLink(), false)
@@ -331,7 +332,30 @@ test('S14A隔离根是短实体目录并核所有权，真实账本不能从本�
     fs.writeFileSync(path.join(root, '.vibe-owner.json'), JSON.stringify({ ...owner, sourceProject: 'foreign' }))
     assert.throws(() => assertOwnedIsolationRoot(baseline, 'baseline'), /UNOWNED_ISOLATION_ROOT/)
     assert.throws(() => validatePhysicalLedger(path.join(root, 'physical-ledger.jsonl')), /PATH_MISMATCH/)
-  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+    const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', ...protocolBinding, arm: 'baseline', codeSha: 'a'.repeat(40),
+      sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
+      phase: 'early-budget', milestone: 'early', caseId: '场景1/1', operation: '指定范围生成' }
+    assert.throws(() => updateLedger(path.join(root, 'synthetic-ledger.jsonl'),
+      { type: 'reserve', attemptId: 'external', binding }, { campaignMode: 'synthetic' }), /UNOWNED_LEDGER/)
+    assert.equal(path.dirname(ledger), path.join(ROOT, '.runtime', '.cache', 'novel-quality-modernization'))
+    updateLedger(ledger, { type: 'reserve', attemptId: 'cache-owned', binding }, { campaignMode: 'synthetic' })
+    updateLedger(ledger, { type: 'dispatch', attemptId: 'cache-owned' }, { campaignMode: 'synthetic' })
+    updateLedger(ledger, { type: 'settle', attemptId: 'cache-owned' }, { campaignMode: 'synthetic' })
+    assert.deepEqual(fs.readFileSync(ledger, 'utf8').trim().split('\n').map(line => JSON.parse(line).type), ['reserve', 'dispatch', 'settle'])
+    assert.equal(fs.existsSync(`${ledger}.lock`), false)
+  } finally {
+    if (fs.existsSync(ledger)) fs.unlinkSync(ledger)
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('真实账本仅绑定登记分支的唯一工作树，拒绝重复和待修剪登记', () => {
+  const branch = 'branch refs/heads/codex/program-v3-autonomous-continuation'
+  const entry = `worktree C:/registered/d103\nHEAD ${'a'.repeat(40)}\n${branch}`
+  assert.equal(registeredCampaignWorktree(entry), 'C:/registered/d103')
+  assert.throws(() => registeredCampaignWorktree(`${entry}\n\n${entry}`), /CAMPAIGN_WORKTREE_NOT_UNIQUE/)
+  assert.throws(() => registeredCampaignWorktree(`${entry}\nprunable gitdir file points to non-existent location`), /CAMPAIGN_WORKTREE_NOT_UNIQUE/)
+  assert.throws(() => registeredCampaignWorktree(`worktree C:/other\nHEAD ${'b'.repeat(40)}\nbranch refs/heads/other`), /CAMPAIGN_WORKTREE_NOT_UNIQUE/)
 })
 test('账本未知不释放、重试新attempt、无硬上限、重复/并发/残记录拒绝', () => {
   const parent = path.join(ROOT, '.runtime/.cache/novel-quality-modernization')

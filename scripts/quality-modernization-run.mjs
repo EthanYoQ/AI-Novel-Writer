@@ -120,9 +120,16 @@ export function validatePhysicalLedger(file) {
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) fail('CAMPAIGN_LEDGER_IDENTITY_MISMATCH')
   if (!samePath(native(path.resolve(ownerRoot, git(ownerRoot, ['rev-parse', '--git-common-dir']))),
     native(path.resolve(ROOT, git(ROOT, ['rev-parse', '--git-common-dir']))))
-    || git(ownerRoot, ['branch', '--show-current']) !== 'codex/program-v3-autonomous-continuation') fail('CAMPAIGN_LEDGER_IDENTITY_MISMATCH')
+    || !samePath(native(registeredCampaignWorktree(git(ROOT, ['worktree', 'list', '--porcelain']))), native(ownerRoot))) fail('CAMPAIGN_LEDGER_IDENTITY_MISMATCH')
   validateHistoricalLedgerBoundary(fs.readFileSync(ledger, 'utf8'), read(PROTOCOL_PATH).historicalLedgerBoundary)
   return ledger
+}
+export function registeredCampaignWorktree(porcelain) {
+  const matches = porcelain.split(/\r?\n\r?\n/u).map(block => block.split(/\r?\n/u))
+    .filter(lines => lines.includes('branch refs/heads/codex/program-v3-autonomous-continuation'))
+  const registered = matches[0]?.filter(line => line.startsWith('worktree '))
+  if (matches.length !== 1 || registered?.length !== 1 || matches[0].some(line => line.startsWith('prunable'))) fail('CAMPAIGN_WORKTREE_NOT_UNIQUE')
+  return registered[0].slice('worktree '.length)
 }
 function git(root, args) {
   const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true })
@@ -404,6 +411,7 @@ export function updateLedger(file, event, options = {}) {
     return { occupied: [...attempts.values()].filter(item => item.type !== 'cancel').length, cap: null }
   } finally { fs.closeSync(fd); fs.unlinkSync(lock) }
 }
+export const developmentLedgerPath = (root, phase) => path.join(CACHE, `synthetic-ledger-${path.basename(root)}-${phase}.jsonl`)
 
 export function main(argv) {
   let [command = 'help', ...rest] = argv
@@ -431,7 +439,8 @@ export function main(argv) {
     if (!scenario) fail('PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED')
     const selection = selectPhase(protocol, phase, args['--milestone'] ?? scenario.milestone)
     assertScenarioMatchesProtocol(selection, scenario)
-    const developmentLedger = path.join(prepared.root, `synthetic-ledger-${phase}.jsonl`)
+    const developmentLedger = developmentLedgerPath(prepared.root, phase)
+    if (fs.existsSync(developmentLedger)) fail('DEVELOPMENT_LEDGER_COLLISION')
     const result = withLedgerReconciliation(developmentLedger, 'synthetic', () => runProductionPhasePair(prepared.targets, { phase, development: true, mode: 'synthetic', milestone: selection.milestone,
       scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, ...currentProtocolBinding(),
       semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(prepared.root, 'baseline-templates.json'), ledgerPath: developmentLedger }))
