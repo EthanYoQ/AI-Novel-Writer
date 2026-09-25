@@ -17,7 +17,9 @@ const option = name => process.argv.find(arg => arg.startsWith(`--${name}=`))?.s
 const packageDir = option('package-dir')
 const u09ImportOnly = process.argv.includes('--u09-import-only')
 const u09FinalizedOnly = process.argv.includes('--u09-finalized-only')
+const u09StaleOnly = process.argv.includes('--u09-stale-only')
 assert(!(u09ImportOnly && u09FinalizedOnly), 'choose one U09 journey mode')
+assert(!u09StaleOnly || u09FinalizedOnly, 'stale source requires --u09-finalized-only')
 const controlledModel = u09ImportOnly || u09FinalizedOnly
 const packageSourceSha = option('package-source-sha')
 const expectedExe = option('exe-sha256')
@@ -77,7 +79,9 @@ const server = createServer(async (request, response) => {
   const body = JSON.parse(Buffer.concat(await Array.fromAsync(request)).toString('utf8'))
   modelRequests.push(body)
   const index = modelRequests.length - 1
-  const content = u09FinalizedOnly ? index === 0 ? `${finalizedNames[0]}走进北塔。` : index === 2 ? lateProse : index >= 3
+  const content = u09StaleOnly ? index === 0 ? lateProse
+    : JSON.stringify({ updates: [{ characterId: lateId, currentState: { location: '旧源模型值' }, evidence: { text: lateProse } }] })
+    : u09FinalizedOnly ? index === 0 ? `${finalizedNames[0]}走进北塔。` : index === 2 ? lateProse : index >= 3
     ? JSON.stringify({ updates: [{ characterId: lateId, currentState: { location: '模型旧值' }, evidence: { text: lateProse } }] })
     : JSON.stringify({ updates: [
     { characterId: finalizedIds[0], currentState: { location: '北塔' }, evidence: { text: `${finalizedNames[0]}走进北塔。` } },
@@ -86,7 +90,7 @@ const server = createServer(async (request, response) => {
   ] }) : JSON.stringify({ results: [{ sourceId: '1:1', characterCards: [{
     name: importNames[index], role: 'supporting', background: `模型背景${index + 1}`, notes: '合成提取',
   }] }] })
-  if (u09FinalizedOnly && index === 3) {
+  if (u09FinalizedOnly && index === (u09StaleOnly ? 1 : 3)) {
     signalLateModel()
     await new Promise(resolve => { releaseLateModel = resolve })
   }
@@ -207,6 +211,92 @@ async function main() {
     await rolePage.locator('.writer-left-rail button[title="角色"]').click()
     await rolePage.getByTitle('新建角色').waitFor({ state: 'visible' })
     assert.equal(await rolePage.locator('[data-shell-variant="v3"]').count(), 1)
+    if (u09StaleOnly) {
+      currentStep = 'u09-a09-stale-source-setup'
+      lateId = await addCharacter(rolePage, lateName)
+      const opened = await invoke(rolePage, 'project:open', projectPath, randomUUID(), null)
+      assert.equal(opened.success, true, opened.error)
+      const session = { projectId: created.projectId, projectPath, leaseId: opened.project?.sessionLease }
+      assert(session.leaseId, 'stale source fixture session missing')
+      const blueprint = await invoke(rolePage, 'db:blueprint-upsert', { chapterNumber: 1, title: '南站', role: '发展',
+        purpose: '核对旧来源拒写', keyEvents: lateProse, characters: [] }, projectPath, session)
+      assert.equal(blueprint.success, true, blueprint.error)
+      const draft = await invoke(rolePage, 'db:draft-create', { chapterNumber: 1, version: 1, source: 'write',
+        content: lateProse, wordCount: lateProse.length }, projectPath, session)
+      assert.equal(draft.success, true, draft.error)
+      await closeAppBounded(app); app = null
+
+      app = (await launch()).app
+      const stalePage = await app.firstWindow()
+      const notice = stalePage.locator('[role="status"].fixed.inset-x-0.top-10')
+      if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
+      await stalePage.locator('.writer-shelf').getByRole('button', { name: `打开《${projectName}》` }).click()
+      await stalePage.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
+      assert((await stalePage.locator('.cm-content').innerText()).includes(lateProse))
+      currentStep = 'u09-a09-stale-source'
+      await stalePage.getByRole('button', { name: '定稿', exact: true }).click()
+      await stalePage.getByRole('dialog').filter({ hasText: '确定要将第 1 章定稿吗？' })
+        .getByRole('button', { name: '确认定稿', exact: true }).click()
+      await stalePage.getByText('已定稿（只读）', { exact: true }).waitFor({ state: 'visible', timeout: 60_000 })
+      await waitBounded(lateModelRequested, 90_000, 'old source model request missing')
+      assert.equal(modelRequests.length, 2)
+      assert(JSON.stringify(modelRequests[1].messages).includes(lateId), 'old request lacks frozen character ID')
+      importDb = new Database(path.join(projectPath, '.ai-novel', 'project.db'), { fileMustExist: true, readonly: true })
+      const binding = JSON.parse(importDb.prepare('SELECT binding_json FROM generation_runs ORDER BY rowid DESC LIMIT 1').pluck().get())
+      assert.equal(binding.sourceManifest.operation, 'finalized-character-state')
+      const currentSession = { projectId: created.projectId, projectPath, leaseId: binding.epoch }
+      const older = importDb.prepare('SELECT finalization_id AS finalizationId FROM finalization_outbox WHERE draft_id=?').get(draft.id)
+      assert(older?.finalizationId, 'old Writer finalization missing')
+      const newerText = `${lateProse}新版定稿。`
+      const newer = await invoke(stalePage, 'db:draft-create', { chapterNumber: 1, version: 2, source: 'write',
+        content: newerText, wordCount: newerText.length }, projectPath, currentSession)
+      assert.equal(newer.success, true, newer.error)
+      const committed = await invoke(stalePage, 'finalization:commit', { tabId: 'u09-stale-v2', projectPath,
+        projectSession: currentSession, draftId: newer.id, chapterNumber: 1, chapterTitle: '南站新版',
+        content: newerText, contentRevision: 0 }, currentSession)
+      assert.equal(committed.success, true, committed.error)
+      assert.equal(importDb.prepare("SELECT id FROM drafts WHERE chapter_number=1 AND status='finalized' ORDER BY version DESC LIMIT 1").get().id,
+        newer.id, 'newer version did not become authoritative')
+      releaseLateModel(); releaseLateModel = undefined
+      const failureRow = importDb.prepare(`SELECT s.ok,s.error_msg AS errorMsg,s.attempt_count AS attemptCount FROM post_process_steps s
+        JOIN post_process_runs r ON r.id=s.run_id WHERE r.trigger_source_id=? AND s.step_key='character_cards' ORDER BY s.id DESC LIMIT 1`)
+      let rejected
+      for (let attempt = 0; attempt < 360; attempt++) {
+        rejected = failureRow.get(`finalization:${older.finalizationId}`)
+        if (rejected?.attemptCount) break
+        await new Promise(resolve => setTimeout(resolve, 250))
+      }
+      assert.equal(rejected?.ok, 0, 'old source result was accepted')
+      assert.equal(rejected.errorMsg, 'FINALIZATION_GENERATION_SOURCE_CHANGED',
+        'old source was rejected for a different reason')
+      const row = importDb.prepare('SELECT cs_location AS location,cs_provenance AS provenance FROM characters WHERE character_id=?').get(lateId)
+      assert.equal(row.location, '', 'old source overwrote the character after newer finalization')
+      assert.equal(modelRequests.length, 2, 'old source failure retried the model')
+      const taskPanel = stalePage.locator('.writer-task-table')
+      if (!(await taskPanel.isVisible())) await stalePage.locator('.bottom-tool-btn[title="任务"]').click()
+      await taskPanel.waitFor({ state: 'visible' })
+      const activeCount = taskPanel.locator(':scope > div:first-child > div:first-child > span.font-mono')
+      const history = taskPanel.getByText('历史任务', { exact: true }).locator('..')
+      const finalizedHistory = history.getByText('定稿 — 第1章 南站', { exact: true })
+      let quiet = false
+      for (let attempt = 0; attempt < 360; attempt++) {
+        quiet = await activeCount.count() === 0 && await finalizedHistory.isVisible()
+        if (quiet) break
+        await new Promise(resolve => setTimeout(resolve, 250))
+      }
+      assert(quiet, 'stale source workflow did not settle before restart')
+      await closeAppBounded(app); app = null
+      app = (await launch()).app
+      const reopened = await app.firstWindow()
+      const persisted = importDb.prepare('SELECT cs_location AS location FROM characters WHERE character_id=?').get(lateId)
+      assert.equal(persisted.location, '', 'old source write survived restart')
+      assert.deepEqual(failureRow.get(`finalization:${older.finalizationId}`), rejected)
+      steps.push({ stepId: currentStep, actionId: 'U09.A09', outcome: 'PASS',
+        assertion: 'A held Writer finalized-character response from chapter version 1 was rejected after version 2 became authoritative; no stale character write or retry survived restart.',
+        observed: { oldFinalizationId: older.finalizationId, newerDraftId: newer.id, rejection: rejected,
+          characterId: lateId, modelRequestCount: modelRequests.length, writerShell: await reopened.locator('[data-shell-variant="v3"]').count() } })
+      return
+    }
     if (u09FinalizedOnly) {
       finalizedIds = [await addCharacter(rolePage, finalizedNames[0]), await addCharacter(rolePage, finalizedNames[1]),
         await addCharacter(rolePage, finalizedNames[2]), await addCharacter(rolePage, finalizedNames[2])]
@@ -1080,7 +1170,8 @@ async function main() {
     }
     const verifiedActions = [...new Set(steps.filter(step => step.outcome === 'PASS' && step.actionId).map(step => step.actionId))]
     const receipt = { schemaVersion: 1, qualification: u09ImportOnly ? 'F05_U09_A01_A02_A03_A04_PACKAGED_V3_IMPORT'
-      : u09FinalizedOnly ? 'F05_U09_A05_A06_A07_A08_A09_PACKAGED_V3_FINALIZED' : 'F05_U09_A08_U10_A01_A02_A03_A04_A05_A06_A07_A09_A10_PACKAGED_V3_CHARACTERS',
+      : u09StaleOnly ? 'F05_U09_A09_STALE_SOURCE_PACKAGED_V3_FINALIZED'
+        : u09FinalizedOnly ? 'F05_U09_A05_A06_A07_A08_A09_PACKAGED_V3_FINALIZED' : 'F05_U09_A08_U10_A01_A02_A03_A04_A05_A06_A07_A09_A10_PACKAGED_V3_CHARACTERS',
       outcome: failure ? 'FAIL' : 'PARTIAL', sliceOutcome: failure ? 'FAIL' : 'PASS', fullU10Qualification: false,
       fullU09Qualification: false, fullF05Qualification: false, evidenceLevel: 'electron', shell: 'writer-v3', testedSha, executionHead, changedPaths,
       dirtyProductPaths, ignoredScreenshotPaths, ignoredTestOnlyPaths, package: { directory: packageDir, executableSha256: sha256(exe), asarSha256: sha256(asar) },
