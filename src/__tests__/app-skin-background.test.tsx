@@ -79,6 +79,7 @@ describe('App image-skin background seam', () => {
     const skinCss = imageSkinCss()
 
     expect(sidebarMarkup).toContain('skin-workspace-panel')
+    expect(editorMarkup).toContain('writer-welcome')
     expect(editorMarkup).toContain('skin-workspace-page')
     expect(knowledgeMarkup).toContain('skin-workspace-page')
 

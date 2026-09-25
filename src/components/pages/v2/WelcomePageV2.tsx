@@ -41,7 +41,7 @@ export default function WelcomePageV2({ overview, recentProjects, onNewProject, 
   }
   const stageStatuses = { unknown: text('待读取', 'Unknown'), 'not-started': text('未开始', 'Not started'), 'in-progress': text('进行中', 'In progress'), completed: text('已完成', 'Completed') }
   const displayCount = (value: number | null | undefined) => count(value) ?? text('待读取', 'Unknown')
-  return <div className="writer-welcome">
+  return <div className="writer-welcome skin-workspace-page">
     <header className="writer-welcome-heading"><BookOpen size={30} strokeWidth={1.4} /><p>{text('写作书房', 'Writing room')}</p><h1>{overview.name || text('写下你的下一段故事', 'Write the next part of your story')}</h1><span className="v3-welcome-verse">{text('从灵感到章节 · 沉浸创作', 'From spark to chapter · Immerse and write')}</span></header>
     <div className="writer-welcome-actions">
       <button type="button" onClick={onNewProject}><Plus size={17} />{text('新建作品', 'New project')}</button>
