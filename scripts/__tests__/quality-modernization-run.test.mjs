@@ -12,7 +12,8 @@ import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolated
   adjudicateEarlyReviewReferenceNonconformance, EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION,
   readBaselineFailureEvidence, validateEarlyContextSelectionDifference,
   validateEarlyReviewChain, targetUnitsGateEvidence,
-  createAttemptSupervisor, createOperationDispatchGate, createOutboundPreflightAssert, fetchProviderResponse, measurePromptBytes,
+  createAttemptSupervisor, createOperationDispatchGate, createOutboundPreflightAssert,
+  rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures, fetchProviderResponse, measurePromptBytes,
   BRIDGE_SETTLEMENT_DEADLINE_MS, BRIDGE_SPAWN_TIMEOUT_MS, BRIDGE_TEST_TIMEOUT_MS } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, readVerifiedRecoveryCandidateSupplement,
   readVerifiedDirectPersistedDraftEvidence, recordPersistedDraftObservation,
@@ -673,6 +674,19 @@ test('bridge 在记账前按 operation 校验出站权威，且只把真实 prov
   assert.ok(fixture.includes('createOutboundPreflightAssert(receipt.preflightFailures ??= [])'))
   assert.ok(fixture.includes('fetchProviderResponse(originalFetch'))
   assert.ok(fixture.includes('globalThis.fetch = physicalFetch'), '全局 fetch 不得再把本地 preflight 失败混入 fetchFailures')
+})
+
+test('外围请求即使被调用方捕获，prepare 与 execute 也不能通过', async () => {
+  const receipt = { preflightFailures: [], physicalModelRequests: 0, syntheticDispatches: 0 }
+  try { await Promise.resolve().then(() => rejectOutsidePhysicalBoundary(receipt)) } catch { /* 产品可回退 FTS */ }
+  assert.deepEqual(receipt.preflightFailures, ['NETWORK_OUTSIDE_PHYSICAL_BOUNDARY'])
+  assert.throws(() => assertNoOutboundPreflightFailures(receipt), /OUTBOUND_PREFLIGHT_FAILURES/)
+  assert.equal(receipt.physicalModelRequests, 0)
+  assert.equal(receipt.syntheticDispatches, 0)
+  const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
+  assert.ok(fixture.includes('globalThis.fetch = async () => rejectOutsidePhysicalBoundary(receipt)'))
+  assert.match(fixture, /if \(request\.action === 'prepare'\) \{ assertNoOutboundPreflightFailures\(receipt\); receipt\.status = 'prepared'/)
+  assert.match(fixture, /assertNoOutboundPreflightFailures\(receipt\)\s+receipt\.status = 'passed'/)
 })
 
 test('early-review 从生产定稿历史发送必需前章，而不是借当前正文复述蒙混通过', () => {

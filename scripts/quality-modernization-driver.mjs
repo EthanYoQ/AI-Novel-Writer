@@ -58,6 +58,13 @@ export function createOutboundPreflightAssert(failures) {
   }
 }
 
+export function rejectOutsidePhysicalBoundary(receipt) {
+  createOutboundPreflightAssert(receipt.preflightFailures ??= [])(false, 'NETWORK_OUTSIDE_PHYSICAL_BOUNDARY')
+}
+export function assertNoOutboundPreflightFailures(receipt) {
+  if (receipt.preflightFailures?.length) throw new Error('OUTBOUND_PREFLIGHT_FAILURES')
+}
+
 /** The only place where provider transport failures enter fetchFailures. */
 export async function fetchProviderResponse(fetcher, url, options, failures, diagnostic = value => String(value)) {
   if (typeof fetcher !== 'function' || !Array.isArray(failures)) throw new Error('PROVIDER_FETCH_ARGUMENTS_INVALID')

@@ -8,7 +8,8 @@ import { pathToFileURL } from 'node:url'
 import { test, vi } from 'vitest'
 import { updateLedger, CAMPAIGN_ID } from '../quality-modernization-run.mjs'
 import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, createOperationDispatchGate,
-  createOutboundPreflightAssert, fetchProviderResponse, measurePromptBytes, BRIDGE_SETTLEMENT_DEADLINE_MS,
+  createOutboundPreflightAssert, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
+  fetchProviderResponse, measurePromptBytes, BRIDGE_SETTLEMENT_DEADLINE_MS,
   BRIDGE_TEST_TIMEOUT_MS } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, recordPersistedDraftObservation, safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
 
@@ -159,7 +160,7 @@ test('isolated production commands persist the selected phase operations', async
   // 再 abort，保证超时杀进程之前账本已经有一条终态，而不是只剩 reserve+dispatch。
   const supervisor = createAttemptSupervisor({ record })
   const originalFetch = globalThis.fetch
-  globalThis.fetch = async () => { throw new Error('NETWORK_OUTSIDE_PHYSICAL_BOUNDARY') }
+  globalThis.fetch = async () => rejectOutsidePhysicalBoundary(receipt)
   let database, projectAccess, currentContext, sourceParity, countUnits, recoveryRows, localDispatchGateRejection
   let secret = null
   const safeDiagnostic = value => safeReceiptDiagnostic(value, request.mode)
@@ -355,7 +356,7 @@ test('isolated production commands persist the selected phase operations', async
       semanticHash: sha(source), guidanceHash: sha(source.template) }
     receipt.physicalProject = { path: project.rootPath, dbPath: db.name, projectId: project.projectId,
       format: candidate ? 'canonical' : 'legacy', parityHash: sha(sourceParity), readback: sourceParity }
-    if (request.action === 'prepare') { receipt.status = 'prepared'; return }
+    if (request.action === 'prepare') { assertNoOutboundPreflightFailures(receipt); receipt.status = 'prepared'; return }
     assert.equal(sha(sourceParity), request.parityHash, 'PHYSICAL_PROJECT_PARITY_CHANGED')
 
     let operationKind = null, operationId = null
@@ -694,7 +695,7 @@ test('isolated production commands persist the selected phase operations', async
         if (request.mode === 'synthetic') assert.equal(terminal.textHash, attempt.visibleTextHash)
       }
     }
-    assert.equal(receipt.preflightFailures?.length ?? 0, 0, 'OUTBOUND_PREFLIGHT_FAILURES')
+    assertNoOutboundPreflightFailures(receipt)
     receipt.status = 'passed'
   } catch (error) {
     const canProjectRecoveryCandidate = request.mode === 'real'
