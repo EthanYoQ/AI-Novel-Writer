@@ -102,7 +102,7 @@ if (process.argv.includes('--help')) {
         canonical: JSON.parse(localStorage.getItem(appearanceKey)), theme: localStorage.getItem(themeKey),
         shell: localStorage.getItem(shellKey), unrelated: localStorage.getItem('startup-unrelated-selection'),
       }), { appearanceKey, themeKey, shellKey })
-      assert.equal(stored.canonical.shellPreference, 'classic'); assert.equal(stored.canonical.colorTheme, 'dark')
+      assert.equal(stored.canonical.shellPreference, 'writer'); assert.equal(stored.canonical.colorTheme, 'dark')
       assert.equal(stored.canonical.zoom, 1.1); assert.equal(stored.canonical.uiFont, 'system'); assert.equal(stored.canonical.writingFont, 'system')
       assert.equal(stored.theme, oldTheme); assert.equal(stored.shell, 'v1'); assert.equal(stored.unrelated, 'synthetic-selected-model')
     } finally { await session.app.close() }

@@ -300,7 +300,7 @@ app.whenReady().then(async () => {
       registerUpdateController(updateService, { ipc: ipcMain, publish: publishUpdateState })
     },
     reportFailure: (operation, error) => {
-      console.warn(`[Vela Update] ${operation}失败，已降级并继续启动应用。`, error)
+      console.warn(`[AI Novel Update] ${operation}失败，已降级并继续启动应用。`, error)
     },
   })
 }).catch((error: unknown) => {

@@ -640,7 +640,7 @@ async function main() {
     await objectiveMerge.getByRole('button', { name: '完成合并' }).click()
     const committedRows = waitForRows(liveProjectPath, state => state.reviews.length === 5
       && state.cycles.find(cycle => cycle.cycleId === objectiveCycle.cycleId)?.recheckCount === 1)
-    const mergeErrorToast = page.locator('#vela-toast-root span').filter({
+    const mergeErrorToast = page.locator('#ai-novel-toast-root span').filter({
       hasText: /^(?:项目会话已失效，未合并修订内容|打开对比后正文已变化，未提交修订；请保存后重新打开|合并失败：|合并出错：)/,
     })
     const toastFailure = mergeErrorToast.waitFor({ state: 'visible', timeout: 60_000 }).then(async () => {
@@ -866,7 +866,7 @@ async function main() {
     const beforeRejectedMerge = formalRows(candidateProjectPath)
     const beforeRejectedGeneration = generationRows(candidateProjectPath)
     await candidateMerge.getByRole('button', { name: '完成合并' }).click()
-    await page.locator('#vela-toast-root').getByText(/项目会话已失效|合并失败/).first()
+    await page.locator('#ai-novel-toast-root').getByText(/项目会话已失效|合并失败/).first()
       .waitFor({ state: 'visible' })
     assert.deepEqual(formalRows(candidateProjectPath), beforeRejectedMerge,
       'stale V3 session merged or changed formal rows after a concurrent author save')

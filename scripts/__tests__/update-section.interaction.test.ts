@@ -178,7 +178,7 @@ describeWithChrome('UpdateSection browser interactions', () => {
       isReminderDeferred: true,
       reminderUntil: '2026-08-01T00:00:00.000Z',
     }))
-    await page.waitForFunction(() => document.querySelectorAll('#vela-action-toast-root button').length === 0)
+    await page.waitForFunction(() => document.querySelectorAll('#ai-novel-action-toast-root button').length === 0)
 
     await page.evaluate(() => window.__updateHarness.setUpdateState({
       status: 'downloaded',
