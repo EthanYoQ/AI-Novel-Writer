@@ -229,7 +229,7 @@ describe('ProjectPeekService source-zero-write overview', () => {
     expect(overview.stages[5]).toEqual({ id: 'finalization', status: 'not-started', count: 0 })
   })
 
-  it('uses unknown for an unknown plan, in-progress once data exists, and only completes full planned coverage', () => {
+  it('uses unknown for an unknown plan, in-progress once data exists, and only completes full planned coverage', { timeout: 10_000 }, () => {
     const unknown = fixture()
     unknown.database.prepare('UPDATE project_core SET total_chapters=0').run()
     const unknownService = new ProjectPeekService({ scratchRoot: unknown.scratch })

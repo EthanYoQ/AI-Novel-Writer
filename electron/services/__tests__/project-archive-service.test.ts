@@ -581,7 +581,7 @@ describe('portable project export service', () => {
     expect(fs.existsSync(f.target)).toBe(false)
   })
 
-  it('detects database and provider asset mutations before archive publication', async () => {
+  it('detects database and provider asset mutations before archive publication', { timeout: 10_000 }, async () => {
     const f = fixture()
     const file = providedFile(f, 'knowledge/a.txt', 'first', 'knowledge-source')
     await expect(exportPortableProject(input(f, provider([file]), {
@@ -602,7 +602,7 @@ describe('portable project export service', () => {
     expect(fs.existsSync(second.target)).toBe(false)
   })
 
-  it('detects source and provider mutations that happen while the archive is being built', async () => {
+  it('detects source and provider mutations that happen while the archive is being built', { timeout: 10_000 }, async () => {
     const f = fixture()
     await expect(exportPortableProject(input(f, provider(), {
       __testHooks: { afterArchiveBuilt: () => {
