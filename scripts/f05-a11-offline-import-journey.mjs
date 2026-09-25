@@ -107,6 +107,24 @@ for table in tables:
 result['avatarRows']=[{'path':p,'hash':h,'size':n} for p,h,n in b.execute('select relative_path,content_hash,byte_size from character_avatar_assets')]+[{'path':p,'hash':h,'size':n} for p,h,n in b.execute('select preserved_relative_path,content_hash,byte_size from character_avatar_unresolved where content_hash is not null')]
 print(json.dumps(result))`
 
+function comparisonDatabase(sourceCopy, root) {
+  const copied = path.join(root, 'sql-read-copy')
+  fs.mkdirSync(copied)
+  const storage = path.join(sourceCopy, '.vela')
+  for (const name of ['vela.db', 'vela.db-wal', 'vela.db-shm', 'vela.db-journal']) {
+    const file = path.join(storage, name)
+    if (fs.existsSync(file)) fs.copyFileSync(file, path.join(copied, name))
+  }
+  const snapshot = path.join(root, 'sql-comparison.db')
+  // SQLite merges any committed WAL entries into this independent, read-only comparison input.
+  execFileSync('python', ['-c', `import sqlite3,sys
+source=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)
+target=sqlite3.connect(sys.argv[2])
+source.backup(target)
+target.close(); source.close()`, path.join(copied, 'vela.db'), snapshot])
+  return snapshot
+}
+
 async function knowledgeSnapshot(storageRoot) {
   const directory = path.join(storageRoot, 'lancedb')
   if (!fs.existsSync(directory)) return { documents: [], chunks: [], tables: [] }
@@ -274,8 +292,10 @@ async function verify(source) {
     assert(fs.existsSync(path.join(target, '.ai-novel', 'project.db')), 'No published target database')
     const dialogs = await session.app.evaluate(() => globalThis.__a11Dialogs)
     assert.deepEqual(dialogs.map(dialog => dialog.type), ['open', 'open', 'confirm'])
+    assert.deepEqual(inventory(sourceCopy), copiedBefore, 'Scratch old source changed during import')
+    const oldDatabase = comparisonDatabase(sourceCopy, root)
     const { avatarRows, ...counts } = JSON.parse(execFileSync('python', ['-c', compareSql,
-      path.join(sourceCopy, '.vela', 'vela.db'), path.join(target, '.ai-novel', 'project.db'), fieldPolicy], { encoding: 'utf8' }))
+      oldDatabase, path.join(target, '.ai-novel', 'project.db'), fieldPolicy], { encoding: 'utf8' }))
     assert.equal(counts.project_core, 1)
     if (supplement) assert.equal(counts.finalization_outbox, 1, 'Synthetic pending outbox was lost')
     for (const table of ['blueprints', 'characters', 'contents', 'drafts', 'reviews', 'revisions',
