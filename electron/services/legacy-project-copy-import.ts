@@ -146,24 +146,25 @@ async function adoptLegacyKnowledgeOriginals(sourceRoot: string, copiedRoot: str
       const expected = new Map<string, string>()
       for (const { id, filePath } of rows) {
         let targetPath = ''
-        if (path.isAbsolute(filePath) && within(sourceRoot, filePath) && /\.(?:txt|md|markdown)$/iu.test(filePath)) {
+        if (filePath !== '') {
+          if (typeof filePath !== 'string' || !path.isAbsolute(filePath) || !within(sourceRoot, filePath)
+            || !/\.(?:txt|md|markdown)$/iu.test(filePath)) fail('LEGACY_IMPORT_KNOWLEDGE_ORIGINAL_UNAVAILABLE')
           const relative = path.relative(sourceRoot, filePath)
           const copiedFile = path.join(copiedRoot, relative)
-          if (exists(copiedFile)) {
-            const parts = relative.split(path.sep)
-            const targetFile = parts[0]?.toLowerCase() === '.vela'
-              ? path.join(storage, ...parts.slice(1)) : path.join(builtRoot, relative)
-            const info = fs.lstatSync(copiedFile)
-            if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) fail('LEGACY_IMPORT_KNOWLEDGE_ORIGINAL_INVALID')
-            sameTree(copiedFile, targetFile)
-            const content = fs.readFileSync(copiedFile, 'utf8')
-            writeKnowledgeCopy(storage, id, { content,
-              indexedHash: createHash('sha256').update(content, 'utf8').digest('hex'), edited: false,
-              indexDirty: true })
-            targetPath = `${KNOWLEDGE_COPY_MARKER}${id}`
-            const copy = readKnowledgeCopy(storage, id)
-            if (!copy || copy.content !== content || !copy.indexDirty) fail('LEGACY_IMPORT_KNOWLEDGE_ORIGINAL_INVALID')
-          }
+          if (!exists(copiedFile)) fail('LEGACY_IMPORT_KNOWLEDGE_ORIGINAL_UNAVAILABLE')
+          const parts = relative.split(path.sep)
+          const targetFile = parts[0]?.toLowerCase() === '.vela'
+            ? path.join(storage, ...parts.slice(1)) : path.join(builtRoot, relative)
+          const info = fs.lstatSync(copiedFile)
+          if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) fail('LEGACY_IMPORT_KNOWLEDGE_ORIGINAL_INVALID')
+          sameTree(copiedFile, targetFile)
+          const content = fs.readFileSync(copiedFile, 'utf8')
+          writeKnowledgeCopy(storage, id, { content,
+            indexedHash: createHash('sha256').update(content, 'utf8').digest('hex'), edited: false,
+            indexDirty: true })
+          targetPath = `${KNOWLEDGE_COPY_MARKER}${id}`
+          const copy = readKnowledgeCopy(storage, id)
+          if (!copy || copy.content !== content || !copy.indexDirty) fail('LEGACY_IMPORT_KNOWLEDGE_ORIGINAL_INVALID')
         }
         expected.set(id, targetPath)
         if (filePath !== targetPath) await table.update({ where: `id = '${id.replaceAll("'", "''")}'`, values: { filePath: targetPath } })

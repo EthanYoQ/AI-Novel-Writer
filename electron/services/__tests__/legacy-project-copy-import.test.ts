@@ -75,11 +75,8 @@ it.each(['v100', 'v110'] as const)('%s 离线完整副本含 WAL、作者配置�
 it('旧项目根内的真实知识原文变成可读项目副本，片段不能冒充全文', async () => {
   const f = fixture('v110')
   const original = path.join(f.source, '创作资料.txt')
-  const outside = path.join(path.dirname(f.source), '外部资料.txt')
-  const missing = path.join(f.source, '缺失资料.txt')
   const content = '完整原文第一段。\n\n完整原文第二段只存在于旧项目文件。'
   fs.writeFileSync(original, content)
-  fs.writeFileSync(outside, '只在旧项目外的合成资料，不得读取或转入新项目。')
   const connection = await lance.connect(path.join(f.legacy, 'lancedb'))
   const tables: lance.Table[] = []
   try {
@@ -89,40 +86,53 @@ it('旧项目根内的真实知识原文变成可读项目副本，片段不能�
     tables.push(await connection.createTable('chunks', [
       { id: 'old-chunk', docId: 'old-doc', fileName: '创作资料.txt', text: '完整原文第一段。',
         chunkIndex: 0, totalChunks: 1, importedAt: '2026-09-13', corpusKind: 'reference' },
-      { id: 'outside-chunk', docId: 'outside-doc', fileName: '外部资料.txt', text: '旧索引片段',
-        chunkIndex: 0, totalChunks: 1, importedAt: '2026-09-13', corpusKind: 'reference' },
-      { id: 'missing-chunk', docId: 'missing-doc', fileName: '缺失资料.txt', text: '旧索引片段',
-        chunkIndex: 0, totalChunks: 1, importedAt: '2026-09-13', corpusKind: 'reference' }],
+    ],
     { schema: new Schema(fields) }))
     tables.push(await connection.createTable('documents', [
       { id: 'old-doc', fileName: '创作资料.txt', filePath: original,
         importedAt: '2026-09-13', chunkCount: 1, corpusKind: 'reference' },
-      { id: 'outside-doc', fileName: '外部资料.txt', filePath: outside,
-        importedAt: '2026-09-13', chunkCount: 1, corpusKind: 'reference' },
-      { id: 'missing-doc', fileName: '缺失资料.txt', filePath: missing,
-        importedAt: '2026-09-13', chunkCount: 1, corpusKind: 'reference' },
     ]))
   } finally { for (const table of tables) table.close(); connection.close() }
   const originalHash = hash(original)
-  const outsideHash = hash(outside)
   const result = await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions })
   expect(result, JSON.stringify(result)).toMatchObject({ state: 'ready' })
   expect(hash(original)).toBe(originalHash)
   expect(hash(path.join(f.target, '创作资料.txt'))).toBe(originalHash)
-  expect(fs.existsSync(path.join(f.target, '外部资料.txt'))).toBe(false)
   initProjectDatabase(f.target)
   try {
     const documents = await listDocuments(f.target)
     expect(documents.find(doc => doc.id === 'old-doc')?.filePath).toBe('knowledge-copy:old-doc')
-    expect(documents.find(doc => doc.id === 'outside-doc')?.filePath).toBe('')
-    expect(documents.find(doc => doc.id === 'missing-doc')?.filePath).toBe('')
     expect(await readDocumentCopy('old-doc', f.target)).toMatchObject({
       available: true, content, edited: false, indexStatus: 'stale',
     })
-    expect(await readDocumentCopy('outside-doc', f.target)).toEqual({ available: false, indexStatus: 'unavailable' })
-    expect(await readDocumentCopy('missing-doc', f.target)).toEqual({ available: false, indexStatus: 'unavailable' })
   } finally { closeConnection(f.target) }
-  expect(hash(outside)).toBe(outsideHash)
+})
+
+it.each(['outside', 'missing'] as const)('旧知识原文引用 %s 时阻断发布且不读取旧项目外文件', async reference => {
+  const f = fixture('v110')
+  const filePath = reference === 'outside' ? path.join(path.dirname(f.source), '外部资料.txt')
+    : path.join(f.source, '缺失资料.txt')
+  if (reference === 'outside') fs.writeFileSync(filePath, '只在旧项目外的合成资料，不得读取或转入新项目。')
+  const sourceHash = hash(path.join(f.legacy, 'vela.db'))
+  const outsideHash = reference === 'outside' ? hash(filePath) : null
+  const connection = await lance.connect(path.join(f.legacy, 'lancedb'))
+  const tables: lance.Table[] = []
+  try {
+    tables.push(await connection.createTable('chunks', [{ id: 'old-chunk', docId: 'old-doc',
+      fileName: '创作资料.txt', text: '旧索引片段', chunkIndex: 0, totalChunks: 1,
+      importedAt: '2026-09-13', corpusKind: 'reference' }], { schema: new Schema([
+      new Field('id', new Utf8()), new Field('docId', new Utf8()), new Field('fileName', new Utf8()),
+      new Field('text', new Utf8()), new Field('chunkIndex', new Int32()), new Field('totalChunks', new Int32()),
+      new Field('importedAt', new Utf8()), new Field('corpusKind', new Utf8()),
+    ]) }))
+    tables.push(await connection.createTable('documents', [{ id: 'old-doc', fileName: '创作资料.txt',
+      filePath, importedAt: '2026-09-13', chunkCount: 1, corpusKind: 'reference' }]))
+  } finally { for (const table of tables) table.close(); connection.close() }
+  expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))
+    .toMatchObject({ state: 'blocked', code: 'LEGACY_IMPORT_KNOWLEDGE_ORIGINAL_UNAVAILABLE' })
+  expect(fs.existsSync(f.target)).toBe(false)
+  expect(hash(path.join(f.legacy, 'vela.db'))).toBe(sourceHash)
+  if (outsideHash) expect(hash(filePath)).toBe(outsideHash)
 })
 
 it('源资料变化、未知旧资产均在发布前拒绝，旧项目保留', async () => {
