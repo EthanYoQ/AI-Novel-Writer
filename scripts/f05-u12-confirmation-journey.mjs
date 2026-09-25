@@ -696,7 +696,37 @@ async function main() {
         recheckAttemptId: committedCycle.recheckAttemptId, mergedHash: committedCycle.mergedHash,
         findingSetHash: committedCycle.findingSetHash, recheckCount: committedCycle.recheckCount,
         externalModelRequests: fixture.externalModelRequests }, 'U12.A06')
-    if (a06Only) return
+    if (a06Only) {
+      currentStep = 'U12.A06-process-reopen'
+      await objectiveMerge.waitFor({ state: 'hidden' })
+      if (await draftSave.isVisible()) {
+        await draftSave.click()
+        await draftSave.waitFor({ state: 'hidden' })
+      }
+      assert.equal(draftRow(liveProjectPath, liveDraft.id).content, recheckedBody)
+      await app.close(); app = null
+      ;({ app, page } = await launch(fixturePort))
+      await page.locator('.writer-shelf').getByRole('button', { name: `打开《${liveProjectName}》` }).click()
+      await page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).click()
+      assert.equal((await page.locator('.cm-content').innerText()).trim(), `港口灯塔\n第 1 章\n${recheckedBody}`)
+      const reopened = formalRows(liveProjectPath)
+      assert.equal(reopened.revisions.find(row => row.id === objectiveRevision.id)?.status, 'merged')
+      assert.equal(reopened.cycles.find(row => row.cycle_id === objectiveCycle.cycleId)?.revision_status, 'merge-committed')
+      assert.equal(reopened.cycles.find(row => row.cycle_id === objectiveCycle.cycleId)?.recheck_count, 1)
+      assert.deepEqual([reopened.findings.find(row => row.finding_id === objectiveFinding.finding_id)?.status,
+        reopened.findings.find(row => row.finding_id === objectiveFinding.finding_id)?.cycle_id,
+        reopened.findings.find(row => row.cycle_id === oldMerged.cycles[0].cycleId)?.status],
+      ['unresolved', objectiveCycle.cycleId, 'unverified'])
+      assert.equal(draftRow(liveProjectPath, liveDraft.id).content, recheckedBody)
+      assert.equal(reopened.outbox.length, 0)
+      assert.equal(fixture.requests.filter(item => item.route === '/v1/chat/completions').length, 6)
+      fixture.externalModelRequests += await app.evaluate(() => globalThis.__f05U12ExternalRequests ?? 0)
+      assert.equal(fixture.externalModelRequests, 0)
+      pass('U12.A06-reopen-unresolved', 'A new V3 process reopened the merged draft while the objective remained unresolved and the separate unverified finding stayed unverified',
+        { projectId: created.projectId, draftId: liveDraft.id, cycleId: objectiveCycle.cycleId,
+          findingId: objectiveFinding.finding_id, recheckCount: 1, externalModelRequests: fixture.externalModelRequests }, 'U12.A06')
+      return
+    }
 
     currentStep = 'U12.A07-finalize-and-publish'
     await objectiveMerge.waitFor({ state: 'hidden' })
@@ -903,16 +933,21 @@ async function main() {
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true })
     const requiredA08Steps = ['U12.A08-failed-candidate-reopen', 'U12.A08-isolated-candidate',
       'U12.A08-session-conflict', 'U12.A08-stale-source-reopen']
-    const receipt = { schemaVersion: 1, qualification: a06Only ? 'F05_U12_A06_DIAGNOSTIC_ONLY' : 'F05_U12_A01_A08_PACKAGED_V3_FINALIZATION',
-      overall: failure ? 'FAIL' : a06Only ? 'DIAGNOSTIC_ONLY' : 'PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3',
+    const requiredA06Steps = a06Only ? ['U12.A06-merge-not-resolved', 'U12.A06-reopen-unresolved']
+      : ['U12.A06-merge-not-resolved']
+    const receipt = { schemaVersion: 1, qualification: a06Only ? 'F05_U12_A06_PACKAGED_V3' : 'F05_U12_A01_A08_PACKAGED_V3_FINALIZATION',
+      overall: failure ? 'FAIL' : 'PARTIAL', evidenceLevel: 'electron', shell: 'writer-v3',
       scope: a06Only ? ['U12.A06'] : ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04', 'U12.A05', 'U12.A06', 'U12.A07', 'U12.A08'], testedSha, executionHead: git('rev-parse', 'HEAD'),
       artifact: { executablePath, executableSha256: sha256(executablePath), asarPath, asarSha256: sha256(asarPath) },
       driver: { path: driverPath, sha256: sha256(driverPath) }, profile: { scratch, projectPath, liveProjectPath },
       provider: { kind: 'loopback-synthetic-openai-sse', localRequests: fixture.requests,
         externalModelRequests: fixture.externalModelRequests, promptBoundaries: fixture.promptBoundaries },
       steps, unverifiedActions: ['U12.A01', 'U12.A02', 'U12.A03', 'U12.A04', 'U12.A05', 'U12.A06', 'U12.A07', 'U12.A08']
-        .filter(actionId => actionId === 'U12.A08'
+        .filter(actionId => a06Only && actionId !== 'U12.A06' ? true
+          : actionId === 'U12.A08'
           ? !requiredA08Steps.every(stepId => steps.some(step => step.stepId === stepId && step.outcome === 'PASS'))
+          : actionId === 'U12.A06' && a06Only
+            ? !requiredA06Steps.every(stepId => steps.some(step => step.stepId === stepId && step.outcome === 'PASS'))
           : !steps.some(step => step.actionId === actionId && step.outcome === 'PASS')),
       failure, ...(lifecycle ? { lifecycle } : {}) }
     fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
