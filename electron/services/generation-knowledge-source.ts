@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { Connection, Table } from '@lancedb/lancedb'
 import type { EmbeddingSpaceIdentity, KnowledgeCorpusKind } from '../vector-store'
+import { isDocumentCopyIndexCurrent } from '../vector-store'
 
 import type { GenerationKnowledgeItem, GenerationKnowledgeSnapshot } from '../../src/shared/generation-knowledge'
 export type { GenerationKnowledgeItem, GenerationKnowledgeSnapshot } from '../../src/shared/generation-knowledge'
@@ -29,6 +30,7 @@ function registryBytes(root: string): string | null {
   return fs.readFileSync(file, 'utf8')
 }
 interface Reader {
+  root: string
   state: GenerationKnowledgeSnapshot['storageState']; canonicalRevision: number | null; documentsRevision: number | null
   chunks?: Table; documents?: Table; connection?: Connection; names: string[]
   pin(table: Table): Promise<void>
@@ -43,7 +45,7 @@ async function readStable<T>(root: string, read: (reader: Reader) => Promise<T>)
     physicalDirectory(root)
     const registry = registryBytes(root)
     if (fs.existsSync(path.join(root, 'vectors.json')) || fs.existsSync(path.join(root, 'vectors.json.migration-journal.json'))) fail('LEGACY_PENDING')
-    const reader: Reader = { state: 'absent', canonicalRevision: null, documentsRevision: null, names: [], async pin(table) {
+    const reader: Reader = { root, state: 'absent', canonicalRevision: null, documentsRevision: null, names: [], async pin(table) {
       const entry = { table, version: 0 }; pinned.push(entry)
       entry.version = integer(await table.version())
       await table.checkout(entry.version)
@@ -86,6 +88,7 @@ async function sourceItem(reader: Reader, row: Row, score: number): Promise<Gene
   const chunkIndex = integer(row.chunkIndex), kind = corpus(row.corpusKind)
   if (kind === 'reference' || !Number.isFinite(score)) fail('INELIGIBLE_SOURCE')
   const docs = await reader.documents!.query().where(`id = ${quote(documentId)}`).toArray()
+  if (docs.length === 1 && !isDocumentCopyIndexCurrent(reader.root, documentId, docs[0].filePath)) fail('SOURCE_STALE')
   const chunks = await reader.chunks!.query().where(`\`docId\` = ${quote(documentId)}`).toArray()
   const ordered = chunks.sort((a, b) => integer(a.chunkIndex) - integer(b.chunkIndex))
   if (docs.length !== 1 || !ordered.length || integer(docs[0].chunkCount) !== ordered.length
@@ -106,6 +109,10 @@ export async function captureGenerationKnowledge(input: {
   return readStable(input.projectStorageRoot, async reader => {
     const snapshot: GenerationKnowledgeSnapshot = { version: 1, state: 'empty', storageState: reader.state, query: input.query, topK, canonicalRevision: reader.canonicalRevision, documentsRevision: reader.documentsRevision, items: [] }
     if (!reader.chunks) return snapshot
+    const staleDocIds = (await reader.documents!.query().select(['id', 'filePath']).toArray())
+      .filter(doc => !isDocumentCopyIndexCurrent(reader.root, String(doc.id), doc.filePath))
+      .map(doc => string(doc.id))
+    const currentCopyFilter = staleDocIds.map(id => `\`docId\` != ${quote(id)}`).join(' AND ')
     let hits: { row: Row; score: number }[] = []
     if (input.queryVector) {
       const bytes = registryBytes(input.projectStorageRoot)
@@ -121,7 +128,7 @@ export async function captureGenerationKnowledge(input: {
         || input.queryVector.length !== active[0].vectorDimension) fail('SPACE_NOT_MATCHED')
       const table = await reader.connection!.openTable(active[0].tableName); await reader.pin(table)
       if (!['l2', 'cosine', 'dot'].includes(active[0].distanceMetric)) fail('SPACE_UNPROVEN')
-      const rows = await table.vectorSearch(input.queryVector).distanceType(active[0].distanceMetric as 'l2' | 'cosine' | 'dot').where("`corpusKind` != 'reference'").limit(topK).toArray()
+      const rows = await table.vectorSearch(input.queryVector).distanceType(active[0].distanceMetric as 'l2' | 'cosine' | 'dot').where(`\`corpusKind\` != 'reference'${currentCopyFilter ? ` AND ${currentCopyFilter}` : ''}`).limit(topK).toArray()
       for (const hit of rows) {
         const canonical = await reader.chunks.query().where(`id = ${quote(string(hit.id))}`).toArray()
         if (canonical.length !== 1 || ['docId', 'text', 'fileName', 'chunkIndex', 'totalChunks', 'corpusKind'].some(key => !isDeepStrictEqual(canonical[0][key], hit[key]))) fail('VECTOR_CANONICAL_MISMATCH')
@@ -134,7 +141,7 @@ export async function captureGenerationKnowledge(input: {
       const raw = input.query.match(/[\p{L}\p{N}-]+/gu) ?? [], meaningful = raw.filter(term => Array.from(term).length >= 2)
       const terms = [...new Map((meaningful.length ? meaningful : raw).map(term => [term.toLocaleLowerCase(), term])).values()].slice(0, 8)
       const filter = terms.length ? terms.map(term => `text LIKE ${quote(`%${term}%`)}`).join(' OR ') : "text LIKE '%%'"
-      const rows = await reader.chunks.query().where(`(${filter})`).toArray()
+      const rows = await reader.chunks.query().where(`(${filter})${currentCopyFilter ? ` AND ${currentCopyFilter}` : ''}`).toArray()
       const rank = (row: Row) => terms.reduce((sum, term, index) => sum + (string(row.text).toLocaleLowerCase().includes(term.toLocaleLowerCase()) ? terms.length - index : 0), 0)
       hits = rows.filter(row => corpus(row.corpusKind) !== 'reference').sort((a, b) => rank(b) - rank(a) || string(a.id).localeCompare(string(b.id)))
         .slice(0, topK).map(row => ({ row, score: 0.5 }))

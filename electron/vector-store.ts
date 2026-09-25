@@ -51,6 +51,7 @@ export interface PortableKnowledgeDocument {
   fileName: string
   corpusKind: KnowledgeCorpusKind
   chunks: Array<{ chunkIndex: number; text: string }>
+  copy?: KnowledgeCopy
 }
 
 export interface PortableKnowledgeSnapshot {
@@ -127,6 +128,51 @@ const LEGACY_MIGRATION_JOURNAL_FILE = 'vectors.json.migration-journal.json'
 const LEGACY_MODEL_FINGERPRINT = 'legacy:unknown'
 const LEGACY_COMPAT_MODEL_PREFIX = 'legacy:dimension:'
 const DEFAULT_DISTANCE_METRIC = 'l2'
+export const KNOWLEDGE_COPY_MARKER = 'knowledge-copy:'
+
+interface KnowledgeCopy { content: string; indexedHash: string; edited: boolean; indexDirty: boolean }
+const contentHash = (content: string) => createHash('sha256').update(content, 'utf8').digest('hex')
+
+function knowledgeCopyPath(projectStorageRoot: string, docId: string): string {
+  const directory = path.join(projectStorageRoot, 'knowledge-copies')
+  if (fs.existsSync(directory)) {
+    const stat = fs.lstatSync(directory)
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('KNOWLEDGE_COPY_UNSAFE_PATH')
+  }
+  return path.join(directory, `${contentHash(docId)}.json`)
+}
+
+export function readKnowledgeCopy(projectStorageRoot: string, docId: string): KnowledgeCopy | null {
+  const file = knowledgeCopyPath(projectStorageRoot, docId)
+  if (!fs.existsSync(file)) return null
+  const stat = fs.lstatSync(file)
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('KNOWLEDGE_COPY_UNSAFE_PATH')
+  const value = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<KnowledgeCopy>
+  if (typeof value.content !== 'string' || typeof value.indexedHash !== 'string' || typeof value.edited !== 'boolean' || typeof value.indexDirty !== 'boolean') {
+    throw new Error('KNOWLEDGE_COPY_INVALID')
+  }
+  return value as KnowledgeCopy
+}
+
+export function writeKnowledgeCopy(projectStorageRoot: string, docId: string, copy: KnowledgeCopy): void {
+  const file = knowledgeCopyPath(projectStorageRoot, docId)
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const temporary = `${file}.${randomUUID()}.tmp`
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(copy), { encoding: 'utf8', flag: 'wx' })
+    fs.renameSync(temporary, file)
+  } finally {
+    if (fs.existsSync(temporary)) fs.rmSync(temporary)
+  }
+}
+
+export function isDocumentCopyIndexCurrent(projectStorageRoot: string, docId: string, filePath: unknown): boolean {
+  if (typeof filePath !== 'string' || !filePath.startsWith(KNOWLEDGE_COPY_MARKER)) return true
+  try {
+    const copy = readKnowledgeCopy(projectStorageRoot, docId)
+    return !!copy && !copy.indexDirty && contentHash(copy.content) === copy.indexedHash
+  } catch { return false }
+}
 
 // ===== 连接池（按项目路径缓存） =====
 
@@ -970,19 +1016,22 @@ async function writeDocumentInfo(
   await docsTable.add([docInfo])
 }
 
-async function pruneSupersededDocumentInfo(
+async function pruneSupersededDocuments(
   db: lancedb.Connection,
+  projectPath: string,
   docInfo: DocumentInfo,
 ): Promise<void> {
-  try {
-    const docsTable = await db.openTable(DOCS_TABLE_NAME)
-    const fileName = docInfo.fileName.replace(/'/g, "''")
-    const docId = docInfo.id.replace(/'/g, "''")
-    const corpusKind = docInfo.corpusKind.replace(/'/g, "''")
-    await docsTable.delete(`\`fileName\` = '${fileName}' AND \`corpusKind\` = '${corpusKind}' AND id != '${docId}'`)
-  } catch (error) {
-    // 这一步是旧元数据整理，不应将已完成的安全写入变成失败或删除新数据。
-    console.warn('[Vela VectorStore] 清理同名旧文档元数据失败:', error)
+  const docsTable = await db.openTable(DOCS_TABLE_NAME)
+  const fileName = docInfo.fileName.replace(/'/g, "''")
+  const docId = docInfo.id.replace(/'/g, "''")
+  const corpusKind = docInfo.corpusKind.replace(/'/g, "''")
+  const old = await docsTable.query()
+    .filter(`\`fileName\` = '${fileName}' AND \`corpusKind\` = '${corpusKind}' AND id != '${docId}'`)
+    .select(['id']).toArray()
+  for (const row of old) {
+    if (!await removeDocumentInternal(projectPath, String(row.id))) {
+      throw new Error('SUPERSEDED_KNOWLEDGE_CLEANUP_FAILED')
+    }
   }
 }
 
@@ -1142,17 +1191,20 @@ async function addChunksInternal(
       await finaliseEmbeddingWrite(projectPath, db, registry, embeddingWrite)
     }
 
+    // The new document is durable. A partial old-document cleanup must not
+    // roll it back and leave the user with no complete copy.
+    rollbackRequired = false
+
     if (metadata?.replacementMode !== 'stable-id') {
-      await pruneSupersededDocumentInfo(db, docInfo)
+      await pruneSupersededDocuments(db, projectPath, docInfo)
     }
 
-    rollbackRequired = false
     return { success: true, chunkCount: chunks.length }
   } catch (error) {
     if (rollbackRequired && db) {
       await rollbackCurrentWrite(db, chunkIds, docId)
     }
-    if (db && embeddingWrite) {
+    if (rollbackRequired && db && embeddingWrite) {
       await compensateEmbeddingWrite(db, embeddingWrite, chunkIds)
     }
     console.error('[Vela VectorStore] 写入失败:', error)
@@ -1179,10 +1231,6 @@ async function removeDocumentInternal(projectPath: string, docId: string): Promi
     for (const tableName of targets) {
       if (tableNames.includes(tableName)) await (await db.openTable(tableName)).delete(`\`docId\` = '${escapedId}'`)
     }
-    if (tableNames.includes(DOCS_TABLE_NAME)) {
-      await (await db.openTable(DOCS_TABLE_NAME)).delete(`id = '${escapedId}'`)
-    }
-
     // LanceDB cannot atomically delete across physical generations.  A retry is
     // safe only after proving that every registered and orphan generation has
     // reached the same zero-row postcondition.
@@ -1201,12 +1249,16 @@ async function removeDocumentInternal(projectPath: string, docId: string): Promi
       if (rows.length > 0) return false
     }
     if (remainingTableNames.includes(DOCS_TABLE_NAME)) {
+      await (await db.openTable(DOCS_TABLE_NAME)).delete(`id = '${escapedId}'`)
+    }
+    if (remainingTableNames.includes(DOCS_TABLE_NAME)) {
       const rows = await (await db.openTable(DOCS_TABLE_NAME)).query()
         .filter(`id = '${escapedId}'`)
         .limit(1)
         .toArray()
       if (rows.length > 0) return false
     }
+    fs.rmSync(knowledgeCopyPath(getProjectDataRoot(projectPath), docId), { force: true })
     return true
   } catch (error) {
     console.error('[Vela VectorStore] 删除失败:', error)
@@ -1232,6 +1284,12 @@ async function clearAllInternal(projectPath: string): Promise<boolean> {
     }
     const filePath = registryPath(projectPath)
     if (fs.existsSync(filePath)) fs.rmSync(filePath, { force: true })
+    const copies = path.join(getProjectDataRoot(projectPath), 'knowledge-copies')
+    if (fs.existsSync(copies)) {
+      const stat = fs.lstatSync(copies)
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('KNOWLEDGE_COPY_UNSAFE_PATH')
+      fs.rmSync(copies, { recursive: true })
+    }
     return true
   } catch (error) {
     console.error('[Vela VectorStore] 清空知识库失败:', error)
@@ -1313,6 +1371,14 @@ async function searchWithScopeInternal(
     const db = await getConnection(projectPath)
     const tableNames = await db.tableNames()
     if (!tableNames.includes(TABLE_NAME)) return []
+    const staleDocIds = tableNames.includes(DOCS_TABLE_NAME)
+      ? (await (await db.openTable(DOCS_TABLE_NAME)).query().select(['id', 'filePath']).toArray())
+          .filter(row => !isDocumentCopyIndexCurrent(getProjectDataRoot(projectPath), String(row.id), row.filePath))
+          .map(row => String(row.id))
+      : []
+    const currentCopyFilter = staleDocIds.length
+      ? staleDocIds.map(id => `\`docId\` != '${id.replace(/'/g, "''")}'`).join(' AND ')
+      : undefined
 
     let scopeFilter: string | undefined
     if (chapterScope) {
@@ -1336,6 +1402,7 @@ async function searchWithScopeInternal(
           if (corpusFilter && await tableSupportsField(vectorTable, 'corpusKind')) {
             vectorFilters.push(corpusFilter)
           }
+          if (currentCopyFilter) vectorFilters.push(currentCopyFilter)
           if (vectorFilters.length > 0) query = query.where(vectorFilters.join(' AND '))
           const results = await query.toArray()
           if (results.length > 0) {
@@ -1374,6 +1441,7 @@ async function searchWithScopeInternal(
       if (corpusFilter && await tableSupportsField(canonicalTable, 'corpusKind')) {
         filters.push(corpusFilter)
       }
+      if (currentCopyFilter) filters.push(currentCopyFilter)
       const filter = filters.join(' AND ')
       const results = await canonicalTable.query().filter(filter).toArray()
       const normalizedTerms = searchTerms.map(term => term.toLocaleLowerCase())
@@ -1461,7 +1529,9 @@ export function parsePortableKnowledgeSnapshot(value: unknown): PortableKnowledg
   const documentIds = new Set<string>()
   const documents = source.documents.map((item) => {
     const document = portableRecord(item)
-    exactPortableKeys(document, ['docId', 'fileName', 'corpusKind', 'chunks'])
+    exactPortableKeys(document, document.copy === undefined
+      ? ['docId', 'fileName', 'corpusKind', 'chunks']
+      : ['docId', 'fileName', 'corpusKind', 'chunks', 'copy'])
     const docId = portableText(document.docId)
     const fileName = portableFileName(document.fileName)
     const corpusKind = portableCorpusKind(document.corpusKind)
@@ -1475,7 +1545,19 @@ export function parsePortableKnowledgeSnapshot(value: unknown): PortableKnowledg
       if (chunk.chunkIndex !== index) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
       return { chunkIndex: index, text: portableText(chunk.text) }
     })
-    return { docId, fileName, corpusKind, chunks }
+    let copy: KnowledgeCopy | undefined
+    if (document.copy !== undefined) {
+      const value = portableRecord(document.copy)
+      exactPortableKeys(value, ['content', 'indexedHash', 'edited', 'indexDirty'])
+      if (typeof value.content !== 'string' || typeof value.indexedHash !== 'string'
+        || !/^[a-f0-9]{64}$/u.test(value.indexedHash)
+        || typeof value.edited !== 'boolean' || typeof value.indexDirty !== 'boolean'
+        || (!value.indexDirty && contentHash(value.content) !== value.indexedHash)) {
+        throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+      }
+      copy = { content: value.content, indexedHash: value.indexedHash, edited: value.edited, indexDirty: value.indexDirty }
+    }
+    return { docId, fileName, corpusKind, chunks, ...(copy ? { copy } : {}) }
   })
   documents.sort((left, right) => left.docId.localeCompare(right.docId))
   return { version: PORTABLE_KNOWLEDGE_VERSION, documents }
@@ -1513,7 +1595,7 @@ async function readPortableKnowledgeSnapshotInternal(projectStorageRoot: string)
     const documentsTable = await db.openTable(DOCS_TABLE_NAME)
     const chunksTable = await db.openTable(TABLE_NAME)
     try {
-      const documentRows = await documentsTable.query().select(['id', 'fileName', 'chunkCount', 'corpusKind']).toArray()
+      const documentRows = await documentsTable.query().toArray()
       const chunkRows = await chunksTable.query()
         .select(['docId', 'fileName', 'text', 'chunkIndex', 'totalChunks', 'corpusKind']).toArray()
       const grouped = new Map<string, Array<{ chunkIndex: number; text: string; fileName: string; corpusKind: KnowledgeCorpusKind; totalChunks: number }>>()
@@ -1541,7 +1623,12 @@ async function readPortableKnowledgeSnapshotInternal(projectStorageRoot: string)
         if (rows.some((chunk, index) => chunk.chunkIndex !== index || chunk.totalChunks !== rows.length
           || chunk.fileName !== fileName || chunk.corpusKind !== corpusKind)) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
         grouped.delete(docId)
-        return { docId, fileName, corpusKind, chunks: rows.map(chunk => ({ chunkIndex: chunk.chunkIndex, text: chunk.text })) }
+        let copy: KnowledgeCopy | undefined
+        if (typeof row.filePath === 'string' && row.filePath.startsWith(KNOWLEDGE_COPY_MARKER)) {
+          copy = readKnowledgeCopy(projectStorageRoot, docId) ?? undefined
+          if (!copy) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+        }
+        return { docId, fileName, corpusKind, chunks: rows.map(chunk => ({ chunkIndex: chunk.chunkIndex, text: chunk.text })), ...(copy ? { copy } : {}) }
       })
       if (grouped.size > 0) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
       const snapshot = parsePortableKnowledgeSnapshot({ version: PORTABLE_KNOWLEDGE_VERSION, documents })
@@ -1579,7 +1666,7 @@ export async function restorePortableKnowledgeSnapshot(
         fileName: document.fileName,
         importedAt: PORTABLE_KNOWLEDGE_DATE,
         chunkCount: document.chunks.length,
-        filePath: '',
+        filePath: document.copy ? `${KNOWLEDGE_COPY_MARKER}${document.docId}` : '',
         corpusKind: document.corpusKind,
       }))
       const chunkRows: ChunkRecord[] = snapshot.documents.flatMap(document => document.chunks.map(chunk => ({
@@ -1597,6 +1684,9 @@ export async function restorePortableKnowledgeSnapshot(
       await ensureTextIndex(chunks)
       chunks.close()
     } finally { db.close() }
+    for (const document of snapshot.documents) {
+      if (document.copy) writeKnowledgeCopy(projectStorageRoot, document.docId, document.copy)
+    }
     const rebuilt = await readPortableKnowledgeSnapshotInternal(projectStorageRoot)
     if (serializePortableKnowledgeSnapshot(rebuilt).compare(serializePortableKnowledgeSnapshot(snapshot)) !== 0) {
       throw new Error('PORTABLE_KNOWLEDGE_REBUILD_FAILED')

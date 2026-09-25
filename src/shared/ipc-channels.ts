@@ -1172,6 +1172,18 @@ export interface KnowledgeBaseChannels {
   'kb:search-writing-context': { args: [query: string, topK: number | undefined, expectedProjectPath: string]; return: AppResult<Array<{ text: string; score: number; fileName: string }>> }
   'kb:search-with-scope': { args: [query: string, fromChapter: number, toChapter: number, topK: number | undefined, expectedProjectPath: string]; return: AppResult<Array<{ text: string; score: number; fileName: string }>> }
   'kb:list-documents': { args: [expectedProjectPath: string]; return: AppResult<Array<{ id: string; fileName: string; importedAt: string; chunkCount: number; filePath: string }>> }
+  'kb:read-document-copy': {
+    args: [docId: string, expectedProjectPath: string]
+    return: AppResult<{ available: boolean; content?: string; contentHash?: string; edited?: boolean; indexStatus: 'current' | 'stale' | 'unavailable' }>
+  }
+  'kb:save-document-copy': {
+    args: [docId: string, content: string, expectedContentHash: string, expectedProjectPath: string]
+    return: AppResult<{ success: boolean; error?: string }>
+  }
+  'kb:reindex-document-copy': {
+    args: [docId: string, expectedProjectPath: string]
+    return: AppResult<{ success: boolean; docId?: string; chunkCount?: number; error?: string }>
+  }
   'kb:remove-document': { args: [docId: string, expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'kb:clear-all': { args: [expectedProjectPath: string]; return: { success: boolean; error?: string } }
   'kb:stats': { args: [expectedProjectPath: string]; return: AppResult<{ documentCount: number; totalChunks: number; vectorDimension: number }> }

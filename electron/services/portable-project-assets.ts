@@ -17,7 +17,7 @@ const KNOWN_OMITTED_TOP_LEVEL = new Set([
   'avatars', 'project.db', 'project.db-wal', 'project.db-shm', 'project.db-journal', 'project.json',
   'lancedb', 'embedding-spaces.json', 'vectors.json', 'vectors.json.migrated',
   'vectors.json.migration-journal.json', 'portable-transfer-authority.json', 'portable-runtime-freeze.json',
-  PORTABLE_KNOWLEDGE_SOURCE_PATH, 'cache', 'logs', 'temp', 'trash',
+  PORTABLE_KNOWLEDGE_SOURCE_PATH, 'knowledge-copies', 'cache', 'logs', 'temp', 'trash',
 ])
 
 function fail(): never { throw new Error('PORTABLE_ASSET_UNSAFE') }
@@ -54,6 +54,7 @@ function enumerateRawFiles(storageRoot: string): PortableProvidedFile[] {
   for (const name of fs.readdirSync(storageRoot)) {
     const topLevel = fs.lstatSync(path.join(storageRoot, name), { bigint: true })
     if (topLevel.isSymbolicLink()) fail()
+    if (name === 'knowledge-copies' && !topLevel.isDirectory()) fail()
     const key = portablePathKey(name)
     if (topKeys.has(key)) fail()
     topKeys.add(key)

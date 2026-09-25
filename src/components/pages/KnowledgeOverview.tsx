@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Database, BookOpen, FileText,
   Search, RefreshCw, Layers, Zap, Server, Activity, Trash2, AlertTriangle, Upload,
@@ -49,6 +49,11 @@ export default function KnowledgeOverview() {
   const [clearing, setClearing] = useState(false)
   const [importing, setImporting] = useState(false)
   const [loadError, setLoadError] = useState('')
+  const [selectedDocId, setSelectedDocId] = useState<string | null>(null)
+  const [documentCopy, setDocumentCopy] = useState<{ available: boolean; content?: string; contentHash?: string; edited?: boolean; indexStatus: 'current' | 'stale' | 'unavailable' } | null>(null)
+  const [draftContent, setDraftContent] = useState('')
+  const [documentBusy, setDocumentBusy] = useState(false)
+  const documentRequest = useRef(0)
 
   const currentProject = useProjectStore(s => s.currentProject)
   const { locale, text } = useLocaleStore()
@@ -100,11 +105,16 @@ export default function KnowledgeOverview() {
       setDocuments([])
       setStats({ documentCount: 0, totalChunks: 0, vectorDimension: 0 })
       setSearchResults([])
+      setSelectedDocId(null)
+      documentRequest.current++
+      setDocumentCopy(null)
+      setDraftContent('')
       setVectorRebuildStatus(null)
       setLoadError('')
       setSearching(false)
       setBackfilling(false)
       setClearing(false)
+      setDocumentBusy(false)
       loadData()
       loadVectorRebuildStatus()
     })
@@ -141,6 +151,56 @@ export default function KnowledgeOverview() {
   const hasVectors = stats.vectorDimension > 0
   const searchMode = hasVectors ? text('混合检索', 'Hybrid search') : text('BM25 全文检索', 'BM25 full-text search')
   const rebuildPresentation = getVectorRebuildPresentation(vectorRebuildStatus)
+
+  const openDocument = async (docId: string) => {
+    const session = captureProjectSession(currentProject)
+    if (!session) return
+    const request = ++documentRequest.current
+    setSelectedDocId(docId)
+    setDocumentCopy(null)
+    try {
+      const result = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(session, 'kb:read-document-copy', docId, session.projectPath))
+      if (!isProjectSessionCurrent(session) || request !== documentRequest.current) return
+      setDocumentCopy(result)
+      setDraftContent(result.content ?? '')
+    } catch (error) {
+      if (isProjectSessionCurrent(session) && request === documentRequest.current) toast.error(appErrorMessage(locale, error))
+    }
+  }
+
+  const saveDocument = async () => {
+    const session = captureProjectSession(currentProject)
+    if (!session || !selectedDocId || !documentCopy?.available || !documentCopy.contentHash) return
+    setDocumentBusy(true)
+    try {
+      const result = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(session, 'kb:save-document-copy', selectedDocId, draftContent, documentCopy.contentHash, session.projectPath))
+      if (!isProjectSessionCurrent(session)) return
+      if (!result.success) { toast.error(result.error || text('保存失败', 'Save failed')); return }
+      await openDocument(selectedDocId)
+      setSearchResults([])
+      toast.success(text('项目副本已保存，索引待更新', 'Project copy saved; index update needed'))
+    } catch (error) {
+      if (isProjectSessionCurrent(session)) toast.error(appErrorMessage(locale, error))
+    } finally { if (isProjectSessionCurrent(session)) setDocumentBusy(false) }
+  }
+
+  const reindexDocument = async () => {
+    const session = captureProjectSession(currentProject)
+    if (!session || !selectedDocId) return
+    setDocumentBusy(true)
+    try {
+      const result = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(session, 'kb:reindex-document-copy', selectedDocId, session.projectPath))
+      if (!isProjectSessionCurrent(session)) return
+      if (!result.success || !result.docId) { toast.error(result.error || text('重建失败', 'Rebuild failed')); return }
+      await loadData()
+      await loadVectorRebuildStatus()
+      await openDocument(result.docId)
+      setSearchResults([])
+      toast.success(text('本地全文索引已更新', 'Local text index updated'))
+    } catch (error) {
+      if (isProjectSessionCurrent(session)) toast.error(appErrorMessage(locale, error))
+    } finally { if (isProjectSessionCurrent(session)) setDocumentBusy(false) }
+  }
 
   if (!currentProject) {
     return (
@@ -394,6 +454,31 @@ export default function KnowledgeOverview() {
             badge={hasVectors ? text('混合', 'Hybrid') : text('基础', 'Basic')}
             badgeColor={hasVectors ? 'var(--color-success-text)' : 'var(--color-text-secondary)'}
           />
+        </div>
+
+        {/* ===== 知识库原文与项目副本 ===== */}
+        <div className="rounded-xl border border-[var(--color-border)] mb-6 p-4" style={{ backgroundColor: 'var(--color-sidebar)' }}>
+          <h3 className="text-sm font-semibold text-[var(--color-text)] mb-3">{text('知识库原文', 'Knowledge originals')}</h3>
+          <div className="flex flex-wrap gap-2 mb-3">
+            {documents.map(doc => <Button key={doc.id} variant="outline" className="text-xs" disabled={documentBusy} onClick={() => openDocument(doc.id)}>
+              {doc.fileName}
+            </Button>)}
+          </div>
+          {selectedDocId && documentCopy && (!documentCopy.available ? (
+            <p className="text-xs text-[var(--color-warning-text)]">{text('完整原文不可用，请重新导入', 'Full original unavailable. Please import it again.')}</p>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs text-[var(--color-text-muted)]">
+                {documentCopy.edited ? text('已编辑的项目副本；外部原文件不变', 'Edited project copy; the external original is unchanged') : text('项目内原文副本；外部原文件不变', 'Original project copy; the external file is unchanged')}
+              </p>
+              <textarea aria-label={text('项目副本内容', 'Project copy content')} className="w-full min-h-64 rounded border border-[var(--color-border)] bg-[var(--color-bg)] p-3 text-sm text-[var(--color-text)]" value={draftContent} disabled={documentBusy} onChange={event => setDraftContent(event.target.value)} />
+              {documentCopy.indexStatus === 'stale' && <p className="text-xs text-[var(--color-warning-text)]">{text('索引待更新；旧内容已停止参与新检索和生成', 'Index update needed; old content is excluded from new search and generation')}</p>}
+              <div className="flex gap-2">
+                <Button variant="outline" disabled={documentBusy || draftContent === documentCopy.content} onClick={saveDocument}>{text('保存项目副本', 'Save project copy')}</Button>
+                {documentCopy.indexStatus === 'stale' && <Button variant="outline" disabled={documentBusy || draftContent !== documentCopy.content} onClick={reindexDocument}>{text('更新本地全文索引', 'Update local text index')}</Button>}
+              </div>
+            </div>
+          ))}
         </div>
 
         {/* ===== 向量检查与重建卡片 ===== */}

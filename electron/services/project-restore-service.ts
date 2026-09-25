@@ -846,12 +846,16 @@ export async function restorePortableProject(input: RestorePortableProjectInput)
       try {
         await restorePortableKnowledgeSnapshot(storage, knowledgeSnapshot)
       } catch {
-        const generated = path.join(storage, 'lancedb')
-        if (fs.existsSync(generated)) captureGeneratedTree(attempt, generated)
+        for (const name of ['lancedb', 'knowledge-copies']) {
+          const generated = path.join(storage, name)
+          if (fs.existsSync(generated)) captureGeneratedTree(attempt, generated)
+        }
         fail('PORTABLE_RESTORE_INVALID')
       }
-      const generated = path.join(storage, 'lancedb')
-      if (fs.existsSync(generated)) captureGeneratedTree(attempt, generated)
+      for (const name of ['lancedb', 'knowledge-copies']) {
+        const generated = path.join(storage, name)
+        if (fs.existsSync(generated)) captureGeneratedTree(attempt, generated)
+      }
     }
     try {
       if (!readPortableRuntimeFreeze(attempt.root).active) fail('PORTABLE_RESTORE_INVALID')

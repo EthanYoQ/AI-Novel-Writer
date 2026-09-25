@@ -364,6 +364,22 @@ export function registerKBController(
     return knowledgeBaseLoader.run((kb) => kb.listDocuments(projectPath))
   })
 
+  ipcMain.handle('kb:read-document-copy', async (_event, docId: string, expectedProjectPath: string) => {
+    const projectPath = requireProjectPath(expectedProjectPath)
+    return knowledgeBaseLoader.run((kb) => kb.readDocumentCopy(docId, projectPath))
+  })
+
+  ipcMain.handle('kb:save-document-copy', async (_event, docId: string, content: string,
+    expectedContentHash: string, expectedProjectPath: string) => {
+    const projectPath = requireProjectPath(expectedProjectPath)
+    return knowledgeBaseLoader.run((kb) => kb.saveDocumentCopy(docId, content, expectedContentHash, projectPath))
+  })
+
+  ipcMain.handle('kb:reindex-document-copy', async (_event, docId: string, expectedProjectPath: string) => {
+    const projectPath = requireProjectPath(expectedProjectPath)
+    return knowledgeBaseLoader.run((kb) => kb.reindexDocumentCopy(docId, projectPath))
+  })
+
   ipcMain.handle('kb:remove-document', async (_event, docId: string, expectedProjectPath: string) => {
     const projectPath = requireProjectPath(expectedProjectPath)
     return knowledgeBaseLoader.run(async (kb) => {

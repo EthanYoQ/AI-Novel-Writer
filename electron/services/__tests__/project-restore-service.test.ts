@@ -29,6 +29,8 @@ import { createPortableProjectAssetProvider } from '../portable-project-assets'
 import { activateCanonicalProjectData, deactivateProjectData } from '../project-data-locator'
 import { readPortableRuntimeFreeze } from '../portable-runtime-freeze'
 import { createProjectArchiveRoundtripFixture } from '../../../test/desktop/project-archive.fixture'
+import { readDocumentCopy } from '../../knowledge-base'
+import { captureGenerationKnowledge } from '../generation-knowledge-source'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
@@ -189,6 +191,32 @@ afterEach(() => {
 })
 
 describe('portable project restore service', { timeout: 20_000 }, () => {
+  it.each([
+    { name: 'stale edited copy', dirty: true, indexed: '旧索引文字', content: '已编辑的完整项目副本' },
+    { name: 'rebuilt edited copy', dirty: false, indexed: '已编辑的完整项目副本', content: '已编辑的完整项目副本' },
+  ])('preserves $name through the production archive', async ({ dirty, indexed, content }) => {
+    const f = fixture()
+    await restorePortableKnowledgeSnapshot(f.sourceStorage, { version: 1, documents: [{
+      docId: 'copy-doc', fileName: '世界观.txt', corpusKind: 'project-knowledge',
+      chunks: [{ chunkIndex: 0, text: indexed }],
+      copy: { content, indexedHash: sha256(indexed), edited: true, indexDirty: dirty },
+    }] })
+    await exportPortableProject({ ...exportInput(f), assets: createPortableProjectAssetProvider() })
+    await restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })
+    activateCanonicalProjectData(f.targetRoot)
+    try {
+      expect(await readDocumentCopy('copy-doc', f.targetRoot)).toMatchObject({
+        available: true, content, edited: true, indexStatus: dirty ? 'stale' : 'current',
+      })
+      expect(await search(f.targetRoot, indexed)).toHaveLength(dirty ? 0 : 1)
+      expect((await captureGenerationKnowledge({ projectStorageRoot: path.join(f.targetRoot, '.ai-novel'), query: indexed })).items)
+        .toHaveLength(dirty ? 0 : 1)
+    } finally {
+      closeConnection(f.targetRoot)
+      deactivateProjectData(f.targetRoot)
+    }
+  })
+
   it('restores the shared 20-chapter corpus under a new identity with exact authored assets and frozen history', async () => {
     const f = await createProjectArchiveRoundtripFixture()
     try {

@@ -84,7 +84,7 @@ export default function KnowledgePanel() {
       const projectSession = captureProjectSession(currentProject)
       if (!projectSession || documents.length === 0) return
       const expectedProjectPath = projectSession.projectPath
-      const missing = documents.filter(d => d.filePath && !titleMap[d.id])
+      const missing = documents.filter(d => d.filePath && !d.filePath.startsWith('knowledge-copy:') && !titleMap[d.id])
       if (missing.length === 0) return
 
       const newTitles: Record<string, string> = {}

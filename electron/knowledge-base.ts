@@ -33,6 +33,9 @@ import {
   planEmbeddingRebuild,
   activatePlannedEmbeddingSpace,
   rebuildPlannedEmbeddingSpace,
+  KNOWLEDGE_COPY_MARKER,
+  readKnowledgeCopy,
+  writeKnowledgeCopy,
   type EmbeddingSpaceIdentity,
   type KnowledgeCorpusKind,
 } from './vector-store'
@@ -40,6 +43,7 @@ import { getCurrentProjectPath, getProjectDb } from './database'
 import { ImportRunRepository } from './repositories/import-run-repository'
 import { assertRequiredExpectedProjectPath } from './utils/project-context'
 import { getProjectDataRoot } from './services/project-data-locator'
+import { withKnowledgeSourceGate } from './services/knowledge-source-gate'
 
 // ===== 迁移状态跟踪 =====
 
@@ -159,13 +163,16 @@ export async function importDocument(
 
     // 4. 写入 LanceDB（text + 元数据 + 可选向量）
     onProgress?.(80, '正在保存...')
+    writeKnowledgeCopy(getProjectDataRoot(projectPath), docId, {
+      content, indexedHash: createHash('sha256').update(content).digest('hex'), edited: false, indexDirty: false,
+    })
     const result = await addChunks(
       projectPath,
       docId,
       fileName,
       chunks,
       vectors,
-      filePath,
+      `${KNOWLEDGE_COPY_MARKER}${docId}`,
       undefined,
       embeddingSpaceFor(protocol, model),
     )
@@ -226,6 +233,61 @@ export async function searchKnowledge(
  */
 export function listDocuments(projectPath: string) {
   return ensureMigration(projectPath).then(() => storeListDocuments(projectPath))
+}
+
+const copyHash = (content: string) => createHash('sha256').update(content, 'utf8').digest('hex')
+
+/** A legacy chunk-only document has no recoverable full original. */
+export async function readDocumentCopy(docId: string, projectPath: string): Promise<{
+  available: boolean; content?: string; contentHash?: string; edited?: boolean; indexStatus: 'current' | 'stale' | 'unavailable'
+}> {
+  await ensureMigration(projectPath)
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), async () => {
+    const doc = (await storeListDocuments(projectPath)).find(item => item.id === docId)
+    if (!doc?.filePath.startsWith(KNOWLEDGE_COPY_MARKER)) return { available: false, indexStatus: 'unavailable' }
+    const copy = readKnowledgeCopy(getProjectDataRoot(projectPath), docId)
+    if (!copy) return { available: false, indexStatus: 'unavailable' }
+    return {
+      available: true, content: copy.content, contentHash: copyHash(copy.content), edited: copy.edited,
+      indexStatus: !copy.indexDirty && copyHash(copy.content) === copy.indexedHash ? 'current' : 'stale',
+    }
+  })
+}
+
+export async function saveDocumentCopy(docId: string, content: string, expectedContentHash: string, projectPath: string): Promise<{ success: boolean; error?: string }> {
+  if (typeof content !== 'string' || typeof expectedContentHash !== 'string') return { success: false, error: '文档内容无效' }
+  await ensureMigration(projectPath)
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), async () => {
+    const doc = (await storeListDocuments(projectPath)).find(item => item.id === docId)
+    if (!doc?.filePath.startsWith(KNOWLEDGE_COPY_MARKER)) return { success: false, error: '完整原文不可用，请重新导入' }
+    const copy = readKnowledgeCopy(getProjectDataRoot(projectPath), docId)
+    if (!copy) return { success: false, error: '完整原文不可用，请重新导入' }
+    if (copyHash(copy.content) !== expectedContentHash) return { success: false, error: '项目副本已变化，请重新打开后编辑' }
+    writeKnowledgeCopy(getProjectDataRoot(projectPath), docId, { ...copy, content, edited: true, indexDirty: true })
+    return { success: true }
+  })
+}
+
+/** Explicit local FTS rebuild from the latest project copy; no model request. */
+export async function reindexDocumentCopy(docId: string, projectPath: string): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string }> {
+  await ensureMigration(projectPath)
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), async () => {
+    const doc = (await storeListDocuments(projectPath)).find(item => item.id === docId)
+    if (!doc?.filePath.startsWith(KNOWLEDGE_COPY_MARKER)) return { success: false, error: '完整原文不可用，请重新导入' }
+    const copy = readKnowledgeCopy(getProjectDataRoot(projectPath), docId)
+    if (!copy?.content.trim()) return { success: false, error: '项目副本为空，无法重建索引' }
+    const newDocId = randomUUID()
+    const chunks = chunkText(copy.content, normalizeEmbeddingOptions(undefined).chunkSize, normalizeEmbeddingOptions(undefined).chunkOverlap)
+    writeKnowledgeCopy(getProjectDataRoot(projectPath), newDocId, { ...copy, indexedHash: copyHash(copy.content), indexDirty: false })
+    const result = await addChunks(projectPath, newDocId, doc.fileName, chunks, undefined,
+      `${KNOWLEDGE_COPY_MARKER}${newDocId}`, { corpusKind: doc.corpusKind, replacementMode: 'stable-id' })
+    if (!result.success) return { success: false, error: result.error }
+    if (!await removeDocFromStore(projectPath, docId)) {
+      await removeDocFromStore(projectPath, newDocId)
+      return { success: false, error: '旧索引清理失败，重建未完成' }
+    }
+    return { success: true, docId: newDocId, chunkCount: chunks.length }
+  })
 }
 
 /**
@@ -390,13 +452,17 @@ async function importTextInternal(
     const existingDocs = await storeListDocuments(projectPath)
     const existingDoc = existingDocs.find(d => d.fileName === fileName)
 
+    writeKnowledgeCopy(getProjectDataRoot(projectPath), docId, {
+      content: text, indexedHash: createHash('sha256').update(text).digest('hex'), edited: false, indexDirty: false,
+    })
+
     const result = await addChunks(
       projectPath,
       docId,
       fileName,
       chunks,
       vectors,
-      undefined,
+      `${KNOWLEDGE_COPY_MARKER}${docId}`,
       { ...(chapterMeta ?? {}), corpusKind: 'project-knowledge' },
       embeddingSpaceFor(protocol, model),
     )
