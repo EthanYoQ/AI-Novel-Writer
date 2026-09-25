@@ -32,7 +32,7 @@ export class GlobalConfigUpdatePreferencesStore implements UpdatePreferencesStor
 
     if (result.status !== 'ok' || !isConfigRecord(result.value)) {
       // 自动更新不能因为配置损坏而用默认值覆盖用户的模型、语言或代理设置。
-      console.warn('[Vela Update] 全局配置不可安全读取，跳过更新偏好写入。')
+      console.warn('[AI Novel Update] 全局配置不可安全读取，跳过更新偏好写入。')
       return false
     }
 

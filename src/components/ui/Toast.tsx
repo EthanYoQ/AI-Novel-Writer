@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 /**
- * Vela 全局 Toast 通知系统
+ * 全局 Toast 通知系统
  *
  * 用于轻量、非阻塞的操作反馈（成功、警告，普通信息）。
  * 关键错误请使用 alertError() — 见 AlertDialog.tsx。
@@ -36,9 +36,9 @@ let _addToast: ((item: ToastItem) => void) | null = null
 
 /** 挂载 Toast 容器到 DOM */
 function ensureContainer() {
-  if (document.getElementById('vela-toast-root')) return
+  if (document.getElementById('ai-novel-toast-root')) return
   const container = document.createElement('div')
-  container.id = 'vela-toast-root'
+  container.id = 'ai-novel-toast-root'
   document.body.appendChild(container)
   createRoot(container).render(<ToastContainer />)
 }

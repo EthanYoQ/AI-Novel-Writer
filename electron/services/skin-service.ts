@@ -160,7 +160,7 @@ function writeFileAtomically(filePath: string, content: string | Buffer): void {
       fs.unlinkSync(temporaryPath)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn('[Vela Skin] Unable to remove temporary skin file.', error)
+        console.warn('[AI Novel Skin] Unable to remove temporary skin file.', error)
       }
     }
   }
@@ -443,7 +443,7 @@ export class SkinService {
       fs.unlinkSync(path.join(this.rootDirectory, 'assets', assetFile))
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn('[Vela Skin] Unable to clean up a previous skin asset.', error)
+        console.warn('[AI Novel Skin] Unable to clean up a previous skin asset.', error)
       }
     }
   }

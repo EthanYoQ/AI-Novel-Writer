@@ -1,6 +1,6 @@
 import { assertKnowledgeSourceIdle, withKnowledgeSourceGate } from './services/knowledge-source-gate'
 /**
- * Vela 向量数据库封装 — 基于 LanceDB
+ * AI Novel 向量数据库封装 — 基于 LanceDB
  *
  * `chunks` 是始终可用的全文文本事实源。每个嵌入空间都有独立物理表，避免
  * 不同模型、维度或距离语义的向量混写进同一 Arrow FixedSizeList。
@@ -530,7 +530,7 @@ async function cleanupOwnedTableCreation(
       removeEmptyUnregisteredTableDirectory(projectPath, tableName)
     }
   } catch (cleanupError) {
-    console.warn(`[Vela VectorStore] 清理本次失败的嵌入表 ${tableName} 失败:`, cleanupError)
+    console.warn(`[AI Novel VectorStore] 清理本次失败的嵌入表 ${tableName} 失败:`, cleanupError)
   }
 }
 
@@ -657,7 +657,7 @@ async function compensateEmbeddingWrite(
       await table.delete(`id = '${recordId.replace(/'/g, "''")}'`)
     }
   } catch (error) {
-    console.warn(`[Vela VectorStore] 补偿嵌入写入 ${write.tableName} 失败:`, error)
+    console.warn(`[AI Novel VectorStore] 补偿嵌入写入 ${write.tableName} 失败:`, error)
   }
 }
 
@@ -989,7 +989,7 @@ async function rebuildPlannedEmbeddingSpaceInternal(
       try {
         await db.dropTable(newSpace.tableName)
       } catch (cleanupError) {
-        console.warn('[Vela VectorStore] 清理失败的嵌入重建表失败:', cleanupError)
+        console.warn('[AI Novel VectorStore] 清理失败的嵌入重建表失败:', cleanupError)
       }
     }
     return {
@@ -1055,11 +1055,11 @@ async function rollbackCurrentWrite(
           }
         }
       } catch (error) {
-        console.warn(`[Vela VectorStore] 回滚 ${tableName} 的本次写入失败:`, error)
+        console.warn(`[AI Novel VectorStore] 回滚 ${tableName} 的本次写入失败:`, error)
       }
     }
   } catch (error) {
-    console.warn('[Vela VectorStore] 读取回滚目标失败:', error)
+    console.warn('[AI Novel VectorStore] 读取回滚目标失败:', error)
   }
 }
 
@@ -1207,7 +1207,7 @@ async function addChunksInternal(
     if (rollbackRequired && db && embeddingWrite) {
       await compensateEmbeddingWrite(db, embeddingWrite, chunkIds)
     }
-    console.error('[Vela VectorStore] 写入失败:', error)
+    console.error('[AI Novel VectorStore] 写入失败:', error)
     return { success: false, chunkCount: 0, error: String(error) }
   }
 }
@@ -1261,7 +1261,7 @@ async function removeDocumentInternal(projectPath: string, docId: string): Promi
     fs.rmSync(knowledgeCopyPath(getProjectDataRoot(projectPath), docId), { force: true })
     return true
   } catch (error) {
-    console.error('[Vela VectorStore] 删除失败:', error)
+    console.error('[AI Novel VectorStore] 删除失败:', error)
     return false
   }
 }
@@ -1292,7 +1292,7 @@ async function clearAllInternal(projectPath: string): Promise<boolean> {
     }
     return true
   } catch (error) {
-    console.error('[Vela VectorStore] 清空知识库失败:', error)
+    console.error('[AI Novel VectorStore] 清空知识库失败:', error)
     return false
   }
 }
@@ -1415,7 +1415,7 @@ async function searchWithScopeInternal(
           } finally { vectorTable.close() }
         }
       } catch (error) {
-        console.warn('[Vela VectorStore] 向量检索降级为全文检索:', error)
+        console.warn('[AI Novel VectorStore] 向量检索降级为全文检索:', error)
       }
     }
 
@@ -1463,13 +1463,13 @@ async function searchWithScopeInternal(
       }
       return [...uniqueResults.values()].slice(0, topK)
     } catch (error) {
-      console.warn('[Vela VectorStore] 纯文本检索失败:', error)
+      console.warn('[AI Novel VectorStore] 纯文本检索失败:', error)
       return []
     } finally {
       canonicalTable?.close()
     }
   } catch (error) {
-    console.error('[Vela VectorStore] 检索失败:', error)
+    console.error('[AI Novel VectorStore] 检索失败:', error)
     return []
   }
 }
@@ -2013,7 +2013,7 @@ async function updateChunkVectorsInternal(
     if (db && write) {
       await compensateEmbeddingWrite(db, write, updates.map(update => update.id))
     }
-    console.error('[Vela VectorStore] 批量更新向量失败:', error)
+    console.error('[AI Novel VectorStore] 批量更新向量失败:', error)
     return { success: false, count: 0, error: String(error) }
   }
 }
@@ -2294,7 +2294,7 @@ async function rollbackLegacyMigrationDocuments(projectPath: string, journal: Le
     restoreLegacyRegistrySnapshot(projectPath, journal.registryBefore)
     return true
   } catch (error) {
-    console.warn('[Vela VectorStore] 回滚旧 vectors.json 迁移失败:', error)
+    console.warn('[AI Novel VectorStore] 回滚旧 vectors.json 迁移失败:', error)
     return false
   }
 }
@@ -2411,10 +2411,10 @@ async function migrateFromJSONOnce(projectPath: string): Promise<{ success: bool
       }
     }
     removeLegacyMigrationJournal(projectPath)
-    console.log(`[Vela VectorStore] 迁移完成：${plan.migratedChunks} 个块已写入 LanceDB`)
+    console.log(`[AI Novel VectorStore] 迁移完成：${plan.migratedChunks} 个块已写入 LanceDB`)
     return { success: true, migrated: plan.migratedChunks }
   } catch (error) {
-    console.error('[Vela VectorStore] 迁移失败:', error)
+    console.error('[AI Novel VectorStore] 迁移失败:', error)
     return { success: false, migrated: 0, error: legacyMigrationError(String(error)) }
   }
 }

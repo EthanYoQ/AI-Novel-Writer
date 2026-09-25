@@ -114,7 +114,7 @@ export function writeJsonFile(filePath: string, data: unknown) {
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code
       if (code !== 'ENOENT') {
-        console.warn(`[Vela] 清理配置临时文件 ${temporaryPath} 失败:`, error)
+        console.warn(`[AI Novel] 清理配置临时文件 ${temporaryPath} 失败:`, error)
       }
     }
   }

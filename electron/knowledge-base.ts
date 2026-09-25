@@ -156,7 +156,7 @@ export async function importDocument(
         vectors = await generateEmbeddings(chunks, protocol, model, model.embeddingOptions?.batchSize)
       } catch (e) {
         if (e instanceof EmbeddingResponseValidationError) throw e
-        console.warn('[Vela KB] Embedding 调用失败，降级为 FTS-only:', e)
+        console.warn('[AI Novel KB] Embedding 调用失败，降级为 FTS-only:', e)
         // 不影响导入，仅 FTS
       }
     }
@@ -443,7 +443,7 @@ async function importTextInternal(
         vectors = await generateEmbeddings(chunks, protocol, model, model.embeddingOptions?.batchSize)
       } catch (e) {
         if (e instanceof EmbeddingResponseValidationError) throw e
-        console.warn('[Vela KB] importText Embedding 失败，降级 FTS-only:', e)
+        console.warn('[AI Novel KB] importText Embedding 失败，降级 FTS-only:', e)
       }
     }
 
@@ -674,7 +674,7 @@ async function performReferenceTextImport(
       } catch (error) {
         assertAuthority()
         if (error instanceof EmbeddingResponseValidationError) throw error
-        console.warn('[Vela KB] reference import embedding failed; using FTS-only:', error)
+        console.warn('[AI Novel KB] reference import embedding failed; using FTS-only:', error)
       }
       assertAuthority()
     }
@@ -886,7 +886,7 @@ export async function backfillVectors(
       failed: 0,
     }
   } catch (error) {
-    console.error('[Vela KB] 向量回填异常:', error)
+    console.error('[AI Novel KB] 向量回填异常:', error)
     return {
       success: false,
       processed: 0,
