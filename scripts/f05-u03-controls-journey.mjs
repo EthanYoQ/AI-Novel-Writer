@@ -41,7 +41,9 @@ const receiptDir = path.join(repository, '.runtime', '.cache', 'f05-u03-controls
 const scratch = path.join(process.env.LOCALAPPDATA ?? path.dirname(repository), 'VibeCodingScratch', 'an', 'u3c', runId.slice(0, 6))
 const profile = Object.fromEntries(['canonical', 'legacy', 'userData', 'home', 'appData', 'localAppData', 'projects'].map(name => [name, path.join(scratch, name)]))
 const steps = []
+const preconditions = []
 const pass = (stepId, actionId, assertion) => steps.push({ stepId, actionId, outcome: 'PASS', assertion })
+const recordPrecondition = (stepId, assertion) => preconditions.push({ stepId, assertion })
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
 const writer = page => page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]')
 const settings = page => page.getByRole('button', { name: '关闭设置' }).locator('xpath=ancestor::div[contains(@class,"relative flex")]')
@@ -59,6 +61,7 @@ async function main() {
   let currentStep = 'setup'
   let app
   let copiedDiagnostic = ''
+  let clipboardObservation = null
   let projectCreateObservation = null
   try {
     currentStep = 'packaged-native-load'
@@ -90,14 +93,14 @@ async function main() {
     await assertWriter(page, 'U03.A01')
     await page.locator('.writer-left-rail button[title="设置"]').click()
     await settings(page).getByRole('heading', { name: 'AI 生成模型' }).waitFor()
-    pass('U03.A01-sidebar-settings', 'U03.A01', 'V3 shell assertion preceded the rail settings click and the real settings modal rendered')
+    recordPrecondition('U03.A01-sidebar-settings', 'V3 shell assertion preceded the rail settings click and the real settings modal rendered')
     await page.getByRole('button', { name: '关闭设置' }).click()
 
     currentStep = 'U03.A02-statusbar-settings'
     await assertWriter(page, 'U03.A02')
     await page.locator('.writer-statusbar [title="点击配置模型"]').click()
     await settings(page).getByRole('heading', { name: 'AI 生成模型' }).waitFor()
-    pass('U03.A02-statusbar-settings', 'U03.A02', 'V3 shell assertion preceded the status bar model entry and the same real settings modal rendered')
+    recordPrecondition('U03.A02-statusbar-settings', 'V3 shell assertion preceded the status bar model entry and the same real settings modal rendered')
     await page.getByRole('button', { name: '关闭设置' }).click()
 
     currentStep = 'U03.A13-proxy-failure'
@@ -120,7 +123,7 @@ async function main() {
     await proxyAlert.waitFor()
     assert.match(await proxyAlert.textContent(), /代理配置保存失败/u)
     assert.equal(fs.readFileSync(configPath, 'utf8'), malformedConfig, 'malformed admitted config must remain untouched')
-    pass('U03.A13-proxy-failure', 'U03.A13', 'V3 proxy save surfaced the malformed-global-config failure through the visible alert without replacing the protected file')
+    recordPrecondition('U03.A13-proxy-failure', 'V3 proxy save surfaced the malformed-global-config failure through the visible alert without replacing the protected file')
     await page.getByRole('button', { name: '关闭设置' }).click()
     if (originalConfig) fs.writeFileSync(configPath, originalConfig)
     else fs.rmSync(configPath, { force: true })
@@ -153,33 +156,87 @@ async function main() {
     await page.locator('.writer-left-rail button[title="模型"]').click()
     await page.getByRole('button', { name: '复制安全诊断' }).waitFor()
     const clipboardSentinel = `pre-click-sentinel-${runId}`
-    const previousClipboard = await app.evaluate(({ clipboard }, sentinel) => {
-      const formats = clipboard.availableFormats()
-      if (!formats.every(format => format === 'text/plain')) throw new Error(`OS clipboard has non-text formats: ${formats.join(', ')}`)
-      const text = clipboard.readText()
-      clipboard.writeText(sentinel)
-      return text
-    }, clipboardSentinel)
-    try {
-      assert.equal(await app.evaluate(({ clipboard }) => clipboard.readText()), clipboardSentinel)
-      await page.getByRole('button', { name: '复制安全诊断' }).click()
-      copiedDiagnostic = await app.evaluate(({ clipboard }) => clipboard.readText())
-    } finally {
-      await app.evaluate(({ clipboard }, { previous, sentinel, marker }) => {
-        const current = clipboard.readText()
-        if (current === sentinel || current.includes(marker)) clipboard.writeText(previous)
-      }, { previous: previousClipboard, sentinel: clipboardSentinel, marker: runId })
+    const previousClipboard = await app.evaluate(({ clipboard }) => ({
+      formats: clipboard.availableFormats(),
+      text: clipboard.readText(),
+    }))
+    const wasEmpty = previousClipboard.formats.length === 0
+    if ((wasEmpty && previousClipboard.text !== '')
+      || (!wasEmpty && !(previousClipboard.formats.length === 1 && previousClipboard.formats[0] === 'text/plain'))) {
+      clipboardObservation = {
+        beforeFormats: previousClipboard.formats,
+        beforeWasEmpty: wasEmpty,
+        preflight: 'unsupported-formats',
+        sentinelVerified: false,
+        diagnosticReadBackVerified: false,
+        restoreStatus: 'not-started',
+        restoredFormats: null,
+        restoredTextVerified: false,
+      }
+      throw new Error('OS clipboard has formats that this journey cannot preserve losslessly')
     }
-    assert.notEqual(copiedDiagnostic, clipboardSentinel, 'V3 copy did not update the OS clipboard')
-    assert.match(copiedDiagnostic, new RegExp(runId), 'OS clipboard does not contain this run’s diagnostic')
-    assert.match(copiedDiagnostic, /Grok 4/u)
-    assert.match(copiedDiagnostic, /content_filter/u)
-    assert.doesNotMatch(copiedDiagnostic, /Authorization|request body|sk-do-not-copy|VibeCodingScratch/u)
-    pass('U03.A14-safe-diagnostic-copy', 'U03.A14', 'V3 model-call history copied the selected safe diagnostic projection and excluded source credential and local-path sentinels')
+    clipboardObservation = {
+      beforeFormats: previousClipboard.formats,
+      beforeWasEmpty: wasEmpty,
+      preflight: 'preservable',
+      sentinelVerified: false,
+      diagnosticReadBackVerified: false,
+      restoreStatus: 'not-started',
+      restoredFormats: null,
+      restoredTextVerified: false,
+    }
+    try {
+      await app.evaluate(({ clipboard }, sentinel) => clipboard.writeText(sentinel), clipboardSentinel)
+      const sentinelState = await app.evaluate(({ clipboard }) => ({
+        formats: clipboard.availableFormats(),
+        text: clipboard.readText(),
+      }))
+      if (sentinelState.text !== clipboardSentinel || sentinelState.formats.length !== 1 || sentinelState.formats[0] !== 'text/plain') {
+        throw new Error('OS clipboard test sentinel was not written as plain text')
+      }
+      clipboardObservation.sentinelVerified = true
+      await page.getByRole('button', { name: '复制安全诊断' }).click()
+      const copiedState = await app.evaluate(({ clipboard }) => ({
+        formats: clipboard.availableFormats(),
+        text: clipboard.readText(),
+      }))
+      copiedDiagnostic = copiedState.text
+      if (copiedState.formats.length !== 1 || copiedState.formats[0] !== 'text/plain'
+        || copiedDiagnostic === clipboardSentinel || !copiedDiagnostic.includes(runId)) {
+        throw new Error('V3 copy did not write this run’s diagnostic to the OS clipboard')
+      }
+      if (!copiedDiagnostic.includes('Grok 4') || !copiedDiagnostic.includes('content_filter')
+        || /Authorization|request body|sk-do-not-copy|VibeCodingScratch/u.test(copiedDiagnostic)) {
+        throw new Error('OS clipboard diagnostic projection did not match the safe fixture')
+      }
+      clipboardObservation.diagnosticReadBackVerified = true
+    } finally {
+      const restoration = await app.evaluate(({ clipboard }, { previous, sentinel, marker, wasEmpty }) => {
+        const current = clipboard.readText()
+        if (current !== sentinel && !current.includes(marker)) {
+          return { status: 'skipped-external-change', formats: clipboard.availableFormats(), textMatches: false }
+        }
+        if (wasEmpty) clipboard.clear()
+        else clipboard.writeText(previous)
+        const formats = clipboard.availableFormats()
+        const textMatches = clipboard.readText() === previous
+        const formatsMatch = wasEmpty
+          ? formats.length === 0
+          : formats.length === 1 && formats[0] === 'text/plain'
+        return { status: textMatches && formatsMatch ? 'verified' : 'mismatch', formats, textMatches }
+      }, { previous: previousClipboard.text, sentinel: clipboardSentinel, marker: runId, wasEmpty })
+      clipboardObservation.restoreStatus = restoration.status
+      clipboardObservation.restoredFormats = restoration.formats
+      clipboardObservation.restoredTextVerified = restoration.textMatches
+    }
+    if (clipboardObservation.restoreStatus !== 'verified') {
+      throw new Error(`OS clipboard restoration was not verified (${clipboardObservation.restoreStatus})`)
+    }
+    pass('U03.A14-safe-diagnostic-copy', 'U03.A14', 'V3 button wrote the safe diagnostic to the OS clipboard, excluded fixture secrets and paths, and restored the prior supported clipboard state')
   } catch (error) { failure = error }
   finally { await app?.close() }
   const receipt = {
-    outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U03_V3_CONTROLS_A01_A02_A13_A14_ONLY', shell: 'writer-v3',
+    outcome: failure ? 'FAIL' : 'PARTIAL', qualification: 'F05_U03_A14_OS_CLIPBOARD_ONLY', shell: 'writer-v3',
     testedSha, currentHead: git('rev-parse', 'HEAD'), changedPaths,
     reuseDecision: { testedSha, changedPaths, differences: changedPaths.join(', ') || 'none', reason: 'historical Writer UI is not reused; fixed V3 package hashes match and current V3 UI is exercised independently' },
     dirtyProductPaths, buildReceipt: { path: priorPath, sha256: fileHash(priorPath) },
@@ -187,7 +244,8 @@ async function main() {
     artifact: { executablePath, executableSha256: fileHash(executablePath), asarPath, asarSha256: fileHash(asarPath) },
     driver: { path: fileURLToPath(import.meta.url), sha256: fileHash(fileURLToPath(import.meta.url)) },
     profile: { canonical: profile.canonical, userData: profile.userData, projectRoot: profile.projects },
-    steps, projectCreateObservation, unverified: Array.from({ length: 10 }, (_, index) => `U03.A${String(index + 3).padStart(2, '0')}`),
+    steps, preconditions, projectCreateObservation, clipboardObservation,
+    unverified: Array.from({ length: 13 }, (_, index) => `U03.A${String(index + 1).padStart(2, '0')}`),
     failedStep: failure ? currentStep : null, error: failure ? String(failure) : null,
   }
   fs.writeFileSync(path.join(receiptDir, 'receipt.json'), JSON.stringify(receipt, null, 2))
