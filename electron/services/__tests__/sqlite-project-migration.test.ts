@@ -47,6 +47,33 @@ function legacyV110Fixture() {
   fs.writeFileSync(path.join(root, 'avatar.png'), Buffer.from('89504e470d0a1a0a00000000', 'hex'))
   return { db, root, source, target }
 }
+function earlyV110Fixture() {
+  const base = path.resolve('.runtime/.cache/novel-quality-modernization/s04-sqlite')
+  fs.mkdirSync(base, { recursive: true })
+  const root = fs.mkdtempSync(path.join(base, 'early-v110-')); roots.push(root)
+  const source = path.join(root, 'source.db'), target = path.join(root, 'target.db')
+  const db = new Database(source); handles.push(db)
+  db.pragma('foreign_keys = ON')
+  db.exec(fs.readFileSync(new URL('./legacy-v110-schema0-early.sql', import.meta.url), 'utf8').replaceAll('\r\n', '\n'))
+  expect(sqliteSchemaFingerprint(db)).toBe('2504dde08865f758f654d38ae3d972420c28fa60d1f747e92898390455272de6')
+  db.prepare('INSERT INTO project_core(rowid,id,project_name,genre,global_guidance,characters_arch) VALUES (?,?,?,?,?,?)')
+    .run(7, 'main', '早期 1.1 项目', '悬疑', '只用作者设定', '# 角色原文')
+  db.prepare('INSERT INTO characters(rowid,name,role,background) VALUES (?,?,?,?)').run(44, '乙', 'protagonist', '旧角色资料')
+  db.prepare('INSERT INTO blueprints(chapter_number,title,notes) VALUES (?,?,?)').run(7, '旧蓝图', '作者蓝图备注')
+  db.prepare('INSERT INTO contents(id,body) VALUES (?,?)').run(11, '正文\r\n原样')
+  db.prepare('INSERT INTO contents(id,body) VALUES (?,?)').run(12, '审稿原文')
+  db.prepare('INSERT INTO contents(id,body) VALUES (?,?)').run(13, '修稿原文')
+  db.prepare('INSERT INTO drafts(id,chapter_number,version,content_id) VALUES (?,?,?,?)').run(19, 7, 1, 11)
+  db.prepare('INSERT INTO reviews(id,base_draft_id,review_index,content_id) VALUES (?,?,?,?)').run(21, 19, 1, 12)
+  db.prepare('INSERT INTO revisions(id,base_draft_id,revision_index,revision_type,content_id) VALUES (?,?,?,?,?)').run(23, 19, 1, 'refine', 13)
+  db.prepare('INSERT INTO summary_snapshots(id,chapter_number,character_states) VALUES (?,?,?)').run(25, 7, '{"乙":"旧状态"}')
+  db.prepare('INSERT INTO llm_calls(id,model_id,purpose) VALUES (?,?,?)').run(27, 'old-model', 'draft')
+  db.prepare('INSERT INTO post_process_runs(id,trigger_source_type,trigger_source_id) VALUES (?,?,?)').run('old-run', 'draft', '19')
+  db.prepare('INSERT INTO post_process_steps(id,run_id,step_key,ok) VALUES (?,?,?,?)').run(29, 'old-run', 'review', 1)
+  db.prepare("UPDATE sqlite_sequence SET seq=900 WHERE name='contents'").run()
+  fs.writeFileSync(path.join(root, 'avatar.png'), Buffer.from('89504e470d0a1a0a00000000', 'hex'))
+  return { db, root, source, target }
+}
 function legacyV100Fixture() {
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/s04-sqlite')
   fs.mkdirSync(base, { recursive: true })
@@ -72,6 +99,39 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 describe('real SQLite schema probe and WAL staging backup', () => {
+  it('imports the exact early v1.1.0 schema0 rows through schema7 without touching the source', async () => {
+    const f = earlyV110Fixture(), before = bytes(f.root)
+    expect(probeProjectSqlite({ databasePath: f.source })).toMatchObject({
+      schemaVersion: 0, fingerprint: '2504dde08865f758f654d38ae3d972420c28fa60d1f747e92898390455272de6',
+    })
+    const result = await backupProjectSqlite({ sourceDatabasePath: f.source, targetDatabasePath: f.target })
+    expect(result.schemaVersion).toBe(7)
+    expect(verifyProjectSqlite({ databasePath: f.target })).toEqual(result)
+    const target = new Database(f.target, { readonly: true, fileMustExist: true }); handles.push(target)
+    expect(target.prepare('SELECT rowid,project_name,genre,global_guidance,characters_arch FROM project_core').get())
+      .toEqual({ rowid: 7, project_name: '早期 1.1 项目', genre: '悬疑', global_guidance: '只用作者设定', characters_arch: '# 角色原文' })
+    expect(target.prepare('SELECT name,background FROM characters').get()).toEqual({ name: '乙', background: '旧角色资料' })
+    expect(target.prepare('SELECT title,notes FROM blueprints').get()).toEqual({ title: '旧蓝图', notes: '作者蓝图备注' })
+    expect(target.prepare('SELECT id,body FROM contents ORDER BY id').all()).toEqual([
+      { id: 11, body: '正文\r\n原样' }, { id: 12, body: '审稿原文' }, { id: 13, body: '修稿原文' },
+    ])
+    for (const [table, id] of [['drafts', 19], ['reviews', 21], ['revisions', 23], ['summary_snapshots', 25], ['llm_calls', 27], ['post_process_steps', 29]] as const) {
+      expect(target.prepare(`SELECT id FROM ${table}`).pluck().get(), table).toBe(id)
+    }
+    expect(target.prepare('SELECT id FROM post_process_runs').pluck().get()).toBe('old-run')
+    expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='contents'").pluck().get()).toBe(900)
+    expect(bytes(f.root)).toMatchObject(before)
+  })
+  it('rejects an early v1.1.0 DDL fork before creating staging', async () => {
+    const f = earlyV110Fixture()
+    f.db.exec('ALTER TABLE contents ADD COLUMN unknown_old_fork TEXT')
+    const before = bytes(f.root)
+    expect(() => probeProjectSqlite({ databasePath: f.source })).toThrow('UNRECOGNIZED_SCHEMA')
+    await expect(backupProjectSqlite({ sourceDatabasePath: f.source, targetDatabasePath: f.target }))
+      .rejects.toThrow('UNRECOGNIZED_SCHEMA')
+    expect(fs.existsSync(f.target)).toBe(false)
+    expect(bytes(f.root)).toEqual(before)
+  })
   it('recognizes the real v1.0.0 old writer schema0 without changing the source', () => {
     const f = legacyV100Fixture(), before = bytes(f.root)
     expect(probeProjectSqlite({ databasePath: f.source })).toMatchObject({
