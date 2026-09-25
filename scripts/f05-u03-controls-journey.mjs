@@ -32,7 +32,7 @@ const changedPaths = git('diff', '--name-only', `${testedSha}..HEAD`).split('\n'
 assert.equal(git('diff', '--name-only', `${testedSha}..HEAD`, '--', 'src', 'electron', 'public', 'build',
   'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5'), '', 'product source changed since fixed package SHA')
 const dirtyProductPaths = git('status', '--porcelain', '--', 'src', 'electron', 'public', 'build', 'package.json', 'pnpm-lock.yaml', 'vite.config.ts', 'tsconfig.json', 'electron-builder.json5').split('\n').filter(Boolean)
-assert(dirtyProductPaths.every(line => /^\?\? src\/components\/(?:dialogs|editor|layout\/v2|pages\/v2|panels)\/__tests__\/__screenshots__\/$/.test(line)), 'product source dirty beyond test screenshots')
+assert(dirtyProductPaths.every(line => /^\?\? src\/components\/(?:characters|dialogs|editor|layout\/v2|pages|pages\/v2|panels)\/__tests__\/__screenshots__\/$/.test(line)), 'product source dirty beyond test screenshots')
 assert.equal(fileHash(executablePath), expectedExe)
 assert.equal(fileHash(asarPath), expectedAsar)
 
