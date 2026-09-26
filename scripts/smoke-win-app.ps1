@@ -2,6 +2,7 @@
   [string]$ExePath,
   [int]$ObservationSeconds = 30,
   [string]$VelaHome,
+  [string]$UserDataPath,
   [System.Collections.Generic.HashSet[string]]$WindowBaselineIdentities,
   [System.Collections.Generic.HashSet[int]]$RelatedProcessIds,
   [hashtable]$RelatedProcessStartTimeTicks,
@@ -940,6 +941,22 @@ if ($LegacyWriterProof) {
 
 $smokeRoot = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) '.runtime\.cache') ('ai-novel-smoke-' + [guid]::NewGuid().ToString('N'))
 $qualificationProfile = New-AiNovelQualificationProfile -Root $smokeRoot -LegacySource $VelaHome
+if (-not [string]::IsNullOrWhiteSpace($UserDataPath)) {
+  $cacheRoot = [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $PSScriptRoot) '.runtime\.cache'))
+  $sharedUserData = [System.IO.Path]::GetFullPath($UserDataPath)
+  $legacyRoot = [System.IO.Path]::GetFullPath($VelaHome)
+  $ownSmokeRoot = [System.IO.Path]::GetFullPath($smokeRoot)
+  if (-not [System.IO.Path]::IsPathRooted($UserDataPath) -or
+      -not $sharedUserData.StartsWith($cacheRoot + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+      $sharedUserData.Equals($ownSmokeRoot, [StringComparison]::OrdinalIgnoreCase) -or
+      $sharedUserData.StartsWith($ownSmokeRoot + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+      $sharedUserData.Equals($legacyRoot, [StringComparison]::OrdinalIgnoreCase) -or
+      $sharedUserData.StartsWith($legacyRoot + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+      $legacyRoot.StartsWith($sharedUserData + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Shared userData must be an isolated path under the repository smoke cache.'
+  }
+  $qualificationProfile.userData = $sharedUserData
+}
 $chromiumLog = Join-Path $smokeRoot 'chromium.log'
 New-Item -ItemType Directory -Path $smokeRoot | Out-Null
 $process = $null

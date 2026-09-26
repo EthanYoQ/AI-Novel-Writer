@@ -487,8 +487,8 @@ describe('Windows installer smoke contract', () => {
     expect(script).toContain('$result.embeddingSpace.vectorDimension -eq 768')
     expect(script).toContain('$result.embeddingSpace.queryResultCount -eq 1')
     expect(script).toContain('v0.2.5 upgrade data preservation evidence:')
-    expect(script).toContain('-LegacyProjectPathToOpen $upgradeFixtureRoot')
-    expect(script.indexOf('-LegacyProjectPathToOpen $upgradeFixtureRoot')).toBeLessThan(
+    expect(script).toContain('LegacyProjectPathToOpen = $upgradeFixtureRoot')
+    expect(script.indexOf('LegacyProjectPathToOpen = $upgradeFixtureRoot')).toBeLessThan(
       script.indexOf('Install-Silently $resolvedInstaller'),
     )
     expect(script).toContain('RelatedProcessStartTimeTicks')
@@ -597,6 +597,7 @@ describe('Windows installer smoke contract', () => {
     const releaseGate = readFileSync('scripts/release-win-verify.mjs', 'utf8')
     const cloudWorkflow = readFileSync('.github/workflows/windows-cloud-build-test.yml', 'utf8')
     expect(releaseGate).toContain("'smoke:win-v025-upgrade'")
+    expect(releaseGate).toContain("step === 'test' ? ['--fileParallelism=false']")
     expect(cloudWorkflow).toContain('pnpm run build:win')
   })
 
@@ -805,6 +806,50 @@ describe('Windows installer smoke contract', () => {
     expect(script).toContain('SHA256]::Create')
     expect(script).toContain('smoke-win-installer.ps1')
     expect(packageJson).toContain('smoke:win-v025-upgrade')
+  })
+
+  it('keeps the installed v1.1 upgrade distinct from the v0.2.5 fixture', () => {
+    const script = readFileSync('scripts/smoke-win-installer.ps1', 'utf8')
+    const appSmoke = readFileSync('scripts/smoke-win-app.ps1', 'utf8')
+    const legacyProbe = readFileSync('scripts/probe-legacy-project-open.mjs', 'utf8')
+    const v110 = script.indexOf('if ($V110InstalledUpgrade) {\n      Invoke-AiNovelV110Fixture -Mode seed')
+    const v025 = script.indexOf('Invoke-AiNovelUpgradeDataFixture -Mode seed -ProjectRoot $upgradeFixtureRoot')
+    expect(v110).toBeGreaterThanOrEqual(0)
+    expect(v025).toBeGreaterThan(v110)
+    expect(script).toContain('legacy-v110-schema.sql')
+    expect(script).toContain('Invoke-AiNovelV110Fixture -Mode inspect')
+    expect(script).toContain('Compare-Object -ReferenceObject $v110Before')
+    expect(script).toContain("$previousReceipt.direct.previousVersion -ne '0.2.5'")
+    expect(script).toContain('NotePropertyName installedV110')
+    expect(script).toContain('$oldAppSmokeParameters.UserDataPath = $sharedUserData')
+    expect(script).toContain('$appSmokeParameters.UserDataPath = $sharedUserData')
+    expect(appSmoke).toContain('$qualificationProfile.userData = $sharedUserData')
+    expect(appSmoke).toContain('Shared userData must be an isolated path under the repository smoke cache.')
+    expect(script).toContain('54B436AEAB43A8B00AFFB768E1DB083F3E6B90EF25EBF1CD2DD6779A500C7F88')
+    expect(script).toContain("$env:AI_NOVEL_V110_GLOBAL_PROOF = if ($V110InstalledUpgrade) { '1' } else { $null }")
+    expect(legacyProbe).toContain("window.velaAPI.invoke('config:get')")
+    expect(legacyProbe).toContain("window.velaAPI.invoke('project:recent-list')")
+    expect(legacyProbe.indexOf('  ${globalRead}')).toBeLessThan(legacyProbe.indexOf("window.velaAPI.invoke('project:open'"))
+  })
+
+  windowsPowerShellIt('writes v1.1 global seeds as strict UTF-8 JSON with an array of recent projects', () => {
+    const root = mkdtempSync(join(resolve('.runtime/cache'), 's14c-v110-global-seed-'))
+    const configPath = join(root, 'config.json')
+    const recentPath = join(root, 'recent-projects.json')
+    const projectPath = join(root, 'synthetic-project')
+    try {
+      runInstallerLibrary(`Write-AiNovelV110GlobalSeed -ConfigPath ${quotePowerShell(configPath)} -RecentPath ${quotePowerShell(recentPath)} -ProjectPath ${quotePowerShell(projectPath)}`)
+      const configBytes = readFileSync(configPath)
+      const recentBytes = readFileSync(recentPath)
+      expect(configBytes.subarray(0, 3)).not.toEqual(Buffer.from([0xef, 0xbb, 0xbf]))
+      expect(recentBytes.subarray(0, 3)).not.toEqual(Buffer.from([0xef, 0xbb, 0xbf]))
+      expect(JSON.parse(configBytes.toString('utf8'))).toMatchObject({ theme: 'light', locale: 'zh-CN', proxy: { port: 7890 } })
+      expect(JSON.parse(recentBytes.toString('utf8'))).toEqual([{
+        name: '升级保留验证小说', path: projectPath, updatedAt: '2026-01-02T03:04:05.000Z',
+      }])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   windowsPowerShellIt('detects only new error windows, including system-owned dialogs outside the app process tree', () => {

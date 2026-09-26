@@ -6,6 +6,8 @@
   [int]$InstallerTimeoutSeconds = 300,
   [int]$PostExitQuietSeconds = 5,
   [switch]$RequireCompleteV025Fixture,
+  [switch]$V110InstalledUpgrade,
+  [string]$IsolatedAcceptanceDirectory,
   [switch]$LoadInstallerLibrary
 )
 
@@ -34,8 +36,18 @@ $script:aiNovelAcceptanceDirectory = if (-not [string]::IsNullOrWhiteSpace($env:
 } else {
   Join-Path $root ("release\{0}\qualification\acceptance" -f [string]$packageJson.version)
 }
+if ($V110InstalledUpgrade) {
+  if ($RequireCompleteV025Fixture -or -not [string]::IsNullOrWhiteSpace($PreviousPortableZipPath) -or
+      [string]::IsNullOrWhiteSpace($PreviousInstallerPath) -or
+      [string]::IsNullOrWhiteSpace($IsolatedAcceptanceDirectory) -or
+      [string]::IsNullOrWhiteSpace($env:AI_NOVEL_RELEASE_EVIDENCE_ROOT)) {
+    throw 'v1.1 installed upgrade requires one previous installer, isolated acceptance output, and the existing release evidence root.'
+  }
+  $script:aiNovelAcceptanceDirectory = [System.IO.Path]::GetFullPath($IsolatedAcceptanceDirectory)
+}
 $smokeRoot = Join-Path (Join-Path $root '.runtime\.cache') ('ai-novel-installer-smoke-' + [guid]::NewGuid().ToString('N'))
 $installRoot = Join-Path $smokeRoot 'installed-app'
+$sharedUserData = Join-Path $smokeRoot 'chromium-profile'
 $velaHome = Join-Path $smokeRoot 'vela-home'
 $globalConfig = Join-Path $velaHome 'config.json'
 $recentProjects = Join-Path $velaHome 'recent-projects.json'
@@ -80,6 +92,95 @@ function Get-AiNovelFileSha256 {
   finally {
     $stream.Dispose()
     $hasher.Dispose()
+  }
+}
+
+function Get-AiNovelV110Inventory {
+  $files = @(Get-ChildItem -LiteralPath $upgradeFixtureRoot -Recurse -File -Force | Sort-Object FullName)
+  if ($files.Count -lt 5) { throw 'v1.1 project source inventory is incomplete.' }
+  return @($files | ForEach-Object {
+    $relative = $_.FullName.Substring($upgradeFixtureRoot.Length).TrimStart('\', '/')
+    "$relative=$((Get-AiNovelFileSha256 -Path $_.FullName).ToLowerInvariant())"
+  })
+}
+
+function Write-AiNovelV110GlobalSeed {
+  param(
+    [Parameter(Mandatory = $true)][string]$ConfigPath,
+    [Parameter(Mandatory = $true)][string]$RecentPath,
+    [Parameter(Mandatory = $true)][string]$ProjectPath
+  )
+
+  $utf8 = [System.Text.UTF8Encoding]::new($false)
+  $configJson = ConvertTo-Json -InputObject @{
+    theme = 'light'; locale = 'zh-CN'; proxy = @{ enabled = $false; type = 'http'; host = ''; port = 7890 }
+  } -Depth 4
+  $recentJson = ConvertTo-Json -InputObject @(@{
+    name = '升级保留验证小说'; path = $ProjectPath; updatedAt = '2026-01-02T03:04:05.000Z'
+  }) -Depth 4
+  [System.IO.File]::WriteAllText($ConfigPath, $configJson, $utf8)
+  [System.IO.File]::WriteAllText($RecentPath, $recentJson, $utf8)
+}
+
+function Invoke-AiNovelV110Fixture {
+  param([Parameter(Mandatory = $true)][ValidateSet('seed', 'inspect')][string]$Mode)
+
+  if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'Node 22 is required for the v1.1 SQLite fixture.' }
+  $fixtureScript = Join-Path $smokeRoot 'v110-fixture.cjs'
+  if (-not (Test-Path -LiteralPath $fixtureScript -PathType Leaf)) {
+    New-Item -ItemType Directory -Path $smokeRoot -Force | Out-Null
+    @'
+const fs = require('node:fs')
+const path = require('node:path')
+const Database = require(process.env.AI_NOVEL_V110_NATIVE)
+const root = process.env.AI_NOVEL_V110_PROJECT
+const storage = path.join(root, '.vela')
+const databasePath = path.join(storage, 'vela.db')
+if (process.argv[2] === 'seed') {
+  fs.mkdirSync(storage, { recursive: true })
+  const db = new Database(databasePath)
+  try {
+    db.pragma('journal_mode = WAL')
+    db.exec(fs.readFileSync(process.env.AI_NOVEL_V110_SCHEMA, 'utf8'))
+    db.prepare('INSERT INTO project_core(id,project_name,genre) VALUES (?,?,?)').run('main', '合成安装升级项目', '合成测试')
+    db.prepare('INSERT INTO contents(body) VALUES (?)').run('合成 v1.1 章节正文')
+    db.prepare('INSERT INTO drafts(chapter_number,version,content_id,word_count) VALUES (1,1,1,?)').run(12)
+  } finally { db.close() }
+  fs.writeFileSync(path.join(storage, 'project.json'), JSON.stringify({ schemaVersion: 1, kind: 'ai-novel-project', projectId: '4e25b0b0-86df-46f4-aabb-211000000001', createdAt: '2026-09-01T00:00:00.000Z' }))
+  fs.mkdirSync(path.join(storage, 'prompts'))
+  fs.mkdirSync(path.join(storage, 'skills'))
+  fs.writeFileSync(path.join(storage, 'prompts', 'author.txt'), '合成项目提示词')
+  fs.writeFileSync(path.join(storage, 'skills', 'author.md'), '合成项目 Skill')
+  fs.writeFileSync(path.join(root, 'outline.md'), '合成项目大纲')
+}
+const db = new Database(databasePath, { readonly: true })
+try {
+  const name = db.prepare("SELECT project_name FROM project_core WHERE id='main'").pluck().get()
+  const body = db.prepare('SELECT body FROM contents WHERE id=1').pluck().get()
+  const drafts = db.prepare('SELECT COUNT(*) FROM drafts WHERE content_id=1').pluck().get()
+  if (name !== '合成安装升级项目' || body !== '合成 v1.1 章节正文' || drafts !== 1) throw Error('v1.1 project rows changed')
+  if (fs.readFileSync(path.join(storage, 'prompts', 'author.txt'), 'utf8') !== '合成项目提示词'
+      || fs.readFileSync(path.join(storage, 'skills', 'author.md'), 'utf8') !== '合成项目 Skill'
+      || fs.readFileSync(path.join(root, 'outline.md'), 'utf8') !== '合成项目大纲') throw Error('v1.1 project files changed')
+  process.stdout.write(JSON.stringify({ projectCoreRows: 1, contentRows: 1, draftRows: drafts, authorFiles: 3 }) + '\n')
+} finally { db.close() }
+'@ | Set-Content -LiteralPath $fixtureScript -Encoding utf8
+  }
+  $previousNative = $env:AI_NOVEL_V110_NATIVE
+  $previousProject = $env:AI_NOVEL_V110_PROJECT
+  $previousSchema = $env:AI_NOVEL_V110_SCHEMA
+  try {
+    $env:AI_NOVEL_V110_NATIVE = Join-Path $root 'node_modules\better-sqlite3'
+    $env:AI_NOVEL_V110_PROJECT = $upgradeFixtureRoot
+    $env:AI_NOVEL_V110_SCHEMA = Join-Path $root 'electron\services\__tests__\legacy-v110-schema.sql'
+    $output = & node $fixtureScript $Mode 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "v1.1 fixture $Mode failed: $($output -join ' ')" }
+    return ($output | Select-Object -Last 1 | ConvertFrom-Json)
+  }
+  finally {
+    $env:AI_NOVEL_V110_NATIVE = $previousNative
+    $env:AI_NOVEL_V110_PROJECT = $previousProject
+    $env:AI_NOVEL_V110_SCHEMA = $previousSchema
   }
 }
 
@@ -776,6 +877,8 @@ $smokeSucceeded = $false
 $failureRecord = $null
 $upgradeFixtureSeeded = $false
 $upgradeValidationEvidence = $null
+$v110Before = $null
+$v110Validation = $null
 $currentInstallCompleted = $false
 
 try {
@@ -796,8 +899,10 @@ try {
   }
 
   New-Item -ItemType Directory -Path $velaHome -Force | Out-Null
-  @{ theme = 'light'; locale = 'zh-CN'; proxy = @{ enabled = $false; type = 'http'; host = ''; port = 7890 } } |
-    ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $globalConfig -Encoding utf8
+  if (-not $V110InstalledUpgrade) {
+    @{ theme = 'light'; locale = 'zh-CN'; proxy = @{ enabled = $false; type = 'http'; host = ''; port = 7890 } } |
+      ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $globalConfig -Encoding utf8
+  }
 
   $hasPreviousVersion = (
     (-not [string]::IsNullOrWhiteSpace($PreviousInstallerPath)) -or
@@ -816,36 +921,68 @@ try {
       Copy-Item -Path (Join-Path $portableExecutable.Directory.FullName '*') -Destination $installRoot -Recurse -Force
     }
     else {
+      if ($V110InstalledUpgrade -and
+          (Get-AiNovelFileSha256 -Path (Resolve-Path -LiteralPath $PreviousInstallerPath).Path) -ne
+          '54B436AEAB43A8B00AFFB768E1DB083F3E6B90EF25EBF1CD2DD6779A500C7F88') {
+        throw 'Previous installer is not the verified official v1.1.0 setup.'
+      }
       Install-Silently (Resolve-Path -LiteralPath $PreviousInstallerPath).Path
     }
-    # Seed the real v0.2.5 project format only after the old installer is present:
-    # {project}\.vela\vela.db with all 11 v0.2.5 tables and representative
-    # core, draft, revision, review, post-process, LLM, and summary records.
-    Invoke-AiNovelUpgradeDataFixture -Mode seed -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig | Out-Null
-    Invoke-AiNovelUpgradeDataFixture -Mode validate-legacy -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig | Out-Null
-    $upgradeFixtureSeeded = $true
-    @(
-      @{
-        name = '升级保留验证小说'
-        path = $upgradeFixtureRoot
-        updatedAt = '2026-01-02T03:04:05.000Z'
-      }
-    ) | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $recentProjects -Encoding utf8
+    if ($V110InstalledUpgrade) {
+      Invoke-AiNovelV110Fixture -Mode seed | Out-Null
+    }
+    else {
+      # Keep the v0.2.5 fixture and its receipt meaning unchanged:
+      # {project}\.vela\vela.db with all 11 v0.2.5 tables and representative records.
+      Invoke-AiNovelUpgradeDataFixture -Mode seed -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig | Out-Null
+      Invoke-AiNovelUpgradeDataFixture -Mode validate-legacy -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig | Out-Null
+      $upgradeFixtureSeeded = $true
+    }
+    if ($V110InstalledUpgrade) {
+      Write-AiNovelV110GlobalSeed -ConfigPath $globalConfig -RecentPath $recentProjects -ProjectPath $upgradeFixtureRoot
+    }
+    else {
+      @(
+        @{
+          name = '升级保留验证小说'
+          path = $upgradeFixtureRoot
+          updatedAt = '2026-01-02T03:04:05.000Z'
+        }
+      ) | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $recentProjects -Encoding utf8
+    }
 
     $legacyExePath = Join-Path $installRoot 'AI小说作家.exe'
     if (-not (Test-Path -LiteralPath $legacyExePath -PathType Leaf)) {
       throw "Previous-version application is missing after installation: $legacyExePath"
     }
-    & (Join-Path $PSScriptRoot 'smoke-win-app.ps1') `
-      -ExePath $legacyExePath `
-      -ObservationSeconds $ObservationSeconds `
-      -PostExitQuietSeconds $PostExitQuietSeconds `
-      -VelaHome $velaHome `
-      -WindowBaselineIdentities $roundBaselineIdentities `
-      -RelatedProcessIds $observedProcessIds `
-      -RelatedProcessStartTimeTicks $observedProcessStartTimeTicks `
-      -RelatedTargetNames @($roundTargetNames) `
-      -LegacyProjectPathToOpen $upgradeFixtureRoot
+    $oldAppSmokeParameters = @{
+      ExePath = $legacyExePath
+      ObservationSeconds = $ObservationSeconds
+      PostExitQuietSeconds = $PostExitQuietSeconds
+      VelaHome = $velaHome
+      WindowBaselineIdentities = $roundBaselineIdentities
+      RelatedProcessIds = $observedProcessIds
+      RelatedProcessStartTimeTicks = $observedProcessStartTimeTicks
+      RelatedTargetNames = @($roundTargetNames)
+      LegacyProjectPathToOpen = $upgradeFixtureRoot
+    }
+    if ($V110InstalledUpgrade) { $oldAppSmokeParameters.UserDataPath = $sharedUserData }
+    $previousGlobalProof = $env:AI_NOVEL_V110_GLOBAL_PROOF
+    try {
+      $env:AI_NOVEL_V110_GLOBAL_PROOF = if ($V110InstalledUpgrade) { '1' } else { $null }
+      & (Join-Path $PSScriptRoot 'smoke-win-app.ps1') @oldAppSmokeParameters
+    }
+    finally {
+      $env:AI_NOVEL_V110_GLOBAL_PROOF = $previousGlobalProof
+    }
+    if ($V110InstalledUpgrade) {
+      $v110Validation = Invoke-AiNovelV110Fixture -Mode inspect
+      $v110Before = @(Get-AiNovelV110Inventory)
+      $v110GlobalBefore = @{
+        config = (Get-AiNovelFileSha256 -Path $globalConfig).ToLowerInvariant()
+        recent = (Get-AiNovelFileSha256 -Path $recentProjects).ToLowerInvariant()
+      }
+    }
   }
   Install-Silently $resolvedInstaller
 $currentInstallCompleted = $true
@@ -901,6 +1038,7 @@ $currentInstallCompleted = $true
   if ($upgradeFixtureSeeded) {
     $appSmokeParameters.ProjectPathToOpen = $upgradeFixtureRoot
   }
+  if ($V110InstalledUpgrade) { $appSmokeParameters.UserDataPath = $sharedUserData }
   & (Join-Path $PSScriptRoot 'smoke-win-app.ps1') @appSmokeParameters
 
   $config = Get-Content -LiteralPath $globalConfig -Raw | ConvertFrom-Json
@@ -950,6 +1088,44 @@ $currentInstallCompleted = $true
         settingsPreserved = $true
         recentProjectPreserved = $true
       })
+  }
+  if ($V110InstalledUpgrade) {
+    $v110After = Invoke-AiNovelV110Fixture -Mode inspect
+    if ($v110After.projectCoreRows -ne 1 -or $v110After.contentRows -ne 1 -or
+        $v110After.draftRows -ne 1 -or $v110After.authorFiles -ne 3 -or
+        (Compare-Object -ReferenceObject $v110Before -DifferenceObject @(Get-AiNovelV110Inventory)) -or
+        (Get-AiNovelFileSha256 -Path $globalConfig).ToLowerInvariant() -ne $v110GlobalBefore.config -or
+        (Get-AiNovelFileSha256 -Path $recentProjects).ToLowerInvariant() -ne $v110GlobalBefore.recent) {
+      throw 'v1.1 installed upgrade changed the legacy project or global data source.'
+    }
+    $recentProjectEntries = @(Get-Content -LiteralPath $recentProjects -Raw | ConvertFrom-Json)
+    if (@($recentProjectEntries | Where-Object { [string]$_.path -eq $upgradeFixtureRoot }).Count -ne 1) {
+      throw 'v1.1 recent-project entry was not preserved.'
+    }
+    $summary = [ordered]@{
+      previousVersion = '1.1.0'
+      previousSource = 'official-installed-setup'
+      previousInstallerSha256 = (Get-AiNovelFileSha256 -Path $PreviousInstallerPath).ToLowerInvariant()
+      oldAppOpenedProject = $true
+      currentAppLaunched = $true
+      projectCoreRows = [int]$v110Validation.projectCoreRows
+      contentRows = [int]$v110Validation.contentRows
+      draftRows = [int]$v110Validation.draftRows
+      authorFiles = [int]$v110Validation.authorFiles
+      sourceFileCount = @($v110Before).Count
+      sourceUnchanged = $true
+      globalConfigUnchanged = $true
+      recentProjectsUnchanged = $true
+    }
+    $previousReceiptPath = Join-Path $env:AI_NOVEL_RELEASE_EVIDENCE_ROOT 'acceptance\upgrade-data.json'
+    $previousReceipt = Get-Content -LiteralPath $previousReceiptPath -Raw | ConvertFrom-Json
+    if ($previousReceipt.accepted -ne $true -or $previousReceipt.kind -ne 'windows-upgrade-data' -or
+        $previousReceipt.direct.previousVersion -ne '0.2.5' -or $previousReceipt.direct.legacyTableCount -ne 11) {
+      throw 'The required v0.2.5 upgrade receipt is missing or changed.'
+    }
+    $previousReceipt.direct | Add-Member -NotePropertyName installedV110 -NotePropertyValue $summary -Force
+    $previousReceipt.observations += 'The official v1.1.0 setup installed and opened a synthetic v1.1 project before the candidate setup replaced it; source data survived unchanged.'
+    Write-AiNovelAcceptanceReceipt -Directory (Split-Path -Parent $previousReceiptPath) -FileName 'upgrade-data.json' -Receipt $previousReceipt
   }
   $smokeSucceeded = $true
 }

@@ -47,6 +47,19 @@ await new Promise((resolvePromise, rejectPromise) => {
 })
 
 const draftContent = writeProof ? `A11_OLD_WRITER_${randomUUID()}` : null
+const globalProof = process.env.AI_NOVEL_V110_GLOBAL_PROOF === '1'
+const globalRead = globalProof ? `
+  const config = await window.velaAPI.invoke('config:get')
+  if (config?.theme !== 'light' || config.locale !== 'zh-CN' || config.proxy?.port !== 7890) {
+    throw new Error('legacy config:get did not read the v1.1 global seed')
+  }
+  const recent = await window.velaAPI.invoke('project:recent-list')
+  if (!Array.isArray(recent) || recent.length !== 1
+      || recent[0]?.path !== ${JSON.stringify(resolve(projectPath))}
+      || recent[0]?.name !== '升级保留验证小说') {
+    throw new Error('legacy project:recent-list did not read the v1.1 recent seed')
+  }
+` : ''
 const draftWrite = writeProof ? `
   if (result.project.path !== ${JSON.stringify(resolve(projectPath))}) {
     throw new Error('legacy project:open returned another project before draft write')
@@ -72,12 +85,13 @@ const expression = `(async () => {
   if (!window.velaAPI || typeof window.velaAPI.invoke !== 'function') {
     throw new Error('legacy preload API is unavailable')
   }
+  ${globalRead}
   const result = await window.velaAPI.invoke('project:open', ${JSON.stringify(resolve(projectPath))})
   if (!result || !result.success || !result.project) {
     throw new Error(result && result.error ? result.error : 'legacy project:open failed')
   }
   ${draftWrite}
-  return { projectPath: result.project.path, projectName: result.project.name }
+  return { projectPath: result.project.path, projectName: result.project.name${globalProof ? ', globalSeedRead: true' : ''} }
 })()`
 
 const response = await new Promise((resolvePromise, rejectPromise) => {
@@ -108,6 +122,9 @@ if (response.result?.exceptionDetails) {
 const proof = response.result?.result?.value
 if (!proof?.projectPath || resolve(proof.projectPath) !== resolve(projectPath)) {
   throw new Error('Legacy application opened a different project than requested')
+}
+if (globalProof && proof.globalSeedRead !== true) {
+  throw new Error('Legacy application did not confirm the v1.1 global seed')
 }
 if (writeProof && (!Number.isInteger(proof.draft?.id) || proof.draft.content !== draftContent
   || proof.draft.readBackContent !== draftContent)) {
