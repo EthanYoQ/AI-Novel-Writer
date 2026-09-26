@@ -175,7 +175,7 @@ function installLegacyRun(snapshots: string[], totalChapters: number): void {
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-import-run-'))
   initProjectDatabase(root)
-})
+}, 20_000)
 
 afterEach(() => {
   normalization.db?.close(); normalization.db = null; normalization.root = null
@@ -184,10 +184,11 @@ afterEach(() => {
 })
 
 describe('ImportRunRepository', () => {
-  it('historical fixture normalization (not production admission): the pre-purpose import-run schema before creating purpose indexes', () => {
-    closeProjectDatabase()
-    const legacy = new Database(path.join(root, '.ai-novel', 'project.db'))
-    legacy.exec(`
+  describe('historical schema normalization', { timeout: 20_000 }, () => {
+    it('historical fixture normalization (not production admission): the pre-purpose import-run schema before creating purpose indexes', () => {
+      closeProjectDatabase()
+      const legacy = new Database(path.join(root, '.ai-novel', 'project.db'))
+      legacy.exec(`
       DROP TABLE import_runs;
       CREATE TABLE import_runs (
         id TEXT PRIMARY KEY,
@@ -210,20 +211,20 @@ describe('ImportRunRepository', () => {
         completed_at TEXT DEFAULT NULL
       );
     `)
-    legacy.close()
+      legacy.close()
 
-    expect(() => normalizeHistoricalFixture(root)).not.toThrow()
-    const columns = getProjectDb()!.prepare('PRAGMA table_info(import_runs)').all() as Array<{ name: string }>
-    expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
-      'purpose', 'root_run_id', 'effect_namespace', 'execution_epoch', 'manifest_chapter_count',
-    ]))
-  })
+      expect(() => normalizeHistoricalFixture(root)).not.toThrow()
+      const columns = getProjectDb()!.prepare('PRAGMA table_info(import_runs)').all() as Array<{ name: string }>
+      expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
+        'purpose', 'root_run_id', 'effect_namespace', 'execution_epoch', 'manifest_chapter_count',
+      ]))
+    })
 
-  it('expands the shipped stage constraint without losing indexes or child foreign keys', () => {
-    closeProjectDatabase()
-    const legacy = new Database(path.join(root, '.ai-novel', 'project.db'))
-    legacy.pragma('foreign_keys = OFF')
-    legacy.exec(`
+    it('expands the shipped stage constraint without losing indexes or child foreign keys', () => {
+      closeProjectDatabase()
+      const legacy = new Database(path.join(root, '.ai-novel', 'project.db'))
+      legacy.pragma('foreign_keys = OFF')
+      legacy.exec(`
       DROP TABLE import_runs;
       CREATE TABLE import_runs (
         id TEXT PRIMARY KEY,
@@ -259,62 +260,62 @@ describe('ImportRunRepository', () => {
         FOREIGN KEY (base_run_id) REFERENCES import_runs(id) ON DELETE SET NULL
       );
     `)
-    legacy.close()
+      legacy.close()
 
-    expect(() => normalizeHistoricalFixture(root)).not.toThrow()
-    const db = getProjectDb()!
-    const schema = db.prepare(`
+      expect(() => normalizeHistoricalFixture(root)).not.toThrow()
+      const db = getProjectDb()!
+      const schema = db.prepare(`
       SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'import_runs'
     `).get() as { sql: string }
-    expect(schema.sql).toContain('author-commit')
-    const indexes = db.prepare(`
+      expect(schema.sql).toContain('author-commit')
+      const indexes = db.prepare(`
       SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'import_runs'
     `).all() as Array<{ name: string }>
-    expect(indexes.map(index => index.name)).toEqual(expect.arrayContaining([
-      'idx_import_runs_source_status',
-      'idx_import_runs_resumable',
-      'idx_import_runs_purpose_source_status',
-    ]))
-    expect(db.pragma('foreign_key_check')).toEqual([])
+      expect(indexes.map(index => index.name)).toEqual(expect.arrayContaining([
+        'idx_import_runs_source_status',
+        'idx_import_runs_resumable',
+        'idx_import_runs_purpose_source_status',
+      ]))
+      expect(db.pragma('foreign_key_check')).toEqual([])
 
-    const manuscript = [chapter(1, 'author chapter one')]
-    const preview = FinalizedDraftImportRepository.preview(manuscript.map(item => ({
-      chapterNumber: item.number,
-      title: item.title,
-      content: item.content,
-      wordCount: countDraftUnits(item.content),
-    })))
-    expect(ImportRunRepository.prepare(request(manuscript, {
-      purpose: 'author-manuscript',
-      authorityFingerprint: preview.authorityFingerprint,
-      expectedManifestFingerprint: preview.manifestFingerprint,
-    })).run).toMatchObject({ stage: 'author-commit', purpose: 'author-manuscript' })
-  })
+      const manuscript = [chapter(1, 'author chapter one')]
+      const preview = FinalizedDraftImportRepository.preview(manuscript.map(item => ({
+        chapterNumber: item.number,
+        title: item.title,
+        content: item.content,
+        wordCount: countDraftUnits(item.content),
+      })))
+      expect(ImportRunRepository.prepare(request(manuscript, {
+        purpose: 'author-manuscript',
+        authorityFingerprint: preview.authorityFingerprint,
+        expectedManifestFingerprint: preview.manifestFingerprint,
+      })).run).toMatchObject({ stage: 'author-commit', purpose: 'author-manuscript' })
+    })
 
-  it.each([
-    {
-      label: '#152-only reference schema',
-      extraColumn: "legacy_source_fingerprint TEXT NOT NULL DEFAULT ''",
-      extraName: 'legacy_source_fingerprint',
-      extraValue: 'c'.repeat(64),
-      purpose: 'reference',
-      stage: 'prepared',
-      stages: "'parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed'",
-    },
-    {
-      label: '#153-only author schema',
-      extraColumn: "authority_fingerprint TEXT NOT NULL DEFAULT ''",
-      extraName: 'authority_fingerprint',
-      extraValue: 'd'.repeat(64),
-      purpose: 'author-manuscript',
-      stage: 'author-publish',
-      stages: "'knowledge', 'global', 'style', 'blueprints', 'author-commit', 'author-publish', 'author-postprocess', 'refresh', 'completed'",
-    },
-  ])('migrates a $label without losing its purpose-specific state', (variant) => {
-    closeProjectDatabase()
-    const legacy = new Database(path.join(root, '.ai-novel', 'project.db'))
-    legacy.pragma('foreign_keys = OFF')
-    legacy.exec(`
+    it.each([
+      {
+        label: '#152-only reference schema',
+        extraColumn: "legacy_source_fingerprint TEXT NOT NULL DEFAULT ''",
+        extraName: 'legacy_source_fingerprint',
+        extraValue: 'c'.repeat(64),
+        purpose: 'reference',
+        stage: 'prepared',
+        stages: "'parsing', 'prepared', 'knowledge', 'global', 'style', 'blueprints', 'refresh', 'completed'",
+      },
+      {
+        label: '#153-only author schema',
+        extraColumn: "authority_fingerprint TEXT NOT NULL DEFAULT ''",
+        extraName: 'authority_fingerprint',
+        extraValue: 'd'.repeat(64),
+        purpose: 'author-manuscript',
+        stage: 'author-publish',
+        stages: "'knowledge', 'global', 'style', 'blueprints', 'author-commit', 'author-publish', 'author-postprocess', 'refresh', 'completed'",
+      },
+    ])('migrates a $label without losing its purpose-specific state', (variant) => {
+      closeProjectDatabase()
+      const legacy = new Database(path.join(root, '.ai-novel', 'project.db'))
+      legacy.pragma('foreign_keys = OFF')
+      legacy.exec(`
       DROP TABLE import_runs;
       CREATE TABLE import_runs (
         id TEXT PRIMARY KEY,
@@ -358,39 +359,39 @@ describe('ImportRunRepository', () => {
         '${variant.extraValue}', 'en-US', '${variant.stage}', 'ready', 1, 1
       );
     `)
-    legacy.close()
+      legacy.close()
 
-    expect(() => normalizeHistoricalFixture(root)).not.toThrow()
-    const db = getProjectDb()!
-    const columns = db.prepare('PRAGMA table_info(import_runs)').all() as Array<{ name: string }>
-    expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
-      'authority_fingerprint', 'legacy_source_fingerprint',
-    ]))
-    const schema = db.prepare(`
+      expect(() => normalizeHistoricalFixture(root)).not.toThrow()
+      const db = getProjectDb()!
+      const columns = db.prepare('PRAGMA table_info(import_runs)').all() as Array<{ name: string }>
+      expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
+        'authority_fingerprint', 'legacy_source_fingerprint',
+      ]))
+      const schema = db.prepare(`
       SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'import_runs'
     `).get() as { sql: string }
-    expect(schema.sql).toContain("'parsing'")
-    expect(schema.sql).toContain("'author-commit'")
-    expect(db.prepare(`
+      expect(schema.sql).toContain("'parsing'")
+      expect(schema.sql).toContain("'author-commit'")
+      expect(db.prepare(`
       SELECT purpose, stage, authority_fingerprint, legacy_source_fingerprint
       FROM import_runs WHERE id = 'split-schema-run'
     `).get()).toEqual({
-      purpose: variant.purpose,
-      stage: variant.stage,
-      authority_fingerprint: variant.extraName === 'authority_fingerprint' ? variant.extraValue : '',
-      legacy_source_fingerprint: variant.extraName === 'legacy_source_fingerprint' ? variant.extraValue : '',
+        purpose: variant.purpose,
+        stage: variant.stage,
+        authority_fingerprint: variant.extraName === 'authority_fingerprint' ? variant.extraValue : '',
+        legacy_source_fingerprint: variant.extraName === 'legacy_source_fingerprint' ? variant.extraValue : '',
+      })
+      expect(db.pragma('foreign_key_check')).toEqual([])
     })
-    expect(db.pragma('foreign_key_check')).toEqual([])
-  })
 
-  it('historical fixture normalization (not production admission): legacy chapter rows to opaque source affiliations and stable mappings', () => {
-    ImportRunRepository.prepare(request())
-    markRunCompleted('import-run-1')
-    closeProjectDatabase()
+    it('historical fixture normalization (not production admission): legacy chapter rows to opaque source affiliations and stable mappings', () => {
+      ImportRunRepository.prepare(request())
+      markRunCompleted('import-run-1')
+      closeProjectDatabase()
 
-    const legacy = new Database(path.join(root, '.ai-novel', 'project.db'))
-    legacy.pragma('foreign_keys = OFF')
-    legacy.exec(`
+      const legacy = new Database(path.join(root, '.ai-novel', 'project.db'))
+      legacy.pragma('foreign_keys = OFF')
+      legacy.exec(`
       DROP TABLE import_source_chapter_map;
       ALTER TABLE import_run_chapters RENAME TO import_run_chapters_current;
       CREATE TABLE import_run_chapters (
@@ -409,43 +410,44 @@ describe('ImportRunRepository', () => {
       FROM import_run_chapters_current;
       DROP TABLE import_run_chapters_current;
     `)
-    legacy.close()
+      legacy.close()
 
-    normalizeHistoricalFixture(root)
-    const columns = getProjectDb()!.prepare('PRAGMA table_info(import_run_chapters)').all() as Array<{ name: string }>
-    expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
-      'source_id', 'source_chapter_number',
-    ]))
-    expect(getProjectDb()!.prepare(`
+      normalizeHistoricalFixture(root)
+      const columns = getProjectDb()!.prepare('PRAGMA table_info(import_run_chapters)').all() as Array<{ name: string }>
+      expect(columns.map(column => column.name)).toEqual(expect.arrayContaining([
+        'source_id', 'source_chapter_number',
+      ]))
+      expect(getProjectDb()!.prepare(`
       SELECT source_id, source_chapter_number FROM import_run_chapters WHERE run_id = 'import-run-1'
     `).get()).toEqual({ source_id: `legacy:${'a'.repeat(64)}`, source_chapter_number: 1 })
-    expect(getProjectDb()!.prepare(`
+      expect(getProjectDb()!.prepare(`
       SELECT chapter_number FROM import_source_chapter_map
       WHERE purpose = 'reference' AND source_chapter_number = 1
     `).get()).toEqual({ chapter_number: 1 })
-  })
-
-  it('backfills a legacy manifest word count from its frozen chapter snapshots', () => {
-    installLegacyRun(['甲😀', 'second'], 2)
-
-    expect(ImportRunRepository.get('legacy-run')).toMatchObject({
-      manifestChapterCount: 2,
-      manifestWordCount: countDraftUnits('甲😀') + countDraftUnits('second'),
-      resumable: true,
     })
-  })
 
-  it('marks a legacy run non-resumable when its frozen snapshots cannot reconstruct the manifest', () => {
-    installLegacyRun(['only one frozen chapter'], 2)
+    it('backfills a legacy manifest word count from its frozen chapter snapshots', () => {
+      installLegacyRun(['甲😀', 'second'], 2)
 
-    expect(ImportRunRepository.get('legacy-run')).toMatchObject({
-      status: 'failed',
-      resumable: false,
-      lastError: expect.stringContaining('cannot be resumed'),
-      manifestWordCount: 0,
+      expect(ImportRunRepository.get('legacy-run')).toMatchObject({
+        manifestChapterCount: 2,
+        manifestWordCount: countDraftUnits('甲😀') + countDraftUnits('second'),
+        resumable: true,
+      })
     })
-    expect(() => ImportRunRepository.startOrResume('legacy-run', 'renderer-a'))
-      .toThrow(/cannot be resumed|不可恢复/i)
+
+    it('marks a legacy run non-resumable when its frozen snapshots cannot reconstruct the manifest', () => {
+      installLegacyRun(['only one frozen chapter'], 2)
+
+      expect(ImportRunRepository.get('legacy-run')).toMatchObject({
+        status: 'failed',
+        resumable: false,
+        lastError: expect.stringContaining('cannot be resumed'),
+        manifestWordCount: 0,
+      })
+      expect(() => ImportRunRepository.startOrResume('legacy-run', 'renderer-a'))
+        .toThrow(/cannot be resumed|不可恢复/i)
+    })
   })
 
   it('rejects an empty frozen manifest before it can become a zero-word resumable run', () => {

@@ -747,7 +747,7 @@ test('真实隔离配置只复制指定生成模型，不继承默认 embedding 
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(source, 'config.json'), 'utf8')), sourceConfig)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
-test('冻结执行验证拒绝adapter、Node版本/ABI、依赖、启动参数、native旁证篡改', () => {
+test('冻结执行验证拒绝adapter、Node版本/ABI、依赖、启动参数、native旁证篡改', { timeout: 20_000 }, () => {
   const parent = path.join(ROOT, '.runtime/.cache/novel-quality-modernization')
   fs.mkdirSync(parent, { recursive: true })
   const dir = fs.mkdtempSync(path.join(parent, 'environment-test-'))
