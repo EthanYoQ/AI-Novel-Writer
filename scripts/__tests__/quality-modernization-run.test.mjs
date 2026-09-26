@@ -25,6 +25,7 @@ import { countDraftUnits } from '../../src/shared/draft-units'
 const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
 const protocolBinding = currentProtocolBinding()
+fs.mkdirSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization'), { recursive: true })
 
 test('c16-c18 keeps candidate qualification and the two allocations separate', () => {
   const scenario = PHASE_SCENARIOS['c16-c18']
