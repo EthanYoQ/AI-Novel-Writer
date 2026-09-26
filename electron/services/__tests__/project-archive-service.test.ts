@@ -277,8 +277,8 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
-describe('portable project export service', () => {
-  it('roundtrips an immutable v7 merged cycle with its body and bound hash', { timeout: 20_000 }, async () => {
+describe('portable project export service', { timeout: 20_000 }, () => {
+  it('roundtrips an immutable v7 merged cycle with its body and bound hash', async () => {
     const f = fixture()
     const seeded = seedMergedCycle(f)
     await exportPortableProject(input(f))
@@ -303,21 +303,21 @@ describe('portable project export service', () => {
   it.each([
     ['secretRef', 'private-credential-sentinel'],
     ['machinePath', 'C:\\Users\\EthanQ\\private-machine-sentinel'],
-  ])('fails closed for a merged cycle context containing %s', { timeout: 20_000 }, async (key, sentinel) => {
+  ])('fails closed for a merged cycle context containing %s', async (key, sentinel) => {
     const f = fixture()
     seedMergedCycle(f, { [key]: sentinel })
     await expect(exportPortableProject(input(f))).rejects.toMatchObject({ code: 'PORTABLE_UNSAFE_PROJECTION' })
     expect(fs.existsSync(f.target)).toBe(false)
   })
 
-  it('rejects a secret hidden in the wrong config field while the source cycle remains valid', { timeout: 20_000 }, async () => {
+  it('rejects a secret hidden in the wrong config field while the source cycle remains valid', async () => {
     const f = fixture()
     seedMergedCycle(f, { text: 'private-credential-sentinel' })
     await expect(exportPortableProject(input(f))).rejects.toMatchObject({ code: 'PORTABLE_UNSAFE_PROJECTION' })
     expect(fs.existsSync(f.target)).toBe(false)
   })
 
-  it('rejects extra recheck receipt content while the source cycle remains valid', { timeout: 20_000 }, async () => {
+  it('rejects extra recheck receipt content while the source cycle remains valid', async () => {
     const f = fixture()
     seedMergedCycle(f, {}, { version: 2, cycleId: 'cycle-merge', comparisonVersion: 1,
       mergedHash: hash('甲推开门，作者手工合并了新正文。'), findingSetHash: canonicalM03FindingSetHash([]),
@@ -326,7 +326,7 @@ describe('portable project export service', () => {
     expect(fs.existsSync(f.target)).toBe(false)
   })
 
-  it('exports the shared 20-chapter corpus with authority, assets and frozen runtime history', { timeout: 20_000 }, async () => {
+  it('exports the shared 20-chapter corpus with authority, assets and frozen runtime history', async () => {
     const f = await createProjectArchiveRoundtripFixture()
     try {
       const sourceBefore = fs.readFileSync(f.sourceDatabasePath)
@@ -378,7 +378,7 @@ describe('portable project export service', () => {
     } finally { f.dispose() }
   })
 
-  it('keeps SQLite sidecar paths below the Windows limit under a long cloud staging parent', { timeout: 20_000 }, async () => {
+  it('keeps SQLite sidecar paths below the Windows limit under a long cloud staging parent', async () => {
     const f = fixture()
     const legacySuffix = path.join('.portable-export-attempt-123456', 'source-final-verification.db-wal')
     const padding = 263 - path.join(f.base, legacySuffix).length - 1
@@ -400,7 +400,7 @@ describe('portable project export service', () => {
     expect(fs.readdirSync(stagingParent)).toEqual(['backup.ainovel'])
   })
 
-  it('exports canonical v7 domain data, explicit assets and F03 avatars while freezing runtime history', { timeout: 20_000 }, async () => {
+  it('exports canonical v7 domain data, explicit assets and F03 avatars while freezing runtime history', async () => {
     const f = fixture()
     const seeded = seedProject(f)
     const assets = [
@@ -469,7 +469,7 @@ describe('portable project export service', () => {
     ]))
   })
 
-  it('never carries X values, secretRef, raw sensitive receipts or their digests while preserving author path-like text bytes', { timeout: 20_000 }, async () => {
+  it('never carries X values, secretRef, raw sensitive receipts or their digests while preserving author path-like text bytes', async () => {
     const f = fixture()
     const seeded = seedProject(f)
     await exportPortableProject(input(f))
@@ -516,7 +516,7 @@ describe('portable project export service', () => {
     expect(fs.existsSync(f.target)).toBe(false)
   })
 
-  it('rejects an unsafe portable DB path and a missing avatar before publication', { timeout: 20_000 }, async () => {
+  it('rejects an unsafe portable DB path and a missing avatar before publication', async () => {
     const f = fixture()
     seedProject(f)
     const db = new Database(f.databasePath)
@@ -556,7 +556,7 @@ describe('portable project export service', () => {
       fs.unlinkSync(file.sourcePath)
       return provider([file])
     }],
-  ])('rejects %s and leaves the source and target unchanged', { timeout: 20_000 }, async (_label, makeProvider) => {
+  ])('rejects %s and leaves the source and target unchanged', async (_label, makeProvider) => {
     const f = fixture()
     const before = fs.readFileSync(f.databasePath)
     await expect(exportPortableProject(input(f, makeProvider(f)))).rejects.toThrow(/PORTABLE_(PATH_UNSAFE|ASSET_MISSING)/u)
@@ -581,7 +581,7 @@ describe('portable project export service', () => {
     expect(fs.existsSync(f.target)).toBe(false)
   })
 
-  it('detects database and provider asset mutations before archive publication', { timeout: 10_000 }, async () => {
+  it('detects database and provider asset mutations before archive publication', async () => {
     const f = fixture()
     const file = providedFile(f, 'knowledge/a.txt', 'first', 'knowledge-source')
     await expect(exportPortableProject(input(f, provider([file]), {
@@ -602,7 +602,7 @@ describe('portable project export service', () => {
     expect(fs.existsSync(second.target)).toBe(false)
   })
 
-  it('detects source and provider mutations that happen while the archive is being built', { timeout: 10_000 }, async () => {
+  it('detects source and provider mutations that happen while the archive is being built', async () => {
     const f = fixture()
     await expect(exportPortableProject(input(f, provider(), {
       __testHooks: { afterArchiveBuilt: () => {

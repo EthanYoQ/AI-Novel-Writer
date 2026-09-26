@@ -137,111 +137,113 @@ describe('main rebuilt generation sources', () => {
         expect(f.db.prepare("SELECT * FROM characters WHERE character_id='character-proved'").get()).toEqual(stored);
     });
 
-    // Match the shared 20-chapter archive fixture's native I/O budget in project-archive-service.test.ts.
-    it('rejects a downstream derived state whose epoch is spoofed after an earlier chapter replacement', { timeout: 20_000 }, async () => {
-        const f = await createProjectArchiveRoundtripFixture();
-        cleanups.push(f.dispose);
-        await f.exportAndRestore();
-        f.reopenRestoredProject();
-        const db = f.restoredDatabase();
-        const body = '第19章新定稿：上游线索已经改变。';
-        db.prepare('INSERT INTO contents(id,body) VALUES(119,?)').run(body);
-        db.prepare(`INSERT INTO drafts(id,chapter_number,version,status,source,content_id,word_count,source_dependencies)
+    describe('restored 20-chapter archive roundtrip', { timeout: 20_000 }, () => {
+        // Match the shared 20-chapter archive fixture's native I/O budget in project-archive-service.test.ts.
+        it('rejects a downstream derived state whose epoch is spoofed after an earlier chapter replacement', async () => {
+            const f = await createProjectArchiveRoundtripFixture();
+            cleanups.push(f.dispose);
+            await f.exportAndRestore();
+            f.reopenRestoredProject();
+            const db = f.restoredDatabase();
+            const body = '第19章新定稿：上游线索已经改变。';
+            db.prepare('INSERT INTO contents(id,body) VALUES(119,?)').run(body);
+            db.prepare(`INSERT INTO drafts(id,chapter_number,version,status,source,content_id,word_count,source_dependencies)
           VALUES(119,19,2,'draft','rewrite',119,?,'[]')`).run(Buffer.from(body).length);
-        FinalizationRepository.commit({ finalizationId: 'finalization-19-replacement', draftId: 119, chapterNumber: 19,
-            chapterTitle: '第19章新定稿', content: body, contentHash: hash(body), contentRevision: 1,
-            targetFileName: 'chapter-19-replacement.md' });
-        const generation = db.prepare("SELECT generation FROM continuity_projection_meta WHERE id='main'").pluck().get() as number;
-        const provenance = JSON.parse(db.prepare('SELECT cs_provenance FROM characters WHERE character_id=?')
-            .pluck().get(f.characterId) as string) as Record<string, { sourceOrder?: { continuityEpoch: string } }>;
-        for (const field of ['physicalState', 'keyItems']) provenance[field]!.sourceOrder!.continuityEpoch = `${f.targetProjectId}:${generation}`;
-        db.prepare('UPDATE characters SET cs_provenance=? WHERE character_id=?').run(JSON.stringify(provenance), f.characterId);
-        const stored = db.prepare('SELECT * FROM characters WHERE character_id=?').get(f.characterId);
-        const result = buildGenerationSourceBinding({ db, projectStorageRoot: f.targetStorage, globalDataRoot: f.globalDataRoot,
-            readBuiltinPrompt: () => JSON.stringify({ key: 'draft', content: 'builtin', systemRole: 'immutable' }) }, {
-            ...f.chapter21GenerationInput, epoch: 'restored-spoofed-epoch', selectedFinalizedDraftIds: [f.chapter20DraftId],
+            FinalizationRepository.commit({ finalizationId: 'finalization-19-replacement', draftId: 119, chapterNumber: 19,
+                chapterTitle: '第19章新定稿', content: body, contentHash: hash(body), contentRevision: 1,
+                targetFileName: 'chapter-19-replacement.md' });
+            const generation = db.prepare("SELECT generation FROM continuity_projection_meta WHERE id='main'").pluck().get() as number;
+            const provenance = JSON.parse(db.prepare('SELECT cs_provenance FROM characters WHERE character_id=?')
+                .pluck().get(f.characterId) as string) as Record<string, { sourceOrder?: { continuityEpoch: string } }>;
+            for (const field of ['physicalState', 'keyItems']) provenance[field]!.sourceOrder!.continuityEpoch = `${f.targetProjectId}:${generation}`;
+            db.prepare('UPDATE characters SET cs_provenance=? WHERE character_id=?').run(JSON.stringify(provenance), f.characterId);
+            const stored = db.prepare('SELECT * FROM characters WHERE character_id=?').get(f.characterId);
+            const result = buildGenerationSourceBinding({ db, projectStorageRoot: f.targetStorage, globalDataRoot: f.globalDataRoot,
+                readBuiltinPrompt: () => JSON.stringify({ key: 'draft', content: 'builtin', systemRole: 'immutable' }) }, {
+                ...f.chapter21GenerationInput, epoch: 'restored-spoofed-epoch', selectedFinalizedDraftIds: [f.chapter20DraftId],
+            });
+            const text = result.materials.find(item => item.ref.sourceId === 'characters:all')?.text;
+            expect(text).not.toContain(f.chapter20Injury);
+            expect(text).not.toContain(f.chapter20Clue);
+            expect(text).toContain(f.authorCharacterState);
+            expect(text).toContain(f.legacyCharacterState);
+            expect(text).toContain(f.earlierDerivedState);
+            expect(db.prepare('SELECT * FROM characters WHERE character_id=?').get(f.characterId)).toEqual(stored);
         });
-        const text = result.materials.find(item => item.ref.sourceId === 'characters:all')?.text;
-        expect(text).not.toContain(f.chapter20Injury);
-        expect(text).not.toContain(f.chapter20Clue);
-        expect(text).toContain(f.authorCharacterState);
-        expect(text).toContain(f.legacyCharacterState);
-        expect(text).toContain(f.earlierDerivedState);
-        expect(db.prepare('SELECT * FROM characters WHERE character_id=?').get(f.characterId)).toEqual(stored);
-    });
 
-    it('reopens a restored 20-chapter copy with readable authority and invalidates only replaced chapter 20 derived facts', async () => {
-        const f = await createProjectArchiveRoundtripFixture();
-        cleanups.push(f.dispose);
-        await f.exportAndRestore();
-        f.reopenRestoredProject();
-        const db = f.restoredDatabase();
-        const input: GenerationSourceBindingInput = {
-            ...f.chapter21GenerationInput,
-            projectId: f.targetProjectId,
-            epoch: 'restored-epoch-1',
-            selectedFinalizedDraftIds: [f.chapter20DraftId],
-        };
-        const deps = {
-            db,
-            projectStorageRoot: f.targetStorage,
-            globalDataRoot: f.globalDataRoot,
-            readBuiltinPrompt: () => JSON.stringify({ key: 'draft', content: 'builtin', systemRole: 'immutable' }),
-        };
+        it('reopens a restored 20-chapter copy with readable authority and invalidates only replaced chapter 20 derived facts', async () => {
+            const f = await createProjectArchiveRoundtripFixture();
+            cleanups.push(f.dispose);
+            await f.exportAndRestore();
+            f.reopenRestoredProject();
+            const db = f.restoredDatabase();
+            const input: GenerationSourceBindingInput = {
+                ...f.chapter21GenerationInput,
+                projectId: f.targetProjectId,
+                epoch: 'restored-epoch-1',
+                selectedFinalizedDraftIds: [f.chapter20DraftId],
+            };
+            const deps = {
+                db,
+                projectStorageRoot: f.targetStorage,
+                globalDataRoot: f.globalDataRoot,
+                readBuiltinPrompt: () => JSON.stringify({ key: 'draft', content: 'builtin', systemRole: 'immutable' }),
+            };
 
-        const restored = buildGenerationSourceBinding(deps, input);
-        const projections = SummaryRepository.listFinalizedContinuityBefore(21, db);
-        expect(projections).toHaveLength(20);
-        expect(projections.every(item => item.sourceStatus === 'current')).toBe(true);
-        expect(projections.at(-1)).toMatchObject({
-            chapterNumber: 20,
-            chapterNotes: f.chapter20Derived,
-            sourceStatus: 'current',
-        });
-        expect(restored.context.transferAuthority).toMatchObject({ originProjectId: f.sourceProjectId });
-        expect(restored.context.sources).toEqual(expect.arrayContaining([
-            expect.objectContaining({ ref: expect.objectContaining({ sourceId: 'author-action:chapter-21-direction' }), slot: 'author-constraint' }),
-            expect.objectContaining({ ref: expect.objectContaining({ sourceId: `finalized:${f.chapter20DraftId}:${f.chapter20FinalizationId}` }), slot: 'finalized-fact' }),
-            expect.objectContaining({ ref: expect.objectContaining({ sourceId: expect.stringMatching(/^portable-transfer:/u) }) }),
-        ]));
-        expect(restored.materials.find(item => item.ref.sourceId === `finalized:${f.chapter20DraftId}:${f.chapter20FinalizationId}`)?.text)
-            .toBe(f.chapter20Body);
-        expect(restored.materials.find(item => item.ref.sourceId === 'characters:all')?.text).toContain(f.chapter20Injury);
-        expect(restored.materials.find(item => item.ref.sourceId === 'continuity-locators')?.text).toContain(f.chapter20Clue);
-        expect(restored.context.sources.some(item => /(?:candidate-old|attempt-unknown|outbox-old|import-old)/u.test(item.ref.sourceId))).toBe(false);
+            const restored = buildGenerationSourceBinding(deps, input);
+            const projections = SummaryRepository.listFinalizedContinuityBefore(21, db);
+            expect(projections).toHaveLength(20);
+            expect(projections.every(item => item.sourceStatus === 'current')).toBe(true);
+            expect(projections.at(-1)).toMatchObject({
+                chapterNumber: 20,
+                chapterNotes: f.chapter20Derived,
+                sourceStatus: 'current',
+            });
+            expect(restored.context.transferAuthority).toMatchObject({ originProjectId: f.sourceProjectId });
+            expect(restored.context.sources).toEqual(expect.arrayContaining([
+                expect.objectContaining({ ref: expect.objectContaining({ sourceId: 'author-action:chapter-21-direction' }), slot: 'author-constraint' }),
+                expect.objectContaining({ ref: expect.objectContaining({ sourceId: `finalized:${f.chapter20DraftId}:${f.chapter20FinalizationId}` }), slot: 'finalized-fact' }),
+                expect.objectContaining({ ref: expect.objectContaining({ sourceId: expect.stringMatching(/^portable-transfer:/u) }) }),
+            ]));
+            expect(restored.materials.find(item => item.ref.sourceId === `finalized:${f.chapter20DraftId}:${f.chapter20FinalizationId}`)?.text)
+                .toBe(f.chapter20Body);
+            expect(restored.materials.find(item => item.ref.sourceId === 'characters:all')?.text).toContain(f.chapter20Injury);
+            expect(restored.materials.find(item => item.ref.sourceId === 'continuity-locators')?.text).toContain(f.chapter20Clue);
+            expect(restored.context.sources.some(item => /(?:candidate-old|attempt-unknown|outbox-old|import-old)/u.test(item.ref.sourceId))).toBe(false);
 
-        const authorityBefore = fs.readFileSync(f.transferAuthorityPath);
-        const chaptersOneToNineteenBefore = db.prepare(`SELECT d.chapter_number AS chapterNumber,o.finalization_id AS finalizationId,
+            const authorityBefore = fs.readFileSync(f.transferAuthorityPath);
+            const chaptersOneToNineteenBefore = db.prepare(`SELECT d.chapter_number AS chapterNumber,o.finalization_id AS finalizationId,
           s.chapter_notes AS chapterNotes,s.source_content_hash AS sourceContentHash
           FROM drafts d JOIN finalization_outbox o ON o.draft_id=d.id JOIN summary_snapshots s ON s.draft_id=d.id
           WHERE d.chapter_number BETWEEN 1 AND 19 ORDER BY d.chapter_number`).all();
-        const replacement = f.prepareChapter20Replacement(db);
-        FinalizationRepository.commit(replacement.commit);
-        const afterReplacement = SummaryRepository.listFinalizedContinuityBefore(21, db);
-        expect(afterReplacement.slice(0, 19).every(item => item.sourceStatus === 'current')).toBe(true);
-        expect(afterReplacement.at(-1)).toMatchObject({
-            chapterNumber: 20,
-            sourceStatus: 'stale',
-            currentFinalizedDraftId: replacement.draftId,
-        });
-        const rebuilt = buildGenerationSourceBinding(deps, {
-            ...input,
-            epoch: 'restored-epoch-2',
-            selectedFinalizedDraftIds: [replacement.draftId],
-        });
-        expect(rebuilt.materials.find(item => item.ref.sourceId.startsWith(`finalized:${replacement.draftId}:`))?.text)
-            .toBe(replacement.body);
-        const rebuiltCharacters = rebuilt.materials.find(item => item.ref.sourceId === 'characters:all')?.text;
-        expect(rebuiltCharacters).not.toContain(f.chapter20Injury);
-        expect(rebuiltCharacters).not.toContain(f.chapter20Clue);
-        expect(rebuiltCharacters).toContain(f.authorCharacterState);
-        expect(rebuiltCharacters).toContain(f.legacyCharacterState);
-        expect(rebuiltCharacters).toContain(f.earlierDerivedState);
-        expect(db.prepare(`SELECT d.chapter_number AS chapterNumber,o.finalization_id AS finalizationId,
+            const replacement = f.prepareChapter20Replacement(db);
+            FinalizationRepository.commit(replacement.commit);
+            const afterReplacement = SummaryRepository.listFinalizedContinuityBefore(21, db);
+            expect(afterReplacement.slice(0, 19).every(item => item.sourceStatus === 'current')).toBe(true);
+            expect(afterReplacement.at(-1)).toMatchObject({
+                chapterNumber: 20,
+                sourceStatus: 'stale',
+                currentFinalizedDraftId: replacement.draftId,
+            });
+            const rebuilt = buildGenerationSourceBinding(deps, {
+                ...input,
+                epoch: 'restored-epoch-2',
+                selectedFinalizedDraftIds: [replacement.draftId],
+            });
+            expect(rebuilt.materials.find(item => item.ref.sourceId.startsWith(`finalized:${replacement.draftId}:`))?.text)
+                .toBe(replacement.body);
+            const rebuiltCharacters = rebuilt.materials.find(item => item.ref.sourceId === 'characters:all')?.text;
+            expect(rebuiltCharacters).not.toContain(f.chapter20Injury);
+            expect(rebuiltCharacters).not.toContain(f.chapter20Clue);
+            expect(rebuiltCharacters).toContain(f.authorCharacterState);
+            expect(rebuiltCharacters).toContain(f.legacyCharacterState);
+            expect(rebuiltCharacters).toContain(f.earlierDerivedState);
+            expect(db.prepare(`SELECT d.chapter_number AS chapterNumber,o.finalization_id AS finalizationId,
           s.chapter_notes AS chapterNotes,s.source_content_hash AS sourceContentHash
           FROM drafts d JOIN finalization_outbox o ON o.draft_id=d.id JOIN summary_snapshots s ON s.draft_id=d.id
           WHERE d.chapter_number BETWEEN 1 AND 19 ORDER BY d.chapter_number`).all()).toEqual(chaptersOneToNineteenBefore);
-        expect(fs.readFileSync(f.transferAuthorityPath)).toEqual(authorityBefore);
+            expect(fs.readFileSync(f.transferAuthorityPath)).toEqual(authorityBefore);
+        });
     });
 
     it('retains explicit empty guidance as distinct from a missing author input', () => {
