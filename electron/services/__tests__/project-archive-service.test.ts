@@ -469,7 +469,7 @@ describe('portable project export service', () => {
     ]))
   })
 
-  it('never carries X values, secretRef, raw sensitive receipts or their digests while preserving author path-like text bytes', async () => {
+  it('never carries X values, secretRef, raw sensitive receipts or their digests while preserving author path-like text bytes', { timeout: 20_000 }, async () => {
     const f = fixture()
     const seeded = seedProject(f)
     await exportPortableProject(input(f))

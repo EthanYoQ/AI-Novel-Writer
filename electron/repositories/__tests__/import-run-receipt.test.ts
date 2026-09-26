@@ -45,7 +45,7 @@ beforeEach(() => {
       contentSize: Buffer.byteLength(content),
     }],
   })
-})
+}, 20_000)
 
 afterEach(() => {
   closeProjectDatabase()

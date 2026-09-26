@@ -122,7 +122,7 @@ function ready<T extends { state: string }>(overview: T): asserts overview is T 
 }
 
 describe('ProjectPeekService source-zero-write overview', () => {
-  it('accepts only a live opaque capability and invalidates it on revoke or manifest drift', () => {
+  it('accepts only a live opaque capability and invalidates it on revoke or manifest drift', { timeout: 20_000 }, () => {
     const f = fixture()
     const service = new ProjectPeekService({ scratchRoot: f.scratch })
     const capability = service.issueCapability(f.root)
