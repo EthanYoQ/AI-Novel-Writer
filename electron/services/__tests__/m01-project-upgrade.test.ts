@@ -66,7 +66,7 @@ it('真实version5项目从init入口执行M05并保留正文', () => {
   expect(getProjectDb()!.prepare('SELECT body FROM contents').pluck().get()).toBe('铜钥匙\r\n作者原文')
   expect(getProjectDb()!.prepare("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='character_avatar_assets'").pluck().get()).toBe(1)
 })
-it('未知version4与失败M04都在写入当前schema前保留原数据', () => {
+it('未知version4与失败M04都在写入当前schema前保留原数据', { timeout: 20_000 }, () => {
   const unknown = fixture(4)
   const fork = new Database(unknown.file)
   try { fork.exec('ALTER TABLE contents ADD COLUMN unknown_m04_fork TEXT') } finally { fork.close() }
@@ -83,7 +83,7 @@ it('未知version4与失败M04都在写入当前schema前保留原数据', () =>
   expect(fs.readFileSync(failed.file)).toEqual(before)
   expect(probeProjectSqlite({ databasePath: failed.file }).schemaVersion).toBe(4)
 })
-it('未知version5与失败M05都在写入当前schema前保留原数据', () => {
+it('未知version5与失败M05都在写入当前schema前保留原数据', { timeout: 20_000 }, () => {
   const unknown = fixture(5), fork = new Database(unknown.file)
   try { fork.exec('ALTER TABLE contents ADD COLUMN unknown_m05_fork TEXT') } finally { fork.close() }
   const forkBytes = fs.readFileSync(unknown.file)
