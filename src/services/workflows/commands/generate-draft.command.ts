@@ -665,6 +665,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       chapterMaterials = await assembleChapterMaterials({
         identity: { projectId: projectSession.projectId, epoch: projectSession.leaseId },
         writingLanguage,
+        budgetChars: 8_000,
         authorProjectFacts: authoredConfigFacts,
         characterProfiles,
         futurePlans: futureBlueprintsStr,

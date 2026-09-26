@@ -1786,6 +1786,33 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expectNoDraftPersistence(invoke)
   })
 
+  it('admits a normal predecessor after long author facts fill more than the former draft capacity', async () => {
+    const runtime = fakeRuntime(() => outcome('新章正文。'.repeat(125), 'stop'))
+    const authorFact = '设'.repeat(5_400)
+    const predecessor = '前章正文。'.repeat(230)
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      chapterNumber: 2,
+      wordsTarget: 500,
+      coreOutline: authorFact,
+      selectedCandidateDrafts: [{ chapterNumber: 1, draftId: 31, version: 3, content: predecessor, required: true }],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const decision = runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision
+    expect(decision?.capacity.maxInputUnits).toBe(24_000)
+    expect(decision?.capacity.admittedUnits).toBeGreaterThan(18_000)
+    expect(decision?.capacity.admittedUnits).toBeLessThan(24_000)
+    expect(decision?.coverage).toEqual({ required: 2, included: 2, complete: true })
+    expect(decision?.included.map(item => item.sourceId)).toEqual(expect.arrayContaining(['author:required', 'candidate:31']))
+    expect(decision?.included.find(item => item.sourceId === 'candidate:31')?.revision).toBe(3)
+    expect(runtime.complete).toHaveBeenCalled()
+    expect(invoke).toHaveBeenCalledWith('db:draft-create', expect.objectContaining({
+      sourceDependencies: [{ draftId: 31, contentHash: createHash('sha256').update(predecessor, 'utf8').digest('hex') }],
+    }), projectPath, expect.anything())
+  })
+
   it('distinguishes author hard constraints from finalized state changes in English', async () => {
     let observedTask: GenerationTask | undefined
     const runtime = fakeRuntime((_attempt, task) => {
