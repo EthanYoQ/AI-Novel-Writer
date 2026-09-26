@@ -309,6 +309,12 @@ async function launch(roots) {
     macStage('first-window-ready')
     await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
     macStage('skin-ready')
+    if (macMode) await page.evaluate(async () => {
+      const saved = await window.aiNovelAPI.invoke('config:set', { locale: 'zh-CN' })
+      if (!saved.success) throw new Error(saved.error || 'Mac A11 locale configuration failed')
+      const config = await window.aiNovelAPI.invoke('config:get')
+      if (config.locale !== 'zh-CN') throw new Error('Mac A11 locale configuration was not persisted')
+    })
     await page.evaluate(() => {
       const key = 'ai-novel-writer-appearance'
       const value = JSON.parse(localStorage.getItem(key) ?? '{}')
@@ -317,6 +323,7 @@ async function launch(roots) {
     })
     macStage('shell-configured')
     await page.reload()
+    if (macMode) await page.locator('html[lang="zh-CN"]').waitFor({ state: 'visible', timeout: 30_000 })
     macStage('launch-ready')
     return { app, page }
   } catch (error) {

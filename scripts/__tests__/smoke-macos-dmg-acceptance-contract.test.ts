@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import vm from 'node:vm'
 import { afterEach, describe, expect, it } from 'vitest'
+import { createStore } from 'zustand/vanilla'
+import { createLocaleState } from '../../src/stores/locale-store'
 import { canonicalPnpmLockfileSha256 } from '../canonical-pnpm-lockfile-hash.mjs'
 import {
   classifyMacosCodeSigning,
@@ -39,6 +41,64 @@ afterEach(() => {
 })
 
 describe('macOS DMG acceptance receipt contract', () => {
+  it.each([
+    { macMode: true, writeSucceeds: true },
+    { macMode: true, writeSucceeds: false },
+    { macMode: false, writeSucceeds: true },
+  ])('prepares the isolated locale with macMode=$macMode writeSucceeds=$writeSucceeds', async ({ macMode, writeSucceeds }) => {
+    const source = readRequired(path.join(repositoryRoot, 'scripts/f05-a11-offline-import-journey.mjs'))
+    const launch = source.slice(source.indexOf('async function launch(roots) {'), source.indexOf('\nasync function home('))
+    let config: { theme: string; locale?: 'zh-CN' | 'en-US' } = { theme: 'light' }
+    const calls: string[] = []
+    const store = createStore(createLocaleState({
+      loadConfig: async () => config,
+      saveLocale: async () => ({ success: true }),
+      systemLocale: () => 'en-US',
+      setDocumentLanguage() {},
+    }))
+    expect(store.getState().text('导入旧项目副本', 'Import legacy project copy')).toBe('Import legacy project copy')
+    const page = {
+      locator: (selector: string) => ({ waitFor: async () => {
+        calls.push(selector)
+        if (selector === 'html[lang="zh-CN"]') expect(store.getState().locale).toBe('zh-CN')
+      } }),
+      evaluate: (callback: () => unknown) => vm.runInNewContext(`(${callback})()`, {
+        window: { aiNovelAPI: { invoke: async (channel: string, value: { locale: 'zh-CN' }) => {
+          calls.push(channel)
+          if (channel === 'config:get') return config
+          expect(channel).toBe('config:set')
+          if (!writeSucceeds) return { success: false, error: 'CONFIG_WRITE_DENIED' }
+          config = { ...config, ...value }
+          return { success: true }
+        } } },
+        localStorage: { getItem: () => null, setItem() {} },
+      }),
+      reload: async () => { calls.push('reload'); await store.getState().init() },
+    }
+    const run = vm.runInNewContext(`(${launch})`, {
+      path, macMode, process: { env: {} }, exe: '/in-memory/app', packageDir: '/in-memory',
+      electron: { launch: async () => ({ firstWindow: async () => page }) },
+      macStage() {}, receipt: {}, console: { error() {} },
+      closeMacApplication: async () => { calls.push('cleanup') },
+    })
+    if (macMode && !writeSucceeds) {
+      await expect(run({})).rejects.toThrow('CONFIG_WRITE_DENIED')
+      expect(calls).not.toContain('reload')
+      expect(calls).toContain('cleanup')
+      expect(config).toEqual({ theme: 'light' })
+    } else {
+      await run({})
+      expect(calls.filter(call => call.startsWith('config:'))).toEqual(macMode ? ['config:set', 'config:get'] : [])
+      expect(store.getState().text('导入旧项目副本', 'Import legacy project copy'))
+        .toBe(macMode ? '导入旧项目副本' : 'Import legacy project copy')
+      expect(config.theme).toBe('light')
+      if (macMode) {
+        expect(calls.indexOf('config:get')).toBeLessThan(calls.indexOf('reload'))
+        expect(calls.indexOf('html[lang="zh-CN"]')).toBeGreaterThan(calls.indexOf('reload'))
+      }
+    }
+  })
+
   it.each(['home', 'first-window'])('preserves the original Mac %s failure across bounded cleanup', async (failureAt) => {
     const source = readRequired(path.join(repositoryRoot, 'scripts/f05-a11-offline-import-journey.mjs'))
     const stages = source.match(/function macStage\(stage\) \{[\s\S]*?\n\}/)?.[0] ?? ''
