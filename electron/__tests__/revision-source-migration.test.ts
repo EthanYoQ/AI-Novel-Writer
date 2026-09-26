@@ -2,9 +2,17 @@ import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../database'
+import { closeLegacyNormalizationFixture as closeProjectDatabase, getLegacyNormalizationFixtureDb as getProjectDb, openLegacyNormalizationFixture } from '../../test/helpers/legacy-baseline-fixture'
+
+// Historical normalization regressions use an explicit fixture handle. Production
+// rejects these unqualified old roots; canonical activation is tested separately.
+vi.mock('../database', async () => {
+  const actual = await vi.importActual<typeof import('../database')>('../database')
+  const fixture = await import('../../test/helpers/legacy-baseline-fixture')
+  return { ...actual, getProjectDb: fixture.getLegacyNormalizationFixtureDb, getCurrentProjectPath: fixture.getLegacyNormalizationFixturePath }
+})
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
@@ -69,7 +77,7 @@ describe('revision and review source migration', () => {
   it('adds nullable frozen-source columns without rebasing legacy rows onto the current draft', () => {
     const projectRoot = makeLegacyProject()
 
-    initProjectDatabase(projectRoot)
+    openLegacyNormalizationFixture(projectRoot)
     const db = getProjectDb()!
     for (const table of ['revisions', 'reviews']) {
       const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>

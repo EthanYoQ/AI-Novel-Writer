@@ -1,3 +1,7 @@
+import { canExecuteGraph, createGraphGeneration } from '../../services/graph-generation'
+import type { GraphGenerationInput, GraphGenerationRecovery } from '../../shared/graph-generation'
+import type { MainGenerationRunView, MainGenerationRunHandle } from '../../services/generation/generation-runtime'
+import { formatResourceUri } from '../../shared/project-paths'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Clock3, Loader2, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react'
 
@@ -17,13 +21,11 @@ import { hasUsablePlotTreeEventSource } from '../../shared/plot-tree'
 import { resolveWritingLanguage } from '../../shared/writing-language'
 import { ipc } from '../../services/ipc-client'
 import {
-  narrativeThreadCandidateGenerator,
   type NarrativeThreadCandidateGenerator,
   type NarrativeThreadEventCandidate,
   type NarrativeThreadPlanCandidate,
 } from '../../services/narrative-thread-candidate-generator'
 import {
-  generatePlotTree,
   PlotTreeGenerationError,
   PlotTreeInputLimitError,
   PlotTreeIncompleteError,
@@ -173,7 +175,11 @@ function plotTreeErrorMessage(
   return text(...fallback)
 }
 
+type BoundPlanCandidate = NarrativeThreadPlanCandidate & { generationIndex?: number; generationHandle?: MainGenerationRunHandle }
+
 interface BoundEventCandidate extends NarrativeThreadEventCandidate {
+  generationIndex?: number
+  generationHandle?: MainGenerationRunHandle
   planId: number
   draftId: number
   chapterNumber: number
@@ -185,10 +191,10 @@ function isGenerationModel(model: ModelProfile): boolean {
 
 export default function NarrativeThreadEditor({
   projectKey,
-  candidateGenerator = narrativeThreadCandidateGenerator,
+  candidateGenerator,
   initialView = 'plans',
   viewRequest,
-  plotTreeGenerator = generatePlotTree,
+  plotTreeGenerator,
 }: NarrativeThreadEditorProps) {
   const currentProject = useProjectStore(s => s.currentProject)
   const text = useLocaleStore(s => s.text)
@@ -212,7 +218,7 @@ export default function NarrativeThreadEditor({
   const [aiMode, setAiMode] = useState<AICandidateMode>('plan')
   const [aiModelId, setAiModelId] = useState<string | null>(null)
   const [aiBlueprintChapter, setAiBlueprintChapter] = useState(0)
-  const [planCandidates, setPlanCandidates] = useState<NarrativeThreadPlanCandidate[]>([])
+  const [planCandidates, setPlanCandidates] = useState<BoundPlanCandidate[]>([])
   const [eventCandidates, setEventCandidates] = useState<BoundEventCandidate[]>([])
   const [aiBusy, setAiBusy] = useState(false)
   const [aiError, setAiError] = useState('')
@@ -224,6 +230,10 @@ export default function NarrativeThreadEditor({
   const [sourcePlanId, setSourcePlanId] = useState<number | null>(null)
   const candidateAbortRef = useRef<AbortController | null>(null)
   const plotAbortRef = useRef<AbortController | null>(null)
+  const graphClient = useRef<ReturnType<typeof createGraphGeneration> | null>(null)
+  const [graphRecovery, setGraphRecovery] = useState<GraphGenerationRecovery | null>(null)
+  const [graphRuns, setGraphRuns] = useState<MainGenerationRunView[]>([])
+  const [graphError, setGraphError] = useState('')
   const previousViewRequestRef = useRef(viewRequest)
   const dormantThreshold = resolveNarrativeThreadDormantThreshold(
     currentProject?.novelConfig.narrativeThreadDormantChapterThreshold,
@@ -255,6 +265,81 @@ export default function NarrativeThreadEditor({
           'The selected plot-tree model is unavailable. Select another model.',
         )
       : ''
+
+  const loadGraphRuns = useCallback(async () => {
+    const session = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!session || !isProjectSessionPath(session, projectKey)) return
+    try {
+      const runs = await ipc.invokeWithProjectSession(session, 'generation:list')
+      if (isProjectSessionCurrent(session)) setGraphRuns(runs.filter(run => ['plot-tree-snapshot', 'narrative-thread-plan-candidate', 'narrative-thread-event-candidate'].includes(run.operation ?? '')))
+    } catch { if (isProjectSessionCurrent(session)) setGraphError(text('无法读取生成历史。', 'Could not read generation history.')) }
+  }, [projectKey, text])
+  useEffect(() => {
+    let active = true
+    queueMicrotask(() => { if (active) { setGraphRecovery(null); setGraphRuns([]); void loadGraphRuns() } })
+    return () => { active = false; graphClient.current?.detach(); graphClient.current = null }
+  }, [loadGraphRuns, currentProject?.sessionLease])
+  const showGraphRecovery = (value: GraphGenerationRecovery) => {
+    setGraphRecovery(value)
+    const result = value.result
+    const confirmed = new Set(value.effects.map(effect => effect.index))
+    setPlanCandidates([])
+    setEventCandidates([])
+    if (result?.kind === 'plan') {
+      setAiMode('plan'); setAiOpen(true)
+      setPlanCandidates(result.candidates.map((candidate, generationIndex) => ({ ...candidate, generationIndex, generationHandle: value.view.handle })).filter(candidate => !confirmed.has(candidate.generationIndex)))
+    } else if (result?.kind === 'event' && value.context.kind === 'event') {
+      const context = value.context
+      setAiMode('event'); setAiOpen(true)
+      setEventCandidates(result.candidates.map((candidate, generationIndex) => ({ ...candidate, generationIndex, generationHandle: value.view.handle,
+        planId: context.plan.id, draftId: context.source.draftId, chapterNumber: context.source.chapterNumber,
+      })).filter(candidate => !confirmed.has(candidate.generationIndex)))
+    }
+  }
+  const startGraph = async (input: GraphGenerationInput, modelId: string) => {
+    const session = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!session || !isProjectSessionPath(session, projectKey)) throw new Error('GRAPH_GENERATION_PROJECT_REQUIRED')
+    graphClient.current?.detach()
+    const client = createGraphGeneration(session)
+    graphClient.current = client
+    const opened = await client.open({ input, modelId, uiActionNonce: crypto.randomUUID() })
+    if (!isProjectSessionCurrent(session) || graphClient.current !== client) throw new Error('GRAPH_GENERATION_DETACHED')
+    showGraphRecovery(opened)
+    void loadGraphRuns()
+    const value = await client.execute()
+    if (!isProjectSessionCurrent(session) || graphClient.current !== client) throw new Error('GRAPH_GENERATION_DETACHED')
+    showGraphRecovery(value)
+    if (!value.result) throw new Error('GRAPH_GENERATION_INCOMPLETE')
+    return { client, value }
+  }
+  const restoreGraph = async (run: MainGenerationRunView) => {
+    const session = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!session || !isProjectSessionPath(session, projectKey)) return
+    graphClient.current?.detach()
+    const client = createGraphGeneration(session)
+    graphClient.current = client
+    try {
+      const value = await client.open({ handle: run.handle })
+      if (isProjectSessionCurrent(session) && graphClient.current === client) { showGraphRecovery(value); setGraphError('') }
+    } catch { setGraphError(text('无法恢复原生成记录。', 'Could not recover the original generation.')) }
+  }
+  const confirmGraph = async (index: number, expectedHandle?: MainGenerationRunHandle) => {
+    const client = graphClient.current
+    if (!client) throw new Error('GRAPH_GENERATION_NOT_OPEN')
+    const effect = await client.confirm(index, expectedHandle)
+    const value = await client.read()
+    if (graphClient.current === client) showGraphRecovery(value)
+    return effect
+  }
+  const cancelGraph = async () => {
+    const client = graphClient.current
+    if (!client) return
+    try {
+      await client.cancel()
+      const value = await client.read()
+      if (graphClient.current === client) showGraphRecovery(value)
+    } catch { setGraphError(text('取消状态尚未确认。', 'Cancellation is not confirmed.')) }
+  }
 
   const reload = useCallback(async () => {
     const session = captureProjectSession(useProjectStore.getState().currentProject)
@@ -321,6 +406,7 @@ export default function NarrativeThreadEditor({
 
   useEffect(() => () => {
     plotAbortRef.current?.abort()
+    graphClient.current?.detach()
   }, [currentProject?.sessionLease, projectKey])
 
   useEffect(() => {
@@ -330,6 +416,9 @@ export default function NarrativeThreadEditor({
   const closeAI = useCallback(() => {
     candidateAbortRef.current?.abort()
     candidateAbortRef.current = null
+    graphClient.current?.detach()
+    graphClient.current = null
+    setGraphRecovery(null)
     setAiOpen(false)
     setAiBusy(false)
     setAiError('')
@@ -352,6 +441,13 @@ export default function NarrativeThreadEditor({
     let failureCode: PlotTreeGenerationErrorCode | PlotTreeResponseErrorCode
       | 'sources_changed' | 'length' | 'save_failed' | null = null
     try {
+      if (!plotTreeGenerator) {
+        const { value } = await startGraph({ kind: 'plot' }, frozenModelId)
+        if (value.result?.kind !== 'plot') throw new Error('GRAPH_GENERATION_KIND_MISMATCH')
+        const effect = await confirmGraph(0, value.view.handle)
+        if (effect.kind === 'plot' && isProjectSessionCurrent(session)) setPlotSources(previous => previous ? { ...previous, snapshot: effect.snapshot } : previous)
+        return
+      }
       const snapshot = await plotTreeGenerator({
         modelId: frozenModelId,
         projectSession: session,
@@ -459,7 +555,7 @@ export default function NarrativeThreadEditor({
     }
     if (source.type === 'finalized-chapter') {
       void openChapterFile(
-        `vela://manuscript/${source.draftId}`,
+        formatResourceUri({ kind: 'manuscript', id: source.draftId }),
         text(`第 ${source.chapterNumber} 章定稿`, `Chapter ${source.chapterNumber} finalized draft`),
       )
       return
@@ -495,6 +591,7 @@ export default function NarrativeThreadEditor({
     setAiError('')
     setPlanCandidates([])
     try {
+      if (!candidateGenerator) { await startGraph({ kind: 'plan', chapterNumber: blueprint.chapterNumber }, frozenModelId); return }
       const candidates = await candidateGenerator.generatePlanCandidates({
         modelId: frozenModelId,
         writingLanguage: resolveWritingLanguage(projectSnapshot.novelConfig.writingLanguage),
@@ -528,6 +625,7 @@ export default function NarrativeThreadEditor({
     setAiError('')
     setEventCandidates([])
     try {
+      if (!candidateGenerator) { await startGraph({ kind: 'event', planId: planSnapshot.id, draftId: draftSnapshot.id }, frozenModelId); return }
       const fullDraft = await ipc.invokeWithProjectSession(
         session, 'db:draft-get-full', draftSnapshot.id, projectKey,
       )
@@ -561,11 +659,12 @@ export default function NarrativeThreadEditor({
     }
   }
 
-  const confirmPlanCandidate = async (candidate: NarrativeThreadPlanCandidate) => {
+  const confirmPlanCandidate = async (candidate: BoundPlanCandidate) => {
     const session = captureProjectSession(useProjectStore.getState().currentProject)
     if (!session || !isProjectSessionPath(session, projectKey) || busy) return
     setBusy(true)
     try {
+      if (candidate.generationIndex !== undefined) { await confirmGraph(candidate.generationIndex, candidate.generationHandle); await reload(); return }
       const result = await ipc.invokeWithProjectSession(
         session, 'db:narrative-thread-plan-create', candidate, projectKey,
       )
@@ -585,6 +684,7 @@ export default function NarrativeThreadEditor({
     if (!session || !isProjectSessionPath(session, projectKey) || busy) return
     setBusy(true)
     try {
+      if (candidate.generationIndex !== undefined) { await confirmGraph(candidate.generationIndex, candidate.generationHandle); await reload(); return }
       const result = await ipc.invokeWithProjectSession(session, 'db:narrative-thread-event-confirm', {
         planId: candidate.planId,
         draftId: candidate.draftId,
@@ -696,6 +796,21 @@ export default function NarrativeThreadEditor({
             </Button>
           </div>
         </header>
+
+        <section aria-label={text('生成记录恢复', 'Recover generation')} className="rounded-lg border p-3 space-y-2" style={{ borderColor: 'var(--color-border)' }}>
+          <Button size="sm" variant="outline" onClick={() => void loadGraphRuns()}>{text('刷新生成记录', 'Refresh generation history')}</Button>
+          {(aiBusy && !candidateGenerator || plotBusy && !plotTreeGenerator) && <Button size="sm" variant="outline" onClick={() => void cancelGraph()}>{text('取消当前生成', 'Cancel current generation')}</Button>}
+          {graphRuns.map(run => <Button key={run.handle.runId} size="sm" variant="ghost" onClick={() => void restoreGraph(run)}>{text('恢复原生成', 'Recover generation')} · {run.operation === 'plot-tree-snapshot' ? text('剧情树', 'Plot tree') : run.operation === 'narrative-thread-plan-candidate' ? text('计划候选', 'Plan candidates') : text('事件候选', 'Event candidates')} · {run.handle.runId}</Button>)}
+          {graphError && <p role="alert">{graphError}</p>}
+          {graphRecovery && <div className="space-y-2">
+            <p>{text('原模型', 'Original model')}: {graphRecovery.modelId} · {text('已确认', 'Confirmed')}: {graphRecovery.effects.length}</p>
+            {graphRecovery.sourceStatus === 'conflict' && <p role="status">{text('来源已变化，仅可查看和复制。', 'Sources changed. Viewing and copying remain available.')}</p>}
+            <Button size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(graphRecovery.result ? JSON.stringify(graphRecovery.result, null, 2) : (graphRecovery.view.candidates ?? graphRecovery.view.artifacts).map(item => item.text).join('\n'))}>{text('复制原结果', 'Copy original result')}</Button>
+            <Button size="sm" disabled={!canExecuteGraph(graphRecovery)} onClick={() => { const client = graphClient.current; if (client) void client.execute().then(value => { if (graphClient.current === client) showGraphRecovery(value) }).catch(() => setGraphError(text('原运行未完成，结果已保留。', 'The original run did not complete; its output is preserved.'))) }}>{text('继续原运行', 'Continue original run')}</Button>
+            <Button size="sm" variant="outline" onClick={() => { const client = graphClient.current; if (client) void client.cancel().then(() => client.read()).then(value => { if (graphClient.current === client) showGraphRecovery(value) }).catch(() => setGraphError(text('取消状态尚未确认。', 'Cancellation is not confirmed.'))) }}>{text('取消原运行', 'Cancel original run')}</Button>
+            {graphRecovery.result?.kind === 'plot' && <><pre className="max-h-40 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(graphRecovery.result.snapshot, null, 2)}</pre><Button size="sm" disabled={graphRecovery.sourceStatus !== 'current' || graphRecovery.view.status === 'cancelled' || graphRecovery.effects.length > 0} onClick={() => void confirmGraph(0, graphRecovery.view.handle).then(() => loadPlotTree()).catch(() => setGraphError(text('无法保存原剧情树。', 'Could not save the original plot tree.')))}>{text('保存原剧情树', 'Save original plot tree')}</Button></>}
+          </div>}
+        </section>
 
         {view === 'plot-tree' ? (
           <PlotTreeView
@@ -809,6 +924,9 @@ export default function NarrativeThreadEditor({
                 )}</DialogDescription>
           </DialogHeader>
           <div className="px-6 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
+            {!candidateGenerator && graphRecovery && <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{text('原运行模型', 'Original run model')}: {graphRecovery.modelId} · {text('已确认', 'Confirmed')}: {graphRecovery.effects.length}</p>}
+            {!candidateGenerator && graphRecovery?.sourceStatus === 'conflict' && <p role="status">{text('来源已变化，仅可查看和复制。', 'Sources changed. Viewing and copying remain available.')}</p>}
+            {!candidateGenerator && graphRecovery?.result && <Button size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(JSON.stringify(graphRecovery.result, null, 2)).catch(() => setAiError(text('无法复制结果。', 'Could not copy the result.')))}>{text('复制原结果', 'Copy original result')}</Button>}
             <label className="block">
               <Label htmlFor="narrative-thread-ai-model">{text('本次识别模型', 'Model for this analysis')}</Label>
               <NativeSelect
@@ -839,7 +957,7 @@ export default function NarrativeThreadEditor({
                 <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{candidate.type} · {text('目标', 'Target')} {candidate.targetStartChapter}–{candidate.targetEndChapter}</p>
                 <p className="text-sm">{candidate.authorIntent}</p>
                 <div className="flex gap-2">
-                  <Button size="sm" onClick={() => void confirmPlanCandidate(candidate)} disabled={busy}>{text('确认计划', 'Confirm plan')}</Button>
+                  <Button size="sm" onClick={() => void confirmPlanCandidate(candidate)} disabled={busy || candidate.generationIndex !== undefined && graphRecovery?.sourceStatus !== 'current'}>{text('确认计划', 'Confirm plan')}</Button>
                   <Button size="sm" variant="ghost" onClick={() => setPlanCandidates(previous => previous.filter(item => item !== candidate))} disabled={busy}>{text('拒绝候选', 'Reject candidate')}</Button>
                 </div>
               </section>
@@ -850,17 +968,18 @@ export default function NarrativeThreadEditor({
                 <blockquote className="text-sm border-l-2 pl-3" style={{ borderColor: 'var(--color-border)' }}>{candidate.evidence}</blockquote>
                 <p className="text-sm">{candidate.reason}</p>
                 <div className="flex gap-2">
-                  <Button size="sm" onClick={() => void confirmEventCandidate(candidate)} disabled={busy}>{text('确认事件', 'Confirm event')}</Button>
+                  <Button size="sm" onClick={() => void confirmEventCandidate(candidate)} disabled={busy || candidate.generationIndex !== undefined && graphRecovery?.sourceStatus !== 'current'}>{text('确认事件', 'Confirm event')}</Button>
                   <Button size="sm" variant="ghost" onClick={() => setEventCandidates(previous => previous.filter(item => item !== candidate))} disabled={busy}>{text('拒绝候选', 'Reject candidate')}</Button>
                 </div>
               </section>
             ))}
           </div>
           <DialogFooter>
+            {!candidateGenerator && (aiBusy || graphRecovery) && <Button variant="outline" onClick={() => void cancelGraph()}>{text('取消原运行', 'Cancel original run')}</Button>}
             <Button variant="ghost" onClick={closeAI} disabled={aiBusy}>{text('关闭', 'Close')}</Button>
             <Button variant="ai" onClick={() => void (aiMode === 'plan' ? generatePlanCandidates() : generateEventCandidates())} disabled={aiBusy || Boolean(modelSelectionError) || (aiMode === 'plan' && !aiBlueprintChapter)}>
               {aiBusy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-              {aiBusy ? text('识别中...', 'Analyzing...') : text('生成候选', 'Generate candidates')}
+              {aiBusy ? text('识别中...', 'Analyzing...') : !candidateGenerator && graphRecovery ? text('生成新候选', 'Generate new candidates') : text('生成候选', 'Generate candidates')}
             </Button>
           </DialogFooter>
         </DialogContent>

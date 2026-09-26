@@ -11,6 +11,7 @@ import {
 } from '../architecture.command'
 import { createWorkflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
 import { clearProjectCustomPrompts, getBuiltinPromptTemplate } from '../../../prompt-templates'
+import { composeVisibleContinuation } from '../../../../shared/visible-continuation'
 
 /**
  * 情节大纲批次状态机：
@@ -217,8 +218,8 @@ function harnessWith(
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
   vi.stubGlobal('window', {
-    velaAPI: {
-      invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(),
+    aiNovelAPI: {
+      invoke, on: vi.fn(() => () => {}), once: vi.fn(), send: vi.fn(),
       setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn(),
     },
   })
@@ -229,13 +230,38 @@ function snapshot() {
   return { expectedProjectPath: projectAPath, novelConfig } as never
 }
 
-function makeCommand(options?: { resumeSynopsis?: boolean; synopsisRange?: { from: number; to: number } }) {
+function makeCommand(options?: { resumeSynopsis?: boolean; synopsisRange?: { from: number; to: number } }, mainOwned = false) {
   return new GeneratePlotArchitectureCommand(
     ['synopsis'],
     snapshot(),
-    createWorkflowRuntimeDependencies(),
-    options,
+    mainOwned ? undefined : createWorkflowRuntimeDependencies(),
+    { ...options, ...(options?.resumeSynopsis ? { resumeHandle: { projectId: 'main', epoch: 'lease-main', rootActionId: '合成恢复根', runId: '合成恢复运行' } } : {}) },
   )
+}
+
+function mainOwnedResponses(harness: IpcHarness, output: string | Error) {
+  const original = harness.invoke.getMockImplementation()! as (channel: string, ...args: unknown[]) => Promise<unknown>
+  const handle = { projectId: 'main', epoch: 'lease-main', rootActionId: '合成恢复根', runId: '合成恢复运行' }
+  const view = { handle, status: 'running', nonReplayable: false, artifacts: [], budget: { maxAttempts: 32, maxRequestedOutputTokens: 2097152, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: 9999999999999 } }
+  const hash = async (value: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))), byte => byte.toString(16).padStart(2, '0')).join('')
+  let composition: { text: string; textHash: string; artifactIds: string[] } | null = null
+  const execute = vi.fn(async () => {
+    if (output instanceof Error) throw output
+    return { run: view, outcome: { status: 'completed', content: output, finishReason: 'stop', receipt: { finishReason: 'stop', visibleArtifact: { artifactId: '本批响应', attemptId: '本批尝试', revision: 1, textHash: await hash(output) } } } }
+  })
+  harness.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+    if (channel === 'generation:begin' || channel === 'generation:read') return view
+    if (channel === 'generation:read-visible-composition') return composition
+    if (channel === 'generation:execute') return execute()
+    if (channel === 'generation:compose-visible') {
+      const text = composeVisibleContinuation(composition?.text ?? '', output instanceof Error ? '' : output)
+      expect(args[2]).toBe(await hash(text))
+      composition = { text, textHash: await hash(text), artifactIds: args[1] as string[] }
+      return composition
+    }
+    return original(channel, ...args)
+  })
+  return { execute, setComposition: async (text: string) => { composition = { text, textHash: await hash(text), artifactIds: ['已确认增量'] } }, getComposition: () => composition }
 }
 
 function bodyOf(persisted: string): string {
@@ -530,6 +556,122 @@ describe('GeneratePlotArchitectureCommand 批次状态机', () => {
     expect(dbBody).toContain('第一章至第二十章已确认大纲内容')
     expect(dbBody).toContain('第22–100章：反噬')
     expect(dbBody).not.toContain('大纲批次进度')
+  })
+
+  it('主进程续批只生成本批增量，确认前缀作为上下文并保留在正式大纲', async () => {
+    useLLMStore.setState({ defaultModelId: '合成模型' })
+    const prefixBody = `第1–20章：已确认前缀\n${'林舟依据税册追查并守住家人，行动和后果按章节连续。'.repeat(5)}`
+    const dbOutline = `# 情节大纲\n\n${prefixBody}\n\n> 本大纲已覆盖至第 20 章（全书 100 章），其余章节将在后续批次继续生成。`
+    const nextSegment = `第21–100章：终局\n${'新一批因果事件逐章推进，最终兑现传承代价。'.repeat(5)}\n\n${progressLine(21, 100, 100)}`
+    const harness = harnessWith({ synopsis_result: prefixBody, synopsis_covered_to: 20, synopsis_range: { from: 1, to: 20 }, synopsis_facts_fingerprint: currentFingerprint({ from: 1, to: 20 }), synopsis_db_hash: dbHashOf(dbOutline), synopsis_step_guidance: '' }, dbOutline)
+    const generation = mainOwnedResponses(harness, nextSegment)
+
+    const result = await makeCommand({ synopsisRange: { from: 21, to: 100 } }, true).execute({ step: {}, context, callbacks })
+
+    const request = harness.invoke.mock.calls.find(([channel]) => channel === 'generation:execute')?.[1] as { task: { messages: Array<{ content: string }> } }
+    expect(request.task.messages.map(message => message.content).join('\n')).toContain(`【已完成大纲前缀】\n${prefixBody}`)
+    expect(generation.execute).toHaveBeenCalledTimes(1)
+    expect(generation.getComposition()?.text).toBe(nextSegment)
+    expect(result).toContain(prefixBody)
+    expect(result).toContain('第21–100章：终局')
+    expect(harness.synopsisCommits).toHaveLength(1)
+    expect(harness.synopsisCommits[0]?.synopsis).toContain(prefixBody)
+    expect(harness.partialWrites.at(-1)).toMatchObject({ synopsis_covered_to: 100, synopsis_incomplete: false })
+  })
+
+  it('主进程新续批零进展失败时 CAS 恢复旧可用检查点', async () => {
+    useLLMStore.setState({ defaultModelId: '合成模型' })
+    const prefixBody = `第1–20章：已确认前缀\n${'林舟依据税册追查并守住家人，行动和后果按章节连续。'.repeat(5)}`
+    const dbOutline = `# 情节大纲\n\n${prefixBody}\n\n> 本大纲已覆盖至第 20 章（全书 100 章），其余章节将在后续批次继续生成。`
+    const prior = { synopsis_result: prefixBody, synopsis_covered_to: 20, synopsis_range: { from: 1, to: 20 }, synopsis_facts_fingerprint: currentFingerprint({ from: 1, to: 20 }), synopsis_db_hash: dbHashOf(dbOutline), synopsis_step_guidance: '' }
+    const harness = harnessWith(prior, dbOutline, { afterPartialWrite: (_checkpoint, count) => count === 2 ? { world_building_result: '同期世界观' } : undefined })
+    mainOwnedResponses(harness, new Error('模拟模型网络失败'))
+
+    await expect(makeCommand({ synopsisRange: { from: 21, to: 100 } }, true).execute({ step: {}, context, callbacks })).rejects.toThrow('模拟模型网络失败')
+
+    expect(harness.partialWrites).toHaveLength(3)
+    expect(harness.partialWrites.at(-1)).toMatchObject({ ...prior, world_building_result: '同期世界观' })
+    expect(harness.synopsisCommits).toHaveLength(0)
+  })
+
+  it('主进程新续批只回显旧前缀并 stop 时保留旧可用检查点', async () => {
+    useLLMStore.setState({ defaultModelId: '合成模型' })
+    const prefixBody = `第1–20章：已确认前缀\n${'林舟依据税册追查并守住家人，行动和后果按章节连续。'.repeat(5)}`
+    const dbOutline = `# 情节大纲\n\n${prefixBody}\n\n> 本大纲已覆盖至第 20 章（全书 100 章），其余章节将在后续批次继续生成。`
+    const prior = { synopsis_result: prefixBody, synopsis_covered_to: 20, synopsis_range: { from: 1, to: 20 }, synopsis_facts_fingerprint: currentFingerprint({ from: 1, to: 20 }), synopsis_db_hash: dbHashOf(dbOutline), synopsis_step_guidance: '' }
+    const harness = harnessWith(prior, dbOutline)
+    mainOwnedResponses(harness, prefixBody)
+
+    await expect(makeCommand({ synopsisRange: { from: 21, to: 100 } }, true).execute({ step: {}, context, callbacks })).rejects.toThrow('本批没有新增情节大纲内容')
+
+    expect(harness.partialWrites.at(-1)).toMatchObject(prior)
+    expect(harness.synopsisCommits).toHaveLength(0)
+  })
+
+  it('主进程新续批返回越界标题时恢复旧可用检查点', async () => {
+    useLLMStore.setState({ defaultModelId: '合成模型' })
+    const prefixBody = `第1–20章：已确认前缀\n${'林舟依据税册追查并守住家人，行动和后果按章节连续。'.repeat(5)}`
+    const dbOutline = `# 情节大纲\n\n${prefixBody}\n\n> 本大纲已覆盖至第 20 章（全书 100 章），其余章节将在后续批次继续生成。`
+    const prior = { synopsis_result: prefixBody, synopsis_covered_to: 20, synopsis_range: { from: 1, to: 20 }, synopsis_facts_fingerprint: currentFingerprint({ from: 1, to: 20 }), synopsis_db_hash: dbHashOf(dbOutline), synopsis_step_guidance: '' }
+    const harness = harnessWith(prior, dbOutline)
+    mainOwnedResponses(harness, `第20章：重复旧章\n${'此标题越界，不应覆盖已确认前缀。'.repeat(6)}\n\n${progressLine(21, 100, 100)}`)
+
+    await expect(makeCommand({ synopsisRange: { from: 21, to: 100 } }, true).execute({ step: {}, context, callbacks })).rejects.toThrow('越界')
+
+    expect(harness.partialWrites.at(-1)).toMatchObject(prior)
+    expect(harness.synopsisCommits).toHaveLength(0)
+  })
+
+  it('主进程续批中断后以同 run 短增量恢复并拼回正式前缀', async () => {
+    useLLMStore.setState({ defaultModelId: '合成模型' })
+    const prefixBody = `第1–20章：已确认前缀\n${'林舟依据税册追查并守住家人，行动和后果按章节连续。'.repeat(5)}`
+    const dbOutline = `# 情节大纲\n\n${prefixBody}\n\n> 本大纲已覆盖至第 20 章（全书 100 章），其余章节将在后续批次继续生成。`
+    const delta = '第21章：新线索\n林舟在旧仓库发现账册。'
+    const addition = `\n\n第22–100章：终局\n${'新一批因果事件逐章推进，最终兑现传承代价。'.repeat(5)}\n\n${progressLine(21, 100, 100)}`
+    const harness = harnessWith({ synopsis_incomplete: true, synopsis_covered_to: 20, synopsis_range: { from: 21, to: 100 }, synopsis_facts_fingerprint: currentFingerprint({ from: 21, to: 100 }), synopsis_db_hash: dbHashOf(dbOutline), synopsis_step_guidance: '' }, dbOutline)
+    const generation = mainOwnedResponses(harness, addition)
+    await generation.setComposition(delta)
+
+    const result = await makeCommand({ resumeSynopsis: true }, true).execute({ step: {}, context, callbacks })
+
+    expect(generation.execute).toHaveBeenCalledTimes(1)
+    expect(generation.getComposition()?.text).toBe(composeVisibleContinuation(delta, addition))
+    expect(result).toContain(prefixBody)
+    expect(result).toContain('第21章：新线索')
+    expect(harness.synopsisCommits[0]?.synopsis).toContain(prefixBody)
+  })
+
+  it('主进程续批仍在请求模型前拒绝旧源指纹', async () => {
+    useLLMStore.setState({ defaultModelId: '合成模型' })
+    const prefixBody = `第1–20章：已确认前缀\n${'林舟依据税册追查并守住家人，行动和后果按章节连续。'.repeat(5)}`
+    const dbOutline = `# 情节大纲\n\n${prefixBody}\n\n> 本大纲已覆盖至第 20 章（全书 100 章），其余章节将在后续批次继续生成。`
+    const harness = harnessWith({ synopsis_result: prefixBody, synopsis_covered_to: 20, synopsis_range: { from: 1, to: 20 }, synopsis_facts_fingerprint: '旧源指纹', synopsis_db_hash: dbHashOf(dbOutline), synopsis_step_guidance: '' }, dbOutline)
+    const generation = mainOwnedResponses(harness, '不会发送')
+
+    await expect(makeCommand({ synopsisRange: { from: 21, to: 100 } }, true).execute({ step: {}, context, callbacks })).rejects.toThrow('项目源事实自上次生成后已变化')
+
+    expect(generation.execute).not.toHaveBeenCalled()
+    expect(harness.synopsisCommits).toHaveLength(0)
+  })
+
+  it('主进程恢复仍拒绝同 run 合成正文在读取后变化', async () => {
+    useLLMStore.setState({ defaultModelId: '合成模型' })
+    const prefixBody = `第1–20章：已确认前缀\n${'林舟依据税册追查并守住家人，行动和后果按章节连续。'.repeat(5)}`
+    const dbOutline = `# 情节大纲\n\n${prefixBody}\n\n> 本大纲已覆盖至第 20 章（全书 100 章），其余章节将在后续批次继续生成。`
+    const harness = harnessWith({ synopsis_incomplete: true, synopsis_covered_to: 20, synopsis_range: { from: 21, to: 100 }, synopsis_facts_fingerprint: currentFingerprint({ from: 21, to: 100 }), synopsis_db_hash: dbHashOf(dbOutline), synopsis_step_guidance: '' }, dbOutline)
+    const generation = mainOwnedResponses(harness, '不会发送')
+    await generation.setComposition('第21章：新线索\n林舟在旧仓库发现账册。')
+    const original = harness.invoke.getMockImplementation()! as (channel: string, ...args: unknown[]) => Promise<unknown>
+    let reads = 0
+    harness.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:read-visible-composition' && ++reads === 2) return { text: '并发替换的候选', textHash: '', artifactIds: [] }
+      return original(channel, ...args)
+    })
+
+    await expect(makeCommand({ resumeSynopsis: true }, true).execute({ step: {}, context, callbacks })).rejects.toThrow('GENERATION_COMPOSITION_SEED_MISMATCH')
+
+    expect(generation.execute).not.toHaveBeenCalled()
+    expect(harness.synopsisCommits).toHaveLength(0)
   })
 
   it('分批必须连续：from ≤ coveredTo（非 1）→ 拒绝且不覆盖已确认前缀', async () => {

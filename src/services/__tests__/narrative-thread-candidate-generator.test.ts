@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { GenerationRuntime } from '../generation/generation-runtime'
 import type { GenerationTask } from '../generation/generation-harness'
+import { useProjectStore } from '../../stores/project-store'
+import type { ProjectData } from '../../shared/ipc-channels'
 
 import {
+  buildNarrativeThreadEventTask,
   createNarrativeThreadCandidateGenerator,
   NARRATIVE_THREAD_CANDIDATE_BUDGET,
   parseNarrativeThreadEventCandidates,
@@ -10,6 +13,51 @@ import {
 } from '../narrative-thread-candidate-generator'
 
 describe('narrative thread AI candidate boundary', () => {
+  it.each(['plan', 'event'] as const)('default %s facade sends selectors without renderer fact payload or formal confirmation', async kind => {
+    const previous = useProjectStore.getState().currentProject
+    useProjectStore.setState({ currentProject: { id: 'project', path: 'C:/synthetic', sessionLease: 'lease' } as ProjectData })
+    const input = kind === 'plan' ? { kind, chapterNumber: 2 } : { kind, planId: 7, draftId: 41 }
+    const handle = { projectId: 'project', epoch: 'lease', rootActionId: 'root', runId: 'run' }
+    const view = { handle, status: 'completed', artifacts: [] }
+    const candidates = kind === 'plan' ? [{ title: 'main-plan' }] : [{ evidence: 'main-evidence' }]
+    const recovery = { view, context: { projectId: 'project', kind, input }, sourceStatus: 'current', attemptCount: 1, result: { kind, candidates }, effects: [], modelId: 'model' }
+    const invoke = vi.fn(async (channel: string, request: unknown) => {
+      if (channel === 'graph-generation:begin') {
+        expect(request).toEqual({ input, modelId: 'model', uiActionNonce: expect.any(String) })
+        return { ...recovery, attemptCount: 0, result: undefined }
+      }
+      if (channel === 'graph-generation:execute') return { run: view, outcome: { status: 'completed', finishReason: 'stop' } }
+      expect(channel).toBe('graph-generation:read')
+      return recovery
+    })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke, on: () => () => {} } })
+    try {
+      const generator = createNarrativeThreadCandidateGenerator()
+      const common = { modelId: 'model', writingLanguage: 'zh-CN' as const, signal: new AbortController().signal }
+      const result = kind === 'plan'
+        ? await generator.generatePlanCandidates({ ...common, totalChapters: 999, blueprint: { chapterNumber: 2, title: 'renderer stale' } as never })
+        : await generator.generateEventCandidates({ ...common, plan: { id: 7, title: 'renderer stale' } as never, draftId: 41, chapterNumber: 999, finalizedContent: 'renderer stale' })
+      expect(result).toEqual(candidates)
+      expect(invoke.mock.calls.some(([channel]) => channel === 'graph-generation:confirm')).toBe(false)
+    } finally { useProjectStore.setState({ currentProject: previous }); vi.unstubAllGlobals() }
+  })
+  it.each(['zh-CN', 'en-US'] as const)('pure %s event task preserves finalized bytes and omits transport identity', writingLanguage => {
+    const finalizedContent = '  林岚把日志藏进抽屉。\r\n尾行  '
+    const task = buildNarrativeThreadEventTask({ writingLanguage, draftId: 41, chapterNumber: 3,
+      finalizedContent, plan: {
+        id: 7, title: '日志', type: '伏笔', targetStartChapter: 1, targetEndChapter: 4,
+        authorIntent: '找到日志。', status: 'planted', dormantChapters: 0, overdue: false,
+        events: [], createdAt: '', updatedAt: '',
+      },
+    })
+    expect(task.messages[0].content).toContain(writingLanguage === 'zh-CN' ? '小说定稿事实审查员' : 'finalized fiction facts')
+    const payload = JSON.parse(task.messages[1].content)
+    expect(payload.finalizedContent).toBe(finalizedContent)
+    expect(payload.plan.currentStatus).toBe('planted')
+    expect(payload).not.toHaveProperty('draftId')
+    expect(task).not.toHaveProperty('modelId')
+    expect(task).not.toHaveProperty('signal')
+  })
   it.each([
     ['generatePlanCandidates', 'zh-CN', { status: 'failed', content: '', finishReason: 'error' }, '叙事线索计划候选生成未完整完成'],
     ['generatePlanCandidates', 'en-US', { status: 'failed', content: '', finishReason: 'error' }, 'Narrative-thread plan candidate generation did not complete.'],

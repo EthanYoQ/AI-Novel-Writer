@@ -1,10 +1,17 @@
+import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_VISIBLE_TEXT_VERSION } from '../../../shared/draft-visible-text'
+export { sanitizeDraftText } from '../../../shared/draft-visible-text'
+import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationRequest } from '../workflow-main-generation'
+import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
+import { formatResourceUri } from '../../../shared/project-paths'
 import {
   BaseWorkflowCommand,
   injectWritingSkillIntoSession,
   type CommandExecuteParams,
   type LLMCompletion,
 } from './base-command'
+import { useLLMStore } from '../../../stores/llm-store'
 import { useProjectStore } from '../../../stores/project-store'
+import { hashAuthorText } from '../../../shared/source-ref'
 import { resolvePromptTemplate } from '../../prompt-templates'
 import { ChapterPromptBuilder } from '../../prompts/prompt-builder'
 import { ipc } from '../../ipc-client'
@@ -21,10 +28,7 @@ import {
 } from '../../../shared/project-paths'
 import type { ChapterInfo } from '../chapter-workflow'
 import { normalizeChapterWordsTarget } from '../chapter-creation-parameters'
-import { appendVisibleTextContinuation } from '../bounded-completion'
-import { stripThinkingTags } from '../workflow-utils'
 import {
-  createGenerationRuntime,
   type CreateGenerationRuntimeOptions,
   type GenerationRuntime,
 } from '../../generation/generation-runtime'
@@ -37,11 +41,13 @@ import type { WritingLanguage } from '../../../shared/writing-language'
 import type { FinalizedContinuityProjection } from '../../../shared/finalized-continuity'
 import type { NarrativeThreadView } from '../../../shared/narrative-thread'
 import { promptLanguageText } from '../../prompt-language'
-import { countDraftUnits } from '../../../shared/draft-units'
+import { countDraftUnits, draftTargetUnitRange } from '../../../shared/draft-units'
 import type { RecoveryChapterSource } from '../../../shared/recovery-candidate'
 import { CHARACTER_STATE_TEXT_FIELDS } from '../../../shared/character-roster'
 import {
   assembleChapterMaterials,
+  ChapterMaterialCapacityError,
+  type ChapterMaterialAssembly,
   type ChapterMaterialReference,
   type FinalizedMaterialSource,
   type SelectedCandidateDraft,
@@ -52,7 +58,6 @@ export { countDraftUnits } from '../../../shared/draft-units'
 export { previousChapterEnding } from '../chapter-materials'
 
 const CONTINUE_PROMPT_MAX_CHARS = 1600
-const MIN_TARGET_COMPLETION_RATIO = 0.8
 const MAX_AUTO_CONTINUE_ROUNDS = 7
 const NEXT_CHAPTER_HEAD_MAX_CHARS = 1200
 const CROSS_CHAPTER_REUSE_CJK_NGRAM_CHARS = 8
@@ -145,23 +150,6 @@ function withoutExactParagraphDuplicates(content: string, duplicates: ReadonlySe
     .join('\n\n')
 }
 
-export function sanitizeDraftText(text: string): string {
-  const cleaned = stripThinkingTags(text)
-    .replace(/^\s*(?:点我继续生成后续内容|继续生成后续内容|请点击继续|未完待续)\s*$/gmi, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-
-  const paragraphs = cleaned.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean)
-  const seen = new Set<string>()
-  const deduped: string[] = []
-  for (const paragraph of paragraphs) {
-    const key = paragraph.replace(/\s+/g, '')
-    if (key.length >= 40 && seen.has(key)) continue
-    if (key.length >= 40) seen.add(key)
-    deduped.push(paragraph)
-  }
-  return deduped.join('\n\n').trim()
-}
 
 const THINKING_TAGS = ['<think>', '</think>'] as const
 
@@ -235,17 +223,22 @@ export const DRAFT_GENERATION_BUDGET = Object.freeze({
 })
 
 export interface GenerateDraftCommandDependencies {
-  createRuntime(options: CreateGenerationRuntimeOptions): Promise<GenerationRuntime>
+  createRuntime(options: CreateGenerationRuntimeOptions, mainRequest?: WorkflowMainGenerationRequest): Promise<GenerationRuntime>
 }
 
 export interface GenerateDraftCommandOptions {
   /** Exact saved draft versions selected by this batch; never inferred as finalized history. */
   readonly selectedCandidateDrafts?: readonly SelectedCandidateDraft[]
+  readonly resumeHandle?: MainGenerationRunHandle
+  readonly batchId?: string
   readonly dependencies?: Partial<GenerateDraftCommandDependencies>
 }
 
 const DEFAULT_DEPENDENCIES: GenerateDraftCommandDependencies = {
-  createRuntime: options => createGenerationRuntime(options),
+  createRuntime: (_options, mainRequest) => {
+    if (!mainRequest) throw new Error('DRAFT_MAIN_GENERATION_REQUEST_REQUIRED')
+    return createWorkflowMainGenerationRuntime(mainRequest)
+  },
 }
 
 type WriterChapterInfo = Pick<ChapterInfo,
@@ -364,6 +357,26 @@ function recoveryFailureCode(error: unknown, cancelled: boolean): string {
   return 'GENERATION_FAILED'
 }
 
+function draftLengthOutOfRangeError(): Error & { code: string } {
+  return Object.assign(new Error('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE'), {
+    code: 'GENERATION_DRAFT_LENGTH_OUT_OF_RANGE',
+  })
+}
+
+function draftTooShortError(
+  context: CommandExecuteParams['context'],
+  units: number,
+  targetUnits: number,
+): Error {
+  return new Error(workflowUiText(
+    context,
+    `模型已声明生成结束，但正文仅约 ${units}/${targetUnits} 字，明显未达到章节目标，结果未保存。` +
+      '请提高最大输出 Tokens、降低本章目标字数，或改用输出能力更强的模型后重试。',
+    `The model reported completion, but the draft is only about ${units}/${targetUnits} units and clearly misses the chapter target, so it was not saved. ` +
+      'Increase the maximum output tokens, lower the chapter target, or use a model with greater output capacity and try again.',
+  ))
+}
+
 function recoveryChapterSource(chapter: ChapterInfo): RecoveryChapterSource {
   return {
     chapterNumber: chapter.chapterNumber,
@@ -384,12 +397,14 @@ async function sha256Hex(value: string): Promise<string> {
 
 /** Join a visible continuation without allowing a repeated prompt tail to count as new prose. */
 export function appendVisibleDraftContinuation(draft: string, continuation: string): string {
-  return appendVisibleTextContinuation(draft, continuation, sanitizeDraftText)
+  return composeDraftVisibleContinuation(draft, continuation)
 }
 
 export class GenerateDraftCommand extends BaseWorkflowCommand {
   private readonly dependencies: GenerateDraftCommandDependencies
   private readonly selectedCandidateDrafts: readonly SelectedCandidateDraft[]
+  private readonly resumeHandle?: MainGenerationRunHandle
+  private readonly batchId?: string
 
   constructor(
     private chapterInfo: ChapterInfo,
@@ -397,6 +412,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
   ) {
     super()
     this.dependencies = { ...DEFAULT_DEPENDENCIES, ...options.dependencies }
+    this.resumeHandle = options.resumeHandle ? Object.freeze({ ...options.resumeHandle }) : undefined
+    this.batchId = options.batchId
     this.selectedCandidateDrafts = Object.freeze([...(options.selectedCandidateDrafts ?? [])])
   }
 
@@ -416,6 +433,40 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     }
     const novelConfig = Object.freeze({ ...project.novelConfig })
     const writingLanguage = workflowWritingLanguage(context)
+    const defaultMain = this.dependencies.createRuntime === DEFAULT_DEPENDENCIES.createRuntime
+    const isFirstChapter = this.chapterInfo.chapterNumber === 1
+    const templateKey = isFirstChapter ? 'first_chapter_draft' : 'next_chapter_draft'
+    const writerChapterInfo = toWriterChapterInfo(this.chapterInfo)
+    const targetChars = normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter)
+    const knowledgeQueryHint = this.chapterInfo.knowledgeQueryHint?.trim() ?? ''
+    const searchQuery = [knowledgeQueryHint, this.chapterInfo.title, this.chapterInfo.keyEvents,
+      this.chapterInfo.characters.join(' ')].filter(Boolean).join(' ')
+    const authorInputs = [{ id: 'draft:chapter-info', text: JSON.stringify(writerChapterInfo) },
+      { id: 'draft:author-config', text: JSON.stringify(novelConfig) },
+      { id: 'draft:target-units', text: String(targetChars) }]
+    const earlyRecovery = defaultMain && this.resumeHandle
+      ? await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: this.resumeHandle }) : null
+    if (earlyRecovery?.savedDraft) {
+      const saved = earlyRecovery.savedDraft
+      if (earlyRecovery.operation !== 'chapter-draft' || earlyRecovery.chapterNumber !== this.chapterInfo.chapterNumber
+        || saved.contentHash !== await sha256Hex(saved.content)) throw new Error('GENERATION_DRAFT_RECOVERY_SCOPE_INVALID')
+      this.assertNotCancelled(context)
+      context.mainGenerationRunHandle = this.resumeHandle
+      return this.publishSavedDraft({ context, callbacks, projectSession, expectedProjectPath,
+        cleanDraftText: saved.content, id: saved.id, nextVersion: saved.version, mergedGuidance: '' })
+    }
+    if (defaultMain) context.generationModelId = workflowGenerationModelId(context) || useLLMStore.getState().defaultModelId || undefined
+    const prepared = defaultMain && !this.resumeHandle
+      ? await ipc.invokeWithProjectSession(projectSession, 'generation:prepare-draft-context', {
+        chapterNumber: this.chapterInfo.chapterNumber, modelId: context.generationModelId!,
+        promptKeys: [templateKey], skillStages: ['drafting'], authorInputs, query: searchQuery,
+        selectedDraftIds: [...new Set(this.selectedCandidateDrafts.filter(item => item.chapterNumber < this.chapterInfo.chapterNumber).map(item => item.draftId))],
+        ...(this.batchId ? { batchId: this.batchId } : {}),
+      }) : null
+    const knowledgeSnapshot = prepared?.knowledgeSnapshot ?? earlyRecovery?.knowledgeSnapshot
+    // Recovery uses the original main snapshot, including retrieval hints outside the writer prompt.
+    if (defaultMain && (!knowledgeSnapshot || prepared && knowledgeSnapshot.query !== searchQuery))
+      throw new Error('GENERATION_DRAFT_KNOWLEDGE_SNAPSHOT_REQUIRED')
     const sourceDraft = await ipc.invokeWithProjectSession(
       projectSession,
       'db:draft-get-latest',
@@ -473,8 +524,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       }
     } catch { /* 忽略 */ }
 
-    const isFirstChapter = this.chapterInfo.chapterNumber === 1
-    const templateKey = isFirstChapter ? 'first_chapter_draft' : 'next_chapter_draft'
     const template = await resolvePromptTemplate(templateKey, projectSession, writingLanguage)
     if (!template) throw new Error(uiText(
       `未找到模板: ${templateKey}`,
@@ -504,20 +553,13 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         '  检索知识库相关片段...',
         '  Searching the knowledge base for relevant passages...',
       ))
-      const knowledgeQueryHint = this.chapterInfo.knowledgeQueryHint?.trim() ?? ''
-      const searchQuery = [
-        knowledgeQueryHint,
-        this.chapterInfo.title,
-        this.chapterInfo.keyEvents,
-        this.chapterInfo.characters.join(' '),
-      ].filter(Boolean).join(' ')
       if (knowledgeQueryHint) {
         callbacks.log(uiText(
           `  追加用户检索关键词：${knowledgeQueryHint}`,
           `  Added author search keywords: ${knowledgeQueryHint}`,
         ))
       }
-      const results = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(
+      const results = defaultMain ? knowledgeSnapshot!.items : unwrapKnowledgeValue(await ipc.invokeWithProjectSession(
         projectSession,
         'kb:search-writing-context',
         searchQuery,
@@ -542,10 +584,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       const unavailableContext = promptLanguageText(writingLanguage, '（知识库检索不可用）', '(knowledge-base search unavailable)')
       knowledgeReferences = [{ text: unavailableContext, rendered: unavailableContext }]
     }
-    const writerChapterInfo = toWriterChapterInfo(this.chapterInfo)
-    const targetChars = normalizeChapterWordsTarget(this.chapterInfo.wordsTarget, novelConfig.wordsPerChapter)
-    const lowerTargetChars = Math.round(targetChars * 0.8)
-    const upperTargetChars = Math.round(targetChars * 1.2)
+    const { minimum: lowerTargetChars, maximum: upperTargetChars } = draftTargetUnitRange(targetChars)
     const promptBuilder = new ChapterPromptBuilder(template, writingLanguage)
       // ---- 缓存命中区（跨章稳定，前缀对齐）----
       .withArchitecture(architecture)
@@ -596,8 +635,15 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         .withShortSummary('')
     }
 
-    const selectedCandidateDrafts = this.selectedCandidateDrafts
+    if (defaultMain && earlyRecovery?.selectedDraftIds.length && !earlyRecovery.selectedDrafts)
+      throw new Error('GENERATION_DRAFT_SOURCE_CHANGED')
+    const explicitlyRequiredDraftIds = new Set(this.selectedCandidateDrafts
+      .filter(candidate => candidate.required === true).map(candidate => candidate.draftId))
+    const selectedCandidateDrafts = (defaultMain ? prepared?.selectedDrafts ?? earlyRecovery?.selectedDrafts ?? [] : this.selectedCandidateDrafts)
       .filter(candidate => candidate.chapterNumber < this.chapterInfo.chapterNumber)
+      .map(candidate => explicitlyRequiredDraftIds.has(candidate.draftId) && candidate.required !== true
+        ? { ...candidate, required: true }
+        : candidate)
       .sort((left, right) => left.chapterNumber - right.chapterNumber)
     const previousChapterNumber = this.chapterInfo.chapterNumber - 1
     const hasRequiredPreviousCandidate = selectedCandidateDrafts.some(candidate => (
@@ -614,23 +660,48 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         `The required finalized source for Chapter ${previousChapterNumber} could not be fixed, so generation stopped. Repair or re-finalize that chapter and try again.`,
       ))
     }
-    const chapterMaterials = assembleChapterMaterials({
-      writingLanguage,
-      authorProjectFacts: authoredConfigFacts,
-      characterProfiles,
-      futurePlans: futureBlueprintsStr,
-      references: [
-        ...(activeThreadContext ? [{ text: activeThreadContext, rendered: activeThreadContext }] : []),
-        ...knowledgeReferences,
-      ],
-      finalized: finalizedSources,
-      candidates: selectedCandidateDrafts,
-      relevanceTerms: [
-        this.chapterInfo.title,
-        this.chapterInfo.keyEvents,
-        ...this.chapterInfo.characters,
-      ],
-    })
+    let chapterMaterials: ChapterMaterialAssembly
+    try {
+      chapterMaterials = await assembleChapterMaterials({
+        identity: { projectId: projectSession.projectId, epoch: projectSession.leaseId },
+        writingLanguage,
+        budgetChars: 8_000,
+        authorProjectFacts: authoredConfigFacts,
+        characterProfiles,
+        futurePlans: futureBlueprintsStr,
+        references: [
+          ...(activeThreadContext ? [{ text: activeThreadContext, rendered: activeThreadContext }] : []),
+          ...knowledgeReferences,
+        ],
+        finalized: finalizedSources,
+        candidates: selectedCandidateDrafts,
+        relevanceTerms: [
+          this.chapterInfo.title,
+          this.chapterInfo.keyEvents,
+          ...this.chapterInfo.characters,
+        ],
+      })
+    } catch (error) {
+      // 必需材料（作者资料/角色档案/后续计划）超出容量：显式失败，绝不静默裁掉。
+      if (!(error instanceof ChapterMaterialCapacityError)) throw error
+      const blocked = error.decision.decision === 'capacity-conflict'
+        ? `${error.decision.blockingSourceId}:${error.decision.blockingReason}`
+        : error.decision.remainingRequired.join('、')
+      callbacks.log(uiText(
+        `  必需材料超出上下文容量（${error.decision.decision}）：${blocked}`,
+        `  Required material exceeds the context capacity (${error.decision.decision}): ${blocked}`,
+      ))
+      throw new Error(uiText(
+        '本章必需材料（作者资料、角色档案、后续计划）超出上下文容量，已停止生成。请精简这些内容后重试。',
+        'The required material for this chapter (author facts, character profiles, future plans) exceeds the context capacity, so generation stopped. Trim it and try again.',
+      ))
+    }
+    const admittedCandidateSourceIds = new Set(chapterMaterials.selection.included
+      .map(material => material.ref.sourceId)
+      .filter(sourceId => sourceId.startsWith('candidate:')))
+    if (selectedCandidateDrafts.length > 0 && admittedCandidateSourceIds.size === 0) {
+      throw new Error('GENERATION_DRAFT_REQUIRED_PREDECESSOR_NOT_ADMITTED')
+    }
     if (chapterMaterials.omissions.length > 0) {
       callbacks.log(uiText(
         `  可选材料覆盖缺口：${chapterMaterials.omissions.length} 项`,
@@ -639,8 +710,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     }
     const chapterLengthContract = promptLanguageText(
       writingLanguage,
-      `【本章篇幅合同】\n用户目标 ${targetChars} 字；可接受范围 ${lowerTargetChars}–${upperTargetChars} 字（±20%）。在此篇幅内完整落实本章蓝图中的全部作者任务和必需事件；不得为满足篇幅而删除、改写或截断这些要求，不要为凑字数增加无关内容。`,
-      `[Chapter length contract]\nThe user's target is ${targetChars} words; the acceptable range is ${lowerTargetChars}-${upperTargetChars} words (±20%). Within this length, fully realize every author task and required event in the chapter blueprint; do not delete, rewrite, or truncate those requirements to meet the range, and do not add unrelated content just to fill space.`,
+      `【本章篇幅合同】\n用户目标 ${targetChars} 字；可接受范围 ${lowerTargetChars}–${upperTargetChars} 字（±30%）。在此篇幅内完整落实本章蓝图中的全部作者任务和必需事件；不得为满足篇幅而删除、改写或截断这些要求，不要为凑字数增加无关内容。`,
+      `[Chapter length contract]\nThe user's target is ${targetChars} words; the acceptable range is ${lowerTargetChars}-${upperTargetChars} words (±30%). Within this length, fully realize every author task and required event in the chapter blueprint; do not delete, rewrite, or truncate those requirements to meet the range, and do not add unrelated content just to fill space.`,
     )
     const executionItems = [
       { zhCN: '必需事件', enUS: 'Required events', value: this.chapterInfo.keyEvents },
@@ -650,19 +721,22 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     const chapterExecutionCard = executionItems.some(item => item.value?.trim())
       ? promptLanguageText(
           writingLanguage,
-          `【本章执行卡（作者原文重列）】\n以下非空项是当前章应落实的动作和收束，不是新增事实。请在输出前核对各项已通过正文动作或结果落实；后一项动作必须承接正文实际形成的物品持有、人物知情和计划完成状态。\n${executionItems.flatMap(item => item.value?.trim() ? [`- ${item.zhCN}: ${item.value}`] : []).join('\n')}`,
-          `[Current-chapter execution card (author text repeated verbatim)]\nThe non-empty items below are current-chapter actions and end states, not new facts. Before output, check that each item is realized through manuscript action or outcome. Each later action must continue from the item ownership, character knowledge, and plan-completion state actually established in the prose.\n${executionItems.flatMap(item => item.value?.trim() ? [`- ${item.enUS}: ${item.value}`] : []).join('\n')}`,
+          `【本章执行卡（作者原文重列）】\n按作者原文含义遵循：明确要求在本章发生的事件与收束须由正文动作或结果落实；持续状态、知情边界、禁止事项和文风要求是叙述约束，不要仅为证明遵守而新增或反复确认动作、对话或解释。悬念按原文揭示时点处理，留待后文的事不得提前写成已完成；作者明确要求的动作、揭示或反复仍按原文执行。后一项动作必须承接正文实际形成的物品持有、人物知情和计划完成状态。\n${executionItems.flatMap(item => item.value?.trim() ? [`- ${item.zhCN}: ${item.value}`] : []).join('\n')}`,
+          `[Current-chapter execution card (author text repeated verbatim)]\nFollow the author text according to its meaning: events and outcomes explicitly required in this chapter must be realized through manuscript action or outcome. Ongoing states, knowledge boundaries, prohibitions, and style requests are narrative constraints; do not add or repeatedly confirm actions, dialogue, or explanations merely to prove compliance. Follow the reveal timing specified by the author; do not present what is reserved for later chapters as already completed. Still carry out explicitly requested actions, reveals, or repetition. Each later action must continue from the item ownership, character knowledge, and plan-completion state actually established in the prose.\n${executionItems.flatMap(item => item.value?.trim() ? [`- ${item.enUS}: ${item.value}`] : []).join('\n')}`,
         )
       : ''
     const prompt = [chapterMaterials.text, promptBuilder.build(), chapterExecutionCard, chapterLengthContract]
       .filter(Boolean)
       .join('\n\n')
+    const materialDecision = { ...chapterMaterials.decision, promptHash: await hashAuthorText(prompt) }
     const previousEnding = chapterMaterials.previousEnding
 
     callbacks.log(uiText(
       '调用 AI 生成章节草稿...',
       'Calling AI to generate the chapter draft...',
     ))
+    let mainOwned = false
+    let alreadySaved = false
     let draftPersisted = false
     let recoverableDraftCandidate = ''
     const workflowStepId = step && typeof step === 'object' && 'id' in step && typeof step.id === 'string'
@@ -673,13 +747,90 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       const cancellation = observeWorkflowCancellation(context)
       let runtime: GenerationRuntime | null = null
       let cleanDraftText: string
+      let acknowledgedPreview = ''
+      const mainCallbacks = callbacks.replaceText ? { ...callbacks,
+        replaceText: (text: string) => callbacks.replaceText?.(composeDraftVisibleContinuation(acknowledgedPreview, text)),
+      } : callbacks
       try {
         const generationModelId = workflowGenerationModelId(context)
+        const priorSave = this.resumeHandle
+          ? await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: this.resumeHandle })
+          : null
+        if (priorSave?.savedDraft) {
+          if (priorSave.operation !== 'chapter-draft' || priorSave.chapterNumber !== this.chapterInfo.chapterNumber)
+            throw new Error('GENERATION_DRAFT_RECOVERY_SCOPE_INVALID')
+          mainOwned = true
+          alreadySaved = true
+          context.mainGenerationRunHandle = this.resumeHandle
+          cleanDraftText = priorSave.savedDraft.content
+        } else {
         runtime = await this.dependencies.createRuntime({
           budget: DRAFT_GENERATION_BUDGET,
           ...(generationModelId ? { modelId: generationModelId } : {}),
-        })
+        }, { context, callbacks: mainCallbacks, selection: {
+          operation: 'chapter-draft', chapterNumber: this.chapterInfo.chapterNumber,
+          ...(prepared ? { preparationId: prepared.preparationId } : {}),
+          ...(this.batchId ? { batchId: this.batchId } : {}),
+          promptKeys: [templateKey], skillStages: ['drafting'], output: 'visible-text',
+          selectedDraftIds: [...new Set(selectedCandidateDrafts.map(item => item.draftId))],
+          selectedFinalizedDraftIds: [...new Set(chapterMaterials.consumedFinalizedSources.map(item => item.draftId))],
+          selectedBlueprintChapterNumbers: Array.from({ length: 6 }, (_, index) => this.chapterInfo.chapterNumber + index),
+          // S10B 步骤 3：本次准入的脱敏收据随冻结上下文一起进主进程，并被恢复指纹绑定。
+          materialDecision,
+          authorInputs: [{ id: 'draft:chapter-info', text: JSON.stringify(writerChapterInfo) },
+            { id: 'draft:author-config', text: JSON.stringify(novelConfig) },
+            { id: 'draft:target-units', text: String(targetChars) }],
+          ...(this.resumeHandle ? { resumeHandle: this.resumeHandle } : {}),
+        } })
+        mainOwned = (runtime as { mainOwned?: boolean }).mainOwned === true
         cleanDraftText = await runtime.execute(async ({ session }) => {
+          const recovery = mainOwned && this.resumeHandle
+            ? await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: context.mainGenerationRunHandle! })
+            : null
+          if (this.resumeHandle && !mainOwned) throw new Error('GENERATION_DRAFT_LEGACY_RESUME_REFUSED')
+          const failedBatchView = recovery && this.batchId && recovery.batchId === this.batchId
+            && !recovery.composition && !recovery.savedDraft && recovery.lastCompositionFinishReason === null
+            && recovery.attemptedPurposes.at(-1) === 'chapter-draft'
+            ? await ipc.invokeWithProjectSession(projectSession, 'generation:read', this.resumeHandle!) : null
+          const lastAttempt = failedBatchView?.budgetDiagnostics?.at(-1)
+          const retryFailedBatch = !!failedBatchView && failedBatchView.status === 'running' && !failedBatchView.nonReplayable
+            && failedBatchView.handle.runId === this.resumeHandle?.runId && (failedBatchView.ledger?.physicalRequests ?? 0) > 0
+            && !failedBatchView.ledger?.blockedCode && lastAttempt?.finishReason === null
+            && (lastAttempt.failureCode === 'GENERATION_PROVIDER_FAILED' || lastAttempt.failureCode === 'NETWORK_ERROR')
+            && ![...failedBatchView.artifacts, ...(failedBatchView.candidates ?? [])].some(artifact => artifact.text.trim())
+            && !failedBatchView.unsavedTails?.some(tail => tail.text.trim())
+          if (recovery && (recovery.operation !== 'chapter-draft'
+            || recovery.chapterNumber !== this.chapterInfo.chapterNumber
+            || !retryFailedBatch && (!recovery.composition || recovery.composition.algorithm !== DRAFT_VISIBLE_TEXT_VERSION
+              || !['stop', 'length'].includes(recovery.lastCompositionFinishReason ?? ''))))
+            throw new Error('GENERATION_DRAFT_RECOVERY_EVIDENCE_REQUIRED')
+          const expectedInputs = [{ id: 'draft:chapter-info', text: JSON.stringify(writerChapterInfo) },
+            { id: 'draft:author-config', text: JSON.stringify(novelConfig) },
+            { id: 'draft:target-units', text: String(targetChars) }]
+          if (recovery && expectedInputs.some(input => recovery.authorInputs.find(item => item.id === input.id)?.text !== input.text))
+            throw new Error('GENERATION_DRAFT_RECOVERY_AUTHOR_INPUT_CHANGED')
+          const sameIds = (a: readonly number[], b: readonly number[]) => JSON.stringify([...new Set(a)].sort((a, b) => a - b)) === JSON.stringify([...new Set(b)].sort((a, b) => a - b))
+          if (recovery && (!sameIds(recovery.selectedDraftIds, selectedCandidateDrafts.map(item => item.draftId))
+            || !sameIds(recovery.selectedFinalizedDraftIds, chapterMaterials.consumedFinalizedSources.map(item => item.draftId))
+            || !sameIds(recovery.selectedBlueprintChapterNumbers, Array.from({ length: 6 }, (_, index) => this.chapterInfo.chapterNumber + index))))
+            throw new Error('GENERATION_DRAFT_RECOVERY_SOURCE_SELECTION_CHANGED')
+          let acknowledgedIds: string[] = [...(recovery?.composition?.artifactIds ?? [])]
+          acknowledgedPreview = recovery?.composition?.text ?? ''
+          const acknowledge = async (outcome: GenerationOutcome, text: string) => {
+            if (!mainOwned || !text || !['stop', 'length'].includes(outcome.finishReason)) return
+            const handle = context.mainGenerationRunHandle
+            const artifact = outcome.receipt.visibleArtifact
+            if (!handle || !artifact) throw new Error('GENERATION_COMPOSITION_ARTIFACT_REQUIRED')
+            const hash = await sha256Hex(text)
+            const expectedIds = [...acknowledgedIds, artifact.artifactId]
+            const receipt = await ipc.invokeWithProjectSession(projectSession, 'generation:compose-visible',
+              handle, expectedIds, hash, DRAFT_VISIBLE_TEXT_VERSION)
+            if (receipt.text !== text || receipt.textHash !== hash || receipt.algorithm !== DRAFT_VISIBLE_TEXT_VERSION
+              || JSON.stringify(receipt.artifactIds) !== JSON.stringify(expectedIds))
+              throw new Error('GENERATION_COMPOSITION_RECEIPT_MISMATCH')
+            acknowledgedIds = [...receipt.artifactIds]
+            acknowledgedPreview = receipt.text
+          }
           const draftingSession = injectWritingSkillIntoSession(session, context, 'drafting')
           if (context.writingSkills?.drafting) {
             callbacks.log(uiText(
@@ -693,41 +844,56 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             callbacks.replaceText,
             visibleDraftStreamText,
           )
-          let initialOutcome: GenerationOutcome
-          try {
-            initialOutcome = await draftingSession.complete({
-              purpose: 'chapter-draft',
-              reasoningStage: 'drafting',
-              output: 'visible-text',
-              messages: [
-                { role: 'system', content: promptBuilder.getSystemRole() },
-                { role: 'user', content: prompt },
-              ],
-            }, {
-              signal: cancellation.signal,
-              onChunk: chunk => {
-                if (context.cancelled) return
-                preview.push(chunk)
-              },
-            })
-          } catch (error) {
-            recoverableDraftCandidate = preview.snapshot()
-            throw error
-          } finally {
+          let initialVisibleDraft: string
+          let initialFinishReason: LLMCompletion['finishReason']
+          let initialFailureCode: GenerationAttemptReceipt['failureCode']
+          let initialReasoning = true
+          if (recovery?.composition) {
+            initialVisibleDraft = recovery.composition!.text
+            initialFinishReason = recovery.lastCompositionFinishReason as 'stop' | 'length'
             preview.stop()
-          }
-          const initialCompletion = completionFromOutcome(initialOutcome)
-          logDraftAttempt(
-            callbacks,
-            context,
-            { zhCN: '初始生成', enUS: 'Initial generation' },
-            initialOutcome.receipt,
-          )
-          callbacks.log(uiText(
-            `  初始生成响应结束：finishReason=${initialCompletion.finishReason}`,
-            `  Initial generation response ended: finishReason=${initialCompletion.finishReason}`,
-          ))
-          const initialVisibleDraft = sanitizeDraftText(this.stripThinkingTags(initialCompletion.content))
+          } else {
+            let initialOutcome: GenerationOutcome
+            try {
+              initialOutcome = await draftingSession.complete({
+                purpose: 'chapter-draft',
+                budgetDemand: { kind: 'draft-units', writingLanguage, requestedUnits: targetChars, segmentable: false },
+                reasoningStage: 'drafting',
+                output: 'visible-text',
+                messages: [
+                  { role: 'system', content: promptBuilder.getSystemRole() },
+                  { role: 'user', content: prompt },
+                ],
+              }, {
+                signal: cancellation.signal,
+                ...(!mainOwned ? { onChunk: (chunk: string) => {
+                  if (context.cancelled) return
+                  preview.push(chunk)
+                } } : {}),
+              })
+            } catch (error) {
+              recoverableDraftCandidate = preview.snapshot()
+              throw error
+            } finally {
+              preview.stop()
+            }
+            const initialCompletion = completionFromOutcome(initialOutcome)
+            logDraftAttempt(
+              callbacks,
+              context,
+              { zhCN: '初始生成', enUS: 'Initial generation' },
+              initialOutcome.receipt,
+            )
+            callbacks.log(uiText(
+              `  初始生成响应结束：finishReason=${initialCompletion.finishReason}`,
+              `  Initial generation response ended: finishReason=${initialCompletion.finishReason}`,
+            ))
+            initialVisibleDraft = sanitizeDraftText(this.stripThinkingTags(initialCompletion.content))
+            initialFinishReason = initialCompletion.finishReason
+            initialFailureCode = initialOutcome.receipt.failureCode
+            initialReasoning = initialOutcome.receipt.capabilities.reasoning === true
+            await acknowledge(initialOutcome, initialVisibleDraft)
+            }
           recoverableDraftCandidate = initialVisibleDraft
           callbacks.log(uiText(
             `  初始生成可见单位：visibleUnits=${countDraftUnits(initialVisibleDraft)}`,
@@ -738,9 +904,14 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           this.assertNotCancelled(context)
           const completedDraft = await this.extendDraftIfNeeded({
             session: draftingSession,
+            mainOwned,
+            acknowledge,
             signal: cancellation.signal,
             initialDraft: initialVisibleDraft,
-            initialFinishReason: initialCompletion.finishReason,
+            initialFinishReason,
+            initialFailureCode,
+            initialRounds: recovery?.attemptedPurposes.filter(purpose => purpose === 'chapter-draft-continuation' || purpose === 'chapter-draft-no-progress-recovery').length,
+            noProgressRecoveryUsed: recovery?.attemptedPurposes.includes('chapter-draft-no-progress-recovery'),
             targetChars,
             callbacks,
             context,
@@ -751,12 +922,13 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             novelConfigFacts: novelConfigFactsJson,
             chapterMaterials: chapterMaterials.text,
             writingLanguage,
-            reasoning: initialOutcome.receipt.capabilities.reasoning === true,
+            reasoning: initialReasoning,
             onRecoverableCandidate: candidate => { recoverableDraftCandidate = candidate },
           })
           recoverableDraftCandidate = completedDraft
           return completedDraft
         })
+        }
       } catch (error) {
         if (context.cancelled) throw new Error(uiText('工作流已取消', 'Workflow was cancelled.'))
         throw error
@@ -767,7 +939,20 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         }
       }
       this.assertNotCancelled(context)
-      if (hasSubstantialPreviousChapterReuse(previousEnding, cleanDraftText, writingLanguage)) {
+      if (!alreadySaved) {
+        const units = countDraftUnits(cleanDraftText)
+        const range = draftTargetUnitRange(targetChars)
+        if (units < range.minimum) throw draftTooShortError(context, units, targetChars)
+        if (units > range.maximum) {
+          if (mainOwned) {
+            const handle = context.mainGenerationRunHandle
+            if (!handle) throw new Error('GENERATION_COMPOSITION_HANDLE_REQUIRED')
+            await ipc.invokeWithProjectSession(projectSession, 'generation:pause', handle)
+          }
+          throw draftLengthOutOfRangeError()
+        }
+      }
+      if (!alreadySaved && hasSubstantialPreviousChapterReuse(previousEnding, cleanDraftText, writingLanguage)) {
         throw new Error(uiText(
           '新章节开头与上一章结尾存在大段重演，结果未保存。请重新生成，并让本章从上一章已完成事件之后继续。',
           'The new chapter substantially replays the previous ending, so it was not saved. Regenerate it and continue after the events already completed in the previous chapter.',
@@ -785,101 +970,74 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         ))
       }
       this.assertNotCancelled(context)
-      const nextVersion: number = await ipc.invokeWithProjectSession(
-        projectSession,
-        'db:draft-next-version',
-        this.chapterInfo.chapterNumber,
-        expectedProjectPath,
-      )
-      this.assertNotCancelled(context)
-      const finalizedDependencies: DraftSourceDependency[] = await Promise.all(
-        chapterMaterials.consumedFinalizedSources.map(async source => source.sourceIdentity?.kind === 'finalized'
-          ? {
-              kind: 'finalized' as const,
-              draftId: source.draftId,
-              chapterNumber: source.chapterNumber,
-              finalizationId: source.sourceIdentity.finalizationId,
-              contentHash: source.sourceIdentity.contentHash,
-            }
-          : {
-              kind: 'legacy-finalized' as const,
-              draftId: source.draftId,
-              chapterNumber: source.chapterNumber,
-              contentHash: await sha256Hex(source.content),
-            }),
-      )
-      const finalizedDraftIds = new Set(finalizedDependencies.map(dependency => dependency.draftId))
-      const candidateDependencies: DraftSourceDependency[] = await Promise.all(
-        selectedCandidateDrafts
-          .filter(candidate => !finalizedDraftIds.has(candidate.draftId))
-          .map(async candidate => ({
-            draftId: candidate.draftId,
-            contentHash: await sha256Hex(candidate.content),
-          })),
-      )
-      const createResult = await ipc.invokeWithProjectSession(projectSession, 'db:draft-create', {
-        chapterNumber: this.chapterInfo.chapterNumber,
-        version: nextVersion,
-        source: 'write',
-        content: cleanDraftText,
-        wordCount: countDraftUnits(cleanDraftText),
-        sourceDependencies: [...candidateDependencies, ...finalizedDependencies],
-      }, expectedProjectPath)
+      if (mainOwned && !alreadySaved
+        && JSON.stringify(useProjectStore.getState().currentProject?.novelConfig) !== JSON.stringify(novelConfig))
+        throw new Error('GENERATION_DRAFT_AUTHOR_CONFIG_CHANGED')
+      const createResult = mainOwned ? await (async () => {
+        const handle = context.mainGenerationRunHandle
+        if (!handle) throw new Error('GENERATION_COMPOSITION_HANDLE_REQUIRED')
+        const saved = await ipc.invokeWithProjectSession(projectSession, 'generation:commit-draft', {
+          handle, chapterNumber: this.chapterInfo.chapterNumber, source: 'write',
+          ...(this.batchId ? { batchId: this.batchId } : {}),
+          expectedCompositionHash: await sha256Hex(cleanDraftText),
+        })
+        if (saved.content !== cleanDraftText || saved.contentHash !== await sha256Hex(cleanDraftText))
+          throw new Error('GENERATION_DRAFT_COMMIT_RECEIPT_MISMATCH')
+        return saved
+      })() : await (async () => {
+        const nextVersion: number = await ipc.invokeWithProjectSession(
+          projectSession,
+          'db:draft-next-version',
+          this.chapterInfo.chapterNumber,
+          expectedProjectPath,
+        )
+        this.assertNotCancelled(context)
+        const finalizedDependencies: DraftSourceDependency[] = await Promise.all(
+          chapterMaterials.consumedFinalizedSources.map(async source => source.sourceIdentity?.kind === 'finalized'
+            ? {
+                kind: 'finalized' as const,
+                draftId: source.draftId,
+                chapterNumber: source.chapterNumber,
+                finalizationId: source.sourceIdentity.finalizationId,
+                contentHash: source.sourceIdentity.contentHash,
+              }
+            : {
+                kind: 'legacy-finalized' as const,
+                draftId: source.draftId,
+                chapterNumber: source.chapterNumber,
+                contentHash: await sha256Hex(source.content),
+              }),
+        )
+        const finalizedDraftIds = new Set(finalizedDependencies.map(dependency => dependency.draftId))
+        const candidateDependencies: DraftSourceDependency[] = await Promise.all(
+          selectedCandidateDrafts
+            .filter(candidate => admittedCandidateSourceIds.has(`candidate:${candidate.draftId}`)
+              && !finalizedDraftIds.has(candidate.draftId))
+            .map(async candidate => ({
+              draftId: candidate.draftId,
+              contentHash: await sha256Hex(candidate.content),
+            })),
+        )
+        const saved = await ipc.invokeWithProjectSession(projectSession, 'db:draft-create', {
+          chapterNumber: this.chapterInfo.chapterNumber,
+          version: nextVersion,
+          source: 'write',
+          content: cleanDraftText,
+          wordCount: countDraftUnits(cleanDraftText),
+          sourceDependencies: [...candidateDependencies, ...finalizedDependencies],
+        }, expectedProjectPath)
+          return { ...saved, version: nextVersion }
+      })()
+      const nextVersion = createResult.version
       if (!createResult.success || !createResult.id) {
-        throw new Error(createResult.error || uiText('章节草稿保存失败', 'Failed to save the chapter draft.'))
+        throw new Error(('error' in createResult ? String(createResult.error) : '') || uiText('章节草稿保存失败', 'Failed to save the chapter draft.'))
       }
       this.assertNotCancelled(context)
       draftPersisted = true
-      callbacks.replaceText?.(cleanDraftText)
-
-      const pseudoPath = createResult.id ? `vela://draft/${createResult.id}` : `vela://draft/ch${this.chapterInfo.chapterNumber}/v${nextVersion}`
-
-      context.data.draft = cleanDraftText
-      context.data.draftContent = cleanDraftText
-      context.data.draftPath = pseudoPath
-      context.data.draftId = createResult.id
-      context.data.draftVersion = nextVersion
-      context.data.chapterNumber = this.chapterInfo.chapterNumber
-      context.data.chapterInfo = this.chapterInfo
-      context.data.mergedGuidance = mergedGuidance
-      context.data.shortSummary = ''
-
-      await useProjectStore.getState().refreshFileTree(expectedProjectPath, undefined, projectSession)
-      try {
-        const { useDraftStore } = await import('../../../stores/draft-store')
-        await useDraftStore.getState().loadAllDrafts(expectedProjectPath, projectSession)
-      } catch { /* 忽略 */ }
-
-      try {
-        if (!sameProjectSessionContext(
-          projectSession,
-          projectSessionContextFromProject(useProjectStore.getState().currentProject),
-        )) throw new Error(uiText(
-          '当前项目已切换，已拒绝打开旧草稿',
-          'The project changed, so opening the old draft was refused.',
-        ))
-        const { useEditorStore } = await import('../../../stores/editor-store')
-        useEditorStore.getState().openFile({
-          id: pseudoPath,
-          name: uiText(
-            `第${this.chapterInfo.chapterNumber}章 ${this.chapterInfo.title} v${nextVersion}`,
-            `Chapter ${this.chapterInfo.chapterNumber} ${this.chapterInfo.title} v${nextVersion}`,
-          ),
-          type: 'chapter',
-          filePath: pseudoPath,
-          content: cleanDraftText,
-          savedContent: cleanDraftText,
-          projectKey: expectedProjectPath,
-        })
-      } catch { /* 忽略 */ }
-
-      callbacks.log(uiText(
-        `草稿已自动入库保存为版本 v${nextVersion}（${countDraftUnits(cleanDraftText)} 字）`,
-        `Draft saved automatically as version v${nextVersion} (${countDraftUnits(cleanDraftText)} units)`,
-      ))
-      return cleanDraftText
+      return this.publishSavedDraft({ context, callbacks, projectSession, expectedProjectPath,
+        cleanDraftText, id: createResult.id, nextVersion, mergedGuidance })
     } catch (error) {
-      if (!draftPersisted && recoverableDraftCandidate) {
+      if (!mainOwned && !draftPersisted && recoverableDraftCandidate) {
         callbacks.replaceText?.(recoverableDraftCandidate)
         const failureCode = recoveryFailureCode(error, context.cancelled)
         const failureReason = error instanceof Error ? error.message : String(error)
@@ -920,11 +1078,68 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             `${failureReason}; saving the recovery candidate failed: ${persistenceReason}`,
           ))
         }
-      } else if (!draftPersisted) {
+      } else if (!mainOwned && !draftPersisted) {
         callbacks.replaceText?.('')
       }
       throw error
     }
+  }
+
+  private async publishSavedDraft({ context, callbacks, projectSession, expectedProjectPath,
+    cleanDraftText, id, nextVersion, mergedGuidance }: {
+    context: CommandExecuteParams['context']; callbacks: CommandExecuteParams['callbacks']
+    projectSession: ProjectSessionContext; expectedProjectPath: string
+    cleanDraftText: string; id: number; nextVersion: number; mergedGuidance: string
+  }): Promise<string> {
+    const uiText = (zh: string, en: string) => workflowUiText(context, zh, en)
+    callbacks.replaceText?.(cleanDraftText)
+
+    const pseudoPath = formatResourceUri({ kind: 'draft', id })
+
+    context.data.draft = cleanDraftText
+    context.data.draftContent = cleanDraftText
+    context.data.draftPath = pseudoPath
+    context.data.draftId = id
+    context.data.draftVersion = nextVersion
+    context.data.chapterNumber = this.chapterInfo.chapterNumber
+    context.data.chapterInfo = this.chapterInfo
+    context.data.mergedGuidance = mergedGuidance
+    context.data.shortSummary = ''
+
+    await useProjectStore.getState().refreshFileTree(expectedProjectPath, undefined, projectSession)
+    try {
+      const { useDraftStore } = await import('../../../stores/draft-store')
+      await useDraftStore.getState().loadAllDrafts(expectedProjectPath, projectSession)
+    } catch { /* 忽略 */ }
+
+    try {
+      if (!sameProjectSessionContext(
+        projectSession,
+        projectSessionContextFromProject(useProjectStore.getState().currentProject),
+      )) throw new Error(uiText(
+        '当前项目已切换，已拒绝打开旧草稿',
+        'The project changed, so opening the old draft was refused.',
+      ))
+      const { useEditorStore } = await import('../../../stores/editor-store')
+      useEditorStore.getState().openFile({
+        id: pseudoPath,
+        name: uiText(
+        `第${this.chapterInfo.chapterNumber}章 ${this.chapterInfo.title} v${nextVersion}`,
+        `Chapter ${this.chapterInfo.chapterNumber} ${this.chapterInfo.title} v${nextVersion}`,
+        ),
+        type: 'chapter',
+        filePath: pseudoPath,
+        content: cleanDraftText,
+        savedContent: cleanDraftText,
+        projectKey: expectedProjectPath,
+      })
+    } catch { /* 忽略 */ }
+
+    callbacks.log(uiText(
+      `草稿已自动入库保存为版本 v${nextVersion}（${countDraftUnits(cleanDraftText)} 字）`,
+      `Draft saved automatically as version v${nextVersion} (${countDraftUnits(cleanDraftText)} units)`,
+    ))
+    return cleanDraftText
   }
 
   private shouldAutoContinue(
@@ -935,17 +1150,23 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
   ): boolean {
     if (rounds >= MAX_AUTO_CONTINUE_ROUNDS) return false
     const currentChars = countDraftUnits(currentText)
+    if (currentChars > draftTargetUnitRange(targetChars).maximum) return false
     if (finishReason === 'stop') {
-      return currentChars < Math.floor(targetChars * MIN_TARGET_COMPLETION_RATIO)
+      return currentChars < draftTargetUnitRange(targetChars).minimum
     }
     return finishReason === 'length'
   }
 
   private async extendDraftIfNeeded(params: {
     session: GenerationSession
+    mainOwned?: boolean
+    acknowledge?: (outcome: GenerationOutcome, text: string) => Promise<void>
     signal: AbortSignal
     initialDraft: string
+    initialRounds?: number
+    noProgressRecoveryUsed?: boolean
     initialFinishReason: LLMCompletion['finishReason']
+    initialFailureCode?: GenerationAttemptReceipt['failureCode']
     targetChars: number
     callbacks: CommandExecuteParams['callbacks']
     context: CommandExecuteParams['context']
@@ -965,9 +1186,10 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       enUSText,
     )
     let draft = params.initialDraft
-    let rounds = 0
+    let rounds = params.initialRounds ?? 0
     let lastFinishReason = params.initialFinishReason
-    let noProgressRecoveryUsed = false
+    let lastFailureCode = params.initialFailureCode
+    let noProgressRecoveryUsed = params.noProgressRecoveryUsed ?? false
     let recoveryPending = false
 
     if (
@@ -1082,16 +1304,17 @@ ${visibleTail}`,
             : 'chapter-draft-continuation',
           reasoningStage: 'drafting',
           output: 'visible-text',
+          budgetDemand: { kind: 'draft-units', writingLanguage: params.writingLanguage, requestedUnits: Math.max(1, remaining), segmentable: false },
           messages: [
             { role: 'system', content: params.systemRole },
             { role: 'user', content: continuationPrompt },
           ],
         }, {
           signal: params.signal,
-          onChunk: chunk => {
+          ...(!params.mainOwned ? { onChunk: (chunk: string) => {
             if (params.context.cancelled) return
             preview.push(chunk)
-          },
+          } } : {}),
         })
       } catch (error) {
         params.onRecoverableCandidate(preview.snapshot())
@@ -1100,6 +1323,7 @@ ${visibleTail}`,
         preview.stop()
       }
       const addition = completionFromOutcome(outcome)
+      lastFailureCode = outcome.receipt.failureCode
       logDraftAttempt(
         params.callbacks,
         params.context,
@@ -1144,6 +1368,7 @@ ${visibleTail}`,
         ))
         continue
       }
+      await params.acknowledge?.(outcome, candidateDraft)
       draft = candidateDraft
       params.onRecoverableCandidate(draft)
       params.callbacks.replaceText?.(draft)
@@ -1153,8 +1378,12 @@ ${visibleTail}`,
     }
 
     this.assertNotCancelled(params.context)
+    if (lastFinishReason === 'length'
+      && countDraftUnits(draft) > draftTargetUnitRange(params.targetChars).maximum) return draft
     if (lastFinishReason !== 'stop') {
       const error = this.createIncompleteCompletionError(lastFinishReason)
+      if (lastFailureCode === 'GENERATION_PROVIDER_FAILED' || lastFailureCode === 'NETWORK_ERROR')
+        Object.assign(error, { code: lastFailureCode })
       error.message = uiText(error.message, (() => {
         switch (lastFinishReason) {
           case 'length':
@@ -1170,17 +1399,9 @@ ${visibleTail}`,
       throw error
     }
 
-    const lowerBound = Math.floor(params.targetChars * MIN_TARGET_COMPLETION_RATIO)
-    if (countDraftUnits(draft) < lowerBound) {
-      throw new Error(
-        uiText(
-          `模型已声明生成结束，但正文仅约 ${countDraftUnits(draft)}/${params.targetChars} 字，明显未达到章节目标，结果未保存。` +
-            '请提高最大输出 Tokens、降低本章目标字数，或改用输出能力更强的模型后重试。',
-          `The model reported completion, but the draft is only about ${countDraftUnits(draft)}/${params.targetChars} units and clearly misses the chapter target, so it was not saved. ` +
-            'Increase the maximum output tokens, lower the chapter target, or use a model with greater output capacity and try again.',
-        ),
-      )
-    }
+    const lowerBound = draftTargetUnitRange(params.targetChars).minimum
+    const draftUnits = countDraftUnits(draft)
+    if (draftUnits < lowerBound) throw draftTooShortError(params.context, draftUnits, params.targetChars)
 
     return draft
   }
@@ -1334,10 +1555,12 @@ ${visibleTail}`,
     const sources: FinalizedMaterialSource[] = []
     for (const { projection, evidence } of selected) {
       try {
+        const sourceDraftId = projection.sourceStatus === 'stale' && projection.currentFinalizedDraftId
+          ? projection.currentFinalizedDraftId : projection.draftId
         const sourceRead = await ipc.invokeWithProjectSession(
           projectSession,
           'db:continuity-read-source',
-          projection.draftId,
+          sourceDraftId,
           projectPath,
         )
         const content = sourceRead.status === 'valid'
@@ -1348,8 +1571,8 @@ ${visibleTail}`,
         if (projection.chapterNumber === currentChapter - 1 && !content.trim()) continue
         sources.push({
           chapterNumber: projection.chapterNumber,
-          draftId: projection.draftId,
-          title: projection.chapterTitle,
+          draftId: sourceDraftId,
+          title: sourceRead.status === 'valid' ? sourceRead.snapshot.chapterTitle : sourceRead.status === 'legacy' ? sourceRead.chapterTitle : projection.chapterTitle,
           content,
           evidence,
           includeEnding: projection.chapterNumber === currentChapter - 1,

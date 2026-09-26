@@ -1,328 +1,104 @@
-import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
-import { useProjectStore } from '../../../stores/project-store'
+import type { CommandExecuteParams, WorkflowGenerationRuntimeDependencies } from './base-command'
+import type { PreparedReviewRevisionContext } from '../../../shared/review-revision-generation'
+import { ReviewRevisionCommand, type ReviewRevisionCommandSource } from './review-revision-command'
+import { hasIncludedReviewItems, parseHumanConfirmedReviewSnapshot, renderHumanConfirmedReviewBrief } from '../../../shared/human-confirmed-review'
+import { hashAuthorText } from '../../../shared/source-ref'
 import { resolvePromptTemplate } from '../../prompt-templates'
 import { ChapterPromptBuilder } from '../../prompts/prompt-builder'
-import { ipc } from '../../ipc-client'
-import { requireIpcSuccess } from '../../ipc-result'
-import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
-import { readWorkflowDraftMeta } from '../workflow-draft-meta'
 import {
-  requireWorkflowProjectSession,
-  workflowUiLocale,
-  workflowUiText,
-  workflowWritingLanguage,
-} from '../workflow-project-session'
-import { assertMateriallyCompleteRevision } from './refinement-completeness'
+  ChapterMaterialCapacityError,
+  selectReviewRevisionMaterials,
+  type ReviewRevisionMaterialAdmission,
+} from '../chapter-materials'
+import { requireWorkflowProjectSession, workflowUiText } from '../workflow-project-session'
 import { countDraftUnits } from '../../../shared/draft-units'
-import { throwIfSourceDraftChanged } from '../source-draft-changed'
-import {
-  hasIncludedReviewItems,
-  parseHumanConfirmedReviewSnapshot,
-  renderHumanConfirmedReviewBrief,
-  serializeHumanConfirmedReviewSnapshot,
-  type HumanConfirmedReviewSnapshot,
-} from '../../../shared/human-confirmed-review'
 
+function appendCompleteRevisionContract(prompt: string, source: string, writingLanguage: 'zh-CN' | 'en-US'): string {
+  const sourceUnits = countDraftUnits(source)
+  const range = { minimum: Math.floor(sourceUnits * 0.8), maximum: Math.ceil(sourceUnits * 1.2) }
+  const contract = writingLanguage === 'en-US'
+    ? `[Complete-revision hard constraint]\nThe frozen source contains ${sourceUnits} prose units. Output the complete revised chapter, between ${range.minimum} and ${range.maximum} prose units (80%-120% of the source). Preserve every unaffected paragraph or line in full. Do not summarize, excerpt, collapse repeated passages, or use placeholders. Apply only the confirmed findings. If a confirmed finding requires an action or result to occur in this chapter, the added action or result must itself satisfy the finding's target meaning and must already have happened in the prose. For a cost or loss, show the concrete consequence already lost, spent, or endured; signing, accepting responsibility, or saying that a character will pay later remains a promise and is not the cost itself. Merely reversing a negation, or stating an abstract decision, plan, promise, or commitment, does not count. Reconcile later paragraphs so they do not preserve a state that contradicts the new event. Output revision prose only.`
+    : `【完整修稿硬约束】\n冻结源稿共 ${sourceUnits} 个正文单位。必须输出修订后的完整章节，长度须在 ${range.minimum}-${range.maximum} 个正文单位之间（源稿的 80%-120%）。所有未受影响的段落或行必须完整保留；不得摘要、节选、合并重复段落或使用占位符。只处理已确认的问题。若已确认问题要求当章发生动作或结果，新增动作或结果本身必须满足该问题的目标语义，并且已经在正文中发生。对于代价或损失，必须写出已经失去、消耗或承受的具体后果；签字、认责或声称以后负责仍只是承诺，不是代价本身。简单否定翻转，或抽象的决定、计划、承诺、保证，均不算完成。必须同步修正后文，不得保留与新增事件相反的状态。最终只输出修订后正文。`
+  return `${prompt}\n\n${contract}`
+}
 
-export interface RefineFromReviewParams {
-  draftPath: string
-  draftContent: string
-  /** Persisted JSON content of the immutable human-confirmed review snapshot. */
+export interface RefineFromReviewParams extends ReviewRevisionCommandSource {
   confirmedReviewContent?: string
-  /** ID of the review row that stores the confirmed snapshot. */
   reviewSourceId?: number
-  /** @deprecated Raw AI review content is deliberately never sent to the refiner. */
+  /** @deprecated Only the persisted confirmation is a revision input. */
   reviewReport?: string
   reviewFileName?: string
-  chapterNumber: number
-  /** @deprecated Author guidance must be persisted in the confirmation snapshot. */
+  /** @deprecated Author guidance is read from the persisted confirmation. */
   userRefinePrompt?: string
 }
 
-export class RefineFromReviewCommand extends BaseWorkflowCommand<string> {
-  constructor(
-    private params: RefineFromReviewParams,
-    generationDependencies?: WorkflowGenerationRuntimeDependencies,
-  ) {
-    super(generationDependencies)
+export class RefineFromReviewCommand extends ReviewRevisionCommand {
+  private readonly requested: RefineFromReviewParams
+  constructor(params: RefineFromReviewParams, dependencies?: WorkflowGenerationRuntimeDependencies) {
+    super('refine-from-review', params, [], {
+      reviewSourceId: params.reviewSourceId, confirmedReviewContent: params.confirmedReviewContent,
+    }, dependencies)
+    this.requested = params
   }
 
-  async execute(params: CommandExecuteParams): Promise<string> {
-    const confirmedReview = await this.requireConfirmedReview(params)
-    return this.executeWithGenerationRuntime(
-      'text',
-      params,
-      () => this.executeWithinGeneration(params, confirmedReview.snapshot, confirmedReview.reviewSourceId),
-    )
+  override execute(params: CommandExecuteParams): Promise<string> {
+    if (!this.requested.recoveryHandle) {
+      if (!Number.isSafeInteger(this.requested.reviewSourceId) || (this.requested.reviewSourceId ?? 0) <= 0) {
+        return Promise.reject(new Error(workflowUiText(params.context, '审稿修稿需要已保存的人工确认快照，未调用模型。',
+          'Review-based revision requires a saved human-confirmed review snapshot. The model was not called.')))
+      }
+      if (!parseHumanConfirmedReviewSnapshot(this.requested.confirmedReviewContent ?? '')) {
+        return Promise.reject(new Error(workflowUiText(params.context, '审稿修稿需要有效的人工确认快照，未调用模型。',
+          'Review-based revision requires a valid human-confirmed review snapshot. The model was not called.')))
+      }
+    }
+    return super.execute(params)
   }
 
-  /**
-   * A renderer-provided JSON string is only a request to use a confirmation
-   * record. Before acquiring a generation lease, resolve that record through
-   * the frozen project session and use its persisted content as the source of
-   * truth. This keeps review_source_id traceable to the exact prompt input.
-   */
-  private async requireConfirmedReview({ context }: CommandExecuteParams): Promise<{
-    snapshot: HumanConfirmedReviewSnapshot
-    reviewSourceId: number
-  }> {
-    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
-    const reviewSourceId = this.params.reviewSourceId
-    if (
-      typeof reviewSourceId !== 'number'
-      || !Number.isSafeInteger(reviewSourceId)
-      || reviewSourceId <= 0
-    ) {
-      throw new Error(text(
-        '审稿修稿需要已保存的人工确认快照，未调用模型。',
-        'Review-based revision requires a saved human-confirmed review snapshot. The model was not called.',
-      ))
+  protected async generateAndCommit(prepared: PreparedReviewRevisionContext, params: CommandExecuteParams) {
+    if (this.recovery?.composition && this.recovery.lastCompositionFinishReason === 'stop') {
+      return this.generateRevision(prepared, params, '', '')
     }
-
-    const requestedSnapshot = this.params.confirmedReviewContent
-      ? parseHumanConfirmedReviewSnapshot(this.params.confirmedReviewContent)
-      : null
-    if (!requestedSnapshot) {
-      throw new Error(text(
-        '审稿修稿需要有效的人工确认快照，未调用模型。',
-        'Review-based revision requires a valid human-confirmed review snapshot. The model was not called.',
-      ))
+    const frozen = prepared.context
+    const confirmation = frozen.confirmation?.snapshot
+    if (!confirmation?.sourceDraft || !hasIncludedReviewItems(confirmation)) throw new Error(workflowUiText(params.context,
+      '缺少有效的已确认审稿清单，请重新确认。', 'A valid confirmed review checklist is required. Confirm the review again.'))
+    params.callbacks.log(workflowUiText(params.context, '正在根据已确认的审稿项精准修复...', 'Revising from the confirmed review checklist...'))
+    const projectSession = requireWorkflowProjectSession(params.context)
+    const template = await resolvePromptTemplate('refine_from_review', projectSession, frozen.writingLanguage)
+    if (!template) throw new Error(workflowUiText(params.context, '未找到审稿修复模板', 'The review-based revision template was not found.'))
+    // 本入口的证据材料就是人工确认快照渲染出的清单：它是作者已确认的事实，
+    // 因此按 author 来源、必需材料进同一条准入。措辞不变，渲染文本逐字透传。
+    const reviewBrief = renderHumanConfirmedReviewBrief(confirmation, frozen.writingLanguage)
+    const current = { projectId: projectSession.projectId, epoch: projectSession.leaseId }
+    let admission: ReviewRevisionMaterialAdmission
+    try {
+      admission = selectReviewRevisionMaterials({
+        current,
+        writingLanguage: frozen.writingLanguage,
+        materials: [{
+          identity: { projectId: current.projectId, sourceId: `review:confirmed:${frozen.confirmation!.reviewSourceId}`,
+            revision: frozen.confirmation!.reviewSourceId, contentHash: await hashAuthorText(reviewBrief),
+            provenance: 'author' },
+          category: 'author',
+          required: true,
+          text: reviewBrief,
+        }],
+        relevanceTerms: [],
+      })
+    } catch (error) {
+      if (!(error instanceof ChapterMaterialCapacityError)) throw error
+      throw new Error(workflowUiText(params.context,
+        '已确认的审稿清单超出上下文容量，已停止修稿。请精简审稿项后重试。',
+        'The confirmed review checklist exceeds the context capacity, so the revision stopped. Trim the review items and try again.'))
     }
-
-    const projectSession = requireWorkflowProjectSession(context)
-    this.assertNotCancelled(context)
-    const persistedReview = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:review-get-full',
-      reviewSourceId,
-      context.projectPath,
-    )
-    this.assertNotCancelled(context)
-    if (!persistedReview) {
-      throw new Error(text(
-        '找不到已保存的人工确认快照，未调用模型。',
-        'The saved human-confirmed review snapshot could not be found. The model was not called.',
-      ))
-    }
-    if (persistedReview.id !== reviewSourceId) {
-      throw new Error(text(
-        '人工确认快照记录校验失败，未调用模型。',
-        'The human-confirmed review snapshot record failed validation. The model was not called.',
-      ))
-    }
-
-    const persistedSnapshot = parseHumanConfirmedReviewSnapshot(persistedReview.content)
-    if (!persistedSnapshot) {
-      throw new Error(text(
-        '已保存的审稿记录不是有效的人工确认快照，未调用模型。',
-        'The saved review record is not a valid human-confirmed review snapshot. The model was not called.',
-      ))
-    }
-    if (
-      serializeHumanConfirmedReviewSnapshot(requestedSnapshot)
-      !== serializeHumanConfirmedReviewSnapshot(persistedSnapshot)
-    ) {
-      throw new Error(text(
-        '人工确认快照与已保存记录不一致，请重新确认后再试。',
-        'The human-confirmed review snapshot does not match the saved record. Confirm it again and retry.',
-      ))
-    }
-    const sourceDraft = persistedSnapshot.sourceDraft
-    if (
-      !sourceDraft
-      || !persistedReview.sourceDraft
-      || persistedReview.sourceDraft.id !== sourceDraft.id
-      || persistedReview.sourceDraft.chapterNumber !== sourceDraft.chapterNumber
-      || persistedReview.sourceDraft.version !== sourceDraft.version
-      || persistedReview.sourceDraft.status !== sourceDraft.status
-      || persistedReview.sourceDraft.content !== sourceDraft.content
-    ) {
-      throw new Error(text(
-        '人工确认快照缺少可信的冻结源稿，未调用模型；请重新运行 AI 审稿。',
-        'The confirmed review has no trusted frozen source draft. The model was not called; run AI review again.',
-      ))
-    }
-
-    const baseDraft = await readWorkflowDraftMeta(
-      this.params.draftPath,
-      context.projectPath,
-      projectSession,
-    )
-    this.assertNotCancelled(context)
-    if (!baseDraft) {
-      throw new Error(text(
-        '找不到基准草稿版本，未调用模型。',
-        'The base draft version could not be found. The model was not called.',
-      ))
-    }
-    if (persistedReview.baseDraftId !== baseDraft.id) {
-      throw new Error(text(
-        '人工确认快照不属于当前草稿版本，未调用模型。',
-        'The human-confirmed review snapshot does not belong to the current draft version. The model was not called.',
-      ))
-    }
-    const currentDraft = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:draft-get-full',
-      baseDraft.id,
-      context.projectPath,
-    )
-    this.assertNotCancelled(context)
-    if (
-      !currentDraft
-      || baseDraft.id !== sourceDraft.id
-      || baseDraft.chapterNumber !== sourceDraft.chapterNumber
-      || baseDraft.version !== sourceDraft.version
-      || baseDraft.status !== sourceDraft.status
-      || currentDraft.content !== sourceDraft.content
-      || this.params.draftContent !== sourceDraft.content
-    ) {
-      throw new Error(text(
-        '源草稿已变化，未调用模型；请重新运行 AI 审稿并确认清单。',
-        'The source draft changed. The model was not called; run AI review and confirm the checklist again.',
-      ))
-    }
-    if (!hasIncludedReviewItems(persistedSnapshot)) {
-      throw new Error(text(
-        '人工确认快照没有任何纳入项，未调用模型。',
-        'The human-confirmed review snapshot has no included items. The model was not called.',
-      ))
-    }
-
-    return { snapshot: persistedSnapshot, reviewSourceId }
-  }
-
-  private async executeWithinGeneration(
-    { context, callbacks }: CommandExecuteParams,
-    confirmedReview: HumanConfirmedReviewSnapshot,
-    reviewSourceId: number,
-  ): Promise<string> {
-    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
-    const projectSession = requireWorkflowProjectSession(context)
-    const project = useProjectStore.getState().currentProject
-    if (!project || !sameProjectSessionContext(
-      projectSession,
-      projectSessionContextFromProject(project),
-    )) throw new Error(text('当前项目已切换，修稿已停止', 'The current project changed, so revision stopped.'))
-    const novelConfig = Object.freeze({ ...project.novelConfig })
-    const writingLanguage = workflowWritingLanguage(context)
-
-    callbacks.log(text(
-      '正在根据已确认的审稿项精准修复...',
-      'Revising from the confirmed review checklist...',
-    ))
-
-    const template = await resolvePromptTemplate('refine_from_review', projectSession, writingLanguage)
-    if (!template) throw new Error(text('未找到审稿修复模板', 'The review-based revision template was not found.'))
-
-    const confirmedReviewBrief = renderHumanConfirmedReviewBrief(confirmedReview, writingLanguage)
-
-    const promptBuilder = new ChapterPromptBuilder(template, writingLanguage)
-      .withReviewReport(confirmedReviewBrief)
-      .withDraftContent(this.params.draftContent)
-      .withGlobalGuidance(novelConfig.globalGuidance || '')
-      // The brief already contains the confirmed author guidance. Do not let
-      // a transient UI field bypass the persisted confirmation snapshot.
+    const builder = new ChapterPromptBuilder(template, frozen.writingLanguage)
+      .withReviewReport(admission.admitted[0]?.text ?? '')
+      .withDraftContent(frozen.source.content)
+      .withGlobalGuidance(frozen.config.globalGuidance || '')
       .withUserRefinePrompt('')
-
-    const sourceDraft = confirmedReview.sourceDraft
-    const currentDraft = sourceDraft
-      ? await ipc.invokeWithProjectSession(
-          projectSession,
-          'db:draft-get-full',
-          sourceDraft.id,
-          context.projectPath,
-        )
-      : null
-    this.assertNotCancelled(context)
-    if (
-      !sourceDraft
-      || !currentDraft
-      || currentDraft.id !== sourceDraft.id
-      || currentDraft.chapterNumber !== sourceDraft.chapterNumber
-      || currentDraft.version !== sourceDraft.version
-      || currentDraft.status !== sourceDraft.status
-      || currentDraft.content !== sourceDraft.content
-    ) {
-      throw new Error(text(
-        '源草稿已变化，未调用模型；请重新运行 AI 审稿并确认清单。',
-        'The source draft changed. The model was not called; run AI review and confirm the checklist again.',
-      ))
-    }
-
-    const refined = await this.callLLMWithBoundedCompletion(
-      promptBuilder.build(),
-      promptBuilder.getSystemRole(),
-      callbacks,
-      { mode: 'append-visible-text', maxContinuations: 3 },
-      { purpose: 'refine-from-review', reasoningStage: 'review', writingSkillStage: 'refinement' },
-      context,
-    )
-    this.assertNotCancelled(context)
-    const cleanRefined = this.stripThinkingTags(refined).trim()
-    assertMateriallyCompleteRevision(
-      this.params.draftContent,
-      cleanRefined,
-      novelConfig.wordsPerChapter,
-      workflowUiLocale(context),
-    )
-
-    if (!sameProjectSessionContext(
-      projectSession,
-      projectSessionContextFromProject(useProjectStore.getState().currentProject),
-    )) throw new Error(text('当前项目已切换，修稿结果未保存', 'The current project changed, so the revision was not saved.'))
-
-    const baseDraft = await readWorkflowDraftMeta(this.params.draftPath, context.projectPath, projectSession)
-    if (!baseDraft) throw new Error(text('找不到基准草稿版本', 'The base draft version could not be found.'))
-
-    this.assertNotCancelled(context)
-    const createRes = await ipc.invokeWithProjectSession(projectSession, 'db:revision-replace-pending', {
-      baseDraftId: baseDraft.id,
-      revisionType: 'review-fix',
-      content: cleanRefined,
-      wordCount: countDraftUnits(cleanRefined),
-      userPrompt: confirmedReview.authorGuidance || undefined,
-      reviewSourceId,
-      expectedSource: confirmedReview.sourceDraft,
-    }, context.projectPath)
-    throwIfSourceDraftChanged(createRes, workflowUiLocale(context), 'refine')
-    requireIpcSuccess(createRes, text('创建审稿修订稿', 'Create review-based revision'))
-    if (createRes.id === undefined) throw new Error(text(
-      '创建审稿修订稿失败：未返回修订稿编号',
-      'Failed to create the review-based revision: no revision ID was returned.',
-    ))
-
-    const revIndex = createRes.revisionIndex ?? 0
-
-    this.assertNotCancelled(context)
-    if (!sameProjectSessionContext(
-      projectSession,
-      projectSessionContextFromProject(useProjectStore.getState().currentProject),
-    )) throw new Error(text(
-      '当前项目已切换，已拒绝打开旧修订稿',
-      'The current project changed, so the stale revision was not opened.',
-    ))
-    const { useEditorStore } = await import('../../../stores/editor-store')
-    useEditorStore.getState().openFile({
-      id: `diff-${this.params.draftPath}-${createRes.id}`,
-      name: text(
-        `审稿修复：第${this.params.chapterNumber}章`,
-        `Review fix: Chapter ${this.params.chapterNumber}`,
-      ),
-      type: 'diff',
-      filePath: this.params.draftPath,
-      originalContent: this.params.draftContent,
-      content: cleanRefined,
-      revisionPath: `vela://revision/${createRes.id}`,
-      chapterNumber: this.params.chapterNumber,
-      chapterDir: `vela://draft/ch${this.params.chapterNumber}`,
-      projectKey: context.projectPath,
-    })
-
-    callbacks.log(text(
-      `审稿修复完成（${countDraftUnits(cleanRefined)} 字），已生成修订稿版本 r${revIndex}`,
-      `Review-based revision complete (${countDraftUnits(cleanRefined)} words); revision r${revIndex} is ready.`,
-    ))
-    return cleanRefined
+    const prompt = appendCompleteRevisionContract(builder.build(), frozen.source.content, frozen.writingLanguage)
+    await this.bindMaterialDecision(params, admission.decision, prompt)
+    return this.generateRevision(prepared, params, prompt, builder.getSystemRole())
   }
 }

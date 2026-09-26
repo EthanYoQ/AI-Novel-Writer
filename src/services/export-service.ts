@@ -386,11 +386,8 @@ export async function exportNovel(
         let content = `${project.name}\n${'='.repeat(project.name.length * 2)}\n\n`
 
         for (const ch of chapterContents) {
-          const chapterHeading = project.novelConfig.writingLanguage === 'en-US'
-            ? `Chapter ${ch.chapterNumber}${ch.title ? ` ${ch.title}` : ''}`
-            : `第${ch.chapterNumber}章${ch.title ? ` ${ch.title}` : ''}`
           // 简单去除 Markdown 标记
-          const plainText = ch.content
+          const plainText = ch.markdownContent
             .replace(/^#{1,6}\s+/gm, '')  // 去掉标题标记
             .replace(/\*\*(.*?)\*\*/g, '$1')  // 去掉加粗
             .replace(/\*(.*?)\*/g, '$1')  // 去掉斜体
@@ -398,7 +395,7 @@ export async function exportNovel(
             .replace(/---+/g, '\n')  // 分隔线
             .trim()
 
-          content += `${chapterHeading}\n\n${plainText}\n\n`
+          content += `${plainText}\n\n`
         }
 
         outputPath = `${projectFileStem}.txt`

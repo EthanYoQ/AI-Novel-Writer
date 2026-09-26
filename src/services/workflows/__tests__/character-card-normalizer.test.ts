@@ -399,3 +399,20 @@ describe('character card normalizer', () => {
     )
   })
 })
+
+
+describe('角色提议的原始身份记录', () => {
+  it('保留两来源同名、大小写名称、原始关系和字段，不按名字合并', async () => {
+    const { parseCharacterProposalCards } = await import('../character-card-normalizer')
+    const input = [
+      { name: '林岚', sourceId: 'first', notes: '甲来源原文', relationships: [{ target: '顾问', relation: '导师' }] },
+      { name: '林岚', sourceId: 'second', notes: '乙来源原文', relationships: '与顾问的关系尚不确定' },
+      { name: 'LIN', notes: '大写人物' }, { name: 'lin', notes: '另一人物' },
+    ]
+    const result = parseCharacterProposalCards(JSON.stringify({ characterCards: input }))
+    expect(result).toEqual(input)
+    expect(result).toHaveLength(4)
+    result[0].notes = '仅修改返回对象'
+    expect(input[0].notes).toBe('甲来源原文')
+  })
+})

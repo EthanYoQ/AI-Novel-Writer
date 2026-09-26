@@ -52,7 +52,7 @@ describe('packaged official homepage smoke', () => {
     let currentHandler: (() => Promise<unknown>) | undefined
     const destroy = vi.fn()
     const executeJavaScript = vi.fn(async (source: string, userGesture?: boolean) => {
-      expect(source).toContain("window.velaAPI.invoke('official-homepage:open')")
+      expect(source).toContain("window.aiNovelAPI.invoke('official-homepage:open')")
       expect(source).not.toContain(OFFICIAL_HOMEPAGE_URL)
       expect(userGesture).toBe(true)
       return currentHandler?.()

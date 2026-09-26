@@ -1,3 +1,5 @@
+import { formatResourceUri } from '../../shared/project-paths'
+import { parseResourceUri, resourceWriteAllowed } from '../../shared/project-paths'
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { Sparkles, Search, BadgeCheck, Save, FileStack, FileText, Wrench, Check } from 'lucide-react'
 
@@ -22,13 +24,13 @@ import {
 import { getPendingRevisions, getReviewsForVersion, type RevisionEntry } from '../../services/draft-index'
 import { readDraftBody } from '../../stores/draft-store'
 import { ipc } from '../../services/ipc-client'
-import { requireIpcSuccess } from '../../services/ipc-result'
 import { retryFinalizationPublication } from '../../services/finalization-client'
 import { captureFinalizationSnapshot } from '../../services/finalization-snapshot'
 
 import { DRAFT_STATUS_LABEL, DRAFT_STATUS_COLOR } from '../../shared/draft-status'
 import { countDraftUnits } from '../../shared/draft-units'
 import { PostProcessStatusPanel } from '../ui/PostProcessStatusPanel'
+import { SaveFeedback, type SaveOutcome } from './save-feedback'
 import { getChapterFinalizeScope } from '../../services/workflows/workflow-utils'
 import { guardRepairPostProcess } from '../../services/workflow-guards'
 import {
@@ -110,7 +112,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       const bp = Array.isArray(bps) ? bps.find((b: unknown) => (b as { chapterNumber?: number }).chapterNumber === m.chapterNumber) : null
       setMeta({ ...m, chapterTitle: bp ? (bp as { title?: string }).title : undefined, filePath, fileName: `v${m.version}`, createdAt: m.updatedAt ?? m.createdAt })
       // 使用 DB 化的虚拟 chapterDir（用于 draft-index 兼容层解析章节号）
-      const chapterDir = `vela://draft/ch${m.chapterNumber}`
+      const chapterDir = `ai-novel://draft/ch${m.chapterNumber}`
       // 检查待合并修稿
       const pending = await getPendingRevisions(chapterDir, m.version, projectKey)
       if (!cancelled && isProjectSessionCurrent(projectSession)) setPendingRevisions(pending)
@@ -128,7 +130,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   }, [currentProject, filePath, projectKey])
 
   const status: DraftStatus = tabDraftStatus ?? meta?.status ?? 'draft'
-  const isReadonly = status === 'finalized' || status === 'archived'
+  const isReadonly = status === 'finalized' || status === 'archived' || !resourceWriteAllowed(filePath)
 
   // 检查是否有相关章节工作流正在运行
   // ✅ 只订阅 activeRuns，不订阅 globalLogs 等高频更新字段
@@ -142,6 +144,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   const isChapterBusy = !!activeChapterRun
 
   const [saving, setSaving] = useState(false)
+  const [saveOutcome, setSaveOutcome] = useState<SaveOutcome>('idle')
   const [confirmAction, setConfirmAction] = useState<'refine' | 'review' | null>(null)
   const [userRefinePrompt, setUserRefinePrompt] = useState('')
   // 审稿维度多选
@@ -180,8 +183,8 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   const finalizationConflict = editorTab?.finalizationConflict
   const currentBodyRef = useRef(content)
 
-  /** 保存（vela://draft/ 走 DB，其他走 FS） */
-  const doSave = async (draftContent: string) => {
+  /** 保存（ai-novel://draft/ 走 DB，其他走 FS） */
+  const doSave = async (draftContent: string, propagateFailure = false) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     const targetTab = useEditorStore.getState().tabs.find(
@@ -199,10 +202,12 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       contentRevision: targetTab.contentRevision ?? 0,
     }
     setSaving(true)
+    setSaveOutcome('idle')
     try {
-      if (filePath.startsWith('vela://draft/') || filePath.startsWith('vela://manuscript/')) {
-        const prefix = filePath.startsWith('vela://draft/') ? 'vela://draft/' : 'vela://manuscript/'
-        const draftId = parseInt(filePath.replace(prefix, ''))
+      const resource = parseResourceUri(filePath)
+      if (!resourceWriteAllowed(filePath) || resource?.kind !== 'draft') throw new Error('资源只读或无效')
+      {
+        const draftId = resource.id
         const result = await ipc.invokeWithProjectSession(
           projectSession,
           'db:draft-update-content',
@@ -212,17 +217,6 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
           projectSession.projectPath,
         )
         if (!result.success) throw new Error(result.error || text('草稿保存失败', 'Could not save the draft'))
-      } else {
-        requireIpcSuccess(
-          await ipc.invokeWithProjectSession(
-            projectSession,
-            'fs:write-file',
-            filePath,
-            saveSnapshot.content,
-            projectSession.projectPath,
-          ),
-          '保存草稿文件',
-        )
       }
       if (!isProjectSessionCurrent(projectSession)) return
       const currentTab = useEditorStore.getState().tabs.find(
@@ -230,7 +224,15 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       )
       if (currentTab) {
         useEditorStore.getState().settleTabSave(currentTab.id, saveSnapshot)
+        const settledTab = useEditorStore.getState().tabs.find(tab => tab.id === currentTab.id)
+        setSaveOutcome(settledTab?.dirty ? 'idle' : 'saved')
       }
+    } catch (error) {
+      if (isProjectSessionCurrent(projectSession)) {
+        setSaveOutcome('failed')
+        toast.error(error instanceof Error ? error.message : text('草稿保存失败', 'Could not save the draft'))
+      }
+      if (propagateFailure) throw error
     } finally {
       if (isProjectSessionCurrent(projectSession)) setSaving(false)
     }
@@ -245,7 +247,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       tabId,
       type: 'chapter',
       projectKey,
-      save: () => exitSaveRef.current(currentBodyRef.current),
+      save: () => exitSaveRef.current(currentBodyRef.current, true),
     })
   }, [projectKey, tabId])
 
@@ -270,7 +272,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       contentRevision: targetTab.contentRevision ?? 0,
     })
 
-    if (targetTab.dirty) await doSave(body)
+    if (targetTab.dirty) await doSave(body, true)
     if (!isProjectSessionCurrent(projectSession)) return null
     return Object.freeze({ body, sourceDraft })
   }
@@ -490,8 +492,8 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       content: targetTab.content ?? content,
       contentRevision: targetTab.contentRevision ?? 0,
     }
-    // 使用 vela://revision/{id} 协议路径读取修稿内容
-    const revPath = `vela://revision/${rev.id}`
+    // 使用 ai-novel://revision/{id} 协议路径读取修稿内容
+    const revPath = formatResourceUri({ kind: 'revision', id: rev.id })
 
     // 读取原稿和修稿
     const [currentSavedContent, revision] = await Promise.all([
@@ -551,7 +553,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
       toast.warning(mergeData.staleReason)
       return
     }
-    const chapterDir = `vela://draft/ch${meta.chapterNumber}`
+    const chapterDir = `ai-novel://draft/ch${meta.chapterNumber}`
     const currentTarget = useEditorStore.getState().tabs.find(
       tab => tab.id === tabId && tab.projectKey === projectKey,
     )
@@ -587,6 +589,10 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
         setMergeData(null)
         setMeta(prev => prev ? { ...prev, status: 'revised' } : prev)
         toast.success(text('合并完成，草稿已更新', 'Merge complete. The draft is updated.'))
+        if (result.postCommitError) toast.warning(text(
+          '合并已持久化，但自动复验未启动；请从审稿报告重试。',
+          'The merge is durable, but the automatic recheck did not start. Retry it from the review report.',
+        ))
         const { getPendingRevisions } = await import('../../services/draft-index')
         const pending = await getPendingRevisions(chapterDir, meta.version, projectKey)
         if (isProjectSessionCurrent(projectSession)) setPendingRevisions(pending)
@@ -603,7 +609,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
   const openLatestReview = async () => {
     const projectSession = captureProjectSession(currentProject)
     if (!meta || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
-    const chapterDir = `vela://draft/ch${meta.chapterNumber}`
+    const chapterDir = `ai-novel://draft/ch${meta.chapterNumber}`
     const { getLatestReview } = await import('../../services/draft-index')
     if (!isProjectSessionCurrent(projectSession)) return
     const latest = await getLatestReview(chapterDir, meta.version, projectKey)
@@ -611,7 +617,7 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
     if (!latest) return
 
     // 使用 review 的数据库 ID 读取审稿报告内容
-    const reportContent = await readDraftBody(`vela://review/${latest.id}`, projectKey, projectSession)
+    const reportContent = await readDraftBody(formatResourceUri({ kind: 'review', id: latest.id }), projectKey, projectSession)
     if (!isProjectSessionCurrent(projectSession)) return
     if (!reportContent) return
 
@@ -673,12 +679,14 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
               />
             )}
 
+            <SaveFeedback dirty={isDirty} saving={saving} outcome={saveOutcome} />
+
             {/* 保存按钮 */}
             {isDirty && (
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => doSave(currentBodyRef.current)}
+                onClick={() => { void doSave(currentBodyRef.current) }}
                 disabled={saving}
                 title={text('保存（⌘S）', 'Save (Ctrl+S)')}
               >
@@ -850,9 +858,14 @@ function DraftEditorSession({ tabId, filePath, content, projectKey }: Props) {
           onCharCountChange={setCharCount}
           onChange={(text) => {
             currentBodyRef.current = text
+            setSaveOutcome('idle')
             useEditorStore.getState().updateTabContent(tabId, text)
           }}
           onSave={(text) => doSave(text)}
+          paperHead={meta?.chapterTitle ? {
+            title: meta.chapterTitle,
+            subtitle: text(`第 ${meta.chapterNumber} 章`, `Chapter ${meta.chapterNumber}`),
+          } : undefined}
         />
 
 

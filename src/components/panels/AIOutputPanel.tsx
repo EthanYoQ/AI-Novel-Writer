@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import GenerationBudgetDiagnostics from './GenerationBudgetDiagnostics'
+import type { GenerationBatchProgress, GenerationRecoveryContext } from '../../shared/generation-owner-contract'
+import type { ReviewRevisionRecovery } from '../../shared/review-revision-generation'
+import type { EditorInlineRecovery } from '../../shared/editor-inline-generation'
+import { createReviewRevisionRecoveryWorkflow } from '../../services/workflows/review-revision-recovery-workflow'
+import type { MainGenerationRunView } from '../../services/generation/generation-runtime'
+import { createDraftRecoveryWorkflow, createBatchRecoveryWorkflow } from '../../services/workflows/draft-recovery-workflow'
 import { CheckCircle2, Loader2, Circle, Sparkles, X, ChevronRight, StopCircle, AlertTriangle, SlidersHorizontal, Copy, Pencil, Trash2 } from 'lucide-react'
 import {
   useWorkflowStore,
@@ -9,6 +16,7 @@ import {
 import { useLayoutStore } from '../../stores/layout-store'
 import { useEditorStore } from '../../stores/editor-store'
 import { useProjectStore } from '../../stores/project-store'
+import { useWorkflowReasoningStore } from '../../stores/workflow-reasoning-store'
 import {
   projectSessionContextFromProject,
   sameProjectPathKey,
@@ -36,13 +44,18 @@ function runText(locale: Locale, zhCNText: string, enUSText: string): string {
  */
 export default function AIOutputPanel() {
   // 使用 selector 精确订阅，避免 globalLogs 高频更新导致整个面板重渲染
-  const activeRuns = useWorkflowStore(s => s.activeRuns)
-  const history = useWorkflowStore(s => s.history)
-  const getActiveStreamingRun = useWorkflowStore(s => s.getActiveStreamingRun)
-  const activeRun = getActiveStreamingRun()
-  const activeRunId = activeRun?.id
+  const allActiveRuns = useWorkflowStore(s => s.activeRuns)
+  const allHistory = useWorkflowStore(s => s.history)
   const currentLocale = useLocaleStore(s => s.locale)
   const currentProject = useProjectStore(s => s.currentProject)
+  const activeRuns = currentProject?.path ? allActiveRuns.filter(run => sameProjectPathKey(run.projectPath, currentProject.path)) : []
+  const history = currentProject?.path ? allHistory.filter(run => sameProjectPathKey(run.projectPath, currentProject.path)) : []
+  const activeRun = activeRuns.find(run => run.status === 'running')
+    ?? activeRuns.find(run => run.status === 'waiting')
+    ?? activeRuns.find(run => run.status === 'paused')
+    ?? activeRuns.find(run => run.status === 'cancelling')
+  const activeRunId = activeRun?.id
+  const mainSession = useMemo(() => projectSessionContextFromProject(currentProject), [currentProject])
   const [viewRunId, setViewRunId] = useState<string | null>(null)
   const [recoveryCandidates, setRecoveryCandidates] = useState<RecoveryCandidate[]>([])
   const [recoveryError, setRecoveryError] = useState('')
@@ -116,7 +129,7 @@ export default function AIOutputPanel() {
         `Recovery candidate · Chapter ${currentCandidate.chapterNumber} ${currentCandidate.chapterTitle}`,
       ),
       type: 'chapter',
-      filePath: `vela://recovery/${currentCandidate.candidateId}`,
+      filePath: `ai-novel://recovery/${currentCandidate.candidateId}`,
       content: currentCandidate.visibleText,
       savedContent: currentCandidate.visibleText,
       dirty: false,
@@ -208,6 +221,7 @@ export default function AIOutputPanel() {
 
       {/* 内容区 */}
       <div className="flex-1 overflow-hidden flex flex-col">
+        <MainDraftRecoverySection session={mainSession} locale={currentLocale} refreshKey={history.length} />
         {(recoveryCandidates.length > 0 || recoveryError) && (
           <RecoveryCandidateSection
             candidates={recoveryCandidates}
@@ -217,6 +231,16 @@ export default function AIOutputPanel() {
             onContinue={candidate => { void continueRecoveryCandidate(candidate) }}
             onDiscard={candidate => { void discardRecoveryCandidate(candidate) }}
           />
+        )}
+        {viewRun && (activeRun || recentHistory.length > 0) && (
+          <div className="max-h-36 flex-shrink-0 overflow-y-auto border-b px-3 py-2" style={{ borderColor: 'var(--color-border)' }}>
+            {activeRun && viewRun.id !== activeRun.id && (
+              <button type="button" className="text-xs" onClick={() => setViewRunId(activeRun.id)}>
+                {runText(visibleLocale, '当前生成', 'Current generation')}
+              </button>
+            )}
+            {recentHistory.length > 0 && <HistoryList items={recentHistory} onSelect={setViewRunId} locale={visibleLocale} />}
+          </div>
         )}
         <div className="flex-1 overflow-hidden">
           {viewRun ? (
@@ -240,6 +264,172 @@ export default function AIOutputPanel() {
       </div>
     </div>
   )
+}
+
+const candidateTextButtonStyle = { width: 'fit-content', height: 'auto' } as const
+
+function MainDraftRecoverySection({ session, locale, refreshKey }: {
+  session: ProjectSessionContext | null; locale: Locale; refreshKey: number
+}) {
+  const [runs, setRuns] = useState<Array<{ view: MainGenerationRunView; recovery: GenerationRecoveryContext }>>([])
+  const [batches, setBatches] = useState<GenerationBatchProgress[]>([])
+  const [reviewRuns, setReviewRuns] = useState<Array<{ view: MainGenerationRunView; recovery: ReviewRevisionRecovery }>>([])
+  const [agentRuns, setAgentRuns] = useState<import('../../shared/agent-generation').AgentGenerationRecovery[]>([])
+  const [editorRuns, setEditorRuns] = useState<EditorInlineRecovery[]>([])
+  const [generationRefresh, setGenerationRefresh] = useState(0)
+  const [selection, setSelection] = useState<Record<string, string[]>>({})
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (!session) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const detach = ipc.on('generation:snapshot', snapshot => {
+      if (snapshot.projectId !== session.projectId || snapshot.epoch !== session.leaseId || snapshot.status === 'running') return
+      clearTimeout(timer)
+      timer = setTimeout(() => setGenerationRefresh(value => value + 1), 100)
+    })
+    return () => { detach(); clearTimeout(timer) }
+  }, [session])
+  useEffect(() => {
+    let active = true
+    if (!session) return
+    void (async () => {
+      const [views, progress] = await Promise.all([
+        ipc.invokeWithProjectSession(session, 'generation:list'),
+        ipc.invokeWithProjectSession(session, 'generation:list-batches'),
+      ])
+      const contexts = await Promise.all(views.map(async view => ({ view,
+        recovery: await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle: view.handle }),
+      })))
+      const reviewContexts = await Promise.allSettled(contexts.filter(item => ['review-chapter', 'refine-draft', 'refine-from-review'].includes(item.recovery.operation))
+        .map(async ({ view }) => ({ view, recovery: await ipc.invokeWithProjectSession(session, 'review-revision:read-recovery', { handle: view.handle }) })))
+      const agentRoots = new Map(contexts.filter(item => item.recovery.operation === 'agent-round').map(item => [item.view.handle.rootActionId, item.view.handle]))
+      const agentContexts = await Promise.allSettled([...agentRoots.values()].map(handle => ipc.invokeWithProjectSession(session, 'agent-generation:read', { handle })))
+      const editorContexts = await Promise.allSettled(contexts.filter(item => item.recovery.operation === 'editor-inline')
+        .map(({ view }) => ipc.invokeWithProjectSession(session, 'editor-inline:read-recovery', { handle: view.handle })))
+      if (!active) return
+      setReviewRuns(reviewContexts.flatMap(result => result.status === 'fulfilled' ? [result.value] : []))
+      setAgentRuns(agentContexts.flatMap(result => result.status === 'fulfilled' ? [result.value] : []))
+      setEditorRuns(editorContexts.flatMap(result => result.status === 'fulfilled' ? [result.value] : []))
+      setRuns(contexts.filter(item => item.recovery.operation === 'chapter-draft' && !item.recovery.batchId
+        && (item.recovery.composition || item.view.artifacts.length || item.view.candidates?.length || item.view.unsavedTails?.length)))
+      setBatches(progress.filter(item => item.nextChapterNumber !== null))
+      setError([...reviewContexts, ...agentContexts, ...editorContexts].some(result => result.status === 'rejected') ? runText(locale, '部分任务暂时无法读取，其他候选仍可恢复。', 'Some tasks could not be loaded; the other candidates remain available.') : '')
+    })().catch(reason => { if (active) setError(reason instanceof Error ? reason.message : String(reason)) })
+    return () => { active = false }
+  }, [session, refreshKey, locale, generationRefresh])
+  if (!session) return null
+  const act = async (operation: () => Promise<void>) => {
+    if (busy || !sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
+    setBusy(true)
+    try { await operation(); setError('') } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { setBusy(false) }
+  }
+  const visibleRuns = runs.filter(item => item.view.handle.projectId === session.projectId)
+  const visibleBatches = batches.filter(item => item.rootHandle.projectId === session.projectId)
+  const visibleReviews = reviewRuns.filter(item => item.view.handle.projectId === session.projectId)
+  const visibleAgents = agentRuns.filter(item => item.handle.projectId === session.projectId)
+  const visibleEditors = editorRuns.filter(item => item.view.handle.projectId === session.projectId)
+  if (!visibleRuns.length && !visibleBatches.length && !visibleReviews.length && !visibleAgents.length && !visibleEditors.length && !error) return null
+  return <section className="max-h-80 overflow-y-auto border-b p-3 text-xs" aria-label={runText(locale, '持久正文候选', 'Saved draft candidates')}>
+    {error && <p role="alert">{error}</p>}
+    {visibleEditors.map(recovery => <article key={recovery.view.handle.runId} className="mb-3">
+      <p>{runText(locale, '编辑器选区建议', 'Editor selection suggestion')}</p>
+      <p className="whitespace-pre-wrap">{recovery.context.selectedText.slice(0, 100)}</p>
+      <GenerationBudgetDiagnostics diagnostics={recovery.view.budgetDiagnostics} locale={locale} />
+      {recovery.view.ledger && <p>{runText(locale, `已用 ${recovery.view.ledger.physicalRequests} 次请求`, `${recovery.view.ledger.physicalRequests} requests used`)}</p>}
+      {recovery.sourceStatus === 'conflict' && <p>{runText(locale, '来源已变化；原建议仍可复制。', 'Sources changed; the original suggestion can still be copied.')}</p>}
+      {(recovery.view.candidates ?? recovery.view.artifacts).map(artifact => <div key={artifact.artifactId}>
+        <p className="whitespace-pre-wrap">{artifact.text.slice(0, 180)}</p>
+        {artifact.status !== 'completed' && <p>{runText(locale, '生成未完整完成，保留的文字仅供参考。', 'Generation is incomplete; the saved text is for reference.')}</p>}
+        <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} onClick={() => { void act(() => navigator.clipboard.writeText(artifact.text)) }}>{runText(locale, '复制建议', 'Copy suggestion')}</button>
+      </div>)}
+      {recovery.view.unsavedTails?.map(tail => <div key={tail.attemptId}>
+        <p className="whitespace-pre-wrap">{tail.text.slice(0, 180)}</p>
+        <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} onClick={() => { void act(() => navigator.clipboard.writeText(tail.text)) }}>{runText(locale, '复制未保存文字', 'Copy unsaved text')}</button>
+      </div>)}
+      <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} onClick={() => { void act(() => navigator.clipboard.writeText(recovery.context.documentText)) }}>{runText(locale, '复制原文稿', 'Copy original manuscript')}</button>
+      <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} disabled={busy || recovery.sourceStatus !== 'current' || recovery.view.status === 'cancelled'
+        || recovery.view.ledger?.physicalRequests !== 0 || Boolean(recovery.view.candidates?.length || recovery.view.artifacts.length)}
+        onClick={() => { void act(async () => {
+          await ipc.invokeWithProjectSession(session, 'editor-inline:execute', { handle: recovery.view.handle })
+          if (sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) setGenerationRefresh(value => value + 1)
+        }) }}>{runText(locale, '继续原选区任务', 'Continue original selection task')}</button>
+    </article>)}
+    {visibleAgents.map(recovery => <article key={recovery.handle.rootActionId} className="mb-3">
+      <p>{runText(locale, '助手任务', 'Assistant task')}：{recovery.context.input.userMessage.slice(0, 80)}</p>
+      <GenerationBudgetDiagnostics diagnostics={recovery.run.budgetDiagnostics} locale={locale} />
+      {recovery.run.ledger && <p>{runText(locale, `已用 ${recovery.run.ledger.physicalRequests} 次请求`, `${recovery.run.ledger.physicalRequests} requests used`)}</p>}
+      <p className="whitespace-pre-wrap">{recovery.rounds.map(round => round.visibleText).join('\n').slice(0, 180)}</p>
+      {recovery.rounds.some(round => round.status === 'unknown' || round.actions.some(action => ['unknown', 'running'].includes(action.status)))
+        && <p>{runText(locale, '部分操作结果待确认，恢复时不会自动重做。', 'Some operation results are unknown and will not be repeated automatically.')}</p>}
+      {recovery.sourceStatus === 'conflict' && <p>{runText(locale, '来源已变化；保留的回复仍可复制。', 'Sources changed; the saved reply can still be copied.')}</p>}
+      {recovery.run.status === 'cancelled' && <p>{runText(locale, '此助手任务已取消；保留的回复仍可复制。', 'This assistant task was cancelled; the saved reply can still be copied.')}</p>}
+      <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} onClick={() => { void act(() => navigator.clipboard.writeText(recovery.rounds.map(round => round.visibleText).join('\n'))) }}>{runText(locale, '复制回复', 'Copy reply')}</button>
+      <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} disabled={busy || recovery.sourceStatus !== 'current' || recovery.run.status === 'cancelled'} onClick={() => { void act(async () => {
+        const { useAgentStore } = await import('../../stores/agent-store')
+        useLayoutStore.getState().setRightView('agent')
+        await useAgentStore.getState().resumeGeneration(recovery.handle)
+      }) }}>{runText(locale, '恢复此助手任务', 'Recover this assistant task')}</button>
+    </article>)}
+    {visibleReviews.map(({ view, recovery }) => <article key={view.handle.runId} className="mb-3">
+      <p>{runText(locale, `第${recovery.context.source.chapterNumber}章${recovery.context.operation === 'review-chapter' ? '审稿' : '修稿'}候选`,
+        `Chapter ${recovery.context.source.chapterNumber} ${recovery.context.operation === 'review-chapter' ? 'review' : 'revision'} candidate`)}</p>
+      <GenerationBudgetDiagnostics diagnostics={view.budgetDiagnostics} locale={locale} />
+      {view.ledger && <p>{runText(locale, `已用 ${view.ledger.physicalRequests} 次请求`, `${view.ledger.physicalRequests} requests used`)}</p>}
+      {recovery.sourceStatus === 'conflict' && !recovery.saved && <p>{runText(locale, '来源已变化；候选仍可复制，不能直接保存。', 'Sources changed; copy the candidate to preserve it. Direct saving is unavailable.')}</p>}
+      {recovery.sourceStatus === 'current' && !recovery.saved && !recovery.canResume && <p>{runText(locale,
+        '候选未通过保存校验；可复制保留，请从原稿重新发起任务。',
+        'The candidate failed save validation. Copy it if needed, then start a new action from the source draft.')}</p>}
+      {(view.candidates ?? view.artifacts).map(artifact => <div key={artifact.artifactId}>
+        <span className="whitespace-pre-wrap">{artifact.text.slice(0, 180)}</span>
+        <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} onClick={() => { void act(() => navigator.clipboard.writeText(artifact.text)) }}>{runText(locale, '复制', 'Copy')}</button>
+      </div>)}
+      {view.unsavedTails?.map(tail => <div key={tail.attemptId}>
+        <span className="whitespace-pre-wrap">{tail.text.slice(0, 180)}</span>
+        <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} onClick={() => { void act(() => navigator.clipboard.writeText(tail.text)) }}>{runText(locale, '复制未保存文字', 'Copy unsaved text')}</button>
+      </div>)}
+      <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} disabled={busy || !recovery.saved && (!recovery.canResume || recovery.sourceStatus !== 'current' || view.status === 'cancelled')}
+        onClick={() => { void act(async () => {
+          const workflow = await createReviewRevisionRecoveryWorkflow(session, view.handle)
+          await useWorkflowStore.getState().startWorkflow(workflow)
+        }) }}>{recovery.saved ? runText(locale, '打开已保存结果', 'Open saved result') : runText(locale, '恢复此审修任务', 'Recover this review or revision')}</button>
+    </article>)}
+    {visibleBatches.map(batch => <article key={batch.batchId} className="mb-3">
+      <p>{runText(locale, `批量正文：已保存 ${batch.completedChapters.length} 章，下一章 ${batch.nextChapterNumber}`,
+        `Batch drafts: ${batch.completedChapters.length} saved; next chapter ${batch.nextChapterNumber}`)}</p>
+      <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} disabled={busy} onClick={() => { void act(async () => {
+        const workflow = await createBatchRecoveryWorkflow(session, batch.batchId)
+        await useWorkflowStore.getState().startWorkflow(workflow)
+      }) }}>{runText(locale, '继续此批次', 'Continue this batch')}</button>
+    </article>)}
+    {visibleRuns.map(({ view, recovery }) => {
+      const artifacts = [...new Map([...view.artifacts, ...(view.candidates ?? [])].map(item => [item.artifactId, item])).values()]
+      const picked = selection[view.handle.runId] ?? []
+      return <article key={view.handle.runId} className="mb-3">
+        <p>{runText(locale, `第${recovery.chapterNumber}章候选`, `Chapter ${recovery.chapterNumber} candidate`)}</p>
+        <GenerationBudgetDiagnostics diagnostics={view.budgetDiagnostics} locale={locale} />
+      {view.ledger && <p>{runText(locale, `已用 ${view.ledger.physicalRequests} 次请求`, `${view.ledger.physicalRequests} requests used`)}</p>}
+        {artifacts.map(artifact => <label key={artifact.artifactId} className="block">
+          <input type="checkbox" checked={picked.includes(artifact.artifactId)} disabled={busy || artifact.compositionEligible !== true}
+            onChange={event => setSelection(previous => ({ ...previous, [view.handle.runId]: event.target.checked
+              ? [...picked, artifact.artifactId] : picked.filter(id => id !== artifact.artifactId) }))} />
+          <span className="whitespace-pre-wrap">{artifact.text.slice(0, 180)}</span>
+          <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} onClick={() => { void act(() => navigator.clipboard.writeText(artifact.text)) }}>{runText(locale, '复制', 'Copy')}</button>
+        </label>)}
+        {view.unsavedTails?.map(tail => <div key={tail.attemptId}>
+          <p>{runText(locale, '尚未落盘的正文，可先复制保留：', 'Text not yet saved; copy it to preserve it:')}</p>
+          <span className="whitespace-pre-wrap">{tail.text.slice(0, 180)}</span>
+          <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} onClick={() => { void act(() => navigator.clipboard.writeText(tail.text)) }}>{runText(locale, '复制', 'Copy')}</button>
+        </div>)}
+        <p>{runText(locale, '勾选顺序决定续接顺序；未完成或来源冲突的片段仍可复制。', 'Selection order determines continuation order. Incomplete or conflicted text can still be copied.')}</p>
+        <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} disabled={busy || (!picked.length && !recovery.composition)} onClick={() => { void act(async () => {
+          const workflow = await createDraftRecoveryWorkflow(session, view.handle, picked.length ? [...picked] : undefined)
+          await useWorkflowStore.getState().startWorkflow(workflow)
+        }) }}>{runText(locale, '确认继续已选正文', 'Confirm selected draft continuation')}</button>
+      </article>
+    })}
+  </section>
 }
 
 function RecoveryCandidateSection({
@@ -281,9 +471,9 @@ function RecoveryCandidateSection({
             {candidate.visibleText}
           </div>
           <div className="mt-2 flex gap-1.5">
-            <button type="button" className="icon-btn px-2" onClick={() => onCopy(candidate)}><Copy size={12} />{runText(locale, '复制', 'Copy')}</button>
-            <button type="button" className="icon-btn px-2" disabled={!candidate.sourceCurrent} onClick={() => onContinue(candidate)}><Pencil size={12} />{runText(locale, '继续编辑', 'Continue editing')}</button>
-            <button type="button" className="icon-btn px-2" onClick={() => onDiscard(candidate)}><Trash2 size={12} />{runText(locale, '放弃', 'Discard')}</button>
+            <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} onClick={() => onCopy(candidate)}><Copy size={12} />{runText(locale, '复制', 'Copy')}</button>
+            <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} disabled={!candidate.sourceCurrent} onClick={() => onContinue(candidate)}><Pencil size={12} />{runText(locale, '继续编辑', 'Continue editing')}</button>
+            <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} onClick={() => onDiscard(candidate)}><Trash2 size={12} />{runText(locale, '放弃', 'Discard')}</button>
           </div>
         </article>
       ))}
@@ -317,6 +507,7 @@ function ActiveRunView({
   onSwitchRun: (id: string) => void
 }) {
   const locale = run.uiLocale
+  const transientReasoning = useWorkflowReasoningStore(state => state.entries[run.id]?.text ?? '')
   const scrollRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const isActive = run.status === 'running' || run.status === 'waiting' || run.status === 'paused' || run.status === 'cancelling'
@@ -446,12 +637,15 @@ function ActiveRunView({
               total={run.steps.length}
               isActiveRun={isActive}
               isCurrentStep={i === run.currentStepIndex}
+              transientReasoning={isActive && i === run.currentStepIndex ? transientReasoning : ''}
               locale={locale}
             />
           ))}
 
           {run.status === 'failed' && (
             <WorkflowFailureNotice
+              title={run.title}
+              errorCode={run.errorCode ?? failedStep?.errorCode}
               failureCode={run.failureCode ?? currentStep?.failureCode}
               error={run.error || currentStep?.error}
               promptBudgetReport={run.promptBudgetReport ?? currentStep?.promptBudgetReport}
@@ -518,7 +712,7 @@ function ActiveRunView({
 
 
 // ===== 新版渲染单步结果（支持查看所有历史步骤数据） =====
-function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep, locale }: { step: WorkflowStep; index: number; total: number; isActiveRun: boolean; isCurrentStep: boolean; locale: Locale }) {
+function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep, transientReasoning, locale }: { step: WorkflowStep; index: number; total: number; isActiveRun: boolean; isCurrentStep: boolean; transientReasoning: string; locale: Locale }) {
   const isRunning = step.status === 'running'
   const isCompleted = step.status === 'completed'
   const isFailed = step.status === 'failed'
@@ -540,6 +734,8 @@ function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep, local
       content = ''
     }
   }
+  const displayedThinking = transientReasoning || thinking
+  const hasOutput = Boolean(rawText || displayedThinking)
 
   // 当前激活的步骤默认展开，过去/未来的默认折叠（只有产生了内容的步骤才允许展开）
   const [expanded, setExpanded] = useState(isCurrentStep)
@@ -559,17 +755,17 @@ function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep, local
     <div className="mb-1.5">
       {/* 头部摘要项，点击折叠/展开 */}
       <div
-        onClick={() => { if (rawText) setExpanded(!expanded) }}
+        onClick={() => { if (hasOutput) setExpanded(!expanded) }}
         className="flex items-center gap-2 px-2 py-1.5 rounded-md text-xs transition-colors"
         style={{
-          cursor: rawText ? 'pointer' : 'default',
+          cursor: hasOutput ? 'pointer' : 'default',
           backgroundColor: isRunning ? 'var(--color-hover)' : 'transparent',
           color: isRunning ? 'var(--color-text)' :
                  isCompleted ? 'var(--color-text-secondary)' :
                  isFailed ? 'var(--color-error-text)' :
                  'var(--color-text-muted)',
         }}
-        title={rawText ? runText(locale, '点击查看该步骤的历史输出', 'View output history for this step') : undefined}
+        title={hasOutput ? runText(locale, '点击查看该步骤的历史输出', 'View output history for this step') : undefined}
       >
         {/* 状态图标 */}
         <span className="flex-shrink-0 w-4 flex justify-center">
@@ -597,7 +793,7 @@ function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep, local
         )}
 
         {/* 展开角标或序号 */}
-        {(rawText && !isRunning) ? (
+        {(hasOutput && !isRunning) ? (
           <ChevronRight
             size={11}
             style={{
@@ -614,12 +810,12 @@ function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep, local
       </div>
 
       {/* 展开的对应输出数据 */}
-      {expanded && rawText && (
+      {expanded && hasOutput && (
         <div className="pl-[4px] pr-1 pt-1 pb-3 text-xs w-full max-w-full break-words">
           {/* 思维链区域 */}
-          {thinking && (
+          {displayedThinking && (
             <ThinkingBlock
-              thinking={thinking}
+              thinking={displayedThinking}
               showCursor={isRunning && isActiveRun && !content}
               hasContent={!!content}
               locale={locale}
@@ -636,7 +832,7 @@ function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep, local
       )}
 
       {/* 如果是单一正在执行等待，则显示一个等待骨架 */}
-      {!rawText && isRunning && isActiveRun && (
+      {!hasOutput && isRunning && isActiveRun && (
         <div className="pl-[4px] pr-1 pt-1 pb-3 text-xs text-center" style={{ color: 'var(--color-text-muted)', opacity: 0.7 }}>
           {runText(locale, '等待指令响应...', 'Waiting for the workflow step...')}
         </div>
@@ -646,6 +842,8 @@ function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep, local
 }
 
 function WorkflowFailureNotice({
+  title,
+  errorCode,
   failureCode,
   error,
   promptBudgetReport,
@@ -657,6 +855,8 @@ function WorkflowFailureNotice({
   resumingSynopsis = false,
   onResumeSynopsis,
 }: {
+  title: string
+  errorCode?: string
   failureCode?: WorkflowFailureCode
   error?: string
   promptBudgetReport?: PromptBudgetReport
@@ -694,6 +894,7 @@ function WorkflowFailureNotice({
       type: 'config',
       projectKey: projectPath,
     })
+    useLayoutStore.setState({ sidebarView: 'project', activeRailItem: 'project', sidebarOpen: true })
   }
 
   return (
@@ -708,10 +909,12 @@ function WorkflowFailureNotice({
     >
       <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" aria-hidden="true" />
       <div className="min-w-0">
+        <p className="m-0 break-words">{title}</p>
         <p className="font-medium m-0">
           {presentation.heading}
         </p>
         <p className="m-0 mt-0.5 break-words">{presentation.reason}</p>
+        {errorCode && <p className="m-0 mt-1 break-all">{runText(locale, '错误码：', 'Error code: ')}{errorCode}</p>}
         {presentation.persistence && <p className="m-0 mt-1">{presentation.persistence}</p>}
         {presentation.guidance && <p className="m-0 mt-1">{presentation.guidance}</p>}
         {presentation.action === 'open-novel-config' && presentation.actionLabel && (

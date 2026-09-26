@@ -633,6 +633,38 @@ function validateWindowsReceipt(receipt, name, bundleRoot, version) {
     assert(direct.installedExecutableExists === false && ['absent', 'empty', 'system-residue-only'].includes(direct.installDirectoryState) && Array.isArray(direct.allowedSystemResiduals), 'Windows uninstall receipt facts are invalid')
   } else if (name === 'upgrade-data') {
     assert(direct.previousVersion === '0.2.5' && direct.legacyTableCount === 11 && positiveInteger(direct.preservedAssetCount) && positiveInteger(direct.vectorDimension) && positiveInteger(direct.queryResultCount), 'Windows upgrade-data receipt facts are invalid')
+    // Receipts without a policy revision retain their historical in-place meaning.
+    if (direct.upgradePolicyRevision !== undefined) {
+      const copy = direct.copyImport
+      const saved = direct.oldSaveProof?.draft
+      assert(direct.upgradePolicyRevision === 'v025-offline-copy-v1' && copy?.revision === direct.upgradePolicyRevision,
+        'Windows v0.2.5 copy policy revision is invalid')
+      assert(direct.oldAppSaved === true && direct.legacyRecentPreserved === true
+        && direct.sourceUnchangedSinceOldSave === true && direct.legacyGlobalBytesPreservedSinceOldSave === true
+        && direct.oldSaveProof?.verifiedBy === 'legacy-renderer-cdp-v025-save'
+        && saved?.before?.id === 71 && saved.after?.id === 71 && nonEmptyString(saved.before.content)
+        && saved.after.content === saved.before.content && nonEmptyString(saved.before.updatedAt)
+        && nonEmptyString(saved.after.updatedAt) && saved.after.updatedAt !== saved.before.updatedAt,
+      'Windows v0.2.5 copy old save evidence is invalid')
+      assert(nonEmptyString(copy.sourceProjectId) && nonEmptyString(copy.targetProjectId)
+        && copy.sourceProjectId !== copy.targetProjectId && nonEmptyString(copy.source) && nonEmptyString(copy.target)
+        && copy.source !== copy.target && positiveInteger(copy.sourceFileCount)
+        && validSha256(copy.sourceInventorySha256) && copy.sourceAfterSha256 === copy.sourceInventorySha256
+        && validSha256(copy.targetInventorySha256) && validSha256(copy.savedBodySha256)
+        && copy.reopenedBodySha256 === copy.savedBodySha256 && copy.sourceUnchanged === true
+        && copy.legacyGlobalsUnchanged === true && copy.settingsPreserved === true && copy.targetRecentRegistered === true
+        && copy.preservedTableCount >= 11 && positiveInteger(copy.preservedAssetCount)
+        && positiveInteger(copy.knowledgeDocuments) && positiveInteger(copy.knowledgeChunks)
+        && validSha256(direct.copyDriverSha256) && validSha256(direct.copyPackageHashes?.exe)
+        && validSha256(direct.copyPackageHashes?.asar), 'Windows v0.2.5 copy preservation facts are invalid')
+      for (const step of ['import-open', 'target-edit-save', 'import-zero-network', 'knowledge-index',
+        'target-edit-reopen', 'reopen-zero-network', 'reopen-unchanged']) {
+        const matches = direct.copySteps?.filter(item => item.stepId === `v0.2.5-${step}`)
+        assert(matches?.length === 1 && matches[0].outcome === 'PASS'
+          && (!step.endsWith('zero-network') || (matches[0].requests?.mainFetchCalls === 0
+            && matches[0].requests?.rendererRequests === 0)), 'Windows v0.2.5 copy UI steps are invalid')
+      }
+    }
   } else if (name === 'native-abi') {
     assert(direct.restoreMode === 'monitored' && /^\d+$/.test(direct.nodeModuleAbi ?? '') && direct.verificationTest === 'electron/repositories/__tests__/character-repository.test.ts', 'Windows native-ABI receipt facts are invalid')
   } else if (name === 'packaged-smoke') {
@@ -760,7 +792,10 @@ function validateExactTemporaryReceipts(evidenceRoot, contract, releaseRoot) {
   const actual = listRegularRelativeFiles(evidenceRoot, 'acceptance')
   assert(JSON.stringify(actual) === JSON.stringify(expected), `Acceptance evidence file set is not exact; got ${actual.join(', ')}`)
   for (const relativePath of actual) {
-    validateAcceptanceReceipt(fileWithin(evidenceRoot, relativePath, 'Acceptance receipt'), `qualification/${relativePath}`, contract.frozen.platform, releaseRoot, contract.frozen.version)
+    const receipt = validateAcceptanceReceipt(fileWithin(evidenceRoot, relativePath, 'Acceptance receipt'), `qualification/${relativePath}`, contract.frozen.platform, releaseRoot, contract.frozen.version)
+    if (contract.frozen.platform === 'windows' && relativePath === 'acceptance/upgrade-data.json') {
+      assert(receipt.direct.upgradePolicyRevision === 'v025-offline-copy-v1', 'Windows v0.2.5 copy policy is required for current qualification')
+    }
   }
   return expected
 }

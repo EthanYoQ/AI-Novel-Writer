@@ -44,41 +44,40 @@ function rowToPlan(row: Record<string, unknown>): NarrativeThreadPlanRecord {
 }
 
 export class NarrativeThreadRepository {
-  static createPlan(input: NarrativeThreadPlanInput): NarrativeThreadPlanRecord {
+  static createPlan(input: NarrativeThreadPlanInput, db = requireDb()): NarrativeThreadPlanRecord {
     const value = validatePlan(input)
-    const result = requireDb().prepare(`
+    const result = db.prepare(`
       INSERT INTO narrative_thread_plans (
         title, type, target_start_chapter, target_end_chapter, author_intent
       ) VALUES (?, ?, ?, ?, ?)
     `).run(value.title, value.type, value.targetStartChapter, value.targetEndChapter, value.authorIntent)
-    return this.getPlan(Number(result.lastInsertRowid))!
+    return this.getPlan(Number(result.lastInsertRowid), db)!
   }
 
-  static updatePlan(id: number, input: NarrativeThreadPlanInput): NarrativeThreadPlanRecord {
+  static updatePlan(id: number, input: NarrativeThreadPlanInput, db = requireDb()): NarrativeThreadPlanRecord {
     const value = validatePlan(input)
-    const result = requireDb().prepare(`
+    const result = db.prepare(`
       UPDATE narrative_thread_plans
       SET title = ?, type = ?, target_start_chapter = ?, target_end_chapter = ?,
           author_intent = ?, updated_at = datetime('now')
       WHERE id = ?
     `).run(value.title, value.type, value.targetStartChapter, value.targetEndChapter, value.authorIntent, id)
     if (result.changes !== 1) throw new Error('叙事线索计划不存在')
-    return this.getPlan(id)!
+    return this.getPlan(id, db)!
   }
 
-  static deletePlan(id: number): void {
-    const result = requireDb().prepare('DELETE FROM narrative_thread_plans WHERE id = ?').run(id)
+  static deletePlan(id: number, db = requireDb()): void {
+    const result = db.prepare('DELETE FROM narrative_thread_plans WHERE id = ?').run(id)
     if (result.changes !== 1) throw new Error('叙事线索计划不存在')
   }
 
-  static getPlan(id: number): NarrativeThreadPlanRecord | null {
-    const row = requireDb().prepare('SELECT * FROM narrative_thread_plans WHERE id = ?')
+  static getPlan(id: number, db = requireDb()): NarrativeThreadPlanRecord | null {
+    const row = db.prepare('SELECT * FROM narrative_thread_plans WHERE id = ?')
       .get(id) as Record<string, unknown> | undefined
     return row ? rowToPlan(row) : null
   }
 
-  static confirmEvent(input: NarrativeThreadEventInput): NarrativeThreadEvent {
-    const db = requireDb()
+  static confirmEvent(input: NarrativeThreadEventInput, db = requireDb()): NarrativeThreadEvent {
     const evidence = input.evidence.trim()
     const reason = input.reason.trim()
     if (!['planted', 'progressing', 'resolved', 'abandoned'].includes(input.type)
@@ -99,7 +98,7 @@ export class NarrativeThreadRepository {
     if (!normalizedContent.includes(normalizedEvidence)) {
       throw new Error('短证据必须来自绑定的定稿正文')
     }
-    if (!this.getPlan(input.planId)) throw new Error('叙事线索计划不存在')
+    if (!this.getPlan(input.planId, db)) throw new Error('叙事线索计划不存在')
     const result = db.prepare(`
       INSERT INTO narrative_thread_confirmations (
         plan_id, draft_id, event_type, evidence, reason
@@ -118,8 +117,7 @@ export class NarrativeThreadRepository {
     }
   }
 
-  static list(): NarrativeThreadView[] {
-    const db = requireDb()
+  static list(db = requireDb()): NarrativeThreadView[] {
     const currentFinalizedChapter = (db.prepare(`
       SELECT COALESCE(MAX(chapter_number), 0) AS chapterNumber
       FROM drafts WHERE status = 'finalized'
@@ -153,10 +151,10 @@ export class NarrativeThreadRepository {
     })
   }
 
-  static listRelevantActive(context: NarrativeThreadChapterContext): NarrativeThreadView[] {
+  static listRelevantActive(context: NarrativeThreadChapterContext, db = requireDb()): NarrativeThreadView[] {
     const currentText = `${context.title}\n${context.keyEvents}`
     const characters = context.characters.map(character => character.trim()).filter(Boolean)
-    return this.list().filter((thread) => {
+    return this.list(db).filter((thread) => {
       if (thread.status === 'resolved' || thread.status === 'abandoned') return false
       if (context.chapterNumber >= thread.targetStartChapter && context.chapterNumber <= thread.targetEndChapter) {
         return true

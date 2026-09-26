@@ -47,7 +47,7 @@ function draft(
     createdAt: '2026-08-29T00:00:00.000Z',
     updatedAt: '2026-08-29T00:00:00.000Z',
     fileName: 'draft_v1.md',
-    filePath: `vela://draft/${id}`,
+    filePath: `ai-novel://draft/${id}`,
   }
 }
 
@@ -88,7 +88,7 @@ beforeEach(() => {
     }
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
-  ;(window as unknown as { velaAPI: TestVelaApi }).velaAPI = {
+  ;(window as unknown as { aiNovelAPI: TestVelaApi }).aiNovelAPI = {
     invoke,
     on: () => () => {},
     once: () => {},
@@ -107,7 +107,7 @@ afterEach(async () => {
   clearChapterTitleCache()
   useLocaleStore.setState(originalLocaleState)
   useProjectStore.setState(originalProjectState)
-  delete (window as unknown as { velaAPI?: TestVelaApi }).velaAPI
+  delete (window as unknown as { aiNovelAPI?: TestVelaApi }).aiNovelAPI
 })
 
 describe('authoritative finalized chapter titles', () => {
@@ -115,7 +115,7 @@ describe('authoritative finalized chapter titles', () => {
     const projectADraft = draft(1, 1)
     const projectBDraft = draft(1, 1)
     const manuscriptFile = {
-      path: 'vela://manuscript/1',
+      path: 'ai-novel://manuscript/1',
       name: 'chapter_1.md',
       isDir: false,
     }
@@ -153,7 +153,7 @@ describe('authoritative finalized chapter titles', () => {
     const projectADraft = draft(1, 1, '项目甲标题')
     const projectBDraft = draft(1, 1, '项目乙标题')
     const manuscriptFile = (chapterTitle: string) => ({
-      path: 'vela://manuscript/1',
+      path: 'ai-novel://manuscript/1',
       name: 'chapter_1.md',
       isDir: false,
       chapterTitle,
@@ -192,7 +192,7 @@ describe('authoritative finalized chapter titles', () => {
     const chapterOne = draft(1, 1, '蓝镜初亮')
     const chapterTwo = draft(2, 2, '潮线回声')
     const manuscriptFiles = [chapterOne, chapterTwo].map(item => ({
-      path: `vela://manuscript/${item.id}`,
+      path: `ai-novel://manuscript/${item.id}`,
       name: `chapter_${item.chapterNumber}.md`,
       isDir: false,
       chapterTitle: item.chapterTitle,
@@ -222,7 +222,7 @@ describe('authoritative finalized chapter titles', () => {
     const pendingDraft = draft(3, 3, undefined, 'draft')
     const legacyFinalized = draft(4, 4)
     const manuscriptFiles = [{
-      path: 'vela://manuscript/4',
+      path: 'ai-novel://manuscript/4',
       name: 'chapter_4.md',
       isDir: false,
     }]

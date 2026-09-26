@@ -1,3 +1,5 @@
+import type { CharacterProposalBatch } from '../shared/character-proposal'
+import { createCharacterProposalChoices, type CharacterProposalChoices } from '../services/character-proposal-choices'
 import { create } from 'zustand'
 import { randomUUID } from '../utils/id'
 import { globalEventBus } from '../shared/event-bus'
@@ -71,6 +73,8 @@ export interface WorkflowStep {
 
 /** 工作流运行实例 */
 export interface WorkflowRun {
+  characterProposalBatch?: CharacterProposalBatch
+  characterProposalChoices?: CharacterProposalChoices
   id: string
   /** 工作流启动时冻结的项目身份。 */
   projectPath: string
@@ -134,6 +138,12 @@ export type StepExecutor = (
 
 /** 工作流上下文（共享数据） */
 export interface WorkflowContext {
+  /** Main-issued identities; stage changes keep the root budget, recovery keeps the exact run. */
+  mainGenerationRootHandle?: import('../services/generation/generation-runtime').MainGenerationRunHandle
+  mainGenerationRunHandle?: import('../services/generation/generation-runtime').MainGenerationRunHandle
+  agentWorkflowRegistrationId?: string
+  /** Main adapter supplies one idempotent cancellation intent, including between stages. */
+  requestMainGenerationCancellation?: () => Promise<void>
   /** 本次运行的稳定身份，供事件消费者排除其他并发任务。 */
   runId: string
   /** 工作流启动时冻结的项目身份。 */
@@ -154,6 +164,10 @@ export interface WorkflowContext {
   data: Record<string, unknown>
   /** 是否已取消 */
   cancelled: boolean
+  /** Import-only intent; the current bounded effect exits before the orchestrator applies cancellation. */
+  cancelRequested?: boolean
+  /** Import cancellation intent must be durable before its orchestrator writes the terminal boundary. */
+  cancellationRequest?: Promise<void>
   /** 是否已请求在当前步骤完成后的安全边界暂停 */
   pauseRequested?: boolean
 }
@@ -187,6 +201,8 @@ export interface WorkflowCompleteAction {
 export interface WorkflowDefinition {
   /** 可由需要同步订阅事件的调用方预先分配。 */
   runId?: string
+  /** Main-validated Agent tool registration, separate from model-editable intent. */
+  agentWorkflowRegistration?: import('../shared/agent-generation').AgentWorkflowRegistration
   type: WorkflowType
   title: string
   /** 工作流启动时冻结的项目身份。 */
@@ -213,6 +229,8 @@ export interface WorkflowDefinition {
     name: string
     description: string
     executor: StepExecutor
+    /** Explicit author action is required even when the workflow runs automatically. */
+    requiresConfirmation?: boolean
   }>
   /** Persist cancellation before waiting for the current operation to yield. */
   onCancelRequested?: (context: WorkflowContext) => void | Promise<void>
@@ -312,6 +330,7 @@ interface WorkflowState {
   /** 启动一个工作流（可并发），返回 runId */
   startWorkflow: (definition: WorkflowDefinition, stepByStep?: boolean) => Promise<string>
   /** 步进模式下确认继续执行下一步（需指定 runId） */
+  setCharacterProposalChoices: (runId: string, choices: CharacterProposalChoices) => boolean
   confirmContinue: (runId?: string) => void
   /** 取消工作流（传 runId 取消指定，不传取消全部） */
   cancelWorkflow: (runId?: string) => void
@@ -335,6 +354,10 @@ const continueResolveRefs = new Map<string, () => void>()
 const pauseResolveRefs = new Map<string, () => void>()
 const cancelRequestedHooks = new Map<string, (context: WorkflowContext) => void | Promise<void>>()
 const cancelBoundaryHooks = new Map<string, (context: WorkflowContext) => void | Promise<void>>()
+
+function isCancellationPending(context: WorkflowContext): boolean {
+  return context.cancelled || context.cancelRequested === true
+}
 
 /** 计算兼容字段的辅助函数 */
 function computeCompat(activeRuns: WorkflowRun[], waitingRuns: Record<string, { waitingForConfirm: boolean; waitingAfterStepIndex: number }>) {
@@ -406,10 +429,28 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     }
   },
 
+  setCharacterProposalChoices: (runId, choices) => {
+    const run = get().activeRuns.find(candidate => candidate.id === runId)
+    const context = activeContexts.get(runId)
+    const batch = context?.data.characterProposalBatch as CharacterProposalBatch | undefined
+    if (!run || run.status !== 'waiting' || !context || context.cancelled || !batch
+      || !sameProjectSessionContext(run.projectSession, projectSessionContextFromProject(useProjectStore.getState().currentProject))
+      || choices.proposalBatchId !== batch.proposalBatchId || choices.revision !== batch.revision) return false
+    const keys = new Set(batch.items.map(item => item.selectionKey))
+    if (choices.selections.length !== keys.size || new Set(choices.selections.map(choice => choice.selectionKey)).size !== keys.size
+      || choices.selections.some(choice => !keys.has(choice.selectionKey))) return false
+    const frozen = structuredClone(choices)
+    context.data.characterProposalChoices = frozen
+    updateRunById(set, runId, { characterProposalChoices: structuredClone(frozen) })
+    return true
+  },
+
   confirmContinue: (runId) => {
     // 如果未指定 runId，使用第一个等待中的
     const targetId = runId ?? Object.keys(get().waitingRuns).find(id => get().waitingRuns[id]?.waitingForConfirm)
     if (!targetId) return
+    const run = get().activeRuns.find(candidate => candidate.id === targetId)
+    if (run?.characterProposalBatch && !sameProjectSessionContext(run.projectSession, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
     const resolve = continueResolveRefs.get(targetId)
     if (resolve) {
       resolve()
@@ -628,6 +669,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
 
     // 创建执行上下文
     const context: WorkflowContext = {
+      ...(definition.agentWorkflowRegistration ? { mainGenerationRootHandle: definition.agentWorkflowRegistration.parentHandle,
+        agentWorkflowRegistrationId: definition.agentWorkflowRegistration.registrationId } : {}),
       runId: run.id,
       projectPath: definition.projectPath,
       projectSession,
@@ -642,10 +685,12 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
     }
     activeContexts.set(run.id, context)
     if (definition.onCancelRequested) cancelRequestedHooks.set(run.id, definition.onCancelRequested)
-    if (definition.onCancelledAtBoundary) cancelBoundaryHooks.set(run.id, definition.onCancelledAtBoundary)
+    if (definition.type !== 'novel_import' && definition.onCancelledAtBoundary) {
+      cancelBoundaryHooks.set(run.id, definition.onCancelledAtBoundary)
+    }
 
     const waitForResumeAtSafeBoundary = async () => {
-      if (!context.pauseRequested || context.cancelled) return
+      if (!context.pauseRequested || isCancellationPending(context)) return
 
       updateRunById(set, run.id, { status: 'paused', pauseRequested: false })
       get().addLog('info', uiText(
@@ -654,7 +699,7 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         `[Paused] Workflow "${definition.title}" paused after the current step`,
       ), context.uiLocale)
       await new Promise<void>((resolve) => { pauseResolveRefs.set(run.id, resolve) })
-      if (!context.cancelled) {
+      if (!isCancellationPending(context)) {
         updateRunById(set, run.id, { status: 'running', pauseRequested: false })
         get().addLog('info', uiText(
           context.uiLocale,
@@ -669,8 +714,27 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       // 批量任务只在步骤之间暂停，避免中断一次正在进行的模型请求或后处理。
       await waitForResumeAtSafeBoundary()
 
+      if (!isCancellationPending(context) && ((stepByStep && i > 0) || definition.steps[i].requiresConfirmation)) {
+        // Register before publishing waiting state so an immediate UI confirmation cannot be lost.
+        const confirmed = new Promise<void>(resolve => { continueResolveRefs.set(run.id, resolve) })
+        const batch = context.data.characterProposalBatch as CharacterProposalBatch | undefined
+        const choices = batch ? createCharacterProposalChoices(batch) : undefined
+        if (choices) context.data.characterProposalChoices = structuredClone(choices)
+        updateRunById(set, run.id, { status: 'waiting', ...(batch && choices ? { characterProposalBatch: structuredClone(batch), characterProposalChoices: structuredClone(choices) } : {}) })
+        set(s => {
+          const newWaiting = { ...s.waitingRuns, [run.id]: { waitingForConfirm: true, waitingAfterStepIndex: i - 1 } }
+          return { waitingRuns: newWaiting, ...computeCompat(s.activeRuns, newWaiting) }
+        })
+        get().addLog('info', uiText(
+          context.uiLocale,
+          `[暂停] [${definition.title}] 等待确认第 ${i + 1} 步：${definition.steps[i].name}`,
+          `[Paused] [${definition.title}] Waiting for confirmation before step ${i + 1}: ${definition.steps[i].name}`,
+        ), context.uiLocale)
+        await confirmed
+        if (!isCancellationPending(context)) updateRunById(set, run.id, { status: 'running' })
+      }
       // 检查取消
-      if (context.cancelled) {
+      if (context.cancelled && definition.type !== 'novel_import') {
         updateRunById(set, run.id, {
           status: 'failed',
           error: uiText(context.uiLocale, '工作流已取消', 'Workflow was cancelled.'),
@@ -773,22 +837,6 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           `[Completed] [${definition.title}] Step: ${stepDef.name}`,
         ), context.uiLocale)
 
-        // 步进模式：非最后一步，且未取消 → 暂停等待用户确认
-        if (stepByStep && i < definition.steps.length - 1 && !context.cancelled) {
-          updateRunById(set, run.id, { status: 'waiting' })
-          set(s => {
-            const newWaiting = { ...s.waitingRuns, [run.id]: { waitingForConfirm: true, waitingAfterStepIndex: i } }
-            return { waitingRuns: newWaiting, ...computeCompat(s.activeRuns, newWaiting) }
-          })
-          get().addLog('info', uiText(
-            context.uiLocale,
-            `[暂停] [${definition.title}] 等待确认继续第 ${i + 2} 步：${definition.steps[i + 1].name}`,
-            `[Paused] [${definition.title}] Waiting for confirmation before step ${i + 2}: ${definition.steps[i + 1].name}`,
-          ), context.uiLocale)
-          await new Promise<void>((resolve) => { continueResolveRefs.set(run.id, resolve) })
-          if (context.cancelled) break
-          updateRunById(set, run.id, { status: 'running' })
-        }
       } catch (error) {
         const promptBudgetFailure = promptBudgetFailureFromError(error, context.uiLocale)
         const errorMsg = promptBudgetFailure?.message
@@ -930,16 +978,23 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         return
       }
       if (ctx) {
-        ctx.cancelled = true
-        ctx.pauseRequested = false
         const persistCancellation = cancelRequestedHooks.get(runId)
-        if (persistCancellation) void Promise.resolve(persistCancellation(ctx)).catch(error => {
-          get().addLog('error', uiText(
-            targetRun.uiLocale,
-            `[取消失败] 未能立即保存取消请求：${String(error)}`,
-            `[Cancellation failed] Could not persist the cancellation request immediately: ${String(error)}`,
-          ), targetRun.uiLocale)
-        })
+        if (persistCancellation && !ctx.cancellationRequest) {
+          ctx.cancellationRequest = Promise.resolve(persistCancellation(ctx))
+          void ctx.cancellationRequest.catch(error => {
+            get().addLog('error', uiText(
+              targetRun.uiLocale,
+              `[取消失败] 未能立即保存取消请求：${String(error)}`,
+              `[Cancellation failed] Could not persist the cancellation request immediately: ${String(error)}`,
+            ), targetRun.uiLocale)
+          })
+        }
+        if (targetRun.type === 'novel_import') ctx.cancelRequested = true
+        else ctx.cancelled = true
+        ctx.pauseRequested = false
+        if (targetRun.type !== 'novel_import') {
+          void ctx.requestMainGenerationCancellation?.().catch(error => get().addLog('error', String(error), targetRun.uiLocale))
+        }
       }
       // 如果在步进等待，解除 Promise
       const resolve = continueResolveRefs.get(runId)
@@ -980,16 +1035,23 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
       for (const [id, ctx] of activeContexts) {
         const run = get().activeRuns.find(item => item.id === id)
         if (!run || run.status === 'completed' || run.status === 'failed') continue
-        ctx.cancelled = true
-        ctx.pauseRequested = false
         const persistCancellation = cancelRequestedHooks.get(id)
-        if (persistCancellation) void Promise.resolve(persistCancellation(ctx)).catch(error => {
-          get().addLog('error', uiText(
-            run.uiLocale,
-            `[取消失败] 未能立即保存取消请求：${String(error)}`,
-            `[Cancellation failed] Could not persist the cancellation request immediately: ${String(error)}`,
-          ), run.uiLocale)
-        })
+        if (persistCancellation && !ctx.cancellationRequest) {
+          ctx.cancellationRequest = Promise.resolve(persistCancellation(ctx))
+          void ctx.cancellationRequest.catch(error => {
+            get().addLog('error', uiText(
+              run.uiLocale,
+              `[取消失败] 未能立即保存取消请求：${String(error)}`,
+              `[Cancellation failed] Could not persist the cancellation request immediately: ${String(error)}`,
+            ), run.uiLocale)
+          })
+        }
+        if (run.type === 'novel_import') ctx.cancelRequested = true
+        else ctx.cancelled = true
+        ctx.pauseRequested = false
+        if (run.type !== 'novel_import') {
+          void ctx.requestMainGenerationCancellation?.().catch(error => get().addLog('error', String(error), run.uiLocale))
+        }
         const resolve = continueResolveRefs.get(id)
         if (resolve) { resolve(); continueResolveRefs.delete(id) }
         const pauseResolve = pauseResolveRefs.get(id)

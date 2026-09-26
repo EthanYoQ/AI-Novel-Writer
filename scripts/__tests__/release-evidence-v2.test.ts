@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { windowsV025CopyProof } from './release-evidence-v2-fixtures'
 import { canonicalPnpmLockfileSha256 } from '../canonical-pnpm-lockfile-hash.mjs'
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url))
@@ -47,7 +48,7 @@ function validWindowsReceipt(name: string, releaseRoot: string) {
     'quiet-window': { ...base, kind: 'windows-final-quiet-window', direct: { monitorState: 'step-completed', monitorStep: 'final:quiet', quietWindowSeconds: 5, completedAt: '2026-08-10T14:57:30.3051843Z' } },
     'error-dialogs': { ...base, kind: 'windows-error-dialogs', direct: { monitorState: 'step-completed', monitorStep: 'final:quiet', newProductErrorDialogCount: 0, observedThrough: '2026-08-10T14:57:30.3051843Z' } },
     uninstall: { ...base, kind: 'windows-uninstall', direct: { installedExecutableExists: false, installDirectoryState: 'absent', allowedSystemResiduals: [] } },
-    'upgrade-data': { ...base, kind: 'windows-upgrade-data', direct: { previousVersion: '0.2.5', legacyTableCount: 11, preservedAssetCount: 1, vectorDimension: 768, queryResultCount: 1 } },
+    'upgrade-data': { ...base, kind: 'windows-upgrade-data', direct: { previousVersion: '0.2.5', legacyTableCount: 11, preservedAssetCount: 1, vectorDimension: 768, queryResultCount: 1, ...windowsV025CopyProof() } },
     'native-abi': { ...base, kind: 'windows-native-abi', direct: { restoreMode: 'monitored', nodeModuleAbi: '127', verificationTest: 'electron/repositories/__tests__/character-repository.test.ts' } },
     'packaged-smoke': { ...base, kind: 'windows-packaged-smoke-summary', direct: { evidenceCount: 3, evidenceKinds: ['packaged-vector-smoke', 'packaged-official-homepage-smoke', 'packaged-skin-smoke'] }, evidence: [
       reference('packaged-vector-smoke', 'packaged-vector-smoke.json'),
@@ -433,6 +434,27 @@ describe('release evidence v2 CLI', () => {
       expect(invalidLaunchResult.status).not.toBe(0)
       expect(invalidLaunchResult.stderr).toContain('Windows launch receipt facts are invalid')
     }
+    for (const mutateCopy of [
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { for (const key of Object.keys(windowsV025CopyProof())) delete (direct as Record<string, unknown>)[key] },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.upgradePolicyRevision = 'unknown' },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copyImport.sourceAfterSha256 = '0'.repeat(64) },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copyImport.targetProjectId = direct.copyImport.sourceProjectId },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copyImport.reopenedBodySha256 = '0'.repeat(64) },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copyImport.legacyGlobalsUnchanged = false },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copyImport.targetRecentRegistered = false },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.oldSaveProof.draft.after.content = 'changed' },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copySteps = direct.copySteps.slice(1) },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copySteps[2].requests!.mainFetchCalls = 1 },
+    ]) {
+      writeSemanticReceipts()
+      const receipt = validWindowsReceipt('upgrade-data', releaseRoot) as { direct: ReturnType<typeof windowsV025CopyProof> }
+      mutateCopy(receipt.direct)
+      writeJson(path.join(evidenceRoot, 'acceptance', 'upgrade-data.json'), receipt)
+      const rejectedCopy = spawnSync(process.execPath, [evidenceScript, 'finalize', '--platform', 'windows',
+        '--evidence-root', evidenceRoot, '--release-root', releaseRoot], { cwd: repositoryRoot, encoding: 'utf8' })
+      expect(rejectedCopy.status).not.toBe(0)
+      expect(rejectedCopy.stderr).toContain('Windows v0.2.5 copy')
+    }
     writeSemanticReceipts()
 
     const result = spawnSync(process.execPath, [
@@ -491,6 +513,23 @@ describe('release evidence v2 CLI', () => {
       platform: 'windows',
       releaseFiles: [installer, `${installer}.blockmap`, 'latest.yml'],
     })
+    // Synthesize a historical bundle in this test only; real archived receipts remain immutable.
+    const oldPath = 'qualification/acceptance/upgrade-data.json'
+    const oldReceipt = JSON.parse(readFileSync(path.join(releaseRoot, oldPath), 'utf8'))
+    for (const key of Object.keys(windowsV025CopyProof())) delete oldReceipt.direct[key]
+    writeJson(path.join(releaseRoot, oldPath), oldReceipt)
+    const oldRecord = manifest.evidence.find((record: { file: string }) => record.file === oldPath)
+    oldRecord.sha256 = sha256(path.join(releaseRoot, oldPath))
+    oldRecord.sizeBytes = readFileSync(path.join(releaseRoot, oldPath)).length
+    writeJson(path.join(releaseRoot, 'manifest.json'), manifest)
+    writeFileSync(path.join(releaseRoot, 'SHA256SUMS.txt'), sums.trim().split('\n').map(line => {
+      const file = line.slice(line.indexOf(' *') + 2)
+      return `${sha256(path.join(releaseRoot, file))} *${file}`
+    }).join('\n') + '\n')
+    const historical = spawnSync(process.execPath, [...verifyArguments, '--run-attempt', '1'],
+      { cwd: repositoryRoot, encoding: 'utf8' })
+    expect(historical.status, historical.stderr).toBe(0)
+
   }, 15_000)
 
   it('requires externally frozen expected toolchain versions and rejects a runtime mismatch', () => {

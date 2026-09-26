@@ -12,7 +12,8 @@ vi.mock('electron', () => ({
   },
 }))
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
+import { closeProjectDatabase, getProjectDb } from '../../database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import { addChunks, closeConnection, listDocuments } from '../../vector-store'
 import { removeDocument, searchKnowledgeFTS } from '../../knowledge-base'
 import { DraftRepository } from '../../repositories/draft-repository'
@@ -83,12 +84,18 @@ describe('chapter lifecycle deletion IPC', () => {
       'finalized-document',
       targetFileName,
       ['目标章节独有关键字'],
+      undefined,
+      undefined,
+      { corpusKind: 'project-knowledge' },
     )
     await addChunks(
       projectRoot,
       'reference-document',
       targetFileName,
       ['参考小说应保留关键字'],
+      undefined,
+      undefined,
+      { corpusKind: 'reference', replacementMode: 'stable-id' },
     )
   })
 

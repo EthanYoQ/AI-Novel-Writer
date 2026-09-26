@@ -508,7 +508,7 @@ export class UpdateService {
     try {
       return this.options.preferences.read()
     } catch (error) {
-      console.warn('[Vela Update] 无法读取更新偏好，当前会话将使用安全默认值。', error)
+      console.warn('[AI Novel Update] 无法读取更新偏好，当前会话将使用安全默认值。', error)
       return undefined
     }
   }
@@ -518,7 +518,7 @@ export class UpdateService {
       return this.options.preferences.write(preferences)
     } catch (error) {
       // 写入失败不能让后台更新或手动检查演变为未处理异常。
-      console.warn('[Vela Update] 无法保存更新偏好，已继续本次安全更新操作。', error)
+      console.warn('[AI Novel Update] 无法保存更新偏好，已继续本次安全更新操作。', error)
       return false
     }
   }
@@ -574,7 +574,7 @@ export class UpdateService {
       try {
         listener(snapshot)
       } catch (error) {
-        console.warn('[Vela Update] 状态监听器处理失败:', error)
+        console.warn('[AI Novel Update] 状态监听器处理失败:', error)
       }
     }
   }

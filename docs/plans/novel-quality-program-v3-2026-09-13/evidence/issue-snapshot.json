@@ -1,0 +1,283 @@
+{
+  "schemaVersion": 1,
+  "repository": "EthanYoQ/AI-Novel-Writer",
+  "snapshotAt": "2026-09-12T16:58:39Z",
+  "checkout": {
+    "head": "731bda13ff9197d0abefaa353139df1359ce75cb",
+    "codeGraph": "unavailable-in-this-worktree; source files were read directly"
+  },
+  "method": "gh issue list --state open --limit 100 with body/comments/labels; pull request and release state queried separately; pull requests excluded from issue count",
+  "openIssueCount": 10,
+  "latestRelease": {
+    "tag": "v1.1.0",
+    "publishedAt": "2026-09-08T04:35:10Z"
+  },
+  "policy": {
+    "goal": "Fix every reproducible bug and implement every accepted feasible enhancement; close only on evidence of the issue's actual delivered outcome.",
+    "forbiddenShortcut": "A successor issue, administrative archive, roadmap note, duplicate label, or merged partial change is not completion evidence.",
+    "closeReasons": [
+      "completed after the issue-specific delivery gate is met",
+      "not-planned only after an explicit product decision that rejects the requested outcome, with an honest reason; not as a clearing mechanism"
+    ]
+  },
+  "issues": [
+    {
+      "number": 187,
+      "title": "工作流未完成  AI 输出达到模型最大长度，结果不完整。请提高模型最大输出 Tokens 或缩短本次任务后重试。好多功能都提示这个，ai里面最大输出token设置的384000",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/187",
+      "labels": [],
+      "updatedAt": "2026-09-12T01:26:34Z",
+      "classification": "active-reported-bug-partially-fixed",
+      "latestUserEvidence": "A non-maintainer reported on 2026-09-12 that the problem still reproduces, after the maintainer's earlier 1.0.0-fix claim.",
+      "deliveryEvidence": "PR #229 merged at 2026-09-11T23:17:29Z, but its own scope says Related to #187 only and excludes many generation paths, packaged end-to-end recovery, a new real-model run, and three-chapter product acceptance. It is later than v1.1.0 and unreleased.",
+      "acceptanceOwner": "generation budget, truncation recovery, and context assembly owner",
+      "requiredOutcome": "Reproduce and close all three reported workflow classes (review-chapter, chapter-blueprint-directory, compact-single) plus the latest reporter scenario; enforce effective provider limits rather than trusting the configured 384000 value; preserve bounded partial results without overwriting author data; provide safe retry/resume and workflow-specific diagnostics.",
+      "closeGate": "Production-path tests for every reported workflow, current real-provider verification, packaged-app recovery/reopen checks, and a release containing the complete fix. PR #229 alone cannot close #187.",
+      "currentTurnReproduction": "not-run"
+    },
+    {
+      "number": 191,
+      "title": "能不能增加根据文本自动生成小说人物卡片功能",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/191",
+      "labels": [
+        "enhancement"
+      ],
+      "createdAt": "2026-09-04T15:10:01Z",
+      "updatedAt": "2026-09-04T15:52:09Z",
+      "classification": "feasible-enhancement-partial-foundation",
+      "body": "看了下软件里面的自制人物卡，需要填列的东西非常多，假设有一定的文本和大纲，能否导入文本后，自动生成对应的人物卡片？且人物卡片是可以修改的，还能根据情节的推进，自动新增关键信息",
+      "comments": [
+        {
+          "author": "EthanYoQ",
+          "authorAssociation": "OWNER",
+          "createdAt": "2026-09-04T15:51:17Z",
+          "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/191#issuecomment-5543028024",
+          "body": "这是导入已有大纲 世界观的需求，已记录。合并入其他需求。\n如果给一个Star，会增加开发者更新动力哦~🤣"
+        }
+      ],
+      "informationRequestStatus": "No maintainer request for missing reproduction or product information. The owner comment says merged into another requirement but provides no canonical link and is not delivery evidence.",
+      "currentFoundation": [
+        "CharacterCardImportButton already accepts pasted text/files, requires endpoint disclosure and confirmation before model upload, previews candidates, and preserves input on failure.",
+        "The planning-material workflow locks the character-roster resource and atomically merges confirmed candidates while preserving author-edited fields.",
+        "Character state supports field-level author/derived/legacy provenance, and derived chapter-progress writes are bound to an authoritative finalized source identity and cannot silently overwrite non-derived values.",
+        "Long-lived identity still uses normalized character names rather than stable UUIDs, so rename/homonym ambiguity remains an implementation boundary."
+      ],
+      "acceptanceOwner": "character ingestion and character-state evolution owner",
+      "requiredOutcome": "Ship both halves of the request: (1) import arbitrary supplied prose/outline/worldbuilding into editable character-card candidates, and (2) automatically update the derived character profile after plot progress. Imported candidates require author preview/edit/accept. Plot-progress updates may automatically replace empty or older derived fields only from the current finalized prose and must retain visible source provenance. A value that conflicts with an author/legacy field, or an ambiguous character identity, becomes a proposal requiring resolution; it must never silently replace or reclassify the author fact.",
+      "closeGate": "UI and persistence prove import accept/edit/reject, automatic non-conflicting derived updates, conflict proposals, stable identity or explicit rename/homonym resolution, idempotence, finalized-source invalidation, project switching/restart, and no write on cancel/failure/stale source. A test must show an unopposed derived change updates automatically, while a conflicting author fact survives and the proposal remains traceable to its finalized chapter. Release the feature before closing completed.",
+      "currentTurnReproduction": "not-run"
+    },
+    {
+      "number": 199,
+      "title": "[Bug] 长篇情节大纲无法限制生成范围，截断后结果不可恢复",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/199",
+      "labels": [
+        "bug",
+        "needs-triage"
+      ],
+      "updatedAt": "2026-09-07T08:50:52Z",
+      "classification": "delivered-close-candidate",
+      "deliveryEvidence": "PR #201 merged at 2026-09-08T03:15:22Z before v1.1.0 was published at 2026-09-08T04:35:10Z; prior acceptance evidence covered bounded ranges and interruption/recovery, including a synthetic 200-chapter project without claiming one 200-chapter request.",
+      "acceptanceOwner": "outline range and recovery owner",
+      "requiredOutcome": "Re-read the released artifact evidence against the issue's range, incomplete-result, resume, cancellation, project-switch, stale-source, corrupt-checkpoint, and UI-state acceptance list.",
+      "closeGate": "If the v1.1.0 artifact contains and passes that exact behavior, close completed with PR/release evidence. Otherwise keep open and repair the missing case; do not add an unnecessary new implementation merely to recreate already delivered work.",
+      "currentTurnReproduction": "not-run"
+    },
+    {
+      "number": 205,
+      "title": "Implement Plan v2: source-grounded chapter continuity and candidate context",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/205",
+      "labels": [
+        "enhancement",
+        "ready-for-agent"
+      ],
+      "updatedAt": "2026-09-08T02:48:32Z",
+      "classification": "delivered-close-candidate",
+      "deliveryEvidence": "PR #208 merged at 2026-09-08T03:50:18Z before v1.1.0 was published at 2026-09-08T04:35:10Z.",
+      "acceptanceOwner": "continuity and chapter-review owner",
+      "requiredOutcome": "Re-check that the released artifact preserves author versus derived facts, deterministic source-grounded context, separate candidate/finalized histories, cancellation/session/commit semantics, and the issue's target-by-target review UI.",
+      "closeGate": "Close completed only with issue-to-PR-to-v1.1.0 artifact evidence and no known regression that negates the requested outcome. A label or plan reference alone is insufficient.",
+      "currentTurnReproduction": "not-run"
+    },
+    {
+      "number": 211,
+      "title": "角色图谱保存无响应：修复真实协议路径并补角色卡粘贴导入入口",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/211",
+      "labels": [],
+      "updatedAt": "2026-09-08T08:32:50Z",
+      "classification": "merged-not-released",
+      "deliveryEvidence": "PR #212 merged at 2026-09-08T10:30:54Z, after v1.1.0 publication; therefore the latest public release does not prove delivery.",
+      "acceptanceOwner": "character-card import and core-document protocol owner",
+      "requiredOutcome": "Preserve the exact core URI mapping, explicit read-only graph behavior, visible save errors with dirty content retained, pasted/file card import with upload confirmation, candidate preview, author-field preservation, and project-session isolation through the redesigned UI.",
+      "closeGate": "Current production/UI/persistence/restart regressions pass and a public artifact containing PR #212 is released. Close completed with that artifact, not merely the merge commit.",
+      "currentTurnReproduction": "not-run"
+    },
+    {
+      "number": 213,
+      "title": "[Feature] 云存档功能",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/213",
+      "labels": [
+        "enhancement",
+        "needs-triage"
+      ],
+      "createdAt": "2026-09-08T12:09:21Z",
+      "updatedAt": "2026-09-09T13:26:45Z",
+      "classification": "feasible-enhancement-no-implementation",
+      "body": "### 提交前确认\n\n- [x] 我已搜索现有 Issues，没有找到相同建议。\n- [x] 我已移除凭据、完整小说、私人路径和其他敏感信息。\n\n### 要解决的问题\n\n希望作者大大能够增加一个云存档的功能，可以考虑使用gitee仓库进行json格式的存储（这个方案我自己用5.6-sol试过，应该可行，通过一本书绑定一个私人仓库来进行存档，在当前项目里可能还有未知问题和挑战）\n\n### 使用场景\n\n比如一个用户有台式和笔记本两台设备，在外地时只携带了笔记本，笔记本上没有存档和记录，这时候就可以用软件拉取云存档仓库里的内容。\n\n### 期望的变化\n\n用户可以进行云存档。\n\n### 已尝试的方法\n\n将文章导出通过weixin一类的发送然后再导入。这不是很方便。\n\n### 范围与限制\n\n未知。",
+      "comments": [
+        {
+          "author": "EthanYoQ",
+          "authorAssociation": "OWNER",
+          "createdAt": "2026-09-09T07:51:09Z",
+          "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/213#issuecomment-5598228270",
+          "body": "Nice Try！考虑到会增加普通用户的配置难度，可以留作后续版本迭代计划。暂不Close，放入长期版本规划"
+        },
+        {
+          "author": "BuLuoPiaoYu",
+          "authorAssociation": "NONE",
+          "createdAt": "2026-09-09T13:26:45Z",
+          "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/213#issuecomment-5602628672",
+          "body": "也可以考虑一下webdav协议的云备份方案 @EthanYoQ"
+        }
+      ],
+      "informationRequestStatus": "No unanswered maintainer request for information. The owner explicitly kept the feature open; the WebDAV suggestion is a scope option, not proof of implementation.",
+      "currentFoundation": {
+        "reusable": [
+          "Project manifest/project ID and canonical-root validation",
+          "Project session leases and stale-session rejection",
+          "Local external-file grants and finalized-manuscript export version guards",
+          "Import staging/identity and migration acceptance concepts",
+          "SQLite-backed project state and the modernization program's canonical asset inventory"
+        ],
+        "missing": [
+          "A complete project snapshot/archive contract",
+          "A WebDAV, Gitee, or other remote provider client",
+          "OS-backed cloud credential storage",
+          "Remote generation/CAS and conflict state",
+          "WAL-consistent whole-project snapshot and verified restore",
+          "Cloud backup/restore UI and product tests"
+        ],
+        "negativeEvidence": [
+          "The title-bar Backup button is disabled and its localized tooltip says the feature will be implemented later.",
+          "Current export supports only merged-md, split-md, and txt finalized-manuscript outputs; it is not a project backup.",
+          "No WebDAV/Gitee client or safeStorage/keytar credential layer appears in current source/dependencies.",
+          "The existing import-source identity secret is a local HMAC key with mode 0600, not a remote credential vault."
+        ]
+      },
+      "acceptanceOwner": "cloud backup/restore owner, with project-storage/migration owner co-signing the snapshot contract",
+      "requiredOutcome": "Deliver a bounded first provider: manual per-project Back up now and Restore as copy over WebDAV. Use a stable cloudBookId, immutable snapshot generations and a conditional latest pointer. Do not implement real-time collaboration, multi-user merge, arbitrary Git commands, a provider marketplace, or a general cloud platform.",
+      "closeGate": "A packaged desktop build backs up a representative project from profile/device A and restores it as a new local project ID on profile/device B; data and canonical-asset hashes match; concurrent remote changes produce an explicit conflict; source mutation, wrong credentials, network interruption, corrupt/oversized/unknown-schema archives and malicious paths fail closed; no author content is overwritten and no API/model/cloud secret, global config, absolute path, cache or log enters the archive. The exact limitation and non-E2E-encryption disclosure are visible, and the feature is publicly released.",
+      "currentTurnReproduction": "not-run"
+    },
+    {
+      "number": 219,
+      "title": "基本上每次都会在生成角色图谱这个地方卡主，这次是频繁报没有生成主角，不知道是什么问题导致的<img width=\"1300\" height=\"379\" alt=\"image\" src=\"https://github.com/user-attachments/assets/a5d4805d-f8b7-4bd1-a396-27aaab4547bc\" />",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/219",
+      "labels": [
+        "bug"
+      ],
+      "updatedAt": "2026-09-10T14:29:26Z",
+      "classification": "active-reported-bug",
+      "acceptanceOwner": "character-graph generation and roster parser/identity owner",
+      "requiredOutcome": "Reproduce the missing-protagonist failure and distinguish model output, parsing/repair, identity matching, persistence, and UI refresh. Fix the responsible layer without weakening protagonist requirements or fabricating a protagonist.",
+      "closeGate": "Synthetic Chinese production-path cases cover valid protagonist, omitted protagonist, alias/rename, malformed/truncated response, retry/repair, persistence and reopen; a real-provider check confirms the user-visible flow. Release the fix before closing completed.",
+      "currentTurnReproduction": "not-run"
+    },
+    {
+      "number": 221,
+      "title": "[Bug]",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/221",
+      "labels": [
+        "bug",
+        "needs-triage"
+      ],
+      "updatedAt": "2026-09-11T01:45:59Z",
+      "classification": "active-compound-bug",
+      "acceptanceOwner": "chapter generation owner for prose repetition and character-state owner for phantom characters; one integrator owns the combined product scenario",
+      "requiredOutcome": "Treat the report as two defects: unexpected character insertion and chapter 4 substantially repeating chapter 3. Fix identity/proposal admission so generation cannot silently add an unapproved character fact, and fix context/source/repetition handling so the next chapter progresses rather than copying prior prose.",
+      "closeGate": "Both symptoms pass separately and together on a 3-of-10-chapter Chinese project using the reported Qwen family or a justified equivalent. Tests cover stable character identity, author approval/rejection, previous-finalized-source selection, retry/reopen, repetition measurement plus human review, and no author-data overwrite. One symptom's fix cannot close the issue.",
+      "currentTurnReproduction": "not-run"
+    },
+    {
+      "number": 222,
+      "title": "[Feature] 删除孤立废弃组件 ActivityBar",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/222",
+      "labels": [
+        "enhancement",
+        "needs-triage"
+      ],
+      "updatedAt": "2026-09-11T03:23:43Z",
+      "classification": "implementation-open-pr",
+      "deliveryEvidence": "PR #223 is open at c033955bd4dcd4007fd22e82de37cf4b722ac0fc and has no reported checks in the queried rollup.",
+      "acceptanceOwner": "frontend dead-code cleanup owner",
+      "requiredOutcome": "Remove ActivityBar.tsx and its stale MenuItem comment after confirming no runtime, test, Storybook, build, release-skin, or documentation consumer remains.",
+      "closeGate": "The deletion is reviewed, checks/build pass, and the change is merged. Because this is internal dead-code removal with no promised user behavior, a separate public release is not required to truthfully close completed, but an open PR is not completion.",
+      "currentTurnReproduction": "not-run"
+    },
+    {
+      "number": 224,
+      "title": "Bug] 点击左侧工具栏或状态栏设置图标时，设置弹窗出现白屏/无法正常显示",
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/224",
+      "labels": [
+        "bug",
+        "needs-triage"
+      ],
+      "updatedAt": "2026-09-11T03:31:54Z",
+      "classification": "active-bug-open-pr-failing-ci",
+      "deliveryEvidence": "PR #225 is open at cc8a18d3a1eb10f708948a0697fbec639cde485e and Desktop PR CI (Windows) failed on 2026-09-12.",
+      "acceptanceOwner": "settings shell/navigation owner",
+      "requiredOutcome": "Repair both settings entry points so the modal opens to a valid default tab and renders real configuration content; preserve tab selection/state correctly across close/reopen and the redesigned UI.",
+      "closeGate": "Browser and packaged Windows desktop checks exercise left-toolbar and status-bar entry, default/deep-linked tabs, close/reopen, project switching and error boundaries; CI is green, the fix is merged and a public artifact is released. Do not close from an unmerged, failing PR.",
+      "currentTurnReproduction": "not-run"
+    }
+  ],
+  "relatedRemoteEvidence": {
+    "pullRequests": [
+      {
+        "number": 201,
+        "state": "MERGED",
+        "mergedAt": "2026-09-08T03:15:22Z",
+        "mergeCommit": "d24a4a417a063fd6df073765fe256bbcd7bc3695"
+      },
+      {
+        "number": 208,
+        "state": "MERGED",
+        "mergedAt": "2026-09-08T03:50:18Z",
+        "mergeCommit": "879f83521414f66019488462830c3134c77dc4f8"
+      },
+      {
+        "number": 212,
+        "state": "MERGED",
+        "mergedAt": "2026-09-08T10:30:54Z",
+        "mergeCommit": "38a844506a91907733c98e5ada66401bf6847532"
+      },
+      {
+        "number": 223,
+        "state": "OPEN",
+        "head": "c033955bd4dcd4007fd22e82de37cf4b722ac0fc"
+      },
+      {
+        "number": 225,
+        "state": "OPEN",
+        "head": "cc8a18d3a1eb10f708948a0697fbec639cde485e",
+        "checks": "Desktop PR CI (Windows): FAILURE"
+      },
+      {
+        "number": 229,
+        "state": "MERGED",
+        "mergedAt": "2026-09-11T23:17:29Z",
+        "mergeCommit": "2264390d6fb8b052cc14736d544df0cc74516649",
+        "scope": "partial Related to #187; explicitly not full closure"
+      }
+    ]
+  },
+  "countsByDisposition": {
+    "deliveredCloseCandidate": 2,
+    "mergedButNotReleased": 1,
+    "partialFixStillOpen": 1,
+    "feasibleEnhancementNeedsDelivery": 2,
+    "activeBugNeedsFix": 3,
+    "openImplementationPR": 1
+  },
+  "evidenceNote": "Issue facts/source investigation only, not current-turn reproduction. Program v3 contracts override advisory policy in this evidence snapshot."
+}

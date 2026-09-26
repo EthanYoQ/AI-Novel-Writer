@@ -1,166 +1,104 @@
-import { BaseWorkflowCommand, CommandExecuteParams, type WorkflowGenerationRuntimeDependencies } from './base-command'
-import { useProjectStore } from '../../../stores/project-store'
+import type { CommandExecuteParams, WorkflowGenerationRuntimeDependencies } from './base-command'
+import type { ChapterInfo } from '../chapter-workflow'
+import type { PreparedReviewRevisionContext, ReviewRevisionContext } from '../../../shared/review-revision-generation'
+import { ReviewRevisionCommand, type ReviewRevisionCommandSource } from './review-revision-command'
 import { resolvePromptTemplate } from '../../prompt-templates'
 import { ChapterPromptBuilder } from '../../prompts/prompt-builder'
-import { ipc } from '../../ipc-client'
-import { requireIpcSuccess } from '../../ipc-result'
-import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
-import { readWorkflowDraftMeta } from '../workflow-draft-meta'
-import {
-  requireWorkflowProjectSession,
-  workflowUiLocale,
-  workflowUiText,
-  workflowWritingLanguage,
-} from '../workflow-project-session'
 import { promptLanguageText } from '../../prompt-language'
-import { assertMateriallyCompleteRevision } from './refinement-completeness'
-import { countDraftUnits } from '../../../shared/draft-units'
-import { throwIfSourceDraftChanged } from '../source-draft-changed'
+import {
+  ChapterMaterialCapacityError,
+  selectReviewRevisionMaterials,
+  unknownReviewMaterialIdentity,
+  type ChapterMaterialIdentity,
+  type ReviewRevisionMaterial,
+  type ReviewRevisionMaterialAdmission,
+} from '../chapter-materials'
+import { requireWorkflowProjectSession, workflowUiText } from '../workflow-project-session'
 
-import type { ChapterInfo, FrozenDraftSourceIdentity } from '../chapter-workflow'
-
-export interface RefineDraftParams {
-  draftPath: string
-  draftContent: string
-  sourceDraft?: FrozenDraftSourceIdentity
-  chapterNumber: number
+export interface RefineDraftParams extends ReviewRevisionCommandSource {
   chapterInfo: ChapterInfo
   mergedGuidance?: string
   userRefinePrompt?: string
   shortSummary?: string
 }
 
-export class RefineDraftCommand extends BaseWorkflowCommand<string> {
-  constructor(
-    private params: RefineDraftParams,
-    generationDependencies?: WorkflowGenerationRuntimeDependencies,
-  ) {
-    super(generationDependencies)
+/**
+ * 修稿路径的材料候选：材料文本就是定稿原文本身，因此准入没有改变集合时
+ * `join('\n\n')` 的结果与接入前逐字节相同。前一章的定稿是必需锚点。
+ *
+ * 导出是为了让 `context-entry-parity.test.ts` 驱动本入口**真实的**装配缝，
+ * 而不是在测试里另写一份近似实现。
+ */
+export function refineHistoryMaterials(frozen: ReviewRevisionContext, current: ChapterMaterialIdentity): ReviewRevisionMaterial[] {
+  return frozen.history.map(item => ({
+    identity: item.identity ?? unknownReviewMaterialIdentity(current),
+    category: 'finalized-history',
+    required: item.chapterNumber === frozen.source.chapterNumber - 1,
+    text: item.content,
+  }))
+}
+
+export class RefineDraftCommand extends ReviewRevisionCommand {
+  constructor(params: RefineDraftParams, dependencies?: WorkflowGenerationRuntimeDependencies) {
+    super('refine-draft', params, [
+      { id: 'user-prompt', text: params.userRefinePrompt ?? '' },
+      { id: 'merged-guidance', text: params.mergedGuidance ?? '' },
+    ], {}, dependencies)
   }
 
-  async execute(params: CommandExecuteParams): Promise<string> {
-    return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params))
-  }
-
-  private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
-    const projectSession = requireWorkflowProjectSession(context)
-    const writingLanguage = workflowWritingLanguage(context)
-    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
-    const project = useProjectStore.getState().currentProject
-    if (!project || !sameProjectSessionContext(
-      projectSession,
-      projectSessionContextFromProject(project),
-    )) throw new Error(text('当前项目已切换，修稿已停止', 'The project changed, so the revision stopped.'))
-    const novelConfig = Object.freeze({ ...project.novelConfig })
-
-    const draft = this.params.draftContent
-    if (!draft) throw new Error(text('无草稿内容', 'There is no draft content to revise.'))
-
-    callbacks.log(text('正在精修章节...', 'Refining the chapter...'))
-
-    const template = await resolvePromptTemplate('refine_chapter', projectSession, writingLanguage)
-    if (!template) throw new Error(text('未找到修稿模板', 'The revision prompt template was not found.'))
-
-    const mergedGuidance = this.params.mergedGuidance || novelConfig.globalGuidance || ''
-    const userPromptBlock = this.params.userRefinePrompt?.trim()
-      ? promptLanguageText(
-          writingLanguage,
-          `【用户额外修稿指导（最高优先级）】\n${this.params.userRefinePrompt}`,
-          `[Additional author revision guidance — highest priority]\n${this.params.userRefinePrompt}`,
-        )
-      : ''
-
-    const promptBuilder = new ChapterPromptBuilder(template, writingLanguage)
-      .withDraftContent(draft)
-      .withChapterInfo(this.params.chapterInfo)
-      .withGlobalGuidance(mergedGuidance)
-      .withGlobalSummary(this.params.shortSummary || '')
-      .withShortSummary(this.params.shortSummary || '')
-      .withWordNumber(novelConfig.wordsPerChapter)
-      .withWritingStyle(novelConfig.writingStyle || '')
-      .withUserRefinePrompt(userPromptBlock)
-
-    const refined = await this.callLLMWithBoundedCompletion(
-      promptBuilder.build(),
-      promptBuilder.getSystemRole(),
-      callbacks,
-      { mode: 'append-visible-text', maxContinuations: 3 },
-      { purpose: 'refine-draft', reasoningStage: 'review', writingSkillStage: 'refinement' },
-      context,
-    )
-    this.assertNotCancelled(context)
-    const cleanRefined = this.stripThinkingTags(refined).trim()
-    assertMateriallyCompleteRevision(
-      draft,
-      cleanRefined,
-      novelConfig.wordsPerChapter,
-      workflowUiLocale(context),
-    )
-
-    if (!sameProjectSessionContext(
-      projectSession,
-      projectSessionContextFromProject(useProjectStore.getState().currentProject),
-    )) throw new Error(text('当前项目已切换，修稿结果未保存', 'The project changed, so the revision was not saved.'))
-
-    const frozenSource = this.params.sourceDraft
-    const legacyBaseDraft = frozenSource
-      ? null
-      : await readWorkflowDraftMeta(this.params.draftPath, context.projectPath, projectSession)
-    const baseDraftId = frozenSource?.id ?? legacyBaseDraft?.id
-    if (baseDraftId === undefined) throw new Error(text('找不到基准草稿版本', 'The source draft version could not be found.'))
-
-    this.assertNotCancelled(context)
-    const createRes = await ipc.invokeWithProjectSession(projectSession, 'db:revision-replace-pending', {
-      baseDraftId,
-      revisionType: 'refine',
-      content: cleanRefined,
-      wordCount: countDraftUnits(cleanRefined),
-      ...(frozenSource ? {
-        expectedSource: {
-          id: frozenSource.id,
-          chapterNumber: frozenSource.chapterNumber,
-          version: frozenSource.version,
-          status: frozenSource.status,
-          content: draft,
-        },
-      } : {}),
-    }, context.projectPath)
-    throwIfSourceDraftChanged(createRes, workflowUiLocale(context), 'refine')
-    requireIpcSuccess(createRes, text('创建修订稿', 'Create the pending revision'))
-    if (createRes.id === undefined) {
-      throw new Error(text('创建修订稿失败：未返回修订稿编号', 'The pending revision did not return an ID.'))
+  protected async generateAndCommit(prepared: PreparedReviewRevisionContext, params: CommandExecuteParams) {
+    if (this.recovery?.composition && this.recovery.lastCompositionFinishReason === 'stop') {
+      return this.generateRevision(prepared, params, '', '')
     }
-
-    const revIndex = createRes.revisionIndex ?? 0
-
-    this.assertNotCancelled(context)
-    if (!sameProjectSessionContext(
-      projectSession,
-      projectSessionContextFromProject(useProjectStore.getState().currentProject),
-    )) throw new Error(text('当前项目已切换，已拒绝打开旧修订稿', 'The project changed, so the stale revision was not opened.'))
-    const { useEditorStore } = await import('../../../stores/editor-store')
-    useEditorStore.getState().openFile({
-      id: `diff-${this.params.draftPath}-${createRes.id}`,
-      name: text(
-        `修稿合并：第${this.params.chapterNumber}章`,
-        `Revision merge: Chapter ${this.params.chapterNumber}`,
-      ),
-      type: 'diff',
-      filePath: this.params.draftPath,
-      originalContent: this.params.draftContent,
-      content: cleanRefined,
-      revisionPath: `vela://revision/${createRes.id}`,
-      chapterNumber: this.params.chapterNumber,
-      chapterDir: `vela://draft/ch${this.params.chapterNumber}`,
-      projectKey: context.projectPath,
-    })
-
-    context.data.refined = cleanRefined
-    context.data.refinedPath = this.params.draftPath
-    callbacks.log(text(
-      `修稿完成（${countDraftUnits(cleanRefined)} 字），已生成修订稿版本 r${revIndex}`,
-      `Revision complete (${countDraftUnits(cleanRefined)} words); created revision r${revIndex}`,
-    ))
-    return cleanRefined
+    const frozen = prepared.context
+    const language = frozen.writingLanguage
+    params.callbacks.log(workflowUiText(params.context, '正在精修章节...', 'Refining the chapter...'))
+    const projectSession = requireWorkflowProjectSession(params.context)
+    const template = await resolvePromptTemplate('refine_chapter', projectSession, language)
+    if (!template) throw new Error(workflowUiText(params.context, '未找到修稿模板', 'The revision prompt template was not found.'))
+    const blueprint = frozen.blueprints.find(item => item.chapterNumber === frozen.source.chapterNumber)
+    const guidance = frozen.authorInputs.find(input => input.id === 'merged-guidance')?.text || frozen.config.globalGuidance || ''
+    const userPrompt = frozen.authorInputs.find(input => input.id === 'user-prompt')?.text || ''
+    const userPromptBlock = userPrompt.trim() ? promptLanguageText(language,
+      `【用户额外修稿指导（最高优先级）】\n${userPrompt}`,
+      `[Additional author revision guidance — highest priority]\n${userPrompt}`) : ''
+    // 与写稿/审稿路径同一套准入：定稿历史按身份整段纳入或整段省略，绝不无预算地整段拼接。
+    const current = { projectId: projectSession.projectId, epoch: projectSession.leaseId }
+    let admission: ReviewRevisionMaterialAdmission
+    try {
+      admission = selectReviewRevisionMaterials({
+        current,
+        writingLanguage: language,
+        materials: refineHistoryMaterials(frozen, current),
+        relevanceTerms: [blueprint?.title ?? '', blueprint?.keyEvents ?? '', ...(blueprint?.characters ?? [])],
+      })
+    } catch (error) {
+      if (!(error instanceof ChapterMaterialCapacityError)) throw error
+      const blocked = error.decision.decision === 'capacity-conflict'
+        ? `${error.decision.blockingSourceId}:${error.decision.blockingReason}`
+        : error.decision.remainingRequired.join('、')
+      params.callbacks.log(workflowUiText(params.context,
+        `  必需材料超出上下文容量（${error.decision.decision}）：${blocked}`,
+        `  Required material exceeds the context capacity (${error.decision.decision}): ${blocked}`))
+      throw new Error(workflowUiText(params.context,
+        '本章修稿的必需材料（前一章定稿）超出上下文容量，已停止修稿。请精简该章定稿材料后重试。',
+        'The required material for this revision (the previous chapter\'s finalized manuscript) exceeds the context capacity, so the revision stopped. Trim that chapter and try again.'))
+    }
+    // 准入只决定成员；顺序仍是定稿历史的原有顺序，因此集合未变时提示词逐字节不变。
+    const historySummary = admission.admitted.map(material => material.text).join('\n\n')
+    const builder = new ChapterPromptBuilder(template, language)
+      .withDraftContent(frozen.source.content)
+      .withChapterInfo({ projectPath: params.context.projectPath, chapterNumber: frozen.source.chapterNumber,
+        title: blueprint?.title ?? '', role: blueprint?.role ?? '', purpose: blueprint?.purpose ?? '',
+        characters: blueprint?.characters ?? [], keyEvents: blueprint?.keyEvents ?? '' })
+      .withGlobalGuidance(guidance)
+      .withGlobalSummary(historySummary)
+      .withShortSummary(historySummary)
+      .withWordNumber(frozen.config.wordsPerChapter)
+      .withWritingStyle(frozen.config.writingStyle || '')
+      .withUserRefinePrompt(userPromptBlock)
+    const prompt = builder.build()
+    await this.bindMaterialDecision(params, admission.decision, prompt)
+    return this.generateRevision(prepared, params, prompt, builder.getSystemRole())
   }
 }

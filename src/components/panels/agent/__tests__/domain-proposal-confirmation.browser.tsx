@@ -45,7 +45,7 @@ beforeEach(() => {
   })
   useAgentStore.setState({ resolveToolConfirmation, cancelGeneration })
   useProjectStore.setState({ currentProject: project as never })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke: invoke,

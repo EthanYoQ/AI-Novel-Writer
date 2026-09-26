@@ -1,5 +1,6 @@
+import { assertKnowledgeSourceIdle, withKnowledgeSourceGate } from './services/knowledge-source-gate'
 /**
- * Vela 向量数据库封装 — 基于 LanceDB
+ * AI Novel 向量数据库封装 — 基于 LanceDB
  *
  * `chunks` 是始终可用的全文文本事实源。每个嵌入空间都有独立物理表，避免
  * 不同模型、维度或距离语义的向量混写进同一 Arrow FixedSizeList。
@@ -9,6 +10,8 @@ import { Field, FixedSizeList as ArrowFixedSizeList, Float32, Int32, Utf8, Schem
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
+import { getProjectDataRoot } from './services/project-data-locator'
+import { CANONICAL_PROJECT_DIRECTORY } from '../src/shared/project-format'
 
 // ===== 类型定义 =====
 
@@ -41,6 +44,19 @@ export interface DocumentInfo {
   chunkCount: number
   filePath: string
   corpusKind: KnowledgeCorpusKind
+}
+
+export interface PortableKnowledgeDocument {
+  docId: string
+  fileName: string
+  corpusKind: KnowledgeCorpusKind
+  chunks: Array<{ chunkIndex: number; text: string }>
+  copy?: KnowledgeCopy
+}
+
+export interface PortableKnowledgeSnapshot {
+  version: 1
+  documents: PortableKnowledgeDocument[]
 }
 
 /** 检索结果 */
@@ -112,28 +128,98 @@ const LEGACY_MIGRATION_JOURNAL_FILE = 'vectors.json.migration-journal.json'
 const LEGACY_MODEL_FINGERPRINT = 'legacy:unknown'
 const LEGACY_COMPAT_MODEL_PREFIX = 'legacy:dimension:'
 const DEFAULT_DISTANCE_METRIC = 'l2'
+export const KNOWLEDGE_COPY_MARKER = 'knowledge-copy:'
+
+interface KnowledgeCopy { content: string; indexedHash: string; edited: boolean; indexDirty: boolean }
+const contentHash = (content: string) => createHash('sha256').update(content, 'utf8').digest('hex')
+
+function knowledgeCopyPath(projectStorageRoot: string, docId: string): string {
+  const directory = path.join(projectStorageRoot, 'knowledge-copies')
+  if (fs.existsSync(directory)) {
+    const stat = fs.lstatSync(directory)
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('KNOWLEDGE_COPY_UNSAFE_PATH')
+  }
+  return path.join(directory, `${contentHash(docId)}.json`)
+}
+
+export function readKnowledgeCopy(projectStorageRoot: string, docId: string): KnowledgeCopy | null {
+  const file = knowledgeCopyPath(projectStorageRoot, docId)
+  if (!fs.existsSync(file)) return null
+  const stat = fs.lstatSync(file)
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('KNOWLEDGE_COPY_UNSAFE_PATH')
+  const value = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<KnowledgeCopy>
+  if (typeof value.content !== 'string' || typeof value.indexedHash !== 'string' || typeof value.edited !== 'boolean' || typeof value.indexDirty !== 'boolean') {
+    throw new Error('KNOWLEDGE_COPY_INVALID')
+  }
+  return value as KnowledgeCopy
+}
+
+export function writeKnowledgeCopy(projectStorageRoot: string, docId: string, copy: KnowledgeCopy): void {
+  const file = knowledgeCopyPath(projectStorageRoot, docId)
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const temporary = `${file}.${randomUUID()}.tmp`
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(copy), { encoding: 'utf8', flag: 'wx' })
+    fs.renameSync(temporary, file)
+  } finally {
+    if (fs.existsSync(temporary)) fs.rmSync(temporary)
+  }
+}
+
+export function isDocumentCopyIndexCurrent(projectStorageRoot: string, docId: string, filePath: unknown): boolean {
+  if (typeof filePath !== 'string' || !filePath.startsWith(KNOWLEDGE_COPY_MARKER)) return true
+  try {
+    const copy = readKnowledgeCopy(projectStorageRoot, docId)
+    return !!copy && !copy.indexDirty && contentHash(copy.content) === copy.indexedHash
+  } catch { return false }
+}
 
 // ===== 连接池（按项目路径缓存） =====
 
 const connectionPool = new Map<string, lancedb.Connection>()
+// Exposing a Connection also permits independently owned Tables. Closing the pool
+// cannot prove those handles were released; migration requires a fresh process.
+const connectionExposure = new Set<string>()
+const migrationFences = new Set<string>()
+function migrationProjectKey(projectPath: string): string {
+  const resolved = path.resolve(projectPath)
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+}
+
+export function closeVectorStoreForMigration(projectPath: string): { closed: true; release: () => void } {
+  assertKnowledgeSourceIdle(path.join(path.resolve(projectPath), CANONICAL_PROJECT_DIRECTORY))
+  const key = migrationProjectKey(projectPath)
+  if (connectionExposure.has(key) || [...legacyMigrationInFlight.keys()].some(root => migrationProjectKey(root) === key)
+    || migrationFences.has(key)) throw new Error('VECTOR_MIGRATION_BUSY_OR_HANDLES_UNPROVEN')
+  migrationFences.add(key)
+  let released = false
+  return { closed: true, release: () => { if (!released) { released = true; migrationFences.delete(key) } } }
+}
 const legacyMigrationInFlight = new Map<string, Promise<{ success: boolean; migrated: number; error?: string }>>()
 const embeddingTableCreationOwners = new Set<string>()
 
 function databasePath(projectPath: string): string {
-  return path.join(projectPath, '.vela', 'lancedb')
+  return path.join(getProjectDataRoot(projectPath), 'lancedb')
 }
 
 function registryPath(projectPath: string): string {
-  return path.join(projectPath, '.vela', EMBEDDING_REGISTRY_FILE)
+  return path.join(getProjectDataRoot(projectPath), EMBEDDING_REGISTRY_FILE)
 }
 
 function legacyMigrationJournalPath(projectPath: string): string {
-  return path.join(projectPath, '.vela', LEGACY_MIGRATION_JOURNAL_FILE)
+  return path.join(getProjectDataRoot(projectPath), LEGACY_MIGRATION_JOURNAL_FILE)
 }
 
 /** 获取 LanceDB 连接（惰性创建） */
 export async function getConnection(projectPath: string): Promise<lancedb.Connection> {
+  if (migrationFences.has(migrationProjectKey(projectPath))) throw new Error('VECTOR_MIGRATION_FENCED')
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => getConnectionInternal(projectPath))
+}
+
+async function getConnectionInternal(projectPath: string): Promise<lancedb.Connection> {
+  if (migrationFences.has(migrationProjectKey(projectPath))) throw new Error('VECTOR_MIGRATION_FENCED')
   const dbPath = databasePath(projectPath)
+  connectionExposure.add(migrationProjectKey(projectPath))
   const cached = connectionPool.get(dbPath)
   if (cached) return cached
 
@@ -145,7 +231,9 @@ export async function getConnection(projectPath: string): Promise<lancedb.Connec
 
 /** 关闭指定项目的连接 */
 export function closeConnection(projectPath: string): void {
-  const dbPath = databasePath(projectPath)
+  assertKnowledgeSourceIdle(path.join(path.resolve(projectPath), CANONICAL_PROJECT_DIRECTORY))
+  // Closing a cached handle must still work after its DB session was revoked.
+  const dbPath = path.join(path.resolve(projectPath), CANONICAL_PROJECT_DIRECTORY, 'lancedb')
   const connection = connectionPool.get(dbPath)
   connectionPool.delete(dbPath)
   connection?.close()
@@ -273,7 +361,7 @@ function emptyRegistry(): EmbeddingSpaceRegistry {
   return { version: 1, activeGeneration: null, spaces: [] }
 }
 
-function validateRegistry(value: unknown): EmbeddingSpaceRegistry {
+export function validateRegistry(value: unknown): EmbeddingSpaceRegistry {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('嵌入空间元数据损坏，未修改现有向量表')
   }
@@ -340,6 +428,7 @@ async function inferLegacyRegistry(
   const registry = emptyRegistry()
   if (tableNames.includes(TABLE_NAME)) {
     const legacyTable = await db.openTable(TABLE_NAME)
+    try {
     const dimension = await vectorDimensionFromTable(legacyTable)
     if (dimension !== undefined) {
       registry.activeGeneration = 0
@@ -353,6 +442,7 @@ async function inferLegacyRegistry(
         createdAt: new Date().toISOString(),
       })
     }
+    } finally { legacyTable.close() }
   }
   return registry
 }
@@ -375,6 +465,10 @@ async function loadOrRegisterLegacyRegistry(
 
 /** 读取当前元数据；旧 2048 表会在这里安全登记为 legacy 空间。 */
 export async function getEmbeddingSpaces(projectPath: string): Promise<EmbeddingSpaceRegistry> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => getEmbeddingSpacesInternal(projectPath))
+}
+
+async function getEmbeddingSpacesInternal(projectPath: string): Promise<EmbeddingSpaceRegistry> {
   const db = await getConnection(projectPath)
   const registry = await loadOrRegisterLegacyRegistry(projectPath, db, await db.tableNames())
   return {
@@ -436,7 +530,7 @@ async function cleanupOwnedTableCreation(
       removeEmptyUnregisteredTableDirectory(projectPath, tableName)
     }
   } catch (cleanupError) {
-    console.warn(`[Vela VectorStore] 清理本次失败的嵌入表 ${tableName} 失败:`, cleanupError)
+    console.warn(`[AI Novel VectorStore] 清理本次失败的嵌入表 ${tableName} 失败:`, cleanupError)
   }
 }
 
@@ -563,7 +657,7 @@ async function compensateEmbeddingWrite(
       await table.delete(`id = '${recordId.replace(/'/g, "''")}'`)
     }
   } catch (error) {
-    console.warn(`[Vela VectorStore] 补偿嵌入写入 ${write.tableName} 失败:`, error)
+    console.warn(`[AI Novel VectorStore] 补偿嵌入写入 ${write.tableName} 失败:`, error)
   }
 }
 
@@ -772,6 +866,13 @@ export async function activatePlannedEmbeddingSpace(
   projectPath: string,
   plan: EmbeddingRebuildPlan,
 ): Promise<{ success: boolean; error?: string }> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => activatePlannedEmbeddingSpaceInternal(projectPath, plan))
+}
+
+async function activatePlannedEmbeddingSpaceInternal(
+  projectPath: string,
+  plan: EmbeddingRebuildPlan,
+): Promise<{ success: boolean; error?: string }> {
   if (plan.mode !== 'activate') {
     return { success: false, error: '当前嵌入空间不允许直接激活' }
   }
@@ -800,6 +901,14 @@ export async function activatePlannedEmbeddingSpace(
  * after the new generation has passed completeness and query probes.
  */
 export async function rebuildPlannedEmbeddingSpace(
+  projectPath: string,
+  plan: EmbeddingRebuildPlan,
+  updates: Array<{ id: string; vector: number[] }>,
+): Promise<{ success: boolean; count: number; error?: string }> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => rebuildPlannedEmbeddingSpaceInternal(projectPath, plan, updates))
+}
+
+async function rebuildPlannedEmbeddingSpaceInternal(
   projectPath: string,
   plan: EmbeddingRebuildPlan,
   updates: Array<{ id: string; vector: number[] }>,
@@ -880,7 +989,7 @@ export async function rebuildPlannedEmbeddingSpace(
       try {
         await db.dropTable(newSpace.tableName)
       } catch (cleanupError) {
-        console.warn('[Vela VectorStore] 清理失败的嵌入重建表失败:', cleanupError)
+        console.warn('[AI Novel VectorStore] 清理失败的嵌入重建表失败:', cleanupError)
       }
     }
     return {
@@ -907,19 +1016,22 @@ async function writeDocumentInfo(
   await docsTable.add([docInfo])
 }
 
-async function pruneSupersededDocumentInfo(
+async function pruneSupersededDocuments(
   db: lancedb.Connection,
+  projectPath: string,
   docInfo: DocumentInfo,
 ): Promise<void> {
-  try {
-    const docsTable = await db.openTable(DOCS_TABLE_NAME)
-    const fileName = docInfo.fileName.replace(/'/g, "''")
-    const docId = docInfo.id.replace(/'/g, "''")
-    const corpusKind = docInfo.corpusKind.replace(/'/g, "''")
-    await docsTable.delete(`\`fileName\` = '${fileName}' AND \`corpusKind\` = '${corpusKind}' AND id != '${docId}'`)
-  } catch (error) {
-    // 这一步是旧元数据整理，不应将已完成的安全写入变成失败或删除新数据。
-    console.warn('[Vela VectorStore] 清理同名旧文档元数据失败:', error)
+  const docsTable = await db.openTable(DOCS_TABLE_NAME)
+  const fileName = docInfo.fileName.replace(/'/g, "''")
+  const docId = docInfo.id.replace(/'/g, "''")
+  const corpusKind = docInfo.corpusKind.replace(/'/g, "''")
+  const old = await docsTable.query()
+    .filter(`\`fileName\` = '${fileName}' AND \`corpusKind\` = '${corpusKind}' AND id != '${docId}'`)
+    .select(['id']).toArray()
+  for (const row of old) {
+    if (!await removeDocumentInternal(projectPath, String(row.id))) {
+      throw new Error('SUPERSEDED_KNOWLEDGE_CLEANUP_FAILED')
+    }
   }
 }
 
@@ -943,11 +1055,11 @@ async function rollbackCurrentWrite(
           }
         }
       } catch (error) {
-        console.warn(`[Vela VectorStore] 回滚 ${tableName} 的本次写入失败:`, error)
+        console.warn(`[AI Novel VectorStore] 回滚 ${tableName} 的本次写入失败:`, error)
       }
     }
   } catch (error) {
-    console.warn('[Vela VectorStore] 读取回滚目标失败:', error)
+    console.warn('[AI Novel VectorStore] 读取回滚目标失败:', error)
   }
 }
 
@@ -958,6 +1070,24 @@ async function rollbackCurrentWrite(
  * 文本先后均可独立检索；带向量时仅写入匹配的版本化嵌入空间。
  */
 export async function addChunks(
+  projectPath: string,
+  docId: string,
+  fileName: string,
+  chunks: string[],
+  vectors?: number[][],
+  filePath?: string,
+  metadata?: {
+    chapterNumber?: number
+    chapterTitle?: string
+    corpusKind?: KnowledgeCorpusKind
+    replacementMode?: 'by-file-name' | 'stable-id'
+  },
+  embeddingSpace?: EmbeddingSpaceIdentity,
+): Promise<{ success: boolean; chunkCount: number; error?: string }> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => addChunksInternal(projectPath, docId, fileName, chunks, vectors, filePath, metadata, embeddingSpace))
+}
+
+async function addChunksInternal(
   projectPath: string,
   docId: string,
   fileName: string,
@@ -1061,26 +1191,33 @@ export async function addChunks(
       await finaliseEmbeddingWrite(projectPath, db, registry, embeddingWrite)
     }
 
+    // The new document is durable. A partial old-document cleanup must not
+    // roll it back and leave the user with no complete copy.
+    rollbackRequired = false
+
     if (metadata?.replacementMode !== 'stable-id') {
-      await pruneSupersededDocumentInfo(db, docInfo)
+      await pruneSupersededDocuments(db, projectPath, docInfo)
     }
 
-    rollbackRequired = false
     return { success: true, chunkCount: chunks.length }
   } catch (error) {
     if (rollbackRequired && db) {
       await rollbackCurrentWrite(db, chunkIds, docId)
     }
-    if (db && embeddingWrite) {
+    if (rollbackRequired && db && embeddingWrite) {
       await compensateEmbeddingWrite(db, embeddingWrite, chunkIds)
     }
-    console.error('[Vela VectorStore] 写入失败:', error)
+    console.error('[AI Novel VectorStore] 写入失败:', error)
     return { success: false, chunkCount: 0, error: String(error) }
   }
 }
 
 /** 删除文档及其在所有嵌入空间中的块，不删除任何表。 */
 export async function removeDocument(projectPath: string, docId: string): Promise<boolean> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => removeDocumentInternal(projectPath, docId))
+}
+
+async function removeDocumentInternal(projectPath: string, docId: string): Promise<boolean> {
   try {
     const db = await getConnection(projectPath)
     const tableNames = await db.tableNames()
@@ -1094,10 +1231,6 @@ export async function removeDocument(projectPath: string, docId: string): Promis
     for (const tableName of targets) {
       if (tableNames.includes(tableName)) await (await db.openTable(tableName)).delete(`\`docId\` = '${escapedId}'`)
     }
-    if (tableNames.includes(DOCS_TABLE_NAME)) {
-      await (await db.openTable(DOCS_TABLE_NAME)).delete(`id = '${escapedId}'`)
-    }
-
     // LanceDB cannot atomically delete across physical generations.  A retry is
     // safe only after proving that every registered and orphan generation has
     // reached the same zero-row postcondition.
@@ -1116,15 +1249,19 @@ export async function removeDocument(projectPath: string, docId: string): Promis
       if (rows.length > 0) return false
     }
     if (remainingTableNames.includes(DOCS_TABLE_NAME)) {
+      await (await db.openTable(DOCS_TABLE_NAME)).delete(`id = '${escapedId}'`)
+    }
+    if (remainingTableNames.includes(DOCS_TABLE_NAME)) {
       const rows = await (await db.openTable(DOCS_TABLE_NAME)).query()
         .filter(`id = '${escapedId}'`)
         .limit(1)
         .toArray()
       if (rows.length > 0) return false
     }
+    fs.rmSync(knowledgeCopyPath(getProjectDataRoot(projectPath), docId), { force: true })
     return true
   } catch (error) {
-    console.error('[Vela VectorStore] 删除失败:', error)
+    console.error('[AI Novel VectorStore] 删除失败:', error)
     return false
   }
 }
@@ -1133,6 +1270,10 @@ export async function removeDocument(projectPath: string, docId: string): Promis
  * 清空整个项目知识库。该函数是用户明确触发的清空操作，因而会删除所有代际。
  */
 export async function clearAll(projectPath: string): Promise<boolean> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => clearAllInternal(projectPath))
+}
+
+async function clearAllInternal(projectPath: string): Promise<boolean> {
   try {
     const db = await getConnection(projectPath)
     const tableNames = await db.tableNames()
@@ -1143,9 +1284,15 @@ export async function clearAll(projectPath: string): Promise<boolean> {
     }
     const filePath = registryPath(projectPath)
     if (fs.existsSync(filePath)) fs.rmSync(filePath, { force: true })
+    const copies = path.join(getProjectDataRoot(projectPath), 'knowledge-copies')
+    if (fs.existsSync(copies)) {
+      const stat = fs.lstatSync(copies)
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('KNOWLEDGE_COPY_UNSAFE_PATH')
+      fs.rmSync(copies, { recursive: true })
+    }
     return true
   } catch (error) {
-    console.error('[Vela VectorStore] 清空知识库失败:', error)
+    console.error('[AI Novel VectorStore] 清空知识库失败:', error)
     return false
   }
 }
@@ -1208,10 +1355,30 @@ export async function searchWithScope(
   embeddingSpace?: EmbeddingSpaceIdentity,
   excludedCorpusKinds: readonly KnowledgeCorpusKind[] = [],
 ): Promise<SearchResult[]> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => searchWithScopeInternal(projectPath, queryText, queryVector, topK, chapterScope, embeddingSpace, excludedCorpusKinds))
+}
+
+async function searchWithScopeInternal(
+  projectPath: string,
+  queryText: string,
+  queryVector?: number[],
+  topK: number = 5,
+  chapterScope?: [number, number],
+  embeddingSpace?: EmbeddingSpaceIdentity,
+  excludedCorpusKinds: readonly KnowledgeCorpusKind[] = [],
+): Promise<SearchResult[]> {
   try {
     const db = await getConnection(projectPath)
     const tableNames = await db.tableNames()
     if (!tableNames.includes(TABLE_NAME)) return []
+    const staleDocIds = tableNames.includes(DOCS_TABLE_NAME)
+      ? (await (await db.openTable(DOCS_TABLE_NAME)).query().toArray())
+          .filter(row => !isDocumentCopyIndexCurrent(getProjectDataRoot(projectPath), String(row.id), row.filePath))
+          .map(row => String(row.id))
+      : []
+    const currentCopyFilter = staleDocIds.length
+      ? staleDocIds.map(id => `\`docId\` != '${id.replace(/'/g, "''")}'`).join(' AND ')
+      : undefined
 
     let scopeFilter: string | undefined
     if (chapterScope) {
@@ -1225,6 +1392,7 @@ export async function searchWithScope(
         const active = activeSpace(registry)
         if (active && tableNames.includes(active.tableName) && requestMatchesActiveSpace(active, queryVector, embeddingSpace)) {
           const vectorTable = await db.openTable(active.tableName)
+          try {
           let query = vectorTable.search(queryVector).limit(topK)
           const vectorFilters: string[] = []
           if (scopeFilter && await tableSupportsField(vectorTable, 'chapterNumber')) {
@@ -1234,6 +1402,7 @@ export async function searchWithScope(
           if (corpusFilter && await tableSupportsField(vectorTable, 'corpusKind')) {
             vectorFilters.push(corpusFilter)
           }
+          if (currentCopyFilter) vectorFilters.push(currentCopyFilter)
           if (vectorFilters.length > 0) query = query.where(vectorFilters.join(' AND '))
           const results = await query.toArray()
           if (results.length > 0) {
@@ -1243,14 +1412,16 @@ export async function searchWithScope(
               fileName: row.fileName,
             }))
           }
+          } finally { vectorTable.close() }
         }
       } catch (error) {
-        console.warn('[Vela VectorStore] 向量检索降级为全文检索:', error)
+        console.warn('[AI Novel VectorStore] 向量检索降级为全文检索:', error)
       }
     }
 
+    let canonicalTable: lancedb.Table | undefined
     try {
-      const canonicalTable = await db.openTable(TABLE_NAME)
+      canonicalTable = await db.openTable(TABLE_NAME)
       const rawTerms = queryText.match(/[\p{L}\p{N}-]+/gu) ?? []
       const meaningfulTerms = rawTerms.filter(term => Array.from(term).length >= 2)
       const searchTerms = [...new Map(
@@ -1270,6 +1441,7 @@ export async function searchWithScope(
       if (corpusFilter && await tableSupportsField(canonicalTable, 'corpusKind')) {
         filters.push(corpusFilter)
       }
+      if (currentCopyFilter) filters.push(currentCopyFilter)
       const filter = filters.join(' AND ')
       const results = await canonicalTable.query().filter(filter).toArray()
       const normalizedTerms = searchTerms.map(term => term.toLocaleLowerCase())
@@ -1291,16 +1463,246 @@ export async function searchWithScope(
       }
       return [...uniqueResults.values()].slice(0, topK)
     } catch (error) {
-      console.warn('[Vela VectorStore] 纯文本检索失败:', error)
+      console.warn('[AI Novel VectorStore] 纯文本检索失败:', error)
       return []
+    } finally {
+      canonicalTable?.close()
     }
   } catch (error) {
-    console.error('[Vela VectorStore] 检索失败:', error)
+    console.error('[AI Novel VectorStore] 检索失败:', error)
     return []
   }
 }
 
 export async function listDocuments(projectPath: string): Promise<DocumentInfo[]> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => listDocumentsInternal(projectPath))
+}
+
+const PORTABLE_KNOWLEDGE_VERSION = 1 as const
+const PORTABLE_KNOWLEDGE_DATE = '1970-01-01T00:00:00.000Z'
+
+function exactPortableKeys(value: Record<string, unknown>, expected: readonly string[]): void {
+  const actual = Object.keys(value).sort()
+  const wanted = [...expected].sort()
+  if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
+    throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+  }
+}
+
+function portableRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+  return value as Record<string, unknown>
+}
+
+function portableText(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.includes('\0')) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+  return value
+}
+
+function portableFileName(value: unknown): string {
+  const fileName = portableText(value)
+  const normalized = fileName.normalize('NFKC')
+  if (fileName.length > 512 || path.posix.isAbsolute(normalized) || path.win32.isAbsolute(normalized)
+    || normalized.includes('/') || normalized.includes('\\') || /^[a-z]:/iu.test(normalized)
+    || /[<>:"|?*]/u.test(normalized) || normalized.endsWith('.') || normalized.endsWith(' ')
+    || [...normalized].some(character => character.charCodeAt(0) <= 31)
+    || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu.test(normalized)) {
+    throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+  }
+  return fileName
+}
+
+function portableCorpusKind(value: unknown): KnowledgeCorpusKind {
+  if (value !== 'reference' && value !== 'project-knowledge' && value !== 'unknown') {
+    throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+  }
+  return value
+}
+
+/** Strict non-executable projection: paths, vectors and embedding identities are not accepted. */
+export function parsePortableKnowledgeSnapshot(value: unknown): PortableKnowledgeSnapshot {
+  const source = portableRecord(value)
+  exactPortableKeys(source, ['version', 'documents'])
+  if (source.version !== PORTABLE_KNOWLEDGE_VERSION || !Array.isArray(source.documents)) {
+    throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+  }
+  const documentIds = new Set<string>()
+  const documents = source.documents.map((item) => {
+    const document = portableRecord(item)
+    exactPortableKeys(document, document.copy === undefined
+      ? ['docId', 'fileName', 'corpusKind', 'chunks']
+      : ['docId', 'fileName', 'corpusKind', 'chunks', 'copy'])
+    const docId = portableText(document.docId)
+    const fileName = portableFileName(document.fileName)
+    const corpusKind = portableCorpusKind(document.corpusKind)
+    if (documentIds.has(docId) || !Array.isArray(document.chunks) || document.chunks.length === 0) {
+      throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+    }
+    documentIds.add(docId)
+    const chunks = document.chunks.map((item, index) => {
+      const chunk = portableRecord(item)
+      exactPortableKeys(chunk, ['chunkIndex', 'text'])
+      if (chunk.chunkIndex !== index) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+      return { chunkIndex: index, text: portableText(chunk.text) }
+    })
+    let copy: KnowledgeCopy | undefined
+    if (document.copy !== undefined) {
+      const value = portableRecord(document.copy)
+      exactPortableKeys(value, ['content', 'indexedHash', 'edited', 'indexDirty'])
+      if (typeof value.content !== 'string' || typeof value.indexedHash !== 'string'
+        || !/^[a-f0-9]{64}$/u.test(value.indexedHash)
+        || typeof value.edited !== 'boolean' || typeof value.indexDirty !== 'boolean'
+        || (!value.indexDirty && contentHash(value.content) !== value.indexedHash)) {
+        throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+      }
+      copy = { content: value.content, indexedHash: value.indexedHash, edited: value.edited, indexDirty: value.indexDirty }
+    }
+    return { docId, fileName, corpusKind, chunks, ...(copy ? { copy } : {}) }
+  })
+  documents.sort((left, right) => left.docId.localeCompare(right.docId))
+  return { version: PORTABLE_KNOWLEDGE_VERSION, documents }
+}
+
+export function serializePortableKnowledgeSnapshot(snapshot: PortableKnowledgeSnapshot): Buffer {
+  return Buffer.from(`${JSON.stringify(parsePortableKnowledgeSnapshot(snapshot))}\n`, 'utf8')
+}
+
+async function readPortableKnowledgeSnapshotInternal(projectStorageRoot: string): Promise<PortableKnowledgeSnapshot> {
+  const dbPath = path.join(projectStorageRoot, 'lancedb')
+  if (!fs.existsSync(dbPath)) return { version: PORTABLE_KNOWLEDGE_VERSION, documents: [] }
+  const assertPhysicalTree = (entry: string): void => {
+    const info = fs.lstatSync(entry, { bigint: true })
+    if (info.isSymbolicLink() || path.resolve(fs.realpathSync.native(entry)) !== path.resolve(entry)) {
+      throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+    }
+    if (info.isDirectory()) {
+      for (const name of fs.readdirSync(entry)) assertPhysicalTree(path.join(entry, name))
+    } else if (!info.isFile() || info.nlink !== 1n) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+  }
+  const storageInfo = fs.lstatSync(projectStorageRoot)
+  if (!storageInfo.isDirectory() || storageInfo.isSymbolicLink()
+    || path.resolve(fs.realpathSync.native(projectStorageRoot)) !== path.resolve(projectStorageRoot)) {
+    throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+  }
+  assertPhysicalTree(dbPath)
+  const db = await lancedb.connect(dbPath)
+  try {
+    const tableNames = await db.tableNames()
+    const hasDocuments = tableNames.includes(DOCS_TABLE_NAME)
+    const hasChunks = tableNames.includes(TABLE_NAME)
+    if (!hasDocuments && !hasChunks) return { version: PORTABLE_KNOWLEDGE_VERSION, documents: [] }
+    if (!hasDocuments || !hasChunks) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+    const documentsTable = await db.openTable(DOCS_TABLE_NAME)
+    const chunksTable = await db.openTable(TABLE_NAME)
+    try {
+      const documentRows = await documentsTable.query().toArray()
+      const chunkRows = await chunksTable.query()
+        .select(['docId', 'fileName', 'text', 'chunkIndex', 'totalChunks', 'corpusKind']).toArray()
+      const grouped = new Map<string, Array<{ chunkIndex: number; text: string; fileName: string; corpusKind: KnowledgeCorpusKind; totalChunks: number }>>()
+      for (const row of chunkRows as Array<Record<string, unknown>>) {
+        const docId = portableText(row.docId)
+        const chunkIndex = row.chunkIndex
+        const totalChunks = row.totalChunks
+        if (!Number.isSafeInteger(chunkIndex) || (chunkIndex as number) < 0
+          || !Number.isSafeInteger(totalChunks) || (totalChunks as number) <= 0) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+        const values = grouped.get(docId) ?? []
+        values.push({ chunkIndex: chunkIndex as number, totalChunks: totalChunks as number,
+          text: portableText(row.text), fileName: portableFileName(row.fileName), corpusKind: portableCorpusKind(row.corpusKind) })
+        grouped.set(docId, values)
+      }
+      const documents = (documentRows as Array<Record<string, unknown>>).map((row) => {
+        const docId = portableText(row.id)
+        const fileName = portableFileName(row.fileName)
+        const corpusKind = portableCorpusKind(row.corpusKind)
+        const chunkCount = row.chunkCount
+        const rows = grouped.get(docId) ?? []
+        if (!Number.isSafeInteger(chunkCount) || chunkCount !== rows.length || rows.length === 0) {
+          throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+        }
+        rows.sort((left, right) => left.chunkIndex - right.chunkIndex)
+        if (rows.some((chunk, index) => chunk.chunkIndex !== index || chunk.totalChunks !== rows.length
+          || chunk.fileName !== fileName || chunk.corpusKind !== corpusKind)) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+        grouped.delete(docId)
+        let copy: KnowledgeCopy | undefined
+        if (typeof row.filePath === 'string' && row.filePath.startsWith(KNOWLEDGE_COPY_MARKER)) {
+          copy = readKnowledgeCopy(projectStorageRoot, docId) ?? undefined
+          if (!copy) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+        }
+        return { docId, fileName, corpusKind, chunks: rows.map(chunk => ({ chunkIndex: chunk.chunkIndex, text: chunk.text })), ...(copy ? { copy } : {}) }
+      })
+      if (grouped.size > 0) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+      const snapshot = parsePortableKnowledgeSnapshot({ version: PORTABLE_KNOWLEDGE_VERSION, documents })
+      assertPhysicalTree(dbPath)
+      return snapshot
+    } finally {
+      documentsTable.close()
+      chunksTable.close()
+    }
+  } finally { db.close() }
+}
+
+/** Reads documents and ordered canonical text under the same source mutation gate. */
+export async function readPortableKnowledgeSnapshot(projectStorageRoot: string): Promise<PortableKnowledgeSnapshot> {
+  return withKnowledgeSourceGate(projectStorageRoot, () => readPortableKnowledgeSnapshotInternal(projectStorageRoot))
+}
+
+/** Creates only canonical text tables. Embeddings and machine-local registry state remain stale/rebuildable. */
+export async function restorePortableKnowledgeSnapshot(
+  projectStorageRoot: string,
+  value: unknown,
+): Promise<PortableKnowledgeSnapshot> {
+  const snapshot = parsePortableKnowledgeSnapshot(value)
+  return withKnowledgeSourceGate(projectStorageRoot, async () => {
+    const dbPath = path.join(projectStorageRoot, 'lancedb')
+    if (fs.existsSync(dbPath) || fs.existsSync(path.join(projectStorageRoot, EMBEDDING_REGISTRY_FILE))) {
+      throw new Error('PORTABLE_KNOWLEDGE_TARGET_EXISTS')
+    }
+    if (snapshot.documents.length === 0) return snapshot
+    fs.mkdirSync(dbPath, { recursive: false })
+    const db = await lancedb.connect(dbPath)
+    try {
+      const documentRows: DocumentInfo[] = snapshot.documents.map(document => ({
+        id: document.docId,
+        fileName: document.fileName,
+        importedAt: PORTABLE_KNOWLEDGE_DATE,
+        chunkCount: document.chunks.length,
+        filePath: document.copy ? `${KNOWLEDGE_COPY_MARKER}${document.docId}` : '',
+        corpusKind: document.corpusKind,
+      }))
+      const chunkRows: ChunkRecord[] = snapshot.documents.flatMap(document => document.chunks.map(chunk => ({
+        id: `portable:${createHash('sha256').update(`${document.docId}\0${chunk.chunkIndex}\0${chunk.text}`).digest('hex')}`,
+        docId: document.docId,
+        fileName: document.fileName,
+        text: chunk.text,
+        chunkIndex: chunk.chunkIndex,
+        totalChunks: document.chunks.length,
+        importedAt: PORTABLE_KNOWLEDGE_DATE,
+        corpusKind: document.corpusKind,
+      })))
+      await db.createTable(DOCS_TABLE_NAME, documentRows)
+      const chunks = await db.createTable(TABLE_NAME, recordsForSchema(chunkRows, canonicalChunkSchema()), { schema: canonicalChunkSchema() })
+      await ensureTextIndex(chunks)
+      chunks.close()
+    } finally { db.close() }
+    for (const document of snapshot.documents) {
+      if (document.copy) writeKnowledgeCopy(projectStorageRoot, document.docId, document.copy)
+    }
+    const rebuilt = await readPortableKnowledgeSnapshotInternal(projectStorageRoot)
+    if (serializePortableKnowledgeSnapshot(rebuilt).compare(serializePortableKnowledgeSnapshot(snapshot)) !== 0) {
+      throw new Error('PORTABLE_KNOWLEDGE_REBUILD_FAILED')
+    }
+    return rebuilt
+  })
+}
+
+export async function verifyPortableKnowledgeSnapshot(projectStorageRoot: string, value: unknown): Promise<boolean> {
+  const expected = serializePortableKnowledgeSnapshot(parsePortableKnowledgeSnapshot(value))
+  return withKnowledgeSourceGate(projectStorageRoot, async () => (
+    expected.compare(serializePortableKnowledgeSnapshot(await readPortableKnowledgeSnapshotInternal(projectStorageRoot))) === 0
+  ))
+}
+
+async function listDocumentsInternal(projectPath: string): Promise<DocumentInfo[]> {
   try {
     const db = await getConnection(projectPath)
     if (!(await db.tableNames()).includes(DOCS_TABLE_NAME)) return []
@@ -1341,6 +1743,13 @@ export function hashCanonicalChunkSet(chunks: readonly string[]): string {
 
 /** Validate both the document commit row and every canonical chunk for a stable import. */
 export async function getDocumentIntegrity(
+  projectPath: string,
+  docId: string,
+): Promise<DocumentIntegrity | null> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => getDocumentIntegrityInternal(projectPath, docId))
+}
+
+async function getDocumentIntegrityInternal(
   projectPath: string,
   docId: string,
 ): Promise<DocumentIntegrity | null> {
@@ -1455,6 +1864,10 @@ export async function getDocumentIntegrity(
 }
 
 export async function getStats(projectPath: string): Promise<KBStats> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => getStatsInternal(projectPath))
+}
+
+async function getStatsInternal(projectPath: string): Promise<KBStats> {
   try {
     const db = await getConnection(projectPath)
     const tableNames = await db.tableNames()
@@ -1512,6 +1925,13 @@ export async function getChunksWithoutVectors(
   projectPath: string,
   embeddingSpace?: EmbeddingSpaceIdentity,
 ): Promise<{ count: number }> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => getChunksWithoutVectorsInternal(projectPath, embeddingSpace))
+}
+
+async function getChunksWithoutVectorsInternal(
+  projectPath: string,
+  embeddingSpace?: EmbeddingSpaceIdentity,
+): Promise<{ count: number }> {
   const db = await getConnection(projectPath)
   const tableNames = await db.tableNames()
   if (!tableNames.includes(TABLE_NAME)) return { count: 0 }
@@ -1540,6 +1960,14 @@ export async function getChunksForBackfill(
  * drop 旧表，且只有完整覆盖 canonical 表后才可能切换 active。
  */
 export async function updateChunkVectors(
+  projectPath: string,
+  updates: Array<{ id: string; vector: number[] }>,
+  embeddingSpace?: EmbeddingSpaceIdentity,
+): Promise<{ success: boolean; count: number; error?: string }> {
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => updateChunkVectorsInternal(projectPath, updates, embeddingSpace))
+}
+
+async function updateChunkVectorsInternal(
   projectPath: string,
   updates: Array<{ id: string; vector: number[] }>,
   embeddingSpace?: EmbeddingSpaceIdentity,
@@ -1585,7 +2013,7 @@ export async function updateChunkVectors(
     if (db && write) {
       await compensateEmbeddingWrite(db, write, updates.map(update => update.id))
     }
-    console.error('[Vela VectorStore] 批量更新向量失败:', error)
+    console.error('[AI Novel VectorStore] 批量更新向量失败:', error)
     return { success: false, count: 0, error: String(error) }
   }
 }
@@ -1866,13 +2294,13 @@ async function rollbackLegacyMigrationDocuments(projectPath: string, journal: Le
     restoreLegacyRegistrySnapshot(projectPath, journal.registryBefore)
     return true
   } catch (error) {
-    console.warn('[Vela VectorStore] 回滚旧 vectors.json 迁移失败:', error)
+    console.warn('[AI Novel VectorStore] 回滚旧 vectors.json 迁移失败:', error)
     return false
   }
 }
 
 async function migrateFromJSONOnce(projectPath: string): Promise<{ success: boolean; migrated: number; error?: string }> {
-  const jsonPath = path.join(projectPath, '.vela', 'vectors.json')
+  const jsonPath = path.join(getProjectDataRoot(projectPath), 'vectors.json')
   const journalPath = legacyMigrationJournalPath(projectPath)
   if (!fs.existsSync(jsonPath)) {
     if (fs.existsSync(journalPath)) {
@@ -1983,10 +2411,10 @@ async function migrateFromJSONOnce(projectPath: string): Promise<{ success: bool
       }
     }
     removeLegacyMigrationJournal(projectPath)
-    console.log(`[Vela VectorStore] 迁移完成：${plan.migratedChunks} 个块已写入 LanceDB`)
+    console.log(`[AI Novel VectorStore] 迁移完成：${plan.migratedChunks} 个块已写入 LanceDB`)
     return { success: true, migrated: plan.migratedChunks }
   } catch (error) {
-    console.error('[Vela VectorStore] 迁移失败:', error)
+    console.error('[AI Novel VectorStore] 迁移失败:', error)
     return { success: false, migrated: 0, error: legacyMigrationError(String(error)) }
   }
 }
@@ -1996,7 +2424,13 @@ async function migrateFromJSONOnce(projectPath: string): Promise<{ success: bool
  * 在任意写入前验证完整源文件，并以持久 journal 回滚中断批次，避免重试重复写入。
  */
 export async function migrateFromJSON(projectPath: string): Promise<{ success: boolean; migrated: number; error?: string }> {
+  if (migrationFences.has(migrationProjectKey(projectPath))) throw new Error('VECTOR_MIGRATION_FENCED')
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), () => migrateFromJSONInternal(projectPath))
+}
+
+async function migrateFromJSONInternal(projectPath: string): Promise<{ success: boolean; migrated: number; error?: string }> {
   const key = path.resolve(projectPath)
+  if (migrationFences.has(migrationProjectKey(projectPath))) throw new Error('VECTOR_MIGRATION_FENCED')
   const running = legacyMigrationInFlight.get(key)
   if (running) return running
   const migration = migrateFromJSONOnce(projectPath)

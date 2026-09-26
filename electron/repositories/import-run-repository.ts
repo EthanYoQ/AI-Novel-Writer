@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import { countDraftUnits } from '../../src/shared/draft-units'
 
 import {
@@ -30,6 +31,7 @@ import type {
   ImportPurpose,
 } from '../../src/shared/import-run'
 import { getCurrentProjectPath, getProjectDb } from '../database'
+import { readPortableRuntimeFreeze } from '../services/portable-runtime-freeze'
 import { BlueprintRepository, type BlueprintRangeCommitRequest } from './blueprint-repository'
 import { ImportGlobalFactsRepository } from './import-global-facts-repository'
 import type { ImportGlobalFactsRequest } from '../../src/shared/import-global-facts'
@@ -149,6 +151,14 @@ interface ImportRunEffectReceiptRow {
   updated_at: string
 }
 
+interface ImportEffectLedgerRow {
+  effect_namespace: string
+  effect_key: string
+  state: 'complete' | 'partial' | 'unknown'
+  evidence_kind: 'receipt' | 'knowledge-receipt' | 'legacy-checkpoint' | 'terminal'
+  diagnostic_code: string
+}
+
 interface ImportRunSourceRow {
   run_id: string
   source_index: number
@@ -259,6 +269,11 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[]):
 
 function assertEffectPayloadSchema(kind: ImportRunEffectKind, payload: unknown): void {
   if (!isRecord(payload)) throw new Error()
+  const generationKeys = Object.hasOwn(payload, 'generationRunHandle') ? ['generationRunHandle'] : []
+  if (generationKeys.length) {
+    const handle = payload.generationRunHandle
+    if (!isRecord(handle) || !exactKeys(handle, ['projectId', 'epoch', 'rootActionId', 'runId']) || Object.values(handle).some(value => typeof value !== 'string' || !value.trim())) throw new Error()
+  }
   if (kind === 'author-finalized-batch') {
     if (
       !exactKeys(payload, ['operationId', 'runId', 'authorityFingerprint', 'manifestFingerprint'])
@@ -270,14 +285,19 @@ function assertEffectPayloadSchema(kind: ImportRunEffectKind, payload: unknown):
     return
   }
   if (kind === 'project-writing-style') {
-    if (!exactKeys(payload, ['writingStyle']) || typeof payload.writingStyle !== 'string' || !payload.writingStyle.trim()) {
+    const hasGeneration = Object.hasOwn(payload, 'generationRunHandle')
+    const handle = payload.generationRunHandle
+    if (!exactKeys(payload, hasGeneration ? ['writingStyle', 'generationRunHandle'] : ['writingStyle'])
+      || typeof payload.writingStyle !== 'string' || !payload.writingStyle.trim()
+      || hasGeneration && (!isRecord(handle) || !exactKeys(handle, ['projectId', 'epoch', 'rootActionId', 'runId'])
+        || Object.values(handle).some(value => typeof value !== 'string' || !value.trim()))) {
       throw new Error()
     }
     return
   }
   if (kind === 'project-global-facts') {
     if (
-      !exactKeys(payload, ['operationId', 'expectedRosterRevision', 'core', 'characterEntries'])
+      !exactKeys(payload, ['operationId', 'expectedRosterRevision', 'core', 'characterEntries', ...generationKeys])
       || typeof payload.operationId !== 'string'
       || !Number.isSafeInteger(payload.expectedRosterRevision)
       || !isRecord(payload.core)
@@ -287,7 +307,7 @@ function assertEffectPayloadSchema(kind: ImportRunEffectKind, payload: unknown):
     return
   }
   if (
-    !exactKeys(payload, ['mode', 'operationId', 'startChapter', 'endChapter', 'blueprints'])
+    !exactKeys(payload, ['mode', 'operationId', 'startChapter', 'endChapter', 'blueprints', ...generationKeys])
     || payload.mode !== 'replace-range'
     || typeof payload.operationId !== 'string'
     || !Number.isSafeInteger(payload.startChapter)
@@ -361,6 +381,17 @@ function assertCommittedEffectSchema(kind: ImportRunEffectKind, payload: unknown
     return
   }
   if (kind === 'project-global-facts') {
+    if (isRecord(effectReceipt.characterProposal)) {
+      const { generationRunHandle: _generationRunHandle, ...domainPayload } = payload
+      void _generationRunHandle
+      if (!exactKeys(effectReceipt, ['operationId', 'payloadHash', 'idempotent', 'core', 'characterProposal', 'proposalSource'])
+        || effectReceipt.operationId !== payload.operationId || typeof effectReceipt.payloadHash !== 'string' || !SHA256.test(effectReceipt.payloadHash)
+        || typeof effectReceipt.idempotent !== 'boolean' || !isRecord(effectReceipt.core) || !canonicalEqual(effectReceipt.proposalSource, domainPayload)
+        || !exactKeys(effectReceipt.characterProposal, ['proposalBatchId', 'sourceHash'])
+        || typeof effectReceipt.characterProposal.proposalBatchId !== 'string' || !/^cpb:[a-f0-9]{64}$/.test(effectReceipt.characterProposal.proposalBatchId)
+        || typeof effectReceipt.characterProposal.sourceHash !== 'string' || !SHA256.test(effectReceipt.characterProposal.sourceHash)) throw new Error()
+      return
+    }
     if (
       !exactKeys(effectReceipt, ['operationId', 'payloadHash', 'idempotent', 'core', 'roster'])
       || effectReceipt.operationId !== payload.operationId
@@ -414,6 +445,13 @@ function assertCompletedBlueprintSyncOperation(operation: Record<string, unknown
 
   if (completion.status === 'already-satisfied') {
     if (!exactKeys(completion, ['blueprintCommitOperationId', 'operationId', 'status'])) throw new Error()
+    return
+  }
+  if (completion.status === 'proposal-staged') {
+    if (!exactKeys(completion, ['blueprintCommitOperationId', 'operationId', 'status', 'proposalReceipt'])
+      || !isRecord(completion.proposalReceipt) || !exactKeys(completion.proposalReceipt, ['proposalBatchId', 'sourceHash'])
+      || typeof completion.proposalReceipt.proposalBatchId !== 'string' || !/^cpb:[a-f0-9]{64}$/.test(completion.proposalReceipt.proposalBatchId)
+      || typeof completion.proposalReceipt.sourceHash !== 'string' || !SHA256.test(completion.proposalReceipt.sourceHash)) throw new Error()
     return
   }
   if (
@@ -501,7 +539,7 @@ function assertCommittedEffectAuthority(
     return
   }
   const authoritative = kind === 'project-global-facts'
-    ? ImportGlobalFactsRepository.getCommittedOperation((payload as ImportGlobalFactsRequest).operationId)
+    ? ImportGlobalFactsRepository.readHistoricalCommittedOperation((payload as ImportGlobalFactsRequest).operationId)
     : BlueprintRepository.getCommittedRangeOperation((payload as BlueprintRangeCommitRequest).operationId)
   if (!authoritative) throw new Error()
   if (kind === 'chapter-blueprint-range') {
@@ -670,7 +708,7 @@ function rowToSnapshot(row: ImportRunRow): ImportRunSnapshot {
     locale: row.locale,
     stage: row.stage,
     status: row.status,
-    completedBatches: parseJson(row.completed_batches_json, {}),
+    completedBatches: completedBatches(row),
     lastError: row.last_error,
     resumable: row.resumable === 1,
     cancelRequested: row.cancel_requested === 1,
@@ -827,6 +865,15 @@ function assertExecutionAuthority(
 }
 
 function completedBatches(row: ImportRunRow): Partial<Record<ImportRunStage, string[]>> {
+  if (hasEffectLedger()) {
+    const completed: Partial<Record<ImportRunStage, string[]>> = {}
+    const rows = db().prepare(`
+      SELECT stage,batch_id FROM import_effect_ledger
+      WHERE run_id=? AND state='complete' ORDER BY rowid
+    `).all(row.id) as Array<{ stage: ImportRunStage; batch_id: string }>
+    for (const entry of rows) completed[entry.stage] = [...(completed[entry.stage] ?? []), entry.batch_id]
+    return completed
+  }
   const parsed = parseJson<unknown>(row.completed_batches_json, null)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('导入运行 checkpoint 损坏')
@@ -840,6 +887,45 @@ function completedBatches(row: ImportRunRow): Partial<Record<ImportRunStage, str
     }
   }
   return parsed as Partial<Record<ImportRunStage, string[]>>
+}
+
+function hasEffectLedger(): boolean {
+  return Boolean(db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='import_effect_ledger'").get())
+}
+
+function readEffectLedger(runId: string, stage: ImportRunStage, batchId: string): ImportEffectLedgerRow | undefined {
+  if (!hasEffectLedger()) return undefined
+  return db().prepare(`SELECT effect_namespace,effect_key,state,evidence_kind,diagnostic_code
+    FROM import_effect_ledger WHERE run_id=? AND stage=? AND batch_id=?`
+  ).get(runId, stage, batchId) as ImportEffectLedgerRow | undefined
+}
+
+function assertKnownEffectHistory(row: ImportRunRow, stage: ImportRunStage, batchId: string): void {
+  if (!hasEffectLedger()) return
+  const unknown = db().prepare(`SELECT diagnostic_code FROM import_effect_ledger
+    WHERE run_id=? AND stage=? AND state='unknown'
+      AND (batch_id=? OR batch_id LIKE '__legacy_%') LIMIT 1`
+  ).get(row.id, stage, batchId) as { diagnostic_code: string } | undefined
+  if (unknown) throw new Error(`导入历史效果状态未知，已拒绝猜测或重做 (${unknown.diagnostic_code})`)
+}
+
+function recordPreparedEffect(row: ImportRunRow, receipt: Pick<ImportRunEffectReceiptRow,
+  'effect_namespace' | 'effect_key' | 'stage' | 'batch_id' | 'state'>): void {
+  if (!hasEffectLedger()) return
+  const expectedState = receipt.state === 'committed' ? 'complete' : 'partial'
+  const existing = readEffectLedger(row.id, receipt.stage, receipt.batch_id)
+  if (existing) {
+    if (existing.effect_namespace !== receipt.effect_namespace || existing.effect_key !== receipt.effect_key
+      || existing.state !== expectedState || existing.evidence_kind !== 'receipt') {
+      throw new Error('导入 effect ledger 与 receipt 不一致')
+    }
+    return
+  }
+  db().prepare(`INSERT INTO import_effect_ledger(
+    run_id,stage,batch_id,effect_namespace,effect_key,state,evidence_kind,diagnostic_code
+  ) VALUES(?,?,?,?,?,?,'receipt',?)`).run(row.id, receipt.stage, receipt.batch_id,
+    receipt.effect_namespace, receipt.effect_key, expectedState,
+    expectedState === 'partial' ? 'EFFECT_PREPARED_NOT_COMMITTED' : '')
 }
 
 function chapterRowsForRange(
@@ -948,6 +1034,7 @@ function assertCheckpointCanApply(
 ): void {
   if (row.status !== 'running' || row.stage !== stage) throw new Error('导入批次与当前阶段不匹配')
   if (stage === 'parsing' || stage === 'prepared' || stage === 'completed') throw new Error('导入批次 ID 无效')
+  assertKnownEffectHistory(row, stage, batchId)
   const receiptStage = stage === 'global'
     || stage === 'style'
     || stage === 'blueprints'
@@ -1014,11 +1101,7 @@ function assertStageCheckpointComplete(row: ImportRunRow, stage: ImportRunStage)
 }
 
 function assertExecution(runId: string, execution: ImportRunExecutionLease, now = Date.now()): ImportRunRow {
-  const row = assertExecutionAuthority(runId, execution, now)
-  if (row.lease_expires_at !== execution.expiresAt) {
-    throw new Error('导入执行租约已失效，已拒绝旧执行器写入')
-  }
-  return row
+  return assertExecutionAuthority(runId, execution, now)
 }
 
 function applyBatchCheckpoint(
@@ -1028,15 +1111,37 @@ function applyBatchCheckpoint(
   source: ImportRunCheckpointSource,
 ): { newlyCompleted: boolean; cancelApplied: boolean } {
   assertCheckpointCanApply(row, stage, batchId, source)
+  const existing = readEffectLedger(row.id, stage, batchId)
   const completed = completedBatches(row)
-  const stageBatches = completed[stage] ?? []
-  const newlyCompleted = !stageBatches.includes(batchId)
-  if (newlyCompleted) completed[stage] = [...stageBatches, batchId]
+  const newlyCompleted = !(completed[stage] ?? []).includes(batchId)
+  if (hasEffectLedger()) {
+    if (existing?.state === 'unknown') throw new Error('导入历史效果状态未知，已拒绝猜测或重做')
+    if (source === 'receipt') {
+      const receipt = db().prepare(`SELECT effect_namespace,effect_key,stage,batch_id,state
+        FROM import_run_receipts WHERE run_id=? AND stage=? AND batch_id=?`
+      ).get(row.id, stage, batchId) as Pick<ImportRunEffectReceiptRow,
+        'effect_namespace' | 'effect_key' | 'stage' | 'batch_id' | 'state'> | undefined
+      if (!receipt || receipt.state !== 'prepared' || !existing || existing.state !== 'partial'
+        || existing.effect_namespace !== receipt.effect_namespace || existing.effect_key !== receipt.effect_key) {
+        throw new Error('导入 effect ledger 与 prepared receipt 不一致')
+      }
+      db().prepare(`UPDATE import_effect_ledger
+        SET state='complete',diagnostic_code='',updated_at=datetime('now')
+        WHERE run_id=? AND stage=? AND batch_id=? AND state='partial'`
+      ).run(row.id, stage, batchId)
+    } else if (!existing) {
+      db().prepare(`INSERT INTO import_effect_ledger(
+        run_id,stage,batch_id,effect_namespace,effect_key,state,evidence_kind,diagnostic_code
+      ) VALUES(?,?,?,?,?,'complete',?,'')`).run(row.id, stage, batchId, row.effect_namespace,
+        `checkpoint:${stage}:${batchId}`, stage === 'knowledge' ? 'knowledge-receipt' : 'legacy-checkpoint')
+    }
+  } else if (newlyCompleted) {
+    completed[stage] = [...(completed[stage] ?? []), batchId]
+  }
   const cancelApplied = row.cancel_requested === 1
   db().prepare(`
     UPDATE import_runs
-    SET completed_batches_json = ?,
-        status = CASE WHEN ? = 1 THEN 'cancelled' ELSE status END,
+    SET status = CASE WHEN ? = 1 THEN 'cancelled' ELSE status END,
         resumable = 1,
         execution_owner = CASE WHEN ? = 1 THEN '' ELSE execution_owner END,
         execution_epoch = execution_epoch + CASE WHEN ? = 1 THEN 1 ELSE 0 END,
@@ -1044,13 +1149,14 @@ function applyBatchCheckpoint(
         updated_at = datetime('now')
     WHERE id = ?
   `).run(
-    JSON.stringify(completed),
     cancelApplied ? 1 : 0,
     cancelApplied ? 1 : 0,
     cancelApplied ? 1 : 0,
     cancelApplied ? 1 : 0,
     row.id,
   )
+  if (!hasEffectLedger()) db().prepare(`UPDATE import_runs SET completed_batches_json=? WHERE id=?`)
+    .run(JSON.stringify(completed), row.id)
   return { newlyCompleted, cancelApplied }
 }
 
@@ -2143,12 +2249,13 @@ export class ImportRunRepository {
   }
 
   static listResumable(): ImportRunSnapshot[] {
+    const freeze = readPortableRuntimeFreeze(getCurrentProjectPath())
     const rows = db().prepare(`
       SELECT * FROM import_runs
       WHERE resumable = 1 AND status IN ('ready', 'running', 'failed', 'cancelled')
       ORDER BY updated_at DESC, rowid DESC
     `).all() as ImportRunRow[]
-    return rows.map(rowToSnapshot)
+    return rows.filter(row => !freeze.isFrozen('import_runs', row.id)).map(rowToSnapshot)
   }
 
   static listChapterBatch(
@@ -2185,6 +2292,7 @@ export class ImportRunRepository {
     request: ImportRunPrepareEffectReceiptRequest,
     execution: ImportRunExecutionLease,
     now = Date.now(),
+    assertGenerationSources?: (handle: MainGenerationRunHandle, slot: import('../../src/shared/import-generation').ImportGenerationSlot) => void,
   ): ImportRunEffectReceipt {
     const effectKey = request.effectKey?.trim()
     const batchId = request.batchId?.trim()
@@ -2208,7 +2316,16 @@ export class ImportRunRepository {
           || existing.kind !== request.kind
           || existing.payload_hash !== payload.hash
         ) throw new Error('导入 effect receipt 已绑定不同载荷')
+        recordPreparedEffect(run, existing)
         return rowToEffectReceipt(existing, run)
+      }
+      if (run.purpose === 'reference') {
+        const handle = (request.payload as { generationRunHandle?: MainGenerationRunHandle }).generationRunHandle
+        const hasGenerationTable = db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='generation_runs'").pluck().get()
+        const bound = hasGenerationTable && db().prepare("SELECT 1 FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.importSlot.runId')=? AND json_extract(binding_json,'$.sourceManifest.importSlot.stage')=? AND json_extract(binding_json,'$.sourceManifest.importSlot.batchId')=?")
+          .pluck().get(request.runId, request.stage, batchId)
+        if ((assertGenerationSources || bound) && !handle) throw new Error('GENERATION_IMPORT_EFFECT_HANDLE_REQUIRED')
+        if (assertGenerationSources && handle) assertGenerationSources(handle, { runId: request.runId, stage: request.stage as 'global' | 'style' | 'blueprints', batchId })
       }
       db().prepare(`
         INSERT INTO import_run_receipts (
@@ -2225,6 +2342,13 @@ export class ImportRunRepository {
         payload.json,
         payload.hash,
       )
+      recordPreparedEffect(run, {
+        effect_namespace: run.effect_namespace,
+        effect_key: effectKey,
+        stage: request.stage,
+        batch_id: batchId,
+        state: 'prepared',
+      })
       return this.getEffectReceipt(request.runId, request.stage, batchId)!
     })()
   }
@@ -2235,24 +2359,33 @@ export class ImportRunRepository {
     batchId: string,
     execution: ImportRunExecutionLease,
     now = Date.now(),
+    assertGenerationSources?: (handle: MainGenerationRunHandle, slot?: import('../../src/shared/import-generation').ImportGenerationSlot) => void,
   ): ImportRunEffectCommitResult {
     return db().transaction(() => {
-      const run = assertExecution(runId, execution, now)
+      const run = readRunRow(runId)
+      if (!run) throw new Error('导入运行不存在')
       const row = db().prepare(`
         SELECT * FROM import_run_receipts
         WHERE run_id = ? AND stage = ? AND batch_id = ?
       `).get(runId, stage, batchId) as ImportRunEffectReceiptRow | undefined
       if (!row) throw new Error('导入 effect receipt 不存在')
-      assertCheckpointCanApply(run, stage, batchId, 'receipt')
       const validatedReceipt = rowToEffectReceipt(row, run)
       if (row.state === 'committed') {
+        recordPreparedEffect(run, row)
         return {
           receipt: validatedReceipt,
           run: this.get(runId)!,
           cancelApplied: run.cancel_requested === 1,
         }
       }
+      assertExecution(runId, execution, now)
+      assertCheckpointCanApply(run, stage, batchId, 'receipt')
       let effectReceipt: unknown
+      const generationRunHandle = (validatedReceipt.payload as { generationRunHandle?: MainGenerationRunHandle }).generationRunHandle
+      if (generationRunHandle) {
+        if (!assertGenerationSources || !['global', 'style', 'blueprints'].includes(stage)) throw new Error('GENERATION_GUARD_REQUIRED')
+        assertGenerationSources(generationRunHandle, { runId, stage: stage as 'global' | 'style' | 'blueprints', batchId })
+      }
       switch (row.kind) {
         case 'project-global-facts':
           effectReceipt = ImportGlobalFactsRepository.commit(
@@ -2260,7 +2393,7 @@ export class ImportRunRepository {
           )
           break
         case 'project-writing-style': {
-          const payload = parseJson<{ writingStyle?: unknown }>(row.payload_json, {})
+          const payload = parseJson<{ writingStyle?: unknown; generationRunHandle?: MainGenerationRunHandle }>(row.payload_json, {})
           if (typeof payload.writingStyle !== 'string' || !payload.writingStyle.trim()) {
             throw new Error('导入文风 receipt 载荷无效')
           }
@@ -2322,6 +2455,7 @@ export class ImportRunRepository {
   ): ImportRunStartResult {
     const normalizedOwner = owner.trim()
     if (!normalizedOwner || normalizedOwner.length > 160 || leaseMs < 1) throw new Error('导入执行器身份无效')
+    readPortableRuntimeFreeze(getCurrentProjectPath()).assertMutable('import_runs', runId)
     return db().transaction(() => {
       const row = readRunRow(runId)
       if (!row || row.resumable !== 1 || !['ready', 'running', 'failed', 'cancelled'].includes(row.status)) {

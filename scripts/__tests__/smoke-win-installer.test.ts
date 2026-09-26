@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -12,6 +12,65 @@ const releaseMonitorScript = resolve('scripts/monitor-win-release-gate.ps1')
 const upgradeFixtureScript = resolve('scripts/upgrade-data-fixture.mjs')
 const electronNodeRunner = resolve('node_modules/electron/dist/electron.exe')
 const WINDOWS_POWERSHELL_INTEGRATION_TIMEOUT_MS = 30_000
+const oldWriterIt = process.platform === 'win32' && process.env.AI_NOVEL_A11_OLD_EXE && process.env.AI_NOVEL_A11_FIXTURE_PROJECT
+  ? it : it.skip
+
+oldWriterIt('rejects wrong old-writer binaries and junction paths before launching', () => {
+  const project = resolve(process.env.AI_NOVEL_A11_FIXTURE_PROJECT!)
+  const guardRoot = mkdtempSync(join(resolve(project, '..'), 'writer-guard-'))
+  const junctionTarget = mkdtempSync(join(resolve('.runtime/cache'), 'a11-junction-target-'))
+  const junctionPath = join(guardRoot, 'junction')
+  const badExe = join(guardRoot, 'wrong.exe')
+  const realExe = join(guardRoot, 'real.exe')
+  try {
+    writeFileSync(badExe, 'not the verified old binary')
+    linkSync(resolve(process.env.AI_NOVEL_A11_OLD_EXE!), realExe)
+    mkdirSync(join(guardRoot, 'resources'))
+    writeFileSync(join(guardRoot, 'resources', 'app.asar'), 'wrong asar')
+    symlinkSync(junctionTarget, junctionPath, 'junction')
+    for (const [exe, acceptance, expected] of [
+      [badExe, join(guardRoot, 'bad-exe'), /old writer proof executable SHA256 mismatch/i],
+      [realExe, join(guardRoot, 'bad-asar'), /old writer proof asar SHA256 mismatch/i],
+      [badExe, join(junctionPath, 'acceptance'), /old writer proof reparse point/i],
+    ] as const) {
+      const result = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', probeScript,
+        '-ExePath', exe, '-LegacyProjectPathToOpen', project,
+        '-VelaHome', join(guardRoot, 'vela-home'), '-AcceptanceDirectory', acceptance, '-LegacyWriterProof'],
+      { encoding: 'utf8', timeout: 30_000 })
+      expect(result.status, result.stderr || result.stdout).not.toBe(0)
+      expect(result.stderr + result.stdout).toMatch(expected)
+    }
+  } finally {
+    rmdirSync(junctionPath)
+    rmSync(guardRoot, { recursive: true, force: true })
+    rmSync(junctionTarget, { recursive: true, force: true })
+  }
+}, 120_000)
+
+oldWriterIt('an opt-in old binary writes and reads a draft in the isolated fixture', async () => {
+  const project = resolve(process.env.AI_NOVEL_A11_FIXTURE_PROJECT!)
+  const acceptance = mkdtempSync(join(resolve(project, '..'), 'acceptance-writer-'))
+  const result = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', probeScript,
+    '-ExePath', resolve(process.env.AI_NOVEL_A11_OLD_EXE!), '-LegacyProjectPathToOpen', project,
+    '-VelaHome', join(resolve(project, '..'), 'vela-home'), '-AcceptanceDirectory', acceptance,
+    '-LegacyWriterProof', '-ObservationSeconds', '15', '-PostExitQuietSeconds', '5'],
+  { encoding: 'utf8', timeout: 120_000 })
+  expect(result.status, result.stderr || result.stdout).toBe(0)
+  const proofPath = join(acceptance, 'legacy-writer.json')
+  expect(existsSync(proofPath)).toBe(true)
+  const proof = JSON.parse(readFileSync(proofPath, 'utf8'))
+  expect(proof.direct.projectPath).toBe(project)
+  expect(proof.direct.draft.id).toBeGreaterThan(0)
+  expect(proof.direct.draft.readBackContent).toBe(proof.direct.draft.content)
+  const { DatabaseSync } = await import('node:sqlite')
+  const database = new DatabaseSync(join(project, '.vela', 'vela.db'), { readOnly: true })
+  try {
+    const row = database.prepare(`SELECT d.chapter_number AS chapterNumber, hex(c.body) AS bodyHex
+      FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?`).get(proof.direct.draft.id)
+    expect(row?.chapterNumber).toBe(43)
+    expect(row?.bodyHex).toBe(Buffer.from(proof.direct.draft.content, 'utf8').toString('hex').toUpperCase())
+  } finally { database.close() }
+}, 120_000)
 
 function windowsPowerShellIt(
   name: string,
@@ -389,6 +448,39 @@ function writeUpgradeFixtureSettings(settingsPath: string) {
 }
 
 describe('Windows installer smoke contract', () => {
+  windowsIt('accepts only the exact old-save timestamp receipt and rejects altered author data', () => {
+    const cache = resolve('.runtime/.cache')
+    mkdirSync(cache, { recursive: true })
+    const root = mkdtempSync(join(cache, 'v025-save-validator-'))
+    const project = join(root, 'source')
+    const settings = join(root, 'config.json')
+    const proofPath = join(root, 'old-save.json')
+    try {
+      writeUpgradeFixtureSettings(settings)
+      runUpgradeFixtureWithNode('seed', project, settings)
+      const before = JSON.parse(execFileSync(process.execPath, ['-e', `
+        const {DatabaseSync}=require('node:sqlite'); const db=new DatabaseSync(process.argv[1]);
+        const before=db.prepare('SELECT d.id,d.updated_at AS updatedAt,d.word_count AS wordCount,c.body AS content FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=71').get();
+        db.prepare('UPDATE drafts SET updated_at=? WHERE id=71').run('2026-09-26 03:04:05');
+        db.close(); console.log(JSON.stringify(before));`, join(project, '.vela', 'vela.db')], { encoding: 'utf8' }))
+      const proof = { projectPath: project, verifiedBy: 'legacy-renderer-cdp-v025-save',
+        draft: { before, after: { ...before, updatedAt: '2026-09-26 03:04:05' } } }
+      const validate = (withProof = true) => spawnSync(process.execPath, [upgradeFixtureScript, 'validate-legacy',
+        project, settings, ...(withProof ? [proofPath] : [])], { encoding: 'utf8' })
+      expect(validate(false).status).not.toBe(0)
+      writeFileSync(proofPath, JSON.stringify(proof))
+      const valid = validate()
+      expect(valid.status, valid.stderr).toBe(0)
+      proof.draft.after.content = 'corrupted body'
+      writeFileSync(proofPath, JSON.stringify(proof))
+      expect(validate().status).not.toBe(0)
+      proof.draft.after.content = before.content
+      proof.draft.before.id = 72
+      writeFileSync(proofPath, JSON.stringify(proof))
+      expect(validate().status).not.toBe(0)
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  }, 15_000)
+
   it('runs the installed executable with isolated Vela data and supports an old-installer upgrade path', () => {
     const script = readFileSync('scripts/smoke-win-installer.ps1', 'utf8')
 
@@ -428,8 +520,8 @@ describe('Windows installer smoke contract', () => {
     expect(script).toContain('$result.embeddingSpace.vectorDimension -eq 768')
     expect(script).toContain('$result.embeddingSpace.queryResultCount -eq 1')
     expect(script).toContain('v0.2.5 upgrade data preservation evidence:')
-    expect(script).toContain('-LegacyProjectPathToOpen $upgradeFixtureRoot')
-    expect(script.indexOf('-LegacyProjectPathToOpen $upgradeFixtureRoot')).toBeLessThan(
+    expect(script).toContain('LegacyProjectPathToOpen = $upgradeFixtureRoot')
+    expect(script.indexOf('LegacyProjectPathToOpen = $upgradeFixtureRoot')).toBeLessThan(
       script.indexOf('Install-Silently $resolvedInstaller'),
     )
     expect(script).toContain('RelatedProcessStartTimeTicks')
@@ -438,9 +530,11 @@ describe('Windows installer smoke contract', () => {
     expect(script).not.toContain('Start-Process -FilePath $Path -ArgumentList $Arguments -Wait')
     expect(script).toContain('smoke-win-app.ps1')
     expect(script).toContain('VelaHome = $velaHome')
-    expect(script).toContain('$appSmokeParameters.ProjectPathToOpen = $upgradeFixtureRoot')
+    expect(script).not.toContain('$appSmokeParameters.ProjectPathToOpen = $upgradeFixtureRoot')
+    expect(script).toContain('Invoke-AiNovelV025CopyImport')
+    expect(script).toContain('LegacyV025SaveProofPath')
     const legacyValidation = 'Invoke-AiNovelUpgradeDataFixture -Mode validate-legacy -ProjectRoot $upgradeFixtureRoot'
-    const migratedValidation = '$upgradeValidationEvidence = Invoke-AiNovelUpgradeDataFixture -Mode validate -ProjectRoot $upgradeFixtureRoot'
+    const migratedValidation = '$upgradeValidationEvidence = Invoke-AiNovelUpgradeDataFixture -Mode validate-legacy -ProjectRoot $upgradeFixtureRoot'
     expect(script).toContain(legacyValidation)
     expect(script).toContain(migratedValidation)
     expect(script).not.toContain('UPDATE drafts SET word_count')
@@ -538,6 +632,7 @@ describe('Windows installer smoke contract', () => {
     const releaseGate = readFileSync('scripts/release-win-verify.mjs', 'utf8')
     const cloudWorkflow = readFileSync('.github/workflows/windows-cloud-build-test.yml', 'utf8')
     expect(releaseGate).toContain("'smoke:win-v025-upgrade'")
+    expect(releaseGate).toContain("step === 'test' ? ['--fileParallelism=false']")
     expect(cloudWorkflow).toContain('pnpm run build:win')
   })
 
@@ -586,7 +681,10 @@ describe('Windows installer smoke contract', () => {
         modelFingerprint: 'upgrade-fixture/non-2048-768',
         distanceMetric: 'l2',
       }
-      await expect(getEmbeddingSpaces(projectRoot)).resolves.toMatchObject({
+      // The standalone legacy fixture still validates native queries before and
+      // after its explicit normalization. Ordinary canonical business APIs must
+      // refuse this unqualified old root instead of granting migration authority.
+      expect(JSON.parse(readFileSync(join(projectRoot, '.vela', 'embedding-spaces.json'), 'utf8'))).toMatchObject({
         activeGeneration: 1,
         spaces: [expect.objectContaining({
           ...identity,
@@ -595,12 +693,9 @@ describe('Windows installer smoke contract', () => {
           status: 'active',
         })],
       })
-      await expect(search(projectRoot, '升级夹具知识库', vector, 5, identity)).resolves.toEqual([
-        expect.objectContaining({
-          fileName: '升级知识库.txt',
-          text: '升级夹具知识库：轨道港航标失真记录必须保留并可检索。',
-        }),
-      ])
+      await expect(getEmbeddingSpaces(projectRoot)).rejects.toThrow('PROJECT_DATA_NOT_READY')
+      // Canonical search keeps the same unqualified-project boundary as its registry read.
+      await expect(search(projectRoot, '升级夹具知识库', vector, 5, identity)).rejects.toThrow('PROJECT_DATA_NOT_READY')
       closeConnection(projectRoot)
 
       applyExpectedDraftUnitMigration(projectRoot)
@@ -746,6 +841,51 @@ describe('Windows installer smoke contract', () => {
     expect(script).toContain('SHA256]::Create')
     expect(script).toContain('smoke-win-installer.ps1')
     expect(packageJson).toContain('smoke:win-v025-upgrade')
+  })
+
+  it('keeps the installed v1.1 upgrade distinct from the v0.2.5 fixture', () => {
+    const script = readFileSync('scripts/smoke-win-installer.ps1', 'utf8')
+    const appSmoke = readFileSync('scripts/smoke-win-app.ps1', 'utf8')
+    const legacyProbe = readFileSync('scripts/probe-legacy-project-open.mjs', 'utf8')
+    const v110 = script.search(/if \(\$V110InstalledUpgrade\) \{\r?\n {6}Invoke-AiNovelV110Fixture -Mode seed/)
+    const v025 = script.indexOf('Invoke-AiNovelUpgradeDataFixture -Mode seed -ProjectRoot $upgradeFixtureRoot')
+    expect(v110).toBeGreaterThanOrEqual(0)
+    expect(v025).toBeGreaterThan(v110)
+    expect(script).toContain('legacy-v110-schema.sql')
+    expect(script).toContain('Invoke-AiNovelV110Fixture -Mode inspect')
+    expect(script).toContain('Compare-Object -ReferenceObject $v110Before')
+    expect(script).toContain("$previousReceipt.direct.previousVersion -ne '0.2.5'")
+    expect(script).toContain('NotePropertyName installedV110')
+    expect(script).toContain('$oldAppSmokeParameters.UserDataPath = $sharedUserData')
+    expect(script).toContain('$appSmokeParameters.UserDataPath = $sharedUserData')
+    expect(appSmoke).toContain('$qualificationProfile.userData = $sharedUserData')
+    expect(appSmoke).toContain('Shared userData must be an isolated path under the repository smoke cache.')
+    expect(script).toContain('54B436AEAB43A8B00AFFB768E1DB083F3E6B90EF25EBF1CD2DD6779A500C7F88')
+    expect(script).toContain("$env:AI_NOVEL_V110_GLOBAL_PROOF = if ($V110InstalledUpgrade) { '1' } else { $null }")
+    expect(legacyProbe).toContain("window.velaAPI.invoke('config:get')")
+    expect(legacyProbe).toContain("window.velaAPI.invoke('project:recent-list')")
+    expect(legacyProbe.indexOf('  ${globalRead}')).toBeLessThan(legacyProbe.indexOf("window.velaAPI.invoke('project:open'"))
+  })
+
+  windowsPowerShellIt('writes v1.1 global seeds as strict UTF-8 JSON with an array of recent projects', () => {
+    mkdirSync(resolve('.runtime/cache'), { recursive: true })
+    const root = mkdtempSync(join(resolve('.runtime/cache'), 's14c-v110-global-seed-'))
+    const configPath = join(root, 'config.json')
+    const recentPath = join(root, 'recent-projects.json')
+    const projectPath = join(root, 'synthetic-project')
+    try {
+      runInstallerLibrary(`Write-AiNovelV110GlobalSeed -ConfigPath ${quotePowerShell(configPath)} -RecentPath ${quotePowerShell(recentPath)} -ProjectPath ${quotePowerShell(projectPath)}`)
+      const configBytes = readFileSync(configPath)
+      const recentBytes = readFileSync(recentPath)
+      expect(configBytes.subarray(0, 3)).not.toEqual(Buffer.from([0xef, 0xbb, 0xbf]))
+      expect(recentBytes.subarray(0, 3)).not.toEqual(Buffer.from([0xef, 0xbb, 0xbf]))
+      expect(JSON.parse(configBytes.toString('utf8'))).toMatchObject({ theme: 'light', locale: 'zh-CN', proxy: { port: 7890 } })
+      expect(JSON.parse(recentBytes.toString('utf8'))).toEqual([{
+        name: '升级保留验证小说', path: projectPath, updatedAt: '2026-01-02T03:04:05.000Z',
+      }])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   windowsPowerShellIt('detects only new error windows, including system-owned dialogs outside the app process tree', () => {

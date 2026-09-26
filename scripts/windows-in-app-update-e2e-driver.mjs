@@ -179,7 +179,7 @@ async function verifyRestartedVersion({ endpoint, expectedVersion, evidenceRoot 
     const { page } = connected
     attachPageDiagnostics(page, evidence)
     const state = await page.evaluate(async () => {
-      const api = window.velaAPI
+      const api = window.aiNovelAPI
       if (!api) throw new Error('Installed renderer did not expose the preload API')
       return await api.invoke('update:get-state')
     })

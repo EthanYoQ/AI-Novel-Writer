@@ -101,11 +101,55 @@ jobs:
           }
           "AI_NOVEL_PREVIOUS_PORTABLE_ZIP=$portableZip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Prepare and verify Node native modules
+        shell: pwsh
+        run: pnpm run prepare:native-node
+
+      - name: Resolve Windows test temp directory
+        shell: pwsh
+        run: |
+          node -e "const fs = require('node:fs'); const os = require('node:os'); const original = os.tmpdir(); const physical = fs.realpathSync.native(original); fs.appendFileSync(process.env.GITHUB_ENV, 'TEMP=' + physical + '\nTMP=' + physical + '\n'); console.log('tempAlias=' + (physical.toLocaleLowerCase('en-US') !== original.toLocaleLowerCase('en-US')))"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Run complete Windows release gate
         shell: pwsh
         env:
           AI_NOVEL_RELEASE_EVIDENCE_COMMAND_TIMEOUT_MS: '2700000'
         run: node scripts/release-evidence-v2.mjs record --evidence-root "$env:AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step complete-windows-release-gate -- "$env:ComSpec" /d /s /c "pnpm run build:win"
+
+      - name: Download verified official v1.1.0 setup
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expectedName = 'ai-novel-writer-setup-1.1.0.exe'
+          $expectedUrl = "https://github.com/EthanYoQ/AI-Novel-Writer/releases/download/v1.1.0/$expectedName"
+          $expectedHash = '54b436aeab43a8b00affb768e1db083f3e6b90ef25ebf1cd2dd6779a500c7f88'
+          $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/EthanYoQ/AI-Novel-Writer/releases/tags/v1.1.0' -Headers @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json' }
+          $assets = @($release.assets | Where-Object { $_.name -eq $expectedName })
+          if ($release.tag_name -ne 'v1.1.0' -or $release.draft -or $release.prerelease -or $assets.Count -ne 1 -or
+              $assets[0].browser_download_url -ne $expectedUrl -or $assets[0].digest -ne "sha256:$expectedHash" -or
+              $assets[0].size -ne 195153833) { throw 'Official v1.1.0 setup Release metadata does not match the frozen asset.' }
+          $assetRoot = Join-Path $env:GITHUB_WORKSPACE '.runtime\.cache\s14c-v110-setup'
+          New-Item -ItemType Directory -Path $assetRoot -Force | Out-Null
+          $installer = Join-Path $assetRoot $expectedName
+          Invoke-WebRequest -Uri $expectedUrl -OutFile $installer
+          if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedHash -or
+              (Get-Item -LiteralPath $installer).Length -ne $assets[0].size) { throw 'Downloaded official v1.1.0 setup bytes do not match Release metadata.' }
+          "AI_NOVEL_V110_SETUP=$installer" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Qualify v1.1.0 installed setup upgrade
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $isolatedAcceptance = Join-Path $env:GITHUB_WORKSPACE '.runtime\.cache\s14c-v110-acceptance'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-win-installer.ps1 -PreviousInstallerPath "$env:AI_NOVEL_V110_SETUP" -V110InstalledUpgrade -IsolatedAcceptanceDirectory "$isolatedAcceptance"
+          if ($LASTEXITCODE -ne 0) { throw "v1.1.0 installed setup upgrade failed with code $LASTEXITCODE" }
+          $receipt = Get-Content -LiteralPath (Join-Path $env:AI_NOVEL_RELEASE_EVIDENCE_ROOT 'acceptance\upgrade-data.json') -Raw | ConvertFrom-Json
+          if ($receipt.direct.previousVersion -ne '0.2.5' -or $receipt.direct.installedV110.previousVersion -ne '1.1.0' -or
+              $receipt.direct.installedV110.oldAppOpenedProject -ne $true -or $receipt.direct.installedV110.currentAppLaunched -ne $true -or
+              $receipt.direct.installedV110.sourceUnchanged -ne $true) { throw 'Combined Windows upgrade receipt is incomplete.' }
 
       - name: Finalize Windows release evidence
         if: ${{ success() }}

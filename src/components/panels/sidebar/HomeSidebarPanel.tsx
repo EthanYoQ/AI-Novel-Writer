@@ -10,31 +10,14 @@ import { Button } from '../../ui/Button'
 import { confirm } from '../../ui/Confirm'
 import { toast } from '../../ui/Toast'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { confirmDeleteCurrentProject } from '../../project-delete-action'
 
 export default function HomeSidebarPanel() {
   const currentProject = useProjectStore(s => s.currentProject)
   const recentProjects = useProjectStore(s => s.recentProjects)
   const openProject = useProjectStore(s => s.openProject)
   const removeRecentProject = useProjectStore(s => s.removeRecentProject)
-  const deleteProject = useProjectStore(s => s.deleteProject)
   const text = useLocaleStore(s => s.text)
-
-  const handleDeleteProject = async (project: { name: string; path: string }) => {
-    const ok = await confirm(
-      text(`确认删除项目「${project.name}」？\n此操作会删除该项目目录下的小说正文、故事架构、角色、蓝图、知识库和所有项目数据。`, `Delete project “${project.name}”?\nThis removes its manuscripts, architecture, characters, blueprints, knowledge base, and all project data.`),
-      {
-        title: text('删除项目', 'Delete project'),
-        confirmText: text('删除项目', 'Delete project'),
-        danger: true,
-      },
-    )
-    if (!ok) return
-
-    const success = await deleteProject(project.path)
-    if (success) {
-      toast.success(text(`项目「${project.name}」已删除`, `Project “${project.name}” deleted`))
-    }
-  }
 
   const handleRemoveRecentProject = async (project: { name: string; path: string }) => {
     const ok = await confirm(
@@ -83,7 +66,7 @@ export default function HomeSidebarPanel() {
               style={{ minHeight: 24, minWidth: 28, padding: 0, color: 'var(--color-error)' }}
               onClick={(e) => {
                 e.stopPropagation()
-                handleDeleteProject(currentProject)
+                void confirmDeleteCurrentProject(currentProject)
               }}
             >
               <Trash2 size={13} />

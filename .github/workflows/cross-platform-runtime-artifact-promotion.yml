@@ -29,7 +29,6 @@ on:
       release_notes_path:
         description: Repository-relative bilingual Markdown release notes
         required: true
-        default: .release/notes/v1.0.0.md
         type: string
       qualification_runs_json:
         description: JSON object mapping each platform to runId, attempt, and artifactId

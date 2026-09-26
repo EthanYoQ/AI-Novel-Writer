@@ -9,6 +9,7 @@ import { useLayoutStore } from '../../../stores/layout-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useProjectStore } from '../../../stores/project-store'
 import LeftToolWindowBar from '../../layout/LeftToolWindowBar'
+import ShellV2 from '../../layout/v2/ShellV2'
 import { openBuiltinEditor } from '../sidebar/sidebar-file-openers'
 import EditorArea from '../EditorArea'
 
@@ -29,6 +30,11 @@ function button(label: string): HTMLButtonElement {
     .find(candidate => candidate.textContent?.trim() === label)
   if (!match) throw new Error(`button not found: ${label}`)
   return match
+}
+
+async function clickWriterButton(label: string): Promise<void> {
+  expect(container?.querySelector('[data-shell-presentation="writer"]')).not.toBeNull()
+  await act(async () => button(label).click())
 }
 
 function selectedTab(label: string): boolean {
@@ -79,7 +85,7 @@ beforeEach(async () => {
     leaseId: project.sessionLease!,
     projectPath: project.path,
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke: vi.fn(async (channel: string) => {
@@ -108,17 +114,24 @@ beforeEach(async () => {
   document.body.append(container)
   root = createRoot(container)
   await act(async () => root?.render(
-    <div>
-      <LeftToolWindowBar />
-      <EditorArea onNewProject={vi.fn()} />
-    </div>,
+    <ShellV2
+      theme="paper"
+      titleBar={<span>剧情树导航</span>}
+      rail={<LeftToolWindowBar />}
+      sidebar={<span>项目结构</span>}
+      editor={<EditorArea onNewProject={vi.fn()} />}
+      aiPanel={<span>助手</span>}
+      bottom={<span>任务</span>}
+      statusBar={<span>本地写作</span>}
+    />,
   ))
+  expect(container.querySelector('[data-shell-presentation="writer"]')).not.toBeNull()
 })
 
 afterEach(async () => {
   await act(async () => root?.unmount())
   container?.remove()
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
   setActiveProjectSessionContext(null)
   useEditorStore.setState(originalEditorState)
   useLayoutStore.setState(originalLayoutState)
@@ -128,7 +141,7 @@ afterEach(async () => {
 
 describe('plot-tree left rail navigation', () => {
   it('opens a project-scoped chapter blueprint tab after switching projects', async () => {
-    await act(async () => button('蓝图').click())
+    await clickWriterButton('蓝图')
     await vi.waitFor(() => expect(useEditorStore.getState().tabs)
       .toContainEqual(expect.objectContaining({ type: 'chapter-card', projectKey: PROJECT_PATH })))
 
@@ -149,7 +162,7 @@ describe('plot-tree left rail navigation', () => {
       })
     })
 
-    await act(async () => button('蓝图').click())
+    await clickWriterButton('蓝图')
     await vi.waitFor(() => {
       const state = useEditorStore.getState()
       expect(state.tabs.find(tab => tab.id === state.activeTabId))
@@ -165,22 +178,24 @@ describe('plot-tree left rail navigation', () => {
   })
 
   it('returns an existing narrative editor to plot tree without losing the plan form', async () => {
-    await act(async () => button('剧情').click())
+    await clickWriterButton('剧情')
     await vi.waitFor(() => expect(selectedTab('剧情树')).toBe(true))
 
-    await act(async () => button('计划清单').click())
+    await clickWriterButton('计划清单')
     expect(selectedTab('计划清单')).toBe(true)
     const title = container!.querySelector<HTMLInputElement>('input')!
+    expect(container?.querySelector('[data-shell-presentation="writer"]')).not.toBeNull()
     await act(async () => setInputValue(title, '不应丢失的计划'))
     expect(title.value).toBe('不应丢失的计划')
 
-    await act(async () => button('剧情').click())
+    await clickWriterButton('剧情')
     await vi.waitFor(() => expect(selectedTab('剧情树')).toBe(true))
 
-    await act(async () => button('计划清单').click())
+    await clickWriterButton('计划清单')
     expect(container!.querySelector<HTMLInputElement>('input')?.value)
       .toBe('不应丢失的计划')
 
+    expect(container?.querySelector('[data-shell-presentation="writer"]')).not.toBeNull()
     await act(async () => openBuiltinEditor(
       'narrative-thread-editor',
       '伏笔与叙事线索',

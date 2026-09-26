@@ -1,3 +1,4 @@
+import type { MainGenerationRunHandle } from '../../services/generation/generation-runtime'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import type { CharacterRosterSnapshot } from '../../shared/character-roster'
 import { LatestRequestGate } from './latest-request-gate'
@@ -17,7 +18,7 @@ export interface CharacterRosterRepairPort {
   getSession(): ProjectSessionContext | null
   isSessionUsable(session: ProjectSessionContext): boolean
   read(session: ProjectSessionContext): Promise<CharacterRosterSnapshot>
-  migrate(projectPath: string): Promise<void>
+  migrate(projectPath: string, options?: { recoveryHandle?: MainGenerationRunHandle; restart?: boolean }): Promise<void>
   setState(next: Partial<CharacterRosterRepairState>): void
 }
 
@@ -70,7 +71,7 @@ export class CharacterRosterRepairController {
     return snapshot
   }
 
-  async migrate(): Promise<void> {
+  async migrate(options?: { recoveryHandle?: MainGenerationRunHandle; restart?: boolean }): Promise<void> {
     if (this.repairInFlight) return
 
     const port = this.getPort()
@@ -81,7 +82,8 @@ export class CharacterRosterRepairController {
     this.repairInFlight = true
     port.setState({ isRepairing: true, repairError: null })
     try {
-      await port.migrate(session.projectPath)
+      if (options) await port.migrate(session.projectPath, options)
+      else await port.migrate(session.projectPath)
       if (!this.canApplyRepair(repairToken, session)) return
       await this.load()
     } catch (error) {

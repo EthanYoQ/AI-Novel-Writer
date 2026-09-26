@@ -1,3 +1,6 @@
+import { formatResourceUri } from '../shared/project-paths'
+import { parseResourceUri, resourceWriteAllowed } from '../shared/project-paths'
+import { readResourceContent } from '../services/resource-protocol'
 /**
  * 草稿状态管理 — 管理各章节草稿列表、定稿操作等
  *
@@ -104,7 +107,8 @@ interface DraftState {
     expectedDraftContent: string,
     expectedProjectPath: string,
     expectedProjectSession?: ProjectSessionContext,
-  ) => Promise<{ success: boolean; error?: string }>
+  ) => Promise<{ success: boolean; receipt?: Awaited<ReturnType<typeof ipc.invoke<'db:revision-merge'>>>['receipt'];
+    error?: string; postCommitError?: string }>
 }
 
 export const useDraftStore = create<DraftState>()((set, get) => ({
@@ -161,7 +165,7 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
         status: m.status as DraftStatus,
         source: m.source as DraftMeta['source'],
         fileName: `draft_v${m.version}.md`,
-        filePath: `vela://draft/${m.id}`
+        filePath: formatResourceUri({ kind: 'draft', id: m.id })
       }))
 
       // 按版本号排序（新 → 旧）
@@ -212,7 +216,7 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
           status: draft.status as DraftStatus,
           source: draft.source as DraftMeta['source'],
           fileName: `draft_v${draft.version}.md`,
-          filePath: `vela://draft/${draft.id}`
+          filePath: formatResourceUri({ kind: 'draft', id: draft.id })
         })
         newDraftsByChapter[draft.chapterNumber] = chapterDrafts
       }
@@ -249,25 +253,12 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
 
 
   markDraftStatus: async (draftPath, chapterNumber, status, expectedProjectSession) => {
-    // 从路径提取版本号
-    const versionMatch = draftPath.match(/draft_v(\d+)\.md$/)
     const project = useProjectStore.getState().currentProject
     const projectSession = currentDraftProjectSession(project?.path, expectedProjectSession)
-    if (!project || !projectSession) return
-    const directDraftId = /^vela:\/(?:draft|manuscript)\/(\d+)$/.exec(draftPath)?.[1]
-    let draftId = directDraftId ? Number(directDraftId) : undefined
-    if (draftId === undefined) {
-      if (!versionMatch) return
-      const drafts = await ipc.invokeWithProjectSession(
-        projectSession,
-        'db:draft-list',
-        chapterNumber,
-        project.path,
-      )
-      if (!isDraftProjectSessionCurrent(projectSession)) return
-      draftId = drafts.find(draft => draft.version === Number(versionMatch[1]))?.id
-    }
-    if (!draftId) return
+    if (!project || !projectSession || !resourceWriteAllowed(draftPath)) return
+    const resource = parseResourceUri(draftPath)
+    if (resource?.kind !== 'draft') return
+    const draftId = resource.id
     requireIpcSuccess(
       await ipc.invokeWithProjectSession(
         projectSession,
@@ -302,6 +293,8 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
     expectedProjectPath,
     expectedProjectSession,
   ) => {
+    void chapterDir // Compatibility argument; typed DB identities now determine the merge target.
+    let committedReceipt: Awaited<ReturnType<typeof ipc.invoke<'db:revision-merge'>>>['receipt'] | undefined
     try {
       const projectSession = currentDraftProjectSession(expectedProjectPath, expectedProjectSession)
       if (!projectSession) {
@@ -320,61 +313,16 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
           }
         : undefined
 
-      const versionMatch = filePath.match(/v(\d+)/)
-      const version = versionMatch ? parseInt(versionMatch[1]) : 1
-
-      let targetDraftId: number | undefined
-      if (filePath.startsWith('vela://draft/') || filePath.startsWith('vela://manuscript/')) {
-        const prefix = filePath.startsWith('vela://draft/') ? 'vela://draft/' : 'vela://manuscript/'
-        targetDraftId = parseInt(filePath.replace(prefix, ''))
-      } else {
-        const chMatch = filePath.match(/ch(\d+)/)
-        const chNum = chMatch ? parseInt(chMatch[1]) : chapterNumber
-        if (chNum !== undefined) {
-          const drafts = await ipc.invokeWithProjectSession(projectSession, 'db:draft-list', chNum, expectedProjectPath)
-          if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
-          const target = drafts.find((draft) => draft.version === version)
-          if (target) {
-            targetDraftId = target.id
-          }
-        }
+      const draftResource = parseResourceUri(filePath)
+      const revisionResource = parseResourceUri(revPath)
+      if (!resourceWriteAllowed(filePath) || draftResource?.kind !== 'draft'
+        || revisionResource?.kind !== 'revision' || revisionResource.legacy) {
+        return { success: false, error: '资源只读或无法确定草稿与修订身份' }
       }
+      const targetDraftId = draftResource.id
+      const revisionId = revisionResource.id
 
-      let revisionId: number | undefined
-      const directRevisionId = /^vela:\/\/revision\/(\d+)$/.exec(revPath)?.[1]
-      if (targetDraftId && directRevisionId) {
-        revisionId = Number(directRevisionId)
-      } else if (targetDraftId) {
-        const revisionMatch = revPath.match(/v(\d+)_r(\d+)/)
-        const chapterMatch = chapterDir.match(/ch(\d+)$/)
-        if (revisionMatch && chapterMatch) {
-          const drafts = await ipc.invokeWithProjectSession(
-            projectSession,
-            'db:draft-list',
-            Number(chapterMatch[1]),
-            expectedProjectPath,
-          )
-          if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
-          const baseDraft = drafts.find(draft => draft.version === Number(revisionMatch[1]))
-          if (baseDraft) {
-            const revisions = await ipc.invokeWithProjectSession(
-              projectSession,
-              'db:revision-list',
-              baseDraft.id,
-              expectedProjectPath,
-            )
-            if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
-            const revision = revisions.find(item => item.revisionIndex === Number(revisionMatch[2]))
-            revisionId = revision?.id
-          }
-        }
-      }
-
-      if (!targetDraftId || !revisionId) {
-        return { success: false, error: '无法确定待合并的草稿或修订身份' }
-      }
-
-      requireIpcSuccess(
+      const merged = requireIpcSuccess(
         await ipc.invokeWithProjectSession(
           projectSession,
           'db:revision-merge',
@@ -389,7 +337,10 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
         ),
         '提交合并后的修订稿',
       )
-      if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
+      committedReceipt = merged.receipt
+      if (!isDraftProjectSessionCurrent(projectSession)) {
+        return { success: true, receipt: committedReceipt, postCommitError: staleProjectError().error }
+      }
 
       if (targetTab && editorSnapshot) {
         editorState.settleMergedRevision(targetTab.id, editorSnapshot, mergedText)
@@ -398,10 +349,33 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
       if (chapterNumber !== undefined) {
         await get().loadChapterDrafts(chapterNumber, expectedProjectPath, projectSession)
       }
-      if (!isDraftProjectSessionCurrent(projectSession)) return staleProjectError()
+      if (!isDraftProjectSessionCurrent(projectSession)) {
+        return { success: true, receipt: committedReceipt, postCommitError: staleProjectError().error }
+      }
 
-      return { success: true }
+      if (merged.receipt?.reviewCycle?.disposition === 'required') {
+        const { createReviewOnlyWorkflow } = await import('../services/workflows/chapter-workflow')
+        const { useWorkflowStore } = await import('./workflow-store')
+        if (!isDraftProjectSessionCurrent(projectSession)) {
+          return { success: true, receipt: committedReceipt, postCommitError: staleProjectError().error }
+        }
+        const mergedTab = useEditorStore.getState().tabs.find(tab => tab.projectKey === expectedProjectPath && tab.filePath === filePath)
+        useWorkflowStore.getState().startWorkflow(createReviewOnlyWorkflow({
+          projectPath: expectedProjectPath,
+          chapterNumber: merged.receipt.chapterNumber,
+          chapterTitle: `第${merged.receipt.chapterNumber}章`,
+          draftPath: filePath,
+          draftContent: mergedText,
+          sourceDraft: { id: merged.receipt.targetDraftId, chapterNumber: merged.receipt.chapterNumber,
+            version: merged.receipt.version, status: 'revised', contentRevision: mergedTab?.contentRevision ?? 0 },
+          reviewCycleId: merged.receipt.reviewCycle.cycleId,
+          expectedMergedHash: merged.receipt.reviewCycle.mergedHash,
+        }, projectSession), false)
+      }
+
+      return { success: true, receipt: committedReceipt }
     } catch (e) {
+      if (committedReceipt) return { success: true, receipt: committedReceipt, postCommitError: String(e) }
       return { success: false, error: String(e) }
     }
   },
@@ -410,8 +384,8 @@ export const useDraftStore = create<DraftState>()((set, get) => ({
 // ===== 辅助工具导出 =====
 
 /**
- * 读取草稿文件正文（委托给 vela-protocol 统一路由）
- * @deprecated 建议直接使用 readVelaContent()
+ * 读取草稿文件正文（委托给 resource-protocol 统一路由）
+ * @deprecated 建议直接使用 readResourceContent()
  */
 export async function readDraftBody(
   filePath: string,
@@ -421,58 +395,8 @@ export async function readDraftBody(
   const projectSession = currentDraftProjectSession(expectedProjectPath, expectedProjectSession)
   if (!projectSession) throw new Error('读取草稿时缺少匹配的冻结项目会话')
 
-  if (filePath.startsWith('vela://draft/') || filePath.startsWith('vela://manuscript/')) {
-    const prefix = filePath.startsWith('vela://draft/') ? 'vela://draft/' : 'vela://manuscript/'
-    const full = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:draft-get-full',
-      parseInt(filePath.replace(prefix, '')),
-      expectedProjectPath,
-    )
-    if (!isDraftProjectSessionCurrent(projectSession)) return ''
-    return full?.content ?? ''
-  }
-
-  if (filePath.startsWith('vela://revision/')) {
-    const full = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:revision-get-full',
-      parseInt(filePath.replace('vela://revision/', '')),
-      expectedProjectPath,
-    )
-    if (!isDraftProjectSessionCurrent(projectSession)) return ''
-    return full?.content ?? ''
-  }
-
-  if (filePath.startsWith('vela://review/')) {
-    const full = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:review-get-full',
-      parseInt(filePath.replace('vela://review/', '')),
-      expectedProjectPath,
-    )
-    if (!isDraftProjectSessionCurrent(projectSession)) return ''
-    return full?.content ?? ''
-  }
-
-  if (filePath.startsWith('vela://core/')) {
-    const core = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:project-core-get',
-      expectedProjectPath,
-    )
-    if (!isDraftProjectSessionCurrent(projectSession)) return ''
-    const key = filePath.replace('vela://core/', '')
-    const fields: Record<string, string | undefined> = {
-      premise: core?.premise,
-      worldbuilding: core?.worldbuilding,
-      characters: core?.charactersArch,
-      synopsis: core?.synopsis,
-    }
-    return fields[key] ?? ''
-  }
-
-  return ''
+  const content = await readResourceContent(filePath, projectSession)
+  return isDraftProjectSessionCurrent(projectSession) ? content : ''
 }
 
 export type { DraftMeta, DraftStatus }

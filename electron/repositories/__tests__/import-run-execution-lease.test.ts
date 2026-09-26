@@ -3,7 +3,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { closeProjectDatabase, getProjectDb, initProjectDatabase } from '../../database'
+import { closeProjectDatabase, getProjectDb } from '../../database'
+import { openCanonicalProjectFixture as initProjectDatabase } from '../../../test/helpers/canonical-project-fixture'
 import { ImportRunRepository } from '../import-run-repository'
 import type { ImportRunPrepareRequest } from '../../../src/shared/import-run'
 import { createImportRunChapterBatchCheckpointId } from '../../../src/shared/import-run'
@@ -26,12 +27,34 @@ beforeEach(() => {
   ImportRunRepository.prepare(request)
 })
 
+function freezeRun(runId: string): void {
+  const storage = path.join(root, '.ai-novel')
+  fs.writeFileSync(path.join(storage, 'portable-runtime-freeze.json'), JSON.stringify({
+    version: 1, originProjectId: '11111111-1111-4111-8111-111111111111', snapshotGeneration: 'snapshot-1',
+    nonReplayable: true, requiresRuntimeFreezeGuard: true, avatarReferenceProjections: [], records: [{
+      projectionId: `history:import_runs:${runId}`, table: 'import_runs', recordId: runId,
+      terminalState: 'ready', projection: {}, projectionHash: 'a'.repeat(64), excludedFields: [],
+      nonReplayable: true, originalReceiptVerified: false,
+    }],
+  }), { mode: 0o600 })
+}
+
 afterEach(() => {
   closeProjectDatabase()
   fs.rmSync(root, { recursive: true, force: true })
 })
 
 describe('import execution lease', () => {
+  it('hides and refuses an imported resumable run without mutating it', () => {
+    freezeRun('leased-run')
+    expect(ImportRunRepository.listResumable()).toEqual([])
+    expect(() => ImportRunRepository.startOrResume('leased-run', 'renderer-a')).toThrow('PORTABLE_RUNTIME_FROZEN')
+    expect(getProjectDb()!.prepare('SELECT status, execution_owner FROM import_runs WHERE id=?').get('leased-run'))
+      .toEqual({ status: 'ready', execution_owner: '' })
+    ImportRunRepository.prepare({ ...request, runId: 'new-run', sourceFingerprint: 'b'.repeat(64) })
+    expect(ImportRunRepository.startOrResume('new-run', 'renderer-a')).toMatchObject({ run: { id: 'new-run', status: 'running' } })
+  })
+
   it('keeps main-process authority stable across heartbeat expiry updates and fences it on takeover', () => {
     const first = ImportRunRepository.startOrResume('leased-run', 'renderer-a', 1_000, 100)
     const authority = { owner: first.execution.owner, epoch: first.execution.epoch }
@@ -131,9 +154,10 @@ describe('import execution lease', () => {
 
     getProjectDb()!.prepare(`
       UPDATE import_runs
-      SET stage = 'refresh', completed_batches_json = '{"refresh":["done"]}'
+      SET stage = 'refresh'
       WHERE id = 'leased-run'
     `).run()
+    ImportRunRepository.completeBatch('leased-run', 'refresh', 'done', resumed.execution)
     expect(ImportRunRepository.complete('leased-run', resumed.execution))
       .toMatchObject({ status: 'completed', resumable: false })
     expect(() => ImportRunRepository.startOrResume('leased-run', 'renderer-c', base + 2, 60_000))

@@ -32,6 +32,11 @@ export interface FinalizationCompletion {
   publicationStatus: FinalizationPublicationStatus
 }
 
+/** Editor revisions are zero-based; persisted finalization source revisions start at one. */
+export function finalizationContentRevision(editorRevision: number | undefined): number {
+  return (editorRevision ?? 0) + 1
+}
+
 export function captureFinalizationSnapshot(input: {
   tab: EditorTab
   projectSession: ProjectSessionContext
@@ -57,7 +62,7 @@ export function captureFinalizationSnapshot(input: {
     chapterNumber: tab.chapterNumber,
     chapterTitle,
     content: tab.content ?? '',
-    contentRevision: tab.contentRevision ?? 0,
+    contentRevision: finalizationContentRevision(tab.contentRevision),
   })
 }
 
@@ -83,7 +88,7 @@ export function reconcileFinalizationCompletion(
   if (!sameTarget) return tab
 
   const snapshotStillCurrent = (
-    (tab.contentRevision ?? 0) === snapshot.contentRevision
+    finalizationContentRevision(tab.contentRevision) === snapshot.contentRevision
     && (tab.content ?? '') === snapshot.content
   )
   if (!snapshotStillCurrent) {

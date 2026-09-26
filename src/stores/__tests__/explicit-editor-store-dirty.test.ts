@@ -30,6 +30,7 @@ vi.mock('../../services/ipc-client', () => ({
       if (channel === 'db:character-roster-read' && Array.isArray(result)) {
         return {
           revision: 1,
+          identityRevision: 1,
           status: result.length > 0 ? 'ready' : 'empty',
           entries: result.map(card => {
             const relationshipText = typeof card.relationships === 'string' ? card.relationships.trim() : ''
@@ -48,7 +49,7 @@ vi.mock('../../services/ipc-client', () => ({
           ...result,
           receipt: {
             revision: request.expectedRevision + 1,
-            snapshot: { entries: request.entries },
+            snapshot: { entries: request.entries, identityRevision: request.expectedRevision + 1 },
           },
         }
       }
@@ -104,6 +105,7 @@ function projectSession(currentProject: ProjectData) {
 function character(name: string, notes = ''): CharacterCard {
   return {
     name,
+    characterId: `id:${name}`,
     role: 'protagonist',
     gender: '',
     age: '',
@@ -159,12 +161,14 @@ beforeEach(() => {
   useCharacterStore.setState({
     characters: [character('主角')],
     selectedName: '主角',
+      selectedId: 'id:主角',
     saving: false,
     identityBusy: false,
     loaded: true,
     dataProjectKey: project().path,
     dataProjectSession: projectSession(project()),
     rosterRevision: 1,
+    identityRevision: 1,
     loadingProjectKey: null,
     loadingProjectSession: null,
     lastError: null,
@@ -172,6 +176,56 @@ beforeEach(() => {
 })
 
 describe('explicit editor dirty integration', () => {
+  it('settles an existing guarded effect once while preserving a concurrent author style draft', async () => {
+    const original = project(), handle = { projectId: original.id, epoch: original.sessionLease!, rootActionId: 'root', runId: 'run' }
+    const pending = deferred<void>(), persistEffect = vi.fn(() => pending.promise)
+    const saving = useProjectStore.getState().commitGeneratedNovelConfig({ writingStyle: '已保存的模型文风' }, original.novelConfig, projectSession(original), handle, persistEffect)
+    useProjectStore.getState().updateNovelConfig({ writingStyle: '作者等待时的新文风' })
+    pending.resolve()
+    await expect(saving).rejects.toThrow('GENERATION_SAVED_WITH_NEWER_AUTHOR_DRAFT')
+    expect(persistEffect).toHaveBeenCalledTimes(1)
+    expect(invoke).not.toHaveBeenCalled()
+    expect(useProjectStore.getState().currentProject?.novelConfig.writingStyle).toBe('作者等待时的新文风')
+    expect(getProjectEditorDraft<ProjectData['novelConfig']>(parseProjectEditorDraftLedger(draftLedgerContent(CONFIG_DRAFT_TAB.id)), original.path)?.baseValue.writingStyle).toBe('已保存的模型文风')
+  })
+  it('keeps unrelated pre-existing author fields dirty after a generated field is committed', async () => {
+    const original = project(), handle = { projectId: original.id, epoch: original.sessionLease!, rootActionId: 'root', runId: 'run' }
+    useProjectStore.getState().updateNovelConfig({ globalGuidance: '作者尚未保存的约束' })
+    const expected = useProjectStore.getState().currentProject!.novelConfig
+    invoke.mockResolvedValue({ success: true })
+    await expect(useProjectStore.getState().commitGeneratedNovelConfig({ coreOutline: '生成的大纲' }, expected, projectSession(original), handle)).resolves.toBe(true)
+    const draft = getProjectEditorDraft(parseProjectEditorDraftLedger(draftLedgerContent(CONFIG_DRAFT_TAB.id)), original.path)
+    expect(draft?.baseValue).toMatchObject({ coreOutline: '生成的大纲', globalGuidance: '' })
+    expect(useProjectStore.getState().currentProject?.novelConfig).toMatchObject({ coreOutline: '生成的大纲', globalGuidance: '作者尚未保存的约束' })
+    useProjectStore.getState().discardNovelConfigDraft(original.path, projectSession(original))
+    expect(useProjectStore.getState().currentProject?.novelConfig).toMatchObject({ coreOutline: '生成的大纲', globalGuidance: '' })
+  })
+  it('publishes generated config only after main commit and maps the POV field', async () => {
+    const original = project(), handle = { projectId: original.id, epoch: original.sessionLease!, rootActionId: 'root', runId: 'run' }
+    const pending = deferred<{ success: boolean }>()
+    invoke.mockReturnValue(pending.promise)
+    const saving = useProjectStore.getState().commitGeneratedNovelConfig({ coreOutline: '生成的大纲', narrativePOV: 'first_person' }, original.novelConfig, projectSession(original), handle)
+    expect(useProjectStore.getState().currentProject?.novelConfig.coreOutline).toBe('原大纲')
+    expect(invoke).toHaveBeenCalledWith('db:project-core-commit-generated', { data: { coreOutline: '生成的大纲', narrativePov: 'first_person' }, generationRunHandle: handle }, original.path)
+    pending.resolve({ success: true })
+    await expect(saving).resolves.toBe(true)
+    expect(useProjectStore.getState().currentProject?.novelConfig).toMatchObject({ coreOutline: '生成的大纲', narrativePOV: 'first_person' })
+  })
+  it('preserves newer local author edits before and during a generated commit', async () => {
+    const original = project(), handle = { projectId: original.id, epoch: original.sessionLease!, rootActionId: 'root', runId: 'run' }
+    useProjectStore.getState().updateNovelConfig({ coreOutline: '作者先修改' })
+    await expect(useProjectStore.getState().commitGeneratedNovelConfig({ coreOutline: '旧生成' }, original.novelConfig, projectSession(original), handle)).rejects.toThrow('GENERATION_AUTHOR_DRAFT_CHANGED')
+    expect(invoke).not.toHaveBeenCalled()
+    useProjectStore.setState({ currentProject: original })
+    const pending = deferred<{ success: boolean }>()
+    invoke.mockReturnValue(pending.promise)
+    const saving = useProjectStore.getState().commitGeneratedNovelConfig({ coreOutline: '生成的大纲' }, original.novelConfig, projectSession(original), handle)
+    useProjectStore.getState().updateNovelConfig({ coreOutline: '作者等待时新写' })
+    pending.resolve({ success: true })
+    await expect(saving).rejects.toThrow('GENERATION_SAVED_WITH_NEWER_AUTHOR_DRAFT')
+    expect(useProjectStore.getState().currentProject?.novelConfig.coreOutline).toBe('作者等待时新写')
+    expect(getProjectEditorDraft(parseProjectEditorDraftLedger(draftLedgerContent(CONFIG_DRAFT_TAB.id)), original.path)).toBeDefined()
+  })
   it('unbinds project A character data before openProject publishes project B and loads B', async () => {
     const fileTree = deferred<[]>()
     invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
@@ -211,7 +265,7 @@ describe('explicit editor dirty integration', () => {
       loadingProjectKey: projectB().path,
       loaded: false,
     })
-    expect(useCharacterStore.getState().renameCharacter('主角', '不应发生')).toBe(false)
+    expect(useCharacterStore.getState().renameCharacter('id:主角', '不应发生')).toBe(false)
     await expect(useCharacterStore.getState().saveAll(projectB().path))
       .rejects.toThrow(/切换项目/)
 
@@ -265,12 +319,12 @@ describe('explicit editor dirty integration', () => {
   })
 
   it('keeps character-card edits recoverable across an asynchronous save', async () => {
-    useCharacterStore.getState().updateField('主角', 'notes', '保存快照')
+    useCharacterStore.getState().updateField('id:主角', 'notes', '保存快照')
     const pending = deferred<{ success: boolean }>()
     invoke.mockReturnValueOnce(pending.promise)
 
     const save = useCharacterStore.getState().saveAll(project().path)
-    useCharacterStore.getState().updateField('主角', 'notes', '保存期间继续编辑')
+    useCharacterStore.getState().updateField('id:主角', 'notes', '保存期间继续编辑')
     pending.resolve({ success: true })
     await save
 
@@ -329,20 +383,22 @@ describe('explicit editor dirty integration', () => {
     useCharacterStore.setState({
       characters: [character('项目 A 角色', '待保存')],
       selectedName: '项目 A 角色',
+      selectedId: 'id:项目 A 角色',
       saving: false,
       loaded: true,
     })
-    useCharacterStore.getState().updateField('项目 A 角色', 'notes', 'A 保存快照')
+    useCharacterStore.getState().updateField('id:项目 A 角色', 'notes', 'A 保存快照')
     const projectASave = deferred<{ success: boolean }>()
     invoke
       .mockReturnValueOnce(projectASave.promise)
       .mockResolvedValueOnce([character('项目 B 角色', 'B 数据')])
 
     const saveA = useCharacterStore.getState().saveAll(project().path)
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1))
     useProjectStore.setState({ currentProject: projectB() })
     useCharacterStore.getState().reset()
     expect(useCharacterStore.getState().saving).toBe(false)
-    expect(useCharacterStore.getState().renameCharacter('项目 A 角色', '不应发生')).toBe(false)
+    expect(useCharacterStore.getState().renameCharacter('id:项目 A 角色', '不应发生')).toBe(false)
 
     const loadB = useCharacterStore.getState().load(projectB().path)
     expect(invoke).toHaveBeenCalledTimes(2)
@@ -367,6 +423,7 @@ describe('explicit editor dirty integration', () => {
     useCharacterStore.setState({
       characters: [character('项目 A 待删除角色')],
       selectedName: '项目 A 待删除角色',
+      selectedId: 'id:项目 A 待删除角色',
       saving: false,
       loaded: true,
     })
@@ -376,21 +433,23 @@ describe('explicit editor dirty integration', () => {
       .mockResolvedValueOnce([character('项目 B 角色')])
 
     const deleteA = useCharacterStore.getState().deleteCharacter(
-      '项目 A 待删除角色',
+      'id:项目 A 待删除角色',
       project().path,
     )
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1))
     useProjectStore.setState({ currentProject: projectB() })
     useCharacterStore.getState().reset()
     useCharacterStore.setState({
       characters: [character('项目 B 角色')],
       selectedName: '项目 B 角色',
+      selectedId: 'id:项目 B 角色',
       loaded: true,
       dataProjectKey: projectB().path,
       dataProjectSession: projectSession(projectB()),
       loadingProjectKey: null,
       loadingProjectSession: null,
     })
-    useCharacterStore.getState().updateField('项目 B 角色', 'notes', 'B 删除等待期间编辑')
+    useCharacterStore.getState().updateField('id:项目 B 角色', 'notes', 'B 删除等待期间编辑')
     const loadB = useCharacterStore.getState().load(projectB().path)
     expect(invoke).toHaveBeenCalledTimes(2)
 
@@ -415,6 +474,7 @@ describe('explicit editor dirty integration', () => {
         character('保留角色', '旧备注'),
       ],
       selectedName: '待删除角色',
+      selectedId: 'id:待删除角色',
       saving: false,
       loaded: true,
     })
@@ -424,21 +484,21 @@ describe('explicit editor dirty integration', () => {
       .mockResolvedValueOnce([character('保留角色', '旧备注')])
 
     const deletion = useCharacterStore.getState().deleteCharacter(
-      '待删除角色',
+      'id:待删除角色',
       project().path,
     )
     expect(useCharacterStore.getState().identityBusy).toBe(true)
     useCharacterStore.getState().addCharacter()
-    expect(useCharacterStore.getState().renameCharacter('待删除角色', '新名字')).toBe(false)
+    expect(useCharacterStore.getState().renameCharacter('id:待删除角色', '新名字')).toBe(false)
     await expect(
-      useCharacterStore.getState().deleteCharacter('待删除角色', project().path),
+      useCharacterStore.getState().deleteCharacter('id:待删除角色', project().path),
     ).resolves.toBe(false)
     await expect(
       useCharacterStore.getState().saveAll(project().path),
     ).rejects.toThrow(/身份操作正在进行/)
     const refresh = useCharacterStore.getState().load(project().path)
-    useCharacterStore.getState().updateField('保留角色', 'notes', '删除等待期间编辑')
-    expect(invoke).toHaveBeenCalledTimes(1)
+    useCharacterStore.getState().updateField('id:保留角色', 'notes', '删除等待期间编辑')
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1))
     expect(useCharacterStore.getState().characters).toHaveLength(1)
 
     pendingDelete.resolve({ success: true })
@@ -463,10 +523,11 @@ describe('explicit editor dirty integration', () => {
     useCharacterStore.setState({
       characters: [character('A', '旧 A'), character('B', '旧 B')],
       selectedName: 'A',
+      selectedId: 'id:A',
       saving: false,
       loaded: true,
     })
-    useCharacterStore.getState().updateField('A', 'notes', '本地 A')
+    useCharacterStore.getState().updateField('id:A', 'notes', '本地 A')
     invoke.mockResolvedValueOnce([
       character('A', '旧 A'),
       character('B', '远端 B'),
@@ -496,11 +557,12 @@ describe('explicit editor dirty integration', () => {
     useCharacterStore.setState({
       characters: [character('旧名', '旧备注')],
       selectedName: '旧名',
+      selectedId: 'id:旧名',
       saving: false,
       loaded: true,
     })
-    useCharacterStore.getState().renameCharacter('旧名', '新名')
-    useCharacterStore.getState().updateField('新名', 'personality', '本地修改的性格')
+    useCharacterStore.getState().renameCharacter('id:旧名', '新名')
+    useCharacterStore.getState().updateField('id:旧名', 'personality', '本地修改的性格')
     invoke.mockResolvedValueOnce([{
       ...character('旧名', '远端更新的备注'),
       personality: '',
@@ -520,9 +582,7 @@ describe('explicit editor dirty integration', () => {
     const ledger = parseProjectEditorDraftLedger<CharacterCard[]>(
       draftLedgerContent(CHARACTER_DRAFT_TAB.id),
     )
-    expect(getCharacterDraftRenames(ledger, project().path)).toEqual([
-      { originalName: '旧名', newName: '新名' },
-    ])
+    expect(getCharacterDraftRenames(ledger, project().path)).toEqual([])
     expect(getProjectEditorDraft(ledger, project().path)?.baseValue[0]).toMatchObject({
       name: '旧名',
       notes: '远端更新的备注',
@@ -540,17 +600,16 @@ describe('explicit editor dirty integration', () => {
     useCharacterStore.setState({
       characters: [character('旧名')],
       selectedName: '旧名',
+      selectedId: 'id:旧名',
       saving: false,
       loaded: true,
     })
-    expect(useCharacterStore.getState().renameCharacter('旧名', '新名')).toBe(true)
+    expect(useCharacterStore.getState().renameCharacter('id:旧名', '新名')).toBe(true)
 
     const beforeResetLedger = parseProjectEditorDraftLedger<CharacterCard[]>(
       draftLedgerContent(CHARACTER_DRAFT_TAB.id),
     )
-    expect(getCharacterDraftRenames(beforeResetLedger, project().path)).toEqual([
-      { originalName: '旧名', newName: '新名' },
-    ])
+    expect(getCharacterDraftRenames(beforeResetLedger, project().path)).toEqual([])
 
     useCharacterStore.getState().reset()
     invoke.mockResolvedValueOnce([character('旧名')])
@@ -560,9 +619,7 @@ describe('explicit editor dirty integration', () => {
     const restoredLedger = parseProjectEditorDraftLedger<CharacterCard[]>(
       draftLedgerContent(CHARACTER_DRAFT_TAB.id),
     )
-    expect(getCharacterDraftRenames(restoredLedger, project().path)).toEqual([
-      { originalName: '旧名', newName: '新名' },
-    ])
+    expect(getCharacterDraftRenames(restoredLedger, project().path)).toEqual([])
     expect(visibleEditor('character')?.dirty).toBe(true)
   })
 
@@ -570,10 +627,11 @@ describe('explicit editor dirty integration', () => {
     useCharacterStore.setState({
       characters: [character('旧名')],
       selectedName: '旧名',
+      selectedId: 'id:旧名',
       saving: false,
       loaded: true,
     })
-    useCharacterStore.getState().renameCharacter('旧名', '冲突名')
+    useCharacterStore.getState().renameCharacter('id:旧名', '冲突名')
     invoke.mockResolvedValueOnce({ success: false, error: '角色名已存在' })
 
     await expect(useCharacterStore.getState().saveAll(project().path)).rejects.toThrow(/已存在/)
@@ -582,9 +640,7 @@ describe('explicit editor dirty integration', () => {
       draftLedgerContent(CHARACTER_DRAFT_TAB.id),
     )
     expect(visibleEditor('character')?.dirty).toBe(true)
-    expect(getCharacterDraftRenames(ledger, project().path)).toEqual([
-      { originalName: '旧名', newName: '冲突名' },
-    ])
+    expect(getCharacterDraftRenames(ledger, project().path)).toEqual([])
     expect(useCharacterStore.getState().characters[0]?.name).toBe('冲突名')
   })
 
@@ -592,15 +648,16 @@ describe('explicit editor dirty integration', () => {
     useCharacterStore.setState({
       characters: [character('旧名', '保存前')],
       selectedName: '旧名',
+      selectedId: 'id:旧名',
       saving: false,
       loaded: true,
     })
-    useCharacterStore.getState().renameCharacter('旧名', '新名')
+    useCharacterStore.getState().renameCharacter('id:旧名', '新名')
     const pending = deferred<{ success: boolean }>()
     invoke.mockReturnValueOnce(pending.promise)
 
     const save = useCharacterStore.getState().saveAll(project().path)
-    useCharacterStore.getState().updateField('新名', 'notes', '保存期间继续编辑')
+    useCharacterStore.getState().updateField('id:旧名', 'notes', '保存期间继续编辑')
     pending.resolve({ success: true })
     await save
 
@@ -609,7 +666,7 @@ describe('explicit editor dirty integration', () => {
       expect.objectContaining({
         intent: 'manual_edit',
         entries: [expect.objectContaining({ name: '新名', notes: '保存前' })],
-        renames: [{ originalName: '旧名', newName: '新名' }],
+        expectedIdentityRevision: 1,
       }),
       project().path,
     )
@@ -627,15 +684,16 @@ describe('explicit editor dirty integration', () => {
     useCharacterStore.setState({
       characters: [character('旧名')],
       selectedName: '旧名',
+      selectedId: 'id:旧名',
       saving: false,
       loaded: true,
     })
-    useCharacterStore.getState().renameCharacter('旧名', '中间名')
+    useCharacterStore.getState().renameCharacter('id:旧名', '中间名')
     const pending = deferred<{ success: boolean }>()
     invoke.mockReturnValueOnce(pending.promise)
 
     const save = useCharacterStore.getState().saveAll(project().path)
-    expect(useCharacterStore.getState().renameCharacter('中间名', '最终名')).toBe(false)
+    expect(useCharacterStore.getState().renameCharacter('id:旧名', '最终名')).toBe(false)
     pending.resolve({ success: true })
     await save
 
@@ -675,25 +733,26 @@ describe('explicit editor dirty integration', () => {
     useCharacterStore.setState({
       characters: [character('旧名', '保存前')],
       selectedName: '旧名',
+      selectedId: 'id:旧名',
       saving: false,
       loaded: true,
     })
-    useCharacterStore.getState().renameCharacter('旧名', '新名')
+    useCharacterStore.getState().renameCharacter('id:旧名', '新名')
     const pending = deferred<{ success: boolean }>()
     invoke
       .mockReturnValueOnce(pending.promise)
-      .mockResolvedValueOnce([character('新名', '保存前')])
+      .mockResolvedValueOnce([{ ...character('新名', '保存前'), characterId: 'id:旧名' }])
 
     const save = useCharacterStore.getState().saveAll(project().path)
     useCharacterStore.getState().addCharacter()
-    expect(useCharacterStore.getState().renameCharacter('新名', '另一个名字')).toBe(false)
+    expect(useCharacterStore.getState().renameCharacter('id:旧名', '另一个名字')).toBe(false)
     await expect(
-      useCharacterStore.getState().deleteCharacter('新名', project().path),
+      useCharacterStore.getState().deleteCharacter('id:旧名', project().path),
     ).resolves.toBe(false)
     const refresh = useCharacterStore.getState().load(project().path)
-    useCharacterStore.getState().updateField('新名', 'notes', '保存期间字段仍可编辑')
+    useCharacterStore.getState().updateField('id:旧名', 'notes', '保存期间字段仍可编辑')
 
-    expect(invoke).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1))
     expect(useCharacterStore.getState().characters).toEqual([
       expect.objectContaining({ name: '新名', notes: '保存期间字段仍可编辑' }),
     ])
@@ -713,24 +772,25 @@ describe('explicit editor dirty integration', () => {
     const secondSave = useCharacterStore.getState().saveAll(project().path)
 
     expect(secondSave).toBe(firstSave)
-    expect(invoke).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1))
     expect(useCharacterStore.getState().saving).toBe(true)
 
     pending.resolve({ success: true })
     await Promise.all([firstSave, secondSave])
     expect(useCharacterStore.getState().saving).toBe(false)
-    expect(invoke).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1))
   })
 
   it('saves a newly added placeholder under its first chosen name without a rename transaction', async () => {
     useCharacterStore.setState({
       characters: [],
       selectedName: null,
+      selectedId: null,
       saving: false,
       loaded: true,
     })
     useCharacterStore.getState().addCharacter()
-    const placeholderName = useCharacterStore.getState().selectedName
+    const placeholderName = useCharacterStore.getState().selectedId
     expect(placeholderName).toBeTruthy()
     useCharacterStore.getState().renameCharacter(placeholderName!, '首个正式名字')
     invoke.mockResolvedValueOnce({ success: true })

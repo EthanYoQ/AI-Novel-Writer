@@ -7,7 +7,9 @@ import {
   Import,
   Languages,
   Menu,
+  Maximize2,
   Minus,
+  Minimize2,
   Moon,
   ScrollText,
   Settings,
@@ -64,6 +66,8 @@ export default function TitleBar() {
   const openNewProject = useLayoutStore(s => s.openNewProject)
   const openExport = useLayoutStore(s => s.openExport)
   const openImportNovel = useLayoutStore(s => s.openImportNovel)
+  const immersive = useLayoutStore(s => s.immersive)
+  const toggleImmersion = useLayoutStore(s => s.toggleImmersion)
   const { locale, toggleLocale, t, text } = useLocaleStore()
   const [exitRequest, setExitRequest] = useState<{ requestId: string; workflowBlocked?: boolean } | null>(null)
   const [exitBusy, setExitBusy] = useState(false)
@@ -244,9 +248,9 @@ export default function TitleBar() {
           <Menu size={17} strokeWidth={1.8} />
         </button>
 
-        <span className="text-xs font-semibold opacity-90 whitespace-nowrap">{t('project.currentLabel')}</span>
+        <span className="writer-topbar-project-label text-xs font-semibold opacity-90 whitespace-nowrap">{t('project.currentLabel')}</span>
         <button
-          className="writer-command-button max-w-[280px]"
+          className="writer-command-button min-w-0 max-w-[280px]"
           title={t('project.switch')}
           onClick={handleOpenProject}
         >
@@ -259,34 +263,44 @@ export default function TitleBar() {
           style={{ color: hasDirty ? 'var(--color-warning-text)' : 'var(--color-success-text)' }}
         >
           <CheckCircle2 size={14} strokeWidth={1.9} />
-          {hasDirty ? t('save.modified') : t('save.saved')}
+          <span className="writer-topbar-status-label">{hasDirty ? t('save.modified') : t('save.saved')}</span>
         </span>
 
         <div className="writer-command-divider h-5 w-px" />
 
-        <button className="writer-command-button" title={t('project.backupUnavailable')} disabled>
+        <button className="writer-command-button writer-topbar-action" title={t('common.backup')} aria-label={t('common.backup')} onClick={() => openSettings('backup')}>
           <Archive size={14} strokeWidth={1.75} />
-          {t('common.backup')}
+          <span className="writer-topbar-action-label">{t('common.backup')}</span>
         </button>
-        <button className="writer-command-button" title={t('project.imitation')} onClick={openImportNovel}>
+        <button className="writer-command-button writer-topbar-action" title={t('project.imitation')} aria-label={t('project.imitation')} onClick={openImportNovel}>
           <Import size={14} strokeWidth={1.75} />
-          {t('project.imitationShort')}
+          <span className="writer-topbar-action-label">{t('project.imitationShort')}</span>
         </button>
-        <button className="writer-command-button" title={t('project.export')} onClick={openExport}>
+        <button className="writer-command-button writer-topbar-action" title={t('project.export')} aria-label={t('project.export')} onClick={openExport}>
           <Upload size={14} strokeWidth={1.75} />
-          {t('common.export')}
+          <span className="writer-topbar-action-label">{t('common.export')}</span>
         </button>
-        <button className="writer-command-button" title={t('project.new')} onClick={openNewProject}>
+        <button className="writer-command-button writer-topbar-action" title={t('project.new')} aria-label={t('project.new')} onClick={openNewProject}>
           <FilePlus2 size={14} strokeWidth={1.75} />
-          {t('common.new')}
+          <span className="writer-topbar-action-label">{t('common.new')}</span>
         </button>
-        <button className="writer-command-button" title={t('project.open')} onClick={handleOpenProject}>
+        <button className="writer-command-button writer-topbar-action" title={t('project.open')} aria-label={t('project.open')} onClick={handleOpenProject}>
           <FolderOpen size={14} strokeWidth={1.75} />
-          {t('common.open')}
+          <span className="writer-topbar-action-label">{t('common.open')}</span>
         </button>
       </div>
 
       <div className="flex items-center gap-1 flex-shrink-0">
+        <button
+          className="writer-command-button"
+          title={immersive ? text('退出沉浸写作', 'Exit focus mode') : text('进入沉浸写作', 'Enter focus mode')}
+          aria-label={immersive ? text('退出沉浸写作', 'Exit focus mode') : text('进入沉浸写作', 'Enter focus mode')}
+          aria-pressed={immersive}
+          onClick={toggleImmersion}
+        >
+          {immersive ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          {immersive ? text('退出沉浸', 'Exit focus') : text('沉浸写作', 'Focus')}
+        </button>
         <button
           onClick={zoomOut}
           title={t('zoom.out')}

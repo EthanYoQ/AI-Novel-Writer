@@ -120,7 +120,7 @@ function isLegacyMigrationBlockedResult(value: unknown): boolean {
     && (value as { errorCode?: unknown }).errorCode === LEGACY_VECTOR_MIGRATION_BLOCKED
 }
 
-function getEmbeddingConfig(): { protocol: 'openai' | 'gemini'; model: { baseUrl: string; apiKey: string; modelName: string; embeddingOptions?: EmbeddingOptions } } | null {
+export function getEmbeddingConfig(): { protocol: 'openai' | 'gemini'; model: { baseUrl: string; apiKey: string; modelName: string; embeddingOptions?: EmbeddingOptions } } | null {
   const config = readJsonFile<GlobalConfig>(GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG)
   const targetModelId = config.defaultEmbeddingModelId || config.defaultModelId
   if (!targetModelId) return null
@@ -362,6 +362,22 @@ export function registerKBController(
   ipcMain.handle('kb:list-documents', async (_event, expectedProjectPath: string) => {
     const projectPath = requireProjectPath(expectedProjectPath)
     return knowledgeBaseLoader.run((kb) => kb.listDocuments(projectPath))
+  })
+
+  ipcMain.handle('kb:read-document-copy', async (_event, docId: string, expectedProjectPath: string) => {
+    const projectPath = requireProjectPath(expectedProjectPath)
+    return knowledgeBaseLoader.run((kb) => kb.readDocumentCopy(docId, projectPath))
+  })
+
+  ipcMain.handle('kb:save-document-copy', async (_event, docId: string, content: string,
+    expectedContentHash: string, expectedProjectPath: string) => {
+    const projectPath = requireProjectPath(expectedProjectPath)
+    return knowledgeBaseLoader.run((kb) => kb.saveDocumentCopy(docId, content, expectedContentHash, projectPath))
+  })
+
+  ipcMain.handle('kb:reindex-document-copy', async (_event, docId: string, expectedProjectPath: string) => {
+    const projectPath = requireProjectPath(expectedProjectPath)
+    return knowledgeBaseLoader.run((kb) => kb.reindexDocumentCopy(docId, projectPath))
   })
 
   ipcMain.handle('kb:remove-document', async (_event, docId: string, expectedProjectPath: string) => {

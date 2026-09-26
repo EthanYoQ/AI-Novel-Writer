@@ -39,6 +39,9 @@ namespace AiNovelReleaseGate {
     public bool IdentityCaptured { get; private set; }
     public bool CommandLineCaptured { get; private set; }
     public string IdentityCaptureError { get; private set; }
+    public string CaptureAttemptedAt { get; private set; }
+    public string CaptureFailureStage { get; private set; }
+    public int? CaptureWin32Error { get; private set; }
     public string RecordedAt { get; private set; }
 
     internal JobProcessEvent(
@@ -57,7 +60,10 @@ namespace AiNovelReleaseGate {
       string parentImagePath = null,
       bool identityCaptured = false,
       bool commandLineCaptured = false,
-      string identityCaptureError = null
+      string identityCaptureError = null,
+      string captureAttemptedAt = null,
+      string captureFailureStage = null,
+      int? captureWin32Error = null
     ) {
       Kind = kind;
       ProcessId = processId;
@@ -75,6 +81,9 @@ namespace AiNovelReleaseGate {
       IdentityCaptured = identityCaptured;
       CommandLineCaptured = commandLineCaptured;
       IdentityCaptureError = identityCaptureError;
+      CaptureAttemptedAt = captureAttemptedAt;
+      CaptureFailureStage = captureFailureStage;
+      CaptureWin32Error = captureWin32Error;
       RecordedAt = DateTime.UtcNow.ToString("o");
     }
   }
@@ -427,7 +436,10 @@ namespace AiNovelReleaseGate {
         if (stopping && message == 0) return;
         int processId = unchecked((int)overlapped.ToInt64());
         if (message == JobObjectMsgNewProcess) {
+          string captureAttemptedAt = DateTime.UtcNow.ToString("o");
           IntPtr process = OpenProcess(ProcessQueryLimitedInformation | Synchronize, false, unchecked((uint)processId));
+          int? captureWin32Error = process == IntPtr.Zero ? (int?)Marshal.GetLastWin32Error() : null;
+          string captureFailureStage = process == IntPtr.Zero ? "OpenProcess" : null;
           bool captured = process != IntPtr.Zero;
           string processStartTimeTicks = null;
           string processName = null;
@@ -459,6 +471,7 @@ namespace AiNovelReleaseGate {
             if (!processHandles.TryAdd(processId, process)) {
               CloseHandle(process);
               captured = false;
+              captureFailureStage = "TryAdd";
             }
           }
           events.Enqueue(new JobProcessEvent(
@@ -477,7 +490,10 @@ namespace AiNovelReleaseGate {
             parentImagePath,
             identityCaptured,
             commandLineCaptured,
-            identityCaptureError
+            identityCaptureError,
+            captureAttemptedAt,
+            captureFailureStage,
+            captureWin32Error
           ));
           continue;
         }
@@ -2092,6 +2108,9 @@ function Write-AiNovelGateProcessEventEvidence {
     processId = [int]$Event.ProcessId
     exitCode = $Event.ExitCode
     captureEstablished = [bool]$Event.CaptureEstablished
+    captureAttemptedAt = [string]$Event.CaptureAttemptedAt
+    captureFailureStage = [string]$Event.CaptureFailureStage
+    captureWin32Error = $Event.CaptureWin32Error
     exitCodeCaptured = [bool]$Event.ExitCodeCaptured
     jobMessage = [uint32]$Event.JobMessage
     processIdentity = ConvertTo-AiNovelGateProcessEvidenceIdentity -ProcessIdentity $ProcessIdentity

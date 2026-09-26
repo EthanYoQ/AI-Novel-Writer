@@ -1,0 +1,315 @@
+{
+  "schemaVersion": 1,
+  "specId": "S00",
+  "observedAt": "2026-09-12T18:03:51.312206+00:00",
+  "repository": "EthanYoQ/AI-Novel-Writer",
+  "baseSha": "2264390d6fb8b052cc14736d544df0cc74516649",
+  "issues": [
+    {
+      "number": 187,
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/187",
+      "summary": "输出长度中断",
+      "state": "open",
+      "updatedAt": "2026-09-12T01:26:34Z",
+      "lastCommentAt": "2026-09-12T01:26:34Z",
+      "symptoms": [
+        "审稿约8K输出中断",
+        "目录蓝图约4K中断",
+        "compact-single约4K中断",
+        "最新反馈仍可复现"
+      ],
+      "acceptanceOwner": "S07",
+      "relatedPrs": [
+        229
+      ],
+      "reproduction": "not-run",
+      "rootCause": "not-established-by-S00",
+      "releaseAcceptance": "not-run",
+      "closureEligible": false,
+      "evidenceLevel": "fresh-public-report-and-state",
+      "missingEvidence": "Production entry, synthetic symptom reproduction, product/install and exact release receipt per Program v3 gate."
+    },
+    {
+      "number": 191,
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/191",
+      "summary": "自动角色卡与随剧情补充",
+      "state": "open",
+      "updatedAt": "2026-09-04T15:52:09Z",
+      "lastCommentAt": "2026-09-04T15:52:09Z",
+      "symptoms": [
+        "从文本/大纲自动生成人物卡",
+        "卡片可编辑",
+        "情节推进自动新增关键信息"
+      ],
+      "acceptanceOwner": "S09B",
+      "relatedPrs": [],
+      "reproduction": "not-run",
+      "rootCause": "not-established-by-S00",
+      "releaseAcceptance": "not-run",
+      "closureEligible": false,
+      "evidenceLevel": "fresh-public-report-and-state",
+      "missingEvidence": "Production entry, synthetic symptom reproduction, product/install and exact release receipt per Program v3 gate."
+    },
+    {
+      "number": 199,
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/199",
+      "summary": "大纲范围与截断恢复",
+      "state": "open",
+      "updatedAt": "2026-09-07T08:50:52Z",
+      "lastCommentAt": null,
+      "symptoms": [
+        "选择本次章节范围",
+        "截断保留未完成内容",
+        "安全续批且不覆盖后来编辑",
+        "坏检查点/源变化/取消/切项目拒写"
+      ],
+      "acceptanceOwner": "S06A",
+      "relatedPrs": [
+        201
+      ],
+      "reproduction": "not-run",
+      "rootCause": "not-established-by-S00",
+      "releaseAcceptance": "not-run",
+      "closureEligible": false,
+      "evidenceLevel": "fresh-public-report-and-state",
+      "missingEvidence": "Production entry, synthetic symptom reproduction, product/install and exact release receipt per Program v3 gate."
+    },
+    {
+      "number": 205,
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/205",
+      "summary": "连续性v2",
+      "state": "open",
+      "updatedAt": "2026-09-08T02:48:32Z",
+      "lastCommentAt": "2026-09-08T02:48:32Z",
+      "symptoms": [
+        "author/derived来源分离",
+        "候选/定稿与必需材料",
+        "逐目标审稿与unknown",
+        "两种批量模式与取消/提交语义"
+      ],
+      "acceptanceOwner": "S10B",
+      "relatedPrs": [
+        208
+      ],
+      "reproduction": "not-run",
+      "rootCause": "not-established-by-S00",
+      "releaseAcceptance": "not-run",
+      "closureEligible": false,
+      "evidenceLevel": "fresh-public-report-and-state",
+      "missingEvidence": "Production entry, synthetic symptom reproduction, product/install and exact release receipt per Program v3 gate."
+    },
+    {
+      "number": 211,
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/211",
+      "summary": "角色图谱保存和导入",
+      "state": "open",
+      "updatedAt": "2026-09-08T08:32:50Z",
+      "lastCommentAt": null,
+      "symptoms": [
+        "真实协议图谱只读",
+        "保存失败可见且保稿",
+        "角色卡粘贴/文件导入确认",
+        "无模型/取消/切项目保留正确状态"
+      ],
+      "acceptanceOwner": "S09C",
+      "relatedPrs": [
+        212
+      ],
+      "reproduction": "not-run",
+      "rootCause": "not-established-by-S00",
+      "releaseAcceptance": "not-run",
+      "closureEligible": false,
+      "evidenceLevel": "fresh-public-report-and-state",
+      "missingEvidence": "Production entry, synthetic symptom reproduction, product/install and exact release receipt per Program v3 gate."
+    },
+    {
+      "number": 213,
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/213",
+      "summary": "手动云存档",
+      "state": "open",
+      "updatedAt": "2026-09-09T13:26:45Z",
+      "lastCommentAt": "2026-09-09T13:26:45Z",
+      "symptoms": [
+        "跨设备完整项目归档/恢复新副本",
+        "手动WebDAV上传列表下载",
+        "保全头像和原稿且不携带权限/秘密"
+      ],
+      "acceptanceOwner": "B02",
+      "relatedPrs": [],
+      "reproduction": "not-run",
+      "rootCause": "not-established-by-S00",
+      "releaseAcceptance": "not-run",
+      "closureEligible": false,
+      "evidenceLevel": "fresh-public-report-and-state",
+      "missingEvidence": "Production entry, synthetic symptom reproduction, product/install and exact release receipt per Program v3 gate."
+    },
+    {
+      "number": 219,
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/219",
+      "summary": "生成角色图谱报告缺主角",
+      "state": "open",
+      "updatedAt": "2026-09-10T14:29:26Z",
+      "lastCommentAt": null,
+      "symptoms": [
+        "生成过程报未生成主角",
+        "区分模型遗漏/解析/身份/保存/刷新"
+      ],
+      "acceptanceOwner": "S06A",
+      "relatedPrs": [],
+      "reproduction": "not-run",
+      "rootCause": "not-established-by-S00",
+      "releaseAcceptance": "not-run",
+      "closureEligible": false,
+      "evidenceLevel": "fresh-public-report-and-state",
+      "missingEvidence": "Production entry, synthetic symptom reproduction, product/install and exact release receipt per Program v3 gate."
+    },
+    {
+      "number": 221,
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/221",
+      "summary": "多余角色和跨章重复",
+      "state": "open",
+      "updatedAt": "2026-09-11T01:45:59Z",
+      "lastCommentAt": null,
+      "symptoms": [
+        "蓝图生成后角色库出现未知角色",
+        "已有3章时第4章大量复述第3章"
+      ],
+      "acceptanceOwner": "S10B",
+      "relatedPrs": [],
+      "reproduction": "not-run",
+      "rootCause": "not-established-by-S00",
+      "releaseAcceptance": "not-run",
+      "closureEligible": false,
+      "evidenceLevel": "fresh-public-report-and-state",
+      "missingEvidence": "Production entry, synthetic symptom reproduction, product/install and exact release receipt per Program v3 gate."
+    },
+    {
+      "number": 222,
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/222",
+      "summary": "ActivityBar残留",
+      "state": "open",
+      "updatedAt": "2026-09-11T03:23:43Z",
+      "lastCommentAt": null,
+      "symptoms": [
+        "移除真正无消费者组件",
+        "清理历史注释"
+      ],
+      "acceptanceOwner": "S13",
+      "relatedPrs": [
+        223
+      ],
+      "reproduction": "not-run",
+      "rootCause": "not-established-by-S00",
+      "releaseAcceptance": "not-run",
+      "closureEligible": false,
+      "evidenceLevel": "fresh-public-report-and-state",
+      "missingEvidence": "Production entry, synthetic symptom reproduction, product/install and exact release receipt per Program v3 gate."
+    },
+    {
+      "number": 224,
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/issues/224",
+      "summary": "设置弹窗白屏",
+      "state": "open",
+      "updatedAt": "2026-09-11T03:31:54Z",
+      "lastCommentAt": null,
+      "symptoms": [
+        "工具栏设置入口白屏",
+        "状态栏设置入口白屏",
+        "有效tab内容与关闭重开状态同步"
+      ],
+      "acceptanceOwner": "F04",
+      "relatedPrs": [
+        225
+      ],
+      "reproduction": "not-run",
+      "rootCause": "not-established-by-S00",
+      "releaseAcceptance": "not-run",
+      "closureEligible": false,
+      "evidenceLevel": "fresh-public-report-and-state",
+      "missingEvidence": "Production entry, synthetic symptom reproduction, product/install and exact release receipt per Program v3 gate."
+    }
+  ],
+  "relatedPrs": [
+    {
+      "number": 201,
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/pull/201",
+      "state": "MERGED",
+      "headSha": "b0d090b9e5300dc64b924e5b52dcb09948aef089",
+      "mergeCommitSha": "d24a4a417a063fd6df073765fe256bbcd7bc3695",
+      "mergedAt": "2026-09-08T03:15:22Z",
+      "includedInCurrentHead": true,
+      "includedInV110": true
+    },
+    {
+      "number": 208,
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/pull/208",
+      "state": "MERGED",
+      "headSha": "21130b434ee8daf04040fdc22a569a67200ea9aa",
+      "mergeCommitSha": "879f83521414f66019488462830c3134c77dc4f8",
+      "mergedAt": "2026-09-08T03:50:18Z",
+      "includedInCurrentHead": true,
+      "includedInV110": true
+    },
+    {
+      "number": 212,
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/pull/212",
+      "state": "MERGED",
+      "headSha": "8651bdf2a860f67521ffb44ea82416a7f9a20f22",
+      "mergeCommitSha": "38a844506a91907733c98e5ada66401bf6847532",
+      "mergedAt": "2026-09-08T10:30:54Z",
+      "includedInCurrentHead": true,
+      "includedInV110": false
+    },
+    {
+      "number": 223,
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/pull/223",
+      "state": "OPEN",
+      "headSha": "c033955bd4dcd4007fd22e82de37cf4b722ac0fc",
+      "mergeCommitSha": null,
+      "mergedAt": null,
+      "includedInCurrentHead": false,
+      "includedInV110": false
+    },
+    {
+      "number": 225,
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/pull/225",
+      "state": "OPEN",
+      "headSha": "cc8a18d3a1eb10f708948a0697fbec639cde485e",
+      "mergeCommitSha": null,
+      "mergedAt": null,
+      "includedInCurrentHead": false,
+      "includedInV110": false
+    },
+    {
+      "number": 229,
+      "url": "https://github.com/EthanYoQ/AI-Novel-Writer/pull/229",
+      "state": "MERGED",
+      "headSha": "731bda13ff9197d0abefaa353139df1359ce75cb",
+      "mergeCommitSha": "2264390d6fb8b052cc14736d544df0cc74516649",
+      "mergedAt": "2026-09-11T23:17:29Z",
+      "includedInCurrentHead": true,
+      "includedInV110": false
+    }
+  ],
+  "pr225Checks": [
+    {
+      "link": "https://github.com/EthanYoQ/AI-Novel-Writer/actions/runs/34559044917/job/103575804857",
+      "name": "Desktop PR CI (Windows)",
+      "state": "FAILURE"
+    }
+  ],
+  "latestRelease": {
+    "tag": "v1.1.0",
+    "publishedAt": "2026-09-08T04:35:10Z",
+    "url": "https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v1.1.0"
+  },
+  "historical226": {
+    "status": "unavailable",
+    "issueApiStatus": 404,
+    "pullApiStatus": 404,
+    "meaning": "Cannot identify this historical reference from public API; not proof of closed/fixed. Owner S00/main must locate original source."
+  },
+  "githubWrites": 0,
+  "modelCalls": 0,
+  "note": "Fresh state and safe symptom summaries only. No comments/raw reports, author prose, machine paths, model configuration IDs, secret material or secret hashes included."
+}

@@ -15,6 +15,7 @@ import {
 } from '../../src/shared/writing-language'
 import {
   closeProjectDatabase,
+  createProjectDatabase,
   getCurrentProjectPath,
   getProjectDb,
   initProjectDatabase,
@@ -28,8 +29,13 @@ import { projectAccess, type ProjectSessionLease } from '../services/project-acc
 import { assertExpectedProjectPath, assertRequiredExpectedProjectPath } from '../utils/project-context'
 import { sanitizeProjectName } from './project-path'
 import { projectStoragePreflightFailure } from '../services/project-storage-preflight'
+import { projectPeekService } from '../services/project-peek'
 
 function projectRootSelectionFailure(error: unknown) {
+  if (error instanceof Error && ['PROJECT_MIGRATION_NOT_QUALIFIED', 'PROJECT_MIGRATION_DUAL_ROOT', 'PROJECT_MIGRATION_RECOVERY_REQUIRED'].includes(error.message)) {
+    return { errorCode: 'PROJECT_ROOT_REQUIRED' as const,
+      error: '项目格式转换尚未具备安全迁移条件，已保留原项目且未写入。请保留当前文件，等待受验证的迁移入口。' }
+  }
   if (
     typeof error === 'object'
     && error !== null
@@ -44,7 +50,7 @@ function projectRootSelectionFailure(error: unknown) {
   return null
 }
 
-interface RecentProject {
+export interface RecentProject {
   name: string
   path: string
   updatedAt: string
@@ -52,6 +58,15 @@ interface RecentProject {
 
 let latestProjectOpenRequestToken: string | null = null
 let projectOpenQueue: Promise<void> = Promise.resolve()
+const recentPreviewCapabilities = new Map<string, string>()
+
+function revokeRecentPreviewCapabilities(projectPath?: string): void {
+  for (const [capabilityId, capabilityPath] of recentPreviewCapabilities) {
+    if (projectPath && !sameRecentProjectPath(capabilityPath, projectPath)) continue
+    projectPeekService.revokeCapability(capabilityId)
+    recentPreviewCapabilities.delete(capabilityId)
+  }
+}
 
 function serializeProjectOpen<T>(operation: () => Promise<T>): Promise<T> {
   const result = projectOpenQueue.then(operation, operation)
@@ -279,7 +294,8 @@ function loadRecentProjects(): RecentProject[] {
   return readJsonFile<RecentProject[]>(RECENT_PROJECTS_PATH, [])
 }
 
-function addRecentProject(project: RecentProject) {
+/** 最近项目导航元数据的唯一写入口。 */
+export function registerRecentProject(project: RecentProject): void {
   const list = loadRecentProjects()
   const filtered = list.filter((p) => !sameRecentProjectPath(p.path, project.path))
   filtered.unshift(project)
@@ -292,7 +308,50 @@ function removeRecentProject(projectPath: string) {
   writeJsonFile(RECENT_PROJECTS_PATH, filtered)
 }
 
-export function registerProjectController() {
+export interface ProjectControllerOptions {
+  /** Called only after the project directory is confirmed absent. */
+  removeDeletedProjectBinding?(projectId: string): void
+}
+
+export function registerProjectController(options: ProjectControllerOptions = {}) {
+  ipcMain.handle('dialog:select-legacy-project', async () => {
+    const result = await dialog.showOpenDialog({
+      title: '选择旧版小说项目文件夹',
+      properties: ['openDirectory'],
+    })
+    return result.canceled ? null : result.filePaths[0] ?? null
+  })
+
+  ipcMain.handle('project:import-legacy-copy', async (_event, sourceRoot: string, targetRoot: string) => {
+    if (typeof sourceRoot !== 'string' || typeof targetRoot !== 'string') {
+      return { state: 'blocked' as const, code: 'LEGACY_IMPORT_PATH_INVALID' }
+    }
+    const confirmation = await dialog.showMessageBox({
+      type: 'warning',
+      buttons: ['取消', '开始导入'],
+      defaultId: 0,
+      cancelId: 0,
+      message: '请先保存并关闭旧版程序，以及正在同步或编辑这个项目的程序。',
+      detail: '导入期间不要重新打开或修改旧项目。应用将创建独立的新项目副本；旧项目保留，此后两份项目的修改不会自动同步。',
+    })
+    if (confirmation.response !== 1) return { state: 'cancelled' as const }
+    let result: Awaited<ReturnType<typeof import('../services/legacy-project-copy-import').importLegacyProjectCopy>>
+    try {
+      const { importLegacyProjectCopy } = await import('../services/legacy-project-copy-import')
+      result = await importLegacyProjectCopy({ sourceRoot, targetRoot })
+    } catch {
+      return { state: 'blocked' as const, code: 'LEGACY_IMPORT_IO_FAILED' }
+    }
+    if (result.state === 'ready') {
+      try {
+        registerRecentProject({ name: path.basename(sourceRoot), path: result.targetRoot, updatedAt: new Date().toISOString() })
+      } catch {
+        return { ...result, warning: 'LEGACY_IMPORT_RECENT_LIST_FAILED' }
+      }
+    }
+    return result
+  })
+
   ipcMain.handle('project:get-runtime-context', async () => {
     const activeProjectPath = getCurrentProjectPath()
     const database = getProjectDb()
@@ -361,6 +420,7 @@ export function registerProjectController() {
         const projectDir = createdProject.rootPath
 
         fs.mkdirSync(path.join(projectDir, DIR_PROMPTS), { recursive: true })
+        createProjectDatabase(projectDir)
         initProjectDatabase(projectDir)
         ProjectCoreRepository.init(projectName, resolveWritingLanguage(config.writingLanguage))
         ProjectCoreRepository.update({
@@ -396,7 +456,7 @@ export function registerProjectController() {
           }
         }
 
-        addRecentProject({
+        registerRecentProject({
           name: projectName,
           path: projectDir,
           updatedAt,
@@ -464,7 +524,7 @@ export function registerProjectController() {
       }
 
       try {
-        // Probe 是只读的：普通目录不能因一次打开被初始化成项目。
+        // Read-only probe; the compatibility adoption method now rejects unqualified legacy migration.
         const trustedProject = projectAccess.adoptLegacyProject(
           projectAccess.probeExistingProject(projectPath),
         )
@@ -538,7 +598,7 @@ export function registerProjectController() {
           }
         }
 
-        addRecentProject({
+        registerRecentProject({
           name: projectData.name,
           path: resolvedProjectPath,
           updatedAt: projectData.updatedAt,
@@ -550,6 +610,7 @@ export function registerProjectController() {
         )
         const session = projectAccess.beginSession(trustedProject)
         projectData.sessionLease = session.leaseId
+        revokeRecentPreviewCapabilities()
         return {
           success: true,
           project: projectData,
@@ -568,15 +629,17 @@ export function registerProjectController() {
           rollbackError = restoreError
           databaseState = failedDatabaseState()
         }
+        const selectionFailure = projectStoragePreflightFailure(error) ?? projectRootSelectionFailure(error)
+        const primaryMessage = selectionFailure?.error ?? String(error)
         const errorMessage = rollbackError
-          ? `${String(error)}；回滚失败：${String(rollbackError)}`
-          : String(error)
+          ? `${primaryMessage}；回滚失败：${String(rollbackError)}`
+          : primaryMessage
         return {
           success: false,
           project: null,
           requestToken,
           ...databaseState,
-          ...(projectStoragePreflightFailure(error) ?? projectRootSelectionFailure(error) ?? {}),
+          ...(selectionFailure ?? {}),
           error: errorMessage,
         }
       }
@@ -640,7 +703,7 @@ export function registerProjectController() {
       // 最近项目是导航便利数据，不属于项目核心提交。写入失败不能把已经
       // 已提交的数据库保存即使被误报为失败，也不能让渲染进程保留过期草稿。
       try {
-        addRecentProject({
+        registerRecentProject({
           name: data.name ?? ProjectCoreRepository.get()?.projectName ?? 'Unknown',
           path: data.path,
           updatedAt: new Date().toISOString(),
@@ -697,12 +760,39 @@ export function registerProjectController() {
   })
 
   ipcMain.handle('project:recent-list', async () => {
-    return loadRecentProjects()
+    revokeRecentPreviewCapabilities()
+    return loadRecentProjects().map(project => {
+      const capability = projectPeekService.issueCapability(project.path)
+      if (!capability) return project
+      recentPreviewCapabilities.set(capability.capabilityId, project.path)
+      return {
+        ...project,
+        previewCapabilityId: capability.capabilityId,
+        projectId: capability.projectId,
+      }
+    })
+  })
+
+  ipcMain.handle('project:peek-overview', async (_event, capabilityId: string) => {
+    if (!recentPreviewCapabilities.has(capabilityId)) return { state: 'unavailable' as const }
+    return projectPeekService.peek(capabilityId)
+  })
+
+  ipcMain.handle('project:overview-current', async (_event, context?: ProjectSessionContext) => {
+    try {
+      const active = projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
+      const database = getProjectDb()
+      if (!database) return { state: 'unavailable' as const }
+      return projectPeekService.readCurrent(active.projectId, database)
+    } catch {
+      return { state: 'unavailable' as const }
+    }
   })
 
   ipcMain.handle('project:recent-remove', async (_event, projectPath: string) => {
     try {
       removeRecentProject(projectPath)
+      revokeRecentPreviewCapabilities(projectPath)
       return { success: true }
     } catch (error) {
       return { success: false, error: String(error) }
@@ -719,6 +809,7 @@ export function registerProjectController() {
       context?: ProjectSessionContext,
     ) => {
     let resolvedPath: string
+    let deletedProjectId: string
     let deletingCurrentProject = false
     let databaseClosed = false
     try {
@@ -726,6 +817,7 @@ export function registerProjectController() {
         context,
         getCurrentProjectPath(),
       )
+      deletedProjectId = activeSession.projectId
       resolvedPath = projectAccess.authorizeDeletion({
         projectId: activeSession.projectId,
         leaseId: activeSession.leaseId,
@@ -778,6 +870,12 @@ export function registerProjectController() {
       return { success: false, directoryDeleted: false, databaseRestored, error }
     }
 
+    let bindingCleanupWarning: string | undefined
+    try {
+      options.removeDeletedProjectBinding?.(deletedProjectId)
+    } catch {
+      bindingCleanupWarning = '项目目录已删除，但本机云备份绑定暂未清理'
+    }
     projectAccess.invalidateCurrentSession()
     try {
       removeRecentProject(resolvedPath)
@@ -785,14 +883,22 @@ export function registerProjectController() {
         success: true,
         directoryDeleted: true,
         databaseRestored: false,
-        ...(deletionError ? { warning: `项目目录已删除：${String(deletionError)}` } : {}),
+        ...((deletionError || bindingCleanupWarning) ? {
+          warning: [
+            deletionError ? `项目目录已删除：${String(deletionError)}` : undefined,
+            bindingCleanupWarning,
+          ].filter(Boolean).join('；'),
+        } : {}),
       }
     } catch (recentProjectError) {
       return {
         success: true,
         directoryDeleted: true,
         databaseRestored: false,
-        warning: `项目目录已删除，但最近项目列表更新失败：${String(recentProjectError)}`,
+        warning: [
+          bindingCleanupWarning,
+          `项目目录已删除，但最近项目列表更新失败：${String(recentProjectError)}`,
+        ].filter(Boolean).join('；'),
       }
     }
     },

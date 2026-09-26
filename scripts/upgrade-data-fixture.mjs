@@ -1017,7 +1017,7 @@ async function seed(projectRoot, settingsPath) {
   return validate(projectRoot, settingsPath, false)
 }
 
-function validateDatabase(projectRoot, migratedDraftUnitCounts) {
+function validateDatabase(projectRoot, migratedDraftUnitCounts, saveProof) {
   const dbPath = databasePath(projectRoot)
   if (!existsSync(dbPath)) {
     throw new Error(`Upgrade fixture database is missing: ${dbPath}`)
@@ -1091,10 +1091,26 @@ function validateDatabase(projectRoot, migratedDraftUnitCounts) {
     assert.deepEqual(contents, CONTENT_ROWS, 'content bodies changed during upgrade')
 
     const drafts = readRows(db, 'drafts', DRAFT_COLUMNS, 'id')
+    // The old application's normal save changes only this draft's timestamp.
+    // Bind that exception to its exact before/after read-back; all author fields remain checked.
+    const savedDraftRows = DRAFT_ROWS.map(row => ({ ...row }))
+    if (saveProof) {
+      assert.equal(saveProof.verifiedBy, 'legacy-renderer-cdp-v025-save')
+      assert.equal(resolve(saveProof.projectPath), resolve(projectRoot))
+      const { before, after } = saveProof.draft
+      assert.equal(before.id, 71)
+      assert.equal(before.updatedAt, DRAFT_ROWS[0].updated_at)
+      assert.equal(before.content, CONTENT_ROWS.find(row => row.id === 701).body)
+      assert.equal(before.wordCount, DRAFT_ROWS[0].word_count)
+      assert.deepEqual({ ...after, updatedAt: before.updatedAt }, before)
+      assert.match(after.updatedAt, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
+      assert.notEqual(after.updatedAt, before.updatedAt)
+      savedDraftRows[0].updated_at = after.updatedAt
+    }
     const expectedDrafts = migratedDraftUnitCounts ? MIGRATED_DRAFT_ROWS : DRAFT_ROWS
     assert.deepEqual(
       drafts.map(draft => normalizeRow(draft, DRAFT_PRESERVED_COLUMNS)),
-      DRAFT_ROWS.map(draft => normalizeRow(draft, DRAFT_PRESERVED_COLUMNS)),
+      savedDraftRows.map(draft => normalizeRow(draft, DRAFT_PRESERVED_COLUMNS)),
       'draft identity or content reference changed during upgrade',
     )
     assert.deepEqual(
@@ -1185,8 +1201,8 @@ function validateDatabase(projectRoot, migratedDraftUnitCounts) {
   }
 }
 
-async function validate(projectRoot, settingsPath, migratedDraftUnitCounts = true) {
-  const databaseEvidence = validateDatabase(projectRoot, migratedDraftUnitCounts)
+async function validate(projectRoot, settingsPath, migratedDraftUnitCounts = true, saveProof) {
+  const databaseEvidence = validateDatabase(projectRoot, migratedDraftUnitCounts, saveProof)
   const embeddingSpace = await validateEmbeddingAssets(projectRoot)
   const inventoryEvidence = validateAssetInventory(
     projectRoot,
@@ -1202,14 +1218,14 @@ async function validate(projectRoot, settingsPath, migratedDraftUnitCounts = tru
 }
 
 async function main() {
-  const [mode, projectRoot, settingsPath] = process.argv.slice(2)
+  const [mode, projectRoot, settingsPath, saveProofPath] = process.argv.slice(2)
   if (!projectRoot || !['seed', 'validate-legacy', 'validate'].includes(mode)) {
     throw new Error('Usage: electron upgrade-data-fixture.mjs <seed|validate-legacy|validate> <project-root> [settings-path]')
   }
 
   const result = mode === 'seed'
     ? await seed(projectRoot, settingsPath)
-    : await validate(projectRoot, settingsPath, mode === 'validate')
+    : await validate(projectRoot, settingsPath, mode === 'validate', saveProofPath ? readJsonRecord(saveProofPath, 'v0.2.5 save proof') : undefined)
   process.stdout.write(`${JSON.stringify({ mode, ...result })}\n`)
 }
 

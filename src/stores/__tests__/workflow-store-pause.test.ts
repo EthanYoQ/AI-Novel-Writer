@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 
 import { useWorkflowStore, type WorkflowDefinition } from '../workflow-store'
 import { globalEventBus } from '../../shared/event-bus'
@@ -19,6 +19,18 @@ function frozenSession(leaseId = 'lease-test-project') {
 }
 
 beforeEach(() => {
+  // 工作流夹具显式提供桌面桥接；未知调用仍拒绝，避免掩盖真实 IPC 缺失。
+  vi.stubGlobal('window', {
+    aiNovelAPI: {
+      invoke: vi.fn(async (channel: string) => {
+        if (channel === 'skills:list-user') return []
+        if (channel === 'fs:check-exists') return false
+        throw new Error(`测试未配置桌面调用：${channel}`)
+      }),
+      on: vi.fn(() => () => {}),
+      once: vi.fn(),
+    },
+  })
   useWorkflowStore.setState({
     activeRuns: [],
     history: [],
@@ -41,6 +53,40 @@ beforeEach(() => {
 })
 
 describe('workflow pause at a safe step boundary', () => {
+  it('自动模式也等待明确采用，重复确认不会重复执行', async () => {
+    const executor = vi.fn(async () => '已采用')
+    const pending = useWorkflowStore.getState().startWorkflow({
+      runId: 'explicit-adoption', type: 'architecture_generation', title: '采用角色候选', projectPath,
+      projectSession: frozenSession(),
+      steps: [{ name: '采用', description: '确认后采用', executor, requiresConfirmation: true }],
+    })
+    await vi.waitFor(() => expect(useWorkflowStore.getState().waitingRuns['explicit-adoption']?.waitingForConfirm).toBe(true))
+    expect(executor).not.toHaveBeenCalled()
+    useWorkflowStore.getState().confirmContinue('explicit-adoption')
+    useWorkflowStore.getState().confirmContinue('explicit-adoption')
+    await pending
+    expect(executor).toHaveBeenCalledOnce()
+    expect(useWorkflowStore.getState().history[0].status).toBe('completed')
+  })
+
+  it('等待采用期间取消不会执行采用步骤', async () => {
+    const executor = vi.fn(async () => '不应执行')
+    const cancelMain = vi.fn().mockResolvedValue(undefined)
+    const pending = useWorkflowStore.getState().startWorkflow({
+      runId: 'cancel-adoption', type: 'architecture_generation', title: '采用角色候选', projectPath,
+      projectSession: frozenSession(),
+      steps: [{ name: '生成完成', description: '主运行已结束本次物理请求', executor: async (_step, context) => {
+        context.requestMainGenerationCancellation = cancelMain
+      } }, { name: '采用', description: '确认后采用', executor, requiresConfirmation: true }],
+    })
+    await vi.waitFor(() => expect(useWorkflowStore.getState().waitingRuns['cancel-adoption']?.waitingForConfirm).toBe(true))
+    useWorkflowStore.getState().cancelWorkflow('cancel-adoption')
+    useWorkflowStore.getState().confirmContinue('cancel-adoption')
+    await pending
+    expect(executor).not.toHaveBeenCalled()
+    expect(cancelMain).toHaveBeenCalledOnce()
+  })
+
   it('reuses an active caller-supplied run id without mutating the first workflow', async () => {
     let releaseFirst!: () => void
     const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve })
@@ -128,11 +174,22 @@ describe('workflow pause at a safe step boundary', () => {
     })
   })
 
-  it('durably requests cancellation immediately and finalizes it at a paused boundary', async () => {
+  it('persists import cancellation before the next orchestrator boundary without finalizing it', async () => {
     let finishStep!: () => void
+    let persistIntent!: () => void
     const blocked = new Promise<void>((resolve) => { finishStep = resolve })
-    const requested = vi.fn(async () => undefined)
+    const persisted = new Promise<void>((resolve) => { persistIntent = resolve })
+    const requested = vi.fn(() => persisted)
     const finalized = vi.fn(async () => undefined)
+    const cancelGeneration = vi.fn(async () => undefined)
+    const terminal = vi.fn()
+    const boundary: WorkflowDefinition['steps'][number]['executor'] = vi.fn(async (_step, context) => {
+      await context.cancellationRequest
+      expect(context.cancelRequested).toBe(true)
+      expect(context.cancelled).toBe(false)
+      terminal()
+      throw new Error('Import cancelled at a safe boundary.')
+    })
     const completion = useWorkflowStore.getState().startWorkflow({
       runId: 'durable-cancel-run',
       type: 'novel_import',
@@ -142,8 +199,11 @@ describe('workflow pause at a safe step boundary', () => {
       onCancelRequested: requested,
       onCancelledAtBoundary: finalized,
       steps: [
-        { name: 'one', description: 'one', executor: async () => { await blocked } },
-        { name: 'two', description: 'two', executor: vi.fn() },
+        { name: 'one', description: 'one', executor: async (_step, context) => {
+          context.requestMainGenerationCancellation = cancelGeneration
+          await blocked
+        } },
+        { name: 'two', description: 'two', executor: boundary },
       ],
     })
     await vi.waitFor(() => expect(useWorkflowStore.getState().activeRuns[0]?.steps[0]?.status).toBe('running'))
@@ -153,9 +213,16 @@ describe('workflow pause at a safe step boundary', () => {
 
     useWorkflowStore.getState().cancelWorkflow('durable-cancel-run')
     expect(requested).toHaveBeenCalledOnce()
+    expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('cancelling')
+    await vi.waitFor(() => expect(boundary).toHaveBeenCalledOnce())
+    expect(terminal).not.toHaveBeenCalled()
+    expect(useWorkflowStore.getState().activeRuns[0]?.status).toBe('cancelling')
+    persistIntent()
     await completion
 
-    expect(finalized).toHaveBeenCalledOnce()
+    expect(terminal).toHaveBeenCalledOnce()
+    expect(cancelGeneration).not.toHaveBeenCalled()
+    expect(finalized).not.toHaveBeenCalled()
     expect(useWorkflowStore.getState().history[0]).toMatchObject({
       id: 'durable-cancel-run', status: 'failed',
     })
@@ -731,4 +798,8 @@ describe('workflow pause at a safe step boundary', () => {
     })
     expect(openResult).not.toHaveBeenCalled()
   })
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })

@@ -34,9 +34,9 @@ export async function retryDirectoryCharacterSync(
     operationId,
     expectedProjectPath,
   )
-  if (!operation) throw new Error('待重试的蓝图角色同步操作不存在')
+  if (!operation) throw new Error('待重试的蓝图角色提议操作不存在')
   if (operation.status === 'completed') {
-    if (!operation.completionReceipt) throw new Error('蓝图角色同步完成操作缺少回执')
+    if (!operation.completionReceipt) throw new Error('蓝图角色提议完成操作缺少回执')
     return operation.completionReceipt
   }
 
@@ -46,8 +46,8 @@ export async function retryDirectoryCharacterSync(
     projectSession,
     operation.operationId,
   )
-  // The renderer may execute the roster sync, but only the main process reads
-  // authoritative operation/fact tables and derives the completion receipt.
+  // Completion means the proposal has been durably staged, not adopted into the roster.
+  // Main derives the receipt from the operation and proposal ledger.
   const completed = await ipc.invokeWithProjectSession(
     projectSession,
     'db:blueprint-character-sync-complete',
@@ -55,10 +55,10 @@ export async function retryDirectoryCharacterSync(
     expectedProjectPath,
   )
   if (!completed.success || completed.operation?.status !== 'completed') {
-    throw new Error(completed.error || '蓝图角色同步已执行，但完成回执未能持久化')
+    throw new Error(completed.error || '蓝图角色提议已保存，但回执未能持久化')
   }
   if (!completed.operation.completionReceipt) {
-    throw new Error('蓝图角色同步完成回执回读失败')
+    throw new Error('蓝图角色提议回执回读失败')
   }
   return completed.operation.completionReceipt
 }

@@ -97,6 +97,9 @@ export function projectSessionContextFromProject(
 
 /** Renderer 唯一的当前会话登记处；写入时复制并冻结，避免异步任务借用后续会话。 */
 export function setActiveProjectSessionContext(context: ProjectSessionContext | null): void {
+  if (context && activeProjectSessionContext?.projectId === context.projectId
+    && activeProjectSessionContext.leaseId === context.leaseId
+    && activeProjectSessionContext.projectPath === context.projectPath) return
   activeProjectSessionContext = context
     ? Object.freeze({ ...context })
     : null

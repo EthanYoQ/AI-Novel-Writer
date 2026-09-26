@@ -56,8 +56,7 @@ export class ReviewRepository {
         reviewIndex?: number
         content: string
         expectedSource?: ExpectedDraftSource
-    }): { id: number; reviewIndex: number } {
-        const db = getProjectDb()
+    }, db = getProjectDb()): { id: number; reviewIndex: number } {
         if (!db) throw new Error('[ReviewRepository] 数据库未连接')
 
         // 事务内原子分配 review_index，避免 getNextIndex + create 竞态
@@ -69,7 +68,7 @@ export class ReviewRepository {
       `).get(params.baseDraftId) as { maxIdx: number | null }
             const reviewIndex = (row.maxIdx ?? 0) + 1
 
-            const contentId = ContentRepository.create(params.content)
+            const contentId = ContentRepository.create(params.content, db)
             const result = db.prepare(`
         INSERT INTO reviews (
           base_draft_id, review_index,
@@ -123,8 +122,7 @@ export class ReviewRepository {
     }
 
     /** 获取审稿完整数据 */
-    static getFull(id: number): ReviewFull | null {
-        const db = getProjectDb()
+    static getFull(id: number, db = getProjectDb()): ReviewFull | null {
         if (!db) return null
 
         const row = db.prepare(
@@ -133,7 +131,7 @@ export class ReviewRepository {
 
         if (!row) return null
         const meta = rowToMeta(row)
-        const body = ContentRepository.getBody(meta.contentId)
+        const body = ContentRepository.getBody(meta.contentId, db)
         return { ...meta, content: body ?? '', sourceDraft: rowToSourceDraft(row) }
     }
 

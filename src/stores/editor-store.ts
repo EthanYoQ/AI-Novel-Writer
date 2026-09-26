@@ -3,6 +3,7 @@ import { create } from 'zustand'
 import type { DraftStatus } from '../shared/draft-status'
 import { sameProjectPathKey } from '../shared/project-session-context'
 import { countUnsavedEditorItems } from './editor-unsaved'
+import { canonicalResourceUri } from '../shared/project-paths'
 
 export interface EditorTabSaveSnapshot {
   content: string
@@ -201,8 +202,18 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   draftLedgers: {},
 
   openFile: (tab) => {
+    const canonical = (value: string | undefined): string | undefined => {
+      if (value === undefined) return value
+      const resource = canonicalResourceUri(value)
+      if (!resource && value.includes('://')) throw new Error('INVALID_RESOURCE_URI')
+      return resource ?? value
+    }
     const projectScopedTab = {
       ...tab,
+      filePath: canonical(tab.filePath),
+      revisionPath: canonical(tab.revisionPath),
+      chapterDir: canonical(tab.chapterDir),
+      reportPath: canonical(tab.reportPath),
       id: createProjectScopedEditorTabId(tab.id, tab.type, tab.projectKey),
     }
     const tabWithDraftState = hasBackgroundProjectDraft(get().draftLedgers, projectScopedTab)
@@ -215,11 +226,18 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
       t.id === tabWithDraftState.id ||
       (!idOnly
         && tabWithDraftState.filePath !== undefined
-        && t.filePath === tabWithDraftState.filePath
+        && canonical(t.filePath) === tabWithDraftState.filePath
         && t.type === tabWithDraftState.type
         && t.projectKey === tabWithDraftState.projectKey)
     )
     if (existing) {
+      if (existing.dirty && existing.filePath !== canonical(existing.filePath)) {
+        set(s => ({ tabs: s.tabs.map(t => t.id === existing.id ? {
+          ...t, filePath: canonical(t.filePath), revisionPath: canonical(t.revisionPath),
+          chapterDir: canonical(t.chapterDir), reportPath: canonical(t.reportPath),
+        } : t), activeTabId: existing.id }))
+        return
+      }
       // diff / review-report 每次内容不同，强制更新内容后激活
       if (tabWithDraftState.type === 'diff' || tabWithDraftState.type === 'review-report') {
         set((s) => ({
@@ -232,6 +250,10 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
           tabs: s.tabs.map((t) => t.id === existing.id
             ? {
                 ...t,
+                filePath: canonical(t.filePath),
+                revisionPath: canonical(t.revisionPath),
+                chapterDir: canonical(t.chapterDir),
+                reportPath: canonical(t.reportPath),
                 name: tabWithDraftState.name,
                 ...(tabWithDraftState.draftId === undefined
                   ? {}

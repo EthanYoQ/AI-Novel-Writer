@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -25,6 +26,40 @@ function namedStep(source: string, name: string) {
 }
 
 describe('macOS ARM64 cloud build workflow contract', () => {
+  it.each([workflowPath, x64WorkflowPath])('resolves a temporary-directory alias before unit tests in %s', (file) => {
+    const workflow = readRequired(file)
+    const preparation = namedStep(workflow, 'Resolve macOS test temp directory')
+    expect(workflow.indexOf('Resolve macOS test temp directory')).toBeLessThan(workflow.indexOf('Run test suite'))
+    const command = preparation.match(/node -e "([^"\r\n]+)"/)?.[1]
+    expect(command).toBeDefined()
+
+    const cache = path.join(repositoryRoot, '.runtime', '.cache', 'macos-temp-workflow-test')
+    mkdirSync(cache, { recursive: true })
+    const root = mkdtempSync(path.join(realpathSync.native(cache), 'case-'))
+    try {
+      const physical = path.join(root, 'physical'), alias = path.join(root, 'alias')
+      mkdirSync(physical)
+      symlinkSync(physical, alias, process.platform === 'win32' ? 'junction' : 'dir')
+      const environmentFile = path.join(root, 'github-env')
+      execFileSync(process.execPath, ['-e', command!], {
+        env: { ...process.env, TMPDIR: alias, TMP: alias, TEMP: alias, GITHUB_ENV: environmentFile },
+      })
+      const exported = readFileSync(environmentFile, 'utf8')
+      expect(exported).toBe(`TMPDIR=${realpathSync.native(physical)}\n`)
+      const temporaryDirectory = exported.trim().slice('TMPDIR='.length)
+      const childFixture = execFileSync(process.execPath, ['-e',
+        "const fs = require('node:fs'); const path = require('node:path'); process.stdout.write(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'child-')))",
+      ], { encoding: 'utf8', env: { ...process.env, TMPDIR: temporaryDirectory,
+        // Windows os.tmpdir uses TEMP/TMP; macOS consumes the exported TMPDIR directly.
+        ...(process.platform === 'win32' ? { TEMP: temporaryDirectory, TMP: temporaryDirectory } : {}),
+      } })
+      expect(path.dirname(childFixture)).toBe(realpathSync.native(physical))
+      expect(realpathSync.native(childFixture)).toBe(childFixture)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('binds an explicit frozen release/profile contract before installing dependencies', () => {
     const workflow = readRequired(workflowPath)
     for (const input of ['expected_sha', 'release_tag', 'release_version', 'profile_path']) {

@@ -11,7 +11,8 @@ import type {
 import { alertError } from '../components/ui/AlertDialog'
 import { confirm } from '../components/ui/Confirm'
 import { appErrorMessage } from '../i18n/app-errors'
-import { useEditorStore } from './editor-store'
+import { saveDirtyEditorChangesForExit, useEditorStore } from './editor-store'
+import { countUnsavedEditorItems } from './editor-unsaved'
 import { useLocaleStore } from './locale-store'
 import { requireIpcSuccess } from '../services/ipc-result'
 import {
@@ -32,12 +33,34 @@ import {
   recordProjectEditorEdit,
   settleProjectEditorSave,
 } from './project-editor-draft-ledger'
+import {
+  captureProjectTransitionDraftSnapshot,
+  discardProjectTransitionDrafts,
+  hasProjectTransitionDrafts,
+  isProjectTransitionDraftSnapshotCurrent,
+  saveProjectTransitionDrafts,
+  type ProjectTransitionDraftSnapshot,
+} from '../services/project-transition'
 
 let refreshFileTreeRequestSequence = 0
 let openProjectRequestSequence = 0
 let recentProjectsRequestSequence = 0
 let closeProjectInFlight: Promise<boolean> | null = null
 let projectRecoveryInFlight: Promise<void> | null = null
+
+type ProjectTransitionDecision = 'clean' | 'saved' | 'discard'
+type PreparedProjectTransition = Readonly<{
+  decision: ProjectTransitionDecision
+  draftLedgers: Record<string, string>
+  draftSnapshot: ProjectTransitionDraftSnapshot
+  tabs: ReturnType<typeof useEditorStore.getState>['tabs']
+}>
+
+let createOpenTransitionAuthorization: {
+  sourceProject: ProjectData
+  targetPath: string
+  prepared: PreparedProjectTransition
+} | null = null
 
 type LocalizedProjectCopy = Readonly<{
   zhCNText: string
@@ -124,6 +147,72 @@ async function confirmAndCancelProjectWorkflows(
   if (!shouldContinue()) return false
   await useWorkflowStore.getState().cancelProjectWorkflowsAndWait(projectPath)
   return shouldContinue()
+}
+
+function capturePreparedProjectTransition(
+  project: ProjectData,
+  decision: ProjectTransitionDecision,
+): PreparedProjectTransition {
+  const editor = useEditorStore.getState()
+  return {
+    decision,
+    tabs: editor.tabs,
+    draftLedgers: editor.draftLedgers,
+    draftSnapshot: captureProjectTransitionDraftSnapshot(project.path),
+  }
+}
+
+function isPreparedProjectTransitionCurrent(
+  project: ProjectData,
+  prepared: PreparedProjectTransition,
+): boolean {
+  const editor = useEditorStore.getState()
+  return sameRendererProject(project, useProjectStore.getState().currentProject)
+    && editor.tabs === prepared.tabs
+    && editor.draftLedgers === prepared.draftLedgers
+    && isProjectTransitionDraftSnapshotCurrent(project.path, prepared.draftSnapshot)
+}
+
+async function prepareProjectTransition(project: ProjectData): Promise<PreparedProjectTransition | null> {
+  const editor = useEditorStore.getState()
+  const hasEditorDrafts = countUnsavedEditorItems(
+    editor.tabs,
+    editor.draftLedgers,
+  ) > 0
+  if (!hasEditorDrafts && !hasProjectTransitionDrafts(project.path)) {
+    return capturePreparedProjectTransition(project, 'clean')
+  }
+
+  const save = await confirm(
+    projectText(
+      '当前项目有未保存内容。保存后再继续切换吗？',
+      'This project has unsaved changes. Save them before continuing?',
+    ),
+    {
+      title: projectText('处理未保存内容', 'Handle unsaved changes'),
+      confirmText: projectText('保存并继续', 'Save and continue'),
+      cancelText: projectText('其他选项', 'Other options'),
+    },
+  )
+  if (save) {
+    await saveDirtyEditorChangesForExit(project.path)
+    await saveProjectTransitionDrafts(project.path)
+    return capturePreparedProjectTransition(project, 'saved')
+  }
+
+  const discard = await confirm(
+    projectText(
+      '只有项目切换成功后才会放弃这些修改。要继续吗？',
+      'These changes will be discarded only after the project transition succeeds. Continue?',
+    ),
+    {
+      title: projectText('放弃未保存内容', 'Discard unsaved changes'),
+      confirmText: projectText('放弃并继续', 'Discard and continue'),
+      cancelText: projectText('取消', 'Cancel'),
+      danger: true,
+    },
+  )
+  return discard ? capturePreparedProjectTransition(project, 'discard') : null
 }
 
 function readConfigDraftLedger() {
@@ -304,7 +393,7 @@ interface ProjectState {
   /** 项目文件树 */
   fileTree: FileNode[]
   /** 最近项目列表 */
-  recentProjects: Array<{ name: string; path: string; updatedAt: string }>
+  recentProjects: ProjectChannels['project:recent-list']['return']
   /** 是否正在加载 */
   loading: boolean
   /** 每次成功打开项目都递增；同一路径重开也属于新的渲染进程项目会话。 */
@@ -319,6 +408,11 @@ interface ProjectState {
   saveProject: (expectedProjectSession?: ProjectSessionContext) => Promise<boolean>
   /** 更新小说配置 */
   updateNovelConfig: (config: Partial<NovelConfig>, expectedProjectSession?: ProjectSessionContext) => void
+  /** Main validates frozen sources and writes before publishing generated fields to the UI. */
+  commitGeneratedNovelConfig: (config: Partial<NovelConfig>, expectedConfig: NovelConfig, expectedProjectSession: ProjectSessionContext,
+    generationRunHandle: import('../services/generation/generation-runtime').MainGenerationRunHandle,
+    /** Existing guarded main effect, such as an import receipt; replaces the direct core write. */
+    persistEffect?: () => Promise<void>) => Promise<boolean>
   /** 放弃指定项目的配置草稿并恢复到已保存基准。 */
   discardNovelConfigDraft: (
     projectPath: string,
@@ -352,6 +446,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   createProject: async (config) => {
     const requestSequence = ++openProjectRequestSequence
     const isLatestRequest = () => requestSequence === openProjectRequestSequence
+    let preparedTransition: PreparedProjectTransition | null = null
     set({ loading: true })
     try {
       if (closeProjectInFlight) {
@@ -365,11 +460,16 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       }
       const rendererProject = get().currentProject
       const rendererProjectPath = rendererProject?.path ?? null
-      if (rendererProjectPath && !await confirmAndCancelProjectWorkflows(
-        rendererProjectPath,
-        'create',
-        isLatestRequest,
-      )) return false
+      if (rendererProject) {
+        preparedTransition = await prepareProjectTransition(rendererProject)
+        if (!preparedTransition || !isLatestRequest() || !isPreparedProjectTransitionCurrent(rendererProject, preparedTransition)) return false
+        if (!await confirmAndCancelProjectWorkflows(
+          rendererProject.path,
+          'create',
+          isLatestRequest,
+        )) return false
+        if (!isPreparedProjectTransitionCurrent(rendererProject, preparedTransition)) return false
+      }
       // 创建与打开共享同一渲染进程请求序列。若等待工作流退出期间已有更新的
       // 打开/创建请求提交，或当前项目已经变化，旧创建请求不得再切换主进程数据库。
       if (
@@ -430,7 +530,21 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       }
       // 使用主进程返回的实际项目路径（跨平台安全，避免路径分隔符问题）
       const projectDir = result.projectPath ?? `${config.path}/${config.name}`
-      return await get().openProject(projectDir)
+      if (rendererProject && preparedTransition) {
+        if (!isPreparedProjectTransitionCurrent(rendererProject, preparedTransition)) return false
+        createOpenTransitionAuthorization = {
+          sourceProject: rendererProject,
+          targetPath: projectDir,
+          prepared: preparedTransition,
+        }
+      }
+      try {
+        return await get().openProject(projectDir)
+      } finally {
+        if (createOpenTransitionAuthorization?.targetPath === projectDir) {
+          createOpenTransitionAuthorization = null
+        }
+      }
     } catch (e) {
       if (!isLatestRequest()) return false
       console.error('[Project] createProject 异常:', e)
@@ -452,6 +566,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     let rendererProject = get().currentProject
     let rendererProjectPath = rendererProject?.path ?? null
     let mainOpenWasAccepted = false
+    let preparedTransition: PreparedProjectTransition | null = null
     set({ loading: true })
     try {
       if (closeProjectInFlight) {
@@ -470,8 +585,26 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       const activeProjectPath = get().currentProject?.path
       // 同一路径重开同样会签发新 lease；旧工作流必须先退出，不能因路径相同而漏掉。
       if (activeProjectPath) {
-        if (!await confirmAndCancelProjectWorkflows(activeProjectPath, 'open', isLatestRequest)) return false
-        if (!isLatestRequest() || !sameRendererProject(rendererProject, get().currentProject)) return false
+        const authorization = createOpenTransitionAuthorization
+        const authorized = Boolean(
+          authorization
+          && sameProjectPathKey(authorization.targetPath, projectPath)
+          && sameRendererProject(authorization.sourceProject, rendererProject),
+        )
+        if (authorized) {
+          preparedTransition = authorization!.prepared
+          createOpenTransitionAuthorization = null
+        } else {
+          preparedTransition = rendererProject && await prepareProjectTransition(rendererProject)
+          if (!preparedTransition) return false
+          if (!await confirmAndCancelProjectWorkflows(activeProjectPath, 'open', isLatestRequest)) return false
+        }
+        if (
+          !isLatestRequest()
+          || !rendererProject
+          || !preparedTransition
+          || !isPreparedProjectTransitionCurrent(rendererProject, preparedTransition)
+        ) return false
       }
       const result = await ipc.invoke('project:open', projectPath, requestToken, rendererProjectPath)
       if (!isLatestRequest() || result.stale || result.requestToken !== requestToken) {
@@ -516,6 +649,28 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
         })
         return false
       }
+      if (
+        result.success
+        && result.project
+        && rendererProject
+        && preparedTransition
+        && !isPreparedProjectTransitionCurrent(rendererProject, preparedTransition)
+      ) {
+        await detachProjectBindings({
+          projectPath: rendererProjectPath,
+          detachRenderer: () => set({ currentProject: null, fileTree: [] }),
+          message: projectCopy(
+            '项目打开期间检测到新的编辑。主进程已切换项目，当前界面已停用以避免使用旧会话继续写入。',
+            'New edits were detected while the project was opening. The main process switched projects, so the editor was disabled to prevent writes through the old session.',
+          ),
+          title: projectCopy(
+            '项目切换期间内容发生变化，已停用项目',
+            'Project content changed during the transition; the project was disabled',
+          ),
+          shouldNotify: isLatestRequest,
+        })
+        return false
+      }
       if (result.success && result.project) {
         mainOpenWasAccepted = true
         const openedProjectSession = projectSessionContextFromProject(result.project)
@@ -545,11 +700,29 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
           })
           return false
         }
+        if (!sameRendererProject(rendererProject, get().currentProject)) return false
+        const { useLayoutStore } = await import('./layout-store')
+        if (!isLatestRequest() || !sameRendererProject(rendererProject, get().currentProject)) return false
+        const layoutBeforeCommit = useLayoutStore.getState()
+        if (rendererProjectPath) {
+          if (preparedTransition?.decision === 'discard') {
+            discardProjectTransitionDrafts(rendererProjectPath)
+          }
+          useEditorStore.getState().clearProjectTabs(rendererProjectPath)
+        }
         set((state) => ({
           currentProject: { ...result.project!, novelConfig: restored.value },
           projectSessionEpoch: state.projectSessionEpoch + 1,
         }))
         const partialLoadWarnings: string[] = []
+        // Opening a project revokes old shelf preview capabilities in main.
+        // Refresh the visible shelf handles without turning a successful open into a failure.
+        try {
+          await get().loadRecentProjects()
+        } catch (recentError) {
+          set({ recentProjects: [] })
+          partialLoadWarnings.push(String(recentError))
+        }
         // 核心项目身份已经提交。文件树属于可降级的第二层视图，
         // 失败不能再把这个已打开的项目报告成整体打开失败。
         try {
@@ -569,10 +742,16 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
         }
         // 此后渲染进程已经提交返回项目；过期状态只影响派生视图，可以安全退出。
         if (!isLatestRequest()) return false
-        // 自动展开侧边栏并切换到项目结构视图
-        const { useLayoutStore } = await import('./layout-store')
-        if (!isLatestRequest()) return false
-        useLayoutStore.setState({ sidebarOpen: true, sidebarView: 'project' })
+        // 文件树加载期间的显式导航优先于项目打开时的默认侧栏。
+        useLayoutStore.setState((layout) => ({
+          ...(layout.sidebarView === layoutBeforeCommit.sidebarView
+            && layout.activeRailItem === layoutBeforeCommit.activeRailItem
+            && layout.sidebarOpen === layoutBeforeCommit.sidebarOpen
+            ? { sidebarOpen: true, sidebarView: 'project', activeRailItem: 'project' as const }
+            : {}),
+          immersive: false,
+          preImmersivePanels: null,
+        }))
         // 统一初始化第二层状态仓库（角色卡、草稿等）
         let layer2Warnings: string[] = []
         try {
@@ -674,6 +853,38 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       console.error('[project-store.saveProject] 保存失败:', err)
       return false
     }
+  },
+
+  commitGeneratedNovelConfig: async (config, expectedConfig, expectedProjectSession, generationRunHandle, persistEffect) => {
+    const project = get().currentProject
+    if (!project || !sameProjectSessionContext(expectedProjectSession, projectSessionContextFromProject(project))
+      || JSON.stringify(project.novelConfig) !== JSON.stringify(expectedConfig)) throw new Error('GENERATION_AUTHOR_DRAFT_CHANGED')
+    const { narrativePOV, ...coreFields } = config
+    const data = { ...coreFields, ...(narrativePOV !== undefined ? { narrativePov: narrativePOV } : {}) }
+    if (persistEffect) await persistEffect()
+    else {
+      const result = await ipc.invokeWithProjectSession(expectedProjectSession, 'db:project-core-commit-generated',
+        { data, generationRunHandle }, project.path)
+      if (!result.success) throw new Error(result.error || 'GENERATION_FORMAL_COMMIT_FAILED')
+    }
+    const current = get().currentProject
+    if (!current || !sameProjectSessionContext(expectedProjectSession, projectSessionContextFromProject(current))) return false
+    const ledger = readConfigDraftLedger()
+    // Only the submitted fields became formal data; unrelated author edits stay dirty.
+    const saved = { ...(getProjectEditorDraft(ledger, project.path)?.baseValue ?? expectedConfig), ...config }
+    const unchanged = JSON.stringify(current.novelConfig) === JSON.stringify(expectedConfig)
+    const next = unchanged ? { ...expectedConfig, ...config } : { ...current.novelConfig }
+    if (!unchanged) {
+      for (const key of Object.keys(config) as (keyof NovelConfig)[]) {
+        if (JSON.stringify(current.novelConfig[key]) === JSON.stringify(expectedConfig[key])) Object.assign(next, { [key]: saved[key] })
+      }
+    }
+    set({ currentProject: { ...current, novelConfig: next } })
+    persistConfigDraftLedger(settleProjectEditorSave(ledger, project.path, saved, next))
+    // The formal effect succeeded. A concurrent author edit remains a dirty draft,
+    // and callers must not run callbacks that replace it with an older full config.
+    if (!unchanged) throw new Error('GENERATION_SAVED_WITH_NEWER_AUTHOR_DRAFT')
+    return true
   },
 
   updateNovelConfig: (config, expectedProjectSession) => {
@@ -940,11 +1151,10 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     const closeOperation = (async () => {
       set({ loading: true })
       try {
+        const preparedTransition = await prepareProjectTransition(project)
+        if (!preparedTransition || !isPreparedProjectTransitionCurrent(project, preparedTransition)) return false
         if (!await confirmAndCancelProjectWorkflows(projectPath, 'close')) return false
-        if (!sameProjectSessionContext(
-          projectSession,
-          projectSessionContextFromProject(get().currentProject),
-        )) {
+        if (!isPreparedProjectTransitionCurrent(project, preparedTransition)) {
           throw new Error(projectText(
             '项目上下文已变化，关闭操作已取消。',
             'The project context changed, so the close operation was cancelled.',
@@ -952,10 +1162,26 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
         }
         const result = await ipc.invokeWithProjectSession(projectSession, 'db:close', projectPath)
         requireIpcSuccess(result, '关闭项目数据库')
+        if (!isPreparedProjectTransitionCurrent(project, preparedTransition)) {
+          await detachProjectBindings({
+            projectPath,
+            detachRenderer: () => set({ currentProject: null, fileTree: [] }),
+            message: projectCopy(
+              '项目数据库关闭期间检测到新的编辑。数据库已关闭，当前界面已停用。',
+              'New edits were detected while the project database was closing. The database is closed, so the editor was disabled.',
+            ),
+            title: projectCopy(
+              '项目关闭期间内容发生变化，已停用项目',
+              'Project content changed during close; the project was disabled',
+            ),
+          })
+          return false
+        }
         if (!sameProjectSessionContext(
           projectSession,
           projectSessionContextFromProject(get().currentProject),
         )) return false
+        if (preparedTransition.decision === 'discard') discardProjectTransitionDrafts(projectPath)
         set({ currentProject: null, fileTree: [] })
         try {
           await callProjectClosed(projectPath)

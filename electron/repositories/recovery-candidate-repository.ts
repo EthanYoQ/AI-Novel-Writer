@@ -6,7 +6,8 @@ import type {
   RecoveryCandidateStatus,
   RecoveryChapterSource,
 } from '../../src/shared/recovery-candidate'
-import { getProjectDb } from '../database'
+import { getCurrentProjectPath, getProjectDb } from '../database'
+import { readPortableRuntimeFreeze } from '../services/portable-runtime-freeze'
 import { BlueprintRepository } from './blueprint-repository'
 import { DraftRepository } from './draft-repository'
 
@@ -209,6 +210,7 @@ export class RecoveryCandidateRepository {
   static updatePending(candidateId: string, text: string): RecoveryCandidate {
     const db = requireDb()
     const id = assertText(candidateId, '恢复候选身份', 160)
+    readPortableRuntimeFreeze(getCurrentProjectPath()).assertMutable('recovery_candidates', id)
     const row = db.prepare(`
       SELECT * FROM recovery_candidates
       WHERE candidate_id = ? AND status = 'pending'
@@ -233,6 +235,7 @@ export class RecoveryCandidateRepository {
   static resolve(candidateId: string, status: Exclude<RecoveryCandidateStatus, 'pending'>): void {
     if (status !== 'continued' && status !== 'discarded') throw new Error('恢复候选动作无效')
     const db = requireDb()
+    readPortableRuntimeFreeze(getCurrentProjectPath()).assertMutable('recovery_candidates', candidateId)
     if (status === 'continued') {
       const row = db.prepare(`
         SELECT * FROM recovery_candidates

@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto'
+import { getBuiltinWritingSkills, readBuiltinWritingSkill } from '../../../shared/builtin-writing-skills'
+import { inspectWritingSkillMarkdown } from '../../../shared/writing-skills'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const invoke = vi.fn()
@@ -116,4 +119,26 @@ describe('writing skill registry identity and tool exposure', () => {
     expect(prompt).not.toMatch(/[\u3400-\u9fff]/u)
   })
 
+})
+
+
+it('pure builtin data preserves all registry metadata, inspections and localized bodies', async () => {
+  invoke.mockResolvedValue([])
+  const { skillRegistry } = await import('../skill-registry')
+  await skillRegistry.loadAll()
+  const data = getBuiltinWritingSkills()
+  expect(data).toHaveLength(7)
+  expect(createHash('sha256').update(JSON.stringify(data)).digest('hex')).toMatchInlineSnapshot(`"c43b4c0d77da3518c850c00ca15b9b96f317c0a951389578d2780f10046ccd51"`)
+  for (const entry of data) {
+    expect(skillRegistry.getById(`builtin:${entry.metadata.name}`)).toMatchObject(entry)
+    for (const language of ['zh-CN', 'en-US'] as const) {
+      const inspected = inspectWritingSkillMarkdown(readBuiltinWritingSkill(entry.metadata.name, language)!)
+      expect(inspected.metadata).toEqual(entry.writingSkill!.metadata)
+      expect(inspected.content).toBe(entry.localizedContent?.[language] ?? entry.content)
+      expect(inspected.reasons).toEqual(entry.metadata.name === 'review-chapter' && language === 'zh-CN' ? ['tool-dependency'] : [])
+    }
+  }
+  data[0].content = '被修改的副本'
+  expect(getBuiltinWritingSkills()[0].content).not.toBe(data[0].content)
+  expect(readBuiltinWritingSkill('不存在', 'zh-CN')).toBeUndefined()
 })

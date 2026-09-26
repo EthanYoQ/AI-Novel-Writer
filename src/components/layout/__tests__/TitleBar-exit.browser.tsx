@@ -46,7 +46,7 @@ beforeEach(() => {
   useWorkflowStore.setState({ activeRuns: [] })
   invoke = vi.fn(async () => ({ success: true }))
   closeRequested = undefined
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: {
       invoke,
@@ -72,7 +72,7 @@ afterEach(async () => {
   useEditorStore.setState(originalEditorState)
   useProjectStore.setState(originalProjectState)
   useLocaleStore.setState(originalLocaleState)
-  Reflect.deleteProperty(window, 'velaAPI')
+  Reflect.deleteProperty(window, 'aiNovelAPI')
 })
 
 describe('TitleBar native exit settlement', () => {

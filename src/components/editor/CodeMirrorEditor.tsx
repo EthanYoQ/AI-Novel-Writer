@@ -1,25 +1,26 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react'
 import CodeMirror, { ReactCodeMirrorRef, EditorView, ViewUpdate } from '@uiw/react-codemirror'
 import { keymap } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { languages } from '@codemirror/language-data'
-import { EditorState } from '@codemirror/state'
+import { EditorState, Prec, type Extension } from '@codemirror/state'
 import { openSearchPanel, closeSearchPanel, search } from '@codemirror/search'
 import { Sparkles, Bold, Check } from 'lucide-react'
 import { cn } from '../../lib/utils'
-import { createGenerationRuntime } from '../../services/generation/generation-runtime'
+import type { MainGenerationRunHandle } from '../../services/generation/generation-runtime'
+import { createEditorInlineGeneration } from '../../services/editor-inline-generation'
+import { useLLMStore } from '../../stores/llm-store'
 import type { GenerationReasoningStage } from '../../shared/reasoning-types'
 import { countDraftUnits } from '../../shared/draft-units'
 import { useLocaleStore } from '../../stores/locale-store'
-import { useProjectStore } from '../../stores/project-store'
 import { getActiveProjectSessionContext } from '../../shared/project-session-context'
-import { resolveWritingLanguage } from '../../shared/writing-language'
-import { promptLanguageText } from '../../services/prompt-language'
-import { composePromptSystemRole, renderPrompt, resolvePromptTemplate } from '../../services/prompt-templates'
+import { livePreview, paperHeadFacet, type PaperHead } from './live-preview'
 
 export type CodeMirrorEditorProps = {
   content: string
   filePath?: string
+  recoveryHandle?: MainGenerationRunHandle
+  onGenerationHandle?: (handle: MainGenerationRunHandle) => void
   editable?: boolean
   onChange?: (content: string) => void
   onSave?: (content: string) => Promise<void> | void
@@ -27,6 +28,7 @@ export type CodeMirrorEditorProps = {
   placeholder?: string
   hideStatusBar?: boolean
   mode?: 'document' | 'prose'
+  paperHead?: PaperHead | null
 }
 
 type EditorAIAction = {
@@ -44,21 +46,18 @@ const AI_ACTIONS = [
   { key: 'dialogue', label: ['对话', 'Dialogue'], color: 'text-[var(--color-success-text)]', prompt: ['将这部分改写为有区分度、能推动冲突的自然对话。', 'Rewrite this passage as distinct, natural dialogue that advances the conflict.'], reasoningStage: 'drafting' },
 ] satisfies readonly EditorAIAction[]
 
-const EDITOR_AI_GENERATION_BUDGET = Object.freeze({
-  maxAttempts: 1,
-  maxRequestedOutputTokens: 4096,
-  maxRequestedOutputTokensPerAttempt: 4096,
-  deadlineMs: 120_000,
-})
-
 export default function CodeMirrorEditor({
   content,
+  filePath,
+  recoveryHandle,
+  onGenerationHandle,
   editable = true,
   onChange,
   onSave,
   onCharCountChange,
   placeholder,
   mode = 'document',
+  paperHead = null,
 }: CodeMirrorEditorProps) {
   const uiText = useLocaleStore(s => s.text)
   const uiLocale = useLocaleStore(s => s.locale)
@@ -68,6 +67,30 @@ export default function CodeMirrorEditor({
   const lastEmittedContentRef = useRef(content)
   const [editorContent, setEditorContent] = useState(content)
   const hasEmittedInitialCount = useRef(false)
+  const composingRef = useRef(false)
+  const pendingExternalContentRef = useRef<string | null>(null)
+  const latestContentPropRef = useRef(content)
+  const charCountHandlerRef = useRef(onCharCountChange)
+  useLayoutEffect(() => {
+    latestContentPropRef.current = content
+    charCountHandlerRef.current = onCharCountChange
+  }, [content, onCharCountChange])
+
+  const handleCompositionStart = useCallback(() => {
+    composingRef.current = true
+  }, [])
+  const handleCompositionEnd = useCallback(() => {
+    composingRef.current = false
+    queueMicrotask(() => {
+      const pending = pendingExternalContentRef.current
+      if (pending === null) return
+      pendingExternalContentRef.current = null
+      if (pending !== latestContentPropRef.current) return
+      lastEmittedContentRef.current = pending
+      setEditorContent(pending)
+      charCountHandlerRef.current?.(countDraftUnits(pending))
+    })
+  }, [])
 
   // 更新内容
   useEffect(() => {
@@ -78,6 +101,11 @@ export default function CodeMirrorEditor({
     }
 
     if (content !== lastEmittedContentRef.current) {
+      if (composingRef.current) {
+        pendingExternalContentRef.current = content
+        return
+      }
+      pendingExternalContentRef.current = null
       lastEmittedContentRef.current = content
       setEditorContent(content)
       // 内容经由外部变动（例如打开新文件）
@@ -100,9 +128,52 @@ export default function CodeMirrorEditor({
     to: number
     selectedText: string
     documentText: string
+    filePath?: string
+    sessionKey: string
   } | null>(null)
 
+  const editableRef = useRef(editable)
+  const filePathRef = useRef(filePath)
+  useLayoutEffect(() => { editableRef.current = editable; filePathRef.current = filePath }, [editable, filePath])
+  const aiCandidateRef = useRef<{ artifactId: string; textHash: string } | null>(null)
+  const inlineRef = useRef<ReturnType<typeof createEditorInlineGeneration> | null>(null)
+  const [canResumeAI, setCanResumeAI] = useState(false)
+  const recoveryKey = recoveryHandle ? JSON.stringify(recoveryHandle) : ''
+  useEffect(() => {
+    if (!recoveryKey) return
+    const handle = JSON.parse(recoveryKey) as MainGenerationRunHandle
+    const session = getActiveProjectSessionContext()
+    if (!session) return
+    const sequence = ++aiRequestSequenceRef.current
+    inlineRef.current?.detach()
+    const client = createEditorInlineGeneration(session)
+    inlineRef.current = client
+    void client.open({ handle }).then(recovery => {
+      if (sequence !== aiRequestSequenceRef.current) return
+      const target = recovery.context
+      aiTargetRef.current = { ...target, requestSequence: sequence, filePath, sessionKey: JSON.stringify(session) }
+      const candidates = recovery.view.candidates ?? recovery.view.artifacts
+      const latest = candidates.at(-1)
+      aiCandidateRef.current = latest ? { artifactId: latest.artifactId, textHash: latest.textHash } : null
+      setAiResult(latest?.text ?? '')
+      const applicable = latest?.status === 'completed' && latest.compositionEligible === true && recovery.view.status !== 'cancelled' && recovery.sourceStatus === 'current'
+      setAiError(applicable ? null : uiText('恢复的候选尚不可应用，可复制或继续原运行', 'The recovered candidate cannot be applied yet; copy it or continue the original run.'))
+      setCanResumeAI(recovery.sourceStatus === 'current' && recovery.view.status !== 'cancelled' && recovery.view.ledger?.physicalRequests === 0 && candidates.length === 0)
+      setActiveAIAction(uiText(...AI_ACTIONS.find(action => action.key === target.action)!.label))
+      const view = editorRef.current?.view
+      const from = Math.min(target.from, view?.state.doc.length ?? 0)
+      setSelectionRange({ from, to: Math.min(target.to, view?.state.doc.length ?? 0) })
+      const coords = view?.coordsAtPos(from)
+      setBubblePos({ top: coords?.top ?? 150, left: coords?.left ?? 200 })
+      setBubbleOpen(true)
+    }).catch(() => { if (sequence === aiRequestSequenceRef.current) { setAiResult(''); setAiError(uiText('无法恢复原运行', 'The original run could not be restored.')); setBubbleOpen(true) } })
+    return () => { client.detach(); aiRequestSequenceRef.current += 1 }
+    // Navigation is explicit; later document changes are checked at acceptance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recoveryKey])
+
   useEffect(() => () => {
+    inlineRef.current?.detach()
     aiRequestSequenceRef.current += 1
     aiTargetRef.current = null
   }, [])
@@ -127,8 +198,7 @@ export default function CodeMirrorEditor({
     if (v.selectionSet || v.docChanged || v.geometryChanged) {
       const sel = v.state.selection.main
       if (sel.empty || sel.to - sel.from < 1) {
-        setBubbleOpen(false)
-        setSelectionRange(null)
+        if (aiResult === null) { setBubbleOpen(false); setSelectionRange(null) }
       } else {
         setSelectionRange({ from: sel.from, to: sel.to })
         // 交由下方的 useEffect 进行精准防越界座标计算与位置同步
@@ -230,18 +300,45 @@ export default function CodeMirrorEditor({
     ".cm-activeLine": { backgroundColor: "transparent" },
     ".cm-selectionBackground, .cm-focused .cm-selectionBackground": { backgroundColor: "var(--color-hover) !important" },
     ".cm-line": { padding: "0" },
+    ".cm-lp-paperhead": {
+      padding: "8px 0 28px",
+      textAlign: "center",
+      color: "var(--color-text)",
+      fontFamily: "var(--font-writing)",
+    },
+    ".cm-lp-paperhead h2": { margin: "0", fontSize: "1.65em", fontWeight: "600" },
+    ".cm-lp-paperhead-sub": { marginTop: "6px", fontSize: "0.8em", color: "var(--color-text-muted)" },
+    ".cm-lp-h": { fontWeight: "600", lineHeight: "1.5" },
+    ".cm-lp-h1": { fontSize: "1.5em" },
+    ".cm-lp-h2": { fontSize: "1.3em" },
+    ".cm-lp-h3": { fontSize: "1.15em" },
+    ".cm-lp-strong": { fontWeight: "700" },
+    ".cm-lp-em": { fontStyle: "italic" },
+    ".cm-lp-dropcap-char": {
+      color: "var(--color-accent)",
+      fontSize: "2.4em",
+      fontWeight: "600",
+      lineHeight: "0.8",
+    },
   }), [mode])
+
+  const paperHeadTitle = paperHead?.title ?? null
+  const paperHeadSubtitle = paperHead?.subtitle ?? ''
+  const stablePaperHead = useMemo<PaperHead | null>(
+    () => paperHeadTitle === null ? null : { title: paperHeadTitle, subtitle: paperHeadSubtitle },
+    [paperHeadTitle, paperHeadSubtitle],
+  )
 
   // 构建扩展
   const extensions = useMemo(() => {
-    const exts = [
+    const exts: Extension[] = [
       search({ top: true }),
       EditorView.lineWrapping,
-      keymap.of([
+      ...(mode === 'prose' ? [Prec.highest(keymap.of([
         {
           key: 'Tab',
           run: (target) => {
-            if (target.state.readOnly) return false
+            if (target.state.readOnly || target.state.selection.ranges.length !== 1 || !target.state.selection.main.empty) return false
             // 插入两个 em 空格（U+2003）= 2em = 标准中文首行缩进两字符宽
             // 使用 \u2003 而非 \u3000（全角空格），因为 em 空格在任何 Unicode 字体下
             // 都精确等于 1em，不依赖 CJK 字体加载
@@ -252,7 +349,7 @@ export default function CodeMirrorEditor({
             return true
           }
         }
-      ]),
+      ]))] : []),
       // 汉化 Search / UI 文本（涵盖官方大小写所有变种）
       EditorState.phrases.of(uiLocale === 'zh-CN' ? {
         "Find": "查找",
@@ -277,74 +374,77 @@ export default function CodeMirrorEditor({
         "close": "关闭"
       } : {})
     ]
-    if (mode === 'document') {
-      exts.push(markdown({ base: markdownLanguage, codeLanguages: languages }))
+    if (mode === 'document' || mode === 'prose') {
+      exts.push(markdown({
+        base: markdownLanguage,
+        codeLanguages: languages,
+        extensions: mode === 'prose' ? { parseInline: [{
+          name: 'HanRun',
+          before: 'Escape',
+          parse(cx, next, pos) {
+            if (next < 0x4e00 || next > 0x9fff) return -1
+            do { pos += 1 } while (pos < cx.end && cx.char(pos) >= 0x4e00 && cx.char(pos) <= 0x9fff)
+            return pos
+          },
+        }] } : undefined,
+      }))
     }
+    if (mode === 'prose') exts.push(...livePreview())
+    exts.push(paperHeadFacet.of(stablePaperHead))
     return exts
-  }, [mode, uiLocale])
+  }, [mode, stablePaperHead, uiLocale])
 
   // AI 菜单处理（流式调用，实时显示生成内容）
   const handleAIAction = async (action: EditorAIAction) => {
-    let runtime: Awaited<ReturnType<typeof createGenerationRuntime>> | null = null
     let requestSequence: number | null = null
     try {
-      if (!selectionRange || !editorRef.current?.view) return
+      if (!selectionRange || !editorRef.current?.view || !editable) return
+      const session = getActiveProjectSessionContext()
+      if (!session) throw new Error('EDITOR_INLINE_PROJECT_REQUIRED')
       const view = editorRef.current.view
-      const selectedText = view.state.sliceDoc(selectionRange.from, selectionRange.to)
       requestSequence = ++aiRequestSequenceRef.current
-      aiTargetRef.current = {
-        requestSequence,
-        from: selectionRange.from,
-        to: selectionRange.to,
-        selectedText,
-        documentText: view.state.doc.toString(),
-      }
-      const writingLanguage = resolveWritingLanguage(
-        useProjectStore.getState().currentProject?.novelConfig.writingLanguage,
-      )
-      const template = await resolvePromptTemplate(
-        'edit_selected_text',
-        getActiveProjectSessionContext() ?? undefined,
-        writingLanguage,
-      )
-      if (!template) throw new Error(uiText('未找到编辑器提示词', 'Editor prompt is unavailable'))
-
-      setActiveAIAction(uiText(...action.label))
-      setAiResult('')
-      setAiError(null)
-
-      runtime = await createGenerationRuntime({ budget: EDITOR_AI_GENERATION_BUDGET })
-      const outcome = await runtime.execute(({ session }) => session.complete({
-        purpose: `editor-ai-${action.key}`,
-        reasoningStage: action.reasoningStage,
-        output: 'visible-text',
-        messages: [
-          { role: 'system', content: composePromptSystemRole(template, writingLanguage) },
-          { role: 'user', content: renderPrompt(template, {
-            edit_instruction: promptLanguageText(writingLanguage, ...action.prompt),
-            selected_text: selectedText,
-          }, writingLanguage) },
-        ],
-      }))
-      if (outcome.status !== 'completed' || outcome.finishReason !== 'stop') {
-        if (requestSequence !== aiRequestSequenceRef.current) return
+      const input = { action: action.key, from: selectionRange.from, to: selectionRange.to,
+        selectedText: view.state.sliceDoc(selectionRange.from, selectionRange.to), documentText: view.state.doc.toString() }
+      aiTargetRef.current = { ...input, requestSequence, filePath, sessionKey: JSON.stringify(session) }
+      inlineRef.current?.detach()
+      const client = createEditorInlineGeneration(session)
+      inlineRef.current = client
+      aiCandidateRef.current = null
+      setActiveAIAction(uiText(...action.label)); setAiResult(''); setAiError(null); setCanResumeAI(false)
+      const recovery = await client.open({ input, modelId: useLLMStore.getState().defaultModelId ?? '', uiActionNonce: crypto.randomUUID() })
+      if (requestSequence !== aiRequestSequenceRef.current) return
+      onGenerationHandle?.(recovery.view.handle)
+      const receipt = await client.execute()
+      if (requestSequence !== aiRequestSequenceRef.current) return
+      if (receipt.outcome.status !== 'completed' || receipt.outcome.finishReason !== 'stop') {
         setAiResult('')
         setAiError(uiText('生成未完整完成，结果不可应用', 'Generation did not complete; the result cannot be applied.'))
         return
       }
+      const proof = (receipt.run.candidates ?? receipt.run.artifacts).find(candidate => candidate.text === receipt.outcome.content && candidate.status === 'completed' && candidate.compositionEligible === true)
+      aiCandidateRef.current = proof ? { artifactId: proof.artifactId, textHash: proof.textHash } : null
+      setAiResult(receipt.outcome.content)
+      if (receipt.sourceStatus !== 'current') setAiError(uiText('来源已变化，结果仅可复制', 'Sources changed; the result can only be copied.'))
+    } catch {
       if (requestSequence !== aiRequestSequenceRef.current) return
-      setAiResult(outcome.content)
-    } catch (e) {
-      console.error(e)
-      if (requestSequence !== aiRequestSequenceRef.current) return
-      setAiResult('')
-      setAiError(uiText('生成失败，结果不可应用', 'Generation failed; the result cannot be applied.'))
-    } finally {
-      await runtime?.close().catch(() => {})
+      setAiResult(''); setAiError(uiText('生成失败，结果不可应用', 'Generation failed; the result cannot be applied.'))
     }
   }
 
-  const handleAcceptAI = () => {
+  const handleResumeAI = async () => {
+    const sequence = aiRequestSequenceRef.current
+    setCanResumeAI(false)
+    try {
+      const receipt = await inlineRef.current?.execute()
+      if (sequence !== aiRequestSequenceRef.current) return
+      if (!receipt || receipt.outcome.status !== 'completed' || receipt.outcome.finishReason !== 'stop') throw new Error('EDITOR_INLINE_INCOMPLETE')
+      const proof = (receipt.run.candidates ?? receipt.run.artifacts).find(candidate => candidate.text === receipt.outcome.content && candidate.status === 'completed' && candidate.compositionEligible === true)
+      aiCandidateRef.current = proof ? { artifactId: proof.artifactId, textHash: proof.textHash } : null
+      setAiResult(receipt.outcome.content); setAiError(receipt.sourceStatus === 'current' ? null : uiText('来源已变化，结果仅可复制', 'Sources changed; the result can only be copied.'))
+    } catch { if (sequence === aiRequestSequenceRef.current) setAiError(uiText('原运行未完整完成，结果不可应用', 'The original run did not complete; its result cannot be applied.')) }
+  }
+
+  const handleAcceptAI = async () => {
     const target = aiTargetRef.current
     if (target && aiResult && editorRef.current?.view) {
       const view = editorRef.current.view
@@ -355,8 +455,22 @@ export default function CodeMirrorEditor({
         ))
         return
       }
+      try {
+        const recovery = await inlineRef.current?.read()
+        if (target.requestSequence !== aiRequestSequenceRef.current) return
+        const proof = (recovery?.view.candidates ?? recovery?.view.artifacts ?? []).find(candidate => candidate.artifactId === aiCandidateRef.current?.artifactId && candidate.textHash === aiCandidateRef.current?.textHash && candidate.text === aiResult && candidate.status === 'completed' && candidate.compositionEligible === true)
+        if (!proof || !recovery || recovery.sourceStatus !== 'current' || recovery.view.status === 'cancelled') throw new Error('EDITOR_INLINE_SOURCE_CHANGED')
+      } catch {
+        if (target.requestSequence !== aiRequestSequenceRef.current) return
+        setAiError(uiText('来源已变化，结果仅可复制', 'Sources changed; the result can only be copied.'))
+        return
+      }
       const targetStillCurrent = (
-        target.requestSequence === aiRequestSequenceRef.current
+        editableRef.current
+        && target.filePath === filePathRef.current
+        && target.requestSequence === aiRequestSequenceRef.current
+        && target.filePath === filePath
+        && target.sessionKey === JSON.stringify(getActiveProjectSessionContext())
         && view.state.doc.toString() === target.documentText
         && view.state.sliceDoc(target.from, target.to) === target.selectedText
       )
@@ -377,6 +491,8 @@ export default function CodeMirrorEditor({
   }
 
   const handleRejectAI = () => {
+    void inlineRef.current?.cancel().catch(() => {})
+    setCanResumeAI(false)
     aiRequestSequenceRef.current += 1
     aiTargetRef.current = null
     setAiResult(null)
@@ -398,6 +514,8 @@ export default function CodeMirrorEditor({
 
   return (
     <div className="relative h-full flex flex-col min-h-0"
+      onCompositionStartCapture={handleCompositionStart}
+      onCompositionEndCapture={handleCompositionEnd}
       onKeyDownCapture={(e) => {
         // 全局捕获 Ctrl+F 实现搜索框 Toggle（解决搜索框内焦点时快捷键失效的问题）
         if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
@@ -419,7 +537,7 @@ export default function CodeMirrorEditor({
         // 捕获 Cmd+S 保存
         if ((e.metaKey || e.ctrlKey) && e.key === 's') {
           e.preventDefault()
-          onSave?.(lastEmittedContentRef.current)
+          void Promise.resolve(onSave?.(lastEmittedContentRef.current)).catch(() => undefined)
         }
       }}>
       <div className="flex-1 relative min-h-0 overflow-hidden"
@@ -501,6 +619,7 @@ export default function CodeMirrorEditor({
                 </div>
               )}
               <div className="flex items-center gap-2 justify-end">
+                {canResumeAI && <button onClick={handleResumeAI}>{uiText('继续原运行', 'Continue original run')}</button>}
                 <button
                   className="px-2.5 py-1 text-xs rounded-md transition-colors"
                   style={{ border: '1px solid var(--color-border)', color: 'var(--color-text-secondary)' }}

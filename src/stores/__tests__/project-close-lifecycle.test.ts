@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ProjectData } from '../../shared/ipc-channels'
-import { useEditorStore } from '../editor-store'
+import { registerProjectTransitionDraft } from '../../services/project-transition'
+import {
+  registerEditorExitSaveHandler,
+  useEditorStore,
+} from '../editor-store'
 import { useLocaleStore } from '../locale-store'
 import { useProjectStore } from '../project-store'
 import { useWorkflowStore } from '../workflow-store'
@@ -92,6 +96,7 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  useEditorStore.getState().clearTabs()
   useLocaleStore.setState({ locale: 'zh-CN' })
   useProjectStore.setState({
     currentProject: project('A'),
@@ -105,7 +110,7 @@ beforeEach(() => {
       name: 'A',
       type: 'outline',
       projectKey: project('A').path,
-      dirty: true,
+      dirty: false,
     }],
     activeTabId: 'a-tab',
     draftLedgers: {},
@@ -122,6 +127,173 @@ beforeEach(() => {
 })
 
 describe('project close lifecycle', () => {
+  it('keeps the current project and tabs when a dirty editor has no safe save handler', async () => {
+    useEditorStore.setState((state) => ({
+      tabs: state.tabs.map(tab => ({ ...tab, dirty: true, content: '未保存正文' })),
+    }))
+
+    await expect(useProjectStore.getState().openProject(project('B').path)).resolves.toBe(false)
+
+    expect(mocks.invoke).not.toHaveBeenCalledWith(
+      'project:open',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    )
+    expect(useProjectStore.getState().currentProject).toEqual(project('A'))
+    expect(useEditorStore.getState().tabs).toEqual([
+      expect.objectContaining({ id: 'a-tab', content: '未保存正文', dirty: true }),
+    ])
+  })
+
+  it('rejects a project switch when the source lease changes while exit-save is pending', async () => {
+    const saving = deferred<void>()
+    useEditorStore.setState((state) => ({
+      tabs: state.tabs.map(tab => ({
+        ...tab,
+        dirty: true,
+        content: '保存前正文',
+        contentRevision: 1,
+      })),
+    }))
+    registerEditorExitSaveHandler({
+      tabId: 'a-tab',
+      type: 'outline',
+      projectKey: project('A').path,
+      save: async () => {
+        await saving.promise
+        useEditorStore.getState().settleTabSave('a-tab', {
+          content: '保存前正文',
+          contentRevision: 1,
+        })
+      },
+    })
+
+    const opening = useProjectStore.getState().openProject(project('B').path)
+    await vi.waitFor(() => expect(mocks.confirm).toHaveBeenCalledOnce())
+    useProjectStore.setState({
+      currentProject: { ...project('A'), sessionLease: 'lease-A-reopened' },
+    })
+    useEditorStore.getState().updateTabContent('a-tab', '保存期间新输入')
+    saving.resolve()
+
+    await expect(opening).resolves.toBe(false)
+    expect(mocks.invoke).not.toHaveBeenCalledWith(
+      'project:open',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    )
+    expect(useEditorStore.getState().tabs).toEqual([
+      expect.objectContaining({ id: 'a-tab', content: '保存期间新输入', dirty: true }),
+    ])
+  })
+
+  it('keeps the old tabs when the source lease changes after a successful exit-save', async () => {
+    const saving = deferred<void>()
+    useEditorStore.setState((state) => ({
+      tabs: state.tabs.map(tab => ({
+        ...tab,
+        dirty: true,
+        content: '已安全保存的正文',
+        contentRevision: 1,
+      })),
+    }))
+    registerEditorExitSaveHandler({
+      tabId: 'a-tab',
+      type: 'outline',
+      projectKey: project('A').path,
+      save: async () => {
+        await saving.promise
+        useEditorStore.getState().settleTabSave('a-tab', {
+          content: '已安全保存的正文',
+          contentRevision: 1,
+        })
+      },
+    })
+
+    const opening = useProjectStore.getState().openProject(project('B').path)
+    await vi.waitFor(() => expect(mocks.confirm).toHaveBeenCalledOnce())
+    useProjectStore.setState({
+      currentProject: { ...project('A'), sessionLease: 'lease-A-reopened' },
+    })
+    saving.resolve()
+
+    await expect(opening).resolves.toBe(false)
+    expect(mocks.invoke).not.toHaveBeenCalledWith(
+      'project:open',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    )
+    expect(useEditorStore.getState().tabs).toEqual([
+      expect.objectContaining({ id: 'a-tab', content: '已安全保存的正文', dirty: false }),
+    ])
+  })
+
+  it('blocks a project switch when an editor draft ledger is malformed', async () => {
+    useEditorStore.setState({ draftLedgers: { config: '{broken' } })
+
+    await expect(useProjectStore.getState().openProject(project('B').path)).resolves.toBe(false)
+
+    expect(mocks.invoke).not.toHaveBeenCalledWith(
+      'project:open',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    )
+    expect(useEditorStore.getState().draftLedgers.config).toBe('{broken')
+    expect(useProjectStore.getState().currentProject).toEqual(project('A'))
+  })
+
+  it('invalidates a saved transition when the author edits during workflow cancellation', async () => {
+    const cancelled = deferred<void>()
+    useEditorStore.setState((state) => ({
+      tabs: state.tabs.map(tab => ({
+        ...tab,
+        dirty: true,
+        content: '已保存版本',
+        contentRevision: 1,
+      })),
+    }))
+    registerEditorExitSaveHandler({
+      tabId: 'a-tab',
+      type: 'outline',
+      projectKey: project('A').path,
+      save: async () => {
+        useEditorStore.getState().settleTabSave('a-tab', {
+          content: '已保存版本',
+          contentRevision: 1,
+        })
+      },
+    })
+    useWorkflowStore.setState({
+      activeRuns: [{ projectPath: project('A').path, status: 'running' }] as never,
+    })
+    const cancelSpy = vi.spyOn(
+      useWorkflowStore.getState(),
+      'cancelProjectWorkflowsAndWait',
+    ).mockReturnValue(cancelled.promise)
+
+    const opening = useProjectStore.getState().openProject(project('B').path)
+    await vi.waitFor(() => expect(cancelSpy).toHaveBeenCalledOnce())
+    useEditorStore.getState().updateTabContent('a-tab', '等待期间的新输入')
+    cancelled.resolve()
+
+    await expect(opening).resolves.toBe(false)
+    expect(mocks.invoke).not.toHaveBeenCalledWith(
+      'project:open',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    )
+    expect(useEditorStore.getState().tabs[0]).toMatchObject({
+      content: '等待期间的新输入',
+      dirty: true,
+    })
+    cancelSpy.mockRestore()
+  })
+
   it('does not cancel an active workflow or switch projects when confirmation is declined', async () => {
     useWorkflowStore.setState({
       activeRuns: [{ projectPath: project('A').path, status: 'running' }] as never,
@@ -251,6 +423,7 @@ describe('project close lifecycle', () => {
         }),
       },
     })
+    mocks.confirm.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
     mocks.invoke.mockResolvedValue({ success: true })
 
     await expect(useProjectStore.getState().closeProject()).resolves.toBe(true)
@@ -290,6 +463,116 @@ describe('project close lifecycle', () => {
       expect.stringContaining('database busy'),
       expect.objectContaining({ title: '关闭项目失败' }),
     )
+  })
+
+  it('defers an explicit discard until database close succeeds', async () => {
+    useEditorStore.setState((state) => ({
+      tabs: state.tabs.map(tab => ({ ...tab, content: '仍需保留', dirty: true })),
+    }))
+    mocks.confirm.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    mocks.invoke.mockResolvedValue({ success: false, error: 'database busy' })
+
+    await expect(useProjectStore.getState().closeProject()).resolves.toBe(false)
+
+    expect(useProjectStore.getState().currentProject).toEqual(project('A'))
+    expect(useEditorStore.getState().tabs).toEqual([
+      expect.objectContaining({ id: 'a-tab', content: '仍需保留', dirty: true }),
+    ])
+  })
+
+  it('detaches without clearing drafts when new edits arrive while project:open is pending', async () => {
+    const openResult = deferred<{
+      success: boolean
+      project: ProjectData
+      activeProjectPath: string
+    }>()
+    let input = '打开前的助手输入'
+    let savedInput = ''
+    let inputVersion = 0
+    const unregister = registerProjectTransitionDraft({
+      projectKey: project('A').path,
+      isDirty: () => input !== savedInput,
+      version: () => inputVersion,
+      save: () => { savedInput = input },
+      discard: () => { input = '' },
+    })
+    mocks.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'project:open') {
+        return openResult.promise.then(result => ({ ...result, requestToken: args[1] }))
+      }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+
+    try {
+      const opening = useProjectStore.getState().openProject(project('B').path)
+      await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith(
+        'project:open',
+        project('B').path,
+        expect.any(String),
+        project('A').path,
+      ))
+      useEditorStore.getState().updateTabContent('a-tab', '打开等待期间的新正文')
+      input = '打开等待期间的新助手输入'
+      inputVersion += 1
+      openResult.resolve({
+        success: true,
+        project: project('B'),
+        activeProjectPath: project('B').path,
+      })
+
+      await expect(opening).resolves.toBe(false)
+      expect(useProjectStore.getState().currentProject).toBeNull()
+      expect(useEditorStore.getState().tabs).toEqual([
+        expect.objectContaining({ id: 'a-tab', content: '打开等待期间的新正文', dirty: true }),
+      ])
+      expect(input).toBe('打开等待期间的新助手输入')
+      expect(mocks.disableProjectBindingsPreservingDrafts).toHaveBeenCalledWith(project('A').path)
+      expect(mocks.onProjectOpening).not.toHaveBeenCalled()
+      expect(mocks.onProjectClosed).not.toHaveBeenCalled()
+    } finally {
+      unregister()
+    }
+  })
+
+  it('detaches without clearing drafts when new edits arrive while db:close is pending', async () => {
+    const closeResult = deferred<{ success: boolean }>()
+    let input = '关闭前的助手输入'
+    let savedInput = ''
+    let inputVersion = 0
+    const unregister = registerProjectTransitionDraft({
+      projectKey: project('A').path,
+      isDirty: () => input !== savedInput,
+      version: () => inputVersion,
+      save: () => { savedInput = input },
+      discard: () => { input = '' },
+    })
+    mocks.invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'db:close') return closeResult.promise
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+
+    try {
+      const closing = useProjectStore.getState().closeProject()
+      await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith(
+        'db:close',
+        project('A').path,
+      ))
+      useEditorStore.getState().updateTabContent('a-tab', '关闭等待期间的新正文')
+      input = '关闭等待期间的新助手输入'
+      inputVersion += 1
+      closeResult.resolve({ success: true })
+
+      await expect(closing).resolves.toBe(false)
+      expect(useProjectStore.getState().currentProject).toBeNull()
+      expect(useEditorStore.getState().tabs).toEqual([
+        expect.objectContaining({ id: 'a-tab', content: '关闭等待期间的新正文', dirty: true }),
+      ])
+      expect(input).toBe('关闭等待期间的新助手输入')
+      expect(mocks.disableProjectBindingsPreservingDrafts).toHaveBeenCalledWith(project('A').path)
+      expect(mocks.onProjectClosed).not.toHaveBeenCalled()
+    } finally {
+      unregister()
+    }
   })
 
   it('quiesces project A workflows before switching the main-process database to B', async () => {
@@ -621,6 +904,7 @@ describe('project close lifecycle', () => {
       if (channel === 'project:get-runtime-context') {
         return { activeProjectPath: project('C').path, dbReady: true }
       }
+      if (channel === 'project:recent-list') return []
       if (channel === 'fs:list-dir') return []
       throw new Error(`unexpected IPC: ${channel}`)
     })
@@ -684,6 +968,7 @@ describe('project close lifecycle', () => {
         }))
       }
       if (channel === 'project:get-runtime-context') return runtimeContext.promise
+      if (channel === 'project:recent-list') return []
       if (channel === 'fs:list-dir') return []
       throw new Error(`unexpected IPC: ${channel}`)
     })
@@ -797,6 +1082,7 @@ describe('project close lifecycle', () => {
         }),
       },
     })
+    mocks.confirm.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
 
     try {
       const openingB = useProjectStore.getState().openProject(project('B').path)

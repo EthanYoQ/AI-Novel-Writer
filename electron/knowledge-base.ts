@@ -26,7 +26,6 @@ import {
   searchWithScope as storeSearchWithScope,
   listDocuments as storeListDocuments,
   getStats as storeGetStats,
-  migrateFromJSON,
   getChunksWithoutVectors as storeGetChunksWithoutVectors,
   getCanonicalChunksForEmbeddingRebuild,
   getDocumentIntegrity,
@@ -34,47 +33,28 @@ import {
   planEmbeddingRebuild,
   activatePlannedEmbeddingSpace,
   rebuildPlannedEmbeddingSpace,
+  KNOWLEDGE_COPY_MARKER,
+  readKnowledgeCopy,
+  writeKnowledgeCopy,
   type EmbeddingSpaceIdentity,
   type KnowledgeCorpusKind,
 } from './vector-store'
 import { getCurrentProjectPath, getProjectDb } from './database'
 import { ImportRunRepository } from './repositories/import-run-repository'
 import { assertRequiredExpectedProjectPath } from './utils/project-context'
+import { getProjectDataRoot } from './services/project-data-locator'
+import { withKnowledgeSourceGate } from './services/knowledge-source-gate'
 
 // ===== 迁移状态跟踪 =====
 
-/** 已执行过迁移检查的项目路径集合 */
-const migratedProjects = new Set<string>()
-const migrationChecksInFlight = new Map<string, Promise<void>>()
-
 export { LEGACY_VECTOR_MIGRATION_BLOCKED, LegacyVectorMigrationBlockedError }
 
-/** 确保旧数据已迁移 */
+/** Recheck every operation; an earlier successful read cannot authorize a newly
+ * appeared pending migration. This check never launches a migration. */
 async function ensureMigration(projectPath: string): Promise<void> {
-  const key = path.resolve(projectPath)
-  if (migratedProjects.has(key)) return
-  const existing = migrationChecksInFlight.get(key)
-  if (existing) return await existing
-
-  const attempt = (async () => {
-    const jsonPath = path.join(projectPath, '.vela', 'vectors.json')
-    if (fs.existsSync(jsonPath)) {
-      const result = await migrateFromJSON(projectPath)
-      if (!result.success) {
-        const error = result.error ?? '旧 vectors.json 无法安全迁移'
-        console.warn('[Vela KB] 旧向量迁移已阻断知识库操作:', error)
-        throw new LegacyVectorMigrationBlockedError(error)
-      }
-    }
-    migratedProjects.add(key)
-  })()
-  migrationChecksInFlight.set(key, attempt)
-  try {
-    await attempt
-  } finally {
-    if (migrationChecksInFlight.get(key) === attempt) {
-      migrationChecksInFlight.delete(key)
-    }
+  const root = getProjectDataRoot(projectPath)
+  if (['vectors.json', 'vectors.json.migration-journal.json'].some(name => fs.existsSync(path.join(root, name)))) {
+    throw new LegacyVectorMigrationBlockedError('项目包含未完成的旧向量迁移，需要先完成项目恢复；普通检索和导入不会自动迁移旧数据。')
   }
 }
 
@@ -103,12 +83,37 @@ async function canWriteIncrementalVectors(projectPath: string): Promise<boolean>
   // A vector generation must cover every canonical chunk before it can become
   // active. If an FTS-only corpus already exists, keep incremental imports in
   // FTS until the user runs the existing explicit full rebuild.
-  if (!fs.existsSync(path.join(projectPath, '.vela', 'lancedb'))) return true
+  if (!fs.existsSync(path.join(getProjectDataRoot(projectPath), 'lancedb'))) return true
   const stats = await storeGetStats(projectPath)
   return stats.totalChunks === 0 || stats.hasVectors
 }
 
 // ===== 导出函数（保持旧签名，IPC 层零改动） =====
+
+/** One initial retrieval; later generation guards re-read identities without another embedding request. */
+export async function captureWritingKnowledgeSnapshot(query: string, projectPath: string,
+  configuration: { protocol: 'openai' | 'gemini'; model: { baseUrl: string; apiKey: string; modelName?: string; embeddingOptions?: EmbeddingOptions } } | null) {
+  await ensureMigration(projectPath)
+  let queryVector: number[] | undefined
+  if (configuration?.model.apiKey && query.trim()) {
+    try {
+      const [vector] = await generateEmbeddings([query], configuration.protocol, configuration.model, configuration.model.embeddingOptions?.batchSize)
+      if (vector?.length) queryVector = vector
+    } catch { /* The established no-embedding path still uses canonical full-text search. */ }
+  }
+  const { captureGenerationKnowledge } = await import('./services/generation-knowledge-source')
+  const { withKnowledgeSourceGate } = await import('./services/knowledge-source-gate')
+  const projectStorageRoot = getProjectDataRoot(projectPath)
+  return withKnowledgeSourceGate(projectStorageRoot, async () => {
+    try {
+      return await captureGenerationKnowledge({ projectStorageRoot, query, topK: 5, queryVector,
+        ...(queryVector && configuration ? { embeddingSpace: embeddingSpaceFor(configuration.protocol, configuration.model) } : {}) })
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== 'GENERATION_KNOWLEDGE_SPACE_NOT_MATCHED') throw error
+      return captureGenerationKnowledge({ projectStorageRoot, query, topK: 5 })
+    }
+  })
+}
 
 /**
  * 导入文档到知识库（单文件，从磁盘读取）
@@ -151,20 +156,23 @@ export async function importDocument(
         vectors = await generateEmbeddings(chunks, protocol, model, model.embeddingOptions?.batchSize)
       } catch (e) {
         if (e instanceof EmbeddingResponseValidationError) throw e
-        console.warn('[Vela KB] Embedding 调用失败，降级为 FTS-only:', e)
+        console.warn('[AI Novel KB] Embedding 调用失败，降级为 FTS-only:', e)
         // 不影响导入，仅 FTS
       }
     }
 
     // 4. 写入 LanceDB（text + 元数据 + 可选向量）
     onProgress?.(80, '正在保存...')
+    writeKnowledgeCopy(getProjectDataRoot(projectPath), docId, {
+      content, indexedHash: createHash('sha256').update(content).digest('hex'), edited: false, indexDirty: false,
+    })
     const result = await addChunks(
       projectPath,
       docId,
       fileName,
       chunks,
       vectors,
-      filePath,
+      `${KNOWLEDGE_COPY_MARKER}${docId}`,
       undefined,
       embeddingSpaceFor(protocol, model),
     )
@@ -225,6 +233,61 @@ export async function searchKnowledge(
  */
 export function listDocuments(projectPath: string) {
   return ensureMigration(projectPath).then(() => storeListDocuments(projectPath))
+}
+
+const copyHash = (content: string) => createHash('sha256').update(content, 'utf8').digest('hex')
+
+/** A legacy chunk-only document has no recoverable full original. */
+export async function readDocumentCopy(docId: string, projectPath: string): Promise<{
+  available: boolean; content?: string; contentHash?: string; edited?: boolean; indexStatus: 'current' | 'stale' | 'unavailable'
+}> {
+  await ensureMigration(projectPath)
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), async () => {
+    const doc = (await storeListDocuments(projectPath)).find(item => item.id === docId)
+    if (!doc?.filePath.startsWith(KNOWLEDGE_COPY_MARKER)) return { available: false, indexStatus: 'unavailable' }
+    const copy = readKnowledgeCopy(getProjectDataRoot(projectPath), docId)
+    if (!copy) return { available: false, indexStatus: 'unavailable' }
+    return {
+      available: true, content: copy.content, contentHash: copyHash(copy.content), edited: copy.edited,
+      indexStatus: !copy.indexDirty && copyHash(copy.content) === copy.indexedHash ? 'current' : 'stale',
+    }
+  })
+}
+
+export async function saveDocumentCopy(docId: string, content: string, expectedContentHash: string, projectPath: string): Promise<{ success: boolean; error?: string }> {
+  if (typeof content !== 'string' || typeof expectedContentHash !== 'string') return { success: false, error: '文档内容无效' }
+  await ensureMigration(projectPath)
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), async () => {
+    const doc = (await storeListDocuments(projectPath)).find(item => item.id === docId)
+    if (!doc?.filePath.startsWith(KNOWLEDGE_COPY_MARKER)) return { success: false, error: '完整原文不可用，请重新导入' }
+    const copy = readKnowledgeCopy(getProjectDataRoot(projectPath), docId)
+    if (!copy) return { success: false, error: '完整原文不可用，请重新导入' }
+    if (copyHash(copy.content) !== expectedContentHash) return { success: false, error: '项目副本已变化，请重新打开后编辑' }
+    writeKnowledgeCopy(getProjectDataRoot(projectPath), docId, { ...copy, content, edited: true, indexDirty: true })
+    return { success: true }
+  })
+}
+
+/** Explicit local FTS rebuild from the latest project copy; no model request. */
+export async function reindexDocumentCopy(docId: string, projectPath: string): Promise<{ success: boolean; docId?: string; chunkCount?: number; error?: string }> {
+  await ensureMigration(projectPath)
+  return withKnowledgeSourceGate(getProjectDataRoot(projectPath), async () => {
+    const doc = (await storeListDocuments(projectPath)).find(item => item.id === docId)
+    if (!doc?.filePath.startsWith(KNOWLEDGE_COPY_MARKER)) return { success: false, error: '完整原文不可用，请重新导入' }
+    const copy = readKnowledgeCopy(getProjectDataRoot(projectPath), docId)
+    if (!copy?.content.trim()) return { success: false, error: '项目副本为空，无法重建索引' }
+    const newDocId = randomUUID()
+    const chunks = chunkText(copy.content, normalizeEmbeddingOptions(undefined).chunkSize, normalizeEmbeddingOptions(undefined).chunkOverlap)
+    writeKnowledgeCopy(getProjectDataRoot(projectPath), newDocId, { ...copy, indexedHash: copyHash(copy.content), indexDirty: false })
+    const result = await addChunks(projectPath, newDocId, doc.fileName, chunks, undefined,
+      `${KNOWLEDGE_COPY_MARKER}${newDocId}`, { corpusKind: doc.corpusKind, replacementMode: 'stable-id' })
+    if (!result.success) return { success: false, error: result.error }
+    if (!await removeDocFromStore(projectPath, docId)) {
+      await removeDocFromStore(projectPath, newDocId)
+      return { success: false, error: '旧索引清理失败，重建未完成' }
+    }
+    return { success: true, docId: newDocId, chunkCount: chunks.length }
+  })
 }
 
 /**
@@ -380,14 +443,13 @@ async function importTextInternal(
         vectors = await generateEmbeddings(chunks, protocol, model, model.embeddingOptions?.batchSize)
       } catch (e) {
         if (e instanceof EmbeddingResponseValidationError) throw e
-        console.warn('[Vela KB] importText Embedding 失败，降级 FTS-only:', e)
+        console.warn('[AI Novel KB] importText Embedding 失败，降级 FTS-only:', e)
       }
     }
 
-    // 记录同名旧文档，但绝不能在 addChunks 的空间兼容性检查之前删除它。
-    // 否则新模型返回 reindex_required 时会损坏仍可用的旧代际。
-    const existingDocs = await storeListDocuments(projectPath)
-    const existingDoc = existingDocs.find(d => d.fileName === fileName)
+    writeKnowledgeCopy(getProjectDataRoot(projectPath), docId, {
+      content: text, indexedHash: createHash('sha256').update(text).digest('hex'), edited: false, indexDirty: false,
+    })
 
     const result = await addChunks(
       projectPath,
@@ -395,17 +457,13 @@ async function importTextInternal(
       fileName,
       chunks,
       vectors,
-      undefined,
+      `${KNOWLEDGE_COPY_MARKER}${docId}`,
       { ...(chapterMeta ?? {}), corpusKind: 'project-knowledge' },
       embeddingSpaceFor(protocol, model),
     )
     if (!result.success) {
       return { success: false, error: result.error }
     }
-    if (existingDoc) {
-      await removeDocFromStore(projectPath, existingDoc.id)
-    }
-
     return { success: true, docId, chunkCount: chunks.length }
   } catch (error) {
     return { success: false, ...migrationFailureDetails(error) }
@@ -616,7 +674,7 @@ async function performReferenceTextImport(
       } catch (error) {
         assertAuthority()
         if (error instanceof EmbeddingResponseValidationError) throw error
-        console.warn('[Vela KB] reference import embedding failed; using FTS-only:', error)
+        console.warn('[AI Novel KB] reference import embedding failed; using FTS-only:', error)
       }
       assertAuthority()
     }
@@ -828,7 +886,7 @@ export async function backfillVectors(
       failed: 0,
     }
   } catch (error) {
-    console.error('[Vela KB] 向量回填异常:', error)
+    console.error('[AI Novel KB] 向量回填异常:', error)
     return {
       success: false,
       processed: 0,

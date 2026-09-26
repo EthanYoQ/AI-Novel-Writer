@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   currentProjectPath: '',
   existingPaths: new Set<string>(),
   initCalls: [] as string[],
+  createCalls: [] as string[],
   createdVelaDirectories: new Set<string>(),
   failCorePaths: new Set<string>(),
   failInitPaths: new Set<string>(),
@@ -40,6 +41,12 @@ const mocks = vi.hoisted(() => ({
     leaseId: string
   },
   leaseSequence: 0,
+  projectPeekService: {
+    issueCapability: vi.fn(),
+    revokeCapability: vi.fn(),
+    peek: vi.fn(),
+    readCurrent: vi.fn(),
+  },
 }))
 
 vi.mock('electron', () => ({
@@ -71,6 +78,8 @@ vi.mock('../../database', () => ({
   getProjectDb: () => mocks.currentProjectPath
     ? { transaction: mocks.transaction }
     : null,
+
+  createProjectDatabase: vi.fn((projectPath: string) => { mocks.createCalls.push(path.resolve(projectPath)) }),
   initProjectDatabase: vi.fn((projectPath: string) => {
     const resolved = path.resolve(projectPath)
     mocks.initCalls.push(resolved)
@@ -140,6 +149,10 @@ vi.mock('../../services/project-access', () => ({
   projectAccess: mocks.projectAccess,
 }))
 
+vi.mock('../../services/project-peek', () => ({
+  projectPeekService: mocks.projectPeekService,
+}))
+
 import { registerProjectController } from '../project-controller'
 
 function handler(channel: string): IpcHandler {
@@ -178,6 +191,7 @@ beforeEach(() => {
     path.join(projectD, '.vela'),
   ])
   mocks.initCalls = []
+  mocks.createCalls = []
   mocks.createdVelaDirectories = new Set()
   mocks.failCorePaths = new Set()
   mocks.failInitPaths = new Set()
@@ -273,9 +287,50 @@ beforeEach(() => {
   mocks.projectAccess.invalidateCurrentSession.mockImplementation(() => {
     mocks.activeSession = null
   })
+  mocks.projectPeekService.issueCapability.mockImplementation((projectPath: string) => ({
+    capabilityId: `peek-${path.basename(projectPath)}`,
+    projectId: `project-${path.basename(projectPath)}`,
+  }))
+  mocks.projectPeekService.peek.mockReturnValue({ state: 'unavailable' })
+  mocks.projectPeekService.readCurrent.mockReturnValue({ state: 'unavailable' })
 })
 
 describe('project controller project identity', () => {
+  it('issues opaque preview capabilities for valid recent projects', async () => {
+    mocks.recentProjects = [{ name: 'Project B', path: projectB, updatedAt: '2026-09-21T00:00:00.000Z' }]
+
+    await expect(handler('project:recent-list')({})).resolves.toEqual([{
+      name: 'Project B',
+      path: projectB,
+      updatedAt: '2026-09-21T00:00:00.000Z',
+      previewCapabilityId: 'peek-B',
+      projectId: 'project-B',
+    }])
+    expect(mocks.projectPeekService.issueCapability).toHaveBeenCalledWith(projectB)
+  })
+
+  it('previews only capabilities issued by the current recent-project listing', async () => {
+    mocks.recentProjects = [{ name: 'Project B', path: projectB, updatedAt: '2026-09-21T00:00:00.000Z' }]
+    mocks.projectPeekService.peek.mockReturnValue({ state: 'ready', projectId: 'project-B' })
+    await handler('project:recent-list')({})
+
+    await expect(handler('project:peek-overview')({}, 'not-issued')).resolves.toEqual({ state: 'unavailable' })
+    expect(mocks.projectPeekService.peek).not.toHaveBeenCalled()
+    await expect(handler('project:peek-overview')({}, 'peek-B')).resolves.toMatchObject({ state: 'ready' })
+    expect(mocks.projectPeekService.peek).toHaveBeenCalledWith('peek-B')
+  })
+
+  it('reads the current overview only through the validated project session', async () => {
+    mocks.projectPeekService.readCurrent.mockReturnValue({ state: 'ready', projectId: 'project-A' })
+
+    await expect(handler('project:overview-current')({}, projectSession())).resolves.toMatchObject({
+      state: 'ready',
+      projectId: 'project-A',
+    })
+    expect(mocks.projectAccess.assertCurrentProjectContext).toHaveBeenCalledWith(projectSession(), projectA)
+    expect(mocks.projectPeekService.readCurrent).toHaveBeenCalledWith('project-A', expect.any(Object))
+  })
+
   it('reports the live main-process project database context', async () => {
     await expect(handler('project:get-runtime-context')({})).resolves.toEqual({
       activeProjectPath: projectA,
@@ -302,6 +357,19 @@ describe('project controller project identity', () => {
     expect(mocks.projectAccess.probeExistingProject).toHaveBeenCalledWith(projectB)
     expect(mocks.projectAccess.adoptLegacyProject).toHaveBeenCalled()
     expect(mocks.projectAccess.beginSession).toHaveBeenCalled()
+    expect(mocks.createCalls).toEqual([])
+  })
+
+  it('opens a complete imported target after its publish ACK is lost and adds it to recent projects', async () => {
+    await expect(handler('project:recent-list')({})).resolves.toEqual([])
+    await expect(handler('project:open')({}, projectB, 'recover-imported-B', projectA))
+      .resolves.toMatchObject({ success: true, project: { id: 'project-B', path: projectB } })
+    expect(mocks.projectAccess.probeExistingProject).toHaveBeenCalledWith(projectB)
+    expect(mocks.initCalls).toContain(projectB)
+    expect(mocks.createCalls).toEqual([])
+    await expect(handler('project:recent-list')({})).resolves.toEqual([
+      expect.objectContaining({ path: projectB, projectId: 'project-B', previewCapabilityId: 'peek-B' }),
+    ])
   })
 
   it('reopens the same project with a new lease while preserving its stable ProjectId', async () => {
@@ -471,6 +539,21 @@ describe('project controller project identity', () => {
     expect(mocks.initCalls).not.toContain(ordinaryDirectory)
   })
 
+  it('preserves the actionable migration refusal instead of overwriting it with an internal code', async () => {
+    mocks.projectAccess.probeExistingProject.mockImplementationOnce(() => {
+      throw new Error('PROJECT_MIGRATION_NOT_QUALIFIED')
+    })
+    await expect(handler('project:open')({}, ordinaryDirectory, 'request-unqualified-legacy')).resolves.toMatchObject({
+      success: false,
+      errorCode: 'PROJECT_ROOT_REQUIRED',
+      error: '项目格式转换尚未具备安全迁移条件，已保留原项目且未写入。请保留当前文件，等待受验证的迁移入口。',
+      databaseRestored: true,
+      dbReady: true,
+    })
+    expect(mocks.initCalls).toEqual([projectA])
+    expect(mocks.initCalls).not.toContain(ordinaryDirectory)
+  })
+
   it('creates from a first-ever neutral runtime, returns to no database or lease, then opens explicitly', async () => {
     mocks.currentProjectPath = ''
     mocks.activeSession = null
@@ -502,6 +585,7 @@ describe('project controller project identity', () => {
       dbReady: true,
     })
 
+    expect(mocks.createCalls).toEqual([projectC])
     await expect(handler('project:open')({}, projectC, 'request-open-created-C'))
       .resolves.toMatchObject({
         success: true,
@@ -1004,5 +1088,24 @@ describe('project controller project identity', () => {
         error: expect.stringContaining('当前数据库'),
       })
     expect(mocks.removeDirectoryWithWindowsRetry).not.toHaveBeenCalled()
+  })
+
+  it('cleans the local cloud binding only after the project directory deletion commits', async () => {
+    const removeDeletedProjectBinding = vi.fn()
+    registerProjectController({ removeDeletedProjectBinding })
+    mocks.removeDirectoryWithWindowsRetry.mockImplementationOnce((target: string) => {
+      mocks.existingPaths.delete(path.resolve(target))
+    })
+
+    await expect(handler('project:delete')(
+      {},
+      projectA,
+      'project-A',
+      'lease-project-A',
+      projectSession(),
+    )).resolves.toMatchObject({ success: true, directoryDeleted: true })
+    expect(removeDeletedProjectBinding).toHaveBeenCalledWith('project-A')
+
+    registerProjectController()
   })
 })

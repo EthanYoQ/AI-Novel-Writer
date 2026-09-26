@@ -89,7 +89,7 @@ async function invokeOfficialHomepageFromRenderer(window: OfficialHomepageSmokeW
   // The string contains only the fixed no-argument trusted intent. The token,
   // URL, and any arbitrary renderer data never cross this renderer boundary.
   const response = await window.webContents.executeJavaScript(
-    "window.velaAPI.invoke('official-homepage:open')",
+    "window.aiNovelAPI.invoke('official-homepage:open')",
     true,
   )
   assertSmokeResult(isHomepageResponse(response), 'preload renderer IPC did not return an official-homepage response')

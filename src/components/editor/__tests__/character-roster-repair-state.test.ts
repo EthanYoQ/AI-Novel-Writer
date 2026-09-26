@@ -19,6 +19,7 @@ function snapshot(overrides: Partial<CharacterRosterSnapshot> = {}): CharacterRo
     renderedMarkdown: '',
     projectionHash: '',
     factHash: '',
+    nameOnlyFactHash: '',
     ...overrides,
   }
 }

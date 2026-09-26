@@ -39,7 +39,7 @@ const originalLocaleState = useLocaleStore.getState()
 const originalLLMState = useLLMStore.getState()
 const originalLayoutState = useLayoutStore.getState()
 const originalWorkflowState = useWorkflowStore.getState()
-const originalVelaAPI = Object.getOwnPropertyDescriptor(window, 'velaAPI')
+const originalVelaAPI = Object.getOwnPropertyDescriptor(window, 'aiNovelAPI')
 
 let root: Root
 let container: HTMLDivElement
@@ -84,7 +84,7 @@ beforeEach(async () => {
     }
     throw new Error(`Unexpected IPC channel: ${channel}`)
   })
-  Object.defineProperty(window, 'velaAPI', {
+  Object.defineProperty(window, 'aiNovelAPI', {
     configurable: true,
     value: { invoke, on: () => () => {}, once: () => {}, send: () => {} },
   })
@@ -152,8 +152,8 @@ afterEach(async () => {
   useLLMStore.setState(originalLLMState)
   useLayoutStore.setState(originalLayoutState)
   useWorkflowStore.setState(originalWorkflowState)
-  if (originalVelaAPI) Object.defineProperty(window, 'velaAPI', originalVelaAPI)
-  else Reflect.deleteProperty(window, 'velaAPI')
+  if (originalVelaAPI) Object.defineProperty(window, 'aiNovelAPI', originalVelaAPI)
+  else Reflect.deleteProperty(window, 'aiNovelAPI')
 })
 
 async function importAndWaitForDisclosure() {
