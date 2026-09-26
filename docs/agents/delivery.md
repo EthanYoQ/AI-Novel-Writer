@@ -3,7 +3,7 @@
 范围和依赖读[现行规格](../research/novel-quality-modernization/frontend-transition-specs.md)及[实施计划](../research/novel-quality-modernization/frontend-transition-plan.md)，替代关系见[交付 delta](../research/novel-quality-modernization/delivery-contract-delta-2026-09-21.md)。任务状态只读唯一私有检查点。
 
 - 顾问负责产品范围、合同与计划；执行主线程负责实现细节、共享接线、集成和交付。改变视觉来源、功能/数据/质量标准或发布范围提交具体差异，不能自行重做总计划。
-- 实施按可独立验证行为切片派工；每片明确目标、验收、所有权和模型/强度。新派开发与审查子 Agent 只用 `gpt-6-sol` 或 `gpt-6-luna`，在工具参数中显式指定 `model`、`reasoning_effort`、`fork_turns="none"`；禁止 Astra，不迁移已运行子 Agent。子 Agent 不再派生、不覆盖他人修改，最多同时两个实施 owner 并预留独立审查。本轮两名 Astra/High 仅做历史顾问计划审计，不扩展实施权限。
+- 实施按可独立验证行为切片派工；每片明确目标、验收、所有权和模型/强度。2026-09-26 用户指定线程 7 为 `gpt-6-astra/high`，并允许 Astra 子 Agent；新派开发与审查可用 `gpt-6-astra`、`gpt-6-sol`、`gpt-6-luna`，取代此前仅 Sol/Luna 的限制，不使用 5.6 系列。每次工具调用显式指定 `model`、`reasoning_effort`、`fork_turns="none"`，正文声明不能代替参数。复杂根因与高风险独审优先 Astra/high，明确实施或证据整理按任务选择 Sol/Luna，不要求所有任务最高强度。首次使用每种模型时，随实际子任务核验可获得的运行元数据；不可见就标未验证，不用自报或请求参数冒充生效证明，也不另派空任务。子 Agent 不再派生、不覆盖他人修改，最多同时两个实施 owner 并预留独立审查；不迁移已运行子 Agent。
 - Superpowers 对所有模型按各 Skill 自身触发条件使用；不因规格已接受、项目约定或模型类型跳过所需的 brainstorming、writing-plans 等步骤。现行计划仍是产品范围与依赖依据，不另建平行总计划；Skill 不扩大外发、发布或产品验收授权。此项目存放路径与用户明确授权仍有效。
 - 实施/审查使用 ponytail full。一次行为切片一次独立审查，修复只复验 finding 与受影响回归；在满足适用 Skill 要求的前提下合并规格与代码质量检查，不为同一变化叠加同义审查。最终审查关注组合风险，不重开无新反例关闭项。
 - 调试先复现、核验代码/driver/ABI/profile/输入，再定位首个错误边界，提出一个可验证假设并最小修复；不循环增加 sleep、同时改多层或把测试夹具失败当产品缺陷。两轮同根因失败升级有界根因咨询；缺外发授权或连接不通继续本地诊断，真实阻断不跳过。
