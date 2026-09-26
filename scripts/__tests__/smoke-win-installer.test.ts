@@ -812,7 +812,7 @@ describe('Windows installer smoke contract', () => {
     const script = readFileSync('scripts/smoke-win-installer.ps1', 'utf8')
     const appSmoke = readFileSync('scripts/smoke-win-app.ps1', 'utf8')
     const legacyProbe = readFileSync('scripts/probe-legacy-project-open.mjs', 'utf8')
-    const v110 = script.indexOf('if ($V110InstalledUpgrade) {\n      Invoke-AiNovelV110Fixture -Mode seed')
+    const v110 = script.search(/if \(\$V110InstalledUpgrade\) \{\r?\n      Invoke-AiNovelV110Fixture -Mode seed/)
     const v025 = script.indexOf('Invoke-AiNovelUpgradeDataFixture -Mode seed -ProjectRoot $upgradeFixtureRoot')
     expect(v110).toBeGreaterThanOrEqual(0)
     expect(v025).toBeGreaterThan(v110)
@@ -833,6 +833,7 @@ describe('Windows installer smoke contract', () => {
   })
 
   windowsPowerShellIt('writes v1.1 global seeds as strict UTF-8 JSON with an array of recent projects', () => {
+    mkdirSync(resolve('.runtime/cache'), { recursive: true })
     const root = mkdtempSync(join(resolve('.runtime/cache'), 's14c-v110-global-seed-'))
     const configPath = join(root, 'config.json')
     const recentPath = join(root, 'recent-projects.json')

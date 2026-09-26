@@ -183,7 +183,7 @@ describe('release dependency contract', () => {
     expect(canUseMonitorBody).toContain('monitor.exitCode === null')
     expect(canUseMonitorBody).toContain('monitor.signalCode === null')
     expect(releaseGate.slice(preMonitorLoop, preMonitorInvocation)).toContain(
-      "await runNodeProcess([pnpmCli, 'run', step])",
+      "await runNodeProcess([pnpmCli, 'run', step, ...(step === 'test' ? ['--fileParallelism=false'] : [])])",
     )
     expect(releaseGate).toContain('let releaseFinalizationRequired = false')
     expect(releaseGate).not.toContain('preMonitorSucceeded')

@@ -169,13 +169,13 @@ describe('Windows heavy integration timeout contract', () => {
     )
 
     expect(smokeInstallerTests).toContain('WINDOWS_POWERSHELL_INTEGRATION_TIMEOUT_MS = 30_000')
-    expect(smokeInstallerTests.match(/^ {2}windowsPowerShellIt\(/gm)).toHaveLength(44)
+    expect(smokeInstallerTests.match(/^ {2}windowsPowerShellIt\(/gm)).toHaveLength(45)
     expect([
       smokeInstallerTests.match(/runProbeLibrary\(/g)?.length,
       smokeInstallerTests.match(/runInstallerLibrary\(/g)?.length,
       smokeInstallerTests.match(/runReleaseMonitorLibrary\(/g)?.length,
       smokeInstallerTests.match(/runWinFormsGracefulCloseProbe\(/g)?.length,
-    ]).toEqual([19, 8, 20, 3])
+    ]).toEqual([19, 9, 20, 3])
 
     expect(updateE2eTests).toContain('WINDOWS_POWERSHELL_INTEGRATION_TIMEOUT_MS = 30_000')
     expect(updateE2eTests.match(/^ {2}windowsPowerShellIt\(/gm)).toHaveLength(5)

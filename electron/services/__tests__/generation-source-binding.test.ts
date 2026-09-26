@@ -137,7 +137,8 @@ describe('main rebuilt generation sources', () => {
         expect(f.db.prepare("SELECT * FROM characters WHERE character_id='character-proved'").get()).toEqual(stored);
     });
 
-    it('rejects a downstream derived state whose epoch is spoofed after an earlier chapter replacement', async () => {
+    // Match the shared 20-chapter archive fixture's native I/O budget in project-archive-service.test.ts.
+    it('rejects a downstream derived state whose epoch is spoofed after an earlier chapter replacement', { timeout: 20_000 }, async () => {
         const f = await createProjectArchiveRoundtripFixture();
         cleanups.push(f.dispose);
         await f.exportAndRestore();
