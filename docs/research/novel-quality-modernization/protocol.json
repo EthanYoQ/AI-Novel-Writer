@@ -47,13 +47,14 @@
     "disposition": "permanent historical failures; not reclassified by s10b-reference-baseline-v2"
   },
   "historicalLedgerBoundary": {
-    "eventCount": 231,
-    "rawBytesSha256": "09553bc653969b4c71d7744be9e786c52e5a6129c9469f6376dfbd728f44ba2c",
-    "evidenceInvocationId": "c2e451cf-8ee6-4f5f-9a17-90693f5e8ec9",
+    "eventCount": 276,
+    "rawBytesSha256": "5bbbbf573782100fd0f01cb4dadacf138094ef7873e6fd4d099e257263c981c4",
+    "evidenceInvocationId": "82eafcb9-69ce-4b60-8e89-6d3e8aa453ba",
     "finalReserveAttemptIds": [
-      "baseline:f03412eb-b176-4faf-97a4-788c267040f9",
-      "baseline:b8eaaf18-ccc5-4626-a4dc-9d89f1c7a9de",
-      "candidate:3147f356-519c-4da2-b041-13755d1ac0ca"
+      "baseline:0ea029b3-000e-48d7-8a89-0d9b2e8b507a",
+      "baseline:f534c593-a88c-4b88-80ba-a52ad243523c",
+      "candidate:08ed1c19-debe-4271-8966-fe6cc651328b",
+      "candidate:e8e22dcc-ed8d-4e19-b21a-fa42a0d28cae"
     ]
   },
   "phases": {
@@ -154,8 +155,27 @@
         "场景3/2",
         "场景3/3"
       ],
-      "minimumCalls": 18,
-      "scope": "3×3×2=18章，臂内依赖独立"
+      "minimumCalls": 24,
+      "scope": "3×3×2=18章，臂内依赖独立",
+      "scenarioRevision": "s14b-full-continuous-project-v1",
+      "operations": [
+        {
+          "id": "三章规划",
+          "kind": "directory",
+          "callsPerArm": 3,
+          "arms": 2,
+          "minimumCalls": 6,
+          "allocation": "finalPlanning"
+        },
+        {
+          "id": "连续章节正文",
+          "kind": "draft",
+          "callsPerArm": 9,
+          "arms": 2,
+          "minimumCalls": 18,
+          "allocation": "finalChapters"
+        }
+      ]
     }
   },
   "allocation": {
@@ -208,7 +228,7 @@
     "postUi": "三early selector在同postUiIntegrationSha重跑；ADR0019取消调用硬帽，全部请求仍逐条记账",
     "failure": "保留全部失败/缺章/中断的意向分析；不挑优",
     "runtimeProbe": "生产runtime模拟completion，不是18章或桌面资格",
-    "commandDriver": "当前未集成；S06 owners/S14A前完成；formal phases fail closed"
+    "commandDriver": "early selectors and full use the production command/registered IPC/physical project bridge; synthetic results are not literary qualification; C16/C17/C18 allocations retain their separate obligations"
   },
   "fixturePath": "test/fixtures/novel-quality-modernization/semantic-source.json",
   "plannedCallAllocation": 80

@@ -138,11 +138,13 @@ export function createAttemptSupervisor({ record, deadlineMs = BRIDGE_SETTLEMENT
 }
 export function runProductionBridge(request) {
   const target = request.target
+  const evidenceRoot = request.evidenceRoot ?? target.isolationRoot
+  fs.mkdirSync(evidenceRoot, { recursive: true })
   const runtime = productionExecutionRuntime(target)
-  const requestFile = path.join(target.isolationRoot, `${request.action}-request.json`)
+  const requestFile = path.join(evidenceRoot, `${request.action}-request.json`)
   const config = path.join(target.isolationRoot, 'production-bridge.vitest.config.mjs')
-  const report = path.join(target.isolationRoot, `${request.action}-vitest.json`)
-  request.receiptPath = path.join(target.isolationRoot, `${request.action}-receipt.json`)
+  const report = path.join(evidenceRoot, `${request.action}-vitest.json`)
+  request.receiptPath = path.join(evidenceRoot, `${request.action}-receipt.json`)
   fs.writeFileSync(requestFile, JSON.stringify(request, null, 2))
   fs.writeFileSync(config, `export default ${JSON.stringify({
     root: ADAPTER_ROOT,
@@ -168,13 +170,13 @@ export function runProductionBridge(request) {
   const secret = request.mode === 'real'
     ? JSON.parse(fs.readFileSync(path.join(target.roots.config, 'models.json'), 'utf8')).find(model => model.id === target.modelId)?.apiKey : null
   const redact = value => secret ? String(value ?? '').split(secret).join('[REDACTED]') : String(value ?? '')
-  fs.writeFileSync(path.join(target.isolationRoot, `${request.action}-stdout.log`), redact(result.stdout))
-  fs.writeFileSync(path.join(target.isolationRoot, `${request.action}-stderr.log`), redact(result.stderr))
+  fs.writeFileSync(path.join(evidenceRoot, `${request.action}-stdout.log`), redact(result.stdout))
+  fs.writeFileSync(path.join(evidenceRoot, `${request.action}-stderr.log`), redact(result.stderr))
   for (const file of [report, request.receiptPath]) if (secret && fs.existsSync(file)) fs.writeFileSync(file, redact(fs.readFileSync(file, 'utf8')))
   const receipt = fs.existsSync(request.receiptPath) ? JSON.parse(fs.readFileSync(request.receiptPath, 'utf8')) : null
   if (result.status !== 0 || !receipt || !['prepared', 'passed'].includes(receipt.status)) {
     throw Object.assign(new Error('PRODUCTION_BRIDGE_FAILED'), { detail: receipt?.error, receiptPath: request.receiptPath,
-      exitCode: result.status, stderrPath: path.join(target.isolationRoot, `${request.action}-stderr.log`) })
+      exitCode: result.status, stderrPath: path.join(evidenceRoot, `${request.action}-stderr.log`) })
   }
   const testReport = JSON.parse(fs.readFileSync(report, 'utf8'))
   if (testReport.numPassedTests !== 1 || testReport.numTotalTests !== 1) throw new Error('PRODUCTION_BRIDGE_COVERAGE_MISMATCH')
@@ -187,6 +189,14 @@ export function runProductionBridge(request) {
 // the selected protocol phase before opening the gate, so a drift here fails closed
 // instead of quietly running a different experiment.
 export const PHASE_SCENARIOS = Object.freeze({
+  full: Object.freeze({
+    caseIds: Object.freeze(['场景1/1', '场景1/2', '场景1/3', '场景2/1', '场景2/2', '场景2/3', '场景3/1', '场景3/2', '场景3/3']),
+    milestone: 'final', scenarioRevision: 's14b-full-continuous-project-v1',
+    operations: Object.freeze([
+      Object.freeze({ id: '三章规划', kind: 'directory' }),
+      Object.freeze({ id: '连续章节正文', kind: 'draft' }),
+    ]),
+  }),
   'early-budget': Object.freeze({
     caseId: '场景1/1',
     sceneId: '场景1',
@@ -340,10 +350,10 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
       if (binding.mode !== mode || binding.arm !== arm || binding.phase !== phase || binding.caseId !== scenario.caseId
         || binding.invocationId !== invocationId
         || binding.protocolRevision !== protocolRevision || binding.protocolHash !== protocolHash
-        || phase === 'early-review' && (binding.codeSha !== result.codeSha || binding.sourceHash !== result.sourceHash
+        || ['early-review', 'full'].includes(phase) && (binding.codeSha !== result.codeSha || binding.sourceHash !== result.sourceHash
           || binding.driverHash !== result.driverHash || binding.parityId !== result.physicalProject?.parityHash))
         return 'ATTEMPT_BINDING_MISMATCH'
-      if (phase === 'early-review' && arm === 'candidate') {
+      if (['early-review', 'full'].includes(phase) && arm === 'candidate') {
         const actual = binding.actual
         const persisted = result.operations?.find(item => item.operation === operation.id)
         if (!actual || !persisted?.handle
@@ -740,7 +750,116 @@ export function copyIsolatedRealModelConfig(original, roots) {
   fs.writeFileSync(path.join(roots.config, 'config.json'), JSON.stringify({ locale: 'zh-CN' }))
 }
 
+export function fullExecutionSchedule(order) {
+  const scenario = PHASE_SCENARIOS.full
+  if (order?.seed !== 'program-v3-2026-09-13-fixed-v1' || order.armsByChapter?.length !== 9
+    || order.armsByChapter.some((arms, index) => arms !== (index % 2 ? 'candidate,baseline' : 'baseline,candidate')))
+    throw new Error('FULL_ORDER_MISMATCH')
+  const chapters = scenario.caseIds.flatMap((caseId, index) => order.armsByChapter[index].split(',').map(arm => ({
+    caseId, sceneId: caseId.split('/')[0], chapterNumber: Number(caseId.split('/')[1]), arm,
+    operation: scenario.operations[1],
+  })))
+  return [...chapters.filter(step => step.chapterNumber === 1).map(step => ({ ...step, operation: scenario.operations[0] })), ...chapters]
+}
+
+export function classifyFullProduction(results, { mode, order }) {
+  const schedule = fullExecutionSchedule(order)
+  const fail = pairFailure => ({ status: 'failed', qualityQualification: 'automatic-gate-failed', pairFailure })
+  if (results.length !== schedule.length) return fail('FULL_OPERATION_COVERAGE_MISMATCH')
+  const projects = new Map(), predecessors = new Map()
+  for (const [index, step] of schedule.entries()) {
+    const result = results[index], key = `${step.sceneId}:${step.arm}`
+    if (result?.status !== 'passed') return fail('FULL_OPERATION_FAILED')
+    const mismatch = validatePairedReceipt(result, { mode, arm: step.arm, phase: 'full',
+      scenario: { caseId: step.caseId, operations: [step.operation] },
+      protocolRevision: results[0].protocolRevision, protocolHash: results[0].protocolHash })
+    if (mismatch) return fail(mismatch)
+    if (result.invocationId !== results[0].invocationId || result.milestone !== 'final'
+      || result.chapterNumber !== step.chapterNumber || result.sceneId !== step.sceneId
+      || result.operations?.length !== 1 || result.operations[0].operation !== step.operation.id)
+      return fail('FULL_ORDER_MISMATCH')
+    const projectId = result.physicalProject?.projectId
+    if (!projectId || projects.has(key) && projects.get(key) !== projectId
+      || !projects.has(key) && [...projects.values()].includes(projectId)) return fail('FULL_PROJECT_MISMATCH')
+    const binding = result.attempts[0].binding
+    const owner = step.arm === 'candidate' ? binding.actual : binding.baselineIpc
+    if (!owner || owner.projectId !== projectId || owner.epoch !== result.projectEpoch
+      || result.attempts[0].attemptId !== `${step.arm}:${owner.attemptId}`
+      || binding.milestone !== 'final') return fail('FULL_OWNER_BINDING_MISMATCH')
+    projects.set(key, projectId)
+    if (step.operation.kind === 'directory') continue
+    if (!Number.isSafeInteger(result.saved?.draftId) || result.saved.draftId <= 0
+      || !Number.isSafeInteger(result.saved?.version) || result.saved.version <= 0
+      || !Number.isSafeInteger(result.saved?.persistedBytes) || result.saved.persistedBytes <= 0
+      || !hasReviewableDraft(result) || !savedMatchesObservation(result)
+      || !withinTargetUnits(result.draftObservation, result.protocolRevision, result.arm)) return fail('FULL_DRAFT_INVALID')
+    const previous = predecessors.get(key) ?? null
+    if (stableEvidence(result.predecessor ?? null) !== stableEvidence(previous)) return fail('FULL_PREDECESSOR_MISMATCH')
+    predecessors.set(key, { projectId, chapterNumber: result.saved.chapterNumber, draftId: result.saved.draftId,
+      version: result.saved.version, contentHash: result.saved.contentHash, persistedBytes: result.saved.persistedBytes })
+  }
+  return { status: mode === 'synthetic' ? 'passed' : 'pending-independent-oracle-review',
+    qualityQualification: mode === 'synthetic' ? 'not-run' : 'pending-independent-oracle-review',
+    pendingOracleDimensions: ['required-events', 'facts', 'recap', 'style'] }
+}
+
+function runProductionFull(targets, options) {
+  if (options.scenarioRevision !== PHASE_SCENARIOS.full.scenarioRevision || options.milestone !== 'final'
+    || !options.protocolRevision || !CONTENT_HASH.test(options.protocolHash ?? '')
+    || ['baseline', 'candidate'].some(arm => targets[arm].protocolRevision !== options.protocolRevision
+      || targets[arm].protocolHash !== options.protocolHash)) throw new Error('PROTOCOL_BINDING_MISMATCH')
+  const schedule = fullExecutionSchedule(options.order), invocationId = randomUUID()
+  const executionTargets = new Map(), prepared = [], results = [], predecessors = new Map()
+  const common = { ...options, invocationId, driverHash: productionBridgeHash(), phase: 'full' }
+  for (const [sceneIndex, sceneId] of ['场景1', '场景2', '场景3'].entries()) {
+    for (const arm of ['baseline', 'candidate']) {
+      const original = targets[arm], directoryId = `${invocationId.slice(0, 6)}${sceneIndex}`
+      const roots = Object.fromEntries(Object.entries(original.roots).map(([name, directory]) => [name, path.join(directory, directoryId)]))
+      const isolationRoot = path.join(original.isolationRoot, 'invocations', invocationId, String(sceneIndex))
+      for (const directory of [isolationRoot, ...Object.values(roots)]) {
+        if (fs.existsSync(directory)) throw new Error('INVOCATION_DIRECTORY_COLLISION')
+        fs.mkdirSync(directory, { recursive: true })
+      }
+      if (options.mode === 'real') copyIsolatedRealModelConfig(original, roots)
+      const target = { ...original, isolationRoot, roots, declaredIsolationRoot: original.isolationRoot, declaredRoots: original.roots }
+      executionTargets.set(`${sceneId}:${arm}`, target)
+      const preparation = runProductionBridge({ ...common, target, action: 'prepare', sceneId,
+        chapterNumber: 1, caseId: `${sceneId}/1`, operations: [], templatesPath: `${options.templatesPath}.${sceneId}.json` })
+      prepared.push(preparation)
+      const peer = prepared.find(item => item.sceneId === sceneId && item.arm !== arm)
+      if (peer && peer.physicalProject.parityHash !== preparation.physicalProject.parityHash) throw new Error('ACTUAL_PROJECT_PARITY_FAILED')
+    }
+  }
+  for (const [index, step] of schedule.entries()) {
+    const key = `${step.sceneId}:${step.arm}`, target = executionTargets.get(key)
+    const request = { ...common, target, caseId: step.caseId, sceneId: step.sceneId,
+      chapterNumber: step.chapterNumber, operations: [step.operation],
+      templatesPath: `${options.templatesPath}.${step.sceneId}.json`,
+      evidenceRoot: path.join(target.isolationRoot, `step-${index}`),
+      predecessor: predecessors.get(key) ?? null,
+      parityHash: prepared.find(item => item.sceneId === step.sceneId && item.arm === step.arm).physicalProject.parityHash }
+    try {
+      const result = runProductionBridge({ ...request, action: 'execute' })
+      results.push(result)
+      if (step.operation.kind === 'draft') predecessors.set(key, { projectId: result.physicalProject.projectId,
+        chapterNumber: result.saved.chapterNumber, draftId: result.saved.draftId, version: result.saved.version,
+        contentHash: result.saved.contentHash, persistedBytes: result.saved.persistedBytes })
+    } catch (error) {
+      const receipt = error.receiptPath && fs.existsSync(error.receiptPath) ? JSON.parse(fs.readFileSync(error.receiptPath, 'utf8')) : {}
+      results.push({ ...receipt, arm: step.arm, caseId: step.caseId, status: 'failed', code: error.message, receiptPath: error.receiptPath })
+      break
+    }
+  }
+  return { ...classifyFullProduction(results, options), phase: 'full', invocationId, order: options.order,
+    qualification: options.development ? 'development-only-unfrozen' : `${options.mode}-production-path-only`,
+    protocolRevision: options.protocolRevision, protocolHash: options.protocolHash, scenarioRevision: options.scenarioRevision,
+    prepared, results, notRun: schedule.slice(results.length),
+    physicalModelRequests: results.reduce((sum, result) => sum + (result.physicalModelRequests ?? 0), 0),
+    syntheticDispatches: results.reduce((sum, result) => sum + (result.syntheticDispatches ?? 0), 0) }
+}
+
 export function runProductionPhasePair(targets, options) {
+  if (options.phase === 'full') return runProductionFull(targets, options)
   const scenario = productionScenario(options.phase)
   if ((scenario.scenarioRevision ?? null) !== (options.scenarioRevision ?? null)
     || stableEvidence(scenario.selectionDifference ?? null) !== stableEvidence(options.selectionDifference ?? null)

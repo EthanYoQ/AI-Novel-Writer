@@ -30,8 +30,12 @@ const templateKeysForPhase = phase => phase === 'early-review'
   ? ['consistency_check', 'refine_from_review']
   : ['chapter_blueprint_chunk', 'first_chapter_draft', 'next_chapter_draft']
 /** 合成正文按目标单位数配长：既不低于 70% 下限，也不触发自动续写。 */
-const syntheticDraftText = (countUnits, targetUnits) => {
-  const line = index => `清晨，林澄核对第${index + 1}行登记，发现日期异常。他握紧铜钥匙，与沈岸商定雨停后到现场核查。`
+const syntheticDraftText = (countUnits, targetUnits, chapterNumber = 1) => {
+  const line = index => chapterNumber === 2
+    ? `午后，两人来到核查地点，第${index + 1}份申请被看守退回。风从门缝灌进来，桌边的烛火晃了一下。他们交出当天的工钱换取查阅机会，把收据收进口袋，等候下一轮登记。`
+    : chapterNumber === 3
+      ? `翌日，第${index + 1}处印迹与原件的缺口吻合。窗外已经放晴，光落在刚刚摊开的纸页上。他们选定公开证据的办法，将副本递交值班室。负责人签收之后暂停了相关手续，屋里的人逐一离去。`
+      : `清晨，林澄核对第${index + 1}行登记，发现日期异常。他握紧铜钥匙，与沈岸商定雨停后到现场核查。`
   const lines = []
   while (countUnits(lines.join('\n')) < targetUnits && lines.length < 500) lines.push(line(lines.length))
   return lines.join('\n')
@@ -158,6 +162,8 @@ test('isolated production commands persist the selected phase operations', async
   const requestBytes = fs.readFileSync(process.env.QUALITY_BRIDGE_REQUEST, 'utf8')
   const request = JSON.parse(requestBytes)
   const target = request.target
+  const fullRun = request.phase === 'full'
+  const evidenceRoot = request.evidenceRoot ?? target.isolationRoot
   const source = json(request.semanticPath)
   const scene = source.scenes.find(value => value.id === request.sceneId)
   assert.ok(scene, 'SCENE_NOT_REGISTERED')
@@ -165,7 +171,8 @@ test('isolated production commands persist the selected phase operations', async
   assert.ok(chapter, 'CHAPTER_NOT_REGISTERED')
   const authorityFacts = Object.values(chapter.oracle ?? {}).flatMap(value => Array.isArray(value) ? value : [value])
   const chapterGuidance = `${source.template}\n本章时点：${chapter.oracle.time}`
-  const authorityText = [scene.material, scene.longSetting, chapter.brief, chapter.requiredEvents,
+  const authorityText = [scene.material, scene.longSetting,
+    ...(fullRun ? scene.chapters.map(entry => `${entry.brief}\n${entry.requiredEvents.join('；')}\n本章时点：${entry.oracle.time}`) : [chapter.brief, chapter.requiredEvents]),
     scene.characters, chapterGuidance].flat().filter(Boolean).join('\n')
   for (const fact of authorityFacts)
     assert.ok(authorityText.includes(fact), `ORACLE_FACT_NOT_IN_AUTHOR_AUTHORITY:${fact}`)
@@ -299,7 +306,7 @@ test('isolated production commands persist the selected phase operations', async
         premise: scene.material, worldbuilding: scene.material, characters_arch: '',
         synopsis: scene.chapters.map(entry => `第${entry.number}章：${entry.brief}`).join('\n') }
       db.prepare(`INSERT INTO project_core (${Object.keys(columns).join(',')}) VALUES (${Object.keys(columns).map(() => '?').join(',')})`).run(...Object.values(columns))
-      for (const entry of scene.chapters.slice(1)) db.prepare('INSERT INTO blueprints(chapter_number,title,role,purpose,key_events,characters,user_guidance) VALUES(?,?,?,?,?,?,?)')
+      for (const entry of fullRun ? [] : scene.chapters.slice(1)) db.prepare('INSERT INTO blueprints(chapter_number,title,role,purpose,key_events,characters,user_guidance) VALUES(?,?,?,?,?,?,?)')
         .run(entry.number, `作者预置第${entry.number}章`, '发展', entry.brief, entry.requiredEvents.join('；'), JSON.stringify(scene.characters),
           `${source.template}\n本章时点：${entry.oracle.time}`)
       if (request.phase === 'early-review') {
@@ -311,7 +318,7 @@ test('isolated production commands persist the selected phase operations', async
       }
       // 合法前驱：第二章场景必须先有本臂自己的第一章来源。这里走生产草稿入口保存一份
       // 「作者前情」候选（不是另一臂的输出），第二臂只从自己的库里读回同一来源。
-      if (request.chapterNumber > 1) {
+      if (!fullRun && request.chapterNumber > 1) {
         const registered = contextSelection?.optionalPredecessors ?? []
         const bodies = [
           { chapterNumber: request.chapterNumber - 1, marker: null, required: true,
@@ -358,13 +365,21 @@ test('isolated production commands persist the selected phase operations', async
         save(path.join(target.isolationRoot, 'predecessor.json'), { candidates: records })
       }
     }
-    const predecessorRecords = request.chapterNumber > 1
-      ? json(path.join(target.isolationRoot, 'predecessor.json')).candidates : []
+    const predecessorRecords = fullRun
+      ? request.chapterNumber > 1 ? [{ ...request.predecessor, sourceId: `candidate:${request.predecessor?.draftId}`, required: true }] : []
+      : request.chapterNumber > 1 ? json(path.join(target.isolationRoot, 'predecessor.json')).candidates : []
+    if (fullRun && request.chapterNumber > 1) {
+      assert.equal(request.predecessor?.projectId, project.projectId, 'FULL_PREDECESSOR_PROJECT_MISMATCH')
+      assert.equal(request.predecessor?.chapterNumber, request.chapterNumber - 1, 'FULL_PREDECESSOR_CHAPTER_MISMATCH')
+    }
+    receipt.predecessor = fullRun ? request.predecessor ?? null : undefined
     // 每一条前驱都必须在使用前从生产 IPC 原样读回；command 只消费这些 readback，绝不旁路注入正文。
     const predecessorReadbacks = []
     for (const record of predecessorRecords) {
       const full = await invoke('db:draft-get-full', record.draftId, project.rootPath, session)
       assert.equal(sha(full?.content ?? ''), record.contentHash, 'PREDECESSOR_SOURCE_CHANGED')
+      assert.equal(full?.version, record.version, 'PREDECESSOR_VERSION_CHANGED')
+      assert.equal(full?.chapterNumber, record.chapterNumber, 'PREDECESSOR_CHAPTER_CHANGED')
       assert.equal(Buffer.byteLength(full?.content ?? '', 'utf8'), record.persistedBytes, 'PREDECESSOR_BYTES_CHANGED')
       predecessorReadbacks.push({ chapterNumber: record.chapterNumber, draftId: record.draftId, sourceId: record.sourceId,
         version: record.version, content: full.content, marker: record.marker, required: record.required,
@@ -391,6 +406,10 @@ test('isolated production commands persist the selected phase operations', async
         persistedBytes: Buffer.byteLength(record.content, 'utf8'), markerHash: record.marker ? sha(record.marker) : null,
         required: record.required })),
       semanticHash: sha(source), guidanceHash: sha(source.template) }
+    if (fullRun) {
+      // Generated blueprints and prose diverge by arm; only original author inputs define initial parity.
+      sourceParity = { ...sourceParity, authorBlueprints: [], predecessors: [] }
+    }
     receipt.physicalProject = { path: project.rootPath, dbPath: db.name, projectId: project.projectId,
       format: candidate ? 'canonical' : 'legacy', parityHash: sha(sourceParity), readback: sourceParity }
     if (request.action === 'prepare') { assertNoOutboundPreflightFailures(receipt); receipt.status = 'prepared'; return }
@@ -468,9 +487,15 @@ test('isolated production commands persist the selected phase operations', async
           preflight(promptText.includes(fact), `OUTBOUND_ORACLE_AUTHORITY_MISSING:${fact}`)
         if (request.chapterNumber > 1) {
           const requiredPredecessor = predecessorReadbacks.find(record => record.required)
-          const predecessorEvidence = naturalPredecessorText(scene).split('\n\n', 1)[0]
+          const predecessorEvidence = fullRun ? previousChapterEnding(requiredPredecessor?.content ?? '')
+            : naturalPredecessorText(scene).split('\n\n', 1)[0]
           preflight(requiredPredecessor && promptText.includes(predecessorEvidence), 'OUTBOUND_REQUIRED_PREDECESSOR_MISSING')
         }
+      }
+      if (candidate && fullRun && request.chapterNumber > 1) {
+        const predecessor = predecessorReadbacks[0]
+        preflight(materialDecision?.included.some(item => item.sourceId === predecessor.sourceId
+          && item.revision === predecessor.version), 'FULL_PREDECESSOR_MATERIAL_BINDING_MISMATCH')
       }
       if (candidate && request.phase === 'early-context') {
         preflight(userMessages.length === 1, 'CANDIDATE_USER_MESSAGE_NOT_UNIQUE')
@@ -527,7 +552,7 @@ test('isolated production commands persist the selected phase operations', async
           sentSourceIds: sentOptional.map(record => record.sourceId),
           ...(candidate ? { materialDecision } : {}) } }
       receipt.attempts.push(requestReceipt)
-      const physicalOutputPath = path.join(target.isolationRoot, `physical-output-${receipt.attempts.length}.txt`)
+      const physicalOutputPath = path.join(evidenceRoot, `physical-output-${receipt.attempts.length}.txt`)
       // 从 dispatch 起由守护接管：到点会先为这次发送写 unknown，再 abort 下面的 fetch。
       const controller = new AbortController()
       supervisor.watch(attemptId, controller)
@@ -537,9 +562,9 @@ test('isolated production commands persist the selected phase operations', async
         if (request.mode === 'synthetic') receipt.syntheticDispatches++
         else receipt.physicalModelRequests++
         let text
-        if (operationKind === 'directory') text = JSON.stringify({ blueprints: [{ chapterNumber: chapter.number, title: scene.title, role: '开篇',
-          purpose: chapter.brief, keyEvents: chapter.requiredEvents.join('；'), characters: scene.characters,
-          relationships: [], suspenseHook: chapter.oracle?.knowledge ?? '', userGuidance: source.template }] })
+        if (operationKind === 'directory') text = JSON.stringify({ blueprints: (fullRun ? scene.chapters : [chapter]).map(entry => ({ chapterNumber: entry.number, title: scene.title, role: '开篇',
+          purpose: entry.brief, keyEvents: entry.requiredEvents.join('；'), characters: scene.characters,
+          relationships: [], suspenseHook: entry.oracle?.knowledge ?? '', userGuidance: fullRun ? `${source.template}\n本章时点：${entry.oracle.time}` : source.template })) })
         else if (operationKind === 'review') text = syntheticReview(chapter)
         else if (operationKind === 'refine') {
           const current = db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1')
@@ -566,7 +591,7 @@ test('isolated production commands persist the selected phase operations', async
                 description: `${event}已有正文证据。`, evidence: [{ quote: index === 0 ? '核查途中突遇断电，核查受阻。' : REVIEW_FIX }],
               })) })
           }
-        } else text = syntheticDraftText(countUnits, chapter.targetUnits)
+        } else text = syntheticDraftText(countUnits, chapter.targetUnits, fullRun ? chapter.number : 1)
         const promptTokens = Math.max(1, Math.ceil(Buffer.byteLength(JSON.stringify(body.messages), 'utf8') / 4))
         const completionTokens = Math.max(1, Math.ceil(Buffer.byteLength(text, 'utf8') / 4))
         const usage = { prompt_tokens: promptTokens, completion_tokens: completionTokens,
@@ -618,11 +643,11 @@ test('isolated production commands persist the selected phase operations', async
       const sourceDraft = latestDraft()
       let command
       if (operationKind === 'directory') command = new (await load('src/services/workflows/commands/directory.command.ts')).GenerateDirectoryCommand(
-          { mode: 'append', startChapter: chapter.number, count: 1 }, { expectedProjectPath: project.rootPath, novelConfig: config })
+          { mode: 'append', startChapter: chapter.number, count: fullRun ? scene.chapters.length : 1 }, { expectedProjectPath: project.rootPath, novelConfig: config })
       else if (operationKind === 'draft') command = new (await load('src/services/workflows/commands/generate-draft.command.ts')).GenerateDraftCommand(
           readCommittedDraftChapterInfo(db, chapter, project.rootPath, chapterGuidance),
           // 第二章必须由本臂自己的库提供前驱候选（作者前情），不能借另一臂的输出。
-          predecessorReadbacks.some(record => record.marker)
+          fullRun || predecessorReadbacks.some(record => record.marker)
             ? { selectedCandidateDrafts: predecessorReadbacks.map(({ marker, materialContentHash, sourceId, ...record }) => {
                 void marker
                 void materialContentHash
@@ -690,8 +715,8 @@ test('isolated production commands persist the selected phase operations', async
       }
       const result = await command.execute(params)
       await Promise.all(streamSettlements)
-      assert.deepEqual(db.prepare('SELECT chapter_number,title,role,purpose,key_events,characters,user_guidance FROM blueprints WHERE chapter_number>1 ORDER BY chapter_number').all(), authorBlueprints, 'OUTSIDE_RANGE_REWRITTEN')
-      const outputPath = path.join(target.isolationRoot, `${receipt.operations.length + 1}-${operationKind}.${['directory', 'review', 'recheck'].includes(operationKind) ? 'json' : 'txt'}`)
+      if (!fullRun || operationKind !== 'directory') assert.deepEqual(db.prepare('SELECT chapter_number,title,role,purpose,key_events,characters,user_guidance FROM blueprints WHERE chapter_number>1 ORDER BY chapter_number').all(), authorBlueprints, 'OUTSIDE_RANGE_REWRITTEN')
+      const outputPath = path.join(evidenceRoot, `${receipt.operations.length + 1}-${operationKind}.${['directory', 'review', 'recheck'].includes(operationKind) ? 'json' : 'txt'}`)
       fs.writeFileSync(outputPath, typeof result === 'string' ? result : JSON.stringify(result, null, 2))
       const operationReceipt = { operation: operationId, kind: operationKind, returnedHash: sha(result),
         outputHash: sha(result), outputPath, handle: currentContext.mainGenerationRunHandle ?? null }
@@ -737,14 +762,16 @@ test('isolated production commands persist the selected phase operations', async
         confirmation: reviewState.confirmation, revision: reviewState.revision, merge: reviewState.merge,
         recheck: reviewState.recheck }
     }
-    const draft = db.prepare('SELECT d.*,c.body AS content FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC').all(chapter.number)
-    assert.equal(draft.length, 1, 'ACTUAL_DRAFT_NOT_SAVED')
-    const units = countUnits(draft[0].content)
-    recordPersistedDraftObservation(receipt, { chapterNumber: chapter.number, targetUnits: chapter.targetUnits,
-      units, contentHash: sha(draft[0].content) })
-    receipt.saved = { chapterNumber: chapter.number, targetUnits: chapter.targetUnits,
-      draftId: draft[0].id, version: draft[0].version, contentHash: sha(draft[0].content), units,
-      blueprintChapterNumbers: db.prepare('SELECT chapter_number FROM blueprints ORDER BY chapter_number').all().map(row => row.chapter_number) }
+    if (!fullRun || request.operations.some(operation => operation.kind === 'draft')) {
+      const draft = db.prepare('SELECT d.*,c.body AS content FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC').all(chapter.number)
+      assert.equal(draft.length, 1, 'ACTUAL_DRAFT_NOT_SAVED')
+      const units = countUnits(draft[0].content)
+      recordPersistedDraftObservation(receipt, { chapterNumber: chapter.number, targetUnits: chapter.targetUnits,
+        units, contentHash: sha(draft[0].content) })
+      receipt.saved = { chapterNumber: chapter.number, targetUnits: chapter.targetUnits,
+        draftId: draft[0].id, version: draft[0].version, contentHash: sha(draft[0].content), units, persistedBytes: Buffer.byteLength(draft[0].content, 'utf8'),
+        blueprintChapterNumbers: db.prepare('SELECT chapter_number FROM blueprints ORDER BY chapter_number').all().map(row => row.chapter_number) }
+    }
     if (candidate) {
       receipt.ownerTerminal = db.prepare('SELECT a.attempt_id,a.attempt_json,a.usage_receipt_json,g.artifact_json FROM generation_attempts a JOIN generation_artifacts g ON g.attempt_id=a.attempt_id ORDER BY a.rowid').all()
         .map(row => { const usage = JSON.parse(row.usage_receipt_json), artifact = JSON.parse(row.artifact_json)
@@ -752,6 +779,7 @@ test('isolated production commands persist the selected phase operations', async
             purpose: usage.purpose, trustedUsage: usage.result?.usage?.trusted === true,
             artifactId: artifact.artifactId, textHash: sha(artifact.text),
             hasFormalEffect: Boolean(usage.directoryProgress || usage.draftCommit || usage.reviewRevisionEffect) } })
+        .filter(row => receipt.attempts.some(attempt => attempt.binding.actual.attemptId === row.attemptId))
       assert.equal(receipt.ownerTerminal.length, receipt.attempts.length, 'OWNER_ATTEMPT_COVERAGE_MISMATCH')
       for (const attempt of receipt.attempts) {
         const terminal = receipt.ownerTerminal.find(row => row.attemptId === attempt.binding.actual.attemptId)

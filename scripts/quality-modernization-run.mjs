@@ -63,7 +63,7 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
   if (!binding || binding.campaignId !== CAMPAIGN_ID || binding.mode !== campaignMode
     || !['baseline', 'candidate'].includes(binding.arm) || !/^[a-f0-9]{40}$/.test(binding.codeSha)
     || ['sourceHash', 'driverHash', 'parityId'].some(key => !/^[a-f0-9]{64}$/.test(binding[key]))
-    || !['early', 'post-ui'].includes(binding.milestone)) fail('INVALID_CAMPAIGN_BINDING')
+    || !['early', 'post-ui', 'final'].includes(binding.milestone)) fail('INVALID_CAMPAIGN_BINDING')
   // The frozen prefix is authenticated byte-for-byte by its boundary hash. Its old
   // protocol selection and allocation are historical evidence, not input to the
   // current revision, so only the stable envelope is rechecked here.
@@ -73,6 +73,9 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
   if (!phase || !Array.isArray(phase.operations) || !Array.isArray(phase.caseIds)
     || !phase.caseIds.includes(binding.caseId)
     || !phase.operations.some(operation => operation.id === binding.operation)) fail('INVALID_CAMPAIGN_BINDING')
+  if ((binding.phase === 'full') !== (binding.milestone === 'final')
+    || binding.phase === 'full' && !phase.operations.some(operation => operation.id === binding.operation
+      && (operation.kind !== 'directory' || binding.caseId.endsWith('/1')))) fail('INVALID_CAMPAIGN_BINDING')
   if (binding.arm === 'candidate' && (!binding.actual || ['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch']
     .some(key => typeof binding.actual[key] !== 'string' || !binding.actual[key]))) fail('ACTUAL_OWNER_ATTEMPT_REQUIRED')
 }
@@ -242,8 +245,7 @@ export function selectPhase(protocol, phase, milestone = 'early') {
  * 预注册内容。不一致时阻断，而不是跑一个不是预注册的实验。
  */
 export function assertScenarioMatchesProtocol(selection, scenario) {
-  if (!scenario || !Array.isArray(selection.caseIds) || selection.caseIds.length !== 1
-    || selection.caseIds[0] !== scenario.caseId
+  if (!scenario || !isDeepStrictEqual(selection.caseIds, scenario.caseIds ?? [scenario.caseId])
     || !Array.isArray(selection.operations) || selection.operations.length !== scenario.operations.length
     || selection.operations.some((operation, index) => operation.id !== scenario.operations[index].id)
     || (selection.scenarioRevision ?? null) !== (scenario.scenarioRevision ?? null)
@@ -369,7 +371,7 @@ export function updateLedger(file, event, options = {}) {
         ? validateHistoricalLedgerBoundary(rawLedger, historicalBoundary) : 0
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
-      // 未知阶段（例如只有 caseIds、没有 operations 的 full）在这里 fail closed。
+      // 未登记 operations 的阶段在这里 fail closed。
       // 阶段决定首选分配桶：early 阶段用 early*，post-UI 重跑用 postUi*；
       // 同一 slot 的重复发送或已超出计划样本量的发送归入失败/修复余量。
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
@@ -377,8 +379,10 @@ export function updateLedger(file, event, options = {}) {
         const occupied = [...reserved.values()].filter(row => statuses.get(row.attemptId) !== 'cancel')
         const slot = value => `${value.milestone}:${value.phase}:${value.caseId}:${value.arm}:${value.operation}`
         const suffix = { 'early-budget': 'Budget', 'early-context': 'Context', 'early-review': 'Review' }[binding.phase]
-        if (!suffix) fail('INVALID_CAMPAIGN_BINDING')
-        const primary = `${binding.milestone === 'early' ? 'early' : 'postUi'}${suffix}`
+        if (!suffix && binding.phase !== 'full') fail('INVALID_CAMPAIGN_BINDING')
+        const primary = binding.phase === 'full'
+          ? protocol.phases.full.operations.find(operation => operation.id === binding.operation).allocation
+          : `${binding.milestone === 'early' ? 'early' : 'postUi'}${suffix}`
         const repeatedSlot = occupied.some(row => slot(row.binding) === slot(binding))
         const primaryUsed = occupied.filter(row => row.allocation === primary).length
         return !repeatedSlot && primaryUsed < protocol.allocation[primary]
@@ -416,7 +420,7 @@ export const developmentLedgerPath = (root, phase) => path.join(CACHE, `syntheti
 
 export function main(argv) {
   let [command = 'help', ...rest] = argv
-  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <freeze-targets|development-synthetic|baseline-probe|dry-run|early-budget|early-context|early-review|full> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>]; freeze-targets/development-synthetic: --baseline-root <existing worktree> --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
+  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <freeze-targets|development-synthetic|baseline-probe|dry-run|early-budget|early-context|early-review|full> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>]; freeze-targets/development-synthetic: --baseline-root <existing worktree> --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
   if (command.startsWith('--')) { rest = argv; command = 'phase-options' }
   const args = {}
   for (let i = 0; i < rest.length; i++) {
@@ -443,7 +447,7 @@ export function main(argv) {
     const developmentLedger = developmentLedgerPath(prepared.root, phase)
     if (fs.existsSync(developmentLedger)) fail('DEVELOPMENT_LEDGER_COLLISION')
     const result = withLedgerReconciliation(developmentLedger, 'synthetic', () => runProductionPhasePair(prepared.targets, { phase, development: true, mode: 'synthetic', milestone: selection.milestone,
-      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy,
+      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, order: protocol.order,
       ...currentProtocolBinding(),
       semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(prepared.root, 'baseline-templates.json'), ledgerPath: developmentLedger }))
     fs.writeFileSync(path.join(prepared.root, `development-receipt-${phase}.json`), JSON.stringify(result, null, 2))
@@ -458,7 +462,7 @@ export function main(argv) {
     const observations = [inspectTarget(targets.baseline), inspectTarget(targets.candidate)]
     validatePair(targets, observations)
     const phase = command === 'dry-run' ? 'early-budget' : command
-    const selection = selectPhase(protocol, phase, args['--milestone'] || 'early')
+    const selection = selectPhase(protocol, phase, args['--milestone'] || (phase === 'full' ? 'final' : 'early'))
     const scenario = PHASE_SCENARIOS[phase]
     if (!scenario) return { status: 'blocked', code: 'PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED', selection, physicalModelRequests: 0 }
     assertScenarioMatchesProtocol(selection, scenario)
@@ -472,7 +476,7 @@ export function main(argv) {
     // 真实或合成的成对执行失败时先对账：子进程被杀不会执行桥内结算，
     // 只有调用方还活着，这是保证每次发送都有终态的最后一道。
     const result = withLedgerReconciliation(ledgerPath, mode, () => runProductionPhasePair(targets, { phase, mode, milestone: selection.milestone,
-      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy,
+      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, order: protocol.order,
       ...currentProtocolBinding(), semanticPath: path.join(ROOT, protocol.fixturePath),
       templatesPath: path.join(evidenceRoot, 'baseline-templates.json'), ledgerPath }))
     inspectTarget(targets.baseline); inspectTarget(targets.candidate)

@@ -73,7 +73,7 @@ node scripts/quality-modernization-run.mjs dry-run --targets <真实双目标exe
 node scripts/quality-modernization-run.mjs early-budget --targets <双目标> --milestone early
 node scripts/quality-modernization-run.mjs early-context --targets <双目标> --milestone post-ui
 node scripts/quality-modernization-run.mjs early-review --targets <双目标> --milestone post-ui
-node scripts/quality-modernization-run.mjs full --targets <双目标> --milestone final
+node scripts/quality-modernization-run.mjs full --targets <双目标> --milestone final --mode synthetic
 pnpm exec vitest run scripts/__tests__/quality-modernization-run.test.mjs
 ```
 
@@ -81,7 +81,7 @@ help不启动目标。baseline-probe实际运行独立冻结树的既有 `real-p
 
 manifest绑定协议 decision revision 与完整协议字节 hash、实际HEAD、仅src/electron生产实现hash（排除tests/fixtures/stories）、独立scripts/package/lock工具hash、既有driver hash与当前runner adapter hash、四个隔离根及fixture字节hash。排除plugins/DSH、计划/报告/缓存；隔离根必须在本工作树任务cache内，realpath检查防交叉、链接逃逸。双目标不能同HEAD/同实现源hash/同realpath，即使标签不同也拒绝；candidate subjectSha必须等于其实际codeSha，参数/作者素材/格式不等拒绝。两个真实目标均启动探针后dry-run才可报通过。hash是完整性而非签名，恶意修改runner本身不在此资格范围。
 
-schemaVersion=1 的 S00 manifests 保持历史探针行为，formal 阶段仍返回 exit2 `PRODUCTION_COMMAND_DRIVER_NOT_INTEGRATED`。schemaVersion=2 使用下述 S07 默认生产桥。未迁移的 early-context、early-review、full 返回 `PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED`。baseline 生产源码保持原样。
+schemaVersion=1 的 S00 manifests 保持历史探针行为，formal 阶段仍返回 exit2 `PRODUCTION_COMMAND_DRIVER_NOT_INTEGRATED`。schemaVersion=2 的三个 early selector 与 full 使用下述默认生产桥。baseline 生产源码保持原样。
 
 ## S07 默认生产双路径与冻结顺序
 
@@ -118,6 +118,21 @@ node scripts/quality-modernization-run.mjs early-budget --targets .runtime/.cach
 ```
 
 裸 early-budget 不默认发模型，必须显式选择模式。兼容 `--phase early-budget --dry-run` 写法，但 `--protocol` 只接受实际 `docs/research/novel-quality-modernization/protocol.json`；冻结旧 Spec 示例中不存在的 test/fixtures 路径不会被悄悄替换。退出码0只表示自动/合成技术检查成功，不代表质量通过；1表示自动执行失败，2表示前置阻断，3表示已取得可评审产物但仍为 `pending-independent-oracle-review`。真实结果须独立评审原文事件、事实和质量，不能把 runner exit 0、合成正文或字数合格直接记为 C06 PASS。
+
+## Full 连续生产执行
+
+`full` 固定为 `final` milestone，执行登记 `s14b-full-continuous-project-v1`。每场景每臂只 prepare 一个独立物理项目，三章持续重开其原 SQLite 数据库。先完成六次 `三章规划`：场景1 baseline/candidate、场景2 candidate/baseline、场景3 baseline/candidate；每次通过 `GenerateDirectoryCommand` 生成并保存第1至3章蓝图。随后按 protocol.order 的原 seed、caseIds 与九组 armsByChapter 顺序完成十八次 `连续章节正文`。规划分配 `finalPlanning=6`，正文分配 `finalChapters=18`，full 最小物理请求数合计24；重复 slot 仍归失败/重试余量，不重置历史占用。
+
+后章 `GenerateDraftCommand` 读取本臂已保存蓝图；前驱由本臂实际生成并保存的上一章收据指定项目、章节、draftId、version、正文 hash 和字节数，再经生产 `db:draft-get-full` 核验原文。正文通过既有 selectedCandidateDrafts 路径送入提示词，发送前检查真实前章结尾与 candidate 来源绑定。full 不使用 early-context 的作者预置前情或可选旧档，也不使用 early-review 的预置缺陷稿。两臂起始作者资料、模型、模板和 Skill 绑定必须相同；各臂生成后的蓝图和正文允许不同，初始 parity 与逐章前驱证据分别记录。
+
+每次规划、正文有独立请求和收据目录，不覆盖前章输出。失败立即停止后续发送，保留失败与未运行列表；缺章、顺序错配、项目或前驱错绑不能汇总为成功。账本继续逐请求 reserve/dispatch/settle/unknown，调用方对账负责异常终止收口。现有 historicalLedgerBoundary 认证协议更新前的原始前缀；新绑定只适用于新调用，旧账字节、旧 FAIL 与 testedSha 保留。
+
+```powershell
+node scripts/quality-modernization-run.mjs development-synthetic --baseline-root <已登记baseline工作树> --output .runtime/.cache/novel-quality-modernization/full-development-targets.json --scenario full
+node scripts/quality-modernization-run.mjs full --targets <新HEAD冻结双目标> --milestone final --mode real --physical-ledger <现有唯一物理账本绝对路径>
+```
+
+合成路径只验证24次边界、18章落盘及接续，`qualityQualification=not-run`；正式执行仍须满足 S14B 前置，自动结果最高为 `pending-independent-oracle-review`。C16 既有提取6次及 C17/C18 恢复继续4次仍是单独义务，本入口不替代其执行、记账或验收；当前 runner 未登记这两组操作，不得以 full 完成声称它们通过。
 
 ## C16、C17、C18与编辑门
 

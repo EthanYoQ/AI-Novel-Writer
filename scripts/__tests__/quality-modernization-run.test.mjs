@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, currentProtocolBinding, assertProtocolBinding, validateHistoricalLedgerBoundary, validateCampaignBinding, buildFixtureExports, validatePair, selectPhase, assertScenarioMatchesProtocol, reconcileDispatchedAttempts, withLedgerReconciliation, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles, assertFormalTargetCandidateClean, createShortIsolationRoot, assertOwnedIsolationRoot, validatePhysicalLedger, registeredCampaignWorktree, developmentLedgerPath } from '../quality-modernization-run.mjs'
 import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolatedRealModelConfig, PHASE_SCENARIOS, classifyProductionPair,
+  fullExecutionSchedule, classifyFullProduction,
   adjudicateEarlyReviewReferenceNonconformance, EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION,
   readBaselineFailureEvidence, validateEarlyContextSelectionDifference,
   validateEarlyReviewChain, targetUnitsGateEvidence,
@@ -24,6 +25,86 @@ import { countDraftUnits } from '../../src/shared/draft-units'
 const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
 const protocolBinding = currentProtocolBinding()
+
+test('full registers six planning calls and eighteen chapters in frozen alternating order', () => {
+  const scenario = PHASE_SCENARIOS.full
+  assert.ok(scenario, 'FULL_SCENARIO_MISSING')
+  assertScenarioMatchesProtocol(selectPhase(protocol, 'full', 'final'), scenario)
+  assert.equal(protocol.phases.full.operations.find(item => item.kind === 'directory').minimumCalls, 6)
+  assert.equal(protocol.phases.full.operations.find(item => item.kind === 'draft').minimumCalls, 18)
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/full-ledger-test-'))
+  try {
+    const file = path.join(dir, 'synthetic-ledger.jsonl')
+    for (const [index, caseId] of protocol.phases.full.caseIds.entries()) {
+      for (const arm of protocol.order.armsByChapter[index].split(',')) {
+        for (const operation of scenario.operations.filter(item => item.kind === 'draft' || caseId.endsWith('/1'))) {
+          const attemptId = `${arm}:${caseId}:${operation.id}`
+          const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', ...protocolBinding, arm,
+            codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
+            phase: 'full', milestone: 'final', caseId, operation: operation.id,
+            ...(arm === 'candidate' ? { actual: { attemptId, runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch' } } : {}) }
+          updateLedger(file, { type: 'reserve', attemptId, binding }, { campaignMode: 'synthetic' })
+          updateLedger(file, { type: 'dispatch', attemptId }, { campaignMode: 'synthetic' })
+          updateLedger(file, { type: 'settle', attemptId }, { campaignMode: 'synthetic' })
+        }
+      }
+    }
+    const reserves = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse).filter(row => row.type === 'reserve')
+    assert.equal(reserves.filter(row => row.allocation === 'finalPlanning').length, 6)
+    assert.equal(reserves.filter(row => row.allocation === 'finalChapters').length, 18)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('full classification rejects missing chapters, wrong arm predecessors, failed operations and owner drift', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/full-receipt-test-'))
+  try {
+    const schedule = fullExecutionSchedule(protocol.order)
+    assert.deepEqual(schedule.slice(0, 6).map(step => `${step.sceneId}:${step.arm}`),
+      ['场景1:baseline', '场景1:candidate', '场景2:candidate', '场景2:baseline', '场景3:baseline', '场景3:candidate'])
+    assert.deepEqual(schedule.slice(6).map(step => `${step.caseId}:${step.arm}`),
+      protocol.phases.full.caseIds.flatMap((caseId, index) => protocol.order.armsByChapter[index].split(',').map(arm => `${caseId}:${arm}`)))
+    const predecessors = new Map()
+    const results = schedule.map((step, index) => {
+      const projectId = `${step.sceneId}:${step.arm}`, text = `${projectId}:${step.chapterNumber}`, contentHash = hash(text)
+      const outputPath = path.join(dir, `${index}.txt`)
+      fs.writeFileSync(outputPath, text)
+      const actual = { projectId, epoch: 'epoch', runId: `run-${index}`, rootActionId: `root-${index}`, attemptId: `attempt-${index}` }
+      const binding = { ...protocolBinding, invocationId: 'd8f34844-b1dc-4864-9383-ab7b4606d0fc', mode: 'synthetic',
+        arm: step.arm, phase: 'full', milestone: 'final', caseId: step.caseId, operation: step.operation.id,
+        codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
+        ...(step.arm === 'candidate' ? { actual } : { baselineIpc: { ...actual, operationId: step.operation.id } }) }
+      const result = { ...binding, status: 'passed', sceneId: step.sceneId, chapterNumber: step.chapterNumber,
+        projectEpoch: 'epoch', physicalProject: { projectId, parityHash: binding.parityId },
+        operations: [{ operation: step.operation.id, kind: step.operation.kind, outputPath, handle: actual }],
+        attempts: [{ attemptId: `${step.arm}:${actual.attemptId}`, binding }], physicalModelRequests: 0, syntheticDispatches: 1 }
+      if (step.operation.kind === 'draft') {
+        result.draftObservation = { chapterNumber: step.chapterNumber, targetUnits: 900, units: 900, contentHash, persisted: true }
+        result.saved = { ...result.draftObservation, draftId: index + 1, version: 1, persistedBytes: Buffer.byteLength(text) }
+        result.predecessor = predecessors.get(projectId) ?? null
+        predecessors.set(projectId, { projectId, chapterNumber: step.chapterNumber, draftId: index + 1,
+          version: 1, contentHash, persistedBytes: Buffer.byteLength(text) })
+      }
+      return result
+    })
+    const classify = values => classifyFullProduction(values, { mode: 'synthetic', order: protocol.order })
+    assert.equal(classify(results).status, 'passed')
+    assert.equal(classify(results.slice(0, -1)).pairFailure, 'FULL_OPERATION_COVERAGE_MISMATCH')
+    for (const mutate of [
+      copy => { copy[8].predecessor.projectId = 'another-arm' },
+      copy => { copy[8].predecessor.version++ },
+      copy => { copy[8].predecessor.contentHash = 'f'.repeat(64) },
+      copy => { copy[8].status = 'failed' },
+      copy => { copy[8].physicalProject.projectId = 'another-project' },
+      copy => { copy[7].attempts[0].binding.actual.projectId = 'another-project' },
+      copy => { copy[6].attempts[0].binding.baselineIpc.projectId = 'another-project' },
+      copy => { copy[6].attempts[0].binding.milestone = 'early' },
+      copy => { copy[8].saved.draftId = null },
+    ]) {
+      const changed = structuredClone(results); mutate(changed)
+      assert.equal(classify(changed).status, 'failed')
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
 
 function constructReviewSourceFixture() {
   const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
@@ -181,7 +262,7 @@ test('三乘三两臂与原80帽含post-UI备份预留', () => {
   assert.equal(protocol.phases['early-review'].scenarioRevision, 's11-early-review-per-attempt-deadline-v3')
   assert.doesNotThrow(() => assertScenarioMatchesProtocol(selectPhase(protocol, 'early-review'), PHASE_SCENARIOS['early-review']))
   assert.deepEqual(PHASE_SCENARIOS['early-review'].operations.map(item => item.kind), ['review', 'refine', 'recheck'])
-  assert.equal(PHASE_SCENARIOS.full, undefined)
+  assert.doesNotThrow(() => assertScenarioMatchesProtocol(selectPhase(protocol, 'full', 'final'), PHASE_SCENARIOS.full))
   assert.throws(() => selectPhase(protocol, 'full', 'early'), /MISMATCH/)
   assert.ok(source.deterministicCases.C16.length >= 10 && source.deterministicCases.C17.length >= 10)
 })
@@ -292,7 +373,7 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
       `${fixture.slice(repairStart, repairEnd)}\nreturn structuredSyntaxRepair`)
     const checkAuthority = new Function('operationKind', 'candidate', 'request', 'db', 'chapter', 'promptText',
       'preflight', 'authorityFacts', 'predecessorReadbacks', 'naturalPredecessorText', 'scene', 'structuredSyntaxRepair',
-      fixture.slice(checkStart, checkEnd))
+      `const fullRun = request.phase === 'full';\n${fixture.slice(checkStart, checkEnd)}`)
     const readAuthorityEvidence = new Function('operationKind', 'candidate', 'request', 'authorityFacts', 'sha',
       'promptText', 'structuredSyntaxRepair', 'predecessorReadbacks', 'db', 'chapter',
       `return ${fixture.slice(evidenceStart, evidenceEnd).trim().replace(/,$/, '')}`)
