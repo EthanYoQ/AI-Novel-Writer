@@ -49,6 +49,49 @@ function fixture(options: { sameName?: boolean; finalize?: boolean } = {}) {
 }
 
 describe('finalized character identities and derived state in the M02 database', () => {
+  it('replaces older derived state from a fresh same-chapter finalization while rejecting the old context', () => {
+    const f = fixture(), old = f.context()
+    SummaryRepository.commitFinalizedCharacterStates(old, f.response(old, { recentEvents: '旧定稿事件' }), f.db)
+    FinalizationRepository.commit(draft(f.db, 2, 1, `${prose}新定稿。`, 2))
+    const current = SummaryRepository.readFinalizedCharacterContext(2, { ...scope, epoch: 'reopened-session' }, f.db)
+    expect(current.projectionGeneration).toBe(old.projectionGeneration + 1)
+    expect(() => SummaryRepository.commitFinalizedCharacterStates(old, f.response(old, { recentEvents: '迟到旧事件' }), f.db))
+      .toThrow('FINALIZED_CHARACTER_SOURCE_CHANGED')
+    expect(SummaryRepository.commitFinalizedCharacterStates(current, f.response(current, { recentEvents: '新定稿事件' }), f.db)).toMatchObject({ applied: 1 })
+    expect(f.row().cs_recent_events).toBe('新定稿事件')
+    expect(JSON.parse(f.row().cs_provenance as string).recentEvents.sourceOrder).toEqual(current.sourceOrder)
+  })
+
+  it.each(['other-project:0', `${scope.projectId}:00`, `${scope.projectId}:-1`, `${scope.projectId}:0x0`,
+    `${scope.projectId}:9007199254740992`, `${scope.projectId}:2`, 'opaque-epoch'])('rejects unproven prior continuity epoch %s', previousEpoch => {
+    const f = fixture(), old = f.context()
+    SummaryRepository.commitFinalizedCharacterStates(old, f.response(old, { recentEvents: '旧事件' }), f.db)
+    const provenance = JSON.parse(f.row().cs_provenance as string)
+    provenance.recentEvents.sourceOrder.continuityEpoch = previousEpoch
+    f.db.prepare('UPDATE characters SET cs_provenance=? WHERE character_id=?').run(JSON.stringify(provenance), f.ids[0])
+    FinalizationRepository.commit(draft(f.db, 2, 1, `${prose}新定稿。`, 2))
+    const current = SummaryRepository.readFinalizedCharacterContext(2, scope, f.db)
+    expect(() => SummaryRepository.commitFinalizedCharacterStates(current, f.response(current, { recentEvents: '新事件' }), f.db))
+      .toThrow('FINALIZED_CHARACTER_SOURCE_CONFLICT')
+    expect(f.row().cs_recent_events).toBe('旧事件')
+  })
+
+  it('keeps author CAS and author protection after a same-chapter finalization advances continuity', () => {
+    const f = fixture(), old = f.context()
+    SummaryRepository.commitFinalizedCharacterStates(old, f.response(old, { recentEvents: '旧事件' }), f.db)
+    FinalizationRepository.commit(draft(f.db, 2, 1, `${prose}新定稿。`, 2))
+    const current = SummaryRepository.readFinalizedCharacterContext(2, scope, f.db)
+    f.db.prepare('UPDATE characters SET cs_recent_events=?,cs_provenance=? WHERE character_id=?')
+      .run('作者并发事件', JSON.stringify({ recentEvents: { kind: 'author', chapterNumber: 1, revision: 2 } }), f.ids[0])
+    expect(() => SummaryRepository.commitFinalizedCharacterStates(current, f.response(current, { recentEvents: '新提取事件' }), f.db))
+      .toThrow('FINALIZED_CHARACTER_FIELD_CONFLICT')
+    const fresh = SummaryRepository.readFinalizedCharacterContext(2, scope, f.db)
+    SummaryRepository.saveFinalizedContinuity({ draftId: 2, chapterNumber: 1, chapterNotes: '新定稿摘要', facts: [],
+      source: fresh.source, projectionGeneration: fresh.projectionGeneration }, f.db)
+    expect(SummaryRepository.commitFinalizedCharacterStates(fresh, f.response(fresh, { recentEvents: '新提取事件' }), f.db))
+      .toMatchObject({ applied: 0, candidates: [expect.objectContaining({ reason: 'author-protected' })] })
+    expect(f.row().cs_recent_events).toBe('作者并发事件')
+  })
   it.each(['rename', 'name-swap'] as const)('preserves frozen source identities through a later %s', kind => {
     const f = fixture(), before = f.context()
     const receiptBefore = f.db.prepare('SELECT * FROM finalization_outbox').get()

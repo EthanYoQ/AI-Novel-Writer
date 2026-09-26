@@ -48,6 +48,16 @@ const sameProvenance = (a: CharacterStateFieldProvenance, b: CharacterStateField
   a.kind === 'legacy' && b.kind === 'legacy'
   || a.kind === 'author' && b.kind === 'author' && a.chapterNumber === b.chapterNumber
   || a.kind === 'derived' && b.kind === 'derived' && sameSource(a.source, b.source)
+function advancesProjectContinuity(projectId: string, previous: string, current: string): boolean {
+  const prefix = `${projectId}:`
+  const generation = (epoch: string) => {
+    if (!epoch.startsWith(prefix)) return null
+    const value = epoch.slice(prefix.length)
+    return /^(0|[1-9][0-9]*)$/u.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : null
+  }
+  const before = generation(previous), after = generation(current)
+  return before !== null && after !== null && after > before
+}
 export type DerivedPatchDecision = 'apply-derived' | 'already-applied' | 'proposal-required' | 'source-conflict' | 'field-conflict'
 /** Caller recomputes hashes and reads field/authority in the same synchronous commit transaction. */
 export function decideDerivedPatch(current: CharacterFieldSnapshot, patch: DerivedCharacterPatch,
@@ -67,7 +77,9 @@ export function decideDerivedPatch(current: CharacterFieldSnapshot, patch: Deriv
     || previous.chapterNumber !== current.provenance.source.chapterNumber)) return 'source-conflict'
   if (previous && (!previous.continuityEpoch || !Number.isSafeInteger(previous.chapterNumber) || previous.chapterNumber < 1
     || !Number.isSafeInteger(previous.authoritativeFinalizationRevision) || previous.authoritativeFinalizationRevision < 1)) return 'source-conflict'
-  if (previous && (previous.continuityEpoch !== order.continuityEpoch || previous.chapterNumber > order.chapterNumber
+  if (previous && (previous.continuityEpoch !== order.continuityEpoch
+    && !(current.provenance.kind === 'derived' && advancesProjectContinuity(patch.projectId, previous.continuityEpoch, order.continuityEpoch))
+    || previous.chapterNumber > order.chapterNumber
     || previous.chapterNumber === order.chapterNumber && previous.authoritativeFinalizationRevision > order.authoritativeFinalizationRevision)) return 'source-conflict'
   if (current.provenance.kind === 'derived' && sameSource(current.provenance.source, patch.source)
     && current.valueHash === patch.valueHash) return 'already-applied'
