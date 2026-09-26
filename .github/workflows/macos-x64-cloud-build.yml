@@ -90,6 +90,10 @@ jobs:
         run: |
           node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step build-native-secure-helper -- bash -lc 'clang -fobjc-arc -framework Foundation electron/security/darwin-safe-file-system.m -o electron/security/darwin-safe-file-system && chmod +x electron/security/darwin-safe-file-system'
 
+      - name: Resolve macOS test temp directory
+        run: |
+          node -e "const fs = require('node:fs'); const os = require('node:os'); const original = os.tmpdir(); const physical = fs.realpathSync.native(original); fs.appendFileSync(process.env.GITHUB_ENV, 'TMPDIR=' + physical + '\n'); console.log('tempAlias=' + (physical !== original))"
+
       - name: Run test suite
         run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step test-suite -- pnpm test
 
