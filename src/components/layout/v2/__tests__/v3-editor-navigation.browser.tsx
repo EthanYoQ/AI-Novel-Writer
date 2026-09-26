@@ -78,7 +78,7 @@ it('V3 real editor keeps preview, dirty/undo and save through shelf navigation',
     await act(async () => host.querySelector<HTMLButtonElement>('button[title="项目"]')!.click())
     expect(host.querySelector('.cm-editor')).toBe(editor)
     await act(async () => view.focus())
-    await act(async () => userEvent.keyboard('{Control>}z{/Control}'))
+    await act(async () => userEvent.keyboard(/Mac/.test(navigator.platform) ? '{Meta>}z{/Meta}' : '{Control>}z{/Control}'))
     expect(view.state.doc.toString()).toBe(initialBody)
     await act(async () => view.dispatch({ changes: { from: view.state.doc.length, insert: '新句' } }))
     expect(view.state.doc.toString()).toBe(initialBody + '新句')

@@ -47,7 +47,7 @@ afterEach(async () => {
   }
 })
 
-it('V3 narrow titlebar keeps export, new, and open actions hittable', async () => {
+it.each([14, 78])('V3 narrow titlebar keeps export, new, and open actions hittable with %ipx system inset', async systemInset => {
   narrowStoreState = {
     appearance: useAppearanceStore.getState(),
     project: useProjectStore.getState(),
@@ -85,6 +85,11 @@ it('V3 narrow titlebar keeps export, new, and open actions hittable', async () =
     titleBar={<TitleBar />} rail={<span>书脊</span>} sidebar={<span>目录</span>}
     editor={<span>正文</span>} aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>页脚</span>} />))
 
+  // Exercise both reserved system-button widths even on a single host OS.
+  const titlebar = host.querySelector<HTMLElement>('.writer-topbar')!
+  expect(getComputedStyle(titlebar).paddingLeft).toBe(navigator.userAgent.includes('Mac') ? '78px' : '14px')
+  titlebar.style.paddingLeft = `${systemInset}px`
+
   for (const title of ['导出', '新建项目', '打开项目']) {
     const button = host.querySelector<HTMLButtonElement>(`.writer-topbar button[title="${title}"]`)!
     const box = button.getBoundingClientRect()
@@ -103,7 +108,7 @@ it('V3 narrow titlebar keeps export, new, and open actions hittable', async () =
   expect(useLayoutStore.getState()).toMatchObject({ exportOpen: true, newProjectOpen: true })
   expect(invoke).toHaveBeenCalledWith('dialog:select-folder')
 
-  for (const width of [1200, 1280, 1320, 1324, 1325, 1440]) {
+  for (const width of [1200, 1280, 1320, 1324, 1325, 1388, 1389, 1440]) {
     await act(async () => {
       await page.viewport(width, 900)
       host.style.width = `${width}px`
@@ -119,7 +124,7 @@ it('V3 narrow titlebar keeps export, new, and open actions hittable', async () =
       const separated = box.right <= rightControlsLeft
       expect.soft(separated, `${title} overlaps right controls at width ${width}px: right=${Math.round(box.right)}, controls=${Math.round(rightControlsLeft)}`).toBe(true)
       allHittable &&= hittable && separated
-      if (width >= 1325) expect(getComputedStyle(button.querySelector('.writer-topbar-action-label')!).display).not.toBe('none')
+      if (width >= (systemInset === 14 ? 1325 : 1389)) expect(getComputedStyle(button.querySelector('.writer-topbar-action-label')!).display).not.toBe('none')
     }
     if (!allHittable) continue
     await act(async () => {

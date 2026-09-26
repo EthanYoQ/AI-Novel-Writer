@@ -75,7 +75,10 @@ describe('CodeMirror live prose preview', () => {
 
     const content = container.querySelector<HTMLElement>('.cm-content')!
     await act(async () => content.focus())
-    content.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', ctrlKey: true, bubbles: true }))
+    await act(async () => content.dispatchEvent(new KeyboardEvent('keydown', {
+      ...(/Mac/.test(navigator.platform) ? { key: 'ArrowDown', metaKey: true } : { key: 'End', ctrlKey: true }),
+      bubbles: true, cancelable: true,
+    })))
 
     await vi.waitFor(() => {
       expect(container.querySelector('.cm-lp-paperhead')?.textContent).toBe('雨夜长街 · 第一章')

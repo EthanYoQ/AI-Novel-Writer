@@ -23,6 +23,8 @@ const originalProject = useProjectStore.getState()
 const originalBridge = Object.getOwnPropertyDescriptor(window, 'aiNovelAPI')
 const projectPath = 'C:/f05/writer-editor'
 
+const isMac = /Mac/.test(navigator.platform)
+
 let host: HTMLDivElement
 let root: Root
 
@@ -79,7 +81,7 @@ afterEach(async () => {
 it('U06.A01 Writer 正文编辑时实时预览 Markdown，源文本仍完整', async () => {
   const view = await renderChapter('# 雨夜\n\n林岚看见 **灯火**。\n\n雨声渐远。')
   await act(async () => view.focus())
-  await act(async () => userEvent.keyboard('{Control>}{End}{/Control}'))
+  await act(async () => userEvent.keyboard(isMac ? '{Meta>}{ArrowDown}{/Meta}' : '{Control>}{End}{/Control}'))
   await vi.waitFor(() => {
     const heading = host.querySelector<HTMLElement>('.cm-lp-h1')?.cloneNode(true) as HTMLElement | undefined
     heading?.querySelector('.cm-lp-paperhead')?.remove()
@@ -102,7 +104,7 @@ it('U06.A06 Writer Tab 插入两字宽缩进并使用写作字体', async () => 
   const view = await renderChapter('林岚推开窗。')
   const content = host.querySelector<HTMLElement>('.cm-content')!
   await act(async () => view.focus())
-  await act(async () => userEvent.keyboard('{Control>}{Home}{/Control}{Tab}'))
+  await act(async () => userEvent.keyboard(isMac ? '{Meta>}{ArrowUp}{/Meta}{Tab}' : '{Control>}{Home}{/Control}{Tab}'))
   expect.soft(view.state.doc.toString()).toBe('\u2003\u2003林岚推开窗。')
   expect(view.state.selection.main.head).toBe(2)
   expect(getComputedStyle(content).fontFamily).toContain('Georgia')
@@ -122,7 +124,7 @@ it('U06.A07 Writer 字数随正文编辑更新', async () => {
   const view = await renderChapter('林岚 walked.')
   await vi.waitFor(() => expect(host.textContent).toContain('3 字'))
   await act(async () => view.focus())
-  await act(async () => userEvent.keyboard('{Control>}{End}{/Control}又'))
+  await act(async () => userEvent.keyboard(isMac ? '{Meta>}{ArrowDown}{/Meta}又' : '{Control>}{End}{/Control}又'))
   await vi.waitFor(() => {
     expect(view.state.doc.toString()).toBe('林岚 walked.又')
     expect(host.textContent).toContain('4 字')

@@ -99,7 +99,7 @@ it('栏目往返保留同一正文编辑器、选区与 undo 历史', async () =
   await act(async () => {
     returnedNode.querySelector<HTMLElement>('.cm-content')!.dispatchEvent(new KeyboardEvent('keydown', {
       key: 'z',
-      ctrlKey: true,
+      ...(/Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }),
       bubbles: true,
       cancelable: true,
     }))

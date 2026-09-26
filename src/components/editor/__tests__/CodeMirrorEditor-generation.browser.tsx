@@ -112,6 +112,8 @@ describe('CodeMirror editor AI generation boundary', () => {
     await expect.element(page.getByRole('textbox', { name: 'Replace' })).toBeVisible()
 
     await act(async () => page.getByText('Original passage').click({ clickCount: 3 }))
+    // Bubble positioning commits on an animation frame; do not wait for it inside act.
+    await expect.element(page.getByRole('button', { name: 'Refine' })).toBeVisible()
     await act(async () => page.getByRole('button', { name: 'Refine' }).click())
 
     await expect.element(page.getByText('Refine preview')).toBeVisible()
@@ -124,8 +126,8 @@ describe('CodeMirror editor AI generation boundary', () => {
       <CodeMirrorEditor content="原文段落" mode="prose" />,
     ))
 
-    await page.getByText('原文段落').click({ clickCount: 3 })
-
+    await act(async () => page.getByText('原文段落').click({ clickCount: 3 }))
+    await expect.element(page.getByRole('button', { name: '润色' })).toBeVisible()
     await act(async () => page.getByRole('button', { name: '润色' }).click())
 
     await expect.element(page.getByText('生成未完整完成，结果不可应用')).toBeVisible()
@@ -144,6 +146,7 @@ describe('CodeMirror editor AI generation boundary', () => {
     const view = EditorView.findFromDOM(container.querySelector('.cm-editor')!)!
 
     await act(async () => page.getByText('甲乙').click({ clickCount: 3 }))
+    await expect.element(page.getByRole('button', { name: '润色' })).toBeVisible()
     await act(async () => page.getByRole('button', { name: '润色' }).click())
     await act(async () => view.dispatch({ selection: { anchor: 1, head: 2 } }))
 
@@ -170,6 +173,7 @@ describe('CodeMirror editor AI generation boundary', () => {
     const view = EditorView.findFromDOM(container.querySelector('.cm-editor')!)!
 
     await act(async () => page.getByText('甲乙').click({ clickCount: 3 }))
+    await expect.element(page.getByRole('button', { name: '润色' })).toBeVisible()
     await act(async () => page.getByRole('button', { name: '润色' }).click())
     await act(async () => view.dispatch({ changes: { from: 0, insert: '新' } }))
 
@@ -197,6 +201,7 @@ describe('CodeMirror editor AI generation boundary', () => {
     const view = EditorView.findFromDOM(container.querySelector('.cm-editor')!)!
 
     await act(async () => page.getByText('甲乙').click({ clickCount: 3 }))
+    await expect.element(page.getByRole('button', { name: '润色' })).toBeVisible()
     await act(async () => page.getByRole('button', { name: '润色' }).click())
     await act(async () => {
       const requestId = pendingRequestId!
@@ -227,6 +232,7 @@ describe('CodeMirror editor AI generation boundary', () => {
     const view = EditorView.findFromDOM(container.querySelector('.cm-editor')!)!
 
     await act(async () => page.getByText('甲乙').click({ clickCount: 3 }))
+    await expect.element(page.getByRole('button', { name: '润色' })).toBeVisible()
     await act(async () => page.getByRole('button', { name: '润色' }).click())
     await vi.waitFor(() => expect(rejectFirstLease).not.toBeNull())
     await act(async () => page.getByRole('button', { name: '取消' }).click())
@@ -235,6 +241,7 @@ describe('CodeMirror editor AI generation boundary', () => {
       view.dispatch({ selection: { anchor: 0 } })
       view.dispatch({ selection: { anchor: 0, head: 2 } })
     })
+    await expect.element(page.getByRole('button', { name: '润色' })).toBeVisible()
     await act(async () => page.getByRole('button', { name: '润色' }).click())
     await vi.waitFor(() => expect(pendingRequestId).not.toBeNull())
     await act(async () => {
@@ -277,6 +284,7 @@ it('取消调用 main；卸载仅脱离且已交付明确恢复 handle', async (
   const navigation = vi.fn()
   await act(async () => root.render(<CodeMirrorEditor content="甲乙" onGenerationHandle={navigation} />))
   await act(async () => page.getByText('甲乙').click({ clickCount: 3 }))
+  await expect.element(page.getByRole('button', { name: '润色' })).toBeVisible()
   await act(async () => page.getByRole('button', { name: '润色' }).click())
   await vi.waitFor(() => expect(navigation).toHaveBeenCalledTimes(1))
   await act(async () => page.getByRole('button', { name: '取消' }).click())
