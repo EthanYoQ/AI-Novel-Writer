@@ -266,23 +266,67 @@ async function verifySupplement(target, seeded) {
   return { ...seeded, targetKnowledgeCopySha256: sha256(copyPath), knowledgeStatus: 'stale', outboxFrozen: true }
 }
 
+function macStage(stage) {
+  if (!macMode) return
+  receipt.lastStage = stage
+  console.error(`[AI Novel A11] stage=${stage}`)
+}
+
+async function closeMacApplication(app) {
+  macStage('cleanup-start')
+  let timer
+  try {
+    await Promise.race([app.close(), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Mac A11 application cleanup timed out (10000ms)')), 10_000)
+    })])
+    macStage('cleanup-complete')
+  } catch (error) {
+    receipt.cleanupFailure = { message: String(error), stack: error?.stack }
+    macStage('cleanup-failed')
+    console.error(error)
+    try {
+      const child = app.process()
+      if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    } catch (terminationError) {
+      receipt.cleanupFailure.terminationError = String(terminationError)
+      console.error(terminationError)
+    }
+    if (!receipt.failure) throw error
+  } finally { clearTimeout(timer) }
+}
+
 async function launch(roots) {
+  macStage('launch-start')
   const env = { ...process.env, AI_NOVEL_APP_DATA_HOME: roots.canonical,
     AI_NOVEL_LEGACY_SOURCE_HOME: roots.legacy, AI_NOVEL_VELA_HOME: roots.legacy,
     HOME: roots.home, USERPROFILE: roots.home, APPDATA: roots.appData, LOCALAPPDATA: roots.localAppData }
   for (const key of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'AI_NOVEL_SMOKE_OPEN_PROJECT', 'AI_NOVEL_SMOKE_PROJECT_MARKER']) delete env[key]
   const app = await electron.launch({ executablePath: exe, cwd: macMode ? path.dirname(exe) : packageDir,
     args: [`--user-data-dir=${roots.userData}`], env, timeout: 30_000 })
-  const page = await app.firstWindow({ timeout: 30_000 })
-  await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
-  await page.evaluate(() => {
-    const key = 'ai-novel-writer-appearance'
-    const value = JSON.parse(localStorage.getItem(key) ?? '{}')
-    localStorage.setItem(key, JSON.stringify({ ...value, shellPreference: 'writer',
-      revision: Number(value.revision ?? 0) + 1, origin: 'author' }))
-  })
-  await page.reload()
-  return { app, page }
+  try {
+    macStage('electron-created')
+    const page = await app.firstWindow({ timeout: 30_000 })
+    macStage('first-window-ready')
+    await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+    macStage('skin-ready')
+    await page.evaluate(() => {
+      const key = 'ai-novel-writer-appearance'
+      const value = JSON.parse(localStorage.getItem(key) ?? '{}')
+      localStorage.setItem(key, JSON.stringify({ ...value, shellPreference: 'writer',
+        revision: Number(value.revision ?? 0) + 1, origin: 'author' }))
+    })
+    macStage('shell-configured')
+    await page.reload()
+    macStage('launch-ready')
+    return { app, page }
+  } catch (error) {
+    if (macMode) {
+      receipt.failure = { message: String(error), stack: error?.stack }
+      console.error(`[AI Novel A11] failure-stage=${receipt.lastStage}`, error)
+      await closeMacApplication(app)
+    }
+    throw error
+  }
 }
 
 async function home(page) {
@@ -336,20 +380,24 @@ async function quit(app, page, version) {
   app.on('close', () => events.push({ event: 'app-close' }))
   page.on('close', () => events.push({ event: 'page-close' }))
   page.on('crash', () => events.push({ event: 'page-crash' }))
+  macStage('quit-start')
   await app.evaluate(({ BrowserWindow }) => {
     globalThis.__a11WindowCloseEvents = []
     const win = BrowserWindow.getAllWindows()[0]
     win?.on('close', event => globalThis.__a11WindowCloseEvents.push({ event: 'window-close', defaultPrevented: event.defaultPrevented }))
     win?.on('closed', () => globalThis.__a11WindowCloseEvents.push({ event: 'window-closed' }))
   })
+  macStage('quit-main-observed')
   await page.evaluate(() => {
     globalThis.__a11CloseRequests = []
     window.aiNovelAPI.on('window:close-requested', ({ requestId }) => {
       globalThis.__a11CloseRequests.push({ requestId })
     })
   })
+  macStage('quit-renderer-observed')
   const started = Date.now()
   await app.evaluate(({ app }) => { setTimeout(() => app.quit(), 0); return true })
+  macStage('quit-requested')
   let timer
   const result = await Promise.race([exited, new Promise(resolve => { timer = setTimeout(() => resolve(null), 10_000) })])
   clearTimeout(timer)
@@ -372,6 +420,7 @@ async function quit(app, page, version) {
   receipt.exitDiagnostics.push(diagnostic)
   if (!result) throw new Error('Electron did not exit')
   assert.deepEqual(result, { code: 0, signal: null })
+  macStage('quit-complete')
 }
 
 async function verify(source) {
@@ -718,18 +767,22 @@ db.close()`, path.join(target, '.ai-novel', 'project.db')], { encoding: 'utf8' }
 }
 
 async function verifyMac() {
-  const seeded = seedMac()
-  const source = seeded.source
-  const targetParent = path.join(scratch, 'target')
-  fs.mkdirSync(targetParent)
-  const target = path.join(targetParent, 'source-新版副本')
-  const roots = Object.fromEntries(['canonical', 'legacy', 'userData', 'home', 'appData', 'localAppData']
-    .map(key => [key, path.join(scratch, 'run', key)]))
-  for (const directory of Object.values(roots)) fs.mkdirSync(directory, { recursive: true })
   let session
   try {
+    macStage('seed-start')
+    const seeded = seedMac()
+    macStage('seed-ready')
+    const source = seeded.source
+    const targetParent = path.join(scratch, 'target')
+    fs.mkdirSync(targetParent)
+    const target = path.join(targetParent, 'source-新版副本')
+    const roots = Object.fromEntries(['canonical', 'legacy', 'userData', 'home', 'appData', 'localAppData']
+      .map(key => [key, path.join(scratch, 'run', key)]))
+    for (const directory of Object.values(roots)) fs.mkdirSync(directory, { recursive: true })
     session = await launch(roots)
+    macStage('home-start')
     await home(session.page)
+    macStage('home-ready')
     let requestCounts = await observeRequests(session)
     await session.app.evaluate(({ dialog }, { source, targetParent }) => {
       globalThis.__a11Dialogs = []
@@ -745,6 +798,7 @@ async function verifyMac() {
         return { response: 1, checkboxChecked: false }
       }
     }, { source, targetParent })
+    macStage('import-start')
     await session.page.getByRole('button', { name: '导入旧项目副本' }).click()
     await session.page.locator('.writer-project-tree').getByText('合成旧项目', { exact: true })
       .waitFor({ state: 'visible', timeout: 30_000 })
@@ -755,23 +809,28 @@ async function verifyMac() {
     assert.match(targetProjectId, /^[a-f0-9-]{36}$/i, 'Imported project has no new identity')
     assert.notEqual(targetProjectId, seeded.sourceProjectId, 'Imported project reused legacy identity')
     assert(!path.resolve(target).startsWith(`${path.resolve(source)}${path.sep}`), 'Target overlaps source')
+    macStage('import-database-check')
     const database = inspectMacDatabases(source, target)
     for (const name of ['outline.md', '.vela/prompts/author.txt', '.vela/skills/author.md', '创作资料.txt']) {
       const targetName = name.startsWith('.vela/') ? `.ai-novel/${name.slice(6)}` : name
       assert.equal(sha256(path.join(target, targetName)), seeded.files[name], `Author asset changed: ${name}`)
     }
     receipt.steps.push({ stepId: 'v1.1.0-import-open', outcome: 'PASS' })
+    macStage('import-verified')
 
+    macStage('editor-open')
     await session.page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).first().click()
     const editor = session.page.locator('.cm-content[contenteditable="true"]')
     await editor.waitFor({ state: 'visible' })
     const openedBody = await editorBody(editor)
     assert.equal(openedBody.replaceAll('\r\n', '\n'), macBody.replaceAll('\r\n', '\n'))
+    macStage('editor-edit')
     await editor.click()
     await session.page.keyboard.press('ControlOrMeta+A')
     await session.page.keyboard.insertText(macSavedBody)
     assert.equal(await editorBody(editor), macSavedBody)
     await session.page.locator('[role="status"]').filter({ hasText: /^未保存$/ }).last().waitFor({ state: 'visible' })
+    macStage('save-start')
     await session.page.locator('button[title="保存（⌘S）"]').click()
     await session.page.locator('[role="status"]').filter({ hasText: /^已保存$/ }).last().waitFor({ state: 'visible' })
     assert(draftBodies(target).includes(macSavedBody), 'Edited target body was not saved')
@@ -779,15 +838,21 @@ async function verifyMac() {
     assert.deepEqual(inventory(source), seeded.files)
     const importAndSaveRequests = await requestCounts()
     receipt.steps.push({ stepId: 'v1.1.0-target-edit-save', outcome: 'PASS' })
+    macStage('save-verified')
     await quit(session.app, session.page, 'v1.1.0')
     session = null
 
+    macStage('relaunch-start')
     session = await launch(roots)
+    macStage('home-start')
     await home(session.page)
+    macStage('home-ready')
     requestCounts = await observeRequests(session)
+    macStage('reopen-start')
     await session.page.locator('.writer-shelf').getByRole('button', { name: '打开《合成旧项目》' }).click()
     await session.page.locator('.writer-project-tree').getByText('合成旧项目', { exact: true })
       .waitFor({ state: 'visible', timeout: 30_000 })
+    macStage('editor-open')
     await session.page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).first().click()
     const reopenedBody = await editorBody(session.page.locator('.cm-content[contenteditable="true"]'))
     assert.equal(reopenedBody, macSavedBody)
@@ -796,11 +861,18 @@ async function verifyMac() {
     assert.equal(macLlmCalls(target), 0)
     assert.deepEqual(inventory(source), seeded.files)
     receipt.steps.push({ stepId: 'v1.1.0-target-edit-reopen', outcome: 'PASS' })
+    macStage('reopen-verified')
     receipt.mac = { sourceVersion: 'v1.1.0', sourceInventorySha256: seeded.inventorySha256,
       targetInventorySha256: hashText(JSON.stringify(inventory(target))), sourceProjectId: seeded.sourceProjectId,
       targetProjectId, database, sourceBodySha256: hashText(macBody), savedBodySha256: hashText(macSavedBody),
       reopenedBodySha256: hashText(reopenedBody), importAndSaveRequests, reopenRequests }
-  } finally { if (session) await session.app.close() }
+  } catch (error) {
+    receipt.failure = { message: String(error), stack: error?.stack }
+    console.error(`[AI Novel A11] failure-stage=${receipt.lastStage}`, error)
+    throw error
+  } finally {
+    if (session) await closeMacApplication(session.app)
+  }
 }
 
 if (macFixtureOnly) {

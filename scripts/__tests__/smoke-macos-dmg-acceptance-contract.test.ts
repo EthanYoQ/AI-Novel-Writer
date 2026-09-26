@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import vm from 'node:vm'
 import { afterEach, describe, expect, it } from 'vitest'
 import { canonicalPnpmLockfileSha256 } from '../canonical-pnpm-lockfile-hash.mjs'
 import {
@@ -38,6 +39,115 @@ afterEach(() => {
 })
 
 describe('macOS DMG acceptance receipt contract', () => {
+  it.each(['home', 'first-window'])('preserves the original Mac %s failure across bounded cleanup', async (failureAt) => {
+    const source = readRequired(path.join(repositoryRoot, 'scripts/f05-a11-offline-import-journey.mjs'))
+    const stages = source.match(/function macStage\(stage\) \{[\s\S]*?\n\}/)?.[0] ?? ''
+    const cleanup = source.match(/async function closeMacApplication\(app\) \{[\s\S]*?\n\}/)?.[0] ?? ''
+    const verify = source.slice(source.indexOf('async function verifyMac() {'), source.indexOf('\nif (macFixtureOnly) {'))
+    const launch = failureAt === 'first-window'
+      ? source.slice(source.indexOf('async function launch(roots) {'), source.indexOf('\nasync function home(')) : ''
+    const stderr: unknown[][] = []
+    const receipt: { lastStage?: string; failure?: { message: string }; cleanupFailure?: { message: string } } = {}
+    const original = new Error('INJECTED_UI_TIMEOUT')
+    let releaseClose!: () => void
+    let closeEntered = false
+    let settled = false
+    let expire: (() => void) | undefined
+    const killed: string[] = []
+    const cleared: number[] = []
+    const close = new Promise<void>(resolve => { releaseClose = resolve })
+    const ownedApp = {
+      close: () => { closeEntered = true; return close },
+      firstWindow: async () => { throw original },
+      process: () => ({ exitCode: null, signalCode: null, kill: (signal: string) => { killed.push(signal); return true } }),
+    }
+    const run = vm.runInNewContext(`${stages}\n${cleanup}\n${launch}\n(${verify})`, {
+      path, macMode: true, receipt, scratch: 'in-memory-fixture', fs: { mkdirSync() {} },
+      console: { error: (...args: unknown[]) => stderr.push(args) },
+      seedMac: () => ({ source: 'in-memory-source' }),
+      launch: async () => ({ page: {}, app: ownedApp }),
+      electron: { launch: async () => ownedApp }, process: { env: {} }, exe: '/in-memory/app',
+      home: async () => { throw original },
+      setTimeout: (callback: () => void, timeout: number) => { expect(timeout).toBe(10_000); expire = callback; return 1 },
+      clearTimeout: (timer: number) => cleared.push(timer),
+    })
+    const completion = run().then(() => { settled = true }, (error: Error) => { settled = true; return error })
+    try {
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(closeEntered).toBe(true)
+      expect(settled).toBe(false)
+      expect(stderr.some(args => args.includes(original))).toBe(true)
+      expect(receipt.failure?.message).toContain('INJECTED_UI_TIMEOUT')
+      expect(receipt.lastStage).toBe('cleanup-start')
+      expect(stderr.findIndex(args => args.includes(original))).toBeLessThan(
+        stderr.findIndex(args => args[0] === '[AI Novel A11] stage=cleanup-start'),
+      )
+      expect(expire).toBeTypeOf('function')
+      expire!()
+      expect(await completion).toBe(original)
+      expect(receipt.failure?.message).toContain('INJECTED_UI_TIMEOUT')
+      expect(receipt.cleanupFailure?.message).toContain('cleanup timed out')
+      expect(killed).toEqual(['SIGKILL'])
+      expect(cleared).toEqual([1])
+    } finally { releaseClose() }
+    expect(await completion).toBe(original)
+
+    const windowsReceipt = {}
+    const windowsStderr: unknown[] = []
+    vm.runInNewContext(`${stages}\nmacStage('launch-start')`, {
+      macMode: false, receipt: windowsReceipt, console: { error: (value: unknown) => windowsStderr.push(value) },
+    })
+    expect(windowsReceipt).toEqual({})
+    expect(windowsStderr).toEqual([])
+    if (failureAt === 'first-window') {
+      const windowsLaunch = vm.runInNewContext(`${stages}\n(${launch})`, {
+        path, macMode: false, receipt: windowsReceipt, exe: '/in-memory/app', packageDir: '/in-memory',
+        process: { env: {} }, console: { error: (value: unknown) => windowsStderr.push(value) },
+        electron: { launch: async () => ({ firstWindow: async () => { throw original } }) },
+      })
+      await expect(windowsLaunch({})).rejects.toBe(original)
+      expect(windowsReceipt).toEqual({})
+      expect(windowsStderr).toEqual([])
+    }
+  })
+
+  it.each([true, false])('keeps successful Mac work failed when cleanup hangs=%s', async (hangs) => {
+    const source = readRequired(path.join(repositoryRoot, 'scripts/f05-a11-offline-import-journey.mjs'))
+    const stages = source.match(/function macStage\(stage\) \{[\s\S]*?\n\}/)?.[0] ?? ''
+    const cleanup = source.match(/async function closeMacApplication\(app\) \{[\s\S]*?\n\}/)?.[0] ?? ''
+    const verify = source.slice(source.indexOf('async function verifyMac() {'), source.indexOf('\nif (macFixtureOnly) {'))
+    // Run the real catch/finally boundary after a successful main body, without fabricating UI success.
+    const completionBoundary = verify.slice(verify.indexOf('  } catch (error) {'))
+    const receipt: { lastStage?: string; cleanupFailure?: { message: string } } = {}
+    const killed: string[] = []
+    let expire: (() => void) | undefined
+    let releaseClose!: () => void
+    const pendingClose = new Promise<void>(resolve => { releaseClose = resolve })
+    const run = vm.runInNewContext(`${stages}\n${cleanup}\n(async () => { const session = ownedSession; try {\n${completionBoundary})`, {
+      macMode: true, receipt, console: { error() {} },
+      ownedSession: { app: { close: () => hangs ? pendingClose : Promise.resolve(),
+        process: () => ({ exitCode: null, signalCode: null, kill: (signal: string) => { killed.push(signal); return true } }),
+      } },
+      setTimeout: (callback: () => void, timeout: number) => { expect(timeout).toBe(10_000); expire = callback; return 1 },
+      clearTimeout() {},
+    })
+    const completion = run().then(() => 'PASS', (error: Error) => error.message)
+    try {
+      await new Promise(resolve => setTimeout(resolve, 0))
+      if (hangs) {
+        expect(expire).toBeTypeOf('function')
+        expire!()
+        expect(await completion).toContain('cleanup timed out')
+        expect(receipt.cleanupFailure?.message).toContain('cleanup timed out')
+        expect(killed).toEqual(['SIGKILL'])
+      } else {
+        expect(await completion).toBe('PASS')
+        expect(receipt.lastStage).toBe('cleanup-complete')
+        expect(killed).toEqual([])
+      }
+    } finally { releaseClose() }
+  })
+
   it('seeds a synthetic v1.1 project with readable committed WAL and author files', () => {
     const scratchParent = path.join(repositoryRoot, '.runtime', '.cache')
     mkdirSync(scratchParent, { recursive: true })
