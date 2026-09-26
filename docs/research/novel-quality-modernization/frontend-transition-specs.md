@@ -1,10 +1,12 @@
-# 当前剩余规格：核心收尾与 V3 时尚杂志接入
+# 现行变更规格：核心收尾与 V3 时尚杂志接入
+
+本文件拥有已接受的前端与交付合同修订；全部 34 项原 Spec 的适用关系见[现行审查索引](current-spec-index.md)。它不是剩余任务清单，实际进度读唯一私有当前检查点。
 
 基础规格于 2026-09-22 双审通过，见[审计记录](frontend-transition-audit-2026-09-22.md)。2026-09-24 用户授权的 A11 完整项目导入与 U06 编辑交互修订单独定向审计，状态见[实施计划](frontend-transition-plan.md)，不沿用旧审计结论。视觉仍为 PR #262 V3 时尚杂志；替代范围见[交付 delta](delivery-contract-delta-2026-09-21.md)，未明确替代的合同继续有效。
 
 ## 范围与固定决定
 
-- 原未完成：F05、S13、S14A、S14B、S14C、S14D、R01、G02，共八个。F04 仅重开前端移植，因此现有 ID 下共九个剩余工作包；G01 贯穿，不新增编号。状态由唯一私有检查点管理，冻结包不回填。
+- 本次变更覆盖 F04、F05、S13、S14A–D、R01、G02，G01 贯穿；同时明确 S04/F03 的旧项目导入和 F01/F02 的呈现兼容。这里的覆盖数不代表当前未完成数；其余原 Spec 的义务与已接受修订见现行审查索引，冻结包不回填状态。
 - 视觉来源固定为 [PR #262](https://github.com/EthanYoQ/AI-Novel-Writer/pull/262) 的 `0044be619f5e7c6abd6d0d000a6d6909eb984931`，采用 **V3 时尚杂志**，不是 donor V2 或当前重构版 Writer。PR 注释与默认值不一致，必须显式选择 V3。换 donor SHA 须说明差异交顾问决定。
 - `writer` 继续表示本项目唯一产品壳，V3 是目标呈现；不新增并行 V1/V2/V3 产品切换。Classic 仅用于隔离历史 baseline 和旧偏好迁移。作者字体、主题、缩放、图片皮肤与项目数据不得因换壳丢失。
 - 以当前重构内核为业务基础。禁止整体 merge/cherry-pick donor 或覆盖同名 store、controller、database；不顺带纳入 donor 新世界观库、Skill 导入等额外业务。没有当前业务接缝的 donor 功能记录差异，由顾问处理，不能假接按钮或自行扩项。
@@ -78,13 +80,15 @@
 
 一次必要全量 unit/browser、静态检查、构建及缺失的关键原生集成；独立审查聚焦跨切片接口、共享入口和未覆盖差异，不重审无新变更关闭项。核心定点通过不冒充最终集成。
 
-版本、默认、package/lock、release、质量/迁移 driver 就绪后，冻结实际 subjectSha、产物、双目标配置并实际 dry-run/parity。可执行 CLI 以当前 quality-protocol 为准，不照抄旧 Spec 失效命令。
+版本、默认、package/lock、release、质量/迁移 driver 就绪后，冻结实际 subjectSha、产物、双目标配置并实际 dry-run/parity。可执行 CLI 以当前 quality-protocol 为准，不照抄旧 Spec 失效命令。S00 原必交的完整实验驱动须在最终阶段冻结前接好：复用已有 runner/bridge、真实生产命令和唯一物理账本，不能以 help 能识别 `full` 或 early-budget 局部 dry-run 代替完整阶段可运行。可先独立完成驱动的零模型验证；修改后按实际消费者影响更新对应冻结，旧阶段有效证据仍保留原 testedSha。
 
 后续按消费者决定资格失效范围，保留 testedSha、变更及沿用理由；新包仍须自身代码/构建/安装/启动/hash 证据。影响不明就扩大对应验证，不能以填完 JSON 代替审查。
 
 ## S14B — 写作质量与 post-UI
 
 在 S14A 冻结候选及真实可运行 baseline 上，保留三场景×三章×双臂共 18 章、oracle、独立盲评；post-UI budget/context/review 共用配置准备与 dry-run。案例语义、触发及全部断言重合才复用真实样本，其余固定案例仍执行；不得绕过实际 command/IPC 取得结果。
+
+**完整阶段的接线与执行边界**：三场景各两臂使用六个隔离项目，每个项目只准备一次；完成原计划的六次规划和十八章正文，每臂后章读取本臂真实已保存前章，保留身份、hash 与来源。沿用 protocol.json 的既定 seed、逐章两臂顺序、材料及预算分配，不通过循环单章 pair、每次重建项目或预置作者前情冒充连续创作。post-UI 与最终样本的操作、前驱、触发、全部断言及独立评审都相符才可复用，同 case ID 不足以证明等价。只补现有驱动及必要协议分派，不新建实验平台。离线接线通过不授权越过现存正式质量阻断或增加抽样；历史 FAIL 不能由其他场景 PASS 冲销。
 
 quality-protocol/protocol.json 继续拥有 candidate ±30%、draft-units v3、参考臂裁决、事实/事件/复述/自然度规则；80 是计划额，不是硬帽。旧 baseline 原代码、唯一物理账本、失败/unknown/重试保留，移植不换已批准 provider、样本或评分。
 

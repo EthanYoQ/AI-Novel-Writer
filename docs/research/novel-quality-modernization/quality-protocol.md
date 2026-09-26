@@ -1,10 +1,10 @@
 # 中文质量预注册：Program v3 S00
 
-状态：现行 revision 为 `draft-units-tolerance-30-v1`（2026-09-20 用户决定）。机器协议见 [`protocol.json`](protocol.json)，本文件负责解释执行规则与冻结合同的显式取代关系。S10B/S11 的历史场景、失败和加性裁决保留各自版本；完成状态见[日期化交接](../../handoffs/2026-09-20-program-v3-s11-pause-handoff.md)，不由本实验说明维护进度。合成验证、真实模型结果与文学质量结论分开记录。
+字数 decision revision 为 `draft-units-tolerance-30-v1`（2026-09-20 用户决定）；完整机器协议及其他 revision 见 [`protocol.json`](protocol.json)。本文件负责解释执行规则与冻结合同的显式取代关系。S10B/S11 的历史场景、失败和加性裁决保留各自版本；[日期化交接](../../handoffs/2026-09-20-program-v3-s11-pause-handoff.md)只证明当时状态，当前进度读唯一私有当前检查点。全部 Spec 的适用关系见[现行索引](current-spec-index.md)。合成验证、真实模型结果与文学质量结论分开记录。
 
 ## 现行交付顺序与复用
 
-[现行剩余规格](frontend-transition-specs.md)与[实施计划](frontend-transition-plan.md)区分核心可交接和最终产品资格：当前弃用 Writer 不再收齐旧 F05，核心工作与 PR #262 V3 接入可按依赖推进。新 V3 的 F04 完成、F05 确定性 Final 及 S13 完整清理后，S14A 才冻结最终候选。三份 post-UI 在冻结后与 S14B 共用配置核验和实际双臂零模型 dry-run；在最终汇合前保持待资格，不能提前写 F05 整体 PASS。核心里程碑不代替模型、升级或发布门。
+[现行变更规格](frontend-transition-specs.md)与[实施计划](frontend-transition-plan.md)区分核心可交接和最终产品资格：当前弃用 Writer 不再收齐旧 F05，核心工作与 PR #262 V3 接入可按依赖推进。新 V3 的 F04 完成、F05 确定性 Final 及 S13 完整清理后，S14A 才冻结最终候选。三份 post-UI 在冻结后与 S14B 共用配置核验和实际双臂零模型 dry-run；在最终汇合前保持待资格，不能提前写 F05 整体 PASS。核心里程碑不代替模型、升级或发布门。
 
 post-UI 样本只在固定案例的触发条件、断言、两臂原始产物及独立评审完整覆盖最终案例时复用；逐 case 记录原 receipt、实际 `testedSha` 和断言对应。未覆盖案例照常执行。原始失败、物理账本和历史结论不改写；仅因文档变化不重跑模型。相关代码、配置或 driver 变化按实际影响重新资格。
 

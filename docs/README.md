@@ -1,6 +1,6 @@
 # 项目文档导航与治理约定
 
-本目录保存可随代码审查、发布和长期维护的项目文档。不同 Worktree 是独立的代码与文档快照；只有当前分支中已跟踪的文件能作为该分支的文档证据，不能把其他 Worktree 的未提交材料当成当前事实。
+本目录保存可随代码审查、发布和长期维护的项目文档。不同 Worktree 是独立快照，提交态文档绑定其实际 SHA；用户授权的工作区规格增量可供本次审查，但须记录来源、内容 hash 和未提交状态。不能把其他 Worktree 的材料或尚未提交的修订说成当前提交/远端已包含的事实。
 
 [`handoffs/2026-09-05-astra-code-review.md`](handoffs/2026-09-05-astra-code-review.md) 是固定到提交 `7ea4d96` 的历史审查快照，记录当时的比较基线、实现提交、两批开发历史、Bug 台账、真实验收和审查顺序；后续审查必须以当前分支代码和测试为准，不能把该快照或其他 README、ADR、旧 handoff 单独当作当前行为证据。
 
@@ -28,8 +28,8 @@
 
 ## Program v3 开发入口
 
-1. [当前实施计划](research/novel-quality-modernization/frontend-transition-plan.md)：核心收尾、PR #262 V3 接入与最终资格的执行顺序；先核对其审计状态。
-2. [当前剩余规格](research/novel-quality-modernization/frontend-transition-specs.md)：原八个未完成 Spec 加 F04 局部重开；G01 贯穿。新执行线程从这里读取目标。
+1. [全部 34 项现行 Spec 索引](research/novel-quality-modernization/current-spec-index.md)：开发及代码审查的统一入口，逐项连接原合同和现行替代；原 Spec 的 NOT STARTED 不代表当前进度。
+2. [当前实施计划](research/novel-quality-modernization/frontend-transition-plan.md)与[现行变更规格](research/novel-quality-modernization/frontend-transition-specs.md)：核心收尾、V3 接入与最终资格的依赖和出口。审计结论只覆盖各自日期的合同；实际进度读唯一私有当前检查点。
 3. [交付 delta](research/novel-quality-modernization/delivery-contract-delta-2026-09-21.md)：明确替代冻结合同哪些条款；[执行规则](agents/delivery.md)管理 Skills、调试和审查。
 4. [冻结 Program v3](plans/novel-quality-program-v3-2026-09-13/00-START-HERE.md)：34 节点原合同与未被替代的核心要求；其 DAG/NOT STARTED 不代表当前调度或状态。
 5. [实施证据索引](research/novel-quality-modernization/evidence-index.md)与[质量协议](research/novel-quality-modernization/quality-protocol.md)：历史证据与现行实验规则分开，历史 PASS 不自动成为新前端资格。

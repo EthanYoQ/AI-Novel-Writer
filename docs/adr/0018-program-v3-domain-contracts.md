@@ -1,5 +1,7 @@
 # Program v3 的共享契约与分阶段接入
 
+阅读边界：本文的“尚未接入/尚未安装”及依赖 SHA 是 S01 决策时的实现快照，不是当前进度。领域边界继续有效；全部现行适用关系见[Spec 索引](../research/novel-quality-modernization/current-spec-index.md)。原 80 次实验硬帽已由 [ADR 0019](0019-remove-real-call-hard-cap.md)取消，计划分配和逐请求记账保留；下文末尾的历史预算声明不再拥有当前执行上限。
+
 2026-09-24 部分取代：[ADR 0020](0020-legacy-project-copy-import.md) 将旧项目兼容改为新目录完整副本导入；下文 project-storage 的源侧 journal/原地隔离要求不再用于该路径，其余领域与 C17 边界保留。
 
 状态：S01领域类型与纯拒绝检查；尚未接入生产运行。依赖S00 `657ce4aa5f2e13dda4be222e256cd3faaecc9559`，S00测试入口集成 `b90b91961bd301e271f8198280c7494f6534186c`。本ADR扩充0017，不废除定稿/outbox、项目租约、Writing Skill与剧情树边界。新类型不创建数据库、IPC、网络、后台工作或第二事实源。
