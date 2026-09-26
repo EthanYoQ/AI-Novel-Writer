@@ -442,7 +442,9 @@ export class GenerationRunRepository {
     }
     listCandidates(): VisibleArtifact[] {
         const rows = this.db().prepare("SELECT attempt_id FROM generation_artifacts WHERE status!='discarded' ORDER BY rowid").all() as { attempt_id: string }[];
-        return rows.map(row => this.receipt(row.attempt_id).artifact!);
+        // Portable history keeps visible text but has no current execution receipt.
+        return rows.filter(row => !this.isFrozen('generation_attempts', row.attempt_id))
+            .map(row => this.receipt(row.attempt_id).artifact!);
     }
     discardCandidate(artifactId: string): void { this.db().prepare("UPDATE generation_artifacts SET status='discarded' WHERE artifact_id=?").run(artifactId); }
 }

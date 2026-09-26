@@ -9,6 +9,7 @@ import {
   closeProjectDatabase,
   createProjectDatabase,
   getCurrentProjectPath,
+  getProjectDb,
   initProjectDatabase,
 } from '../../database'
 import { BlueprintRepository } from '../../repositories/blueprint-repository'
@@ -31,6 +32,16 @@ import { readPortableRuntimeFreeze } from '../portable-runtime-freeze'
 import { createProjectArchiveRoundtripFixture } from '../../../test/desktop/project-archive.fixture'
 import { readDocumentCopy } from '../../knowledge-base'
 import { captureGenerationKnowledge } from '../generation-knowledge-source'
+import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
+import { createGenerationRunService, type GenerationRunServiceDependencies } from '../generation-run-service'
+import { createMainGenerationOwner } from '../main-generation-owner'
+import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
+import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
+import { MAIN_GENERATION_POLICY } from '../main-generation-plan'
+import { generationOutputContract } from '../../../src/shared/generation-owner-contract'
+import { getBuiltinPromptTemplate } from '../../../src/services/builtin-prompt-templates'
+import { readBuiltinWritingSkill } from '../../../src/shared/builtin-writing-skills'
+import type { ModelProfile } from '../../../src/shared/ipc-channels'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
@@ -191,6 +202,59 @@ afterEach(() => {
 })
 
 describe('portable project restore service', { timeout: 20_000 }, () => {
+  it('admits first new generation after restoring frozen artifacts without treating history as current candidates', async () => {
+    const f = fixture(), source = new Database(path.join(f.sourceStorage, 'project.db'))
+    const h = textHash('source'), fingerprint = { chapterBriefHash: h, authorGuidanceHash: h, dependencyHash: h,
+      contextSnapshotHash: h, templateHash: h, skillSnapshotHash: h, modelLeaseRevision: h, policyHash: h, outputContractHash: h }
+    const service = createGenerationRunService({ repository: new GenerationRunRepository(() => source), dispatch: async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: '必须保留的历史候选正文。' })
+      return { usage: null, finishReason: 'stop' }
+    } })
+    const prior = service.open({ projectId: f.sourceProjectId, epoch: 'source-lease', operation: 'write', uiActionNonce: 'source',
+      frozenInputHash: h, fingerprint, contextSnapshotId: 'source', sourceManifest: { kind: 'fixture' }, sourceRefs: [],
+      budget: { maxPhysicalRequests: 2, maxTokenLiability: 500, maxOutputPerRequest: 100, maxActiveElapsedMs: 10000 } })
+    const historical = await service.execute({ runId: prior.runId, invocationNonce: 'source-call', requestHash: h, providerRequest: {},
+      reservedTokens: 200, requestedOutputTokens: 100, inputUpperBoundTokens: 90, reasoningUpperBoundTokens: 0,
+      usagePolicy: { estimatorVersion: 'fixture', safetyMarginTokens: 10, reasoning: 'included-in-completion', canBoundTotalLiability: true } })
+    source.prepare("INSERT INTO blueprints(chapter_number,title) VALUES(2,'下一章')").run()
+    source.close()
+    await exportPortableProject(exportInput(f))
+    const restored = await restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })
+    initProjectDatabase(f.targetRoot)
+    const db = getProjectDb()!, freeze = readPortableRuntimeFreeze(f.targetRoot)
+    const oldRow = db.prepare('SELECT * FROM generation_artifacts WHERE attempt_id=?').get(historical.attempt.attemptId)
+    expect(db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(historical.attempt.attemptId)).toBeNull()
+    expect(freeze.isFrozen('generation_attempts', historical.attempt.attemptId)).toBe(true)
+    const model: ModelProfile = { id: 'model', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1',
+      apiKey: 'synthetic', baseUrl: 'https://api.openai.com/v1', temperature: 0.7, maxTokens: 2048, purposes: ['generation'] }
+    const projectId = restored.targetProjectId, epoch = 'restored-new-session'
+    const dependencies = { db, projectStorageRoot: path.join(f.targetRoot, '.ai-novel'), globalDataRoot: f.base,
+      readBuiltinPrompt: (key: string, language: 'zh-CN' | 'en-US') => JSON.stringify(getBuiltinPromptTemplate(key, language)), readBuiltinSkill: readBuiltinWritingSkill }
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: '恢复后首次新生成。' }); return { usage: null, finishReason: 'stop' }
+    })
+    const owner = createMainGenerationOwner({ database: db, projectId, epoch, assertCurrent: () => undefined,
+      leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch,
+      buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(dependencies, { ...selection, projectId, epoch,
+        modelReceipt, policy: MAIN_GENERATION_POLICY, outputContract: generationOutputContract(selection) }).binding,
+      rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(dependencies, previous, epoch, modelReceipt, MAIN_GENERATION_POLICY).binding })
+    const next = owner.begin({ operation: 'chapter-draft', uiActionNonce: 'new', modelId: model.id, chapterNumber: 2,
+      selectedDraftIds: [], selectedFinalizedDraftIds: [2], promptKeys: ['next_chapter_draft'], skillStages: [], output: 'visible-text' })
+    expect(next.handle.projectId).toBe(projectId)
+    expect(next.candidates).toEqual([])
+    expect(dispatch).not.toHaveBeenCalled()
+    await expect(owner.resume({ projectId: f.sourceProjectId, epoch: 'source-lease', rootActionId: prior.rootActionId, runId: prior.runId }))
+      .rejects.toThrow('GENERATION_RUN_IDENTITY_MISMATCH')
+    const result = await owner.execute({ handle: next.handle, invocationNonce: 'new-call', task: { purpose: 'chapter-draft', output: 'visible-text',
+      messages: [{ role: 'user', content: '继续故事。' }] } })
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    expect(result.run.candidates?.map(item => item.text)).toEqual(['恢复后首次新生成。'])
+    expect(db.prepare('SELECT * FROM generation_artifacts WHERE attempt_id=?').get(historical.attempt.attemptId)).toEqual(oldRow)
+    expect(JSON.parse((oldRow as { artifact_json: string }).artifact_json).text).toBe('必须保留的历史候选正文。')
+    db.prepare('UPDATE generation_attempts SET usage_receipt_json=NULL WHERE attempt_id=?').run(result.run.candidates![0].attemptId)
+    expect(() => owner.read(next.handle)).toThrow()
+    owner.suspendForProjectClose()
+  })
   it.each([
     { name: 'stale edited copy', dirty: true, indexed: '旧索引文字', content: '已编辑的完整项目副本' },
     { name: 'rebuilt edited copy', dirty: false, indexed: '已编辑的完整项目副本', content: '已编辑的完整项目副本' },
