@@ -250,7 +250,7 @@ export default function TitleBar() {
 
         <span className="writer-topbar-project-label text-xs font-semibold opacity-90 whitespace-nowrap">{t('project.currentLabel')}</span>
         <button
-          className="writer-command-button max-w-[280px]"
+          className="writer-command-button min-w-0 max-w-[280px]"
           title={t('project.switch')}
           onClick={handleOpenProject}
         >

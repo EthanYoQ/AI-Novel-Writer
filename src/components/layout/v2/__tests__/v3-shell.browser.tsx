@@ -47,7 +47,10 @@ afterEach(async () => {
   }
 })
 
-it.each([14, 78])('V3 narrow titlebar keeps export, new, and open actions hittable with %ipx system inset', async systemInset => {
+it.each([
+  [14, 'U11'], [78, 'U11'],
+  [14, '雨夜来信的长篇小说项目'], [78, '雨夜来信的长篇小说项目'],
+] as const)('V3 narrow titlebar keeps export, new, and open actions hittable with %ipx system inset and project %s', async (systemInset, projectName) => {
   narrowStoreState = {
     appearance: useAppearanceStore.getState(),
     project: useProjectStore.getState(),
@@ -80,7 +83,7 @@ it.each([14, 78])('V3 narrow titlebar keeps export, new, and open actions hittab
     once: vi.fn(), send: vi.fn(),
   } })
   useAppearanceStore.setState({ resolvedShell: 'writer' })
-  useProjectStore.setState({ currentProject: { id: 'narrow', name: 'U11', path: 'C:/narrow', sessionLease: 'narrow', novelConfig: {} } as never })
+  useProjectStore.setState({ currentProject: { id: 'narrow', name: projectName, path: 'C:/narrow', sessionLease: 'narrow', novelConfig: {} } as never })
   await act(async () => root.render(<ShellV2 theme="paper"
     titleBar={<TitleBar />} rail={<span>书脊</span>} sidebar={<span>目录</span>}
     editor={<span>正文</span>} aiPanel={<span>助手</span>} bottom={<span>任务</span>} statusBar={<span>页脚</span>} />))
@@ -89,6 +92,8 @@ it.each([14, 78])('V3 narrow titlebar keeps export, new, and open actions hittab
   const titlebar = host.querySelector<HTMLElement>('.writer-topbar')!
   expect(getComputedStyle(titlebar).paddingLeft).toBe(navigator.userAgent.includes('Mac') ? '78px' : '14px')
   titlebar.style.paddingLeft = `${systemInset}px`
+  const projectButton = titlebar.querySelector('.truncate')!.parentElement as HTMLButtonElement
+  await expect.element(projectButton).toHaveAccessibleName(projectName)
 
   for (const title of ['导出', '新建项目', '打开项目']) {
     const button = host.querySelector<HTMLButtonElement>(`.writer-topbar button[title="${title}"]`)!
@@ -104,6 +109,7 @@ it.each([14, 78])('V3 narrow titlebar keeps export, new, and open actions hittab
     host.querySelector<HTMLButtonElement>('.writer-topbar button[title="新建项目"]')!.focus()
     await userEvent.keyboard('{Enter}')
     await page.getByRole('button', { name: '打开项目' }).click()
+    await page.getByRole('button', { name: projectName, exact: true }).click()
   })
   expect(useLayoutStore.getState()).toMatchObject({ exportOpen: true, newProjectOpen: true })
   expect(invoke).toHaveBeenCalledWith('dialog:select-folder')
@@ -115,6 +121,9 @@ it.each([14, 78])('V3 narrow titlebar keeps export, new, and open actions hittab
     })
     let allHittable = true
     const rightControlsLeft = host.querySelector<HTMLElement>('.writer-topbar > div:last-child')!.getBoundingClientRect().left
+    const projectBox = projectButton.getBoundingClientRect()
+    expect(projectBox.width).toBeGreaterThan(22) // Keep text space beyond the existing padding and border.
+    expect(projectButton.contains(document.elementFromPoint(projectBox.left + projectBox.width / 2, projectBox.top + projectBox.height / 2))).toBe(true)
     for (const title of ['导出', '新建项目', '打开项目']) {
       const button = host.querySelector<HTMLButtonElement>(`.writer-topbar button[title="${title}"]`)!
       const box = button.getBoundingClientRect()
