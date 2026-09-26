@@ -23,7 +23,7 @@ import type {
   GenerationTask,
 } from '../../../generation/generation-harness'
 import { EN_US_BUILTIN_PROMPTS } from '../../../prompt-language'
-import { BUILTIN_PROMPTS } from '../../../prompt-templates'
+import { BUILTIN_PROMPTS, clearProjectCustomPrompts } from '../../../prompt-templates'
 import { composeDraftVisibleContinuation, DRAFT_VISIBLE_TEXT_VERSION } from '../../../../shared/draft-visible-text'
 import { appendVisibleTextContinuation } from '../../bounded-completion'
 import {
@@ -320,6 +320,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    clearProjectCustomPrompts()
     useProjectStore.setState({ currentProject: null })
   })
 
@@ -383,11 +384,20 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       [key: string]: unknown
     }>
     sourceDraft?: { id: number; version: number }
+    customDraftTemplate?: typeof BUILTIN_PROMPTS[number]
   }) {
     let recoveryCandidateSequence = 0
     const invoke = vi.fn(async (channel: string, ...args: unknown[]): Promise<unknown> => {
       if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
-      if (channel === 'fs:check-exists' && String(args[0]).endsWith('/.ai-novel/prompts')) return false
+      if (channel === 'fs:check-exists' && String(args[0]).endsWith('/.ai-novel/prompts')) return Boolean(options.customDraftTemplate)
+      if (channel === 'fs:list-dir' && options.customDraftTemplate) return [{
+        isDir: false,
+        name: `${options.customDraftTemplate.key}.${options.customDraftTemplate.writingLanguage}.json`,
+        path: `${projectPath}/.ai-novel/prompts/${options.customDraftTemplate.key}.${options.customDraftTemplate.writingLanguage}.json`,
+      }]
+      if (channel === 'fs:read-file' && options.customDraftTemplate) return {
+        success: true, content: JSON.stringify(options.customDraftTemplate),
+      }
       if (channel === 'db:project-core-get') {
         return {
           premise: options.premise ?? '故事前提',
@@ -1065,32 +1075,38 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       writingLanguage: 'zh-CN' as const,
       heading: '【本章执行卡（作者原文重列）】',
       labels: ['必需事件', '章节钩子', '作者本章指导'],
+      semanticChecks: ['按作者原文含义遵循', '正文动作或结果落实', '叙述约束', '不要仅为证明遵守而新增或反复确认', '按原文揭示时点', '作者明确要求的动作、揭示或反复仍按原文执行'],
     },
     {
       writingLanguage: 'en-US' as const,
       heading: '[Current-chapter execution card (author text repeated verbatim)]',
       labels: ['Required events', 'Chapter hook', 'Author guidance for this chapter'],
+      semanticChecks: ['Follow the author text according to its meaning', 'manuscript action or outcome', 'narrative constraints', 'do not add or repeatedly confirm', 'reveal timing specified by the author', 'explicitly requested actions, reveals, or repetition'],
     },
-  ])('places a $writingLanguage verbatim execution card immediately before the length contract', async ({
+  ].flatMap(language => [1, 2].map(chapterNumber => ({ ...language, chapterNumber }))))('places a $writingLanguage chapter $chapterNumber semantic execution card immediately before the length contract', async ({
     writingLanguage,
     heading,
     labels,
+    semanticChecks,
+    chapterNumber,
   }) => {
     let observedTask: GenerationTask | undefined
     const runtime = fakeRuntime((_attempt, task) => {
       observedTask = task
       return outcome('正'.repeat(900), 'stop')
     })
-    const keyEvents = '顾弦把潮印实际交给陆霁。'
-    const suspenseHook = '门后传来记录机倒带声。'
-    const userGuidance = '四拍灯码暂时只有陆霁知道。'
+    const keyEvents = '顾弦把潮印实际交给陆霁。潮印此后由陆霁保管。'
+    const suspenseHook = '本章只听到记录机倒带声；第二章才揭示来源。'
+    const userGuidance = '四拍灯码暂时只有陆霁知道；不要让她重复解释；用克制语气叙述。'
     const { context, callbacks, command } = setup({
       runtime,
       writingLanguage,
+      chapterNumber,
       wordsTarget: 900,
       keyEvents,
       suspenseHook,
       userGuidance,
+      previousFinalizedContent: chapterNumber === 2 ? '上一章正文已完成。'.repeat(100) : undefined,
     })
 
     await command.execute({ step: {}, context, callbacks })
@@ -1105,12 +1121,50 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(`- ${labels[0]}: ${keyEvents}`)
     expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(`- ${labels[1]}: ${suspenseHook}`)
     expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(`- ${labels[2]}: ${userGuidance}`)
+    for (const instruction of semanticChecks) {
+      expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(instruction)
+    }
     expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(
       writingLanguage === 'en-US'
         ? 'Each later action must continue from the item ownership, character knowledge, and plan-completion state actually established in the prose.'
         : '后一项动作必须承接正文实际形成的物品持有、人物知情和计划完成状态。',
     )
     expect(runtime.complete).toHaveBeenCalledOnce()
+  })
+
+  it('retains all three author fields in the final task when a custom draft template omits chapter_info', async () => {
+    clearProjectCustomPrompts()
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('正'.repeat(900), 'stop')
+    })
+    const builtin = BUILTIN_PROMPTS.find(template => template.key === 'first_chapter_draft')!
+    const keyEvents = '顾弦把潮印交给陆霁。'
+    const suspenseHook = '来源留待下一章揭示。'
+    const userGuidance = '保持克制，潮印由陆霁保管。'
+    const { context, callbacks, command } = setup({
+      runtime,
+      wordsTarget: 900,
+      keyEvents,
+      suspenseHook,
+      userGuidance,
+      customDraftTemplate: {
+        ...builtin,
+        writingLanguage: 'zh-CN',
+        content: '自定义正文任务。',
+        systemSuffix: '',
+        requiredContextVariables: [],
+      },
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(user).toContain('自定义正文任务。')
+    expect(user).toContain(`- 必需事件: ${keyEvents}`)
+    expect(user).toContain(`- 章节钩子: ${suspenseHook}`)
+    expect(user).toContain(`- 作者本章指导: ${userGuidance}`)
   })
 
   it('omits the execution card when all three author fields are empty', async () => {
