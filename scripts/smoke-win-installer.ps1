@@ -52,6 +52,7 @@ $velaHome = Join-Path $smokeRoot 'vela-home'
 $globalConfig = Join-Path $velaHome 'config.json'
 $recentProjects = Join-Path $velaHome 'recent-projects.json'
 $upgradeFixtureRoot = Join-Path $smokeRoot 'user-projects\upgrade-preservation-fixture'
+$v025SaveProofPath = Join-Path $smokeRoot 'v025-save-proof.json'
 $uninstaller = Join-Path $installRoot 'Uninstall AI小说作家.exe'
 $lastWindowSnapshot = @()
 $observedProcessIds = [System.Collections.Generic.HashSet[int]]::new()
@@ -95,9 +96,31 @@ function Get-AiNovelFileSha256 {
   }
 }
 
-function Get-AiNovelV110Inventory {
+function Invoke-AiNovelV025CopyImport {
+  $head = (& git -C $root rev-parse HEAD).Trim()
+  if ($LASTEXITCODE -ne 0) { throw 'Cannot bind v0.2.5 copy journey to build HEAD.' }
+  $arguments = @(
+    (Join-Path $PSScriptRoot 'f05-a11-offline-import-journey.mjs'),
+    "--package-dir=$installRoot", "--build-tree=$root", "--tested-sha=$head",
+    "--exe-sha256=$((Get-AiNovelFileSha256 -Path $exePath).ToLowerInvariant())",
+    "--asar-sha256=$((Get-AiNovelFileSha256 -Path (Join-Path $installRoot 'resources\app.asar')).ToLowerInvariant())",
+    "--legacy-v025=$upgradeFixtureRoot", "--legacy-home=$velaHome", "--installer-smoke-root=$smokeRoot"
+  )
+  $output = @(& node @arguments)
+  if ($LASTEXITCODE -ne 0) { throw 'Installed v0.2.5 copy import, save or reopen journey failed.' }
+  $summary = $output[-1] | ConvertFrom-Json
+  $proof = Get-Content -LiteralPath $summary.receiptPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  if ($proof.sliceOutcome -ne 'PASS' -or $proof.mode -ne 'v025-offline-copy-v1' -or
+      $proof.packageMode -ne 'installed' -or $proof.testedSha -ne $head -or
+      $proof.copyImport.legacyGlobalsUnchanged -ne $true -or $proof.copyImport.settingsPreserved -ne $true) {
+    throw 'Installed v0.2.5 copy import evidence is incomplete.'
+  }
+  return $proof
+}
+
+function Get-AiNovelUpgradeSourceInventory {
   $files = @(Get-ChildItem -LiteralPath $upgradeFixtureRoot -Recurse -File -Force | Sort-Object FullName)
-  if ($files.Count -lt 5) { throw 'v1.1 project source inventory is incomplete.' }
+  if ($files.Count -lt 5) { throw 'Upgrade project source inventory is incomplete.' }
   return @($files | ForEach-Object {
     $relative = $_.FullName.Substring($upgradeFixtureRoot.Length).TrimStart('\', '/')
     "$relative=$((Get-AiNovelFileSha256 -Path $_.FullName).ToLowerInvariant())"
@@ -217,7 +240,8 @@ function Invoke-AiNovelUpgradeDataFixture {
   param(
     [Parameter(Mandatory = $true)][ValidateSet('seed', 'validate-legacy', 'validate')][string]$Mode,
     [Parameter(Mandatory = $true)][string]$ProjectRoot,
-    [string]$SettingsPath
+    [string]$SettingsPath,
+    [string]$SaveProofPath
   )
 
   if (-not (Test-Path -LiteralPath $script:aiNovelElectronNodeRunner -PathType Leaf)) {
@@ -239,6 +263,10 @@ function Invoke-AiNovelUpgradeDataFixture {
     $fixtureArguments = @($quotedFixtureScript, $Mode, $quotedProjectRoot)
     if (-not [string]::IsNullOrWhiteSpace($SettingsPath)) {
       $fixtureArguments += '"' + $SettingsPath.Replace('"', '\"') + '"'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SaveProofPath)) {
+      if ([string]::IsNullOrWhiteSpace($SettingsPath)) { throw 'Save proof validation requires the isolated settings path.' }
+      $fixtureArguments += '"' + $SaveProofPath.Replace('"', '\"') + '"'
     }
     $process = Start-Process `
       -FilePath $script:aiNovelElectronNodeRunner `
@@ -966,6 +994,7 @@ try {
       RelatedTargetNames = @($roundTargetNames)
       LegacyProjectPathToOpen = $upgradeFixtureRoot
     }
+    if ($upgradeFixtureSeeded) { $oldAppSmokeParameters.LegacyV025SaveProofPath = $v025SaveProofPath }
     if ($V110InstalledUpgrade) { $oldAppSmokeParameters.UserDataPath = $sharedUserData }
     $previousGlobalProof = $env:AI_NOVEL_V110_GLOBAL_PROOF
     try {
@@ -975,9 +1004,17 @@ try {
     finally {
       $env:AI_NOVEL_V110_GLOBAL_PROOF = $previousGlobalProof
     }
+    if ($upgradeFixtureSeeded) {
+      Invoke-AiNovelUpgradeDataFixture -Mode validate-legacy -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig -SaveProofPath $v025SaveProofPath | Out-Null
+      $v025SourceBefore = @(Get-AiNovelUpgradeSourceInventory)
+      $v025GlobalBefore = @{
+        config = (Get-AiNovelFileSha256 -Path $globalConfig).ToLowerInvariant()
+        recent = (Get-AiNovelFileSha256 -Path $recentProjects).ToLowerInvariant()
+      }
+    }
     if ($V110InstalledUpgrade) {
       $v110Validation = Invoke-AiNovelV110Fixture -Mode inspect
-      $v110Before = @(Get-AiNovelV110Inventory)
+      $v110Before = @(Get-AiNovelUpgradeSourceInventory)
       $v110GlobalBefore = @{
         config = (Get-AiNovelFileSha256 -Path $globalConfig).ToLowerInvariant()
         recent = (Get-AiNovelFileSha256 -Path $recentProjects).ToLowerInvariant()
@@ -1035,9 +1072,7 @@ $currentInstallCompleted = $true
     AcceptanceDirectory = $script:aiNovelAcceptanceDirectory
     ExpectedVersion = [string]$packageJson.version
   }
-  if ($upgradeFixtureSeeded) {
-    $appSmokeParameters.ProjectPathToOpen = $upgradeFixtureRoot
-  }
+  # ADR 0020 requires a new imported copy; project:open must still reject the old root.
   if ($V110InstalledUpgrade) { $appSmokeParameters.UserDataPath = $sharedUserData }
   & (Join-Path $PSScriptRoot 'smoke-win-app.ps1') @appSmokeParameters
 
@@ -1046,7 +1081,13 @@ $currentInstallCompleted = $true
     throw 'Installer smoke changed existing global configuration instead of preserving it.'
   }
   if ($upgradeFixtureSeeded) {
-    $upgradeValidationEvidence = Invoke-AiNovelUpgradeDataFixture -Mode validate -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig
+    $upgradeValidationEvidence = Invoke-AiNovelUpgradeDataFixture -Mode validate-legacy -ProjectRoot $upgradeFixtureRoot -SettingsPath $globalConfig -SaveProofPath $v025SaveProofPath
+    $copyJourney = Invoke-AiNovelV025CopyImport
+    if ((Compare-Object -ReferenceObject $v025SourceBefore -DifferenceObject @(Get-AiNovelUpgradeSourceInventory)) -or
+        (Get-AiNovelFileSha256 -Path $globalConfig).ToLowerInvariant() -ne $v025GlobalBefore.config -or
+        (Get-AiNovelFileSha256 -Path $recentProjects).ToLowerInvariant() -ne $v025GlobalBefore.recent) {
+      throw 'v0.2.5 setup or copy journey changed old source files or global bytes.'
+    }
     if ($RequireCompleteV025Fixture -and $upgradeValidationEvidence.legacyTableCount -ne 11) {
       throw 'The required complete v0.2.5 upgrade fixture was not validated.'
     }
@@ -1068,11 +1109,22 @@ $currentInstallCompleted = $true
         kind = 'windows-upgrade-data'
         accepted = $true
         observations = @(
-          'The verified v0.2.5 fixture was opened before upgrade and reopened by the current installed application.'
-          'Project database records, physical assets, embedding search, global settings, and recent-project state were validated after upgrade.'
+          'The verified v0.2.5 application opened, saved and read back its fixture before setup upgrade.'
+          'The installed application imported a complete independent copy through the V3 UI, saved it and reopened it in a new process.'
+          'Old source bytes, settings and recent entry remained unchanged; retained vector search was checked on the old source.'
         )
         direct = [ordered]@{
           previousVersion = '0.2.5'
+          upgradePolicyRevision = 'v025-offline-copy-v1'
+          oldAppSaved = $true
+          oldSaveProof = (Get-Content -LiteralPath $v025SaveProofPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+          legacyRecentPreserved = $true
+          sourceUnchangedSinceOldSave = $true
+          legacyGlobalBytesPreservedSinceOldSave = $true
+          copyImport = $copyJourney.copyImport
+          copySteps = $copyJourney.steps
+          copyDriverSha256 = $copyJourney.driverSha256
+          copyPackageHashes = $copyJourney.packageHashes
           legacyTableCount = [int]$upgradeValidationEvidence.legacyTableCount
           preservedAssetCount = [int]$upgradeValidationEvidence.preservedAssetCount
           vectorDimension = [int]$upgradeValidationEvidence.embeddingSpace.vectorDimension
@@ -1093,7 +1145,7 @@ $currentInstallCompleted = $true
     $v110After = Invoke-AiNovelV110Fixture -Mode inspect
     if ($v110After.projectCoreRows -ne 1 -or $v110After.contentRows -ne 1 -or
         $v110After.draftRows -ne 1 -or $v110After.authorFiles -ne 3 -or
-        (Compare-Object -ReferenceObject $v110Before -DifferenceObject @(Get-AiNovelV110Inventory)) -or
+        (Compare-Object -ReferenceObject $v110Before -DifferenceObject @(Get-AiNovelUpgradeSourceInventory)) -or
         (Get-AiNovelFileSha256 -Path $globalConfig).ToLowerInvariant() -ne $v110GlobalBefore.config -or
         (Get-AiNovelFileSha256 -Path $recentProjects).ToLowerInvariant() -ne $v110GlobalBefore.recent) {
       throw 'v1.1 installed upgrade changed the legacy project or global data source.'

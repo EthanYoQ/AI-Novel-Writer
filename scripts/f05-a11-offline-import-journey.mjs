@@ -1,5 +1,6 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -26,7 +27,11 @@ const expectedAsar = arg('asar-sha256')
 const supplement = arg('supplement') === '1'
 const onlyVersion = arg('only')
 const finalDelta = arg('final-delta') === '1'
-const sources = [
+const legacyV025 = arg('legacy-v025')
+const installedRoot = arg('installer-smoke-root')
+const legacyHome = arg('legacy-home')
+const editSaveProof = finalDelta || Boolean(legacyV025)
+const sources = legacyV025 ? [{ version: 'v0.2.5', path: legacyV025 }] : [
   { version: 'v1.0.0', path: arg('legacy-v100') },
   { version: 'v1.1.0', path: arg('legacy-v110') },
 ]
@@ -53,7 +58,13 @@ const buildGit = (...args) => execFileSync('git', args, { cwd: buildTree, encodi
 if (!macMode) {
 assert.equal(buildGit('rev-parse', 'HEAD'), testedSha, 'Build tree HEAD differs from tested SHA')
 assert.equal(buildGit('status', '--porcelain'), '', 'Build tree must be clean')
-assert.equal(path.resolve(packageDir), path.join(path.resolve(buildTree), 'release', JSON.parse(fs.readFileSync(path.join(buildTree, 'package.json'), 'utf8')).version, 'win-unpacked'))
+if (installedRoot) {
+  assert(legacyV025 && legacyHome, 'Installed v0.2.5 copy requires source and isolated legacy home')
+  assert.equal(path.dirname(path.resolve(installedRoot)), path.join(path.resolve(buildTree), '.runtime', '.cache'))
+  assert.match(path.basename(installedRoot), /^ai-novel-installer-smoke-[a-f0-9]+$/)
+  assert.equal(path.resolve(packageDir), path.join(path.resolve(installedRoot), 'installed-app'))
+  assert.equal(fs.realpathSync(packageDir), path.resolve(packageDir))
+} else assert.equal(path.resolve(packageDir), path.join(path.resolve(buildTree), 'release', JSON.parse(fs.readFileSync(path.join(buildTree, 'package.json'), 'utf8')).version, 'win-unpacked'))
 }
 
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -71,7 +82,8 @@ const receipt = macMode ? { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification
     dmgSha256: sha256(macDmg), executableSha256: sha256(exe), asarSha256: sha256(asar),
     appPathSha256: hashText(fs.realpathSync(macMountedApp)), mountPointSha256: hashText(fs.realpathSync(macMountPoint)) },
 } : { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_WIN_V3',
-  mode: finalDelta ? 'synthetic-completeness-final-delta' : supplement ? 'synthetic-completeness' : 'historical-baseline',
+  mode: legacyV025 ? 'v025-offline-copy-v1' : finalDelta ? 'synthetic-completeness-final-delta' : supplement ? 'synthetic-completeness' : 'historical-baseline',
+  packageMode: installedRoot ? 'installed' : 'unpacked',
   selectedVersions: onlyVersion ? [onlyVersion] : sources.map(source => source.version),
   testedSha, buildTree: path.resolve(buildTree),
   executionHead: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim(),
@@ -83,7 +95,7 @@ const receipt = macMode ? { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification
 if (!macMode) assert.deepEqual(receipt.packageHashes, { exe: expectedExe, asar: expectedAsar })
 fs.mkdirSync(scratch, { recursive: true })
 if (!macMode) {
-fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'codex/thread-6/a11',
+fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: legacyV025 ? 'codex/thread-7/s14c-v025' : 'codex/thread-6/a11',
   sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 72,
   cleanupCommand: `Remove-Item -LiteralPath '${scratch}' -Recurse -Force`,
   retainReason: 'Packaged old-project import evidence and source/target comparisons' }, null, 2))
@@ -376,14 +388,15 @@ async function verify(source) {
   const seeded = supplement ? await seedSupplement(sourceCopy) : null
   const copiedBefore = inventory(sourceCopy)
   const roots = Object.fromEntries(['canonical', 'legacy', 'userData', 'home', 'appData', 'localAppData']
-    .map(key => [key, path.join(root, key)]))
+    .map(key => [key, key === 'legacy' && legacyV025 && legacyHome ? path.resolve(legacyHome) : path.join(root, key)]))
+  const globalBefore = legacyV025 && legacyHome ? inventory(legacyHome) : null
   for (const directory of Object.values(roots)) fs.mkdirSync(directory, { recursive: true })
   let session
   let savedBody
   try {
     session = await launch(roots)
     await home(session.page)
-    let requestCounts = finalDelta ? await observeRequests(session) : null
+    let requestCounts = editSaveProof ? await observeRequests(session) : null
     await session.app.evaluate(({ dialog }, { sourceCopy, targetParent }) => {
       globalThis.__a11Dialogs = []
       dialog.showOpenDialog = async options => {
@@ -460,7 +473,7 @@ async function verify(source) {
     receipt.steps.push({ stepId: `${source.version}-import-open`, version: source.version, step: 'V3 import and open', outcome: 'PASS',
       target, copiedSourceFiles: Object.keys(copiedBefore).length, counts, rawAssets,
       avatars: avatarRows.map(({ path: relativePath, hash }) => ({ relativePath, hash })), dialogs })
-    if (finalDelta) {
+    if (editSaveProof) {
       await session.page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).first().click()
       const editor = session.page.locator('.cm-content[contenteditable="true"]')
       await editor.waitFor({ state: 'visible' })
@@ -502,11 +515,22 @@ async function verify(source) {
 
     session = await launch(roots)
     await home(session.page)
-    requestCounts = finalDelta ? await observeRequests(session) : null
-    await session.page.locator('.writer-shelf').getByRole('button', { name: '打开《升级保留验证小说》' }).click()
+    requestCounts = editSaveProof ? await observeRequests(session) : null
+    if (legacyV025) {
+      // Both the preserved old recent entry and the imported copy have the same title.
+      const recent = await session.page.evaluate(() => window.aiNovelAPI.invoke('project:recent-list'))
+      const index = recent.findIndex(entry => path.resolve(entry.path).toLowerCase() === path.resolve(target).toLowerCase())
+      assert(index >= 0, 'Imported target missing from recent projects')
+      await session.page.locator('.writer-shelf li').nth(index).getByRole('button', { name: '打开《升级保留验证小说》' }).click()
+    } else await session.page.locator('.writer-shelf').getByRole('button', { name: '打开《升级保留验证小说》' }).click()
     await session.page.locator('.writer-project-tree').getByText('升级保留验证小说', { exact: true })
       .waitFor({ state: 'visible', timeout: 30_000 })
-    if (finalDelta) {
+    if (editSaveProof) {
+      if (legacyV025) {
+        const runtime = await session.page.evaluate(() => window.aiNovelAPI.invoke('project:get-runtime-context'))
+        assert.equal(path.resolve(runtime.activeProjectPath).toLowerCase(), path.resolve(target).toLowerCase(), 'Reopened another recent project')
+        assert.equal(runtime.dbReady, true)
+      }
       await session.page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).first().click()
       const editor = session.page.locator('.cm-content[contenteditable="true"]')
       assert.equal(await editorBody(editor), savedBody)
@@ -521,6 +545,40 @@ async function verify(source) {
     assert.deepEqual(inventory(source.path), originalBefore)
     receipt.steps.push({ stepId: `${source.version}-reopen-unchanged`, version: source.version,
       step: 'New process opens copy; both old sources unchanged', outcome: 'PASS' })
+    if (legacyV025) {
+      const sourceProjectId = JSON.parse(fs.readFileSync(path.join(sourceCopy, '.vela', 'project.json'), 'utf8')).projectId
+      const targetProjectId = JSON.parse(fs.readFileSync(path.join(target, '.ai-novel', 'project.json'), 'utf8')).projectId
+      assert.match(targetProjectId, /^[a-f0-9-]{36}$/i)
+      assert.notEqual(targetProjectId, sourceProjectId)
+      const globals = await session.page.evaluate(async () => ({
+        recent: await window.aiNovelAPI.invoke('project:recent-list'),
+        config: await window.aiNovelAPI.invoke('config:get'),
+      }))
+      assert(globals.recent.some(entry => path.resolve(entry.path).toLowerCase() === path.resolve(target).toLowerCase()), 'Imported copy absent from current recent projects')
+      if (globalBefore) {
+        assert.deepEqual(inventory(legacyHome), globalBefore, 'Old global settings or recent bytes changed')
+        assert.equal(globals.config.theme, 'light')
+        assert.equal(globals.config.locale, 'zh-CN')
+        assert.equal(globals.config.proxy.port, 7890)
+      }
+      await quit(session.app, session.page, source.version)
+      session = null
+      assert.deepEqual(inventory(source.path), originalBefore)
+      assert.deepEqual(inventory(sourceCopy), copiedBefore)
+      receipt.copyImport = { revision: 'v025-offline-copy-v1', sourceProjectId, targetProjectId,
+        source: source.path, importSource: sourceCopy, target,
+        sourceFileCount: Object.keys(originalBefore).length,
+        sourceInventorySha256: hashText(JSON.stringify(originalBefore)),
+        sourceAfterSha256: hashText(JSON.stringify(inventory(source.path))),
+        targetInventorySha256: hashText(JSON.stringify(inventory(target))),
+        savedBodySha256: hashText(savedBody), reopenedBodySha256: hashText(savedBody),
+        sourceUnchanged: true, legacyGlobalsUnchanged: globalBefore ? true : null,
+        targetRecentRegistered: true, settingsPreserved: globalBefore ? true : null,
+        preservedTableCount: Object.values(counts).filter(value => typeof value === 'number' && value > 0).length,
+        preservedAssetCount: Object.keys(rawAssets).length + avatarRows.length,
+        knowledgeDocuments: knowledge.documents.length, knowledgeChunks: knowledge.chunks.length,
+      }
+    }
     if (finalDelta) {
       await quit(session.app, session.page, source.version)
       session = null
@@ -569,6 +627,15 @@ db.commit(); db.close()`, path.join(sourceCopy, '.vela', 'vela.db')])
         firstTargetSha256: createHash('sha256').update(JSON.stringify(firstTargetBefore)).digest('hex'),
         secondTargetSha256: createHash('sha256').update(JSON.stringify(inventory(secondTarget))).digest('hex'), requests })
     }
+  } catch (error) {
+    if (legacyV025 && session) {
+      receipt.diagnostic = { ...receipt.diagnostic,
+        body: await session.page.locator('body').innerText().catch(() => null),
+        dialogs: await session.page.locator('[role="dialog"]').allInnerTexts().catch(() => []),
+        screenshot: path.join(root, 'failure.png') }
+      await session.page.screenshot({ path: receipt.diagnostic.screenshot }).catch(() => {})
+    }
+    throw error
   } finally { if (session) await session.app.close() }
 }
 

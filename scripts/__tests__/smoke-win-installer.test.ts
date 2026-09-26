@@ -448,6 +448,39 @@ function writeUpgradeFixtureSettings(settingsPath: string) {
 }
 
 describe('Windows installer smoke contract', () => {
+  windowsIt('accepts only the exact old-save timestamp receipt and rejects altered author data', () => {
+    const cache = resolve('.runtime/.cache')
+    mkdirSync(cache, { recursive: true })
+    const root = mkdtempSync(join(cache, 'v025-save-validator-'))
+    const project = join(root, 'source')
+    const settings = join(root, 'config.json')
+    const proofPath = join(root, 'old-save.json')
+    try {
+      writeUpgradeFixtureSettings(settings)
+      runUpgradeFixtureWithNode('seed', project, settings)
+      const before = JSON.parse(execFileSync(process.execPath, ['-e', `
+        const {DatabaseSync}=require('node:sqlite'); const db=new DatabaseSync(process.argv[1]);
+        const before=db.prepare('SELECT d.id,d.updated_at AS updatedAt,d.word_count AS wordCount,c.body AS content FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=71').get();
+        db.prepare('UPDATE drafts SET updated_at=? WHERE id=71').run('2026-09-26 03:04:05');
+        db.close(); console.log(JSON.stringify(before));`, join(project, '.vela', 'vela.db')], { encoding: 'utf8' }))
+      const proof = { projectPath: project, verifiedBy: 'legacy-renderer-cdp-v025-save',
+        draft: { before, after: { ...before, updatedAt: '2026-09-26 03:04:05' } } }
+      const validate = (withProof = true) => spawnSync(process.execPath, [upgradeFixtureScript, 'validate-legacy',
+        project, settings, ...(withProof ? [proofPath] : [])], { encoding: 'utf8' })
+      expect(validate(false).status).not.toBe(0)
+      writeFileSync(proofPath, JSON.stringify(proof))
+      const valid = validate()
+      expect(valid.status, valid.stderr).toBe(0)
+      proof.draft.after.content = 'corrupted body'
+      writeFileSync(proofPath, JSON.stringify(proof))
+      expect(validate().status).not.toBe(0)
+      proof.draft.after.content = before.content
+      proof.draft.before.id = 72
+      writeFileSync(proofPath, JSON.stringify(proof))
+      expect(validate().status).not.toBe(0)
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  }, 15_000)
+
   it('runs the installed executable with isolated Vela data and supports an old-installer upgrade path', () => {
     const script = readFileSync('scripts/smoke-win-installer.ps1', 'utf8')
 
@@ -497,9 +530,11 @@ describe('Windows installer smoke contract', () => {
     expect(script).not.toContain('Start-Process -FilePath $Path -ArgumentList $Arguments -Wait')
     expect(script).toContain('smoke-win-app.ps1')
     expect(script).toContain('VelaHome = $velaHome')
-    expect(script).toContain('$appSmokeParameters.ProjectPathToOpen = $upgradeFixtureRoot')
+    expect(script).not.toContain('$appSmokeParameters.ProjectPathToOpen = $upgradeFixtureRoot')
+    expect(script).toContain('Invoke-AiNovelV025CopyImport')
+    expect(script).toContain('LegacyV025SaveProofPath')
     const legacyValidation = 'Invoke-AiNovelUpgradeDataFixture -Mode validate-legacy -ProjectRoot $upgradeFixtureRoot'
-    const migratedValidation = '$upgradeValidationEvidence = Invoke-AiNovelUpgradeDataFixture -Mode validate -ProjectRoot $upgradeFixtureRoot'
+    const migratedValidation = '$upgradeValidationEvidence = Invoke-AiNovelUpgradeDataFixture -Mode validate-legacy -ProjectRoot $upgradeFixtureRoot'
     expect(script).toContain(legacyValidation)
     expect(script).toContain(migratedValidation)
     expect(script).not.toContain('UPDATE drafts SET word_count')

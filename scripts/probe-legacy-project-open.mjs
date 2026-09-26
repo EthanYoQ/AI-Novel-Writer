@@ -7,10 +7,18 @@ import { fileURLToPath } from 'node:url'
 
 const [, , portText, projectPath, markerPath, mode] = process.argv
 const port = Number(portText)
-if (!Number.isInteger(port) || !projectPath || !markerPath || (mode && mode !== '--draft-write-proof')) {
+if (!Number.isInteger(port) || !projectPath || !markerPath || (mode && !['--draft-write-proof', '--v025-save-proof'].includes(mode))) {
   throw new Error('Usage: node probe-legacy-project-open.mjs <port> <projectPath> <markerPath> [--draft-write-proof]')
 }
 const writeProof = mode === '--draft-write-proof'
+const v025SaveProof = mode === '--v025-save-proof'
+if (v025SaveProof) {
+  const cacheRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '.runtime', '.cache')
+  const child = relative(cacheRoot, resolve(projectPath))
+  if (isAbsolute(child) || !/^ai-novel-installer-smoke-[a-f0-9]+[\\/]/.test(child)) {
+    throw new Error('v0.2.5 save proof requires an isolated installer fixture')
+  }
+}
 if (writeProof) {
   const fixtureRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '.runtime', 'cache', 's14c-old-binaries')
   const child = relative(fixtureRoot, resolve(projectPath))
@@ -91,6 +99,18 @@ const expression = `(async () => {
     throw new Error(result && result.error ? result.error : 'legacy project:open failed')
   }
   ${draftWrite}
+  ${v025SaveProof ? `
+  const before = await window.velaAPI.invoke('db:draft-get-full', 71)
+  if (before?.id !== 71 || before.status !== 'draft' || before.chapterNumber !== 7 || before.version !== 1) {
+    throw new Error('v0.2.5 editable fixture draft is missing')
+  }
+  const saved = await window.velaAPI.invoke('db:draft-update-content', before.id, before.content, before.wordCount)
+  if (saved?.success !== true) throw new Error('v0.2.5 draft save failed')
+  const after = await window.velaAPI.invoke('db:draft-get-full', before.id)
+  if (JSON.stringify({ ...after, updatedAt: before.updatedAt }) !== JSON.stringify(before)
+      || after.updatedAt === before.updatedAt) throw new Error('v0.2.5 saved draft read-back differs')
+  return { projectPath: result.project.path, projectName: result.project.name, draft: { before, after } }
+  ` : ''}
   return { projectPath: result.project.path, projectName: result.project.name${globalProof ? ', globalSeedRead: true' : ''} }
 })()`
 
@@ -133,6 +153,6 @@ if (writeProof && (!Number.isInteger(proof.draft?.id) || proof.draft.content !==
 
 writeFileSync(markerPath, `${JSON.stringify({
   ...proof,
-  verifiedBy: writeProof ? 'legacy-renderer-cdp-draft-write' : 'legacy-renderer-cdp-project-open',
+  verifiedBy: v025SaveProof ? 'legacy-renderer-cdp-v025-save' : writeProof ? 'legacy-renderer-cdp-draft-write' : 'legacy-renderer-cdp-project-open',
   verifiedAt: new Date().toISOString(),
 }, null, 2)}\n`, 'utf8')

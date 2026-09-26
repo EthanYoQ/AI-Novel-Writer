@@ -39,6 +39,30 @@ function reference(releaseRoot: string, kind: string, file: string) {
   }
 }
 
+export function windowsV025CopyProof() {
+  const before = { id: 71, content: 'fixture author body', updatedAt: '2026-01-02 03:04:05' }
+  return {
+    upgradePolicyRevision: 'v025-offline-copy-v1', oldAppSaved: true, legacyRecentPreserved: true,
+    sourceUnchangedSinceOldSave: true, legacyGlobalBytesPreservedSinceOldSave: true,
+    oldSaveProof: { verifiedBy: 'legacy-renderer-cdp-v025-save', draft: {
+      before, after: { ...before, updatedAt: '2026-09-26 03:04:05' },
+    } },
+    copyDriverSha256: 'd'.repeat(64), copyPackageHashes: { exe: 'e'.repeat(64), asar: 'f'.repeat(64) },
+    copyImport: { revision: 'v025-offline-copy-v1', sourceProjectId: 'old-id', targetProjectId: 'new-id',
+      source: 'C:/fixture/source', importSource: 'C:/scratch/s', target: 'C:/scratch/copy', sourceFileCount: 12,
+      sourceInventorySha256: 'a'.repeat(64), sourceAfterSha256: 'a'.repeat(64), targetInventorySha256: 'b'.repeat(64),
+      savedBodySha256: 'c'.repeat(64), reopenedBodySha256: 'c'.repeat(64),
+      sourceUnchanged: true, legacyGlobalsUnchanged: true, settingsPreserved: true, targetRecentRegistered: true,
+      preservedTableCount: 11, preservedAssetCount: 2, knowledgeDocuments: 1, knowledgeChunks: 1,
+    },
+    copySteps: ['import-open', 'target-edit-save', 'import-zero-network', 'knowledge-index',
+      'target-edit-reopen', 'reopen-zero-network', 'reopen-unchanged'].map(step => ({
+      stepId: `v0.2.5-${step}`, outcome: 'PASS',
+      ...(step.endsWith('zero-network') ? { requests: { mainFetchCalls: 0, rendererRequests: 0 } } : {}),
+    })),
+  }
+}
+
 export function windowsAcceptanceReceipt(releaseRoot: string, version: string, name: string) {
   const sha256 = sha256File(path.join(releaseRoot, `ai-novel-writer-setup-${version}.exe`))
   const receipts: Record<string, unknown> = {
@@ -47,7 +71,7 @@ export function windowsAcceptanceReceipt(releaseRoot: string, version: string, n
     'quiet-window': { ...base(name), kind: 'windows-final-quiet-window', direct: { monitorState: 'step-completed', monitorStep: 'final:quiet', quietWindowSeconds: 5, completedAt: '2026-08-10T12:00:00.000Z' } },
     'error-dialogs': { ...base(name), kind: 'windows-error-dialogs', direct: { monitorState: 'step-completed', monitorStep: 'final:quiet', newProductErrorDialogCount: 0, observedThrough: '2026-08-10T12:00:00.000Z' } },
     uninstall: { ...base(name), kind: 'windows-uninstall', direct: { installedExecutableExists: false, installDirectoryState: 'absent', allowedSystemResiduals: [] } },
-    'upgrade-data': { ...base(name), kind: 'windows-upgrade-data', direct: { previousVersion: '0.2.5', legacyTableCount: 11, preservedAssetCount: 1, vectorDimension: 768, queryResultCount: 1 } },
+    'upgrade-data': { ...base(name), kind: 'windows-upgrade-data', direct: { previousVersion: '0.2.5', legacyTableCount: 11, preservedAssetCount: 1, vectorDimension: 768, queryResultCount: 1, ...windowsV025CopyProof() } },
     'native-abi': { ...base(name), kind: 'windows-native-abi', direct: { restoreMode: 'monitored', nodeModuleAbi: '127', verificationTest: 'electron/repositories/__tests__/character-repository.test.ts' } },
     'packaged-smoke': { ...base(name), kind: 'windows-packaged-smoke-summary', direct: { evidenceCount: 3, evidenceKinds: ['packaged-vector-smoke', 'packaged-official-homepage-smoke', 'packaged-skin-smoke'] }, evidence: [
       reference(releaseRoot, 'packaged-vector-smoke', 'packaged-vector-smoke.json'),

@@ -12,6 +12,7 @@
   [string]$ProjectPathToOpen,
   [string]$LegacyProjectPathToOpen,
   [switch]$LegacyWriterProof,
+  [string]$LegacyV025SaveProofPath,
   [string]$AcceptanceDirectory,
   [string]$ExpectedVersion
 )
@@ -1118,6 +1119,7 @@ try {
     if ($shouldProbeLegacyProject) {
       $legacyProbeArguments = @([string]$legacyDebuggerPort, (Resolve-Path -LiteralPath $LegacyProjectPathToOpen).Path, $projectOpenMarker)
       if ($LegacyWriterProof) { $legacyProbeArguments += '--draft-write-proof' }
+      if (-not [string]::IsNullOrWhiteSpace($LegacyV025SaveProofPath)) { $legacyProbeArguments += '--v025-save-proof' }
       & node (Join-Path $PSScriptRoot 'probe-legacy-project-open.mjs') @legacyProbeArguments
       if ($LASTEXITCODE -ne 0) {
         throw "Legacy renderer project-open probe failed with code $LASTEXITCODE"
@@ -1170,6 +1172,16 @@ try {
       throw 'Application main window opened, but the renderer did not open and confirm the upgrade fixture project.'
     }
     $openedProject = Get-Content -LiteralPath $projectOpenMarker -Raw | ConvertFrom-Json
+    if (-not [string]::IsNullOrWhiteSpace($LegacyV025SaveProofPath)) {
+      if ($LegacyWriterProof -or [string]$openedProject.verifiedBy -ne 'legacy-renderer-cdp-v025-save' -or
+          [int]$openedProject.draft.before.id -ne 71 -or
+          [string]$openedProject.draft.before.content -ne [string]$openedProject.draft.after.content -or
+          [string]$openedProject.draft.before.updatedAt -eq [string]$openedProject.draft.after.updatedAt -or
+          (Get-Item -LiteralPath $resolvedExe).VersionInfo.ProductVersion -notin @('0.2.5', '0.2.5.0')) {
+        throw 'The v0.2.5 application did not return exact save/read-back evidence.'
+      }
+      Copy-Item -LiteralPath $projectOpenMarker -Destination $LegacyV025SaveProofPath
+    }
     if ([System.IO.Path]::GetFullPath([string]$openedProject.projectPath) -ne
         [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $expectedOpenedProjectPath).Path)) {
       throw 'Application confirmed a different project than the requested upgrade fixture.'
