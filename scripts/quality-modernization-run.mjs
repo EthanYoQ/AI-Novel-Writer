@@ -72,8 +72,9 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
   const phase = protocol.phases[binding.phase]
   if (!phase || !Array.isArray(phase.operations) || !Array.isArray(phase.caseIds)
     || !phase.caseIds.includes(binding.caseId)
-    || !phase.operations.some(operation => operation.id === binding.operation)) fail('INVALID_CAMPAIGN_BINDING')
-  if ((binding.phase === 'full') !== (binding.milestone === 'final')
+    || !phase.operations.some(operation => operation.id === binding.operation && (!operation.caseIds || operation.caseIds.includes(binding.caseId)))) fail('INVALID_CAMPAIGN_BINDING')
+  if ((['full', 'c16-c18'].includes(binding.phase)) !== (binding.milestone === 'final')
+    || phase.arms && !phase.arms.includes(binding.arm)
     || binding.phase === 'full' && !phase.operations.some(operation => operation.id === binding.operation
       && (operation.kind !== 'directory' || binding.caseId.endsWith('/1')))) fail('INVALID_CAMPAIGN_BINDING')
   if (binding.arm === 'candidate' && (!binding.actual || ['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch']
@@ -237,7 +238,7 @@ export function withLedgerReconciliation(ledgerPath, campaignMode, run) {
 export function selectPhase(protocol, phase, milestone = 'early') {
   if (!['early', 'post-ui', 'final'].includes(milestone)) fail('INVALID_MILESTONE')
   if (!Object.hasOwn(protocol.phases, phase)) fail('INVALID_PHASE')
-  if ((phase === 'full') !== (milestone === 'final')) fail('PHASE_MILESTONE_MISMATCH')
+  if ((['full', 'c16-c18'].includes(phase)) !== (milestone === 'final')) fail('PHASE_MILESTONE_MISMATCH')
   return { phase, milestone, ...protocol.phases[phase] }
 }
 /**
@@ -251,6 +252,7 @@ export function assertScenarioMatchesProtocol(selection, scenario) {
     || (selection.scenarioRevision ?? null) !== (scenario.scenarioRevision ?? null)
     || !isDeepStrictEqual(selection.selectionDifference ?? null, scenario.selectionDifference ?? null)
     || !isDeepStrictEqual(selection.attemptPolicy ?? null, scenario.attemptPolicy ?? null)) fail('SCENARIO_PROTOCOL_MISMATCH')
+  if (!isDeepStrictEqual(selection.arms ?? null, scenario.arms ?? null)) fail('SCENARIO_PROTOCOL_MISMATCH')
 }
 export function validatePair(targets, observations) {
   const [a, b] = [targets.baseline, targets.candidate]
@@ -379,9 +381,9 @@ export function updateLedger(file, event, options = {}) {
         const occupied = [...reserved.values()].filter(row => statuses.get(row.attemptId) !== 'cancel')
         const slot = value => `${value.milestone}:${value.phase}:${value.caseId}:${value.arm}:${value.operation}`
         const suffix = { 'early-budget': 'Budget', 'early-context': 'Context', 'early-review': 'Review' }[binding.phase]
-        if (!suffix && binding.phase !== 'full') fail('INVALID_CAMPAIGN_BINDING')
-        const primary = binding.phase === 'full'
-          ? protocol.phases.full.operations.find(operation => operation.id === binding.operation).allocation
+        if (!suffix && !['full', 'c16-c18'].includes(binding.phase)) fail('INVALID_CAMPAIGN_BINDING')
+        const primary = ['full', 'c16-c18'].includes(binding.phase)
+          ? protocol.phases[binding.phase].operations.find(operation => operation.id === binding.operation).allocation
           : `${binding.milestone === 'early' ? 'early' : 'postUi'}${suffix}`
         const repeatedSlot = occupied.some(row => slot(row.binding) === slot(binding))
         const primaryUsed = occupied.filter(row => row.allocation === primary).length
@@ -420,7 +422,7 @@ export const developmentLedgerPath = (root, phase) => path.join(CACHE, `syntheti
 
 export function main(argv) {
   let [command = 'help', ...rest] = argv
-  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <freeze-targets|development-synthetic|baseline-probe|dry-run|early-budget|early-context|early-review|full> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>]; freeze-targets/development-synthetic: --baseline-root <existing worktree> --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
+  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <freeze-targets|development-synthetic|baseline-probe|dry-run|early-budget|early-context|early-review|full|c16-c18> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>]; freeze-targets/development-synthetic: --baseline-root <existing worktree> --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full|c16-c18 (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
   if (command.startsWith('--')) { rest = argv; command = 'phase-options' }
   const args = {}
   for (let i = 0; i < rest.length; i++) {
@@ -462,7 +464,7 @@ export function main(argv) {
     const observations = [inspectTarget(targets.baseline), inspectTarget(targets.candidate)]
     validatePair(targets, observations)
     const phase = command === 'dry-run' ? 'early-budget' : command
-    const selection = selectPhase(protocol, phase, args['--milestone'] || (phase === 'full' ? 'final' : 'early'))
+    const selection = selectPhase(protocol, phase, args['--milestone'] || PHASE_SCENARIOS[phase]?.milestone || 'early')
     const scenario = PHASE_SCENARIOS[phase]
     if (!scenario) return { status: 'blocked', code: 'PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED', selection, physicalModelRequests: 0 }
     assertScenarioMatchesProtocol(selection, scenario)

@@ -58,6 +58,19 @@
     ]
   },
   "phases": {
+    "c16-c18": {
+      "scenarioRevision": "c16-c18-candidate-production-path-v1",
+      "arms": ["candidate"],
+      "caseIds": ["C16-A", "C16-B", "C16-C", "C17-A", "C17-B", "C18-A", "C18-B"],
+      "minimumCalls": 10,
+      "scope": "candidate-only七案例；C16三组notes/cards=6，local及DAV各两组续写=4；准备、修复及失败请求另逐实际记账",
+      "operations": [
+        { "id": "定稿章节要点", "kind": "chapter_notes", "caseIds": ["C16-A", "C16-B", "C16-C"], "allocation": "C16ExistingExtraction" },
+        { "id": "定稿角色状态", "kind": "character_cards", "caseIds": ["C16-A", "C16-B", "C16-C"], "allocation": "C16ExistingExtraction" },
+        { "id": "本地恢复后续写", "kind": "draft", "restore": "local", "caseIds": ["C17-A", "C17-B"], "allocation": "C17C18RestoreContinue" },
+        { "id": "DAV选定世代恢复后续写", "kind": "draft", "restore": "webdav", "caseIds": ["C18-A", "C18-B"], "allocation": "C17C18RestoreContinue" }
+      ]
+    },
     "early-budget": {
       "scenarioRevision": "s14b-post-ui-budget-syntax-repair-v1",
       "attemptPolicy": {

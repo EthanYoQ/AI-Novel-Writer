@@ -22,11 +22,14 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => transport.sender ? [{ webContents: transport.sender }] : [],
     fromWebContents: () => ({ webContents: transport.sender }) },
   dialog: {}, shell: {}, nativeImage: {},
+  safeStorage: { isEncryptionAvailable: () => false },
 }))
 const sha = value => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex')
 const json = file => JSON.parse(fs.readFileSync(file, 'utf8'))
 const save = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n')
-const templateKeysForPhase = phase => phase === 'early-review'
+const templateKeysForPhase = phase => phase === 'c16-c18'
+  ? ['generate_chapter_notes', 'update_character_cards', 'first_chapter_draft', 'next_chapter_draft']
+  : phase === 'early-review'
   ? ['consistency_check', 'refine_from_review']
   : ['chapter_blueprint_chunk', 'first_chapter_draft', 'next_chapter_draft']
 /** 合成正文按目标单位数配长：既不低于 70% 下限，也不触发自动续写。 */
@@ -163,8 +166,12 @@ test('isolated production commands persist the selected phase operations', async
   const request = JSON.parse(requestBytes)
   const target = request.target
   const fullRun = request.phase === 'full'
+  const continuityRun = request.phase === 'c16-c18'
   const evidenceRoot = request.evidenceRoot ?? target.isolationRoot
   const source = json(request.semanticPath)
+  const continuityCase = continuityRun ? source.continuityQualificationCases.find(item => item.id === request.caseId) : null
+  if (continuityRun) assert.ok(continuityCase && continuityCase.sceneId === request.sceneId
+    && continuityCase.chapterNumber === request.chapterNumber, 'CONTINUITY_CASE_NOT_REGISTERED')
   const scene = source.scenes.find(value => value.id === request.sceneId)
   assert.ok(scene, 'SCENE_NOT_REGISTERED')
   const chapter = scene.chapters[request.chapterNumber - 1]
@@ -199,7 +206,8 @@ test('isolated production commands persist the selected phase operations', async
   // 再 abort，保证超时杀进程之前账本已经有一条终态，而不是只剩 reserve+dispatch。
   const supervisor = createAttemptSupervisor({ record })
   const originalFetch = globalThis.fetch
-  globalThis.fetch = async () => rejectOutsidePhysicalBoundary(receipt)
+  let davFetch = null
+  globalThis.fetch = async (...args) => davFetch ? davFetch(...args) : rejectOutsidePhysicalBoundary(receipt)
   let database, projectAccess, currentContext, sourceParity, countUnits, recoveryRows, localDispatchGateRejection
   let secret = null
   const safeDiagnostic = value => safeReceiptDiagnostic(value, request.mode)
@@ -227,16 +235,16 @@ test('isolated production commands persist the selected phase operations', async
       database.initProjectDatabase(project.rootPath, Buffer.alloc(32, 7))
       assert.deepEqual(projectAccess.probeExistingProject(project.rootPath), project)
     }
-    const db = database.getProjectDb()
+    let db = database.getProjectDb()
     assert.equal(db.prepare('SELECT 1').pluck().get(), 1)
-    const lease = projectAccess.beginSession(project)
-    const session = { projectId: project.projectId, projectPath: project.rootPath, leaseId: lease.leaseId }
+    let lease = projectAccess.beginSession(project)
+    let session = { projectId: project.projectId, projectPath: project.rootPath, leaseId: lease.leaseId }
     receipt.projectEpoch = session.leaseId
     const sender = { id: 701, isDestroyed: () => false, send: (channel, ...args) => {
       for (const listener of transport.listeners.get(channel) ?? []) listener(...args)
     } }
     transport.sender = sender
-    let pendingBaselineIpc = null
+    let pendingBaselineIpc = null, finalizedContext = null
     const invoke = async (channel, ...args) => {
       receipt.invocations.push(channel)
       if (!candidate && channel === 'llm:generate-stream') pendingBaselineIpc = {
@@ -249,7 +257,12 @@ test('isolated production commands persist the selected phase operations', async
       }
       const handler = transport.handlers.get(channel)
       if (!handler) throw new Error(`UNREGISTERED_PRODUCTION_IPC:${channel}`)
-      try { return await handler({ sender }, ...args) }
+      try {
+        const result = await handler({ sender }, ...args)
+        if (continuityRun && ['finalization-generation:begin', 'finalization-generation:read'].includes(channel) && result)
+          finalizedContext = result.context
+        return result
+      }
       catch (error) { (receipt.ipcFailures ??= []).push({ channel, error: safeDiagnostic(error.message) }); throw error }
     }
     const api = { invoke, on: (channel, listener) => {
@@ -279,6 +292,15 @@ test('isolated production commands persist the selected phase operations', async
     ;(await load('electron/controllers/fs-controller.ts')).registerFSController()
     ;(await load('electron/controllers/app-data-controller.ts')).registerAppDataController()
     ;(await load('electron/controllers/kb-controller.ts')).registerKBController()
+    if (continuityRun) {
+      assert.equal(candidate, true, 'CANDIDATE_REQUIRED')
+      ;(await load('electron/controllers/project-archive-controller.ts')).registerProjectArchiveController()
+      ;(await load('electron/controllers/finalization-controller.ts')).registerFinalizationController()
+      ;(await load('electron/controllers/cloud-backup-controller.ts')).registerCloudBackupController()
+      const embedding = (await load('electron/controllers/kb-controller.ts')).getEmbeddingConfig()
+      receipt.embedding = { configured: embedding !== null, selectedSteps: ['chapter_notes', 'character_cards'], requests: 0 }
+      assert.equal(embedding, null, 'UNREGISTERED_EMBEDDING_CONFIGURATION')
+    }
 
     const config = { genre: '悬疑', targetAudience: '通用', totalChapters: scene.chapters.length, wordsPerChapter: scene.targetUnits,
       writingLanguage: 'zh-CN', creativeStrategy: 'auto', globalGuidance: source.template,
@@ -289,11 +311,28 @@ test('isolated production commands persist the selected phase operations', async
       sessionLease: lease.leaseId, novelConfig: config } })
     const llmStore = (await load('src/stores/llm-store.ts')).useLLMStore
     llmStore.setState({ defaultModelId: model.id, models: [model] })
+    const refinalize = async (draftId, suffix) => {
+      const before = await invoke('db:continuity-read-source', draftId, project.rootPath, session)
+      assert.equal(before.status, 'valid', 'REPLACED_SOURCE_NOT_CURRENT')
+      const content = `${before.snapshot.content}\n\n${suffix}`
+      const created = await invoke('db:draft-create', { chapterNumber: 1, source: 'write', content, wordCount: countUnits(content) }, project.rootPath, session)
+      assert.ok(created?.success && created.id, 'REPLACEMENT_DRAFT_NOT_SAVED')
+      const result = await (await load('src/services/finalization-client.ts')).commitFinalizationSnapshot({
+        tabId: `quality:${request.caseId}`, projectPath: project.rootPath, projectSession: session, draftId: created.id,
+        chapterNumber: 1, chapterTitle: scene.title, content, contentRevision: 1 })
+      assert.ok(result?.success && result.committed, `SOURCE_REPLACEMENT_FAILED:${JSON.stringify(result)}`)
+      const after = await invoke('db:continuity-read-source', created.id, project.rootPath, session)
+      assert.equal(after.status, 'valid', 'REPLACEMENT_SOURCE_NOT_CURRENT')
+      assert.notEqual(after.snapshot.source.finalizationId, before.snapshot.source.finalizationId, 'FINALIZATION_SOURCE_NOT_REPLACED')
+      assert.equal(after.snapshot.content, content, 'REPLACEMENT_SOURCE_CONTENT_MISMATCH')
+      const current = await invoke('db:draft-get-full', created.id, project.rootPath, session)
+      return { before: before.snapshot.source, after: after.snapshot.source, content, draftId: created.id, version: current.version }
+    }
     const prompts = await load('src/services/prompt-templates.ts')
     const templateKeys = templateKeysForPhase(request.phase)
     if (request.action === 'prepare') {
       let templates
-      if (!candidate) {
+      if (!candidate || continuityRun) {
         templates = templateKeys.map(key => structuredClone(prompts.getPromptTemplate(key)))
         assert.ok(templates.every(template => template?.content && template.key))
         save(request.templatesPath, { baselineSha: target.codeSha, templates })
@@ -306,6 +345,14 @@ test('isolated production commands persist the selected phase operations', async
         premise: scene.material, worldbuilding: scene.material, characters_arch: '',
         synopsis: scene.chapters.map(entry => `第${entry.number}章：${entry.brief}`).join('\n') }
       db.prepare(`INSERT INTO project_core (${Object.keys(columns).join(',')}) VALUES (${Object.keys(columns).map(() => '?').join(',')})`).run(...Object.values(columns))
+      if (continuityRun) {
+        const roster = await invoke('db:character-roster-read', project.rootPath, session)
+        const saved = await invoke('db:character-roster-commit', { operationId: `quality-roster:${request.invocationId}`,
+          intent: 'manual_edit', schemaVersion: 1, expectedRevision: roster.revision, expectedIdentityRevision: roster.identityRevision,
+          entries: scene.characters.map(name => ({ characterId: `draft:${randomUUID()}`, name, role: 'protagonist',
+            gender: '', age: '', appearance: '', personality: '', background: '', abilities: '', motivation: '', arc: '', notes: '', relationships: [] })) }, project.rootPath, session)
+        assert.ok(saved?.success, `AUTHOR_ROSTER_NOT_SAVED:${saved?.error}`)
+      }
       for (const entry of fullRun ? [] : scene.chapters.slice(1)) db.prepare('INSERT INTO blueprints(chapter_number,title,role,purpose,key_events,characters,user_guidance) VALUES(?,?,?,?,?,?,?)')
         .run(entry.number, `作者预置第${entry.number}章`, '发展', entry.brief, entry.requiredEvents.join('；'), JSON.stringify(scene.characters),
           `${source.template}\n本章时点：${entry.oracle.time}`)
@@ -330,7 +377,17 @@ test('isolated production commands persist the selected phase operations', async
         const records = []
         for (const item of bodies) {
           let draftId, sourceId
-          if (item.required && request.phase === 'early-review') {
+          if (item.required && continuityRun) {
+            const created = await invoke('db:draft-create', { chapterNumber: item.chapterNumber, source: 'write', content: item.content,
+              wordCount: countUnits(item.content) }, project.rootPath, session)
+            assert.ok(created?.success && created.id, 'AUTHOR_DRAFT_NOT_SAVED')
+            const finalized = await (await load('src/services/finalization-client.ts')).commitFinalizationSnapshot({
+              tabId: `quality:${request.invocationId}`, projectPath: project.rootPath, projectSession: session,
+              draftId: created.id, chapterNumber: item.chapterNumber, chapterTitle: scene.title, content: item.content, contentRevision: 1 })
+            assert.ok(finalized?.committed && finalized.success, `AUTHOR_DRAFT_NOT_FINALIZED:${JSON.stringify(finalized)}`)
+            draftId = created.id
+            sourceId = `finalized:${draftId}`
+          } else if (item.required && request.phase === 'early-review') {
             const authority = await invoke('db:draft-authority-sequence', project.rootPath, session)
             assert.equal(authority?.status, 'empty', 'PREDECESSOR_AUTHORITY_NOT_EMPTY')
             const imported = await invoke('db:draft-import-finalized-batch', {
@@ -354,7 +411,7 @@ test('isolated production commands persist the selected phase operations', async
           }
           const full = await invoke('db:draft-get-full', draftId, project.rootPath, session)
           assert.equal(full?.content, item.content, 'PREDECESSOR_SOURCE_CHANGED')
-          if (item.required && request.phase === 'early-review') assert.equal(full?.status, 'finalized', 'PREDECESSOR_STATUS_CHANGED')
+          if (item.required && (request.phase === 'early-review' || continuityRun)) assert.equal(full?.status, 'finalized', 'PREDECESSOR_STATUS_CHANGED')
           assert.ok(Number.isSafeInteger(full?.version) && full.version > 0, 'PREDECESSOR_VERSION_INVALID')
           const materialBody = item.required ? previousChapterEnding(full.content) : full.content
           records.push({ chapterNumber: item.chapterNumber, draftId, sourceId, version: full.version,
@@ -364,6 +421,23 @@ test('isolated production commands persist the selected phase operations', async
         }
         save(path.join(target.isolationRoot, 'predecessor.json'), { candidates: records })
       }
+    }
+    if (continuityRun && request.action === 'execute' && continuityCase.kind === 'extraction' && continuityCase.sourceSuffix) {
+      if (continuityCase.authorMentalState) {
+        const roster = await invoke('db:character-roster-read', project.rootPath, session)
+        const edited = await invoke('db:character-roster-commit', { operationId: `quality-state:${request.invocationId}:${request.caseId}`,
+          intent: 'manual_edit', schemaVersion: 1, expectedRevision: roster.revision, expectedIdentityRevision: roster.identityRevision,
+          entries: roster.entries.map(entry => entry.currentState ? { ...entry,
+            currentState: { ...entry.currentState, mentalState: continuityCase.authorMentalState } } : entry) }, project.rootPath, session)
+        assert.ok(edited?.success, `AUTHOR_STATE_NOT_SAVED:${edited?.error}`)
+      }
+      const file = path.join(target.isolationRoot, 'predecessor.json'), previous = json(file)
+      const record = previous.candidates.find(item => item.required)
+      const replaced = await refinalize(record.draftId, continuityCase.sourceSuffix)
+      receipt.sourceReplacement = replaced
+      record.draftId = replaced.draftId; record.sourceId = `finalized:${replaced.draftId}`; record.version = replaced.version
+      record.contentHash = sha(replaced.content); record.persistedBytes = Buffer.byteLength(replaced.content)
+      save(file, previous)
     }
     const predecessorRecords = fullRun
       ? request.chapterNumber > 1 ? [{ ...request.predecessor, sourceId: `candidate:${request.predecessor?.draftId}`, required: true }] : []
@@ -413,19 +487,139 @@ test('isolated production commands persist the selected phase operations', async
     receipt.physicalProject = { path: project.rootPath, dbPath: db.name, projectId: project.projectId,
       format: candidate ? 'canonical' : 'legacy', parityHash: sha(sourceParity), readback: sourceParity }
     if (request.action === 'prepare') { assertNoOutboundPreflightFailures(receipt); receipt.status = 'prepared'; return }
-    assert.equal(sha(sourceParity), request.parityHash, 'PHYSICAL_PROJECT_PARITY_CHANGED')
+    if (continuityRun) request.parityHash = sha(sourceParity)
+    else assert.equal(sha(sourceParity), request.parityHash, 'PHYSICAL_PROJECT_PARITY_CHANGED')
+
+    const restorationKind = continuityRun ? request.operations[0]?.restore : null
+    let sourceDbPath, sourceBefore
+    const sourceRows = connection => Object.fromEntries(['drafts', 'contents', 'generation_attempts', 'finalization_outbox']
+      .map(table => [table, connection.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]))
+    if (restorationKind) {
+      const origin = { ...project }, originEpoch = session.leaseId
+      sourceDbPath = db.name
+      sourceBefore = sourceRows(db)
+      const targetProjectRoot = path.join(target.roots.project, request.caseId.toLowerCase())
+      assert.equal(path.dirname(targetProjectRoot), path.resolve(target.roots.project), 'RESTORE_OUTSIDE_TARGET_ROOT')
+      let restored, selectedGenerationId, bindingMode, branchGenerationIds
+      if (restorationKind === 'local') {
+        const archivePath = path.join(evidenceRoot, 'source.ainovel')
+        const exported = await invoke('project:archive-export', { projectSession: session, targetArchivePath: archivePath })
+        assert.ok(exported?.success, `ARCHIVE_EXPORT_FAILED:${exported?.error}`)
+        restored = await invoke('project:archive-restore', { archivePath, targetProjectRoot })
+      } else {
+        assert.equal(restorationKind, 'webdav', 'UNREGISTERED_RESTORE_KIND')
+        // The real WebDavBackupService sees a bounded in-memory DAV transport. No sockets are opened.
+        const files = new Map(), collections = new Set(['/dav/'])
+        receipt.dav = { transport: 'synthetic-loopback-fetch', requests: 0, externalRequests: 0 }
+        davFetch = async (input, options) => {
+          const url = new URL(String(input)), method = options.method
+          assert.ok(url.origin === 'http://127.0.0.1:17861' && url.pathname.startsWith('/dav/')
+            && !url.search && !url.hash && ['PROPFIND', 'MKCOL', 'PUT', 'GET', 'HEAD'].includes(method), 'DAV_OUTSIDE_REGISTERED_BOUNDARY')
+          receipt.dav.requests++
+          if (method === 'MKCOL') { collections.add(url.pathname.endsWith('/') ? url.pathname : `${url.pathname}/`); return new Response(null, { status: 201 }) }
+          if (method === 'PUT') {
+            const chunks = []
+            if (Buffer.isBuffer(options.body) || typeof options.body === 'string') chunks.push(Buffer.from(options.body))
+            else for await (const chunk of options.body) chunks.push(Buffer.from(chunk))
+            files.set(url.pathname, Buffer.concat(chunks))
+            return new Response(null, { status: 201 })
+          }
+          if (method === 'PROPFIND') {
+            const root = url.pathname.endsWith('/') ? url.pathname : `${url.pathname}/`
+            const children = [...collections].filter(item => item.startsWith(root) && item !== root && !item.slice(root.length).replace(/\/$/u, '').includes('/'))
+            return new Response(`<d:multistatus xmlns:d="DAV:">${[root, ...children].map(item => `<d:response><d:href>${item}</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>`).join('')}</d:multistatus>`, { status: 207 })
+          }
+          const bytes = files.get(url.pathname)
+          return new Response(method === 'HEAD' ? null : bytes ?? null, { status: bytes ? 200 : 404,
+            headers: bytes ? { 'Content-Length': String(bytes.length) } : {} })
+        }
+        const connected = await invoke('cloud-backup:connect', { endpoint: 'http://127.0.0.1:17861/dav/', username: 'fixture', secret: 'synthetic-dav-only' })
+        assert.ok(connected?.success, `DAV_CONNECT_FAILED:${JSON.stringify(connected)}`)
+        const accountId = connected.account.accountId
+        const existing = await invoke('cloud-backup:view', session)
+        const bound = await invoke('cloud-backup:confirm-binding', { projectSession: session, localEndpointAccountId: accountId,
+          lastSelectedParentGenerationIds: [], expectedRevision: existing.binding?.revision ?? null })
+        assert.ok(bound?.success, 'DAV_BIND_FAILED')
+        const backed = await invoke('cloud-backup:backup', { projectSession: session, operationId: randomUUID(), disclosureConfirmed: true })
+        assert.ok(backed?.success && backed.bindingSaved, `DAV_BACKUP_FAILED:${JSON.stringify(backed)}`)
+        if (continuityCase.otherBranchSuffix) {
+          await refinalize(predecessorReadbacks.find(item => item.required).draftId, continuityCase.otherBranchSuffix)
+          const branch = await invoke('cloud-backup:confirm-binding', { projectSession: session, localEndpointAccountId: accountId,
+            cloudBookId: bound.binding.cloudBookId, lastSelectedParentGenerationIds: [], expectedRevision: backed.binding.revision })
+          assert.ok(branch?.success, 'DAV_BRANCH_SELECTION_FAILED')
+          const second = await invoke('cloud-backup:backup', { projectSession: session, operationId: randomUUID(), disclosureConfirmed: true })
+          assert.ok(second?.success && second.bindingSaved, 'DAV_SECOND_BRANCH_FAILED')
+          branchGenerationIds = [backed.generation.generationId, second.generation.generationId]
+          sourceBefore = sourceRows(db)
+        }
+        const listed = await invoke('cloud-backup:list', { localEndpointAccountId: accountId, cloudBookId: bound.binding.cloudBookId })
+        selectedGenerationId = backed.generation.generationId
+        assert.ok(listed?.success && listed.generations.some(item => item.generationId === selectedGenerationId), 'DAV_SELECTED_GENERATION_MISSING')
+        if (branchGenerationIds) assert.ok(branchGenerationIds.every(id => listed.generations.some(item => item.generationId === id && item.hasSibling)), 'DAV_COMPLETE_FORK_MISSING')
+        restored = await invoke('cloud-backup:restore-copy', { localEndpointAccountId: accountId, cloudBookId: bound.binding.cloudBookId,
+          generationId: selectedGenerationId, targetProjectRoot, operationId: randomUUID() })
+        bindingMode = restored?.binding?.mode
+        assert.equal(bindingMode, 'origin-readonly', 'DAV_RESTORED_BINDING_INVALID')
+        davFetch = null
+      }
+      assert.ok(restored?.success, `RESTORE_FAILED:${JSON.stringify(restored)}`)
+      assert.equal(restored.receipt.originProjectId, origin.projectId, 'RESTORE_ORIGIN_MISMATCH')
+      assert.equal(restored.receipt.targetProjectRoot, targetProjectRoot, 'RESTORE_TARGET_MISMATCH')
+      database.closeProjectDatabase(); projectAccess.invalidateCurrentSession()
+      project = projectAccess.probeExistingProject(targetProjectRoot)
+      assert.equal(project.projectId, restored.receipt.targetProjectId, 'RESTORE_IDENTITY_MISMATCH')
+      assert.notEqual(project.projectId, origin.projectId, 'RESTORE_IDENTITY_REUSED')
+      database.initProjectDatabase(project.rootPath, Buffer.alloc(32, 7))
+      db = database.getProjectDb()
+      lease = projectAccess.beginSession(project)
+      session = { projectId: project.projectId, projectPath: project.rootPath, leaseId: lease.leaseId }
+      assert.notEqual(session.leaseId, originEpoch, 'RESTORE_EPOCH_REUSED')
+      projectStore.setState({ currentProject: { id: project.projectId, path: project.rootPath, name: scene.title, sessionLease: lease.leaseId, novelConfig: config } })
+      llmStore.setState({ defaultModelId: model.id, models: [model] })
+      const freeze = json(path.join(project.rootPath, '.ai-novel', 'portable-runtime-freeze.json'))
+      const transfer = json(path.join(project.rootPath, '.ai-novel', 'portable-transfer-authority.json'))
+      assert.equal(freeze.nonReplayable, true, 'RESTORE_HISTORY_NOT_FROZEN')
+      for (const prior of predecessorReadbacks) {
+        const restoredSource = await invoke('db:continuity-read-source', prior.draftId, project.rootPath, session)
+        assert.equal(restoredSource.status, 'valid', 'RESTORED_SOURCE_NOT_CURRENT')
+        assert.equal(sha(restoredSource.snapshot.content), sha(prior.content), 'RESTORED_SOURCE_CHANGED')
+      }
+      receipt.projectEpoch = session.leaseId
+      receipt.physicalProject = { ...receipt.physicalProject, path: project.rootPath, dbPath: db.name, projectId: project.projectId }
+      receipt.restoration = { ...restored.receipt, kind: restorationKind, selectedGenerationId, bindingMode, branchGenerationIds,
+        transferReceiptHash: sha(transfer), oldWorkFrozen: true }
+      receipt.restoration.currentAuthority = (await load('electron/services/portable-current-authority.ts')).readPortableCurrentAuthority({
+        database: db, projectStorageRoot: path.join(project.rootPath, '.ai-novel'), projectId: project.projectId })
+      if (continuityCase.sourceSuffix) {
+        const previous = predecessorReadbacks.find(item => item.required)
+        receipt.restoration.sourceReplacement = await refinalize(previous.draftId, continuityCase.sourceSuffix)
+        previous.content = receipt.restoration.sourceReplacement.content
+        previous.draftId = receipt.restoration.sourceReplacement.draftId
+        previous.sourceId = `finalized:${previous.draftId}`
+        previous.version = receipt.restoration.sourceReplacement.version
+      }
+    }
 
     let operationKind = null, operationId = null
     const repairPolicy = request.attemptPolicy?.milestone === request.milestone
       && request.attemptPolicy.arms?.includes(target.arm) ? request.attemptPolicy : null
-    const beforeOperationDispatch = createOperationDispatchGate({ repairPolicy, readPrimaryEvidence: first => {
+    const { parseFinalizedCharacterStateResponse } = continuityRun ? await load('src/shared/finalized-continuity.ts') : {}
+    const beforeOperationDispatch = createOperationDispatchGate({ repairPolicy, finalizationRepair: continuityRun, readPrimaryEvidence: first => {
       const attemptId = `${target.arm}:${first.attemptId}`
       const matches = receipt.attempts.filter(attempt => attempt.attemptId === attemptId)
       if (matches.length !== 1) return null
-      if (matches[0].authorityEvidence?.allFactsSent !== true
-        || JSON.stringify(matches[0].authorityEvidence.factHashes) !== JSON.stringify(authorityFacts.map(sha))) return null
+      if (!continuityRun && (matches[0].authorityEvidence?.allFactsSent !== true
+        || JSON.stringify(matches[0].authorityEvidence.factHashes) !== JSON.stringify(authorityFacts.map(sha)))) return null
       const events = fs.readFileSync(request.ledgerPath, 'utf8').trimEnd().split('\n')
         .map(line => JSON.parse(line)).filter(event => event.attemptId === attemptId)
+      if (continuityRun) {
+        const artifact = db.prepare('SELECT artifact_json FROM generation_artifacts WHERE attempt_id=?').pluck().get(first.attemptId)
+        if (!artifact || !finalizedContext) return null
+        const saved = JSON.parse(artifact)
+        let finalizedCharacterInvalid = false
+        try { parseFinalizedCharacterStateResponse(saved.text, finalizedContext.identity) } catch { finalizedCharacterInvalid = true }
+        return { attempt: matches[0], events, finalizedCharacterInvalid, ownerArtifactHash: sha(saved.text) }
+      }
       return { attempt: matches[0], events }
     }, onReject: rejection => {
       localDispatchGateRejection = { ...rejection, operation: operationId, runId: currentContext?.runId,
@@ -447,7 +641,7 @@ test('isolated production commands persist the selected phase operations', async
         actual = selectOwnerDispatch(db, currentContext.mainGenerationRunHandle, session, body)
         const run = db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').get(actual.runId)
         materialDecision = JSON.parse(run.binding_json).sourceManifest?.materialDecision ?? null
-        if (operationKind !== 'directory') preflight(materialDecision, 'MATERIAL_DECISION_RECEIPT_MISSING')
+        if (!['directory', 'chapter_notes', 'character_cards'].includes(operationKind)) preflight(materialDecision, 'MATERIAL_DECISION_RECEIPT_MISSING')
       }
       const observedIpc = candidate ? null : pendingBaselineIpc
       pendingBaselineIpc = null
@@ -456,6 +650,7 @@ test('isolated production commands persist the selected phase operations', async
         && observedIpc.epoch === session.leaseId, 'BASELINE_IPC_DISPATCH_IDENTITY_MISMATCH')
       if (repairPolicy && operationId === repairPolicy.operationId
         && (actual ?? observedIpc).purpose === repairPolicy.repairPurpose) await Promise.all(streamSettlements)
+      if (continuityRun && operationKind === 'character_cards' && actual.purpose.includes(':repair:')) await Promise.all(streamSettlements)
       // The registered extra call must carry its real product purpose before campaign reserve.
       beforeOperationDispatch(operationId, actual ?? observedIpc)
       const structuredSyntaxRepair = repairPolicy?.operationId === operationId
@@ -466,6 +661,16 @@ test('isolated production commands persist the selected phase operations', async
         .map(message => message.content).join('\n')
       const userMessages = body.messages.filter(message => message?.role === 'user' && typeof message.content === 'string')
       const userPromptHash = userMessages.length === 1 ? sha(userMessages[0].content) : null
+      if (continuityRun && operationKind === 'draft') {
+        preflight(actual.projectId === receipt.restoration.targetProjectId
+          && materialDecision?.included.some(item => item.sourceId === `finalized:${predecessorReadbacks.find(record => record.required).draftId}`),
+        'RESTORED_CURRENT_PREDECESSOR_NOT_SENT')
+        if (continuityCase.otherBranchSuffix) preflight(!promptText.includes(continuityCase.otherBranchSuffix), 'DAV_UNSELECTED_BRANCH_SENT')
+        if (receipt.restoration.sourceReplacement) {
+          preflight(promptText.includes(continuityCase.sourceSuffix), 'RESTORED_REPLACEMENT_SOURCE_NOT_SENT')
+          preflight(!materialDecision.included.some(item => item.category === 'derived-locator'), 'RESTORED_STALE_DERIVED_SENT')
+        }
+      }
       if (operationKind === 'draft') preflight(draftPromptIncludesCommittedBlueprint(userMessages.length === 1 ? userMessages[0].content : '',
         readCommittedDraftChapterInfo(db, chapter, project.rootPath, chapterGuidance), (actual ?? observedIpc).purpose), 'OUTBOUND_DRAFT_BLUEPRINT_MISSING')
       if (operationKind === 'recheck' && candidate) {
@@ -482,6 +687,14 @@ test('isolated production commands persist the selected phase operations', async
         const activeDraft = db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC,d.id DESC LIMIT 1')
           .pluck().get(chapter.number)
         preflight(typeof activeDraft === 'string' && promptText.includes(activeDraft), 'OUTBOUND_REFINE_SOURCE_DRAFT_MISSING')
+      } else if (continuityRun && ['chapter_notes', 'character_cards'].includes(operationKind)) {
+        const manifest = JSON.parse(db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(actual.runId)).sourceManifest
+        const task = manifest.finalizationGenerationTask
+        preflight(finalizedContext && sha(finalizedContext) === manifest.finalizationGenerationContextHash
+          && sha(task) === manifest.finalizationGenerationTaskHash
+          && sha(finalizedContext.identity.content) === finalizedContext.slot.source.contentHash
+          && promptText.includes(finalizedContext.identity.content), 'FINALIZATION_FROZEN_SOURCE_MISMATCH')
+        preflight(JSON.stringify(body.messages.slice(0, task.messages.length)) === JSON.stringify(task.messages), 'FINALIZATION_FROZEN_TASK_MISMATCH')
       } else if (!structuredSyntaxRepair) {
         for (const fact of authorityFacts)
           preflight(promptText.includes(fact), `OUTBOUND_ORACLE_AUTHORITY_MISSING:${fact}`)
@@ -546,6 +759,8 @@ test('isolated production commands persist the selected phase operations', async
           : request.phase === 'early-review' && operationKind === 'refine'
             ? { sourceDraftHash: sha(db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC,d.id DESC LIMIT 1')
                 .pluck().get(chapter.number)), confirmedReviewBound: candidate ? materialDecision.included.some(item => item.sourceId.startsWith('review:confirmed:')) : true }
+          : continuityRun && ['chapter_notes', 'character_cards'].includes(operationKind)
+            ? { finalizedSource: finalizedContext.slot.source, contextHash: sha(finalizedContext) }
           : { factHashes: authorityFacts.map(sha), allFactsSent: authorityFacts.every(fact => promptText.includes(fact)),
               ...(request.chapterNumber > 1 ? { predecessorHash: sha(predecessorReadbacks.find(record => record.required)?.content ?? ''), predecessorSent: true } : {}) },
         userPromptHash, optionalMaterialEvidence: { registered: registeredOptional, sent: sentOptional,
@@ -565,6 +780,14 @@ test('isolated production commands persist the selected phase operations', async
         if (operationKind === 'directory') text = JSON.stringify({ blueprints: (fullRun ? scene.chapters : [chapter]).map(entry => ({ chapterNumber: entry.number, title: scene.title, role: '开篇',
           purpose: entry.brief, keyEvents: entry.requiredEvents.join('；'), characters: scene.characters,
           relationships: [], suspenseHook: entry.oracle?.knowledge ?? '', userGuidance: fullRun ? `${source.template}\n本章时点：${entry.oracle.time}` : source.template })) })
+        else if (operationKind === 'chapter_notes') text = finalizedContext.identity.content
+        else if (operationKind === 'character_cards') {
+          const identity = finalizedContext.identity
+          const character = identity.characters.find(item => identity.content.includes(item.displayNameSnapshot))
+          assert.ok(character, 'SYNTHETIC_CHARACTER_SOURCE_MISSING')
+          text = JSON.stringify({ updates: [{ characterId: character.characterId,
+            currentState: { recentEvents: '发现日期异常，决定到现场核查', mentalState: '决定核查' }, evidence: { text: identity.content } }] })
+        }
         else if (operationKind === 'review') text = syntheticReview(chapter)
         else if (operationKind === 'refine') {
           const current = db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1')
@@ -642,7 +865,16 @@ test('isolated production commands persist the selected phase operations', async
       const params = { context: currentContext, callbacks, step: { id: operationId, title: operationId } }
       const sourceDraft = latestDraft()
       let command
-      if (operationKind === 'directory') command = new (await load('src/services/workflows/commands/directory.command.ts')).GenerateDirectoryCommand(
+      if (continuityRun && ['chapter_notes', 'character_cards'].includes(operationKind)) {
+        const predecessor = predecessorReadbacks.find(item => item.required)
+        const readback = await invoke('db:continuity-read-source', predecessor.draftId, project.rootPath, session)
+        assert.equal(readback.status, 'valid', 'FINALIZATION_SOURCE_NOT_CURRENT')
+        command = new (await load('src/services/workflows/commands/finalize-chapter.command.ts')).RunFinalizePostProcessCommand({
+          project: projectStore.getState().currentProject, chapterNumber: predecessor.chapterNumber, chapterTitle: scene.title,
+          draftContent: readback.snapshot.content, draftId: predecessor.draftId, sourceLabel: 'quality-c16-existing',
+          finalizedSource: readback.snapshot.source, stopOnFailure: true, stepKey: operationKind })
+      }
+      else if (operationKind === 'directory') command = new (await load('src/services/workflows/commands/directory.command.ts')).GenerateDirectoryCommand(
           { mode: 'append', startChapter: chapter.number, count: fullRun ? scene.chapters.length : 1 }, { expectedProjectPath: project.rootPath, novelConfig: config })
       else if (operationKind === 'draft') command = new (await load('src/services/workflows/commands/generate-draft.command.ts')).GenerateDraftCommand(
           readCommittedDraftChapterInfo(db, chapter, project.rootPath, chapterGuidance),
@@ -721,6 +953,34 @@ test('isolated production commands persist the selected phase operations', async
       const operationReceipt = { operation: operationId, kind: operationKind, returnedHash: sha(result),
         outputHash: sha(result), outputPath, handle: currentContext.mainGenerationRunHandle ?? null }
       receipt.operations.push(operationReceipt)
+      if (continuityRun && ['chapter_notes', 'character_cards'].includes(operationKind)) {
+        const slot = finalizedContext.slot
+        const persisted = await invoke('finalization-generation:read', { slot }, session)
+        assert.ok(persisted?.effect?.success && persisted.effect.stepKey === operationKind, 'FINALIZATION_EFFECT_NOT_SAVED')
+        const count = receipt.attempts.length
+        await command.execute(params)
+        assert.equal(receipt.attempts.length, count, 'FINALIZATION_IDEMPOTENCY_DISPATCHED')
+        receipt.finalizationEvidence ??= { source: slot.source, effects: [], idempotent: true }
+        receipt.finalizationEvidence.effects.push({ stepKey: operationKind, effect: persisted.effect,
+          effectHash: sha(persisted.effect), contextHash: sha(persisted.context) })
+        if (operationKind === 'character_cards') {
+          const roster = await invoke('db:character-roster-read', project.rootPath, session)
+          const character = roster.entries.find(item => item.characterId === finalizedContext.identity.characters[0].characterId)
+          const provenance = character?.currentState?.provenance?.recentEvents
+          receipt.finalizationEvidence.derivedApplied = provenance?.kind === 'derived'
+            && provenance.source.finalizationId === slot.source.finalizationId
+          if (request.mode === 'synthetic') {
+            assert.equal(character?.currentState?.recentEvents, '发现日期异常，决定到现场核查', 'DERIVED_STATE_NOT_APPLIED')
+            assert.equal(receipt.finalizationEvidence.derivedApplied, true, 'DERIVED_PROVENANCE_MISSING')
+          }
+          if (['C16-B', 'C16-C'].includes(request.caseId)) {
+            assert.equal(character?.currentState?.mentalState, '谨慎', 'AUTHOR_STATE_OVERWRITTEN')
+            const candidates = await invoke('finalized-character:list-state-candidates', session)
+            receipt.finalizationEvidence.authorProtected = candidates.some(item => item.characterId === character.characterId && item.field === 'mentalState')
+            if (request.mode === 'synthetic') assert.equal(receipt.finalizationEvidence.authorProtected, true, 'AUTHOR_CONFLICT_CANDIDATE_MISSING')
+          }
+        }
+      }
       if (operationKind === 'review') {
         const stored = await invoke('db:review-get-latest', sourceDraft.id, project.rootPath, session)
         assert.ok(stored?.id && stored.content, 'REVIEW_NOT_PERSISTED')
@@ -762,7 +1022,7 @@ test('isolated production commands persist the selected phase operations', async
         confirmation: reviewState.confirmation, revision: reviewState.revision, merge: reviewState.merge,
         recheck: reviewState.recheck }
     }
-    if (!fullRun || request.operations.some(operation => operation.kind === 'draft')) {
+    if ((!fullRun && !continuityRun) || request.operations.some(operation => operation.kind === 'draft')) {
       const draft = db.prepare('SELECT d.*,c.body AS content FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC').all(chapter.number)
       assert.equal(draft.length, 1, 'ACTUAL_DRAFT_NOT_SAVED')
       const units = countUnits(draft[0].content)
@@ -774,12 +1034,12 @@ test('isolated production commands persist the selected phase operations', async
     }
     if (candidate) {
       receipt.ownerTerminal = db.prepare('SELECT a.attempt_id,a.attempt_json,a.usage_receipt_json,g.artifact_json FROM generation_attempts a JOIN generation_artifacts g ON g.attempt_id=a.attempt_id ORDER BY a.rowid').all()
+        .filter(row => receipt.attempts.some(attempt => attempt.binding.actual.attemptId === row.attempt_id))
         .map(row => { const usage = JSON.parse(row.usage_receipt_json), artifact = JSON.parse(row.artifact_json)
           return { attemptId: row.attempt_id, status: JSON.parse(row.attempt_json).status, finishReason: usage.result?.finishReason,
             purpose: usage.purpose, trustedUsage: usage.result?.usage?.trusted === true,
             artifactId: artifact.artifactId, textHash: sha(artifact.text),
-            hasFormalEffect: Boolean(usage.directoryProgress || usage.draftCommit || usage.reviewRevisionEffect) } })
-        .filter(row => receipt.attempts.some(attempt => attempt.binding.actual.attemptId === row.attemptId))
+            hasFormalEffect: Boolean(usage.directoryProgress || usage.draftCommit || usage.reviewRevisionEffect || usage.finalizationEffect) } })
       assert.equal(receipt.ownerTerminal.length, receipt.attempts.length, 'OWNER_ATTEMPT_COVERAGE_MISMATCH')
       for (const attempt of receipt.attempts) {
         const terminal = receipt.ownerTerminal.find(row => row.attemptId === attempt.binding.actual.attemptId)
@@ -791,10 +1051,21 @@ test('isolated production commands persist the selected phase operations', async
           && attempt.binding.actual.purpose === repairPolicy.primaryPurpose
           && receipt.attempts.some(other => other.binding.operation === repairPolicy.operationId
             && other.binding.actual?.purpose === repairPolicy.repairPurpose)
-        assert.equal(terminal.hasFormalEffect, !repairedDirectory)
+        const repairedCards = continuityRun && attempt.binding.operation === '定稿角色状态'
+          && receipt.attempts.filter(other => other.binding.operation === '定稿角色状态').at(-1) !== attempt
+        assert.equal(terminal.hasFormalEffect, !repairedDirectory && !repairedCards)
         if (request.mode === 'synthetic') assert.equal(terminal.trustedUsage, true)
         assert.equal(terminal.textHash, attempt.visibleTextHash, 'OWNER_ARTIFACT_OUTPUT_MISMATCH')
       }
+    }
+    if (restorationKind) {
+      const { createRequire } = await import('node:module')
+      const BetterSqlite = createRequire(path.join(target.repositoryRoot, 'package.json'))('better-sqlite3')
+      const original = new BetterSqlite(sourceDbPath, { readonly: true, fileMustExist: true })
+      try { assert.deepEqual(sourceRows(original), sourceBefore, 'RESTORE_SOURCE_MODIFIED') } finally { original.close() }
+      receipt.restoration.sourceUnchanged = true
+      assert.equal(json(projectFile).projectId, receipt.restoration.originProjectId, 'SOURCE_DESCRIPTOR_REWRITTEN')
+      assert.ok(receipt.attempts.every(attempt => attempt.binding.actual.projectId === receipt.restoration.targetProjectId), 'RESTORE_DISPATCHED_OLD_PROJECT')
     }
     const ledgerEvents = fs.readFileSync(request.ledgerPath, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line))
     for (const attempt of receipt.attempts) {

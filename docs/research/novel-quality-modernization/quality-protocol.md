@@ -132,9 +132,13 @@ node scripts/quality-modernization-run.mjs development-synthetic --baseline-root
 node scripts/quality-modernization-run.mjs full --targets <新HEAD冻结双目标> --milestone final --mode real --physical-ledger <现有唯一物理账本绝对路径>
 ```
 
-合成路径只验证24次边界、18章落盘及接续，`qualityQualification=not-run`；正式执行仍须满足 S14B 前置，自动结果最高为 `pending-independent-oracle-review`。C16 既有提取6次及 C17/C18 恢复继续4次仍是单独义务，本入口不替代其执行、记账或验收；当前 runner 未登记这两组操作，不得以 full 完成声称它们通过。
+合成路径只验证24次边界、18章落盘及接续，`qualityQualification=not-run`；正式执行仍须满足 S14B 前置，自动结果最高为 `pending-independent-oracle-review`。C16 既有提取6次及 C17/C18 恢复继续4次仍是单独义务，full 不替代其执行、记账或验收。
 
 ## C16、C17、C18与编辑门
+
+`c16-c18` 是 `final` 下独立的 candidate-only 阶段，复用四个生产操作：定稿章节要点、角色状态、本地归档恢复后续写、WebDAV 选定世代恢复后续写。`continuityQualificationCases` 登记七个案例：C16-A 有效来源更新 derived、C16-B author 冲突、C16-C 同章重新定稿替换旧源，各执行 notes/cards 两次，归入原 `C16ExistingExtraction` 的6次；C17-A 恢复有效 source、C17-B 恢复后正常重新定稿使旧 derived 失效、C18-A 选定世代、C18-B 两完整分支明确选一，各执行一次 `GenerateDraftCommand`，归入原 `C17C18RestoreContinue` 的4次。准备、重试及角色状态原生 repair 如产生请求，均逐实际 attempt 记账；repair 仅接受同 run/root 的持久前序失败 artifact。早门和 full 的双臂设计不变，本阶段不触发 full 的6次规划/18章判定。离线合成通过只证明接线，正式质量资格仍需冻结输入、真实执行及独立 oracle 审核。
+
+离线 DAV 使用原控制器和服务、受限 loopback 地址的合成 transport，单独报告 DAV 请求数，不能充当真实网络、双 profile、OS 凭据或打包资格。嵌入配置须从实际隔离配置回读；本最小路径只选择 notes/cards、无 KB 导入。恢复回执必须包含新项目身份、transfer 来源、旧任务冻结与源项目不变；原6/4正式资格、文学裁决和历史 FAIL 均不由合成通过改判。
 
 中文语义源逐项登记C16自动derived正例、author冲突、同名改名、拒绝重启、旧outbox、CAS作者并发、较早章迟到、同章旧版本、身份不明及后处理失败。全部消费现有提取路径，禁止每角色新建付费调用。
 

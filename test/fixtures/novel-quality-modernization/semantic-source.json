@@ -13,6 +13,15 @@
   },
   "template": "只依据作者素材与本臂前章写作；完成本章必需事件；尚未实施的方案不得写为既成事实。",
   "skills": [],
+  "continuityQualificationCases": [
+    { "id": "C16-A", "sceneId": "场景1", "chapterNumber": 2, "kind": "extraction", "purpose": "有效定稿的空或旧derived字段更新" },
+    { "id": "C16-B", "sceneId": "场景1", "chapterNumber": 2, "kind": "extraction", "authorMentalState": "谨慎", "sourceSuffix": "林澄在记录末尾写下核查安排。", "purpose": "作者状态保全与冲突提议" },
+    { "id": "C16-C", "sceneId": "场景1", "chapterNumber": 2, "kind": "extraction", "sourceSuffix": "林澄更正记录：核查仍未开始，原定安排等待雨停。", "purpose": "同章重新定稿替换旧来源" },
+    { "id": "C17-A", "sceneId": "场景1", "chapterNumber": 2, "kind": "local", "purpose": "恢复有效derived来源后续写" },
+    { "id": "C17-B", "sceneId": "场景1", "chapterNumber": 2, "kind": "local", "sourceSuffix": "恢复副本的作者更正：林澄撤回先前核查安排，等待新的通行许可。", "purpose": "恢复后正常重新定稿使旧derived失效" },
+    { "id": "C18-A", "sceneId": "场景1", "chapterNumber": 2, "kind": "webdav", "purpose": "恢复选定完整世代后续写" },
+    { "id": "C18-B", "sceneId": "场景1", "chapterNumber": 2, "kind": "webdav", "otherBranchSuffix": "未选择分支：沈岸独自把草图交给另一个看守。", "purpose": "两完整分支明确选一且不混合来源" }
+  ],
   "scenes": [
     {
       "id": "场景1",

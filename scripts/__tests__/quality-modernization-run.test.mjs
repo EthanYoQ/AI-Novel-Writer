@@ -26,6 +26,65 @@ const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-q
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
 const protocolBinding = currentProtocolBinding()
 
+test('c16-c18 keeps candidate qualification and the two allocations separate', () => {
+  const scenario = PHASE_SCENARIOS['c16-c18']
+  assert.ok(scenario, 'C16_C18_SCENARIO_MISSING')
+  assertScenarioMatchesProtocol(selectPhase(protocol, 'c16-c18', 'final'), scenario)
+  assert.deepEqual(scenario.arms, ['candidate'])
+  assert.equal(scenario.operations.length, 4)
+  assert.equal(protocol.allocation.C16ExistingExtraction, 6)
+  assert.equal(protocol.allocation.C17C18RestoreContinue, 4)
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/c16-ledger-test-'))
+  try {
+    const file = path.join(dir, 'synthetic-ledger.jsonl')
+    for (const operation of scenario.operations) {
+      const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', ...protocolBinding, arm: 'candidate',
+        codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
+        phase: 'c16-c18', milestone: 'final', caseId: operation.restore === 'local' ? 'C17-A' : operation.restore === 'webdav' ? 'C18-A' : 'C16-A', operation: operation.id,
+        actual: { attemptId: operation.id, runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch' } }
+      assert.throws(() => validateCampaignBinding({ ...binding, arm: 'baseline' }, { campaignMode: 'synthetic', protocol }), /INVALID_CAMPAIGN_BINDING/)
+      updateLedger(file, { type: 'reserve', attemptId: operation.id, binding }, { campaignMode: 'synthetic' })
+    }
+    const rows = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse)
+    assert.deepEqual(rows.map(row => row.allocation), ['C16ExistingExtraction', 'C16ExistingExtraction', 'C17C18RestoreContinue', 'C17C18RestoreContinue'])
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('C16 native repairs require each settled invalid artifact and keep their actual owner lineage', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/c16-repair-test-'))
+  try {
+    const operation = '定稿角色状态'
+    const first = { attemptId: 'first', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: 'finalized-character-state' }
+    const outputPath = path.join(dir, 'artifact.txt')
+    fs.writeFileSync(outputPath, '{"updates":[{"evidence":"invalid"}]}')
+    const outputHash = hash(fs.readFileSync(outputPath))
+    let invalid = true
+    const proof = owner => {
+      const attemptId = `candidate:${owner.attemptId}`
+      const binding = { operation, actual: { ...owner } }
+      delete binding.actual.ordinal
+      return { attempt: { attemptId, binding, outputPath, visibleTextHash: outputHash },
+        events: [{ type: 'reserve', attemptId, binding }, { type: 'dispatch', attemptId }, { type: 'settle', attemptId, finishReason: 'stop' }],
+        finalizedCharacterInvalid: invalid, ownerArtifactHash: outputHash }
+    }
+    const create = () => createOperationDispatchGate({ finalizationRepair: true, readPrimaryEvidence: proof })
+    const gate = create()
+    gate(operation, first)
+    const repair = { ...first, attemptId: 'repair1', purpose: 'finalized-character-state:repair:1' }
+    assert.throws(() => gate(operation, { ...repair, rootActionId: 'other' }), /MODEL_REQUEST_REJECTED/)
+    invalid = false
+    assert.throws(() => gate(operation, repair), /MODEL_REQUEST_REJECTED/)
+    invalid = true
+    gate(operation, repair)
+    assert.throws(() => gate(operation, repair), /MODEL_REQUEST_REJECTED/)
+    gate(operation, { ...first, attemptId: 'repair2', purpose: 'finalized-character-state:repair:2' })
+    assert.throws(() => gate(operation, { ...first, attemptId: 'repair3', purpose: 'finalized-character-state:repair:3' }), /MODEL_REQUEST_REJECTED/)
+    const unchanged = createOperationDispatchGate({ readPrimaryEvidence: proof })
+    unchanged(operation, first)
+    assert.throws(() => unchanged(operation, repair), /MODEL_REQUEST_REJECTED/)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('full registers six planning calls and eighteen chapters in frozen alternating order', () => {
   const scenario = PHASE_SCENARIOS.full
   assert.ok(scenario, 'FULL_SCENARIO_MISSING')
@@ -368,15 +427,15 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
       && repairEnd > repairStart && checkStart > repairEnd && checkEnd > checkStart && reserve > checkEnd
       && evidenceStart > 0 && evidenceEnd > evidenceStart)
     const readPrimaryEvidence = new Function('first', 'receipt', 'request', 'authorityFacts', 'sha', 'fs', 'target',
-      fixture.slice(proofStart, proofEnd))
+      `const continuityRun = false;\n${fixture.slice(proofStart, proofEnd)}`)
     const isStructuredSyntaxRepair = new Function('repairPolicy', 'operationId', 'actual', 'observedIpc',
       `${fixture.slice(repairStart, repairEnd)}\nreturn structuredSyntaxRepair`)
     const checkAuthority = new Function('operationKind', 'candidate', 'request', 'db', 'chapter', 'promptText',
       'preflight', 'authorityFacts', 'predecessorReadbacks', 'naturalPredecessorText', 'scene', 'structuredSyntaxRepair',
-      `const fullRun = request.phase === 'full';\n${fixture.slice(checkStart, checkEnd)}`)
+      `const fullRun = request.phase === 'full', continuityRun = false;\n${fixture.slice(checkStart, checkEnd)}`)
     const readAuthorityEvidence = new Function('operationKind', 'candidate', 'request', 'authorityFacts', 'sha',
       'promptText', 'structuredSyntaxRepair', 'predecessorReadbacks', 'db', 'chapter',
-      `return ${fixture.slice(evidenceStart, evidenceEnd).trim().replace(/,$/, '')}`)
+      `const continuityRun = false; return ${fixture.slice(evidenceStart, evidenceEnd).trim().replace(/,$/, '')}`)
     const facts = ['fact sent', 'fact absent from repair']
     const request = { phase: 'early-budget', chapterNumber: 1 }
     const ledgerPath = path.join(dir, 'ledger.jsonl')
@@ -969,7 +1028,7 @@ test('外围请求即使被调用方捕获，prepare 与 execute 也不能通过
   assert.equal(receipt.physicalModelRequests, 0)
   assert.equal(receipt.syntheticDispatches, 0)
   const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
-  assert.ok(fixture.includes('globalThis.fetch = async () => rejectOutsidePhysicalBoundary(receipt)'))
+  assert.ok(fixture.includes('globalThis.fetch = async (...args) => davFetch ? davFetch(...args) : rejectOutsidePhysicalBoundary(receipt)'))
   assert.match(fixture, /if \(request\.action === 'prepare'\) \{ assertNoOutboundPreflightFailures\(receipt\); receipt\.status = 'prepared'/)
   assert.match(fixture, /assertNoOutboundPreflightFailures\(receipt\)\s+receipt\.status = 'passed'/)
 })

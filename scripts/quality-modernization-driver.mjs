@@ -189,6 +189,17 @@ export function runProductionBridge(request) {
 // the selected protocol phase before opening the gate, so a drift here fails closed
 // instead of quietly running a different experiment.
 export const PHASE_SCENARIOS = Object.freeze({
+  'c16-c18': Object.freeze({
+    caseId: 'C16-A', caseIds: Object.freeze(['C16-A', 'C16-B', 'C16-C', 'C17-A', 'C17-B', 'C18-A', 'C18-B']),
+    sceneId: '场景1', chapterNumber: 2, milestone: 'final', arms: Object.freeze(['candidate']),
+    scenarioRevision: 'c16-c18-candidate-production-path-v1',
+    operations: Object.freeze([
+      Object.freeze({ id: '定稿章节要点', kind: 'chapter_notes' }),
+      Object.freeze({ id: '定稿角色状态', kind: 'character_cards' }),
+      Object.freeze({ id: '本地恢复后续写', kind: 'draft', restore: 'local' }),
+      Object.freeze({ id: 'DAV选定世代恢复后续写', kind: 'draft', restore: 'webdav' }),
+    ]),
+  }),
   full: Object.freeze({
     caseIds: Object.freeze(['场景1/1', '场景1/2', '场景1/3', '场景2/1', '场景2/2', '场景2/3', '场景3/1', '场景3/2', '场景3/3']),
     milestone: 'final', scenarioRevision: 's14b-full-continuous-project-v1',
@@ -254,7 +265,7 @@ const repairableDirectJsonSyntax = content => {
   if (!/^[{[]/u.test(candidate)) return false
   try { JSON.parse(candidate); return false } catch { return true }
 }
-function verifiedPrimarySyntaxFailure(first, evidence, operationId) {
+function verifiedPrimarySyntaxFailure(first, evidence, operationId, finalizationRepair = false) {
   const attempt = evidence?.attempt, rows = evidence?.events
   const identity = attempt?.binding?.actual ?? attempt?.binding?.baselineIpc
   if (!attempt || !Array.isArray(rows) || rows.length !== 3 || !identity
@@ -267,34 +278,40 @@ function verifiedPrimarySyntaxFailure(first, evidence, operationId) {
     || typeof attempt.outputPath !== 'string' || !/^[a-f0-9]{64}$/.test(attempt.visibleTextHash ?? '')) return false
   try {
     const output = fs.readFileSync(attempt.outputPath, 'utf8')
-    return digest(output) === attempt.visibleTextHash && repairableDirectJsonSyntax(output)
+    return digest(output) === attempt.visibleTextHash && (finalizationRepair
+      ? evidence.finalizedCharacterInvalid === true && evidence.ownerArtifactHash === attempt.visibleTextHash
+      : repairableDirectJsonSyntax(output))
   } catch { return false }
 }
 /** Only a settled, hash-verified syntax failure may add one physical request. */
-export function createOperationDispatchGate({ onReject, repairPolicy, readPrimaryEvidence } = {}) {
+export function createOperationDispatchGate({ onReject, repairPolicy, readPrimaryEvidence, finalizationRepair = false } = {}) {
   const dispatched = new Map()
   return (operationId, owner) => {
     const first = dispatched.get(operationId)
+    const cards = finalizationRepair && operationId === '定稿角色状态'
     const policyApplies = repairPolicy?.operationId === operationId && repairPolicy.maxRepairAttempts === 1
     const identity = value => value && typeof value.attemptId === 'string' && value.attemptId
       && typeof value.runId === 'string' && value.runId && typeof value.projectId === 'string' && value.projectId
       && typeof value.epoch === 'string' && value.epoch
     const hasSyntaxProof = () => {
-      try { return verifiedPrimarySyntaxFailure(first, readPrimaryEvidence?.(first), operationId) }
+      try { return verifiedPrimarySyntaxFailure(first, readPrimaryEvidence?.(first), operationId, cards) }
       catch { return false }
     }
-    const repair = first && policyApplies && identity(first) && identity(owner)
-      && first.purpose === repairPolicy.primaryPurpose && owner.purpose === repairPolicy.repairPurpose
+    const repair = first && (policyApplies || cards) && identity(first) && identity(owner)
+      && (cards ? (first.ordinal ?? 0) < 2 && owner.purpose === `finalized-character-state:repair:${(first.ordinal ?? 0) + 1}`
+        : first.purpose === repairPolicy.primaryPurpose && owner.purpose === repairPolicy.repairPurpose)
       && first.attemptId !== owner.attemptId && first.runId === owner.runId
       && first.rootActionId === owner.rootActionId && first.projectId === owner.projectId && first.epoch === owner.epoch
       && first.repairUsed !== true && hasSyntaxProof()
-    if (!operationId || first && !repair || !first && policyApplies && (!identity(owner) || owner.purpose !== repairPolicy.primaryPurpose)) {
+    if (!operationId || first && !repair || !first && (policyApplies || cards)
+      && (!identity(owner) || owner.purpose !== (cards ? 'finalized-character-state' : repairPolicy.primaryPurpose))) {
       const rejection = Object.freeze({ code: 'UNREGISTERED_ADDITIONAL_MODEL_REQUEST',
         operationId: operationId || null, reason: operationId ? 'duplicate-operation' : 'missing-operation', beforeDispatch: true })
       onReject?.(rejection)
       throw Object.assign(new Error('MODEL_REQUEST_REJECTED'), { code: 'OPERATION_DISPATCH_REJECTED' })
     }
-    if (repair) first.repairUsed = true
+    if (repair && cards) dispatched.set(operationId, { ...owner, ordinal: (first.ordinal ?? 0) + 1 })
+    else if (repair) first.repairUsed = true
     else dispatched.set(operationId, { ...owner })
   }
 }
@@ -861,15 +878,16 @@ function runProductionFull(targets, options) {
 export function runProductionPhasePair(targets, options) {
   if (options.phase === 'full') return runProductionFull(targets, options)
   const scenario = productionScenario(options.phase)
+  const arms = scenario.arms ?? ['baseline', 'candidate']
   if ((scenario.scenarioRevision ?? null) !== (options.scenarioRevision ?? null)
     || stableEvidence(scenario.selectionDifference ?? null) !== stableEvidence(options.selectionDifference ?? null)
     || stableEvidence(scenario.attemptPolicy ?? null) !== stableEvidence(options.attemptPolicy ?? null))
     throw new Error('SCENARIO_PROTOCOL_MISMATCH')
   if (!options.protocolRevision || !/^[a-f0-9]{64}$/.test(options.protocolHash ?? '')
-    || ['baseline', 'candidate'].some(arm => targets[arm].protocolRevision !== options.protocolRevision || targets[arm].protocolHash !== options.protocolHash)) throw new Error('PROTOCOL_BINDING_MISMATCH')
+    || arms.some(arm => targets[arm].protocolRevision !== options.protocolRevision || targets[arm].protocolHash !== options.protocolHash)) throw new Error('PROTOCOL_BINDING_MISMATCH')
   const invocationId = randomUUID()
   const directoryId = invocationId.slice(0, 8)
-  const executionTargets = Object.fromEntries(['baseline', 'candidate'].map(arm => {
+  const executionTargets = Object.fromEntries(arms.map(arm => {
     const original = targets[arm], roots = Object.fromEntries(Object.entries(original.roots).map(([key, directory]) => [key, path.join(directory, directoryId)]))
     const isolationRoot = path.join(original.isolationRoot, 'invocations', invocationId)
     for (const directory of [isolationRoot, ...Object.values(roots)]) if (fs.existsSync(directory)) throw new Error('INVOCATION_DIRECTORY_COLLISION')
@@ -885,8 +903,37 @@ export function runProductionPhasePair(targets, options) {
     phase: options.phase, caseId: scenario.caseId, sceneId: scenario.sceneId, chapterNumber: scenario.chapterNumber,
     operations: scenario.operations, semanticPath: options.semanticPath, templatesPath: options.templatesPath,
     ledgerPath: options.ledgerPath, driverHash: productionBridgeHash() }
-  const prepared = ['baseline', 'candidate'].map(arm => runProductionBridge({ ...common, target: executionTargets[arm], action: 'prepare' }))
+  const prepared = arms.map(arm => runProductionBridge({ ...common, target: executionTargets[arm], action: 'prepare' }))
   const parityHash = prepared[0].physicalProject.parityHash
+  if (options.phase === 'c16-c18') {
+    const results = []
+    const cases = JSON.parse(fs.readFileSync(options.semanticPath)).continuityQualificationCases
+    if (stableEvidence(cases?.map(item => item.id)) !== stableEvidence(scenario.caseIds)) throw new Error('CONTINUITY_CASES_NOT_REGISTERED')
+    for (const [index, item] of cases.entries()) {
+      const operations = item.kind === 'extraction' ? scenario.operations.slice(0, 2)
+        : scenario.operations.filter(operation => operation.restore === item.kind)
+      if (operations.length !== (item.kind === 'extraction' ? 2 : 1)) throw new Error('CONTINUITY_CASES_NOT_REGISTERED')
+      try {
+        results.push(runProductionBridge({ ...common, caseId: item.id, target: executionTargets.candidate, action: 'execute', operations,
+          parityHash, evidenceRoot: path.join(executionTargets.candidate.isolationRoot, `step-${index}`) }))
+      } catch (error) {
+        results.push({ ...(error.receiptPath && fs.existsSync(error.receiptPath) ? JSON.parse(fs.readFileSync(error.receiptPath)) : {}),
+          status: 'failed', code: error.message, receiptPath: error.receiptPath })
+        break
+      }
+    }
+    const validation = validateCandidateContinuityResults(results, common.mode)
+    return { ...validation, phase: options.phase, invocationId, parityHash, prepared, results,
+      qualification: options.development ? 'development-only-unfrozen' : `${common.mode}-production-path-only`,
+      qualityQualification: common.mode === 'synthetic' ? 'not-run' : validation.status,
+      formalSampleQualification: common.mode === 'synthetic' ? 'not-run' : validation.status,
+      operationCounts: scenario.operations.map(operation => ({ operation: operation.id,
+        logical: results.flatMap(result => result.operations ?? []).filter(item => item.operation === operation.id).length,
+        physical: results.flatMap(result => result.attempts ?? []).filter(item => item.binding?.operation === operation.id && common.mode === 'real').length,
+        synthetic: results.flatMap(result => result.attempts ?? []).filter(item => item.binding?.operation === operation.id && common.mode === 'synthetic').length })),
+      physicalModelRequests: results.reduce((sum, result) => sum + (result.physicalModelRequests ?? 0), 0),
+      syntheticDispatches: results.reduce((sum, result) => sum + (result.syntheticDispatches ?? 0), 0) }
+  }
   if (prepared[1].physicalProject.parityHash !== parityHash) throw new Error('ACTUAL_PROJECT_PARITY_FAILED')
   const results = ['baseline', 'candidate'].map(arm => {
     try { return runProductionBridge({ ...common, target: executionTargets[arm], action: 'execute', parityHash }) }
@@ -907,6 +954,54 @@ export function runProductionPhasePair(targets, options) {
     protocolRevision: common.protocolRevision, protocolHash: common.protocolHash,
     scenarioRevision: common.scenarioRevision, selectionDifferencePolicy: common.selectionDifference,
     invocationId, parityHash, prepared, results }
+}
+
+export function validateCandidateContinuityResults(results, mode) {
+  const fail = code => ({ status: 'failed', candidateFailure: code })
+  if (results.length !== 7 || results.some(result => result.status !== 'passed' || result.arm !== 'candidate'
+    || result.phase !== 'c16-c18' || result.mode !== mode)) return fail('CANDIDATE_OPERATION_MISSING')
+  if (stableEvidence(results.map(result => result.caseId)) !== stableEvidence(PHASE_SCENARIOS['c16-c18'].caseIds)) return fail('CANDIDATE_CASE_MISMATCH')
+  const source = results[0].physicalProject?.projectId
+  if (!source || results.slice(0, 3).some(result => result.physicalProject?.projectId !== source
+    || !result.finalizationEvidence?.idempotent || !result.finalizationEvidence.derivedApplied || result.finalizationEvidence.effects?.length !== 2))
+    return fail('FINALIZATION_EFFECT_MISSING')
+  for (const [index, result] of results.entries()) {
+    const expected = PHASE_SCENARIOS['c16-c18'].operations.slice(index < 3 ? 0 : index < 5 ? 2 : 3, index < 3 ? 2 : index < 5 ? 3 : 4)
+    if (stableEvidence(result.operations?.map(item => item.operation)) !== stableEvidence(expected.map(item => item.id))) return fail('CANDIDATE_OPERATION_MISMATCH')
+    if (!Array.isArray(result.attempts) || !Array.isArray(result.ownerTerminal)
+      || result.ownerTerminal.length !== result.attempts.length) return fail('ACTUAL_OWNER_ARTIFACT_MISMATCH')
+    for (const operation of result.operations) {
+      const attempts = result.attempts.filter(attempt => attempt.binding?.operation === operation.operation)
+      if (attempts.length < 1 || attempts.length > (operation.kind === 'character_cards' ? 3 : 1)) return fail('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+      for (const [ordinal, attempt] of attempts.entries()) {
+        const actual = attempt.binding?.actual, terminal = result.ownerTerminal.find(item => item.attemptId === actual?.attemptId)
+        if (!actual || actual.projectId !== result.physicalProject.projectId || actual.epoch !== result.projectEpoch
+          || actual.runId !== operation.handle?.runId || actual.rootActionId !== operation.handle?.rootActionId
+          || !terminal?.artifactId || terminal.textHash !== attempt.visibleTextHash
+          || attempt.binding.phase !== 'c16-c18' || attempt.binding.arm !== 'candidate'
+          || attempt.binding.invocationId !== result.invocationId || attempt.binding.parityId !== result.physicalProject.parityHash
+          || terminal.purpose !== actual.purpose || terminal.finishReason !== 'stop'
+          || terminal.hasFormalEffect !== (ordinal === attempts.length - 1)
+          || ordinal === 0 && actual.purpose !== (operation.kind === 'chapter_notes' ? 'finalized-chapter-notes'
+            : operation.kind === 'character_cards' ? 'finalized-character-state' : 'chapter-draft')
+          || ordinal > 0 && actual.purpose !== `finalized-character-state:repair:${ordinal}`)
+          return fail('ACTUAL_OWNER_IDENTITY_MISMATCH')
+      }
+    }
+    if (result.physicalModelRequests !== (mode === 'real' ? result.attempts.length : 0)
+      || result.syntheticDispatches !== (mode === 'synthetic' ? result.attempts.length : 0)) return fail('PHYSICAL_CALL_COUNT_MISMATCH')
+    if (index >= 3 && (result.restoration?.originProjectId !== source || result.restoration?.targetProjectId !== result.physicalProject.projectId
+      || result.physicalProject.projectId === source || !result.restoration.transferReceiptHash
+      || !result.restoration.sourceUnchanged || !result.restoration.oldWorkFrozen
+      || !validDraftObservation(result.draftObservation)
+      || index >= 5 && (!result.restoration.selectedGenerationId || result.restoration.bindingMode !== 'origin-readonly')))
+      return fail('RESTORE_IDENTITY_MISMATCH')
+  }
+  if (new Set(results.slice(3).map(result => result.physicalProject.projectId)).size !== 4) return fail('RESTORE_IDENTITY_MISMATCH')
+  if (!results[1].finalizationEvidence.authorProtected || !results[2].sourceReplacement
+    || !results[4].restoration.sourceReplacement || results[6].restoration.branchGenerationIds?.length !== 2)
+    return fail('CONTINUITY_CASE_EVIDENCE_MISSING')
+  return { status: mode === 'real' ? 'pending-independent-oracle-review' : 'passed' }
 }
 
 // Existing command tests already inject the physical completion/IPC boundaries.
