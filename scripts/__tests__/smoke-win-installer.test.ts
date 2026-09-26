@@ -812,7 +812,7 @@ describe('Windows installer smoke contract', () => {
     const script = readFileSync('scripts/smoke-win-installer.ps1', 'utf8')
     const appSmoke = readFileSync('scripts/smoke-win-app.ps1', 'utf8')
     const legacyProbe = readFileSync('scripts/probe-legacy-project-open.mjs', 'utf8')
-    const v110 = script.search(/if \(\$V110InstalledUpgrade\) \{\r?\n      Invoke-AiNovelV110Fixture -Mode seed/)
+    const v110 = script.search(/if \(\$V110InstalledUpgrade\) \{\r?\n {6}Invoke-AiNovelV110Fixture -Mode seed/)
     const v025 = script.indexOf('Invoke-AiNovelUpgradeDataFixture -Mode seed -ProjectRoot $upgradeFixtureRoot')
     expect(v110).toBeGreaterThanOrEqual(0)
     expect(v025).toBeGreaterThan(v110)
