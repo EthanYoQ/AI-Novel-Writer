@@ -343,6 +343,12 @@ if (skin?.customSkin?.importSucceeded !== true || skin?.customSkin?.readSucceede
 }
 NODE
 
+a11_receipt="$smoke_root/a11/receipt.json"
+tested_sha="$(git rev-parse HEAD)"
+run_with_timeout 'mounted app A11 offline import' 300 node "$repository_root/scripts/f05-a11-offline-import-journey.mjs" \
+  "--mac-mounted-app=$app" "--mount-point=$mount_point" "--dmg=$dmg" \
+  "--scratch-root=$smoke_root/a11" "--tested-sha=$tested_sha" "--arch=$target_arch"
+
 node - "$qualification_directory/macos-dmg-smoke.json" "$dmg" "$app" "$target_arch" "$runner_machine_arch" <<'NODE'
 const fs = require('node:fs')
 const crypto = require('node:crypto')
@@ -364,11 +370,12 @@ fs.writeFileSync(output, `${JSON.stringify({
 }, null, 2)}\n`)
 NODE
 
-node - "$packaged_smoke_receipt" "$release_directory" "$vector_evidence" "$homepage_evidence" "$skin_evidence" "$qualification_directory/macos-dmg-smoke.json" "$target_arch" "$runner_machine_arch" <<'NODE'
+node - "$packaged_smoke_receipt" "$release_directory" "$vector_evidence" "$homepage_evidence" "$skin_evidence" "$qualification_directory/macos-dmg-smoke.json" "$target_arch" "$runner_machine_arch" "$a11_receipt" "$app" "$mount_point" "$dmg" "$tested_sha" "$repository_root/scripts/f05-a11-offline-import-journey.mjs" "$repository_root/electron/services/__tests__/legacy-v110-schema.sql" <<'NODE'
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
-const [output, releaseDirectory, vectorFile, homepageFile, skinFile, macosDmgSmokeFile, targetArch, runnerMachine] = process.argv.slice(2)
+const [output, releaseDirectory, vectorFile, homepageFile, skinFile, macosDmgSmokeFile, targetArch, runnerMachine,
+  a11File, app, mountPoint, dmg, testedSha, driver, sql] = process.argv.slice(2)
 
 function sha256(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -396,6 +403,51 @@ const macosDmgSmokeReference = {
   kind: macosDmgSmoke.kind,
   sha256: sha256(macosDmgSmokeFile),
 }
+const a11 = JSON.parse(fs.readFileSync(a11File, 'utf8'))
+const provenance = a11.provenance
+const journey = a11.mac
+const hashText = value => crypto.createHash('sha256').update(value).digest('hex')
+if (a11.qualification !== 'A11_OFFLINE_LEGACY_COPY_MAC_V3' || a11.mode !== 'synthetic-v110-mounted-app'
+  || a11.outcome !== 'PARTIAL' || a11.sliceOutcome !== 'PASS' || a11.testedSha !== testedSha || a11.arch !== targetArch) {
+  throw new Error('Mounted app A11 qualification or source binding is incomplete')
+}
+if (provenance?.dmgSha256 !== sha256(dmg)
+  || provenance.executableSha256 !== sha256(path.join(app, 'Contents', 'MacOS', 'AI小说作家'))
+  || provenance.asarSha256 !== sha256(path.join(app, 'Contents', 'Resources', 'app.asar'))
+  || provenance.driverSha256 !== sha256(driver) || provenance.sqlSha256 !== sha256(sql)
+  || provenance.appPathSha256 !== hashText(fs.realpathSync(app))
+  || provenance.mountPointSha256 !== hashText(fs.realpathSync(mountPoint))) {
+  throw new Error('Mounted app A11 package, path, driver or SQL hash changed')
+}
+if (JSON.stringify(a11.steps?.map(step => [step.stepId, step.outcome])) !== JSON.stringify([
+  ['v1.1.0-import-open', 'PASS'], ['v1.1.0-target-edit-save', 'PASS'], ['v1.1.0-target-edit-reopen', 'PASS'],
+]) || journey?.sourceVersion !== 'v1.1.0' || !/^[a-f0-9]{64}$/.test(journey.sourceInventorySha256 ?? '')
+  || !/^[a-f0-9]{64}$/.test(journey.targetInventorySha256 ?? '')
+  || journey.sourceProjectId === journey.targetProjectId
+  || journey.database?.rows?.project_core !== 1 || journey.database?.rows?.contents !== 1
+  || journey.database?.rows?.drafts !== 1 || journey.database?.llmCalls !== 0
+  || journey.savedBodySha256 !== journey.reopenedBodySha256
+  || !/^[a-f0-9]{64}$/.test(journey.sourceBodySha256 ?? '')
+  || journey.importAndSaveRequests?.mainFetchCalls !== 0 || journey.importAndSaveRequests?.rendererRequests !== 0
+  || journey.reopenRequests?.mainFetchCalls !== 0 || journey.reopenRequests?.rendererRequests !== 0) {
+  throw new Error('Mounted app A11 import, persistence or zero-request evidence is incomplete')
+}
+const a11OfflineImport = {
+  sourceVersion: journey.sourceVersion,
+  testedSha,
+  architecture: targetArch,
+  packageHashes: provenance,
+  sourceInventorySha256: journey.sourceInventorySha256,
+  targetInventorySha256: journey.targetInventorySha256,
+  sourceProjectId: journey.sourceProjectId,
+  targetProjectId: journey.targetProjectId,
+  sourceBodySha256: journey.sourceBodySha256,
+  savedBodySha256: journey.savedBodySha256,
+  reopenedBodySha256: journey.reopenedBodySha256,
+  llmCalls: journey.database.llmCalls,
+  requests: { importAndSave: journey.importAndSaveRequests, reopen: journey.reopenRequests },
+  actions: a11.steps.map(step => step.stepId),
+}
 const direct = {
   mountedApplication: macosDmgSmoke.mountedApplication,
   secureFileSystemHelper: macosDmgSmoke.secureFileSystemHelper,
@@ -404,6 +456,7 @@ const direct = {
   vectorSmoke: macosDmgSmoke.vectorSmoke,
   officialHomepageSmoke: macosDmgSmoke.officialHomepageSmoke,
   skinSmoke: macosDmgSmoke.skinSmoke,
+  a11OfflineImport,
   architecture: { target: targetArch, runnerMachine },
 }
 
@@ -424,6 +477,7 @@ fs.writeFileSync(output, `${JSON.stringify({
     'Validated the packaged official-homepage smoke fact.',
     'Validated the packaged skin smoke fact.',
     'Validated the direct macOS DMG smoke fact.',
+    'Validated synthetic v1.1 offline project import, target save, and new-process reopen in the mounted application.',
   ],
   direct,
   directFacts: direct,

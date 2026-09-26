@@ -10,7 +10,14 @@ import * as lancedb from '@lancedb/lancedb'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const arg = name => process.argv.find(value => value.startsWith(`--${name}=`))?.slice(name.length + 3)
-const packageDir = arg('package-dir')
+const macMountedApp = arg('mac-mounted-app')
+const macFixtureOnly = arg('mac-fixture-only') === '1'
+const macMode = Boolean(macMountedApp || macFixtureOnly)
+const macScratchRoot = arg('scratch-root')
+const macDmg = arg('dmg')
+const macMountPoint = arg('mount-point')
+const macArch = arg('arch')
+const packageDir = macMode ? macMountedApp : arg('package-dir')
 const buildTree = arg('build-tree')
 const fieldPolicy = path.join(buildTree ?? '', 'electron', 'services', 'portable-project-field-policy.json')
 const testedSha = arg('tested-sha')
@@ -23,23 +30,47 @@ const sources = [
   { version: 'v1.0.0', path: arg('legacy-v100') },
   { version: 'v1.1.0', path: arg('legacy-v110') },
 ]
+if (macMode) {
+  assert(macScratchRoot && path.isAbsolute(macScratchRoot), 'macOS fixture requires an absolute --scratch-root')
+  if (!macFixtureOnly) {
+    assert(macMountedApp && macDmg && macMountPoint && /^[a-f0-9]{40}$/.test(testedSha ?? '')
+      && ['arm64', 'x64'].includes(macArch), 'Specify mounted app, DMG, mount point, tested SHA and arch')
+    assert.equal(process.platform, 'darwin', 'Mounted macOS package journey requires macOS')
+    assert.equal(path.resolve(macMountedApp), path.join(path.resolve(macMountPoint), path.basename(macMountedApp)))
+    assert.equal(fs.realpathSync(macMountedApp), path.join(fs.realpathSync(macMountPoint), path.basename(macMountedApp)))
+    assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim(), testedSha)
+    assert.equal(execFileSync('uname', ['-m'], { encoding: 'utf8' }).trim(), macArch === 'x64' ? 'x86_64' : 'arm64')
+    assert(fs.statSync(macDmg).isFile(), 'Missing mounted DMG source')
+  }
+} else {
 assert(packageDir && buildTree && /^[a-f0-9]{40}$/.test(testedSha ?? '')
   && /^[a-f0-9]{64}$/.test(expectedExe ?? '') && /^[a-f0-9]{64}$/.test(expectedAsar ?? '')
   && sources.every(source => source.path) && (!onlyVersion || sources.some(source => source.version === onlyVersion)),
   'Specify clean build tree, fixed package SHA/hashes, both historical fixture paths and a known --only version')
 assert(!finalDelta || (supplement && onlyVersion === 'v1.1.0'), 'Final A11 delta requires one synthetic v1.1.0 source')
+}
 const buildGit = (...args) => execFileSync('git', args, { cwd: buildTree, encoding: 'utf8' }).trim()
+if (!macMode) {
 assert.equal(buildGit('rev-parse', 'HEAD'), testedSha, 'Build tree HEAD differs from tested SHA')
 assert.equal(buildGit('status', '--porcelain'), '', 'Build tree must be clean')
 assert.equal(path.resolve(packageDir), path.join(path.resolve(buildTree), 'release', JSON.parse(fs.readFileSync(path.join(buildTree, 'package.json'), 'utf8')).version, 'win-unpacked'))
+}
 
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
-const exe = path.join(packageDir, 'AI小说作家.exe')
-const asar = path.join(packageDir, 'resources', 'app.asar')
+const hashText = value => createHash('sha256').update(value).digest('hex')
+const exe = macMode && !macFixtureOnly ? path.join(macMountedApp, 'Contents', 'MacOS', 'AI小说作家') : path.join(packageDir ?? '', 'AI小说作家.exe')
+const asar = macMode && !macFixtureOnly ? path.join(macMountedApp, 'Contents', 'Resources', 'app.asar') : path.join(packageDir ?? '', 'resources', 'app.asar')
+if (macMode && !macFixtureOnly) assert(fs.statSync(exe).isFile() && fs.statSync(asar).isFile(), 'Mounted app executable or ASAR missing')
 const runId = randomUUID()
-const scratch = path.join(process.env.LOCALAPPDATA, 'VibeCodingScratch', 'AI-Novel', `a11-${runId.slice(0, 8)}`)
-const receiptPath = path.join(repository, '.runtime', '.cache', 'f05-a11-offline-import', runId, 'receipt.json')
-const receipt = { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_WIN_V3',
+const scratch = macMode ? path.resolve(macScratchRoot) : path.join(process.env.LOCALAPPDATA, 'VibeCodingScratch', 'AI-Novel', `a11-${runId.slice(0, 8)}`)
+const receiptPath = macMode ? path.join(scratch, 'receipt.json') : path.join(repository, '.runtime', '.cache', 'f05-a11-offline-import', runId, 'receipt.json')
+const receipt = macMode ? { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_MAC_V3',
+  mode: 'synthetic-v110-mounted-app', testedSha, arch: macArch, steps: [], exitDiagnostics: [],
+  provenance: macFixtureOnly ? null : { driverSha256: sha256(fileURLToPath(import.meta.url)),
+    sqlSha256: sha256(path.join(repository, 'electron', 'services', '__tests__', 'legacy-v110-schema.sql')),
+    dmgSha256: sha256(macDmg), executableSha256: sha256(exe), asarSha256: sha256(asar),
+    appPathSha256: hashText(fs.realpathSync(macMountedApp)), mountPointSha256: hashText(fs.realpathSync(macMountPoint)) },
+} : { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_WIN_V3',
   mode: finalDelta ? 'synthetic-completeness-final-delta' : supplement ? 'synthetic-completeness' : 'historical-baseline',
   selectedVersions: onlyVersion ? [onlyVersion] : sources.map(source => source.version),
   testedSha, buildTree: path.resolve(buildTree),
@@ -49,12 +80,14 @@ const receipt = { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFF
   historicalSources: sources.map(source => ({ version: source.version, path: source.path,
     injectedInventoryRemovedFromScratchCopy: fs.existsSync(path.join(source.path, '.vela', 'upgrade-data-inventory.json')) })),
   steps: [], exitDiagnostics: [], receiptPath }
-assert.deepEqual(receipt.packageHashes, { exe: expectedExe, asar: expectedAsar })
+if (!macMode) assert.deepEqual(receipt.packageHashes, { exe: expectedExe, asar: expectedAsar })
 fs.mkdirSync(scratch, { recursive: true })
+if (!macMode) {
 fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: 'codex/thread-6/a11',
   sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 72,
   cleanupCommand: `Remove-Item -LiteralPath '${scratch}' -Recurse -Force`,
   retainReason: 'Packaged old-project import evidence and source/target comparisons' }, null, 2))
+}
 
 function inventory(root) {
   const files = {}
@@ -123,7 +156,7 @@ function comparisonDatabase(sourceCopy, root) {
   }
   const snapshot = path.join(root, 'sql-comparison.db')
   // SQLite merges any committed WAL entries into this independent, read-only comparison input.
-  execFileSync('python', ['-c', `import sqlite3,sys
+  execFileSync(macMode ? 'python3' : 'python', ['-c', `import sqlite3,sys
 source=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)
 target=sqlite3.connect(sys.argv[2])
 source.backup(target)
@@ -226,7 +259,7 @@ async function launch(roots) {
     AI_NOVEL_LEGACY_SOURCE_HOME: roots.legacy, AI_NOVEL_VELA_HOME: roots.legacy,
     HOME: roots.home, USERPROFILE: roots.home, APPDATA: roots.appData, LOCALAPPDATA: roots.localAppData }
   for (const key of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'AI_NOVEL_SMOKE_OPEN_PROJECT', 'AI_NOVEL_SMOKE_PROJECT_MARKER']) delete env[key]
-  const app = await electron.launch({ executablePath: exe, cwd: packageDir,
+  const app = await electron.launch({ executablePath: exe, cwd: macMode ? path.dirname(exe) : packageDir,
     args: [`--user-data-dir=${roots.userData}`], env, timeout: 30_000 })
   const page = await app.firstWindow({ timeout: 30_000 })
   await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
@@ -275,7 +308,7 @@ const editorBody = locator => locator.evaluate(element => Array.from(element.que
 }).join('\n'))
 
 function draftBodies(target) {
-  return JSON.parse(execFileSync('python', ['-c', `import json,sqlite3,sys
+  return JSON.parse(execFileSync(macMode ? 'python3' : 'python', ['-c', `import json,sqlite3,sys
 db=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)
 print(json.dumps([r[0] for r in db.execute('select body from contents')]))
 db.close()`, path.join(target, '.ai-novel', 'project.db')], { encoding: 'utf8' }))
@@ -539,8 +572,180 @@ db.commit(); db.close()`, path.join(sourceCopy, '.vela', 'vela.db')])
   } finally { if (session) await session.app.close() }
 }
 
-try {
+const macBody = '合成章节正文\r\n原字节'
+const macSavedBody = '合成章节正文\n原字节\nA11 mac 目标保存'
+const macSchema = path.join(repository, 'electron', 'services', '__tests__', 'legacy-v110-schema.sql')
+
+function seedMac() {
+  const source = path.join(scratch, 'source')
+  const storage = path.join(source, '.vela')
+  fs.mkdirSync(storage, { recursive: true })
+  const python = `import pathlib,shutil,sqlite3,sys
+root,schema,source=sys.argv[1:]
+seed=pathlib.Path(root)/'seed.db'
+storage=pathlib.Path(source)/'.vela'
+db=sqlite3.connect(seed)
+try:
+  db.execute('pragma journal_mode=WAL')
+  db.execute('pragma wal_autocheckpoint=0')
+  db.executescript(pathlib.Path(schema).read_text(encoding='utf-8'))
+  db.execute('insert into project_core(rowid,id,project_name,characters_arch) values(?,?,?,?)',(7,'main','合成旧项目','作者明确角色群像'))
+  db.execute('insert into contents(id,body) values(?,?)',(11,'合成章节正文\\r\\n原字节'))
+  db.execute('insert into drafts(id,chapter_number,version,content_id,word_count) values(?,?,?,?,?)',(19,7,1,11,876))
+  db.commit()
+  for suffix in ('','-wal','-shm'): shutil.copyfile(str(seed)+suffix,str(storage/'vela.db')+suffix)
+finally: db.close()
+copied=sqlite3.connect('file:'+str(storage/'vela.db')+'?mode=ro',uri=True)
+try:
+  assert copied.execute('select body from contents where id=11').fetchone()[0]=='合成章节正文\\r\\n原字节'
+  assert copied.execute('select count(*) from drafts').fetchone()[0]==1
+  assert copied.execute('select count(*) from llm_calls').fetchone()[0]==0
+finally: copied.close()`
+  execFileSync('python3', ['-c', python, scratch, macSchema, source])
+  const sourceProjectId = randomUUID()
+  fs.writeFileSync(path.join(storage, 'project.json'), JSON.stringify({ schemaVersion: 1,
+    kind: 'ai-novel-project', projectId: sourceProjectId, createdAt: '2026-09-01T00:00:00.000Z' }))
+  for (const [name, content] of [
+    ['outline.md', '作者目录级大纲'], ['.vela/prompts/author.txt', '作者项目级提示词'],
+    ['.vela/skills/author.md', '作者项目级 Skill 原文'], ['创作资料.txt', '完整原文第一段。\n\n完整原文第二段。'],
+  ]) {
+    const file = path.join(source, name)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, content)
+  }
+  const files = inventory(source)
+  assert.deepEqual(Object.keys(files).sort(), [
+    '.vela/prompts/author.txt', '.vela/project.json', '.vela/skills/author.md',
+    '.vela/vela.db', '.vela/vela.db-shm', '.vela/vela.db-wal', 'outline.md', '创作资料.txt',
+  ].sort())
+  return { source, sourceProjectId, files, inventorySha256: hashText(JSON.stringify(files)),
+    rows: { project_core: 1, contents: 1, drafts: 1 }, llmCalls: 0 }
+}
+
+function inspectMacDatabases(source, target) {
+  const snapshot = comparisonDatabase(source, scratch)
+  const result = JSON.parse(execFileSync('python3', ['-c', `import json,sqlite3,sys
+a=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)
+b=sqlite3.connect('file:'+sys.argv[2]+'?mode=ro',uri=True)
+tables={'project_core':['id','project_name','characters_arch'],'contents':['id','body'],'drafts':['id','chapter_number','version','content_id','word_count']}
+rows={}
+for table,columns in tables.items():
+  query='select '+','.join(columns)+' from '+table+' order by rowid'
+  source=list(a.execute(query)); target=list(b.execute(query))
+  assert source==target,(table,source,target)
+  rows[table]=len(source)
+assert rows=={'project_core':1,'contents':1,'drafts':1},rows
+assert b.execute('pragma integrity_check').fetchone()[0]=='ok'
+llm_calls=b.execute('select count(*) from llm_calls').fetchone()[0]
+assert llm_calls==0,llm_calls
+print(json.dumps({'rows':rows,'llmCalls':llm_calls}))
+a.close(); b.close()`, snapshot, path.join(target, '.ai-novel', 'project.db')], { encoding: 'utf8' }))
+  return result
+}
+
+function macLlmCalls(target) {
+  return Number(execFileSync('python3', ['-c', `import sqlite3,sys
+db=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)
+print(db.execute('select count(*) from llm_calls').fetchone()[0])
+db.close()`, path.join(target, '.ai-novel', 'project.db')], { encoding: 'utf8' }).trim())
+}
+
+async function verifyMac() {
+  const seeded = seedMac()
+  const source = seeded.source
+  const targetParent = path.join(scratch, 'target')
+  fs.mkdirSync(targetParent)
+  const target = path.join(targetParent, 'source-新版副本')
+  const roots = Object.fromEntries(['canonical', 'legacy', 'userData', 'home', 'appData', 'localAppData']
+    .map(key => [key, path.join(scratch, 'run', key)]))
+  for (const directory of Object.values(roots)) fs.mkdirSync(directory, { recursive: true })
+  let session
+  try {
+    session = await launch(roots)
+    await home(session.page)
+    let requestCounts = await observeRequests(session)
+    await session.app.evaluate(({ dialog }, { source, targetParent }) => {
+      globalThis.__a11Dialogs = []
+      dialog.showOpenDialog = async options => {
+        globalThis.__a11Dialogs.push({ type: 'open', title: options.title })
+        if (options.title === '选择旧版小说项目文件夹') return { canceled: false, filePaths: [source] }
+        if (options.title === '选择恢复副本所在文件夹') return { canceled: false, filePaths: [targetParent] }
+        throw new Error(`Unexpected dialog: ${options.title}`)
+      }
+      dialog.showMessageBox = async options => {
+        globalThis.__a11Dialogs.push({ type: 'confirm', message: options.message })
+        if (!options.message.includes('保存并关闭旧版程序')) throw new Error('Unexpected confirmation')
+        return { response: 1, checkboxChecked: false }
+      }
+    }, { source, targetParent })
+    await session.page.getByRole('button', { name: '导入旧项目副本' }).click()
+    await session.page.locator('.writer-project-tree').getByText('合成旧项目', { exact: true })
+      .waitFor({ state: 'visible', timeout: 30_000 })
+    assert(fs.existsSync(path.join(target, '.ai-novel', 'project.db')), 'No published target database')
+    assert.deepEqual((await session.app.evaluate(() => globalThis.__a11Dialogs)).map(item => item.type), ['open', 'open', 'confirm'])
+    assert.deepEqual(inventory(source), seeded.files, 'Synthetic source changed during import')
+    const targetProjectId = JSON.parse(fs.readFileSync(path.join(target, '.ai-novel', 'project.json'), 'utf8')).projectId
+    assert.match(targetProjectId, /^[a-f0-9-]{36}$/i, 'Imported project has no new identity')
+    assert.notEqual(targetProjectId, seeded.sourceProjectId, 'Imported project reused legacy identity')
+    assert(!path.resolve(target).startsWith(`${path.resolve(source)}${path.sep}`), 'Target overlaps source')
+    const database = inspectMacDatabases(source, target)
+    for (const name of ['outline.md', '.vela/prompts/author.txt', '.vela/skills/author.md', '创作资料.txt']) {
+      const targetName = name.startsWith('.vela/') ? `.ai-novel/${name.slice(6)}` : name
+      assert.equal(sha256(path.join(target, targetName)), seeded.files[name], `Author asset changed: ${name}`)
+    }
+    receipt.steps.push({ stepId: 'v1.1.0-import-open', outcome: 'PASS' })
+
+    await session.page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).first().click()
+    const editor = session.page.locator('.cm-content[contenteditable="true"]')
+    await editor.waitFor({ state: 'visible' })
+    const openedBody = await editorBody(editor)
+    assert.equal(openedBody.replaceAll('\r\n', '\n'), macBody.replaceAll('\r\n', '\n'))
+    await editor.click()
+    await session.page.keyboard.press('ControlOrMeta+A')
+    await session.page.keyboard.insertText(macSavedBody)
+    assert.equal(await editorBody(editor), macSavedBody)
+    await session.page.locator('[role="status"]').filter({ hasText: /^未保存$/ }).last().waitFor({ state: 'visible' })
+    await session.page.locator('button[title="保存（⌘S）"]').click()
+    await session.page.locator('[role="status"]').filter({ hasText: /^已保存$/ }).last().waitFor({ state: 'visible' })
+    assert(draftBodies(target).includes(macSavedBody), 'Edited target body was not saved')
+    assert.equal(macLlmCalls(target), 0)
+    assert.deepEqual(inventory(source), seeded.files)
+    const importAndSaveRequests = await requestCounts()
+    receipt.steps.push({ stepId: 'v1.1.0-target-edit-save', outcome: 'PASS' })
+    await quit(session.app, session.page, 'v1.1.0')
+    session = null
+
+    session = await launch(roots)
+    await home(session.page)
+    requestCounts = await observeRequests(session)
+    await session.page.locator('.writer-shelf').getByRole('button', { name: '打开《合成旧项目》' }).click()
+    await session.page.locator('.writer-project-tree').getByText('合成旧项目', { exact: true })
+      .waitFor({ state: 'visible', timeout: 30_000 })
+    await session.page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).first().click()
+    const reopenedBody = await editorBody(session.page.locator('.cm-content[contenteditable="true"]'))
+    assert.equal(reopenedBody, macSavedBody)
+    assert(draftBodies(target).includes(macSavedBody))
+    const reopenRequests = await requestCounts()
+    assert.equal(macLlmCalls(target), 0)
+    assert.deepEqual(inventory(source), seeded.files)
+    receipt.steps.push({ stepId: 'v1.1.0-target-edit-reopen', outcome: 'PASS' })
+    receipt.mac = { sourceVersion: 'v1.1.0', sourceInventorySha256: seeded.inventorySha256,
+      targetInventorySha256: hashText(JSON.stringify(inventory(target))), sourceProjectId: seeded.sourceProjectId,
+      targetProjectId, database, sourceBodySha256: hashText(macBody), savedBodySha256: hashText(macSavedBody),
+      reopenedBodySha256: hashText(reopenedBody), importAndSaveRequests, reopenRequests }
+  } finally { if (session) await session.app.close() }
+}
+
+if (macFixtureOnly) {
+  const fixture = seedMac()
+  console.log(JSON.stringify({ kind: 'synthetic-v110-mac-fixture', sourceVersion: 'v1.1.0',
+    rows: fixture.rows, llmCalls: fixture.llmCalls, sourceInventorySha256: fixture.inventorySha256,
+    sqlSha256: sha256(macSchema) }))
+} else try {
+  if (macMode) await verifyMac()
+  else {
   for (const source of sources.filter(source => !onlyVersion || source.version === onlyVersion)) await verify(source)
+  }
   receipt.outcome = 'PARTIAL'
   receipt.sliceOutcome = 'PASS'
 } catch (error) {
@@ -550,6 +755,6 @@ try {
 } finally {
   fs.mkdirSync(path.dirname(receiptPath), { recursive: true })
   fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
-  console.log(JSON.stringify({ outcome: receipt.outcome, sliceOutcome: receipt.sliceOutcome, receiptPath,
-    receiptSha256: sha256(receiptPath), steps: receipt.steps.length }))
+  console.log(JSON.stringify({ outcome: receipt.outcome, sliceOutcome: receipt.sliceOutcome,
+    ...(macMode ? {} : { receiptPath }), receiptSha256: sha256(receiptPath), steps: receipt.steps.length }))
 }

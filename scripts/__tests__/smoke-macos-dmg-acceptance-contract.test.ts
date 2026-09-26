@@ -38,6 +38,30 @@ afterEach(() => {
 })
 
 describe('macOS DMG acceptance receipt contract', () => {
+  it('seeds a synthetic v1.1 project with readable committed WAL and author files', () => {
+    const scratchParent = path.join(repositoryRoot, '.runtime', '.cache')
+    mkdirSync(scratchParent, { recursive: true })
+    const scratch = mkdtempSync(path.join(scratchParent, 's14c-fixture-'))
+    fixtures.push(scratch)
+    const result = spawnSync(process.execPath, [
+      path.join(repositoryRoot, 'scripts', 'f05-a11-offline-import-journey.mjs'),
+      '--mac-fixture-only=1', `--scratch-root=${scratch}`,
+    ], { cwd: repositoryRoot, encoding: 'utf8' })
+    expect(result.status, result.stderr).toBe(0)
+    const fact = JSON.parse(result.stdout.trim())
+    expect(fact).toMatchObject({ kind: 'synthetic-v110-mac-fixture', sourceVersion: 'v1.1.0', llmCalls: 0,
+      rows: { project_core: 1, contents: 1, drafts: 1 } })
+    for (const file of ['.vela/vela.db', '.vela/vela.db-wal', '.vela/vela.db-shm', '.vela/project.json',
+      '.vela/prompts/author.txt', '.vela/skills/author.md', 'outline.md', '创作资料.txt']) {
+      expect(existsSync(path.join(scratch, 'source', file)), file).toBe(true)
+    }
+    const db = path.join(scratch, 'source', '.vela', 'vela.db')
+    const check = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c',
+      "import sqlite3,sys; db=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True); assert db.execute('select body from contents where id=11').fetchone()[0]=='合成章节正文\\r\\n原字节'; assert db.execute('select count(*) from llm_calls').fetchone()[0]==0", db],
+    { cwd: repositoryRoot, encoding: 'utf8' })
+    expect(check.status, check.stderr).toBe(0)
+  })
+
   it('classifies an exit-zero ad-hoc signature as lacking a Developer ID distribution identity', () => {
     const observation = classifyMacosCodeSigning({
       detailsExitCode: 0,
@@ -135,6 +159,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     expect(script).not.toContain('unexpected-signed')
     expect(script).toContain('observations: [')
     expect(script).toContain('const direct = {')
+    expect(script).toContain('a11OfflineImport,')
     expect(script).toContain('direct,')
 
     for (const directFact of ['dmg:', 'app:', 'executable:', 'helper:', 'hash:', 'mount:', 'unmount:']) {
@@ -149,7 +174,7 @@ describe('macOS DMG acceptance receipt contract', () => {
       expect(script).toContain(priorFact)
     }
 
-    expect(script).not.toMatch(/(?:\.exe|latest\.yml|win-unpacked|NSIS|Start-Process)/i)
+    expect(script).not.toMatch(/(?:\.exe\b|latest\.yml|win-unpacked|NSIS|Start-Process)/i)
   })
 
   it('accepts the fixed Intel LanceDB binding step and rejects an unknown Intel macOS command step', () => {
