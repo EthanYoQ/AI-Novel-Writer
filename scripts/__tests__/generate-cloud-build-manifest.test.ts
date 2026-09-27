@@ -88,7 +88,7 @@ describe('cloud Windows build manifest', () => {
         direct: { packaged: true },
       })
     }
-    const commit = 'a'.repeat(40)
+    const commit = 'c'.repeat(40)
     const initialized = spawnSync(process.execPath, [
       path.join(repositoryRoot, 'scripts', 'release-evidence-v2.mjs'),
       'init',
