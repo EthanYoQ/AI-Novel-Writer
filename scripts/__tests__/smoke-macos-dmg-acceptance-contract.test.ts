@@ -187,7 +187,9 @@ describe('macOS DMG acceptance receipt contract', () => {
     const cleanup = source.match(/async function closeMacApplication\(app\) \{[\s\S]*?\n\}/)?.[0] ?? ''
     const verify = source.slice(source.indexOf('async function verifyMac() {'), source.indexOf('\nif (macFixtureOnly) {'))
     // Run the real catch/finally boundary after a successful main body, without fabricating UI success.
-    const completionBoundary = verify.slice(verify.indexOf('  } catch (error) {'))
+    const boundary = verify.indexOf('\n  } catch (error) {')
+    expect(boundary).toBeGreaterThan(-1)
+    const completionBoundary = verify.slice(boundary)
     const receipt: { lastStage?: string; cleanupFailure?: { message: string } } = {}
     const killed: string[] = []
     let expire: (() => void) | undefined
