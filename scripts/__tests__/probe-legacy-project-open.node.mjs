@@ -8,7 +8,7 @@ import { dirname, join, resolve } from 'node:path'
 
 const script = resolve('scripts/probe-legacy-project-open.mjs')
 const fixtureRoot = resolve('.runtime/cache/s14c-old-binaries')
-mkdirSync(fixtureRoot, { recursive: true })
+mkdirSync(join(fixtureRoot, 'v1.1.0'), { recursive: true })
 const legacyExe = join(fixtureRoot, 'v1.1.0/unpacked-a11/app/AI小说作家.exe')
 const hash = input => createHash('sha256').update(input).digest('hex')
 
