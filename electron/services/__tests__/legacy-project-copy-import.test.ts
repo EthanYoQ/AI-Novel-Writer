@@ -26,7 +26,7 @@ const Database = createRequire(import.meta.url)('better-sqlite3') as typeof impo
 const roots: string[] = []
 const preflightOptions = { maxNativePathCharacters: 4096 }
 const hash = (file: string) => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
-function fixture(version: 'v100' | 'v110') {
+function fixture(version: 'v100' | 'v110', charactersArch = '作者明确角色群像，与正文推断不同') {
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/a11-copy-import')
   fs.mkdirSync(base, { recursive: true })
   const root = fs.mkdtempSync(path.join(base, 'attempt-')); roots.push(root)
@@ -37,7 +37,7 @@ function fixture(version: 'v100' | 'v110') {
     db.pragma('journal_mode = WAL'); db.pragma('wal_autocheckpoint = 0')
     db.exec(fs.readFileSync(new URL(`./legacy-${version}-schema.sql`, import.meta.url), 'utf8'))
     db.prepare('INSERT INTO project_core(rowid,id,project_name,characters_arch) VALUES (?,?,?,?)')
-      .run(7, 'main', '合成旧项目', '作者明确角色群像，与正文推断不同')
+      .run(7, 'main', '合成旧项目', charactersArch)
     db.prepare('INSERT INTO contents(id,body) VALUES (?,?)').run(11, '合成章节正文\r\n原字节')
     db.prepare('INSERT INTO drafts(id,chapter_number,version,content_id,word_count) VALUES (?,?,?,?,?)').run(19, 7, 1, 11, 876)
     for (const suffix of ['', '-wal', '-shm']) fs.copyFileSync(seed + suffix, path.join(legacy, 'vela.db') + suffix)
@@ -125,8 +125,36 @@ async function terminateImportAt(f: ReturnType<typeof fixture>, phase: 'sqlite-c
 }
 afterEach(() => { closeProjectDatabase(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }) })
 
-it.each(['v100', 'v110'] as const)('%s 离线完整副本含 WAL、作者配置和正文，源只读且新身份独立', async version => {
-  const f = fixture(version)
+it.each(['v100', 'v110'] as const)('%s 有旧角色原文但无角色卡时拒绝发布且保留源', async version => {
+  const f = fixture(version), before = sourceState(f)
+  expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))
+    .toMatchObject({ state: 'blocked', code: 'LEGACY_IMPORT_ROSTER_UNAVAILABLE' })
+  expect(fs.existsSync(f.target)).toBe(false)
+  expect(sourceState(f)).toEqual(before)
+  const attempts = fs.readdirSync(path.dirname(f.target)).filter(name => name.startsWith('.new.legacy-import-'))
+  expect(attempts).toHaveLength(1)
+  const staging = path.join(path.dirname(f.target), attempts[0]!, 'target', '.ai-novel', 'project.db')
+  const preserved = new Database(staging, { readonly: true, fileMustExist: true })
+  try {
+    expect(preserved.prepare("SELECT legacy_markdown FROM character_roster_meta WHERE id='main'").pluck().get())
+      .toBe('作者明确角色群像，与正文推断不同')
+  } finally { preserved.close() }
+})
+
+it('有既存角色卡但未有可用结构化名单状态时拒绝发布', async () => {
+  const f = fixture('v110', '')
+  const source = new Database(path.join(f.legacy, 'vela.db'))
+  try { source.prepare('INSERT INTO characters(rowid,name,role,background) VALUES (?,?,?,?)')
+    .run(44, '乙', 'protagonist', '旧角色资料') } finally { source.close() }
+  const before = sourceState(f)
+  expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))
+    .toMatchObject({ state: 'blocked', code: 'LEGACY_IMPORT_ROSTER_UNAVAILABLE' })
+  expect(fs.existsSync(f.target)).toBe(false)
+  expect(sourceState(f)).toEqual(before)
+})
+
+it.each(['v100', 'v110'] as const)('%s 合法空角色名单的离线完整副本含 WAL、作者配置和正文', async version => {
+  const f = fixture(version, '')
   const result = await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions })
   expect(result, JSON.stringify(result)).toMatchObject({ state: 'ready', targetRoot: f.target })
   if (result.state !== 'ready') return
@@ -138,7 +166,8 @@ it.each(['v100', 'v110'] as const)('%s 离线完整副本含 WAL、作者配置�
   expect(verifyProjectSqlite({ databasePath: path.join(f.target, '.ai-novel', 'project.db') }).schemaVersion).toBe(7)
   const db = new Database(path.join(f.target, '.ai-novel', 'project.db'), { readonly: true })
   try {
-    expect(db.prepare('SELECT characters_arch FROM project_core WHERE id=?').pluck().get('main')).toBe('作者明确角色群像，与正文推断不同')
+    expect(db.prepare('SELECT characters_arch FROM project_core WHERE id=?').pluck().get('main')).toBe('')
+    expect(db.prepare("SELECT migration_state FROM character_roster_meta WHERE id='main'").pluck().get()).toBe('empty')
     expect(db.prepare('SELECT body FROM contents WHERE id=11').pluck().get()).toBe('合成章节正文\r\n原字节')
     expect(db.prepare('SELECT content_id FROM drafts WHERE id=19').pluck().get()).toBe(11)
   } finally { db.close() }
@@ -147,7 +176,7 @@ it.each(['v100', 'v110'] as const)('%s 离线完整副本含 WAL、作者配置�
 })
 
 it('旧项目根内的真实知识原文变成可读项目副本，片段不能冒充全文', async () => {
-  const f = fixture('v110')
+  const f = fixture('v110', '')
   const original = path.join(f.source, '创作资料.txt')
   const content = '完整原文第一段。\n\n完整原文第二段只存在于旧项目文件。'
   fs.writeFileSync(original, content)
@@ -231,7 +260,7 @@ it('缺失必需旧库或目标发布前中断均不留下半成品', async () =
   expect(fs.existsSync(missing.target)).toBe(false)
   expect(fs.existsSync(path.join(missing.legacy, 'vela.db-wal'))).toBe(true)
 
-  const interrupted = fixture('v100')
+  const interrupted = fixture('v100', '')
   let reachedVerified = false
   expect(await importLegacyProjectCopy({ sourceRoot: interrupted.source, targetRoot: interrupted.target, preflightOptions,
     checkpoint: phase => { if (phase === 'verified') { reachedVerified = true; throw new Error('synthetic interruption') } },
@@ -245,7 +274,7 @@ it('缺失必需旧库或目标发布前中断均不留下半成品', async () =
 
 it.each(['sqlite-converted', 'assets-converted', 'history-frozen'] as const)(
   '%s 持久化后中断只清理目标 staging，同路径重试可完成', async phase => {
-    const f = fixture('v110')
+    const f = fixture('v110', '')
     if (phase === 'history-frozen') {
       const db = new Database(path.join(f.legacy, 'vela.db'))
       try {
@@ -275,7 +304,7 @@ it.each(['sqlite-converted', 'assets-converted', 'history-frozen'] as const)(
 )
 
 it.each(['sqlite-converted', 'renamed'] as const)('%s 子进程终止后源保留且目标可安全恢复', async phase => {
-  const f = fixture('v110'), before = sourceState(f)
+  const f = fixture('v110', ''), before = sourceState(f)
   await terminateImportAt(f, phase)
   expect(sourceState(f)).toEqual(before)
   const attempts = fs.readdirSync(path.dirname(f.target)).filter(name => name.startsWith('.new.legacy-import-'))
@@ -302,7 +331,7 @@ it.each(['sqlite-converted', 'renamed'] as const)('%s 子进程终止后源保�
 })
 
 it('旧候选正文保留为可读冻结历史，新项目不重放', async () => {
-  const f = fixture('v110'), db = new Database(path.join(f.legacy, 'vela.db'))
+  const f = fixture('v110', ''), db = new Database(path.join(f.legacy, 'vela.db'))
   try {
     db.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(12, '旧版人工审稿原文')
     db.prepare(`INSERT INTO reviews(id,base_draft_id,review_index,content_id,source_draft_chapter_number,
@@ -367,7 +396,7 @@ it('旧候选正文保留为可读冻结历史，新项目不重放', async () =
 })
 
 it.each(['v100', 'v110'] as const)('%s 无 manifest 的旧历史启用新 lineage，旧删除操作不能重放', async version => {
-  const f = fixture(version)
+  const f = fixture(version, '')
   fs.rmSync(path.join(f.legacy, 'project.json'))
   const oldCandidateProjectId = randomUUID()
   const source = new Database(path.join(f.legacy, 'vela.db'))
@@ -429,7 +458,7 @@ it.each(['v100', 'v110'] as const)('%s 无 manifest 的旧历史启用新 lineag
 })
 
 it.each(['v100', 'v110'] as const)('%s 旧版无收据定稿正文保留为 legacy，仅转移有证明的定稿', async version => {
-  const f = fixture(version)
+  const f = fixture(version, '')
   const source = new Database(path.join(f.legacy, 'vela.db'))
   try {
     source.prepare("UPDATE drafts SET status='finalized' WHERE id=19").run()
@@ -480,7 +509,7 @@ it('旧定稿存在失配收据时拒绝发布，不能把坏收据降为 legacy
 })
 
 it('未被角色引用的头像原字节保留为待处理资料', async () => {
-  const f = fixture('v110')
+  const f = fixture('v110', '')
   fs.mkdirSync(path.join(f.legacy, 'avatars'))
   fs.writeFileSync(path.join(f.legacy, 'avatars', 'unmapped.png'), Buffer.from('89504e470d0a1a0a00000000', 'hex'))
   expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))

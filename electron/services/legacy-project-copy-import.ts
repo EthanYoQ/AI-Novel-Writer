@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from 'node:util'
 import * as lancedb from '@lancedb/lancedb'
 import { KNOWLEDGE_COPY_MARKER, readKnowledgeCopy, writeKnowledgeCopy } from '../vector-store'
 import { m05CharacterAssetMigrationAdapter } from '../migrations/m05-character-assets'
+import { CharacterRosterRepository } from '../repositories/character-roster-repository'
 import { CURRENT_DESKTOP_SCHEMA_VERSION } from '../migrations/desktop-registry'
 import { CANONICAL_PROJECT_DATABASE, CANONICAL_PROJECT_DIRECTORY, createCanonicalProjectManifest, parseCanonicalProjectManifest } from '../../src/shared/project-format'
 import { assertProjectStoragePathSupported, type ProjectStoragePreflightOptions } from './project-storage-preflight'
@@ -190,6 +191,7 @@ export async function importLegacyProjectCopy(options: {
 }): Promise<{ state: 'ready'; projectId: string; targetRoot: string } | { state: 'blocked'; code: string }> {
   let attempt: string | undefined
   let attemptIdentity: fs.BigIntStats | undefined
+  let preserveAttempt = false
   try {
     const sourceRoot = path.resolve(options.sourceRoot), targetRoot = path.resolve(options.targetRoot)
     const parent = path.dirname(targetRoot), checkpoint = options.checkpoint ?? (() => {})
@@ -300,6 +302,14 @@ export async function importLegacyProjectCopy(options: {
     )) fail('LEGACY_IMPORT_SQLITE_VERIFICATION_FAILED')
     if (!hasHistory && !await m05CharacterAssetMigrationAdapter.verify({ sourceSnapshot: avatars, stagingTargetRoot: storage,
       stagingDatabasePath: newDatabase, receipt: avatarReceipt })) fail('LEGACY_IMPORT_AVATAR_INVALID')
+    const rosterDb = new Database(newDatabase, { readonly: true, fileMustExist: true })
+    try {
+      const roster = CharacterRosterRepository.read(rosterDb)
+      if (!(
+        roster.migrationState === 'empty' && roster.status === 'empty' && roster.entries.length === 0 && !roster.legacyMarkdown?.trim()
+        || roster.migrationState === 'ready' && roster.status === 'ready' && roster.entries.length > 0
+      )) { preserveAttempt = true; fail('LEGACY_IMPORT_ROSTER_UNAVAILABLE') }
+    } finally { rosterDb.close() }
     for (const name of fs.readdirSync(copiedRoot)) if (name !== '.vela') sameTree(path.join(copiedRoot, name), path.join(builtRoot, name))
     if (treeHash(sourceRoot) !== before) fail('LEGACY_IMPORT_SOURCE_CHANGED')
     if (exists(targetRoot)) fail('LEGACY_IMPORT_TARGET_EXISTS')
@@ -313,7 +323,7 @@ export async function importLegacyProjectCopy(options: {
         ? error.message : 'LEGACY_IMPORT_IO_FAILED'
     return { state: 'blocked', code }
   } finally {
-    if (attempt && attemptIdentity) { try {
+    if (attempt && attemptIdentity && !preserveAttempt) { try {
       const current = fs.lstatSync(attempt, { bigint: true })
       if (current.isDirectory() && !current.isSymbolicLink() && current.dev === attemptIdentity.dev && current.ino === attemptIdentity.ino
         && key(fs.realpathSync.native(attempt)) === key(attempt)) fs.rmSync(attempt, { recursive: true, force: true })
