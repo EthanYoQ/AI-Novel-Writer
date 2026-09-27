@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "bindings": {
+    "planning": "builtin:long-form-continuity"
+  }
+}

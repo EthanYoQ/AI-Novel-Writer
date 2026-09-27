@@ -18,6 +18,7 @@ const macScratchRoot = arg('scratch-root')
 const macDmg = arg('dmg')
 const macMountPoint = arg('mount-point')
 const macArch = arg('arch')
+const macVersion = arg('mac-version')
 const packageDir = macMode ? macMountedApp : arg('package-dir')
 const buildTree = arg('build-tree')
 const fieldPolicy = path.join(buildTree ?? '', 'electron', 'services', 'portable-project-field-policy.json')
@@ -37,6 +38,7 @@ const sources = legacyV025 ? [{ version: 'v0.2.5', path: legacyV025 }] : [
 ]
 if (macMode) {
   assert(macScratchRoot && path.isAbsolute(macScratchRoot), 'macOS fixture requires an absolute --scratch-root')
+  assert(['v1.0.0', 'v1.1.0'].includes(macVersion), 'Select an official --mac-version')
   if (!macFixtureOnly) {
     assert(macMountedApp && macDmg && macMountPoint && /^[a-f0-9]{40}$/.test(testedSha ?? '')
       && ['arm64', 'x64'].includes(macArch), 'Specify mounted app, DMG, mount point, tested SHA and arch')
@@ -76,9 +78,9 @@ const runId = randomUUID()
 const scratch = macMode ? path.resolve(macScratchRoot) : path.join(process.env.LOCALAPPDATA, 'VibeCodingScratch', 'AI-Novel', `a11-${runId.slice(0, 8)}`)
 const receiptPath = macMode ? path.join(scratch, 'receipt.json') : path.join(repository, '.runtime', '.cache', 'f05-a11-offline-import', runId, 'receipt.json')
 const receipt = macMode ? { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_MAC_V3',
-  mode: 'synthetic-v110-mounted-app', testedSha, arch: macArch, steps: [], exitDiagnostics: [],
+  mode: 'official-old-app-mounted-app', testedSha, arch: macArch, steps: [], exitDiagnostics: [],
   provenance: macFixtureOnly ? null : { driverSha256: sha256(fileURLToPath(import.meta.url)),
-    sqlSha256: sha256(path.join(repository, 'electron', 'services', '__tests__', 'legacy-v110-schema.sql')),
+    sourceManifestSha256: sha256(path.join(repository, 'scripts', 'fixtures', 's14c-official-old-sources', 'manifest.json')),
     dmgSha256: sha256(macDmg), executableSha256: sha256(exe), asarSha256: sha256(asar),
     appPathSha256: hashText(fs.realpathSync(macMountedApp)), mountPointSha256: hashText(fs.realpathSync(macMountPoint)) },
 } : { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_WIN_V3',
@@ -781,69 +783,60 @@ db.commit(); db.close()`, path.join(sourceCopy, '.vela', 'vela.db')])
   }
 }
 
-const macBody = '合成章节正文\r\n原字节'
-const macSavedBody = '合成章节正文\n原字节\nA11 mac 目标保存'
-const macSchema = path.join(repository, 'electron', 'services', '__tests__', 'legacy-v110-schema.sql')
-
 function seedMac() {
+  const fixtureRoot = path.join(repository, 'scripts', 'fixtures', 's14c-official-old-sources')
+  const manifest = JSON.parse(fs.readFileSync(path.join(fixtureRoot, 'manifest.json'), 'utf8'))
+  const entry = manifest.cases.find(item => `v${item.version}` === macVersion)
+  assert.equal(manifest.kind, 's14c-official-old-app-synthetic-source')
+  assert(entry, `Missing official old-app source: ${macVersion}`)
+  const fixture = path.join(fixtureRoot, entry.directory)
+  assert.deepEqual(inventory(fixture), entry.files, 'Official source fixture differs from reviewed manifest')
   const source = path.join(scratch, 'source')
-  const storage = path.join(source, '.vela')
-  fs.mkdirSync(storage, { recursive: true })
-  const python = `import pathlib,shutil,sqlite3,sys
-root,schema,source=sys.argv[1:]
-seed=pathlib.Path(root)/'seed.db'
-storage=pathlib.Path(source)/'.vela'
-db=sqlite3.connect(seed)
-try:
-  db.execute('pragma journal_mode=WAL')
-  db.execute('pragma wal_autocheckpoint=0')
-  db.executescript(pathlib.Path(schema).read_text(encoding='utf-8'))
-  db.execute('insert into project_core(rowid,id,project_name,characters_arch) values(?,?,?,?)',(7,'main','合成旧项目','作者明确角色群像'))
-  db.execute('insert into contents(id,body) values(?,?)',(11,'合成章节正文\\r\\n原字节'))
-  db.execute('insert into drafts(id,chapter_number,version,content_id,word_count) values(?,?,?,?,?)',(19,7,1,11,876))
-  db.commit()
-  for suffix in ('','-wal','-shm'): shutil.copyfile(str(seed)+suffix,str(storage/'vela.db')+suffix)
-finally: db.close()
-copied=sqlite3.connect('file:'+str(storage/'vela.db')+'?mode=ro',uri=True)
-try:
-  assert copied.execute('select body from contents where id=11').fetchone()[0]=='合成章节正文\\r\\n原字节'
-  assert copied.execute('select count(*) from drafts').fetchone()[0]==1
-  assert copied.execute('select count(*) from llm_calls').fetchone()[0]==0
-finally: copied.close()`
-  execFileSync('python3', ['-c', python, scratch, macSchema, source])
-  const sourceProjectId = randomUUID()
-  fs.writeFileSync(path.join(storage, 'project.json'), JSON.stringify({ schemaVersion: 1,
-    kind: 'ai-novel-project', projectId: sourceProjectId, createdAt: '2026-09-01T00:00:00.000Z' }))
-  for (const [name, content] of [
-    ['outline.md', '作者目录级大纲'], ['.vela/prompts/author.txt', '作者项目级提示词'],
-    ['.vela/skills/author.md', '作者项目级 Skill 原文'], ['创作资料.txt', '完整原文第一段。\n\n完整原文第二段。'],
-  ]) {
-    const file = path.join(source, name)
-    fs.mkdirSync(path.dirname(file), { recursive: true })
-    fs.writeFileSync(file, content)
-  }
+  fs.cpSync(fixture, source, { recursive: true, errorOnExist: true, force: false })
   const files = inventory(source)
-  assert.deepEqual(Object.keys(files).sort(), [
-    '.vela/prompts/author.txt', '.vela/project.json', '.vela/skills/author.md',
-    '.vela/vela.db', '.vela/vela.db-shm', '.vela/vela.db-wal', 'outline.md', '创作资料.txt',
-  ].sort())
-  return { source, sourceProjectId, files, inventorySha256: hashText(JSON.stringify(files)),
-    rows: { project_core: 1, contents: 1, drafts: 1 }, llmCalls: 0 }
+  assert.deepEqual(files, entry.files)
+  const sourceProjectId = JSON.parse(fs.readFileSync(path.join(source, '.vela', 'project.json'), 'utf8')).projectId
+  const databaseSnapshot = comparisonDatabase(source, scratch)
+  const facts = JSON.parse(execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', `import json,sqlite3,sys
+db=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)
+tables=['project_core','contents','drafts','characters','blueprints','reviews','revisions','finalization_outbox']
+rows={table:db.execute('select count(*) from '+table).fetchone()[0] for table in tables}
+assert rows=={'project_core':1,'contents':4,'drafts':2,'characters':2,'blueprints':1,'reviews':1,'revisions':1,'finalization_outbox':1},rows
+assert db.execute('select migration_state from character_roster_meta').fetchone()[0]=='ready'
+assert db.execute('select count(*) from character_roster_operations').fetchone()[0]==1
+llm=db.execute('select count(*) from llm_calls').fetchone()[0]
+assert llm==0
+body=db.execute('select c.body from drafts d join contents c on c.id=d.content_id where d.version=1').fetchone()[0]
+print(json.dumps({'rows':rows,'llmCalls':llm,'body':body}))
+db.close()`, databaseSnapshot], { encoding: 'utf8' }))
+  assert.deepEqual(inventory(source), files, 'Official old-app source changed while reading facts')
+  return { source, sourceProjectId, databaseSnapshot, files, inventorySha256: hashText(JSON.stringify(files)),
+    proofSha256: entry.proofSha256, ...facts }
 }
 
-function inspectMacDatabases(source, target) {
-  const snapshot = comparisonDatabase(source, scratch)
+function inspectMacDatabases(snapshot, target) {
   const result = JSON.parse(execFileSync('python3', ['-c', `import json,sqlite3,sys
 a=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)
 b=sqlite3.connect('file:'+sys.argv[2]+'?mode=ro',uri=True)
-tables={'project_core':['id','project_name','characters_arch'],'contents':['id','body'],'drafts':['id','chapter_number','version','content_id','word_count']}
+tables={'project_core':['id','project_name','characters_arch','core_outline','world_setting'],
+ 'blueprints':['chapter_number','title','key_events','characters'],
+ 'characters':['name','role','relationships'],
+ 'contents':['id','body'],'drafts':['id','chapter_number','version','content_id','word_count'],
+ 'reviews':['id','base_draft_id','content_id'],
+ 'revisions':['id','base_draft_id','content_id','merged_to_draft_id'],
+ 'finalization_outbox':['finalization_id','draft_id','content_hash','content_snapshot']}
 rows={}
 for table,columns in tables.items():
   query='select '+','.join(columns)+' from '+table+' order by rowid'
   source=list(a.execute(query)); target=list(b.execute(query))
   assert source==target,(table,source,target)
   rows[table]=len(source)
-assert rows=={'project_core':1,'contents':1,'drafts':1},rows
+assert rows=={'project_core':1,'blueprints':1,'characters':2,'contents':4,'drafts':2,
+ 'reviews':1,'revisions':1,'finalization_outbox':1},rows
+assert a.execute('select migration_state from character_roster_meta').fetchone()[0]=='ready'
+assert b.execute('select migration_state from character_roster_meta').fetchone()[0]=='ready'
+assert a.execute('select count(*) from character_roster_operations').fetchone()[0]==1
+assert b.execute('select count(*) from character_roster_operations').fetchone()[0]==1
 assert b.execute('pragma integrity_check').fetchone()[0]=='ok'
 llm_calls=b.execute('select count(*) from llm_calls').fetchone()[0]
 assert llm_calls==0,llm_calls
@@ -864,6 +857,8 @@ async function verifyMac() {
   try {
     macStage('seed-start')
     const seeded = seedMac()
+    const macBody = seeded.body
+    const macSavedBody = `${macBody}\nA11 mac 目标保存`
     macStage('seed-ready')
     const source = seeded.source
     const targetParent = path.join(scratch, 'target')
@@ -893,22 +888,30 @@ async function verifyMac() {
     }, { source, targetParent })
     macStage('import-start')
     await session.page.getByRole('button', { name: '导入旧项目副本' }).click()
-    await session.page.locator('.writer-project-tree').getByText('合成旧项目', { exact: true })
+    await session.page.locator('.writer-project-tree').getByText('p', { exact: true })
       .waitFor({ state: 'visible', timeout: 30_000 })
     assert(fs.existsSync(path.join(target, '.ai-novel', 'project.db')), 'No published target database')
     assert.deepEqual((await session.app.evaluate(() => globalThis.__a11Dialogs)).map(item => item.type), ['open', 'open', 'confirm'])
-    assert.deepEqual(inventory(source), seeded.files, 'Synthetic source changed during import')
+    assert.deepEqual(inventory(source), seeded.files, 'Official old-app source changed during import')
     const targetProjectId = JSON.parse(fs.readFileSync(path.join(target, '.ai-novel', 'project.json'), 'utf8')).projectId
     assert.match(targetProjectId, /^[a-f0-9-]{36}$/i, 'Imported project has no new identity')
     assert.notEqual(targetProjectId, seeded.sourceProjectId, 'Imported project reused legacy identity')
     assert(!path.resolve(target).startsWith(`${path.resolve(source)}${path.sep}`), 'Target overlaps source')
     macStage('import-database-check')
-    const database = inspectMacDatabases(source, target)
-    for (const name of ['outline.md', '.vela/prompts/author.txt', '.vela/skills/author.md', '创作资料.txt']) {
+    const database = inspectMacDatabases(seeded.databaseSnapshot, target)
+    for (const name of Object.keys(seeded.files).filter(name => !name.startsWith('.vela/lancedb/')
+      && !name.endsWith('.db') && !name.endsWith('.db-shm') && !name.endsWith('.db-wal')
+      && name !== '.vela/project.json')) {
       const targetName = name.startsWith('.vela/') ? `.ai-novel/${name.slice(6)}` : name
       assert.equal(sha256(path.join(target, targetName)), seeded.files[name], `Author asset changed: ${name}`)
     }
-    receipt.steps.push({ stepId: 'v1.1.0-import-open', outcome: 'PASS' })
+    const sourceKnowledge = await knowledgeSnapshot(path.join(source, '.vela'))
+    const targetKnowledge = await knowledgeSnapshot(path.join(target, '.ai-novel'))
+    assert.equal(sourceKnowledge.documents.length, 1)
+    assert.equal(sourceKnowledge.chunks.length, 1)
+    assert.deepEqual(targetKnowledge.documents, sourceKnowledge.documents)
+    assert.deepEqual(targetKnowledge.chunks, sourceKnowledge.chunks)
+    receipt.steps.push({ stepId: `${macVersion}-import-open`, outcome: 'PASS' })
     macStage('import-verified')
 
     macStage('editor-open')
@@ -957,9 +960,9 @@ async function verifyMac() {
     assert.equal(macLlmCalls(target), 0)
     assert.deepEqual(inventory(source), seeded.files)
     const importAndSaveRequests = await requestCounts()
-    receipt.steps.push({ stepId: 'v1.1.0-target-edit-save', outcome: 'PASS' })
+    receipt.steps.push({ stepId: `${macVersion}-target-edit-save`, outcome: 'PASS' })
     macStage('save-verified')
-    await quit(session.app, session.page, 'v1.1.0')
+    await quit(session.app, session.page, macVersion)
     session = null
 
     macStage('relaunch-start')
@@ -969,8 +972,8 @@ async function verifyMac() {
     macStage('home-ready')
     requestCounts = await observeRequests(session)
     macStage('reopen-start')
-    await session.page.locator('.writer-shelf').getByRole('button', { name: '打开《合成旧项目》' }).click()
-    await session.page.locator('.writer-project-tree').getByText('合成旧项目', { exact: true })
+    await session.page.locator('.writer-shelf').getByRole('button', { name: '打开《p》' }).click()
+    await session.page.locator('.writer-project-tree').getByText('p', { exact: true })
       .waitFor({ state: 'visible', timeout: 30_000 })
     macStage('editor-open')
     await session.page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).first().click()
@@ -980,11 +983,14 @@ async function verifyMac() {
     const reopenRequests = await requestCounts()
     assert.equal(macLlmCalls(target), 0)
     assert.deepEqual(inventory(source), seeded.files)
-    receipt.steps.push({ stepId: 'v1.1.0-target-edit-reopen', outcome: 'PASS' })
+    receipt.steps.push({ stepId: `${macVersion}-target-edit-reopen`, outcome: 'PASS' })
     macStage('reopen-verified')
-    receipt.mac = { sourceVersion: 'v1.1.0', sourceInventorySha256: seeded.inventorySha256,
+    receipt.mac = { sourceVersion: macVersion, officialProofSha256: seeded.proofSha256,
+      sourceInventorySha256: seeded.inventorySha256,
       targetInventorySha256: hashText(JSON.stringify(inventory(target))), sourceProjectId: seeded.sourceProjectId,
-      targetProjectId, database, sourceBodySha256: hashText(macBody), savedBodySha256: hashText(macSavedBody),
+      targetProjectId, database, knowledgeDocuments: sourceKnowledge.documents.length,
+      knowledgeChunks: sourceKnowledge.chunks.length,
+      sourceBodySha256: hashText(macBody), savedBodySha256: hashText(macSavedBody),
       reopenedBodySha256: hashText(reopenedBody), importAndSaveRequests, reopenRequests }
   } catch (error) {
     receipt.failure = { message: String(error), stack: error?.stack }
@@ -997,9 +1003,9 @@ async function verifyMac() {
 
 if (macFixtureOnly) {
   const fixture = seedMac()
-  console.log(JSON.stringify({ kind: 'synthetic-v110-mac-fixture', sourceVersion: 'v1.1.0',
+  console.log(JSON.stringify({ kind: 'official-old-app-mac-fixture', sourceVersion: macVersion,
     rows: fixture.rows, llmCalls: fixture.llmCalls, sourceInventorySha256: fixture.inventorySha256,
-    sqlSha256: sha256(macSchema) }))
+    officialProofSha256: fixture.proofSha256 }))
 } else try {
   if (macMode) await verifyMac()
   else {

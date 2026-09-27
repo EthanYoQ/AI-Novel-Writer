@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -220,28 +220,40 @@ describe('macOS DMG acceptance receipt contract', () => {
     } finally { releaseClose() }
   })
 
-  it('seeds a synthetic v1.1 project with readable committed WAL and author files', () => {
+  it.each(['v1.0.0', 'v1.1.0'])('copies official %s old-app author source for Mac import', version => {
     const scratchParent = path.join(repositoryRoot, '.runtime', '.cache')
     mkdirSync(scratchParent, { recursive: true })
     const scratch = mkdtempSync(path.join(scratchParent, 's14c-fixture-'))
     fixtures.push(scratch)
     const result = spawnSync(process.execPath, [
       path.join(repositoryRoot, 'scripts', 'f05-a11-offline-import-journey.mjs'),
-      '--mac-fixture-only=1', `--scratch-root=${scratch}`,
+      '--mac-fixture-only=1', `--mac-version=${version}`, `--scratch-root=${scratch}`,
     ], { cwd: repositoryRoot, encoding: 'utf8' })
     expect(result.status, result.stderr).toBe(0)
     const fact = JSON.parse(result.stdout.trim())
-    expect(fact).toMatchObject({ kind: 'synthetic-v110-mac-fixture', sourceVersion: 'v1.1.0', llmCalls: 0,
-      rows: { project_core: 1, contents: 1, drafts: 1 } })
-    for (const file of ['.vela/vela.db', '.vela/vela.db-wal', '.vela/vela.db-shm', '.vela/project.json',
-      '.vela/prompts/author.txt', '.vela/skills/author.md', 'outline.md', '创作资料.txt']) {
+    expect(fact).toMatchObject({ kind: 'official-old-app-mac-fixture', sourceVersion: version, llmCalls: 0,
+      rows: { project_core: 1, contents: 4, drafts: 2, characters: 2, blueprints: 1 } })
+    for (const file of ['.vela/vela.db', '.vela/project.json',
+      '.vela/prompts/assistant_writing_identity.zh-CN.json', '.vela/writing-skills.json',
+      '.vela/lancedb/documents.lance/_versions/2.manifest', '.vela/lancedb/chunks.lance/_versions/2.manifest']) {
       expect(existsSync(path.join(scratch, 'source', file)), file).toBe(true)
     }
-    const db = path.join(scratch, 'source', '.vela', 'vela.db')
-    const check = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c',
-      "import sqlite3,sys; db=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True); assert db.execute('select body from contents where id=11').fetchone()[0]=='合成章节正文\\r\\n原字节'; assert db.execute('select count(*) from llm_calls').fetchone()[0]==0", db],
-    { cwd: repositoryRoot, encoding: 'utf8' })
-    expect(check.status, check.stderr).toBe(0)
+    const source = path.join(scratch, 'source')
+    const files: Record<string, string> = {}
+    const visit = (directory: string) => {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const file = path.join(directory, entry.name)
+        if (entry.isDirectory()) visit(file)
+        else {
+          expect(entry.isFile(), file).toBe(true)
+          files[path.relative(source, file).replaceAll('\\', '/')] = createHash('sha256').update(readFileSync(file)).digest('hex')
+        }
+      }
+    }
+    visit(source)
+    const manifest = JSON.parse(readFileSync(path.join(repositoryRoot, 'scripts/fixtures/s14c-official-old-sources/manifest.json'), 'utf8'))
+    expect(files).toEqual(manifest.cases.find((entry: { version: string }) => `v${entry.version}` === version).files)
+    expect(fact.sourceInventorySha256).toBe(createHash('sha256').update(JSON.stringify(files)).digest('hex'))
   })
 
   it('classifies an exit-zero ad-hoc signature as lacking a Developer ID distribution identity', () => {
@@ -342,6 +354,11 @@ describe('macOS DMG acceptance receipt contract', () => {
     expect(script).toContain('observations: [')
     expect(script).toContain('const direct = {')
     expect(script).toContain('a11OfflineImport,')
+    expect(script).toContain('for old_version in v1.0.0 v1.1.0')
+    expect(script).toContain('"--mac-version=$old_version"')
+    expect(script).toContain('journey.database?.rows?.characters !== 2')
+    expect(script).toContain('journey.knowledgeChunks !== 1')
+    expect(script).not.toContain('synthetic-v110-mounted-app')
     expect(script).toContain('direct,')
 
     for (const directFact of ['dmg:', 'app:', 'executable:', 'helper:', 'hash:', 'mount:', 'unmount:']) {
