@@ -864,7 +864,8 @@ describe('Windows installer smoke contract', () => {
     expect(script).toContain("$env:AI_NOVEL_V110_GLOBAL_PROOF = if ($V110InstalledUpgrade) { '1' } else { $null }")
     expect(legacyProbe).toContain("window.velaAPI.invoke('config:get')")
     expect(legacyProbe).toContain("window.velaAPI.invoke('project:recent-list')")
-    expect(legacyProbe.indexOf('  ${globalRead}')).toBeLessThan(legacyProbe.indexOf("window.velaAPI.invoke('project:open'"))
+    const evaluation = legacyProbe.slice(legacyProbe.indexOf('const expression = `(async () => {'))
+    expect(evaluation.indexOf('  ${globalRead}')).toBeLessThan(evaluation.indexOf("  const result = await window.velaAPI.invoke('project:open'"))
   })
 
   windowsPowerShellIt('writes v1.1 global seeds as strict UTF-8 JSON with an array of recent projects', () => {
