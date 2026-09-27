@@ -881,6 +881,7 @@ describe('Windows installer smoke contract', () => {
   })
 
   windowsPowerShellIt('rejects an official journey summary outside its isolated receipt path', () => {
+    mkdirSync(resolve('.runtime/cache'), { recursive: true })
     const temporary = mkdtempSync(join(resolve('.runtime/cache'), 's14c-win-official-binding-'))
     mkdirSync(join(temporary, 'resources'))
     writeFileSync(join(temporary, 'AI小说作家.exe'), 'fake installed executable')
