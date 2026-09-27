@@ -1226,7 +1226,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
   const ledger = path.join(dir, '.runtime/.cache/novel-quality-modernization/physical-ledger.jsonl')
   const file = path.join(dir, 'synthetic-ledger.jsonl')
   const archive = ['historicalSupersessionBoundary', 'historicalReviewedDraftBoundary',
-    'historicalReviewRebuildBoundary', 'historicalS14BSplitBoundary']
+    'historicalReviewRebuildBoundary', 'historicalS14BSplitBoundary', 'historicalPostUi408Boundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -1246,8 +1246,12 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
       const original = protocol[name]
       const attempts = original.reserveAttempts ?? original.reserveAttemptIds.map(attemptId => ({
         attemptId, invocationId: original.evidenceInvocationId, terminal: 'settle' }))
-      for (const item of attempts) triplet(item.attemptId, { protocolRevision: original.protocolRevision,
-        protocolHash: original.protocolHash, invocationId: item.invocationId }, item.terminal)
+      for (const item of attempts) {
+        const arm = item.attemptId.split(':')[0]
+        triplet(item.attemptId, { protocolRevision: original.protocolRevision,
+          protocolHash: original.protocolHash, invocationId: item.invocationId,
+          ...(original.armBindings ? { arm, ...original.armBindings[arm] } : {}) }, item.terminal)
+      }
       boundaries[name] = { ...original, rawBytesSha256: hash(rows.map(JSON.stringify).join('\n') + '\n') }
     }
     return { raw: rows.map(JSON.stringify).join('\n') + '\n', boundaries, binding }
@@ -1275,11 +1279,19 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
       return originalRead.call(this, name, ...args)
     }
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 345, real.boundaries.historicalS14BSplitBoundary), 390)
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 390, real.boundaries.historicalPostUi408Boundary), 408)
     assert.equal(validatePhysicalLedger(ledger), ledger)
     fs.writeFileSync(file, synthetic.raw)
     const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
     assert.doesNotThrow(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt',
       binding: { ...synthetic.binding, ...currentProtocolBinding() } }, options))
+    fs.writeFileSync(ledger, real.raw.split('\n').slice(0, 408).join('\n'))
+    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_MISSING/)
+    const changed408 = real.raw.trimEnd().split('\n')
+    changed408[407] = changed408[407].replace('"attemptId":"', '"attemptId":"tampered-')
+    fs.writeFileSync(ledger, changed408.join('\n') + '\n')
+    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    fs.writeFileSync(ledger, real.raw)
     const tamper = raw => {
       const lines = raw.trimEnd().split('\n')
       lines[389] = lines[389].replace('"attemptId":"', '"attemptId":"tampered-')
@@ -1290,6 +1302,29 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     fs.writeFileSync(file, tamper(synthetic.raw))
     assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
       /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    for (const [field, value] of [['codeSha', 'f'.repeat(40)], ['sourceHash', 'f'.repeat(64)],
+      ['driverHash', 'f'.repeat(64)], ['parityId', 'f'.repeat(64)]]) {
+      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 390, {
+        ...real.boundaries.historicalPostUi408Boundary,
+        armBindings: { ...real.boundaries.historicalPostUi408Boundary.armBindings,
+          baseline: { ...real.boundaries.historicalPostUi408Boundary.armBindings.baseline, [field]: value } },
+      }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    }
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 390, {
+      ...real.boundaries.historicalPostUi408Boundary,
+      reserveAttempts: real.boundaries.historicalPostUi408Boundary.reserveAttempts.map((item, index) =>
+        index === 0 ? { ...item, terminal: 'unknown' } : item),
+    }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 390, {
+      ...real.boundaries.historicalPostUi408Boundary,
+      reserveAttempts: real.boundaries.historicalPostUi408Boundary.reserveAttempts.map((item, index) =>
+        index === 0 ? { ...item, attemptId: 'candidate:wrong' } : item),
+    }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    fs.writeFileSync(file, synthetic.raw + JSON.stringify({ type: 'reserve', attemptId: 'unregistered-old',
+      binding: { ...synthetic.binding, protocolRevision: protocol.historicalPostUi408Boundary.protocolRevision,
+        protocolHash: protocol.historicalPostUi408Boundary.protocolHash }, allocation: 'failedRetryRepairReviewReserve' }) + '\n')
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt',
+      binding: { ...synthetic.binding, ...currentProtocolBinding() } }, options), /PROTOCOL_DRIFT/)
   } finally {
     fs.readFileSync = originalRead
     childProcess.spawnSync = originalSpawn

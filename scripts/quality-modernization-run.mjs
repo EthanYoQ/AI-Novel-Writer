@@ -72,6 +72,9 @@ export function validateHistoricalSupersessionBoundary(raw, fromEventCount, boun
     || attempts.some(item => typeof item.attemptId !== 'string'
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.invocationId)
       || !['settle', 'unknown'].includes(item.terminal))
+    || boundary.armBindings && ['baseline', 'candidate'].some(arm =>
+      !boundary.armBindings[arm] || !/^[a-f0-9]{40}$/.test(boundary.armBindings[arm].codeSha)
+      || ['sourceHash', 'driverHash', 'parityId'].some(key => !/^[a-f0-9]{64}$/.test(boundary.armBindings[arm][key])))
     || boundary.eventCount !== fromEventCount + attempts.length * 3) fail('INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY')
   let prefixEnd = 0
   for (let index = 0; index < boundary.eventCount; index++) {
@@ -89,7 +92,11 @@ export function validateHistoricalSupersessionBoundary(raw, fromEventCount, boun
       || reserve.binding?.protocolHash !== boundary.protocolHash
       || reserve.binding?.invocationId !== invocationId
       || dispatch?.type !== 'dispatch' || dispatch.attemptId !== attemptId
-      || outcome?.type !== terminal || outcome.attemptId !== attemptId) fail('HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING')
+      || outcome?.type !== terminal || outcome.attemptId !== attemptId
+      || boundary.armBindings && (reserve.binding?.arm !== attemptId.split(':')[0]
+        || !['baseline', 'candidate'].includes(reserve.binding.arm)
+        || ['codeSha', 'sourceHash', 'driverHash', 'parityId'].some(key =>
+          reserve.binding[key] !== boundary.armBindings[reserve.binding.arm][key]))) fail('HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING')
   }
   return boundary.eventCount
 }
@@ -166,7 +173,8 @@ export function validatePhysicalLedger(file) {
   const superseded = validateHistoricalSupersessionBoundary(raw, historical, protocol.historicalSupersessionBoundary)
   const reviewed = validateHistoricalSupersessionBoundary(raw, superseded, protocol.historicalReviewedDraftBoundary)
   const rebuilt = validateHistoricalSupersessionBoundary(raw, reviewed, protocol.historicalReviewRebuildBoundary)
-  validateHistoricalSupersessionBoundary(raw, rebuilt, protocol.historicalS14BSplitBoundary)
+  const split = validateHistoricalSupersessionBoundary(raw, rebuilt, protocol.historicalS14BSplitBoundary)
+  validateHistoricalSupersessionBoundary(raw, split, protocol.historicalPostUi408Boundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -445,6 +453,11 @@ export function updateLedger(file, event, options = {}) {
       const trustedSplitEvents = splitBoundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedRebuildEvents, splitBoundary)
         : trustedRebuildEvents
+      const postUiBoundary = options.campaignMode === 'real'
+        ? protocol.historicalPostUi408Boundary : options.historicalPostUi408Boundary
+      const trustedPostUiEvents = postUiBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedSplitEvents, postUiBoundary)
+        : trustedSplitEvents
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
       // 未登记 operations 的阶段在这里 fail closed。
@@ -467,7 +480,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedSplitEvents
+          const superseded = index >= trustedHistoricalEvents && index < trustedPostUiEvents
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)

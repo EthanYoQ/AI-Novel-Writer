@@ -198,6 +198,35 @@
       }
     ]
   },
+  "historicalPostUi408Boundary": {
+    "fromEventCount": 390,
+    "eventCount": 408,
+    "rawBytesSha256": "08392b2237146877b067cf63241024b07829a72cef0598454d968492b3e05bbe",
+    "protocolRevision": "s14b-split-quality-gates-v1",
+    "protocolHash": "13b83c228c1323dc3962da90dfc9503622300a54b843a0331fa71d881309c183",
+    "armBindings": {
+      "baseline": {
+        "codeSha": "2264390d6fb8b052cc14736d544df0cc74516649",
+        "sourceHash": "9b0d78fc45e0ad01d4c975eb0c23d2d0f2dae0ef5c2b84d6c5e19294a31bd4e8",
+        "driverHash": "402e43be631f53c104c2fd0e3acb39e83df49ced008f890b5d397670186abab3",
+        "parityId": "2c0b6a3284ce1e223e7b6080b190716ddcf562fe62e7fb226861d393f39079a7"
+      },
+      "candidate": {
+        "codeSha": "77928d0bb2d580ec2bab4ad61a50f6e052fbd1c4",
+        "sourceHash": "a91b3cfd942bdeb1ca914fa7469a2531c1bd5d914fee68657863f7ef7ca866f8",
+        "driverHash": "402e43be631f53c104c2fd0e3acb39e83df49ced008f890b5d397670186abab3",
+        "parityId": "2c0b6a3284ce1e223e7b6080b190716ddcf562fe62e7fb226861d393f39079a7"
+      }
+    },
+    "reserveAttempts": [
+      { "attemptId": "baseline:cf3d2360-2bac-4b46-bc18-f307ef475897", "invocationId": "0807270b-f5c5-495c-bd71-5f1d6e9a32c1", "terminal": "settle" },
+      { "attemptId": "baseline:6fa8add6-a282-4244-8bc3-4fff15829804", "invocationId": "0807270b-f5c5-495c-bd71-5f1d6e9a32c1", "terminal": "settle" },
+      { "attemptId": "baseline:5182a0b1-677a-4ddc-ba79-a4ec07f83599", "invocationId": "0807270b-f5c5-495c-bd71-5f1d6e9a32c1", "terminal": "settle" },
+      { "attemptId": "candidate:a1c177b9-f0f8-4063-8702-5881d8573476", "invocationId": "0807270b-f5c5-495c-bd71-5f1d6e9a32c1", "terminal": "settle" },
+      { "attemptId": "candidate:bcafa870-d642-4345-af7d-9927efeea84c", "invocationId": "0807270b-f5c5-495c-bd71-5f1d6e9a32c1", "terminal": "settle" },
+      { "attemptId": "candidate:49e03a76-6582-4fab-8d1a-24c489cf3e60", "invocationId": "0807270b-f5c5-495c-bd71-5f1d6e9a32c1", "terminal": "settle" }
+    ]
+  },
   "phases": {
     "c16-c18": {
       "scenarioRevision": "c16-c18-candidate-production-path-v1",
