@@ -29,7 +29,7 @@ const Database = createRequire(import.meta.url)('better-sqlite3') as typeof impo
 const roots: string[] = []
 const preflightOptions = { maxNativePathCharacters: 4096 }
 const hash = (file: string) => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
-function fixture(version: 'v100' | 'v110', charactersArch = '作者明确角色群像，与正文推断不同') {
+function fixture(version: 'v100' | 'v100-official' | 'v110', charactersArch = '作者明确角色群像，与正文推断不同') {
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/a11-copy-import')
   fs.mkdirSync(base, { recursive: true })
   const root = fs.mkdtempSync(path.join(base, 'attempt-')); roots.push(root)
@@ -155,8 +155,8 @@ function addLegacyCards(f: ReturnType<typeof fixture>) {
   } finally { source.close() }
 }
 
-async function markLegacyCardsReady(f: ReturnType<typeof fixture>) {
-  // Produce the old v1.1 ready hashes through the existing roster commit path.
+async function markLegacyCardsReady(f: ReturnType<typeof fixture>, officialV100 = false) {
+  // Produce old ready hashes through the existing roster commit path.
   expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))
     .toMatchObject({ state: 'ready' })
   const converted = new Database(path.join(f.target, '.ai-novel', 'project.db'), { readonly: true })
@@ -171,7 +171,8 @@ async function markLegacyCardsReady(f: ReturnType<typeof fixture>) {
     old.prepare("INSERT INTO character_roster_meta(id,schema_version,revision,migration_state,projection_hash,fact_hash) VALUES('main',1,1,'ready',?,?)")
       .run(meta.projection_hash, meta.fact_hash)
     old.prepare("UPDATE project_core SET characters_arch=? WHERE id='main'").run(meta.characters_arch)
-    expect(CharacterRosterRepository.read(old).status).toBe('ready')
+    if (officialV100) expect(old.prepare("SELECT migration_state FROM character_roster_meta WHERE id='main'").pluck().get()).toBe('ready')
+    else expect(CharacterRosterRepository.read(old).status).toBe('ready')
   } finally { old.close() }
   return meta
 }
@@ -205,6 +206,53 @@ it('v1.1 ready 旧卡在离线副本内绑定唯一 PK 关系并保持作者投�
       .toEqual(['legacy-offline-identity-binding'])
   } finally { db.close() }
   expect(sourceState(f)).toEqual(before)
+})
+
+it('官方 v1.0 ready 旧卡在只读验源后导入，源和旧副本的 DDL、行、已有 DB/WAL 数据不变', async () => {
+  const f = fixture('v100-official', '')
+  addLegacyCards(f)
+  await markLegacyCardsReady(f, true)
+  const before = sourceState(f)
+  const copied: Array<unknown> = []
+  const result = await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions,
+    checkpoint(phase) {
+      if (phase !== 'assets-converted' && phase !== 'verified') return
+      const attempt = fs.readdirSync(path.dirname(f.target)).find(name => name.startsWith('.new.legacy-import-'))!
+      const oldPath = path.join(path.dirname(f.target), attempt, 'source', '.vela', 'vela.db')
+      const old = new Database(oldPath, { readonly: true, fileMustExist: true })
+      try { copied.push({ database: hash(oldPath), wal: fs.existsSync(oldPath + '-wal') && fs.statSync(oldPath + '-wal').size
+        ? hash(oldPath + '-wal') : null,
+        schema: old.prepare("SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").all(),
+        cards: old.prepare('SELECT rowid AS source_rowid,* FROM characters ORDER BY rowid').all(),
+        meta: old.prepare('SELECT rowid AS source_rowid,* FROM character_roster_meta').all(),
+      }) } finally { old.close() }
+    },
+  })
+  expect(result, JSON.stringify(result)).toMatchObject({ state: 'ready' })
+  expect(copied).toHaveLength(2)
+  expect(copied[1]).toEqual(copied[0])
+  expect(sourceState(f)).toEqual(before)
+  if (result.state !== 'ready') return
+  const db = new Database(path.join(f.target, '.ai-novel', 'project.db'), { readonly: true, fileMustExist: true })
+  try { expect(CharacterRosterRepository.read(db)).toMatchObject({ migrationState: 'ready', status: 'ready' }) }
+  finally { db.close() }
+})
+
+it('官方 v1.0 旧 ready 标签不能洗白已篡改的原始关系', async () => {
+  const f = fixture('v100-official', '')
+  addLegacyCards(f)
+  await markLegacyCardsReady(f, true)
+  const old = new Database(path.join(f.legacy, 'vela.db'))
+  try { old.prepare("UPDATE characters SET relationships=? WHERE name='乙'").run('[{"target":"甲","relation":"改写后关系"}]') }
+  finally { old.close() }
+  const before = sourceState(f)
+  expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))
+    .toEqual({ state: 'blocked', code: 'LEGACY_IMPORT_ROSTER_UNAVAILABLE' })
+  expect(fs.existsSync(f.target)).toBe(false)
+  expect(sourceState(f)).toEqual(before)
+  const attempt = fs.readdirSync(path.dirname(f.target)).find(name => name.startsWith('.new.legacy-import-'))!
+  expect(fs.readdirSync(path.join(path.dirname(f.target), attempt, 'source', '.vela'))
+    .filter(name => name.startsWith('.roster-check-'))).toEqual([])
 })
 
 it.each(['missing', 'stale-source', 'ambiguous', 'missing-origin'] as const)('v1.1 ready 旧关系 %s endpoint 阻断发布且不写稳定边', async problem => {

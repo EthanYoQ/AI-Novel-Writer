@@ -180,18 +180,28 @@ async function adoptLegacyKnowledgeOriginals(sourceRoot: string, copiedRoot: str
 }
 
 /** Only the qualified offline copy has the old primary-key rows as target authority. */
-function adoptCopiedLegacyCards(db: import('better-sqlite3').Database, oldDatabase: string): void {
+async function adoptCopiedLegacyCards(db: import('better-sqlite3').Database, oldDatabase: string): Promise<void> {
   const initial = readLegacyRosterSource(db)
   const readySource = initial.snapshot.migrationState === 'ready'
   if ((!readySource && initial.snapshot.migrationState !== 'legacy_cards_preserved') || initial.rawLegacy.trim()
     || (readySource && initial.snapshot.status === 'ready')) return
   const old = new Database(oldDatabase, { readonly: true, fileMustExist: true })
+  let rosterCheck: import('better-sqlite3').Database | undefined
+  let rosterCheckPath: string | undefined
   const hash = (text: string) => createHash('sha256').update(text).digest('hex')
   const serialize = (value: unknown) => JSON.stringify(value, (_key, item: unknown) => typeof item === 'bigint' ? { integer: item.toString() } : item)
   const reject = () => fail('LEGACY_IMPORT_ROSTER_UNAVAILABLE')
   try {
+    if (readySource && !(old.prepare('PRAGMA table_info(characters)').all() as { name: string }[])
+      .some(column => column.name === 'cs_provenance')) {
+      // Qualified v1.0 lacks this later column. Reuse the full roster validator
+      // on a disposable snapshot so its legacy DDL cannot write the old copy.
+      rosterCheckPath = path.join(path.dirname(oldDatabase), `.roster-check-${randomUUID()}.db`)
+      await old.backup(rosterCheckPath)
+      rosterCheck = new Database(rosterCheckPath, { fileMustExist: true })
+    }
     db.transaction(() => {
-      if (readySource && CharacterRosterRepository.read(old).status !== 'ready') reject()
+      if (readySource && CharacterRosterRepository.read(rosterCheck ?? old).status !== 'ready') reject()
       const rows = old.prepare('SELECT * FROM characters ORDER BY rowid').safeIntegers().all() as Record<string, unknown>[]
       const origins = db.prepare('SELECT * FROM character_identity_origins').all() as {
         character_id: string; source_key: string; original_row_json: string; original_hash: string
@@ -277,7 +287,11 @@ function adoptCopiedLegacyCards(db: import('better-sqlite3').Database, oldDataba
       } else adoptLegacyCards(db, { operationId: 'offline-project-copy', expectedRevision: source.snapshot.revision,
         expectedLegacyHash: source.legacyHash, expectedIdentityRevision: source.identityRevision, expectedFactsHash: source.factsHash })
     }).immediate()
-  } finally { old.close() }
+  } finally {
+    rosterCheck?.close()
+    old.close()
+    if (rosterCheckPath) for (const suffix of ['', '-wal', '-shm', '-journal']) fs.rmSync(rosterCheckPath + suffix, { force: true })
+  }
 }
 
 /** Explicit offline import. Caller prompts the user to close the old editor/sync
@@ -407,7 +421,7 @@ export async function importLegacyProjectCopy(options: {
     const rosterDb = new Database(newDatabase, { fileMustExist: true })
     try {
       rosterDb.pragma('foreign_keys = ON')
-      try { adoptCopiedLegacyCards(rosterDb, oldDatabase) } catch (error) {
+      try { await adoptCopiedLegacyCards(rosterDb, oldDatabase) } catch (error) {
         if (error instanceof Error && error.message === 'LEGACY_IMPORT_ROSTER_UNAVAILABLE') preserveAttempt = true
         throw error
       }
