@@ -130,6 +130,36 @@ function Invoke-AiNovelV025CopyImport {
   return $proof
 }
 
+function New-AiNovelOfficialJourneyScratch {
+  param([ValidatePattern('^[a-f0-9]{8}$')][string]$TaskId = ([guid]::NewGuid().ToString('N').Substring(0, 8)))
+
+  if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA) -or -not [System.IO.Path]::IsPathRooted($env:LOCALAPPDATA)) {
+    throw 'Official A11 scratch requires an absolute LOCALAPPDATA path.'
+  }
+  $parent = Join-Path ([System.IO.Path]::GetFullPath($env:LOCALAPPDATA)) 'VibeCodingScratch\an'
+  $scratch = Join-Path $parent $TaskId
+  $target = Join-Path $scratch 'target\source-新版副本'
+  # Keep this final-target limit aligned with project-storage-preflight.ts (covered by the contract test).
+  if ($target.Length -gt 85) {
+    throw "PROJECT_STORAGE_PATH_UNSUPPORTED: official A11 target has $($target.Length) characters; maximum is 85: $target"
+  }
+  $owner = [ordered]@{
+    owner = 'codex/s14c-windows-official'
+    sourceProject = $root
+    createdAt = [DateTime]::UtcNow.ToString('o')
+    ttlHours = 72
+    cleanupCommand = "Remove-Item -LiteralPath '$($scratch.Replace("'", "''"))' -Recurse -Force"
+    retainReason = 'Official A11 synthetic import evidence, including early launch failures'
+  }
+  $ownerBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($owner | ConvertTo-Json -Compress)))
+  New-Item -ItemType Directory -Path $parent -Force | Out-Null
+  $node = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+  # Non-recursive mkdir is exclusive: an existing task directory is never reused or overwritten.
+  & $node -e "const fs = require('node:fs'); fs.mkdirSync(process.argv[1]); fs.writeFileSync(require('node:path').join(process.argv[1], '.vibe-owner.json'), Buffer.from(process.argv[2], 'base64'), { flag: 'wx' });" $scratch $ownerBase64
+  if ($LASTEXITCODE -ne 0) { throw "Cannot exclusively create owned official A11 scratch: $scratch" }
+  return $scratch
+}
+
 function Invoke-AiNovelOfficialOldSourceJourney {
   param([Parameter(Mandatory = $true)][ValidateSet('v1.0.0', 'v1.1.0')][string]$Version)
 
@@ -141,7 +171,7 @@ function Invoke-AiNovelOfficialOldSourceJourney {
   if ($manifest.kind -ne 's14c-official-old-app-synthetic-source' -or $entry.Count -ne 1) {
     throw "Official old-source manifest has no unique $Version case."
   }
-  $scratch = Join-Path (Join-Path $root '.runtime\.cache') ("s14c-official-win-$($Version.Replace('.', ''))-$([guid]::NewGuid().ToString('N'))")
+  $scratch = New-AiNovelOfficialJourneyScratch
   $exeSha256 = (Get-AiNovelFileSha256 -Path (Join-Path $installRoot 'AI小说作家.exe')).ToLowerInvariant()
   $asarSha256 = (Get-AiNovelFileSha256 -Path (Join-Path $installRoot 'resources\app.asar')).ToLowerInvariant()
   $arguments = @(
@@ -150,7 +180,15 @@ function Invoke-AiNovelOfficialOldSourceJourney {
     "--tested-sha=$head", "--exe-sha256=$exeSha256", "--asar-sha256=$asarSha256"
   )
   $output = @(& node @arguments)
-  if ($LASTEXITCODE -ne 0) { throw "Installed official $Version A11 Writer journey failed." }
+  if ($LASTEXITCODE -ne 0) {
+    $failedReceipt = Join-Path $scratch 'receipt.json'
+    if (Test-Path -LiteralPath $failedReceipt -PathType Leaf) {
+      $diagnosticsAcceptance = Join-Path $env:AI_NOVEL_RELEASE_EVIDENCE_ROOT 'acceptance'
+      New-Item -ItemType Directory -Path $diagnosticsAcceptance -Force | Out-Null
+      Copy-Item -LiteralPath $failedReceipt -Destination (Join-Path $diagnosticsAcceptance 'a11-failure.json')
+    }
+    throw "Installed official $Version A11 Writer journey failed. Scratch: $scratch; receipt: $failedReceipt"
+  }
   $summary = $output[-1] | ConvertFrom-Json
   $receiptPath = Join-Path $scratch 'receipt.json'
   if ([System.IO.Path]::GetFullPath([string]$summary.receiptPath) -ne [System.IO.Path]::GetFullPath($receiptPath)) {

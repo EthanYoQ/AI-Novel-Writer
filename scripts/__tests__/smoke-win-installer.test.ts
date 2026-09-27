@@ -1,9 +1,11 @@
 import { execFileSync, spawnSync } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, win32 } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { closeConnection, getEmbeddingSpaces, search } from '../../electron/vector-store'
+import { assertProjectStoragePathSupported } from '../../electron/services/project-storage-preflight'
 
 const windowsIt = process.platform === 'win32' ? it : it.skip
 const probeScript = resolve('scripts/smoke-win-app.ps1')
@@ -880,6 +882,124 @@ describe('Windows installer smoke contract', () => {
     expect(script).toContain("$summary.receiptSha256")
   })
 
+  it('keeps the official copy target within the real Windows storage boundary', () => {
+    const oldScratch = win32.join('D:\\a\\AI-Novel-Writer\\AI-Novel-Writer', '.runtime', '.cache', `s14c-official-win-v100-${'0'.repeat(32)}`)
+    const oldTarget = win32.join(oldScratch, 'target', 'source-新版副本')
+    expect(oldTarget).toHaveLength(127)
+    expect(() => assertProjectStoragePathSupported(oldTarget, { platform: 'win32' })).toThrow()
+    const ciTarget = win32.join('C:\\Users\\runneradmin\\AppData\\Local', 'VibeCodingScratch', 'an', '12345678', 'target', 'source-新版副本')
+    expect(ciTarget).toHaveLength(83)
+    expect(() => assertProjectStoragePathSupported(ciTarget, { platform: 'win32' })).not.toThrow()
+    expect(() => assertProjectStoragePathSupported(`${ciTarget}xx`, { platform: 'win32' })).not.toThrow()
+    expect(() => assertProjectStoragePathSupported(`${ciTarget}xxx`, { platform: 'win32' })).toThrow()
+  })
+
+  windowsPowerShellIt('gives both official journeys an owned short scratch before launching', () => {
+    const scratchBase = join(process.env.LOCALAPPDATA!, 'VibeCodingScratch', 'an')
+    const output = runInstallerLibrary(`
+function Get-AiNovelFileSha256 { '0' * 64 }
+function node {
+  $script:capturedScratch = (($args | Where-Object { $_ -like '--scratch-root=*' }) -replace '^--scratch-root=', '')
+  $global:LASTEXITCODE = 1
+}
+$results = foreach ($version in @('v1.0.0', 'v1.1.0')) {
+  try { Invoke-AiNovelOfficialOldSourceJourney -Version $version | Out-Null }
+  catch { [ordered]@{ scratch = $script:capturedScratch; error = $_.Exception.Message } }
+}
+$results | ConvertTo-Json -Compress
+`)
+    const results = JSON.parse(output) as Array<{ scratch: string; error: string }>
+    try {
+      expect(results).toHaveLength(2)
+      expect(new Set(results.map(result => result.scratch)).size).toBe(2)
+      for (const result of results) {
+        expect(() => assertProjectStoragePathSupported(join(result.scratch, 'target', 'source-新版副本'))).not.toThrow()
+        expect(win32.dirname(result.scratch)).toBe(scratchBase)
+        expect(win32.basename(result.scratch)).toMatch(/^[a-f0-9]{8}$/)
+        const owner = JSON.parse(readFileSync(join(result.scratch, '.vibe-owner.json'), 'utf8'))
+        expect(owner).toMatchObject({ owner: 'codex/s14c-windows-official', sourceProject: resolve('.'), ttlHours: 72 })
+        expect(owner.cleanupCommand).toContain(result.scratch)
+        expect(result.error).toContain('A11 Writer journey failed')
+      }
+    } finally {
+      for (const { scratch } of results) {
+        if (typeof scratch === 'string' && scratch.startsWith(`${scratchBase}\\`) && existsSync(join(scratch, '.vibe-owner.json'))) rmSync(scratch, { recursive: true })
+      }
+    }
+  })
+
+  windowsPowerShellIt('rejects an overlong official copy target before creating scratch or launching', () => {
+    const output = runInstallerLibrary(`
+$env:LOCALAPPDATA = 'C:\\Users\\runneradminxxx\\AppData\\Local'
+function node { throw 'UNEXPECTED_NODE' }
+try { Invoke-AiNovelOfficialOldSourceJourney -Version 'v1.0.0' | Out-Null; 'UNEXPECTED_PASS' }
+catch { $_.Exception.Message }
+`)
+    expect(output).toContain('PROJECT_STORAGE_PATH_UNSUPPORTED')
+    expect(output).toContain('86')
+    expect(output).toContain('85')
+    expect(output).not.toContain('UNEXPECTED_')
+  })
+
+  windowsPowerShellIt('never reuses an existing official scratch task directory', () => {
+    const taskId = randomBytes(4).toString('hex')
+    const scratch = join(process.env.LOCALAPPDATA!, 'VibeCodingScratch', 'an', taskId)
+    let allocated = false
+    try {
+      const result = JSON.parse(runInstallerLibrary(`
+$scratch = New-AiNovelOfficialJourneyScratch -TaskId '${taskId}'
+$before = [IO.File]::ReadAllText((Join-Path $scratch '.vibe-owner.json'))
+try { New-AiNovelOfficialJourneyScratch -TaskId '${taskId}' | Out-Null; $collision = 'UNEXPECTED_PASS' }
+catch { $collision = $_.Exception.Message }
+[ordered]@{ scratch = $scratch; before = $before; after = [IO.File]::ReadAllText((Join-Path $scratch '.vibe-owner.json')); collision = $collision } | ConvertTo-Json -Compress
+`))
+      expect(result.scratch).toBe(scratch)
+      allocated = true
+      expect(result.collision).toContain('Cannot exclusively create owned official A11 scratch')
+      expect(result.after).toBe(result.before)
+    } finally {
+      if (allocated) rmSync(scratch, { recursive: true })
+    }
+  })
+
+  windowsPowerShellIt('preserves the failed official receipt bytes in existing diagnostics and still fails', () => {
+    mkdirSync(resolve('.runtime/cache'), { recursive: true })
+    const evidence = mkdtempSync(join(resolve('.runtime/cache'), 's14c-official-failure-'))
+    const acceptance = join(evidence, 'acceptance')
+    mkdirSync(acceptance)
+    const originalReceipt = '{\r\n  "sliceOutcome": "FAIL", "steps": []\r\n}\r\n'
+    writeFileSync(join(acceptance, 'upgrade-data.json'), 'existing-v025-proof')
+    let scratch: string | undefined
+    try {
+      const result = JSON.parse(runInstallerLibrary(`
+$env:AI_NOVEL_RELEASE_EVIDENCE_ROOT = ${quotePowerShell(evidence)}
+$script:aiNovelAcceptanceDirectory = ${quotePowerShell(join(evidence, 'isolated-v110-acceptance'))}
+function Get-AiNovelFileSha256 { '0' * 64 }
+function node {
+  $script:capturedScratch = (($args | Where-Object { $_ -like '--scratch-root=*' }) -replace '^--scratch-root=', '')
+  [IO.File]::WriteAllBytes((Join-Path $script:capturedScratch 'receipt.json'), [Convert]::FromBase64String('${Buffer.from(originalReceipt).toString('base64')}'))
+  $global:LASTEXITCODE = 1
+  'not-success-json'
+}
+try { Invoke-AiNovelOfficialOldSourceJourney -Version 'v1.0.0' | Out-Null; $failure = 'UNEXPECTED_PASS' }
+catch { $failure = $_.Exception.Message }
+[ordered]@{ scratch = $script:capturedScratch; failure = $failure } | ConvertTo-Json -Compress
+`))
+      scratch = result.scratch
+      expect(result.failure).toContain('A11 Writer journey failed')
+      expect(readFileSync(join(acceptance, 'a11-failure.json'))).toEqual(Buffer.from(originalReceipt))
+      expect(readFileSync(join(scratch!, 'receipt.json'))).toEqual(Buffer.from(originalReceipt))
+      expect(readFileSync(join(acceptance, 'upgrade-data.json'), 'utf8')).toBe('existing-v025-proof')
+      expect(existsSync(join(evidence, 'isolated-v110-acceptance'))).toBe(false)
+      const workflow = readFileSync(resolve('.github/workflows/windows-cloud-build-test.yml'), 'utf8')
+      expect(workflow.slice(workflow.indexOf('- name: Collect Windows build diagnostics'))).toContain("'a11-failure.json'")
+    } finally {
+      const scratchBase = join(process.env.LOCALAPPDATA!, 'VibeCodingScratch', 'an')
+      if (scratch?.startsWith(`${scratchBase}\\`) && existsSync(join(scratch, '.vibe-owner.json'))) rmSync(scratch, { recursive: true })
+      rmSync(evidence, { recursive: true })
+    }
+  })
+
   windowsPowerShellIt('rejects an official journey summary outside its isolated receipt path', () => {
     mkdirSync(resolve('.runtime/cache'), { recursive: true })
     const temporary = mkdtempSync(join(resolve('.runtime/cache'), 's14c-win-official-binding-'))
@@ -889,6 +1009,7 @@ describe('Windows installer smoke contract', () => {
     try {
       const output = runInstallerLibrary(`
 $installRoot = ${quotePowerShell(temporary)}
+function New-AiNovelOfficialJourneyScratch { Join-Path $installRoot 'isolated-scratch' }
 function node {
   $global:LASTEXITCODE = 0
   '{"sliceOutcome":"PASS","receiptPath":"C:\\\\outside\\\\receipt.json","receiptSha256":"fake"}'

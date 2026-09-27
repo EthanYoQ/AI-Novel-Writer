@@ -194,7 +194,7 @@ jobs:
               }
             }
             $acceptanceRoot = Join-Path $env:AI_NOVEL_RELEASE_EVIDENCE_ROOT 'acceptance'
-            foreach ($name in @('install.json', 'launch.json', 'quiet-window.json', 'error-dialogs.json', 'uninstall.json', 'upgrade-data.json', 'native-abi.json', 'packaged-smoke.json', 'signing.json')) {
+            foreach ($name in @('install.json', 'launch.json', 'quiet-window.json', 'error-dialogs.json', 'uninstall.json', 'upgrade-data.json', 'a11-failure.json', 'native-abi.json', 'packaged-smoke.json', 'signing.json')) {
               $source = Join-Path $acceptanceRoot $name
               if (Test-Path -LiteralPath $source -PathType Leaf) {
                 Copy-Item -LiteralPath $source -Destination (Join-Path $diagnosticsRoot "acceptance-$name") -Force
