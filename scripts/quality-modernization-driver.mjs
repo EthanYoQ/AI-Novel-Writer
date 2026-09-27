@@ -19,6 +19,7 @@ export const PRODUCTION_BRIDGE = 'scripts/fixtures/quality-modernization-product
 export const EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION = 's11-reference-no-actionable-review-v1'
 export const REVIEWED_DRAFT_PROTOCOL_REVISION = 's14b-reviewed-draft-v1'
 export const SPLIT_QUALITY_GATES_PROTOCOL_REVISION = 's14b-split-quality-gates-v1'
+export const CANDIDATE_QUALITY_COMPARISON_PROTOCOL_REVISION = 's14b-candidate-quality-and-comparison-v2'
 export const POST_UI_REVIEW_POLICY = Object.freeze({ revision: 's14b-post-ui-reviewed-draft-unknown-oracle-v2',
   selection: 'all-error-warning-in-report-order', confirmation: 'test-preauthorized-original-items',
   merge: 'accept-only-revision', finalReview: 'ordinary-full-review', noAction: 'retain-initial-draft',
@@ -749,7 +750,8 @@ export function classifyProductionPair(results, { mode, phase }) {
   }
   const baseline = baselineRows[0], candidate = candidateRows[0]
   const reviewed = phase === 'early-budget' && baseline.milestone === 'post-ui'
-    && [REVIEWED_DRAFT_PROTOCOL_REVISION, SPLIT_QUALITY_GATES_PROTOCOL_REVISION].includes(baseline.protocolRevision)
+    && [REVIEWED_DRAFT_PROTOCOL_REVISION, SPLIT_QUALITY_GATES_PROTOCOL_REVISION,
+      CANDIDATE_QUALITY_COMPARISON_PROTOCOL_REVISION].includes(baseline.protocolRevision)
   const scenario = productionScenario(phase, reviewed ? 'post-ui' : undefined)
   const reviewedChains = reviewed ? [baseline, candidate].map(validateReviewedDraft) : []
   if (reviewedChains.some(chain => !chain.valid)) return { status: 'failed', qualityQualification: 'automatic-gate-failed',

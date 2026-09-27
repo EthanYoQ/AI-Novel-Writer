@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "novel-quality-program-v3-80-v1",
-  "decisionRevision": "s14b-split-quality-gates-v1",
+  "decisionRevision": "s14b-candidate-quality-and-comparison-v2",
   "status": "approved-requires-committed-target-freeze-before-experiment",
   "language": "zh-CN",
   "decisionPolicy": {
@@ -10,7 +10,7 @@
     "baselineTechnicalEndpoint": "required",
     "baselineContentValidity": "independent-from-candidate-absolute-gates",
     "candidateAbsoluteResult": "independent-oracle-only",
-    "baselineContentFailureOrUnknown": "does not reject a candidate absolute result when the baseline production endpoint, original/final saved text, hashes, source and identity are technically valid; relative naturalness and character-motivation comparison remains INCONCLUSIVE where incomparable",
+    "baselineContentFailureOrUnknown": "does not reject a candidate independent quality result when the baseline production endpoint, original/final saved text, hashes, source and identity are technically valid; each incomparable relative dimension is INCONCLUSIVE and cannot support an improvement claim",
     "invalidTechnicalEndpoint": "provider/IPC failure, missing saved original or final draft, missing review/refine predecessor, unverifiable text/hash/source/identity or interrupted full sequence fail the pair technical gate",
     "baselineTargetUnitsFailure": "historical S10B reference adjudication only; future S14B requires a completed saved production endpoint and does not admit a local target-units exception",
     "invalidReference": [
@@ -24,7 +24,7 @@
       "all required events",
       "zero fact errors including time and event continuity",
       "recap rule",
-      "style review",
+      "two independent reviewers find naturalness and character motivation readable against the frozen candidate-only floors",
       "existing two-reviewer pacing readability floor"
     ],
     "automatedOutcomeCeiling": "pending-independent-oracle-review",
@@ -428,7 +428,8 @@
     ],
     "reviewers": 2,
     "reviewerEligibility": "未参与实现且不是生成器自评",
-    "nonInferiority": "后续post-UI与最终18章：自然度和人物动机两名盲评逐维引用两臂原文并说明可比性；可比时判优/平/劣且均不得劣，不可比时该维为INCONCLUSIVE、综合不得PASS；分歧最多一次既有独立仲裁。baseline内容fail/unknown不自动否决candidate独立绝对结果，也不把不可比当平或宣称改善。节奏逐章比较并完整披露，候选须独立达到pacingReadability；节奏较弱时仅可称本revision质量合格，不得称整体non-inferior",
+    "candidateReadability": "后续新冻结的post-UI与最终18章：两名独立盲评者对candidate每章单独判自然度、人物动机、节奏可读底线，不参照baseline。自然度：对话、叙述和动作表达通顺且符合当章语境，没有持续机械重复或语气断裂妨碍理解；人物动机：关键选择能从已知目标、处境和知情事实理解，结果与选择有可辨联系，没有无依据的重大反转；节奏按pacingReadability四项。逐维引用固定成稿原文说明PASS/FAIL/INCONCLUSIVE；指出具体不合格片段或两人分歧最多一次独立仲裁，确认具体缺陷为FAIL；证据不足、无仲裁资源或仲裁未决为candidate INCONCLUSIVE，不得PASS。事实时间、必需事件、字数、复述及来源另逐章过绝对门",
+    "relativeComparison": "后续post-UI与最终18章：两名盲评者逐章逐维对自然度、人物动机、节奏引用两臂原文并说明可比性；可比判优/平/劣，不可比该维记INCONCLUSIVE。baseline内容fail/unknown或相对劣/不可比不自动否决已过绝对门的candidate；相对结论只支持有证据的改善声明，不可比不得记平或称改善。全部逐章逐维结果与较弱项披露，不能凭局部改善称整体non-inferior或全面优于参考",
     "pacingReadability": {
       "appliesTo": ["post-ui", "final"],
       "perChapter": true,
@@ -442,7 +443,7 @@
       "comparison": "逐章保留与参考的节奏优劣及原文证据；仅更慢或铺陈更多不单独否决；逐维结果完整披露",
       "dispute": "任一评审指出具体不合格片段则一次独立仲裁；无仲裁资源或仍不明为inconclusive，不得通过"
     },
-    "improvement": "至少两个场景各一章一个维度两人一致优，其余章节自然度/人物动机无劣且节奏可读，才称有证据的样本改善；节奏较弱须披露，不得称全面优于参考",
+    "improvement": "改善声明须注明章节和维度、两名独立评审一致的可比原文证据；不可比维度不得称改善。至少两个场景各一章一个维度一致优、其余章节逐维可比且无劣时，才可称整体样本改善；有较弱或不可比维度只可作对应范围的改善声明并完整披露，不影响candidate自身合格",
     "arbitration": "分歧一次独立仲裁；无条件或仍不明为inconclusive"
   },
   "evidence": {

@@ -90,11 +90,11 @@
 
 **完整阶段的接线与执行边界**：三场景各两臂使用六个隔离项目，每个项目只准备一次；完成原计划的六次规划和十八章正文，每臂后章读取本臂真实已保存前章，保留身份、hash 与来源。沿用 protocol.json 的既定 seed、逐章两臂顺序、材料及预算分配，不通过循环单章 pair、每次重建项目或预置作者前情冒充连续创作。post-UI 与最终样本的操作、前驱、触发、全部断言及独立评审都相符才可复用，同 case ID 不足以证明等价。只补现有驱动及必要协议分派，不新建实验平台。离线接线通过不授权越过现存正式质量阻断或增加抽样；历史 FAIL 不能由其他场景 PASS 冲销。
 
-quality-protocol/protocol.json 继续拥有 candidate ±30%、draft-units v3、参考臂裁决、事实/事件/复述/自然度规则；2026-09-27 用户选择 B 后，仅未来 post-UI 与最终18章节奏资格采用其中的双评可读底线，逐章节奏比较及原文证据仍完整披露，自然度/人物动机比较无劣和其余硬门不变，历史 FAIL 不改判。80 是计划额，不是硬帽。旧 baseline 原代码、唯一物理账本、失败/unknown/重试保留，移植不换已批准 provider、样本或其他评分。
+quality-protocol/protocol.json 继续拥有 candidate ±30%、draft-units v3、参考臂裁决与事实/事件/复述规则。未来新冻结的 post-UI 与最终18章按现行质量协议拆分 candidate 自身资格和相对改善声明：candidate 自然度、人物动机、节奏均须过两名独立盲评的预先冻结可读底线；三维逐章逐维比较完整披露，但劣或不可比不自动否决合格 candidate，不可比不能称改善。历史 FAIL/INCONCLUSIVE 不改判。80 是计划额，不是硬帽。旧 baseline 原代码、唯一物理账本、失败/unknown/重试保留，移植不换已批准 provider、样本或其他评分。
 
-未来新冻结的 `s14b-split-quality-gates-v1` 将 candidate 绝对门与 baseline 文学内容有效性分开：baseline 已完成且 hash/来源/身份可核验的生产终点，即使内容 FAIL/UNKNOWN，也不自动否决 candidate 的事实（含时间）、事件、字数、复述、来源和既有节奏双评可读底线。baseline 缺真实 saved 原稿/成稿、审修链、前驱或其他技术证据仍阻断。自然度和人物动机依旧逐维相对无劣：两名盲评引用原文并说明可比性，可比时判优/平/劣，不可比为 INCONCLUSIVE；分歧最多一次既有仲裁。绝对门通过但任一必需相对维度不可比，不得将综合 S14B 记 PASS 或宣称改善。`6df8518d-30ec-4b7c-9828-2393e751becf` 原 INCONCLUSIVE、历史 FAIL 和旧账本不改判。新实验仍先冻结原场景、seed、顺序、次数、停止条件与协议 hash，自动 runner 最高 pending。
+未来新冻结的 `s14b-candidate-quality-and-comparison-v2` 将 candidate 自身合格与证明优于 baseline 分开。baseline 须完成真实生产并保存初稿/成稿，审修链、hash、来源、身份、前驱和物理账本可核验；缺项仍阻断技术门。baseline 正文 FAIL/UNKNOWN 或比较证据不足不自动否决 candidate 自身资格。candidate 逐章须过事实（含时间）、事件、字数、复述、来源及自然度/人物动机/节奏的双评可读底线；分歧最多一次独立仲裁，证据不足为 INCONCLUSIVE。相对比较两名盲评逐章逐维引用两臂原文、说明可比性，可比记优/平/劣，不可比记该维 INCONCLUSIVE，只用于有证据改善声明。`6df8518d-30ec-4b7c-9828-2393e751becf` 原 INCONCLUSIVE、历史 FAIL 和旧账本不改判。新实验仍先冻结相同场景、seed、顺序、次数、停止条件与新协议 hash，自动 runner 最高 pending。
 
-主线程安排原协议的两名独立非实现文学评审及一次必要仲裁，worker 不再派生；与此次两名计划顾问审计不是同一件事。报告 failed/inconclusive/本 revision 合格/相应维度改善，并披露节奏较弱项；有节奏劣项不得称整体 non-inferior 或全面优于参考。post-UI 完成才补足 F05，不能继续抽样挑优。
+主线程安排原协议的两名独立非实现文学评审及一次必要仲裁，worker 不再派生；与此次两名计划顾问审计不是同一件事。分别报告 failed/inconclusive/candidate 自身合格及可比维度的改善；较弱或不可比维度完整披露，不得凭局部优势称整体 non-inferior 或全面优于参考。post-UI 完成才补足 F05，不能继续抽样挑优。
 
 ## S14C — 升级与中断恢复
 

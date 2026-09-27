@@ -21,7 +21,8 @@ class ReferenceEvidenceValidationError extends Error {}
 const fail = code => { throw new ReferenceEvidenceValidationError(code) }
 export const targetUnitRange = (targetUnits, protocolRevision, arm) =>
   (protocolRevision === THIRTY_PERCENT_TOLERANCE_REVISION || protocolRevision === 'pacing-readability-v1'
-    || protocolRevision === 's14b-reviewed-draft-v1' || protocolRevision === 's14b-split-quality-gates-v1') && arm !== 'baseline'
+    || protocolRevision === 's14b-reviewed-draft-v1' || protocolRevision === 's14b-split-quality-gates-v1'
+    || protocolRevision === 's14b-candidate-quality-and-comparison-v2') && arm !== 'baseline'
   ? { minimum: Math.floor(targetUnits * 0.7), maximum: Math.ceil(targetUnits * 1.3) }
   : { minimum: Math.floor(targetUnits * 0.8), maximum: Math.ceil(targetUnits * 1.2) }
 
