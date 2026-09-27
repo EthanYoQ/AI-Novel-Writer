@@ -42,24 +42,40 @@ function reference(releaseRoot: string, kind: string, file: string) {
 export function windowsV025CopyProof() {
   const before = { id: 71, content: 'fixture author body', updatedAt: '2026-01-02 03:04:05' }
   return {
-    upgradePolicyRevision: 'v025-offline-copy-v1', oldAppSaved: true, legacyRecentPreserved: true,
+    upgradePolicyRevision: 'v025-roster-refusal-v2', oldAppSaved: true, legacyRecentPreserved: true,
     sourceUnchangedSinceOldSave: true, legacyGlobalBytesPreservedSinceOldSave: true,
     oldSaveProof: { verifiedBy: 'legacy-renderer-cdp-v025-save', draft: {
       before, after: { ...before, updatedAt: '2026-09-26 03:04:05' },
     } },
-    copyDriverSha256: 'd'.repeat(64), copyPackageHashes: { exe: 'e'.repeat(64), asar: 'f'.repeat(64) },
-    copyImport: { revision: 'v025-offline-copy-v1', sourceProjectId: 'old-id', targetProjectId: 'new-id',
+    copyDriverSha256: 'd'.repeat(64), copyTestedSha: 'c'.repeat(40),
+    copyPackageHashes: { exe: 'e'.repeat(64), asar: 'f'.repeat(64) },
+    copyImport: { revision: 'v025-roster-refusal-v2', expectedCode: 'LEGACY_IMPORT_ROSTER_UNAVAILABLE',
       source: 'C:/fixture/source', importSource: 'C:/scratch/s', target: 'C:/scratch/copy', sourceFileCount: 12,
-      sourceInventorySha256: 'a'.repeat(64), sourceAfterSha256: 'a'.repeat(64), targetInventorySha256: 'b'.repeat(64),
-      savedBodySha256: 'c'.repeat(64), reopenedBodySha256: 'c'.repeat(64),
-      sourceUnchanged: true, legacyGlobalsUnchanged: true, settingsPreserved: true, targetRecentRegistered: true,
-      preservedTableCount: 11, preservedAssetCount: 2, knowledgeDocuments: 1, knowledgeChunks: 1,
+      sourceInventorySha256: 'a'.repeat(64), sourceAfterSha256: 'a'.repeat(64),
+      legacyGlobalsBeforeSha256: 'b'.repeat(64), legacyGlobalsAfterSha256: 'b'.repeat(64),
+      sourceUnchanged: true, legacyGlobalsUnchanged: true, targetPublished: false,
+      targetRecentRegistered: false, stagingRetained: true,
+      modelRequests: { mainFetchCalls: 0, rendererRequests: 0 },
     },
-    copySteps: ['import-open', 'target-edit-save', 'import-zero-network', 'knowledge-index',
-      'target-edit-reopen', 'reopen-zero-network', 'reopen-unchanged'].map(step => ({
-      stepId: `v0.2.5-${step}`, outcome: 'PASS',
-      ...(step.endsWith('zero-network') ? { requests: { mainFetchCalls: 0, rendererRequests: 0 } } : {}),
-    })),
+    copySteps: [{ stepId: 'v0.2.5-roster-rejected', outcome: 'PASS',
+      expectedCode: 'LEGACY_IMPORT_ROSTER_UNAVAILABLE', requests: { mainFetchCalls: 0, rendererRequests: 0 } }],
+    installedV110: { previousVersion: '1.1.0', previousSource: 'official-installed-setup',
+      previousInstallerSha256: '1'.repeat(64), oldAppOpenedProject: true, currentAppLaunched: true,
+      sourceUnchanged: true, globalConfigUnchanged: true, recentProjectsUnchanged: true,
+      officialSources: ['v1.0.0', 'v1.1.0'].map(sourceVersion => ({
+        sourceVersion, testedSha: 'c'.repeat(40), officialProofSha256: '2'.repeat(64),
+        sourceManifestSha256: '3'.repeat(64), driverSha256: 'd'.repeat(64),
+        executableSha256: 'e'.repeat(64), asarSha256: 'f'.repeat(64), receiptSha256: '4'.repeat(64),
+        sourceInventorySha256: '5'.repeat(64), targetInventorySha256: '6'.repeat(64),
+        sourceProjectId: 'old-id', targetProjectId: 'new-id',
+        sourceBodySha256: '7'.repeat(64), savedBodySha256: '8'.repeat(64), reopenedBodySha256: '8'.repeat(64), modelCallRows: 0,
+        importAndSaveRequests: { mainFetchCalls: 0, rendererRequests: 0 },
+        reopenRequests: { mainFetchCalls: 0, rendererRequests: 0 },
+        steps: ['import-open', 'target-edit-save', 'target-edit-reopen'].map(step => ({
+          stepId: `${sourceVersion}-${step}`, outcome: 'PASS',
+        })),
+      })),
+    },
   }
 }
 

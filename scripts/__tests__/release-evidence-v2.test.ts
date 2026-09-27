@@ -438,13 +438,19 @@ describe('release evidence v2 CLI', () => {
       (direct: ReturnType<typeof windowsV025CopyProof>) => { for (const key of Object.keys(windowsV025CopyProof())) delete (direct as Record<string, unknown>)[key] },
       (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.upgradePolicyRevision = 'unknown' },
       (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copyImport.sourceAfterSha256 = '0'.repeat(64) },
-      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copyImport.targetProjectId = direct.copyImport.sourceProjectId },
-      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copyImport.reopenedBodySha256 = '0'.repeat(64) },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copyImport.expectedCode = 'OTHER_CODE' },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copyImport.targetPublished = true },
       (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copyImport.legacyGlobalsUnchanged = false },
-      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copyImport.targetRecentRegistered = false },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copyImport.targetRecentRegistered = true },
       (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.oldSaveProof.draft.after.content = 'changed' },
       (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copySteps = direct.copySteps.slice(1) },
-      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copySteps[2].requests!.mainFetchCalls = 1 },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.copyImport.modelRequests.mainFetchCalls = 1 },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.installedV110.officialSources[0].testedSha = '0'.repeat(40) },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.installedV110.officialSources.pop() },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.installedV110.officialSources[0].steps.pop() },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.installedV110.officialSources[1].reopenedBodySha256 = '0'.repeat(64) },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.installedV110.officialSources[1].importAndSaveRequests.mainFetchCalls = 1 },
+      (direct: ReturnType<typeof windowsV025CopyProof>) => { direct.installedV110.officialSources[1].modelCallRows = 1 },
     ]) {
       writeSemanticReceipts()
       const receipt = validWindowsReceipt('upgrade-data', releaseRoot) as { direct: ReturnType<typeof windowsV025CopyProof> }
@@ -453,7 +459,7 @@ describe('release evidence v2 CLI', () => {
       const rejectedCopy = spawnSync(process.execPath, [evidenceScript, 'finalize', '--platform', 'windows',
         '--evidence-root', evidenceRoot, '--release-root', releaseRoot], { cwd: repositoryRoot, encoding: 'utf8' })
       expect(rejectedCopy.status).not.toBe(0)
-      expect(rejectedCopy.stderr).toContain('Windows v0.2.5 copy')
+      expect(rejectedCopy.stderr).toMatch(/Windows (v0\.2\.5 (copy|refusal)|official)/)
     }
     writeSemanticReceipts()
 
@@ -513,12 +519,28 @@ describe('release evidence v2 CLI', () => {
       platform: 'windows',
       releaseFiles: [installer, `${installer}.blockmap`, 'latest.yml'],
     })
-    // Synthesize a historical bundle in this test only; real archived receipts remain immutable.
     const oldPath = 'qualification/acceptance/upgrade-data.json'
+    const wrongShaReceipt = JSON.parse(readFileSync(path.join(releaseRoot, oldPath), 'utf8'))
+    wrongShaReceipt.direct.copyTestedSha = '0'.repeat(40)
+    for (const source of wrongShaReceipt.direct.installedV110.officialSources) source.testedSha = '0'.repeat(40)
+    writeJson(path.join(releaseRoot, oldPath), wrongShaReceipt)
+    const oldRecord = manifest.evidence.find((record: { file: string }) => record.file === oldPath)
+    oldRecord.sha256 = sha256(path.join(releaseRoot, oldPath))
+    oldRecord.sizeBytes = readFileSync(path.join(releaseRoot, oldPath)).length
+    writeJson(path.join(releaseRoot, 'manifest.json'), manifest)
+    writeFileSync(path.join(releaseRoot, 'SHA256SUMS.txt'), sums.trim().split('\n').map(line => {
+      const file = line.slice(line.indexOf(' *') + 2)
+      return `${sha256(path.join(releaseRoot, file))} *${file}`
+    }).join('\n') + '\n')
+    const wrongSha = spawnSync(process.execPath, [...verifyArguments, '--run-attempt', '1'],
+      { cwd: repositoryRoot, encoding: 'utf8' })
+    expect(wrongSha.status).not.toBe(0)
+    expect(wrongSha.stderr).toContain('Windows old-source journeys must match the frozen candidate commit')
+
+    // Synthesize a historical bundle in this test only; real archived receipts remain immutable.
     const oldReceipt = JSON.parse(readFileSync(path.join(releaseRoot, oldPath), 'utf8'))
     for (const key of Object.keys(windowsV025CopyProof())) delete oldReceipt.direct[key]
     writeJson(path.join(releaseRoot, oldPath), oldReceipt)
-    const oldRecord = manifest.evidence.find((record: { file: string }) => record.file === oldPath)
     oldRecord.sha256 = sha256(path.join(releaseRoot, oldPath))
     oldRecord.sizeBytes = readFileSync(path.join(releaseRoot, oldPath)).length
     writeJson(path.join(releaseRoot, 'manifest.json'), manifest)

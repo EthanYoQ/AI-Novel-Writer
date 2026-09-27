@@ -35,6 +35,8 @@ feature-evidence-levels.json 的 productShell=writer 继续是逻辑产品壳，
 
 旧 UI DOM/视觉/接线证据不能直接证明 V3；未变核心证据保留 SHA、差异和消费者理由沿用。evidence.reuseDecision 只验证记录形状，不能代审查。driver 不适配新 UI 时由 F04/F05 最小修改后再验，不改历史回执；包与 driver 各自标实际来源。
 
+Windows S14C 的官方 v0.2.5 已保存旧源含非空旧角色原文和无法确定性映射的关系：候选版须返回 `LEGACY_IMPORT_ROSTER_UNAVAILABLE`，保留未发布 staging、源与全局配置不变且不发模型请求；这是一项受控拒绝负例，不是完整导入通过。旧程序保存/重开及安装升级仍验。完整导入、目标编辑保存与退出重开须分别由官方 v1.0.0、v1.1.0 来源在同一候选包验证。历史失败回执保持原样，新修订收据分别记录负例和两版正例。
+
 candidate 字数继续 ±30%、draft-units v3 与既有舍入，文学参考 baseline 原代码和历史裁决不变；仅 U06 的性能 20% 门按上表取代，不作全局文本替换。模型吞吐与本地界面交互分开，不新增统一 token/s 门。80 为计划额而非硬帽；post-UI 三案例、最终 18 章、oracle/盲评、失败和唯一账本保留，不因换壳重启已完成的 early 实验，不挑优补样改判。
 
 ## 交接

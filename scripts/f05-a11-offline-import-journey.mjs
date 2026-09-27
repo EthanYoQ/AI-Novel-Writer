@@ -108,7 +108,7 @@ const receipt = macMode ? { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification
     sourceManifestSha256: sha256(path.join(repository, 'scripts', 'fixtures', 's14c-official-old-sources', 'manifest.json')),
     executableSha256: sha256(exe), asarSha256: sha256(asar) },
 } : { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_WIN_V3',
-  mode: legacyV025 ? 'v025-offline-copy-v1' : finalDelta ? 'synthetic-completeness-final-delta' : supplement ? 'synthetic-completeness' : 'historical-baseline',
+  mode: legacyV025 ? 'v025-roster-refusal-v2' : finalDelta ? 'synthetic-completeness-final-delta' : supplement ? 'synthetic-completeness' : 'historical-baseline',
   packageMode: installedRoot ? 'installed' : 'unpacked',
   selectedVersions: onlyVersion ? [onlyVersion] : sources.map(source => source.version),
   testedSha, buildTree: path.resolve(buildTree),
@@ -565,6 +565,41 @@ async function verify(source) {
     v025Stage('import-start')
     await session.page.getByRole('button', { name: '导入旧项目副本' }).click()
     const target = path.join(targetParent, 's-新版副本')
+    if (legacyV025) {
+      const code = 'LEGACY_IMPORT_ROSTER_UNAVAILABLE'
+      await session.page.locator('[role="status"]').filter({ hasText: code })
+        .waitFor({ state: 'visible', timeout: 30_000 })
+      const requests = await requestCounts()
+      const stages = fs.readdirSync(targetParent).filter(name => name.startsWith(`.${path.basename(target)}.legacy-import-`))
+      assert.equal(stages.length, 1, 'Expected one retained unpublished import staging attempt')
+      assert(fs.statSync(path.join(targetParent, stages[0])).isDirectory())
+      assert(!fs.existsSync(target), 'Rejected import published a target')
+      const recent = await session.page.evaluate(() => window.aiNovelAPI.invoke('project:recent-list'))
+      assert(!recent.some(entry => path.resolve(entry.path).toLowerCase() === path.resolve(target).toLowerCase()),
+        'Rejected target entered recent projects')
+      assert.equal(await session.page.locator('.writer-shelf').getByRole('button', { name: '打开《升级保留验证小说》' }).count(),
+        recent.filter(entry => path.resolve(entry.path).toLowerCase() === path.resolve(source.path).toLowerCase()).length,
+        'Rejected target entered shelf')
+      assert.deepEqual(inventory(sourceCopy), copiedBefore, 'Scratch source changed on rejection')
+      assert.deepEqual(inventory(source.path), originalBefore, 'Official source changed on rejection')
+      assert.deepEqual(inventory(legacyHome), globalBefore, 'Old globals changed on rejection')
+      receipt.copyImport = { revision: 'v025-roster-refusal-v2', expectedCode: code,
+        source: source.path, importSource: sourceCopy, target, sourceFileCount: Object.keys(originalBefore).length,
+        sourceInventorySha256: hashText(JSON.stringify(originalBefore)),
+        sourceAfterSha256: hashText(JSON.stringify(inventory(source.path))),
+        legacyGlobalsBeforeSha256: hashText(JSON.stringify(globalBefore)),
+        legacyGlobalsAfterSha256: hashText(JSON.stringify(inventory(legacyHome))),
+        sourceUnchanged: true, legacyGlobalsUnchanged: true, targetPublished: false,
+        targetRecentRegistered: false, stagingRetained: true, modelRequests: requests }
+      receipt.steps.push({ stepId: 'v0.2.5-roster-rejected', outcome: 'PASS', expectedCode: code,
+        sourceUnchanged: true, legacyGlobalsUnchanged: true, targetPublished: false,
+        targetRecentRegistered: false, stagingRetained: true, requests })
+      await quit(session.app, session.page, source.version)
+      session = null
+      assert.deepEqual(inventory(source.path), originalBefore)
+      assert.deepEqual(inventory(legacyHome), globalBefore)
+      return
+    }
     try {
       await session.page.locator('.writer-project-tree').getByText('升级保留验证小说', { exact: true })
         .waitFor({ state: 'visible', timeout: 30_000 })
@@ -791,13 +826,6 @@ db.commit(); db.close()`, path.join(sourceCopy, '.vela', 'vela.db')])
     }
   } catch (error) {
     if (legacyV025) console.error(`[AI Novel A11] failure-stage=${receipt.lastStage}`)
-    if (legacyV025 && session) {
-      receipt.diagnostic = { ...receipt.diagnostic,
-        body: await session.page.locator('body').innerText().catch(() => null),
-        dialogs: await session.page.locator('[role="dialog"]').allInnerTexts().catch(() => []),
-        screenshot: path.join(root, 'failure.png') }
-      await session.page.screenshot({ path: receipt.diagnostic.screenshot }).catch(() => {})
-    }
     throw error
   } finally {
     if (session) {
@@ -1021,7 +1049,8 @@ async function verifyMac() {
       targetProjectId, database, knowledgeDocuments: sourceKnowledge.documents.length,
       knowledgeChunks: sourceKnowledge.chunks.length,
       sourceBodySha256: hashText(macBody), savedBodySha256: hashText(macSavedBody),
-      reopenedBodySha256: hashText(reopenedBody), importAndSaveRequests, reopenRequests }
+      reopenedBodySha256: hashText(reopenedBody), modelCallRows: macLlmCalls(target),
+      importAndSaveRequests, reopenRequests }
   } catch (error) {
     receipt.failure = { message: String(error), stack: error?.stack }
     console.error(`[AI Novel A11] failure-stage=${receipt.lastStage}`, error)

@@ -107,13 +107,25 @@ function Invoke-AiNovelV025CopyImport {
     "--legacy-v025=$upgradeFixtureRoot", "--legacy-home=$velaHome", "--installer-smoke-root=$smokeRoot"
   )
   $output = @(& node @arguments)
-  if ($LASTEXITCODE -ne 0) { throw 'Installed v0.2.5 copy import, save or reopen journey failed.' }
+  if ($LASTEXITCODE -ne 0) { throw 'Installed v0.2.5 roster refusal journey failed.' }
   $summary = $output[-1] | ConvertFrom-Json
   $proof = Get-Content -LiteralPath $summary.receiptPath -Raw -Encoding UTF8 | ConvertFrom-Json
-  if ($proof.sliceOutcome -ne 'PASS' -or $proof.mode -ne 'v025-offline-copy-v1' -or
+  if ($proof.sliceOutcome -ne 'PASS' -or $summary.receiptSha256 -ne (Get-AiNovelFileSha256 -Path $summary.receiptPath).ToLowerInvariant() -or
+      $proof.mode -ne 'v025-roster-refusal-v2' -or
       $proof.packageMode -ne 'installed' -or $proof.testedSha -ne $head -or
-      $proof.copyImport.legacyGlobalsUnchanged -ne $true -or $proof.copyImport.settingsPreserved -ne $true) {
-    throw 'Installed v0.2.5 copy import evidence is incomplete.'
+      $proof.driverSha256 -ne (Get-AiNovelFileSha256 -Path (Join-Path $PSScriptRoot 'f05-a11-offline-import-journey.mjs')).ToLowerInvariant() -or
+      $proof.packageHashes.exe -ne (Get-AiNovelFileSha256 -Path $exePath).ToLowerInvariant() -or
+      $proof.packageHashes.asar -ne (Get-AiNovelFileSha256 -Path (Join-Path $installRoot 'resources\app.asar')).ToLowerInvariant() -or
+      $proof.copyImport.revision -ne 'v025-roster-refusal-v2' -or
+      $proof.copyImport.expectedCode -ne 'LEGACY_IMPORT_ROSTER_UNAVAILABLE' -or
+      $proof.copyImport.sourceUnchanged -ne $true -or $proof.copyImport.legacyGlobalsUnchanged -ne $true -or
+      $proof.copyImport.sourceAfterSha256 -ne $proof.copyImport.sourceInventorySha256 -or
+      $proof.copyImport.legacyGlobalsAfterSha256 -ne $proof.copyImport.legacyGlobalsBeforeSha256 -or
+      $proof.copyImport.targetPublished -ne $false -or $proof.copyImport.targetRecentRegistered -ne $false -or
+      $proof.copyImport.stagingRetained -ne $true -or $proof.copyImport.modelRequests.mainFetchCalls -ne 0 -or
+      $proof.copyImport.modelRequests.rendererRequests -ne 0 -or
+      @($proof.steps | Where-Object { $_.stepId -eq 'v0.2.5-roster-rejected' -and $_.outcome -eq 'PASS' }).Count -ne 1) {
+    throw 'Installed v0.2.5 roster refusal evidence is incomplete.'
   }
   return $proof
 }
@@ -163,7 +175,12 @@ function Invoke-AiNovelOfficialOldSourceJourney {
       $proof.win.savedBodySha256 -notmatch '^[a-f0-9]{64}$' -or
       $proof.win.savedBodySha256 -ne $proof.win.reopenedBodySha256 -or
       $proof.win.savedBodySha256 -eq $proof.win.sourceBodySha256 -or
+      $proof.win.modelCallRows -ne 0 -or
       $proof.win.sourceProjectId -eq $proof.win.targetProjectId -or
+      $proof.win.importAndSaveRequests.mainFetchCalls -ne 0 -or
+      $proof.win.importAndSaveRequests.rendererRequests -ne 0 -or
+      $proof.win.reopenRequests.mainFetchCalls -ne 0 -or
+      $proof.win.reopenRequests.rendererRequests -ne 0 -or
       @($proof.steps | Where-Object { $_.outcome -eq 'PASS' -and $_.stepId -eq "$Version-import-open" }).Count -ne 1 -or
       @($proof.steps | Where-Object { $_.outcome -eq 'PASS' -and $_.stepId -eq "$Version-target-edit-save" }).Count -ne 1 -or
       @($proof.steps | Where-Object { $_.outcome -eq 'PASS' -and $_.stepId -eq "$Version-target-edit-reopen" }).Count -ne 1) {
@@ -171,6 +188,7 @@ function Invoke-AiNovelOfficialOldSourceJourney {
   }
   return [ordered]@{
     sourceVersion = $Version
+    testedSha = $head
     officialProofSha256 = $proof.win.officialProofSha256
     sourceManifestSha256 = $manifestSha256
     driverSha256 = $driverSha256
@@ -182,6 +200,11 @@ function Invoke-AiNovelOfficialOldSourceJourney {
     sourceBodySha256 = $proof.win.sourceBodySha256
     savedBodySha256 = $proof.win.savedBodySha256
     reopenedBodySha256 = $proof.win.reopenedBodySha256
+    modelCallRows = $proof.win.modelCallRows
+    sourceProjectId = $proof.win.sourceProjectId
+    targetProjectId = $proof.win.targetProjectId
+    importAndSaveRequests = $proof.win.importAndSaveRequests
+    reopenRequests = $proof.win.reopenRequests
     steps = $proof.steps
   }
 }
@@ -1181,12 +1204,12 @@ $currentInstallCompleted = $true
         accepted = $true
         observations = @(
           'The verified v0.2.5 application opened, saved and read back its fixture before setup upgrade.'
-          'The installed application imported a complete independent copy through the V3 UI, saved it and reopened it in a new process.'
+          'The installed application rejected the v0.2.5 roster with the expected code, retained unpublished staging and left source and globals unchanged.'
           'Old source bytes, settings and recent entry remained unchanged; retained vector search was checked on the old source.'
         )
         direct = [ordered]@{
           previousVersion = '0.2.5'
-          upgradePolicyRevision = 'v025-offline-copy-v1'
+          upgradePolicyRevision = 'v025-roster-refusal-v2'
           oldAppSaved = $true
           oldSaveProof = (Get-Content -LiteralPath $v025SaveProofPath -Raw -Encoding UTF8 | ConvertFrom-Json)
           legacyRecentPreserved = $true
@@ -1195,6 +1218,7 @@ $currentInstallCompleted = $true
           copyImport = $copyJourney.copyImport
           copySteps = $copyJourney.steps
           copyDriverSha256 = $copyJourney.driverSha256
+          copyTestedSha = $copyJourney.testedSha
           copyPackageHashes = $copyJourney.packageHashes
           legacyTableCount = [int]$upgradeValidationEvidence.legacyTableCount
           preservedAssetCount = [int]$upgradeValidationEvidence.preservedAssetCount
