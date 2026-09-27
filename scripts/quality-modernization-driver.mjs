@@ -23,8 +23,10 @@ const POST_UI_BUDGET = Object.freeze({ scenarioRevision: 's14b-post-ui-reviewed-
     { id: '成稿首审', kind: 'review' }, { id: '成稿一次修稿', kind: 'refine' }, { id: '成稿完整复评', kind: 'final-review' }]) })
 export function reviewedDraftSelection(report) {
   if (!Array.isArray(report?.items) || report.items.length === 0
-    || report.items.some(item => !['pass', 'error', 'warning'].includes(item?.severity))) throw new Error('REVIEWED_DRAFT_REPORT_INVALID')
-  return report.items.filter(item => item.severity === 'error' || item.severity === 'warning')
+    || report.items.some(item => !['pass', 'error', 'warning', 'unknown'].includes(item?.severity))) throw new Error('REVIEWED_DRAFT_REPORT_INVALID')
+  const selected = report.items.filter(item => item.severity === 'error' || item.severity === 'warning')
+  if (!selected.length && report.items.some(item => item.severity === 'unknown')) throw new Error('REVIEWED_DRAFT_UNKNOWN_UNRESOLVED')
+  return selected
 }
 /** The S14B endpoint is immutable evidence, not a second product revision workflow. */
 export function validateReviewedDraft(result) {

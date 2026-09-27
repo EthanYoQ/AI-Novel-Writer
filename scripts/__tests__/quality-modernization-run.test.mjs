@@ -35,6 +35,11 @@ test('post-UI reviewed draft policy selects every actionable item without changi
   ] }
   assert.deepEqual(reviewedDraftSelection(report), report.items.slice(1))
   assert.deepEqual(reviewedDraftSelection({ items: [report.items[0]] }), [])
+  const mixed = { items: [{ severity: 'unknown', category: '目标', description: '证据不足' }, report.items[1]] }
+  assert.deepEqual(reviewedDraftSelection(mixed), [report.items[1]])
+  assert.equal(mixed.items[0].severity, 'unknown')
+  assert.throws(() => reviewedDraftSelection({ items: [mixed.items[0]] }), /REVIEWED_DRAFT_UNKNOWN_UNRESOLVED/)
+  assert.throws(() => reviewedDraftSelection({ items: [{ severity: 'invented' }] }), /REVIEWED_DRAFT_REPORT_INVALID/)
   const selected = selectPhase(protocol, 'early-budget', 'post-ui')
   assert.deepEqual(selected.evaluationPolicy, POST_UI_REVIEW_POLICY)
   assert.deepEqual(selected.operations.map(item => item.kind), ['directory', 'draft', 'review', 'refine', 'final-review'])
@@ -68,6 +73,26 @@ test('reviewed draft evidence rejects skipped issues, best-version picking and c
       draftObservation: { contentHash: finalDraft.contentHash }, reviewedDraft: { initial, review, confirmation, revision,
         finalReview, finalDraft, mergeHash: revision.contentHash, selectedCount: 2, selectedItemsHash: hash(items), disposition: 'revised-once' } }
     assert.equal(validateReviewedDraft(result).valid, true, 'a failing final model review stays evidence, not a model quality verdict')
+    const mixedReview = JSON.stringify({ items: [{ category: '目标', severity: 'unknown', description: '证据不足' }, ...items] })
+    fs.writeFileSync(review.outputPath, mixedReview)
+    review.contentHash = hash(mixedReview)
+    operations.find(item => item.kind === 'review').outputHash = review.contentHash
+    assert.equal(validateReviewedDraft(result).valid, true, 'unknown remains in the saved report while actionable items are selected')
+    const passReview = artifact('pass-review.json', JSON.stringify({ items: [{ category: '事实', severity: 'pass', description: '已满足' }] }),
+      { reviewId: 2, sourceHash: initial.contentHash })
+    const noAction = { evaluationPolicy: POST_UI_REVIEW_POLICY,
+      operations: [{ operation: operations[0].operation, kind: 'directory' },
+        { operation: operations[1].operation, kind: 'draft', outputHash: initial.contentHash },
+        { operation: operations[2].operation, kind: 'review', outputHash: passReview.contentHash }],
+      saved: { contentHash: initial.contentHash }, draftObservation: { contentHash: initial.contentHash },
+      reviewedDraft: { initial, review: passReview, finalDraft: initial, selectedCount: 0,
+        selectedItemsHash: hash([]), disposition: 'no-actionable-review' } }
+    assert.equal(validateReviewedDraft(noAction).valid, true)
+    const unknownReview = JSON.stringify({ items: [{ category: '目标', severity: 'unknown', description: '证据不足' }] })
+    fs.writeFileSync(passReview.outputPath, unknownReview)
+    passReview.contentHash = hash(unknownReview)
+    noAction.operations[2].outputHash = passReview.contentHash
+    assert.equal(validateReviewedDraft(noAction).valid, false, 'unknown-only review cannot become no-actionable-review')
     for (const mutate of [value => { value.reviewedDraft.selectedCount = 1 },
       value => { value.reviewedDraft.finalDraft = initial },
       value => { value.operations.pop() },
