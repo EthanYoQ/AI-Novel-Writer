@@ -5,6 +5,7 @@ import { test } from 'node:test'
 import { createServer } from 'node:net'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import process from 'node:process'
 
 const script = resolve('scripts/probe-legacy-project-open.mjs')
 const fixtureRoot = resolve('.runtime/cache/s14c-old-binaries')
@@ -96,7 +97,7 @@ test('renderer reload in the same official process cannot count as a roster rest
       await new Promise(resolvePromise => setTimeout(resolvePromise, 100))
     }
     assert.ok(target, 'official renderer CDP page must start')
-    async function cdp(method, params = {}) {
+    const cdp = async (method, params = {}) => {
       const socket = new WebSocket(target.webSocketDebuggerUrl)
       await new Promise(resolvePromise => socket.addEventListener('open', resolvePromise, { once: true }))
       const response = await new Promise(resolvePromise => {
