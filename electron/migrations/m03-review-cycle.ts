@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type Database from 'better-sqlite3'
 import { buildReviewGenerationReport } from '../../src/shared/review-generation-report'
-import { buildReviewCycleRecheckReport, classifyFindingEvidenceChange,
+import { buildReviewCycleRecheckReport, classifyFindingEvidenceChange, unshownMustShowRecheckFindings,
   type ReviewCycleRecheckContext, type ReviewCycleRecheckFinding } from '../../src/shared/review-cycle'
 import { parseHumanConfirmedReviewSnapshot, type HumanConfirmedReviewSnapshot } from '../../src/shared/human-confirmed-review'
 import { composeVisibleContinuation } from '../../src/shared/visible-continuation'
@@ -390,6 +390,7 @@ export function verifyM03ReviewCycle(db: Database.Database): boolean {
       const recheckEvidence = new Map<string, { targetId: string; evidenceHash: string; resolved: boolean }>()
       const recheckEligible = new Set<string>()
       const recheckTargets = new Map<string, string>()
+      const unshownRecheck = new Set<string>()
       if (cycle.revision_status === 'merge-committed') {
         if (!revision || revision.status !== 'merged' || revision.merged_to_draft_id !== revision.base_draft_id
           || revision.base_draft_id !== review.base_draft_id || !cycle.merged_hash || !HASH.test(cycle.merged_hash)) return false
@@ -425,6 +426,13 @@ export function verifyM03ReviewCycle(db: Database.Database): boolean {
               sourceExcerpt: review.source_content!.slice(finding.span_start, finding.span_end) }
             return classifyFindingEvidenceChange(review.source_content!, mergedBody, value) === 'changed' ? [value] : []
           })
+          const unshown = unshownMustShowRecheckFindings(JSON.parse(review.body), confirmation?.snapshot ?? null,
+            recheckFindings.map(finding => ({ findingId: finding.finding_id, kind: finding.kind,
+              status: finding.status, targetId: finding.target_id, problemText: finding.problem_text,
+              expectedText: finding.expected_text }))).filter(finding =>
+              classifyFindingEvidenceChange(review.source_content!, mergedBody, finding) === 'changed')
+          eligible.push(...unshown)
+          for (const finding of unshown) unshownRecheck.add(finding.findingId)
           for (const finding of eligible) {
             recheckEligible.add(finding.findingId)
             recheckTargets.set(finding.findingId, finding.targetId)
@@ -434,7 +442,8 @@ export function verifyM03ReviewCycle(db: Database.Database): boolean {
           if (!receipt || (receipt.version !== 1 && receipt.version !== 2)) return false
           const expectedRecheck: ReviewCycleRecheckContext = { version: receipt.version, cycleId: cycle.cycle_id,
             comparisonVersion: cycle.comparison_version, mergedHash: cycle.merged_hash,
-            findingSetHash: cycle.finding_set_hash, findings: eligible }
+            findingSetHash: cycle.finding_set_hash,
+            ...(unshown.length ? { sourceContent: review.source_content! } : {}), findings: eligible }
           if (!recheckReview || !recheckMeta || !mergedDraft || recheckMeta.base_draft_id !== review.base_draft_id
             || recheckMeta.source_draft_chapter_number !== mergedDraft.chapter_number || recheckMeta.source_draft_version !== mergedDraft.version
             || recheckMeta.source_draft_status !== 'revised' || recheckReview.source_content === null
@@ -505,7 +514,7 @@ export function verifyM03ReviewCycle(db: Database.Database): boolean {
           if (occurrence !== finding.occurrence) return false
         }
         if (finding.evidence_hash !== null && !HASH.test(finding.evidence_hash)) return false
-        if (recheckEligible.has(finding.finding_id)) {
+        if (recheckEligible.has(finding.finding_id) && !unshownRecheck.has(finding.finding_id)) {
           const candidateEvidence = recheckEvidence.get(finding.finding_id)
           const evidence = candidateEvidence?.targetId === finding.target_id ? candidateEvidence : undefined
           const expectedStatus = evidence ? evidence.resolved ? 'resolved' : 'unresolved' : 'unknown'

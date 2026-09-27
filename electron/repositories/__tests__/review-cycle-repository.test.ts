@@ -1040,6 +1040,105 @@ describe('ReviewCycleRepository merge state', () => {
 })
 
 describe('ReviewCycleRepository recheck state', () => {
+  it('keeps both author-applied must-show findings when their text and unknown descriptions coincide', () => {
+    const db = fixture()
+    try {
+      const source = '她走进大厅。'
+      const goalIds = ['ch1:mustShow:1', 'ch1:mustShow:2']
+      const seeded = seed(db, { key: 'must-show-duplicate', source,
+        frozenGoals: { chapterNumber: 1, coverage: 'complete',
+          items: goalIds.map(id => ({ id, text: '钟楼在她眼前倒塌' })) },
+        model: { summary: '待核实', items: [{ category: '文风', severity: 'pass', description: '通过' }],
+          goalReviews: goalIds.map(id => ({ id, status: 'unknown', description: '正文尚未展示。', evidence: [] })) } })
+      const cycle = create(db, seeded.call)
+      const rows = db.prepare('SELECT finding_id,status,span_start,target_id FROM review_findings WHERE cycle_id=? ORDER BY rowid')
+        .all(cycle.cycleId) as Array<{ finding_id: string; status: string; span_start: number | null; target_id: string | null }>
+      expect(rows).toHaveLength(2)
+      expect(rows.map(row => [row.status, row.span_start, row.target_id])).toEqual([
+        ['unverified', null, null], ['unverified', null, null],
+      ])
+      const snapshot = { kind: 'human-confirmed-review', schemaVersion: 2, cycleId: cycle.cycleId,
+        sourceReviewId: seeded.reviewId,
+        sourceDraft: { id: seeded.draftId, chapterNumber: 1, version: 1, status: 'draft', content: source },
+        summary: '作者确认', authorGuidance: '', items: goalIds.map((goalId, index) => ({
+          findingId: rows[index]!.finding_id, goalId, category: '本章目标', severity: 'unknown',
+          description: '正文尚未展示。', decision: 'apply', origin: 'ai',
+        })) }
+      const revision = seedRevision(db, seeded, { key: 'must-show-duplicate-revision', snapshot })
+      revision.attach.cycleId = cycle.cycleId
+      db.transaction(() => ReviewCycleRepository.attachGeneratedRevision(revision.attach, db))()
+      const mergedContent = `${source}钟楼在她眼前倒塌。`
+      const item = { seeded, cycle, revision, mergedContent,
+        mergedHash: mergeRows(db, { seeded, cycle, revision }, mergedContent) }
+      db.transaction(() => ReviewCycleRepository.commitMergedRevision({ revisionId: revision.revisionId,
+        mergedHash: item.mergedHash }, db))()
+      const plan = ReviewCycleRepository.planRecheck(cycle.cycleId, db)
+      expect(plan.disposition).toBe('required')
+      expect(plan.context?.findings.map(finding => [finding.findingId, finding.targetId]).sort()).toEqual(
+        rows.map((row, index) => [row.finding_id, goalIds[index]]).sort())
+      const attempt = seedRecheckAttempt(db, item, plan.context!, { key: 'must-show-duplicate-check', mappings: [] })
+      expect(db.transaction(() => ReviewCycleRepository.commitRecheck(cycle.cycleId, attempt.attemptId, db))())
+        .toMatchObject({ recheckCount: 1 })
+      expect(verifyM03ReviewCycle(db)).toBe(true)
+    } finally { db.close() }
+  })
+
+  it.each([['apply', false], ['ignore', false], ['apply', true]] as const)(
+    'only author-applied explicit goals with new prose enter recheck (%s, punctuation only: %s)', (decision, punctuationOnly) => {
+    const db = fixture()
+    try {
+      const goalId = 'ch1:mustShow:1'
+      const source = '她走进大厅。'
+      const seeded = seed(db, { key: `must-show-${decision}-${punctuationOnly}`, source,
+        frozenGoals: { chapterNumber: 1, coverage: 'complete', items: [{ id: goalId, text: '钟楼在她眼前倒塌' }] },
+        model: { summary: '待核实', items: [{ category: '文风', severity: 'pass', description: '通过' }],
+          goalReviews: [{ id: goalId, status: 'unknown', description: '正文尚未展示。', evidence: [] }] } })
+      const cycle = create(db, seeded.call)
+      const originalFinding = db.prepare('SELECT finding_id,status,span_start,target_id FROM review_findings WHERE cycle_id=?')
+        .get(cycle.cycleId) as Record<string, unknown>
+      expect(originalFinding).toMatchObject({ status: 'unverified', span_start: null, target_id: null })
+      const snapshot = { kind: 'human-confirmed-review', schemaVersion: 2, cycleId: cycle.cycleId,
+        sourceReviewId: seeded.reviewId,
+        sourceDraft: { id: seeded.draftId, chapterNumber: 1, version: 1, status: 'draft', content: source },
+        summary: '作者确认', authorGuidance: '', items: [{ findingId: originalFinding.finding_id,
+          goalId, category: '本章目标', severity: 'unknown', description: '本章须明示钟楼倒塌',
+          decision, origin: 'ai' }] }
+      const mergedContent = punctuationOnly ? '她走进大厅！' : `${source}钟楼在她眼前倒塌。`
+      const revision = seedRevision(db, seeded, { key: `must-show-revision-${decision}-${punctuationOnly}`, snapshot })
+      revision.attach.cycleId = cycle.cycleId
+      db.transaction(() => ReviewCycleRepository.attachGeneratedRevision(revision.attach, db))()
+      const item = { seeded, cycle, revision, mergedContent, mergedHash: mergeRows(db, { seeded, cycle, revision }, mergedContent) }
+      db.transaction(() => ReviewCycleRepository.commitMergedRevision({ revisionId: revision.revisionId,
+        mergedHash: item.mergedHash }, db))()
+      const plan = ReviewCycleRepository.planRecheck(cycle.cycleId, db)
+      expect(plan.disposition).toBe(decision === 'apply' && !punctuationOnly ? 'required' : 'not-required')
+      if (decision === 'apply' && !punctuationOnly) {
+        expect(plan.context?.findings).toEqual([expect.objectContaining({
+          findingId: originalFinding.finding_id, targetId: goalId, mustShow: true,
+          expected: expect.stringContaining('钟楼在她眼前倒塌'),
+        })])
+        expect(plan.context?.findings[0]).not.toHaveProperty('sourceExcerpt')
+        const finding = plan.context!.findings[0]!
+        const checked = buildReviewCycleRecheckReport(JSON.stringify({ summary: '找到新正文', items: [{
+          findingId: finding.findingId, targetId: goalId, resolved: true,
+          evidenceQuote: '钟楼在她眼前倒塌。', reason: '正文展示了倒塌。',
+        }] }), mergedContent, plan.context!, 'zh-CN')
+        expect(checked.items[0]).toMatchObject({ severity: 'unknown', quote: '钟楼在她眼前倒塌。' })
+        const oldQuote = buildReviewCycleRecheckReport(JSON.stringify({ summary: '旧句冒充新证据', items: [{
+          findingId: finding.findingId, targetId: goalId, resolved: true,
+          evidenceQuote: '她走进大厅。', reason: '误用原句。',
+        }] }), mergedContent, plan.context!, 'zh-CN')
+        expect(oldQuote.items[0]).toMatchObject({ severity: 'unknown' })
+        expect(oldQuote.items[0]).not.toHaveProperty('quote')
+        const attempt = seedRecheckAttempt(db, item, plan.context!, { key: 'must-show-check', mappings: [] })
+        expect(db.transaction(() => ReviewCycleRepository.commitRecheck(cycle.cycleId, attempt.attemptId, db))())
+          .toMatchObject({ recheckCount: 1 })
+        expect(ReviewCycleRepository.planRecheck(cycle.cycleId, db).disposition).toBe('completed')
+        expect(verifyM03ReviewCycle(db)).toBe(true)
+      }
+    } finally { db.close() }
+  })
+
   it.each([
     ['no-op', (source: string) => source],
     ['format-only', (source: string) => `${source}\n`],

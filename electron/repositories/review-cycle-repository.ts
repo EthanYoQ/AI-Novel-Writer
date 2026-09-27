@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type Database from 'better-sqlite3'
 import { canonicalM03FindingSetHash, verifyM03ReviewCycle, type M03FindingDescriptor } from '../migrations/m03-review-cycle'
 import { parseHumanConfirmedReviewSnapshot, type HumanConfirmedReviewSnapshot } from '../../src/shared/human-confirmed-review'
-import { classifyFindingEvidenceChange, type ReviewCycleRecheckContext,
+import { classifyFindingEvidenceChange, unshownMustShowRecheckFindings, type ReviewCycleRecheckContext,
   type ReviewCycleRecheckFinding, type ReviewCycleProjection } from '../../src/shared/review-cycle'
 
 const HASH = /^[a-f0-9]{64}$/u
@@ -484,8 +484,20 @@ function recheckContext(cycle: RecheckCycleRow, db: Database.Database): ReviewCy
       sourceExcerpt: cycle.source_content!.slice(row.span_start, row.span_end) }
     if (classifyFindingEvidenceChange(cycle.source_content!, cycle.merged_body, finding) === 'changed') findings.push(finding)
   }
+  const sourceRows = db.prepare(`SELECT c.body AS review_body, cc.body AS confirmation_body
+    FROM review_cycles rc JOIN reviews r ON r.id=rc.review_id JOIN contents c ON c.id=r.content_id
+    LEFT JOIN reviews cr ON cr.id=rc.confirmation_review_id LEFT JOIN contents cc ON cc.id=cr.content_id
+    WHERE rc.cycle_id=?`).get(cycle.cycle_id) as { review_body: string; confirmation_body: string | null }
+  const originalReport = JSON.parse(sourceRows.review_body) as unknown
+  const snapshot = sourceRows.confirmation_body ? parseHumanConfirmedReviewSnapshot(sourceRows.confirmation_body) : null
+  const unshown = unshownMustShowRecheckFindings(originalReport, snapshot, rows.map(row => ({
+    findingId: row.finding_id, kind: row.kind, status: row.status, targetId: row.target_id,
+    problemText: row.problem_text, expectedText: row.expected_text,
+  }))).filter(finding => classifyFindingEvidenceChange(cycle.source_content!, cycle.merged_body, finding) === 'changed')
+  findings.push(...unshown)
   return { version: 2, cycleId: cycle.cycle_id, comparisonVersion: cycle.comparison_version,
-    mergedHash: cycle.merged_hash!, findingSetHash: cycle.finding_set_hash, findings }
+    mergedHash: cycle.merged_hash!, findingSetHash: cycle.finding_set_hash,
+    ...(unshown.length ? { sourceContent: cycle.source_content! } : {}), findings }
 }
 
 export class ReviewCycleRepository {
@@ -739,6 +751,7 @@ export class ReviewCycleRepository {
       const update = db.prepare(`UPDATE review_findings SET status=?,evidence_hash=?,confirmation_item_index=NULL
         WHERE cycle_id=? AND finding_id=? AND status NOT IN ('resolved','author-waived')`)
       for (const finding of plan.context.findings) {
+        if (finding.mustShow) continue // The old finding has no quote and remains unverified in M03.
         const candidates = mappings.filter(mapping => mapping?.findingId === finding.findingId)
         const mapping = candidates.length === 1 ? candidates[0] : null
         const valid = mapping && mapping.targetId === finding.targetId && integer(mapping.reviewItemIndex)

@@ -111,7 +111,8 @@ export function captureReviewRevisionContext(db: Database.Database, request: Pre
         identity: materialIdentity, ...(sourceIdentity ? { source: sourceIdentity } : {}), ...(projection ? { projection } : {}) }
     })
     const activeIds = new Set((db.prepare('SELECT character_id FROM characters WHERE retired=0').all() as { character_id: string }[]).map(row => row.character_id))
-    const stateLines = CharacterRepository.getAll(db).filter(card => card.characterId && activeIds.has(card.characterId)).flatMap(card => {
+    const authorCards = CharacterRepository.getAll(db).filter(card => card.characterId && activeIds.has(card.characterId))
+    const stateLines = authorCards.flatMap(card => {
       const state = card.currentState
       if (!state) return []
       const fields = Object.fromEntries(CHARACTER_STATE_TEXT_FIELDS.flatMap(field => {
@@ -127,7 +128,8 @@ export function captureReviewRevisionContext(db: Database.Database, request: Pre
       writingLanguage: core.writingLanguage, uiLocale: request.uiLocale, authorInputs: structuredClone(request.authorInputs),
       characterStates: stateLines.join('\n') || (core.writingLanguage === 'en-US' ? '(none)' : '（暂无）'),
       worldbuilding: core.worldbuilding, history, blueprints,
-      frozenGoals: freezeChapterGoals(source.chapterNumber, currentBlueprint?.keyEvents),
+      frozenGoals: freezeChapterGoals(source.chapterNumber, currentBlueprint?.keyEvents,
+        [core.worldSetting, ...authorCards.map(card => card.notes)]),
       preflightFindings: currentBlueprint ? findBlueprintContinuityRisks(history.flatMap(item => item.projection ? [item.projection] : []), currentBlueprint, ConsistencyExemptionRepository.list(db)) : [],
       ...(confirmation ? { confirmation } : {}), ...(recheck ? { recheck } : {}) }
   })()

@@ -1,4 +1,6 @@
 import { isContentHash, type SourceRef } from './source-ref'
+import { parseChapterGoalReview } from './chapter-goal-review'
+import type { HumanConfirmedReviewSnapshot } from './human-confirmed-review'
 
 export type ReviewFindingStatus = 'unverified' | 'unresolved' | 'unknown' | 'resolved' | 'author-waived'
 export interface ReviewFinding {
@@ -37,9 +39,11 @@ export interface ReviewCycleRecheckFinding {
   problem: string
   /** Optional original goal semantics that the merged draft must actually satisfy. */
   expected?: string
-  sourceSpan: { start: number; end: number; unit: 'utf16-code-unit' }
-  occurrence: number
-  sourceExcerpt: string
+  sourceSpan?: { start: number; end: number; unit: 'utf16-code-unit' }
+  occurrence?: number
+  sourceExcerpt?: string
+  /** Author-applied explicit goal with no old-draft quote; the original row remains unverified. */
+  mustShow?: true
 }
 
 export interface ReviewCycleRecheckContext {
@@ -49,6 +53,8 @@ export interface ReviewCycleRecheckContext {
   comparisonVersion: number
   mergedHash: string
   findingSetHash: string
+  /** Present only for unshown mustShow goals, to reject evidence already in the original draft. */
+  sourceContent?: string
   findings: readonly ReviewCycleRecheckFinding[]
 }
 
@@ -79,6 +85,33 @@ export function isNoopRevision(before: string, after: string): boolean {
   return visible(before) === visible(after)
 }
 
+/** A narrow projection from the original saved goal and author confirmation, never a fabricated old quote. */
+export function unshownMustShowRecheckFindings(rawReport: unknown, snapshot: HumanConfirmedReviewSnapshot | null,
+  rows: readonly { findingId: string; kind: string; status: string; targetId: string | null;
+    problemText: string; expectedText: string | null }[]): ReviewCycleRecheckFinding[] {
+  if (!rawReport || typeof rawReport !== 'object' || Array.isArray(rawReport) || !snapshot) return []
+  const report = rawReport as { goalReview?: unknown; items?: unknown }
+  const goals = parseChapterGoalReview(report.goalReview)
+  if (!goals || !Array.isArray(report.items)) return []
+  const reportItems = report.items as unknown[]
+  return goals.items.flatMap(goal => {
+    if (!/^ch\d+:mustShow:\d+$/u.test(goal.id) || goal.status !== 'unknown' || goal.evidence.length) return []
+    const projections = reportItems.filter((item): item is { goalId: string; category: string; description: string } =>
+      Boolean(item && typeof item === 'object' && !Array.isArray(item) && (item as { goalId?: unknown }).goalId === goal.id))
+    const choices = snapshot.items.filter(item => item.goalId === goal.id && item.origin === 'ai'
+      && item.decision === 'apply' && item.findingId)
+    if (projections.length !== 1 || choices.length !== 1) return []
+    const projection = projections[0]!
+    const choice = choices[0]!
+    const matches = rows.filter(row => row.findingId === choice.findingId && row.kind === 'objective'
+      && row.status === 'unverified' && row.targetId === null
+      && row.expectedText === `${goal.text}\n${goal.description}` && row.problemText === projection.description)
+    return matches.length === 1 && matches[0]!.findingId === choice.findingId ? [{ findingId: choice.findingId!, targetId: goal.id,
+      category: projection.category, kind: 'objective' as const, problem: projection.description,
+      expected: `${goal.text}\n${goal.description}`, mustShow: true as const }] : []
+  })
+}
+
 function countOccurrences(text: string, excerpt: string): number {
   if (!excerpt) return 0
   let count = 0
@@ -96,12 +129,14 @@ const objectiveText = (value: string): string => value.replace(/[^\p{L}\p{N}]/gu
 /** Deterministic admission only: unchanged or ambiguous evidence never spends a model request. */
 export function classifyFindingEvidenceChange(source: string, merged: string,
   finding: ReviewCycleRecheckFinding): 'changed' | 'unchanged' | 'ambiguous' {
+  if (finding.mustShow) return objectiveText(source) === objectiveText(merged) ? 'unchanged' : 'changed'
   const span = finding.sourceSpan
-  if (span.unit !== 'utf16-code-unit' || !Number.isSafeInteger(span.start) || span.start < 0
+  const occurrence = finding.occurrence
+  if (!span || span.unit !== 'utf16-code-unit' || !Number.isSafeInteger(span.start) || span.start < 0
     || !Number.isSafeInteger(span.end) || span.end <= span.start || span.end > source.length
-    || !Number.isSafeInteger(finding.occurrence) || finding.occurrence < 1) return 'ambiguous'
+    || !Number.isSafeInteger(occurrence) || occurrence === undefined || occurrence < 1) return 'ambiguous'
   const excerpt = source.slice(span.start, span.end)
-  if (!excerpt || countOccurrences(source, excerpt) < finding.occurrence) return 'ambiguous'
+  if (!excerpt || countOccurrences(source, excerpt) < occurrence) return 'ambiguous'
   if (isNoopRevision(source, merged)) return 'unchanged'
   if (finding.kind === 'objective') {
     const objectiveExcerpt = objectiveText(excerpt)
@@ -146,6 +181,8 @@ export function buildReviewCycleRecheckReport(content: string, merged: string,
       ? parsed?.items.find(item => item.findingId === finding.findingId) : undefined
     const evidenceCount = candidate ? countOccurrences(merged, candidate.evidenceQuote) : 0
     const valid = candidate?.targetId === finding.targetId && evidenceCount === 1
+      && (!finding.mustShow || typeof context.sourceContent === 'string'
+        && !objectiveText(context.sourceContent).includes(objectiveText(candidate.evidenceQuote)))
     const reviewItemIndex = items.length
     if (!valid || !candidate) {
       items.push({ category: finding.category, severity: 'unknown', findingId: finding.findingId,

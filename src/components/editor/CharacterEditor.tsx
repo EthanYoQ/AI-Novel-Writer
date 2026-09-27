@@ -416,7 +416,7 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
                 />
               </div>
               <div><Label>{text('成长轨迹', 'Character arc')}</Label><Textarea value={selectedCard.arc} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'arc', e.target.value)} rows={3} placeholder={text('输入成长轨迹...', 'Describe the character arc...')} /></div>
-              <div><Label>{text('备注', 'Notes')}</Label><Textarea value={selectedCard.notes} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'notes', e.target.value)} rows={2} placeholder={text('输入备注...', 'Enter notes...')} /></div>
+              <div><Label>{text('备注', 'Notes')}</Label><Textarea value={selectedCard.notes} onChange={(e) => updateCurrentField(selectedCard.characterId!, 'notes', e.target.value)} rows={2} placeholder={text('输入备注...', 'Enter notes...')} /><p className="text-xs text-muted-foreground">{text('本章须在正文中明示的内容，另起一行写【第N章必现】具体要求', 'For a must-show requirement, use its own line: 【第N章必现】specific requirement')}</p></div>
             </div>
           </div>
         )}

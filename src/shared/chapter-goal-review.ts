@@ -22,12 +22,19 @@ export interface FrozenChapterGoals {
 }
 
 /** Only explicit current-chapter list boundaries are split; prose is not semantically rewritten. */
-export function freezeChapterGoals(chapterNumber: number, keyEvents: string | null | undefined): FrozenChapterGoals {
-  const items = (keyEvents ?? '').split(/\r?\n|[；;]/u).map(text => text.trim()).filter(Boolean)
+export function freezeChapterGoals(chapterNumber: number, keyEvents: string | null | undefined,
+  authorSources: readonly string[] = []): FrozenChapterGoals {
+  const items: Array<Readonly<{ id: string; text: string }>> = (keyEvents ?? '').split(/\r?\n|[；;]/u).map(text => text.trim()).filter(Boolean)
     .map((text, index) => Object.freeze({ id: `ch${chapterNumber}:keyEvents:${index + 1}`, text }))
+  const marker = /^\s*【第(\d+)章必现】\s*(\S(?:.*\S)?)\s*$/u
+  const mustShow = authorSources.flatMap(source => source.split(/\r?\n/u).flatMap(line => {
+    const match = marker.exec(line)
+    return match && Number(match[1]) === chapterNumber ? [match[2]!] : []
+  })).map((text, index) => Object.freeze({ id: `ch${chapterNumber}:mustShow:${index + 1}`, text }))
+  items.push(...mustShow)
   return Object.freeze({
     chapterNumber,
-    coverage: keyEvents === undefined ? 'unknown' : items.length ? 'complete' : 'not_configured',
+    coverage: items.length ? 'complete' : keyEvents === undefined ? 'unknown' : 'not_configured',
     items: Object.freeze(items),
   })
 }
@@ -40,8 +47,8 @@ export function buildChapterGoalReviewPrompt(goals: FrozenChapterGoals, language
 依次判断：
 1. 先按原意区分当章行动与背景/未来约束；仅当目标要求达成约定时，本章达成约定即可，不要求提前执行。背景、purpose、未来计划不是已发生事实，也不自动变成到期行动。
 2. 当章到期行动有明确延期、拒绝或相反结果的正文证据 → unmet。准备/承诺不能代替要求现在完成的行动；部分完成不等于整项目标完成。
-3. 全部到期动作有完成证据，或正文明确支持该项约束 → completed。
-4. 仅未提及、无法判断或证据不足 → unknown，不能以“没写到”断言“没发生”。例如要求归还借书，正文只写走进图书馆：应 unknown，不能判 unmet。
+3. 全部到期动作有完成证据，或正文明确支持该项约束 → completed。标识含 mustShow 的目标必须有正文中积极、可定位的明示证据；背景一致或没有矛盾不算完成。
+4. 仅未提及、无法判断或证据不足 → unknown，不能以“没写到”断言“没发生”。必现目标完全未展示也为 unknown，可由作者明确纳入一次修稿。普通背景只检查矛盾。例如要求归还借书，正文只写走进图书馆：应 unknown，不能判 unmet。
 最后汇总所有子动作：任一 unmet → unmet；否则任一 unknown → unknown；仅全部完成 → completed。不得用多数已完成掩盖一个延期或不明子动作。
 completed/unmet 都须当前正文逐字证据；unknown 可 evidence:[]。不拼接或改写引文，不引用计划证明行动；引文存在不证明推断成立。不检查字数或强求背景细节。
 冻结清单：${JSON.stringify(goals)}`,
@@ -51,8 +58,8 @@ Return fields in id, evidence, description, status order: {"id":"original id","e
 Decide in order:
 1. Distinguish actions due now from background/future constraints. An agreement goal only requires the agreement, not early execution. Background, purpose and future plans are not established events or automatically due actions.
 2. Explicit draft evidence of postponement, refusal or an opposite outcome for a due action → unmet. Preparation/promises cannot replace execution due now; partial completion is not whole-goal completion.
-3. Evidence completes every due action or explicitly supports the constraint → completed.
-4. Mere omission, ambiguity or insufficient evidence → unknown, not proof of non-occurrence. Example: a goal requires returning a library book, but the draft only describes entering the library: unknown, not unmet.
+3. Evidence completes every due action or explicitly supports the constraint → completed. A mustShow goal requires positive, locatable prose showing it; background consistency or absence of contradiction is insufficient.
+4. Mere omission, ambiguity or insufficient evidence → unknown, not proof of non-occurrence. A completely unshown mustShow goal is unknown and may enter one revision when the author explicitly applies it. Ordinary background is checked only for contradiction. Example: a goal requires returning a library book, but the draft only describes entering the library: unknown, not unmet.
 Aggregate last: any unmet → unmet; otherwise any unknown → unknown; only all completed → completed. A completed majority cannot hide one postponed or uncertain sub-action.
 completed/unmet require verbatim current-draft evidence; unknown may use evidence:[]. Do not combine/rewrite quotations or cite plans as proof. Locatable evidence does not prove an inference. Do not check length or demand background detail.
 Frozen checklist: ${JSON.stringify(goals)}`)

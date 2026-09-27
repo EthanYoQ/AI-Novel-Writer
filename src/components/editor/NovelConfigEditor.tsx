@@ -384,7 +384,7 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
           {/* 世界观设定 */}
           <Section
             title={text('世界观 / 初始设定', 'World / initial setting')}
-            desc={text('故事发生的背景、时代、力量体系（架构生成后可由 AI 自动扩展）', 'Background, era, and power system. AI can expand this during architecture generation.')}
+            desc={text('背景、时代与力量体系；本章必须明示的内容另起一行写【第N章必现】具体要求', 'Background, era, and power system. Put a must-show requirement on its own line as 【第N章必现】specific requirement.')}
             aiFieldKey="worldSetting"
             generatingField={generatingField}
             onAIGenerate={handleFieldGenerate}

@@ -145,6 +145,20 @@ describe('S01共享契约（纯合成，不是生产持久化资格）', () => {
       { findingId: '意见一', targetId: '事实一', resolved: true, evidenceQuote: '甲在城外', reason: '二' },
     ] })]) expect(buildReviewCycleRecheckReport(output, '甲在城外。', context, 'zh-CN').decisions[0]?.status).toBe('unknown')
   })
+  it('必现复核不把改标点的旧句当成新证据', () => {
+    const sourceContent = '她走进大厅。'
+    const finding = { findingId: '意见一', targetId: 'ch1:mustShow:1', category: '本章目标',
+      kind: 'objective' as const, problem: '正文尚未展示。', mustShow: true as const }
+    const context: ReviewCycleRecheckContext = { version: 2, cycleId: '审修一', comparisonVersion: 1,
+      mergedHash: h, findingSetHash: h, sourceContent, findings: [finding] }
+    const merged = '她走进大厅！钟楼在她眼前倒塌。'
+    const report = buildReviewCycleRecheckReport(JSON.stringify({ summary: '找到证据', items: [{
+      findingId: finding.findingId, targetId: finding.targetId, resolved: true,
+      evidenceQuote: '她走进大厅！', reason: '旧句被改了标点。',
+    }] }), merged, context, 'zh-CN')
+    expect(report.items[0]).toMatchObject({ severity: 'unknown' })
+    expect(report.items[0]).not.toHaveProperty('quote')
+  })
   it('负数反向span和伪byte单位不能形成finding锚点', () => {
     const finding: ReviewFinding = { findingId: '意见', source: { ...identity, sourceId: '章节', revision: 1, contentHash: h, span: { start: 0, end: 1, unit: 'utf16-code-unit' } }, excerptHash: h, occurrence: 1, category: '连续性', targetId: '事实', kind: 'objective', status: 'unverified' }
     expect(() => findingAnchorKey(finding)).not.toThrow()

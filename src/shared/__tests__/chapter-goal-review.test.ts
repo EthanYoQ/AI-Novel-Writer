@@ -9,6 +9,27 @@ const answer = [
 ]
 
 describe('本章目标审稿合同', () => {
+  it('只把当前章的独立必现行并入原目标，普通背景和其他章不入清单', () => {
+    const frozen = freezeChapterGoals(3, '交还钥匙', [
+      '北塔常年积雪。\n【第3章必现】主角亲眼看见红灯熄灭\n【第4章必现】城门开启',
+      '【第3章必现】她当面承认身份\n普通备注：她害怕黑暗',
+    ])
+    expect(frozen.items).toEqual([
+      { id: 'ch3:keyEvents:1', text: '交还钥匙' },
+      { id: 'ch3:mustShow:1', text: '主角亲眼看见红灯熄灭' },
+      { id: 'ch3:mustShow:2', text: '她当面承认身份' },
+    ])
+  })
+
+  it('必现缺席是 unknown，正文明确出现与明确相反分别接纳定位证据', () => {
+    const frozen = freezeChapterGoals(3, '', ['【第3章必现】主角亲眼看见红灯熄灭'])
+    const goal = frozen.items[0]!
+    const absent = normalizeChapterGoalReview([{ id: goal.id, status: 'unknown', description: '正文没有展示。', evidence: [] }], frozen, '主角走进北塔。', 'zh-CN')
+    expect(absent.items[0]).toMatchObject({ status: 'unknown', evidence: [] })
+    expect(normalizeChapterGoalReview([{ id: goal.id, status: 'completed', description: '红灯熄灭。', evidence: [{ quote: '红灯在他眼前熄灭。' }] }], frozen, '红灯在他眼前熄灭。', 'zh-CN').items[0]?.status).toBe('completed')
+    expect(normalizeChapterGoalReview([{ id: goal.id, status: 'unmet', description: '正文明确相反。', evidence: [{ quote: '红灯始终亮着。' }] }], frozen, '红灯始终亮着。', 'zh-CN').items[0]?.status).toBe('unmet')
+  })
+
   it('软件按原文冻结每个显式条目，不让模型改写目标', () => {
     expect(goals.items.map(item => item.text)).toEqual(['完成相册', '约定周三搬设备'])
     expect(Object.isFrozen(goals.items)).toBe(true)
