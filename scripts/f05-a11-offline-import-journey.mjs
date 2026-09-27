@@ -272,6 +272,12 @@ function macStage(stage) {
   console.error(`[AI Novel A11] stage=${stage}`)
 }
 
+function v025Stage(stage) {
+  if (!legacyV025) return
+  receipt.lastStage = stage
+  console.error(`[AI Novel A11] stage=${stage}`)
+}
+
 async function closeMacApplication(app) {
   macStage('cleanup-start')
   let timer
@@ -508,8 +514,10 @@ async function verify(source) {
   let session
   let savedBody
   try {
+    v025Stage('first-launch-start')
     session = await launch(roots)
     await home(session.page)
+    v025Stage('first-launch-ready')
     let requestCounts = editSaveProof ? await observeRequests(session) : null
     await session.app.evaluate(({ dialog }, { sourceCopy, targetParent }) => {
       globalThis.__a11Dialogs = []
@@ -525,6 +533,7 @@ async function verify(source) {
         return { response: 1, checkboxChecked: false }
       }
     }, { sourceCopy, targetParent })
+    v025Stage('import-start')
     await session.page.getByRole('button', { name: '导入旧项目副本' }).click()
     const target = path.join(targetParent, 's-新版副本')
     try {
@@ -587,7 +596,9 @@ async function verify(source) {
     receipt.steps.push({ stepId: `${source.version}-import-open`, version: source.version, step: 'V3 import and open', outcome: 'PASS',
       target, copiedSourceFiles: Object.keys(copiedBefore).length, counts, rawAssets,
       avatars: avatarRows.map(({ path: relativePath, hash }) => ({ relativePath, hash })), dialogs })
+    v025Stage('import-verified')
     if (editSaveProof) {
+      v025Stage('save-start')
       await session.page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).first().click()
       const editor = session.page.locator('.cm-content[contenteditable="true"]')
       await editor.waitFor({ state: 'visible' })
@@ -607,12 +618,15 @@ async function verify(source) {
       assert.deepEqual(inventory(source.path), originalBefore)
       receipt.steps.push({ stepId: `${source.version}-target-edit-save`, outcome: 'PASS',
         step: 'V3 edited and saved imported author body without changing either old source', savedBodySha256: createHash('sha256').update(savedBody).digest('hex') })
+      v025Stage('save-verified')
       const requests = await requestCounts()
       receipt.steps.push({ stepId: `${source.version}-import-zero-network`, outcome: 'PASS',
         step: 'No main fetch or renderer HTTP request during V3 import and target save', requests })
     }
+    v025Stage('first-quit-start')
     await quit(session.app, session.page, source.version)
     session = null
+    v025Stage('first-quit-complete')
 
     const knowledge = await knowledgeSnapshot(path.join(target, '.ai-novel'))
     assert.deepEqual(knowledge, await knowledgeSnapshot(path.join(sourceCopy, '.vela')),
@@ -627,8 +641,10 @@ async function verify(source) {
         step: 'Synthetic complete original, project Skill and frozen pending outbox retained', outcome: 'PASS', proof })
     }
 
+    v025Stage('reopen-start')
     session = await launch(roots)
     await home(session.page)
+    v025Stage('reopen-ready')
     requestCounts = editSaveProof ? await observeRequests(session) : null
     if (legacyV025) {
       // Both the preserved old recent entry and the imported copy have the same title.
@@ -659,6 +675,7 @@ async function verify(source) {
     assert.deepEqual(inventory(source.path), originalBefore)
     receipt.steps.push({ stepId: `${source.version}-reopen-unchanged`, version: source.version,
       step: 'New process opens copy; both old sources unchanged', outcome: 'PASS' })
+    v025Stage('reopen-ui-verified')
     if (legacyV025) {
       const sourceProjectId = JSON.parse(fs.readFileSync(path.join(sourceCopy, '.vela', 'project.json'), 'utf8')).projectId
       const targetProjectId = JSON.parse(fs.readFileSync(path.join(target, '.ai-novel', 'project.json'), 'utf8')).projectId
@@ -675,8 +692,10 @@ async function verify(source) {
         assert.equal(globals.config.locale, 'zh-CN')
         assert.equal(globals.config.proxy.port, 7890)
       }
+      v025Stage('second-quit-start')
       await quit(session.app, session.page, source.version)
       session = null
+      v025Stage('second-quit-complete')
       assert.deepEqual(inventory(source.path), originalBefore)
       assert.deepEqual(inventory(sourceCopy), copiedBefore)
       receipt.copyImport = { revision: 'v025-offline-copy-v1', sourceProjectId, targetProjectId,
@@ -742,6 +761,7 @@ db.commit(); db.close()`, path.join(sourceCopy, '.vela', 'vela.db')])
         secondTargetSha256: createHash('sha256').update(JSON.stringify(inventory(secondTarget))).digest('hex'), requests })
     }
   } catch (error) {
+    if (legacyV025) console.error(`[AI Novel A11] failure-stage=${receipt.lastStage}`)
     if (legacyV025 && session) {
       receipt.diagnostic = { ...receipt.diagnostic,
         body: await session.page.locator('body').innerText().catch(() => null),
@@ -750,7 +770,15 @@ db.commit(); db.close()`, path.join(sourceCopy, '.vela', 'vela.db')])
       await session.page.screenshot({ path: receipt.diagnostic.screenshot }).catch(() => {})
     }
     throw error
-  } finally { if (session) await session.app.close() }
+  } finally {
+    if (session) {
+      if (legacyV025) {
+        v025Stage('cleanup-start')
+        await closeWindowsApplication(session.app)
+        v025Stage('cleanup-complete')
+      } else await session.app.close()
+    }
+  }
 }
 
 const macBody = '合成章节正文\r\n原字节'
