@@ -821,9 +821,12 @@ test('isolated production commands persist the selected phase operations', async
           const current = db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1')
             .pluck().get(chapter.number)
           assert.equal(typeof current, 'string', 'REVIEW_SOURCE_DRAFT_MISSING')
-          text = reviewedRun ? reviewedSyntheticIssues.reduce((value, item) => value.replace(item.quote, item.replacement), current)
-            : current.replace(REVIEW_DEFECT, REVIEW_FIX)
-          assert.notEqual(text, current, 'SYNTHETIC_TARGETED_REVISION_MISSING')
+          text = current
+          if (request.mode === 'synthetic') {
+            text = reviewedRun ? reviewedSyntheticIssues.reduce((value, item) => value.replace(item.quote, item.replacement), current)
+              : current.replace(REVIEW_DEFECT, REVIEW_FIX)
+            assert.notEqual(text, current, 'SYNTHETIC_TARGETED_REVISION_MISSING')
+          }
         } else if (operationKind === 'recheck') {
           if (candidate) {
             const cycle = db.prepare("SELECT cycle_id FROM review_cycles WHERE revision_status='merge-committed' ORDER BY rowid DESC LIMIT 1")

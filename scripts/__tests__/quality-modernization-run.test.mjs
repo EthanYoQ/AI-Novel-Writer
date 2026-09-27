@@ -1224,6 +1224,23 @@ test('S14B reviewed refine rejects any missing registered author fact before res
   }
 })
 
+test('S14B reviewed refine keeps real draft intact and applies targeted quotes only to synthetic output', () => {
+  const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
+  const start = fixture.indexOf("        else if (operationKind === 'refine') {")
+  const end = fixture.indexOf("        } else if (operationKind === 'recheck')", start)
+  assert.ok(start >= 0 && end > start)
+  const generate = new Function('request', 'db', 'reviewedSyntheticIssues', 'assert', 'REVIEW_DEFECT', 'REVIEW_FIX',
+    `let text; const operationKind = 'refine', reviewedRun = true, chapter = { number: 1 }; if (false) {} ${fixture.slice(start, end)} } return text`)
+  const quote = 'synthetic quote', replacement = 'synthetic replacement'
+  const issues = [{ quote, replacement }]
+  const sourceDraft = '真实正文没有合成引文，原文应完整保留。'
+  const db = body => ({ prepare: () => ({ pluck: () => ({ get: () => body }) }) })
+  assert.equal(generate({ mode: 'real' }, db(sourceDraft), issues, assert, 'synthetic defect', 'synthetic fix'), sourceDraft)
+  assert.equal(generate({ mode: 'synthetic' }, db(quote), issues, assert, 'synthetic defect', 'synthetic fix'), replacement)
+  assert.throws(() => generate({ mode: 'synthetic' }, db(sourceDraft), issues, assert, 'synthetic defect', 'synthetic fix'),
+    /SYNTHETIC_TARGETED_REVISION_MISSING/)
+})
+
 test('early-review 提供已实现代价验收标准且正文不泄露固定修法', () => {
   const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
   const { text, reviewFix, reviewRevisionFixtureVerdict, chapter } = constructReviewSourceFixture()
