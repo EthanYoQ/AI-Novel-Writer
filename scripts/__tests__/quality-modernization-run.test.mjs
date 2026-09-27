@@ -43,6 +43,10 @@ test('post-UI reviewed draft policy selects every actionable item without changi
   assert.throws(() => reviewedDraftSelection({ items: [{ severity: 'invented' }] }), /REVIEWED_DRAFT_REPORT_INVALID/)
   const selected = selectPhase(protocol, 'early-budget', 'post-ui')
   assert.deepEqual(selected.evaluationPolicy, POST_UI_REVIEW_POLICY)
+  assert.equal(selected.scenarioRevision, 's14b-post-ui-reviewed-budget-review-rebuild-v1')
+  assert.equal(selected.maximumPlannedCalls, 14)
+  assert.deepEqual(selected.attemptPolicy.reviewRebuild, PHASE_SCENARIOS['early-budget'].attemptPolicy.reviewRebuild)
+  assertScenarioMatchesProtocol(selected, productionScenario('early-budget', 'post-ui'))
   assert.deepEqual(selected.operations.map(item => item.kind), ['directory', 'draft', 'review', 'refine', 'final-review'])
   assert.equal(selectPhase(protocol, 'early-budget').evaluationPolicy, undefined)
   assert.equal(selectPhase(protocol, 'full', 'final').evaluationPolicy, undefined)
@@ -531,7 +535,7 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
     const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
     const proofStart = fixture.indexOf('readPrimaryEvidence: first => {') + 'readPrimaryEvidence: first => {'.length
     const proofEnd = fixture.indexOf('    }, onReject:', proofStart)
-    const gateCall = fixture.indexOf('      beforeOperationDispatch(operationId, actual ?? observedIpc)')
+    const gateCall = fixture.indexOf('      beforeOperationDispatch(operationId, actual ?? observedIpc, reviewSource)')
     const repairStart = fixture.indexOf('      const structuredSyntaxRepair =', gateCall)
     const repairEnd = fixture.indexOf('      const attemptId =', repairStart)
     const checkStart = fixture.indexOf("      if (operationKind === 'recheck' && candidate)")
@@ -597,6 +601,57 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
     assert.ok(path.resolve(dir).startsWith(path.resolve(ROOT, '.runtime/.cache/novel-quality-modernization') + path.sep))
     fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('post-UI 首审只以已结算的同稿 fenced JSON 语法错误许可一次重建', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/review-rebuild-proof-'))
+  const policy = PHASE_SCENARIOS['early-budget'].attemptPolicy
+  const review = policy.reviewRebuild
+  const source = { draftId: 7, contentHash: hash('原始待审正文') }
+  const owner = { attemptId: 'main', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: review.primaryPurpose }
+  const malformed = '```json\n{"items":[{"description":"提到"开船过去""}]}\n```'
+  let outputNumber = 0
+  const proof = (content, { arm = 'baseline', terminal = 'settle', absent = true, sourceBinding = source } = {}) => {
+    const outputPath = path.join(dir, `physical-output-${++outputNumber}.txt`)
+    fs.writeFileSync(outputPath, content)
+    const identity = arm === 'baseline' ? { ...owner, operationId: review.operationId } : owner
+    const attemptId = `${arm}:${identity.attemptId}`
+    const binding = { operation: review.operationId, reviewSource: sourceBinding,
+      ...(arm === 'baseline' ? { baselineIpc: identity } : { actual: identity }) }
+    return { attempt: { attemptId, binding, outputPath, visibleTextHash: hash(content) }, reviewReportAbsent: absent,
+      events: [{ type: 'reserve', attemptId, binding }, { type: 'dispatch', attemptId },
+        { type: terminal, attemptId, finishReason: 'stop' }] }
+  }
+  const run = (evidence, { arm = 'baseline', next = {}, nextSource = source } = {}) => {
+    const first = arm === 'baseline' ? { ...owner, operationId: review.operationId } : owner
+    const gate = createOperationDispatchGate({ repairPolicy: policy, readPrimaryEvidence: () => evidence })
+    gate(review.operationId, first, source)
+    return () => gate(review.operationId,
+      { ...first, attemptId: 'rebuild', purpose: review.repairPurpose, ...next }, nextSource)
+  }
+  try {
+    const actual = proof(malformed)
+    const accepted = run(actual)
+    assert.doesNotThrow(accepted, 'the captured invalid fenced JSON shape can rebuild')
+    assert.throws(accepted, /MODEL_REQUEST_REJECTED/, 'a second rebuild is rejected before reserve')
+    assert.doesNotThrow(run(proof(malformed, { arm: 'candidate' }), { arm: 'candidate' }))
+    for (const [label, evidence] of [
+      ['valid unfavorable review', proof('```json\n{"summary":"不利","items":[{"severity":"error"}]}\n```')],
+      ['valid unknown review', proof('```json\n{"summary":"未知","items":[{"severity":"unknown"}]}\n```')],
+      ['thinking wrapper needs product redaction', proof('<think>analysis</think>```json\n{"items":[]}\n```')],
+      ['unsettled primary', proof(malformed, { terminal: 'dispatch' })],
+      ['already saved review', proof(malformed, { absent: false })],
+      ['wrong source', proof(malformed, { sourceBinding: { ...source, draftId: 8 } })],
+    ]) assert.throws(run(evidence), /MODEL_REQUEST_REJECTED/, label)
+    const forged = proof(malformed)
+    forged.attempt.visibleTextHash = '0'.repeat(64)
+    assert.throws(run(forged), /MODEL_REQUEST_REJECTED/, 'changed physical output is rejected')
+    for (const next of [{ purpose: 'review-chapter-retry' }, { runId: 'other' }, { rootActionId: 'other' },
+      { projectId: 'other' }, { epoch: 'other' }])
+      assert.throws(run(proof(malformed), { next }), /MODEL_REQUEST_REJECTED/)
+    assert.throws(run(proof(malformed), { nextSource: { ...source, contentHash: hash('另一稿') } }),
+      /MODEL_REQUEST_REJECTED/, 'review source cannot change')
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
 function earlyReviewChain(arm) {
@@ -1640,6 +1695,82 @@ test('post-UI pair accepts only one evidenced syntax repair per arm and retains 
     assert.ok(path.resolve(dir).startsWith(path.resolve(ROOT, '.runtime/.cache/novel-quality-modernization') + path.sep))
     fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('post-UI pair authenticates review rebuild attempts and both retained outputs', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/review-rebuild-pair-'))
+  const scenario = productionScenario('early-budget', 'post-ui')
+  const reviewPolicy = scenario.attemptPolicy.reviewRebuild
+  const invocationId = '11111111-1111-4111-8111-111111111111'
+  const artifact = (name, content, extra = {}) => {
+    const outputPath = path.join(dir, name)
+    fs.writeFileSync(outputPath, content)
+    return { outputPath, contentHash: hash(content), ...extra }
+  }
+  const make = arm => {
+    const initial = artifact(`${arm}-draft.txt`, '甲'.repeat(100), { draftId: 7 })
+    const source = { draftId: initial.draftId, contentHash: initial.contentHash }
+    const report = artifact(`${arm}-review.json`, JSON.stringify({ summary: '无问题',
+      items: [{ category: '事实', severity: 'pass', description: '保持' }] }),
+    { reviewId: 9, sourceHash: initial.contentHash })
+    const outputs = [
+      [scenario.operations[0], 'directory', 'chapter-blueprint-directory', '{"blueprints":[]}'],
+      [scenario.operations[1], 'draft', 'chapter-draft', '甲'.repeat(100)],
+      [scenario.operations[2], 'review', reviewPolicy.primaryPurpose, '```json\n{"items":[{"description":"提到"开船过去""}]}\n```'],
+      [scenario.operations[2], 'rebuild', reviewPolicy.repairPurpose, fs.readFileSync(report.outputPath, 'utf8')],
+    ]
+    const attempts = outputs.map(([operation, label, purpose, content]) => {
+      const saved = artifact(`${arm}-${label}.txt`, content)
+      const identity = { attemptId: `${arm}-${label}`, runId: `run-${operation.kind}`,
+        ...(arm === 'candidate' ? { rootActionId: `root-${operation.kind}` } : {}),
+        projectId: `${arm}-project`, epoch: `${arm}-epoch`, purpose,
+        ...(arm === 'baseline' ? { operationId: operation.id } : {}) }
+      return { attemptId: `${arm}:${identity.attemptId}`, outputPath: saved.outputPath, visibleTextHash: saved.contentHash,
+        binding: { invocationId, mode: 'real', arm, phase: 'early-budget', milestone: 'post-ui', caseId: '场景1/1',
+          protocolRevision: protocol.decisionRevision, protocolHash: protocolBinding.protocolHash,
+          codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
+          operation: operation.id, ...(operation.kind === 'review' ? { reviewSource: source } : {}),
+          ...(arm === 'candidate' ? { actual: identity } : { baselineIpc: identity }) } }
+    })
+    const operations = scenario.operations.slice(0, 3).map(operation => ({ operation: operation.id, kind: operation.kind,
+      ...(arm === 'candidate' ? { handle: { runId: `run-${operation.kind}`, rootActionId: `root-${operation.kind}` } } : {}),
+      ...(operation.kind === 'draft' ? { outputHash: initial.contentHash } : {}),
+      ...(operation.kind === 'review' ? { outputHash: report.contentHash } : {}) }))
+    return { invocationId, mode: 'real', arm, phase: 'early-budget', milestone: 'post-ui', caseId: '场景1/1',
+      protocolRevision: protocol.decisionRevision, protocolHash: protocolBinding.protocolHash,
+      codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64),
+      status: 'passed', evaluationPolicy: POST_UI_REVIEW_POLICY,
+      physicalProject: { projectId: `${arm}-project`, parityHash: 'd'.repeat(64) }, projectEpoch: `${arm}-epoch`,
+      attempts, operations, physicalModelRequests: attempts.length, syntheticDispatches: 0,
+      saved: { chapterNumber: 1, targetUnits: 100, units: 100, contentHash: initial.contentHash },
+      draftObservation: { chapterNumber: 1, targetUnits: 100, units: 100, contentHash: initial.contentHash, persisted: true },
+      reviewedDraft: { initial, review: report, finalDraft: initial, selectedCount: 0,
+        selectedItemsHash: hash([]), disposition: 'no-actionable-review' },
+      ...(arm === 'candidate' ? { ownerTerminal: attempts.map(attempt => ({
+        attemptId: attempt.binding.actual.attemptId, artifactId: `artifact-${attempt.attemptId}`,
+        textHash: attempt.visibleTextHash })) } : {}) }
+  }
+  try {
+    const baseline = make('baseline'), candidate = make('candidate')
+    const classify = value => classifyProductionPair([baseline, value], { mode: 'real', phase: 'early-budget' })
+    assert.equal(classify(candidate).pairFailure, undefined)
+    const wrongPurpose = structuredClone(candidate)
+    wrongPurpose.attempts[3].binding.actual.purpose = 'review-chapter-retry'
+    assert.equal(classify(wrongPurpose).pairFailure, 'REVIEW_REBUILD_OWNER_MISMATCH')
+    const otherDraft = structuredClone(candidate)
+    otherDraft.attempts[3].binding.reviewSource.draftId = 8
+    assert.equal(classify(otherDraft).pairFailure, 'REVIEW_REBUILD_OWNER_MISMATCH')
+    const validPrimary = structuredClone(candidate)
+    fs.writeFileSync(validPrimary.attempts[2].outputPath, '{"items":[]}')
+    validPrimary.attempts[2].visibleTextHash = hash('{"items":[]}')
+    validPrimary.ownerTerminal[2].textHash = validPrimary.attempts[2].visibleTextHash
+    assert.equal(classify(validPrimary).pairFailure, 'REVIEW_REBUILD_PRIMARY_NOT_SYNTAX_FAILURE')
+    fs.writeFileSync(candidate.attempts[2].outputPath, '```json\n{"items":[{"description":"提到"开船过去""}]}\n```')
+    const third = structuredClone(candidate)
+    third.attempts.push(structuredClone(third.attempts[3]))
+    third.physicalModelRequests++
+    assert.equal(classify(third).pairFailure, 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
 test('真实桥只公开本地字数门失败，并在失败收据保留持久化观察而非 saved', () => {

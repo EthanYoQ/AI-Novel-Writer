@@ -633,7 +633,10 @@ test('isolated production commands persist the selected phase operations', async
         try { parseFinalizedCharacterStateResponse(saved.text, finalizedContext.identity) } catch { finalizedCharacterInvalid = true }
         return { attempt: matches[0], events, finalizedCharacterInvalid, ownerArtifactHash: sha(saved.text) }
       }
-      return { attempt: matches[0], events }
+      const reviewSource = first.reviewSource
+      const reviewReportAbsent = reviewSource && db.prepare('SELECT COUNT(*) FROM reviews WHERE base_draft_id=?')
+        .pluck().get(reviewSource.draftId) === 0
+      return { attempt: matches[0], events, reviewReportAbsent }
     }, onReject: rejection => {
       localDispatchGateRejection = { ...rejection, operation: operationId, runId: currentContext?.runId,
         projectId: session.projectId, chapterNumber: request.chapterNumber }
@@ -663,9 +666,14 @@ test('isolated production commands persist the selected phase operations', async
         && observedIpc.epoch === session.leaseId, 'BASELINE_IPC_DISPATCH_IDENTITY_MISMATCH')
       if (repairPolicy && operationId === repairPolicy.operationId
         && (actual ?? observedIpc).purpose === repairPolicy.repairPurpose) await Promise.all(streamSettlements)
+      const reviewRepairPolicy = repairPolicy?.reviewRebuild
+      if (reviewRepairPolicy?.operationId === operationId
+        && (actual ?? observedIpc).purpose === reviewRepairPolicy.repairPurpose) await Promise.all(streamSettlements)
       if (continuityRun && operationKind === 'character_cards' && actual.purpose.includes(':repair:')) await Promise.all(streamSettlements)
       // The registered extra call must carry its real product purpose before campaign reserve.
-      beforeOperationDispatch(operationId, actual ?? observedIpc)
+      const draft = reviewedRun && operationKind === 'review' ? latestDraft() : null
+      const reviewSource = draft ? { draftId: draft.id, contentHash: sha(draft.content) } : undefined
+      beforeOperationDispatch(operationId, actual ?? observedIpc, reviewSource)
       const structuredSyntaxRepair = repairPolicy?.operationId === operationId
         && repairPolicy.maxRepairAttempts === 1
         && (actual ?? observedIpc).purpose === repairPolicy.repairPurpose
@@ -753,7 +761,8 @@ test('isolated production commands persist the selected phase operations', async
         protocolRevision: request.protocolRevision, protocolHash: request.protocolHash,
         codeSha: target.codeSha, sourceHash: target.sourceHash, driverHash: request.driverHash,
         parityId: request.parityHash, phase: request.phase, milestone: request.milestone, caseId: request.caseId,
-        operation: operationId, ...(actual ? { actual } : { baselineIpc: observedIpc }) }
+        operation: operationId, ...(reviewSource ? { reviewSource } : {}),
+        ...(actual ? { actual } : { baselineIpc: observedIpc }) }
       record({ type: 'reserve', attemptId, binding })
       record({ type: 'dispatch', attemptId })
       // 发送规模证据：只记字节数，绝不记提示词原文或凭据，好让两臂在不花真实调用的前提下可比。

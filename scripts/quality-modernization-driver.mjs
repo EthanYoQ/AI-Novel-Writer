@@ -18,7 +18,7 @@ export const POST_UI_REVIEW_POLICY = Object.freeze({ revision: 's14b-post-ui-rev
   merge: 'accept-only-revision', finalReview: 'ordinary-full-review', noAction: 'retain-initial-draft',
   unknownOnly: 'retain-initial-draft-and-full-review-pending-independent-goal-proof',
   maxRevisions: 1, qualityDecision: 'independent-oracle-final-text' })
-const POST_UI_BUDGET = Object.freeze({ scenarioRevision: 's14b-post-ui-reviewed-budget-v1',
+const POST_UI_BUDGET = Object.freeze({ scenarioRevision: 's14b-post-ui-reviewed-budget-review-rebuild-v1',
   evaluationPolicy: POST_UI_REVIEW_POLICY,
   operations: Object.freeze([{ id: '指定范围生成', kind: 'directory' }, { id: '900单位正文', kind: 'draft' },
     { id: '成稿首审', kind: 'review' }, { id: '成稿一次修稿', kind: 'refine' }, { id: '成稿完整复评', kind: 'final-review' }]) })
@@ -103,7 +103,7 @@ export function selectOwnerDispatch(db, handle, session, body) {
 export const BRIDGE_SETTLEMENT_DEADLINE_MS = 480_000
 export const BRIDGE_SPAWN_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 3 + 60_000
 export const BRIDGE_TEST_TIMEOUT_MS = BRIDGE_SPAWN_TIMEOUT_MS + 60_000
-export const BRIDGE_REVIEWED_TEST_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 6 + 120_000
+export const BRIDGE_REVIEWED_TEST_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 7 + 120_000
 
 /** 只测规模、不落内容：返回提示词载荷的 UTF-8 字节数，绝不含提示词原文或凭据。 */
 export function measurePromptBytes(messages) {
@@ -278,7 +278,9 @@ export const PHASE_SCENARIOS = Object.freeze({
     scenarioRevision: 's14b-post-ui-budget-syntax-repair-v1',
     attemptPolicy: Object.freeze({ milestone: 'post-ui', arms: Object.freeze(['baseline', 'candidate']),
       operationId: '指定范围生成', primaryPurpose: 'chapter-blueprint-directory',
-      repairPurpose: 'chapter-blueprint-directory:structured-syntax-repair', maxRepairAttempts: 1 }),
+      repairPurpose: 'chapter-blueprint-directory:structured-syntax-repair', maxRepairAttempts: 1,
+      reviewRebuild: Object.freeze({ operationId: '成稿首审', primaryPurpose: 'review-chapter',
+        repairPurpose: 'review-chapter-rebuild', maxRepairAttempts: 1 }) }),
     operations: Object.freeze([
       Object.freeze({ id: '指定范围生成', kind: 'directory' }),
       Object.freeze({ id: '900单位正文', kind: 'draft' }),
@@ -327,7 +329,16 @@ const repairableDirectJsonSyntax = content => {
   if (!/^[{[]/u.test(candidate)) return false
   try { JSON.parse(candidate); return false } catch { return true }
 }
-function verifiedPrimarySyntaxFailure(first, evidence, operationId, finalizationRepair = false) {
+// Match parseReviewGenerationResult's fenced JSON extraction before its JSON.parse.
+const reviewJsonSyntaxFailure = content => {
+  // The command strips thinking tags first; avoid classifying an unstripped artifact as a syntax failure.
+  if (/<\/?think>/iu.test(content)) return false
+  const trimmed = content.trim()
+  const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu.exec(trimmed)
+  try { JSON.parse(fenced?.[1]?.trim() ?? trimmed); return false }
+  catch (error) { return error instanceof SyntaxError }
+}
+function verifiedPrimarySyntaxFailure(first, evidence, operationId, kind = 'directory') {
   const attempt = evidence?.attempt, rows = evidence?.events
   const identity = attempt?.binding?.actual ?? attempt?.binding?.baselineIpc
   if (!attempt || !Array.isArray(rows) || rows.length !== 3 || !identity
@@ -337,36 +348,46 @@ function verifiedPrimarySyntaxFailure(first, evidence, operationId, finalization
     || JSON.stringify(rows.map(row => row.type)) !== JSON.stringify(['reserve', 'dispatch', 'settle'])
     || rows[1].attemptId !== attempt.attemptId || rows[2].attemptId !== attempt.attemptId
     || rows[2].finishReason !== 'stop' || JSON.stringify(rows[0].binding) !== JSON.stringify(attempt.binding)
+    || kind === 'review' && (evidence.reviewReportAbsent !== true
+      || !first.reviewSource || !Number.isSafeInteger(first.reviewSource.draftId) || first.reviewSource.draftId <= 0
+      || !/^[a-f0-9]{64}$/.test(first.reviewSource.contentHash ?? '')
+      || JSON.stringify(attempt.binding.reviewSource) !== JSON.stringify(first.reviewSource))
     || typeof attempt.outputPath !== 'string' || !/^[a-f0-9]{64}$/.test(attempt.visibleTextHash ?? '')) return false
   try {
     const output = fs.readFileSync(attempt.outputPath, 'utf8')
-    return digest(output) === attempt.visibleTextHash && (finalizationRepair
+    return digest(output) === attempt.visibleTextHash && (kind === 'cards'
       ? evidence.finalizedCharacterInvalid === true && evidence.ownerArtifactHash === attempt.visibleTextHash
-      : repairableDirectJsonSyntax(output))
+      : kind === 'review' ? reviewJsonSyntaxFailure(output) : repairableDirectJsonSyntax(output))
   } catch { return false }
 }
 /** Only a settled, hash-verified syntax failure may add one physical request. */
 export function createOperationDispatchGate({ onReject, repairPolicy, readPrimaryEvidence, finalizationRepair = false } = {}) {
   const dispatched = new Map()
-  return (operationId, owner) => {
+  return (operationId, owner, reviewSource) => {
     const first = dispatched.get(operationId)
     const cards = finalizationRepair && operationId === '定稿角色状态'
-    const policyApplies = repairPolicy?.operationId === operationId && repairPolicy.maxRepairAttempts === 1
+    const review = repairPolicy?.reviewRebuild?.operationId === operationId
+    const policy = review ? repairPolicy.reviewRebuild : repairPolicy
+    const policyApplies = policy?.operationId === operationId && policy.maxRepairAttempts === 1
     const identity = value => value && typeof value.attemptId === 'string' && value.attemptId
       && typeof value.runId === 'string' && value.runId && typeof value.projectId === 'string' && value.projectId
       && typeof value.epoch === 'string' && value.epoch
     const hasSyntaxProof = () => {
-      try { return verifiedPrimarySyntaxFailure(first, readPrimaryEvidence?.(first), operationId, cards) }
+      try { return verifiedPrimarySyntaxFailure(first, readPrimaryEvidence?.(first), operationId,
+        cards ? 'cards' : review ? 'review' : 'directory') }
       catch { return false }
     }
     const repair = first && (policyApplies || cards) && identity(first) && identity(owner)
       && (cards ? (first.ordinal ?? 0) < 2 && owner.purpose === `finalized-character-state:repair:${(first.ordinal ?? 0) + 1}`
-        : first.purpose === repairPolicy.primaryPurpose && owner.purpose === repairPolicy.repairPurpose)
+        : first.purpose === policy.primaryPurpose && owner.purpose === policy.repairPurpose)
       && first.attemptId !== owner.attemptId && first.runId === owner.runId
       && first.rootActionId === owner.rootActionId && first.projectId === owner.projectId && first.epoch === owner.epoch
+      && (!review || JSON.stringify(first.reviewSource) === JSON.stringify(reviewSource))
       && first.repairUsed !== true && hasSyntaxProof()
     if (!operationId || first && !repair || !first && (policyApplies || cards)
-      && (!identity(owner) || owner.purpose !== (cards ? 'finalized-character-state' : repairPolicy.primaryPurpose))) {
+      && (!identity(owner) || owner.purpose !== (cards ? 'finalized-character-state' : policy.primaryPurpose)
+        || review && (!Number.isSafeInteger(reviewSource?.draftId) || reviewSource.draftId <= 0
+          || !/^[a-f0-9]{64}$/.test(reviewSource.contentHash ?? '')))) {
       const rejection = Object.freeze({ code: 'UNREGISTERED_ADDITIONAL_MODEL_REQUEST',
         operationId: operationId || null, reason: operationId ? 'duplicate-operation' : 'missing-operation', beforeDispatch: true })
       onReject?.(rejection)
@@ -374,7 +395,7 @@ export function createOperationDispatchGate({ onReject, repairPolicy, readPrimar
     }
     if (repair && cards) dispatched.set(operationId, { ...owner, ordinal: (first.ordinal ?? 0) + 1 })
     else if (repair) first.repairUsed = true
-    else dispatched.set(operationId, { ...owner })
+    else dispatched.set(operationId, { ...owner, ...(review ? { reviewSource } : {}) })
   }
 }
 
@@ -419,12 +440,16 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
   const eligible = policy && result.milestone === policy.milestone && policy.arms.includes(arm)
   const repairMatches = eligible ? result.attempts.filter(attempt => attempt?.binding?.operation === policy.operationId) : []
   const repairUsed = repairMatches.length === 2
-  if (result.attempts.length !== scenario.operations.length + Number(repairUsed)
+  const reviewPolicy = eligible && scenario.evaluationPolicy ? policy.reviewRebuild : null
+  const reviewMatches = reviewPolicy ? result.attempts.filter(attempt => attempt?.binding?.operation === reviewPolicy.operationId) : []
+  const reviewUsed = reviewMatches.length === 2
+  if (result.attempts.length !== scenario.operations.length + Number(repairUsed) + Number(reviewUsed)
     || new Set(result.attempts.map(attempt => attempt?.attemptId)).size !== result.attempts.length)
     return 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'
   for (const operation of scenario.operations) {
     const matches = result.attempts.filter(attempt => attempt?.binding?.operation === operation.id)
-    if (matches.length !== (repairUsed && operation.id === policy.operationId ? 2 : 1)) return 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'
+    if (matches.length !== (repairUsed && operation.id === policy.operationId
+      || reviewUsed && operation.id === reviewPolicy.operationId ? 2 : 1)) return 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'
     for (const match of matches) {
       const binding = match.binding
       if (binding.mode !== mode || binding.arm !== arm || binding.phase !== phase || binding.caseId !== scenario.caseId
@@ -451,6 +476,12 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
       || repairMatches[0].attemptId !== `${arm}:${primary.attemptId}`
       || repairMatches[0].binding.milestone !== policy.milestone)
       return 'STRUCTURED_REPAIR_OWNER_MISMATCH'
+  }
+  if (reviewPolicy) {
+    const primary = arm === 'candidate' ? reviewMatches[0]?.binding?.actual : reviewMatches[0]?.binding?.baselineIpc
+    if (!primary || primary.purpose !== reviewPolicy.primaryPurpose || !primary.attemptId
+      || reviewMatches[0].attemptId !== `${arm}:${primary.attemptId}`)
+      return 'REVIEW_REBUILD_OWNER_MISMATCH'
   }
   if (repairUsed) {
     const identity = attempt => arm === 'candidate' ? attempt.binding.actual : attempt.binding.baselineIpc
@@ -479,6 +510,41 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
     }
     if (arm === 'candidate' && (result.ownerTerminal?.length !== result.attempts.length
       || repairMatches.some(attempt => {
+        const terminal = result.ownerTerminal.find(item => item.attemptId === attempt.binding.actual.attemptId)
+        return !terminal?.artifactId || terminal.textHash !== attempt.visibleTextHash
+      }))) return 'ACTUAL_OWNER_ARTIFACT_MISMATCH'
+  }
+  if (reviewUsed) {
+    const identity = attempt => arm === 'candidate' ? attempt.binding.actual : attempt.binding.baselineIpc
+    const [primary, rebuild] = reviewMatches.map(identity)
+    const persisted = result.operations?.find(item => item.operation === reviewPolicy.operationId)
+    const source = reviewMatches[0].binding.reviewSource
+    if (!rebuild || rebuild.purpose !== reviewPolicy.repairPurpose
+      || !primary.attemptId || !rebuild.attemptId || primary.attemptId === rebuild.attemptId
+      || primary.runId !== rebuild.runId || primary.rootActionId !== rebuild.rootActionId
+      || primary.projectId !== rebuild.projectId || primary.epoch !== rebuild.epoch
+      || primary.projectId !== result.physicalProject?.projectId || primary.epoch !== result.projectEpoch
+      || !Number.isSafeInteger(source?.draftId) || source.draftId <= 0
+      || source.contentHash !== result.reviewedDraft?.initial?.contentHash
+      || source.draftId !== result.reviewedDraft?.initial?.draftId
+      || arm === 'candidate' && (!persisted?.handle || primary.runId !== persisted.handle.runId
+        || primary.rootActionId !== persisted.handle.rootActionId)
+      || reviewMatches.some(attempt => attempt.attemptId !== `${arm}:${identity(attempt).attemptId}`
+        || attempt.binding.milestone !== policy.milestone
+        || JSON.stringify(attempt.binding.reviewSource) !== JSON.stringify(source)
+        || arm === 'baseline' && identity(attempt).operationId !== reviewPolicy.operationId))
+      return 'REVIEW_REBUILD_OWNER_MISMATCH'
+    for (const [index, attempt] of reviewMatches.entries()) {
+      if (!CONTENT_HASH.test(attempt.visibleTextHash ?? '') || typeof attempt.outputPath !== 'string')
+        return 'PHYSICAL_OUTPUT_MISSING'
+      try {
+        const output = fs.readFileSync(attempt.outputPath, 'utf8')
+        if (digest(output) !== attempt.visibleTextHash) return 'PHYSICAL_OUTPUT_HASH_MISMATCH'
+        if (index === 0 && !reviewJsonSyntaxFailure(output)) return 'REVIEW_REBUILD_PRIMARY_NOT_SYNTAX_FAILURE'
+      } catch { return 'PHYSICAL_OUTPUT_MISSING' }
+    }
+    if (arm === 'candidate' && (result.ownerTerminal?.length !== result.attempts.length
+      || reviewMatches.some(attempt => {
         const terminal = result.ownerTerminal.find(item => item.attemptId === attempt.binding.actual.attemptId)
         return !terminal?.artifactId || terminal.textHash !== attempt.visibleTextHash
       }))) return 'ACTUAL_OWNER_ARTIFACT_MISMATCH'

@@ -93,6 +93,21 @@
       { "attemptId": "candidate:5e9f59c1-eabc-4182-ad5b-0134df29a48e", "invocationId": "13f33d55-016a-4db1-9993-c62f8f122ed7", "terminal": "unknown" }
     ]
   },
+  "historicalReviewRebuildBoundary": {
+    "fromEventCount": 327,
+    "eventCount": 345,
+    "rawBytesSha256": "f62b4e6fa49ddb1c34e8f6a8ce278a1c4343695243d79f9205b2045920c1b86e",
+    "protocolRevision": "s14b-reviewed-draft-v1",
+    "protocolHash": "db9132ce6fa68c31d835d73a3403b2e22c9fbe1f211418992f02d800bfe489b4",
+    "reserveAttempts": [
+      { "attemptId": "baseline:3cee9eab-22de-4f14-9cef-016a89593693", "invocationId": "a5be6f35-3568-4147-a238-403c67f4acfd", "terminal": "settle" },
+      { "attemptId": "baseline:b1c0314b-79be-49f0-8c30-87172292c76b", "invocationId": "a5be6f35-3568-4147-a238-403c67f4acfd", "terminal": "settle" },
+      { "attemptId": "baseline:3bbb2895-849d-4410-9919-14053b463577", "invocationId": "a5be6f35-3568-4147-a238-403c67f4acfd", "terminal": "settle" },
+      { "attemptId": "candidate:3daf53a6-1c34-4c64-9fa3-4552b78480af", "invocationId": "a5be6f35-3568-4147-a238-403c67f4acfd", "terminal": "settle" },
+      { "attemptId": "candidate:c0ccd181-af6c-48a6-8c97-5c17c21c8ece", "invocationId": "a5be6f35-3568-4147-a238-403c67f4acfd", "terminal": "settle" },
+      { "attemptId": "candidate:923b6099-3b92-48df-8e93-a255b289aee2", "invocationId": "a5be6f35-3568-4147-a238-403c67f4acfd", "terminal": "settle" }
+    ]
+  },
   "phases": {
     "c16-c18": {
       "scenarioRevision": "c16-c18-candidate-production-path-v1",
@@ -115,7 +130,13 @@
         "operationId": "指定范围生成",
         "primaryPurpose": "chapter-blueprint-directory",
         "repairPurpose": "chapter-blueprint-directory:structured-syntax-repair",
-        "maxRepairAttempts": 1
+        "maxRepairAttempts": 1,
+        "reviewRebuild": {
+          "operationId": "成稿首审",
+          "primaryPurpose": "review-chapter",
+          "repairPurpose": "review-chapter-rebuild",
+          "maxRepairAttempts": 1
+        }
       },
       "caseIds": [
         "场景1/1"
@@ -137,9 +158,9 @@
         }
       ],
       "postUi": {
-        "scenarioRevision": "s14b-post-ui-reviewed-budget-v1",
+        "scenarioRevision": "s14b-post-ui-reviewed-budget-review-rebuild-v1",
         "minimumCalls": 6,
-        "maximumPlannedCalls": 12,
+        "maximumPlannedCalls": 14,
         "evaluationPolicy": {
           "revision": "s14b-post-ui-reviewed-draft-unknown-oracle-v2",
           "selection": "all-error-warning-in-report-order",

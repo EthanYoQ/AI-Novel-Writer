@@ -8,7 +8,7 @@
 
 两臂复评均使用普通审稿入口，不冒充旧版具有候选版原生定向复核状态机；既有 finding 状态不因此改为 resolved。初稿、原审稿、确认快照、唯一修订、合并正文和复评分别保留文件与 hash，最终评审正文须与数据库回读和 receipt 一致。请求按真实 attempt 继续 reserve/dispatch/settle/unknown；策略、协议字节、驱动、实际代码 SHA 和来源均随新目标冻结。旧目标拒绝新协议；真实执行前须将此前账本完整前缀重新登记为只读历史，不能改写原账本。
 
-独立评审只对固定终点正文作本 revision 的结论，报告同时披露初稿到成稿的变化与成本。`unknown` 终点的每个必需目标须用可回查且符合既有逐字引文规则的原文证据逐项补足，并独立核查没有已识别待修缺陷；无法核实为 inconclusive，具体缺陷为 FAIL。事实、全部事件、现行字数、复述、来源、自然度、动机及节奏门和两名盲评要求均不变；自动状态最高 `pending-independent-oracle-review`。模型审稿 pass 不是独立质量 PASS。原276/288行历史边界保留，新289–327行旧绑定以完整前缀 hash 和13组 reserve/dispatch/terminal 加性认证，末项 `unknown` 原样保留；invocation `13f33d55-016a-4db1-9993-c62f8f122ed7` 技术 FAIL 不改。所有旧 FAIL 原样保留，不追溯改判，不重采挑优。两臂合计无修稿需6次请求，两臂均修一次需10次；沿用既有规划语法修复最多各加1次，因此登记最大计划路径12次。原80次是历史计划分配而非硬帽，新增审修请求按真实 operation 计入既有失败/审修余量并单独披露；本切片不申请真实调用。
+独立评审只对固定终点正文作本 revision 的结论，报告同时披露初稿到成稿的变化与成本。`unknown` 终点的每个必需目标须用可回查且符合既有逐字引文规则的原文证据逐项补足，并独立核查没有已识别待修缺陷；无法核实为 inconclusive，具体缺陷为 FAIL。事实、全部事件、现行字数、复述、来源、自然度、动机及节奏门和两名盲评要求均不变；自动状态最高 `pending-independent-oracle-review`。模型审稿 pass 不是独立质量 PASS。原276/288行历史边界保留，新289–327行旧绑定以完整前缀 hash 和13组 reserve/dispatch/terminal 加性认证，末项 `unknown` 原样保留；invocation `13f33d55-016a-4db1-9993-c62f8f122ed7` 技术 FAIL 不改。所有旧 FAIL 原样保留，不追溯改判，不重采挑优。两臂合计无修稿需6次请求，两臂均修一次需10次；既有规划语法修复和新登记的首审语法重建各最多每臂一次，因此登记最大计划路径14次。原80次是历史计划分配而非硬帽，新增审修请求按真实 operation 计入既有失败/审修余量并单独披露；本切片不申请真实调用。原327行边界不变，invocation `a5be6f35-3568-4147-a238-403c67f4acfd` 的第328–345行另以原始字节 SHA-256 和六组 reserve/dispatch/settle 加性认证；baseline 首审非法 JSON 与旧 FAIL 不改。
 
 ## 现行交付顺序与复用
 
@@ -98,6 +98,8 @@ schemaVersion=1 的 S00 manifests 保持历史探针行为，formal 阶段仍返
 candidate 每次发送前从实际 fixture 数据库查询唯一 `dispatch-marked` attempt，并核对当前默认 command 持有的 project/epoch/root/run、attemptId 和真正输出上限；零条、多条或不匹配都拒发。收尾再核对原 attempt 的 stop、artifact 与正式 effect。已知 stop 且 usage 不可信时保留产品账本的 unknown liability，不谎称可信用量或失败退款。baseline 不伪造它没有的 main attempt，使用独立物理 ID 并绑定原实现哈希。
 
 `early-budget` 的 `s14b-post-ui-budget-syntax-repair-v1` 只让 post-UI `指定范围生成` 在两臂首发之后，各按现有产品路径增加最多一次 `chapter-blueprint-directory:structured-syntax-repair`。candidate 从唯一 SQLite owner attempt 的 `usage_receipt_json.purpose` 证明主发与修复身份，并保持原 run/root/project/epoch；baseline 从实际 `llm:generate-stream` IPC 的 requestId、purpose 与当前 run/session 证明归属，不伪造 main owner。额外请求仍逐次写入唯一物理账本和桥收据、保存每次可核验输出；缺身份、其他 retry 或第三次请求在发送前拒绝。pair 技术门允许这一次已登记修复，但实际产品失败、缺产物或独立质量门失败仍为 FAIL。全局 `draft-units-tolerance-30-v1` 字数标准与历史 FAIL 均不改判。
+
+`s14b-post-ui-reviewed-budget-review-rebuild-v1` 另为 post-UI `成稿首审` 登记一次产品已有的 `review-chapter-rebuild`：首发必须是同一草稿的 `review-chapter`，已在唯一账本 settle，原输出文件与哈希相符，按产品 parseReviewGenerationResult 的 fenced JSON 提取和 JSON.parse 确认语法错误，且草稿尚无已保存的审稿报告。重建请求须沿用同一 run、root action、project、epoch、草稿身份，第二次重建和其他 retry 在 reserve 前拒绝。有效但含 error/warning/unknown 的报告不得借此重建；重建后仍按原审稿合同和独立质量门验收，初次坏输出与替代输出均保留。
 
 两臂的模板输入采用对称映射：从不可变 baseline `2264390d6fb8b052cc14736d544df0cc74516649` 提取 `chapter_blueprint_chunk` 和 `first_chapter_draft` 的完整原模板；两臂作为相同的自定义作者模板读回。语义源那句无占位符的 `template` 完整写入双方 `globalGuidance`，不会用它覆盖生产模板并丢掉作者素材。模板原字节、guidance 字节、实际项目回读哈希保存在私有 receipt；各臂编译后的 system/完整 prompt 哈希另列，允许体现实现差异。角色原始名字与身份约束完整保存在作者素材及主角档案，本门不凭名字凭空创建已批准角色卡。第二、三章作者预置蓝图用于验证本次第1章范围提交没有改写范围外内容。
 

@@ -164,7 +164,8 @@ export function validatePhysicalLedger(file) {
   const raw = fs.readFileSync(ledger, 'utf8'), protocol = read(PROTOCOL_PATH)
   const historical = validateHistoricalLedgerBoundary(raw, protocol.historicalLedgerBoundary)
   const superseded = validateHistoricalSupersessionBoundary(raw, historical, protocol.historicalSupersessionBoundary)
-  validateHistoricalSupersessionBoundary(raw, superseded, protocol.historicalReviewedDraftBoundary)
+  const reviewed = validateHistoricalSupersessionBoundary(raw, superseded, protocol.historicalReviewedDraftBoundary)
+  validateHistoricalSupersessionBoundary(raw, reviewed, protocol.historicalReviewRebuildBoundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -422,6 +423,11 @@ export function updateLedger(file, event, options = {}) {
       const trustedReviewedEvents = reviewedBoundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedSupersessionEvents, reviewedBoundary)
         : trustedSupersessionEvents
+      const rebuildBoundary = options.campaignMode === 'real'
+        ? protocol.historicalReviewRebuildBoundary : options.historicalReviewRebuildBoundary
+      const trustedRebuildEvents = rebuildBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedReviewedEvents, rebuildBoundary)
+        : trustedReviewedEvents
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
       // 未登记 operations 的阶段在这里 fail closed。
@@ -444,7 +450,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedReviewedEvents
+          const superseded = index >= trustedHistoricalEvents && index < trustedRebuildEvents
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)
