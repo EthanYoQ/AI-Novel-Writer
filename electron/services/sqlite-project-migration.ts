@@ -16,6 +16,7 @@ import { initializeCharacterRosterMetadata } from '../repositories/character-ros
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
 const QUALIFIED_V100_SCHEMA = '5e1ee5e03fa79bbf49694a680316ee74047f45901cd3f8affeaa0a7fda3ea414'
+const QUALIFIED_OFFICIAL_V100_SCHEMA = 'c536a35e30f51f681843a2a07a48592cc80e9840abeb7898fcd463297128ccf8'
 const QUALIFIED_V110_SCHEMA = '1207fd8203e31503e3cd09ba5b60a959c606ded34a8c8c7774a9e15edc8271ba'
 const QUALIFIED_EARLY_V110_SCHEMA = '2504dde08865f758f654d38ae3d972420c28fa60d1f747e92898390455272de6'
 const EARLY_V110_TABLES = [
@@ -124,7 +125,7 @@ function inspect(db: BetterSqlite3.Database, registry: MigrationRegistry, target
 function qualifiedLegacySource(db: BetterSqlite3.Database): string | null {
   const adapter = new SqliteSchemaAdapter(db)
   const fingerprint = adapter.readSchemaFingerprint()
-  return adapter.readUserVersion() === 0 && [QUALIFIED_V100_SCHEMA, QUALIFIED_V110_SCHEMA, QUALIFIED_EARLY_V110_SCHEMA].includes(fingerprint)
+  return adapter.readUserVersion() === 0 && [QUALIFIED_V100_SCHEMA, QUALIFIED_OFFICIAL_V100_SCHEMA, QUALIFIED_V110_SCHEMA, QUALIFIED_EARLY_V110_SCHEMA].includes(fingerprint)
     && adapter.integrityCheck() && adapter.foreignKeyCheck() ? fingerprint : null
 }
 function inspectSource(db: BetterSqlite3.Database, registry: MigrationRegistry, allowLegacy: boolean): ProjectSqliteEvidence {
@@ -137,7 +138,7 @@ function copyQualifiedLegacy(source: BetterSqlite3.Database, staging: BetterSqli
   initializeLegacyBaselineSchema(staging)
   const targetColumns = domainColumns(staging)
   const columnSets = (tables: DomainColumns) => tables.map(({ name, columns }) => [name, [...columns].sort()])
-  const expectedColumns = fingerprint === QUALIFIED_V100_SCHEMA ? targetColumns
+  const expectedColumns = [QUALIFIED_V100_SCHEMA, QUALIFIED_OFFICIAL_V100_SCHEMA].includes(fingerprint) ? targetColumns
     .filter(({ name }) => name !== 'continuity_projection_meta')
     .map(({ name, columns }) => ({ name, columns: columns.filter(column => !V100_MISSING_COLUMNS[name]?.includes(column)) })) : targetColumns
   const earlyV110 = fingerprint === QUALIFIED_EARLY_V110_SCHEMA
@@ -213,7 +214,7 @@ export async function backupProjectSqlite(options: {
     source.pragma('foreign_keys = ON')
     const columnsBefore = domainColumns(source)
     const before = inspectSource(source, registry, !options.registry)
-    const legacySchema = !options.registry && [QUALIFIED_V100_SCHEMA, QUALIFIED_V110_SCHEMA, QUALIFIED_EARLY_V110_SCHEMA].includes(before.fingerprint)
+    const legacySchema = !options.registry && [QUALIFIED_V100_SCHEMA, QUALIFIED_OFFICIAL_V100_SCHEMA, QUALIFIED_V110_SCHEMA, QUALIFIED_EARLY_V110_SCHEMA].includes(before.fingerprint)
     // Reserve a new inode before the backup API can open it.
     const fd = fs.openSync(targetPath, 'wx', 0o600); fs.closeSync(fd)
     if (!legacySchema) await source.backup(targetPath)

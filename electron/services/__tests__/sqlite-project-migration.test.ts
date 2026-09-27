@@ -9,6 +9,7 @@ import { ensureBaselineBlueprintTables } from '../../migrations/baseline-bluepri
 import { sqliteSchemaFingerprint } from '../../migrations/sqlite-schema-adapter'
 import { backupProjectSqlite, probeProjectSqlite, verifyProjectSqlite } from '../sqlite-project-migration'
 import { CharacterRosterRepository } from '../../repositories/character-roster-repository'
+import { ProjectCoreRepository } from '../../repositories/project-core-repository'
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const roots: string[] = [], handles: BetterSqlite3.Database[] = []
@@ -75,21 +76,32 @@ function earlyV110Fixture() {
   fs.writeFileSync(path.join(root, 'avatar.png'), Buffer.from('89504e470d0a1a0a00000000', 'hex'))
   return { db, root, source, target }
 }
-function legacyV100Fixture() {
+function legacyV100Fixture(official = false) {
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/s04-sqlite')
   fs.mkdirSync(base, { recursive: true })
   const root = fs.mkdtempSync(path.join(base, 'legacy-v100-')); roots.push(root)
   const source = path.join(root, 'source.db'), target = path.join(root, 'target.db')
   const db = new Database(source); handles.push(db)
   db.pragma('journal_mode = WAL'); db.pragma('wal_autocheckpoint = 0'); db.pragma('foreign_keys = ON')
-  db.exec(fs.readFileSync(new URL('./legacy-v100-schema.sql', import.meta.url), 'utf8'))
-  expect(sqliteSchemaFingerprint(db)).toBe('5e1ee5e03fa79bbf49694a680316ee74047f45901cd3f8affeaa0a7fda3ea414')
+  db.exec(fs.readFileSync(new URL(official ? './legacy-v100-official-schema.sql' : './legacy-v100-schema.sql', import.meta.url), 'utf8'))
+  expect(sqliteSchemaFingerprint(db)).toBe(official
+    ? 'c536a35e30f51f681843a2a07a48592cc80e9840abeb7898fcd463297128ccf8'
+    : '5e1ee5e03fa79bbf49694a680316ee74047f45901cd3f8affeaa0a7fda3ea414')
   db.prepare('INSERT INTO project_core(rowid,id,project_name,characters_arch) VALUES (?,?,?,?)')
     .run(7, 'main', 'v1.0 合成项目', '旧版角色原文')
   db.prepare('INSERT INTO characters(rowid,name,role) VALUES (?,?,?)').run(44, '乙', 'protagonist')
   db.prepare('INSERT INTO characters(rowid,name,role) VALUES (?,?,?)').run(99, '甲', 'supporting')
   db.prepare('INSERT INTO contents(id,body) VALUES (?,?)').run(11, 'v1.0 正文\r\n原字节')
   db.prepare('INSERT INTO drafts(id,chapter_number,version,content_id,word_count) VALUES (?,?,?,?,?)').run(19, 7, 1, 11, 876)
+  if (official) {
+    db.prepare('UPDATE project_core SET core_outline=NULL, world_setting=NULL, protagonist_profile=NULL WHERE id=?').run('main')
+    db.prepare('INSERT INTO contents(id,body) VALUES (?,?)').run(12, '官方审稿原文')
+    db.prepare('INSERT INTO contents(id,body) VALUES (?,?)').run(13, '官方修稿原文')
+    db.prepare('INSERT INTO reviews(id,base_draft_id,review_index,source_draft_chapter_number,source_draft_version,source_draft_status,source_content,content_id) VALUES (?,?,?,?,?,?,?,?)')
+      .run(21, 19, 1, 7, 1, 'draft', '冻结审稿源文', 12)
+    db.prepare('INSERT INTO revisions(id,base_draft_id,revision_index,revision_type,source_draft_chapter_number,source_draft_version,source_draft_status,source_content,content_id) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(22, 19, 1, 'refine', 7, 1, 'draft', '冻结修稿源文', 13)
+  }
   db.prepare('INSERT INTO summary_snapshots(id,draft_id,chapter_number,character_states) VALUES (?,?,?,?)').run(23, 19, 7, '{"乙":"作者旧状态"}')
   db.prepare("UPDATE sqlite_sequence SET seq=900 WHERE name='contents'").run()
   db.prepare("UPDATE sqlite_sequence SET seq=500 WHERE name='drafts'").run()
@@ -210,6 +222,41 @@ describe('real SQLite schema probe and WAL staging backup', () => {
   it('rejects a v1.0.0 DDL fork before creating staging', async () => {
     const f = legacyV100Fixture()
     f.db.exec('ALTER TABLE contents ADD COLUMN unknown_old_fork TEXT')
+    const before = bytes(f.root)
+    expect(() => probeProjectSqlite({ databasePath: f.source })).toThrow('UNRECOGNIZED_SCHEMA')
+    await expect(backupProjectSqlite({ sourceDatabasePath: f.source, targetDatabasePath: f.target }))
+      .rejects.toThrow('UNRECOGNIZED_SCHEMA')
+    expect(fs.existsSync(f.target)).toBe(false)
+    expect(bytes(f.root)).toEqual(before)
+  })
+  it('imports the exact official v1.0.0 schema0 with NULL author fields and reordered review data intact', async () => {
+    const f = legacyV100Fixture(true), before = bytes(f.root)
+    expect(probeProjectSqlite({ databasePath: f.source })).toMatchObject({
+      schemaVersion: 0, fingerprint: 'c536a35e30f51f681843a2a07a48592cc80e9840abeb7898fcd463297128ccf8',
+    })
+    const result = await backupProjectSqlite({ sourceDatabasePath: f.source, targetDatabasePath: f.target })
+    expect(result.schemaVersion).toBe(7)
+    expect(verifyProjectSqlite({ databasePath: f.target })).toEqual(result)
+    const target = new Database(f.target, { fileMustExist: true }); handles.push(target)
+    expect(target.prepare('SELECT rowid,core_outline,world_setting,protagonist_profile FROM project_core').get())
+      .toEqual({ rowid: 7, core_outline: null, world_setting: null, protagonist_profile: null })
+    expect(ProjectCoreRepository.get(target)).toMatchObject({ coreOutline: null, worldSetting: null, protagonistProfile: null })
+    ProjectCoreRepository.update({ projectName: '导入后编辑' }, target)
+    expect(target.prepare('SELECT project_name,core_outline,world_setting,protagonist_profile FROM project_core').get())
+      .toEqual({ project_name: '导入后编辑', core_outline: null, world_setting: null, protagonist_profile: null })
+    expect(target.prepare('SELECT rowid AS source_rowid,source_draft_chapter_number,source_draft_version,source_draft_status,source_content,content_id FROM reviews').get())
+      .toEqual({ source_rowid: 21, source_draft_chapter_number: 7, source_draft_version: 1, source_draft_status: 'draft', source_content: '冻结审稿源文', content_id: 12 })
+    expect(target.prepare('SELECT rowid AS source_rowid,source_draft_chapter_number,source_draft_version,source_draft_status,source_content,content_id FROM revisions').get())
+      .toEqual({ source_rowid: 22, source_draft_chapter_number: 7, source_draft_version: 1, source_draft_status: 'draft', source_content: '冻结修稿源文', content_id: 13 })
+    expect(target.prepare('SELECT rowid AS source_rowid,draft_id,chapter_number,character_states FROM summary_snapshots').get())
+      .toEqual({ source_rowid: 23, draft_id: 19, chapter_number: 7, character_states: '{"乙":"作者旧状态"}' })
+    expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='contents'").pluck().get()).toBe(900)
+    expect(target.prepare("SELECT seq FROM sqlite_sequence WHERE name='drafts'").pluck().get()).toBe(500)
+    expect(bytes(f.root)).toMatchObject(before)
+  })
+  it('rejects a one-property DDL fork of the exact official v1.0.0 schema', async () => {
+    const f = legacyV100Fixture(true)
+    f.db.exec('ALTER TABLE project_core ADD COLUMN unknown_old_fork TEXT')
     const before = bytes(f.root)
     expect(() => probeProjectSqlite({ databasePath: f.source })).toThrow('UNRECOGNIZED_SCHEMA')
     await expect(backupProjectSqlite({ sourceDatabasePath: f.source, targetDatabasePath: f.target }))
