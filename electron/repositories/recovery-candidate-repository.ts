@@ -101,8 +101,8 @@ function sourceIsCurrent(row: RecoveryCandidateRow): boolean {
   return currentDraft?.id === row.source_draft_id && currentDraft.version === row.source_draft_version
 }
 
-function toCandidate(row: RecoveryCandidateRow): RecoveryCandidate {
-  if (sha256(row.source_snapshot) !== row.source_hash || sha256(row.visible_text) !== row.content_hash) {
+function toCandidate(row: RecoveryCandidateRow, frozen = false): RecoveryCandidate {
+  if ((!frozen && sha256(row.source_snapshot) !== row.source_hash) || sha256(row.visible_text) !== row.content_hash) {
     throw new Error('恢复候选完整性校验失败')
   }
   return {
@@ -119,7 +119,7 @@ function toCandidate(row: RecoveryCandidateRow): RecoveryCandidate {
     failureReason: row.failure_reason,
     status: row.status,
     replacesCandidateId: row.replaces_candidate_id,
-    sourceCurrent: sourceIsCurrent(row),
+    sourceCurrent: !frozen && sourceIsCurrent(row),
     createdAt: row.created_at,
     resolvedAt: row.resolved_at,
   }
@@ -199,12 +199,13 @@ export class RecoveryCandidateRepository {
   }
 
   static listPending(): RecoveryCandidate[] {
+    const freeze = readPortableRuntimeFreeze(getCurrentProjectPath())
     const rows = requireDb().prepare(`
       SELECT * FROM recovery_candidates
       WHERE status = 'pending'
       ORDER BY rowid ASC
     `).all() as RecoveryCandidateRow[]
-    return rows.map(toCandidate)
+    return rows.map(row => toCandidate(row, freeze.isFrozen('recovery_candidates', row.candidate_id)))
   }
 
   static updatePending(candidateId: string, text: string): RecoveryCandidate {

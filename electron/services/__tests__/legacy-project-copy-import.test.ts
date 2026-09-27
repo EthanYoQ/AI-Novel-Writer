@@ -70,6 +70,82 @@ function sourceState(f: ReturnType<typeof fixture>) {
   return entries
 }
 
+async function verifyFrozenLegacyConsumersAfterRestart(target: string, entry: string) {
+  await build({
+    stdin: {
+      resolveDir: process.cwd(), sourcefile: 'legacy-freeze-child.ts', loader: 'ts',
+      contents: `
+        import assert from 'node:assert/strict'
+        import { initProjectDatabase, closeProjectDatabase, getProjectDb } from './electron/database'
+        import { FinalizationService } from './electron/services/finalization-service'
+        import { BlueprintRepository } from './electron/repositories/blueprint-repository'
+        import { RecoveryCandidateRepository } from './electron/repositories/recovery-candidate-repository'
+        import { ImportRunRepository } from './electron/repositories/import-run-repository'
+
+        const root = process.env.LEGACY_FREEZE_ROOT!
+        let publishCalls = 0, modelFetchCalls = 0
+        globalThis.fetch = async () => { modelFetchCalls++; throw new Error('unexpected model fetch') }
+        initProjectDatabase(root)
+        try {
+          const db = getProjectDb()!
+          const rows = () => ['finalization_outbox', 'recovery_candidates', 'import_runs']
+            .map(table => db.prepare('SELECT * FROM ' + table + ' ORDER BY rowid').all())
+          const before = rows()
+          const retry = await new FinalizationService({ publisher: { async publish() { publishCalls++ } } })
+            .retry({ projectRoot: root, finalizationId: 'old-outbox' })
+          assert.equal(retry.success, false)
+          assert.equal(retry.committed, true)
+          assert.equal(retry.error, 'PORTABLE_RUNTIME_FROZEN')
+          assert.equal(RecoveryCandidateRepository.listPending().some(item =>
+            item.candidateId === 'old-candidate' && item.visibleText === '旧候选正文' && !item.sourceCurrent), true)
+          assert.throws(() => RecoveryCandidateRepository.updatePending('old-candidate', '覆盖正文'), /PORTABLE_RUNTIME_FROZEN/)
+          assert.throws(() => RecoveryCandidateRepository.resolve('old-candidate', 'discarded'), /PORTABLE_RUNTIME_FROZEN/)
+          db.exec('SAVEPOINT mixed_candidates')
+          try {
+            const source = { chapterNumber: 8, title: '第八章', role: '推进', purpose: '继续',
+              keyEvents: '新线索', characters: [], suspenseHook: '', userGuidance: '' }
+            BlueprintRepository.upsert({ ...source, notes: '', notesUpdatedAt: '' })
+            const fresh = RecoveryCandidateRepository.record({ runId: 'new-run', stepId: 'generate-draft',
+              projectId: 'current-project', chapterNumber: 8, chapterTitle: source.title, source, sourceDraft: null,
+              visibleText: '新候选正文', failureCode: 'NETWORK_ERROR', failureReason: 'test' })
+            assert.deepEqual(RecoveryCandidateRepository.listPending().map(item => ({
+              candidateId: item.candidateId, visibleText: item.visibleText, sourceCurrent: item.sourceCurrent,
+            })), [
+              { candidateId: 'old-candidate', visibleText: '旧候选正文', sourceCurrent: false },
+              { candidateId: fresh.candidateId, visibleText: '新候选正文', sourceCurrent: true },
+            ])
+            assert.equal(RecoveryCandidateRepository.updatePending(fresh.candidateId, '可编辑正文').visibleText, '可编辑正文')
+            db.prepare('UPDATE recovery_candidates SET source_hash=? WHERE candidate_id=?').run('bad', fresh.candidateId)
+            assert.throws(() => RecoveryCandidateRepository.listPending(), /恢复候选完整性校验失败/)
+          } finally { db.exec('ROLLBACK TO mixed_candidates; RELEASE mixed_candidates') }
+          assert.equal(ImportRunRepository.get('old-import')?.id, 'old-import')
+          assert.equal(ImportRunRepository.listResumable().some(item => item.id === 'old-import'), false)
+          assert.throws(() => ImportRunRepository.startOrResume('old-import', 'new-owner'), /PORTABLE_RUNTIME_FROZEN/)
+          assert.equal(publishCalls, 0)
+          assert.equal(modelFetchCalls, 0)
+          assert.deepEqual(rows(), before)
+        } finally { closeProjectDatabase() }
+      `,
+    },
+    outfile: entry, bundle: true, packages: 'external', platform: 'node', format: 'esm', target: 'node22',
+    plugins: [{ name: 'unused-electron-imports', setup(build) {
+      build.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'test-shim' }))
+      build.onLoad({ filter: /.*/, namespace: 'test-shim' }, () => ({ contents:
+        'export const app = { getPath() { throw Error("Electron-only path used") } }; export const nativeImage = {}', loader: 'js' }))
+    } }],
+  })
+  const child = spawn(process.execPath, [entry], {
+    cwd: process.cwd(), env: { ...process.env, LEGACY_FREEZE_ROOT: target }, stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let stderr = ''
+  child.stderr.on('data', data => { stderr += String(data) })
+  const code = await new Promise<number | null>((resolve, reject) => {
+    child.once('error', reject)
+    child.once('close', resolve)
+  })
+  expect(code, stderr).toBe(0)
+}
+
 async function terminateImportAt(f: ReturnType<typeof fixture>, phase: 'sqlite-converted' | 'renamed') {
   const entry = path.join(path.dirname(f.source), 'import-child.mjs')
   await build({ entryPoints: [path.resolve('electron/services/legacy-project-copy-import.ts')], outfile: entry,
@@ -595,6 +671,7 @@ it.each(['sqlite-converted', 'renamed'] as const)('%s 子进程终止后源保�
 
 it('旧候选正文保留为可读冻结历史，新项目不重放', async () => {
   const f = fixture('v110', ''), db = new Database(path.join(f.legacy, 'vela.db'))
+  const candidateSource = JSON.stringify({ chapterNumber: 7, title: '第七章', role: '推进', purpose: '追踪', keyEvents: '线索', characters: [] })
   try {
     db.prepare('INSERT INTO contents(id,body) VALUES(?,?)').run(12, '旧版人工审稿原文')
     db.prepare(`INSERT INTO reviews(id,base_draft_id,review_index,content_id,source_draft_chapter_number,
@@ -612,8 +689,8 @@ it('旧候选正文保留为可读冻结历史，新项目不重放', async () =
     db.prepare(`INSERT INTO recovery_candidates(candidate_id,run_id,step_id,project_id,chapter_number,
       source_snapshot,source_hash,visible_text,content_hash) VALUES(?,?,?,?,?,?,?,?,?)`)
       .run('old-candidate', 'old-run', 'old-step', f.sourceProjectId, 7,
-        JSON.stringify({ chapterNumber: 7, title: '第七章', role: '推进', purpose: '追踪', keyEvents: '线索', characters: [] }),
-        hash(path.join(f.legacy, 'project.json')), '旧候选正文', 'content-hash')
+        candidateSource, createHash('sha256').update(candidateSource).digest('hex'),
+        '旧候选正文', createHash('sha256').update('旧候选正文').digest('hex'))
     db.prepare(`INSERT INTO llm_calls(id,model_id,model_name,purpose,prompt_tokens,completion_tokens,
       total_tokens,duration_ms,success,error_message,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
       .run(31, 'model?token=secret', 'C:\\private\\model', 'review', 120, 0, 120, 43, 0,
@@ -636,6 +713,7 @@ it('旧候选正文保留为可读冻结历史，新项目不重放', async () =
   expect(() => frozen.assertMutable('recovery_candidates', 'old-candidate')).toThrow('PORTABLE_RUNTIME_FROZEN')
   const copy = new Database(path.join(f.target, '.ai-novel', 'project.db'), { readonly: true })
   try {
+    expect(copy.prepare('SELECT source_hash FROM recovery_candidates WHERE candidate_id=?').pluck().get('old-candidate')).toBe('')
     expect(copy.prepare('SELECT visible_text FROM recovery_candidates WHERE candidate_id=?').pluck().get('old-candidate')).toBe('旧候选正文')
     expect(copy.prepare('SELECT body FROM contents WHERE id=(SELECT content_id FROM reviews WHERE id=21)').pluck().get()).toBe('旧版人工审稿原文')
     expect(copy.prepare('SELECT source_content FROM reviews WHERE id=21').pluck().get()).toBe('合成章节正文\r\n原字节')
@@ -654,6 +732,8 @@ it('旧候选正文保留为可读冻结历史，新项目不重放', async () =
   expect(LLMHistoryRepository.getStats()).toMatchObject({ totalCalls: 1, failedCalls: 1, totalTokens: 120 })
   expect(LLMHistoryRepository.getHistory(1)).toMatchObject([{ modelName: '旧版模型身份不可用', success: 0 }])
   expect(PostProcessRepository.getSteps('old-post-run')).toMatchObject([{ errorMsg: '旧版错误详情不可用', attemptCount: 1 }])
+  closeProjectDatabase()
+  await verifyFrozenLegacyConsumersAfterRestart(f.target, path.join(path.dirname(f.source), 'legacy-freeze-child.mjs'))
   expect(Object.fromEntries(Object.keys(before).map(name => [name, hash(path.join(f.legacy, name))]))).toEqual(before)
   expect(fs.existsSync(path.join(f.legacy, 'vela.db'))).toBe(true)
 })
