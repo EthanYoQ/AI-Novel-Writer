@@ -354,7 +354,7 @@ test('isolated production commands persist the selected phase operations', async
         assert.ok(saved?.success, `AUTHOR_ROSTER_NOT_SAVED:${saved?.error}`)
       }
       for (const entry of fullRun ? [] : scene.chapters.slice(1)) db.prepare('INSERT INTO blueprints(chapter_number,title,role,purpose,key_events,characters,user_guidance) VALUES(?,?,?,?,?,?,?)')
-        .run(entry.number, `作者预置第${entry.number}章`, '发展', entry.brief, entry.requiredEvents.join('；'), JSON.stringify(scene.characters),
+        .run(entry.number, request.phase === 'early-context' ? scene.title : `作者预置第${entry.number}章`, '发展', entry.brief, entry.requiredEvents.join('；'), JSON.stringify(scene.characters),
           `${source.template}\n本章时点：${entry.oracle.time}`)
       if (request.phase === 'early-review') {
         const content = reviewSourceText(countUnits, scene, chapter)
