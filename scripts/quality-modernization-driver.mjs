@@ -12,6 +12,63 @@ import { isExpectedReferenceEvidenceFailure, isVerifiedDirectPersistedDraftEvide
 const ADAPTER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const PRODUCTION_BRIDGE = 'scripts/fixtures/quality-modernization-production.fixture.mjs'
 export const EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION = 's11-reference-no-actionable-review-v1'
+export const REVIEWED_DRAFT_PROTOCOL_REVISION = 's14b-reviewed-draft-v1'
+export const POST_UI_REVIEW_POLICY = Object.freeze({ revision: 's14b-post-ui-reviewed-draft-v1',
+  selection: 'all-error-warning-in-report-order', confirmation: 'test-preauthorized-original-items',
+  merge: 'accept-only-revision', finalReview: 'ordinary-full-review', noAction: 'retain-initial-draft',
+  maxRevisions: 1, qualityDecision: 'independent-oracle-final-text' })
+const POST_UI_BUDGET = Object.freeze({ scenarioRevision: 's14b-post-ui-reviewed-budget-v1',
+  evaluationPolicy: POST_UI_REVIEW_POLICY,
+  operations: Object.freeze([{ id: '指定范围生成', kind: 'directory' }, { id: '900单位正文', kind: 'draft' },
+    { id: '成稿首审', kind: 'review' }, { id: '成稿一次修稿', kind: 'refine' }, { id: '成稿完整复评', kind: 'final-review' }]) })
+export function reviewedDraftSelection(report) {
+  if (!Array.isArray(report?.items) || report.items.length === 0
+    || report.items.some(item => !['pass', 'error', 'warning'].includes(item?.severity))) throw new Error('REVIEWED_DRAFT_REPORT_INVALID')
+  return report.items.filter(item => item.severity === 'error' || item.severity === 'warning')
+}
+/** The S14B endpoint is immutable evidence, not a second product revision workflow. */
+export function validateReviewedDraft(result) {
+  const fail = () => ({ valid: false, pairFailure: 'REVIEWED_DRAFT_EVIDENCE_INVALID' })
+  const chain = result?.reviewedDraft
+  try {
+    if (stableEvidence(result.evaluationPolicy) !== stableEvidence(POST_UI_REVIEW_POLICY) || !chain) return fail()
+    const readArtifact = artifact => {
+      if (!artifact || !CONTENT_HASH.test(artifact.contentHash ?? '') || typeof artifact.outputPath !== 'string') throw new Error('missing artifact')
+      const content = fs.readFileSync(artifact.outputPath, 'utf8')
+      if (digest(content) !== artifact.contentHash) throw new Error('changed artifact')
+      return content
+    }
+    readArtifact(chain.initial)
+    const report = JSON.parse(readArtifact(chain.review)), selected = reviewedDraftSelection(report)
+    if (chain.review.sourceHash !== chain.initial.contentHash || chain.selectedCount !== selected.length
+      || chain.selectedItemsHash !== digest(selected)) return fail()
+    const revised = selected.length > 0
+    if (chain.disposition !== (revised ? 'revised-once' : 'no-actionable-review')) return fail()
+    if (revised) {
+      const confirmation = JSON.parse(readArtifact(chain.confirmation))
+      if (confirmation.sourceReviewId !== chain.review.reviewId || digest(confirmation.sourceDraft?.content ?? '') !== chain.initial.contentHash
+        || confirmation.items?.length !== selected.length || confirmation.items.some((item, index) =>
+          item.decision !== 'apply' || item.origin !== 'ai'
+          || ['category', 'severity', 'description', 'quote', 'goalId', 'stableFactKey'].some(key => item[key] !== selected[index][key]))) return fail()
+      readArtifact(chain.revision)
+      readArtifact(chain.finalReview)
+      if (chain.mergeHash !== chain.revision.contentHash || chain.finalReview.sourceHash !== chain.mergeHash
+        || chain.finalDraft.contentHash !== chain.mergeHash) return fail()
+    } else if (chain.confirmation || chain.revision || chain.finalReview || chain.mergeHash
+      || chain.finalDraft.contentHash !== chain.initial.contentHash) return fail()
+    readArtifact(chain.finalDraft)
+    if (chain.finalDraft.contentHash !== result.saved?.contentHash
+      || chain.finalDraft.contentHash !== result.draftObservation?.contentHash) return fail()
+    const operations = POST_UI_BUDGET.operations.slice(0, revised ? 5 : 3)
+    if (stableEvidence(result.operations?.map(item => [item.operation, item.kind]))
+      !== stableEvidence(operations.map(item => [item.id, item.kind]))) return fail()
+    for (const [kind, artifact] of [['draft', chain.initial], ['review', chain.review],
+      ...(revised ? [['refine', chain.revision], ['final-review', chain.finalReview]] : [])]) {
+      if (result.operations.find(item => item.kind === kind)?.outputHash !== artifact.contentHash) return fail()
+    }
+    return { valid: true, operations, disposition: chain.disposition }
+  } catch { return fail() }
+}
 const digest = value => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex')
 export function productionBridgeHash() {
   return digest([PRODUCTION_BRIDGE, 'scripts/quality-modernization-driver.mjs'].map(file => [file, digest(fs.readFileSync(path.join(ADAPTER_ROOT, file)))]))
@@ -42,6 +99,7 @@ export function selectOwnerDispatch(db, handle, session, body) {
 export const BRIDGE_SETTLEMENT_DEADLINE_MS = 480_000
 export const BRIDGE_SPAWN_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 3 + 60_000
 export const BRIDGE_TEST_TIMEOUT_MS = BRIDGE_SPAWN_TIMEOUT_MS + 60_000
+export const BRIDGE_REVIEWED_TEST_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 6 + 120_000
 
 /** 只测规模、不落内容：返回提示词载荷的 UTF-8 字节数，绝不含提示词原文或凭据。 */
 export function measurePromptBytes(messages) {
@@ -140,6 +198,7 @@ export function runProductionBridge(request) {
   const evidenceRoot = request.evidenceRoot ?? target.isolationRoot
   fs.mkdirSync(evidenceRoot, { recursive: true })
   const runtime = productionExecutionRuntime(target)
+  const testTimeout = request.evaluationPolicy ? BRIDGE_REVIEWED_TEST_TIMEOUT_MS : BRIDGE_TEST_TIMEOUT_MS
   const requestFile = path.join(evidenceRoot, `${request.action}-request.json`)
   const config = path.join(target.isolationRoot, 'production-bridge.vitest.config.mjs')
   const report = path.join(evidenceRoot, `${request.action}-vitest.json`)
@@ -150,7 +209,7 @@ export function runProductionBridge(request) {
     resolve: { alias: { vitest: path.join(target.repositoryRoot, 'node_modules/vitest/dist/index.js'),
       electron: path.join(target.repositoryRoot, 'node_modules/electron/index.js') } },
     test: { include: [PRODUCTION_BRIDGE], exclude: [], environment: 'node',
-      globals: false, maxWorkers: 1, fileParallelism: false, testTimeout: BRIDGE_TEST_TIMEOUT_MS },
+      globals: false, maxWorkers: 1, fileParallelism: false, testTimeout },
   })}\n`)
   const env = Object.fromEntries(['SystemRoot', 'WINDIR', 'PATH', 'PATHEXT', 'ComSpec'].filter(key => process.env[key]).map(key => [key, process.env[key]]))
   Object.assign(env, { QUALITY_BRIDGE_REQUEST: requestFile, QUALITY_USER_DATA: target.roots.userData,
@@ -165,7 +224,7 @@ export function runProductionBridge(request) {
     '--reporter=json', `--outputFile=${report}`]
   const result = spawnSync(runtime.executable, argv, { cwd: target.repositoryRoot, env, encoding: 'utf8',
     // 三次串行 operation 各自拥有 480s；先由 attempt 守护收口，再由父进程 spawn、最后 Vitest 兜底。
-    timeout: BRIDGE_SPAWN_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, windowsHide: true })
+    timeout: testTimeout - 60_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true })
   const secret = request.mode === 'real'
     ? JSON.parse(fs.readFileSync(path.join(target.roots.config, 'models.json'), 'utf8')).find(model => model.id === target.modelId)?.apiKey : null
   const redact = value => secret ? String(value ?? '').split(secret).join('[REDACTED]') : String(value ?? '')
@@ -252,10 +311,10 @@ export const PHASE_SCENARIOS = Object.freeze({
     ]),
   }),
 })
-export function productionScenario(phase) {
+export function productionScenario(phase, milestone) {
   const scenario = PHASE_SCENARIOS[phase]
   if (!scenario) throw new Error('PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED')
-  return scenario
+  return phase === 'early-budget' && milestone === 'post-ui' ? { ...scenario, ...POST_UI_BUDGET } : scenario
 }
 
 // Keep this predicate byte-for-byte equivalent to the product's direct JSON syntax test.
@@ -326,7 +385,8 @@ const withinTargetUnits = (observation, protocolRevision, arm) => {
 }
 function hasReviewableDraft(result) {
   const observation = result?.draftObservation
-  const output = result?.operations?.find(operation => operation.kind === 'draft')?.outputPath
+  const output = result?.evaluationPolicy ? result.reviewedDraft?.finalDraft?.outputPath
+    : result?.operations?.find(operation => operation.kind === 'draft')?.outputPath
   if (!validDraftObservation(observation) || typeof output !== 'string') return false
   try { return digest(fs.readFileSync(output, 'utf8')) === observation.contentHash } catch { return false }
 }
@@ -342,6 +402,7 @@ const sourceIdentity = item => JSON.stringify([item?.sourceId, item?.revision, i
 const sourceIdentityWithReason = item => JSON.stringify([item?.sourceId, item?.revision, item?.contentHash, item?.reason])
 const validCount = (value, minimum = 0) => Number.isSafeInteger(value) && value >= minimum
 function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRevision, protocolHash }) {
+  const owned = ['early-review', 'full'].includes(phase) || Boolean(scenario.evaluationPolicy)
   const invocationId = result?.invocationId
   if (typeof protocolRevision !== 'string' || !protocolRevision || !CONTENT_HASH.test(protocolHash ?? '')
     || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(invocationId ?? '')
@@ -365,10 +426,10 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
       if (binding.mode !== mode || binding.arm !== arm || binding.phase !== phase || binding.caseId !== scenario.caseId
         || binding.invocationId !== invocationId
         || binding.protocolRevision !== protocolRevision || binding.protocolHash !== protocolHash
-        || ['early-review', 'full'].includes(phase) && (binding.codeSha !== result.codeSha || binding.sourceHash !== result.sourceHash
+        || owned && (binding.codeSha !== result.codeSha || binding.sourceHash !== result.sourceHash
           || binding.driverHash !== result.driverHash || binding.parityId !== result.physicalProject?.parityHash))
         return 'ATTEMPT_BINDING_MISMATCH'
-      if (['early-review', 'full'].includes(phase) && arm === 'candidate') {
+      if (owned && arm === 'candidate') {
         const actual = binding.actual
         const persisted = result.operations?.find(item => item.operation === operation.id)
         if (!actual || !persisted?.handle
@@ -614,14 +675,21 @@ export function classifyProductionPair(results, { mode, phase }) {
     return { status: 'failed', qualityQualification: 'automatic-gate-failed', pairFailure: 'INVALID_PAIR_RESULTS' }
   }
   const baseline = baselineRows[0], candidate = candidateRows[0]
-  const scenario = productionScenario(phase)
+  const reviewed = phase === 'early-budget' && baseline.milestone === 'post-ui'
+    && baseline.protocolRevision === REVIEWED_DRAFT_PROTOCOL_REVISION
+  const scenario = productionScenario(phase, reviewed ? 'post-ui' : undefined)
+  const reviewedChains = reviewed ? [baseline, candidate].map(validateReviewedDraft) : []
+  if (reviewedChains.some(chain => !chain.valid)) return { status: 'failed', qualityQualification: 'automatic-gate-failed',
+    pairFailure: 'REVIEWED_DRAFT_EVIDENCE_INVALID' }
   if (Array.isArray(baseline.attempts) && Array.isArray(candidate.attempts)) {
     if (baseline.invocationId !== candidate.invocationId)
       return { status: 'failed', qualityQualification: 'automatic-gate-failed', pairFailure: 'PAIR_BINDING_MISMATCH' }
     const protocolRevision = baseline.protocolRevision
     const protocolHash = baseline.protocolHash
-    const baselineBindingFailure = validatePairedReceipt(baseline, { mode, arm: 'baseline', phase, scenario, protocolRevision, protocolHash })
-    const candidateBindingFailure = validatePairedReceipt(candidate, { mode, arm: 'candidate', phase, scenario, protocolRevision, protocolHash })
+    const baselineBindingFailure = validatePairedReceipt(baseline, { mode, arm: 'baseline', phase,
+      scenario: reviewed ? { ...scenario, operations: reviewedChains[0].operations } : scenario, protocolRevision, protocolHash })
+    const candidateBindingFailure = validatePairedReceipt(candidate, { mode, arm: 'candidate', phase,
+      scenario: reviewed ? { ...scenario, operations: reviewedChains[1].operations } : scenario, protocolRevision, protocolHash })
     if (baselineBindingFailure || candidateBindingFailure)
       return { status: 'failed', qualityQualification: 'automatic-gate-failed', pairFailure: baselineBindingFailure ?? candidateBindingFailure }
   }
@@ -875,11 +943,12 @@ function runProductionFull(targets, options) {
 
 export function runProductionPhasePair(targets, options) {
   if (options.phase === 'full') return runProductionFull(targets, options)
-  const scenario = productionScenario(options.phase)
+  const scenario = productionScenario(options.phase, options.milestone)
   const arms = scenario.arms ?? ['baseline', 'candidate']
   if ((scenario.scenarioRevision ?? null) !== (options.scenarioRevision ?? null)
     || stableEvidence(scenario.selectionDifference ?? null) !== stableEvidence(options.selectionDifference ?? null)
-    || stableEvidence(scenario.attemptPolicy ?? null) !== stableEvidence(options.attemptPolicy ?? null))
+    || stableEvidence(scenario.attemptPolicy ?? null) !== stableEvidence(options.attemptPolicy ?? null)
+    || stableEvidence(scenario.evaluationPolicy ?? null) !== stableEvidence(options.evaluationPolicy ?? null))
     throw new Error('SCENARIO_PROTOCOL_MISMATCH')
   if (!options.protocolRevision || !/^[a-f0-9]{64}$/.test(options.protocolHash ?? '')
     || arms.some(arm => targets[arm].protocolRevision !== options.protocolRevision || targets[arm].protocolHash !== options.protocolHash)) throw new Error('PROTOCOL_BINDING_MISMATCH')
@@ -897,6 +966,8 @@ export function runProductionPhasePair(targets, options) {
     protocolRevision: options.protocolRevision, protocolHash: options.protocolHash,
     scenarioRevision: options.scenarioRevision ?? null, selectionDifference: options.selectionDifference ?? null,
     attemptPolicy: options.attemptPolicy ?? null,
+    evaluationPolicy: options.evaluationPolicy ?? null,
+    ...(options.mode === 'synthetic' && options.development ? { syntheticReviewedDraftCase: options.syntheticReviewedDraftCase ?? 'multiple' } : {}),
     milestone: options.milestone ?? scenario.milestone,
     phase: options.phase, caseId: scenario.caseId, sceneId: scenario.sceneId, chapterNumber: scenario.chapterNumber,
     operations: scenario.operations, semanticPath: options.semanticPath, templatesPath: options.templatesPath,

@@ -1,6 +1,14 @@
 # 中文质量预注册：Program v3 S00
 
-现行 decision revision 为 `pacing-readability-v1`（2026-09-27 用户选择 B）；字数标准仍采用 `draft-units-tolerance-30-v1`（2026-09-20 用户决定）。完整机器协议及其他 revision 见 [`protocol.json`](protocol.json)。本文件负责解释执行规则与冻结合同的显式取代关系。S10B/S11 的历史场景、失败和加性裁决保留各自版本；[日期化交接](../../handoffs/2026-09-20-program-v3-s11-pause-handoff.md)只证明当时状态，当前进度读唯一私有当前检查点。全部 Spec 的适用关系见[现行索引](current-spec-index.md)。合成验证、真实模型结果与文学质量结论分开记录。
+现行 decision revision 为 `s14b-reviewed-draft-v1`（2026-09-27 用户批准测试成稿评估；保留 `pacing-readability-v1` 节奏规则）；字数标准仍采用 `draft-units-tolerance-30-v1`（2026-09-20 用户决定）。完整机器协议及其他 revision 见 [`protocol.json`](protocol.json)。本文件负责解释执行规则与冻结合同的显式取代关系。S10B/S11 的历史场景、失败和加性裁决保留各自版本；[日期化交接](../../handoffs/2026-09-20-program-v3-s11-pause-handoff.md)只证明当时状态，当前进度读唯一私有当前检查点。全部 Spec 的适用关系见[现行索引](current-spec-index.md)。合成验证、真实模型结果与文学质量结论分开记录。
+
+## 测试专用成稿评估（第一切片）
+
+`s14b-post-ui-reviewed-draft-v1` 仅适用于未来 `post-ui early-budget` 资格测试；本切片不扩展 full、early-context 或 S11，不改变软件默认创作、自动审稿、确认、修稿或定稿流程。两臂均调用既有生产入口：生成并保存初稿、普通审稿；报告存在 error/warning 时，按原报告顺序预先授权采纳全部问题，保存确认快照，执行一次修稿并接受唯一修订，再对修后全文普通审稿一次。全部 pass 时保留初稿，记录 `no-actionable-review`，不虚构修稿。复评仍有问题也不追加修稿或改选初稿。确认与合并是测试预授权规则，不冒称作者现场逐项核实。
+
+两臂复评均使用普通审稿入口，不冒充旧版具有候选版原生定向复核状态机；既有 finding 状态不因此改为 resolved。初稿、原审稿、确认快照、唯一修订、合并正文和复评分别保留文件与 hash，最终评审正文须与数据库回读和 receipt 一致。请求按真实 attempt 继续 reserve/dispatch/settle/unknown；策略、协议字节、驱动、实际代码 SHA 和来源均随新目标冻结。旧目标拒绝新协议；真实执行前须将此前账本完整前缀重新登记为只读历史，不能改写原账本。
+
+独立评审只对固定终点正文作本 revision 的结论，报告同时披露初稿到成稿的变化与成本；事实、全部事件、现行字数、复述、自然度、动机及节奏门均不变。模型审稿 pass 不是独立质量 PASS。所有旧 FAIL 原样保留，不追溯改判，不重采挑优。两臂合计无修稿需6次请求，两臂均修一次需10次；沿用既有规划语法修复最多各加1次，因此登记最大计划路径12次。原80次是历史计划分配而非硬帽，新增审修请求按真实 operation 计入既有失败/审修余量并单独披露；本切片不申请真实调用。
 
 ## 现行交付顺序与复用
 

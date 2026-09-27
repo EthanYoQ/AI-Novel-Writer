@@ -20,11 +20,67 @@ import { projectRecoveryCandidateSupplement, readVerifiedRecoveryCandidateSupple
   readVerifiedDirectPersistedDraftEvidence, recordPersistedDraftObservation,
   safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
 import Database from 'better-sqlite3'
+import { POST_UI_REVIEW_POLICY, reviewedDraftSelection, validateReviewedDraft, productionScenario } from '../quality-modernization-driver.mjs'
 import { countDraftUnits } from '../../src/shared/draft-units'
 
 const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
 const protocolBinding = currentProtocolBinding()
+
+test('post-UI reviewed draft policy selects every actionable item without changing earlier phases', () => {
+  const report = { summary: 'review', items: [
+    { severity: 'pass', category: '事实', description: '保持' },
+    { severity: 'warning', category: '自然度', description: '修复重复', quote: '重复句' },
+    { severity: 'error', category: '事实', description: '恢复保管事实', quote: '钥匙丢失' },
+  ] }
+  assert.deepEqual(reviewedDraftSelection(report), report.items.slice(1))
+  assert.deepEqual(reviewedDraftSelection({ items: [report.items[0]] }), [])
+  const selected = selectPhase(protocol, 'early-budget', 'post-ui')
+  assert.deepEqual(selected.evaluationPolicy, POST_UI_REVIEW_POLICY)
+  assert.deepEqual(selected.operations.map(item => item.kind), ['directory', 'draft', 'review', 'refine', 'final-review'])
+  assert.equal(selectPhase(protocol, 'early-budget').evaluationPolicy, undefined)
+  assert.equal(selectPhase(protocol, 'full', 'final').evaluationPolicy, undefined)
+  assert.deepEqual(validateReviewedDraft({}), { valid: false, pairFailure: 'REVIEWED_DRAFT_EVIDENCE_INVALID' })
+})
+
+test('reviewed draft evidence rejects skipped issues, best-version picking and changed artifacts', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/reviewed-chain-'))
+  const artifact = (name, text, extra = {}) => {
+    const outputPath = path.join(dir, name)
+    fs.writeFileSync(outputPath, text)
+    return { ...extra, outputPath, contentHash: hash(text) }
+  }
+  try {
+    const items = [{ category: '事实', severity: 'error', description: '保管人错误', quote: '初稿' },
+      { category: '自然度', severity: 'warning', description: '重复', quote: '句子' }]
+    const initial = artifact('initial.txt', '初稿句子')
+    const review = artifact('review.json', JSON.stringify({ items }), { reviewId: 1, sourceHash: initial.contentHash })
+    const confirmation = artifact('confirmation.json', JSON.stringify({ sourceReviewId: 1,
+      sourceDraft: { content: '初稿句子' }, items: items.map(item => ({ ...item, decision: 'apply', origin: 'ai' })) }))
+    const revision = artifact('revision.txt', '唯一修订正文')
+    const finalReview = artifact('final-review.json', JSON.stringify({ items: [{ severity: 'error', description: '仍有事实错误' }] }),
+      { sourceHash: revision.contentHash })
+    const finalDraft = artifact('final.txt', '唯一修订正文')
+    const operations = productionScenario('early-budget', 'post-ui').operations.map(item => ({ operation: item.id, kind: item.kind }))
+    for (const [kind, saved] of [['draft', initial], ['review', review], ['refine', revision], ['final-review', finalReview]])
+      Object.assign(operations.find(item => item.kind === kind), { outputHash: saved.contentHash, outputPath: saved.outputPath })
+    const result = { evaluationPolicy: POST_UI_REVIEW_POLICY, operations, saved: { contentHash: finalDraft.contentHash },
+      draftObservation: { contentHash: finalDraft.contentHash }, reviewedDraft: { initial, review, confirmation, revision,
+        finalReview, finalDraft, mergeHash: revision.contentHash, selectedCount: 2, selectedItemsHash: hash(items), disposition: 'revised-once' } }
+    assert.equal(validateReviewedDraft(result).valid, true, 'a failing final model review stays evidence, not a model quality verdict')
+    for (const mutate of [value => { value.reviewedDraft.selectedCount = 1 },
+      value => { value.reviewedDraft.finalDraft = initial },
+      value => { value.operations.pop() },
+      value => { value.reviewedDraft.disposition = 'no-actionable-review' },
+      value => { value.reviewedDraft.finalReview.sourceHash = initial.contentHash },
+      value => { value.evaluationPolicy = { ...POST_UI_REVIEW_POLICY, maxRevisions: 2 } }]) {
+      const changed = structuredClone(result); mutate(changed)
+      assert.equal(validateReviewedDraft(changed).valid, false)
+    }
+    fs.writeFileSync(initial.outputPath, '合并后覆写初稿')
+    assert.equal(validateReviewedDraft(result).valid, false)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
 fs.mkdirSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization'), { recursive: true })
 
 test('c16-c18 keeps candidate qualification and the two allocations separate', () => {
@@ -287,7 +343,7 @@ test('三乘三两臂与原80帽含post-UI备份预留', () => {
   assert.equal(selectPhase(protocol, 'full', 'final').caseIds.length, 9)
   assert.equal(protocol.phases['early-budget'].operations.reduce((n, op) => n + op.minimumCalls, 0), 4)
   assert.equal(protocol.allocation.postUiBudget, 4)
-  assert.equal(protocol.decisionRevision, 'pacing-readability-v1')
+  assert.equal(protocol.decisionRevision, 's14b-reviewed-draft-v1')
   assert.deepEqual(protocol.oracle.pacingReadability.appliesTo, ['post-ui', 'final'])
   assert.equal(protocol.oracle.pacingReadability.requirements.length, 4)
   assert.match(protocol.oracle.nonInferiority, /节奏逐章比较并完整披露/)
@@ -296,7 +352,7 @@ test('三乘三两臂与原80帽含post-UI备份预留', () => {
   assert.match(protocol.oracle.improvement, /节奏较弱须披露，不得称全面优于参考/)
   assert.equal(protocol.phases['early-budget'].scenarioRevision, 's14b-post-ui-budget-syntax-repair-v1')
   assert.deepEqual(protocol.phases['early-budget'].attemptPolicy, PHASE_SCENARIOS['early-budget'].attemptPolicy)
-  assert.doesNotThrow(() => assertScenarioMatchesProtocol(selectPhase(protocol, 'early-budget', 'post-ui'), PHASE_SCENARIOS['early-budget']))
+  assert.doesNotThrow(() => assertScenarioMatchesProtocol(selectPhase(protocol, 'early-budget', 'post-ui'), productionScenario('early-budget', 'post-ui')))
   // 生产桥只接线已登记的场景；每个场景的 caseId 与 operation id 必须逐字等于协议。
   for (const phase of ['early-budget', 'early-context', 'early-review']) {
     assert.equal(PHASE_SCENARIOS[phase].caseId, protocol.phases[phase].caseIds[0])
@@ -452,10 +508,10 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
       `${fixture.slice(repairStart, repairEnd)}\nreturn structuredSyntaxRepair`)
     const checkAuthority = new Function('operationKind', 'candidate', 'request', 'db', 'chapter', 'promptText',
       'preflight', 'authorityFacts', 'predecessorReadbacks', 'naturalPredecessorText', 'scene', 'structuredSyntaxRepair',
-      `const fullRun = request.phase === 'full', continuityRun = false;\n${fixture.slice(checkStart, checkEnd)}`)
+      `const fullRun = request.phase === 'full', continuityRun = false, reviewedRun = false;\n${fixture.slice(checkStart, checkEnd)}`)
     const readAuthorityEvidence = new Function('operationKind', 'candidate', 'request', 'authorityFacts', 'sha',
       'promptText', 'structuredSyntaxRepair', 'predecessorReadbacks', 'db', 'chapter',
-      `const continuityRun = false; return ${fixture.slice(evidenceStart, evidenceEnd).trim().replace(/,$/, '')}`)
+      `const continuityRun = false, reviewedRun = false; return ${fixture.slice(evidenceStart, evidenceEnd).trim().replace(/,$/, '')}`)
     const facts = ['fact sent', 'fact absent from repair']
     const request = { phase: 'early-budget', chapterNumber: 1 }
     const ledgerPath = path.join(dir, 'ledger.jsonl')
@@ -1018,7 +1074,7 @@ test('请求规模证据只存字节数、取自真正出站的请求体，且�
   // 先收口，父进程 spawn 与 Vitest 依次兜底。
   assert.ok(BRIDGE_SETTLEMENT_DEADLINE_MS * 3 < BRIDGE_SPAWN_TIMEOUT_MS)
   assert.ok(BRIDGE_SPAWN_TIMEOUT_MS < BRIDGE_TEST_TIMEOUT_MS)
-  assert.ok(fixture.includes('}, BRIDGE_TEST_TIMEOUT_MS)'), 'fixture 顶层测试必须使用同一外层预算')
+  assert.ok(fixture.includes('BRIDGE_REVIEWED_TEST_TIMEOUT_MS : BRIDGE_TEST_TIMEOUT_MS)'), 'fixture 顶层测试必须使用同一外层预算')
 })
 
 test('bridge 在记账前按 operation 校验出站权威，且只把真实 provider 失败归入 fetchFailures', () => {
@@ -1065,8 +1121,32 @@ test('early-review 从生产定稿历史发送必需前章，而不是借当前�
     'early-review 必须校验必需前章已进入材料准入收据')
   assert.ok(fixture.includes('REVIEW_PROMPT_PRIVATE_FIXTURE_LEAK'), '真实出站 prompt 必须拒绝夹具元话语和私有修法泄露')
   assert.match(fixture,
-    /request\.phase === 'early-review' && operationKind === 'refine'[\s\S]*?OUTBOUND_REFINE_SOURCE_DRAFT_MISSING[\s\S]*?\} else if \(!structuredSyntaxRepair\) \{[\s\S]*?OUTBOUND_ORACLE_AUTHORITY_MISSING/,
+    /request\.phase === 'early-review'[\s\S]*?operationKind === 'refine'[\s\S]*?OUTBOUND_REFINE_SOURCE_DRAFT_MISSING[\s\S]*?\} else if \(!structuredSyntaxRepair\) \{[\s\S]*?OUTBOUND_ORACLE_AUTHORITY_MISSING/,
     '定向修稿应校验当前正文与已确认审稿绑定，不得要求重复发送不属于该 prompt 合同的全套世界观')
+})
+
+test('S14B reviewed refine rejects any missing registered author fact before reserve on both arms', () => {
+  const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
+  const checkStart = fixture.indexOf("      if (operationKind === 'recheck' && candidate)")
+  const checkEnd = fixture.indexOf("      if (candidate && request.phase === 'early-context')", checkStart)
+  const reserve = fixture.indexOf("record({ type: 'reserve', attemptId, binding })", checkEnd)
+  assert.ok(checkStart > 0 && checkEnd > checkStart && reserve > checkEnd)
+  const check = new Function('candidate', 'db', 'chapter', 'promptText', 'authorityFacts', 'preflight',
+    'request', 'structuredSyntaxRepair',
+    `const operationKind = 'refine', reviewedRun = true, continuityRun = false, fullRun = false;\n${fixture.slice(checkStart, checkEnd)}`)
+  const chapter = source.scenes[0].chapters[0]
+  const facts = Object.values(chapter.oracle).flatMap(value => Array.isArray(value) ? value : [value])
+  assert.equal(facts.length, 6)
+  const draft = 'S14B source draft'
+  const db = { prepare: () => ({ pluck: () => ({ get: () => draft }) }) }
+  for (const candidate of [false, true]) {
+    const run = promptText => check(candidate, db, chapter, promptText, facts,
+      createOutboundPreflightAssert([]), { phase: 'early-budget', chapterNumber: 1 }, false)
+    assert.doesNotThrow(() => run(`${draft}\n${facts.join('\n')}`))
+    assert.throws(() => run(facts.join('\n')), /OUTBOUND_REFINE_SOURCE_DRAFT_MISSING/)
+    for (const fact of facts) assert.throws(() => run(`${draft}\n${facts.filter(value => value !== fact).join('\n')}`),
+      /OUTBOUND_ORACLE_AUTHORITY_MISSING/, `refine ${candidate ? 'candidate' : 'baseline'} must send ${fact}`)
+  }
 })
 
 test('early-review 提供已实现代价验收标准且正文不泄露固定修法', () => {
@@ -1086,7 +1166,7 @@ test('early-review 提供已实现代价验收标准且正文不泄露固定修�
     assert.ok(text.includes(fact), `review source 缺少 oracle 事实：${fact}`)
   assert.ok(text.includes('周砚只说旧设备清单记过一面备用镜，自己从未见过实物'))
   assert.ok(text.includes('把便签别进未办夹，昨夜日志仍停在原来的最后一行'))
-  assert.match(fixture, /authorGuidance: '.*人物已经执行选择.*具体损失或牺牲已经发生.*后文不保留相反状态.*签字认责/)
+  assert.match(fixture, /authorGuidance: .*人物已经执行选择.*具体损失或牺牲已经发生.*后文不保留相反状态.*签字认责/)
   assert.match(fixture, /reviewFocus: '.*严格只输出模板约定的 JSON 根对象.*具体损失已经发生.*后文没有反证.*签字认责/)
 
   const validAlternatives = [
@@ -1391,11 +1471,11 @@ test('post-UI pair accepts only one evidenced syntax repair per arm and retains 
       const identity = owner(`${arm}-${id}`, purpose, operation)
       return { attemptId: `${arm}:${identity.attemptId}`, outputPath, visibleTextHash: hash(content),
         binding: { invocationId, mode: 'real', arm, phase: 'early-budget', milestone: 'post-ui', caseId: '场景1/1',
-          protocolRevision: protocol.decisionRevision, protocolHash: protocolBinding.protocolHash, operation,
+          protocolRevision: 'pacing-readability-v1', protocolHash: protocolBinding.protocolHash, operation,
           ...(arm === 'candidate' ? { actual: identity } : { baselineIpc: identity }) } }
     })
     return { invocationId, mode: 'real', arm, phase: 'early-budget', milestone: 'post-ui', caseId: '场景1/1',
-      protocolRevision: protocol.decisionRevision, protocolHash: protocolBinding.protocolHash, status: 'failed',
+      protocolRevision: 'pacing-readability-v1', protocolHash: protocolBinding.protocolHash, status: 'failed',
       physicalModelRequests: attempts.length, syntheticDispatches: 0, attempts,
       projectEpoch: 'epoch', physicalProject: { projectId: 'project' },
       operations: [{ operation: policy.operationId, handle: { runId: 'run', rootActionId: 'root' } }],

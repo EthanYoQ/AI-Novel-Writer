@@ -10,7 +10,7 @@ import { updateLedger, CAMPAIGN_ID } from '../quality-modernization-run.mjs'
 import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, createOperationDispatchGate,
   createOutboundPreflightAssert, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
   fetchProviderResponse, measurePromptBytes, BRIDGE_SETTLEMENT_DEADLINE_MS,
-  BRIDGE_TEST_TIMEOUT_MS } from '../quality-modernization-driver.mjs'
+  BRIDGE_TEST_TIMEOUT_MS, BRIDGE_REVIEWED_TEST_TIMEOUT_MS, POST_UI_REVIEW_POLICY, reviewedDraftSelection } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, recordPersistedDraftObservation, safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
 
 // This adapter replaces the Electron transport, never a command/runtime/repository.
@@ -43,6 +43,12 @@ const syntheticDraftText = (countUnits, targetUnits, chapterNumber = 1) => {
   while (countUnits(lines.join('\n')) < targetUnits && lines.length < 500) lines.push(line(lines.length))
   return lines.join('\n')
 }
+const reviewedSyntheticIssues = [
+  { category: '物品', severity: 'error', description: '铜钥匙保管人与作者事实冲突。',
+    quote: '清晨，林澄把铜钥匙交给门卫保管。', replacement: '清晨，林澄核对第一行登记，铜钥匙仍由她保管。' },
+  { category: '知情', severity: 'warning', description: '沈岸提前知道地图，违反作者知情边界。',
+    quote: '雨还未停，沈岸已经知道信封内有地图。', replacement: '雨还未停，林澄没有向沈岸透露信封里的地图。' },
+]
 const optionalPredecessorBody = spec => `${spec.line.repeat(spec.repeat)}\n${spec.marker}`
 const previousChapterEnding = content => {
   const trimmed = content.trim()
@@ -166,6 +172,12 @@ test('isolated production commands persist the selected phase operations', async
   const request = JSON.parse(requestBytes)
   const target = request.target
   const fullRun = request.phase === 'full'
+  const reviewedRun = Boolean(request.evaluationPolicy)
+  if (reviewedRun) {
+    assert.equal(request.phase, 'early-budget', 'REVIEWED_DRAFT_SCOPE_INVALID')
+    assert.equal(request.milestone, 'post-ui', 'REVIEWED_DRAFT_SCOPE_INVALID')
+    assert.deepEqual(request.evaluationPolicy, POST_UI_REVIEW_POLICY, 'REVIEWED_DRAFT_POLICY_DRIFT')
+  }
   const continuityRun = request.phase === 'c16-c18'
   const evidenceRoot = request.evidenceRoot ?? target.isolationRoot
   const source = json(request.semanticPath)
@@ -197,6 +209,7 @@ test('isolated production commands persist the selected phase operations', async
     phase: request.phase, milestone: request.milestone, caseId: request.caseId, sceneId: request.sceneId, chapterNumber: request.chapterNumber,
     operations: [], qualification: request.development ? 'development-only-unfrozen' : 'frozen-target', codeSha: target.codeSha,
     sourceHash: target.sourceHash, driverHash: request.driverHash,
+    ...(reviewedRun ? { evaluationPolicy: request.evaluationPolicy } : {}),
     runtime: { node: process.version, abi: process.versions.modules }, physicalModelRequests: 0, syntheticDispatches: 0,
     invocations: [], attempts: [], status: 'running' }
   const candidate = target.arm === 'candidate'
@@ -329,7 +342,7 @@ test('isolated production commands persist the selected phase operations', async
       return { before: before.snapshot.source, after: after.snapshot.source, content, draftId: created.id, version: current.version }
     }
     const prompts = await load('src/services/prompt-templates.ts')
-    const templateKeys = templateKeysForPhase(request.phase)
+    const templateKeys = [...templateKeysForPhase(request.phase), ...(reviewedRun ? ['consistency_check', 'refine_from_review'] : [])]
     if (request.action === 'prepare') {
       let templates
       if (!candidate || continuityRun) {
@@ -683,10 +696,12 @@ test('isolated production commands persist the selected phase operations', async
           preflight(promptText.includes(finding.finding_id), 'OUTBOUND_RECHECK_FINDING_ID_MISSING')
           preflight(promptText.includes(finding.target_id), 'OUTBOUND_RECHECK_TARGET_ID_MISSING')
         }
-      } else if (request.phase === 'early-review' && operationKind === 'refine') {
+      } else if ((request.phase === 'early-review' || reviewedRun) && operationKind === 'refine') {
         const activeDraft = db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC,d.id DESC LIMIT 1')
           .pluck().get(chapter.number)
         preflight(typeof activeDraft === 'string' && promptText.includes(activeDraft), 'OUTBOUND_REFINE_SOURCE_DRAFT_MISSING')
+        if (reviewedRun) for (const fact of authorityFacts)
+          preflight(promptText.includes(fact), `OUTBOUND_ORACLE_AUTHORITY_MISSING:${fact}`)
       } else if (continuityRun && ['chapter_notes', 'character_cards'].includes(operationKind)) {
         const manifest = JSON.parse(db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(actual.runId)).sourceManifest
         const task = manifest.finalizationGenerationTask
@@ -756,9 +771,10 @@ test('isolated production commands persist the selected phase operations', async
         authorityEvidence: operationKind === 'recheck' && candidate
           ? { mergedDraftHash: sha(db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1')
               .pluck().get(chapter.number)), findingAnchorsSent: true }
-          : request.phase === 'early-review' && operationKind === 'refine'
+          : (request.phase === 'early-review' || reviewedRun) && operationKind === 'refine'
             ? { sourceDraftHash: sha(db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC,d.id DESC LIMIT 1')
-                .pluck().get(chapter.number)), confirmedReviewBound: candidate ? materialDecision.included.some(item => item.sourceId.startsWith('review:confirmed:')) : true }
+                .pluck().get(chapter.number)), confirmedReviewBound: candidate ? materialDecision.included.some(item => item.sourceId.startsWith('review:confirmed:')) : true,
+              ...(reviewedRun ? { factHashes: authorityFacts.map(sha), allFactsSent: authorityFacts.every(fact => promptText.includes(fact)) } : {}) }
           : continuityRun && ['chapter_notes', 'character_cards'].includes(operationKind)
             ? { finalizedSource: finalizedContext.slot.source, contextHash: sha(finalizedContext) }
           : { factHashes: authorityFacts.map(sha), allFactsSent: authorityFacts.every(fact => promptText.includes(fact)),
@@ -788,12 +804,25 @@ test('isolated production commands persist the selected phase operations', async
           text = JSON.stringify({ updates: [{ characterId: character.characterId,
             currentState: { recentEvents: '发现日期异常，决定到现场核查', mentalState: '决定核查' }, evidence: { text: identity.content } }] })
         }
+        else if (reviewedRun && ['review', 'final-review'].includes(operationKind)) {
+          const current = latestDraft().content
+          const issues = reviewedSyntheticIssues.filter(item => current.includes(item.quote))
+          const actionable = operationKind === 'review' ? issues : request.syntheticReviewedDraftCase === 'final-fail'
+            ? [{ category: '自然度', severity: 'warning', description: '仍有重复描述，留给独立评审判断。', quote: current.split('\n')[2] }] : []
+          text = JSON.stringify({ summary: actionable.length ? '存在需要修复的问题。' : '本轮未发现问题。',
+            items: actionable.length ? actionable.map(item => ({ category: item.category, severity: item.severity,
+              description: item.description, quote: item.quote }))
+              : [{ category: '本章目标', severity: 'pass', description: '本轮未发现需要修复的问题。' }],
+            goalReviews: chapter.requiredEvents.map((event, index) => ({ id: `ch${chapter.number}:keyEvents:${index + 1}`,
+              status: 'completed', description: `${event}已有正文证据。`, evidence: [{ quote: current.split('\n')[2] }] })) })
+        }
         else if (operationKind === 'review') text = syntheticReview(chapter)
         else if (operationKind === 'refine') {
           const current = db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1')
             .pluck().get(chapter.number)
           assert.equal(typeof current, 'string', 'REVIEW_SOURCE_DRAFT_MISSING')
-          text = current.replace(REVIEW_DEFECT, REVIEW_FIX)
+          text = reviewedRun ? reviewedSyntheticIssues.reduce((value, item) => value.replace(item.quote, item.replacement), current)
+            : current.replace(REVIEW_DEFECT, REVIEW_FIX)
           assert.notEqual(text, current, 'SYNTHETIC_TARGETED_REVISION_MISSING')
         } else if (operationKind === 'recheck') {
           if (candidate) {
@@ -814,7 +843,13 @@ test('isolated production commands persist the selected phase operations', async
                 description: `${event}已有正文证据。`, evidence: [{ quote: index === 0 ? '核查途中突遇断电，核查受阻。' : REVIEW_FIX }],
               })) })
           }
-        } else text = syntheticDraftText(countUnits, chapter.targetUnits, fullRun ? chapter.number : 1)
+        } else {
+          text = syntheticDraftText(countUnits, chapter.targetUnits, fullRun ? chapter.number : 1)
+          if (reviewedRun && request.syntheticReviewedDraftCase !== 'none') {
+            const issues = request.syntheticReviewedDraftCase === 'single' ? reviewedSyntheticIssues.slice(0, 1) : reviewedSyntheticIssues
+            issues.forEach((item, index) => { text = text.replace(`清晨，林澄核对第${index + 1}行登记，发现日期异常。`, item.quote) })
+          }
+        }
         const promptTokens = Math.max(1, Math.ceil(Buffer.byteLength(JSON.stringify(body.messages), 'utf8') / 4))
         const completionTokens = Math.max(1, Math.ceil(Buffer.byteLength(text, 'utf8') / 4))
         const usage = { prompt_tokens: promptTokens, completion_tokens: completionTokens,
@@ -857,9 +892,12 @@ test('isolated production commands persist the selected phase operations', async
     const latestDraft = () => db.prepare(`SELECT d.id,d.chapter_number AS chapterNumber,d.version,d.status,d.word_count AS wordCount,c.body AS content
       FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1`).get(chapter.number)
     const reviewState = {}
+    const reviewedDraft = reviewedRun ? {} : null
+    const artifact = (outputPath, content, extra = {}) => ({ ...extra, outputPath, contentHash: sha(content) })
     for (const operation of request.operations) {
       operationKind = operation.kind
       operationId = operation.id
+      if (reviewedRun && ['refine', 'final-review'].includes(operationKind) && reviewedDraft.selectedCount === 0) continue
       currentContext = { runId: randomUUID(), projectPath: project.rootPath, projectSession: session, writingLanguage: 'zh-CN',
         uiLocale: 'zh-CN', generationModelId: model.id, data: { architecture: authorityText, existingBlueprints: [] }, cancelled: false }
       const params = { context: currentContext, callbacks, step: { id: operationId, title: operationId } }
@@ -893,17 +931,27 @@ test('isolated production commands persist the selected phase operations', async
         const draftPath = candidate
           ? `ai-novel://draft/${sourceDraft.id}`
           : `vela://draft/ch${sourceDraft.chapterNumber}/v${sourceDraft.version}`
-        if (operationKind === 'review') {
+        if (operationKind === 'review' || operationKind === 'final-review') {
           command = new (await load('src/services/workflows/commands/review-chapter.command.ts')).ReviewChapterCommand({
             draftPath, draftContent: sourceDraft.content, sourceDraft: frozenSource, chapterNumber: chapter.number,
-            reviewFocus: '只核对本章必需事件、作者事实与明确证据，不检查字数。对于“承担代价”，只有人物已经执行选择、具体损失或牺牲已经发生、后文没有反证，才算完成；签字认责或承诺以后负责不算代价。',
+            reviewFocus: reviewedRun ? `核对本章全部必需事件、作者事实、字数、复述、自然度、人物动机和节奏可读性。只依据作者资料、蓝图及待审正文给出问题与原文证据；不得新增作者事实。\n${chapterGuidance}` : '只核对本章必需事件、作者事实与明确证据，不检查字数。对于“承担代价”，只有人物已经执行选择、具体损失或牺牲已经发生、后文没有反证，才算完成；签字认责或承诺以后负责不算代价。',
           })
         } else if (operationKind === 'refine') {
           const sourceReview = await invoke('db:review-get-full', reviewState.reviewId, project.rootPath, session)
           assert.ok(sourceReview?.sourceDraft, 'SOURCE_REVIEW_NOT_PERSISTED')
           const report = JSON.parse(sourceReview.content)
-          let cycleId, selected
-          if (candidate) {
+          let cycleId, selected, selectedItems
+          if (reviewedRun) {
+            const items = reviewedDraftSelection(report)
+            assert.ok(items.length > 0, 'REVIEWED_DRAFT_NO_SELECTED_ITEMS')
+            const cycle = candidate ? await invoke('db:review-cycle-get', sourceReview.id, project.rootPath, session) : null
+            cycleId = cycle?.cycleId
+            selectedItems = items.map(item => {
+              const index = report.items.indexOf(item)
+              const finding = cycle?.findings.find(entry => entry.reviewItemIndex === index)
+              return { ...item, ...(finding ? { findingId: finding.findingId } : {}), decision: 'apply', origin: 'ai' }
+            })
+          } else if (candidate) {
             const cycle = db.prepare('SELECT cycle_id FROM review_cycles WHERE review_id=?').get(sourceReview.id)
             const finding = cycle && db.prepare(`SELECT finding_id,target_id,category,span_start,span_end FROM review_findings
               WHERE cycle_id=? AND target_id IS NOT NULL AND status IN ('unresolved','unknown') ORDER BY finding_id LIMIT 1`).get(cycle.cycle_id)
@@ -921,7 +969,7 @@ test('isolated production commands persist the selected phase operations', async
           const human = await load('src/shared/human-confirmed-review.ts')
           const snapshot = human.createHumanConfirmedReviewSnapshot({ sourceReviewId: sourceReview.id,
             sourceDraft: sourceReview.sourceDraft, ...(cycleId ? { cycleId } : {}), summary: report.summary,
-            authorGuidance: '只修复已选问题，其余正文保持不变。若问题要求人物在当章承担代价，必须同时满足三项：人物已经执行选择，具体损失或牺牲已经发生，后文不保留相反状态。签字认责、保证负责、简单否定翻转或承诺以后付出都不算代价。', items: [selected],
+            authorGuidance: reviewedRun ? `只修复本次全部已选问题，保留全部作者事实与必需事件，不新增物品史、人物身份或知情事实；其余内容保持不变。\n作者事实：\n${authorityFacts.join('\n')}\n本章必需事件：\n${chapter.requiredEvents.join('\n')}` : '只修复已选问题，其余正文保持不变。若问题要求人物在当章承担代价，必须同时满足三项：人物已经执行选择，具体损失或牺牲已经发生，后文不保留相反状态。签字认责、保证负责、简单否定翻转或承诺以后付出都不算代价。', items: selectedItems ?? [selected],
             ...(report.goalReview ? { goalReview: report.goalReview } : {}) })
           assert.ok(snapshot, 'CONFIRMATION_SNAPSHOT_INVALID')
           const confirmationContent = human.serializeHumanConfirmedReviewSnapshot(snapshot)
@@ -929,8 +977,13 @@ test('isolated production commands persist the selected phase operations', async
             content: confirmationContent, expectedSource: sourceReview.sourceDraft }, project.rootPath, session)
           assert.ok(confirmation?.success && confirmation.id, 'CONFIRMATION_NOT_PERSISTED')
           reviewState.confirmation = { reviewId: confirmation.id, contentHash: sha(confirmationContent),
-            selectedItemHash: sha(selected), selectedFindingIds: selected.findingId ? [selected.findingId] : [],
+            selectedItemHash: sha(selectedItems ?? selected), selectedFindingIds: (selectedItems ?? [selected]).flatMap(item => item.findingId ? [item.findingId] : []),
             ...(cycleId ? { cycleId } : {}) }
+          if (reviewedRun) {
+            const confirmationPath = path.join(evidenceRoot, 'author-confirmation.json')
+            fs.writeFileSync(confirmationPath, confirmationContent)
+            reviewedDraft.confirmation = artifact(confirmationPath, confirmationContent, { reviewId: confirmation.id })
+          }
           command = new (await load('src/services/workflows/commands/refine-from-review.command.ts')).RefineFromReviewCommand({
             draftPath, draftContent: sourceDraft.content, sourceDraft: frozenSource, chapterNumber: chapter.number,
             reviewSourceId: confirmation.id, confirmedReviewContent: confirmationContent,
@@ -948,7 +1001,7 @@ test('isolated production commands persist the selected phase operations', async
       const result = await command.execute(params)
       await Promise.all(streamSettlements)
       if (!fullRun || operationKind !== 'directory') assert.deepEqual(db.prepare('SELECT chapter_number,title,role,purpose,key_events,characters,user_guidance FROM blueprints WHERE chapter_number>1 ORDER BY chapter_number').all(), authorBlueprints, 'OUTSIDE_RANGE_REWRITTEN')
-      const outputPath = path.join(evidenceRoot, `${receipt.operations.length + 1}-${operationKind}.${['directory', 'review', 'recheck'].includes(operationKind) ? 'json' : 'txt'}`)
+      const outputPath = path.join(evidenceRoot, `${receipt.operations.length + 1}-${operationKind}.${['directory', 'review', 'recheck', 'final-review'].includes(operationKind) ? 'json' : 'txt'}`)
       fs.writeFileSync(outputPath, typeof result === 'string' ? result : JSON.stringify(result, null, 2))
       const operationReceipt = { operation: operationId, kind: operationKind, returnedHash: sha(result),
         outputHash: sha(result), outputPath, handle: currentContext.mainGenerationRunHandle ?? null }
@@ -981,7 +1034,10 @@ test('isolated production commands persist the selected phase operations', async
           }
         }
       }
-      if (operationKind === 'review') {
+      if (reviewedRun && operationKind === 'draft') {
+        reviewedDraft.initial = artifact(outputPath, typeof result === 'string' ? result : JSON.stringify(result), { draftId: latestDraft().id })
+      }
+      if (operationKind === 'review' || operationKind === 'final-review') {
         const stored = await invoke('db:review-get-latest', sourceDraft.id, project.rootPath, session)
         assert.ok(stored?.id && stored.content, 'REVIEW_NOT_PERSISTED')
         const cycleId = candidate ? db.prepare('SELECT cycle_id FROM review_cycles WHERE review_id=?').pluck().get(stored.id) : null
@@ -989,6 +1045,17 @@ test('isolated production commands persist the selected phase operations', async
         reviewState.review = { reviewId: stored.id, contentHash: sha(stored.content), ...(cycleId ? { cycleId } : {}) }
         operationReceipt.outputHash = reviewState.review.contentHash
         reviewState.source = { draftId: sourceDraft.id, contentHash: sha(sourceDraft.content) }
+        if (reviewedRun) {
+          fs.writeFileSync(outputPath, stored.content)
+          const savedReview = artifact(outputPath, stored.content, { reviewId: stored.id, sourceHash: sha(sourceDraft.content) })
+          if (operationKind === 'review') {
+            reviewedDraft.review = savedReview
+            const selected = reviewedDraftSelection(JSON.parse(stored.content))
+            reviewedDraft.selectedCount = selected.length
+            reviewedDraft.selectedItemsHash = sha(selected)
+            reviewedDraft.disposition = selected.length ? 'revised-once' : 'no-actionable-review'
+          } else reviewedDraft.finalReview = savedReview
+        }
       } else if (operationKind === 'refine') {
         const revision = db.prepare(`SELECT r.id,r.status,c.body FROM revisions r JOIN contents c ON c.id=r.content_id
           WHERE r.base_draft_id=? ORDER BY r.revision_index DESC LIMIT 1`).get(sourceDraft.id)
@@ -998,6 +1065,13 @@ test('isolated production commands persist the selected phase operations', async
           expectedDraftContent: sourceDraft.content, mergedContent: revision.body, wordCount: countUnits(revision.body) }, project.rootPath, session)
         assert.ok(merged?.success && merged.receipt, 'TARGETED_REVISION_NOT_MERGED')
         reviewState.merge = { mergedHash: sha(revision.body), ...(merged.receipt.reviewCycle ?? {}) }
+        if (reviewedRun) {
+          fs.writeFileSync(outputPath, revision.body)
+          operationReceipt.outputHash = sha(revision.body)
+          reviewedDraft.revision = artifact(outputPath, revision.body, { revisionId: revision.id })
+          reviewedDraft.mergeHash = sha(latestDraft().content)
+          assert.equal(reviewedDraft.mergeHash, reviewedDraft.revision.contentHash, 'REVIEWED_DRAFT_MERGE_MISMATCH')
+        }
       } else if (operationKind === 'recheck') {
         const stored = await invoke('db:review-get-latest', sourceDraft.id, project.rootPath, session)
         assert.ok(stored?.id && stored.content, 'RECHECK_NOT_PERSISTED')
@@ -1026,6 +1100,12 @@ test('isolated production commands persist the selected phase operations', async
       const draft = db.prepare('SELECT d.*,c.body AS content FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC').all(chapter.number)
       assert.equal(draft.length, 1, 'ACTUAL_DRAFT_NOT_SAVED')
       const units = countUnits(draft[0].content)
+      if (reviewedRun) {
+        const finalPath = path.join(evidenceRoot, 'reviewed-final-draft.txt')
+        fs.writeFileSync(finalPath, draft[0].content)
+        reviewedDraft.finalDraft = artifact(finalPath, draft[0].content, { draftId: draft[0].id, version: draft[0].version })
+        receipt.reviewedDraft = reviewedDraft
+      }
       recordPersistedDraftObservation(receipt, { chapterNumber: chapter.number, targetUnits: chapter.targetUnits,
         units, contentHash: sha(draft[0].content) })
       receipt.saved = { chapterNumber: chapter.number, targetUnits: chapter.targetUnits,
@@ -1113,4 +1193,4 @@ test('isolated production commands persist the selected phase operations', async
       ledgerBytes: fs.readFileSync(request.ledgerPath, 'utf8'), recoveryRows, targetUnits: chapter.targetUnits,
       isolationRoot: target.isolationRoot, localDispatchGateRejection })
   }
-}, BRIDGE_TEST_TIMEOUT_MS)
+}, json(process.env.QUALITY_BRIDGE_REQUEST).evaluationPolicy ? BRIDGE_REVIEWED_TEST_TIMEOUT_MS : BRIDGE_TEST_TIMEOUT_MS)

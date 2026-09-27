@@ -16,6 +16,13 @@ test('real receipts preserve stable targeted-review failure codes without exposi
   assert.equal(safeReceiptDiagnostic(new Error('provider said secret'), 'real'), 'REAL_PROVIDER_DIAGNOSTIC_REDACTED')
 })
 
+test('reviewed-draft revision preserves candidate units without changing historical ranges', () => {
+  for (const units of [630, 1170]) assert.doesNotThrow(() => recordPersistedDraftObservation(
+    { protocolRevision: 's14b-reviewed-draft-v1', arm: 'candidate' }, { chapterNumber: 1, targetUnits: 900, units, contentHash: 'a'.repeat(64) }))
+  for (const units of [629, 1171]) assert.throws(() => recordPersistedDraftObservation(
+    { protocolRevision: 's14b-reviewed-draft-v1', arm: 'candidate' }, { chapterNumber: 1, targetUnits: 900, units, contentHash: 'a'.repeat(64) }), { code: 'TARGET_UNITS_FAILED' })
+})
+
 test('current receipts use 70%-130% while historical receipts retain 80%-120%', () => {
   for (const units of [630, 680, 1170]) assert.doesNotThrow(() => recordPersistedDraftObservation(
     { protocolRevision: 'pacing-readability-v1', arm: 'candidate' }, { chapterNumber: 1, targetUnits: 900, units, contentHash: 'a'.repeat(64) }))

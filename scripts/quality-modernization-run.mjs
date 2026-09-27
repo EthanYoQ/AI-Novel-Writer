@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import os from 'node:os'
-import { runProductionCommandProbe, runProductionPhasePair, productionBridgeHash, productionExecutionRuntime, PRODUCTION_BRIDGE, PHASE_SCENARIOS } from './quality-modernization-driver.mjs'
+import { runProductionCommandProbe, runProductionPhasePair, productionBridgeHash, productionExecutionRuntime, productionScenario, PRODUCTION_BRIDGE, PHASE_SCENARIOS } from './quality-modernization-driver.mjs'
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CACHE = path.join(ROOT, '.runtime', '.cache', 'novel-quality-modernization')
@@ -69,7 +69,9 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
   // current revision, so only the stable envelope is rechecked here.
   if (historical) return
   assertProtocolBinding(binding)
-  const phase = protocol.phases[binding.phase]
+  const registeredPhase = protocol.phases[binding.phase]
+  const phase = registeredPhase && { ...registeredPhase,
+    ...(binding.milestone === 'post-ui' ? registeredPhase.postUi ?? {} : {}) }
   if (!phase || !Array.isArray(phase.operations) || !Array.isArray(phase.caseIds)
     || !phase.caseIds.includes(binding.caseId)
     || !phase.operations.some(operation => operation.id === binding.operation && (!operation.caseIds || operation.caseIds.includes(binding.caseId)))) fail('INVALID_CAMPAIGN_BINDING')
@@ -239,7 +241,8 @@ export function selectPhase(protocol, phase, milestone = 'early') {
   if (!['early', 'post-ui', 'final'].includes(milestone)) fail('INVALID_MILESTONE')
   if (!Object.hasOwn(protocol.phases, phase)) fail('INVALID_PHASE')
   if ((['full', 'c16-c18'].includes(phase)) !== (milestone === 'final')) fail('PHASE_MILESTONE_MISMATCH')
-  return { phase, milestone, ...protocol.phases[phase] }
+  return { phase, milestone, ...protocol.phases[phase],
+    ...(milestone === 'post-ui' ? protocol.phases[phase].postUi ?? {} : {}) }
 }
 /**
  * 生产桥只是协议的执行者：场景登记的 caseId 与 operation id 必须逐字等于该阶段的
@@ -251,7 +254,8 @@ export function assertScenarioMatchesProtocol(selection, scenario) {
     || selection.operations.some((operation, index) => operation.id !== scenario.operations[index].id)
     || (selection.scenarioRevision ?? null) !== (scenario.scenarioRevision ?? null)
     || !isDeepStrictEqual(selection.selectionDifference ?? null, scenario.selectionDifference ?? null)
-    || !isDeepStrictEqual(selection.attemptPolicy ?? null, scenario.attemptPolicy ?? null)) fail('SCENARIO_PROTOCOL_MISMATCH')
+    || !isDeepStrictEqual(selection.attemptPolicy ?? null, scenario.attemptPolicy ?? null)
+    || !isDeepStrictEqual(selection.evaluationPolicy ?? null, scenario.evaluationPolicy ?? null)) fail('SCENARIO_PROTOCOL_MISMATCH')
   if (!isDeepStrictEqual(selection.arms ?? null, scenario.arms ?? null)) fail('SCENARIO_PROTOCOL_MISMATCH')
 }
 export function validatePair(targets, observations) {
@@ -442,14 +446,14 @@ export function main(argv) {
     // 零模型开发路径只跑已登记的场景；默认仍是 early-budget，逐字保持原有行为。
     // 它永远只产出 development-only-unfrozen 收据，不构成冻结目标资格。
     const phase = args['--scenario'] ?? 'early-budget'
-    const scenario = PHASE_SCENARIOS[phase]
+    const scenario = productionScenario(phase, args['--milestone'] ?? PHASE_SCENARIOS[phase]?.milestone)
     if (!scenario) fail('PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED')
     const selection = selectPhase(protocol, phase, args['--milestone'] ?? scenario.milestone)
     assertScenarioMatchesProtocol(selection, scenario)
     const developmentLedger = developmentLedgerPath(prepared.root, phase)
     if (fs.existsSync(developmentLedger)) fail('DEVELOPMENT_LEDGER_COLLISION')
     const result = withLedgerReconciliation(developmentLedger, 'synthetic', () => runProductionPhasePair(prepared.targets, { phase, development: true, mode: 'synthetic', milestone: selection.milestone,
-      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, order: protocol.order,
+      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, evaluationPolicy: selection.evaluationPolicy, order: protocol.order,
       ...currentProtocolBinding(),
       semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(prepared.root, 'baseline-templates.json'), ledgerPath: developmentLedger }))
     fs.writeFileSync(path.join(prepared.root, `development-receipt-${phase}.json`), JSON.stringify(result, null, 2))
@@ -465,7 +469,7 @@ export function main(argv) {
     validatePair(targets, observations)
     const phase = command === 'dry-run' ? 'early-budget' : command
     const selection = selectPhase(protocol, phase, args['--milestone'] || PHASE_SCENARIOS[phase]?.milestone || 'early')
-    const scenario = PHASE_SCENARIOS[phase]
+    const scenario = productionScenario(phase, selection.milestone)
     if (!scenario) return { status: 'blocked', code: 'PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED', selection, physicalModelRequests: 0 }
     assertScenarioMatchesProtocol(selection, scenario)
     const mode = command === 'dry-run' || args['--dry-run'] ? 'synthetic' : args['--mode']
@@ -478,7 +482,7 @@ export function main(argv) {
     // 真实或合成的成对执行失败时先对账：子进程被杀不会执行桥内结算，
     // 只有调用方还活着，这是保证每次发送都有终态的最后一道。
     const result = withLedgerReconciliation(ledgerPath, mode, () => runProductionPhasePair(targets, { phase, mode, milestone: selection.milestone,
-      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, order: protocol.order,
+      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, evaluationPolicy: selection.evaluationPolicy, order: protocol.order,
       ...currentProtocolBinding(), semanticPath: path.join(ROOT, protocol.fixturePath),
       templatesPath: path.join(evidenceRoot, 'baseline-templates.json'), ledgerPath }))
     inspectTarget(targets.baseline); inspectTarget(targets.candidate)

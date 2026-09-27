@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "novel-quality-program-v3-80-v1",
-  "decisionRevision": "pacing-readability-v1",
+  "decisionRevision": "s14b-reviewed-draft-v1",
   "status": "approved-requires-committed-target-freeze-before-experiment",
   "language": "zh-CN",
   "decisionPolicy": {
@@ -99,7 +99,55 @@
           "arms": 2,
           "minimumCalls": 2
         }
-      ]
+      ],
+      "postUi": {
+        "scenarioRevision": "s14b-post-ui-reviewed-budget-v1",
+        "minimumCalls": 6,
+        "maximumPlannedCalls": 12,
+        "evaluationPolicy": {
+          "revision": "s14b-post-ui-reviewed-draft-v1",
+          "selection": "all-error-warning-in-report-order",
+          "confirmation": "test-preauthorized-original-items",
+          "merge": "accept-only-revision",
+          "finalReview": "ordinary-full-review",
+          "noAction": "retain-initial-draft",
+          "maxRevisions": 1,
+          "qualityDecision": "independent-oracle-final-text"
+        },
+        "operations": [
+          {
+            "id": "指定范围生成",
+            "callsPerArm": 1,
+            "arms": 2,
+            "minimumCalls": 2,
+            "kind": "directory"
+          },
+          {
+            "id": "900单位正文",
+            "callsPerArm": 1,
+            "arms": 2,
+            "minimumCalls": 2,
+            "kind": "draft"
+          },
+          {
+            "id": "成稿首审",
+            "kind": "review",
+            "minimumCalls": 2
+          },
+          {
+            "id": "成稿一次修稿",
+            "kind": "refine",
+            "minimumCalls": 0,
+            "conditional": "actionable-review"
+          },
+          {
+            "id": "成稿完整复评",
+            "kind": "final-review",
+            "minimumCalls": 0,
+            "conditional": "actionable-review"
+          }
+        ]
+      }
     },
     "early-context": {
       "scenarioRevision": "s10b-early-context-selection-difference-v3",
