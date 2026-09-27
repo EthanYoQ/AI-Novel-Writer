@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path'
 
 const script = resolve('scripts/probe-legacy-project-open.mjs')
 const fixtureRoot = resolve('.runtime/cache/s14c-old-binaries')
+mkdirSync(fixtureRoot, { recursive: true })
 const legacyExe = join(fixtureRoot, 'v1.1.0/unpacked-a11/app/AI小说作家.exe')
 const hash = input => createHash('sha256').update(input).digest('hex')
 
@@ -70,7 +71,7 @@ test('roster proof refuses a CDP port owned by a different process', { skip: pro
 
 test('renderer reload in the same official process cannot count as a roster restart', { skip: process.platform !== 'win32' || !existsSync(legacyExe), timeout: 30_000 }, async () => {
   const root = mkdtempSync(join(fixtureRoot, 't-'))
-  writeFileSync(join(root, '.vibe-owner.json'), JSON.stringify({ owner: 'probe-legacy-project-open.test.mjs', sourceProject: resolve(),
+  writeFileSync(join(root, '.vibe-owner.json'), JSON.stringify({ owner: 'probe-legacy-project-open.node.mjs', sourceProject: resolve(),
     createdAt: new Date().toISOString(), ttlUntil: new Date(Date.now() + 7 * 86_400_000).toISOString(),
     reason: 'Isolated same-process reload fixture retained after a recursive cleanup approval block',
     cleanupCommand: 'Remove-Item -LiteralPath <this exact verified fixture path> -Recurse -Force' }))
