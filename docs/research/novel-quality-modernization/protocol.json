@@ -1,13 +1,18 @@
 {
   "schemaVersion": 2,
   "id": "novel-quality-program-v3-80-v1",
-  "decisionRevision": "s14b-reviewed-draft-v1",
+  "decisionRevision": "s14b-split-quality-gates-v1",
   "status": "approved-requires-committed-target-freeze-before-experiment",
   "language": "zh-CN",
   "decisionPolicy": {
-    "scope": "S10B early-context",
+    "scope": "future S14B post-UI and final 18 chapters; prior decisions remain historical",
     "baselineRole": "frozen-reference-only",
-    "baselineTargetUnitsFailure": "reference-nonconforming only when a persisted, hash-verifiable local artifact is available for independent review; it does not automatically reject a conforming candidate",
+    "baselineTechnicalEndpoint": "required",
+    "baselineContentValidity": "independent-from-candidate-absolute-gates",
+    "candidateAbsoluteResult": "independent-oracle-only",
+    "baselineContentFailureOrUnknown": "does not reject a candidate absolute result when the baseline production endpoint, original/final saved text, hashes, source and identity are technically valid; relative naturalness and character-motivation comparison remains INCONCLUSIVE where incomparable",
+    "invalidTechnicalEndpoint": "provider/IPC failure, missing saved original or final draft, missing review/refine predecessor, unverifiable text/hash/source/identity or interrupted full sequence fail the pair technical gate",
+    "baselineTargetUnitsFailure": "historical S10B reference adjudication only; future S14B requires a completed saved production endpoint and does not admit a local target-units exception",
     "invalidReference": [
       "provider failure",
       "IPC failure",
@@ -17,9 +22,10 @@
     "candidateAbsoluteGates": [
       "draft units within 70%-130%",
       "all required events",
-      "zero fact errors",
+      "zero fact errors including time and event continuity",
       "recap rule",
-      "style review"
+      "style review",
+      "existing two-reviewer pacing readability floor"
     ],
     "automatedOutcomeCeiling": "pending-independent-oracle-review",
     "historyPolicy": "retain every failure, retry, missing result and interruption in intention-to-treat; never retrospectively reclassify or select the best run"
@@ -106,6 +112,90 @@
       { "attemptId": "candidate:3daf53a6-1c34-4c64-9fa3-4552b78480af", "invocationId": "a5be6f35-3568-4147-a238-403c67f4acfd", "terminal": "settle" },
       { "attemptId": "candidate:c0ccd181-af6c-48a6-8c97-5c17c21c8ece", "invocationId": "a5be6f35-3568-4147-a238-403c67f4acfd", "terminal": "settle" },
       { "attemptId": "candidate:923b6099-3b92-48df-8e93-a255b289aee2", "invocationId": "a5be6f35-3568-4147-a238-403c67f4acfd", "terminal": "settle" }
+    ]
+  },
+  "historicalS14BSplitBoundary": {
+    "fromEventCount": 345,
+    "eventCount": 390,
+    "rawBytesSha256": "fb6b291b69aefc6c2699ddaa2eb780610f9957da54f1603c7c87ea3a7f61ab2a",
+    "protocolRevision": "s14b-reviewed-draft-v1",
+    "protocolHash": "977fed026b4e35a673365a534b227bde7b0eaefe106d1e8cd73d8a4148218b25",
+    "reserveAttempts": [
+      {
+        "attemptId": "baseline:0205eb7a-863d-4e1d-bed6-71ff876634cf",
+        "invocationId": "d9f755e1-d1ff-4fcd-8f39-b41957b3f428",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "baseline:556b68d7-8592-4cd1-9dbf-c61742277bc2",
+        "invocationId": "d9f755e1-d1ff-4fcd-8f39-b41957b3f428",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "baseline:007929ff-df33-44e0-bbc0-f7f0337ada67",
+        "invocationId": "d9f755e1-d1ff-4fcd-8f39-b41957b3f428",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:69fcf6d3-bac3-4a9a-9d26-0cb11f350db8",
+        "invocationId": "d9f755e1-d1ff-4fcd-8f39-b41957b3f428",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:74513e65-94dc-48af-a500-69f5f06e2010",
+        "invocationId": "d9f755e1-d1ff-4fcd-8f39-b41957b3f428",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:e5920b06-f982-4655-90ef-c94d03d0c491",
+        "invocationId": "d9f755e1-d1ff-4fcd-8f39-b41957b3f428",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:b1b7daba-3443-4503-95a5-31784ccbf806",
+        "invocationId": "d9f755e1-d1ff-4fcd-8f39-b41957b3f428",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:61426a22-c37d-45ae-a33a-26d487347fe7",
+        "invocationId": "d9f755e1-d1ff-4fcd-8f39-b41957b3f428",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "baseline:20008dea-5fa6-4144-a5db-ad45bd489094",
+        "invocationId": "6df8518d-30ec-4b7c-9828-2393e751becf",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "baseline:444f1699-db55-40e9-a2ed-35098077e00c",
+        "invocationId": "6df8518d-30ec-4b7c-9828-2393e751becf",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "baseline:a27fc783-821d-4705-832d-09aba9d35499",
+        "invocationId": "6df8518d-30ec-4b7c-9828-2393e751becf",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "baseline:7a947760-745c-4c68-a512-ee010971d6c2",
+        "invocationId": "6df8518d-30ec-4b7c-9828-2393e751becf",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:22df56db-e879-496a-9279-3884bdc90e0d",
+        "invocationId": "6df8518d-30ec-4b7c-9828-2393e751becf",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:50cfbea0-1132-4449-a5e9-69966fda973f",
+        "invocationId": "6df8518d-30ec-4b7c-9828-2393e751becf",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:e5bb58d2-e24b-4f43-82c5-79bd66e3c20d",
+        "invocationId": "6df8518d-30ec-4b7c-9828-2393e751becf",
+        "terminal": "settle"
+      }
     ]
   },
   "phases": {
@@ -338,7 +428,7 @@
     ],
     "reviewers": 2,
     "reviewerEligibility": "未参与实现且不是生成器自评",
-    "nonInferiority": "后续post-UI与最终18章：自然度和人物动机两人逐章比较均无劣；节奏逐章比较并完整披露，候选须独立达到pacingReadability；节奏较弱时仅可称本revision质量合格，不得称整体non-inferior",
+    "nonInferiority": "后续post-UI与最终18章：自然度和人物动机两名盲评逐维引用两臂原文并说明可比性；可比时判优/平/劣且均不得劣，不可比时该维为INCONCLUSIVE、综合不得PASS；分歧最多一次既有独立仲裁。baseline内容fail/unknown不自动否决candidate独立绝对结果，也不把不可比当平或宣称改善。节奏逐章比较并完整披露，候选须独立达到pacingReadability；节奏较弱时仅可称本revision质量合格，不得称整体non-inferior",
     "pacingReadability": {
       "appliesTo": ["post-ui", "final"],
       "perChapter": true,

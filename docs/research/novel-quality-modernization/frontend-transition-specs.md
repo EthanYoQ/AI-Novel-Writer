@@ -92,6 +92,8 @@
 
 quality-protocol/protocol.json 继续拥有 candidate ±30%、draft-units v3、参考臂裁决、事实/事件/复述/自然度规则；2026-09-27 用户选择 B 后，仅未来 post-UI 与最终18章节奏资格采用其中的双评可读底线，逐章节奏比较及原文证据仍完整披露，自然度/人物动机比较无劣和其余硬门不变，历史 FAIL 不改判。80 是计划额，不是硬帽。旧 baseline 原代码、唯一物理账本、失败/unknown/重试保留，移植不换已批准 provider、样本或其他评分。
 
+未来新冻结的 `s14b-split-quality-gates-v1` 将 candidate 绝对门与 baseline 文学内容有效性分开：baseline 已完成且 hash/来源/身份可核验的生产终点，即使内容 FAIL/UNKNOWN，也不自动否决 candidate 的事实（含时间）、事件、字数、复述、来源和既有节奏双评可读底线。baseline 缺真实 saved 原稿/成稿、审修链、前驱或其他技术证据仍阻断。自然度和人物动机依旧逐维相对无劣：两名盲评引用原文并说明可比性，可比时判优/平/劣，不可比为 INCONCLUSIVE；分歧最多一次既有仲裁。绝对门通过但任一必需相对维度不可比，不得将综合 S14B 记 PASS 或宣称改善。`6df8518d-30ec-4b7c-9828-2393e751becf` 原 INCONCLUSIVE、历史 FAIL 和旧账本不改判。新实验仍先冻结原场景、seed、顺序、次数、停止条件与协议 hash，自动 runner 最高 pending。
+
 主线程安排原协议的两名独立非实现文学评审及一次必要仲裁，worker 不再派生；与此次两名计划顾问审计不是同一件事。报告 failed/inconclusive/本 revision 合格/相应维度改善，并披露节奏较弱项；有节奏劣项不得称整体 non-inferior 或全面优于参考。post-UI 完成才补足 F05，不能继续抽样挑优。
 
 ## S14C — 升级与中断恢复

@@ -18,6 +18,12 @@ test('real receipts preserve stable targeted-review failure codes without exposi
 
 test('reviewed-draft revision preserves candidate units without changing historical ranges', () => {
   for (const units of [630, 1170]) assert.doesNotThrow(() => recordPersistedDraftObservation(
+    { protocolRevision: 's14b-split-quality-gates-v1', arm: 'candidate' }, { chapterNumber: 1, targetUnits: 900, units, contentHash: 'a'.repeat(64) }))
+  for (const units of [629, 1171]) assert.throws(() => recordPersistedDraftObservation(
+    { protocolRevision: 's14b-split-quality-gates-v1', arm: 'candidate' }, { chapterNumber: 1, targetUnits: 900, units, contentHash: 'a'.repeat(64) }), { code: 'TARGET_UNITS_FAILED' })
+  assert.throws(() => recordPersistedDraftObservation(
+    { protocolRevision: 's14b-split-quality-gates-v1', arm: 'baseline' }, { chapterNumber: 1, targetUnits: 900, units: 630, contentHash: 'a'.repeat(64) }), { code: 'TARGET_UNITS_FAILED' })
+  for (const units of [630, 1170]) assert.doesNotThrow(() => recordPersistedDraftObservation(
     { protocolRevision: 's14b-reviewed-draft-v1', arm: 'candidate' }, { chapterNumber: 1, targetUnits: 900, units, contentHash: 'a'.repeat(64) }))
   for (const units of [629, 1171]) assert.throws(() => recordPersistedDraftObservation(
     { protocolRevision: 's14b-reviewed-draft-v1', arm: 'candidate' }, { chapterNumber: 1, targetUnits: 900, units, contentHash: 'a'.repeat(64) }), { code: 'TARGET_UNITS_FAILED' })

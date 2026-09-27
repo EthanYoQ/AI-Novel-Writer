@@ -109,6 +109,15 @@ test('reviewed draft evidence rejects skipped issues, best-version picking and c
       saved: { chapterNumber: 1, targetUnits: 100, units: 100, contentHash: initial.contentHash } }))
     assert.equal(classifyProductionPair(pendingPair, { mode: 'real', phase: 'early-budget' }).status,
       'pending-independent-oracle-review')
+    const splitPair = pendingPair.map(value => ({ ...value, protocolRevision: 's14b-split-quality-gates-v1' }))
+    assert.equal(classifyProductionPair(splitPair, { mode: 'real', phase: 'early-budget' }).status,
+      'pending-independent-oracle-review', '真实 unknown 报告与有效审修链仍只到独立评审待判')
+    assert.equal(classifyProductionPair([{ ...splitPair[0], reviewedDraft: null }, splitPair[1]],
+      { mode: 'real', phase: 'early-budget' }).pairFailure, 'REVIEWED_DRAFT_EVIDENCE_INVALID')
+    assert.equal(classifyProductionPair([splitPair[0], { ...splitPair[1], status: 'failed' }],
+      { mode: 'real', phase: 'early-budget' }).status, 'failed')
+    assert.equal(classifyProductionPair([{ ...splitPair[0], status: 'failed', saved: null }, splitPair[1]],
+      { mode: 'real', phase: 'early-budget' }).status, 'failed')
     fs.writeFileSync(passReview.outputPath, JSON.stringify({ items: [{ severity: 'pass' }] }))
     assert.equal(validateReviewedDraft(noAction).valid, false, 'changed full original review must fail')
     fs.writeFileSync(passReview.outputPath, unknownReview)
@@ -388,7 +397,11 @@ test('三乘三两臂与原80帽含post-UI备份预留', () => {
   assert.equal(selectPhase(protocol, 'full', 'final').caseIds.length, 9)
   assert.equal(protocol.phases['early-budget'].operations.reduce((n, op) => n + op.minimumCalls, 0), 4)
   assert.equal(protocol.allocation.postUiBudget, 4)
-  assert.equal(protocol.decisionRevision, 's14b-reviewed-draft-v1')
+  assert.equal(protocol.decisionRevision, 's14b-split-quality-gates-v1')
+  assert.equal(protocol.decisionPolicy.baselineContentValidity, 'independent-from-candidate-absolute-gates')
+  assert.equal(protocol.decisionPolicy.baselineTechnicalEndpoint, 'required')
+  assert.equal(protocol.decisionPolicy.candidateAbsoluteResult, 'independent-oracle-only')
+  assert.match(protocol.oracle.nonInferiority, /不可比.*INCONCLUSIVE/)
   assert.deepEqual(protocol.oracle.pacingReadability.appliesTo, ['post-ui', 'final'])
   assert.equal(protocol.oracle.pacingReadability.requirements.length, 4)
   assert.match(protocol.oracle.nonInferiority, /节奏逐章比较并完整披露/)
@@ -1185,6 +1198,30 @@ test('旧 reviewed-draft 段认证两次 invocation 和末项 unknown', () => {
   assert.throws(() => validateHistoricalSupersessionBoundary(raw.replace('unknown', 'settle'), 0, boundary), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
   assert.throws(() => validateHistoricalSupersessionBoundary(raw, 0, { ...boundary,
     reserveAttempts: [...attempts, attempts[0]] }), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+})
+
+test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂移', () => {
+  const campaignRoot = registeredCampaignWorktree(spawnSync('git', ['worktree', 'list', '--porcelain'], {
+    cwd: ROOT, encoding: 'utf8' }).stdout)
+  const ledger = path.join(campaignRoot, '.runtime/.cache/novel-quality-modernization/physical-ledger.jsonl')
+  const raw = fs.readFileSync(ledger, 'utf8')
+  const boundary = protocol.historicalS14BSplitBoundary
+  assert.equal(boundary.fromEventCount, 345)
+  assert.equal(boundary.eventCount, 390)
+  assert.equal(validateHistoricalSupersessionBoundary(raw, 345, boundary), 390)
+  assert.equal(validatePhysicalLedger(ledger), ledger)
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/split-boundary-'))
+  const file = path.join(dir, 'synthetic-ledger.jsonl')
+  try {
+    fs.writeFileSync(file, raw)
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, {
+      campaignMode: 'synthetic', historicalLedgerBoundary: protocol.historicalLedgerBoundary,
+      historicalSupersessionBoundary: protocol.historicalSupersessionBoundary,
+      historicalReviewedDraftBoundary: protocol.historicalReviewedDraftBoundary,
+      historicalReviewRebuildBoundary: protocol.historicalReviewRebuildBoundary,
+      historicalS14BSplitBoundary: { ...boundary, rawBytesSha256: '0'.repeat(64) },
+    }), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
 test('超时守护为每个 dispatch 独立计时：先写 unknown 再 abort，且后续 attempt 不继承残余预算', async () => {

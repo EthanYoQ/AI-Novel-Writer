@@ -1,6 +1,12 @@
 # 中文质量预注册：Program v3 S00
 
-现行 decision revision 仍为 `s14b-reviewed-draft-v1`，字数标准仍采用 `draft-units-tolerance-30-v1`（2026-09-20 用户决定）；未来 post-UI 测试的评估策略 revision 为 `s14b-post-ui-reviewed-draft-unknown-oracle-v2`（2026-09-27 用户批准 unknown 单独终点）。保留 `pacing-readability-v1` 节奏规则。完整机器协议及其他 revision 见 [`protocol.json`](protocol.json)；新协议完整字节 hash 须重新冻结，旧目标拒绝漂移。本文件负责解释执行规则与冻结合同的显式取代关系。S10B/S11 的历史场景、失败和加性裁决保留各自版本；[日期化交接](../../handoffs/2026-09-20-program-v3-s11-pause-handoff.md)只证明当时状态，当前进度读唯一私有当前检查点。全部 Spec 的适用关系见[现行索引](current-spec-index.md)。合成验证、真实模型结果与文学质量结论分开记录。
+现行 decision revision 为 `s14b-split-quality-gates-v1`；`s14b-reviewed-draft-v1` 及其结论保留为历史。candidate 字数标准仍采用 `draft-units-tolerance-30-v1`（2026-09-20 用户决定）；未来 post-UI 测试的评估策略 revision 为 `s14b-post-ui-reviewed-draft-unknown-oracle-v2`（2026-09-27 用户批准 unknown 单独终点）。保留 `pacing-readability-v1` 节奏规则。完整机器协议及其他 revision 见 [`protocol.json`](protocol.json)；新协议完整字节 hash 须重新冻结，旧目标拒绝漂移。本文件负责解释执行规则与冻结合同的显式取代关系。S10B/S11 的历史场景、失败和加性裁决保留各自版本；[日期化交接](../../handoffs/2026-09-20-program-v3-s11-pause-handoff.md)只证明当时状态，当前进度读唯一私有当前检查点。全部 Spec 的适用关系见[现行索引](current-spec-index.md)。合成验证、真实模型结果与文学质量结论分开记录。
+
+## S14B 未来样本的门禁拆分
+
+本 revision 仅适用于新冻结的 post-UI 与最终18章；事先冻结同一场景、seed、两臂顺序、次数和停止条件。生产链先通过技术门：baseline 原生产代码和原稿/成稿真实保存，正文 hash、来源、请求及项目身份、审修链、前驱和物理账本均可核验；candidate 同样须有完整技术终点。baseline 若在本地字数门抛错、缺 saved/后续审修或 full 前驱不可达，仍是技术无效，整组不得通过。第346–390行历史账本以原始字节 SHA-256 和15组 reserve/dispatch/settle 加性认证，原345行边界及全部历史失败不改。invocation `6df8518d-30ec-4b7c-9828-2393e751becf` 原 INCONCLUSIVE 不追溯改判。
+
+技术门有效后，candidate 的事实（含时间、事件）、逐章±30%生产单位、复述、来源和既有双评节奏可读底线是独立绝对门；baseline 的文学内容 FAIL/UNKNOWN 不自动否决 candidate 绝对结论，也不变成 baseline PASS。自然度与人物动机仍执行原相对无劣硬门：两名盲评逐章逐维引用两臂原文、说明可比性；可比时判优/平/劣，不可比为 INCONCLUSIVE。分歧最多一次既有独立仲裁；未解决、candidate 任一绝对门失败或未知、任一相对必需维度劣或不可比时，S14B 综合不得 PASS。candidate 绝对门 PASS 不等于 S14B PASS，不能把不可比记平或声称改善。自动 runner 最高只报 `pending-independent-oracle-review`，文学裁决由独立评审作出，不从模型审稿结果推算。
 
 ## 测试专用成稿评估（第一切片）
 
