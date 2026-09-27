@@ -21,8 +21,9 @@ import { projectRecoveryCandidateSupplement, readVerifiedRecoveryCandidateSupple
   readVerifiedDirectPersistedDraftEvidence, recordPersistedDraftObservation,
   safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
 import Database from 'better-sqlite3'
-import { POST_UI_REVIEW_POLICY, reviewedDraftSelection, validateReviewedDraft, productionScenario } from '../quality-modernization-driver.mjs'
+import { POST_UI_REVIEW_POLICY, reviewedDraftSelection, validateReviewedDraft, productionScenario, scenarioAuthorSetting } from '../quality-modernization-driver.mjs'
 import { countDraftUnits } from '../../src/shared/draft-units'
+import { freezeChapterGoals } from '../../src/shared/chapter-goal-review'
 import { parseReviewGenerationResult } from '../../src/shared/review-generation-report'
 
 const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
@@ -46,7 +47,7 @@ test('post-UI reviewed draft policy selects every actionable item without changi
   assert.throws(() => reviewedDraftSelection({ items: [{ severity: 'invented' }] }), /REVIEWED_DRAFT_REPORT_INVALID/)
   const selected = selectPhase(protocol, 'early-budget', 'post-ui')
   assert.deepEqual(selected.evaluationPolicy, POST_UI_REVIEW_POLICY)
-  assert.equal(selected.scenarioRevision, 's14b-post-ui-reviewed-budget-review-rebuild-v1')
+  assert.equal(selected.scenarioRevision, 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2')
   assert.equal(selected.maximumPlannedCalls, 14)
   assert.deepEqual(selected.attemptPolicy.reviewRebuild, PHASE_SCENARIOS['early-budget'].attemptPolicy.reviewRebuild)
   assertScenarioMatchesProtocol(selected, productionScenario('early-budget', 'post-ui'))
@@ -54,6 +55,119 @@ test('post-UI reviewed draft policy selects every actionable item without changi
   assert.equal(selectPhase(protocol, 'early-budget').evaluationPolicy, undefined)
   assert.equal(selectPhase(protocol, 'full', 'final').evaluationPolicy, undefined)
   assert.deepEqual(validateReviewedDraft({}), { valid: false, pairFailure: 'REVIEWED_DRAFT_EVIDENCE_INVALID' })
+})
+
+const MUST_SHOW_SCENARIO_REVISION = 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2'
+const MUST_SHOW_LINE = '【第1章必现】林澄保管铜钥匙'
+test('post-UI must-show v3 adopts author must-show unknown goals with actionable items in one revision', () => {
+  assert.equal(POST_UI_REVIEW_POLICY.revision, 's14b-post-ui-reviewed-draft-must-show-unknown-v3')
+  assert.equal(POST_UI_REVIEW_POLICY.selection, 'all-error-warning-and-must-show-unknown-in-report-order')
+  assert.equal(POST_UI_REVIEW_POLICY.mustShowGoalId, '^ch\\d+:mustShow:\\d+$')
+  assert.equal(POST_UI_REVIEW_POLICY.maxRevisions, 1)
+  // 不对称必须在策略本身披露，策略原样进入协议、manifest 与每臂 receipt。
+  for (const key of ['baseline', 'candidate', 'claim']) assert.ok(POST_UI_REVIEW_POLICY.armAsymmetry[key].trim())
+  assert.match(POST_UI_REVIEW_POLICY.armAsymmetry.claim, /不得.*声称相对改善/u)
+  const keyUnknown = { category: '本章目标', goalId: 'ch1:keyEvents:1', severity: 'unknown', description: '发现异常\n证据不足' }
+  const mustShow = { category: '本章目标', goalId: 'ch1:mustShow:1', severity: 'unknown', description: '林澄保管铜钥匙\n未明示' }
+  const warning = { category: '自然度', severity: 'warning', description: '修复重复', quote: '重复句' }
+  const error = { category: '事实', severity: 'error', description: '恢复保管事实', quote: '钥匙丢失' }
+  const coverage = { category: '本章目标', severity: 'unknown', description: '覆盖不完整' }
+  const lookalike = { category: '本章目标', goalId: 'ch1:mustShowX:1', severity: 'unknown', description: '非必现目标' }
+  const completed = { category: '本章目标', goalId: 'ch1:mustShow:2', severity: 'pass', description: '已明示', quote: '钥匙' }
+  const report = { items: [{ severity: 'pass', category: '事实', description: '保持' }, keyUnknown, warning, mustShow, lookalike, error, coverage, completed] }
+  assert.deepEqual(reviewedDraftSelection(report), { selected: [warning, mustShow, error], disposition: 'revised-once' },
+    'error/warning 与 mustShow unknown 按原报告顺序共用唯一修稿；非必现 unknown 不被采纳')
+  assert.deepEqual(reviewedDraftSelection({ items: [keyUnknown, mustShow, coverage] }),
+    { selected: [mustShow], disposition: 'revised-once' }, '仅有必现 unknown 时同样只触发一次修稿')
+  assert.equal(mustShow.severity, 'unknown', '选择不改写原 unknown')
+  // baseline 2264390d 不识别标记：其报告最多只有 keyEvents unknown，按原 unknown-only 规则保留初稿。
+  assert.deepEqual(reviewedDraftSelection({ items: [keyUnknown, coverage, report.items[0]] }),
+    { selected: [], disposition: 'no-actionable-review-with-unresolved-goals' })
+  assert.deepEqual(reviewedDraftSelection({ items: [report.items[0], completed] }), { selected: [], disposition: 'no-actionable-review' },
+    '首稿自然满足必现目标时修复分支不触发')
+  const post = selectPhase(protocol, 'early-budget', 'post-ui')
+  assert.equal(post.scenarioRevision, MUST_SHOW_SCENARIO_REVISION)
+  assert.equal(productionScenario('early-budget', 'post-ui').scenarioRevision, MUST_SHOW_SCENARIO_REVISION)
+  assert.equal(selectPhase(protocol, 'early-budget').scenarioRevision, 's14b-post-ui-budget-syntax-repair-v1')
+})
+
+test('must-show scenario revision adds the marker only to the post-UI scene 1 world setting', () => {
+  const legacy = scene => [scene.material, scene.longSetting].filter(Boolean).join('\n')
+  const revisions = [null, ...Object.values(PHASE_SCENARIOS).map(item => item.scenarioRevision),
+    's14b-post-ui-reviewed-budget-review-rebuild-v1']
+  for (const scene of source.scenes) for (const revision of revisions)
+    assert.equal(scenarioAuthorSetting(scene, revision), legacy(scene), `${scene.id}/${revision}`)
+  const [scene1, ...others] = source.scenes
+  assert.equal(scenarioAuthorSetting(scene1, MUST_SHOW_SCENARIO_REVISION), `${legacy(scene1)}\n${MUST_SHOW_LINE}`)
+  for (const scene of others) assert.equal(scenarioAuthorSetting(scene, MUST_SHOW_SCENARIO_REVISION), legacy(scene))
+  // 产品冻结目标只在新场景 revision 下多出 ch1:mustShow:1；其余事实、事件与字数不变。
+  const goals = setting => freezeChapterGoals(1, scene1.chapters[0].requiredEvents.join('；'), [setting]).items
+  assert.deepEqual(goals(legacy(scene1)).map(item => item.id), ['ch1:keyEvents:1', 'ch1:keyEvents:2'])
+  assert.deepEqual(goals(scenarioAuthorSetting(scene1, MUST_SHOW_SCENARIO_REVISION)).at(-1),
+    { id: 'ch1:mustShow:1', text: '林澄保管铜钥匙' })
+  assert.deepEqual(scene1.chapters[0].requiredEvents, ['发现异常', '决定核查'])
+  assert.equal(scene1.chapters[0].targetUnits, 900)
+  assert.equal(scene1.chapters[0].oracle.item, '铜钥匙始终由林澄保管')
+})
+
+test('must-show v3 reviewed chain keeps unknown labels and rejects tampering or the superseded v2 policy', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/must-show-chain-'))
+  const artifact = (name, text, extra = {}) => {
+    const outputPath = path.join(dir, name)
+    fs.writeFileSync(outputPath, text)
+    return { ...extra, outputPath, contentHash: hash(text) }
+  }
+  try {
+    const items = [{ category: '本章目标', goalId: 'ch1:keyEvents:1', severity: 'unknown', description: '发现异常\n证据不足' },
+      { category: '事实', severity: 'error', description: '保管人错误', quote: '初稿' },
+      { category: '本章目标', goalId: 'ch1:mustShow:1', severity: 'unknown', description: '林澄保管铜钥匙\n未明示' }]
+    const selectedItems = items.slice(1)
+    const initial = artifact('initial.txt', '初稿句子')
+    const review = artifact('review.json', JSON.stringify({ items }), { reviewId: 1, sourceHash: initial.contentHash })
+    const confirmationOf = values => JSON.stringify({ sourceReviewId: 1, sourceDraft: { content: '初稿句子' },
+      items: values.map(item => ({ ...item, decision: 'apply', origin: 'ai', ...(item.goalId ? { findingId: `finding:${item.goalId}` } : {}) })) })
+    const confirmation = artifact('confirmation.json', confirmationOf(selectedItems))
+    const revision = artifact('revision.txt', '唯一修订正文。林澄保管铜钥匙。')
+    const finalReview = artifact('final-review.json', JSON.stringify({ items: [{ severity: 'pass', description: '已明示' }] }),
+      { sourceHash: revision.contentHash })
+    const finalDraft = artifact('final.txt', '唯一修订正文。林澄保管铜钥匙。')
+    const operations = productionScenario('early-budget', 'post-ui').operations.map(item => ({ operation: item.id, kind: item.kind }))
+    for (const [kind, saved] of [['draft', initial], ['review', review], ['refine', revision], ['final-review', finalReview]])
+      Object.assign(operations.find(item => item.kind === kind), { outputHash: saved.contentHash, outputPath: saved.outputPath })
+    const result = { evaluationPolicy: POST_UI_REVIEW_POLICY, operations, saved: { contentHash: finalDraft.contentHash },
+      draftObservation: { contentHash: finalDraft.contentHash }, reviewedDraft: { initial, review, confirmation, revision,
+        finalReview, finalDraft, mergeHash: revision.contentHash, selectedCount: 2, selectedItemsHash: hash(selectedItems),
+        disposition: 'revised-once' } }
+    assert.equal(validateReviewedDraft(result).valid, true)
+    // candidate（及未声明臂）采纳的必现 unknown 必须带产品 review-cycle findingId；baseline 无 review-cycle，不要求。
+    const withoutFinding = JSON.stringify({ sourceReviewId: 1, sourceDraft: { content: '初稿句子' },
+      items: selectedItems.map(item => ({ ...item, decision: 'apply', origin: 'ai' })) })
+    for (const [arm, findingText, valid] of [['candidate', confirmationOf(selectedItems), true],
+      ['candidate', withoutFinding, false], [undefined, withoutFinding, false], ['baseline', withoutFinding, true],
+      ['candidate', withoutFinding.replace('"origin":"ai"}]', '"origin":"ai","findingId":" "}]'), false]]) {
+      const changed = structuredClone(result)
+      changed.arm = arm
+      changed.reviewedDraft.confirmation = artifact('confirmation-arm.json', findingText)
+      assert.equal(validateReviewedDraft(changed).valid, valid, `${arm}:${valid}`)
+    }
+    const rewrite = (file, text) => { fs.writeFileSync(file.outputPath, text); file.contentHash = hash(text) }
+    const relabelled = confirmationOf(selectedItems.map(item => item.goalId ? { ...item, severity: 'error' } : item))
+    for (const mutate of [value => { value.reviewedDraft.selectedItemsHash = hash(items.slice(1, 2)) },
+      value => { value.reviewedDraft.selectedCount = 1 },
+      value => { value.reviewedDraft.disposition = 'no-actionable-review-with-unresolved-goals' },
+      value => { rewrite(value.reviewedDraft.confirmation, relabelled) },
+      value => { rewrite(value.reviewedDraft.confirmation, confirmationOf(items.slice(1, 2))) },
+      value => { value.evaluationPolicy = { revision: 's14b-post-ui-reviewed-draft-unknown-oracle-v2',
+        selection: 'all-error-warning-in-report-order', confirmation: 'test-preauthorized-original-items',
+        merge: 'accept-only-revision', finalReview: 'ordinary-full-review', noAction: 'retain-initial-draft',
+        unknownOnly: 'retain-initial-draft-and-full-review-pending-independent-goal-proof',
+        maxRevisions: 1, qualityDecision: 'independent-oracle-final-text' } }]) {
+      const changed = structuredClone(result)
+      changed.reviewedDraft.confirmation = artifact('confirmation.json', confirmationOf(selectedItems))
+      mutate(changed)
+      assert.equal(validateReviewedDraft(changed).valid, false)
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
 test('reviewed draft evidence rejects skipped issues, best-version picking and changed artifacts', () => {
@@ -1226,7 +1340,8 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
   const ledger = path.join(dir, '.runtime/.cache/novel-quality-modernization/physical-ledger.jsonl')
   const file = path.join(dir, 'synthetic-ledger.jsonl')
   const archive = ['historicalSupersessionBoundary', 'historicalReviewedDraftBoundary',
-    'historicalReviewRebuildBoundary', 'historicalS14BSplitBoundary', 'historicalPostUi408Boundary']
+    'historicalReviewRebuildBoundary', 'historicalS14BSplitBoundary', 'historicalPostUi408Boundary',
+    'historicalC16Ee3435ecBoundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -1250,7 +1365,8 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
         const arm = item.attemptId.split(':')[0]
         triplet(item.attemptId, { protocolRevision: original.protocolRevision,
           protocolHash: original.protocolHash, invocationId: item.invocationId,
-          ...(original.armBindings ? { arm, ...original.armBindings[arm] } : {}) }, item.terminal)
+          ...(original.armBindings ? { arm, ...original.armBindings[arm] } : {}),
+          ...(item.parityId ? { parityId: item.parityId } : {}) }, item.terminal)
       }
       boundaries[name] = { ...original, rawBytesSha256: hash(rows.map(JSON.stringify).join('\n') + '\n') }
     }
@@ -1280,6 +1396,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     }
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 345, real.boundaries.historicalS14BSplitBoundary), 390)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 390, real.boundaries.historicalPostUi408Boundary), 408)
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 408, real.boundaries.historicalC16Ee3435ecBoundary), 432)
     assert.equal(validatePhysicalLedger(ledger), ledger)
     fs.writeFileSync(file, synthetic.raw)
     const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
@@ -1331,6 +1448,98 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     syncBuiltinESMExports()
     fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('C16 ee3435ec 单臂历史段只在登记为历史时放行，之后严格按当前协议', () => {
+  const c16 = protocol.historicalC16Ee3435ecBoundary
+  assert.deepEqual([c16.fromEventCount, c16.eventCount, c16.reserveAttempts.length], [408, 432, 8])
+  assert.deepEqual(Object.keys(c16.armBindings), ['candidate'])
+  assert.equal(c16.protocolHash, '459faac156091628a6c8d84c7e1321610af4dec06f000ade75d44510dfc74961')
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/c16-boundary-'))
+  const file = path.join(dir, 'synthetic-ledger.jsonl')
+  const envelope = { campaignId: CAMPAIGN_ID, mode: 'synthetic', phase: 'c16-c18', milestone: 'final', caseId: 'C16-A', operation: '定稿章节要点' }
+  const twoArm = { baseline: { codeSha: '1'.repeat(40), sourceHash: '2'.repeat(64), driverHash: '3'.repeat(64), parityId: '4'.repeat(64) },
+    candidate: { codeSha: '5'.repeat(40), sourceHash: '6'.repeat(64), driverHash: '3'.repeat(64), parityId: '4'.repeat(64) } }
+  const oldTwoArm = { protocolRevision: 's14b-split-quality-gates-v1', protocolHash: 'a'.repeat(64) }
+  const twoArmAttempts = ['baseline:0a9c1a8e-0000-4000-8000-000000000001', 'candidate:0a9c1a8e-0000-4000-8000-000000000002']
+    .map(attemptId => ({ attemptId, invocationId: '0807270b-f5c5-495c-bd71-5f1d6e9a32c1', terminal: 'settle' }))
+  const old = { protocolRevision: c16.protocolRevision, protocolHash: c16.protocolHash }
+  const candidate = { codeSha: 'e'.repeat(40), sourceHash: 'f'.repeat(64), driverHash: 'd'.repeat(64) }
+  const c16Attempts = [['9', 'settle'], ['8', 'settle'], ['8', 'unknown']].map(([parity, terminal], index) => ({
+    attemptId: `candidate:1726d37a-74d1-43cb-925e-00000000000${index}`, invocationId: '97b6ccf0-63b0-454e-97f5-71e5efc7b39c',
+    terminal, parityId: parity.repeat(64) }))
+  const rows = []
+  for (const item of twoArmAttempts) {
+    const arm = item.attemptId.split(':')[0]
+    rows.push({ type: 'reserve', attemptId: item.attemptId, binding: { ...envelope, arm, ...twoArm[arm], ...oldTwoArm,
+      invocationId: item.invocationId }, allocation: 'C16ExistingExtraction' },
+    { type: 'dispatch', attemptId: item.attemptId }, { type: item.terminal, attemptId: item.attemptId })
+  }
+  for (const item of c16Attempts) rows.push({ type: 'reserve', attemptId: item.attemptId, binding: { ...envelope, arm: 'candidate', ...candidate,
+    parityId: item.parityId, ...old, invocationId: item.invocationId }, allocation: 'C16ExistingExtraction' },
+  { type: 'dispatch', attemptId: item.attemptId }, { type: item.terminal, attemptId: item.attemptId })
+  const text = list => list.map(JSON.stringify).join('\n') + '\n'
+  const raw = text(rows)
+  const postUi = { fromEventCount: 0, eventCount: 6, rawBytesSha256: hash(text(rows.slice(0, 6))), ...oldTwoArm,
+    armBindings: twoArm, reserveAttempts: twoArmAttempts }
+  const boundary = { fromEventCount: 6, eventCount: 15, rawBytesSha256: hash(raw), ...old,
+    armBindings: { candidate }, reserveAttempts: c16Attempts }
+  const options = { campaignMode: 'synthetic', historicalPostUi408Boundary: postUi, historicalC16Ee3435ecBoundary: boundary }
+  const current = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'baseline', codeSha: 'a'.repeat(40),
+    sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
+    phase: 'early-budget', milestone: 'early', caseId: '场景1/1', operation: '指定范围生成', ...currentProtocolBinding() }
+  const evidence = /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/, invalid = /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/
+  try {
+    // e) 既有两臂边界（armBindings 含整臂 parityId）语义不变。
+    assert.equal(validateHistoricalSupersessionBoundary(raw, 0, postUi), 6)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 0, { ...postUi,
+      armBindings: { ...twoArm, baseline: { ...twoArm.baseline, parityId: '0'.repeat(64) } } }), evidence)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 0, { ...postUi,
+      armBindings: { ...twoArm, baseline: { ...twoArm.baseline, parityId: undefined } } }), invalid)
+    // a) 单臂边界通过，之后的新 reserve 按当前协议继续；不登记则同一段被当作当前协议 → PROTOCOL_DRIFT。
+    assert.equal(validateHistoricalSupersessionBoundary(raw, 6, boundary), 15)
+    fs.writeFileSync(file, raw)
+    assert.doesNotThrow(() => updateLedger(file, { type: 'reserve', attemptId: 'current-after-c16', binding: current }, options))
+    assert.equal(fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).length, 16)
+    assert.throws(() => updateLedger(file, { type: 'dispatch', attemptId: 'current-after-c16' },
+      { ...options, historicalC16Ee3435ecBoundary: undefined }), /PROTOCOL_DRIFT/)
+    fs.writeFileSync(file, raw + JSON.stringify({ type: 'reserve', attemptId: 'candidate:unregistered',
+      binding: rows[6].binding, allocation: 'C16ExistingExtraction' }) + '\n')
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'after-unregistered', binding: current }, options), /PROTOCOL_DRIFT/)
+    // b) 前缀字节漂移（仅多一个空格）。
+    const drifted = raw.replace(`"attemptId":"${c16Attempts[1].attemptId}"}`, `"attemptId":"${c16Attempts[1].attemptId}" }`)
+    assert.notEqual(drifted, raw)
+    assert.throws(() => validateHistoricalSupersessionBoundary(drifted, 6, boundary), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    fs.writeFileSync(file, drifted)
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'after-drift', binding: current }, options),
+      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    // c) 边界内 reserve 的 invocationId / protocolHash / codeSha / 逐 attempt parityId 不符。
+    for (const changed of [
+      { reserveAttempts: c16Attempts.map((item, index) => index === 1 ? { ...item, invocationId: '0807270b-f5c5-495c-bd71-5f1d6e9a32c1' } : item) },
+      { protocolHash: '0'.repeat(64) },
+      { armBindings: { candidate: { ...candidate, codeSha: 'ee3435ec299e6b5a9bd9dc55950c9109abe92a24' } } },
+      { reserveAttempts: c16Attempts.map((item, index) => index === 0 ? { ...item, parityId: '8'.repeat(64) } : item) },
+    ]) assert.throws(() => validateHistoricalSupersessionBoundary(raw, 6, { ...boundary, ...changed }), evidence)
+    // d) 只登记 candidate 时，baseline reserve 或 baseline attempt 都拒绝；parityId 必须恰在一处登记。
+    const baselineRows = rows.map(row => row.attemptId === c16Attempts[0].attemptId && row.type === 'reserve'
+      ? { ...row, binding: { ...row.binding, arm: 'baseline' } } : row)
+    assert.throws(() => validateHistoricalSupersessionBoundary(text(baselineRows), 6,
+      { ...boundary, rawBytesSha256: hash(text(baselineRows)) }), evidence)
+    const renamed = c16Attempts.map((item, index) => index === 0 ? { ...item, attemptId: item.attemptId.replace('candidate:', 'baseline:') } : item)
+    const renamedRows = rows.map(row => row.attemptId === c16Attempts[0].attemptId
+      ? { ...row, attemptId: renamed[0].attemptId, ...(row.binding ? { binding: { ...row.binding, arm: 'baseline' } } : {}) } : row)
+    assert.throws(() => validateHistoricalSupersessionBoundary(text(renamedRows), 6,
+      { ...boundary, rawBytesSha256: hash(text(renamedRows)), reserveAttempts: renamed }), invalid)
+    for (const changed of [
+      { armBindings: { candidate: { ...candidate, parityId: '9'.repeat(64) } } },
+      { reserveAttempts: c16Attempts.map(({ parityId: _parityId, ...item }) => item) },
+      { armBindings: { candidate, reviewer: candidate } },
+      { armBindings: {} },
+      { armBindings: null },
+      { armBindings: { candidate: { ...candidate, sourceHash: 'x' } } },
+      { armBindings: undefined },
+    ]) assert.throws(() => validateHistoricalSupersessionBoundary(raw, 6, { ...boundary, ...changed }), invalid)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
 test('超时守护为每个 dispatch 独立计时：先写 unknown 再 abort，且后续 attempt 不继承残余预算', async () => {
@@ -1485,8 +1694,9 @@ test('S14B reviewed refine keeps real draft intact and applies targeted quotes o
   const start = fixture.indexOf("        else if (operationKind === 'refine') {")
   const end = fixture.indexOf("        } else if (operationKind === 'recheck')", start)
   assert.ok(start >= 0 && end > start)
-  const generate = new Function('request', 'db', 'reviewedSyntheticIssues', 'assert', 'REVIEW_DEFECT', 'REVIEW_FIX',
+  const generator = new Function('request', 'db', 'reviewedSyntheticIssues', 'assert', 'REVIEW_DEFECT', 'REVIEW_FIX', 'reviewedMustShowTexts',
     `let text; const operationKind = 'refine', reviewedRun = true, chapter = { number: 1 }; if (false) {} ${fixture.slice(start, end)} } return text`)
+  const generate = (...args) => generator(...args, [])
   const quote = 'synthetic quote', replacement = 'synthetic replacement'
   const issues = [{ quote, replacement }]
   const sourceDraft = '真实正文没有合成引文，原文应完整保留。'
@@ -1495,6 +1705,10 @@ test('S14B reviewed refine keeps real draft intact and applies targeted quotes o
   assert.equal(generate({ mode: 'synthetic' }, db(quote), issues, assert, 'synthetic defect', 'synthetic fix'), replacement)
   assert.throws(() => generate({ mode: 'synthetic' }, db(sourceDraft), issues, assert, 'synthetic defect', 'synthetic fix'),
     /SYNTHETIC_TARGETED_REVISION_MISSING/)
+  // 只有必现 unknown 被采纳时，合成修订逐字补写目标；真实模式仍原样返回模型输出位置的正文。
+  assert.equal(generator({ mode: 'synthetic' }, db(sourceDraft), issues, assert, 'd', 'f', ['林澄保管铜钥匙']),
+    `${sourceDraft}\n林澄保管铜钥匙。`)
+  assert.equal(generator({ mode: 'real' }, db(sourceDraft), issues, assert, 'd', 'f', ['林澄保管铜钥匙']), sourceDraft)
 })
 
 test('early-review 提供已实现代价验收标准且正文不泄露固定修法', () => {

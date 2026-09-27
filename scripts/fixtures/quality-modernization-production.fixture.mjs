@@ -10,7 +10,8 @@ import { updateLedger, CAMPAIGN_ID } from '../quality-modernization-run.mjs'
 import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, createOperationDispatchGate,
   createOutboundPreflightAssert, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
   fetchProviderResponse, measurePromptBytes, BRIDGE_SETTLEMENT_DEADLINE_MS,
-  BRIDGE_TEST_TIMEOUT_MS, BRIDGE_REVIEWED_TEST_TIMEOUT_MS, POST_UI_REVIEW_POLICY, reviewedDraftSelection } from '../quality-modernization-driver.mjs'
+  BRIDGE_TEST_TIMEOUT_MS, BRIDGE_REVIEWED_TEST_TIMEOUT_MS, POST_UI_REVIEW_POLICY, reviewedDraftSelection,
+  scenarioAuthorSetting } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, recordPersistedDraftObservation, safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
 
 // This adapter replaces the Electron transport, never a command/runtime/repository.
@@ -202,7 +203,9 @@ test('isolated production commands persist the selected phase operations', async
       'OPTIONAL_PREDECESSORS_NOT_REGISTERED')
   }
   // 长设定只在预注册语义源里存在的场景携带；它作为作者资料进入受预算的必需材料。
-  const authorSetting = [scene.material, scene.longSetting].filter(Boolean).join('\n')
+  // 场景 revision 登记的附加行（如 post-UI 的【第1章必现】）只追加到作者世界设定，其余 revision 字节不变。
+  const authorSetting = scenarioAuthorSetting(scene, request.scenarioRevision)
+  if (reviewedRun) assert.ok(scene.scenarioAuthorSettingLines?.[request.scenarioRevision]?.length, 'REVIEWED_SCENARIO_AUTHOR_LINE_MISSING')
   const load = relative => import(/* @vite-ignore */ pathToFileURL(path.join(target.repositoryRoot, relative)).href)
   const receipt = { schemaVersion: 1, invocationId: request.invocationId, arm: target.arm, mode: request.mode, action: request.action,
     protocolRevision: request.protocolRevision, protocolHash: request.protocolHash,
@@ -826,12 +829,18 @@ test('isolated production commands persist the selected phase operations', async
           const issues = reviewedSyntheticIssues.filter(item => current.includes(item.quote))
           const actionable = operationKind === 'review' ? issues : request.syntheticReviewedDraftCase === 'final-fail'
             ? [{ category: '自然度', severity: 'warning', description: '仍有重复描述，留给独立评审判断。', quote: current.split('\n')[2] }] : []
+          // 合成审稿只回应本臂生产代码实际冻结并发出的必现目标：未明示为 unknown，补写后给出逐字证据。
+          const mustShowGoals = [...promptText.matchAll(/"id":"(ch\d+:mustShow:\d+)","text":"([^"\\]+)"/gu)]
+            .map(([, id, goal]) => ({ id, proof: `${goal}。` }))
           text = JSON.stringify({ summary: actionable.length ? '存在需要修复的问题。' : '本轮未发现问题。',
             items: actionable.length ? actionable.map(item => ({ category: item.category, severity: item.severity,
               description: item.description, quote: item.quote }))
               : [{ category: '本章目标', severity: 'pass', description: '本轮未发现需要修复的问题。' }],
-            goalReviews: chapter.requiredEvents.map((event, index) => ({ id: `ch${chapter.number}:keyEvents:${index + 1}`,
-              status: 'completed', description: `${event}已有正文证据。`, evidence: [{ quote: current.split('\n')[2] }] })) })
+            goalReviews: [...chapter.requiredEvents.map((event, index) => ({ id: `ch${chapter.number}:keyEvents:${index + 1}`,
+              status: 'completed', description: `${event}已有正文证据。`, evidence: [{ quote: current.split('\n')[2] }] })),
+            ...mustShowGoals.map(({ id, proof }) => current.includes(proof)
+              ? { id, status: 'completed', description: '必现目标已有正文明示。', evidence: [{ quote: proof }] }
+              : { id, status: 'unknown', description: '正文未明示该必现目标，无法确认。', evidence: [] })] })
         }
         else if (operationKind === 'review') text = syntheticReview(chapter)
         else if (operationKind === 'refine') {
@@ -841,6 +850,7 @@ test('isolated production commands persist the selected phase operations', async
           text = current
           if (request.mode === 'synthetic') {
             text = reviewedRun ? reviewedSyntheticIssues.reduce((value, item) => value.replace(item.quote, item.replacement), current)
+              + reviewedMustShowTexts.map(goal => `\n${goal}。`).join('')
               : current.replace(REVIEW_DEFECT, REVIEW_FIX)
             assert.notEqual(text, current, 'SYNTHETIC_TARGETED_REVISION_MISSING')
           }
@@ -913,6 +923,7 @@ test('isolated production commands persist the selected phase operations', async
       FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1`).get(chapter.number)
     const reviewState = {}
     const reviewedDraft = reviewedRun ? {} : null
+    let reviewedMustShowTexts = []
     const artifact = (outputPath, content, extra = {}) => ({ ...extra, outputPath, contentHash: sha(content) })
     for (const operation of request.operations) {
       operationKind = operation.kind
@@ -964,11 +975,14 @@ test('isolated production commands persist the selected phase operations', async
           if (reviewedRun) {
             const { selected: items } = reviewedDraftSelection(report)
             assert.ok(items.length > 0, 'REVIEWED_DRAFT_NO_SELECTED_ITEMS')
+            reviewedMustShowTexts = items.filter(item => item.severity === 'unknown').map(item => item.description.split('\n')[0])
             const cycle = candidate ? await invoke('db:review-cycle-get', sourceReview.id, project.rootPath, session) : null
             cycleId = cycle?.cycleId
             selectedItems = items.map(item => {
               const index = report.items.indexOf(item)
               const finding = cycle?.findings.find(entry => entry.reviewItemIndex === index)
+              // Fail before any refine request when an adopted must-show unknown lacks its product finding.
+              if (candidate && item.severity === 'unknown') assert.ok(finding?.findingId, 'REVIEWED_MUST_SHOW_FINDING_MISSING')
               return { ...item, ...(finding ? { findingId: finding.findingId } : {}), decision: 'apply', origin: 'ai' }
             })
           } else if (candidate) {

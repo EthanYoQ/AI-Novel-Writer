@@ -1,6 +1,6 @@
 # 中文质量预注册：Program v3 S00
 
-现行 decision revision 为 `s14b-candidate-quality-and-comparison-v2`；`s14b-split-quality-gates-v1`、`s14b-reviewed-draft-v1` 及其结论保留为历史。candidate 字数标准仍采用 `draft-units-tolerance-30-v1`（2026-09-20 用户决定）；未来 post-UI 测试的评估策略 revision 为 `s14b-post-ui-reviewed-draft-unknown-oracle-v2`（2026-09-27 用户批准 unknown 单独终点）。保留 `pacing-readability-v1` 节奏规则。完整机器协议及其他 revision 见 [`protocol.json`](protocol.json)；新协议完整字节 hash 须重新冻结，旧目标拒绝漂移。本文件负责解释执行规则与冻结合同的显式取代关系。S10B/S11 的历史场景、失败和加性裁决保留各自版本；[日期化交接](../../handoffs/2026-09-20-program-v3-s11-pause-handoff.md)只证明当时状态，当前进度读唯一私有当前检查点。全部 Spec 的适用关系见[现行索引](current-spec-index.md)。合成验证、真实模型结果与文学质量结论分开记录。
+现行 decision revision 为 `s14b-candidate-quality-and-comparison-v2`；`s14b-split-quality-gates-v1`、`s14b-reviewed-draft-v1` 及其结论保留为历史。candidate 字数标准仍采用 `draft-units-tolerance-30-v1`（2026-09-20 用户决定）；未来 post-UI 测试的评估策略 revision 为 `s14b-post-ui-reviewed-draft-must-show-unknown-v3`（用户批准采纳必现目标 unknown）；`s14b-post-ui-reviewed-draft-unknown-oracle-v2`（2026-09-27 用户批准 unknown 单独终点）保留为历史。保留 `pacing-readability-v1` 节奏规则。完整机器协议及其他 revision 见 [`protocol.json`](protocol.json)；新协议完整字节 hash 须重新冻结，旧目标拒绝漂移。本文件负责解释执行规则与冻结合同的显式取代关系。S10B/S11 的历史场景、失败和加性裁决保留各自版本；[日期化交接](../../handoffs/2026-09-20-program-v3-s11-pause-handoff.md)只证明当时状态，当前进度读唯一私有当前检查点。全部 Spec 的适用关系见[现行索引](current-spec-index.md)。合成验证、真实模型结果与文学质量结论分开记录。
 
 ## S14B 未来样本的门禁拆分
 
@@ -8,13 +8,23 @@
 
 第391–408行是旧 `s14b-split-quality-gates-v1` 协议在 invocation `0807270b-f5c5-495c-bd71-5f1d6e9a32c1` 下已经结算的六次真实请求：baseline 与 candidate 各三次，均为 reserve→dispatch→settle。`protocol.json` 的 `historicalPostUi408Boundary` 以原始前408行 SHA-256、顺序、attempt/invocation、终态和两臂 code/source/driver/parity 身份认证这一段；原390行边界和历史结论不改。第409行起的新增 reserve 必须使用当前协议 revision 与完整字节 hash；这次加性认证不恢复旧目标资格，也不将先前失败的 C16 预检 记成已派发。继续真实 C16 前须按新协议 hash 重新冻结目标。
 
+第409–432行是同一 revision `s14b-candidate-quality-and-comparison-v2` 旧协议字节（hash `459faac1…4961`）下 C16–C18 真实 invocation `97b6ccf0-63b0-454e-97f5-71e5efc7b39c` 的八次 candidate-only 请求，均为 reserve→dispatch→settle，结论为永久 FAIL。`historicalC16Ee3435ecBoundary` 以原始前432行 SHA-256、顺序、attempt/invocation、终态、candidate 的 code（`ee3435ec`）/source/driver 身份及逐 attempt 的项目 parity（按 case 不同）认证这一段；该边界只登记 candidate 臂，出现 baseline 即拒绝。它只把这段视为历史，不改判、不恢复旧目标资格；第433行起的新增 reserve 必须使用当前协议 revision 与完整字节 hash。
+
 技术门有效后，candidate 自身资格逐章独立判定事实（含时间）、全部必需事件、±30% 生产单位、复述、来源，以及自然度、人物动机和节奏的双评可读底线；baseline 文学内容 FAIL/UNKNOWN 不自动否决 candidate，也不变成 baseline PASS。两名未参与实现的独立盲评者只依据冻结的 candidate 成稿与作者材料，分别给三维 PASS/FAIL/INCONCLUSIVE，并引用可回查的原文：自然度须对话、叙述和动作表达通顺且符合当章语境，无持续机械重复或语气断裂妨碍理解；人物动机须关键选择能从已知目标、处境和知情事实理解，选择与结果有可辨联系，无缺少依据的重大反转；节奏按下述四项可读要求。任一评审指出具体不合格片段或两人分歧，最多一次独立仲裁；确认具体缺陷为 FAIL，证据不足、无仲裁资源或仲裁未决为 candidate INCONCLUSIVE，不得 PASS。candidate 任一绝对门 FAIL/INCONCLUSIVE 时自身资格不得 PASS。
 
 与 baseline 的自然度、人物动机、节奏比较另逐章逐维披露：两名盲评引用两臂原文并说明可比性；可比时记优/平/劣，不可比的该维记 INCONCLUSIVE，不得当作平或改善。相对劣或不可比不改变已成立的 candidate 自身资格；改善声明只能引用可比且有两名评审一致证据的章节与维度。至少两个场景各一章一个维度一致优、其余章节逐维可比且无劣，才可称整体样本改善；存在较弱或不可比维度，只能在证据覆盖的范围内称改善并完整披露，不能称整体 non-inferior 或全面优于参考。自动 runner 最高只报 pending-independent-oracle-review，文学裁决由独立评审作出，不从模型审稿结果推算。此拆分只适用于新冻结目标；历史 FAIL/INCONCLUSIVE、原评分、旧账本与原目标不追溯改判。
 
 ## 测试专用成稿评估（第一切片）
 
-产品已支持作者显式的 `【第N章必现】` 目标及作者选择后的一次修稿，但这不自动改变下述测试预授权。若未来实验要采纳必现目标的 unknown，须先取得该测试政策的明确决定，登记输入标记、选择范围、双臂实际可执行路径、次数和停止条件，再更新机器协议与消费者并重新冻结；不得仅因产品支持 apply 就让现有 driver 自动采纳 unknown。
+产品已支持作者显式的 `【第N章必现】` 目标及作者选择后的一次修稿；这不自动改变测试预授权，必须另有测试政策决定。用户已批准以下决定，现行 post-UI 评估策略为 `s14b-post-ui-reviewed-draft-must-show-unknown-v3`，场景 revision 为 `s14b-post-ui-reviewed-budget-review-rebuild-must-show-v2`，只适用于未来一轮 S14B post-UI 固定实验场景1/1；early、full、C16–C18 的选择与场景不变。新场景 revision 只增加上述输入标记，继承原 `s14b-post-ui-reviewed-budget-review-rebuild-v1` 的全部登记，包括 `指定范围生成` 的一次结构化语法修复和 `成稿首审` 的一次 `review-chapter-rebuild`（见下文 S07 段），并非不带 rebuild 的新场景。
+
+- 输入标记：该场景 revision 只在场景1作者世界设定末尾加入独立一行 `【第1章必现】林澄保管铜钥匙`（语义源 `scenarioAuthorSettingLines`）；原场景其余事实、事件、字数和 oracle 不变，其他 milestone/场景 revision 的作者设定字节不变。
+- 选择范围：首审报告中全部 error/warning，加上 `goalId` 匹配 `^ch\d+:mustShow:\d+$`（本场景即 `ch1:mustShow:K`）且 severity 为 unknown 的项，按原报告顺序；与 error/warning 共用至多一次修稿与一次普通复评，`maxRevisions` 仍为 1。其余 unknown（蓝图 keyEvents、覆盖不完整）不采纳。
+- 确认含义：视为作者已同意补写（测试预授权），确认快照原样保留 unknown，不得改称已确认错误；初稿、原 unknown 报告、确认快照、唯一修订、复评全部保留文件与 hash。
+- 双臂实际路径：candidate 由生产 `freezeChapterGoals` 从作者世界设定解析标记，审稿报告 `items` 中出现带 `goalId` 的 unknown 投影，并由 review-cycle finding 绑定后经既有确认与修稿入口 apply。baseline（`2264390d`，不可改）不识别该标记，只把这行当普通设定文本，首审不会有 mustShow 项，其 unknown 只可能来自蓝图 keyEvents 或覆盖不完整，均不被采纳：首审有 error/warning 时仍按原规则只采纳 error/warning 修稿一次并复评，无 error/warning 时按原 unknown-only 规则保留初稿。candidate 被采纳的必现 unknown 确认项必须带产品 review-cycle 的 `findingId`，缺失即判审修链证据无效；baseline 没有 review-cycle，不要求。该不对称写入策略 `armAsymmetry` 字段，随协议、pair manifest 与每臂 receipt 披露；不得据此单独声称相对改善。
+- 停止条件：首稿自然满足（无可采纳项）时记录修复分支未触发，不得制造触发；复评仍有问题也不追加修稿。
+
+以下 `s14b-post-ui-reviewed-draft-unknown-oracle-v2` 段落及 `s14b-post-ui-reviewed-budget-review-rebuild-v1` 场景保留为历史 revision：它只采纳 error/warning；现行 driver 不再按其校验，旧目标因协议 hash 漂移被拒绝属预期，旧结论不追溯改判。除上述选择范围外，v3 沿用其余执行规则。
 
 `s14b-post-ui-reviewed-draft-unknown-oracle-v2` 仅适用于未来 `post-ui early-budget` 资格测试；本切片不扩展 full、early-context 或 S11，不改变软件默认创作、自动审稿、确认、修稿或定稿流程。两臂均调用既有生产入口：生成并保存初稿、普通审稿；报告存在 error/warning 时，即使同时有 unknown，也只按原报告顺序预先授权采纳全部 error/warning，保存确认快照，执行一次修稿并接受唯一修订，再对修后全文普通审稿一次。全部 pass 时保留初稿，记录 `no-actionable-review`。仅 pass/unknown 且没有 error/warning 时，冻结初稿与完整原报告，记录单独的 `no-actionable-review-with-unresolved-goals`；不确认、不修稿、不复审，不把 unknown 改为 pass。复评仍有问题也不追加修稿或改选初稿。确认与合并是测试预授权规则，不冒称作者现场逐项核实。
 
@@ -119,7 +129,7 @@ candidate 每次发送前从实际 fixture 数据库查询唯一 `dispatch-marke
 
 `early-budget` 的 `s14b-post-ui-budget-syntax-repair-v1` 只让 post-UI `指定范围生成` 在两臂首发之后，各按现有产品路径增加最多一次 `chapter-blueprint-directory:structured-syntax-repair`。candidate 从唯一 SQLite owner attempt 的 `usage_receipt_json.purpose` 证明主发与修复身份，并保持原 run/root/project/epoch；baseline 从实际 `llm:generate-stream` IPC 的 requestId、purpose 与当前 run/session 证明归属，不伪造 main owner。额外请求仍逐次写入唯一物理账本和桥收据、保存每次可核验输出；缺身份、其他 retry 或第三次请求在发送前拒绝。pair 技术门允许这一次已登记修复，但实际产品失败、缺产物或独立质量门失败仍为 FAIL。全局 `draft-units-tolerance-30-v1` 字数标准与历史 FAIL 均不改判。
 
-`s14b-post-ui-reviewed-budget-review-rebuild-v1` 另为 post-UI `成稿首审` 登记一次产品已有的 `review-chapter-rebuild`：首发必须是同一草稿的 `review-chapter`，已在唯一账本 settle，原输出文件与哈希相符，按产品 parseReviewGenerationResult 的 fenced JSON 提取和 JSON.parse 确认语法错误，且草稿尚无已保存的审稿报告。重建请求须沿用同一 run、root action、project、epoch、草稿身份，第二次重建和其他 retry 在 reserve 前拒绝。有效但含 error/warning/unknown 的报告不得借此重建；重建后仍按原审稿合同和独立质量门验收，初次坏输出与替代输出均保留。
+`s14b-post-ui-reviewed-budget-review-rebuild-v1` 及继承它的现行 `s14b-post-ui-reviewed-budget-review-rebuild-must-show-v2` 另为 post-UI `成稿首审` 登记一次产品已有的 `review-chapter-rebuild`：首发必须是同一草稿的 `review-chapter`，已在唯一账本 settle，原输出文件与哈希相符，按产品 parseReviewGenerationResult 的 fenced JSON 提取和 JSON.parse 确认语法错误，且草稿尚无已保存的审稿报告。重建请求须沿用同一 run、root action、project、epoch、草稿身份，第二次重建和其他 retry 在 reserve 前拒绝。有效但含 error/warning/unknown 的报告不得借此重建；重建后仍按原审稿合同和独立质量门验收，初次坏输出与替代输出均保留。
 
 两臂的模板输入采用对称映射：从不可变 baseline `2264390d6fb8b052cc14736d544df0cc74516649` 提取 `chapter_blueprint_chunk` 和 `first_chapter_draft` 的完整原模板；两臂作为相同的自定义作者模板读回。语义源那句无占位符的 `template` 完整写入双方 `globalGuidance`，不会用它覆盖生产模板并丢掉作者素材。模板原字节、guidance 字节、实际项目回读哈希保存在私有 receipt；各臂编译后的 system/完整 prompt 哈希另列，允许体现实现差异。角色原始名字与身份约束完整保存在作者素材及主角档案，本门不凭名字凭空创建已批准角色卡。第二、三章作者预置蓝图用于验证本次第1章范围提交没有改写范围外内容。
 

@@ -227,6 +227,30 @@
       { "attemptId": "candidate:49e03a76-6582-4fab-8d1a-24c489cf3e60", "invocationId": "0807270b-f5c5-495c-bd71-5f1d6e9a32c1", "terminal": "settle" }
     ]
   },
+  "historicalC16Ee3435ecBoundary": {
+    "fromEventCount": 408,
+    "eventCount": 432,
+    "rawBytesSha256": "7c97d2c6160acc3234451cdc715097515fc1d64daf513ef57282c83d232199ce",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "459faac156091628a6c8d84c7e1321610af4dec06f000ade75d44510dfc74961",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "ee3435ec299e6b5a9bd9dc55950c9109abe92a24",
+        "sourceHash": "fe13e15f56566a4b945a855c6dcf400e92e70af31d49b206b1f2c64f76a7953e",
+        "driverHash": "dcf093184cf17a6d23477b23a3e18717b23c505fc9fb56eb7f0383b03af97591"
+      }
+    },
+    "reserveAttempts": [
+      { "attemptId": "candidate:1726d37a-74d1-43cb-925e-1a34f542316b", "invocationId": "97b6ccf0-63b0-454e-97f5-71e5efc7b39c", "terminal": "settle", "parityId": "9d7bf891be148fe3e62cb5c1e14d98e32a5f8e9a2a1e9795ce13535072a50899" },
+      { "attemptId": "candidate:c7b917ec-e880-48a4-a4d1-bf5517ecebd0", "invocationId": "97b6ccf0-63b0-454e-97f5-71e5efc7b39c", "terminal": "settle", "parityId": "9d7bf891be148fe3e62cb5c1e14d98e32a5f8e9a2a1e9795ce13535072a50899" },
+      { "attemptId": "candidate:c26441f7-28b5-450e-9254-057dbe182a01", "invocationId": "97b6ccf0-63b0-454e-97f5-71e5efc7b39c", "terminal": "settle", "parityId": "4322e69bf77237085d553504d1bcce75fa17589c07fd5d44301da3d29fb89032" },
+      { "attemptId": "candidate:f8b2c9e9-2a1b-4bfc-be33-ae7b52497810", "invocationId": "97b6ccf0-63b0-454e-97f5-71e5efc7b39c", "terminal": "settle", "parityId": "4322e69bf77237085d553504d1bcce75fa17589c07fd5d44301da3d29fb89032" },
+      { "attemptId": "candidate:55c63c62-a797-4968-9ec6-d3973ee07ae6", "invocationId": "97b6ccf0-63b0-454e-97f5-71e5efc7b39c", "terminal": "settle", "parityId": "eda8dce86f5910519964e8d4b2f75cf6f7a5270e464e9f36a159a8fdf7a08543" },
+      { "attemptId": "candidate:17153f8a-df71-4bc6-a5b9-f6cff1390d42", "invocationId": "97b6ccf0-63b0-454e-97f5-71e5efc7b39c", "terminal": "settle", "parityId": "eda8dce86f5910519964e8d4b2f75cf6f7a5270e464e9f36a159a8fdf7a08543" },
+      { "attemptId": "candidate:f5e73818-ddb0-46a4-8af4-e91b233488aa", "invocationId": "97b6ccf0-63b0-454e-97f5-71e5efc7b39c", "terminal": "settle", "parityId": "eda8dce86f5910519964e8d4b2f75cf6f7a5270e464e9f36a159a8fdf7a08543" },
+      { "attemptId": "candidate:7e22701c-2cd6-4a87-b118-565ab1959576", "invocationId": "97b6ccf0-63b0-454e-97f5-71e5efc7b39c", "terminal": "settle", "parityId": "eda8dce86f5910519964e8d4b2f75cf6f7a5270e464e9f36a159a8fdf7a08543" }
+    ]
+  },
   "phases": {
     "c16-c18": {
       "scenarioRevision": "c16-c18-candidate-production-path-v1",
@@ -314,19 +338,25 @@
         }
       ],
       "postUi": {
-        "scenarioRevision": "s14b-post-ui-reviewed-budget-review-rebuild-v1",
+        "scenarioRevision": "s14b-post-ui-reviewed-budget-review-rebuild-must-show-v2",
         "minimumCalls": 6,
         "maximumPlannedCalls": 14,
         "evaluationPolicy": {
-          "revision": "s14b-post-ui-reviewed-draft-unknown-oracle-v2",
-          "selection": "all-error-warning-in-report-order",
+          "revision": "s14b-post-ui-reviewed-draft-must-show-unknown-v3",
+          "selection": "all-error-warning-and-must-show-unknown-in-report-order",
+          "mustShowGoalId": "^ch\\d+:mustShow:\\d+$",
           "confirmation": "test-preauthorized-original-items",
           "merge": "accept-only-revision",
           "finalReview": "ordinary-full-review",
           "noAction": "retain-initial-draft",
           "unknownOnly": "retain-initial-draft-and-full-review-pending-independent-goal-proof",
           "maxRevisions": 1,
-          "qualityDecision": "independent-oracle-final-text"
+          "qualityDecision": "independent-oracle-final-text",
+          "armAsymmetry": {
+            "baseline": "baseline 2264390d 不识别【第N章必现】标记，只把该行当普通世界设定文本，首审不会产生 mustShow 项，其 unknown 只可能来自蓝图 keyEvents 或覆盖不完整且不被采纳；首审有 error/warning 时仍按原规则修稿一次，无 error/warning 时按 unknown-only 规则保留初稿",
+            "candidate": "candidate 把该行冻结为 chN:mustShow:K 目标；首审为 unknown 时视为作者测试预授权补写，与 error/warning 按原报告顺序共用至多一次修稿和一次普通复评，不改称已确认错误",
+            "claim": "两臂是否触发修复分支的差异来自上述不对称，不得据此单独声称相对改善；首稿自然满足时记录修复分支未触发"
+          }
         },
         "operations": [
           {

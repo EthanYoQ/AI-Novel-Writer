@@ -62,6 +62,10 @@ export function validateHistoricalLedgerBoundary(raw, boundary) {
 export function validateHistoricalSupersessionBoundary(raw, fromEventCount, boundary) {
   const attempts = boundary?.reserveAttempts ?? boundary?.reserveAttemptIds?.map(attemptId => ({ attemptId,
     invocationId: boundary.evidenceInvocationId, terminal: 'settle' }))
+  // armBindings 只登记实际出现的臂；每臂 codeSha/sourceHash/driverHash 必填。parityId 是项目级
+  // parity（按 case 不同），因此要么整臂一个值写在 armBindings，要么逐 attempt 写在 reserveAttempts，二者恰选其一。
+  const armBindings = boundary?.armBindings
+  const armOf = item => armBindings?.[item.attemptId.split(':')[0]]
   if (!boundary || boundary.fromEventCount !== fromEventCount
     || !Number.isSafeInteger(boundary.eventCount) || boundary.eventCount <= fromEventCount
     || !/^[a-f0-9]{64}$/.test(boundary.rawBytesSha256)
@@ -72,9 +76,14 @@ export function validateHistoricalSupersessionBoundary(raw, fromEventCount, boun
     || attempts.some(item => typeof item.attemptId !== 'string'
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.invocationId)
       || !['settle', 'unknown'].includes(item.terminal))
-    || boundary.armBindings && ['baseline', 'candidate'].some(arm =>
-      !boundary.armBindings[arm] || !/^[a-f0-9]{40}$/.test(boundary.armBindings[arm].codeSha)
-      || ['sourceHash', 'driverHash', 'parityId'].some(key => !/^[a-f0-9]{64}$/.test(boundary.armBindings[arm][key])))
+    || armBindings !== undefined && (!armBindings || typeof armBindings !== 'object' || Object.keys(armBindings).length === 0
+      || Object.entries(armBindings).some(([arm, binding]) => !['baseline', 'candidate'].includes(arm)
+        || !binding || !/^[a-f0-9]{40}$/.test(binding.codeSha)
+        || ['sourceHash', 'driverHash'].some(key => !/^[a-f0-9]{64}$/.test(binding[key]))
+        || binding.parityId !== undefined && !/^[a-f0-9]{64}$/.test(binding.parityId))
+      || attempts.some(item => !Object.hasOwn(armBindings, item.attemptId.split(':')[0])
+        || (armOf(item).parityId === undefined) === (item.parityId === undefined)))
+    || attempts.some(item => item.parityId !== undefined && (!armBindings || !/^[a-f0-9]{64}$/.test(item.parityId)))
     || boundary.eventCount !== fromEventCount + attempts.length * 3) fail('INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY')
   let prefixEnd = 0
   for (let index = 0; index < boundary.eventCount; index++) {
@@ -85,7 +94,7 @@ export function validateHistoricalSupersessionBoundary(raw, fromEventCount, boun
   const prefix = raw.slice(0, prefixEnd)
   if (hash(prefix) !== boundary.rawBytesSha256) fail('HISTORICAL_LEDGER_SUPERSESSION_DRIFT')
   const rows = prefix.slice(0, -1).split('\n').slice(fromEventCount).map(line => JSON.parse(line))
-  for (const [index, { attemptId, invocationId, terminal }] of attempts.entries()) {
+  for (const [index, { attemptId, invocationId, terminal, parityId }] of attempts.entries()) {
     const [reserve, dispatch, outcome] = rows.slice(index * 3, index * 3 + 3)
     if (reserve?.type !== 'reserve' || reserve.attemptId !== attemptId
       || reserve.binding?.protocolRevision !== boundary.protocolRevision
@@ -93,10 +102,11 @@ export function validateHistoricalSupersessionBoundary(raw, fromEventCount, boun
       || reserve.binding?.invocationId !== invocationId
       || dispatch?.type !== 'dispatch' || dispatch.attemptId !== attemptId
       || outcome?.type !== terminal || outcome.attemptId !== attemptId
-      || boundary.armBindings && (reserve.binding?.arm !== attemptId.split(':')[0]
-        || !['baseline', 'candidate'].includes(reserve.binding.arm)
-        || ['codeSha', 'sourceHash', 'driverHash', 'parityId'].some(key =>
-          reserve.binding[key] !== boundary.armBindings[reserve.binding.arm][key]))) fail('HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING')
+      || armBindings && (reserve.binding?.arm !== attemptId.split(':')[0]
+        || !['baseline', 'candidate'].includes(reserve.binding.arm) || !Object.hasOwn(armBindings, reserve.binding.arm)
+        || ['codeSha', 'sourceHash', 'driverHash'].some(key =>
+          reserve.binding[key] !== armBindings[reserve.binding.arm][key])
+        || reserve.binding.parityId !== (parityId ?? armBindings[reserve.binding.arm].parityId))) fail('HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING')
   }
   return boundary.eventCount
 }
@@ -174,7 +184,8 @@ export function validatePhysicalLedger(file) {
   const reviewed = validateHistoricalSupersessionBoundary(raw, superseded, protocol.historicalReviewedDraftBoundary)
   const rebuilt = validateHistoricalSupersessionBoundary(raw, reviewed, protocol.historicalReviewRebuildBoundary)
   const split = validateHistoricalSupersessionBoundary(raw, rebuilt, protocol.historicalS14BSplitBoundary)
-  validateHistoricalSupersessionBoundary(raw, split, protocol.historicalPostUi408Boundary)
+  const postUi = validateHistoricalSupersessionBoundary(raw, split, protocol.historicalPostUi408Boundary)
+  validateHistoricalSupersessionBoundary(raw, postUi, protocol.historicalC16Ee3435ecBoundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -458,6 +469,11 @@ export function updateLedger(file, event, options = {}) {
       const trustedPostUiEvents = postUiBoundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedSplitEvents, postUiBoundary)
         : trustedSplitEvents
+      const c16Boundary = options.campaignMode === 'real'
+        ? protocol.historicalC16Ee3435ecBoundary : options.historicalC16Ee3435ecBoundary
+      const trustedC16Events = c16Boundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedPostUiEvents, c16Boundary)
+        : trustedPostUiEvents
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
       // 未登记 operations 的阶段在这里 fail closed。
@@ -480,7 +496,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedPostUiEvents
+          const superseded = index >= trustedHistoricalEvents && index < trustedC16Events
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)

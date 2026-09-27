@@ -94,7 +94,12 @@
           "recapRequired": false
         }
       ],
-      "authorPredecessor": "作者提供的前情：档案员林澄在清晨发现记录上的日期与旧钟不符，决定到现场核查；尚未核查成功。"
+      "authorPredecessor": "作者提供的前情：档案员林澄在清晨发现记录上的日期与旧钟不符，决定到现场核查；尚未核查成功。",
+      "scenarioAuthorSettingLines": {
+        "s14b-post-ui-reviewed-budget-review-rebuild-must-show-v2": [
+          "【第1章必现】林澄保管铜钥匙"
+        ]
+      }
     },
     {
       "id": "场景2",

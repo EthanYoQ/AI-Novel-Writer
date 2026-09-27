@@ -20,19 +20,32 @@ export const EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION = 's11-reference-no-ac
 export const REVIEWED_DRAFT_PROTOCOL_REVISION = 's14b-reviewed-draft-v1'
 export const SPLIT_QUALITY_GATES_PROTOCOL_REVISION = 's14b-split-quality-gates-v1'
 export const CANDIDATE_QUALITY_COMPARISON_PROTOCOL_REVISION = 's14b-candidate-quality-and-comparison-v2'
-export const POST_UI_REVIEW_POLICY = Object.freeze({ revision: 's14b-post-ui-reviewed-draft-unknown-oracle-v2',
-  selection: 'all-error-warning-in-report-order', confirmation: 'test-preauthorized-original-items',
+// 旧 v2（只采纳 error/warning）保留为历史 revision；按 v1→v2 先例不再作为可校验策略，旧目标因协议 hash 漂移拒绝。
+export const POST_UI_REVIEW_POLICY = Object.freeze({ revision: 's14b-post-ui-reviewed-draft-must-show-unknown-v3',
+  selection: 'all-error-warning-and-must-show-unknown-in-report-order', mustShowGoalId: '^ch\\d+:mustShow:\\d+$',
+  confirmation: 'test-preauthorized-original-items',
   merge: 'accept-only-revision', finalReview: 'ordinary-full-review', noAction: 'retain-initial-draft',
   unknownOnly: 'retain-initial-draft-and-full-review-pending-independent-goal-proof',
-  maxRevisions: 1, qualityDecision: 'independent-oracle-final-text' })
-const POST_UI_BUDGET = Object.freeze({ scenarioRevision: 's14b-post-ui-reviewed-budget-review-rebuild-v1',
+  maxRevisions: 1, qualityDecision: 'independent-oracle-final-text',
+  armAsymmetry: Object.freeze({
+    baseline: 'baseline 2264390d 不识别【第N章必现】标记，只把该行当普通世界设定文本，首审不会产生 mustShow 项，其 unknown 只可能来自蓝图 keyEvents 或覆盖不完整且不被采纳；首审有 error/warning 时仍按原规则修稿一次，无 error/warning 时按 unknown-only 规则保留初稿',
+    candidate: 'candidate 把该行冻结为 chN:mustShow:K 目标；首审为 unknown 时视为作者测试预授权补写，与 error/warning 按原报告顺序共用至多一次修稿和一次普通复评，不改称已确认错误',
+    claim: '两臂是否触发修复分支的差异来自上述不对称，不得据此单独声称相对改善；首稿自然满足时记录修复分支未触发' }) })
+const MUST_SHOW_GOAL_ID = new RegExp(POST_UI_REVIEW_POLICY.mustShowGoalId, 'u')
+const POST_UI_BUDGET = Object.freeze({ scenarioRevision: 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2',
   evaluationPolicy: POST_UI_REVIEW_POLICY,
   operations: Object.freeze([{ id: '指定范围生成', kind: 'directory' }, { id: '900单位正文', kind: 'draft' },
     { id: '成稿首审', kind: 'review' }, { id: '成稿一次修稿', kind: 'refine' }, { id: '成稿完整复评', kind: 'final-review' }]) })
+/** 作者世界设定：只有登记了该场景 revision 附加行的场景才追加独立行，其余 revision 字节不变。 */
+export function scenarioAuthorSetting(scene, scenarioRevision) {
+  const lines = scenarioRevision ? scene?.scenarioAuthorSettingLines?.[scenarioRevision] ?? [] : []
+  return [scene?.material, scene?.longSetting, ...lines].filter(Boolean).join('\n')
+}
 export function reviewedDraftSelection(report) {
   if (!Array.isArray(report?.items) || report.items.length === 0
     || report.items.some(item => !['pass', 'error', 'warning', 'unknown'].includes(item?.severity))) throw new Error('REVIEWED_DRAFT_REPORT_INVALID')
-  const selected = report.items.filter(item => item.severity === 'error' || item.severity === 'warning')
+  const selected = report.items.filter(item => item.severity === 'error' || item.severity === 'warning'
+    || item.severity === 'unknown' && typeof item.goalId === 'string' && MUST_SHOW_GOAL_ID.test(item.goalId))
   return { selected, disposition: selected.length ? 'revised-once'
     : report.items.some(item => item.severity === 'unknown')
       ? 'no-actionable-review-with-unresolved-goals' : 'no-actionable-review' }
@@ -60,7 +73,10 @@ export function validateReviewedDraft(result) {
       if (confirmation.sourceReviewId !== chain.review.reviewId || digest(confirmation.sourceDraft?.content ?? '') !== chain.initial.contentHash
         || confirmation.items?.length !== selected.length || confirmation.items.some((item, index) =>
           item.decision !== 'apply' || item.origin !== 'ai'
-          || ['category', 'severity', 'description', 'quote', 'goalId', 'stableFactKey'].some(key => item[key] !== selected[index][key]))) return fail()
+          || ['category', 'severity', 'description', 'quote', 'goalId', 'stableFactKey'].some(key => item[key] !== selected[index][key])
+          // 非 baseline 臂采纳的必现 unknown 只能经产品 review-cycle finding 进入 apply；baseline 无 review-cycle，不要求。
+          || result.arm !== 'baseline' && selected[index].severity === 'unknown' && MUST_SHOW_GOAL_ID.test(selected[index].goalId ?? '')
+            && (typeof item.findingId !== 'string' || !item.findingId.trim()))) return fail()
       readArtifact(chain.revision)
       readArtifact(chain.finalReview)
       if (chain.mergeHash !== chain.revision.contentHash || chain.finalReview.sourceHash !== chain.mergeHash
@@ -1097,6 +1113,7 @@ export function runProductionPhasePair(targets, options) {
     physicalModelRequests: results.reduce((sum, result) => sum + (result.physicalModelRequests ?? 0), 0), syntheticDispatches: results.reduce((sum, result) => sum + (result.syntheticDispatches ?? 0), 0),
     protocolRevision: common.protocolRevision, protocolHash: common.protocolHash,
     scenarioRevision: common.scenarioRevision, selectionDifferencePolicy: common.selectionDifference,
+    ...(common.evaluationPolicy ? { evaluationPolicy: common.evaluationPolicy } : {}),
     invocationId, parityHash, prepared, results }
 }
 
