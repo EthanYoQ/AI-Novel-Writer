@@ -884,7 +884,34 @@ async function verifyMac() {
     macStage('import-verified')
 
     macStage('editor-open')
-    await session.page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).first().click()
+    const draftItem = session.page.locator('.writer-project-tree').getByText('草稿_v1', { exact: true }).first()
+    try {
+      await draftItem.click()
+    } catch (error) {
+      try {
+        const diagnostic = await draftItem.evaluate(target => {
+          const rect = target.getBoundingClientRect()
+          const x = rect.left + rect.width / 2
+          const y = rect.top + rect.height / 2
+          const path = []
+          for (let node = document.elementFromPoint(x, y); node && path.length < 6; node = node.parentElement) {
+            const style = getComputedStyle(node)
+            path.push({ tag: node.tagName.toLowerCase(), role: node.getAttribute('role'),
+              className: (typeof node.className === 'string' ? node.className : '').slice(0, 100),
+              position: style.position, zIndex: style.zIndex, pointerEvents: style.pointerEvents })
+          }
+          const alertdialogs = [...document.querySelectorAll('[role="alertdialog"]')]
+            .filter(node => node.getBoundingClientRect().width > 0 && getComputedStyle(node).visibility === 'visible')
+            .map(node => ({ title: node.querySelector('#alert-title')?.textContent?.trim().slice(0, 120),
+              body: node.querySelector('#alert-message')?.textContent?.trim().slice(0, 400) }))
+          return { point: { x, y }, hitPath: path, alertdialogs }
+        }, undefined, { timeout: 3_000 })
+        console.error(`[AI Novel A11] editor-open-diagnostic=${JSON.stringify(diagnostic)}`)
+      } catch (diagnosticError) {
+        console.error('[AI Novel A11] editor-open-diagnostic-unavailable', diagnosticError)
+      }
+      throw error
+    }
     const editor = session.page.locator('.cm-content[contenteditable="true"]')
     await editor.waitFor({ state: 'visible' })
     const openedBody = await editorBody(editor)
