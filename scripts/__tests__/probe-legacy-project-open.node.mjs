@@ -27,6 +27,62 @@ test('reopen proof refuses a missing prior save receipt before contacting the ap
   assert.match(result.stderr, /Roster reopen proof requires the prior save receipt/)
 })
 
+test('complete-source write rejects a receipt inside the project before CDP', () => {
+  const root = mkdtempSync(join(fixtureRoot, 'complete-guard-test-'))
+  try {
+    const project = join(root, 'p')
+    mkdirSync(project)
+    const result = spawnSync(process.execPath, [script, '1', project, join(project, 'proof.json'), '--complete-source-write-proof'], { encoding: 'utf8' })
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /proof receipt must be an isolated fixture file outside the project/i)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('complete-source reopen requires its own saved receipt before CDP', () => {
+  const root = mkdtempSync(join(fixtureRoot, 'complete-reopen-test-'))
+  try {
+    const result = spawnSync(process.execPath, [script, '1', join(root, 'p'), join(root, 'missing.json'), '--complete-source-read-proof'], { encoding: 'utf8' })
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /reopen proof requires the prior save receipt/i)
+    const marker = join(root, 'roster.json')
+    const rosterReceipt = JSON.stringify({ verifiedBy: 'legacy-renderer-cdp-roster-write', projectPath: join(root, 'p') })
+    writeFileSync(marker, rosterReceipt)
+    const wrongMode = spawnSync(process.execPath, [script, '1', join(root, 'p'), marker, '--complete-source-read-proof'], { encoding: 'utf8' })
+    assert.notEqual(wrongMode.status, 0)
+    assert.match(wrongMode.stderr, /requires the prior save receipt for this project/i)
+    assert.equal(readFileSync(marker, 'utf8'), rosterReceipt)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('complete-source reopen rejects missing or changed published manuscript before CDP', () => {
+  const root = mkdtempSync(join(fixtureRoot, 'complete-asset-test-'))
+  try {
+    const project = join(root, 'p')
+    mkdirSync(project)
+    const title = '作者蓝图'
+    const revision = '作者修稿正文'
+    const manuscript = `第1章 ${title}.txt`
+    const contents = `第1章 ${title}\n\n${revision}`
+    const file = join(project, manuscript)
+    writeFileSync(file, contents)
+    const body = { verifiedBy: 'legacy-renderer-cdp-complete-source-write', projectPath: project,
+      process: { exited: true, portClosed: true }, completeSourceSeed: { blueprint: { title }, revision },
+      sourceIdentity: { draftIds: [1, 2] }, completeSource: {},
+      publishedManuscript: { path: manuscript, sha256: hash(contents) } }
+    const marker = join(root, 'receipt.json')
+    const receipt = JSON.stringify({ ...body, proofSha256: hash(JSON.stringify(body)) })
+    writeFileSync(marker, receipt)
+    for (const changed of ['tampered', null]) {
+      if (changed === null) rmSync(file)
+      else writeFileSync(file, changed)
+      const result = spawnSync(process.execPath, [script, '1', project, marker, '--complete-source-read-proof'], { encoding: 'utf8' })
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /complete source published manuscript differs/i)
+      assert.equal(readFileSync(marker, 'utf8'), receipt)
+    }
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
 test('roster proof refuses outside, project-internal, and unrelated existing receipt paths before CDP', () => {
   const root = mkdtempSync(join(fixtureRoot, 'roster-guard-test-'))
   try {

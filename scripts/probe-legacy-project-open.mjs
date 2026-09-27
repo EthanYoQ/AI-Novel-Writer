@@ -8,17 +8,32 @@ import { fileURLToPath } from 'node:url'
 
 const [, , portText, projectPath, markerPath, mode] = process.argv
 const port = Number(portText)
-if (!Number.isInteger(port) || !projectPath || !markerPath || (mode && !['--draft-write-proof', '--v025-save-proof', '--roster-write-proof', '--roster-read-proof'].includes(mode))) {
-  throw new Error('Usage: node probe-legacy-project-open.mjs <port> <projectPath> <markerPath> [--draft-write-proof|--v025-save-proof|--roster-write-proof|--roster-read-proof]')
+if (!Number.isInteger(port) || !projectPath || !markerPath || (mode && !['--draft-write-proof', '--v025-save-proof', '--roster-write-proof', '--roster-read-proof', '--complete-source-write-proof', '--complete-source-read-proof'].includes(mode))) {
+  throw new Error('Usage: node probe-legacy-project-open.mjs <port> <projectPath> <markerPath> [--draft-write-proof|--v025-save-proof|--roster-write-proof|--roster-read-proof|--complete-source-write-proof|--complete-source-read-proof]')
 }
 const writeProof = mode === '--draft-write-proof'
 const v025SaveProof = mode === '--v025-save-proof'
-const rosterWriteProof = mode === '--roster-write-proof'
-const rosterReadProof = mode === '--roster-read-proof'
+const completeWriteProof = mode === '--complete-source-write-proof'
+const completeReadProof = mode === '--complete-source-read-proof'
+const rosterWriteProof = mode === '--roster-write-proof' || completeWriteProof
+const rosterReadProof = mode === '--roster-read-proof' || completeReadProof
 const rosterProof = rosterWriteProof || rosterReadProof
 const fixtureRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '.runtime', 'cache', 's14c-old-binaries')
 const sha256 = path => createHash('sha256').update(readFileSync(path)).digest('hex')
 const textHash = text => createHash('sha256').update(text).digest('hex')
+function publishedManuscript(root, seed) {
+  const title = seed?.blueprint?.title
+  const content = seed?.revision
+  if (typeof title !== 'string' || typeof content !== 'string') throw new Error('Complete source published manuscript differs')
+  const name = `第1章 ${title}.txt`
+  if (basename(name) !== name) throw new Error('Complete source published manuscript differs')
+  const path = join(root, name)
+  if (!existsSync(path) || !lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()
+    || readFileSync(path, 'utf8') !== `第1章 ${title}\n\n${content}`) {
+    throw new Error('Complete source published manuscript differs')
+  }
+  return { path: name, sha256: sha256(path) }
+}
 const within = (root, candidate) => {
   const child = relative(root, candidate)
   return child && child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child)
@@ -53,18 +68,26 @@ if (rosterProof) {
   if (rosterReadProof) {
     priorRosterProof = JSON.parse(readFileSync(markerPath, 'utf8'))
     const { proofSha256, ...priorBody } = priorRosterProof
-    if (priorRosterProof.verifiedBy !== 'legacy-renderer-cdp-roster-write'
+    if (priorRosterProof.verifiedBy !== (completeReadProof ? 'legacy-renderer-cdp-complete-source-write' : 'legacy-renderer-cdp-roster-write')
       || priorRosterProof.process?.exited !== true || priorRosterProof.process?.portClosed !== true
       || proofSha256 !== textHash(JSON.stringify(priorBody))
       || resolve(priorRosterProof.projectPath) !== resolve(projectPath)) {
       throw new Error('Roster reopen proof requires the prior save receipt for this project')
     }
     delete priorRosterProof.proofSha256
+    if (completeReadProof && (!priorRosterProof.completeSourceSeed || !priorRosterProof.sourceIdentity || !priorRosterProof.completeSource)) {
+      throw new Error('Complete source reopen proof requires the prior complete save receipt')
+    }
   }
   const projectParent = realpathSync(dirname(resolve(projectPath)))
   if (!within(realpathSync(fixtureRoot), projectParent) || (existsSync(projectPath)
     && !within(realpathSync(fixtureRoot), realpathSync(projectPath)))) {
     throw new Error('Roster proof requires an isolated old-binary fixture project')
+  }
+  if (completeWriteProof && existsSync(projectPath)) throw new Error('Complete source proof requires a new isolated project')
+  if (completeReadProof && JSON.stringify(publishedManuscript(projectPath, priorRosterProof.completeSourceSeed))
+    !== JSON.stringify(priorRosterProof.publishedManuscript)) {
+    throw new Error('Complete source published manuscript differs from the save receipt')
   }
   const exePath = process.env.AI_NOVEL_LEGACY_EXE_PATH
   if (!exePath || !existsSync(exePath) || !within(realpathSync(fixtureRoot), realpathSync(exePath))) {
@@ -184,6 +207,28 @@ const draftWrite = writeProof ? `
 ` : ''
 const rosterNames = rosterWriteProof ? [`S14C作者甲_${randomUUID()}`, `S14C作者乙_${randomUUID()}`] : priorRosterProof?.rosterNames
 const rosterRelation = '作者明确设定的旧版搭档'
+const completeSourceSeed = completeWriteProof ? (() => {
+  const nonce = randomUUID()
+  return {
+    config: {
+      coreOutline: `作者核心大纲_${nonce}：两位搭档追查失踪手稿，终局必须由作者确认真相。`,
+      worldSetting: `作者世界观_${nonce}：海港城用纸质档案维持记忆，档案室有严格借阅制度。`,
+      protagonistProfile: `作者主角档案_${nonce}：甲擅长访谈但怕深水，乙负责档案核查。`,
+      goldenFinger: `作者设定能力_${nonce}：仅能辨别纸张年代，不能推断正文。`,
+      globalGuidance: `作者写作约束_${nonce}：保留两人已确认的搭档关系。`,
+    },
+    blueprint: {
+      chapterNumber: 1, title: `旧港档案_${nonce}`, role: 'opening', purpose: `建立失踪案_${nonce}`,
+      keyEvents: `甲与乙在档案室找到第一份线索_${nonce}`, characters: rosterNames,
+      suspenseHook: `借阅记录缺页_${nonce}`, userGuidance: `保留档案编号_${nonce}`,
+      notes: `作者蓝图注记_${nonce}`, notesUpdatedAt: new Date().toISOString(),
+    },
+    draft1: `第一版正文_${nonce}：甲走进档案室，乙指向缺页。`,
+    draft2: `第二版正文_${nonce}：甲确认缺页编号，乙提出新的核查路线。`,
+    review: `作者审稿_${nonce}：第二版应先明确缺页编号。`,
+    revision: `作者修稿正文_${nonce}：甲先确认缺页编号，乙据此提出核查路线。`,
+  }
+})() : priorRosterProof?.completeSourceSeed
 const rosterCreate = rosterWriteProof && !existsSync(projectPath) ? `
   const created = await window.velaAPI.invoke('project:create', {
     path: ${JSON.stringify(dirname(resolve(projectPath)))}, name: ${JSON.stringify(basename(resolve(projectPath)))},
@@ -222,12 +267,13 @@ const rosterWrite = rosterWriteProof ? `
         relation.target === names[1] && relation.relation === ${JSON.stringify(rosterRelation)})) {
     throw new Error('legacy roster immediate read-back differs from the saved cards and relation')
   }
-  return { projectPath: result.project.path, projectName: result.project.name,
+  const rosterEvidence = { projectPath: result.project.path, projectName: result.project.name,
     rendererTimeOrigin: performance.timeOrigin, rosterNames: names,
     rosterRelation: ${JSON.stringify(rosterRelation)}, saveReceipt: {
       operationId: saved.receipt.operationId, payloadHash: saved.receipt.payloadHash,
       revision: saved.receipt.revision, idempotent: saved.receipt.idempotent,
     }, savedRoster: { revision: after.revision, factHash: after.factHash, entries: after.entries } }
+  ${completeWriteProof ? '' : 'return rosterEvidence'}
 ` : ''
 const rosterRead = rosterReadProof ? `
   const context = { projectId: result.project.id, projectPath: result.project.path,
@@ -241,14 +287,114 @@ const rosterRead = rosterReadProof ? `
         relation.target === names[1] && relation.relation === ${JSON.stringify(priorRosterProof.rosterRelation)})) {
     throw new Error('legacy roster reopen read-back differs from the saved cards and relation')
   }
-  return { projectPath: result.project.path, projectName: result.project.name,
+  const rosterEvidence = { projectPath: result.project.path, projectName: result.project.name,
     rendererTimeOrigin: performance.timeOrigin,
     reopenedRoster: { revision: after.revision, factHash: after.factHash, entries: after.entries } }
+  ${completeReadProof ? '' : 'return rosterEvidence'}
+` : ''
+const completeReader = completeWriteProof || completeReadProof ? `
+  const readCompleteSource = async (opened, identity, seed, expectedRoster) => {
+    if (!opened?.success || opened.project?.path !== ${JSON.stringify(resolve(projectPath))}) throw new Error('complete source project reopen failed')
+    const path = opened.project.path
+    const context = { projectId: opened.project.id, projectPath: path, leaseId: opened.project.sessionLease }
+    const config = opened.project.novelConfig
+    if (!config || Object.entries(seed.config).some(([key, value]) => config[key] !== value)) throw new Error('complete source author config read-back differs')
+    const roster = await window.velaAPI.invoke('db:character-roster-read', path, context)
+    if (roster?.factHash !== expectedRoster.factHash || JSON.stringify(roster.entries) !== JSON.stringify(expectedRoster.entries)) {
+      throw new Error('complete source roster read-back differs')
+    }
+    const blueprint = await window.velaAPI.invoke('db:blueprint-get', 1, path, context)
+    if (!blueprint || Object.entries(seed.blueprint).some(([key, value]) => JSON.stringify(blueprint[key]) !== JSON.stringify(value))) {
+      throw new Error('complete source chapter blueprint read-back differs')
+    }
+    const drafts = await Promise.all(identity.draftIds.map(id => window.velaAPI.invoke('db:draft-get-full', id, path, context)))
+    if (drafts[0]?.chapterNumber !== 1 || drafts[0]?.version !== 1 || drafts[0]?.status !== 'draft' || drafts[0]?.content !== seed.draft1
+      || drafts[1]?.chapterNumber !== 1 || drafts[1]?.version !== 2 || drafts[1]?.status !== 'finalized' || drafts[1]?.content !== seed.revision) {
+      throw new Error('complete source two-version draft read-back differs')
+    }
+    const review = await window.velaAPI.invoke('db:review-get-full', identity.reviewId, path, context)
+    const revision = await window.velaAPI.invoke('db:revision-get-full', identity.revisionId, path, context)
+    if (review?.baseDraftId !== identity.draftIds[1] || review?.content !== seed.review
+      || review?.sourceDraft?.id !== identity.draftIds[1] || review?.sourceDraft?.version !== 2
+      || review?.sourceDraft?.content !== seed.draft2 || review?.sourceDraft?.status !== 'draft'
+      || revision?.baseDraftId !== identity.draftIds[1] || revision?.reviewSourceId !== identity.reviewId
+      || revision?.content !== seed.revision || revision?.sourceDraft?.id !== identity.draftIds[1]
+      || revision?.sourceDraft?.version !== 2 || revision?.sourceDraft?.content !== seed.draft2
+      || revision?.sourceDraft?.status !== 'reviewed' || revision?.status !== 'merged'
+      || revision?.mergedToDraftId !== identity.draftIds[1]) {
+      throw new Error('complete source review or revision read-back differs')
+    }
+    const finalized = await window.velaAPI.invoke('db:draft-get-finalized', 1, path, context)
+    const exportRows = await window.velaAPI.invoke('db:draft-export-snapshot', path, context)
+    const exported = exportRows?.find(row => row.draftId === identity.draftIds[1])
+    if (finalized?.id !== identity.draftIds[1] || exported?.finalizationId !== identity.finalizationId
+      || exported?.content !== seed.revision || exported?.title !== seed.blueprint.title) {
+      throw new Error('complete source finalized chapter read-back differs')
+    }
+    return { config: seed.config, roster: { factHash: roster.factHash, entries: roster.entries }, blueprint,
+      drafts, review, revision, finalized, exported }
+  }
+` : ''
+const completeWrite = completeWriteProof ? `
+  const seed = ${JSON.stringify(completeSourceSeed)}
+  const blueprintSaved = await window.velaAPI.invoke('db:blueprint-upsert', seed.blueprint, result.project.path, context)
+  if (blueprintSaved?.success !== true) throw new Error(blueprintSaved?.error || 'complete source blueprint save failed')
+  const first = await window.velaAPI.invoke('db:draft-create',
+    { chapterNumber: 1, version: 1, source: 'write', content: seed.draft1, wordCount: seed.draft1.length }, result.project.path, context)
+  if (first?.success !== true || !Number.isInteger(first.id)) throw new Error(first?.error || 'complete source first draft save failed')
+  const firstDraft = await window.velaAPI.invoke('db:draft-get-full', first.id, result.project.path, context)
+  if (firstDraft?.content !== seed.draft1 || firstDraft.version !== 1) throw new Error('complete source first draft immediate read-back failed')
+  const second = await window.velaAPI.invoke('db:draft-create',
+    { chapterNumber: 1, version: 2, source: 'rewrite', content: seed.draft2, wordCount: seed.draft2.length }, result.project.path, context)
+  if (second?.success !== true || !Number.isInteger(second.id)) throw new Error(second?.error || 'complete source second draft save failed')
+  const secondDraft = await window.velaAPI.invoke('db:draft-get-full', second.id, result.project.path, context)
+  if (secondDraft?.content !== seed.draft2 || secondDraft.version !== 2) throw new Error('complete source second draft immediate read-back failed')
+  const secondSource = { id: second.id, chapterNumber: 1, version: 2, status: secondDraft.status, content: seed.draft2 }
+  const reviewSaved = await window.velaAPI.invoke('db:review-create',
+    { baseDraftId: second.id, content: seed.review, expectedSource: secondSource }, result.project.path, context)
+  if (reviewSaved?.success !== true || !Number.isInteger(reviewSaved.id)) throw new Error(reviewSaved?.error || 'complete source review save failed')
+  const reviewed = await window.velaAPI.invoke('db:draft-update-status', second.id, 'reviewed', seed.draft2.length, result.project.path, context)
+  if (reviewed?.success !== true) throw new Error(reviewed?.error || 'complete source reviewed status save failed')
+  const revisionSaved = await window.velaAPI.invoke('db:revision-create',
+    { baseDraftId: second.id, revisionType: 'review-fix', reviewSourceId: reviewSaved.id,
+      content: seed.revision, wordCount: seed.revision.length,
+      expectedSource: { ...secondSource, status: 'reviewed' } }, result.project.path, context)
+  if (revisionSaved?.success !== true || !Number.isInteger(revisionSaved.id)) throw new Error(revisionSaved?.error || 'complete source revision save failed')
+  const merged = await window.velaAPI.invoke('db:revision-merge', {
+    revisionId: revisionSaved.id, targetDraftId: second.id, expectedDraftContent: seed.draft2,
+    mergedContent: seed.revision, wordCount: seed.revision.length,
+  }, result.project.path, context)
+  if (merged?.success !== true || merged.receipt?.status !== 'revised'
+    || merged.receipt?.targetDraftId !== second.id || merged.receipt?.revisionId !== revisionSaved.id) {
+    throw new Error(merged?.error || 'complete source revision merge failed')
+  }
+  const finalized = await window.velaAPI.invoke('finalization:commit', {
+    tabId: 's14c-complete-source', projectPath: result.project.path, projectSession: context,
+    draftId: second.id, chapterNumber: 1, chapterTitle: seed.blueprint.title,
+    content: seed.revision, contentRevision: 0,
+  }, context)
+  if (finalized?.success !== true || finalized.committed !== true || finalized.publicationStatus !== 'published'
+    || !finalized.finalizationId) throw new Error(finalized?.error || 'complete source finalization failed')
+  const updated = { ...result.project, novelConfig: { ...result.project.novelConfig, ...seed.config } }
+  const configSaved = await window.velaAPI.invoke('project:save', result.project.id, updated, result.project.path, context)
+  if (configSaved?.success !== true) throw new Error(configSaved?.error || 'complete source author config save failed')
+  const sameProcessOpen = await window.velaAPI.invoke('project:open', result.project.path)
+  const sourceIdentity = { draftIds: [first.id, second.id], reviewId: reviewSaved.id,
+    revisionId: revisionSaved.id, finalizationId: finalized.finalizationId }
+  const completeSource = await readCompleteSource(sameProcessOpen, sourceIdentity, seed, rosterEvidence.savedRoster)
+  return { ...rosterEvidence, completeSourceSeed: seed, sourceIdentity, completeSource }
+` : ''
+const completeRead = completeReadProof ? `
+  const sourceIdentity = ${JSON.stringify(priorRosterProof.sourceIdentity)}
+  const seed = ${JSON.stringify(completeSourceSeed)}
+  const completeSource = await readCompleteSource(result, sourceIdentity, seed, ${JSON.stringify(priorRosterProof.savedRoster)})
+  return { ...rosterEvidence, completeSource }
 ` : ''
 const expression = `(async () => {
   if (!window.velaAPI || typeof window.velaAPI.invoke !== 'function') {
     throw new Error('legacy preload API is unavailable')
   }
+  ${completeReader}
   ${globalRead}
   ${rosterCreate}
   const result = await window.velaAPI.invoke('project:open', ${JSON.stringify(resolve(projectPath))})
@@ -258,6 +404,8 @@ const expression = `(async () => {
   ${draftWrite}
   ${rosterWrite}
   ${rosterRead}
+  ${completeWrite}
+  ${completeRead}
   ${v025SaveProof ? `
   const before = await window.velaAPI.invoke('db:draft-get-full', 71)
   if (before?.id !== 71 || before.status !== 'draft' || before.chapterNumber !== 7 || before.version !== 1) {
@@ -318,6 +466,17 @@ if (rosterReadProof && (proof.rendererTimeOrigin === priorRosterProof.rendererTi
   || JSON.stringify(proof.reopenedRoster?.entries) !== JSON.stringify(priorRosterProof.savedRoster?.entries))) {
   throw new Error('Legacy roster reopen did not prove a fresh renderer and identical saved facts')
 }
+if (completeWriteProof && (!proof.sourceIdentity?.finalizationId || proof.sourceIdentity.draftIds?.length !== 2
+  || !proof.completeSourceSeed || !proof.completeSource)) {
+  throw new Error('Legacy application did not return complete source save proof')
+}
+if (completeReadProof && JSON.stringify(proof.completeSource) !== JSON.stringify(priorRosterProof.completeSource)) {
+  throw new Error('Legacy complete source reopen differs from the same-process read-back')
+}
+if (completeReadProof && JSON.stringify(publishedManuscript(projectPath, priorRosterProof.completeSourceSeed))
+  !== JSON.stringify(priorRosterProof.publishedManuscript)) {
+  throw new Error('Complete source published manuscript differs from the save receipt')
+}
 if (rosterProof) {
   const current = listener()
   if (current?.pid !== processProof.pid || current.startedAt !== processProof.startedAt) throw new Error('Roster proof CDP listener changed during renderer evaluation')
@@ -368,8 +527,12 @@ const receiptBody = {
     ...proof,
     ...(rosterProof ? { package: packageProof, process: processProof, source: sourceHashes(resolve(projectPath)) } : {}),
   }),
-  verifiedBy: rosterWriteProof ? 'legacy-renderer-cdp-roster-write'
-    : rosterReadProof ? 'legacy-renderer-cdp-roster-reopen'
+  ...(completeWriteProof ? { publishedManuscript: publishedManuscript(projectPath, completeSourceSeed) } : {}),
+  ...(completeWriteProof || completeReadProof ? { sourceCoverage: 'core-author-config-roster-blueprint-chapter-review-revision-only; prompt-skill-kb-original-avatar-uncovered' } : {}),
+  verifiedBy: completeWriteProof ? 'legacy-renderer-cdp-complete-source-write'
+    : completeReadProof ? 'legacy-renderer-cdp-complete-source-reopen'
+      : rosterWriteProof ? 'legacy-renderer-cdp-roster-write'
+        : rosterReadProof ? 'legacy-renderer-cdp-roster-reopen'
       : v025SaveProof ? 'legacy-renderer-cdp-v025-save' : writeProof ? 'legacy-renderer-cdp-draft-write' : 'legacy-renderer-cdp-project-open',
   verifiedAt: new Date().toISOString(),
   ...(rosterProof ? { probeSha256: sha256(fileURLToPath(import.meta.url)) } : {}),
