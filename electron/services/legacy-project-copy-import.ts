@@ -182,13 +182,16 @@ async function adoptLegacyKnowledgeOriginals(sourceRoot: string, copiedRoot: str
 /** Only the qualified offline copy has the old primary-key rows as target authority. */
 function adoptCopiedLegacyCards(db: import('better-sqlite3').Database, oldDatabase: string): void {
   const initial = readLegacyRosterSource(db)
-  if (initial.snapshot.migrationState !== 'legacy_cards_preserved' || initial.rawLegacy.trim()) return
+  const readySource = initial.snapshot.migrationState === 'ready'
+  if ((!readySource && initial.snapshot.migrationState !== 'legacy_cards_preserved') || initial.rawLegacy.trim()
+    || (readySource && initial.snapshot.status === 'ready')) return
   const old = new Database(oldDatabase, { readonly: true, fileMustExist: true })
   const hash = (text: string) => createHash('sha256').update(text).digest('hex')
   const serialize = (value: unknown) => JSON.stringify(value, (_key, item: unknown) => typeof item === 'bigint' ? { integer: item.toString() } : item)
   const reject = () => fail('LEGACY_IMPORT_ROSTER_UNAVAILABLE')
   try {
     db.transaction(() => {
+      if (readySource && CharacterRosterRepository.read(old).status !== 'ready') reject()
       const rows = old.prepare('SELECT * FROM characters ORDER BY rowid').safeIntegers().all() as Record<string, unknown>[]
       const origins = db.prepare('SELECT * FROM character_identity_origins').all() as {
         character_id: string; source_key: string; original_row_json: string; original_hash: string
@@ -269,7 +272,9 @@ function adoptCopiedLegacyCards(db: import('better-sqlite3').Database, oldDataba
           JSON.stringify({ kind: 'legacy', sourceKey: binding.sourceKey, sourceHash: binding.sourceHash, migration: 'offline-project-copy' }), operationId)
       }
       const source = readLegacyRosterSource(db)
-      adoptLegacyCards(db, { operationId: 'offline-project-copy', expectedRevision: source.snapshot.revision,
+      if (readySource) {
+        if (source.snapshot.migrationState !== 'ready' || source.snapshot.status !== 'ready') reject()
+      } else adoptLegacyCards(db, { operationId: 'offline-project-copy', expectedRevision: source.snapshot.revision,
         expectedLegacyHash: source.legacyHash, expectedIdentityRevision: source.identityRevision, expectedFactsHash: source.factsHash })
     }).immediate()
   } finally { old.close() }

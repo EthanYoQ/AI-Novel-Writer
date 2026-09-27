@@ -155,6 +155,94 @@ function addLegacyCards(f: ReturnType<typeof fixture>) {
   } finally { source.close() }
 }
 
+async function markLegacyCardsReady(f: ReturnType<typeof fixture>) {
+  // Produce the old v1.1 ready hashes through the existing roster commit path.
+  expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))
+    .toMatchObject({ state: 'ready' })
+  const converted = new Database(path.join(f.target, '.ai-novel', 'project.db'), { readonly: true })
+  let meta: { projection_hash: string; fact_hash: string; characters_arch: string }
+  try {
+    meta = converted.prepare(`SELECT m.projection_hash,m.fact_hash,c.characters_arch FROM character_roster_meta m
+      JOIN project_core c ON c.id=m.id WHERE m.id='main'`).get() as typeof meta
+  } finally { converted.close() }
+  fs.rmSync(f.target, { recursive: true, force: true })
+  const old = new Database(path.join(f.legacy, 'vela.db'))
+  try {
+    old.prepare("INSERT INTO character_roster_meta(id,schema_version,revision,migration_state,projection_hash,fact_hash) VALUES('main',1,1,'ready',?,?)")
+      .run(meta.projection_hash, meta.fact_hash)
+    old.prepare("UPDATE project_core SET characters_arch=? WHERE id='main'").run(meta.characters_arch)
+    expect(CharacterRosterRepository.read(old).status).toBe('ready')
+  } finally { old.close() }
+  return meta
+}
+
+it('v1.1 ready 旧卡在离线副本内绑定唯一 PK 关系并保持作者投影', async () => {
+  const f = fixture('v110', '')
+  addLegacyCards(f)
+  const oldMeta = await markLegacyCardsReady(f)
+  const before = sourceState(f)
+  const result = await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions })
+  expect(result, JSON.stringify(result)).toMatchObject({ state: 'ready' })
+  if (result.state !== 'ready') return
+  const db = new Database(path.join(f.target, '.ai-novel', 'project.db'), { readonly: true })
+  try {
+    const roster = CharacterRosterRepository.read(db)
+    expect(roster).toMatchObject({ migrationState: 'ready', status: 'ready' })
+    const owner = roster.entries.find(entry => entry.name === '乙')!
+    const target = roster.entries.find(entry => entry.name === '甲')!
+    expect(owner.relationships).toEqual([{ target: '甲', targetCharacterId: target.characterId, relation: '同门' }])
+    expect(db.prepare('SELECT source_character_id,target_character_id,relation,provenance_json FROM character_relationships').all())
+      .toEqual([{ source_character_id: owner.characterId, target_character_id: target.characterId, relation: '同门',
+        provenance_json: expect.any(String) }])
+    const edge = db.prepare('SELECT provenance_json FROM character_relationships').pluck().get() as string
+    expect(JSON.parse(edge)).toMatchObject({ kind: 'legacy', sourceKey: 'legacy:characters:0:relationships:0',
+      sourceHash: createHash('sha256').update('[{"target":"甲","relation":"同门"}]').digest('hex') })
+    expect(db.prepare('SELECT projection_hash,fact_hash FROM character_roster_meta WHERE id=?').get('main'))
+      .toEqual({ projection_hash: oldMeta.projection_hash, fact_hash: oldMeta.fact_hash })
+    expect(db.prepare('SELECT characters_arch FROM project_core WHERE id=?').pluck().get('main')).toBe(oldMeta.characters_arch)
+    expect(db.prepare('SELECT resolved_character_id FROM character_identity_proposals').pluck().get()).toBe(target.characterId)
+    expect(db.prepare('SELECT operation_id FROM character_identity_approvals').pluck().all())
+      .toEqual(['legacy-offline-identity-binding'])
+  } finally { db.close() }
+  expect(sourceState(f)).toEqual(before)
+})
+
+it.each(['missing', 'stale-source', 'ambiguous', 'missing-origin'] as const)('v1.1 ready 旧关系 %s endpoint 阻断发布且不写稳定边', async problem => {
+  const f = fixture('v110', '')
+  addLegacyCards(f)
+  await markLegacyCardsReady(f)
+  if (problem === 'missing' || problem === 'stale-source') {
+    const old = new Database(path.join(f.legacy, 'vela.db'))
+    try { old.prepare('UPDATE characters SET relationships=? WHERE name=?')
+      .run(problem === 'missing' ? '[{"target":"不存在","relation":"同门"}]' : '[{"target":"甲","relation":"旧快照以外的新关系"}]', '乙') } finally { old.close() }
+  }
+  const before = sourceState(f)
+  const result = await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions,
+    checkpoint: problem === 'ambiguous' || problem === 'missing-origin' ? phase => {
+      if (phase !== 'assets-converted') return
+      const attempt = fs.readdirSync(path.dirname(f.target)).find(name => name.startsWith('.new.legacy-import-'))!
+      const staging = new Database(path.join(path.dirname(f.target), attempt, 'target', '.ai-novel', 'project.db'))
+      try {
+        if (problem === 'ambiguous') {
+          const ids = staging.prepare('SELECT character_id FROM characters ORDER BY name').pluck().all() as string[]
+          staging.prepare('UPDATE character_identity_proposals SET candidate_ids_json=? WHERE owner_character_id IS NOT NULL')
+            .run(JSON.stringify(ids))
+        } else staging.prepare("DELETE FROM character_identity_origins WHERE source_key='legacy:characters:1'").run()
+      } finally { staging.close() }
+    } : undefined,
+  })
+  expect(result).toEqual({ state: 'blocked', code: problem === 'missing' || problem === 'stale-source'
+    ? 'LEGACY_IMPORT_ROSTER_UNAVAILABLE'
+    : problem === 'ambiguous' ? 'LEGACY_IMPORT_SQLITE_VERIFICATION_FAILED' : 'MIGRATION_VERIFICATION_FAILED' })
+  expect(fs.existsSync(f.target)).toBe(false)
+  expect(sourceState(f)).toEqual(before)
+  if (problem !== 'missing' && problem !== 'stale-source') return
+  const attempt = fs.readdirSync(path.dirname(f.target)).find(name => name.startsWith('.new.legacy-import-'))!
+  const staging = new Database(path.join(path.dirname(f.target), attempt, 'target', '.ai-novel', 'project.db'), { readonly: true })
+  try { expect(staging.prepare('SELECT COUNT(*) FROM character_relationships').pluck().get()).toBe(0) }
+  finally { staging.close() }
+})
+
 it.each(['v100', 'v110'] as const)('%s 非空旧角色卡与关系确定性采用，生产保存重开不回写源', async version => {
   const f = fixture(version, '')
   addLegacyCards(f)
