@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
@@ -160,13 +161,22 @@ describe('macOS DMG acceptance receipt contract', () => {
     expect(windowsReceipt).toEqual({})
     expect(windowsStderr).toEqual([])
     if (failureAt === 'first-window') {
-      const windowsLaunch = vm.runInNewContext(`${stages}\n(${launch})`, {
+      const windowsHelpers = source.slice(source.indexOf('async function closeWindowsApplication(app) {'),
+        source.indexOf('\nasync function launch(roots) {'))
+      const taskkills: string[][] = []
+      const windowsLaunch = vm.runInNewContext(`${stages}\n${windowsHelpers}\n(${launch})`, {
+        assert, setTimeout, clearTimeout,
         path, macMode: false, receipt: windowsReceipt, exe: '/in-memory/app', packageDir: '/in-memory',
+        fs: { existsSync: () => false },
+        execFileSync: (command: string, args: string[]) => { taskkills.push([command, ...args]); return '' },
         process: { env: {} }, console: { error: (value: unknown) => windowsStderr.push(value) },
-        electron: { launch: async () => ({ firstWindow: async () => { throw original } }) },
+        electron: { launch: async () => ({ firstWindow: async () => { throw original },
+          process: () => ({ pid: 424242 }), close: async () => {} }) },
       })
-      await expect(windowsLaunch({})).rejects.toBe(original)
-      expect(windowsReceipt).toEqual({})
+      await expect(windowsLaunch({ canonical: '/canonical', legacy: '/legacy' })).rejects.toBe(original)
+      expect(taskkills).toEqual([['taskkill', '/PID', '424242', '/T', '/F']])
+      expect(windowsReceipt).toMatchObject({ startupDiagnostic: { stage: 'electron-created',
+        startupState: null, visibleAlert: null, legacyConfigHasBom: null, canonicalConfigHasBom: null } })
       expect(windowsStderr).toEqual([])
     }
   })

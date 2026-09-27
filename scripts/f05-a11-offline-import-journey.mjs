@@ -295,6 +295,32 @@ async function closeMacApplication(app) {
   } finally { clearTimeout(timer) }
 }
 
+async function closeWindowsApplication(app) {
+  let pid
+  try {
+    pid = app.process()?.pid
+    assert(Number.isSafeInteger(pid) && pid > 0, 'Packaged Electron process PID is unavailable')
+    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'],
+      { windowsHide: true, encoding: 'utf8', timeout: 10_000 })
+  } catch (error) {
+    receipt.cleanupFailure = { processTree: 'not-confirmed', pid: pid ?? null,
+      code: error?.code ?? null, status: error?.status ?? null }
+  }
+  let timer
+  try {
+    const closed = await Promise.race([app.close().then(() => true, () => false),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), 2_000) })])
+    if (!closed) receipt.cleanupFailure = { ...receipt.cleanupFailure, playwrightClose: 'not-confirmed', pid: pid ?? null }
+  } catch {
+    receipt.cleanupFailure = { ...receipt.cleanupFailure, playwrightClose: 'failed', pid: pid ?? null }
+  } finally { clearTimeout(timer) }
+}
+
+function configHasBom(file) {
+  try { return fs.existsSync(file) ? fs.readFileSync(file).subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])) : null }
+  catch { return null }
+}
+
 async function launch(roots) {
   macStage('launch-start')
   const env = { ...process.env, AI_NOVEL_APP_DATA_HOME: roots.canonical,
@@ -303,11 +329,15 @@ async function launch(roots) {
   for (const key of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'AI_NOVEL_SMOKE_OPEN_PROJECT', 'AI_NOVEL_SMOKE_PROJECT_MARKER']) delete env[key]
   const app = await electron.launch({ executablePath: exe, cwd: macMode ? path.dirname(exe) : packageDir,
     args: [`--user-data-dir=${roots.userData}`], env, timeout: 30_000 })
+  let page
+  let stage = 'electron-created'
   try {
     macStage('electron-created')
-    const page = await app.firstWindow({ timeout: 30_000 })
+    page = await app.firstWindow({ timeout: 30_000 })
+    stage = 'first-window-ready'
     macStage('first-window-ready')
     await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
+    stage = 'skin-ready'
     macStage('skin-ready')
     if (macMode) await page.evaluate(async () => {
       const saved = await window.aiNovelAPI.invoke('config:set', { locale: 'zh-CN' })
@@ -331,6 +361,34 @@ async function launch(roots) {
       receipt.failure = { message: String(error), stack: error?.stack }
       console.error(`[AI Novel A11] failure-stage=${receipt.lastStage}`, error)
       await closeMacApplication(app)
+    } else {
+      try {
+        const generationsRoot = path.join(roots.canonical, 'generations')
+        const generations = fs.existsSync(generationsRoot) ? fs.readdirSync(generationsRoot) : []
+        const diagnostic = { stage, startupState: null, visibleAlert: null,
+          legacyConfigHasBom: configHasBom(path.join(roots.legacy, 'config.json')),
+          canonicalConfigHasBom: generations.length === 1
+            ? configHasBom(path.join(generationsRoot, generations[0], 'config.json')) : null }
+        if (page) {
+          let timer
+          try {
+            const facts = await Promise.race([page.evaluate(async () => {
+              const visibleAlert = [...document.querySelectorAll('[role="alert"]')]
+                .some(element => element.getClientRects().length > 0)
+              const state = await Promise.race([
+                Promise.resolve().then(() => window.aiNovelAPI?.invoke('startup:get-state')).catch(() => null),
+                new Promise(resolve => setTimeout(() => resolve(null), 1_000)),
+              ])
+              return { startupState: state?.state ?? null, visibleAlert }
+            }).catch(() => null), new Promise(resolve => { timer = setTimeout(() => resolve(null), 1_500) })])
+            diagnostic.startupState = facts?.startupState ?? null
+            diagnostic.visibleAlert = facts?.visibleAlert ?? null
+          } finally { clearTimeout(timer) }
+        }
+        receipt.startupDiagnostic = diagnostic
+      } catch {
+        receipt.startupDiagnostic = { stage, unavailable: true }
+      } finally { await closeWindowsApplication(app) }
     }
     throw error
   }
