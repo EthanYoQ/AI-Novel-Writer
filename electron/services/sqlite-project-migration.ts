@@ -11,6 +11,7 @@ import { SqliteSchemaAdapter } from '../migrations/sqlite-schema-adapter'
 import { M02_ADDED_CHARACTER_COLUMNS, M02_AUXILIARY_TABLES } from '../migrations/m02-character-identity'
 import { M03_REVIEW_CYCLE_TABLES } from '../migrations/m03-review-cycle'
 import { initializeLegacyBaselineSchema } from '../migrations/baseline-schema'
+import { initializeCharacterRosterMetadata } from '../repositories/character-roster-schema'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3') as typeof import('better-sqlite3')
@@ -225,8 +226,10 @@ export async function backupProjectSqlite(options: {
         inspect(staging, registry, 0)
       }
       migrateSchema(new SqliteSchemaAdapter(staging), registry, options.targetVersion ?? CURRENT_DESKTOP_SCHEMA_VERSION)
-      const after = inspect(staging, registry, options.targetVersion ?? CURRENT_DESKTOP_SCHEMA_VERSION)
       if (JSON.stringify(before.domain) !== JSON.stringify(domain(staging, columnsBefore))) throw new Error('PROJECT_MIGRATION_SQLITE_CONTENT_CHANGED')
+      // Missing legacy metadata is derived only after every source row was verified.
+      if (legacySchema) initializeCharacterRosterMetadata(staging)
+      const after = inspect(staging, registry, options.targetVersion ?? CURRENT_DESKTOP_SCHEMA_VERSION)
       snapshot.unchanged()
       staging.pragma('wal_checkpoint(TRUNCATE)')
       const fd = fs.openSync(targetPath, 'r+'); try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) }

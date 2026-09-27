@@ -2,12 +2,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { createHash } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type BetterSqlite3 from 'better-sqlite3'
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema'
 import { ensureBaselineBlueprintTables } from '../../migrations/baseline-blueprint-schema'
 import { sqliteSchemaFingerprint } from '../../migrations/sqlite-schema-adapter'
 import { backupProjectSqlite, probeProjectSqlite, verifyProjectSqlite } from '../sqlite-project-migration'
+import { CharacterRosterRepository } from '../../repositories/character-roster-repository'
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const roots: string[] = [], handles: BetterSqlite3.Database[] = []
@@ -99,6 +100,50 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 describe('real SQLite schema probe and WAL staging backup', () => {
+  it.each([
+    ['empty', 'empty', 'empty'],
+    ['markdown', 'legacy_markdown_pending', 'legacy_repair_required'],
+    ['cards', 'legacy_cards_preserved', 'inconsistent'],
+    ['existing', 'legacy_markdown_pending', 'legacy_repair_required'],
+  ])('preserves author data and exposes the imported %s roster without read-time writes', async (kind, migrationState, status) => {
+    const f = legacyV110Fixture()
+    if (kind !== 'cards') f.db.exec('DELETE FROM characters')
+    if (kind === 'empty') f.db.exec("UPDATE project_core SET characters_arch='' WHERE id='main'")
+    const raw = f.db.prepare("SELECT characters_arch FROM project_core WHERE id='main'").pluck().get()
+    if (kind === 'existing') f.db.prepare(`INSERT INTO character_roster_meta
+      (id,schema_version,revision,migration_state,legacy_markdown,projection_hash,fact_hash,updated_at)
+      VALUES ('main',1,7,'legacy_markdown_pending',?,'old-projection','old-facts','2026-01-01 00:00:00')`).run(raw)
+    const originalMeta = f.db.prepare('SELECT rowid,* FROM character_roster_meta').get()
+    const originalCore = f.db.prepare('SELECT rowid,* FROM project_core').get()
+    const sequences = f.db.prepare('SELECT name,seq FROM sqlite_sequence ORDER BY name').all()
+    const before = bytes(f.root)
+    const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Migration must not invoke a model'))
+    try {
+      const result = await backupProjectSqlite({ sourceDatabasePath: f.source, targetDatabasePath: f.target })
+      expect(verifyProjectSqlite({ databasePath: f.target })).toEqual(result)
+      const target = new Database(f.target, { readonly: true, fileMustExist: true }); handles.push(target)
+      expect(CharacterRosterRepository.read(target)).toMatchObject({ migrationState, status,
+        revision: kind === 'existing' ? 7 : 0,
+        ...(kind === 'empty' ? {} : { legacyMarkdown: raw }),
+      })
+      expect(target.prepare('SELECT rowid,* FROM project_core').get()).toEqual(originalCore)
+      expect(target.prepare('SELECT name,seq FROM sqlite_sequence ORDER BY name').all()).toEqual(sequences)
+      expect(target.prepare('SELECT COUNT(*) FROM llm_calls').pluck().get()).toBe(0)
+      if (originalMeta) expect(target.prepare('SELECT rowid,* FROM character_roster_meta').get()).toEqual(originalMeta)
+      expect(bytes(f.root)).toMatchObject(before)
+      expect(fetch).not.toHaveBeenCalled()
+    } finally { fetch.mockRestore() }
+  })
+
+  it('does not repair missing M02 roster metadata during a read', async () => {
+    const f = fixture()
+    await backupProjectSqlite({ sourceDatabasePath: f.source, targetDatabasePath: f.target })
+    const target = new Database(f.target, { fileMustExist: true }); handles.push(target)
+    target.exec('DELETE FROM character_roster_meta')
+    expect(() => CharacterRosterRepository.read(target)).toThrow('角色名单元数据未初始化')
+    expect(target.prepare('SELECT COUNT(*) FROM character_roster_meta').pluck().get()).toBe(0)
+  })
+
   it('imports the exact early v1.1.0 schema0 rows through schema7 without touching the source', async () => {
     const f = earlyV110Fixture(), before = bytes(f.root)
     expect(probeProjectSqlite({ databasePath: f.source })).toMatchObject({

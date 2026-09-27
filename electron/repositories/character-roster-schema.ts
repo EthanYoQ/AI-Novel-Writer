@@ -48,6 +48,11 @@ export function ensureCharacterRosterSchema(db: BetterSqlite3.Database): void {
     db.exec("ALTER TABLE character_roster_meta ADD COLUMN fact_hash TEXT NOT NULL DEFAULT ''")
   }
 
+  initializeCharacterRosterMetadata(db)
+}
+
+/** Classify copied facts without DDL or rewriting an existing roster receipt. */
+export function initializeCharacterRosterMetadata(db: BetterSqlite3.Database): void {
   const hasMeta = db.prepare(
     "SELECT 1 FROM character_roster_meta WHERE id = 'main'",
   ).get()
