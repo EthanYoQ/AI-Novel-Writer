@@ -583,6 +583,13 @@ it.each(['sqlite-converted', 'renamed'] as const)('%s 子进程终止后源保�
     expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))
       .toMatchObject({ state: 'blocked', code: 'LEGACY_IMPORT_TARGET_EXISTS' })
   }
+  const targetDb = new Database(path.join(f.target, '.ai-novel', 'project.db'), { readonly: true })
+  try {
+    expect(targetDb.prepare('SELECT body FROM contents WHERE id=11').pluck().get()).toBe('合成章节正文\r\n原字节')
+  } finally { targetDb.close() }
+  expect(hash(path.join(f.target, 'outline.md'))).toBe(hash(path.join(f.source, 'outline.md')))
+  for (const file of ['prompts/author.txt', 'skills/author.md'])
+    expect(hash(path.join(f.target, '.ai-novel', file))).toBe(hash(path.join(f.legacy, file)))
   expect(sourceState(f)).toEqual(before)
 })
 
