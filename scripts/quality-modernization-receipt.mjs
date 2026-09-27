@@ -19,7 +19,8 @@ const inside = (root, value) => {
 }
 class ReferenceEvidenceValidationError extends Error {}
 const fail = code => { throw new ReferenceEvidenceValidationError(code) }
-const targetUnitRange = (targetUnits, protocolRevision, arm) => protocolRevision === THIRTY_PERCENT_TOLERANCE_REVISION && arm !== 'baseline'
+export const targetUnitRange = (targetUnits, protocolRevision, arm) =>
+  (protocolRevision === THIRTY_PERCENT_TOLERANCE_REVISION || protocolRevision === 'pacing-readability-v1') && arm !== 'baseline'
   ? { minimum: Math.floor(targetUnits * 0.7), maximum: Math.ceil(targetUnits * 1.3) }
   : { minimum: Math.floor(targetUnits * 0.8), maximum: Math.ceil(targetUnits * 1.2) }
 

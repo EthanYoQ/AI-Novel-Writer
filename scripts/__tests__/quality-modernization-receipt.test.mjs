@@ -17,6 +17,16 @@ test('real receipts preserve stable targeted-review failure codes without exposi
 })
 
 test('current receipts use 70%-130% while historical receipts retain 80%-120%', () => {
+  for (const units of [630, 680, 1170]) assert.doesNotThrow(() => recordPersistedDraftObservation(
+    { protocolRevision: 'pacing-readability-v1', arm: 'candidate' }, { chapterNumber: 1, targetUnits: 900, units, contentHash: 'a'.repeat(64) }))
+  for (const units of [629, 1171]) assert.throws(() => recordPersistedDraftObservation(
+    { protocolRevision: 'pacing-readability-v1', arm: 'candidate' }, { chapterNumber: 1, targetUnits: 900, units, contentHash: 'a'.repeat(64) }), { code: 'TARGET_UNITS_FAILED' })
+  for (const units of [720, 1080]) assert.doesNotThrow(() => recordPersistedDraftObservation(
+    { protocolRevision: 'pacing-readability-v1', arm: 'baseline' }, { chapterNumber: 1, targetUnits: 900, units, contentHash: 'a'.repeat(64) }))
+  for (const units of [680, 719, 1081]) assert.throws(() => recordPersistedDraftObservation(
+    { protocolRevision: 'pacing-readability-v1', arm: 'baseline' }, { chapterNumber: 1, targetUnits: 900, units, contentHash: 'a'.repeat(64) }), { code: 'TARGET_UNITS_FAILED' })
+  assert.throws(() => recordPersistedDraftObservation(
+    { protocolRevision: 'unknown-revision', arm: 'candidate' }, { chapterNumber: 1, targetUnits: 900, units: 630, contentHash: 'a'.repeat(64) }), { code: 'TARGET_UNITS_FAILED' })
   for (const units of [1400, 2600]) assert.doesNotThrow(() => recordPersistedDraftObservation(
     { protocolRevision: 'draft-units-tolerance-30-v1', arm: 'candidate' }, { chapterNumber: 1, targetUnits: 2000, units, contentHash: 'a'.repeat(64) }))
   for (const units of [1399, 2601]) assert.throws(() => recordPersistedDraftObservation(

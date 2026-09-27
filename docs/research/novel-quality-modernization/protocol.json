@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "novel-quality-program-v3-80-v1",
-  "decisionRevision": "draft-units-tolerance-30-v1",
+  "decisionRevision": "pacing-readability-v1",
   "status": "approved-requires-committed-target-freeze-before-experiment",
   "language": "zh-CN",
   "decisionPolicy": {
@@ -232,8 +232,21 @@
     ],
     "reviewers": 2,
     "reviewerEligibility": "未参与实现且不是生成器自评",
-    "nonInferiority": "两人逐章逐维均无劣",
-    "improvement": "至少两个场景各一章一维两人一致优，其余非劣",
+    "nonInferiority": "后续post-UI与最终18章：自然度和人物动机两人逐章比较均无劣；节奏逐章比较并完整披露，候选须独立达到pacingReadability；节奏较弱时仅可称本revision质量合格，不得称整体non-inferior",
+    "pacingReadability": {
+      "appliesTo": ["post-ui", "final"],
+      "perChapter": true,
+      "reviewers": 2,
+      "requirements": [
+        "主要动作及顺序可追踪",
+        "必需情节实际发生",
+        "关键选择及其结果可识别",
+        "重复描写或心理回绕没有实质阻断本章推进"
+      ],
+      "comparison": "逐章保留与参考的节奏优劣及原文证据；仅更慢或铺陈更多不单独否决；逐维结果完整披露",
+      "dispute": "任一评审指出具体不合格片段则一次独立仲裁；无仲裁资源或仍不明为inconclusive，不得通过"
+    },
+    "improvement": "至少两个场景各一章一个维度两人一致优，其余章节自然度/人物动机无劣且节奏可读，才称有证据的样本改善；节奏较弱须披露，不得称全面优于参考",
     "arbitration": "分歧一次独立仲裁；无条件或仍不明为inconclusive"
   },
   "evidence": {

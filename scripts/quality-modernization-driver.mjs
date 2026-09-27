@@ -7,12 +7,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { createHash, randomUUID } from 'node:crypto'
 import { isExpectedReferenceEvidenceFailure, isVerifiedDirectPersistedDraftEvidence, isVerifiedRecoverySupplementEvidence,
-  readVerifiedDirectPersistedDraftEvidence, readVerifiedRecoveryCandidateSupplement } from './quality-modernization-receipt.mjs'
+  readVerifiedDirectPersistedDraftEvidence, readVerifiedRecoveryCandidateSupplement, targetUnitRange } from './quality-modernization-receipt.mjs'
 
 const ADAPTER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const PRODUCTION_BRIDGE = 'scripts/fixtures/quality-modernization-production.fixture.mjs'
 export const EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION = 's11-reference-no-actionable-review-v1'
-const THIRTY_PERCENT_TOLERANCE_REVISION = 'draft-units-tolerance-30-v1'
 const digest = value => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex')
 export function productionBridgeHash() {
   return digest([PRODUCTION_BRIDGE, 'scripts/quality-modernization-driver.mjs'].map(file => [file, digest(fs.readFileSync(path.join(ADAPTER_ROOT, file)))]))
@@ -321,10 +320,9 @@ const validDraftObservation = observation => Number.isSafeInteger(observation?.c
   && Number.isSafeInteger(observation?.targetUnits) && observation.targetUnits > 0
   && observation.persisted === true && /^[a-f0-9]{64}$/.test(observation.contentHash ?? '')
 const withinTargetUnits = (observation, protocolRevision, arm) => {
-  const tolerance = protocolRevision === THIRTY_PERCENT_TOLERANCE_REVISION && arm !== 'baseline' ? 0.3 : 0.2
-  return validDraftObservation(observation)
-    && observation.units >= Math.floor(observation.targetUnits * (1 - tolerance))
-    && observation.units <= Math.ceil(observation.targetUnits * (1 + tolerance))
+  if (!validDraftObservation(observation)) return false
+  const { minimum, maximum } = targetUnitRange(observation.targetUnits, protocolRevision, arm)
+  return observation.units >= minimum && observation.units <= maximum
 }
 function hasReviewableDraft(result) {
   const observation = result?.draftObservation

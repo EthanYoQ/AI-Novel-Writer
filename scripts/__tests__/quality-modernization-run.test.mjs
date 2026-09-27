@@ -148,6 +148,19 @@ test('full classification rejects missing chapters, wrong arm predecessors, fail
     })
     const classify = values => classifyFullProduction(values, { mode: 'synthetic', order: protocol.order })
     assert.equal(classify(results).status, 'passed')
+    for (const [arm, accepted, rejected] of [
+      ['candidate', [630, 680, 1170], [629, 1171]],
+      ['baseline', [720, 1080], [680, 719, 1081]],
+    ]) {
+      for (const [units, pairFailure] of [...accepted.map(value => [value, undefined]),
+        ...rejected.map(value => [value, 'FULL_DRAFT_INVALID'])]) {
+        const changed = structuredClone(results)
+        const draft = changed.find(result => result.arm === arm && result.draftObservation)
+        draft.draftObservation.units = units
+        draft.saved.units = units
+        assert.equal(classify(changed).pairFailure, pairFailure, `${arm} ${units}`)
+      }
+    }
     assert.equal(classify(results.slice(0, -1)).pairFailure, 'FULL_OPERATION_COVERAGE_MISMATCH')
     for (const mutate of [
       copy => { copy[8].predecessor.projectId = 'another-arm' },
@@ -274,7 +287,13 @@ test('三乘三两臂与原80帽含post-UI备份预留', () => {
   assert.equal(selectPhase(protocol, 'full', 'final').caseIds.length, 9)
   assert.equal(protocol.phases['early-budget'].operations.reduce((n, op) => n + op.minimumCalls, 0), 4)
   assert.equal(protocol.allocation.postUiBudget, 4)
-  assert.equal(protocol.decisionRevision, 'draft-units-tolerance-30-v1')
+  assert.equal(protocol.decisionRevision, 'pacing-readability-v1')
+  assert.deepEqual(protocol.oracle.pacingReadability.appliesTo, ['post-ui', 'final'])
+  assert.equal(protocol.oracle.pacingReadability.requirements.length, 4)
+  assert.match(protocol.oracle.nonInferiority, /节奏逐章比较并完整披露/)
+  assert.doesNotMatch(protocol.oracle.nonInferiority, /逐章逐维均无劣/)
+  assert.match(protocol.oracle.nonInferiority, /节奏较弱时仅可称本revision质量合格，不得称整体non-inferior/)
+  assert.match(protocol.oracle.improvement, /节奏较弱须披露，不得称全面优于参考/)
   assert.equal(protocol.phases['early-budget'].scenarioRevision, 's14b-post-ui-budget-syntax-repair-v1')
   assert.deepEqual(protocol.phases['early-budget'].attemptPolicy, PHASE_SCENARIOS['early-budget'].attemptPolicy)
   assert.doesNotThrow(() => assertScenarioMatchesProtocol(selectPhase(protocol, 'early-budget', 'post-ui'), PHASE_SCENARIOS['early-budget']))
