@@ -83,6 +83,68 @@ test('complete-source reopen rejects missing or changed published manuscript bef
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
+test('complete-source reopen rejects a core-only receipt before CDP', () => {
+  const root = mkdtempSync(join(fixtureRoot, 'complete-coverage-test-'))
+  try {
+    const project = join(root, 'p')
+    mkdirSync(project)
+    const title = '作者蓝图'
+    const revision = '作者修稿正文'
+    const manuscript = `第1章 ${title}.txt`
+    writeFileSync(join(project, manuscript), `第1章 ${title}\n\n${revision}`)
+    const body = { verifiedBy: 'legacy-renderer-cdp-complete-source-write', projectPath: project,
+      process: { exited: true, portClosed: true }, completeSourceSeed: { blueprint: { title }, revision },
+      sourceIdentity: { draftIds: [1, 2] }, completeSource: {},
+      publishedManuscript: { path: manuscript, sha256: hash(readFileSync(join(project, manuscript))) } }
+    const marker = join(root, 'receipt.json')
+    const receipt = JSON.stringify({ ...body, proofSha256: hash(JSON.stringify(body)) })
+    writeFileSync(marker, receipt)
+    const result = spawnSync(process.execPath, [script, '1', project, marker, '--complete-source-read-proof'], { encoding: 'utf8' })
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /complete source reopen proof requires saved project prompt, writing skill binding, and chunks-only knowledge evidence/i)
+    assert.equal(readFileSync(marker, 'utf8'), receipt)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('complete-source reopen rejects changed project prompt before CDP', () => {
+  const root = mkdtempSync(join(fixtureRoot, 'complete-prompt-hash-test-'))
+  try {
+    const project = join(root, 'p')
+    const prompt = '.vela/prompts/assistant_writing_identity.zh-CN.json'
+    const skill = '.vela/writing-skills.json'
+    const knowledge = '.vela/lancedb/chunks.lance/data'
+    for (const file of [prompt, skill, knowledge]) mkdirSync(dirname(join(project, file)), { recursive: true })
+    writeFileSync(join(project, '.vela/vela.db'), 'offline schema placeholder')
+    writeFileSync(join(project, prompt), '{"key":"assistant_writing_identity"}')
+    writeFileSync(join(project, skill), '{"version":1,"bindings":{"planning":"builtin:long-form-continuity"}}')
+    writeFileSync(join(project, knowledge), 'chunk bytes')
+    const title = '作者蓝图'
+    const revision = '作者修稿正文'
+    const manuscript = `第1章 ${title}.txt`
+    writeFileSync(join(project, manuscript), `第1章 ${title}\n\n${revision}`)
+    const assets = [prompt, skill, knowledge, manuscript]
+      .map(path => ({ path, sha256: hash(readFileSync(join(project, path))) }))
+      .sort((a, b) => a.path.localeCompare(b.path))
+    const body = { verifiedBy: 'legacy-renderer-cdp-complete-source-write', projectPath: project,
+      process: { exited: true, portClosed: true },
+      completeSourceSeed: { blueprint: { title }, revision, prompt: { key: 'assistant_writing_identity' },
+        writingSkill: { stage: 'planning', skillId: 'builtin:long-form-continuity' }, knowledge: { text: 'chunk bytes' } },
+      sourceIdentity: { draftIds: [1, 2], knowledgeDocumentId: 'offline-doc' },
+      completeSource: { authorAssets: { prompt: readFileSync(join(project, prompt), 'utf8') } },
+      chunkEvidence: { documentId: 'offline-doc', chunkCount: 1, textSha256: hash('chunk bytes') },
+      source: { assetManifestSha256: hash(JSON.stringify(assets)), assets },
+      publishedManuscript: { path: manuscript, sha256: hash(readFileSync(join(project, manuscript))) } }
+    const marker = join(root, 'receipt.json')
+    const receipt = JSON.stringify({ ...body, proofSha256: hash(JSON.stringify(body)) })
+    writeFileSync(marker, receipt)
+    writeFileSync(join(project, prompt), '{"key":"changed"}')
+    const result = spawnSync(process.execPath, [script, '1', project, marker, '--complete-source-read-proof'], { encoding: 'utf8' })
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /complete source authored asset hashes differ from the save receipt/i)
+    assert.equal(readFileSync(marker, 'utf8'), receipt)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
 test('roster proof refuses outside, project-internal, and unrelated existing receipt paths before CDP', () => {
   const root = mkdtempSync(join(fixtureRoot, 'roster-guard-test-'))
   try {

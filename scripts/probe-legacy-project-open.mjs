@@ -89,6 +89,14 @@ if (rosterProof) {
     !== JSON.stringify(priorRosterProof.publishedManuscript)) {
     throw new Error('Complete source published manuscript differs from the save receipt')
   }
+  if (completeReadProof && (!priorRosterProof.completeSourceSeed.prompt || !priorRosterProof.completeSourceSeed.writingSkill
+    || !priorRosterProof.completeSourceSeed.knowledge || !priorRosterProof.sourceIdentity.knowledgeDocumentId
+    || !priorRosterProof.completeSource.authorAssets || !priorRosterProof.chunkEvidence)) {
+    throw new Error('Complete source reopen proof requires saved project prompt, writing skill binding, and chunks-only knowledge evidence')
+  }
+  if (completeReadProof && sourceHashes(resolve(projectPath)).assetManifestSha256 !== priorRosterProof.source?.assetManifestSha256) {
+    throw new Error('Complete source authored asset hashes differ from the save receipt')
+  }
   const exePath = process.env.AI_NOVEL_LEGACY_EXE_PATH
   if (!exePath || !existsSync(exePath) || !within(realpathSync(fixtureRoot), realpathSync(exePath))) {
     throw new Error('Roster proof requires an isolated official legacy executable')
@@ -227,6 +235,13 @@ const completeSourceSeed = completeWriteProof ? (() => {
     draft2: `第二版正文_${nonce}：甲确认缺页编号，乙提出新的核查路线。`,
     review: `作者审稿_${nonce}：第二版应先明确缺页编号。`,
     revision: `作者修稿正文_${nonce}：甲先确认缺页编号，乙据此提出核查路线。`,
+    prompt: { key: 'assistant_writing_identity', writingLanguage: 'zh-CN',
+      name: '作者项目写作身份', description: '此项目的作者写作身份',
+      systemRole: `你是此项目的写作助手_${nonce}。`,
+      taskGuidance: '遵守作者已确认的旧港档案设定。',
+      content: '{{mode_instruction}}', variables: { mode_instruction: '当前助手工作模式说明' } },
+    writingSkill: { stage: 'planning', skillId: 'builtin:long-form-continuity' },
+    knowledge: { fileName: `作者设定资料_${nonce}.txt`, text: `作者知识库资料_${nonce}：海港城的档案必须登记借阅。` },
   }
 })() : priorRosterProof?.completeSourceSeed
 const rosterCreate = rosterWriteProof && !existsSync(projectPath) ? `
@@ -331,8 +346,24 @@ const completeReader = completeWriteProof || completeReadProof ? `
       || exported?.content !== seed.revision || exported?.title !== seed.blueprint.title) {
       throw new Error('complete source finalized chapter read-back differs')
     }
+    const promptPath = path + '/.vela/prompts/' + seed.prompt.key + '.zh-CN.json'
+    const skillPath = path + '/.vela/writing-skills.json'
+    const promptFile = await window.velaAPI.invoke('fs:read-file', promptPath, path, context)
+    const skillFile = await window.velaAPI.invoke('fs:read-file', skillPath, path, context)
+    const expectedSkill = { version: 1, bindings: { [seed.writingSkill.stage]: seed.writingSkill.skillId } }
+    if (promptFile?.success !== true || JSON.stringify(JSON.parse(promptFile.content)) !== JSON.stringify(seed.prompt)
+      || skillFile?.success !== true || JSON.stringify(JSON.parse(skillFile.content)) !== JSON.stringify(expectedSkill)) {
+      throw new Error('complete source project prompt or writing skill binding read-back differs')
+    }
+    const documents = await window.velaAPI.invoke('kb:list-documents', path, context)
+    const knowledge = documents?.find(document => document.id === identity.knowledgeDocumentId)
+    if (!knowledge || knowledge.fileName !== seed.knowledge.fileName || knowledge.filePath !== ''
+      || knowledge.chunkCount !== identity.knowledgeChunkCount) {
+      throw new Error('complete source chunks-only knowledge read-back differs')
+    }
     return { config: seed.config, roster: { factHash: roster.factHash, entries: roster.entries }, blueprint,
-      drafts, review, revision, finalized, exported }
+      drafts, review, revision, finalized, exported,
+      authorAssets: { prompt: promptFile.content, writingSkill: skillFile.content, knowledge } }
   }
 ` : ''
 const completeWrite = completeWriteProof ? `
@@ -378,9 +409,27 @@ const completeWrite = completeWriteProof ? `
   const updated = { ...result.project, novelConfig: { ...result.project.novelConfig, ...seed.config } }
   const configSaved = await window.velaAPI.invoke('project:save', result.project.id, updated, result.project.path, context)
   if (configSaved?.success !== true) throw new Error(configSaved?.error || 'complete source author config save failed')
+  const promptDir = result.project.path + '/.vela/prompts'
+  if (!await window.velaAPI.invoke('fs:check-exists', promptDir, result.project.path, context)) {
+    const made = await window.velaAPI.invoke('fs:mkdir', promptDir, result.project.path, context)
+    if (made?.success !== true) throw new Error(made?.error || 'complete source project prompt directory creation failed')
+  }
+  const promptSaved = await window.velaAPI.invoke('fs:write-file',
+    promptDir + '/' + seed.prompt.key + '.zh-CN.json', JSON.stringify(seed.prompt, null, 2), result.project.path, context)
+  if (promptSaved?.success !== true) throw new Error(promptSaved?.error || 'complete source project prompt save failed')
+  const skillSaved = await window.velaAPI.invoke('fs:write-file', result.project.path + '/.vela/writing-skills.json',
+    JSON.stringify({ version: 1, bindings: { [seed.writingSkill.stage]: seed.writingSkill.skillId } }, null, 2) + '\\n',
+    result.project.path, context)
+  if (skillSaved?.success !== true) throw new Error(skillSaved?.error || 'complete source writing skill binding save failed')
+  const imported = await window.velaAPI.invoke('kb:import-planning-text',
+    seed.knowledge.text, seed.knowledge.fileName, result.project.path, context)
+  if (imported?.success !== true || !imported.docId || imported.chunkCount !== 1) {
+    throw new Error(imported?.error || 'complete source chunks-only knowledge import failed')
+  }
   const sameProcessOpen = await window.velaAPI.invoke('project:open', result.project.path)
   const sourceIdentity = { draftIds: [first.id, second.id], reviewId: reviewSaved.id,
-    revisionId: revisionSaved.id, finalizationId: finalized.finalizationId }
+    revisionId: revisionSaved.id, finalizationId: finalized.finalizationId,
+    knowledgeDocumentId: imported.docId, knowledgeChunkCount: imported.chunkCount }
   const completeSource = await readCompleteSource(sameProcessOpen, sourceIdentity, seed, rosterEvidence.savedRoster)
   return { ...rosterEvidence, completeSourceSeed: seed, sourceIdentity, completeSource }
 ` : ''
@@ -507,6 +556,17 @@ function sourceHashes(root) {
   }
 }
 
+async function chunksOnlyEvidence(root, identity, seed) {
+  const lancedb = await import('@lancedb/lancedb')
+  const db = await lancedb.connect(join(root, '.vela', 'lancedb'))
+  const table = await db.openTable('chunks')
+  const rows = (await table.query().toArray()).filter(row => row.docId === identity.knowledgeDocumentId)
+  if (rows.length !== identity.knowledgeChunkCount || rows.length !== 1 || rows[0].text !== seed.knowledge.text) {
+    throw new Error('Complete source chunks-only knowledge text differs from the saved public import')
+  }
+  return { documentId: identity.knowledgeDocumentId, chunkCount: rows.length, textSha256: textHash(rows[0].text) }
+}
+
 if (rosterWriteProof) {
   const current = listener()
   if (current?.pid !== processProof.pid || current.startedAt !== processProof.startedAt) throw new Error('Roster save process changed before close')
@@ -519,16 +579,30 @@ if (rosterWriteProof) {
   processProof.exited = true
   processProof.portClosed = true
 }
+const chunkEvidence = completeWriteProof || completeReadProof
+  ? await chunksOnlyEvidence(resolve(projectPath), completeReadProof ? priorRosterProof.sourceIdentity : proof.sourceIdentity, completeSourceSeed)
+  : undefined
+const sourceProof = rosterProof ? sourceHashes(resolve(projectPath)) : undefined
+if (completeWriteProof && (!sourceProof.assets.some(asset => asset.path === `.vela/prompts/${completeSourceSeed.prompt.key}.zh-CN.json`)
+  || !sourceProof.assets.some(asset => asset.path === '.vela/writing-skills.json')
+  || !sourceProof.assets.some(asset => asset.path.startsWith('.vela/lancedb/')))) {
+  throw new Error('Complete source project prompt, writing skill, or knowledge assets are missing')
+}
+if (completeReadProof && (JSON.stringify(chunkEvidence) !== JSON.stringify(priorRosterProof.chunkEvidence)
+  || sourceProof.assetManifestSha256 !== priorRosterProof.source?.assetManifestSha256)) {
+  throw new Error('Complete source authored asset hashes differ after the new-process reopen')
+}
 const receiptBody = {
   ...(rosterReadProof ? {
     ...priorRosterProof,
-    reopened: { ...proof, process: processProof, source: sourceHashes(resolve(projectPath)) },
+    reopened: { ...proof, process: processProof, source: sourceProof },
   } : {
     ...proof,
-    ...(rosterProof ? { package: packageProof, process: processProof, source: sourceHashes(resolve(projectPath)) } : {}),
+    ...(rosterProof ? { package: packageProof, process: processProof, source: sourceProof } : {}),
   }),
+  ...(completeWriteProof ? { chunkEvidence } : {}),
   ...(completeWriteProof ? { publishedManuscript: publishedManuscript(projectPath, completeSourceSeed) } : {}),
-  ...(completeWriteProof || completeReadProof ? { sourceCoverage: 'core-author-config-roster-blueprint-chapter-review-revision-only; prompt-skill-kb-original-avatar-uncovered' } : {}),
+  ...(completeWriteProof || completeReadProof ? { sourceCoverage: 'core-author-config-roster-blueprint-chapter-review-revision-project-prompt-stage-skill-binding-kb-chunks-only; kb-original-project-skill-file-avatar-uncovered' } : {}),
   verifiedBy: completeWriteProof ? 'legacy-renderer-cdp-complete-source-write'
     : completeReadProof ? 'legacy-renderer-cdp-complete-source-reopen'
       : rosterWriteProof ? 'legacy-renderer-cdp-roster-write'
