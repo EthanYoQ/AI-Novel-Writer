@@ -287,7 +287,7 @@ export function selectPhase(protocol, phase, milestone = 'early') {
  * 生产桥只是协议的执行者：场景登记的 caseId 与 operation id 必须逐字等于该阶段的
  * 预注册内容。不一致时阻断，而不是跑一个不是预注册的实验。
  */
-export function assertScenarioMatchesProtocol(selection, scenario) {
+export function assertScenarioMatchesProtocol(selection, scenario, semanticPath) {
   if (!scenario || !isDeepStrictEqual(selection.caseIds, scenario.caseIds ?? [scenario.caseId])
     || !Array.isArray(selection.operations) || selection.operations.length !== scenario.operations.length
     || selection.operations.some((operation, index) => operation.id !== scenario.operations[index].id)
@@ -296,6 +296,17 @@ export function assertScenarioMatchesProtocol(selection, scenario) {
     || !isDeepStrictEqual(selection.attemptPolicy ?? null, scenario.attemptPolicy ?? null)
     || !isDeepStrictEqual(selection.evaluationPolicy ?? null, scenario.evaluationPolicy ?? null)) fail('SCENARIO_PROTOCOL_MISMATCH')
   if (!isDeepStrictEqual(selection.arms ?? null, scenario.arms ?? null)) fail('SCENARIO_PROTOCOL_MISMATCH')
+  if (selection.phase === 'c16-c18') {
+    const order = semanticPath && read(semanticPath).continuityQualificationCases?.map(item => item.id)
+    const oracles = selection.caseOracles
+    if (!isDeepStrictEqual(selection.caseOrder, selection.caseIds) || !isDeepStrictEqual(selection.caseOrder, order)
+      || !isDeepStrictEqual(Object.keys(oracles ?? {}), selection.caseOrder)
+      || selection.caseOrder.some(id => ['automatic', 'independentReview'].some(key =>
+        !Array.isArray(oracles[id]?.[key]) || oracles[id][key].length === 0
+        || oracles[id][key].some(value => typeof value !== 'string' || !value.trim())))
+      || ['technicalFailure', 'semanticFailureOrUnknown', 'attemptAccounting', 'repair']
+        .some(key => typeof selection.stopPolicy?.[key] !== 'string' || !selection.stopPolicy[key].trim())) fail('SCENARIO_PROTOCOL_MISMATCH')
+  }
 }
 export function validatePair(targets, observations) {
   const [a, b] = [targets.baseline, targets.candidate]
@@ -509,7 +520,7 @@ export function main(argv) {
     const scenario = productionScenario(phase, args['--milestone'] ?? PHASE_SCENARIOS[phase]?.milestone)
     if (!scenario) fail('PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED')
     const selection = selectPhase(protocol, phase, args['--milestone'] ?? scenario.milestone)
-    assertScenarioMatchesProtocol(selection, scenario)
+    assertScenarioMatchesProtocol(selection, scenario, path.join(ROOT, protocol.fixturePath))
     const developmentLedger = developmentLedgerPath(prepared.root, phase)
     if (fs.existsSync(developmentLedger)) fail('DEVELOPMENT_LEDGER_COLLISION')
     const result = withLedgerReconciliation(developmentLedger, 'synthetic', () => runProductionPhasePair(prepared.targets, { phase, development: true, mode: 'synthetic', milestone: selection.milestone,
@@ -531,7 +542,7 @@ export function main(argv) {
     const selection = selectPhase(protocol, phase, args['--milestone'] || PHASE_SCENARIOS[phase]?.milestone || 'early')
     const scenario = productionScenario(phase, selection.milestone)
     if (!scenario) return { status: 'blocked', code: 'PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED', selection, physicalModelRequests: 0 }
-    assertScenarioMatchesProtocol(selection, scenario)
+    assertScenarioMatchesProtocol(selection, scenario, path.join(ROOT, protocol.fixturePath))
     const mode = command === 'dry-run' || args['--dry-run'] ? 'synthetic' : args['--mode']
     if (!['synthetic', 'real'].includes(mode)) fail('EXPLICIT_PROVIDER_MODE_REQUIRED')
     if (mode === 'real' && (!targets.baseline.modelId || !targets.candidate.modelId)) fail('FROZEN_SAFE_MODEL_REQUIRED')

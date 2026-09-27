@@ -164,6 +164,8 @@ node scripts/quality-modernization-run.mjs full --targets <新HEAD冻结双目�
 
 `c16-c18` 是 `final` 下独立的 candidate-only 阶段，复用四个生产操作：定稿章节要点、角色状态、本地归档恢复后续写、WebDAV 选定世代恢复后续写。`continuityQualificationCases` 登记七个案例：C16-A 有效来源更新 derived、C16-B author 冲突、C16-C 同章重新定稿替换旧源，各执行 notes/cards 两次，归入原 `C16ExistingExtraction` 的6次；C17-A 恢复有效 source、C17-B 恢复后正常重新定稿使旧 derived 失效、C18-A 选定世代、C18-B 两完整分支明确选一，各执行一次 `GenerateDraftCommand`，归入原 `C17C18RestoreContinue` 的4次。准备、重试及角色状态原生 repair 如产生请求，均逐实际 attempt 记账；repair 仅接受同 run/root 的持久前序失败 artifact。早门和 full 的双臂设计不变，本阶段不触发 full 的6次规划/18章判定。离线合成通过只证明接线，正式质量资格仍需冻结输入、真实执行及独立 oracle 审核。
 
+本轮预注册在 `protocol.json.phases.c16-c18` 固定 C16-A→B→C、C17-A→B、C18-A→B 的 `caseOrder`、逐案 `caseOracles` 和 `stopPolicy`；runner 在执行前将该顺序与实际 `semantic-source.json.continuityQualificationCases` 逐项核对。自动证据核对物理 attempt、来源、持久效果、恢复身份与分支选择；语义事实在真实执行后由两名独立评审分别引用原定稿、notes/cards 和续写正文核验。任一技术失败立即停发，后续案记 NOT RUN；后判的语义 FAIL/UNKNOWN 保留全部已发送结果和原证据，不补采改判。10次只是七案最短物理路径，不能合并报正式 PASS；旧目标因新协议完整字节 hash 漂移而拒绝，须重新冻结。C18 仅验证选定完整世代与未选分支不混入，不证明外部 DAV 服务。
+
 离线 DAV 使用原控制器和服务、受限 loopback 地址的合成 transport，单独报告 DAV 请求数，不能充当真实网络、双 profile、OS 凭据或打包资格。嵌入配置须从实际隔离配置回读；本最小路径只选择 notes/cards、无 KB 导入。恢复回执必须包含新项目身份、transfer 来源、旧任务冻结与源项目不变；原6/4正式资格、文学裁决和历史 FAIL 均不由合成通过改判。
 
 中文语义源逐项登记C16自动derived正例、author冲突、同名改名、拒绝重启、旧outbox、CAS作者并发、较早章迟到、同章旧版本、身份不明及后处理失败。全部消费现有提取路径，禁止每角色新建付费调用。

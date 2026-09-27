@@ -27,6 +27,7 @@ import { parseReviewGenerationResult } from '../../src/shared/review-generation-
 
 const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
+const semanticPath = path.join(ROOT, protocol.fixturePath)
 const protocolBinding = currentProtocolBinding()
 
 test('post-UI reviewed draft policy selects every actionable item without changing earlier phases', () => {
@@ -144,7 +145,19 @@ fs.mkdirSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization'), { r
 test('c16-c18 keeps candidate qualification and the two allocations separate', () => {
   const scenario = PHASE_SCENARIOS['c16-c18']
   assert.ok(scenario, 'C16_C18_SCENARIO_MISSING')
-  assertScenarioMatchesProtocol(selectPhase(protocol, 'c16-c18', 'final'), scenario)
+  const selection = selectPhase(protocol, 'c16-c18', 'final')
+  assertScenarioMatchesProtocol(selection, scenario, semanticPath)
+  assert.deepEqual(selection.caseOrder, source.continuityQualificationCases.map(item => item.id))
+  for (const mutate of [
+    value => { value.caseOrder.reverse() },
+    value => { delete value.caseOracles['C16-A'] },
+    value => { value.caseOracles['C18-B'].independentReview = [] },
+    value => { delete value.stopPolicy.technicalFailure },
+  ]) {
+    const changed = structuredClone(selection)
+    mutate(changed)
+    assert.throws(() => assertScenarioMatchesProtocol(changed, scenario, semanticPath), /SCENARIO_PROTOCOL_MISMATCH/)
+  }
   assert.deepEqual(scenario.arms, ['candidate'])
   assert.equal(scenario.operations.length, 4)
   assert.equal(protocol.allocation.C16ExistingExtraction, 6)

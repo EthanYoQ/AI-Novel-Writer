@@ -203,6 +203,43 @@
       "scenarioRevision": "c16-c18-candidate-production-path-v1",
       "arms": ["candidate"],
       "caseIds": ["C16-A", "C16-B", "C16-C", "C17-A", "C17-B", "C18-A", "C18-B"],
+      "caseOrder": ["C16-A", "C16-B", "C16-C", "C17-A", "C17-B", "C18-A", "C18-B"],
+      "caseOracles": {
+        "C16-A": {
+          "automatic": ["有效定稿来源与正文hash绑定；notes/cards两次实际owner attempt及正式效果可回读", "空或旧derived字段按该来源更新；author与非空legacy字段保全，重复outbox不重复写"],
+          "independentReview": ["两名独立评审各引定稿正文、notes和cards原文：只记录实际核查遇阻与具体代价，不把待办核查写成已完成，人物、钥匙、知情和同日午后时点一致"]
+        },
+        "C16-B": {
+          "automatic": ["作者状态“谨慎”及其他author字段不被derived覆盖；冲突保留可见提议而非正式改写", "notes/cards各有来源、owner attempt、正式效果和持久回读；同名或改名不按名字误绑身份"],
+          "independentReview": ["两名独立评审各引含核查安排的定稿正文、notes和cards原文：安排仍是计划，提议不冒充作者批准的角色状态；人物和知情事实准确"]
+        },
+        "C16-C": {
+          "automatic": ["同章新定稿有新来源与正文hash；旧来源回包或迟到outbox不能覆盖新derived，作者并发改字段的CAS拒写", "notes/cards绑定新来源并持久回读；失败只保留候选，不产生部分正式效果"],
+          "independentReview": ["两名独立评审各引更正后的定稿正文、notes和cards原文：核查尚未开始、原安排待雨停；旧版本的已安排或已实施叙述不得残留为当前事实"]
+        },
+        "C17-A": {
+          "automatic": ["本地完整归档恢复为新projectId/epoch；原正文、头像、知识原文字节及稳定领域ID保全，源项目不变", "有效author与source-valid derived经transfer来源可读；旧候选/outbox/unknown冻结不可重放，秘密和机器权限不入副本；新草稿正式保存及来源可回读"],
+          "independentReview": ["两名独立评审各引恢复的定稿/notes/cards来源及续写草稿正文：续写承接有效事实、人物、钥匙、知情与时间，不把冻结旧候选当权威"]
+        },
+        "C17-B": {
+          "automatic": ["恢复副本内正常重新定稿绑定更正后的新来源；旧derived失效，新正式正文与草稿来源可回读，源项目不变", "新草稿由恢复副本当前author及source-valid权威生成；旧任务和旧derived不得重新获执行资格"],
+          "independentReview": ["两名独立评审各引恢复后更正定稿、当前notes/cards及续写草稿正文：林澄撤回旧核查安排，等待新通行许可；旧安排不得被写作已执行事实"]
+        },
+        "C18-A": {
+          "automatic": ["选定完整DAV世代经原恢复服务成为新项目；归档hash、项目身份、transfer来源与原项目不变可回读", "新项目的续写草稿正式保存且来源指向所选世代；旧任务冻结；离线受控transport结果仅算生产路径接线"],
+          "independentReview": ["两名独立评审各引所选世代定稿/notes/cards及续写草稿正文：续写只承接所选世代的有效人物、物品、知情和时间事实"]
+        },
+        "C18-B": {
+          "automatic": ["同父两个完整世代均可列出且未覆盖，显式选一恢复为新项目；选定generationId、parent与草稿来源可回读", "未选择分支不进入恢复权威或草稿来源；源项目及另一分支原字节不变；不以latest代替选择"],
+          "independentReview": ["两名独立评审各引两分支定稿/notes/cards和续写草稿正文：只承接所选代事实，不混入未选择分支“沈岸独自把草图交给另一个看守”；此案不证明外部DAV服务"]
+        }
+      },
+      "stopPolicy": {
+        "technicalFailure": "任一案或操作技术失败即停止发送，保留该失败及后续逐案NOT RUN；不得以10次最小路径合计冒充七案资格",
+        "semanticFailureOrUnknown": "真实执行后的独立评审才裁决语义；FAIL或UNKNOWN保留全部已发送结果、原案结论及原文证据，不补采、不改判、不挑最佳；未满足七案逐案资格不得汇总PASS",
+        "attemptAccounting": "每个真实发送含准备、失败、unknown和允许的修复，逐attempt reserve/dispatch/settle或unknown；无发送不记已发",
+        "repair": "仅定稿角色状态现有同run/root且有持久失败artifact的原生repair可用；不得新造重试权或放宽事实门"
+      },
       "minimumCalls": 10,
       "scope": "candidate-only七案例；C16三组notes/cards=6，local及DAV各两组续写=4；准备、修复及失败请求另逐实际记账",
       "operations": [
