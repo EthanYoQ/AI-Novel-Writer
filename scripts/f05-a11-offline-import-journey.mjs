@@ -1011,7 +1011,7 @@ async function verifyMac() {
     assert.equal(await editorBody(editor), macSavedBody)
     await session.page.locator('[role="status"]').filter({ hasText: /^未保存$/ }).last().waitFor({ state: 'visible' })
     macStage('save-start')
-    if (officialWindows) await session.page.keyboard.press('Control+S')
+    if (officialWindows) await session.page.keyboard.press('Control+s')
     else await session.page.locator('button[title="保存（⌘S）"]').click()
     await session.page.locator('[role="status"]').filter({ hasText: /^已保存$/ }).last().waitFor({ state: 'visible' })
     assert(draftBodies(target).includes(macSavedBody), 'Edited target body was not saved')
