@@ -5,7 +5,8 @@ import path from 'node:path'
 import vm from 'node:vm'
 import process from 'node:process'
 import { Buffer } from 'node:buffer'
-import { spawnSync } from 'node:child_process'
+import childProcess, { spawnSync } from 'node:child_process'
+import { syncBuiltinESMExports } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, currentProtocolBinding, assertProtocolBinding, validateHistoricalLedgerBoundary, validateHistoricalSupersessionBoundary, validateCampaignBinding, buildFixtureExports, validatePair, selectPhase, assertScenarioMatchesProtocol, reconcileDispatchedAttempts, withLedgerReconciliation, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles, assertFormalTargetCandidateClean, createShortIsolationRoot, assertOwnedIsolationRoot, validatePhysicalLedger, registeredCampaignWorktree, developmentLedgerPath } from '../quality-modernization-run.mjs'
 import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolatedRealModelConfig, PHASE_SCENARIOS, classifyProductionPair,
@@ -1201,27 +1202,83 @@ test('旧 reviewed-draft 段认证两次 invocation 和末项 unknown', () => {
 })
 
 test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂移', () => {
-  const campaignRoot = registeredCampaignWorktree(spawnSync('git', ['worktree', 'list', '--porcelain'], {
-    cwd: ROOT, encoding: 'utf8' }).stdout)
-  const ledger = path.join(campaignRoot, '.runtime/.cache/novel-quality-modernization/physical-ledger.jsonl')
-  const raw = fs.readFileSync(ledger, 'utf8')
   const boundary = protocol.historicalS14BSplitBoundary
   assert.equal(boundary.fromEventCount, 345)
   assert.equal(boundary.eventCount, 390)
-  assert.equal(validateHistoricalSupersessionBoundary(raw, 345, boundary), 390)
-  assert.equal(validatePhysicalLedger(ledger), ledger)
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/split-boundary-'))
+  const ledger = path.join(dir, '.runtime/.cache/novel-quality-modernization/physical-ledger.jsonl')
   const file = path.join(dir, 'synthetic-ledger.jsonl')
+  const archive = ['historicalSupersessionBoundary', 'historicalReviewedDraftBoundary',
+    'historicalReviewRebuildBoundary', 'historicalS14BSplitBoundary']
+  const fixture = mode => {
+    const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
+      sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
+      phase: 'early-budget', milestone: 'early', caseId: '场景1/1', operation: '指定范围生成' }
+    const rows = []
+    const triplet = (attemptId, extra = {}, terminal = 'settle') => rows.push(
+      { type: 'reserve', attemptId, binding: { ...binding, ...extra }, allocation: 'earlyBudget' },
+      { type: 'dispatch', attemptId }, { type: terminal, attemptId })
+    const frozen = Array.from({ length: protocol.historicalLedgerBoundary.eventCount / 3 }, (_, index) => `frozen-${index}`)
+    frozen.splice(-protocol.historicalLedgerBoundary.finalReserveAttemptIds.length,
+      protocol.historicalLedgerBoundary.finalReserveAttemptIds.length,
+      ...protocol.historicalLedgerBoundary.finalReserveAttemptIds)
+    frozen.forEach(id => triplet(id))
+    const boundaries = { historicalLedgerBoundary: { ...protocol.historicalLedgerBoundary,
+      rawBytesSha256: hash(rows.map(JSON.stringify).join('\n') + '\n') } }
+    for (const name of archive) {
+      const original = protocol[name]
+      const attempts = original.reserveAttempts ?? original.reserveAttemptIds.map(attemptId => ({
+        attemptId, invocationId: original.evidenceInvocationId, terminal: 'settle' }))
+      for (const item of attempts) triplet(item.attemptId, { protocolRevision: original.protocolRevision,
+        protocolHash: original.protocolHash, invocationId: item.invocationId }, item.terminal)
+      boundaries[name] = { ...original, rawBytesSha256: hash(rows.map(JSON.stringify).join('\n') + '\n') }
+    }
+    return { raw: rows.map(JSON.stringify).join('\n') + '\n', boundaries, binding }
+  }
+  const real = fixture('real'), synthetic = fixture('synthetic')
+  const protocolBytes = Buffer.from(JSON.stringify({ ...protocol, ...real.boundaries }))
+  const gitDir = spawnSync('git', ['-C', ROOT, 'rev-parse', '--absolute-git-dir'], { encoding: 'utf8' })
+  assert.equal(gitDir.status, 0)
+  const originalSpawn = childProcess.spawnSync, originalRead = fs.readFileSync
   try {
-    fs.writeFileSync(file, raw)
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, {
-      campaignMode: 'synthetic', historicalLedgerBoundary: protocol.historicalLedgerBoundary,
-      historicalSupersessionBoundary: protocol.historicalSupersessionBoundary,
-      historicalReviewedDraftBoundary: protocol.historicalReviewedDraftBoundary,
-      historicalReviewRebuildBoundary: protocol.historicalReviewRebuildBoundary,
-      historicalS14BSplitBoundary: { ...boundary, rawBytesSha256: '0'.repeat(64) },
-    }), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+    fs.mkdirSync(path.dirname(ledger), { recursive: true })
+    fs.writeFileSync(path.join(dir, '.git'), `gitdir: ${gitDir.stdout.trim()}\n`)
+    fs.writeFileSync(ledger, real.raw)
+    // Test-only inventory and protocol bytes; the real entry still checks the Git common dir,
+    // canonical ledger path, file identity and every historical boundary.
+    childProcess.spawnSync = function (command, args, options) {
+      if (command === 'git' && args?.slice(-3).join(' ') === 'worktree list --porcelain')
+        return { status: 0, stdout: `worktree ${dir}\nHEAD ${'a'.repeat(40)}\nbranch refs/heads/codex/program-v3-autonomous-continuation\n` }
+      return originalSpawn.call(this, command, args, options)
+    }
+    syncBuiltinESMExports()
+    fs.readFileSync = function (name, ...args) {
+      if (typeof name === 'string' && path.resolve(name) === path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json'))
+        return args[0] === 'utf8' ? protocolBytes.toString('utf8') : protocolBytes
+      return originalRead.call(this, name, ...args)
+    }
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 345, real.boundaries.historicalS14BSplitBoundary), 390)
+    assert.equal(validatePhysicalLedger(ledger), ledger)
+    fs.writeFileSync(file, synthetic.raw)
+    const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
+    assert.doesNotThrow(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt',
+      binding: { ...synthetic.binding, ...currentProtocolBinding() } }, options))
+    const tamper = raw => {
+      const lines = raw.trimEnd().split('\n')
+      lines[389] = lines[389].replace('"attemptId":"', '"attemptId":"tampered-')
+      return lines.join('\n') + '\n'
+    }
+    fs.writeFileSync(ledger, tamper(real.raw))
+    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    fs.writeFileSync(file, tamper(synthetic.raw))
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  } finally {
+    fs.readFileSync = originalRead
+    childProcess.spawnSync = originalSpawn
+    syncBuiltinESMExports()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('超时守护为每个 dispatch 独立计时：先写 unknown 再 abort，且后续 attempt 不继承残余预算', async () => {
