@@ -928,8 +928,10 @@ try {
 
   New-Item -ItemType Directory -Path $velaHome -Force | Out-Null
   if (-not $V110InstalledUpgrade) {
-    @{ theme = 'light'; locale = 'zh-CN'; proxy = @{ enabled = $false; type = 'http'; host = ''; port = 7890 } } |
-      ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $globalConfig -Encoding utf8
+    $configJson = ConvertTo-Json -InputObject @{
+      theme = 'light'; locale = 'zh-CN'; proxy = @{ enabled = $false; type = 'http'; host = ''; port = 7890 }
+    } -Depth 4
+    [System.IO.File]::WriteAllText($globalConfig, $configJson, [System.Text.UTF8Encoding]::new($false))
   }
 
   $hasPreviousVersion = (
@@ -970,13 +972,14 @@ try {
       Write-AiNovelV110GlobalSeed -ConfigPath $globalConfig -RecentPath $recentProjects -ProjectPath $upgradeFixtureRoot
     }
     else {
-      @(
+      $recentJson = ConvertTo-Json -InputObject @(
         @{
           name = '升级保留验证小说'
           path = $upgradeFixtureRoot
           updatedAt = '2026-01-02T03:04:05.000Z'
         }
-      ) | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $recentProjects -Encoding utf8
+      ) -Depth 4
+      [System.IO.File]::WriteAllText($recentProjects, $recentJson, [System.Text.UTF8Encoding]::new($false))
     }
 
     $legacyExePath = Join-Path $installRoot 'AI小说作家.exe'
