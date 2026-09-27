@@ -14,12 +14,14 @@ const arg = name => process.argv.find(value => value.startsWith(`--${name}=`))?.
 const macMountedApp = arg('mac-mounted-app')
 const macFixtureOnly = arg('mac-fixture-only') === '1'
 const macMode = Boolean(macMountedApp || macFixtureOnly)
+const winInstalledApp = arg('win-installed-app')
+const winMode = Boolean(winInstalledApp)
 const macScratchRoot = arg('scratch-root')
 const macDmg = arg('dmg')
 const macMountPoint = arg('mount-point')
 const macArch = arg('arch')
-const macVersion = arg('mac-version')
-const packageDir = macMode ? macMountedApp : arg('package-dir')
+const macVersion = arg('mac-version') ?? arg('win-version')
+const packageDir = macMode ? macMountedApp : winMode ? winInstalledApp : arg('package-dir')
 const buildTree = arg('build-tree')
 const fieldPolicy = path.join(buildTree ?? '', 'electron', 'services', 'portable-project-field-policy.json')
 const testedSha = arg('tested-sha')
@@ -36,6 +38,7 @@ const sources = legacyV025 ? [{ version: 'v0.2.5', path: legacyV025 }] : [
   { version: 'v1.0.0', path: arg('legacy-v100') },
   { version: 'v1.1.0', path: arg('legacy-v110') },
 ]
+assert(!(macMode && winMode), 'Select one official package platform')
 if (macMode) {
   assert(macScratchRoot && path.isAbsolute(macScratchRoot), 'macOS fixture requires an absolute --scratch-root')
   assert(['v1.0.0', 'v1.1.0'].includes(macVersion), 'Select an official --mac-version')
@@ -49,6 +52,17 @@ if (macMode) {
     assert.equal(execFileSync('uname', ['-m'], { encoding: 'utf8' }).trim(), macArch === 'x64' ? 'x86_64' : 'arm64')
     assert(fs.statSync(macDmg).isFile(), 'Missing mounted DMG source')
   }
+} else if (winMode) {
+  assert.equal(process.platform, 'win32', 'Installed Windows package journey requires Windows')
+  assert(macScratchRoot && path.isAbsolute(macScratchRoot) && path.isAbsolute(winInstalledApp)
+    && ['v1.0.0', 'v1.1.0'].includes(macVersion)
+    && /^[a-f0-9]{40}$/.test(testedSha ?? '')
+    && /^[a-f0-9]{64}$/.test(expectedExe ?? '') && /^[a-f0-9]{64}$/.test(expectedAsar ?? ''),
+  'Specify absolute installed app and scratch, official Windows version, tested SHA and package hashes')
+  assert.equal(path.basename(path.resolve(winInstalledApp)), 'installed-app', 'Expected installer installed-app directory')
+  assert.equal(fs.realpathSync(winInstalledApp), path.resolve(winInstalledApp), 'Installed app directory must not be a link')
+  assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim(), testedSha,
+    'Execution HEAD differs from tested SHA')
 } else {
 assert(packageDir && buildTree && /^[a-f0-9]{40}$/.test(testedSha ?? '')
   && /^[a-f0-9]{64}$/.test(expectedExe ?? '') && /^[a-f0-9]{64}$/.test(expectedAsar ?? '')
@@ -57,7 +71,7 @@ assert(packageDir && buildTree && /^[a-f0-9]{40}$/.test(testedSha ?? '')
 assert(!finalDelta || (supplement && onlyVersion === 'v1.1.0'), 'Final A11 delta requires one synthetic v1.1.0 source')
 }
 const buildGit = (...args) => execFileSync('git', args, { cwd: buildTree, encoding: 'utf8' }).trim()
-if (!macMode) {
+if (!macMode && !winMode) {
 assert.equal(buildGit('rev-parse', 'HEAD'), testedSha, 'Build tree HEAD differs from tested SHA')
 assert.equal(buildGit('status', '--porcelain'), '', 'Build tree must be clean')
 if (installedRoot) {
@@ -74,15 +88,25 @@ const hashText = value => createHash('sha256').update(value).digest('hex')
 const exe = macMode && !macFixtureOnly ? path.join(macMountedApp, 'Contents', 'MacOS', 'AI小说作家') : path.join(packageDir ?? '', 'AI小说作家.exe')
 const asar = macMode && !macFixtureOnly ? path.join(macMountedApp, 'Contents', 'Resources', 'app.asar') : path.join(packageDir ?? '', 'resources', 'app.asar')
 if (macMode && !macFixtureOnly) assert(fs.statSync(exe).isFile() && fs.statSync(asar).isFile(), 'Mounted app executable or ASAR missing')
+if (winMode) {
+  assert(fs.statSync(exe).isFile() && fs.statSync(asar).isFile(), 'Installed app executable or ASAR missing')
+  assert.equal(sha256(exe), expectedExe, 'Installed app executable hash differs')
+  assert.equal(sha256(asar), expectedAsar, 'Installed app ASAR hash differs')
+}
 const runId = randomUUID()
-const scratch = macMode ? path.resolve(macScratchRoot) : path.join(process.env.LOCALAPPDATA, 'VibeCodingScratch', 'AI-Novel', `a11-${runId.slice(0, 8)}`)
-const receiptPath = macMode ? path.join(scratch, 'receipt.json') : path.join(repository, '.runtime', '.cache', 'f05-a11-offline-import', runId, 'receipt.json')
+const scratch = macMode || winMode ? path.resolve(macScratchRoot) : path.join(process.env.LOCALAPPDATA, 'VibeCodingScratch', 'AI-Novel', `a11-${runId.slice(0, 8)}`)
+const receiptPath = macMode || winMode ? path.join(scratch, 'receipt.json') : path.join(repository, '.runtime', '.cache', 'f05-a11-offline-import', runId, 'receipt.json')
 const receipt = macMode ? { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_MAC_V3',
   mode: 'official-old-app-mounted-app', testedSha, arch: macArch, steps: [], exitDiagnostics: [],
   provenance: macFixtureOnly ? null : { driverSha256: sha256(fileURLToPath(import.meta.url)),
     sourceManifestSha256: sha256(path.join(repository, 'scripts', 'fixtures', 's14c-official-old-sources', 'manifest.json')),
     dmgSha256: sha256(macDmg), executableSha256: sha256(exe), asarSha256: sha256(asar),
     appPathSha256: hashText(fs.realpathSync(macMountedApp)), mountPointSha256: hashText(fs.realpathSync(macMountPoint)) },
+} : winMode ? { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_WIN_V3',
+  mode: 'official-old-app-installed-app', testedSha, steps: [], exitDiagnostics: [], receiptPath,
+  provenance: { driverSha256: sha256(fileURLToPath(import.meta.url)),
+    sourceManifestSha256: sha256(path.join(repository, 'scripts', 'fixtures', 's14c-official-old-sources', 'manifest.json')),
+    executableSha256: sha256(exe), asarSha256: sha256(asar) },
 } : { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_WIN_V3',
   mode: legacyV025 ? 'v025-offline-copy-v1' : finalDelta ? 'synthetic-completeness-final-delta' : supplement ? 'synthetic-completeness' : 'historical-baseline',
   packageMode: installedRoot ? 'installed' : 'unpacked',
@@ -94,10 +118,10 @@ const receipt = macMode ? { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification
   historicalSources: sources.map(source => ({ version: source.version, path: source.path,
     injectedInventoryRemovedFromScratchCopy: fs.existsSync(path.join(source.path, '.vela', 'upgrade-data-inventory.json')) })),
   steps: [], exitDiagnostics: [], receiptPath }
-if (!macMode) assert.deepEqual(receipt.packageHashes, { exe: expectedExe, asar: expectedAsar })
+if (!macMode && !winMode) assert.deepEqual(receipt.packageHashes, { exe: expectedExe, asar: expectedAsar })
 fs.mkdirSync(scratch, { recursive: true })
 if (!macMode) {
-fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: legacyV025 ? 'codex/thread-7/s14c-v025' : 'codex/thread-6/a11',
+fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: winMode ? 'codex/s14c-windows-official' : legacyV025 ? 'codex/thread-7/s14c-v025' : 'codex/thread-6/a11',
   sourceProject: repository, createdAt: new Date().toISOString(), ttlHours: 72,
   cleanupCommand: `Remove-Item -LiteralPath '${scratch}' -Recurse -Force`,
   retainReason: 'Packaged old-project import evidence and source/target comparisons' }, null, 2))
@@ -330,6 +354,7 @@ function configHasBom(file) {
 }
 
 async function launch(roots) {
+  const officialWindows = roots.officialWindows === true
   macStage('launch-start')
   const env = { ...process.env, AI_NOVEL_APP_DATA_HOME: roots.canonical,
     AI_NOVEL_LEGACY_SOURCE_HOME: roots.legacy, AI_NOVEL_VELA_HOME: roots.legacy,
@@ -347,7 +372,7 @@ async function launch(roots) {
     await page.locator('.app-skin-root').waitFor({ state: 'visible', timeout: 30_000 })
     stage = 'skin-ready'
     macStage('skin-ready')
-    if (macMode) await page.evaluate(async () => {
+    if (macMode || officialWindows) await page.evaluate(async () => {
       const saved = await window.aiNovelAPI.invoke('config:set', { locale: 'zh-CN' })
       if (!saved.success) throw new Error(saved.error || 'Mac A11 locale configuration failed')
       const config = await window.aiNovelAPI.invoke('config:get')
@@ -361,7 +386,7 @@ async function launch(roots) {
     })
     macStage('shell-configured')
     await page.reload()
-    if (macMode) await page.locator('html[lang="zh-CN"]').waitFor({ state: 'visible', timeout: 30_000 })
+    if (macMode || officialWindows) await page.locator('html[lang="zh-CN"]').waitFor({ state: 'visible', timeout: 30_000 })
     macStage('launch-ready')
     return { app, page }
   } catch (error) {
@@ -815,7 +840,7 @@ db.close()`, databaseSnapshot], { encoding: 'utf8' }))
 }
 
 function inspectMacDatabases(snapshot, target) {
-  const result = JSON.parse(execFileSync('python3', ['-c', `import json,sqlite3,sys
+  const result = JSON.parse(execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', `import json,sqlite3,sys
 a=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)
 b=sqlite3.connect('file:'+sys.argv[2]+'?mode=ro',uri=True)
 tables={'project_core':['id','project_name','characters_arch','core_outline','world_setting'],
@@ -846,19 +871,20 @@ a.close(); b.close()`, snapshot, path.join(target, '.ai-novel', 'project.db')], 
 }
 
 function macLlmCalls(target) {
-  return Number(execFileSync('python3', ['-c', `import sqlite3,sys
+  return Number(execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', `import sqlite3,sys
 db=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True)
 print(db.execute('select count(*) from llm_calls').fetchone()[0])
 db.close()`, path.join(target, '.ai-novel', 'project.db')], { encoding: 'utf8' }).trim())
 }
 
 async function verifyMac() {
+  const officialWindows = typeof winMode !== 'undefined' && winMode
   let session
   try {
     macStage('seed-start')
     const seeded = seedMac()
     const macBody = seeded.body
-    const macSavedBody = `${macBody}\nA11 mac 目标保存`
+    const macSavedBody = `${macBody}\nA11 ${officialWindows ? 'windows' : 'mac'} 目标保存`
     macStage('seed-ready')
     const source = seeded.source
     const targetParent = path.join(scratch, 'target')
@@ -867,6 +893,7 @@ async function verifyMac() {
     const roots = Object.fromEntries(['canonical', 'legacy', 'userData', 'home', 'appData', 'localAppData']
       .map(key => [key, path.join(scratch, 'run', key)]))
     for (const directory of Object.values(roots)) fs.mkdirSync(directory, { recursive: true })
+    roots.officialWindows = officialWindows
     session = await launch(roots)
     macStage('home-start')
     await home(session.page)
@@ -954,7 +981,8 @@ async function verifyMac() {
     assert.equal(await editorBody(editor), macSavedBody)
     await session.page.locator('[role="status"]').filter({ hasText: /^未保存$/ }).last().waitFor({ state: 'visible' })
     macStage('save-start')
-    await session.page.locator('button[title="保存（⌘S）"]').click()
+    if (officialWindows) await session.page.keyboard.press('Control+S')
+    else await session.page.locator('button[title="保存（⌘S）"]').click()
     await session.page.locator('[role="status"]').filter({ hasText: /^已保存$/ }).last().waitFor({ state: 'visible' })
     assert(draftBodies(target).includes(macSavedBody), 'Edited target body was not saved')
     assert.equal(macLlmCalls(target), 0)
@@ -985,7 +1013,7 @@ async function verifyMac() {
     assert.deepEqual(inventory(source), seeded.files)
     receipt.steps.push({ stepId: `${macVersion}-target-edit-reopen`, outcome: 'PASS' })
     macStage('reopen-verified')
-    receipt.mac = { sourceVersion: macVersion, officialProofSha256: seeded.proofSha256,
+    receipt[officialWindows ? 'win' : 'mac'] = { sourceVersion: macVersion, officialProofSha256: seeded.proofSha256,
       sourceInventorySha256: seeded.inventorySha256,
       targetInventorySha256: hashText(JSON.stringify(inventory(target))), sourceProjectId: seeded.sourceProjectId,
       targetProjectId, database, knowledgeDocuments: sourceKnowledge.documents.length,
@@ -997,7 +1025,10 @@ async function verifyMac() {
     console.error(`[AI Novel A11] failure-stage=${receipt.lastStage}`, error)
     throw error
   } finally {
-    if (session) await closeMacApplication(session.app)
+    if (session) {
+      if (typeof winMode !== 'undefined' && winMode) await closeWindowsApplication(session.app)
+      else await closeMacApplication(session.app)
+    }
   }
 }
 
@@ -1007,7 +1038,7 @@ if (macFixtureOnly) {
     rows: fixture.rows, llmCalls: fixture.llmCalls, sourceInventorySha256: fixture.inventorySha256,
     officialProofSha256: fixture.proofSha256 }))
 } else try {
-  if (macMode) await verifyMac()
+  if (macMode || winMode) await verifyMac()
   else {
   for (const source of sources.filter(source => !onlyVersion || source.version === onlyVersion)) await verify(source)
   }
