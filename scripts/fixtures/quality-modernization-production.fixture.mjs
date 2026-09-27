@@ -945,7 +945,7 @@ test('isolated production commands persist the selected phase operations', async
           const report = JSON.parse(sourceReview.content)
           let cycleId, selected, selectedItems
           if (reviewedRun) {
-            const items = reviewedDraftSelection(report)
+            const { selected: items } = reviewedDraftSelection(report)
             assert.ok(items.length > 0, 'REVIEWED_DRAFT_NO_SELECTED_ITEMS')
             const cycle = candidate ? await invoke('db:review-cycle-get', sourceReview.id, project.rootPath, session) : null
             cycleId = cycle?.cycleId
@@ -1053,10 +1053,10 @@ test('isolated production commands persist the selected phase operations', async
           const savedReview = artifact(outputPath, stored.content, { reviewId: stored.id, sourceHash: sha(sourceDraft.content) })
           if (operationKind === 'review') {
             reviewedDraft.review = savedReview
-            const selected = reviewedDraftSelection(JSON.parse(stored.content))
+            const { selected, disposition } = reviewedDraftSelection(JSON.parse(stored.content))
             reviewedDraft.selectedCount = selected.length
             reviewedDraft.selectedItemsHash = sha(selected)
-            reviewedDraft.disposition = selected.length ? 'revised-once' : 'no-actionable-review'
+            reviewedDraft.disposition = disposition
           } else reviewedDraft.finalReview = savedReview
         }
       } else if (operationKind === 'refine') {

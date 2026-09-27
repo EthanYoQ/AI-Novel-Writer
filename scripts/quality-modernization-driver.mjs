@@ -13,9 +13,10 @@ const ADAPTER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 export const PRODUCTION_BRIDGE = 'scripts/fixtures/quality-modernization-production.fixture.mjs'
 export const EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION = 's11-reference-no-actionable-review-v1'
 export const REVIEWED_DRAFT_PROTOCOL_REVISION = 's14b-reviewed-draft-v1'
-export const POST_UI_REVIEW_POLICY = Object.freeze({ revision: 's14b-post-ui-reviewed-draft-v1',
+export const POST_UI_REVIEW_POLICY = Object.freeze({ revision: 's14b-post-ui-reviewed-draft-unknown-oracle-v2',
   selection: 'all-error-warning-in-report-order', confirmation: 'test-preauthorized-original-items',
   merge: 'accept-only-revision', finalReview: 'ordinary-full-review', noAction: 'retain-initial-draft',
+  unknownOnly: 'retain-initial-draft-and-full-review-pending-independent-goal-proof',
   maxRevisions: 1, qualityDecision: 'independent-oracle-final-text' })
 const POST_UI_BUDGET = Object.freeze({ scenarioRevision: 's14b-post-ui-reviewed-budget-v1',
   evaluationPolicy: POST_UI_REVIEW_POLICY,
@@ -25,8 +26,9 @@ export function reviewedDraftSelection(report) {
   if (!Array.isArray(report?.items) || report.items.length === 0
     || report.items.some(item => !['pass', 'error', 'warning', 'unknown'].includes(item?.severity))) throw new Error('REVIEWED_DRAFT_REPORT_INVALID')
   const selected = report.items.filter(item => item.severity === 'error' || item.severity === 'warning')
-  if (!selected.length && report.items.some(item => item.severity === 'unknown')) throw new Error('REVIEWED_DRAFT_UNKNOWN_UNRESOLVED')
-  return selected
+  return { selected, disposition: selected.length ? 'revised-once'
+    : report.items.some(item => item.severity === 'unknown')
+      ? 'no-actionable-review-with-unresolved-goals' : 'no-actionable-review' }
 }
 /** The S14B endpoint is immutable evidence, not a second product revision workflow. */
 export function validateReviewedDraft(result) {
@@ -41,11 +43,11 @@ export function validateReviewedDraft(result) {
       return content
     }
     readArtifact(chain.initial)
-    const report = JSON.parse(readArtifact(chain.review)), selected = reviewedDraftSelection(report)
+    const report = JSON.parse(readArtifact(chain.review)), { selected, disposition } = reviewedDraftSelection(report)
     if (chain.review.sourceHash !== chain.initial.contentHash || chain.selectedCount !== selected.length
       || chain.selectedItemsHash !== digest(selected)) return fail()
     const revised = selected.length > 0
-    if (chain.disposition !== (revised ? 'revised-once' : 'no-actionable-review')) return fail()
+    if (chain.disposition !== disposition) return fail()
     if (revised) {
       const confirmation = JSON.parse(readArtifact(chain.confirmation))
       if (confirmation.sourceReviewId !== chain.review.reviewId || digest(confirmation.sourceDraft?.content ?? '') !== chain.initial.contentHash

@@ -60,15 +60,19 @@ export function validateHistoricalLedgerBoundary(raw, boundary) {
   return boundary.eventCount
 }
 export function validateHistoricalSupersessionBoundary(raw, fromEventCount, boundary) {
+  const attempts = boundary?.reserveAttempts ?? boundary?.reserveAttemptIds?.map(attemptId => ({ attemptId,
+    invocationId: boundary.evidenceInvocationId, terminal: 'settle' }))
   if (!boundary || boundary.fromEventCount !== fromEventCount
     || !Number.isSafeInteger(boundary.eventCount) || boundary.eventCount <= fromEventCount
     || !/^[a-f0-9]{64}$/.test(boundary.rawBytesSha256)
     || typeof boundary.protocolRevision !== 'string' || !boundary.protocolRevision
     || !/^[a-f0-9]{64}$/.test(boundary.protocolHash)
-    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(boundary.evidenceInvocationId)
-    || !Array.isArray(boundary.reserveAttemptIds) || boundary.reserveAttemptIds.length === 0
-    || new Set(boundary.reserveAttemptIds).size !== boundary.reserveAttemptIds.length
-    || boundary.eventCount !== fromEventCount + boundary.reserveAttemptIds.length * 3) fail('INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY')
+    || !Array.isArray(attempts) || attempts.length === 0
+    || new Set(attempts.map(item => item.attemptId)).size !== attempts.length
+    || attempts.some(item => typeof item.attemptId !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.invocationId)
+      || !['settle', 'unknown'].includes(item.terminal))
+    || boundary.eventCount !== fromEventCount + attempts.length * 3) fail('INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY')
   let prefixEnd = 0
   for (let index = 0; index < boundary.eventCount; index++) {
     prefixEnd = raw.indexOf('\n', prefixEnd)
@@ -78,14 +82,14 @@ export function validateHistoricalSupersessionBoundary(raw, fromEventCount, boun
   const prefix = raw.slice(0, prefixEnd)
   if (hash(prefix) !== boundary.rawBytesSha256) fail('HISTORICAL_LEDGER_SUPERSESSION_DRIFT')
   const rows = prefix.slice(0, -1).split('\n').slice(fromEventCount).map(line => JSON.parse(line))
-  for (const [index, attemptId] of boundary.reserveAttemptIds.entries()) {
-    const [reserve, dispatch, settle] = rows.slice(index * 3, index * 3 + 3)
-    if (typeof attemptId !== 'string' || reserve?.type !== 'reserve' || reserve.attemptId !== attemptId
+  for (const [index, { attemptId, invocationId, terminal }] of attempts.entries()) {
+    const [reserve, dispatch, outcome] = rows.slice(index * 3, index * 3 + 3)
+    if (reserve?.type !== 'reserve' || reserve.attemptId !== attemptId
       || reserve.binding?.protocolRevision !== boundary.protocolRevision
       || reserve.binding?.protocolHash !== boundary.protocolHash
-      || reserve.binding?.invocationId !== boundary.evidenceInvocationId
+      || reserve.binding?.invocationId !== invocationId
       || dispatch?.type !== 'dispatch' || dispatch.attemptId !== attemptId
-      || settle?.type !== 'settle' || settle.attemptId !== attemptId) fail('HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING')
+      || outcome?.type !== terminal || outcome.attemptId !== attemptId) fail('HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING')
   }
   return boundary.eventCount
 }
@@ -159,7 +163,8 @@ export function validatePhysicalLedger(file) {
     || !samePath(native(registeredCampaignWorktree(git(ROOT, ['worktree', 'list', '--porcelain']))), native(ownerRoot))) fail('CAMPAIGN_LEDGER_IDENTITY_MISMATCH')
   const raw = fs.readFileSync(ledger, 'utf8'), protocol = read(PROTOCOL_PATH)
   const historical = validateHistoricalLedgerBoundary(raw, protocol.historicalLedgerBoundary)
-  validateHistoricalSupersessionBoundary(raw, historical, protocol.historicalSupersessionBoundary)
+  const superseded = validateHistoricalSupersessionBoundary(raw, historical, protocol.historicalSupersessionBoundary)
+  validateHistoricalSupersessionBoundary(raw, superseded, protocol.historicalReviewedDraftBoundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -412,6 +417,11 @@ export function updateLedger(file, event, options = {}) {
       const trustedSupersessionEvents = supersessionBoundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedHistoricalEvents, supersessionBoundary)
         : trustedHistoricalEvents
+      const reviewedBoundary = options.campaignMode === 'real'
+        ? protocol.historicalReviewedDraftBoundary : options.historicalReviewedDraftBoundary
+      const trustedReviewedEvents = reviewedBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedSupersessionEvents, reviewedBoundary)
+        : trustedSupersessionEvents
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
       // 未登记 operations 的阶段在这里 fail closed。
@@ -434,7 +444,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedSupersessionEvents
+          const superseded = index >= trustedHistoricalEvents && index < trustedReviewedEvents
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)

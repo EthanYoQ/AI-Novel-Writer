@@ -7,7 +7,7 @@ import process from 'node:process'
 import { Buffer } from 'node:buffer'
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
-import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, currentProtocolBinding, assertProtocolBinding, validateHistoricalLedgerBoundary, validateCampaignBinding, buildFixtureExports, validatePair, selectPhase, assertScenarioMatchesProtocol, reconcileDispatchedAttempts, withLedgerReconciliation, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles, assertFormalTargetCandidateClean, createShortIsolationRoot, assertOwnedIsolationRoot, validatePhysicalLedger, registeredCampaignWorktree, developmentLedgerPath } from '../quality-modernization-run.mjs'
+import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, currentProtocolBinding, assertProtocolBinding, validateHistoricalLedgerBoundary, validateHistoricalSupersessionBoundary, validateCampaignBinding, buildFixtureExports, validatePair, selectPhase, assertScenarioMatchesProtocol, reconcileDispatchedAttempts, withLedgerReconciliation, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles, assertFormalTargetCandidateClean, createShortIsolationRoot, assertOwnedIsolationRoot, validatePhysicalLedger, registeredCampaignWorktree, developmentLedgerPath } from '../quality-modernization-run.mjs'
 import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolatedRealModelConfig, PHASE_SCENARIOS, classifyProductionPair,
   fullExecutionSchedule, classifyFullProduction,
   adjudicateEarlyReviewReferenceNonconformance, EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION,
@@ -33,12 +33,13 @@ test('post-UI reviewed draft policy selects every actionable item without changi
     { severity: 'warning', category: '自然度', description: '修复重复', quote: '重复句' },
     { severity: 'error', category: '事实', description: '恢复保管事实', quote: '钥匙丢失' },
   ] }
-  assert.deepEqual(reviewedDraftSelection(report), report.items.slice(1))
-  assert.deepEqual(reviewedDraftSelection({ items: [report.items[0]] }), [])
+  assert.deepEqual(reviewedDraftSelection(report), { selected: report.items.slice(1), disposition: 'revised-once' })
+  assert.deepEqual(reviewedDraftSelection({ items: [report.items[0]] }), { selected: [], disposition: 'no-actionable-review' })
   const mixed = { items: [{ severity: 'unknown', category: '目标', description: '证据不足' }, report.items[1]] }
-  assert.deepEqual(reviewedDraftSelection(mixed), [report.items[1]])
+  assert.deepEqual(reviewedDraftSelection(mixed), { selected: [report.items[1]], disposition: 'revised-once' })
   assert.equal(mixed.items[0].severity, 'unknown')
-  assert.throws(() => reviewedDraftSelection({ items: [mixed.items[0]] }), /REVIEWED_DRAFT_UNKNOWN_UNRESOLVED/)
+  assert.deepEqual(reviewedDraftSelection({ items: [mixed.items[0]] }),
+    { selected: [], disposition: 'no-actionable-review-with-unresolved-goals' })
   assert.throws(() => reviewedDraftSelection({ items: [{ severity: 'invented' }] }), /REVIEWED_DRAFT_REPORT_INVALID/)
   const selected = selectPhase(protocol, 'early-budget', 'post-ui')
   assert.deepEqual(selected.evaluationPolicy, POST_UI_REVIEW_POLICY)
@@ -92,7 +93,21 @@ test('reviewed draft evidence rejects skipped issues, best-version picking and c
     fs.writeFileSync(passReview.outputPath, unknownReview)
     passReview.contentHash = hash(unknownReview)
     noAction.operations[2].outputHash = passReview.contentHash
-    assert.equal(validateReviewedDraft(noAction).valid, false, 'unknown-only review cannot become no-actionable-review')
+    assert.equal(validateReviewedDraft(noAction).valid, false, 'unknown-only review cannot become ordinary no-action')
+    noAction.reviewedDraft.disposition = 'no-actionable-review-with-unresolved-goals'
+    assert.deepEqual(validateReviewedDraft(noAction), { valid: true,
+      operations: productionScenario('early-budget', 'post-ui').operations.slice(0, 3),
+      disposition: 'no-actionable-review-with-unresolved-goals' })
+    const pendingPair = ['baseline', 'candidate'].map(arm => ({ ...structuredClone(noAction), arm,
+      phase: 'early-budget', milestone: 'post-ui', protocolRevision: protocol.decisionRevision, status: 'passed',
+      draftObservation: { chapterNumber: 1, targetUnits: 100, units: 100, persisted: true, contentHash: initial.contentHash },
+      saved: { chapterNumber: 1, targetUnits: 100, units: 100, contentHash: initial.contentHash } }))
+    assert.equal(classifyProductionPair(pendingPair, { mode: 'real', phase: 'early-budget' }).status,
+      'pending-independent-oracle-review')
+    fs.writeFileSync(passReview.outputPath, JSON.stringify({ items: [{ severity: 'pass' }] }))
+    assert.equal(validateReviewedDraft(noAction).valid, false, 'changed full original review must fail')
+    fs.writeFileSync(passReview.outputPath, unknownReview)
+    noAction.reviewedDraft.disposition = 'no-actionable-review'
     for (const mutate of [value => { value.reviewedDraft.selectedCount = 1 },
       value => { value.reviewedDraft.finalDraft = initial },
       value => { value.operations.pop() },
@@ -1075,6 +1090,27 @@ test('旧 post-UI 十二行只按精确前缀继承，边界外旧 revision 仍�
       binding: { ...old, protocolRevision: 'unknown-old-v9' }, allocation: 'postUiBudget' }) + '\n')
     assert.throws(() => append('after-unknown'), /PROTOCOL_DRIFT/)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('旧 reviewed-draft 段认证两次 invocation 和末项 unknown', () => {
+  const attempts = [
+    { attemptId: 'baseline:old-a', invocationId: '577497d2-0862-476c-9cee-839a6fce7c11', terminal: 'settle' },
+    { attemptId: 'candidate:old-b', invocationId: '13f33d55-016a-4db1-9993-c62f8f122ed7', terminal: 'unknown' },
+  ]
+  const old = { protocolRevision: 's14b-reviewed-draft-v1', protocolHash: 'a'.repeat(64) }
+  const rows = attempts.flatMap(item => [{ type: 'reserve', attemptId: item.attemptId,
+    binding: { ...old, invocationId: item.invocationId } },
+  { type: 'dispatch', attemptId: item.attemptId }, { type: item.terminal, attemptId: item.attemptId }])
+  const raw = rows.map(JSON.stringify).join('\n') + '\n'
+  const boundary = { fromEventCount: 0, eventCount: 6, rawBytesSha256: hash(raw), ...old, reserveAttempts: attempts }
+  assert.equal(validateHistoricalSupersessionBoundary(raw, 0, boundary), 6)
+  assert.throws(() => validateHistoricalSupersessionBoundary(raw, 0, { ...boundary,
+    reserveAttempts: attempts.map(item => ({ ...item, terminal: 'settle' })) }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  assert.throws(() => validateHistoricalSupersessionBoundary(raw, 0, { ...boundary,
+    reserveAttempts: [{ ...attempts[0], invocationId: attempts[1].invocationId }, attempts[1]] }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  assert.throws(() => validateHistoricalSupersessionBoundary(raw.replace('unknown', 'settle'), 0, boundary), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  assert.throws(() => validateHistoricalSupersessionBoundary(raw, 0, { ...boundary,
+    reserveAttempts: [...attempts, attempts[0]] }), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
 })
 
 test('超时守护为每个 dispatch 独立计时：先写 unknown 再 abort，且后续 attempt 不继承残余预算', async () => {
