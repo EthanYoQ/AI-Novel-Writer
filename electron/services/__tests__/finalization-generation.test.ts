@@ -21,7 +21,8 @@ const cleanup: (() => void)[] = []
 afterEach(() => { for (const dispose of cleanup.splice(0)) dispose(); vi.restoreAllMocks() })
 const prose = '林岚走进了北塔。'
 
-function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
+function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], options: { content?: string; writingLanguage?: 'en-US' } = {}) {
+  const content = options.content ?? prose
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/finalization-generation-tests')
   fs.mkdirSync(base, { recursive: true })
   const root = fs.mkdtempSync(path.join(base, 'owner-'))
@@ -30,13 +31,14 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   vi.mocked(getProjectDb).mockReturnValue(db)
   db.exec("INSERT INTO characters(name,character_id,cs_provenance) VALUES('林岚','character-lan','{}')")
   db.exec("INSERT INTO project_core(id,project_name) VALUES('main','合成定稿'); INSERT INTO blueprints(chapter_number,title) VALUES(1,'北塔'); INSERT INTO contents(id,body) VALUES(1,'旧稿'); INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,2)")
+  if (options.writingLanguage) db.prepare("UPDATE project_core SET writing_language=? WHERE id='main'").run(options.writingLanguage)
   FinalizationRepository.commit({ finalizationId: 'finalized-1', draftId: 1, chapterNumber: 1, chapterTitle: '北塔',
-    content: prose, contentHash: textHash(prose), contentRevision: 1, targetFileName: '第一章.txt' })
+    content, contentHash: textHash(content), contentRevision: 1, targetFileName: '第一章.txt' })
   const characterId = db.prepare("SELECT character_id FROM characters WHERE name='林岚'").pluck().get() as string
   const model: ModelProfile = { id: 'synthetic', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1',
     apiKey: 'synthetic-fixture-key', baseUrl: 'https://api.openai.com/v1', temperature: 0.7, maxTokens: 2048, purposes: ['generation'],
     capabilities: { contextWindowTokens: 32768, maxOutputTokens: 2048, reasoning: false, structuredOutput: true, usage: true } }
-  const response = (updates = [{ characterId, currentState: { location: '北塔' }, evidence: { start: 0, end: prose.length, text: prose } }]) => JSON.stringify({ updates })
+  const response = (updates = [{ characterId, currentState: { location: '北塔' }, evidence: { start: 0, end: content.length, text: content } }]) => JSON.stringify({ updates })
   const dispatchSpy = vi.fn<GenerationRunServiceDependencies['dispatch']>(dispatch ?? (async (_request, options) => {
     options.onVisible({ kind: 'delta', text: response() }); return { finishReason: 'stop', usage: null }
   }))
@@ -253,4 +255,65 @@ it.each(['length','unknown'] as const)('characters %s坏JSON不能触发修复�
  expect(cached.run.artifacts).toEqual(result.run.artifacts)
  expect(next.readFinalizationGeneration({slot})?.effect).toBeUndefined()
  expect(f.dispatch).toHaveBeenCalledTimes(1)
+})
+
+const splitProse='林岚在记录末尾写下核查安排。\n\n林岚更正记录：核查仍未开始，原定安排等待雨停。'
+const joinedQuote='林岚在记录末尾写下核查安排。林岚更正记录：核查仍未开始，原定安排等待雨停。'
+const lastUserMessage=(request:unknown)=>{
+ const messages=(request as {task:{messages:{role:string;content:unknown}[]}}).task.messages
+ const content=messages.filter(message=>message.role==='user').at(-1)?.content
+ return typeof content==='string'?content:JSON.stringify(content)
+}
+async function splitEvidenceRun(writingLanguage?:'en-US',replies:((characterId:string)=>unknown)[]=[]){
+ const f=fixture(undefined,{content:splitProse,writingLanguage})
+ for(const reply of replies)f.dispatch.mockImplementationOnce(async(_request,options)=>{
+  const value=reply(f.characterId);options.onVisible({kind:'delta',text:typeof value==='string'?value:JSON.stringify(value)});return {finishReason:'stop',usage:null}})
+ const slot:FinalizationGenerationSlot={source:f.prepared.context.source,stepKey:'character_cards'}
+ const handle=f.owner.beginFinalizationGeneration({slot,modelId:'synthetic'}).view.handle
+ const result=await f.owner.executeFinalizationGeneration({handle})
+ return Object.assign(f,{slot,handle,result})
+}
+const joined=(offsets:boolean)=>(characterId:string)=>({updates:[{characterId,currentState:{location:'记录室'},evidence:offsets?{start:0,end:joinedQuote.length,text:joinedQuote}:{text:joinedQuote}}]})
+const single=(characterId:string)=>({updates:[{characterId,currentState:{location:'记录室'},evidence:{text:'林岚更正记录：核查仍未开始，原定安排等待雨停。'}}]})
+
+it('characters初始提示要求evidence为单一连续片段（中英）',async()=>{
+ const zh=await splitEvidenceRun(undefined,[single])
+ expect(lastUserMessage(zh.dispatch.mock.calls[0]![0])).toContain('不得跨段落或空行拼接')
+ const en=await splitEvidenceRun('en-US',[single])
+ expect(lastUserMessage(en.dispatch.mock.calls[0]![0])).toContain('never join sentences across paragraphs or blank lines')
+})
+
+it('characters跨空行拼接证据：修复消息给出连续片段规则，合法单句后提交',async()=>{
+ const f=await splitEvidenceRun(undefined,[joined(true),single])
+ expect(f.dispatch).toHaveBeenCalledTimes(2)
+ const repair=lastUserMessage(f.dispatch.mock.calls[1]![0])
+ expect(repair).toContain('不得跨段落或空行拼接')
+ expect(repair).toContain('省略 start/end')
+ expect(repair).not.toContain('上一份回答未满足要求的 JSON 结构或原文证据校验')
+ expect(repair).not.toContain(joinedQuote)
+ expect(f.owner.commitFinalizationGeneration({handle:f.handle,artifact:f.artifactOf(f.result)})).toMatchObject({success:true,applied:1})
+})
+
+it('characters英文项目证据修复消息为英文',async()=>{
+ const f=await splitEvidenceRun('en-US',[joined(false),single])
+ const repair=lastUserMessage(f.dispatch.mock.calls[1]![0])
+ expect(repair).toContain('never join sentences across paragraphs or blank lines')
+ expect(repair).toContain('omit start/end')
+ expect(repair).not.toMatch(/[一-鿿]/)
+})
+
+it('characters三次跨段拼接证据仍封顶拒写，事实门不放宽',async()=>{
+ const f=await splitEvidenceRun(undefined,[joined(true),joined(false),joined(false)])
+ expect(f.dispatch).toHaveBeenCalledTimes(3)
+ expect(lastUserMessage(f.dispatch.mock.calls[2]![0])).toContain('不得跨段落或空行拼接')
+ expect(()=>f.owner.commitFinalizationGeneration({handle:f.handle,artifact:f.artifactOf(f.result)})).toThrow(/FINALIZED_CHARACTER_EVIDENCE_/)
+ expect(f.owner.readFinalizationGeneration({slot:f.slot})?.effect).toBeUndefined()
+ expect(f.db.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(f.characterId)).not.toBe('记录室')
+})
+
+it('characters JSON结构错误仍给通用修复说明',async()=>{
+ const f=await splitEvidenceRun(undefined,[()=>'{"updates": [',single])
+ const repair=lastUserMessage(f.dispatch.mock.calls[1]![0])
+ expect(repair).toContain('上一份回答未满足要求的 JSON 结构或原文证据校验')
+ expect(repair).not.toContain('不得跨段落或空行拼接')
 })
