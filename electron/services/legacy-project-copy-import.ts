@@ -7,6 +7,7 @@ import * as lancedb from '@lancedb/lancedb'
 import { KNOWLEDGE_COPY_MARKER, readKnowledgeCopy, writeKnowledgeCopy } from '../vector-store'
 import { m05CharacterAssetMigrationAdapter } from '../migrations/m05-character-assets'
 import { CharacterRosterRepository } from '../repositories/character-roster-repository'
+import { adoptLegacyCards, readLegacyRosterSource } from './legacy-roster-source'
 import { CURRENT_DESKTOP_SCHEMA_VERSION } from '../migrations/desktop-registry'
 import { CANONICAL_PROJECT_DATABASE, CANONICAL_PROJECT_DIRECTORY, createCanonicalProjectManifest, parseCanonicalProjectManifest } from '../../src/shared/project-format'
 import { assertProjectStoragePathSupported, type ProjectStoragePreflightOptions } from './project-storage-preflight'
@@ -178,6 +179,102 @@ async function adoptLegacyKnowledgeOriginals(sourceRoot: string, copiedRoot: str
   } finally { connection.close() }
 }
 
+/** Only the qualified offline copy has the old primary-key rows as target authority. */
+function adoptCopiedLegacyCards(db: import('better-sqlite3').Database, oldDatabase: string): void {
+  const initial = readLegacyRosterSource(db)
+  if (initial.snapshot.migrationState !== 'legacy_cards_preserved' || initial.rawLegacy.trim()) return
+  const old = new Database(oldDatabase, { readonly: true, fileMustExist: true })
+  const hash = (text: string) => createHash('sha256').update(text).digest('hex')
+  const serialize = (value: unknown) => JSON.stringify(value, (_key, item: unknown) => typeof item === 'bigint' ? { integer: item.toString() } : item)
+  const reject = () => fail('LEGACY_IMPORT_ROSTER_UNAVAILABLE')
+  try {
+    db.transaction(() => {
+      const rows = old.prepare('SELECT * FROM characters ORDER BY rowid').safeIntegers().all() as Record<string, unknown>[]
+      const origins = db.prepare('SELECT * FROM character_identity_origins').all() as {
+        character_id: string; source_key: string; original_row_json: string; original_hash: string
+      }[]
+      if (!rows.length || rows.length !== origins.length || rows.length !== initial.activeIds.length
+        || initial.identityRevision !== 0 || db.prepare('SELECT 1 FROM character_relationships LIMIT 1').get()) reject()
+      const mapped = rows.map((row, index) => {
+        const origin = origins.find(item => item.source_key === `legacy:characters:${index}`)
+        // The qualified v1.0 adapter adds this empty provenance column before M02.
+        const original = JSON.parse(serialize({ ...row, cs_provenance: 'cs_provenance' in row ? row.cs_provenance : '{}' })) as unknown
+        if (!origin || !isDeepStrictEqual(JSON.parse(origin.original_row_json), original) || origin.original_hash !== hash(origin.original_row_json)
+          || typeof row.name !== 'string' || !row.name.trim()) return reject()
+        const current = db.prepare('SELECT * FROM characters WHERE character_id=?').safeIntegers().get(origin.character_id) as Record<string, unknown>
+        if (!current || current.legacy_key !== row.name || current.retired !== 0n
+          || Object.keys(row).some(column => current[column] !== row[column])) reject()
+        return { ...origin, name: row.name, relationships: row.relationships }
+      })
+      const byName = new Map(mapped.map(row => [row.name, row]))
+      if (byName.size !== rows.length) reject()
+      const proposals = db.prepare('SELECT * FROM character_identity_proposals').all() as {
+        proposal_id: string; owner_character_id: string | null; source_key: string; source_hash: string;
+        raw_value: string; candidate_ids_json: string; resolved_character_id: string | null; approval_id: string | null
+      }[]
+      const bindings: { proposalId: string; sourceKey: string; sourceHash: string; targetId: string;
+        ownerId: string | null; relation?: string; sourceName?: string; targetName: string }[] = []
+      const checked = new Set<string>()
+      const checkProposal = (sourceKey: string, sourceHash: string, raw: string, ownerId: string | null, targetName: string | undefined) => {
+        const matches = proposals.filter(item => item.source_key === sourceKey)
+        const target = targetName === undefined ? undefined : byName.get(targetName)
+        const proposal = matches[0]
+        if (matches.length !== 1 || !proposal || proposal.owner_character_id !== ownerId || proposal.source_hash !== sourceHash
+          || proposal.raw_value !== raw || proposal.resolved_character_id !== null || proposal.approval_id !== null
+          || proposal.candidate_ids_json !== JSON.stringify(target ? [target.character_id] : [])) return reject()
+        checked.add(proposal.proposal_id)
+        return target ? { proposalId: proposal.proposal_id, sourceKey, sourceHash, targetId: target.character_id,
+          ownerId, targetName: target.name } : undefined
+      }
+      for (const row of mapped) {
+        let edges: unknown
+        try { edges = row.relationships === '' ? [] : JSON.parse(row.relationships as string) } catch { return reject() }
+        if (!Array.isArray(edges)) return reject()
+        const targets = new Set<string>()
+        for (const [index, edge] of edges.entries()) {
+          if (!edge || typeof edge !== 'object' || Array.isArray(edge)
+            || Object.keys(edge).sort().join(',') !== 'relation,target'
+            || typeof edge.target !== 'string' || !edge.target.trim() || !byName.has(edge.target)
+            || edge.target === row.name || targets.has(edge.target)
+            || typeof edge.relation !== 'string' || !edge.relation.trim()) return reject()
+          targets.add(edge.target)
+          const binding = checkProposal(`${row.source_key}:relationships:${index}`, hash(row.relationships as string),
+            JSON.stringify(edge), row.character_id, edge.target)!
+          bindings.push({ ...binding, relation: edge.relation, sourceName: row.name })
+        }
+      }
+      // Chapter planning names are preserved verbatim; only exact old roster keys bind.
+      const blueprints = old.prepare('SELECT chapter_number,characters FROM blueprints').all() as { chapter_number: number; characters: string }[]
+      for (const blueprint of blueprints) {
+        if (!blueprint.characters) continue
+        let names: unknown[]
+        try { const parsed: unknown = JSON.parse(blueprint.characters); names = Array.isArray(parsed) ? parsed : [blueprint.characters] }
+        catch { names = [blueprint.characters] }
+        for (const [index, name] of names.entries()) {
+          const binding = checkProposal(`legacy:blueprints:${blueprint.chapter_number}:characters:${index}`, hash(blueprint.characters),
+            typeof name === 'string' ? name : JSON.stringify(name), null, typeof name === 'string' ? name : undefined)
+          if (binding) bindings.push(binding)
+        }
+      }
+      if (checked.size !== proposals.length) reject()
+      const operationId = 'legacy-offline-identity-binding'
+      const receipt = JSON.stringify({ version: 1, kind: 'legacy-offline-identity-binding',
+        origins: mapped.map(row => ({ characterId: row.character_id, sourceKey: row.source_key, originalHash: row.original_hash })), bindings })
+      db.prepare('INSERT INTO character_identity_approvals VALUES(?,?,?)').run(operationId, hash(receipt), receipt)
+      for (const binding of bindings) {
+        db.prepare('UPDATE character_identity_proposals SET resolved_character_id=?,approval_id=? WHERE proposal_id=?')
+          .run(binding.targetId, operationId, binding.proposalId)
+        if (binding.ownerId) db.prepare('INSERT INTO character_relationships VALUES(?,?,?,?,?,?,?,?)').run(randomUUID(),
+          binding.ownerId, binding.targetId, binding.relation, binding.sourceName, binding.targetName,
+          JSON.stringify({ kind: 'legacy', sourceKey: binding.sourceKey, sourceHash: binding.sourceHash, migration: 'offline-project-copy' }), operationId)
+      }
+      const source = readLegacyRosterSource(db)
+      adoptLegacyCards(db, { operationId: 'offline-project-copy', expectedRevision: source.snapshot.revision,
+        expectedLegacyHash: source.legacyHash, expectedIdentityRevision: source.identityRevision, expectedFactsHash: source.factsHash })
+    }).immediate()
+  } finally { old.close() }
+}
+
 /** Explicit offline import. Caller prompts the user to close the old editor/sync
  * processes, owns the new target choice, and registers the result only on ready.
  * All SQLite/Lance writes occur inside an attempt-owned copy.
@@ -302,8 +399,13 @@ export async function importLegacyProjectCopy(options: {
     )) fail('LEGACY_IMPORT_SQLITE_VERIFICATION_FAILED')
     if (!hasHistory && !await m05CharacterAssetMigrationAdapter.verify({ sourceSnapshot: avatars, stagingTargetRoot: storage,
       stagingDatabasePath: newDatabase, receipt: avatarReceipt })) fail('LEGACY_IMPORT_AVATAR_INVALID')
-    const rosterDb = new Database(newDatabase, { readonly: true, fileMustExist: true })
+    const rosterDb = new Database(newDatabase, { fileMustExist: true })
     try {
+      rosterDb.pragma('foreign_keys = ON')
+      try { adoptCopiedLegacyCards(rosterDb, oldDatabase) } catch (error) {
+        if (error instanceof Error && error.message === 'LEGACY_IMPORT_ROSTER_UNAVAILABLE') preserveAttempt = true
+        throw error
+      }
       const roster = CharacterRosterRepository.read(rosterDb)
       if (!(
         roster.migrationState === 'empty' && roster.status === 'empty' && roster.entries.length === 0 && !roster.legacyMarkdown?.trim()

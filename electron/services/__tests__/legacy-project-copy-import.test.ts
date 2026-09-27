@@ -16,6 +16,9 @@ import { readPortableCurrentAuthority } from '../portable-current-authority'
 import { ProjectAccessService } from '../project-access'
 import { createPortableTransferAuthority } from '../portable-transfer-authority'
 import { ProjectCoreRepository } from '../../repositories/project-core-repository'
+import { CharacterRosterRepository } from '../../repositories/character-roster-repository'
+import { commitAuthorCharacterRoster } from '../character-roster-author'
+import { buildGenerationSourceBinding } from '../generation-source-binding'
 import { SummaryRepository } from '../../repositories/summary-repository'
 import { LLMHistoryRepository } from '../../repositories/llm-repository'
 import { PostProcessRepository } from '../../repositories/post-process-repository'
@@ -141,16 +144,133 @@ it.each(['v100', 'v110'] as const)('%s 有旧角色原文但无角色卡时拒�
   } finally { preserved.close() }
 })
 
-it('有既存角色卡但未有可用结构化名单状态时拒绝发布', async () => {
-  const f = fixture('v110', '')
+function addLegacyCards(f: ReturnType<typeof fixture>) {
   const source = new Database(path.join(f.legacy, 'vela.db'))
-  try { source.prepare('INSERT INTO characters(rowid,name,role,background) VALUES (?,?,?,?)')
-    .run(44, '乙', 'protagonist', '旧角色资料') } finally { source.close() }
+  try {
+    source.prepare(`INSERT INTO characters(rowid,name,role,background,relationships,cs_location,cs_updated_at_chapter)
+      VALUES (?,?,?,?,?,?,?)`).run(44, '乙', 'protagonist', '旧角色资料\r\n原文',
+      JSON.stringify([{ target: '甲', relation: '同门' }]), '旧山门', 0)
+    source.prepare('INSERT INTO characters(rowid,name,role,background) VALUES (?,?,?,?)')
+      .run(45, '甲', 'supporting', '同门的作者设定')
+  } finally { source.close() }
+}
+
+it.each(['v100', 'v110'] as const)('%s 非空旧角色卡与关系确定性采用，生产保存重开不回写源', async version => {
+  const f = fixture(version, '')
+  addLegacyCards(f)
+  const old = new Database(path.join(f.legacy, 'vela.db'))
+  try { old.prepare('INSERT INTO blueprints(chapter_number,characters) VALUES(?,?)').run(7, '["乙","甲","章级待出场"]') }
+  finally { old.close() }
+  const before = sourceState(f)
+  let preservedFacts: unknown[] = []
+  const tables = ['characters', 'character_aliases', 'character_identity_origins']
+  const result = await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions,
+    checkpoint(phase) {
+      if (phase !== 'assets-converted') return
+      const attempt = fs.readdirSync(path.dirname(f.target)).find(name => name.startsWith('.new.legacy-import-'))!
+      const staging = new Database(path.join(path.dirname(f.target), attempt, 'target', '.ai-novel', 'project.db'), { readonly: true })
+      try { preservedFacts = tables.map(table => staging.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()) }
+      finally { staging.close() }
+    },
+  })
+  expect(result, JSON.stringify(result)).toMatchObject({ state: 'ready' })
+  if (result.state !== 'ready') return
+  initProjectDatabase(f.target)
+  const db = getProjectDb()!
+  expect(tables.map(table => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())).toEqual(preservedFacts)
+  const roster = CharacterRosterRepository.read()
+  expect(roster).toMatchObject({ status: 'ready', migrationState: 'ready', identityRevision: 0 })
+  expect(roster.entries).toHaveLength(2)
+  const protagonist = roster.entries.find(entry => entry.name === '乙')!
+  const companion = roster.entries.find(entry => entry.name === '甲')!
+  expect(protagonist.characterId).toBeTruthy()
+  expect(companion.characterId).toBeTruthy()
+  expect(protagonist).toMatchObject({ background: '旧角色资料\r\n原文',
+    currentState: { location: '旧山门', updatedAtChapter: 0 },
+    relationships: [{ target: '甲', targetCharacterId: companion.characterId, relation: '同门' }] })
+  expect(db.prepare("SELECT legacy_markdown FROM character_roster_meta WHERE id='main'").pluck().get()).toBe('')
+  expect(ProjectCoreRepository.get()!.charactersArch).toContain('甲（同门）')
+  const relation = db.prepare('SELECT * FROM character_relationships').get() as { provenance_json: string; approval_id: string }
+  expect(JSON.parse(relation.provenance_json)).toMatchObject({ kind: 'legacy', sourceKey: 'legacy:characters:0:relationships:0', migration: 'offline-project-copy' })
+  expect(relation.approval_id).toBe('legacy-offline-identity-binding')
+  expect(db.prepare('SELECT characters FROM blueprints WHERE chapter_number=7').pluck().get()).toBe('["乙","甲","章级待出场"]')
+  expect(db.prepare('SELECT raw_value,resolved_character_id FROM character_identity_proposals WHERE owner_character_id IS NULL ORDER BY source_key').all())
+    .toEqual([{ raw_value: '乙', resolved_character_id: protagonist.characterId },
+      { raw_value: '甲', resolved_character_id: companion.characterId }, { raw_value: '章级待出场', resolved_character_id: null }])
+  expect(db.prepare("SELECT COUNT(*) FROM character_identity_approvals WHERE operation_id LIKE 'legacy-cards-adoption:%'").pluck().get()).toBe(1)
+  expect(db.prepare('SELECT COUNT(*) FROM llm_calls').pluck().get()).toBe(0)
+  expect(db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(0)
+  const fingerprint = 'a'.repeat(64)
+  const writing = buildGenerationSourceBinding({ db, projectStorageRoot: path.join(f.target, '.ai-novel'),
+    globalDataRoot: path.dirname(f.source), readBuiltinPrompt: () => JSON.stringify({ key: 'draft', content: '测试写作契约', systemRole: '测试' }) },
+  { projectId: result.projectId, epoch: 'test-import-session', operation: 'chapter-draft', chapterNumber: 7,
+    selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['draft'], skillStages: [],
+    modelReceipt: { modelId: 'fixture', provider: 'openai', protocol: 'openai', modelName: 'fixture',
+      modelRevision: fingerprint, endpointFingerprint: fingerprint, capabilityEvidence: {
+        source: { contextWindowTokens: 'unknown', maxOutputTokens: 'user-operational-cap', featureFlags: 'unknown' },
+        subjectFingerprint: fingerprint, contextWindowTokens: 8000, maxOutputTokens: 1000, reasoning: false, structuredOutput: false, usage: true } },
+    policy: { version: 'fixture', maxPhysicalRequests: 1 }, outputContract: 'visible-text' })
+  expect(JSON.parse(writing.materials.find(item => item.ref.sourceId === 'character-relationships:all')!.text))
+    .toMatchObject([{ source_character_id: protagonist.characterId, target_character_id: companion.characterId, relation: '同门' }])
+  const saved = commitAuthorCharacterRoster(db, { operationId: 'imported-author-edit', schemaVersion: 1,
+    intent: 'manual_edit', expectedRevision: roster.revision, expectedIdentityRevision: roster.identityRevision,
+    entries: roster.entries.map(entry => entry.characterId === protagonist.characterId ? { ...entry, notes: '新版保存笔记' } : entry),
+  }, { projectId: result.projectId, epoch: 'test-import-session' }, () => {})
+  closeProjectDatabase()
+  initProjectDatabase(f.target)
+  expect(CharacterRosterRepository.read()).toEqual(saved.snapshot)
+  expect(CharacterRosterRepository.read().entries.find(entry => entry.characterId === protagonist.characterId)?.notes).toBe('新版保存笔记')
+  expect(getProjectDb()!.prepare("SELECT COUNT(*) FROM character_identity_approvals WHERE operation_id LIKE 'legacy-cards-adoption:%'").pluck().get()).toBe(1)
+  expect(sourceState(f)).toEqual(before)
+})
+
+it.each([
+  '与甲是同门', '[{"target":" 甲","relation":"同门"}]', '[{"target":"不存在","relation":"同门"}]',
+  '[{"target":"乙","relation":"自指"}]', '[{"target":"甲","relation":""}]',
+  '[{"target":"甲","relation":"同门","confidence":1}]',
+  '[{"target":"甲","relation":"同门"},{"target":"甲","relation":"友人"}]',
+  '{"target":"甲","relation":"同门"}',
+])('旧卡关系不满足完整主键边契约时阻断且保全：%s', async relationships => {
+  const f = fixture('v110', '')
+  addLegacyCards(f)
+  const old = new Database(path.join(f.legacy, 'vela.db'))
+  try { old.prepare('UPDATE characters SET relationships=? WHERE name=?').run(relationships, '乙') }
+  finally { old.close() }
+  const before = sourceState(f)
+  expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))
+    .toEqual({ state: 'blocked', code: 'LEGACY_IMPORT_ROSTER_UNAVAILABLE' })
+  expect(sourceState(f)).toEqual(before)
+  expect(fs.existsSync(f.target)).toBe(false)
+  const attempt = fs.readdirSync(path.dirname(f.target)).find(name => name.startsWith('.new.legacy-import-'))!
+  const staging = new Database(path.join(path.dirname(f.target), attempt, 'target', '.ai-novel', 'project.db'), { readonly: true })
+  try {
+    expect(staging.prepare('SELECT relationships FROM characters WHERE name=?').pluck().get('乙')).toBe(relationships)
+    expect(staging.prepare('SELECT COUNT(*) FROM character_relationships').pluck().get()).toBe(0)
+    expect(staging.prepare('SELECT COUNT(*) FROM character_identity_approvals').pluck().get()).toBe(0)
+    expect(CharacterRosterRepository.read(staging).migrationState).toBe('legacy_cards_preserved')
+  } finally { staging.close() }
+})
+
+it.each(['v100', 'v110'] as const)('%s 非空旧原文与卡片无法证明无损时仍拒绝发布并保留 staging', async version => {
+  const f = fixture(version)
+  addLegacyCards(f)
   const before = sourceState(f)
   expect(await importLegacyProjectCopy({ sourceRoot: f.source, targetRoot: f.target, preflightOptions }))
     .toMatchObject({ state: 'blocked', code: 'LEGACY_IMPORT_ROSTER_UNAVAILABLE' })
   expect(fs.existsSync(f.target)).toBe(false)
   expect(sourceState(f)).toEqual(before)
+  const attempt = fs.readdirSync(path.dirname(f.target)).find(name => name.startsWith('.new.legacy-import-'))!
+  const staging = new Database(path.join(path.dirname(f.target), attempt, 'target', '.ai-novel', 'project.db'), { readonly: true })
+  try {
+    expect(CharacterRosterRepository.read(staging)).toMatchObject({ migrationState: 'legacy_cards_preserved', status: 'inconsistent',
+      legacyMarkdown: '作者明确角色群像，与正文推断不同' })
+    expect(staging.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(2)
+    expect(staging.prepare('SELECT relationships FROM characters WHERE name=?').pluck().get('乙'))
+      .toBe('[{"target":"甲","relation":"同门"}]')
+    expect(staging.prepare('SELECT raw_value,resolved_character_id FROM character_identity_proposals').all())
+      .toEqual([{ raw_value: '{"target":"甲","relation":"同门"}', resolved_character_id: null }])
+    expect(staging.prepare('SELECT COUNT(*) FROM character_identity_approvals').pluck().get()).toBe(0)
+  } finally { staging.close() }
 })
 
 it.each(['v100', 'v110'] as const)('%s 合法空角色名单的离线完整副本含 WAL、作者配置和正文', async version => {
