@@ -118,6 +118,74 @@ function Invoke-AiNovelV025CopyImport {
   return $proof
 }
 
+function Invoke-AiNovelOfficialOldSourceJourney {
+  param([Parameter(Mandatory = $true)][ValidateSet('v1.0.0', 'v1.1.0')][string]$Version)
+
+  $head = (& git -C $root rev-parse HEAD).Trim().ToLowerInvariant()
+  if ($LASTEXITCODE -ne 0 -or $head -notmatch '^[a-f0-9]{40}$') { throw 'Cannot bind official old-source journey to build HEAD.' }
+  $manifestPath = Join-Path $PSScriptRoot 'fixtures\s14c-official-old-sources\manifest.json'
+  $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  $entry = @($manifest.cases | Where-Object { "v$($_.version)" -eq $Version })
+  if ($manifest.kind -ne 's14c-official-old-app-synthetic-source' -or $entry.Count -ne 1) {
+    throw "Official old-source manifest has no unique $Version case."
+  }
+  $scratch = Join-Path (Join-Path $root '.runtime\.cache') ("s14c-official-win-$($Version.Replace('.', ''))-$([guid]::NewGuid().ToString('N'))")
+  $exeSha256 = (Get-AiNovelFileSha256 -Path (Join-Path $installRoot 'AI小说作家.exe')).ToLowerInvariant()
+  $asarSha256 = (Get-AiNovelFileSha256 -Path (Join-Path $installRoot 'resources\app.asar')).ToLowerInvariant()
+  $arguments = @(
+    (Join-Path $PSScriptRoot 'f05-a11-offline-import-journey.mjs'),
+    "--win-installed-app=$installRoot", "--win-version=$Version", "--scratch-root=$scratch",
+    "--tested-sha=$head", "--exe-sha256=$exeSha256", "--asar-sha256=$asarSha256"
+  )
+  $output = @(& node @arguments)
+  if ($LASTEXITCODE -ne 0) { throw "Installed official $Version A11 Writer journey failed." }
+  $summary = $output[-1] | ConvertFrom-Json
+  $receiptPath = Join-Path $scratch 'receipt.json'
+  if ([System.IO.Path]::GetFullPath([string]$summary.receiptPath) -ne [System.IO.Path]::GetFullPath($receiptPath)) {
+    throw "Installed official $Version A11 receipt path differs from its isolated scratch root."
+  }
+  $proof = Get-Content -LiteralPath $receiptPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  $receiptSha256 = (Get-AiNovelFileSha256 -Path $receiptPath).ToLowerInvariant()
+  $manifestSha256 = (Get-AiNovelFileSha256 -Path $manifestPath).ToLowerInvariant()
+  $driverSha256 = (Get-AiNovelFileSha256 -Path (Join-Path $PSScriptRoot 'f05-a11-offline-import-journey.mjs')).ToLowerInvariant()
+  if ($summary.sliceOutcome -ne 'PASS' -or $proof.sliceOutcome -ne 'PASS' -or
+      $summary.receiptSha256 -ne $receiptSha256 -or $proof.mode -ne 'official-old-app-installed-app' -or
+      $proof.qualification -ne 'A11_OFFLINE_LEGACY_COPY_WIN_V3' -or $proof.testedSha -ne $head -or
+      $proof.win.sourceVersion -ne $Version -or $proof.win.officialProofSha256 -ne $entry[0].proofSha256 -or
+      $proof.provenance.sourceManifestSha256 -ne $manifestSha256 -or
+      $proof.provenance.driverSha256 -ne $driverSha256 -or
+      $proof.provenance.executableSha256 -ne $exeSha256 -or $proof.provenance.asarSha256 -ne $asarSha256) {
+    throw "Installed official $Version A11 Writer evidence is incomplete or unbound."
+  }
+  if ($proof.win.sourceInventorySha256 -notmatch '^[a-f0-9]{64}$' -or
+      $proof.win.targetInventorySha256 -notmatch '^[a-f0-9]{64}$' -or
+      $proof.win.sourceBodySha256 -notmatch '^[a-f0-9]{64}$' -or
+      $proof.win.savedBodySha256 -notmatch '^[a-f0-9]{64}$' -or
+      $proof.win.savedBodySha256 -ne $proof.win.reopenedBodySha256 -or
+      $proof.win.savedBodySha256 -eq $proof.win.sourceBodySha256 -or
+      $proof.win.sourceProjectId -eq $proof.win.targetProjectId -or
+      @($proof.steps | Where-Object { $_.outcome -eq 'PASS' -and $_.stepId -eq "$Version-import-open" }).Count -ne 1 -or
+      @($proof.steps | Where-Object { $_.outcome -eq 'PASS' -and $_.stepId -eq "$Version-target-edit-save" }).Count -ne 1 -or
+      @($proof.steps | Where-Object { $_.outcome -eq 'PASS' -and $_.stepId -eq "$Version-target-edit-reopen" }).Count -ne 1) {
+    throw "Installed official $Version A11 Writer import, save or reopen evidence is incomplete."
+  }
+  return [ordered]@{
+    sourceVersion = $Version
+    officialProofSha256 = $proof.win.officialProofSha256
+    sourceManifestSha256 = $manifestSha256
+    driverSha256 = $driverSha256
+    executableSha256 = $exeSha256
+    asarSha256 = $asarSha256
+    receiptSha256 = $receiptSha256
+    sourceInventorySha256 = $proof.win.sourceInventorySha256
+    targetInventorySha256 = $proof.win.targetInventorySha256
+    sourceBodySha256 = $proof.win.sourceBodySha256
+    savedBodySha256 = $proof.win.savedBodySha256
+    reopenedBodySha256 = $proof.win.reopenedBodySha256
+    steps = $proof.steps
+  }
+}
+
 function Get-AiNovelUpgradeSourceInventory {
   $files = @(Get-ChildItem -LiteralPath $upgradeFixtureRoot -Recurse -File -Force | Sort-Object FullName)
   if ($files.Count -lt 5) { throw 'Upgrade project source inventory is incomplete.' }
@@ -1172,6 +1240,10 @@ $currentInstallCompleted = $true
       globalConfigUnchanged = $true
       recentProjectsUnchanged = $true
     }
+    $summary.officialSources = @(
+      (Invoke-AiNovelOfficialOldSourceJourney -Version 'v1.0.0')
+      (Invoke-AiNovelOfficialOldSourceJourney -Version 'v1.1.0')
+    )
     $previousReceiptPath = Join-Path $env:AI_NOVEL_RELEASE_EVIDENCE_ROOT 'acceptance\upgrade-data.json'
     $previousReceipt = Get-Content -LiteralPath $previousReceiptPath -Raw | ConvertFrom-Json
     if ($previousReceipt.accepted -ne $true -or $previousReceipt.kind -ne 'windows-upgrade-data' -or
@@ -1180,6 +1252,7 @@ $currentInstallCompleted = $true
     }
     $previousReceipt.direct | Add-Member -NotePropertyName installedV110 -NotePropertyValue $summary -Force
     $previousReceipt.observations += 'The official v1.1.0 setup installed and opened a synthetic v1.1 project before the candidate setup replaced it; source data survived unchanged.'
+    $previousReceipt.observations += 'The installed candidate imported official v1.0.0 and v1.1.0 old-app sources through V3 Writer, saved and reopened each independent copy.'
     Write-AiNovelAcceptanceReceipt -Directory (Split-Path -Parent $previousReceiptPath) -FileName 'upgrade-data.json' -Receipt $previousReceipt
   }
   $smokeSucceeded = $true

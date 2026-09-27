@@ -868,6 +868,40 @@ describe('Windows installer smoke contract', () => {
     expect(evaluation.indexOf('  ${globalRead}')).toBeLessThan(evaluation.indexOf("  const result = await window.velaAPI.invoke('project:open'"))
   })
 
+  it('requires both official old-app sources in the installed v1.1 candidate path', () => {
+    const script = readFileSync(installerScript, 'utf8')
+    expect(script).toContain("Invoke-AiNovelOfficialOldSourceJourney -Version 'v1.0.0'")
+    expect(script).toContain("Invoke-AiNovelOfficialOldSourceJourney -Version 'v1.1.0'")
+    expect(script).toContain('--win-installed-app=')
+    expect(script).toContain('--scratch-root=')
+    expect(script).toContain("$proof.mode -ne 'official-old-app-installed-app'")
+    expect(script).toContain('$proof.provenance.sourceManifestSha256')
+    expect(script).toContain('$proof.win.officialProofSha256')
+    expect(script).toContain("$summary.receiptSha256")
+  })
+
+  windowsPowerShellIt('rejects an official journey summary outside its isolated receipt path', () => {
+    const temporary = mkdtempSync(join(resolve('.runtime/cache'), 's14c-win-official-binding-'))
+    mkdirSync(join(temporary, 'resources'))
+    writeFileSync(join(temporary, 'AI小说作家.exe'), 'fake installed executable')
+    writeFileSync(join(temporary, 'resources', 'app.asar'), 'fake installed asar')
+    try {
+      const output = runInstallerLibrary(`
+$installRoot = ${quotePowerShell(temporary)}
+function node {
+  $global:LASTEXITCODE = 0
+  '{"sliceOutcome":"PASS","receiptPath":"C:\\\\outside\\\\receipt.json","receiptSha256":"fake"}'
+}
+try { Invoke-AiNovelOfficialOldSourceJourney -Version 'v1.0.0' | Out-Null; 'UNEXPECTED_PASS' }
+catch { $_.Exception.Message }
+`)
+      expect(output).toContain('receipt path differs from its isolated scratch root')
+      expect(output).not.toContain('UNEXPECTED_PASS')
+    } finally {
+      rmSync(temporary, { recursive: true, force: true })
+    }
+  })
+
   windowsPowerShellIt('writes v1.1 global seeds as strict UTF-8 JSON with an array of recent projects', () => {
     mkdirSync(resolve('.runtime/cache'), { recursive: true })
     const root = mkdtempSync(join(resolve('.runtime/cache'), 's14c-v110-global-seed-'))
