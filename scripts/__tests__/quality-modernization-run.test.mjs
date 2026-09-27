@@ -1002,6 +1002,56 @@ test('冻结旧selection与旧allocation经boundary回放，新reserve仍按当�
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('旧 post-UI 十二行只按精确前缀继承，边界外旧 revision 仍拒绝', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/supersession-test-'))
+  const file = path.join(dir, 'synthetic-ledger.jsonl')
+  const invocationId = 'f090a41e-9a4e-4868-beec-88f6fe08db82'
+  const oldHash = '74c26ce61ed3cff96c811da2b537776fe4470924af3c33e52ec8db93023e1c51'
+  const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'baseline', codeSha: 'a'.repeat(40),
+    sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
+    phase: 'early-budget', milestone: 'post-ui', caseId: '场景1/1', operation: '指定范围生成' }
+  const old = { ...binding, protocolRevision: 'pacing-readability-v1', protocolHash: oldHash, invocationId }
+  const rows = [
+    { type: 'reserve', attemptId: 'frozen-old', binding, allocation: 'postUiBudget' },
+    { type: 'dispatch', attemptId: 'frozen-old' },
+    { type: 'settle', attemptId: 'frozen-old' },
+    { type: 'reserve', attemptId: 'superseded-old', binding: old, allocation: 'failedRetryRepairReviewReserve' },
+    { type: 'dispatch', attemptId: 'superseded-old' },
+    { type: 'settle', attemptId: 'superseded-old' },
+  ]
+  const prefix = count => `${rows.slice(0, count).map(JSON.stringify).join('\n')}\n`
+  const original = prefix(6)
+  const options = { campaignMode: 'synthetic', historicalLedgerBoundary: {
+    eventCount: 3, rawBytesSha256: hash(prefix(3)), evidenceInvocationId: invocationId,
+    finalReserveAttemptIds: ['frozen-old'],
+  }, historicalSupersessionBoundary: {
+    fromEventCount: 3, eventCount: 6, rawBytesSha256: hash(original),
+    protocolRevision: old.protocolRevision, protocolHash: oldHash,
+    evidenceInvocationId: invocationId, reserveAttemptIds: ['superseded-old'],
+  } }
+  const current = { ...binding, ...protocolBinding, invocationId }
+  const append = attemptId => updateLedger(file, { type: 'reserve', attemptId, binding: current }, options)
+  try {
+    fs.writeFileSync(file, original)
+    assert.doesNotThrow(() => append('current'))
+    assert.equal(fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).length, 7)
+    for (const mismatch of [
+      { protocolHash: '0'.repeat(64) },
+      { evidenceInvocationId: 'e8900180-945a-4211-b0c9-8427389c0625' },
+      { reserveAttemptIds: ['another-attempt'] },
+    ]) {
+      assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'wrong-boundary', binding: current }, {
+        ...options, historicalSupersessionBoundary: { ...options.historicalSupersessionBoundary, ...mismatch },
+      }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    }
+    fs.writeFileSync(file, original.replace('superseded-old', 'tampered-old'))
+    assert.throws(() => append('tampered'), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    fs.writeFileSync(file, original + JSON.stringify({ type: 'reserve', attemptId: 'unknown-revision',
+      binding: { ...old, protocolRevision: 'unknown-old-v9' }, allocation: 'postUiBudget' }) + '\n')
+    assert.throws(() => append('after-unknown'), /PROTOCOL_DRIFT/)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('超时守护为每个 dispatch 独立计时：先写 unknown 再 abort，且后续 attempt 不继承残余预算', async () => {
   // 桥测试的 120s 超时是进程内计时器：不投信号、不跑 finally。供应商卡住时，
   // 「等流结束再写终态」永远等不到，账本只剩 reserve+dispatch。守护必须自己到点收尾。

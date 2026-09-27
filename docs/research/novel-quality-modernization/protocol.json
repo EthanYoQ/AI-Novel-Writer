@@ -57,6 +57,20 @@
       "candidate:e8e22dcc-ed8d-4e19-b21a-fa42a0d28cae"
     ]
   },
+  "historicalSupersessionBoundary": {
+    "fromEventCount": 276,
+    "eventCount": 288,
+    "rawBytesSha256": "034d7dd9454b7126d3602e7ebbab4cf23b838c0159fc69b71d250bcf8fd1aa64",
+    "protocolRevision": "pacing-readability-v1",
+    "protocolHash": "74c26ce61ed3cff96c811da2b537776fe4470924af3c33e52ec8db93023e1c51",
+    "evidenceInvocationId": "f090a41e-9a4e-4868-beec-88f6fe08db82",
+    "reserveAttemptIds": [
+      "baseline:42cf929a-21d3-4a5b-930d-9750af6f8a1d",
+      "baseline:961cfd78-17e5-4e2a-95df-57432f959f96",
+      "candidate:fe3d66f9-de81-4ba6-b8fa-51d16afeeaff",
+      "candidate:858de352-80d9-427d-823c-fe9e18debd99"
+    ]
+  },
   "phases": {
     "c16-c18": {
       "scenarioRevision": "c16-c18-candidate-production-path-v1",
