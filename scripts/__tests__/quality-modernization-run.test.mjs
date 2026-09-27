@@ -22,6 +22,7 @@ import { projectRecoveryCandidateSupplement, readVerifiedRecoveryCandidateSupple
 import Database from 'better-sqlite3'
 import { POST_UI_REVIEW_POLICY, reviewedDraftSelection, validateReviewedDraft, productionScenario } from '../quality-modernization-driver.mjs'
 import { countDraftUnits } from '../../src/shared/draft-units'
+import { parseReviewGenerationResult } from '../../src/shared/review-generation-report'
 
 const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
@@ -603,13 +604,16 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
   }
 })
 
-test('post-UI 首审只以已结算的同稿 fenced JSON 语法错误许可一次重建', () => {
+test('post-UI 首审只以已结算的同稿产品解析失败许可一次重建', () => {
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/review-rebuild-proof-'))
   const policy = PHASE_SCENARIOS['early-budget'].attemptPolicy
   const review = policy.reviewRebuild
   const source = { draftId: 7, contentHash: hash('原始待审正文') }
   const owner = { attemptId: 'main', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: review.primaryPurpose }
   const malformed = '```json\n{"items":[{"description":"提到"开船过去""}]}\n```'
+  const schemaInvalid = '```json\n{"summary":"无问题","items":[{"category":"事实","severity":"pass"}]}\n```'
+  const adverse = '```json\n{"summary":"不利","items":[{"category":"事实","severity":"error","description":"事实冲突","quote":"正文原句"}]}\n```'
+  const unknown = '```json\n{"summary":"未知","items":[{"category":"事实","severity":"pass","description":"该项无问题"}],"goalReviews":[{"id":"ch1:keyEvents:1","status":"unknown","description":"证据不足","evidence":[]}]}\n```'
   let outputNumber = 0
   const proof = (content, { arm = 'baseline', terminal = 'settle', absent = true, sourceBinding = source } = {}) => {
     const outputPath = path.join(dir, `physical-output-${++outputNumber}.txt`)
@@ -630,14 +634,29 @@ test('post-UI 首审只以已结算的同稿 fenced JSON 语法错误许可一�
       { ...first, attemptId: 'rebuild', purpose: review.repairPurpose, ...next }, nextSource)
   }
   try {
+    assert.throws(() => parseReviewGenerationResult(schemaInvalid), /invalid review contract/)
+    assert.doesNotThrow(() => parseReviewGenerationResult(adverse))
+    assert.doesNotThrow(() => parseReviewGenerationResult(unknown))
     const actual = proof(malformed)
     const accepted = run(actual)
     assert.doesNotThrow(accepted, 'the captured invalid fenced JSON shape can rebuild')
     assert.throws(accepted, /MODEL_REQUEST_REJECTED/, 'a second rebuild is rejected before reserve')
     assert.doesNotThrow(run(proof(malformed, { arm: 'candidate' }), { arm: 'candidate' }))
+    const invalidShape = run(proof(schemaInvalid))
+    assert.doesNotThrow(invalidShape, 'product-rejected schema may rebuild once')
+    assert.throws(invalidShape, /MODEL_REQUEST_REJECTED/, 'a second schema rebuild is rejected before reserve')
+    const savedOutput = process.env.S14B_REVIEW_INVALID_OUTPUT
+    if (savedOutput) {
+      const captured = fs.readFileSync(savedOutput, 'utf8')
+      assert.equal(hash(captured), 'e167529f761c3a33b3ea0582268fa9d544c7965a0b7db55b73738a1fcb0da770')
+      assert.throws(() => parseReviewGenerationResult(captured), /invalid review contract/)
+      const capturedAttempt = run(proof(captured))
+      assert.doesNotThrow(capturedAttempt, 'saved d9f755e1 response may rebuild once')
+      assert.throws(capturedAttempt, /MODEL_REQUEST_REJECTED/)
+    }
     for (const [label, evidence] of [
-      ['valid unfavorable review', proof('```json\n{"summary":"不利","items":[{"severity":"error"}]}\n```')],
-      ['valid unknown review', proof('```json\n{"summary":"未知","items":[{"severity":"unknown"}]}\n```')],
+      ['valid unfavorable review', proof(adverse)],
+      ['valid unknown review', proof(unknown)],
       ['thinking wrapper needs product redaction', proof('<think>analysis</think>```json\n{"items":[]}\n```')],
       ['unsettled primary', proof(malformed, { terminal: 'dispatch' })],
       ['already saved review', proof(malformed, { absent: false })],
@@ -1707,16 +1726,22 @@ test('post-UI pair authenticates review rebuild attempts and both retained outpu
     fs.writeFileSync(outputPath, content)
     return { outputPath, contentHash: hash(content), ...extra }
   }
+  const capturedReview = process.env.S14B_REVIEW_INVALID_OUTPUT
+    ? fs.readFileSync(process.env.S14B_REVIEW_INVALID_OUTPUT, 'utf8') : null
+  if (capturedReview) assert.equal(hash(capturedReview), 'e167529f761c3a33b3ea0582268fa9d544c7965a0b7db55b73738a1fcb0da770')
+  const invalidReview = capturedReview ?? '```json\n{"summary":"无问题","items":[{"category":"事实","severity":"pass"}]}\n```'
+  const validReview = JSON.stringify({ summary: '无问题', items: [{ category: '事实', severity: 'pass', description: '保持' }] })
+  assert.throws(() => parseReviewGenerationResult(invalidReview), /invalid review contract/)
+  assert.doesNotThrow(() => parseReviewGenerationResult(validReview))
   const make = arm => {
     const initial = artifact(`${arm}-draft.txt`, '甲'.repeat(100), { draftId: 7 })
     const source = { draftId: initial.draftId, contentHash: initial.contentHash }
-    const report = artifact(`${arm}-review.json`, JSON.stringify({ summary: '无问题',
-      items: [{ category: '事实', severity: 'pass', description: '保持' }] }),
+    const report = artifact(`${arm}-review.json`, validReview,
     { reviewId: 9, sourceHash: initial.contentHash })
     const outputs = [
       [scenario.operations[0], 'directory', 'chapter-blueprint-directory', '{"blueprints":[]}'],
       [scenario.operations[1], 'draft', 'chapter-draft', '甲'.repeat(100)],
-      [scenario.operations[2], 'review', reviewPolicy.primaryPurpose, '```json\n{"items":[{"description":"提到"开船过去""}]}\n```'],
+      [scenario.operations[2], 'review', reviewPolicy.primaryPurpose, invalidReview],
       [scenario.operations[2], 'rebuild', reviewPolicy.repairPurpose, fs.readFileSync(report.outputPath, 'utf8')],
     ]
     const attempts = outputs.map(([operation, label, purpose, content]) => {
@@ -1761,11 +1786,11 @@ test('post-UI pair authenticates review rebuild attempts and both retained outpu
     otherDraft.attempts[3].binding.reviewSource.draftId = 8
     assert.equal(classify(otherDraft).pairFailure, 'REVIEW_REBUILD_OWNER_MISMATCH')
     const validPrimary = structuredClone(candidate)
-    fs.writeFileSync(validPrimary.attempts[2].outputPath, '{"items":[]}')
-    validPrimary.attempts[2].visibleTextHash = hash('{"items":[]}')
+    fs.writeFileSync(validPrimary.attempts[2].outputPath, validReview)
+    validPrimary.attempts[2].visibleTextHash = hash(validReview)
     validPrimary.ownerTerminal[2].textHash = validPrimary.attempts[2].visibleTextHash
     assert.equal(classify(validPrimary).pairFailure, 'REVIEW_REBUILD_PRIMARY_NOT_SYNTAX_FAILURE')
-    fs.writeFileSync(candidate.attempts[2].outputPath, '```json\n{"items":[{"description":"提到"开船过去""}]}\n```')
+    fs.writeFileSync(candidate.attempts[2].outputPath, invalidReview)
     const third = structuredClone(candidate)
     third.attempts.push(structuredClone(third.attempts[3]))
     third.physicalModelRequests++

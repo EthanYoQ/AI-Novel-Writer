@@ -6,10 +6,15 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { createHash, randomUUID } from 'node:crypto'
+import { buildSync } from 'esbuild'
 import { isExpectedReferenceEvidenceFailure, isVerifiedDirectPersistedDraftEvidence, isVerifiedRecoverySupplementEvidence,
   readVerifiedDirectPersistedDraftEvidence, readVerifiedRecoveryCandidateSupplement, targetUnitRange } from './quality-modernization-receipt.mjs'
 
 const ADAPTER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// The gate and post-run check use the same production parser as ReviewChapterCommand.
+const reviewParserBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/shared/review-generation-report.ts')],
+  bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
+const { parseReviewGenerationResult } = await import(`data:text/javascript;base64,${Buffer.from(reviewParserBundle).toString('base64')}`)
 export const PRODUCTION_BRIDGE = 'scripts/fixtures/quality-modernization-production.fixture.mjs'
 export const EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION = 's11-reference-no-actionable-review-v1'
 export const REVIEWED_DRAFT_PROTOCOL_REVISION = 's14b-reviewed-draft-v1'
@@ -329,14 +334,11 @@ const repairableDirectJsonSyntax = content => {
   if (!/^[{[]/u.test(candidate)) return false
   try { JSON.parse(candidate); return false } catch { return true }
 }
-// Match parseReviewGenerationResult's fenced JSON extraction before its JSON.parse.
-const reviewJsonSyntaxFailure = content => {
-  // The command strips thinking tags first; avoid classifying an unstripped artifact as a syntax failure.
+const reviewParseFailure = content => {
+  // The command strips thinking tags first; avoid classifying an unstripped artifact as a parse failure.
   if (/<\/?think>/iu.test(content)) return false
-  const trimmed = content.trim()
-  const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu.exec(trimmed)
-  try { JSON.parse(fenced?.[1]?.trim() ?? trimmed); return false }
-  catch (error) { return error instanceof SyntaxError }
+  try { parseReviewGenerationResult(content); return false }
+  catch (error) { return error instanceof SyntaxError || error?.message === 'invalid review contract' }
 }
 function verifiedPrimarySyntaxFailure(first, evidence, operationId, kind = 'directory') {
   const attempt = evidence?.attempt, rows = evidence?.events
@@ -357,10 +359,10 @@ function verifiedPrimarySyntaxFailure(first, evidence, operationId, kind = 'dire
     const output = fs.readFileSync(attempt.outputPath, 'utf8')
     return digest(output) === attempt.visibleTextHash && (kind === 'cards'
       ? evidence.finalizedCharacterInvalid === true && evidence.ownerArtifactHash === attempt.visibleTextHash
-      : kind === 'review' ? reviewJsonSyntaxFailure(output) : repairableDirectJsonSyntax(output))
+      : kind === 'review' ? reviewParseFailure(output) : repairableDirectJsonSyntax(output))
   } catch { return false }
 }
-/** Only a settled, hash-verified syntax failure may add one physical request. */
+/** Only a settled, hash-verified parse failure may add one physical request. */
 export function createOperationDispatchGate({ onReject, repairPolicy, readPrimaryEvidence, finalizationRepair = false } = {}) {
   const dispatched = new Map()
   return (operationId, owner, reviewSource) => {
@@ -540,7 +542,7 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
       try {
         const output = fs.readFileSync(attempt.outputPath, 'utf8')
         if (digest(output) !== attempt.visibleTextHash) return 'PHYSICAL_OUTPUT_HASH_MISMATCH'
-        if (index === 0 && !reviewJsonSyntaxFailure(output)) return 'REVIEW_REBUILD_PRIMARY_NOT_SYNTAX_FAILURE'
+        if (index === 0 && !reviewParseFailure(output)) return 'REVIEW_REBUILD_PRIMARY_NOT_SYNTAX_FAILURE'
       } catch { return 'PHYSICAL_OUTPUT_MISSING' }
     }
     if (arm === 'candidate' && (result.ownerTerminal?.length !== result.attempts.length
