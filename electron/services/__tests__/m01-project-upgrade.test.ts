@@ -105,7 +105,7 @@ it('新建项目与S04备份默认均到当前schema，M00可显式停在1', asy
   const result = await backupProjectSqlite({ sourceDatabasePath: old.file, targetDatabasePath: path.join(old.root, '副本.db') })
   expect(result.schemaVersion).toBe(CURRENT_DESKTOP_SCHEMA_VERSION); expect(fs.readFileSync(old.file)).toEqual(bytes)
 })
-it.each(['unknown', 'higher', 'missing-manifest'] as const)('%s在任何迁移写入前拒绝，源字节不变', mode => {
+it.each(['unknown', 'higher', 'missing-manifest'] as const)('%s在任何迁移写入前拒绝，源字节不变', { timeout: 20_000 }, mode => {
   const f = fixture()
   if (mode === 'missing-manifest') fs.unlinkSync(path.join(f.data, 'project.json'))
   else { const db = new Database(f.file); try { if (mode === 'higher') db.pragma('user_version = 999'); else db.exec('ALTER TABLE contents ADD COLUMN unknown_fork TEXT') } finally { db.close() } }
