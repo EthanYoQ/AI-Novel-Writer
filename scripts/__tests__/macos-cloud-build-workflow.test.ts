@@ -162,6 +162,13 @@ describe('macOS ARM64 cloud build workflow contract', () => {
     expect(artifactStep).toContain('retention-days: 14')
     expect(artifactStep).toContain('macos-arm64-qualified')
 
+    const failureDiagnostic = namedStep(workflow, 'Upload redacted A11 exit diagnostic')
+    expect(failureDiagnostic).toMatch(/if:\s*\$\{\{\s*failure\(\)\s*\}\}/)
+    expect(failureDiagnostic).toContain('name: macos-arm64-a11-exit-diagnostic')
+    expect(failureDiagnostic).toContain('if-no-files-found: ignore')
+    expect(failureDiagnostic).toContain('path: ${{ env.AI_NOVEL_RELEASE_EVIDENCE_ROOT }}/diagnostics/macos-a11-exit.json')
+    expect(failureDiagnostic).not.toContain('macos-arm64-qualified')
+
     const finalizeEvidence = namedStep(workflow, 'Finalize macOS v2 acceptance receipts')
     expect(finalizeEvidence).toContain('release-evidence-v2.mjs finalize --platform macos-arm64')
     expect(finalizeEvidence).toContain('--evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT"')

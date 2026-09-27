@@ -49,6 +49,8 @@ app=''
 executable=''
 secure_helper=''
 dmg_sha256=''
+a11_started=0
+a11_current_version=''
 dmg_mount_receipt="$acceptance_directory/dmg-mount.json"
 packaged_smoke_receipt="$acceptance_directory/packaged-smoke.json"
 signing_receipt="$acceptance_directory/signing.json"
@@ -102,6 +104,42 @@ NODE
 
 cleanup() {
   local exit_status=$?
+  if [[ "$exit_status" != "0" && "$a11_started" == "1" ]]; then
+    node - "$evidence_root/diagnostics/macos-a11-exit.json" "$a11_current_version" "$smoke_root/a11-v1.0.0/receipt.json" "$smoke_root/a11-v1.1.0/receipt.json" <<'NODE' || true
+const fs = require('node:fs')
+const path = require('node:path')
+const [output, attemptedVersion, ...receipts] = process.argv.slice(2)
+const cases = []
+for (const file of receipts) {
+  if (!fs.existsSync(file)) continue
+  const version = path.basename(path.dirname(file)) === 'a11-v1.0.0' ? 'v1.0.0' : 'v1.1.0'
+  let receipt
+  try { receipt = JSON.parse(fs.readFileSync(file, 'utf8')) }
+  catch { cases.push({ version, stage: 'receipt-unreadable' }); continue }
+  const exit = receipt.exitDiagnostics?.at(-1)
+  cases.push({
+    version,
+    stage: typeof receipt.lastStage === 'string' && /^[a-z][a-z0-9-]{0,80}$/.test(receipt.lastStage) ? receipt.lastStage : 'unknown',
+    closeRequestCount: Number.isInteger(exit?.renderer?.closeRequestCount) ? exit.renderer.closeRequestCount : null,
+    approvalOrCancel: exit?.renderer?.approvalOrCancel === 'not-observed' ? 'not-observed' : 'unknown',
+    window: exit?.window && typeof exit.window.count === 'number' ? {
+      count: exit.window.count,
+      mainAlive: exit.window.mainAlive === true,
+      mainVisible: exit.window.mainVisible === true,
+      webContentsAlive: exit.window.webContentsAlive === true,
+      closeEvents: Array.isArray(exit.window.events) ? exit.window.events.map(event => ({
+        event: ['window-close', 'window-closed'].includes(event.event) ? event.event : 'unknown',
+        defaultPrevented: event.defaultPrevented === true,
+      })) : [],
+    } : null,
+    processExitObserved: Array.isArray(exit?.events) && exit.events.some(event => event.event === 'process-exit'),
+  })
+}
+if (!cases.some(entry => entry.version === attemptedVersion)) cases.push({ version: attemptedVersion, stage: 'receipt-missing' })
+fs.mkdirSync(path.dirname(output), { recursive: true })
+fs.writeFileSync(output, `${JSON.stringify({ schemaVersion: 1, kind: 'macos-a11-exit-diagnostic', cases }, null, 2)}\n`)
+NODE
+  fi
   if [[ "$mounted" == "1" ]]; then
     unmount_attempted=1
     if hdiutil detach "$mount_point" -force -quiet; then
@@ -345,11 +383,14 @@ NODE
 
 tested_sha="$(git rev-parse HEAD)"
 for old_version in v1.0.0 v1.1.0; do
+  a11_started=1
+  a11_current_version="$old_version"
   run_with_timeout "mounted app A11 $old_version offline import" 600 node "$repository_root/scripts/f05-a11-offline-import-journey.mjs" \
     "--mac-mounted-app=$app" "--mount-point=$mount_point" "--dmg=$dmg" \
     "--scratch-root=$smoke_root/a11-$old_version" "--tested-sha=$tested_sha" "--arch=$target_arch" \
     "--mac-version=$old_version"
 done
+a11_started=0
 
 node - "$qualification_directory/macos-dmg-smoke.json" "$dmg" "$app" "$target_arch" "$runner_machine_arch" <<'NODE'
 const fs = require('node:fs')

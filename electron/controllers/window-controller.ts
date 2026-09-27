@@ -1,7 +1,8 @@
-import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
 
 interface WindowCloseGuardState {
   approved: boolean
+  quitRequested: boolean
   pendingRequestId: string | null
   requestSequence: number
 }
@@ -15,10 +16,14 @@ function getSenderWindow(event: IpcMainInvokeEvent): BrowserWindow | null {
 export function installWindowCloseGuard(win: BrowserWindow): void {
   const state: WindowCloseGuardState = {
     approved: false,
+    quitRequested: false,
     pendingRequestId: null,
     requestSequence: 0,
   }
   closeGuardStates.set(win, state)
+  const noteQuitRequest = () => { state.quitRequested = true }
+  app.on('before-quit', noteQuitRequest)
+  win.on('closed', () => app.off('before-quit', noteQuitRequest))
   win.on('close', (event) => {
     if (
       state.approved
@@ -70,10 +75,14 @@ export function registerWindowController() {
     ) return { success: false }
 
     state.pendingRequestId = null
-    if (decision === 'cancel') return { success: true }
+    if (decision === 'cancel') {
+      state.quitRequested = false
+      return { success: true }
+    }
 
     state.approved = true
-    win.close()
+    if (state.quitRequested) app.quit()
+    else win.close()
     return { success: true }
   })
 }

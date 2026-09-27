@@ -42,6 +42,33 @@ afterEach(() => {
 })
 
 describe('macOS DMG acceptance receipt contract', () => {
+  it('keeps only structured A11 exit facts when a failed smoke cleans its scratch', () => {
+    const script = readRequired(smokeScriptPath)
+    const projection = script.match(/node - "\$evidence_root\/diagnostics\/macos-a11-exit\.json"[^\n]*<<'NODE' \|\| true\r?\n([\s\S]*?)\r?\nNODE/)?.[1]
+    expect(projection).toBeDefined()
+    const root = fixture()
+    const receiptFile = path.join(root, 'a11-v1.1.0', 'receipt.json')
+    const diagnosticFile = path.join(root, 'evidence', 'diagnostics', 'macos-a11-exit.json')
+    mkdirSync(path.dirname(receiptFile), { recursive: true })
+    writeFileSync(receiptFile, JSON.stringify({ lastStage: 'quit-requested',
+      failure: { message: 'PRIVATE_NOVEL_TEXT' },
+      exitDiagnostics: [{ renderer: { closeRequestCount: 1, approvalOrCancel: 'not-observed',
+        dialogs: ['PRIVATE_NOVEL_TEXT'] }, window: { count: 1, mainAlive: true,
+        mainVisible: true, webContentsAlive: true, events: [{ event: 'window-close', defaultPrevented: true }] },
+      events: [{ event: 'app-close' }] }],
+    }))
+    const run = spawnSync(process.execPath, ['-', diagnosticFile, 'v1.1.0',
+      path.join(root, 'a11-v1.0.0', 'receipt.json'), receiptFile], { input: projection, encoding: 'utf8' })
+    expect(run.status, run.stderr).toBe(0)
+    const diagnostic = readFileSync(diagnosticFile, 'utf8')
+    expect(diagnostic).not.toContain('PRIVATE_NOVEL_TEXT')
+    expect(JSON.parse(diagnostic)).toMatchObject({ kind: 'macos-a11-exit-diagnostic', cases: [{
+      version: 'v1.1.0', stage: 'quit-requested', closeRequestCount: 1,
+      approvalOrCancel: 'not-observed', window: { count: 1, mainAlive: true,
+        closeEvents: [{ event: 'window-close', defaultPrevented: true }] },
+      processExitObserved: false,
+    }] })
+  })
   it.each([
     { macMode: true, writeSucceeds: true },
     { macMode: true, writeSucceeds: false },

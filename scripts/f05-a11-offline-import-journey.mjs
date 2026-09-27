@@ -487,9 +487,9 @@ async function quit(app, page, version) {
   })
   macStage('quit-main-observed')
   await page.evaluate(() => {
-    globalThis.__a11CloseRequests = []
-    window.aiNovelAPI.on('window:close-requested', ({ requestId }) => {
-      globalThis.__a11CloseRequests.push({ requestId })
+    globalThis.__a11CloseRequestCount = 0
+    window.aiNovelAPI.on('window:close-requested', () => {
+      globalThis.__a11CloseRequestCount += 1
     })
   })
   macStage('quit-renderer-observed')
@@ -501,18 +501,20 @@ async function quit(app, page, version) {
   clearTimeout(timer)
   const diagnostic = { version, elapsedMs: Date.now() - started, result, events }
   if (!result) {
-    diagnostic.windowEvents = await Promise.race([
-      app.evaluate(() => globalThis.__a11WindowCloseEvents ?? []).catch(error => ({ unavailable: String(error) })),
-      new Promise(resolve => setTimeout(() => resolve({ unavailable: 'main process did not answer' }), 1_000)),
+    diagnostic.window = await Promise.race([
+      app.evaluate(({ BrowserWindow }) => {
+        const windows = BrowserWindow.getAllWindows()
+        const main = windows[0]
+        return { events: globalThis.__a11WindowCloseEvents ?? [], count: windows.length,
+          mainAlive: !!main && !main.isDestroyed(), mainVisible: !!main && main.isVisible(),
+          webContentsAlive: !!main && !main.webContents.isDestroyed() }
+      }).catch(() => ({ unavailable: true })),
+      new Promise(resolve => setTimeout(() => resolve({ unavailable: true }), 1_000)),
     ])
     diagnostic.renderer = await Promise.race([
-      page.evaluate(() => ({ closeRequests: globalThis.__a11CloseRequests ?? [],
-        dialogs: [...document.querySelectorAll('[role="dialog"]')].map(item => item.innerText.slice(0, 700)),
-        alerts: [...document.querySelectorAll('[role="alert"]')].map(item => item.innerText.slice(0, 500)),
-        unsavedMarkers: document.querySelectorAll('[aria-label*="未保存"], [title*="未保存"], [data-dirty="true"]').length,
-        workflowBlockedDialog: document.body.innerText.includes('创作任务仍在运行'),
-      })).catch(error => ({ unavailable: String(error) })),
-      new Promise(resolve => setTimeout(() => resolve({ unavailable: 'renderer did not answer' }), 1_000)),
+      page.evaluate(() => ({ closeRequestCount: globalThis.__a11CloseRequestCount ?? 0,
+        approvalOrCancel: 'not-observed' })).catch(() => ({ unavailable: true })),
+      new Promise(resolve => setTimeout(() => resolve({ unavailable: true }), 1_000)),
     ])
   }
   receipt.exitDiagnostics.push(diagnostic)
