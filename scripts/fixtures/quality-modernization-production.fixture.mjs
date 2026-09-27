@@ -257,7 +257,7 @@ test('isolated production commands persist the selected phase operations', async
       for (const listener of transport.listeners.get(channel) ?? []) listener(...args)
     } }
     transport.sender = sender
-    let pendingBaselineIpc = null, finalizedContext = null
+    let pendingBaselineIpc = null, finalizedContext = null, finalizedCharacterId = null
     const invoke = async (channel, ...args) => {
       receipt.invocations.push(channel)
       if (!candidate && channel === 'llm:generate-stream') pendingBaselineIpc = {
@@ -272,8 +272,16 @@ test('isolated production commands persist the selected phase operations', async
       if (!handler) throw new Error(`UNREGISTERED_PRODUCTION_IPC:${channel}`)
       try {
         const result = await handler({ sender }, ...args)
-        if (continuityRun && ['finalization-generation:begin', 'finalization-generation:read'].includes(channel) && result)
+        if (continuityRun && ['finalization-generation:begin', 'finalization-generation:read'].includes(channel) && result) {
           finalizedContext = result.context
+          if (operationKind === 'character_cards') {
+            const identity = finalizedContext.identity
+            const matches = identity.characters.filter(item => identity.content.includes(item.displayNameSnapshot))
+            assert.equal(matches.length, 1, 'FINALIZATION_TARGET_CHARACTER_AMBIGUOUS')
+            if (finalizedCharacterId) assert.equal(matches[0].characterId, finalizedCharacterId, 'FINALIZATION_TARGET_CHARACTER_CHANGED')
+            else finalizedCharacterId = matches[0].characterId
+          }
+        }
         return result
       }
       catch (error) { (receipt.ipcFailures ??= []).push({ channel, error: safeDiagnostic(error.message) }); throw error }
@@ -808,8 +816,8 @@ test('isolated production commands persist the selected phase operations', async
         else if (operationKind === 'chapter_notes') text = finalizedContext.identity.content
         else if (operationKind === 'character_cards') {
           const identity = finalizedContext.identity
-          const character = identity.characters.find(item => identity.content.includes(item.displayNameSnapshot))
-          assert.ok(character, 'SYNTHETIC_CHARACTER_SOURCE_MISSING')
+          const character = identity.characters.find(item => item.characterId === finalizedCharacterId)
+          assert.ok(character && identity.content.includes(character.displayNameSnapshot), 'SYNTHETIC_CHARACTER_SOURCE_MISSING')
           text = JSON.stringify({ updates: [{ characterId: character.characterId,
             currentState: { recentEvents: '发现日期异常，决定到现场核查', mentalState: '决定核查' }, evidence: { text: identity.content } }] })
         }
@@ -1030,7 +1038,8 @@ test('isolated production commands persist the selected phase operations', async
           effectHash: sha(persisted.effect), contextHash: sha(persisted.context) })
         if (operationKind === 'character_cards') {
           const roster = await invoke('db:character-roster-read', project.rootPath, session)
-          const character = roster.entries.find(item => item.characterId === finalizedContext.identity.characters[0].characterId)
+          assert.ok(finalizedCharacterId, 'FINALIZATION_TARGET_CHARACTER_MISSING')
+          const character = roster.entries.find(item => item.characterId === finalizedCharacterId)
           const provenance = character?.currentState?.provenance?.recentEvents
           receipt.finalizationEvidence.derivedApplied = provenance?.kind === 'derived'
             && provenance.source.finalizationId === slot.source.finalizationId
