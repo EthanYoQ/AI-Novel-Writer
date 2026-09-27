@@ -14,6 +14,8 @@
 
 ## 测试专用成稿评估（第一切片）
 
+产品已支持作者显式的 `【第N章必现】` 目标及作者选择后的一次修稿，但这不自动改变下述测试预授权。若未来实验要采纳必现目标的 unknown，须先取得该测试政策的明确决定，登记输入标记、选择范围、双臂实际可执行路径、次数和停止条件，再更新机器协议与消费者并重新冻结；不得仅因产品支持 apply 就让现有 driver 自动采纳 unknown。
+
 `s14b-post-ui-reviewed-draft-unknown-oracle-v2` 仅适用于未来 `post-ui early-budget` 资格测试；本切片不扩展 full、early-context 或 S11，不改变软件默认创作、自动审稿、确认、修稿或定稿流程。两臂均调用既有生产入口：生成并保存初稿、普通审稿；报告存在 error/warning 时，即使同时有 unknown，也只按原报告顺序预先授权采纳全部 error/warning，保存确认快照，执行一次修稿并接受唯一修订，再对修后全文普通审稿一次。全部 pass 时保留初稿，记录 `no-actionable-review`。仅 pass/unknown 且没有 error/warning 时，冻结初稿与完整原报告，记录单独的 `no-actionable-review-with-unresolved-goals`；不确认、不修稿、不复审，不把 unknown 改为 pass。复评仍有问题也不追加修稿或改选初稿。确认与合并是测试预授权规则，不冒称作者现场逐项核实。
 
 两臂复评均使用普通审稿入口，不冒充旧版具有候选版原生定向复核状态机；既有 finding 状态不因此改为 resolved。初稿、原审稿、确认快照、唯一修订、合并正文和复评分别保留文件与 hash，最终评审正文须与数据库回读和 receipt 一致。请求按真实 attempt 继续 reserve/dispatch/settle/unknown；策略、协议字节、驱动、实际代码 SHA 和来源均随新目标冻结。旧目标拒绝新协议；真实执行前须将此前账本完整前缀重新登记为只读历史，不能改写原账本。
@@ -121,7 +123,7 @@ candidate 每次发送前从实际 fixture 数据库查询唯一 `dispatch-marke
 
 两臂的模板输入采用对称映射：从不可变 baseline `2264390d6fb8b052cc14736d544df0cc74516649` 提取 `chapter_blueprint_chunk` 和 `first_chapter_draft` 的完整原模板；两臂作为相同的自定义作者模板读回。语义源那句无占位符的 `template` 完整写入双方 `globalGuidance`，不会用它覆盖生产模板并丢掉作者素材。模板原字节、guidance 字节、实际项目回读哈希保存在私有 receipt；各臂编译后的 system/完整 prompt 哈希另列，允许体现实现差异。角色原始名字与身份约束完整保存在作者素材及主角档案，本门不凭名字凭空创建已批准角色卡。第二、三章作者预置蓝图用于验证本次第1章范围提交没有改写范围外内容。
 
-执行环境由每臂实际探针决定。当前基线依赖使用 Electron ABI145，可用其 Electron executable 的 `ELECTRON_RUN_AS_NODE=1` 执行；候选使用本树 Node ABI141。二者都实际加载其自身 better-sqlite3 并查询，不把 package 版本或历史 native 收据当加载证明；不切换当前树 ABI，不改基线源码。差异写入 manifest，不声称环境完全相同，也不声称这是安装版 Electron UI 验收。
+执行环境由每臂实际探针及冻结 manifest 决定，不沿用历史运行的 Node/Electron ABI 数字。基线若使用 Electron executable 的 `ELECTRON_RUN_AS_NODE=1`，仍须核对该 executable、实际 ABI 和其自身 better-sqlite3；候选同样实际加载其对应运行时的 better-sqlite3 并查询。不能把 package 版本或历史 native 收据当加载证明；共享工作树的 ABI 切换串行，不改基线源码。差异写入 manifest，不声称环境完全相同，也不声称这是安装版 Electron UI 验收。
 
 开发阶段先运行（只能生成 `development-only-unfrozen` 收据）：
 
