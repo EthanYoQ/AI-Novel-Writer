@@ -376,7 +376,7 @@ export function previousChapterEnding(content: string): string {
     : tail.trim()
 }
 
-function relevantPassages(content: string, terms: readonly string[]): string[] {
+function relevantPassages(content: string, terms: readonly string[], retainAll = false): string[] {
   const sourceParagraphs = paragraphs(content)
   const normalizedTerms = terms.map(term => term.trim().toLocaleLowerCase()).filter(term => term.length >= 2)
   const windows: Array<[number, number]> = []
@@ -386,7 +386,9 @@ function relevantPassages(content: string, terms: readonly string[]): string[] {
       windows.push([Math.max(0, index - 1), Math.min(sourceParagraphs.length - 1, index + 1)])
     }
   }
-  return mergeWindows(windows).slice(-2).map(([start, end]) => sourceParagraphs.slice(start, end + 1).join('\n\n'))
+  const merged = mergeWindows(windows)
+  return (retainAll ? merged : merged.slice(-2))
+    .map(([start, end]) => sourceParagraphs.slice(start, end + 1).join('\n\n'))
 }
 
 function removeContainedPassages(passages: readonly string[]): string[] {
@@ -415,9 +417,12 @@ function finalizedPassages(source: FinalizedMaterialSource, relevanceTerms: read
 }
 
 /** 未定稿候选在本章的材料文本；同上，只有一处计算。 */
-function candidatePassages(candidate: SelectedCandidateDraft, isLatest: boolean,
+function candidatePassages(candidate: SelectedCandidateDraft, isRequired: boolean,
   relevanceTerms: readonly string[]): string[] {
-  return isLatest ? [previousChapterEnding(candidate.content)] : relevantPassages(candidate.content, relevanceTerms)
+  const relevant = relevantPassages(candidate.content, relevanceTerms, isRequired)
+  return isRequired
+    ? removeContainedPassages([...relevant, previousChapterEnding(candidate.content)])
+    : relevant
 }
 
 /** 每条候选在渲染与账目上额外需要的信息，只能由本函数的构造过程给出。 */

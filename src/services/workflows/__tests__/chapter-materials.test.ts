@@ -453,6 +453,100 @@ describe('chapter materials', () => {
       : undefined).toBe(true)
   })
 
+  it.each([true, undefined])('keeps relevant early predecessor prose and its ending with required=%s', async required => {
+    const early = '铜钥匙已交给林岚，周砚不再持有。'
+    const ending = '两人从南门离开。'
+    const content = ['门外下雨。', early, '见证人点头。', `${'石'.repeat(1_800)}。`, ending].join('\n\n')
+    const originalHash = await hashAuthorText(content)
+    const candidate = { chapterNumber: 1, draftId: 101, version: 2, content, required }
+    const input = {
+      writingLanguage: 'zh-CN' as const, authorProjectFacts: [], characterProfiles: '', futurePlans: '（无）',
+      references: [], finalized: [], candidates: [candidate], relevanceTerms: ['林岚'],
+    }
+    const bundle = await assemble(input)
+    const material = bundle.selection.included.find(item => item.ref.sourceId === 'candidate:101')!
+    const expected = `【未定稿候选 · 第1章 · draft 101 · v2】\n门外下雨。\n\n${early}\n\n见证人点头。\n\n${ending}`
+
+    expect(content.length).toBeGreaterThan(1_000)
+    expect(content.indexOf(early)).toBeLessThan(content.length / 2)
+    expect(material.text).toBe(expected)
+    expect(bundle.text).toContain(expected)
+    expect(bundle.previousEnding).toBe(ending)
+    expect(material.ref).toEqual({ projectId: '项目', epoch: '会话', sourceId: 'candidate:101', revision: 2,
+      contentHash: await hashAuthorText(expected) })
+    expect(bundle.decision.included.find(item => item.sourceId === 'candidate:101')).toMatchObject({
+      revision: 2, contentHash: material.ref.contentHash, required: true,
+      units: new TextEncoder().encode(expected).length,
+    })
+    expect(bundle.decision.capacity.admittedUnits).toBeLessThanOrEqual(bundle.decision.capacity.maxInputUnits)
+    expect(await hashAuthorText(candidate.content)).toBe(originalHash)
+
+    const unrelated = await assemble({ ...input, relevanceTerms: ['无关词'] })
+    expect(unrelated.selection.included.find(item => item.ref.sourceId === 'candidate:101')?.text)
+      .toBe(`【未定稿候选 · 第1章 · draft 101 · v2】\n${ending}`)
+    // A budget that fits the old tail must not silently discard the newly selected early evidence.
+    const budgetChars = Math.ceil(unrelated.decision.capacity.admittedUnits / 3)
+    await expect(assemble({ ...input, relevanceTerms: ['无关词'], budgetChars })).resolves.toBeDefined()
+    await expect(assemble({ ...input, budgetChars })).rejects.toMatchObject({
+      code: 'CHAPTER_MATERIAL_CAPACITY_CONFLICT',
+      decision: { decision: 'capacity-conflict', blockingSourceId: 'candidate:101', blockingReason: 'budget' },
+    })
+  })
+
+  it('does not duplicate a required ending already contained in relevant predecessor prose', async () => {
+    const content = '林岚收好铜钥匙。\n\n她关上门。'
+    const bundle = await assemble({
+      writingLanguage: 'zh-CN', authorProjectFacts: [], characterProfiles: '', futurePlans: '（无）',
+      references: [], finalized: [], relevanceTerms: ['林岚'],
+      candidates: [
+        { chapterNumber: 1, draftId: 100, version: 1, content: '另册只记录天气。' },
+        { chapterNumber: 2, draftId: 101, version: 2, content, required: true },
+      ],
+    })
+    expect(bundle.text.split(content)).toHaveLength(2)
+    expect(bundle.previousEnding).toBe(content)
+    expect(bundle.omissions).toContainEqual({ source: 'candidate', chapterNumber: 1, reason: 'no-relevant-passage' })
+  })
+
+  it('keeps all three required predecessor windows while optional and finalized fallback retain the last two', async () => {
+    const early = '林岚已接过铜钥匙，周砚不再持有。'
+    const middle = '林岚在第二窗口核对地图。'
+    const late = '林岚在第三窗口确认南门。'
+    const ending = '夜色掩住了城墙。'
+    const content = ['窗前。', early, '见证人点头。', '石'.repeat(600),
+      '桌前。', middle, '墨迹未干。', '雨'.repeat(600),
+      '门前。', late, '门闩松动。', `${'风'.repeat(1_800)}。`, ending].join('\n\n')
+    const predecessor = { chapterNumber: 2, draftId: 101, version: 2, content, required: true }
+    const input = {
+      writingLanguage: 'zh-CN' as const, authorProjectFacts: [], characterProfiles: '', futurePlans: '（无）',
+      references: [], relevanceTerms: ['林岚'],
+      candidates: [{ chapterNumber: 1, draftId: 100, version: 1, content }, predecessor],
+      finalized: [{ chapterNumber: 1, draftId: 99, title: '旧章', content, evidence: ['已失效的定位'], sourceStatus: 'stale' as const }],
+    }
+    const bundle = await assemble(input)
+    for (const sourceId of ['candidate:101', 'candidate:100', 'finalized:99']) {
+      const material = bundle.selection.included.find(item => item.ref.sourceId === sourceId)!
+      expect(material.text).toContain(middle)
+      expect(material.text).toContain(late)
+      if (sourceId === 'candidate:101') {
+        expect(material.text).toContain(early)
+        expect(material.text).toContain(ending)
+        expect(material.ref.contentHash).toBe(await hashAuthorText(material.text))
+      } else expect(material.text).not.toContain(early)
+    }
+    expect(bundle.previousEnding).toBe(ending)
+
+    const requiredOnly = { ...input, candidates: [predecessor], finalized: [] }
+    const lastTwoTerms = ['第二窗口', '第三窗口']
+    const lastTwo = await assemble({ ...requiredOnly, relevanceTerms: lastTwoTerms })
+    const budgetChars = Math.ceil(lastTwo.decision.capacity.admittedUnits / 3)
+    await expect(assemble({ ...requiredOnly, relevanceTerms: lastTwoTerms, budgetChars })).resolves.toBeDefined()
+    await expect(assemble({ ...requiredOnly, budgetChars })).rejects.toMatchObject({
+      code: 'CHAPTER_MATERIAL_CAPACITY_CONFLICT',
+      decision: { decision: 'capacity-conflict', blockingSourceId: 'candidate:101', blockingReason: 'budget' },
+    })
+  })
+
   it('fails closed when multiple predecessor candidates have no unique explicit required item', async () => {
     await expect(assemble({
       writingLanguage: 'zh-CN', authorProjectFacts: [], characterProfiles: '', futurePlans: '（无）',
