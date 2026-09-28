@@ -186,7 +186,9 @@ export function validatePhysicalLedger(file) {
   const split = validateHistoricalSupersessionBoundary(raw, rebuilt, protocol.historicalS14BSplitBoundary)
   const postUi = validateHistoricalSupersessionBoundary(raw, split, protocol.historicalPostUi408Boundary)
   const c16 = validateHistoricalSupersessionBoundary(raw, postUi, protocol.historicalC16Ee3435ecBoundary)
-  validateHistoricalSupersessionBoundary(raw, c16, protocol.historicalC16Ccc70b31Boundary)
+  const ccc70b31 = validateHistoricalSupersessionBoundary(raw, c16, protocol.historicalC16Ccc70b31Boundary)
+  const c9b88510 = validateHistoricalSupersessionBoundary(raw, ccc70b31, protocol.historicalC16C9b88510Boundary)
+  validateHistoricalSupersessionBoundary(raw, c9b88510, protocol.historicalC16D8a30c11Boundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -481,6 +483,18 @@ export function updateLedger(file, event, options = {}) {
       const trustedCcc70b31Events = ccc70b31Boundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedC16Events, ccc70b31Boundary)
         : trustedC16Events
+      // 第508–579行：旧协议 hash `68722f93…` 下 C16–C18 真实 invocation c9b88510 与 d8a30c11。两次 candidate 代码
+      // 身份不同，按同一 armBindings 规则各登记一段（507→546、546→579）；只加性认证，不改判。
+      const c9b88510Boundary = options.campaignMode === 'real'
+        ? protocol.historicalC16C9b88510Boundary : options.historicalC16C9b88510Boundary
+      const trustedC9b88510Events = c9b88510Boundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedCcc70b31Events, c9b88510Boundary)
+        : trustedCcc70b31Events
+      const d8a30c11Boundary = options.campaignMode === 'real'
+        ? protocol.historicalC16D8a30c11Boundary : options.historicalC16D8a30c11Boundary
+      const trustedD8a30c11Events = d8a30c11Boundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedC9b88510Events, d8a30c11Boundary)
+        : trustedC9b88510Events
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
       // 未登记 operations 的阶段在这里 fail closed。
@@ -503,7 +517,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedCcc70b31Events
+          const superseded = index >= trustedHistoricalEvents && index < trustedD8a30c11Events
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)

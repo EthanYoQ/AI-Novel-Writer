@@ -287,7 +287,7 @@ export const PHASE_SCENARIOS = Object.freeze({
   'c16-c18': Object.freeze({
     caseId: 'C16-A', caseIds: Object.freeze(['C16-A', 'C16-B', 'C16-C', 'C17-A', 'C17-B', 'C18-A', 'C18-B']),
     sceneId: '场景1', chapterNumber: 2, milestone: 'final', arms: Object.freeze(['candidate']),
-    scenarioRevision: 'c16-c18-candidate-production-path-v2',
+    scenarioRevision: 'c16-c18-candidate-production-path-v3',
     attemptPolicy: C16_C18_ATTEMPT_POLICY,
     operations: Object.freeze([
       Object.freeze({ id: '定稿章节要点', kind: 'chapter_notes' }),
@@ -1154,6 +1154,27 @@ function verifiedCondensedDraft(primary, result) {
       && countProjectedDraftUnits(output) > targetUnitRange(observation.targetUnits, result.protocolRevision, 'candidate').maximum
   } catch { return false }
 }
+/**
+ * C16-B 作者保护（评分规则变更，用户批准，c16-c18 v3）：作者值始终由桥断言保全；是否出现冲突候选
+ * 只在模型正式生效输出确实提议改写 mentalState 时才要求。证据须绑定末次正式 attempt 的 hash 可复核产物，
+ * 字段缺失或不一致一律失败。合成模式的 transport 必定提议冲突值，因此仍强制冲突候选。
+ */
+function authorProtectionSatisfied(result, mode) {
+  const evidence = result.finalizationEvidence, protection = evidence?.authorProtection
+  const operationId = PHASE_SCENARIOS['c16-c18'].operations.find(operation => operation.kind === 'character_cards').id
+  const formal = result.attempts.filter(attempt => attempt.binding?.operation === operationId).at(-1)
+  const terminal = result.ownerTerminal.find(item => item.attemptId === formal?.binding?.actual?.attemptId)
+  if (typeof evidence?.authorProtected !== 'boolean' || !protection || typeof protection !== 'object'
+    || typeof protection.proposed !== 'boolean' || protection.status !== (protection.proposed ? 'triggered' : 'untriggered')
+    || protection.field !== 'mentalState' || protection.authorValue !== '谨慎'
+    || protection.derivation !== 'formal-owner-artifact-production-parser'
+    || !formal || protection.formalAttemptId !== formal.binding.actual?.attemptId
+    || !CONTENT_HASH.test(protection.ownerArtifactHash ?? '') || protection.ownerArtifactHash !== formal.visibleTextHash
+    || terminal?.hasFormalEffect !== true || terminal.textHash !== protection.ownerArtifactHash) return false
+  try { if (digest(fs.readFileSync(formal.outputPath, 'utf8')) !== protection.ownerArtifactHash) return false } catch { return false }
+  if (mode === 'synthetic' && !protection.proposed) return false
+  return !protection.proposed || evidence.authorProtected === true
+}
 export function validateCandidateContinuityResults(results, mode) {
   const fail = code => ({ status: 'failed', candidateFailure: code })
   const condense = PHASE_SCENARIOS['c16-c18'].attemptPolicy.draftCondense
@@ -1200,7 +1221,7 @@ export function validateCandidateContinuityResults(results, mode) {
       return fail('RESTORE_IDENTITY_MISMATCH')
   }
   if (new Set(results.slice(3).map(result => result.physicalProject.projectId)).size !== 4) return fail('RESTORE_IDENTITY_MISMATCH')
-  if (!results[1].finalizationEvidence.authorProtected || !results[2].sourceReplacement
+  if (!authorProtectionSatisfied(results[1], mode) || !results[2].sourceReplacement
     || !results[4].restoration.sourceReplacement || results[6].restoration.branchGenerationIds?.length !== 2)
     return fail('CONTINUITY_CASE_EVIDENCE_MISSING')
   return { status: mode === 'real' ? 'pending-independent-oracle-review' : 'passed' }

@@ -1095,7 +1095,25 @@ test('isolated production commands persist the selected phase operations', async
             assert.equal(character?.currentState?.mentalState, '谨慎', 'AUTHOR_STATE_OVERWRITTEN')
             const candidates = await invoke('finalized-character:list-state-candidates', session)
             receipt.finalizationEvidence.authorProtected = candidates.some(item => item.characterId === character.characterId && item.field === 'mentalState')
-            if (request.mode === 'synthetic') assert.equal(receipt.finalizationEvidence.authorProtected, true, 'AUTHOR_CONFLICT_CANDIDATE_MISSING')
+            // 评分规则变更（用户批准，c16-c18 v3）：模型是否提议改写作者字段，只取本 operation 末次（正式生效）attempt
+            // 的 owner artifact；其文本须与物理输出 hash 一致，且用生产解析器解析，不读自由文本。
+            const formal = receipt.attempts.filter(attempt => attempt.binding.operation === operationId).at(-1)
+            const formalRow = formal && db.prepare('SELECT a.usage_receipt_json,g.artifact_json FROM generation_attempts a JOIN generation_artifacts g ON g.attempt_id=a.attempt_id WHERE a.attempt_id=?')
+              .get(formal.binding.actual.attemptId)
+            const formalText = formalRow ? JSON.parse(formalRow.artifact_json).text : null
+            assert.ok(typeof formalText === 'string' && Boolean(JSON.parse(formalRow.usage_receipt_json).finalizationEffect)
+              && sha(formalText) === formal.visibleTextHash && sha(fs.readFileSync(formal.outputPath, 'utf8')) === formal.visibleTextHash,
+            'AUTHOR_PROTECTION_ARTIFACT_UNVERIFIED')
+            const proposal = parseFinalizedCharacterStateResponse(formalText, finalizedContext.identity).updates
+              .find(update => update.characterId === character.characterId && Object.hasOwn(update.currentState, 'mentalState'))
+            const proposed = Boolean(proposal) && proposal.currentState.mentalState !== character.currentState.mentalState
+            receipt.finalizationEvidence.authorProtection = { field: 'mentalState', authorValue: character.currentState.mentalState,
+              proposed, status: proposed ? 'triggered' : 'untriggered', formalAttemptId: formal.binding.actual.attemptId,
+              ownerArtifactHash: formal.visibleTextHash, derivation: 'formal-owner-artifact-production-parser' }
+            if (request.mode === 'synthetic') {
+              assert.equal(proposed, true, 'SYNTHETIC_AUTHOR_CONFLICT_NOT_PROPOSED')
+              assert.equal(receipt.finalizationEvidence.authorProtected, true, 'AUTHOR_CONFLICT_CANDIDATE_MISSING')
+            }
           }
         }
       }
