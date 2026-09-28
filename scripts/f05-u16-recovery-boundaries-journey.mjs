@@ -199,6 +199,9 @@ async function launch(profile) {
   for (const key of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'AI_NOVEL_SMOKE_OPEN_PROJECT']) delete env[key]
   const app = await electron.launch({ executablePath, cwd: packageDir,
     args: [`--user-data-dir=${profile.userData}`], env, timeout: 30_000 })
+  // Keep main-process output beside the receipt so a UI-level failure code can be traced to its cause.
+  for (const stream of [app.process().stdout, app.process().stderr]) stream?.on('data', chunk =>
+    fs.appendFileSync(path.join(receiptDir, 'main-process.log'), String(chunk).replaceAll(scratch, '<isolated-scratch>')))
   const page = await app.firstWindow({ timeout: 30_000 })
   page.setDefaultTimeout(15_000)
   await page.locator('.app-skin-root').waitFor({ state: 'visible' })

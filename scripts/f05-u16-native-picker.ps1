@@ -113,8 +113,12 @@ foreach($unit in $Target.ToCharArray()) {
   $keys.Add([NativePickerInput]::Key(0,[uint16][char]$unit,6))
 }
 if([NativePickerInput]::Send($keys.ToArray()) -ne $keys.Count){ throw 'Unicode SendInput incomplete' }
-Start-Sleep -Milliseconds 300
-$after = [NativePickerInput]::EditText($edit)
+# SendInput is queued; poll until the dialog has consumed it instead of reading after a fixed delay.
+$deadline = [DateTime]::UtcNow.AddSeconds(5)
+do {
+  Start-Sleep -Milliseconds 100
+  $after = [NativePickerInput]::EditText($edit)
+} while($after -ne $Target -and [DateTime]::UtcNow -lt $deadline)
 if($after -ne $Target){ throw "Edit readback mismatch before=[$before] after=[$after]" }
 $enter = @([NativePickerInput]::Key(0x0d,0,0),[NativePickerInput]::Key(0x0d,0,2))
 if($DialogTitle -eq '选择恢复副本所在文件夹'){
