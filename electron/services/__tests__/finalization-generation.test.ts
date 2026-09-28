@@ -14,6 +14,7 @@ import { generationOutputContract, type BeginGenerationRequest } from '../../../
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
 import type { MainGenerationExecuteReceipt } from '../../../src/services/generation/generation-runtime'
+import { parseFinalizedCharacterStateResponse } from '../../../src/shared/finalized-continuity'
 
 vi.mock('../../database', async importOriginal => ({ ...await importOriginal<typeof import('../../database')>(), getProjectDb: vi.fn() }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -316,4 +317,58 @@ it('characters JSON结构错误仍给通用修复说明',async()=>{
  const repair=lastUserMessage(f.dispatch.mock.calls[1]![0])
  expect(repair).toContain('上一份回答未满足要求的 JSON 结构或原文证据校验')
  expect(repair).not.toContain('不得跨段落或空行拼接')
+})
+
+// Replays the observed template-following shape: name instead of characterId, no evidence, all fields, newCharacters.
+const templateShaped=()=>({updates:[{name:'林岚',currentState:{location:'记录室',powerLevel:'未变',physicalState:'疲惫',mentalState:'警觉',keyItems:'记录本',recentEvents:'更正记录',updatedAtChapter:1}}],newCharacters:[{name:'守夜人',role:'minor',currentState:{location:'北塔'}}]})
+
+it('characters缺evidence按独立错误码拒绝，结构错误码不变',async()=>{
+ const f=await splitEvidenceRun(undefined,[single])
+ const identity=f.prepared.context
+ expect(()=>parseFinalizedCharacterStateResponse(JSON.stringify(templateShaped()),identity)).toThrow('FINALIZED_CHARACTER_EVIDENCE_MISSING')
+ expect(()=>parseFinalizedCharacterStateResponse(JSON.stringify({updates:[{characterId:f.characterId,currentState:{location:'记录室'},evidence:'林岚'}]}),identity)).toThrow('FINALIZED_CHARACTER_EVIDENCE_MISSING')
+ expect(()=>parseFinalizedCharacterStateResponse(JSON.stringify({updates:[{characterId:f.characterId,evidence:{text:'林岚'}}]}),identity)).toThrow('FINALIZED_CHARACTER_UPDATE_INVALID')
+ expect(()=>parseFinalizedCharacterStateResponse('{"updates":[null]}',identity)).toThrow('FINALIZED_CHARACTER_UPDATE_INVALID')
+})
+
+it('characters缺evidence：修复消息点名缺失字段并要求保留有据更新，合法后提交',async()=>{
+ const f=await splitEvidenceRun(undefined,[templateShaped,single])
+ expect(f.dispatch).toHaveBeenCalledTimes(2)
+ const repair=lastUserMessage(f.dispatch.mock.calls[1]![0])
+ expect(repair).toContain('上一份回答的更新项缺少 evidence')
+ expect(repair).toContain('不要因缺少 evidence 而返回空列表')
+ expect(repair).toContain('characterId')
+ expect(repair).toContain('删除 newCharacters')
+ expect(repair).not.toContain('上一份回答未满足要求的 JSON 结构或原文证据校验')
+ expect(repair).not.toContain('不得跨段落或空行拼接')
+ expect(repair).not.toContain('守夜人')
+ expect(f.owner.commitFinalizationGeneration({handle:f.handle,artifact:f.artifactOf(f.result)})).toMatchObject({success:true,applied:1})
+})
+
+it('characters英文项目缺evidence修复消息为英文',async()=>{
+ const f=await splitEvidenceRun('en-US',[templateShaped,single])
+ const repair=lastUserMessage(f.dispatch.mock.calls[1]![0])
+ expect(repair).toContain('At least one update had no evidence object')
+ expect(repair).toContain('instead of returning an empty list because evidence was missing')
+ expect(repair).toContain('remove newCharacters')
+ expect(repair).not.toContain('never join sentences across paragraphs or blank lines')
+ expect(repair).not.toMatch(/[一-鿿]/)
+})
+
+it('characters缺evidence三次仍封顶拒写',async()=>{
+ const f=await splitEvidenceRun(undefined,[templateShaped,templateShaped,templateShaped])
+ expect(f.dispatch).toHaveBeenCalledTimes(3)
+ expect(lastUserMessage(f.dispatch.mock.calls[2]![0])).toContain('上一份回答的更新项缺少 evidence')
+ expect(()=>f.owner.commitFinalizationGeneration({handle:f.handle,artifact:f.artifactOf(f.result)})).toThrow('FINALIZED_CHARACTER_EVIDENCE_MISSING')
+ expect(f.owner.readFinalizationGeneration({slot:f.slot})?.effect).toBeUndefined()
+})
+
+it('characters初始提示以最终合同覆盖模板示例（中英）',async()=>{
+ const zh=lastUserMessage((await splitEvidenceRun(undefined,[single])).dispatch.mock.calls[0]![0])
+ expect(zh).toContain('【最终输出合同，覆盖上文【输出格式（JSON）】】')
+ expect(zh.indexOf('【最终输出合同')).toBeLessThan(zh.indexOf('只返回一个 JSON 对象'))
+ const en=lastUserMessage((await splitEvidenceRun('en-US',[single])).dispatch.mock.calls[0]![0])
+ expect(en).toContain('[Final output contract: this overrides the [JSON output contract] above]')
+ expect(en).toContain("that card's exact characterId")
+ expect(en.indexOf('[Final output contract')).toBeLessThan(en.indexOf('Return one JSON object'))
 })

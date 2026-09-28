@@ -158,7 +158,9 @@ export function parseFinalizedCharacterStateResponse(content: string, context: F
   const result: FinalizedCharacterStateResponse = { updates: [], unresolved: [] }
   const seen = new Set<string>()
   for (const [index, input] of parsed.updates.entries()) {
-    if (!record(input) || !record(input.currentState) || !record(input.evidence)) throw new Error('FINALIZED_CHARACTER_UPDATE_INVALID')
+    if (!record(input) || !record(input.currentState)) throw new Error('FINALIZED_CHARACTER_UPDATE_INVALID')
+    // A distinct code lets the repair turn name the missing field instead of offering only the empty exit.
+    if (!record(input.evidence)) throw new Error('FINALIZED_CHARACTER_EVIDENCE_MISSING')
     const evidence = input.evidence
     let start = evidence.start, end = evidence.end
     if (!Object.hasOwn(evidence, 'start') && !Object.hasOwn(evidence, 'end') && typeof evidence.text === 'string' && evidence.text.length > 0) {

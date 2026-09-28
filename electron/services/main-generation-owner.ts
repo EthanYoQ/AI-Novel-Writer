@@ -743,17 +743,20 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (!request || Object.keys(request).some(key => key !== 'handle')) throw new Error('GENERATION_FINALIZATION_REQUEST_INVALID')
       let run = finalizations.require(request.handle)
       const initialTask = finalizations.task(run), context = readFinalizationGenerationContext(run)
-      let invalidText: string | undefined, evidenceInvalid = false
+      let invalidText: string | undefined, repairKind: 'generic' | 'evidence-missing' | 'evidence-span' = 'generic'
       for (let ordinal = 0; ordinal < 3; ordinal++) {
         const english = context.writingLanguage === 'en-US'
-        // Only our own error class selects fixed guidance; model text and error details never enter the message.
-        const guidance = !evidenceInvalid ? '' : english
-          ? ' The evidence.text was not one contiguous, verbatim span of the frozen chapter that occurs exactly once, or its start/end did not match. Copy a single contiguous span verbatim; never join sentences across paragraphs or blank lines, and do not alter punctuation or whitespace. Quote only the one sentence that supports the field; if that sentence appears more than once, extend it with adjacent text into a longer contiguous span that is unique, and omit start/end so the program calculates them.'
-          : '上一份回答的 evidence.text 不是冻结正文中单一连续、只出现一次的逐字片段，或 start/end 与正文不符。只能逐字复制一段连续原文；不得跨段落或空行拼接多句，不得删改标点或空白。请只引用直接支持该字段的一句；若该句在正文中不唯一，扩展为包含相邻文字的更长连续片段。省略 start/end，由程序计算。'
+        // Only our own error codes select fixed guidance; model text and error details never enter the message.
+        const guidance = repairKind === 'generic' ? '' : repairKind === 'evidence-missing' ? english
+          ? ' At least one update had no evidence object. Keep the supported updates from the preceding response instead of returning an empty list because evidence was missing. Give every update an evidence.text copied as one contiguous, verbatim span of the frozen chapter, and omit start/end so the program calculates them. For a person who has an existing character card, use that card\'s characterId rather than a name alone. Keep only the fields that actually changed, and remove newCharacters.'
+          : '上一份回答的更新项缺少 evidence。请保留上一份回答中有正文支持的更新，不要因缺少 evidence 而返回空列表：每项都必须填写逐字复制的单一连续原文 evidence.text，省略 start/end，由程序计算；现有角色卡中的人物必须填写其 characterId，不能只写 name；只保留实际变化的字段；删除 newCharacters。'
+          : english
+            ? ' The evidence.text was not one contiguous, verbatim span of the frozen chapter that occurs exactly once, or its start/end did not match. Copy a single contiguous span verbatim; never join sentences across paragraphs or blank lines, and do not alter punctuation or whitespace. Quote only the one sentence that supports the field; if that sentence appears more than once, extend it with adjacent text into a longer contiguous span that is unique, and omit start/end so the program calculates them.'
+            : '上一份回答的 evidence.text 不是冻结正文中单一连续、只出现一次的逐字片段，或 start/end 与正文不符。只能逐字复制一段连续原文；不得跨段落或空行拼接多句，不得删改标点或空白。请只引用直接支持该字段的一句；若该句在正文中不唯一，扩展为包含相邻文字的更长连续片段。省略 start/end，由程序计算。'
         const task: GenerationTask = invalidText === undefined ? initialTask : { ...initialTask, purpose: `${initialTask.purpose}:repair:${ordinal}`,
           messages: [...initialTask.messages, { role: 'assistant', content: invalidText }, { role: 'user', content: english
-            ? `The preceding response does not satisfy the required ${evidenceInvalid ? 'exact source evidence' : 'JSON structure or exact source evidence'}.${guidance} Return a corrected JSON object using only the original frozen source and character IDs. Do not change or invent evidence. Return {"updates":[]} when there is no supported update.`
-            : `${evidenceInvalid ? guidance : '上一份回答未满足要求的 JSON 结构或原文证据校验。'}请仅依据原始冻结正文和角色 ID 返回修正后的 JSON 对象，不得改写或虚构证据。没有可靠更新时返回 {"updates":[]}。` }] }
+            ? `The preceding response does not satisfy the required ${repairKind === 'generic' ? 'JSON structure or exact source evidence' : 'exact source evidence'}.${guidance} Return a corrected JSON object using only the original frozen source and character IDs. Do not change or invent evidence. Return {"updates":[]} when there is no supported update.`
+            : `${repairKind === 'generic' ? '上一份回答未满足要求的 JSON 结构或原文证据校验。' : guidance}请仅依据原始冻结正文和角色 ID 返回修正后的 JSON 对象，不得改写或虚构证据。没有可靠更新时返回 {"updates":[]}。` }] }
         const invocationNonce = `finalization:${ordinal}`
         const requestHash = textHash(JSON.stringify([task, run.binding.fingerprint.modelLeaseRevision, run.binding.fingerprint.policyHash]))
         const prior = repository.findInvocation(run.runId, invocationNonce, requestHash)
@@ -773,7 +776,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         if (textHash(candidate.text) !== candidate.textHash) throw new Error('GENERATION_FINALIZATION_ARTIFACT_INVALID')
         try { parseFinalizedCharacterStateResponse(result.outcome.content, context.identity); return result } catch (error) {
           invalidText = result.outcome.content
-          evidenceInvalid = error instanceof Error && error.message.startsWith('FINALIZED_CHARACTER_EVIDENCE_')
+          const code = error instanceof Error ? error.message : ''
+          repairKind = code === 'FINALIZED_CHARACTER_EVIDENCE_MISSING' ? 'evidence-missing' : code.startsWith('FINALIZED_CHARACTER_EVIDENCE_') ? 'evidence-span' : 'generic'
         }
       }
       throw new Error('GENERATION_FINALIZATION_ATTEMPT_CONFLICT')

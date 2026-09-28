@@ -755,9 +755,24 @@ describe('workflow mutation failure boundaries', () => {
   })
 
   it.each([
+    ['zh-CN', '【最终输出合同，覆盖上文【输出格式（JSON）】】', '只返回一个 JSON 对象'],
+    ['en-US', '[Final output contract: this overrides the [JSON output contract] above]', 'Return one JSON object'],
+  ] as const)('prefixes the code-owned contract with an explicit template override: %s', async (writingLanguage, override, contract) => {
+    stubVelaIpc(vi.fn())
+    const characterStates = vi.fn(async () => ({ applied: 0, unchanged: 0, candidates: [], unresolved: [] }))
+    const step = testFrozenCharacterSteps('正文', { complete: vi.fn(), characterStates }).find(step => step.key === 'character_cards')!
+    await step.executor(callbacks(), { ...context(), writingLanguage })
+    const [builder] = characterStates.mock.calls[0] as unknown as Parameters<NonNullable<FinalizePostProcessGeneration['characterStates']>>
+    const prompt = builder.build()
+    expect(prompt).toContain(override)
+    expect(prompt.indexOf(override)).toBeLessThan(prompt.indexOf(contract))
+  })
+
+  it.each([
     ['missing updates', '{}', 'UPDATES_INVALID'],
     ['non-array updates', '{"updates":{}}', 'UPDATES_INVALID'],
     ['invalid member', '{"updates":[null]}', 'UPDATE_INVALID'],
+    ['template-shaped member without evidence', '{"updates":[{"name":"林岚","currentState":{"location":"码头","updatedAtChapter":1}}],"newCharacters":[]}', 'EVIDENCE_MISSING'],
     ['invalid state type', '{"updates":[{"characterId":"synthetic-lin-lan","currentState":{"location":7},"evidence":{"start":0,"end":2,"text":"正文"}}]}', 'FIELD_INVALID'],
     ['duplicate ID', '{"updates":[{"characterId":"synthetic-lin-lan","currentState":{"location":"码头"},"evidence":{"start":0,"end":2,"text":"正文"}},{"characterId":"synthetic-lin-lan","currentState":{"location":"旧站"},"evidence":{"start":0,"end":2,"text":"正文"}}]}', 'DUPLICATE_ID'],
   ])('rejects malformed state artifacts without treating them as an empty success: %s', async (_label, response, error) => {
