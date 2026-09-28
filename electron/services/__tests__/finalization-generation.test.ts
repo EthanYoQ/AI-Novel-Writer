@@ -372,3 +372,21 @@ it('characters初始提示以最终合同覆盖模板示例（中英）',async()
  expect(en).toContain("that card's exact characterId")
  expect(en.indexOf('[Final output contract')).toBeLessThan(en.indexOf('Return one JSON object'))
 })
+
+it('characters最终合同要求每个update含recentEvents，且与渲染端副本一致（中英）',async()=>{
+ const zh=lastUserMessage((await splitEvidenceRun(undefined,[single])).dispatch.mock.calls[0]![0])
+ const en=lastUserMessage((await splitEvidenceRun('en-US',[single])).dispatch.mock.calls[0]![0])
+ expect(zh).toContain('每个 update 必须填写 recentEvents（本章中该角色最重要的事件，50字以内）')
+ expect(zh).toContain('location 只写地点，不写事件或进度')
+ expect(zh).toContain('只返回一个 JSON 对象：{"updates":[{"characterId":"冻结名单中的精确ID","currentState":{"recentEvents":"本章事件","location":"新地点"},"evidence":{"text":"原文精确引用"}}]}')
+ expect(zh).not.toContain('只列出实际变化的字段')
+ expect(en).toContain("Every update must include recentEvents (this character's most important event in this chapter, within 50 words)")
+ expect(en).toContain('location is a place, never an event or progress')
+ expect(en).toContain('Return one JSON object: {"updates":[{"characterId":"exact ID from the frozen list","currentState":{"recentEvents":"this chapter\'s event","location":"new place"},"evidence":{"text":"exact source quote"}}]}')
+ expect(en).not.toContain('list only the fields that actually changed')
+ const renderer=fs.readFileSync(path.resolve('src/services/workflows/commands/finalize-chapter.command.ts'),'utf8')
+ for(const [message,prefix] of [[zh,'【最终输出合同'],[en,'[Final output contract']] as const){
+  const contract=message.slice(message.indexOf(prefix))
+  expect(renderer).toContain(`'${contract.replace(/'/g,"\\'")}'`)
+ }
+})

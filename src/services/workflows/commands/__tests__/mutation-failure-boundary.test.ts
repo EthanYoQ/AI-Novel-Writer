@@ -769,6 +769,21 @@ describe('workflow mutation failure boundaries', () => {
   })
 
   it.each([
+    ['zh-CN', '每个 update 必须填写 recentEvents（本章中该角色最重要的事件，50字以内）', '只返回一个 JSON 对象：{"updates":[{"characterId":"冻结名单中的精确ID","currentState":{"recentEvents":"本章事件","location":"新地点"},"evidence":{"text":"原文精确引用"}}]}', '只列出实际变化的字段'],
+    ['en-US', "Every update must include recentEvents (this character's most important event in this chapter, within 50 words)", 'Return one JSON object: {"updates":[{"characterId":"exact ID from the frozen list","currentState":{"recentEvents":"this chapter\'s event","location":"new place"},"evidence":{"text":"exact source quote"}}]}', 'list only the fields that actually changed'],
+  ] as const)('requires recentEvents on every update in the code-owned contract: %s', async (writingLanguage, requirement, example, retired) => {
+    stubVelaIpc(vi.fn())
+    const characterStates = vi.fn(async () => ({ applied: 0, unchanged: 0, candidates: [], unresolved: [] }))
+    const step = testFrozenCharacterSteps('正文', { complete: vi.fn(), characterStates }).find(step => step.key === 'character_cards')!
+    await step.executor(callbacks(), { ...context(), writingLanguage })
+    const [builder] = characterStates.mock.calls[0] as unknown as Parameters<NonNullable<FinalizePostProcessGeneration['characterStates']>>
+    const prompt = builder.build()
+    expect(prompt).toContain(requirement)
+    expect(prompt).toContain(example)
+    expect(prompt).not.toContain(retired)
+  })
+
+  it.each([
     ['missing updates', '{}', 'UPDATES_INVALID'],
     ['non-array updates', '{"updates":{}}', 'UPDATES_INVALID'],
     ['invalid member', '{"updates":[null]}', 'UPDATE_INVALID'],
