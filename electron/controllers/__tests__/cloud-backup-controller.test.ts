@@ -11,6 +11,19 @@ import {
   registerCloudBackupController,
   type CloudBackupControllerDependencies,
 } from '../cloud-backup-controller'
+import { removeDirectoryWithWindowsRetry } from '../../utils/remove-directory'
+
+vi.mock('../../utils/remove-directory', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../utils/remove-directory')>()
+  return { removeDirectoryWithWindowsRetry: vi.fn(actual.removeDirectoryWithWindowsRetry) }
+})
+
+function busyError(): NodeJS.ErrnoException {
+  const lockedPath = 'C:\\private\\cloud-backup-staging\\x'
+  return Object.assign(new Error(`EBUSY: resource busy or locked, rmdir '${lockedPath}'`), {
+    code: 'EBUSY', syscall: 'rmdir', path: lockedPath,
+  })
+}
 
 const PROJECT = '11111111-1111-4111-8111-111111111111'
 const TARGET_PROJECT = '22222222-2222-4222-8222-222222222222'
@@ -550,6 +563,68 @@ describe('registerCloudBackupController', () => {
     await expect(f.invoke('cloud-backup:cancel', OPERATION)).resolves.toEqual({
       success: false, state: 'failed', errorCode: 'CLOUD_BACKUP_OPERATION_NOT_FOUND',
     })
+  })
+
+  it('keeps a completed backup successful when Windows staging cleanup stays busy', async () => {
+    const f = fixture()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    vi.mocked(removeDirectoryWithWindowsRetry).mockRejectedValueOnce(busyError())
+
+    const result = await f.invoke('cloud-backup:backup', {
+      operationId: OPERATION, projectSession: session, disclosureConfirmed: true,
+    })
+
+    expect(result).toMatchObject({
+      success: true, state: 'backup-complete', operationId: OPERATION, bindingSaved: true,
+      generation: { generationId: GENERATION },
+    })
+    expect(f.deps.bindingStore.saveWritable).toHaveBeenCalledTimes(1)
+    expect(removeDirectoryWithWindowsRetry).toHaveBeenCalledWith(
+      expect.stringContaining(path.join(f.root, 'cloud-backup-staging', `${OPERATION}-`)),
+    )
+    expect(warn).toHaveBeenCalledWith('[cloud-backup] staging cleanup deferred', 'EBUSY')
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/private|cloud-backup-staging|resource busy/u)
+  })
+
+  it('keeps a completed restore copy successful when Windows staging cleanup stays busy', async () => {
+    const f = fixture()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    vi.mocked(removeDirectoryWithWindowsRetry).mockRejectedValueOnce(busyError())
+
+    const result = await f.invoke('cloud-backup:restore-copy', {
+      operationId: OTHER_OPERATION,
+      localEndpointAccountId: ACCOUNT,
+      cloudBookId: BOOK,
+      generationId: GENERATION,
+      targetProjectRoot: 'C:\\books\\restored',
+    })
+
+    expect(result).toMatchObject({
+      success: true, state: 'restore-complete', operationId: OTHER_OPERATION, bindingSaved: true,
+      receipt: { targetProjectId: TARGET_PROJECT },
+    })
+    expect(warn).toHaveBeenCalledWith('[cloud-backup] staging cleanup deferred', 'EBUSY')
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/private|resource busy/u)
+  })
+
+  it('logs only name, code and syscall for a genuinely unmapped failure', async () => {
+    const f = fixture()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    vi.mocked(f.deps.webDav.appendGeneration).mockRejectedValueOnce(Object.assign(
+      new Error("EACCES: permission denied, open 'C:\\private\\backup.ainovel' top-secret"),
+      { code: 'EACCES', syscall: 'open', path: 'C:\\private\\backup.ainovel' },
+    ))
+
+    const result = await f.invoke('cloud-backup:backup', {
+      operationId: OPERATION, projectSession: session, disclosureConfirmed: true,
+    })
+
+    expect(result).toEqual({ success: false, state: 'failed', errorCode: 'CLOUD_BACKUP_FAILED', operationId: OPERATION })
+    expect(f.deps.bindingStore.saveWritable).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith('[cloud-backup] unmapped failure', { name: 'Error', code: 'EACCES', syscall: 'open' })
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/private|top-secret|permission denied/u)
+    expect(fs.readdirSync(path.join(f.root, 'cloud-backup-staging'))).toEqual([])
   })
 
   it('returns fixed failure codes without leaking secrets or raw server errors', async () => {

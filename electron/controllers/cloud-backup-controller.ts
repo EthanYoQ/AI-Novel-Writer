@@ -49,6 +49,7 @@ import {
   type WebDavAccount,
   type WebDavGeneration,
 } from '../services/webdav-backup-service'
+import { removeDirectoryWithWindowsRetry } from '../utils/remove-directory'
 import { registerRecentProject, type RecentProject } from './project-controller'
 
 const require = createRequire(import.meta.url)
@@ -157,8 +158,22 @@ function errorCode(error: unknown): CloudBackupErrorCode {
   return 'CLOUD_BACKUP_FAILED'
 }
 
+function stringField(error: unknown, key: 'name' | 'code' | 'syscall'): string | undefined {
+  if (!error || typeof error !== 'object') return undefined
+  const value = (error as Record<string, unknown>)[key]
+  return typeof value === 'string' ? value : undefined
+}
+
 function failure(error: unknown, currentOperationId?: string): CloudBackupFailure {
   const code = errorCode(error)
+  if (code === 'CLOUD_BACKUP_FAILED') {
+    // 仅记录字符串类型的 name/code/syscall，绝不输出 message、路径或服务端文本。
+    console.warn('[cloud-backup] unmapped failure', {
+      name: stringField(error, 'name'),
+      code: stringField(error, 'code'),
+      syscall: stringField(error, 'syscall'),
+    })
+  }
   return {
     success: false,
     state: code === 'CLOUD_BACKUP_CANCELLED' ? 'cancelled' : 'failed',
@@ -184,12 +199,20 @@ function createStagingRoot(dataRoot: string, currentOperationId: string): string
   return root
 }
 
-function removeStagingRoot(dataRoot: string, currentOperationId: string, stagingRoot: string): void {
+/**
+ * 暂存目录清理是尽力而为：远端代与绑定可能已提交，清理失败（如 Windows 上
+ * 杀软/索引器短暂占用刚上传的归档导致 EBUSY/EPERM）不得改写已完成的结果。
+ */
+async function removeStagingRoot(dataRoot: string, currentOperationId: string, stagingRoot: string): Promise<void> {
   const parent = path.join(path.resolve(dataRoot), STAGING_DIRECTORY)
   const relative = path.relative(parent, stagingRoot)
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)
     || !path.basename(stagingRoot).startsWith(`${currentOperationId}-`)) return
-  fs.rmSync(stagingRoot, { recursive: true, force: true })
+  try {
+    await removeDirectoryWithWindowsRetry(stagingRoot)
+  } catch (error) {
+    console.warn('[cloud-backup] staging cleanup deferred', stringField(error, 'code'))
+  }
 }
 
 function readRestoredProjectName(projectRoot: string): string {
@@ -426,7 +449,7 @@ export function registerCloudBackupController(injected?: CloudBackupControllerDe
           }
         }
       } finally {
-        removeStagingRoot(dataRoot, id, stagingRoot)
+        await removeStagingRoot(dataRoot, id, stagingRoot)
       }
     })
   })
@@ -508,7 +531,7 @@ export function registerCloudBackupController(injected?: CloudBackupControllerDe
           recentProjectUpdated,
         }
       } finally {
-        removeStagingRoot(dataRoot, id, stagingRoot)
+        await removeStagingRoot(dataRoot, id, stagingRoot)
       }
     })
   })
