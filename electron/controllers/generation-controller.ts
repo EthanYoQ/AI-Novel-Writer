@@ -23,6 +23,7 @@ import { ModelExecutionLeaseRegistry } from '../services/model-execution-lease'
 import { createMainGenerationOwner } from '../services/main-generation-owner'
 import { MAIN_GENERATION_POLICY, TaskBudgetPreflightError } from '../services/main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../services/generation-source-binding'
+import { readPortableCurrentAuthority } from '../services/portable-current-authority'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import type { BlueprintRangeCommitReceipt } from '../repositories/blueprint-repository'
 import type { GenerationKnowledgeSnapshot } from '../../src/shared/generation-knowledge'
@@ -90,6 +91,8 @@ export function registerGenerationController(options: {
         assertCurrent: () => { projectAccess.assertCurrentProjectContext(captured, getCurrentProjectPath());
           if (getProjectDb() !== database) throw new Error('GENERATION_DATABASE_CHANGED') },
         leases: options.modelExecutionLeases, loadModel: options.loadModel, beforeDispatch: options.applyProxyConfig,
+        transferOrigin: () => readPortableCurrentAuthority({ database, projectStorageRoot: sourceDependencies.projectStorageRoot,
+          projectId: captured.projectId })?.originProjectId,
         buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(sourceDependencies, { ...selection,
           projectId: captured.projectId, epoch: captured.leaseId, modelReceipt, policy: MAIN_GENERATION_POLICY, outputContract: generationOutputContract(selection) }).binding,
         rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDependencies, previous, captured.leaseId,

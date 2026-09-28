@@ -68,6 +68,8 @@ export interface MainGenerationOwnerDependencies {
   onSnapshot?: (snapshot: MainGenerationSnapshot) => void
   onReasoning?: (event: { projectId: string; epoch: string; rootActionId: string; runId: string; attemptId: string; text: string }) => void
   dispatch?: GenerationRunServiceDependencies['dispatch']
+  /** Verified portable-transfer originProjectId (readPortableCurrentAuthority), read at commit time. */
+  transferOrigin?: () => string | undefined
 }
 
 interface ProviderRequest { model: ModelProfile; task: GenerationTask; plan: MainGenerationPlan }
@@ -113,7 +115,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (!value || typeof value.modelId !== 'string' || !/^[a-f0-9]{64}$/u.test(value.modelRevision)) throw new Error('GENERATION_MODEL_BINDING_INVALID')
     return value
   }
-  const finalizedCharacters = new FinalizedCharacterGeneration(deps.database, repository, { projectId: deps.projectId, epoch: deps.epoch }, assertCurrent)
+  const finalizedCharacters = new FinalizedCharacterGeneration(deps.database, repository, { projectId: deps.projectId, epoch: deps.epoch }, assertCurrent, deps.transferOrigin)
   const reviewRevisions = new ReviewRevisionGeneration(deps.database, repository, { projectId: deps.projectId, epoch: deps.epoch }, assertCurrent)
   const handleOf = (run: DurableGenerationRun): MainGenerationRunHandle => ({ projectId: run.binding.projectId,
     epoch: run.binding.epoch, rootActionId: run.rootActionId, runId: run.runId })
@@ -523,7 +525,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const imports = new ImportGeneration(deps.database, repository, deps.projectId)
   const legacyRosters = new LegacyRosterGeneration(deps.database, repository, deps.projectId, characters)
   const graphs = new GraphGeneration(deps.database, repository, deps.projectId)
-  const finalizations = new FinalizationGeneration(deps.database, repository, deps.projectId, characters)
+  const finalizations = new FinalizationGeneration(deps.database, repository, deps.projectId, characters, deps.transferOrigin)
   const agents = new AgentGeneration(deps.database, repository, { projectId: deps.projectId, epoch: deps.epoch }, assertCurrent, {
     begin: selection => begin(selection, false, true), read: handle => viewOf(requireRun(handle)), resume,
     execute: (handle, invocationNonce, task) => execute({ handle, invocationNonce, task }, true),

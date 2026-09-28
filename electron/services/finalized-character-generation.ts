@@ -14,7 +14,8 @@ import { proveFinalizedCharacterGeneration } from './finalized-character-generat
 export class FinalizedCharacterGeneration {
   private readonly contexts = new Map<string, FinalizedCharacterContext>()
   constructor(private readonly db: Database.Database, private readonly runs: GenerationRunRepository,
-    private readonly scope: { projectId: string; epoch: string }, private readonly assertCurrent: () => void) {}
+    private readonly scope: { projectId: string; epoch: string }, private readonly assertCurrent: () => void,
+    private readonly transferOrigin: () => string | undefined = () => undefined) {}
 
   readContext(draftId: number) {
     this.assertCurrent()
@@ -72,7 +73,8 @@ export class FinalizedCharacterGeneration {
       assertSources(request.handle)
       const proof = proveFinalizedCharacterGeneration(this.db, this.runs, this.scope.projectId, request.handle, request.artifact)
       if (!isDeepStrictEqual(proof.context, context)) throw new Error('GENERATION_CHARACTER_CONTEXT_MISMATCH')
-      const receipt = SummaryRepository.commitFinalizedCharacterStates(context, proof.response, this.db)
+      // transferOrigin 同步读取已验证的转移凭据，与本事务同属一次同步执行；凭据被篡改只会读出 null/抛错，趋向冲突而非放行。
+      const receipt = SummaryRepository.commitFinalizedCharacterStates(context, proof.response, this.db, this.transferOrigin())
       // Nameless occurrences remain visible in the durable artifact; never invent a name for adoption.
       const batch = proof.response.unresolved.some(item => item.displayName.trim())
         ? characters.stage({ kind: 'finalized-generation', handle: request.handle, artifact: request.artifact }) : undefined

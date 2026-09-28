@@ -22,7 +22,7 @@ const cleanup: (() => void)[] = []
 afterEach(() => { for (const dispose of cleanup.splice(0)) dispose(); vi.restoreAllMocks() })
 const prose = '林岚走进了北塔。'
 
-function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], options: { content?: string; writingLanguage?: 'en-US' } = {}) {
+function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], options: { content?: string; writingLanguage?: 'en-US'; seed?: (db: import('better-sqlite3').Database) => void; transferOrigin?: () => string | undefined } = {}) {
   const content = options.content ?? prose
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/finalization-generation-tests')
   fs.mkdirSync(base, { recursive: true })
@@ -36,6 +36,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], option
   FinalizationRepository.commit({ finalizationId: 'finalized-1', draftId: 1, chapterNumber: 1, chapterTitle: '北塔',
     content, contentHash: textHash(content), contentRevision: 1, targetFileName: '第一章.txt' })
   const characterId = db.prepare("SELECT character_id FROM characters WHERE name='林岚'").pluck().get() as string
+  options.seed?.(db)
   const model: ModelProfile = { id: 'synthetic', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1',
     apiKey: 'synthetic-fixture-key', baseUrl: 'https://api.openai.com/v1', temperature: 0.7, maxTokens: 2048, purposes: ['generation'],
     capabilities: { contextWindowTokens: 32768, maxOutputTokens: 2048, reasoning: false, structuredOutput: true, usage: true } }
@@ -51,6 +52,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], option
     buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch,
       modelReceipt, policy: MAIN_GENERATION_POLICY, outputContract: generationOutputContract(selection) }).binding,
     rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, MAIN_GENERATION_POLICY).binding,
+    transferOrigin: options.transferOrigin,
   })
   const owner=makeOwner('epoch')
   const reopen=()=>{owner.suspendForProjectClose();db.close();db=new Database(path.join(root,'.ai-novel','project.db'));deps.db=db;vi.mocked(getProjectDb).mockReturnValue(db);const next=makeOwner('epoch-2');cleanup.unshift(()=>next.suspendForProjectClose());return next}
@@ -116,6 +118,28 @@ it('characters原ACK跨重开保持计数，作者后改不被回读覆盖',asyn
  expect(next.commitFinalizationGeneration(f.commitRequest)).toEqual(saved)
  expect(f.db.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe('作者后来地点')
  expect(f.dispatch).toHaveBeenCalledTimes(1)
+})
+it('恢复副本重新定稿：经验证origin epoch的derived字段被当前项目推进，无授权仍source-conflict',async()=>{
+ const seed=(db:import('better-sqlite3').Database)=>{
+  // 原项目在 generation 0 派生；恢复副本复制同一计数器，重新定稿后绑定更大的 generation。
+  db.exec("UPDATE continuity_projection_meta SET generation=generation+1 WHERE id='main'; UPDATE summary_snapshots SET projection_generation=(SELECT generation FROM continuity_projection_meta WHERE id='main') WHERE draft_id=1")
+  const generation=db.prepare("SELECT generation FROM continuity_projection_meta WHERE id='main'").pluck().get() as number
+  const source={draftId:1,finalizationId:'origin-finalized-1',chapterNumber:1,contentHash:textHash('原项目定稿')}
+  db.prepare("UPDATE characters SET cs_location='原项目地点',cs_provenance=? WHERE name='林岚'").run(JSON.stringify({location:{kind:'derived',source,revision:1,
+   sourceOrder:{continuityEpoch:`origin-project:${generation-1}`,chapterNumber:1,authoritativeFinalizationRevision:1}}}))
+ }
+ const commit=async(transferOrigin?:()=>string|undefined)=>{
+  const f=fixture(undefined,{seed,transferOrigin})
+  const slot:FinalizationGenerationSlot={source:f.prepared.context.source,stepKey:'character_cards'}
+  const recovery=f.owner.beginFinalizationGeneration({slot,modelId:'synthetic'})
+  const receipt=await f.owner.executeFinalizationGeneration({handle:recovery.view.handle})
+  return {f,run:()=>f.owner.commitFinalizationGeneration({handle:recovery.view.handle,artifact:f.artifactOf(receipt)})}
+ }
+ const denied=await commit()
+ expect(denied.run).toThrow('FINALIZED_CHARACTER_SOURCE_CONFLICT')
+ const restored=await commit(()=>'origin-project')
+ expect(restored.run()).toMatchObject({success:true,stepKey:'character_cards',applied:1})
+ expect(restored.f.db.prepare('SELECT cs_location FROM characters WHERE character_id=?').pluck().get(restored.f.characterId)).toBe('北塔')
 })
 it('未提交characters作者字段改变拒绝覆盖，保留artifact',async()=>{
  const f=await generated('character_cards')

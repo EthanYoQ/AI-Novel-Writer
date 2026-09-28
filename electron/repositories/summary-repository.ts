@@ -418,7 +418,9 @@ export class SummaryRepository {
     })()
   }
 
-  static commitFinalizedCharacterStates(context: FinalizedCharacterContext, response: FinalizedCharacterStateResponse, database = getProjectDb()): FinalizedCharacterStateCommitReceipt {
+  /** originProjectId must come from readPortableCurrentAuthority for this project; it only lets origin-epoch derived fields advance. */
+  static commitFinalizedCharacterStates(context: FinalizedCharacterContext, response: FinalizedCharacterStateResponse, database = getProjectDb(),
+    originProjectId?: string): FinalizedCharacterStateCommitReceipt {
     if (!database) throw new Error('项目数据库未打开')
     const db = database
     return db.transaction(() => {
@@ -444,7 +446,7 @@ export class SummaryRepository {
           const value = update.currentState[field]!
           const decision = decideDerivedPatch(actual, { projectId: context.projectId, epoch: context.epoch, characterId: update.characterId, field, value, valueHash: sha256(value),
             baseFieldRevision: base.revision, baseValueHash: base.valueHash, baseProvenance: base.provenance,
-            source: context.source, sourceOrder: context.sourceOrder }, { source: current.source, order: current.sourceOrder })
+            source: context.source, sourceOrder: context.sourceOrder }, { source: current.source, order: current.sourceOrder, originProjectId })
           if (decision === 'source-conflict' || decision === 'field-conflict') throw new Error(`FINALIZED_CHARACTER_${decision === 'source-conflict' ? 'SOURCE' : 'FIELD'}_CONFLICT`)
           if (decision === 'already-applied') { receipt.unchanged++; continue }
           if (decision === 'proposal-required') {

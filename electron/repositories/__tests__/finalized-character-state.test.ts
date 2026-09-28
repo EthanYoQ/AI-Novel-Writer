@@ -76,6 +76,37 @@ describe('finalized character identities and derived state in the M02 database',
     expect(f.row().cs_recent_events).toBe('旧事件')
   })
 
+  it('advances origin-epoch derived state after a refinalization inside a verified restored copy', () => {
+    const f = fixture(), origin = { projectId: 'origin-project', epoch: 'origin-session' }
+    const old = SummaryRepository.readFinalizedCharacterContext(1, origin, f.db)
+    SummaryRepository.commitFinalizedCharacterStates(old, f.response(old, { recentEvents: '原项目事件' }), f.db)
+    FinalizationRepository.commit(draft(f.db, 2, 1, `${prose}恢复副本新定稿。`, 2))
+    const current = SummaryRepository.readFinalizedCharacterContext(2, { projectId: 'restored-project', epoch: 'restored-session' }, f.db)
+    expect(current.sourceOrder.continuityEpoch).toBe(`restored-project:${old.projectionGeneration + 1}`)
+    expect(() => SummaryRepository.commitFinalizedCharacterStates(current, f.response(current, { recentEvents: '恢复副本事件' }), f.db))
+      .toThrow('FINALIZED_CHARACTER_SOURCE_CONFLICT')
+    expect(() => SummaryRepository.commitFinalizedCharacterStates(current, f.response(current, { recentEvents: '恢复副本事件' }), f.db, 'other-project'))
+      .toThrow('FINALIZED_CHARACTER_SOURCE_CONFLICT')
+    expect(SummaryRepository.commitFinalizedCharacterStates(current, f.response(current, { recentEvents: '恢复副本事件' }), f.db, origin.projectId))
+      .toMatchObject({ applied: 1 })
+    expect(f.row().cs_recent_events).toBe('恢复副本事件')
+    expect(JSON.parse(f.row().cs_provenance as string).recentEvents.sourceOrder).toEqual(current.sourceOrder)
+  })
+
+  it('advances origin-epoch derived state when a restored copy finalizes the next chapter at the same generation', () => {
+    const f = fixture(), origin = { projectId: 'origin-project', epoch: 'origin-session' }
+    const old = SummaryRepository.readFinalizedCharacterContext(1, origin, f.db)
+    SummaryRepository.commitFinalizedCharacterStates(old, f.response(old, { recentEvents: '原项目第1章事件' }), f.db)
+    FinalizationRepository.commit(draft(f.db, 2, 2, `${prose}第二章。`))
+    const current = SummaryRepository.readFinalizedCharacterContext(2, { projectId: 'restored-project', epoch: 'restored-session' }, f.db)
+    expect(current.sourceOrder.continuityEpoch).toBe(`restored-project:${old.projectionGeneration}`)
+    expect(() => SummaryRepository.commitFinalizedCharacterStates(current, f.response(current, { recentEvents: '副本第2章事件' }), f.db))
+      .toThrow('FINALIZED_CHARACTER_SOURCE_CONFLICT')
+    expect(SummaryRepository.commitFinalizedCharacterStates(current, f.response(current, { recentEvents: '副本第2章事件' }), f.db, origin.projectId))
+      .toMatchObject({ applied: 1 })
+    expect(f.row().cs_recent_events).toBe('副本第2章事件')
+  })
+
   it('keeps author CAS and author protection after a same-chapter finalization advances continuity', () => {
     const f = fixture(), old = f.context()
     SummaryRepository.commitFinalizedCharacterStates(old, f.response(old, { recentEvents: '旧事件' }), f.db)

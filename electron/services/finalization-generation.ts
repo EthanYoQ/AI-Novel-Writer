@@ -14,7 +14,8 @@ import type { CharacterProposalService } from './character-proposal-service'
 
 interface SavedEffect { version: 1; artifact: FinalizedCharacterArtifact; contextHash: string; receipt: FinalizationGenerationEffect; receiptHash: string }
 export class FinalizationGeneration {
-  constructor(private readonly db: Database.Database, private readonly runs: GenerationRunRepository, private readonly projectId: string, private readonly characters: CharacterProposalService) {}
+  constructor(private readonly db: Database.Database, private readonly runs: GenerationRunRepository, private readonly projectId: string, private readonly characters: CharacterProposalService,
+    private readonly transferOrigin: () => string | undefined = () => undefined) {}
   find(slot: FinalizationGenerationSlot): DurableGenerationRun | undefined {
     const key = finalizationSlotKey(slot)
     const rows = this.db.prepare("SELECT run_id FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.finalizationGenerationSlotKey')=?").all(key) as { run_id: string }[]
@@ -89,7 +90,8 @@ export class FinalizationGeneration {
         receipt = { success: true, stepKey: 'chapter_notes', chapterNotes, factCount: facts.length, blueprintUpdated }
       } else {
         const characterProof = proveFinalizedCharacterGeneration(this.db, this.runs, this.projectId, handle, reference)
-        const applied = SummaryRepository.commitFinalizedCharacterStates(characterProof.context, characterProof.response, this.db)
+        // transferOrigin 同步读取已验证的转移凭据，与本事务同属一次同步执行；凭据被篡改只会读出 null/抛错，趋向冲突而非放行。
+        const applied = SummaryRepository.commitFinalizedCharacterStates(characterProof.context, characterProof.response, this.db, this.transferOrigin())
         const batch = characterProof.response.unresolved.some(item => item.displayName.trim())
           ? characters.stage({ kind: 'finalized-generation', handle: characterProof.currentHandle, artifact: reference }) : undefined
         receipt = { success: true, stepKey: 'character_cards', ...applied, unresolved: structuredClone(characterProof.response.unresolved), ...(batch ? { proposalBatchId: batch.proposalBatchId } : {}) }

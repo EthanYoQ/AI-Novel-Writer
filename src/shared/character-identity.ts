@@ -48,20 +48,24 @@ const sameProvenance = (a: CharacterStateFieldProvenance, b: CharacterStateField
   a.kind === 'legacy' && b.kind === 'legacy'
   || a.kind === 'author' && b.kind === 'author' && a.chapterNumber === b.chapterNumber
   || a.kind === 'derived' && b.kind === 'derived' && sameSource(a.source, b.source)
-function advancesProjectContinuity(projectId: string, previous: string, current: string): boolean {
-  const prefix = `${projectId}:`
-  const generation = (epoch: string) => {
-    if (!epoch.startsWith(prefix)) return null
-    const value = epoch.slice(prefix.length)
+/**
+ * A verified transfer origin shares the copied projection generation counter: `${origin}:G` is treated as `${projectId}:G`,
+ * so an equal generation is allowed and chapter/revision order below still rejects regressions.
+ */
+function advancesProjectContinuity(projectId: string, previous: string, current: string, originProjectId?: string): boolean {
+  const generation = (epoch: string, project: string) => {
+    if (!project || !epoch.startsWith(`${project}:`)) return null
+    const value = epoch.slice(project.length + 1)
     return /^(0|[1-9][0-9]*)$/u.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : null
   }
-  const before = generation(previous), after = generation(current)
-  return before !== null && after !== null && after > before
+  const after = generation(current, projectId), before = generation(previous, projectId)
+  const fromOrigin = before === null && originProjectId ? generation(previous, originProjectId) : null
+  return after !== null && (before !== null && after > before || fromOrigin !== null && after >= fromOrigin)
 }
 export type DerivedPatchDecision = 'apply-derived' | 'already-applied' | 'proposal-required' | 'source-conflict' | 'field-conflict'
 /** Caller recomputes hashes and reads field/authority in the same synchronous commit transaction. */
 export function decideDerivedPatch(current: CharacterFieldSnapshot, patch: DerivedCharacterPatch,
-  authority: { source: FinalizedSourceIdentity; order: DerivedSourceOrder }): DerivedPatchDecision {
+  authority: { source: FinalizedSourceIdentity; order: DerivedSourceOrder; originProjectId?: string }): DerivedPatchDecision {
   const order = patch.sourceOrder
   if (!sameProjectEpoch(current, patch) || !isFinalizedSourceIdentity(patch.source) || !isFinalizedSourceIdentity(authority.source) || !sameSource(patch.source, authority.source)
     || !isContentHash(patch.source.contentHash) || !order.continuityEpoch
@@ -78,7 +82,7 @@ export function decideDerivedPatch(current: CharacterFieldSnapshot, patch: Deriv
   if (previous && (!previous.continuityEpoch || !Number.isSafeInteger(previous.chapterNumber) || previous.chapterNumber < 1
     || !Number.isSafeInteger(previous.authoritativeFinalizationRevision) || previous.authoritativeFinalizationRevision < 1)) return 'source-conflict'
   if (previous && (previous.continuityEpoch !== order.continuityEpoch
-    && !(current.provenance.kind === 'derived' && advancesProjectContinuity(patch.projectId, previous.continuityEpoch, order.continuityEpoch))
+    && !(current.provenance.kind === 'derived' && advancesProjectContinuity(patch.projectId, previous.continuityEpoch, order.continuityEpoch, authority.originProjectId))
     || previous.chapterNumber > order.chapterNumber
     || previous.chapterNumber === order.chapterNumber && previous.authoritativeFinalizationRevision > order.authoritativeFinalizationRevision)) return 'source-conflict'
   if (current.provenance.kind === 'derived' && sameSource(current.provenance.source, patch.source)

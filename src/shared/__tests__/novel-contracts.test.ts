@@ -97,6 +97,28 @@ describe('S01共享契约（纯合成，不是生产持久化资格）', () => {
     expect(decideDerivedPatch(current, { ...patch, source: invalidSource }, { ...authority, source: invalidSource })).toBe('source-conflict')
     expect(decideDerivedPatch({ ...current, provenance: { kind: 'derived', source: { ...patch.source, chapterNumber: 4 } } }, { ...patch, baseProvenance: { kind: 'derived', source: { ...patch.source, chapterNumber: 4 } } }, authority)).toBe('source-conflict')
   })
+  it('恢复副本：仅经验证origin的旧epoch可被当前项目不小于其generation的epoch推进', () => {
+    const { current, patch } = characterCase()
+    const origin = '原项目', project = patch.projectId
+    const oldSource = { ...patch.source, draftId: 2, finalizationId: '原定稿' }
+    const previous: CharacterFieldSnapshot = { ...current, provenance: { kind: 'derived', source: oldSource }, sourceOrder: { continuityEpoch: `${origin}:2`, chapterNumber: 3, authoritativeFinalizationRevision: 1 } }
+    const order = { continuityEpoch: `${project}:3`, chapterNumber: 3, authoritativeFinalizationRevision: 2 }
+    const next = { ...patch, baseProvenance: previous.provenance, sourceOrder: order }
+    expect(decideDerivedPatch(previous, next, { source: patch.source, order, originProjectId: origin })).toBe('apply-derived')
+    expect(decideDerivedPatch(previous, next, { source: patch.source, order })).toBe('source-conflict')
+    expect(decideDerivedPatch(previous, next, { source: patch.source, order, originProjectId: '他项目' })).toBe('source-conflict')
+    const flat = { ...order, continuityEpoch: `${project}:2` }
+    expect(decideDerivedPatch(previous, { ...next, sourceOrder: flat }, { source: patch.source, order: flat, originProjectId: origin })).toBe('apply-derived')
+    const nextChapter = { ...flat, chapterNumber: 4 }, chapterFourSource = { ...patch.source, chapterNumber: 4 }
+    expect(decideDerivedPatch(previous, { ...next, source: chapterFourSource, sourceOrder: nextChapter }, { source: chapterFourSource, order: nextChapter, originProjectId: origin })).toBe('apply-derived')
+    const later = { ...previous, provenance: { kind: 'derived' as const, source: { ...oldSource, chapterNumber: 5 } }, sourceOrder: { ...previous.sourceOrder!, chapterNumber: 5 } }
+    expect(decideDerivedPatch(later, { ...next, baseProvenance: later.provenance, sourceOrder: flat }, { source: patch.source, order: flat, originProjectId: origin })).toBe('source-conflict')
+    const lower = { ...order, continuityEpoch: `${project}:1` }
+    expect(decideDerivedPatch(previous, { ...next, sourceOrder: lower }, { source: patch.source, order: lower, originProjectId: origin })).toBe('source-conflict')
+    const reverse = { ...previous, sourceOrder: { ...previous.sourceOrder!, continuityEpoch: `${project}:2` } }
+    const toOrigin = { ...order, continuityEpoch: `${origin}:3` }
+    expect(decideDerivedPatch(reverse, { ...next, sourceOrder: toOrigin }, { source: patch.source, order: toOrigin, originProjectId: origin })).toBe('source-conflict')
+  })
   it('同源同值幂等，拒绝去重按来源变化重新判定', () => {
     const { current, patch, authority } = characterCase()
     expect(decideDerivedPatch({ ...current, valueHash: patch.valueHash, sourceOrder: authority.order, provenance: { kind: 'derived', source: patch.source } }, patch, authority)).toBe('already-applied')
