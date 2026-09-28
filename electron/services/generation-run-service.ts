@@ -46,6 +46,8 @@ export interface ExecuteGenerationRequest {
     agentToolNames?: readonly string[];
     /** The original semantic task is committed with the reservation before dispatch. */
     replayTask?: import('../../src/services/generation/generation-harness').GenerationTask;
+    /** 首稿提示经主进程复核确实带有生成前定稿对账注入块；恢复据此决定续写/压缩是否沿用对账结果。 */
+    reconciliationInjected?: boolean;
 }
 export interface GenerationRunServiceDependencies {
     repository: GenerationRunRepository;
@@ -113,7 +115,7 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 throw new Error('GENERATION_LIABILITY_UNBOUNDED');
             let receipt: GenerationExecutionReceipt;
             try {
-                receipt = deps.repository.reserve(request.runId, request.invocationNonce, requestHash, request.reservedTokens, request.requestedOutputTokens, policy, request.purpose, request.replayTask, request.budgetDecision);
+                receipt = deps.repository.reserve(request.runId, request.invocationNonce, requestHash, request.reservedTokens, request.requestedOutputTokens, policy, request.purpose, request.replayTask, request.budgetDecision, request.reconciliationInjected);
             }
             catch (error) {
                 if (!/BUDGET|RESERVATION|EPOCH|DISPATCH|INVOCATION/.test(error instanceof Error ? error.message : '')) {

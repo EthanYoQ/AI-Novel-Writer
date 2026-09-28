@@ -6,11 +6,12 @@ import { generationOutputContract, type GenerationAuthorInput } from '../../src/
 import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot } from '../../src/services/generation/generation-runtime'
 import type { ModelProfile, ModelExecutionLeaseReceipt, LLMFinishReason } from '../../src/shared/ipc-channels'
 import { tokenLiability } from '../../src/shared/generation-contract'
+import { DRAFT_RECONCILE_PURPOSE, stripDraftReconciliationBlock } from '../../src/shared/draft-reconciliation'
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
 import { getCurrentProjectPath } from '../database'
 import { ModelExecutionLeaseRegistry, createModelExecutionLeaseReceipt } from './model-execution-lease'
 import { createGenerationRunService, type GenerationRunServiceDependencies } from './generation-run-service'
-import { assertSemanticGenerationTask, buildMainGenerationPlan, MAIN_GENERATION_POLICY, type MainGenerationPlan } from './main-generation-plan'
+import { assertSemanticGenerationTask, batchRootBudget, buildMainGenerationPlan, MAIN_GENERATION_POLICY, type MainGenerationPlan } from './main-generation-plan'
 import { LLMFactory } from '../llm/llm-factory'
 import type { GenerationAttemptReceipt, GenerationTask } from '../../src/services/generation/generation-harness'
 import type { ProviderUsageEvidence } from '../llm/provider.interface'
@@ -126,6 +127,21 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (execution && run.binding.epoch !== deps.epoch) throw new Error('GENERATION_EPOCH_STALE')
     return run
   }
+  const attemptPurpose = (attemptId: string): string => {
+    const row = deps.database.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(attemptId) as string | undefined
+    return row ? String(JSON.parse(row).purpose ?? 'unknown') : 'unknown'
+  }
+  const runAttempts = (runId: string) => (deps.database.prepare('SELECT attempt_id,invocation_nonce,attempt_json,usage_receipt_json FROM generation_attempts WHERE run_id=? ORDER BY rowid').all(runId) as { attempt_id: string; invocation_nonce: string; attempt_json: string; usage_receipt_json: string }[])
+    .map(row => ({ attemptId: row.attempt_id, invocationNonce: row.invocation_nonce, status: String(JSON.parse(row.attempt_json).status),
+      purpose: String(JSON.parse(row.usage_receipt_json).purpose ?? 'unknown') }))
+  /** 最近一次完整结束（stop、无失败码）的对账原始输出。 */
+  const completedReconciliationOutput = (runId: string): string | null => {
+    for (const attempt of runAttempts(runId).filter(item => item.purpose === DRAFT_RECONCILE_PURPOSE).reverse()) {
+      const receipt = volatileReceipts.get(attempt.attemptId) ?? repository.receipt(attempt.attemptId)
+      if (!receipt.failureCode && receipt.result?.finishReason === 'stop' && receipt.artifact?.text) return receipt.artifact.text
+    }
+    return null
+  }
   const snapshotOf = (receipt: GenerationExecutionReceipt): MainGenerationSnapshot | null => {
     const artifact = receipt.artifact
     if (!artifact) return null
@@ -137,6 +153,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const compositionEligible = ['settled', 'unknown'].includes(receipt.attempt.status) && !receipt.failureCode
       && receipt.budget.root.status !== 'cancelled' && ['stop', 'length'].includes(receipt.result?.finishReason ?? '')
       && Boolean(artifact.text.trim()) && deps.database.prepare("SELECT 1 FROM generation_artifacts WHERE artifact_id=? AND status<>'discarded'").pluck().get(artifact.artifactId) === 1
+      // 生成前定稿对账的输出只是依据，永不作为正文候选参与组合。
+      && attemptPurpose(receipt.attempt.attemptId) !== DRAFT_RECONCILE_PURPOSE
     return { ...handleOf(receipt.run), epoch: artifact.epoch, artifactId: artifact.artifactId, attemptId: artifact.attemptId,
       revision: artifact.revision, durableRevision: artifact.revision, text: artifact.text, textHash: artifact.textHash, status, compositionEligible }
   }
@@ -329,9 +347,13 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (agentWorkflow) repository.activateRootForCommittedStage(agentWorkflow.parentRootActionId, binding)
       if (importAdmission?.parentRootActionId) repository.activateRootForCommittedStage(importAdmission.parentRootActionId, binding)
       if (continuation && !continuation.continuationHandle) repository.activateRootForCommittedStage(continuation.sourceHandle.rootActionId, binding)
+      const parentRootActionId = continuation?.sourceHandle.rootActionId ?? selection.parentRootActionId
+      // 批量根按章数缩放（见 batchRootBudget）；子运行沿用其根已冻结的预算，其余新根不变。
+      const budget = selection.batchIntent ? batchRootBudget(selection.batchIntent.range.endChapter - selection.batchIntent.range.startChapter + 1)
+        : parentRootActionId ? repository.budget(parentRootActionId).policy : MAIN_GENERATION_POLICY.budget
       const next = service.open({ ...binding, operation: selection.operation, uiActionNonce: selection.uiActionNonce,
         frozenInputHash: textHash(JSON.stringify([binding.fingerprint, binding.contextSnapshotId, selection.output])),
-        budget: MAIN_GENERATION_POLICY.budget, parentRootActionId: continuation?.sourceHandle.rootActionId ?? selection.parentRootActionId })
+        budget, parentRootActionId })
       if (continuation?.continuationHandle && continuation.continuationHandle.runId !== next.runId) throw new Error('GENERATION_DIRECTORY_CONTINUATION_EXISTS')
       if (batch?.currentChapterRunHandle && batch.currentChapterRunHandle.runId !== next.runId) throw new Error('GENERATION_BATCH_RECOVERY_REQUIRED')
       if (continuation && !continuation.continuationHandle) repository.bindDirectoryContinuation(continuation.operationId, handleOf(next))
@@ -382,11 +404,27 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if ((!materialDecision && ['review-chapter', 'refine-draft', 'refine-from-review'].includes(materialOperation))
       || !materialDecision && materialOperation === 'chapter-draft' && run.binding.sourceManifest.preparationId)
       throw new Error('GENERATION_MATERIAL_DECISION_REQUIRED')
-    if (materialDecision && !repository.hasNonCancelledAttempt(run.runId)) {
+    let reconciliationInjected = false
+    if (materialDecision) {
+      const prior = runAttempts(run.runId).filter(attempt => attempt.status !== 'cancelled-before-dispatch')
       const userMessages = task.messages.filter(message => message.role === 'user')
-      if (task.purpose !== run.binding.sourceManifest.operation || userMessages.length !== 1
-        || textHash(userMessages[0]!.content) !== materialDecision.promptHash)
-        throw new Error('GENERATION_MATERIAL_PROMPT_MISMATCH')
+      const userPrompt = userMessages.length === 1 ? userMessages[0]!.content : null
+      // 写稿首个物理请求可以是生成前定稿对账：只能有一次、只能最先，提示须与收据绑定的哈希一致。
+      const reconciliationHash = materialOperation === 'chapter-draft' ? materialDecision.reconciliationPromptHash : undefined
+      const onlyReconciled = !!reconciliationHash && prior.length > 0 && prior.every(attempt => attempt.purpose === DRAFT_RECONCILE_PURPOSE)
+      if (task.purpose === DRAFT_RECONCILE_PURPOSE) {
+        const replay = prior.length === 1 && prior[0]!.invocationNonce === request.invocationNonce
+        if (!reconciliationHash || prior.length && !replay || userPrompt === null || textHash(userPrompt) !== reconciliationHash)
+          throw new Error('GENERATION_MATERIAL_PROMPT_MISMATCH')
+      } else if (!prior.length || onlyReconciled) {
+        // 首稿提示：与收据的 promptHash 完全一致，或恰好多出由已完成对账输出重算的注入块。
+        const reconciliationOutput = onlyReconciled ? completedReconciliationOutput(run.runId) : null
+        const stripped = userPrompt !== null && reconciliationOutput !== null ? stripDraftReconciliationBlock(userPrompt, reconciliationOutput) : null
+        if (task.purpose !== run.binding.sourceManifest.operation || userPrompt === null
+          || textHash(userPrompt) !== materialDecision.promptHash && (stripped === null || textHash(stripped) !== materialDecision.promptHash))
+          throw new Error('GENERATION_MATERIAL_PROMPT_MISMATCH')
+        reconciliationInjected = userPrompt !== null && textHash(userPrompt) !== materialDecision.promptHash
+      }
     }
     const contract = run.binding.sourceManifest.outputContract
     const composite = contract as { primary?: string; overrides?: { purpose: string; output: string }[] }
@@ -421,6 +459,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       reasoningUpperBoundTokens: plan.reasoningUpperBoundTokens, usagePolicy: plan.usagePolicy, purpose: task.purpose,
       ...(plan.budgetDecision ? { budgetDecision: plan.budgetDecision } : {}),
       ...(run.binding.sourceManifest.importSlot ? { replayTask: task } : {}),
+      ...(reconciliationInjected ? { reconciliationInjected } : {}),
       ...(agentExecution ? { agentToolNames: (run.binding.sourceManifest.agentContext as AgentGenerationContext).input.tools.map(tool => tool.name) } : {}) })
     if (receipt.failureCode || receipt.unsavedTail) volatileReceipts.set(receipt.attempt.attemptId, receipt)
     assertCurrent()
@@ -504,6 +543,14 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       selectedBlueprintChapterNumbers: structuredClone(manifest.selectedBlueprintChapterNumbers as number[] ?? []), composition,
       lastCompositionFinishReason: last ? repository.receipt(last).result?.finishReason ?? null : null,
       attemptedPurposes: rows.map(row => JSON.parse(row.usage_receipt_json).purpose ?? 'unknown'),
+      ...(rows.some(row => JSON.parse(row.usage_receipt_json).purpose === DRAFT_RECONCILE_PURPOSE) ? { draftReconciliation: {
+        artifactIds: rows.filter(row => JSON.parse(row.usage_receipt_json).purpose === DRAFT_RECONCILE_PURPOSE)
+          .flatMap(row => { const artifact = repository.receipt(row.attempt_id).artifact; return artifact ? [artifact.artifactId] : [] }),
+        // 首稿已发出时，只有首稿提示经复核确实带了注入块，续写/压缩才沿用；首稿尚未发出时沿用记录的对账结果。
+        completedOutput: (() => {
+          const firstDraft = rows.find(row => JSON.parse(row.usage_receipt_json).purpose === 'chapter-draft')
+          return !firstDraft || JSON.parse(firstDraft.usage_receipt_json).reconciliationInjected === true ? completedReconciliationOutput(run.runId) : null
+        })() } } : {}),
       ...(saved ? { savedDraft: { success: true as const, id: saved.id, version: saved.version, content: saved.content, contentHash: saved.contentHash } } : {}),
       ...(manifest.knowledgeSnapshot ? { knowledgeSnapshot: structuredClone(manifest.knowledgeSnapshot) as GenerationKnowledgeSnapshot } : {}),
       ...(selectedDrafts.every(item => item !== null) ? { selectedDrafts } : {}),
@@ -753,8 +800,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
           ? ' At least one update had no evidence object. Keep the supported updates from the preceding response instead of returning an empty list because evidence was missing. Give every update an evidence.text copied as one contiguous, verbatim span of the frozen chapter, and omit start/end so the program calculates them. For a person who has an existing character card, use that card\'s characterId rather than a name alone. Keep recentEvents in every update and only the other fields that actually changed, and remove newCharacters.'
           : '上一份回答的更新项缺少 evidence。请保留上一份回答中有正文支持的更新，不要因缺少 evidence 而返回空列表：每项都必须填写逐字复制的单一连续原文 evidence.text，省略 start/end，由程序计算；现有角色卡中的人物必须填写其 characterId，不能只写 name；每项保留 recentEvents，其余只保留实际变化的字段；删除 newCharacters。'
           : english
-            ? ' The evidence.text was not one contiguous, verbatim span of the frozen chapter that occurs exactly once, or its start/end did not match. Copy a single contiguous span verbatim; never join sentences across paragraphs or blank lines, and do not alter punctuation or whitespace. Quote only the one sentence that supports the field; if that sentence appears more than once, extend it with adjacent text into a longer contiguous span that is unique, and omit start/end so the program calculates them.'
-            : '上一份回答的 evidence.text 不是冻结正文中单一连续、只出现一次的逐字片段，或 start/end 与正文不符。只能逐字复制一段连续原文；不得跨段落或空行拼接多句，不得删改标点或空白。请只引用直接支持该字段的一句；若该句在正文中不唯一，扩展为包含相邻文字的更长连续片段。省略 start/end，由程序计算。'
+            ? ' The evidence.text was not one contiguous, verbatim span of the frozen chapter that occurs exactly once, or its start/end did not match. Copy a single contiguous span verbatim; never join sentences across paragraphs or blank lines, and do not alter punctuation or whitespace. Quote only one sentence; do not rewrite recentEvents to fit a quote: it must still state the latest state of this character at the end of the chapter (when later prose corrects, withdraws, or postpones an earlier plan, follow the last correction), and the evidence must be the one sentence that directly supports that latest state; if that sentence appears more than once, extend it with adjacent text into a longer contiguous span that is unique, and omit start/end so the program calculates them.'
+            : '上一份回答的 evidence.text 不是冻结正文中单一连续、只出现一次的逐字片段，或 start/end 与正文不符。只能逐字复制一段连续原文；不得跨段落或空行拼接多句，不得删改标点或空白。请只引用一句；不要为了迁就引用而改写 recentEvents：它仍须写本章结束时该角色的最新状态（正文后文更正、撤回或推迟前文安排时，以最后的更正为准），evidence 选直接支持这一最新状态的那一句；若该句在正文中不唯一，扩展为包含相邻文字的更长连续片段。省略 start/end，由程序计算。'
         const task: GenerationTask = invalidText === undefined ? initialTask : { ...initialTask, purpose: `${initialTask.purpose}:repair:${ordinal}`,
           messages: [...initialTask.messages, { role: 'assistant', content: invalidText }, { role: 'user', content: english
             ? `The preceding response does not satisfy the required ${repairKind === 'generic' ? 'JSON structure or exact source evidence' : 'exact source evidence'}.${guidance} Return a corrected JSON object using only the original frozen source and character IDs. Do not change or invent evidence. Return {"updates":[]} when there is no supported update.`

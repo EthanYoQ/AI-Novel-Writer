@@ -310,15 +310,18 @@ function compareDecisionIdentity(left: { sourceId: string; revision: number; con
     return compareCodeUnit(left.sourceId, right.sourceId) || left.revision - right.revision || compareCodeUnit(left.contentHash, right.contentHash);
 }
 function freezeMaterialDecision(value: unknown): MaterialDecisionReceipt {
-    const record = decisionFields(value, ['version', 'verdict', 'promptHash', 'capacity', 'coverage', 'included', 'omitted']);
+    const reconciled = !!value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'reconciliationPromptHash');
+    const record = decisionFields(value, ['version', 'verdict', 'promptHash', ...(reconciled ? ['reconciliationPromptHash'] : []), 'capacity', 'coverage', 'included', 'omitted']);
     if (record.version !== MATERIAL_DECISION_RECEIPT_VERSION || record.verdict !== 'admitted')
         fail('GENERATION_MATERIAL_DECISION_INVALID');
-    if (typeof record.promptHash !== 'string' || !isContentHash(record.promptHash))
+    if (typeof record.promptHash !== 'string' || !isContentHash(record.promptHash)
+        || reconciled && (typeof record.reconciliationPromptHash !== 'string' || !isContentHash(record.reconciliationPromptHash)))
         fail('GENERATION_MATERIAL_DECISION_INVALID');
     const capacity = decisionFields(record.capacity, ['maxInputUnits', 'methodVersion', 'admittedUnits']);
     const coverage = decisionFields(record.coverage, ['required', 'included', 'complete']);
     const frozen: MaterialDecisionReceipt = {
         version: MATERIAL_DECISION_RECEIPT_VERSION, verdict: 'admitted', promptHash: record.promptHash,
+        ...(reconciled ? { reconciliationPromptHash: record.reconciliationPromptHash as string } : {}),
         capacity: { maxInputUnits: decisionCount(capacity.maxInputUnits, 1, MATERIAL_DECISION_MAX_INPUT_UNITS),
             methodVersion: decisionEnum(capacity.methodVersion, [MATERIAL_DECISION_UNIT_METHOD_VERSION]),
             admittedUnits: decisionCount(capacity.admittedUnits, 0, MATERIAL_DECISION_MAX_INPUT_UNITS) },

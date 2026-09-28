@@ -18,6 +18,29 @@ export const MAIN_GENERATION_POLICY = Object.freeze({
   safetyMarginTokens: 512,
 })
 
+/**
+ * 批量根预算按章数缩放（预算策略变更，2026-09 生成前定稿对账引入）。
+ *
+ * 批量创作的所有子运行（每章首稿、auto_finalize 的 notes/cards）共用批次根的一份预算。生成前定稿
+ * 对账让 auto_finalize 每章最低物理请求从 3 次（首稿、notes、cards）变为 4 次，10 章最低 40 次，
+ * 超过单根的 32 次上限，第 9 章起会确定性 ROOT_BUDGET_EXHAUSTED。
+ *
+ * 每章预算 8 次 = 最低 4 次（对账、首稿、notes、cards）+ 4 次余量，足够覆盖典型的一次压缩或续写
+ * 加两次角色卡修复；余量在整批内共享。单章理论上限（对账 1 + 首稿 1 + 续写/无进展恢复 7 + 压缩 1
+ * + notes 1 + cards 3 = 14 次）不按章预留：超出仍 fail-closed。token 责任上限与活动时长按每次
+ * 请求的同一比例（65 536 tokens、112.5 秒）缩放，使批量每次请求可用的额度与单根一致；单章非批量根不变。
+ */
+export const BATCH_ROOT_PHYSICAL_REQUESTS_PER_CHAPTER = 8
+export function batchRootBudget(chapterCount: number): RootBudget {
+  const base = MAIN_GENERATION_POLICY.budget
+  if (!Number.isSafeInteger(chapterCount) || chapterCount < 1) throw new Error('GENERATION_BATCH_INTENT_INVALID')
+  const maxPhysicalRequests = Math.max(base.maxPhysicalRequests, chapterCount * BATCH_ROOT_PHYSICAL_REQUESTS_PER_CHAPTER)
+  return Object.freeze({ maxPhysicalRequests,
+    maxTokenLiability: base.maxTokenLiability / base.maxPhysicalRequests * maxPhysicalRequests,
+    maxOutputPerRequest: base.maxOutputPerRequest,
+    maxActiveElapsedMs: base.maxActiveElapsedMs / base.maxPhysicalRequests * maxPhysicalRequests })
+}
+
 export interface MainGenerationPlan {
   budgetDecision?: TaskBudgetDecision
   options: LLMGenerateOptions

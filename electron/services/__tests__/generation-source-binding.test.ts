@@ -490,6 +490,8 @@ describe('material decision receipt binding (S10B step 3)', () => {
         ['an extra field', { ...decision(), note: '自由文本说明' }],
         ['a missing coverage block', (() => { const copy: Record<string, unknown> = { ...decision() }; delete copy.coverage; return copy })()],
         ['a prompt hash that is not a hash', { ...decision(), promptHash: 'not-a-hash' }],
+        ['a reconciliation prompt hash that is not a hash', { ...decision(), reconciliationPromptHash: 'not-a-hash' }],
+        ['an undefined reconciliation prompt hash', { ...decision(), reconciliationPromptHash: undefined }],
         ['an omission reason outside the closed set', { ...decision(), omitted: [{ sourceId: 'reference:0', revision: 1,
             contentHash: hash('参考'), reason: 'secret-token', category: 'reference', required: false }] }],
         ['an absolute path used as a source id', { ...decision(), included: [{ sourceId: 'C:\\private\\x', revision: 1, contentHash: hash('x'), category: 'author', required: true, units: 1 }] }],

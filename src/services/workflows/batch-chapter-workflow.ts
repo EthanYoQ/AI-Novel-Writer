@@ -1,5 +1,5 @@
 import { useProjectStore } from '../../stores/project-store'
-import type { GenerationBatchProgress } from '../../shared/generation-owner-contract'
+import { MAX_BATCH_CHAPTERS, MIN_BATCH_CHAPTERS, type GenerationBatchProgress } from '../../shared/generation-owner-contract'
 import { hashAuthorText } from '../../shared/source-ref'
 import { parseResourceUri } from '../../shared/project-paths'
 import { workflowResourceKey, type WorkflowContext, type WorkflowDefinition, type WorkflowStep, type StepCallbacks } from '../../stores/workflow-store'
@@ -19,9 +19,8 @@ import { FINALIZATION_SHARED_WRITE_RESOURCE_KINDS } from '../../shared/workflow-
 import { requireWorkflowProjectSession } from './workflow-project-session'
 import { normalizeChapterWordsTarget } from './chapter-creation-parameters'
 
-/** 单次批量创作的安全上限，避免无边界调用模型。 */
-export const MIN_BATCH_CHAPTERS = 1
-export const MAX_BATCH_CHAPTERS = 10
+/** 单次批量创作的安全上限，避免无边界调用模型；主进程准入（assertGenerationBatchIntent）同样执行。 */
+export { MAX_BATCH_CHAPTERS, MIN_BATCH_CHAPTERS }
 
 export type BatchChapterCompletionMode = 'draft_review' | 'auto_finalize'
 

@@ -127,6 +127,36 @@ it.each(['completed', 'failed'] as const)('中文恢复面板按明确组合资�
   expect(invoke.mock.calls.some(([channel]) => channel === 'generation:execute' || channel === 'generation:begin')).toBe(false)
 })
 
+it.each([true, false])('写稿恢复面板不把生成前定稿对账产物列为正文候选（另有正文片段=%s）', async (withDraft) => {
+  const session = { projectId: '对账海港', leaseId: '当前会话', projectPath: 'C:/合成对账海港' }
+  const handle: MainGenerationRunHandle = { projectId: session.projectId, epoch: session.leaseId, rootActionId: '对账根', runId: '对账正文' }
+  const reconciliationText = '{"finalState":["对账依据哨兵"],"events":[]}'
+  const view: MainGenerationRunView = { handle, status: 'failed', nonReplayable: false,
+    budget: { maxAttempts: 32, maxRequestedOutputTokens: 2000000, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: 9999999999999 },
+    artifacts: [reconciliationText, ...(withDraft ? ['海潮拍岸。'] : [])].map((text, index) => ({ ...handle, text, textHash: 'a'.repeat(64), artifactId: `片段${index}`,
+      attemptId: `请求${index}`, revision: 1, durableRevision: 1, status: 'completed' as const, compositionEligible: index !== 0 })) }
+  const invoke = vi.fn(async (channel: string) => {
+    if (channel === 'generation:list') return [view]
+    if (channel === 'generation:list-batches' || channel === 'db:recovery-candidate-list') return []
+    if (channel === 'generation:read-context') return { handle, operation: 'chapter-draft', chapterNumber: 2, modelId: '原模型',
+      authorInputs: [], selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [2], composition: null,
+      lastCompositionFinishReason: null, attemptedPurposes: withDraft ? ['chapter-draft-reconcile', 'chapter-draft'] : ['chapter-draft-reconcile'],
+      draftReconciliation: { artifactIds: ['片段0'], completedOutput: reconciliationText } }
+    throw new Error(`未配置调用：${channel}`)
+  })
+  Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: () => () => {} } })
+  useProjectStore.setState({ currentProject: { id: session.projectId, path: session.projectPath, name: '对账海港', sessionLease: session.leaseId, novelConfig: {} } as never })
+  useWorkflowStore.setState({ activeRuns: [], history: [], currentRun: null })
+  useLocaleStore.setState({ locale: 'zh-CN' })
+  container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container)
+  await act(async () => root!.render(<AIOutputPanel />))
+  await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'generation:read-context')).toBe(true))
+  if (withDraft) await vi.waitFor(() => expect(container!.textContent).toContain('海潮拍岸。'))
+  else await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+  expect(container.textContent).not.toContain('对账依据哨兵')
+  expect(container.querySelectorAll('input[type=checkbox]')).toHaveLength(withDraft ? 1 : 0)
+})
+
 it.each(['unknown', 'conflict', 'cancelled'] as const)('助手恢复卡只显示可见回复并保留 %s 边界', async state => {
   const { useAgentStore } = await import('../../../stores/agent-store')
   const { useLayoutStore } = await import('../../../stores/layout-store')

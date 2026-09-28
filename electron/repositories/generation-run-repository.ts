@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 import type { VisibleCompositionReceipt, VisibleCompositionAlgorithm, DirectoryGenerationProgress } from '../../src/shared/generation-owner-contract';
 import { composeVisibleContinuation, VISIBLE_CONTINUATION_VERSION } from '../../src/shared/visible-continuation';
 import { composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, sanitizeDraftText } from '../../src/shared/draft-visible-text';
+import { DRAFT_RECONCILE_PURPOSE } from '../../src/shared/draft-reconciliation';
 import { countDraftUnits, draftTargetUnitRange } from '../../src/shared/draft-units';
 import { getProjectDb } from '../database';
 import type { PortableRuntimeFreezeTable } from '../services/portable-runtime-freeze';
@@ -167,7 +168,7 @@ export class GenerationRunRepository {
             fail('GENERATION_INVOCATION_CONFLICT');
         return this.receipt(row.attempt_id);
     }
-    reserve(runId: string, nonce: string, requestHash: string, reservedTokens: number, requestedOutputTokens: number, usagePolicy?: ProviderUsagePolicy, purpose?: string, replayTask?: import('../../src/services/generation/generation-harness').GenerationTask, budgetDecision?: import('../../src/services/generation/task-budget-planner').TaskBudgetDecision): GenerationExecutionReceipt {
+    reserve(runId: string, nonce: string, requestHash: string, reservedTokens: number, requestedOutputTokens: number, usagePolicy?: ProviderUsagePolicy, purpose?: string, replayTask?: import('../../src/services/generation/generation-harness').GenerationTask, budgetDecision?: import('../../src/services/generation/task-budget-planner').TaskBudgetDecision, reconciliationInjected?: boolean): GenerationExecutionReceipt {
         return this.transaction(() => {
             const prior = this.findInvocation(runId, nonce, requestHash);
             if (prior)
@@ -183,7 +184,7 @@ export class GenerationRunRepository {
             assertReservation(budget.root, budget.policy, budget.attempts, attempt, budget.activeElapsedMs);
             this.db().prepare('INSERT INTO generation_attempts VALUES(?,?,?,?,?,?,?)').run(attempt.attemptId, attempt.reservationId, runId, run.rootActionId, encode(attempt), encode({ requestHash, usagePolicy: usagePolicy ?? null }), nonce);
             const artifact: VisibleArtifact = { artifactId: randomUUID(), attemptId: attempt.attemptId, rootActionId: run.rootActionId, projectId: run.binding.projectId, epoch: run.binding.epoch, fingerprint: run.binding.fingerprint, revision: 0, text: '', textHash: textHash('') };
-            this.db().prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(encode({ requestHash, usagePolicy: usagePolicy ?? null, ...(purpose ? { purpose } : {}), ...(replayTask ? { replayTask } : {}), ...(budgetDecision ? { budgetDecision } : {}), artifactIdentity: { artifactId: artifact.artifactId, epoch: artifact.epoch, fingerprint: artifact.fingerprint } }), attempt.attemptId);
+            this.db().prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(encode({ requestHash, usagePolicy: usagePolicy ?? null, ...(purpose ? { purpose } : {}), ...(replayTask ? { replayTask } : {}), ...(budgetDecision ? { budgetDecision } : {}), ...(reconciliationInjected ? { reconciliationInjected: true } : {}), artifactIdentity: { artifactId: artifact.artifactId, epoch: artifact.epoch, fingerprint: artifact.fingerprint } }), attempt.attemptId);
             this.db().prepare('INSERT INTO generation_artifacts VALUES(?,?,?,?,?,?)').run(artifact.artifactId, attempt.attemptId, runId, encode(artifact), 0, 'partial');
             return this.receipt(attempt.attemptId);
         });
@@ -236,7 +237,8 @@ export class GenerationRunRepository {
             const row = this.db().prepare('SELECT a.attempt_id,a.run_id,a.status,t.rowid AS ordinal,t.usage_receipt_json FROM generation_artifacts a JOIN generation_attempts t ON t.attempt_id=a.attempt_id WHERE a.artifact_id=?').get(artifactId) as {
                 attempt_id: string; run_id: string; status: string; ordinal: number; usage_receipt_json: string;
             } | undefined;
-            if (!row || row.run_id !== runId || row.status === 'discarded' || row.ordinal <= previousOrdinal)
+            if (!row || row.run_id !== runId || row.status === 'discarded' || row.ordinal <= previousOrdinal
+                || JSON.parse(row.usage_receipt_json).purpose === DRAFT_RECONCILE_PURPOSE)
                 fail('GENERATION_COMPOSITION_SOURCE_INVALID');
             const receipt = this.receipt(row.attempt_id), artifact = receipt.artifact!;
             if (!['settled', 'unknown'].includes(receipt.attempt.status) || !artifact.text.trim())

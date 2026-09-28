@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3'
 import { isDeepStrictEqual } from 'node:util'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
-import type { GenerationBatchIntent, GenerationBatchProgress, GenerationDraftCommitReceipt, GenerationDraftCommitRequest } from '../../src/shared/generation-owner-contract'
+import { MAX_BATCH_CHAPTERS, type GenerationBatchIntent, type GenerationBatchProgress, type GenerationDraftCommitReceipt, type GenerationDraftCommitRequest } from '../../src/shared/generation-owner-contract'
 import type { DraftSourceDependency } from '../../src/shared/draft-source-dependency'
 import { countDraftUnits, draftTargetUnitRange } from '../../src/shared/draft-units'
 import { GenerationRunRepository, textHash, type DurableGenerationRun } from '../repositories/generation-run-repository'
@@ -19,7 +19,7 @@ export function assertGenerationBatchIntent(intent: GenerationBatchIntent): void
   if (!intent || !['draft_review', 'auto_finalize'].includes(intent.mode) || !intent.range
     || !Number.isSafeInteger(intent.range.startChapter) || !Number.isSafeInteger(intent.range.endChapter)
     || intent.range.startChapter < 1 || intent.range.endChapter < intent.range.startChapter
-    || intent.range.endChapter - intent.range.startChapter >= 10000
+    || intent.range.endChapter - intent.range.startChapter >= MAX_BATCH_CHAPTERS
     || !Number.isSafeInteger(intent.targetUnits) || intent.targetUnits < 1 || intent.targetUnits > 1_000_000)
     throw new Error('GENERATION_BATCH_INTENT_INVALID')
 }

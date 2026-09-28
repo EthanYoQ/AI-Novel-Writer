@@ -3,7 +3,7 @@ import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationTask } from '../../../src/services/generation/generation-harness'
 import type { GenerationBudgetReceipt } from '../../repositories/generation-run-repository'
 import { createModelExecutionLeaseReceipt } from '../model-execution-lease'
-import { buildMainGenerationPlan, MAIN_GENERATION_POLICY } from '../main-generation-plan'
+import { batchRootBudget, buildMainGenerationPlan, MAIN_GENERATION_POLICY } from '../main-generation-plan'
 
 const task: GenerationTask = { purpose: 'chapter:draft', output: 'visible-text', messages: [{ role: 'user', content: '雨夜，铜钥匙落在门前。' }] }
 function model(overrides: Partial<ModelProfile> = {}): ModelProfile {
@@ -22,6 +22,13 @@ const silicon = () => model({ baseUrl: 'https://api.siliconflow.cn/v1', modelNam
 describe('main generation physical liability planning without provider calls', () => {
   it('keeps the temporary S05 policy finite and explicit', () => {
     expect(MAIN_GENERATION_POLICY.budget).toEqual({ maxPhysicalRequests: 32, maxTokenLiability: 2097152, maxOutputPerRequest: 32768, maxActiveElapsedMs: 3600000 })
+  })
+  it('scales batch roots by chapter count without shrinking below the single-root policy', () => {
+    expect(batchRootBudget(1)).toEqual(MAIN_GENERATION_POLICY.budget)
+    expect(batchRootBudget(4)).toEqual(MAIN_GENERATION_POLICY.budget)
+    expect(batchRootBudget(5)).toEqual({ maxPhysicalRequests: 40, maxTokenLiability: 2_621_440, maxOutputPerRequest: 32768, maxActiveElapsedMs: 4_500_000 })
+    expect(batchRootBudget(10).maxPhysicalRequests).toBe(80)
+    for (const invalid of [0, -1, 1.5, Number.NaN]) expect(() => batchRootBudget(invalid)).toThrow('GENERATION_BATCH_INTENT_INVALID')
   })
   it('uses OpenAI combined completion cap without counting reasoning twice', () => {
     const result = plan(model({ modelName: 'o3', reasoningOverride: 'high' }))

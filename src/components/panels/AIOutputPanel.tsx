@@ -33,6 +33,7 @@ import { ipc } from '../../services/ipc-client'
 import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
 import { PLOT_OUTLINE_RESUME_ERROR_CODE } from '../../services/workflows/commands/architecture.command'
 import { toast } from '../ui/Toast'
+import { withoutDraftReconciliationArtifacts } from '../../shared/draft-reconciliation'
 
 function runText(locale: Locale, zhCNText: string, enUSText: string): string {
   return locale === 'en-US' ? enUSText : zhCNText
@@ -312,7 +313,8 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
       setAgentRuns(agentContexts.flatMap(result => result.status === 'fulfilled' ? [result.value] : []))
       setEditorRuns(editorContexts.flatMap(result => result.status === 'fulfilled' ? [result.value] : []))
       setRuns(contexts.filter(item => item.recovery.operation === 'chapter-draft' && !item.recovery.batchId
-        && (item.recovery.composition || item.view.artifacts.length || item.view.candidates?.length || item.view.unsavedTails?.length)))
+        && (item.recovery.composition || withoutDraftReconciliationArtifacts([...item.view.artifacts, ...(item.view.candidates ?? [])], item.recovery).length
+          || item.view.unsavedTails?.length)))
       setBatches(progress.filter(item => item.nextChapterNumber !== null))
       setError([...reviewContexts, ...agentContexts, ...editorContexts].some(result => result.status === 'rejected') ? runText(locale, '部分任务暂时无法读取，其他候选仍可恢复。', 'Some tasks could not be loaded; the other candidates remain available.') : '')
     })().catch(reason => { if (active) setError(reason instanceof Error ? reason.message : String(reason)) })
@@ -404,7 +406,7 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
       }) }}>{runText(locale, '继续此批次', 'Continue this batch')}</button>
     </article>)}
     {visibleRuns.map(({ view, recovery }) => {
-      const artifacts = [...new Map([...view.artifacts, ...(view.candidates ?? [])].map(item => [item.artifactId, item])).values()]
+      const artifacts = withoutDraftReconciliationArtifacts([...new Map([...view.artifacts, ...(view.candidates ?? [])].map(item => [item.artifactId, item])).values()], recovery)
       const picked = selection[view.handle.runId] ?? []
       return <article key={view.handle.runId} className="mb-3">
         <p>{runText(locale, `第${recovery.chapterNumber}章候选`, `Chapter ${recovery.chapterNumber} candidate`)}</p>

@@ -82,6 +82,12 @@ export interface MaterialDecisionReceipt {
   verdict: 'admitted'
   /** 精确初始 user message 的 UTF-8 SHA-256；main 在首个物理请求前复核。 */
   promptHash: string
+  /**
+   * 生成前定稿对账请求（`chapter-draft-reconcile`）唯一 user message 的 UTF-8 SHA-256。
+   * 存在时，写稿运行的首个物理请求可以是这次对账；随后的首稿提示须等于 promptHash 对应的提示，
+   * 或恰好多出由对账输出重算的注入块（见 `src/shared/draft-reconciliation.ts`）。
+   */
+  reconciliationPromptHash?: string
   /** admittedUnits 只统计被选来源块，不冒充完整 user prompt 的总字节数。 */
   capacity: { maxInputUnits: number; methodVersion: typeof MATERIAL_DECISION_UNIT_METHOD_VERSION; admittedUnits: number }
   coverage: { required: number; included: number; complete: boolean }
@@ -119,6 +125,11 @@ export interface GenerationRecoveryContext {
   savedDraft?: GenerationDraftCommitReceipt
   batchId?: string
   knowledgeSnapshot?: GenerationKnowledgeSnapshot
+  /**
+   * 生成前定稿对账：对账尝试的产物 id（永不作为正文候选），以及首稿应沿用的对账原始输出——首稿尚未发出时为最近一次
+   * 完整结束的对账输出；首稿已发出时，只有主进程复核到首稿提示确实带了注入块才返回，否则为 null。
+   */
+  draftReconciliation?: { artifactIds: string[]; completedOutput: string | null }
   /** Present only when the originally selected drafts still match their frozen source references. */
   selectedDrafts?: PreparedDraftContext['selectedDrafts']
 }
@@ -137,6 +148,9 @@ export interface PreparedDraftContext {
   knowledgeSnapshot: GenerationKnowledgeSnapshot
   selectedDrafts: { draftId: number; chapterNumber: number; version: number; contentHash: string; content: string; required?: boolean }[]
 }
+/** 单次批量创作的章数边界；渲染层界面与主进程准入共用，主进程据此限定批量根预算（见 batchRootBudget）。 */
+export const MIN_BATCH_CHAPTERS = 1
+export const MAX_BATCH_CHAPTERS = 10
 export interface GenerationBatchIntent {
   mode: 'draft_review' | 'auto_finalize'
   range: { startChapter: number; endChapter: number }

@@ -7,16 +7,17 @@ import { getDesktopMigrationRegistry, CURRENT_DESKTOP_SCHEMA_VERSION } from '../
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { migrateSchema } from '../../migrations/runner'
 import { createMainGenerationOwner } from '../main-generation-owner'
-import { MAIN_GENERATION_POLICY } from '../main-generation-plan'
+import { batchRootBudget, MAIN_GENERATION_POLICY } from '../main-generation-plan'
 import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
 import { getBuiltinPromptTemplate } from '../../../src/services/builtin-prompt-templates'
 import { readBuiltinWritingSkill } from '../../../src/shared/builtin-writing-skills'
 import type { BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
-import { generationOutputContract } from '../../../src/shared/generation-owner-contract'
+import { generationOutputContract, MAX_BATCH_CHAPTERS } from '../../../src/shared/generation-owner-contract'
 import { textHash } from '../../repositories/generation-run-repository'
 import { composeVisibleContinuation } from '../../../src/shared/visible-continuation'
 import { sanitizeDraftText } from '../../../src/shared/draft-visible-text'
+import { DRAFT_RECONCILE_PURPOSE, parseDraftReconciliation, renderDraftReconciliationBlock } from '../../../src/shared/draft-reconciliation'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
 import { PostProcessRepository } from '../../repositories/post-process-repository'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
@@ -272,6 +273,97 @@ it('rejects prompt substitution before the first material-bound request', async 
   } })).rejects.toThrow('GENERATION_MATERIAL_PROMPT_MISMATCH')
   expect(f.db.prepare('SELECT COUNT(*) FROM generation_attempts').pluck().get()).toBe(0)
 });
+
+describe('pre-draft finalized reconciliation binding', () => {
+  const basePrompt = '【本章执行卡（作者原文重列）】\n- 必需事件: 核查遇阻\n\n【本章篇幅合同】\n目标 900 字。'
+  const reconcilePrompt = '你是连载小说的连续性编辑。只做对账。'
+  const output = JSON.stringify({ finalState: ['林澄已撤回核查安排。'], events: [{ event: '核查遇阻', conflict: true, realization: '许可被驳回。' }] })
+  const block = renderDraftReconciliationBlock('zh-CN', parseDraftReconciliation(output)!)
+  const reconciledPrompt = basePrompt.replace('\n\n【本章篇幅合同】', `\n\n${block}\n\n【本章篇幅合同】`)
+  const decision = (reconciliation = true): NonNullable<BeginGenerationRequest['materialDecision']> => ({
+    version: 1, verdict: 'admitted', promptHash: textHash(basePrompt),
+    ...(reconciliation ? { reconciliationPromptHash: textHash(reconcilePrompt) } : {}),
+    capacity: { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1', admittedUnits: 12 },
+    coverage: { required: 1, included: 1, complete: true },
+    included: [{ sourceId: 'author:required', revision: 1, contentHash: 'a'.repeat(64), category: 'author', required: true, units: 12 }],
+    omitted: [],
+  })
+  const reconcileTask = (content = reconcilePrompt) => ({ purpose: DRAFT_RECONCILE_PURPOSE, output: 'visible-text' as const, messages: [{ role: 'user' as const, content }] })
+  const draftTask = (content: string) => ({ purpose: 'chapter-draft', output: 'visible-text' as const, messages: [{ role: 'user' as const, content }] })
+  const setup = (reconcileOutput = output) => {
+    const f = fixture(async (request, options) => {
+      options.onVisible({ kind: 'delta', text: (request as { task: { purpose: string } }).task.purpose === DRAFT_RECONCILE_PURPOSE ? reconcileOutput : '合成正文。' })
+      return { finishReason: 'stop', usage: null }
+    })
+    return { f, run: f.owner.begin({ ...f.begin, materialDecision: decision() }) }
+  }
+
+  it('admits one reconciliation first and a draft prompt that differs only by the recomputed block', async () => {
+    const { f, run } = setup()
+    const reconciled = await f.owner.execute({ handle: run.handle, invocationNonce: 'reconcile', task: reconcileTask() })
+    expect(reconciled.outcome.content).toBe(output)
+    // 对账产物只作依据：不能作为正文候选组合。
+    expect(reconciled.run.artifacts[0]).toMatchObject({ text: output, compositionEligible: false })
+    expect(() => f.owner.composeVisible(run.handle, [reconciled.outcome.receipt.visibleArtifact!.artifactId], textHash(output), 'draft-visible-v1'))
+      .toThrow('GENERATION_COMPOSITION_SOURCE_INVALID')
+    expect(f.owner.readContext(run.handle).draftReconciliation).toEqual({
+      artifactIds: [reconciled.outcome.receipt.visibleArtifact!.artifactId], completedOutput: output })
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'smuggle', task: draftTask(`${reconciledPrompt}\n\n夹带内容`) }))
+      .rejects.toThrow('GENERATION_MATERIAL_PROMPT_MISMATCH')
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'reconcile-again', task: reconcileTask() }))
+      .rejects.toThrow('GENERATION_MATERIAL_PROMPT_MISMATCH')
+    const drafted = await f.owner.execute({ handle: run.handle, invocationNonce: 'draft', task: draftTask(reconciledPrompt) })
+    expect(drafted.outcome.content).toBe('合成正文。')
+    expect(f.owner.readContext(run.handle).attemptedPurposes).toEqual([DRAFT_RECONCILE_PURPOSE, 'chapter-draft'])
+    expect(f.owner.readContext(run.handle).draftReconciliation?.completedOutput).toBe(output)
+  })
+
+  it('does not offer the reconciliation to recovery when the first draft was sent without its block', async () => {
+    // 例如对账已在主进程完成，但渲染层 IPC 报错后按无对账发出了首稿。
+    const { f, run } = setup()
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'reconcile', task: reconcileTask() })
+    expect(f.owner.readContext(run.handle).draftReconciliation?.completedOutput).toBe(output)
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'draft', task: draftTask(basePrompt) })
+    expect(f.owner.readContext(run.handle).draftReconciliation).toMatchObject({ completedOutput: null })
+  })
+
+  it('still admits the unreconciled draft prompt when the reconciliation output is unusable', async () => {
+    const { f, run } = setup('没有 JSON')
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'reconcile', task: reconcileTask() })
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'draft-with-block', task: draftTask(reconciledPrompt) }))
+      .rejects.toThrow('GENERATION_MATERIAL_PROMPT_MISMATCH')
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'draft', task: draftTask(basePrompt) })).resolves.toBeTruthy()
+  })
+
+  it('offers no recorded reconciliation when the reconcile attempt failed or ended unknown', async () => {
+    const f = fixture(async (request, options) => {
+      if ((request as { task: { purpose: string } }).task.purpose === DRAFT_RECONCILE_PURPOSE) {
+        options.onVisible({ kind: 'delta', text: output })
+        throw new Error('NETWORK_ERROR')
+      }
+      options.onVisible({ kind: 'delta', text: '合成正文。' })
+      return { finishReason: 'stop', usage: null }
+    })
+    const run = f.owner.begin({ ...f.begin, materialDecision: decision() })
+    const reconciled = await f.owner.execute({ handle: run.handle, invocationNonce: 'reconcile', task: reconcileTask() })
+    expect(reconciled.outcome.receipt).toMatchObject({ failureCode: 'NETWORK_ERROR' })
+    expect(reconciled.run.budgetDiagnostics![0]).toMatchObject({ actualState: 'unknown' })
+    expect(f.owner.readContext(run.handle).draftReconciliation?.completedOutput).toBeNull()
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'draft-with-block', task: draftTask(reconciledPrompt) }))
+      .rejects.toThrow('GENERATION_MATERIAL_PROMPT_MISMATCH')
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'draft', task: draftTask(basePrompt) })).resolves.toBeTruthy()
+  })
+
+  it('rejects an unbound or substituted reconciliation before dispatch', async () => {
+    const { f, run } = setup()
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'wrong', task: reconcileTask('其他内容') }))
+      .rejects.toThrow('GENERATION_MATERIAL_PROMPT_MISMATCH')
+    const unbound = f.owner.begin({ ...f.begin, uiActionNonce: 'click:unbound', materialDecision: decision(false) })
+    await expect(f.owner.execute({ handle: unbound.handle, invocationNonce: 'unbound', task: reconcileTask() }))
+      .rejects.toThrow('GENERATION_MATERIAL_PROMPT_MISMATCH')
+    expect(f.db.prepare('SELECT COUNT(*) FROM generation_attempts').pluck().get()).toBe(0)
+  })
+})
 
 it('freezes changed sources in a distinct child run without resetting the author action budget', async () => {
   const fetch = syntheticStream(), f = fixture();
@@ -747,6 +839,35 @@ describe('main draft persistence and batch lineage', () => {
     expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(0)
     expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
+  it.each(['auto_finalize', 'draft_review'] as const)('enforces the shared %s batch chapter limit in main before any budget', mode => {
+    const f = drafting()
+    const intent = (endChapter: number, uiActionNonce: string) => ({ mode, range: { startChapter: 3, endChapter }, targetUnits: 20,
+      uiActionNonce, modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    expect(() => f.owner.beginBatch(intent(3 + MAX_BATCH_CHAPTERS, 'eleven'))).toThrow('GENERATION_BATCH_INTENT_INVALID')
+    expect(f.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(0)
+    const accepted = f.owner.beginBatch(intent(2 + MAX_BATCH_CHAPTERS, 'ten'))
+    expect(accepted.range).toEqual({ startChapter: 3, endChapter: 12 })
+    expect(f.owner.read(accepted.rootHandle).budget.maxAttempts).toBe(batchRootBudget(MAX_BATCH_CHAPTERS).maxPhysicalRequests)
+  })
+  it('scales a 10-chapter automatic batch root so minimum and typical usage finish, and still fails closed beyond it', async () => {
+    const f = drafting()
+    const batch = f.owner.beginBatch({ mode: 'auto_finalize', range: { startChapter: 1, endChapter: 10 }, targetUnits: 20,
+      uiActionNonce: 'ten-chapter-batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
+    const budget = batchRootBudget(10)
+    expect(budget).toEqual({ maxPhysicalRequests: 80, maxTokenLiability: 5_242_880, maxOutputPerRequest: 32_768, maxActiveElapsedMs: 9_000_000 })
+    const generated = await generate(f, { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId })
+    expect(generated.run.budget.maxAttempts).toBe(80)
+    // 每章最低 4 次（对账、首稿、notes、cards）× 10 = 40；典型每章 6 次 = 60；新上限 80 全部可用。
+    for (let request = 2; request <= 80; request++) {
+      const result = await f.owner.execute({ handle: generated.run.handle, invocationNonce: `batch-request-${request}`, task: { ...task, purpose: 'chapter-draft-continuation' } })
+      if ([40, 60, 80].includes(request)) expect(result.run.ledger?.physicalRequests).toBe(request)
+    }
+    await expect(f.owner.execute({ handle: generated.run.handle, invocationNonce: 'batch-request-81', task: { ...task, purpose: 'chapter-draft-continuation' } }))
+      .rejects.toThrow('ROOT_BUDGET_EXHAUSTED')
+    expect(f.dispatch).toHaveBeenCalledTimes(80)
+    // 单章非批量根不变。
+    expect(f.owner.begin({ ...f.begin, authorInputs, uiActionNonce: 'single' }).budget.maxAttempts).toBe(MAIN_GENERATION_POLICY.budget.maxPhysicalRequests)
+  }, 60_000)
   it('waits for the exact finalization postprocess before advancing an automatic batch', async () => {
     const f = drafting()
     const batch = f.owner.beginBatch({ mode: 'auto_finalize', range: { startChapter: 1, endChapter: 1 }, targetUnits: 20,
