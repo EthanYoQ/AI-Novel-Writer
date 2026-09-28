@@ -251,9 +251,68 @@
       { "attemptId": "candidate:7e22701c-2cd6-4a87-b118-565ab1959576", "invocationId": "97b6ccf0-63b0-454e-97f5-71e5efc7b39c", "terminal": "settle", "parityId": "eda8dce86f5910519964e8d4b2f75cf6f7a5270e464e9f36a159a8fdf7a08543" }
     ]
   },
+  "historicalC16Ccc70b31Boundary": {
+    "fromEventCount": 432,
+    "eventCount": 507,
+    "rawBytesSha256": "610ab53b9bf5aac02920212077efca669a418385153f45cf818691a663615be2",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "7f4206ca8fe137d72f2cafb0c9c739147e6f295caa06c08d5a3d44a0d7167092",
+    "armBindings": {
+      "baseline": {
+        "codeSha": "2264390d6fb8b052cc14736d544df0cc74516649",
+        "sourceHash": "9b0d78fc45e0ad01d4c975eb0c23d2d0f2dae0ef5c2b84d6c5e19294a31bd4e8",
+        "driverHash": "01a3dfd96e8739078d2882d6b56fc9edaa14553c19e8319629807ac1a37ce3ad",
+        "parityId": "3c217fca02910eb0bc2e82d5d2e08414a75695125a38b4a1c0abf4f33c35127e"
+      },
+      "candidate": {
+        "codeSha": "ccc70b314744ab7a969c1f4f068e6596a1c37a7b",
+        "sourceHash": "3df716517b2d18f09b3c22215321a5608dfc538e7b2318d898122cc7e524ac69",
+        "driverHash": "01a3dfd96e8739078d2882d6b56fc9edaa14553c19e8319629807ac1a37ce3ad"
+      }
+    },
+    "reserveAttempts": [
+      { "attemptId": "candidate:1a4e71c0-6cfd-49e5-b0c3-49d05965692e", "invocationId": "9cbac025-272e-489a-986a-e3fdf2568a04", "terminal": "settle", "parityId": "679cd87df8912084a6935d62077f001a827741b9e0a4f594f64b7c661ce22357" },
+      { "attemptId": "candidate:1d0d18ae-5761-4d0a-a5e5-492fa993a7d2", "invocationId": "9cbac025-272e-489a-986a-e3fdf2568a04", "terminal": "settle", "parityId": "679cd87df8912084a6935d62077f001a827741b9e0a4f594f64b7c661ce22357" },
+      { "attemptId": "candidate:ff77fbc4-26fb-4129-b846-fb45f01d43cd", "invocationId": "9cbac025-272e-489a-986a-e3fdf2568a04", "terminal": "settle", "parityId": "2ef8c7c855814df2e085c3f1e07f7d4d2d7143275fe452713044d47cc92f2ad2" },
+      { "attemptId": "candidate:fd57a6a8-640f-4761-84c0-4376a3b0f0ba", "invocationId": "9cbac025-272e-489a-986a-e3fdf2568a04", "terminal": "settle", "parityId": "2ef8c7c855814df2e085c3f1e07f7d4d2d7143275fe452713044d47cc92f2ad2" },
+      { "attemptId": "candidate:99650a60-344a-49ef-bb4f-7aac6b9cb838", "invocationId": "9cbac025-272e-489a-986a-e3fdf2568a04", "terminal": "settle", "parityId": "2ef8c7c855814df2e085c3f1e07f7d4d2d7143275fe452713044d47cc92f2ad2" },
+      { "attemptId": "candidate:1adf7729-e6ae-43eb-b9d2-5782cf1007dd", "invocationId": "9cbac025-272e-489a-986a-e3fdf2568a04", "terminal": "settle", "parityId": "469918b94d751c607decf29d461b4b1181fdec44ed31b2acd613ad36e35b7806" },
+      { "attemptId": "candidate:f8d23b80-5368-4087-a2f3-b6309266ab91", "invocationId": "9cbac025-272e-489a-986a-e3fdf2568a04", "terminal": "settle", "parityId": "469918b94d751c607decf29d461b4b1181fdec44ed31b2acd613ad36e35b7806" },
+      { "attemptId": "candidate:294b7c84-1189-4905-b887-dadf72253eba", "invocationId": "9cbac025-272e-489a-986a-e3fdf2568a04", "terminal": "settle", "parityId": "469918b94d751c607decf29d461b4b1181fdec44ed31b2acd613ad36e35b7806" },
+      { "attemptId": "candidate:3dacc78b-6a34-400e-968e-e631de59830e", "invocationId": "9cbac025-272e-489a-986a-e3fdf2568a04", "terminal": "settle", "parityId": "469918b94d751c607decf29d461b4b1181fdec44ed31b2acd613ad36e35b7806" },
+      { "attemptId": "candidate:19ccc6f8-4687-44b8-8495-155a1b4be2e0", "invocationId": "9cbac025-272e-489a-986a-e3fdf2568a04", "terminal": "settle", "parityId": "469918b94d751c607decf29d461b4b1181fdec44ed31b2acd613ad36e35b7806" },
+      { "attemptId": "baseline:4f82aefe-c053-4691-8075-c9914c8a5518", "invocationId": "ae397af2-216d-4014-bb89-4b50ac72ae03", "terminal": "settle" },
+      { "attemptId": "baseline:af0b7532-0f5b-436b-8970-b26dd2427c55", "invocationId": "ae397af2-216d-4014-bb89-4b50ac72ae03", "terminal": "settle" },
+      { "attemptId": "baseline:2fa93edb-5482-4a07-bb08-5b3a2698381d", "invocationId": "ae397af2-216d-4014-bb89-4b50ac72ae03", "terminal": "settle" },
+      { "attemptId": "candidate:389a0e57-c0a1-489f-be87-c5f227db6047", "invocationId": "ae397af2-216d-4014-bb89-4b50ac72ae03", "terminal": "settle", "parityId": "3c217fca02910eb0bc2e82d5d2e08414a75695125a38b4a1c0abf4f33c35127e" },
+      { "attemptId": "candidate:25c1bd30-38b9-421d-83ce-607a760f96e3", "invocationId": "ae397af2-216d-4014-bb89-4b50ac72ae03", "terminal": "settle", "parityId": "3c217fca02910eb0bc2e82d5d2e08414a75695125a38b4a1c0abf4f33c35127e" },
+      { "attemptId": "candidate:60c424e6-26e6-41ba-8a45-7b86906c28b3", "invocationId": "ae397af2-216d-4014-bb89-4b50ac72ae03", "terminal": "settle", "parityId": "3c217fca02910eb0bc2e82d5d2e08414a75695125a38b4a1c0abf4f33c35127e" },
+      { "attemptId": "candidate:7c251a57-97be-4899-b6f0-5f29841a27ef", "invocationId": "ae397af2-216d-4014-bb89-4b50ac72ae03", "terminal": "settle", "parityId": "3c217fca02910eb0bc2e82d5d2e08414a75695125a38b4a1c0abf4f33c35127e" },
+      { "attemptId": "candidate:d7436d53-87e3-42fa-973f-5af5a4de141b", "invocationId": "ae397af2-216d-4014-bb89-4b50ac72ae03", "terminal": "settle", "parityId": "3c217fca02910eb0bc2e82d5d2e08414a75695125a38b4a1c0abf4f33c35127e" },
+      { "attemptId": "candidate:211c33f2-2c6a-4877-a2e2-60b5bf1a81cb", "invocationId": "24c90aec-80c8-411a-85b0-783c824ae7af", "terminal": "settle", "parityId": "679cd87df8912084a6935d62077f001a827741b9e0a4f594f64b7c661ce22357" },
+      { "attemptId": "candidate:ef6aed4b-489e-4121-b078-850def0e2340", "invocationId": "24c90aec-80c8-411a-85b0-783c824ae7af", "terminal": "settle", "parityId": "679cd87df8912084a6935d62077f001a827741b9e0a4f594f64b7c661ce22357" },
+      { "attemptId": "candidate:04589a7c-2cdc-4fea-8e5c-922a2d592597", "invocationId": "24c90aec-80c8-411a-85b0-783c824ae7af", "terminal": "settle", "parityId": "2ef8c7c855814df2e085c3f1e07f7d4d2d7143275fe452713044d47cc92f2ad2" },
+      { "attemptId": "candidate:a5e8ffe2-d7e8-4b1a-acd0-fdc3f54637a6", "invocationId": "24c90aec-80c8-411a-85b0-783c824ae7af", "terminal": "settle", "parityId": "2ef8c7c855814df2e085c3f1e07f7d4d2d7143275fe452713044d47cc92f2ad2" },
+      { "attemptId": "candidate:f3b022b7-c193-4b91-b73e-db0c1bdd0fa1", "invocationId": "24c90aec-80c8-411a-85b0-783c824ae7af", "terminal": "settle", "parityId": "469918b94d751c607decf29d461b4b1181fdec44ed31b2acd613ad36e35b7806" },
+      { "attemptId": "candidate:612d31b5-be51-4310-bf6a-ff82cec930f1", "invocationId": "24c90aec-80c8-411a-85b0-783c824ae7af", "terminal": "settle", "parityId": "469918b94d751c607decf29d461b4b1181fdec44ed31b2acd613ad36e35b7806" },
+      { "attemptId": "candidate:3f11b45b-b342-4334-97e5-32ed729cbd28", "invocationId": "24c90aec-80c8-411a-85b0-783c824ae7af", "terminal": "settle", "parityId": "469918b94d751c607decf29d461b4b1181fdec44ed31b2acd613ad36e35b7806" }
+    ]
+  },
   "phases": {
     "c16-c18": {
-      "scenarioRevision": "c16-c18-candidate-production-path-v1",
+      "scenarioRevision": "c16-c18-candidate-production-path-v2",
+      "attemptPolicy": {
+        "milestone": "final",
+        "arms": ["candidate"],
+        "draftCondense": {
+          "operationIds": ["本地恢复后续写", "DAV选定世代恢复后续写"],
+          "primaryPurpose": "chapter-draft",
+          "condensePurpose": "chapter-draft-condense",
+          "maxCondenseAttempts": 1,
+          "trigger": "primary-settled-stop-hash-verified-units-above-draftTargetUnitRange-maximum",
+          "formalEffect": "last-attempt-only"
+        }
+      },
       "arms": ["candidate"],
       "caseIds": ["C16-A", "C16-B", "C16-C", "C17-A", "C17-B", "C18-A", "C18-B"],
       "caseOrder": ["C16-A", "C16-B", "C16-C", "C17-A", "C17-B", "C18-A", "C18-B"],
@@ -290,8 +349,8 @@
       "stopPolicy": {
         "technicalFailure": "任一案或操作技术失败即停止发送，保留该失败及后续逐案NOT RUN；不得以10次最小路径合计冒充七案资格",
         "semanticFailureOrUnknown": "真实执行后的独立评审才裁决语义；FAIL或UNKNOWN保留全部已发送结果、原案结论及原文证据，不补采、不改判、不挑最佳；未满足七案逐案资格不得汇总PASS",
-        "attemptAccounting": "每个真实发送含准备、失败、unknown和允许的修复，逐attempt reserve/dispatch/settle或unknown；无发送不记已发",
-        "repair": "仅定稿角色状态现有同run/root且有持久失败artifact的原生repair可用；不得新造重试权或放宽事实门"
+        "attemptAccounting": "每个真实发送含准备、失败、unknown、允许的修复和登记的唯一压缩，逐attempt reserve/dispatch/settle或unknown；无发送不记已发",
+        "repair": "仅定稿角色状态现有同run/root且有持久失败artifact的原生repair可用；C17/C18续写只额外登记产品原生的唯一一次chapter-draft-condense：须同run/root/项目/epoch的chapter-draft首请求已结算为stop，且其hash可复核输出按生产countDraftUnits超出draftTargetUnitRange上限，压缩请求携带与续写相同的作者资料、oracle事实、必需前驱和替换来源，只有末次压缩attempt可带正式效果；压缩后仍越界或未完整结束按原失败语义暂停。第二次压缩、未越界压缩或任何其他失败都不获新的重试权，不放宽事实门或篇幅门"
       },
       "minimumCalls": 10,
       "scope": "candidate-only七案例；C16三组notes/cards=6，local及DAV各两组续写=4；准备、修复及失败请求另逐实际记账",

@@ -144,19 +144,31 @@ function readCommittedDraftChapterInfo(db, chapter, projectPath, chapterGuidance
 }
 function draftPromptIncludesCommittedBlueprint(userPrompt, chapterInfo, purpose) {
   const initial = purpose === 'chapter-draft'
-  if (!initial && !['chapter-draft-continuation', 'chapter-draft-no-progress-recovery'].includes(purpose)) return false
+  // 登记的唯一压缩与续写携带同一作者资料块：【本章蓝图】紧接【全局写作要求】。
+  if (!initial && !['chapter-draft-continuation', 'chapter-draft-no-progress-recovery', 'chapter-draft-condense'].includes(purpose)) return false
   const heading = initial ? chapterInfo.chapterNumber === 1 ? '【本章信息】' : '【本章写作方向与核心任务】' : '【本章蓝图】'
-  const next = initial ? '【后续章节大纲预告】' : '【全局写作要求】'
   const marker = `\n${heading}\n`
   const start = userPrompt.indexOf(marker)
   if (start < 0 || userPrompt.indexOf(marker, start + marker.length) >= 0) return false
-  const end = userPrompt.indexOf(`\n${next}`, start + marker.length)
-  if (end < 0) return false
+  // JSON 块止于其后第一个【…】标题行（JSON 字符串中的换行均已转义）。续写/压缩要求该标题恰为【全局写作要求】；
+  // 初始请求的空【后续章节大纲预告】会被产品整段删去，此时接下一个标题，整块仍须逐键等于已提交蓝图。
+  const end = userPrompt.indexOf('\n【', start + marker.length)
+  if (end < 0 || !initial && !userPrompt.startsWith('\n【全局写作要求】', end)) return false
   let sent
   try { sent = JSON.parse(userPrompt.slice(start + marker.length, end).trim()) } catch { return false }
   return sent && typeof sent === 'object' && !Array.isArray(sent)
     && ['chapterNumber', 'title', 'role', 'purpose', 'characters', 'keyEvents', 'suspenseHook', 'userGuidance']
       .every(key => Object.hasOwn(sent, key) && JSON.stringify(sent[key]) === JSON.stringify(chapterInfo[key]))
+}
+/**
+ * 开发合成篇幅：只有登记的案例让首稿超出上限，压缩回复按登记结局落入目标或仍越界；
+ * 其余请求与冻结/真实执行都返回目标本身，不改变既有合成行为。
+ */
+const syntheticDraftUnitsGoal = (plan, caseId, purpose, targetUnits, maximum) => {
+  if (!plan || plan.caseId !== caseId) return targetUnits
+  if (purpose === 'chapter-draft') return maximum + Math.ceil(targetUnits * 0.1)
+  if (purpose === 'chapter-draft-condense') return plan.outcome === 'still-over' ? maximum + Math.ceil(targetUnits * 0.05) : targetUnits
+  return targetUnits
 }
 const syntheticReview = chapter => JSON.stringify({
   summary: '本章完成受阻事件，但人物只罗列选择，没有执行会造成已实现损失的处置。',
@@ -625,10 +637,23 @@ test('isolated production commands persist the selected phase operations', async
     }
 
     let operationKind = null, operationId = null
-    const repairPolicy = request.attemptPolicy?.milestone === request.milestone
-      && request.attemptPolicy.arms?.includes(target.arm) ? request.attemptPolicy : null
+    const policyEligible = request.attemptPolicy?.milestone === request.milestone && request.attemptPolicy.arms?.includes(target.arm)
+    const repairPolicy = policyEligible && !continuityRun ? request.attemptPolicy : null
+    // C17/C18 唯一压缩：用途常量、计数、清洗与篇幅上限全部取自生产代码，与产品触发条件同源。
+    const condensePolicy = policyEligible && continuityRun ? request.attemptPolicy.draftCondense ?? null : null
+    let draftCondense = null
+    if (condensePolicy) {
+      const visible = await load('src/shared/draft-visible-text.ts')
+      assert.equal(visible.DRAFT_CONDENSE_PURPOSE, condensePolicy.condensePurpose, 'DRAFT_CONDENSE_PURPOSE_MISMATCH')
+      const { redactVisibleCompletionText } = await load('src/services/workflows/bounded-completion.ts')
+      const { normalizeChapterWordsTarget } = await load('src/services/workflows/chapter-creation-parameters.ts')
+      const { draftTargetUnitRange } = await load('src/shared/draft-units.ts')
+      const targetUnits = normalizeChapterWordsTarget(chapter.targetUnits, scene.targetUnits)
+      draftCondense = { policy: condensePolicy, targetUnits, maximum: draftTargetUnitRange(targetUnits).maximum,
+        measureUnits: text => countUnits(visible.sanitizeDraftText(redactVisibleCompletionText(text))) }
+    }
     const { parseFinalizedCharacterStateResponse } = continuityRun ? await load('src/shared/finalized-continuity.ts') : {}
-    const beforeOperationDispatch = createOperationDispatchGate({ repairPolicy, finalizationRepair: continuityRun, readPrimaryEvidence: first => {
+    const beforeOperationDispatch = createOperationDispatchGate({ repairPolicy, draftCondense, finalizationRepair: continuityRun, readPrimaryEvidence: first => {
       const attemptId = `${target.arm}:${first.attemptId}`
       const matches = receipt.attempts.filter(attempt => attempt.attemptId === attemptId)
       if (matches.length !== 1) return null
@@ -638,7 +663,9 @@ test('isolated production commands persist the selected phase operations', async
         .map(line => JSON.parse(line)).filter(event => event.attemptId === attemptId)
       if (continuityRun) {
         const artifact = db.prepare('SELECT artifact_json FROM generation_artifacts WHERE attempt_id=?').pluck().get(first.attemptId)
-        if (!artifact || !finalizedContext) return null
+        if (!artifact) return null
+        if (operationKind === 'draft') return { attempt: matches[0], events, ownerArtifactHash: sha(JSON.parse(artifact).text) }
+        if (!finalizedContext) return null
         const saved = JSON.parse(artifact)
         let finalizedCharacterInvalid = false
         try { parseFinalizedCharacterStateResponse(saved.text, finalizedContext.identity) } catch { finalizedCharacterInvalid = true }
@@ -681,6 +708,7 @@ test('isolated production commands persist the selected phase operations', async
       if (reviewRepairPolicy?.operationId === operationId
         && (actual ?? observedIpc).purpose === reviewRepairPolicy.repairPurpose) await Promise.all(streamSettlements)
       if (continuityRun && operationKind === 'character_cards' && actual.purpose.includes(':repair:')) await Promise.all(streamSettlements)
+      if (condensePolicy && operationKind === 'draft' && actual.purpose === condensePolicy.condensePurpose) await Promise.all(streamSettlements)
       // The registered extra call must carry its real product purpose before campaign reserve.
       const draft = reviewedRun && operationKind === 'review' ? latestDraft() : null
       const reviewSource = draft ? { draftId: draft.id, contentHash: sha(draft.content) } : undefined
@@ -874,7 +902,9 @@ test('isolated production commands persist the selected phase operations', async
               })) })
           }
         } else {
-          text = syntheticDraftText(countUnits, chapter.targetUnits, fullRun ? chapter.number : 1)
+          text = syntheticDraftText(countUnits, draftCondense && request.mode === 'synthetic' && operationKind === 'draft'
+            ? syntheticDraftUnitsGoal(request.syntheticDraftCondense, request.caseId, actual.purpose, chapter.targetUnits, draftCondense.maximum)
+            : chapter.targetUnits, fullRun ? chapter.number : 1)
           if (reviewedRun && request.syntheticReviewedDraftCase !== 'none') {
             const issues = request.syntheticReviewedDraftCase === 'single' ? reviewedSyntheticIssues.slice(0, 1) : reviewedSyntheticIssues
             issues.forEach((item, index) => { text = text.replace(`清晨，林澄核对第${index + 1}行登记，发现日期异常。`, item.quote) })
@@ -1166,9 +1196,10 @@ test('isolated production commands persist the selected phase operations', async
           && attempt.binding.actual.purpose === repairPolicy.primaryPurpose
           && receipt.attempts.some(other => other.binding.operation === repairPolicy.operationId
             && other.binding.actual?.purpose === repairPolicy.repairPurpose)
-        const repairedCards = continuityRun && attempt.binding.operation === '定稿角色状态'
-          && receipt.attempts.filter(other => other.binding.operation === '定稿角色状态').at(-1) !== attempt
-        assert.equal(terminal.hasFormalEffect, !repairedDirectory && !repairedCards)
+        // C16 原生修复与 C17/C18 唯一压缩同规则：同一 operation 只有末次 attempt 带正式效果。
+        const supersededAttempt = continuityRun
+          && receipt.attempts.filter(other => other.binding.operation === attempt.binding.operation).at(-1) !== attempt
+        assert.equal(terminal.hasFormalEffect, !repairedDirectory && !supersededAttempt)
         if (request.mode === 'synthetic') assert.equal(terminal.trustedUsage, true)
         assert.equal(terminal.textHash, attempt.visibleTextHash, 'OWNER_ARTIFACT_OUTPUT_MISMATCH')
       }

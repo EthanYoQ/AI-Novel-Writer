@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { createHash, randomUUID } from 'node:crypto'
 import { buildSync } from 'esbuild'
-import { isExpectedReferenceEvidenceFailure, isVerifiedDirectPersistedDraftEvidence, isVerifiedRecoverySupplementEvidence,
+import { countProjectedDraftUnits, isExpectedReferenceEvidenceFailure, isVerifiedDirectPersistedDraftEvidence, isVerifiedRecoverySupplementEvidence,
   readVerifiedDirectPersistedDraftEvidence, readVerifiedRecoveryCandidateSupplement, targetUnitRange } from './quality-modernization-receipt.mjs'
 
 const ADAPTER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -268,6 +268,16 @@ export function runProductionBridge(request) {
   return { ...receipt, command: { executable: runtime.executable, argv, cwd: target.repositoryRoot, shell: false }, receiptPath: request.receiptPath }
 }
 
+/**
+ * C17/C18 续写的唯一一次原生超长压缩（评分规则变更，随产品修复登记）：只在同一 run/root/项目/epoch
+ * 的 chapter-draft 首请求已结算为 stop、且其 hash 可复核的输出按生产计数超出 draftTargetUnitRange
+ * 上限时，才许可一次 chapter-draft-condense；它不是任意失败的新重试权，正式效果只能落在末次 attempt。
+ */
+export const C16_C18_ATTEMPT_POLICY = Object.freeze({ milestone: 'final', arms: Object.freeze(['candidate']),
+  draftCondense: Object.freeze({ operationIds: Object.freeze(['本地恢复后续写', 'DAV选定世代恢复后续写']),
+    primaryPurpose: 'chapter-draft', condensePurpose: 'chapter-draft-condense', maxCondenseAttempts: 1,
+    trigger: 'primary-settled-stop-hash-verified-units-above-draftTargetUnitRange-maximum',
+    formalEffect: 'last-attempt-only' }) })
 // A phase scenario is the bridge-side counterpart of one preregistered protocol phase.
 // The protocol stays the only authority for case ids and operation ids; this map only
 // says which production commands realize them. The runner re-checks every field against
@@ -277,7 +287,8 @@ export const PHASE_SCENARIOS = Object.freeze({
   'c16-c18': Object.freeze({
     caseId: 'C16-A', caseIds: Object.freeze(['C16-A', 'C16-B', 'C16-C', 'C17-A', 'C17-B', 'C18-A', 'C18-B']),
     sceneId: '场景1', chapterNumber: 2, milestone: 'final', arms: Object.freeze(['candidate']),
-    scenarioRevision: 'c16-c18-candidate-production-path-v1',
+    scenarioRevision: 'c16-c18-candidate-production-path-v2',
+    attemptPolicy: C16_C18_ATTEMPT_POLICY,
     operations: Object.freeze([
       Object.freeze({ id: '定稿章节要点', kind: 'chapter_notes' }),
       Object.freeze({ id: '定稿角色状态', kind: 'character_cards' }),
@@ -358,7 +369,7 @@ const reviewParseFailure = content => {
   try { parseReviewGenerationResult(content); return false }
   catch (error) { return error instanceof SyntaxError || error?.message === 'invalid review contract' }
 }
-function verifiedPrimarySyntaxFailure(first, evidence, operationId, kind = 'directory') {
+function verifiedPrimarySyntaxFailure(first, evidence, operationId, kind = 'directory', condense = null) {
   const attempt = evidence?.attempt, rows = evidence?.events
   const identity = attempt?.binding?.actual ?? attempt?.binding?.baselineIpc
   if (!attempt || !Array.isArray(rows) || rows.length !== 3 || !identity
@@ -377,15 +388,23 @@ function verifiedPrimarySyntaxFailure(first, evidence, operationId, kind = 'dire
     const output = fs.readFileSync(attempt.outputPath, 'utf8')
     return digest(output) === attempt.visibleTextHash && (kind === 'cards'
       ? evidence.finalizedCharacterInvalid === true && evidence.ownerArtifactHash === attempt.visibleTextHash
+      : kind === 'condense' ? evidence.ownerArtifactHash === attempt.visibleTextHash && typeof condense?.measureUnits === 'function'
+        && Number.isSafeInteger(condense.maximum) && condense.maximum > 0 && condense.measureUnits(output) > condense.maximum
       : kind === 'review' ? reviewParseFailure(output) : repairableDirectJsonSyntax(output))
   } catch { return false }
 }
-/** Only a settled, hash-verified parse failure may add one physical request. */
-export function createOperationDispatchGate({ onReject, repairPolicy, readPrimaryEvidence, finalizationRepair = false } = {}) {
+/**
+ * Only a settled, hash-verified parse failure — or, for a registered draft operation, a settled
+ * over-length primary draft — may add one physical request. `draftCondense.measureUnits` and
+ * `draftCondense.maximum` come from the production counter and draftTargetUnitRange.
+ */
+export function createOperationDispatchGate({ onReject, repairPolicy, readPrimaryEvidence, finalizationRepair = false, draftCondense = null } = {}) {
   const dispatched = new Map()
   return (operationId, owner, reviewSource) => {
     const first = dispatched.get(operationId)
     const cards = finalizationRepair && operationId === '定稿角色状态'
+    const condensePolicy = draftCondense?.policy
+    const condense = Boolean(condensePolicy?.maxCondenseAttempts === 1 && condensePolicy.operationIds?.includes(operationId))
     const review = repairPolicy?.reviewRebuild?.operationId === operationId
     const policy = review ? repairPolicy.reviewRebuild : repairPolicy
     const policyApplies = policy?.operationId === operationId && policy.maxRepairAttempts === 1
@@ -394,18 +413,19 @@ export function createOperationDispatchGate({ onReject, repairPolicy, readPrimar
       && typeof value.epoch === 'string' && value.epoch
     const hasSyntaxProof = () => {
       try { return verifiedPrimarySyntaxFailure(first, readPrimaryEvidence?.(first), operationId,
-        cards ? 'cards' : review ? 'review' : 'directory') }
+        cards ? 'cards' : condense ? 'condense' : review ? 'review' : 'directory', condense ? draftCondense : null) }
       catch { return false }
     }
-    const repair = first && (policyApplies || cards) && identity(first) && identity(owner)
+    const repair = first && (policyApplies || cards || condense) && identity(first) && identity(owner)
       && (cards ? (first.ordinal ?? 0) < 2 && owner.purpose === `finalized-character-state:repair:${(first.ordinal ?? 0) + 1}`
+        : condense ? first.purpose === condensePolicy.primaryPurpose && owner.purpose === condensePolicy.condensePurpose
         : first.purpose === policy.primaryPurpose && owner.purpose === policy.repairPurpose)
       && first.attemptId !== owner.attemptId && first.runId === owner.runId
       && first.rootActionId === owner.rootActionId && first.projectId === owner.projectId && first.epoch === owner.epoch
       && (!review || JSON.stringify(first.reviewSource) === JSON.stringify(reviewSource))
       && first.repairUsed !== true && hasSyntaxProof()
-    if (!operationId || first && !repair || !first && (policyApplies || cards)
-      && (!identity(owner) || owner.purpose !== (cards ? 'finalized-character-state' : policy.primaryPurpose)
+    if (!operationId || first && !repair || !first && (policyApplies || cards || condense)
+      && (!identity(owner) || owner.purpose !== (cards ? 'finalized-character-state' : condense ? condensePolicy.primaryPurpose : policy.primaryPurpose)
         || review && (!Number.isSafeInteger(reviewSource?.draftId) || reviewSource.draftId <= 0
           || !/^[a-f0-9]{64}$/.test(reviewSource.contentHash ?? '')))) {
       const rejection = Object.freeze({ code: 'UNREGISTERED_ADDITIONAL_MODEL_REQUEST',
@@ -1059,6 +1079,9 @@ export function runProductionPhasePair(targets, options) {
     attemptPolicy: options.attemptPolicy ?? null,
     evaluationPolicy: options.evaluationPolicy ?? null,
     ...(options.mode === 'synthetic' && options.development ? { syntheticReviewedDraftCase: options.syntheticReviewedDraftCase ?? 'multiple' } : {}),
+    // 开发合成才登记超长首稿：默认让 C17-A 走「超长→唯一压缩→在范围」；still-over 用于复现原失败语义。
+    ...(options.mode === 'synthetic' && options.development && options.phase === 'c16-c18'
+      ? { syntheticDraftCondense: options.syntheticDraftCondense ?? { caseId: 'C17-A', outcome: 'in-range' } } : {}),
     milestone: options.milestone ?? scenario.milestone,
     phase: options.phase, caseId: scenario.caseId, sceneId: scenario.sceneId, chapterNumber: scenario.chapterNumber,
     operations: scenario.operations, semanticPath: options.semanticPath, templatesPath: options.templatesPath,
@@ -1117,8 +1140,23 @@ export function runProductionPhasePair(targets, options) {
     invocationId, parityHash, prepared, results }
 }
 
+/**
+ * 结果侧复核：保存的原始可见输出按 hash 读回，以 harness 同一 v3 计数（与生产 countDraftUnits 相同）
+ * 超出上限。产品先清洗再计数，清洗只删不增，因此这是产品触发压缩的必要条件，不放宽任何门。
+ */
+function verifiedCondensedDraft(primary, result) {
+  const observation = result?.draftObservation
+  if (!CONTENT_HASH.test(primary?.visibleTextHash ?? '') || typeof primary.outputPath !== 'string'
+    || !withinTargetUnits(observation, result.protocolRevision, 'candidate')) return false
+  try {
+    const output = fs.readFileSync(primary.outputPath, 'utf8')
+    return digest(output) === primary.visibleTextHash
+      && countProjectedDraftUnits(output) > targetUnitRange(observation.targetUnits, result.protocolRevision, 'candidate').maximum
+  } catch { return false }
+}
 export function validateCandidateContinuityResults(results, mode) {
   const fail = code => ({ status: 'failed', candidateFailure: code })
+  const condense = PHASE_SCENARIOS['c16-c18'].attemptPolicy.draftCondense
   if (results.length !== 7 || results.some(result => result.status !== 'passed' || result.arm !== 'candidate'
     || result.phase !== 'c16-c18' || result.mode !== mode)) return fail('CANDIDATE_OPERATION_MISSING')
   if (stableEvidence(results.map(result => result.caseId)) !== stableEvidence(PHASE_SCENARIOS['c16-c18'].caseIds)) return fail('CANDIDATE_CASE_MISMATCH')
@@ -1133,7 +1171,8 @@ export function validateCandidateContinuityResults(results, mode) {
       || result.ownerTerminal.length !== result.attempts.length) return fail('ACTUAL_OWNER_ARTIFACT_MISMATCH')
     for (const operation of result.operations) {
       const attempts = result.attempts.filter(attempt => attempt.binding?.operation === operation.operation)
-      if (attempts.length < 1 || attempts.length > (operation.kind === 'character_cards' ? 3 : 1)) return fail('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+      const condensable = operation.kind === 'draft' && condense.operationIds.includes(operation.operation)
+      if (attempts.length < 1 || attempts.length > (operation.kind === 'character_cards' ? 3 : condensable ? 2 : 1)) return fail('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
       for (const [ordinal, attempt] of attempts.entries()) {
         const actual = attempt.binding?.actual, terminal = result.ownerTerminal.find(item => item.attemptId === actual?.attemptId)
         if (!actual || actual.projectId !== result.physicalProject.projectId || actual.epoch !== result.projectEpoch
@@ -1145,9 +1184,11 @@ export function validateCandidateContinuityResults(results, mode) {
           || terminal.hasFormalEffect !== (ordinal === attempts.length - 1)
           || ordinal === 0 && actual.purpose !== (operation.kind === 'chapter_notes' ? 'finalized-chapter-notes'
             : operation.kind === 'character_cards' ? 'finalized-character-state' : 'chapter-draft')
-          || ordinal > 0 && actual.purpose !== `finalized-character-state:repair:${ordinal}`)
+          || ordinal > 0 && actual.purpose !== (condensable ? condense.condensePurpose : `finalized-character-state:repair:${ordinal}`))
           return fail('ACTUAL_OWNER_IDENTITY_MISMATCH')
       }
+      // 登记的唯一压缩：首稿 hash 可复核且超出上限（生产计数），末次压缩稿才是正式保存的在范围正文。
+      if (condensable && attempts.length === 2 && !verifiedCondensedDraft(attempts[0], result)) return fail('DRAFT_CONDENSE_NOT_REGISTERED')
     }
     if (result.physicalModelRequests !== (mode === 'real' ? result.attempts.length : 0)
       || result.syntheticDispatches !== (mode === 'synthetic' ? result.attempts.length : 0)) return fail('PHYSICAL_CALL_COUNT_MISMATCH')

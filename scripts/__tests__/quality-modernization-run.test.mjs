@@ -16,13 +16,14 @@ import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolated
   validateEarlyReviewChain, targetUnitsGateEvidence,
   createAttemptSupervisor, createOperationDispatchGate, createOutboundPreflightAssert,
   rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures, fetchProviderResponse, measurePromptBytes,
-  BRIDGE_SETTLEMENT_DEADLINE_MS, BRIDGE_SPAWN_TIMEOUT_MS, BRIDGE_TEST_TIMEOUT_MS } from '../quality-modernization-driver.mjs'
+  BRIDGE_SETTLEMENT_DEADLINE_MS, BRIDGE_SPAWN_TIMEOUT_MS, BRIDGE_TEST_TIMEOUT_MS,
+  C16_C18_ATTEMPT_POLICY, validateCandidateContinuityResults, runProductionPhasePair } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, readVerifiedRecoveryCandidateSupplement,
   readVerifiedDirectPersistedDraftEvidence, recordPersistedDraftObservation,
   safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
 import Database from 'better-sqlite3'
 import { POST_UI_REVIEW_POLICY, reviewedDraftSelection, validateReviewedDraft, productionScenario, scenarioAuthorSetting } from '../quality-modernization-driver.mjs'
-import { countDraftUnits } from '../../src/shared/draft-units'
+import { countDraftUnits, draftTargetUnitRange } from '../../src/shared/draft-units'
 import { freezeChapterGoals } from '../../src/shared/chapter-goal-review'
 import { parseReviewGenerationResult } from '../../src/shared/review-generation-report'
 
@@ -327,6 +328,316 @@ test('C16 native repairs require each settled invalid artifact and keep their ac
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
+// 合成篇幅文本与生产计数：与桥里完全相同的 syntheticDraftText / syntheticDraftUnitsGoal 源码。
+const fixtureSource = () => fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
+function syntheticLengthHelpers() {
+  const fixture = fixtureSource()
+  const slice = (from, to) => fixture.slice(fixture.indexOf(from), fixture.indexOf(to, fixture.indexOf(from)))
+  const sandbox = {}
+  vm.runInNewContext(`${slice('const syntheticDraftText =', 'const reviewedSyntheticIssues =')}
+${slice('const syntheticDraftUnitsGoal =', 'const syntheticReview =')}
+this.syntheticDraftText = syntheticDraftText; this.syntheticDraftUnitsGoal = syntheticDraftUnitsGoal`, sandbox)
+  return sandbox
+}
+const C17_TARGET = source.scenes.find(scene => scene.id === '场景1').chapters[1].targetUnits
+const C17_RANGE = draftTargetUnitRange(C17_TARGET)
+
+test('C17/C18 唯一压缩只在已结算且 hash 可复核的超长首稿后登记一次', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/condense-gate-test-'))
+  try {
+    const policy = PHASE_SCENARIOS['c16-c18'].attemptPolicy.draftCondense
+    assert.deepEqual(policy.operationIds, ['本地恢复后续写', 'DAV选定世代恢复后续写'])
+    const { syntheticDraftText } = syntheticLengthHelpers()
+    const overText = syntheticDraftText(countDraftUnits, C17_RANGE.maximum + 60)
+    const inRangeText = syntheticDraftText(countDraftUnits, C17_TARGET)
+    assert.ok(countDraftUnits(overText) > C17_RANGE.maximum && countDraftUnits(inRangeText) <= C17_RANGE.maximum)
+    const operation = '本地恢复后续写'
+    const first = { attemptId: 'first', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: 'chapter-draft' }
+    const outputPath = path.join(dir, 'primary.txt')
+    const settled = { finish: 'stop', artifact: null, operation, recorded: null }
+    const proof = owner => {
+      const attemptId = `candidate:${owner.attemptId}`, text = fs.readFileSync(outputPath, 'utf8')
+      const binding = { operation: settled.operation, actual: { ...owner } }
+      return { attempt: { attemptId, binding, outputPath, visibleTextHash: settled.recorded ?? hash(text) },
+        events: [{ type: 'reserve', attemptId, binding }, { type: 'dispatch', attemptId }, { type: 'settle', attemptId, finishReason: settled.finish }],
+        ownerArtifactHash: settled.artifact ?? hash(text) }
+    }
+    const draftCondense = { policy, maximum: C17_RANGE.maximum, measureUnits: countDraftUnits }
+    const rejections = []
+    const create = (options = {}) => createOperationDispatchGate({ finalizationRepair: true, draftCondense, readPrimaryEvidence: proof,
+      onReject: item => rejections.push(item), ...options })
+    const condense = { ...first, attemptId: 'condense', purpose: 'chapter-draft-condense' }
+    fs.writeFileSync(outputPath, overText)
+    // 注册的唯一压缩：同 run/root/项目/epoch，首稿已 stop 结算且按生产计数超上限。
+    const gate = create()
+    gate(operation, first)
+    gate(operation, condense)
+    assert.throws(() => gate(operation, { ...condense, attemptId: 'condense-2' }), /MODEL_REQUEST_REJECTED/)
+    assert.throws(() => gate(operation, { ...first, attemptId: 'continuation', purpose: 'chapter-draft-continuation' }), /MODEL_REQUEST_REJECTED/)
+    assert.deepEqual(rejections.at(-1), { code: 'UNREGISTERED_ADDITIONAL_MODEL_REQUEST', operationId: operation,
+      reason: 'duplicate-operation', beforeDispatch: true })
+    // DAV 续写同样登记；两个操作各自计数，互不借用。
+    const dav = create()
+    dav('DAV选定世代恢复后续写', first)
+    settled.operation = 'DAV选定世代恢复后续写'
+    dav('DAV选定世代恢复后续写', condense)
+    settled.operation = operation
+    const rejected = mutate => {
+      const isolated = create()
+      isolated(operation, first)
+      const owner = mutate() ?? condense
+      assert.throws(() => isolated(operation, owner), /MODEL_REQUEST_REJECTED/)
+      fs.writeFileSync(outputPath, overText); Object.assign(settled, { finish: 'stop', artifact: null, operation, recorded: null })
+    }
+    rejected(() => { fs.writeFileSync(outputPath, inRangeText) })
+    // 首稿产物在结算后被改写：记录的 hash 与读回字节不符。
+    rejected(() => { settled.recorded = hash(overText); fs.writeFileSync(outputPath, `${overText}补`) })
+    rejected(() => { settled.finish = 'length' })
+    rejected(() => { settled.artifact = hash('other owner artifact') })
+    rejected(() => { settled.operation = 'DAV选定世代恢复后续写' })
+    rejected(() => ({ ...condense, rootActionId: 'other-root' }))
+    rejected(() => ({ ...condense, epoch: 'other-epoch' }))
+    rejected(() => ({ ...condense, attemptId: first.attemptId }))
+    rejected(() => ({ ...condense, purpose: 'chapter-draft-condense:2' }))
+    // 恰在上限不越界：不许压缩（上限本身在范围内）。
+    const exact = create()
+    exact(operation, first)
+    let atMaximum = inRangeText
+    const extra = '清晨，林澄核对登记，发现日期异常。'
+    while (countDraftUnits(atMaximum + extra) <= C17_RANGE.maximum) atMaximum += extra
+    fs.writeFileSync(outputPath, atMaximum)
+    assert.ok(countDraftUnits(atMaximum) <= C17_RANGE.maximum)
+    assert.throws(() => exact(operation, condense), /MODEL_REQUEST_REJECTED/)
+    fs.writeFileSync(outputPath, overText)
+    // 压缩不能作为首请求，也不能用于未登记操作或未登记本策略的旧门。
+    assert.throws(() => create()(operation, condense), /MODEL_REQUEST_REJECTED/)
+    const notes = create()
+    notes('定稿章节要点', { ...first, purpose: 'finalized-chapter-notes' })
+    assert.throws(() => notes('定稿章节要点', condense), /MODEL_REQUEST_REJECTED/)
+    const legacy = createOperationDispatchGate({ finalizationRepair: true, readPrimaryEvidence: proof })
+    legacy(operation, first)
+    assert.throws(() => legacy(operation, condense), /MODEL_REQUEST_REJECTED/)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('合成 transport 可复现 C17/C18 超长→唯一压缩→在范围，以及压缩仍越界', () => {
+  const { syntheticDraftText, syntheticDraftUnitsGoal } = syntheticLengthHelpers()
+  const units = (plan, caseId, purpose) => countDraftUnits(syntheticDraftText(countDraftUnits,
+    syntheticDraftUnitsGoal(plan, caseId, purpose, C17_TARGET, C17_RANGE.maximum)))
+  for (const caseId of ['C17-A', 'C18-B']) {
+    const inRange = { caseId, outcome: 'in-range' }, stillOver = { caseId, outcome: 'still-over' }
+    assert.ok(units(inRange, caseId, 'chapter-draft') > C17_RANGE.maximum, `${caseId}:primary-over`)
+    const condensed = units(inRange, caseId, 'chapter-draft-condense')
+    assert.ok(condensed >= C17_RANGE.minimum && condensed <= C17_RANGE.maximum, `${caseId}:condense-in-range`)
+    assert.ok(units(stillOver, caseId, 'chapter-draft-condense') > C17_RANGE.maximum, `${caseId}:condense-still-over`)
+    // 未登记案例与未登记计划保持原合成行为：首稿在范围内，产品不会发起压缩。
+    for (const plan of [null, { caseId: 'C16-A', outcome: 'in-range' }]) {
+      const value = units(plan, caseId, 'chapter-draft')
+      assert.ok(value >= C17_RANGE.minimum && value <= C17_RANGE.maximum)
+    }
+  }
+  const fixture = fixtureSource()
+  assert.match(fixture, /draftCondense && request\.mode === 'synthetic' && operationKind === 'draft'\s*\? syntheticDraftUnitsGoal\(request\.syntheticDraftCondense, request\.caseId, actual\.purpose, chapter\.targetUnits, draftCondense\.maximum\)/)
+  assert.match(fixture, /assert\.equal\(visible\.DRAFT_CONDENSE_PURPOSE, condensePolicy\.condensePurpose, 'DRAFT_CONDENSE_PURPOSE_MISMATCH'\)/)
+  assert.match(fixture, /createOperationDispatchGate\(\{ repairPolicy, draftCondense, finalizationRepair: continuityRun,/)
+  assert.match(fixture, /draftCondense = \{ policy: condensePolicy, targetUnits, maximum: draftTargetUnitRange\(targetUnits\)\.maximum,\s*measureUnits: text => countUnits\(visible\.sanitizeDraftText\(redactVisibleCompletionText\(text\)\)\) \}/)
+  // 压缩发出前先等首稿流结算，门禁才能读到 settle 与 hash。
+  assert.match(fixture, /if \(condensePolicy && operationKind === 'draft' && actual\.purpose === condensePolicy\.condensePurpose\) await Promise\.all\(streamSettlements\)/)
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-driver.mjs'), 'utf8')
+  assert.match(driver, /options\.mode === 'synthetic' && options\.development && options\.phase === 'c16-c18'\s*\? \{ syntheticDraftCondense: options\.syntheticDraftCondense \?\? \{ caseId: 'C17-A', outcome: 'in-range' \} \}/)
+})
+
+function continuityResults(dir, { condensedIndex = null, primaryText, savedUnits = C17_TARGET } = {}) {
+  const operations = PHASE_SCENARIOS['c16-c18'].operations
+  const write = (name, text) => { const file = path.join(dir, name); fs.writeFileSync(file, text); return { outputPath: file, visibleTextHash: hash(text) } }
+  return PHASE_SCENARIOS['c16-c18'].caseIds.map((caseId, index) => {
+    const projectId = index < 3 ? 'project-source' : `project-restored-${index}`
+    const parityHash = hash(`parity-${index}`), epoch = `epoch-${index}`
+    const ops = index < 3 ? operations.slice(0, 2) : [operations[index < 5 ? 2 : 3]]
+    const attempts = [], ownerTerminal = []
+    const receiptOps = ops.map(operation => {
+      const handle = { runId: `run-${index}-${operation.kind}`, rootActionId: `root-${index}-${operation.kind}` }
+      const purposes = operation.kind === 'chapter_notes' ? ['finalized-chapter-notes'] : operation.kind === 'character_cards'
+        ? ['finalized-character-state'] : index === condensedIndex ? ['chapter-draft', 'chapter-draft-condense'] : ['chapter-draft']
+      purposes.forEach((purpose, ordinal) => {
+        const attemptId = `${index}-${operation.kind}-${ordinal}`
+        const output = write(`${attemptId}.txt`, ordinal === 0 && purposes.length === 2 ? primaryText : `output ${attemptId}`)
+        attempts.push({ attemptId: `candidate:${attemptId}`, ...output, binding: { operation: operation.id, phase: 'c16-c18',
+          arm: 'candidate', invocationId: 'invocation', parityId: parityHash,
+          actual: { attemptId, projectId, epoch, ...handle, purpose } } })
+        ownerTerminal.push({ attemptId, artifactId: `artifact-${attemptId}`, textHash: output.visibleTextHash, purpose,
+          finishReason: 'stop', hasFormalEffect: ordinal === purposes.length - 1 })
+      })
+      return { operation: operation.id, kind: operation.kind, handle }
+    })
+    return { status: 'passed', arm: 'candidate', phase: 'c16-c18', mode: 'synthetic', caseId, invocationId: 'invocation',
+      protocolRevision: protocolBinding.protocolRevision, physicalProject: { projectId, parityHash }, projectEpoch: epoch,
+      operations: receiptOps, attempts, ownerTerminal, physicalModelRequests: 0, syntheticDispatches: attempts.length,
+      ...(index < 3 ? { finalizationEvidence: { idempotent: true, derivedApplied: true, effects: [{}, {}],
+        ...(index === 1 ? { authorProtected: true } : {}) }, ...(index === 2 ? { sourceReplacement: {} } : {}) } : {
+        draftObservation: { chapterNumber: 2, units: savedUnits, targetUnits: C17_TARGET, persisted: true, contentHash: hash(`saved-${index}`) },
+        restoration: { originProjectId: 'project-source', targetProjectId: projectId, transferReceiptHash: hash('transfer'),
+          sourceUnchanged: true, oldWorkFrozen: true, ...(index >= 5 ? { selectedGenerationId: 'generation', bindingMode: 'origin-readonly' } : {}),
+          ...(index === 4 ? { sourceReplacement: {} } : {}), ...(index === 6 ? { branchGenerationIds: ['a', 'b'] } : {}) } }) }
+  })
+}
+
+test('C17/C18 压缩结果最多两次 attempt、正式效果只在末次，且首稿超上限须可复核', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/condense-result-test-'))
+  try {
+    const { syntheticDraftText } = syntheticLengthHelpers()
+    const overText = syntheticDraftText(countDraftUnits, C17_RANGE.maximum + 60)
+    assert.deepEqual(validateCandidateContinuityResults(continuityResults(dir), 'synthetic'), { status: 'passed' })
+    for (const index of [3, 4, 5, 6]) {
+      assert.deepEqual(validateCandidateContinuityResults(continuityResults(dir, { condensedIndex: index, primaryText: overText }), 'synthetic'),
+        { status: 'passed' }, `case ${index}`)
+    }
+    const failure = (results, code) => assert.deepEqual(validateCandidateContinuityResults(results, 'synthetic'),
+      { status: 'failed', candidateFailure: code })
+    const condensed = () => continuityResults(dir, { condensedIndex: 3, primaryText: overText })
+    // 首稿未超上限、首稿产物被改写、压缩后保存稿仍越界，都不是登记的压缩。
+    failure(continuityResults(dir, { condensedIndex: 3, primaryText: syntheticDraftText(countDraftUnits, C17_TARGET) }), 'DRAFT_CONDENSE_NOT_REGISTERED')
+    const tampered = condensed()
+    fs.appendFileSync(tampered[3].attempts[0].outputPath, '改')
+    failure(tampered, 'DRAFT_CONDENSE_NOT_REGISTERED')
+    failure(continuityResults(dir, { condensedIndex: 3, primaryText: overText, savedUnits: C17_RANGE.maximum + 1 }), 'DRAFT_CONDENSE_NOT_REGISTERED')
+    // 仍越界时产品按原语义暂停失败：该案不是 passed，整组不通过。
+    const paused = condensed()
+    paused[3].status = 'failed'
+    failure(paused, 'CANDIDATE_OPERATION_MISSING')
+    // 正式效果只能在末次压缩；首稿不得带效果、压缩不得缺效果。
+    for (const [ordinal, value] of [[0, true], [1, false]]) {
+      const changed = condensed()
+      changed[3].ownerTerminal.find(item => item.attemptId === '3-draft-' + ordinal).hasFormalEffect = value
+      failure(changed, 'ACTUAL_OWNER_IDENTITY_MISMATCH')
+    }
+    // 第二次压缩、续写冒充压缩、首请求不是 chapter-draft、提取操作多一次，都拒绝。
+    const twice = condensed()
+    const extra = structuredClone(twice[3].attempts[1])
+    extra.attemptId = 'candidate:3-draft-2'; extra.binding.actual.attemptId = '3-draft-2'
+    twice[3].attempts.push(extra)
+    twice[3].ownerTerminal.push({ ...twice[3].ownerTerminal[1], attemptId: '3-draft-2' })
+    twice[3].syntheticDispatches = 3
+    failure(twice, 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+    for (const [ordinal, purpose] of [[1, 'chapter-draft-continuation'], [0, 'chapter-draft-condense']]) {
+      const changed = condensed()
+      changed[3].attempts[ordinal].binding.actual.purpose = purpose
+      changed[3].ownerTerminal[ordinal].purpose = purpose
+      failure(changed, 'ACTUAL_OWNER_IDENTITY_MISMATCH')
+    }
+    const notes = continuityResults(dir)
+    const notesExtra = structuredClone(notes[0].attempts[0])
+    notesExtra.attemptId = 'candidate:0-notes-extra'; notesExtra.binding.actual.attemptId = '0-notes-extra'
+    notesExtra.binding.actual.purpose = 'chapter-draft-condense'
+    notes[0].attempts.splice(1, 0, notesExtra)
+    notes[0].ownerTerminal.splice(1, 0, { ...notes[0].ownerTerminal[0], attemptId: '0-notes-extra', purpose: 'chapter-draft-condense' })
+    notes[0].syntheticDispatches += 1
+    failure(notes, 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+    // 压缩是普通可记账物理 attempt：调用计数必须包含它。
+    const uncounted = condensed()
+    uncounted[3].syntheticDispatches = 1
+    failure(uncounted, 'PHYSICAL_CALL_COUNT_MISMATCH')
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('c16-c18 v2 场景逐字登记唯一压缩策略，历史 v1 与任何放宽都拒绝', () => {
+  const selection = selectPhase(protocol, 'c16-c18', 'final')
+  const scenario = PHASE_SCENARIOS['c16-c18']
+  assert.equal(selection.scenarioRevision, 'c16-c18-candidate-production-path-v2')
+  assert.deepEqual(selection.attemptPolicy, C16_C18_ATTEMPT_POLICY)
+  assert.equal(scenario.attemptPolicy, C16_C18_ATTEMPT_POLICY)
+  assertScenarioMatchesProtocol(selection, scenario, semanticPath)
+  assert.match(selection.stopPolicy.repair, /唯一一次chapter-draft-condense/)
+  assert.match(selection.stopPolicy.repair, /不获新的重试权/)
+  assert.match(selection.stopPolicy.attemptAccounting, /登记的唯一压缩/)
+  for (const mutate of [
+    value => { value.scenarioRevision = 'c16-c18-candidate-production-path-v1' },
+    value => { delete value.attemptPolicy },
+    value => { value.attemptPolicy.draftCondense.maxCondenseAttempts = 2 },
+    value => { value.attemptPolicy.draftCondense.operationIds.push('定稿章节要点') },
+    value => { value.attemptPolicy.draftCondense.condensePurpose = 'chapter-draft-continuation' },
+    value => { value.attemptPolicy.draftCondense.formalEffect = 'any-attempt' },
+    value => { value.attemptPolicy.arms.push('baseline') },
+  ]) {
+    const changed = structuredClone(selection)
+    mutate(changed)
+    assert.throws(() => assertScenarioMatchesProtocol(changed, scenario, semanticPath), /SCENARIO_PROTOCOL_MISMATCH/)
+    // 生产桥入口在建任何目录前同样逐字比对。
+    assert.throws(() => runProductionPhasePair({}, { phase: 'c16-c18', scenarioRevision: changed.scenarioRevision,
+      attemptPolicy: changed.attemptPolicy ?? null }), /SCENARIO_PROTOCOL_MISMATCH/)
+  }
+  // 其他阶段的策略保持原样：full 与 early-review 仍没有额外尝试权，early-budget 仍只有原两类修复。
+  assert.equal(PHASE_SCENARIOS.full.attemptPolicy, undefined)
+  assert.equal(PHASE_SCENARIOS['early-review'].attemptPolicy, undefined)
+  assert.deepEqual(Object.keys(PHASE_SCENARIOS['early-budget'].attemptPolicy).sort(),
+    ['arms', 'maxRepairAttempts', 'milestone', 'operationId', 'primaryPurpose', 'repairPurpose', 'reviewRebuild'])
+})
+
+test('C16 ccc70b31 段（第433–507行）加性登记两次 C16–C18 失败与一次 post-UI，之后严格按当前协议', () => {
+  const boundary = protocol.historicalC16Ccc70b31Boundary
+  assert.deepEqual([boundary.fromEventCount, boundary.eventCount, boundary.reserveAttempts.length],
+    [protocol.historicalC16Ee3435ecBoundary.eventCount, 507, 25])
+  assert.equal(boundary.protocolRevision, protocolBinding.protocolRevision)
+  assert.equal(boundary.protocolHash, '7f4206ca8fe137d72f2cafb0c9c739147e6f295caa06c08d5a3d44a0d7167092')
+  assert.notEqual(boundary.protocolHash, protocolBinding.protocolHash, '新协议字节必须与被取代的 hash 不同')
+  assert.deepEqual(Object.keys(boundary.armBindings), ['baseline', 'candidate'])
+  assert.equal(boundary.armBindings.candidate.codeSha, 'ccc70b314744ab7a969c1f4f068e6596a1c37a7b')
+  assert.deepEqual([...new Set(boundary.reserveAttempts.map(item => item.invocationId))],
+    ['9cbac025-272e-489a-986a-e3fdf2568a04', 'ae397af2-216d-4014-bb89-4b50ac72ae03', '24c90aec-80c8-411a-85b0-783c824ae7af'])
+  assert.ok(boundary.reserveAttempts.every(item => item.terminal === 'settle'
+    && (item.attemptId.startsWith('baseline:') ? item.parityId === undefined : /^[a-f0-9]{64}$/.test(item.parityId))))
+  // 真实账本只读认证：注册的活动工作树存在时，用当前协议的全部边界链回放，不写任何一行。
+  const porcelain = spawnSync('git', ['-C', ROOT, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' })
+  let ledger = null
+  try { ledger = path.join(registeredCampaignWorktree(porcelain.stdout), '.runtime/.cache/novel-quality-modernization/physical-ledger.jsonl') } catch { ledger = null }
+  if (ledger && fs.existsSync(ledger)) {
+    const before = fs.readFileSync(ledger)
+    assert.equal(validatePhysicalLedger(ledger), path.resolve(ledger))
+    const raw = before.toString('utf8')
+    let from = validateHistoricalLedgerBoundary(raw, protocol.historicalLedgerBoundary)
+    for (const name of ['historicalSupersessionBoundary', 'historicalReviewedDraftBoundary', 'historicalReviewRebuildBoundary',
+      'historicalS14BSplitBoundary', 'historicalPostUi408Boundary', 'historicalC16Ee3435ecBoundary', 'historicalC16Ccc70b31Boundary'])
+      from = validateHistoricalSupersessionBoundary(raw, from, protocol[name])
+    assert.equal(from, 507)
+    assert.ok(fs.readFileSync(ledger).equals(before), 'REAL_LEDGER_MUST_STAY_READ_ONLY')
+  }
+  // 合成账本：登记为历史时第508行起的当前 reserve 通过；未登记则同一段按当前协议被拒。
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/ccc70b31-boundary-'))
+  try {
+    const file = path.join(dir, 'synthetic-ledger.jsonl')
+    const envelope = { campaignId: CAMPAIGN_ID, mode: 'synthetic', phase: 'c16-c18', milestone: 'final', caseId: 'C17-A', operation: '本地恢复后续写' }
+    const old = { protocolRevision: boundary.protocolRevision, protocolHash: boundary.protocolHash }
+    const attempts = [['candidate:294b7c84-0000-4000-8000-000000000001', '9'], ['baseline:4f82aefe-0000-4000-8000-000000000002', null]]
+      .map(([attemptId, parity]) => ({ attemptId, invocationId: '9cbac025-272e-489a-986a-e3fdf2568a04', terminal: 'settle',
+        ...(parity ? { parityId: parity.repeat(64) } : {}) }))
+    const armBindings = { baseline: { codeSha: '1'.repeat(40), sourceHash: '2'.repeat(64), driverHash: '3'.repeat(64), parityId: '4'.repeat(64) },
+      candidate: { codeSha: '5'.repeat(40), sourceHash: '6'.repeat(64), driverHash: '3'.repeat(64) } }
+    const rows = attempts.flatMap(item => {
+      const arm = item.attemptId.split(':')[0]
+      return [{ type: 'reserve', attemptId: item.attemptId, binding: { ...envelope, arm, ...armBindings[arm], ...old,
+        ...(item.parityId ? { parityId: item.parityId } : {}), invocationId: item.invocationId }, allocation: 'C17C18RestoreContinue' },
+      { type: 'dispatch', attemptId: item.attemptId }, { type: 'settle', attemptId: item.attemptId, finishReason: 'stop' }]
+    })
+    const raw = rows.map(JSON.stringify).join('\n') + '\n'
+    const registered = { fromEventCount: 0, eventCount: 6, rawBytesSha256: hash(raw), ...old, armBindings, reserveAttempts: attempts }
+    assert.equal(validateHistoricalSupersessionBoundary(raw, 0, registered), 6)
+    const current = { ...envelope, arm: 'candidate', codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(),
+      parityId: 'c'.repeat(64), ...currentProtocolBinding(),
+      actual: { attemptId: 'a', runId: 'r', rootActionId: 'root', projectId: 'p', epoch: 'e' } }
+    fs.writeFileSync(file, raw)
+    assert.doesNotThrow(() => updateLedger(file, { type: 'reserve', attemptId: 'after-ccc70b31', binding: current },
+      { campaignMode: 'synthetic', historicalC16Ccc70b31Boundary: registered }))
+    assert.throws(() => updateLedger(file, { type: 'dispatch', attemptId: 'after-ccc70b31' }, { campaignMode: 'synthetic' }), /PROTOCOL_DRIFT/)
+    // 边界内的字节、终态或身份被改，均拒绝。
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw.replace('"settle"', '"unknown"'), 0, registered), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 0, { ...registered,
+      armBindings: { ...armBindings, candidate: { ...armBindings.candidate, codeSha: 'ccc70b314744ab7a969c1f4f068e6596a1c37a7b' } } }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 0, { ...registered, protocolHash: protocolBinding.protocolHash }),
+      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('full registers six planning calls and eighteen chapters in frozen alternating order', () => {
   const scenario = PHASE_SCENARIOS.full
   assert.ok(scenario, 'FULL_SCENARIO_MISSING')
@@ -465,6 +776,7 @@ test('draft reads this arm committed blueprint into ChapterInfo before generatio
       ['chapter-draft', '【本章信息】', '【后续章节大纲预告】'],
       ['chapter-draft-continuation', '【本章蓝图】', '【全局写作要求】'],
       ['chapter-draft-no-progress-recovery', '【本章蓝图】', '【全局写作要求】'],
+      ['chapter-draft-condense', '【本章蓝图】', '【全局写作要求】'],
     ]) {
       const prompt = info => `${authorMaterial}\n\n${heading}\n${JSON.stringify(info, null, 4)}\n\n${next}\n后续内容`
       assert.equal(sandbox.draftPromptIncludesCommittedBlueprint(prompt(oldInfo), actual, purpose), false,
@@ -474,6 +786,19 @@ test('draft reads this arm committed blueprint into ChapterInfo before generatio
       assert.equal(sandbox.draftPromptIncludesCommittedBlueprint(prompt({ ...sent, chapterNumber: '1' }), actual, purpose), false)
       assert.equal(sandbox.draftPromptIncludesCommittedBlueprint(prompt({ ...sent, characters: '林澄,沈岸' }), actual, purpose), false)
     }
+    // 压缩请求不能只带蓝图后直接接待压缩正文而缺少全局写作要求；未登记用途一律拒绝。
+    const condenseSent = { ...actual }
+    delete condenseSent.projectPath
+    delete condenseSent.wordsTarget
+    const blueprintBlock = next => `前置\n【本章蓝图】\n${JSON.stringify(condenseSent)}\n\n${next}\n正文`
+    assert.equal(sandbox.draftPromptIncludesCommittedBlueprint(blueprintBlock('【全局写作要求】'), actual, 'chapter-draft-condense'), true)
+    assert.equal(sandbox.draftPromptIncludesCommittedBlueprint(blueprintBlock('【待压缩正文】'), actual, 'chapter-draft-condense'), false)
+    assert.equal(sandbox.draftPromptIncludesCommittedBlueprint(blueprintBlock('【全局写作要求】'), actual, 'chapter-draft-rewrite'), false)
+    // 产品删去空的【后续章节大纲预告】整段后，初始请求的蓝图块止于下一个标题；夹带非 JSON 文本仍拒绝。
+    const initialBlock = next => `前置\n【本章信息】\n${JSON.stringify(condenseSent, null, 2)}\n\n${next}\n正文`
+    assert.equal(sandbox.draftPromptIncludesCommittedBlueprint(initialBlock('【网文连载更新核心法则】'), actual, 'chapter-draft'), true)
+    assert.equal(sandbox.draftPromptIncludesCommittedBlueprint(initialBlock('补充说明\n【后续章节大纲预告】'), actual, 'chapter-draft'), false)
+    assert.equal(sandbox.draftPromptIncludesCommittedBlueprint(initialBlock('【网文连载更新核心法则】'), actual, 'chapter-draft-continuation'), false)
     db.prepare('INSERT INTO blueprints VALUES(?,?,?,?,?,?,?,?)').run(3, '作者预置第三章', '发展', '依据证据选择',
       '留下后果', '["林澄"]', '', '本章时点：翌日清晨')
     const preset = sandbox.readCommittedDraftChapterInfo(db, { number: 3, targetUnits: 2000 }, '/this-arm/project', '本章时点：翌日清晨')
@@ -1341,7 +1666,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
   const file = path.join(dir, 'synthetic-ledger.jsonl')
   const archive = ['historicalSupersessionBoundary', 'historicalReviewedDraftBoundary',
     'historicalReviewRebuildBoundary', 'historicalS14BSplitBoundary', 'historicalPostUi408Boundary',
-    'historicalC16Ee3435ecBoundary']
+    'historicalC16Ee3435ecBoundary', 'historicalC16Ccc70b31Boundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -1397,6 +1722,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 345, real.boundaries.historicalS14BSplitBoundary), 390)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 390, real.boundaries.historicalPostUi408Boundary), 408)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 408, real.boundaries.historicalC16Ee3435ecBoundary), 432)
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 432, real.boundaries.historicalC16Ccc70b31Boundary), 507)
     assert.equal(validatePhysicalLedger(ledger), ledger)
     fs.writeFileSync(file, synthetic.raw)
     const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
