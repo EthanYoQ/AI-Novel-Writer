@@ -1,4 +1,4 @@
-import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_VISIBLE_TEXT_VERSION } from '../../../shared/draft-visible-text'
+import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, DRAFT_VISIBLE_TEXT_VERSION } from '../../../shared/draft-visible-text'
 export { sanitizeDraftText } from '../../../shared/draft-visible-text'
 import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationRequest } from '../workflow-main-generation'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
@@ -377,6 +377,67 @@ function draftTooShortError(
   ))
 }
 
+/**
+ * 本章篇幅合同：门禁仍是 draftTargetUnitRange（±30%）；这里只向模型给出更紧的写作目标，
+ * 并明确上限是会被退回的硬上限。初始生成、自动续写与压缩修订共用同一措辞。
+ */
+function chapterLengthContractText(writingLanguage: WritingLanguage, targetUnits: number): string {
+  const { minimum, maximum } = draftTargetUnitRange(targetUnits)
+  const aimLow = Math.round(targetUnits * 0.85)
+  return promptLanguageText(
+    writingLanguage,
+    `【本章篇幅合同】\n目标 ${targetUnits} 字（按汉字计，不含标点）；请写到约 ${aimLow}–${targetUnits} 字。${maximum} 字是硬上限，超过即被退回；少于 ${minimum} 字同样会被退回。篇幅紧张时，压缩描写与过渡、减少场景数量，而不是删掉必需事件；本章蓝图中的全部作者任务和必需事件都要落实，不得删除、改写或截断，也不要为凑字数增加无关内容。`,
+    `[Chapter length contract]\nTarget: ${targetUnits} words (counted as words, excluding punctuation); aim for about ${aimLow}-${targetUnits} words. ${maximum} words is a hard ceiling: drafts beyond it are rejected, and drafts under ${minimum} words are rejected too. When space is tight, compress description and transitions and use fewer scenes rather than dropping required events; realize every author task and required event in the chapter blueprint without deleting, rewriting, or truncating them, and do not add unrelated content to fill space.`,
+  )
+}
+
+/** 自动续写与压缩修订共用的作者资料块：本章蓝图、全局写作要求、文风、小说配置事实与章节材料。 */
+function draftAuthorMaterialBlock(writingLanguage: WritingLanguage, material: {
+  chapterInfo: WriterChapterInfo
+  globalGuidance: string
+  writingStyle: string
+  novelConfigFacts: string
+  chapterMaterials: string
+}): string {
+  return promptLanguageText(
+    writingLanguage,
+    `【本章蓝图】
+${JSON.stringify(material.chapterInfo, null, 2)}
+
+【全局写作要求】
+${material.globalGuidance}
+
+【文风要求】
+${material.writingStyle || '（无）'}
+
+【文风适用边界】
+- 文风仅用于选择表达方式，不是新增事实或事件要求；无需逐条强行兑现。
+- 作者明确事实与指导、实际前文、本章关键因果和本章篇幅优先。不得用文风改写这些内容或仅为兑现文风增加场景、动作或事件；不得把作者明确事实或要求降格为推测。
+
+【小说配置事实】
+${material.novelConfigFacts}
+
+${material.chapterMaterials}`,
+    `[Current chapter blueprint]
+${JSON.stringify(material.chapterInfo, null, 2)}
+
+[Project-wide writing guidance]
+${material.globalGuidance}
+
+[Writing style]
+${material.writingStyle || '(none)'}
+
+[Writing-style applicability]
+- Writing style selects expression only; it adds no facts or events, and not every item must be forced into the manuscript.
+- Explicit author facts and guidance, actual prior prose, the chapter's key causality, and its target length take priority. Do not use style guidance to rewrite them, relabel explicit author facts or requirements as guesses, or add scenes, actions, or events merely to satisfy style guidance.
+
+[Novel configuration facts]
+${material.novelConfigFacts}
+
+${material.chapterMaterials}`,
+  )
+}
+
 function recoveryChapterSource(chapter: ChapterInfo): RecoveryChapterSource {
   return {
     chapterNumber: chapter.chapterNumber,
@@ -584,7 +645,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       const unavailableContext = promptLanguageText(writingLanguage, '（知识库检索不可用）', '(knowledge-base search unavailable)')
       knowledgeReferences = [{ text: unavailableContext, rendered: unavailableContext }]
     }
-    const { minimum: lowerTargetChars, maximum: upperTargetChars } = draftTargetUnitRange(targetChars)
+    const chapterLengthContract = chapterLengthContractText(writingLanguage, targetChars)
     const promptBuilder = new ChapterPromptBuilder(template, writingLanguage)
       // ---- 缓存命中区（跨章稳定，前缀对齐）----
       .withArchitecture(architecture)
@@ -708,11 +769,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         `  Optional material coverage gaps: ${chapterMaterials.omissions.length}`,
       ))
     }
-    const chapterLengthContract = promptLanguageText(
-      writingLanguage,
-      `【本章篇幅合同】\n用户目标 ${targetChars} 字；可接受范围 ${lowerTargetChars}–${upperTargetChars} 字（±30%）。在此篇幅内完整落实本章蓝图中的全部作者任务和必需事件；不得为满足篇幅而删除、改写或截断这些要求，不要为凑字数增加无关内容。`,
-      `[Chapter length contract]\nThe user's target is ${targetChars} words; the acceptable range is ${lowerTargetChars}-${upperTargetChars} words (±30%). Within this length, fully realize every author task and required event in the chapter blueprint; do not delete, rewrite, or truncate those requirements to meet the range, and do not add unrelated content just to fill space.`,
-    )
     const executionItems = [
       { zhCN: '必需事件', enUS: 'Required events', value: this.chapterInfo.keyEvents },
       { zhCN: '章节钩子', enUS: 'Chapter hook', value: this.chapterInfo.suspenseHook },
@@ -926,7 +982,26 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             onRecoverableCandidate: candidate => { recoverableDraftCandidate = candidate },
           })
           recoverableDraftCandidate = completedDraft
-          return completedDraft
+          const lengthCheckedDraft = await this.condenseDraftIfNeeded({
+            session: draftingSession,
+            acknowledge,
+            signal: cancellation.signal,
+            draft: completedDraft,
+            alreadyAttempted: recovery?.attemptedPurposes.includes(DRAFT_CONDENSE_PURPOSE) === true,
+            targetChars,
+            callbacks,
+            context,
+            systemRole: promptBuilder.getSystemRole(),
+            chapterInfo: writerChapterInfo,
+            globalGuidance: mergedGuidance,
+            writingStyle,
+            novelConfigFacts: novelConfigFactsJson,
+            chapterMaterials: chapterMaterials.text,
+            chapterExecutionCard,
+            writingLanguage,
+          })
+          recoverableDraftCandidate = lengthCheckedDraft
+          return lengthCheckedDraft
         })
         }
       } catch (error) {
@@ -1216,7 +1291,11 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         `  Auto-continuation ${rounds}: currently about ${currentChars}/${params.targetChars} units`,
       ))
 
+      // 续写额度：未到目标时补足剩余篇幅；已到目标（长度截断）时只允许补完断句并收束。两者都不得越过门禁上限。
+      const range = draftTargetUnitRange(params.targetChars)
       const remaining = Math.max(0, params.targetChars - currentChars)
+      const ceiling = Math.max(0, range.maximum - currentChars)
+      const allowance = remaining > 0 ? Math.min(remaining, ceiling) : Math.min(150, ceiling)
       const visibleTail = sanitizeDraftText(draft).slice(-CONTINUE_PROMPT_MAX_CHARS)
       const recoveryInstruction = recoveryPending
         ? promptLanguageText(
@@ -1227,6 +1306,19 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
               + 'This is the only no-progress recovery attempt: advance directly to the next event, action, or line of dialogue without repeating the existing ending.\n\n',
           )
         : ''
+      const lengthInstruction = remaining > 0
+        ? promptLanguageText(
+            params.writingLanguage,
+            `- 本次续写补足约 ${allowance} 字即可，新增部分绝不超过 ${ceiling} 字；接近时按本章结束状态收束，停在完整句子和自然段落末尾。`,
+            `- Add about ${allowance} words in this continuation and never more than ${ceiling}; as you approach that length, close at the chapter's ending state and stop at the end of a complete sentence and paragraph.`,
+          )
+        : promptLanguageText(
+            params.writingLanguage,
+            `- 本章已达到目标篇幅：只补完被截断的句子并收束当前场景，新增部分约 ${allowance} 字以内、绝不超过 ${ceiling} 字，不要展开新事件。`,
+            `- The chapter has reached its target length: only finish the truncated sentence and close the current scene in about ${allowance} words or fewer, never more than ${ceiling}; do not start new events.`,
+          )
+      const authorMaterial = draftAuthorMaterialBlock(params.writingLanguage, params)
+      const lengthContract = chapterLengthContractText(params.writingLanguage, params.targetChars)
       const continuationPrompt = promptLanguageText(
         params.writingLanguage,
         `${recoveryInstruction}请无缝续写当前章节正文。
@@ -1234,28 +1326,14 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 【硬性要求】
 - 只输出新增正文，不要复述已写内容。
 - 从“已写正文末尾”自然接下去，保持同一场景逻辑或合理转场。
-- 本次续写尽可能完成剩余约 ${remaining} 字；如果无法达到，停在自然段落末尾。
+${lengthInstruction}
 - 不要输出标题、解释、总结、Markdown、思考过程或“点我继续”。
 - 避免重复已写正文中的整句、整段、动作链和意象。
 - 不提前写后续章节，只完成本章蓝图允许的内容。
 
-【本章蓝图】
-${JSON.stringify(params.chapterInfo, null, 2)}
+${lengthContract}
 
-【全局写作要求】
-${params.globalGuidance}
-
-【文风要求】
-${params.writingStyle || '（无）'}
-
-【文风适用边界】
-- 文风仅用于选择表达方式，不是新增事实或事件要求；无需逐条强行兑现。
-- 作者明确事实与指导、实际前文、本章关键因果和本章篇幅优先。不得用文风改写这些内容或仅为兑现文风增加场景、动作或事件；不得把作者明确事实或要求降格为推测。
-
-【小说配置事实】
-${params.novelConfigFacts}
-
-${params.chapterMaterials}
+${authorMaterial}
 
 【已写正文末尾】
 ${visibleTail}`,
@@ -1264,28 +1342,14 @@ ${visibleTail}`,
 [Requirements]
 - Output only new manuscript prose; do not repeat existing text.
 - Continue naturally from the existing ending, preserving the same scene logic or making a justified transition.
-- Complete as much as possible of the remaining approximately ${remaining} words; if that is not possible, stop at a natural paragraph boundary.
+${lengthInstruction}
 - Do not output a title, explanation, summary, Markdown, reasoning, or an interface continuation prompt.
 - Avoid repeating complete sentences, paragraphs, action sequences, or imagery from the existing manuscript.
 - Complete only the current chapter blueprint; do not advance later chapters.
 
-[Current chapter blueprint]
-${JSON.stringify(params.chapterInfo, null, 2)}
+${lengthContract}
 
-[Project-wide writing guidance]
-${params.globalGuidance}
-
-[Writing style]
-${params.writingStyle || '(none)'}
-
-[Writing-style applicability]
-- Writing style selects expression only; it adds no facts or events, and not every item must be forced into the manuscript.
-- Explicit author facts and guidance, actual prior prose, the chapter's key causality, and its target length take priority. Do not use style guidance to rewrite them, relabel explicit author facts or requirements as guesses, or add scenes, actions, or events merely to satisfy style guidance.
-
-[Novel configuration facts]
-${params.novelConfigFacts}
-
-${params.chapterMaterials}
+${authorMaterial}
 
 [End of existing manuscript]
 ${visibleTail}`,
@@ -1304,7 +1368,7 @@ ${visibleTail}`,
             : 'chapter-draft-continuation',
           reasoningStage: 'drafting',
           output: 'visible-text',
-          budgetDemand: { kind: 'draft-units', writingLanguage: params.writingLanguage, requestedUnits: Math.max(1, remaining), segmentable: false },
+          budgetDemand: { kind: 'draft-units', writingLanguage: params.writingLanguage, requestedUnits: Math.max(1, allowance), segmentable: false },
           messages: [
             { role: 'system', content: params.systemRole },
             { role: 'user', content: continuationPrompt },
@@ -1404,6 +1468,110 @@ ${visibleTail}`,
     if (draftUnits < lowerBound) throw draftTooShortError(params.context, draftUnits, params.targetChars)
 
     return draft
+  }
+
+  /**
+   * 超出篇幅上限时，经同一生成会话做唯一一次压缩修订。压缩稿落入可接受范围且完整结束才采用；
+   * 否则（仍越界、未完整结束或请求失败）原样返回原稿，由保存前的篇幅门禁按原语义暂停并报错。
+   */
+  private async condenseDraftIfNeeded(params: {
+    session: GenerationSession
+    acknowledge: (outcome: GenerationOutcome, text: string) => Promise<void>
+    signal: AbortSignal
+    draft: string
+    alreadyAttempted: boolean
+    targetChars: number
+    callbacks: CommandExecuteParams['callbacks']
+    context: CommandExecuteParams['context']
+    systemRole: string
+    chapterInfo: WriterChapterInfo
+    globalGuidance: string
+    writingStyle: string
+    novelConfigFacts: string
+    chapterMaterials: string
+    chapterExecutionCard: string
+    writingLanguage: WritingLanguage
+  }): Promise<string> {
+    const uiText = (zhCNText: string, enUSText: string) => workflowUiText(params.context, zhCNText, enUSText)
+    const range = draftTargetUnitRange(params.targetChars)
+    const originalUnits = countDraftUnits(params.draft)
+    if (originalUnits <= range.maximum || params.alreadyAttempted || params.context.cancelled) return params.draft
+    params.callbacks.log(uiText(
+      `  正文约 ${originalUnits} 字，超出可接受上限 ${range.maximum} 字，执行唯一一次压缩修订`,
+      `  Draft is about ${originalUnits} units, above the acceptable maximum of ${range.maximum}; running the single condense revision`,
+    ))
+    // 顺序：任务与硬性要求 → 与续写相同的作者资料块 → 篇幅合同 → 执行卡 → 待压缩正文。
+    const authorMaterial = draftAuthorMaterialBlock(params.writingLanguage, params)
+    const lengthContract = chapterLengthContractText(params.writingLanguage, params.targetChars)
+    const executionCard = params.chapterExecutionCard ? `${params.chapterExecutionCard}\n\n` : ''
+    const condensePrompt = promptLanguageText(
+      params.writingLanguage,
+      `请把下面的本章正文压缩修订到可接受篇幅内，输出修订后的完整正文。
+
+【硬性要求】
+- 修订后正文须在 ${range.minimum}–${range.maximum} 字之间，按下方篇幅合同写到约 ${Math.round(params.targetChars * 0.85)}–${params.targetChars} 字。
+- 保留本章蓝图中的全部必需事件、作者任务和情节事实，保留人物身份与关系，保留本章结尾的收束与钩子。
+- 只通过删减冗余描写、重复动作、重复心理和啰嗦对话来缩短；不得新增情节、人物、设定或事实，不得改变事件顺序与因果。
+- 只输出修订后的完整正文；不要输出标题、解释、总结、Markdown、思考过程或“点我继续”。
+
+${authorMaterial}
+
+${lengthContract}
+
+${executionCard}【待压缩正文】
+${params.draft}`,
+      `Condense the chapter manuscript below into the acceptable length and output the complete revised manuscript.
+
+[Requirements]
+- The revised manuscript must be between ${range.minimum} and ${range.maximum} words; following the length contract below, aim for about ${Math.round(params.targetChars * 0.85)}-${params.targetChars} words.
+- Keep every required event, author task, and plot fact from the chapter blueprint, keep character identities and relationships, and keep the chapter ending and hook.
+- Shorten only by cutting redundant description, repeated actions, repeated introspection, and wordy dialogue; do not add plot, characters, setting, or facts, and do not change event order or causality.
+- Output only the complete revised manuscript; do not output a title, explanation, summary, Markdown, reasoning, or an interface continuation prompt.
+
+${authorMaterial}
+
+${lengthContract}
+
+${executionCard}[Manuscript to condense]
+${params.draft}`,
+    )
+    let condensed: string
+    try {
+      const outcome = await params.session.complete({
+        purpose: DRAFT_CONDENSE_PURPOSE,
+        reasoningStage: 'drafting',
+        output: 'visible-text',
+        budgetDemand: { kind: 'draft-units', writingLanguage: params.writingLanguage, requestedUnits: params.targetChars, segmentable: false },
+        messages: [
+          { role: 'system', content: params.systemRole },
+          { role: 'user', content: condensePrompt },
+        ],
+      }, { signal: params.signal })
+      logDraftAttempt(params.callbacks, params.context, { zhCN: '压缩修订', enUS: 'Condense revision' }, outcome.receipt)
+      condensed = sanitizeDraftText(this.stripThinkingTags(outcome.content))
+      const units = countDraftUnits(condensed)
+      const accepted = outcome.finishReason === 'stop' && units >= range.minimum && units <= range.maximum
+      params.callbacks.log(uiText(
+        `  压缩修订响应结束：finishReason=${outcome.finishReason} visibleUnits=${units} accepted=${accepted}`,
+        `  Condense revision response ended: finishReason=${outcome.finishReason} visibleUnits=${units} accepted=${accepted}`,
+      ))
+      if (!accepted) {
+        params.callbacks.replaceText?.(params.draft)
+        return params.draft
+      }
+      this.assertNotCancelled(params.context)
+      await params.acknowledge(outcome, condensed)
+    } catch (error) {
+      if (params.context.cancelled || params.signal.aborted) throw error
+      params.callbacks.log(uiText(
+        `  压缩修订未完成，保留原稿：${error instanceof Error ? error.message : String(error)}`,
+        `  Condense revision did not complete; keeping the original draft: ${error instanceof Error ? error.message : String(error)}`,
+      ))
+      params.callbacks.replaceText?.(params.draft)
+      return params.draft
+    }
+    params.callbacks.replaceText?.(condensed)
+    return condensed
   }
 
   // --- 抽取自原文件的辅助方法 ---

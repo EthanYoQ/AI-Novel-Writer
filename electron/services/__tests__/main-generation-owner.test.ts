@@ -614,6 +614,57 @@ describe('main draft persistence and batch lineage', () => {
     expect(reopened.readVisibleComposition(resumed.handle)?.text).toBe(draftText.repeat(2))
     expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
+  it('composes the single condense revision as a replacement of the oversized draft and commits it', async () => {
+    const texts = [draftText.repeat(2), draftText]
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: texts.shift()! })
+      return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch)
+    const generated = await generate({ ...f, fixture: f, dispatch }, { ...f.begin, authorInputs })
+    expect(() => f.owner.commitDraft(generated.request)).toThrow('GENERATION_DRAFT_LENGTH_OUT_OF_RANGE')
+    const condense = await f.owner.execute({ handle: generated.run.handle, invocationNonce: 'draft:condense',
+      task: { ...task, purpose: 'chapter-draft-condense' } })
+    const condensedId = condense.run.artifacts.at(-1)!.artifactId
+    expect(() => f.owner.composeVisible(generated.run.handle, [condensedId], textHash(draftText), 'draft-visible-v1'))
+      .toThrow('GENERATION_COMPOSITION_SOURCE_INVALID')
+    const composed = f.owner.composeVisible(generated.run.handle, [generated.raw.artifactId, condensedId], textHash(draftText), 'draft-visible-v1')
+    expect(composed.text).toBe(draftText)
+    const saved = f.owner.commitDraft({ ...generated.request, expectedCompositionHash: textHash(draftText) })
+    expect(saved.content).toBe(draftText)
+    expect(f.owner.readContext(generated.run.handle).attemptedPurposes).toEqual(['chapter-draft', 'chapter-draft-condense'])
+    expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+  })
+  it('refuses a condense revision that does not shorten the composed draft', async () => {
+    const texts = [draftText, `${draftText}城门外的风更紧了。`]
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: texts.shift()! })
+      return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch)
+    const generated = await generate({ ...f, fixture: f, dispatch }, { ...f.begin, authorInputs })
+    const condense = await f.owner.execute({ handle: generated.run.handle, invocationNonce: 'draft:condense',
+      task: { ...task, purpose: 'chapter-draft-condense' } })
+    const longer = `${draftText}城门外的风更紧了。`
+    expect(() => f.owner.composeVisible(generated.run.handle, [generated.raw.artifactId, condense.run.artifacts.at(-1)!.artifactId],
+      textHash(longer), 'draft-visible-v1')).toThrow('GENERATION_COMPOSITION_NO_PROGRESS')
+    expect(f.owner.readVisibleComposition(generated.run.handle)?.text).toBe(draftText)
+  })
+  it('refuses a condense revision that replaces a draft already within the frozen target maximum', async () => {
+    const shorter = '清晨的街道渐渐苏醒，林岚走向城门。'
+    const texts = [draftText, shorter]
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: texts.shift()! })
+      return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch)
+    const generated = await generate({ ...f, fixture: f, dispatch }, { ...f.begin, authorInputs })
+    const condense = await f.owner.execute({ handle: generated.run.handle, invocationNonce: 'draft:condense',
+      task: { ...task, purpose: 'chapter-draft-condense' } })
+    expect(() => f.owner.composeVisible(generated.run.handle, [generated.raw.artifactId, condense.run.artifacts.at(-1)!.artifactId],
+      textHash(shorter), 'draft-visible-v1')).toThrow('GENERATION_COMPOSITION_NO_PROGRESS')
+    expect(f.owner.readVisibleComposition(generated.run.handle)?.text).toBe(draftText)
+  })
   it.each([
     [1399, 'GENERATION_DRAFT_INCOMPLETE'],
     [1400, null],

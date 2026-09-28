@@ -667,8 +667,7 @@ Output JSON only, with no Markdown, explanation, or reasoning.`,
 [Chapter brief]
 {{chapter_info}}
 
-[Upcoming chapter blueprints]
-Use these only to understand later turning points. Do not reveal or advance them in this chapter.
+[Upcoming chapter blueprints — use only to understand later turning points; do not reveal or advance them in this chapter]
 {{future_blueprints}}
 
 [Project-wide writing guidance]
@@ -697,7 +696,7 @@ Use these only to understand later turning points. Do not reveal or advance them
 - Write approximately {{word_number}} words and cover only the chapter brief. End at the state or hook specified there; when none is specified, end naturally without advancing later blueprints or adding filler.
 - Output plain manuscript prose only. Do not use Markdown, headings, analysis, plans, or screenplay formatting.
 - Separate every paragraph with one blank line. Use standard quotation marks consistently for dialogue.
-- If the target length cannot fit in one response, stop at a natural paragraph boundary without asking the user to continue.
+- As you approach the target length, close at the chapter's specified ending state and do not exceed the target; never ask the user to continue.
 - Keep each character's voice distinct. Avoid paragraph-ending summaries, generic destiny metaphors, and unrelated philosophical conclusions.`,
   },
   next_chapter_draft: {
@@ -713,17 +712,16 @@ Use these only to understand later turning points. Do not reveal or advance them
 [Chapter brief]
 {{chapter_info}}
 
-[Upcoming chapter blueprints]
-Use these only to understand later turning points. Do not reveal or advance them in this chapter.
+[Upcoming chapter blueprints — use only to understand later turning points; do not reveal or advance them in this chapter]
 {{future_blueprints}}
 
 [Knowledge-base context]
 {{filtered_context}}
 
 [Serialization requirements]
-1. [Story memory and previous stopping point] records completed history. [Chapter brief], [Upcoming chapter blueprints], and [Knowledge-base context] do not thereby become completed events. Begin after the previous chapter's final state and advance a new event from this chapter brief. Do not quote, summarize, replay, or restage any sentence, action, or image from the previous ending; also avoid teleporting the scene or abruptly changing viewpoint.
+1. The [Finalized manuscript · Chapter N] passages (and any author-selected [Unfinalized candidate · Chapter N] passages) under [Sourced history and candidates] are prose written before this chapter; the end of the latest one is the previous chapter's completed state. [Chapter brief] and [Future-plan boundary] do not thereby become completed events. Begin after the previous chapter's final state and advance a new event from this chapter brief. Do not quote, summarize, replay, or restage any sentence, action, or image from the previous ending; also avoid teleporting the scene or abruptly changing viewpoint.
 2. Drive the scene through action, expression, sensory detail, and dialogue rather than detached summary.
-3. Use approximately {{word_number}} words to complete this chapter's conflict without filler.
+3. Complete this chapter's conflict without filler.
 4. Use only the ending state or hook explicitly required by the chapter brief. When none is specified, end naturally without inventing an escalation, interruption, or later event.
 5. Follow the project-wide guidance: {{global_guidance}}
 
@@ -742,10 +740,10 @@ Use these only to understand later turning points. Do not reveal or advance them
 {{user_guidance}}
 
 [Output contract]
-- Cover only the chapter brief and stop once its conflict is complete. Do not advance later blueprints.
+- Write approximately {{word_number}} words. Cover only the chapter brief and stop once its conflict is complete; do not pad with filler narration or idle dialogue, and do not advance later blueprints.
 - Output plain manuscript prose only, without headings, Markdown, analysis, plans, or screenplay formatting.
 - Separate every paragraph with one blank line and use quotation marks consistently for dialogue.
-- If the target length cannot fit in one response, stop at a natural paragraph boundary without asking the user to continue.
+- As you approach the target length, close at the chapter's specified ending state and do not exceed the target; never ask the user to continue.
 - Keep character voices distinct and avoid generic paragraph summaries, destiny metaphors, or unrelated philosophical conclusions.`,
   },
 } satisfies Record<CoreLocalizedBuiltinPromptKey, PromptLanguageTemplate> & Record<string, PromptLanguageTemplate>)

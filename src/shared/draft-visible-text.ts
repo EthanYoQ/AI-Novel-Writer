@@ -1,6 +1,8 @@
 import { composeVisibleContinuation } from './visible-continuation'
 
 export const DRAFT_VISIBLE_TEXT_VERSION = 'draft-visible-v1' as const
+/** 超长正文唯一一次压缩修订的尝试用途；主进程组合时以其全文替换此前正文。 */
+export const DRAFT_CONDENSE_PURPOSE = 'chapter-draft-condense' as const
 
 export function stripDraftThinkingTags(text: string): string {
   if (!text) return text

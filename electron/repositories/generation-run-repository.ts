@@ -3,8 +3,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import type { VisibleCompositionReceipt, VisibleCompositionAlgorithm, DirectoryGenerationProgress } from '../../src/shared/generation-owner-contract';
 import { composeVisibleContinuation, VISIBLE_CONTINUATION_VERSION } from '../../src/shared/visible-continuation';
-import { composeDraftVisibleContinuation, sanitizeDraftText } from '../../src/shared/draft-visible-text';
-import { countDraftUnits } from '../../src/shared/draft-units';
+import { composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, sanitizeDraftText } from '../../src/shared/draft-visible-text';
+import { countDraftUnits, draftTargetUnitRange } from '../../src/shared/draft-units';
 import { getProjectDb } from '../database';
 import type { PortableRuntimeFreezeTable } from '../services/portable-runtime-freeze';
 import { assertReservation, assertAttemptTransition, rootActionIdempotencyKey, type RootAction, type RootBudget, type PhysicalAttempt, type VisibleArtifact, type ProviderUsagePolicy } from '../../src/shared/generation-contract';
@@ -232,9 +232,9 @@ export class GenerationRunRepository {
             fail('GENERATION_COMPOSITION_INVALID');
         let text = '', previousOrdinal = -1;
         const sources: VisibleCompositionReceipt['sources'] = [];
-        for (const artifactId of artifactIds) {
-            const row = this.db().prepare('SELECT a.attempt_id,a.run_id,a.status,t.rowid AS ordinal FROM generation_artifacts a JOIN generation_attempts t ON t.attempt_id=a.attempt_id WHERE a.artifact_id=?').get(artifactId) as {
-                attempt_id: string; run_id: string; status: string; ordinal: number;
+        for (const [index, artifactId] of artifactIds.entries()) {
+            const row = this.db().prepare('SELECT a.attempt_id,a.run_id,a.status,t.rowid AS ordinal,t.usage_receipt_json FROM generation_artifacts a JOIN generation_attempts t ON t.attempt_id=a.attempt_id WHERE a.artifact_id=?').get(artifactId) as {
+                attempt_id: string; run_id: string; status: string; ordinal: number; usage_receipt_json: string;
             } | undefined;
             if (!row || row.run_id !== runId || row.status === 'discarded' || row.ordinal <= previousOrdinal)
                 fail('GENERATION_COMPOSITION_SOURCE_INVALID');
@@ -243,14 +243,26 @@ export class GenerationRunRepository {
                 fail('GENERATION_COMPOSITION_SOURCE_NOT_TERMINAL');
             if (!['stop', 'length'].includes(receipt.result?.finishReason ?? ''))
                 fail('GENERATION_COMPOSITION_SOURCE_UNTRUSTED');
-            const next = algorithm === 'draft-visible-v1'
+            // 超长正文的唯一压缩修订：只能作为最后一个来源，以完整结束的全文替换此前正文，且必须真正缩短。
+            const condense = algorithm === 'draft-visible-v1' && JSON.parse(row.usage_receipt_json).purpose === DRAFT_CONDENSE_PURPOSE;
+            if (condense && (!sources.length || index !== artifactIds.length - 1)) fail('GENERATION_COMPOSITION_SOURCE_INVALID');
+            const next = condense ? sanitizeDraftText(artifact.text) : algorithm === 'draft-visible-v1'
                 ? sources.length ? composeDraftVisibleContinuation(text, artifact.text) : sanitizeDraftText(artifact.text)
                 : sources.length ? composeVisibleContinuation(text, artifact.text) : artifact.text.trim();
             if (!next.trim()) fail('GENERATION_COMPOSITION_NO_PROGRESS');
-            if (algorithm === 'draft-visible-v1' && sources.length && receipt.result?.finishReason === 'length'
-                && countDraftUnits(next) - countDraftUnits(text) < 300) fail('GENERATION_COMPOSITION_NO_PROGRESS');
-            if (sources.length && (next.match(/[\p{L}\p{N}]/gu)?.length ?? 0) <= (text.match(/[\p{L}\p{N}]/gu)?.length ?? 0))
-                fail('GENERATION_COMPOSITION_NO_PROGRESS');
+            if (condense) {
+                // 只有被替换的正文确实超过本次运行冻结目标的篇幅上限，才允许压缩修订替换它。
+                const target = Number((this.get(runId).binding.sourceManifest.authorInputs as { id: string; text: string }[] | undefined)
+                    ?.find(item => item.id === 'draft:target-units')?.text);
+                if (!Number.isSafeInteger(target) || target < 1) fail('GENERATION_COMPOSITION_SOURCE_INVALID');
+                if (receipt.result?.finishReason !== 'stop' || countDraftUnits(next) >= countDraftUnits(text)
+                    || countDraftUnits(text) <= draftTargetUnitRange(target).maximum) fail('GENERATION_COMPOSITION_NO_PROGRESS');
+            } else {
+                if (algorithm === 'draft-visible-v1' && sources.length && receipt.result?.finishReason === 'length'
+                    && countDraftUnits(next) - countDraftUnits(text) < 300) fail('GENERATION_COMPOSITION_NO_PROGRESS');
+                if (sources.length && (next.match(/[\p{L}\p{N}]/gu)?.length ?? 0) <= (text.match(/[\p{L}\p{N}]/gu)?.length ?? 0))
+                    fail('GENERATION_COMPOSITION_NO_PROGRESS');
+            }
             text = next; previousOrdinal = row.ordinal;
             sources.push({ artifactId, revision: artifact.revision, textHash: artifact.textHash });
         }
