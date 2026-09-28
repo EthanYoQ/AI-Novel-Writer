@@ -756,3 +756,85 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     }, 'stop')
   })
 })
+
+describe('OpenAIProvider opencode Go compatibility', () => {
+  const opencodeGoModel: ModelProfile = {
+    ...novelAIModel,
+    id: 'opencode-go-test',
+    name: 'OpenCode Go Test',
+    provider: 'custom',
+    modelName: 'deepseek-v4.1-flash',
+    baseUrl: 'https://opencode.ai/zen/go/v1',
+  }
+
+  function responseMock() {
+    return {
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: '正文' }, finish_reason: 'stop' }] }),
+    }
+  }
+
+  function streamMock(...messages: Array<string | Uint8Array>) {
+    return { ok: true, body: { getReader: () => sseReader(...messages) } }
+  }
+
+  it('sends a stable session id and an ai-novel-writer user agent to the opencode Go gateway in normal and streaming requests', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(responseMock())
+      .mockResolvedValueOnce(streamMock('data: [DONE]\n\n'))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new OpenAIProvider().generate(opencodeGoModel, [{ role: 'user', content: '普通正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+    })
+    await new OpenAIProvider().generateStream(opencodeGoModel, [{ role: 'user', content: '流式正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+      signal: new AbortController().signal,
+      onChunk: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    })
+
+    const headersPerCall = fetchMock.mock.calls.map(([, request]) => request.headers as Record<string, string>)
+    const sessionIds = headersPerCall.map(headers => headers['x-opencode-session'])
+    expect(sessionIds).toHaveLength(2)
+    for (const sessionId of sessionIds) {
+      expect(sessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu)
+    }
+    expect(new Set(sessionIds).size).toBe(1)
+    for (const headers of headersPerCall) {
+      expect(headers['User-Agent']).toMatch(/^ai-novel-writer\//u)
+      expect(headers['Authorization']).toBe('Bearer pst-test-token')
+      expect(headers['Content-Type']).toBe('application/json')
+    }
+  })
+
+  it('does not send the opencode Go session header to the pay-per-token Zen gateway', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(responseMock())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new OpenAIProvider().generate(
+      { ...opencodeGoModel, baseUrl: 'https://opencode.ai/zen/v1' },
+      [{ role: 'user', content: '正文' }],
+      { temperature: 0.2, maxTokens: 512 },
+    )
+
+    const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>
+    expect(headers).not.toHaveProperty('x-opencode-session')
+  })
+
+  it('does not send the opencode Go session header to other OpenAI-compatible gateways', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(responseMock())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new OpenAIProvider().generate(fixedTemperatureKimiModel, [{ role: 'user', content: '正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+    })
+
+    const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>
+    expect(headers).not.toHaveProperty('x-opencode-session')
+  })
+})
