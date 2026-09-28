@@ -409,9 +409,39 @@
       { "attemptId": "candidate:a6e474d9-128e-4f3d-ad04-69b6689b1f07", "invocationId": "73b46513-7371-4d9c-8ca1-671e3fd76349", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" }
     ]
   },
+  "historicalC16Fa8806d7Boundary": {
+    "fromEventCount": 648,
+    "eventCount": 690,
+    "rawBytesSha256": "1090745ab998f81e04b5d825c1c49135814700bfbd6f4d46504b6a35f9d6ac5c",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "7a17f36a70fcc5df185528c042f536261532f524e19fa5e266f45df4505701a3",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "8a07eb16b91e2d3e12338aac4619804a8e07e860",
+        "sourceHash": "87cdbbb212ece2cd10bca2d89270dc54c946f9f72ad44d53b95886f848575332",
+        "driverHash": "014f5770a78104f7ffb92dfe8cae9dba6425066eae729d0517a9daed3ff03350"
+      }
+    },
+    "reserveAttempts": [
+      { "attemptId": "candidate:c251831e-de60-4401-ab8d-01c11ef9cb9a", "invocationId": "fa8806d7-5287-4059-82a0-c1c316396067", "terminal": "settle", "parityId": "0432aa7115443372339327b8f723d854dbfaa864356070e6dd782ae217f30a01" },
+      { "attemptId": "candidate:364ea104-1039-48a1-befd-fde13844a864", "invocationId": "fa8806d7-5287-4059-82a0-c1c316396067", "terminal": "settle", "parityId": "0432aa7115443372339327b8f723d854dbfaa864356070e6dd782ae217f30a01" },
+      { "attemptId": "candidate:0fcee39f-91a4-4c1f-92c9-4a9d5166ce78", "invocationId": "fa8806d7-5287-4059-82a0-c1c316396067", "terminal": "settle", "parityId": "712b782db4d9392eb68c3e09c8dc025310b60dca91b32c2d1b739093a6c1f024" },
+      { "attemptId": "candidate:df6d3dfd-e041-4887-bc32-e48d01456ad7", "invocationId": "fa8806d7-5287-4059-82a0-c1c316396067", "terminal": "settle", "parityId": "712b782db4d9392eb68c3e09c8dc025310b60dca91b32c2d1b739093a6c1f024" },
+      { "attemptId": "candidate:17000dc2-44b6-4025-8866-4b0156a14dee", "invocationId": "fa8806d7-5287-4059-82a0-c1c316396067", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:84a0283c-450e-4bf1-b9cd-7c8d2316c77e", "invocationId": "fa8806d7-5287-4059-82a0-c1c316396067", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:107c8e1a-53ac-4f46-a23d-cd60b34d8956", "invocationId": "fa8806d7-5287-4059-82a0-c1c316396067", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:f6787c48-585e-4faf-b009-bd7f48999846", "invocationId": "fa8806d7-5287-4059-82a0-c1c316396067", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:54cc3346-5d13-4179-b1a3-78c6e9a8812c", "invocationId": "fa8806d7-5287-4059-82a0-c1c316396067", "terminal": "settle", "parityId": "4e5b911f3f873ae8e6e564d844bc1b65e601c8137ab49af575af72b36888529c" },
+      { "attemptId": "candidate:673e3370-f068-4819-b104-8f01d57d68a1", "invocationId": "fa8806d7-5287-4059-82a0-c1c316396067", "terminal": "settle", "parityId": "4e5b911f3f873ae8e6e564d844bc1b65e601c8137ab49af575af72b36888529c" },
+      { "attemptId": "candidate:4be1a66d-fb0e-4019-a7d1-df7c1fa6e83b", "invocationId": "fa8806d7-5287-4059-82a0-c1c316396067", "terminal": "settle", "parityId": "4e5b911f3f873ae8e6e564d844bc1b65e601c8137ab49af575af72b36888529c" },
+      { "attemptId": "candidate:370f62e1-46d6-422a-8ee3-b346a0b0c698", "invocationId": "fa8806d7-5287-4059-82a0-c1c316396067", "terminal": "settle", "parityId": "4e5b911f3f873ae8e6e564d844bc1b65e601c8137ab49af575af72b36888529c" },
+      { "attemptId": "candidate:20e3ade1-5946-4606-b7a5-9da32c967e1f", "invocationId": "fa8806d7-5287-4059-82a0-c1c316396067", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:1d0003b3-2eea-496b-98c6-13650c0ce6b1", "invocationId": "fa8806d7-5287-4059-82a0-c1c316396067", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" }
+    ]
+  },
   "phases": {
     "c16-c18": {
-      "scenarioRevision": "c16-c18-candidate-production-path-v4",
+      "scenarioRevision": "c16-c18-candidate-production-path-v5",
       "attemptPolicy": {
         "milestone": "final",
         "arms": ["candidate"],
@@ -422,6 +452,16 @@
           "maxCondenseAttempts": 1,
           "trigger": "primary-settled-stop-hash-verified-units-above-draftTargetUnitRange-maximum",
           "formalEffect": "last-attempt-only"
+        },
+        "draftReconcile": {
+          "operationIds": ["本地恢复后续写", "DAV选定世代恢复后续写"],
+          "purpose": "chapter-draft-reconcile",
+          "maxReconcileAttempts": 1,
+          "position": "first-physical-request-of-operation-run-only",
+          "formalEffect": "none",
+          "composition": "never-composed-never-repaired-not-condense-primary",
+          "finishReasons": ["stop", "length"],
+          "unusableOutput": "recorded-as-unusable-first-draft-prompt-without-injection"
         }
       },
       "arms": ["candidate"],
@@ -442,29 +482,29 @@
         },
         "C17-A": {
           "automatic": ["本地完整归档恢复为新projectId/epoch；原正文、头像、知识原文字节及稳定领域ID保全，源项目不变", "有效author与source-valid derived经transfer来源可读；旧候选/outbox/unknown冻结不可重放，秘密和机器权限不入副本；新草稿正式保存及来源可回读"],
-          "independentReview": ["两名独立评审各引恢复的定稿/notes/cards来源及续写草稿正文：续写承接有效事实、人物、钥匙、知情与时间，不把冻结旧候选当权威"]
+          "independentReview": ["两名独立评审各引恢复的定稿/notes/cards来源及续写草稿正文：续写承接有效事实、人物、钥匙、知情与时间，不把冻结旧候选当权威；硬事实不因计划改变而放宽：第1章异常须仍是“记录上的日期与旧钟不符”（可换措辞、不要求逐字复述，但不得把核查对象替换为另一异常或否认它）、铜钥匙始终由林澄保管（交给他人保管或押出即违规）、雨停前沈岸不知道信封内有地图、清晨发现与第2章同日午后的时点；计划与决定（v5前向修订）：定稿中“原定安排等待雨停”是人物的计划而非禁令；正文写出人物作出新决定及其理由后改变或提前执行计划属正常叙事，不判违规；只有未写出新决定或理由就把原计划当作已执行或已放弃，或与所选来源状态（核查尚未开始）矛盾，才判违规"]
         },
         "C17-B": {
           "automatic": ["恢复副本内正常重新定稿绑定更正后的新来源；重新定稿按产品定稿路径紧接生产后处理，恢复副本重新定稿章节要点/角色状态各经RunFinalizePostProcessCommand对新finalizationId重新生成并持久回读，finalizationEvidence来源须等于替换后来源；旧derived失效，新正式正文与草稿来源可回读，源项目不变", "physicalProject.readback.predecessors记录替换后实际送入的必需前驱：sourceId/revision为新定稿draft、正文hash与字节等于替换正文，且与续写materialDecision实际纳入的来源一致；替换前前驱另记predecessorsBeforeReplacement，不放宽parity绑定", "新草稿由恢复副本当前author及source-valid权威生成；旧任务和旧derived不得重新获执行资格"],
-          "independentReview": ["两名独立评审各引恢复后更正定稿、当前notes/cards及续写草稿正文：林澄撤回旧核查安排，等待新通行许可；旧安排不得被写作已执行事实"]
+          "independentReview": ["两名独立评审各引恢复后更正定稿、当前notes/cards及续写草稿正文：林澄撤回旧核查安排，等待新通行许可；旧安排不得被写作已执行事实；硬事实不因计划改变而放宽：第1章异常须仍是“记录上的日期与旧钟不符”（可换措辞、不要求逐字复述，但不得把核查对象替换为另一异常或否认它）、铜钥匙始终由林澄保管（交给他人保管或押出即违规）、雨停前沈岸不知道信封内有地图、清晨发现与第2章同日午后的时点；计划与决定（v5前向修订）：撤回与等待新通行许可是所选来源状态；正文写出许可到来，或人物作出针对该撤回的新决定并写明理由后再行动，属正常叙事；未写出许可或新决定与理由，就按已撤回的旧安排（如雨停即出发核查）行动或把旧安排写成已执行，判违规"]
         },
         "C18-A": {
           "automatic": ["选定完整DAV世代经原恢复服务成为新项目；归档hash、项目身份、transfer来源与原项目不变可回读", "新项目的续写草稿正式保存且来源指向所选世代；旧任务冻结；离线受控transport结果仅算生产路径接线"],
-          "independentReview": ["两名独立评审各引所选世代定稿/notes/cards及续写草稿正文：续写只承接所选世代的有效人物、物品、知情和时间事实"]
+          "independentReview": ["两名独立评审各引所选世代定稿/notes/cards及续写草稿正文：续写只承接所选世代的有效人物、物品、知情和时间事实；硬事实不因计划改变而放宽：第1章异常须仍是“记录上的日期与旧钟不符”（可换措辞、不要求逐字复述，但不得把核查对象替换为另一异常或否认它）、铜钥匙始终由林澄保管（交给他人保管或押出即违规）、雨停前沈岸不知道信封内有地图、清晨发现与第2章同日午后的时点；计划与决定（v5前向修订）：定稿中“原定安排等待雨停”是人物的计划而非禁令；正文写出人物作出新决定及其理由后改变或提前执行计划属正常叙事，不判违规；只有未写出新决定或理由就把原计划当作已执行或已放弃，或与所选来源状态（核查尚未开始）矛盾，才判违规"]
         },
         "C18-B": {
           "automatic": ["同父两个完整世代均可列出且未覆盖，显式选一恢复为新项目；选定generationId、parent与草稿来源可回读", "未选择分支不进入恢复权威或草稿来源；源项目及另一分支原字节不变；不以latest代替选择"],
-          "independentReview": ["两名独立评审各引两分支定稿/notes/cards和续写草稿正文：只承接所选代事实，不混入未选择分支“沈岸独自把草图交给另一个看守”；此案不证明外部DAV服务"]
+          "independentReview": ["两名独立评审各引两分支定稿/notes/cards和续写草稿正文：只承接所选代事实，不混入未选择分支“沈岸独自把草图交给另一个看守”；此案不证明外部DAV服务；硬事实不因计划改变而放宽：第1章异常须仍是“记录上的日期与旧钟不符”（可换措辞、不要求逐字复述，但不得把核查对象替换为另一异常或否认它）、铜钥匙始终由林澄保管（交给他人保管或押出即违规）、雨停前沈岸不知道信封内有地图、清晨发现与第2章同日午后的时点；计划与决定（v5前向修订）：定稿中“原定安排等待雨停”是人物的计划而非禁令；正文写出人物作出新决定及其理由后改变或提前执行计划属正常叙事，不判违规；只有未写出新决定或理由就把原计划当作已执行或已放弃，或与所选来源状态（核查尚未开始）矛盾，才判违规"]
         }
       },
       "stopPolicy": {
-        "technicalFailure": "任一案或操作技术失败即停止发送，保留该失败及后续逐案NOT RUN；不得以12次最小路径合计冒充七案资格",
+        "technicalFailure": "任一案或操作技术失败即停止发送，保留该失败及后续逐案NOT RUN；不得以16次最小路径合计冒充七案资格",
         "semanticFailureOrUnknown": "真实执行后的独立评审才裁决语义；FAIL或UNKNOWN保留全部已发送结果、原案结论及原文证据，不补采、不改判、不挑最佳；未满足七案逐案资格不得汇总PASS",
-        "attemptAccounting": "每个真实发送含准备、失败、unknown、允许的修复和登记的唯一压缩，逐attempt reserve/dispatch/settle或unknown；无发送不记已发",
-        "repair": "仅定稿角色状态（含C17-B恢复副本重新定稿角色状态）现有同run/root且有持久失败artifact的原生repair可用；C17/C18续写只额外登记产品原生的唯一一次chapter-draft-condense：须同run/root/项目/epoch的chapter-draft首请求已结算为stop，且其hash可复核输出按生产countDraftUnits超出draftTargetUnitRange上限，压缩请求携带与续写相同的作者资料、oracle事实、必需前驱和替换来源，只有末次压缩attempt可带正式效果；压缩后仍越界或未完整结束按原失败语义暂停。第二次压缩、未越界压缩或任何其他失败都不获新的重试权，不放宽事实门或篇幅门"
+        "attemptAccounting": "每个真实发送含准备、失败、unknown、允许的修复、登记的唯一对账和登记的唯一压缩，逐attempt reserve/dispatch/settle或unknown；无发送不记已发",
+        "repair": "仅定稿角色状态（含C17-B恢复副本重新定稿角色状态）现有同run/root且有持久失败artifact的原生repair可用；C17/C18续写只额外登记产品原生的唯一一次chapter-draft-condense：须同run/root/项目/epoch的chapter-draft首请求已结算为stop，且其hash可复核输出按生产countDraftUnits超出draftTargetUnitRange上限，压缩请求携带与续写相同的作者资料、oracle事实、必需前驱和替换来源，只有末次压缩attempt可带正式效果；压缩后仍越界或未完整结束按原失败语义暂停。第二次压缩、未越界压缩或任何其他失败都不获新的重试权，不放宽事实门或篇幅门。v5另登记产品原生的唯一一次生成前定稿对账chapter-draft-reconcile：只能是该续写run的第一个物理请求，至多一次，不带正式效果，不参与正文组合、不是压缩的首稿、无修复或重试权；其提示须含所纳入定稿、作者设定与已提交蓝图且hash等于materialDecision.reconciliationPromptHash；以stop结束且可解析时首稿及续写/压缩作者资料块须恰含由其输出重算的注入块，否则如实记为unusable（记原因），首稿与promptHash逐字一致；对账的发送失败或unknown与其他attempt同属技术失败；第二次对账、对账不在首位或对账出现在未登记operation即拒绝"
       },
-      "minimumCalls": 12,
-      "scope": "candidate-only七案例；C16三组notes/cards=6，local及DAV各两组续写=4，C17-B恢复副本重新定稿后处理notes/cards=2（按既有做法计入失败/修复/审修余量并单独披露）；准备、修复及失败请求另逐实际记账",
+      "minimumCalls": 16,
+      "scope": "candidate-only七案例；C16三组notes/cards=6，local及DAV各两组续写=4，C17-B恢复副本重新定稿后处理notes/cards=2，v5四个续写各一次生成前定稿对账=4（均按既有做法计入失败/修复/审修余量并单独披露）；最短16次，登记的cards原生repair与唯一压缩全部发生时最多28次；准备、修复及失败请求另逐实际记账",
       "operations": [
         { "id": "定稿章节要点", "kind": "chapter_notes", "caseIds": ["C16-A", "C16-B", "C16-C"], "allocation": "C16ExistingExtraction" },
         { "id": "定稿角色状态", "kind": "character_cards", "caseIds": ["C16-A", "C16-B", "C16-C"], "allocation": "C16ExistingExtraction" },

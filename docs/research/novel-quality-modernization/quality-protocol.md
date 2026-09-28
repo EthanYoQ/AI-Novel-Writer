@@ -192,7 +192,25 @@ C16–C18 场景 revision `c16-c18-candidate-production-path-v4` 是用户批准
 
 v4 的最短物理路径由10次增为12次（C17-B 多 notes 与 cards 各一次）；两次按既有做法计入失败/修复/审修余量 `failedRetryRepairReviewReserve` 并单独披露，80次计划分配与各桶数额不变，cards 原生 repair 与唯一压缩仍逐实际 attempt 记账。历史 invocation `ca466d9a`（`FINALIZATION_EFFECT_MISSING`）与 `73b46513`（C17-B 独立评审 FAIL，评审 `review-r1.md`、`review-r2.md`）按原结论永久保留，不按 v4 重新评判；旧目标因协议字节 hash 漂移拒绝，须重新冻结。
 
-本轮预注册在 `protocol.json.phases.c16-c18` 固定 C16-A→B→C、C17-A→B、C18-A→B 的 `caseOrder`、逐案 `caseOracles` 和 `stopPolicy`；runner 在执行前将该顺序与实际 `semantic-source.json.continuityQualificationCases` 逐项核对。自动证据核对物理 attempt、来源、持久效果、恢复身份与分支选择；语义事实在真实执行后由两名独立评审分别引用原定稿、notes/cards 和续写正文核验。任一技术失败立即停发，后续案记 NOT RUN；后判的语义 FAIL/UNKNOWN 保留全部已发送结果和原证据，不补采改判。12次（v4；v3 及以前为10次）只是七案最短物理路径，不能合并报正式 PASS；旧目标因新协议完整字节 hash 漂移而拒绝，须重新冻结。C18 仅验证选定完整世代与未选分支不混入，不证明外部 DAV 服务。
+C16–C18 场景 revision `c16-c18-candidate-production-path-v5` 是用户批准的 harness 与评分规则变更，与同期产品变更分开说明。产品变更（另一 owner，不在本节范围）：`GenerateDraftCommand` 在首稿前新增一次“生成前定稿对账”物理调用（用途 `chapter-draft-reconcile`，review 推理档，≤1024 tokens），仅在直接前驱为已纳入定稿、本章无未定稿候选且蓝图有 keyEvents/purpose 时触发；其 JSON 输出渲染为注入块，放进首稿提示与续写/压缩作者资料块，失败或不可解析时按原提示继续；材料准入收据可选新增 `reconciliationPromptHash`。本节只记录 harness/评分如何承接它。
+
+一、对账调用的 harness 承接。`attemptPolicy.draftReconcile` 只为两个续写 operation 登记这次对账：必须是该续写 run 的第一个物理请求、至多一次、不带正式效果、不参与正文组合、不能当压缩的首稿、没有修复或重试权；之后的首稿须同 run/root/项目/epoch 且用途为 `chapter-draft`。dispatch 门在记账前拒绝第二次对账、首稿之后的对账、未登记 operation 或未登记策略中的对账，以及对账后换 run 的首稿；结果侧另核对对账 attempt 位于首位、`hasFormalEffect=false`、终态为 stop 或 length、物理计数包含它。桥的出站检查不再把对账当写稿提示：它须是唯一 user 消息且 hash 等于 `materialDecision.reconciliationPromptHash`，`【已定稿章节原文】` 与 `【作者设定】` 各出现一次并逐字含必需前驱的定稿结尾，`【本章蓝图】` 是最后一节且逐键等于已提交蓝图；原有的 oracle 事实、必需前驱、替换来源与未选分支检查照常适用。之后的写稿请求出站前先等对账流结算，再用生产 `draftReconciliationBlock` 从落盘输出重算注入块：可用时首稿须恰含一次该块且去块后等于 `promptHash`，续写/压缩作者资料块也须含该块；不可用时首稿与 `promptHash` 逐字一致，且不得出现注入标题。对账提示原文落盘为 `reconcile-prompt-N.txt`，输出为同序号 `physical-output-N.txt`，两者路径与 hash 写入收据 `draftReconciliation` 与 invocation 汇总 `draftReconciliation[]`，供评审包引用。
+
+二、失败处理的决定：对账以 stop 结束且可解析时记 `injected`（含冲突数与注入块 hash）；以 length 结束或输出不可解析时如实记为 `unusable`，原因分别为 `finish-reason-not-stop` 与 `unparseable-output`，该案不判技术失败，按产品设计以原提示生成，由独立评审照常裁决，但汇总中明确标出对账未生效，不能冒充已生效。对账的发送失败或 unknown 与其他 attempt 一样属技术失败并停发。登记续写没有发出对账（产品触发条件在本场景必然成立）也按技术失败停发（`DRAFT_RECONCILE_NOT_TRIGGERED` / `DRAFT_RECONCILE_EVIDENCE_MISSING`）。合成 transport 对对账返回合法 JSON，其中首个必需事件标为冲突；合成模式只接受 `injected` 且冲突数≥1，覆盖“对账结果注入首稿与作者资料块”这条路径。
+
+三、请求记账。每个续写多 1 次对账：最短物理路径由 12 次增为 16 次（C16 notes/cards 6、C17-B 重新定稿后处理 2、四个续写各为对账+首稿 8）。登记的 cards 原生 repair（C16 三案与 C17-B 各至多 2 次）与唯一压缩（四个续写各至多 1 次）全部发生时最多 28 次。按“新增请求计入余量并单独披露”的既有做法，4 次对账计入 `failedRetryRepairReviewReserve`，总 80 与各桶数额不变；账本 allocation 仍按原 slot 规则分类，同一 operation 的后续 attempt 归余量。自 ADR 0019 起分配只做分类与汇报，不限制发送，因此无需调整桶数。
+
+四、独立评审 oracle 前向修订（评分规则变更，单列）。fa8806d7 的两份评审诊断显示，C18-A/C18-B 所选世代中的“原定安排等待雨停”是人物的计划，不是禁令；续写里人物明确作出新决定后行动属于正常叙事，但 R2 把它判成与所选世代事实相悖。修订前后对照如下：
+
+- C18-A 修订前：“两名独立评审各引所选世代定稿/notes/cards及续写草稿正文：续写只承接所选世代的有效人物、物品、知情和时间事实”。修订后在原文之后追加两条。第一条是硬事实，不因计划改变而放宽：第1章异常须仍是“记录上的日期与旧钟不符”，可以换措辞、不要求逐字复述，但不得把核查对象替换为另一异常或否认它；铜钥匙始终由林澄保管，交给他人保管或押出都算违规；雨停前沈岸不知道信封内有地图；清晨发现，第2章为同日午后。第二条是计划与决定：“原定安排等待雨停”是计划而非禁令，正文写出新决定及理由后改变或提前执行计划属正常叙事；只有未写出新决定或理由就把原计划当作已执行或已放弃，或与所选来源状态（核查尚未开始）矛盾，才判违规。
+- C18-B：原文（只承接所选代、不混入未选分支、不证明外部 DAV）保留，追加同样的两条。
+- C17-A：同属“等待雨停”来源，原文保留，追加同样的两条。
+- C17-B：原文“林澄撤回旧核查安排，等待新通行许可；旧安排不得被写作已执行事实”保留，追加同样的硬事实条。计划条改为针对撤回：正文写出许可到来，或人物针对撤回作出新决定并写明理由后再行动，属正常叙事；未写出许可或新决定与理由，就按已撤回的旧安排（如雨停即出发）行动，或把旧安排写成已执行，判违规。其中钥匙与知情在 C17-B 原 oracle 中未点名，这是一项收紧，理由是作者设定写明“铜钥匙始终由林澄保管”，且 fa8806d7 两名评审都认为押出钥匙若在判定维度内就足以判 FAIL。现把四个续写案的硬事实统一。
+- 逐条审视后未改的项：C16-A/B/C 审的是 notes/cards 对定稿计划状态的记录，“核查尚未开始、原安排待雨停”在那里正是被记录的事实状态，不存在“人物新决定”的情形，因此不改。C17-A 的“清晨→昨夜”属于时间事实的真实改写，不是措辞差异，继续判违规。“旧钟异常被替换”是核心事实被替换，保留为硬事实，只明确“换措辞不算替换”。automatic 项全部不变。
+
+五、账本历史边界：新增 `historicalC16Fa8806d7Boundary`，接在 `historicalC1673b46513Boundary` 之后，覆盖第649–690行（fromEventCount 648 → eventCount 690）。这一段是协议 `s14b-candidate-quality-and-comparison-v2`、hash `7a17f36a70fcc5df185528c042f536261532f524e19fa5e266f45df4505701a3`（场景 v4）下的真实 invocation `fa8806d7-5287-4059-82a0-c1c316396067`，candidate 身份为 codeSha `8a07eb16b91e2d3e12338aac4619804a8e07e860`、sourceHash `87cdbbb2…5332`、driverHash `014f5770…3350`，共 14 次 attempt，全部 settle，parityId 逐 attempt 登记；前 690 行 sha256 为 `1090745ab998f81e04b5d825c1c49135814700bfbd6f4d46504b6a35f9d6ac5c`（即当前整本账本）。这些数值都只读推导自账本，账本字节未改。runner 读写两入口按链末端取历史范围，其后的新 reserve 按 v5 协议完整校验。fa8806d7 的独立评审 FAIL（R1：C16-C/C17-A/C17-B；R2：C16-C/C17-A/C17-B/C18-A/C18-B；评审包 d103 `c16-c18-8a07eb16-review-fa8806d7`）按原结论永久保留，不按 v5 oracle 或对账规则追溯改判。旧目标因协议字节 hash 漂移而拒绝，须重新冻结。
+
+本轮预注册在 `protocol.json.phases.c16-c18` 固定 C16-A→B→C、C17-A→B、C18-A→B 的 `caseOrder`、逐案 `caseOracles` 和 `stopPolicy`；runner 在执行前将该顺序与实际 `semantic-source.json.continuityQualificationCases` 逐项核对。自动证据核对物理 attempt、来源、持久效果、恢复身份与分支选择；语义事实在真实执行后由两名独立评审分别引用原定稿、notes/cards 和续写正文核验。任一技术失败立即停发，后续案记 NOT RUN；后判的语义 FAIL/UNKNOWN 保留全部已发送结果和原证据，不补采改判。16次（v5；v4 为12次，v3 及以前为10次）只是七案最短物理路径，不能合并报正式 PASS；旧目标因新协议完整字节 hash 漂移而拒绝，须重新冻结。C18 仅验证选定完整世代与未选分支不混入，不证明外部 DAV 服务。
 
 离线 DAV 使用原控制器和服务、受限 loopback 地址的合成 transport，单独报告 DAV 请求数，不能充当真实网络、双 profile、OS 凭据或打包资格。嵌入配置须从实际隔离配置回读；本最小路径只选择 notes/cards、无 KB 导入。恢复回执必须包含新项目身份、transfer 来源、旧任务冻结与源项目不变；原6/4正式资格、文学裁决和历史 FAIL 均不由合成通过改判。
 

@@ -15,6 +15,10 @@ const ADAPTER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 const reviewParserBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/shared/review-generation-report.ts')],
   bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
 const { parseReviewGenerationResult } = await import(`data:text/javascript;base64,${Buffer.from(reviewParserBundle).toString('base64')}`)
+// 结果侧从对账原始输出重算注入块，用的是与产品主进程复核同一份生产模块。
+const reconciliationBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/shared/draft-reconciliation.ts')],
+  bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
+const { draftReconciliationBlock, parseDraftReconciliation } = await import(`data:text/javascript;base64,${Buffer.from(reconciliationBundle).toString('base64')}`)
 export const PRODUCTION_BRIDGE = 'scripts/fixtures/quality-modernization-production.fixture.mjs'
 export const EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION = 's11-reference-no-actionable-review-v1'
 export const REVIEWED_DRAFT_PROTOCOL_REVISION = 's14b-reviewed-draft-v1'
@@ -277,7 +281,14 @@ export const C16_C18_ATTEMPT_POLICY = Object.freeze({ milestone: 'final', arms: 
   draftCondense: Object.freeze({ operationIds: Object.freeze(['本地恢复后续写', 'DAV选定世代恢复后续写']),
     primaryPurpose: 'chapter-draft', condensePurpose: 'chapter-draft-condense', maxCondenseAttempts: 1,
     trigger: 'primary-settled-stop-hash-verified-units-above-draftTargetUnitRange-maximum',
-    formalEffect: 'last-attempt-only' }) })
+    formalEffect: 'last-attempt-only' }),
+  // v5（harness 变更，随产品“生成前定稿对账”登记）：续写 run 的首个物理请求可以是唯一一次对账；
+  // 它只提供依据、不带正式效果、不是压缩的首稿、不获任何重试或修复权。
+  draftReconcile: Object.freeze({ operationIds: Object.freeze(['本地恢复后续写', 'DAV选定世代恢复后续写']),
+    purpose: 'chapter-draft-reconcile', maxReconcileAttempts: 1, position: 'first-physical-request-of-operation-run-only',
+    formalEffect: 'none', composition: 'never-composed-never-repaired-not-condense-primary',
+    finishReasons: Object.freeze(['stop', 'length']),
+    unusableOutput: 'recorded-as-unusable-first-draft-prompt-without-injection' }) })
 // A phase scenario is the bridge-side counterpart of one preregistered protocol phase.
 // The protocol stays the only authority for case ids and operation ids; this map only
 // says which production commands realize them. The runner re-checks every field against
@@ -287,8 +298,9 @@ export const PHASE_SCENARIOS = Object.freeze({
   'c16-c18': Object.freeze({
     caseId: 'C16-A', caseIds: Object.freeze(['C16-A', 'C16-B', 'C16-C', 'C17-A', 'C17-B', 'C18-A', 'C18-B']),
     sceneId: '场景1', chapterNumber: 2, milestone: 'final', arms: Object.freeze(['candidate']),
-    scenarioRevision: 'c16-c18-candidate-production-path-v4',
+    scenarioRevision: 'c16-c18-candidate-production-path-v5',
     attemptPolicy: C16_C18_ATTEMPT_POLICY,
+    // v5（用户批准的 harness 变更）：C17/C18 续写登记产品原生的唯一一次生成前定稿对账（见 attemptPolicy.draftReconcile）。
     // v4（用户批准的 harness 变更）：C17-B 恢复副本内重新定稿后按产品定稿路径紧接生产后处理，
     // notes/cards 各为独立登记 operation，与 C16 同一 RunFinalizePostProcessCommand 入口，绑定新 finalizationId。
     operations: Object.freeze([
@@ -413,10 +425,32 @@ function verifiedPrimarySyntaxFailure(first, evidence, operationId, kind = 'dire
  * over-length primary draft — may add one physical request. `draftCondense.measureUnits` and
  * `draftCondense.maximum` come from the production counter and draftTargetUnitRange.
  */
-export function createOperationDispatchGate({ onReject, repairPolicy, readPrimaryEvidence, finalizationRepair = false, draftCondense = null } = {}) {
+export function createOperationDispatchGate({ onReject, repairPolicy, readPrimaryEvidence, finalizationRepair = false, draftCondense = null,
+  draftReconcile = null } = {}) {
   const dispatched = new Map()
+  const reconciled = new Map()
+  const reject = (operationId, reason) => {
+    const rejection = Object.freeze({ code: 'UNREGISTERED_ADDITIONAL_MODEL_REQUEST',
+      operationId: operationId || null, reason, beforeDispatch: true })
+    onReject?.(rejection)
+    throw Object.assign(new Error('MODEL_REQUEST_REJECTED'), { code: 'OPERATION_DISPATCH_REJECTED' })
+  }
+  const sameRun = (left, right) => left.runId === right.runId && left.rootActionId === right.rootActionId
+    && left.projectId === right.projectId && left.epoch === right.epoch && left.attemptId !== right.attemptId
   return (operationId, owner, reviewSource) => {
     const first = dispatched.get(operationId)
+    // 登记的生成前定稿对账：只能是该续写 operation 的第一个物理请求、最多一次；之后的首稿必须同 run/root/项目/epoch。
+    const reconcileRegistered = Boolean(draftReconcile?.maxReconcileAttempts === 1 && draftReconcile.operationIds?.includes(operationId))
+    if (owner?.purpose === 'chapter-draft-reconcile' || draftReconcile && owner?.purpose === draftReconcile.purpose) {
+      const valid = reconcileRegistered && owner.purpose === draftReconcile.purpose && !first && !reconciled.has(operationId)
+        && typeof owner.attemptId === 'string' && owner.attemptId && typeof owner.runId === 'string' && owner.runId
+        && typeof owner.projectId === 'string' && owner.projectId && typeof owner.epoch === 'string' && owner.epoch
+      if (!valid) reject(operationId, operationId ? 'duplicate-operation' : 'missing-operation')
+      reconciled.set(operationId, { ...owner })
+      return
+    }
+    const reconcile = reconciled.get(operationId)
+    if (reconcile && !first && !sameRun(reconcile, owner ?? {})) reject(operationId, 'duplicate-operation')
     const cards = finalizationRepair && FINALIZED_CHARACTER_OPERATION_IDS.includes(operationId)
     const condensePolicy = draftCondense?.policy
     const condense = Boolean(condensePolicy?.maxCondenseAttempts === 1 && condensePolicy.operationIds?.includes(operationId))
@@ -443,10 +477,7 @@ export function createOperationDispatchGate({ onReject, repairPolicy, readPrimar
       && (!identity(owner) || owner.purpose !== (cards ? 'finalized-character-state' : condense ? condensePolicy.primaryPurpose : policy.primaryPurpose)
         || review && (!Number.isSafeInteger(reviewSource?.draftId) || reviewSource.draftId <= 0
           || !/^[a-f0-9]{64}$/.test(reviewSource.contentHash ?? '')))) {
-      const rejection = Object.freeze({ code: 'UNREGISTERED_ADDITIONAL_MODEL_REQUEST',
-        operationId: operationId || null, reason: operationId ? 'duplicate-operation' : 'missing-operation', beforeDispatch: true })
-      onReject?.(rejection)
-      throw Object.assign(new Error('MODEL_REQUEST_REJECTED'), { code: 'OPERATION_DISPATCH_REJECTED' })
+      reject(operationId, operationId ? 'duplicate-operation' : 'missing-operation')
     }
     if (repair && cards) dispatched.set(operationId, { ...owner, ordinal: (first.ordinal ?? 0) + 1 })
     else if (repair) first.repairUsed = true
@@ -1125,6 +1156,7 @@ export function runProductionPhasePair(targets, options) {
     }
     const validation = validateCandidateContinuityResults(results, common.mode)
     return { ...validation, phase: options.phase, invocationId, parityHash, prepared, results,
+      draftReconciliation: summarizeDraftReconciliation(results),
       qualification: options.development ? 'development-only-unfrozen' : `${common.mode}-production-path-only`,
       qualityQualification: common.mode === 'synthetic' ? 'not-run' : validation.status,
       formalSampleQualification: common.mode === 'synthetic' ? 'not-run' : validation.status,
@@ -1235,9 +1267,49 @@ function admittedPredecessorBound(result) {
   return drafts.length > 0 && drafts.every(attempt => attempt.optionalMaterialEvidence?.materialDecision?.included?.some(item =>
     item.sourceId === predecessor.sourceId && item.revision === predecessor.revision))
 }
+/**
+ * v5 生成前定稿对账证据（harness 变更）。结果侧从落盘的对账原始输出，用生产 draft-reconciliation 模块重算注入块：
+ * 可解析且以 stop 结束 → 必须 `injected`（桥已断言首稿提示恰含该块，且去掉它后等于 materialDecision.promptHash）；
+ * 否则如实记为 `unusable`（首稿按原提示发送，不得冒充对账生效）。合成 transport 必返回含冲突的合法 JSON，只接受 injected。
+ * 登记续写没有对账 attempt、提示/输出落盘与 hash 不一致或任何字段不自洽，一律 fail closed。
+ */
+function draftReconciliationEvidenceFailure(result, operation, reconcileAttempt, draftAttempts, mode) {
+  const evidence = result.draftReconciliation
+  if (!reconcileAttempt || !evidence || evidence.operation !== operation.operation) return 'DRAFT_RECONCILE_EVIDENCE_MISSING'
+  const actual = reconcileAttempt.binding.actual
+  const terminal = result.ownerTerminal.find(item => item.attemptId === actual.attemptId)
+  const decision = reconcileAttempt.optionalMaterialEvidence?.materialDecision
+  const readHashed = artifact => {
+    if (!artifact || typeof artifact.outputPath !== 'string' || !CONTENT_HASH.test(artifact.contentHash ?? '')) return null
+    try { const text = fs.readFileSync(artifact.outputPath, 'utf8'); return digest(text) === artifact.contentHash ? text : null } catch { return null }
+  }
+  const prompt = readHashed(evidence.prompt), output = readHashed(evidence.output)
+  if (prompt === null || output === null || evidence.attemptId !== actual.attemptId || evidence.finishReason !== terminal?.finishReason
+    || evidence.prompt.contentHash !== reconcileAttempt.userPromptHash || evidence.prompt.contentHash !== decision?.reconciliationPromptHash
+    || evidence.output.outputPath !== reconcileAttempt.outputPath || evidence.output.contentHash !== reconcileAttempt.visibleTextHash
+    || evidence.firstDraftAttemptId !== draftAttempts[0]?.binding?.actual?.attemptId) return 'DRAFT_RECONCILE_EVIDENCE_MISMATCH'
+  const block = evidence.finishReason === 'stop' ? draftReconciliationBlock('zh-CN', output) : ''
+  const conflicts = block ? parseDraftReconciliation(output).events.filter(item => item.conflict).length : 0
+  if (evidence.status !== (block ? 'injected' : 'unusable') || evidence.conflicts !== conflicts
+    || evidence.injectedIntoFirstDraft !== Boolean(block) || evidence.blockHash !== (block ? digest(block) : null)
+    || evidence.reason !== (block ? null : evidence.finishReason !== 'stop' ? 'finish-reason-not-stop' : 'unparseable-output')
+    || !Number.isSafeInteger(evidence.authorMaterialAttempts)
+    || evidence.authorMaterialAttempts !== (block ? draftAttempts.length - 1 : 0)) return 'DRAFT_RECONCILE_EVIDENCE_MISMATCH'
+  if (mode === 'synthetic' && (evidence.status !== 'injected' || conflicts < 1)) return 'DRAFT_RECONCILE_EVIDENCE_MISMATCH'
+  return null
+}
+/** 评审包用的对账摘要：逐续写案如实列出注入与否、冲突数、失败原因与落盘路径/hash，不含判断。 */
+export function summarizeDraftReconciliation(results) {
+  return (Array.isArray(results) ? results : []).flatMap(result => result?.draftReconciliation ? [{ caseId: result.caseId,
+    operation: result.draftReconciliation.operation, status: result.draftReconciliation.status,
+    conflicts: result.draftReconciliation.conflicts, reason: result.draftReconciliation.reason ?? null,
+    prompt: result.draftReconciliation.prompt ?? null, output: result.draftReconciliation.output ?? null,
+    blockHash: result.draftReconciliation.blockHash ?? null }] : [])
+}
 export function validateCandidateContinuityResults(results, mode) {
   const fail = code => ({ status: 'failed', candidateFailure: code })
   const condense = PHASE_SCENARIOS['c16-c18'].attemptPolicy.draftCondense
+  const reconcile = PHASE_SCENARIOS['c16-c18'].attemptPolicy.draftReconcile
   if (results.length !== 7 || results.some(result => result.status !== 'passed' || result.arm !== 'candidate'
     || result.phase !== 'c16-c18' || result.mode !== mode)) return fail('CANDIDATE_OPERATION_MISSING')
   if (stableEvidence(results.map(result => result.caseId)) !== stableEvidence(PHASE_SCENARIOS['c16-c18'].caseIds)) return fail('CANDIDATE_CASE_MISMATCH')
@@ -1254,17 +1326,33 @@ export function validateCandidateContinuityResults(results, mode) {
     if (!Array.isArray(result.attempts) || !Array.isArray(result.ownerTerminal)
       || result.ownerTerminal.length !== result.attempts.length) return fail('ACTUAL_OWNER_ARTIFACT_MISMATCH')
     for (const operation of result.operations) {
-      const attempts = result.attempts.filter(attempt => attempt.binding?.operation === operation.operation)
+      const all = result.attempts.filter(attempt => attempt.binding?.operation === operation.operation)
       const condensable = operation.kind === 'draft' && condense.operationIds.includes(operation.operation)
+      const reconcilable = operation.kind === 'draft' && reconcile.operationIds.includes(operation.operation)
+      // v5：登记的唯一对账只能是该续写 operation 的第一个 attempt；其余 attempt 仍按原规则（首稿→可选唯一压缩）。
+      const reconciles = all.filter(attempt => attempt.binding?.actual?.purpose === reconcile.purpose)
+      if (reconciles.length > (reconcilable ? 1 : 0) || reconciles.length === 1 && all[0] !== reconciles[0])
+        return fail('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+      const attempts = all.slice(reconciles.length)
       if (attempts.length < 1 || attempts.length > (operation.kind === 'character_cards' ? 3 : condensable ? 2 : 1)) return fail('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
-      for (const [ordinal, attempt] of attempts.entries()) {
+      const ownerMismatch = attempt => {
         const actual = attempt.binding?.actual, terminal = result.ownerTerminal.find(item => item.attemptId === actual?.attemptId)
-        if (!actual || actual.projectId !== result.physicalProject.projectId || actual.epoch !== result.projectEpoch
+        return !actual || actual.projectId !== result.physicalProject.projectId || actual.epoch !== result.projectEpoch
           || actual.runId !== operation.handle?.runId || actual.rootActionId !== operation.handle?.rootActionId
           || !terminal?.artifactId || terminal.textHash !== attempt.visibleTextHash
           || attempt.binding.phase !== 'c16-c18' || attempt.binding.arm !== 'candidate'
           || attempt.binding.invocationId !== result.invocationId || attempt.binding.parityId !== result.physicalProject.parityHash
-          || terminal.purpose !== actual.purpose || terminal.finishReason !== 'stop'
+          || terminal.purpose !== actual.purpose ? null : terminal
+      }
+      for (const attempt of reconciles) {
+        const terminal = ownerMismatch(attempt)
+        // 对账不带正式效果；stop 或 length 均如实结算（length 记为不可用），其他终态按技术失败处理。
+        if (!terminal || terminal.hasFormalEffect !== false || !reconcile.finishReasons.includes(terminal.finishReason))
+          return fail('ACTUAL_OWNER_IDENTITY_MISMATCH')
+      }
+      for (const [ordinal, attempt] of attempts.entries()) {
+        const actual = attempt.binding?.actual, terminal = ownerMismatch(attempt)
+        if (!terminal || terminal.finishReason !== 'stop'
           || terminal.hasFormalEffect !== (ordinal === attempts.length - 1)
           || ordinal === 0 && actual.purpose !== (operation.kind === 'chapter_notes' ? 'finalized-chapter-notes'
             : operation.kind === 'character_cards' ? 'finalized-character-state' : 'chapter-draft')
@@ -1273,6 +1361,10 @@ export function validateCandidateContinuityResults(results, mode) {
       }
       // 登记的唯一压缩：首稿 hash 可复核且超出上限（生产计数），末次压缩稿才是正式保存的在范围正文。
       if (condensable && attempts.length === 2 && !verifiedCondensedDraft(attempts[0], result)) return fail('DRAFT_CONDENSE_NOT_REGISTERED')
+      if (reconcilable) {
+        const failure = draftReconciliationEvidenceFailure(result, operation, reconciles[0], attempts, mode)
+        if (failure) return fail(failure)
+      }
     }
     if (result.physicalModelRequests !== (mode === 'real' ? result.attempts.length : 0)
       || result.syntheticDispatches !== (mode === 'synthetic' ? result.attempts.length : 0)) return fail('PHYSICAL_CALL_COUNT_MISMATCH')
