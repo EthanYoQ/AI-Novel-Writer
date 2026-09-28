@@ -354,9 +354,64 @@
       { "attemptId": "candidate:85fbd6ae-b574-4ff6-9b8c-ee95744b0bc7", "invocationId": "d8a30c11-95a7-46ad-8f22-82113fa95e8b", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" }
     ]
   },
+  "historicalC16Ca466d9aBoundary": {
+    "fromEventCount": 579,
+    "eventCount": 615,
+    "rawBytesSha256": "6c9ea5ee59eaa937e0df16d806d879b0a189f60c492b58c4555c732de9b6dc8c",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "a0a14777420a545f1489f6a202390452d2384f2fbd48832281064d62b453990b",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "e797f2d2005cb3a8e95be0c691b4f5b82bb7fc3d",
+        "sourceHash": "d21470d792abc43a9a561e84671c3a5100cf2ca9ac6d34b944e801be0ae593b6",
+        "driverHash": "89e242c9f6e7f0da54b5aa4c297e1ec7159b636567f102f7b95609023472d9bd"
+      }
+    },
+    "reserveAttempts": [
+      { "attemptId": "candidate:5ca7f15a-610b-4da7-b8ba-68fe8da1fe44", "invocationId": "ca466d9a-cce5-4a30-a267-2a6d4044409a", "terminal": "settle", "parityId": "0432aa7115443372339327b8f723d854dbfaa864356070e6dd782ae217f30a01" },
+      { "attemptId": "candidate:88a7827c-e157-42d8-a568-40e4d07e9d52", "invocationId": "ca466d9a-cce5-4a30-a267-2a6d4044409a", "terminal": "settle", "parityId": "0432aa7115443372339327b8f723d854dbfaa864356070e6dd782ae217f30a01" },
+      { "attemptId": "candidate:0f63992c-b920-495b-9a98-838d52d1d6ef", "invocationId": "ca466d9a-cce5-4a30-a267-2a6d4044409a", "terminal": "settle", "parityId": "712b782db4d9392eb68c3e09c8dc025310b60dca91b32c2d1b739093a6c1f024" },
+      { "attemptId": "candidate:1610e8ad-0d12-4322-b085-83c7d3786d07", "invocationId": "ca466d9a-cce5-4a30-a267-2a6d4044409a", "terminal": "settle", "parityId": "712b782db4d9392eb68c3e09c8dc025310b60dca91b32c2d1b739093a6c1f024" },
+      { "attemptId": "candidate:4781d4cd-2ff7-46c9-a408-cee25c707820", "invocationId": "ca466d9a-cce5-4a30-a267-2a6d4044409a", "terminal": "settle", "parityId": "712b782db4d9392eb68c3e09c8dc025310b60dca91b32c2d1b739093a6c1f024" },
+      { "attemptId": "candidate:59c9f00d-7653-4795-81d3-7571d5e45fb0", "invocationId": "ca466d9a-cce5-4a30-a267-2a6d4044409a", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:6bae0ad5-07ba-4e16-90e7-cfe1e213a4bb", "invocationId": "ca466d9a-cce5-4a30-a267-2a6d4044409a", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:8cee8eac-8da3-48d0-bb73-60cc91329652", "invocationId": "ca466d9a-cce5-4a30-a267-2a6d4044409a", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:a6186d60-36f1-424d-9f6b-bdcef3027fcd", "invocationId": "ca466d9a-cce5-4a30-a267-2a6d4044409a", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:9245845b-afc9-401e-9935-c2939e9df201", "invocationId": "ca466d9a-cce5-4a30-a267-2a6d4044409a", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:5560ed6b-f139-40b6-8cca-cc392b8a6600", "invocationId": "ca466d9a-cce5-4a30-a267-2a6d4044409a", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:520cec0e-ab98-4ed1-be68-17230f500dcb", "invocationId": "ca466d9a-cce5-4a30-a267-2a6d4044409a", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" }
+    ]
+  },
+  "historicalC1673b46513Boundary": {
+    "fromEventCount": 615,
+    "eventCount": 648,
+    "rawBytesSha256": "fb866f35b1071f2b9e098e080709b3c80205793616febe4267a8503404c3d953",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "a0a14777420a545f1489f6a202390452d2384f2fbd48832281064d62b453990b",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "2275cdde02fa8cab4fe061f8cedd2b82c1f12b57",
+        "sourceHash": "d352eccc645471a64e7f4e3c7080fc3d2de8f4aded4a6de6d27c7bfd67ac1f58",
+        "driverHash": "89e242c9f6e7f0da54b5aa4c297e1ec7159b636567f102f7b95609023472d9bd"
+      }
+    },
+    "reserveAttempts": [
+      { "attemptId": "candidate:1d7c1fed-fa37-46ac-8af7-a29fe0d67a5a", "invocationId": "73b46513-7371-4d9c-8ca1-671e3fd76349", "terminal": "settle", "parityId": "0432aa7115443372339327b8f723d854dbfaa864356070e6dd782ae217f30a01" },
+      { "attemptId": "candidate:4d24fd11-2acf-4885-bb6c-cc87714e1533", "invocationId": "73b46513-7371-4d9c-8ca1-671e3fd76349", "terminal": "settle", "parityId": "0432aa7115443372339327b8f723d854dbfaa864356070e6dd782ae217f30a01" },
+      { "attemptId": "candidate:52755b5e-6e78-4956-af6b-540190155829", "invocationId": "73b46513-7371-4d9c-8ca1-671e3fd76349", "terminal": "settle", "parityId": "712b782db4d9392eb68c3e09c8dc025310b60dca91b32c2d1b739093a6c1f024" },
+      { "attemptId": "candidate:f2172a37-d11f-4e3d-ba70-32b7544e2562", "invocationId": "73b46513-7371-4d9c-8ca1-671e3fd76349", "terminal": "settle", "parityId": "712b782db4d9392eb68c3e09c8dc025310b60dca91b32c2d1b739093a6c1f024" },
+      { "attemptId": "candidate:07949667-ef7c-4485-a643-dcb96ba6afc5", "invocationId": "73b46513-7371-4d9c-8ca1-671e3fd76349", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:92d1886a-6ff2-4d2f-ad3e-9c48d67ff39a", "invocationId": "73b46513-7371-4d9c-8ca1-671e3fd76349", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:4b2beaa1-c912-4967-9a82-233a8ea7bbd9", "invocationId": "73b46513-7371-4d9c-8ca1-671e3fd76349", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:3f165102-d0c4-4732-8c9c-10da4164a1dd", "invocationId": "73b46513-7371-4d9c-8ca1-671e3fd76349", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:32063b45-20ed-40f7-8e78-27000396d66f", "invocationId": "73b46513-7371-4d9c-8ca1-671e3fd76349", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:b02ec063-bfd7-411f-bc48-0d1cf327ac8c", "invocationId": "73b46513-7371-4d9c-8ca1-671e3fd76349", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" },
+      { "attemptId": "candidate:a6e474d9-128e-4f3d-ad04-69b6689b1f07", "invocationId": "73b46513-7371-4d9c-8ca1-671e3fd76349", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" }
+    ]
+  },
   "phases": {
     "c16-c18": {
-      "scenarioRevision": "c16-c18-candidate-production-path-v3",
+      "scenarioRevision": "c16-c18-candidate-production-path-v4",
       "attemptPolicy": {
         "milestone": "final",
         "arms": ["candidate"],
@@ -390,7 +445,7 @@
           "independentReview": ["两名独立评审各引恢复的定稿/notes/cards来源及续写草稿正文：续写承接有效事实、人物、钥匙、知情与时间，不把冻结旧候选当权威"]
         },
         "C17-B": {
-          "automatic": ["恢复副本内正常重新定稿绑定更正后的新来源；旧derived失效，新正式正文与草稿来源可回读，源项目不变", "新草稿由恢复副本当前author及source-valid权威生成；旧任务和旧derived不得重新获执行资格"],
+          "automatic": ["恢复副本内正常重新定稿绑定更正后的新来源；重新定稿按产品定稿路径紧接生产后处理，恢复副本重新定稿章节要点/角色状态各经RunFinalizePostProcessCommand对新finalizationId重新生成并持久回读，finalizationEvidence来源须等于替换后来源；旧derived失效，新正式正文与草稿来源可回读，源项目不变", "physicalProject.readback.predecessors记录替换后实际送入的必需前驱：sourceId/revision为新定稿draft、正文hash与字节等于替换正文，且与续写materialDecision实际纳入的来源一致；替换前前驱另记predecessorsBeforeReplacement，不放宽parity绑定", "新草稿由恢复副本当前author及source-valid权威生成；旧任务和旧derived不得重新获执行资格"],
           "independentReview": ["两名独立评审各引恢复后更正定稿、当前notes/cards及续写草稿正文：林澄撤回旧核查安排，等待新通行许可；旧安排不得被写作已执行事实"]
         },
         "C18-A": {
@@ -403,18 +458,20 @@
         }
       },
       "stopPolicy": {
-        "technicalFailure": "任一案或操作技术失败即停止发送，保留该失败及后续逐案NOT RUN；不得以10次最小路径合计冒充七案资格",
+        "technicalFailure": "任一案或操作技术失败即停止发送，保留该失败及后续逐案NOT RUN；不得以12次最小路径合计冒充七案资格",
         "semanticFailureOrUnknown": "真实执行后的独立评审才裁决语义；FAIL或UNKNOWN保留全部已发送结果、原案结论及原文证据，不补采、不改判、不挑最佳；未满足七案逐案资格不得汇总PASS",
         "attemptAccounting": "每个真实发送含准备、失败、unknown、允许的修复和登记的唯一压缩，逐attempt reserve/dispatch/settle或unknown；无发送不记已发",
-        "repair": "仅定稿角色状态现有同run/root且有持久失败artifact的原生repair可用；C17/C18续写只额外登记产品原生的唯一一次chapter-draft-condense：须同run/root/项目/epoch的chapter-draft首请求已结算为stop，且其hash可复核输出按生产countDraftUnits超出draftTargetUnitRange上限，压缩请求携带与续写相同的作者资料、oracle事实、必需前驱和替换来源，只有末次压缩attempt可带正式效果；压缩后仍越界或未完整结束按原失败语义暂停。第二次压缩、未越界压缩或任何其他失败都不获新的重试权，不放宽事实门或篇幅门"
+        "repair": "仅定稿角色状态（含C17-B恢复副本重新定稿角色状态）现有同run/root且有持久失败artifact的原生repair可用；C17/C18续写只额外登记产品原生的唯一一次chapter-draft-condense：须同run/root/项目/epoch的chapter-draft首请求已结算为stop，且其hash可复核输出按生产countDraftUnits超出draftTargetUnitRange上限，压缩请求携带与续写相同的作者资料、oracle事实、必需前驱和替换来源，只有末次压缩attempt可带正式效果；压缩后仍越界或未完整结束按原失败语义暂停。第二次压缩、未越界压缩或任何其他失败都不获新的重试权，不放宽事实门或篇幅门"
       },
-      "minimumCalls": 10,
-      "scope": "candidate-only七案例；C16三组notes/cards=6，local及DAV各两组续写=4；准备、修复及失败请求另逐实际记账",
+      "minimumCalls": 12,
+      "scope": "candidate-only七案例；C16三组notes/cards=6，local及DAV各两组续写=4，C17-B恢复副本重新定稿后处理notes/cards=2（按既有做法计入失败/修复/审修余量并单独披露）；准备、修复及失败请求另逐实际记账",
       "operations": [
         { "id": "定稿章节要点", "kind": "chapter_notes", "caseIds": ["C16-A", "C16-B", "C16-C"], "allocation": "C16ExistingExtraction" },
         { "id": "定稿角色状态", "kind": "character_cards", "caseIds": ["C16-A", "C16-B", "C16-C"], "allocation": "C16ExistingExtraction" },
         { "id": "本地恢复后续写", "kind": "draft", "restore": "local", "caseIds": ["C17-A", "C17-B"], "allocation": "C17C18RestoreContinue" },
-        { "id": "DAV选定世代恢复后续写", "kind": "draft", "restore": "webdav", "caseIds": ["C18-A", "C18-B"], "allocation": "C17C18RestoreContinue" }
+        { "id": "DAV选定世代恢复后续写", "kind": "draft", "restore": "webdav", "caseIds": ["C18-A", "C18-B"], "allocation": "C17C18RestoreContinue" },
+        { "id": "恢复副本重新定稿章节要点", "kind": "chapter_notes", "caseIds": ["C17-B"], "allocation": "failedRetryRepairReviewReserve" },
+        { "id": "恢复副本重新定稿角色状态", "kind": "character_cards", "caseIds": ["C17-B"], "allocation": "failedRetryRepairReviewReserve" }
       ]
     },
     "early-budget": {

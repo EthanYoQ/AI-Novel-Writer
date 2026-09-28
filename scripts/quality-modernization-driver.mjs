@@ -287,13 +287,17 @@ export const PHASE_SCENARIOS = Object.freeze({
   'c16-c18': Object.freeze({
     caseId: 'C16-A', caseIds: Object.freeze(['C16-A', 'C16-B', 'C16-C', 'C17-A', 'C17-B', 'C18-A', 'C18-B']),
     sceneId: '场景1', chapterNumber: 2, milestone: 'final', arms: Object.freeze(['candidate']),
-    scenarioRevision: 'c16-c18-candidate-production-path-v3',
+    scenarioRevision: 'c16-c18-candidate-production-path-v4',
     attemptPolicy: C16_C18_ATTEMPT_POLICY,
+    // v4（用户批准的 harness 变更）：C17-B 恢复副本内重新定稿后按产品定稿路径紧接生产后处理，
+    // notes/cards 各为独立登记 operation，与 C16 同一 RunFinalizePostProcessCommand 入口，绑定新 finalizationId。
     operations: Object.freeze([
-      Object.freeze({ id: '定稿章节要点', kind: 'chapter_notes' }),
-      Object.freeze({ id: '定稿角色状态', kind: 'character_cards' }),
-      Object.freeze({ id: '本地恢复后续写', kind: 'draft', restore: 'local' }),
-      Object.freeze({ id: 'DAV选定世代恢复后续写', kind: 'draft', restore: 'webdav' }),
+      Object.freeze({ id: '定稿章节要点', kind: 'chapter_notes', caseIds: Object.freeze(['C16-A', 'C16-B', 'C16-C']) }),
+      Object.freeze({ id: '定稿角色状态', kind: 'character_cards', caseIds: Object.freeze(['C16-A', 'C16-B', 'C16-C']) }),
+      Object.freeze({ id: '本地恢复后续写', kind: 'draft', restore: 'local', caseIds: Object.freeze(['C17-A', 'C17-B']) }),
+      Object.freeze({ id: 'DAV选定世代恢复后续写', kind: 'draft', restore: 'webdav', caseIds: Object.freeze(['C18-A', 'C18-B']) }),
+      Object.freeze({ id: '恢复副本重新定稿章节要点', kind: 'chapter_notes', caseIds: Object.freeze(['C17-B']) }),
+      Object.freeze({ id: '恢复副本重新定稿角色状态', kind: 'character_cards', caseIds: Object.freeze(['C17-B']) }),
     ]),
   }),
   full: Object.freeze({
@@ -351,6 +355,17 @@ export const PHASE_SCENARIOS = Object.freeze({
     ]),
   }),
 })
+/**
+ * 一个 c16-c18 案例实际执行的登记 operation：先该案登记的定稿后处理（notes→cards），再该案的恢复续写。
+ * driver 选择与结果侧校验共用这一个函数，不按下标切片。
+ */
+export function continuityCaseOperations(caseId) {
+  const operations = PHASE_SCENARIOS['c16-c18'].operations.filter(operation => operation.caseIds.includes(caseId))
+  return [...operations.filter(operation => !operation.restore), ...operations.filter(operation => operation.restore)]
+}
+/** 登记为定稿角色状态的 operation（含 C17-B 重新定稿后处理）共用产品原生 repair 的门禁规则。 */
+export const FINALIZED_CHARACTER_OPERATION_IDS = Object.freeze(PHASE_SCENARIOS['c16-c18'].operations
+  .filter(operation => operation.kind === 'character_cards').map(operation => operation.id))
 export function productionScenario(phase, milestone) {
   const scenario = PHASE_SCENARIOS[phase]
   if (!scenario) throw new Error('PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED')
@@ -402,7 +417,7 @@ export function createOperationDispatchGate({ onReject, repairPolicy, readPrimar
   const dispatched = new Map()
   return (operationId, owner, reviewSource) => {
     const first = dispatched.get(operationId)
-    const cards = finalizationRepair && operationId === '定稿角色状态'
+    const cards = finalizationRepair && FINALIZED_CHARACTER_OPERATION_IDS.includes(operationId)
     const condensePolicy = draftCondense?.policy
     const condense = Boolean(condensePolicy?.maxCondenseAttempts === 1 && condensePolicy.operationIds?.includes(operationId))
     const review = repairPolicy?.reviewRebuild?.operationId === operationId
@@ -1093,9 +1108,12 @@ export function runProductionPhasePair(targets, options) {
     const cases = JSON.parse(fs.readFileSync(options.semanticPath)).continuityQualificationCases
     if (stableEvidence(cases?.map(item => item.id)) !== stableEvidence(scenario.caseIds)) throw new Error('CONTINUITY_CASES_NOT_REGISTERED')
     for (const [index, item] of cases.entries()) {
-      const operations = item.kind === 'extraction' ? scenario.operations.slice(0, 2)
-        : scenario.operations.filter(operation => operation.restore === item.kind)
-      if (operations.length !== (item.kind === 'extraction' ? 2 : 1)) throw new Error('CONTINUITY_CASES_NOT_REGISTERED')
+      const operations = continuityCaseOperations(item.id)
+      // 抽取案恰为 notes/cards；恢复案恰一个同 kind 续写，只有带 sourceSuffix 的恢复案（C17-B）前置重新定稿后处理 notes/cards。
+      const postProcess = operations.filter(operation => !operation.restore), restore = operations.filter(operation => operation.restore)
+      if ((item.kind === 'extraction' ? restore.length !== 0 || postProcess.length !== 2
+        : restore.length !== 1 || restore[0].restore !== item.kind || postProcess.length !== (item.sourceSuffix ? 2 : 0))
+        || postProcess.some((operation, index) => operation.kind !== ['chapter_notes', 'character_cards'][index])) throw new Error('CONTINUITY_CASES_NOT_REGISTERED')
       try {
         results.push(runProductionBridge({ ...common, caseId: item.id, target: executionTargets.candidate, action: 'execute', operations,
           parityHash, evidenceRoot: path.join(executionTargets.candidate.isolationRoot, `step-${index}`) }))
@@ -1175,6 +1193,48 @@ function authorProtectionSatisfied(result, mode) {
   if (mode === 'synthetic' && !protection.proposed) return false
   return !protection.proposed || evidence.authorProtected === true
 }
+/** 案例内的定稿替换：C16-B/C16-C 在原项目重新定稿，C17-B 在恢复副本内重新定稿。 */
+const continuitySourceReplacement = result => result?.sourceReplacement ?? result?.restoration?.sourceReplacement ?? null
+const FINALIZED_SOURCE_KEYS = ['draftId', 'finalizationId', 'chapterNumber', 'contentHash']
+const sameFinalizedSource = (left, right) => FINALIZED_SOURCE_KEYS.every(key => left?.[key] !== undefined && left[key] !== null && left[key] === right?.[key])
+/**
+ * v4：定稿后处理（notes/cards）必须绑定该案当前定稿来源。有替换时来源即替换后的新 finalizationId；
+ * notes 持久投影与 cards derived provenance 均须回读到同一来源。
+ */
+function finalizationEvidenceBound(result) {
+  const evidence = result.finalizationEvidence, replacement = continuitySourceReplacement(result)
+  if (!evidence?.idempotent || !evidence.derivedApplied || evidence.effects?.length !== 2
+    || stableEvidence(evidence.effects.map(effect => effect?.stepKey)) !== stableEvidence(['chapter_notes', 'character_cards'])) return 'FINALIZATION_EFFECT_MISSING'
+  if (!FINALIZED_SOURCE_KEYS.every(key => evidence.source?.[key] !== undefined && evidence.source[key] !== null)
+    || evidence.notesReadback?.draftId !== evidence.source.draftId || evidence.notesReadback.sourceFinalizationId !== evidence.source.finalizationId
+    || evidence.notesReadback.sourceContentHash !== evidence.source.contentHash || evidence.notesReadback.sourceStatus !== 'current'
+    || !CONTENT_HASH.test(evidence.notesReadback.chapterNotesHash ?? '')
+    || evidence.cardsReadback?.sourceFinalizationId !== evidence.source.finalizationId
+    || replacement && (!sameFinalizedSource(evidence.source, replacement.after)
+      || replacement.after.finalizationId === replacement.before?.finalizationId)) return 'FINALIZATION_SOURCE_NOT_BOUND'
+  return null
+}
+/**
+ * v4：physicalProject.readback.predecessors 是续写实际纳入的必需前驱。C17-B 恢复副本重新定稿后，readback 与 parity
+ * 改为替换后的来源（替换前另存），parityHash 仍须等于 readback 的 hash，续写 materialDecision 须纳入同一来源与 revision。
+ */
+function admittedPredecessorBound(result) {
+  const readback = result.physicalProject?.readback, required = readback?.predecessors?.filter(item => item?.required === true)
+  if (!readback || required?.length !== 1 || result.physicalProject.parityHash !== digest(readback)) return false
+  const [predecessor] = required, replacement = result.restoration?.sourceReplacement
+  if (replacement) {
+    const before = result.restoration.predecessorsBeforeReplacement?.filter(item => item?.required === true)
+    if (predecessor.sourceId !== `finalized:${replacement.draftId}` || predecessor.revision !== replacement.draftId
+      || predecessor.version !== replacement.version || typeof replacement.content !== 'string'
+      || predecessor.contentHash !== digest(replacement.content) || predecessor.persistedBytes !== Buffer.byteLength(replacement.content, 'utf8')
+      || before?.length !== 1 || before[0].sourceId === predecessor.sourceId || before[0].sourceId !== `finalized:${replacement.before?.draftId}`
+      || !CONTENT_HASH.test(result.restoration.parityHashBeforeReplacement ?? '')
+      || result.restoration.parityHashBeforeReplacement === result.physicalProject.parityHash) return false
+  }
+  const drafts = result.attempts.filter(attempt => attempt.binding?.actual?.purpose?.startsWith('chapter-draft'))
+  return drafts.length > 0 && drafts.every(attempt => attempt.optionalMaterialEvidence?.materialDecision?.included?.some(item =>
+    item.sourceId === predecessor.sourceId && item.revision === predecessor.revision))
+}
 export function validateCandidateContinuityResults(results, mode) {
   const fail = code => ({ status: 'failed', candidateFailure: code })
   const condense = PHASE_SCENARIOS['c16-c18'].attemptPolicy.draftCondense
@@ -1182,11 +1242,14 @@ export function validateCandidateContinuityResults(results, mode) {
     || result.phase !== 'c16-c18' || result.mode !== mode)) return fail('CANDIDATE_OPERATION_MISSING')
   if (stableEvidence(results.map(result => result.caseId)) !== stableEvidence(PHASE_SCENARIOS['c16-c18'].caseIds)) return fail('CANDIDATE_CASE_MISMATCH')
   const source = results[0].physicalProject?.projectId
-  if (!source || results.slice(0, 3).some(result => result.physicalProject?.projectId !== source
-    || !result.finalizationEvidence?.idempotent || !result.finalizationEvidence.derivedApplied || result.finalizationEvidence.effects?.length !== 2))
-    return fail('FINALIZATION_EFFECT_MISSING')
+  if (!source || results.slice(0, 3).some(result => result.physicalProject?.projectId !== source)) return fail('FINALIZATION_EFFECT_MISSING')
+  // 有定稿后处理 operation 的案例（C16 三案与 C17-B）逐案核对正式效果与来源绑定。
+  for (const result of results.filter(item => continuityCaseOperations(item.caseId).some(operation => !operation.restore))) {
+    const failure = finalizationEvidenceBound(result)
+    if (failure) return fail(failure)
+  }
   for (const [index, result] of results.entries()) {
-    const expected = PHASE_SCENARIOS['c16-c18'].operations.slice(index < 3 ? 0 : index < 5 ? 2 : 3, index < 3 ? 2 : index < 5 ? 3 : 4)
+    const expected = continuityCaseOperations(result.caseId)
     if (stableEvidence(result.operations?.map(item => item.operation)) !== stableEvidence(expected.map(item => item.id))) return fail('CANDIDATE_OPERATION_MISMATCH')
     if (!Array.isArray(result.attempts) || !Array.isArray(result.ownerTerminal)
       || result.ownerTerminal.length !== result.attempts.length) return fail('ACTUAL_OWNER_ARTIFACT_MISMATCH')
@@ -1219,9 +1282,10 @@ export function validateCandidateContinuityResults(results, mode) {
       || !validDraftObservation(result.draftObservation)
       || index >= 5 && (!result.restoration.selectedGenerationId || result.restoration.bindingMode !== 'origin-readonly')))
       return fail('RESTORE_IDENTITY_MISMATCH')
+    if (index >= 3 && !admittedPredecessorBound(result)) return fail('PREDECESSOR_AFTER_REPLACEMENT_MISMATCH')
   }
   if (new Set(results.slice(3).map(result => result.physicalProject.projectId)).size !== 4) return fail('RESTORE_IDENTITY_MISMATCH')
-  if (!authorProtectionSatisfied(results[1], mode) || !results[2].sourceReplacement
+  if (!authorProtectionSatisfied(results[1], mode) || !results[1].sourceReplacement || !results[2].sourceReplacement
     || !results[4].restoration.sourceReplacement || results[6].restoration.branchGenerationIds?.length !== 2)
     return fail('CONTINUITY_CASE_EVIDENCE_MISSING')
   return { status: mode === 'real' ? 'pending-independent-oracle-review' : 'passed' }

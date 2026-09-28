@@ -50,7 +50,13 @@ const reviewedSyntheticIssues = [
   { category: '知情', severity: 'warning', description: '沈岸提前知道地图，违反作者知情边界。',
     quote: '雨还未停，沈岸已经知道信封内有地图。', replacement: '雨还未停，林澄没有向沈岸透露信封里的地图。' },
 ]
-const optionalPredecessorBody = spec => `${spec.line.repeat(spec.repeat)}\n${spec.marker}`
+/** 物理项目 parity 中的前驱回读：只记来源身份、hash 与字节，不记正文。 */
+const parityPredecessors = readbacks => readbacks.map(record => ({ sourceId: record.sourceId,
+  chapterNumber: record.chapterNumber, version: record.version,
+  revision: record.sourceId.startsWith('finalized:') ? record.draftId : record.version, contentHash: sha(record.content),
+  persistedBytes: Buffer.byteLength(record.content, 'utf8'), markerHash: record.marker ? sha(record.marker) : null,
+  required: record.required }))
+const optionalPredecessorBody = spec =>`${spec.line.repeat(spec.repeat)}\n${spec.marker}`
 const previousChapterEnding = content => {
   const trimmed = content.trim()
   if (trimmed.length <= 1_000) return trimmed
@@ -510,11 +516,7 @@ test('isolated production commands persist the selected phase operations', async
     const skillBindings = await (await load('src/services/agent/writing-skill-bindings.ts')).loadWritingSkillBindings(session)
     assert.deepEqual(skillBindings.bindings, {}, 'UNREGISTERED_WRITING_SKILL')
     sourceParity = { core, authorBlueprints, model: safeModel, templates: physicalTemplates, skills: skillBindings.bindings,
-      predecessors: predecessorReadbacks.map(record => ({ sourceId: record.sourceId,
-        chapterNumber: record.chapterNumber, version: record.version,
-        revision: record.sourceId.startsWith('finalized:') ? record.draftId : record.version, contentHash: sha(record.content),
-        persistedBytes: Buffer.byteLength(record.content, 'utf8'), markerHash: record.marker ? sha(record.marker) : null,
-        required: record.required })),
+      predecessors: parityPredecessors(predecessorReadbacks),
       semanticHash: sha(source), guidanceHash: sha(source.template) }
     if (fullRun) {
       // Generated blueprints and prose diverge by arm; only original author inputs define initial parity.
@@ -526,7 +528,10 @@ test('isolated production commands persist the selected phase operations', async
     if (continuityRun) request.parityHash = sha(sourceParity)
     else assert.equal(sha(sourceParity), request.parityHash, 'PHYSICAL_PROJECT_PARITY_CHANGED')
 
-    const restorationKind = continuityRun ? request.operations[0]?.restore : null
+    // C17-B 的登记 operation 先是重新定稿后处理、后是续写：恢复类型取自本案唯一的续写 operation，而非首项。
+    const restorationKinds = continuityRun ? [...new Set(request.operations.flatMap(operation => operation.restore ? [operation.restore] : []))] : []
+    assert.ok(restorationKinds.length <= 1, 'RESTORE_KIND_AMBIGUOUS')
+    const restorationKind = restorationKinds[0] ?? null
     let sourceDbPath, sourceBefore
     const sourceRows = connection => Object.fromEntries(['drafts', 'contents', 'generation_attempts', 'finalization_outbox']
       .map(table => [table, connection.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]))
@@ -627,12 +632,20 @@ test('isolated production commands persist the selected phase operations', async
       receipt.restoration.currentAuthority = (await load('electron/services/portable-current-authority.ts')).readPortableCurrentAuthority({
         database: db, projectStorageRoot: path.join(project.rootPath, '.ai-novel'), projectId: project.projectId })
       if (continuityCase.sourceSuffix) {
+        // 恢复副本内重新定稿（C17-B）。产品定稿在提交后立即运行定稿后处理；这里由本案登记的
+        // 「恢复副本重新定稿章节要点/角色状态」operation 在续写前经同一 RunFinalizePostProcessCommand 执行。
         const previous = predecessorReadbacks.find(item => item.required)
         receipt.restoration.sourceReplacement = await refinalize(previous.draftId, continuityCase.sourceSuffix)
         previous.content = receipt.restoration.sourceReplacement.content
         previous.draftId = receipt.restoration.sourceReplacement.draftId
         previous.sourceId = `finalized:${previous.draftId}`
         previous.version = receipt.restoration.sourceReplacement.version
+        // 续写实际纳入的是替换后的前驱：readback 与 parity 同步改为替换后，替换前原样另存；此后全部 dispatch 绑定新 parity。
+        receipt.restoration.predecessorsBeforeReplacement = sourceParity.predecessors
+        receipt.restoration.parityHashBeforeReplacement = request.parityHash
+        sourceParity = { ...sourceParity, predecessors: parityPredecessors(predecessorReadbacks) }
+        request.parityHash = sha(sourceParity)
+        receipt.physicalProject = { ...receipt.physicalProject, parityHash: request.parityHash, readback: sourceParity }
       }
     }
 
@@ -966,11 +979,14 @@ test('isolated production commands persist the selected phase operations', async
       let command
       if (continuityRun && ['chapter_notes', 'character_cards'].includes(operationKind)) {
         const predecessor = predecessorReadbacks.find(item => item.required)
+        // 恢复案只在副本内重新定稿后才登记后处理：否则只会读回恢复前已冻结的旧效果。
+        if (restorationKind) assert.ok(receipt.restoration?.sourceReplacement, 'RESTORED_POST_PROCESS_WITHOUT_REFINALIZE')
         const readback = await invoke('db:continuity-read-source', predecessor.draftId, project.rootPath, session)
         assert.equal(readback.status, 'valid', 'FINALIZATION_SOURCE_NOT_CURRENT')
         command = new (await load('src/services/workflows/commands/finalize-chapter.command.ts')).RunFinalizePostProcessCommand({
           project: projectStore.getState().currentProject, chapterNumber: predecessor.chapterNumber, chapterTitle: scene.title,
-          draftContent: readback.snapshot.content, draftId: predecessor.draftId, sourceLabel: 'quality-c16-existing',
+          draftContent: readback.snapshot.content, draftId: predecessor.draftId,
+          sourceLabel: receipt.restoration?.sourceReplacement ? 'quality-c17b-refinalize' : 'quality-c16-existing',
           finalizedSource: readback.snapshot.source, stopOnFailure: true, stepKey: operationKind })
       }
       else if (operationKind === 'directory') command = new (await load('src/services/workflows/commands/directory.command.ts')).GenerateDirectoryCommand(
@@ -1078,8 +1094,25 @@ test('isolated production commands persist the selected phase operations', async
         await command.execute(params)
         assert.equal(receipt.attempts.length, count, 'FINALIZATION_IDEMPOTENCY_DISPATCHED')
         receipt.finalizationEvidence ??= { source: slot.source, effects: [], idempotent: true }
+        assert.deepEqual(slot.source, receipt.finalizationEvidence.source, 'FINALIZATION_STEPS_SOURCE_DIVERGED')
+        // 重新定稿后的后处理必须绑定替换后的新来源（C16-B/C16-C 原项目，C17-B 恢复副本）。
+        const replacement = receipt.sourceReplacement ?? receipt.restoration?.sourceReplacement
+        if (replacement) assert.deepEqual(slot.source, replacement.after, 'POST_PROCESS_SOURCE_NOT_REPLACEMENT')
         receipt.finalizationEvidence.effects.push({ stepKey: operationKind, effect: persisted.effect,
           effectHash: sha(persisted.effect), contextHash: sha(persisted.context) })
+        if (operationKind === 'chapter_notes') {
+          // 持久 notes 投影按生产 IPC 回读，并落一份原文供独立评审引用。
+          const projection = (await invoke('db:continuity-list-before', chapter.number, project.rootPath, session))
+            .find(item => item.chapterNumber === slot.source.chapterNumber)
+          assert.ok(projection && projection.draftId === slot.source.draftId && projection.sourceStatus === 'current'
+            && projection.source?.finalizationId === slot.source.finalizationId
+            && projection.source.contentHash === slot.source.contentHash, 'DERIVED_NOTES_NOT_BOUND_TO_SOURCE')
+          const notesPath = path.join(evidenceRoot, `derived-notes-${slot.source.finalizationId}.txt`)
+          fs.writeFileSync(notesPath, projection.chapterNotes)
+          receipt.finalizationEvidence.notesReadback = { draftId: projection.draftId, sourceFinalizationId: projection.source.finalizationId,
+            sourceContentHash: projection.source.contentHash, sourceStatus: projection.sourceStatus,
+            chapterNotesHash: sha(projection.chapterNotes), outputPath: notesPath }
+        }
         if (operationKind === 'character_cards') {
           const roster = await invoke('db:character-roster-read', project.rootPath, session)
           assert.ok(finalizedCharacterId, 'FINALIZATION_TARGET_CHARACTER_MISSING')
@@ -1087,6 +1120,12 @@ test('isolated production commands persist the selected phase operations', async
           const provenance = character?.currentState?.provenance?.recentEvents
           receipt.finalizationEvidence.derivedApplied = provenance?.kind === 'derived'
             && provenance.source.finalizationId === slot.source.finalizationId
+          const cardsPath = path.join(evidenceRoot, `derived-cards-${slot.source.finalizationId}.json`)
+          const cardsText = JSON.stringify(roster.entries.map(entry => ({ characterId: entry.characterId, name: entry.name,
+            currentState: entry.currentState ?? null })), null, 2)
+          fs.writeFileSync(cardsPath, cardsText)
+          receipt.finalizationEvidence.cardsReadback = { characterId: finalizedCharacterId,
+            sourceFinalizationId: provenance?.source?.finalizationId ?? null, rosterHash: sha(cardsText), outputPath: cardsPath }
           if (request.mode === 'synthetic') {
             assert.equal(character?.currentState?.recentEvents, '发现日期异常，决定到现场核查', 'DERIVED_STATE_NOT_APPLIED')
             assert.equal(receipt.finalizationEvidence.derivedApplied, true, 'DERIVED_PROVENANCE_MISSING')

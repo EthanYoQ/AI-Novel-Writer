@@ -188,7 +188,9 @@ export function validatePhysicalLedger(file) {
   const c16 = validateHistoricalSupersessionBoundary(raw, postUi, protocol.historicalC16Ee3435ecBoundary)
   const ccc70b31 = validateHistoricalSupersessionBoundary(raw, c16, protocol.historicalC16Ccc70b31Boundary)
   const c9b88510 = validateHistoricalSupersessionBoundary(raw, ccc70b31, protocol.historicalC16C9b88510Boundary)
-  validateHistoricalSupersessionBoundary(raw, c9b88510, protocol.historicalC16D8a30c11Boundary)
+  const d8a30c11 = validateHistoricalSupersessionBoundary(raw, c9b88510, protocol.historicalC16D8a30c11Boundary)
+  const ca466d9a = validateHistoricalSupersessionBoundary(raw, d8a30c11, protocol.historicalC16Ca466d9aBoundary)
+  validateHistoricalSupersessionBoundary(raw, ca466d9a, protocol.historicalC1673b46513Boundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -321,7 +323,11 @@ export function assertScenarioMatchesProtocol(selection, scenario, semanticPath)
   if (selection.phase === 'c16-c18') {
     const order = semanticPath && read(semanticPath).continuityQualificationCases?.map(item => item.id)
     const oracles = selection.caseOracles
-    if (!isDeepStrictEqual(selection.caseOrder, selection.caseIds) || !isDeepStrictEqual(selection.caseOrder, order)
+    // v4 起每个 operation 的 kind、restore 与 caseIds 也逐字对齐：哪一案执行哪些后处理/续写只由协议决定。
+    if (selection.operations.some((operation, index) => operation.kind !== scenario.operations[index].kind
+      || (operation.restore ?? null) !== (scenario.operations[index].restore ?? null)
+      || !isDeepStrictEqual(operation.caseIds, [...(scenario.operations[index].caseIds ?? [])]))
+      || !isDeepStrictEqual(selection.caseOrder, selection.caseIds) || !isDeepStrictEqual(selection.caseOrder, order)
       || !isDeepStrictEqual(Object.keys(oracles ?? {}), selection.caseOrder)
       || selection.caseOrder.some(id => ['automatic', 'independentReview'].some(key =>
         !Array.isArray(oracles[id]?.[key]) || oracles[id][key].length === 0
@@ -495,6 +501,18 @@ export function updateLedger(file, event, options = {}) {
       const trustedD8a30c11Events = d8a30c11Boundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedC9b88510Events, d8a30c11Boundary)
         : trustedC9b88510Events
+      // 第580–648行：协议 hash `a0a14777…` 下 C16–C18 真实 invocation ca466d9a（code e797f2d2，FINALIZATION_EFFECT_MISSING）
+      // 与 73b46513（code 2275cdde，C17-B 独立评审 FAIL）。按同一 armBindings 规则各登记一段（579→615、615→648）；只加性认证，不改判。
+      const ca466d9aBoundary = options.campaignMode === 'real'
+        ? protocol.historicalC16Ca466d9aBoundary : options.historicalC16Ca466d9aBoundary
+      const trustedCa466d9aEvents = ca466d9aBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedD8a30c11Events, ca466d9aBoundary)
+        : trustedD8a30c11Events
+      const r73b46513Boundary = options.campaignMode === 'real'
+        ? protocol.historicalC1673b46513Boundary : options.historicalC1673b46513Boundary
+      const trusted73b46513Events = r73b46513Boundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedCa466d9aEvents, r73b46513Boundary)
+        : trustedCa466d9aEvents
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
       // 未登记 operations 的阶段在这里 fail closed。
@@ -517,7 +535,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedD8a30c11Events
+          const superseded = index >= trustedHistoricalEvents && index < trusted73b46513Events
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)
