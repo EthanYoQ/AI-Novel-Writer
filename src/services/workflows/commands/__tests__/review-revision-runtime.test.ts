@@ -125,6 +125,8 @@ describe('review/revision consumers using the main contract (synthetic transport
     expect(prompt).toContain('不得拼接多个位置、改写原文或包含省略号')
     expect(prompt).toContain('优先选择足以证明问题的最短完整句')
     expect(prompt).toContain('需要多处证据时拆成多个 evidence 项')
+    expect(prompt).toContain('【作者设定优先】【作者确认项目配置】与【世界观设定】是权威事实；【角色状态】只是既往章节摘要，不在此列。')
+    expect(prompt).toContain('即使蓝图、章节计划或冻结目标写法相反，也不得因此放过。')
   })
 
   it('renders the unique contiguous evidence-anchor constraint for an English ordinary review', async () => {
@@ -139,6 +141,8 @@ describe('review/revision consumers using the main contract (synthetic transport
     expect(prompt).toContain('one verbatim, contiguous excerpt that occurs exactly once')
     expect(prompt).toContain('Do not combine multiple locations')
     expect(prompt).toContain('use separate evidence entries')
+    expect(prompt).toContain('[Author settings take priority] The author-confirmed project configuration and the worldbuilding settings are authoritative facts; character states are only summaries of earlier chapters and are not included.')
+    expect(prompt).toContain('even when a blueprint, chapter plan or frozen goal says otherwise.')
   })
 
   it('prepares source hashes, binds only the main context and commits the verified composition reference', async () => {

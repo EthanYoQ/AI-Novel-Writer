@@ -94,6 +94,13 @@ describe('本章目标审稿合同', () => {
     expect(prompt).toContain('任一 unmet → unmet；否则任一 unknown → unknown；仅全部完成 → completed')
   })
 
+  it('目标与作者设定冲突时一律判 unknown 且不改写目标', () => {
+    const zh = buildChapterGoalReviewPrompt(goals, 'zh-CN')
+    expect(zh).toContain('目标原文与作者确认设定冲突时，无论正文是否写出该冲突内容，都判 unknown（不判 completed 或 unmet），并在 description 说明冲突，仍不得改写目标。')
+    const en = buildChapterGoalReviewPrompt(goals, 'en-US')
+    expect(en).toContain("If a goal's text conflicts with author-confirmed settings, judge it unknown (never completed or unmet) whether or not the draft contains the conflicting content, and explain the conflict in description. Still do not rewrite the goal.")
+  })
+
   it.each(['“钟楼已经修好。”', '"钟楼已经修好。"', '“钟楼已经修好。”她说。”'])('只容忍一对外围引号：%s', quote => {
     const source = '“钟楼已经修好。”她说。'
     const frozen = freezeChapterGoals(1, '修好钟楼')
