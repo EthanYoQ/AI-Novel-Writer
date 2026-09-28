@@ -387,6 +387,6 @@ it('characters最终合同要求每个update含recentEvents，且与渲染端副
  const renderer=fs.readFileSync(path.resolve('src/services/workflows/commands/finalize-chapter.command.ts'),'utf8')
  for(const [message,prefix] of [[zh,'【最终输出合同'],[en,'[Final output contract']] as const){
   const contract=message.slice(message.indexOf(prefix))
-  expect(renderer).toContain(`'${contract.replace(/'/g,"\\'")}'`)
+  expect(renderer).toContain(`'${contract.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}'`)
  }
 })

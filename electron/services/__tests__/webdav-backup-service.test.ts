@@ -29,6 +29,11 @@ async function requestBytes(request: IncomingMessage): Promise<Buffer> {
   return Buffer.concat(chunks)
 }
 
+// The stub echoes request paths into XML; escape them like a real server would.
+function escapeXml(value: string): string {
+  return value.replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`)
+}
+
 function encodeDavHref(value: string): string {
   return value.split('/').map(segment => {
     try { return encodeURIComponent(decodeURIComponent(segment)) }
@@ -123,7 +128,7 @@ class DavFixture {
       .filter(candidate => candidate.startsWith(normalized) && candidate !== normalized
         && !candidate.slice(normalized.length).replace(/\/$/u, '').includes('/'))
     return `<?xml version="1.0"?><d:multistatus xmlns:d="DAV:">${[normalized, ...children]
-      .map(href => `<d:response><d:href>${encodeDavHref(href)}</d:href><d:status>HTTP/1.1 200 OK</d:status></d:response>`)
+      .map(href => `<d:response><d:href>${escapeXml(encodeDavHref(href))}</d:href><d:status>HTTP/1.1 200 OK</d:status></d:response>`)
       .join('')}</d:multistatus>`
   }
 }
