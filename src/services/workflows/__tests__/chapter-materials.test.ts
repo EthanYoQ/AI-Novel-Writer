@@ -193,6 +193,11 @@ describe('chapter materials', () => {
 
     expect(bundle.text).toContain('伤口不是坠落造成的，而是铁钩划伤。')
     expect(bundle.text).not.toContain(staleStatement)
+    // 定位状态是内部决策信息：标题里不再出现，但已消费来源仍记录 stale。
+    expect(bundle.text).toContain('【定稿原文 · 第2章 · draft 22】')
+    expect(bundle.text).not.toContain('定位索引')
+    expect(bundle.text).not.toContain('stale')
+    expect(bundle.consumedFinalizedSources.map(source => source.sourceStatus)).toEqual(['stale'])
     expect(bundle.omissions).toContainEqual({
       source: 'finalized',
       chapterNumber: 2,
@@ -230,7 +235,7 @@ describe('chapter materials', () => {
     expect(bundle.text.split('仓门刚刚打开。')).toHaveLength(2)
     expect(bundle.text).toContain(source.content)
     expect(bundle.text).toContain('AUTHOR_TEXT_MUST_STAY')
-    expect(bundle.text).toContain('第2章 · draft 22 · 定位索引current')
+    expect(bundle.text).toContain('【定稿原文 · 第2章 · draft 22】')
     expect(bundle.consumedFinalizedSources).toEqual([source])
     expect(bundle.omissions).toContainEqual({
       source: 'finalized',

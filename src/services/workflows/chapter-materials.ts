@@ -565,13 +565,14 @@ export async function assembleChapterMaterials(input: {
       revision: source.draftId,
       text: promptLanguageText(
         writingLanguage,
-        `【定稿原文 · 第${source.chapterNumber}章 · draft ${source.draftId} · 定位索引${source.sourceStatus ?? 'legacy'}】\n${extracted.passages.join('\n\n')}`,
-        `[Finalized manuscript · Chapter ${source.chapterNumber} · draft ${source.draftId} · locator ${source.sourceStatus ?? 'legacy'}]\n${extracted.passages.join('\n\n')}`,
+        `【定稿原文 · 第${source.chapterNumber}章 · draft ${source.draftId}】\n${extracted.passages.join('\n\n')}`,
+        `[Finalized manuscript · Chapter ${source.chapterNumber} · draft ${source.draftId}]\n${extracted.passages.join('\n\n')}`,
       ),
       category: 'finalized-history',
       provenance: source.sourceStatus === 'legacy' ? 'legacy' : 'finalized',
       required: false,
       // stale 定位只说明索引失效：回读到的原文照常计入材料，过时陈述本身从不进入提示词。
+      // 定位状态只留在 consumedFinalizedSources / 决策里，不再印进模型可见的标题。
       ...(source.sourceStatus === 'stale' ? { staleLocator: false as const } : {}),
     })
     if (hasUnlocatedEvidence && selected) {

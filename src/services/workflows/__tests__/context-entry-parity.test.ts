@@ -20,6 +20,7 @@ import { refineHistoryMaterials } from '../commands/refine-draft.command'
  * （预算单位、排序、受预算的集合都随之改变），提示词因此逐字节不同。哈希改变只证明
  * 提示词确实变了，**不**证明它变好：质量仍是 `not-run`，要等 `early-context` 真模型门
  * 跑完才能判定。护栏本身不因此放松——它仍然是精确的 sha256 钉死，不是快照。
+ * 之后又变过一次：定稿原文标题不再印出内部定位状态（`· 定位索引<status>`），其余字节不变。
  */
 const sha = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
 
@@ -55,7 +56,7 @@ describe('S10B write-path characterization (the composed prompt must not change)
     expect(bundle.previousEnding).toBe('第三章草稿。\n\n她走向北塔。')
     expect(bundle.omissions).toEqual([])
     expect(bundle.consumedFinalizedSources.map(source => source.draftId)).toEqual([1])
-    expect(sha(bundle.text)).toBe('4a646510d5b5566f2e703058a422d52fec14f97180a66049901f21b9887b9360')
+    expect(sha(bundle.text)).toBe('8ab3d7af87aea4022011220e1f0307b42e2868f48088ce7a42879e548a3614b8')
   })
 
   it('fails explicitly when required author material alone exceeds the capacity', async () => {
@@ -80,7 +81,7 @@ describe('S10B write-path characterization (the composed prompt must not change)
     expect(bundle.omissions).toEqual([{ source: 'reference', reason: 'budget' }])
     expect(bundle.text).not.toContain('参'.repeat(7_000))
     expect(bundle.text).toContain('主角：林岚')
-    expect(sha(bundle.text)).toBe('c3742ac83ae9e90ab8f870d2c7370f2642cd529c8969863e87bba65bcffc79ca')
+    expect(sha(bundle.text)).toBe('d2d6026008c172eef6f93609983a1184a953a5cfb095dc59ca9d2be8ca600e30')
   })
 
   it('reports an unlocatable evidence index and still recovers nearby prose', async () => {
@@ -109,7 +110,7 @@ describe('S10B-1b single authority', () => {
     for (const item of selection.included) expect(bundle.text).toContain(item.text)
     // 块头只由各族原有的模板生成：渲染顺序就是合同顺序，没有第二条遍历。
     const candidateBlock = bundle.text.indexOf('【未定稿候选 · 第3章 · draft 30 · v1】')
-    const finalizedBlock = bundle.text.indexOf('【定稿原文 · 第1章 · draft 1 · 定位索引legacy】')
+    const finalizedBlock = bundle.text.indexOf('【定稿原文 · 第1章 · draft 1】')
     expect(candidateBlock).toBeGreaterThanOrEqual(0)
     expect(finalizedBlock).toBeGreaterThan(candidateBlock)
   })

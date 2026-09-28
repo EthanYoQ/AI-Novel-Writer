@@ -391,6 +391,19 @@ function chapterLengthContractText(writingLanguage: WritingLanguage, targetUnits
   )
 }
 
+/**
+ * 定稿事实优先规则：作者修改前文后，后续章节蓝图常常仍沿用旧计划。初始生成直接放在执行卡之后，
+ * 自动续写与压缩修订经由共用的作者资料块获得同一措辞——两者都会重读蓝图与必需事件，
+ * 续写还会新增情节，缺了这条就可能把已撤回的计划写成已执行。
+ */
+function finalizedFactPrecedenceText(writingLanguage: WritingLanguage): string {
+  return promptLanguageText(
+    writingLanguage,
+    `【定稿事实优先】\n本章蓝图、章节计划或必需事件的措辞与已定稿章节中确立的事实（包括作者在定稿中的最新更正）冲突时，以定稿事实为准：按与定稿事实一致的方式落实该条目（例如改变阻碍发生的方式或原因），不得把已撤回、取消或被取代的计划写成已执行；蓝图明确写成本章新决定的（如重新启用某计划），按新决定写。`,
+    `[Finalized facts take precedence]\nWhen the chapter blueprint, chapter plans, or the wording of required events conflict with facts established in finalized chapters (including the author's latest corrections in them), the finalized facts prevail: realize the item in a way consistent with them (for example, change how or why an obstacle happens) and never write a withdrawn, cancelled, or superseded plan as executed. If the blueprint explicitly states a new decision in this chapter (such as reviving a plan), write that new decision.`,
+  )
+}
+
 /** 自动续写与压缩修订共用的作者资料块：本章蓝图、全局写作要求、文风、小说配置事实与章节材料。 */
 function draftAuthorMaterialBlock(writingLanguage: WritingLanguage, material: {
   chapterInfo: WriterChapterInfo
@@ -417,7 +430,9 @@ ${material.writingStyle || '（无）'}
 【小说配置事实】
 ${material.novelConfigFacts}
 
-${material.chapterMaterials}`,
+${material.chapterMaterials}
+
+${finalizedFactPrecedenceText(writingLanguage)}`,
     `[Current chapter blueprint]
 ${JSON.stringify(material.chapterInfo, null, 2)}
 
@@ -434,7 +449,9 @@ ${material.writingStyle || '(none)'}
 [Novel configuration facts]
 ${material.novelConfigFacts}
 
-${material.chapterMaterials}`,
+${material.chapterMaterials}
+
+${finalizedFactPrecedenceText(writingLanguage)}`,
   )
 }
 
@@ -781,7 +798,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           `[Current-chapter execution card (author text repeated verbatim)]\nFollow the author text according to its meaning: events and outcomes explicitly required in this chapter must be realized through manuscript action or outcome. Ongoing states, knowledge boundaries, prohibitions, and style requests are narrative constraints; do not add or repeatedly confirm actions, dialogue, or explanations merely to prove compliance. Follow the reveal timing specified by the author; do not present what is reserved for later chapters as already completed. Still carry out explicitly requested actions, reveals, or repetition. Each later action must continue from the item ownership, character knowledge, and plan-completion state actually established in the prose.\n${executionItems.flatMap(item => item.value?.trim() ? [`- ${item.enUS}: ${item.value}`] : []).join('\n')}`,
         )
       : ''
-    const prompt = [chapterMaterials.text, promptBuilder.build(), chapterExecutionCard, chapterLengthContract]
+    const prompt = [chapterMaterials.text, promptBuilder.build(), chapterExecutionCard, finalizedFactPrecedenceText(writingLanguage), chapterLengthContract]
       .filter(Boolean)
       .join('\n\n')
     const materialDecision = { ...chapterMaterials.decision, promptHash: await hashAuthorText(prompt) }

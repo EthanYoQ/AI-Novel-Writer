@@ -1432,7 +1432,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(prompt).not.toContain('OLD_DERIVED_SUMMARY_MUST_NOT_REACH_PROVIDER')
     expect(prompt).not.toContain('林岚脚踝韧带受损，始终持有红色钥匙。')
     expect(prompt).not.toContain('[character-state]')
-    expect(prompt).toContain('定稿原文 · 第1章 · draft 41 · 定位索引')
+    expect(prompt).toContain('【定稿原文 · 第1章 · draft 41】')
     expect(prompt).toContain('林岚把红色钥匙收进口袋。')
     expect(prompt).toContain('索引、摘要和 currentState 都不是作者事实')
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('定稿连续性原文（1 条候选）'))
@@ -1489,7 +1489,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(decision?.included.map(item => item.sourceId)).toContain('finalized:41')
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
     expect(decision?.promptHash).toBe(createHash('sha256').update(prompt).digest('hex'))
-    expect(prompt).toContain('定稿原文 · 第1章 · draft 41 · 定位索引')
+    expect(prompt).toContain('【定稿原文 · 第1章 · draft 41】')
     expect(prompt).toContain('上一章定稿结尾哨兵。')
     // 脱敏：收据只是编号、原因码与数字，没有任何材料正文。
     const serialized = JSON.stringify(decision)
@@ -1605,7 +1605,9 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     await command.execute({ step: {}, context, callbacks })
 
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
-    expect(prompt).toContain('定位索引stale')
+    expect(prompt).toContain('【定稿原文 · 第1章 · draft 52】')
+    expect(prompt).not.toContain('定位索引')
+    expect(prompt).not.toMatch(/draft 52[^\n]*stale/)
     expect(prompt).toContain('新权威正文：林岚扶墙停下')
     expect(prompt).toContain('林岚扶墙停下')
     expect(prompt).toContain('她拒绝把钥匙交给周砚')
@@ -2163,6 +2165,48 @@ ${headingPrefix}第3章：潮门
   })
 
   it.each([
+    {
+      writingLanguage: 'zh-CN' as const,
+      heading: '【定稿事实优先】',
+      rule: '本章蓝图、章节计划或必需事件的措辞与已定稿章节中确立的事实（包括作者在定稿中的最新更正）冲突时，以定稿事实为准：按与定稿事实一致的方式落实该条目（例如改变阻碍发生的方式或原因），不得把已撤回、取消或被取代的计划写成已执行；蓝图明确写成本章新决定的（如重新启用某计划），按新决定写。',
+      executionCard: '【本章执行卡（作者原文重列）】',
+      lengthContract: '【本章篇幅合同】',
+    },
+    {
+      writingLanguage: 'en-US' as const,
+      heading: '[Finalized facts take precedence]',
+      rule: "When the chapter blueprint, chapter plans, or the wording of required events conflict with facts established in finalized chapters (including the author's latest corrections in them), the finalized facts prevail: realize the item in a way consistent with them (for example, change how or why an obstacle happens) and never write a withdrawn, cancelled, or superseded plan as executed. If the blueprint explicitly states a new decision in this chapter (such as reviving a plan), write that new decision.",
+      executionCard: '[Current-chapter execution card (author text repeated verbatim)]',
+      lengthContract: '[Chapter length contract]',
+    },
+  ])('puts the $writingLanguage finalized-fact precedence rule in initial and continuation requests', async ({
+    writingLanguage, heading, rule, executionCard, lengthContract,
+  }) => {
+    const runtime = fakeOutcomes(
+      outcome('初'.repeat(100), 'length', 1),
+      outcome(`${'续'.repeat(400)}。`, 'stop', 2),
+    )
+    const { context, callbacks, command } = setup({
+      runtime, wordsTarget: 500, writingLanguage, chapterNumber: 2, keyEvents: '核查遇阻；承担代价',
+      previousFinalizedContent: '作者更正：林澄撤回先前核查安排。',
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-continuation'])
+    const [initial, continuation] = runtime.complete.mock.calls.map(([task]) => task.messages.at(-1)!.content)
+    expect(initial).toContain(`${heading}\n${rule}`)
+    expect(initial.split(rule)).toHaveLength(2)
+    // 初始请求：执行卡之后、篇幅合同之前。
+    const ruleIndex = initial.indexOf(heading)
+    expect(ruleIndex).toBeGreaterThan(initial.lastIndexOf(executionCard))
+    expect(initial.indexOf(lengthContract)).toBeGreaterThan(ruleIndex)
+    // 续写复用作者资料块，同一措辞只出现一次。
+    expect(continuation).toContain(`${heading}\n${rule}`)
+    expect(continuation.split(heading)).toHaveLength(2)
+  })
+
+  it.each([
     ['zh-CN', '文风仅用于选择表达方式', '作者明确事实与指导、实际前文、本章关键因果和本章篇幅优先'],
     ['en-US', 'Writing style selects expression only', 'actual prior prose'],
   ] as const)('keeps the complete style profile optional in %s draft and continuation requests', async (
@@ -2540,7 +2584,7 @@ ${headingPrefix}第3章：潮门
 
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
     expect(prompt).toContain('林岚在旧码头拒绝登船。')
-    expect(prompt).toContain('定稿原文 · 第1章 · draft 41 · 定位索引')
+    expect(prompt).toContain('【定稿原文 · 第1章 · draft 41】')
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('定稿连续性原文（1 条候选）'))
   })
 
@@ -2917,7 +2961,7 @@ ${headingPrefix}第3章：潮门
     expect(condensePrompt).toContain('目标 2000 字（按汉字计，不含标点）；请写到约 1700–2000 字。2600 字是硬上限')
     // 与自动续写相同的作者资料块，随后才是篇幅合同、执行卡与待压缩正文。
     const order = ['【硬性要求】', '【本章蓝图】', '【全局写作要求】\n压缩全局要求哨兵', '【文风要求】\n压缩文风哨兵', '【文风适用边界】',
-      '【小说配置事实】', '【作者资料（保留原文', '【本章篇幅合同】', '【本章执行卡（作者原文重列）】', '- 必需事件: 压缩必需事件哨兵', '【待压缩正文】']
+      '【小说配置事实】', '【作者资料（保留原文', '【定稿事实优先】', '【本章篇幅合同】', '【本章执行卡（作者原文重列）】', '- 必需事件: 压缩必需事件哨兵', '【待压缩正文】']
       .map(marker => condensePrompt.indexOf(marker))
     expect(order.every(index => index >= 0)).toBe(true)
     expect(order).toEqual([...order].sort((left, right) => left - right))
@@ -2944,7 +2988,7 @@ ${headingPrefix}第3章：潮门
     expect(condensePrompt).toContain('between 630 and 1170 words')
     expect(condensePrompt).toContain('[Chapter length contract]')
     const order = ['[Requirements]', '[Current chapter blueprint]', '[Project-wide writing guidance]', '[Writing style]', '[Novel configuration facts]',
-      '[Author material (verbatim', '[Chapter length contract]', '[Manuscript to condense]'].map(marker => condensePrompt.indexOf(marker))
+      '[Author material (verbatim', '[Finalized facts take precedence]', '[Chapter length contract]', '[Manuscript to condense]'].map(marker => condensePrompt.indexOf(marker))
     expect(order.every(index => index >= 0)).toBe(true)
     expect(order).toEqual([...order].sort((left, right) => left - right))
     expect(condensePrompt).not.toContain('【')
