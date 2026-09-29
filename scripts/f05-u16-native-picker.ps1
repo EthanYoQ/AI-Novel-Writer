@@ -78,6 +78,9 @@ $fileNameId = switch ($DialogTitle) {
   '选择作者原稿文件' { 1148 }
   '选择角色头像' { 1148 }
   '选择恢复副本所在文件夹' { 1152 }
+  '选择项目保存位置' { 1152 }
+  '选择项目目录' { 1152 }
+  '选择旧版小说项目文件夹' { 1152 }
   default { throw "Unsupported picker title: $DialogTitle" }
 }
 $fileNameEdits = @($edits | Where-Object { [NativePickerInput]::GetDlgCtrlID($_) -eq $fileNameId })
@@ -121,7 +124,7 @@ do {
 } while($after -ne $Target -and [DateTime]::UtcNow -lt $deadline)
 if($after -ne $Target){ throw "Edit readback mismatch before=[$before] after=[$after]" }
 $enter = @([NativePickerInput]::Key(0x0d,0,0),[NativePickerInput]::Key(0x0d,0,2))
-if($DialogTitle -eq '选择恢复副本所在文件夹'){
+if($fileNameId -eq 1152){
   $confirm = @($buttons | Where-Object { [NativePickerInput]::GetDlgCtrlID($_) -eq 1 })
   if($confirm.Count -ne 1 -or [NativePickerInput]::Text($confirm[0]) -ne '选择文件夹' -or
      -not [NativePickerInput]::IsWindowVisible($confirm[0]) -or -not [NativePickerInput]::IsWindowEnabled($confirm[0])){
@@ -129,4 +132,4 @@ if($DialogTitle -eq '选择恢复副本所在文件夹'){
   }
   [NativePickerInput]::SendMessage($confirm[0],0xF5,[IntPtr]::Zero,$null) | Out-Null
 } elseif([NativePickerInput]::Send($enter) -ne $enter.Length){ throw 'Enter SendInput incomplete' }
-[pscustomobject]@{ dialogTitle=$DialogTitle; dialogPid=$d.pid; dialogHandle=$d.h.ToInt64(); focusHandle=$focus.ToInt64(); before=$before; typedExact=$true; submitted=$true; submitControl=$(if($DialogTitle -eq '选择恢复副本所在文件夹'){'Button:1'}else{'Enter'}) } | ConvertTo-Json -Compress
+[pscustomobject]@{ dialogTitle=$DialogTitle; dialogPid=$d.pid; dialogHandle=$d.h.ToInt64(); focusHandle=$focus.ToInt64(); before=$before; typedExact=$true; submitted=$true; submitControl=$(if($fileNameId -eq 1152){'Button:1'}else{'Enter'}) } | ConvertTo-Json -Compress

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
 import { test } from 'vitest'
@@ -6,11 +7,45 @@ import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 
 const driver = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../f05-a11-offline-import-journey.mjs'), 'utf8')
-const functionSource = name => {
-  const start = driver.indexOf(`async function ${name}(`) >= 0
-    ? driver.indexOf(`async function ${name}(`) : driver.indexOf(`function ${name}(`)
-  return start < 0 ? '' : driver.slice(start, driver.indexOf('\n}', start) + 2)
+const functionSource = (name, source = driver) => {
+  const start = source.indexOf(`async function ${name}(`) >= 0
+    ? source.indexOf(`async function ${name}(`) : source.indexOf(`function ${name}(`)
+  return start < 0 ? '' : source.slice(start, source.indexOf('\n}', start) + 2)
 }
+
+test('native project and legacy receipts require opaque grants consumed by their selecting sender', () => {
+  const u01 = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../f05-u01-transitions-journey.mjs'), 'utf8')
+  const sourceGrant = '11111111-1111-4111-8111-111111111111'
+  const targetGrant = '22222222-2222-4222-8222-222222222222'
+  const projectId = '33333333-3333-4333-8333-333333333333'
+  const choice = (channel, grantId, args = []) => ({ channel, senderId: 7, args, result: { grantId, displayName: 'folder' } })
+  const projectCalls = [
+    choice('dialog:select-folder', sourceGrant, ['project-create']),
+    { channel: 'project:create', senderId: 7, args: [{ parentGrantId: sourceGrant }], result: { success: true, projectId } },
+    choice('dialog:select-folder', targetGrant, ['project-open']),
+    { channel: 'project:open', senderId: 7, args: [{ grantId: targetGrant }], result: { success: true, project: { id: projectId } } },
+  ]
+  const importCalls = [choice('dialog:select-legacy-project', sourceGrant), choice('dialog:select-project-restore-target', targetGrant),
+    { channel: 'project:import-legacy-copy', senderId: 7, args: [sourceGrant, targetGrant],
+      result: { state: 'ready', projectId, targetRoot: 'target' } }]
+  for (const [name, source, calls] of [
+    ['verifyNativeProjectGrants', u01, projectCalls], ['verifyNativeImportGrants', driver, importCalls],
+  ]) {
+    const verify = input => vm.runInNewContext(`${functionSource(name, source)}\n${name}(${JSON.stringify(input)})`, { assert })
+    assert.doesNotThrow(() => verify(calls))
+    for (const mutate of [
+      items => { items.at(-1).senderId = 8 },
+      items => { items[0].result.path = 'C:\\raw-path' },
+      items => { items[0].result.grantId = 'C:\\raw-path' },
+      items => { items[0].result.grantId = projectId },
+      items => { items.at(-1).result = { success: false, state: 'blocked' } },
+    ]) {
+      const altered = structuredClone(calls)
+      mutate(altered)
+      assert.throws(() => verify(altered), undefined, `${name} accepted invalid native evidence`)
+    }
+  }
+})
 
 test('Windows partial launch records bounded startup facts and kills its exact process tree', async () => {
   const original = new Error('skin wait timed out')

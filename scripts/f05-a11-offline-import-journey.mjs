@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -16,6 +16,9 @@ const macFixtureOnly = arg('mac-fixture-only') === '1'
 const macMode = Boolean(macMountedApp || macFixtureOnly)
 const winInstalledApp = arg('win-installed-app')
 const winMode = Boolean(winInstalledApp)
+const nativePicker = arg('native-picker') === '1'
+assert(!nativePicker || (winMode && !macMode), '--native-picker=1 requires the official Windows installed-app mode')
+const nativePickerHelper = path.join(repository, 'scripts', 'f05-u16-native-picker.ps1')
 const macScratchRoot = arg('scratch-root')
 const macDmg = arg('dmg')
 const macMountPoint = arg('mount-point')
@@ -119,6 +122,9 @@ const receipt = macMode ? { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification
     injectedInventoryRemovedFromScratchCopy: fs.existsSync(path.join(source.path, '.vela', 'upgrade-data-inventory.json')) })),
   steps: [], exitDiagnostics: [], receiptPath }
 if (!macMode && !winMode) assert.deepEqual(receipt.packageHashes, { exe: expectedExe, asar: expectedAsar })
+if (nativePicker) Object.assign(receipt, { mode: 'official-old-app-installed-app-native-picker',
+  nativePickerHelperSha256: sha256(nativePickerHelper), nativePickerEvidence: [],
+  pickerQualification: 'Native source and target OS choices; legacy warning confirmation remains controlled' })
 fs.mkdirSync(scratch, { recursive: true })
 if (!macMode) {
 fs.writeFileSync(path.join(scratch, '.vibe-owner.json'), JSON.stringify({ owner: winMode ? 'codex/s14c-windows-official' : legacyV025 ? 'codex/thread-7/s14c-v025' : 'codex/thread-6/a11',
@@ -139,6 +145,35 @@ function inventory(root) {
   }
   visit(root)
   return files
+}
+
+function chooseNativeDirectory(title, target, pid) {
+  const result = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', nativePickerHelper,
+    '-Target', target, '-ExpectedExe', exe, '-DialogTitle', title],
+  { cwd: repository, encoding: 'utf8', windowsHide: true, timeout: 30_000 })
+  assert.equal(result.status, 0, `native picker: ${result.stderr || result.stdout || result.error}`)
+  const evidence = JSON.parse(result.stdout.trim())
+  assert.equal(evidence.dialogTitle, title)
+  assert.equal(evidence.dialogPid, pid)
+  assert.equal(evidence.typedExact, true)
+  assert.equal(evidence.submitted, true)
+  receipt.nativePickerEvidence.push(evidence)
+}
+
+function verifyNativeImportGrants(calls) {
+  const channels = ['dialog:select-legacy-project', 'dialog:select-project-restore-target', 'project:import-legacy-copy']
+  assert.deepEqual(calls.map(call => call.channel), channels)
+  const [source, target, imported] = calls
+  for (const [index, choice] of [source, target].entries()) {
+    assert.deepEqual(Object.keys(choice.result).sort(), ['displayName', 'grantId'])
+    assert.match(choice.result.grantId, /^[a-f0-9-]{36}$/i)
+    assert.equal(choice.senderId, imported.senderId)
+    assert.equal(choice.result.grantId, imported.args[index])
+  }
+  assert.equal(imported.result.state, 'ready')
+  assert.match(imported.result.projectId, /^[a-f0-9-]{36}$/i)
+  return { senderId: imported.senderId, sourceOpaque: true, targetOpaque: true, consumerMatched: true,
+    projectId: imported.result.projectId, targetRoot: imported.result.targetRoot }
 }
 
 const compareSql = `import json,sqlite3,sys
@@ -929,10 +964,12 @@ async function verifyMac() {
     await home(session.page)
     macStage('home-ready')
     let requestCounts = await observeRequests(session)
-    await session.app.evaluate(({ dialog }, { source, targetParent }) => {
+    await session.app.evaluate(({ dialog, ipcMain }, { source, targetParent, nativePicker }) => {
       globalThis.__a11Dialogs = []
+      const originalDialog = dialog.showOpenDialog.bind(dialog)
       dialog.showOpenDialog = async options => {
         globalThis.__a11Dialogs.push({ type: 'open', title: options.title })
+        if (nativePicker) return originalDialog(options)
         if (options.title === '选择旧版小说项目文件夹') return { canceled: false, filePaths: [source] }
         if (options.title === '选择恢复副本所在文件夹') return { canceled: false, filePaths: [targetParent] }
         throw new Error(`Unexpected dialog: ${options.title}`)
@@ -942,15 +979,37 @@ async function verifyMac() {
         if (!options.message.includes('保存并关闭旧版程序')) throw new Error('Unexpected confirmation')
         return { response: 1, checkboxChecked: false }
       }
-    }, { source, targetParent })
+      if (nativePicker) {
+        globalThis.__a11NativeCalls = []
+        for (const channel of ['dialog:select-legacy-project', 'dialog:select-project-restore-target', 'project:import-legacy-copy']) {
+          const original = ipcMain._invokeHandlers.get(channel)
+          if (!original) throw new Error(`Missing IPC handler: ${channel}`)
+          ipcMain.removeHandler(channel)
+          ipcMain.handle(channel, async (event, ...args) => {
+            const result = await original(event, ...args)
+            globalThis.__a11NativeCalls.push({ channel, senderId: event.sender.id, args, result })
+            return result
+          })
+        }
+      }
+    }, { source, targetParent, nativePicker })
     macStage('import-start')
     await session.page.getByRole('button', { name: '导入旧项目副本' }).click()
+    if (nativePicker) {
+      chooseNativeDirectory('选择旧版小说项目文件夹', source, session.app.process().pid)
+      chooseNativeDirectory('选择恢复副本所在文件夹', targetParent, session.app.process().pid)
+    }
     await session.page.locator('.writer-project-tree').getByText('p', { exact: true })
       .waitFor({ state: 'visible', timeout: 30_000 })
     assert(fs.existsSync(path.join(target, '.ai-novel', 'project.db')), 'No published target database')
     assert.deepEqual((await session.app.evaluate(() => globalThis.__a11Dialogs)).map(item => item.type), ['open', 'open', 'confirm'])
     assert.deepEqual(inventory(source), seeded.files, 'Official old-app source changed during import')
     const targetProjectId = JSON.parse(fs.readFileSync(path.join(target, '.ai-novel', 'project.json'), 'utf8')).projectId
+    if (nativePicker) {
+      receipt.nativeGrants = verifyNativeImportGrants(await session.app.evaluate(() => globalThis.__a11NativeCalls))
+      assert.equal(receipt.nativeGrants.projectId, targetProjectId)
+      assert.equal(fs.realpathSync.native(receipt.nativeGrants.targetRoot), fs.realpathSync.native(target))
+    }
     assert.match(targetProjectId, /^[a-f0-9-]{36}$/i, 'Imported project has no new identity')
     assert.notEqual(targetProjectId, seeded.sourceProjectId, 'Imported project reused legacy identity')
     assert(!path.resolve(target).startsWith(`${path.resolve(source)}${path.sep}`), 'Target overlaps source')

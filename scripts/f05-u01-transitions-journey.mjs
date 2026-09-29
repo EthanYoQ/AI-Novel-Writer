@@ -20,6 +20,9 @@ const packageDir = argument('package-dir')
 const packageSourceSha = argument('package-source-sha')
 const expectedExe = argument('exe-sha256')
 const expectedAsar = argument('asar-sha256')
+const nativePickerOnly = process.argv.includes('--native-picker-only')
+assert(!nativePickerOnly || !process.argv.some(arg => ['--a10-only', '--a12-only'].includes(arg)),
+  '--native-picker-only cannot be combined with other action subsets')
 assert(packageDir && packageSourceSha && /^[a-f0-9]{64}$/.test(expectedExe ?? '') && /^[a-f0-9]{64}$/.test(expectedAsar ?? ''),
   'pass --package-dir=<win-unpacked> --package-source-sha=<sha> --exe-sha256=<hash> --asar-sha256=<hash>')
 const executablePath = path.join(packageDir, 'AI小说作家.exe')
@@ -135,15 +138,35 @@ async function open(page, name) {
   await page.locator('.writer-shelf').getByRole('button', { name: `打开《${name}》` }).click()
   await page.locator('.writer-project-tree').getByText(name, { exact: true }).waitFor({ state: 'visible' })
 }
-function chooseNativeFile(target) {
+function chooseNativeFile(target, title = '选择作者原稿文件') {
   const result = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', nativePickerHelper,
-    '-Target', target, '-ExpectedExe', executablePath, '-DialogTitle', '选择作者原稿文件'],
+    '-Target', target, '-ExpectedExe', executablePath, '-DialogTitle', title],
   { cwd: repository, encoding: 'utf8', windowsHide: true, timeout: 30_000 })
   assert.equal(result.status, 0, `native picker: ${result.stderr || result.stdout || result.error}`)
   const evidence = JSON.parse(result.stdout.trim())
+  assert.equal(evidence.dialogTitle, title)
   assert.equal(evidence.typedExact, true)
   assert.equal(evidence.submitted, true)
   return evidence
+}
+function verifyNativeProjectGrants(calls) {
+  return ['project-create', 'project-open'].map(purpose => {
+    const choices = calls.filter(call => call.channel === 'dialog:select-folder' && call.args[0] === purpose)
+    assert.equal(choices.length, 1, 'Expected one native directory choice per operation')
+    const choice = choices[0]
+    assert.deepEqual(Object.keys(choice.result).sort(), ['displayName', 'grantId'])
+    assert.match(choice.result.grantId, /^[a-f0-9-]{36}$/i)
+    const consumers = calls.filter(call => call.channel === purpose.replace('-', ':')
+      && (purpose === 'project-create' ? call.args[0]?.parentGrantId : call.args[0]?.grantId) === choice.result.grantId)
+    assert.equal(consumers.length, 1, 'Selected grant must be consumed exactly once')
+    const consumer = consumers[0]
+    assert.equal(consumer.senderId, choice.senderId)
+    assert.equal(consumer.result.success, true)
+    assert.equal(Object.hasOwn(consumer.args[0], 'path'), false)
+    const projectId = purpose === 'project-create' ? consumer.result.projectId : consumer.result.project.id
+    assert.match(projectId, /^[a-f0-9-]{36}$/i)
+    return { purpose, senderId: choice.senderId, opaqueGrant: true, consumerMatched: true, projectId }
+  })
 }
 async function assertProjectFacts(page, projectPath, config, body) {
   assert.equal((await invoke(page, 'project:get-runtime-context')).activeProjectPath, projectPath)
@@ -198,6 +221,7 @@ async function main() {
   let shelfScreenshot
   let deleteEntryScreenshot
   const rendererLogs = []
+  const nativePickerEvidence = []
   const a10Only = process.argv.includes('--a10-only')
   const model = { id: 'f05-u01-synthetic', name: 'U01 离线合成模型', provider: 'openai', protocol: 'openai',
     modelName: 'gpt-4.1', baseUrl: 'https://api.openai.com/v1', apiKey: 'f05-u01-offline-only',
@@ -418,20 +442,34 @@ async function main() {
     let expectedAConfig = fixtureConfig.a
     let cFile
     if (!a12Only) {
+    if (nativePickerOnly) await session.app.evaluate(({ ipcMain }) => {
+      globalThis.__u01NativeCalls = []
+      for (const channel of ['dialog:select-folder', 'project:create', 'project:open']) {
+        const original = ipcMain._invokeHandlers.get(channel)
+        if (!original) throw new Error(`Missing IPC handler: ${channel}`)
+        ipcMain.removeHandler(channel)
+        ipcMain.handle(channel, async (event, ...args) => {
+          const result = await original(event, ...args)
+          globalThis.__u01NativeCalls.push({ channel, senderId: event.sender.id, args, result })
+          return result
+        })
+      }
+    })
     currentStep = 'U01.A01'
     await page.getByRole('button', { name: '新建作品', exact: true }).click()
     const createDialog = page.getByRole('dialog', { name: '新建小说项目' })
     await createDialog.getByPlaceholder('如：斗破苍穹').fill(names.c)
-    await session.app.evaluate(({ dialog }, selectedPath) => {
+    if (!nativePickerOnly) await session.app.evaluate(({ dialog }, selectedPath) => {
       globalThis.__u01PickerOriginal = dialog.showOpenDialog
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] })
     }, roots.projects)
     try {
       await createDialog.getByRole('button', { name: '选择', exact: true }).click()
+      if (nativePickerOnly) nativePickerEvidence.push(chooseNativeFile(roots.projects, '选择项目保存位置'))
       await page.waitForFunction(displayName => document.querySelector('input[placeholder="选择项目保存目录"]')?.value === displayName,
         path.basename(roots.projects))
     } finally {
-      await session.app.evaluate(({ dialog }) => {
+      if (!nativePickerOnly) await session.app.evaluate(({ dialog }) => {
         dialog.showOpenDialog = globalThis.__u01PickerOriginal
         delete globalThis.__u01PickerOriginal
       })
@@ -450,15 +488,16 @@ async function main() {
 
     currentStep = 'U01.A02'
     await home(page)
-    await session.app.evaluate(({ dialog }, selectedPath) => {
+    if (!nativePickerOnly) await session.app.evaluate(({ dialog }, selectedPath) => {
       globalThis.__u01PickerOriginal = dialog.showOpenDialog
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] })
     }, projects.a)
     try {
       await page.getByRole('button', { name: '打开作品', exact: true }).click()
+      if (nativePickerOnly) nativePickerEvidence.push(chooseNativeFile(projects.a, '选择项目目录'))
       await page.locator('.writer-project-tree').getByText(names.a, { exact: true }).waitFor({ state: 'visible' })
     } finally {
-      await session.app.evaluate(({ dialog }) => {
+      if (!nativePickerOnly) await session.app.evaluate(({ dialog }) => {
         dialog.showOpenDialog = globalThis.__u01PickerOriginal
         delete globalThis.__u01PickerOriginal
       })
@@ -468,7 +507,28 @@ async function main() {
     try { assert.deepEqual(reopenedC.prepare("SELECT project_name, core_outline FROM project_core WHERE id = 'main'").get(), cCore) }
     finally { reopenedC.close() }
     assert.equal(hash(path.join(projects.c, '.ai-novel', 'project.json')), cFile, 'opening A rewrote C project file')
-    pass('v3-open-project', 'U01.A02', 'V3 Open project action uses a controlled folder choice and binds A without writing C')
+    pass('v3-open-project', 'U01.A02', `V3 Open project action uses a ${nativePickerOnly ? 'native OS' : 'controlled'} folder choice and binds A without writing C`)
+
+    if (nativePickerOnly) {
+      const grants = verifyNativeProjectGrants(await session.app.evaluate(() => globalThis.__u01NativeCalls))
+      assert.equal(grants[0].projectId, JSON.parse(fs.readFileSync(path.join(projects.c, '.ai-novel', 'project.json'), 'utf8')).projectId)
+      assert.equal(grants[1].projectId, projectIds.a)
+      assert(nativePickerEvidence.every(item => item.dialogPid === session.app.process().pid))
+      dbA.close()
+      await quit(session.app)
+      session = null
+      assert.equal(hash(scriptPath), driverSha256)
+      assert.deepEqual(provenance().artifactHashes, source.artifactHashes)
+      const receipt = { outcome: 'PARTIAL', sliceOutcome: 'PASS', qualification: 'F05_U01_NATIVE_A01_A02_ONLY',
+        evidenceLevel: 'native-os-picker', shell: 'writer-v3', ...source, driverSha256,
+        nativePickerHelperSha256: hash(nativePickerHelper), nativePickerEvidence, grants, steps,
+        verifiedActions: ['U01.A01', 'U01.A02'], physicalModelRequests: 0, releaseDefaultQualified: false,
+        pickerFixture: 'Setup projects use controlled choices; qualified A01/A02 use untouched OS dialogs and original IPC handlers',
+        unverifiedActions: ['U01.A03–A12 and full F05/product qualification are not reverified'] }
+      fs.writeFileSync(receiptPath, JSON.stringify(receipt, null, 2))
+      process.stdout.write(`${JSON.stringify({ outcome: receipt.outcome, sliceOutcome: receipt.sliceOutcome, receipt: receiptPath })}\n`)
+      return
+    }
 
     currentStep = 'U01.A03'
     const aFileBeforeRecent = hash(projectFile)
@@ -828,7 +888,7 @@ async function main() {
       if (!closed) { try { session.app.process()?.kill() } catch { /* already closed */ } }
     }
     fs.writeFileSync(receiptPath, JSON.stringify({ outcome: 'FAIL', ...source, driverSha256, shelfScreenshot, deleteEntryScreenshot,
-      failedStep: currentStep, steps, error: String(error), diagnostic, modelRequests, rendererLogs: rendererLogs.slice(-20) }, null, 2))
+      failedStep: currentStep, steps, nativePickerEvidence, error: String(error), diagnostic, modelRequests, rendererLogs: rendererLogs.slice(-20) }, null, 2))
     throw error
   } finally {
     if (fixtureServer?.listening) await new Promise(resolve => fixtureServer.close(resolve))
