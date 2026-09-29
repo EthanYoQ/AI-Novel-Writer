@@ -176,11 +176,32 @@ async function preflight(page, channel, args, selection, expectedResult) {
     timer = setTimeout(() => resolve({ error: 'IPC_TIMEOUT_15000' }), 15_000)
   })])
   clearTimeout(timer)
-  evidence.ipcResult = outcome.result ?? null
+  // 授权标识是短期能力，不写入收据；渲染进程只会得到 { grantId, displayName }，完整路径不再出现在 IPC 结果里。
+  evidence.ipcResult = outcome.result ? { displayName: outcome.result.displayName, grantIssued: typeof outcome.result.grantId === 'string' } : null
   evidence.error = outcome.error ?? null
   assert.equal(outcome.error, undefined, `public ${channel} IPC failed: ${outcome.error}`)
-  assert.equal(folded(outcome.result), folded(expectedResult), `public ${channel} IPC returned unexpected path`)
+  assert.deepEqual(Object.keys(outcome.result ?? {}).sort(), ['displayName', 'grantId'], `public ${channel} IPC returned unexpected shape`)
+  assert.equal(typeof outcome.result.grantId, 'string', `public ${channel} IPC returned no grant`)
+  assert.equal(folded(outcome.result.displayName), folded(path.basename(expectedResult)), `public ${channel} IPC returned unexpected display name`)
   return evidence
+}
+
+/**
+ * 直接调用需要授权的 IPC 时：仅在主进程桩住 Electron 原生对话框（用后还原），
+ * 让生产 chooser IPC 照常签发授权标识；不绕过授权服务，也不向渲染进程暴露路径。
+ */
+async function chooseGrantWithStubbedDialog(app, page, channel, args, method, dialogResult) {
+  await app.evaluate(({ dialog }, { method, dialogResult }) => {
+    globalThis.__chooserOriginal = dialog[method]
+    dialog[method] = async () => dialogResult
+  }, { method, dialogResult })
+  try {
+    const grant = await invoke(page, channel, ...args)
+    assert.equal(typeof grant?.grantId, 'string', `${channel} did not issue a grant`)
+    return grant
+  } finally {
+    await app.evaluate(({ dialog }, method) => { dialog[method] = globalThis.__chooserOriginal }, method)
+  }
 }
 
 async function choose(button, selections) {
@@ -328,7 +349,7 @@ async function main() {
       process.stdout.write(`${JSON.stringify({ outcome: receipt.outcome, receipt: path.join(receiptDir, 'receipt.json') })}\n`)
       return
     }
-    pass('writer-local-restore-copy', 'U16.A02', 'Public OpenFile/OpenDirectory preflights matched isolated paths; Writer selection restored a separate local copy without original DB changes')
+    pass('writer-local-restore-copy', 'U16.A02', 'Public OpenFile/OpenDirectory preflights returned opaque grants whose display names matched the isolated targets; Writer selection restored a separate local copy without original DB changes')
 
     if (process.argv.includes('--diagnose-after-local-restore')) {
       currentStep = 'diagnostic-post-local-restore-archive'
@@ -343,7 +364,9 @@ async function main() {
       const reopened = await invoke(page, 'project:open', created.projectPath, randomUUID(), null)
       assert.equal(reopened.success, true, reopened.error)
       const projectSession = { projectId: reopened.project.id, projectPath: created.projectPath, leaseId: reopened.project.sessionLease }
-      const exported = await invoke(page, 'project:archive-export', { targetArchivePath, projectSession })
+      const archiveGrant = await chooseGrantWithStubbedDialog(app, page, 'dialog:select-project-archive-export', ['diagnostic'],
+        'showSaveDialog', { canceled: false, filePath: targetArchivePath })
+      const exported = await invoke(page, 'project:archive-export', { targetArchiveGrantId: archiveGrant.grantId, projectSession })
       const diagnostic = { publicIpcSuccess: exported.success, errorCode: exported.errorCode ?? null,
         error: exported.success ? null : String(exported.error).replaceAll(scratch, '<isolated-scratch>').slice(0, 300),
         targetArchiveCreated: fs.existsSync(targetArchivePath),

@@ -187,9 +187,12 @@ async function preflight(page, parent, copyName) {
   await sleep(100)
   evidence.helper = pick(evidence.title, parent)
   const returned = await Promise.race([pending, sleep(15_000).then(() => { throw new Error('restore target IPC timeout') })])
-  evidence.returned = returned
-  assert.equal(folded(returned), folded(path.join(parent, copyName)))
-  assert.equal(fs.existsSync(returned), false, 'picker preflight created a copy')
+  // 授权标识是短期能力，不写入收据；渲染进程只会得到 { grantId, displayName }，完整路径不再出现在 IPC 结果里。
+  evidence.returned = returned ? { displayName: returned.displayName, grantIssued: typeof returned.grantId === 'string' } : null
+  assert.deepEqual(Object.keys(returned ?? {}).sort(), ['displayName', 'grantId'], 'restore target IPC returned unexpected shape')
+  assert.equal(typeof returned.grantId, 'string', 'restore target IPC returned no grant')
+  assert.equal(folded(returned.displayName), folded(copyName))
+  assert.equal(fs.existsSync(path.join(parent, returned.displayName)), false, 'picker preflight created a copy')
 }
 
 async function launch(profile) {

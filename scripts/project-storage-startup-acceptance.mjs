@@ -133,6 +133,21 @@ if (process.argv.includes('--help')) {
     invokedChannels.add(channel)
     return invoke(page, channel, ...args)
   }
+  // 渲染进程只能携带选择器签发的授权标识。这里只在主进程桩住 Electron 原生对话框（用后还原），
+  // 让生产 chooser IPC 照常签发授权：不绕过授权服务，也不向渲染进程暴露任何路径。
+  const chooseGrant = async (session, channel, args, method, dialogResult) => {
+    await session.app.evaluate(({ dialog }, { method, dialogResult }) => {
+      globalThis.__chooserOriginal = dialog[method]
+      dialog[method] = async () => dialogResult
+    }, { method, dialogResult })
+    try {
+      const grant = await call(session.page, channel, ...args)
+      assert.equal(typeof grant?.grantId, 'string', `${channel} did not issue a grant`)
+      return grant
+    } finally {
+      await session.app.evaluate(({ dialog }, method) => { dialog[method] = globalThis.__chooserOriginal }, method)
+    }
+  }
   try {
     const authorBody = '合成作者正文。\r\nLiteral C:\\fiction\\notes stays prose.'
     const authorBodySha256 = hash(Buffer.from(authorBody))
@@ -161,8 +176,11 @@ if (process.argv.includes('--help')) {
       assert.equal((await call(session.page, 'db:draft-get-full', draft.id, sourceProjectPath, sourceSession)).content, authorBody)
 
       sourceInventory = inventory(sourceProjectPath)
+      const exportGrant = await chooseGrant(session, 'dialog:select-project-archive-export', ['canonical-fixture'], 'showSaveDialog',
+        { canceled: false, filePath: archivePath })
+      assert.equal(exportGrant.displayName, path.basename(archivePath))
       const exported = await call(session.page, 'project:archive-export', {
-        targetArchivePath: archivePath,
+        targetArchiveGrantId: exportGrant.grantId,
         projectSession: sourceSession,
       })
       assert.equal(exported.success, true, exported.error)
@@ -178,19 +196,33 @@ if (process.argv.includes('--help')) {
     let restoredProjectPath, restoreReceipt
     try {
       assert.deepEqual(await call(session.page, 'project:get-runtime-context'), { activeProjectPath: null, dbReady: true })
-      const collisionTarget = path.join(profiles.B.projects, 'existing-target')
+      const chooseArchive = () => chooseGrant(session, 'dialog:select-project-archive', [], 'showOpenDialog',
+        { canceled: false, filePaths: [archivePath] })
+      const chooseRestoreTarget = suggestedName => chooseGrant(session, 'dialog:select-project-restore-target', [suggestedName],
+        'showOpenDialog', { canceled: false, filePaths: [profiles.B.projects] })
+      // 选择器只会给出尚不存在的子项；目标在授权之后、恢复之前被占用，正是 no-clobber 必须拦住的竞争。
+      const collisionGrant = await chooseRestoreTarget('existing-target')
+      assert.equal(collisionGrant.displayName, 'existing-target')
+      const collisionTarget = path.join(profiles.B.projects, collisionGrant.displayName)
       fs.mkdirSync(collisionTarget)
       fs.writeFileSync(path.join(collisionTarget, 'sentinel.txt'), 'do not replace')
       const collisionBefore = inventory(collisionTarget)
-      const collision = await call(session.page, 'project:archive-restore', { archivePath, targetProjectRoot: collisionTarget })
+      const collision = await call(session.page, 'project:archive-restore', {
+        archiveGrantId: (await chooseArchive()).grantId, targetGrantId: collisionGrant.grantId,
+      })
       assert.equal(collision.success, false)
       assert.equal(collision.errorCode, 'PORTABLE_RESTORE_TARGET_EXISTS')
       assert.deepEqual(inventory(collisionTarget), collisionBefore)
       assert.deepEqual(inventory(sourceProjectPath), sourceInventory)
       results.push({ name: 'restore-target-collision', outcome: 'PASS', targetAndSourceBytesUnchanged: true })
 
-      restoredProjectPath = path.join(profiles.B.projects, 'r')
-      const restored = await call(session.page, 'project:archive-restore', { archivePath, targetProjectRoot: restoredProjectPath })
+      const restoreTarget = await chooseRestoreTarget('r')
+      assert.equal(restoreTarget.displayName, 'r')
+      // 授权把父目录固定为规范真实路径；恢复收据里的目标必须正是这条授权路径。
+      restoredProjectPath = path.join(fs.realpathSync.native(profiles.B.projects), restoreTarget.displayName)
+      const restored = await call(session.page, 'project:archive-restore', {
+        archiveGrantId: (await chooseArchive()).grantId, targetGrantId: restoreTarget.grantId,
+      })
       assert.equal(restored.success, true, restored.error)
       restoreReceipt = restored.receipt
       assert.equal(restoreReceipt.originProjectId, sourceProjectId)

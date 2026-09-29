@@ -763,6 +763,55 @@ test('C17-B 重新定稿后处理：notes/cards 绑定替换后的新 finalizati
   assert.match(driver, /postProcess\.length !== \(item\.sourceSuffix \? 2 : 0\)/)
 })
 
+test('C16–C18 恢复案例只以授权标识调用恢复 IPC：harness 授权与选择器同一 owner，baseline 臂不经过恢复', async () => {
+  const fixture = fixtureSource()
+  // 行为：取夹具里真实的授权签发器源码，对真实授权 owner 生效（进程内 harness 没有 dialog，不能走选择器）。
+  const sandbox = {}
+  vm.runInNewContext(`${fixture.slice(fixture.indexOf('const restoreGrantIssuer ='), fixture.indexOf("test('isolated production commands"))}
+this.restoreGrantIssuer = restoreGrantIssuer`, sandbox)
+  const { ExternalFileGrantService } = await import('../../electron/services/external-file-grant-service.ts')
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/restore-grant-test-'))
+  try {
+    const service = new ExternalFileGrantService()
+    const grantFor = sandbox.restoreGrantIssuer(service, 701)
+    const resolve = (grantId, operation, webContentsId = 701) => service.resolveExactPath({ grantId, webContentsId, operation })
+    const canonicalDir = fs.realpathSync.native(dir)
+    // 导出目标是尚不存在的子项：create 授权精确解析回「规范父目录 + 子项名」，且只能用一次。
+    const archive = path.join(dir, 'source.ainovel')
+    const exportGrant = grantFor('create', archive)
+    assert.equal(resolve(exportGrant, 'create'), path.join(canonicalDir, 'source.ainovel'))
+    assert.throws(() => resolve(exportGrant, 'create'), /授权/)
+    // 归档读取授权要求文件已存在：导出之前签发必失败，导出之后才成立；它不能被换成写入用途或他窗口使用。
+    assert.throws(() => grantFor('read', archive), /ENOENT/)
+    fs.writeFileSync(archive, 'archive bytes')
+    const readGrant = grantFor('read', archive)
+    assert.throws(() => resolve(readGrant, 'create'), /未授予/)
+    assert.throws(() => resolve(readGrant, 'read', 702), /不属于当前窗口/)
+    assert.equal(resolve(readGrant, 'read'), path.join(canonicalDir, 'source.ainovel'))
+    // 恢复目标同样是尚不存在的子项；已被占用的目录不会因此被授权覆盖之外的任何位置。
+    const targetRoot = path.join(dir, 'c17-a')
+    assert.equal(resolve(grantFor('create', targetRoot), 'create'), path.join(canonicalDir, 'c17-a'))
+    assert.equal(fs.existsSync(targetRoot), false, '签发授权不得创建目标')
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  // 接线：四条生产 IPC 只携带授权标识；原始路径形状（生产控制器会拒绝）不再出现在夹具里。
+  assert.match(fixture, /const \{ externalFileGrants \} = await load\('electron\/services\/external-file-grant-service\.ts'\)\s*const grantFor = restoreGrantIssuer\(externalFileGrants, sender\.id\)/)
+  assert.match(fixture, /invoke\('project:archive-export', \{ projectSession: session, targetArchiveGrantId: grantFor\('create', archivePath\) \}\)/)
+  assert.match(fixture, /invoke\('project:archive-restore', \{ archiveGrantId: grantFor\('read', archivePath\), targetGrantId: grantFor\('create', targetProjectRoot\) \}\)/)
+  assert.match(fixture, /invoke\('cloud-backup:restore-copy', \{[^}]*targetGrantId: grantFor\('create', targetProjectRoot\)[^}]*\}\)/)
+  assert.doesNotMatch(fixture, /targetArchivePath|\barchivePath,|(?<![.\w])targetProjectRoot\s*[,:]/)
+  // 断言不放宽：恢复出的目标必须正是授权解析出的「规范父目录 + 子项名」，来源项目与新身份检查照旧。
+  assert.match(fixture, /const grantedTargetRoot = path\.join\(fs\.realpathSync\.native\(path\.dirname\(targetProjectRoot\)\), path\.basename\(targetProjectRoot\)\)/)
+  assert.match(fixture, /assert\.equal\(restored\.receipt\.targetProjectRoot, grantedTargetRoot, 'RESTORE_TARGET_MISMATCH'\)/)
+  assert.match(fixture, /assert\.equal\(restored\.receipt\.originProjectId, origin\.projectId, 'RESTORE_ORIGIN_MISMATCH'\)/)
+  assert.match(fixture, /assert\.equal\(path\.dirname\(targetProjectRoot\), path\.resolve\(target\.roots\.project\), 'RESTORE_OUTSIDE_TARGET_ROOT'\)/)
+  assert.match(fixture, /assert\.notEqual\(project\.projectId, origin\.projectId, 'RESTORE_IDENTITY_REUSED'\)/)
+  // baseline 臂不经过恢复调用：c16-c18 只对 candidate 派发 execute，桥内断言 candidate，恢复类型只在 continuityRun 内取得。
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-driver.mjs'), 'utf8')
+  assert.match(driver, /runProductionBridge\(\{ \.\.\.common, caseId: item\.id, target: executionTargets\.candidate, action: 'execute'/)
+  assert.match(fixture, /if \(continuityRun\) \{\s*assert\.equal\(candidate, true, 'CANDIDATE_REQUIRED'\)/)
+  assert.match(fixture, /const restorationKinds = continuityRun \? /)
+})
+
 test('C17-B 替换后前驱：readback 与 parity 记录续写实际纳入的新来源，替换前另存，且与 materialDecision 一致', () => {
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/c17b-predecessor-test-'))
   try {

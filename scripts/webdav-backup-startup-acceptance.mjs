@@ -330,13 +330,27 @@ async function main() {
       assert.equal(listed.success, true, listed.errorCode)
       assert.deepEqual(listed.generations.map(item => item.generationId), [gen1])
 
-      restoredProjectPath = path.join(profiles.B.projects, 'restored')
+      // 渲染进程只能携带选择器签发的授权标识：仅在主进程桩住 Electron 原生对话框（用后还原），
+      // 让生产 chooser IPC 照常签发授权，再由主进程在下载前解析。
+      await session.app.evaluate(({ dialog }, parent) => {
+        globalThis.__chooserOriginal = dialog.showOpenDialog
+        dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [parent] })
+      }, profiles.B.projects)
+      let restoreTarget
+      try {
+        restoreTarget = await call(session.page, 'dialog:select-project-restore-target', 'restored')
+      } finally {
+        await session.app.evaluate(({ dialog }) => { dialog.showOpenDialog = globalThis.__chooserOriginal })
+      }
+      assert.equal(typeof restoreTarget?.grantId, 'string', 'restore target chooser did not issue a grant')
+      assert.equal(restoreTarget.displayName, 'restored')
+      restoredProjectPath = path.join(profiles.B.projects, restoreTarget.displayName)
       const restored = await call(session.page, 'cloud-backup:restore-copy', {
         operationId: randomUUID(),
         localEndpointAccountId: accountB,
         cloudBookId,
         generationId: gen1,
-        targetProjectRoot: restoredProjectPath,
+        targetGrantId: restoreTarget.grantId,
       })
       assert.equal(restored.success, true, restored.errorCode)
       assert.equal(restored.bindingSaved, true)

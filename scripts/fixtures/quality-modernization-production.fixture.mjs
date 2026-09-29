@@ -188,6 +188,14 @@ const syntheticReview = chapter => JSON.stringify({
     : { id: `ch${chapter.number}:keyEvents:${index + 1}`, evidence: [{ quote: REVIEW_DEFECT }],
         description: `${event}被正文明确否定。`, status: 'unmet' }),
 })
+/**
+ * 进程内 harness 没有 Electron dialog，无法走选择器：与选择器同一 owner（externalFileGrants）为本 sender
+ * 直接签发一次性精确授权，恢复 IPC 只收授权标识（生产控制器会拒绝原始路径）。
+ * 目标是尚不存在的子项（issueNewChild）；归档读取授权要求文件已存在，故须在导出成功之后再签发。
+ */
+const restoreGrantIssuer = (externalFileGrants, webContentsId) => (operation, filePath) => externalFileGrants[
+  operation === 'read' ? 'issueFile' : 'issueNewChild']({ webContentsId, filePath, operations: [operation],
+  ttlMs: 10 * 60 * 1_000, maxUses: 1 }).grantId
 
 test('isolated production commands persist the selected phase operations', async () => {
   const requestBytes = fs.readFileSync(process.env.QUALITY_BRIDGE_REQUEST, 'utf8')
@@ -544,12 +552,16 @@ test('isolated production commands persist the selected phase operations', async
       sourceBefore = sourceRows(db)
       const targetProjectRoot = path.join(target.roots.project, request.caseId.toLowerCase())
       assert.equal(path.dirname(targetProjectRoot), path.resolve(target.roots.project), 'RESTORE_OUTSIDE_TARGET_ROOT')
+      const { externalFileGrants } = await load('electron/services/external-file-grant-service.ts')
+      const grantFor = restoreGrantIssuer(externalFileGrants, sender.id)
+      // 授权把父目录固定为规范真实路径；恢复收据里的目标必须正是这条授权路径。
+      const grantedTargetRoot = path.join(fs.realpathSync.native(path.dirname(targetProjectRoot)), path.basename(targetProjectRoot))
       let restored, selectedGenerationId, bindingMode, branchGenerationIds
       if (restorationKind === 'local') {
         const archivePath = path.join(evidenceRoot, 'source.ainovel')
-        const exported = await invoke('project:archive-export', { projectSession: session, targetArchivePath: archivePath })
+        const exported = await invoke('project:archive-export', { projectSession: session, targetArchiveGrantId: grantFor('create', archivePath) })
         assert.ok(exported?.success, `ARCHIVE_EXPORT_FAILED:${exported?.error}`)
-        restored = await invoke('project:archive-restore', { archivePath, targetProjectRoot })
+        restored = await invoke('project:archive-restore', { archiveGrantId: grantFor('read', archivePath), targetGrantId: grantFor('create', targetProjectRoot) })
       } else {
         assert.equal(restorationKind, 'webdav', 'UNREGISTERED_RESTORE_KIND')
         // The real WebDavBackupService sees a bounded in-memory DAV transport. No sockets are opened.
@@ -601,14 +613,14 @@ test('isolated production commands persist the selected phase operations', async
         assert.ok(listed?.success && listed.generations.some(item => item.generationId === selectedGenerationId), 'DAV_SELECTED_GENERATION_MISSING')
         if (branchGenerationIds) assert.ok(branchGenerationIds.every(id => listed.generations.some(item => item.generationId === id && item.hasSibling)), 'DAV_COMPLETE_FORK_MISSING')
         restored = await invoke('cloud-backup:restore-copy', { localEndpointAccountId: accountId, cloudBookId: bound.binding.cloudBookId,
-          generationId: selectedGenerationId, targetProjectRoot, operationId: randomUUID() })
+          generationId: selectedGenerationId, targetGrantId: grantFor('create', targetProjectRoot), operationId: randomUUID() })
         bindingMode = restored?.binding?.mode
         assert.equal(bindingMode, 'origin-readonly', 'DAV_RESTORED_BINDING_INVALID')
         davFetch = null
       }
       assert.ok(restored?.success, `RESTORE_FAILED:${JSON.stringify(restored)}`)
       assert.equal(restored.receipt.originProjectId, origin.projectId, 'RESTORE_ORIGIN_MISMATCH')
-      assert.equal(restored.receipt.targetProjectRoot, targetProjectRoot, 'RESTORE_TARGET_MISMATCH')
+      assert.equal(restored.receipt.targetProjectRoot, grantedTargetRoot, 'RESTORE_TARGET_MISMATCH')
       database.closeProjectDatabase(); projectAccess.invalidateCurrentSession()
       project = projectAccess.probeExistingProject(targetProjectRoot)
       assert.equal(project.projectId, restored.receipt.targetProjectId, 'RESTORE_IDENTITY_MISMATCH')
