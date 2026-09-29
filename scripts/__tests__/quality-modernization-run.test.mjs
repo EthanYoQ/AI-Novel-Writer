@@ -18,7 +18,7 @@ import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolated
   rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures, fetchProviderResponse, measurePromptBytes,
   BRIDGE_SETTLEMENT_DEADLINE_MS, BRIDGE_SPAWN_TIMEOUT_MS, BRIDGE_TEST_TIMEOUT_MS,
   C16_C18_ATTEMPT_POLICY, validateCandidateContinuityResults, runProductionPhasePair, summarizeDraftReconciliation,
-  continuityCaseOperations, FINALIZED_CHARACTER_OPERATION_IDS } from '../quality-modernization-driver.mjs'
+  continuityCaseOperations, FINALIZED_CHARACTER_OPERATION_IDS, draftCondenseFor } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, readVerifiedRecoveryCandidateSupplement,
   readVerifiedDirectPersistedDraftEvidence, recordPersistedDraftObservation,
   safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
@@ -50,8 +50,8 @@ test('post-UI reviewed draft policy selects every actionable item without changi
   assert.throws(() => reviewedDraftSelection({ items: [{ severity: 'invented' }] }), /REVIEWED_DRAFT_REPORT_INVALID/)
   const selected = selectPhase(protocol, 'early-budget', 'post-ui')
   assert.deepEqual(selected.evaluationPolicy, POST_UI_REVIEW_POLICY)
-  assert.equal(selected.scenarioRevision, 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2')
-  assert.equal(selected.maximumPlannedCalls, 14)
+  assert.equal(selected.scenarioRevision, POST_UI_SCENARIO_REVISION)
+  assert.equal(selected.maximumPlannedCalls, 15, '每臂最多7次登记请求；candidate 含登记的唯一压缩，至多多1次')
   assert.deepEqual(selected.attemptPolicy.reviewRebuild, PHASE_SCENARIOS['early-budget'].attemptPolicy.reviewRebuild)
   assertScenarioMatchesProtocol(selected, productionScenario('early-budget', 'post-ui'))
   assert.deepEqual(selected.operations.map(item => item.kind), ['directory', 'draft', 'review', 'refine', 'final-review'])
@@ -60,7 +60,9 @@ test('post-UI reviewed draft policy selects every actionable item without changi
   assert.deepEqual(validateReviewedDraft({}), { valid: false, pairFailure: 'REVIEWED_DRAFT_EVIDENCE_INVALID' })
 })
 
+// v2 是语义源 scenarioAuthorSettingLines 登记附加行所用的键；v3 只改登记（attemptPolicy 增加唯一压缩），沿用同一附加行。
 const MUST_SHOW_SCENARIO_REVISION = 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2'
+const POST_UI_SCENARIO_REVISION = 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v3'
 const MUST_SHOW_LINE = '【第1章必现】林澄保管铜钥匙'
 test('post-UI must-show v3 adopts author must-show unknown goals with actionable items in one revision', () => {
   assert.equal(POST_UI_REVIEW_POLICY.revision, 's14b-post-ui-reviewed-draft-must-show-unknown-v3')
@@ -89,8 +91,8 @@ test('post-UI must-show v3 adopts author must-show unknown goals with actionable
   assert.deepEqual(reviewedDraftSelection({ items: [report.items[0], completed] }), { selected: [], disposition: 'no-actionable-review' },
     '首稿自然满足必现目标时修复分支不触发')
   const post = selectPhase(protocol, 'early-budget', 'post-ui')
-  assert.equal(post.scenarioRevision, MUST_SHOW_SCENARIO_REVISION)
-  assert.equal(productionScenario('early-budget', 'post-ui').scenarioRevision, MUST_SHOW_SCENARIO_REVISION)
+  assert.equal(post.scenarioRevision, POST_UI_SCENARIO_REVISION)
+  assert.equal(productionScenario('early-budget', 'post-ui').scenarioRevision, POST_UI_SCENARIO_REVISION)
   assert.equal(selectPhase(protocol, 'early-budget').scenarioRevision, 's14b-post-ui-budget-syntax-repair-v1')
 })
 
@@ -103,6 +105,10 @@ test('must-show scenario revision adds the marker only to the post-UI scene 1 wo
   const [scene1, ...others] = source.scenes
   assert.equal(scenarioAuthorSetting(scene1, MUST_SHOW_SCENARIO_REVISION), `${legacy(scene1)}\n${MUST_SHOW_LINE}`)
   for (const scene of others) assert.equal(scenarioAuthorSetting(scene, MUST_SHOW_SCENARIO_REVISION), legacy(scene))
+  // v3 只改 attemptPolicy：作者世界设定输入与 v2 逐字相同（同一条附加行），语义源字节不因新 revision 改动。
+  assert.equal(scenarioAuthorSetting(scene1, POST_UI_SCENARIO_REVISION), `${legacy(scene1)}\n${MUST_SHOW_LINE}`)
+  for (const scene of others) assert.equal(scenarioAuthorSetting(scene, POST_UI_SCENARIO_REVISION), legacy(scene))
+  assert.equal(scene1.scenarioAuthorSettingLines[POST_UI_SCENARIO_REVISION], undefined, 'v3 不在语义源另登记键，避免改动冻结输入')
   // 产品冻结目标只在新场景 revision 下多出 ch1:mustShow:1；其余事实、事件与字数不变。
   const goals = setting => freezeChapterGoals(1, scene1.chapters[0].requiredEvents.join('；'), [setting]).items
   assert.deepEqual(goals(legacy(scene1)).map(item => item.id), ['ch1:keyEvents:1', 'ch1:keyEvents:2'])
@@ -1091,7 +1097,7 @@ test('C16–C18 ca466d9a/73b46513 段（第580–648行）按同一规则分两�
   // 新协议字节 hash 与被取代的 a0a14777 不同，runner 读写两入口都按链末端取历史范围。
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
   assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, ca466d9a, protocol\.historicalC1673b46513Boundary\)/)
-  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trusted2867cfa4Events/)
+  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedBa2d34abEvents/)
 })
 
 test('v5 唯一对账只能是续写 operation 的首个物理请求且至多一次，任何越界在 dispatch 前拒绝', () => {
@@ -1291,7 +1297,7 @@ test('C16–C18 fa8806d7 段（第649–690行）按同一规则加性登记，�
     /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
     assert.throws(() => validateHistoricalSupersessionBoundary(raw, 648, { ...fa, protocolHash: protocolBinding.protocolHash }),
       /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    // 整链回放：全部边界自冻结前缀起依次认证到链末端（现为第828行，见 2867cfa4 段测试）。
+    // 整链回放：全部边界自冻结前缀起依次认证到链末端（现为第843行，见 ba2d34ab 段测试）。
     assert.equal(validatePhysicalLedger(ledger), path.resolve(ledger))
     const after = fs.readFileSync(ledger)
     assert.ok(after.equals(before), 'REAL_LEDGER_MUST_STAY_READ_ONLY')
@@ -1378,7 +1384,7 @@ test('C16–C18 b42cfc55 段（第691–738行）按同一规则加性登记，�
     const tampered = raw.trimEnd().split('\n')
     tampered[689] = tampered[689].replace('"attemptId":"', '"attemptId":"tampered-')
     assert.throws(() => validateHistoricalSupersessionBoundary(tampered.join('\n') + '\n', 690, b42), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    // 整链回放：全部边界自冻结前缀起依次认证到链末端（现为第828行，见 2867cfa4 段测试）。
+    // 整链回放：全部边界自冻结前缀起依次认证到链末端（现为第843行，见 ba2d34ab 段测试）。
     assert.equal(validatePhysicalLedger(ledger), path.resolve(ledger))
     const after = fs.readFileSync(ledger)
     assert.ok(after.equals(before), 'REAL_LEDGER_MUST_STAY_READ_ONLY')
@@ -1488,7 +1494,7 @@ test('C16–C18 67a57c04 段（第739–774行，C17-B 失败停发）按同一�
       assert.throws(() => validateHistoricalSupersessionBoundary(tampered.join('\n') + '\n', 738, r67), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/, String(line))
     }
     assert.throws(() => validateHistoricalSupersessionBoundary(raw.split('\n').slice(0, 773).join('\n') + '\n', 738, r67), /HISTORICAL_LEDGER_SUPERSESSION_MISSING/)
-    // 整链回放：全部边界自冻结前缀起依次认证到链末端（现为第828行，见 2867cfa4 段测试）。
+    // 整链回放：全部边界自冻结前缀起依次认证到链末端（现为第843行，见 ba2d34ab 段测试）。
     assert.equal(validatePhysicalLedger(ledger), path.resolve(ledger))
     const after = fs.readFileSync(ledger)
     assert.ok(after.equals(before), 'REAL_LEDGER_MUST_STAY_READ_ONLY')
@@ -1631,7 +1637,7 @@ test('C16–C18 2867cfa4 段（第775–828行，自动阶段七案通过）按�
     assert.throws(() => validateHistoricalSupersessionBoundary(extra.join('\n') + '\n', 774, r28), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
     assert.throws(() => validateHistoricalSupersessionBoundary(raw.split('\n').slice(0, 827).join('\n') + '\n', 774, r28), /HISTORICAL_LEDGER_SUPERSESSION_MISSING/)
     assert.throws(() => validateHistoricalSupersessionBoundary(raw.split('\n').slice(0, 774).join('\n') + '\n', 774, r28), /HISTORICAL_LEDGER_SUPERSESSION_MISSING/)
-    // 整链回放：全部边界自冻结前缀起依次认证到第828行。
+    // 整链回放：全部边界自冻结前缀起依次认证到链末端（现为第843行，见 ba2d34ab 段测试）。
     assert.equal(validatePhysicalLedger(ledger), path.resolve(ledger))
     const after = fs.readFileSync(ledger)
     assert.ok(after.equals(before), 'REAL_LEDGER_MUST_STAY_READ_ONLY')
@@ -1685,6 +1691,175 @@ test('C16–C18 2867cfa4 段（第775–828行，自动阶段七案通过）按�
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
   assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, r67a57c04, protocol\.historicalC162867cfa4Boundary\)/)
   assert.match(runner, /validateHistoricalSupersessionBoundary\(rawLedger, trusted67a57c04Events, r2867cfa4Boundary\)/)
+})
+
+test('S14B post-UI ba2d34ab 段（第829–843行，candidate 超长首稿的压缩被拒后失败）按同一规则加性登记，链在 2867cfa4 后，真实账本只读回放到843且字节不变', () => {
+  const r28 = protocol.historicalC162867cfa4Boundary, r43 = protocol.historicalPostUiBa2d34abBoundary
+  const invocationId = 'ba2d34ab-a4f6-4283-bed1-eb2bffa8b5aa', parity = '3c217fca02910eb0bc2e82d5d2e08414a75695125a38b4a1c0abf4f33c35127e'
+  assert.deepEqual([r43.fromEventCount, r43.eventCount, r43.reserveAttempts.length], [r28.eventCount, 843, 5])
+  assert.equal(r43.rawBytesSha256, 'baa7666b4905b268d0a96c5d4443cdd5f935f52b3b077bdeac52f86fbc89c1b5')
+  assert.equal(r43.protocolRevision, protocolBinding.protocolRevision)
+  assert.equal(r43.protocolHash, '7cf6e1ce4a7f91c408af3fed1369d914ff2e53a3f19501169ebf12ee2c997869')
+  assert.notEqual(r43.protocolHash, protocolBinding.protocolHash, '登记本段后协议字节必然漂移，须与被取代的 hash 不同')
+  // 边界记录的协议 hash 必须是候选代码 a618c122 提交里那份 protocol.json 的字节 hash（可复核时才断言）。
+  const committed = spawnSync('git', ['-C', ROOT, 'show', 'a618c122d02d3abf08103620db063118e710073d:docs/research/novel-quality-modernization/protocol.json'])
+  if (committed.status === 0) assert.equal(hash(committed.stdout), r43.protocolHash)
+  // 两臂各自的代码/源/driver 身份；baseline 整臂一个 parity（登记在 armBindings），candidate 逐 attempt 登记 parity。
+  assert.deepEqual(r43.armBindings, {
+    baseline: { codeSha: '2264390d6fb8b052cc14736d544df0cc74516649',
+      sourceHash: '9b0d78fc45e0ad01d4c975eb0c23d2d0f2dae0ef5c2b84d6c5e19294a31bd4e8',
+      driverHash: 'dbc1cfd85fb54880bb9987a927f574798894e967bffb608917c147f9adbeff92', parityId: parity },
+    candidate: { codeSha: 'a618c122d02d3abf08103620db063118e710073d',
+      sourceHash: '880dc80c1aea30f37f12e2605aad47e95e3609a9c28eb6d62d638467a86c0b73',
+      driverHash: 'dbc1cfd85fb54880bb9987a927f574798894e967bffb608917c147f9adbeff92' } })
+  assert.deepEqual([...new Set(r43.reserveAttempts.map(item => item.invocationId))], [invocationId])
+  // 边界只有身份与证据字段，不含把该 invocation 解读为“通过/改判/补采”的结论字段；失败事实只写在 quality-protocol.md。
+  assert.deepEqual(Object.keys(r43), ['fromEventCount', 'eventCount', 'rawBytesSha256', 'protocolRevision', 'protocolHash', 'armBindings', 'reserveAttempts'])
+  assert.deepEqual(r43.reserveAttempts, [
+    { attemptId: 'baseline:0b71919f-bd4b-4631-99a4-163dcfa568fe', invocationId, terminal: 'settle' },
+    { attemptId: 'baseline:10c1680b-c313-4ef7-87a2-9432e4ad1da4', invocationId, terminal: 'settle' },
+    { attemptId: 'baseline:08fbd628-7ae9-4b30-a203-1833d48e9550', invocationId, terminal: 'settle' },
+    { attemptId: 'candidate:5a1ec919-f31e-4979-8a02-1276639d14d8', invocationId, terminal: 'settle', parityId: parity },
+    { attemptId: 'candidate:ebfb08cd-ef74-45b9-9663-83b12476a172', invocationId, terminal: 'settle', parityId: parity }])
+  const porcelain = spawnSync('git', ['-C', ROOT, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' })
+  let ledger = null
+  try { ledger = path.join(registeredCampaignWorktree(porcelain.stdout), '.runtime/.cache/novel-quality-modernization/physical-ledger.jsonl') } catch { ledger = null }
+  if (ledger && fs.existsSync(ledger)) {
+    const before = fs.readFileSync(ledger)
+    const raw = before.toString('utf8')
+    // 登记本段时账本恰为843行；此后若账本继续追加，本段前缀 hash 仍须成立。
+    assert.equal(validateHistoricalSupersessionBoundary(raw, 828, r43), 843)
+    // 前828行原字节仍是 2867cfa4 段认证的整本账本，本段只加性追加。
+    assert.equal(hash(raw.split('\n').slice(0, 828).join('\n') + '\n'), r28.rawBytesSha256)
+    const segment = raw.split('\n').slice(828, 843).map(line => JSON.parse(line))
+    assert.equal(segment.length, 15)
+    assert.deepEqual(segment.map(row => row.type), Array.from({ length: 5 }, () => ['reserve', 'dispatch', 'settle']).flat())
+    const reserves = segment.filter(row => row.type === 'reserve')
+    assert.ok(reserves.every(row => row.binding.mode === 'real' && row.binding.phase === 'early-budget' && row.binding.milestone === 'post-ui'
+      && row.binding.caseId === '场景1/1' && row.binding.invocationId === invocationId && row.binding.parityId === parity))
+    // 账本 reserve 的臂序与 operation 序：candidate 首稿之后再无 reserve——登记外的压缩请求在 reserve 前被拒，不在账本里。
+    assert.deepEqual(reserves.map(row => `${row.binding.arm}/${row.binding.operation}`), [
+      'baseline/指定范围生成', 'baseline/900单位正文', 'baseline/成稿首审', 'candidate/指定范围生成', 'candidate/900单位正文'])
+    assert.ok(segment.filter(row => row.type === 'settle').every(row => row.finishReason === 'stop'))
+    // fromEventCount 必须恰为前一段的链末端；更早的起点不能替代本段。
+    for (const from of [738, 774, 690]) assert.throws(() => validateHistoricalSupersessionBoundary(raw, from, r43), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/, String(from))
+    // 事件数与 attempt 数不符（多一个或少一个事件、少登记一次或多登记一次 attempt）一律拒绝。
+    for (const eventCount of [840, 842, 844, 846])
+      assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43, eventCount }), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/, String(eventCount))
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43, reserveAttempts: r43.reserveAttempts.slice(0, 4) }), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43, reserveAttempts: [...r43.reserveAttempts, r43.reserveAttempts[0]] }), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+    // 缺任一臂的绑定（两臂都出现在本段）或把两臂绑定错位，一律拒绝。
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43, armBindings: { baseline: r43.armBindings.baseline } }), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43, armBindings: { candidate: r43.armBindings.candidate } }), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43, armBindings: {
+      baseline: { ...r43.armBindings.candidate, parityId: parity }, candidate: { ...r43.armBindings.baseline, parityId: undefined } } }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    // 每臂三项身份逐项替换为另一臂的值（相同则换成全 f），均拒绝。
+    for (const arm of ['baseline', 'candidate']) for (const key of ['codeSha', 'sourceHash', 'driverHash']) {
+      const other = r43.armBindings[arm === 'baseline' ? 'candidate' : 'baseline'][key]
+      const value = other === r43.armBindings[arm][key] ? 'f'.repeat(key === 'codeSha' ? 40 : 64) : other
+      assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43,
+        armBindings: { ...r43.armBindings, [arm]: { ...r43.armBindings[arm], [key]: value } } }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/, `${arm}:${key}`)
+    }
+    // candidate 身份不同于 2867cfa4 段的 candidate（codeSha 是登记上一段的提交，本段是它之后的 a618c122）。
+    assert.notEqual(r28.armBindings.candidate.codeSha, r43.armBindings.candidate.codeSha)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43, armBindings: { ...r43.armBindings,
+      candidate: { ...r43.armBindings.candidate, codeSha: r28.armBindings.candidate.codeSha } } }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    // parity：baseline 整臂值错、candidate 逐 attempt 值错、二者同时登记或都缺，均拒绝。
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43, armBindings: { ...r43.armBindings,
+      baseline: { ...r43.armBindings.baseline, parityId: 'f'.repeat(64) } } }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43, reserveAttempts: r43.reserveAttempts.map((item, index) =>
+      index === 4 ? { ...item, parityId: 'f'.repeat(64) } : item) }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43, reserveAttempts: r43.reserveAttempts.map((item, index) =>
+      index === 0 ? { ...item, parityId: parity } : item) }), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43, reserveAttempts: r43.reserveAttempts.map((item, index) =>
+      index === 3 ? { attemptId: item.attemptId, invocationId: item.invocationId, terminal: item.terminal } : item) }), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+    for (const protocolHash of [protocolBinding.protocolHash, r28.protocolHash])
+      assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43, protocolHash }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43, protocolRevision: 'other-revision' }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    // 终态、attemptId、invocationId 逐项核对：任一项改 unknown、任一 attemptId 写错、换成别的 invocation 均拒绝。
+    for (const index of [0, 2, 3, 4]) assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43, reserveAttempts: r43.reserveAttempts.map((item, at) =>
+      at === index ? { ...item, terminal: 'unknown' } : item) }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/, `terminal:${index}`)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43, reserveAttempts: r43.reserveAttempts.map((item, index) =>
+      index === 0 ? { ...item, attemptId: 'baseline:wrong' } : item) }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43, reserveAttempts: r43.reserveAttempts.map((item, index) =>
+      index === 4 ? { ...item, invocationId: r28.reserveAttempts[0].invocationId } : item) }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    // attempt 顺序即账本顺序：对调 baseline 首两项、对调 candidate 两项均拒绝。
+    for (const [left, right] of [[0, 1], [3, 4]]) assert.throws(() => validateHistoricalSupersessionBoundary(raw, 828, { ...r43,
+      reserveAttempts: r43.reserveAttempts.map((item, index, all) => index === left ? { ...item, attemptId: all[right].attemptId }
+        : index === right ? { ...item, attemptId: all[left].attemptId } : item) }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/, `${left}<->${right}`)
+    // 前缀（第1–828行）或本段（第829–843行）内任一字节被改，整段前缀 hash 即拒绝。
+    for (const line of [827, 828, 834, 837, 842]) {
+      const tampered = raw.trimEnd().split('\n')
+      tampered[line] = tampered[line].replace('"attemptId":"', '"attemptId":"tampered-')
+      assert.throws(() => validateHistoricalSupersessionBoundary(tampered.join('\n') + '\n', 828, r43), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/, String(line))
+    }
+    // 本段内多出一行（重复一个事件）同样使前缀 hash 漂移；少一行或缺整段则前缀不足 843 行。
+    const extra = raw.trimEnd().split('\n')
+    extra.splice(835, 0, extra[835])
+    assert.throws(() => validateHistoricalSupersessionBoundary(extra.join('\n') + '\n', 828, r43), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw.split('\n').slice(0, 842).join('\n') + '\n', 828, r43), /HISTORICAL_LEDGER_SUPERSESSION_MISSING/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw.split('\n').slice(0, 828).join('\n') + '\n', 828, r43), /HISTORICAL_LEDGER_SUPERSESSION_MISSING/)
+    // 整链回放：全部边界自冻结前缀起依次认证到第843行。
+    assert.equal(validatePhysicalLedger(ledger), path.resolve(ledger))
+    const after = fs.readFileSync(ledger)
+    assert.ok(after.equals(before), 'REAL_LEDGER_MUST_STAY_READ_ONLY')
+    assert.equal(hash(after), hash(before))
+  }
+  // 合成账本：2867cfa4 类段后接本段（两臂）登记为历史时，其后的当前 reserve 通过；缺该段则按当前协议拒绝。
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/ba2d34ab-boundary-'))
+  try {
+    const file = path.join(dir, 'synthetic-ledger.jsonl')
+    const envelope = { campaignId: CAMPAIGN_ID, mode: 'synthetic', phase: 'early-budget', milestone: 'post-ui', caseId: '场景1/1', operation: '900单位正文' }
+    const segment = (id, protocolHash, armBindings, ids) => {
+      const attempts = ids.map(([attemptId, parityId]) => ({ attemptId, invocationId: id, terminal: 'settle', ...(parityId ? { parityId } : {}) }))
+      const rows = attempts.flatMap(item => {
+        const arm = item.attemptId.split(':')[0]
+        return [{ type: 'reserve', attemptId: item.attemptId, binding: { ...envelope, arm, ...armBindings[arm], protocolRevision: protocolBinding.protocolRevision,
+          protocolHash, ...(item.parityId ? { parityId: item.parityId } : {}), invocationId: id }, allocation: 'failedRetryRepairReviewReserve' },
+        { type: 'dispatch', attemptId: item.attemptId }, { type: 'settle', attemptId: item.attemptId, finishReason: 'stop' }]
+      })
+      return { armBindings, attempts, raw: rows.map(JSON.stringify).join('\n') + '\n' }
+    }
+    const first = segment('2867cfa4-a10f-4912-8134-edf0f83e608e', r28.protocolHash, { candidate: { codeSha: '2'.repeat(40), sourceHash: '6'.repeat(64), driverHash: '3'.repeat(64) } },
+      [['candidate:c8a69a50-0000-4000-8000-000000000005', '9'.repeat(64)]])
+    const both = { baseline: { codeSha: '1'.repeat(40), sourceHash: '2'.repeat(64), driverHash: '3'.repeat(64), parityId: '4'.repeat(64) },
+      candidate: { codeSha: 'b'.repeat(40), sourceHash: '6'.repeat(64), driverHash: '3'.repeat(64) } }
+    const second = segment(invocationId, r43.protocolHash, both, [['baseline:0b71919f-0000-4000-8000-000000000001'],
+      ['candidate:ebfb08cd-0000-4000-8000-000000000002', '5'.repeat(64)]])
+    const raw = first.raw + second.raw
+    const b2 = { fromEventCount: 0, eventCount: 3, rawBytesSha256: hash(first.raw), protocolRevision: r28.protocolRevision,
+      protocolHash: r28.protocolHash, armBindings: first.armBindings, reserveAttempts: first.attempts }
+    const b3 = { fromEventCount: 3, eventCount: 9, rawBytesSha256: hash(raw), protocolRevision: r43.protocolRevision,
+      protocolHash: r43.protocolHash, armBindings: second.armBindings, reserveAttempts: second.attempts }
+    const current = { ...envelope, operation: '指定范围生成', arm: 'candidate', codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(),
+      parityId: 'c'.repeat(64), ...currentProtocolBinding(),
+      actual: { attemptId: 'a', runId: 'r', rootActionId: 'root', projectId: 'p', epoch: 'e' } }
+    fs.writeFileSync(file, raw)
+    assert.doesNotThrow(() => updateLedger(file, { type: 'reserve', attemptId: 'after-ba2d34ab', binding: current },
+      { campaignMode: 'synthetic', historicalC162867cfa4Boundary: b2, historicalPostUiBa2d34abBoundary: b3 }))
+    fs.writeFileSync(file, raw)
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'after-ba2d34ab', binding: current },
+      { campaignMode: 'synthetic', historicalC162867cfa4Boundary: b2 }), /PROTOCOL_DRIFT/)
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'after-ba2d34ab', binding: current },
+      { campaignMode: 'synthetic', historicalC162867cfa4Boundary: b2, historicalPostUiBa2d34abBoundary: { ...b3, fromEventCount: 0 } }),
+    /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+    // 跳过前一段直接登记本段：本段起点对不上链末端，拒绝。
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'after-ba2d34ab', binding: current },
+      { campaignMode: 'synthetic', historicalPostUiBa2d34abBoundary: b3 }), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+    // 两臂绑定错位（baseline 值写成 candidate 的）：拒绝。
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'after-ba2d34ab', binding: current },
+      { campaignMode: 'synthetic', historicalC162867cfa4Boundary: b2, historicalPostUiBa2d34abBoundary: { ...b3,
+        armBindings: { ...b3.armBindings, baseline: { ...b3.armBindings.baseline, codeSha: b3.armBindings.candidate.codeSha } } } }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    // 新协议下旧协议 hash 的新 reserve（未登记为历史）一律按当前协议拒绝。
+    fs.writeFileSync(file, raw)
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'stale-ba2d34ab', binding: { ...current, protocolHash: r43.protocolHash } },
+      { campaignMode: 'synthetic', historicalC162867cfa4Boundary: b2, historicalPostUiBa2d34abBoundary: b3 }), /PROTOCOL_DRIFT/)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
+  assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, r2867cfa4, protocol\.historicalPostUiBa2d34abBoundary\)/)
+  assert.match(runner, /validateHistoricalSupersessionBoundary\(rawLedger, trusted2867cfa4Events, ba2d34abBoundary\)/)
 })
 
 test('v5 独立评审 oracle 前向修订：计划可由正文新决定改变，硬事实（旧钟异常、钥匙、知情、时点）不放宽；其余 oracle 不变', () => {
@@ -2805,7 +2980,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     'historicalReviewRebuildBoundary', 'historicalS14BSplitBoundary', 'historicalPostUi408Boundary',
     'historicalC16Ee3435ecBoundary', 'historicalC16Ccc70b31Boundary', 'historicalC16C9b88510Boundary', 'historicalC16D8a30c11Boundary',
     'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary', 'historicalC16B42cfc55Boundary',
-    'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary']
+    'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -2870,6 +3045,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 690, real.boundaries.historicalC16B42cfc55Boundary), 738)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 738, real.boundaries.historicalC1667a57c04Boundary), 774)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 774, real.boundaries.historicalC162867cfa4Boundary), 828)
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 828, real.boundaries.historicalPostUiBa2d34abBoundary), 843)
     assert.equal(validatePhysicalLedger(ledger), ledger)
     fs.writeFileSync(file, synthetic.raw)
     const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
@@ -3629,6 +3805,424 @@ test('post-UI pair authenticates review rebuild attempts and both retained outpu
     third.physicalModelRequests++
     assert.equal(classify(third).pairFailure, 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+// ---- S14B post-UI 候选臂的唯一原生压缩（场景 revision v3；评分规则/场景变更，与产品 f00b612b 的修复分开）----
+const POST_UI_TARGET = 900
+const POST_UI_RANGE = draftTargetUnitRange(POST_UI_TARGET)
+const POST_UI_DRAFT = '900单位正文'
+const postUiPolicy = () => productionScenario('early-budget', 'post-ui').attemptPolicy
+const postUiEvidenceDir = prefix => fs.mkdtempSync(path.join(ROOT, `.runtime/.cache/novel-quality-modernization/${prefix}`))
+
+test('S14B post-UI v2 登记没有 draftCondense：候选的合法压缩在 reserve 前被拒，复现 ba2d34ab', () => {
+  const policy = postUiPolicy()
+  const legacy = { ...policy }
+  delete legacy.draftCondense
+  const rejections = []
+  // 旧接线：repairPolicy=post-UI attemptPolicy；draftCondense 只对 continuityRun 生效，post-UI 为 null。
+  const gate = createOperationDispatchGate({ repairPolicy: legacy, draftCondense: null, readPrimaryEvidence: () => null, onReject: item => rejections.push(item) })
+  const first = { attemptId: 'primary', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: 'chapter-draft' }
+  gate(POST_UI_DRAFT, first)
+  assert.throws(() => gate(POST_UI_DRAFT, { ...first, attemptId: 'condense', purpose: 'chapter-draft-condense' }), /MODEL_REQUEST_REJECTED/)
+  assert.deepEqual(rejections, [{ code: 'UNREGISTERED_ADDITIONAL_MODEL_REQUEST', operationId: POST_UI_DRAFT, reason: 'duplicate-operation', beforeDispatch: true }])
+})
+
+test('S14B post-UI 场景 v3 只为候选臂登记「900单位正文」的唯一原生压缩；early 与其它阶段的登记和 revision 不变', () => {
+  const scenario = productionScenario('early-budget', 'post-ui'), policy = scenario.attemptPolicy
+  assert.equal(scenario.scenarioRevision, POST_UI_SCENARIO_REVISION)
+  assert.deepEqual(policy.draftCondense, { operationIds: ['900单位正文'], arms: ['candidate'], primaryPurpose: 'chapter-draft',
+    condensePurpose: 'chapter-draft-condense', maxCondenseAttempts: 1,
+    trigger: 'primary-settled-stop-hash-verified-units-above-draftTargetUnitRange-maximum', formalEffect: 'last-attempt-only' })
+  // 其余登记（milestone、两臂、指定范围一次结构化语法修复、成稿首审一次重建）与 early 基础登记逐字相同：现有 review/refine/final-review 链不受影响。
+  const rest = { ...policy }
+  delete rest.draftCondense
+  assert.deepEqual(rest, PHASE_SCENARIOS['early-budget'].attemptPolicy)
+  // 协议与 driver 一致，压缩只出现在 post-UI selection。
+  const selected = selectPhase(protocol, 'early-budget', 'post-ui')
+  assert.deepEqual(selected.attemptPolicy, policy)
+  assertScenarioMatchesProtocol(selected, scenario)
+  assert.deepEqual(selected.operations.map(item => item.id), ['指定范围生成', '900单位正文', '成稿首审', '成稿一次修稿', '成稿完整复评'])
+  // 逐臂生效：candidate 取到登记，baseline 从不；基础 early 登记与其它阶段的登记取不到新压缩。
+  assert.equal(draftCondenseFor(policy, 'candidate'), policy.draftCondense)
+  assert.equal(draftCondenseFor(policy, 'baseline'), null)
+  assert.equal(draftCondenseFor(PHASE_SCENARIOS['early-budget'].attemptPolicy, 'candidate'), null)
+  assert.equal(draftCondenseFor(undefined, 'candidate'), null)
+  // C16–C18 的登记本身不变：沿用 attemptPolicy.arms（仅 candidate）。
+  assert.equal(C16_C18_ATTEMPT_POLICY.draftCondense.arms, undefined)
+  assert.equal(draftCondenseFor(C16_C18_ATTEMPT_POLICY, 'candidate'), C16_C18_ATTEMPT_POLICY.draftCondense)
+  assert.equal(draftCondenseFor(C16_C18_ATTEMPT_POLICY, 'baseline'), null)
+  assert.deepEqual(C16_C18_ATTEMPT_POLICY.draftCondense.operationIds, ['本地恢复后续写', 'DAV选定世代恢复后续写'])
+  // early milestone 的历史场景与 revision 不变：无压缩登记，协议与 driver 一致。
+  const early = selectPhase(protocol, 'early-budget')
+  assert.equal(early.scenarioRevision, 's14b-post-ui-budget-syntax-repair-v1')
+  assert.equal(PHASE_SCENARIOS['early-budget'].scenarioRevision, 's14b-post-ui-budget-syntax-repair-v1')
+  assert.equal(early.attemptPolicy.draftCondense, undefined)
+  assert.equal(protocol.phases['early-budget'].attemptPolicy.draftCondense, undefined)
+  assertScenarioMatchesProtocol(early, productionScenario('early-budget', 'early'))
+  assert.equal(productionScenario('early-budget').attemptPolicy, PHASE_SCENARIOS['early-budget'].attemptPolicy)
+  // 其它阶段的 revision 与登记逐字不变，且不含新压缩。
+  assert.equal(PHASE_SCENARIOS['c16-c18'].scenarioRevision, 'c16-c18-candidate-production-path-v5')
+  assert.equal(PHASE_SCENARIOS['c16-c18'].attemptPolicy, C16_C18_ATTEMPT_POLICY)
+  assert.equal(PHASE_SCENARIOS.full.scenarioRevision, 's14b-full-continuous-project-v1')
+  assert.equal(PHASE_SCENARIOS['early-context'].scenarioRevision, 's10b-early-context-selection-difference-v3')
+  assert.equal(PHASE_SCENARIOS['early-review'].scenarioRevision, 's11-early-review-per-attempt-deadline-v3')
+  for (const [phase, milestone] of [['full', 'final'], ['early-context', 'early'], ['early-review', 'early']]) {
+    assert.equal(PHASE_SCENARIOS[phase].attemptPolicy, undefined, phase)
+    assertScenarioMatchesProtocol(selectPhase(protocol, phase, milestone), productionScenario(phase, milestone))
+  }
+  assert.equal(protocol.phases['c16-c18'].scenarioRevision, PHASE_SCENARIOS['c16-c18'].scenarioRevision)
+  assert.deepEqual(protocol.phases['c16-c18'].attemptPolicy, C16_C18_ATTEMPT_POLICY)
+  // 不对称披露：candidate 含原生压缩登记、baseline 没有，不得据此单独声称相对改善（随协议、pair 与 receipt 的 evaluationPolicy 一并披露）。
+  const asymmetry = POST_UI_REVIEW_POLICY.armAsymmetry.condense
+  assert.match(asymmetry, /candidate.*压缩.*baseline.*(没有|无).*不得.*声称相对改善/su)
+  assert.deepEqual(selected.evaluationPolicy, POST_UI_REVIEW_POLICY)
+  assert.equal(selected.evaluationPolicy.armAsymmetry.condense, asymmetry)
+})
+
+test('S14B post-UI 旧 v2 revision 或缺 draftCondense 的登记不再被 driver 接受', () => {
+  const current = productionScenario('early-budget', 'post-ui')
+  const options = { phase: 'early-budget', milestone: 'post-ui', scenarioRevision: current.scenarioRevision, selectionDifference: null,
+    attemptPolicy: current.attemptPolicy, evaluationPolicy: current.evaluationPolicy }
+  const withoutCondense = { ...current.attemptPolicy }
+  delete withoutCondense.draftCondense
+  for (const changed of [{ scenarioRevision: MUST_SHOW_SCENARIO_REVISION }, { attemptPolicy: withoutCondense },
+    { attemptPolicy: { ...current.attemptPolicy, draftCondense: { ...current.attemptPolicy.draftCondense, arms: ['baseline', 'candidate'] } } },
+    { attemptPolicy: { ...current.attemptPolicy, draftCondense: { ...current.attemptPolicy.draftCondense, maxCondenseAttempts: 2 } } }])
+    assert.throws(() => runProductionPhasePair({}, { ...options, ...changed }), /SCENARIO_PROTOCOL_MISMATCH/)
+})
+
+test('S14B post-UI 唯一压缩：仅候选臂、仅「900单位正文」、仅在已结算且超上限的首稿后恰好一次，其余登记不受影响', () => {
+  const dir = postUiEvidenceDir('post-ui-condense-gate-')
+  try {
+    const policy = postUiPolicy(), condensePolicy = policy.draftCondense
+    const { syntheticDraftText } = syntheticLengthHelpers()
+    const overText = syntheticDraftText(countDraftUnits, POST_UI_RANGE.maximum + 90)
+    const inRangeText = syntheticDraftText(countDraftUnits, POST_UI_TARGET)
+    assert.ok(countDraftUnits(overText) > POST_UI_RANGE.maximum && countDraftUnits(inRangeText) <= POST_UI_RANGE.maximum)
+    const first = { attemptId: 'primary', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: 'chapter-draft' }
+    const condense = { ...first, attemptId: 'condense', purpose: 'chapter-draft-condense' }
+    const outputPath = path.join(dir, 'primary.txt')
+    const settled = { finish: 'stop', artifact: null, operation: POST_UI_DRAFT, recorded: null }
+    const proof = owner => {
+      const attemptId = `candidate:${owner.attemptId}`, text = fs.readFileSync(outputPath, 'utf8')
+      const binding = { operation: settled.operation, actual: { ...owner } }
+      return { attempt: { attemptId, binding, outputPath, visibleTextHash: settled.recorded ?? hash(text) },
+        events: [{ type: 'reserve', attemptId, binding }, { type: 'dispatch', attemptId }, { type: 'settle', attemptId, finishReason: settled.finish }],
+        ownerArtifactHash: settled.artifact ?? hash(text) }
+    }
+    const draftCondense = { policy: condensePolicy, maximum: POST_UI_RANGE.maximum, measureUnits: countDraftUnits }
+    const rejections = []
+    const create = (options = {}) => createOperationDispatchGate({ repairPolicy: policy, draftCondense, readPrimaryEvidence: proof,
+      onReject: item => rejections.push(item), ...options })
+    const reset = () => { fs.writeFileSync(outputPath, overText); Object.assign(settled, { finish: 'stop', artifact: null, operation: POST_UI_DRAFT, recorded: null }) }
+    reset()
+    // (a) 候选：同 run/root/项目/epoch 的首稿已 stop 结算且按生产计数超上限，恰放行一次压缩。
+    const gate = create()
+    gate(POST_UI_DRAFT, first)
+    assert.doesNotThrow(() => gate(POST_UI_DRAFT, condense))
+    // (b) 第二次压缩、续写等其他额外请求在 reserve 前拒绝。
+    assert.throws(() => gate(POST_UI_DRAFT, { ...condense, attemptId: 'condense-2' }), /MODEL_REQUEST_REJECTED/)
+    assert.throws(() => gate(POST_UI_DRAFT, { ...first, attemptId: 'continuation', purpose: 'chapter-draft-continuation' }), /MODEL_REQUEST_REJECTED/)
+    assert.deepEqual(rejections.at(-1), { code: 'UNREGISTERED_ADDITIONAL_MODEL_REQUEST', operationId: POST_UI_DRAFT, reason: 'duplicate-operation', beforeDispatch: true })
+    // (c) baseline：fixture 对 baseline 传 draftCondense=null，超限首稿之后的压缩仍被拒（baseline 身份没有 rootActionId）。
+    const ipc = { attemptId: 'ipc-primary', runId: 'bridge-run', projectId: 'project', epoch: 'epoch', purpose: 'chapter-draft' }
+    const baseline = create({ draftCondense: draftCondenseFor(policy, 'baseline') })
+    baseline(POST_UI_DRAFT, ipc)
+    assert.throws(() => baseline(POST_UI_DRAFT, { ...ipc, attemptId: 'ipc-condense', purpose: 'chapter-draft-condense' }), /MODEL_REQUEST_REJECTED/)
+    // (d) 非「900单位正文」的 operation：即使有同样的超限证据，压缩用途也被拒。
+    const reviewSource = { draftId: 7, contentHash: hash(inRangeText) }
+    for (const [operation, purpose] of [[policy.operationId, policy.primaryPurpose], [policy.reviewRebuild.operationId, policy.reviewRebuild.primaryPurpose],
+      ['成稿一次修稿', 'review-refine'], ['成稿完整复评', 'review-chapter']]) {
+      const other = create()
+      settled.operation = operation
+      other(operation, { ...first, purpose }, reviewSource)
+      assert.throws(() => other(operation, condense, reviewSource), /MODEL_REQUEST_REJECTED/, operation)
+      settled.operation = POST_UI_DRAFT
+    }
+    // (e) 首稿未超上限（含恰在上限）、未以 stop 结束、hash 不符、owner artifact 不符、身份错位：一律拒绝。
+    const rejected = mutate => {
+      const isolated = create()
+      isolated(POST_UI_DRAFT, first)
+      const owner = mutate() ?? condense
+      assert.throws(() => isolated(POST_UI_DRAFT, owner), /MODEL_REQUEST_REJECTED/)
+      reset()
+    }
+    rejected(() => { fs.writeFileSync(outputPath, inRangeText) })
+    rejected(() => { settled.recorded = hash(overText); fs.writeFileSync(outputPath, `${overText}补`) })
+    rejected(() => { settled.finish = 'length' })
+    rejected(() => { settled.artifact = hash('other owner artifact') })
+    rejected(() => { settled.operation = policy.operationId })
+    rejected(() => ({ ...condense, rootActionId: 'other-root' }))
+    rejected(() => ({ ...condense, epoch: 'other-epoch' }))
+    rejected(() => ({ ...condense, attemptId: first.attemptId }))
+    rejected(() => ({ ...condense, purpose: 'chapter-draft-condense:2' }))
+    const exact = create()
+    exact(POST_UI_DRAFT, first)
+    let atMaximum = inRangeText
+    const extra = '清晨，林澄核对登记，发现日期异常。'
+    while (countDraftUnits(atMaximum + extra) <= POST_UI_RANGE.maximum) atMaximum += extra
+    fs.writeFileSync(outputPath, atMaximum)
+    assert.ok(countDraftUnits(atMaximum) <= POST_UI_RANGE.maximum)
+    assert.throws(() => exact(POST_UI_DRAFT, condense), /MODEL_REQUEST_REJECTED/)
+    reset()
+    // 压缩不能作为首请求；登记压缩的 operation 首请求必须是 chapter-draft（其他首用途如续写不再被放行）。
+    assert.throws(() => create()(POST_UI_DRAFT, condense), /MODEL_REQUEST_REJECTED/)
+    assert.throws(() => create()(POST_UI_DRAFT, { ...first, purpose: 'chapter-draft-continuation' }), /MODEL_REQUEST_REJECTED/)
+    // 未登记 draftCondense 的旧门仍拒绝。
+    const legacy = createOperationDispatchGate({ repairPolicy: policy, readPrimaryEvidence: proof })
+    legacy(POST_UI_DRAFT, first)
+    assert.throws(() => legacy(POST_UI_DRAFT, condense), /MODEL_REQUEST_REJECTED/)
+    // (h) 同一门里，指定范围的一次结构化语法修复与成稿首审的一次重建保持原样。
+    const directory = { attemptId: 'dir', runId: 'run-dir', rootActionId: 'root-dir', projectId: 'project', epoch: 'epoch', purpose: policy.primaryPurpose }
+    const directoryPath = path.join(dir, 'directory.txt')
+    fs.writeFileSync(directoryPath, '{"blueprints":[')
+    const directoryProof = owner => {
+      const attemptId = `candidate:${owner.attemptId}`, binding = { operation: policy.operationId, actual: { ...owner } }
+      return { attempt: { attemptId, binding, outputPath: directoryPath, visibleTextHash: hash('{"blueprints":[') },
+        events: [{ type: 'reserve', attemptId, binding }, { type: 'dispatch', attemptId }, { type: 'settle', attemptId, finishReason: 'stop' }] }
+    }
+    const mixed = create({ readPrimaryEvidence: owner => owner.attemptId === 'dir' ? directoryProof(owner) : proof(owner) })
+    mixed(policy.operationId, directory)
+    assert.doesNotThrow(() => mixed(policy.operationId, { ...directory, attemptId: 'dir-repair', purpose: policy.repairPurpose }))
+    assert.throws(() => mixed(policy.operationId, { ...directory, attemptId: 'dir-third', purpose: policy.repairPurpose }), /MODEL_REQUEST_REJECTED/)
+    const reviewOwner = { ...first, attemptId: 'review', runId: 'run-review', rootActionId: 'root-review', purpose: policy.reviewRebuild.primaryPurpose }
+    const rebuildGate = create({ readPrimaryEvidence: () => null })
+    rebuildGate(policy.reviewRebuild.operationId, reviewOwner, reviewSource)
+    assert.throws(() => rebuildGate(policy.reviewRebuild.operationId, { ...reviewOwner, attemptId: 'review-rebuild', purpose: policy.reviewRebuild.repairPurpose }, reviewSource),
+      /MODEL_REQUEST_REJECTED/, '没有可核验语法失败证据时首审重建仍被拒；本切片不放宽它')
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('S14B post-UI 压缩的 fixture 接线：登记只对候选臂取到，首稿证据取 owner artifact 原文 hash，并与 driver 门禁联通', () => {
+  const dir = postUiEvidenceDir('post-ui-condense-wiring-')
+  try {
+    const fixture = fixtureSource()
+    // 1) 逐臂/逐里程碑的登记选择：直接执行 fixture 里的三行选择代码。
+    const selectStart = fixture.indexOf('    const policyEligible =')
+    const selectEnd = fixture.indexOf('    let draftCondense = null', selectStart)
+    assert.ok(selectStart > 0 && selectEnd > selectStart)
+    const select = new Function('request', 'target', 'continuityRun', 'draftCondenseFor',
+      `${fixture.slice(selectStart, selectEnd)}\nreturn { repairPolicy, condensePolicy }`)
+    const policy = postUiPolicy()
+    const pick = (request, arm, continuityRun = false) => select(request, { arm }, continuityRun, draftCondenseFor)
+    const postUi = { milestone: 'post-ui', attemptPolicy: policy }
+    assert.deepEqual(pick(postUi, 'candidate'), { repairPolicy: policy, condensePolicy: policy.draftCondense })
+    assert.deepEqual(pick(postUi, 'baseline'), { repairPolicy: policy, condensePolicy: null }, 'baseline 保留原修复/重建登记，但从不获压缩')
+    // early 里程碑：基础登记 milestone 为 post-ui，不适用；无登记的阶段也不适用。
+    const early = { milestone: 'early', attemptPolicy: PHASE_SCENARIOS['early-budget'].attemptPolicy }
+    for (const arm of ['baseline', 'candidate']) assert.deepEqual(pick(early, arm), { repairPolicy: null, condensePolicy: null }, arm)
+    assert.deepEqual(pick({ milestone: 'early', attemptPolicy: null }, 'candidate'), { repairPolicy: null, condensePolicy: null })
+    // C16–C18 保持原样：单臂 candidate，续写 run 不带 repairPolicy，压缩登记不变。
+    const c16 = { milestone: 'final', attemptPolicy: C16_C18_ATTEMPT_POLICY }
+    assert.deepEqual(pick(c16, 'candidate', true), { repairPolicy: null, condensePolicy: C16_C18_ATTEMPT_POLICY.draftCondense })
+    assert.deepEqual(pick(c16, 'baseline', true), { repairPolicy: null, condensePolicy: null })
+    // 2) 首稿证据读取：直接执行 fixture 的 readPrimaryEvidence，配合 driver 的门禁放行/拒绝唯一压缩。
+    const proofStart = fixture.indexOf('readPrimaryEvidence: first => {') + 'readPrimaryEvidence: first => {'.length
+    const proofEnd = fixture.indexOf('    }, onReject:', proofStart)
+    assert.ok(proofStart > 0 && proofEnd > proofStart)
+    const readEvidence = new Function('first', 'receipt', 'request', 'authorityFacts', 'sha', 'fs', 'target', 'operationKind', 'db', 'continuityRun',
+      `const finalizedContext = null, parseFinalizedCharacterStateResponse = null;\n${fixture.slice(proofStart, proofEnd)}`)
+    const { syntheticDraftText } = syntheticLengthHelpers()
+    const overText = syntheticDraftText(countDraftUnits, POST_UI_RANGE.maximum + 90)
+    const first = { attemptId: 'primary', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: 'chapter-draft' }
+    const attemptId = `candidate:${first.attemptId}`, binding = { operation: POST_UI_DRAFT, actual: first }
+    const outputPath = path.join(dir, 'primary.txt'), ledgerPath = path.join(dir, 'ledger.jsonl')
+    fs.writeFileSync(outputPath, overText)
+    fs.writeFileSync(ledgerPath, [{ type: 'reserve', attemptId, binding }, { type: 'dispatch', attemptId },
+      { type: 'settle', attemptId, finishReason: 'stop' }].map(row => JSON.stringify(row)).join('\n') + '\n')
+    const facts = ['fact one', 'fact two']
+    const attempt = { attemptId, binding, outputPath, visibleTextHash: hash(overText),
+      authorityEvidence: { factHashes: facts.map(hash), allFactsSent: true } }
+    let artifact = JSON.stringify({ text: overText })
+    const db = { prepare: () => ({ pluck: () => ({ get: () => artifact }) }) }
+    const reader = (kind, request = { attemptPolicy: policy, ledgerPath }, receipt = { attempts: [attempt] }) => first =>
+      readEvidence(first, receipt, request, facts, hash, fs, { arm: 'candidate' }, kind, db, false)
+    const draftCondense = { policy: policy.draftCondense, maximum: POST_UI_RANGE.maximum, measureUnits: countDraftUnits }
+    const dispatch = (readPrimaryEvidence, owner = { ...first, attemptId: 'condense', purpose: 'chapter-draft-condense' }) => {
+      const gate = createOperationDispatchGate({ repairPolicy: policy, draftCondense, readPrimaryEvidence })
+      gate(POST_UI_DRAFT, first)
+      return () => gate(POST_UI_DRAFT, owner)
+    }
+    const evidence = reader('draft')(first)
+    assert.equal(evidence.ownerArtifactHash, hash(overText))
+    assert.equal(evidence.events.length, 3)
+    assert.doesNotThrow(dispatch(reader('draft')), '候选超长首稿：读到 owner artifact hash，唯一压缩放行')
+    // owner artifact 与物理输出不符、缺 owner artifact、首稿事实未全发出：拒绝。
+    artifact = JSON.stringify({ text: `${overText}改` })
+    assert.throws(dispatch(reader('draft')), /MODEL_REQUEST_REJECTED/)
+    artifact = undefined
+    assert.throws(dispatch(reader('draft')), /MODEL_REQUEST_REJECTED/)
+    artifact = JSON.stringify({ text: overText })
+    assert.throws(dispatch(reader('draft', undefined, { attempts: [{ ...attempt, authorityEvidence: { factHashes: facts.map(hash), allFactsSent: false } }] })), /MODEL_REQUEST_REJECTED/)
+    // 只有登记了压缩的 post-UI 才走 owner artifact 证据：early / v2 登记（无 draftCondense）读到的是审稿证据，压缩因此无法放行。
+    const legacy = { ...policy }
+    delete legacy.draftCondense
+    assert.equal(reader('draft', { attemptPolicy: legacy, ledgerPath })(first).ownerArtifactHash, undefined)
+    assert.throws(dispatch(reader('draft', { attemptPolicy: legacy, ledgerPath })), /MODEL_REQUEST_REJECTED/)
+    // 非 draft operation（首审）在 post-UI 仍走原审稿证据，不因新登记改变。
+    assert.equal(Object.hasOwn(reader('review')(first), 'reviewReportAbsent'), true)
+    assert.equal(reader('review')(first).ownerArtifactHash, undefined)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('合成 transport 可复现 S14B post-UI 候选：超长首稿→唯一压缩→在范围，以及压缩仍越界；接线只对候选臂生效', () => {
+  const { syntheticDraftText, syntheticDraftUnitsGoal } = syntheticLengthHelpers()
+  const caseId = '场景1/1'
+  const units = (plan, purpose) => countDraftUnits(syntheticDraftText(countDraftUnits,
+    syntheticDraftUnitsGoal(plan, caseId, purpose, POST_UI_TARGET, POST_UI_RANGE.maximum)))
+  const inRange = { caseId, outcome: 'in-range' }, stillOver = { caseId, outcome: 'still-over' }
+  assert.ok(units(inRange, 'chapter-draft') > POST_UI_RANGE.maximum, 'primary-over')
+  const condensed = units(inRange, 'chapter-draft-condense')
+  assert.ok(condensed >= POST_UI_RANGE.minimum && condensed <= POST_UI_RANGE.maximum, 'condense-in-range')
+  assert.ok(units(stillOver, 'chapter-draft-condense') > POST_UI_RANGE.maximum, 'condense-still-over')
+  // 未登记计划保持原合成行为：首稿在范围内，产品不会发起压缩（in-range 默认路径不变）。
+  for (const plan of [null, { caseId: 'C17-A', outcome: 'in-range' }]) {
+    const value = units(plan, 'chapter-draft')
+    assert.ok(value >= POST_UI_RANGE.minimum && value <= POST_UI_RANGE.maximum)
+  }
+  const fixture = fixtureSource()
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-driver.mjs'), 'utf8')
+  // 登记按臂取：baseline 不加载生产压缩常量，其 gate 的 draftCondense 恒为 null。
+  assert.match(fixture, /const condensePolicy = policyEligible \? draftCondenseFor\(request\.attemptPolicy, target\.arm\) : null/)
+  assert.match(fixture, /const repairPolicy = policyEligible && !continuityRun \? request\.attemptPolicy : null/)
+  assert.match(fixture, /if \(continuityRun \|\| request\.attemptPolicy\?\.draftCondense && operationKind === 'draft'\) \{/)
+  assert.match(fixture, /const condensedPrimary = condensePolicy && attempt\.binding\.actual\.purpose === condensePolicy\.primaryPurpose/)
+  assert.match(fixture, /assert\.equal\(terminal\.hasFormalEffect, !repairedDirectory && !supersededAttempt && !condensedPrimary\)/)
+  assert.match(fixture, /if \(reviewedRun\) assert\.ok\(scenarioAuthorSettingLines\(scene, request\.scenarioRevision\)\.length, 'REVIEWED_SCENARIO_AUTHOR_LINE_MISSING'\)/)
+  // 开发合成默认让 post-UI 候选走「超长→唯一压缩→在范围」；C16–C18 的默认接线原样保留。
+  assert.match(driver, /options\.mode === 'synthetic' && options\.development && options\.phase === 'early-budget' && options\.milestone === 'post-ui'\s*\? \{ syntheticDraftCondense: options\.syntheticDraftCondense \?\? \{ caseId: scenario\.caseId, outcome: 'in-range' \} \}/)
+  assert.match(driver, /options\.mode === 'synthetic' && options\.development && options\.phase === 'c16-c18'\s*\? \{ syntheticDraftCondense: options\.syntheticDraftCondense \?\? \{ caseId: 'C17-A', outcome: 'in-range' \} \}/)
+  // 压缩最多使 candidate 的一次 operation 多一个物理 attempt：外层测试预算覆盖 8 个串行 attempt。
+  assert.match(driver, /BRIDGE_REVIEWED_TEST_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS \* 8 \+ 120_000/)
+})
+
+test('S14B post-UI pair：候选至多一次可核验压缩，末次为正式效果与保存来源；baseline 与任何未登记压缩一律拒绝', () => {
+  const dir = postUiEvidenceDir('post-ui-condense-pair-')
+  const { syntheticDraftText } = syntheticLengthHelpers()
+  const scenario = productionScenario('early-budget', 'post-ui'), policy = scenario.attemptPolicy
+  const overText = syntheticDraftText(countDraftUnits, POST_UI_RANGE.maximum + 90)
+  const condensedText = syntheticDraftText(countDraftUnits, POST_UI_TARGET)
+  const invocationId = '11111111-1111-4111-8111-111111111111'
+  const review = JSON.stringify({ summary: '无问题', items: [{ category: '事实', severity: 'pass', description: '保持' }] })
+  const artifact = (name, content, extra = {}) => {
+    const outputPath = path.join(dir, name)
+    fs.writeFileSync(outputPath, content)
+    return { outputPath, contentHash: hash(content), ...extra }
+  }
+  // saved/draftObservation/reviewedDraft 都指向 finalText；condenseOutput 是最后一次 draft attempt 的物理输出（默认同 finalText）。
+  const make = (arm, { condense = arm === 'candidate', primaryText = overText, finalText = condensedText, condenseOutput = finalText, tag = '' } = {}) => {
+    const finalDraft = artifact(`${arm}${tag}-final.txt`, finalText, { draftId: 7 })
+    const report = artifact(`${arm}${tag}-review.json`, review, { reviewId: 9, sourceHash: finalDraft.contentHash })
+    const source = { draftId: 7, contentHash: finalDraft.contentHash }
+    const steps = [[scenario.operations[0], 'directory', 'chapter-blueprint-directory', '{"blueprints":[]}'],
+      [scenario.operations[1], 'draft', 'chapter-draft', condense ? primaryText : finalText],
+      ...(condense ? [[scenario.operations[1], 'condense', 'chapter-draft-condense', condenseOutput]] : []),
+      [scenario.operations[2], 'review', policy.reviewRebuild.primaryPurpose, review]]
+    const attempts = steps.map(([operation, label, purpose, content]) => {
+      const saved = artifact(`${arm}${tag}-${label}.txt`, content)
+      const identity = { attemptId: `${arm}${tag}-${label}`, runId: `run-${operation.kind}`,
+        ...(arm === 'candidate' ? { rootActionId: `root-${operation.kind}` } : {}), projectId: `${arm}-project`, epoch: `${arm}-epoch`, purpose,
+        ...(arm === 'baseline' ? { operationId: operation.id } : {}) }
+      return { attemptId: `${arm}:${identity.attemptId}`, outputPath: saved.outputPath, visibleTextHash: saved.contentHash,
+        binding: { invocationId, mode: 'real', arm, phase: 'early-budget', milestone: 'post-ui', caseId: '场景1/1',
+          protocolRevision: protocol.decisionRevision, protocolHash: protocolBinding.protocolHash,
+          codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
+          operation: operation.id, ...(operation.kind === 'review' ? { reviewSource: source } : {}),
+          ...(arm === 'candidate' ? { actual: identity } : { baselineIpc: identity }) } }
+    })
+    const operations = scenario.operations.slice(0, 3).map(operation => ({ operation: operation.id, kind: operation.kind,
+      ...(arm === 'candidate' ? { handle: { runId: `run-${operation.kind}`, rootActionId: `root-${operation.kind}` } } : {}),
+      ...(operation.kind === 'draft' ? { outputHash: finalDraft.contentHash } : {}),
+      ...(operation.kind === 'review' ? { outputHash: report.contentHash } : {}) }))
+    const units = countDraftUnits(finalText)
+    const drafts = attempts.filter(attempt => attempt.binding.operation === POST_UI_DRAFT)
+    return { invocationId, mode: 'real', arm, phase: 'early-budget', milestone: 'post-ui', caseId: '场景1/1',
+      protocolRevision: protocol.decisionRevision, protocolHash: protocolBinding.protocolHash,
+      codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64),
+      status: 'passed', evaluationPolicy: POST_UI_REVIEW_POLICY,
+      physicalProject: { projectId: `${arm}-project`, parityHash: 'd'.repeat(64) }, projectEpoch: `${arm}-epoch`,
+      attempts, operations, physicalModelRequests: attempts.length, syntheticDispatches: 0,
+      saved: { chapterNumber: 1, targetUnits: POST_UI_TARGET, units, contentHash: finalDraft.contentHash },
+      draftObservation: { chapterNumber: 1, targetUnits: POST_UI_TARGET, units, contentHash: finalDraft.contentHash, persisted: true },
+      reviewedDraft: { initial: finalDraft, review: report, finalDraft, selectedCount: 0, selectedItemsHash: hash([]), disposition: 'no-actionable-review' },
+      ...(arm === 'candidate' ? { ownerTerminal: attempts.map(attempt => ({ attemptId: attempt.binding.actual.attemptId,
+        artifactId: `artifact-${attempt.attemptId}`, textHash: attempt.visibleTextHash, finishReason: 'stop', purpose: attempt.binding.actual.purpose,
+        hasFormalEffect: attempt.binding.operation !== POST_UI_DRAFT || attempt === drafts.at(-1) })) } : {}) }
+  }
+  try {
+    const baseline = make('baseline'), candidate = make('candidate')
+    const classify = (value, other = baseline) => classifyProductionPair([other, value], { mode: 'real', phase: 'early-budget' })
+    assert.equal(candidate.attempts.filter(attempt => attempt.binding.operation === POST_UI_DRAFT).length, 2)
+    assert.ok(countDraftUnits(overText) > POST_UI_RANGE.maximum && candidate.draftObservation.units <= POST_UI_RANGE.maximum)
+    // 合法：首稿超上限→恰好一次压缩→保存的是压缩稿；两臂其余链条不变，仍只到独立评审待判。
+    const valid = classify(candidate)
+    assert.equal(valid.pairFailure, undefined)
+    assert.equal(valid.status, 'pending-independent-oracle-review')
+    // in-range 默认路径行为不变：首稿在范围内的候选只有一个 draft attempt，同样通过。
+    const plain = make('candidate', { condense: false, tag: '-plain' })
+    assert.equal(plain.attempts.filter(attempt => attempt.binding.operation === POST_UI_DRAFT).length, 1)
+    assert.equal(classify(plain).pairFailure, undefined)
+    // 保存的正文按生产清洗（主进程 draft-visible-v1 组合）从末次压缩原文得出：仅清洗可去除的尾随空行不构成不一致。
+    assert.equal(classify(make('candidate', { condenseOutput: `${condensedText}\n\n\n`, tag: '-padded' })).pairFailure, undefined)
+    // (b) 第三个 draft attempt；(c) baseline 出现压缩 attempt：数量校验直接拒绝。
+    const third = structuredClone(candidate)
+    third.attempts.splice(2, 0, { ...structuredClone(third.attempts[2]), attemptId: 'candidate:candidate-condense-2' })
+    third.physicalModelRequests++
+    assert.equal(classify(third).pairFailure, 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+    const baselineCondensed = make('baseline', { condense: true, tag: '-condensed' })
+    assert.equal(classify(candidate, baselineCondensed).pairFailure, 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+    // 用途或顺序不符：第二个 draft attempt 不是 chapter-draft-condense，或首个不是 chapter-draft。
+    const wrongCondense = structuredClone(candidate)
+    wrongCondense.attempts[2].binding.actual.purpose = 'chapter-draft-continuation'
+    wrongCondense.ownerTerminal[2].purpose = 'chapter-draft-continuation'
+    assert.equal(classify(wrongCondense).pairFailure, 'DRAFT_CONDENSE_OWNER_MISMATCH')
+    const wrongPrimary = structuredClone(candidate)
+    wrongPrimary.attempts[1].binding.actual.purpose = 'chapter-draft-continuation'
+    wrongPrimary.ownerTerminal[1].purpose = 'chapter-draft-continuation'
+    assert.equal(classify(wrongPrimary).pairFailure, 'DRAFT_CONDENSE_OWNER_MISMATCH')
+    // 正式效果只在末次压缩；首稿带正式效果、压缩缺正式效果或非 stop，均拒绝。
+    for (const mutate of [value => { value.ownerTerminal[1].hasFormalEffect = true },
+      value => { value.ownerTerminal[2].hasFormalEffect = false },
+      value => { value.ownerTerminal[1].finishReason = 'length' },
+      value => { value.ownerTerminal[2].finishReason = 'length' }]) {
+      const changed = structuredClone(candidate)
+      mutate(changed)
+      assert.equal(classify(changed).pairFailure, 'DRAFT_CONDENSE_OWNER_MISMATCH')
+    }
+    // owner 终态与物理输出 hash 不符、终态缺失：拒绝。
+    const wrongTerminalHash = structuredClone(candidate)
+    wrongTerminalHash.ownerTerminal[2].textHash = hash('other')
+    assert.equal(classify(wrongTerminalHash).pairFailure, 'ACTUAL_OWNER_ARTIFACT_MISMATCH')
+    const missingTerminal = structuredClone(candidate)
+    missingTerminal.ownerTerminal.pop()
+    assert.equal(classify(missingTerminal).pairFailure, 'ACTUAL_OWNER_ARTIFACT_MISMATCH')
+    // 压缩与首稿必须同 run/root（同一 operation 的 handle）；否则按 owner 绑定拒绝。
+    const foreignRun = structuredClone(candidate)
+    foreignRun.attempts[2].binding.actual.runId = 'run-other'
+    assert.equal(classify(foreignRun).pairFailure, 'ACTUAL_OWNER_ATTEMPT_MISMATCH')
+    // (e) 首稿未超上限却压缩：拒绝；首稿原文在结算后被改写：hash 不符或丢失。
+    assert.equal(classify(make('candidate', { primaryText: condensedText, tag: '-inrange-primary' })).pairFailure, 'DRAFT_CONDENSE_NOT_REGISTERED')
+    fs.writeFileSync(candidate.attempts[1].outputPath, `${overText}补`)
+    assert.equal(classify(candidate).pairFailure, 'PHYSICAL_OUTPUT_HASH_MISMATCH')
+    fs.rmSync(candidate.attempts[1].outputPath)
+    assert.equal(classify(candidate).pairFailure, 'PHYSICAL_OUTPUT_MISSING')
+    fs.writeFileSync(candidate.attempts[1].outputPath, overText)
+    // (f) 保存/观察 hash 必须等于最后一次 draft attempt 的可见输出（生产清洗后；干净输出即其物理输出 hash）：保存的若是别的正文即拒绝。
+    assert.equal(classify(make('candidate', { condenseOutput: `${condensedText}\n另一稿`, tag: '-other-saved' })).pairFailure, 'DRAFT_CONDENSE_SAVED_MISMATCH')
+    // (g) 压缩后仍超限：产品保留原稿并以 GENERATION_DRAFT_LENGTH_OUT_OF_RANGE 停下——收据为失败且无保存/审修链，原失败语义保留。
+    const stillOver = { ...structuredClone(candidate), status: 'failed', error: 'GENERATION_DRAFT_LENGTH_OUT_OF_RANGE',
+      saved: undefined, draftObservation: undefined, reviewedDraft: undefined }
+    assert.deepEqual(classify(stillOver), { status: 'failed', qualityQualification: 'automatic-gate-failed', pairFailure: 'REVIEWED_DRAFT_EVIDENCE_INVALID' })
+    // 即使收据谎称 passed：保存稿仍越界（压缩没有落入范围）时不能进入独立评审待判。
+    const overSaved = make('candidate', { finalText: overText, condenseOutput: overText, tag: '-over-saved' })
+    const overResult = classify(overSaved)
+    assert.equal(overResult.status, 'failed')
+    assert.ok(overResult.pairFailure)
+    fs.writeFileSync(candidate.attempts[1].outputPath, overText)
+  } finally {
+    assert.ok(path.resolve(dir).startsWith(path.resolve(ROOT, '.runtime/.cache/novel-quality-modernization') + path.sep))
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('真实桥只公开本地字数门失败，并在失败收据保留持久化观察而非 saved', () => {

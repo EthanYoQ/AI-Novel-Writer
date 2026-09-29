@@ -11,7 +11,7 @@ import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, 
   createOutboundPreflightAssert, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
   fetchProviderResponse, measurePromptBytes, BRIDGE_SETTLEMENT_DEADLINE_MS,
   BRIDGE_TEST_TIMEOUT_MS, BRIDGE_REVIEWED_TEST_TIMEOUT_MS, POST_UI_REVIEW_POLICY, reviewedDraftSelection,
-  scenarioAuthorSetting } from '../quality-modernization-driver.mjs'
+  scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, recordPersistedDraftObservation, safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
 
 // This adapter replaces the Electron transport, never a command/runtime/repository.
@@ -226,7 +226,7 @@ test('isolated production commands persist the selected phase operations', async
   // 长设定只在预注册语义源里存在的场景携带；它作为作者资料进入受预算的必需材料。
   // 场景 revision 登记的附加行（如 post-UI 的【第1章必现】）只追加到作者世界设定，其余 revision 字节不变。
   const authorSetting = scenarioAuthorSetting(scene, request.scenarioRevision)
-  if (reviewedRun) assert.ok(scene.scenarioAuthorSettingLines?.[request.scenarioRevision]?.length, 'REVIEWED_SCENARIO_AUTHOR_LINE_MISSING')
+  if (reviewedRun) assert.ok(scenarioAuthorSettingLines(scene, request.scenarioRevision).length, 'REVIEWED_SCENARIO_AUTHOR_LINE_MISSING')
   const load = relative => import(/* @vite-ignore */ pathToFileURL(path.join(target.repositoryRoot, relative)).href)
   const receipt = { schemaVersion: 1, invocationId: request.invocationId, arm: target.arm, mode: request.mode, action: request.action,
     protocolRevision: request.protocolRevision, protocolHash: request.protocolHash,
@@ -655,8 +655,9 @@ test('isolated production commands persist the selected phase operations', async
     let operationKind = null, operationId = null
     const policyEligible = request.attemptPolicy?.milestone === request.milestone && request.attemptPolicy.arms?.includes(target.arm)
     const repairPolicy = policyEligible && !continuityRun ? request.attemptPolicy : null
-    // C17/C18 唯一压缩：用途常量、计数、清洗与篇幅上限全部取自生产代码，与产品触发条件同源。
-    const condensePolicy = policyEligible && continuityRun ? request.attemptPolicy.draftCondense ?? null : null
+    // C17/C18 与 post-UI 候选臂的唯一压缩：按臂登记（baseline 恒为 null，也不加载生产压缩常量）；
+    // 用途常量、计数、清洗与篇幅上限全部取自生产代码，与产品触发条件同源。
+    const condensePolicy = policyEligible ? draftCondenseFor(request.attemptPolicy, target.arm) : null
     let draftCondense = null
     if (condensePolicy) {
       const visible = await load('src/shared/draft-visible-text.ts')
@@ -687,7 +688,8 @@ test('isolated production commands persist the selected phase operations', async
         || JSON.stringify(matches[0].authorityEvidence.factHashes) !== JSON.stringify(authorityFacts.map(sha)))) return null
       const events = fs.readFileSync(request.ledgerPath, 'utf8').trimEnd().split('\n')
         .map(line => JSON.parse(line)).filter(event => event.attemptId === attemptId)
-      if (continuityRun) {
+      // 压缩的首稿证据只取 owner artifact 原文 hash（C17/C18 与 post-UI 候选同规则）；post-UI 其余 operation 仍走审稿证据。
+      if (continuityRun || request.attemptPolicy?.draftCondense && operationKind === 'draft') {
         const artifact = db.prepare('SELECT artifact_json FROM generation_artifacts WHERE attempt_id=?').pluck().get(first.attemptId)
         if (!artifact) return null
         if (operationKind === 'draft') return { attempt: matches[0], events, ownerArtifactHash: sha(JSON.parse(artifact).text) }
@@ -1330,10 +1332,13 @@ test('isolated production commands persist the selected phase operations', async
           && attempt.binding.actual.purpose === repairPolicy.primaryPurpose
           && receipt.attempts.some(other => other.binding.operation === repairPolicy.operationId
             && other.binding.actual?.purpose === repairPolicy.repairPurpose)
-        // C16 原生修复与 C17/C18 唯一压缩同规则：同一 operation 只有末次 attempt 带正式效果。
+        // C16 原生修复与 C17/C18、post-UI 候选的唯一压缩同规则：同一 operation 只有末次 attempt 带正式效果。
         const supersededAttempt = continuityRun
           && receipt.attempts.filter(other => other.binding.operation === attempt.binding.operation).at(-1) !== attempt
-        assert.equal(terminal.hasFormalEffect, !repairedDirectory && !supersededAttempt)
+        const condensedPrimary = condensePolicy && attempt.binding.actual.purpose === condensePolicy.primaryPurpose
+          && receipt.attempts.some(other => other.binding.operation === attempt.binding.operation
+            && other.binding.actual?.purpose === condensePolicy.condensePurpose)
+        assert.equal(terminal.hasFormalEffect, !repairedDirectory && !supersededAttempt && !condensedPrimary)
         if (request.mode === 'synthetic') assert.equal(terminal.trustedUsage, true)
         assert.equal(terminal.textHash, attempt.visibleTextHash, 'OWNER_ARTIFACT_OUTPUT_MISMATCH')
       }

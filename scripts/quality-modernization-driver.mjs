@@ -19,6 +19,10 @@ const { parseReviewGenerationResult } = await import(`data:text/javascript;base6
 const reconciliationBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/shared/draft-reconciliation.ts')],
   bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
 const { draftReconciliationBlock, parseDraftReconciliation } = await import(`data:text/javascript;base64,${Buffer.from(reconciliationBundle).toString('base64')}`)
+// 压缩后保存的正文由主进程按同一份生产清洗从末次压缩原文组合（generation-run-repository 的 draft-visible-v1 组合）。
+const draftVisibleBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/shared/draft-visible-text.ts')],
+  bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
+const { sanitizeDraftText } = await import(`data:text/javascript;base64,${Buffer.from(draftVisibleBundle).toString('base64')}`)
 export const PRODUCTION_BRIDGE = 'scripts/fixtures/quality-modernization-production.fixture.mjs'
 export const EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION = 's11-reference-no-actionable-review-v1'
 export const REVIEWED_DRAFT_PROTOCOL_REVISION = 's14b-reviewed-draft-v1'
@@ -34,16 +38,39 @@ export const POST_UI_REVIEW_POLICY = Object.freeze({ revision: 's14b-post-ui-rev
   armAsymmetry: Object.freeze({
     baseline: 'baseline 2264390d 不识别【第N章必现】标记，只把该行当普通世界设定文本，首审不会产生 mustShow 项，其 unknown 只可能来自蓝图 keyEvents 或覆盖不完整且不被采纳；首审有 error/warning 时仍按原规则修稿一次，无 error/warning 时按 unknown-only 规则保留初稿',
     candidate: 'candidate 把该行冻结为 chN:mustShow:K 目标；首审为 unknown 时视为作者测试预授权补写，与 error/warning 按原报告顺序共用至多一次修稿和一次普通复评，不改称已确认错误',
+    // 场景 v3（评分规则/场景变更）：候选臂登记产品原生的唯一压缩，baseline 没有该能力，不对称同样披露。
+    condense: 'candidate（产品自 f00b612b 起）可对超出 draftTargetUnitRange 上限的首稿发一次产品原生压缩 chapter-draft-condense，并登记为「900单位正文」的正式效果；baseline 2264390d 没有该产品能力、不登记压缩，首稿超上限即按原字数门失败；两臂是否触发压缩及压缩后正文长度的差异来自该不对称，不得据此单独声称相对改善',
     claim: '两臂是否触发修复分支的差异来自上述不对称，不得据此单独声称相对改善；首稿自然满足时记录修复分支未触发' }) })
 const MUST_SHOW_GOAL_ID = new RegExp(POST_UI_REVIEW_POLICY.mustShowGoalId, 'u')
-const POST_UI_BUDGET = Object.freeze({ scenarioRevision: 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2',
+// early-budget 的登记：指定范围生成的一次结构化语法修复与成稿首审的一次重建。early 场景与 post-UI 共用同一份，milestone 限定 post-ui。
+const EARLY_BUDGET_ATTEMPT_POLICY = Object.freeze({ milestone: 'post-ui', arms: Object.freeze(['baseline', 'candidate']),
+  operationId: '指定范围生成', primaryPurpose: 'chapter-blueprint-directory',
+  repairPurpose: 'chapter-blueprint-directory:structured-syntax-repair', maxRepairAttempts: 1,
+  reviewRebuild: Object.freeze({ operationId: '成稿首审', primaryPurpose: 'review-chapter',
+    repairPurpose: 'review-chapter-rebuild', maxRepairAttempts: 1 }) })
+/**
+ * post-UI 场景 v3（评分规则/场景变更，与产品 f00b612b 的修复分开）：只为候选臂的「900单位正文」登记产品原生的唯一一次
+ * 超长压缩，语义同 C16–C18 v2；early 里程碑的登记（EARLY_BUDGET_ATTEMPT_POLICY）不变。
+ */
+const POST_UI_ATTEMPT_POLICY = Object.freeze({ ...EARLY_BUDGET_ATTEMPT_POLICY,
+  draftCondense: Object.freeze({ operationIds: Object.freeze(['900单位正文']), arms: Object.freeze(['candidate']),
+    primaryPurpose: 'chapter-draft', condensePurpose: 'chapter-draft-condense', maxCondenseAttempts: 1,
+    trigger: 'primary-settled-stop-hash-verified-units-above-draftTargetUnitRange-maximum',
+    formalEffect: 'last-attempt-only' }) })
+const POST_UI_BUDGET = Object.freeze({ scenarioRevision: 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v3',
+  attemptPolicy: POST_UI_ATTEMPT_POLICY,
   evaluationPolicy: POST_UI_REVIEW_POLICY,
   operations: Object.freeze([{ id: '指定范围生成', kind: 'directory' }, { id: '900单位正文', kind: 'draft' },
     { id: '成稿首审', kind: 'review' }, { id: '成稿一次修稿', kind: 'refine' }, { id: '成稿完整复评', kind: 'final-review' }]) })
+// v3 只改登记（attemptPolicy 增加唯一压缩），作者世界设定输入与 v2 逐字相同：沿用语义源里登记给 v2 的同一条附加行，不改动冻结的语义源。
+const AUTHOR_SETTING_LINES_REVISION = Object.freeze({
+  's14b-post-ui-reviewed-budget-review-rebuild-must-show-v3': 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2' })
+/** 场景 revision 在语义源登记的作者设定附加行。 */
+export const scenarioAuthorSettingLines = (scene, scenarioRevision) => scenarioRevision
+  ? scene?.scenarioAuthorSettingLines?.[AUTHOR_SETTING_LINES_REVISION[scenarioRevision] ?? scenarioRevision] ?? [] : []
 /** 作者世界设定：只有登记了该场景 revision 附加行的场景才追加独立行，其余 revision 字节不变。 */
 export function scenarioAuthorSetting(scene, scenarioRevision) {
-  const lines = scenarioRevision ? scene?.scenarioAuthorSettingLines?.[scenarioRevision] ?? [] : []
-  return [scene?.material, scene?.longSetting, ...lines].filter(Boolean).join('\n')
+  return [scene?.material, scene?.longSetting, ...scenarioAuthorSettingLines(scene, scenarioRevision)].filter(Boolean).join('\n')
 }
 export function reviewedDraftSelection(report) {
   if (!Array.isArray(report?.items) || report.items.length === 0
@@ -130,7 +157,8 @@ export function selectOwnerDispatch(db, handle, session, body) {
 export const BRIDGE_SETTLEMENT_DEADLINE_MS = 480_000
 export const BRIDGE_SPAWN_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 3 + 60_000
 export const BRIDGE_TEST_TIMEOUT_MS = BRIDGE_SPAWN_TIMEOUT_MS + 60_000
-export const BRIDGE_REVIEWED_TEST_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 7 + 120_000
+// post-UI 候选最多 8 个串行 attempt：指定范围 2、正文 2（含唯一压缩）、首审 2、修稿 1、复评 1。
+export const BRIDGE_REVIEWED_TEST_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 8 + 120_000
 
 /** 只测规模、不落内容：返回提示词载荷的 UTF-8 字节数，绝不含提示词原文或凭据。 */
 export function measurePromptBytes(messages) {
@@ -289,6 +317,14 @@ export const C16_C18_ATTEMPT_POLICY = Object.freeze({ milestone: 'final', arms: 
     formalEffect: 'none', composition: 'never-composed-never-repaired-not-condense-primary',
     finishReasons: Object.freeze(['stop', 'length']),
     unusableOutput: 'recorded-as-unusable-first-draft-prompt-without-injection' }) })
+/**
+ * 登记的唯一压缩按臂生效：`draftCondense.arms` 缺省时沿用 attemptPolicy.arms（C16–C18 的单臂策略）；
+ * post-UI v3 显式只给 candidate。未登记或该臂不在其中返回 null——baseline 因此从不获压缩许可。
+ */
+export const draftCondenseFor = (attemptPolicy, arm) => {
+  const condense = attemptPolicy?.draftCondense
+  return condense && (condense.arms ?? attemptPolicy.arms ?? []).includes(arm) ? condense : null
+}
 // A phase scenario is the bridge-side counterpart of one preregistered protocol phase.
 // The protocol stays the only authority for case ids and operation ids; this map only
 // says which production commands realize them. The runner re-checks every field against
@@ -326,11 +362,7 @@ export const PHASE_SCENARIOS = Object.freeze({
     chapterNumber: 1,
     milestone: 'early',
     scenarioRevision: 's14b-post-ui-budget-syntax-repair-v1',
-    attemptPolicy: Object.freeze({ milestone: 'post-ui', arms: Object.freeze(['baseline', 'candidate']),
-      operationId: '指定范围生成', primaryPurpose: 'chapter-blueprint-directory',
-      repairPurpose: 'chapter-blueprint-directory:structured-syntax-repair', maxRepairAttempts: 1,
-      reviewRebuild: Object.freeze({ operationId: '成稿首审', primaryPurpose: 'review-chapter',
-        repairPurpose: 'review-chapter-rebuild', maxRepairAttempts: 1 }) }),
+    attemptPolicy: EARLY_BUDGET_ATTEMPT_POLICY,
     operations: Object.freeze([
       Object.freeze({ id: '指定范围生成', kind: 'directory' }),
       Object.freeze({ id: '900单位正文', kind: 'draft' }),
@@ -529,13 +561,19 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
   const reviewPolicy = eligible && scenario.evaluationPolicy ? policy.reviewRebuild : null
   const reviewMatches = reviewPolicy ? result.attempts.filter(attempt => attempt?.binding?.operation === reviewPolicy.operationId) : []
   const reviewUsed = reviewMatches.length === 2
-  if (result.attempts.length !== scenario.operations.length + Number(repairUsed) + Number(reviewUsed)
+  // post-UI v3：只有登记的臂（candidate）与 operation 可多出唯一一次压缩 attempt；baseline 与其余 operation 仍恰一次。
+  const condensePolicy = eligible && scenario.evaluationPolicy ? draftCondenseFor(policy, arm) : null
+  const condenseMatches = condensePolicy
+    ? result.attempts.filter(attempt => condensePolicy.operationIds.includes(attempt?.binding?.operation)) : []
+  const condenseUsed = condenseMatches.length === 2
+  if (result.attempts.length !== scenario.operations.length + Number(repairUsed) + Number(reviewUsed) + Number(condenseUsed)
     || new Set(result.attempts.map(attempt => attempt?.attemptId)).size !== result.attempts.length)
     return 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'
   for (const operation of scenario.operations) {
     const matches = result.attempts.filter(attempt => attempt?.binding?.operation === operation.id)
     if (matches.length !== (repairUsed && operation.id === policy.operationId
-      || reviewUsed && operation.id === reviewPolicy.operationId ? 2 : 1)) return 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'
+      || reviewUsed && operation.id === reviewPolicy.operationId
+      || condenseUsed && condensePolicy.operationIds.includes(operation.id) ? 2 : 1)) return 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'
     for (const match of matches) {
       const binding = match.binding
       if (binding.mode !== mode || binding.arm !== arm || binding.phase !== phase || binding.caseId !== scenario.caseId
@@ -634,6 +672,31 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
         const terminal = result.ownerTerminal.find(item => item.attemptId === attempt.binding.actual.attemptId)
         return !terminal?.artifactId || terminal.textHash !== attempt.visibleTextHash
       }))) return 'ACTUAL_OWNER_ARTIFACT_MISMATCH'
+  }
+  if (condenseUsed) {
+    // 登记的唯一压缩：首稿→压缩同 run/root/项目/epoch；首稿 stop 且 hash 可复核、按生产计数超上限；正式效果与保存来源只在末次压缩。
+    const [primary, condense] = condenseMatches.map(attempt => attempt.binding.actual)
+    if (primary?.purpose !== condensePolicy.primaryPurpose || condense?.purpose !== condensePolicy.condensePurpose
+      || ['runId', 'rootActionId', 'projectId', 'epoch'].some(key => primary[key] !== condense[key]))
+      return 'DRAFT_CONDENSE_OWNER_MISMATCH'
+    if (result.ownerTerminal?.length !== result.attempts.length) return 'ACTUAL_OWNER_ARTIFACT_MISMATCH'
+    let condensedOutput = ''
+    for (const [index, attempt] of condenseMatches.entries()) {
+      const terminal = result.ownerTerminal.find(item => item.attemptId === attempt.binding.actual.attemptId)
+      if (!terminal?.artifactId || terminal.textHash !== attempt.visibleTextHash) return 'ACTUAL_OWNER_ARTIFACT_MISMATCH'
+      if (terminal.finishReason !== 'stop' || terminal.purpose !== attempt.binding.actual.purpose
+        || terminal.hasFormalEffect !== (index === 1)) return 'DRAFT_CONDENSE_OWNER_MISMATCH'
+      if (!CONTENT_HASH.test(attempt.visibleTextHash ?? '') || typeof attempt.outputPath !== 'string') return 'PHYSICAL_OUTPUT_MISSING'
+      try {
+        const output = fs.readFileSync(attempt.outputPath, 'utf8')
+        if (digest(output) !== attempt.visibleTextHash) return 'PHYSICAL_OUTPUT_HASH_MISMATCH'
+        condensedOutput = output
+      } catch { return 'PHYSICAL_OUTPUT_MISSING' }
+    }
+    if (!verifiedCondensedDraft(condenseMatches[0], result)) return 'DRAFT_CONDENSE_NOT_REGISTERED'
+    // 保存的正文必须是最后一次 draft attempt 的可见输出（生产清洗后；干净输出即物理输出本身），而不是被压缩取代的首稿；
+    // saved、draftObservation 与审修链来源已由 validateReviewedDraft 强制同 hash，因此审稿源、后续保存与收据全部随之取自这份末次输出。
+    if (result.saved?.contentHash !== digest(sanitizeDraftText(condensedOutput))) return 'DRAFT_CONDENSE_SAVED_MISMATCH'
   }
   const expectedPhysical = mode === 'real' ? result.attempts.length : 0
   const expectedSynthetic = mode === 'synthetic' ? result.attempts.length : 0
@@ -1128,6 +1191,9 @@ export function runProductionPhasePair(targets, options) {
     // 开发合成才登记超长首稿：默认让 C17-A 走「超长→唯一压缩→在范围」；still-over 用于复现原失败语义。
     ...(options.mode === 'synthetic' && options.development && options.phase === 'c16-c18'
       ? { syntheticDraftCondense: options.syntheticDraftCondense ?? { caseId: 'C17-A', outcome: 'in-range' } } : {}),
+    // post-UI v3 同理：默认让候选首稿超长→唯一压缩→在范围（baseline 不登记压缩，合成首稿始终在范围）；still-over 复现原失败语义。
+    ...(options.mode === 'synthetic' && options.development && options.phase === 'early-budget' && options.milestone === 'post-ui'
+      ? { syntheticDraftCondense: options.syntheticDraftCondense ?? { caseId: scenario.caseId, outcome: 'in-range' } } : {}),
     milestone: options.milestone ?? scenario.milestone,
     phase: options.phase, caseId: scenario.caseId, sceneId: scenario.sceneId, chapterNumber: scenario.chapterNumber,
     operations: scenario.operations, semanticPath: options.semanticPath, templatesPath: options.templatesPath,

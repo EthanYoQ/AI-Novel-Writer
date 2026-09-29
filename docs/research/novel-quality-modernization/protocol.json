@@ -533,6 +533,33 @@
       { "attemptId": "candidate:c8a69a50-f6f0-4b3a-bcb8-a97a621a3860", "invocationId": "2867cfa4-a10f-4912-8134-edf0f83e608e", "terminal": "settle", "parityId": "1e180064d98bde4551822c2d2ddd2a5ad005b640f5eb4365a082c9f9d98aae2a" }
     ]
   },
+  "historicalPostUiBa2d34abBoundary": {
+    "fromEventCount": 828,
+    "eventCount": 843,
+    "rawBytesSha256": "baa7666b4905b268d0a96c5d4443cdd5f935f52b3b077bdeac52f86fbc89c1b5",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "7cf6e1ce4a7f91c408af3fed1369d914ff2e53a3f19501169ebf12ee2c997869",
+    "armBindings": {
+      "baseline": {
+        "codeSha": "2264390d6fb8b052cc14736d544df0cc74516649",
+        "sourceHash": "9b0d78fc45e0ad01d4c975eb0c23d2d0f2dae0ef5c2b84d6c5e19294a31bd4e8",
+        "driverHash": "dbc1cfd85fb54880bb9987a927f574798894e967bffb608917c147f9adbeff92",
+        "parityId": "3c217fca02910eb0bc2e82d5d2e08414a75695125a38b4a1c0abf4f33c35127e"
+      },
+      "candidate": {
+        "codeSha": "a618c122d02d3abf08103620db063118e710073d",
+        "sourceHash": "880dc80c1aea30f37f12e2605aad47e95e3609a9c28eb6d62d638467a86c0b73",
+        "driverHash": "dbc1cfd85fb54880bb9987a927f574798894e967bffb608917c147f9adbeff92"
+      }
+    },
+    "reserveAttempts": [
+      { "attemptId": "baseline:0b71919f-bd4b-4631-99a4-163dcfa568fe", "invocationId": "ba2d34ab-a4f6-4283-bed1-eb2bffa8b5aa", "terminal": "settle" },
+      { "attemptId": "baseline:10c1680b-c313-4ef7-87a2-9432e4ad1da4", "invocationId": "ba2d34ab-a4f6-4283-bed1-eb2bffa8b5aa", "terminal": "settle" },
+      { "attemptId": "baseline:08fbd628-7ae9-4b30-a203-1833d48e9550", "invocationId": "ba2d34ab-a4f6-4283-bed1-eb2bffa8b5aa", "terminal": "settle" },
+      { "attemptId": "candidate:5a1ec919-f31e-4979-8a02-1276639d14d8", "invocationId": "ba2d34ab-a4f6-4283-bed1-eb2bffa8b5aa", "terminal": "settle", "parityId": "3c217fca02910eb0bc2e82d5d2e08414a75695125a38b4a1c0abf4f33c35127e" },
+      { "attemptId": "candidate:ebfb08cd-ef74-45b9-9663-83b12476a172", "invocationId": "ba2d34ab-a4f6-4283-bed1-eb2bffa8b5aa", "terminal": "settle", "parityId": "3c217fca02910eb0bc2e82d5d2e08414a75695125a38b4a1c0abf4f33c35127e" }
+    ]
+  },
   "phases": {
     "c16-c18": {
       "scenarioRevision": "c16-c18-candidate-production-path-v5",
@@ -644,9 +671,35 @@
         }
       ],
       "postUi": {
-        "scenarioRevision": "s14b-post-ui-reviewed-budget-review-rebuild-must-show-v2",
+        "scenarioRevision": "s14b-post-ui-reviewed-budget-review-rebuild-must-show-v3",
+        "attemptPolicy": {
+          "milestone": "post-ui",
+          "arms": [
+            "baseline",
+            "candidate"
+          ],
+          "operationId": "指定范围生成",
+          "primaryPurpose": "chapter-blueprint-directory",
+          "repairPurpose": "chapter-blueprint-directory:structured-syntax-repair",
+          "maxRepairAttempts": 1,
+          "reviewRebuild": {
+            "operationId": "成稿首审",
+            "primaryPurpose": "review-chapter",
+            "repairPurpose": "review-chapter-rebuild",
+            "maxRepairAttempts": 1
+          },
+          "draftCondense": {
+            "operationIds": ["900单位正文"],
+            "arms": ["candidate"],
+            "primaryPurpose": "chapter-draft",
+            "condensePurpose": "chapter-draft-condense",
+            "maxCondenseAttempts": 1,
+            "trigger": "primary-settled-stop-hash-verified-units-above-draftTargetUnitRange-maximum",
+            "formalEffect": "last-attempt-only"
+          }
+        },
         "minimumCalls": 6,
-        "maximumPlannedCalls": 14,
+        "maximumPlannedCalls": 15,
         "evaluationPolicy": {
           "revision": "s14b-post-ui-reviewed-draft-must-show-unknown-v3",
           "selection": "all-error-warning-and-must-show-unknown-in-report-order",
@@ -661,6 +714,7 @@
           "armAsymmetry": {
             "baseline": "baseline 2264390d 不识别【第N章必现】标记，只把该行当普通世界设定文本，首审不会产生 mustShow 项，其 unknown 只可能来自蓝图 keyEvents 或覆盖不完整且不被采纳；首审有 error/warning 时仍按原规则修稿一次，无 error/warning 时按 unknown-only 规则保留初稿",
             "candidate": "candidate 把该行冻结为 chN:mustShow:K 目标；首审为 unknown 时视为作者测试预授权补写，与 error/warning 按原报告顺序共用至多一次修稿和一次普通复评，不改称已确认错误",
+            "condense": "candidate（产品自 f00b612b 起）可对超出 draftTargetUnitRange 上限的首稿发一次产品原生压缩 chapter-draft-condense，并登记为「900单位正文」的正式效果；baseline 2264390d 没有该产品能力、不登记压缩，首稿超上限即按原字数门失败；两臂是否触发压缩及压缩后正文长度的差异来自该不对称，不得据此单独声称相对改善",
             "claim": "两臂是否触发修复分支的差异来自上述不对称，不得据此单独声称相对改善；首稿自然满足时记录修复分支未触发"
           }
         },
