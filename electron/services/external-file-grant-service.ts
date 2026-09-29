@@ -138,6 +138,32 @@ export class ExternalFileGrantService {
     })
   }
 
+  /**
+   * 为用户在保存对话框或“新建文件夹”选择器中选定、可能尚不存在的单一子项签发精确授权。
+   * 授权固定父目录与子项名称，渲染进程既不能改名也不能追加子路径。
+   */
+  issueNewChild(options: FileExternalFileGrantOptions): IssuedExternalFileGrant {
+    const requestedPath = path.resolve(options.filePath)
+    const name = path.basename(requestedPath)
+    const rootPath = fs.realpathSync.native(path.dirname(requestedPath))
+    if (!fs.statSync(rootPath).isDirectory()) {
+      throw new Error('外部文件授权的父目录必须是已存在的目录')
+    }
+    if (name === '' || normalizedRelativePath(name) !== name) {
+      throw new Error('外部文件授权的相对路径无效')
+    }
+    return this.issue({
+      webContentsId: options.webContentsId,
+      scope: 'file',
+      rootPath,
+      rootIdentity: captureSecureRootIdentity(rootPath),
+      fixedRelativePath: name,
+      operations: options.operations,
+      ttlMs: options.ttlMs,
+      maxUses: options.maxUses,
+    })
+  }
+
   revoke(grantId: string): void {
     this.grants.delete(grantId)
   }
@@ -198,6 +224,26 @@ export class ExternalFileGrantService {
    */
   revalidate(request: ExternalFileGrantRequest): ResolvedExternalFileGrant {
     return this.resolveRequest(request, false)
+  }
+
+  /**
+   * 仅供主进程内仍以路径为入参、并自行做无跟随/防覆盖校验的服务（便携归档导出与恢复）使用：
+   * 把一次精确文件授权解析成路径。目录范围授权不能冒充精确授权（且不会被消费），
+   * 并在交出路径前复核授权时的父目录仍是同一个目录。渲染进程拿不到本服务实例。
+   */
+  resolveExactPath(request: Omit<ExternalFileGrantRequest, 'relativePath'>): string {
+    if (this.revalidate(request).scope !== 'file') {
+      throw new Error('外部文件授权范围不符')
+    }
+    const target = this.resolve(request)
+    const current = captureSecureRootIdentity(target.rootPath)
+    if (
+      current.volumeSerialNumber !== target.rootIdentity.volumeSerialNumber
+      || current.fileIndex !== target.rootIdentity.fileIndex
+    ) {
+      throw new Error('外部文件授权目标已变化')
+    }
+    return path.join(target.rootPath, target.relativePath)
   }
 
   private resolveRequest(

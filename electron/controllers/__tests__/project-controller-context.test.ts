@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => ({
   recentProjects: [] as Array<{ name: string; path: string; updatedAt: string }>,
   rmSync: vi.fn(),
   removeDirectoryWithWindowsRetry: vi.fn(),
+  showMessageBox: vi.fn(),
+  importLegacyProjectCopy: vi.fn(),
+  resolveExactPath: vi.fn(),
   projectAccess: {
     createProject: vi.fn(),
     probeExistingProject: vi.fn(),
@@ -52,6 +55,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('electron', () => ({
   dialog: {
     showOpenDialog: vi.fn(),
+    showMessageBox: mocks.showMessageBox,
   },
   ipcMain: {
     handle: vi.fn((channel: string, handler: IpcHandler) => {
@@ -151,6 +155,14 @@ vi.mock('../../services/project-access', () => ({
 
 vi.mock('../../services/project-peek', () => ({
   projectPeekService: mocks.projectPeekService,
+}))
+
+vi.mock('../../services/external-file-grant-service', () => ({
+  externalFileGrants: { resolveExactPath: mocks.resolveExactPath },
+}))
+
+vi.mock('../../services/legacy-project-copy-import', () => ({
+  importLegacyProjectCopy: mocks.importLegacyProjectCopy,
 }))
 
 import { registerProjectController } from '../project-controller'
@@ -1107,5 +1119,52 @@ describe('project controller project identity', () => {
     expect(removeDeletedProjectBinding).toHaveBeenCalledWith('project-A')
 
     registerProjectController()
+  })
+})
+
+describe('legacy project copy import target grant', () => {
+  const sender = { sender: { id: 17 } }
+  const legacyRoot = path.resolve('C:/old/book')
+  const grantedTarget = path.resolve('C:/new/book-copy')
+
+  beforeEach(() => {
+    mocks.showMessageBox.mockReset().mockResolvedValue({ response: 1 })
+    mocks.importLegacyProjectCopy.mockReset().mockImplementation(async (input: { targetRoot: string }) => ({
+      state: 'ready', projectId: 'copy-id', targetRoot: input.targetRoot,
+    }))
+    mocks.resolveExactPath.mockReset().mockReturnValue(grantedTarget)
+  })
+
+  it('imports into the main-process path resolved from the sender-bound chooser grant', async () => {
+    await expect(handler('project:import-legacy-copy')(sender, legacyRoot, 'restore-target-grant'))
+      .resolves.toEqual({ state: 'ready', projectId: 'copy-id', targetRoot: grantedTarget })
+
+    expect(mocks.resolveExactPath).toHaveBeenCalledExactlyOnceWith({
+      grantId: 'restore-target-grant', webContentsId: 17, operation: 'create',
+    })
+    expect(mocks.importLegacyProjectCopy).toHaveBeenCalledExactlyOnceWith({
+      sourceRoot: legacyRoot, targetRoot: grantedTarget,
+    })
+  })
+
+  it('never reaches the importer when the grant is refused or the argument is not a grant id', async () => {
+    mocks.resolveExactPath.mockImplementation(() => { throw new Error('外部文件授权不属于当前窗口') })
+
+    await expect(handler('project:import-legacy-copy')(sender, legacyRoot, path.resolve('C:/attacker/raw-target')))
+      .resolves.toEqual({ state: 'blocked', code: 'LEGACY_IMPORT_PATH_INVALID' })
+    await expect(handler('project:import-legacy-copy')(sender, legacyRoot, undefined))
+      .resolves.toEqual({ state: 'blocked', code: 'LEGACY_IMPORT_PATH_INVALID' })
+
+    expect(mocks.importLegacyProjectCopy).not.toHaveBeenCalled()
+  })
+
+  it('does not consume the grant when the user cancels the confirmation', async () => {
+    mocks.showMessageBox.mockResolvedValue({ response: 0 })
+
+    await expect(handler('project:import-legacy-copy')(sender, legacyRoot, 'restore-target-grant'))
+      .resolves.toEqual({ state: 'cancelled' })
+
+    expect(mocks.resolveExactPath).not.toHaveBeenCalled()
+    expect(mocks.importLegacyProjectCopy).not.toHaveBeenCalled()
   })
 })

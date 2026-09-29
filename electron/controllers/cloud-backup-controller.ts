@@ -27,6 +27,7 @@ import {
   type SaveWritableCloudProjectBindingInput,
 } from '../services/cloud-project-binding-store'
 import { getGlobalDataRoot } from '../services/app-data-locator'
+import { externalFileGrants } from '../services/external-file-grant-service'
 import { projectAccess } from '../services/project-access'
 import {
   exportPortableProject,
@@ -101,6 +102,8 @@ export interface CloudBackupControllerDependencies {
   getCurrentProjectPath(): string | null
   sameCanonicalProjectRoot(left: string, right: string): boolean
   getGlobalDataRoot(): string
+  /** 把选择器签发、绑定调用窗口的恢复副本位置授权解析成主进程持有的路径。 */
+  resolveRestoreTargetGrant(event: unknown, grantId: string): string
   readRestoredProjectName(projectRoot: string): string
   registerRecentProject(project: RecentProject): void
   idFactory(): string
@@ -249,6 +252,11 @@ function productionDependencies(): CloudBackupControllerDependencies {
     getCurrentProjectPath,
     sameCanonicalProjectRoot: (left, right) => projectAccess.sameCanonicalProjectRoot(left, right),
     getGlobalDataRoot,
+    resolveRestoreTargetGrant: (event, grantId) => externalFileGrants.resolveExactPath({
+      grantId,
+      webContentsId: (event as { sender: { id: number } }).sender.id,
+      operation: 'create',
+    }),
     readRestoredProjectName,
     registerRecentProject,
     idFactory: randomUUID,
@@ -469,7 +477,7 @@ export function registerCloudBackupController(injected?: CloudBackupControllerDe
     }
   })
 
-  deps.ipc.handle('cloud-backup:restore-copy', async (_event, rawRequest) => {
+  deps.ipc.handle('cloud-backup:restore-copy', async (event, rawRequest) => {
     const request = (() => {
       try { return record(rawRequest) } catch { return null }
     })()
@@ -478,7 +486,11 @@ export function registerCloudBackupController(injected?: CloudBackupControllerDe
       const accountId = string(request.localEndpointAccountId)
       const cloudBookId = string(request.cloudBookId)
       const generationId = string(request.generationId)
-      const targetProjectRoot = string(request.targetProjectRoot)
+      // 目标只接受选择器授权；无授权、他窗口、过期或已消费的授权都在下载前被拒绝。
+      const targetGrantId = string(request.targetGrantId)
+      let targetProjectRoot: string
+      try { targetProjectRoot = deps.resolveRestoreTargetGrant(event, targetGrantId) }
+      catch { return fail('CLOUD_BACKUP_INPUT_INVALID') }
       const remoteAccount = account(deps.credentialStore, accountId)
       const dataRoot = deps.getGlobalDataRoot()
       const stagingRoot = createStagingRoot(dataRoot, id)

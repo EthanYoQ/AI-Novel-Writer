@@ -4,12 +4,18 @@ import { createRequire } from 'node:module'
 import { dialog, ipcMain } from 'electron'
 
 import type {
+  ExternalFileGrant,
   PortableProjectOperationErrorCode,
   PortableProjectExportRequest,
   PortableProjectRestoreRequest,
 } from '../../src/shared/ipc-channels'
 import { CANONICAL_PROJECT_DATABASE, CANONICAL_PROJECT_DIRECTORY } from '../../src/shared/project-format'
 import { getCurrentProjectPath } from '../database'
+import {
+  ExternalFileGrantService,
+  externalFileGrants,
+  type IssuedExternalFileGrant,
+} from '../services/external-file-grant-service'
 import { projectAccess } from '../services/project-access'
 import { exportPortableProject } from '../services/project-archive-service'
 import { createPortableProjectAssetProvider } from '../services/portable-project-assets'
@@ -20,6 +26,8 @@ const require = createRequire(import.meta.url)
 const BetterSqlite = require('better-sqlite3') as typeof import('better-sqlite3')
 const portableAssets = createPortableProjectAssetProvider()
 const ARCHIVE_EXTENSION = 'ainovel'
+/** 选择器签发的一次性授权；恢复需要连续选择两次，故留出足够的选择时间。 */
+const ARCHIVE_GRANT_TTL_MS = 10 * 60 * 1_000
 const PORTABLE_ERROR_CODES = new Set<PortableProjectOperationErrorCode>([
   'PORTABLE_ARCHIVE_INVALID',
   'PORTABLE_ARCHIVE_LIMIT_EXCEEDED',
@@ -30,6 +38,7 @@ const PORTABLE_ERROR_CODES = new Set<PortableProjectOperationErrorCode>([
   'PORTABLE_ASSET_MISSING',
   'PORTABLE_ASSET_UNSAFE',
   'PORTABLE_CONTEXT_INVALID',
+  'PORTABLE_GRANT_INVALID',
   'PORTABLE_SCHEMA_UNSUPPORTED',
   'PORTABLE_SOURCE_CHANGED',
   'PORTABLE_TARGET_INSIDE_SOURCE',
@@ -91,43 +100,108 @@ function availableRestoreTarget(parent: string, suggestedName: string): string {
   throw new Error('PORTABLE_RESTORE_TARGET_EXISTS')
 }
 
-export function registerProjectArchiveController(): void {
-  ipcMain.handle('dialog:select-project-archive-export', async (_event, suggestedName: string) => {
+interface ArchiveGrantEvent {
+  sender: {
+    id: number
+    once: (event: 'destroyed', listener: () => void) => unknown
+  }
+}
+
+/** 选择结果只以不透明授权标识交给渲染进程；授权绑定该窗口，窗口销毁即撤销。 */
+function issueSelectedGrant(
+  grants: ExternalFileGrantService,
+  event: ArchiveGrantEvent,
+  issued: IssuedExternalFileGrant,
+  selectedPath: string,
+): ExternalFileGrant {
+  event.sender.once('destroyed', () => grants.revoke(issued.grantId))
+  return { grantId: issued.grantId, displayName: path.basename(selectedPath) }
+}
+
+/**
+ * 归档服务仍以路径为入参，因此授权在服务边界前由主进程解析成路径。
+ * 无授权、他窗口授权、操作或范围不符、过期或已消费的授权一律折叠为同一个不含路径的错误码。
+ */
+function resolveGrantedPath(
+  grants: ExternalFileGrantService,
+  event: ArchiveGrantEvent,
+  grantId: unknown,
+  operation: 'read' | 'create',
+): string {
+  try {
+    if (typeof grantId !== 'string' || grantId === '') throw new Error('grant missing')
+    return grants.resolveExactPath({ grantId, webContentsId: event.sender.id, operation })
+  } catch {
+    throw Object.assign(new Error('PORTABLE_GRANT_INVALID'), { code: 'PORTABLE_GRANT_INVALID' })
+  }
+}
+
+export function registerProjectArchiveController(
+  grants: ExternalFileGrantService = externalFileGrants,
+): void {
+  ipcMain.handle('dialog:select-project-archive-export', async (event: ArchiveGrantEvent, suggestedName: string) => {
     const result = await dialog.showSaveDialog({
       title: '导出项目存档',
       defaultPath: `${safeSuggestedName(suggestedName, 'project-backup')}.${ARCHIVE_EXTENSION}`,
       filters: [{ name: 'AI Novel Archive', extensions: [ARCHIVE_EXTENSION] }],
       properties: ['createDirectory', 'showOverwriteConfirmation'],
     })
-    return result.canceled || !result.filePath ? null : result.filePath
+    if (result.canceled || !result.filePath) return null
+    const issued = grants.issueNewChild({
+      webContentsId: event.sender.id,
+      filePath: result.filePath,
+      operations: ['create'],
+      ttlMs: ARCHIVE_GRANT_TTL_MS,
+      maxUses: 1,
+    })
+    return issueSelectedGrant(grants, event, issued, result.filePath)
   })
 
-  ipcMain.handle('dialog:select-project-archive', async () => {
+  ipcMain.handle('dialog:select-project-archive', async (event: ArchiveGrantEvent) => {
     const result = await dialog.showOpenDialog({
       title: '选择项目存档',
       filters: [{ name: 'AI Novel Archive', extensions: [ARCHIVE_EXTENSION] }],
       properties: ['openFile'],
     })
-    return result.canceled ? null : result.filePaths[0] ?? null
+    const archivePath = result.canceled ? undefined : result.filePaths[0]
+    if (!archivePath) return null
+    const issued = grants.issueFile({
+      webContentsId: event.sender.id,
+      filePath: archivePath,
+      operations: ['read'],
+      ttlMs: ARCHIVE_GRANT_TTL_MS,
+      maxUses: 1,
+    })
+    return issueSelectedGrant(grants, event, issued, archivePath)
   })
 
-  ipcMain.handle('dialog:select-project-restore-target', async (_event, suggestedName: string) => {
+  ipcMain.handle('dialog:select-project-restore-target', async (event: ArchiveGrantEvent, suggestedName: string) => {
     const result = await dialog.showOpenDialog({ title: '选择恢复副本所在文件夹', properties: ['openDirectory', 'createDirectory'] })
     const parent = result.canceled ? undefined : result.filePaths[0]
-    return parent ? availableRestoreTarget(parent, suggestedName) : null
+    if (!parent) return null
+    const targetPath = availableRestoreTarget(parent, suggestedName)
+    const issued = grants.issueNewChild({
+      webContentsId: event.sender.id,
+      filePath: targetPath,
+      operations: ['create'],
+      ttlMs: ARCHIVE_GRANT_TTL_MS,
+      maxUses: 1,
+    })
+    return issueSelectedGrant(grants, event, issued, targetPath)
   })
 
-  ipcMain.handle('project:archive-export', async (_event, request: PortableProjectExportRequest) => {
+  ipcMain.handle('project:archive-export', async (event: ArchiveGrantEvent, request: PortableProjectExportRequest) => {
     try {
       const active = projectAccess.assertCurrentProjectContext(
         request.projectSession,
         getCurrentProjectPath(),
       )
+      const targetArchivePath = resolveGrantedPath(grants, event, request.targetArchiveGrantId, 'create')
       const receipt = await exportPortableProject({
         sourceProjectRoot: active.rootPath,
         projectSession: request.projectSession,
-        targetArchivePath: request.targetArchivePath,
-        attemptParentPath: path.dirname(path.resolve(request.targetArchivePath)),
+        targetArchivePath,
+        attemptParentPath: path.dirname(path.resolve(targetArchivePath)),
         assets: portableAssets,
         assertCurrentContext(context, sourceProjectRoot) {
           const current = projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
@@ -140,12 +214,11 @@ export function registerProjectArchiveController(): void {
     }
   })
 
-  ipcMain.handle('project:archive-restore', async (_event, request: PortableProjectRestoreRequest) => {
+  ipcMain.handle('project:archive-restore', async (event: ArchiveGrantEvent, request: PortableProjectRestoreRequest) => {
     try {
-      const receipt = await restorePortableProject({
-        archivePath: request.archivePath,
-        targetProjectRoot: request.targetProjectRoot,
-      })
+      const archivePath = resolveGrantedPath(grants, event, request.archiveGrantId, 'read')
+      const targetProjectRoot = resolveGrantedPath(grants, event, request.targetGrantId, 'create')
+      const receipt = await restorePortableProject({ archivePath, targetProjectRoot })
       try {
         registerRecentProject({
           name: readRestoredProjectName(receipt.targetProjectRoot),

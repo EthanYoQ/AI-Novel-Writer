@@ -252,8 +252,9 @@ export interface CreateProjectConfig {
   writingLanguage?: WritingLanguage
 }
 
+/** 目标位置只以 dialog:select-project-archive-export 签发的授权标识表达；渲染进程不得携带路径。 */
 export interface PortableProjectExportRequest {
-  targetArchivePath: string
+  targetArchiveGrantId: string
   projectSession: ProjectSessionContext
 }
 
@@ -272,9 +273,10 @@ export interface PortableProjectExportReceipt {
   requiresRuntimeFreezeGuard: true
 }
 
+/** 归档与恢复副本位置分别来自 dialog:select-project-archive 与 dialog:select-project-restore-target 的授权。 */
 export interface PortableProjectRestoreRequest {
-  archivePath: string
-  targetProjectRoot: string
+  archiveGrantId: string
+  targetGrantId: string
 }
 
 export interface PortableProjectRestoreReceipt {
@@ -296,6 +298,7 @@ export type PortableProjectOperationErrorCode =
   | 'PORTABLE_ASSET_MISSING'
   | 'PORTABLE_ASSET_UNSAFE'
   | 'PORTABLE_CONTEXT_INVALID'
+  | 'PORTABLE_GRANT_INVALID'
   | 'PORTABLE_SCHEMA_UNSUPPORTED'
   | 'PORTABLE_SOURCE_CHANGED'
   | 'PORTABLE_TARGET_INSIDE_SOURCE'
@@ -317,7 +320,7 @@ export interface ProjectChannels {
     return: string | null
   }
   'project:import-legacy-copy': {
-    args: [sourceRoot: string, targetRoot: string]
+    args: [sourceRoot: string, targetGrantId: string]
     return: { state: 'ready'; projectId: string; targetRoot: string; warning?: string }
       | { state: 'cancelled' }
       | { state: 'blocked'; code: string }
@@ -407,15 +410,15 @@ export interface ProjectChannels {
   }
   'dialog:select-project-archive-export': {
     args: [suggestedName: string]
-    return: string | null
+    return: ExternalFileGrant | null
   }
   'dialog:select-project-archive': {
     args: []
-    return: string | null
+    return: ExternalFileGrant | null
   }
   'dialog:select-project-restore-target': {
     args: [suggestedName: string]
-    return: string | null
+    return: ExternalFileGrant | null
   }
   'project:delete': {
     args: [projectPath: string, projectId: string, sessionLease: string]

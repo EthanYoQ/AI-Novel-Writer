@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { CloudBackupProjectSessionContext } from '../../../src/shared/cloud-backup'
 import type { CloudProjectBinding } from '../../services/cloud-project-binding-store'
+import { ExternalFileGrantService } from '../../services/external-file-grant-service'
 import { WebDavBackupError } from '../../services/webdav-backup-service'
 import {
   registerCloudBackupController,
@@ -67,11 +68,16 @@ const generation = {
 
 type Handler = (_event: unknown, argument: unknown) => unknown
 
+const SENDER_ID = 17
+const OTHER_SENDER_ID = 18
+
 function fixture(overrides: Partial<CloudBackupControllerDependencies> = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cloud-backup-controller-'))
   roots.push(root)
   const handlers = new Map<string, Handler>()
   const order: string[] = []
+  const clock = { now: 1_000 }
+  const grants = new ExternalFileGrantService({ now: () => clock.now })
   const ipc = { handle: vi.fn((channel: string, handler: Handler) => handlers.set(channel, handler)) }
   const deps: CloudBackupControllerDependencies = {
     ipc,
@@ -130,6 +136,9 @@ function fixture(overrides: Partial<CloudBackupControllerDependencies> = {}) {
     getCurrentProjectPath: vi.fn(() => session.projectPath),
     sameCanonicalProjectRoot: vi.fn(() => true),
     getGlobalDataRoot: vi.fn(() => root),
+    resolveRestoreTargetGrant: vi.fn((event, grantId) => grants.resolveExactPath({
+      grantId, webContentsId: (event as { sender: { id: number } }).sender.id, operation: 'create',
+    })),
     readRestoredProjectName: vi.fn(() => '恢复后的真实书名'),
     registerRecentProject: vi.fn(),
     idFactory: vi.fn(() => GENERATED_BOOK),
@@ -137,8 +146,21 @@ function fixture(overrides: Partial<CloudBackupControllerDependencies> = {}) {
     ...overrides,
   }
   registerCloudBackupController(deps)
-  const invoke = async (channel: string, argument: unknown) => handlers.get(channel)!(undefined, argument)
-  return { deps, invoke, order, root }
+  const invoke = async (channel: string, argument: unknown, senderId = SENDER_ID) => (
+    handlers.get(channel)!({ sender: { id: senderId } }, argument)
+  )
+  /** 与主进程选择器签发的恢复副本位置授权同形：单次、绑定窗口、精确到用户选定的子目录。 */
+  const restoreTarget = (name: string, options: { senderId?: number; operations?: Array<'read' | 'create'> } = {}) => {
+    const grant = grants.issueNewChild({
+      webContentsId: options.senderId ?? SENDER_ID,
+      filePath: path.join(root, name),
+      operations: options.operations ?? ['create'],
+      ttlMs: 60_000,
+      maxUses: 1,
+    })
+    return { grantId: grant.grantId, path: path.join(fs.realpathSync.native(root), name) }
+  }
+  return { deps, invoke, order, root, grants, clock, restoreTarget }
 }
 
 afterEach(() => {
@@ -454,6 +476,8 @@ describe('registerCloudBackupController', () => {
 
   it('restores a copy without switching sessions and reports independent binding and recent-list failures', async () => {
     const f = fixture()
+    const restored = f.restoreTarget('restored')
+    const restoredAgain = f.restoreTarget('restored-2')
     vi.mocked(f.deps.bindingStore.saveOriginReadonly).mockImplementation(() => { throw new Error('CLOUD_BINDING_REVISION_CONFLICT') })
 
     const result = await f.invoke('cloud-backup:restore-copy', {
@@ -461,12 +485,12 @@ describe('registerCloudBackupController', () => {
       localEndpointAccountId: ACCOUNT,
       cloudBookId: BOOK,
       generationId: GENERATION,
-      targetProjectRoot: 'C:\\books\\restored',
+      targetGrantId: restored.grantId,
     })
 
     expect(f.order).toEqual(['download', 'restore'])
     expect(f.deps.restorePortableProject).toHaveBeenCalledWith(expect.objectContaining({
-      targetProjectRoot: 'C:\\books\\restored', signal: expect.any(AbortSignal),
+      targetProjectRoot: restored.path, signal: expect.any(AbortSignal),
     }))
     expect(f.deps.bindingStore.saveOriginReadonly).toHaveBeenCalledWith({
       localProjectId: TARGET_PROJECT,
@@ -474,9 +498,9 @@ describe('registerCloudBackupController', () => {
       localEndpointAccountId: ACCOUNT,
       lastSelectedParentGenerationIds: [GENERATION],
     })
-    expect(f.deps.readRestoredProjectName).toHaveBeenCalledWith('C:\\books\\restored')
+    expect(f.deps.readRestoredProjectName).toHaveBeenCalledWith(restored.path)
     expect(f.deps.registerRecentProject).toHaveBeenCalledWith({
-      name: '恢复后的真实书名', path: 'C:\\books\\restored', updatedAt: '2026-09-21T01:00:00.000Z',
+      name: '恢复后的真实书名', path: restored.path, updatedAt: '2026-09-21T01:00:00.000Z',
     })
     expect(result).toMatchObject({
       success: true, state: 'binding-not-saved', bindingSaved: false, binding: null, recentProjectUpdated: true,
@@ -494,9 +518,84 @@ describe('registerCloudBackupController', () => {
       localEndpointAccountId: ACCOUNT,
       cloudBookId: BOOK,
       generationId: GENERATION,
-      targetProjectRoot: 'C:\\books\\restored-2',
+      targetGrantId: restoredAgain.grantId,
     })).resolves.toMatchObject({
       success: true, state: 'restore-complete', bindingSaved: true, recentProjectUpdated: false,
+    })
+  })
+
+  describe('restore-copy target grants', () => {
+    const request = (targetGrantId?: string, extra: Record<string, unknown> = {}) => ({
+      operationId: OTHER_OPERATION,
+      localEndpointAccountId: ACCOUNT,
+      cloudBookId: BOOK,
+      generationId: GENERATION,
+      ...(targetGrantId === undefined ? {} : { targetGrantId }),
+      ...extra,
+    })
+    const refused = { success: false, state: 'failed', errorCode: 'CLOUD_BACKUP_INPUT_INVALID', operationId: OTHER_OPERATION }
+
+    function expectNothingReached(f: ReturnType<typeof fixture>) {
+      expect(f.deps.webDav.downloadGeneration).not.toHaveBeenCalled()
+      expect(f.deps.restorePortableProject).not.toHaveBeenCalled()
+      expect(f.deps.bindingStore.saveOriginReadonly).not.toHaveBeenCalled()
+      expect(f.deps.registerRecentProject).not.toHaveBeenCalled()
+      expect(fs.existsSync(path.join(f.root, 'cloud-backup-staging'))).toBe(false)
+    }
+
+    it('refuses a renderer-supplied raw target path before any download or restore', async () => {
+      const f = fixture()
+
+      await expect(f.invoke('cloud-backup:restore-copy', request(undefined, {
+        targetProjectRoot: path.join(f.root, 'attacker-copy'),
+      }))).resolves.toEqual(refused)
+      await expect(f.invoke('cloud-backup:restore-copy', request('forged-grant', {
+        targetProjectRoot: path.join(f.root, 'attacker-copy'),
+      }))).resolves.toEqual(refused)
+
+      expectNothingReached(f)
+      expect(fs.existsSync(path.join(f.root, 'attacker-copy'))).toBe(false)
+    })
+
+    it('restores only to the granted target even when a raw path accompanies a valid grant', async () => {
+      const f = fixture()
+      const target = f.restoreTarget('chosen-copy')
+
+      await expect(f.invoke('cloud-backup:restore-copy', request(target.grantId, {
+        targetProjectRoot: path.join(f.root, 'attacker-copy'),
+      }))).resolves.toMatchObject({ success: true })
+
+      expect(f.deps.restorePortableProject).toHaveBeenCalledOnce()
+      expect(f.deps.restorePortableProject).toHaveBeenCalledWith(expect.objectContaining({ targetProjectRoot: target.path }))
+    })
+
+    it('refuses grants of another window, without the create operation, or already consumed', async () => {
+      const f = fixture()
+
+      await expect(f.invoke('cloud-backup:restore-copy', request(f.restoreTarget('other-window').grantId), OTHER_SENDER_ID))
+        .resolves.toEqual(refused)
+      await expect(f.invoke('cloud-backup:restore-copy', request(f.restoreTarget('read-only', { operations: ['read'] }).grantId)))
+        .resolves.toEqual(refused)
+      expectNothingReached(f)
+
+      const once = f.restoreTarget('once')
+      await expect(f.invoke('cloud-backup:restore-copy', request(once.grantId))).resolves.toMatchObject({ success: true })
+      await expect(f.invoke('cloud-backup:restore-copy', request(once.grantId))).resolves.toEqual(refused)
+      expect(f.deps.restorePortableProject).toHaveBeenCalledOnce()
+    })
+
+    it('refuses an expired grant and a directory-scope grant issued for another purpose', async () => {
+      const f = fixture()
+      const expired = f.restoreTarget('expired')
+      const directory = f.grants.issueDirectory({
+        webContentsId: SENDER_ID, directoryPath: f.root, operations: ['create', 'write'], ttlMs: 60_000, maxUses: 1,
+      })
+      await expect(f.invoke('cloud-backup:restore-copy', request(directory.grantId))).resolves.toEqual(refused)
+      f.clock.now += 60_001
+
+      await expect(f.invoke('cloud-backup:restore-copy', request(expired.grantId))).resolves.toEqual(refused)
+
+      expectNothingReached(f)
     })
   })
 
@@ -504,6 +603,7 @@ describe('registerCloudBackupController', () => {
     let finishDownload!: () => void
     const downloadGate = new Promise<void>(resolve => { finishDownload = resolve })
     const f = fixture()
+    const target = f.restoreTarget('restored-after-clear')
     vi.mocked(f.deps.webDav.downloadGeneration).mockImplementation(async input => {
       await downloadGate
       fs.writeFileSync(input.targetArchivePath, 'archive')
@@ -514,7 +614,7 @@ describe('registerCloudBackupController', () => {
       localEndpointAccountId: ACCOUNT,
       cloudBookId: BOOK,
       generationId: GENERATION,
-      targetProjectRoot: 'C:\\books\\restored-after-clear',
+      targetGrantId: target.grantId,
     })
     await vi.waitFor(() => expect(f.deps.webDav.downloadGeneration).toHaveBeenCalledOnce())
     vi.mocked(f.deps.credentialStore.resolveSecret).mockReturnValue(null)
@@ -588,6 +688,7 @@ describe('registerCloudBackupController', () => {
 
   it('keeps a completed restore copy successful when Windows staging cleanup stays busy', async () => {
     const f = fixture()
+    const target = f.restoreTarget('restored')
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     vi.mocked(removeDirectoryWithWindowsRetry).mockRejectedValueOnce(busyError())
 
@@ -596,7 +697,7 @@ describe('registerCloudBackupController', () => {
       localEndpointAccountId: ACCOUNT,
       cloudBookId: BOOK,
       generationId: GENERATION,
-      targetProjectRoot: 'C:\\books\\restored',
+      targetGrantId: target.grantId,
     })
 
     expect(result).toMatchObject({

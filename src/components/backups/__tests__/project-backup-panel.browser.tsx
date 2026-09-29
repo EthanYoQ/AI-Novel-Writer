@@ -161,10 +161,10 @@ describe('ProjectBackupPanel', () => {
     useProjectStore.setState({ openProject })
     invoke.mockImplementation(async (channel: string) => {
       if (channel === 'cloud-backup:view') return { success: true, state: 'unconfigured', binding: null, account: null }
-      if (channel === 'dialog:select-project-archive-export') return 'C:\\exports\\book.anovel'
+      if (channel === 'dialog:select-project-archive-export') return { grantId: 'export-grant', displayName: 'book.anovel' }
       if (channel === 'project:archive-export') return { success: true, receipt: { snapshotGeneration: '7', targetSha256: 'export-hash' } }
-      if (channel === 'dialog:select-project-archive') return 'C:\\imports\\book.anovel'
-      if (channel === 'dialog:select-project-restore-target') return 'C:\\novels\\book-restored'
+      if (channel === 'dialog:select-project-archive') return { grantId: 'archive-grant', displayName: 'book.anovel' }
+      if (channel === 'dialog:select-project-restore-target') return { grantId: 'restore-target-grant', displayName: 'book-restored' }
       if (channel === 'project:archive-restore') return { success: true, receipt: { targetProjectId: 'copy-1', targetProjectRoot: 'C:\\novels\\book-restored' }, recentProjectUpdated: true }
       throw new Error(`Unexpected IPC: ${channel}`)
     })
@@ -173,7 +173,7 @@ describe('ProjectBackupPanel', () => {
     await act(async () => button('导出本地存档').click())
     expect(invoke).toHaveBeenCalledWith('dialog:select-project-archive-export', '第一部小说')
     expect(invoke).toHaveBeenCalledWith('project:archive-export', {
-      targetArchivePath: 'C:\\exports\\book.anovel', projectSession: SESSION,
+      targetArchiveGrantId: 'export-grant', projectSession: SESSION,
     })
     expect(container.textContent).toContain('export-hash')
 
@@ -181,11 +181,17 @@ describe('ProjectBackupPanel', () => {
     expect(invoke).toHaveBeenCalledWith('dialog:select-project-archive')
     expect(invoke).toHaveBeenCalledWith('dialog:select-project-restore-target', '第一部小说-恢复副本')
     expect(invoke).toHaveBeenCalledWith('project:archive-restore', {
-      archivePath: 'C:\\imports\\book.anovel', targetProjectRoot: 'C:\\novels\\book-restored',
+      archiveGrantId: 'archive-grant', targetGrantId: 'restore-target-grant',
     })
     expect(container.textContent).toContain('copy-1')
     expect(openProject).not.toHaveBeenCalled()
     expect(useProjectStore.getState().currentProject).toBe(PROJECT)
+    // 渲染进程从不持有也不回传外部路径：归档 IPC 的载荷里只有授权标识，没有路径字段。
+    const archiveCalls = invoke.mock.calls.filter(([channel]) => String(channel).startsWith('project:archive-'))
+    expect(archiveCalls).toHaveLength(2)
+    for (const [channel, payload] of archiveCalls) {
+      expect(JSON.stringify(payload), String(channel)).not.toMatch(/targetArchivePath|archivePath|targetProjectRoot|book\.anovel|book-restored/)
+    }
   })
 
   it('requires disclosure before upload and shows the backup point and unsaved binding', async () => {
@@ -236,7 +242,7 @@ describe('ProjectBackupPanel', () => {
           ? { success: false, state: 'failed', errorCode: 'CLOUD_BACKUP_NETWORK_FAILED' }
           : { success: true, state: 'listed', generations: [GENERATION] }
       }
-      if (channel === 'dialog:select-project-restore-target') return 'C:\\novels\\cloud-copy'
+      if (channel === 'dialog:select-project-restore-target') return { grantId: 'cloud-target-grant', displayName: 'cloud-copy' }
       if (channel === 'cloud-backup:restore-copy') return { success: false, state: 'failed', errorCode: 'CLOUD_BACKUP_RESTORE_FAILED' }
       throw new Error(`Unexpected IPC: ${channel}`)
     })
@@ -252,7 +258,7 @@ describe('ProjectBackupPanel', () => {
     await act(async () => button('恢复所选云端世代为副本').click())
     expect(invoke).toHaveBeenCalledWith('cloud-backup:restore-copy', {
       operationId: expect.any(String), localEndpointAccountId: 'account-1', cloudBookId: 'cloud-book',
-      generationId: 'generation-1', targetProjectRoot: 'C:\\novels\\cloud-copy',
+      generationId: 'generation-1', targetGrantId: 'cloud-target-grant',
     })
     expect(container.textContent).toContain('CLOUD_BACKUP_RESTORE_FAILED')
     expect(useProjectStore.getState().currentProject).toBe(PROJECT)
@@ -265,7 +271,7 @@ describe('ProjectBackupPanel', () => {
       if (channel === 'cloud-backup:view') return { success: true, state: 'configured', binding: BINDING, account: ACCOUNT }
       if (channel === 'cloud-backup:backup') return backup.promise
       if (channel === 'cloud-backup:list') return { success: true, state: 'listed', generations: [GENERATION] }
-      if (channel === 'dialog:select-project-restore-target') return 'C:\\novels\\cloud-copy'
+      if (channel === 'dialog:select-project-restore-target') return { grantId: 'cloud-target-grant', displayName: 'cloud-copy' }
       if (channel === 'cloud-backup:restore-copy') return restore.promise
       if (channel === 'cloud-backup:cancel') return { success: true, cancelled: true }
       throw new Error(`Unexpected IPC: ${channel}`)

@@ -115,19 +115,19 @@ function ProjectBackupPanelSession({
   }
 
   const exportLocal = () => run(async () => {
-    const targetArchivePath = await ipc.invoke('dialog:select-project-archive-export', project.name)
-    if (!targetArchivePath) return
-    const result = await ipc.invoke('project:archive-export', { targetArchivePath, projectSession })
+    const target = await ipc.invoke('dialog:select-project-archive-export', project.name)
+    if (!target) return
+    const result = await ipc.invoke('project:archive-export', { targetArchiveGrantId: target.grantId, projectSession })
     if (!result.success) throw new Error(result.errorCode || result.error)
     setNotice({ kind: 'success', text: text(`本地存档已导出：${result.receipt.targetSha256}`, `Local archive exported: ${result.receipt.targetSha256}`) })
   })
 
   const restoreLocal = () => run(async () => {
-    const archivePath = await ipc.invoke('dialog:select-project-archive')
-    if (!archivePath) return
-    const targetProjectRoot = await ipc.invoke('dialog:select-project-restore-target', `${project.name}-恢复副本`)
-    if (!targetProjectRoot) return
-    const result = await ipc.invoke('project:archive-restore', { archivePath, targetProjectRoot })
+    const archive = await ipc.invoke('dialog:select-project-archive')
+    if (!archive) return
+    const target = await ipc.invoke('dialog:select-project-restore-target', `${project.name}-恢复副本`)
+    if (!target) return
+    const result = await ipc.invoke('project:archive-restore', { archiveGrantId: archive.grantId, targetGrantId: target.grantId })
     if (!result.success) throw new Error(result.errorCode || result.error)
     setNotice({ kind: 'success', text: text(`已恢复新副本 ${result.receipt.targetProjectId}：${result.receipt.targetProjectRoot}`, `Restored copy ${result.receipt.targetProjectId}: ${result.receipt.targetProjectRoot}`) })
   })
@@ -210,12 +210,12 @@ function ProjectBackupPanelSession({
     const localEndpointAccountId = account?.accountId ?? binding?.localEndpointAccountId
     const bookId = cloudBookId.trim() || binding?.cloudBookId
     if (!localEndpointAccountId || !bookId || !selectedGenerationId) throw new Error(text('请先选择一个云端世代。', 'Select a cloud generation first.'))
-    const targetProjectRoot = await ipc.invoke('dialog:select-project-restore-target', `${project.name}-恢复副本`)
-    if (!targetProjectRoot) return
+    const target = await ipc.invoke('dialog:select-project-restore-target', `${project.name}-恢复副本`)
+    if (!target) return
     const operationId = randomUUID()
     setActiveOperationId(operationId)
     try {
-      const result = await ipc.invoke('cloud-backup:restore-copy', { operationId, localEndpointAccountId, cloudBookId: bookId, generationId: selectedGenerationId, targetProjectRoot })
+      const result = await ipc.invoke('cloud-backup:restore-copy', { operationId, localEndpointAccountId, cloudBookId: bookId, generationId: selectedGenerationId, targetGrantId: target.grantId })
       if (!result.success) throw new Error(result.errorCode)
       setNotice({ kind: 'success', text: text(`云端世代已恢复为新副本 ${result.receipt.targetProjectId}：${result.receipt.targetProjectRoot}${result.bindingSaved ? '' : '；绑定未保存'}`, `Cloud generation restored as copy ${result.receipt.targetProjectId}: ${result.receipt.targetProjectRoot}${result.bindingSaved ? '' : '; binding not saved'}`) })
     } finally {

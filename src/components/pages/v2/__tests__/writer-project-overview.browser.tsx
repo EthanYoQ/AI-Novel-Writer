@@ -96,7 +96,7 @@ it('routes the V3 legacy import through a new copy and opens only the ready targ
   useProjectStore.setState({ openProject })
   invoke.mockImplementation(async (channel: string) => {
     if (channel === 'dialog:select-legacy-project') return 'C:\\old\\book'
-    if (channel === 'dialog:select-project-restore-target') return 'C:\\new\\book-copy'
+    if (channel === 'dialog:select-project-restore-target') return { grantId: 'legacy-target-grant', displayName: 'book-copy' }
     if (channel === 'project:import-legacy-copy') return { state: 'ready', projectId: 'new-id', targetRoot: 'C:\\new\\book-copy' }
     if (channel === 'update:get-state') return { status: 'disabled', currentVersion: '', isReminderDeferred: false }
     return { success: true }
@@ -107,7 +107,7 @@ it('routes the V3 legacy import through a new copy and opens only the ready targ
   await act(async () => button.click())
   await vi.waitFor(() => expect(openProject).toHaveBeenCalledExactlyOnceWith('C:\\new\\book-copy'))
   expect(invoke).toHaveBeenCalledWith('dialog:select-project-restore-target', 'book-新版副本')
-  expect(invoke).toHaveBeenCalledWith('project:import-legacy-copy', 'C:\\old\\book', 'C:\\new\\book-copy')
+  expect(invoke).toHaveBeenCalledWith('project:import-legacy-copy', 'C:\\old\\book', 'legacy-target-grant')
   expect(container.textContent).toContain('两份项目的后续修改不会自动同步')
 })
 

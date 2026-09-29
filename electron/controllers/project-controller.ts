@@ -21,6 +21,7 @@ import {
   initProjectDatabase,
 } from '../database'
 import { closeConnection as closeVectorConnection } from '../vector-store'
+import { externalFileGrants } from '../services/external-file-grant-service'
 import {
   ProjectCoreRepository,
   type ProjectCoreData,
@@ -322,8 +323,12 @@ export function registerProjectController(options: ProjectControllerOptions = {}
     return result.canceled ? null : result.filePaths[0] ?? null
   })
 
-  ipcMain.handle('project:import-legacy-copy', async (_event, sourceRoot: string, targetRoot: string) => {
-    if (typeof sourceRoot !== 'string' || typeof targetRoot !== 'string') {
+  ipcMain.handle('project:import-legacy-copy', async (
+    event: { sender: { id: number } },
+    sourceRoot: string,
+    targetGrantId: string,
+  ) => {
+    if (typeof sourceRoot !== 'string' || typeof targetGrantId !== 'string') {
       return { state: 'blocked' as const, code: 'LEGACY_IMPORT_PATH_INVALID' }
     }
     const confirmation = await dialog.showMessageBox({
@@ -335,6 +340,17 @@ export function registerProjectController(options: ProjectControllerOptions = {}
       detail: '导入期间不要重新打开或修改旧项目。应用将创建独立的新项目副本；旧项目保留，此后两份项目的修改不会自动同步。',
     })
     if (confirmation.response !== 1) return { state: 'cancelled' as const }
+    // 副本位置只来自 dialog:select-project-restore-target 签发、绑定本窗口的一次性授权。
+    let targetRoot: string
+    try {
+      targetRoot = externalFileGrants.resolveExactPath({
+        grantId: targetGrantId,
+        webContentsId: event.sender.id,
+        operation: 'create',
+      })
+    } catch {
+      return { state: 'blocked' as const, code: 'LEGACY_IMPORT_PATH_INVALID' }
+    }
     let result: Awaited<ReturnType<typeof import('../services/legacy-project-copy-import').importLegacyProjectCopy>>
     try {
       const { importLegacyProjectCopy } = await import('../services/legacy-project-copy-import')
