@@ -9,6 +9,7 @@ import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../
 import { migrateSchema } from '../../migrations/runner';
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter';
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding, compareGenerationSourceBindings, type GenerationSourceBindingInput } from '../generation-source-binding';
+import { currentDerivedCharacterFields } from '../current-character-projection';
 import { readPortableCurrentAuthority } from '../portable-current-authority';
 import { createPortableTransferAuthority, mapPortableTransferAuthority, serializePortableTransferAuthority } from '../portable-transfer-authority';
 import { SummaryRepository } from '../../repositories/summary-repository';
@@ -208,6 +209,7 @@ describe('main rebuilt generation sources', () => {
             expect(restored.materials.find(item => item.ref.sourceId === `finalized:${f.chapter20DraftId}:${f.chapter20FinalizationId}`)?.text)
                 .toBe(f.chapter20Body);
             expect(restored.materials.find(item => item.ref.sourceId === 'characters:all')?.text).toContain(f.chapter20Injury);
+            expect(currentDerivedCharacterFields(db, f.targetProjectId, f.sourceProjectId)[f.characterId]).toEqual(expect.arrayContaining(['physicalState', 'keyItems']));
             expect(restored.materials.find(item => item.ref.sourceId === 'continuity-locators')?.text).toContain(f.chapter20Clue);
             expect(restored.context.sources.some(item => /(?:candidate-old|attempt-unknown|outbox-old|import-old)/u.test(item.ref.sourceId))).toBe(false);
 
@@ -238,6 +240,9 @@ describe('main rebuilt generation sources', () => {
             expect(rebuiltCharacters).toContain(f.authorCharacterState);
             expect(rebuiltCharacters).toContain(f.legacyCharacterState);
             expect(rebuiltCharacters).toContain(f.earlierDerivedState);
+            const currentFields = currentDerivedCharacterFields(db, f.targetProjectId, f.sourceProjectId)[f.characterId];
+            expect(currentFields).not.toContain('physicalState');
+            expect(currentFields).not.toContain('keyItems');
             expect(db.prepare(`SELECT d.chapter_number AS chapterNumber,o.finalization_id AS finalizationId,
           s.chapter_notes AS chapterNotes,s.source_content_hash AS sourceContentHash
           FROM drafts d JOIN finalization_outbox o ON o.draft_id=d.id JOIN summary_snapshots s ON s.draft_id=d.id

@@ -11,6 +11,7 @@ import type {
   CharacterStateData,
 } from '../../electron/repositories/character-repository'
 import { normalizeCharacterRole } from '../shared/character-role'
+import type { CharacterStateTextField } from '../shared/character-roster'
 import {
   characterCardFromRosterEntry,
   characterRosterEntriesFromCards,
@@ -176,6 +177,8 @@ let characterLoadSequence = 0
 
 interface CharacterState {
   characters: CharacterCard[]
+  /** IPC-verified display grant; raw cards remain the author edit and history source. */
+  currentDerivedFields: Record<string, CharacterStateTextField[]>
   selectedId: string | null
   /** Display-only compatibility; writes always receive characterId. */
   selectedName: string | null
@@ -227,6 +230,7 @@ interface CharacterState {
 
 export const useCharacterStore = create<CharacterState>()((set, get) => ({
   characters: [],
+  currentDerivedFields: {},
   selectedId: null, selectedName: null,
   saving: false,
   identityBusy: false,
@@ -246,6 +250,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
     if (!sameProjectSessionContext(get().dataProjectSession, projectSession)) {
       set({
         characters: [],
+        currentDerivedFields: {},
         selectedId: null, selectedName: null,
         loaded: false,
         dataProjectKey: null,
@@ -315,6 +320,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       const { selectedId } = get()
       set({
         characters: visibleCards,
+        currentDerivedFields: roster.currentDerivedFields ?? {},
         loaded: true,
         dataProjectKey: requestedProjectKey,
         dataProjectSession: projectSession,
@@ -333,6 +339,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
       ) return
       set({
         characters: [],
+        currentDerivedFields: {},
         selectedId: null, selectedName: null,
         loaded: false,
         dataProjectKey: requestedProjectKey,
@@ -353,6 +360,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
     characterLoadSequence += 1
     set({
       characters: [],
+      currentDerivedFields: {},
       selectedId: null, selectedName: null,
       saving: false,
       identityBusy: false,
@@ -370,6 +378,7 @@ export const useCharacterStore = create<CharacterState>()((set, get) => ({
     characterLoadSequence += 1
     set({
       characters: [],
+      currentDerivedFields: {},
       selectedId: null, selectedName: null,
       saving: false,
       identityBusy: false,

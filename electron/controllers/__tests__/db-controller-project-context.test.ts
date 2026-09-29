@@ -37,6 +37,9 @@ const mocks = vi.hoisted(() => ({
   authorRosterCommit: vi.fn(),
   hasCharacterIdentitySchema: vi.fn(() => false),
   getProjectDb: vi.fn(),
+  getProjectDataRoot: vi.fn(() => 'C:/projects/A/.ai-novel'),
+  readPortableCurrentAuthority: vi.fn((): { originProjectId: string } | null => null),
+  currentDerivedCharacterFields: vi.fn(() => ({ characterA: ['recentEvents'] })),
   assertCurrentSession: vi.fn(),
   finalizedDraftImportCommit: vi.fn(),
   finalizedDraftImportPreview: vi.fn(),
@@ -88,6 +91,10 @@ vi.mock('../../services/project-access', () => ({
     assertCurrentSession: mocks.assertCurrentSession,
   },
 }))
+
+vi.mock('../../services/project-data-locator', () => ({ getProjectDataRoot: mocks.getProjectDataRoot }))
+vi.mock('../../services/portable-current-authority', () => ({ readPortableCurrentAuthority: mocks.readPortableCurrentAuthority }))
+vi.mock('../../services/current-character-projection', () => ({ currentDerivedCharacterFields: mocks.currentDerivedCharacterFields }))
 
 vi.mock('../../repositories/project-core-repository', () => ({
   ProjectCoreRepository: {
@@ -270,6 +277,9 @@ beforeEach(() => {
   mocks.currentProjectPath = 'C:/projects/A'
   vi.clearAllMocks()
   mocks.getProjectDb.mockReset()
+  mocks.getProjectDataRoot.mockReturnValue('C:/projects/A/.ai-novel')
+  mocks.readPortableCurrentAuthority.mockReturnValue(null)
+  mocks.currentDerivedCharacterFields.mockReturnValue({ characterA: ['recentEvents'] })
   mocks.hasCharacterIdentitySchema.mockReturnValue(false)
   mocks.assertCurrentSession.mockReset()
   mocks.authorRosterCommit.mockReset()
@@ -290,6 +300,28 @@ beforeEach(() => {
 })
 
 describe('database controller project context guard', () => {
+  it('adds only proven current derived fields to the read view using verified portable origin', async () => {
+    const database = { synthetic: true }
+    mocks.getProjectDb.mockReturnValue(database)
+    mocks.readPortableCurrentAuthority.mockReturnValue({ originProjectId: 'origin-A' })
+    const roster = mocks.characterRosterRead()
+    expect(await handler('db:character-roster-read')({}, 'C:/projects/A')).toEqual({
+      ...roster, currentDerivedFields: { characterA: ['recentEvents'] },
+    })
+    expect(mocks.readPortableCurrentAuthority).toHaveBeenCalledWith({
+      database, projectStorageRoot: 'C:/projects/A/.ai-novel', projectId: 'project-A',
+    })
+    expect(mocks.currentDerivedCharacterFields).toHaveBeenCalledWith(database, 'project-A', 'origin-A')
+  })
+
+  it('keeps raw roster readable but grants no derived fields if source verification fails', async () => {
+    mocks.getProjectDb.mockReturnValue({ synthetic: true })
+    mocks.currentDerivedCharacterFields.mockImplementationOnce(() => { throw new Error('SOURCE_UNPROVED') })
+    expect(await handler('db:character-roster-read')({}, 'C:/projects/A')).toEqual({
+      ...mocks.characterRosterRead(), currentDerivedFields: {},
+    })
+  })
+
   it('routes M02 author ID writes through the captured author transaction and rechecks its session', async () => {
     const db = { synthetic: true }, receipt = { revision: 7 }
     const request = { operationId: 'author-ID', intent: 'manual_edit', schemaVersion: 1, expectedRevision: 6, expectedIdentityRevision: 3, entries: [] }

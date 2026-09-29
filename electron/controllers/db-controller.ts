@@ -4,6 +4,9 @@ import { closeProjectDatabase, getCurrentProjectPath, getProjectDb } from '../da
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import { assertGenerationSourcesCurrent, assertImportGenerationSourcesCurrent, recordGenerationDirectoryCommit, withGenerationAgentChildEffect } from './generation-controller'
 import { projectAccess } from '../services/project-access'
+import { getProjectDataRoot } from '../services/project-data-locator'
+import { readPortableCurrentAuthority } from '../services/portable-current-authority'
+import { currentDerivedCharacterFields } from '../services/current-character-projection'
 import { assertRequiredExpectedProjectPath } from '../utils/project-context'
 
 // 导入所有 Repository
@@ -634,7 +637,17 @@ export function registerDatabaseController() {
 
   ipcMain.handle('db:character-roster-read', async (_event, expectedProjectPath: string) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
-    return CharacterRosterRepository.read()
+    const roster = CharacterRosterRepository.read()
+    const database = getProjectDb()
+    const session = projectAccess.captureCurrentSession()
+    let currentDerivedFields = {}
+    if (database && session) {
+      try {
+        const authority = readPortableCurrentAuthority({ database, projectStorageRoot: getProjectDataRoot(session.rootPath), projectId: session.projectId })
+        currentDerivedFields = currentDerivedCharacterFields(database, session.projectId, authority?.originProjectId)
+      } catch { /* Missing source proof never makes a derived field current; raw author/history remains readable. */ }
+    }
+    return { ...roster, currentDerivedFields }
   })
 
   ipcMain.handle('db:character-roster-commit', async (

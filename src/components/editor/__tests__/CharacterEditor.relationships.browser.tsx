@@ -6,7 +6,8 @@ import { createRoot, type Root } from 'react-dom/client'
 
 import type { ProjectData } from '../../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../../shared/project-session-context'
-import { useCharacterStore, type CharacterCard } from '../../../stores/character-store'
+import { EMPTY_STATE, useCharacterStore, type CharacterCard } from '../../../stores/character-store'
+import { characterRosterEntryFromCard } from '../../../services/character-roster-client'
 import { saveDirtyEditorChangesForExit, useEditorStore } from '../../../stores/editor-store'
 import { useLocaleStore } from '../../../stores/locale-store'
 import { useProjectStore } from '../../../stores/project-store'
@@ -120,6 +121,66 @@ afterEach(async () => {
 })
 
 describe('CharacterEditor relationship field', () => {
+  it('uses the roster read projection for current derived state while preserving raw history on author edit', async () => {
+    const card: CharacterCard = {
+      ...character('沈砺'),
+      currentState: {
+        ...EMPTY_STATE,
+        location: '旧档案室',
+        mentalState: '作者确认警觉',
+        recentEvents: '当前定稿中新线索',
+        updatedAtChapter: 4,
+        provenance: {
+          location: { kind: 'derived', source: { draftId: 3, finalizationId: '旧定稿', chapterNumber: 3, contentHash: 'a'.repeat(64) } },
+          mentalState: { kind: 'author', chapterNumber: 4 },
+          recentEvents: { kind: 'derived', source: { draftId: 4, finalizationId: '当前定稿', chapterNumber: 4, contentHash: 'b'.repeat(64) } },
+        },
+      },
+    }
+    const roster = {
+      schemaVersion: 1, revision: 2, migrationState: 'ready', status: 'ready',
+      entries: [characterRosterEntryFromCard(card)], currentDerivedFields: { [card.characterId!]: ['recentEvents'] },
+      renderedMarkdown: '', projectionHash: '', factHash: '', nameOnlyFactHash: '',
+    }
+    const invoke = vi.fn(async (...args: unknown[]) => {
+      const channel = args[0]
+      if (channel === 'db:character-roster-read') return roster
+      if (channel === 'db:character-roster-commit') return {
+        success: true, receipt: { revision: 3, snapshot: { ...roster, revision: 3 } },
+      }
+      throw new Error(`Unexpected IPC: ${channel}`)
+    })
+    Object.assign(window, { aiNovelAPI: { invoke } })
+    await act(async () => useCharacterStore.getState().load(PROJECT_PATH))
+    expect(invoke).toHaveBeenCalledWith('db:character-roster-read', PROJECT_PATH,
+      expect.objectContaining({ projectId: 'relationship-editor', leaseId: 'relationship-editor-lease' }))
+    await act(async () => root?.render(<CharacterEditor projectKey={PROJECT_PATH} />))
+    await act(async () => page.getByRole('button', { name: '当前状态' }).click())
+
+    const field = (label: string) => [...container!.querySelectorAll('textarea')].find(node => node.placeholder.startsWith(label))!
+    expect(field('当前位置').value).toBe('')
+    expect(field('心理状态').value).toBe('作者确认警觉')
+    expect(field('最近重要事件').value).toBe('当前定稿中新线索')
+    expect(container!.textContent).toContain('历史派生（非当前）')
+    expect(container!.textContent).toContain('历史记录（来源已失效或未核验）：旧档案室')
+
+    await act(async () => {
+      const input = field('心理状态')
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, '作者更新警觉')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const state = useCharacterStore.getState().characters[0]!.currentState!
+    expect(state.mentalState).toBe('作者更新警觉')
+    expect(state.location).toBe('旧档案室')
+    expect(state.provenance?.location?.kind).toBe('derived')
+    expect(field('当前位置').value).toBe('')
+    await act(async () => useCharacterStore.getState().saveAll(PROJECT_PATH))
+    const save = invoke.mock.calls.find(([channel]) => channel === 'db:character-roster-commit')?.[1]
+    expect(save).toMatchObject({ entries: [{ currentState: {
+      location: '旧档案室', provenance: { location: { kind: 'derived' } },
+    } }] })
+  })
+
   it('shows unsaved feedback for the character auxiliary page without a character tab', async () => {
     useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
     await act(async () => root?.render(<CharacterEditor projectKey={PROJECT_PATH} />))

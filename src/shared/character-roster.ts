@@ -104,6 +104,8 @@ export interface CharacterRosterSnapshot {
   migrationState: CharacterRosterMigrationState
   status: CharacterRosterStatus
   entries: CharacterRosterEntry[]
+  /** Read-only UI view: derived fields proven current by the drafting source projection. Not persisted or committed. */
+  currentDerivedFields?: Record<string, CharacterStateTextField[]>
   renderedMarkdown: string
   projectionHash: string
   /**

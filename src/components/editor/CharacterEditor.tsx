@@ -40,6 +40,7 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
   const currentProject = useProjectStore(s => s.currentProject)
   const addLog = useWorkflowStore(s => s.addLog)
   const characters = useCharacterStore(s => s.characters)
+  const currentDerivedFields = useCharacterStore(s => s.currentDerivedFields)
   const dataProjectKey = useCharacterStore(s => s.dataProjectKey)
   const loadingProjectKey = useCharacterStore(s => s.loadingProjectKey)
   const lastError = useCharacterStore(s => s.lastError)
@@ -314,20 +315,25 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
                 ['mentalState', text('心理状态（愿望/恐惧/心态）', 'Mental state (goals, fears, mindset)')],
                 ['keyItems', text('关键道具/资源', 'Key items / resources')],
                 ['recentEvents', text('最近重要事件', 'Recent important events')],
-              ] as const).map(([field, label]) => (
-                <div key={field}>
+              ] as const).map(([field, label]) => {
+                const provenance = selectedCard.currentState?.provenance?.[field]
+                const historicalDerived = provenance?.kind === 'derived'
+                  && !currentDerivedFields[selectedCard.characterId ?? '']?.includes(field)
+                return <div key={field}>
                   <Label>
                     {label}
                     <span className="ml-2 text-[0.65rem] font-normal text-[var(--color-text-secondary)]">
-                      {selectedCard.currentState?.provenance?.[field]?.kind === 'author'
+                      {historicalDerived
+                        ? text('历史派生（非当前）', 'Historical derived value (not current)')
+                        : provenance?.kind === 'author'
                         ? text('作者输入', 'Author input')
-                        : selectedCard.currentState?.provenance?.[field]?.kind === 'derived'
+                        : provenance?.kind === 'derived'
                           ? text('定稿派生', 'Derived from finalized prose')
                           : text('来源未知', 'Unknown source')}
                     </span>
                   </Label>
                   <Textarea
-                    value={selectedCard.currentState?.[field]?.toString() ?? ''}
+                    value={historicalDerived ? '' : selectedCard.currentState?.[field]?.toString() ?? ''}
                     onChange={(e) => {
                       const cs: CharacterCurrentState = {
                         ...(selectedCard.currentState ?? EMPTY_STATE),
@@ -345,8 +351,13 @@ export default function CharacterEditor({ projectKey }: { projectKey: string }) 
                     rows={2}
                     placeholder={`${label}...`}
                   />
+                  {historicalDerived && selectedCard.currentState?.[field] && (
+                    <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
+                      {text('历史记录（来源已失效或未核验）：', 'History (source invalid or unverified): ')}{selectedCard.currentState[field]}
+                    </p>
+                  )}
                 </div>
-              ))}
+              })}
             </div>
             {!selectedCard.currentState && (
               <div className="mt-4 p-3 rounded-lg bg-[var(--color-hover)] text-xs text-[var(--color-text-secondary)]">
