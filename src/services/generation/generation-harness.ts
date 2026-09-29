@@ -288,11 +288,11 @@ function safeDiagnosticDisplayName(value: string | undefined): string | undefine
   return normalized ? normalized.slice(0, 128) : undefined
 }
 
-function createPromptBudgetReport(input: {
+export function createPromptBudgetReport(input: {
   messages: readonly GenerationMessage[]
   policy: PromptBudgetPolicy
   contextWindowTokens: number | null
-  estimatedInputTokens: number
+  estimatedInputTokens?: number
   reservedOutputTokens: number
   modelId: string
 }): PromptBudgetReport {
@@ -370,7 +370,7 @@ function createPromptBudgetReport(input: {
     totalUtf8Bytes,
     limitUtf8Bytes: effectiveLimitUtf8Bytes,
     contextWindowTokens: input.contextWindowTokens,
-    estimatedInputTokens: input.estimatedInputTokens,
+    ...(input.estimatedInputTokens === undefined ? {} : { estimatedInputTokens: input.estimatedInputTokens }),
     reservedOutputTokens: input.reservedOutputTokens,
     sections: Object.freeze(sections),
     modelId: input.modelId,

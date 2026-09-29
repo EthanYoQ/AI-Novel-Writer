@@ -854,6 +854,7 @@ describe('GenerateDirectoryCommand', () => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
     const observed: Array<{ range: [number, number]; purpose: string }> = []
     const authorGuidance = `KEEP-FULL-${'g'.repeat(1_300)}-END`
+    const architecture = `${'作者设定：药柜仅作背景。\n'.repeat(450)}药师陆青必须在场；但前述取药计划已撤销。`
     let attempt = 0
     const session = generationSession(async (task) => {
       attempt += 1
@@ -862,8 +863,9 @@ describe('GenerateDirectoryCommand', () => {
       if (task.purpose.includes(':compact-single:')) {
         const prompt = task.messages.find(message => message.role === 'user')?.content ?? ''
         expect(prompt).toContain(authorGuidance)
+        expect(prompt).toContain('药师陆青必须在场；但前述取药计划已撤销。')
         expect(task.promptBudget).toMatchObject({
-          limitUtf8Bytes: 16_384,
+          limitUtf8Bytes: 32_768,
           sections: expect.arrayContaining([
             expect.objectContaining({ sectionName: 'global-guidance', messageIndex: 1 }),
           ]),
@@ -900,7 +902,7 @@ describe('GenerateDirectoryCommand', () => {
 
     const result = await command.execute({
       step: {},
-      context: workflowContext(),
+      context: { ...workflowContext(), data: { architecture } },
       callbacks: stepCallbacks(),
     })
 
@@ -914,6 +916,48 @@ describe('GenerateDirectoryCommand', () => {
     expect(createRuntime).toHaveBeenCalledOnce()
     expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range'))
       .toHaveLength(1)
+  })
+
+  it('rejects a compact request enlarged by a writing Skill before main dispatch and preserves source', async () => {
+    const invoke = stubIpcInvoke(successfulCommitHandler())
+    const physicalDispatch = vi.fn()
+    const tail = '药师陆青必须在场；但取药计划已撤销。'
+    const architecture = `${'药柜只是背景设定。\n'.repeat(450)}${tail}`
+    const skillContent = '创作技巧不能改写作者事实。'.repeat(900)
+    const context: WorkflowContext = {
+      ...workflowContext(), data: { architecture },
+      writingSkills: Object.freeze({ planning: Object.freeze({
+        skillId: 'user:planning-skill', name: 'Planning craft', stage: 'planning' as const,
+        source: 'user' as const, writingLanguage: 'zh-CN' as const,
+        content: skillContent, utf8Bytes: new TextEncoder().encode(skillContent).byteLength,
+      }) }),
+    }
+    const session = generationSession(async task => {
+      physicalDispatch(task.purpose)
+      return {
+        status: 'incomplete', content: '{"blueprints":[', finishReason: 'length',
+        receipt: generationReceipt(1, 'length', task.purpose),
+      }
+    })
+    const command = new GenerateDirectoryCommand(
+      { mode: 'full', count: 1 },
+      { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 1 } },
+      { createRuntime: vi.fn(async () => testRuntime(session)) },
+    )
+
+    await expect(command.execute({ step: {}, context, callbacks: stepCallbacks() }))
+      .rejects.toMatchObject({
+        code: 'PROMPT_BUDGET_EXHAUSTED',
+        report: {
+          limitUtf8Bytes: 32_768,
+          sections: expect.arrayContaining([
+            expect.objectContaining({ sectionName: 'architecture', utf8Bytes: new TextEncoder().encode(JSON.stringify({ architecture }).slice(1, -1)).byteLength }),
+            expect.objectContaining({ sectionName: 'writing-skill', utf8Bytes: expect.any(Number) }),
+          ]),
+        },
+      })
+    expect(physicalDispatch).toHaveBeenCalledTimes(1)
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
   })
 
   it('commits no directory facts when the single-item replacement is also length-truncated', async () => {
@@ -976,7 +1020,7 @@ describe('GenerateDirectoryCommand', () => {
           (total, message) => total + new TextEncoder().encode(message.content).byteLength,
           0,
         )
-        expect(taskBytes).toBeLessThanOrEqual(16_384)
+        expect(taskBytes).toBeLessThanOrEqual(32_768)
         expect(prompt).not.toContain('不可信截断片段')
       }
       const chapters = Array.from(
@@ -996,7 +1040,7 @@ describe('GenerateDirectoryCommand', () => {
       { createRuntime: vi.fn(async () => testRuntime(session)) },
     )
     const context = workflowContext()
-    context.data.architecture = '极长架构事实。'.repeat(20_000)
+    context.data.architecture = '极长架构事实。'.repeat(20)
 
     const result = await command.execute({ step: {}, context, callbacks: stepCallbacks() })
 

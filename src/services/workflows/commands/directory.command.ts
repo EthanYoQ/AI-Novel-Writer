@@ -8,7 +8,7 @@ import {
 import type { BlueprintRangeCommitReceipt } from '../../../../electron/repositories/blueprint-repository'
 import { composePromptSystemRole, resolvePromptTemplate } from '../../prompt-templates'
 import { DirectoryPromptBuilder } from '../../prompts/prompt-builder'
-import type { GenerationTask } from '../../generation/generation-harness'
+import { createPromptBudgetReport, PromptBudgetExceededError, type GenerationTask } from '../../generation/generation-harness'
 import {
   createStructuredBatchExecutor,
   type StructuredBatchContract,
@@ -132,9 +132,9 @@ function directoryGenerationFailureSummary(
   )).join('; ')
 }
 
-const COMPACT_BLUEPRINT_PROMPT_MAX_UTF8_BYTES = 16_384
-const COMPACT_ARCHITECTURE_MAX_UTF8_BYTES = 4_800
-const COMPACT_SYSTEM_ROLE_MAX_UTF8_BYTES = 600
+// Match the existing protected structured-planning input envelope. Main still
+// checks the actual model context before dispatch; no source facts are clipped.
+const COMPACT_BLUEPRINT_PROMPT_MAX_UTF8_BYTES = 32_768
 const COMPACT_RECENT_BLUEPRINTS = 3
 
 function blueprintCapacityGenerationContract(
@@ -148,31 +148,6 @@ function blueprintCapacityGenerationContract(
     `【章节容量合同】\n每章正文目标约 ${targetWords} 字，可接受范围 ${lowerBound}–${upperBound} 字；据此控制情节点容量。作者指定事件与字数目标均为权威事实，不得删除、改写或擅自调整。合并 role、purpose、keyEvents、架构与前章列表中对同一事件的重复表述，只计一个语义事件；不擅自增加独立事件，也不为凑字数补事件。背景设定只作为约束和参考；除非作者指定事件明确要求，不得把全部背景逐项演成场景。JSON 输出合同不变；容量兼容时，keyEvents 只写能在上述范围内完整演绎的推进与结果。若语义去重后仍不兼容，保留作者指定事件，并在现有 keyEvents 字符串中简短指出“容量冲突：…”供作者调整；不新增字段、不代替作者取舍，也不写章节正文。`,
     `[Chapter capacity contract]\nTarget about ${targetWords} words per chapter, with an acceptable range of ${lowerBound}-${upperBound}; size the plot-point load accordingly. Author-specified events and the word target are authoritative facts: do not delete, rewrite, or adjust them. Merge duplicate descriptions of the same event across role, purpose, keyEvents, architecture, and the preceding chapter list, counting them as one semantic event; do not invent independent events or add events to fill space. Background facts are constraints and references, not a requirement to dramatize every fact as a scene unless an author-specified event requires it. Keep the JSON output contract unchanged. When capacity is compatible, keyEvents should state only the progression and outcome that can be fully dramatized within this range. If semantic deduplication still leaves an incompatible load, preserve the author-specified events and briefly state "Capacity conflict: ..." in the existing keyEvents string for the author to adjust; add no field, make no choice for the author, and do not write chapter prose.`,
   )
-}
-
-function utf8Bytes(value: string): number {
-  return new TextEncoder().encode(value).byteLength
-}
-
-function boundedFactText(value: string, maxBytes: number): string {
-  if (utf8Bytes(value) <= maxBytes) return value.trim()
-  let bytes = 0
-  let bounded = ''
-  for (const character of value) {
-    const characterBytes = utf8Bytes(character)
-    if (bytes + characterBytes > maxBytes) break
-    bounded += character
-    bytes += characterBytes
-  }
-  const boundary = Math.max(
-    bounded.lastIndexOf('\n'),
-    bounded.lastIndexOf('。'),
-    bounded.lastIndexOf('！'),
-    bounded.lastIndexOf('？'),
-  )
-  return (boundary >= Math.floor(bounded.length * 0.6)
-    ? bounded.slice(0, boundary + 1)
-    : bounded).trim()
 }
 
 function buildCompactBlueprintTask(input: {
@@ -192,13 +167,13 @@ function buildCompactBlueprintTask(input: {
     targetChapterNumber: input.chapterNumber,
     totalChapters: input.totalChapters,
     targetWordsPerChapter: input.wordsPerChapter,
-    genre: boundedFactText(input.genre, 240),
-    architectureExcerpt: boundedFactText(input.architecture, COMPACT_ARCHITECTURE_MAX_UTF8_BYTES),
+    genre: input.genre,
+    architecture: input.architecture,
     recentBlueprints: input.previous.slice(-COMPACT_RECENT_BLUEPRINTS).map(chapter => ({
       chapterNumber: chapter.chapterNumber,
-      title: boundedFactText(chapter.title, 240),
-      keyEvents: boundedFactText(chapter.keyEvents, 1_200),
-      suspenseHook: boundedFactText(chapter.suspenseHook, 480),
+      title: chapter.title,
+      keyEvents: chapter.keyEvents,
+      suspenseHook: chapter.suspenseHook,
     })),
     globalGuidance: input.globalGuidance,
     pacingGuidance: input.pacingGuidance,
@@ -226,7 +201,7 @@ function buildCompactBlueprintTask(input: {
     blueprintCapacityGenerationContract(input.writingLanguage, input.wordsPerChapter),
   ].join('\n')
   const systemRole = composePromptSystemRole({
-    systemRole: boundedFactText(input.systemRole, COMPACT_SYSTEM_ROLE_MAX_UTF8_BYTES)
+    systemRole: input.systemRole
       || promptLanguageText(input.writingLanguage, '你是一位经验丰富的章节架构师。', 'You are an experienced chapter architect.'),
   }, input.writingLanguage)
   const factSection = (sectionName: string, key: keyof typeof facts) => ({
@@ -249,7 +224,7 @@ function buildCompactBlueprintTask(input: {
         factSection('project-chapter-count', 'totalChapters'),
         factSection('chapter-word-target', 'targetWordsPerChapter'),
         factSection('genre', 'genre'),
-        factSection('architecture', 'architectureExcerpt'),
+        factSection('architecture', 'architecture'),
         factSection('previous-blueprints', 'recentBlueprints'),
         factSection('global-guidance', 'globalGuidance'),
         factSection('step-guidance', 'pacingGuidance'),
@@ -428,7 +403,26 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
     try {
       const batchResult = await (async () => {
         const session = this.requireGenerationExecution().session
-        const planningSession = injectWritingSkillIntoSession(session, context, 'planning')
+        // Check the final request, including any injected Skill, before either
+        // the renderer fallback or the durable main session can dispatch it.
+        const checkedSession = {
+          budget: session.budget,
+          complete: (task: GenerationTask, options?: Parameters<typeof session.complete>[1]) => {
+            if (task.purpose.startsWith('chapter-blueprint-directory:compact-single:')) {
+              if (!task.promptBudget) throw new Error('COMPACT_BLUEPRINT_PROMPT_BUDGET_REQUIRED')
+              const report = createPromptBudgetReport({
+                messages: task.messages,
+                policy: task.promptBudget,
+                contextWindowTokens: null,
+                reservedOutputTokens: 0,
+                modelId: context.generationModelId || 'unresolved',
+              })
+              if (report.errorCode === 'PROMPT_BUDGET_EXHAUSTED') throw new PromptBudgetExceededError(report)
+            }
+            return session.complete(task, options)
+          },
+        }
+        const planningSession = injectWritingSkillIntoSession(checkedSession, context, 'planning')
         if (context.writingSkills?.planning) {
           callbacks.log(workflowUiText(
             context,
