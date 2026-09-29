@@ -15,17 +15,21 @@ const macMountedApp = arg('mac-mounted-app')
 const macFixtureOnly = arg('mac-fixture-only') === '1'
 const macMode = Boolean(macMountedApp || macFixtureOnly)
 const winInstalledApp = arg('win-installed-app')
-const winMode = Boolean(winInstalledApp)
+const winUnpackedApp = arg('win-unpacked-app')
+assert(!(winInstalledApp && winUnpackedApp), 'Select installed or unpacked Windows package, not both')
+const winMode = Boolean(winInstalledApp || winUnpackedApp)
 const nativePicker = arg('native-picker') === '1'
-assert(!nativePicker || (winMode && !macMode), '--native-picker=1 requires the official Windows installed-app mode')
+assert(!nativePicker || (winMode && !macMode), '--native-picker=1 requires an official Windows package mode')
+assert(!winUnpackedApp || nativePicker, '--win-unpacked-app requires --native-picker=1')
 const nativePickerHelper = path.join(repository, 'scripts', 'f05-u16-native-picker.ps1')
 const macScratchRoot = arg('scratch-root')
 const macDmg = arg('dmg')
 const macMountPoint = arg('mount-point')
 const macArch = arg('arch')
 const macVersion = arg('mac-version') ?? arg('win-version')
-const packageDir = macMode ? macMountedApp : winMode ? winInstalledApp : arg('package-dir')
+const packageDir = macMode ? macMountedApp : winMode ? winInstalledApp || winUnpackedApp : arg('package-dir')
 const buildTree = arg('build-tree')
+const officialFixtureRoot = path.join(winUnpackedApp ? buildTree ?? '' : repository, 'scripts', 'fixtures', 's14c-official-old-sources')
 const fieldPolicy = path.join(buildTree ?? '', 'electron', 'services', 'portable-project-field-policy.json')
 const testedSha = arg('tested-sha')
 const expectedExe = arg('exe-sha256')
@@ -41,6 +45,7 @@ const sources = legacyV025 ? [{ version: 'v0.2.5', path: legacyV025 }] : [
   { version: 'v1.0.0', path: arg('legacy-v100') },
   { version: 'v1.1.0', path: arg('legacy-v110') },
 ]
+let unpackedProvenance
 assert(!(macMode && winMode), 'Select one official package platform')
 if (macMode) {
   assert(macScratchRoot && path.isAbsolute(macScratchRoot), 'macOS fixture requires an absolute --scratch-root')
@@ -56,16 +61,19 @@ if (macMode) {
     assert(fs.statSync(macDmg).isFile(), 'Missing mounted DMG source')
   }
 } else if (winMode) {
-  assert.equal(process.platform, 'win32', 'Installed Windows package journey requires Windows')
-  assert(macScratchRoot && path.isAbsolute(macScratchRoot) && path.isAbsolute(winInstalledApp)
+  assert.equal(process.platform, 'win32', 'Official Windows package journey requires Windows')
+  assert(macScratchRoot && path.isAbsolute(macScratchRoot) && path.isAbsolute(packageDir)
     && ['v1.0.0', 'v1.1.0'].includes(macVersion)
     && /^[a-f0-9]{40}$/.test(testedSha ?? '')
     && /^[a-f0-9]{64}$/.test(expectedExe ?? '') && /^[a-f0-9]{64}$/.test(expectedAsar ?? ''),
-  'Specify absolute installed app and scratch, official Windows version, tested SHA and package hashes')
+  'Specify absolute Windows app and scratch, official Windows version, tested SHA and package hashes')
+  if (winUnpackedApp) unpackedProvenance = unpackedPackageProvenance()
+  else {
   assert.equal(path.basename(path.resolve(winInstalledApp)), 'installed-app', 'Expected installer installed-app directory')
   assert.equal(fs.realpathSync(winInstalledApp), path.resolve(winInstalledApp), 'Installed app directory must not be a link')
   assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim(), testedSha,
     'Execution HEAD differs from tested SHA')
+  }
 } else {
 assert(packageDir && buildTree && /^[a-f0-9]{40}$/.test(testedSha ?? '')
   && /^[a-f0-9]{64}$/.test(expectedExe ?? '') && /^[a-f0-9]{64}$/.test(expectedAsar ?? '')
@@ -86,15 +94,34 @@ if (installedRoot) {
 } else assert.equal(path.resolve(packageDir), path.join(path.resolve(buildTree), 'release', JSON.parse(fs.readFileSync(path.join(buildTree, 'package.json'), 'utf8')).version, 'win-unpacked'))
 }
 
+function unpackedPackageProvenance() {
+  assert(buildTree && path.isAbsolute(buildTree), 'Unpacked native qualification requires an absolute --build-tree')
+  const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trimEnd()
+  const executionHead = git(repository, 'rev-parse', 'HEAD')
+  const buildTreeHead = git(buildTree, 'rev-parse', 'HEAD')
+  assert.equal(git(buildTree, 'status', '--porcelain'), '', 'Build tree must be clean')
+  const changedPaths = git(repository, 'diff', '--name-only', `${testedSha}..${executionHead}`).split('\n').filter(Boolean)
+  const buildChangedPaths = git(buildTree, 'diff', '--name-only', `${testedSha}..${buildTreeHead}`).split('\n').filter(Boolean)
+  const dirtyExecutionPaths = git(repository, 'status', '--porcelain').split('\n').filter(Boolean)
+  assert([...changedPaths, ...buildChangedPaths, ...dirtyExecutionPaths.map(line => line.slice(3))]
+    .every(file => file.startsWith('scripts/')), 'Only script changes may follow the unpacked package source')
+  assert.equal(git(buildTree, 'diff', '--name-only', `${testedSha}..${buildTreeHead}`, '--',
+    'scripts/fixtures/s14c-official-old-sources'), '', 'Official fixtures must match the package source')
+  const expected = path.join(buildTree, 'release', JSON.parse(fs.readFileSync(path.join(buildTree, 'package.json'), 'utf8')).version, 'win-unpacked')
+  assert.equal(fs.realpathSync.native(packageDir), fs.realpathSync.native(expected), 'Package is not the build tree win-unpacked artifact')
+  return { packageSourceSha: testedSha, executionHead, buildTreeHead, buildTree: path.resolve(buildTree),
+    changedPaths, buildChangedPaths, dirtyExecutionPaths }
+}
+
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 const hashText = value => createHash('sha256').update(value).digest('hex')
 const exe = macMode && !macFixtureOnly ? path.join(macMountedApp, 'Contents', 'MacOS', 'AI小说作家') : path.join(packageDir ?? '', 'AI小说作家.exe')
 const asar = macMode && !macFixtureOnly ? path.join(macMountedApp, 'Contents', 'Resources', 'app.asar') : path.join(packageDir ?? '', 'resources', 'app.asar')
 if (macMode && !macFixtureOnly) assert(fs.statSync(exe).isFile() && fs.statSync(asar).isFile(), 'Mounted app executable or ASAR missing')
 if (winMode) {
-  assert(fs.statSync(exe).isFile() && fs.statSync(asar).isFile(), 'Installed app executable or ASAR missing')
-  assert.equal(sha256(exe), expectedExe, 'Installed app executable hash differs')
-  assert.equal(sha256(asar), expectedAsar, 'Installed app ASAR hash differs')
+  assert(fs.statSync(exe).isFile() && fs.statSync(asar).isFile(), 'Windows app executable or ASAR missing')
+  assert.equal(sha256(exe), expectedExe, `${winUnpackedApp ? 'Unpacked' : 'Installed'} app executable hash differs`)
+  assert.equal(sha256(asar), expectedAsar, `${winUnpackedApp ? 'Unpacked' : 'Installed'} app ASAR hash differs`)
 }
 const runId = randomUUID()
 const scratch = macMode || winMode ? path.resolve(macScratchRoot) : path.join(process.env.LOCALAPPDATA, 'VibeCodingScratch', 'AI-Novel', `a11-${runId.slice(0, 8)}`)
@@ -102,14 +129,14 @@ const receiptPath = macMode || winMode ? path.join(scratch, 'receipt.json') : pa
 const receipt = macMode ? { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_MAC_V3',
   mode: 'official-old-app-mounted-app', testedSha, arch: macArch, steps: [], exitDiagnostics: [],
   provenance: macFixtureOnly ? null : { driverSha256: sha256(fileURLToPath(import.meta.url)),
-    sourceManifestSha256: sha256(path.join(repository, 'scripts', 'fixtures', 's14c-official-old-sources', 'manifest.json')),
+    sourceManifestSha256: sha256(path.join(officialFixtureRoot, 'manifest.json')),
     dmgSha256: sha256(macDmg), executableSha256: sha256(exe), asarSha256: sha256(asar),
     appPathSha256: hashText(fs.realpathSync(macMountedApp)), mountPointSha256: hashText(fs.realpathSync(macMountPoint)) },
-} : winMode ? { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_WIN_V3',
+} : winMode ? { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: winUnpackedApp ? 'A11_OFFLINE_LEGACY_COPY_WIN_UNPACKED_NATIVE_V3' : 'A11_OFFLINE_LEGACY_COPY_WIN_V3',
   mode: 'official-old-app-installed-app', testedSha, steps: [], exitDiagnostics: [], receiptPath,
   provenance: { driverSha256: sha256(fileURLToPath(import.meta.url)),
-    sourceManifestSha256: sha256(path.join(repository, 'scripts', 'fixtures', 's14c-official-old-sources', 'manifest.json')),
-    executableSha256: sha256(exe), asarSha256: sha256(asar) },
+    sourceManifestSha256: sha256(path.join(officialFixtureRoot, 'manifest.json')),
+    executableSha256: sha256(exe), asarSha256: sha256(asar), ...unpackedProvenance },
 } : { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification: 'A11_OFFLINE_LEGACY_COPY_WIN_V3',
   mode: legacyV025 ? 'v025-roster-refusal-v2' : finalDelta ? 'synthetic-completeness-final-delta' : supplement ? 'synthetic-completeness' : 'historical-baseline',
   packageMode: installedRoot ? 'installed' : 'unpacked',
@@ -122,7 +149,8 @@ const receipt = macMode ? { outcome: 'FAIL', sliceOutcome: 'FAIL', qualification
     injectedInventoryRemovedFromScratchCopy: fs.existsSync(path.join(source.path, '.vela', 'upgrade-data-inventory.json')) })),
   steps: [], exitDiagnostics: [], receiptPath }
 if (!macMode && !winMode) assert.deepEqual(receipt.packageHashes, { exe: expectedExe, asar: expectedAsar })
-if (nativePicker) Object.assign(receipt, { mode: 'official-old-app-installed-app-native-picker',
+if (nativePicker) Object.assign(receipt, { mode: `official-old-app-${winUnpackedApp ? 'unpacked' : 'installed-app'}-native-picker`,
+  packageMode: winUnpackedApp ? 'unpacked' : 'installed',
   nativePickerHelperSha256: sha256(nativePickerHelper), nativePickerEvidence: [],
   pickerQualification: 'Native source and target OS choices; legacy warning confirmation remains controlled' })
 fs.mkdirSync(scratch, { recursive: true })
@@ -153,11 +181,11 @@ function chooseNativeDirectory(title, target, pid) {
   { cwd: repository, encoding: 'utf8', windowsHide: true, timeout: 30_000 })
   assert.equal(result.status, 0, `native picker: ${result.stderr || result.stdout || result.error}`)
   const evidence = JSON.parse(result.stdout.trim())
+  receipt.nativePickerEvidence.push(evidence)
   assert.equal(evidence.dialogTitle, title)
   assert.equal(evidence.dialogPid, pid)
   assert.equal(evidence.typedExact, true)
   assert.equal(evidence.submitted, true)
-  receipt.nativePickerEvidence.push(evidence)
 }
 
 function verifyNativeImportGrants(calls) {
@@ -174,6 +202,27 @@ function verifyNativeImportGrants(calls) {
   assert.match(imported.result.projectId, /^[a-f0-9-]{36}$/i)
   return { senderId: imported.senderId, sourceOpaque: true, targetOpaque: true, consumerMatched: true,
     projectId: imported.result.projectId, targetRoot: imported.result.targetRoot }
+}
+
+async function captureNativeImportFailure(session) {
+  let timer
+  try {
+    return await Promise.race([
+      Promise.all([
+        session.app.evaluate(() => ({ dialogs: globalThis.__a11Dialogs ?? [],
+          calls: (globalThis.__a11NativeCalls ?? []).map(call => ({ channel: call.channel,
+            senderId: call.senderId, error: call.error, pending: !('result' in call) && !call.error,
+            result: call.channel === 'project:import-legacy-copy' ? call.result
+              : { selected: Boolean(call.result), grantIssued: typeof call.result?.grantId === 'string',
+                  displayName: call.result?.displayName } })) })).catch(() => ({ unavailable: true })),
+        session.page.evaluate(() => ({ alerts: [...document.querySelectorAll('[role="alert"], [role="alertdialog"], [role="status"]')]
+          .filter(node => node.getClientRects().length).slice(0, 10).map(node => node.textContent?.slice(0, 500)),
+        projectTree: document.querySelector('.writer-project-tree')?.textContent?.slice(0, 2000) ?? null }))
+          .catch(() => ({ unavailable: true })),
+      ]).then(([main, renderer]) => ({ main, renderer })),
+      new Promise(resolve => { timer = setTimeout(() => resolve({ unavailable: true, reason: 'diagnostic-timeout' }), 3_000) }),
+    ])
+  } finally { clearTimeout(timer) }
 }
 
 const compareSql = `import json,sqlite3,sys
@@ -328,7 +377,7 @@ async function verifySupplement(target, seeded) {
 }
 
 function macStage(stage) {
-  if (!macMode) return
+  if (!macMode && !winMode) return
   receipt.lastStage = stage
   console.error(`[AI Novel A11] stage=${stage}`)
 }
@@ -874,7 +923,7 @@ db.commit(); db.close()`, path.join(sourceCopy, '.vela', 'vela.db')])
 }
 
 function seedMac() {
-  const fixtureRoot = path.join(repository, 'scripts', 'fixtures', 's14c-official-old-sources')
+  const fixtureRoot = officialFixtureRoot
   const manifest = JSON.parse(fs.readFileSync(path.join(fixtureRoot, 'manifest.json'), 'utf8'))
   const entry = manifest.cases.find(item => `v${item.version}` === macVersion)
   assert.equal(manifest.kind, 's14c-official-old-app-synthetic-source')
@@ -943,6 +992,7 @@ db.close()`, path.join(target, '.ai-novel', 'project.db')], { encoding: 'utf8' }
 }
 
 async function verifyMac() {
+  const rendererErrors = []
   const officialWindows = typeof winMode !== 'undefined' && winMode
   let session
   try {
@@ -960,6 +1010,12 @@ async function verifyMac() {
     for (const directory of Object.values(roots)) fs.mkdirSync(directory, { recursive: true })
     roots.officialWindows = officialWindows
     session = await launch(roots)
+    if (nativePicker) session.page.on('console', message => {
+      if (message.type() === 'error') {
+        rendererErrors.push(message.text().slice(0, 500))
+        if (rendererErrors.length > 10) rendererErrors.shift()
+      }
+    })
     macStage('home-start')
     await home(session.page)
     macStage('home-ready')
@@ -986,18 +1042,23 @@ async function verifyMac() {
           if (!original) throw new Error(`Missing IPC handler: ${channel}`)
           ipcMain.removeHandler(channel)
           ipcMain.handle(channel, async (event, ...args) => {
-            const result = await original(event, ...args)
-            globalThis.__a11NativeCalls.push({ channel, senderId: event.sender.id, args, result })
-            return result
+            const call = { channel, senderId: event.sender.id, args }
+            globalThis.__a11NativeCalls.push(call)
+            try {
+              call.result = await original(event, ...args)
+              return call.result
+            } catch (error) { call.error = String(error); throw error }
           })
         }
       }
     }, { source, targetParent, nativePicker })
     macStage('import-start')
+    if (nativePicker) receipt.nativePickerProcess = { playwrightProcessPid: session.app.process().pid,
+      electronMainPid: await session.app.evaluate(() => process.pid) }
     await session.page.getByRole('button', { name: '导入旧项目副本' }).click()
     if (nativePicker) {
-      chooseNativeDirectory('选择旧版小说项目文件夹', source, session.app.process().pid)
-      chooseNativeDirectory('选择恢复副本所在文件夹', targetParent, session.app.process().pid)
+      chooseNativeDirectory('选择旧版小说项目文件夹', source, receipt.nativePickerProcess.electronMainPid)
+      chooseNativeDirectory('选择恢复副本所在文件夹', targetParent, receipt.nativePickerProcess.electronMainPid)
     }
     await session.page.locator('.writer-project-tree').getByText('p', { exact: true })
       .waitFor({ state: 'visible', timeout: 30_000 })
@@ -1112,6 +1173,8 @@ async function verifyMac() {
       importAndSaveRequests, reopenRequests }
   } catch (error) {
     receipt.failure = { message: String(error), stack: error?.stack }
+    if (nativePicker && session) receipt.nativeFailureDiagnostic = { stage: receipt.lastStage, rendererErrors,
+      ...await captureNativeImportFailure(session) }
     console.error(`[AI Novel A11] failure-stage=${receipt.lastStage}`, error)
     throw error
   } finally {

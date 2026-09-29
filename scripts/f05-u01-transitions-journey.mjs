@@ -222,6 +222,7 @@ async function main() {
   let deleteEntryScreenshot
   const rendererLogs = []
   const nativePickerEvidence = []
+  let nativeProcessEvidence
   const a10Only = process.argv.includes('--a10-only')
   const model = { id: 'f05-u01-synthetic', name: 'U01 离线合成模型', provider: 'openai', protocol: 'openai',
     modelName: 'gpt-4.1', baseUrl: 'https://api.openai.com/v1', apiKey: 'f05-u01-offline-only',
@@ -513,7 +514,12 @@ async function main() {
       const grants = verifyNativeProjectGrants(await session.app.evaluate(() => globalThis.__u01NativeCalls))
       assert.equal(grants[0].projectId, JSON.parse(fs.readFileSync(path.join(projects.c, '.ai-novel', 'project.json'), 'utf8')).projectId)
       assert.equal(grants[1].projectId, projectIds.a)
-      assert(nativePickerEvidence.every(item => item.dialogPid === session.app.process().pid))
+      nativeProcessEvidence = { electronMainPid: await session.app.evaluate(() => process.pid),
+        playwrightProcessPid: session.app.process().pid,
+        dialogPids: nativePickerEvidence.map(item => item.dialogPid) }
+      assert.deepEqual(nativeProcessEvidence.dialogPids,
+        [nativeProcessEvidence.electronMainPid, nativeProcessEvidence.electronMainPid],
+        'Both native pickers must belong to this Electron main process')
       dbA.close()
       await quit(session.app)
       session = null
@@ -521,7 +527,7 @@ async function main() {
       assert.deepEqual(provenance().artifactHashes, source.artifactHashes)
       const receipt = { outcome: 'PARTIAL', sliceOutcome: 'PASS', qualification: 'F05_U01_NATIVE_A01_A02_ONLY',
         evidenceLevel: 'native-os-picker', shell: 'writer-v3', ...source, driverSha256,
-        nativePickerHelperSha256: hash(nativePickerHelper), nativePickerEvidence, grants, steps,
+        nativePickerHelperSha256: hash(nativePickerHelper), nativePickerEvidence, nativeProcessEvidence, grants, steps,
         verifiedActions: ['U01.A01', 'U01.A02'], physicalModelRequests: 0, releaseDefaultQualified: false,
         pickerFixture: 'Setup projects use controlled choices; qualified A01/A02 use untouched OS dialogs and original IPC handlers',
         unverifiedActions: ['U01.A03–A12 and full F05/product qualification are not reverified'] }
@@ -888,7 +894,7 @@ async function main() {
       if (!closed) { try { session.app.process()?.kill() } catch { /* already closed */ } }
     }
     fs.writeFileSync(receiptPath, JSON.stringify({ outcome: 'FAIL', ...source, driverSha256, shelfScreenshot, deleteEntryScreenshot,
-      failedStep: currentStep, steps, nativePickerEvidence, error: String(error), diagnostic, modelRequests, rendererLogs: rendererLogs.slice(-20) }, null, 2))
+      failedStep: currentStep, steps, nativePickerEvidence, nativeProcessEvidence, error: String(error), diagnostic, modelRequests, rendererLogs: rendererLogs.slice(-20) }, null, 2))
     throw error
   } finally {
     if (fixtureServer?.listening) await new Promise(resolve => fixtureServer.close(resolve))

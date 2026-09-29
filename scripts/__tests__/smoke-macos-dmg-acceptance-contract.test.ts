@@ -150,7 +150,7 @@ describe('macOS DMG acceptance receipt contract', () => {
       process: () => ({ exitCode: null, signalCode: null, kill: (signal: string) => { killed.push(signal); return true } }),
     }
     const run = vm.runInNewContext(`${stages}\n${cleanup}\n${launch}\n(${verify})`, {
-      path, macMode: true, receipt, scratch: 'in-memory-fixture', fs: { mkdirSync() {} },
+      path, macMode: true, winMode: false, nativePicker: false, receipt, scratch: 'in-memory-fixture', fs: { mkdirSync() {} },
       console: { error: (...args: unknown[]) => stderr.push(args) },
       seedMac: () => ({ source: 'in-memory-source' }),
       launch: async () => ({ page: {}, app: ownedApp }),
@@ -183,7 +183,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     const windowsReceipt = {}
     const windowsStderr: unknown[] = []
     vm.runInNewContext(`${stages}\nmacStage('launch-start')`, {
-      macMode: false, receipt: windowsReceipt, console: { error: (value: unknown) => windowsStderr.push(value) },
+      macMode: false, winMode: false, receipt: windowsReceipt, console: { error: (value: unknown) => windowsStderr.push(value) },
     })
     expect(windowsReceipt).toEqual({})
     expect(windowsStderr).toEqual([])
@@ -193,7 +193,7 @@ describe('macOS DMG acceptance receipt contract', () => {
       const taskkills: string[][] = []
       const windowsLaunch = vm.runInNewContext(`${stages}\n${windowsHelpers}\n(${launch})`, {
         assert, setTimeout, clearTimeout,
-        path, macMode: false, receipt: windowsReceipt, exe: '/in-memory/app', packageDir: '/in-memory',
+        path, macMode: false, winMode: false, receipt: windowsReceipt, exe: '/in-memory/app', packageDir: '/in-memory',
         fs: { existsSync: () => false },
         execFileSync: (command: string, args: string[]) => { taskkills.push([command, ...args]); return '' },
         process: { env: {} }, console: { error: (value: unknown) => windowsStderr.push(value) },
@@ -223,7 +223,7 @@ describe('macOS DMG acceptance receipt contract', () => {
     let releaseClose!: () => void
     const pendingClose = new Promise<void>(resolve => { releaseClose = resolve })
     const run = vm.runInNewContext(`${stages}\n${cleanup}\n(async () => { const session = ownedSession; try {\n${completionBoundary})`, {
-      macMode: true, receipt, console: { error() {} },
+      macMode: true, winMode: false, nativePicker: false, receipt, console: { error() {} },
       ownedSession: { app: { close: () => hangs ? pendingClose : Promise.resolve(),
         process: () => ({ exitCode: null, signalCode: null, kill: (signal: string) => { killed.push(signal); return true } }),
       } },

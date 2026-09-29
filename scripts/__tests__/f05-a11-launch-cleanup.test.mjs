@@ -13,6 +13,62 @@ const functionSource = (name, source = driver) => {
   return start < 0 ? '' : source.slice(start, source.indexOf('\n}', start) + 2)
 }
 
+test('unpacked provenance separates package source from script-only execution and build heads', () => {
+  const packageSource = 'a'.repeat(40)
+  const executionHead = 'b'.repeat(40)
+  const buildTreeHead = 'c'.repeat(40)
+  const buildTree = path.resolve('build-tree')
+  const repository = path.resolve('execution-tree')
+  const packageDir = path.join(buildTree, 'release', '1.2.0', 'win-unpacked')
+  const verify = (overrides = {}) => vm.runInNewContext(`${functionSource('unpackedPackageProvenance')}\nunpackedPackageProvenance()`, {
+    assert, path, buildTree, repository, packageDir, testedSha: packageSource,
+    fs: { readFileSync: () => '{"version":"1.2.0"}', realpathSync: { native: value => value } },
+    execFileSync: (_command, args, { cwd }) => {
+      if (args[0] === 'rev-parse') return cwd === repository ? executionHead : buildTreeHead
+      if (args[0] === 'status') return cwd === buildTree ? overrides.buildDirty ?? '' : overrides.executionDirty ?? ' M scripts/driver.mjs'
+      assert.equal(args[2], `${packageSource}..${cwd === repository ? executionHead : buildTreeHead}`)
+      if (args.includes('--')) return overrides.fixtureChanges ?? ''
+      return overrides.changes ?? 'scripts/driver.mjs'
+    },
+  })
+  const provenance = verify()
+  assert.equal(provenance.packageSourceSha, packageSource)
+  assert.equal(provenance.executionHead, executionHead)
+  assert.equal(provenance.buildTreeHead, buildTreeHead)
+  for (const overrides of [
+    { changes: 'electron/main.ts' }, { executionDirty: ' M src/App.tsx' },
+    { buildDirty: ' M scripts/driver.mjs' }, { fixtureChanges: 'scripts/fixtures/s14c-official-old-sources/manifest.json' },
+  ]) assert.throws(() => verify(overrides))
+})
+
+test('native picker rejects a different main PID and preserves the observed dialog identity', () => {
+  const receipt = { nativePickerEvidence: [] }
+  const choose = vm.runInNewContext(`${functionSource('chooseNativeDirectory')}\nchooseNativeDirectory`, {
+    assert, receipt, nativePickerHelper: 'helper.ps1', exe: 'app.exe', repository: 'repo',
+    spawnSync: () => ({ status: 0, stdout: JSON.stringify({ dialogTitle: 'directory', dialogPid: 123,
+      typedExact: true, submitted: true }) }),
+  })
+  assert.throws(() => choose('directory', 'target', 456))
+  assert.equal(receipt.nativePickerEvidence[0].dialogPid, 123)
+  assert.doesNotThrow(() => choose('directory', 'target', 123))
+})
+
+test('native import failure retains production result and visible alert without grant tokens', async () => {
+  const capture = vm.runInNewContext(`${functionSource('captureNativeImportFailure')}\ncaptureNativeImportFailure`, {
+    setTimeout, clearTimeout,
+    __a11Dialogs: [{ type: 'confirm' }],
+    __a11NativeCalls: [
+      { channel: 'dialog:select-legacy-project', senderId: 7, args: [], result: { grantId: 'private-grant', displayName: 'source' } },
+      { channel: 'project:import-legacy-copy', senderId: 7, args: ['private-grant'], result: { state: 'blocked', code: 'PROJECT_STORAGE_PATH_UNSUPPORTED' } },
+    ],
+    document: { querySelectorAll: () => [{ getClientRects: () => [1], textContent: 'PROJECT_STORAGE_PATH_UNSUPPORTED' }], querySelector: () => null },
+  })
+  const diagnostic = await capture({ app: { evaluate: fn => Promise.resolve(fn()) }, page: { evaluate: fn => Promise.resolve(fn()) } })
+  assert.equal(diagnostic.main.calls[1].result.code, 'PROJECT_STORAGE_PATH_UNSUPPORTED')
+  assert.equal(diagnostic.renderer.alerts[0], 'PROJECT_STORAGE_PATH_UNSUPPORTED')
+  assert.equal(JSON.stringify(diagnostic).includes('private-grant'), false)
+})
+
 test('native project and legacy receipts require opaque grants consumed by their selecting sender', () => {
   const u01 = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../f05-u01-transitions-journey.mjs'), 'utf8')
   const sourceGrant = '11111111-1111-4111-8111-111111111111'
