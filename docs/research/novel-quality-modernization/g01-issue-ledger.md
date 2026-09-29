@@ -1,47 +1,22 @@
-# G01：原问题逐项验收台账
+# G01：原问题逐症状验收台账
 
-读取日期：2026-09-13（北京时间）。依赖 S00 `657ce4aa5f2e13dda4be222e256cd3faaecc9559`、S01 `7143d301313b95a2df572a3b17f1d459b48d5947`。已通过 GitHub API 重新读取全部 10 个开放 Issue 的正文、全部评论、10 个相关 PR 的状态/合并提交/当前检查，以及 v1.1.0 Release；另读 #219 来源 Discussion #215 的正文与评论。没有新建评论、关闭 Issue 或修改标签。
+状态读取：2026-09-30。重新核对原 10 个 Issue、[#279](https://github.com/EthanYoQ/AI-Novel-Writer/issues/279)、PR [#223](https://github.com/EthanYoQ/AI-Novel-Writer/pull/223) 与 [#225](https://github.com/EthanYoQ/AI-Novel-Writer/pull/225) 的只读回执。以下状态只代表读取时点；G02 关单前须再次读取 Issue、评论、PR 与 Release。本表记录症状、当前消费者和证据缺口，不把 Issue 状态、代码存在或测试通过当作正式版修复证明。
 
-下面的“当前复现”只指本次对原问题的合成产品场景；S00/S01 合同测试和旧实现注入结果探针不计产品复现。公开历史报告、提交被 Release 包含、安装资格与当前验证分别记录。每项只有一个验收 owner，其他切片提供实现证据。
+现行产品只有 Writer V3 一个逻辑壳；Classic 用作历史基线及旧偏好兼容，不再要求两套长期入口各自验收。旧 F05 并集回执绑定历史 SHA `bf3b31fdc6bd8cb625855ff745e69fe14f27cd7d`，153 项中 152 项 qualified、1 项 waived；它保留历史结论，不证明此轮目录授权变更后的 native、三平台或正式发行资格。下表“待验”均不得预写为 PASS。
 
-| 原问题与当前事实 | 唯一验收 owner / 代码片 | 必须分别验证的症状与失败反例 | 当前复现 / 未完成 |
-| --- | --- | --- | --- |
-| [#187 输出截断](https://github.com/EthanYoQ/AI-Novel-Writer/issues/187)：0.9.2/macOS 报告自述最大输出设为 384000（不等于实际请求或提供商生效上限），review-chapter 约 8K、directory 与 compact-single 约 4K 输出；9 月 12 日仍有复现反馈。#229 已合并，但不在 v1.1.0。 | S07；S05–S07、S10B；review-chapter、chapter-blueprint-directory（含 compact-single）command 与预算运行入口 | 三条原用途各查真实请求参数、有效预算、截断候选留存、恢复/重开、重复恢复与失败提示；最新反馈不能被单次世界观成功替代。 | NOT RUN；新反馈缺精确版本/参数，先做合成反例；获准模型的证据不推定同一原网关结果。 |
-| [#191 自动角色卡与后续补充](https://github.com/EthanYoQ/AI-Novel-Writer/issues/191)：原文同时要求文本/大纲导入、可编辑卡片、随情节自动新增信息。 | S09B；S09A/S09B/S09C/F04 | 文本、大纲、世界观提取为可编辑候选；接受/拒绝及项目隔离；非冲突 derived 自动补充；作者冲突走提议；commit-time CAS、来源顺序单调、重复/过期/重启拒绝旧写入。 | NOT RUN；S01 纯 CAS 合同已验，真实事务和产品交互未完成。 |
-| [#199 大纲范围与恢复](https://github.com/EthanYoQ/AI-Novel-Writer/issues/199)：#201/#202/#203 在 v1.1.0 提交祖先中；#198 已关闭且未合并。 | S06A；范围规划/检查点/恢复命令与 UI | 明确本次数量/连续范围；200 章不无界输出；截断标未完成且保留有效内容；下一批续写不重复、不丢失、不覆盖后来编辑的内容；缺失/坏 checkpoint、源变化、取消、切项目拒写；UI 区分批次/全书完成、可续写/恢复失败；stop 误报仍检查覆盖。 | 原版本实现包含关系已确认；本轮产品复验、历史产物内逐症状证据复核 NOT RUN，仍非可关闭结论。 |
-| [#205 连续性 v2 与逐目标审稿](https://github.com/EthanYoQ/AI-Novel-Writer/issues/205)：#197/#208 在 v1.1.0；实质评论还要求冻结目标、三态和正文引文。 | S11；S09B/S10B/S11 | author/derived、候选/定稿与过期来源区分；必要材料保留、可选覆盖提示；两种批量完成方式、取消/切项目；冻结目标不被改写/遗漏，章节目的不自动增任务、未来安排不变成本章必须完成；缺失/重复标识、错误状态、伪造或不可定位引文均待核实且不默认修稿，引文定位与语义正确分开；未知与无目标区分；显式选择、不可变人工确认后重开及旧报告兼容；保持既有调用预算，不新增默认调用或逐事实强制审批。 | 已发布代码包含关系已确认；本次全部原规格和产物证据复核 NOT RUN，不扩大到所有文学质量。 |
-| [#211 图谱保存与角色卡导入](https://github.com/EthanYoQ/AI-Novel-Writer/issues/211)：原 Issue 记录 1.1.0 Windows 实测；#212 合并及 Windows CI 成功，晚于 v1.1.0。 | F04；S02/S09C/F04/F05 | 四类 core 与旧 Markdown 路径正确打开；图谱只读；生成/修复入口；错误可见且 dirty 正文保留；角色管理与图谱均支持粘贴/文件导入；上传/候选确认、无模型提示、取消保稿、旧会话拒写；Writer 与 Classic 均复验。 | 历史复现已记录，本轮产品复验 NOT RUN；代码完成不等于已发布。 |
-| [#213 云存档](https://github.com/EthanYoQ/AI-Novel-Writer/issues/213)：跨台式机/笔记本恢复整本项目；Gitee 为建议，另一评论建议 WebDAV；本轮 Program v3 采用 WebDAV 方向。 | B02；B01/B02/F03/F04/F05 | 一个 WebDAV 协议手动上传/下载完整项目，含头像/当前读取权威；新副本 ID、旧执行冻结；两个隔离 profile；凭据本机保管与重启绑定；不可变世代、分叉、中断、损坏、版本拒绝、原稿保护；实际打包入口与受控服务。 | 增强未完成，NOT RUN；本轮已纳入实施，不能继续以长期规划排除。 |
-| [#219 主角缺失/图谱卡住](https://github.com/EthanYoQ/AI-Novel-Writer/issues/219)：[Discussion #215](https://github.com/EthanYoQ/AI-Novel-Writer/discussions/215) 只有同一报告与“稍晚修复”回复，没有参数或根因证据。 | S09A；S06A/S09A/F04 | 分开追踪模型原输出、解析、身份准入、落盘、刷新；中文正例主角、别名/重名、格式错/截断与恢复重开；不伪造主角、不取消主角约束。 | 原因未知，当前复现 NOT RUN；模型/版本/协议参数待明确，不能直接定性身份 Bug。 |
-| [#221 多余角色与跨章重复](https://github.com/EthanYoQ/AI-Novel-Writer/issues/221)：1.1.0/Windows 11 x64；已有 3 章/计划 10 章，第四章重复第三章；原模型名记作“千问 / qian-log”。 | S10B；S09A/S09B/S10B/F04 | 合成前三章→第四章分别检查未批准角色准入、前章上下文及大段重复，另做联合场景；重复指标与人工核对分开。 | 两症状均 NOT RUN；未新增 Qwen 凭据/调用。当前获准模型可查通用缺陷，但不能计 Qwen 特有资格。 |
-| [#222 ActivityBar 残留](https://github.com/EthanYoQ/AI-Novel-Writer/issues/222)：#223 仍开放，没有合并提交或当前检查结果。 | S13 | 在 F05 后验证生产、测试、Storybook、构建均零消费者，再删除废弃组件和注释；检查与独立审查通过并合并。 | 未执行清理；S00 词法清单不算零消费者证明。此窄内部问题可按合并门复核，不伪造产品发布门。 |
-| [#224 设置白屏](https://github.com/EthanYoQ/AI-Novel-Writer/issues/224)：Windows 11 x64 源码运行报告；#225 仍开放，当前 Windows CI 为 FAILURE。 | F04；F04/F05 | Writer/Classic 两个设置入口、默认/深链 tab、实际内容、关闭重开、切项目、同步状态；相关 CI、Windows 打包验证和公开发布。 | 当前复现 NOT RUN；不能把候选 PR 或 CI 失败标记成已修复。 |
+| 原 Issue／读取状态与独立症状 | 唯一验收 owner；现行实现消费者 | 已有证据层与仍需验收的边界 |
+| --- | --- | --- |
+| [#187 输出截断](https://github.com/EthanYoQ/AI-Novel-Writer/issues/187) **OPEN**：review-chapter、目录批次和 compact-single 三种用途分别可能遇到内部输出上限；错误提示不能把内部限制误归因于用户的 Max Tokens。 | S07；`review-chapter.command.ts`、`directory.command.ts`、生成预算运行入口。 | 已有预算/截断处理代码与局部测试；需分别核验三条真实请求的有效上限、截断候选保全、恢复/重开、重复恢复、失败提示，以及长字段尾部限定语不丢失。#229 合并或一次成功不能替三条用途结案；当前合成、真实模型与打包入口的最终证据待验。 |
+| [#191 自动角色卡与后续补充](https://github.com/EthanYoQ/AI-Novel-Writer/issues/191) **CLOSED**：文本／大纲导入可编辑角色卡，情节推进后补充派生状态，是两个不同需求。关闭原因是管理归并至 [#279 的 B01 待办项](https://github.com/EthanYoQ/AI-Novel-Writer/issues/279)，**并非全部实现完成**；此 B01 与 Program v3 的 B01 项目归档 Spec 无关。 | S09B；`CharacterCardImportButton.tsx`、`FinalizedCharacterStateCandidatePanel.tsx`、`CharactersView.tsx`、角色库的 derived-state 合并。 | 已有导入候选、状态补充与 CAS 合同/实现；按来源文本与大纲、预览/确认/拒绝、作者信息保护、冲突提议、定稿后非冲突更新、重开和过期拒写逐项核验。已验的定稿派生能力可按自身证据独立交付；#279 B01 继续承接尚未交付的自动角色卡子需求，不能用其中一项替全部结案。 |
+| [#199 故事架构/情节大纲范围与恢复](https://github.com/EthanYoQ/AI-Novel-Writer/issues/199) **CLOSED**：原症状是“AI 生成故事架构”中的 200 章情节大纲范围、截断后的续写与覆盖正确性。原 #201/#202/#203 实现已进入旧正式版。 | S06A；Writer V3“故事架构”→“AI 生成架构”→ `architecture-workflow.ts` 的 synopsis 步骤 → `GeneratePlotArchitectureCommand`（`architecture.command.ts`）。章节蓝图的 `DirectoryConfigDialog`/`directory.command.ts` 属另一入口，不能代证原情节大纲。 | 旧版代码/发布包含关系与当前故事架构大纲的范围、checkpoint、正文覆盖检查是不同证据；需核验 200 章有界批次、截断时未完成标记与原数据保全、续写不重复/覆盖作者编辑、取消/切项目/坏 checkpoint、UI 完成状态。蓝图批次覆盖可另验，但不替代本单。既有关闭保持历史事实；新 V3 资格不能从旧 Release 自动继承。 |
+| [#205 连续性与逐目标审稿](https://github.com/EthanYoQ/AI-Novel-Writer/issues/205) **CLOSED**：冻结目标、三态审稿、证据引文及未来计划边界。原 #208 已合并并关闭。 | S11；`chapter-goal-review.ts`、写稿/审稿/修稿命令及章节共享证据。 | 当前代码有目标清单和三态路径；仍需验证必现/可选/未知、当章与未来、引文定位和语义真实性分开、错误状态或伪引文不默认修稿、作者确认不可变、预算与恢复。旧发布证据可复用其真实范围；新反例须重新处理。 |
+| [#211 图谱保存与角色卡导入](https://github.com/EthanYoQ/AI-Novel-Writer/issues/211) **CLOSED**：图谱/角色卡的导入、保存、错误可见性。#212 合并后关闭，晚于旧 v1.1.0。 | F04；`EditorArea` → `ArchFileViewer` → `CharacterCardImportButton`，角色管理与 Writer V3 导航。 | 有代码和合并记录；需验证 Writer V3 图谱只读与文件/粘贴导入、候选确认、无模型/失败/取消时原稿保全、重开及旧会话拒写。关闭和合并不证明对应正式版已包含，也不要求 Classic 双壳复验。 |
+| [#213 云存档](https://github.com/EthanYoQ/AI-Novel-Writer/issues/213) **OPEN**：台式机与笔记本间完整项目手动备份和恢复。 | B02；`ProjectBackupPanel.tsx`、`cloud-backup-controller.ts`、`WebDavBackupService`，依赖 B01 完整归档/新副本恢复。 | 已有 WebDAV、归档/恢复实现和历史 F05 证据；仍需当前版两个隔离 profile、完整资产/读取权威、新 projectId/冻结旧任务、凭据重启绑定、分叉/中断/损坏/版本拒绝、C17/C18 恢复后继续创作及三平台 native/打包证据。历史 SHA 的通过不能替代当前授权和平台资格。 |
+| [#219 主角缺失](https://github.com/EthanYoQ/AI-Novel-Writer/issues/219) **OPEN、needs-info**：生成人物时提示缺主角并卡住。根因尚未证实。 | S09A；人物生成/解析、`CharactersView.tsx`、角色库和身份准入。 | 现有身份与角色状态链路不能单独证明原故障；需取得版本、协议、入口及脱敏最小输出/错误，再分层核查原输出、解析、主角识别、落盘和 UI 刷新。先做合成正反例，不能假设是身份 Bug，也不能放宽主角要求。 |
+| [#221 角色、复述与未来剧情](https://github.com/EthanYoQ/AI-Novel-Writer/issues/221) **OPEN、needs-info**：①新增未批准角色；②第四章复述第三章；③第六章提前使用第八至十二章的未来剧情（后续反馈 #246 归并管理）。三个症状独立。 | S10B；章节上下文、`generate-draft.command.ts`、`review-chapter.command.ts`、`chapter-goal-review.ts`，角色准入由 S09A/B 提供。 | 有上下文选择、未来计划边界和目标审稿代码；仍需各症状的合成/产品反例、跨章数据与人工语义核对。原报告的特定 provider 未获授权资格，现有其他模型或静态检查不能声称已解决该 provider 上的行为。 |
+| [#222 ActivityBar 残留](https://github.com/EthanYoQ/AI-Novel-Writer/issues/222) **CLOSED**：内部未使用组件清理。[#223](https://github.com/EthanYoQ/AI-Novel-Writer/pull/223) 已合并于 `a2948c16f0dba26f7abdc763792c2b97fc6c57d9`。 | S13；当前 Writer V3 使用 `LeftToolWindowBar.tsx`；旧 `ActivityBar.tsx` 已无当前生产引用。 | 合并记录与当前消费者检查支持窄内部清理；保留独立审查/相关检查边界，不将此单扩大成产品 Release 完成证明。 |
+| [#224 设置白屏](https://github.com/EthanYoQ/AI-Novel-Writer/issues/224) **OPEN**：Windows 源码运行时设置窗口内容空白。[#225](https://github.com/EthanYoQ/AI-Novel-Writer/pull/225) 读取时仍 **OPEN**，head `e9aeb603241a573ae7de6a67d62767e1aa21e1ab`。 | F04；`App.tsx` → `SettingsModal.tsx`，Writer V3 的标题栏/设置入口及各分类面板。 | 当前组件与浏览器测试只能证明其相应层；需核验 Writer V3 两处设置入口、默认/深链分类、真实内容、关闭重开与同步状态，并在 Windows 源码及适用打包入口重现/复验。候选 PR 未合并，CI、平台包和 Release 资格待验。 |
 
-## 提交与发布包含关系
+原 G01 在 2026-09-13 读取时十项均开放，现为五项开放（#187/#213/#219/#221/#224）、五项关闭（#191/#199/#205/#211/#222）。旧 v1.1.0 的 #199/#205 合并与发布包含关系、#211 后续合并、#222 窄内部清理都保留原有历史归因；不把这些旧结论重算成当前 V3 通过，也不因新的统一前端要求重开已关 Issue。#191 的迁移关闭只表示管理位置变化。
 
-Git 对合并提交执行祖先检查；这只能证明代码进入对应提交，不能代替历史安装产物的逐症状资格。
-
-| PR | 当前状态 | 合并提交 | 在 v1.1.0 中 | 当前可读取的 PR 检查 |
-| --- | --- | --- | --- | --- |
-| #197 | MERGED | `0f429039dfc5c68f322c5a5b4af6ec2efe1b0b61` | 是 | 无返回记录，不计通过 |
-| #198 | CLOSED、未合并 | 无 | 不适用 | 无返回记录 |
-| #201 | MERGED | `d24a4a417a063fd6df073765fe256bbcd7bc3695` | 是 | 无返回记录，不计通过 |
-| #202 | MERGED | `e64dc03b155c3d5926e565f0a880fa7c54aa73ab` | 是 | 无返回记录，不计通过 |
-| #203 | MERGED | `17feb431a8a0358f4b49479d4df349da2107748e` | 是 | 无返回记录，不计通过 |
-| #208 | MERGED | `879f83521414f66019488462830c3134c77dc4f8` | 是 | 无返回记录，不计通过 |
-| #212 | MERGED | `38a844506a91907733c98e5ada66401bf6847532` | 否 | Windows SUCCESS |
-| #223 | OPEN | 无 | 不适用 | 无返回记录 |
-| #225 | OPEN | 无 | 不适用 | Windows FAILURE |
-| #229 | MERGED | `2264390d6fb8b052cc14736d544df0cc74516649` | 否 | 两项 Windows SUCCESS |
-
-[v1.1.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v1.1.0) 为公开正式 Release，发布时间 `2026-09-08T04:35:10Z`，目标提交 `879f83521414f66019488462830c3134c77dc4f8`。S00 已记录 Windows 与 macOS 两架构资产元数据；本次未重新执行这些安装包。
-
-## 当前结论与尚缺材料
-
-已确认可关闭：0。#199/#205 是已发布证据复核候选；先查必要旧证据并补当前入口复验，有新反例则继续修复。#211/#187 部分代码已合并未发布。#191/#213 继续实现。#219 根因仍待定位，#221 的两个症状分别保留。原 Issue 全部维持 open。
-
-需要补充信息时，一次询问：应用版本、系统/安装方式、模型与 provider/protocol 原名、实际 max output/context window/temperature/推理配置、最短中文步骤、期望/实际结果和脱敏诊断。先自行做可执行合成反例；不索取 Key、完整提示词或原稿。目前没有已发送后仍未补充的请求，不以等待时间关闭问题。
-
-对外说明草稿（未发送）：各项应直接引用本表对应症状、实际完成的验证与尚缺门。#199/#205 说明“相关代码已进入 1.1.0，正在按原范围复核，当前仍保持开放”；#211/#187 说明“相关代码已合并，完整产品验证与包含该修复的发布尚未完成”；#191/#213 说明“已纳入角色自动补充/整项目 WebDAV 备份恢复实施”；#219/#221 说明“报告已拆为具体诊断场景，尚未确认根因或原提供商资格”；#222/#224 说明“候选 PR 状态不代表验证通过，按当前消费者/实际设置入口验收”。发布与关单时必须重新读取，再根据当时证据改写，不能直接复制成完成声明。
-
-原始 API 回执仅存本任务缓存 `g01-issue-fresh.json`、`g01-pr-fresh.json`、`g01-release-fresh.json`、`g01-discussion-215.json`。本文件不包含原报告的内部模型记录 ID、截图原文、私人路径或作者正文。
+G02 最终逐症状关单须串起复现/原因、实际修复 SHA、独立审查与相关检查、中文生产和适用打包入口、公开 Release 包含及无否定新反例；#222 按窄内部合同处理。V3 全项目门仍待全量 CI、C16–C18、post-UI/full、三平台与 U16 当前授权路径，按既定合成场景及已授权模型/平台合同验收。#219 缺必要输入限制该 Issue 的根因判断和结案，#221 缺原 provider 资格限制对该 provider 的修复宣称与结案；两者不新增 V3 全项目阻断，也不要求为完成 G02 索取无关模型凭据或关闭无证据 Issue。旧回执、静态消费者或 PR 状态不能替代各自的验收。未在本轮发表 Issue 评论、关闭/重开 Issue 或变更 PR。
