@@ -193,7 +193,8 @@ export function validatePhysicalLedger(file) {
   const r73b46513 = validateHistoricalSupersessionBoundary(raw, ca466d9a, protocol.historicalC1673b46513Boundary)
   const fa8806d7 = validateHistoricalSupersessionBoundary(raw, r73b46513, protocol.historicalC16Fa8806d7Boundary)
   const b42cfc55 = validateHistoricalSupersessionBoundary(raw, fa8806d7, protocol.historicalC16B42cfc55Boundary)
-  validateHistoricalSupersessionBoundary(raw, b42cfc55, protocol.historicalC1667a57c04Boundary)
+  const r67a57c04 = validateHistoricalSupersessionBoundary(raw, b42cfc55, protocol.historicalC1667a57c04Boundary)
+  validateHistoricalSupersessionBoundary(raw, r67a57c04, protocol.historicalC162867cfa4Boundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -537,6 +538,13 @@ export function updateLedger(file, event, options = {}) {
       const trusted67a57c04Events = r67a57c04Boundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedB42cfc55Events, r67a57c04Boundary)
         : trustedB42cfc55Events
+      // 第775–828行：协议 hash `1d7c737b…`（场景 v5）下 C16–C18 真实 invocation 2867cfa4（code 2147b95c，自动阶段七案通过，独立评审七案 PASS）。
+      // 按同一 armBindings 规则登记一段（774→828）；只加性认证，不改判。
+      const r2867cfa4Boundary = options.campaignMode === 'real'
+        ? protocol.historicalC162867cfa4Boundary : options.historicalC162867cfa4Boundary
+      const trusted2867cfa4Events = r2867cfa4Boundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trusted67a57c04Events, r2867cfa4Boundary)
+        : trusted67a57c04Events
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
       // 未登记 operations 的阶段在这里 fail closed。
@@ -559,7 +567,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trusted67a57c04Events
+          const superseded = index >= trustedHistoricalEvents && index < trusted2867cfa4Events
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)
