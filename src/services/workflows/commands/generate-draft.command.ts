@@ -400,8 +400,8 @@ function chapterLengthContractText(writingLanguage: WritingLanguage, targetUnits
 function finalizedFactPrecedenceText(writingLanguage: WritingLanguage): string {
   return promptLanguageText(
     writingLanguage,
-    `【定稿事实优先】\n本章蓝图、章节计划或必需事件的措辞与已定稿章节中确立的事实（包括作者在定稿中的最新更正）冲突时，以定稿事实为准：按与定稿事实一致的方式落实该条目（例如改变阻碍发生的方式或原因），不得把已撤回、取消或被取代的计划写成已执行；蓝图明确写成本章新决定的（如重新启用某计划），按新决定写。`,
-    `[Finalized facts take precedence]\nWhen the chapter blueprint, chapter plans, or the wording of required events conflict with facts established in finalized chapters (including the author's latest corrections in them), the finalized facts prevail: realize the item in a way consistent with them (for example, change how or why an obstacle happens) and never write a withdrawn, cancelled, or superseded plan as executed. If the blueprint explicitly states a new decision in this chapter (such as reviving a plan), write that new decision.`,
+    `【定稿事实优先】\n本章蓝图、章节计划或必需事件的措辞与已定稿章节中确立的事实（包括作者在定稿中的最新更正）冲突时，以定稿事实为准：按与定稿事实一致的方式落实该条目（例如改变阻碍发生的方式或原因），不得把已撤回、取消或被取代的计划写成已执行；蓝图明确写成本章新决定的（如重新启用某计划），按新决定写。本章紧接上一章结尾：作者没有写明跨日或时间间隔时，视为同一天内的紧接发展，上一章事件就发生在不久之前，不得写成“昨天”“昨夜”“前一天”。已定稿事件的时点以定稿原文和【本章写作方向】里的时点说明为准，本章提到这些事件时须按该时点换算（例如定稿写“黄昏”、本章时点为“同日深夜”，则那些事件发生在“黄昏时”“傍晚那会儿”；定稿写“傍晚”、本章时点为“次日上午”，则写“昨晚”“昨天傍晚”）。`,
+    `[Finalized facts take precedence]\nWhen the chapter blueprint, chapter plans, or the wording of required events conflict with facts established in finalized chapters (including the author's latest corrections in them), the finalized facts prevail: realize the item in a way consistent with them (for example, change how or why an obstacle happens) and never write a withdrawn, cancelled, or superseded plan as executed. If the blueprint explicitly states a new decision in this chapter (such as reviving a plan), write that new decision. This chapter follows directly on the previous chapter's ending: when the author states no day change or time gap, treat it as a continuation within the same day; events of the previous chapter happened a little while ago and must not be written as "yesterday", "last night", or "the day before". The time of finalized events is fixed by the finalized text and by the time stated in [Chapter brief]; when this chapter mentions those events, convert their time accordingly (for example, if the finalized text says "dusk" and this chapter is "late the same night", those events happened "at dusk" or "earlier this evening"; if it says "evening" and this chapter is "the next morning", write "last night" or "yesterday evening").`,
   )
 }
 
@@ -1655,9 +1655,17 @@ ${visibleTail}`,
     const authorMaterial = draftAuthorMaterialBlock(params.writingLanguage, params)
     const lengthContract = chapterLengthContractText(params.writingLanguage, params.targetChars)
     const executionCard = params.chapterExecutionCard ? `${params.chapterExecutionCard}\n\n` : ''
+    // 篇幅现状：告知模型待压缩正文当前长度与需删量（只说“须落入区间”时，模型常原样返回而压缩不足）。
+    // 压缩仅在 originalUnits > range.maximum 时触发，故 cutUnits > 0；ceilUnits 不超过 range.maximum 且必大于 aimUnits。
+    const aimUnits = Math.round(params.targetChars * 0.89)
+    const ceilUnits = Math.min(range.maximum, Math.max(Math.round(params.targetChars * 1.05), aimUnits + 1))
+    const cutUnits = originalUnits - aimUnits
+    const cutPercent = Math.round(cutUnits / originalUnits * 100)
     const condensePrompt = promptLanguageText(
       params.writingLanguage,
       `请把下面的本章正文压缩修订到可接受篇幅内，输出修订后的完整正文。
+
+【篇幅现状】待压缩正文当前约 ${originalUnits} 字，超出上限。请压缩到约 ${aimUnits} 字（绝对不得超过 ${ceilUnits} 字），即删去约 ${cutUnits} 字，约占全文 ${cutPercent}%。做法：逐段压缩，每段都删减描写、重复动作和心理，不要只删某一段。
 
 【硬性要求】
 - 修订后正文须在 ${range.minimum}–${range.maximum} 字之间，按下方篇幅合同写到约 ${Math.round(params.targetChars * 0.85)}–${params.targetChars} 字。
@@ -1672,6 +1680,8 @@ ${lengthContract}
 ${executionCard}【待压缩正文】
 ${params.draft}`,
       `Condense the chapter manuscript below into the acceptable length and output the complete revised manuscript.
+
+[Current length] The manuscript to condense is about ${originalUnits} words, above the ceiling. Condense it to about ${aimUnits} words (never more than ${ceilUnits} words), which means cutting about ${cutUnits} words, roughly ${cutPercent}% of the text. Method: condense paragraph by paragraph, trimming description, repeated actions, and repeated introspection in every paragraph rather than cutting only one part.
 
 [Requirements]
 - The revised manuscript must be between ${range.minimum} and ${range.maximum} words; following the length contract below, aim for about ${Math.round(params.targetChars * 0.85)}-${params.targetChars} words.

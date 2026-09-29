@@ -320,6 +320,24 @@ function leaseReceipt(overrides: Partial<ModelExecutionLeaseReceipt> = {}): Mode
   }
 }
 
+// 定稿事实优先段全文：末尾的“上一章紧接”时点规则与原段落同属一段（同一行，无新标题）。
+const FINALIZED_FACT_PRECEDENCE = {
+  'zh-CN': {
+    heading: '【定稿事实优先】',
+    rule: '本章蓝图、章节计划或必需事件的措辞与已定稿章节中确立的事实（包括作者在定稿中的最新更正）冲突时，以定稿事实为准：按与定稿事实一致的方式落实该条目（例如改变阻碍发生的方式或原因），不得把已撤回、取消或被取代的计划写成已执行；蓝图明确写成本章新决定的（如重新启用某计划），按新决定写。本章紧接上一章结尾：作者没有写明跨日或时间间隔时，视为同一天内的紧接发展，上一章事件就发生在不久之前，不得写成“昨天”“昨夜”“前一天”。已定稿事件的时点以定稿原文和【本章写作方向】里的时点说明为准，本章提到这些事件时须按该时点换算（例如定稿写“黄昏”、本章时点为“同日深夜”，则那些事件发生在“黄昏时”“傍晚那会儿”；定稿写“傍晚”、本章时点为“次日上午”，则写“昨晚”“昨天傍晚”）。',
+    timeRuleStart: '本章紧接上一章结尾：作者没有写明跨日或时间间隔时，视为同一天内的紧接发展',
+    timeRuleEnd: '则写“昨晚”“昨天傍晚”）。',
+    lengthContract: '【本章篇幅合同】',
+  },
+  'en-US': {
+    heading: '[Finalized facts take precedence]',
+    rule: "When the chapter blueprint, chapter plans, or the wording of required events conflict with facts established in finalized chapters (including the author's latest corrections in them), the finalized facts prevail: realize the item in a way consistent with them (for example, change how or why an obstacle happens) and never write a withdrawn, cancelled, or superseded plan as executed. If the blueprint explicitly states a new decision in this chapter (such as reviving a plan), write that new decision. This chapter follows directly on the previous chapter's ending: when the author states no day change or time gap, treat it as a continuation within the same day; events of the previous chapter happened a little while ago and must not be written as \"yesterday\", \"last night\", or \"the day before\". The time of finalized events is fixed by the finalized text and by the time stated in [Chapter brief]; when this chapter mentions those events, convert their time accordingly (for example, if the finalized text says \"dusk\" and this chapter is \"late the same night\", those events happened \"at dusk\" or \"earlier this evening\"; if it says \"evening\" and this chapter is \"the next morning\", write \"last night\" or \"yesterday evening\").",
+    timeRuleStart: "This chapter follows directly on the previous chapter's ending: when the author states no day change or time gap",
+    timeRuleEnd: '"earlier this evening"; if it says "evening" and this chapter is "the next morning", write "last night" or "yesterday evening").',
+    lengthContract: '[Chapter length contract]',
+  },
+} as const
+
 describe('GenerateDraftCommand generation runtime boundary', () => {
   const projectPath = 'C:\\novels\\generation-runtime'
 
@@ -2225,20 +2243,18 @@ ${headingPrefix}第3章：潮门
   it.each([
     {
       writingLanguage: 'zh-CN' as const,
-      heading: '【定稿事实优先】',
-      rule: '本章蓝图、章节计划或必需事件的措辞与已定稿章节中确立的事实（包括作者在定稿中的最新更正）冲突时，以定稿事实为准：按与定稿事实一致的方式落实该条目（例如改变阻碍发生的方式或原因），不得把已撤回、取消或被取代的计划写成已执行；蓝图明确写成本章新决定的（如重新启用某计划），按新决定写。',
+      ...FINALIZED_FACT_PRECEDENCE['zh-CN'],
       executionCard: '【本章执行卡（作者原文重列）】',
-      lengthContract: '【本章篇幅合同】',
+      continuationTail: '【已写正文末尾】',
     },
     {
       writingLanguage: 'en-US' as const,
-      heading: '[Finalized facts take precedence]',
-      rule: "When the chapter blueprint, chapter plans, or the wording of required events conflict with facts established in finalized chapters (including the author's latest corrections in them), the finalized facts prevail: realize the item in a way consistent with them (for example, change how or why an obstacle happens) and never write a withdrawn, cancelled, or superseded plan as executed. If the blueprint explicitly states a new decision in this chapter (such as reviving a plan), write that new decision.",
+      ...FINALIZED_FACT_PRECEDENCE['en-US'],
       executionCard: '[Current-chapter execution card (author text repeated verbatim)]',
-      lengthContract: '[Chapter length contract]',
+      continuationTail: '[End of existing manuscript]',
     },
   ])('puts the $writingLanguage finalized-fact precedence rule in initial and continuation requests', async ({
-    writingLanguage, heading, rule, executionCard, lengthContract,
+    writingLanguage, heading, rule, timeRuleStart, timeRuleEnd, executionCard, lengthContract, continuationTail,
   }) => {
     const runtime = fakeOutcomes(
       outcome('初'.repeat(100), 'length', 1),
@@ -2253,15 +2269,21 @@ ${headingPrefix}第3章：潮门
 
     expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-continuation'])
     const [initial, continuation] = runtime.complete.mock.calls.map(([task]) => task.messages.at(-1)!.content)
-    expect(initial).toContain(`${heading}\n${rule}`)
+    // 时点规则紧跟原段落末句，位于同一【定稿事实优先】段内（整段一行，规则之后才是下一段）。
+    expect(initial).toContain(`${heading}\n${rule}\n\n${lengthContract}`)
+    expect(initial).toContain(timeRuleStart)
+    expect(initial).toContain(timeRuleEnd)
     expect(initial.split(rule)).toHaveLength(2)
     // 初始请求：执行卡之后、篇幅合同之前。
     const ruleIndex = initial.indexOf(heading)
     expect(ruleIndex).toBeGreaterThan(initial.lastIndexOf(executionCard))
     expect(initial.indexOf(lengthContract)).toBeGreaterThan(ruleIndex)
     // 续写复用作者资料块，同一措辞只出现一次。
-    expect(continuation).toContain(`${heading}\n${rule}`)
+    expect(continuation).toContain(`${heading}\n${rule}\n\n${continuationTail}`)
+    expect(continuation).toContain(timeRuleStart)
+    expect(continuation).toContain(timeRuleEnd)
     expect(continuation.split(heading)).toHaveLength(2)
+    expect(continuation.split(rule)).toHaveLength(2)
   })
 
   describe('pre-draft finalized reconciliation', () => {
@@ -3152,11 +3174,18 @@ ${headingPrefix}第3章：潮门
     expect(condensePrompt).toContain('1400–2600')
     expect(condensePrompt).toContain('目标 2000 字（按汉字计，不含标点）；请写到约 1700–2000 字。2600 字是硬上限')
     // 与自动续写相同的作者资料块，随后才是篇幅合同、执行卡与待压缩正文。
-    const order = ['【硬性要求】', '【本章蓝图】', '【全局写作要求】\n压缩全局要求哨兵', '【文风要求】\n压缩文风哨兵', '【文风适用边界】',
+    // 篇幅现状块：目标 2000、待压缩 2700 单位 → 约 1780、不超过 2100、删 920（34%）。
+    expect(condensePrompt).toContain('【篇幅现状】待压缩正文当前约 2700 字，超出上限。请压缩到约 1780 字（绝对不得超过 2100 字），即删去约 920 字，约占全文 34%。')
+    const order = ['【篇幅现状】', '【硬性要求】', '【本章蓝图】', '【全局写作要求】\n压缩全局要求哨兵', '【文风要求】\n压缩文风哨兵', '【文风适用边界】',
       '【小说配置事实】', '【作者资料（保留原文', '【定稿事实优先】', '【本章篇幅合同】', '【本章执行卡（作者原文重列）】', '- 必需事件: 压缩必需事件哨兵', '【待压缩正文】']
       .map(marker => condensePrompt.indexOf(marker))
     expect(order.every(index => index >= 0)).toBe(true)
     expect(order).toEqual([...order].sort((left, right) => left - right))
+    // 压缩提示经共用作者资料块携带同一条时点规则，且仍在【定稿事实优先】段内（其后才是篇幅合同）。
+    const zhPrecedence = FINALIZED_FACT_PRECEDENCE['zh-CN']
+    expect(condensePrompt).toContain(`${zhPrecedence.heading}\n${zhPrecedence.rule}\n\n${zhPrecedence.lengthContract}`)
+    expect(condensePrompt).toContain(zhPrecedence.timeRuleStart)
+    expect(condensePrompt).toContain(zhPrecedence.timeRuleEnd)
     expect(condensePrompt.endsWith(`【待压缩正文】\n${draft}`)).toBe(true)
     expect(invoke).toHaveBeenCalledWith(
       'db:draft-create',
@@ -3179,11 +3208,37 @@ ${headingPrefix}第3章：潮门
     const condensePrompt = runtime.complete.mock.calls[1]![0].messages.at(-1)!.content
     expect(condensePrompt).toContain('between 630 and 1170 words')
     expect(condensePrompt).toContain('[Chapter length contract]')
-    const order = ['[Requirements]', '[Current chapter blueprint]', '[Project-wide writing guidance]', '[Writing style]', '[Novel configuration facts]',
+    // 篇幅现状块：目标 900、待压缩 1200 词 → 约 801、不超过 945、删 399（33%）。
+    expect(condensePrompt).toContain('[Current length] The manuscript to condense is about 1200 words, above the ceiling. Condense it to about 801 words (never more than 945 words), which means cutting about 399 words, roughly 33% of the text.')
+    const order = ['[Current length]', '[Requirements]', '[Current chapter blueprint]', '[Project-wide writing guidance]', '[Writing style]', '[Novel configuration facts]',
       '[Author material (verbatim', '[Finalized facts take precedence]', '[Chapter length contract]', '[Manuscript to condense]'].map(marker => condensePrompt.indexOf(marker))
     expect(order.every(index => index >= 0)).toBe(true)
     expect(order).toEqual([...order].sort((left, right) => left - right))
+    // 压缩提示经共用作者资料块携带同一条时点规则，且仍在 [Finalized facts take precedence] 段内。
+    const enPrecedence = FINALIZED_FACT_PRECEDENCE['en-US']
+    expect(condensePrompt).toContain(`${enPrecedence.heading}\n${enPrecedence.rule}\n\n${enPrecedence.lengthContract}`)
+    expect(condensePrompt).toContain(enPrecedence.timeRuleStart)
+    expect(condensePrompt).toContain(enPrecedence.timeRuleEnd)
     expect(condensePrompt).not.toContain('【')
+  })
+
+  it.each([
+    // 目标 900、待压缩 1300：约 801、不超过 945、删 499（38%）。
+    { label: 'target 900 with a 1300-unit draft', target: 900, draftUnits: 1300, condensedUnits: 850, aim: 801, ceil: 945, cut: 499, percent: 38 },
+    // 最小合法目标 100（上限 130）：ceilUnits=105 未被上限夹住，且严格大于 aimUnits=89；待压缩 140 → 删 51（36%）。
+    { label: 'the minimum target 100 with a 140-unit draft', target: 100, draftUnits: 140, condensedUnits: 100, aim: 89, ceil: 105, cut: 51, percent: 36 },
+  ])('states the current length, aim, ceiling and cut in the zh condense prompt: $label', async ({ target, draftUnits, condensedUnits, aim, ceil, cut, percent }) => {
+    const draft = `${'长'.repeat(draftUnits)}。`
+    const condensed = `${'缩'.repeat(condensedUnits)}。`
+    const runtime = fakeOutcomes(outcome(draft, 'stop', 1), outcome(condensed, 'stop', 2))
+    const { context, callbacks, command } = setup({ runtime, wordsTarget: target })
+
+    await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(condensed)
+
+    const condensePrompt = runtime.complete.mock.calls[1]![0].messages.at(-1)!.content
+    const block = `【篇幅现状】待压缩正文当前约 ${draftUnits} 字，超出上限。请压缩到约 ${aim} 字（绝对不得超过 ${ceil} 字），即删去约 ${cut} 字，约占全文 ${percent}%。做法：逐段压缩，每段都删减描写、重复动作和心理，不要只删某一段。`
+    expect(condensePrompt).toContain(`${block}\n\n【硬性要求】`)
+    expect(condensePrompt.indexOf('【篇幅现状】')).toBeGreaterThan(condensePrompt.indexOf('请把下面的本章正文压缩修订到可接受篇幅内'))
   })
 
   it.each([
