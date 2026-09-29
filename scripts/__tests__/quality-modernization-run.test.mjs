@@ -4096,8 +4096,8 @@ test('合成 transport 可复现 S14B post-UI 候选：超长首稿→唯一压�
   assert.match(driver, /BRIDGE_REVIEWED_TEST_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS \* 8 \+ 120_000/)
 })
 
-test('S14B post-UI pair：候选至多一次可核验压缩，末次为正式效果与保存来源；baseline 与任何未登记压缩一律拒绝', () => {
-  const dir = postUiEvidenceDir('post-ui-condense-pair-')
+/** post-UI 候选压缩的 pair 收据夹具：证据落在 dir；make 生成一臂收据，classify 走生产分类器。 */
+function postUiCondensePairKit(dir) {
   const { syntheticDraftText } = syntheticLengthHelpers()
   const scenario = productionScenario('early-budget', 'post-ui'), policy = scenario.attemptPolicy
   const overText = syntheticDraftText(countDraftUnits, POST_UI_RANGE.maximum + 90)
@@ -4109,15 +4109,27 @@ test('S14B post-UI pair：候选至多一次可核验压缩，末次为正式效
     fs.writeFileSync(outputPath, content)
     return { outputPath, contentHash: hash(content), ...extra }
   }
-  // saved/draftObservation/reviewedDraft 都指向 finalText；condenseOutput 是最后一次 draft attempt 的物理输出（默认同 finalText）。
-  const make = (arm, { condense = arm === 'candidate', primaryText = overText, finalText = condensedText, condenseOutput = finalText, tag = '' } = {}) => {
-    const finalDraft = artifact(`${arm}${tag}-final.txt`, finalText, { draftId: 7 })
-    const report = artifact(`${arm}${tag}-review.json`, review, { reviewId: 9, sourceHash: finalDraft.contentHash })
-    const source = { draftId: 7, contentHash: finalDraft.contentHash }
+  // finalText 是被审稿的正文（reviewedDraft.initial，即压缩稿）；condenseOutput 是最后一次 draft attempt 的物理输出（默认同 finalText）。
+  // 无修稿（默认）：initial == finalDraft == saved。revisedText 给定时为有修稿形状：saved/draftObservation/finalDraft 是修稿产物，与 initial 不同。
+  const items = [{ category: '事实', severity: 'error', description: '保管人错误', quote: '林澄' }]
+  const finalReviewText = JSON.stringify({ summary: '已修复', items: [{ category: '事实', severity: 'pass', description: '已修复' }] })
+  const make = (arm, { condense = arm === 'candidate', primaryText = overText, finalText = condensedText, condenseOutput = finalText,
+    revisedText = null, tag = '' } = {}) => {
+    const initial = artifact(`${arm}${tag}-final.txt`, finalText, { draftId: 7 })
+    const reviewText = revisedText === null ? review : JSON.stringify({ summary: '需修复', items })
+    const report = artifact(`${arm}${tag}-review.json`, reviewText, { reviewId: 9, sourceHash: initial.contentHash })
+    const revision = revisedText === null ? null : artifact(`${arm}${tag}-revision.txt`, revisedText)
+    const finalReview = revision && artifact(`${arm}${tag}-final-review.json`, finalReviewText, { sourceHash: revision.contentHash })
+    const confirmation = revision && artifact(`${arm}${tag}-confirmation.json`, JSON.stringify({ sourceReviewId: 9,
+      sourceDraft: { content: finalText }, items: items.map(item => ({ ...item, decision: 'apply', origin: 'ai' })) }))
+    const finalDraft = revision ?? initial
+    const source = { draftId: 7, contentHash: initial.contentHash }
     const steps = [[scenario.operations[0], 'directory', 'chapter-blueprint-directory', '{"blueprints":[]}'],
       [scenario.operations[1], 'draft', 'chapter-draft', condense ? primaryText : finalText],
       ...(condense ? [[scenario.operations[1], 'condense', 'chapter-draft-condense', condenseOutput]] : []),
-      [scenario.operations[2], 'review', policy.reviewRebuild.primaryPurpose, review]]
+      [scenario.operations[2], 'review', policy.reviewRebuild.primaryPurpose, reviewText],
+      ...(revision ? [[scenario.operations[3], 'refine', 'refine-from-review', revisedText],
+        [scenario.operations[4], 'final-review', 'review-chapter', finalReviewText]] : [])]
     const attempts = steps.map(([operation, label, purpose, content]) => {
       const saved = artifact(`${arm}${tag}-${label}.txt`, content)
       const identity = { attemptId: `${arm}${tag}-${label}`, runId: `run-${operation.kind}`,
@@ -4130,11 +4142,13 @@ test('S14B post-UI pair：候选至多一次可核验压缩，末次为正式效
           operation: operation.id, ...(operation.kind === 'review' ? { reviewSource: source } : {}),
           ...(arm === 'candidate' ? { actual: identity } : { baselineIpc: identity }) } }
     })
-    const operations = scenario.operations.slice(0, 3).map(operation => ({ operation: operation.id, kind: operation.kind,
+    const operations = scenario.operations.slice(0, revision ? 5 : 3).map(operation => ({ operation: operation.id, kind: operation.kind,
       ...(arm === 'candidate' ? { handle: { runId: `run-${operation.kind}`, rootActionId: `root-${operation.kind}` } } : {}),
-      ...(operation.kind === 'draft' ? { outputHash: finalDraft.contentHash } : {}),
-      ...(operation.kind === 'review' ? { outputHash: report.contentHash } : {}) }))
-    const units = countDraftUnits(finalText)
+      ...(operation.kind === 'draft' ? { outputHash: initial.contentHash } : {}),
+      ...(operation.kind === 'review' ? { outputHash: report.contentHash } : {}),
+      ...(operation.kind === 'refine' ? { outputHash: revision.contentHash } : {}),
+      ...(operation.kind === 'final-review' ? { outputHash: finalReview.contentHash } : {}) }))
+    const units = countDraftUnits(revisedText ?? finalText)
     const drafts = attempts.filter(attempt => attempt.binding.operation === POST_UI_DRAFT)
     return { invocationId, mode: 'real', arm, phase: 'early-budget', milestone: 'post-ui', caseId: '场景1/1',
       protocolRevision: protocol.decisionRevision, protocolHash: protocolBinding.protocolHash,
@@ -4144,14 +4158,23 @@ test('S14B post-UI pair：候选至多一次可核验压缩，末次为正式效
       attempts, operations, physicalModelRequests: attempts.length, syntheticDispatches: 0,
       saved: { chapterNumber: 1, targetUnits: POST_UI_TARGET, units, contentHash: finalDraft.contentHash },
       draftObservation: { chapterNumber: 1, targetUnits: POST_UI_TARGET, units, contentHash: finalDraft.contentHash, persisted: true },
-      reviewedDraft: { initial: finalDraft, review: report, finalDraft, selectedCount: 0, selectedItemsHash: hash([]), disposition: 'no-actionable-review' },
+      reviewedDraft: { initial, review: report, finalDraft, selectedCount: revision ? 1 : 0, selectedItemsHash: hash(revision ? items : []),
+        disposition: revision ? 'revised-once' : 'no-actionable-review',
+        ...(revision ? { confirmation, revision, finalReview, mergeHash: revision.contentHash } : {}) },
       ...(arm === 'candidate' ? { ownerTerminal: attempts.map(attempt => ({ attemptId: attempt.binding.actual.attemptId,
         artifactId: `artifact-${attempt.attemptId}`, textHash: attempt.visibleTextHash, finishReason: 'stop', purpose: attempt.binding.actual.purpose,
         hasFormalEffect: attempt.binding.operation !== POST_UI_DRAFT || attempt === drafts.at(-1) })) } : {}) }
   }
+  const baseline = make('baseline')
+  const classify = (value, other = baseline) => classifyProductionPair([other, value], { mode: 'real', phase: 'early-budget' })
+  return { make, classify, overText, condensedText, syntheticDraftText }
+}
+
+test('S14B post-UI pair：候选至多一次可核验压缩，末次压缩稿是被审稿（无修稿时即保存稿）；baseline 与任何未登记压缩一律拒绝', () => {
+  const dir = postUiEvidenceDir('post-ui-condense-pair-')
+  const { make, classify, overText, condensedText } = postUiCondensePairKit(dir)
   try {
-    const baseline = make('baseline'), candidate = make('candidate')
-    const classify = (value, other = baseline) => classifyProductionPair([other, value], { mode: 'real', phase: 'early-budget' })
+    const candidate = make('candidate')
     assert.equal(candidate.attempts.filter(attempt => attempt.binding.operation === POST_UI_DRAFT).length, 2)
     assert.ok(countDraftUnits(overText) > POST_UI_RANGE.maximum && candidate.draftObservation.units <= POST_UI_RANGE.maximum)
     // 合法：首稿超上限→恰好一次压缩→保存的是压缩稿；两臂其余链条不变，仍只到独立评审待判。
@@ -4162,7 +4185,7 @@ test('S14B post-UI pair：候选至多一次可核验压缩，末次为正式效
     const plain = make('candidate', { condense: false, tag: '-plain' })
     assert.equal(plain.attempts.filter(attempt => attempt.binding.operation === POST_UI_DRAFT).length, 1)
     assert.equal(classify(plain).pairFailure, undefined)
-    // 保存的正文按生产清洗（主进程 draft-visible-v1 组合）从末次压缩原文得出：仅清洗可去除的尾随空行不构成不一致。
+    // 压缩稿按生产清洗（主进程 draft-visible-v1 组合）从末次压缩原文得出：仅清洗可去除的尾随空行不构成不一致。
     assert.equal(classify(make('candidate', { condenseOutput: `${condensedText}\n\n\n`, tag: '-padded' })).pairFailure, undefined)
     // (b) 第三个 draft attempt；(c) baseline 出现压缩 attempt：数量校验直接拒绝。
     const third = structuredClone(candidate)
@@ -4207,7 +4230,7 @@ test('S14B post-UI pair：候选至多一次可核验压缩，末次为正式效
     fs.rmSync(candidate.attempts[1].outputPath)
     assert.equal(classify(candidate).pairFailure, 'PHYSICAL_OUTPUT_MISSING')
     fs.writeFileSync(candidate.attempts[1].outputPath, overText)
-    // (f) 保存/观察 hash 必须等于最后一次 draft attempt 的可见输出（生产清洗后；干净输出即其物理输出 hash）：保存的若是别的正文即拒绝。
+    // (f) 被审稿（无修稿时即保存稿）必须等于最后一次 draft attempt 的可见输出（生产清洗后；干净输出即其物理输出 hash）：是别的正文即拒绝。
     assert.equal(classify(make('candidate', { condenseOutput: `${condensedText}\n另一稿`, tag: '-other-saved' })).pairFailure, 'DRAFT_CONDENSE_SAVED_MISMATCH')
     // (g) 压缩后仍超限：产品保留原稿并以 GENERATION_DRAFT_LENGTH_OUT_OF_RANGE 停下——收据为失败且无保存/审修链，原失败语义保留。
     const stillOver = { ...structuredClone(candidate), status: 'failed', error: 'GENERATION_DRAFT_LENGTH_OUT_OF_RANGE',
@@ -4225,6 +4248,50 @@ test('S14B post-UI pair：候选至多一次可核验压缩，末次为正式效
   }
 })
 
+
+test('S14B post-UI pair 有修稿形状：被审稿（reviewedDraft.initial）是压缩稿，saved 是唯一修稿产物，二者不同也通过', () => {
+  const dir = postUiEvidenceDir('post-ui-condense-revised-')
+  const { make, classify, condensedText } = postUiCondensePairKit(dir)
+  try {
+    const revised = make('candidate', { revisedText: `${condensedText}
+林澄保管铜钥匙。`, tag: '-revised' })
+    assert.equal(revised.reviewedDraft.disposition, 'revised-once')
+    assert.notEqual(revised.saved.contentHash, revised.reviewedDraft.initial.contentHash)
+    assert.equal(revised.reviewedDraft.initial.contentHash, hash(condensedText))
+    const result = classify(revised)
+    assert.equal(result.pairFailure, undefined)
+    assert.equal(result.status, 'pending-independent-oracle-review')
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('S14B post-UI pair 有修稿形状：被审稿若是被压缩取代的首稿，即使修稿产物恰等于压缩输出也拒绝', () => {
+  const dir = postUiEvidenceDir('post-ui-condense-reviewed-original-')
+  const { make, classify, overText, condensedText } = postUiCondensePairKit(dir)
+  try {
+    const reviewedOriginal = make('candidate', { finalText: overText, condenseOutput: condensedText, revisedText: condensedText, tag: '-reviewed-original' })
+    assert.equal(reviewedOriginal.saved.contentHash, hash(condensedText), '修稿产物恰等于压缩输出')
+    assert.equal(reviewedOriginal.reviewedDraft.initial.contentHash, hash(overText), '但被审稿是未压缩的首稿')
+    assert.equal(classify(reviewedOriginal).pairFailure, 'DRAFT_CONDENSE_SAVED_MISMATCH')
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('S14B post-UI pair 有修稿形状：压缩是否落入范围按压缩稿判，最终稿（修稿产物）范围由原字数门另判', () => {
+  const dir = postUiEvidenceDir('post-ui-condense-range-')
+  const { make, classify, condensedText, syntheticDraftText } = postUiCondensePairKit(dir)
+  try {
+    // 修稿把最终稿推出范围：压缩本身合格，不得归因于压缩登记；仍因最终稿越界而技术门 failed。
+    const longRevision = make('candidate', { revisedText: syntheticDraftText(countDraftUnits, POST_UI_RANGE.maximum + 90), tag: '-long-revision' })
+    assert.ok(longRevision.draftObservation.units > POST_UI_RANGE.maximum)
+    const refinedOver = classify(longRevision)
+    assert.equal(refinedOver.pairFailure, undefined)
+    assert.deepEqual([refinedOver.status, refinedOver.qualityQualification], ['failed', 'automatic-gate-failed'])
+    // 压缩稿本身仍越界、修稿后才落入范围：压缩没有落入范围，不能因最终稿在范围内而放行。
+    const overCondensed = syntheticDraftText(countDraftUnits, POST_UI_RANGE.maximum + 30)
+    assert.ok(countDraftUnits(overCondensed) > POST_UI_RANGE.maximum)
+    assert.equal(classify(make('candidate', { finalText: overCondensed, revisedText: condensedText, tag: '-condensed-over' })).pairFailure,
+      'DRAFT_CONDENSE_NOT_REGISTERED')
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
 test('真实桥只公开本地字数门失败，并在失败收据保留持久化观察而非 saved', () => {
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/receipt-test-'))
   const file = path.join(dir, 'receipt.json')

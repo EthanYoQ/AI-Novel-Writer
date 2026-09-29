@@ -19,7 +19,7 @@ const { parseReviewGenerationResult } = await import(`data:text/javascript;base6
 const reconciliationBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/shared/draft-reconciliation.ts')],
   bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
 const { draftReconciliationBlock, parseDraftReconciliation } = await import(`data:text/javascript;base64,${Buffer.from(reconciliationBundle).toString('base64')}`)
-// 压缩后保存的正文由主进程按同一份生产清洗从末次压缩原文组合（generation-run-repository 的 draft-visible-v1 组合）。
+// 压缩稿（此后被审；未修稿时即保存的正文）由主进程按同一份生产清洗从末次压缩原文组合（generation-run-repository 的 draft-visible-v1 组合）。
 const draftVisibleBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/shared/draft-visible-text.ts')],
   bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
 const { sanitizeDraftText } = await import(`data:text/javascript;base64,${Buffer.from(draftVisibleBundle).toString('base64')}`)
@@ -674,7 +674,7 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
       }))) return 'ACTUAL_OWNER_ARTIFACT_MISMATCH'
   }
   if (condenseUsed) {
-    // 登记的唯一压缩：首稿→压缩同 run/root/项目/epoch；首稿 stop 且 hash 可复核、按生产计数超上限；正式效果与保存来源只在末次压缩。
+    // 登记的唯一压缩：首稿→压缩同 run/root/项目/epoch；首稿 stop 且 hash 可复核、按生产计数超上限；正式效果只在末次压缩，被审稿是压缩稿。
     const [primary, condense] = condenseMatches.map(attempt => attempt.binding.actual)
     if (primary?.purpose !== condensePolicy.primaryPurpose || condense?.purpose !== condensePolicy.condensePurpose
       || ['runId', 'rootActionId', 'projectId', 'epoch'].some(key => primary[key] !== condense[key]))
@@ -693,10 +693,14 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
         condensedOutput = output
       } catch { return 'PHYSICAL_OUTPUT_MISSING' }
     }
-    if (!verifiedCondensedDraft(condenseMatches[0], result)) return 'DRAFT_CONDENSE_NOT_REGISTERED'
-    // 保存的正文必须是最后一次 draft attempt 的可见输出（生产清洗后；干净输出即物理输出本身），而不是被压缩取代的首稿；
-    // saved、draftObservation 与审修链来源已由 validateReviewedDraft 强制同 hash，因此审稿源、后续保存与收据全部随之取自这份末次输出。
-    if (result.saved?.contentHash !== digest(sanitizeDraftText(condensedOutput))) return 'DRAFT_CONDENSE_SAVED_MISMATCH'
+    // 压缩稿 = 末次压缩输出经生产清洗（主进程 draft-visible-v1 组合同一规则；干净输出即物理输出本身）。
+    // 首稿是否超长按首稿物理输出判，压缩稿是否落入范围按压缩稿自身判；最终稿（有修稿时是修稿产物）的范围由原字数门另判。
+    const condensed = sanitizeDraftText(condensedOutput)
+    if (!verifiedCondensedDraft(condenseMatches[0], result, { ...result.draftObservation, units: countProjectedDraftUnits(condensed) }))
+      return 'DRAFT_CONDENSE_NOT_REGISTERED'
+    // 被审稿（reviewedDraft.initial）必须是压缩稿，而不是被压缩取代的首稿。无修稿时 initial == finalDraft == saved，同一条件
+    // 即覆盖保存的正文；有修稿时 saved 是唯一修稿产物，其来源由 validateReviewedDraft 的审修链校验。
+    if (result.reviewedDraft?.initial?.contentHash !== digest(condensed)) return 'DRAFT_CONDENSE_SAVED_MISMATCH'
   }
   const expectedPhysical = mode === 'real' ? result.attempts.length : 0
   const expectedSynthetic = mode === 'synthetic' ? result.attempts.length : 0
@@ -1259,11 +1263,13 @@ export function runProductionPhasePair(targets, options) {
 /**
  * 结果侧复核：保存的原始可见输出按 hash 读回，以 harness 同一 v3 计数（与生产 countDraftUnits 相同）
  * 超出上限。产品先清洗再计数，清洗只删不增，因此这是产品触发压缩的必要条件，不放宽任何门。
+ * `condensed` 是压缩稿的观察（须落入范围）；默认取 draftObservation——C16–C18 里保存稿即压缩稿。
+ * post-UI 有修稿时 draftObservation 是修稿产物，调用方须传压缩稿自己的观察。
  */
-function verifiedCondensedDraft(primary, result) {
+function verifiedCondensedDraft(primary, result, condensed = result?.draftObservation) {
   const observation = result?.draftObservation
   if (!CONTENT_HASH.test(primary?.visibleTextHash ?? '') || typeof primary.outputPath !== 'string'
-    || !withinTargetUnits(observation, result.protocolRevision, 'candidate')) return false
+    || !withinTargetUnits(condensed, result.protocolRevision, 'candidate')) return false
   try {
     const output = fs.readFileSync(primary.outputPath, 'utf8')
     return digest(output) === primary.visibleTextHash
