@@ -88,7 +88,7 @@ export default function HomeSidebarPanel() {
           variant="outline"
           className="w-full"
           onClick={async () => {
-            const folder = await ipc.invoke('dialog:select-folder')
+            const folder = await ipc.invoke('dialog:select-folder', 'project-open')
             if (folder) {
               openProject(folder)
             }

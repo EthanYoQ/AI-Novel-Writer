@@ -19,12 +19,16 @@ const mocks = vi.hoisted(() => ({
   closeProjectDatabase: vi.fn(),
   transaction: vi.fn((operation: () => void) => operation),
   writeJsonFile: vi.fn(),
-  recentProjects: [] as Array<{ name: string; path: string; updatedAt: string }>,
+  recentProjects: [] as Array<{ name: string; path: string; updatedAt: string; projectId?: string }>,
   rmSync: vi.fn(),
   removeDirectoryWithWindowsRetry: vi.fn(),
   showMessageBox: vi.fn(),
   importLegacyProjectCopy: vi.fn(),
   resolveExactPath: vi.fn(),
+  resolveDirectoryPath: vi.fn(),
+  issueDirectory: vi.fn(),
+  revokeWebContents: vi.fn(),
+  showOpenDialog: vi.fn(),
   projectAccess: {
     createProject: vi.fn(),
     probeExistingProject: vi.fn(),
@@ -54,7 +58,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('electron', () => ({
   dialog: {
-    showOpenDialog: vi.fn(),
+    showOpenDialog: mocks.showOpenDialog,
     showMessageBox: mocks.showMessageBox,
   },
   ipcMain: {
@@ -158,7 +162,8 @@ vi.mock('../../services/project-peek', () => ({
 }))
 
 vi.mock('../../services/external-file-grant-service', () => ({
-  externalFileGrants: { resolveExactPath: mocks.resolveExactPath },
+  externalFileGrants: { resolveExactPath: mocks.resolveExactPath, resolveDirectoryPath: mocks.resolveDirectoryPath,
+    issueDirectory: mocks.issueDirectory, revokeWebContents: mocks.revokeWebContents },
 }))
 
 vi.mock('../../services/legacy-project-copy-import', () => ({
@@ -166,6 +171,10 @@ vi.mock('../../services/legacy-project-copy-import', () => ({
 }))
 
 import { registerProjectController } from '../project-controller'
+
+function selectedProject(projectPath: string) {
+  return { grantId: `selected:${projectPath}`, displayName: path.basename(projectPath) }
+}
 
 function handler(channel: string): IpcHandler {
   const registered = mocks.handlers.get(channel)
@@ -216,10 +225,14 @@ beforeEach(() => {
     leaseId: 'lease-project-A',
   }
   mocks.recentProjects = []
+  mocks.resolveDirectoryPath.mockImplementation(({ grantId }: { grantId: string }) => {
+    if (!grantId?.startsWith('selected:')) throw new Error('外部文件授权不存在')
+    return grantId.slice(9)
+  })
   mocks.rmSync.mockImplementation(() => undefined)
   mocks.removeDirectoryWithWindowsRetry.mockImplementation(async () => undefined)
   mocks.writeJsonFile.mockImplementation((_target: string, data: unknown) => {
-    mocks.recentProjects = data as Array<{ name: string; path: string; updatedAt: string }>
+    mocks.recentProjects = data as Array<{ name: string; path: string; updatedAt: string; projectId?: string }>
   })
   mocks.projectAccess.createProject.mockImplementation((parentPath: string, name: string) => ({
     kind: 'manifest',
@@ -308,6 +321,58 @@ beforeEach(() => {
 })
 
 describe('project controller project identity', () => {
+  it('issues only purpose-specific chooser grants and treats chooser cancellation normally', async () => {
+    const sender = { id: 17, once: vi.fn() }
+    mocks.issueDirectory.mockReturnValue({ grantId: 'chosen-grant' })
+    mocks.showOpenDialog.mockResolvedValue({ canceled: false, filePaths: [projectB] })
+    for (const purpose of ['project-create', 'project-open'] as const) {
+      await expect(handler('dialog:select-folder')({ sender }, purpose)).resolves.toEqual({ grantId: 'chosen-grant', displayName: 'B' })
+      expect(mocks.issueDirectory).toHaveBeenLastCalledWith({
+        webContentsId: 17, directoryPath: projectB, operations: [purpose], ttlMs: 600_000,
+      })
+    }
+    await expect(handler('dialog:select-legacy-project')({ sender })).resolves.toEqual({ grantId: 'chosen-grant', displayName: 'B' })
+    expect(mocks.issueDirectory).toHaveBeenLastCalledWith({
+      webContentsId: 17, directoryPath: projectB, operations: ['legacy-import'], ttlMs: 600_000,
+    })
+    sender.once.mock.calls[0][1]()
+    expect(mocks.revokeWebContents).toHaveBeenCalledWith(17)
+    mocks.issueDirectory.mockClear()
+    mocks.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
+    await expect(handler('dialog:select-folder')({ sender }, 'project-open')).resolves.toBeNull()
+    await expect(handler('dialog:select-legacy-project')({ sender })).resolves.toBeNull()
+    expect(mocks.issueDirectory).not.toHaveBeenCalled()
+    await expect(handler('dialog:select-folder')({ sender }, 'write')).rejects.toThrow('用途无效')
+  })
+
+  it('rejects an unselected, unregistered raw project path before probing it', async () => {
+    await expect(handler('project:open')({ sender: { id: 17 } }, ordinaryDirectory, 'ungranted'))
+      .resolves.toMatchObject({ success: false })
+    expect(mocks.projectAccess.probeExistingProject).not.toHaveBeenCalled()
+  })
+
+  it('rejects raw creation paths and refused chooser grants before project access', async () => {
+    const sender = { sender: { id: 17 } }
+    await expect(handler('project:create')(sender, { name: 'B', path: projectB }, 'raw-create'))
+      .resolves.toMatchObject({ success: false })
+    expect(mocks.projectAccess.createProject).not.toHaveBeenCalled()
+    mocks.resolveDirectoryPath.mockImplementation(() => { throw new Error('外部文件授权已过期') })
+    await expect(handler('project:open')(sender, selectedProject(projectB), 'expired-open'))
+      .resolves.toMatchObject({ success: false })
+    expect(mocks.projectAccess.probeExistingProject).not.toHaveBeenCalled()
+  })
+
+  it('reopens persisted recent projects and rejects replaced identities before opening the database', async () => {
+    mocks.recentProjects = [{ name: 'B', path: projectB, updatedAt: '', projectId: 'project-B' }]
+    await expect(handler('project:open')({ sender: { id: 17 } }, projectB, 'history-open'))
+      .resolves.toMatchObject({ success: true })
+    expect(mocks.resolveDirectoryPath).not.toHaveBeenCalled()
+    mocks.initCalls = []
+    mocks.recentProjects = [{ name: 'B', path: projectD, updatedAt: '', projectId: 'different-id' }]
+    await expect(handler('project:open')({ sender: { id: 17 } }, projectD, 'history-replaced'))
+      .resolves.toMatchObject({ success: false })
+    expect(mocks.initCalls).not.toContain(projectD)
+  })
   it('issues opaque preview capabilities for valid recent projects', async () => {
     mocks.recentProjects = [{ name: 'Project B', path: projectB, updatedAt: '2026-09-21T00:00:00.000Z' }]
 
@@ -351,7 +416,7 @@ describe('project controller project identity', () => {
   })
 
   it('opens a probe-verified project with its stable identity and a fresh main-process lease', async () => {
-    await expect(handler('project:open')({}, projectB, 'request-open-B', projectA))
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB), 'request-open-B', projectA))
       .resolves.toMatchObject({
         success: true,
         project: {
@@ -374,7 +439,7 @@ describe('project controller project identity', () => {
 
   it('opens a complete imported target after its publish ACK is lost and adds it to recent projects', async () => {
     await expect(handler('project:recent-list')({})).resolves.toEqual([])
-    await expect(handler('project:open')({}, projectB, 'recover-imported-B', projectA))
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB), 'recover-imported-B', projectA))
       .resolves.toMatchObject({ success: true, project: { id: 'project-B', path: projectB } })
     expect(mocks.projectAccess.probeExistingProject).toHaveBeenCalledWith(projectB)
     expect(mocks.initCalls).toContain(projectB)
@@ -385,8 +450,8 @@ describe('project controller project identity', () => {
   })
 
   it('reopens the same project with a new lease while preserving its stable ProjectId', async () => {
-    const first = await handler('project:open')({}, projectB, 'request-open-B-1', projectA)
-    const second = await handler('project:open')({}, projectB, 'request-open-B-2', projectB)
+    const first = await handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB), 'request-open-B-1', projectA)
+    const second = await handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB), 'request-open-B-2', projectB)
 
     expect(first).toMatchObject({
       success: true,
@@ -405,7 +470,7 @@ describe('project controller project identity', () => {
       updatedAt: 'old',
     }]
 
-    await expect(handler('project:open')({}, projectA, 'request-open-A', projectA))
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectA), 'request-open-A', projectA))
       .resolves.toMatchObject({ success: true })
 
     expect(mocks.recentProjects).toEqual([
@@ -417,10 +482,10 @@ describe('project controller project identity', () => {
     let latestRequest: Promise<unknown> | null = null
     mocks.failCorePaths.add(projectD)
     mocks.onCoreGet = () => {
-      latestRequest = handler('project:open')({}, projectD, 'request-D', projectA)
+      latestRequest = handler('project:open')({ sender: { id: 17 } }, selectedProject(projectD), 'request-D', projectA)
     }
 
-    const olderRequest = handler('project:open')({}, projectB, 'request-B', projectA)
+    const olderRequest = handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB), 'request-B', projectA)
     const olderResult = await olderRequest
     expect(latestRequest).not.toBeNull()
     const latestResult = await latestRequest!
@@ -445,9 +510,7 @@ describe('project controller project identity', () => {
     mocks.existingPaths.add(ordinaryDirectory)
     mocks.failCorePaths.add(projectD)
 
-    await expect(handler('project:open')(
-      {},
-      projectD,
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectD),
       'request-open-D-untrusted-renderer-path',
       ordinaryDirectory,
     )).resolves.toMatchObject({
@@ -477,10 +540,10 @@ describe('project controller project identity', () => {
     })
 
     await expect(handler('project:create')(
-      {},
+      { sender: { id: 17 } },
       {
         name: 'C',
-        path: path.resolve('C:/projects'),
+        parentGrantId: `selected:${path.resolve('C:/projects')}`,
         genre: 'fantasy',
         targetAudience: 'all',
       },
@@ -508,10 +571,10 @@ describe('project controller project identity', () => {
     })
 
     await expect(handler('project:create')(
-      {},
+      { sender: { id: 17 } },
       {
         name: 'C',
-        path: path.resolve('C:/projects'),
+        parentGrantId: `selected:${path.resolve('C:/projects')}`,
         genre: 'fantasy',
         targetAudience: 'all',
       },
@@ -535,9 +598,7 @@ describe('project controller project identity', () => {
       })
     })
 
-    await expect(handler('project:open')(
-      {},
-      ordinaryDirectory,
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(ordinaryDirectory),
       'request-open-parent-directory',
       projectA,
     )).resolves.toMatchObject({
@@ -555,7 +616,7 @@ describe('project controller project identity', () => {
     mocks.projectAccess.probeExistingProject.mockImplementationOnce(() => {
       throw new Error('PROJECT_MIGRATION_NOT_QUALIFIED')
     })
-    await expect(handler('project:open')({}, ordinaryDirectory, 'request-unqualified-legacy')).resolves.toMatchObject({
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(ordinaryDirectory), 'request-unqualified-legacy')).resolves.toMatchObject({
       success: false,
       errorCode: 'PROJECT_ROOT_REQUIRED',
       error: '项目格式转换尚未具备安全迁移条件，已保留原项目且未写入。请保留当前文件，等待受验证的迁移入口。',
@@ -571,10 +632,10 @@ describe('project controller project identity', () => {
     mocks.activeSession = null
 
     const created = await handler('project:create')(
-      {},
+      { sender: { id: 17 } },
       {
         name: 'C',
-        path: path.resolve('C:/projects'),
+        parentGrantId: `selected:${path.resolve('C:/projects')}`,
         genre: 'fantasy',
         targetAudience: 'all',
       },
@@ -598,7 +659,7 @@ describe('project controller project identity', () => {
     })
 
     expect(mocks.createCalls).toEqual([projectC])
-    await expect(handler('project:open')({}, projectC, 'request-open-created-C'))
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectC), 'request-open-created-C'))
       .resolves.toMatchObject({
         success: true,
         project: {
@@ -622,10 +683,10 @@ describe('project controller project identity', () => {
     mocks.activeSession = null
 
     await expect(handler('project:create')(
-      {},
+      { sender: { id: 17 } },
       {
         name: 'English novel',
-        path: path.resolve('C:/projects'),
+        parentGrantId: `selected:${path.resolve('C:/projects')}`,
         genre: 'fantasy',
         targetAudience: 'all',
         writingLanguage: 'en-US',
@@ -645,10 +706,10 @@ describe('project controller project identity', () => {
     })
 
     await expect(handler('project:create')(
-      {},
+      { sender: { id: 17 } },
       {
         name: 'C',
-        path: path.resolve('C:/projects'),
+        parentGrantId: `selected:${path.resolve('C:/projects')}`,
         genre: 'fantasy',
         targetAudience: 'all',
       },
@@ -676,12 +737,10 @@ describe('project controller project identity', () => {
     mocks.existingPaths.add(ordinaryDirectory)
     mocks.failCorePaths.add(projectD)
     mocks.onCoreGet = () => {
-      latestRequest = handler('project:open')({}, projectD, 'request-D-after-B', projectA)
+      latestRequest = handler('project:open')({ sender: { id: 17 } }, selectedProject(projectD), 'request-D-after-B', projectA)
     }
 
-    const olderResult = await handler('project:open')(
-      {},
-      projectB,
+    const olderResult = await handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB),
       'request-B-before-D',
       ordinaryDirectory,
     )
@@ -714,9 +773,7 @@ describe('project controller project identity', () => {
       }
     }
 
-    await expect(handler('project:open')(
-      {},
-      projectD,
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectD),
       'request-open-D-expired-rollback',
       projectA,
     )).resolves.toMatchObject({
@@ -741,9 +798,7 @@ describe('project controller project identity', () => {
     mocks.existingPaths.add(ordinaryDirectory)
     mocks.failCorePaths.add(projectD)
 
-    await expect(handler('project:open')(
-      {},
-      projectD,
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectD),
       'request-open-D-no-rollback-snapshot',
       ordinaryDirectory,
     )).resolves.toMatchObject({
@@ -763,17 +818,17 @@ describe('project controller project identity', () => {
 
   it('serializes create with open and prevents a stale create from initializing a new database', async () => {
     const creating = handler('project:create')(
-      {},
+      { sender: { id: 17 } },
       {
         name: 'C',
-        path: path.resolve('C:/projects'),
+        parentGrantId: `selected:${path.resolve('C:/projects')}`,
         genre: 'fantasy',
         targetAudience: 'all',
       },
       'request-create-C',
       projectA,
     )
-    const opening = handler('project:open')({}, projectB, 'request-open-B', projectA)
+    const opening = handler('project:open')({ sender: { id: 17 } }, selectedProject(projectB), 'request-open-B', projectA)
 
     await expect(creating).resolves.toMatchObject({
       success: false,
@@ -795,9 +850,7 @@ describe('project controller project identity', () => {
     mocks.failCorePaths.add(projectD)
     mocks.failInitPaths.add(projectA)
 
-    await expect(handler('project:open')(
-      {},
-      projectD,
+    await expect(handler('project:open')({ sender: { id: 17 } }, selectedProject(projectD),
       'request-open-D',
       projectA,
     )).resolves.toMatchObject({
@@ -820,10 +873,10 @@ describe('project controller project identity', () => {
     mocks.failInitPaths.add(projectA)
 
     await expect(handler('project:create')(
-      {},
+      { sender: { id: 17 } },
       {
         name: 'C',
-        path: path.resolve('C:/projects'),
+        parentGrantId: `selected:${path.resolve('C:/projects')}`,
         genre: 'fantasy',
         targetAudience: 'all',
       },
@@ -1136,7 +1189,7 @@ describe('legacy project copy import target grant', () => {
   })
 
   it('imports into the main-process path resolved from the sender-bound chooser grant', async () => {
-    await expect(handler('project:import-legacy-copy')(sender, legacyRoot, 'restore-target-grant'))
+    await expect(handler('project:import-legacy-copy')(sender, `selected:${legacyRoot}`, 'restore-target-grant'))
       .resolves.toEqual({ state: 'ready', projectId: 'copy-id', targetRoot: grantedTarget })
 
     expect(mocks.resolveExactPath).toHaveBeenCalledExactlyOnceWith({
@@ -1150,9 +1203,9 @@ describe('legacy project copy import target grant', () => {
   it('never reaches the importer when the grant is refused or the argument is not a grant id', async () => {
     mocks.resolveExactPath.mockImplementation(() => { throw new Error('外部文件授权不属于当前窗口') })
 
-    await expect(handler('project:import-legacy-copy')(sender, legacyRoot, path.resolve('C:/attacker/raw-target')))
+    await expect(handler('project:import-legacy-copy')(sender, `selected:${legacyRoot}`, path.resolve('C:/attacker/raw-target')))
       .resolves.toEqual({ state: 'blocked', code: 'LEGACY_IMPORT_PATH_INVALID' })
-    await expect(handler('project:import-legacy-copy')(sender, legacyRoot, undefined))
+    await expect(handler('project:import-legacy-copy')(sender, `selected:${legacyRoot}`, undefined))
       .resolves.toEqual({ state: 'blocked', code: 'LEGACY_IMPORT_PATH_INVALID' })
 
     expect(mocks.importLegacyProjectCopy).not.toHaveBeenCalled()
@@ -1161,7 +1214,7 @@ describe('legacy project copy import target grant', () => {
   it('does not consume the grant when the user cancels the confirmation', async () => {
     mocks.showMessageBox.mockResolvedValue({ response: 0 })
 
-    await expect(handler('project:import-legacy-copy')(sender, legacyRoot, 'restore-target-grant'))
+    await expect(handler('project:import-legacy-copy')(sender, `selected:${legacyRoot}`, 'restore-target-grant'))
       .resolves.toEqual({ state: 'cancelled' })
 
     expect(mocks.resolveExactPath).not.toHaveBeenCalled()

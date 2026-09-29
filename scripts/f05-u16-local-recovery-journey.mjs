@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import yauzl from 'yauzl'
 import { verifyWindowsPackage, verifyPackagedBetterSqliteLoad, verifyPackagedLanceLoad } from './verify-win-package.mjs'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const scriptPath = fileURLToPath(import.meta.url)
@@ -248,7 +249,7 @@ async function main() {
     })
     await page.reload()
     await page.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
-    const created = await invoke(page, 'project:create', { path: profile.projects, name,
+    const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name,
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(created.success, true, created.error)
     const opened = await invoke(page, 'project:open', created.projectPath, randomUUID(), null)

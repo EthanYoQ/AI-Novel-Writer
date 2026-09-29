@@ -1,5 +1,6 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import fs from 'node:fs'
@@ -110,7 +111,7 @@ async function main() {
     const page = await app.firstWindow()
     await page.evaluate(() => { const key = 'ai-novel-writer-appearance'; const value = JSON.parse(localStorage.getItem(key) ?? '{}'); localStorage.setItem(key, JSON.stringify({ ...value, shellPreference: 'writer', revision: Number(value.revision ?? 0) + 1, origin: 'author' })) })
     await page.reload(); await assertWriter(page, 'writer-shell-selection')
-    project = await invoke(page, 'project:create', { path: profile.projects, name: projectName, genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
+    project = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: projectName, genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(project.success, true, project.error)
     const opened = await invoke(page, 'project:open', project.projectPath, randomUUID(), null)
     assert.equal(opened.success, true, opened.error)

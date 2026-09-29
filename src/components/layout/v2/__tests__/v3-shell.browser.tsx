@@ -112,7 +112,7 @@ it.each([
     await page.getByRole('button', { name: projectName, exact: true }).click()
   })
   expect(useLayoutStore.getState()).toMatchObject({ exportOpen: true, newProjectOpen: true })
-  expect(invoke).toHaveBeenCalledWith('dialog:select-folder')
+  expect(invoke).toHaveBeenCalledWith('dialog:select-folder', 'project-open')
 
   for (const width of [1200, 1280, 1320, 1324, 1325, 1388, 1389, 1440]) {
     await act(async () => {

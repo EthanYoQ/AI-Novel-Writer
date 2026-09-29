@@ -333,7 +333,7 @@ describe('project close lifecycle', () => {
       const result = operation === 'create'
         ? useProjectStore.getState().createProject({
             name: 'B',
-            path: 'C:\\novels',
+            parentGrantId: 'parent-grant',
             genre: '玄幻',
             targetAudience: '全龄',
           })
@@ -658,7 +658,7 @@ describe('project close lifecycle', () => {
 
     const creating = useProjectStore.getState().createProject({
       name: 'B',
-      path: 'C:\\novels',
+      parentGrantId: 'parent-grant',
       genre: '玄幻',
       targetAudience: '全龄',
     })
@@ -714,7 +714,7 @@ describe('project close lifecycle', () => {
 
     const creating = useProjectStore.getState().createProject({
       name: 'C',
-      path: 'C:\\novels',
+      parentGrantId: 'parent-grant',
       genre: '玄幻',
       targetAudience: '全龄',
     })
@@ -1156,7 +1156,7 @@ describe('project close lifecycle', () => {
     try {
       const creating = useProjectStore.getState().createProject({
         name: 'C',
-        path: 'C:\\novels',
+        parentGrantId: 'parent-grant',
         genre: '玄幻',
         targetAudience: '全龄',
       })
@@ -1214,7 +1214,7 @@ describe('project close lifecycle', () => {
 
     await expect(useProjectStore.getState().createProject({
       name: 'B',
-      path: 'C:\\novels',
+      parentGrantId: 'parent-grant',
       genre: '玄幻',
       targetAudience: '全龄',
     })).resolves.toBe(false)
@@ -1247,7 +1247,7 @@ describe('project close lifecycle', () => {
 
     await expect(useProjectStore.getState().createProject({
       name: 'B',
-      path: 'C:\\novels',
+      parentGrantId: 'parent-grant',
       genre: '玄幻',
       targetAudience: '全龄',
     })).resolves.toBe(false)
@@ -1276,7 +1276,7 @@ describe('project close lifecycle', () => {
 
     await expect(useProjectStore.getState().createProject({
       name: 'B',
-      path: 'C:\\novels',
+      parentGrantId: 'parent-grant',
       genre: '玄幻',
       targetAudience: '全龄',
     })).resolves.toBe(false)

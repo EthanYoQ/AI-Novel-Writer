@@ -1,5 +1,6 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
@@ -281,7 +282,7 @@ async function main() {
   let currentStep = 'fixture-persist'
   try {
     ({ app, page } = await launch())
-    const project = await invoke(page, 'project:create', { path: profile.projects, name: projectName,
+    const project = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: projectName,
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(project.success, true, project.error)
     projectPath = project.projectPath
@@ -379,7 +380,7 @@ async function main() {
     })
     const fixturePort = server.address().port
     ;({ app, page } = await launch(fixturePort))
-    const created = await invoke(page, 'project:create', { path: profile.projects, name: liveProjectName,
+    const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: liveProjectName,
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(created.success, true, created.error)
     liveProjectPath = created.projectPath
@@ -813,7 +814,7 @@ async function main() {
 
     currentStep = 'U12.A08-isolated-candidate'
     ;({ app, page } = await launch(fixturePort))
-    const candidateProject = await invoke(page, 'project:create', { path: profile.projects, name: candidateProjectName,
+    const candidateProject = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: candidateProjectName,
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(candidateProject.success, true, candidateProject.error)
     const candidateProjectPath = candidateProject.projectPath

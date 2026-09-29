@@ -1,5 +1,6 @@
 /* global process, Buffer */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import { createServer } from 'node:http'
@@ -243,7 +244,7 @@ async function runProfile(profile, endpoint) {
     // Setup may use IPC. The U16 action starts after V3 opens this project through its own control.
     currentStep = `${profile.name}:project-setup`
     const projectName = `U16-${profile.name}`
-    const created = await invoke(page, 'project:create', { path: profile.projects, name: projectName,
+    const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: projectName,
       genre: 'fixture', targetAudience: 'fixture', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(created.success, true, created.error)
     if (profile.name === 'a') {

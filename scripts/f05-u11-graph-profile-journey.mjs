@@ -1,5 +1,6 @@
 /* global process, Buffer */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
@@ -819,7 +820,7 @@ async function main() {
     assert.equal((await invoke(page, 'startup:get-state')).state, 'ready')
     await setWriter(page)
     currentStep = 'fixture-project'
-    const created = await invoke(page, 'project:create', { path: profile.projects, name: projectName,
+    const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: projectName,
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(created.success, true, created.error)
     projectPath = created.projectPath

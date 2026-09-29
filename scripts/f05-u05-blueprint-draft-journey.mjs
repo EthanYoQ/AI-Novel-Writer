@@ -1,5 +1,6 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
@@ -191,8 +192,8 @@ async function batchDialog(page, count, mode) {
   if (mode === 'auto_finalize') await dialog.getByRole('button', { name: '确认自动定稿并启动' }).click()
   await dialog.waitFor({ state: 'hidden', timeout })
 }
-async function createConfiguredProject(page, name) {
-  const created = await invoke(page, 'project:create', { path: profile.projects, name,
+async function createConfiguredProject(app, page, name) {
+  const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name,
     genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
   assert.equal(created.success, true, created.error)
   const opened = await invoke(page, 'project:open', created.projectPath, randomUUID(), null)
@@ -293,7 +294,7 @@ async function main() {
     assert.equal((await invoke(page, 'llm:set-default-model', model.id)).success, true)
     await selectWriter(page)
     if (!selectedAction) {
-    ;({ created: project, session: context } = await createConfiguredProject(page, projectName))
+    ;({ created: project, session: context } = await createConfiguredProject(app, page, projectName))
 
     mark('U05.A01-single-blueprint')
     await requestBlueprints(page, 1)
@@ -370,7 +371,7 @@ async function main() {
       { draftId: drafts[0].id, chapterNumber: drafts[0].chapterNumber, units: prose.length, providerCalls: draftRequests.length })
 
     mark('U05.A04-batch-review')
-    ;({ created: project, session: context } = await createConfiguredProject(page, 'U05B'))
+    ;({ created: project, session: context } = await createConfiguredProject(app, page, 'U05B'))
     fixture.mode = 'blueprint'
     fixture.blueprintQueue = [1, 2]
     const blueprintRequestOffset = fixture.chapters.length
@@ -434,7 +435,7 @@ async function main() {
         requestedOutputTokens: budgetReceipts.map(row => row.requestedOutputTokens) })
 
     mark('U05.A06-stop-batch')
-    ;({ created: project, session: context } = await createConfiguredProject(page, 'U05C'))
+    ;({ created: project, session: context } = await createConfiguredProject(app, page, 'U05C'))
     fixture.mode = 'blueprint'
     fixture.blueprintQueue = [1, 2]
     await requestBlueprints(page, 2)
@@ -466,7 +467,7 @@ async function main() {
     }
 
     mark('U05.A07-failure-stops-before-next')
-    ;({ created: project, session: context } = await createConfiguredProject(page, 'U05D'))
+    ;({ created: project, session: context } = await createConfiguredProject(app, page, 'U05D'))
     fixture.mode = 'blueprint'
     fixture.blueprintQueue = [1, 2]
     await requestBlueprints(page, 2)
@@ -527,7 +528,7 @@ async function main() {
 
     if (!selectedAction) {
     mark('U05.A05-auto-finalize')
-    ;({ created: project, session: context } = await createConfiguredProject(page, 'U05E'))
+    ;({ created: project, session: context } = await createConfiguredProject(app, page, 'U05E'))
     fixture.mode = 'blueprint'
     fixture.blueprintQueue = [1]
     await requestBlueprints(page, 1)

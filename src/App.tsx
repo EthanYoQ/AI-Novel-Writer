@@ -235,7 +235,7 @@ export default function App() {
         useLayoutStore.getState().openNewProject()
       } else if (e.key === 'o' || e.key === 'O') {
         e.preventDefault()
-        const folder = await ipc.invoke('dialog:select-folder')
+        const folder = await ipc.invoke('dialog:select-folder', 'project-open')
         if (folder) {
           useProjectStore.getState().openProject(folder)
         }

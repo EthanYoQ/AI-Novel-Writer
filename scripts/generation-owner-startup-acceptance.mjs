@@ -1,5 +1,6 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -70,7 +71,7 @@ if (process.argv.includes('--help')) {
   try {
     let session = await launch(), projectPath, projectId, oldHandle, firstArtifactId, firstLedger
     try {
-      const created = await invoke(session.page, 'project:create', { path: roots.projects, name: '合成生成验收', genre: '合成测试', targetAudience: '合成读者', writingLanguage: 'zh-CN' }, randomUUID())
+      const created = await invoke(session.page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(session.app, session.page, roots.projects)).grantId, name: '合成生成验收', genre: '合成测试', targetAudience: '合成读者', writingLanguage: 'zh-CN' }, randomUUID())
       assert.equal(created.success, true, created.error)
       projectPath = created.projectPath; projectId = created.projectId
       const opened = await invoke(session.page, 'project:open', projectPath, randomUUID())

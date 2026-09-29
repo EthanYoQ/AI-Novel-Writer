@@ -210,7 +210,7 @@ export default function TitleBar() {
   }, [zoomIn, zoomOut, zoomReset])
 
   const handleOpenProject = async () => {
-    const folder = await ipc.invoke('dialog:select-folder')
+    const folder = await ipc.invoke('dialog:select-folder', 'project-open')
     if (folder) {
       openProject(folder)
     }

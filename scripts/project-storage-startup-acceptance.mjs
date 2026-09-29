@@ -1,5 +1,6 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -157,7 +158,7 @@ if (process.argv.includes('--help')) {
     let session = await launch(profiles.A)
     try {
       const created = await call(session.page, 'project:create', {
-        path: profiles.A.projects, name: 'A', genre: '合成测试', targetAudience: 'fixture', writingLanguage: 'zh-CN',
+        parentGrantId: (await chooseProjectDirectoryGrant(session.app, session.page, profiles.A.projects)).grantId, name: 'A', genre: '合成测试', targetAudience: 'fixture', writingLanguage: 'zh-CN',
       }, randomUUID(), null)
       assert.equal(created.success, true, created.error)
       sourceProjectPath = created.projectPath

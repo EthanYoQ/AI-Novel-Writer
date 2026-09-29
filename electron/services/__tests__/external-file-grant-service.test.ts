@@ -5,6 +5,34 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { ExternalFileGrantService } from '../external-file-grant-service'
 
 describe('ExternalFileGrantService', () => {
+  it('binds a selected project directory to its sender, operation, root, expiry and one use', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-project-grant-'))
+    let now = 1_000
+    const grants = new ExternalFileGrantService({ now: () => now })
+    const issue = (operation: 'project-create' | 'project-open' | 'legacy-import') => grants.issueDirectory({
+      webContentsId: 17, directoryPath: root, operations: [operation], ttlMs: 500,
+    }).grantId
+    try {
+      for (const operation of ['project-create', 'project-open', 'legacy-import'] as const) {
+        const request = { grantId: issue(operation), webContentsId: 17, operation }
+        expect(() => grants.resolveDirectoryPath({ ...request, grantId: root })).toThrow('不存在')
+        expect(() => grants.resolveDirectoryPath({ ...request, webContentsId: 18 })).toThrow('不属于')
+        expect(() => grants.resolveDirectoryPath({ ...request, operation: 'write' })).toThrow('未授予')
+        expect(() => grants.resolveDirectoryPath({ ...request, operation: operation === 'project-open' ? 'legacy-import' : 'project-open' })).toThrow('未授予')
+        expect(grants.resolveDirectoryPath(request)).toBe(fs.realpathSync.native(root))
+        expect(() => grants.resolveDirectoryPath(request)).toThrow('不存在')
+      }
+      const expired = issue('project-open')
+      now += 500
+      expect(() => grants.resolveDirectoryPath({ grantId: expired, webContentsId: 17, operation: 'project-open' })).toThrow('过期')
+      const file = path.join(root, 'book.txt')
+      fs.writeFileSync(file, 'book')
+      const fileGrant = grants.issueFile({ webContentsId: 17, filePath: file, operations: ['project-open'], ttlMs: 500 })
+      expect(() => grants.resolveDirectoryPath({ grantId: fileGrant.grantId, webContentsId: 17, operation: 'project-open' })).toThrow('范围不符')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
   it('拒绝伪造的授权标识，不能借此读取用户选择的文件', () => {
     const grants = new ExternalFileGrantService({
       now: () => 1_000,

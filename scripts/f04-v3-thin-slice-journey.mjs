@@ -1,5 +1,6 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
@@ -80,7 +81,7 @@ async function main() {
     if (await startupNotice.isVisible()) await startupNotice.getByRole('button', { name: '知道了', exact: true }).click()
     await page.screenshot({ path: path.join(receiptDir, 'v3-shelf-empty.png') })
     currentStep = 'fixture-create-via-IPC'
-    const project = await invoke(page, 'project:create', { path: profile.projects, name: projectName,
+    const project = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: projectName,
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(project.success, true, project.error)
     projectPath = project.projectPath

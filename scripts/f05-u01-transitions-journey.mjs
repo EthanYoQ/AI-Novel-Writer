@@ -1,5 +1,6 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
@@ -244,7 +245,7 @@ async function main() {
     const projects = {}
     const projectIds = {}
     for (const key of ['a', 'b']) {
-      const created = await invoke(session.page, 'project:create', { path: roots.projects, name: names[key],
+      const created = await invoke(session.page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(session.app, session.page, roots.projects)).grantId, name: names[key],
         genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID())
       assert.equal(created.success, true, created.error)
       projects[key] = created.projectPath
@@ -421,7 +422,20 @@ async function main() {
     await page.getByRole('button', { name: '新建作品', exact: true }).click()
     const createDialog = page.getByRole('dialog', { name: '新建小说项目' })
     await createDialog.getByPlaceholder('如：斗破苍穹').fill(names.c)
-    await createDialog.getByPlaceholder('选择项目保存目录').fill(roots.projects)
+    await session.app.evaluate(({ dialog }, selectedPath) => {
+      globalThis.__u01PickerOriginal = dialog.showOpenDialog
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] })
+    }, roots.projects)
+    try {
+      await createDialog.getByRole('button', { name: '选择', exact: true }).click()
+      await page.waitForFunction(displayName => document.querySelector('input[placeholder="选择项目保存目录"]')?.value === displayName,
+        path.basename(roots.projects))
+    } finally {
+      await session.app.evaluate(({ dialog }) => {
+        dialog.showOpenDialog = globalThis.__u01PickerOriginal
+        delete globalThis.__u01PickerOriginal
+      })
+    }
     await createDialog.getByRole('button', { name: '创建项目', exact: true }).click()
     const expectedC = path.join(roots.projects, names.c)
     await page.locator('.writer-project-tree').getByText(names.c, { exact: true }).waitFor({ state: 'visible' })
@@ -436,23 +450,17 @@ async function main() {
 
     currentStep = 'U01.A02'
     await home(page)
-    await session.app.evaluate(({ ipcMain }, selectedPath) => {
-      const channel = 'dialog:select-folder'
-      const original = ipcMain._invokeHandlers.get(channel)
-      if (!original) throw new Error('folder picker IPC handler missing')
-      globalThis.__u01PickerHandler = original
-      ipcMain.removeHandler(channel)
-      ipcMain.handle(channel, async () => selectedPath)
+    await session.app.evaluate(({ dialog }, selectedPath) => {
+      globalThis.__u01PickerOriginal = dialog.showOpenDialog
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] })
     }, projects.a)
     try {
       await page.getByRole('button', { name: '打开作品', exact: true }).click()
       await page.locator('.writer-project-tree').getByText(names.a, { exact: true }).waitFor({ state: 'visible' })
     } finally {
-      await session.app.evaluate(({ ipcMain }) => {
-        const original = globalThis.__u01PickerHandler
-        ipcMain.removeHandler('dialog:select-folder')
-        ipcMain.handle('dialog:select-folder', original)
-        delete globalThis.__u01PickerHandler
+      await session.app.evaluate(({ dialog }) => {
+        dialog.showOpenDialog = globalThis.__u01PickerOriginal
+        delete globalThis.__u01PickerOriginal
       })
     }
     await assertProjectFacts(page, projects.a, fixtureConfig.a, fixtureBody.a)

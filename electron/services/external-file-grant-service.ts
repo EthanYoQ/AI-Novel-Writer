@@ -13,6 +13,7 @@ import {
  * 不能借此传入任意绝对路径。
  */
 export type ExternalFileGrantOperation = 'read' | 'list' | 'write' | 'create' | 'show'
+  | 'project-create' | 'project-open' | 'legacy-import'
 
 export interface ExternalFileGrantRequest {
   grantId: string
@@ -244,6 +245,21 @@ export class ExternalFileGrantService {
       throw new Error('外部文件授权目标已变化')
     }
     return path.join(target.rootPath, target.relativePath)
+  }
+
+  /** Project services own their internal paths; only the selected root crosses this boundary. */
+  resolveDirectoryPath(request: Omit<ExternalFileGrantRequest, 'relativePath'>): string {
+    const target = this.revalidate(request)
+    if (target.scope !== 'directory' || target.relativePath !== '') {
+      throw new Error('外部文件授权范围不符')
+    }
+    const current = captureSecureRootIdentity(target.rootPath)
+    if (current.volumeSerialNumber !== target.rootIdentity.volumeSerialNumber
+      || current.fileIndex !== target.rootIdentity.fileIndex) {
+      throw new Error('外部文件授权目标已变化')
+    }
+    this.resolve(request)
+    return target.rootPath
   }
 
   private resolveRequest(

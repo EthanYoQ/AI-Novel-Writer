@@ -500,7 +500,7 @@ describe('registerCloudBackupController', () => {
     })
     expect(f.deps.readRestoredProjectName).toHaveBeenCalledWith(restored.path)
     expect(f.deps.registerRecentProject).toHaveBeenCalledWith({
-      name: '恢复后的真实书名', path: restored.path, updatedAt: '2026-09-21T01:00:00.000Z',
+      name: '恢复后的真实书名', path: restored.path, projectId: TARGET_PROJECT, updatedAt: '2026-09-21T01:00:00.000Z',
     })
     expect(result).toMatchObject({
       success: true, state: 'binding-not-saved', bindingSaved: false, binding: null, recentProjectUpdated: true,

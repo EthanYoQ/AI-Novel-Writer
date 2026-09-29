@@ -246,11 +246,19 @@ export type SourceDraftGuardErrorCode = 'SOURCE_DRAFT_CHANGED'
 // ===== 项目管理 =====
 export interface CreateProjectConfig {
   name: string
-  path: string
+  parentGrantId: string
   genre: string
   targetAudience: string
   writingLanguage?: WritingLanguage
 }
+
+export interface ProjectDirectoryGrant {
+  grantId: string
+  displayName: string
+}
+
+/** Strings identify main-owned recent projects; new selections require a grant. */
+export type ProjectOpenTarget = string | ProjectDirectoryGrant
 
 /** 目标位置只以 dialog:select-project-archive-export 签发的授权标识表达；渲染进程不得携带路径。 */
 export interface PortableProjectExportRequest {
@@ -317,10 +325,10 @@ export type PortableProjectOperationFailure = {
 export interface ProjectChannels {
   'dialog:select-legacy-project': {
     args: []
-    return: string | null
+    return: ProjectDirectoryGrant | null
   }
   'project:import-legacy-copy': {
-    args: [sourceRoot: string, targetGrantId: string]
+    args: [sourceGrantId: string, targetGrantId: string]
     return: { state: 'ready'; projectId: string; targetRoot: string; warning?: string }
       | { state: 'cancelled' }
       | { state: 'blocked'; code: string }
@@ -352,7 +360,7 @@ export interface ProjectChannels {
     }
   }
   'project:open': {
-    args: [projectPath: string, requestToken: string, rendererProjectPath: string | null]
+    args: [target: ProjectOpenTarget, requestToken: string, rendererProjectPath: string | null]
     return: {
       success: boolean
       project: ProjectData | null
@@ -439,8 +447,8 @@ export interface ProjectChannels {
     return: { success: boolean; error?: string }
   }
   'dialog:select-folder': {
-    args: []
-    return: string | null
+    args: [purpose: 'project-create' | 'project-open']
+    return: ProjectDirectoryGrant | null
   }
 }
 

@@ -223,6 +223,7 @@ export function registerProjectArchiveController(
         registerRecentProject({
           name: readRestoredProjectName(receipt.targetProjectRoot),
           path: receipt.targetProjectRoot,
+          projectId: receipt.targetProjectId,
           updatedAt: new Date().toISOString(),
         })
         return { success: true as const, receipt, recentProjectUpdated: true }

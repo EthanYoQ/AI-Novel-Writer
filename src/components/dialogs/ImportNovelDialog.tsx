@@ -1,3 +1,4 @@
+import type { ProjectDirectoryGrant } from '../../shared/ipc-channels'
 import { useState, useCallback, useEffect } from 'react'
 import { FileUp, FolderOpen, BookOpen, FileText, Zap, Clock, AlertTriangle, RotateCcw } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
@@ -44,7 +45,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
 
   // 表单状态
   const [name, setName] = useState('')
-  const [savePath, setSavePath] = useState('')
+  const [savePath, setSavePath] = useState<ProjectDirectoryGrant | null>(null)
   const [targetMode, setTargetMode] = useState<'new' | 'current'>('new')
   const [purpose, setPurpose] = useState<ImportPurpose>('reference')
 
@@ -172,17 +173,18 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
       let project = useProjectStore.getState().currentProject
       let projectSession = captureProjectSession(project)
       if (targetMode === 'new' && !explicitRun) {
-        if (!name.trim() || !savePath.trim()) throw new Error(text(
+        if (!name.trim() || !savePath) throw new Error(text(
           '请先填写新项目名称和保存位置，再选择小说文件。',
           'Enter the new project name and save location before choosing novel files.',
         ))
         const success = await createProject({
           name: name.trim(),
-          path: savePath.trim(),
+          parentGrantId: savePath.grantId,
           genre: '',
           targetAudience: '',
           writingLanguage: locale,
         })
+        setSavePath(null)
         if (!success) return
         project = useProjectStore.getState().currentProject
         projectSession = captureProjectSession(project)
@@ -248,7 +250,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
 
   /** 选择保存路径 */
   const handleSelectFolder = useCallback(async () => {
-    const selected = await ipc.invoke('dialog:select-folder')
+    const selected = await ipc.invoke('dialog:select-folder', 'project-create')
     if (selected) setSavePath(selected)
   }, [])
 
@@ -860,8 +862,8 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 <Label>{text('保存位置', 'Save location')}</Label>
                 <div className="flex gap-2">
                   <Input
-                    value={savePath}
-                    onChange={(e) => setSavePath(e.target.value)}
+                    value={savePath?.displayName ?? ''}
+                    readOnly
                     placeholder={text('选择项目保存目录', 'Choose a project folder')}
                     className="flex-1"
                   />

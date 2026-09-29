@@ -1,5 +1,6 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
@@ -275,7 +276,7 @@ async function main() {
     let session = await launch(profiles.A)
     try {
       const created = await call(session.page, 'project:create', {
-        path: profiles.A.projects,
+        parentGrantId: (await chooseProjectDirectoryGrant(session.app, session.page, profiles.A.projects)).grantId,
         name: 'B02-A',
         genre: '合成测试',
         targetAudience: 'fixture',

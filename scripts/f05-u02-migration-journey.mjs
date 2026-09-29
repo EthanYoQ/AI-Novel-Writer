@@ -1,5 +1,6 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -96,9 +97,10 @@ async function migrate(name, legacyShell, expectedPreference, prepare) {
   let session = await launch(roots)
   try {
     if (name === 'v1' && !currentMode) {
-      const result = await session.page.evaluate(({ projectParent, requestToken }) => window.aiNovelAPI.invoke('project:create',
-        { path: projectParent, name: '迁移前作品', genre: '合成测试', targetAudience: '合成读者', writingLanguage: 'zh-CN' },
-        requestToken), { projectParent, requestToken: randomUUID() })
+      const parentGrantId = (await chooseProjectDirectoryGrant(session.app, session.page, projectParent)).grantId
+      const result = await session.page.evaluate(({ parentGrantId, requestToken }) => window.aiNovelAPI.invoke('project:create',
+        { parentGrantId, name: '迁移前作品', genre: '合成测试', targetAudience: '合成读者', writingLanguage: 'zh-CN' },
+        requestToken), { parentGrantId, requestToken: randomUUID() })
       assert.equal(result.success, true, result.error)
       projectPath = result.projectPath
       assert(fs.existsSync(path.join(projectPath, '.ai-novel', 'project.json')))

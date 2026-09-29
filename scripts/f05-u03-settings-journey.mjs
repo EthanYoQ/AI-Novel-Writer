@@ -1,5 +1,6 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
@@ -223,7 +224,7 @@ async function main() {
     await page.reload()
     await writer(page).waitFor({ state: 'visible' })
     await dismissStartupNotice(page)
-    const created = await invoke(page, 'project:create', { path: profile.projects, name: 'U03-settings',
+    const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: 'U03-settings',
       genre: 'fixture', targetAudience: 'fixture', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(created.success, true, created.error)
     await page.reload()

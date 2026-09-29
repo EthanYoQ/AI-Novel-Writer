@@ -1,5 +1,6 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
@@ -536,7 +537,7 @@ async function performanceMain() {
       const body = ('春'.repeat(100) + '\n').repeat(units / 100).trimEnd()
       assert.equal((body.match(/春/g) ?? []).length, units)
       fixtureBodies[units] = body
-      const created = await invoke(page, 'project:create', { path: profile.projects, name,
+      const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name,
         genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
       assert.equal(created.success, true, created.error)
       const opened = await invoke(page, 'project:open', created.projectPath, randomUUID(), null)
@@ -1027,7 +1028,7 @@ async function imeMain() {
     assert.equal(git('diff', '--name-only', '--', ...productInputs), '', 'dirty product input changed since fixed package')
     currentStep = 'fixture'
     ;({ app, page } = await launch())
-    const created = await invoke(page, 'project:create', { path: profile.projects, name: 'U06-IME',
+    const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: 'U06-IME',
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(created.success, true, created.error)
     projectPath = created.projectPath
@@ -1132,7 +1133,7 @@ async function main() {
     ;({ app, page } = await launch())
     const notice = page.locator('[role="status"].fixed.inset-x-0.top-10')
     if (await notice.isVisible()) await notice.getByRole('button', { name: '知道了', exact: true }).click()
-    const created = await invoke(page, 'project:create', { path: profile.projects, name: projectName,
+    const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: projectName,
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(created.success, true, created.error)
     projectPath = created.projectPath

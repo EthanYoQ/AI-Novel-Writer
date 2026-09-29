@@ -7,6 +7,7 @@ import {
   ProjectData,
   type CreateProjectConfig,
   type ProjectSessionContext,
+  type ProjectOpenTarget,
 } from '../../src/shared/ipc-channels'
 import { DIR_PROMPTS } from '../../src/shared/project-paths'
 import { sameProjectPathKey } from '../../src/shared/project-session-context'
@@ -55,6 +56,7 @@ export interface RecentProject {
   name: string
   path: string
   updatedAt: string
+  projectId?: string
 }
 
 let latestProjectOpenRequestToken: string | null = null
@@ -315,20 +317,29 @@ export interface ProjectControllerOptions {
 }
 
 export function registerProjectController(options: ProjectControllerOptions = {}) {
-  ipcMain.handle('dialog:select-legacy-project', async () => {
+  const issueDirectoryGrant = (event: Electron.IpcMainInvokeEvent, directoryPath: string,
+    operation: 'project-create' | 'project-open' | 'legacy-import') => {
+    const grant = externalFileGrants.issueDirectory({
+      webContentsId: event.sender.id, directoryPath, operations: [operation], ttlMs: 10 * 60 * 1_000,
+    })
+    event.sender.once('destroyed', () => externalFileGrants.revokeWebContents(event.sender.id))
+    return { grantId: grant.grantId, displayName: path.basename(directoryPath) }
+  }
+  ipcMain.handle('dialog:select-legacy-project', async (event) => {
     const result = await dialog.showOpenDialog({
       title: '选择旧版小说项目文件夹',
       properties: ['openDirectory'],
     })
-    return result.canceled ? null : result.filePaths[0] ?? null
+    return result.canceled || !result.filePaths[0] ? null
+      : issueDirectoryGrant(event, result.filePaths[0], 'legacy-import')
   })
 
   ipcMain.handle('project:import-legacy-copy', async (
     event: { sender: { id: number } },
-    sourceRoot: string,
+    sourceGrantId: string,
     targetGrantId: string,
   ) => {
-    if (typeof sourceRoot !== 'string' || typeof targetGrantId !== 'string') {
+    if (typeof sourceGrantId !== 'string' || typeof targetGrantId !== 'string') {
       return { state: 'blocked' as const, code: 'LEGACY_IMPORT_PATH_INVALID' }
     }
     const confirmation = await dialog.showMessageBox({
@@ -342,7 +353,11 @@ export function registerProjectController(options: ProjectControllerOptions = {}
     if (confirmation.response !== 1) return { state: 'cancelled' as const }
     // 副本位置只来自 dialog:select-project-restore-target 签发、绑定本窗口的一次性授权。
     let targetRoot: string
+    let sourceRoot: string
     try {
+      sourceRoot = externalFileGrants.resolveDirectoryPath({
+        grantId: sourceGrantId, webContentsId: event.sender.id, operation: 'legacy-import',
+      })
       targetRoot = externalFileGrants.resolveExactPath({
         grantId: targetGrantId,
         webContentsId: event.sender.id,
@@ -360,7 +375,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
     }
     if (result.state === 'ready') {
       try {
-        registerRecentProject({ name: path.basename(sourceRoot), path: result.targetRoot, updatedAt: new Date().toISOString() })
+        registerRecentProject({ name: path.basename(sourceRoot), path: result.targetRoot, projectId: result.projectId, updatedAt: new Date().toISOString() })
       } catch {
         return { ...result, warning: 'LEGACY_IMPORT_RECENT_LIST_FAILED' }
       }
@@ -409,7 +424,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
 
   // 创建新项目
   ipcMain.handle('project:create', async (
-    _event,
+    event,
     config: CreateProjectConfig,
     requestToken: string,
   ) => {
@@ -431,7 +446,10 @@ export function registerProjectController(options: ProjectControllerOptions = {}
 
       try {
         const projectName = sanitizeProjectName(config.name)
-        const createdProject = projectAccess.createProject(config.path, projectName)
+        const parentPath = externalFileGrants.resolveDirectoryPath({
+          grantId: config.parentGrantId, webContentsId: event.sender.id, operation: 'project-create',
+        })
+        const createdProject = projectAccess.createProject(parentPath, projectName)
         const projectId = createdProject.projectId
         const projectDir = createdProject.rootPath
 
@@ -475,6 +493,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         registerRecentProject({
           name: projectName,
           path: projectDir,
+          projectId,
           updatedAt,
         })
         // 创建只提交磁盘数据；渲染进程随后通过同一串行队列执行打开。
@@ -518,8 +537,8 @@ export function registerProjectController(options: ProjectControllerOptions = {}
 
   // 打开现有项目
   ipcMain.handle('project:open', async (
-    _event,
-    projectPath: string,
+    event,
+    target: ProjectOpenTarget,
     requestToken: string,
   ) => {
     latestProjectOpenRequestToken = requestToken
@@ -540,11 +559,24 @@ export function registerProjectController(options: ProjectControllerOptions = {}
       }
 
       try {
+        const recent = typeof target === 'string'
+          ? loadRecentProjects().find(project => project.path === target) : undefined
+        const smokePath = process.env.AI_NOVEL_SMOKE_OPEN_PROJECT?.trim()
+        // Persisted recent entries are main-owned project references, not arbitrary path authority.
+        const projectPath = typeof target === 'string'
+          ? recent?.path ?? (smokePath && target === smokePath ? smokePath : null)
+          : externalFileGrants.resolveDirectoryPath({
+            grantId: target?.grantId, webContentsId: event.sender.id, operation: 'project-open',
+          })
+        if (!projectPath) throw new Error('项目未获授权，请重新选择项目目录。')
         // Read-only probe; the compatibility adoption method now rejects unqualified legacy migration.
         const trustedProject = projectAccess.adoptLegacyProject(
           projectAccess.probeExistingProject(projectPath),
         )
         const resolvedProjectPath = trustedProject.rootPath
+        if (recent?.projectId && recent.projectId !== trustedProject.projectId) {
+          throw new Error('历史项目身份已变化，请重新选择项目目录。')
+        }
         initProjectDatabase(resolvedProjectPath)
 
         // 从数据库读取配置
@@ -618,6 +650,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
           name: projectData.name,
           path: resolvedProjectPath,
           updatedAt: projectData.updatedAt,
+          projectId: trustedProject.projectId,
         })
 
         const databaseState = requireReadyDatabase(
@@ -722,6 +755,7 @@ export function registerProjectController(options: ProjectControllerOptions = {}
         registerRecentProject({
           name: data.name ?? ProjectCoreRepository.get()?.projectName ?? 'Unknown',
           path: data.path,
+          projectId: _projectId,
           updatedAt: new Date().toISOString(),
         })
         return { success: true, recentProjectUpdated: true }
@@ -920,12 +954,13 @@ export function registerProjectController(options: ProjectControllerOptions = {}
     },
   )
 
-  ipcMain.handle('dialog:select-folder', async () => {
+  ipcMain.handle('dialog:select-folder', async (event, purpose: 'project-create' | 'project-open') => {
+    if (purpose !== 'project-create' && purpose !== 'project-open') throw new Error('项目目录授权用途无效')
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
-      title: '选择项目保存位置',
+      title: purpose === 'project-create' ? '选择项目保存位置' : '选择项目目录',
     })
     if (result.canceled || result.filePaths.length === 0) return null
-    return result.filePaths[0]
+    return issueDirectoryGrant(event, result.filePaths[0], purpose)
   })
 }

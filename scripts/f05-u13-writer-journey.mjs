@@ -1,5 +1,6 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, relative, resolve, isAbsolute, dirname } from 'node:path'
@@ -183,7 +184,7 @@ async function main() {
       const current = JSON.parse(localStorage.getItem(key))
       localStorage.setItem(key, JSON.stringify({ ...current, shellPreference: 'writer', revision: current.revision + 1, origin: 'author' }))
     })
-    const created = await invoke(session.page, 'project:create', { path: projectParent, name: projectName,
+    const created = await invoke(session.page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, session.page, projectParent)).grantId, name: projectName,
       genre: '合成测试', targetAudience: '合成读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(created.success, true, created.error)
     writeJson(join(projectParent, '.vibe-owner.json'), { owner: 'codex/f05-u13', sourceProject: repository,
@@ -345,7 +346,7 @@ async function main() {
 
     currentStep = 'U13.A05'
     const batchProjectName = '合成续批验收'
-    const batchCreated = await invoke(page, 'project:create', { path: projectParent, name: batchProjectName,
+    const batchCreated = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, projectParent)).grantId, name: batchProjectName,
       genre: '合成测试', targetAudience: '合成读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(batchCreated.success, true, batchCreated.error)
     const batchOpened = await invoke(page, 'project:open', batchCreated.projectPath, randomUUID(), null)
@@ -461,7 +462,7 @@ async function main() {
 
     currentStep = 'U13.A06'
     const candidateProjectName = '合成候选恢复验收'
-    const candidateCreated = await invoke(page, 'project:create', { path: projectParent, name: candidateProjectName,
+    const candidateCreated = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, projectParent)).grantId, name: candidateProjectName,
       genre: '合成测试', targetAudience: '合成读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(candidateCreated.success, true, candidateCreated.error)
     const candidateOpened = await invoke(page, 'project:open', candidateCreated.projectPath, randomUUID(), null)
@@ -573,7 +574,7 @@ async function main() {
 
     currentStep = 'U13.A07'
     const cancelProjectName = '合成中止验收'
-    const cancelCreated = await invoke(page, 'project:create', { path: projectParent, name: cancelProjectName,
+    const cancelCreated = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, projectParent)).grantId, name: cancelProjectName,
       genre: '合成测试', targetAudience: '合成读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(cancelCreated.success, true, cancelCreated.error)
     const cancelOpened = await invoke(page, 'project:open', cancelCreated.projectPath, randomUUID(), null)

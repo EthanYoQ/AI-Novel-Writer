@@ -1,3 +1,4 @@
+import { ipc } from '../../services/ipc-client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { page } from 'vitest/browser'
 import { act } from 'react'
@@ -36,6 +37,7 @@ afterEach(async () => {
   useProjectStore.setState(originalProjectState)
   useEditorStore.setState(originalEditorState, true)
   setActiveProjectSessionContext(null)
+  vi.restoreAllMocks()
 })
 
 function project(id: string, writingLanguage: 'zh-CN' | 'en-US'): ProjectData {
@@ -73,6 +75,7 @@ function writingLanguageSelect(): HTMLSelectElement {
 
 describe('project writing language', () => {
   it('initializes a new project from the UI language at creation time', async () => {
+    vi.spyOn(ipc, 'invoke').mockResolvedValueOnce({ grantId: 'parent-grant', displayName: 'novels' } as never)
     const createProject = vi.fn(async () => true)
     useLocaleStore.setState({ locale: 'en-US' })
     useProjectStore.setState({ createProject: createProject as never })
@@ -80,13 +83,13 @@ describe('project writing language', () => {
     await mount(<NewProjectDialog open onClose={() => {}} />)
     await act(async () => {
       await page.getByPlaceholder('e.g. The Glass Observatory').fill('English novel')
-      await page.getByPlaceholder('Choose a project folder').fill('C:\\novels')
+      await page.getByRole('button', { name: 'Choose', exact: true }).click()
       await page.getByRole('button', { name: 'Create project' }).click()
     })
 
     const expectedConfig: CreateProjectConfig = {
       name: 'English novel',
-      path: 'C:\\novels',
+      parentGrantId: 'parent-grant',
       genre: '',
       targetAudience: '',
       writingLanguage: 'en-US',

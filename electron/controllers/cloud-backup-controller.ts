@@ -529,6 +529,7 @@ export function registerCloudBackupController(injected?: CloudBackupControllerDe
           deps.registerRecentProject({
             name: deps.readRestoredProjectName(receipt.targetProjectRoot),
             path: receipt.targetProjectRoot,
+            projectId: receipt.targetProjectId,
             updatedAt: deps.now().toISOString(),
           })
           recentProjectUpdated = true

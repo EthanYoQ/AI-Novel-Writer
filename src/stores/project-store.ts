@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { ipc } from '../services/ipc-client'
 import type {
   CreateProjectConfig,
+  ProjectOpenTarget,
   ProjectChannels,
   ProjectData,
   ProjectSessionContext,
@@ -403,7 +404,7 @@ interface ProjectState {
   /** 新建项目 */
   createProject: (config: CreateProjectConfig) => Promise<boolean>
   /** 打开项目 */
-  openProject: (projectPath: string) => Promise<boolean>
+  openProject: (target: ProjectOpenTarget) => Promise<boolean>
   /** 保存项目 */
   saveProject: (expectedProjectSession?: ProjectSessionContext) => Promise<boolean>
   /** 更新小说配置 */
@@ -529,7 +530,8 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
         return false
       }
       // 使用主进程返回的实际项目路径（跨平台安全，避免路径分隔符问题）
-      const projectDir = result.projectPath ?? `${config.path}/${config.name}`
+      const projectDir = result.projectPath
+      if (!projectDir) throw new Error('创建结果缺少项目路径')
       if (rendererProject && preparedTransition) {
         if (!isPreparedProjectTransitionCurrent(rendererProject, preparedTransition)) return false
         createOpenTransitionAuthorization = {
@@ -559,7 +561,8 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   },
 
 
-  openProject: async (projectPath) => {
+  openProject: async (target) => {
+    const projectPath = typeof target === 'string' ? target : ''
     const requestSequence = ++openProjectRequestSequence
     const requestToken = `${Date.now()}-${requestSequence}-${Math.random().toString(36).slice(2)}`
     const isLatestRequest = () => requestSequence === openProjectRequestSequence
@@ -606,7 +609,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
           || !isPreparedProjectTransitionCurrent(rendererProject, preparedTransition)
         ) return false
       }
-      const result = await ipc.invoke('project:open', projectPath, requestToken, rendererProjectPath)
+      const result = await ipc.invoke('project:open', target, requestToken, rendererProjectPath)
       if (!isLatestRequest() || result.stale || result.requestToken !== requestToken) {
         await reconcileStaleProjectResponse({
           getRendererProjectPath: () => get().currentProject?.path ?? null,

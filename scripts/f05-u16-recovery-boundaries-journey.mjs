@@ -1,5 +1,6 @@
 /* global process, Buffer */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
@@ -369,7 +370,7 @@ async function main() {
     currentStep = 'source-generation'
     const a = await launch(profiles.a)
     const name = '分叉原稿'
-    const created = await invoke(a.page, 'project:create', { path: profiles.a.projects, name,
+    const created = await invoke(a.page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(a.app, a.page, profiles.a.projects)).grantId, name,
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(created.success, true, created.error)
     const opened = await invoke(a.page, 'project:open', created.projectPath, randomUUID(), null)
@@ -391,7 +392,7 @@ async function main() {
 
     currentStep = 'U16.A10-origin-readonly-restart'
     const b = await launch(profiles.b)
-    const bootstrap = await invoke(b.page, 'project:create', { path: profiles.b.projects, name: '恢复入口',
+    const bootstrap = await invoke(b.page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(b.app, b.page, profiles.b.projects)).grantId, name: '恢复入口',
       genre: '悬疑', targetAudience: '成年读者', writingLanguage: 'zh-CN' }, randomUUID(), null)
     assert.equal(bootstrap.success, true, bootstrap.error)
     await b.page.reload()

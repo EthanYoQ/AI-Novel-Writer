@@ -1,5 +1,6 @@
 /* global process, Buffer */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -176,7 +177,7 @@ async function main() {
     })
 
     currentStep = 'fixture-project'
-    const project = await invoke(page, 'project:create', { path: profile.projects, name: 'U07-dirty-tabs', genre: 'fixture', targetAudience: 'fixture', writingLanguage: 'zh-CN' }, randomUUID(), null)
+    const project = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: 'U07-dirty-tabs', genre: 'fixture', targetAudience: 'fixture', writingLanguage: 'zh-CN' }, randomUUID(), null)
     projectCreateObservation = { success: project.success, stale: project.stale ?? 'absent', error: project.error ?? null, projectPath: project.projectPath ?? null }
     assert.equal(project.success, true, JSON.stringify(projectCreateObservation))
     projectCoreBefore = readProjectCore(project.projectPath)

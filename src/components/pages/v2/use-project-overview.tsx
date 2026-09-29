@@ -113,10 +113,10 @@ export function WriterWelcomePage({ onNewProject }: { onNewProject: () => void }
     try {
       const sourceRoot = await ipc.invoke('dialog:select-legacy-project')
       if (!sourceRoot) return
-      const sourceName = sourceRoot.split(/[\\/]/).filter(Boolean).at(-1) || '旧项目'
+      const sourceName = sourceRoot.displayName || '旧项目'
       const target = await ipc.invoke('dialog:select-project-restore-target', `${sourceName}-新版副本`)
       if (!target) return
-      const result = await ipc.invoke('project:import-legacy-copy', sourceRoot, target.grantId)
+      const result = await ipc.invoke('project:import-legacy-copy', sourceRoot.grantId, target.grantId)
       if (result.state === 'cancelled') return
       if (result.state === 'blocked') {
         setLegacyImportNotice(text(`导入未完成，旧项目保持原样。原因：${result.code}`, `Import did not complete; the original project is unchanged. Reason: ${result.code}`))
@@ -137,7 +137,7 @@ export function WriterWelcomePage({ onNewProject }: { onNewProject: () => void }
     recentProjects={recentProjects}
     onNewProject={onNewProject}
     onOpenProject={() => {
-      void ipc.invoke('dialog:select-folder').then(folder => {
+      void ipc.invoke('dialog:select-folder', 'project-open').then(folder => {
         if (folder) void useProjectStore.getState().openProject(folder)
       })
     }}

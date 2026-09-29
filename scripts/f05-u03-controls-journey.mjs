@@ -1,5 +1,6 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -132,7 +133,7 @@ async function main() {
 
     currentStep = 'U03.A14-safe-diagnostic-copy'
     await assertWriter(page, 'U03.A14')
-    const project = await invoke(page, 'project:create', { path: profile.projects, name: 'U03-controls', genre: 'fixture', targetAudience: 'fixture', writingLanguage: 'zh-CN' }, randomUUID(), null)
+    const project = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, profile.projects)).grantId, name: 'U03-controls', genre: 'fixture', targetAudience: 'fixture', writingLanguage: 'zh-CN' }, randomUUID(), null)
     projectCreateObservation = { success: project.success,
       stale: Object.hasOwn(project, 'stale') ? project.stale : 'absent',
       hasOwnError: Object.hasOwn(project, 'error'),

@@ -1,5 +1,6 @@
 /* global process */
 import assert from 'node:assert/strict'
+import { chooseProjectDirectoryGrant } from './project-directory-grant.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -115,10 +116,10 @@ function sourceInventory(projectPath) {
   return result
 }
 
-async function seed(page, roots) {
+async function seed(app, page, roots) {
   const projects = {}
   for (const key of ['a', 'b', 'c']) {
-    const created = await invoke(page, 'project:create', { path: roots.projects, name: names[key],
+    const created = await invoke(page, 'project:create', { parentGrantId: (await chooseProjectDirectoryGrant(app, page, roots.projects)).grantId, name: names[key],
       genre: key === 'a' ? '悬疑' : '', targetAudience: key === 'a' ? '成年读者' : '', writingLanguage: 'zh-CN' }, randomUUID())
     assert.equal(created.success, true, created.error)
     projects[key] = { path: created.projectPath, id: created.projectId }
@@ -159,7 +160,7 @@ async function main() {
   try {
     currentStep = 'synthetic-fixture'
     session = await launch(roots)
-    const projects = await seed(session.page, roots)
+    const projects = await seed(session.app, session.page, roots)
     await quit(session.app)
     session = null
     // A deliberately unreadable synthetic recent project stays outside the active project database.
