@@ -99,4 +99,3 @@ export function currentDerivedCharacterFields(db: Database.Database, projectId: 
         return [String(row.character_id), CHARACTER_STATE_TEXT_FIELDS.filter(field => provenance[field]?.kind === 'derived')];
     }));
 }
-
