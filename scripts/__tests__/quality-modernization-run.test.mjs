@@ -1173,7 +1173,7 @@ test('C16–C18 ca466d9a/73b46513 段（第580–648行）按同一规则分两�
   // 新协议字节 hash 与被取代的 a0a14777 不同，runner 读写两入口都按链末端取历史范围。
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
   assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, ca466d9a, protocol\.historicalC1673b46513Boundary\)/)
-  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedAc3af420Events/)
+  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedA9552e67Events/)
 })
 
 test('v5 唯一对账只能是续写 operation 的首个物理请求且至多一次，任何越界在 dispatch 前拒绝', () => {
@@ -3192,7 +3192,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     'historicalC16Ee3435ecBoundary', 'historicalC16Ccc70b31Boundary', 'historicalC16C9b88510Boundary', 'historicalC16D8a30c11Boundary',
     'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary', 'historicalC16B42cfc55Boundary',
     'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
-    'historicalC16Ac3af420Boundary']
+    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -3260,13 +3260,24 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 828, real.boundaries.historicalPostUiBa2d34abBoundary), 843)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 843, real.boundaries.historicalPostUi1d0bdac3Boundary), 861)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 861, real.boundaries.historicalC16Ac3af420Boundary), 909)
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 909, real.boundaries.historicalC16A9552e67Boundary), 957)
     assert.equal(validatePhysicalLedger(ledger), ledger)
     fs.writeFileSync(file, synthetic.raw)
     const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
     assert.doesNotThrow(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt',
       binding: { ...synthetic.binding, ...currentProtocolBinding() } }, options))
     const ac3 = real.boundaries.historicalC16Ac3af420Boundary
+    const a955 = real.boundaries.historicalC16A9552e67Boundary
     assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 843, ac3), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 861, a955), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+    for (const field of ['codeSha', 'sourceHash', 'driverHash']) {
+      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 909, { ...a955,
+        armBindings: { candidate: { ...a955.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
+      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    }
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 909, { ...a955,
+      reserveAttempts: a955.reserveAttempts.map((item, index) => index === 0 ? { ...item, parityId: 'f'.repeat(64) } : item) }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
     for (const field of ['codeSha', 'sourceHash', 'driverHash']) {
       assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 861, { ...ac3,
         armBindings: { candidate: { ...ac3.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
@@ -3283,6 +3294,13 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     fs.writeFileSync(ledger, changed909(real.raw))
     assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
     fs.writeFileSync(file, changed909(synthetic.raw))
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    const changed957 = raw => raw.trimEnd().split('\n').map((line, index) =>
+      index === 956 ? line.replace('"attemptId":"', '"attemptId":"tampered-') : line).join('\n') + '\n'
+    fs.writeFileSync(ledger, changed957(real.raw))
+    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    fs.writeFileSync(file, changed957(synthetic.raw))
     assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
       /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
     fs.writeFileSync(file, synthetic.raw + JSON.stringify({ type: 'reserve', attemptId: 'unregistered-ac3',
