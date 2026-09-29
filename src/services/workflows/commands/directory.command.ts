@@ -26,9 +26,7 @@ import {
   blueprintSemanticGenerationContract,
   validateBlueprintSemanticItem,
 } from '../../../shared/blueprint-semantic-contract'
-import { structuredContractDiagnostic } from '../../../shared/structured-contract-diagnostic'
 import { requireWorkflowProjectSession, workflowUiText, workflowWritingLanguage } from '../workflow-project-session'
-import { stripThinkingTags } from '../workflow-utils'
 import { promptLanguageText } from '../../prompt-language'
 import { retryDirectoryCharacterSync } from '../directory-character-sync-recovery'
 export {
@@ -152,17 +150,6 @@ function blueprintCapacityGenerationContract(
   )
 }
 
-const GENERATED_BLUEPRINT_TEXT_LIMITS = [
-  ['title', BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.titleCharacters],
-  ['role', BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.roleCharacters],
-  ['purpose', BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.purposeCharacters],
-  ['keyEvents', BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.keyEventsCharacters],
-  ['key_events', BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.keyEventsCharacters],
-  ['suspenseHook', BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.suspenseHookCharacters],
-  ['suspense_hook', BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.suspenseHookCharacters],
-] as const
-const GENERATED_BLUEPRINT_RELATION_FIELDS = ['relationships', 'relationshipHints', 'relations'] as const
-
 function utf8Bytes(value: string): number {
   return new TextEncoder().encode(value).byteLength
 }
@@ -186,64 +173,6 @@ function boundedFactText(value: string, maxBytes: number): string {
   return (boundary >= Math.floor(bounded.length * 0.6)
     ? bounded.slice(0, boundary + 1)
     : bounded).trim()
-}
-
-function normalizeGeneratedBlueprintText(content: string): string {
-  const trimmed = stripThinkingTags(content).trim()
-  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(trimmed)
-  const parsed: unknown = JSON.parse(fenced ? fenced[1].trim() : trimmed)
-  const candidates = parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.hasOwn(parsed, 'blueprints')
-    ? (parsed as Record<string, unknown>).blueprints
-    : parsed
-  if (!Array.isArray(candidates)) return content
-  for (const candidate of candidates) {
-    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue
-    const record = candidate as Record<string, unknown>
-    for (const [field, maxCharacters] of GENERATED_BLUEPRINT_TEXT_LIMITS) {
-      const value = record[field]
-      if (typeof value === 'string') {
-        record[field] = Array.from(value.trim()).slice(0, maxCharacters).join('')
-      }
-    }
-    for (const field of GENERATED_BLUEPRINT_RELATION_FIELDS) {
-      const relationships = record[field]
-      if (!Array.isArray(relationships)) continue
-      for (const relationship of relationships) {
-        if (!relationship || typeof relationship !== 'object' || Array.isArray(relationship)) continue
-        const relation = (relationship as Record<string, unknown>).relation
-        if (typeof relation === 'string') {
-          (relationship as Record<string, unknown>).relation = Array.from(relation.trim())
-            .slice(0, BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipCharacters)
-            .join('')
-        }
-      }
-    }
-  }
-  return JSON.stringify(parsed)
-}
-
-function decodeGeneratedBlueprints(
-  content: string,
-  startChapter: number,
-  endChapter: number,
-): ChapterBlueprint[] {
-  try {
-    return parseTextBlueprintsStrict(content, startChapter, endChapter)
-  } catch (error) {
-    const diagnostic = structuredContractDiagnostic(error)
-    if (
-      diagnostic?.code !== 'value_too_long'
-      || (
-        diagnostic.field !== 'relation'
-        && !GENERATED_BLUEPRINT_TEXT_LIMITS.some(([field]) => field === diagnostic.field)
-      )
-    ) throw error
-    return parseTextBlueprintsStrict(
-      normalizeGeneratedBlueprintText(content),
-      startChapter,
-      endChapter,
-    )
-  }
 }
 
 function buildCompactBlueprintTask(input: {
@@ -478,7 +407,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
       ),
       inputKey: chapterNumber => chapterNumber,
       outputKey: blueprint => blueprint.chapterNumber,
-      decode: content => decodeGeneratedBlueprints(
+      decode: content => parseTextBlueprintsStrict(
         content,
         activeRange.startChapter,
         activeRange.endChapter,
