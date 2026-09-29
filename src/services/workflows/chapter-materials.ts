@@ -413,7 +413,13 @@ function finalizedPassages(source: FinalizedMaterialSource, relevanceTerms: read
   // never injecting the old statement itself.
   const recovered = located.locatedEvidence < expectedEvidence
     ? relevantPassages(source.content, relevanceTerms) : []
-  return { passages: removeContainedPassages([...located.passages, ...recovered]), locatedEvidence: located.locatedEvidence }
+  // 上一章结尾是本章续写的时点锚点，必进定稿块，不依赖模型上次定稿时给出的证据位置；
+  // 与 candidatePassages 的必需前驱同一写法。结尾不是证据，不计入 locatedEvidence。
+  const ending = source.includeEnding ? [previousChapterEnding(source.content)] : []
+  return {
+    passages: removeContainedPassages([...located.passages, ...recovered, ...ending].filter(Boolean)),
+    locatedEvidence: located.locatedEvidence,
+  }
 }
 
 /** 未定稿候选在本章的材料文本；同上，只有一处计算。 */

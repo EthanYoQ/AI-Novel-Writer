@@ -7,6 +7,7 @@ import {
   adjacentEvidencePassages,
   assembleChapterMaterials,
   buildMaterialDecisionReceipt,
+  previousChapterEnding,
   selectReviewRevisionMaterials,
   type ReviewRevisionMaterial,
 } from '../chapter-materials'
@@ -164,6 +165,95 @@ describe('chapter materials', () => {
     expect(bundle.text).not.toContain(source.content)
     expect(bundle.previousEnding).toBe(source.content)
     expect(bundle.consumedFinalizedSources).toEqual([source])
+  })
+
+  /** 定稿来源在提示词里的那一块（标题 + 摘取出的段落）。 */
+  const finalizedBlock = (bundle: Awaited<ReturnType<typeof assemble>>, draftId: number): string => {
+    if (bundle.selection.decision !== 'ready') throw new Error('unreachable')
+    return bundle.selection.included.find(item => item.ref.sourceId === `finalized:${draftId}`)?.text ?? ''
+  }
+  const previousFinalized = (content: string, over: {
+    evidence?: string[]
+    includeEnding?: boolean
+    sourceStatus?: 'current' | 'stale'
+  } = {}) => ({
+    chapterNumber: 1, draftId: 11, title: '上一章', content, evidence: over.evidence ?? [],
+    ...(over.includeEnding === undefined ? {} : { includeEnding: over.includeEnding }),
+    sourceStatus: over.sourceStatus ?? 'current',
+  })
+  const withFinalized = (source: ReturnType<typeof previousFinalized>) => assemble({
+    writingLanguage: 'zh-CN', authorProjectFacts: [], characterProfiles: '', futurePlans: '（无）',
+    references: [], finalized: [source], candidates: [], relevanceTerms: [],
+  })
+
+  it('always carries the whole short previous chapter when includeEnding is set, even if evidence covers only its last three paragraphs', async () => {
+    const paragraphs = ['清晨发现记录日期不符。', '林岚核对了三遍。', '周砚赶到库房。', '铜钥匙就在桌上。', '两人沉默地离开。']
+    const content = paragraphs.join('\n\n')
+    const evidence = ['铜钥匙就在桌上']
+
+    const withEnding = await withFinalized(previousFinalized(content, { evidence, includeEnding: true }))
+    expect(finalizedBlock(withEnding, 11)).toBe(`【定稿原文 · 第1章 · draft 11】\n${content}`)
+    expect(withEnding.previousEnding).toBe(content)
+    // 结尾不是证据：命中数只来自证据定位。
+    expect(withEnding.includedFinalizedFacts).toBe(1)
+
+    // 其它路径不变：includeEnding 缺省/为假时仍只有证据窗口（命中段 ± 1 段）。
+    for (const includeEnding of [false, undefined]) {
+      const without = await withFinalized(previousFinalized(content, { evidence, includeEnding }))
+      expect(finalizedBlock(without, 11)).toBe(`【定稿原文 · 第1章 · draft 11】\n${paragraphs.slice(2).join('\n\n')}`)
+      expect(finalizedBlock(without, 11)).not.toContain(paragraphs[0])
+      expect(finalizedBlock(without, 11)).not.toContain(paragraphs[1])
+      expect(without.includedFinalizedFacts).toBe(1)
+    }
+  })
+
+  it.each([
+    {
+      shape: 'the ending starts inside an earlier paragraph, so it contains the last-two-paragraph window',
+      tailParagraphs: ['她停住。', '门关上了。'],
+      middle: '石阶湿滑。'.repeat(250),
+      expectPassage: (ending: string) => ending,
+    },
+    {
+      shape: 'the last-two-paragraph window already contains the ending',
+      tailParagraphs: ['石阶湿滑。'.repeat(150), '她转身离开。'.repeat(60)],
+      middle: '',
+      expectPassage: (_ending: string, content: string) => content.split('\n\n').slice(-2).join('\n\n'),
+    },
+  ])('aligns a long previous chapter to previousChapterEnding without duplicates when $shape', async ({
+    tailParagraphs, middle, expectPassage,
+  }) => {
+    const head = ['开场一。', '开场二。', ...(middle ? [middle] : [])]
+    const content = [...head, ...tailParagraphs].join('\n\n')
+    const ending = previousChapterEnding(content)
+    expect(content.length).toBeGreaterThan(1_000)
+    expect(ending.length).toBeLessThan(content.length)
+
+    const bundle = await withFinalized(previousFinalized(content, { includeEnding: true }))
+    const block = finalizedBlock(bundle, 11)
+    const passage = expectPassage(ending, content)
+
+    // 单一段落：结尾与窗口互相包含时只留较长者，不出现互为子串的两份。
+    expect(passage).toContain(ending)
+    expect(block).toBe(`【定稿原文 · 第1章 · draft 11】\n${passage}`)
+    expect(bundle.text.split(ending)).toHaveLength(2)
+    expect(bundle.previousEnding).toBe(ending)
+    for (const early of head) expect(block).not.toContain(early)
+  })
+
+  it('keeps the previous ending when every evidence locator is stale, without counting it as located evidence', async () => {
+    const content = ['清晨发现记录日期不符。', '林岚核对了三遍。', '周砚赶到库房。', '铜钥匙就在桌上。', '两人沉默地离开。'].join('\n\n')
+    const bundle = await withFinalized(previousFinalized(content, {
+      evidence: ['已经失效的旧摘要'], includeEnding: true, sourceStatus: 'stale',
+    }))
+
+    expect(finalizedBlock(bundle, 11)).toBe(`【定稿原文 · 第1章 · draft 11】\n${content}`)
+    expect(bundle.text).not.toContain('已经失效的旧摘要')
+    expect(bundle.includedFinalizedFacts).toBe(0)
+    expect(bundle.omissions).toContainEqual({ source: 'finalized', chapterNumber: 1, reason: 'evidence-not-locatable' })
+    expect(bundle.decision.omitted).toContainEqual(expect.objectContaining({
+      sourceId: 'finalized:11', reason: 'evidence-not-locatable',
+    }))
   })
 
   it('falls back to relevant neighbouring finalized prose when a far-chapter locator is stale', async () => {

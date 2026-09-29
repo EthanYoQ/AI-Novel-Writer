@@ -21,6 +21,8 @@ import { refineHistoryMaterials } from '../commands/refine-draft.command'
  * 提示词确实变了，**不**证明它变好：质量仍是 `not-run`，要等 `early-context` 真模型门
  * 跑完才能判定。护栏本身不因此放松——它仍然是精确的 sha256 钉死，不是快照。
  * 之后又变过一次：定稿原文标题不再印出内部定位状态（`· 定位索引<status>`），其余字节不变。
+ * 再变一次：`includeEnding` 的上一章定稿必带 `previousChapterEnding`，不再只靠证据窗口与末两段；
+ * 基线第 1 章不足一个结尾上限，于是整章进入，定稿块前多出 `第一章正文。` 一段，其余字节不变。
  */
 const sha = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
 
@@ -56,7 +58,7 @@ describe('S10B write-path characterization (the composed prompt must not change)
     expect(bundle.previousEnding).toBe('第三章草稿。\n\n她走向北塔。')
     expect(bundle.omissions).toEqual([])
     expect(bundle.consumedFinalizedSources.map(source => source.draftId)).toEqual([1])
-    expect(sha(bundle.text)).toBe('8ab3d7af87aea4022011220e1f0307b42e2868f48088ce7a42879e548a3614b8')
+    expect(sha(bundle.text)).toBe('b5e96e08e0ca6887b8056d84bc69a9152c27e0369200c36ecf382eae7c141b3e')
   })
 
   it('fails explicitly when required author material alone exceeds the capacity', async () => {
@@ -81,7 +83,7 @@ describe('S10B write-path characterization (the composed prompt must not change)
     expect(bundle.omissions).toEqual([{ source: 'reference', reason: 'budget' }])
     expect(bundle.text).not.toContain('参'.repeat(7_000))
     expect(bundle.text).toContain('主角：林岚')
-    expect(sha(bundle.text)).toBe('d2d6026008c172eef6f93609983a1184a953a5cfb095dc59ca9d2be8ca600e30')
+    expect(sha(bundle.text)).toBe('d1e119aa20fb63581a355af0df7d1107171d10c963d9facc248dbe5a7d3a4fb6')
   })
 
   it('reports an unlocatable evidence index and still recovers nearby prose', async () => {
