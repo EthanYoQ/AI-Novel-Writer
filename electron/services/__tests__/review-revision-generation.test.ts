@@ -141,6 +141,26 @@ describe('review and revision generation through the actual owner and SQLite', (
     expect(recovery.canResume).toBe(false)
     expect(recovery).not.toHaveProperty('contextId')
   })
+  it('refuses to resume or commit a stop revision with an obviously duplicated paragraph', async () => {
+    // Long enough and different from the source, but the same long paragraph appears twice.
+    const paragraph = '\u6797\u5c9a\u8d70\u8fdb\u5317\u5854\uff0c\u6708\u5149\u7167\u4eae\u4e86\u77f3\u9636\u3002'.repeat(10)
+    const duplicated = `${paragraph}\n\n${paragraph}`
+    const f = fixture(async (_request, options) => { options.onVisible({ kind: 'delta', text: duplicated }); return { finishReason: 'stop', usage: null } })
+    const request = await f.run('refine-draft')
+    const composition = f.owner.composeVisible(request.handle, [request.artifact.artifactId], textHash(duplicated), 'visible-append-v1')
+    // The author reopens the run after the first execution rejected this exact composition.
+    const recovery = f.owner.readReviewRevisionRecovery(request.handle)
+    expect(recovery.lastCompositionFinishReason).toBe('stop')
+    expect(recovery.canResume).toBe(false)
+    expect(recovery).not.toHaveProperty('contextId')
+    expect(() => f.owner.commitRevision({ contextId: request.contextId, handle: request.handle,
+      expectedCompositionHash: composition.textHash })).toThrow('\u660e\u663e\u91cd\u590d\u6bb5\u843d')
+    expect(f.db.prepare('SELECT COUNT(*) FROM revisions').pluck().get()).toBe(0)
+    expect(f.db.prepare("SELECT COUNT(*) FROM generation_attempts WHERE json_extract(usage_receipt_json,'$.reviewRevisionEffect') IS NOT NULL")
+      .pluck().get()).toBe(0)
+    expect(f.owner.read(request.handle).candidates).toHaveLength(1)
+    expect(f.spy).toHaveBeenCalledTimes(1)
+  })
   it.each([
     ['identical', prose],
     ['format-only', `${prose}\n\u200b`],

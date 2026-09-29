@@ -156,6 +156,7 @@ export abstract class ReviewRevisionCommand extends BaseWorkflowCommand<string> 
       composition = (await this.readMainVisibleComposition()) ?? undefined
     }
     if (!composition) throw new Error('GENERATION_COMPOSITION_REQUIRED')
+    // A recovered `stop` composition skips the bounded-completion loop, so this shared gate is its integrity check too.
     assertMateriallyCompleteRevision(frozen.source.content, composition.text, frozen.config.wordsPerChapter, frozen.uiLocale)
     this.assertSession(params)
     this.assertNotCancelled(params.context)

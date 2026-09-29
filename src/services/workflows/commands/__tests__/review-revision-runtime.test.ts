@@ -362,6 +362,40 @@ describe('review/revision consumers using the main contract (synthetic transport
     expect(f.writes()).toBe(0)
   })
 
+  it.each(['refine-draft', 'refine-from-review'] as const)(
+    'does not turn the first-run integrity rejection of a stop revision into a saved revision when %s resumes', async operation => {
+      // Long enough and different from the source, but the same long paragraph appears twice.
+      const paragraph = '修订后的长段落逐字重复。'.repeat(12)
+      const duplicated = `${paragraph}\n\n${paragraph}`
+      const f = setup([{ content: duplicated, finishReason: 'stop' }])
+      await expect(f.command(operation).execute(f.args)).rejects.toThrow('明显重复段落')
+      expect(f.fixture.recovery!.composition!.text).toBe(duplicated)
+      expect(f.fixture.recovery!.lastCompositionFinishReason).toBe('stop')
+      const handle = f.fixture.recovery!.handle
+      f.provider.mockClear()
+
+      await expect(f.command(operation, { recoveryHandle: handle }).execute(f.args)).rejects.toThrow('明显重复段落')
+
+      expect(f.provider).not.toHaveBeenCalled()
+      expect(f.fixture.calls.filter(call => call.channel === 'review-revision:commit-revision')).toHaveLength(0)
+      expect(f.fixture.recovery!.saved).toBeUndefined()
+      expect(f.writes()).toBe(0)
+    },
+  )
+
+  it('still saves a resumed stop composition that passes the same integrity check', async () => {
+    const f = setup([{ content: revised, finishReason: 'stop' }])
+    f.failSaves(1)
+    await expect(f.command('refine-draft').execute(f.args)).rejects.toThrow('synthetic storage failed')
+    const handle = f.fixture.recovery!.handle
+    f.provider.mockClear()
+
+    await f.command('refine-draft', { recoveryHandle: handle }).execute(f.args)
+
+    expect(f.provider).not.toHaveBeenCalled()
+    expect(f.writes()).toBe(1)
+  })
+
   it('rejects a receipt whose persisted content hash was altered instead of opening renderer prose', async () => {
     const f = setup([{ content: revised, finishReason: 'stop' }])
     await f.command('refine-draft').execute(f.args)

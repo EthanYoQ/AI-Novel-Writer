@@ -1,4 +1,5 @@
 import type { Locale } from '../../../i18n/types'
+import { assertMechanicallyCompleteVisibleText } from '../../../shared/visible-text-integrity'
 
 const MIN_REFINEMENT_COMPLETION_RATIO = 0.6
 const MIN_REFINEMENT_UNITS = 200
@@ -18,12 +19,19 @@ function countVisibleProseUnits(text: string): number {
   return chineseCharacters + englishWords + otherCharacters
 }
 
+/**
+ * The one acceptance gate for a revision candidate, shared by the renderer
+ * command and the main-process recovery/commit. A `stop` finish reason does not
+ * prove the text is complete, and a recovered `stop` composition never re-enters
+ * the bounded-completion loop, so the mechanical integrity check runs here too.
+ */
 export function assertMateriallyCompleteRevision(
   source: string,
   revision: string,
   targetUnits: number,
   uiLocale: Locale,
 ): void {
+  assertMechanicallyCompleteVisibleText(revision, uiLocale)
   const sourceUnits = countVisibleProseUnits(source)
   const revisionUnits = countVisibleProseUnits(revision)
   const boundedTarget = Number.isSafeInteger(targetUnits) && targetUnits > 0
