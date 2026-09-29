@@ -334,6 +334,12 @@ const FINALIZED_FACT_PRECEDENCE = {
     heading: '【定稿事实优先】',
     unresolved: '定稿只发现疑点、提出猜测或写明待核实时，不能把某一解释、原因或哪一方出错写成已确认事实',
     verification: '本章可以通过新线索和调查推进并解决疑点',
+    planDecision: '人物的等待、暂停或撤回是当时的计划状态，不是作者禁令',
+    supportedDecision: '本章可以先写出人物基于既有事实作出的新决定、理由及连续性依据',
+    authorBoundary: '不能违反作者明确禁令、必需呈现或既成事实',
+    noRetroactiveExecution: '不得把已撤回、取消或被取代的计划追溯写成已执行',
+    newAction: '复述、确认或记账前章已发生的结果不能单独算作兑现',
+    actionConsistency: '付款、收回、失去等状态改变必须按事件先后写清',
     timeRuleStart: '本章紧接上一章结尾：作者没有写明跨日或时间间隔时，视为同一天内的紧接发展',
     timeRuleEnd: '则写“昨晚”“昨天傍晚”）。',
     lengthContract: '【本章篇幅合同】',
@@ -342,6 +348,12 @@ const FINALIZED_FACT_PRECEDENCE = {
     heading: '[Finalized facts take precedence]',
     unresolved: 'do not present an explanation, cause, or which side is wrong as confirmed',
     verification: 'This chapter may pursue new clues and resolve the question',
+    planDecision: "Characters' waiting, paused, or withdrawn plans describe their prior intention, not an author prohibition",
+    supportedDecision: "this chapter may first show a new decision grounded in established facts, the character's reason, and continuity evidence",
+    authorBoundary: 'without violating explicit author prohibitions, required on-page events, or completed facts',
+    noRetroactiveExecution: 'never retroactively portray a withdrawn, cancelled, or superseded plan as executed',
+    newAction: 'merely repeating, confirming, or accounting for an outcome already completed in an earlier chapter does not fulfill them',
+    actionConsistency: 'Keep the order and result of paying, recovering, or losing money or property consistent',
     timeRuleStart: "This chapter follows directly on the previous chapter's ending: when the author states no day change or time gap",
     timeRuleEnd: '"earlier this evening"; if it says "evening" and this chapter is "the next morning", write "last night" or "yesterday evening").',
     lengthContract: '[Chapter length contract]',
@@ -2351,7 +2363,9 @@ ${headingPrefix}第3章：潮门
       continuationTail: '[End of existing manuscript]',
     },
   ])('puts the $writingLanguage finalized-fact precedence rule in initial and continuation requests', async ({
-    writingLanguage, heading, unresolved, verification, timeRuleStart, timeRuleEnd, executionCard, lengthContract, continuationTail,
+    writingLanguage, heading, unresolved, verification, planDecision, supportedDecision, authorBoundary, noRetroactiveExecution,
+    newAction, actionConsistency,
+    timeRuleStart, timeRuleEnd, executionCard, lengthContract, continuationTail,
   }) => {
     const runtime = fakeOutcomes(
       outcome('初'.repeat(100), 'length', 1),
@@ -2369,6 +2383,7 @@ ${headingPrefix}第3章：潮门
     const rule = initial.split(`${heading}\n`)[1]?.split(`\n\n${lengthContract}`)[0]
     expect(rule).toContain(unresolved)
     expect(rule).toContain(verification)
+    for (const anchor of [planDecision, supportedDecision, authorBoundary, noRetroactiveExecution, newAction, actionConsistency]) expect(rule).toContain(anchor)
     expect(initial).toContain(timeRuleStart)
     expect(initial).toContain(timeRuleEnd)
     expect(initial.split(heading)).toHaveLength(2)
@@ -2407,6 +2422,27 @@ ${headingPrefix}第3章：潮门
         heading: '[Finalized chapter text]', blueprint: '[Current chapter blueprint]' },
     } as const
 
+    it.each(['zh-CN', 'en-US'] as const)('does not require an invented cost for a cost-free %s event during reconciliation', async writingLanguage => {
+      const runtime = fakeRuntime(() => outcome('本章正文。'.repeat(125), 'stop'),
+        () => outcome(JSON.stringify({ finalState: ['上一章已结束。'], events: [{ event: '读信', conflict: false, realization: '读完信并回信。' }] }), 'stop'))
+      const { context, callbacks, command } = setup({
+        runtime, wordsTarget: 500, writingLanguage, chapterNumber: 2, keyEvents: '读信',
+        previousFinalizedContent: '上一章末尾，信刚送到。',
+      })
+
+      await command.execute({ step: {}, context, callbacks })
+
+      const prompt = runtime.reconcile.mock.calls[0]![0].messages[0]!.content
+      expect(prompt).toContain('"keyEvents": "读信"')
+      if (writingLanguage === 'zh-CN') {
+        expect(prompt).toContain('仅当作者设定或本章蓝图明确要求代价时')
+        expect(prompt).not.toContain('每条必需事件写出本章新动作、代价和实际后果')
+      } else {
+        expect(prompt).toContain('include a cost only when the author settings or current chapter blueprint explicitly require one')
+        expect(prompt).not.toContain("For each required event, distinguish what already happened in an earlier chapter, what remains pending, and what must newly change in this chapter; describe this chapter's new action, cost, and actual consequence")
+      }
+    })
+
     it.each(['zh-CN', 'en-US'] as const)('reconciles once before the %s first draft and carries the result into continuation', async writingLanguage => {
       const runtime = fakeRuntime((attempt) => attempt === 1 ? outcome('初'.repeat(100), 'length', 1) : outcome(`${'续'.repeat(400)}。`, 'stop', 2),
         () => outcome(`<think>先想一想</think>\`\`\`json\n${reconciliationOutput(writingLanguage)}\n\`\`\``, 'stop'))
@@ -2424,11 +2460,29 @@ ${headingPrefix}第3章：潮门
         budgetDemand: { kind: 'structured-items', writingLanguage, requestedItems: 1 } })
       expect(reconcileTask.messages).toHaveLength(1)
       const reconcilePrompt = reconcileTask.messages[0]!.content
+      for (const anchor of [markers[writingLanguage].precedence,
+        FINALIZED_FACT_PRECEDENCE[writingLanguage].planDecision,
+        FINALIZED_FACT_PRECEDENCE[writingLanguage].supportedDecision,
+        FINALIZED_FACT_PRECEDENCE[writingLanguage].authorBoundary,
+        FINALIZED_FACT_PRECEDENCE[writingLanguage].noRetroactiveExecution,
+        FINALIZED_FACT_PRECEDENCE[writingLanguage].newAction,
+        FINALIZED_FACT_PRECEDENCE[writingLanguage].actionConsistency]) expect(reconcilePrompt).toContain(anchor)
+      expect(reconcilePrompt).toContain(writingLanguage === 'zh-CN'
+        ? '逐项区分前章已发生、仍待执行和本章必须新增的变化'
+        : 'distinguish what already happened in an earlier chapter, what remains pending, and what must newly change in this chapter')
+      expect(reconcilePrompt).not.toContain(writingLanguage === 'zh-CN'
+        ? '除非正文先写明条件已满足，不得让人物动身执行'
+        : 'a plan still waiting for a condition must not be set in motion unless the prose first shows the condition being met')
       for (const text of [markers[writingLanguage].heading, '作者更正：林澄撤回先前核查安排，等待新的通行许可。', '铜钥匙始终由林澄保管。',
         markers[writingLanguage].blueprint, '"keyEvents": "核查遇阻；承担代价"']) expect(reconcilePrompt).toContain(text)
       expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-continuation'])
       const [initial, continuation] = runtime.complete.mock.calls.map(([task]) => task.messages.at(-1)!.content)
       const block = expectedBlock[writingLanguage]
+      const heading = markers[writingLanguage].precedence
+      const sharedRule = reconcilePrompt.split(`${heading}\n`)[1]?.split('\n1. ')[0]
+      expect(sharedRule).toBeTruthy()
+      expect(initial).toContain(`${heading}\n${sharedRule}`)
+      expect(continuation).toContain(`${heading}\n${sharedRule}`)
       // 首稿：紧跟执行卡（必需事件）之后、定稿事实优先规则之前，只出现一次。
       expect(initial.split(block)).toHaveLength(2)
       expect(initial.indexOf(block)).toBeGreaterThan(initial.indexOf(markers[writingLanguage].card))
@@ -2438,20 +2492,29 @@ ${headingPrefix}第3章：潮门
       expect(continuation).toContain(`${block}\n\n${markers[writingLanguage].precedence}`)
     })
 
-    it('carries the reconciliation into the single condense revision', async () => {
-      const draft = `${'长'.repeat(2700)}。`
-      const condensed = `${'缩'.repeat(2000)}。`
+    it.each(['zh-CN', 'en-US'] as const)('carries the %s reconciliation and shared fact contract into the single condense revision', async writingLanguage => {
+      const draft = writingLanguage === 'zh-CN' ? `${'长'.repeat(2700)}。` : `${'long '.repeat(2700).trim()}.`
+      const condensed = writingLanguage === 'zh-CN' ? `${'缩'.repeat(2000)}。` : `${'short '.repeat(2000).trim()}.`
       const runtime = fakeRuntime(attempt => attempt === 1 ? outcome(draft, 'stop', 1) : outcome(condensed, 'stop', 2),
-        () => outcome(reconciliationOutput('zh-CN'), 'stop'))
+        () => outcome(reconciliationOutput(writingLanguage), 'stop'))
       const { context, callbacks, command } = setup({ runtime, wordsPerChapter: 2000, wordsTarget: 2000, chapterNumber: 2,
-        keyEvents: '核查遇阻；承担代价', previousFinalizedContent: '作者更正：林澄撤回先前核查安排，等待新的通行许可。' })
+        writingLanguage, keyEvents: '核查遇阻；承担代价', previousFinalizedContent: '作者更正：林澄撤回先前核查安排，等待新的通行许可。' })
 
       await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(condensed)
 
       expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-condense'])
+      const initialPrompt = runtime.complete.mock.calls[0]![0].messages.at(-1)!.content
       const condensePrompt = runtime.complete.mock.calls[1]![0].messages.at(-1)!.content
-      expect(condensePrompt).toContain(`${expectedBlock['zh-CN']}\n\n【定稿事实优先】`)
-      expect(condensePrompt.indexOf(expectedBlock['zh-CN'])).toBeLessThan(condensePrompt.indexOf('【待压缩正文】'))
+      const heading = markers[writingLanguage].precedence
+      const block = expectedBlock[writingLanguage]
+      const rule = initialPrompt.split(`${heading}\n`)[1]?.split(writingLanguage === 'zh-CN' ? '\n\n【本章篇幅合同】' : '\n\n[Chapter length contract]')[0]
+      const reconcilePrompt = runtime.reconcile.mock.calls[0]![0].messages[0]!.content
+      expect(reconcilePrompt).toContain(`${heading}\n${rule}\n1. `)
+      expect(condensePrompt).toContain(`${block}\n\n${heading}\n${rule}`)
+      expect(condensePrompt.indexOf(block)).toBeLessThan(condensePrompt.indexOf(writingLanguage === 'zh-CN' ? '【待压缩正文】' : '[Manuscript to condense]'))
+      for (const anchor of [FINALIZED_FACT_PRECEDENCE[writingLanguage].planDecision,
+        FINALIZED_FACT_PRECEDENCE[writingLanguage].newAction,
+        FINALIZED_FACT_PRECEDENCE[writingLanguage].actionConsistency]) expect(condensePrompt).toContain(anchor)
     })
 
     it('binds the reconciliation prompt and the unreconciled draft prompt into the material decision', async () => {
