@@ -169,9 +169,17 @@ node scripts/quality-modernization-run.mjs early-budget --targets .runtime/.cach
 
 裸 early-budget 不默认发模型，必须显式选择模式。兼容 `--phase early-budget --dry-run` 写法，但 `--protocol` 只接受实际 `docs/research/novel-quality-modernization/protocol.json`；冻结旧 Spec 示例中不存在的 test/fixtures 路径不会被悄悄替换。退出码0只表示自动/合成技术检查成功，不代表质量通过；1表示自动执行失败，2表示前置阻断，3表示已取得可评审产物但仍为 `pending-independent-oracle-review`。真实结果须独立评审原文事件、事实和质量，不能把 runner exit 0、合成正文或字数合格直接记为 C06 PASS。
 
-## H5 有界生产恢复登记（现行）
+## C16–C18 v7 专用定稿来源（前向场景修订）
 
-本次只补 harness 合同，不增加产品能力。现行场景为 C16–C18 `c16-c18-candidate-production-path-v6`、full `s14b-full-continuous-project-v3`、post-UI `s14b-post-ui-reviewed-budget-review-rebuild-must-show-v4`；下文旧 revision 段落保留历史解释，额外调用资格以本节和现行 `protocol.json` 为准。三个场景及协议完整字节 hash 均须重新冻结；唯一物理账本历史边界仍为 861 行，全部历史失败不变。
+现行场景为 `c16-c18-candidate-production-path-v7`。`semantic-source.json` 的 C16-A `finalizedSource` 固定为该 revision 的专用作者定稿：清晨发现记录日期与旧钟不符；同日午后，人物因缺少通行许可在现场核查启动前被拒，林澄已损失不退还的六枚铜币预约费；铜钥匙保管、沈岸尚不知地图、核查尚未开始、异常原因未明均明确。它经原生产草稿保存和定稿入口成为后处理实际读取的第1章 snapshot，替代 C16–C18 原来过短的前情；全局 `authorPredecessor` 及 post-UI/full 输入正文不变。
+
+B/C 继续追加原核查安排与“尚未开始、等待雨停”更正；C17-B 继续在恢复副本重新定稿，撤回旧安排并等待新许可；C17/C18 仍从实际选定的来源继承已发生的拒绝、损失及未决异常。没有写入已完成核查再试图用后缀抹除历史。`targetCharacterName` 明确登记林澄为原作者状态保全/冲突断言的目标；fixture 从生产定稿 identity 唯一解析其稳定 ID，不再假设正文只出现一个人物。原七案 oracle、顺序、操作、预算及最短16次物理调用不变；v7 仅补齐正向覆盖所需来源，不增加产品能力。语义源、协议、前驱正文和实际 parity/hash 必须重新冻结，不能声称与旧输入相同；旧 scenario revision 在现行 fixture 入口拒绝，历史重放须使用对应旧 fixture。
+
+ac3af420 的 C16-A 独评及唯一仲裁为 INCONCLUSIVE，C18-B 自然度为 FAIL，本轮与更早失败永久保留，不因前向场景或另行产品提示修复改判。开发合成只证明定稿、后处理及恢复来源接线；新的真实质量仍需重新冻结执行和独立评审。
+
+## H5 有界生产恢复登记（恢复策略继续适用）
+
+该次只补 harness 合同，不增加产品能力，登记 C16–C18 `c16-c18-candidate-production-path-v6`、full `s14b-full-continuous-project-v3`、post-UI `s14b-post-ui-reviewed-budget-review-rebuild-must-show-v4`；C16 现已由上节 v7 场景取代，恢复策略不变。下文旧 revision 段落保留历史解释，额外调用资格以本节和现行 `protocol.json` 为准。三个场景及协议完整字节 hash 均须重新冻结；该次登记时的唯一物理账本历史边界为 861 行，后续历史边界见下文，全部历史失败不变。
 
 正文恢复复用生产 `DRAFT_GENERATION_BUDGET.maxAttempts=8`，包括同一 root 内对账、首稿、续写、无进展恢复与唯一压缩，不另外给八次重试。最多七轮 continuation；正常 stop 但短于该臂生产下限或 length 才可继续；length 且可见新增不足 300 单位时丢弃该段，至多一次 no-progress recovery。候选超过上限后走既有唯一全文压缩，baseline 无此能力。门禁逐次核对同 run/root/project/epoch、唯一 attempt、reserve→dispatch→settle、stop/length 终态、落盘原文 hash，候选另核对 main owner artifact。未结算、错身份、错误触发、超次数和未知用途在 reserve 前拒绝；原 token、截止时间和上下文预算仍由实际生产 session 约束。
 

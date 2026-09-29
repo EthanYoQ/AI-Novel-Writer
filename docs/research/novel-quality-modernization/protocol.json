@@ -622,7 +622,7 @@
   },
   "phases": {
     "c16-c18": {
-      "scenarioRevision": "c16-c18-candidate-production-path-v6",
+      "scenarioRevision": "c16-c18-candidate-production-path-v7",
       "attemptPolicy": {
         "milestone": "final",
         "arms": [

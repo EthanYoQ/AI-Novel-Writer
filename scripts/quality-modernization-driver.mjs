@@ -382,7 +382,7 @@ export const PHASE_SCENARIOS = Object.freeze({
   'c16-c18': Object.freeze({
     caseId: 'C16-A', caseIds: Object.freeze(['C16-A', 'C16-B', 'C16-C', 'C17-A', 'C17-B', 'C18-A', 'C18-B']),
     sceneId: '场景1', chapterNumber: 2, milestone: 'final', arms: Object.freeze(['candidate']),
-    scenarioRevision: 'c16-c18-candidate-production-path-v6',
+    scenarioRevision: 'c16-c18-candidate-production-path-v7',
     attemptPolicy: C16_C18_ATTEMPT_POLICY,
     // v5（用户批准的 harness 变更）：C17/C18 续写登记产品原生的唯一一次生成前定稿对账（见 attemptPolicy.draftReconcile）。
     // v4（用户批准的 harness 变更）：C17-B 恢复副本内重新定稿后按产品定稿路径紧接生产后处理，

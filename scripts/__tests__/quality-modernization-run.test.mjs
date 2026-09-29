@@ -869,10 +869,36 @@ test('C17-B 替换后前驱：readback 与 parity 记录续写实际纳入的新
   assert.ok(fixture.indexOf('receipt.restoration.predecessorsBeforeReplacement') < fixture.indexOf('const physicalFetch = async'), 'PARITY_REBOUND_BEFORE_ANY_DISPATCH')
 })
 
-test('c16-c18 v5 场景沿用唯一压缩策略、条件作者保护与 C17-B 重新定稿后处理，并登记唯一对账；历史 v1–v4 与任何放宽都拒绝', () => {
+test('c16-c18 v7 专用定稿拒绝旧revision，保留非连续性阶段前情及更正链', () => {
+  const fixture = fixtureSource()
+  const start = fixture.indexOf('  const continuitySource =')
+  const end = fixture.indexOf('  const scene =', start)
+  const select = new Function('source', 'request', 'continuityRun', 'assert', `${fixture.slice(start, end)}\nreturn continuitySource`)
+  const current = PHASE_SCENARIOS['c16-c18'].scenarioRevision
+  const selected = select(source, { scenarioRevision: current }, true, assert)
+  assert.equal(selected, source.continuityQualificationCases[0].finalizedSource)
+  const matchStart = fixture.indexOf('            const matches = identity.characters.filter')
+  const matchEnd = fixture.indexOf('            if (finalizedCharacterId)', matchStart)
+  const targetId = new Function('identity', 'continuitySource', 'assert', `${fixture.slice(matchStart, matchEnd)}\nreturn matches[0].characterId`)
+  const identity = { content: selected.content, characters: source.scenes[0].characters.map((name, index) => ({
+    characterId: `stable-${index}`, displayNameSnapshot: name })) }
+  assert.equal(targetId(identity, selected, assert), 'stable-0')
+  assert.throws(() => targetId({ ...identity, characters: identity.characters.slice(1) }, selected, assert), /FINALIZATION_TARGET_CHARACTER_AMBIGUOUS/)
+  for (const fact of ['同日午后', '缺少通行许可', '六枚铜币预约费已被扣除', '不予退还',
+    '铜钥匙始终由林澄保管', '雨停前沈岸不知道信封内有地图', '现场核查尚未开始', '原因仍未查明']) assert.ok(selected.content.includes(fact))
+  for (const revision of ['c16-c18-candidate-production-path-v6', undefined])
+    assert.throws(() => select(source, { scenarioRevision: revision }, true, assert), /CONTINUITY_SOURCE_REVISION_MISMATCH/)
+  assert.equal(select(source, { scenarioRevision: current }, false, assert), null)
+  assert.equal(source.scenes[0].authorPredecessor, '作者提供的前情：档案员林澄在清晨发现记录上的日期与旧钟不符，决定到现场核查；尚未核查成功。')
+  const byId = id => source.continuityQualificationCases.find(item => item.id === id)
+  assert.equal(byId('C16-C').sourceSuffix, '林澄更正记录：核查仍未开始，原定安排等待雨停。')
+  assert.equal(byId('C17-B').sourceSuffix, '恢复副本的作者更正：林澄撤回先前核查安排，等待新的通行许可。')
+})
+
+test('c16-c18 v7 场景沿用有界恢复、条件作者保护与 C17-B 重新定稿后处理；历史 v1–v6 与任何放宽都拒绝', () => {
   const selection = selectPhase(protocol, 'c16-c18', 'final')
   const scenario = PHASE_SCENARIOS['c16-c18']
-  assert.equal(selection.scenarioRevision, 'c16-c18-candidate-production-path-v6')
+  assert.equal(selection.scenarioRevision, 'c16-c18-candidate-production-path-v7')
   assert.match(selection.stopPolicy.repair, /唯一一次生成前定稿对账chapter-draft-reconcile/)
   assert.match(selection.stopPolicy.attemptAccounting, /登记的唯一对账/)
   assert.match(selection.caseOracles['C17-B'].automatic[0], /RunFinalizePostProcessCommand对新finalizationId重新生成/)
@@ -892,6 +918,8 @@ test('c16-c18 v5 场景沿用唯一压缩策略、条件作者保护与 C17-B �
     value => { value.scenarioRevision = 'c16-c18-candidate-production-path-v2' },
     value => { value.scenarioRevision = 'c16-c18-candidate-production-path-v3' },
     value => { value.scenarioRevision = 'c16-c18-candidate-production-path-v4' },
+    value => { value.scenarioRevision = 'c16-c18-candidate-production-path-v5' },
+    value => { value.scenarioRevision = 'c16-c18-candidate-production-path-v6' },
     value => { delete value.attemptPolicy },
     value => { delete value.attemptPolicy.draftReconcile },
     value => { value.attemptPolicy.draftReconcile.maxReconcileAttempts = 2 },
@@ -4074,7 +4102,7 @@ test('S14B post-UI 场景 v4 保留候选唯一压缩并登记有界恢复；ear
   assertScenarioMatchesProtocol(early, productionScenario('early-budget', 'early'))
   assert.equal(productionScenario('early-budget').attemptPolicy, PHASE_SCENARIOS['early-budget'].attemptPolicy)
   // 其它阶段的 revision 与登记逐字不变，且不含新压缩。
-  assert.equal(PHASE_SCENARIOS['c16-c18'].scenarioRevision, 'c16-c18-candidate-production-path-v6')
+  assert.equal(PHASE_SCENARIOS['c16-c18'].scenarioRevision, 'c16-c18-candidate-production-path-v7')
   assert.equal(PHASE_SCENARIOS['c16-c18'].attemptPolicy, C16_C18_ATTEMPT_POLICY)
   assert.equal(PHASE_SCENARIOS['early-context'].scenarioRevision, 's10b-early-context-selection-difference-v3')
   assert.equal(PHASE_SCENARIOS['early-review'].scenarioRevision, 's11-early-review-per-attempt-deadline-v3')
@@ -4812,7 +4840,7 @@ test('S14B full 场景 v3 保留候选唯一压缩并登记有界恢复；其余
   assert.equal(PHASE_SCENARIOS['early-budget'].scenarioRevision, 's14b-post-ui-budget-syntax-repair-v1')
   assert.equal(PHASE_SCENARIOS['early-budget'].attemptPolicy.draftCondense, undefined)
   assert.equal(productionScenario('early-budget', 'post-ui').scenarioRevision, POST_UI_SCENARIO_REVISION)
-  assert.equal(PHASE_SCENARIOS['c16-c18'].scenarioRevision, 'c16-c18-candidate-production-path-v6')
+  assert.equal(PHASE_SCENARIOS['c16-c18'].scenarioRevision, 'c16-c18-candidate-production-path-v7')
   assert.equal(PHASE_SCENARIOS['c16-c18'].attemptPolicy, C16_C18_ATTEMPT_POLICY)
   assert.equal(PHASE_SCENARIOS['early-context'].scenarioRevision, 's10b-early-context-selection-difference-v3')
   assert.equal(PHASE_SCENARIOS['early-review'].scenarioRevision, 's11-early-review-per-attempt-deadline-v3')

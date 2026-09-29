@@ -214,6 +214,11 @@ test('isolated production commands persist the selected phase operations', async
   const continuityCase = continuityRun ? source.continuityQualificationCases.find(item => item.id === request.caseId) : null
   if (continuityRun) assert.ok(continuityCase && continuityCase.sceneId === request.sceneId
     && continuityCase.chapterNumber === request.chapterNumber, 'CONTINUITY_CASE_NOT_REGISTERED')
+  const continuitySource = continuityRun ? source.continuityQualificationCases.find(item => item.id === 'C16-A')?.finalizedSource : null
+  if (continuityRun) {
+    assert.equal(continuitySource?.scenarioRevision, request.scenarioRevision, 'CONTINUITY_SOURCE_REVISION_MISMATCH')
+    assert.ok(typeof continuitySource?.content === 'string' && continuitySource.content.trim(), 'CONTINUITY_SOURCE_MISSING')
+  }
   const scene = source.scenes.find(value => value.id === request.sceneId)
   assert.ok(scene, 'SCENE_NOT_REGISTERED')
   const chapter = scene.chapters[request.chapterNumber - 1]
@@ -309,7 +314,8 @@ test('isolated production commands persist the selected phase operations', async
           finalizedContext = result.context
           if (operationKind === 'character_cards') {
             const identity = finalizedContext.identity
-            const matches = identity.characters.filter(item => identity.content.includes(item.displayNameSnapshot))
+            const matches = identity.characters.filter(item => item.displayNameSnapshot === continuitySource.targetCharacterName
+              && identity.content.includes(item.displayNameSnapshot))
             assert.equal(matches.length, 1, 'FINALIZATION_TARGET_CHARACTER_AMBIGUOUS')
             if (finalizedCharacterId) assert.equal(matches[0].characterId, finalizedCharacterId, 'FINALIZATION_TARGET_CHARACTER_CHANGED')
             else finalizedCharacterId = matches[0].characterId
@@ -424,6 +430,7 @@ test('isolated production commands persist the selected phase operations', async
         const bodies = [
           { chapterNumber: request.chapterNumber - 1, marker: null, required: true,
             content: request.phase === 'early-review' ? naturalPredecessorText(scene)
+              : continuityRun ? continuitySource.content
               : `${scene.title}第${request.chapterNumber - 1}章正文（作者前情；本夹具预置的合法前驱候选）。\n\n${scene.authorPredecessor}` },
           ...registered.map(spec => ({ chapterNumber: spec.chapterNumber, marker: spec.marker, required: false,
             content: optionalPredecessorBody(spec) })),

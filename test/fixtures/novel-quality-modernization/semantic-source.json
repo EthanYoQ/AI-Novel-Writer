@@ -14,7 +14,12 @@
   "template": "只依据作者素材与本臂前章写作；完成本章必需事件；尚未实施的方案不得写为既成事实。",
   "skills": [],
   "continuityQualificationCases": [
-    { "id": "C16-A", "sceneId": "场景1", "chapterNumber": 2, "kind": "extraction", "purpose": "有效定稿的空或旧derived字段更新" },
+    { "id": "C16-A", "sceneId": "场景1", "chapterNumber": 2, "kind": "extraction", "purpose": "有效定稿的空或旧derived字段更新",
+      "finalizedSource": {
+        "scenarioRevision": "c16-c18-candidate-production-path-v7",
+        "targetCharacterName": "档案员林澄",
+        "content": "档案员林澄在清晨发现记录上的日期与旧钟不符，决定到现场核查；尚未核查成功。\n\n同日午后，雨仍未停。林澄和摆渡人沈岸来到核查地点的值班室门口，看守以缺少通行许可为由退回申请，拒绝让两人进入现场。林澄预付的六枚铜币预约费已被扣除，收据上盖着不予退还的章；她把收据收进口袋，这笔钱已经拿不回来了。铜钥匙始终由林澄保管。沈岸只知道他们要核对日期，雨停前沈岸不知道信封内有地图。\n\n两人停在门外，现场核查尚未开始。记录上的日期与旧钟不符的原因仍未查明，也尚未确认记录或旧钟哪一方有误。"
+      } },
     { "id": "C16-B", "sceneId": "场景1", "chapterNumber": 2, "kind": "extraction", "authorMentalState": "谨慎", "sourceSuffix": "林澄在记录末尾写下核查安排。", "purpose": "作者状态保全与冲突提议" },
     { "id": "C16-C", "sceneId": "场景1", "chapterNumber": 2, "kind": "extraction", "sourceSuffix": "林澄更正记录：核查仍未开始，原定安排等待雨停。", "purpose": "同章重新定稿替换旧来源" },
     { "id": "C17-A", "sceneId": "场景1", "chapterNumber": 2, "kind": "local", "purpose": "恢复有效derived来源后续写" },
