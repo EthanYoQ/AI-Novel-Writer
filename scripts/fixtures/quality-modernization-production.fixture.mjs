@@ -11,7 +11,7 @@ import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, 
   createOutboundPreflightAssert, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
   fetchProviderResponse, measurePromptBytes, BRIDGE_SETTLEMENT_DEADLINE_MS,
   BRIDGE_TEST_TIMEOUT_MS, BRIDGE_REVIEWED_TEST_TIMEOUT_MS, POST_UI_REVIEW_POLICY, reviewedDraftSelection,
-  scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor } from '../quality-modernization-driver.mjs'
+  scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, recordPersistedDraftObservation, safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
 
 // This adapter replaces the Electron transport, never a command/runtime/repository.
@@ -34,14 +34,14 @@ const templateKeysForPhase = phase => phase === 'c16-c18'
   ? ['consistency_check', 'refine_from_review']
   : ['chapter_blueprint_chunk', 'first_chapter_draft', 'next_chapter_draft']
 /** 合成正文按目标单位数配长：既不低于 70% 下限，也不触发自动续写。 */
-const syntheticDraftText = (countUnits, targetUnits, chapterNumber = 1) => {
+const syntheticDraftText = (countUnits, targetUnits, chapterNumber = 1, offset = 0) => {
   const line = index => chapterNumber === 2
     ? `午后，两人来到核查地点，第${index + 1}份申请被看守退回。风从门缝灌进来，桌边的烛火晃了一下。他们交出当天的工钱换取查阅机会，把收据收进口袋，等候下一轮登记。`
     : chapterNumber === 3
       ? `翌日，第${index + 1}处印迹与原件的缺口吻合。窗外已经放晴，光落在刚刚摊开的纸页上。他们选定公开证据的办法，将副本递交值班室。负责人签收之后暂停了相关手续，屋里的人逐一离去。`
       : `清晨，林澄核对第${index + 1}行登记，发现日期异常。他握紧铜钥匙，与沈岸商定雨停后到现场核查。`
   const lines = []
-  while (countUnits(lines.join('\n')) < targetUnits && lines.length < 500) lines.push(line(lines.length))
+  while (countUnits(lines.join('\n')) < targetUnits && lines.length < 500) lines.push(line(lines.length + offset))
   return lines.join('\n')
 }
 const reviewedSyntheticIssues = [
@@ -293,7 +293,8 @@ test('isolated production commands persist the selected phase operations', async
     const invoke = async (channel, ...args) => {
       receipt.invocations.push(channel)
       if (!candidate && channel === 'llm:generate-stream') pendingBaselineIpc = {
-        attemptId: args[0], runId: currentContext?.runId, projectId: args[1]?.projectSession?.projectId,
+        // Legacy baseline has one renderer command/session budget and no durable RootAction; bind its command run as that root.
+        attemptId: args[0], runId: currentContext?.runId, rootActionId: currentContext?.runId, projectId: args[1]?.projectSession?.projectId,
         epoch: args[1]?.projectSession?.leaseId, purpose: args[1]?.purpose, operationId,
       }
       if (channel === 'generation:bind-material-decision') {
@@ -681,6 +682,15 @@ test('isolated production commands persist the selected phase operations', async
       draftCondense = { policy: condensePolicy, targetUnits, maximum: draftTargetUnitRange(targetUnits).maximum,
         measureUnits: text => countUnits(visible.sanitizeDraftText(redactVisibleCompletionText(text))) }
     }
+    const structuredPolicy = policyEligible ? structuredRecoveryFor(request.attemptPolicy, target.arm) : null
+    const structuredRecovery = structuredPolicy ? { policy: structuredPolicy, decode: blueprintRecoveryDecoder(target.repositoryRoot, target.arm),
+      chapterNumbers: fullRun ? scene.chapters.map(entry => entry.number) : [chapter.number] } : null
+    const recoveryPolicy = policyEligible ? draftRecoveryFor(request.attemptPolicy, target.arm) : null
+    const draftRecovery = recoveryPolicy ? { policy: recoveryPolicy, arm: target.arm, targetUnits: chapter.targetUnits } : null
+    if (recoveryPolicy) {
+      const { DRAFT_GENERATION_BUDGET } = await load('src/services/workflows/commands/generate-draft.command.ts')
+      assert.equal(recoveryPolicy.maxAttempts, DRAFT_GENERATION_BUDGET.maxAttempts, 'DRAFT_RECOVERY_BUDGET_MISMATCH')
+    }
     // v5 唯一生成前定稿对账：用途常量与注入块渲染取自生产 draft-reconciliation 模块（与主进程复核同源）。
     const reconcilePolicy = policyEligible && continuityRun ? request.attemptPolicy.draftReconcile ?? null : null
     const reconciliation = reconcilePolicy ? await load('src/shared/draft-reconciliation.ts') : null
@@ -691,7 +701,7 @@ test('isolated production commands persist the selected phase operations', async
     const reconcileBlockOf = attempt => attempt?.finishReason === 'stop' && typeof attempt.outputPath === 'string'
       ? reconciliation.draftReconciliationBlock('zh-CN', fs.readFileSync(attempt.outputPath, 'utf8')) : ''
     const { parseFinalizedCharacterStateResponse } = continuityRun ? await load('src/shared/finalized-continuity.ts') : {}
-    const beforeOperationDispatch = createOperationDispatchGate({ repairPolicy, draftCondense, draftReconcile: reconcilePolicy,
+    const beforeOperationDispatch = createOperationDispatchGate({ repairPolicy, draftCondense, draftRecovery, structuredRecovery, draftReconcile: reconcilePolicy,
       finalizationRepair: continuityRun, readPrimaryEvidence: first => {
       const attemptId = `${target.arm}:${first.attemptId}`
       const matches = receipt.attempts.filter(attempt => attempt.attemptId === attemptId)
@@ -701,10 +711,11 @@ test('isolated production commands persist the selected phase operations', async
       const events = fs.readFileSync(request.ledgerPath, 'utf8').trimEnd().split('\n')
         .map(line => JSON.parse(line)).filter(event => event.attemptId === attemptId)
       // 压缩的首稿证据只取 owner artifact 原文 hash（C17/C18 与 post-UI 候选同规则）；post-UI 其余 operation 仍走审稿证据。
-      if (continuityRun || request.attemptPolicy?.draftCondense && operationKind === 'draft') {
+      if (target.arm === 'candidate' && (continuityRun || request.attemptPolicy?.structuredRecovery && operationKind === 'directory'
+        || (request.attemptPolicy?.draftRecovery || request.attemptPolicy?.draftCondense) && operationKind === 'draft')) {
         const artifact = db.prepare('SELECT artifact_json FROM generation_artifacts WHERE attempt_id=?').pluck().get(first.attemptId)
         if (!artifact) return null
-        if (operationKind === 'draft') return { attempt: matches[0], events, ownerArtifactHash: sha(JSON.parse(artifact).text) }
+        if (['draft', 'directory'].includes(operationKind)) return { attempt: matches[0], events, ownerArtifactHash: sha(JSON.parse(artifact).text) }
         if (!finalizedContext) return null
         const saved = JSON.parse(artifact)
         let finalizedCharacterInvalid = false
@@ -748,9 +759,15 @@ test('isolated production commands persist the selected phase operations', async
       if (reviewRepairPolicy?.operationId === operationId
         && (actual ?? observedIpc).purpose === reviewRepairPolicy.repairPurpose) await Promise.all(streamSettlements)
       if (continuityRun && operationKind === 'character_cards' && actual.purpose.includes(':repair:')) await Promise.all(streamSettlements)
-      if (condensePolicy && operationKind === 'draft' && actual.purpose === condensePolicy.condensePurpose) await Promise.all(streamSettlements)
+      if ((draftRecovery || condensePolicy) && operationKind === 'draft') await Promise.all(streamSettlements)
       // 对账之后的写稿请求出站前先等对账流结算，才能从落盘输出重算注入块。
       if (reconcilePolicy && operationKind === 'draft' && reconcileAttemptOf(operationId)) await Promise.all(streamSettlements)
+      if (structuredRecovery && operationKind === 'directory') {
+        await Promise.all(streamSettlements)
+        const owner = actual ?? observedIpc
+        try { owner.structuredRange = structuredRequestRange(body.messages.map(message => message.content).join('\n'), owner.purpose) }
+        catch (error) { preflight(false, error.message) }
+      }
       // The registered extra call must carry its real product purpose before campaign reserve.
       const draft = reviewedRun && operationKind === 'review' ? latestDraft() : null
       const reviewSource = draft ? { draftId: draft.id, contentHash: sha(draft.content) } : undefined
@@ -900,6 +917,11 @@ test('isolated production commands persist the selected phase operations', async
           ...(candidate ? { materialDecision } : {}) } }
       receipt.attempts.push(requestReceipt)
       const physicalOutputPath = path.join(evidenceRoot, `physical-output-${receipt.attempts.length}.txt`)
+      if (structuredRecovery && operationKind === 'directory') {
+        const promptPath = path.join(evidenceRoot, `structured-prompt-${receipt.attempts.length}.txt`)
+        fs.writeFileSync(promptPath, promptText)
+        requestReceipt.structuredPrompt = { outputPath: promptPath, contentHash: sha(promptText) }
+      }
       if (reconcilePrompt !== null) {
         // 对账请求原文落盘供评审包引用（作者资料与蓝图，不含凭据）；输出即同序号 physical-output。
         const promptPath = path.join(evidenceRoot, `reconcile-prompt-${receipt.attempts.length}.txt`)
@@ -914,13 +936,13 @@ test('isolated production commands persist the selected phase operations', async
       try {
         if (request.mode === 'synthetic') receipt.syntheticDispatches++
         else receipt.physicalModelRequests++
-        let text
+        let text, syntheticFinish = 'stop'
         // 合成对账：合法 JSON，首个必需事件登记为冲突，覆盖“对账结果注入首稿与作者资料块”路径。
         if (operationKind === 'draft' && isReconcile(actual?.purpose)) text = JSON.stringify({
           finalState: ['核查尚未开始，原定安排仍在等待条件满足', '铜钥匙仍由林澄保管'],
           events: chapter.requiredEvents.map((event, index) => ({ event, conflict: index === 0,
             realization: index === 0 ? '林澄先在正文中写明改变原定安排的新决定与理由，再动身核查，途中受阻。' : '' })) })
-        else if (operationKind === 'directory') text =JSON.stringify({ blueprints: (fullRun ? scene.chapters : [chapter]).map(entry => ({ chapterNumber: entry.number, title: scene.title, role: '开篇',
+        else if (operationKind === 'directory') text =JSON.stringify({ blueprints: (fullRun ? scene.chapters : [chapter]).filter(entry => !(actual ?? observedIpc).structuredRange || (actual ?? observedIpc).structuredRange.includes(entry.number)).map(entry => ({ chapterNumber: entry.number, title: scene.title, role: '开篇',
           purpose: entry.brief, keyEvents: entry.requiredEvents.join('；'), characters: scene.characters,
           relationships: [], suspenseHook: entry.oracle?.knowledge ?? '', userGuidance: fullRun ? `${source.template}\n本章时点：${entry.oracle.time}` : source.template })) })
         else if (operationKind === 'chapter_notes') text = finalizedContext.identity.content
@@ -989,11 +1011,36 @@ test('isolated production commands persist the selected phase operations', async
             issues.forEach((item, index) => { text = text.replace(`清晨，林澄核对第${index + 1}行登记，发现日期异常。`, item.quote) })
           }
         }
+        // Development transport exercises the existing product recovery branches; real/frozen requests never enter here.
+        if (request.development && request.mode === 'synthetic') {
+          const purpose = (actual ?? observedIpc).purpose
+          const recoverDraft = draftRecovery && operationKind === 'draft' && !isReconcile(purpose)
+            && (request.caseId === 'C17-A' || request.caseId === 'C18-A' || request.caseId === '场景1/2'
+              || reviewedRun || fullRun && request.caseId === '场景1/1')
+          if (recoverDraft) {
+            const noProgress = request.caseId === 'C18-A'
+            const condense = candidate && (request.caseId === 'C17-A' || request.caseId === '场景1/2' || reviewedRun)
+            const units = purpose === 'chapter-draft' ? 500 : purpose === 'chapter-draft-condense' ? chapter.targetUnits
+              : purpose === 'chapter-draft-continuation' && noProgress ? 500 : condense ? 900 : 400
+            const offset = purpose === 'chapter-draft-continuation' && !noProgress || purpose === 'chapter-draft-no-progress-recovery' ? 100 : 0
+            text = syntheticDraftText(countUnits, units, fullRun ? chapter.number : 1, offset)
+            syntheticFinish = noProgress && purpose !== 'chapter-draft-no-progress-recovery' ? 'length' : 'stop'
+            if (reviewedRun && purpose === 'chapter-draft-condense' && request.syntheticReviewedDraftCase !== 'none') {
+              const issues = request.syntheticReviewedDraftCase === 'single' ? reviewedSyntheticIssues.slice(0, 1) : reviewedSyntheticIssues
+              issues.forEach((item, index) => { text = text.replace(`清晨，林澄核对第${index + 1}行登记，发现日期异常。`, item.quote) })
+            }
+          }
+          if (structuredRecovery && operationKind === 'directory' && candidate && !purpose.includes(':compact-single:')) {
+            const invalid = JSON.parse(text)
+            invalid.blueprints[0].keyEvents = '超'.repeat(4001)
+            text = JSON.stringify(invalid)
+          }
+        }
         const promptTokens = Math.max(1, Math.ceil(Buffer.byteLength(JSON.stringify(body.messages), 'utf8') / 4))
         const completionTokens = Math.max(1, Math.ceil(Buffer.byteLength(text, 'utf8') / 4))
         const usage = { prompt_tokens: promptTokens, completion_tokens: completionTokens,
           total_tokens: promptTokens + completionTokens }
-        const sse = `data: ${JSON.stringify({ choices: [{ delta: { content: text }, finish_reason: 'stop' }] })}\n\ndata: ${JSON.stringify({ choices: [], usage })}\n\ndata: [DONE]\n\n`
+        const sse = `data: ${JSON.stringify({ choices: [{ delta: { content: text }, finish_reason: syntheticFinish }] })}\n\ndata: ${JSON.stringify({ choices: [], usage })}\n\ndata: [DONE]\n\n`
         const response = request.mode === 'synthetic'
           ? new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } })
           : await fetchProviderResponse(originalFetch, url, { ...options, signal }, receipt.fetchFailures ??= [], safeDiagnostic)
@@ -1337,6 +1384,7 @@ test('isolated production commands persist the selected phase operations', async
         assert.ok(terminal && ['settled', 'unknown'].includes(terminal.status))
         // 对账以 length 结束如实记为不可用（见 draftReconciliation）；其余 attempt 仍须 stop。
         if (isReconcile(attempt.binding.actual.purpose)) assert.ok(reconcilePolicy.finishReasons.includes(terminal.finishReason), 'DRAFT_RECONCILE_TERMINAL_INVALID')
+        else if (structuredRecovery && attempt.binding.actual.purpose.startsWith('chapter-blueprint-directory') || draftRecovery && attempt.binding.actual.purpose.startsWith('chapter-draft')) assert.ok(['stop', 'length'].includes(terminal.finishReason))
         else assert.equal(terminal.finishReason, 'stop')
         assert.equal(terminal.purpose, attempt.binding.actual.purpose)
         assert.ok(terminal.artifactId && terminal.textHash !== sha(''), 'OWNER_ARTIFACT_MISSING')
@@ -1345,7 +1393,7 @@ test('isolated production commands persist the selected phase operations', async
           && receipt.attempts.some(other => other.binding.operation === repairPolicy.operationId
             && other.binding.actual?.purpose === repairPolicy.repairPurpose)
         // C16 原生修复与 C17/C18、post-UI 候选的唯一压缩同规则：同一 operation 只有末次 attempt 带正式效果。
-        const supersededAttempt = continuityRun
+        const supersededAttempt = (continuityRun || structuredRecovery && attempt.binding.actual.purpose.startsWith('chapter-blueprint-directory') || draftRecovery && attempt.binding.actual.purpose.startsWith('chapter-draft'))
           && receipt.attempts.filter(other => other.binding.operation === attempt.binding.operation).at(-1) !== attempt
         const condensedPrimary = condensePolicy && attempt.binding.actual.purpose === condensePolicy.primaryPurpose
           && receipt.attempts.some(other => other.binding.operation === attempt.binding.operation
@@ -1375,6 +1423,7 @@ test('isolated production commands persist the selected phase operations', async
     assertNoOutboundPreflightFailures(receipt)
     receipt.status = 'passed'
   } catch (error) {
+    if (localDispatchGateRejection) receipt.dispatchGateRejection = localDispatchGateRejection
     const canProjectRecoveryCandidate = request.mode === 'real'
       && !candidate
       && request.action === 'execute'

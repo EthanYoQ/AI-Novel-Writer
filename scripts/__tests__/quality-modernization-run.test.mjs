@@ -51,7 +51,7 @@ test('post-UI reviewed draft policy selects every actionable item without changi
   const selected = selectPhase(protocol, 'early-budget', 'post-ui')
   assert.deepEqual(selected.evaluationPolicy, POST_UI_REVIEW_POLICY)
   assert.equal(selected.scenarioRevision, POST_UI_SCENARIO_REVISION)
-  assert.equal(selected.maximumPlannedCalls, 15, '每臂最多7次登记请求；candidate 含登记的唯一压缩，至多多1次')
+  assert.equal(selected.maximumPlannedCalls, 30, '每臂目录3、正文8、首审2、修稿1、复评1；原产品root预算可先耗尽')
   assert.deepEqual(selected.attemptPolicy.reviewRebuild, PHASE_SCENARIOS['early-budget'].attemptPolicy.reviewRebuild)
   assertScenarioMatchesProtocol(selected, productionScenario('early-budget', 'post-ui'))
   assert.deepEqual(selected.operations.map(item => item.kind), ['directory', 'draft', 'review', 'refine', 'final-review'])
@@ -62,7 +62,7 @@ test('post-UI reviewed draft policy selects every actionable item without changi
 
 // v2 是语义源 scenarioAuthorSettingLines 登记附加行所用的键；v3 只改登记（attemptPolicy 增加唯一压缩），沿用同一附加行。
 const MUST_SHOW_SCENARIO_REVISION = 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2'
-const POST_UI_SCENARIO_REVISION = 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v3'
+const POST_UI_SCENARIO_REVISION = 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v4'
 const MUST_SHOW_LINE = '【第1章必现】林澄保管铜钥匙'
 test('post-UI must-show v3 adopts author must-show unknown goals with actionable items in one revision', () => {
   assert.equal(POST_UI_REVIEW_POLICY.revision, 's14b-post-ui-reviewed-draft-must-show-unknown-v3')
@@ -495,10 +495,10 @@ test('合成 transport 可复现 C17/C18 超长→唯一压缩→在范围，以
   const fixture = fixtureSource()
   assert.match(fixture, /draftCondense && request\.mode === 'synthetic' && operationKind === 'draft'\s*\? syntheticDraftUnitsGoal\(request\.syntheticDraftCondense, request\.caseId, actual\.purpose, chapter\.targetUnits, draftCondense\.maximum\)/)
   assert.match(fixture, /assert\.equal\(visible\.DRAFT_CONDENSE_PURPOSE, condensePolicy\.condensePurpose, 'DRAFT_CONDENSE_PURPOSE_MISMATCH'\)/)
-  assert.match(fixture, /createOperationDispatchGate\(\{ repairPolicy, draftCondense, draftReconcile: reconcilePolicy,\s*finalizationRepair: continuityRun,/)
+  assert.match(fixture, /createOperationDispatchGate\(\{ repairPolicy, draftCondense, draftRecovery, structuredRecovery, draftReconcile: reconcilePolicy,\s*finalizationRepair: continuityRun,/)
   assert.match(fixture, /draftCondense = \{ policy: condensePolicy, targetUnits, maximum: draftTargetUnitRange\(targetUnits\)\.maximum,\s*measureUnits: text => countUnits\(visible\.sanitizeDraftText\(redactVisibleCompletionText\(text\)\)\) \}/)
   // 压缩发出前先等首稿流结算，门禁才能读到 settle 与 hash。
-  assert.match(fixture, /if \(condensePolicy && operationKind === 'draft' && actual\.purpose === condensePolicy\.condensePurpose\) await Promise\.all\(streamSettlements\)/)
+  assert.match(fixture, /if \(\(draftRecovery \|\| condensePolicy\) && operationKind === 'draft'\) await Promise\.all\(streamSettlements\)/)
   assert.deepEqual(syntheticDraftCondensePlan({ mode: 'synthetic', development: true, phase: 'c16-c18' }),
     { syntheticDraftCondense: { caseId: 'C17-A', outcome: 'in-range' } })
 })
@@ -552,8 +552,8 @@ function continuityResults(dir, { condensedIndex = null, primaryText, savedUnits
         ? ['finalized-character-state'] : index === condensedIndex ? ['chapter-draft', 'chapter-draft-condense'] : ['chapter-draft']
       purposes.forEach((purpose, ordinal) => {
         const attemptId = `${index}-${operation.kind}-${ordinal}`
-        const output = write(`${attemptId}.txt`, ordinal === 0 && purposes.length === 2 ? primaryText : `output ${attemptId}`)
-        attempts.push({ attemptId: `candidate:${attemptId}`, ...output, binding: { operation: operation.id, phase: 'c16-c18',
+        const output = write(`${attemptId}.txt`, ordinal === 0 && purposes.length === 2 ? primaryText : operation.kind === 'draft' ? '甲'.repeat(savedUnits) : `output ${attemptId}`)
+        attempts.push({ attemptId: `candidate:${attemptId}`, ...output, finishReason: 'stop', binding: { operation: operation.id, phase: 'c16-c18',
           arm: 'candidate', invocationId: 'invocation', parityId: parityHash,
           actual: { attemptId, projectId, epoch, ...handle, purpose } },
           ...(operation.kind === 'draft' ? { optionalMaterialEvidence: { materialDecision: { included: [
@@ -581,7 +581,7 @@ function continuityResults(dir, { condensedIndex = null, primaryText, savedUnits
       syntheticDispatches: mode === 'synthetic' ? attempts.length : 0,
       ...(index < 3 || index === 4 ? { finalizationEvidence } : {}),
       ...(index < 3 ? replacement ? { sourceReplacement: replacement } : {} : {
-        draftObservation: { chapterNumber: 2, units: savedUnits, targetUnits: C17_TARGET, persisted: true, contentHash: hash(`saved-${index}`) },
+        draftObservation: { chapterNumber: 2, units: savedUnits, targetUnits: C17_TARGET, persisted: true, contentHash: hash('甲'.repeat(savedUnits)) },
         restoration: { originProjectId: 'project-source', targetProjectId: projectId, transferReceiptHash: hash('transfer'),
           sourceUnchanged: true, oldWorkFrozen: true, ...(index >= 5 ? { selectedGenerationId: 'generation', bindingMode: 'origin-readonly' } : {}),
           ...(index === 4 ? { sourceReplacement: replacement, predecessorsBeforeReplacement: beforePredecessors,
@@ -604,11 +604,11 @@ test('C17/C18 压缩结果最多两次 attempt、正式效果只在末次，且�
       { status: 'failed', candidateFailure: code })
     const condensed = () => continuityResults(dir, { condensedIndex: 3, primaryText: overText })
     // 首稿未超上限、首稿产物被改写、压缩后保存稿仍越界，都不是登记的压缩。
-    failure(continuityResults(dir, { condensedIndex: 3, primaryText: syntheticDraftText(countDraftUnits, C17_TARGET) }), 'DRAFT_CONDENSE_NOT_REGISTERED')
+    failure(continuityResults(dir, { condensedIndex: 3, primaryText: syntheticDraftText(countDraftUnits, C17_TARGET) }), 'DRAFT_RECOVERY_EVIDENCE_INVALID')
     const tampered = condensed()
     fs.appendFileSync(tampered[3].attempts.find(attempt => attempt.attemptId === 'candidate:3-draft-0').outputPath, '改')
-    failure(tampered, 'DRAFT_CONDENSE_NOT_REGISTERED')
-    failure(continuityResults(dir, { condensedIndex: 3, primaryText: overText, savedUnits: C17_RANGE.maximum + 1 }), 'DRAFT_CONDENSE_NOT_REGISTERED')
+    failure(tampered, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
+    failure(continuityResults(dir, { condensedIndex: 3, primaryText: overText, savedUnits: C17_RANGE.maximum + 1 }), 'DRAFT_RECOVERY_SAVED_MISMATCH')
     // 仍越界时产品按原语义暂停失败：该案不是 passed，整组不通过。
     const paused = condensed()
     paused[3].status = 'failed'
@@ -617,7 +617,7 @@ test('C17/C18 压缩结果最多两次 attempt、正式效果只在末次，且�
     for (const [ordinal, value] of [[0, true], [1, false]]) {
       const changed = condensed()
       changed[3].ownerTerminal.find(item => item.attemptId === '3-draft-' + ordinal).hasFormalEffect = value
-      failure(changed, 'ACTUAL_OWNER_IDENTITY_MISMATCH')
+      failure(changed, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
     }
     // 第二次压缩、续写冒充压缩、首请求不是 chapter-draft、提取操作多一次，都拒绝。
     const twice = condensed()
@@ -627,12 +627,12 @@ test('C17/C18 压缩结果最多两次 attempt、正式效果只在末次，且�
     twice[3].attempts.push(extra)
     twice[3].ownerTerminal.push({ ...twice[3].ownerTerminal[2], attemptId: '3-draft-2' })
     twice[3].syntheticDispatches = 4
-    failure(twice, 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+    failure(twice, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
     for (const [ordinal, purpose] of [[2, 'chapter-draft-continuation'], [1, 'chapter-draft-condense']]) {
       const changed = condensed()
       changed[3].attempts[ordinal].binding.actual.purpose = purpose
       changed[3].ownerTerminal[ordinal].purpose = purpose
-      failure(changed, 'ACTUAL_OWNER_IDENTITY_MISMATCH')
+      failure(changed, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
     }
     const notes = continuityResults(dir)
     const notesExtra = structuredClone(notes[0].attempts[0])
@@ -872,7 +872,7 @@ test('C17-B 替换后前驱：readback 与 parity 记录续写实际纳入的新
 test('c16-c18 v5 场景沿用唯一压缩策略、条件作者保护与 C17-B 重新定稿后处理，并登记唯一对账；历史 v1–v4 与任何放宽都拒绝', () => {
   const selection = selectPhase(protocol, 'c16-c18', 'final')
   const scenario = PHASE_SCENARIOS['c16-c18']
-  assert.equal(selection.scenarioRevision, 'c16-c18-candidate-production-path-v5')
+  assert.equal(selection.scenarioRevision, 'c16-c18-candidate-production-path-v6')
   assert.match(selection.stopPolicy.repair, /唯一一次生成前定稿对账chapter-draft-reconcile/)
   assert.match(selection.stopPolicy.attemptAccounting, /登记的唯一对账/)
   assert.match(selection.caseOracles['C17-B'].automatic[0], /RunFinalizePostProcessCommand对新finalizationId重新生成/)
@@ -1286,7 +1286,7 @@ test('v5 桥侧：对账出站检查蓝图/定稿/作者设定与收据 hash，�
   const fixture = fixtureSource()
   // 对账提示不是写稿提示：【本章蓝图】须为最后一节且逐键等于已提交蓝图。
   const sandbox = {}
-  vm.runInNewContext(`${fixture.slice(fixture.indexOf('function draftPromptIncludesCommittedBlueprint'), fixture.indexOf('/**\n * 开发合成篇幅'))}
+  vm.runInNewContext(`${fixture.slice(fixture.indexOf('function draftPromptIncludesCommittedBlueprint'), fixture.indexOf('const syntheticDraftUnitsGoal ='))}
 this.check = draftPromptIncludesCommittedBlueprint`, sandbox)
   const info = { chapterNumber: 2, title: 't', role: 'r', purpose: 'p', characters: ['档案员林澄'], keyEvents: '核查遇阻；承担代价', suspenseHook: '', userGuidance: 'g' }
   const blueprint = JSON.stringify(info, null, 2)
@@ -2513,7 +2513,7 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
       && repairEnd > repairStart && checkStart > repairEnd && checkEnd > checkStart && reserve > checkEnd
       && evidenceStart > 0 && evidenceEnd > evidenceStart)
     const readPrimaryEvidence = new Function('first', 'receipt', 'request', 'authorityFacts', 'sha', 'fs', 'target',
-      `const continuityRun = false;\n${fixture.slice(proofStart, proofEnd)}`)
+      `const continuityRun = false, operationKind = 'directory';\n${fixture.slice(proofStart, proofEnd)}`)
     const isStructuredSyntaxRepair = new Function('repairPolicy', 'operationId', 'actual', 'observedIpc',
       `${fixture.slice(repairStart, repairEnd)}\nreturn structuredSyntaxRepair`)
     const checkAuthority = new Function('operationKind', 'candidate', 'request', 'db', 'chapter', 'promptText',
@@ -3365,7 +3365,7 @@ test('C16 ee3435ec 单臂历史段只在登记为历史时放行，之后严格�
       { ...boundary, rawBytesSha256: hash(text(renamedRows)), reserveAttempts: renamed }), invalid)
     for (const changed of [
       { armBindings: { candidate: { ...candidate, parityId: '9'.repeat(64) } } },
-      { reserveAttempts: c16Attempts.map(({ parityId: _parityId, ...item }) => item) },
+      { reserveAttempts: c16Attempts.map(value => { const item = { ...value }; delete item.parityId; return item }) },
       { armBindings: { candidate, reviewer: candidate } },
       { armBindings: {} },
       { armBindings: null },
@@ -3876,7 +3876,7 @@ test('post-UI pair accepts only one evidenced syntax repair per arm and retains 
       operations: [{ operation: policy.operationId, handle: { runId: 'run', rootActionId: 'root' } }],
       ...(arm === 'candidate' ? { ownerTerminal: attempts.map(attempt => ({
         attemptId: attempt.binding.actual.attemptId, artifactId: `artifact-${attempt.attemptId}`,
-        textHash: attempt.visibleTextHash })) } : {}) }
+        textHash: attempt.visibleTextHash, finishReason: 'stop', purpose: attempt.binding.actual.purpose, hasFormalEffect: true })) } : {}) }
   }
   try {
     const baseline = make('baseline'), candidate = make('candidate')
@@ -3943,7 +3943,7 @@ test('post-UI pair authenticates review rebuild attempts and both retained outpu
         ...(arm === 'candidate' ? { rootActionId: `root-${operation.kind}` } : {}),
         projectId: `${arm}-project`, epoch: `${arm}-epoch`, purpose,
         ...(arm === 'baseline' ? { operationId: operation.id } : {}) }
-      return { attemptId: `${arm}:${identity.attemptId}`, outputPath: saved.outputPath, visibleTextHash: saved.contentHash,
+      return { attemptId: `${arm}:${identity.attemptId}`, outputPath: saved.outputPath, visibleTextHash: saved.contentHash, finishReason: 'stop',
         binding: { invocationId, mode: 'real', arm, phase: 'early-budget', milestone: 'post-ui', caseId: '场景1/1',
           protocolRevision: protocol.decisionRevision, protocolHash: protocolBinding.protocolHash,
           codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
@@ -3966,7 +3966,7 @@ test('post-UI pair authenticates review rebuild attempts and both retained outpu
         selectedItemsHash: hash([]), disposition: 'no-actionable-review' },
       ...(arm === 'candidate' ? { ownerTerminal: attempts.map(attempt => ({
         attemptId: attempt.binding.actual.attemptId, artifactId: `artifact-${attempt.attemptId}`,
-        textHash: attempt.visibleTextHash })) } : {}) }
+        textHash: attempt.visibleTextHash, finishReason: 'stop', purpose: attempt.binding.actual.purpose, hasFormalEffect: true })) } : {}) }
   }
   try {
     const baseline = make('baseline'), candidate = make('candidate')
@@ -3987,7 +3987,7 @@ test('post-UI pair authenticates review rebuild attempts and both retained outpu
     const third = structuredClone(candidate)
     third.attempts.push(structuredClone(third.attempts[3]))
     third.physicalModelRequests++
-    assert.equal(classify(third).pairFailure, 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+    assert.equal(classify(third).pairFailure, 'ACTUAL_OWNER_ARTIFACT_MISMATCH')
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
@@ -4011,15 +4011,17 @@ test('S14B post-UI v2 登记没有 draftCondense：候选的合法压缩在 rese
   assert.deepEqual(rejections, [{ code: 'UNREGISTERED_ADDITIONAL_MODEL_REQUEST', operationId: POST_UI_DRAFT, reason: 'duplicate-operation', beforeDispatch: true }])
 })
 
-test('S14B post-UI 场景 v3 只为候选臂登记「900单位正文」的唯一原生压缩；early 与其它阶段的登记和 revision 不变', () => {
+test('S14B post-UI 场景 v4 保留候选唯一压缩并登记有界恢复；early 与其它阶段的登记和 revision 不变', () => {
   const scenario = productionScenario('early-budget', 'post-ui'), policy = scenario.attemptPolicy
   assert.equal(scenario.scenarioRevision, POST_UI_SCENARIO_REVISION)
   assert.deepEqual(policy.draftCondense, { operationIds: ['900单位正文'], arms: ['candidate'], primaryPurpose: 'chapter-draft',
     condensePurpose: 'chapter-draft-condense', maxCondenseAttempts: 1,
-    trigger: 'primary-settled-stop-hash-verified-units-above-draftTargetUnitRange-maximum', formalEffect: 'last-attempt-only' })
+    trigger: 'settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum', formalEffect: 'last-attempt-only' })
   // 其余登记（milestone、两臂、指定范围一次结构化语法修复、成稿首审一次重建）与 early 基础登记逐字相同：现有 review/refine/final-review 链不受影响。
   const rest = { ...policy }
   delete rest.draftCondense
+  delete rest.draftRecovery
+  delete rest.structuredRecovery
   assert.deepEqual(rest, PHASE_SCENARIOS['early-budget'].attemptPolicy)
   // 协议与 driver 一致，压缩只出现在 post-UI selection。
   const selected = selectPhase(protocol, 'early-budget', 'post-ui')
@@ -4045,7 +4047,7 @@ test('S14B post-UI 场景 v3 只为候选臂登记「900单位正文」的唯一
   assertScenarioMatchesProtocol(early, productionScenario('early-budget', 'early'))
   assert.equal(productionScenario('early-budget').attemptPolicy, PHASE_SCENARIOS['early-budget'].attemptPolicy)
   // 其它阶段的 revision 与登记逐字不变，且不含新压缩。
-  assert.equal(PHASE_SCENARIOS['c16-c18'].scenarioRevision, 'c16-c18-candidate-production-path-v5')
+  assert.equal(PHASE_SCENARIOS['c16-c18'].scenarioRevision, 'c16-c18-candidate-production-path-v6')
   assert.equal(PHASE_SCENARIOS['c16-c18'].attemptPolicy, C16_C18_ATTEMPT_POLICY)
   assert.equal(PHASE_SCENARIOS['early-context'].scenarioRevision, 's10b-early-context-selection-difference-v3')
   assert.equal(PHASE_SCENARIOS['early-review'].scenarioRevision, 's11-early-review-per-attempt-deadline-v3')
@@ -4240,6 +4242,7 @@ test('S14B post-UI 压缩的 fixture 接线：登记只对候选臂取到，首�
     // 只有登记了压缩的 post-UI 才走 owner artifact 证据：early / v2 登记（无 draftCondense）读到的是审稿证据，压缩因此无法放行。
     const legacy = { ...policy }
     delete legacy.draftCondense
+    delete legacy.draftRecovery
     assert.equal(reader('draft', { attemptPolicy: legacy, ledgerPath })(first).ownerArtifactHash, undefined)
     assert.throws(dispatch(reader('draft', { attemptPolicy: legacy, ledgerPath })), /MODEL_REQUEST_REJECTED/)
     // 非 draft operation（首审）在 post-UI 仍走原审稿证据，不因新登记改变。
@@ -4268,7 +4271,7 @@ test('合成 transport 可复现 S14B post-UI 候选：超长首稿→唯一压�
   // 登记按臂取：baseline 不加载生产压缩常量，其 gate 的 draftCondense 恒为 null。
   assert.match(fixture, /const condensePolicy = policyEligible \? draftCondenseFor\(request\.attemptPolicy, target\.arm\) : null/)
   assert.match(fixture, /const repairPolicy = policyEligible && !continuityRun \? request\.attemptPolicy : null/)
-  assert.match(fixture, /if \(continuityRun \|\| request\.attemptPolicy\?\.draftCondense && operationKind === 'draft'\) \{/)
+  assert.match(fixture, /request\.attemptPolicy\?\.draftRecovery \|\| request\.attemptPolicy\?\.draftCondense/)
   assert.match(fixture, /const condensedPrimary = condensePolicy && attempt\.binding\.actual\.purpose === condensePolicy\.primaryPurpose/)
   assert.match(fixture, /assert\.equal\(terminal\.hasFormalEffect, !repairedDirectory && !supersededAttempt && !condensedPrimary\)/)
   assert.match(fixture, /if \(reviewedRun\) assert\.ok\(scenarioAuthorSettingLines\(scene, request\.scenarioRevision\)\.length, 'REVIEWED_SCENARIO_AUTHOR_LINE_MISSING'\)/)
@@ -4276,7 +4279,7 @@ test('合成 transport 可复现 S14B post-UI 候选：超长首稿→唯一压�
   const plan = syntheticDraftCondensePlan({ mode: 'synthetic', development: true, phase: 'early-budget', milestone: 'post-ui' })
   assert.deepEqual(plan, { syntheticDraftCondense: { caseId: '场景1/1', outcome: 'in-range' } })
   // 压缩最多使 candidate 的一次 operation 多一个物理 attempt：外层测试预算覆盖 8 个串行 attempt。
-  assert.match(driver, /BRIDGE_REVIEWED_TEST_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS \* 8 \+ 120_000/)
+  assert.match(driver, /BRIDGE_REVIEWED_TEST_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS \* 15 \+ 120_000/)
 })
 
 /** post-UI 候选压缩的 pair 收据夹具：证据落在 dir；make 生成一臂收据，classify 走生产分类器。 */
@@ -4318,7 +4321,7 @@ function postUiCondensePairKit(dir) {
       const identity = { attemptId: `${arm}${tag}-${label}`, runId: `run-${operation.kind}`,
         ...(arm === 'candidate' ? { rootActionId: `root-${operation.kind}` } : {}), projectId: `${arm}-project`, epoch: `${arm}-epoch`, purpose,
         ...(arm === 'baseline' ? { operationId: operation.id } : {}) }
-      return { attemptId: `${arm}:${identity.attemptId}`, outputPath: saved.outputPath, visibleTextHash: saved.contentHash,
+      return { attemptId: `${arm}:${identity.attemptId}`, outputPath: saved.outputPath, visibleTextHash: saved.contentHash, finishReason: 'stop',
         binding: { invocationId, mode: 'real', arm, phase: 'early-budget', milestone: 'post-ui', caseId: '场景1/1',
           protocolRevision: protocol.decisionRevision, protocolHash: protocolBinding.protocolHash,
           codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
@@ -4374,18 +4377,18 @@ test('S14B post-UI pair：候选至多一次可核验压缩，末次压缩稿是
     const third = structuredClone(candidate)
     third.attempts.splice(2, 0, { ...structuredClone(third.attempts[2]), attemptId: 'candidate:candidate-condense-2' })
     third.physicalModelRequests++
-    assert.equal(classify(third).pairFailure, 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+    assert.equal(classify(third).pairFailure, 'ACTUAL_OWNER_ARTIFACT_MISMATCH')
     const baselineCondensed = make('baseline', { condense: true, tag: '-condensed' })
-    assert.equal(classify(candidate, baselineCondensed).pairFailure, 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+    assert.equal(classify(candidate, baselineCondensed).pairFailure, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
     // 用途或顺序不符：第二个 draft attempt 不是 chapter-draft-condense，或首个不是 chapter-draft。
     const wrongCondense = structuredClone(candidate)
     wrongCondense.attempts[2].binding.actual.purpose = 'chapter-draft-continuation'
     wrongCondense.ownerTerminal[2].purpose = 'chapter-draft-continuation'
-    assert.equal(classify(wrongCondense).pairFailure, 'DRAFT_CONDENSE_OWNER_MISMATCH')
+    assert.equal(classify(wrongCondense).pairFailure, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
     const wrongPrimary = structuredClone(candidate)
     wrongPrimary.attempts[1].binding.actual.purpose = 'chapter-draft-continuation'
     wrongPrimary.ownerTerminal[1].purpose = 'chapter-draft-continuation'
-    assert.equal(classify(wrongPrimary).pairFailure, 'DRAFT_CONDENSE_OWNER_MISMATCH')
+    assert.equal(classify(wrongPrimary).pairFailure, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
     // 正式效果只在末次压缩；首稿带正式效果、压缩缺正式效果或非 stop，均拒绝。
     for (const mutate of [value => { value.ownerTerminal[1].hasFormalEffect = true },
       value => { value.ownerTerminal[2].hasFormalEffect = false },
@@ -4393,7 +4396,7 @@ test('S14B post-UI pair：候选至多一次可核验压缩，末次压缩稿是
       value => { value.ownerTerminal[2].finishReason = 'length' }]) {
       const changed = structuredClone(candidate)
       mutate(changed)
-      assert.equal(classify(changed).pairFailure, 'DRAFT_CONDENSE_OWNER_MISMATCH')
+      assert.equal(classify(changed).pairFailure, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
     }
     // owner 终态与物理输出 hash 不符、终态缺失：拒绝。
     const wrongTerminalHash = structuredClone(candidate)
@@ -4405,16 +4408,16 @@ test('S14B post-UI pair：候选至多一次可核验压缩，末次压缩稿是
     // 压缩与首稿必须同 run/root（同一 operation 的 handle）；否则按 owner 绑定拒绝。
     const foreignRun = structuredClone(candidate)
     foreignRun.attempts[2].binding.actual.runId = 'run-other'
-    assert.equal(classify(foreignRun).pairFailure, 'ACTUAL_OWNER_ATTEMPT_MISMATCH')
+    assert.equal(classify(foreignRun).pairFailure, 'DRAFT_RECOVERY_OWNER_MISMATCH')
     // (e) 首稿未超上限却压缩：拒绝；首稿原文在结算后被改写：hash 不符或丢失。
-    assert.equal(classify(make('candidate', { primaryText: condensedText, tag: '-inrange-primary' })).pairFailure, 'DRAFT_CONDENSE_NOT_REGISTERED')
+    assert.equal(classify(make('candidate', { primaryText: condensedText, tag: '-inrange-primary' })).pairFailure, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
     fs.writeFileSync(candidate.attempts[1].outputPath, `${overText}补`)
-    assert.equal(classify(candidate).pairFailure, 'PHYSICAL_OUTPUT_HASH_MISMATCH')
+    assert.equal(classify(candidate).pairFailure, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
     fs.rmSync(candidate.attempts[1].outputPath)
-    assert.equal(classify(candidate).pairFailure, 'PHYSICAL_OUTPUT_MISSING')
+    assert.equal(classify(candidate).pairFailure, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
     fs.writeFileSync(candidate.attempts[1].outputPath, overText)
     // (f) 被审稿（无修稿时即保存稿）必须等于最后一次 draft attempt 的可见输出（生产清洗后；干净输出即其物理输出 hash）：是别的正文即拒绝。
-    assert.equal(classify(make('candidate', { condenseOutput: `${condensedText}\n另一稿`, tag: '-other-saved' })).pairFailure, 'DRAFT_CONDENSE_SAVED_MISMATCH')
+    assert.equal(classify(make('candidate', { condenseOutput: `${condensedText}\n另一稿`, tag: '-other-saved' })).pairFailure, 'DRAFT_RECOVERY_SAVED_MISMATCH')
     // (g) 压缩后仍超限：产品保留原稿并以 GENERATION_DRAFT_LENGTH_OUT_OF_RANGE 停下——收据为失败且无保存/审修链，原失败语义保留。
     const stillOver = { ...structuredClone(candidate), status: 'failed', error: 'GENERATION_DRAFT_LENGTH_OUT_OF_RANGE',
       saved: undefined, draftObservation: undefined, reviewedDraft: undefined }
@@ -4454,7 +4457,7 @@ test('S14B post-UI pair 有修稿形状：被审稿若是被压缩取代的首�
     const reviewedOriginal = make('candidate', { finalText: overText, condenseOutput: condensedText, revisedText: condensedText, tag: '-reviewed-original' })
     assert.equal(reviewedOriginal.saved.contentHash, hash(condensedText), '修稿产物恰等于压缩输出')
     assert.equal(reviewedOriginal.reviewedDraft.initial.contentHash, hash(overText), '但被审稿是未压缩的首稿')
-    assert.equal(classify(reviewedOriginal).pairFailure, 'DRAFT_CONDENSE_SAVED_MISMATCH')
+    assert.equal(classify(reviewedOriginal).pairFailure, 'DRAFT_RECOVERY_SAVED_MISMATCH')
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
@@ -4472,7 +4475,7 @@ test('S14B post-UI pair 有修稿形状：压缩是否落入范围按压缩稿�
     const overCondensed = syntheticDraftText(countDraftUnits, POST_UI_RANGE.maximum + 30)
     assert.ok(countDraftUnits(overCondensed) > POST_UI_RANGE.maximum)
     assert.equal(classify(make('candidate', { finalText: overCondensed, revisedText: condensedText, tag: '-condensed-over' })).pairFailure,
-      'DRAFT_CONDENSE_NOT_REGISTERED')
+      'DRAFT_RECOVERY_SAVED_MISMATCH')
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 test('真实桥只公开本地字数门失败，并在失败收据保留持久化观察而非 saved', () => {
@@ -4703,17 +4706,17 @@ const fullPredecessorOf = result => ({ projectId: result.physicalProject.project
  */
 function fullStepReceipt(dir, step, index, { invocationId = FULL_INVOCATION, parityId = 'd'.repeat(64), predecessor = null, condense = null, tag = '' } = {}) {
   const projectId = `${step.sceneId}:${step.arm}`, isDraft = step.operation.kind === 'draft'
-  const savedText = condense ? condense.saved ?? condense.output : `${projectId}:${step.chapterNumber}`
+  const savedText = condense ? condense.saved ?? condense.output : isDraft ? '甲'.repeat(FULL_TARGET) : `${projectId}:${step.chapterNumber}`
   const write = (name, text) => { const file = path.join(dir, `${index}${tag}-${name}.txt`); fs.writeFileSync(file, text); return file }
   const owner = (suffix, purpose) => ({ projectId, epoch: 'epoch', runId: `run-${index}`, rootActionId: `root-${index}`,
     attemptId: `attempt-${index}${suffix}`, ...(purpose ? { purpose } : {}) })
   const bindingOf = actual => ({ ...protocolBinding, invocationId, mode: 'synthetic', arm: step.arm, phase: 'full', milestone: 'final',
     caseId: step.caseId, operation: step.operation.id, codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId,
     ...(step.arm === 'candidate' ? { actual } : { baselineIpc: { ...actual, operationId: step.operation.id } }) })
-  const specs = condense ? [['-primary', 'chapter-draft', condense.primaryText], ['-condense', 'chapter-draft-condense', condense.output]] : [['', undefined, null]]
+  const specs = condense ? [['-primary', 'chapter-draft', condense.primaryText], ['-condense', 'chapter-draft-condense', condense.output]] : [['', isDraft ? 'chapter-draft' : undefined, isDraft ? savedText : null]]
   const attempts = specs.map(([suffix, purpose, text]) => {
     const actual = owner(suffix, purpose)
-    return { attemptId: `${step.arm}:${actual.attemptId}`, binding: bindingOf(actual),
+    return { attemptId: `${step.arm}:${actual.attemptId}`, binding: bindingOf(actual), finishReason: 'stop',
       ...(text === null ? {} : { outputPath: write(`attempt${suffix}`, text), visibleTextHash: hash(text) }) }
   })
   const primary = attempts[0].binding.actual ?? attempts[0].binding.baselineIpc
@@ -4722,7 +4725,7 @@ function fullStepReceipt(dir, step, index, { invocationId = FULL_INVOCATION, par
     projectEpoch: 'epoch', physicalProject: { projectId, parityHash: parityId },
     operations: [{ operation: step.operation.id, kind: step.operation.kind, outputPath, handle: primary }],
     attempts, physicalModelRequests: 0, syntheticDispatches: attempts.length }
-  if (condense && step.arm === 'candidate') result.ownerTerminal = attempts.map((attempt, at) => ({ attemptId: attempt.binding.actual.attemptId,
+  if (isDraft && step.arm === 'candidate') result.ownerTerminal = attempts.map((attempt, at) => ({ attemptId: attempt.binding.actual.attemptId,
     artifactId: `artifact-${attempt.attemptId}`, textHash: attempt.visibleTextHash, finishReason: 'stop', purpose: attempt.binding.actual.purpose,
     hasFormalEffect: at === attempts.length - 1 }))
   if (isDraft) {
@@ -4755,13 +4758,15 @@ function fullReceiptKit(dir) {
   return { schedule, overText, condensedText, at, build, classify, syntheticDraftText }
 }
 
-test('S14B full 场景 v2 只为候选臂的「连续章节正文」登记唯一原生压缩；其余阶段的登记与 revision 不变', () => {
+test('S14B full 场景 v3 保留候选唯一压缩并登记有界恢复；其余阶段的登记与 revision 不变', () => {
   const scenario = PHASE_SCENARIOS.full, policy = scenario.attemptPolicy
-  assert.equal(scenario.scenarioRevision, 's14b-full-continuous-project-v2')
-  const { armAsymmetry, ...registered } = policy
-  assert.deepEqual(registered, { milestone: 'final', arms: ['candidate'], draftCondense: { operationIds: ['连续章节正文'], arms: ['candidate'],
+  assert.equal(scenario.scenarioRevision, 's14b-full-continuous-project-v3')
+  const { armAsymmetry, draftRecovery, structuredRecovery, ...registered } = policy
+  assert.equal(draftRecovery.maxAttempts, 8)
+  assert.equal(structuredRecovery.budget, 'planBlueprintGenerationCost')
+  assert.deepEqual(registered, { milestone: 'final', arms: ['baseline', 'candidate'], draftCondense: { operationIds: ['连续章节正文'], arms: ['candidate'],
     primaryPurpose: 'chapter-draft', condensePurpose: 'chapter-draft-condense', maxCondenseAttempts: 1,
-    trigger: 'primary-settled-stop-hash-verified-units-above-draftTargetUnitRange-maximum', formalEffect: 'last-attempt-only' } })
+    trigger: 'settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum', formalEffect: 'last-attempt-only' } })
   // 不对称披露：candidate 有压缩、baseline 无；两臂长度差异来自该不对称，不得据此单独声称相对改善。
   assert.match(armAsymmetry, /candidate.*压缩.*baseline.*(没有|无).*不得.*声称相对改善/su)
   // 协议与 driver 逐字一致；full 仍是唯一的 final 里程碑，operations/caseIds 不变。
@@ -4780,7 +4785,7 @@ test('S14B full 场景 v2 只为候选臂的「连续章节正文」登记唯一
   assert.equal(PHASE_SCENARIOS['early-budget'].scenarioRevision, 's14b-post-ui-budget-syntax-repair-v1')
   assert.equal(PHASE_SCENARIOS['early-budget'].attemptPolicy.draftCondense, undefined)
   assert.equal(productionScenario('early-budget', 'post-ui').scenarioRevision, POST_UI_SCENARIO_REVISION)
-  assert.equal(PHASE_SCENARIOS['c16-c18'].scenarioRevision, 'c16-c18-candidate-production-path-v5')
+  assert.equal(PHASE_SCENARIOS['c16-c18'].scenarioRevision, 'c16-c18-candidate-production-path-v6')
   assert.equal(PHASE_SCENARIOS['c16-c18'].attemptPolicy, C16_C18_ATTEMPT_POLICY)
   assert.equal(PHASE_SCENARIOS['early-context'].scenarioRevision, 's10b-early-context-selection-difference-v3')
   assert.equal(PHASE_SCENARIOS['early-review'].scenarioRevision, 's11-early-review-per-attempt-deadline-v3')
@@ -4854,34 +4859,34 @@ test('full 收据负例：baseline 压缩、第二次压缩、仍越界、保存
     // baseline 出现压缩 attempt：恒拒。
     const baselineCondense = kit.build({ condenseAt: baselineChapter, tag: '-baseline' })
     assert.equal(baselineCondense[baselineChapter].attempts.length, 2)
-    failed(baselineCondense, 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+    failed(baselineCondense, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
     // 第二次压缩：三个 draft attempt。
     const second = structuredClone(results)
     second[chapter2].attempts.push({ ...structuredClone(second[chapter2].attempts[1]), attemptId: 'candidate:attempt-extra' })
     second[chapter2].syntheticDispatches = 3
-    failed(second, 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+    failed(second, 'ACTUAL_OWNER_ARTIFACT_MISMATCH')
     // 压缩后仍越界（保存的压缩稿仍超上限）：不算落入范围，按字数门失败。
     const overCondensed = kit.syntheticDraftText(countDraftUnits, FULL_RANGE.maximum + 30)
-    failed(kit.build({ condenseAt: chapter2, condense: { primaryText: kit.overText, output: overCondensed }, tag: '-still-over' }), 'DRAFT_CONDENSE_NOT_REGISTERED')
+    failed(kit.build({ condenseAt: chapter2, condense: { primaryText: kit.overText, output: overCondensed }, tag: '-still-over' }), 'DRAFT_RECOVERY_SAVED_MISMATCH')
     // 首稿本身未超上限却压缩：拒绝。
-    failed(kit.build({ condenseAt: chapter2, condense: { primaryText: kit.condensedText, output: kit.condensedText }, tag: '-primary-in-range' }), 'DRAFT_CONDENSE_NOT_REGISTERED')
+    failed(kit.build({ condenseAt: chapter2, condense: { primaryText: kit.condensedText, output: kit.condensedText }, tag: '-primary-in-range' }), 'DRAFT_RECOVERY_EVIDENCE_INVALID')
     // 保存的仍是被压缩取代的未压缩首稿（压缩输出在范围内，但 saved/observation/operation 输出都是首稿）。
     const savedPrimary = structuredClone(results)
     fs.writeFileSync(savedPrimary[chapter2].operations[0].outputPath, kit.overText)
     for (const target of [savedPrimary[chapter2].saved, savedPrimary[chapter2].draftObservation]) target.contentHash = hash(kit.overText)
-    failed(savedPrimary, 'DRAFT_CONDENSE_SAVED_MISMATCH')
+    failed(savedPrimary, 'DRAFT_RECOVERY_SAVED_MISMATCH')
     fs.writeFileSync(savedPrimary[chapter2].operations[0].outputPath, kit.condensedText)
     // 压缩 attempt 非 stop、正式效果错位、用途错位：拒绝。
-    for (const [mutate, code] of [[value => { value[chapter2].ownerTerminal[1].finishReason = 'length' }, 'DRAFT_CONDENSE_OWNER_MISMATCH'],
-      [value => { value[chapter2].ownerTerminal[0].hasFormalEffect = true }, 'DRAFT_CONDENSE_OWNER_MISMATCH'],
-      [value => { value[chapter2].ownerTerminal[1].hasFormalEffect = false }, 'DRAFT_CONDENSE_OWNER_MISMATCH'],
-      [value => { value[chapter2].attempts[1].binding.actual.purpose = 'chapter-draft-continuation'; value[chapter2].ownerTerminal[1].purpose = 'chapter-draft-continuation' }, 'DRAFT_CONDENSE_OWNER_MISMATCH'],
+    for (const [mutate, code] of [[value => { value[chapter2].ownerTerminal[1].finishReason = 'length' }, 'DRAFT_RECOVERY_EVIDENCE_INVALID'],
+      [value => { value[chapter2].ownerTerminal[0].hasFormalEffect = true }, 'DRAFT_RECOVERY_EVIDENCE_INVALID'],
+      [value => { value[chapter2].ownerTerminal[1].hasFormalEffect = false }, 'DRAFT_RECOVERY_EVIDENCE_INVALID'],
+      [value => { value[chapter2].attempts[1].binding.actual.purpose = 'chapter-draft-continuation'; value[chapter2].ownerTerminal[1].purpose = 'chapter-draft-continuation' }, 'DRAFT_RECOVERY_EVIDENCE_INVALID'],
       [value => { value[chapter2].ownerTerminal.pop() }, 'ACTUAL_OWNER_ARTIFACT_MISMATCH'],
       [value => { value[chapter2].ownerTerminal[1].textHash = hash('other') }, 'ACTUAL_OWNER_ARTIFACT_MISMATCH'],
       // 压缩与首稿必须同 run/root/项目/epoch。
-      [value => { value[chapter2].attempts[1].binding.actual.runId = 'run-other' }, 'ACTUAL_OWNER_ATTEMPT_MISMATCH'],
+      [value => { value[chapter2].attempts[1].binding.actual.runId = 'run-other' }, 'DRAFT_RECOVERY_OWNER_MISMATCH'],
       // 首个（primary）attempt 的 owner 绑定检查仍有效。
-      [value => { value[chapter2].attempts[0].binding.actual.projectId = 'another-project' }, 'ACTUAL_OWNER_ATTEMPT_MISMATCH']]) {
+      [value => { value[chapter2].attempts[0].binding.actual.projectId = 'another-project' }, 'DRAFT_RECOVERY_OWNER_MISMATCH']]) {
       const changed = structuredClone(results)
       mutate(changed)
       failed(changed, code)
@@ -4889,7 +4894,7 @@ test('full 收据负例：baseline 压缩、第二次压缩、仍越界、保存
     // 首稿原文在结算后被改写：hash 不符。
     const tampered = structuredClone(results)
     fs.writeFileSync(tampered[chapter2].attempts[0].outputPath, `${kit.overText}补`)
-    failed(tampered, 'PHYSICAL_OUTPUT_HASH_MISMATCH')
+    failed(tampered, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
     fs.writeFileSync(tampered[chapter2].attempts[0].outputPath, kit.overText)
     // 压缩出现在 directory operation（三章规划）：登记只含「连续章节正文」。
     const directoryIndex = kit.schedule.findIndex(step => step.operation.kind === 'directory' && step.arm === 'candidate')
@@ -4959,7 +4964,7 @@ test('full 压缩的 fixture 接线（行为）：登记只对候选臂取到，
     const candidate = select(request, { arm: 'candidate' }, false, draftCondenseFor)
     assert.equal(candidate.condensePolicy, policy.draftCondense)
     assert.equal(select(request, { arm: 'baseline' }, false, draftCondenseFor).condensePolicy, null, 'baseline 恒无压缩登记')
-    assert.equal(select(request, { arm: 'baseline' }, false, draftCondenseFor).repairPolicy, null)
+    assert.equal(select(request, { arm: 'baseline' }, false, draftCondenseFor).repairPolicy, policy)
     // 非 final 里程碑、无登记的请求不取到压缩。
     assert.equal(select({ ...request, milestone: 'early' }, { arm: 'candidate' }, false, draftCondenseFor).condensePolicy, null)
     assert.equal(select({ ...request, attemptPolicy: undefined }, { arm: 'candidate' }, false, draftCondenseFor).condensePolicy, null)
@@ -5063,7 +5068,7 @@ test('full 端到端（注入假桥）：开发合成默认让候选场景1/2 �
     // 前驱链：候选场景1/3 的请求前驱是场景1/2 保存的压缩稿；baseline 不受影响。
     const chapter3 = executes(requests).find(item => item.caseId === '场景1/3' && item.target.arm === 'candidate')
     assert.equal(chapter3.predecessor.contentHash, hash(kit.condensedText))
-    assert.equal(executes(requests).find(item => item.caseId === '场景1/3' && item.target.arm === 'baseline').predecessor.contentHash, hash(`场景1:baseline:2`))
+    assert.equal(executes(requests).find(item => item.caseId === '场景1/3' && item.target.arm === 'baseline').predecessor.contentHash, hash('甲'.repeat(FULL_TARGET)))
     // 正式合成（无 development）不带计划：24 次 dispatch，无压缩。
     // 正式合成即使被传入计划也不带它（计划只属于开发合成）。
     const formal = []
@@ -5079,5 +5084,63 @@ test('full 端到端（注入假桥）：开发合成默认让候选场景1/2 �
     assert.equal(failedRun.results.at(-1).caseId, '场景1/2')
     assert.equal(failedRun.notRun.length, kit.schedule.length - failedRun.results.length)
     assert.ok(failedRun.notRun.length > 0)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+
+test('full continuation then condense keeps each raw candidate and binds saved/reviewable bytes and chapter 3 predecessor', () => {
+  const dir = postUiEvidenceDir('full-recovery-receipt-')
+  try {
+    const kit = fullReceiptKit(dir), index = kit.at('场景1/2', 'candidate'), nextIndex = kit.at('场景1/3', 'candidate')
+    const results = kit.build({ condenseAt: index }), result = results[index]
+    const first = result.attempts[0], last = result.attempts[1]
+    fs.writeFileSync(first.outputPath, '甲'.repeat(500)); first.visibleTextHash = hash('甲'.repeat(500))
+    const middle = structuredClone(first)
+    middle.attemptId += '-continuation'; middle.binding.actual.attemptId += '-continuation'
+    middle.binding.actual.purpose = 'chapter-draft-continuation'
+    middle.outputPath = path.join(dir, 'continuation.txt')
+    fs.writeFileSync(middle.outputPath, '乙'.repeat(900)); middle.visibleTextHash = hash('乙'.repeat(900))
+    result.attempts = [first, middle, last]
+    for (const attempt of result.attempts) attempt.finishReason = 'stop'
+    result.syntheticDispatches = 3
+    result.ownerTerminal = result.attempts.map((attempt, at) => ({ attemptId: attempt.binding.actual.attemptId,
+      artifactId: `artifact-${at}`, textHash: attempt.visibleTextHash, finishReason: 'stop', purpose: attempt.binding.actual.purpose,
+      hasFormalEffect: at === 2 }))
+    assert.equal(kit.classify(results).status, 'passed')
+    assert.equal(fs.readFileSync(first.outputPath, 'utf8'), '甲'.repeat(500))
+    const wrongSave = structuredClone(results)
+    wrongSave[index].saved.contentHash = first.visibleTextHash
+    assert.equal(kit.classify(wrongSave).status, 'failed')
+    const wrongPredecessor = structuredClone(results)
+    wrongPredecessor[nextIndex].predecessor.contentHash = first.visibleTextHash
+    assert.equal(kit.classify(wrongPredecessor).pairFailure, 'FULL_PREDECESSOR_MISMATCH')
+    const wrongEffect = structuredClone(results)
+    wrongEffect[index].ownerTerminal[1].hasFormalEffect = true
+    assert.equal(kit.classify(wrongEffect).pairFailure, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+
+test('H5 length overlong primary followed directly by condense passes full/post-UI/C16 current receipts', () => {
+  const dir = postUiEvidenceDir('length-condense-receipts-')
+  try {
+    const update = (result, operation) => {
+      const first = result.attempts.find(attempt => attempt.binding.operation === operation && attempt.binding.actual?.purpose === 'chapter-draft')
+      first.finishReason = 'length'
+      result.ownerTerminal.find(item => item.attemptId === first.binding.actual.attemptId).finishReason = 'length'
+    }
+    const full = fullReceiptKit(dir), index = full.at('场景1/2', 'candidate'), values = full.build({ condenseAt: index })
+    update(values[index], FULL_DRAFT)
+    assert.equal(full.classify(values).status, 'passed')
+    const post = postUiCondensePairKit(dir), value = post.make('candidate')
+    update(value, POST_UI_DRAFT)
+    assert.equal(post.classify(value).pairFailure, undefined)
+    const continuity = continuityResults(dir, { condensedIndex: 3, primaryText: '甲'.repeat(1400) })
+    update(continuity[3], '本地恢复后续写')
+    assert.deepEqual(validateCandidateContinuityResults(continuity, 'synthetic'), { status: 'passed' })
+    // A second compression still has no permission; a short length primary must continue, not condense.
+    const wrong = continuityResults(dir, { condensedIndex: 3, primaryText: '甲'.repeat(500) })
+    update(wrong[3], '本地恢复后续写')
+    assert.equal(validateCandidateContinuityResults(wrong, 'synthetic').candidateFailure, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })

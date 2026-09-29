@@ -22,7 +22,16 @@ const { draftReconciliationBlock, parseDraftReconciliation } = await import(`dat
 // 压缩稿（此后被审；未修稿时即保存的正文）由主进程按同一份生产清洗从末次压缩原文组合（generation-run-repository 的 draft-visible-v1 组合）。
 const draftVisibleBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/shared/draft-visible-text.ts')],
   bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
-const { sanitizeDraftText } = await import(`data:text/javascript;base64,${Buffer.from(draftVisibleBundle).toString('base64')}`)
+const { sanitizeDraftText, stripDraftThinkingTags, composeDraftVisibleContinuation } = await import(`data:text/javascript;base64,${Buffer.from(draftVisibleBundle).toString('base64')}`)
+const blueprintBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/shared/blueprint-semantic-contract.ts')],
+  bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
+const { parseBlueprintSemanticResponseText } = await import(`data:text/javascript;base64,${Buffer.from(blueprintBundle).toString('base64')}`)
+const costBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/services/workflows/blueprint-batch-policy.ts')],
+  bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
+const syntaxBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/services/workflows/structured-syntax-repair.ts')],
+  bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
+const { preservesStructuredJsonEvidence } = await import(`data:text/javascript;base64,${Buffer.from(syntaxBundle).toString('base64')}`)
+const { planBlueprintGenerationCost } = await import(`data:text/javascript;base64,${Buffer.from(costBundle).toString('base64')}`)
 export const PRODUCTION_BRIDGE = 'scripts/fixtures/quality-modernization-production.fixture.mjs'
 export const EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION = 's11-reference-no-actionable-review-v1'
 export const REVIEWED_DRAFT_PROTOCOL_REVISION = 's14b-reviewed-draft-v1'
@@ -43,6 +52,17 @@ export const POST_UI_REVIEW_POLICY = Object.freeze({ revision: 's14b-post-ui-rev
     claim: '两臂是否触发修复分支的差异来自上述不对称，不得据此单独声称相对改善；首稿自然满足时记录修复分支未触发' }) })
 const MUST_SHOW_GOAL_ID = new RegExp(POST_UI_REVIEW_POLICY.mustShowGoalId, 'u')
 // early-budget 的登记：指定范围生成的一次结构化语法修复与成稿首审的一次重建。early 场景与 post-UI 共用同一份，milestone 限定 post-ui。
+const structuredRecoveryPolicy = operationId => Object.freeze({ operationId, arms: Object.freeze(['baseline', 'candidate']),
+  budget: 'planBlueprintGenerationCost', maxSyntaxRepairs: 1, maxCompactFallbacksPerChapter: 1,
+  trigger: 'settled-length-or-production-blueprint-decode-failure', order: 'depth-first-half-split',
+  armAsymmetry: 'Both arms use their existing structured executor; candidate now rebuilds value_too_long without mechanical truncation. No baseline product code is changed.' })
+export const structuredRecoveryFor = (policy, arm) => policy?.structuredRecovery?.arms.includes(arm) ? policy.structuredRecovery : null
+const draftRecoveryPolicy = operationIds => Object.freeze({ operationIds: Object.freeze(operationIds),
+  arms: Object.freeze(['baseline', 'candidate']), maxAttempts: 8, maxContinuationRounds: 7, maxNoProgressRecoveries: 1,
+  baselineMinimumRatio: 0.8, candidateMinimumRatio: 0.7, minimumProgressUnits: 300,
+  trigger: 'settled-hash-verified-short-stop-or-length', formalEffect: 'last-attempt-only',
+  armAsymmetry: 'baseline 2264390d uses its original 80% continuation minimum and has no upper-bound stop or condense; candidate uses draftTargetUnitRange and may condense the composed draft. Both retain their own eight-attempt root budget.' })
+export const draftRecoveryFor = (policy, arm) => policy?.draftRecovery?.arms.includes(arm) ? policy.draftRecovery : null
 const EARLY_BUDGET_ATTEMPT_POLICY = Object.freeze({ milestone: 'post-ui', arms: Object.freeze(['baseline', 'candidate']),
   operationId: '指定范围生成', primaryPurpose: 'chapter-blueprint-directory',
   repairPurpose: 'chapter-blueprint-directory:structured-syntax-repair', maxRepairAttempts: 1,
@@ -53,28 +73,33 @@ const EARLY_BUDGET_ATTEMPT_POLICY = Object.freeze({ milestone: 'post-ui', arms: 
  * 超长压缩，语义同 C16–C18 v2；early 里程碑的登记（EARLY_BUDGET_ATTEMPT_POLICY）不变。
  */
 const POST_UI_ATTEMPT_POLICY = Object.freeze({ ...EARLY_BUDGET_ATTEMPT_POLICY,
+  draftRecovery: draftRecoveryPolicy(['900单位正文']),
+  structuredRecovery: structuredRecoveryPolicy('指定范围生成'),
   draftCondense: Object.freeze({ operationIds: Object.freeze(['900单位正文']), arms: Object.freeze(['candidate']),
     primaryPurpose: 'chapter-draft', condensePurpose: 'chapter-draft-condense', maxCondenseAttempts: 1,
-    trigger: 'primary-settled-stop-hash-verified-units-above-draftTargetUnitRange-maximum',
+    trigger: 'settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum',
     formalEffect: 'last-attempt-only' }) })
 /**
  * full 场景 v2（评分规则/场景变更，与产品 f00b612b 的修复分开）：只为候选臂的「连续章节正文」登记产品原生的唯一一次超长压缩，
- * 语义同 post-UI v3；每章没有审修链，保存稿即压缩稿。baseline 恒无；续写与无进展恢复不登记（触发即在 reserve 前拒绝并记技术失败）。
+ * 语义同 post-UI v3；每章没有审修链，保存稿即压缩稿。baseline 恒无压缩；v3 另登记两臂既有有界续写、无进展恢复与结构化拆批/完整重建。
  */
-const FULL_ATTEMPT_POLICY = Object.freeze({ milestone: 'final', arms: Object.freeze(['candidate']),
+const FULL_ATTEMPT_POLICY = Object.freeze({ milestone: 'final', arms: Object.freeze(['baseline', 'candidate']),
+  draftRecovery: draftRecoveryPolicy(['连续章节正文']),
+  structuredRecovery: structuredRecoveryPolicy('三章规划'),
   draftCondense: Object.freeze({ operationIds: Object.freeze(['连续章节正文']), arms: Object.freeze(['candidate']),
     primaryPurpose: 'chapter-draft', condensePurpose: 'chapter-draft-condense', maxCondenseAttempts: 1,
-    trigger: 'primary-settled-stop-hash-verified-units-above-draftTargetUnitRange-maximum',
+    trigger: 'settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum',
     formalEffect: 'last-attempt-only' }),
   armAsymmetry: 'candidate（产品自 f00b612b 起）可对超出 draftTargetUnitRange 上限的章节首稿发一次产品原生压缩 chapter-draft-condense，并登记为该章「连续章节正文」的正式效果；baseline 2264390d 没有该产品能力、不登记压缩，首稿超上限即按原字数门失败；两臂是否触发压缩及各章压缩后正文长度的差异来自该不对称，不得据此单独声称相对改善' })
-const POST_UI_BUDGET = Object.freeze({ scenarioRevision: 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v3',
+const POST_UI_BUDGET = Object.freeze({ scenarioRevision: 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v4',
   attemptPolicy: POST_UI_ATTEMPT_POLICY,
   evaluationPolicy: POST_UI_REVIEW_POLICY,
   operations: Object.freeze([{ id: '指定范围生成', kind: 'directory' }, { id: '900单位正文', kind: 'draft' },
     { id: '成稿首审', kind: 'review' }, { id: '成稿一次修稿', kind: 'refine' }, { id: '成稿完整复评', kind: 'final-review' }]) })
 // v3 只改登记（attemptPolicy 增加唯一压缩），作者世界设定输入与 v2 逐字相同：沿用语义源里登记给 v2 的同一条附加行，不改动冻结的语义源。
 const AUTHOR_SETTING_LINES_REVISION = Object.freeze({
-  's14b-post-ui-reviewed-budget-review-rebuild-must-show-v3': 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2' })
+  's14b-post-ui-reviewed-budget-review-rebuild-must-show-v3': 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2',
+  's14b-post-ui-reviewed-budget-review-rebuild-must-show-v4': 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2' })
 /** 场景 revision 在语义源登记的作者设定附加行。 */
 export const scenarioAuthorSettingLines = (scene, scenarioRevision) => scenarioRevision
   ? scene?.scenarioAuthorSettingLines?.[AUTHOR_SETTING_LINES_REVISION[scenarioRevision] ?? scenarioRevision] ?? [] : []
@@ -167,8 +192,8 @@ export function selectOwnerDispatch(db, handle, session, body) {
 export const BRIDGE_SETTLEMENT_DEADLINE_MS = 480_000
 export const BRIDGE_SPAWN_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 3 + 60_000
 export const BRIDGE_TEST_TIMEOUT_MS = BRIDGE_SPAWN_TIMEOUT_MS + 60_000
-// post-UI 候选最多 8 个串行 attempt：指定范围 2、正文 2（含唯一压缩）、首审 2、修稿 1、复评 1。
-export const BRIDGE_REVIEWED_TEST_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 8 + 120_000
+// post-UI 每臂最多 15 个登记 attempt：目录 3、正文 8、首审 2、修稿 1、复评 1；产品自身 root 预算仍先行约束。
+export const BRIDGE_REVIEWED_TEST_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 15 + 120_000
 
 /** 只测规模、不落内容：返回提示词载荷的 UTF-8 字节数，绝不含提示词原文或凭据。 */
 export function measurePromptBytes(messages) {
@@ -316,9 +341,10 @@ export function runProductionBridge(request) {
  * 上限时，才许可一次 chapter-draft-condense；它不是任意失败的新重试权，正式效果只能落在末次 attempt。
  */
 export const C16_C18_ATTEMPT_POLICY = Object.freeze({ milestone: 'final', arms: Object.freeze(['candidate']),
+  draftRecovery: draftRecoveryPolicy(['本地恢复后续写', 'DAV选定世代恢复后续写']),
   draftCondense: Object.freeze({ operationIds: Object.freeze(['本地恢复后续写', 'DAV选定世代恢复后续写']),
     primaryPurpose: 'chapter-draft', condensePurpose: 'chapter-draft-condense', maxCondenseAttempts: 1,
-    trigger: 'primary-settled-stop-hash-verified-units-above-draftTargetUnitRange-maximum',
+    trigger: 'settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum',
     formalEffect: 'last-attempt-only' }),
   // v5（harness 变更，随产品“生成前定稿对账”登记）：续写 run 的首个物理请求可以是唯一一次对账；
   // 它只提供依据、不带正式效果、不是压缩的首稿、不获任何重试或修复权。
@@ -356,7 +382,7 @@ export const PHASE_SCENARIOS = Object.freeze({
   'c16-c18': Object.freeze({
     caseId: 'C16-A', caseIds: Object.freeze(['C16-A', 'C16-B', 'C16-C', 'C17-A', 'C17-B', 'C18-A', 'C18-B']),
     sceneId: '场景1', chapterNumber: 2, milestone: 'final', arms: Object.freeze(['candidate']),
-    scenarioRevision: 'c16-c18-candidate-production-path-v5',
+    scenarioRevision: 'c16-c18-candidate-production-path-v6',
     attemptPolicy: C16_C18_ATTEMPT_POLICY,
     // v5（用户批准的 harness 变更）：C17/C18 续写登记产品原生的唯一一次生成前定稿对账（见 attemptPolicy.draftReconcile）。
     // v4（用户批准的 harness 变更）：C17-B 恢复副本内重新定稿后按产品定稿路径紧接生产后处理，
@@ -372,7 +398,7 @@ export const PHASE_SCENARIOS = Object.freeze({
   }),
   full: Object.freeze({
     caseIds: Object.freeze(['场景1/1', '场景1/2', '场景1/3', '场景2/1', '场景2/2', '场景2/3', '场景3/1', '场景3/2', '场景3/3']),
-    milestone: 'final', scenarioRevision: 's14b-full-continuous-project-v2',
+    milestone: 'final', scenarioRevision: 's14b-full-continuous-project-v3',
     attemptPolicy: FULL_ATTEMPT_POLICY,
     operations: Object.freeze([
       Object.freeze({ id: '三章规划', kind: 'directory' }),
@@ -475,15 +501,147 @@ function verifiedPrimarySyntaxFailure(first, evidence, operationId, kind = 'dire
       : kind === 'review' ? reviewParseFailure(output) : repairableDirectJsonSyntax(output))
   } catch { return false }
 }
+export function structuredRequestRange(prompt, purpose) {
+  const compact = /^chapter-blueprint-directory:compact-single:chapter-(\d+)(?::structured-syntax-repair)?$/u.exec(purpose)
+  if (compact) return [Number(compact[1])]
+  const repair = /本次必须且只能完整返回以下 chapterNumber：([\d、]+)\s*[。.]/u.exec(prompt)
+  if (purpose.endsWith(':structured-syntax-repair') && repair) return repair[1].split('、').map(Number)
+  const range = /第\s*(\d+)\s*章\s*到\s*第\s*(\d+)\s*章/u.exec(prompt)
+  if (!range) throw new Error('STRUCTURED_REQUEST_RANGE_MISSING')
+  const [start, end] = range.slice(1).map(Number)
+  if (end < start || end - start > 49) throw new Error('STRUCTURED_REQUEST_RANGE_INVALID')
+  return Array.from({ length: end - start + 1 }, (_, index) => start + index)
+}
+const baselineDecoders = new Map()
+/** The frozen baseline's private decoder includes historical truncation. Execute that source read-only, without copying its rules to candidate. */
+export function blueprintRecoveryDecoder(repositoryRoot, arm) {
+  if (arm !== 'baseline') return (output, range) => parseBlueprintSemanticResponseText(stripDraftThinkingTags(output), range)
+  const directory = path.join(repositoryRoot, 'src/services/workflows/commands')
+  const source = fs.readFileSync(path.join(directory, 'directory.command.ts'), 'utf8')
+  const key = digest([repositoryRoot, source])
+  if (!baselineDecoders.has(key)) {
+    const start = source.indexOf('const GENERATED_BLUEPRINT_TEXT_LIMITS =')
+    const end = source.indexOf('function buildCompactBlueprintTask(', start)
+    if (start < 0 || end <= start) throw new Error('BASELINE_BLUEPRINT_DECODER_SOURCE_UNAVAILABLE')
+    const contents = `import { parseTextBlueprintsStrict } from '../directory-workflow';
+      import { BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST } from '../../../shared/blueprint-semantic-contract';
+      import { structuredContractDiagnostic } from '../../../shared/structured-contract-diagnostic';
+      import { stripThinkingTags } from '../workflow-utils';
+      ${source.slice(start, end)}; export { decodeGeneratedBlueprints };`
+    const bundle = buildSync({ stdin: { contents, loader: 'ts', resolveDir: directory }, bundle: true,
+      platform: 'node', format: 'cjs', write: false }).outputFiles[0].text
+    const module = { exports: {} }
+    new Function('module', 'exports', 'require', bundle)(module, module.exports, createRequire(path.join(repositoryRoot, 'package.json')))
+    baselineDecoders.set(key, (output, range) => module.exports.decodeGeneratedBlueprints(output, range[0], range.at(-1)))
+  }
+  return baselineDecoders.get(key)
+}
+export function structuredRecoveryState(attempts, { chapterNumbers, decode = blueprintRecoveryDecoder(null, 'candidate') }, readOutput) {
+  const pending = [{ range: chapterNumbers, purpose: 'chapter-blueprint-directory' }]
+  const compact = new Set()
+  let syntaxUsed = false, lastSyntaxSource = null
+  const maxCalls = planBlueprintGenerationCost(chapterNumbers.length).maxCalls
+  const rebuild = task => {
+    if (task.range.length > 1) {
+      const midpoint = Math.floor(task.range.length / 2)
+      pending.unshift({ range: task.range.slice(0, midpoint), purpose: 'chapter-blueprint-directory' },
+        { range: task.range.slice(midpoint), purpose: 'chapter-blueprint-directory' })
+    } else if (!compact.has(task.range[0])) {
+      compact.add(task.range[0])
+      pending.unshift({ range: task.range, purpose: `chapter-blueprint-directory:compact-single:chapter-${task.range[0]}` })
+    } else throw new Error('STRUCTURED_RECOVERY_EXHAUSTED')
+  }
+  for (const [index, owner] of attempts.entries()) {
+    const task = pending.shift()
+    if (!task || index >= maxCalls || owner.purpose !== task.purpose
+      || JSON.stringify(owner.structuredRange) !== JSON.stringify(task.range)) throw new Error('STRUCTURED_RECOVERY_SEQUENCE_INVALID')
+    const { output, finishReason } = readOutput(owner)
+    if (!['stop', 'length'].includes(finishReason)) throw new Error('STRUCTURED_RECOVERY_UNSETTLED')
+    const syntax = owner.purpose.endsWith(':structured-syntax-repair')
+    if (finishReason === 'length') { rebuild(task); continue }
+    if (!syntax && repairableDirectJsonSyntax(output) && !syntaxUsed) {
+      syntaxUsed = true; lastSyntaxSource = output
+      pending.unshift({ ...task, purpose: `${task.purpose}:structured-syntax-repair` })
+      continue
+    }
+    // Production itself owns evidence-preserving syntax repair; the raw source and repaired output remain hash-bound.
+    if (syntax && (!lastSyntaxSource || !preservesStructuredJsonEvidence(lastSyntaxSource, output)))
+      throw new Error('STRUCTURED_REPAIR_EVIDENCE_CHANGED')
+    try { decode(output, task.range) }
+    catch { rebuild(task) }
+  }
+  return { next: attempts.length < maxCalls ? pending[0] ?? null : null, complete: pending.length === 0, maxCalls }
+}
+/** Replay only the product's bounded draft path from immutable raw-visible outputs. */
+export function draftRecoveryState(attempts, { policy, targetUnits, arm, reconcileCount = 0 }, readOutput) {
+  let text = '', lastFinish = null, pendingRecovery = false, recoveryUsed = false, stopped = false, condensed = false
+  const minimum = Math.floor(targetUnits * (arm === 'baseline' ? policy.baselineMinimumRatio : policy.candidateMinimumRatio))
+  const maximum = arm === 'candidate' ? Math.ceil(targetUnits * 1.3) : Infinity
+  const allowed = () => {
+    if (attempts.length === 0) return ['chapter-draft']
+    if (condensed) return []
+    if (countProjectedDraftUnits(text) > maximum) return ['chapter-draft-condense']
+    if (stopped) return []
+    if (pendingRecovery) return ['chapter-draft-no-progress-recovery']
+    if (lastFinish === 'length' || lastFinish === 'stop' && countProjectedDraftUnits(text) < minimum)
+      return ['chapter-draft-continuation']
+    return []
+  }
+  for (let index = 0; index < attempts.length; index++) {
+    const attempt = attempts[index], purpose = attempt.purpose
+    const expected = index === 0 ? ['chapter-draft'] : allowed()
+    if (!expected.includes(purpose) || index + reconcileCount >= policy.maxAttempts
+      || index > policy.maxContinuationRounds) throw new Error('DRAFT_RECOVERY_SEQUENCE_INVALID')
+    const { output, finishReason } = readOutput(attempt)
+    if (!['stop', 'length'].includes(finishReason)) throw new Error('DRAFT_RECOVERY_UNSETTLED')
+    const clean = sanitizeDraftText(output)
+    if (purpose === 'chapter-draft') text = clean
+    else if (purpose === 'chapter-draft-condense') {
+      text = clean; condensed = true
+      if (finishReason !== 'stop') throw new Error('DRAFT_RECOVERY_CONDENSE_INCOMPLETE')
+    } else {
+      const composed = composeDraftVisibleContinuation(text, clean)
+      const delta = countProjectedDraftUnits(composed) - countProjectedDraftUnits(text)
+      if (finishReason === 'length' && delta < policy.minimumProgressUnits) {
+        if (recoveryUsed) { stopped = true; pendingRecovery = false }
+        else { recoveryUsed = true; pendingRecovery = true }
+      } else {
+        text = composed; pendingRecovery = false
+        if (delta < policy.minimumProgressUnits) stopped = true
+      }
+    }
+    lastFinish = finishReason
+  }
+  return { text, next: attempts.length + reconcileCount >= policy.maxAttempts ? [] : allowed(),
+    complete: lastFinish === 'stop' && countProjectedDraftUnits(text) >= minimum && countProjectedDraftUnits(text) <= maximum,
+    condensed }
+}
+function verifiedRecoveryOutput(owner, evidence, operationId) {
+  const attempt = evidence?.attempt, events = evidence?.events
+  const identity = attempt?.binding?.actual ?? attempt?.binding?.baselineIpc
+  if (!identity || attempt.binding.operation !== operationId || !Array.isArray(events) || events.length !== 3
+    || ['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch', 'purpose'].some(key => identity[key] !== owner[key])
+    || attempt.attemptId !== events[0]?.attemptId || !attempt.attemptId.endsWith(`:${owner.attemptId}`)
+    || events.some(row => row.attemptId !== attempt.attemptId)
+    || JSON.stringify(events.map(row => row.type)) !== JSON.stringify(['reserve', 'dispatch', 'settle'])
+    || JSON.stringify(events[0].binding) !== JSON.stringify(attempt.binding)
+    || !['stop', 'length'].includes(events[2].finishReason)) throw new Error('RECOVERY_SOURCE_UNVERIFIED')
+  const output = fs.readFileSync(attempt.outputPath, 'utf8')
+  if (digest(output) !== attempt.visibleTextHash
+    || attempt.binding.actual && evidence.ownerArtifactHash !== attempt.visibleTextHash) throw new Error('RECOVERY_SOURCE_HASH_MISMATCH')
+  return { output, finishReason: events[2].finishReason }
+}
 /**
  * Only a settled, hash-verified parse failure — or, for a registered draft operation, a settled
  * over-length primary draft — may add one physical request. `draftCondense.measureUnits` and
  * `draftCondense.maximum` come from the production counter and draftTargetUnitRange.
  */
 export function createOperationDispatchGate({ onReject, repairPolicy, readPrimaryEvidence, finalizationRepair = false, draftCondense = null,
-  draftReconcile = null } = {}) {
+  draftReconcile = null, draftRecovery = null, structuredRecovery = null } = {}) {
   const dispatched = new Map()
   const reconciled = new Map()
+  const draftAttempts = new Map()
+  const structuredAttempts = new Map()
   const reject = (operationId, reason) => {
     const rejection = Object.freeze({ code: 'UNREGISTERED_ADDITIONAL_MODEL_REQUEST',
       operationId: operationId || null, reason, beforeDispatch: true })
@@ -506,6 +664,33 @@ export function createOperationDispatchGate({ onReject, repairPolicy, readPrimar
     }
     const reconcile = reconciled.get(operationId)
     if (reconcile && !first && !sameRun(reconcile, owner ?? {})) reject(operationId, 'duplicate-operation')
+    if (structuredRecovery?.policy.operationId === operationId) {
+      const history = structuredAttempts.get(operationId) ?? []
+      try {
+        if (!owner || !['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch'].every(key => typeof owner[key] === 'string' && owner[key])
+          || history.some(prior => !sameRun(prior, owner))) throw new Error('STRUCTURED_RECOVERY_OWNER_MISMATCH')
+        const state = structuredRecoveryState(history, structuredRecovery,
+          prior => verifiedRecoveryOutput(prior, readPrimaryEvidence?.(prior), operationId))
+        if (!state.next || owner.purpose !== state.next.purpose
+          || JSON.stringify(owner.structuredRange) !== JSON.stringify(state.next.range)) throw new Error('STRUCTURED_RECOVERY_NOT_TRIGGERED')
+        structuredAttempts.set(operationId, [...history, { ...owner }])
+        dispatched.set(operationId, { ...owner })
+        return
+      } catch { reject(operationId, 'structured-recovery-not-authorized') }
+    }
+    if (draftRecovery?.policy.operationIds.includes(operationId)) {
+      const history = draftAttempts.get(operationId) ?? []
+      const validIdentity = owner && ['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch'].every(key => typeof owner[key] === 'string' && owner[key])
+      try {
+        if (!validIdentity || history.some(prior => !sameRun(prior, owner))) throw new Error('DRAFT_RECOVERY_OWNER_MISMATCH')
+        const state = history.length ? draftRecoveryState(history, { ...draftRecovery, reconcileCount: reconcile ? 1 : 0 },
+          prior => verifiedRecoveryOutput(prior, readPrimaryEvidence?.(prior), operationId)) : { next: ['chapter-draft'] }
+        if (!state.next.includes(owner.purpose)) throw new Error('DRAFT_RECOVERY_NOT_TRIGGERED')
+        draftAttempts.set(operationId, [...history, { ...owner }])
+        dispatched.set(operationId, { ...owner })
+        return
+      } catch { reject(operationId, 'draft-recovery-not-authorized') }
+    }
     const cards = finalizationRepair && FINALIZED_CHARACTER_OPERATION_IDS.includes(operationId)
     const condensePolicy = draftCondense?.policy
     const condense = Boolean(condensePolicy?.maxCondenseAttempts === 1 && condensePolicy.operationIds?.includes(operationId))
@@ -567,6 +752,52 @@ const MATERIAL_CATEGORIES = new Set(['author', 'finalized-history', 'future-plan
 const sourceIdentity = item => JSON.stringify([item?.sourceId, item?.revision, item?.contentHash])
 const sourceIdentityWithReason = item => JSON.stringify([item?.sourceId, item?.revision, item?.contentHash, item?.reason])
 const validCount = (value, minimum = 0) => Number.isSafeInteger(value) && value >= minimum
+function structuredRecoveryReceiptFailure(result, operationId, chapterNumbers, arm) {
+  const attempts = result.attempts.filter(item => item.binding?.operation === operationId)
+  const identities = attempts.map(item => item.binding.actual ?? item.binding.baselineIpc)
+  try {
+    if (!identities[0] || identities.some(owner => ['runId', 'rootActionId', 'projectId', 'epoch'].some(key => owner[key] !== identities[0][key]))) throw new Error('owner')
+    const state = structuredRecoveryState(identities, { chapterNumbers,
+      decode: blueprintRecoveryDecoder(result.command?.cwd, arm) }, owner => {
+      const attempt = attempts.find(item => (item.binding.actual ?? item.binding.baselineIpc).attemptId === owner.attemptId)
+      const prompt = fs.readFileSync(attempt.structuredPrompt.outputPath, 'utf8')
+      if (digest(prompt) !== attempt.structuredPrompt.contentHash
+        || JSON.stringify(structuredRequestRange(prompt, owner.purpose)) !== JSON.stringify(owner.structuredRange)) throw new Error('scope')
+      const output = fs.readFileSync(attempt.outputPath, 'utf8')
+      if (digest(output) !== attempt.visibleTextHash) throw new Error('hash')
+      if (arm === 'candidate') {
+        const terminal = result.ownerTerminal?.find(item => item.attemptId === owner.attemptId)
+        if (!terminal?.artifactId || terminal.textHash !== attempt.visibleTextHash || terminal.finishReason !== attempt.finishReason
+          || terminal.hasFormalEffect !== (attempt === attempts.at(-1))) throw new Error('effect')
+      }
+      return { output, finishReason: attempt.finishReason }
+    })
+    return state.complete ? null : 'STRUCTURED_RECOVERY_INCOMPLETE'
+  } catch { return 'STRUCTURED_RECOVERY_EVIDENCE_INVALID' }
+}
+function draftRecoveryReceiptFailure(result, operationId, policy, arm, reviewed = false, reconcileCount = 0) {
+  const attempts = result.attempts.filter(item => item.binding?.operation === operationId
+    && (item.binding.actual ?? item.binding.baselineIpc)?.purpose !== 'chapter-draft-reconcile')
+  const identities = attempts.map(item => item.binding.actual ?? item.binding.baselineIpc)
+  if (!identities[0] || identities.some(owner => !owner || ['runId', 'rootActionId', 'projectId', 'epoch'].some(key => owner[key] !== identities[0][key]))
+    || new Set(identities.map(owner => owner.attemptId)).size !== identities.length) return 'DRAFT_RECOVERY_OWNER_MISMATCH'
+  try {
+    const state = draftRecoveryState(identities, { policy, arm, targetUnits: result.draftObservation?.targetUnits, reconcileCount }, owner => {
+      const attempt = attempts.find(item => (item.binding.actual ?? item.binding.baselineIpc).attemptId === owner.attemptId)
+      const output = fs.readFileSync(attempt.outputPath, 'utf8')
+      if (digest(output) !== attempt.visibleTextHash) throw new Error('hash')
+      if (arm === 'candidate') {
+        const terminal = result.ownerTerminal?.find(item => item.attemptId === owner.attemptId)
+        if (!terminal?.artifactId || terminal.textHash !== attempt.visibleTextHash || terminal.purpose !== owner.purpose
+          || terminal.finishReason !== attempt.finishReason || terminal.hasFormalEffect !== (attempt === attempts.at(-1))) throw new Error('owner')
+      }
+      return { output, finishReason: attempt.finishReason }
+    })
+    const sourceHash = reviewed ? result.reviewedDraft?.initial?.contentHash : result.saved?.contentHash ?? result.draftObservation?.contentHash
+    if (!state.complete || digest(state.text) !== sourceHash) return 'DRAFT_RECOVERY_SAVED_MISMATCH'
+    return null
+  } catch { return 'DRAFT_RECOVERY_EVIDENCE_INVALID' }
+}
 function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRevision, protocolHash }) {
   const owned = ['early-review', 'full'].includes(phase) || Boolean(scenario.evaluationPolicy)
   const invocationId = result?.invocationId
@@ -580,7 +811,10 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
   const policy = scenario.attemptPolicy
   const eligible = policy && result.milestone === policy.milestone && policy.arms.includes(arm)
   const repairMatches = eligible && policy.operationId ? result.attempts.filter(attempt => attempt?.binding?.operation === policy.operationId) : []
-  const repairUsed = repairMatches.length === 2
+  const structuredPolicy = eligible ? structuredRecoveryFor(policy, arm) : null
+  const structuredMatches = structuredPolicy ? result.attempts.filter(attempt => attempt.binding?.operation === structuredPolicy.operationId) : []
+  const structuredUsed = structuredMatches.some(attempt => (attempt.binding.actual ?? attempt.binding.baselineIpc)?.structuredRange)
+  const repairUsed = !structuredUsed && repairMatches.length === 2
   const reviewPolicy = eligible && scenario.evaluationPolicy ? policy.reviewRebuild : null
   const reviewMatches = reviewPolicy ? result.attempts.filter(attempt => attempt?.binding?.operation === reviewPolicy.operationId) : []
   const reviewUsed = reviewMatches.length === 2
@@ -588,13 +822,27 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
   const condensePolicy = eligible ? draftCondenseFor(policy, arm) : null
   const condenseMatches = condensePolicy
     ? result.attempts.filter(attempt => condensePolicy.operationIds.includes(attempt?.binding?.operation)) : []
-  const condenseUsed = condenseMatches.length === 2
-  if (result.attempts.length !== scenario.operations.length + Number(repairUsed) + Number(reviewUsed) + Number(condenseUsed)
+  const recoveryPolicy = eligible ? draftRecoveryFor(policy, arm) : null
+  const recoveryOperations = scenario.operations.filter(operation => recoveryPolicy?.operationIds.includes(operation.id))
+  if (recoveryOperations.length && arm === 'candidate' && (result.ownerTerminal?.length !== result.attempts.length
+    || result.attempts.some(attempt => {
+      const terminal = result.ownerTerminal.find(item => item.attemptId === attempt.binding.actual?.attemptId)
+      return !terminal?.artifactId || terminal.textHash !== attempt.visibleTextHash
+    }))) return 'ACTUAL_OWNER_ARTIFACT_MISMATCH'
+  const recoveryExtras = recoveryOperations.reduce((sum, operation) => sum + result.attempts.filter(attempt => attempt.binding?.operation === operation.id).length - 1, 0)
+  const condenseUsed = recoveryOperations.length === 0 && condenseMatches.length === 2
+  if (result.attempts.length !== scenario.operations.length + Number(repairUsed) + Number(reviewUsed) + Number(condenseUsed) + recoveryExtras + (structuredUsed ? structuredMatches.length - 1 : 0)
     || new Set(result.attempts.map(attempt => attempt?.attemptId)).size !== result.attempts.length)
     return 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'
   for (const operation of scenario.operations) {
     const matches = result.attempts.filter(attempt => attempt?.binding?.operation === operation.id)
-    if (matches.length !== (repairUsed && operation.id === policy.operationId
+    if (structuredUsed && structuredPolicy.operationId === operation.id) {
+      const failure = structuredRecoveryReceiptFailure(result, operation.id, phase === 'full' ? [1, 2, 3] : [scenario.chapterNumber], arm)
+      if (failure) return failure
+    } else if (recoveryOperations.some(item => item.id === operation.id)) {
+      const failure = draftRecoveryReceiptFailure(result, operation.id, recoveryPolicy, arm, Boolean(scenario.evaluationPolicy))
+      if (failure) return failure
+    } else if (matches.length !== (repairUsed && operation.id === policy.operationId
       || reviewUsed && operation.id === reviewPolicy.operationId
       || condenseUsed && condensePolicy.operationIds.includes(operation.id) ? 2 : 1)) return 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'
     for (const match of matches) {
@@ -616,7 +864,7 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
       }
     }
   }
-  if (eligible && policy.operationId) {
+  if (!structuredUsed && eligible && policy.operationId) {
     const identity = attempt => arm === 'candidate' ? attempt.binding.actual : attempt.binding.baselineIpc
     const primary = identity(repairMatches[0])
     if (!primary || primary.purpose !== policy.primaryPurpose || !primary.attemptId
@@ -1428,7 +1676,9 @@ export function validateCandidateContinuityResults(results, mode) {
       if (reconciles.length > (reconcilable ? 1 : 0) || reconciles.length === 1 && all[0] !== reconciles[0])
         return fail('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
       const attempts = all.slice(reconciles.length)
-      if (attempts.length < 1 || attempts.length > (operation.kind === 'character_cards' ? 3 : condensable ? 2 : 1)) return fail('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+      const recoveryPolicy = draftRecoveryFor(PHASE_SCENARIOS['c16-c18'].attemptPolicy, 'candidate')
+      const recoverable = operation.kind === 'draft' && recoveryPolicy?.operationIds.includes(operation.operation)
+      if (attempts.length < 1 || attempts.length > (recoverable ? recoveryPolicy.maxAttempts - reconciles.length : operation.kind === 'character_cards' ? 3 : condensable ? 2 : 1)) return fail('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
       const ownerMismatch = attempt => {
         const actual = attempt.binding?.actual, terminal = result.ownerTerminal.find(item => item.attemptId === actual?.attemptId)
         return !actual || actual.projectId !== result.physicalProject.projectId || actual.epoch !== result.projectEpoch
@@ -1444,8 +1694,13 @@ export function validateCandidateContinuityResults(results, mode) {
         if (!terminal || terminal.hasFormalEffect !== false || !reconcile.finishReasons.includes(terminal.finishReason))
           return fail('ACTUAL_OWNER_IDENTITY_MISMATCH')
       }
+      if (recoverable) {
+        const failure = draftRecoveryReceiptFailure(result, operation.operation, recoveryPolicy, 'candidate', false, reconciles.length)
+        if (failure) return fail(failure)
+      }
       for (const [ordinal, attempt] of attempts.entries()) {
         const actual = attempt.binding?.actual, terminal = ownerMismatch(attempt)
+        if (recoverable) { if (!terminal) return fail('ACTUAL_OWNER_IDENTITY_MISMATCH'); continue }
         if (!terminal || terminal.finishReason !== 'stop'
           || terminal.hasFormalEffect !== (ordinal === attempts.length - 1)
           || ordinal === 0 && actual.purpose !== (operation.kind === 'chapter_notes' ? 'finalized-chapter-notes'
@@ -1454,7 +1709,7 @@ export function validateCandidateContinuityResults(results, mode) {
           return fail('ACTUAL_OWNER_IDENTITY_MISMATCH')
       }
       // 登记的唯一压缩：首稿 hash 可复核且超出上限（生产计数），末次压缩稿才是正式保存的在范围正文。
-      if (condensable && attempts.length === 2 && !verifiedCondensedDraft(attempts[0], result)) return fail('DRAFT_CONDENSE_NOT_REGISTERED')
+      if (!recoverable && condensable && attempts.length === 2 && !verifiedCondensedDraft(attempts[0], result)) return fail('DRAFT_CONDENSE_NOT_REGISTERED')
       if (reconcilable) {
         const failure = draftReconciliationEvidenceFailure(result, operation, reconciles[0], attempts, mode)
         if (failure) return fail(failure)

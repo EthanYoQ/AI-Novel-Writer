@@ -169,6 +169,22 @@ node scripts/quality-modernization-run.mjs early-budget --targets .runtime/.cach
 
 裸 early-budget 不默认发模型，必须显式选择模式。兼容 `--phase early-budget --dry-run` 写法，但 `--protocol` 只接受实际 `docs/research/novel-quality-modernization/protocol.json`；冻结旧 Spec 示例中不存在的 test/fixtures 路径不会被悄悄替换。退出码0只表示自动/合成技术检查成功，不代表质量通过；1表示自动执行失败，2表示前置阻断，3表示已取得可评审产物但仍为 `pending-independent-oracle-review`。真实结果须独立评审原文事件、事实和质量，不能把 runner exit 0、合成正文或字数合格直接记为 C06 PASS。
 
+## H5 有界生产恢复登记（现行）
+
+本次只补 harness 合同，不增加产品能力。现行场景为 C16–C18 `c16-c18-candidate-production-path-v6`、full `s14b-full-continuous-project-v3`、post-UI `s14b-post-ui-reviewed-budget-review-rebuild-must-show-v4`；下文旧 revision 段落保留历史解释，额外调用资格以本节和现行 `protocol.json` 为准。三个场景及协议完整字节 hash 均须重新冻结；唯一物理账本历史边界仍为 861 行，全部历史失败不变。
+
+正文恢复复用生产 `DRAFT_GENERATION_BUDGET.maxAttempts=8`，包括同一 root 内对账、首稿、续写、无进展恢复与唯一压缩，不另外给八次重试。最多七轮 continuation；正常 stop 但短于该臂生产下限或 length 才可继续；length 且可见新增不足 300 单位时丢弃该段，至多一次 no-progress recovery。候选超过上限后走既有唯一全文压缩，baseline 无此能力。门禁逐次核对同 run/root/project/epoch、唯一 attempt、reserve→dispatch→settle、stop/length 终态、落盘原文 hash，候选另核对 main owner artifact。未结算、错身份、错误触发、超次数和未知用途在 reserve 前拒绝；原 token、截止时间和上下文预算仍由实际生产 session 约束。
+
+结果侧按生产 `sanitizeDraftText` / `composeDraftVisibleContinuation` 重放有效片段，保留每次原文及无进展失败候选；压缩以完整新稿取代此前组合。末次才可有正式效果，最终组合 hash 必须等于 full/C16–C18 保存稿或 post-UI 被审初稿；后续修稿、复评与 full 下一章前驱继续绑定既有链，篇幅门、事实门、盲评均不放宽。
+
+结构化恢复只作用于 post-UI `指定范围生成` 和 full `三章规划`，直接调用生产 `planBlueprintGenerationCost(N)` 取原 maxCalls（单章 3、三章 9）。实际请求范围从出站生产提示及用途取证；length 或生产解码失败后多章深度优先拆半，单章至多一次 compact-single 完整重建。全 operation 仍最多一次证据不变的语法修复。候选 value_too_long 不接受机械截断；失败原文、拆分范围、修复来源、owner 终态和最后正式效果均可复核。
+
+baseline `2264390d` 保持原源码及实际行为：正文下限 80%，候选 70%；baseline 没有 durable RootAction，收据以实际 renderer command run 作为同一 session 预算根，不冒称 main owner；其历史结构化 decoder 会对部分 value_too_long 机械截断。harness 从冻结 baseline 工作树只读编译该 decoder，用于门禁与收据回放，候选始终调用当前严格语义 parser。两臂恢复与压缩触发差异必须披露，不据此单独声称质量改善。
+
+最短路径不变：C16–C18 16 次，full 24 次，post-UI 6 次。post-UI 登记包络为两臂各 `3+8+2+1+1=15`，`maximumPlannedCalls=30`；full 登记包络为六次三章规划各最多 9、十八次正文各最多 8，即最多 198 次，且原 token/时间预算可能更早耗尽。80 次计划分配和各桶额度按 ADR0019 保持不变；额外物理请求照常进入同一账本既有失败/重试/修复余量分类，不合并、不漏记，也不以计划额度替代生产 root 预算。
+
+开发合成对所有候选目录注入超长字段，检验生产拆批与完整重建；正文覆盖短 stop、length、重复无进展、恢复后压缩。任何 compact 提示若丢失原 oracle 事实，仍由原出站事实门拒绝并保留失败，不能缩小注入场景或减弱事实门来改判通过。开发合成仅证明接线与门禁，物理模型请求必须为 0；真实质量和正式冻结须另行完成。
+
 ## Full 连续生产执行
 
 `full` 固定为 `final` milestone，执行登记 `s14b-full-continuous-project-v2`（v1 保留为历史；v2 相对 v1 只增加下文单列披露的候选臂唯一原生压缩登记）。每场景每臂只 prepare 一个独立物理项目，三章持续重开其原 SQLite 数据库。先完成六次 `三章规划`：场景1 baseline/candidate、场景2 candidate/baseline、场景3 baseline/candidate；每次通过 `GenerateDirectoryCommand` 生成并保存第1至3章蓝图。随后按 protocol.order 的原 seed、caseIds 与九组 armsByChapter 顺序完成十八次 `连续章节正文`。规划分配 `finalPlanning=6`，正文分配 `finalChapters=18`，full 最小物理请求数合计24；重复 slot 仍归失败/重试余量，不重置历史占用。
@@ -179,7 +195,7 @@ node scripts/quality-modernization-run.mjs early-budget --targets .runtime/.cach
 
 S14B full 场景 revision `s14b-full-continuous-project-v2` 是随产品超长压缩修复登记的评分规则/场景变更（单列披露），与产品修复分开说明。产品侧不在本变更范围：产品自 `f00b612b` 起就对超出 `draftTargetUnitRange` 上限的首稿发一次原生 `chapter-draft-condense`，本次只改 full 的登记。变更内容：`phases.full.attemptPolicy.draftCondense` 只为 candidate 臂的 `连续章节正文` 登记这唯一一次压缩（`arms: ["candidate"]`）；`三章规划` 与 baseline `2264390d` 不登记，baseline 早于该产品修复、没有这项能力，任何 baseline 或 `三章规划` 中的额外请求仍在 reserve 前拒绝。许可条件、次数与正式效果同 post-UI v3：同 run/root/项目/epoch 的 `chapter-draft` 首请求已结算为 stop，其 hash 可复核的输出按生产 `countDraftUnits` 严格超出 `draftTargetUnitRange` 上限；至多一次，同一 operation 至多两次 attempt，正式效果只在末次压缩，用途常量、计数与上限取自生产代码。每章没有审修链，因此保存的正文（`saved.contentHash`）必须等于末次压缩输出按生产 `sanitizeDraftText` 清洗（主进程 draft-visible-v1 组合同一规则）后的 hash，干净输出即其物理输出 hash 本身；`saved`、`draftObservation` 与下一章前驱（`classifyFullProduction` 的前驱链与 `result.predecessor`）都取该压缩稿。压缩稿是否落入 candidate ±30% 范围按压缩稿自身判，压缩后仍越界记 `DRAFT_CONDENSE_NOT_REGISTERED` 并使 full 失败（产品侧仍以 `GENERATION_DRAFT_LENGTH_OUT_OF_RANGE` 保留原稿失败）；第二次压缩、首稿未超上限的压缩、压缩 attempt 非 stop、保存稿仍是被压缩取代的首稿，均不获新的重试权，字数门与事实门不放宽。分类里 `result.attempts[0]` 的 owner 绑定检查继续针对首个（primary）attempt，第二个 attempt 须与 primary 同 run/root/项目/epoch。
 
-未登记：`chapter-draft-continuation` 与 `chapter-draft-no-progress-recovery` 在 full 里不登记。依据主 Agent 的历史统计（约100个正文类 attempt 全部以 stop 结束），按 fail-closed 处理：未登记，触发即在 reserve 前拒绝并记技术失败。baseline 不登记任何额外请求。
+历史 full v2 未登记：`chapter-draft-continuation` 与 `chapter-draft-no-progress-recovery` 在 full 里不登记。依据主 Agent 的历史统计（约100个正文类 attempt 全部以 stop 结束），按 fail-closed 处理：未登记，触发即在 reserve 前拒绝并记技术失败。baseline 不登记任何额外请求。
 
 预算：分配不变。压缩 attempt 与首稿同 slot（milestone/phase/caseId/arm/operation），按 `allocationFor` 计入 `failedRetryRepairReviewReserve`，不占 `finalChapters=18` 与 `finalPlanning=6`；`minimumCalls` 仍为24，`plannedCallAllocation` 与各桶数额（合计80）不变，无需改协议数字。最坏情形 candidate 9 章全部压缩：full 物理请求最多 24+9=33，多出的 9 次在22次余量之内；该余量是全 campaign 共享的计划分配而非调用上限（ADR 0019 只分类汇报、不拒发，历史上 unknown 与修复超出后仍继续记账）。
 
