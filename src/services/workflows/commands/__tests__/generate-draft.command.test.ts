@@ -36,6 +36,14 @@ import {
   synopsisForDraftChapter,
   type GenerateDraftCommandDependencies,
 } from '../generate-draft.command'
+import { assembleChapterMaterials } from '../../chapter-materials'
+
+// 默认原样透传真实装配；只有个别测试用 mockImplementationOnce 改写一次返回值，
+// 用来验证命令层对装配结果的独立复核。
+vi.mock('../../chapter-materials', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../chapter-materials')>()
+  return { ...actual, assembleChapterMaterials: vi.fn(actual.assembleChapterMaterials) }
+})
 
 describe('generate draft command text cleanup', () => {
   it('主进程正文投影保持旧续接规则且不改原始片段', () => {
@@ -2002,6 +2010,93 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(invoke).toHaveBeenCalledWith('db:draft-create', expect.objectContaining({
       sourceDependencies: [{ draftId: 31, contentHash: createHash('sha256').update(predecessor, 'utf8').digest('hex') }],
     }), projectPath, expect.anything())
+  })
+
+  describe('直接前驱的定稿块是必需连续性材料', () => {
+    // 无未定稿候选前驱、知识库没有相关原文时，上一章结尾只经定稿块进入提示词；
+    // 作者资料几乎占满材料预算时，整块（证据窗口 + 结尾）装不下，也不能静默丢掉前驱后仍生成续章。
+    const endingSentinel = '上一章定稿结尾哨兵。'
+    const evidenceLine = '林岚把红色钥匙收进口袋。'
+    const previousFinalizedContent = [
+      '开场交代。',
+      `${evidenceLine}${'铺垫。'.repeat(300)}`,
+      '中段。'.repeat(300),
+      '过场。'.repeat(300),
+      '过场二。'.repeat(250),
+      `${'收束。'.repeat(200)}${endingSentinel}`,
+    ].join('\n\n')
+    const predecessorSetup = (authorFactChars: number, runtime: ReturnType<typeof fakeRuntime>) => setup({
+      runtime,
+      chapterNumber: 2,
+      characters: ['林岚'],
+      wordsTarget: 500,
+      coreOutline: '设'.repeat(authorFactChars),
+      continuity: [{
+        draftId: 41,
+        chapterNumber: 1,
+        chapterTitle: '作者第一章',
+        chapterNotes: '',
+        facts: [{ category: 'plot', entities: ['林岚'], statement: '林岚收起钥匙。', sourceChapter: 1, evidence: evidenceLine }],
+      }],
+      previousFinalizedContent,
+    })
+
+    it('keeps the previous ending in the prompt when only the ending fits beside long author facts', async () => {
+      let observedTask: GenerationTask | undefined
+      const runtime = fakeRuntime((_attempt, task) => {
+        observedTask = task
+        return outcome('新章正文。'.repeat(125), 'stop')
+      })
+      const { context, callbacks, command } = predecessorSetup(5_600, runtime)
+
+      await command.execute({ step: {}, context, callbacks })
+
+      const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+      expect(runtime.complete).toHaveBeenCalled()
+      // 模型必须收到上一章原文（至少结尾）；淘汰的只是证据窗口。
+      expect(prompt).toContain(endingSentinel)
+      expect(prompt).not.toContain(evidenceLine)
+      const decision = runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision
+      const finalizedItem = decision?.included.find(item => item.sourceId === 'finalized:41')
+      expect(finalizedItem).toMatchObject({ required: true })
+      expect(finalizedItem?.units).toBeLessThan(3_500)
+      expect(decision?.coverage).toEqual({ required: 2, included: 2, complete: true })
+      expect(decision?.omitted).toContainEqual(expect.objectContaining({ sourceId: 'finalized:41', reason: 'budget' }))
+      expect(prompt).toContain('finalized#1:budget')
+    })
+
+    it('stops before the provider when the ending cannot fit beside the required author material', async () => {
+      const runtime = fakeRuntime(() => outcome('不应到达的正文。'.repeat(125), 'stop'))
+      const { invoke, context, callbacks, command } = predecessorSetup(7_100, runtime)
+
+      await expect(command.execute({ step: {}, context, callbacks }))
+        .rejects.toThrow('必需材料（作者资料、角色档案、后续计划）超出上下文容量')
+
+      expect(runtime.complete).not.toHaveBeenCalled()
+      expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining(
+        '必需材料超出上下文容量（capacity-conflict）：finalized:41:budget',
+      ))
+      expectNoDraftPersistence(invoke)
+    })
+
+    it('independently refuses to start when the direct finalized predecessor did not reach the prompt', async () => {
+      // 命令层不信任装配层的保证：来源存在不等于模型收到了它。这里让装配「意外」漏掉定稿块。
+      const actual = await vi.importActual<typeof import('../../chapter-materials')>('../../chapter-materials')
+      vi.mocked(assembleChapterMaterials).mockImplementationOnce(async input => {
+        const bundle = await actual.assembleChapterMaterials(input)
+        if (bundle.selection.decision !== 'ready') return bundle
+        return { ...bundle, selection: { ...bundle.selection,
+          included: bundle.selection.included.filter(material => !material.ref.sourceId.startsWith('finalized:')) } }
+      })
+      const runtime = fakeRuntime(() => outcome('不应到达的正文。'.repeat(125), 'stop'))
+      const { invoke, context, callbacks, command } = predecessorSetup(1_000, runtime)
+
+      await expect(command.execute({ step: {}, context, callbacks }))
+        .rejects.toThrow('GENERATION_DRAFT_REQUIRED_PREDECESSOR_NOT_ADMITTED')
+
+      expect(runtime.complete).not.toHaveBeenCalled()
+      expectNoDraftPersistence(invoke)
+    })
   })
 
   it('distinguishes author hard constraints from finalized state changes in English', async () => {

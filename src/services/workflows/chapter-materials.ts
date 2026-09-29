@@ -522,6 +522,23 @@ export async function assembleChapterMaterials(input: {
     category: 'author', provenance: 'author', required: true,
   })
 
+  // 定稿块的候选材料：整块与「只保留结尾」的降级块共用同一份块头与身份规则，只有段落和必需性不同。
+  const finalizedMaterial = (source: FinalizedMaterialSource, passages: readonly string[], isRequired: boolean) => ({
+    sourceId: `finalized:${source.draftId}`,
+    revision: source.draftId,
+    text: promptLanguageText(
+      writingLanguage,
+      `【定稿原文 · 第${source.chapterNumber}章 · draft ${source.draftId}】\n${passages.join('\n\n')}`,
+      `[Finalized manuscript · Chapter ${source.chapterNumber} · draft ${source.draftId}]\n${passages.join('\n\n')}`,
+    ),
+    category: 'finalized-history' as const,
+    provenance: source.sourceStatus === 'legacy' ? 'legacy' as const : 'finalized' as const,
+    required: isRequired,
+    // stale 定位只说明索引失效：回读到的原文照常计入材料，过时陈述本身从不进入提示词。
+    // 定位状态只留在 consumedFinalizedSources / 决策里，不再印进模型可见的标题。
+    ...(source.sourceStatus === 'stale' ? { staleLocator: false as const } : {}),
+  })
+
   // ---- 定稿来源 ----
   // 摘取顺序仍是新章在前，这样摘取层的省略清单保持稳定；**渲染顺序由合同决定**。
   for (const source of [...input.finalized].sort((left, right) => right.chapterNumber - left.chapterNumber)) {
@@ -566,21 +583,7 @@ export async function assembleChapterMaterials(input: {
       locatedEvidence: extracted.locatedEvidence,
       passages: extracted.passages,
       source,
-    }, {
-      sourceId: `finalized:${source.draftId}`,
-      revision: source.draftId,
-      text: promptLanguageText(
-        writingLanguage,
-        `【定稿原文 · 第${source.chapterNumber}章 · draft ${source.draftId}】\n${extracted.passages.join('\n\n')}`,
-        `[Finalized manuscript · Chapter ${source.chapterNumber} · draft ${source.draftId}]\n${extracted.passages.join('\n\n')}`,
-      ),
-      category: 'finalized-history',
-      provenance: source.sourceStatus === 'legacy' ? 'legacy' : 'finalized',
-      required: false,
-      // stale 定位只说明索引失效：回读到的原文照常计入材料，过时陈述本身从不进入提示词。
-      // 定位状态只留在 consumedFinalizedSources / 决策里，不再印进模型可见的标题。
-      ...(source.sourceStatus === 'stale' ? { staleLocator: false as const } : {}),
-    })
+    }, finalizedMaterial(source, extracted.passages, false))
     if (hasUnlocatedEvidence && selected) {
       await recordDecisionOmission({
         sourceId: selected.ref.sourceId,
@@ -680,44 +683,88 @@ export async function assembleChapterMaterials(input: {
   //
   // 探针只可能**多**纳入定稿块（参考候选被删掉只会让出预算，不会夺走预算），所以探针算出的
   // 「已纳入定稿段落」在权威选择里仍然成立，被删掉的参考不会因此漏网。
-  const probe = selectChapterSources({
-    current: input.identity,
-    capacity,
-    relevanceTerms: input.relevanceTerms,
-    candidates,
-  })
-  const includedFinalizedPassages: string[] = []
-  if (probe.decision === 'ready') {
-    for (const material of probe.included) {
-      const family = familyBySourceId.get(material.ref.sourceId)
-      if (family?.family === 'finalized') includedFinalizedPassages.push(...family.passages)
+  //
+  // 探针 + 权威选择是一个整体：候选集变化（直接前驱降级，见下）时必须整体重跑。
+  const select = () => {
+    const probe = selectChapterSources({
+      current: input.identity,
+      capacity,
+      relevanceTerms: input.relevanceTerms,
+      candidates,
+    })
+    const includedFinalizedPassages: string[] = []
+    if (probe.decision === 'ready') {
+      for (const material of probe.included) {
+        const family = familyBySourceId.get(material.ref.sourceId)
+        if (family?.family === 'finalized') includedFinalizedPassages.push(...family.passages)
+      }
+    }
+    const droppedReferences = new Set<MaterialCandidate>(referenceCandidates
+      .filter(({ reference }) => reference.deduplicateAgainstFinalized && reference.text.length > 0
+        && includedFinalizedPassages.some(passage => passage.includes(reference.text)))
+      .map(({ candidate }) => candidate))
+    // ---- 权威裁决：这一步的结果就是提示词，别处不再有第二条准入路径 ----
+    return {
+      droppedReferences,
+      selection: selectChapterSources({
+        current: input.identity,
+        capacity,
+        relevanceTerms: input.relevanceTerms,
+        candidates: candidates.filter(item => !droppedReferences.has(item)),
+      }),
     }
   }
-  const droppedReferences = new Set<MaterialCandidate>()
-  for (const { candidate, reference } of referenceCandidates) {
-    if (reference.deduplicateAgainstFinalized && reference.text.length > 0
-      && includedFinalizedPassages.some(passage => passage.includes(reference.text))) {
-      droppedReferences.add(candidate)
+  let { selection, droppedReferences } = select()
+
+  // ---- 直接前驱的定稿块是必需连续性材料 ----
+  // 没有未定稿候选前驱时，上一章的结尾只经这个定稿块进入提示词（旧的 previousEnding 提示槽已清空），
+  // 材料预算不得把它静默淘汰：整块（证据窗口 + 结尾）装不下时降级为只保留结尾——它有上界
+  // （`PREVIOUS_ENDING_MAX_CHARS`）——并作为必需材料；连结尾都装不下就和别的必需材料一样显式失败。
+  // 整块装得下时仍按原有的相关度竞争入选，提示词与降级机制引入前逐字节相同。
+  const predecessorSource = requiredPredecessor
+    ? undefined
+    : input.finalized.find(source => source.includeEnding && source.sourceStatus !== 'invalid' && source.content.trim())
+  const predecessorBlock = predecessorSource
+    ? candidates.find(item => item.ref.sourceId === `finalized:${predecessorSource.draftId}`)
+    : undefined
+  let predecessorEnding: MaterialCandidate | undefined
+  if (predecessorSource && predecessorBlock && selection.decision === 'ready'
+    && !selection.included.some(item => item.ref.contentHash === predecessorBlock.ref.contentHash)) {
+    candidates.splice(candidates.indexOf(predecessorBlock), 1)
+    const ending = previousChapterEnding(predecessorSource.content)
+    predecessorEnding = await push({
+      family: 'finalized', chapterNumber: predecessorSource.chapterNumber, locatedEvidence: 0,
+      passages: [ending], source: predecessorSource,
+    }, finalizedMaterial(predecessorSource, [ending], true))
+    // 被淘汰的只是证据窗口：照常作为可选材料的覆盖缺口报告（提示词与收据里都有据可查）。
+    // 整块没有结尾之外的窗口（无证据回退，或证据落在结尾内）时整块就是结尾块，身份全同：
+    // 没有任何窗口被淘汰，不能再为同一身份记省略（它同时入选，收据会自相矛盾）。
+    if (predecessorEnding?.ref.contentHash !== predecessorBlock.ref.contentHash) {
+      omissions.push({ source: 'finalized', chapterNumber: predecessorSource.chapterNumber, reason: 'budget' })
       await recordDecisionOmission({
-        sourceId: candidate.ref.sourceId,
-        revision: candidate.ref.revision,
-        contentHash: candidate.ref.contentHash,
-        reason: 'deduplicated-against-finalized',
-        category: candidate.category,
+        sourceId: predecessorBlock.ref.sourceId,
+        revision: predecessorBlock.ref.revision,
+        contentHash: predecessorBlock.ref.contentHash,
+        reason: 'budget',
+        category: predecessorBlock.category,
       })
     }
+    const reselected = select()
+    selection = reselected.selection
+    droppedReferences = reselected.droppedReferences
   }
-
-  // ---- 权威裁决：这一步的结果就是提示词，别处不再有第二条准入路径 ----
-  const selection = selectChapterSources({
-    current: input.identity,
-    capacity,
-    relevanceTerms: input.relevanceTerms,
-    candidates: candidates.filter(item => !droppedReferences.has(item)),
-  })
+  for (const candidate of droppedReferences) {
+    await recordDecisionOmission({
+      sourceId: candidate.ref.sourceId,
+      revision: candidate.ref.revision,
+      contentHash: candidate.ref.contentHash,
+      reason: 'deduplicated-against-finalized',
+      category: candidate.category,
+    })
+  }
   if (selection.decision !== 'ready') {
     const omission = selection.omissions.find(item => (
-      [requiredCandidate, requiredPredecessorMaterial].some(material => material
+      [requiredCandidate, requiredPredecessorMaterial, predecessorEnding].some(material => material
         && item.sourceId === material.ref.sourceId
         && item.revision === material.ref.revision
         && item.contentHash === material.ref.contentHash)
@@ -764,14 +811,6 @@ export async function assembleChapterMaterials(input: {
     if (family?.family !== 'finalized' || !family.source) continue
     consumedFinalizedSources.push(family.source)
     includedFinalizedFacts += family.locatedEvidence
-  }
-
-  const endingSource = requiredPredecessor
-    ? undefined
-    : input.finalized.find(source => source.includeEnding && source.content.trim())
-  if (endingSource && !consumedFinalizedSources.some(source => source.draftId === endingSource.draftId)) {
-    // The ending also affects replay rejection even when its prompt block exceeded the budget.
-    consumedFinalizedSources.push(endingSource)
   }
 
   return {

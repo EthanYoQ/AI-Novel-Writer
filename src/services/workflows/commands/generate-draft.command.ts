@@ -784,12 +784,12 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     const hasRequiredPreviousCandidate = selectedCandidateDrafts.some(candidate => (
       candidate.chapterNumber === previousChapterNumber && Boolean(candidate.content.trim())
     ))
-    const hasRequiredFinalizedSource = finalizedSources.some(source => (
+    const requiredFinalizedSource = finalizedSources.find(source => (
       source.chapterNumber === previousChapterNumber
       && source.sourceStatus !== 'invalid'
       && Boolean(source.content.trim())
     ))
-    if (!isFirstChapter && !hasRequiredPreviousCandidate && !hasRequiredFinalizedSource) {
+    if (!isFirstChapter && !hasRequiredPreviousCandidate && !requiredFinalizedSource) {
       throw new Error(uiText(
         `无法固定第 ${previousChapterNumber} 章的必需定稿来源，已停止生成。请修复或重新定稿该章后再试。`,
         `The required finalized source for Chapter ${previousChapterNumber} could not be fixed, so generation stopped. Repair or re-finalize that chapter and try again.`,
@@ -835,6 +835,12 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       .map(material => material.ref.sourceId)
       .filter(sourceId => sourceId.startsWith('candidate:')))
     if (selectedCandidateDrafts.length > 0 && admittedCandidateSourceIds.size === 0) {
+      throw new Error('GENERATION_DRAFT_REQUIRED_PREDECESSOR_NOT_ADMITTED')
+    }
+    // 无未定稿候选时上一章原文只经直接前驱的定稿块（整块或降级后的结尾）到达模型：
+    // 来源存在不等于模型收到了它，未被选入提示词就不得开始生成。
+    if (selectedCandidateDrafts.length === 0 && requiredFinalizedSource
+      && !chapterMaterials.selection.included.some(material => material.ref.sourceId === `finalized:${requiredFinalizedSource.draftId}`)) {
       throw new Error('GENERATION_DRAFT_REQUIRED_PREDECESSOR_NOT_ADMITTED')
     }
     if (chapterMaterials.omissions.length > 0) {

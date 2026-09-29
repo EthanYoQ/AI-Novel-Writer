@@ -11,6 +11,7 @@ import {
   selectReviewRevisionMaterials,
   type ReviewRevisionMaterial,
 } from '../chapter-materials'
+import type { MaterialDecisionDraft } from '../../../shared/generation-owner-contract'
 import type { ReviewMaterialIdentity } from '../../../shared/review-revision-generation'
 
 /** S10B-1a：该接缝现在需要项目身份并额外返回差异清单，测试里用固定身份。 */
@@ -140,7 +141,9 @@ describe('chapter materials', () => {
     })
   })
 
-  it('keeps the previous finalized ending dependency when its prompt block exceeds the budget', async () => {
+  it('fails explicitly instead of recording a previous-ending dependency that never reached the prompt', async () => {
+    // 旧行为：整块超预算时仍把结尾记进依赖并继续生成，提示词里却没有上一章原文。
+    // 现在直接前驱的结尾是必需连续性材料：连结尾都装不下就显式失败。
     const source = {
       chapterNumber: 1,
       draftId: 11,
@@ -150,7 +153,7 @@ describe('chapter materials', () => {
       includeEnding: true,
       sourceIdentity: { kind: 'finalized' as const, finalizationId: 'finalization-11', contentHash: 'a'.repeat(64) },
     }
-    const bundle = await assemble({
+    const error = await assemble({
       writingLanguage: 'zh-CN',
       authorProjectFacts: [],
       characterProfiles: '',
@@ -160,11 +163,13 @@ describe('chapter materials', () => {
       candidates: [],
       relevanceTerms: ['林岚'],
       budgetChars: 400,
-    })
+    }).catch(reason => reason)
 
-    expect(bundle.text).not.toContain(source.content)
-    expect(bundle.previousEnding).toBe(source.content)
-    expect(bundle.consumedFinalizedSources).toEqual([source])
+    expect(error).toBeInstanceOf(ChapterMaterialCapacityError)
+    expect(error).toMatchObject({
+      code: 'CHAPTER_MATERIAL_CAPACITY_CONFLICT',
+      decision: { decision: 'capacity-conflict', blockingSourceId: 'finalized:11', blockingReason: 'budget' },
+    })
   })
 
   /** 定稿来源在提示词里的那一块（标题 + 摘取出的段落）。 */
@@ -254,6 +259,263 @@ describe('chapter materials', () => {
     expect(bundle.decision.omitted).toContainEqual(expect.objectContaining({
       sourceId: 'finalized:11', reason: 'evidence-not-locatable',
     }))
+  })
+
+  describe('the direct finalized predecessor is required continuity', () => {
+    // 无未定稿候选前驱时，上一章的定稿结尾只经定稿块进入提示词（旧的 previousEnding 槽已清空）。
+    // 作者资料几乎占满材料预算时，整块（证据窗口 + 结尾）装不下，也不能整块被静默淘汰。
+    const endingSentinel = '上一章定稿结尾哨兵。'
+    const evidenceLine = '林岚把红色钥匙收进口袋。'
+    const content = [
+      '开场交代。',
+      `${evidenceLine}${'铺垫。'.repeat(300)}`,
+      '中段。'.repeat(300),
+      '过场。'.repeat(300),
+      '过场二。'.repeat(250),
+      `${'收束。'.repeat(200)}${endingSentinel}`,
+    ].join('\n\n')
+    const predecessor = previousFinalized(content, { evidence: [evidenceLine], includeEnding: true })
+    const header = '【定稿原文 · 第1章 · draft 11】'
+    const bytes = (text: string) => new TextEncoder().encode(text).length
+    const withAuthorFacts = (authorFactChars: number, references: Parameters<typeof assemble>[0]['references'] = []) => assemble({
+      writingLanguage: 'zh-CN', authorProjectFacts: [authorFactChars > 0 ? '设'.repeat(authorFactChars) : ''],
+      characterProfiles: '', futurePlans: '（无）', references, finalized: [predecessor], candidates: [],
+      relevanceTerms: ['林岚'], budgetChars: 8_000,
+    })
+    /** 必需材料块的字节数随作者资料字数线性增长（每个「设」3 字节），据此算出各档的剩余容量。 */
+    const remainingRoom = async (authorFactChars: number) => {
+      const base = await withAuthorFacts(1)
+      const baseUnits = base.decision.included.find(item => item.sourceId === 'author:required')!.units
+      return base.decision.capacity.maxInputUnits - baseUnits - (authorFactChars - 1) * 3
+    }
+
+    it('keeps the whole block (evidence windows and ending) when it fits, as an optional competitor', async () => {
+      const bundle = await withAuthorFacts(0)
+      const block = finalizedBlock(bundle, 11)
+
+      expect(block).toContain(evidenceLine)
+      expect(block).toContain(endingSentinel)
+      expect(bundle.selection.decision === 'ready'
+        ? bundle.selection.included.find(item => item.ref.sourceId === 'finalized:11')?.required
+        : undefined).toBe(false)
+      expect(bundle.omissions).toEqual([])
+    })
+
+    it('degrades to the ending block, marked required, when the whole block no longer fits', async () => {
+      const ending = previousChapterEnding(content)
+      const endingBlock = `${header}\n${ending}`
+      const full = finalizedBlock(await withAuthorFacts(0), 11)
+      const room = await remainingRoom(5_600)
+      // 前提：整块装不下，但有上界的结尾装得下。
+      expect(bytes(endingBlock)).toBeLessThanOrEqual(room)
+      expect(bytes(full)).toBeGreaterThan(room)
+
+      const bundle = await withAuthorFacts(5_600)
+
+      expect(bundle.selection.decision).toBe('ready')
+      expect(finalizedBlock(bundle, 11)).toBe(endingBlock)
+      expect(bundle.text).toContain(endingSentinel)
+      expect(bundle.text).not.toContain(evidenceLine)
+      expect(bundle.previousEnding).toBe(ending)
+      expect(bundle.consumedFinalizedSources).toEqual([predecessor])
+      expect(bundle.includedFinalizedFacts).toBe(0)
+      expect(bundle.selection).toMatchObject({ coverage: { required: 2, included: 2, complete: true } })
+      // 被淘汰的只是证据窗口：作为可选材料的覆盖缺口报告，模型可见，收据里也有据可查。
+      expect(bundle.omissions).toContainEqual({ source: 'finalized', chapterNumber: 1, reason: 'budget' })
+      expect(bundle.text).toContain('finalized#1:budget')
+      expect(bundle.decision.included.find(item => item.sourceId === 'finalized:11')).toMatchObject({
+        revision: 11, required: true, contentHash: await hashAuthorText(endingBlock), units: bytes(endingBlock),
+      })
+      expect(bundle.decision.omitted).toContainEqual({
+        sourceId: 'finalized:11', revision: 11, contentHash: await hashAuthorText(full),
+        reason: 'budget', category: 'finalized-history', required: false,
+      })
+      expect(bundle.decision.coverage).toEqual({ required: 2, included: 2, complete: true })
+      expectReceiptSelfConsistent(bundle.decision)
+    })
+
+    /**
+     * 收据在装配层就必须自洽。规则与主进程 `freezeMaterialDecision` 同源：同一身份
+     * （sourceId + revision + contentHash）不得既入选又被省略（定位类原因除外）、省略事件唯一、
+     * 必需覆盖按内容哈希闭合。
+     */
+    const expectReceiptSelfConsistent = (decision: MaterialDecisionDraft, label = '') => {
+      const identity = (item: { sourceId: string; revision: number; contentHash: string }) =>
+        JSON.stringify([item.sourceId, item.revision, item.contentHash])
+      const included = decision.included.map(identity)
+      expect(new Set(included).size, label).toBe(included.length)
+      const events = decision.omitted.map(item => `${identity(item)}\0${item.reason}`)
+      expect(new Set(events).size, label).toBe(events.length)
+      const tolerated = ['locator-statement-not-evidence', 'evidence-not-locatable']
+      expect(decision.omitted.filter(item => included.includes(identity(item)) && !tolerated.includes(item.reason)), label)
+        .toEqual([])
+      const requiredHashes = new Map<string, string>()
+      for (const item of [...decision.included, ...decision.omitted]) if (item.required) requiredHashes.set(identity(item), item.contentHash)
+      const includedHashes = new Set(decision.included.map(item => item.contentHash))
+      const covered = [...requiredHashes.values()].filter(hash => includedHashes.has(hash)).length
+      expect(decision.coverage, label).toEqual({ required: requiredHashes.size, included: covered, complete: true })
+      expect(decision.included.reduce((sum, item) => sum + item.units, 0), label).toBe(decision.capacity.admittedUnits)
+      expect(decision.capacity.admittedUnits, label).toBeLessThanOrEqual(decision.capacity.maxInputUnits)
+    }
+
+    // 直接前驱没有结尾之外的证据窗口时（无证据回退，或证据落在章末），整块文本就是结尾块文本，
+    // sourceId / revision / contentHash 全同：降级没有淘汰任何窗口，不能为同一身份再记一条 budget 省略。
+    it.each([
+      {
+        name: 'no evidence window (zh-CN)',
+        writingLanguage: 'zh-CN' as const,
+        content: ['开场交代。', '中段。'.repeat(150), `收束。${endingSentinel}`].join('\n\n'),
+        evidence: [] as string[],
+        header: '【定稿原文 · 第1章 · draft 11】',
+        term: '参考词',
+        filler: '参',
+        sentinel: endingSentinel,
+      },
+      {
+        name: 'evidence located inside the ending (zh-CN)',
+        writingLanguage: 'zh-CN' as const,
+        content: ['铺垫。'.repeat(700), '走廊很长。'.repeat(30), `${evidenceLine}门锁响了。`, endingSentinel].join('\n\n'),
+        evidence: [evidenceLine],
+        header: '【定稿原文 · 第1章 · draft 11】',
+        term: '参考词',
+        filler: '参',
+        sentinel: endingSentinel,
+      },
+      {
+        name: 'no evidence window (en-US)',
+        writingLanguage: 'en-US' as const,
+        content: ['Opening scene.', Array(30).fill('Middle passage.').join(' '), 'Closing line. PREVIOUS_ENDING_SENTINEL.'].join('\n\n'),
+        evidence: [] as string[],
+        header: '[Finalized manuscript · Chapter 1 · draft 11]',
+        term: 'refword',
+        filler: 'x',
+        sentinel: 'PREVIOUS_ENDING_SENTINEL.',
+      },
+    ])('keeps a whole block that equals the ending as a required block when other optional material crowds it out: $name', async scenario => {
+      const source = previousFinalized(scenario.content, { evidence: scenario.evidence, includeEnding: true })
+      const base = {
+        writingLanguage: scenario.writingLanguage, authorProjectFacts: [], characterProfiles: '', futurePlans: '（无）',
+        finalized: [source], candidates: [], relevanceTerms: [scenario.term], budgetChars: 8_000,
+      }
+      const roomy = await assemble({ ...base, references: [] })
+      const endingBlock = `${scenario.header}\n${previousChapterEnding(scenario.content)}`
+      // 前提：整块与结尾块逐字相同（三元身份全同）。
+      expect(finalizedBlock(roomy, 11)).toBe(endingBlock)
+      const authorUnits = roomy.decision.included.find(item => item.sourceId === 'author:required')!.units
+      const capacity = roomy.decision.capacity.maxInputUnits
+      const fillerCount = Math.floor((capacity - authorUnits - Math.floor(bytes(endingBlock) / 2) - bytes(scenario.term)) / bytes(scenario.filler))
+      const reference = { text: scenario.term, rendered: `${scenario.term}${scenario.filler.repeat(fillerCount)}` }
+      // 前提：更相关的参考材料自己装得下，但它先入选后剩余容量放不下整块；让出后结尾放得下。
+      expect(authorUnits + bytes(reference.rendered)).toBeLessThanOrEqual(capacity)
+      expect(authorUnits + bytes(reference.rendered) + bytes(endingBlock)).toBeGreaterThan(capacity)
+      expect(authorUnits + bytes(endingBlock)).toBeLessThanOrEqual(capacity)
+
+      const bundle = await assemble({ ...base, references: [reference] })
+
+      expect(bundle.selection.decision).toBe('ready')
+      expect(finalizedBlock(bundle, 11)).toBe(endingBlock)
+      expect(bundle.text).toContain(scenario.sentinel)
+      expect(bundle.text).not.toContain(reference.rendered)
+      expect(bundle.consumedFinalizedSources).toEqual([source])
+      expect(bundle.selection).toMatchObject({ coverage: { required: 2, included: 2, complete: true } })
+      expect(bundle.selection.decision === 'ready'
+        ? bundle.selection.included.find(item => item.ref.sourceId === 'finalized:11')?.required
+        : undefined).toBe(true)
+      // 被淘汰的是参考材料，不是前驱窗口：缺口里没有 finalized，收据里也没有同一身份的 budget 省略。
+      expect(bundle.omissions).toContainEqual({ source: 'reference', reason: 'budget' })
+      expect(bundle.omissions.filter(item => item.source === 'finalized' && item.reason === 'budget')).toEqual([])
+      expect(bundle.decision.omitted.filter(item => item.sourceId === 'finalized:11' && item.reason === 'budget')).toEqual([])
+      expectReceiptSelfConsistent(bundle.decision)
+    })
+
+    it('never fails with an identity conflict while other optional finalized blocks crowd a predecessor without evidence', async () => {
+      // 三个带证据的更早章节比直接前驱更相关，挤占可选预算；直接前驱没有证据，整块就是结尾块。
+      const earlier = [1, 2, 3].map(chapterNumber => ({
+        chapterNumber, draftId: 10 + chapterNumber, title: `第${chapterNumber}章`,
+        content: ['开场。', `林岚把钥匙交给周砚${chapterNumber}。${'铺垫。'.repeat(120)}`, '尾段。'.repeat(120)].join('\n\n'),
+        evidence: [`林岚把钥匙交给周砚${chapterNumber}`], sourceStatus: 'current' as const,
+      }))
+      const source = {
+        chapterNumber: 4, draftId: 14, title: '上一章', evidence: [] as string[], includeEnding: true, sourceStatus: 'current' as const,
+        content: ['开场交代。', '中段。'.repeat(150), `收束。${endingSentinel}`].join('\n\n'),
+      }
+      const run = (authorFactChars: number) => assemble({
+        writingLanguage: 'zh-CN', authorProjectFacts: ['设'.repeat(authorFactChars)], characterProfiles: '', futurePlans: '（无）',
+        references: [], finalized: [...earlier, source], candidates: [], relevanceTerms: ['林岚', '钥匙'], budgetChars: 8_000,
+      })
+      const endingBytes = bytes(`【定稿原文 · 第4章 · draft 14】\n${previousChapterEnding(source.content)}`)
+      const base = await run(1)
+      const baseUnits = base.decision.included.find(item => item.sourceId === 'author:required')!.units
+
+      const regimes = { plain: 0, degraded: 0, refused: 0 }
+      for (let authorFactChars = 300; authorFactChars <= 7_500; authorFactChars += 150) {
+        const label = `authorFactChars=${authorFactChars}`
+        const requiredUnits = baseUnits + (authorFactChars - 1) * 3
+        const endingFits = requiredUnits + endingBytes <= base.decision.capacity.maxInputUnits
+        const outcome = await run(authorFactChars).then(bundle => ({ bundle, error: undefined }), (error: unknown) => ({ bundle: undefined, error }))
+        if (!endingFits) {
+          // 只有必需的作者资料加上结尾装不下时才失败，并且是共享的容量错误。
+          expect(outcome.error, label).toBeInstanceOf(ChapterMaterialCapacityError)
+          expect(outcome.error, label).toMatchObject({ decision: { decision: 'capacity-conflict', blockingSourceId: 'finalized:14' } })
+          regimes.refused += 1
+          continue
+        }
+        expect(outcome.error, label).toBeUndefined()
+        const bundle = outcome.bundle!
+        expect(bundle.text, label).toContain(endingSentinel)
+        expect(bundle.consumedFinalizedSources.map(item => item.draftId), label).toContain(14)
+        expectReceiptSelfConsistent(bundle.decision, label)
+        const item = bundle.decision.included.find(entry => entry.sourceId === 'finalized:14')
+        if (item?.required) regimes.degraded += 1
+        else regimes.plain += 1
+      }
+      // 扫描确实覆盖了三种情形：整块入选、降级为必需结尾、结尾也放不下。
+      expect(regimes.plain).toBeGreaterThan(0)
+      expect(regimes.degraded).toBeGreaterThan(0)
+      expect(regimes.refused).toBeGreaterThan(0)
+    })
+
+    it('keeps a knowledge-base result that only the omitted evidence window contained', async () => {
+      const reference = { text: evidenceLine, rendered: `【参考】${evidenceLine}`, deduplicateAgainstFinalized: true }
+
+      // 整块入选时，参考材料重复了其中的证据窗口，被族内子串规则过滤。
+      const roomy = await withAuthorFacts(0, [reference])
+      expect(roomy.text).not.toContain(reference.rendered)
+
+      // 证据窗口没有进入提示词时，这条参考材料不再是重复，必须留下。
+      const degraded = await withAuthorFacts(5_600, [reference])
+      expect(finalizedBlock(degraded, 11)).not.toContain(evidenceLine)
+      expect(degraded.text).toContain(reference.rendered)
+    })
+
+    it('leaves a predecessor candidate in charge: the finalized block of that chapter stays optional', async () => {
+      const bundle = await assemble({
+        writingLanguage: 'zh-CN', authorProjectFacts: ['设'.repeat(5_600)], characterProfiles: '', futurePlans: '（无）',
+        references: [], finalized: [predecessor], relevanceTerms: ['林岚'], budgetChars: 8_000,
+        candidates: [{ chapterNumber: 1, draftId: 31, version: 2, content: '批内上一章候选结尾。' }],
+      })
+
+      expect(bundle.selection).toMatchObject({ decision: 'ready', coverage: { required: 2, included: 2, complete: true } })
+      expect(bundle.text).toContain('批内上一章候选结尾。')
+      expect(finalizedBlock(bundle, 11)).toBe('')
+      expect(bundle.consumedFinalizedSources).toEqual([])
+      expect(bundle.omissions).toContainEqual({ source: 'finalized', chapterNumber: 1, reason: 'budget' })
+    })
+
+    it('fails with the shared capacity error when even the ending does not fit, never continuing without it', async () => {
+      const endingBlock = `${header}\n${previousChapterEnding(content)}`
+      // 前提：必需的作者资料自己装得下，但装不下再加上一章结尾。
+      expect(await remainingRoom(7_100)).toBeGreaterThan(0)
+      expect(await remainingRoom(7_100)).toBeLessThan(bytes(endingBlock))
+
+      const error = await withAuthorFacts(7_100).catch(reason => reason)
+
+      expect(error).toBeInstanceOf(ChapterMaterialCapacityError)
+      expect(error).toMatchObject({
+        code: 'CHAPTER_MATERIAL_CAPACITY_CONFLICT',
+        decision: { decision: 'capacity-conflict', blockingSourceId: 'finalized:11', blockingReason: 'budget' },
+      })
+    })
   })
 
   it('falls back to relevant neighbouring finalized prose when a far-chapter locator is stale', async () => {
