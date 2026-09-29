@@ -17,7 +17,9 @@ const PROJECT = '11111111-1111-4111-8111-111111111111'
 const GEN_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const GEN_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const GEN_C = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+const GEN_D = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 const PARENT = '99999999-9999-4999-8999-999999999999'
+const PARENT_B = '88888888-8888-4888-8888-888888888888'
 const servers: Server[] = []
 const roots: string[] = []
 
@@ -215,6 +217,38 @@ describe('WebDavBackupService', () => {
       account: account(dav), cloudBookId: BOOK, generationId: GEN_A, targetArchivePath: source.target,
     })).resolves.toMatchObject({ generationId: GEN_A, archiveSha256: sha256(source.bytes), archiveByteSize: source.bytes.length })
     expect(fs.readFileSync(source.target)).toEqual(source.bytes)
+  })
+
+  it('groups the same parent set as siblings regardless of parent click order and keeps the stored order', async () => {
+    const dav = new DavFixture(); await dav.listen()
+    const source = workspace()
+    const manifestOf = (generationId: string) =>
+      dav.files.get(`/dav/books/${BOOK}/generations/${generationId}/manifest.json`)!
+
+    const first = await appender(dav, GEN_A, source.archive, [PARENT, PARENT_B])
+    const second = await appender(dav, GEN_B, source.archive, [PARENT_B, PARENT])
+    await appender(dav, GEN_C, source.archive, [PARENT])
+    await appender(dav, GEN_D, source.archive, [])
+    const manifestBefore = Buffer.from(manifestOf(GEN_B))
+    const service = new WebDavBackupService()
+    const listed = await service.listGenerations({ account: account(dav), cloudBookId: BOOK })
+    const byId = (generationId: string) => listed.find(item => item.generationId === generationId)!
+
+    expect(byId(GEN_A)).toMatchObject({ hasSibling: true, siblingGenerationIds: [GEN_B] })
+    expect(byId(GEN_B)).toMatchObject({ hasSibling: true, siblingGenerationIds: [GEN_A] })
+    expect(byId(GEN_C)).toMatchObject({ hasSibling: false, siblingGenerationIds: [] })
+    expect(byId(GEN_D)).toMatchObject({ hasSibling: false, siblingGenerationIds: [] })
+    expect(first.parentGenerationIds).toEqual([PARENT, PARENT_B])
+    expect(second.parentGenerationIds).toEqual([PARENT_B, PARENT])
+    expect(byId(GEN_A).parentGenerationIds).toEqual([PARENT, PARENT_B])
+    expect(byId(GEN_B).parentGenerationIds).toEqual([PARENT_B, PARENT])
+    expect(JSON.parse(manifestOf(GEN_A).toString('utf8')).parentGenerationIds).toEqual([PARENT, PARENT_B])
+
+    await expect(service.downloadGeneration({
+      account: account(dav), cloudBookId: BOOK, generationId: GEN_B, targetArchivePath: source.target,
+    })).resolves.toMatchObject({ generationId: GEN_B, archiveSha256: sha256(source.bytes) })
+    expect(manifestOf(GEN_B)).toEqual(manifestBefore)
+    expect(JSON.parse(manifestOf(GEN_B).toString('utf8')).parentGenerationIds).toEqual([PARENT_B, PARENT])
   })
 
   it('does not list a generation whose upload never reached completion.json', async () => {

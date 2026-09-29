@@ -365,16 +365,18 @@ export class WebDavBackupService {
         throw error
       }
     }
+    // 分组键按排序副本计算：父集合相同、点选顺序不同的两个副本仍是同父分支；manifest 与公开字段保持原顺序。
+    const siblingKey = (manifest: GenerationManifest) => JSON.stringify([...manifest.parentGenerationIds].sort())
     const siblingGroups = new Map<string, string[]>()
     for (const manifest of manifests) {
-      const key = JSON.stringify(manifest.parentGenerationIds)
+      const key = siblingKey(manifest)
       const group = siblingGroups.get(key) ?? []
       group.push(manifest.generationId)
       siblingGroups.set(key, group)
     }
     return manifests.map(manifest => this.publicGeneration(
       manifest,
-      siblingGroups.get(JSON.stringify(manifest.parentGenerationIds))!.filter(id => id !== manifest.generationId),
+      siblingGroups.get(siblingKey(manifest))!.filter(id => id !== manifest.generationId),
     ))
   }
 
