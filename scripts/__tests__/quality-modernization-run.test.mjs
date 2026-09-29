@@ -1091,7 +1091,7 @@ test('C16–C18 ca466d9a/73b46513 段（第580–648行）按同一规则分两�
   // 新协议字节 hash 与被取代的 a0a14777 不同，runner 读写两入口都按链末端取历史范围。
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
   assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, ca466d9a, protocol\.historicalC1673b46513Boundary\)/)
-  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedFa8806d7Events/)
+  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedB42cfc55Events/)
 })
 
 test('v5 唯一对账只能是续写 operation 的首个物理请求且至多一次，任何越界在 dispatch 前拒绝', () => {
@@ -1291,7 +1291,7 @@ test('C16–C18 fa8806d7 段（第649–690行）按同一规则加性登记，�
     /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
     assert.throws(() => validateHistoricalSupersessionBoundary(raw, 648, { ...fa, protocolHash: protocolBinding.protocolHash }),
       /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    // 整链回放：全部边界自冻结前缀起依次认证到第690行。
+    // 整链回放：全部边界自冻结前缀起依次认证到链末端（现为第738行，见 b42cfc55 段测试）。
     assert.equal(validatePhysicalLedger(ledger), path.resolve(ledger))
     const after = fs.readFileSync(ledger)
     assert.ok(after.equals(before), 'REAL_LEDGER_MUST_STAY_READ_ONLY')
@@ -1338,6 +1338,97 @@ test('C16–C18 fa8806d7 段（第649–690行）按同一规则加性登记，�
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
   assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, r73b46513, protocol\.historicalC16Fa8806d7Boundary\)/)
   assert.match(runner, /validateHistoricalSupersessionBoundary\(rawLedger, trusted73b46513Events, fa8806d7Boundary\)/)
+})
+
+test('C16–C18 b42cfc55 段（第691–738行）按同一规则加性登记，链在 fa8806d7 后，真实账本只读回放到738且字节不变', () => {
+  const fa = protocol.historicalC16Fa8806d7Boundary, b42 = protocol.historicalC16B42cfc55Boundary
+  assert.deepEqual([b42.fromEventCount, b42.eventCount, b42.reserveAttempts.length], [fa.eventCount, 738, 16])
+  assert.equal(b42.rawBytesSha256, '2aecf9a8bbfad77791eddb4a4015306a3d44967f89a41d858e2d4f8d43ea3e73')
+  assert.equal(b42.protocolRevision, protocolBinding.protocolRevision)
+  assert.equal(b42.protocolHash, '31f8b204806efa41bd7ebf4faf094fac6ff3e8f4df2a4136472ccee7305a2c5a')
+  assert.notEqual(b42.protocolHash, protocolBinding.protocolHash, '登记本段后协议字节必然漂移，须与被取代的 v5 hash 不同')
+  assert.deepEqual(b42.armBindings, { candidate: { codeSha: '2f420a38e80e8548fd2827fc39c355d0ea248738',
+    sourceHash: '010c1a79aaadab14d9de0005bd7ab8e55c012ec8a5ea1edceeadc2470b22c46d',
+    driverHash: 'dbc1cfd85fb54880bb9987a927f574798894e967bffb608917c147f9adbeff92' } })
+  assert.deepEqual([...new Set(b42.reserveAttempts.map(item => item.invocationId))], ['b42cfc55-e214-4d51-b4c8-6b6bd2e5ea16'])
+  assert.ok(b42.reserveAttempts.every(item => item.attemptId.startsWith('candidate:') && item.terminal === 'settle' && /^[a-f0-9]{64}$/.test(item.parityId)))
+  const porcelain = spawnSync('git', ['-C', ROOT, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' })
+  let ledger = null
+  try { ledger = path.join(registeredCampaignWorktree(porcelain.stdout), '.runtime/.cache/novel-quality-modernization/physical-ledger.jsonl') } catch { ledger = null }
+  if (ledger && fs.existsSync(ledger)) {
+    const before = fs.readFileSync(ledger)
+    const raw = before.toString('utf8')
+    assert.equal(validateHistoricalSupersessionBoundary(raw, 690, b42), 738)
+    // 前690行原字节仍是 fa8806d7 段认证的整本账本，本段只加性追加。
+    assert.equal(hash(raw.split('\n').slice(0, 690).join('\n') + '\n'), fa.rawBytesSha256)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 648, b42), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+    for (const [key, value] of [['codeSha', fa.armBindings.candidate.codeSha], ['sourceHash', fa.armBindings.candidate.sourceHash],
+      ['driverHash', fa.armBindings.candidate.driverHash]])
+      assert.throws(() => validateHistoricalSupersessionBoundary(raw, 690, { ...b42,
+        armBindings: { candidate: { ...b42.armBindings.candidate, [key]: value } } }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/, key)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 690, { ...b42, protocolHash: protocolBinding.protocolHash }),
+      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 690, { ...b42, reserveAttempts: b42.reserveAttempts.map((item, index) =>
+      index === 0 ? { ...item, terminal: 'unknown' } : item) }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 690, { ...b42, reserveAttempts: b42.reserveAttempts.map((item, index) =>
+      index === 0 ? { ...item, attemptId: 'candidate:wrong' } : item) }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(raw, 690, { ...b42, reserveAttempts: b42.reserveAttempts.map((item, index) =>
+      index === 0 ? { ...item, invocationId: fa.reserveAttempts[0].invocationId } : item) }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    // 前缀（第1–690行）内任一字节被改，本段的整段前缀 hash 即拒绝。
+    const tampered = raw.trimEnd().split('\n')
+    tampered[689] = tampered[689].replace('"attemptId":"', '"attemptId":"tampered-')
+    assert.throws(() => validateHistoricalSupersessionBoundary(tampered.join('\n') + '\n', 690, b42), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    // 整链回放：全部边界自冻结前缀起依次认证到第738行。
+    assert.equal(validatePhysicalLedger(ledger), path.resolve(ledger))
+    const after = fs.readFileSync(ledger)
+    assert.ok(after.equals(before), 'REAL_LEDGER_MUST_STAY_READ_ONLY')
+    assert.equal(hash(after), hash(before))
+  }
+  // 合成账本：fa8806d7 后接 b42cfc55 段登记为历史时，其后的当前 reserve 通过；缺该段则按当前协议拒绝。
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/b42cfc55-boundary-'))
+  try {
+    const file = path.join(dir, 'synthetic-ledger.jsonl')
+    const envelope = { campaignId: CAMPAIGN_ID, mode: 'synthetic', phase: 'c16-c18', milestone: 'final', caseId: 'C18-A', operation: 'DAV选定世代恢复后续写' }
+    const segment = (invocationId, codeSha, protocolHash, ids) => {
+      const armBindings = { candidate: { codeSha, sourceHash: '6'.repeat(64), driverHash: '3'.repeat(64) } }
+      const attempts = ids.map(id => ({ attemptId: `candidate:${id}`, invocationId, terminal: 'settle', parityId: '9'.repeat(64) }))
+      const rows = attempts.flatMap(item => [{ type: 'reserve', attemptId: item.attemptId, binding: { ...envelope, arm: 'candidate',
+        ...armBindings.candidate, protocolRevision: protocolBinding.protocolRevision, protocolHash, parityId: item.parityId, invocationId },
+      allocation: 'failedRetryRepairReviewReserve' },
+      { type: 'dispatch', attemptId: item.attemptId }, { type: 'settle', attemptId: item.attemptId, finishReason: 'stop' }])
+      return { armBindings, attempts, raw: rows.map(JSON.stringify).join('\n') + '\n' }
+    }
+    const first = segment('fa8806d7-5287-4059-82a0-c1c316396067', '8'.repeat(40), fa.protocolHash, ['20e3ade1-0000-4000-8000-000000000003'])
+    const second = segment('b42cfc55-e214-4d51-b4c8-6b6bd2e5ea16', '2'.repeat(40), b42.protocolHash, ['daa24833-0000-4000-8000-000000000004'])
+    const raw = first.raw + second.raw
+    const b1 = { fromEventCount: 0, eventCount: 3, rawBytesSha256: hash(first.raw), protocolRevision: fa.protocolRevision,
+      protocolHash: fa.protocolHash, armBindings: first.armBindings, reserveAttempts: first.attempts }
+    const b2 = { fromEventCount: 3, eventCount: 6, rawBytesSha256: hash(raw), protocolRevision: b42.protocolRevision,
+      protocolHash: b42.protocolHash, armBindings: second.armBindings, reserveAttempts: second.attempts }
+    const current = { ...envelope, arm: 'candidate', codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(),
+      parityId: 'c'.repeat(64), ...currentProtocolBinding(),
+      actual: { attemptId: 'a', runId: 'r', rootActionId: 'root', projectId: 'p', epoch: 'e' } }
+    fs.writeFileSync(file, raw)
+    assert.doesNotThrow(() => updateLedger(file, { type: 'reserve', attemptId: 'after-b42cfc55', binding: current },
+      { campaignMode: 'synthetic', historicalC16Fa8806d7Boundary: b1, historicalC16B42cfc55Boundary: b2 }))
+    fs.writeFileSync(file, raw)
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'after-b42cfc55', binding: current },
+      { campaignMode: 'synthetic', historicalC16Fa8806d7Boundary: b1 }), /PROTOCOL_DRIFT/)
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'after-b42cfc55', binding: current },
+      { campaignMode: 'synthetic', historicalC16Fa8806d7Boundary: b1, historicalC16B42cfc55Boundary: { ...b2, fromEventCount: 0 } }),
+    /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'after-b42cfc55', binding: current },
+      { campaignMode: 'synthetic', historicalC16Fa8806d7Boundary: b1,
+        historicalC16B42cfc55Boundary: { ...b2, armBindings: { candidate: { ...b2.armBindings.candidate, codeSha: '1'.repeat(40) } } } }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    // 新协议下旧协议 hash 的新 reserve（未登记为历史）一律按当前协议拒绝。
+    fs.writeFileSync(file, raw)
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'stale-v5', binding: { ...current, protocolHash: b42.protocolHash } },
+      { campaignMode: 'synthetic', historicalC16Fa8806d7Boundary: b1, historicalC16B42cfc55Boundary: b2 }), /PROTOCOL_DRIFT/)
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+  const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
+  assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, fa8806d7, protocol\.historicalC16B42cfc55Boundary\)/)
+  assert.match(runner, /validateHistoricalSupersessionBoundary\(rawLedger, trustedFa8806d7Events, b42cfc55Boundary\)/)
 })
 
 test('v5 独立评审 oracle 前向修订：计划可由正文新决定改变，硬事实（旧钟异常、钥匙、知情、时点）不放宽；其余 oracle 不变', () => {
@@ -2457,7 +2548,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
   const archive = ['historicalSupersessionBoundary', 'historicalReviewedDraftBoundary',
     'historicalReviewRebuildBoundary', 'historicalS14BSplitBoundary', 'historicalPostUi408Boundary',
     'historicalC16Ee3435ecBoundary', 'historicalC16Ccc70b31Boundary', 'historicalC16C9b88510Boundary', 'historicalC16D8a30c11Boundary',
-    'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary']
+    'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary', 'historicalC16B42cfc55Boundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -2519,6 +2610,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 579, real.boundaries.historicalC16Ca466d9aBoundary), 615)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 615, real.boundaries.historicalC1673b46513Boundary), 648)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 648, real.boundaries.historicalC16Fa8806d7Boundary), 690)
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 690, real.boundaries.historicalC16B42cfc55Boundary), 738)
     assert.equal(validatePhysicalLedger(ledger), ledger)
     fs.writeFileSync(file, synthetic.raw)
     const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
