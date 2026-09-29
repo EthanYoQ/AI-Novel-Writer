@@ -505,6 +505,12 @@ describe('RunFinalizePostProcessCommand character-state persistence', () => {
     expect(observedChapterNotesPrompt).toContain(
       'Do not infer missing details or require every note to contain all of these elements',
     )
+    expect(observedChapterNotesPrompt).toContain(
+      "preserve the affected character's last correction and current conditions in Character Dynamics or Foreshadowing and Hooks",
+    )
+    expect(observedChapterNotesPrompt).toContain(
+      'Do not substitute a more prominent earlier event for the current plan or describe a plan as executed',
+    )
     expect(status.steps).toMatchObject({ chapter_notes: { ok: true }, character_cards: { ok: true, attemptCount: 1 } })
     expect(selections).toMatchObject([{ slot: { stepKey: 'chapter_notes', source: { draftId: 7 } } }, { slot: { stepKey: 'character_cards', source: { draftId: 7 } } }])
     expect(commitRequests).toEqual([expect.objectContaining({ handle: expect.objectContaining({ projectId: 'test', epoch: 'lease-test' }), artifact: expect.objectContaining({ textHash: expect.stringMatching(/^[a-f0-9]{64}$/) }) })])

@@ -397,17 +397,53 @@ it('characters初始提示以最终合同覆盖模板示例（中英）',async()
  expect(en.indexOf('[Final output contract')).toBeLessThan(en.indexOf('Return one JSON object'))
 })
 
+it.each([undefined, 'en-US'] as const)('末次安排合同保留原snapshot并按原来源保存单次角色提取：%s', async writingLanguage => {
+ const cases = [
+  { content: '林岚被拒绝入塔，已经损失六枚铜币。\n\n顾砚决定留守渡口。\n\n林岚更正记录：核查尚未开始，原定安排等待雨停。',
+    current: '林岚更正记录：核查尚未开始，原定安排等待雨停。' },
+  { content: '林岚决定雨停后核查北塔，核查尚未开始。', current: '林岚决定雨停后核查北塔，核查尚未开始。' },
+  { content: '林岚决定雨停后核查北塔，核查尚未开始。\n\n顾砚撤回巡河安排，等待许可。', current: '林岚决定雨停后核查北塔，核查尚未开始。' },
+ ]
+ for (const { content, current } of cases) {
+  // The double supplies the extraction: this verifies prompt/source/persistence wiring, not model understanding.
+  const f = fixture(async (_request, options) => {
+   options.onVisible({ kind: 'delta', text: JSON.stringify({ updates: [{ characterId: f.characterId,
+    currentState: { recentEvents: current }, evidence: { text: current } }] }) })
+   return { finishReason: 'stop', usage: null }
+  }, { content, writingLanguage, seed: db => { db.exec("INSERT INTO characters(name,character_id,cs_recent_events,cs_provenance) VALUES('顾砚','character-gu','顾砚原有状态','{}')") } })
+  const slot: FinalizationGenerationSlot = { source: f.prepared.context.source, stepKey: 'character_cards' }
+  const handle = f.owner.beginFinalizationGeneration({ slot, modelId: 'synthetic' }).view.handle
+  const result = await f.owner.executeFinalizationGeneration({ handle })
+  const prompt = lastUserMessage(f.dispatch.mock.calls[0]![0])
+  expect(prompt).toContain(content)
+  expect(prompt).toContain(writingLanguage === 'en-US'
+   ? 'prioritize that correction and its current conditions over a more prominent earlier event'
+   : '优先保留该更正及当前条件，不得被更显著的旧事件挤掉')
+  expect(prompt).toContain(writingLanguage === 'en-US'
+   ? 'Do not apply another character\'s change of plan to this character'
+   : '不得将其他角色的安排变化套到该角色')
+  expect(prompt).toContain(writingLanguage === 'en-US'
+   ? 'Without a correction, retain this character\'s relevant event or still-pending plan'
+   : '没有更正时，保留该角色有关事件或仍待执行的安排')
+  expect(f.owner.commitFinalizationGeneration({ handle, artifact: f.artifactOf(result) })).toMatchObject({ success: true, applied: 1 })
+  expect(f.db.prepare('SELECT cs_recent_events FROM characters WHERE character_id=?').pluck().get(f.characterId)).toBe(current)
+  expect(f.db.prepare("SELECT cs_recent_events FROM characters WHERE character_id='character-gu'").pluck().get()).toBe('顾砚原有状态')
+  expect(f.db.prepare('SELECT content_snapshot FROM finalization_outbox').pluck().get()).toBe(content)
+  expect(f.dispatch).toHaveBeenCalledTimes(1)
+ }
+})
+
 it('characters最终合同要求每个update含recentEvents，且与渲染端副本一致（中英）',async()=>{
  const zh=lastUserMessage((await splitEvidenceRun(undefined,[single])).dispatch.mock.calls[0]![0])
  const en=lastUserMessage((await splitEvidenceRun('en-US',[single])).dispatch.mock.calls[0]![0])
- expect(zh).toContain('每个 update 必须填写 recentEvents（本章中该角色最重要的事件，50字以内）')
+ expect(zh).toContain('每个 update 必须填写 recentEvents（本章结束时该角色的最新状态，50字以内）')
  expect(zh).toContain('location 只写正文明确写出的人物当前所在地点，不写事件或进度')
  expect(zh).toContain('正文只写了计划、决定或打算前往某处时，人物仍在原处')
  expect(zh).toContain('正文没有明确写出地点变化时不要列出 location')
  expect(zh).not.toContain('location 只写地点，不写事件或进度')
  expect(zh).toContain('只返回一个 JSON 对象：{"updates":[{"characterId":"冻结名单中的精确ID","currentState":{"recentEvents":"本章事件","location":"新地点"},"evidence":{"text":"原文精确引用"}}]}')
  expect(zh).not.toContain('只列出实际变化的字段')
- expect(en).toContain("Every update must include recentEvents (this character's most important event in this chapter, within 50 words)")
+ expect(en).toContain("Every update must include recentEvents (this character's latest state at the end of the chapter, within 50 words)")
  expect(en).toContain('location is only the place the chapter prose explicitly states the character is currently in, never an event or progress')
  expect(en).toContain('the character is still where they were')
  expect(en).toContain('do not list location')

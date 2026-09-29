@@ -508,6 +508,8 @@ Mark planted clues with [Plant] and the chapter-ending hook with [Hook]. Omit th
 
 For an irreversible change relevant to later continuity, preserve an explicitly stated cause, location, witness, or source of knowledge in the same note as the subject and change. Do not infer missing details or require every note to contain all of these elements.
 
+When later prose corrects, withdraws, or postpones an earlier plan, preserve the affected character's last correction and current conditions in Character Dynamics or Foreshadowing and Hooks (such as not yet started, or what they are waiting for). Do not substitute a more prominent earlier event for the current plan or describe a plan as executed. Without a correction, retain the current plan stated in the manuscript; do not change another character's plan.
+
 Keep every item concise and grounded in the manuscript.`,
   },
   update_character_cards: {
@@ -525,6 +527,8 @@ Keep every item concise and grounded in the manuscript.`,
 2. In newCharacters, include only important newly introduced characters, excluding incidental figures with no continuing effect.
 3. currentState may contain location, powerLevel, physicalState, mentalState, keyItems, recentEvents, and updatedAtChapter. Set updatedAtChapter to {{chapter_number}}.
 4. Preserve every character name exactly as written in the manuscript or existing records.
+
+recentEvents records this character's latest state at the end of the chapter, within 50 words. If a plan is corrected, withdrawn, or postponed, prioritize the last correction and current conditions over a prominent earlier event. Without a correction, retain the relevant event or still-pending plan. Do not describe a plan as executed or change another character's plan.
 
 [JSON output contract]
 Return exactly one JSON object:
