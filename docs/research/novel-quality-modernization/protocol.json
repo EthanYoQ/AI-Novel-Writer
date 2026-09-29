@@ -560,6 +560,34 @@
       { "attemptId": "candidate:ebfb08cd-ef74-45b9-9663-83b12476a172", "invocationId": "ba2d34ab-a4f6-4283-bed1-eb2bffa8b5aa", "terminal": "settle", "parityId": "3c217fca02910eb0bc2e82d5d2e08414a75695125a38b4a1c0abf4f33c35127e" }
     ]
   },
+  "historicalPostUi1d0bdac3Boundary": {
+    "fromEventCount": 843,
+    "eventCount": 861,
+    "rawBytesSha256": "60610b99ef8456da2aa09a159962de9a26bbdfbbf955ae7b5a411e5b62403d22",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "08dbed9d6b5ac52cd25aef24feb0b728f4772b8f230c74cbed34f293230b5cfd",
+    "armBindings": {
+      "baseline": {
+        "codeSha": "2264390d6fb8b052cc14736d544df0cc74516649",
+        "sourceHash": "9b0d78fc45e0ad01d4c975eb0c23d2d0f2dae0ef5c2b84d6c5e19294a31bd4e8",
+        "driverHash": "abf22f3ee65d1641ec79f92f0fdc48fbce14986212fdf8b3f954b075d895c4ff",
+        "parityId": "3c217fca02910eb0bc2e82d5d2e08414a75695125a38b4a1c0abf4f33c35127e"
+      },
+      "candidate": {
+        "codeSha": "02e947874365a8da074bcfdefe330c64dac0f58f",
+        "sourceHash": "880dc80c1aea30f37f12e2605aad47e95e3609a9c28eb6d62d638467a86c0b73",
+        "driverHash": "abf22f3ee65d1641ec79f92f0fdc48fbce14986212fdf8b3f954b075d895c4ff"
+      }
+    },
+    "reserveAttempts": [
+      { "attemptId": "baseline:0dd6810a-9f11-468b-ab41-66f54c53596a", "invocationId": "1d0bdac3-6dc9-4f75-9bb8-405716b07711", "terminal": "settle" },
+      { "attemptId": "baseline:25a523df-ffec-4b78-a9aa-9d231293b856", "invocationId": "1d0bdac3-6dc9-4f75-9bb8-405716b07711", "terminal": "settle" },
+      { "attemptId": "baseline:69efe42f-9629-4082-8532-44d4786ac37f", "invocationId": "1d0bdac3-6dc9-4f75-9bb8-405716b07711", "terminal": "settle" },
+      { "attemptId": "candidate:224db6a0-309a-45b4-8db7-3f022ade47db", "invocationId": "1d0bdac3-6dc9-4f75-9bb8-405716b07711", "terminal": "settle", "parityId": "3c217fca02910eb0bc2e82d5d2e08414a75695125a38b4a1c0abf4f33c35127e" },
+      { "attemptId": "candidate:84824103-9dd0-4e08-acf4-10c45c17b98d", "invocationId": "1d0bdac3-6dc9-4f75-9bb8-405716b07711", "terminal": "settle", "parityId": "3c217fca02910eb0bc2e82d5d2e08414a75695125a38b4a1c0abf4f33c35127e" },
+      { "attemptId": "candidate:5c9fb356-1b89-4f6f-93e4-82a3d16ce6f0", "invocationId": "1d0bdac3-6dc9-4f75-9bb8-405716b07711", "terminal": "settle", "parityId": "3c217fca02910eb0bc2e82d5d2e08414a75695125a38b4a1c0abf4f33c35127e" }
+    ]
+  },
   "phases": {
     "c16-c18": {
       "scenarioRevision": "c16-c18-candidate-production-path-v5",
@@ -822,7 +850,21 @@
       ],
       "minimumCalls": 24,
       "scope": "3×3×2=18章，臂内依赖独立",
-      "scenarioRevision": "s14b-full-continuous-project-v1",
+      "scenarioRevision": "s14b-full-continuous-project-v2",
+      "attemptPolicy": {
+        "milestone": "final",
+        "arms": ["candidate"],
+        "draftCondense": {
+          "operationIds": ["连续章节正文"],
+          "arms": ["candidate"],
+          "primaryPurpose": "chapter-draft",
+          "condensePurpose": "chapter-draft-condense",
+          "maxCondenseAttempts": 1,
+          "trigger": "primary-settled-stop-hash-verified-units-above-draftTargetUnitRange-maximum",
+          "formalEffect": "last-attempt-only"
+        },
+        "armAsymmetry": "candidate（产品自 f00b612b 起）可对超出 draftTargetUnitRange 上限的章节首稿发一次产品原生压缩 chapter-draft-condense，并登记为该章「连续章节正文」的正式效果；baseline 2264390d 没有该产品能力、不登记压缩，首稿超上限即按原字数门失败；两臂是否触发压缩及各章压缩后正文长度的差异来自该不对称，不得据此单独声称相对改善"
+      },
       "operations": [
         {
           "id": "三章规划",

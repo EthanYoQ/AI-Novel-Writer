@@ -57,6 +57,16 @@ const POST_UI_ATTEMPT_POLICY = Object.freeze({ ...EARLY_BUDGET_ATTEMPT_POLICY,
     primaryPurpose: 'chapter-draft', condensePurpose: 'chapter-draft-condense', maxCondenseAttempts: 1,
     trigger: 'primary-settled-stop-hash-verified-units-above-draftTargetUnitRange-maximum',
     formalEffect: 'last-attempt-only' }) })
+/**
+ * full 场景 v2（评分规则/场景变更，与产品 f00b612b 的修复分开）：只为候选臂的「连续章节正文」登记产品原生的唯一一次超长压缩，
+ * 语义同 post-UI v3；每章没有审修链，保存稿即压缩稿。baseline 恒无；续写与无进展恢复不登记（触发即在 reserve 前拒绝并记技术失败）。
+ */
+const FULL_ATTEMPT_POLICY = Object.freeze({ milestone: 'final', arms: Object.freeze(['candidate']),
+  draftCondense: Object.freeze({ operationIds: Object.freeze(['连续章节正文']), arms: Object.freeze(['candidate']),
+    primaryPurpose: 'chapter-draft', condensePurpose: 'chapter-draft-condense', maxCondenseAttempts: 1,
+    trigger: 'primary-settled-stop-hash-verified-units-above-draftTargetUnitRange-maximum',
+    formalEffect: 'last-attempt-only' }),
+  armAsymmetry: 'candidate（产品自 f00b612b 起）可对超出 draftTargetUnitRange 上限的章节首稿发一次产品原生压缩 chapter-draft-condense，并登记为该章「连续章节正文」的正式效果；baseline 2264390d 没有该产品能力、不登记压缩，首稿超上限即按原字数门失败；两臂是否触发压缩及各章压缩后正文长度的差异来自该不对称，不得据此单独声称相对改善' })
 const POST_UI_BUDGET = Object.freeze({ scenarioRevision: 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v3',
   attemptPolicy: POST_UI_ATTEMPT_POLICY,
   evaluationPolicy: POST_UI_REVIEW_POLICY,
@@ -325,6 +335,18 @@ export const draftCondenseFor = (attemptPolicy, arm) => {
   const condense = attemptPolicy?.draftCondense
   return condense && (condense.arms ?? attemptPolicy.arms ?? []).includes(arm) ? condense : null
 }
+/**
+ * 开发合成才登记超长首稿：默认让 C16–C18 的 C17-A、post-UI 的场景1/1、full 的场景1/2（候选的第 2 章，其后第 3 章可见
+ * 前驱取压缩稿）走「超长首稿→唯一压缩→在范围」；显式 syntheticDraftCondense（如 still-over）原样通过。
+ * 正式合成（无 development）与真实模式不给计划，其余阶段/里程碑也不给。
+ */
+export function syntheticDraftCondensePlan(options) {
+  if (options?.mode !== 'synthetic' || options.development !== true) return {}
+  const caseId = options.phase === 'c16-c18' ? 'C17-A'
+    : options.phase === 'early-budget' && options.milestone === 'post-ui' ? '场景1/1'
+      : options.phase === 'full' ? '场景1/2' : null
+  return caseId ? { syntheticDraftCondense: options.syntheticDraftCondense ?? { caseId, outcome: 'in-range' } } : {}
+}
 // A phase scenario is the bridge-side counterpart of one preregistered protocol phase.
 // The protocol stays the only authority for case ids and operation ids; this map only
 // says which production commands realize them. The runner re-checks every field against
@@ -350,7 +372,8 @@ export const PHASE_SCENARIOS = Object.freeze({
   }),
   full: Object.freeze({
     caseIds: Object.freeze(['场景1/1', '场景1/2', '场景1/3', '场景2/1', '场景2/2', '场景2/3', '场景3/1', '场景3/2', '场景3/3']),
-    milestone: 'final', scenarioRevision: 's14b-full-continuous-project-v1',
+    milestone: 'final', scenarioRevision: 's14b-full-continuous-project-v2',
+    attemptPolicy: FULL_ATTEMPT_POLICY,
     operations: Object.freeze([
       Object.freeze({ id: '三章规划', kind: 'directory' }),
       Object.freeze({ id: '连续章节正文', kind: 'draft' }),
@@ -556,13 +579,13 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
     return 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'
   const policy = scenario.attemptPolicy
   const eligible = policy && result.milestone === policy.milestone && policy.arms.includes(arm)
-  const repairMatches = eligible ? result.attempts.filter(attempt => attempt?.binding?.operation === policy.operationId) : []
+  const repairMatches = eligible && policy.operationId ? result.attempts.filter(attempt => attempt?.binding?.operation === policy.operationId) : []
   const repairUsed = repairMatches.length === 2
   const reviewPolicy = eligible && scenario.evaluationPolicy ? policy.reviewRebuild : null
   const reviewMatches = reviewPolicy ? result.attempts.filter(attempt => attempt?.binding?.operation === reviewPolicy.operationId) : []
   const reviewUsed = reviewMatches.length === 2
-  // post-UI v3：只有登记的臂（candidate）与 operation 可多出唯一一次压缩 attempt；baseline 与其余 operation 仍恰一次。
-  const condensePolicy = eligible && scenario.evaluationPolicy ? draftCondenseFor(policy, arm) : null
+  // post-UI v3 与 full v2：只有登记的臂（candidate）与 operation 可多出唯一一次压缩 attempt；baseline 与其余 operation 仍恰一次。
+  const condensePolicy = eligible ? draftCondenseFor(policy, arm) : null
   const condenseMatches = condensePolicy
     ? result.attempts.filter(attempt => condensePolicy.operationIds.includes(attempt?.binding?.operation)) : []
   const condenseUsed = condenseMatches.length === 2
@@ -593,7 +616,7 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
       }
     }
   }
-  if (eligible) {
+  if (eligible && policy.operationId) {
     const identity = attempt => arm === 'candidate' ? attempt.binding.actual : attempt.binding.baselineIpc
     const primary = identity(repairMatches[0])
     if (!primary || primary.purpose !== policy.primaryPurpose || !primary.attemptId
@@ -698,9 +721,11 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
     const condensed = sanitizeDraftText(condensedOutput)
     if (!verifiedCondensedDraft(condenseMatches[0], result, { ...result.draftObservation, units: countProjectedDraftUnits(condensed) }))
       return 'DRAFT_CONDENSE_NOT_REGISTERED'
-    // 被审稿（reviewedDraft.initial）必须是压缩稿，而不是被压缩取代的首稿。无修稿时 initial == finalDraft == saved，同一条件
+    // post-UI：被审稿（reviewedDraft.initial）必须是压缩稿，而不是被压缩取代的首稿。无修稿时 initial == finalDraft == saved，同一条件
     // 即覆盖保存的正文；有修稿时 saved 是唯一修稿产物，其来源由 validateReviewedDraft 的审修链校验。
-    if (result.reviewedDraft?.initial?.contentHash !== digest(condensed)) return 'DRAFT_CONDENSE_SAVED_MISMATCH'
+    // full：每章没有审修链，保存的正文（随后是下一章前驱）必须就是压缩稿。
+    const reviewedSource = scenario.evaluationPolicy ? result.reviewedDraft?.initial?.contentHash : result.saved?.contentHash
+    if (reviewedSource !== digest(condensed)) return 'DRAFT_CONDENSE_SAVED_MISMATCH'
   }
   const expectedPhysical = mode === 'real' ? result.attempts.length : 0
   const expectedSynthetic = mode === 'synthetic' ? result.attempts.length : 0
@@ -1078,7 +1103,7 @@ export function classifyFullProduction(results, { mode, order }) {
     const result = results[index], key = `${step.sceneId}:${step.arm}`
     if (result?.status !== 'passed') return fail('FULL_OPERATION_FAILED')
     const mismatch = validatePairedReceipt(result, { mode, arm: step.arm, phase: 'full',
-      scenario: { caseId: step.caseId, operations: [step.operation] },
+      scenario: { caseId: step.caseId, operations: [step.operation], attemptPolicy: PHASE_SCENARIOS.full.attemptPolicy },
       protocolRevision: results[0].protocolRevision, protocolHash: results[0].protocolHash })
     if (mismatch) return fail(mismatch)
     if (result.invocationId !== results[0].invocationId || result.milestone !== 'final'
@@ -1110,14 +1135,15 @@ export function classifyFullProduction(results, { mode, order }) {
     pendingOracleDimensions: ['required-events', 'facts', 'recap', 'style'] }
 }
 
-function runProductionFull(targets, options) {
-  if (options.scenarioRevision !== PHASE_SCENARIOS.full.scenarioRevision || options.milestone !== 'final'
+function runProductionFull(targets, options, bridge = runProductionBridge) {
+  if (options.scenarioRevision !== PHASE_SCENARIOS.full.scenarioRevision
+    || stableEvidence(options.attemptPolicy ?? null) !== stableEvidence(PHASE_SCENARIOS.full.attemptPolicy) || options.milestone !== 'final'
     || !options.protocolRevision || !CONTENT_HASH.test(options.protocolHash ?? '')
     || ['baseline', 'candidate'].some(arm => targets[arm].protocolRevision !== options.protocolRevision
       || targets[arm].protocolHash !== options.protocolHash)) throw new Error('PROTOCOL_BINDING_MISMATCH')
   const schedule = fullExecutionSchedule(options.order), invocationId = randomUUID()
   const executionTargets = new Map(), prepared = [], results = [], predecessors = new Map()
-  const common = { ...options, invocationId, driverHash: productionBridgeHash(), phase: 'full' }
+  const common = { ...options, syntheticDraftCondense: undefined, ...syntheticDraftCondensePlan(options), invocationId, driverHash: productionBridgeHash(), phase: 'full' }
   for (const [sceneIndex, sceneId] of ['场景1', '场景2', '场景3'].entries()) {
     for (const arm of ['baseline', 'candidate']) {
       const original = targets[arm], directoryId = `${invocationId.slice(0, 6)}${sceneIndex}`
@@ -1130,7 +1156,7 @@ function runProductionFull(targets, options) {
       if (options.mode === 'real') copyIsolatedRealModelConfig(original, roots)
       const target = { ...original, isolationRoot, roots, declaredIsolationRoot: original.isolationRoot, declaredRoots: original.roots }
       executionTargets.set(`${sceneId}:${arm}`, target)
-      const preparation = runProductionBridge({ ...common, target, action: 'prepare', sceneId,
+      const preparation = bridge({ ...common, target, action: 'prepare', sceneId,
         chapterNumber: 1, caseId: `${sceneId}/1`, operations: [], templatesPath: `${options.templatesPath}.${sceneId}.json` })
       prepared.push(preparation)
       const peer = prepared.find(item => item.sceneId === sceneId && item.arm !== arm)
@@ -1146,7 +1172,7 @@ function runProductionFull(targets, options) {
       predecessor: predecessors.get(key) ?? null,
       parityHash: prepared.find(item => item.sceneId === step.sceneId && item.arm === step.arm).physicalProject.parityHash }
     try {
-      const result = runProductionBridge({ ...request, action: 'execute' })
+      const result = bridge({ ...request, action: 'execute' })
       results.push(result)
       if (step.operation.kind === 'draft') predecessors.set(key, { projectId: result.physicalProject.projectId,
         chapterNumber: result.saved.chapterNumber, draftId: result.saved.draftId, version: result.saved.version,
@@ -1160,13 +1186,13 @@ function runProductionFull(targets, options) {
   return { ...classifyFullProduction(results, options), phase: 'full', invocationId, order: options.order,
     qualification: options.development ? 'development-only-unfrozen' : `${options.mode}-production-path-only`,
     protocolRevision: options.protocolRevision, protocolHash: options.protocolHash, scenarioRevision: options.scenarioRevision,
-    prepared, results, notRun: schedule.slice(results.length),
+    attemptPolicy: options.attemptPolicy, prepared, results, notRun: schedule.slice(results.length),
     physicalModelRequests: results.reduce((sum, result) => sum + (result.physicalModelRequests ?? 0), 0),
     syntheticDispatches: results.reduce((sum, result) => sum + (result.syntheticDispatches ?? 0), 0) }
 }
 
-export function runProductionPhasePair(targets, options) {
-  if (options.phase === 'full') return runProductionFull(targets, options)
+export function runProductionPhasePair(targets, options, bridge) {
+  if (options.phase === 'full') return runProductionFull(targets, options, bridge)
   const scenario = productionScenario(options.phase, options.milestone)
   const arms = scenario.arms ?? ['baseline', 'candidate']
   if ((scenario.scenarioRevision ?? null) !== (options.scenarioRevision ?? null)
@@ -1192,12 +1218,8 @@ export function runProductionPhasePair(targets, options) {
     attemptPolicy: options.attemptPolicy ?? null,
     evaluationPolicy: options.evaluationPolicy ?? null,
     ...(options.mode === 'synthetic' && options.development ? { syntheticReviewedDraftCase: options.syntheticReviewedDraftCase ?? 'multiple' } : {}),
-    // 开发合成才登记超长首稿：默认让 C17-A 走「超长→唯一压缩→在范围」；still-over 用于复现原失败语义。
-    ...(options.mode === 'synthetic' && options.development && options.phase === 'c16-c18'
-      ? { syntheticDraftCondense: options.syntheticDraftCondense ?? { caseId: 'C17-A', outcome: 'in-range' } } : {}),
-    // post-UI v3 同理：默认让候选首稿超长→唯一压缩→在范围（baseline 不登记压缩，合成首稿始终在范围）；still-over 复现原失败语义。
-    ...(options.mode === 'synthetic' && options.development && options.phase === 'early-budget' && options.milestone === 'post-ui'
-      ? { syntheticDraftCondense: options.syntheticDraftCondense ?? { caseId: scenario.caseId, outcome: 'in-range' } } : {}),
+    // 开发合成才登记超长首稿（默认章见 syntheticDraftCondensePlan）；still-over 用于复现原失败语义。
+    ...syntheticDraftCondensePlan({ ...options, milestone: options.milestone ?? scenario.milestone }),
     milestone: options.milestone ?? scenario.milestone,
     phase: options.phase, caseId: scenario.caseId, sceneId: scenario.sceneId, chapterNumber: scenario.chapterNumber,
     operations: scenario.operations, semanticPath: options.semanticPath, templatesPath: options.templatesPath,
