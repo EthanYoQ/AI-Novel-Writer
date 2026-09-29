@@ -96,7 +96,6 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
   const siliconV4 = ['api.siliconflow.cn', 'api.siliconflow.com'].includes(host) && model.protocol === 'openai'
     && /^(?:Pro\/)?deepseek-ai\/DeepSeek-V4(?:-Flash|-Pro)?(?:-\d{4})?$/iu.test(model.modelName)
   const evidence = receipt.capabilityEvidence
-  const context = siliconV4 ? Math.min(evidence.contextWindowTokens ?? 1_048_576, 1_048_576) : evidence.contextWindowTokens
   const safety = MAIN_GENERATION_POLICY.safetyMarginTokens
   const remaining = budget.policy.maxTokenLiability - budget.attempts.reduce((sum, attempt) => sum + tokenLiability(attempt), 0)
   const parameters = resolveGenerationParameters(model, { reasoningStage: task.reasoningStage ?? (task.output === 'visible-text' ? 'drafting' : 'planning') })
@@ -109,7 +108,8 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
   // dispatch against a user-entered or legacy output cap that proves nothing
   // about the endpoint. Unknown models fail closed before any reservation.
   const capability = resolveGenerationCapabilityConstraints(model)
-  if (capability.modelContextSource !== 'verified-provider-preset'
+  const { modelContextWindowTokens: modelContext, modelMaxOutputTokens: modelOutput } = capability
+  if (modelContext === null || modelOutput === null || capability.modelContextSource !== 'verified-provider-preset'
     || capability.modelOutputSource !== 'verified-provider-preset') {
     throw new Error('GENERATION_MODEL_CAPABILITY_UNKNOWN')
   }
@@ -143,9 +143,15 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
   // full documented-context liability. Report exhausted root accounting before
   // deriving a misleading non-positive per-request input capacity.
   if (siliconV4 && remaining < 1_048_576) throw new Error('ROOT_BUDGET_EXHAUSTED')
-  const requestedOutputTokens = Math.min(evidence.maxOutputTokens, budget.policy.maxOutputPerRequest,
-    remaining - inputUpperBoundTokens - separateReasoning - safety,
-    (context ?? remaining) - inputUpperBoundTokens - separateReasoning - safety)
+  // Same capability merge as planTaskBudget: the verified model limits are only
+  // ever narrowed by the user's ModelSettings limits, the root ceiling/remaining
+  // liability and the input occupancy. The lease's frozen evidence numbers are
+  // not a bound here: they take the user's value when the preset has no lease-level
+  // capabilities (OpenAI, Silicon) and let a verified context hide a smaller user one.
+  const effectiveContext = Math.min(modelContext, capability.userContextWindowTokens ?? modelContext)
+  const requestedOutputTokens = Math.min(modelOutput, capability.userMaxOutputTokens ?? modelOutput,
+    budget.policy.maxOutputPerRequest, remaining - inputUpperBoundTokens - separateReasoning - safety,
+    effectiveContext - inputUpperBoundTokens - separateReasoning - safety)
   if (!Number.isSafeInteger(requestedOutputTokens) || requestedOutputTokens <= 0) throw new Error('GENERATION_INPUT_CAPACITY_EXCEEDED')
   // SiliconFlow max_tokens excludes reasoning, and thinking_budget is not a hard
   // stop for every model. Reserve its full documented context ceiling instead.

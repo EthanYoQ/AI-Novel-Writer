@@ -130,6 +130,66 @@ it.each(['gpt-4.1', 'gpt-4.1-2025-04-14', 'o3', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-
     expect(result.usagePolicy.canBoundTotalLiability).toBe(true)
   })
 
+// SPEC-002：无 budgetDemand 的任务（plot-tree、finalization 提取、agent 等）也必须把
+// 已验证的模型容量、用户 ModelSettings 限额、根预算余量与输入占用合并成同一个输出上限，
+// 与 demand 分支同源；不能只信 lease 里冻结的 capabilityEvidence 数值。
+describe('no-demand tasks merge verified capability, user limits and input occupancy (SPEC-002)', () => {
+  const plot = (content = '合成情节数据'): GenerationTask => ({ purpose: 'plot-tree-snapshot', output: 'structured-data',
+    reasoningStage: 'planning', messages: [{ role: 'user', content }] })
+  const userCaps = (contextWindowTokens: number, maxOutputTokens: number) =>
+    ({ contextWindowTokens, maxOutputTokens, reasoning: false, structuredOutput: true, usage: true })
+  const deepseek = (overrides: Partial<ModelProfile> = {}) => model({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com',
+    modelName: 'deepseek-v4-flash', reasoningOverride: 'off', ...overrides })
+
+  it('never requests more than the verified model output limit when the user limit is larger', () => {
+    // OpenAI 目录里 gpt-4-turbo 已验证输出上限 4096，用户在设置里填了 32768。
+    const result = plan(model({ modelName: 'gpt-4-turbo', maxTokens: 32768, reasoningOverride: 'off',
+      capabilities: userCaps(128000, 32768) }), plot())
+    expect(result.requestedOutputTokens).toBe(4096)
+    expect(result.options.maxTokens).toBe(4096)
+    expect(result.reservedTokens).toBe(result.inputUpperBoundTokens + 4096 + 512)
+  })
+  it('keeps the smaller user output limit below the verified model limit', () => {
+    const result = plan(model({ modelName: 'gpt-4-turbo', maxTokens: 2048, reasoningOverride: 'off' }), plot())
+    expect(result.requestedOutputTokens).toBe(2048)
+  })
+  it('refuses input that exceeds a smaller user context limit instead of trusting the 1M model window', () => {
+    const profile = deepseek({ maxTokens: 2048, capabilities: userCaps(4096, 2048) })
+    expect(() => plan(profile, plot('A'.repeat(10000)))).toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
+  })
+  it('lets the user context limit reduce the output cap by the input occupancy', () => {
+    const result = plan(deepseek({ maxTokens: 4000, capabilities: userCaps(4096, 4000) }), plot())
+    expect(result.requestedOutputTokens).toBe(4096 - result.inputUpperBoundTokens - 512)
+    expect(result.requestedOutputTokens).toBeLessThan(4000)
+  })
+  it('refuses input that exceeds the verified model context even without a user context limit', () => {
+    // gpt-3.5-turbo 已验证上下文 16385；OpenAI 目录条目没有 lease 级 capabilities，
+    // 所以冻结证据的 contextWindowTokens 为 null，不能因此放行。
+    const profile = model({ modelName: 'gpt-3.5-turbo', maxTokens: 4096, reasoningOverride: 'off' })
+    expect(() => plan(profile, plot('A'.repeat(20000)))).toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
+  })
+  it('keeps the Silicon V4 full-context reservation while honoring the user context limit', () => {
+    const profile = { ...silicon(), reasoningOverride: 'off' as const,
+      capabilities: userCaps(4096, 3000) }
+    const result = plan(profile, plot())
+    expect(result.requestedOutputTokens).toBe(3000)
+    expect(result.reservedTokens).toBe(1_048_576)
+    expect(() => plan(profile, plot('A'.repeat(10000)))).toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
+  })
+  it('uses the verified Silicon context (1M), not the documented 1,048,576 reservation, as the input capacity', () => {
+    const profile = model({ baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash',
+      reasoningOverride: 'off', maxTokens: 16384 })
+    expect(plan(profile, plot('A'.repeat(900_000))).requestedOutputTokens).toBe(16384)
+    expect(() => plan(profile, plot('A'.repeat(1_000_000)))).toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
+  })
+  it('treats the root output ceiling and remaining liability exactly as before', () => {
+    expect(plan(deepseek({ maxTokens: 100000 }), plot()).requestedOutputTokens).toBe(32768)
+    const budget = ledger(); budget.policy.maxTokenLiability = 4096
+    expect(plan(deepseek({ maxTokens: 16384 }), plot(), budget).requestedOutputTokens)
+      .toBe(4096 - plan(deepseek(), plot()).inputUpperBoundTokens - 512)
+  })
+})
+
 describe('S07 semantic pre-dispatch integration', () => {
   const known = () => model({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash', maxTokens: 16384 })
   const draft = (requestedUnits: number): GenerationTask => ({ ...task,
