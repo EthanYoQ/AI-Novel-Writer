@@ -53,6 +53,12 @@ let currentPage
 const pass = (actionId, assertion, detail = {}) => steps.push({ stepId: actionId, actionId, outcome: 'PASS', assertion, ...detail })
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
 const folded = value => path.win32.normalize(value).toLowerCase()
+async function recentRestoredProject(page, expectedPath, originProjectId) {
+  const matches = (await invoke(page, 'project:recent-list')).filter(project => folded(project.path) === folded(expectedPath))
+  assert.equal(matches.length, 1, 'restored copy has no unique main-registered recent path')
+  assert(matches[0].projectId && matches[0].projectId !== originProjectId, 'restored copy has no distinct main-registered project ID')
+  return matches[0]
+}
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 function provenance() {
@@ -402,8 +408,10 @@ async function main() {
     const copy = await restoreGeneration(b.page, panelB, root.generationId, profiles.b.restored, '恢复入口-恢复副本')
     assertCurrentSchema(path.join(copy, '.ai-novel', 'project.db'))
     assert.equal(sha(originalDb), originalSha)
-    const copyOpen = await invoke(b.page, 'project:open', copy, randomUUID(), null)
+    const copyRecent = await recentRestoredProject(b.page, copy, created.projectId)
+    const copyOpen = await invoke(b.page, 'project:open', copyRecent.path, randomUUID(), null)
     assert.equal(copyOpen.success, true, copyOpen.error)
+    assert.equal(copyOpen.project.id, copyRecent.projectId)
     await close(b.app)
     const restarted = await launch(profiles.b)
     let copyPanel = await openPanel(restarted.page, name)
@@ -417,8 +425,10 @@ async function main() {
       { remoteCount, originalSha256: originalSha, copyDbSha256: sha(path.join(copy, '.ai-novel', 'project.db')) })
 
     currentStep = 'U16.A09-sibling-branches'
-    const copyReopened = await invoke(restarted.page, 'project:open', copy, randomUUID(), null)
+    const reopenedRecent = await recentRestoredProject(restarted.page, copy, created.projectId)
+    const copyReopened = await invoke(restarted.page, 'project:open', reopenedRecent.path, randomUUID(), null)
     assert.equal(copyReopened.success, true, copyReopened.error)
+    assert.equal(copyReopened.project.id, reopenedRecent.projectId)
     const copySession = { projectId: copyReopened.project.id, projectPath: copy,
       leaseId: copyReopened.project.sessionLease }
     const currentBody = '雨城北门铜钥匙线索浮现'
@@ -516,8 +526,10 @@ async function main() {
     files.set(archiveKey, intactArchive)
     pass('U16.A11', 'V3 native restore cancellation caused no download/write; altered remote archive was rejected without changing source, prior copy or active project')
     currentStep = 'U16.A12-continuity-and-continue-writing'
-    const selectedOpen = await invoke(resumedA.page, 'project:open', selectedBranchCopy, randomUUID(), null)
+    const selectedRecent = await recentRestoredProject(resumedA.page, selectedBranchCopy, created.projectId)
+    const selectedOpen = await invoke(resumedA.page, 'project:open', selectedRecent.path, randomUUID(), null)
     assert.equal(selectedOpen.success, true, selectedOpen.error)
+    assert.equal(selectedOpen.project.id, selectedRecent.projectId)
     assert.notEqual(selectedOpen.project.id, created.projectId)
     const selectedSession = { projectId: selectedOpen.project.id, projectPath: selectedBranchCopy,
       leaseId: selectedOpen.project.sessionLease }
@@ -565,8 +577,9 @@ async function main() {
     await resumedA.page.keyboard.type(continued)
     await resumedA.page.locator('button[title="保存（⌘S）"]').click()
     await resumedA.page.getByText('已保存', { exact: true }).first().waitFor({ state: 'visible' })
-    const savedOpen = await invoke(resumedA.page, 'project:open', selectedBranchCopy, randomUUID(), null)
+    const savedOpen = await invoke(resumedA.page, 'project:open', selectedRecent.path, randomUUID(), null)
     assert.equal(savedOpen.success, true, savedOpen.error)
+    assert.equal(savedOpen.project.id, selectedRecent.projectId)
     const savedSession = { projectId: savedOpen.project.id, projectPath: selectedBranchCopy,
       leaseId: savedOpen.project.sessionLease }
     const fullAfter = await invoke(resumedA.page, 'db:draft-get-full', draft2.id, selectedBranchCopy, savedSession)

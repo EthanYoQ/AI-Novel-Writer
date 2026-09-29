@@ -50,6 +50,12 @@ let currentStep = 'setup'
 const pass = (stepId, actionId, assertion) => steps.push({ stepId, actionId, outcome: 'PASS', assertion })
 const invoke = (page, channel, ...args) => page.evaluate(({ channel, args }) => window.aiNovelAPI.invoke(channel, ...args), { channel, args })
 const folded = value => path.win32.normalize(value).toLowerCase()
+async function recentRestoredProject(page, expectedPath, originProjectId) {
+  const matches = (await invoke(page, 'project:recent-list')).filter(project => folded(project.path) === folded(expectedPath))
+  assert.equal(matches.length, 1, 'restored copy has no unique main-registered recent path')
+  assert(matches[0].projectId && matches[0].projectId !== originProjectId, 'restored copy has no distinct main-registered project ID')
+  return matches[0]
+}
 const archiveManifest = bytes => new Promise((resolve, reject) => yauzl.fromBuffer(bytes, { lazyEntries: true }, (error, zip) => {
   if (error || !zip) return reject(error ?? new Error('archive unavailable'))
   zip.once('error', reject)
@@ -323,8 +329,10 @@ async function main() {
       const reopenedPage = await app.firstWindow({ timeout: 30_000 })
       await reopenedPage.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
       assert.equal((await invoke(reopenedPage, 'startup:get-state')).state, 'ready')
-      const reopened = await invoke(reopenedPage, 'project:open', localCopy, randomUUID(), null)
+      const localRecent = await recentRestoredProject(reopenedPage, localCopy, created.projectId)
+      const reopened = await invoke(reopenedPage, 'project:open', localRecent.path, randomUUID(), null)
       assert.equal(reopened.success, true, reopened.error)
+      assert.equal(reopened.project.id, localRecent.projectId)
       assert.notEqual(reopened.project.id, created.projectId, 'restored copy reused origin project ID')
       assert.equal(folded((await invoke(reopenedPage, 'project:get-runtime-context')).activeProjectPath), folded(localCopy))
       const copySession = { projectId: reopened.project.id, projectPath: localCopy, leaseId: reopened.project.sessionLease }
@@ -452,8 +460,10 @@ async function main() {
     const reopenedPage = await app.firstWindow({ timeout: 30_000 })
     await reopenedPage.locator('[data-shell-presentation="writer"][data-shell-variant="v3"]').waitFor({ state: 'visible' })
     assert.equal((await invoke(reopenedPage, 'startup:get-state')).state, 'ready')
-    const reopened = await invoke(reopenedPage, 'project:open', cloudCopy, randomUUID(), null)
+    const cloudRecent = await recentRestoredProject(reopenedPage, cloudCopy, created.projectId)
+    const reopened = await invoke(reopenedPage, 'project:open', cloudRecent.path, randomUUID(), null)
     assert.equal(reopened.success, true, reopened.error)
+    assert.equal(reopened.project.id, cloudRecent.projectId)
     assert.notEqual(reopened.project.id, created.projectId, 'cloud copy reused origin project ID')
     assert.equal(folded((await invoke(reopenedPage, 'project:get-runtime-context')).activeProjectPath), folded(cloudCopy))
     const copySession = { projectId: reopened.project.id, projectPath: cloudCopy, leaseId: reopened.project.sessionLease }
