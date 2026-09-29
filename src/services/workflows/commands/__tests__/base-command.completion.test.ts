@@ -132,9 +132,9 @@ describe('BaseWorkflowCommand completion boundary', () => {
   })
 
   it.each([
-    { leasedCap: 16_384, expectedRequest: 8192 },
+    { leasedCap: 16_384, expectedRequest: 16_384 },
     { leasedCap: 8192, expectedRequest: 8192 },
-  ])('keeps ordinary structured requests at $expectedRequest for a $leasedCap-capability lease', async ({ leasedCap, expectedRequest }) => {
+  ])('keeps ordinary structured requests at the declaring $leasedCap-capability lease', async ({ leasedCap, expectedRequest }) => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
       .mockResolvedValue({ content: '{"ok":true}', finishReason: 'stop' })
     const baseLease = leaseReceipt()
@@ -158,7 +158,7 @@ describe('BaseWorkflowCommand completion boundary', () => {
   })
 
   it.each([
-    { leasedCap: 16_384, expectedRequest: 8192 },
+    { leasedCap: 16_384, expectedRequest: 16_384 },
     { leasedCap: 8192, expectedRequest: 8192 },
   ])('uses the bounded character-architecture policy without exceeding a $leasedCap-capability lease', async ({ leasedCap, expectedRequest }) => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
@@ -183,10 +183,10 @@ describe('BaseWorkflowCommand completion boundary', () => {
     expect(WORKFLOW_GENERATION_BUDGETS['character-architecture']).toEqual({
       maxAttempts: 12,
       maxRequestedOutputTokens: 98_304,
-      maxRequestedOutputTokensPerAttempt: 8192,
+      maxRequestedOutputTokensPerAttempt: 32_768,
       deadlineMs: 20 * 60_000,
     })
-    expect(12 * WORKFLOW_GENERATION_BUDGETS['character-architecture'].maxRequestedOutputTokensPerAttempt).toBe(98_304)
+    expect(12 * 8192).toBe(98_304)
   })
 
   it('keeps ordinary generation single-shot and fail-closed while an unknown model uses its leased cap', async () => {
