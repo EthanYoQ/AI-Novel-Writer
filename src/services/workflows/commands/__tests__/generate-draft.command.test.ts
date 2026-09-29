@@ -328,18 +328,20 @@ function leaseReceipt(overrides: Partial<ModelExecutionLeaseReceipt> = {}): Mode
   }
 }
 
-// 定稿事实优先段全文：末尾的“上一章紧接”时点规则与原段落同属一段（同一行，无新标题）。
+// 只钉住共享合同的行为锚点和接线，避免复制整段生产提示词。
 const FINALIZED_FACT_PRECEDENCE = {
   'zh-CN': {
     heading: '【定稿事实优先】',
-    rule: '本章蓝图、章节计划或必需事件的措辞与已定稿章节中确立的事实（包括作者在定稿中的最新更正）冲突时，以定稿事实为准：按与定稿事实一致的方式落实该条目（例如改变阻碍发生的方式或原因），不得把已撤回、取消或被取代的计划写成已执行；蓝图明确写成本章新决定的（如重新启用某计划），按新决定写。本章紧接上一章结尾：作者没有写明跨日或时间间隔时，视为同一天内的紧接发展，上一章事件就发生在不久之前，不得写成“昨天”“昨夜”“前一天”。已定稿事件的时点以定稿原文和【本章写作方向】里的时点说明为准，本章提到这些事件时须按该时点换算（例如定稿写“黄昏”、本章时点为“同日深夜”，则那些事件发生在“黄昏时”“傍晚那会儿”；定稿写“傍晚”、本章时点为“次日上午”，则写“昨晚”“昨天傍晚”）。',
+    unresolved: '定稿只发现疑点、提出猜测或写明待核实时，不能把某一解释、原因或哪一方出错写成已确认事实',
+    verification: '本章可以通过新线索和调查推进并解决疑点',
     timeRuleStart: '本章紧接上一章结尾：作者没有写明跨日或时间间隔时，视为同一天内的紧接发展',
     timeRuleEnd: '则写“昨晚”“昨天傍晚”）。',
     lengthContract: '【本章篇幅合同】',
   },
   'en-US': {
     heading: '[Finalized facts take precedence]',
-    rule: "When the chapter blueprint, chapter plans, or the wording of required events conflict with facts established in finalized chapters (including the author's latest corrections in them), the finalized facts prevail: realize the item in a way consistent with them (for example, change how or why an obstacle happens) and never write a withdrawn, cancelled, or superseded plan as executed. If the blueprint explicitly states a new decision in this chapter (such as reviving a plan), write that new decision. This chapter follows directly on the previous chapter's ending: when the author states no day change or time gap, treat it as a continuation within the same day; events of the previous chapter happened a little while ago and must not be written as \"yesterday\", \"last night\", or \"the day before\". The time of finalized events is fixed by the finalized text and by the time stated in [Chapter brief]; when this chapter mentions those events, convert their time accordingly (for example, if the finalized text says \"dusk\" and this chapter is \"late the same night\", those events happened \"at dusk\" or \"earlier this evening\"; if it says \"evening\" and this chapter is \"the next morning\", write \"last night\" or \"yesterday evening\").",
+    unresolved: 'do not present an explanation, cause, or which side is wrong as confirmed',
+    verification: 'This chapter may pursue new clues and resolve the question',
     timeRuleStart: "This chapter follows directly on the previous chapter's ending: when the author states no day change or time gap",
     timeRuleEnd: '"earlier this evening"; if it says "evening" and this chapter is "the next morning", write "last night" or "yesterday evening").',
     lengthContract: '[Chapter length contract]',
@@ -2349,7 +2351,7 @@ ${headingPrefix}第3章：潮门
       continuationTail: '[End of existing manuscript]',
     },
   ])('puts the $writingLanguage finalized-fact precedence rule in initial and continuation requests', async ({
-    writingLanguage, heading, rule, timeRuleStart, timeRuleEnd, executionCard, lengthContract, continuationTail,
+    writingLanguage, heading, unresolved, verification, timeRuleStart, timeRuleEnd, executionCard, lengthContract, continuationTail,
   }) => {
     const runtime = fakeOutcomes(
       outcome('初'.repeat(100), 'length', 1),
@@ -2364,11 +2366,12 @@ ${headingPrefix}第3章：潮门
 
     expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-continuation'])
     const [initial, continuation] = runtime.complete.mock.calls.map(([task]) => task.messages.at(-1)!.content)
-    // 时点规则紧跟原段落末句，位于同一【定稿事实优先】段内（整段一行，规则之后才是下一段）。
-    expect(initial).toContain(`${heading}\n${rule}\n\n${lengthContract}`)
+    const rule = initial.split(`${heading}\n`)[1]?.split(`\n\n${lengthContract}`)[0]
+    expect(rule).toContain(unresolved)
+    expect(rule).toContain(verification)
     expect(initial).toContain(timeRuleStart)
     expect(initial).toContain(timeRuleEnd)
-    expect(initial.split(rule)).toHaveLength(2)
+    expect(initial.split(heading)).toHaveLength(2)
     // 初始请求：执行卡之后、篇幅合同之前。
     const ruleIndex = initial.indexOf(heading)
     expect(ruleIndex).toBeGreaterThan(initial.lastIndexOf(executionCard))
@@ -2378,7 +2381,6 @@ ${headingPrefix}第3章：潮门
     expect(continuation).toContain(timeRuleStart)
     expect(continuation).toContain(timeRuleEnd)
     expect(continuation.split(heading)).toHaveLength(2)
-    expect(continuation.split(rule)).toHaveLength(2)
   })
 
   describe('pre-draft finalized reconciliation', () => {
@@ -3276,9 +3278,11 @@ ${headingPrefix}第3章：潮门
       .map(marker => condensePrompt.indexOf(marker))
     expect(order.every(index => index >= 0)).toBe(true)
     expect(order).toEqual([...order].sort((left, right) => left - right))
-    // 压缩提示经共用作者资料块携带同一条时点规则，且仍在【定稿事实优先】段内（其后才是篇幅合同）。
+    // 压缩提示经共用作者资料块携带同一事实与时点合同。
     const zhPrecedence = FINALIZED_FACT_PRECEDENCE['zh-CN']
-    expect(condensePrompt).toContain(`${zhPrecedence.heading}\n${zhPrecedence.rule}\n\n${zhPrecedence.lengthContract}`)
+    const zhRule = condensePrompt.split(`${zhPrecedence.heading}\n`)[1]?.split(`\n\n${zhPrecedence.lengthContract}`)[0]
+    expect(zhRule).toContain(zhPrecedence.unresolved)
+    expect(zhRule).toContain(zhPrecedence.verification)
     expect(condensePrompt).toContain(zhPrecedence.timeRuleStart)
     expect(condensePrompt).toContain(zhPrecedence.timeRuleEnd)
     expect(condensePrompt.endsWith(`【待压缩正文】\n${draft}`)).toBe(true)
@@ -3311,7 +3315,9 @@ ${headingPrefix}第3章：潮门
     expect(order).toEqual([...order].sort((left, right) => left - right))
     // 压缩提示经共用作者资料块携带同一条时点规则，且仍在 [Finalized facts take precedence] 段内。
     const enPrecedence = FINALIZED_FACT_PRECEDENCE['en-US']
-    expect(condensePrompt).toContain(`${enPrecedence.heading}\n${enPrecedence.rule}\n\n${enPrecedence.lengthContract}`)
+    const enRule = condensePrompt.split(`${enPrecedence.heading}\n`)[1]?.split(`\n\n${enPrecedence.lengthContract}`)[0]
+    expect(enRule).toContain(enPrecedence.unresolved)
+    expect(enRule).toContain(enPrecedence.verification)
     expect(condensePrompt).toContain(enPrecedence.timeRuleStart)
     expect(condensePrompt).toContain(enPrecedence.timeRuleEnd)
     expect(condensePrompt).not.toContain('【')
