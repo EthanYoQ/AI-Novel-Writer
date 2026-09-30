@@ -296,3 +296,11 @@ S07 early-budget 已接默认生产命令及最终 fetch 处的 reserve/dispatch
 `protocol.json` 的 `shared-input-diagnostic` 只登记 C17-A/C18-A 共有原始消息的一次 candidate 提取任务。私有输入包保留原 system/user 全文、原始材料三项 hash、原收据与测试 SHA；新请求将原两段全文各作为明确标界的引用资料，并以新的 system 和末尾任务要求五列表格。消息角色和包装已改变，不能称为相同请求，也不向模型提供历史失败正文或正确答案。
 
 该诊断最多一次物理请求，任何 `stop`、`length`、`unknown` 或技术失败都不重试；新请求经现有 generation owner/controller、出站预检和逐请求账本。输出交两名独立评审按调用前冻结的私有判据判断；技术/语义不确定均为 `UNKNOWN`。结果只说明同一原材料在提取任务下的一次表现，不证明原写作失败的根因，不改变七案资格、历史 FAIL、baseline、post-UI/full 门禁或原 0.7 / max 参数配置。
+
+## 固定零温度配置资格（非因果实验）
+
+`forwardTemperatureExperiment` 仅在原 `forwardReasoningExperiment` 已登记的 C16 七案、post-UI 三个 selector 和 final full 范围生效，继承原范围与 caseIds，固定两臂模型 profile 的 `temperature: 0`。原 max 登记对象及语义源中的 `temperature: 0.7` 均原样保留；执行回执分别记录源参数和本次登记的有效参数。`shared-input-diagnostic` 不属于此范围，仍为 0.7 / max 的历史一次非资格调用。
+
+实际模型配置回读与每次出站请求须满足新登记的 0、原 provider/protocol/modelName/maxTokens、原每操作 `max_tokens` 预算。candidate 自然发送 `enable_thinking: true` / `reasoning_effort: max`，baseline 自然缺席这两个字段；创作策略仍为 `auto`。未登记温度、错误 base revision、旧 max 对象或 case 范围漂移在 reserve 前拒绝。此轮只判断新固定配置下的既有绝对资格，不能以参数或两臂 wire 不对称宣称代码改善、先前失败根因或稳定性；C16 七案未通过不得进入 post-UI/full。
+
+唯一物理账本的 `historicalSharedInput7203443dBoundary` 接在 `historicalC169337909dBoundary` 后，认证第1159–1161行（1158 → 1161）：真实 invocation `7203443d-d7aa-46e1-82b4-37ab1d392df5` 的单次 candidate 诊断 reserve→dispatch→settle，原协议 hash `7b6d01e3fd8788bedabd768a1757da4aa8cbc71358948e14a667e07e8b0f6bd6`，至1161行完整 sha256 `3a0293bce8c9d2123ea69f07c48fdca92d613ae1430fddfc27a57b504daec1dc`。该历史调用继续占用诊断唯一额度，不因本协议 revision 更新而重新开放；诊断结论和历史七案 FAIL 不改判。

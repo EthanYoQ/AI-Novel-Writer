@@ -6,7 +6,7 @@ import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { test, vi } from 'vitest'
-import { updateLedger, CAMPAIGN_ID } from '../quality-modernization-run.mjs'
+import { updateLedger, CAMPAIGN_ID, ROOT, forwardReasoningFor } from '../quality-modernization-run.mjs'
 import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, createOperationDispatchGate,
   createOutboundPreflightAssert, assertForwardReasoning, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
   fetchProviderResponse, measurePromptBytes, BRIDGE_SETTLEMENT_DEADLINE_MS,
@@ -212,6 +212,11 @@ test('isolated production commands persist the selected phase operations', async
   const continuityRun = request.phase === 'c16-c18'
   const evidenceRoot = request.evidenceRoot ?? target.isolationRoot
   const source = json(request.semanticPath)
+  const registeredForward = forwardReasoningFor(json(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')),
+    request.phase, request.milestone)
+  assert.deepEqual(request.forwardReasoning ?? null, registeredForward, 'FORWARD_REGISTRATION_MISMATCH')
+  const effectiveModelParameters = { ...source.modelParameters,
+    ...(registeredForward?.revision === 'fixed-zero-temperature-max-v1' ? { temperature: registeredForward.model.temperature } : {}) }
   const continuityCase = continuityRun ? source.continuityQualificationCases.find(item => item.id === request.caseId) : null
   if (continuityRun) assert.ok(continuityCase && continuityCase.sceneId === request.sceneId
     && continuityCase.chapterNumber === request.chapterNumber, 'CONTINUITY_CASE_NOT_REGISTERED')
@@ -247,6 +252,8 @@ test('isolated production commands persist the selected phase operations', async
     phase: request.phase, milestone: request.milestone, caseId: request.caseId, sceneId: request.sceneId, chapterNumber: request.chapterNumber,
     operations: [], qualification: diagnosticRun ? 'non-qualification-diagnostic' : request.development ? 'development-only-unfrozen' : 'frozen-target', codeSha: target.codeSha,
     sourceHash: target.sourceHash, driverHash: request.driverHash,
+    modelParameters: { source: source.modelParameters, effective: effectiveModelParameters,
+      registrationRevision: registeredForward?.revision ?? null },
     ...(reviewedRun ? { evaluationPolicy: request.evaluationPolicy } : {}),
     runtime: { node: process.version, abi: process.versions.modules }, physicalModelRequests: 0, syntheticDispatches: 0,
     invocations: [], attempts: [], status: 'running' }
@@ -332,8 +339,8 @@ test('isolated production commands persist the selected phase operations', async
       return () => transport.listeners.get(channel).delete(listener)
     } }
     vi.stubGlobal('window', { aiNovelAPI: api, velaAPI: api, addEventListener() {}, removeEventListener() {} })
-    let model = { id: 'quality-preregistered-model', name: '预注册合成验证模型', ...source.modelParameters,
-      apiKey: 'synthetic-quality-never-network', baseUrl: `https://${source.modelParameters.endpointHost}/v1`, purposes: ['generation'] }
+    let model = { id: 'quality-preregistered-model', name: '预注册合成验证模型', ...effectiveModelParameters,
+      apiKey: 'synthetic-quality-never-network', baseUrl: `https://${effectiveModelParameters.endpointHost}/v1`, purposes: ['generation'] }
     delete model.parameterStatus
     if (request.forwardReasoning || diagnosticRun) model.reasoningOverride = diagnosticRun ? 'max' : request.forwardReasoning.reasoningOverride
     if (request.mode === 'real') {
@@ -341,8 +348,8 @@ test('isolated production commands persist the selected phase operations', async
       model = json(path.join(target.roots.config, 'models.json')).find(value => value.id === target.modelId)
       if (!model || typeof model.apiKey !== 'string' || !model.apiKey) throw new Error('SAFE_MODEL_UNAVAILABLE')
       secret = model.apiKey
-      for (const key of ['provider', 'protocol', 'modelName', 'temperature', 'maxTokens']) assert.equal(model[key], source.modelParameters[key], 'MODEL_PARAMETER_MISMATCH')
-      assert.equal(new URL(model.baseUrl).host, source.modelParameters.endpointHost)
+      for (const key of ['provider', 'protocol', 'modelName', 'temperature', 'maxTokens']) assert.equal(model[key], effectiveModelParameters[key], 'MODEL_PARAMETER_MISMATCH')
+      assert.equal(new URL(model.baseUrl).host, effectiveModelParameters.endpointHost)
     } else if (request.mode !== 'synthetic') throw new Error('INVALID_PROVIDER_MODE')
     if (request.action === 'prepare' && request.mode === 'synthetic') {
       save(path.join(target.roots.config, 'models.json'), [model])
@@ -746,11 +753,11 @@ test('isolated production commands persist the selected phase operations', async
     } })
     const physicalFetch = async (url, options) => {
       const preflight = createOutboundPreflightAssert(receipt.preflightFailures ??= [])
-      preflight(new URL(String(url)).host === source.modelParameters.endpointHost, 'UNREGISTERED_PROVIDER_HOST')
+      preflight(new URL(String(url)).host === effectiveModelParameters.endpointHost, 'UNREGISTERED_PROVIDER_HOST')
       preflight(new URL(String(url)).pathname === '/v1/chat/completions', 'UNREGISTERED_PROVIDER_PATH')
       const body = JSON.parse(options.body)
-      preflight(body.model === source.modelParameters.modelName, 'UNREGISTERED_PROVIDER_MODEL')
-      preflight(body.temperature === source.modelParameters.temperature, 'UNREGISTERED_PROVIDER_TEMPERATURE')
+      preflight(body.model === effectiveModelParameters.modelName, 'UNREGISTERED_PROVIDER_MODEL')
+      preflight(body.temperature === effectiveModelParameters.temperature, 'UNREGISTERED_PROVIDER_TEMPERATURE')
       let forwardReasoningEvidence = null
       if (request.forwardReasoning) {
         try { forwardReasoningEvidence = assertForwardReasoning(request.forwardReasoning, { arm: target.arm,

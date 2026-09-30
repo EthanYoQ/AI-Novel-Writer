@@ -49,6 +49,12 @@
     },
     "limits": "Fixed max only, no high pilot or best-of; candidate absolute gates and complete baseline technical endpoint remain required. Natural wire asymmetry makes parameter or code-causal improvement claims unsupported; incomparable relative dimensions are INCONCLUSIVE. Preserve semantic source, oracle, temperature 0.7, profile maxTokens 16384, per-request budget, arm order, history and the original physical ledger. C16 seven candidate cases must pass before post-UI/full."
   },
+  "forwardTemperatureExperiment": {
+    "revision": "fixed-zero-temperature-max-v1",
+    "baseRevision": "fixed-max-natural-wire-asymmetry-v1",
+    "temperature": 0,
+    "limits": "Fixed temperature 0 for both arms in the pre-registered max scopes only. Preserve semantic source, oracles, per-operation budgets, arm order and all historical results. Candidate and baseline reasoning wire remain naturally asymmetric; this qualification cannot establish parameter or code-causal improvement, root cause, or stability. C16 seven candidate cases must pass before post-UI/full."
+  },
   "historicalIntentionToTreat": {
     "decisionRevision": "s10b-paired-hard-gate-v1",
     "failedInvocations": [
@@ -1563,6 +1569,24 @@
       { "attemptId": "candidate:26e9e4ab-4f51-4077-b533-a9cf7797af9d", "invocationId": "9337909d-a526-4684-b5ff-80cad9206d3a", "terminal": "settle", "parityId": "73c00b48cd24c66ec299ce5f08500292bc72a5dd04d9d63b7e9880e83b9f25f7" },
       { "attemptId": "candidate:00306227-68b2-47d8-9d64-697383d695c8", "invocationId": "9337909d-a526-4684-b5ff-80cad9206d3a", "terminal": "settle", "parityId": "8fc3ebaa16213c100f69967ee2372acea596cd46ffb3934a900e58ae8c5ea754" },
       { "attemptId": "candidate:47b0682a-d9a5-4649-ba97-a92ec95d7362", "invocationId": "9337909d-a526-4684-b5ff-80cad9206d3a", "terminal": "settle", "parityId": "8fc3ebaa16213c100f69967ee2372acea596cd46ffb3934a900e58ae8c5ea754" }
+    ]
+  },
+  "historicalSharedInput7203443dBoundary": {
+    "fromEventCount": 1158,
+    "eventCount": 1161,
+    "rawBytesSha256": "3a0293bce8c9d2123ea69f07c48fdca92d613ae1430fddfc27a57b504daec1dc",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "7b6d01e3fd8788bedabd768a1757da4aa8cbc71358948e14a667e07e8b0f6bd6",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "e51c78fb07545b30ef067b86106b5fbfdc1784e8",
+        "sourceHash": "3b52d46f48c541637da3f324de0f01b45be5e5169301166657dd3687759a4ab4",
+        "driverHash": "a52416501c1e02bb8a3b1cd1af4304f6386b20f6d6e9768ca32c73ffabd94ef4",
+        "parityId": "8f521aeec0c96b83c1c3a7eb42942f9b1ba7a7efac5ff998f860ac9a8aefbc6f"
+      }
+    },
+    "reserveAttempts": [
+      { "attemptId": "candidate:dc854194-e3f1-4144-9086-21a5a7ddf9f9", "invocationId": "7203443d-d7aa-46e1-82b4-37ab1d392df5", "terminal": "settle" }
     ]
   }
 }
