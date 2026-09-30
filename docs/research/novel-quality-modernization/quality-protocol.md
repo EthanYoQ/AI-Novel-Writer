@@ -306,3 +306,11 @@ S07 early-budget 已接默认生产命令及最终 fetch 处的 reserve/dispatch
 唯一物理账本的 `historicalSharedInput7203443dBoundary` 接在 `historicalC169337909dBoundary` 后，认证第1159–1161行（1158 → 1161）：真实 invocation `7203443d-d7aa-46e1-82b4-37ab1d392df5` 的单次 candidate 诊断 reserve→dispatch→settle，原协议 hash `7b6d01e3fd8788bedabd768a1757da4aa8cbc71358948e14a667e07e8b0f6bd6`，至1161行完整 sha256 `3a0293bce8c9d2123ea69f07c48fdca92d613ae1430fddfc27a57b504daec1dc`。该历史调用继续占用诊断唯一额度，不因本协议 revision 更新而重新开放；诊断结论和历史七案 FAIL 不改判。
 
 `historicalC1670407421Boundary` 再接续第1162–1182行（1161 → 1182），以原始前缀 sha256 `4ae528592d515960ffdd860e9c9d1d1d9b1fda43783f32c31399c8ff7d6d8ae7`、invocation `70407421-7e4f-4614-b8f6-b890b2005d2a`、七次 candidate 的 code/source/driver 与逐次 parity 认证六次 settle、一次 C17-A UNKNOWN。末次 UNKNOWN 仍占用物理请求和原 slot；先前失败及 704 的根因均不改判。修正流账本消费者后，只允许从新代码身份开始一次完整七案前瞻资格；不得拼接旧六案、单补第七案或绕过 C16 门禁。新增 `streamProgress` 仅记请求发出后的字节数、内容/推理事件数、DONE/finish 标志和相对首末字节毫秒数，用于以后技术失败定位，不参与放行，也不追填 704 的旧收据。
+
+## 固定 high / 零温度前向资格
+
+前文 max-only 与 0/max 的限制属于各自冻结的历史资格。`forwardHighReasoningExperiment` 是新增的 `fixed-high-zero-temperature-v1` 登记，继承上述 max 对象的原五个 scope、caseIds、原两臂温度 0 与全部七案/后续门禁；原 max 和零温度登记对象逐项不变。只将实际 `reasoningOverride` 固定为 `high`：candidate 自然发送 `enable_thinking: true` / `reasoning_effort: high`，baseline 的两个字段仍自然缺席，两臂不得有 `thinking_budget`。执行回执继续分别保留语义源的 0.7 参数和本次有效的 0 / high 参数，`shared-input-diagnostic` 仍为已经消费的一次 0.7 / max 非资格诊断。原模型身份、`creativeStrategy: auto`、每操作预算、16384 profile 上限、480 秒截止、素材与 oracle 均不变。未登记 high、旧登记或 scope 漂移，以及读回或 wire 不符，须在物理 reserve 前拒绝。
+
+新配置只进行一次从 C16-A 开始的完整七案前向资格；任何技术 UNKNOWN/FAIL 或原文学门失败均保留并停止依赖推进，不拼接前次成功案或自动再换参数。此实验只检验固定 high / 0 在原期限内能否完成并满足原绝对门，不追认 704/d712 根因，不把旧 0.7/max 或 0/max 失败改判，也不证明参数或代码改善、服务端实际模型模式或稳定性。只有完整七案按原规则通过，才按原顺序进入既定 post-UI/full。
+
+`historicalC16D712808cBoundary` 从1182行接续第1183–1194行，原始完整前缀 sha256 为 `74fa8d5a7f056f2e8b5321dca40f08bc631194add392c03eaeb755033341bf1c`。真实 invocation `d712808c-5336-4abc-bd7e-cd9d0d061300` 的四次 candidate 请求均有 reserve→dispatch→终态，前三次 settle，末次 C16-B 为 `BRIDGE_SETTLEMENT_DEADLINE_EXCEEDED` UNKNOWN；原 `44bcc601` code、`3b52d46f` source、`3e76921f` driver 与逐次 parity 绑定在协议历史项中。四次物理请求均已占用，不退款、不得拼接或改判。账本读写两入口都认证这一段，后续 reserve 使用新协议身份。

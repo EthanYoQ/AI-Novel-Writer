@@ -55,6 +55,12 @@
     "temperature": 0,
     "limits": "Fixed temperature 0 for both arms in the pre-registered max scopes only. Preserve semantic source, oracles, per-operation budgets, arm order and all historical results. Candidate and baseline reasoning wire remain naturally asymmetric; this qualification cannot establish parameter or code-causal improvement, root cause, or stability. C16 seven candidate cases must pass before post-UI/full."
   },
+  "forwardHighReasoningExperiment": {
+    "revision": "fixed-high-zero-temperature-v1",
+    "baseRevision": "fixed-zero-temperature-max-v1",
+    "reasoningOverride": "high",
+    "limits": "One prospective complete seven-case qualification at temperature 0 and reasoning high within the inherited C16, post-UI and full scopes. Preserve the original source, oracles, budgets, arm order, 480-second deadline, prior max results and physical ledger. No causal improvement or stability claim; stop dependent work on any technical or quality failure."
+  },
   "historicalIntentionToTreat": {
     "decisionRevision": "s10b-paired-hard-gate-v1",
     "failedInvocations": [
@@ -1610,6 +1616,26 @@
       { "attemptId": "candidate:35bfb56a-a16b-4732-874a-8b2e7d2e14b7", "invocationId": "70407421-7e4f-4614-b8f6-b890b2005d2a", "terminal": "settle", "parityId": "46d4fd1700158b1f5904a92d8d5014016fc0c0bbcb0beddc75953f153890743c" },
       { "attemptId": "candidate:6a3a42e7-28c5-4c9a-b675-17ef58a81b41", "invocationId": "70407421-7e4f-4614-b8f6-b890b2005d2a", "terminal": "settle", "parityId": "46d4fd1700158b1f5904a92d8d5014016fc0c0bbcb0beddc75953f153890743c" },
       { "attemptId": "candidate:44726846-b229-4dbc-96d3-568102e62c22", "invocationId": "70407421-7e4f-4614-b8f6-b890b2005d2a", "terminal": "unknown", "parityId": "46d4fd1700158b1f5904a92d8d5014016fc0c0bbcb0beddc75953f153890743c" }
+    ]
+  },
+  "historicalC16D712808cBoundary": {
+    "fromEventCount": 1182,
+    "eventCount": 1194,
+    "rawBytesSha256": "74fa8d5a7f056f2e8b5321dca40f08bc631194add392c03eaeb755033341bf1c",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "cae971a99beb598443e702cb55f2c05ed79c9e66430406ba9c77089afbed1f3a",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "44bcc601ae102cdfaaa315fa26024b2c4e13bc07",
+        "sourceHash": "3b52d46f48c541637da3f324de0f01b45be5e5169301166657dd3687759a4ab4",
+        "driverHash": "3e76921f09cabc04a57d079adebaee35050feafaf0b9b7ec2ccc34f350666e96"
+      }
+    },
+    "reserveAttempts": [
+      { "attemptId": "candidate:1a7f0b73-07e4-475c-8b57-893b701ffe00", "invocationId": "d712808c-5336-4abc-bd7e-cd9d0d061300", "terminal": "settle", "parityId": "698a2a33a6e3f1939063a7ba00be80bb135e88e9df905930fd384dabfb8481c8" },
+      { "attemptId": "candidate:17695e36-da6a-4050-bc62-2bcd7868448c", "invocationId": "d712808c-5336-4abc-bd7e-cd9d0d061300", "terminal": "settle", "parityId": "698a2a33a6e3f1939063a7ba00be80bb135e88e9df905930fd384dabfb8481c8" },
+      { "attemptId": "candidate:b256831c-e48e-4b2e-bbb7-84759b035601", "invocationId": "d712808c-5336-4abc-bd7e-cd9d0d061300", "terminal": "settle", "parityId": "b69ea23383b236853fb899be003679343df61eb1c7151def00386584785ef749" },
+      { "attemptId": "candidate:8ca854ac-09bc-4430-8ebe-7dea43ce89f3", "invocationId": "d712808c-5336-4abc-bd7e-cd9d0d061300", "terminal": "unknown", "parityId": "b69ea23383b236853fb899be003679343df61eb1c7151def00386584785ef749" }
     ]
   }
 }

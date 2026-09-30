@@ -210,7 +210,8 @@ export function validatePhysicalLedger(file) {
   const r1aa5487e = validateHistoricalSupersessionBoundary(raw, r0917fb36, protocol.historicalC161aa5487eBoundary)
   const r9337909d = validateHistoricalSupersessionBoundary(raw, r1aa5487e, protocol.historicalC169337909dBoundary)
   const sharedInput7203443d = validateHistoricalSupersessionBoundary(raw, r9337909d, protocol.historicalSharedInput7203443dBoundary)
-  validateHistoricalSupersessionBoundary(raw, sharedInput7203443d, protocol.historicalC1670407421Boundary)
+  const c1670407421 = validateHistoricalSupersessionBoundary(raw, sharedInput7203443d, protocol.historicalC1670407421Boundary)
+  validateHistoricalSupersessionBoundary(raw, c1670407421, protocol.historicalC16D712808cBoundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -331,16 +332,23 @@ export function selectPhase(protocol, phase, milestone = 'early') {
 export function forwardReasoningFor(protocol, phase, milestone) {
   const registration = protocol.forwardReasoningExperiment
   const zero = protocol.forwardTemperatureExperiment
-  if (zero !== undefined && (!registration || !zero || typeof zero !== 'object'
+  const high = protocol.forwardHighReasoningExperiment
+  if ((zero !== undefined || high !== undefined) && (!registration || !zero || typeof zero !== 'object'
     || hash(registration) !== '2600c33e729b32d5d604645cfa833608f15dce588fea055788ad82f6d3ea6fc0'
     || !isDeepStrictEqual(Object.keys(zero).sort(), ['baseRevision', 'limits', 'revision', 'temperature'])
     || zero.revision !== 'fixed-zero-temperature-max-v1' || zero.baseRevision !== registration.revision
-    || zero.temperature !== 0 || typeof zero.limits !== 'string' || !zero.limits)) fail('FORWARD_TEMPERATURE_REGISTRATION_MISMATCH')
+    || zero.temperature !== 0 || hash(zero) !== '2bce7d852a0fb355e693db1b95812fda70d81eae0472b31bf9b17489e78e71a6')) fail('FORWARD_TEMPERATURE_REGISTRATION_MISMATCH')
+  if (high !== undefined && (!high || hash(high) !== '39d2606076046d2e5307abf9be392abf0a4c4c46dbe9c235851de95016fbbf95'
+    || !isDeepStrictEqual(Object.keys(high).sort(), ['baseRevision', 'limits', 'reasoningOverride', 'revision'])
+    || high.revision !== 'fixed-high-zero-temperature-v1' || high.baseRevision !== zero.revision
+    || high.reasoningOverride !== 'high')) fail('FORWARD_HIGH_REGISTRATION_MISMATCH')
   const scope = registration?.scopes?.find(item => item.phase === phase && item.milestone === milestone)
   if (!scope) return null
   if (!isDeepStrictEqual(scope.caseIds, selectPhase(protocol, phase, milestone).caseIds)) fail('FORWARD_REASONING_SCOPE_MISMATCH')
   if (zero === undefined) return registration
-  return { ...registration, revision: zero.revision, model: { ...registration.model, temperature: zero.temperature }, limits: zero.limits }
+  const effective = { ...registration, revision: zero.revision, model: { ...registration.model, temperature: zero.temperature }, limits: zero.limits }
+  return high === undefined ? effective : { ...effective, revision: high.revision, reasoningOverride: high.reasoningOverride,
+    wire: { ...effective.wire, candidate: { ...effective.wire.candidate, reasoning_effort: high.reasoningOverride } }, limits: high.limits }
 }
 /**
  * 生产桥只是协议的执行者：场景登记的 caseId 与 operation id 必须逐字等于该阶段的
@@ -643,6 +651,11 @@ export function updateLedger(file, event, options = {}) {
       const trustedC1670407421Events = c1670407421Boundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedSharedInput7203443dEvents, c1670407421Boundary)
         : trustedSharedInput7203443dEvents
+      const d712808cBoundary = options.campaignMode === 'real'
+        ? protocol.historicalC16D712808cBoundary : options.historicalC16D712808cBoundary
+      const trustedD712808cEvents = d712808cBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedC1670407421Events, d712808cBoundary)
+        : trustedC1670407421Events
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
       // 未登记 operations 的阶段在这里 fail closed。
@@ -669,7 +682,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedC1670407421Events
+          const superseded = index >= trustedHistoricalEvents && index < trustedD712808cEvents
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)

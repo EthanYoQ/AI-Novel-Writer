@@ -85,18 +85,19 @@ test('shared-input diagnostic registers one candidate and rejects a second physi
 
 test('固定 max 登记只覆盖 C16、post-UI 三 selector 和 final full，原六参数与素材不动', () => {
   const registered = protocol.forwardReasoningExperiment
+  const zeroProtocol = { ...protocol, forwardHighReasoningExperiment: undefined }
   assert.equal(registered.revision, 'fixed-max-natural-wire-asymmetry-v1')
   assert.equal(registered.wireParity, false)
   assert.deepEqual(registered.model, { provider: source.modelParameters.provider, protocol: source.modelParameters.protocol,
     baseUrl: `https://${source.modelParameters.endpointHost}/v1`, modelName: source.modelParameters.modelName,
     temperature: source.modelParameters.temperature, maxTokens: source.modelParameters.maxTokens })
   for (const scope of registered.scopes) {
-    const effective = forwardReasoningFor(protocol, scope.phase, scope.milestone)
+    const effective = forwardReasoningFor(zeroProtocol, scope.phase, scope.milestone)
     assert.equal(effective.revision, 'fixed-zero-temperature-max-v1')
     assert.deepEqual(effective.model, { ...registered.model, temperature: 0 })
     assert.deepEqual(effective.scopes, registered.scopes)
   }
-  assert.equal(forwardReasoningFor(protocol, 'early-budget', 'early'), null)
+  assert.equal(forwardReasoningFor(zeroProtocol, 'early-budget', 'early'), null)
   assert.throws(() => forwardReasoningFor({ ...protocol, forwardReasoningExperiment: { ...registered,
     scopes: [{ ...registered.scopes[0], caseIds: ['C16-A'] }] } }, 'c16-c18', 'final'), /FORWARD_TEMPERATURE_REGISTRATION_MISMATCH/)
 })
@@ -168,34 +169,85 @@ test('70407421 七次物理请求认证六次结算与末次 UNKNOWN，未知请
 
 test('固定零温度只接受继承原 max 范围的唯一登记，旧诊断仍用 0.7', async () => {
   const zero = protocol.forwardTemperatureExperiment
+  const zeroProtocol = { ...protocol, forwardHighReasoningExperiment: undefined }
   assert.deepEqual(Object.keys(zero).sort(), ['baseRevision', 'limits', 'revision', 'temperature'])
   assert.equal(zero.baseRevision, protocol.forwardReasoningExperiment.revision)
   assert.equal(zero.temperature, 0)
-  assert.equal(forwardReasoningFor(protocol, 'shared-input-diagnostic', 'diagnostic'), null)
-  assert.equal(forwardReasoningFor(protocol, 'early-budget', 'early'), null)
+  assert.equal(forwardReasoningFor(zeroProtocol, 'shared-input-diagnostic', 'diagnostic'), null)
+  assert.equal(forwardReasoningFor(zeroProtocol, 'early-budget', 'early'), null)
   for (const base of [undefined, { ...protocol.forwardReasoningExperiment,
     scopes: protocol.forwardReasoningExperiment.scopes.filter(scope => scope.phase !== 'c16-c18') }])
-    assert.throws(() => forwardReasoningFor({ ...protocol, forwardReasoningExperiment: base }, 'c16-c18', 'final'),
+    assert.throws(() => forwardReasoningFor({ ...zeroProtocol, forwardReasoningExperiment: base }, 'c16-c18', 'final'),
       /FORWARD_TEMPERATURE_REGISTRATION_MISMATCH/)
   const { assertForwardReasoning } = await import('../quality-modernization-driver.mjs')
-  const effective = forwardReasoningFor(protocol, 'c16-c18', 'final')
+  const effective = forwardReasoningFor(zeroProtocol, 'c16-c18', 'final')
   const actual = { arm: 'candidate', phase: 'c16-c18', milestone: 'final', caseId: 'C16-A',
     creativeStrategy: 'auto', model: { ...effective.model, reasoningOverride: 'max' } }
   assert.throws(() => assertForwardReasoning(effective, { ...actual,
     model: { ...actual.model, temperature: 0.7 } }), /FORWARD_REASONING_CONFIG_MISMATCH/)
-  const unregistered = forwardReasoningFor({ ...protocol, forwardTemperatureExperiment: undefined }, 'c16-c18', 'final')
+  const unregistered = forwardReasoningFor({ ...zeroProtocol, forwardTemperatureExperiment: undefined }, 'c16-c18', 'final')
   assert.equal(unregistered.model.temperature, 0.7)
   assert.throws(() => assertForwardReasoning(unregistered, { ...actual }), /FORWARD_REASONING_CONFIG_MISMATCH/)
-  const change = value => ({ ...protocol, forwardTemperatureExperiment: { ...zero, ...value } })
+  const change = value => ({ ...zeroProtocol, forwardTemperatureExperiment: { ...zero, ...value } })
   for (const value of [{ baseRevision: 'wrong' }, { temperature: 0.7 }, { extra: true }])
     assert.throws(() => forwardReasoningFor(change(value), 'c16-c18', 'final'), /FORWARD_TEMPERATURE_REGISTRATION_MISMATCH/)
   for (const model of [{ ...protocol.forwardReasoningExperiment.model, modelName: 'changed' },
     { ...protocol.forwardReasoningExperiment.model, temperature: 0 }])
-    assert.throws(() => forwardReasoningFor({ ...protocol, forwardReasoningExperiment: {
+    assert.throws(() => forwardReasoningFor({ ...zeroProtocol, forwardReasoningExperiment: {
       ...protocol.forwardReasoningExperiment, model } }, 'c16-c18', 'final'), /FORWARD_TEMPERATURE_REGISTRATION_MISMATCH/)
+  assert.throws(() => forwardReasoningFor({ ...zeroProtocol, phases: { ...protocol.phases,
+    'c16-c18': { ...protocol.phases['c16-c18'], caseIds: ['C16-A'] } } }, 'c16-c18', 'final'),
+  /FORWARD_REASONING_SCOPE_MISMATCH/)
+})
+
+test('固定 high/零温度只在原五个 scope 生效，并在读回及 wire 前拒绝漂移', async () => {
+  const high = protocol.forwardHighReasoningExperiment
+  assert.deepEqual(Object.keys(high).sort(), ['baseRevision', 'limits', 'reasoningOverride', 'revision'])
+  assert.equal(high.revision, 'fixed-high-zero-temperature-v1')
+  assert.equal(high.baseRevision, protocol.forwardTemperatureExperiment.revision)
+  assert.equal(high.reasoningOverride, 'high')
+  for (const scope of protocol.forwardReasoningExperiment.scopes) {
+    const effective = forwardReasoningFor(protocol, scope.phase, scope.milestone)
+    assert.equal(effective.revision, high.revision)
+    assert.deepEqual(effective.scopes, protocol.forwardReasoningExperiment.scopes)
+    assert.equal(effective.model.temperature, 0)
+    assert.equal(effective.reasoningOverride, 'high')
+    assert.deepEqual(effective.wire, { candidate: { enable_thinking: true, reasoning_effort: 'high' },
+      baseline: { enable_thinking: 'absent', reasoning_effort: 'absent' } })
+  }
+  assert.equal(forwardReasoningFor(protocol, 'early-budget', 'early'), null)
+  assert.equal(forwardReasoningFor(protocol, 'shared-input-diagnostic', 'diagnostic'), null)
+  const change = value => ({ ...protocol, forwardHighReasoningExperiment: { ...high, ...value } })
+  for (const value of [{ baseRevision: 'wrong' }, { reasoningOverride: 'max' }, { extra: true }])
+    assert.throws(() => forwardReasoningFor(change(value), 'c16-c18', 'final'), /FORWARD_HIGH_REGISTRATION_MISMATCH/)
+  assert.throws(() => forwardReasoningFor({ ...protocol, forwardTemperatureExperiment: {
+    ...protocol.forwardTemperatureExperiment, limits: 'changed' } }, 'c16-c18', 'final'),
+  /FORWARD_TEMPERATURE_REGISTRATION_MISMATCH/)
   assert.throws(() => forwardReasoningFor({ ...protocol, phases: { ...protocol.phases,
     'c16-c18': { ...protocol.phases['c16-c18'], caseIds: ['C16-A'] } } }, 'c16-c18', 'final'),
   /FORWARD_REASONING_SCOPE_MISMATCH/)
+  for (const field of ['forwardReasoningExperiment', 'forwardTemperatureExperiment'])
+    assert.throws(() => forwardReasoningFor({ ...protocol, [field]: undefined }, 'c16-c18', 'final'),
+      /FORWARD_(HIGH|TEMPERATURE)_REGISTRATION_MISMATCH/)
+  const { assertForwardReasoning } = await import('../quality-modernization-driver.mjs')
+  const effective = forwardReasoningFor(protocol, 'c16-c18', 'final')
+  const common = { arm: 'candidate', phase: 'c16-c18', milestone: 'final', caseId: 'C16-A',
+    model: { ...effective.model, reasoningOverride: 'high' }, creativeStrategy: 'auto',
+    resolution: { requested: 'high', effective: 'high', status: 'mapped', source: 'model-override' } }
+  const body = { enable_thinking: true, reasoning_effort: 'high', max_tokens: 2672, temperature: 0 }
+  assert.deepEqual(assertForwardReasoning(effective, { ...common, body }), { requested: 'high', effective: 'high',
+    status: 'mapped', source: 'model-override', wire: { enable_thinking: { present: true, value: true },
+      reasoning_effort: { present: true, value: 'high' }, thinking_budget: { present: false } } })
+  assert.equal(assertForwardReasoning(effective, { ...common, arm: 'baseline', resolution: null,
+    body: { max_tokens: 2672, temperature: 0 } }).wire.reasoning_effort.present, false)
+  for (const mutation of [{ body: { ...body, reasoning_effort: 'max' } },
+    { body: { ...body, thinking_budget: 1 } }, { model: { ...common.model, temperature: 0.7 } },
+    { resolution: { ...common.resolution, effective: 'max' } }])
+    assert.throws(() => assertForwardReasoning(effective, { ...common, body, ...mutation }),
+      /FORWARD_REASONING_(WIRE|CONFIG|RESOLUTION)_MISMATCH/)
+  const unregistered = forwardReasoningFor({ ...protocol, forwardHighReasoningExperiment: undefined }, 'c16-c18', 'final')
+  assert.equal(unregistered.reasoningOverride, 'max')
+  assert.throws(() => assertForwardReasoning(unregistered, { ...common, body }), /FORWARD_REASONING_CONFIG_MISMATCH/)
 })
 
 test('固定 max 前瞻：配置读回与每次出站严格区分 candidate wire 和 baseline 真缺席', async () => {
@@ -1368,7 +1420,7 @@ test('C16–C18 ca466d9a/73b46513 段（第580–648行）按同一规则分两�
   // 新协议字节 hash 与被取代的 a0a14777 不同，runner 读写两入口都按链末端取历史范围。
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
   assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, ca466d9a, protocol\.historicalC1673b46513Boundary\)/)
-  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedC1670407421Events/)
+  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedD712808cEvents/)
 })
 
 test('新登记续写直接首稿，旧对账可读但当前实验拒绝额外发送', () => {
@@ -3235,7 +3287,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     'historicalC16Ee3435ecBoundary', 'historicalC16Ccc70b31Boundary', 'historicalC16C9b88510Boundary', 'historicalC16D8a30c11Boundary',
     'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary', 'historicalC16B42cfc55Boundary',
     'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
-    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary']
+    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -3311,6 +3363,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1122, real.boundaries.historicalC169337909dBoundary), 1158)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1158, real.boundaries.historicalSharedInput7203443dBoundary), 1161)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1161, real.boundaries.historicalC1670407421Boundary), 1182)
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1182, real.boundaries.historicalC16D712808cBoundary), 1194)
     assert.equal(validatePhysicalLedger(ledger), ledger)
     fs.writeFileSync(file, synthetic.raw)
     const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
@@ -3325,6 +3378,20 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
       /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
     fs.writeFileSync(ledger, real.raw)
     fs.writeFileSync(file, synthetic.raw)
+    const changed1194 = raw => raw.replace('"type":"unknown","attemptId":"candidate:8ca854ac-09bc-4430-8ebe-7dea43ce89f3"',
+      '"type":"settle","attemptId":"candidate:8ca854ac-09bc-4430-8ebe-7dea43ce89f3"')
+    fs.writeFileSync(ledger, changed1194(real.raw))
+    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    fs.writeFileSync(file, changed1194(synthetic.raw))
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    fs.writeFileSync(ledger, real.raw)
+    fs.writeFileSync(file, synthetic.raw)
+    const d712 = real.boundaries.historicalC16D712808cBoundary
+    for (const field of ['codeSha', 'sourceHash', 'driverHash'])
+      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1182, { ...d712,
+        armBindings: { candidate: { ...d712.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
+      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
     const ac3 = real.boundaries.historicalC16Ac3af420Boundary
     const a955 = real.boundaries.historicalC16A9552e67Boundary
     const r63 = real.boundaries.historicalC1663a44636Boundary

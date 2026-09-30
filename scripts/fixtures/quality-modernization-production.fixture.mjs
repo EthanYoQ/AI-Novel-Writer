@@ -216,7 +216,8 @@ test('isolated production commands persist the selected phase operations', async
     request.phase, request.milestone)
   assert.deepEqual(request.forwardReasoning ?? null, registeredForward, 'FORWARD_REGISTRATION_MISMATCH')
   const effectiveModelParameters = { ...source.modelParameters,
-    ...(registeredForward?.revision === 'fixed-zero-temperature-max-v1' ? { temperature: registeredForward.model.temperature } : {}) }
+    ...(['fixed-zero-temperature-max-v1', 'fixed-high-zero-temperature-v1'].includes(registeredForward?.revision)
+      ? { temperature: registeredForward.model.temperature } : {}) }
   const continuityCase = continuityRun ? source.continuityQualificationCases.find(item => item.id === request.caseId) : null
   if (continuityRun) assert.ok(continuityCase && continuityCase.sceneId === request.sceneId
     && continuityCase.chapterNumber === request.chapterNumber, 'CONTINUITY_CASE_NOT_REGISTERED')
