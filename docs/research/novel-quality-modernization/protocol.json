@@ -1119,5 +1119,117 @@
     "commandDriver": "early selectors and full use the production command/registered IPC/physical project bridge; synthetic results are not literary qualification; C16/C17/C18 allocations retain their separate obligations"
   },
   "fixturePath": "test/fixtures/novel-quality-modernization/semantic-source.json",
-  "plannedCallAllocation": 80
+  "plannedCallAllocation": 80,
+  "historicalC1663a44636Boundary": {
+    "fromEventCount": 957,
+    "eventCount": 1005,
+    "rawBytesSha256": "566dd2547eb812991fe559caf9c0d72b00f5e224f1e049a083f2411db5866523",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "311bd2e993ea5c2548a1d7677e9384715e13c3d6f5702d8291247bc861ac8196",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "613a55cdd9c74730dd29a1af6ca100d6547dea7e",
+        "sourceHash": "a6288dfbb06bfffb6cfdb7d489c4236318a3f59160d6beb17b4e4d37fadb71d4",
+        "driverHash": "e0f2a516b06f5ce3530f4b353c3012023d41007d231ff3125619ab04d33cee9e"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:2cb21f48-ae81-454e-b877-02001b6828e5",
+        "invocationId": "63a44636-aa79-441d-9236-6af956c0647e",
+        "terminal": "settle",
+        "parityId": "260572cb3eb47e6527d6427a93e53df0514d144a6c2d0304bed9473447335b3d"
+      },
+      {
+        "attemptId": "candidate:4e46c987-3404-4ffa-93e3-32a236b41834",
+        "invocationId": "63a44636-aa79-441d-9236-6af956c0647e",
+        "terminal": "settle",
+        "parityId": "260572cb3eb47e6527d6427a93e53df0514d144a6c2d0304bed9473447335b3d"
+      },
+      {
+        "attemptId": "candidate:e7f15892-b0b4-456a-b02f-7d373cec5ee9",
+        "invocationId": "63a44636-aa79-441d-9236-6af956c0647e",
+        "terminal": "settle",
+        "parityId": "4e03f7dd058c6cb03001c96c702720e227ffab4433015989972b7b4c2a9a6de4"
+      },
+      {
+        "attemptId": "candidate:1289169c-c71b-4066-864a-7b24527e0b1e",
+        "invocationId": "63a44636-aa79-441d-9236-6af956c0647e",
+        "terminal": "settle",
+        "parityId": "4e03f7dd058c6cb03001c96c702720e227ffab4433015989972b7b4c2a9a6de4"
+      },
+      {
+        "attemptId": "candidate:f454403d-3f1b-4ba9-a499-394a71280ef7",
+        "invocationId": "63a44636-aa79-441d-9236-6af956c0647e",
+        "terminal": "settle",
+        "parityId": "718f3683650b8bbb63b3fab01964e53d9729d389ee807f31d4a9d52667be8c3c"
+      },
+      {
+        "attemptId": "candidate:aedc0235-ec56-468b-839f-82b1e7d625db",
+        "invocationId": "63a44636-aa79-441d-9236-6af956c0647e",
+        "terminal": "settle",
+        "parityId": "718f3683650b8bbb63b3fab01964e53d9729d389ee807f31d4a9d52667be8c3c"
+      },
+      {
+        "attemptId": "candidate:a474ae6f-1269-40cf-9083-a4ceda679f7d",
+        "invocationId": "63a44636-aa79-441d-9236-6af956c0647e",
+        "terminal": "settle",
+        "parityId": "718f3683650b8bbb63b3fab01964e53d9729d389ee807f31d4a9d52667be8c3c"
+      },
+      {
+        "attemptId": "candidate:99fdfca1-7cfe-4fd0-82f9-441c039dab03",
+        "invocationId": "63a44636-aa79-441d-9236-6af956c0647e",
+        "terminal": "settle",
+        "parityId": "718f3683650b8bbb63b3fab01964e53d9729d389ee807f31d4a9d52667be8c3c"
+      },
+      {
+        "attemptId": "candidate:aa83c934-20d7-4f44-ac53-1f14bf3c2d61",
+        "invocationId": "63a44636-aa79-441d-9236-6af956c0647e",
+        "terminal": "settle",
+        "parityId": "a3a37941bdf1e593e41edb045ef7c87ce1bd40330f13b21d2104fc01b51b0e17"
+      },
+      {
+        "attemptId": "candidate:98fa22c2-d940-4d02-b8fe-fa35e438236c",
+        "invocationId": "63a44636-aa79-441d-9236-6af956c0647e",
+        "terminal": "settle",
+        "parityId": "a3a37941bdf1e593e41edb045ef7c87ce1bd40330f13b21d2104fc01b51b0e17"
+      },
+      {
+        "attemptId": "candidate:16835294-1148-4587-b760-31f27b195056",
+        "invocationId": "63a44636-aa79-441d-9236-6af956c0647e",
+        "terminal": "settle",
+        "parityId": "a3a37941bdf1e593e41edb045ef7c87ce1bd40330f13b21d2104fc01b51b0e17"
+      },
+      {
+        "attemptId": "candidate:e1aab91d-4b13-48d1-8399-3fbb6b799b09",
+        "invocationId": "63a44636-aa79-441d-9236-6af956c0647e",
+        "terminal": "settle",
+        "parityId": "a3a37941bdf1e593e41edb045ef7c87ce1bd40330f13b21d2104fc01b51b0e17"
+      },
+      {
+        "attemptId": "candidate:78058908-ffef-4ff3-863c-9835254cb2fd",
+        "invocationId": "63a44636-aa79-441d-9236-6af956c0647e",
+        "terminal": "settle",
+        "parityId": "718f3683650b8bbb63b3fab01964e53d9729d389ee807f31d4a9d52667be8c3c"
+      },
+      {
+        "attemptId": "candidate:74dc17e8-f2e6-4624-bcaf-fcea182229f9",
+        "invocationId": "63a44636-aa79-441d-9236-6af956c0647e",
+        "terminal": "settle",
+        "parityId": "718f3683650b8bbb63b3fab01964e53d9729d389ee807f31d4a9d52667be8c3c"
+      },
+      {
+        "attemptId": "candidate:466eb175-c3e6-4c1e-8a6b-6252f0277e3f",
+        "invocationId": "63a44636-aa79-441d-9236-6af956c0647e",
+        "terminal": "settle",
+        "parityId": "718f3683650b8bbb63b3fab01964e53d9729d389ee807f31d4a9d52667be8c3c"
+      },
+      {
+        "attemptId": "candidate:276b42ef-ceeb-4e4c-be91-ae4da34ddc7e",
+        "invocationId": "63a44636-aa79-441d-9236-6af956c0647e",
+        "terminal": "settle",
+        "parityId": "718f3683650b8bbb63b3fab01964e53d9729d389ee807f31d4a9d52667be8c3c"
+      }
+    ]
+  }
 }
