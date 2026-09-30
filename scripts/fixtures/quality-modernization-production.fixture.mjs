@@ -11,7 +11,8 @@ import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, 
   createOutboundPreflightAssert, assertForwardReasoning, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
   fetchProviderResponse, measurePromptBytes, BRIDGE_SETTLEMENT_DEADLINE_MS,
   BRIDGE_TEST_TIMEOUT_MS, BRIDGE_REVIEWED_TEST_TIMEOUT_MS, POST_UI_REVIEW_POLICY, reviewedDraftSelection,
-  scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder } from '../quality-modernization-driver.mjs'
+  scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder,
+  assertSharedInputDiagnostic } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, recordPersistedDraftObservation, safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
 
 // This adapter replaces the Electron transport, never a command/runtime/repository.
@@ -200,6 +201,8 @@ test('isolated production commands persist the selected phase operations', async
   const request = JSON.parse(requestBytes)
   const target = request.target
   const fullRun = request.phase === 'full'
+  const diagnosticRun = request.phase === 'shared-input-diagnostic'
+  if (diagnosticRun) assert.equal(target.arm, 'candidate', 'SHARED_INPUT_DIAGNOSTIC_CANDIDATE_REQUIRED')
   const reviewedRun = Boolean(request.evaluationPolicy)
   if (reviewedRun) {
     assert.equal(request.phase, 'early-budget', 'REVIEWED_DRAFT_SCOPE_INVALID')
@@ -242,7 +245,7 @@ test('isolated production commands persist the selected phase operations', async
   const receipt = { schemaVersion: 1, invocationId: request.invocationId, arm: target.arm, mode: request.mode, action: request.action,
     protocolRevision: request.protocolRevision, protocolHash: request.protocolHash,
     phase: request.phase, milestone: request.milestone, caseId: request.caseId, sceneId: request.sceneId, chapterNumber: request.chapterNumber,
-    operations: [], qualification: request.development ? 'development-only-unfrozen' : 'frozen-target', codeSha: target.codeSha,
+    operations: [], qualification: diagnosticRun ? 'non-qualification-diagnostic' : request.development ? 'development-only-unfrozen' : 'frozen-target', codeSha: target.codeSha,
     sourceHash: target.sourceHash, driverHash: request.driverHash,
     ...(reviewedRun ? { evaluationPolicy: request.evaluationPolicy } : {}),
     runtime: { node: process.version, abi: process.versions.modules }, physicalModelRequests: 0, syntheticDispatches: 0,
@@ -332,7 +335,7 @@ test('isolated production commands persist the selected phase operations', async
     let model = { id: 'quality-preregistered-model', name: '预注册合成验证模型', ...source.modelParameters,
       apiKey: 'synthetic-quality-never-network', baseUrl: `https://${source.modelParameters.endpointHost}/v1`, purposes: ['generation'] }
     delete model.parameterStatus
-    if (request.forwardReasoning) model.reasoningOverride = request.forwardReasoning.reasoningOverride
+    if (request.forwardReasoning || diagnosticRun) model.reasoningOverride = diagnosticRun ? 'max' : request.forwardReasoning.reasoningOverride
     if (request.mode === 'real') {
       if (request.development || !target.modelId) throw new Error('FROZEN_SAFE_MODEL_REQUIRED')
       model = json(path.join(target.roots.config, 'models.json')).find(value => value.id === target.modelId)
@@ -391,7 +394,7 @@ test('isolated production commands persist the selected phase operations', async
     const templateKeys = [...templateKeysForPhase(request.phase), ...(reviewedRun ? ['consistency_check', 'refine_from_review'] : [])]
     if (request.action === 'prepare') {
       let templates
-      if (!candidate || continuityRun) {
+      if (!candidate || continuityRun || diagnosticRun) {
         templates = templateKeys.map(key => structuredClone(prompts.getPromptTemplate(key)))
         assert.ok(templates.every(template => template?.content && template.key))
         save(request.templatesPath, { baselineSha: target.codeSha, templates })
@@ -764,7 +767,7 @@ test('isolated production commands persist the selected phase operations', async
         actual = selectOwnerDispatch(db, currentContext.mainGenerationRunHandle, session, body)
         const run = db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').get(actual.runId)
         materialDecision = JSON.parse(run.binding_json).sourceManifest?.materialDecision ?? null
-        if (!['directory', 'chapter_notes', 'character_cards'].includes(operationKind)) preflight(materialDecision, 'MATERIAL_DECISION_RECEIPT_MISSING')
+        if (!['directory', 'chapter_notes', 'character_cards', 'diagnostic'].includes(operationKind)) preflight(materialDecision, 'MATERIAL_DECISION_RECEIPT_MISSING')
       }
       const observedIpc = candidate ? null : pendingBaselineIpc
       pendingBaselineIpc = null
@@ -788,7 +791,9 @@ test('isolated production commands persist the selected phase operations', async
       // The registered extra call must carry its real product purpose before campaign reserve.
       const draft = reviewedRun && operationKind === 'review' ? latestDraft() : null
       const reviewSource = draft ? { draftId: draft.id, contentHash: sha(draft.content) } : undefined
+      if (!diagnosticRun) {
       beforeOperationDispatch(operationId, actual ?? observedIpc, reviewSource)
+      }
       const structuredSyntaxRepair = repairPolicy?.operationId === operationId
         && repairPolicy.maxRepairAttempts === 1
         && (actual ?? observedIpc).purpose === repairPolicy.repairPurpose
@@ -797,6 +802,21 @@ test('isolated production commands persist the selected phase operations', async
         .map(message => message.content).join('\n')
       const userMessages = body.messages.filter(message => message?.role === 'user' && typeof message.content === 'string')
       const userPromptHash = userMessages.length === 1 ? sha(userMessages[0].content) : null
+      if (diagnosticRun) {
+        const registered = json(path.join(target.repositoryRoot, 'docs/research/novel-quality-modernization/protocol.json')).phases['shared-input-diagnostic']
+        const input = json(request.diagnosticInputPath)
+        const reserved = fs.existsSync(request.ledgerPath) ? fs.readFileSync(request.ledgerPath, 'utf8').split('\n').filter(Boolean)
+          .map(line => JSON.parse(line)).filter(row => row.type === 'reserve' && row.binding?.phase === request.phase).length : 0
+        receipt.diagnosticPreflightShape = { modelNameMatches: body.model === registered.model.modelName,
+          configMatches: Object.entries(registered.model).filter(([key]) => key !== 'creativeStrategy').every(([key, value]) => actualModel[key] === value),
+          configMismatchKeys: Object.entries(registered.model).filter(([key, value]) => key !== 'creativeStrategy' && actualModel[key] !== value).map(([key]) => key),
+          messageHash: sha(body.messages), outputTokens: body.max_tokens, temperature: body.temperature,
+          enableThinking: body.enable_thinking, reasoningEffort: body.reasoning_effort,
+          stream: body.stream, usageStream: body.stream_options?.include_usage, hasThinkingBudget: Object.hasOwn(body, 'thinking_budget') }
+        try { assertSharedInputDiagnostic(registered, input, { arm: target.arm, model: { ...actualModel, creativeStrategy: actualCreativeStrategy }, body, reserved }) }
+        catch (error) { preflight(false, error.message) }
+        preflight(actual.purpose === 'shared-input-fact-extraction', 'SHARED_INPUT_DIAGNOSTIC_PURPOSE_MISMATCH')
+      }
       if (continuityRun && operationKind === 'draft') {
         preflight(actual.projectId === receipt.restoration.targetProjectId
           && materialDecision?.included.some(item => item.sourceId === `finalized:${predecessorReadbacks.find(record => record.required).draftId}`),
@@ -840,6 +860,7 @@ test('isolated production commands persist the selected phase operations', async
           && promptText.includes(finalizedContext.identity.content), 'FINALIZATION_FROZEN_SOURCE_MISMATCH')
         preflight(JSON.stringify(body.messages.slice(0, task.messages.length)) === JSON.stringify(task.messages), 'FINALIZATION_FROZEN_TASK_MISMATCH')
       } else if (!structuredSyntaxRepair) {
+        if (request.phase !== 'shared-input-diagnostic') {
         for (const fact of authorityFacts)
           preflight(promptText.includes(fact), `OUTBOUND_ORACLE_AUTHORITY_MISSING:${fact}`)
         if (request.chapterNumber > 1) {
@@ -847,6 +868,7 @@ test('isolated production commands persist the selected phase operations', async
           const predecessorEvidence = fullRun ? previousChapterEnding(requiredPredecessor?.content ?? '')
             : naturalPredecessorText(scene).split('\n\n', 1)[0]
           preflight(requiredPredecessor && promptText.includes(predecessorEvidence), 'OUTBOUND_REQUIRED_PREDECESSOR_MISSING')
+        }
         }
       }
       if (candidate && fullRun && request.chapterNumber > 1) {
@@ -882,7 +904,8 @@ test('isolated production commands persist the selected phase operations', async
         protocolRevision: request.protocolRevision, protocolHash: request.protocolHash,
         codeSha: target.codeSha, sourceHash: target.sourceHash, driverHash: request.driverHash,
         parityId: request.parityHash, phase: request.phase, milestone: request.milestone, caseId: request.caseId,
-        operation: operationId, ...(reviewSource ? { reviewSource } : {}),
+        operation: operationId, ...(diagnosticRun ? { messagesSha256: request.diagnosticMessagesSha256,
+          originalMessagesSha256: request.diagnosticOriginalMessagesSha256 } : {}), ...(reviewSource ? { reviewSource } : {}),
         ...(actual ? { actual } : { baselineIpc: observedIpc }) }
       record({ type: 'reserve', attemptId, binding })
       record({ type: 'dispatch', attemptId })
@@ -930,7 +953,8 @@ test('isolated production commands persist the selected phase operations', async
         if (request.mode === 'synthetic') receipt.syntheticDispatches++
         else receipt.physicalModelRequests++
         let text, syntheticFinish = 'stop'
-        if (operationKind === 'directory') text =JSON.stringify({ blueprints: (fullRun ? scene.chapters : [chapter]).filter(entry => !(actual ?? observedIpc).structuredRange || (actual ?? observedIpc).structuredRange.includes(entry.number)).map(entry => ({ chapterNumber: entry.number, title: scene.title, role: '开篇',
+        if (diagnosticRun) text = '| 事实原文引文 | 时间单位 | 属于前章或本章 | 已经发生或尚未发生 | 本章要求新增的事件 |\n| --- | --- | --- | --- | --- |\n| 未明示 | 未明示 | 未明示 | 未明示 | 未明示 |'
+        else if (operationKind === 'directory') text =JSON.stringify({ blueprints: (fullRun ? scene.chapters : [chapter]).filter(entry => !(actual ?? observedIpc).structuredRange || (actual ?? observedIpc).structuredRange.includes(entry.number)).map(entry => ({ chapterNumber: entry.number, title: scene.title, role: '开篇',
           purpose: entry.brief, keyEvents: entry.requiredEvents.join('；'), characters: scene.characters,
           relationships: [], suspenseHook: entry.oracle?.knowledge ?? '', userGuidance: fullRun ? `${source.template}\n本章时点：${entry.oracle.time}` : source.template })) })
         else if (operationKind === 'chapter_notes') text = finalizedContext.identity.content
@@ -1063,6 +1087,37 @@ test('isolated production commands persist the selected phase operations', async
       } catch (error) { supervisor.terminal(attemptId, 'unknown'); throw error }
     }
     globalThis.fetch = physicalFetch
+    if (diagnosticRun) {
+      operationKind = 'diagnostic'; operationId = 'fact-extraction'
+      currentContext = { runId: randomUUID(), projectPath: project.rootPath, projectSession: session,
+        mainGenerationRunHandle: null }
+      const input = json(request.diagnosticInputPath)
+      const begun = await invoke('generation:begin', { operation: 'shared-input-fact-extraction', uiActionNonce: randomUUID(),
+        modelId: model.id, selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['next_chapter_draft'],
+        skillStages: [], output: 'visible-text' }, session)
+      currentContext.mainGenerationRunHandle = begun.handle
+      const executed = await invoke('generation:execute', { handle: begun.handle, invocationNonce: randomUUID(),
+        task: { purpose: 'shared-input-fact-extraction', output: 'visible-text', messages: input.messages,
+          reasoningStage: 'general', budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 900,
+            segmentable: false } } }, session)
+      await Promise.all(streamSettlements)
+      assert.equal(receipt.attempts.length, 1, 'SHARED_INPUT_DIAGNOSTIC_ONE_ATTEMPT_REQUIRED')
+      const attempt = receipt.attempts[0]
+      const output = executed.outcome?.content
+      assert.equal(typeof output, 'string', 'SHARED_INPUT_DIAGNOSTIC_OUTPUT_MISSING')
+      const outputPath = path.join(evidenceRoot, 'diagnostic-output.txt')
+      fs.writeFileSync(outputPath, output)
+      receipt.operations.push({ operation: operationId, kind: operationKind, outputPath, outputHash: sha(output),
+        handle: begun.handle })
+      receipt.ownerTerminal = { attemptId: attempt.binding.actual.attemptId, outcome: executed.outcome.status,
+        finishReason: executed.outcome.finishReason, outputHash: sha(output) }
+      assert.equal(attempt.visibleTextHash, sha(output), 'SHARED_INPUT_DIAGNOSTIC_OWNER_OUTPUT_MISMATCH')
+      assert.deepEqual(fs.readFileSync(request.ledgerPath, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line))
+        .filter(row => row.attemptId === attempt.attemptId).map(row => row.type), ['reserve', 'dispatch', 'settle'])
+      assertNoOutboundPreflightFailures(receipt)
+      receipt.status = 'passed'
+      return
+    }
     const callbacks = { log(text) { (receipt.diagnostics ??= []).push(safeDiagnostic(text)) }, setProgress() {}, appendText() {}, onChunk() {} }
     const latestDraft = () => db.prepare(`SELECT d.id,d.chapter_number AS chapterNumber,d.version,d.status,d.word_count AS wordCount,c.body AS content
       FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1`).get(chapter.number)

@@ -34,6 +34,55 @@ const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel
 const semanticPath = path.join(ROOT, protocol.fixturePath)
 const protocolBinding = currentProtocolBinding()
 
+test('shared-input diagnostic registers one candidate and rejects a second physical slot', async () => {
+  const phase = 'shared-input-diagnostic'
+  const registration = protocol.phases[phase]
+  const selected = selectPhase({ ...protocol, phases: { ...protocol.phases, [phase]: registration } }, phase, 'diagnostic')
+  assert.deepEqual(selected.caseIds, ['C17-C18-shared'])
+  const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', codeSha: 'a'.repeat(40),
+    sourceHash: 'a'.repeat(64), driverHash: 'b'.repeat(64), parityId: 'c'.repeat(64), milestone: 'diagnostic', phase,
+    caseId: selected.caseIds[0], operation: selected.operations[0].id,
+    messagesSha256: registration.messagesSha256, originalMessagesSha256: registration.originalMessagesSha256, ...protocolBinding,
+    actual: { attemptId: 'fresh', runId: 'fresh-run', rootActionId: 'fresh-root', projectId: 'fresh-project', epoch: 'fresh-epoch' } }
+  assert.doesNotThrow(() => validateCampaignBinding(binding, { campaignMode: 'synthetic', protocol: { ...protocol, phases: { ...protocol.phases, [phase]: registration } } }))
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/shared-input-ledger-test-'))
+  const ledger = path.join(directory, 'synthetic-ledger.jsonl')
+  try {
+    updateLedger(ledger, { type: 'reserve', attemptId: 'candidate:first', binding }, { campaignMode: 'synthetic' })
+    updateLedger(ledger, { type: 'dispatch', attemptId: 'candidate:first' }, { campaignMode: 'synthetic' })
+    updateLedger(ledger, { type: 'settle', attemptId: 'candidate:first' }, { campaignMode: 'synthetic' })
+    assert.throws(() => updateLedger(ledger, { type: 'reserve', attemptId: 'candidate:second',
+      binding: { ...binding, actual: { ...binding.actual, attemptId: 'second' } } }, { campaignMode: 'synthetic' }),
+    /SHARED_INPUT_DIAGNOSTIC_ALREADY_DISPATCHED/)
+    assert.deepEqual(fs.readFileSync(ledger, 'utf8').trimEnd().split('\n').map(line => JSON.parse(line).type), ['reserve', 'dispatch', 'settle'])
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+  const { assertSharedInputDiagnostic } = await import('../quality-modernization-driver.mjs')
+  const originalMessages = [{ role: 'system', content: 'original system' }, { role: 'user', content: 'original user' }]
+  const prefix = '【原始系统消息原文开始】\noriginal system\n【原始系统消息原文结束】\n【原始用户消息原文开始】\n'
+  const suffix = '\n【原始用户消息原文结束】\n【当前唯一输出任务】\n五列表格'
+  const messages = [{ role: 'system', content: '仅提取事实' }, { role: 'user', content: prefix + originalMessages[1].content + suffix }]
+  const input = { diagnosticId: 'shared-input-fact-extraction-9337909d-v1', originalMessages,
+    originalMessagesSha256: hash(originalMessages), messages, messagesSha256: hash(messages),
+    originalUserWrapper: { prefix, suffix }, materials: registration.materials,
+    originalInvocationId: registration.originalInvocationId, originalTestedSha: registration.originalTestedSha,
+    originalCaseIds: registration.originalCaseIds }
+  const registered = { ...registration, originalMessagesSha256: input.originalMessagesSha256, messagesSha256: input.messagesSha256 }
+  assert.equal(messages[1].content.split(originalMessages[0].content).length, 2)
+  assert.equal(messages[1].content.split(originalMessages[1].content).length, 2)
+  assert.notEqual(input.messagesSha256, input.originalMessagesSha256)
+  const expected = { ...registration.model }
+  const body = { model: expected.modelName, messages: input.messages, temperature: 0.7, max_tokens: 2672,
+    enable_thinking: true, reasoning_effort: 'max', stream: true, stream_options: { include_usage: true } }
+  assert.doesNotThrow(() => assertSharedInputDiagnostic(registered, input, { arm: 'candidate', model: expected, body, reserved: 0 }))
+  for (const change of [
+    { arm: 'baseline' }, { model: { ...expected, temperature: 0 } },
+    { body: { ...body, max_tokens: 2673 } }, { body: { ...body, messages: [{ ...input.messages[0], content: 'changed' }, input.messages[1]] } },
+    { reserved: 1 },
+  ]) assert.throws(() => assertSharedInputDiagnostic(registered, input, { arm: 'candidate', model: expected, body, reserved: 0, ...change }), /SHARED_INPUT_DIAGNOSTIC_/)
+  assert.throws(() => assertSharedInputDiagnostic(registered, { ...input, originalUserWrapper: { prefix: '', suffix: '' } },
+    { arm: 'candidate', model: expected, body, reserved: 0 }), /SHARED_INPUT_DIAGNOSTIC_INPUT_MISMATCH/)
+})
+
 test('固定 max 登记只覆盖 C16、post-UI 三 selector 和 final full，原六参数与素材不动', () => {
   const registered = protocol.forwardReasoningExperiment
   assert.equal(registered.revision, 'fixed-max-natural-wire-asymmetry-v1')
@@ -2816,6 +2865,9 @@ test('真实隔离配置只复制指定生成模型，不继承默认 embedding 
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(isolated, 'models.json'), 'utf8')), [profiles[0]])
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(isolated, 'config.json'), 'utf8')), { locale: 'zh-CN' })
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(source, 'config.json'), 'utf8')), sourceConfig)
+    fs.writeFileSync(path.join(source, 'models.json'), JSON.stringify(profiles[0]))
+    copyIsolatedRealModelConfig({ roots: { config: source }, modelId: 'approved' }, { config: isolated })
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(isolated, 'models.json'), 'utf8')), [profiles[0]])
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 test('冻结执行验证拒绝adapter、Node版本/ABI、依赖、启动参数、native旁证篡改', { timeout: 20_000 }, () => {

@@ -2,12 +2,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { Buffer } from 'node:buffer'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import os from 'node:os'
-import { runProductionCommandProbe, runProductionPhasePair, productionBridgeHash, productionExecutionRuntime, productionScenario, PRODUCTION_BRIDGE, PHASE_SCENARIOS } from './quality-modernization-driver.mjs'
+import { runProductionCommandProbe, runProductionPhasePair, runProductionBridge, copyIsolatedRealModelConfig,
+  assertSharedInputDiagnostic, productionBridgeHash, productionExecutionRuntime, productionScenario, PRODUCTION_BRIDGE, PHASE_SCENARIOS } from './quality-modernization-driver.mjs'
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CACHE = path.join(ROOT, '.runtime', '.cache', 'novel-quality-modernization')
@@ -114,7 +115,7 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
   if (!binding || binding.campaignId !== CAMPAIGN_ID || binding.mode !== campaignMode
     || !['baseline', 'candidate'].includes(binding.arm) || !/^[a-f0-9]{40}$/.test(binding.codeSha)
     || ['sourceHash', 'driverHash', 'parityId'].some(key => !/^[a-f0-9]{64}$/.test(binding[key]))
-    || !['early', 'post-ui', 'final'].includes(binding.milestone)) fail('INVALID_CAMPAIGN_BINDING')
+    || !['early', 'post-ui', 'final', 'diagnostic'].includes(binding.milestone)) fail('INVALID_CAMPAIGN_BINDING')
   // The frozen prefix is authenticated byte-for-byte by its boundary hash. Its old
   // protocol selection and allocation are historical evidence, not input to the
   // current revision, so only the stable envelope is rechecked here.
@@ -127,6 +128,10 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
     || !phase.caseIds.includes(binding.caseId)
     || !phase.operations.some(operation => operation.id === binding.operation && (!operation.caseIds || operation.caseIds.includes(binding.caseId)))) fail('INVALID_CAMPAIGN_BINDING')
   if ((['full', 'c16-c18'].includes(binding.phase)) !== (binding.milestone === 'final')
+    || (binding.phase === 'shared-input-diagnostic') !== (binding.milestone === 'diagnostic')
+    || binding.phase === 'shared-input-diagnostic' && (binding.arm !== 'candidate'
+      || phase.nonQualification !== true || phase.maxPhysicalRequests !== 1
+      || binding.messagesSha256 !== phase.messagesSha256 || binding.originalMessagesSha256 !== phase.originalMessagesSha256)
     || phase.arms && !phase.arms.includes(binding.arm)
     || binding.phase === 'full' && !phase.operations.some(operation => operation.id === binding.operation
       && (operation.kind !== 'directory' || binding.caseId.endsWith('/1')))) fail('INVALID_CAMPAIGN_BINDING')
@@ -314,9 +319,10 @@ export function withLedgerReconciliation(ledgerPath, campaignMode, run) {
 }
 
 export function selectPhase(protocol, phase, milestone = 'early') {
-  if (!['early', 'post-ui', 'final'].includes(milestone)) fail('INVALID_MILESTONE')
+  if (!['early', 'post-ui', 'final', 'diagnostic'].includes(milestone)) fail('INVALID_MILESTONE')
   if (!Object.hasOwn(protocol.phases, phase)) fail('INVALID_PHASE')
-  if ((['full', 'c16-c18'].includes(phase)) !== (milestone === 'final')) fail('PHASE_MILESTONE_MISMATCH')
+  if ((['full', 'c16-c18'].includes(phase)) !== (milestone === 'final')
+    || (phase === 'shared-input-diagnostic') !== (milestone === 'diagnostic')) fail('PHASE_MILESTONE_MISMATCH')
   return { phase, milestone, ...protocol.phases[phase],
     ...(milestone === 'post-ui' ? protocol.phases[phase].postUi ?? {} : {}) }
 }
@@ -626,6 +632,10 @@ export function updateLedger(file, event, options = {}) {
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
       const allocationFor = binding => {
         const occupied = [...reserved.values()].filter(row => statuses.get(row.attemptId) !== 'cancel')
+        if (binding.phase === 'shared-input-diagnostic') {
+          if (occupied.some(row => row.binding.phase === binding.phase)) fail('SHARED_INPUT_DIAGNOSTIC_ALREADY_DISPATCHED')
+          return 'nonQualificationDiagnostic'
+        }
         const slot = value => `${value.milestone}:${value.phase}:${value.caseId}:${value.arm}:${value.operation}`
         const suffix = { 'early-budget': 'Budget', 'early-context': 'Context', 'early-review': 'Review' }[binding.phase]
         if (!suffix && !['full', 'c16-c18'].includes(binding.phase)) fail('INVALID_CAMPAIGN_BINDING')
@@ -670,18 +680,68 @@ export const developmentLedgerPath = (root, phase) => path.join(CACHE, `syntheti
 
 export function main(argv) {
   let [command = 'help', ...rest] = argv
-  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <freeze-targets|development-synthetic|baseline-probe|dry-run|early-budget|early-context|early-review|full|c16-c18> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>]; freeze-targets/development-synthetic: --baseline-root <existing worktree> --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full|c16-c18 (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
+  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <freeze-targets|development-synthetic|shared-input-diagnostic|baseline-probe|dry-run|early-budget|early-context|early-review|full|c16-c18> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>]; shared-input-diagnostic: --diagnostic-input <frozen private JSON> --mode synthetic|real [--targets <frozen targets> | --baseline-root <baseline> --output <new private targets>] ; freeze-targets/development-synthetic: --baseline-root <existing worktree> --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full|c16-c18 (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
   if (command.startsWith('--')) { rest = argv; command = 'phase-options' }
   const args = {}
   for (let i = 0; i < rest.length; i++) {
     const key = rest[i]
     if (key === '--dry-run') { if (args[key]) fail('INVALID_ARGUMENT'); args[key] = true; continue }
-    if (!['--targets', '--milestone', '--mode', '--baseline-root', '--output', '--model-id', '--protocol', '--phase', '--scenario', '--physical-ledger'].includes(key) || !rest[i + 1] || args[key]) fail('INVALID_ARGUMENT')
+    if (!['--targets', '--milestone', '--mode', '--baseline-root', '--output', '--model-id', '--protocol', '--phase', '--scenario', '--physical-ledger', '--diagnostic-input'].includes(key) || !rest[i + 1] || args[key]) fail('INVALID_ARGUMENT')
     args[key] = rest[++i]
   }
   if (command === 'phase-options') command = args['--phase'] || fail('INVALID_PHASE')
   if (args['--protocol'] && path.resolve(args['--protocol']) !== path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')) fail('PROTOCOL_PATH_MISMATCH')
   const protocol = read(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json'))
+  if (command === 'shared-input-diagnostic') {
+    const registration = selectPhase(protocol, command, 'diagnostic')
+    if (!args['--diagnostic-input'] || !['real', 'synthetic'].includes(args['--mode'])
+      || (args['--mode'] === 'real') !== Boolean(args['--physical-ledger'])) fail('SHARED_INPUT_DIAGNOSTIC_ARGUMENTS_REQUIRED')
+    const inputPath = real(args['--diagnostic-input'])
+    if (!inside(real(path.join(ROOT, '.runtime', '.cache')), inputPath)) fail('SHARED_INPUT_DIAGNOSTIC_INPUT_PATH')
+    const input = read(inputPath)
+    const syntheticBody = { model: registration.model.modelName, messages: input.messages,
+      temperature: registration.model.temperature, max_tokens: registration.actualMaxTokens,
+      enable_thinking: true, reasoning_effort: 'max', stream: true, stream_options: { include_usage: true } }
+    assertSharedInputDiagnostic(registration, input, { arm: 'candidate', model: registration.model, body: syntheticBody, reserved: 0 })
+    const prepared = args['--targets'] ? null : args['--mode'] === 'synthetic' && args['--baseline-root'] && args['--output']
+      ? createProductionTargets(args['--baseline-root'], args['--output'], { development: true }) : fail('SHARED_INPUT_DIAGNOSTIC_TARGET_REQUIRED')
+    const targets = prepared?.targets ?? read(args['--targets'])
+    const original = targets.candidate
+    if (!original || original.arm !== 'candidate' || args['--mode'] === 'real' && (original.developmentOnly || !original.modelId)) fail('SHARED_INPUT_DIAGNOSTIC_TARGET_INVALID')
+    if (!original.developmentOnly) inspectTarget(original)
+    const ledgerPath = args['--mode'] === 'real' ? validatePhysicalLedger(args['--physical-ledger'])
+      : path.join(CACHE, `synthetic-ledger-shared-input-${randomUUID()}.jsonl`)
+    const invocationId = randomUUID(), shortId = invocationId.slice(0, 8)
+    const roots = Object.fromEntries(Object.entries(original.roots).map(([key, directory]) => [key, path.join(directory, shortId)]))
+    const isolationRoot = path.join(original.isolationRoot, 'invocations', invocationId)
+    for (const directory of [isolationRoot, ...Object.values(roots)]) {
+      if (fs.existsSync(directory)) fail('INVOCATION_DIRECTORY_COLLISION')
+      fs.mkdirSync(directory, { recursive: true })
+    }
+    if (args['--mode'] === 'real') copyIsolatedRealModelConfig(original, roots)
+    const target = { ...original, isolationRoot, roots, declaredIsolationRoot: original.isolationRoot, declaredRoots: original.roots }
+    const evidenceRoot = path.join(CACHE, `shared-input-${invocationId}`)
+    fs.mkdirSync(evidenceRoot, { recursive: false })
+    const common = { target, invocationId, mode: args['--mode'], phase: command, milestone: 'diagnostic',
+      caseId: registration.caseIds[0], sceneId: '场景1', chapterNumber: 1, operations: registration.operations,
+      protocolRevision: currentProtocolBinding().protocolRevision, protocolHash: currentProtocolBinding().protocolHash,
+      semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(evidenceRoot, 'candidate-templates.json'),
+      ledgerPath, evidenceRoot, driverHash: productionBridgeHash(), diagnosticInputPath: inputPath,
+      diagnosticMessagesSha256: input.messagesSha256, diagnosticOriginalMessagesSha256: input.originalMessagesSha256,
+      development: args['--mode'] === 'synthetic' }
+    const result = withLedgerReconciliation(ledgerPath, args['--mode'], () => {
+      const preparedReceipt = runProductionBridge({ ...common, action: 'prepare' })
+      const executed = runProductionBridge({ ...common, action: 'execute', parityHash: preparedReceipt.physicalProject.parityHash })
+      if (executed.attempts.length !== 1 || executed.physicalModelRequests + executed.syntheticDispatches !== 1)
+        fail('SHARED_INPUT_DIAGNOSTIC_ONE_REQUEST_REQUIRED')
+      return executed
+    })
+    return { status: 'diagnostic-only', qualityQualification: 'not-run', physicalModelRequests: result.physicalModelRequests,
+      syntheticDispatches: result.syntheticDispatches, invocationId, inputPath, inputSha256: hash(fs.readFileSync(inputPath)),
+      ledgerPath, evidenceRoot, receiptPath: result.receiptPath, outputPath: result.operations[0].outputPath,
+      originalMessagesSha256: input.originalMessagesSha256, messagesSha256: input.messagesSha256,
+      actual: result.attempts[0].binding.actual, finishReason: result.ownerTerminal.finishReason }
+  }
   if (['freeze-targets', 'development-synthetic'].includes(command)) {
     if (!args['--baseline-root'] || !args['--output'] || args['--mode'] === 'real') fail('TARGET_PREPARATION_ARGUMENTS_REQUIRED')
     if (command === 'freeze-targets' && args['--scenario']) fail('INVALID_ARGUMENT')

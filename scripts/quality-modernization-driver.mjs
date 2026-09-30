@@ -232,6 +232,34 @@ export function assertForwardReasoning(registration, { arm, phase, milestone, ca
       thinking_budget: observed('thinking_budget') } }
 }
 
+/** One quoted-input extraction request; all checks run before the campaign reserve. */
+export function assertSharedInputDiagnostic(registration, input, { arm, model, body, reserved }) {
+  const original = input?.originalMessages, messages = input?.messages
+  const quote = input?.originalUserWrapper
+  if (!registration?.nonQualification || registration.maxPhysicalRequests !== 1 || arm !== 'candidate' || reserved !== 0
+    || input?.diagnosticId !== 'shared-input-fact-extraction-9337909d-v1'
+    || input.originalMessagesSha256 !== registration.originalMessagesSha256
+    || input.messagesSha256 !== registration.messagesSha256
+    || digest(original) !== registration.originalMessagesSha256 || digest(messages) !== registration.messagesSha256
+    || stableEvidence(input.materials) !== stableEvidence(registration.materials)
+    || input.originalInvocationId !== registration.originalInvocationId || input.originalTestedSha !== registration.originalTestedSha
+    || stableEvidence(input.originalCaseIds) !== stableEvidence(registration.originalCaseIds)
+    || !Array.isArray(original) || original.length !== 2 || !Array.isArray(messages) || messages.length !== 2
+    || original[0].role !== 'system' || original[1].role !== 'user'
+    || messages[0].role !== 'system' || messages[1].role !== 'user'
+    || typeof quote?.prefix !== 'string' || typeof quote?.suffix !== 'string'
+    || quote.prefix + original[1].content + quote.suffix !== messages[1].content
+    || !quote.prefix.includes(original[0].content) || quote.prefix.split(original[0].content).length !== 2
+    || messages[1].content.split(original[1].content).length !== 2)
+    throw new Error('SHARED_INPUT_DIAGNOSTIC_INPUT_MISMATCH')
+  if (!model || Object.entries(registration.model).some(([key, value]) => model[key] !== value)
+    || body?.model !== registration.model.modelName || body.temperature !== registration.model.temperature
+    || digest(body.messages) !== registration.messagesSha256 || body.max_tokens !== registration.actualMaxTokens
+    || body.enable_thinking !== true || body.reasoning_effort !== 'max' || Object.hasOwn(body, 'thinking_budget')
+    || body.stream !== true || body.stream_options?.include_usage !== true)
+    throw new Error('SHARED_INPUT_DIAGNOSTIC_WIRE_MISMATCH')
+}
+
 export function rejectOutsidePhysicalBoundary(receipt) {
   createOutboundPreflightAssert(receipt.preflightFailures ??= [])(false, 'NETWORK_OUTSIDE_PHYSICAL_BOUNDARY')
 }
@@ -1328,7 +1356,7 @@ export function readBaselineFailureEvidence(receipt, receiptPath) {
 export function copyIsolatedRealModelConfig(original, roots) {
   // Copy only the approved generation profile; a default model would also start an unregistered embedding request.
   const models = JSON.parse(fs.readFileSync(path.join(original.roots.config, 'models.json'), 'utf8'))
-  const model = models.find(value => value.id === original.modelId)
+  const model = (Array.isArray(models) ? models : [models]).find(value => value.id === original.modelId)
   if (!model?.apiKey) throw new Error('SAFE_MODEL_UNAVAILABLE')
   fs.writeFileSync(path.join(roots.config, 'models.json'), JSON.stringify([model]), { mode: 0o600 })
   fs.writeFileSync(path.join(roots.config, 'config.json'), JSON.stringify({ locale: 'zh-CN' }))

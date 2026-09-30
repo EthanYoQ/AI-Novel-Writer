@@ -672,6 +672,26 @@
     ]
   },
   "phases": {
+    "shared-input-diagnostic": {
+      "milestone": "diagnostic",
+      "nonQualification": true,
+      "arms": ["candidate"],
+      "caseIds": ["C17-C18-shared"],
+      "operations": [{ "id": "fact-extraction", "kind": "diagnostic" }],
+      "maxPhysicalRequests": 1,
+      "originalInvocationId": "9337909d-a526-4684-b5ff-80cad9206d3a",
+      "originalTestedSha": "2e3500b828e9e17d376a2451d53a7639bf1eed7f",
+      "originalCaseIds": ["C17-A", "C18-A"],
+      "originalMessagesSha256": "0105270b1535ed9d93dbeaa86af213fd4981262233d05903150be0545c3c93a1",
+      "messagesSha256": "caa5ccd6bbc5f81fff5e60dcae566d4c43161cfe01a14ce2cc9aaf4cf52fa587",
+      "materials": [
+        { "id": "author:required", "hash": "bd17b65382964755fb91b030021a914d37e921c56a7f142e59e0727ad193c6b4" },
+        { "id": "finalized:3", "hash": "1a316c3d538f2434c72c76a693e877c740779aa20d96f3175d7b26555aa9ab17" },
+        { "id": "reference:0", "hash": "5241cdea49b56f940eab08816b9a2721664a3ad88aeda341200597a7c41d4795" }
+      ],
+      "actualMaxTokens": 2672,
+      "model": { "provider": "openai", "protocol": "openai", "baseUrl": "https://api.siliconflow.cn/v1", "modelName": "deepseek-ai/DeepSeek-V4-Flash", "temperature": 0.7, "maxTokens": 16384, "reasoningOverride": "max", "creativeStrategy": "auto" }
+    },
     "c16-c18": {
       "scenarioRevision": "c16-c18-candidate-production-path-v7",
       "attemptPolicy": {
