@@ -20,6 +20,15 @@ const gemini = () => model({ provider: 'gemini', protocol: 'gemini', baseUrl: 'h
 const silicon = () => model({ baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash', capabilities: { contextWindowTokens: 65536, maxOutputTokens: 8192, reasoning: false, structuredOutput: false, usage: false } })
 
 describe('main generation physical liability planning without provider calls', () => {
+  it.each(['high', 'max'] as const)('keeps SiliconFlow output and liability unchanged for explicit %s', reasoningOverride => {
+    for (const input of [task, { ...task, budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 1000, segmentable: false } } as GenerationTask]) {
+      const before = plan(silicon(), input)
+      const after = plan({ ...silicon(), reasoningOverride }, input)
+      expect(after.options.reasoning).toEqual({ adapter: 'siliconflow-v4-thinking', reasoningEffort: reasoningOverride })
+      expect({ ...after, options: { ...after.options, reasoning: undefined } }).toEqual({ ...before, options: { ...before.options, reasoning: undefined } })
+      expect(after.reservedTokens).toBe(1_048_576)
+    }
+  })
   it('keeps the temporary S05 policy finite and explicit', () => {
     expect(MAIN_GENERATION_POLICY.budget).toEqual({ maxPhysicalRequests: 32, maxTokenLiability: 2097152, maxOutputPerRequest: 32768, maxActiveElapsedMs: 3600000 })
   })

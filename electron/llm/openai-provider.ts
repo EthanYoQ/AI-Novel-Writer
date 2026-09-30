@@ -2,6 +2,7 @@ import { InBandReasoningStream, ILLMProvider, LLMGenerateOptions, LLMResponse, L
 import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 import { resolveOpenAIChatCompletionsUrl } from './openai-compatible-endpoint'
 import { VisibleStreamFilter } from './visible-stream'
+import { resolveModelProfileReasoningMapping } from '../../src/shared/provider-presets'
 
 export class OpenAIProvider implements ILLMProvider {
   private normalizeFinishReason(reason: string | null | undefined): LLMFinishReason {
@@ -44,6 +45,12 @@ export class OpenAIProvider implements ILLMProvider {
     }
 
     if (opts.reasoning?.adapter === 'openai-reasoning-effort' && !isNovelAI) {
+      body.reasoning_effort = opts.reasoning.reasoningEffort
+    }
+
+    if (opts.reasoning?.adapter === 'siliconflow-v4-thinking'
+      && resolveModelProfileReasoningMapping(model)?.adapter === 'siliconflow-v4-thinking') {
+      body.enable_thinking = true
       body.reasoning_effort = opts.reasoning.reasoningEffort
     }
 

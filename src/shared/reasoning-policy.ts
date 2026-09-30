@@ -31,6 +31,11 @@ function providerDirective(
   effective: EffectiveReasoningEffort,
 ): ProviderReasoningDirective | undefined {
   const value = mapping.providerValues[effective]
+  if (mapping.adapter === 'siliconflow-v4-thinking') {
+    return (effective === 'high' || effective === 'max') && value === effective
+      ? { adapter: mapping.adapter, reasoningEffort: effective }
+      : undefined
+  }
   if (mapping.adapter === 'openai-reasoning-effort') {
     return value === 'low' || value === 'medium' || value === 'high'
       ? { adapter: mapping.adapter, reasoningEffort: value }
@@ -100,6 +105,12 @@ export function resolveReasoningPolicy(input: {
     : override
   const mapping = resolveModelProfileReasoningMapping(input.model)
   if (!mapping) return { requested, effective: null, status: 'unsupported', source }
+  // Only explicit, documented SiliconFlow choices are supported. Preserve
+  // automatic requests and never force off/low/medium up to high.
+  if (mapping.adapter === 'siliconflow-v4-thinking'
+    && (source !== 'model-override' || requested !== 'high' && requested !== 'max')) {
+    return { requested, effective: null, status: 'unsupported', source }
+  }
 
   const resolved = closestEffectiveEffort(requested, mapping)
   if (!resolved) return { requested, effective: null, status: 'unsupported', source }

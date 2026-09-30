@@ -219,6 +219,12 @@ export function createProviderCatalog(): ProviderPreset[] {
     models: [
       {
         name: 'deepseek-ai/DeepSeek-V4-Flash',
+        // https://docs.siliconflow.cn/docs/api/chat-completions-post
+        reasoningMapping: {
+          adapter: 'siliconflow-v4-thinking',
+          supportedEfforts: ['high', 'max'],
+          providerValues: { high: 'high', max: 'max' },
+        },
         // Preserve the existing operational default. The separately verified
         // capacity is evidence for planning and does not enlarge user settings.
         maxTokens: 16_384,
@@ -526,12 +532,13 @@ export function resolveModelProfileReasoningMapping(
   const provider = profile.provider
   const protocol = profile.protocol
   const modelName = profile.modelName.trim()
-  const preset = BUILTIN_PRESETS.find(candidate => candidate.provider === provider)
-  if (
-    !preset
-    || preset.protocol !== protocol
-    || normalizedOfficialBaseUrl(profile.baseUrl) !== normalizedOfficialBaseUrl(preset.baseUrl)
-  ) return undefined
+  // The existing OpenAI-compatible label is supported only at this preset's
+  // exact official endpoint; budget aliases do not grant request features.
+  const preset = BUILTIN_PRESETS.find(candidate => (
+    candidate.provider === provider || provider === 'openai' && candidate.provider === 'siliconflow'
+  ) && candidate.protocol === protocol
+    && normalizedOfficialBaseUrl(profile.baseUrl) === normalizedOfficialBaseUrl(candidate.baseUrl))
+  if (!preset) return undefined
 
   const mapping = preset.models.find(candidate => candidate.name === modelName)
     ?.reasoningMapping

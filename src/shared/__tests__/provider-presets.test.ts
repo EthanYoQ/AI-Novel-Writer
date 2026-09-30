@@ -122,7 +122,7 @@ describe('provider catalog', () => {
     })).toEqual(gemini?.models.find(model => model.name === 'gemini-2.5-flash-lite')?.capabilities)
   })
 
-  it('publishes conservative SiliconFlow budget facts without feature capability claims', () => {
+  it('publishes conservative SiliconFlow budget facts and explicit reasoning mapping separately', () => {
     const siliconflow = createProviderCatalog().find((preset) => preset.provider === 'siliconflow')
 
     expect(siliconflow).toMatchObject({
@@ -134,6 +134,11 @@ describe('provider catalog', () => {
     expect(siliconflow?.models).toContainEqual({
       name: 'deepseek-ai/DeepSeek-V4-Flash',
       maxTokens: 16_384,
+      reasoningMapping: {
+        adapter: 'siliconflow-v4-thinking',
+        supportedEfforts: ['high', 'max'],
+        providerValues: { high: 'high', max: 'max' },
+      },
       budgetCapabilities: {
         contextWindowTokens: 1_000_000,
         maxOutputTokens: 393_000,
@@ -144,7 +149,6 @@ describe('provider catalog', () => {
       },
     })
     expect(siliconflow?.models[0]?.capabilities).toBeUndefined()
-    expect(siliconflow?.models[0]?.reasoningMapping).toBeUndefined()
   })
 
   it('resolves the approved OpenAI-compatible SiliconFlow profile without changing its provider', () => {
@@ -158,6 +162,31 @@ describe('provider catalog', () => {
       contextWindowTokens: 1_000_000,
       maxOutputTokens: 393_000,
     })
+  })
+
+  it.each([
+    { baseUrl: 'https://api.siliconflow.com/v1' },
+    { baseUrl: 'http://api.siliconflow.cn/v1' },
+    { baseUrl: 'https://api.siliconflow.cn/v2' },
+    { baseUrl: 'https://api.siliconflow.cn/v1/chat/completions' },
+    { baseUrl: 'https://api.siliconflow.cn.evil.test/v1' },
+    { baseUrl: 'https://api.siliconflow.cn:8443/v1' },
+    { baseUrl: 'https://user@api.siliconflow.cn/v1' },
+    { baseUrl: 'https://api.siliconflow.cn/v1?route=other' },
+    { baseUrl: 'https://api.siliconflow.cn/v1#other' },
+    { modelName: 'deepseek-ai/DeepSeek-V4-Pro' },
+    { modelName: 'deepseek-ai/DeepSeek-V4-Flash-2026' },
+    { provider: 'custom' },
+    { protocol: 'anthropic' },
+  ])('does not promote SiliconFlow budget or family matches into reasoning evidence: %j', overrides => {
+    expect(resolveModelProfileReasoningMapping({ provider: 'openai', protocol: 'openai',
+      baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash', ...overrides })).toBeUndefined()
+  })
+
+  it('normalizes the official SiliconFlow trailing slash for reasoning', () => {
+    expect(resolveModelProfileReasoningMapping({ provider: 'siliconflow', protocol: 'openai',
+      baseUrl: 'https://api.siliconflow.cn/v1/', modelName: 'deepseek-ai/DeepSeek-V4-Flash' }))
+      .toMatchObject({ adapter: 'siliconflow-v4-thinking' })
   })
 
   it.each([

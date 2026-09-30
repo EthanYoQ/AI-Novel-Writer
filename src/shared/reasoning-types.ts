@@ -19,6 +19,10 @@ export type ReasoningResolutionStatus = 'mapped' | 'capped' | 'forced' | 'unsupp
 
 export type ProviderReasoningDirective =
   | {
+      adapter: 'siliconflow-v4-thinking'
+      reasoningEffort: 'high' | 'max'
+    }
+  | {
       adapter: 'openai-reasoning-effort'
       reasoningEffort: 'low' | 'medium' | 'high'
     }
