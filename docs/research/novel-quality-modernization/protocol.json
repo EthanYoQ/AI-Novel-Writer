@@ -1516,5 +1516,33 @@
         "parityId": "8fc3ebaa16213c100f69967ee2372acea596cd46ffb3934a900e58ae8c5ea754"
       }
     ]
+  },
+  "historicalC169337909dBoundary": {
+    "fromEventCount": 1122,
+    "eventCount": 1158,
+    "rawBytesSha256": "1e6d8af44ddeec1b8973e2635999e693bd0c378c9204a7846f4064f530861866",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "924513bae3afc3e7495eeb6d7f873f83795d0695975f678d04ebff66d19ec8d2",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "2e3500b828e9e17d376a2451d53a7639bf1eed7f",
+        "sourceHash": "3b52d46f48c541637da3f324de0f01b45be5e5169301166657dd3687759a4ab4",
+        "driverHash": "976988e954c9cb1864c65aab33295a18b4917ab499ce6df643e34e1ec4f6571f"
+      }
+    },
+    "reserveAttempts": [
+      { "attemptId": "candidate:77e48216-275a-403d-ace6-a970f01c9d47", "invocationId": "9337909d-a526-4684-b5ff-80cad9206d3a", "terminal": "settle", "parityId": "6b203c84a0f1e0340ff8aec019870ff6c6233d0570a4296b9106e371d55c3dcc" },
+      { "attemptId": "candidate:468ace78-9c01-4c18-b59d-a1f3af7837fa", "invocationId": "9337909d-a526-4684-b5ff-80cad9206d3a", "terminal": "settle", "parityId": "6b203c84a0f1e0340ff8aec019870ff6c6233d0570a4296b9106e371d55c3dcc" },
+      { "attemptId": "candidate:1a41e275-97b1-410f-888b-a15d0a4b1ce0", "invocationId": "9337909d-a526-4684-b5ff-80cad9206d3a", "terminal": "settle", "parityId": "f592b6ff6dd6e161d66c5065a1d25a9e30876251403aa20078da7a4b6adadecb" },
+      { "attemptId": "candidate:7d7f475e-f1c4-44ce-bf53-a7fc4f234cb9", "invocationId": "9337909d-a526-4684-b5ff-80cad9206d3a", "terminal": "settle", "parityId": "f592b6ff6dd6e161d66c5065a1d25a9e30876251403aa20078da7a4b6adadecb" },
+      { "attemptId": "candidate:9b74f2e9-c8bb-430a-add9-7a3bff3bf663", "invocationId": "9337909d-a526-4684-b5ff-80cad9206d3a", "terminal": "settle", "parityId": "8fc3ebaa16213c100f69967ee2372acea596cd46ffb3934a900e58ae8c5ea754" },
+      { "attemptId": "candidate:394bd677-e104-4345-9cdc-ec1a5e58a43a", "invocationId": "9337909d-a526-4684-b5ff-80cad9206d3a", "terminal": "settle", "parityId": "8fc3ebaa16213c100f69967ee2372acea596cd46ffb3934a900e58ae8c5ea754" },
+      { "attemptId": "candidate:d4d9e39c-8924-4f7f-ba47-f3b51ead6be8", "invocationId": "9337909d-a526-4684-b5ff-80cad9206d3a", "terminal": "settle", "parityId": "8fc3ebaa16213c100f69967ee2372acea596cd46ffb3934a900e58ae8c5ea754" },
+      { "attemptId": "candidate:f9d7d5cc-754c-4874-bce2-058f515d3f00", "invocationId": "9337909d-a526-4684-b5ff-80cad9206d3a", "terminal": "settle", "parityId": "73c00b48cd24c66ec299ce5f08500292bc72a5dd04d9d63b7e9880e83b9f25f7" },
+      { "attemptId": "candidate:1e6abbc2-1bcd-4e5b-aadc-a6a725295766", "invocationId": "9337909d-a526-4684-b5ff-80cad9206d3a", "terminal": "settle", "parityId": "73c00b48cd24c66ec299ce5f08500292bc72a5dd04d9d63b7e9880e83b9f25f7" },
+      { "attemptId": "candidate:26e9e4ab-4f51-4077-b533-a9cf7797af9d", "invocationId": "9337909d-a526-4684-b5ff-80cad9206d3a", "terminal": "settle", "parityId": "73c00b48cd24c66ec299ce5f08500292bc72a5dd04d9d63b7e9880e83b9f25f7" },
+      { "attemptId": "candidate:00306227-68b2-47d8-9d64-697383d695c8", "invocationId": "9337909d-a526-4684-b5ff-80cad9206d3a", "terminal": "settle", "parityId": "8fc3ebaa16213c100f69967ee2372acea596cd46ffb3934a900e58ae8c5ea754" },
+      { "attemptId": "candidate:47b0682a-d9a5-4649-ba97-a92ec95d7362", "invocationId": "9337909d-a526-4684-b5ff-80cad9206d3a", "terminal": "settle", "parityId": "8fc3ebaa16213c100f69967ee2372acea596cd46ffb3934a900e58ae8c5ea754" }
+    ]
   }
 }
