@@ -916,6 +916,7 @@ test('isolated production commands persist the selected phase operations', async
         ...(actual ? { actual } : { baselineIpc: observedIpc }) }
       record({ type: 'reserve', attemptId, binding })
       record({ type: 'dispatch', attemptId })
+      const dispatchAt = performance.now()
       // 发送规模证据：只记字节数，绝不记提示词原文或凭据，好让两臂在不花真实调用的前提下可比。
       const registeredOptional = predecessorReadbacks.filter(record => record.marker).map(record => ({
         sourceId: `candidate:${record.draftId}`, revision: record.version, contentHash: record.materialContentHash,
@@ -1065,30 +1066,53 @@ test('isolated production commands persist the selected phase operations', async
           : await fetchProviderResponse(originalFetch, url, { ...options, signal }, receipt.fetchFailures ??= [], safeDiagnostic)
         const [providerBody, ledgerBody] = response.body.tee()
         streamSettlements.push((async () => {
-          let finishReason = null, buffer = '', visibleText = '', interrupted = false, malformed = false
+          let finishReason = null, buffer = '', visibleText = '', interrupted = false, malformed = false, sawDone = false
+          let dataLines = []
+          const streamProgress = requestReceipt.streamProgress = { bodyBytes: 0, contentEvents: 0, reasoningEvents: 0,
+            sawDone: false, sawFinish: false, firstByteMs: null, lastByteMs: null }
           const reader = ledgerBody.getReader(), decoder = new TextDecoder()
           try {
             for (;;) {
               const next = await reader.read()
-              if (next.done) break
-              buffer += decoder.decode(next.value, { stream: true })
+              if (next.done) buffer += decoder.decode() + '\n\n'
+              else {
+                if (next.value.byteLength) {
+                  const elapsed = Math.max(0, Math.round(performance.now() - dispatchAt))
+                  streamProgress.firstByteMs ??= elapsed
+                  streamProgress.lastByteMs = elapsed
+                  streamProgress.bodyBytes += next.value.byteLength
+                }
+                buffer += decoder.decode(next.value, { stream: true })
+              }
               const lines = buffer.split('\n'); buffer = lines.pop() ?? ''
-              for (const line of lines) {
-                if (!line.startsWith('data:') || line.includes('[DONE]')) continue
-                try { const event = JSON.parse(line.slice(5)); const reason = event.choices?.[0]?.finish_reason
+              for (const rawLine of lines) {
+                const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+                if (line.startsWith('data:')) {
+                  const value = line.slice(5)
+                  dataLines.push(value.startsWith(' ') ? value.slice(1) : value)
+                  continue
+                }
+                if (line !== '' || dataLines.length === 0) continue
+                const data = dataLines.join('\n').trim(); dataLines = []
+                if (!data) continue
+                if (data === '[DONE]') { sawDone = streamProgress.sawDone = true; break }
+                try { const event = JSON.parse(data); const reason = event.choices?.[0]?.finish_reason
                   const content = event.choices?.[0]?.delta?.content
-                  if (typeof content === 'string') visibleText += content
-                  if (typeof reason === 'string' && reason) finishReason = reason
+                  const reasoning = event.choices?.[0]?.delta?.reasoning_content
+                  if (typeof content === 'string') { visibleText += content; streamProgress.contentEvents++ }
+                  if (typeof reasoning === 'string') streamProgress.reasoningEvents++
+                  if (typeof reason === 'string' && reason) { finishReason = reason; streamProgress.sawFinish = true }
                 } catch { malformed = true }
               }
+              if (sawDone || next.done) break
             }
           } catch { interrupted = true }
-          finally { reader.releaseLock() }
-          supervisor.terminal(attemptId, finishReason && !interrupted && !malformed ? 'settle' : 'unknown', finishReason ? { finishReason } : {})
+          finally { if (sawDone) void reader.cancel().catch(() => {}); reader.releaseLock() }
+          supervisor.terminal(attemptId, sawDone && finishReason && !interrupted && !malformed ? 'settle' : 'unknown', finishReason ? { finishReason } : {})
           fs.writeFileSync(physicalOutputPath, visibleText)
           requestReceipt.outputPath = physicalOutputPath
           requestReceipt.visibleTextHash = sha(visibleText)
-          requestReceipt.finishReason = finishReason && !interrupted && !malformed ? finishReason : null
+          requestReceipt.finishReason = sawDone && finishReason && !interrupted && !malformed ? finishReason : null
         })())
         return new Response(providerBody, { status: response.status, statusText: response.statusText, headers: response.headers })
       } catch (error) { supervisor.terminal(attemptId, 'unknown'); throw error }
