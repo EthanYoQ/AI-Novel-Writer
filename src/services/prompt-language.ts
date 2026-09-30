@@ -478,14 +478,14 @@ severity must be error, warning, or pass. Return 1–10 items total. A review di
 Output the complete revised chapter as plain prose only. Do not include a preface, explanation, Markdown, analysis, or screenplay formatting. Separate every paragraph with one blank line.`,
   },
   generate_chapter_notes: {
-    systemRole: 'You are a professional fiction structure analyst. Use concise phrases, explicit categories, and concrete evidence from the chapter.',
+    systemRole: 'You are a professional fiction structure analyst. Extract only events, state changes, and unresolved questions explicitly supported by the manuscript; do not invent canon or design foreshadowing.',
     content: `Generate precise structured chapter notes for the following manuscript.
 
 [Chapter manuscript]
 Chapter {{chapter_number}}: {{chapter_title}}
 {{chapter_content}}
 
-Return exactly this Markdown structure and no additional explanation:
+Organize explicitly supported manuscript facts under the following Markdown headings, with no additional explanation. Leave a section empty or omit it when the manuscript states no corresponding fact; do not invent content to fill the structure:
 
 # Chapter {{chapter_number}} Notes
 
@@ -501,12 +501,14 @@ List irreversible developments with a type marker.
 | Name | Specific change |
 
 ## New Canon
-List world, power-system, or rule facts first established or confirmed here. Omit this section when empty.
+List only world, power-system, or rule facts explicitly established or confirmed by the manuscript. Omit this section when empty.
 
 ## Foreshadowing and Hooks
-Mark planted clues with [Plant] and the chapter-ending hook with [Hook]. Omit this section when empty.
+Record only clues and unresolved questions explicitly left by the manuscript, using [Plant] or [Hook] where appropriate. Do not infer an object's purpose, symbolism, or future plot. Omit this section when empty.
 
 For an irreversible change relevant to later continuity, preserve an explicitly stated cause, location, witness, or source of knowledge in the same note as the subject and change. Do not infer missing details or require every note to contain all of these elements.
+
+Co-occurrence does not establish ownership, causation, responsibility, or narrative purpose; do not connect people, objects, places, or events merely because they appear together. Preserve the original predicates and modality where possible, distinguishing events from plans, guesses, negations, and unknowns. Do not turn a character's judgment or an unresolved question into a confirmed fact.
 
 When later prose corrects, withdraws, or postpones an earlier plan, preserve the affected character's last correction and current conditions in Character Dynamics or Foreshadowing and Hooks (such as not yet started, or what they are waiting for). Do not substitute a more prominent earlier event for the current plan or describe a plan as executed. Without a correction, retain the current plan stated in the manuscript; do not change another character's plan.
 

@@ -243,6 +243,24 @@ afterEach(() => {
 })
 
 describe('workflow mutation failure boundaries', () => {
+  it.each(['zh-CN', 'en-US'] as const)('passes notes source-support instructions and complete prose through the renderer fallback: %s', async writingLanguage => {
+    const content = 'Asha waited outside the hall. The parcel remained in her bag.\n\nThe reason was still unknown.'
+    const invoke = vi.fn(async (channel: string) => {
+      if (channel === 'db:blueprint-update-notes' || channel === 'db:continuity-save-finalized') return { success: true }
+      throw new Error(`unexpected IPC: ${channel}`)
+    })
+    stubVelaIpc(invoke)
+    let prompt = ''
+    const generation = testPostProcessGeneration()
+    generation.complete = vi.fn(async builder => { prompt = builder.build(); return '# Notes' })
+    const steps = testFrozenCharacterSteps(content, generation)
+    await steps.find(step => step.key === 'chapter_notes')!.executor(callbacks(), { ...context(), writingLanguage })
+    expect(prompt).toContain(content)
+    expect(prompt).toContain(writingLanguage === 'en-US' ? 'Leave a section empty or omit it when the manuscript states no corresponding fact' : '栏目没有对应的明示事实时可留空或省略')
+    expect(prompt).toContain(writingLanguage === 'en-US' ? 'Co-occurrence does not establish ownership, causation, responsibility, or narrative purpose' : '共现不构成归属、因果、责任或叙事用途的依据')
+    expect(generation.complete).toHaveBeenCalledTimes(1)
+  })
+
   it('sends both finalization post-process requests in the frozen English writing language', async () => {
     const invoke = vi.fn(async (channel: string) => {
       if (channel === 'db:blueprint-update-notes') return { success: true }

@@ -15,6 +15,7 @@ import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
 import type { MainGenerationExecuteReceipt } from '../../../src/services/generation/generation-runtime'
 import { parseFinalizedCharacterStateResponse } from '../../../src/shared/finalized-continuity'
+import { getBuiltinPromptTemplate } from '../../../src/services/builtin-prompt-templates'
 
 vi.mock('../../database', async importOriginal => ({ ...await importOriginal<typeof import('../../database')>(), getProjectDb: vi.fn() }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -22,7 +23,7 @@ const cleanup: (() => void)[] = []
 afterEach(() => { for (const dispose of cleanup.splice(0)) dispose(); vi.restoreAllMocks() })
 const prose = '林岚走进了北塔。'
 
-function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], options: { content?: string; writingLanguage?: 'en-US'; seed?: (db: import('better-sqlite3').Database) => void; transferOrigin?: () => string | undefined } = {}) {
+function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], options: { content?: string; writingLanguage?: 'en-US'; builtinPrompts?: boolean; seed?: (db: import('better-sqlite3').Database) => void; transferOrigin?: () => string | undefined } = {}) {
   const content = options.content ?? prose
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/finalization-generation-tests')
   fs.mkdirSync(base, { recursive: true })
@@ -44,7 +45,9 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], option
   const dispatchSpy = vi.fn<GenerationRunServiceDependencies['dispatch']>(dispatch ?? (async (_request, options) => {
     options.onVisible({ kind: 'delta', text: response() }); return { finishReason: 'stop', usage: null }
   }))
-  const deps = { db, projectStorageRoot: root, globalDataRoot: root, readBuiltinPrompt: (key: string) => JSON.stringify({key,systemRole:'合成定稿编辑',content:'正文：{{chapter_content}} 角色：{{existing_cards_json}}'}) }
+  const deps = { db, projectStorageRoot: root, globalDataRoot: root, readBuiltinPrompt: (key: string) => JSON.stringify(options.builtinPrompts
+    ? getBuiltinPromptTemplate(key, options.writingLanguage ?? 'zh-CN')
+    : {key,systemRole:'合成定稿编辑',content:'正文：{{chapter_content}} 角色：{{existing_cards_json}}'}) }
   let current = true
   const makeOwner = (epoch: string) => createMainGenerationOwner({ database: db, projectId: 'project', epoch,
     assertCurrent: () => { if (!current) throw new Error('GENERATION_EPOCH_STALE') },
@@ -90,6 +93,27 @@ async function generated(stepKey:FinalizationGenerationSlot['stepKey']='chapter_
  const receipt=await f.owner.executeFinalizationGeneration({handle:recovery.view.handle})
  return Object.assign(f,{slot,recovery,receipt,commitRequest:{handle:recovery.view.handle,artifact:f.artifactOf(receipt)}})
 }
+it.each([undefined, 'en-US'] as const)('notes源文支持合同随完整冻结正文出站：%s', async writingLanguage => {
+  const content = writingLanguage
+    ? 'Mira waited outside the archive. Her deposit was not refunded. She carried a sealed box.\n\nThe cause of the discrepancy remained unknown; the inspection had not started.'
+    : '陆遥停在档案室外，预付款没有退还，封好的匣子由她随身携带。\n\n记录差异的原因仍未查明，核查尚未开始。'
+  const notes = writingLanguage ? '# Chapter 1 Notes\n\n## Character Dynamics\nMira waited outside the archive.' : '# 第1章 要点\n\n## 角色动态\n陆遥停在档案室外。'
+  const f = fixture(async (_request, options) => {
+    options.onVisible({ kind: 'delta', text: notes }); return { finishReason: 'stop', usage: null }
+  }, { content, writingLanguage, builtinPrompts: true })
+  const recovery = f.owner.beginFinalizationGeneration({ slot: { source: f.prepared.context.source, stepKey: 'chapter_notes' }, modelId: 'synthetic' })
+  const receipt = await f.owner.executeFinalizationGeneration({ handle: recovery.view.handle })
+  const prompt = lastUserMessage(f.dispatch.mock.calls[0]![0])
+  expect(prompt).toContain(content)
+  expect(prompt).toContain(writingLanguage ? 'Leave a section empty or omit it when the manuscript states no corresponding fact' : '栏目没有对应的明示事实时可留空或省略')
+  expect(prompt).toContain(writingLanguage ? 'Co-occurrence does not establish ownership, causation, responsibility, or narrative purpose' : '共现不构成归属、因果、责任或叙事用途的依据')
+  expect(prompt).toContain(writingLanguage ? 'Preserve the original predicates and modality where possible' : '尽量保留原文谓词和模态')
+  // Deterministic output proves the existing save path only, not model interpretation.
+  expect(f.owner.commitFinalizationGeneration({ handle: recovery.view.handle, artifact: f.artifactOf(receipt) })).toMatchObject({ chapterNotes: notes })
+  expect(f.db.prepare('SELECT content_snapshot FROM finalization_outbox').pluck().get()).toBe(content)
+  expect(f.dispatch).toHaveBeenCalledTimes(1)
+})
+
 it('notes与blueprint及ACK同TX，注入写失败全部回滚；重复ACK零写',async()=>{
  const f=await generated()
  const before=f.db.prepare('SELECT * FROM summary_snapshots').all(),usage=f.db.prepare('SELECT usage_receipt_json FROM generation_attempts').pluck().get()
