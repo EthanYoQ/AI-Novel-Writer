@@ -9,7 +9,8 @@ import https from 'node:https'
 import { createHash } from 'node:crypto'
 import { syncBuiltinESMExports } from 'node:module'
 import { OpenAIProvider } from '../../electron/llm/openai-provider'
-import { createAttemptSupervisor } from '../quality-modernization-driver.mjs'
+import { createAttemptSupervisor, qualificationBridgeWindows, productionScenario, continuityCaseOperations } from '../quality-modernization-driver.mjs'
+import { forwardReasoningFor, forwardQualificationWindowFor } from '../quality-modernization-run.mjs'
 
 const root = path.resolve(import.meta.dirname, '../..')
 const fixture = fs.readFileSync(path.join(root, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
@@ -106,6 +107,72 @@ test('the actual tee consumer settles a complete DONE without waiting for body E
       if (item.name === 'reasoning-heartbeat') assert.equal(owner.reasoning.length, 1)
     }
   } finally {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    syncBuiltinESMExports()
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('the registered watchdog permits a controlled 600000ms completion through the actual stream consumer', async () => {
+  const deny = () => { throw new Error('NETWORK_FORBIDDEN') }
+  vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(deny)
+  vi.spyOn(tls, 'connect').mockImplementation(deny)
+  vi.spyOn(http, 'request').mockImplementation(deny)
+  vi.spyOn(http, 'get').mockImplementation(deny)
+  vi.spyOn(https, 'request').mockImplementation(deny)
+  vi.spyOn(https, 'get').mockImplementation(deny)
+  syncBuiltinESMExports()
+  const protocol = JSON.parse(fs.readFileSync(path.join(root, 'docs/research/novel-quality-modernization/protocol.json')))
+  const request = { action: 'execute', phase: 'c16-c18', milestone: 'final', caseId: 'C16-A', arm: 'candidate',
+    operations: continuityCaseOperations('C16-A'), attemptPolicy: productionScenario('c16-c18', 'final').attemptPolicy,
+    scenarioRevision: productionScenario('c16-c18', 'final').scenarioRevision, evaluationPolicy: null,
+    forwardReasoning: forwardReasoningFor(protocol, 'c16-c18', 'final'),
+    forwardQualificationWindow: forwardQualificationWindowFor(protocol, 'c16-c18', 'final') }
+  const windows = qualificationBridgeWindows(request)
+  assert.equal(windows.attemptMs, 3_660_000)
+  const directory = fs.mkdtempSync(path.join(root, '.runtime/.cache/novel-quality-modernization/stream-window-'))
+  const events = [], receipt = {}, owner = {}, id = 'synthetic:600000ms'
+  const watchdog = new AbortController(), native = new AbortController()
+  const supervisor = createAttemptSupervisor({ deadlineMs: windows.attemptMs, record: value => events.push(value) })
+  const encoder = new TextEncoder()
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+  const body = new ReadableStream({ start(controller) {
+    controller.enqueue(encoder.encode(reasoning))
+    setTimeout(() => {
+      controller.enqueue(encoder.encode(content('正文')))
+      controller.enqueue(encoder.encode(done))
+      controller.close()
+    }, 600_000)
+  } })
+  const [providerBody, ledgerBody] = body.tee()
+  let fetches = 0
+  try {
+    vi.stubGlobal('fetch', async url => {
+      if (++fetches !== 1 || String(url) !== 'https://network-denied.invalid/v1/chat/completions')
+        throw new Error('NETWORK_FORBIDDEN')
+      return new Response(providerBody, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+    })
+    events.push({ type: 'reserve', attemptId: id }, { type: 'dispatch', attemptId: id })
+    supervisor.watch(id, watchdog)
+    const settlements = [], outputPath = path.join(directory, 'output.txt')
+    consume(ledgerBody, supervisor, id, outputPath, receipt, settlements, fs, sha, 0)
+    const generated = new OpenAIProvider().generateStream(model, [{ role: 'user', content: 'offline' }], {
+      maxTokens: 2672, temperature: 0, visibleOnly: true, signal: AbortSignal.any([watchdog.signal, native.signal]),
+      onChunk: () => {}, onDone: value => { owner.done = value }, onError: error => { owner.error = error },
+    })
+    await vi.advanceTimersByTimeAsync(600_000)
+    await Promise.all([generated, ...settlements])
+    assert.equal(fetches, 1)
+    assert.deepEqual(events.map(value => value.type), ['reserve', 'dispatch', 'settle'])
+    assert.equal(owner.done, '正文')
+    assert.equal(receipt.finishReason, 'stop')
+    assert.equal(fs.readFileSync(outputPath, 'utf8'), '正文')
+    assert.equal(watchdog.signal.aborted, false)
+    assert.equal(native.signal.aborted, false)
+  } finally {
+    supervisor.dispose()
+    vi.useRealTimers()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
     syncBuiltinESMExports()

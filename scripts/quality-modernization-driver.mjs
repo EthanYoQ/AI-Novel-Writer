@@ -28,6 +28,9 @@ const syntaxBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/serv
   bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
 const { preservesStructuredJsonEvidence } = await import(`data:text/javascript;base64,${Buffer.from(syntaxBundle).toString('base64')}`)
 const { planBlueprintGenerationCost } = await import(`data:text/javascript;base64,${Buffer.from(costBundle).toString('base64')}`)
+const policyBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'electron/services/main-generation-plan.ts')],
+  bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
+const { MAIN_GENERATION_POLICY } = await import(`data:text/javascript;base64,${Buffer.from(policyBundle).toString('base64')}`)
 export const PRODUCTION_BRIDGE = 'scripts/fixtures/quality-modernization-production.fixture.mjs'
 export const EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION = 's11-reference-no-actionable-review-v1'
 export const REVIEWED_DRAFT_PROTOCOL_REVISION = 's14b-reviewed-draft-v1'
@@ -190,6 +193,63 @@ export const BRIDGE_SPAWN_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 3 + 60_00
 export const BRIDGE_TEST_TIMEOUT_MS = BRIDGE_SPAWN_TIMEOUT_MS + 60_000
 // post-UI 每臂最多 15 个登记 attempt：目录 3、正文 8、首审 2、修稿 1、复评 1；产品自身 root 预算仍先行约束。
 export const BRIDGE_REVIEWED_TEST_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 15 + 120_000
+const QUALIFICATION_WINDOW_HASH = '60ea01b953c801ab0457dcab1c17401a535a888fd4a94316903d6fafcd9af075'
+
+/** Resolve only the registered bridge fallback; native owner budgets and dispatch gates remain authoritative. */
+export function qualificationBridgeWindows(request) {
+  const registration = request.forwardQualificationWindow
+  if (registration == null) return { attemptMs: BRIDGE_SETTLEMENT_DEADLINE_MS,
+    spawnMs: request.evaluationPolicy ? BRIDGE_REVIEWED_TEST_TIMEOUT_MS - 60_000 : BRIDGE_SPAWN_TIMEOUT_MS,
+    testMs: request.evaluationPolicy ? BRIDGE_REVIEWED_TEST_TIMEOUT_MS : BRIDGE_TEST_TIMEOUT_MS,
+    maxCalls: null, revision: null }
+  if (digest(registration) !== QUALIFICATION_WINDOW_HASH
+    || registration.revision !== 'native-budget-aligned-qualification-window-v1'
+    || request.forwardReasoning?.revision !== 'fixed-high-zero-temperature-v1'
+    || request.forwardReasoning.model?.temperature !== 0
+    || request.forwardReasoning.reasoningOverride !== 'high'
+    || MAIN_GENERATION_POLICY.budget.maxActiveElapsedMs !== 3_600_000)
+    throw new Error('FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH')
+  if (Object.keys(request).some(key => /timeout|deadline/iu.test(key)))
+    throw new Error('FORWARD_QUALIFICATION_WINDOW_REQUEST_MISMATCH')
+  const scope = registration.scopes.find(item => item.phase === request.phase && item.milestone === request.milestone)
+  const scenario = productionScenario(request.phase, request.milestone)
+  if (!scope?.caseIds.includes(request.caseId) || !scenario
+    || stableEvidence(request.attemptPolicy ?? null) !== stableEvidence(scenario.attemptPolicy ?? null)
+    || stableEvidence(request.evaluationPolicy ?? null) !== stableEvidence(scenario.evaluationPolicy ?? null)
+    || request.scenarioRevision !== scenario.scenarioRevision
+    || !['baseline', 'candidate'].includes(request.arm ?? request.target?.arm))
+    throw new Error('FORWARD_QUALIFICATION_WINDOW_SCOPE_MISMATCH')
+  const attemptMs = MAIN_GENERATION_POLICY.budget.maxActiveElapsedMs + 60_000
+  if (request.action === 'prepare') {
+    if (stableEvidence(request.operations) !== stableEvidence(request.phase === 'full' ? [] : scenario.operations))
+      throw new Error('FORWARD_QUALIFICATION_WINDOW_SCOPE_MISMATCH')
+    return { attemptMs, spawnMs: attemptMs + 60_000, testMs: attemptMs + 120_000,
+      maxCalls: 1, revision: registration.revision }
+  }
+  const operations = request.operations
+  const expected = request.phase === 'c16-c18' ? continuityCaseOperations(request.caseId)
+    : request.phase === 'full' ? scenario.operations.filter(item => item.id === operations?.[0]?.id && item.kind === operations?.[0]?.kind
+      && (item.kind !== 'directory' || request.caseId.endsWith('/1')))
+      : scenario.operations
+  if (request.action !== 'execute' || stableEvidence(operations) !== stableEvidence(expected)
+    || request.phase === 'full' && expected.length !== 1)
+    throw new Error('FORWARD_QUALIFICATION_WINDOW_SCOPE_MISMATCH')
+  const arm = request.arm ?? request.target.arm
+  const policy = request.attemptPolicy
+  const count = operation => {
+    if (operation.kind === 'character_cards' && request.phase === 'c16-c18') return 3
+    if (operation.kind === 'directory' && structuredRecoveryFor(policy, arm)?.operationId === operation.id)
+      return planBlueprintGenerationCost(request.phase === 'full' ? 3 : 1).maxCalls
+    if (operation.kind === 'draft' && draftRecoveryFor(policy, arm)?.operationIds.includes(operation.id))
+      return draftRecoveryFor(policy, arm).maxAttempts
+    if (operation.kind === 'review' && policy?.reviewRebuild?.operationId === operation.id)
+      return 1 + policy.reviewRebuild.maxRepairAttempts
+    return 1
+  }
+  const maxCalls = operations.reduce((sum, operation) => sum + count(operation), 0)
+  return { attemptMs, spawnMs: maxCalls * attemptMs + 60_000,
+    testMs: maxCalls * attemptMs + 120_000, maxCalls, revision: registration.revision }
+}
 
 /** 只测规模、不落内容：返回提示词载荷的 UTF-8 字节数，绝不含提示词原文或凭据。 */
 export function measurePromptBytes(messages) {
@@ -342,10 +402,11 @@ export function createAttemptSupervisor({ record, deadlineMs = BRIDGE_SETTLEMENT
 }
 export function runProductionBridge(request) {
   const target = request.target
+  const windows = qualificationBridgeWindows(request)
   const evidenceRoot = request.evidenceRoot ?? target.isolationRoot
   fs.mkdirSync(evidenceRoot, { recursive: true })
   const runtime = productionExecutionRuntime(target)
-  const testTimeout = request.evaluationPolicy ? BRIDGE_REVIEWED_TEST_TIMEOUT_MS : BRIDGE_TEST_TIMEOUT_MS
+  const testTimeout = windows.testMs
   const requestFile = path.join(evidenceRoot, `${request.action}-request.json`)
   const config = path.join(target.isolationRoot, 'production-bridge.vitest.config.mjs')
   const report = path.join(evidenceRoot, `${request.action}-vitest.json`)
@@ -370,8 +431,8 @@ export function runProductionBridge(request) {
   const argv = [...(request.mode === 'synthetic' ? ['--import', pathToFileURL(guard).href] : []), path.join(target.repositoryRoot, 'node_modules/vitest/vitest.mjs'), 'run', '--config', config,
     '--reporter=json', `--outputFile=${report}`]
   const result = spawnSync(runtime.executable, argv, { cwd: target.repositoryRoot, env, encoding: 'utf8',
-    // 三次串行 operation 各自拥有 480s；先由 attempt 守护收口，再由父进程 spawn、最后 Vitest 兜底。
-    timeout: testTimeout - 60_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true })
+    // Attempt 先由登记的桥内守护收口，再由父进程 spawn、最后 Vitest 兜底。
+    timeout: windows.spawnMs, maxBuffer: 4 * 1024 * 1024, windowsHide: true })
   const secret = request.mode === 'real'
     ? JSON.parse(fs.readFileSync(path.join(target.roots.config, 'models.json'), 'utf8')).find(model => model.id === target.modelId)?.apiKey : null
   const redact = value => secret ? String(value ?? '').split(secret).join('[REDACTED]') : String(value ?? '')
@@ -1498,6 +1559,7 @@ export function runProductionPhasePair(targets, options, bridge) {
   const common = { invocationId, mode: options.mode ?? 'synthetic', development: options.development === true,
     protocolRevision: options.protocolRevision, protocolHash: options.protocolHash,
     forwardReasoning: options.forwardReasoning ?? null,
+    forwardQualificationWindow: options.forwardQualificationWindow ?? null,
     scenarioRevision: options.scenarioRevision ?? null, selectionDifference: options.selectionDifference ?? null,
     attemptPolicy: options.attemptPolicy ?? null,
     evaluationPolicy: options.evaluationPolicy ?? null,

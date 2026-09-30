@@ -8,16 +8,16 @@ import { Buffer } from 'node:buffer'
 import childProcess, { spawnSync } from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
 import { pathToFileURL } from 'node:url'
-import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, currentProtocolBinding, assertProtocolBinding, validateHistoricalLedgerBoundary, validateHistoricalSupersessionBoundary, validateCampaignBinding, buildFixtureExports, validatePair, selectPhase, forwardReasoningFor, assertScenarioMatchesProtocol, reconcileDispatchedAttempts, withLedgerReconciliation, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles, assertFormalTargetCandidateClean, createShortIsolationRoot, assertOwnedIsolationRoot, validatePhysicalLedger, registeredCampaignWorktree, developmentLedgerPath } from '../quality-modernization-run.mjs'
+import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, currentProtocolBinding, assertProtocolBinding, validateHistoricalLedgerBoundary, validateHistoricalSupersessionBoundary, validateCampaignBinding, buildFixtureExports, validatePair, selectPhase, forwardReasoningFor, forwardQualificationWindowFor, assertScenarioMatchesProtocol, reconcileDispatchedAttempts, withLedgerReconciliation, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles, assertFormalTargetCandidateClean, createShortIsolationRoot, assertOwnedIsolationRoot, validatePhysicalLedger, registeredCampaignWorktree, developmentLedgerPath } from '../quality-modernization-run.mjs'
 import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolatedRealModelConfig, PHASE_SCENARIOS, classifyProductionPair,
   fullExecutionSchedule, classifyFullProduction,
   adjudicateEarlyReviewReferenceNonconformance, EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION,
   readBaselineFailureEvidence, validateEarlyContextSelectionDifference,
   validateEarlyReviewChain, targetUnitsGateEvidence,
-  createAttemptSupervisor, createOperationDispatchGate, createOutboundPreflightAssert,
+  createAttemptSupervisor, qualificationBridgeWindows, createOperationDispatchGate, createOutboundPreflightAssert,
   rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures, fetchProviderResponse, measurePromptBytes,
   BRIDGE_SETTLEMENT_DEADLINE_MS, BRIDGE_SPAWN_TIMEOUT_MS, BRIDGE_TEST_TIMEOUT_MS,
-  C16_C18_ATTEMPT_POLICY, validateCandidateContinuityResults, runProductionPhasePair, summarizeDraftReconciliation,
+  C16_C18_ATTEMPT_POLICY, validateCandidateContinuityResults, runProductionBridge, runProductionPhasePair, summarizeDraftReconciliation,
   continuityCaseOperations, FINALIZED_CHARACTER_OPERATION_IDS, draftCondenseFor, syntheticDraftCondensePlan } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, readVerifiedRecoveryCandidateSupplement,
   readVerifiedDirectPersistedDraftEvidence, recordPersistedDraftObservation,
@@ -248,6 +248,166 @@ test('固定 high/零温度只在原五个 scope 生效，并在读回及 wire �
   const unregistered = forwardReasoningFor({ ...protocol, forwardHighReasoningExperiment: undefined }, 'c16-c18', 'final')
   assert.equal(unregistered.reasoningOverride, 'max')
   assert.throws(() => assertForwardReasoning(unregistered, { ...common, body }), /FORWARD_REASONING_CONFIG_MISMATCH/)
+})
+
+test('前向资格窗口只继承 high 的五个 scope，按本次 bridge 的已登记动作确定三层兜底', () => {
+  const window = protocol.forwardQualificationWindowExperiment
+  assert.deepEqual(Object.keys(window).sort(), ['baseHash', 'limits', 'revision', 'scopes'])
+  assert.equal(window.baseHash, hash(protocol.forwardHighReasoningExperiment))
+  assert.deepEqual(window.scopes, protocol.forwardReasoningExperiment.scopes)
+  assert.equal(forwardQualificationWindowFor(protocol, 'shared-input-diagnostic', 'diagnostic'), null)
+  assert.equal(forwardQualificationWindowFor(protocol, 'early-budget', 'early'), null)
+  const request = (phase, milestone, caseId, arm = 'candidate', operations) => ({
+    phase, milestone, caseId, arm, action: 'execute',
+    operations: operations ?? (phase === 'c16-c18' ? continuityCaseOperations(caseId)
+      : productionScenario(phase, milestone).operations.filter(item => !item.caseIds || item.caseIds.includes(caseId))),
+    attemptPolicy: selectPhase(protocol, phase, milestone).attemptPolicy,
+    evaluationPolicy: selectPhase(protocol, phase, milestone).evaluationPolicy,
+    scenarioRevision: selectPhase(protocol, phase, milestone).scenarioRevision,
+    forwardReasoning: forwardReasoningFor(protocol, phase, milestone),
+    forwardQualificationWindow: forwardQualificationWindowFor(protocol, phase, milestone) })
+  const expected = (input, calls) => assert.deepEqual(qualificationBridgeWindows(input), {
+    attemptMs: 3_660_000, spawnMs: calls * 3_660_000 + 60_000, testMs: calls * 3_660_000 + 120_000,
+    maxCalls: calls, revision: window.revision })
+  for (const id of ['C16-A', 'C16-B', 'C16-C']) expected(request('c16-c18', 'final', id), 4)
+  for (const id of ['C17-A', 'C18-A', 'C18-B']) expected(request('c16-c18', 'final', id), 8)
+  expected(request('c16-c18', 'final', 'C17-B'), 12)
+  expected(request('early-budget', 'post-ui', '场景1/1'), 15)
+  expected(request('early-context', 'post-ui', '场景2/3'), 1)
+  expected(request('early-review', 'post-ui', '场景3/2'), 3)
+  const full = request('full', 'final', '场景1/1', 'candidate',
+    [{ id: '三章规划', kind: 'directory' }])
+  expected(full, 9)
+  expected(request('full', 'final', '场景1/2', 'candidate',
+    [{ id: '连续章节正文', kind: 'draft' }]), 8)
+  assert.deepEqual(qualificationBridgeWindows({ ...request('early-budget', 'early', '场景1/1'),
+    forwardQualificationWindow: null }), {
+    attemptMs: BRIDGE_SETTLEMENT_DEADLINE_MS, spawnMs: BRIDGE_SPAWN_TIMEOUT_MS,
+    testMs: BRIDGE_TEST_TIMEOUT_MS, maxCalls: null, revision: null })
+  for (const change of [{ baseHash: 'f'.repeat(64) }, { scopes: window.scopes.slice(1) },
+    { revision: 'wrong' }, { extra: true }])
+    assert.throws(() => forwardQualificationWindowFor({ ...protocol,
+      forwardQualificationWindowExperiment: { ...window, ...change } }, 'c16-c18', 'final'),
+    /FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH/)
+  assert.throws(() => forwardQualificationWindowFor({ ...protocol,
+    forwardHighReasoningExperiment: { ...protocol.forwardHighReasoningExperiment, limits: 'changed' } }, 'c16-c18', 'final'),
+  /FORWARD_HIGH_REGISTRATION_MISMATCH|FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH/)
+  for (const change of [{ caseId: 'unregistered' },
+    { forwardQualificationWindow: { ...window, limits: 'changed' } },
+    { operations: [{ id: '定稿章节要点', kind: 'chapter_notes' }] },
+    { scenarioRevision: 'changed' },
+    { attemptTimeoutMs: 1 }])
+    assert.throws(() => qualificationBridgeWindows({ ...request('c16-c18', 'final', 'C16-A'), ...change }),
+    /FORWARD_QUALIFICATION_WINDOW_(SCOPE|REGISTRATION|REQUEST)_MISMATCH/)
+})
+
+test('父桥实际生成配置和 spawn options 使用同一已登记窗口，漂移在启动前拒绝', () => {
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/v3-resume-20260930/window-parent-'))
+  const target = { arm: 'candidate', repositoryRoot: ROOT, isolationRoot: directory,
+    roots: { userData: directory, config: directory, legacySource: directory } }
+  const phase = 'c16-c18', milestone = 'final', caseId = 'C17-B'
+  const request = { target, action: 'execute', mode: 'synthetic', phase, milestone, caseId,
+    operations: continuityCaseOperations(caseId), attemptPolicy: selectPhase(protocol, phase, milestone).attemptPolicy,
+    evaluationPolicy: null, scenarioRevision: selectPhase(protocol, phase, milestone).scenarioRevision,
+    forwardReasoning: forwardReasoningFor(protocol, phase, milestone),
+    forwardQualificationWindow: forwardQualificationWindowFor(protocol, phase, milestone) }
+  const original = childProcess.spawnSync
+  let captured = null
+  try {
+    childProcess.spawnSync = function (_executable, args, options) {
+      captured = { args, options }
+      fs.writeFileSync(path.join(directory, 'execute-receipt.json'), JSON.stringify({ status: 'passed' }))
+      fs.writeFileSync(path.join(directory, 'execute-vitest.json'), JSON.stringify({ numPassedTests: 1, numTotalTests: 1 }))
+      return { status: 0, stdout: '', stderr: '' }
+    }
+    syncBuiltinESMExports()
+    const output = runProductionBridge(request)
+    const windows = qualificationBridgeWindows(request)
+    assert.equal(windows.maxCalls, 12)
+    assert.equal(captured.options.timeout, windows.spawnMs)
+    assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'execute-request.json'))).forwardQualificationWindow.revision,
+      request.forwardQualificationWindow.revision)
+    const config = fs.readFileSync(path.join(directory, 'production-bridge.vitest.config.mjs'), 'utf8')
+    assert.ok(config.includes(`"testTimeout":${windows.testMs}`))
+    assert.equal(output.status, 'passed')
+    captured = null
+    assert.throws(() => runProductionBridge({ ...request, attemptTimeoutMs: 1 }),
+      /FORWARD_QUALIFICATION_WINDOW_REQUEST_MISMATCH/)
+    assert.equal(captured, null)
+  } finally {
+    childProcess.spawnSync = original
+    syncBuiltinESMExports()
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('前向资格窗口接受实际四个 phase prepare 的登记列表，漂移在父桥启动前拒绝', () => {
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/v3-resume-20260930/window-prepare-'))
+  const original = childProcess.spawnSync, captured = []
+  let spawnCalls = 0
+  try {
+    childProcess.spawnSync = function (_executable, args, options) {
+      spawnCalls++
+      const request = JSON.parse(fs.readFileSync(options.env.QUALITY_BRIDGE_REQUEST, 'utf8'))
+      if (request.action !== 'prepare') throw new Error('PREPARE_REGRESSION_EXECUTION_STOP')
+      const windows = qualificationBridgeWindows(request)
+      const receipt = { status: 'prepared', arm: request.target.arm, attempts: [],
+        physicalProject: { parityHash: 'a'.repeat(64) }, physicalModelRequests: 0,
+        syntheticDispatches: 0, bridgeWindows: windows }
+      captured.push({ request, options, receipt,
+        config: fs.readFileSync(args[args.indexOf('--config') + 1], 'utf8') })
+      fs.writeFileSync(request.receiptPath, JSON.stringify(receipt))
+      fs.writeFileSync(args.find(arg => arg.startsWith('--outputFile=')).slice('--outputFile='.length),
+        JSON.stringify({ numPassedTests: 1, numTotalTests: 1 }))
+      return { status: 0, stdout: '', stderr: '' }
+    }
+    syncBuiltinESMExports()
+    for (const [phase, milestone] of [['c16-c18', 'final'], ['early-budget', 'post-ui'],
+      ['early-context', 'post-ui'], ['early-review', 'post-ui']]) {
+      const selected = selectPhase(protocol, phase, milestone), scenario = productionScenario(phase, milestone)
+      const targets = Object.fromEntries(['baseline', 'candidate'].map(arm => {
+        const isolationRoot = path.join(directory, phase, arm)
+        return [arm, { arm, ...protocolBinding, repositoryRoot: ROOT, isolationRoot,
+          roots: Object.fromEntries(['userData', 'config', 'legacySource'].map(key => [key, path.join(isolationRoot, key)])) }]
+      }))
+      const start = captured.length
+      const output = runProductionPhasePair(targets, { phase, milestone, mode: 'synthetic', ...protocolBinding,
+        scenarioRevision: selected.scenarioRevision, selectionDifference: selected.selectionDifference,
+        attemptPolicy: selected.attemptPolicy, evaluationPolicy: selected.evaluationPolicy,
+        forwardReasoning: forwardReasoningFor(protocol, phase, milestone),
+        forwardQualificationWindow: forwardQualificationWindowFor(protocol, phase, milestone),
+        semanticPath, templatesPath: path.join(directory, 'templates'), ledgerPath: path.join(directory, 'ledger.jsonl') })
+      const prepares = captured.slice(start)
+      assert.equal(prepares.length, (scenario.arms ?? ['baseline', 'candidate']).length)
+      assert.deepEqual(output.prepared.map(item => item.status), prepares.map(() => 'prepared'))
+      for (const { request, options, receipt, config } of prepares) {
+        assert.deepEqual(request.operations, scenario.operations)
+        assert.equal(receipt.bridgeWindows.maxCalls, 1)
+        assert.equal(receipt.bridgeWindows.attemptMs, 3_660_000)
+        assert.equal(options.timeout, receipt.bridgeWindows.spawnMs)
+        assert.ok(config.includes(`"testTimeout":${receipt.bridgeWindows.testMs}`))
+        assert.equal(receipt.physicalModelRequests, 0)
+        assert.equal(receipt.syntheticDispatches, 0)
+        assert.deepEqual(receipt.attempts, [])
+        const before = spawnCalls
+        for (const change of [{ action: 'changed' }, { caseId: 'unregistered' }, { phase: 'full' },
+          { operations: [] }, { operations: [...request.operations, request.operations[0]] },
+          { operations: request.operations.map((operation, index) => index ? operation : { ...operation, id: 'changed' }) },
+          { operations: request.operations.map((operation, index) => index ? operation : { ...operation, kind: 'changed' }) },
+          { scenarioRevision: 'changed' }, { attemptPolicy: { changed: true } },
+          { evaluationPolicy: { changed: true } }, { attemptTimeoutMs: 1 }])
+          assert.throws(() => runProductionBridge({ ...request, ...change }),
+            /FORWARD_QUALIFICATION_WINDOW_(SCOPE|REQUEST)_MISMATCH/)
+        assert.equal(spawnCalls, before, 'prepare 漂移不能到达 spawn')
+      }
+    }
+    assert.equal(captured.length, 7)
+    assert.equal(fs.existsSync(path.join(directory, 'ledger.jsonl')), false, '受控桥不产生 reserve/dispatch')
+  } finally {
+    childProcess.spawnSync = original
+    syncBuiltinESMExports()
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test('固定 max 前瞻：配置读回与每次出站严格区分 candidate wire 和 baseline 真缺席', async () => {
@@ -1420,7 +1580,7 @@ test('C16–C18 ca466d9a/73b46513 段（第580–648行）按同一规则分两�
   // 新协议字节 hash 与被取代的 a0a14777 不同，runner 读写两入口都按链末端取历史范围。
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
   assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, ca466d9a, protocol\.historicalC1673b46513Boundary\)/)
-  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedD712808cEvents/)
+  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trusted625bfda8Events/)
 })
 
 test('新登记续写直接首稿，旧对账可读但当前实验拒绝额外发送', () => {
@@ -3287,7 +3447,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     'historicalC16Ee3435ecBoundary', 'historicalC16Ccc70b31Boundary', 'historicalC16C9b88510Boundary', 'historicalC16D8a30c11Boundary',
     'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary', 'historicalC16B42cfc55Boundary',
     'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
-    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary']
+    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -3364,6 +3524,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1158, real.boundaries.historicalSharedInput7203443dBoundary), 1161)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1161, real.boundaries.historicalC1670407421Boundary), 1182)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1182, real.boundaries.historicalC16D712808cBoundary), 1194)
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1194, real.boundaries.historicalC16625bfda8Boundary), 1212)
     assert.equal(validatePhysicalLedger(ledger), ledger)
     fs.writeFileSync(file, synthetic.raw)
     const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
@@ -3388,6 +3549,15 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     fs.writeFileSync(ledger, real.raw)
     fs.writeFileSync(file, synthetic.raw)
     const d712 = real.boundaries.historicalC16D712808cBoundary
+    const changed1212 = raw => raw.replace('"type":"unknown","attemptId":"candidate:5fa5944d-d1e9-40a7-ad29-b18b2fee7680"',
+      '"type":"settle","attemptId":"candidate:5fa5944d-d1e9-40a7-ad29-b18b2fee7680"')
+    fs.writeFileSync(ledger, changed1212(real.raw))
+    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    fs.writeFileSync(file, changed1212(synthetic.raw))
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    fs.writeFileSync(ledger, real.raw)
+    fs.writeFileSync(file, synthetic.raw)
     for (const field of ['codeSha', 'sourceHash', 'driverHash'])
       assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1182, { ...d712,
         armBindings: { candidate: { ...d712.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
@@ -3756,7 +3926,7 @@ test('请求规模证据只存字节数、取自真正出站的请求体，且�
   assert.ok(fixture.includes('receipt.composedPromptBytes = receipt.attempts.reduce'), '每臂必须有一个可比较的合计字节数')
   assert.ok(fixture.includes('requestSizes'), '每臂必须保留逐次发送的规模明细')
   // 守护必须真的接在桥里，且失败路径也走它；否则超时仍会丢掉终态。
-  assert.ok(fixture.includes('createAttemptSupervisor({ record })'), '桥必须拥有自己的结算守护')
+  assert.ok(fixture.includes('createAttemptSupervisor({ record, deadlineMs: windows.attemptMs })'), '桥必须拥有自己的结算守护')
   assert.ok(fixture.includes('supervisor.watch(attemptId, controller)'), '每次发送都必须登记进守护')
   assert.ok(/supervisor\.terminal\(attemptId, 'unknown'\)/.test(fixture), '失败路径也必须经守护写终态')
   assert.ok(!/record\(\{ type: 'unknown', attemptId \}\)/.test(fixture), '不存在绕过守护的裸 unknown 写入')
@@ -3764,7 +3934,7 @@ test('请求规模证据只存字节数、取自真正出站的请求体，且�
   // 先收口，父进程 spawn 与 Vitest 依次兜底。
   assert.ok(BRIDGE_SETTLEMENT_DEADLINE_MS * 3 < BRIDGE_SPAWN_TIMEOUT_MS)
   assert.ok(BRIDGE_SPAWN_TIMEOUT_MS < BRIDGE_TEST_TIMEOUT_MS)
-  assert.ok(fixture.includes('BRIDGE_REVIEWED_TEST_TIMEOUT_MS : BRIDGE_TEST_TIMEOUT_MS)'), 'fixture 顶层测试必须使用同一外层预算')
+  assert.ok(fixture.includes('qualificationBridgeWindows(json(process.env.QUALITY_BRIDGE_REQUEST)).testMs)'), 'fixture 顶层测试必须使用同一外层预算')
 })
 
 test('bridge 在记账前按 operation 校验出站权威，且只把真实 provider 失败归入 fetchFailures', () => {
@@ -5357,11 +5527,19 @@ test('full 端到端（注入假桥）：开发合成默认让候选场景1/2 �
     const selection = selectPhase(protocol, 'full', 'final')
     const run = (overrides = {}, bridge) => runProductionPhasePair(targets, { phase: 'full', development: true, mode: 'synthetic', milestone: 'final',
       scenarioRevision: scenario.scenarioRevision, attemptPolicy: selection.attemptPolicy, order: protocol.order, ...protocolBinding,
+      forwardReasoning: forwardReasoningFor(protocol, 'full', 'final'),
+      forwardQualificationWindow: forwardQualificationWindowFor(protocol, 'full', 'final'),
       semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(dir, 'templates'), ledgerPath: path.join(dir, 'ledger.jsonl'), ...overrides }, bridge)
     // 假桥：按 driver 交来的请求（默认计划、前驱、invocationId）复现 fixture 的行为，逐步返回 fixture 形状的收据。
     const fakeBridge = requests => request => {
       requests.push(request)
-      if (request.action === 'prepare') return { arm: request.target.arm, sceneId: request.sceneId, physicalProject: { parityHash: hash(request.sceneId) } }
+      const windows = qualificationBridgeWindows(request)
+      assert.equal(windows.maxCalls, request.action === 'prepare' ? 1 : request.operations[0].kind === 'directory' ? 9 : 8)
+      if (request.action === 'prepare') {
+        assert.deepEqual(request.operations, [])
+        return { status: 'prepared', arm: request.target.arm, sceneId: request.sceneId,
+          physicalProject: { parityHash: hash(request.sceneId) }, attempts: [], physicalModelRequests: 0, syntheticDispatches: 0 }
+      }
       const index = requests.filter(item => item.action === 'execute').length - 1, step = kit.schedule[index]
       assert.deepEqual([request.caseId, request.target.arm], [step.caseId, step.arm])
       const plan = request.syntheticDraftCondense
@@ -5374,10 +5552,23 @@ test('full 端到端（注入假桥）：开发合成默认让候选场景1/2 �
     // 开发合成默认：24 步 + 候选场景1/2 的 1 次压缩 = 25 次合成 dispatch，收据分类通过。
     const requests = []
     const result = run({}, fakeBridge(requests))
+    assert.deepEqual(executes(requests).slice(0, 6).map(item => item.operations[0].kind), Array(6).fill('directory'))
+    const firstDraft = executes(requests)[6]
+    assert.equal(firstDraft.caseId, '场景1/1')
+    assert.deepEqual(firstDraft.operations, [{ id: '连续章节正文', kind: 'draft' }])
+    assert.equal(qualificationBridgeWindows(firstDraft).maxCalls, 8)
     assert.equal(result.status, 'passed')
     assert.equal(result.pairFailure, undefined)
     assert.equal(result.syntheticDispatches, 25)
     assert.equal(executes(requests).length, 24)
+    assert.equal(result.prepared.length, 6)
+    assert.ok(result.prepared.every(item => item.physicalModelRequests === 0 && item.syntheticDispatches === 0 && item.attempts.length === 0))
+    for (const preparation of requests.filter(item => item.action === 'prepare'))
+      assert.throws(() => qualificationBridgeWindows({ ...preparation, operations: scenario.operations }), /FORWARD_QUALIFICATION_WINDOW_SCOPE_MISMATCH/)
+    for (const operations of [[], scenario.operations, [{ id: '三章规划', kind: 'draft' }],
+      [{ id: '连续章节正文', kind: 'directory' }], [{ ...firstDraft.operations[0], extra: true }]])
+      assert.throws(() => qualificationBridgeWindows({ ...firstDraft, operations }), /FORWARD_QUALIFICATION_WINDOW_SCOPE_MISMATCH/)
+    assert.throws(() => qualificationBridgeWindows({ ...executes(requests)[0], caseId: '场景1/2' }), /FORWARD_QUALIFICATION_WINDOW_SCOPE_MISMATCH/)
     assert.deepEqual(new Set(executes(requests).map(item => JSON.stringify(item.syntheticDraftCondense))), new Set([JSON.stringify({ caseId: '场景1/2', outcome: 'in-range' })]))
     assert.deepEqual(result.attemptPolicy, scenario.attemptPolicy, '登记与不对称披露随结果一起给出')
     const dispatches = result.results.map(item => [item.caseId, item.arm, item.attempts.length])

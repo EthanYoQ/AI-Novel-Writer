@@ -211,7 +211,8 @@ export function validatePhysicalLedger(file) {
   const r9337909d = validateHistoricalSupersessionBoundary(raw, r1aa5487e, protocol.historicalC169337909dBoundary)
   const sharedInput7203443d = validateHistoricalSupersessionBoundary(raw, r9337909d, protocol.historicalSharedInput7203443dBoundary)
   const c1670407421 = validateHistoricalSupersessionBoundary(raw, sharedInput7203443d, protocol.historicalC1670407421Boundary)
-  validateHistoricalSupersessionBoundary(raw, c1670407421, protocol.historicalC16D712808cBoundary)
+  const d712808c = validateHistoricalSupersessionBoundary(raw, c1670407421, protocol.historicalC16D712808cBoundary)
+  validateHistoricalSupersessionBoundary(raw, d712808c, protocol.historicalC16625bfda8Boundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -349,6 +350,26 @@ export function forwardReasoningFor(protocol, phase, milestone) {
   const effective = { ...registration, revision: zero.revision, model: { ...registration.model, temperature: zero.temperature }, limits: zero.limits }
   return high === undefined ? effective : { ...effective, revision: high.revision, reasoningOverride: high.reasoningOverride,
     wire: { ...effective.wire, candidate: { ...effective.wire.candidate, reasoning_effort: high.reasoningOverride } }, limits: high.limits }
+}
+export function forwardQualificationWindowFor(protocol, phase, milestone) {
+  const registration = protocol.forwardQualificationWindowExperiment
+  const reasoning = forwardReasoningFor(protocol, phase, milestone)
+  if (registration === undefined) return null
+  if (!protocol.forwardHighReasoningExperiment || !protocol.forwardTemperatureExperiment
+    || !isDeepStrictEqual(Object.keys(registration ?? {}).sort(), ['baseHash', 'limits', 'revision', 'scopes'])
+    || registration.revision !== 'native-budget-aligned-qualification-window-v1'
+    || registration.baseHash !== hash(protocol.forwardHighReasoningExperiment)
+    || hash(registration) !== '60ea01b953c801ab0457dcab1c17401a535a888fd4a94316903d6fafcd9af075'
+    || !isDeepStrictEqual(registration.scopes, protocol.forwardReasoningExperiment.scopes))
+    fail('FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH')
+  for (const scope of registration.scopes)
+    if (!isDeepStrictEqual(scope.caseIds, selectPhase(protocol, scope.phase, scope.milestone).caseIds))
+      fail('FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH')
+  const scope = registration.scopes.find(item => item.phase === phase && item.milestone === milestone)
+  if (!scope) return null
+  if (reasoning?.revision !== protocol.forwardHighReasoningExperiment.revision)
+    fail('FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH')
+  return registration
 }
 /**
  * 生产桥只是协议的执行者：场景登记的 caseId 与 operation id 必须逐字等于该阶段的
@@ -656,6 +677,11 @@ export function updateLedger(file, event, options = {}) {
       const trustedD712808cEvents = d712808cBoundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedC1670407421Events, d712808cBoundary)
         : trustedC1670407421Events
+      const r625bfda8Boundary = options.campaignMode === 'real'
+        ? protocol.historicalC16625bfda8Boundary : options.historicalC16625bfda8Boundary
+      const trusted625bfda8Events = r625bfda8Boundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedD712808cEvents, r625bfda8Boundary)
+        : trustedD712808cEvents
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
       // 未登记 operations 的阶段在这里 fail closed。
@@ -682,7 +708,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedD712808cEvents
+          const superseded = index >= trustedHistoricalEvents && index < trusted625bfda8Events
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)
@@ -791,6 +817,7 @@ export function main(argv) {
     const result = withLedgerReconciliation(developmentLedger, 'synthetic', () => runProductionPhasePair(prepared.targets, { phase, development: true, mode: 'synthetic', milestone: selection.milestone,
       scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, evaluationPolicy: selection.evaluationPolicy, order: protocol.order,
       forwardReasoning: forwardReasoningFor(protocol, phase, selection.milestone),
+      forwardQualificationWindow: forwardQualificationWindowFor(protocol, phase, selection.milestone),
       ...currentProtocolBinding(),
       semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(prepared.root, 'baseline-templates.json'), ledgerPath: developmentLedger }))
     fs.writeFileSync(path.join(prepared.root, `development-receipt-${phase}.json`), JSON.stringify(result, null, 2))
@@ -821,6 +848,7 @@ export function main(argv) {
     const result = withLedgerReconciliation(ledgerPath, mode, () => runProductionPhasePair(targets, { phase, mode, milestone: selection.milestone,
       scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, evaluationPolicy: selection.evaluationPolicy, order: protocol.order,
       forwardReasoning: forwardReasoningFor(protocol, phase, selection.milestone),
+      forwardQualificationWindow: forwardQualificationWindowFor(protocol, phase, selection.milestone),
       ...currentProtocolBinding(), semanticPath: path.join(ROOT, protocol.fixturePath),
       templatesPath: path.join(evidenceRoot, 'baseline-templates.json'), ledgerPath }))
     inspectTarget(targets.baseline); inspectTarget(targets.candidate)

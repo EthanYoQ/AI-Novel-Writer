@@ -314,3 +314,13 @@ S07 early-budget 已接默认生产命令及最终 fetch 处的 reserve/dispatch
 新配置只进行一次从 C16-A 开始的完整七案前向资格；任何技术 UNKNOWN/FAIL 或原文学门失败均保留并停止依赖推进，不拼接前次成功案或自动再换参数。此实验只检验固定 high / 0 在原期限内能否完成并满足原绝对门，不追认 704/d712 根因，不把旧 0.7/max 或 0/max 失败改判，也不证明参数或代码改善、服务端实际模型模式或稳定性。只有完整七案按原规则通过，才按原顺序进入既定 post-UI/full。
 
 `historicalC16D712808cBoundary` 从1182行接续第1183–1194行，原始完整前缀 sha256 为 `74fa8d5a7f056f2e8b5321dca40f08bc631194add392c03eaeb755033341bf1c`。真实 invocation `d712808c-5336-4abc-bd7e-cd9d0d061300` 的四次 candidate 请求均有 reserve→dispatch→终态，前三次 settle，末次 C16-B 为 `BRIDGE_SETTLEMENT_DEADLINE_EXCEEDED` UNKNOWN；原 `44bcc601` code、`3b52d46f` source、`3e76921f` driver 与逐次 parity 绑定在协议历史项中。四次物理请求均已占用，不退款、不得拼接或改判。账本读写两入口都认证这一段，后续 reserve 使用新协议身份。
+
+## 原生预算对齐的前向资格窗口
+
+`forwardQualificationWindowExperiment` 是独立于上述 high 登记的新时间合同；它以原 `forwardHighReasoningExperiment` 完整对象 hash 为基，逐字继承原五个 scope、两臂 0 / high 参数和自然不对称 wire。旧 high 登记中的 480 秒限制与真实 `625bfda8-9451-4027-8f8c-762e665f0ffb` 结论均不改：该次只完成 C16-A/B，C16-C 的 cards 在第六次物理请求于桥内 480 秒到期后记为 UNKNOWN，余四案未运行。六次请求已消费，不能把五次 settle 拼入新样本，也不能把技术 UNKNOWN 改判为文学结果。
+
+新登记只授权一次从 C16-A 开始的完整七案；原绝对门、七案、作者资料、模型输入、每操作调用许可与 native 预算均不变。产品普通 root 的 `maxActiveElapsedMs` 仍为 3,600,000 毫秒，并由原 owner/repository 按实际累计活动时间、epoch 与 token/call 上限先行约束。实验桥的每 attempt 守护仅作兜底：3,600,000 加 60,000 毫秒结算余量；父进程上限为本次 bridge 已登记最大物理请求数 N × 3,660,000 加 60,000 毫秒，Vitest 上限再加 60,000 毫秒。若 native 先到期，仍记 UNKNOWN 并拒绝迟到成功。未登记路径继续使用原 480,000 / 1,500,000 / 1,560,000 毫秒（reviewed 原专用测试窗保留）；不能从请求传任意 timeout。
+
+N 只计算桥的外层兜底，不增加任何 dispatch 权限：C16-A/B/C 的 notes 加 cards 及已有两次 cards repair 为 4；C17-A 与 C18-A/B 的原续写恢复最多 8；C17-B 的 notes/cards 加续写为 12。`early-budget` post-UI 的目录3、正文8、首审2、修稿1、完整复评1 合计15；`early-context` post-UI 单正文为1；`early-review` post-UI 三操作为3。`full` 每次 bridge 只运行一个 operation：三章规划以产品 `planBlueprintGenerationCost(3).maxCalls` 取9，单章正文以已登记恢复上限取8，不拿完整旅程重置 native root。准备阶段无发送，只需一个有限兜底。任一 scope、case、operation、登记 hash 或实际请求参数漂移须在 reserve 前拒绝；同一解析结果写入父桥 spawn/Vitest config、fixture it/守护与回执。
+
+`historicalC16625bfda8Boundary` 从1194行接续至1212行，完整前缀 sha256 `e6fbc58d717e6acf9cb24cab41c14487cda670db73ab158c7c9a654629b5daa5`，精确认证六次 candidate 的 reserve→dispatch→终态（五次 settle、末次 unknown）及原 code/source/driver/parity 绑定。账本读写两入口都继承该段；旧1194及之前的原始字节前缀继续认证。新目标须绑定新的完整协议与桥 hash。任何技术或文学失败均停止依赖资格；本时间合同本身不证明模型能力、参数或代码改善、原失败根因及服务端实际采纳。

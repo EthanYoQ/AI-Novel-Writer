@@ -6,11 +6,11 @@ import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { test, vi } from 'vitest'
-import { updateLedger, CAMPAIGN_ID, ROOT, forwardReasoningFor } from '../quality-modernization-run.mjs'
+import { updateLedger, CAMPAIGN_ID, ROOT, forwardReasoningFor, forwardQualificationWindowFor } from '../quality-modernization-run.mjs'
 import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, createOperationDispatchGate,
   createOutboundPreflightAssert, assertForwardReasoning, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
-  fetchProviderResponse, measurePromptBytes, BRIDGE_SETTLEMENT_DEADLINE_MS,
-  BRIDGE_TEST_TIMEOUT_MS, BRIDGE_REVIEWED_TEST_TIMEOUT_MS, POST_UI_REVIEW_POLICY, reviewedDraftSelection,
+  fetchProviderResponse, measurePromptBytes, qualificationBridgeWindows,
+  POST_UI_REVIEW_POLICY, reviewedDraftSelection,
   scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder,
   assertSharedInputDiagnostic } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, recordPersistedDraftObservation, safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
@@ -215,6 +215,10 @@ test('isolated production commands persist the selected phase operations', async
   const registeredForward = forwardReasoningFor(json(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')),
     request.phase, request.milestone)
   assert.deepEqual(request.forwardReasoning ?? null, registeredForward, 'FORWARD_REGISTRATION_MISMATCH')
+  const registeredWindow = forwardQualificationWindowFor(json(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')),
+    request.phase, request.milestone)
+  assert.deepEqual(request.forwardQualificationWindow ?? null, registeredWindow, 'FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH')
+  const windows = qualificationBridgeWindows(request)
   const effectiveModelParameters = { ...source.modelParameters,
     ...(['fixed-zero-temperature-max-v1', 'fixed-high-zero-temperature-v1'].includes(registeredForward?.revision)
       ? { temperature: registeredForward.model.temperature } : {}) }
@@ -263,7 +267,7 @@ test('isolated production commands persist the selected phase operations', async
   const record = event => updateLedger(request.ledgerPath, event, { campaignMode: request.mode })
   // 每个已 dispatch 的发送都由守护拥有一个短于桥测试超时的截止时间：到点时先写 unknown，
   // 再 abort，保证超时杀进程之前账本已经有一条终态，而不是只剩 reserve+dispatch。
-  const supervisor = createAttemptSupervisor({ record })
+  const supervisor = createAttemptSupervisor({ record, deadlineMs: windows.attemptMs })
   const originalFetch = globalThis.fetch
   let davFetch = null
   globalThis.fetch = async (...args) => davFetch ? davFetch(...args) : rejectOutsidePhysicalBoundary(receipt)
@@ -1498,7 +1502,8 @@ test('isolated production commands persist the selected phase operations', async
     database?.closeProjectDatabase(); projectAccess?.invalidateCurrentSession()
     vi.unstubAllGlobals()
     // 每臂的请求规模证据（纯数字，不含提示词原文与凭据），两臂因此可在不花真实调用时比较。
-    receipt.bridgeSettlementDeadlineMs = BRIDGE_SETTLEMENT_DEADLINE_MS
+    receipt.bridgeSettlementDeadlineMs = windows.attemptMs
+    receipt.bridgeWindows = windows
     receipt.requestSizes = receipt.attempts.map(attempt => ({ operation: attempt.binding.operation, arm: attempt.binding.arm,
       mode: attempt.binding.mode, attemptId: attempt.attemptId, composedPromptBytes: attempt.composedPromptBytes,
       requestBodyBytes: attempt.requestBodyBytes }))
@@ -1510,4 +1515,4 @@ test('isolated production commands persist the selected phase operations', async
       ledgerBytes: fs.readFileSync(request.ledgerPath, 'utf8'), recoveryRows, targetUnits: chapter.targetUnits,
       isolationRoot: target.isolationRoot, localDispatchGateRejection })
   }
-}, json(process.env.QUALITY_BRIDGE_REQUEST).evaluationPolicy ? BRIDGE_REVIEWED_TEST_TIMEOUT_MS : BRIDGE_TEST_TIMEOUT_MS)
+}, qualificationBridgeWindows(json(process.env.QUALITY_BRIDGE_REQUEST)).testMs)
