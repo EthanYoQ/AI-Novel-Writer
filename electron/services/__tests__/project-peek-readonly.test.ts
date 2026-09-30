@@ -121,8 +121,8 @@ function ready<T extends { state: string }>(overview: T): asserts overview is T 
   expect(overview.state).toBe('ready')
 }
 
-describe('ProjectPeekService source-zero-write overview', () => {
-  it('accepts only a live opaque capability and invalidates it on revoke or manifest drift', { timeout: 20_000 }, () => {
+describe('ProjectPeekService source-zero-write overview', { timeout: 20_000 }, () => {
+  it('accepts only a live opaque capability and invalidates it on revoke or manifest drift', () => {
     const f = fixture()
     const service = new ProjectPeekService({ scratchRoot: f.scratch })
     const capability = service.issueCapability(f.root)
@@ -167,7 +167,7 @@ describe('ProjectPeekService source-zero-write overview', () => {
     expect(fs.existsSync(`${f.databasePath}-shm`)).toBe(false)
   })
 
-  it('refuses legacy roots plus old, future, and forked desktop schemas', { timeout: 20_000 }, () => {
+  it('refuses legacy roots plus old, future, and forked desktop schemas', () => {
     const legacyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-project-peek-legacy-'))
     roots.push(legacyRoot)
     fs.mkdirSync(path.join(legacyRoot, '.vela'))
@@ -186,7 +186,7 @@ describe('ProjectPeekService source-zero-write overview', () => {
     }
   })
 
-  it('reports conservative counts and never marks one chapter as a completed multi-chapter plan', { timeout: 20_000 }, () => {
+  it('reports conservative counts and never marks one chapter as a completed multi-chapter plan', () => {
     const f = fixture()
     f.database.prepare("UPDATE project_core SET premise='前提', worldbuilding='世界观'").run()
     f.database.prepare("INSERT INTO characters (character_id,name,retired) VALUES ('c1','林舟',0),('c2','已退场',1)").run()
@@ -216,7 +216,7 @@ describe('ProjectPeekService source-zero-write overview', () => {
     ])
   })
 
-  it('does not count a finalized status whose frozen outbox fact is inconsistent', { timeout: 20_000 }, () => {
+  it('does not count a finalized status whose frozen outbox fact is inconsistent', () => {
     const f = fixture()
     f.database.prepare('UPDATE project_core SET total_chapters=1').run()
     addChapter(f.database, 1, { draft: true, finalized: true })
@@ -229,7 +229,7 @@ describe('ProjectPeekService source-zero-write overview', () => {
     expect(overview.stages[5]).toEqual({ id: 'finalization', status: 'not-started', count: 0 })
   })
 
-  it('uses unknown for an unknown plan, in-progress once data exists, and only completes full planned coverage', { timeout: 10_000 }, () => {
+  it('uses unknown for an unknown plan, in-progress once data exists, and only completes full planned coverage', () => {
     const unknown = fixture()
     unknown.database.prepare('UPDATE project_core SET total_chapters=0').run()
     const unknownService = new ProjectPeekService({ scratchRoot: unknown.scratch })
