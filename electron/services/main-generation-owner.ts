@@ -5,6 +5,7 @@ import type { BeginGenerationRequest, ExecuteGenerationRequest, BeginGenerationB
 import { generationOutputContract, type GenerationAuthorInput } from '../../src/shared/generation-owner-contract'
 import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot } from '../../src/services/generation/generation-runtime'
 import type { ModelProfile, ModelExecutionLeaseReceipt, LLMFinishReason } from '../../src/shared/ipc-channels'
+import type { CreativeStrategy } from '../../src/shared/reasoning-types'
 import { tokenLiability } from '../../src/shared/generation-contract'
 import { DRAFT_RECONCILE_PURPOSE, stripDraftReconciliationBlock } from '../../src/shared/draft-reconciliation'
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
@@ -450,7 +451,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const leaseId = runLeases.get(run.runId)
     if (!leaseId) throw new Error('GENERATION_RESUME_REQUIRED')
     const model = deps.leases.resolve(leaseId)
-    const plan = buildMainGenerationPlan(model, modelReceipt(run.binding), task, repository.budget(run.rootActionId))
+    const creativeStrategy = deps.database.prepare("SELECT creative_strategy FROM project_core WHERE id='main'").pluck().get() as CreativeStrategy | undefined
+    const plan = buildMainGenerationPlan(model, modelReceipt(run.binding), task, repository.budget(run.rootActionId), creativeStrategy)
     deps.beforeDispatch?.()
     assertCurrent()
     const receipt = await service.execute({ runId: run.runId, invocationNonce: request.invocationNonce, requestHash,

@@ -6,6 +6,7 @@ import { resolveGenerationParameters, resolveGenerationCapabilityConstraints } f
 import { planTaskBudget, S07_TASK_BUDGET_POLICY, type TaskBudgetDecision } from '../../src/services/generation/task-budget-planner'
 import { formatTaskBudgetDecisionFailure } from '../../src/services/generation/prompt-budget-failure'
 import type { LLMGenerateOptions } from '../llm/provider.interface'
+import type { CreativeStrategy } from '../../src/shared/reasoning-types'
 
 /** Finite root ceilings and semantic sizing are frozen into each source binding. */
 export const MAIN_GENERATION_POLICY = Object.freeze({
@@ -83,7 +84,7 @@ export function assertSemanticGenerationTask(task: GenerationTask): void {
 }
 
 export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<ModelExecutionLeaseReceipt, 'capabilityEvidence'>,
-  task: GenerationTask, budget: GenerationBudgetReceipt): MainGenerationPlan {
+  task: GenerationTask, budget: GenerationBudgetReceipt, creativeStrategy: CreativeStrategy = 'auto'): MainGenerationPlan {
   assertSemanticGenerationTask(task)
   const inputUpperBoundTokens = task.messages.reduce((sum, message) =>
     sum + Buffer.byteLength(message.content, 'utf8') + Buffer.byteLength(message.role) + 32, 32)
@@ -98,7 +99,8 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
   const evidence = receipt.capabilityEvidence
   const safety = MAIN_GENERATION_POLICY.safetyMarginTokens
   const remaining = budget.policy.maxTokenLiability - budget.attempts.reduce((sum, attempt) => sum + tokenLiability(attempt), 0)
-  const parameters = resolveGenerationParameters(model, { reasoningStage: task.reasoningStage ?? (task.output === 'visible-text' ? 'drafting' : 'planning') })
+  const parameters = resolveGenerationParameters(model, { creativeStrategy,
+    reasoningStage: task.reasoningStage ?? (task.output === 'visible-text' ? 'drafting' : 'planning') })
   const geminiReasoning = parameters.reasoning?.adapter === 'gemini-thinking-budget' ? parameters.reasoning.thinkingBudget : null
   const canBound = openai || deepseek || siliconV4 || gemini && geminiReasoning !== null && geminiReasoning >= 0
   if (!canBound) throw new Error('GENERATION_LIABILITY_UNBOUNDED')

@@ -80,6 +80,38 @@ function syntheticStream() {
   return fetch
 }
 
+it('applies the current project strategy through the main owner while keeping model override and source freeze', async () => {
+  const reasoning: unknown[] = []
+  const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
+    reasoning.push((request as { plan: { options: { reasoning?: unknown } } }).plan.options.reasoning)
+    options.onVisible({ kind: 'delta', text: '合成正文。' })
+    return { finishReason: 'stop', usage: null }
+  })
+  const f = fixture(dispatch)
+  Object.assign(f.model, { provider: 'deepseek', modelName: 'deepseek-v4-flash', baseUrl: 'https://api.deepseek.com', reasoningOverride: 'auto' })
+  const generate = async (nonce: string) => {
+    const run = f.owner.begin({ ...f.begin, uiActionNonce: nonce })
+    await f.owner.execute({ handle: run.handle, invocationNonce: nonce, task: { ...task, reasoningStage: 'drafting' } })
+  }
+
+  await generate('strategy-auto')
+  expect(reasoning.at(-1)).toEqual({ adapter: 'deepseek-v4-thinking', thinking: 'enabled', reasoningEffort: 'low' })
+
+  f.db.prepare("UPDATE project_core SET creative_strategy='fluent-drafting' WHERE id='main'").run()
+  await generate('strategy-fluent')
+  expect(reasoning.at(-1)).toEqual({ adapter: 'deepseek-v4-thinking', thinking: 'disabled' })
+
+  f.model.reasoningOverride = 'high'
+  await generate('strategy-override')
+  expect(reasoning.at(-1)).toEqual({ adapter: 'deepseek-v4-thinking', thinking: 'enabled', reasoningEffort: 'high' })
+
+  const oldRun = f.owner.begin({ ...f.begin, uiActionNonce: 'strategy-stale' })
+  f.db.prepare("UPDATE project_core SET creative_strategy='auto' WHERE id='main'").run()
+  await expect(f.owner.execute({ handle: oldRun.handle, invocationNonce: 'strategy-stale', task: { ...task, reasoningStage: 'drafting' } }))
+    .rejects.toThrow('GENERATION_SOURCE_CHANGED')
+  expect(dispatch).toHaveBeenCalledTimes(3)
+})
+
 describe('S07 durable task budget diagnostics', () => {
   it('projects only the durable safe provider failure code into the renderer receipt', async () => {
     const f = fixture(async () => { throw new Error('GENERATION_PROVIDER_FAILED') })
