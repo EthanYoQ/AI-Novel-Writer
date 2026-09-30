@@ -393,15 +393,38 @@ function chapterLengthContractText(writingLanguage: WritingLanguage, targetUnits
 }
 
 /**
- * 定稿事实优先规则：作者修改前文后，后续章节蓝图常常仍沿用旧计划。初始生成直接放在执行卡之后，
- * 自动续写与压缩修订经由共用的作者资料块获得同一措辞——两者都会重读蓝图与必需事件，
- * 续写还会新增情节，缺了这条就可能把已撤回的计划写成已执行。
+ * 单一本章执行合同：作者任务、前文既成事实、本章新动作与待核实事项按时态区分。
+ * 首章没有前驱，不加入依赖前章的规则；首稿、续写、压缩和历史恢复复用同一内容。
  */
-function finalizedFactPrecedenceText(writingLanguage: WritingLanguage): string {
+function chapterExecutionContractText(writingLanguage: WritingLanguage, chapterInfo: WriterChapterInfo): string {
+  const executionItems = [
+    { zhCN: '必需事件', enUS: 'Required events', value: chapterInfo.keyEvents },
+    { zhCN: '章节钩子', enUS: 'Chapter hook', value: chapterInfo.suspenseHook },
+    { zhCN: '作者本章指导', enUS: 'Author guidance for this chapter', value: chapterInfo.userGuidance },
+  ]
+  const zhItems = executionItems.flatMap(item => item.value?.trim() ? [`- ${item.zhCN}: ${item.value}`] : []).join('\n')
+  const enItems = executionItems.flatMap(item => item.value?.trim() ? [`- ${item.enUS}: ${item.value}`] : []).join('\n')
+  const hasPredecessor = chapterInfo.chapterNumber > 1
   return promptLanguageText(
     writingLanguage,
-    `【定稿事实优先】\n本章蓝图、章节计划或必需事件的措辞与已定稿章节中确立的事实（包括作者在定稿中的最新更正）冲突时，以定稿事实为准：按与定稿事实一致的方式落实该条目（例如改变阻碍发生的方式或原因），不得把已撤回、取消或被取代的计划追溯写成已执行。人物的等待、暂停或撤回是当时的计划状态，不是作者禁令；本章可以先写出人物基于既有事实作出的新决定、理由及连续性依据，再推进或替换计划，但不能违反作者明确禁令、必需呈现或既成事实。本章明确要求的新事件或新代价必须在本章通过具体行动及其实际后果发生；复述、确认或记账前章已发生的结果不能单独算作兑现。付款、收回、失去等状态改变必须按事件先后写清，不能把同一笔钱款或物品同时写成已收回与仍然失去。定稿只发现疑点、提出猜测或写明待核实时，不能把某一解释、原因或哪一方出错写成已确认事实；本章可以通过新线索和调查推进并解决疑点，但须先写出与既有事实相容且足以支持结论的核验过程与证据，证据不足时保留疑点，结论的方向、时间和因果前后必须一致。本章紧接上一章结尾：作者没有写明跨日或时间间隔时，视为同一天内的紧接发展，上一章事件就发生在不久之前，不得写成“昨天”“昨夜”“前一天”。已定稿事件的时点以定稿原文和【本章写作方向】里的时点说明为准，本章提到这些事件时须按该时点换算（例如定稿写“黄昏”、本章时点为“同日深夜”，则那些事件发生在“黄昏时”“傍晚那会儿”；定稿写“傍晚”、本章时点为“次日上午”，则写“昨晚”“昨天傍晚”）。`,
-    `[Finalized facts take precedence]\nWhen the chapter blueprint, chapter plans, or the wording of required events conflict with facts established in finalized chapters (including the author's latest corrections in them), the finalized facts prevail: realize the item in a way consistent with them (for example, change how or why an obstacle happens), and never retroactively portray a withdrawn, cancelled, or superseded plan as executed. Characters' waiting, paused, or withdrawn plans describe their prior intention, not an author prohibition; this chapter may first show a new decision grounded in established facts, the character's reason, and continuity evidence, then advance or replace the plan without violating explicit author prohibitions, required on-page events, or completed facts. Events and costs explicitly required to occur in this chapter must happen through concrete new action and its actual consequence here; merely repeating, confirming, or accounting for an outcome already completed in an earlier chapter does not fulfill them. Keep the order and result of paying, recovering, or losing money or property consistent; do not describe the same amount or item as both recovered and still lost. If a finalized chapter only discovers a discrepancy, raises a suspicion, or leaves a question for verification, do not present an explanation, cause, or which side is wrong as confirmed. This chapter may pursue new clues and resolve the question, but first show a verification process and evidence sufficient for a conclusion consistent with established facts; otherwise keep it unresolved. The conclusion's direction, timing, and causality must remain consistent throughout. This chapter follows directly on the previous chapter's ending: when the author states no day change or time gap, treat it as a continuation within the same day; events of the previous chapter happened a little while ago and must not be written as "yesterday", "last night", or "the day before". The time of finalized events is fixed by the finalized text and by the time stated in [Chapter brief]; when this chapter mentions those events, convert their time accordingly (for example, if the finalized text says "dusk" and this chapter is "late the same night", those events happened "at dusk" or "earlier this evening"; if it says "evening" and this chapter is "the next morning", write "last night" or "yesterday evening").`,
+    `【本章执行合同】
+【作者本章任务】按作者原文含义遵循：明确要求在本章发生的事件与收束须由正文动作或结果落实；持续状态、知情边界、禁止事项和文风要求是叙述约束，不要仅为证明遵守而新增或反复确认动作、对话或解释。悬念按原文揭示时点处理，留待后文的事不得提前写成已完成；作者明确要求的动作、揭示或反复仍按原文执行。后一项动作必须承接正文实际形成的物品持有、人物知情和计划完成状态。
+${zhItems}
+【本章可推进的事件】可以写与既有事实相容的新行动和结果；仅当作者或本章蓝图明确要求本章发生新代价时，才须写出本章新动作及实际代价。普通无代价情节无需增加代价。${hasPredecessor ? `
+【前文已定稿事实】本章蓝图、章节计划或必需事件的措辞与已定稿章节中确立的事实（包括作者在定稿中的最新更正）冲突时，以定稿事实为准：按与定稿事实一致的方式落实该条目，不得把已撤回、取消或被取代的计划追溯写成已执行。人物身份、物品持有、人物知情、付款与收回及事件时点应承接前文；付款、收回、失去等状态改变必须按事件先后写清，不能把同一笔钱款或物品同时写成已收回与仍然失去。
+【前文计划与本章决定】人物的等待、暂停或撤回是当时的计划状态，不是作者禁令；本章可以先写出人物基于既有事实作出的新决定、理由及连续性依据，再推进或替换计划，但不能违反作者明确禁令、必需呈现或既成事实。
+【本章新增兑现】作者或本章蓝图明确要求的新事件或新代价，必须在本章通过具体行动及其实际后果发生；复述、确认或记账前章已发生的结果不能单独算作兑现。
+【前文待核实问题】定稿只发现疑点、提出猜测或写明待核实时，不能把某一解释、原因或哪一方出错写成已确认事实；本章可以通过新线索和调查推进并解决疑点，但须先写出与既有事实相容且足以支持结论的核验过程与证据，证据不足时保留疑点，结论的方向、时间和因果前后必须一致。
+【时间承接】本章紧接上一章结尾：作者没有写明跨日或时间间隔时，视为同一天内的紧接发展，上一章事件就发生在不久之前，不得写成“昨天”“昨夜”“前一天”。已定稿事件的时点以定稿原文和【本章写作方向】里的时点说明为准，本章提到这些事件时须按该时点换算（例如定稿写“黄昏”、本章时点为“同日深夜”，则那些事件发生在“黄昏时”“傍晚那会儿”；定稿写“傍晚”、本章时点为“次日上午”，则写“昨晚”“昨天傍晚”）。` : ''}`,
+    `[Current-chapter execution contract]
+[Author tasks for this chapter] Follow the author text according to its meaning: events and outcomes explicitly required in this chapter must be realized through manuscript action or outcome. Ongoing states, knowledge boundaries, prohibitions, and style requests are narrative constraints; do not add or repeatedly confirm actions, dialogue, or explanations merely to prove compliance. Follow the reveal timing specified by the author; do not present what is reserved for later chapters as already completed. Still carry out explicitly requested actions, reveals, or repetition. Each later action must continue from the item ownership, character knowledge, and plan-completion state actually established in the prose.
+${enItems}
+[Events this chapter may advance] New actions and outcomes consistent with established facts are allowed. A new action and actual cost in this chapter are required only when the author or this chapter blueprint explicitly requires a new cost here. Ordinary events need no added cost.${hasPredecessor ? `
+[Established finalized facts] When the chapter blueprint, chapter plans, or the wording of required events conflict with facts established in finalized chapters (including the author's latest corrections in them), the finalized facts prevail: realize the item consistently and never retroactively portray a withdrawn, cancelled, or superseded plan as executed. Preserve identities, item ownership, character knowledge, payments and recoveries, and event times from prior prose. Keep the order and result of paying, recovering, or losing money or property consistent; do not describe the same amount or item as both recovered and still lost.
+[Prior plans and current decisions] Characters' waiting, paused, or withdrawn plans describe their prior intention, not an author prohibition; this chapter may first show a new decision grounded in established facts, the character's reason, and continuity evidence, then advance or replace the plan without violating explicit author prohibitions, required on-page events, or completed facts.
+[New fulfillment in this chapter] Events or costs explicitly required by the author or this chapter blueprint to occur here must happen through concrete action and actual consequence here; merely repeating, confirming, or accounting for an outcome already completed in an earlier chapter does not fulfill them.
+[Unverified prior questions] If a finalized chapter only discovers a discrepancy, raises a suspicion, or leaves a question for verification, do not present an explanation, cause, or which side is wrong as confirmed. This chapter may pursue new clues and resolve the question, but first show a verification process and evidence sufficient for a conclusion consistent with established facts; otherwise keep it unresolved. The conclusion's direction, timing, and causality must remain consistent throughout.
+[Time continuity] This chapter follows directly on the previous chapter's ending: when the author states no day change or time gap, treat it as a continuation within the same day; events of the previous chapter happened a little while ago and must not be written as "yesterday", "last night", or "the day before". The time of finalized events is fixed by the finalized text and by the time stated in [Chapter brief]; when this chapter mentions those events, convert their time accordingly (for example, if the finalized text says "dusk" and this chapter is "late the same night", those events happened "at dusk" or "earlier this evening"; if it says "evening" and this chapter is "the next morning", write "last night" or "yesterday evening").` : ''}`,
   )
 }
 
@@ -436,7 +459,7 @@ ${material.novelConfigFacts}
 
 ${material.chapterMaterials}
 
-${reconciliation}${finalizedFactPrecedenceText(writingLanguage)}`,
+${reconciliation}${chapterExecutionContractText(writingLanguage, material.chapterInfo)}`,
     `[Current chapter blueprint]
 ${JSON.stringify(material.chapterInfo, null, 2)}
 
@@ -455,7 +478,7 @@ ${material.novelConfigFacts}
 
 ${material.chapterMaterials}
 
-${reconciliation}${finalizedFactPrecedenceText(writingLanguage)}`,
+${reconciliation}${chapterExecutionContractText(writingLanguage, material.chapterInfo)}`,
   )
 }
 
@@ -796,21 +819,9 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         `  Optional material coverage gaps: ${chapterMaterials.omissions.length}`,
       ))
     }
-    const executionItems = [
-      { zhCN: '必需事件', enUS: 'Required events', value: this.chapterInfo.keyEvents },
-      { zhCN: '章节钩子', enUS: 'Chapter hook', value: this.chapterInfo.suspenseHook },
-      { zhCN: '作者本章指导', enUS: 'Author guidance for this chapter', value: this.chapterInfo.userGuidance },
-    ]
-    const chapterExecutionCard = executionItems.some(item => item.value?.trim())
-      ? promptLanguageText(
-          writingLanguage,
-          `【本章执行卡（作者原文重列）】\n按作者原文含义遵循：明确要求在本章发生的事件与收束须由正文动作或结果落实；持续状态、知情边界、禁止事项和文风要求是叙述约束，不要仅为证明遵守而新增或反复确认动作、对话或解释。悬念按原文揭示时点处理，留待后文的事不得提前写成已完成；作者明确要求的动作、揭示或反复仍按原文执行。后一项动作必须承接正文实际形成的物品持有、人物知情和计划完成状态。\n${executionItems.flatMap(item => item.value?.trim() ? [`- ${item.zhCN}: ${item.value}`] : []).join('\n')}`,
-          `[Current-chapter execution card (author text repeated verbatim)]\nFollow the author text according to its meaning: events and outcomes explicitly required in this chapter must be realized through manuscript action or outcome. Ongoing states, knowledge boundaries, prohibitions, and style requests are narrative constraints; do not add or repeatedly confirm actions, dialogue, or explanations merely to prove compliance. Follow the reveal timing specified by the author; do not present what is reserved for later chapters as already completed. Still carry out explicitly requested actions, reveals, or repetition. Each later action must continue from the item ownership, character knowledge, and plan-completion state actually established in the prose.\n${executionItems.flatMap(item => item.value?.trim() ? [`- ${item.enUS}: ${item.value}`] : []).join('\n')}`,
-        )
-      : ''
     // 仅历史恢复沿用已记录的对账块；新 run 直接使用作者材料与定稿事实。
-    const composeInitialPrompt = (reconciliationBlock: string) => [chapterMaterials.text, promptBuilder.build(), chapterExecutionCard,
-      reconciliationBlock, finalizedFactPrecedenceText(writingLanguage), chapterLengthContract]
+    const composeInitialPrompt = (reconciliationBlock: string) => [chapterMaterials.text, promptBuilder.build(),
+      reconciliationBlock, chapterExecutionContractText(writingLanguage, writerChapterInfo), chapterLengthContract]
       .filter(Boolean)
       .join('\n\n')
     const prompt = composeInitialPrompt('')
@@ -1036,7 +1047,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             novelConfigFacts: novelConfigFactsJson,
             chapterMaterials: chapterMaterials.text,
             reconciliation: reconciliationBlock,
-            chapterExecutionCard,
             writingLanguage,
           })
           recoverableDraftCandidate = lengthCheckedDraft
@@ -1530,7 +1540,6 @@ ${visibleTail}`,
     novelConfigFacts: string
     chapterMaterials: string
     reconciliation?: string
-    chapterExecutionCard: string
     writingLanguage: WritingLanguage
   }): Promise<string> {
     const uiText = (zhCNText: string, enUSText: string) => workflowUiText(params.context, zhCNText, enUSText)
@@ -1541,10 +1550,9 @@ ${visibleTail}`,
       `  正文约 ${originalUnits} 字，超出可接受上限 ${range.maximum} 字，执行唯一一次压缩修订`,
       `  Draft is about ${originalUnits} units, above the acceptable maximum of ${range.maximum}; running the single condense revision`,
     ))
-    // 顺序：任务与硬性要求 → 与续写相同的作者资料块 → 篇幅合同 → 执行卡 → 待压缩正文。
+    // 顺序：任务与硬性要求 → 含唯一执行合同的作者资料块 → 篇幅合同 → 待压缩正文。
     const authorMaterial = draftAuthorMaterialBlock(params.writingLanguage, params)
     const lengthContract = chapterLengthContractText(params.writingLanguage, params.targetChars)
-    const executionCard = params.chapterExecutionCard ? `${params.chapterExecutionCard}\n\n` : ''
     // 篇幅现状：告知模型待压缩正文当前长度与需删量（只说“须落入区间”时，模型常原样返回而压缩不足）。
     // 压缩仅在 originalUnits > range.maximum 时触发，故 cutUnits > 0；ceilUnits 不超过 range.maximum 且必大于 aimUnits。
     const aimUnits = Math.round(params.targetChars * 0.89)
@@ -1567,7 +1575,7 @@ ${authorMaterial}
 
 ${lengthContract}
 
-${executionCard}【待压缩正文】
+【待压缩正文】
 ${params.draft}`,
       `Condense the chapter manuscript below into the acceptable length and output the complete revised manuscript.
 
@@ -1583,7 +1591,7 @@ ${authorMaterial}
 
 ${lengthContract}
 
-${executionCard}[Manuscript to condense]
+[Manuscript to condense]
 ${params.draft}`,
     )
     let condensed: string

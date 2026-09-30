@@ -331,7 +331,7 @@ function leaseReceipt(overrides: Partial<ModelExecutionLeaseReceipt> = {}): Mode
 // 只钉住共享合同的行为锚点和接线，避免复制整段生产提示词。
 const FINALIZED_FACT_PRECEDENCE = {
   'zh-CN': {
-    heading: '【定稿事实优先】',
+    heading: '【本章执行合同】',
     unresolved: '定稿只发现疑点、提出猜测或写明待核实时，不能把某一解释、原因或哪一方出错写成已确认事实',
     verification: '本章可以通过新线索和调查推进并解决疑点',
     planDecision: '人物的等待、暂停或撤回是当时的计划状态，不是作者禁令',
@@ -345,7 +345,7 @@ const FINALIZED_FACT_PRECEDENCE = {
     lengthContract: '【本章篇幅合同】',
   },
   'en-US': {
-    heading: '[Finalized facts take precedence]',
+    heading: '[Current-chapter execution contract]',
     unresolved: 'do not present an explanation, cause, or which side is wrong as confirmed',
     verification: 'This chapter may pursue new clues and resolve the question',
     planDecision: "Characters' waiting, paused, or withdrawn plans describe their prior intention, not an author prohibition",
@@ -877,7 +877,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     await expect(f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })).resolves.toBe(expected)
     expect(executed.map(task => task.purpose)).toEqual([draftPending ? 'chapter-draft' : 'chapter-draft-continuation'])
     if (withoutBlock) expect(executed[0]!.messages.at(-1)!.content).not.toContain('【本章与定稿对账')
-    else expect(executed[0]!.messages.at(-1)!.content).toContain(`${block}\n\n【定稿事实优先】`)
+    else expect(executed[0]!.messages.at(-1)!.content).toContain(`${block}\n\n【本章执行合同】`)
   })
 
   it.each([
@@ -1284,17 +1284,17 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
   it.each([
     {
       writingLanguage: 'zh-CN' as const,
-      heading: '【本章执行卡（作者原文重列）】',
+      heading: '【本章执行合同】',
       labels: ['必需事件', '章节钩子', '作者本章指导'],
       semanticChecks: ['按作者原文含义遵循', '正文动作或结果落实', '叙述约束', '不要仅为证明遵守而新增或反复确认', '按原文揭示时点', '作者明确要求的动作、揭示或反复仍按原文执行'],
     },
     {
       writingLanguage: 'en-US' as const,
-      heading: '[Current-chapter execution card (author text repeated verbatim)]',
+      heading: '[Current-chapter execution contract]',
       labels: ['Required events', 'Chapter hook', 'Author guidance for this chapter'],
       semanticChecks: ['Follow the author text according to its meaning', 'manuscript action or outcome', 'narrative constraints', 'do not add or repeatedly confirm', 'reveal timing specified by the author', 'explicitly requested actions, reveals, or repetition'],
     },
-  ].flatMap(language => [1, 2].map(chapterNumber => ({ ...language, chapterNumber }))))('places a $writingLanguage chapter $chapterNumber semantic execution card immediately before the length contract', async ({
+  ].flatMap(language => [1, 2].map(chapterNumber => ({ ...language, chapterNumber }))))('places one $writingLanguage chapter $chapterNumber execution contract before the length contract', async ({
     writingLanguage,
     heading,
     labels,
@@ -1328,6 +1328,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       writingLanguage === 'en-US' ? '[Chapter length contract]' : '【本章篇幅合同】',
     )
     expect(executionCardIndex).toBeGreaterThanOrEqual(0)
+    expect(user.split(heading)).toHaveLength(2)
     expect(lengthContractIndex).toBeGreaterThan(executionCardIndex)
     expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(`- ${labels[0]}: ${keyEvents}`)
     expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(`- ${labels[1]}: ${suspenseHook}`)
@@ -1340,6 +1341,12 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         ? 'Each later action must continue from the item ownership, character knowledge, and plan-completion state actually established in the prose.'
         : '后一项动作必须承接正文实际形成的物品持有、人物知情和计划完成状态。',
     )
+    expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(
+      writingLanguage === 'en-US' ? 'are required only when the author or this chapter blueprint explicitly requires' : '仅当作者或本章蓝图明确要求',
+    )
+    if (chapterNumber === 1) {
+      expect(user).not.toContain(writingLanguage === 'en-US' ? 'This chapter follows directly on the previous chapter' : '本章紧接上一章结尾')
+    }
     expect(runtime.complete).toHaveBeenCalledOnce()
   })
 
@@ -2353,19 +2360,17 @@ ${headingPrefix}第3章：潮门
     {
       writingLanguage: 'zh-CN' as const,
       ...FINALIZED_FACT_PRECEDENCE['zh-CN'],
-      executionCard: '【本章执行卡（作者原文重列）】',
       continuationTail: '【已写正文末尾】',
     },
     {
       writingLanguage: 'en-US' as const,
       ...FINALIZED_FACT_PRECEDENCE['en-US'],
-      executionCard: '[Current-chapter execution card (author text repeated verbatim)]',
       continuationTail: '[End of existing manuscript]',
     },
   ])('puts the $writingLanguage finalized-fact precedence rule in initial and continuation requests', async ({
     writingLanguage, heading, unresolved, verification, planDecision, supportedDecision, authorBoundary, noRetroactiveExecution,
     newAction, actionConsistency,
-    timeRuleStart, timeRuleEnd, executionCard, lengthContract, continuationTail,
+    timeRuleStart, timeRuleEnd, lengthContract, continuationTail,
   }) => {
     const runtime = fakeOutcomes(
       outcome('初'.repeat(100), 'length', 1),
@@ -2387,9 +2392,9 @@ ${headingPrefix}第3章：潮门
     expect(initial).toContain(timeRuleStart)
     expect(initial).toContain(timeRuleEnd)
     expect(initial.split(heading)).toHaveLength(2)
-    // 初始请求：执行卡之后、篇幅合同之前。
+    // 初始请求：唯一执行合同位于篇幅合同之前。
     const ruleIndex = initial.indexOf(heading)
-    expect(ruleIndex).toBeGreaterThan(initial.lastIndexOf(executionCard))
+    expect(ruleIndex).toBeGreaterThanOrEqual(0)
     expect(initial.indexOf(lengthContract)).toBeGreaterThan(ruleIndex)
     // 续写复用作者资料块，同一措辞只出现一次。
     expect(continuation).toContain(`${heading}\n${rule}\n\n${continuationTail}`)
@@ -2436,6 +2441,12 @@ ${headingPrefix}第3章：潮门
 
       expect(runtime.reconcile).not.toHaveBeenCalled()
       expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-condense'])
+      const [initialPrompt, condensePrompt] = runtime.complete.mock.calls.map(([task]) => task.messages.at(-1)!.content)
+      const { heading, lengthContract } = FINALIZED_FACT_PRECEDENCE[writingLanguage]
+      const contract = (prompt: string) => prompt.split(`${heading}\n`)[1]?.split(`\n\n${lengthContract}`)[0]
+      expect(contract(initialPrompt)).toBe(contract(condensePrompt))
+      expect(initialPrompt.split(heading)).toHaveLength(2)
+      expect(condensePrompt.split(heading)).toHaveLength(2)
       for (const [task] of runtime.complete.mock.calls) {
         const prompt = task.messages.map(message => message.content).join('\n')
         for (const text of [source, '铜钥匙始终由林澄保管。', '核查遇阻；承担代价',
@@ -2454,6 +2465,10 @@ ${headingPrefix}第3章：潮门
       const prompt = runtime.complete.mock.calls[0]![0].messages.at(-1)!.content
       expect(prompt).toContain('读信')
       expect(prompt).toContain(FINALIZED_FACT_PRECEDENCE[writingLanguage].newAction)
+      if (writingLanguage === 'en-US') {
+        expect(prompt).toContain('A new action and actual cost in this chapter are required only when the author or this chapter blueprint explicitly requires a new cost here.')
+        expect(prompt).not.toContain('describe a new action and actual cost in this chapter only when')
+      }
       expect(prompt).not.toContain('每条必需事件写出本章新动作、代价和实际后果')
       expect(prompt).not.toContain("describe this chapter's new action, cost, and actual consequence")
     })
@@ -3226,17 +3241,16 @@ ${headingPrefix}第3章：潮门
     // 篇幅现状块：目标 2000、待压缩 2700 单位 → 约 1780、不超过 2100、删 920（34%）。
     expect(condensePrompt).toContain('【篇幅现状】待压缩正文当前约 2700 字，超出上限。请压缩到约 1780 字（绝对不得超过 2100 字），即删去约 920 字，约占全文 34%。')
     const order = ['【篇幅现状】', '【硬性要求】', '【本章蓝图】', '【全局写作要求】\n压缩全局要求哨兵', '【文风要求】\n压缩文风哨兵', '【文风适用边界】',
-      '【小说配置事实】', '【作者资料（保留原文', '【定稿事实优先】', '【本章篇幅合同】', '【本章执行卡（作者原文重列）】', '- 必需事件: 压缩必需事件哨兵', '【待压缩正文】']
+      '【小说配置事实】', '【作者资料（保留原文', '【本章执行合同】', '- 必需事件: 压缩必需事件哨兵', '【本章篇幅合同】', '【待压缩正文】']
       .map(marker => condensePrompt.indexOf(marker))
     expect(order.every(index => index >= 0)).toBe(true)
     expect(order).toEqual([...order].sort((left, right) => left - right))
-    // 压缩提示经共用作者资料块携带同一事实与时点合同。
+    // 首章压缩复用合同，但不注入依赖前章的事实与时点规则。
     const zhPrecedence = FINALIZED_FACT_PRECEDENCE['zh-CN']
     const zhRule = condensePrompt.split(`${zhPrecedence.heading}\n`)[1]?.split(`\n\n${zhPrecedence.lengthContract}`)[0]
-    expect(zhRule).toContain(zhPrecedence.unresolved)
-    expect(zhRule).toContain(zhPrecedence.verification)
-    expect(condensePrompt).toContain(zhPrecedence.timeRuleStart)
-    expect(condensePrompt).toContain(zhPrecedence.timeRuleEnd)
+    expect(zhRule).toContain('仅当作者或本章蓝图明确要求')
+    expect(condensePrompt).not.toContain(zhPrecedence.timeRuleStart)
+    expect(condensePrompt.split(zhPrecedence.heading)).toHaveLength(2)
     expect(condensePrompt.endsWith(`【待压缩正文】\n${draft}`)).toBe(true)
     expect(invoke).toHaveBeenCalledWith(
       'db:draft-create',
@@ -3262,16 +3276,15 @@ ${headingPrefix}第3章：潮门
     // 篇幅现状块：目标 900、待压缩 1200 词 → 约 801、不超过 945、删 399（33%）。
     expect(condensePrompt).toContain('[Current length] The manuscript to condense is about 1200 words, above the ceiling. Condense it to about 801 words (never more than 945 words), which means cutting about 399 words, roughly 33% of the text.')
     const order = ['[Current length]', '[Requirements]', '[Current chapter blueprint]', '[Project-wide writing guidance]', '[Writing style]', '[Novel configuration facts]',
-      '[Author material (verbatim', '[Finalized facts take precedence]', '[Chapter length contract]', '[Manuscript to condense]'].map(marker => condensePrompt.indexOf(marker))
+      '[Author material (verbatim', '[Current-chapter execution contract]', '[Chapter length contract]', '[Manuscript to condense]'].map(marker => condensePrompt.indexOf(marker))
     expect(order.every(index => index >= 0)).toBe(true)
     expect(order).toEqual([...order].sort((left, right) => left - right))
-    // 压缩提示经共用作者资料块携带同一条时点规则，且仍在 [Finalized facts take precedence] 段内。
+    // 首章压缩复用合同，但不注入依赖前章的事实与时点规则。
     const enPrecedence = FINALIZED_FACT_PRECEDENCE['en-US']
     const enRule = condensePrompt.split(`${enPrecedence.heading}\n`)[1]?.split(`\n\n${enPrecedence.lengthContract}`)[0]
-    expect(enRule).toContain(enPrecedence.unresolved)
-    expect(enRule).toContain(enPrecedence.verification)
-    expect(condensePrompt).toContain(enPrecedence.timeRuleStart)
-    expect(condensePrompt).toContain(enPrecedence.timeRuleEnd)
+    expect(enRule).toContain('are required only when the author or this chapter blueprint explicitly requires')
+    expect(condensePrompt).not.toContain(enPrecedence.timeRuleStart)
+    expect(condensePrompt.split(enPrecedence.heading)).toHaveLength(2)
     expect(condensePrompt).not.toContain('【')
   })
 
