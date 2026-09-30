@@ -338,7 +338,7 @@ const FINALIZED_FACT_PRECEDENCE = {
     supportedDecision: '本章可以先写出人物基于既有事实作出的新决定、理由及连续性依据',
     authorBoundary: '不能违反作者明确禁令、必需呈现或既成事实',
     noRetroactiveExecution: '不得把已撤回、取消或被取代的计划追溯写成已执行',
-    newAction: '复述、确认或记账前章已发生的结果不能单独算作兑现',
+    newAction: '作者或本章蓝图要求在本章发生的事件，必须在本章通过具体行动及其实际后果发生；复述、确认或记账前章已发生的结果不能替代本章要求发生的动作或结果',
     actionConsistency: '付款、收回、失去等状态改变必须按事件先后写清',
     timeRuleStart: '本章紧接上一章结尾：作者没有写明跨日或时间间隔时，视为同一天内的紧接发展',
     timeRuleEnd: '则写“昨晚”“昨天傍晚”）。',
@@ -352,7 +352,7 @@ const FINALIZED_FACT_PRECEDENCE = {
     supportedDecision: "this chapter may first show a new decision grounded in established facts, the character's reason, and continuity evidence",
     authorBoundary: 'without violating explicit author prohibitions, required on-page events, or completed facts',
     noRetroactiveExecution: 'never retroactively portray a withdrawn, cancelled, or superseded plan as executed',
-    newAction: 'merely repeating, confirming, or accounting for an outcome already completed in an earlier chapter does not fulfill them',
+    newAction: 'Events required by the author or this chapter blueprint to happen in this chapter must happen through concrete action and actual consequence here; merely repeating, confirming, or accounting for an outcome already completed in an earlier chapter cannot replace the action or outcome required in this chapter',
     actionConsistency: 'Keep the order and result of paying, recovering, or losing money or property consistent',
     timeRuleStart: "This chapter follows directly on the previous chapter's ending: when the author states no day change or time gap",
     timeRuleEnd: '"earlier this evening"; if it says "evening" and this chapter is "the next morning", write "last night" or "yesterday evening").',
@@ -1342,7 +1342,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         : '后一项动作必须承接正文实际形成的物品持有、人物知情和计划完成状态。',
     )
     expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(
-      writingLanguage === 'en-US' ? 'are required only when the author or this chapter blueprint explicitly requires' : '仅当作者或本章蓝图明确要求',
+      writingLanguage === 'en-US' ? 'New actions and outcomes consistent with established facts are allowed. Ordinary events need no added cost.' : '可以写与既有事实相容的新行动和结果；普通无代价情节无需增加代价。',
     )
     if (chapterNumber === 1) {
       expect(user).not.toContain(writingLanguage === 'en-US' ? 'This chapter follows directly on the previous chapter' : '本章紧接上一章结尾')
@@ -2465,10 +2465,10 @@ ${headingPrefix}第3章：潮门
       const prompt = runtime.complete.mock.calls[0]![0].messages.at(-1)!.content
       expect(prompt).toContain('读信')
       expect(prompt).toContain(FINALIZED_FACT_PRECEDENCE[writingLanguage].newAction)
-      if (writingLanguage === 'en-US') {
-        expect(prompt).toContain('A new action and actual cost in this chapter are required only when the author or this chapter blueprint explicitly requires a new cost here.')
-        expect(prompt).not.toContain('describe a new action and actual cost in this chapter only when')
-      }
+      expect(prompt).toContain(writingLanguage === 'en-US'
+        ? 'New actions and outcomes consistent with established facts are allowed. Ordinary events need no added cost.'
+        : '可以写与既有事实相容的新行动和结果；普通无代价情节无需增加代价。')
+      expect(prompt).not.toContain(writingLanguage === 'en-US' ? 'requires a new cost here' : '明确要求本章发生新代价')
       expect(prompt).not.toContain('每条必需事件写出本章新动作、代价和实际后果')
       expect(prompt).not.toContain("describe this chapter's new action, cost, and actual consequence")
     })
@@ -3248,7 +3248,7 @@ ${headingPrefix}第3章：潮门
     // 首章压缩复用合同，但不注入依赖前章的事实与时点规则。
     const zhPrecedence = FINALIZED_FACT_PRECEDENCE['zh-CN']
     const zhRule = condensePrompt.split(`${zhPrecedence.heading}\n`)[1]?.split(`\n\n${zhPrecedence.lengthContract}`)[0]
-    expect(zhRule).toContain('仅当作者或本章蓝图明确要求')
+    expect(zhRule).toContain('可以写与既有事实相容的新行动和结果；普通无代价情节无需增加代价。')
     expect(condensePrompt).not.toContain(zhPrecedence.timeRuleStart)
     expect(condensePrompt.split(zhPrecedence.heading)).toHaveLength(2)
     expect(condensePrompt.endsWith(`【待压缩正文】\n${draft}`)).toBe(true)
@@ -3282,7 +3282,7 @@ ${headingPrefix}第3章：潮门
     // 首章压缩复用合同，但不注入依赖前章的事实与时点规则。
     const enPrecedence = FINALIZED_FACT_PRECEDENCE['en-US']
     const enRule = condensePrompt.split(`${enPrecedence.heading}\n`)[1]?.split(`\n\n${enPrecedence.lengthContract}`)[0]
-    expect(enRule).toContain('are required only when the author or this chapter blueprint explicitly requires')
+    expect(enRule).toContain('New actions and outcomes consistent with established facts are allowed. Ordinary events need no added cost.')
     expect(condensePrompt).not.toContain(enPrecedence.timeRuleStart)
     expect(condensePrompt.split(enPrecedence.heading)).toHaveLength(2)
     expect(condensePrompt).not.toContain('【')
