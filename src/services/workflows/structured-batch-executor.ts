@@ -3,6 +3,7 @@ import {
   GenerationHarnessError,
   PromptBudgetExceededError,
   type GenerationAttemptReceipt,
+  type GenerationOutcome,
   type GenerationSession,
   type GenerationTask,
 } from '../generation/generation-harness'
@@ -39,6 +40,15 @@ export interface StructuredBatchContract<TInput, TOutput> {
   syntaxRepairContract?(input: { items: readonly TInput[] }): string
 }
 
+/**
+ * Provider-side transient failures get a bounded second chance before a batch
+ * fails the whole run. This is deliberately not a retry for lazy or malformed
+ * output: `length`, `content_filter`, syntax damage and contract violations
+ * keep their existing fail-closed or split/rebuild paths.
+ */
+const PROVIDER_RETRY_LIMIT = 2
+const PROVIDER_RETRY_BASE_DELAY_MS = 750
+
 export type StructuredGenerationFailureReason =
   | 'server_error'
   | 'authentication'
@@ -60,6 +70,8 @@ export interface StructuredBatchReceipt {
   requestedTokens: number
   attempts: readonly GenerationAttemptReceipt[]
   compactSingleFallbackCount?: number
+  /** Physical provider faults that were retried within the same batch. */
+  providerRetryCount?: number
 }
 
 export interface StructuredBatchFailure {
@@ -138,6 +150,61 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
         dependencies.onAttempt?.(attempt)
       }
 
+      /**
+       * Interruptible exponential backoff. Returns false when the run was
+       * cancelled while waiting, so the caller stops instead of retrying.
+       */
+      const waitBeforeProviderRetry = async (retryIndex: number): Promise<boolean> => {
+        const deadline = Date.now() + PROVIDER_RETRY_BASE_DELAY_MS * (2 ** (retryIndex - 1))
+        while (Date.now() < deadline) {
+          if (input.signal?.aborted) return false
+          await new Promise(resolvePromise => setTimeout(
+            resolvePromise,
+            Math.min(100, Math.max(0, deadline - Date.now())),
+          ))
+        }
+        return !input.signal?.aborted
+      }
+
+      /**
+       * One transient provider failure must not discard every earlier batch
+       * that already succeeded. Only provider-side error terminal states are
+       * retried: `length`, `content_filter`, syntax damage and contract
+       * violations keep their existing split, rebuild or fail-closed paths.
+       *
+       * This seam cannot tell a genuine upstream rejection from transport
+       * noise, so `PROVIDER_REQUEST_FAILED` is retried too; the limit keeps
+       * that bounded and every physical call is still recorded once.
+       */
+      const completeWithProviderRetry = async (
+        task: GenerationTask,
+      ): Promise<GenerationOutcome> => {
+        let providerRetries = 0
+        for (;;) {
+          let outcome: GenerationOutcome
+          try {
+            outcome = await session.complete(task, { signal: input.signal })
+          } catch (error) {
+            if (!(error instanceof GenerationAttemptError)) throw error
+            if (attemptReceipts.at(-1) !== error.receipt) recordAttempt(error.receipt)
+            if (error.code !== 'PROVIDER_REQUEST_FAILED' || providerRetries >= PROVIDER_RETRY_LIMIT) {
+              throw error
+            }
+            providerRetries += 1
+            receipt.providerRetryCount = providerRetries
+            if (!await waitBeforeProviderRetry(providerRetries)) throw error
+            continue
+          }
+          recordAttempt(outcome.receipt)
+          const isTransient = outcome.status === 'incomplete'
+            && outcome.finishReason === 'error'
+          if (!isTransient || providerRetries >= PROVIDER_RETRY_LIMIT) return outcome
+          providerRetries += 1
+          receipt.providerRetryCount = providerRetries
+          if (!await waitBeforeProviderRetry(providerRetries)) return outcome
+        }
+      }
+
       if (!Number.isInteger(input.limits.maxBatchItems) || input.limits.maxBatchItems < 1) {
         return {
           ok: false,
@@ -208,8 +275,7 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
           })
         }
 
-        const outcome = await session.complete(task, { signal: input.signal })
-        recordAttempt(outcome.receipt)
+        const outcome = await completeWithProviderRetry(task)
         if (input.signal?.aborted) {
           throw new ExecutionFailure({
             code: 'cancelled',
@@ -483,7 +549,9 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
         if (error instanceof ExecutionFailure) {
           failure = error.failure
         } else if (error instanceof GenerationAttemptError) {
-          recordAttempt(error.receipt)
+          // A retried attempt is already recorded; only a terminal one that
+          // never passed through the retry seam needs recording here.
+          if (attemptReceipts.at(-1) !== error.receipt) recordAttempt(error.receipt)
           if (error.code === 'CANCELLED') {
             failure = { code: 'cancelled', reason: 'cancelled', message: error.message }
           } else if (error.code === 'DEADLINE_EXHAUSTED') {

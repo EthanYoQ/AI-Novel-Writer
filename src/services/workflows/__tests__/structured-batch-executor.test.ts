@@ -444,7 +444,7 @@ describe('StructuredBatchExecutor seam', () => {
     ])
   })
 
-  it('returns no publishable items when an earlier split batch succeeds and a later batch fails', async () => {
+  it('keeps an earlier split batch when a later provider failure exhausts its retries', async () => {
     const generate = vi.fn<AttemptHandler>(async request => {
       if (request.items.length === 5) {
         return {
@@ -461,11 +461,7 @@ describe('StructuredBatchExecutor seam', () => {
           requestedTokens: 100,
         }
       }
-      return {
-        status: 'failed',
-        reason: 'server_error',
-        requestedTokens: 100,
-      }
+      return { status: 'failed', reason: 'server_error', requestedTokens: 100 }
     })
     const executor = createStructuredBatchExecutor({
       contract: blueprintContract,
@@ -479,15 +475,8 @@ describe('StructuredBatchExecutor seam', () => {
 
     expect(result).toMatchObject({
       ok: false,
-      failure: {
-        code: 'generation_failed',
-        reason: 'server_error',
-      },
-      receipt: {
-        calls: 3,
-        splitCount: 1,
-        requestedTokens: 300,
-      },
+      failure: { code: 'generation_failed', reason: 'server_error' },
+      receipt: { calls: 5, splitCount: 1, requestedTokens: 500, providerRetryCount: 2 },
     })
     expect(result).not.toHaveProperty('items')
   })
@@ -1292,9 +1281,40 @@ describe('StructuredBatchExecutor seam', () => {
     expect(result).toMatchObject({
       ok: false,
       failure: { code: 'generation_failed', reason: 'server_error' },
-      receipt: { calls: 1, splitCount: 0, requestedTokens: 100 },
+      receipt: { calls: 3, splitCount: 0, requestedTokens: 300, providerRetryCount: 2 },
     })
-    expect(generate).toHaveBeenCalledTimes(1)
+    expect(generate).toHaveBeenCalledTimes(3)
+  })
+
+  it('retries a transient provider error and completes the batch on the retry', async () => {
+    let attempt = 0
+    const generate = vi.fn<AttemptHandler>(async request => {
+      attempt += 1
+      if (attempt === 1) {
+        return { status: 'failed', reason: 'server_error', requestedTokens: 100 }
+      }
+      return {
+        status: 'completed',
+        content: blueprintJson(request.items),
+        requestedTokens: 100,
+      }
+    })
+    const executor = createStructuredBatchExecutor({
+      contract: blueprintContract,
+      session: createSession(generate),
+    })
+
+    const result = await executor.execute({
+      items: [1, 2, 3, 4, 5],
+      limits: { maxBatchItems: 5 },
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      items: [{ chapterNumber: 1 }, { chapterNumber: 2 }, { chapterNumber: 3 }, { chapterNumber: 4 }, { chapterNumber: 5 }],
+      receipt: { calls: 2, splitCount: 0, requestedTokens: 200, providerRetryCount: 1 },
+    })
+    expect(generate).toHaveBeenCalledTimes(2)
   })
 
   it('does not split a five-item batch after a safety-filtered outcome', async () => {
