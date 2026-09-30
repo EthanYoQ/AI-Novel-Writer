@@ -18,7 +18,7 @@ export interface FinalizedCharacterGenerationReceipt extends FinalizedCharacterS
   proposalBatchId?: string
 }
 export interface FinalizedCharacterGenerationChannels {
-  'finalized-character:read-context': { args: [{ draftId: number }]; return: { contextId: string; context: FinalizedCharacterContext } }
+  'finalized-character:read-context': { args: [{ draftId: number }]; return: { contextId: string; context: FinalizedCharacterContext; originProjectId?: string } }
   'finalized-character:commit': { args: [FinalizedCharacterGenerationCommit]; return: FinalizedCharacterGenerationReceipt }
   'finalized-character:list-state-candidates': { args: []; return: PendingFinalizedCharacterStateCandidateSummary[] }
   'finalized-character:read-state-candidate': { args: [{ draftId: number; candidateKey: string }]; return: PendingFinalizedCharacterStateCandidate }

@@ -16,6 +16,7 @@ import type { GenerationRunServiceDependencies } from '../generation-run-service
 import type { MainGenerationExecuteReceipt } from '../../../src/services/generation/generation-runtime'
 import { parseFinalizedCharacterStateResponse } from '../../../src/shared/finalized-continuity'
 import { getBuiltinPromptTemplate } from '../../../src/services/builtin-prompt-templates'
+import * as portableAuthority from '../portable-current-authority'
 
 vi.mock('../../database', async importOriginal => ({ ...await importOriginal<typeof import('../../database')>(), getProjectDb: vi.fn() }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -313,6 +314,44 @@ const lastUserMessage=(request:unknown)=>{
  const content=messages.filter(message=>message.role==='user').at(-1)?.content
  return typeof content==='string'?content:JSON.stringify(content)
 }
+it.each(['same-project', 'authorized-origin', 'unknown-origin'] as const)('cards冻结消息只移除可证同章旧derived事件，CAS基线保留：%s', async origin => {
+ const previous = '更正记录：核查仍未开始，原定安排等待雨停。'
+ const content = '林岚更正记录：核查仍未开始，原定安排等待雨停。\n\n林岚撤回先前核查安排，等待新的通行许可。'
+ const authorized = origin === 'authorized-origin'
+ if (authorized) vi.spyOn(portableAuthority, 'readPortableCurrentAuthority').mockReturnValue({ receiptId: 'verified-transfer', originProjectId: 'origin-project', snapshotGeneration: 'fixture' })
+ const f = fixture(async (_request, options) => {
+  options.onVisible({ kind: 'delta', text: JSON.stringify({ updates: [{ characterId: f.characterId,
+   currentState: { recentEvents: '撤回核查安排，等待新的通行许可。' }, evidence: { text: '林岚撤回先前核查安排，等待新的通行许可。' } }] }) })
+  return { finishReason: 'stop', usage: null }
+ }, { content, transferOrigin: () => authorized ? 'origin-project' : undefined, seed: db => {
+  // C17-B shape: prior revision 3 / generation 2, new revision 4 / generation 3.
+  db.exec("UPDATE drafts SET version=4 WHERE id=1; UPDATE continuity_projection_meta SET generation=3 WHERE id='main'; UPDATE summary_snapshots SET projection_generation=3 WHERE draft_id=1")
+  const provenance = { recentEvents: { kind: 'derived', source: { draftId: 3, chapterNumber: 1, finalizationId: 'previous-finalization', contentHash: textHash('previous prose') }, revision: 3,
+   sourceOrder: { continuityEpoch: `${origin === 'same-project' ? 'project' : 'origin-project'}:2`, chapterNumber: 1, authoritativeFinalizationRevision: 3 } },
+   location: { kind: 'author', chapterNumber: 1, revision: 1 } }
+  db.prepare("UPDATE characters SET cs_recent_events=?,cs_location='作者地点',cs_provenance=? WHERE name='林岚'").run(previous, JSON.stringify(provenance))
+ } })
+ expect(f.prepared).toMatchObject(authorized ? { originProjectId: 'origin-project' } : { context: { projectId: 'project' } })
+ const slot: FinalizationGenerationSlot = { source: f.prepared.context.source, stepKey: 'character_cards' }
+ const recovery = f.owner.beginFinalizationGeneration({ slot, modelId: 'synthetic' })
+ const frozen = structuredClone(recovery.context.identity)
+ const receipt = await f.owner.executeFinalizationGeneration({ handle: recovery.view.handle })
+ const prompt = lastUserMessage(f.dispatch.mock.calls[0]![0])
+ const cards = JSON.parse(prompt.slice(prompt.indexOf('角色：') + 3, prompt.indexOf('\n\n【最终输出合同')))
+ const fields = cards.find((card: { characterId: string }) => card.characterId === f.characterId).fields
+ expect(fields.some((field: { field: string }) => field.field === 'recentEvents')).toBe(origin === 'unknown-origin')
+ expect(fields).toContainEqual(expect.objectContaining({ field: 'location', value: '作者地点', provenance: { kind: 'author', chapterNumber: 1 } }))
+ expect(prompt).toContain(content)
+ expect(f.owner.readFinalizationGeneration({ slot })?.context.identity).toEqual(frozen)
+ expect(frozen.characters[0]!.fields).toContainEqual(expect.objectContaining({ field: 'recentEvents', value: previous, revision: 3 }))
+ const request = { handle: recovery.view.handle, artifact: f.artifactOf(receipt) }
+ // Filtering the prompt must not erase the old comparison baseline or bypass a concurrent author edit.
+ f.db.prepare('UPDATE characters SET cs_recent_events=? WHERE character_id=?').run('作者运行中修改', f.characterId)
+ expect(() => f.owner.commitFinalizationGeneration(request)).toThrow(origin === 'unknown-origin' ? 'FINALIZED_CHARACTER_SOURCE_CONFLICT' : 'FINALIZED_CHARACTER_FIELD_CONFLICT')
+ f.db.prepare('UPDATE characters SET cs_recent_events=? WHERE character_id=?').run(previous, f.characterId)
+ if (origin !== 'unknown-origin') expect(f.owner.commitFinalizationGeneration(request)).toMatchObject({ applied: 1 })
+ expect(f.dispatch).toHaveBeenCalledTimes(1)
+})
 async function splitEvidenceRun(writingLanguage?:'en-US',replies:((characterId:string)=>unknown)[]=[]){
  const f=fixture(undefined,{content:splitProse,writingLanguage})
  for(const reply of replies)f.dispatch.mockImplementationOnce(async(_request,options)=>{

@@ -24,7 +24,7 @@ export class FinalizedCharacterGeneration {
     const contextId = randomUUID()
     if (this.contexts.size >= 64) this.contexts.delete(this.contexts.keys().next().value!)
     this.contexts.set(contextId, structuredClone(context))
-    return { contextId, context: structuredClone(context) }
+    return { contextId, context: structuredClone(context), originProjectId: this.transferOrigin() }
   }
 
   listPendingStateCandidates() {

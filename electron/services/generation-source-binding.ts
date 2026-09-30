@@ -558,7 +558,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
             graphGenerationTask: task, graphGenerationTaskHash: hash(JSON.stringify(task)) });
     }
     if (finalizationContext) {
-        const task = finalizationGenerationTask(finalizationContext);
+        const task = finalizationGenerationTask(finalizationContext, transferAuthority?.originProjectId);
         Object.assign(sourceManifest, { finalizationGenerationSlot: finalizationContext.slot, finalizationGenerationSlotKey: finalizationSlotKey(finalizationContext.slot),
             finalizationGenerationContext: finalizationContext, finalizationGenerationContextHash: hash(JSON.stringify(finalizationContext)), finalizationGenerationOriginEpoch: finalizationContext.identity.epoch,
             finalizationGenerationTask: task, finalizationGenerationTaskHash: hash(JSON.stringify(task)) });

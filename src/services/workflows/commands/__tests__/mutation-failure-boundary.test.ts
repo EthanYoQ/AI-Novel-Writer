@@ -135,6 +135,7 @@ function testPostProcessGeneration(): FinalizePostProcessGeneration {
 }
 
 const characterContexts = new Map<number, FinalizedCharacterContext>()
+let characterContextOrigin: string | undefined
 function testFrozenCharacterSteps(content: string, generation: FinalizePostProcessGeneration, chapterNumber = 1) {
   const source = finalizedSource(42, chapterNumber, content)
   const frozen: FinalizedCharacterContext = { projectId: 'A', epoch: 'epoch-A', source, content, projectionGeneration: 0,
@@ -206,7 +207,7 @@ function stubVelaIpc(invoke: (channel: string, ...args: unknown[]) => Promise<un
     aiNovelAPI: {
       invoke: (channel: string, ...args: unknown[]) => (
         channel === 'finalized-character:read-context'
-          ? Promise.resolve({ contextId: 'synthetic-context', context: characterContexts.get((args[0] as { draftId: number }).draftId) })
+          ? Promise.resolve({ contextId: 'synthetic-context', context: characterContexts.get((args[0] as { draftId: number }).draftId), originProjectId: characterContextOrigin })
           : channel === 'prompt:load-global'
           ? Promise.resolve({ templates: [], diagnostics: [] })
           : channel === 'fs:check-exists' && String(args[0]).endsWith('/.ai-novel/prompts')
@@ -219,6 +220,7 @@ function stubVelaIpc(invoke: (channel: string, ...args: unknown[]) => Promise<un
 
 beforeEach(() => {
   characterContexts.clear()
+  characterContextOrigin = undefined
   finalizationClient.commitFinalizationSnapshot.mockReset()
   useProjectStore.setState({
     currentProject: {
@@ -771,6 +773,35 @@ describe('workflow mutation failure boundaries', () => {
     expect(prepared.context.content).toBe(draftContent)
     expect(prepared.contextId).toBe('synthetic-context')
   })
+
+  it.each(['same-project', 'authorized-origin', 'unknown-origin', 'unknown-order', 'unknown-source', 'unknown-epoch', 'future-epoch', 'future-revision', 'same-source', 'equal-revision', 'other-chapter', 'other-character', 'other-project', 'author', 'legacy'] as const)(
+    'renderer cards投影仅隐藏已被当前定稿替代的事件，保留完整context：%s', async kind => {
+      stubVelaIpc(vi.fn())
+      const characterStates = vi.fn(async () => ({ applied: 0, unchanged: 0, candidates: [], unresolved: [] }))
+      const step = testFrozenCharacterSteps('林岚撤回安排，等待许可。', { complete: vi.fn(), characterStates }, 2).find(step => step.key === 'character_cards')!
+      const frozen = characterContexts.get(42)!
+      frozen.projectionGeneration = 3
+      frozen.sourceOrder = { continuityEpoch: 'A:3', chapterNumber: 2, authoritativeFinalizationRevision: 4 }
+      const priorSource = kind === 'same-source' ? frozen.source : finalizedSource(3, kind === 'other-chapter' ? 1 : 2, '旧正文')
+      if (kind === 'unknown-source') priorSource.contentHash = ''
+      const field: FinalizedCharacterContext['characters'][number]['fields'][number] = {
+        projectId: kind === 'other-project' ? 'other-project' : 'A', epoch: 'epoch-A', characterId: kind === 'other-character' ? 'other-character' : 'synthetic-lin-lan', field: 'recentEvents', revision: 3,
+        value: '旧事件基线标记', valueHash: createHash('sha256').update('旧事件基线标记').digest('hex'),
+        provenance: kind === 'author' ? { kind: 'author', chapterNumber: 1 } : kind === 'legacy' ? { kind: 'legacy' } : { kind: 'derived', source: priorSource },
+        sourceOrder: kind === 'unknown-order' ? undefined : { continuityEpoch: kind.includes('origin') ? 'origin-A:2' : kind === 'unknown-epoch' ? 'unrecognized' : kind === 'future-epoch' ? 'A:4' : 'A:2',
+          chapterNumber: priorSource.chapterNumber, authoritativeFinalizationRevision: kind === 'equal-revision' ? 4 : kind === 'future-revision' ? 5 : 3 },
+      }
+      frozen.characters[0]!.fields = [field, { ...field, field: 'location', value: '保留地点标记' }]
+      if (kind === 'authorized-origin') characterContextOrigin = 'origin-A'
+      const before = structuredClone(frozen)
+      await step.executor(callbacks(), context())
+      const [builder, , , prepared] = characterStates.mock.calls[0] as unknown as Parameters<NonNullable<FinalizePostProcessGeneration['characterStates']>>
+      expect(builder.build().includes('旧事件基线标记')).toBe(!['same-project', 'authorized-origin'].includes(kind))
+      expect(builder.build()).toContain('保留地点标记')
+      expect(builder.build()).toContain(frozen.content)
+      expect(prepared.context).toEqual(before)
+      expect(characterContexts.get(42)).toEqual(before)
+    })
 
   it.each([
     ['zh-CN', '【最终输出合同，覆盖上文【输出格式（JSON）】】', '只返回一个 JSON 对象'],

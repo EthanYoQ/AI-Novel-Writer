@@ -28,9 +28,10 @@ import {
   type PostProcessStatus,
 } from '../workflow-utils'
 import type { ChapterInfo } from '../chapter-workflow'
-import type {
-  FinalizedCharacterContext,
-  FinalizedSourceIdentity,
+import {
+  finalizedCharacterPromptCards,
+  type FinalizedCharacterContext,
+  type FinalizedSourceIdentity,
 } from '../../../shared/finalized-continuity'
 import { readWorkflowDraftMeta } from '../workflow-draft-meta'
 import {
@@ -281,8 +282,7 @@ export function buildFinalizePostProcessSteps(
       const writingLanguage = workflowWritingLanguage(context)
       const template = await resolvePromptTemplate('update_character_cards', projectSession, writingLanguage)
       if (!template) throw new Error('FINALIZED_CHARACTER_TEMPLATE_REQUIRED')
-      const cards = prepared.context.characters.map(character => ({ characterId: character.characterId,
-        name: character.displayNameSnapshot, aliases: character.aliases, fields: character.fields.map(field => ({ field: field.field, value: field.value, provenance: field.provenance })) }))
+      const cards = finalizedCharacterPromptCards(prepared.context, prepared.originProjectId)
       const base = new PostProcessPromptBuilder(template, writingLanguage)
         .withChapterContent(prepared.context.content).withChapterNumber(chapterNumber).withExistingCardsJson(cards)
       const contract = writingLanguage === 'en-US'

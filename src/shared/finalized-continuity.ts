@@ -1,6 +1,6 @@
 import { CHARACTER_STATE_TEXT_FIELDS, type CharacterStateTextField } from './character-roster'
-import type { CharacterFieldSnapshot, DerivedSourceOrder } from './character-identity'
-import type { ProjectEpoch } from './source-ref'
+import { decideDerivedPatch, type CharacterFieldSnapshot, type DerivedSourceOrder } from './character-identity'
+import { isFinalizedSourceIdentity, type ProjectEpoch } from './source-ref'
 
 export type FinalizedContinuityFactCategory =
   | 'character-state'
@@ -121,6 +121,23 @@ export interface FinalizedCharacterContext extends ProjectEpoch {
     aliases: string[]
     fields: CharacterFieldSnapshot[]
   }>
+}
+/** Render only: the original fields remain the CAS baseline. originProjectId must be main-verified transfer authority. */
+export function finalizedCharacterPromptCards(context: FinalizedCharacterContext, originProjectId?: string) {
+  return context.characters.map(character => ({ characterId: character.characterId, name: character.displayNameSnapshot, aliases: character.aliases,
+    fields: character.fields.filter(field => {
+      const previous = field.sourceOrder
+      // chapterNumber identifies the chapter within the verified project lineage; draft IDs identify versions, not chapters.
+      const superseded = field.field === 'recentEvents' && field.characterId === character.characterId && field.provenance.kind === 'derived'
+        && typeof field.provenance.source?.finalizationId === 'string' && isFinalizedSourceIdentity(field.provenance.source)
+        && field.provenance.source.chapterNumber === context.source.chapterNumber
+        && field.provenance.source.finalizationId !== context.source.finalizationId
+        && previous && previous.authoritativeFinalizationRevision < context.sourceOrder.authoritativeFinalizationRevision
+        && decideDerivedPatch(field, { ...field, projectId: context.projectId, epoch: context.epoch,
+          baseFieldRevision: field.revision, baseValueHash: field.valueHash, baseProvenance: field.provenance,
+          source: context.source, sourceOrder: context.sourceOrder }, { source: context.source, order: context.sourceOrder, originProjectId }) === 'apply-derived'
+      return !superseded
+    }).map(field => ({ field: field.field, value: field.value, provenance: field.provenance })) }))
 }
 export type FinalizedCharacterStateValues = Partial<Record<CharacterStateTextField, string>>
 export interface FinalizedCharacterStateUpdate {
