@@ -1,5 +1,5 @@
 import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, DRAFT_VISIBLE_TEXT_VERSION } from '../../../shared/draft-visible-text'
-import { DRAFT_RECONCILE_PURPOSE, parseDraftReconciliation, renderDraftReconciliationBlock } from '../../../shared/draft-reconciliation'
+import { DRAFT_RECONCILE_PURPOSE, draftReconciliationBlock } from '../../../shared/draft-reconciliation'
 export { sanitizeDraftText } from '../../../shared/draft-visible-text'
 import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationRequest } from '../workflow-main-generation'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
@@ -459,62 +459,6 @@ ${reconciliation}${finalizedFactPrecedenceText(writingLanguage)}`,
   )
 }
 
-/**
- * 生成前定稿对账提示。作者修改前文（撤回、推迟、改由其他条件触发某计划）后，后续蓝图常仍沿用旧计划；
- * 仅在正文提示里强调“定稿优先”无法可靠修正这类冲突，压缩修订也修不回首稿违规。因此首稿之前先让模型
- * 只做对账：列出上一章定稿结束时的状态，逐条给出必需事件与定稿一致的落实方式。
- */
-function draftReconciliationPrompt(writingLanguage: WritingLanguage, input: {
-  finalizedBlocks: readonly string[]
-  previousEnding: string
-  authorFacts: string
-  chapterInfo: WriterChapterInfo
-}): string {
-  const finalized = input.finalizedBlocks.join('\n\n')
-  const ending = input.previousEnding.trim() && !input.finalizedBlocks.some(block => block.includes(input.previousEnding.trim()))
-    ? input.previousEnding.trim() : ''
-  const blueprint = JSON.stringify(input.chapterInfo, null, 2)
-  const factContract = finalizedFactPrecedenceText(writingLanguage)
-  return promptLanguageText(
-    writingLanguage,
-    `你是连载小说的连续性编辑。下面是已定稿章节原文（后出现的作者更正覆盖前文）、作者全书设定与本章蓝图。请只做对账，不写正文：
-${factContract}
-1. 列出上一章定稿结尾时的最终状态：已发生事件及准确时点、仍待执行的计划与条件、物品持有；不要把本章尚未发生的变化或人物等待写成既成行动。
-2. 逐项区分前章已发生、仍待执行和本章必须新增的变化；对本章蓝图的每条必需事件写出本章新动作和实际后果；仅当作者设定或本章蓝图明确要求代价时，落实相应代价，不得凭空增造损失。前章已发生的阻碍或代价只作来源，不能靠复述、确认或记旧账兑现本章新增要求。若按字面执行会与定稿事实或作者设定冲突，conflict 填 true，保留事件名、改变其发生方式或原因；不冲突填 false。人物可在本章作出有连续性依据的新决定并说明理由，再推进或替换旧计划；不追溯写成旧计划早已执行，也不违反作者禁令或既成事实。
-只输出一个 JSON 对象，不要其他文字：{"finalState":["最终状态要点"],"events":[{"event":"必需事件","conflict":true,"realization":"与上述状态一致的具体落实方式"}]}。finalState 不超过5条，events 不超过8条，每条一句话。
-
-【已定稿章节原文】
-${finalized}
-${ending ? `\n【上一章定稿结尾】\n${ending}\n` : ''}
-【作者设定】
-${input.authorFacts.trim() || '（无）'}
-
-【本章蓝图】
-${blueprint}`,
-    `You are the continuity editor of a serialized novel. Below are the finalized chapter text (later author corrections override earlier text), the author's project-wide settings, and the current chapter blueprint. Only reconcile them; do not write prose:
-${factContract}
-1. List the final state at the end of the finalized previous chapter: completed events and their exact times, pending plans and conditions, and item ownership; do not treat changes yet to occur in this chapter or a character's waiting as completed action.
-2. For each required event, distinguish what already happened in an earlier chapter, what remains pending, and what must newly change in this chapter; describe this chapter's new action and actual consequence; include a cost only when the author settings or current chapter blueprint explicitly require one, without inventing a loss. An obstacle or cost already completed in an earlier chapter is source history, not fulfillment by repetition, confirmation, or bookkeeping. If literal realization would conflict with finalized facts or author settings, set conflict to true, keep the event, and change how or why it happens; otherwise set it to false. A character may make a new decision grounded in continuity and give a reason before advancing or replacing an old plan; do not retroactively treat the old plan as executed or violate author prohibitions or completed facts.
-Output one JSON object and nothing else: {"finalState":["final-state point"],"events":[{"event":"required event","conflict":true,"realization":"concrete realization consistent with that state"}]}. At most 5 finalState items and 8 events, one sentence each.
-
-[Finalized chapter text]
-${finalized}
-${ending ? `\n[Ending of the finalized previous chapter]\n${ending}\n` : ''}
-[Author settings]
-${input.authorFacts.trim() || '(none)'}
-
-[Current chapter blueprint]
-${blueprint}`,
-  )
-}
-
-function reconciliationBlockFrom(writingLanguage: WritingLanguage, output: string): { block: string; conflicts: number } {
-  const parsed = parseDraftReconciliation(output)
-  return parsed
-    ? { block: renderDraftReconciliationBlock(writingLanguage, parsed), conflicts: parsed.events.filter(item => item.conflict).length }
-    : { block: '', conflicts: 0 }
-}
-
 function recoveryChapterSource(chapter: ChapterInfo): RecoveryChapterSource {
   return {
     chapterNumber: chapter.chapterNumber,
@@ -864,25 +808,13 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           `[Current-chapter execution card (author text repeated verbatim)]\nFollow the author text according to its meaning: events and outcomes explicitly required in this chapter must be realized through manuscript action or outcome. Ongoing states, knowledge boundaries, prohibitions, and style requests are narrative constraints; do not add or repeatedly confirm actions, dialogue, or explanations merely to prove compliance. Follow the reveal timing specified by the author; do not present what is reserved for later chapters as already completed. Still carry out explicitly requested actions, reveals, or repetition. Each later action must continue from the item ownership, character knowledge, and plan-completion state actually established in the prose.\n${executionItems.flatMap(item => item.value?.trim() ? [`- ${item.enUS}: ${item.value}`] : []).join('\n')}`,
         )
       : ''
-    // 对账注入块紧跟执行卡（必需事件）之后；无对账时提示与原先逐字一致。
+    // 仅历史恢复沿用已记录的对账块；新 run 直接使用作者材料与定稿事实。
     const composeInitialPrompt = (reconciliationBlock: string) => [chapterMaterials.text, promptBuilder.build(), chapterExecutionCard,
       reconciliationBlock, finalizedFactPrecedenceText(writingLanguage), chapterLengthContract]
       .filter(Boolean)
       .join('\n\n')
     const prompt = composeInitialPrompt('')
-    // 生成前定稿对账只在直接前驱是已纳入的定稿章节、且本章有蓝图任务时进行；前驱是未定稿候选时不做，
-    // 以免只凭更早的定稿得出过时的“最终状态”。
-    const finalizedBlocks = chapterMaterials.selection.included
-      .filter(material => material.ref.sourceId.startsWith('finalized:'))
-      .map(material => material.text)
-    const reconciliationPrompt = finalizedBlocks.length > 0 && selectedCandidateDrafts.length === 0
-      && chapterMaterials.consumedFinalizedSources.some(source => source.chapterNumber === previousChapterNumber)
-      && Boolean(this.chapterInfo.keyEvents?.trim() || this.chapterInfo.purpose?.trim())
-      ? draftReconciliationPrompt(writingLanguage, { finalizedBlocks, previousEnding: chapterMaterials.previousEnding,
-        authorFacts: [...new Set(authoredConfigFacts.map(fact => fact.trim()))].join('\n'), chapterInfo: writerChapterInfo })
-      : ''
-    const materialDecision = { ...chapterMaterials.decision, promptHash: await hashAuthorText(prompt),
-      ...(reconciliationPrompt ? { reconciliationPromptHash: await hashAuthorText(reconciliationPrompt) } : {}) }
+    const materialDecision = { ...chapterMaterials.decision, promptHash: await hashAuthorText(prompt) }
     const previousEnding = chapterMaterials.previousEnding
 
     callbacks.log(uiText(
@@ -903,9 +835,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       let cleanDraftText: string
       let acknowledgedPreview = ''
       // 对账输出不是正文：对账请求进行期间不把它的快照显示到写作面板。
-      let reconciling = false
       const mainCallbacks = callbacks.replaceText ? { ...callbacks,
-        replaceText: (text: string) => { if (!reconciling) callbacks.replaceText?.(composeDraftVisibleContinuation(acknowledgedPreview, text)) },
+        replaceText: (text: string) => { callbacks.replaceText?.(composeDraftVisibleContinuation(acknowledgedPreview, text)) },
       } : callbacks
       try {
         const generationModelId = workflowGenerationModelId(context)
@@ -999,14 +930,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             ))
           }
           const recordedReconciliation = recovery?.draftReconciliation?.completedOutput
-          let reconciliationBlock = recordedReconciliation ? reconciliationBlockFrom(writingLanguage, recordedReconciliation).block : ''
-          if (!recovery && reconciliationPrompt) {
-            reconciling = true
-            try {
-              reconciliationBlock = await this.reconcileBeforeDraft({ session, signal: cancellation.signal, prompt: reconciliationPrompt,
-                writingLanguage, callbacks, context })
-            } finally { reconciling = false }
-          }
+          const reconciliationBlock = recordedReconciliation ? draftReconciliationBlock(writingLanguage, recordedReconciliation) : ''
           this.assertNotCancelled(context)
           callbacks.setProgress(10)
           const preview = createDraftStreamPreview(
@@ -1330,49 +1254,6 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       `Draft saved automatically as version v${nextVersion} (${countDraftUnits(cleanDraftText)} units)`,
     ))
     return cleanDraftText
-  }
-
-  /**
-   * 首稿之前的唯一一次定稿对账。失败策略：对账是改进而非门禁——请求失败、未完整结束或输出不可解析时
-   * 记录原因并按“无对账”继续生成（提示与未启用对账时逐字一致）；只有取消会中止。
-   */
-  private async reconcileBeforeDraft(params: {
-    session: GenerationSession
-    signal: AbortSignal
-    prompt: string
-    writingLanguage: WritingLanguage
-    callbacks: CommandExecuteParams['callbacks']
-    context: CommandExecuteParams['context']
-  }): Promise<string> {
-    const uiText = (zhCNText: string, enUSText: string) => workflowUiText(params.context, zhCNText, enUSText)
-    params.callbacks.log(uiText(
-      '  生成前定稿对账：比对已定稿事实与本章蓝图...',
-      '  Pre-draft reconciliation: checking finalized facts against the chapter blueprint...',
-    ))
-    try {
-      const outcome = await params.session.complete({
-        purpose: DRAFT_RECONCILE_PURPOSE,
-        reasoningStage: 'review',
-        output: 'visible-text',
-        budgetDemand: { kind: 'structured-items', writingLanguage: params.writingLanguage, requestedItems: 1 },
-        messages: [{ role: 'user', content: params.prompt }],
-      }, { signal: params.signal })
-      logDraftAttempt(params.callbacks, params.context, { zhCN: '生成前定稿对账', enUS: 'Pre-draft reconciliation' }, outcome.receipt)
-      const result = outcome.finishReason === 'stop' ? reconciliationBlockFrom(params.writingLanguage, outcome.content) : { block: '', conflicts: 0 }
-      params.callbacks.log(result.block
-        ? uiText(`  生成前定稿对账完成：冲突 ${result.conflicts} 项，结果已注入本章提示`,
-          `  Pre-draft reconciliation finished: ${result.conflicts} conflicts; the result was added to the chapter prompt`)
-        : uiText(`  生成前定稿对账结果不可用（finishReason=${outcome.finishReason}），按无对账继续生成`,
-          `  Pre-draft reconciliation result unavailable (finishReason=${outcome.finishReason}); continuing without it`))
-      return result.block
-    } catch (error) {
-      if (params.context.cancelled || params.signal.aborted) throw error
-      params.callbacks.log(uiText(
-        `  生成前定稿对账失败，按无对账继续生成：${error instanceof Error ? error.message : String(error)}`,
-        `  Pre-draft reconciliation failed; continuing without it: ${error instanceof Error ? error.message : String(error)}`,
-      ))
-      return ''
-    }
   }
 
   private shouldAutoContinue(

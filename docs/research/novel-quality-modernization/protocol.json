@@ -689,22 +689,6 @@
           "maxCondenseAttempts": 1,
           "trigger": "settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum",
           "formalEffect": "last-attempt-only"
-        },
-        "draftReconcile": {
-          "operationIds": [
-            "本地恢复后续写",
-            "DAV选定世代恢复后续写"
-          ],
-          "purpose": "chapter-draft-reconcile",
-          "maxReconcileAttempts": 1,
-          "position": "first-physical-request-of-operation-run-only",
-          "formalEffect": "none",
-          "composition": "never-composed-never-repaired-not-condense-primary",
-          "finishReasons": [
-            "stop",
-            "length"
-          ],
-          "unusableOutput": "recorded-as-unusable-first-draft-prompt-without-injection"
         }
       },
       "arms": ["candidate"],
@@ -741,13 +725,13 @@
         }
       },
       "stopPolicy": {
-        "technicalFailure": "任一案或操作技术失败即停止发送，保留该失败及后续逐案NOT RUN；不得以16次最小路径合计冒充七案资格",
+        "technicalFailure": "任一案或操作技术失败即停止发送，保留该失败及后续逐案NOT RUN；不得以12次最小路径合计冒充七案资格",
         "semanticFailureOrUnknown": "真实执行后的独立评审才裁决语义；FAIL或UNKNOWN保留全部已发送结果、原案结论及原文证据，不补采、不改判、不挑最佳；未满足七案逐案资格不得汇总PASS",
-        "attemptAccounting": "每个真实发送含准备、失败、unknown、允许的修复、登记的唯一对账和登记的唯一压缩，逐attempt reserve/dispatch/settle或unknown；无发送不记已发",
-        "repair": "仅定稿角色状态（含C17-B恢复副本重新定稿角色状态）现有同run/root且有持久失败artifact的原生repair可用；C17/C18续写只额外登记产品原生的唯一一次chapter-draft-condense：须同run/root/项目/epoch的chapter-draft首请求已结算为stop，且其hash可复核输出按生产countDraftUnits超出draftTargetUnitRange上限，压缩请求携带与续写相同的作者资料、oracle事实、必需前驱和替换来源，只有末次压缩attempt可带正式效果；压缩后仍越界或未完整结束按原失败语义暂停。第二次压缩、未越界压缩或任何其他失败都不获新的重试权，不放宽事实门或篇幅门。v5另登记产品原生的唯一一次生成前定稿对账chapter-draft-reconcile：只能是该续写run的第一个物理请求，至多一次，不带正式效果，不参与正文组合、不是压缩的首稿、无修复或重试权；其提示须含所纳入定稿、作者设定与已提交蓝图且hash等于materialDecision.reconciliationPromptHash；以stop结束且可解析时首稿及续写/压缩作者资料块须恰含由其输出重算的注入块，否则如实记为unusable（记原因），首稿与promptHash逐字一致；对账的发送失败或unknown与其他attempt同属技术失败；第二次对账、对账不在首位或对账出现在未登记operation即拒绝"
+        "attemptAccounting": "每个真实发送含准备、失败、unknown、允许的修复、登记的唯一压缩，历史对账仍按原登记读取；逐attempt reserve/dispatch/settle或unknown；无发送不记已发",
+        "repair": "仅定稿角色状态（含C17-B恢复副本重新定稿角色状态）现有同run/root且有持久失败artifact的原生repair可用；C17/C18续写只额外登记产品原生的唯一一次chapter-draft-condense：须同run/root/项目/epoch的chapter-draft首请求已结算为stop，且其hash可复核输出按生产countDraftUnits超出draftTargetUnitRange上限，压缩请求携带与续写相同的作者资料、oracle事实、必需前驱和替换来源，只有末次压缩attempt可带正式效果；压缩后仍越界或未完整结束按原失败语义暂停。第二次压缩、未越界压缩或任何其他失败都不获新的重试权，不放宽事实门或篇幅门。新run不再调用或注入生成前对账，首个物理请求必须为chapter-draft；作者、定稿、蓝图仍完整送入。历史对账attempt按原冻结登记和原hash读取，旧产品run恢复仍保留必要的对账识别与预算计数；不新增重试权"
       },
-      "minimumCalls": 16,
-      "scope": "candidate-only七案例；C16三组notes/cards=6，local及DAV各两组续写=4，C17-B恢复副本重新定稿后处理notes/cards=2，v5四个续写各一次生成前定稿对账=4（均按既有做法计入失败/修复/审修余量并单独披露）；最短16次，登记的cards原生repair与唯一压缩全部发生时最多28次；准备、修复及失败请求另逐实际记账",
+      "minimumCalls": 12,
+      "scope": "candidate-only七案例；C16三组notes/cards=6，local及DAV各两组续写=4，C17-B恢复副本重新定稿后处理notes/cards=2；新run直接首稿，最短12次；cards原生repair、正文有界续写与唯一压缩按既有每run/root预算和触发条件逐次记账，准备、失败请求另逐实际记账；v7源文与语义oracle不变",
       "operations": [
         { "id": "定稿章节要点", "kind": "chapter_notes", "caseIds": ["C16-A", "C16-B", "C16-C"], "allocation": "C16ExistingExtraction" },
         { "id": "定稿角色状态", "kind": "character_cards", "caseIds": ["C16-A", "C16-B", "C16-C"], "allocation": "C16ExistingExtraction" },

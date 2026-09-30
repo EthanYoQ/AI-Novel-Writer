@@ -285,11 +285,11 @@ test('c16-c18 keeps candidate qualification and the two allocations separate', (
   assert.equal(scenario.operations.length, 6)
   assert.equal(protocol.allocation.C16ExistingExtraction, 6)
   assert.equal(protocol.allocation.C17C18RestoreContinue, 4)
-  // v4：C17-B 重新定稿后处理两次、v5：四个续写各一次生成前定稿对账，均按既有做法计入失败/修复/审修余量，80 次计划分配不变。
+  // C17-B 重新定稿后处理仍计余量；新 run 省去四次对账，80 次计划分配与原预算保护不变。
   assert.equal(Object.values(protocol.allocation).reduce((a, b) => a + b, 0), 80)
-  assert.equal(protocol.phases['c16-c18'].minimumCalls, 16)
-  assert.match(protocol.phases['c16-c18'].scope, /生成前定稿对账=4/)
-  assert.match(protocol.phases['c16-c18'].scope, /最短16次.*最多28次/)
+  assert.equal(protocol.phases['c16-c18'].minimumCalls, 12)
+  assert.match(protocol.phases['c16-c18'].scope, /新run直接首稿/)
+  assert.match(protocol.phases['c16-c18'].scope, /最短12次.*既有每run\/root预算/)
   assert.deepEqual(protocol.phases['c16-c18'].operations.slice(4).map(item => [item.id, item.kind, item.caseIds, item.allocation]), [
     ['恢复副本重新定稿章节要点', 'chapter_notes', ['C17-B'], 'failedRetryRepairReviewReserve'],
     ['恢复副本重新定稿角色状态', 'character_cards', ['C17-B'], 'failedRetryRepairReviewReserve']])
@@ -495,7 +495,7 @@ test('合成 transport 可复现 C17/C18 超长→唯一压缩→在范围，以
   const fixture = fixtureSource()
   assert.match(fixture, /draftCondense && request\.mode === 'synthetic' && operationKind === 'draft'\s*\? syntheticDraftUnitsGoal\(request\.syntheticDraftCondense, request\.caseId, actual\.purpose, chapter\.targetUnits, draftCondense\.maximum\)/)
   assert.match(fixture, /assert\.equal\(visible\.DRAFT_CONDENSE_PURPOSE, condensePolicy\.condensePurpose, 'DRAFT_CONDENSE_PURPOSE_MISMATCH'\)/)
-  assert.match(fixture, /createOperationDispatchGate\(\{ repairPolicy, draftCondense, draftRecovery, structuredRecovery, draftReconcile: reconcilePolicy,\s*finalizationRepair: continuityRun,/)
+  assert.match(fixture, /createOperationDispatchGate\(\{ repairPolicy, draftCondense, draftRecovery, structuredRecovery,\s*finalizationRepair: continuityRun,/)
   assert.match(fixture, /draftCondense = \{ policy: condensePolicy, targetUnits, maximum: draftTargetUnitRange\(targetUnits\)\.maximum,\s*measureUnits: text => countUnits\(visible\.sanitizeDraftText\(redactVisibleCompletionText\(text\)\)\) \}/)
   // 压缩发出前先等首稿流结算，门禁才能读到 settle 与 hash。
   assert.match(fixture, /if \(\(draftRecovery \|\| condensePolicy\) && operationKind === 'draft'\) await Promise\.all\(streamSettlements\)/)
@@ -507,7 +507,7 @@ const RECONCILE_OUTPUT = JSON.stringify({ finalState: ['核查尚未开始，原
   events: [{ event: '核查遇阻', conflict: true, realization: '林澄先写明新的决定与理由，再动身核查，途中受阻。' },
     { event: '承担代价', conflict: false, realization: '' }] })
 function continuityResults(dir, { condensedIndex = null, primaryText, savedUnits = C17_TARGET, mode = 'synthetic',
-  proposed = true, authorProtected = true, reconcile = true, reconcileOutput = RECONCILE_OUTPUT, reconcileFinish = 'stop' } = {}) {
+  proposed = true, authorProtected = true, reconcile = false, reconcileOutput = RECONCILE_OUTPUT, reconcileFinish = 'stop' } = {}) {
   const write = (name, text) => { const file = path.join(dir, name); fs.writeFileSync(file, text); return { outputPath: file, visibleTextHash: hash(text) } }
   const finalizedSource = (draftId, tag) => ({ draftId, finalizationId: `finalization-${tag}`, chapterNumber: 1, contentHash: hash(`content-${tag}`) })
   const predecessor = (draftId, content) => ({ sourceId: `finalized:${draftId}`, chapterNumber: 1, version: 1, revision: draftId,
@@ -621,14 +621,14 @@ test('C17/C18 压缩结果最多两次 attempt、正式效果只在末次，且�
     }
     // 第二次压缩、续写冒充压缩、首请求不是 chapter-draft、提取操作多一次，都拒绝。
     const twice = condensed()
-    // v5：下标 0 是登记的唯一对账，首稿与压缩依次在其后。
-    const extra = structuredClone(twice[3].attempts[2])
+    // 新 run 的下标 0/1 分别为首稿与压缩。
+    const extra = structuredClone(twice[3].attempts[1])
     extra.attemptId = 'candidate:3-draft-2'; extra.binding.actual.attemptId = '3-draft-2'
     twice[3].attempts.push(extra)
-    twice[3].ownerTerminal.push({ ...twice[3].ownerTerminal[2], attemptId: '3-draft-2' })
-    twice[3].syntheticDispatches = 4
+    twice[3].ownerTerminal.push({ ...twice[3].ownerTerminal[1], attemptId: '3-draft-2' })
+    twice[3].syntheticDispatches = 3
     failure(twice, 'DRAFT_RECOVERY_EVIDENCE_INVALID')
-    for (const [ordinal, purpose] of [[2, 'chapter-draft-continuation'], [1, 'chapter-draft-condense']]) {
+    for (const [ordinal, purpose] of [[1, 'chapter-draft-continuation'], [0, 'chapter-draft-condense']]) {
       const changed = condensed()
       changed[3].attempts[ordinal].binding.actual.purpose = purpose
       changed[3].ownerTerminal[ordinal].purpose = purpose
@@ -644,7 +644,7 @@ test('C17/C18 压缩结果最多两次 attempt、正式效果只在末次，且�
     failure(notes, 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
     // 压缩是普通可记账物理 attempt：调用计数必须包含它。
     const uncounted = condensed()
-    uncounted[3].syntheticDispatches = 2
+    uncounted[3].syntheticDispatches = 1
     failure(uncounted, 'PHYSICAL_CALL_COUNT_MISMATCH')
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
@@ -718,7 +718,7 @@ test('C17-B 重新定稿后处理：notes/cards 绑定替换后的新 finalizati
     check(repaired(2), { status: 'passed' })
     check(repaired(3), { status: 'passed' })
     check(repaired(3, 'real'), { status: 'pending-independent-oracle-review' }, 'real repairs', 'real')
-    assert.equal(repaired(3, 'real')[4].attempts.length, 6, 'notes 1 + cards 3 + reconcile 1 + draft 1')
+    assert.equal(repaired(3, 'real')[4].attempts.length, 5, 'notes 1 + cards 3 + draft 1')
     check(repaired(4), failure('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'))
     const earlyEffect = repaired(2)
     earlyEffect[4].ownerTerminal.find(item => item.attemptId === '4-character_cards-0').hasFormalEffect = true
@@ -899,12 +899,12 @@ test('c16-c18 v7 场景沿用有界恢复、条件作者保护与 C17-B 重新�
   const selection = selectPhase(protocol, 'c16-c18', 'final')
   const scenario = PHASE_SCENARIOS['c16-c18']
   assert.equal(selection.scenarioRevision, 'c16-c18-candidate-production-path-v7')
-  assert.match(selection.stopPolicy.repair, /唯一一次生成前定稿对账chapter-draft-reconcile/)
-  assert.match(selection.stopPolicy.attemptAccounting, /登记的唯一对账/)
+  assert.match(selection.stopPolicy.repair, /新run不再调用或注入生成前对账/)
+  assert.match(selection.stopPolicy.attemptAccounting, /历史对账仍按原登记读取/)
   assert.match(selection.caseOracles['C17-B'].automatic[0], /RunFinalizePostProcessCommand对新finalizationId重新生成/)
   assert.match(selection.caseOracles['C17-B'].automatic[1], /predecessorsBeforeReplacement/)
   assert.match(selection.stopPolicy.repair, /含C17-B恢复副本重新定稿角色状态/)
-  assert.match(selection.stopPolicy.technicalFailure, /16次最小路径/)
+  assert.match(selection.stopPolicy.technicalFailure, /12次最小路径/)
   assert.match(selection.caseOracles['C16-B'].automatic[0], /未提议时记authorProtection=untriggered/)
   assert.match(selection.caseOracles['C16-B'].automatic[0], /合成transport必提议冲突值，仍须有候选/)
   assert.deepEqual(selection.attemptPolicy, C16_C18_ATTEMPT_POLICY)
@@ -921,12 +921,7 @@ test('c16-c18 v7 场景沿用有界恢复、条件作者保护与 C17-B 重新�
     value => { value.scenarioRevision = 'c16-c18-candidate-production-path-v5' },
     value => { value.scenarioRevision = 'c16-c18-candidate-production-path-v6' },
     value => { delete value.attemptPolicy },
-    value => { delete value.attemptPolicy.draftReconcile },
-    value => { value.attemptPolicy.draftReconcile.maxReconcileAttempts = 2 },
-    value => { value.attemptPolicy.draftReconcile.operationIds.push('定稿章节要点') },
-    value => { value.attemptPolicy.draftReconcile.formalEffect = 'last-attempt-only' },
-    value => { value.attemptPolicy.draftReconcile.finishReasons.push('content_filter') },
-    value => { value.attemptPolicy.draftReconcile.position = 'any' },
+    value => { value.attemptPolicy.draftReconcile = { purpose: 'chapter-draft-reconcile', maxReconcileAttempts: 1 } },
     value => { value.attemptPolicy.draftCondense.maxCondenseAttempts = 2 },
     value => { value.attemptPolicy.draftCondense.operationIds.push('定稿章节要点') },
     value => { value.attemptPolicy.draftCondense.condensePurpose = 'chapter-draft-continuation' },
@@ -1176,176 +1171,21 @@ test('C16–C18 ca466d9a/73b46513 段（第580–648行）按同一规则分两�
   assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trusted63a44636Events/)
 })
 
-test('v5 唯一对账只能是续写 operation 的首个物理请求且至多一次，任何越界在 dispatch 前拒绝', () => {
-  const policy = PHASE_SCENARIOS['c16-c18'].attemptPolicy.draftReconcile
-  assert.deepEqual(policy.operationIds, ['本地恢复后续写', 'DAV选定世代恢复后续写'])
-  assert.equal(policy.purpose, 'chapter-draft-reconcile')
-  const operation = '本地恢复后续写'
-  const owner = { attemptId: 'reconcile', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: 'chapter-draft-reconcile' }
-  const draft = { ...owner, attemptId: 'draft', purpose: 'chapter-draft' }
-  const condensePolicy = PHASE_SCENARIOS['c16-c18'].attemptPolicy.draftCondense
-  const rejections = []
-  const create = (options = {}) => createOperationDispatchGate({ finalizationRepair: true, draftReconcile: policy,
-    draftCondense: { policy: condensePolicy, maximum: 1, measureUnits: () => 0 }, onReject: item => rejections.push(item), ...options })
-  // 登记路径：对账 → 同 run/root/项目/epoch 的首稿；两个续写 operation 各自计数。
-  const gate = create()
-  gate(operation, owner)
-  gate(operation, draft)
-  gate('DAV选定世代恢复后续写', owner)
-  gate('DAV选定世代恢复后续写', draft)
-  // 未对账也可直接首稿（门禁层面；结果侧另要求登记续写必须有对账证据）。
-  create()(operation, draft)
-  const rejected = run => {
-    const before = rejections.length
-    assert.throws(run, /MODEL_REQUEST_REJECTED/)
-    assert.equal(rejections.length, before + 1)
-    assert.equal(rejections.at(-1).code, 'UNREGISTERED_ADDITIONAL_MODEL_REQUEST')
-  }
-  // 第二次对账、对账在首稿之后、对账后的首稿换 run/root/项目/epoch 或复用 attemptId，都拒绝。
-  rejected(() => { const value = create(); value(operation, owner); value(operation, { ...owner, attemptId: 'reconcile-2' }) })
-  rejected(() => { const value = create(); value(operation, draft); value(operation, { ...owner, attemptId: 'late' }) })
-  for (const key of ['runId', 'rootActionId', 'projectId', 'epoch'])
-    rejected(() => { const value = create(); value(operation, owner); value(operation, { ...draft, [key]: 'other' }) })
-  rejected(() => { const value = create(); value(operation, owner); value(operation, { ...draft, attemptId: owner.attemptId }) })
-  // 对账之后首个写稿请求仍须是 chapter-draft（压缩不能借对账当首稿）。
-  rejected(() => { const value = create(); value(operation, owner); value(operation, { ...draft, purpose: 'chapter-draft-condense' }) })
-  // 未登记 operation、未登记策略的门、缺身份或变体用途的对账、放宽次数的策略，一律拒绝。
-  rejected(() => create()('定稿章节要点', owner))
-  rejected(() => createOperationDispatchGate({ finalizationRepair: true, onReject: item => rejections.push(item) })(operation, owner))
-  rejected(() => createOperationDispatchGate({ onReject: item => rejections.push(item) })('900单位正文', owner))
-  rejected(() => create()(operation, { ...owner, runId: '' }))
-  assert.throws(() => create()(operation, { ...owner, purpose: 'chapter-draft-reconcile:2' }), /MODEL_REQUEST_REJECTED/)
-  rejected(() => create({ draftReconcile: { ...policy, maxReconcileAttempts: 2 } })(operation, owner))
-})
-
-test('v5 对账结果侧：首位、无正式效果、提示与输出落盘 hash、注入块重算一致；合成只接受注入，真实如实记不可用', () => {
-  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/reconcile-result-test-'))
+test('新登记续写直接首稿，旧对账可读但当前实验拒绝额外发送', () => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/direct-draft-result-test-'))
   try {
-    const check = (results, mode, expected, message) => assert.deepEqual(validateCandidateContinuityResults(results, mode), expected, message)
-    const failure = code => ({ status: 'failed', candidateFailure: code })
-    const pending = { status: 'pending-independent-oracle-review' }
-    check(continuityResults(dir), 'synthetic', { status: 'passed' })
-    const { syntheticDraftText } = syntheticLengthHelpers()
-    check(continuityResults(dir, { condensedIndex: 5, primaryText: syntheticDraftText(countDraftUnits, C17_RANGE.maximum + 60) }), 'synthetic', { status: 'passed' })
-    // 摘要逐续写案列出状态、冲突数与落盘 hash，供评审包引用。
-    const summary = summarizeDraftReconciliation(continuityResults(dir))
-    assert.deepEqual(summary.map(item => [item.caseId, item.status, item.conflicts]), [['C17-A', 'injected', 1], ['C17-B', 'injected', 1],
-      ['C18-A', 'injected', 1], ['C18-B', 'injected', 1]])
-    assert.ok(summary.every(item => /^[a-f0-9]{64}$/.test(item.prompt.contentHash) && /^[a-f0-9]{64}$/.test(item.output.contentHash)))
-    // 真实模式：不可解析或 length 结束如实记为 unusable（首稿未注入），不判技术失败；合成模式只接受含冲突的注入。
-    const noConflict = JSON.stringify({ finalState: ['状态'], events: [{ event: '核查遇阻', conflict: false, realization: '' }] })
-    for (const [options, status] of [[{ reconcileOutput: '不是 JSON' }, 'unusable'], [{ reconcileFinish: 'length' }, 'unusable'],
-      [{ reconcileOutput: noConflict }, 'injected']]) {
-      const results = continuityResults(dir, { mode: 'real', proposed: false, authorProtected: false, ...options })
-      assert.equal(results[3].draftReconciliation.status, status)
-      check(results, 'real', pending, JSON.stringify(options))
-      assert.equal(summarizeDraftReconciliation(results)[0].reason, status === 'unusable'
-        ? options.reconcileFinish === 'length' ? 'finish-reason-not-stop' : 'unparseable-output' : null)
-      check(continuityResults(dir, options), 'synthetic', failure('DRAFT_RECONCILE_EVIDENCE_MISMATCH'), `synthetic ${JSON.stringify(options)}`)
-    }
-    // 登记续写缺对账 attempt 或证据即 fail closed。
-    check(continuityResults(dir, { reconcile: false }), 'synthetic', failure('DRAFT_RECONCILE_EVIDENCE_MISSING'))
-    check(continuityResults(dir, { reconcile: false, mode: 'real', proposed: false, authorProtected: false }), 'real', failure('DRAFT_RECONCILE_EVIDENCE_MISSING'))
-    const noEvidence = continuityResults(dir)
-    delete noEvidence[5].draftReconciliation
-    check(noEvidence, 'synthetic', failure('DRAFT_RECONCILE_EVIDENCE_MISSING'))
-    const wrongOperation = continuityResults(dir)
-    wrongOperation[6].draftReconciliation.operation = '定稿章节要点'
-    check(wrongOperation, 'synthetic', failure('DRAFT_RECONCILE_EVIDENCE_MISSING'))
-    // 证据与 attempt、落盘字节或重算注入块任一不一致即失败（不能把不可用伪装成“对账生效”）。
-    const mutations = [
-      result => { result.draftReconciliation.status = 'unusable' },
-      result => { result.draftReconciliation.conflicts = 2 },
-      result => { result.draftReconciliation.blockHash = hash('other block') },
-      result => { result.draftReconciliation.injectedIntoFirstDraft = false },
-      result => { result.draftReconciliation.reason = 'unparseable-output' },
-      result => { result.draftReconciliation.authorMaterialAttempts = 1 },
-      result => { result.draftReconciliation.firstDraftAttemptId = 'other' },
-      result => { result.draftReconciliation.attemptId = 'other' },
-      result => { result.draftReconciliation.finishReason = 'length' },
-      result => { result.draftReconciliation.prompt.contentHash = hash('other prompt') },
-      result => { fs.appendFileSync(result.draftReconciliation.prompt.outputPath, '改') },
-      result => { result.attempts[0].optionalMaterialEvidence.materialDecision.reconciliationPromptHash = hash('other prompt') },
-      result => { result.attempts[0].userPromptHash = hash('other prompt') },
-      result => { delete result.draftReconciliation.prompt },
-    ]
-    for (const [index, mutate] of mutations.entries()) {
-      const results = continuityResults(dir)
-      mutate(results[6])
-      check(results, 'synthetic', failure('DRAFT_RECONCILE_EVIDENCE_MISMATCH'), `mutation ${index}`)
-    }
-    // 输出被改写：owner 产物/落盘核对拒绝。
-    const tampered = continuityResults(dir)
-    fs.appendFileSync(tampered[4].attempts.find(attempt => attempt.binding.actual.purpose === 'chapter-draft-reconcile').outputPath, '改')
-    assert.equal(validateCandidateContinuityResults(tampered, 'synthetic').status, 'failed')
-    // 对账带正式效果、以其他终态结束、不在首位、出现两次或出现在未登记 operation，都拒绝。
-    const reconcileOf = result => result.attempts.findIndex(attempt => attempt.binding.actual.purpose === 'chapter-draft-reconcile')
-    const effect = continuityResults(dir)
-    effect[3].ownerTerminal[reconcileOf(effect[3])].hasFormalEffect = true
-    check(effect, 'synthetic', failure('ACTUAL_OWNER_IDENTITY_MISMATCH'))
-    const filtered = continuityResults(dir, { mode: 'real', proposed: false, authorProtected: false })
-    filtered[3].ownerTerminal[reconcileOf(filtered[3])].finishReason = 'content_filter'
-    check(filtered, 'real', failure('ACTUAL_OWNER_IDENTITY_MISMATCH'))
-    const late = continuityResults(dir)
-    late[3].attempts.reverse(); late[3].ownerTerminal.reverse()
-    check(late, 'synthetic', failure('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'))
-    const twice = continuityResults(dir)
-    const second = structuredClone(twice[3].attempts[0])
-    second.attemptId = 'candidate:3-reconcile-1'; second.binding.actual.attemptId = '3-reconcile-1'
-    twice[3].attempts.splice(1, 0, second)
-    twice[3].ownerTerminal.splice(1, 0, { ...twice[3].ownerTerminal[0], attemptId: '3-reconcile-1' })
-    twice[3].syntheticDispatches += 1
-    check(twice, 'synthetic', failure('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'))
-    const notes = continuityResults(dir)
-    const stray = structuredClone(notes[0].attempts[0])
-    stray.attemptId = 'candidate:0-reconcile'; stray.binding.actual.attemptId = '0-reconcile'; stray.binding.actual.purpose = 'chapter-draft-reconcile'
-    notes[0].attempts.unshift(stray)
-    notes[0].ownerTerminal.unshift({ ...notes[0].ownerTerminal[0], attemptId: '0-reconcile', purpose: 'chapter-draft-reconcile', hasFormalEffect: false })
-    notes[0].syntheticDispatches += 1
-    check(notes, 'synthetic', failure('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'))
-    // 对账是可记账物理 attempt：调用计数必须包含它。
-    const uncounted = continuityResults(dir)
-    uncounted[3].syntheticDispatches -= 1
-    check(uncounted, 'synthetic', failure('PHYSICAL_CALL_COUNT_MISMATCH'))
+    assert.equal(C16_C18_ATTEMPT_POLICY.draftReconcile, undefined)
+    const current = continuityResults(dir)
+    assert.deepEqual(validateCandidateContinuityResults(current, 'synthetic'), { status: 'passed' })
+    assert.equal(current.reduce((sum, item) => sum + item.syntheticDispatches, 0), 12)
+    assert.deepEqual(summarizeDraftReconciliation(current), [])
+    const legacy = continuityResults(dir, { reconcile: true })
+    assert.equal(validateCandidateContinuityResults(legacy, 'synthetic').status, 'failed')
+    assert.equal(summarizeDraftReconciliation(legacy).length, 4, '历史摘要读取仍保留')
+    const gate = createOperationDispatchGate({ finalizationRepair: true })
+    assert.throws(() => gate('本地恢复后续写', { attemptId: 'old', runId: 'r', rootActionId: 'root', projectId: 'p', epoch: 'e',
+      purpose: 'chapter-draft-reconcile' }), /MODEL_REQUEST_REJECTED/)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
-})
-
-test('v5 桥侧：对账出站检查蓝图/定稿/作者设定与收据 hash，合成返回含冲突 JSON，首稿与作者资料块断言注入块', () => {
-  const fixture = fixtureSource()
-  // 对账提示不是写稿提示：【本章蓝图】须为最后一节且逐键等于已提交蓝图。
-  const sandbox = {}
-  vm.runInNewContext(`${fixture.slice(fixture.indexOf('function draftPromptIncludesCommittedBlueprint'), fixture.indexOf('const syntheticDraftUnitsGoal ='))}
-this.check = draftPromptIncludesCommittedBlueprint`, sandbox)
-  const info = { chapterNumber: 2, title: 't', role: 'r', purpose: 'p', characters: ['档案员林澄'], keyEvents: '核查遇阻；承担代价', suspenseHook: '', userGuidance: 'g' }
-  const blueprint = JSON.stringify(info, null, 2)
-  const prompt = `你是连续性编辑。\n\n【已定稿章节原文】\n定稿\n\n【作者设定】\n设定\n\n【本章蓝图】\n${blueprint}`
-  assert.equal(sandbox.check(prompt, info, 'chapter-draft-reconcile'), true)
-  assert.equal(sandbox.check(`${prompt}\n【全局写作要求】\nx`, info, 'chapter-draft-reconcile'), false)
-  assert.equal(sandbox.check(prompt.replace('"title": "t"', '"title": "other"'), info, 'chapter-draft-reconcile'), false)
-  assert.equal(sandbox.check(prompt, info, 'chapter-draft-reconcile:2'), false)
-  assert.equal(sandbox.check(prompt, info, 'chapter-draft-continuation'), false, '续写仍要求【全局写作要求】紧随蓝图')
-  // 出站：唯一 user 消息 hash 等于 reconciliationPromptHash，含定稿结尾与作者设定；提示原文落盘供评审包引用。
-  assert.match(fixture, /preflight\(text && sha\(text\) === materialDecision\?\.reconciliationPromptHash, 'DRAFT_RECONCILE_PROMPT_HASH_MISMATCH'\)/)
-  assert.match(fixture, /text\.includes\(previousChapterEnding\(required\.content\)\),\s*'DRAFT_RECONCILE_FINALIZED_SOURCE_MISSING'\)/)
-  assert.match(fixture, /reconcile-prompt-\$\{receipt\.attempts\.length\}\.txt/)
-  // 注入：块由生产 draftReconciliationBlock 从落盘输出重算；首稿去块后等于 promptHash；不可用时不得出现注入标题。
-  assert.match(fixture, /reconciliation\.draftReconciliationBlock\('zh-CN', fs\.readFileSync\(attempt\.outputPath, 'utf8'\)\)/)
-  assert.ok(fixture.includes("preflight(text.split(`\\n\\n${block}`).length === 2, 'DRAFT_RECONCILE_BLOCK_NOT_INJECTED')"))
-  assert.ok(fixture.includes("sha(text.replace(`\\n\\n${block}`, '')) === materialDecision.promptHash, 'DRAFT_RECONCILE_INITIAL_PROMPT_DRIFT'"))
-  assert.ok(fixture.includes("preflight(!text.includes('【本章与定稿对账'), 'DRAFT_RECONCILE_UNUSABLE_BUT_INJECTED')"))
-  assert.ok(fixture.includes("if (request.mode === 'synthetic') assert.ok(block && conflicts >= 1, 'SYNTHETIC_RECONCILE_NOT_INJECTED')"))
-  assert.ok(fixture.includes("assert.ok(reconciled, 'DRAFT_RECONCILE_NOT_TRIGGERED')"))
-  assert.ok(fixture.includes("assert.equal(reconciliation.DRAFT_RECONCILE_PURPOSE, reconcilePolicy.purpose, 'DRAFT_RECONCILE_PURPOSE_MISMATCH')"))
-  // 合成对账输出：经生产解析器可解析、至少一个冲突，渲染出的块非空。
-  const start = fixture.indexOf("if (operationKind === 'draft' && isReconcile(actual?.purpose)) text = JSON.stringify(")
-  const end = fixture.indexOf("else if (operationKind === 'directory')", start)
-  assert.ok(start > 0 && end > start)
-  const synthetic = {}
-  vm.runInNewContext(`const chapter = { requiredEvents: ['核查遇阻', '承担代价'] }; const operationKind = 'draft'; const actual = { purpose: 'chapter-draft-reconcile' };
-const isReconcile = value => value === 'chapter-draft-reconcile'; let text; ${fixture.slice(start, end)}; this.text = text`, synthetic)
-  const parsed = parseDraftReconciliation(synthetic.text)
-  assert.ok(parsed && parsed.events.filter(item => item.conflict).length >= 1)
-  assert.match(draftReconciliationBlock('zh-CN', synthetic.text), /^【本章与定稿对账（生成前自动对账，须遵守）】/)
 })
 
 test('C16–C18 fa8806d7 段（第649–690行）按同一规则加性登记，链在 73b46513 后，真实账本只读回放到690且字节不变', () => {

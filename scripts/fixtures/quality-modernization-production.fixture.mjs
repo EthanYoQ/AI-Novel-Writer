@@ -150,10 +150,8 @@ function readCommittedDraftChapterInfo(db, chapter, projectPath, chapterGuidance
 }
 function draftPromptIncludesCommittedBlueprint(userPrompt, chapterInfo, purpose) {
   const initial = purpose === 'chapter-draft'
-  // v5 生成前定稿对账不是写稿提示：【本章蓝图】是整条提示的最后一节，之后不得再有任何【…】标题。
-  const reconcile = purpose === 'chapter-draft-reconcile'
   // 登记的唯一压缩与续写携带同一作者资料块：【本章蓝图】紧接【全局写作要求】。
-  if (!initial && !reconcile && !['chapter-draft-continuation', 'chapter-draft-no-progress-recovery', 'chapter-draft-condense'].includes(purpose)) return false
+  if (!initial && !['chapter-draft-continuation', 'chapter-draft-no-progress-recovery', 'chapter-draft-condense'].includes(purpose)) return false
   const heading = initial ? chapterInfo.chapterNumber === 1 ? '【本章信息】' : '【本章写作方向与核心任务】' : '【本章蓝图】'
   const marker = `\n${heading}\n`
   const start = userPrompt.indexOf(marker)
@@ -161,8 +159,8 @@ function draftPromptIncludesCommittedBlueprint(userPrompt, chapterInfo, purpose)
   // JSON 块止于其后第一个【…】标题行（JSON 字符串中的换行均已转义）。续写/压缩要求该标题恰为【全局写作要求】；
   // 初始请求的空【后续章节大纲预告】会被产品整段删去，此时接下一个标题，整块仍须逐键等于已提交蓝图。
   const next = userPrompt.indexOf('\n【', start + marker.length)
-  const end = reconcile ? next < 0 ? userPrompt.length : -1 : next
-  if (end < 0 || !initial && !reconcile && !userPrompt.startsWith('\n【全局写作要求】', end)) return false
+  const end = next
+  if (end < 0 || !initial && !userPrompt.startsWith('\n【全局写作要求】', end)) return false
   let sent
   try { sent = JSON.parse(userPrompt.slice(start + marker.length, end).trim()) } catch { return false }
   return sent && typeof sent === 'object' && !Array.isArray(sent)
@@ -698,17 +696,8 @@ test('isolated production commands persist the selected phase operations', async
       const { DRAFT_GENERATION_BUDGET } = await load('src/services/workflows/commands/generate-draft.command.ts')
       assert.equal(recoveryPolicy.maxAttempts, DRAFT_GENERATION_BUDGET.maxAttempts, 'DRAFT_RECOVERY_BUDGET_MISMATCH')
     }
-    // v5 唯一生成前定稿对账：用途常量与注入块渲染取自生产 draft-reconciliation 模块（与主进程复核同源）。
-    const reconcilePolicy = policyEligible && continuityRun ? request.attemptPolicy.draftReconcile ?? null : null
-    const reconciliation = reconcilePolicy ? await load('src/shared/draft-reconciliation.ts') : null
-    if (reconcilePolicy) assert.equal(reconciliation.DRAFT_RECONCILE_PURPOSE, reconcilePolicy.purpose, 'DRAFT_RECONCILE_PURPOSE_MISMATCH')
-    const isReconcile = purpose => Boolean(reconcilePolicy) && purpose === reconcilePolicy.purpose
-    const reconcileAttemptOf = operation => receipt.attempts.find(attempt => attempt.binding.operation === operation
-      && isReconcile(attempt.binding.actual?.purpose))
-    const reconcileBlockOf = attempt => attempt?.finishReason === 'stop' && typeof attempt.outputPath === 'string'
-      ? reconciliation.draftReconciliationBlock('zh-CN', fs.readFileSync(attempt.outputPath, 'utf8')) : ''
     const { parseFinalizedCharacterStateResponse } = continuityRun ? await load('src/shared/finalized-continuity.ts') : {}
-    const beforeOperationDispatch = createOperationDispatchGate({ repairPolicy, draftCondense, draftRecovery, structuredRecovery, draftReconcile: reconcilePolicy,
+    const beforeOperationDispatch = createOperationDispatchGate({ repairPolicy, draftCondense, draftRecovery, structuredRecovery,
       finalizationRepair: continuityRun, readPrimaryEvidence: first => {
       const attemptId = `${target.arm}:${first.attemptId}`
       const matches = receipt.attempts.filter(attempt => attempt.attemptId === attemptId)
@@ -768,7 +757,6 @@ test('isolated production commands persist the selected phase operations', async
       if (continuityRun && operationKind === 'character_cards' && actual.purpose.includes(':repair:')) await Promise.all(streamSettlements)
       if ((draftRecovery || condensePolicy) && operationKind === 'draft') await Promise.all(streamSettlements)
       // 对账之后的写稿请求出站前先等对账流结算，才能从落盘输出重算注入块。
-      if (reconcilePolicy && operationKind === 'draft' && reconcileAttemptOf(operationId)) await Promise.all(streamSettlements)
       if (structuredRecovery && operationKind === 'directory') {
         await Promise.all(streamSettlements)
         const owner = actual ?? observedIpc
@@ -799,31 +787,11 @@ test('isolated production commands persist the selected phase operations', async
       }
       if (operationKind === 'draft') preflight(draftPromptIncludesCommittedBlueprint(userMessages.length === 1 ? userMessages[0].content : '',
         readCommittedDraftChapterInfo(db, chapter, project.rootPath, chapterGuidance), (actual ?? observedIpc).purpose), 'OUTBOUND_DRAFT_BLUEPRINT_MISSING')
-      let reconcilePrompt = null
-      if (operationKind === 'draft' && isReconcile(actual?.purpose)) {
-        // 对账出站：唯一 user 消息（无系统提示），hash 等于材料准入收据登记的 reconciliationPromptHash；
-        // 含【已定稿章节原文】（必需前驱定稿结尾逐字在内）与【作者设定】各一次，蓝图为最后一节（上方已逐键核对）。
-        const text = userMessages.length === 1 && body.messages.length === 1 ? userMessages[0].content : ''
-        const required = predecessorReadbacks.find(record => record.required)
-        preflight(text && sha(text) === materialDecision?.reconciliationPromptHash, 'DRAFT_RECONCILE_PROMPT_HASH_MISMATCH')
-        preflight(['\n【已定稿章节原文】\n', '\n【作者设定】\n'].every(heading => text.split(heading).length === 2)
-          && required?.sourceId.startsWith('finalized:') && text.includes(previousChapterEnding(required.content)),
-        'DRAFT_RECONCILE_FINALIZED_SOURCE_MISSING')
-        reconcilePrompt = text
-      } else if (operationKind === 'draft' && reconcilePolicy && reconcilePolicy.operationIds.includes(operationId)) {
-        // 对账之后的写稿请求：对账可用时首稿恰含一次由对账输出重算的注入块，去掉它后等于 promptHash；
-        // 续写/压缩的作者资料块同样携带该块。对账不可用（未 stop 或不可解析）时首稿与 promptHash 逐字一致、不得出现注入标题。
+      if (continuityRun && operationKind === 'draft') {
         const text = userMessages.length === 1 ? userMessages[0].content : ''
-        const reconciled = reconcileAttemptOf(operationId)
-        const block = reconcileBlockOf(reconciled)
-        const initial = actual.purpose === 'chapter-draft'
-        if (block) {
-          preflight(text.split(`\n\n${block}`).length === 2, 'DRAFT_RECONCILE_BLOCK_NOT_INJECTED')
-          if (initial) preflight(sha(text.replace(`\n\n${block}`, '')) === materialDecision.promptHash, 'DRAFT_RECONCILE_INITIAL_PROMPT_DRIFT')
-        } else {
-          preflight(!text.includes('【本章与定稿对账'), 'DRAFT_RECONCILE_UNUSABLE_BUT_INJECTED')
-          if (initial) preflight(sha(text) === materialDecision.promptHash, 'DRAFT_RECONCILE_INITIAL_PROMPT_DRIFT')
-        }
+        preflight(!text.includes('【本章与定稿对账') && !text.includes('[Reconciliation with finalized chapters'), 'DRAFT_GENERATED_PLAN_INJECTED')
+        preflight(!materialDecision?.reconciliationPromptHash, 'DRAFT_RECONCILE_NOT_REGISTERED')
+        if (actual.purpose === 'chapter-draft') preflight(sha(text) === materialDecision.promptHash, 'DRAFT_INITIAL_PROMPT_DRIFT')
       }
       if (operationKind === 'recheck' && candidate) {
         const merged = db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1')
@@ -929,12 +897,7 @@ test('isolated production commands persist the selected phase operations', async
         fs.writeFileSync(promptPath, promptText)
         requestReceipt.structuredPrompt = { outputPath: promptPath, contentHash: sha(promptText) }
       }
-      if (reconcilePrompt !== null) {
-        // 对账请求原文落盘供评审包引用（作者资料与蓝图，不含凭据）；输出即同序号 physical-output。
-        const promptPath = path.join(evidenceRoot, `reconcile-prompt-${receipt.attempts.length}.txt`)
-        fs.writeFileSync(promptPath, reconcilePrompt)
-        requestReceipt.reconciliationPrompt = { outputPath: promptPath, contentHash: sha(reconcilePrompt) }
-      }
+
       // 从 dispatch 起由守护接管：到点会先为这次发送写 unknown，再 abort 下面的 fetch。
       const controller = new AbortController()
       supervisor.watch(attemptId, controller)
@@ -944,12 +907,7 @@ test('isolated production commands persist the selected phase operations', async
         if (request.mode === 'synthetic') receipt.syntheticDispatches++
         else receipt.physicalModelRequests++
         let text, syntheticFinish = 'stop'
-        // 合成对账：合法 JSON，首个必需事件登记为冲突，覆盖“对账结果注入首稿与作者资料块”路径。
-        if (operationKind === 'draft' && isReconcile(actual?.purpose)) text = JSON.stringify({
-          finalState: ['核查尚未开始，原定安排仍在等待条件满足', '铜钥匙仍由林澄保管'],
-          events: chapter.requiredEvents.map((event, index) => ({ event, conflict: index === 0,
-            realization: index === 0 ? '林澄先在正文中写明改变原定安排的新决定与理由，再动身核查，途中受阻。' : '' })) })
-        else if (operationKind === 'directory') text =JSON.stringify({ blueprints: (fullRun ? scene.chapters : [chapter]).filter(entry => !(actual ?? observedIpc).structuredRange || (actual ?? observedIpc).structuredRange.includes(entry.number)).map(entry => ({ chapterNumber: entry.number, title: scene.title, role: '开篇',
+        if (operationKind === 'directory') text =JSON.stringify({ blueprints: (fullRun ? scene.chapters : [chapter]).filter(entry => !(actual ?? observedIpc).structuredRange || (actual ?? observedIpc).structuredRange.includes(entry.number)).map(entry => ({ chapterNumber: entry.number, title: scene.title, role: '开篇',
           purpose: entry.brief, keyEvents: entry.requiredEvents.join('；'), characters: scene.characters,
           relationships: [], suspenseHook: entry.oracle?.knowledge ?? '', userGuidance: fullRun ? `${source.template}\n本章时点：${entry.oracle.time}` : source.template })) })
         else if (operationKind === 'chapter_notes') text = finalizedContext.identity.content
@@ -1021,7 +979,7 @@ test('isolated production commands persist the selected phase operations', async
         // Development transport exercises the existing product recovery branches; real/frozen requests never enter here.
         if (request.development && request.mode === 'synthetic') {
           const purpose = (actual ?? observedIpc).purpose
-          const recoverDraft = draftRecovery && operationKind === 'draft' && !isReconcile(purpose)
+          const recoverDraft = draftRecovery && operationKind === 'draft'
             && (request.caseId === 'C17-A' || request.caseId === 'C18-A' || request.caseId === '场景1/2'
               || reviewedRun || fullRun && request.caseId === '场景1/1')
           if (recoverDraft) {
@@ -1207,28 +1165,6 @@ test('isolated production commands persist the selected phase operations', async
       const operationReceipt = { operation: operationId, kind: operationKind, returnedHash: sha(result),
         outputHash: sha(result), outputPath, handle: currentContext.mainGenerationRunHandle ?? null }
       receipt.operations.push(operationReceipt)
-      if (reconcilePolicy && operationKind === 'draft' && reconcilePolicy.operationIds.includes(operationId)) {
-        // v5：登记续写的对账证据如实落盘。可用 → injected（出站前已逐请求断言注入）；不可用 → unusable 并记原因，
-        // 首稿按原提示发送，不冒充对账生效。未发起对账（产品触发条件本应成立）按技术失败停发。
-        const attempts = receipt.attempts.filter(attempt => attempt.binding.operation === operationId)
-        const reconciled = reconcileAttemptOf(operationId), drafts = attempts.filter(attempt => attempt !== reconciled)
-        if (!reconciled) receipt.draftReconciliation = { operation: operationId, status: 'not-triggered' }
-        else {
-          const block = reconcileBlockOf(reconciled)
-          const conflicts = block ? reconciliation.parseDraftReconciliation(fs.readFileSync(reconciled.outputPath, 'utf8'))
-            .events.filter(item => item.conflict).length : 0
-          receipt.draftReconciliation = { operation: operationId, status: block ? 'injected' : 'unusable',
-            attemptId: reconciled.binding.actual.attemptId, finishReason: reconciled.finishReason,
-            prompt: reconciled.reconciliationPrompt ?? null,
-            output: { outputPath: reconciled.outputPath, contentHash: reconciled.visibleTextHash },
-            conflicts, blockHash: block ? sha(block) : null,
-            reason: block ? null : reconciled.finishReason !== 'stop' ? 'finish-reason-not-stop' : 'unparseable-output',
-            firstDraftAttemptId: drafts[0]?.binding.actual.attemptId ?? null, injectedIntoFirstDraft: Boolean(block),
-            authorMaterialAttempts: block ? drafts.length - 1 : 0 }
-          if (request.mode === 'synthetic') assert.ok(block && conflicts >= 1, 'SYNTHETIC_RECONCILE_NOT_INJECTED')
-        }
-        assert.ok(reconciled, 'DRAFT_RECONCILE_NOT_TRIGGERED')
-      }
       if (continuityRun && ['chapter_notes', 'character_cards'].includes(operationKind)) {
         const slot = finalizedContext.slot
         const persisted = await invoke('finalization-generation:read', { slot }, session)
@@ -1389,9 +1325,7 @@ test('isolated production commands persist the selected phase operations', async
       for (const attempt of receipt.attempts) {
         const terminal = receipt.ownerTerminal.find(row => row.attemptId === attempt.binding.actual.attemptId)
         assert.ok(terminal && ['settled', 'unknown'].includes(terminal.status))
-        // 对账以 length 结束如实记为不可用（见 draftReconciliation）；其余 attempt 仍须 stop。
-        if (isReconcile(attempt.binding.actual.purpose)) assert.ok(reconcilePolicy.finishReasons.includes(terminal.finishReason), 'DRAFT_RECONCILE_TERMINAL_INVALID')
-        else if (structuredRecovery && attempt.binding.actual.purpose.startsWith('chapter-blueprint-directory') || draftRecovery && attempt.binding.actual.purpose.startsWith('chapter-draft')) assert.ok(['stop', 'length'].includes(terminal.finishReason))
+        if (structuredRecovery && attempt.binding.actual.purpose.startsWith('chapter-blueprint-directory') || draftRecovery && attempt.binding.actual.purpose.startsWith('chapter-draft')) assert.ok(['stop', 'length'].includes(terminal.finishReason))
         else assert.equal(terminal.finishReason, 'stop')
         assert.equal(terminal.purpose, attempt.binding.actual.purpose)
         assert.ok(terminal.artifactId && terminal.textHash !== sha(''), 'OWNER_ARTIFACT_MISSING')

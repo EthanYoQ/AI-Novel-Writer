@@ -25,7 +25,7 @@ import type {
 import { EN_US_BUILTIN_PROMPTS } from '../../../prompt-language'
 import { BUILTIN_PROMPTS, clearProjectCustomPrompts } from '../../../prompt-templates'
 import { composeDraftVisibleContinuation, DRAFT_VISIBLE_TEXT_VERSION } from '../../../../shared/draft-visible-text'
-import { parseDraftReconciliation, renderDraftReconciliationBlock, stripDraftReconciliationBlock } from '../../../../shared/draft-reconciliation'
+import { parseDraftReconciliation, renderDraftReconciliationBlock } from '../../../../shared/draft-reconciliation'
 import { appendVisibleTextContinuation } from '../../bounded-completion'
 import {
   DRAFT_GENERATION_BUDGET,
@@ -773,9 +773,9 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
     expect(legacy.createRuntime).not.toHaveBeenCalled()
     const executed = f.invoke.mock.calls.filter(([channel]) => channel === 'generation:execute')
-    // 已定稿前驱 + 本章蓝图：首稿之前先有一次生成前定稿对账（此处输出不可解析，按无对账继续）。
+    // 新 run 直接生成正文，唯一压缩仍使用同一 run。
     expect(executed.map(([, request]) => (request as { task: GenerationTask }).task.purpose))
-      .toEqual(['chapter-draft-reconcile', 'chapter-draft', 'chapter-draft-condense'])
+      .toEqual(['chapter-draft', 'chapter-draft-condense'])
     expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:compose-visible')).toHaveLength(1)
     expect(f.invoke).toHaveBeenCalledWith('generation:pause', handle, f.context.projectSession)
     expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:commit-draft')).toBe(false)
@@ -2398,185 +2398,74 @@ ${headingPrefix}第3章：潮门
     expect(continuation.split(heading)).toHaveLength(2)
   })
 
-  describe('pre-draft finalized reconciliation', () => {
-    const reconciliationOutput = (writingLanguage: 'zh-CN' | 'en-US') => JSON.stringify(writingLanguage === 'en-US'
-      ? { finalState: ['Lin withdrew the inspection plan and waits for a new pass.'],
-        events: [{ event: 'Inspection is blocked', conflict: true, realization: 'The pass request is refused; Lin does not set out.' },
-          { event: 'Pay a price', conflict: false, realization: 'as written' }] }
-      : { finalState: ['林澄已撤回核查安排，等待新的通行许可。'],
-        events: [{ event: '核查遇阻', conflict: true, realization: '通行许可申请被驳回，林澄不出发核查。' },
-          { event: '承担代价', conflict: false, realization: '按原文' }] })
-    const expectedBlock = {
-      'zh-CN': '【本章与定稿对账（生成前自动对账，须遵守）】\n上一章定稿结束时的状态（本章正文写出条件满足或人物作出新决定之前保持不变）：\n- 林澄已撤回核查安排，等待新的通行许可。\n本章必需事件的落实方式：\n'
-        + '- 核查遇阻（按字面会与定稿冲突）：通行许可申请被驳回，林澄不出发核查。\n- 承担代价：按原文落实，不得与上述状态矛盾。\n'
-        + '对账结论：以上冲突按给出的落实方式处理；不得把已撤回、取消或被取代的计划写成已执行。',
-      'en-US': '[Reconciliation with finalized chapters (automatic pre-draft check; binding)]\nState at the end of the finalized previous chapter (it holds until this chapter\'s prose shows a condition being met or a character making a new decision):\n'
-        + '- Lin withdrew the inspection plan and waits for a new pass.\nHow to realize this chapter\'s required events:\n'
-        + '- Inspection is blocked (conflicts with the finalized facts if taken literally): The pass request is refused; Lin does not set out.\n'
-        + '- Pay a price: as written, without contradicting the state above.\n'
-        + 'Conclusion: resolve the conflicts above exactly as stated; never write a withdrawn, cancelled, or superseded plan as executed.',
-    } as const
-    const markers = {
-      'zh-CN': { card: '【本章执行卡（作者原文重列）】', precedence: '【定稿事实优先】', heading: '【已定稿章节原文】', blueprint: '【本章蓝图】' },
-      'en-US': { card: '[Current-chapter execution card (author text repeated verbatim)]', precedence: '[Finalized facts take precedence]',
-        heading: '[Finalized chapter text]', blueprint: '[Current chapter blueprint]' },
-    } as const
-
-    it.each(['zh-CN', 'en-US'] as const)('does not require an invented cost for a cost-free %s event during reconciliation', async writingLanguage => {
-      const runtime = fakeRuntime(() => outcome('本章正文。'.repeat(125), 'stop'),
-        () => outcome(JSON.stringify({ finalState: ['上一章已结束。'], events: [{ event: '读信', conflict: false, realization: '读完信并回信。' }] }), 'stop'))
-      const { context, callbacks, command } = setup({
-        runtime, wordsTarget: 500, writingLanguage, chapterNumber: 2, keyEvents: '读信',
-        previousFinalizedContent: '上一章末尾，信刚送到。',
-      })
-
-      await command.execute({ step: {}, context, callbacks })
-
-      const prompt = runtime.reconcile.mock.calls[0]![0].messages[0]!.content
-      expect(prompt).toContain('"keyEvents": "读信"')
-      if (writingLanguage === 'zh-CN') {
-        expect(prompt).toContain('仅当作者设定或本章蓝图明确要求代价时')
-        expect(prompt).not.toContain('每条必需事件写出本章新动作、代价和实际后果')
-      } else {
-        expect(prompt).toContain('include a cost only when the author settings or current chapter blueprint explicitly require one')
-        expect(prompt).not.toContain("For each required event, distinguish what already happened in an earlier chapter, what remains pending, and what must newly change in this chapter; describe this chapter's new action, cost, and actual consequence")
-      }
-    })
-
-    it.each(['zh-CN', 'en-US'] as const)('reconciles once before the %s first draft and carries the result into continuation', async writingLanguage => {
-      const runtime = fakeRuntime((attempt) => attempt === 1 ? outcome('初'.repeat(100), 'length', 1) : outcome(`${'续'.repeat(400)}。`, 'stop', 2),
-        () => outcome(`<think>先想一想</think>\`\`\`json\n${reconciliationOutput(writingLanguage)}\n\`\`\``, 'stop'))
-      const { context, callbacks, command } = setup({
-        runtime, wordsTarget: 500, writingLanguage, chapterNumber: 2, keyEvents: '核查遇阻；承担代价',
-        worldSetting: '铜钥匙始终由林澄保管。',
-        previousFinalizedContent: '林澄写下核查安排。\n\n作者更正：林澄撤回先前核查安排，等待新的通行许可。',
-      })
-
-      await command.execute({ step: {}, context, callbacks })
-
-      expect(runtime.reconcile).toHaveBeenCalledTimes(1)
-      const reconcileTask = runtime.reconcile.mock.calls[0]![0]
-      expect(reconcileTask).toMatchObject({ purpose: 'chapter-draft-reconcile', output: 'visible-text', reasoningStage: 'review',
-        budgetDemand: { kind: 'structured-items', writingLanguage, requestedItems: 1 } })
-      expect(reconcileTask.messages).toHaveLength(1)
-      const reconcilePrompt = reconcileTask.messages[0]!.content
-      for (const anchor of [markers[writingLanguage].precedence,
-        FINALIZED_FACT_PRECEDENCE[writingLanguage].planDecision,
-        FINALIZED_FACT_PRECEDENCE[writingLanguage].supportedDecision,
-        FINALIZED_FACT_PRECEDENCE[writingLanguage].authorBoundary,
-        FINALIZED_FACT_PRECEDENCE[writingLanguage].noRetroactiveExecution,
-        FINALIZED_FACT_PRECEDENCE[writingLanguage].newAction,
-        FINALIZED_FACT_PRECEDENCE[writingLanguage].actionConsistency]) expect(reconcilePrompt).toContain(anchor)
-      expect(reconcilePrompt).toContain(writingLanguage === 'zh-CN'
-        ? '逐项区分前章已发生、仍待执行和本章必须新增的变化'
-        : 'distinguish what already happened in an earlier chapter, what remains pending, and what must newly change in this chapter')
-      expect(reconcilePrompt).not.toContain(writingLanguage === 'zh-CN'
-        ? '除非正文先写明条件已满足，不得让人物动身执行'
-        : 'a plan still waiting for a condition must not be set in motion unless the prose first shows the condition being met')
-      for (const text of [markers[writingLanguage].heading, '作者更正：林澄撤回先前核查安排，等待新的通行许可。', '铜钥匙始终由林澄保管。',
-        markers[writingLanguage].blueprint, '"keyEvents": "核查遇阻；承担代价"']) expect(reconcilePrompt).toContain(text)
-      expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-continuation'])
-      const [initial, continuation] = runtime.complete.mock.calls.map(([task]) => task.messages.at(-1)!.content)
-      const block = expectedBlock[writingLanguage]
-      const heading = markers[writingLanguage].precedence
-      const sharedRule = reconcilePrompt.split(`${heading}\n`)[1]?.split('\n1. ')[0]
-      expect(sharedRule).toBeTruthy()
-      expect(initial).toContain(`${heading}\n${sharedRule}`)
-      expect(continuation).toContain(`${heading}\n${sharedRule}`)
-      // 首稿：紧跟执行卡（必需事件）之后、定稿事实优先规则之前，只出现一次。
-      expect(initial.split(block)).toHaveLength(2)
-      expect(initial.indexOf(block)).toBeGreaterThan(initial.indexOf(markers[writingLanguage].card))
-      expect(initial).toContain(`${block}\n\n${markers[writingLanguage].precedence}`)
-      // 续写复用作者资料块，携带同一对账结果。
-      expect(continuation.split(block)).toHaveLength(2)
-      expect(continuation).toContain(`${block}\n\n${markers[writingLanguage].precedence}`)
-    })
-
-    it.each(['zh-CN', 'en-US'] as const)('carries the %s reconciliation and shared fact contract into the single condense revision', async writingLanguage => {
-      const draft = writingLanguage === 'zh-CN' ? `${'长'.repeat(2700)}。` : `${'long '.repeat(2700).trim()}.`
-      const condensed = writingLanguage === 'zh-CN' ? `${'缩'.repeat(2000)}。` : `${'short '.repeat(2000).trim()}.`
-      const runtime = fakeRuntime(attempt => attempt === 1 ? outcome(draft, 'stop', 1) : outcome(condensed, 'stop', 2),
-        () => outcome(reconciliationOutput(writingLanguage), 'stop'))
-      const { context, callbacks, command } = setup({ runtime, wordsPerChapter: 2000, wordsTarget: 2000, chapterNumber: 2,
-        writingLanguage, keyEvents: '核查遇阻；承担代价', previousFinalizedContent: '作者更正：林澄撤回先前核查安排，等待新的通行许可。' })
-
-      await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(condensed)
-
-      expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-condense'])
-      const initialPrompt = runtime.complete.mock.calls[0]![0].messages.at(-1)!.content
-      const condensePrompt = runtime.complete.mock.calls[1]![0].messages.at(-1)!.content
-      const heading = markers[writingLanguage].precedence
-      const block = expectedBlock[writingLanguage]
-      const rule = initialPrompt.split(`${heading}\n`)[1]?.split(writingLanguage === 'zh-CN' ? '\n\n【本章篇幅合同】' : '\n\n[Chapter length contract]')[0]
-      const reconcilePrompt = runtime.reconcile.mock.calls[0]![0].messages[0]!.content
-      expect(reconcilePrompt).toContain(`${heading}\n${rule}\n1. `)
-      expect(condensePrompt).toContain(`${block}\n\n${heading}\n${rule}`)
-      expect(condensePrompt.indexOf(block)).toBeLessThan(condensePrompt.indexOf(writingLanguage === 'zh-CN' ? '【待压缩正文】' : '[Manuscript to condense]'))
-      for (const anchor of [FINALIZED_FACT_PRECEDENCE[writingLanguage].planDecision,
-        FINALIZED_FACT_PRECEDENCE[writingLanguage].newAction,
-        FINALIZED_FACT_PRECEDENCE[writingLanguage].actionConsistency]) expect(condensePrompt).toContain(anchor)
-    })
-
-    it('binds the reconciliation prompt and the unreconciled draft prompt into the material decision', async () => {
-      const runtime = fakeRuntime(() => outcome('新章正文。'.repeat(125), 'stop'), () => outcome(reconciliationOutput('zh-CN'), 'stop'))
-      const { context, callbacks, command } = setup({ runtime, wordsTarget: 500, chapterNumber: 2, keyEvents: '核查遇阻',
-        previousFinalizedContent: '作者更正：林澄撤回先前核查安排。' })
-
-      await command.execute({ step: {}, context, callbacks })
-
-      const hash = (value: string) => createHash('sha256').update(value).digest('hex')
-      const decision = runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision
-      const reconcilePrompt = runtime.reconcile.mock.calls[0]![0].messages[0]!.content
-      const initial = runtime.complete.mock.calls[0]![0].messages.at(-1)!.content
-      expect(decision?.reconciliationPromptHash).toBe(hash(reconcilePrompt))
-      expect(decision?.promptHash).toBe(hash(stripDraftReconciliationBlock(initial, reconciliationOutput('zh-CN'))!))
-      expect(decision?.promptHash).not.toBe(hash(initial))
-    })
-
-    it('stops without drafting when the workflow is cancelled during reconciliation', async () => {
-      let cancel = () => {}
-      const runtime = fakeRuntime(() => outcome('新章正文。'.repeat(125), 'stop'), () => {
-        cancel()
-        throw new Error('GENERATION_WORKFLOW_CANCELLED')
-      })
-      const { context, callbacks, command } = setup({ runtime, wordsTarget: 500, chapterNumber: 2, keyEvents: '核查遇阻',
-        previousFinalizedContent: '作者更正：林澄撤回先前核查安排。' })
-      cancel = () => { context.cancelled = true }
-
-      await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow()
-
-      expect(runtime.reconcile).toHaveBeenCalledTimes(1)
-      expect(runtime.complete).not.toHaveBeenCalled()
-      expect(vi.mocked(callbacks.log).mock.calls.map(([line]) => String(line)).some(line => line.includes('按无对账继续生成'))).toBe(false)
-    })
-
-    it('does not reconcile without a finalized predecessor', async () => {
-      const runtime = fakeOutcomes(outcome('新章正文。'.repeat(125), 'stop'))
-      const { context, callbacks, command } = setup({ runtime, wordsTarget: 500, chapterNumber: 1, keyEvents: '核查遇阻' })
+  describe('new runs draft directly from author and finalized material', () => {
+    it.each(['zh-CN', 'en-US'] as const)('starts with the %s draft and preserves required material through continuation', async writingLanguage => {
+      const runtime = fakeRuntime(attempt => attempt === 1 ? outcome('初'.repeat(100), 'length', 1) : outcome(`${'续'.repeat(400)}。`, 'stop', 2),
+        () => { throw new Error('new runs must not ask for generated planning') })
+      const source = '林澄写下核查安排。\n\n作者更正：林澄撤回先前核查安排，等待新的通行许可。'
+      const { context, callbacks, command } = setup({ runtime, wordsTarget: 500, writingLanguage, chapterNumber: 2,
+        keyEvents: '核查遇阻；承担代价', worldSetting: '铜钥匙始终由林澄保管。', previousFinalizedContent: source })
 
       await command.execute({ step: {}, context, callbacks })
 
       expect(runtime.reconcile).not.toHaveBeenCalled()
-      expect(runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision?.reconciliationPromptHash).toBeUndefined()
+      expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-continuation'])
+      for (const [task] of runtime.complete.mock.calls) {
+        const prompt = task.messages.map(message => message.content).join('\n')
+        for (const text of [source, '铜钥匙始终由林澄保管。', '核查遇阻；承担代价',
+          FINALIZED_FACT_PRECEDENCE[writingLanguage].planDecision, FINALIZED_FACT_PRECEDENCE[writingLanguage].newAction,
+          FINALIZED_FACT_PRECEDENCE[writingLanguage].actionConsistency]) expect(prompt).toContain(text)
+        expect(prompt).not.toContain('【本章与定稿对账')
+        expect(prompt).not.toContain('[Reconciliation with finalized chapters')
+      }
+      const initial = runtime.complete.mock.calls[0]![0].messages.at(-1)!.content
+      const decision = runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision
+      expect(decision?.reconciliationPromptHash).toBeUndefined()
+      expect(decision?.promptHash).toBe(createHash('sha256').update(initial).digest('hex'))
     })
 
-    it.each([
-      ['a failed request', () => { throw new Error('GENERATION_PROVIDER_FAILED') }],
-      ['an incomplete response', () => outcome(reconciliationOutput('zh-CN').slice(0, 20), 'length')],
-      ['unparseable output', () => outcome('这里没有冲突。', 'stop')],
-    ] as const)('continues with the unreconciled prompt after %s', async (_label, reconcile) => {
-      const runtime = fakeRuntime(() => outcome('新章正文。'.repeat(125), 'stop'), reconcile)
+    it.each(['zh-CN', 'en-US'] as const)('preserves %s source and requirements in the single condense request without generated planning', async writingLanguage => {
+      const draft = writingLanguage === 'zh-CN' ? `${'长'.repeat(2700)}。` : `${'long '.repeat(2700).trim()}.`
+      const condensed = writingLanguage === 'zh-CN' ? `${'缩'.repeat(2000)}。` : `${'short '.repeat(2000).trim()}.`
+      const runtime = fakeRuntime(attempt => attempt === 1 ? outcome(draft, 'stop', 1) : outcome(condensed, 'stop', 2))
+      const source = '作者更正：林澄撤回先前核查安排，等待新的通行许可。'
+      const { context, callbacks, command } = setup({ runtime, wordsPerChapter: 2000, wordsTarget: 2000, chapterNumber: 2,
+        writingLanguage, keyEvents: '核查遇阻；承担代价', worldSetting: '铜钥匙始终由林澄保管。', previousFinalizedContent: source })
+
+      await expect(command.execute({ step: {}, context, callbacks })).resolves.toBe(condensed)
+
+      expect(runtime.reconcile).not.toHaveBeenCalled()
+      expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-condense'])
+      for (const [task] of runtime.complete.mock.calls) {
+        const prompt = task.messages.map(message => message.content).join('\n')
+        for (const text of [source, '铜钥匙始终由林澄保管。', '核查遇阻；承担代价',
+          FINALIZED_FACT_PRECEDENCE[writingLanguage].planDecision, FINALIZED_FACT_PRECEDENCE[writingLanguage].newAction]) expect(prompt).toContain(text)
+        expect(prompt).not.toContain('【本章与定稿对账')
+        expect(prompt).not.toContain('[Reconciliation with finalized chapters')
+      }
+    })
+
+    it.each(['zh-CN', 'en-US'] as const)('does not introduce a cost requirement for a cost-free %s chapter', async writingLanguage => {
+      const runtime = fakeOutcomes(outcome('本章正文。'.repeat(125), 'stop'))
+      const { context, callbacks, command } = setup({ runtime, wordsTarget: 500, writingLanguage, chapterNumber: 2,
+        keyEvents: '读信', previousFinalizedContent: '上一章末尾，信刚送到。' })
+      await command.execute({ step: {}, context, callbacks })
+      expect(runtime.reconcile).not.toHaveBeenCalled()
+      const prompt = runtime.complete.mock.calls[0]![0].messages.at(-1)!.content
+      expect(prompt).toContain('读信')
+      expect(prompt).toContain(FINALIZED_FACT_PRECEDENCE[writingLanguage].newAction)
+      expect(prompt).not.toContain('每条必需事件写出本章新动作、代价和实际后果')
+      expect(prompt).not.toContain("describe this chapter's new action, cost, and actual consequence")
+    })
+
+    it('does not dispatch any request when cancelled before drafting', async () => {
+      const runtime = fakeOutcomes(outcome('新章正文。'.repeat(125), 'stop'))
       const { context, callbacks, command } = setup({ runtime, wordsTarget: 500, chapterNumber: 2, keyEvents: '核查遇阻',
         previousFinalizedContent: '作者更正：林澄撤回先前核查安排。' })
-
-      await command.execute({ step: {}, context, callbacks })
-
-      expect(runtime.reconcile).toHaveBeenCalledTimes(1)
-      const decision = runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision
-      const initial = runtime.complete.mock.calls[0]![0].messages.at(-1)!.content
-      expect(initial).not.toContain('【本章与定稿对账')
-      expect(decision?.promptHash).toBe(createHash('sha256').update(initial).digest('hex'))
-      expect(vi.mocked(callbacks.log).mock.calls.map(([line]) => String(line)).some(line => line.includes('按无对账继续生成'))).toBe(true)
+      context.cancelled = true
+      await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow()
+      expect(runtime.complete).not.toHaveBeenCalled()
+      expect(runtime.reconcile).not.toHaveBeenCalled()
     })
   })
 
