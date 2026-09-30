@@ -302,7 +302,7 @@ test('前向资格窗口只继承 high 的五个 scope，按本次 bridge 的已
 })
 
 test('父桥实际生成配置和 spawn options 使用同一已登记窗口，漂移在启动前拒绝', () => {
-  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/v3-resume-20260930/window-parent-'))
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/window-parent-'))
   const target = { arm: 'candidate', repositoryRoot: ROOT, isolationRoot: directory,
     roots: { userData: directory, config: directory, legacySource: directory } }
   const phase = 'c16-c18', milestone = 'final', caseId = 'C17-B'
@@ -342,7 +342,7 @@ test('父桥实际生成配置和 spawn options 使用同一已登记窗口，�
 })
 
 test('前向资格窗口接受实际四个 phase prepare 的登记列表，漂移在父桥启动前拒绝', () => {
-  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/v3-resume-20260930/window-prepare-'))
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/window-prepare-'))
   const original = childProcess.spawnSync, captured = []
   let spawnCalls = 0
   try {
