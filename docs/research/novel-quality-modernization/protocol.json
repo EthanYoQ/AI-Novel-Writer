@@ -1215,5 +1215,93 @@
         "parityId": "718f3683650b8bbb63b3fab01964e53d9729d389ee807f31d4a9d52667be8c3c"
       }
     ]
+  },
+  "historicalC16A4d2b6edBoundary": {
+    "fromEventCount": 1005,
+    "eventCount": 1041,
+    "rawBytesSha256": "193d9e5638a4406bd51a0dc4217704f181e83c752cd65c45af3d65976b6648d5",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "336ac6c686a46bf401f60efd98c30c57afbcac277783aa2f72139762a7f7483e",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "74d168a6cbd4b56c83c487db80634de367b2ff36",
+        "sourceHash": "702a2229aad38f8877061d80b47816b4849c7360edf5eed2b3c26717412620e5",
+        "driverHash": "843f16bf94bea40c530c65ae0439d48f0608e2274dade379dbffaab64bfdebea"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:034ffdbe-2e02-4b8c-a5fb-38bab278d53d",
+        "invocationId": "a4d2b6ed-9f61-4b4b-b698-c16d0dec1efe",
+        "terminal": "settle",
+        "parityId": "6b203c84a0f1e0340ff8aec019870ff6c6233d0570a4296b9106e371d55c3dcc"
+      },
+      {
+        "attemptId": "candidate:7347f9f4-adcc-4061-a4d7-7d6c62382016",
+        "invocationId": "a4d2b6ed-9f61-4b4b-b698-c16d0dec1efe",
+        "terminal": "settle",
+        "parityId": "6b203c84a0f1e0340ff8aec019870ff6c6233d0570a4296b9106e371d55c3dcc"
+      },
+      {
+        "attemptId": "candidate:bc887b6c-60c1-4be9-8116-a0512e7668e9",
+        "invocationId": "a4d2b6ed-9f61-4b4b-b698-c16d0dec1efe",
+        "terminal": "settle",
+        "parityId": "f592b6ff6dd6e161d66c5065a1d25a9e30876251403aa20078da7a4b6adadecb"
+      },
+      {
+        "attemptId": "candidate:f3fa816f-b5f7-4607-be22-a40bd1523d6a",
+        "invocationId": "a4d2b6ed-9f61-4b4b-b698-c16d0dec1efe",
+        "terminal": "settle",
+        "parityId": "f592b6ff6dd6e161d66c5065a1d25a9e30876251403aa20078da7a4b6adadecb"
+      },
+      {
+        "attemptId": "candidate:73a6d42f-d5bf-42ed-94a7-b256e3424a4b",
+        "invocationId": "a4d2b6ed-9f61-4b4b-b698-c16d0dec1efe",
+        "terminal": "settle",
+        "parityId": "8fc3ebaa16213c100f69967ee2372acea596cd46ffb3934a900e58ae8c5ea754"
+      },
+      {
+        "attemptId": "candidate:fb30f5ae-c728-492d-a8fe-e5b0e6a830da",
+        "invocationId": "a4d2b6ed-9f61-4b4b-b698-c16d0dec1efe",
+        "terminal": "settle",
+        "parityId": "8fc3ebaa16213c100f69967ee2372acea596cd46ffb3934a900e58ae8c5ea754"
+      },
+      {
+        "attemptId": "candidate:267f0158-9811-4ff5-8507-d4785cf7c52a",
+        "invocationId": "a4d2b6ed-9f61-4b4b-b698-c16d0dec1efe",
+        "terminal": "settle",
+        "parityId": "8fc3ebaa16213c100f69967ee2372acea596cd46ffb3934a900e58ae8c5ea754"
+      },
+      {
+        "attemptId": "candidate:0edf1c56-82b0-40a9-8157-0bacd9f71d97",
+        "invocationId": "a4d2b6ed-9f61-4b4b-b698-c16d0dec1efe",
+        "terminal": "settle",
+        "parityId": "73c00b48cd24c66ec299ce5f08500292bc72a5dd04d9d63b7e9880e83b9f25f7"
+      },
+      {
+        "attemptId": "candidate:a352acac-c6d3-4782-90aa-f32fb3b64bf7",
+        "invocationId": "a4d2b6ed-9f61-4b4b-b698-c16d0dec1efe",
+        "terminal": "settle",
+        "parityId": "73c00b48cd24c66ec299ce5f08500292bc72a5dd04d9d63b7e9880e83b9f25f7"
+      },
+      {
+        "attemptId": "candidate:a9d82486-67d5-433c-8a89-675e7b488598",
+        "invocationId": "a4d2b6ed-9f61-4b4b-b698-c16d0dec1efe",
+        "terminal": "settle",
+        "parityId": "73c00b48cd24c66ec299ce5f08500292bc72a5dd04d9d63b7e9880e83b9f25f7"
+      },
+      {
+        "attemptId": "candidate:0d3a0f80-2342-47b9-b402-680c2da0f78f",
+        "invocationId": "a4d2b6ed-9f61-4b4b-b698-c16d0dec1efe",
+        "terminal": "settle",
+        "parityId": "8fc3ebaa16213c100f69967ee2372acea596cd46ffb3934a900e58ae8c5ea754"
+      },
+      {
+        "attemptId": "candidate:755e45a5-da1a-4c43-b856-5a744c689f7c",
+        "invocationId": "a4d2b6ed-9f61-4b4b-b698-c16d0dec1efe",
+        "terminal": "settle",
+        "parityId": "8fc3ebaa16213c100f69967ee2372acea596cd46ffb3934a900e58ae8c5ea754"
+      }
+    ]
   }
 }
