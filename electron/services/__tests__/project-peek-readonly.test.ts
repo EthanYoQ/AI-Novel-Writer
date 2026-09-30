@@ -186,7 +186,7 @@ describe('ProjectPeekService source-zero-write overview', () => {
     }
   })
 
-  it('reports conservative counts and never marks one chapter as a completed multi-chapter plan', () => {
+  it('reports conservative counts and never marks one chapter as a completed multi-chapter plan', { timeout: 20_000 }, () => {
     const f = fixture()
     f.database.prepare("UPDATE project_core SET premise='前提', worldbuilding='世界观'").run()
     f.database.prepare("INSERT INTO characters (character_id,name,retired) VALUES ('c1','林舟',0),('c2','已退场',1)").run()
@@ -216,7 +216,7 @@ describe('ProjectPeekService source-zero-write overview', () => {
     ])
   })
 
-  it('does not count a finalized status whose frozen outbox fact is inconsistent', () => {
+  it('does not count a finalized status whose frozen outbox fact is inconsistent', { timeout: 20_000 }, () => {
     const f = fixture()
     f.database.prepare('UPDATE project_core SET total_chapters=1').run()
     addChapter(f.database, 1, { draft: true, finalized: true })

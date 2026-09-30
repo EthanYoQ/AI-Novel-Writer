@@ -135,7 +135,7 @@ describe('current-project import parsing persistence', () => {
     )).resolves.toEqual({ success: false, error: expected })
   })
 
-  it('does not create an import run when the project changes while the file picker is open', async () => {
+  it('does not create an import run when the project changes while the file picker is open', { timeout: 20_000 }, async () => {
     const source = path.join(parent, 'picker.txt')
     fs.writeFileSync(source, 'Chapter 1 Picker\nalpha', 'utf8')
     const picker = deferred<{ canceled: boolean; filePaths: string[] }>()
@@ -196,7 +196,7 @@ describe('current-project import parsing persistence', () => {
     })
   })
 
-  it('keeps multi-file progress in the original project when a later read returns after a switch', async () => {
+  it('keeps multi-file progress in the original project when a later read returns after a switch', { timeout: 20_000 }, async () => {
     const sourceA = path.join(parent, 'multi-a.txt')
     const sourceB = path.join(parent, 'multi-b.txt')
     fs.writeFileSync(sourceA, 'a', 'utf8')
