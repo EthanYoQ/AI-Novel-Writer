@@ -319,6 +319,13 @@ export function selectPhase(protocol, phase, milestone = 'early') {
   return { phase, milestone, ...protocol.phases[phase],
     ...(milestone === 'post-ui' ? protocol.phases[phase].postUi ?? {} : {}) }
 }
+export function forwardReasoningFor(protocol, phase, milestone) {
+  const registration = protocol.forwardReasoningExperiment
+  const scope = registration?.scopes?.find(item => item.phase === phase && item.milestone === milestone)
+  if (!scope) return null
+  if (!isDeepStrictEqual(scope.caseIds, selectPhase(protocol, phase, milestone).caseIds)) fail('FORWARD_REASONING_SCOPE_MISMATCH')
+  return registration
+}
 /**
  * 生产桥只是协议的执行者：场景登记的 caseId 与 operation id 必须逐字等于该阶段的
  * 预注册内容。不一致时阻断，而不是跑一个不是预注册的实验。
@@ -684,6 +691,7 @@ export function main(argv) {
     if (fs.existsSync(developmentLedger)) fail('DEVELOPMENT_LEDGER_COLLISION')
     const result = withLedgerReconciliation(developmentLedger, 'synthetic', () => runProductionPhasePair(prepared.targets, { phase, development: true, mode: 'synthetic', milestone: selection.milestone,
       scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, evaluationPolicy: selection.evaluationPolicy, order: protocol.order,
+      forwardReasoning: forwardReasoningFor(protocol, phase, selection.milestone),
       ...currentProtocolBinding(),
       semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(prepared.root, 'baseline-templates.json'), ledgerPath: developmentLedger }))
     fs.writeFileSync(path.join(prepared.root, `development-receipt-${phase}.json`), JSON.stringify(result, null, 2))
@@ -713,6 +721,7 @@ export function main(argv) {
     // 只有调用方还活着，这是保证每次发送都有终态的最后一道。
     const result = withLedgerReconciliation(ledgerPath, mode, () => runProductionPhasePair(targets, { phase, mode, milestone: selection.milestone,
       scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, evaluationPolicy: selection.evaluationPolicy, order: protocol.order,
+      forwardReasoning: forwardReasoningFor(protocol, phase, selection.milestone),
       ...currentProtocolBinding(), semanticPath: path.join(ROOT, protocol.fixturePath),
       templatesPath: path.join(evidenceRoot, 'baseline-templates.json'), ledgerPath }))
     inspectTarget(targets.baseline); inspectTarget(targets.candidate)

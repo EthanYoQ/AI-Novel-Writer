@@ -206,6 +206,32 @@ export function createOutboundPreflightAssert(failures) {
   }
 }
 
+/** Forward-only experiment: verify the saved preference separately from each arm's natural wire. */
+export function assertForwardReasoning(registration, { arm, phase, milestone, caseId, model, creativeStrategy, resolution, body }) {
+  const scope = registration?.scopes?.find(item => item.phase === phase && item.milestone === milestone)
+  if (!scope || caseId && !scope.caseIds.includes(caseId) || !['baseline', 'candidate'].includes(arm)
+    || registration.reasoningOverride !== 'max' || registration.creativeStrategy !== 'auto' || registration.wireParity !== false
+    || registration.wire?.candidate?.enable_thinking !== true || registration.wire.candidate.reasoning_effort !== 'max'
+    || registration.wire?.baseline?.enable_thinking !== 'absent' || registration.wire.baseline.reasoning_effort !== 'absent'
+    || !model || ['provider', 'protocol', 'baseUrl', 'modelName', 'temperature', 'maxTokens']
+      .some(key => model[key] !== registration.model?.[key])
+    || model.reasoningOverride !== registration.reasoningOverride || creativeStrategy !== registration.creativeStrategy)
+    throw new Error('FORWARD_REASONING_CONFIG_MISMATCH')
+  if (body === undefined) return null
+  const present = key => Object.hasOwn(body, key)
+  if (present('thinking_budget') || (arm === 'candidate'
+    ? !present('enable_thinking') || body.enable_thinking !== true || !present('reasoning_effort') || body.reasoning_effort !== 'max'
+    : present('enable_thinking') || present('reasoning_effort'))) throw new Error('FORWARD_REASONING_WIRE_MISMATCH')
+  if (arm === 'candidate' && (resolution?.requested !== 'max' || resolution.effective !== 'max'
+    || resolution.status !== 'mapped' || resolution.source !== 'model-override')) throw new Error('FORWARD_REASONING_RESOLUTION_MISMATCH')
+  const observed = key => present(key) ? { present: true, value: body[key] } : { present: false }
+  return { requested: 'max', effective: arm === 'candidate' ? resolution.effective : null,
+    status: arm === 'candidate' ? resolution.status : 'not-exposed-by-baseline',
+    source: arm === 'candidate' ? resolution.source : 'profile-readback',
+    wire: { enable_thinking: observed('enable_thinking'), reasoning_effort: observed('reasoning_effort'),
+      thinking_budget: observed('thinking_budget') } }
+}
+
 export function rejectOutsidePhysicalBoundary(receipt) {
   createOutboundPreflightAssert(receipt.preflightFailures ??= [])(false, 'NETWORK_OUTSIDE_PHYSICAL_BOUNDARY')
 }
@@ -1440,6 +1466,7 @@ export function runProductionPhasePair(targets, options, bridge) {
   }))
   const common = { invocationId, mode: options.mode ?? 'synthetic', development: options.development === true,
     protocolRevision: options.protocolRevision, protocolHash: options.protocolHash,
+    forwardReasoning: options.forwardReasoning ?? null,
     scenarioRevision: options.scenarioRevision ?? null, selectionDifference: options.selectionDifference ?? null,
     attemptPolicy: options.attemptPolicy ?? null,
     evaluationPolicy: options.evaluationPolicy ?? null,

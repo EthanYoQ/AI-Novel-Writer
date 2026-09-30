@@ -8,7 +8,7 @@ import { Buffer } from 'node:buffer'
 import childProcess, { spawnSync } from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
 import { pathToFileURL } from 'node:url'
-import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, currentProtocolBinding, assertProtocolBinding, validateHistoricalLedgerBoundary, validateHistoricalSupersessionBoundary, validateCampaignBinding, buildFixtureExports, validatePair, selectPhase, assertScenarioMatchesProtocol, reconcileDispatchedAttempts, withLedgerReconciliation, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles, assertFormalTargetCandidateClean, createShortIsolationRoot, assertOwnedIsolationRoot, validatePhysicalLedger, registeredCampaignWorktree, developmentLedgerPath } from '../quality-modernization-run.mjs'
+import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, currentProtocolBinding, assertProtocolBinding, validateHistoricalLedgerBoundary, validateHistoricalSupersessionBoundary, validateCampaignBinding, buildFixtureExports, validatePair, selectPhase, forwardReasoningFor, assertScenarioMatchesProtocol, reconcileDispatchedAttempts, withLedgerReconciliation, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles, assertFormalTargetCandidateClean, createShortIsolationRoot, assertOwnedIsolationRoot, validatePhysicalLedger, registeredCampaignWorktree, developmentLedgerPath } from '../quality-modernization-run.mjs'
 import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolatedRealModelConfig, PHASE_SCENARIOS, classifyProductionPair,
   fullExecutionSchedule, classifyFullProduction,
   adjudicateEarlyReviewReferenceNonconformance, EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION,
@@ -33,6 +33,55 @@ const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-q
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
 const semanticPath = path.join(ROOT, protocol.fixturePath)
 const protocolBinding = currentProtocolBinding()
+
+test('固定 max 登记只覆盖 C16、post-UI 三 selector 和 final full，原六参数与素材不动', () => {
+  const registered = protocol.forwardReasoningExperiment
+  assert.equal(registered.revision, 'fixed-max-natural-wire-asymmetry-v1')
+  assert.equal(registered.wireParity, false)
+  assert.deepEqual(registered.model, { provider: source.modelParameters.provider, protocol: source.modelParameters.protocol,
+    baseUrl: `https://${source.modelParameters.endpointHost}/v1`, modelName: source.modelParameters.modelName,
+    temperature: source.modelParameters.temperature, maxTokens: source.modelParameters.maxTokens })
+  for (const scope of registered.scopes) assert.equal(forwardReasoningFor(protocol, scope.phase, scope.milestone), registered)
+  assert.equal(forwardReasoningFor(protocol, 'early-budget', 'early'), null)
+  assert.throws(() => forwardReasoningFor({ ...protocol, forwardReasoningExperiment: { ...registered,
+    scopes: [{ ...registered.scopes[0], caseIds: ['C16-A'] }] } }, 'c16-c18', 'final'), /FORWARD_REASONING_SCOPE_MISMATCH/)
+})
+
+test('固定 max 前瞻：配置读回与每次出站严格区分 candidate wire 和 baseline 真缺席', async () => {
+  const { assertForwardReasoning } = await import('../quality-modernization-driver.mjs')
+  const registration = { revision: 'fixed-max-v1', scopes: [{ phase: 'c16-c18', milestone: 'final' }],
+    model: { provider: 'openai', protocol: 'openai', baseUrl: 'https://api.siliconflow.cn/v1',
+      modelName: 'deepseek-ai/DeepSeek-V4-Flash', temperature: 0.7, maxTokens: 16384 },
+    reasoningOverride: 'max', creativeStrategy: 'auto', wireParity: false,
+    wire: { candidate: { enable_thinking: true, reasoning_effort: 'max' },
+      baseline: { enable_thinking: 'absent', reasoning_effort: 'absent' } } }
+  const model = { ...registration.model, reasoningOverride: 'max' }
+  const common = { arm: 'candidate', phase: 'c16-c18', milestone: 'final', model, creativeStrategy: 'auto',
+    resolution: { requested: 'max', effective: 'max', status: 'mapped', source: 'model-override' } }
+  const candidate = assertForwardReasoning(registration, { ...common,
+    body: { enable_thinking: true, reasoning_effort: 'max', max_tokens: 4096 } })
+  assert.deepEqual(candidate, { requested: 'max', effective: 'max', status: 'mapped', source: 'model-override',
+    wire: { enable_thinking: { present: true, value: true }, reasoning_effort: { present: true, value: 'max' },
+      thinking_budget: { present: false } } })
+  const baseline = assertForwardReasoning(registration, { ...common, arm: 'baseline', resolution: null, body: { max_tokens: 4096 } })
+  assert.deepEqual(baseline, { requested: 'max', effective: null, status: 'not-exposed-by-baseline', source: 'profile-readback',
+    wire: { enable_thinking: { present: false }, reasoning_effort: { present: false }, thinking_budget: { present: false } } })
+  for (const change of [
+    { model: { ...model, reasoningOverride: 'auto' } },
+    { model: { ...model, baseUrl: 'https://api.siliconflow.com/v1' } },
+    { model: { ...model, modelName: 'deepseek-ai/DeepSeek-V4-Pro' } },
+    { creativeStrategy: 'deep-planning' },
+    { phase: 'early-context' },
+  ]) assert.throws(() => assertForwardReasoning(registration, { ...common, ...change }), /FORWARD_REASONING_CONFIG_MISMATCH/)
+  for (const body of [{ max_tokens: 4096 }, { enable_thinking: true, max_tokens: 4096 },
+    { enable_thinking: false, reasoning_effort: 'max', max_tokens: 4096 },
+    { enable_thinking: true, reasoning_effort: 'high', max_tokens: 4096 },
+    { enable_thinking: true, reasoning_effort: 'max', thinking_budget: 8192, max_tokens: 4096 }])
+    assert.throws(() => assertForwardReasoning(registration, { ...common, body }), /FORWARD_REASONING_WIRE_MISMATCH/)
+  for (const body of [{ enable_thinking: null, max_tokens: 4096 }, { reasoning_effort: false, max_tokens: 4096 },
+    { enable_thinking: false, reasoning_effort: null, max_tokens: 4096 }, { thinking_budget: null, max_tokens: 4096 }])
+    assert.throws(() => assertForwardReasoning(registration, { ...common, arm: 'baseline', resolution: null, body }), /FORWARD_REASONING_WIRE_MISMATCH/)
+})
 
 test('post-UI reviewed draft policy selects every actionable item without changing earlier phases', () => {
   const report = { summary: 'review', items: [

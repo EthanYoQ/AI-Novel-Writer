@@ -108,6 +108,8 @@ S07 的 early-budget 驱动在每次最终 provider fetch 前持锁 reserve→di
 
 获准安全参数：provider=`openai`、protocol=`openai`、endpointHost=`api.siliconflow.cn`、modelName=`deepseek-ai/DeepSeek-V4-Flash`、temperature=0.7、maxTokens=16384。配置declared context=null/output=16384/reasoning=false/structuredOutput=false/usage=false不等于实测能力；不推测结构化支持、usage或上下文上限。密钥只通过现有安全模型入口，禁止fixture/receipt/日志携带密钥或密钥hash。旧qualification driver模拟的其他模型名称仅是其自带模拟样本，绝不是正式获准provider配置。
 
+前瞻推理配置以 `protocol.json.forwardReasoningExperiment` 的 `fixed-max-natural-wire-asymmetry-v1` 登记为准，只覆盖 C16–C18 七案、post-UI 三个固定 selector、final full；须先完成 C16 七案 candidate 绝对门再推进其依赖。两臂实际模型配置均须读回 `reasoningOverride=max`，项目策略均为 `creativeStrategy=auto`，且 provider/protocol/baseUrl/modelName 精确匹配登记。candidate 的每个物理请求自然发送 `enable_thinking:true`、`reasoning_effort:max`；冻结旧 baseline 自然省略两个字段，`false`、`null` 都不算缺席；两臂都不得发送 `thinking_budget`。逐请求在现有 requestReceipt 中保存非敏感解析状态、字段 presence/value 与实际 `requestedOutputTokens`（来自当次 `max_tokens`），先核对再 reserve/dispatch，不改写出站 body。原六参数、作者素材 parity 不变；同配置偏好不冒称 wire parity（登记为 `false`）。这次只固定 max，不先试 high 或选优；不能据此作参数或代码因果改善声明，不可比相对维度记 INCONCLUSIVE，candidate 全部绝对门与 baseline 完整技术端点不减。语义源、oracle、温度 0.7、profile 上限 16384、原预算、顺序、历史失败与唯一原账本均保持。出站证据不能证明服务端实际模型身份或思考模式；没有服务端 metadata 就记未验证。新协议完整字节 hash 漂移，旧目标不得复用，须重新冻结并先跑零模型 dry-run。
+
 ## 可运行入口及证据边界
 
 ```

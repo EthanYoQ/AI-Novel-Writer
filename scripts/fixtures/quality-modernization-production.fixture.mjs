@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url'
 import { test, vi } from 'vitest'
 import { updateLedger, CAMPAIGN_ID } from '../quality-modernization-run.mjs'
 import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, createOperationDispatchGate,
-  createOutboundPreflightAssert, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
+  createOutboundPreflightAssert, assertForwardReasoning, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
   fetchProviderResponse, measurePromptBytes, BRIDGE_SETTLEMENT_DEADLINE_MS,
   BRIDGE_TEST_TIMEOUT_MS, BRIDGE_REVIEWED_TEST_TIMEOUT_MS, POST_UI_REVIEW_POLICY, reviewedDraftSelection,
   scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder } from '../quality-modernization-driver.mjs'
@@ -332,6 +332,7 @@ test('isolated production commands persist the selected phase operations', async
     let model = { id: 'quality-preregistered-model', name: '预注册合成验证模型', ...source.modelParameters,
       apiKey: 'synthetic-quality-never-network', baseUrl: `https://${source.modelParameters.endpointHost}/v1`, purposes: ['generation'] }
     delete model.parameterStatus
+    if (request.forwardReasoning) model.reasoningOverride = request.forwardReasoning.reasoningOverride
     if (request.mode === 'real') {
       if (request.development || !target.modelId) throw new Error('FROZEN_SAFE_MODEL_REQUIRED')
       model = json(path.join(target.roots.config, 'models.json')).find(value => value.id === target.modelId)
@@ -528,6 +529,20 @@ test('isolated production commands persist the selected phase operations', async
         templateHash: sha(template), contentHash: sha(template.content) })) }
     const actualModel = (await invoke('llm:list-models')).find(value => value.id === model.id)
     assert.ok(actualModel)
+    const actualCreativeStrategy = candidate
+      ? db.prepare("SELECT creative_strategy FROM project_core WHERE id='main'").pluck().get()
+      : projectStore.getState().currentProject?.novelConfig?.creativeStrategy
+    if (request.forwardReasoning) {
+      assertForwardReasoning(request.forwardReasoning, { arm: target.arm, phase: request.phase, milestone: request.milestone,
+        caseId: request.caseId, model: actualModel, creativeStrategy: actualCreativeStrategy })
+      receipt.forwardReasoningReadback = { revision: request.forwardReasoning.revision,
+        reasoningOverride: actualModel.reasoningOverride, creativeStrategy: actualCreativeStrategy,
+        model: Object.fromEntries(['provider', 'protocol', 'baseUrl', 'modelName', 'temperature', 'maxTokens']
+          .map(key => [key, actualModel[key]])) }
+    }
+    const reasoningResolution = request.forwardReasoning && candidate
+      ? (await load('src/shared/reasoning-policy.ts')).resolveReasoningPolicy({ model: actualModel,
+        creativeStrategy: actualCreativeStrategy, stage: 'general' }) : null
     const safeModel = Object.fromEntries(['provider', 'protocol', 'modelName', 'temperature', 'maxTokens', 'baseUrl'].map(key => [key, actualModel[key]]))
     const authorBlueprints = db.prepare('SELECT chapter_number,title,role,purpose,key_events,characters,user_guidance FROM blueprints WHERE chapter_number>1 ORDER BY chapter_number').all()
     const skillBindings = await (await load('src/services/agent/writing-skill-bindings.ts')).loadWritingSkillBindings(session)
@@ -733,6 +748,13 @@ test('isolated production commands persist the selected phase operations', async
       const body = JSON.parse(options.body)
       preflight(body.model === source.modelParameters.modelName, 'UNREGISTERED_PROVIDER_MODEL')
       preflight(body.temperature === source.modelParameters.temperature, 'UNREGISTERED_PROVIDER_TEMPERATURE')
+      let forwardReasoningEvidence = null
+      if (request.forwardReasoning) {
+        try { forwardReasoningEvidence = assertForwardReasoning(request.forwardReasoning, { arm: target.arm,
+          phase: request.phase, milestone: request.milestone, caseId: request.caseId, model: actualModel,
+          creativeStrategy: actualCreativeStrategy, resolution: reasoningResolution, body }) }
+        catch (error) { preflight(false, error.message) }
+      }
       if (candidate && request.mode === 'synthetic')
         preflight(body.stream_options?.include_usage === true, 'OPENAI_USAGE_STREAM_NOT_REQUESTED')
       preflight(currentContext && operationKind, 'PHYSICAL_REQUEST_OUTSIDE_COMMAND')
@@ -873,6 +895,7 @@ test('isolated production commands persist the selected phase operations', async
         .map(record => ({ sourceId: `candidate:${record.draftId}`, revision: record.version, contentHash: record.materialContentHash,
           persistedContentHash: sha(record.content), persistedBytes: Buffer.byteLength(record.content, 'utf8'), markerHash: sha(record.marker) }))
       const requestReceipt = { attemptId, binding, requestedOutputTokens: body.max_tokens ?? body.max_completion_tokens,
+        ...(forwardReasoningEvidence ? { reasoning: forwardReasoningEvidence } : {}),
         compiledPromptHash: sha(body.messages), systemPromptHash: sha(body.messages.filter(message => message.role === 'system')),
         composedPromptBytes: measurePromptBytes(body.messages),
         requestBodyBytes: Buffer.byteLength(typeof options.body === 'string' ? options.body : '', 'utf8'),

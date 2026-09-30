@@ -30,6 +30,25 @@
     "automatedOutcomeCeiling": "pending-independent-oracle-review",
     "historyPolicy": "retain every failure, retry, missing result and interruption in intention-to-treat; never retrospectively reclassify or select the best run"
   },
+  "forwardReasoningExperiment": {
+    "revision": "fixed-max-natural-wire-asymmetry-v1",
+    "scopes": [
+      { "phase": "c16-c18", "milestone": "final", "caseIds": ["C16-A", "C16-B", "C16-C", "C17-A", "C17-B", "C18-A", "C18-B"] },
+      { "phase": "early-budget", "milestone": "post-ui", "caseIds": ["场景1/1"] },
+      { "phase": "early-context", "milestone": "post-ui", "caseIds": ["场景2/3"] },
+      { "phase": "early-review", "milestone": "post-ui", "caseIds": ["场景3/2"] },
+      { "phase": "full", "milestone": "final", "caseIds": ["场景1/1", "场景1/2", "场景1/3", "场景2/1", "场景2/2", "场景2/3", "场景3/1", "场景3/2", "场景3/3"] }
+    ],
+    "model": { "provider": "openai", "protocol": "openai", "baseUrl": "https://api.siliconflow.cn/v1", "modelName": "deepseek-ai/DeepSeek-V4-Flash", "temperature": 0.7, "maxTokens": 16384 },
+    "reasoningOverride": "max",
+    "creativeStrategy": "auto",
+    "wireParity": false,
+    "wire": {
+      "candidate": { "enable_thinking": true, "reasoning_effort": "max" },
+      "baseline": { "enable_thinking": "absent", "reasoning_effort": "absent" }
+    },
+    "limits": "Fixed max only, no high pilot or best-of; candidate absolute gates and complete baseline technical endpoint remain required. Natural wire asymmetry makes parameter or code-causal improvement claims unsupported; incomparable relative dimensions are INCONCLUSIVE. Preserve semantic source, oracle, temperature 0.7, profile maxTokens 16384, per-request budget, arm order, history and the original physical ledger. C16 seven candidate cases must pass before post-UI/full."
+  },
   "historicalIntentionToTreat": {
     "decisionRevision": "s10b-paired-hard-gate-v1",
     "failedInvocations": [
