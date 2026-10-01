@@ -1220,6 +1220,129 @@
       ]
     },
     "early-budget": {
+      "postUiAiReview": {
+        "scenarioRevision": "s14b-post-ui-ai-review-final-early-budget-v1",
+        "minimumCalls": 6,
+        "maximumPlannedCalls": 38,
+        "evaluationPolicy": {
+          "revision": "ai-review-final-manuscript-v1",
+          "caseIds": [
+            "场景1/1"
+          ],
+          "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+          "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+          "confirmation": "preauthorized-ai-only-persisted-original-items-with-native-findingIds",
+          "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+          "endpoint": "native-merge-then-ordinary-full-review",
+          "automaticCeiling": "pending-independent-oracle-review",
+          "physicalRequests": {
+            "minimum": 6,
+            "maximum": 38,
+            "manuscriptMinimum": 1,
+            "manuscriptMaximum": 8
+          },
+          "armAsymmetry": {
+            "baseline": "Native keyEvents only; no mustShow, findingId, targeted cycle or durable owner artifact; original 8192 per-request budget retained.",
+            "candidate": "Native keyEvents/mustShow and actual persisted cycle findingIds; own root/model budgets retained.",
+            "claim": "Record native selection, source, parameter and condense differences; no improvement claim from this asymmetry."
+          }
+        },
+        "attemptPolicy": {
+          "milestone": "post-ui",
+          "arms": [
+            "baseline",
+            "candidate"
+          ],
+          "operationId": "指定范围生成",
+          "primaryPurpose": "chapter-blueprint-directory",
+          "repairPurpose": "chapter-blueprint-directory:structured-syntax-repair",
+          "maxRepairAttempts": 1,
+          "reviewRebuild": {
+            "operationId": "成稿首审",
+            "primaryPurpose": "review-chapter",
+            "repairPurpose": "review-chapter-rebuild",
+            "maxRepairAttempts": 1
+          },
+          "draftRecovery": {
+            "operationIds": [
+              "900单位正文"
+            ],
+            "arms": [
+              "baseline",
+              "candidate"
+            ],
+            "maxAttempts": 8,
+            "maxContinuationRounds": 7,
+            "maxNoProgressRecoveries": 1,
+            "baselineMinimumRatio": 0.8,
+            "candidateMinimumRatio": 0.7,
+            "minimumProgressUnits": 300,
+            "trigger": "settled-hash-verified-short-stop-or-length",
+            "formalEffect": "last-attempt-only",
+            "armAsymmetry": "baseline 2264390d uses its original 80% continuation minimum and has no upper-bound stop or condense; candidate uses draftTargetUnitRange and may condense the composed draft. Both retain their own eight-attempt root budget."
+          },
+          "structuredRecovery": {
+            "operationId": "指定范围生成",
+            "arms": [
+              "baseline",
+              "candidate"
+            ],
+            "budget": "planBlueprintGenerationCost",
+            "maxSyntaxRepairs": 1,
+            "maxCompactFallbacksPerChapter": 1,
+            "trigger": "settled-length-or-production-blueprint-decode-failure",
+            "order": "depth-first-half-split",
+            "armAsymmetry": "Both arms use their existing structured executor; candidate now rebuilds value_too_long without mechanical truncation. No baseline product code is changed."
+          },
+          "draftCondense": {
+            "operationIds": [
+              "900单位正文"
+            ],
+            "arms": [
+              "candidate"
+            ],
+            "primaryPurpose": "chapter-draft",
+            "condensePurpose": "chapter-draft-condense",
+            "maxCondenseAttempts": 1,
+            "trigger": "settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum",
+            "formalEffect": "last-attempt-only"
+          },
+          "finalReviewRebuild": {
+            "operationId": "成稿完整复评",
+            "primaryPurpose": "review-chapter",
+            "repairPurpose": "review-chapter-rebuild",
+            "maxRepairAttempts": 1
+          },
+          "refinementRecovery": {
+            "operationId": "成稿一次修稿",
+            "purpose": "refine-from-review",
+            "maxAttempts": 4,
+            "trigger": "settled-length-same-confirmation-visible-append-with-progress"
+          }
+        },
+        "operations": [
+          {
+            "id": "指定范围生成",
+            "kind": "directory"
+          },
+          {
+            "id": "900单位正文",
+            "kind": "draft"
+          },
+          {
+            "id": "成稿首审",
+            "kind": "review"
+          },
+          {
+            "id": "成稿一次修稿",
+            "kind": "refine"
+          },
+          {
+            "id": "成稿完整复评",
+            "kind": "final-review"
+          }
+        ]
+      },
       "scenarioRevision": "s14b-post-ui-budget-syntax-repair-v1",
       "attemptPolicy": {
         "milestone": "post-ui",
@@ -1373,6 +1496,75 @@
       }
     },
     "early-context": {
+      "postUiAiReview": {
+        "scenarioRevision": "s14b-post-ui-ai-review-final-early-context-v1",
+        "minimumCalls": 4,
+        "maximumPlannedCalls": 18,
+        "evaluationPolicy": {
+          "revision": "ai-review-final-manuscript-v1",
+          "caseIds": [
+            "场景2/3"
+          ],
+          "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+          "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+          "confirmation": "preauthorized-ai-only-persisted-original-items-with-native-findingIds",
+          "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+          "endpoint": "native-merge-then-ordinary-full-review",
+          "automaticCeiling": "pending-independent-oracle-review",
+          "physicalRequests": {
+            "minimum": 4,
+            "maximum": 18,
+            "manuscriptMinimum": 1,
+            "manuscriptMaximum": 8
+          },
+          "armAsymmetry": {
+            "baseline": "Native keyEvents only; no mustShow, findingId, targeted cycle or durable owner artifact; original 8192 per-request budget retained.",
+            "candidate": "Native keyEvents/mustShow and actual persisted cycle findingIds; own root/model budgets retained.",
+            "claim": "Record native selection, source, parameter and condense differences; no improvement claim from this asymmetry."
+          }
+        },
+        "attemptPolicy": {
+          "milestone": "post-ui",
+          "arms": [
+            "baseline",
+            "candidate"
+          ],
+          "operationId": "成稿首审",
+          "primaryPurpose": "review-chapter",
+          "repairPurpose": "review-chapter-rebuild",
+          "maxRepairAttempts": 1,
+          "reviewRebuild": {
+            "operationId": "成稿完整复评",
+            "primaryPurpose": "review-chapter",
+            "repairPurpose": "review-chapter-rebuild",
+            "maxRepairAttempts": 1
+          },
+          "refinementRecovery": {
+            "operationId": "成稿一次修稿",
+            "purpose": "refine-from-review",
+            "maxAttempts": 4,
+            "trigger": "settled-length-same-confirmation-visible-append-with-progress"
+          }
+        },
+        "operations": [
+          {
+            "id": "长设定第三章正文",
+            "kind": "draft"
+          },
+          {
+            "id": "成稿首审",
+            "kind": "review"
+          },
+          {
+            "id": "成稿一次修稿",
+            "kind": "refine"
+          },
+          {
+            "id": "成稿完整复评",
+            "kind": "final-review"
+          }
+        ]
+      },
       "scenarioRevision": "s10b-early-context-selection-difference-v3",
       "selectionDifference": {
         "requireDifferentPromptHash": true,
@@ -1397,6 +1589,71 @@
       ]
     },
     "early-review": {
+      "postUiAiReview": {
+        "scenarioRevision": "s14b-post-ui-ai-review-final-early-review-v1",
+        "minimumCalls": 2,
+        "maximumPlannedCalls": 16,
+        "evaluationPolicy": {
+          "revision": "ai-review-final-manuscript-v1",
+          "caseIds": [
+            "场景3/2"
+          ],
+          "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+          "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+          "confirmation": "preauthorized-ai-only-persisted-original-items-with-native-findingIds",
+          "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+          "endpoint": "native-merge-then-ordinary-full-review",
+          "automaticCeiling": "pending-independent-oracle-review",
+          "physicalRequests": {
+            "minimum": 2,
+            "maximum": 16,
+            "manuscriptMinimum": 1,
+            "manuscriptMaximum": 8
+          },
+          "armAsymmetry": {
+            "baseline": "Native keyEvents only; no mustShow, findingId, targeted cycle or durable owner artifact; original 8192 per-request budget retained.",
+            "candidate": "Native keyEvents/mustShow and actual persisted cycle findingIds; own root/model budgets retained.",
+            "claim": "Record native selection, source, parameter and condense differences; no improvement claim from this asymmetry."
+          }
+        },
+        "attemptPolicy": {
+          "milestone": "post-ui",
+          "arms": [
+            "baseline",
+            "candidate"
+          ],
+          "operationId": "审稿",
+          "primaryPurpose": "review-chapter",
+          "repairPurpose": "review-chapter-rebuild",
+          "maxRepairAttempts": 1,
+          "reviewRebuild": {
+            "operationId": "一次复核",
+            "primaryPurpose": "review-chapter",
+            "repairPurpose": "review-chapter-rebuild",
+            "maxRepairAttempts": 1
+          },
+          "refinementRecovery": {
+            "operationId": "定向修稿",
+            "purpose": "refine-from-review",
+            "maxAttempts": 4,
+            "trigger": "settled-length-same-confirmation-visible-append-with-progress"
+          }
+        },
+        "operations": [
+          {
+            "id": "审稿",
+            "kind": "review"
+          },
+          {
+            "id": "定向修稿",
+            "kind": "refine"
+          },
+          {
+            "id": "一次复核",
+            "kind": "final-review"
+          }
+        ]
+      },
       "scenarioRevision": "s11-early-review-per-attempt-deadline-v3",
       "referenceAdjudicationRevision": "s11-reference-no-actionable-review-v1",
       "referenceAdjudication": "additive-only: retain the original pair failure; when the baseline review request settled with a hash-verifiable all-pass artifact and the frozen driver then stopped because no actionable item existed, classify the baseline as reference-nonconforming while the candidate must still pass the complete three-operation technical chain and independent absolute quality review",

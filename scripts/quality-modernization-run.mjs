@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import os from 'node:os'
 import { runProductionCommandProbe, runProductionPhasePair, runProductionBridge, copyIsolatedRealModelConfig,
-  assertSharedInputDiagnostic, BOUNDED_REVISION_DIAGNOSTIC, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, readBoundedRevisionSource,
+  assertSharedInputDiagnostic, BOUNDED_REVISION_DIAGNOSTIC, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, POST_UI_AI_REVIEW_SCENARIOS, readBoundedRevisionSource,
   productionBridgeHash, productionExecutionRuntime, productionScenario, PRODUCTION_BRIDGE, PHASE_SCENARIOS } from './quality-modernization-driver.mjs'
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -124,7 +124,7 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
   assertProtocolBinding(binding)
   const registeredPhase = protocol.phases[binding.phase]
   const phase = registeredPhase && { ...registeredPhase,
-    ...(binding.milestone === 'post-ui' ? registeredPhase.postUi ?? {} : {}) }
+    ...(binding.milestone === 'post-ui' ? registeredPhase.postUiAiReview ?? registeredPhase.postUi ?? {} : {}) }
   if (!phase || !Array.isArray(phase.operations) || !Array.isArray(phase.caseIds)
     || !phase.caseIds.includes(binding.caseId)
     || !phase.operations.some(operation => operation.id === binding.operation && (!operation.caseIds || operation.caseIds.includes(binding.caseId)))) fail('INVALID_CAMPAIGN_BINDING')
@@ -140,10 +140,11 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
         ? binding.actual?.purpose === 'refine-from-review'
         : ['review-chapter', 'review-chapter-rebuild'].includes(binding.actual?.purpose)))
     || phase.arms && !phase.arms.includes(binding.arm)
-    || binding.phase === 'c16-c18' && ['review', 'refine', 'final-review'].includes(phase.operations.find(item => item.id === binding.operation)?.kind)
-      && (binding.evaluationPolicyHash !== hash(AI_REVIEW_FINAL_MANUSCRIPT_POLICY)
+    || phase.evaluationPolicy?.revision === AI_REVIEW_FINAL_MANUSCRIPT_POLICY.revision && ['review', 'refine', 'final-review'].includes(phase.operations.find(item => item.id === binding.operation)?.kind)
+      && (binding.evaluationPolicyHash !== hash(phase.evaluationPolicy)
         || !(phase.operations.find(item => item.id === binding.operation).kind === 'refine'
-          ? binding.actual?.purpose === 'refine-from-review' : ['review-chapter', 'review-chapter-rebuild'].includes(binding.actual?.purpose)))
+          ? (binding.actual ?? binding.baselineIpc)?.purpose === 'refine-from-review'
+          : ['review-chapter', 'review-chapter-rebuild'].includes((binding.actual ?? binding.baselineIpc)?.purpose)))
     || binding.phase === 'full' && !phase.operations.some(operation => operation.id === binding.operation
       && (operation.kind !== 'directory' || binding.caseId.endsWith('/1')))) fail('INVALID_CAMPAIGN_BINDING')
   if (binding.arm === 'candidate' && (!binding.actual || ['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch']
@@ -343,10 +344,12 @@ export function selectPhase(protocol, phase, milestone = 'early') {
     fail('BOUNDED_REVISION_REGISTRATION_MISMATCH')
   if (phase === 'c16-c18' && !isDeepStrictEqual(protocol.phases[phase].evaluationPolicy, AI_REVIEW_FINAL_MANUSCRIPT_POLICY))
     fail('AI_MANUSCRIPT_REGISTRATION_MISMATCH')
+  if (milestone === 'post-ui' && POST_UI_AI_REVIEW_SCENARIOS[phase]
+    && !isDeepStrictEqual(protocol.phases[phase].postUiAiReview, POST_UI_AI_REVIEW_SCENARIOS[phase])) fail('AI_MANUSCRIPT_REGISTRATION_MISMATCH')
   if ((['full', 'c16-c18'].includes(phase)) !== (milestone === 'final')
     || (['shared-input-diagnostic', 'bounded-revision-diagnostic'].includes(phase)) !== (milestone === 'diagnostic')) fail('PHASE_MILESTONE_MISMATCH')
   return { phase, milestone, ...protocol.phases[phase],
-    ...(milestone === 'post-ui' ? protocol.phases[phase].postUi ?? {} : {}) }
+    ...(milestone === 'post-ui' ? protocol.phases[phase].postUiAiReview ?? protocol.phases[phase].postUi ?? {} : {}) }
 }
 export function forwardReasoningFor(protocol, phase, milestone) {
   const registration = protocol.forwardReasoningExperiment

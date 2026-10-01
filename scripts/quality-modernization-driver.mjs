@@ -233,18 +233,37 @@ const FULL_ATTEMPT_POLICY = Object.freeze({ milestone: 'final', arms: Object.fre
     trigger: 'settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum',
     formalEffect: 'last-attempt-only' }),
   armAsymmetry: 'candidate（产品自 f00b612b 起）可对超出 draftTargetUnitRange 上限的章节首稿发一次产品原生压缩 chapter-draft-condense，并登记为该章「连续章节正文」的正式效果；baseline 2264390d 没有该产品能力、不登记压缩，首稿超上限即按原字数门失败；两臂是否触发压缩及各章压缩后正文长度的差异来自该不对称，不得据此单独声称相对改善' })
-const POST_UI_BUDGET = Object.freeze({ scenarioRevision: 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v4',
+export const POST_UI_BUDGET = Object.freeze({ scenarioRevision: 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v4',
   attemptPolicy: POST_UI_ATTEMPT_POLICY,
   evaluationPolicy: POST_UI_REVIEW_POLICY,
   operations: Object.freeze([{ id: '指定范围生成', kind: 'directory' }, { id: '900单位正文', kind: 'draft' },
     { id: '成稿首审', kind: 'review' }, { id: '成稿一次修稿', kind: 'refine' }, { id: '成稿完整复评', kind: 'final-review' }]) })
+export const POST_UI_AI_REVIEW_SCENARIOS = Object.freeze(Object.fromEntries([
+  ['early-budget', 6, 38, POST_UI_BUDGET.operations, POST_UI_ATTEMPT_POLICY],
+  ['early-context', 4, 18, [{ id: '长设定第三章正文', kind: 'draft' }, ...POST_UI_BUDGET.operations.slice(2)], null],
+  ['early-review', 2, 16, [{ id: '审稿', kind: 'review' }, { id: '定向修稿', kind: 'refine' }, { id: '一次复核', kind: 'final-review' }], null],
+].map(([phase, minimumCalls, maximumPlannedCalls, operations, sourcePolicy]) => {
+  const first = operations.find(item => item.kind === 'review'), final = operations.find(item => item.kind === 'final-review')
+  const reviewPolicy = operationId => ({ operationId, primaryPurpose: 'review-chapter', repairPurpose: 'review-chapter-rebuild', maxRepairAttempts: 1 })
+  return [phase, Object.freeze({ scenarioRevision: `s14b-post-ui-ai-review-final-${phase}-v1`, minimumCalls, maximumPlannedCalls,
+    evaluationPolicy: { ...AI_REVIEW_FINAL_MANUSCRIPT_POLICY, caseIds: [phase === 'early-budget' ? '场景1/1' : phase === 'early-context' ? '场景2/3' : '场景3/2'],
+      physicalRequests: { minimum: minimumCalls, maximum: maximumPlannedCalls, manuscriptMinimum: 1, manuscriptMaximum: 8 },
+      armAsymmetry: { baseline: 'Native keyEvents only; no mustShow, findingId, targeted cycle or durable owner artifact; original 8192 per-request budget retained.',
+        candidate: 'Native keyEvents/mustShow and actual persisted cycle findingIds; own root/model budgets retained.',
+        claim: 'Record native selection, source, parameter and condense differences; no improvement claim from this asymmetry.' } },
+    attemptPolicy: { ...(sourcePolicy ?? { milestone: 'post-ui', arms: ['baseline', 'candidate'], ...reviewPolicy(first.id) }),
+      reviewRebuild: reviewPolicy(sourcePolicy ? first.id : final.id), ...(sourcePolicy ? { finalReviewRebuild: reviewPolicy(final.id) } : {}),
+      refinementRecovery: { operationId: operations.find(item => item.kind === 'refine').id, purpose: 'refine-from-review', maxAttempts: 4,
+        trigger: 'settled-length-same-confirmation-visible-append-with-progress' } }, operations })]
+})))
 // v3 只改登记（attemptPolicy 增加唯一压缩），作者世界设定输入与 v2 逐字相同：沿用语义源里登记给 v2 的同一条附加行，不改动冻结的语义源。
 const AUTHOR_SETTING_LINES_REVISION = Object.freeze({
   's14b-post-ui-reviewed-budget-review-rebuild-must-show-v3': 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2',
   's14b-post-ui-reviewed-budget-review-rebuild-must-show-v4': 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2' })
 /** 场景 revision 在语义源登记的作者设定附加行。 */
 export const scenarioAuthorSettingLines = (scene, scenarioRevision) => scenarioRevision
-  ? scene?.scenarioAuthorSettingLines?.[AUTHOR_SETTING_LINES_REVISION[scenarioRevision] ?? scenarioRevision] ?? [] : []
+  ? scene?.scenarioAuthorSettingLines?.[scenarioRevision === POST_UI_AI_REVIEW_SCENARIOS['early-budget'].scenarioRevision
+    ? 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2' : AUTHOR_SETTING_LINES_REVISION[scenarioRevision] ?? scenarioRevision] ?? [] : []
 /** 作者世界设定：只有登记了该场景 revision 附加行的场景才追加独立行，其余 revision 字节不变。 */
 export function scenarioAuthorSetting(scene, scenarioRevision) {
   return [scene?.material, scene?.longSetting, ...scenarioAuthorSettingLines(scene, scenarioRevision)].filter(Boolean).join('\n')
@@ -260,11 +279,11 @@ export function reviewedDraftSelection(report) {
 }
 
 /** Select only discoveries present in the formal raw report; normalization is not a discovery. */
-export function aiReviewFinalManuscriptSelection({ rawContent, savedContent, context }) {
+export function aiReviewFinalManuscriptSelection({ rawContent, savedContent, context, baselineContract }) {
   if (context?.operation !== 'review-chapter' || context.recheck || !context.source?.content)
     throw new Error('AI_REVIEW_CONTEXT_INVALID')
-  const raw = parseReviewGenerationResult(rawContent)
-  const build = (content, frozenGoals = context.frozenGoals) => buildReviewGenerationReport({ content,
+  const raw = (baselineContract?.parseReviewResult ?? parseReviewGenerationResult)(stripDraftThinkingTags(rawContent))
+  const build = (content, frozenGoals = context.frozenGoals) => (baselineContract?.buildReport ?? buildReviewGenerationReport)({ content: stripDraftThinkingTags(content),
     sourceContent: context.source.content, frozenGoals, writingLanguage: context.writingLanguage,
     uiLocale: context.uiLocale, preflightFindings: context.preflightFindings })
   const report = build(rawContent)
@@ -284,6 +303,30 @@ export function aiReviewFinalManuscriptSelection({ rawContent, savedContent, con
       && ['error', 'unknown'].includes(item.severity))
   const softwareItems = report.items.filter(item => item.stableFactKey && item.sourceChapter !== undefined)
   return { selected: aiItems, softwareItems, disposition: aiItems.length ? 'revised-once' : 'no-actionable-review' }
+}
+/** Baseline's private parser/presentation runs from its frozen source, without candidate goal projection. */
+export function loadBaselineReviewContract(repositoryRoot) {
+  const relative = 'src/services/workflows/commands/review-chapter.command.ts'
+  const source = fs.readFileSync(path.join(repositoryRoot, relative), 'utf8')
+  const definitions = source.slice(source.indexOf('const REVIEW_SUMMARY_MAX_CHARACTERS'), source.indexOf('function formatFinalizedHistory'))
+  const projection = source.slice(source.indexOf('    const goalReview = normalizeChapterGoalReview'), source.indexOf('    const blueprint = await ipc.invokeWithProjectSession'))
+  if (!definitions.includes('function parseReviewResult') || !projection.includes('delete parsedResult.goalReviews'))
+    throw new Error('BASELINE_REVIEW_CONTRACT_UNAVAILABLE')
+  const bundle = buildSync({ stdin: { contents: `import {freezeChapterGoals,normalizeChapterGoalReview,chapterGoalReviewItems} from './src/shared/chapter-goal-review';
+    import {mergeConsistencyFindingsIntoReview,findBlueprintContinuityRisks} from './src/shared/consistency-preflight';
+    export {appendVisibleTextContinuation,redactVisibleCompletionText} from './src/services/workflows/bounded-completion';
+    ${definitions}
+    export {parseReviewResult,freezeChapterGoals,findBlueprintContinuityRisks};
+    export function buildReport(input){let parsedResult=parseReviewResult(input.content);const draft=input.sourceContent,frozenGoals=input.frozenGoals,
+      writingLanguage=input.writingLanguage,text=(zh,en)=>input.uiLocale==='en-US'?en:zh;
+      ${projection}
+      return mergeConsistencyFindingsIntoReview(parsedResult,input.preflightFindings??[],input.uiLocale??'zh-CN');}`, loader: 'ts', resolveDir: repositoryRoot },
+    bundle: true, platform: 'node', format: 'cjs', write: false }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('module', 'exports', bundle)(module, module.exports)
+  return { ...module.exports, sourceHashes: Object.fromEntries([relative, 'src/shared/chapter-goal-review.ts', 'src/shared/consistency-preflight.ts',
+    'src/shared/writing-language.ts', 'src/services/workflows/bounded-completion.ts', 'src/services/workflows/workflow-utils.ts']
+    .map(file => [file, digest(fs.readFileSync(path.join(repositoryRoot, file)))])) }
 }
 /** The S14B endpoint is immutable evidence, not a second product revision workflow. */
 export function validateReviewedDraft(result) {
@@ -902,7 +945,7 @@ export const FINALIZED_CHARACTER_OPERATION_IDS = Object.freeze(PHASE_SCENARIOS['
 export function productionScenario(phase, milestone) {
   const scenario = PHASE_SCENARIOS[phase]
   if (!scenario) throw new Error('PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED')
-  return phase === 'early-budget' && milestone === 'post-ui' ? { ...scenario, ...POST_UI_BUDGET } : scenario
+  return milestone === 'post-ui' && POST_UI_AI_REVIEW_SCENARIOS[phase] ? { ...scenario, ...POST_UI_AI_REVIEW_SCENARIOS[phase] } : scenario
 }
 
 // Keep this predicate byte-for-byte equivalent to the product's direct JSON syntax test.
@@ -931,7 +974,7 @@ function verifiedPrimarySyntaxFailure(first, evidence, operationId, kind = 'dire
       || !first.reviewSource || !Number.isSafeInteger(first.reviewSource.draftId) || first.reviewSource.draftId <= 0
       || !/^[a-f0-9]{64}$/.test(first.reviewSource.contentHash ?? '')
       || first.reviewSource.version !== undefined && (!Number.isSafeInteger(first.reviewSource.version)
-        || evidence.ownerArtifactHash !== attempt.visibleTextHash)
+        || attempt.binding.actual && evidence.ownerArtifactHash !== attempt.visibleTextHash)
       || JSON.stringify(attempt.binding.reviewSource) !== JSON.stringify(first.reviewSource))
     || typeof attempt.outputPath !== 'string' || !/^[a-f0-9]{64}$/.test(attempt.visibleTextHash ?? '')) return false
   try {
@@ -1102,16 +1145,18 @@ export function createOperationDispatchGate({ onReject, repairPolicy, readPrimar
           || !['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch'].every(key => typeof owner[key] === 'string' && owner[key])
           || ![reviewSource?.draftId, reviewSource?.version, reviewSource?.confirmationId].every(value => Number.isInteger(value) && value > 0)
           || !CONTENT_HASH.test(reviewSource.contentHash ?? '') || !CONTENT_HASH.test(reviewSource.confirmationHash ?? '')
-          || history.some(prior => !sameRun(prior, owner) || stableEvidence(prior.reviewSource) !== stableEvidence(reviewSource)))
+          || history.some(prior => !sameRun(prior, owner) || stableEvidence(prior.reviewSource) !== stableEvidence(reviewSource)
+            || prior.modelExecutionLeaseId !== owner.modelExecutionLeaseId))
           throw new Error('REFINEMENT_RECOVERY_OWNER_MISMATCH')
         let text = '', artifactIds = []
         for (const prior of history) {
           const evidence = readPrimaryEvidence?.(prior)
           const { output, finishReason } = verifiedRecoveryOutput(prior, evidence, operationId)
           if (finishReason !== 'length') throw new Error('REFINEMENT_RECOVERY_NOT_LENGTH')
-          if (!evidence.ownerArtifactId) throw new Error('REFINEMENT_COMPOSITION_UNPROVEN')
-          artifactIds.push(evidence.ownerArtifactId)
-          const next = text ? composeVisibleContinuation(text, stripDraftThinkingTags(output)) : stripDraftThinkingTags(output).trim()
+          if (evidence.attempt.binding.actual && !evidence.ownerArtifactId) throw new Error('REFINEMENT_COMPOSITION_UNPROVEN')
+          artifactIds.push(evidence.attempt.binding.actual ? evidence.ownerArtifactId : evidence.attempt.attemptId)
+          const clean = (evidence.redactVisibleText ?? stripDraftThinkingTags)(output)
+          const next = text ? (evidence.composeVisibleText ?? composeVisibleContinuation)(text, clean) : clean.trim()
           if ((next.match(/[\p{L}\p{N}]/gu)?.length ?? 0) <= (text.match(/[\p{L}\p{N}]/gu)?.length ?? 0))
             throw new Error('REFINEMENT_RECOVERY_NO_PROGRESS')
           text = next
@@ -1119,7 +1164,7 @@ export function createOperationDispatchGate({ onReject, repairPolicy, readPrimar
         if (history.length) {
           const composition = readPrimaryEvidence?.(history.at(-1))?.composition
           if (composition?.algorithm !== 'visible-append-v1' || composition.textHash !== digest(text)
-            || stableEvidence(composition.artifactIds) !== stableEvidence(artifactIds)) throw new Error('REFINEMENT_COMPOSITION_UNPROVEN')
+            || stableEvidence(composition.artifactIds ?? composition.attemptIds) !== stableEvidence(artifactIds)) throw new Error('REFINEMENT_COMPOSITION_UNPROVEN')
         }
         refinementAttempts.set(operationId, [...history, { ...owner, reviewSource }])
         return
@@ -1155,9 +1200,9 @@ export function createOperationDispatchGate({ onReject, repairPolicy, readPrimar
     const cards = finalizationRepair && FINALIZED_CHARACTER_OPERATION_IDS.includes(operationId)
     const condensePolicy = draftCondense?.policy
     const condense = Boolean(condensePolicy?.maxCondenseAttempts === 1 && condensePolicy.operationIds?.includes(operationId))
-    const finalReview = repairPolicy?.reviewRebuild?.operationId === operationId
+    const finalReview = [repairPolicy?.reviewRebuild, repairPolicy?.finalReviewRebuild].find(item => item?.operationId === operationId)
     const review = finalReview || repairPolicy?.operationId === operationId && repairPolicy.primaryPurpose === 'review-chapter'
-    const policy = finalReview ? repairPolicy.reviewRebuild : repairPolicy
+    const policy = finalReview ?? repairPolicy
     const policyApplies = policy?.operationId === operationId && policy.maxRepairAttempts === 1
     const identity = value => value && typeof value.attemptId === 'string' && value.attemptId
       && typeof value.runId === 'string' && value.runId && typeof value.projectId === 'string' && value.projectId
@@ -1198,7 +1243,7 @@ const withinTargetUnits = (observation, protocolRevision, arm) => {
 }
 function hasReviewableDraft(result) {
   const observation = result?.draftObservation
-  const output = result?.evaluationPolicy ? result.reviewedDraft?.finalDraft?.outputPath
+  const output = result?.evaluationPolicy ? (result.aiReviewedDraft ?? result.reviewedDraft)?.finalDraft?.outputPath
     : result?.operations?.find(operation => operation.kind === 'draft')?.outputPath
   if (!validDraftObservation(observation) || typeof output !== 'string') return false
   try { return digest(fs.readFileSync(output, 'utf8')) === observation.contentHash } catch { return false }
@@ -1260,7 +1305,7 @@ function draftRecoveryReceiptFailure(result, operationId, policy, arm, reviewed 
     return null
   } catch { return 'DRAFT_RECOVERY_EVIDENCE_INVALID' }
 }
-function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRevision, protocolHash }) {
+export function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRevision, protocolHash }) {
   const owned = ['early-review', 'full'].includes(phase) || Boolean(scenario.evaluationPolicy)
   const invocationId = result?.invocationId
   if (typeof protocolRevision !== 'string' || !protocolRevision || !CONTENT_HASH.test(protocolHash ?? '')
@@ -1270,6 +1315,37 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
     return 'PAIR_BINDING_MISMATCH'
   if (!Array.isArray(result.attempts))
     return 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'
+  if (scenario.evaluationPolicy?.revision === AI_REVIEW_FINAL_MANUSCRIPT_POLICY.revision) {
+    if (stableEvidence(result.evaluationPolicy) !== stableEvidence(scenario.evaluationPolicy)
+      || result.aiReviewedDraft?.initial?.chapterNumber !== scenario.chapterNumber
+      || new Set(result.attempts.map(item => item.attemptId)).size !== result.attempts.length
+      || stableEvidence(result.operations?.map(item => [item.operation, item.kind])) !== stableEvidence(scenario.operations.map(item => [item.id, item.kind])))
+      return 'AI_MANUSCRIPT_OPERATION_MISMATCH'
+    for (const attempt of result.attempts) {
+      const binding = attempt.binding, owner = binding?.actual ?? binding?.baselineIpc
+      const operation = result.operations.find(item => item.operation === binding?.operation)
+      if (!operation || !owner || attempt.attemptId !== `${arm}:${owner.attemptId}`
+        || binding.mode !== mode || binding.arm !== arm || binding.phase !== phase || binding.caseId !== scenario.caseId
+        || binding.invocationId !== invocationId || binding.protocolRevision !== protocolRevision || binding.protocolHash !== protocolHash
+        || binding.codeSha !== result.codeSha || binding.sourceHash !== result.sourceHash || binding.driverHash !== result.driverHash
+        || binding.parityId !== result.physicalProject?.parityHash || owner.projectId !== result.physicalProject?.projectId
+        || owner.epoch !== result.projectEpoch || arm === 'candidate' && (owner.runId !== operation.handle?.runId || owner.rootActionId !== operation.handle?.rootActionId))
+        return 'ATTEMPT_BINDING_MISMATCH'
+    }
+    const sourceOperations = scenario.operations.filter(item => !['review', 'refine', 'final-review'].includes(item.kind))
+    const sourceAttempts = result.attempts.filter(item => sourceOperations.some(operation => operation.id === item.binding.operation))
+    const sourceFailure = sourceOperations.length ? validatePairedReceipt({ ...result, attempts: sourceAttempts,
+      operations: result.operations.filter(item => sourceOperations.some(operation => operation.id === item.operation)),
+      ownerTerminal: result.ownerTerminal?.filter(item => sourceAttempts.some(attempt => attempt.binding.actual?.attemptId === item.attemptId)),
+      physicalModelRequests: mode === 'real' ? sourceAttempts.length : 0, syntheticDispatches: mode === 'synthetic' ? sourceAttempts.length : 0 },
+    { mode, arm, phase, protocolRevision, protocolHash, scenario: { ...scenario, evaluationPolicy: null, operations: sourceOperations,
+      attemptPolicy: { ...scenario.attemptPolicy,
+        operationId: sourceOperations.some(item => item.id === scenario.attemptPolicy.operationId) ? scenario.attemptPolicy.operationId : null } } }) : null
+    if (sourceFailure) return sourceFailure
+    if (result.physicalModelRequests !== (mode === 'real' ? result.attempts.length : 0)
+      || result.syntheticDispatches !== (mode === 'synthetic' ? result.attempts.length : 0)) return 'PHYSICAL_CALL_COUNT_MISMATCH'
+    return validateAiReviewedManuscript(result)
+  }
   const policy = scenario.attemptPolicy
   const eligible = policy && result.milestone === policy.milestone && policy.arms.includes(arm)
   const repairMatches = eligible && policy.operationId ? result.attempts.filter(attempt => attempt?.binding?.operation === policy.operationId) : []
@@ -1434,7 +1510,8 @@ function validatePairedReceipt(result, { mode, arm, phase, scenario, protocolRev
     // post-UI：被审稿（reviewedDraft.initial）必须是压缩稿，而不是被压缩取代的首稿。无修稿时 initial == finalDraft == saved，同一条件
     // 即覆盖保存的正文；有修稿时 saved 是唯一修稿产物，其来源由 validateReviewedDraft 的审修链校验。
     // full：每章没有审修链，保存的正文（随后是下一章前驱）必须就是压缩稿。
-    const reviewedSource = scenario.evaluationPolicy ? result.reviewedDraft?.initial?.contentHash : result.saved?.contentHash
+    const reviewedSource = result.aiReviewedDraft?.initial?.contentHash
+      ?? (scenario.evaluationPolicy ? result.reviewedDraft?.initial?.contentHash : result.saved?.contentHash)
     if (reviewedSource !== digest(condensed)) return 'DRAFT_CONDENSE_SAVED_MISMATCH'
   }
   const expectedPhysical = mode === 'real' ? result.attempts.length : 0
@@ -1633,10 +1710,12 @@ export function classifyProductionPair(results, { mode, phase }) {
     return { status: 'failed', qualityQualification: 'automatic-gate-failed', pairFailure: 'INVALID_PAIR_RESULTS' }
   }
   const baseline = baselineRows[0], candidate = candidateRows[0]
-  const reviewed = phase === 'early-budget' && baseline.milestone === 'post-ui'
+  const aiReviewed = Boolean(POST_UI_AI_REVIEW_SCENARIOS[phase]) && baseline.milestone === 'post-ui'
+    && baseline.evaluationPolicy?.revision === AI_REVIEW_FINAL_MANUSCRIPT_POLICY.revision
+  const reviewed = !aiReviewed && phase === 'early-budget' && baseline.milestone === 'post-ui'
     && [REVIEWED_DRAFT_PROTOCOL_REVISION, SPLIT_QUALITY_GATES_PROTOCOL_REVISION,
       CANDIDATE_QUALITY_COMPARISON_PROTOCOL_REVISION].includes(baseline.protocolRevision)
-  const scenario = productionScenario(phase, reviewed ? 'post-ui' : undefined)
+  const scenario = aiReviewed ? productionScenario(phase, 'post-ui') : reviewed ? { ...PHASE_SCENARIOS[phase], ...POST_UI_BUDGET } : productionScenario(phase)
   const reviewedChains = reviewed ? [baseline, candidate].map(validateReviewedDraft) : []
   if (reviewedChains.some(chain => !chain.valid)) return { status: 'failed', qualityQualification: 'automatic-gate-failed',
     pairFailure: 'REVIEWED_DRAFT_EVIDENCE_INVALID' }
@@ -1646,20 +1725,32 @@ export function classifyProductionPair(results, { mode, phase }) {
     const protocolRevision = baseline.protocolRevision
     const protocolHash = baseline.protocolHash
     const baselineBindingFailure = validatePairedReceipt(baseline, { mode, arm: 'baseline', phase,
-      scenario: reviewed ? { ...scenario, operations: reviewedChains[0].operations } : scenario, protocolRevision, protocolHash })
+      scenario: reviewed ? { ...scenario, operations: reviewedChains[0].operations } : aiReviewed
+        ? { ...scenario, operations: scenario.operations.filter(item => !['refine', 'final-review'].includes(item.kind) || baseline.aiReviewedDraft?.selectedCount > 0) }
+        : scenario, protocolRevision, protocolHash })
     const candidateBindingFailure = validatePairedReceipt(candidate, { mode, arm: 'candidate', phase,
-      scenario: reviewed ? { ...scenario, operations: reviewedChains[1].operations } : scenario, protocolRevision, protocolHash })
+      scenario: reviewed ? { ...scenario, operations: reviewedChains[1].operations } : aiReviewed
+        ? { ...scenario, operations: scenario.operations.filter(item => !['refine', 'final-review'].includes(item.kind) || candidate.aiReviewedDraft?.selectedCount > 0) }
+        : scenario, protocolRevision, protocolHash })
     if (baselineBindingFailure || candidateBindingFailure)
       return { status: 'failed', qualityQualification: 'automatic-gate-failed', pairFailure: baselineBindingFailure ?? candidateBindingFailure }
   }
   const selectionDifference = phase === 'early-context'
     ? validateEarlyContextSelectionDifference(baseline, candidate) : null
-  const earlyReview = phase === 'early-review'
+  const earlyReview = phase === 'early-review' && !aiReviewed
     ? { baseline: validateEarlyReviewChain(baseline, 'baseline'), candidate: validateEarlyReviewChain(candidate, 'candidate') }
     : null
   if (earlyReview && (!earlyReview.baseline.valid || !earlyReview.candidate.valid)) {
     return { status: 'failed', qualityQualification: 'automatic-gate-failed',
       pairFailure: earlyReview.baseline.pairFailure ?? earlyReview.candidate.pairFailure }
+  }
+  if (aiReviewed) {
+    const valid = results.every(result => result.status === 'passed' && hasReviewableDraft(result) && savedMatchesObservation(result)
+      && withinTargetUnits(result.draftObservation, result.protocolRevision, result.arm)) && (!selectionDifference || selectionDifference.valid)
+    return { status: valid ? mode === 'real' ? 'pending-independent-oracle-review' : 'passed' : 'failed',
+      qualityQualification: valid ? mode === 'real' ? 'pending-independent-oracle-review' : 'not-run' : 'automatic-gate-failed',
+      ...(selectionDifference ? { selectionDifference } : {}),
+      pendingOracleDimensions: ['raw-ai-finding-correctness', 'facts', 'required-events', 'recap', 'style'] }
   }
   if (mode !== 'real') {
     if (selectionDifference && !selectionDifference.valid) return { status: 'failed', qualityQualification: 'automatic-gate-failed',
@@ -2103,10 +2194,33 @@ export function validateAiReviewedManuscript(result) {
   let db
   try {
     db = new (createRequire(import.meta.url)('better-sqlite3'))(result.physicalProject.dbPath, { readonly: true, fileMustExist: true })
+    const baselineContract = result.arm === 'baseline' ? loadBaselineReviewContract(result.baselineReviewNative?.repositoryRoot) : null
+    if (baselineContract && stableEvidence(baselineContract.sourceHashes) !== stableEvidence(result.baselineReviewNative.sourceHashes))
+      throw new Error('BASELINE_AI_REVIEW_NATIVE_SOURCE_DRIFT')
     const initial = read(chain.initial), final = read(chain.finalDraft)
     const review = (kind, saved, source) => {
       const operation = result.operations.find(item => item.kind === kind), provenance = operation?.reviewProvenance
       const attempts = result.attempts.filter(item => item.binding.operation === operation?.operation)
+      if (attempts.length < 1 || attempts.length > 2
+        || (attempts[0].binding.actual ?? attempts[0].binding.baselineIpc)?.purpose !== 'review-chapter') throw new Error('AI_REVIEW_ATTEMPT_COUNT_MISMATCH')
+      if (baselineContract) {
+        const native = operation.baselineReviewProvenance, attempt = attempts.at(-1), owner = attempt.binding.baselineIpc
+        const row = db.prepare(`SELECT r.base_draft_id,r.source_draft_chapter_number,r.source_draft_version,r.source_draft_status,r.source_content,c.body
+          FROM reviews r JOIN contents c ON c.id=r.content_id WHERE r.id=?`).get(saved.reviewId)
+        const context = native?.context, raw = fs.readFileSync(attempt.outputPath, 'utf8')
+        if (!row || native.reviewId !== saved.reviewId || native.attemptId !== attempt.attemptId || native.contentHash !== saved.contentHash
+          || native.baseDraftId !== row.base_draft_id || native.sourceDraftHash !== digest(context?.source)
+          || row.source_content !== source || row.source_draft_chapter_number !== context?.source?.chapterNumber
+          || row.source_draft_version !== context?.source?.version || row.source_draft_status !== context?.source?.status
+          || row.base_draft_id !== context?.source?.id || context.source.content !== source || row.body !== read(saved)
+          || attempt.finishReason !== 'stop' || digest(raw) !== attempt.visibleTextHash
+          || owner.purpose !== (attempts.length === 1 ? 'review-chapter' : 'review-chapter-rebuild')
+          || attempts.some(item => ['runId', 'rootActionId', 'projectId', 'epoch', 'modelExecutionLeaseId'].some(key =>
+            item.binding.baselineIpc[key] !== owner[key]) || stableEvidence(item.binding.reviewSource) !== stableEvidence(attempt.binding.reviewSource))
+          || attempts.length === 2 && (attempts[0].finishReason !== 'stop' || attempts[0].binding.baselineIpc.purpose !== 'review-chapter'
+            || !reviewParseFailure(fs.readFileSync(attempts[0].outputPath, 'utf8')))) throw new Error('BASELINE_AI_REVIEW_PROVENANCE_MISMATCH')
+        return { ...aiReviewFinalManuscriptSelection({ rawContent: raw, savedContent: row.body, context, baselineContract }), context, report: JSON.parse(row.body) }
+      }
       const formal = result.ownerTerminal.filter(item => attempts.some(attempt => attempt.binding.actual.attemptId === item.attemptId)
         && item.reviewRevisionEffect?.kind === 'review' && item.reviewRevisionEffect.id === saved.reviewId)
       if (formal.length !== 1 || formal[0].attemptId !== provenance?.attemptId) throw new Error('AI_REVIEW_FORMAL_EFFECT_NOT_UNIQUE')
@@ -2146,7 +2260,8 @@ export function validateAiReviewedManuscript(result) {
       || stableEvidence(first.softwareItems) !== stableEvidence(chain.softwareItems) || first.disposition !== chain.disposition)
       throw new Error('AI_REVIEW_SELECTION_MISMATCH')
     if (first.selected.length === 0) {
-      if (chain.confirmation || chain.revision || chain.finalReview || final !== initial) throw new Error('AI_REVIEW_NO_ACTION_MISMATCH')
+      if (chain.confirmation || chain.revision || chain.finalReview || chain.mergeHash || chain.mergeReceipt || chain.composition || final !== initial)
+        throw new Error('AI_REVIEW_NO_ACTION_MISMATCH')
     } else {
       const confirmationBody = read(chain.confirmation), confirmation = JSON.parse(confirmationBody)
       const persisted = db.prepare('SELECT c.body FROM reviews r JOIN contents c ON c.id=r.content_id WHERE r.id=?').pluck().get(chain.confirmation.reviewId)
@@ -2156,18 +2271,33 @@ export function validateAiReviewedManuscript(result) {
         || confirmation.items?.length !== first.report.items.length) throw new Error('AI_REVIEW_CONFIRMATION_MISMATCH')
       for (const [index, item] of confirmation.items.entries()) {
         const { findingId, decision, origin, ...original } = item
-        const finding = findingId && db.prepare('SELECT problem_text,category FROM review_findings WHERE cycle_id=? AND finding_id=?')
+        const finding = !baselineContract && findingId && db.prepare('SELECT problem_text,category FROM review_findings WHERE cycle_id=? AND finding_id=?')
           .get(confirmation.cycleId, findingId)
         if (origin !== 'ai' || decision !== (selectedIndexes.includes(index) ? 'apply' : 'ignore')
           || stableEvidence(original) !== stableEvidence(first.report.items[index])
-          || selectedIndexes.includes(index) && (!finding || finding.problem_text !== item.description || finding.category !== item.category))
+          || baselineContract && (findingId !== undefined || confirmation.cycleId !== undefined)
+          || !baselineContract && selectedIndexes.includes(index) && (!finding || finding.problem_text !== item.description || finding.category !== item.category))
           throw new Error('AI_REVIEW_CONFIRMATION_ITEMS_MISMATCH')
       }
       const revision = read(chain.revision), operation = result.operations.find(item => item.kind === 'refine')
       const attempts = result.attempts.filter(item => item.binding.operation === operation.operation)
+      if (attempts.length < 1 || attempts.length > 4) throw new Error('AI_REVISION_ATTEMPT_COUNT_MISMATCH')
       let composed = ''
       for (const [index, attempt] of attempts.entries()) {
         const output = fs.readFileSync(attempt.outputPath, 'utf8'), previous = composed
+        if (baselineContract) {
+          const owner = attempt.binding.baselineIpc, source = attempt.binding.reviewSource
+          const clean = baselineContract.redactVisibleCompletionText(output)
+          composed = composed ? baselineContract.appendVisibleTextContinuation(composed, clean) : clean.trim()
+          if (digest(output) !== attempt.visibleTextHash || owner.purpose !== 'refine-from-review' || !owner.modelExecutionLeaseId
+            || attempt.finishReason !== (index === attempts.length - 1 ? 'stop' : 'length')
+            || ['runId', 'rootActionId', 'projectId', 'epoch', 'modelExecutionLeaseId'].some(key => owner[key] !== attempts[0].binding.baselineIpc[key])
+            || source.confirmationId !== chain.confirmation.reviewId || source.confirmationHash !== chain.confirmation.contentHash
+            || source.draftId !== chain.initial.draftId || source.version !== chain.initial.version || source.contentHash !== chain.initial.contentHash
+            || (composed.match(/[\p{L}\p{N}]/gu)?.length ?? 0) <= (previous.match(/[\p{L}\p{N}]/gu)?.length ?? 0))
+            throw new Error('BASELINE_AI_REVISION_COMPOSITION_MISMATCH')
+          continue
+        }
         const terminal = result.ownerTerminal.find(item => item.attemptId === attempt.binding.actual.attemptId)
         const row = db.prepare(`SELECT a.attempt_json,a.usage_receipt_json,g.artifact_json FROM generation_attempts a
           JOIN generation_artifacts g ON g.attempt_id=a.attempt_id WHERE a.attempt_id=? AND a.run_id=?`)
@@ -2184,6 +2314,15 @@ export function validateAiReviewedManuscript(result) {
           || attempt.binding.actual.runId !== operation.handle.runId || attempt.binding.actual.rootActionId !== operation.handle.rootActionId
           || (composed.match(/[\p{L}\p{N}]/gu)?.length ?? 0) <= (previous.match(/[\p{L}\p{N}]/gu)?.length ?? 0)) throw new Error('AI_REVISION_COMPOSITION_MISMATCH')
       }
+      if (baselineContract) {
+        const persistedRevision = db.prepare('SELECT r.status,r.review_source_id,c.body FROM revisions r JOIN contents c ON c.id=r.content_id WHERE r.id=?').get(chain.revision.revisionId)
+        if (persistedRevision?.status !== 'merged' || persistedRevision.review_source_id !== chain.confirmation.reviewId
+          || persistedRevision.body !== revision || composed !== revision || revision !== final
+          || chain.composition?.algorithm !== 'visible-append-v1' || chain.composition.textHash !== digest(revision)
+          || stableEvidence(chain.composition.attemptIds) !== stableEvidence(attempts.map(item => item.attemptId))
+          || chain.mergeHash !== digest(final) || chain.mergeReceipt?.revisionId !== chain.revision.revisionId
+          || chain.mergeReceipt.reviewCycle !== undefined) throw new Error('BASELINE_AI_REVISION_MERGE_MISMATCH')
+      } else {
       const terminal = result.ownerTerminal.find(item => item.attemptId === attempts.at(-1).binding.actual.attemptId)
       const run = db.prepare('SELECT binding_json,root_action_id FROM generation_runs WHERE run_id=?').get(operation.handle.runId)
       const binding = JSON.parse(run.binding_json)
@@ -2207,15 +2346,20 @@ export function validateAiReviewedManuscript(result) {
           .find(item => item.attemptId === attempt.binding.actual.attemptId).artifactId))
         || chain.mergeHash !== digest(final) || chain.mergeReceipt?.revisionId !== chain.revision.revisionId
         || chain.mergeReceipt.reviewCycle?.cycleId !== confirmation.cycleId) throw new Error('AI_REVISION_MERGE_MISMATCH')
+      }
       const finalReview = review('final-review', chain.finalReview, final)
-      if (finalReview.context.recheck || chain.finalReview.reviewId === chain.review.reviewId) throw new Error('AI_FINAL_REVIEW_NOT_ORDINARY')
+      if (finalReview.context.recheck || chain.finalReview.reviewId === chain.review.reviewId
+        || finalReview.context.source.id !== first.context.source.id || finalReview.context.source.chapterNumber !== first.context.source.chapterNumber
+        || finalReview.context.source.version !== chain.finalDraft.version) throw new Error('AI_FINAL_REVIEW_NOT_ORDINARY')
       const units = countProjectedDraftUnits(final), sourceUnits = countProjectedDraftUnits(initial)
       if (units < Math.floor(sourceUnits * 0.8) || units > Math.ceil(sourceUnits * 1.2)) throw new Error('AI_REVISION_LENGTH_MISMATCH')
     }
-    const draft = db.prepare('SELECT d.version,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(chain.finalDraft.draftId)
-    if (draft?.body !== final || draft.version !== chain.finalDraft.version || digest(final) !== result.saved?.contentHash
+    const draft = db.prepare('SELECT d.version,d.chapter_number,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(chain.finalDraft.draftId)
+    if (draft?.body !== final || draft.version !== chain.finalDraft.version || draft.chapter_number !== chain.initial.chapterNumber
+      || chain.finalDraft.draftId !== result.saved?.draftId || chain.finalDraft.version !== result.saved?.version
+      || chain.initial.chapterNumber !== result.saved?.chapterNumber || digest(final) !== result.saved?.contentHash
       || digest(final) !== result.draftObservation?.contentHash || countProjectedDraftUnits(final) !== result.saved.units
-      || !withinTargetUnits(result.draftObservation, result.protocolRevision, 'candidate')) throw new Error('AI_FINAL_DB_MISMATCH')
+      || !withinTargetUnits(result.draftObservation, result.protocolRevision, result.arm)) throw new Error('AI_FINAL_DB_MISMATCH')
     return null
   } catch (error) { return error.message } finally { db?.close() }
 }

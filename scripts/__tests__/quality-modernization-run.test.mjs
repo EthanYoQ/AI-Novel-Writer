@@ -20,7 +20,7 @@ import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolated
   C16_C18_ATTEMPT_POLICY, validateCandidateContinuityResults, runProductionBridge, runProductionPhasePair, summarizeDraftReconciliation,
   continuityCaseOperations, FINALIZED_CHARACTER_OPERATION_IDS, draftCondenseFor, syntheticDraftCondensePlan,
   BOUNDED_REVISION_DIAGNOSTIC, assertBoundedRevisionSource, AI_REVIEW_FINAL_MANUSCRIPT_POLICY,
-  aiReviewFinalManuscriptSelection, validateAiReviewedManuscript } from '../quality-modernization-driver.mjs'
+  aiReviewFinalManuscriptSelection, validateAiReviewedManuscript, validatePairedReceipt, loadBaselineReviewContract, POST_UI_BUDGET } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, readVerifiedRecoveryCandidateSupplement,
   readVerifiedDirectPersistedDraftEvidence, recordPersistedDraftObservation,
   safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
@@ -48,6 +48,19 @@ test('AI final manuscript registers the unchanged seven sources plus four bounde
   assert.deepEqual(continuityCaseOperations('C17-B').map(item => item.kind),
     ['chapter_notes', 'character_cards', 'draft', 'review', 'refine', 'final-review'])
   assert.equal(BOUNDED_REVISION_DIAGNOSTIC.maxPhysicalRequests, 5)
+})
+
+test('post-UI AI manuscript registers both native arms at budget 6–38, context 4–18 and review 2–16', () => {
+  for (const [phase, minimum, maximum, sourceKinds] of [
+    ['early-budget', 6, 38, ['directory', 'draft']], ['early-context', 4, 18, ['draft']], ['early-review', 2, 16, []]]) {
+    const scenario = productionScenario(phase, 'post-ui'), selected = selectPhase(protocol, phase, 'post-ui')
+    assert.equal(scenario.evaluationPolicy?.revision, AI_REVIEW_FINAL_MANUSCRIPT_POLICY.revision)
+    assert.deepEqual(scenario.operations.map(item => item.kind), [...sourceKinds, 'review', 'refine', 'final-review'])
+    assert.equal(selected.minimumCalls, minimum); assert.equal(selected.maximumPlannedCalls, maximum)
+    assert.equal(scenario.attemptPolicy.refinementRecovery.maxAttempts, 4)
+    assert.deepEqual(scenario.attemptPolicy.arms, ['baseline', 'candidate'])
+    assert.equal(scenario.attemptPolicy.draftRecovery?.maxAttempts, phase === 'early-budget' ? 8 : undefined)
+  }
 })
 
 test('AI final manuscript distinguishes raw goal discoveries from mechanical unknown and software preflight', () => {
@@ -78,6 +91,158 @@ test('AI final manuscript distinguishes raw goal discoveries from mechanical unk
   }
   assert.throws(() => aiReviewFinalManuscriptSelection({ rawContent: discovered.rawContent,
     savedContent: discovered.savedContent.replace('柜台描述', '人工补题'), context }), /SAVED_REPORT_MISMATCH/)
+})
+
+test('post-UI baseline uses its native review projection, persisted AI-only confirmation and 8192 refine command', async () => {
+  const repositoryRoot = path.join(ROOT, '../thread6-s14a-baseline-clean')
+  const load = file => import(pathToFileURL(path.join(repositoryRoot, file)).href)
+  const [{ ReviewChapterCommand }, { RefineFromReviewCommand }, { useProjectStore }, { useEditorStore },
+    { createGenerationRuntime }, nativeConfirmation, { ReviewRepository }, { RevisionRepository }, database] = await Promise.all([
+    load('src/services/workflows/commands/review-chapter.command.ts'), load('src/services/workflows/commands/refine-from-review.command.ts'),
+    load('src/stores/project-store.ts'), load('src/stores/editor-store.ts'), load('src/services/generation/generation-runtime.ts'),
+    load('src/shared/human-confirmed-review.ts'), load('electron/repositories/review-repository.ts'), load('electron/repositories/revision-repository.ts'), load('electron/database.ts') ])
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/post-ui-baseline-native-'))
+  const db = new Database(path.join(directory, 'project.db')), native = loadBaselineReviewContract(repositoryRoot)
+  const databaseRead = vi.spyOn(database, 'getProjectDb').mockReturnValue(db)
+  const sourceDraft = { id: 1, chapterNumber: 1, version: 1, status: 'draft', content: '林岚走进北塔，灯火照亮石阶。'.repeat(70) }
+  const session = { projectId: 'baseline-test', leaseId: 'project-test-lease', projectPath: directory }, requests = []
+  const blueprint = { chapterNumber: 1, title: '北塔', keyEvents: '当章归还借书', characters: [], relationships: [] }
+  let response, finishReason = 'stop', confirmationId, savedReview, currentDraft = sourceDraft
+  try {
+    // Use the frozen baseline's verbatim table DDL with this checkout's Node22 SQLite binary.
+    const nativeDdl = fs.readFileSync(path.join(repositoryRoot, 'electron/database.ts'), 'utf8').match(/db\.exec\(`([\s\S]*?)`\)/u)?.[1]
+    assert.ok(nativeDdl?.includes('CREATE TABLE IF NOT EXISTS reviews'))
+    db.exec(nativeDdl)
+    db.prepare('INSERT INTO contents(id,body) VALUES(1,?)').run(sourceDraft.content)
+    db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,?)").run(countDraftUnits(sourceDraft.content))
+    useProjectStore.setState({ currentProject: { id: session.projectId, path: directory, sessionLease: session.leaseId,
+      novelConfig: { wordsPerChapter: 900, globalGuidance: '保留开头悬念。' } } })
+    useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
+    vi.stubGlobal('window', { velaAPI: { invoke: async (channel, ...args) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
+      if (channel === 'db:blueprint-get-all') return [blueprint]
+      if (channel === 'db:blueprint-get') return blueprint
+      if (['db:character-get-all', 'db:continuity-list-before', 'db:consistency-exemption-list'].includes(channel)) return []
+      if (channel === 'db:project-core-get') return { worldSetting: '北塔只在白天开放。' }
+      if (channel === 'db:draft-get-meta') return { ...currentDraft, source: 'write' }
+      if (channel === 'db:draft-get-full') return currentDraft
+      if (channel === 'db:review-create') { const saved = ReviewRepository.create(args[0]); savedReview = ReviewRepository.getFull(saved.id); return { success: true, ...saved } }
+      if (channel === 'db:review-get-full') return ReviewRepository.getFull(args[0], db)
+      if (channel === 'db:revision-replace-pending') return { success: true, ...RevisionRepository.replacePending(args[0]) }
+      throw new Error(`unexpected native baseline IPC: ${channel}`)
+    } } })
+    const dependencies = { createRuntime: options => createGenerationRuntime(options, {
+      snapshotDefaultModelId: () => 'baseline-test', beginModelExecution: async () => ({ leaseId: 'native-model-lease', modelId: 'baseline-test',
+        provider: 'custom', protocol: 'openai', modelName: 'baseline-test', modelRevision: 'a'.repeat(64), endpointFingerprint: 'b'.repeat(64),
+        capabilityEvidence: { source: { contextWindowTokens: 'unknown', maxOutputTokens: 'user-operational-cap', featureFlags: 'unknown' },
+          subjectFingerprint: 'c'.repeat(64), contextWindowTokens: 32768, maxOutputTokens: 8192, reasoning: null, structuredOutput: true, usage: null }, createdAt: 1000, expiresAt: 61000 }),
+      completeWithLease: async request => { requests.push(request); return { content: response, finishReason } }, closeModelExecution: async () => {},
+    }) }
+    const params = () => ({ context: { runId: 'native-test', projectPath: directory, projectSession: session, writingLanguage: 'zh-CN', uiLocale: 'zh-CN',
+      data: {}, cancelled: false }, callbacks: { log() {}, setProgress() {}, appendText() {} }, step: { id: 'review', title: 'review' } })
+    const frozenGoals = native.freezeChapterGoals(1, blueprint.keyEvents)
+    assert.deepEqual(frozenGoals.items.map(item => item.id), ['ch1:keyEvents:1'])
+    response = JSON.stringify({ summary: '正常首审', items: [{ category: '表达', severity: 'pass', description: '保持原稿' }],
+      goalReviews: [{ id: frozenGoals.items[0].id, status: 'unknown', description: '正文未显示归还动作。', evidence: [] }] })
+    const raw = response
+    await new ReviewChapterCommand({ draftPath: 'vela://draft/1', draftContent: sourceDraft.content, sourceDraft, chapterNumber: 1 }, dependencies).execute(params())
+    const firstReview = savedReview
+    assert.deepEqual(savedReview.sourceDraft, sourceDraft)
+    const context = { operation: 'review-chapter', source: sourceDraft, writingLanguage: 'zh-CN', uiLocale: 'zh-CN', frozenGoals, preflightFindings: [] }
+    const selection = aiReviewFinalManuscriptSelection({ rawContent: raw, savedContent: savedReview.content, context, baselineContract: native })
+    assert.equal(selection.selected.length, 1)
+    const report = JSON.parse(savedReview.content), snapshot = nativeConfirmation.createHumanConfirmedReviewSnapshot({ sourceReviewId: savedReview.id,
+      sourceDraft, summary: report.summary, authorGuidance: '只修复已选问题，其余正文保留。', goalReview: report.goalReview,
+      items: report.items.map(item => ({ ...item, decision: selection.selected.some(selected => hash(selected) === hash(item)) ? 'apply' : 'ignore', origin: 'ai' })) })
+    assert.ok(snapshot && snapshot.items.every(item => !item.findingId) && !snapshot.cycleId)
+    const confirmedReviewContent = nativeConfirmation.serializeHumanConfirmedReviewSnapshot(snapshot)
+    confirmationId = ReviewRepository.create({ baseDraftId: 1, content: confirmedReviewContent, expectedSource: sourceDraft }, db).id
+    const refine = overrides => new RefineFromReviewCommand({ draftPath: 'vela://draft/1', draftContent: sourceDraft.content, sourceDraft,
+      chapterNumber: 1, reviewSourceId: confirmationId, confirmedReviewContent, ...overrides }, dependencies).execute(params())
+    await assert.rejects(refine({ reviewSourceId: 999 }), /找不到|could not be found/)
+    currentDraft = { ...sourceDraft, version: 2 }
+    await assert.rejects(refine({}), /源草稿已变化|source draft changed/)
+    currentDraft = sourceDraft
+    const ignored = nativeConfirmation.serializeHumanConfirmedReviewSnapshot({ ...snapshot, items: snapshot.items.map(item => ({ ...item, decision: 'ignore' })) })
+    const ignoredId = ReviewRepository.create({ baseDraftId: 1, content: ignored, expectedSource: sourceDraft }, db).id
+    await assert.rejects(refine({ reviewSourceId: ignoredId, confirmedReviewContent: ignored }), /没有任何纳入项|no included items/)
+    assert.equal(requests.length, 1, 'native invalid confirmations reject before model completion')
+    response = `${sourceDraft.content}\n林岚把借书归还柜台。`
+    const revisionText = await refine({})
+    assert.equal(requests[1].purpose, 'refine-from-review'); assert.equal(requests[1].plan.maxOutputTokens, 8192)
+    assert.ok(requests[1].messages.some(item => item.content.includes('当章归还借书')))
+    assert.ok(requests[1].messages.every(item => !item.content.includes('保持原稿')), 'ignored AI item does not enter native refine prompt')
+    const revision = db.prepare('SELECT id FROM revisions WHERE base_draft_id=1').get()
+    const merged = RevisionRepository.mergeIntoDraft({ revisionId: revision.id, targetDraftId: 1, expectedDraftContent: sourceDraft.content,
+      mergedContent: revisionText, wordCount: countDraftUnits(revisionText) }, db)
+    assert.equal(merged.reviewCycle, undefined)
+    currentDraft = { ...sourceDraft, status: 'revised', content: revisionText }
+    response = JSON.stringify({ summary: '正常全文末审', items: [{ category: '表达', severity: 'pass', description: '回读完成' }],
+      goalReviews: [{ id: frozenGoals.items[0].id, status: 'completed', description: '当章已归还。', evidence: [{ quote: '林岚把借书归还柜台。' }] }] })
+    await new ReviewChapterCommand({ draftPath: 'vela://draft/1', draftContent: revisionText, sourceDraft: currentDraft, chapterNumber: 1 }, dependencies).execute(params())
+    assert.deepEqual(requests.map(item => item.purpose), ['review-chapter', 'refine-from-review', 'review-chapter'])
+    assert.equal(savedReview.sourceDraft.content, revisionText)
+    assert.equal(aiReviewFinalManuscriptSelection({ rawContent: response, savedContent: savedReview.content,
+      context: { ...context, source: currentDraft }, baselineContract: native }).selected.length, 0)
+    const save = (name, body, extra = {}) => { const outputPath = path.join(directory, name); fs.writeFileSync(outputPath, body)
+      return { ...extra, outputPath, contentHash: hash(body) } }
+    const kinds = ['review', 'refine', 'final-review'], bodies = [raw, revisionText, response]
+    const attempts = requests.map((request, index) => ({ ...save(`raw-${index}.txt`, bodies[index]),
+      attemptId: `baseline:${index}`, visibleTextHash: hash(bodies[index]), finishReason: 'stop', binding: { operation: kinds[index],
+        reviewSource: { draftId: 1, version: 1, contentHash: hash(index === 2 ? revisionText : sourceDraft.content),
+          ...(index === 1 ? { confirmationId, confirmationHash: hash(confirmedReviewContent) } : {}) },
+        baselineIpc: { attemptId: String(index), purpose: request.purpose, runId: `operation-${index}`, rootActionId: `operation-${index}`,
+          projectId: session.projectId, epoch: 'local-test-epoch', modelExecutionLeaseId: request.leaseId } } }))
+    const reviews = [firstReview, savedReview], contexts = [context, { ...context, source: currentDraft }]
+    const operations = kinds.map((kind, index) => ({ kind, operation: kind, ...(index === 1 ? {} : {
+      baselineReviewProvenance: { reviewId: reviews[index / 2].id, attemptId: attempts[index].attemptId,
+        contentHash: hash(reviews[index / 2].content), sourceDraftHash: hash(contexts[index / 2].source), baseDraftId: 1, context: contexts[index / 2] } }) }))
+    const result = { arm: 'baseline', physicalProject: { dbPath: path.join(directory, 'project.db') }, operations, attempts,
+      baselineReviewNative: { repositoryRoot, sourceHashes: native.sourceHashes }, protocolRevision: protocolBinding.protocolRevision,
+      saved: { draftId: 1, chapterNumber: 1, version: 1, contentHash: hash(revisionText), units: countDraftUnits(revisionText) },
+      draftObservation: { chapterNumber: 1, targetUnits: 900, units: countDraftUnits(revisionText), contentHash: hash(revisionText), persisted: true },
+      aiReviewedDraft: { initial: save('initial.txt', sourceDraft.content, { draftId: 1, chapterNumber: 1, version: 1, status: 'draft' }), review: save('first.json', firstReview.content, { reviewId: firstReview.id }),
+        selectedCount: 1, selectedIndexes: [1], selectedItemsHash: hash(selection.selected), softwareItems: selection.softwareItems, disposition: selection.disposition,
+        confirmation: save('confirmation.json', confirmedReviewContent, { reviewId: confirmationId }), revision: save('revision.txt', revisionText, { revisionId: revision.id }),
+        mergeHash: hash(revisionText), mergeReceipt: merged, composition: { algorithm: 'visible-append-v1', textHash: hash(revisionText), attemptIds: [attempts[1].attemptId] },
+        finalReview: save('final-review.json', savedReview.content, { reviewId: savedReview.id }), finalDraft: save('final.txt', revisionText, { draftId: 1, version: 1 }) } }
+    assert.equal(validateAiReviewedManuscript(result), null)
+    const wrong = structuredClone(result); wrong.operations[0].baselineReviewProvenance.sourceDraftHash = hash('another draft')
+    assert.equal(validateAiReviewedManuscript(wrong), 'BASELINE_AI_REVIEW_PROVENANCE_MISMATCH')
+    const changed = structuredClone(result); changed.baselineReviewNative.sourceHashes['src/shared/chapter-goal-review.ts'] = hash('other contract')
+    assert.equal(validateAiReviewedManuscript(changed), 'BASELINE_AI_REVIEW_NATIVE_SOURCE_DRIFT')
+    // Exercise the current post-UI receipt consumer around the actual native command/DB proof above.
+    // The source dispatch is a local test double; no experiment receipt or ledger is created.
+    const scenario = { ...productionScenario('early-context', 'post-ui'), chapterNumber: 1 }, invocationId = '11111111-1111-4111-8111-111111111111'
+    const observed = { ...result, mode: 'synthetic', phase: 'early-context', milestone: 'post-ui', caseId: scenario.caseId, invocationId,
+      protocolHash: protocolBinding.protocolHash, codeSha: 'a'.repeat(40), sourceHash: hash('native-source'), driverHash: hash('driver'),
+      evaluationPolicy: scenario.evaluationPolicy, projectEpoch: 'local-test-epoch',
+      physicalProject: { ...result.physicalProject, projectId: session.projectId, parityHash: hash('native-parity') }, physicalModelRequests: 0, syntheticDispatches: 4 }
+    observed.operations = [{ operation: scenario.operations[0].id, kind: 'draft' }, ...operations.map(item => ({ ...item,
+      operation: scenario.operations.find(operation => operation.kind === item.kind).id }))]
+    observed.attempts = [{ ...save('source-dispatch.txt', sourceDraft.content), attemptId: 'baseline:source', visibleTextHash: hash(sourceDraft.content),
+      finishReason: 'stop', binding: { baselineIpc: { attemptId: 'source', runId: 'source', rootActionId: 'source', projectId: session.projectId,
+        epoch: 'local-test-epoch', purpose: 'chapter-draft' } } }, ...attempts].map((attempt, index) => ({ ...attempt, binding: { ...attempt.binding,
+      campaignId: CAMPAIGN_ID, invocationId, mode: observed.mode, arm: 'baseline', phase: observed.phase, milestone: observed.milestone,
+      caseId: observed.caseId, protocolRevision: observed.protocolRevision, protocolHash: observed.protocolHash, codeSha: observed.codeSha,
+      sourceHash: observed.sourceHash, driverHash: observed.driverHash, parityId: observed.physicalProject.parityHash,
+      operation: observed.operations[index].operation } }))
+    assert.equal(validatePairedReceipt(observed, { mode: 'synthetic', arm: 'baseline', phase: observed.phase,
+      scenario, protocolRevision: observed.protocolRevision, protocolHash: observed.protocolHash }), null)
+    const extraDraft = structuredClone(observed); extraDraft.attempts.push({ ...extraDraft.attempts[0], attemptId: 'baseline:extra-source',
+      binding: { ...extraDraft.attempts[0].binding, baselineIpc: { ...extraDraft.attempts[0].binding.baselineIpc, attemptId: 'extra-source' } } }); extraDraft.syntheticDispatches++
+    assert.equal(validatePairedReceipt(extraDraft, { mode: 'synthetic', arm: 'baseline', phase: observed.phase,
+      scenario, protocolRevision: observed.protocolRevision, protocolHash: observed.protocolHash }), 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH', 'context draft retains one physical request')
+    const noAction = { ...result, operations: [{ ...operations[2], kind: 'review', operation: 'review' }],
+      attempts: [{ ...attempts[2], binding: { ...attempts[2].binding, operation: 'review' } }], aiReviewedDraft: {
+        initial: save('no-action-initial.txt', revisionText, { draftId: 1, chapterNumber: 1, version: 1, status: 'revised' }),
+        review: result.aiReviewedDraft.finalReview, selectedCount: 0, selectedIndexes: [], selectedItemsHash: hash([]), softwareItems: [],
+        disposition: 'no-actionable-review', finalDraft: result.aiReviewedDraft.finalDraft } }
+    assert.equal(validateAiReviewedManuscript(noAction), null, 'actual passing native report retains its source without another refine')
+    noAction.aiReviewedDraft.composition = result.aiReviewedDraft.composition
+    assert.equal(validateAiReviewedManuscript(noAction), 'AI_REVIEW_NO_ACTION_MISMATCH')
+  } finally { databaseRead.mockRestore(); vi.unstubAllGlobals(); db.close(); fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
 test('AI final manuscript native main owner persists keyEvents unknown confirmation, one revision, merge and ordinary final review', async () => {
@@ -136,11 +301,11 @@ test('AI final manuscript native main owner persists keyEvents unknown confirmat
     const report = JSON.parse(saved.content), cycle = ReviewCycleRepository.getByReviewId(saved.id, db)
     const fixture = fixtureSource(), start = fixture.indexOf('          else if (aiReviewRun) {', fixture.indexOf("if (boundedRun) selectedItems = boundedRevisionItems"))
     const end = fixture.indexOf('          else if (reviewedRun)', start)
-    const selectNativeItems = new Function('report', 'sourceReview', 'frozenSource', 'aiReviewedDraft', 'invoke', 'project', 'session', 'assert',
+    const selectNativeItems = new Function('report', 'sourceReview', 'frozenSource', 'aiReviewedDraft', 'invoke', 'project', 'session', 'assert', 'candidate',
       `return (async () => { let cycleId, selectedItems; const aiReviewRun = true; if (false) {} ${fixture.slice(start, end)} return {cycleId,selectedItems}; })()`)
     const mapped = await selectNativeItems(report, ReviewRepository.getFull(saved.id, db), sourceDraft,
       { selectedIndexes: report.items.flatMap((item, index) => selection.selected.some(selected => hash(selected) === hash(item)) ? [index] : []) },
-      async (channel, id) => { assert.equal(channel, 'db:review-cycle-get'); return ReviewCycleRepository.getByReviewId(id, db) }, { rootPath: directory }, {}, assert)
+      async (channel, id) => { assert.equal(channel, 'db:review-cycle-get'); return ReviewCycleRepository.getByReviewId(id, db) }, { rootPath: directory }, {}, assert, true)
     const items = mapped.selectedItems
     assert.equal(mapped.cycleId, cycle.cycleId)
     assert.ok(cycle.findings.every(item => item.status === 'unverified' && !item.targetId), 'missing quote retains native unverified/null-target truth')
@@ -208,7 +373,7 @@ test('AI final manuscript native main owner persists keyEvents unknown confirmat
       return { attemptId: row.attempt_id, status: JSON.parse(row.attempt_json).status, artifactId: artifact.artifactId,
         artifactRevision: artifact.revision, textHash: artifact.textHash, reviewRevisionEffect: usage.reviewRevisionEffect } })
     const result = { physicalProject: { projectId: 'project', dbPath }, projectEpoch: 'epoch', operations, attempts, ownerTerminal,
-      protocolRevision: protocolBinding.protocolRevision, saved: { contentHash: hash(revisedProse), units: countDraftUnits(revisedProse) },
+      protocolRevision: protocolBinding.protocolRevision, saved: { draftId: 1, chapterNumber: 1, version: 1, contentHash: hash(revisedProse), units: countDraftUnits(revisedProse) },
       draftObservation: { chapterNumber: 1, targetUnits: 900, units: countDraftUnits(revisedProse), contentHash: hash(revisedProse), persisted: true },
       aiReviewedDraft: { initial: save('initial.txt', prose, { draftId: 1, chapterNumber: 1, version: 1, status: 'draft' }),
         review: save('first-review.json', saved.content, { reviewId: saved.id }), selectedCount: selection.selected.length,
@@ -742,9 +907,9 @@ test('前向资格窗口只继承 high 的五个 scope，按本次 bridge 的已
   for (const id of ['C16-A', 'C16-B', 'C16-C']) expected(request('c16-c18', 'final', id), 4)
   for (const id of ['C17-A', 'C18-A', 'C18-B']) expected(request('c16-c18', 'final', id), 16)
   expected(request('c16-c18', 'final', 'C17-B'), 20)
-  expected(request('early-budget', 'post-ui', '场景1/1'), 15)
-  expected(request('early-context', 'post-ui', '场景2/3'), 1)
-  expected(request('early-review', 'post-ui', '场景3/2'), 3)
+  expected(request('early-budget', 'post-ui', '场景1/1'), 19)
+  expected(request('early-context', 'post-ui', '场景2/3'), 9)
+  expected(request('early-review', 'post-ui', '场景3/2'), 8)
   const full = request('full', 'final', '场景1/1', 'candidate',
     [{ id: '三章规划', kind: 'directory' }])
   expected(full, 9)
@@ -930,12 +1095,12 @@ test('post-UI reviewed draft policy selects every actionable item without changi
   assert.deepEqual(reviewedDraftSelection({ items: [mixed.items[0]] }),
     { selected: [], disposition: 'no-actionable-review-with-unresolved-goals' })
   assert.throws(() => reviewedDraftSelection({ items: [{ severity: 'invented' }] }), /REVIEWED_DRAFT_REPORT_INVALID/)
-  const selected = selectPhase(protocol, 'early-budget', 'post-ui')
+  const selected = { phase: 'early-budget', ...protocol.phases['early-budget'], ...protocol.phases['early-budget'].postUi }
   assert.deepEqual(selected.evaluationPolicy, POST_UI_REVIEW_POLICY)
   assert.equal(selected.scenarioRevision, POST_UI_SCENARIO_REVISION)
   assert.equal(selected.maximumPlannedCalls, 30, '每臂目录3、正文8、首审2、修稿1、复评1；原产品root预算可先耗尽')
   assert.deepEqual(selected.attemptPolicy.reviewRebuild, PHASE_SCENARIOS['early-budget'].attemptPolicy.reviewRebuild)
-  assertScenarioMatchesProtocol(selected, productionScenario('early-budget', 'post-ui'))
+  assertScenarioMatchesProtocol(selected, { ...PHASE_SCENARIOS['early-budget'], ...POST_UI_BUDGET })
   assert.deepEqual(selected.operations.map(item => item.kind), ['directory', 'draft', 'review', 'refine', 'final-review'])
   assert.equal(selectPhase(protocol, 'early-budget').evaluationPolicy, undefined)
   assert.equal(selectPhase(protocol, 'full', 'final').evaluationPolicy, undefined)
@@ -972,9 +1137,9 @@ test('post-UI must-show v3 adopts author must-show unknown goals with actionable
     { selected: [], disposition: 'no-actionable-review-with-unresolved-goals' })
   assert.deepEqual(reviewedDraftSelection({ items: [report.items[0], completed] }), { selected: [], disposition: 'no-actionable-review' },
     '首稿自然满足必现目标时修复分支不触发')
-  const post = selectPhase(protocol, 'early-budget', 'post-ui')
+  const post = { phase: 'early-budget', ...protocol.phases['early-budget'], ...protocol.phases['early-budget'].postUi }
   assert.equal(post.scenarioRevision, POST_UI_SCENARIO_REVISION)
-  assert.equal(productionScenario('early-budget', 'post-ui').scenarioRevision, POST_UI_SCENARIO_REVISION)
+  assert.equal({ ...PHASE_SCENARIOS['early-budget'], ...POST_UI_BUDGET }.scenarioRevision, POST_UI_SCENARIO_REVISION)
   assert.equal(selectPhase(protocol, 'early-budget').scenarioRevision, 's14b-post-ui-budget-syntax-repair-v1')
 })
 
@@ -1464,12 +1629,12 @@ function continuityResults(dir, { condensedIndex = null, primaryText, savedUnits
         dbPath = path.join(dir, `${index}-review.db`)
         const db = new Database(dbPath)
         try {
-          db.exec('CREATE TABLE IF NOT EXISTS generation_attempts(attempt_id,run_id,attempt_json,usage_receipt_json); CREATE TABLE IF NOT EXISTS generation_artifacts(attempt_id,artifact_json); CREATE TABLE IF NOT EXISTS generation_runs(run_id,root_action_id,binding_json); CREATE TABLE IF NOT EXISTS contents(id,body); CREATE TABLE IF NOT EXISTS reviews(id,content_id); CREATE TABLE IF NOT EXISTS drafts(id,version,content_id); DELETE FROM generation_attempts; DELETE FROM generation_artifacts; DELETE FROM generation_runs; DELETE FROM contents; DELETE FROM reviews; DELETE FROM drafts;')
+          db.exec('CREATE TABLE IF NOT EXISTS generation_attempts(attempt_id,run_id,attempt_json,usage_receipt_json); CREATE TABLE IF NOT EXISTS generation_artifacts(attempt_id,artifact_json); CREATE TABLE IF NOT EXISTS generation_runs(run_id,root_action_id,binding_json); CREATE TABLE IF NOT EXISTS contents(id,body); CREATE TABLE IF NOT EXISTS reviews(id,content_id); CREATE TABLE IF NOT EXISTS drafts(id,chapter_number,version,content_id); DELETE FROM generation_attempts; DELETE FROM generation_artifacts; DELETE FROM generation_runs; DELETE FROM contents; DELETE FROM reviews; DELETE FROM drafts;')
           db.prepare('INSERT INTO generation_attempts VALUES(?,?,?,?)').run(terminal.attemptId, handle.runId, JSON.stringify({ status: 'settled' }), JSON.stringify({ purpose: 'review-chapter', result: { finishReason: 'stop' }, reviewRevisionEffect: effect }))
           db.prepare('INSERT INTO generation_artifacts VALUES(?,?)').run(terminal.attemptId, JSON.stringify({ ...effect.artifact, text: rawReport }))
           db.prepare('INSERT INTO generation_runs VALUES(?,?,?)').run(handle.runId, handle.rootActionId, JSON.stringify({ projectId, epoch, sourceManifest: { reviewRevisionContext: reviewContext } }))
           db.prepare('INSERT INTO contents VALUES(1,?),(2,?)').run(manuscriptContent, reportBody)
-          db.exec(`INSERT INTO reviews VALUES(1,2); INSERT INTO drafts VALUES(${manuscriptId},1,1);`)
+          db.exec(`INSERT INTO reviews VALUES(1,2); INSERT INTO drafts VALUES(${manuscriptId},2,1,1);`)
         } finally { db.close() }
         return { operation: operation.id, kind: operation.kind, handle, reviewProvenance: { attemptId: terminal.attemptId, effect } }
       }
@@ -1489,7 +1654,7 @@ function continuityResults(dir, { condensedIndex = null, primaryText, savedUnits
     return { status: 'passed', arm: 'candidate', phase: 'c16-c18', mode, caseId, invocationId: 'invocation',
       protocolRevision: protocolBinding.protocolRevision, evaluationPolicy: AI_REVIEW_FINAL_MANUSCRIPT_POLICY,
       physicalProject: { projectId, parityHash, readback, ...(dbPath ? { dbPath } : {}) }, projectEpoch: epoch,
-      ...(aiReviewedDraft ? { aiReviewedDraft, saved: { contentHash: hash(manuscriptContent), units: savedUnits } } : {}),
+      ...(aiReviewedDraft ? { aiReviewedDraft, saved: { draftId: manuscriptId, chapterNumber: 2, version: 1, contentHash: hash(manuscriptContent), units: savedUnits } } : {}),
       operations: receiptOps, attempts, ownerTerminal, physicalModelRequests: mode === 'real' ? attempts.length : 0,
       ...(draftReconciliation ? { draftReconciliation } : {}),
       syntheticDispatches: mode === 'synthetic' ? attempts.length : 0,
@@ -3295,7 +3460,7 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
       && repairEnd > repairStart && checkStart > repairEnd && checkEnd > checkStart && reserve > checkEnd
       && evidenceStart > 0 && evidenceEnd > evidenceStart)
     const readPrimaryEvidence = new Function('first', 'receipt', 'request', 'authorityFacts', 'sha', 'fs', 'target',
-      `const continuityRun = false, operationKind = 'directory';\n${fixture.slice(proofStart, proofEnd)}`)
+      `const continuityRun = false, baselineContract = null, operationKind = 'directory';\n${fixture.slice(proofStart, proofEnd)}`)
     const isStructuredSyntaxRepair = new Function('repairPolicy', 'operationId', 'actual', 'observedIpc',
       `${fixture.slice(repairStart, repairEnd)}\nreturn structuredSyntaxRepair`)
     const checkAuthority = new Function('operationKind', 'candidate', 'request', 'db', 'chapter', 'promptText',
@@ -5038,7 +5203,7 @@ test('S14B post-UI v2 登记没有 draftCondense：候选的合法压缩在 rese
 })
 
 test('S14B post-UI 场景 v4 保留候选唯一压缩并登记有界恢复；early 与其它阶段的登记和 revision 不变', () => {
-  const scenario = productionScenario('early-budget', 'post-ui'), policy = scenario.attemptPolicy
+  const scenario = { ...PHASE_SCENARIOS['early-budget'], ...POST_UI_BUDGET }, policy = scenario.attemptPolicy
   assert.equal(scenario.scenarioRevision, POST_UI_SCENARIO_REVISION)
   assert.deepEqual(policy.draftCondense, { operationIds: ['900单位正文'], arms: ['candidate'], primaryPurpose: 'chapter-draft',
     condensePurpose: 'chapter-draft-condense', maxCondenseAttempts: 1,
@@ -5050,7 +5215,7 @@ test('S14B post-UI 场景 v4 保留候选唯一压缩并登记有界恢复；ear
   delete rest.structuredRecovery
   assert.deepEqual(rest, PHASE_SCENARIOS['early-budget'].attemptPolicy)
   // 协议与 driver 一致，压缩只出现在 post-UI selection。
-  const selected = selectPhase(protocol, 'early-budget', 'post-ui')
+  const selected = { phase: 'early-budget', ...protocol.phases['early-budget'], ...protocol.phases['early-budget'].postUi }
   assert.deepEqual(selected.attemptPolicy, policy)
   assertScenarioMatchesProtocol(selected, scenario)
   assert.deepEqual(selected.operations.map(item => item.id), ['指定范围生成', '900单位正文', '成稿首审', '成稿一次修稿', '成稿完整复评'])
@@ -5232,7 +5397,7 @@ test('S14B post-UI 压缩的 fixture 接线：登记只对候选臂取到，首�
     const proofEnd = fixture.indexOf('    }, onReject:', proofStart)
     assert.ok(proofStart > 0 && proofEnd > proofStart)
     const readEvidence = new Function('first', 'receipt', 'request', 'authorityFacts', 'sha', 'fs', 'target', 'operationKind', 'db', 'continuityRun',
-      `const finalizedContext = null, parseFinalizedCharacterStateResponse = null;\n${fixture.slice(proofStart, proofEnd)}`)
+      `const baselineContract = null, finalizedContext = null, parseFinalizedCharacterStateResponse = null;\n${fixture.slice(proofStart, proofEnd)}`)
     const { syntheticDraftText } = syntheticLengthHelpers()
     const overText = syntheticDraftText(countDraftUnits, POST_UI_RANGE.maximum + 90)
     const first = { attemptId: 'primary', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: 'chapter-draft' }
@@ -5810,7 +5975,7 @@ test('S14B full 场景 v3 保留候选唯一压缩并登记有界恢复；其余
   // 早前 early / post-UI / C16–C18 / 其它阶段的登记与 revision 逐字不变。
   assert.equal(PHASE_SCENARIOS['early-budget'].scenarioRevision, 's14b-post-ui-budget-syntax-repair-v1')
   assert.equal(PHASE_SCENARIOS['early-budget'].attemptPolicy.draftCondense, undefined)
-  assert.equal(productionScenario('early-budget', 'post-ui').scenarioRevision, POST_UI_SCENARIO_REVISION)
+  assert.equal(productionScenario('early-budget', 'post-ui').scenarioRevision, protocol.phases['early-budget'].postUiAiReview.scenarioRevision)
   assert.equal(PHASE_SCENARIOS['c16-c18'].scenarioRevision, 'c16-c18-candidate-production-path-v7')
   assert.equal(PHASE_SCENARIOS['c16-c18'].attemptPolicy, C16_C18_ATTEMPT_POLICY)
   assert.equal(PHASE_SCENARIOS['early-context'].scenarioRevision, 's10b-early-context-selection-difference-v3')
@@ -5998,7 +6163,7 @@ test('full 压缩的 fixture 接线（行为）：登记只对候选臂取到，
     const proofStart = fixture.indexOf('readPrimaryEvidence: first => {') + 'readPrimaryEvidence: first => {'.length
     const proofEnd = fixture.indexOf('    }, onReject:', proofStart)
     const readEvidence = new Function('first', 'receipt', 'request', 'authorityFacts', 'sha', 'fs', 'target', 'operationKind', 'db', 'continuityRun',
-      `const finalizedContext = null, parseFinalizedCharacterStateResponse = null;\n${fixture.slice(proofStart, proofEnd)}`)
+      `const baselineContract = null, finalizedContext = null, parseFinalizedCharacterStateResponse = null;\n${fixture.slice(proofStart, proofEnd)}`)
     const { syntheticDraftText } = syntheticLengthHelpers()
     const overText = syntheticDraftText(countDraftUnits, FULL_RANGE.maximum + 90), inRange = syntheticDraftText(countDraftUnits, FULL_TARGET)
     const first = { attemptId: 'primary', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: 'chapter-draft' }

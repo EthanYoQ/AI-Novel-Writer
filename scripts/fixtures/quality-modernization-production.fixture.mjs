@@ -11,7 +11,7 @@ import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, 
   createOutboundPreflightAssert, assertForwardReasoning, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
   fetchProviderResponse, measurePromptBytes, qualificationBridgeWindows,
   POST_UI_REVIEW_POLICY, reviewedDraftSelection, BOUNDED_REVISION_DIAGNOSTIC,
-  AI_REVIEW_FINAL_MANUSCRIPT_POLICY, aiReviewFinalManuscriptSelection,
+  AI_REVIEW_FINAL_MANUSCRIPT_POLICY, aiReviewFinalManuscriptSelection, productionScenario, loadBaselineReviewContract,
   readBoundedRevisionSource, assertBoundedRevisionSource, boundedRevisionItems,
   scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder,
   assertSharedInputDiagnostic } from '../quality-modernization-driver.mjs'
@@ -213,8 +213,9 @@ test('isolated production commands persist the selected phase operations', async
     assert.deepEqual(request.attemptPolicy, BOUNDED_REVISION_DIAGNOSTIC.attemptPolicy, 'BOUNDED_REVISION_SCOPE_INVALID')
   }
   if (diagnosticRun) assert.equal(target.arm, 'candidate', 'SHARED_INPUT_DIAGNOSTIC_CANDIDATE_REQUIRED')
-  const aiReviewRun = request.phase === 'c16-c18'
-    && request.evaluationPolicy?.revision === AI_REVIEW_FINAL_MANUSCRIPT_POLICY.revision
+  const aiReviewRun = request.evaluationPolicy?.revision === AI_REVIEW_FINAL_MANUSCRIPT_POLICY.revision
+    && (request.phase === 'c16-c18' || request.milestone === 'post-ui' && ['early-budget', 'early-context', 'early-review'].includes(request.phase))
+  if (aiReviewRun) assert.deepEqual(request.evaluationPolicy, productionScenario(request.phase, request.milestone).evaluationPolicy, 'AI_REVIEW_POLICY_DRIFT')
   if (request.phase === 'c16-c18') assert.deepEqual(request.evaluationPolicy, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, 'AI_REVIEW_POLICY_DRIFT')
   const reviewedRun = Boolean(request.evaluationPolicy) && !aiReviewRun
   if (reviewedRun) {
@@ -276,6 +277,8 @@ test('isolated production commands persist the selected phase operations', async
     runtime: { node: process.version, abi: process.versions.modules }, physicalModelRequests: 0, syntheticDispatches: 0,
     invocations: [], attempts: [], status: 'running' }
   const candidate = target.arm === 'candidate'
+  const baselineContract = !candidate && aiReviewRun ? loadBaselineReviewContract(target.repositoryRoot) : null
+  if (baselineContract) receipt.baselineReviewNative = { repositoryRoot: target.repositoryRoot, sourceHashes: baselineContract.sourceHashes }
   // 账本写入器在物理发送与守护之间共用：reserve 先占位，dispatch 先落盘再发网络。
   const record = event => updateLedger(request.ledgerPath, event, { campaignMode: request.mode })
   // 每个已 dispatch 的发送都由守护拥有一个短于桥测试超时的截止时间：到点时先写 unknown，
@@ -336,6 +339,7 @@ test('isolated production commands persist the selected phase operations', async
         // Legacy baseline has one renderer command/session budget and no durable RootAction; bind its command run as that root.
         attemptId: args[0], runId: currentContext?.runId, rootActionId: currentContext?.runId, projectId: args[1]?.projectSession?.projectId,
         epoch: args[1]?.projectSession?.leaseId, purpose: args[1]?.purpose, operationId,
+        ...(aiReviewRun ? { modelExecutionLeaseId: args[1]?.modelExecutionLeaseId } : {}),
       }
       if (channel === 'generation:bind-material-decision') {
         const decisions = receipt.materialDecisions ?? (receipt.materialDecisions = [])
@@ -345,6 +349,13 @@ test('isolated production commands persist the selected phase operations', async
       if (!handler) throw new Error(`UNREGISTERED_PRODUCTION_IPC:${channel}`)
       try {
         const result = await handler({ sender }, ...args)
+        if (baselineContract && channel === 'db:review-create' && ['review', 'final-review'].includes(operationKind)) {
+          await Promise.all(streamSettlements)
+          const physical = receipt.attempts.filter(item => item.binding.operation === operationId).at(-1)
+          assert.ok(result?.success && result.id && physical?.finishReason === 'stop', 'BASELINE_REVIEW_CREATE_UNPROVEN')
+          reviewState.baselineCreate = { reviewId: result.id, attemptId: physical.attemptId, contentHash: sha(args[0].content),
+            sourceDraftHash: sha(args[0].expectedSource), baseDraftId: args[0].baseDraftId }
+        }
         if (boundedRun && channel === 'review-revision:prepare') {
           (receipt.reviewPreparations ??= []).push({ operation: operationId, contextId: result.contextId,
             sourceHash: result.context.sourceHash, sourceDraftHash: sha(result.context.source),
@@ -804,6 +815,10 @@ test('isolated production commands persist the selected phase operations', async
         || JSON.stringify(matches[0].authorityEvidence.factHashes) !== JSON.stringify(authorityFacts.map(sha)))) return null
       const events = fs.readFileSync(request.ledgerPath, 'utf8').trimEnd().split('\n')
         .map(line => JSON.parse(line)).filter(event => event.attemptId === attemptId)
+      if (baselineContract && ['review', 'final-review', 'refine'].includes(operationKind)) return { attempt: matches[0], events,
+        reviewReportAbsent: !reviewState.baselineCreate || reviewState.baselineCreate.attemptId !== attemptId,
+        ...(operationKind === 'refine' ? { composition: refinementComposition,
+          composeVisibleText: baselineContract.appendVisibleTextContinuation, redactVisibleText: baselineContract.redactVisibleCompletionText } : {}) }
       // 压缩的首稿证据只取 owner artifact 原文 hash（C17/C18 与 post-UI 候选同规则）；post-UI 其余 operation 仍走审稿证据。
       if (target.arm === 'candidate' && (continuityRun || request.attemptPolicy?.structuredRecovery && operationKind === 'directory'
         || (request.attemptPolicy?.draftRecovery || request.attemptPolicy?.draftCondense) && operationKind === 'draft')) {
@@ -869,13 +884,22 @@ test('isolated production commands persist the selected phase operations', async
         && observedIpc.epoch === session.leaseId, 'BASELINE_IPC_DISPATCH_IDENTITY_MISMATCH')
       if (repairPolicy && operationId === repairPolicy.operationId
         && (actual ?? observedIpc).purpose === repairPolicy.repairPurpose) await Promise.all(streamSettlements)
-      const reviewRepairPolicy = repairPolicy?.reviewRebuild
+      const reviewRepairPolicy = [repairPolicy?.reviewRebuild, repairPolicy?.finalReviewRebuild].find(item => item?.operationId === operationId)
       if (reviewRepairPolicy?.operationId === operationId
         && (actual ?? observedIpc).purpose === reviewRepairPolicy.repairPurpose) await Promise.all(streamSettlements)
       if (continuityRun && operationKind === 'character_cards' && actual.purpose.includes(':repair:')) await Promise.all(streamSettlements)
       if ((draftRecovery || condensePolicy) && operationKind === 'draft') await Promise.all(streamSettlements)
       if (aiReviewRun && operationKind === 'refine') await Promise.all(streamSettlements)
-      if (aiReviewRun && operationKind === 'refine') refinementComposition = await invoke('generation:read-visible-composition', currentContext.mainGenerationRunHandle, session)
+      if (aiReviewRun && operationKind === 'refine') {
+        if (candidate) refinementComposition = await invoke('generation:read-visible-composition', currentContext.mainGenerationRunHandle, session)
+        else {
+          const previous = receipt.attempts.filter(item => item.binding.operation === operationId)
+          let text = ''
+          for (const item of previous) { const clean = baselineContract.redactVisibleCompletionText(fs.readFileSync(item.outputPath, 'utf8'))
+            text = text ? baselineContract.appendVisibleTextContinuation(text, clean) : clean.trim() }
+          refinementComposition = { algorithm: 'visible-append-v1', textHash: sha(text), attemptIds: previous.map(item => item.attemptId) }
+        }
+      }
       // 对账之后的写稿请求出站前先等对账流结算，才能从落盘输出重算注入块。
       if (structuredRecovery && operationKind === 'directory') {
         await Promise.all(streamSettlements)
@@ -1256,7 +1280,7 @@ test('isolated production commands persist the selected phase operations', async
       FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1`).get(chapter.number)
     const reviewState = {}
     const reviewedDraft = reviewedRun ? {} : null
-    const aiReviewedDraft = aiReviewRun && request.operations.some(item => item.kind === 'draft') ? {} : null
+    const aiReviewedDraft = aiReviewRun && request.operations.some(item => ['draft', 'review'].includes(item.kind)) ? {} : null
     let reviewedMustShowTexts = []
     const artifact = (outputPath, content, extra = {}) => ({ ...extra, outputPath, contentHash: sha(content) })
     for (const operation of request.operations) {
@@ -1301,6 +1325,18 @@ test('isolated production commands persist the selected phase operations', async
           ? `ai-novel://draft/${sourceDraft.id}`
           : `vela://draft/ch${sourceDraft.chapterNumber}/v${sourceDraft.version}`
         if (operationKind === 'review' || operationKind === 'final-review') {
+          if (aiReviewRun && operationKind === 'review' && !aiReviewedDraft.initial) {
+            const initialPath = path.join(evidenceRoot, 'initial-review-source.txt'); fs.writeFileSync(initialPath, sourceDraft.content)
+            aiReviewedDraft.initial = artifact(initialPath, sourceDraft.content, { draftId: sourceDraft.id, chapterNumber: sourceDraft.chapterNumber,
+              version: sourceDraft.version, status: sourceDraft.status })
+          }
+          if (baselineContract) {
+            const blueprint = await invoke('db:blueprint-get', chapter.number, project.rootPath, session)
+            const preflight = blueprint ? await (await load('src/services/consistency-preflight.ts')).readConsistencyPreflight(session, [blueprint]) : { findings: [] }
+            reviewState.baselineContext = { operation: 'review-chapter', source: frozenSource, writingLanguage: 'zh-CN', uiLocale: 'zh-CN',
+              frozenGoals: baselineContract.freezeChapterGoals(chapter.number, blueprint?.keyEvents), preflightFindings: preflight.findings }
+            reviewState.baselineCreate = null
+          }
           command = new (await load('src/services/workflows/commands/review-chapter.command.ts')).ReviewChapterCommand({
             draftPath, draftContent: sourceDraft.content, sourceDraft: frozenSource, chapterNumber: chapter.number,
             reviewFocus: aiReviewRun ? '' : reviewedRun || boundedRun ? `核对本章全部必需事件、作者事实、字数、复述、自然度、人物动机和节奏可读性。只依据作者资料、蓝图及待审正文给出问题与原文证据；不得新增作者事实。\n${chapterGuidance}` : '只核对本章必需事件、作者事实与明确证据，不检查字数。对于“承担代价”，只有人物已经执行选择、具体损失或牺牲已经发生、后文没有反证，才算完成；签字认责或承诺以后负责不算代价。',
@@ -1313,14 +1349,14 @@ test('isolated production commands persist the selected phase operations', async
           if (boundedRun) selectedItems = boundedRevisionItems(report, sourceReview, frozenSource)
           else if (aiReviewRun) {
             assert.deepEqual(sourceReview.sourceDraft, frozenSource, 'AI_REVIEW_CONFIRMATION_SOURCE_DRIFT')
-            const cycle = await invoke('db:review-cycle-get', sourceReview.id, project.rootPath, session)
-            assert.ok(cycle?.cycleId, 'AI_REVIEW_CYCLE_MISSING')
-            cycleId = cycle.cycleId
-            aiReviewedDraft.findings = cycle.findings
+            const cycle = candidate ? await invoke('db:review-cycle-get', sourceReview.id, project.rootPath, session) : null
+            if (candidate) assert.ok(cycle?.cycleId, 'AI_REVIEW_CYCLE_MISSING')
+            cycleId = cycle?.cycleId
+            if (cycle) aiReviewedDraft.findings = cycle.findings
             selectedItems = report.items.map((item, index) => {
               const apply = aiReviewedDraft.selectedIndexes.includes(index)
-              const finding = cycle.findings.find(entry => entry.reviewItemIndex === index)
-              if (apply) assert.ok(finding?.findingId, 'AI_REVIEW_FINDING_MISSING')
+              const finding = cycle?.findings.find(entry => entry.reviewItemIndex === index)
+              if (candidate && apply) assert.ok(finding?.findingId, 'AI_REVIEW_FINDING_MISSING')
               return { ...item, ...(finding ? { findingId: finding.findingId } : {}), decision: apply ? 'apply' : 'ignore', origin: 'ai' }
             })
           }
@@ -1486,7 +1522,7 @@ test('isolated production commands persist the selected phase operations', async
         if (reviewedRun || boundedRun || aiReviewRun) {
           fs.writeFileSync(outputPath, stored.content)
           const savedReview = artifact(outputPath, stored.content, { reviewId: stored.id, sourceHash: sha(sourceDraft.content) })
-          if (aiReviewRun) {
+          if (aiReviewRun && candidate) {
             const rows = db.prepare(`SELECT a.attempt_id,a.attempt_json,a.usage_receipt_json,g.artifact_json,r.binding_json
               FROM generation_attempts a JOIN generation_artifacts g ON g.attempt_id=a.attempt_id
               JOIN generation_runs r ON r.run_id=a.run_id WHERE a.run_id=?`).all(operationReceipt.handle.runId)
@@ -1516,8 +1552,26 @@ test('isolated production commands persist the selected phase operations', async
               aiReviewedDraft.softwareItems = selection.softwareItems
               aiReviewedDraft.disposition = selection.disposition
             }
-          }
-          else if (boundedRun) receipt.boundedRevision[operationKind === 'review' ? 'review' : 'finalReview'] = savedReview
+          } else if (aiReviewRun) {
+            const native = reviewState.baselineCreate
+            const physical = receipt.attempts.find(attempt => attempt.attemptId === native?.attemptId)
+            assert.ok(native?.reviewId === stored.id && native.contentHash === sha(stored.content)
+              && native.sourceDraftHash === sha(reviewState.baselineContext.source) && physical?.finishReason === 'stop', 'BASELINE_AI_REVIEW_SOURCE_MISMATCH')
+            const rawContent = fs.readFileSync(physical.outputPath, 'utf8')
+            assert.equal(sha(rawContent), physical.visibleTextHash, 'AI_REVIEW_RAW_OUTPUT_MISMATCH')
+            const selection = aiReviewFinalManuscriptSelection({ rawContent, savedContent: stored.content,
+              context: reviewState.baselineContext, baselineContract })
+            operationReceipt.baselineReviewProvenance = { ...native, context: reviewState.baselineContext }
+            aiReviewedDraft[operationKind === 'review' ? 'review' : 'finalReview'] = savedReview
+            if (operationKind === 'review') {
+              aiReviewedDraft.selectedCount = selection.selected.length
+              aiReviewedDraft.selectedItemsHash = sha(selection.selected)
+              aiReviewedDraft.selectedIndexes = JSON.parse(stored.content).items.flatMap((item, index) =>
+                selection.selected.some(selected => sha(selected) === sha(item)) ? [index] : [])
+              aiReviewedDraft.softwareItems = selection.softwareItems
+              aiReviewedDraft.disposition = selection.disposition
+            }
+          } else if (boundedRun) receipt.boundedRevision[operationKind === 'review' ? 'review' : 'finalReview'] = savedReview
           else if (operationKind === 'review') {
             reviewedDraft.review = savedReview
             const { selected, disposition } = reviewedDraftSelection(JSON.parse(stored.content))
@@ -1542,10 +1596,21 @@ test('isolated production commands persist the selected phase operations', async
           chain.revision = artifact(outputPath, revision.body, { revisionId: revision.id })
           chain.mergeHash = sha(latestDraft().content)
           if (boundedRun || aiReviewRun) chain.mergeReceipt = merged.receipt
-          if (aiReviewRun) {
+          if (aiReviewRun && candidate) {
             const composition = await invoke('generation:read-visible-composition', operationReceipt.handle, session)
             chain.composition = { algorithm: composition.algorithm, textHash: composition.textHash,
               artifactIds: composition.artifactIds, sources: composition.sources }
+          } else if (aiReviewRun) {
+            const attempts = receipt.attempts.filter(attempt => attempt.binding.operation === operationId)
+            let text = ''
+            for (const attempt of attempts) {
+              const raw = fs.readFileSync(attempt.outputPath, 'utf8')
+              assert.equal(sha(raw), attempt.visibleTextHash, 'AI_REVISION_RAW_OUTPUT_MISMATCH')
+              const clean = baselineContract.redactVisibleCompletionText(raw)
+              text = text ? baselineContract.appendVisibleTextContinuation(text, clean) : clean.trim()
+            }
+            assert.equal(text, revision.body, 'BASELINE_AI_REVISION_COMPOSITION_MISMATCH')
+            chain.composition = { algorithm: 'visible-append-v1', textHash: sha(text), attemptIds: attempts.map(attempt => attempt.attemptId) }
           }
           assert.equal(chain.mergeHash, chain.revision.contentHash, 'REVIEWED_DRAFT_MERGE_MISMATCH')
         }
