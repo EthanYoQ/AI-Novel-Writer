@@ -62,7 +62,7 @@
     "limits": "One prospective complete seven-case qualification at temperature 0 and reasoning high within the inherited C16, post-UI and full scopes. Preserve the original source, oracles, budgets, arm order, 480-second deadline, prior max results and physical ledger. No causal improvement or stability claim; stop dependent work on any technical or quality failure."
   },
   "forwardQualificationWindowExperiment": {
-    "revision": "native-budget-aligned-qualification-window-v2",
+    "revision": "native-budget-aligned-qualification-window-v3",
     "baseHash": "39d2606076046d2e5307abf9be392abf0a4c4c46dbe9c235851de95016fbbf95",
     "scopes": [
       { "phase": "c16-c18", "milestone": "final", "caseIds": ["C16-A", "C16-B", "C16-C", "C17-A", "C17-B", "C18-A", "C18-B"] },
@@ -71,7 +71,7 @@
       { "phase": "early-review", "milestone": "post-ui", "caseIds": ["场景3/2"] },
       { "phase": "full", "milestone": "final", "caseIds": ["场景1/1", "场景1/2", "场景1/3", "场景2/1", "场景2/2", "场景2/3", "场景3/1", "场景3/2", "场景3/3"] }
     ],
-    "limits": "One new prospective repaired-subject complete seven-case qualification after the shared ordinary-review default-scope repair at f625f1f54b7b4669c90f3359df052284f8d87d4d and actual C16 before/after observations, using a fresh committed subject freeze and all seven new cases from C16-A at the unchanged temperature 0 and reasoning high, followed by the inherited dependent scopes only if prior gates pass. The prior native-budget-aligned-qualification-window-v1 qualification invocation 9182d475-c42a-4a96-bfea-99ab4e7bd842 tested 990f8bb51d8c686e9400c014ffc46c632558beca is consumed; both fresh three-stage whole FAIL and all historical failures/UNKNOWN remain unchanged. No automatic rerun, case substitution, six-plus-one stitching or best-of selection. Native product budgets and registered physical-call ceilings remain unchanged. The experimental attempt watchdog is native ordinary-root maximum plus 60000 ms settlement; parent and test windows are bounded by the registered operations' existing physical-call ceilings. The prior 480-second high qualification is consumed and its UNKNOWN remains unchanged. No technical or literary result is carried forward; any failure stops dependent work."
+    "limits": "One new prospective repaired-subject complete seven-case qualification after the independently reviewed shared ordinary-review author-fact compatibility and full-draft goal-evidence repair at 09b6b7e5f7d34579c48879db08dbe89e22b43ee0. The frozen testedSHA must come from a later committed subject including this policy registration and is distinct from the product-repair SHA. Start from C16-A with all seven new cases at the unchanged temperature 0 and reasoning high; inherited post-UI and full scopes open only if every prior gate passes. The prior native-budget-aligned-qualification-window-v2 invocation 87266499-46a4-4784-87d3-aac2cc4d2074 tested 06a40497a24aa0e5e2cdca04a280159e2b1513bd is consumed and closed WHOLE FAIL; both fresh three-stage whole FAIL and the one limited adjudication remain closed. The prior v1 invocation 9182d475-c42a-4a96-bfea-99ab4e7bd842 tested 990f8bb51d8c686e9400c014ffc46c632558beca, the consumed 480-second high qualification, and all historical failures/UNKNOWN remain unchanged. No automatic rerun or reroll of 06a40497, case substitution, six-plus-one stitching, best-of selection, relaxed standards or additional budget. Native product budgets and registered physical-call ceilings remain unchanged. The experimental attempt watchdog is native ordinary-root maximum plus 60000 ms settlement; parent and test windows remain bounded by the registered operations' existing physical-call ceilings. No technical or literary result is carried forward; any failure stops dependent work."
   },
   "historicalIntentionToTreat": {
     "decisionRevision": "s10b-paired-hard-gate-v1",
@@ -2659,6 +2659,154 @@
         "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
         "terminal": "settle",
         "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"
+      }
+    ]
+  },
+  "historicalC1687266499Boundary": {
+    "fromEventCount": 1419,
+    "eventCount": 1485,
+    "rawBytesSha256": "ed35ff5b379ddb0682728dc8631a45ea803a3c673d321f625d545a5e202f4fa3",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "626f14ac8c2583e68bc74db6a2e85e27e59ea5e24b58aac79b0b3d370ceb491c",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "06a40497a24aa0e5e2cdca04a280159e2b1513bd",
+        "sourceHash": "3d277686a66be25cb3198b411222a01130a8616eb2e6407f0bcb79251e2e3aa7",
+        "driverHash": "afeae5af41ed6be8655de2f558f78bdb8d5c7813f22e6b2b93307eeb4e40d724"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:ff389f4c-ad11-4552-a0eb-ee7494c76e07",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "311aaff422dca0fdb8b4588bac3633a6771745f1b4d96e0ec445e17e707c3330"
+      },
+      {
+        "attemptId": "candidate:70b3344b-0419-45b5-bd13-08b40711bb78",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "311aaff422dca0fdb8b4588bac3633a6771745f1b4d96e0ec445e17e707c3330"
+      },
+      {
+        "attemptId": "candidate:1b3ad0d5-4506-4d8b-a6c8-27e7a9af2b21",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "e9b9623bffcf98bd4f6fbdbebffca50fa01a8745a99cd7d66d55411dac3f657e"
+      },
+      {
+        "attemptId": "candidate:a535aded-6d3a-4f3f-bb6d-5caadc3e195b",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "e9b9623bffcf98bd4f6fbdbebffca50fa01a8745a99cd7d66d55411dac3f657e"
+      },
+      {
+        "attemptId": "candidate:1bdb58f6-c654-40e5-a917-0677211d077a",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "219225c0fb096b35b4d27512174626d833ed665e2b166fa41412afddbd1f1bbf"
+      },
+      {
+        "attemptId": "candidate:ffd8bb72-1d73-483f-ac2f-1408b1e94537",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "219225c0fb096b35b4d27512174626d833ed665e2b166fa41412afddbd1f1bbf"
+      },
+      {
+        "attemptId": "candidate:1500079d-a9bd-4c8b-b42a-1a73a8c61d14",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "219225c0fb096b35b4d27512174626d833ed665e2b166fa41412afddbd1f1bbf"
+      },
+      {
+        "attemptId": "candidate:85f73b2f-ce86-4ebe-bee1-abec3fd8439b",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "219225c0fb096b35b4d27512174626d833ed665e2b166fa41412afddbd1f1bbf"
+      },
+      {
+        "attemptId": "candidate:3b46935a-b206-493a-bed8-9b37b654291d",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "219225c0fb096b35b4d27512174626d833ed665e2b166fa41412afddbd1f1bbf"
+      },
+      {
+        "attemptId": "candidate:28a36b2a-79c3-44e1-94a2-c27b10064725",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "219225c0fb096b35b4d27512174626d833ed665e2b166fa41412afddbd1f1bbf"
+      },
+      {
+        "attemptId": "candidate:8e3ccdf9-c021-4eea-8a81-045860dae41f",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "7337d95dacd410a5b4610f01285eac8f70ababef9af1225776bc2c5fae103bdc"
+      },
+      {
+        "attemptId": "candidate:6a739966-a344-4bf8-8799-8f9d5747cbab",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "7337d95dacd410a5b4610f01285eac8f70ababef9af1225776bc2c5fae103bdc"
+      },
+      {
+        "attemptId": "candidate:f767f122-ffe9-4322-aa01-5ba179fd2dd4",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "7337d95dacd410a5b4610f01285eac8f70ababef9af1225776bc2c5fae103bdc"
+      },
+      {
+        "attemptId": "candidate:17973821-82df-4c15-810b-9a8d92ca3091",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "7337d95dacd410a5b4610f01285eac8f70ababef9af1225776bc2c5fae103bdc"
+      },
+      {
+        "attemptId": "candidate:0371c104-1d1f-4309-b7a2-d5f8cfe5c45e",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "219225c0fb096b35b4d27512174626d833ed665e2b166fa41412afddbd1f1bbf"
+      },
+      {
+        "attemptId": "candidate:0ec31b02-b0df-49d2-9c5a-e33de3e74e7f",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "219225c0fb096b35b4d27512174626d833ed665e2b166fa41412afddbd1f1bbf"
+      },
+      {
+        "attemptId": "candidate:2993c139-28a3-4822-bc7e-08dc7e3ba30e",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "219225c0fb096b35b4d27512174626d833ed665e2b166fa41412afddbd1f1bbf"
+      },
+      {
+        "attemptId": "candidate:35aa30d2-b772-4d61-8597-a764cfb4e696",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "219225c0fb096b35b4d27512174626d833ed665e2b166fa41412afddbd1f1bbf"
+      },
+      {
+        "attemptId": "candidate:943cee00-1f7b-480b-979d-80cd12c4600b",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "219225c0fb096b35b4d27512174626d833ed665e2b166fa41412afddbd1f1bbf"
+      },
+      {
+        "attemptId": "candidate:1f85b842-af93-45c8-9be2-270842d792f6",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "219225c0fb096b35b4d27512174626d833ed665e2b166fa41412afddbd1f1bbf"
+      },
+      {
+        "attemptId": "candidate:deb0fa47-f386-4a5b-9f4c-8618ef0cfa88",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "219225c0fb096b35b4d27512174626d833ed665e2b166fa41412afddbd1f1bbf"
+      },
+      {
+        "attemptId": "candidate:7eec302d-4238-4081-9dad-368403bf7ec9",
+        "invocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+        "terminal": "settle",
+        "parityId": "219225c0fb096b35b4d27512174626d833ed665e2b166fa41412afddbd1f1bbf"
       }
     ]
   }

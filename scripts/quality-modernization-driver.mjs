@@ -548,7 +548,7 @@ export const BRIDGE_SPAWN_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 3 + 60_00
 export const BRIDGE_TEST_TIMEOUT_MS = BRIDGE_SPAWN_TIMEOUT_MS + 60_000
 // post-UI 每臂最多 15 个登记 attempt：目录 3、正文 8、首审 2、修稿 1、复评 1；产品自身 root 预算仍先行约束。
 export const BRIDGE_REVIEWED_TEST_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 15 + 120_000
-const QUALIFICATION_WINDOW_HASH = 'd313fd939dedd8ecb7ba799c757ae6532dc09b64db93d104271b212328fc690a'
+const QUALIFICATION_WINDOW_HASH = '26fe1d2b336445ef01d491395f71ca353b76f67402bfbe6633e14e3ac1db63ef'
 
 /** Resolve only the registered bridge fallback; native owner budgets and dispatch gates remain authoritative. */
 export function qualificationBridgeWindows(request) {
@@ -558,7 +558,7 @@ export function qualificationBridgeWindows(request) {
     testMs: request.evaluationPolicy ? BRIDGE_REVIEWED_TEST_TIMEOUT_MS : BRIDGE_TEST_TIMEOUT_MS,
     maxCalls: null, revision: null }
   if (digest(registration) !== QUALIFICATION_WINDOW_HASH
-    || registration.revision !== 'native-budget-aligned-qualification-window-v2'
+    || registration.revision !== 'native-budget-aligned-qualification-window-v3'
     || request.forwardReasoning?.revision !== 'fixed-high-zero-temperature-v1'
     || request.forwardReasoning.model?.temperature !== 0
     || request.forwardReasoning.reasoningOverride !== 'high'

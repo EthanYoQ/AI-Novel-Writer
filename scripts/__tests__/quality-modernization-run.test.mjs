@@ -96,7 +96,7 @@ test('AI final manuscript distinguishes raw goal discoveries from mechanical unk
 
 test('post-UI baseline uses its native review projection, persisted AI-only confirmation and 8192 refine command', async () => {
   const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/post-ui-baseline-native-'))
-  let db, databaseRead
+  let db, nativeDatabase
   try {
     const repositoryRoot = path.join(directory, 'baseline-source')
     const compressed = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/s14a-baseline-native-source.json.gz'))
@@ -115,17 +115,19 @@ test('post-UI baseline uses its native review projection, persisted AI-only conf
       load('src/services/workflows/commands/review-chapter.command.ts'), load('src/services/workflows/commands/refine-from-review.command.ts'),
       load('src/stores/project-store.ts'), load('src/stores/editor-store.ts'), load('src/services/generation/generation-runtime.ts'),
       load('src/shared/human-confirmed-review.ts'), load('electron/repositories/review-repository.ts'), load('electron/repositories/revision-repository.ts'), load('electron/database.ts') ])
-    db = new Database(path.join(directory, 'project.db'))
+    nativeDatabase = database
+    const nativeDatabaseRead = database.getProjectDb
+    // Initialize the frozen module's private state, which its repository getters actually read.
+    database.initProjectDatabase(directory, Buffer.alloc(32, 7))
+    db = database.getProjectDb()
+    assert.ok(db)
+    assert.equal(nativeDatabaseRead(), db, 'frozen repository getter must read the initialized native fixture database')
+    assert.equal(db.name, path.join(directory, '.vela', 'vela.db'))
     const native = loadBaselineReviewContract(repositoryRoot)
-    databaseRead = vi.spyOn(database, 'getProjectDb').mockReturnValue(db)
     const sourceDraft = { id: 1, chapterNumber: 1, version: 1, status: 'draft', content: '林岚走进北塔，灯火照亮石阶。'.repeat(70) }
     const session = { projectId: 'baseline-test', leaseId: 'project-test-lease', projectPath: directory }, requests = []
     const blueprint = { chapterNumber: 1, title: '北塔', keyEvents: '当章归还借书', characters: [], relationships: [] }
     let response, finishReason = 'stop', confirmationId, savedReview, currentDraft = sourceDraft
-    // Use the frozen baseline's verbatim table DDL with this checkout's Node22 SQLite binary.
-    const nativeDdl = fs.readFileSync(path.join(repositoryRoot, 'electron/database.ts'), 'utf8').match(/db\.exec\(`([\s\S]*?)`\)/u)?.[1]
-    assert.ok(nativeDdl?.includes('CREATE TABLE IF NOT EXISTS reviews'))
-    db.exec(nativeDdl)
     db.prepare('INSERT INTO contents(id,body) VALUES(1,?)').run(sourceDraft.content)
     db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,?)").run(countDraftUnits(sourceDraft.content))
     useProjectStore.setState({ currentProject: { id: session.projectId, path: directory, sessionLease: session.leaseId,
@@ -211,7 +213,7 @@ test('post-UI baseline uses its native review projection, persisted AI-only conf
     const operations = kinds.map((kind, index) => ({ kind, operation: kind, ...(index === 1 ? {} : {
       baselineReviewProvenance: { reviewId: reviews[index / 2].id, attemptId: attempts[index].attemptId,
         contentHash: hash(reviews[index / 2].content), sourceDraftHash: hash(contexts[index / 2].source), baseDraftId: 1, context: contexts[index / 2] } }) }))
-    const result = { arm: 'baseline', physicalProject: { dbPath: path.join(directory, 'project.db') }, operations, attempts,
+    const result = { arm: 'baseline', physicalProject: { dbPath: db.name }, operations, attempts,
       baselineReviewNative: { repositoryRoot, sourceHashes: native.sourceHashes }, protocolRevision: protocolBinding.protocolRevision,
       saved: { draftId: 1, chapterNumber: 1, version: 1, contentHash: hash(revisionText), units: countDraftUnits(revisionText) },
       draftObservation: { chapterNumber: 1, targetUnits: 900, units: countDraftUnits(revisionText), contentHash: hash(revisionText), persisted: true },
@@ -281,7 +283,7 @@ test('post-UI baseline uses its native review projection, persisted AI-only conf
     assert.ok(requests.at(-1).messages.some(item => item.content.includes(JSON.stringify(expected))))
     assert.equal(requests.at(-1).plan.maxOutputTokens, 8192)
     assert.equal(savedReview.sourceDraft.chapterNumber, 2)
-  } finally { databaseRead?.mockRestore(); vi.unstubAllGlobals(); db?.close(); fs.rmSync(directory, { recursive: true, force: true }) }
+  } finally { vi.unstubAllGlobals(); nativeDatabase?.closeProjectDatabase(); fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
 test('AI final manuscript native main owner persists keyEvents unknown confirmation, one revision, merge and ordinary final review', async () => {
@@ -969,7 +971,7 @@ test('固定 high/零温度只在原五个 scope 生效，并在读回及 wire �
 
 test('前向资格窗口只继承 high 的五个 scope，按本次 bridge 的已登记动作确定三层兜底', () => {
   const window = protocol.forwardQualificationWindowExperiment
-  assert.equal(window.revision, 'native-budget-aligned-qualification-window-v2')
+  assert.equal(window.revision, 'native-budget-aligned-qualification-window-v3')
   assert.deepEqual(Object.keys(window).sort(), ['baseHash', 'limits', 'revision', 'scopes'])
   assert.equal(window.baseHash, hash(protocol.forwardHighReasoningExperiment))
   assert.deepEqual(window.scopes, protocol.forwardReasoningExperiment.scopes)
@@ -1004,6 +1006,7 @@ test('前向资格窗口只继承 high 的五个 scope，按本次 bridge 的已
     testMs: BRIDGE_TEST_TIMEOUT_MS, maxCalls: null, revision: null })
   for (const change of [{ baseHash: 'f'.repeat(64) }, { scopes: window.scopes.slice(1) },
     { revision: 'wrong' }, { revision: 'native-budget-aligned-qualification-window-v1' },
+    { revision: 'native-budget-aligned-qualification-window-v2' },
     { limits: window.limits + ' changed' }, { extra: true }])
     assert.throws(() => forwardQualificationWindowFor({ ...protocol,
       forwardQualificationWindowExperiment: { ...window, ...change } }, 'c16-c18', 'final'),
@@ -1013,6 +1016,7 @@ test('前向资格窗口只继承 high 的五个 scope，按本次 bridge 的已
   /FORWARD_HIGH_REGISTRATION_MISMATCH|FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH/)
   for (const change of [{ caseId: 'unregistered' },
     { forwardQualificationWindow: { ...window, limits: 'changed' } },
+    { forwardQualificationWindow: { ...window, revision: 'native-budget-aligned-qualification-window-v2' } },
     { operations: [{ id: '定稿章节要点', kind: 'chapter_notes' }] },
     { scenarioRevision: 'changed' },
     { attemptTimeoutMs: 1 }])
@@ -2331,7 +2335,7 @@ test('C16–C18 ca466d9a/73b46513 段（第580–648行）按同一规则分两�
   // 新协议字节 hash 与被取代的 a0a14777 不同，runner 读写两入口都按链末端取历史范围。
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
   assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, ca466d9a, protocol\.historicalC1673b46513Boundary\)/)
-  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trusted071156e5Events/)
+  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trusted87266499Events/)
 })
 
 test('新登记续写直接首稿，旧对账可读但当前实验拒绝额外发送', () => {
@@ -4371,7 +4375,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     'historicalC16Ee3435ecBoundary', 'historicalC16Ccc70b31Boundary', 'historicalC16C9b88510Boundary', 'historicalC16D8a30c11Boundary',
     'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary', 'historicalC16B42cfc55Boundary',
     'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
-    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary']
+    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -4464,11 +4468,18 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     assert.ok(closed.reserveAttempts.every(item => item.terminal === 'settle'
       && item.invocationId === '9182d475-c42a-4a96-bfea-99ab4e7bd842'))
     assert.equal(closed.armBindings.candidate.codeSha, '990f8bb51d8c686e9400c014ffc46c632558beca')
-    for (const field of ['codeSha', 'sourceHash', 'driverHash'])
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1350, { ...closed,
-        armBindings: { candidate: { ...closed.armBindings.candidate,
-          [field]: 'f'.repeat(closed.armBindings.candidate[field].length) } },
-      }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    const consumed = real.boundaries.historicalC1687266499Boundary
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1419, consumed), 1485)
+    assert.equal(consumed.reserveAttempts.length, 22)
+    assert.ok(consumed.reserveAttempts.every(item => item.terminal === 'settle'
+      && item.invocationId === '87266499-46a4-4784-87d3-aac2cc4d2074'))
+    assert.equal(consumed.armBindings.candidate.codeSha, '06a40497a24aa0e5e2cdca04a280159e2b1513bd')
+    for (const [from, registered] of [[1350, closed], [1419, consumed]])
+      for (const field of ['codeSha', 'sourceHash', 'driverHash'])
+        assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, from, { ...registered,
+          armBindings: { candidate: { ...registered.armBindings.candidate,
+            [field]: 'f'.repeat(registered.armBindings.candidate[field].length) } },
+        }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
     assert.equal(validatePhysicalLedger(ledger), ledger)
     fs.writeFileSync(file, synthetic.raw)
     const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
@@ -4492,7 +4503,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
       /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
     fs.writeFileSync(ledger, real.raw)
     fs.writeFileSync(file, synthetic.raw)
-    for (const name of ['historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary']) {
+    for (const name of ['historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary']) {
       const registered = real.boundaries[name]
       const changed = raw => raw.replace(`"codeSha":"${registered.armBindings.candidate.codeSha}"`, `"codeSha":"${'f'.repeat(40)}"`)
       fs.writeFileSync(ledger, changed(real.raw))
