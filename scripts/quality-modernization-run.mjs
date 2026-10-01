@@ -230,7 +230,8 @@ export function validatePhysicalLedger(file) {
   const e41a3f0a = validateHistoricalSupersessionBoundary(raw, a763f510, protocol.historicalBoundedRevisionE41a3f0aBoundary)
   const r071156e5 = validateHistoricalSupersessionBoundary(raw, e41a3f0a, protocol.historicalC16071156e5Boundary)
   const r9182d475 = validateHistoricalSupersessionBoundary(raw, r071156e5, protocol.historicalC169182d475Boundary)
-  validateHistoricalSupersessionBoundary(raw, r9182d475, protocol.historicalC1687266499Boundary)
+  const r87266499 = validateHistoricalSupersessionBoundary(raw, r9182d475, protocol.historicalC1687266499Boundary)
+  validateHistoricalSupersessionBoundary(raw, r87266499, protocol.historicalC16D021261fBoundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -386,9 +387,9 @@ export function forwardQualificationWindowFor(protocol, phase, milestone) {
   if (registration === undefined) return null
   if (!protocol.forwardHighReasoningExperiment || !protocol.forwardTemperatureExperiment
     || !isDeepStrictEqual(Object.keys(registration ?? {}).sort(), ['baseHash', 'limits', 'revision', 'scopes'])
-    || registration.revision !== 'native-budget-aligned-qualification-window-v3'
+    || registration.revision !== 'native-budget-aligned-qualification-window-v4'
     || registration.baseHash !== hash(protocol.forwardHighReasoningExperiment)
-    || hash(registration) !== '26fe1d2b336445ef01d491395f71ca353b76f67402bfbe6633e14e3ac1db63ef'
+    || hash(registration) !== '27ff092cf9da1e8597df841d3eb51ef9a364f3ec88abd076d85a1468e1fd0645'
     || !isDeepStrictEqual(registration.scopes, protocol.forwardReasoningExperiment.scopes))
     fail('FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH')
   for (const scope of registration.scopes)
@@ -735,6 +736,10 @@ export function updateLedger(file, event, options = {}) {
         ? protocol.historicalC1687266499Boundary : options.historicalC1687266499Boundary
       const trusted87266499Events = r87266499Boundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trusted9182d475Events, r87266499Boundary) : trusted9182d475Events
+      const d021261fBoundary = options.campaignMode === 'real'
+        ? protocol.historicalC16D021261fBoundary : options.historicalC16D021261fBoundary
+      const trustedD021261fEvents = d021261fBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trusted87266499Events, d021261fBoundary) : trusted87266499Events
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
       // 未登记 operations 的阶段在这里 fail closed。
@@ -774,7 +779,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trusted87266499Events
+          const superseded = index >= trustedHistoricalEvents && index < trustedD021261fEvents
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)

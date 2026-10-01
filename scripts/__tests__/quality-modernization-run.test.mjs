@@ -971,7 +971,7 @@ test('固定 high/零温度只在原五个 scope 生效，并在读回及 wire �
 
 test('前向资格窗口只继承 high 的五个 scope，按本次 bridge 的已登记动作确定三层兜底', () => {
   const window = protocol.forwardQualificationWindowExperiment
-  assert.equal(window.revision, 'native-budget-aligned-qualification-window-v3')
+  assert.equal(window.revision, 'native-budget-aligned-qualification-window-v4')
   assert.deepEqual(Object.keys(window).sort(), ['baseHash', 'limits', 'revision', 'scopes'])
   assert.equal(window.baseHash, hash(protocol.forwardHighReasoningExperiment))
   assert.deepEqual(window.scopes, protocol.forwardReasoningExperiment.scopes)
@@ -1007,6 +1007,7 @@ test('前向资格窗口只继承 high 的五个 scope，按本次 bridge 的已
   for (const change of [{ baseHash: 'f'.repeat(64) }, { scopes: window.scopes.slice(1) },
     { revision: 'wrong' }, { revision: 'native-budget-aligned-qualification-window-v1' },
     { revision: 'native-budget-aligned-qualification-window-v2' },
+    { revision: 'native-budget-aligned-qualification-window-v3' },
     { limits: window.limits + ' changed' }, { extra: true }])
     assert.throws(() => forwardQualificationWindowFor({ ...protocol,
       forwardQualificationWindowExperiment: { ...window, ...change } }, 'c16-c18', 'final'),
@@ -1017,11 +1018,20 @@ test('前向资格窗口只继承 high 的五个 scope，按本次 bridge 的已
   for (const change of [{ caseId: 'unregistered' },
     { forwardQualificationWindow: { ...window, limits: 'changed' } },
     { forwardQualificationWindow: { ...window, revision: 'native-budget-aligned-qualification-window-v2' } },
+    { forwardQualificationWindow: { ...window, revision: 'native-budget-aligned-qualification-window-v3' } },
     { operations: [{ id: '定稿章节要点', kind: 'chapter_notes' }] },
     { scenarioRevision: 'changed' },
     { attemptTimeoutMs: 1 }])
     assert.throws(() => qualificationBridgeWindows({ ...request('c16-c18', 'final', 'C16-A'), ...change }),
     /FORWARD_QUALIFICATION_WINDOW_(SCOPE|REGISTRATION|REQUEST)_MISMATCH/)
+  for (const caseIds of [window.scopes[0].caseIds.filter(id => id !== 'C18-A'),
+    window.scopes[0].caseIds.filter(id => id !== 'C18-B'), window.scopes[0].caseIds.slice(0, 5)]) {
+    const registration = { ...window, scopes: window.scopes.map((scope, index) => index === 0 ? { ...scope, caseIds } : scope) }
+    assert.throws(() => forwardQualificationWindowFor({ ...protocol, forwardQualificationWindowExperiment: registration },
+      'c16-c18', 'final'), /FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH/)
+    assert.throws(() => qualificationBridgeWindows({ ...request('c16-c18', 'final', 'C16-A'),
+      forwardQualificationWindow: registration }), /FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH/)
+  }
 })
 
 test('父桥实际生成配置和 spawn options 使用同一已登记窗口，漂移在启动前拒绝', () => {
@@ -2335,7 +2345,7 @@ test('C16–C18 ca466d9a/73b46513 段（第580–648行）按同一规则分两�
   // 新协议字节 hash 与被取代的 a0a14777 不同，runner 读写两入口都按链末端取历史范围。
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
   assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, ca466d9a, protocol\.historicalC1673b46513Boundary\)/)
-  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trusted87266499Events/)
+  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedD021261fEvents/)
 })
 
 test('新登记续写直接首稿，旧对账可读但当前实验拒绝额外发送', () => {
@@ -4364,6 +4374,7 @@ test('context 审稿传选定候选原文，身份漂移与写稿材料错配仍
 })
 
 test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂移', () => {
+  assert.ok(protocol.historicalC16D021261fBoundary, 'the consumed partial v3 window must be registered')
   const boundary = protocol.historicalS14BSplitBoundary
   assert.equal(boundary.fromEventCount, 345)
   assert.equal(boundary.eventCount, 390)
@@ -4375,7 +4386,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     'historicalC16Ee3435ecBoundary', 'historicalC16Ccc70b31Boundary', 'historicalC16C9b88510Boundary', 'historicalC16D8a30c11Boundary',
     'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary', 'historicalC16B42cfc55Boundary',
     'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
-    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary']
+    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -4474,7 +4485,19 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     assert.ok(consumed.reserveAttempts.every(item => item.terminal === 'settle'
       && item.invocationId === '87266499-46a4-4784-87d3-aac2cc4d2074'))
     assert.equal(consumed.armBindings.candidate.codeSha, '06a40497a24aa0e5e2cdca04a280159e2b1513bd')
-    for (const [from, registered] of [[1350, closed], [1419, consumed]])
+    const partial = real.boundaries.historicalC16D021261fBoundary
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1485, partial), 1524)
+    assert.equal(partial.reserveAttempts.length, 13)
+    assert.ok(partial.reserveAttempts.every(item => item.terminal === 'settle'
+      && item.invocationId === 'd021261f-ef32-45d2-937e-a004483a1634'))
+    assert.equal(partial.armBindings.candidate.codeSha, 'ee52863638b24683e3d083513a6a7ef5f6ded408')
+    for (const [field, value] of [['protocolRevision', 'unregistered'], ['protocolHash', 'f'.repeat(64)]])
+      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1485, { ...partial, [field]: value }),
+      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1485, { ...partial,
+      reserveAttempts: [partial.reserveAttempts[1], partial.reserveAttempts[0], ...partial.reserveAttempts.slice(2)] }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    for (const [from, registered] of [[1350, closed], [1419, consumed], [1485, partial]])
       for (const field of ['codeSha', 'sourceHash', 'driverHash'])
         assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, from, { ...registered,
           armBindings: { candidate: { ...registered.armBindings.candidate,
@@ -4485,6 +4508,9 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
     assert.doesNotThrow(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt',
       binding: { ...synthetic.binding, ...currentProtocolBinding() } }, options))
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'unregistered-d021261f',
+      binding: { ...synthetic.binding, protocolRevision: partial.protocolRevision, protocolHash: partial.protocolHash } }, options),
+    /PROTOCOL_DRIFT/)
     const changed1350 = raw => raw.replace('"type":"unknown","attemptId":"candidate:5d0933d2-8d48-4a3b-8d14-2d87f74bf5ae"',
       '"type":"settle","attemptId":"candidate:5d0933d2-8d48-4a3b-8d14-2d87f74bf5ae"')
     fs.writeFileSync(ledger, changed1350(real.raw))
@@ -4503,7 +4529,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
       /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
     fs.writeFileSync(ledger, real.raw)
     fs.writeFileSync(file, synthetic.raw)
-    for (const name of ['historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary']) {
+    for (const name of ['historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary']) {
       const registered = real.boundaries[name]
       const changed = raw => raw.replace(`"codeSha":"${registered.armBindings.candidate.codeSha}"`, `"codeSha":"${'f'.repeat(40)}"`)
       fs.writeFileSync(ledger, changed(real.raw))
@@ -4548,11 +4574,12 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
       assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1122, { ...r933,
         armBindings: { candidate: { ...r933.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
       /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    for (const [field, value] of [['attemptId', 'candidate:wrong'], ['invocationId', '00000000-0000-4000-8000-000000000000'],
-      ['terminal', 'unknown'], ['parityId', 'f'.repeat(64)]])
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1122, { ...r933,
-        reserveAttempts: r933.reserveAttempts.map((item, index) => index === 0 ? { ...item, [field]: value } : item) }),
-      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    for (const [from, registered] of [[1122, r933], [1485, partial]])
+      for (const [field, value] of [['attemptId', 'candidate:wrong'], ['invocationId', '00000000-0000-4000-8000-000000000000'],
+        ['terminal', 'unknown'], ['parityId', 'f'.repeat(64)]])
+        assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, from, { ...registered,
+          reserveAttempts: registered.reserveAttempts.map((item, index) => index === 0 ? { ...item, [field]: value } : item) }),
+        /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
     assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1041, r1aa), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
     for (const field of ['codeSha', 'sourceHash', 'driverHash']) {
       assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1080, { ...r1aa,
