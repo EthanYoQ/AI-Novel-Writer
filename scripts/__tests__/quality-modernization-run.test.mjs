@@ -753,6 +753,165 @@ test('bounded-revision missing execute receipt keeps consumption unknown and ret
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
+test('separated-review diagnostic freezes six slots without reopening qualification or shared input', () => {
+  const selected = selectPhase(protocol, 'separated-review-diagnostic', 'diagnostic')
+  assert.equal(selected.diagnosticId, 'separated-review-diagnostic-3x2-v1')
+  assert.equal(selected.nonQualification, true)
+  assert.deepEqual(selected.arms, ['candidate'])
+  assert.deepEqual(selected.caseIds, ['source-1', 'source-2', 'source-3'])
+  assert.equal(selected.maxPhysicalRequests, 6)
+  assert.deepEqual(selected.operations.map(item => item.id),
+    ['source-1-goal', 'source-1-fact', 'source-2-goal', 'source-2-fact', 'source-3-goal', 'source-3-fact'])
+  const hashes = ['feee1bdaa2a508811bb0fd52aad30229c6334311b8d89aaeaf9c85934023e890',
+    '539c35997c28de02b282e19890263a581785ebebed19f12443113d9d9418294e',
+    '84f4a1e84be81eb1dc6ab175785be7e7a42598ba6087e430b64170fee8a12655']
+  for (const [index, item] of selected.operations.entries()) {
+    assert.equal(item.sourceId, selected.caseIds[Math.floor(index / 2)])
+    assert.equal(item.role, index % 2 === 0 ? 'goal' : 'fact')
+    assert.equal(item.contentSha256, hashes[Math.floor(index / 2)])
+    for (const key of ['contextHash', 'materialsSha256', 'messagesSha256'])
+      assert.match(item[key], /^[a-f0-9]{64}$/u)
+    if (index % 2) for (const key of ['originalInvocationId', 'originalTestedSha', 'contextHash', 'materialsSha256'])
+      assert.equal(item[key], selected.operations[index - 1][key])
+  }
+  assert.equal(selected.model.temperature, 0)
+  assert.equal(selected.model.reasoningOverride, 'high')
+  assert.equal(selected.model.maxTokens, 16384)
+  assert.equal(selected.model.creativeStrategy, 'auto')
+  assert.equal(protocol.phases['shared-input-diagnostic'].maxPhysicalRequests, 1)
+  assert.equal(protocol.phases['shared-input-diagnostic'].model.temperature, 0.7)
+  assert.equal(protocol.forwardQualificationWindowExperiment.scopes.length, 5)
+  assert.equal(forwardReasoningFor(protocol, selected.phase, 'diagnostic'), null)
+  assert.equal(forwardQualificationWindowFor(protocol, selected.phase, 'diagnostic'), null)
+})
+
+test('separated-review diagnostic runs six zero-model owner slots and preserves global one-shot limits', async () => {
+  const { assertSharedInputDiagnostic } = await import('../quality-modernization-driver.mjs')
+  const phase = 'separated-review-diagnostic', registered = protocol.phases[phase]
+  const sources = registered.caseIds.map(id => ({ id, frozenContext: { sourceId: id },
+    materials: { source: { content: `${id} saved body`, chapterNumber: 2 }, context: { frozenGoals: { items: [{ id: 'goal-1' }] } } } }))
+  const operations = registered.operations.map(slot => {
+    const source = sources.find(item => item.id === slot.sourceId)
+    const messages = [{ role: 'system', content: `${slot.role} only` }, { role: 'user', content: JSON.stringify(source.materials) }]
+    return { ...slot, materialsSourceId: source.id, contentSha256: hash(source.materials.source.content),
+      contextHash: hash(source.frozenContext), materialsSha256: hash(source.materials), messages, messagesSha256: hash(messages) }
+  })
+  const input = { schemaVersion: 1, diagnosticId: registered.diagnosticId, sources, operations }
+  const inputBytes = Buffer.from(JSON.stringify(input)), inputHash = hash(inputBytes)
+  const registration = { ...registered, diagnosticInputHash: inputHash,
+    operations: operations.map(({ messages, materialsSourceId, ...slot }) => slot) }
+  const bytes = Buffer.from(JSON.stringify({ ...protocol, phases: { ...protocol.phases, [phase]: registration } }))
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/separated-review-test-'))
+  const ledger = path.join(directory, 'synthetic-ledger.jsonl'), originalRead = fs.readFileSync
+  const fixture = originalRead(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8').replaceAll('\r\n', '\n')
+  const start = fixture.indexOf("    if (diagnosticRun) {\n      operationKind = 'diagnostic'")
+  const end = fixture.indexOf('    const callbacks = {', start)
+  assert.ok(start > 0 && end > start)
+  const execute = new Function('request', 'diagnosticSlot', 'diagnosticInput', 'session', 'project', 'model', 'receipt',
+    'invoke', 'load', 'evidenceRoot', 'fs', 'sha', 'assert', 'assertNoOutboundPreflightFailures', 'randomUUID', 'path',
+    `return (async () => { const diagnosticRun = true, separatedRun = true, streamSettlements = []; let operationKind, operationId, currentContext; ${fixture.slice(start, end)} })()`)
+  const bindingFor = (slot, index) => ({ campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate',
+    codeSha: 'a'.repeat(40), sourceHash: 'a'.repeat(64), driverHash: 'b'.repeat(64), parityId: 'c'.repeat(64),
+    ...currentProtocolBinding(), invocationId: '00000000-0000-4000-8000-000000000001', phase, milestone: 'diagnostic',
+    caseId: slot.sourceId, operation: slot.id, diagnosticId: registration.diagnosticId, diagnosticInputHash: inputHash,
+    ...Object.fromEntries(['sourceId', 'role', 'originalInvocationId', 'originalTestedSha', 'contentSha256', 'contextHash', 'materialsSha256', 'messagesSha256'].map(key => [key, slot[key]])),
+    actual: { attemptId: `actual-${index}`, runId: `run-${index}`, rootActionId: `root-${index}`,
+      projectId: 'private-project', epoch: 'private-epoch', purpose: `separated-review-${slot.role}` } })
+  try {
+    fs.readFileSync = function (name, ...args) {
+      if (typeof name === 'string' && path.resolve(name) === path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json'))
+        return args[0] === 'utf8' ? bytes.toString('utf8') : bytes
+      return originalRead.call(this, name, ...args)
+    }
+    const results = []
+    for (const [index, slot] of operations.entries()) {
+      const body = { model: registration.model.modelName, messages: slot.messages, temperature: 0, max_tokens: 2672,
+        enable_thinking: true, reasoning_effort: 'high', response_format: { type: 'json_object' }, stream: true, stream_options: { include_usage: true } }
+      const options = { arm: 'candidate', model: registration.model, body, reserved: index, operation: slot.id, inputHash }
+      assert.doesNotThrow(() => assertSharedInputDiagnostic(registration, input, options))
+      if (index === 0) {
+        for (const changed of [{ inputHash: 'f'.repeat(64) }, { operation: 'not-registered' }, { reserved: 1 },
+          { model: { ...registration.model, temperature: 0.7 } }, { body: { ...body, max_tokens: 16385 } },
+          { body: { ...body, response_format: undefined } },
+          { body: { ...body, messages: [{ ...slot.messages[0], content: 'changed' }, slot.messages[1]] } }])
+          assert.throws(() => assertSharedInputDiagnostic(registration, input, { ...options, ...changed }), /SEPARATED_REVIEW_DIAGNOSTIC_/)
+        const changed = structuredClone(input); changed.sources[0].materials.source.content += '!'
+        assert.throws(() => assertSharedInputDiagnostic(registration, changed, options), /SEPARATED_REVIEW_DIAGNOSTIC_INPUT_MISMATCH/)
+      }
+      const binding = bindingFor(slot, index), attemptId = `candidate:unit-${index}`
+      const root = path.join(directory, slot.id); fs.mkdirSync(root)
+      const receipt = { attempts: [], operations: [] }, session = { projectId: 'private-project', leaseId: 'private-epoch' }
+      const handle = { projectId: session.projectId, epoch: session.leaseId, runId: binding.actual.runId, rootActionId: binding.actual.rootActionId }
+      const output = JSON.stringify({ summary: 'zero-model wiring only',
+        items: [{ category: 'wiring', severity: 'warning', quote: 'saved body', description: 'semantic findings must not stop remaining slots' }],
+        ...(slot.role === 'goal' ? { goalReviews: [{ id: 'goal-1', status: 'unmet', description: 'wiring only', evidence: [] }] } : {}) })
+      const invoke = async (channel, request) => {
+        if (channel === 'generation:begin') {
+          assert.equal(request.operation, binding.actual.purpose)
+          assert.equal(request.output, 'structured-data')
+          assert.deepEqual(request.authorInputs, [{ id: slot.id, text: slot.messages[1].content }])
+          assert.deepEqual(request.promptKeys, ['consistency_check'])
+          return { handle }
+        }
+        assert.equal(channel, 'generation:execute'); assert.deepEqual(request.handle, handle)
+        assert.equal(request.task.output, 'structured-data')
+        assert.deepEqual(request.task.messages, slot.messages); assert.equal(request.task.reasoningStage, 'review')
+        assert.equal(request.task.budgetDemand, undefined)
+        const row = { attempt_id: binding.actual.attemptId, run_id: handle.runId, root_action_id: handle.rootActionId,
+          binding_json: JSON.stringify(handle), attempt_json: JSON.stringify({ attemptId: binding.actual.attemptId, requestedOutputTokens: body.max_tokens }),
+          usage_receipt_json: JSON.stringify({ purpose: binding.actual.purpose }) }
+        const db = { prepare: () => ({ all: () => [row] }) }
+        assert.deepEqual(selectOwnerDispatch(db, handle, session, body), binding.actual)
+        assert.throws(() => selectOwnerDispatch(db, handle, session, { ...body, max_tokens: body.max_tokens + 1 }), /OWNER_DISPATCH_IDENTITY_MISMATCH/)
+        updateLedger(ledger, { type: 'reserve', attemptId, binding }, { campaignMode: 'synthetic' })
+        updateLedger(ledger, { type: 'dispatch', attemptId }, { campaignMode: 'synthetic' })
+        updateLedger(ledger, { type: 'settle', attemptId, finishReason: 'stop' }, { campaignMode: 'synthetic' })
+        receipt.attempts.push({ attemptId, binding, visibleTextHash: hash(output) })
+        return { outcome: { status: 'completed', content: output, finishReason: 'stop' } }
+      }
+      await execute({ ledgerPath: ledger }, slot, input, session, { rootPath: root }, { id: 'frozen-model' }, receipt,
+        invoke, async () => ({ parseReviewGenerationResult }), root, fs, hash, assert, assertNoOutboundPreflightFailures, () => 'nonce', path)
+      assert.equal(receipt.status, 'passed'); assert.equal(receipt.ownerTerminal.outputHash, hash(output))
+      assert.equal(Array.isArray(receipt.diagnosticReview.goalReviews), slot.role === 'goal')
+      assert.equal(hash(originalRead(receipt.operations[0].outputPath)), hash(output)); results.push(receipt)
+      if (index === 0) {
+        const next = bindingFor(operations[1], 1)
+        assert.throws(() => updateLedger(ledger, { type: 'reserve', attemptId: 'duplicate', binding }, { campaignMode: 'synthetic' }), /SLOT_UNAVAILABLE/)
+        for (const [key, value] of [['invocationId', '00000000-0000-4000-8000-000000000002'], ['codeSha', 'f'.repeat(40)], ['sourceHash', 'f'.repeat(64)], ['driverHash', 'f'.repeat(64)]])
+          assert.throws(() => updateLedger(ledger, { type: 'reserve', attemptId: 'restart', binding: { ...next, [key]: value } }, { campaignMode: 'synthetic' }), /EXECUTION_DRIFT/)
+        for (const terminal of [{ type: 'settle', finishReason: 'length' }, { type: 'unknown', finishReason: 'unknown' }, { type: 'cancel' }]) {
+          const broken = path.join(directory, `synthetic-${terminal.type}-${terminal.finishReason ?? 'cancel'}.jsonl`)
+          const rows = [{ type: 'reserve', attemptId, binding, allocation: 'nonQualificationDiagnostic' },
+            ...(terminal.type === 'cancel' ? [] : [{ type: 'dispatch', attemptId }]), { ...terminal, attemptId }]
+          fs.writeFileSync(broken, rows.map(JSON.stringify).join('\n') + '\n')
+          assert.throws(() => updateLedger(broken, { type: 'reserve', attemptId: 'after-failure', binding: next }, { campaignMode: 'synthetic' }), /PREVIOUS_ATTEMPT_FAILED/)
+        }
+      }
+    }
+    assert.equal(results.length, 6)
+    assert.equal(originalRead(ledger, 'utf8').trimEnd().split('\n').length, 18)
+    assert.throws(() => updateLedger(ledger, { type: 'reserve', attemptId: 'seventh', binding: bindingFor(operations[0], 7) }, { campaignMode: 'synthetic' }), /SLOT_UNAVAILABLE/)
+    assert.throws(() => validateCampaignBinding({ ...bindingFor(operations[0], 8), operation: 'seventh' },
+      { campaignMode: 'synthetic', protocol: { ...protocol, phases: { ...protocol.phases, [phase]: registration } } }), /INVALID_CAMPAIGN_BINDING/)
+    const persisted = path.join(directory, 'synthetic-restarted-ledger.jsonl')
+    const rows = originalRead(ledger, 'utf8').trimEnd().split('\n').map(JSON.parse).map(row => row.type !== 'reserve' ? row : {
+      ...row, binding: { ...row.binding, ...protocolBinding, diagnosticInputHash: registered.diagnosticInputHash,
+        ...Object.fromEntries(['sourceId', 'role', 'originalInvocationId', 'originalTestedSha', 'contentSha256', 'contextHash', 'materialsSha256', 'messagesSha256']
+          .map(key => [key, registered.operations.find(item => item.id === row.binding.operation)[key]])) } })
+    fs.writeFileSync(persisted, rows.map(JSON.stringify).join('\n') + '\n')
+    const restarted = spawnSync(process.execPath, ['--input-type=module', '-e',
+      `import fs from 'node:fs';import {updateLedger} from ${JSON.stringify(pathToFileURL(path.join(ROOT, 'scripts/quality-modernization-run.mjs')).href)};
+       const rows=fs.readFileSync(process.argv[1],'utf8').trimEnd().split('\\n').map(JSON.parse);
+       const binding={...rows[0].binding,invocationId:'00000000-0000-4000-8000-000000000099',codeSha:'f'.repeat(40)};
+       try{updateLedger(process.argv[1],{type:'reserve',attemptId:'fresh-process-seventh',binding},{campaignMode:'synthetic'});process.exitCode=1}
+       catch(error){console.log(error.message);if(error.message!=='SEPARATED_REVIEW_DIAGNOSTIC_SLOT_UNAVAILABLE')process.exitCode=2}`, persisted],
+    { cwd: ROOT, encoding: 'utf8', windowsHide: true })
+    assert.equal(restarted.status, 0, restarted.stderr)
+    assert.equal(restarted.stdout.trim(), 'SEPARATED_REVIEW_DIAGNOSTIC_SLOT_UNAVAILABLE')
+    assert.equal(originalRead(persisted, 'utf8').trimEnd().split('\n').length, 18)
+  } finally { fs.readFileSync = originalRead; fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
 test('shared-input diagnostic registers one candidate and rejects a second physical slot', async () => {
   const phase = 'shared-input-diagnostic'
   const registration = protocol.phases[phase]
@@ -2345,7 +2504,7 @@ test('C16–C18 ca466d9a/73b46513 段（第580–648行）按同一规则分两�
   // 新协议字节 hash 与被取代的 a0a14777 不同，runner 读写两入口都按链末端取历史范围。
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
   assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, ca466d9a, protocol\.historicalC1673b46513Boundary\)/)
-  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedD021261fEvents/)
+  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trusted09ad48e1Events/)
 })
 
 test('新登记续写直接首稿，旧对账可读但当前实验拒绝额外发送', () => {
@@ -3656,7 +3815,7 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
     const checkStart = fixture.indexOf("      if (operationKind === 'recheck' && candidate)")
     const checkEnd = fixture.indexOf("      if (candidate && request.phase === 'early-context'", checkStart)
     const reserve = fixture.indexOf("record({ type: 'reserve', attemptId, binding })", checkEnd)
-    const evidenceStart = fixture.indexOf('authorityEvidence: operationKind ===') + 'authorityEvidence: '.length
+    const evidenceStart = fixture.indexOf('authorityEvidence: ') + 'authorityEvidence: '.length
     const evidenceEnd = fixture.indexOf('\n        userPromptHash,', evidenceStart)
     assert.ok(proofStart > 0 && proofEnd > proofStart && gateCall > 0 && repairStart > gateCall
       && repairEnd > repairStart && checkStart > repairEnd && checkEnd > checkStart && reserve > checkEnd
@@ -3670,7 +3829,7 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
       `const fullRun = request.phase === 'full', continuityRun = false, reviewedRun = false, boundedRun = false, aiReviewRun = false;\n${fixture.slice(checkStart, checkEnd)}`)
     const readAuthorityEvidence = new Function('operationKind', 'candidate', 'request', 'authorityFacts', 'sha',
       'promptText', 'structuredSyntaxRepair', 'predecessorReadbacks', 'db', 'chapter',
-      `const continuityRun = false, reviewedRun = false, boundedRun = false, aiReviewRun = false; return ${fixture.slice(evidenceStart, evidenceEnd).trim().replace(/,$/, '')}`)
+      `const separatedRun = false, continuityRun = false, reviewedRun = false, boundedRun = false, aiReviewRun = false; return ${fixture.slice(evidenceStart, evidenceEnd).trim().replace(/,$/, '')}`)
     const facts = ['fact sent', 'fact absent from repair']
     const request = { phase: 'early-budget', chapterNumber: 1 }
     const ledgerPath = path.join(dir, 'ledger.jsonl')
@@ -4386,7 +4545,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     'historicalC16Ee3435ecBoundary', 'historicalC16Ccc70b31Boundary', 'historicalC16C9b88510Boundary', 'historicalC16D8a30c11Boundary',
     'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary', 'historicalC16B42cfc55Boundary',
     'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
-    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary']
+    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary', 'historicalC1609ad48e1Boundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -4491,13 +4650,21 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     assert.ok(partial.reserveAttempts.every(item => item.terminal === 'settle'
       && item.invocationId === 'd021261f-ef32-45d2-937e-a004483a1634'))
     assert.equal(partial.armBindings.candidate.codeSha, 'ee52863638b24683e3d083513a6a7ef5f6ded408')
-    for (const [field, value] of [['protocolRevision', 'unregistered'], ['protocolHash', 'f'.repeat(64)]])
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1485, { ...partial, [field]: value }),
+    const failed = real.boundaries.historicalC1609ad48e1Boundary
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1524, failed), 1578)
+    assert.equal(failed.reserveAttempts.length, 18)
+    assert.ok(failed.reserveAttempts.every(item => item.terminal === 'settle'
+      && item.invocationId === '09ad48e1-ad68-427e-b00a-1a19408586a5'))
+    assert.equal(failed.armBindings.candidate.codeSha, '003a3f79f901a072d1ab633e3477ad307a542797')
+    for (const [from, registered] of [[1485, partial], [1524, failed]]) {
+      for (const [field, value] of [['protocolRevision', 'unregistered'], ['protocolHash', 'f'.repeat(64)]])
+        assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, from, { ...registered, [field]: value }),
+        /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, from, { ...registered,
+        reserveAttempts: [registered.reserveAttempts[1], registered.reserveAttempts[0], ...registered.reserveAttempts.slice(2)] }),
       /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1485, { ...partial,
-      reserveAttempts: [partial.reserveAttempts[1], partial.reserveAttempts[0], ...partial.reserveAttempts.slice(2)] }),
-    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    for (const [from, registered] of [[1350, closed], [1419, consumed], [1485, partial]])
+    }
+    for (const [from, registered] of [[1350, closed], [1419, consumed], [1485, partial], [1524, failed]])
       for (const field of ['codeSha', 'sourceHash', 'driverHash'])
         assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, from, { ...registered,
           armBindings: { candidate: { ...registered.armBindings.candidate,
@@ -4529,7 +4696,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
       /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
     fs.writeFileSync(ledger, real.raw)
     fs.writeFileSync(file, synthetic.raw)
-    for (const name of ['historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary']) {
+    for (const name of ['historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary', 'historicalC1609ad48e1Boundary']) {
       const registered = real.boundaries[name]
       const changed = raw => raw.replace(`"codeSha":"${registered.armBindings.candidate.codeSha}"`, `"codeSha":"${'f'.repeat(40)}"`)
       fs.writeFileSync(ledger, changed(real.raw))
@@ -4574,7 +4741,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
       assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1122, { ...r933,
         armBindings: { candidate: { ...r933.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
       /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    for (const [from, registered] of [[1122, r933], [1485, partial]])
+    for (const [from, registered] of [[1122, r933], [1485, partial], [1524, failed]])
       for (const [field, value] of [['attemptId', 'candidate:wrong'], ['invocationId', '00000000-0000-4000-8000-000000000000'],
         ['terminal', 'unknown'], ['parityId', 'f'.repeat(64)]])
         assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, from, { ...registered,

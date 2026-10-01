@@ -203,7 +203,11 @@ test('isolated production commands persist the selected phase operations', async
   const request = JSON.parse(requestBytes)
   const target = request.target
   const fullRun = request.phase === 'full'
-  const diagnosticRun = request.phase === 'shared-input-diagnostic'
+  const separatedRun = request.phase === 'separated-review-diagnostic'
+  const diagnosticRun = separatedRun || request.phase === 'shared-input-diagnostic'
+  const diagnosticRegistration = diagnosticRun ? json(path.join(target.repositoryRoot, 'docs/research/novel-quality-modernization/protocol.json')).phases[request.phase] : null
+  const diagnosticInput = diagnosticRun ? json(request.diagnosticInputPath) : null
+  const diagnosticSlot = separatedRun ? diagnosticInput.operations.find(item => item.id === request.operationId) : null
   const boundedRun = request.phase === 'bounded-revision-diagnostic'
   const boundedSource = boundedRun ? readBoundedRevisionSource(request.diagnosticInputPath) : null
   if (boundedRun) {
@@ -235,7 +239,8 @@ test('isolated production commands persist the selected phase operations', async
   const windows = qualificationBridgeWindows(request)
   const effectiveModelParameters = { ...source.modelParameters,
     ...(['fixed-zero-temperature-max-v1', 'fixed-high-zero-temperature-v1'].includes(registeredForward?.revision)
-      ? { temperature: registeredForward.model.temperature } : {}) }
+      ? { temperature: registeredForward.model.temperature } : {}),
+    ...(separatedRun ? { temperature: diagnosticRegistration.model.temperature } : {}) }
   const continuityCase = continuityRun ? source.continuityQualificationCases.find(item => item.id === request.caseId) : null
   if (continuityRun) assert.ok(continuityCase && continuityCase.sceneId === request.sceneId
     && continuityCase.chapterNumber === request.chapterNumber, 'CONTINUITY_CASE_NOT_REGISTERED')
@@ -391,7 +396,7 @@ test('isolated production commands persist the selected phase operations', async
     let model = { id: 'quality-preregistered-model', name: '预注册合成验证模型', ...effectiveModelParameters,
       apiKey: 'synthetic-quality-never-network', baseUrl: `https://${effectiveModelParameters.endpointHost}/v1`, purposes: ['generation'] }
     delete model.parameterStatus
-    if (request.forwardReasoning || diagnosticRun) model.reasoningOverride = diagnosticRun ? 'max' : request.forwardReasoning.reasoningOverride
+    if (request.forwardReasoning || diagnosticRun) model.reasoningOverride = diagnosticRun ? diagnosticRegistration.model.reasoningOverride : request.forwardReasoning.reasoningOverride
     if (request.mode === 'real') {
       if (request.development || !target.modelId) throw new Error('FROZEN_SAFE_MODEL_REQUIRED')
       model = json(path.join(target.roots.config, 'models.json')).find(value => value.id === target.modelId)
@@ -958,8 +963,8 @@ test('isolated production commands persist the selected phase operations', async
       const userMessages = body.messages.filter(message => message?.role === 'user' && typeof message.content === 'string')
       const userPromptHash = userMessages.length === 1 ? sha(userMessages[0].content) : null
       if (diagnosticRun) {
-        const registered = json(path.join(target.repositoryRoot, 'docs/research/novel-quality-modernization/protocol.json')).phases['shared-input-diagnostic']
-        const input = json(request.diagnosticInputPath)
+        const registered = diagnosticRegistration
+        const input = diagnosticInput
         const reserved = fs.existsSync(request.ledgerPath) ? fs.readFileSync(request.ledgerPath, 'utf8').split('\n').filter(Boolean)
           .map(line => JSON.parse(line)).filter(row => row.type === 'reserve' && row.binding?.phase === request.phase).length : 0
         receipt.diagnosticPreflightShape = { modelNameMatches: body.model === registered.model.modelName,
@@ -968,9 +973,11 @@ test('isolated production commands persist the selected phase operations', async
           messageHash: sha(body.messages), outputTokens: body.max_tokens, temperature: body.temperature,
           enableThinking: body.enable_thinking, reasoningEffort: body.reasoning_effort,
           stream: body.stream, usageStream: body.stream_options?.include_usage, hasThinkingBudget: Object.hasOwn(body, 'thinking_budget') }
-        try { assertSharedInputDiagnostic(registered, input, { arm: target.arm, model: { ...actualModel, creativeStrategy: actualCreativeStrategy }, body, reserved }) }
+        try { assertSharedInputDiagnostic(registered, input, { arm: target.arm, model: { ...actualModel, creativeStrategy: actualCreativeStrategy }, body, reserved,
+          operation: operationId, inputHash: sha(fs.readFileSync(request.diagnosticInputPath)) }) }
         catch (error) { preflight(false, error.message) }
-        preflight(actual.purpose === 'shared-input-fact-extraction', 'SHARED_INPUT_DIAGNOSTIC_PURPOSE_MISMATCH')
+        preflight(actual.purpose === (separatedRun ? `separated-review-${diagnosticSlot.role}` : 'shared-input-fact-extraction'), 'SHARED_INPUT_DIAGNOSTIC_PURPOSE_MISMATCH')
+        if (separatedRun) preflight(receipt.attempts.length === 0, 'SEPARATED_REVIEW_DIAGNOSTIC_ONE_ATTEMPT_REQUIRED')
       }
       if (continuityRun && operationKind === 'draft') {
         preflight(actual.projectId === receipt.restoration.targetProjectId
@@ -1078,8 +1085,11 @@ test('isolated production commands persist the selected phase operations', async
         protocolRevision: request.protocolRevision, protocolHash: request.protocolHash,
         codeSha: target.codeSha, sourceHash: target.sourceHash, driverHash: request.driverHash,
         parityId: request.parityHash, phase: request.phase, milestone: request.milestone, caseId: request.caseId,
-        operation: operationId, ...(diagnosticRun ? { messagesSha256: request.diagnosticMessagesSha256,
+        operation: operationId, ...(diagnosticRun && !separatedRun ? { messagesSha256: request.diagnosticMessagesSha256,
           originalMessagesSha256: request.diagnosticOriginalMessagesSha256 } : {}), ...(reviewSource ? { reviewSource } : {}),
+        ...(separatedRun ? { diagnosticId: request.diagnosticId, diagnosticInputHash: request.diagnosticInputHash,
+          ...Object.fromEntries(['sourceId', 'role', 'originalInvocationId', 'originalTestedSha', 'contentSha256', 'contextHash', 'materialsSha256', 'messagesSha256']
+            .map(key => [key, diagnosticSlot[key]])) } : {}),
         ...(boundedRun ? { diagnosticSourceHash: sha(BOUNDED_REVISION_DIAGNOSTIC.source), diagnosticInputHash: boundedSource.inputHash } : {}),
         ...(aiReviewRun ? { evaluationPolicyHash: sha(request.evaluationPolicy) } : {}),
         ...(actual ? { actual } : { baselineIpc: observedIpc }) }
@@ -1095,13 +1105,15 @@ test('isolated production commands persist the selected phase operations', async
         .map(record => ({ sourceId: `candidate:${record.draftId}`, revision: record.version, contentHash: record.materialContentHash,
           persistedContentHash: sha(record.content), persistedBytes: Buffer.byteLength(record.content, 'utf8'), markerHash: sha(record.marker) }))
       const requestReceipt = { attemptId, binding, requestedOutputTokens: body.max_tokens ?? body.max_completion_tokens,
-        ...(boundedRun ? { nativePlannedAttempt: JSON.parse(db.prepare('SELECT attempt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(actual.attemptId)) } : {}),
+        ...(boundedRun || separatedRun ? { nativePlannedAttempt: JSON.parse(db.prepare('SELECT attempt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(actual.attemptId)) } : {}),
         ...(forwardReasoningEvidence ? { reasoning: forwardReasoningEvidence } : {}),
         compiledPromptHash: sha(body.messages), systemPromptHash: sha(body.messages.filter(message => message.role === 'system')),
         composedPromptBytes: measurePromptBytes(body.messages),
         requestBodyBytes: Buffer.byteLength(typeof options.body === 'string' ? options.body : '', 'utf8'),
         ...(predecessorConsumption ? { predecessorConsumption } : {}),
-        authorityEvidence: operationKind === 'recheck' && candidate
+        authorityEvidence: separatedRun ? { contentSha256: diagnosticSlot.contentSha256,
+          contextHash: diagnosticSlot.contextHash, materialsSha256: diagnosticSlot.materialsSha256, messagesSha256: diagnosticSlot.messagesSha256 }
+          : operationKind === 'recheck' && candidate
           ? { mergedDraftHash: sha(db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1')
               .pluck().get(chapter.number)), findingAnchorsSent: true }
           : (request.phase === 'early-review' || reviewedRun || boundedRun || aiReviewRun) && operationKind === 'refine'
@@ -1116,6 +1128,11 @@ test('isolated production commands persist the selected phase operations', async
           sentSourceIds: sentOptional.map(record => record.sourceId),
           ...(candidate ? { materialDecision } : {}) } }
       receipt.attempts.push(requestReceipt)
+      if (separatedRun) {
+        const outputPath = path.join(evidenceRoot, 'diagnostic-request-body.json')
+        fs.writeFileSync(outputPath, options.body)
+        requestReceipt.diagnosticRequest = { outputPath, sha256: sha(options.body), bytes: Buffer.byteLength(options.body, 'utf8') }
+      }
       const physicalOutputPath = path.join(evidenceRoot, `physical-output-${receipt.attempts.length}.txt`)
       if (structuredRecovery && operationKind === 'directory') {
         const promptPath = path.join(evidenceRoot, `structured-prompt-${receipt.attempts.length}.txt`)
@@ -1132,7 +1149,11 @@ test('isolated production commands persist the selected phase operations', async
         if (request.mode === 'synthetic') receipt.syntheticDispatches++
         else receipt.physicalModelRequests++
         let text, syntheticFinish = 'stop'
-        if (diagnosticRun) text = '| 事实原文引文 | 时间单位 | 属于前章或本章 | 已经发生或尚未发生 | 本章要求新增的事件 |\n| --- | --- | --- | --- | --- |\n| 未明示 | 未明示 | 未明示 | 未明示 | 未明示 |'
+        if (separatedRun) text = JSON.stringify({ summary: '零模型诊断接线输出，不代表文学判断。',
+          items: [{ category: '接线', severity: 'pass', description: '仅用于核验原生请求与输出接线，不表示目标完成或事实正确。' }],
+          ...(diagnosticSlot.role === 'goal' ? { goalReviews: diagnosticInput.sources.find(item => item.id === diagnosticSlot.sourceId)
+            .materials.context.frozenGoals.items.map(goal => ({ id: goal.id, status: 'unknown', description: '零模型接线不判断目标。', evidence: [] })) } : {}) })
+        else if (diagnosticRun) text = '| 事实原文引文 | 时间单位 | 属于前章或本章 | 已经发生或尚未发生 | 本章要求新增的事件 |\n| --- | --- | --- | --- | --- |\n| 未明示 | 未明示 | 未明示 | 未明示 | 未明示 |'
         else if (operationKind === 'directory') text =JSON.stringify({ blueprints: (fullRun ? scene.chapters : [chapter]).filter(entry => !(actual ?? observedIpc).structuredRange || (actual ?? observedIpc).structuredRange.includes(entry.number)).map(entry => ({ chapterNumber: entry.number, title: scene.title, role: '开篇',
           purpose: entry.brief, keyEvents: entry.requiredEvents.join('；'), characters: scene.characters,
           relationships: [], suspenseHook: entry.oracle?.knowledge ?? '', userGuidance: fullRun ? `${source.template}\n本章时点：${entry.oracle.time}` : source.template })) })
@@ -1297,18 +1318,22 @@ test('isolated production commands persist the selected phase operations', async
     }
     globalThis.fetch = physicalFetch
     if (diagnosticRun) {
-      operationKind = 'diagnostic'; operationId = 'fact-extraction'
+      operationKind = 'diagnostic'; operationId = separatedRun ? diagnosticSlot.id : 'fact-extraction'
       currentContext = { runId: randomUUID(), projectPath: project.rootPath, projectSession: session,
         mainGenerationRunHandle: null }
-      const input = json(request.diagnosticInputPath)
-      const begun = await invoke('generation:begin', { operation: 'shared-input-fact-extraction', uiActionNonce: randomUUID(),
-        modelId: model.id, selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['next_chapter_draft'],
-        skillStages: [], output: 'visible-text' }, session)
+      const input = diagnosticInput
+      const purpose = separatedRun ? `separated-review-${diagnosticSlot.role}` : 'shared-input-fact-extraction'
+      const messages = separatedRun ? diagnosticSlot.messages : input.messages
+      const outputKind = separatedRun ? 'structured-data' : 'visible-text'
+      const begun = await invoke('generation:begin', { operation: purpose, uiActionNonce: randomUUID(),
+        modelId: model.id, selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: [separatedRun ? 'consistency_check' : 'next_chapter_draft'],
+        ...(separatedRun ? { authorInputs: [{ id: diagnosticSlot.id, text: messages[1].content }] } : {}),
+        skillStages: [], output: outputKind }, session)
       currentContext.mainGenerationRunHandle = begun.handle
       const executed = await invoke('generation:execute', { handle: begun.handle, invocationNonce: randomUUID(),
-        task: { purpose: 'shared-input-fact-extraction', output: 'visible-text', messages: input.messages,
-          reasoningStage: 'general', budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 900,
-            segmentable: false } } }, session)
+        task: { purpose, output: outputKind, messages,
+          ...(separatedRun ? { reasoningStage: 'review' } : { reasoningStage: 'general',
+            budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 900, segmentable: false } }) } }, session)
       await Promise.all(streamSettlements)
       assert.equal(receipt.attempts.length, 1, 'SHARED_INPUT_DIAGNOSTIC_ONE_ATTEMPT_REQUIRED')
       const attempt = receipt.attempts[0]
@@ -1316,6 +1341,13 @@ test('isolated production commands persist the selected phase operations', async
       assert.equal(typeof output, 'string', 'SHARED_INPUT_DIAGNOSTIC_OUTPUT_MISSING')
       const outputPath = path.join(evidenceRoot, 'diagnostic-output.txt')
       fs.writeFileSync(outputPath, output)
+      if (separatedRun) {
+        assert.equal(executed.outcome.status, 'completed', 'SEPARATED_REVIEW_DIAGNOSTIC_OWNER_FAILED')
+        assert.equal(executed.outcome.finishReason, 'stop', 'SEPARATED_REVIEW_DIAGNOSTIC_OWNER_NOT_STOP')
+        const parsed = (await load('src/shared/review-generation-report.ts')).parseReviewGenerationResult(output)
+        assert.equal(Array.isArray(parsed.goalReviews), diagnosticSlot.role === 'goal', 'SEPARATED_REVIEW_DIAGNOSTIC_ROLE_OUTPUT_MISMATCH')
+        receipt.diagnosticReview = parsed
+      }
       receipt.operations.push({ operation: operationId, kind: operationKind, outputPath, outputHash: sha(output),
         handle: begun.handle })
       receipt.ownerTerminal = { attemptId: attempt.binding.actual.attemptId, outcome: executed.outcome.status,

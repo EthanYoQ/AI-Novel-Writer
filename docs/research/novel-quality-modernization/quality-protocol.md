@@ -352,7 +352,7 @@ S07 early-budget 已接默认生产命令及最终 fetch 处的 reserve/dispatch
 
 ## 固定零温度配置资格（非因果实验）
 
-`forwardTemperatureExperiment` 仅在原 `forwardReasoningExperiment` 已登记的 C16 七案、post-UI 三个 selector 和 final full 范围生效，继承原范围与 caseIds，固定两臂模型 profile 的 `temperature: 0`。原 max 登记对象及语义源中的 `temperature: 0.7` 均原样保留；执行回执分别记录源参数和本次登记的有效参数。`shared-input-diagnostic` 不属于此范围，仍为 0.7 / max 的历史一次非资格调用。
+`forwardTemperatureExperiment` 仅在原 `forwardReasoningExperiment` 已登记的 C16 七案、post-UI 三个 selector 和 final full 范围生效，继承原范围与 caseIds，固定两臂模型 profile 的 `temperature: 0`。原 max 登记对象及语义源中的 `temperature: 0.7` 均原样保留；执行回执分别记录源参数和本次登记的有效参数。9337909d 的历史 `shared-input-diagnostic` 不属于此范围，仍为 0.7 / max 的历史一次非资格调用。
 
 实际模型配置回读与每次出站请求须满足新登记的 0、原 provider/protocol/modelName/maxTokens、原每操作 `max_tokens` 预算。candidate 自然发送 `enable_thinking: true` / `reasoning_effort: max`，baseline 自然缺席这两个字段；创作策略仍为 `auto`。未登记温度、错误 base revision、旧 max 对象或 case 范围漂移在 reserve 前拒绝。此轮只判断新固定配置下的既有绝对资格，不能以参数或两臂 wire 不对称宣称代码改善、先前失败根因或稳定性；C16 七案未通过不得进入 post-UI/full。
 
@@ -362,7 +362,7 @@ S07 early-budget 已接默认生产命令及最终 fetch 处的 reserve/dispatch
 
 ## 固定 high / 零温度前向资格
 
-前文 max-only 与 0/max 的限制属于各自冻结的历史资格。`forwardHighReasoningExperiment` 是新增的 `fixed-high-zero-temperature-v1` 登记，继承上述 max 对象的原五个 scope、caseIds、原两臂温度 0 与全部七案/后续门禁；原 max 和零温度登记对象逐项不变。只将实际 `reasoningOverride` 固定为 `high`：candidate 自然发送 `enable_thinking: true` / `reasoning_effort: high`，baseline 的两个字段仍自然缺席，两臂不得有 `thinking_budget`。执行回执继续分别保留语义源的 0.7 参数和本次有效的 0 / high 参数，`shared-input-diagnostic` 仍为已经消费的一次 0.7 / max 非资格诊断。原模型身份、`creativeStrategy: auto`、每操作预算、16384 profile 上限、480 秒截止、素材与 oracle 均不变。未登记 high、旧登记或 scope 漂移，以及读回或 wire 不符，须在物理 reserve 前拒绝。
+前文 max-only 与 0/max 的限制属于各自冻结的历史资格。`forwardHighReasoningExperiment` 是新增的 `fixed-high-zero-temperature-v1` 登记，继承上述 max 对象的原五个 scope、caseIds、原两臂温度 0 与全部七案/后续门禁；原 max 和零温度登记对象逐项不变。只将实际 `reasoningOverride` 固定为 `high`：candidate 自然发送 `enable_thinking: true` / `reasoning_effort: high`，baseline 的两个字段仍自然缺席，两臂不得有 `thinking_budget`。执行回执继续分别保留语义源的 0.7 参数和本次有效的 0 / high 参数，9337909d 的历史 `shared-input-diagnostic` 仍为已经消费的一次 0.7 / max 非资格诊断。原模型身份、`creativeStrategy: auto`、每操作预算、16384 profile 上限、480 秒截止、素材与 oracle 均不变。未登记 high、旧登记或 scope 漂移，以及读回或 wire 不符，须在物理 reserve 前拒绝。
 
 新配置只进行一次从 C16-A 开始的完整七案前向资格；任何技术 UNKNOWN/FAIL 或原文学门失败均保留并停止依赖推进，不拼接前次成功案或自动再换参数。此实验只检验固定 high / 0 在原期限内能否完成并满足原绝对门，不追认 704/d712 根因，不把旧 0.7/max 或 0/max 失败改判，也不证明参数或代码改善、服务端实际模型模式或稳定性。只有完整七案按原规则通过，才按原顺序进入既定 post-UI/full。
 
@@ -393,6 +393,16 @@ N 只计算桥的外层兜底，不增加任何 dispatch 权限：C16-A/B/C 的 
 原 v3 invocation `d021261f-ef32-45d2-937e-a004483a1634`、tested `ee52863638b24683e3d083513a6a7ef5f6ded408` 已自然 exit 1，并以完整门 FAIL 关闭：C16-A/B/C、C17-A 为4项技术 PASS，C17-B 为 `GENERATION_REVIEW_REVISION_NOOP` FAIL，C18-A/B 为2项 NOT_RUN。首审 warning 的 description 明确合理且“不构成矛盾”，修稿与原稿字节相同，NOOP 门正确保留；本轮未启动 whole dual-oracle 或依赖 post-UI/full。v4 从 C16-A 在同一新 subject 重新完成全部七案，不携带这4项或任何旧技术/文学 PASS，不重抽旧 SHA、不拼接6+1、不换案例、择优、放宽评分或增加预算。四字段形状、baseHash、五 scope、全部案例、0/high、auto/default 原生行为、profile、native 预算、watchdog、物理调用上界和 arm 顺序保持原样；只有新整轮全部原门 PASS 才打开 post-UI/full，失败停止依赖。
 
 `historicalC16D021261fBoundary` 从1485行接续至1524行，精确认证13组原顺序 reserve→dispatch→settle / 13 STOP，0 LENGTH/UNKNOWN/open、0 synthetic；旧 protocol hash `43186d44509640e59b4401a20d931b61a2271a73a73f1560e5f849602e44882a`、candidate code `ee52863638b24683e3d083513a6a7ef5f6ded408`、source `462488f3921b75b523122549a97964438fbc25e2727c9f3333d2897f66b7d368`、driver `037ac3bb1e784aad85cfe4ae0468a202ef7e4e446467619b321e7ef08cda28f9` 与逐 attempt parity 均按实际账本冻结。完整1524行/643784 bytes raw SHA-256 `363597bfd3285f164e5f2ca2c950fa82d95374dce57179502cd00f6355dd61e4`；原1485行/625516 bytes `ed35ff5b379ddb0682728dc8631a45ea803a3c673d321f625d545a5e202f4fa3` 和1419行 `304c6979c2b89ddf93f8522f61118a4e86f21c15cb207599c02b8d8a067d7168` 前缀不变。账本读写两入口仅加性认证闭合历史，不写账本、不退款、不把2项未运行补作 PASS；之后新 reserve 必须完整绑定当前协议。原071 UNKNOWN、918/872 FAIL 与已关闭双评/受限裁决保持历史，不重写或重裁。
+
+## 保存正文的分工审稿诊断（非资格）
+
+新增 `separated-review-diagnostic` / `separated-review-diagnostic-3x2-v1`，保留旧 shared-input 登记与已消费额度，不新增第六个资格 scope。三份材料固定为09ad的 C18-A 首稿、C17-A 实际终稿，以及872的 C18-B 原正常误报对照，分别带原作者、历史、目标资料；不向提示词加入评审答案或缺陷标签。协议逐槽绑定原 invocation/testedSHA、完整正文、原 context、材料及最终 system/user 消息 hash，私有输入原始字节 hash 也必须一致，无占位 hash 放行。执行身份须另行冻结为本切片独立审查后的 committed clean subject，不能复用旧 targets。
+
+仅 candidate 按 source-1-goal、source-1-fact、source-2-goal、source-2-fact、source-3-goal、source-3-fact 顺序运行，各槽一次，整份登记最多六次物理请求。唯一物理账本按整份登记计数；换 invocation/SHA、进程重启或 cancel 不退款、不重置额度，已开始的诊断不重新启动。沿用原模型、ZH、temperature0 / high / auto、16384 profile 上限及实际原生 root 预算；每次出站预算须与同一持久 attempt 相等且大于0、不超过 profile，不能把所有请求强制设成上限。桥只继承原生时间合同并允许每槽一个请求，不重建、续写、择优、换材料或加预算。
+
+每槽单独通过原生 generation owner/controller 的 lease、reserve→dispatch→settle，保存实际请求、原始输出、owner 持久 artifact 与独立来源。目标槽保留原 `goalReviews`，事实槽仅解析原审稿 JSON，不补目标 unknown；契约载体 pass 项不表示目标完成。语义漏检/误报记录后继续剩余固定槽；材料/身份错、技术 FAIL、LENGTH/UNKNOWN 停止后续，已消费次数保留。六份输出不能合称一次首审，只用于决定是否实施审稿分工，不证明稳定性、修稿安全，不替代 whole7、文学 oracle、正式资格或 post-UI/full；原五资格 scope、评分、selector、预算及全部历史 FAIL 保持。
+
+`historicalC1609ad48e1Boundary` 加性接续1524→1578行的18组实际原顺序 reserve→dispatch→settle / STOP，原 invocation `09ad48e1-ad68-427e-b00a-1a19408586a5`、testedSHA `003a3f79f901a072d1ab633e3477ad307a542797`、source `a21aceae7eb0fd664c53efd200233dad89518fa04d634e4070ce0216c3e3e7cb`、driver `215fcb6fe21d2c3725fc3e8e7f97b9776daf75c981a47ca17456270902f4c765`、协议 `5e41f58dd6ffdd9ab6b341a1e5fcd090cb2333d7b3f78d82385313253a8d4adb` 和逐 attempt parity 精确冻结。完整1578行/669241 bytes raw SHA-256 `da1ca778a7ac08742e6918d355ed923d84d5058a22772082b47bd6af61e8572a`，原1524行/643784 bytes前缀 `363597bfd3285f164e5f2ca2c950fa82d95374dce57179502cd00f6355dd61e4` 不变；两账本入口同时认证该段，之后新 reserve 严格绑定当前协议。原七案技术通过与18 STOP不能消除 C18-A 首审漏检、C17-A 修稿作者事实漂移导致的文学 FAIL，旧结论不重写、不重裁、不退款。
 
 ## C17-A 固定保存稿有界修稿诊断（非资格）
 

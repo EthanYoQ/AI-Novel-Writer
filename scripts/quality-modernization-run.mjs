@@ -129,7 +129,7 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
     || !phase.caseIds.includes(binding.caseId)
     || !phase.operations.some(operation => operation.id === binding.operation && (!operation.caseIds || operation.caseIds.includes(binding.caseId)))) fail('INVALID_CAMPAIGN_BINDING')
   if ((['full', 'c16-c18'].includes(binding.phase)) !== (binding.milestone === 'final')
-    || (['shared-input-diagnostic', 'bounded-revision-diagnostic'].includes(binding.phase)) !== (binding.milestone === 'diagnostic')
+    || (['shared-input-diagnostic', 'separated-review-diagnostic', 'bounded-revision-diagnostic'].includes(binding.phase)) !== (binding.milestone === 'diagnostic')
     || binding.phase === 'shared-input-diagnostic' && (binding.arm !== 'candidate'
       || phase.nonQualification !== true || phase.maxPhysicalRequests !== 1
       || binding.messagesSha256 !== phase.messagesSha256 || binding.originalMessagesSha256 !== phase.originalMessagesSha256)
@@ -149,6 +149,17 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
       && (operation.kind !== 'directory' || binding.caseId.endsWith('/1')))) fail('INVALID_CAMPAIGN_BINDING')
   if (binding.arm === 'candidate' && (!binding.actual || ['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch']
     .some(key => typeof binding.actual[key] !== 'string' || !binding.actual[key]))) fail('ACTUAL_OWNER_ATTEMPT_REQUIRED')
+  if (binding.phase === 'separated-review-diagnostic') {
+    selectPhase(protocol, binding.phase, binding.milestone)
+    const slot = phase.operations.find(item => item.id === binding.operation)
+    if (phase.diagnosticId !== 'separated-review-diagnostic-3x2-v1' || phase.nonQualification !== true
+      || phase.maxPhysicalRequests !== 6 || phase.operations.length !== 6 || binding.arm !== 'candidate'
+      || binding.caseId !== slot.sourceId || binding.diagnosticId !== phase.diagnosticId
+      || !/^[a-f0-9]{64}$/u.test(phase.diagnosticInputHash ?? '') || binding.diagnosticInputHash !== phase.diagnosticInputHash
+      || ['sourceId', 'role', 'originalInvocationId', 'originalTestedSha', 'contentSha256', 'contextHash', 'materialsSha256', 'messagesSha256']
+        .some(key => binding[key] !== slot[key])
+      || binding.actual.purpose !== `separated-review-${slot.role}`) fail('SEPARATED_REVIEW_DIAGNOSTIC_BINDING_MISMATCH')
+  }
 }
 export const runnerAdapterHash = () => hash(['scripts/quality-modernization-run.mjs', 'scripts/quality-modernization-driver.mjs', PRODUCTION_BRIDGE].map(file => [file, hash(fs.readFileSync(path.join(ROOT, file)))]))
 const fail = code => { throw new Error(code) }
@@ -231,7 +242,8 @@ export function validatePhysicalLedger(file) {
   const r071156e5 = validateHistoricalSupersessionBoundary(raw, e41a3f0a, protocol.historicalC16071156e5Boundary)
   const r9182d475 = validateHistoricalSupersessionBoundary(raw, r071156e5, protocol.historicalC169182d475Boundary)
   const r87266499 = validateHistoricalSupersessionBoundary(raw, r9182d475, protocol.historicalC1687266499Boundary)
-  validateHistoricalSupersessionBoundary(raw, r87266499, protocol.historicalC16D021261fBoundary)
+  const d021261f = validateHistoricalSupersessionBoundary(raw, r87266499, protocol.historicalC16D021261fBoundary)
+  validateHistoricalSupersessionBoundary(raw, d021261f, protocol.historicalC1609ad48e1Boundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -346,13 +358,30 @@ export function selectPhase(protocol, phase, milestone = 'early') {
   if (!Object.hasOwn(protocol.phases, phase)) fail('INVALID_PHASE')
   if (phase === 'bounded-revision-diagnostic' && !isDeepStrictEqual(protocol.phases[phase], BOUNDED_REVISION_DIAGNOSTIC))
     fail('BOUNDED_REVISION_REGISTRATION_MISMATCH')
+  if (phase === 'separated-review-diagnostic') {
+    const registration = protocol.phases[phase]
+    if (registration.diagnosticId !== 'separated-review-diagnostic-3x2-v1' || registration.nonQualification !== true
+      || registration.maxPhysicalRequests !== 6 || !isDeepStrictEqual(registration.arms, ['candidate'])
+      || !isDeepStrictEqual(registration.caseIds, ['source-1', 'source-2', 'source-3'])
+      || !/^[a-f0-9]{64}$/u.test(registration.diagnosticInputHash ?? '')
+      || !Array.isArray(registration.operations) || registration.operations.length !== 6
+      || registration.operations.some((slot, index) => {
+        const sourceId = `source-${Math.floor(index / 2) + 1}`, role = index % 2 ? 'fact' : 'goal'
+        return slot.id !== `${sourceId}-${role}` || slot.sourceId !== sourceId || slot.role !== role || slot.kind !== 'diagnostic'
+          || !/^[a-f0-9]{40}$/u.test(slot.originalTestedSha ?? '')
+          || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(slot.originalInvocationId ?? '')
+          || ['contentSha256', 'contextHash', 'materialsSha256', 'messagesSha256'].some(key => !/^[a-f0-9]{64}$/u.test(slot[key] ?? ''))
+      }) || registration.model?.temperature !== 0 || registration.model.reasoningOverride !== 'high'
+      || registration.model.maxTokens !== 16384 || registration.model.creativeStrategy !== 'auto')
+      fail('SEPARATED_REVIEW_DIAGNOSTIC_REGISTRATION_MISMATCH')
+  }
   if (phase === 'c16-c18' && !isDeepStrictEqual(protocol.phases[phase].evaluationPolicy, AI_REVIEW_FINAL_MANUSCRIPT_POLICY))
     fail('AI_MANUSCRIPT_REGISTRATION_MISMATCH')
   if (milestone === 'post-ui' && POST_UI_AI_REVIEW_SCENARIOS[phase]
     && !isDeepStrictEqual(protocol.phases[phase].postUiAiReview, POST_UI_AI_REVIEW_SCENARIOS[phase])) fail('AI_MANUSCRIPT_REGISTRATION_MISMATCH')
   if (phase === 'full' && !isDeepStrictEqual(protocol.phases.full.aiReviewFinal, FULL_AI_REVIEW_SCENARIO)) fail('AI_MANUSCRIPT_REGISTRATION_MISMATCH')
   if ((['full', 'c16-c18'].includes(phase)) !== (milestone === 'final')
-    || (['shared-input-diagnostic', 'bounded-revision-diagnostic'].includes(phase)) !== (milestone === 'diagnostic')) fail('PHASE_MILESTONE_MISMATCH')
+    || (['shared-input-diagnostic', 'separated-review-diagnostic', 'bounded-revision-diagnostic'].includes(phase)) !== (milestone === 'diagnostic')) fail('PHASE_MILESTONE_MISMATCH')
   return { phase, milestone, ...protocol.phases[phase],
     ...(milestone === 'post-ui' ? protocol.phases[phase].postUiAiReview ?? protocol.phases[phase].postUi ?? {} : phase === 'full' ? protocol.phases.full.aiReviewFinal ?? {} : {}) }
 }
@@ -740,6 +769,10 @@ export function updateLedger(file, event, options = {}) {
         ? protocol.historicalC16D021261fBoundary : options.historicalC16D021261fBoundary
       const trustedD021261fEvents = d021261fBoundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trusted87266499Events, d021261fBoundary) : trusted87266499Events
+      const r09ad48e1Boundary = options.campaignMode === 'real'
+        ? protocol.historicalC1609ad48e1Boundary : options.historicalC1609ad48e1Boundary
+      const trusted09ad48e1Events = r09ad48e1Boundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedD021261fEvents, r09ad48e1Boundary) : trustedD021261fEvents
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
       // 未登记 operations 的阶段在这里 fail closed。
@@ -748,6 +781,20 @@ export function updateLedger(file, event, options = {}) {
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
       const allocationFor = binding => {
         const occupied = [...reserved.values()].filter(row => statuses.get(row.attemptId) !== 'cancel')
+        if (binding.phase === 'separated-review-diagnostic') {
+          // Fixed registration, not invocation/SHA: restarting cannot refund a slot.
+          const prior = [...reserved.values()].filter(row => row.binding.phase === binding.phase)
+          const registration = protocol.phases[binding.phase]
+          if (prior.length >= registration.maxPhysicalRequests || prior.some(row => row.binding.operation === binding.operation)
+            || registration.operations[prior.length]?.id !== binding.operation)
+            fail('SEPARATED_REVIEW_DIAGNOSTIC_SLOT_UNAVAILABLE')
+          if (prior.some(row => ['invocationId', 'codeSha', 'sourceHash', 'driverHash', 'diagnosticInputHash']
+            .some(key => row.binding[key] !== binding[key]))) fail('SEPARATED_REVIEW_DIAGNOSTIC_EXECUTION_DRIFT')
+          if (prior.some(row => statuses.get(row.attemptId) !== 'settle'
+            || events.find(event => event.attemptId === row.attemptId && event.type === 'settle')?.finishReason !== 'stop'))
+            fail('SEPARATED_REVIEW_DIAGNOSTIC_PREVIOUS_ATTEMPT_FAILED')
+          return 'nonQualificationDiagnostic'
+        }
         if (binding.phase === 'shared-input-diagnostic') {
           if (occupied.some(row => row.binding.phase === binding.phase)) fail('SHARED_INPUT_DIAGNOSTIC_ALREADY_DISPATCHED')
           return 'nonQualificationDiagnostic'
@@ -779,7 +826,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedD021261fEvents
+          const superseded = index >= trustedHistoricalEvents && index < trusted09ad48e1Events
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)
@@ -809,7 +856,7 @@ export const developmentLedgerPath = (root, phase) => path.join(CACHE, `syntheti
 
 export function main(argv) {
   let [command = 'help', ...rest] = argv
-  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <freeze-targets|development-synthetic|shared-input-diagnostic|baseline-probe|dry-run|early-budget|early-context|early-review|full|c16-c18> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>]; shared-input-diagnostic: --diagnostic-input <frozen private JSON> --mode synthetic|real [--targets <frozen targets> | --baseline-root <baseline> --output <new private targets>] ; freeze-targets/development-synthetic: --baseline-root <existing worktree> --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full|c16-c18 (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
+  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <freeze-targets|development-synthetic|shared-input-diagnostic|separated-review-diagnostic|baseline-probe|dry-run|early-budget|early-context|early-review|full|c16-c18> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>]; shared-input-diagnostic/separated-review-diagnostic: --diagnostic-input <frozen private JSON> --mode synthetic|real [--targets <frozen targets> | --baseline-root <baseline> --output <new private targets>] ; freeze-targets/development-synthetic: --baseline-root <existing worktree> --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full|c16-c18 (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
   if (command.startsWith('--')) { rest = argv; command = 'phase-options' }
   const args = {}
   for (let i = 0; i < rest.length; i++) {
@@ -821,7 +868,8 @@ export function main(argv) {
   if (command === 'phase-options') command = args['--phase'] || fail('INVALID_PHASE')
   if (args['--protocol'] && path.resolve(args['--protocol']) !== path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')) fail('PROTOCOL_PATH_MISMATCH')
   const protocol = read(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json'))
-  if (command === 'shared-input-diagnostic') {
+  if (['shared-input-diagnostic', 'separated-review-diagnostic'].includes(command)) {
+    const separated = command === 'separated-review-diagnostic'
     const registration = selectPhase(protocol, command, 'diagnostic')
     if (!args['--diagnostic-input'] || !['real', 'synthetic'].includes(args['--mode'])
       || (args['--mode'] === 'real') !== Boolean(args['--physical-ledger'])) fail('SHARED_INPUT_DIAGNOSTIC_ARGUMENTS_REQUIRED')
@@ -831,7 +879,9 @@ export function main(argv) {
     const syntheticBody = { model: registration.model.modelName, messages: input.messages,
       temperature: registration.model.temperature, max_tokens: registration.actualMaxTokens,
       enable_thinking: true, reasoning_effort: 'max', stream: true, stream_options: { include_usage: true } }
-    assertSharedInputDiagnostic(registration, input, { arm: 'candidate', model: registration.model, body: syntheticBody, reserved: 0 })
+    if (separated) for (const slot of registration.operations)
+      assertSharedInputDiagnostic(registration, input, { arm: 'candidate', model: registration.model, operation: slot.id, inputHash: hash(fs.readFileSync(inputPath)) })
+    else assertSharedInputDiagnostic(registration, input, { arm: 'candidate', model: registration.model, body: syntheticBody, reserved: 0 })
     const prepared = args['--targets'] ? null : args['--mode'] === 'synthetic' && args['--baseline-root'] && args['--output']
       ? createProductionTargets(args['--baseline-root'], args['--output'], { development: true }) : fail('SHARED_INPUT_DIAGNOSTIC_TARGET_REQUIRED')
     const targets = prepared?.targets ?? read(args['--targets'])
@@ -840,6 +890,9 @@ export function main(argv) {
     if (!original.developmentOnly) inspectTarget(original)
     const ledgerPath = args['--mode'] === 'real' ? validatePhysicalLedger(args['--physical-ledger'])
       : path.join(CACHE, `synthetic-ledger-shared-input-${randomUUID()}.jsonl`)
+    if (separated && fs.existsSync(ledgerPath) && fs.readFileSync(ledgerPath, 'utf8').split('\n').filter(Boolean)
+      .some(line => { const row = JSON.parse(line); return row.type === 'reserve' && row.binding?.phase === command }))
+      fail('SEPARATED_REVIEW_DIAGNOSTIC_ALREADY_DISPATCHED')
     const invocationId = randomUUID(), shortId = invocationId.slice(0, 8)
     const roots = Object.fromEntries(Object.entries(original.roots).map(([key, directory]) => [key, path.join(directory, shortId)]))
     const isolationRoot = path.join(original.isolationRoot, 'invocations', invocationId)
@@ -849,7 +902,7 @@ export function main(argv) {
     }
     if (args['--mode'] === 'real') copyIsolatedRealModelConfig(original, roots)
     const target = { ...original, isolationRoot, roots, declaredIsolationRoot: original.isolationRoot, declaredRoots: original.roots }
-    const evidenceRoot = path.join(CACHE, `shared-input-${invocationId}`)
+    const evidenceRoot = path.join(CACHE, `${separated ? 'separated-review' : 'shared-input'}-${invocationId}`)
     fs.mkdirSync(evidenceRoot, { recursive: false })
     const common = { target, invocationId, mode: args['--mode'], phase: command, milestone: 'diagnostic',
       caseId: registration.caseIds[0], sceneId: '场景1', chapterNumber: 1, operations: registration.operations,
@@ -857,7 +910,29 @@ export function main(argv) {
       semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(evidenceRoot, 'candidate-templates.json'),
       ledgerPath, evidenceRoot, driverHash: productionBridgeHash(), diagnosticInputPath: inputPath,
       diagnosticMessagesSha256: input.messagesSha256, diagnosticOriginalMessagesSha256: input.originalMessagesSha256,
+      ...(separated ? { diagnosticId: registration.diagnosticId, diagnosticInputHash: hash(fs.readFileSync(inputPath)) } : {}),
       development: args['--mode'] === 'synthetic' }
+    if (separated) {
+      const results = withLedgerReconciliation(ledgerPath, args['--mode'], () => {
+        const first = registration.operations[0]
+        const preparedReceipt = runProductionBridge({ ...common, action: 'prepare', operations: [first],
+          operationId: first.id, caseId: first.sourceId, evidenceRoot: path.join(evidenceRoot, 'prepare') })
+        const outputs = []
+        for (const slot of registration.operations) {
+          const executed = runProductionBridge({ ...common, action: 'execute', operations: [slot], operationId: slot.id,
+            caseId: slot.sourceId, parityHash: preparedReceipt.physicalProject.parityHash,
+            evidenceRoot: path.join(evidenceRoot, slot.id) })
+          if (executed.attempts.length !== 1 || executed.physicalModelRequests + executed.syntheticDispatches !== 1
+            || executed.ownerTerminal?.finishReason !== 'stop') fail('SEPARATED_REVIEW_DIAGNOSTIC_ONE_STOP_REQUIRED')
+          outputs.push(executed)
+        }
+        return outputs
+      })
+      return { status: 'diagnostic-only', qualityQualification: 'not-run', invocationId, inputPath,
+        inputSha256: common.diagnosticInputHash, ledgerPath, evidenceRoot,
+        physicalModelRequests: results.reduce((sum, item) => sum + item.physicalModelRequests, 0),
+        syntheticDispatches: results.reduce((sum, item) => sum + item.syntheticDispatches, 0), results }
+    }
     const result = withLedgerReconciliation(ledgerPath, args['--mode'], () => {
       const preparedReceipt = runProductionBridge({ ...common, action: 'prepare' })
       const executed = runProductionBridge({ ...common, action: 'execute', parityHash: preparedReceipt.physicalProject.parityHash })

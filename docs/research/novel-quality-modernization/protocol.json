@@ -910,6 +910,105 @@
     ]
   },
   "phases": {
+    "separated-review-diagnostic": {
+      "diagnosticId": "separated-review-diagnostic-3x2-v1",
+      "milestone": "diagnostic",
+      "nonQualification": true,
+      "arms": [
+        "candidate"
+      ],
+      "caseIds": [
+        "source-1",
+        "source-2",
+        "source-3"
+      ],
+      "maxPhysicalRequests": 6,
+      "diagnosticInputHash": "0d55626e391d99de4b0c7b4b66278e7c39a191a774993e52f645c64d505222fa",
+      "model": {
+        "provider": "openai",
+        "protocol": "openai",
+        "baseUrl": "https://api.siliconflow.cn/v1",
+        "modelName": "deepseek-ai/DeepSeek-V4-Flash",
+        "temperature": 0,
+        "maxTokens": 16384,
+        "reasoningOverride": "high",
+        "creativeStrategy": "auto"
+      },
+      "operations": [
+        {
+          "id": "source-1-goal",
+          "sourceId": "source-1",
+          "role": "goal",
+          "originalInvocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+          "originalTestedSha": "003a3f79f901a072d1ab633e3477ad307a542797",
+          "contentSha256": "feee1bdaa2a508811bb0fd52aad30229c6334311b8d89aaeaf9c85934023e890",
+          "contextHash": "a9e9c79e0334740c492411974f5dbf8b3f2681bfdb4955dc5675bb2edf9eef36",
+          "materialsSha256": "917bb7c1c94278ee670e7c9236bf842860ba896d2baac6cda15397dbf9cd4659",
+          "messagesSha256": "9a8c8e32238c0a4bf3303ebdb74e158f50e0efd4fff0ffbc8597c1cc7588cee9",
+          "kind": "diagnostic"
+        },
+        {
+          "id": "source-1-fact",
+          "sourceId": "source-1",
+          "role": "fact",
+          "originalInvocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+          "originalTestedSha": "003a3f79f901a072d1ab633e3477ad307a542797",
+          "contentSha256": "feee1bdaa2a508811bb0fd52aad30229c6334311b8d89aaeaf9c85934023e890",
+          "contextHash": "a9e9c79e0334740c492411974f5dbf8b3f2681bfdb4955dc5675bb2edf9eef36",
+          "materialsSha256": "917bb7c1c94278ee670e7c9236bf842860ba896d2baac6cda15397dbf9cd4659",
+          "messagesSha256": "88d7736a731c6e589ce6614af918182c3827bec09d972f53ba531a659cf9af4b",
+          "kind": "diagnostic"
+        },
+        {
+          "id": "source-2-goal",
+          "sourceId": "source-2",
+          "role": "goal",
+          "originalInvocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+          "originalTestedSha": "003a3f79f901a072d1ab633e3477ad307a542797",
+          "contentSha256": "539c35997c28de02b282e19890263a581785ebebed19f12443113d9d9418294e",
+          "contextHash": "41b4efd7b97b8c4811450bed89f7da349f02e72af559a7a0175051799642adef",
+          "materialsSha256": "54f2510f6e2b5f01bb902acfe608546b89913b0b373b83b94ba703035bdf5719",
+          "messagesSha256": "91dcc8884ecc04d79ea67d4b28cd70ffb505e2e119933577499ef1400efede30",
+          "kind": "diagnostic"
+        },
+        {
+          "id": "source-2-fact",
+          "sourceId": "source-2",
+          "role": "fact",
+          "originalInvocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+          "originalTestedSha": "003a3f79f901a072d1ab633e3477ad307a542797",
+          "contentSha256": "539c35997c28de02b282e19890263a581785ebebed19f12443113d9d9418294e",
+          "contextHash": "41b4efd7b97b8c4811450bed89f7da349f02e72af559a7a0175051799642adef",
+          "materialsSha256": "54f2510f6e2b5f01bb902acfe608546b89913b0b373b83b94ba703035bdf5719",
+          "messagesSha256": "c071256546d72480a880f0225048745863ba93903aadabe3854b9f6b61e9dcc0",
+          "kind": "diagnostic"
+        },
+        {
+          "id": "source-3-goal",
+          "sourceId": "source-3",
+          "role": "goal",
+          "originalInvocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+          "originalTestedSha": "06a40497a24aa0e5e2cdca04a280159e2b1513bd",
+          "contentSha256": "84f4a1e84be81eb1dc6ab175785be7e7a42598ba6087e430b64170fee8a12655",
+          "contextHash": "fae0a33ade490f3f81b83fdb22d7517f5634e2b73c0ac6643e951d50b659604b",
+          "materialsSha256": "d7e4452b35d4b5a880cd54eb9e9571d58d439d0d99e855e5033ee20096df11ee",
+          "messagesSha256": "6f20be9bfe5b39f81a4ead8e0da1666a2de730fffde737ff0021965211f4c24e",
+          "kind": "diagnostic"
+        },
+        {
+          "id": "source-3-fact",
+          "sourceId": "source-3",
+          "role": "fact",
+          "originalInvocationId": "87266499-46a4-4784-87d3-aac2cc4d2074",
+          "originalTestedSha": "06a40497a24aa0e5e2cdca04a280159e2b1513bd",
+          "contentSha256": "84f4a1e84be81eb1dc6ab175785be7e7a42598ba6087e430b64170fee8a12655",
+          "contextHash": "fae0a33ade490f3f81b83fdb22d7517f5634e2b73c0ac6643e951d50b659604b",
+          "materialsSha256": "d7e4452b35d4b5a880cd54eb9e9571d58d439d0d99e855e5033ee20096df11ee",
+          "messagesSha256": "25bf316217c44a574024925998766ecff31045905f651c802340ebb0efe50135",
+          "kind": "diagnostic"
+        }
+      ]
+    },
     "bounded-revision-diagnostic": {
       "caseId": "C17-A",
       "caseIds": [
@@ -2901,6 +3000,130 @@
         "invocationId": "d021261f-ef32-45d2-937e-a004483a1634",
         "terminal": "settle",
         "parityId": "7337d95dacd410a5b4610f01285eac8f70ababef9af1225776bc2c5fae103bdc"
+      }
+    ]
+  },
+  "historicalC1609ad48e1Boundary": {
+    "fromEventCount": 1524,
+    "eventCount": 1578,
+    "rawBytesSha256": "da1ca778a7ac08742e6918d355ed923d84d5058a22772082b47bd6af61e8572a",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "5e41f58dd6ffdd9ab6b341a1e5fcd090cb2333d7b3f78d82385313253a8d4adb",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "003a3f79f901a072d1ab633e3477ad307a542797",
+        "sourceHash": "a21aceae7eb0fd664c53efd200233dad89518fa04d634e4070ce0216c3e3e7cb",
+        "driverHash": "215fcb6fe21d2c3725fc3e8e7f97b9776daf75c981a47ca17456270902f4c765"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:edb77b36-aff6-40e4-b6fb-20e76ecbd418",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "efe3d5ea640a89f01ca6b634e4ab3efefdd4974f00bd7dad6972a664b456e744"
+      },
+      {
+        "attemptId": "candidate:ed244075-36d7-492d-97e7-3311c00513bb",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "efe3d5ea640a89f01ca6b634e4ab3efefdd4974f00bd7dad6972a664b456e744"
+      },
+      {
+        "attemptId": "candidate:62b42021-d8a4-4a45-a0de-120d37cc916a",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "7dcd94dfcbb2ba77bb3f883caf87c56dd7cbede06378eefe56b26ff57092b345"
+      },
+      {
+        "attemptId": "candidate:83342897-38eb-4d44-9c2b-0ada1ef2fc68",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "7dcd94dfcbb2ba77bb3f883caf87c56dd7cbede06378eefe56b26ff57092b345"
+      },
+      {
+        "attemptId": "candidate:d2297054-b765-4387-87ec-472cb8aa8908",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "49a487e2af22847b6e50cf26efe8baaf794636e6e375feb4b9fc101a5bcd71f0"
+      },
+      {
+        "attemptId": "candidate:b2566934-0e51-4cd9-9d24-42d72cb137ca",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "49a487e2af22847b6e50cf26efe8baaf794636e6e375feb4b9fc101a5bcd71f0"
+      },
+      {
+        "attemptId": "candidate:a898ea9b-363a-4b21-ae75-ccf787f0eb24",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "49a487e2af22847b6e50cf26efe8baaf794636e6e375feb4b9fc101a5bcd71f0"
+      },
+      {
+        "attemptId": "candidate:b9c30f86-e3a4-4407-b931-e1044279a074",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "49a487e2af22847b6e50cf26efe8baaf794636e6e375feb4b9fc101a5bcd71f0"
+      },
+      {
+        "attemptId": "candidate:404d9eb9-8dbd-454c-8f44-d6ca5d50d97c",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "49a487e2af22847b6e50cf26efe8baaf794636e6e375feb4b9fc101a5bcd71f0"
+      },
+      {
+        "attemptId": "candidate:5ddc4cee-6d9f-4a83-85c9-da64703a8be8",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "49a487e2af22847b6e50cf26efe8baaf794636e6e375feb4b9fc101a5bcd71f0"
+      },
+      {
+        "attemptId": "candidate:dd644afc-5e2a-4f14-8180-e9f3781b604e",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "328a46046d521c8e88d1cf910f44d0a16cbf7bb04555a2cf68dfcf9980a848c4"
+      },
+      {
+        "attemptId": "candidate:e5002b67-d3d3-4336-b46d-2afb3759b796",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "328a46046d521c8e88d1cf910f44d0a16cbf7bb04555a2cf68dfcf9980a848c4"
+      },
+      {
+        "attemptId": "candidate:bdcef751-2300-4006-8625-b9a77acaaf7b",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "328a46046d521c8e88d1cf910f44d0a16cbf7bb04555a2cf68dfcf9980a848c4"
+      },
+      {
+        "attemptId": "candidate:1e8d1854-cb03-4df0-a69b-3a6316a8e7b4",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "328a46046d521c8e88d1cf910f44d0a16cbf7bb04555a2cf68dfcf9980a848c4"
+      },
+      {
+        "attemptId": "candidate:9780060b-224e-4b0b-b75b-37f170ab5bce",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "49a487e2af22847b6e50cf26efe8baaf794636e6e375feb4b9fc101a5bcd71f0"
+      },
+      {
+        "attemptId": "candidate:db8796de-b84a-4563-879d-5a06a1f78c78",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "49a487e2af22847b6e50cf26efe8baaf794636e6e375feb4b9fc101a5bcd71f0"
+      },
+      {
+        "attemptId": "candidate:e82e7946-d7cd-4a6c-8b1f-a5e821b77fe6",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "49a487e2af22847b6e50cf26efe8baaf794636e6e375feb4b9fc101a5bcd71f0"
+      },
+      {
+        "attemptId": "candidate:766c83a5-57fb-4dac-99b5-7dcf4c62ae41",
+        "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
+        "terminal": "settle",
+        "parityId": "49a487e2af22847b6e50cf26efe8baaf794636e6e375feb4b9fc101a5bcd71f0"
       }
     ]
   }

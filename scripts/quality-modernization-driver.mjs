@@ -552,6 +552,19 @@ const QUALIFICATION_WINDOW_HASH = '27ff092cf9da1e8597df841d3eb51ef9a364f3ec88abd
 
 /** Resolve only the registered bridge fallback; native owner budgets and dispatch gates remain authoritative. */
 export function qualificationBridgeWindows(request) {
+  if (request.phase === 'separated-review-diagnostic') {
+    const phase = JSON.parse(fs.readFileSync(path.join(ADAPTER_ROOT, 'docs/research/novel-quality-modernization/protocol.json'))).phases[request.phase]
+    const slot = phase?.operations?.find(item => item.id === request.operationId)
+    if (!slot || phase.diagnosticId !== request.diagnosticId || phase.nonQualification !== true
+      || phase.maxPhysicalRequests !== 6 || phase.operations.length !== 6 || request.milestone !== 'diagnostic'
+      || (request.arm ?? request.target?.arm) !== 'candidate' || request.caseId !== slot.sourceId
+      || stableEvidence(request.operations) !== stableEvidence([slot]) || !['prepare', 'execute'].includes(request.action)
+      || request.forwardQualificationWindow != null || Object.keys(request).some(key => /timeout|deadline/iu.test(key)))
+      throw new Error('SEPARATED_REVIEW_DIAGNOSTIC_SCOPE_MISMATCH')
+    const attemptMs = MAIN_GENERATION_POLICY.budget.maxActiveElapsedMs + 60_000
+    return { attemptMs, spawnMs: attemptMs + 60_000, testMs: attemptMs + 120_000,
+      maxCalls: 1, revision: phase.diagnosticId }
+  }
   const registration = request.forwardQualificationWindow
   if (registration == null) return { attemptMs: BRIDGE_SETTLEMENT_DEADLINE_MS,
     spawnMs: request.evaluationPolicy ? BRIDGE_REVIEWED_TEST_TIMEOUT_MS - 60_000 : BRIDGE_SPAWN_TIMEOUT_MS,
@@ -661,7 +674,41 @@ export function assertForwardReasoning(registration, { arm, phase, milestone, ca
 }
 
 /** One quoted-input extraction request; all checks run before the campaign reserve. */
-export function assertSharedInputDiagnostic(registration, input, { arm, model, body, reserved }) {
+export function assertSharedInputDiagnostic(registration, input, { arm, model, body, reserved, operation, inputHash }) {
+  if (registration?.diagnosticId === 'separated-review-diagnostic-3x2-v1') {
+    const slot = registration.operations?.find(item => item.id === operation)
+    const supplied = input?.operations?.find(item => item.id === operation)
+    const source = input?.sources?.find(item => item.id === slot?.sourceId)
+    if (!slot || !supplied || !source || registration.nonQualification !== true || registration.maxPhysicalRequests !== 6
+      || arm !== 'candidate' || input?.diagnosticId !== registration.diagnosticId
+      || !/^[a-f0-9]{64}$/u.test(registration.diagnosticInputHash ?? '') || inputHash !== registration.diagnosticInputHash
+      || input.sources.length !== 3 || input.operations.length !== 6 || registration.operations.length !== 6
+      || stableEvidence(input.operations.map(item => item.id)) !== stableEvidence(registration.operations.map(item => item.id))
+      || ['sourceId', 'role', 'originalInvocationId', 'originalTestedSha', 'contentSha256', 'contextHash', 'materialsSha256', 'messagesSha256']
+        .some(key => supplied[key] !== slot[key])
+      || supplied.materialsSourceId !== source.id
+      || typeof source.materials?.source?.content !== 'string' || !source.frozenContext || !source.materials
+      || digest(source.materials?.source?.content) !== slot.contentSha256
+      || digest(source.frozenContext) !== slot.contextHash || digest(source.materials) !== slot.materialsSha256
+      || digest(supplied.messages) !== slot.messagesSha256
+      || !Array.isArray(supplied.messages) || supplied.messages.length !== 2
+      || supplied.messages[0].role !== 'system' || supplied.messages[1].role !== 'user'
+      || supplied.messages.some(item => typeof item.content !== 'string' || !item.content.trim())
+      || reserved !== undefined && reserved !== registration.operations.findIndex(item => item.id === operation))
+      throw new Error('SEPARATED_REVIEW_DIAGNOSTIC_INPUT_MISMATCH')
+    if (!model || registration.model?.temperature !== 0 || registration.model.reasoningOverride !== 'high'
+      || registration.model.maxTokens !== 16384 || registration.model.creativeStrategy !== 'auto'
+      || Object.entries(registration.model).some(([key, value]) => model[key] !== value))
+      throw new Error('SEPARATED_REVIEW_DIAGNOSTIC_CONFIG_MISMATCH')
+    if (body !== undefined && (body.model !== registration.model.modelName || body.temperature !== 0
+      || digest(body.messages) !== slot.messagesSha256 || !Number.isSafeInteger(body.max_tokens)
+      || body.max_tokens <= 0 || body.max_tokens > registration.model.maxTokens
+      || body.enable_thinking !== true || body.reasoning_effort !== 'high' || Object.hasOwn(body, 'thinking_budget')
+      || body.response_format?.type !== 'json_object'
+      || body.stream !== true || body.stream_options?.include_usage !== true))
+      throw new Error('SEPARATED_REVIEW_DIAGNOSTIC_WIRE_MISMATCH')
+    return supplied
+  }
   const original = input?.originalMessages, messages = input?.messages
   const quote = input?.originalUserWrapper
   if (!registration?.nonQualification || registration.maxPhysicalRequests !== 1 || arm !== 'candidate' || reserved !== 0
