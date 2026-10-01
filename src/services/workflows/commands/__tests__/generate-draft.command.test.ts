@@ -877,7 +877,12 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     await expect(f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })).resolves.toBe(expected)
     expect(executed.map(task => task.purpose)).toEqual([draftPending ? 'chapter-draft' : 'chapter-draft-continuation'])
     if (withoutBlock) expect(executed[0]!.messages.at(-1)!.content).not.toContain('【本章与定稿对账')
-    else expect(executed[0]!.messages.at(-1)!.content).toContain(`${block}\n\n【本章执行合同】`)
+    else expect(executed[0]!.messages.at(-1)!.content).toContain(`${block}\n\n- 必需事件: 开端`)
+    expect(executed[0]!.messages.map(message => message.role)).toEqual(['system', 'user'])
+    expect(executed[0]!.messages[0]!.content.split('【本章执行合同】')).toHaveLength(2)
+    expect(executed[0]!.messages[1]!.content).not.toContain('【本章执行合同】')
+    expect(executed[0]!.messages[0]!.content).not.toContain('林澄已撤回核查安排。')
+    expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:bind-material-decision' || channel === 'generation:begin')).toBe(false)
   })
 
   it.each([
@@ -989,7 +994,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     else await expect(execution).rejects.toThrow('GENERATION_DRAFT_RECOVERY_EVIDENCE_REQUIRED')
     expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:execute'))
       .toHaveLength(scenario.allowed ? 1 : 0)
-    expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:begin')).toBe(false)
+    expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:begin' || channel === 'generation:bind-material-decision')).toBe(false)
   })
 
   it('main续写低增量片段保持独立，不进入确认组合或正式草稿', async () => {
@@ -1286,13 +1291,13 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       writingLanguage: 'zh-CN' as const,
       heading: '【本章执行合同】',
       labels: ['必需事件', '章节钩子', '作者本章指导'],
-      semanticChecks: ['按作者原文含义遵循', '正文动作或结果落实', '叙述约束', '不要仅为证明遵守而新增或反复确认', '按原文揭示时点', '作者明确要求的动作、揭示或反复仍按原文执行'],
+      semanticChecks: ['按作者原文含义遵循', '正文动作或结果落实', '叙述约束', '不要仅为证明遵守而新增或反复确认', '按原文揭示时点', '作者明确要求的回顾、回忆、动作、揭示或反复仍按原文执行'],
     },
     {
       writingLanguage: 'en-US' as const,
       heading: '[Current-chapter execution contract]',
       labels: ['Required events', 'Chapter hook', 'Author guidance for this chapter'],
-      semanticChecks: ['Follow the author text according to its meaning', 'manuscript action or outcome', 'narrative constraints', 'do not add or repeatedly confirm', 'reveal timing specified by the author', 'explicitly requested actions, reveals, or repetition'],
+      semanticChecks: ['Follow the author text according to its meaning', 'manuscript action or outcome', 'narrative constraints', 'do not add or repeatedly confirm', 'reveal timing specified by the author', 'explicitly requested recollections, flashbacks, actions, reveals, or repetition'],
     },
   ].flatMap(language => [1, 2].map(chapterNumber => ({ ...language, chapterNumber }))))('places one $writingLanguage chapter $chapterNumber execution contract before the length contract', async ({
     writingLanguage,
@@ -1322,30 +1327,37 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
     await command.execute({ step: {}, context, callbacks })
 
-    const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
-    const executionCardIndex = user.lastIndexOf(heading)
+    const messages = observedTask!.messages
+    const system = messages[0]!.content
+    const user = messages[1]!.content
+    const executionCardIndex = user.indexOf(`- ${labels[0]}:`)
     const lengthContractIndex = user.indexOf(
       writingLanguage === 'en-US' ? '[Chapter length contract]' : '【本章篇幅合同】',
     )
+    expect(messages.map(message => message.role)).toEqual(['system', 'user'])
+    expect(system.includes(heading)).toBe(true)
+    expect(system.split(heading)).toHaveLength(2)
+    expect(user.includes(heading)).toBe(false)
     expect(executionCardIndex).toBeGreaterThanOrEqual(0)
-    expect(user.split(heading)).toHaveLength(2)
     expect(lengthContractIndex).toBeGreaterThan(executionCardIndex)
     expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(`- ${labels[0]}: ${keyEvents}`)
     expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(`- ${labels[1]}: ${suspenseHook}`)
     expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(`- ${labels[2]}: ${userGuidance}`)
     for (const instruction of semanticChecks) {
-      expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(instruction)
+      expect(system).toContain(instruction)
+      expect(user).not.toContain(instruction)
     }
-    expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(
+    for (const authorText of [keyEvents, suspenseHook, userGuidance]) expect(system).not.toContain(authorText)
+    expect(system).toContain(
       writingLanguage === 'en-US'
         ? 'Each later action must continue from the item ownership, character knowledge, and plan-completion state actually established in the prose.'
         : '后一项动作必须承接正文实际形成的物品持有、人物知情和计划完成状态。',
     )
-    expect(user.slice(executionCardIndex, lengthContractIndex)).toContain(
+    expect(system).toContain(
       writingLanguage === 'en-US' ? 'New actions and outcomes consistent with established facts are allowed. Ordinary events need no added cost.' : '可以写与既有事实相容的新行动和结果；普通无代价情节无需增加代价。',
     )
     if (chapterNumber === 1) {
-      expect(user).not.toContain(writingLanguage === 'en-US' ? 'This chapter follows directly on the previous chapter' : '本章紧接上一章结尾')
+      expect(system).not.toContain(writingLanguage === 'en-US' ? 'This chapter follows directly on the previous chapter' : '本章紧接上一章结尾')
     }
     expect(runtime.complete).toHaveBeenCalledOnce()
   })
@@ -1404,6 +1416,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
 
     const user = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
     expect(user).not.toContain('【本章执行卡（作者原文重列）】')
+    expect(observedTask?.messages[0]!.content.includes('【本章执行合同】')).toBe(true)
+    expect(user).not.toContain('【本章执行合同】')
     expect(user).toContain('【本章篇幅合同】')
     expect(runtime.complete).toHaveBeenCalledOnce()
   })
@@ -2384,23 +2398,32 @@ ${headingPrefix}第3章：潮门
     await command.execute({ step: {}, context, callbacks })
 
     expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-continuation'])
-    const [initial, continuation] = runtime.complete.mock.calls.map(([task]) => task.messages.at(-1)!.content)
-    const rule = initial.split(`${heading}\n`)[1]?.split(`\n\n${lengthContract}`)[0]
+    const [initialTask, continuationTask] = runtime.complete.mock.calls.map(([task]) => task)
+    const initial = initialTask!.messages[0]!.content
+    const continuation = continuationTask!.messages[0]!.content
+    expect(initial.includes(heading)).toBe(true)
+    const rule = initial.split(`${heading}\n`)[1]
     expect(rule).toContain(unresolved)
     expect(rule).toContain(verification)
     for (const anchor of [planDecision, supportedDecision, authorBoundary, noRetroactiveExecution, newAction, actionConsistency]) expect(rule).toContain(anchor)
     expect(initial).toContain(timeRuleStart)
     expect(initial).toContain(timeRuleEnd)
     expect(initial.split(heading)).toHaveLength(2)
-    // 初始请求：唯一执行合同位于篇幅合同之前。
-    const ruleIndex = initial.indexOf(heading)
-    expect(ruleIndex).toBeGreaterThanOrEqual(0)
-    expect(initial.indexOf(lengthContract)).toBeGreaterThan(ruleIndex)
-    // 续写复用作者资料块，同一措辞只出现一次。
-    expect(continuation).toContain(`${heading}\n${rule}\n\n${continuationTail}`)
+    expect(continuation).toBe(initial)
     expect(continuation).toContain(timeRuleStart)
     expect(continuation).toContain(timeRuleEnd)
     expect(continuation.split(heading)).toHaveLength(2)
+    for (const task of [initialTask!, continuationTask!]) {
+      expect(task.messages.map(message => message.role)).toEqual(['system', 'user'])
+      const user = task.messages[1]!.content
+      expect(user).not.toContain(heading)
+      expect(user).toContain(lengthContract)
+      expect(user).toContain('核查遇阻；承担代价')
+      expect(user).toContain('作者更正：林澄撤回先前核查安排。')
+      expect(task.messages[0]!.content).not.toContain('核查遇阻；承担代价')
+      expect(task.messages[0]!.content).not.toContain('作者更正：林澄撤回先前核查安排。')
+    }
+    expect(continuationTask!.messages[1]!.content).toContain(continuationTail)
   })
 
   describe('new runs draft directly from author and finalized material', () => {
@@ -2416,10 +2439,14 @@ ${headingPrefix}第3章：潮门
       expect(runtime.reconcile).not.toHaveBeenCalled()
       expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-continuation'])
       for (const [task] of runtime.complete.mock.calls) {
-        const prompt = task.messages.map(message => message.content).join('\n')
-        for (const text of [source, '铜钥匙始终由林澄保管。', '核查遇阻；承担代价',
-          FINALIZED_FACT_PRECEDENCE[writingLanguage].planDecision, FINALIZED_FACT_PRECEDENCE[writingLanguage].newAction,
-          FINALIZED_FACT_PRECEDENCE[writingLanguage].actionConsistency]) expect(prompt).toContain(text)
+        const system = task.messages[0]!.content
+        const prompt = task.messages[1]!.content
+        for (const text of [source, '铜钥匙始终由林澄保管。', '核查遇阻；承担代价']) {
+          expect(prompt).toContain(text)
+          expect(system).not.toContain(text)
+        }
+        for (const text of [FINALIZED_FACT_PRECEDENCE[writingLanguage].planDecision, FINALIZED_FACT_PRECEDENCE[writingLanguage].newAction,
+          FINALIZED_FACT_PRECEDENCE[writingLanguage].actionConsistency]) expect(system).toContain(text)
         expect(prompt).not.toContain('【本章与定稿对账')
         expect(prompt).not.toContain('[Reconciliation with finalized chapters')
       }
@@ -2441,16 +2468,24 @@ ${headingPrefix}第3章：潮门
 
       expect(runtime.reconcile).not.toHaveBeenCalled()
       expect(runtime.complete.mock.calls.map(([task]) => task.purpose)).toEqual(['chapter-draft', 'chapter-draft-condense'])
-      const [initialPrompt, condensePrompt] = runtime.complete.mock.calls.map(([task]) => task.messages.at(-1)!.content)
-      const { heading, lengthContract } = FINALIZED_FACT_PRECEDENCE[writingLanguage]
-      const contract = (prompt: string) => prompt.split(`${heading}\n`)[1]?.split(`\n\n${lengthContract}`)[0]
-      expect(contract(initialPrompt)).toBe(contract(condensePrompt))
-      expect(initialPrompt.split(heading)).toHaveLength(2)
-      expect(condensePrompt.split(heading)).toHaveLength(2)
+      const [initialTask, condenseTask] = runtime.complete.mock.calls.map(([task]) => task)
+      const { heading } = FINALIZED_FACT_PRECEDENCE[writingLanguage]
+      expect(initialTask!.messages[0]!.content.includes(heading)).toBe(true)
+      expect(initialTask!.messages[0]!.content).toBe(condenseTask!.messages[0]!.content)
+      expect(condenseTask!.messages[0]!.content).toContain(writingLanguage === 'en-US'
+        ? 'Condensing only cuts existing prose and must not add plot or repair missing events.'
+        : '压缩只删减既有正文，不新增情节或修补缺失事件。')
       for (const [task] of runtime.complete.mock.calls) {
-        const prompt = task.messages.map(message => message.content).join('\n')
-        for (const text of [source, '铜钥匙始终由林澄保管。', '核查遇阻；承担代价',
-          FINALIZED_FACT_PRECEDENCE[writingLanguage].planDecision, FINALIZED_FACT_PRECEDENCE[writingLanguage].newAction]) expect(prompt).toContain(text)
+        expect(task.messages.map(message => message.role)).toEqual(['system', 'user'])
+        const system = task.messages[0]!.content
+        const prompt = task.messages[1]!.content
+        expect(system.split(heading)).toHaveLength(2)
+        expect(prompt).not.toContain(heading)
+        for (const text of [source, '铜钥匙始终由林澄保管。', '核查遇阻；承担代价']) {
+          expect(prompt).toContain(text)
+          expect(system).not.toContain(text)
+        }
+        for (const text of [FINALIZED_FACT_PRECEDENCE[writingLanguage].planDecision, FINALIZED_FACT_PRECEDENCE[writingLanguage].newAction]) expect(system).toContain(text)
         expect(prompt).not.toContain('【本章与定稿对账')
         expect(prompt).not.toContain('[Reconciliation with finalized chapters')
       }
@@ -2462,7 +2497,7 @@ ${headingPrefix}第3章：潮门
         keyEvents: '读信', previousFinalizedContent: '上一章末尾，信刚送到。' })
       await command.execute({ step: {}, context, callbacks })
       expect(runtime.reconcile).not.toHaveBeenCalled()
-      const prompt = runtime.complete.mock.calls[0]![0].messages.at(-1)!.content
+      const prompt = runtime.complete.mock.calls[0]![0].messages.map(message => message.content).join('\n')
       expect(prompt).toContain('读信')
       expect(prompt).toContain(FINALIZED_FACT_PRECEDENCE[writingLanguage].newAction)
       expect(prompt).toContain(writingLanguage === 'en-US'
@@ -3241,16 +3276,18 @@ ${headingPrefix}第3章：潮门
     // 篇幅现状块：目标 2000、待压缩 2700 单位 → 约 1780、不超过 2100、删 920（34%）。
     expect(condensePrompt).toContain('【篇幅现状】待压缩正文当前约 2700 字，超出上限。请压缩到约 1780 字（绝对不得超过 2100 字），即删去约 920 字，约占全文 34%。')
     const order = ['【篇幅现状】', '【硬性要求】', '【本章蓝图】', '【全局写作要求】\n压缩全局要求哨兵', '【文风要求】\n压缩文风哨兵', '【文风适用边界】',
-      '【小说配置事实】', '【作者资料（保留原文', '【本章执行合同】', '- 必需事件: 压缩必需事件哨兵', '【本章篇幅合同】', '【待压缩正文】']
+      '【小说配置事实】', '【作者资料（保留原文', '- 必需事件: 压缩必需事件哨兵', '【本章篇幅合同】', '【待压缩正文】']
       .map(marker => condensePrompt.indexOf(marker))
     expect(order.every(index => index >= 0)).toBe(true)
     expect(order).toEqual([...order].sort((left, right) => left - right))
     // 首章压缩复用合同，但不注入依赖前章的事实与时点规则。
     const zhPrecedence = FINALIZED_FACT_PRECEDENCE['zh-CN']
-    const zhRule = condensePrompt.split(`${zhPrecedence.heading}\n`)[1]?.split(`\n\n${zhPrecedence.lengthContract}`)[0]
+    const zhRule = condenseTask.messages[0]!.content
     expect(zhRule).toContain('可以写与既有事实相容的新行动和结果；普通无代价情节无需增加代价。')
-    expect(condensePrompt).not.toContain(zhPrecedence.timeRuleStart)
-    expect(condensePrompt.split(zhPrecedence.heading)).toHaveLength(2)
+    expect(zhRule).not.toContain(zhPrecedence.timeRuleStart)
+    expect(zhRule.split(zhPrecedence.heading)).toHaveLength(2)
+    expect(condensePrompt).not.toContain(zhPrecedence.heading)
+    for (const text of ['压缩全局要求哨兵', '压缩文风哨兵', '压缩必需事件哨兵', draft]) expect(zhRule).not.toContain(text)
     expect(condensePrompt.endsWith(`【待压缩正文】\n${draft}`)).toBe(true)
     expect(invoke).toHaveBeenCalledWith(
       'db:draft-create',
@@ -3276,15 +3313,16 @@ ${headingPrefix}第3章：潮门
     // 篇幅现状块：目标 900、待压缩 1200 词 → 约 801、不超过 945、删 399（33%）。
     expect(condensePrompt).toContain('[Current length] The manuscript to condense is about 1200 words, above the ceiling. Condense it to about 801 words (never more than 945 words), which means cutting about 399 words, roughly 33% of the text.')
     const order = ['[Current length]', '[Requirements]', '[Current chapter blueprint]', '[Project-wide writing guidance]', '[Writing style]', '[Novel configuration facts]',
-      '[Author material (verbatim', '[Current-chapter execution contract]', '[Chapter length contract]', '[Manuscript to condense]'].map(marker => condensePrompt.indexOf(marker))
+      '[Author material (verbatim', '[Chapter length contract]', '[Manuscript to condense]'].map(marker => condensePrompt.indexOf(marker))
     expect(order.every(index => index >= 0)).toBe(true)
     expect(order).toEqual([...order].sort((left, right) => left - right))
     // 首章压缩复用合同，但不注入依赖前章的事实与时点规则。
     const enPrecedence = FINALIZED_FACT_PRECEDENCE['en-US']
-    const enRule = condensePrompt.split(`${enPrecedence.heading}\n`)[1]?.split(`\n\n${enPrecedence.lengthContract}`)[0]
+    const enRule = runtime.complete.mock.calls[1]![0].messages[0]!.content
     expect(enRule).toContain('New actions and outcomes consistent with established facts are allowed. Ordinary events need no added cost.')
-    expect(condensePrompt).not.toContain(enPrecedence.timeRuleStart)
-    expect(condensePrompt.split(enPrecedence.heading)).toHaveLength(2)
+    expect(enRule).not.toContain(enPrecedence.timeRuleStart)
+    expect(enRule.split(enPrecedence.heading)).toHaveLength(2)
+    expect(condensePrompt).not.toContain(enPrecedence.heading)
     expect(condensePrompt).not.toContain('【')
   })
 
@@ -3544,6 +3582,11 @@ ${headingPrefix}第3章：潮门
       expect(prompt).toContain(finalizedEvidenceSentinel)
       expect(prompt).toContain(referenceSentinel)
     }
+    for (const runtime of [initialRuntime, continuationRuntime, overTargetContinuationRuntime]) {
+      for (const [task] of runtime.complete.mock.calls) {
+        for (const text of [characterProfileSentinel, finalizedEvidenceSentinel, referenceSentinel]) expect(task.messages[0]!.content).not.toContain(text)
+      }
+    }
   })
 
   it('recovers once from an output-limited continuation with no visible progress and commits only the recovered draft', async () => {
@@ -3564,6 +3607,16 @@ ${headingPrefix}第3章：潮门
       'chapter-draft-continuation',
       'chapter-draft-no-progress-recovery',
     ])
+    const system = runtime.complete.mock.calls[0]![0].messages[0]!.content
+    for (const [task] of runtime.complete.mock.calls) {
+      expect(task.messages.map(message => message.role)).toEqual(['system', 'user'])
+      expect(task.messages[0]!.content).toBe(system)
+      expect(system.split('【本章执行合同】')).toHaveLength(2)
+      expect(task.messages[1]!.content).not.toContain('【本章执行合同】')
+    }
+    expect(runtime.complete.mock.calls.map(([task]) => task.budgetDemand)).toEqual([5000, 1000, 1000].map(requestedUnits => ({
+      kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits, segmentable: false,
+    })))
     expect(callbacks.log).toHaveBeenCalledWith(expect.stringMatching(
       /visibleUnitsBefore=4000 candidateVisibleUnits=200 mergedDelta=0 accepted=false/u,
     ))
@@ -3604,6 +3657,16 @@ ${headingPrefix}第3章：潮门
     expect(prompts[0]).toContain('(no additional author material)')
     expect(prompts[1]).toContain('Continue the current chapter seamlessly')
     expect(prompts[2]).toContain('This is the only no-progress recovery attempt')
+    const system = runtime.complete.mock.calls[0]![0].messages[0]!.content
+    for (const [task] of runtime.complete.mock.calls) {
+      expect(task.messages.map(message => message.role)).toEqual(['system', 'user'])
+      expect(task.messages[0]!.content).toBe(system)
+      expect(system.split('[Current-chapter execution contract]')).toHaveLength(2)
+      expect(system).not.toContain(authorGuidance)
+      expect(system).not.toContain('The previous chapter is finalized.')
+      expect(task.messages[1]!.content).toContain(authorGuidance)
+      expect(task.messages[1]!.content).not.toContain('[Current-chapter execution contract]')
+    }
     expect(prompts.join('\n')).not.toMatch(/【(?:硬性要求|本章蓝图|后续章节大纲预告|角色状态档案|第\d+章)/u)
   })
 
@@ -3652,6 +3715,7 @@ ${headingPrefix}第3章：潮门
     expect(task).toMatchObject({ purpose: 'chapter-draft', output: 'visible-text' })
     expect(prompt).toContain('【补充写作 Skill：Scene craft】')
     expect(prompt).toContain('用具体动作推进因果变化。')
+    expect(task.messages[0]!.content).not.toContain('用具体动作推进因果变化。')
     expect(prompt).not.toMatch(/\{\{(?:chapter_info|future_blueprints|user_guidance)\}\}/u)
     expect(prompt).toContain('第2章 蓝门回声：追查蓝色漆屑与撞击声')
     expect(prompt).toContain('第一章必须以潮湿灯塔开场')
