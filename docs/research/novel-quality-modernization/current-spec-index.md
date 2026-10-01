@@ -6,7 +6,7 @@
 
 1. 每项均读下表链接的**原 Spec 全文**，以及[核心 C01–C09](../../plans/novel-quality-modernization/03-CONTRACTS-AND-GATES.md)和 [Program v3 C10–C18 与旧 24 项覆盖表](../../plans/novel-quality-program-v3-2026-09-13/05-INTEGRATION-CONTRACT.md)中适用的条款。表内摘要是定位提示，不删减未列出的义务。
 2. 按[交付 delta](delivery-contract-delta-2026-09-21.md)应用明确的替代关系；[现行变更规格](frontend-transition-specs.md)拥有前端、导入、编辑交互及交付出口，[质量协议](quality-protocol.md)拥有实验规则，[ADR 0019](../../adr/0019-remove-real-call-hard-cap.md)、[ADR 0020](../../adr/0020-legacy-project-copy-import.md)分别拥有调用上限调整和完整旧项目导入决定。
-3. [实施计划](frontend-transition-plan.md)拥有当前依赖与调度，[执行规则](../../agents/delivery.md)拥有派工、模型和审查流程。冻结 DAG、旧执行矩阵、旧模型禁令和 `NOT STARTED` 是当时的规划，不是当前任务状态。
+3. [实施计划](frontend-transition-plan.md)拥有当前依赖与调度，[执行规则](../../agents/delivery.md)拥有派工、模型和审查流程，包括 2026-10-01 生效的新建子 Agent 默认继承主线程模型与推理强度。冻结 DAG、旧执行矩阵、旧模型禁令和 `NOT STARTED` 是当时的规划，不是当前任务状态；旧环境快照、handoff 与审查收据中的模型配置只记录历史，不能覆盖现行派工规则。
 4. 冻结 Spec 中的拟新增文件和示例命令须映射到实际 owner、消费者和现行入口；名字不同本身不构成缺陷。实际缺少合同要求的行为仍是缺口，不能通过修改规格消除。
 5. 实际进度以唯一私有当前检查点及其绑定证据为准；[历史证据索引](evidence-index.md)与日期化 handoff 只证明各自范围。审查启动时固定代码 SHA、比较基线、工作区文档 hash 和未提交排除项，不把后续修改默认为已审。
 
