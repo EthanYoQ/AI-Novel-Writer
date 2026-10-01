@@ -695,7 +695,317 @@
       { "attemptId": "candidate:898f798a-cbc8-483b-aaed-2b75e53ff959", "invocationId": "a9552e67-c26a-4f39-ab8b-e9565c20e798", "terminal": "settle", "parityId": "58aee2b617812bb0f5af0cdddd66422ae3b75ff2cde1ead33b191bb193e43dd2" }
     ]
   },
+  "historicalC16D515b666Boundary": {
+    "fromEventCount": 1212,
+    "eventCount": 1251,
+    "rawBytesSha256": "79f9ded8a2eebb55e8ea78d190e822836d5bf12e104d15d40a4aa5dac347dc92",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "9de2619fd8a998b626545c81368f57456a44dda7db854222489bd4dfce2d36a9",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "a8812b8fc78bab739de3c686a067b099437c3e0e",
+        "sourceHash": "3b52d46f48c541637da3f324de0f01b45be5e5169301166657dd3687759a4ab4",
+        "driverHash": "2f38f1e6f345e27879e19257682c104c087a4afaa0610ffdeddf099d68d56b30"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:662d685c-4acd-44dd-b2d0-b54dcc5059a0",
+        "invocationId": "d515b666-c8be-4ffe-8326-5953d92fa0aa",
+        "terminal": "settle",
+        "parityId": "698a2a33a6e3f1939063a7ba00be80bb135e88e9df905930fd384dabfb8481c8"
+      },
+      {
+        "attemptId": "candidate:34198063-fa42-4171-970c-acbf6f394539",
+        "invocationId": "d515b666-c8be-4ffe-8326-5953d92fa0aa",
+        "terminal": "settle",
+        "parityId": "698a2a33a6e3f1939063a7ba00be80bb135e88e9df905930fd384dabfb8481c8"
+      },
+      {
+        "attemptId": "candidate:d3e75672-1eb0-4e58-8de0-e2682a5d2a76",
+        "invocationId": "d515b666-c8be-4ffe-8326-5953d92fa0aa",
+        "terminal": "settle",
+        "parityId": "b69ea23383b236853fb899be003679343df61eb1c7151def00386584785ef749"
+      },
+      {
+        "attemptId": "candidate:f0a4eb87-94e8-4502-a073-40183ed4b958",
+        "invocationId": "d515b666-c8be-4ffe-8326-5953d92fa0aa",
+        "terminal": "settle",
+        "parityId": "b69ea23383b236853fb899be003679343df61eb1c7151def00386584785ef749"
+      },
+      {
+        "attemptId": "candidate:054828c0-fbef-4691-90c9-996e5fde7189",
+        "invocationId": "d515b666-c8be-4ffe-8326-5953d92fa0aa",
+        "terminal": "settle",
+        "parityId": "46d4fd1700158b1f5904a92d8d5014016fc0c0bbcb0beddc75953f153890743c"
+      },
+      {
+        "attemptId": "candidate:421dcb5d-6120-452d-b0e5-5ddf94a82ac7",
+        "invocationId": "d515b666-c8be-4ffe-8326-5953d92fa0aa",
+        "terminal": "settle",
+        "parityId": "46d4fd1700158b1f5904a92d8d5014016fc0c0bbcb0beddc75953f153890743c"
+      },
+      {
+        "attemptId": "candidate:65fd17e7-43d5-48ad-9934-9541dea4ad9b",
+        "invocationId": "d515b666-c8be-4ffe-8326-5953d92fa0aa",
+        "terminal": "settle",
+        "parityId": "46d4fd1700158b1f5904a92d8d5014016fc0c0bbcb0beddc75953f153890743c"
+      },
+      {
+        "attemptId": "candidate:4232fef3-1a76-40ca-b2d0-d6336b4040ae",
+        "invocationId": "d515b666-c8be-4ffe-8326-5953d92fa0aa",
+        "terminal": "settle",
+        "parityId": "cc8bd00a9b44f838e8b54358d14d8745199d3a1f8fa52765ab2d108dc83189e5"
+      },
+      {
+        "attemptId": "candidate:ef0a379f-eedb-48a0-8b1f-992fc0967a02",
+        "invocationId": "d515b666-c8be-4ffe-8326-5953d92fa0aa",
+        "terminal": "settle",
+        "parityId": "cc8bd00a9b44f838e8b54358d14d8745199d3a1f8fa52765ab2d108dc83189e5"
+      },
+      {
+        "attemptId": "candidate:69bc8d85-9a9d-4fcf-8246-0a9e76a9dbe1",
+        "invocationId": "d515b666-c8be-4ffe-8326-5953d92fa0aa",
+        "terminal": "settle",
+        "parityId": "cc8bd00a9b44f838e8b54358d14d8745199d3a1f8fa52765ab2d108dc83189e5"
+      },
+      {
+        "attemptId": "candidate:6472a683-f719-4b98-9873-b1c3f322ebc1",
+        "invocationId": "d515b666-c8be-4ffe-8326-5953d92fa0aa",
+        "terminal": "settle",
+        "parityId": "46d4fd1700158b1f5904a92d8d5014016fc0c0bbcb0beddc75953f153890743c"
+      },
+      {
+        "attemptId": "candidate:7806b753-6869-4068-93ac-a4ae02779c9b",
+        "invocationId": "d515b666-c8be-4ffe-8326-5953d92fa0aa",
+        "terminal": "settle",
+        "parityId": "46d4fd1700158b1f5904a92d8d5014016fc0c0bbcb0beddc75953f153890743c"
+      },
+      {
+        "attemptId": "candidate:c471bb5b-14ce-44e4-b046-594f2500c147",
+        "invocationId": "d515b666-c8be-4ffe-8326-5953d92fa0aa",
+        "terminal": "settle",
+        "parityId": "46d4fd1700158b1f5904a92d8d5014016fc0c0bbcb0beddc75953f153890743c"
+      }
+    ]
+  },
+  "historicalC16A763f510Boundary": {
+    "fromEventCount": 1251,
+    "eventCount": 1287,
+    "rawBytesSha256": "dec581bd913e4ae841b00b3b4d78906b01a1231773900053c7cc6e33e4102ad2",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "9de2619fd8a998b626545c81368f57456a44dda7db854222489bd4dfce2d36a9",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "889b5e23e57daa763c4e549e892afaa69d1da73c",
+        "sourceHash": "b7bb85c2b1a8aadf0ef314fb5de06c50a1b4d2fabb60f1339ece977922f43083",
+        "driverHash": "2f38f1e6f345e27879e19257682c104c087a4afaa0610ffdeddf099d68d56b30"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:8dd87e8a-db6f-47fd-8811-7df147cff021",
+        "invocationId": "a763f510-eac5-4368-967e-0abb630ff597",
+        "terminal": "settle",
+        "parityId": "698a2a33a6e3f1939063a7ba00be80bb135e88e9df905930fd384dabfb8481c8"
+      },
+      {
+        "attemptId": "candidate:806e5686-00f8-4b34-87e1-3d54c527b5ee",
+        "invocationId": "a763f510-eac5-4368-967e-0abb630ff597",
+        "terminal": "settle",
+        "parityId": "698a2a33a6e3f1939063a7ba00be80bb135e88e9df905930fd384dabfb8481c8"
+      },
+      {
+        "attemptId": "candidate:b9aab766-2e4a-489a-b1df-677be3ef8f7d",
+        "invocationId": "a763f510-eac5-4368-967e-0abb630ff597",
+        "terminal": "settle",
+        "parityId": "b69ea23383b236853fb899be003679343df61eb1c7151def00386584785ef749"
+      },
+      {
+        "attemptId": "candidate:d487c22c-f0d8-4fee-bf60-8921103cc305",
+        "invocationId": "a763f510-eac5-4368-967e-0abb630ff597",
+        "terminal": "settle",
+        "parityId": "b69ea23383b236853fb899be003679343df61eb1c7151def00386584785ef749"
+      },
+      {
+        "attemptId": "candidate:8d2483fe-2d1b-4978-ab03-0b21255e0a73",
+        "invocationId": "a763f510-eac5-4368-967e-0abb630ff597",
+        "terminal": "settle",
+        "parityId": "46d4fd1700158b1f5904a92d8d5014016fc0c0bbcb0beddc75953f153890743c"
+      },
+      {
+        "attemptId": "candidate:f081646e-9bbf-4077-8384-6c4246472516",
+        "invocationId": "a763f510-eac5-4368-967e-0abb630ff597",
+        "terminal": "settle",
+        "parityId": "46d4fd1700158b1f5904a92d8d5014016fc0c0bbcb0beddc75953f153890743c"
+      },
+      {
+        "attemptId": "candidate:38e01078-6019-4534-9b5e-aa08af74593e",
+        "invocationId": "a763f510-eac5-4368-967e-0abb630ff597",
+        "terminal": "settle",
+        "parityId": "46d4fd1700158b1f5904a92d8d5014016fc0c0bbcb0beddc75953f153890743c"
+      },
+      {
+        "attemptId": "candidate:4d2326ed-7732-40ca-95ac-639a27507790",
+        "invocationId": "a763f510-eac5-4368-967e-0abb630ff597",
+        "terminal": "settle",
+        "parityId": "cc8bd00a9b44f838e8b54358d14d8745199d3a1f8fa52765ab2d108dc83189e5"
+      },
+      {
+        "attemptId": "candidate:836845b2-07be-4278-8c83-0091e004b36d",
+        "invocationId": "a763f510-eac5-4368-967e-0abb630ff597",
+        "terminal": "settle",
+        "parityId": "cc8bd00a9b44f838e8b54358d14d8745199d3a1f8fa52765ab2d108dc83189e5"
+      },
+      {
+        "attemptId": "candidate:09ef75b8-59ef-4c6a-963b-5951d58edae8",
+        "invocationId": "a763f510-eac5-4368-967e-0abb630ff597",
+        "terminal": "settle",
+        "parityId": "cc8bd00a9b44f838e8b54358d14d8745199d3a1f8fa52765ab2d108dc83189e5"
+      },
+      {
+        "attemptId": "candidate:04a4be76-31cb-4eb2-b445-189dfe66ea44",
+        "invocationId": "a763f510-eac5-4368-967e-0abb630ff597",
+        "terminal": "settle",
+        "parityId": "46d4fd1700158b1f5904a92d8d5014016fc0c0bbcb0beddc75953f153890743c"
+      },
+      {
+        "attemptId": "candidate:ca1178c6-0b9e-4ed7-be63-4560e110754d",
+        "invocationId": "a763f510-eac5-4368-967e-0abb630ff597",
+        "terminal": "settle",
+        "parityId": "46d4fd1700158b1f5904a92d8d5014016fc0c0bbcb0beddc75953f153890743c"
+      }
+    ]
+  },
   "phases": {
+    "bounded-revision-diagnostic": {
+      "caseId": "C17-A",
+      "caseIds": [
+        "C17-A"
+      ],
+      "sceneId": "场景1",
+      "chapterNumber": 2,
+      "milestone": "diagnostic",
+      "arms": [
+        "candidate"
+      ],
+      "nonQualification": true,
+      "scenarioRevision": "c17-a-saved-bounded-revision-diagnostic-v1",
+      "minPhysicalRequests": 3,
+      "maxPhysicalRequests": 5,
+      "actualMaxTokens": 16384,
+      "source": {
+        "invocationId": "a763f510-eac5-4368-967e-0abb630ff597",
+        "testedSha": "889b5e23e57daa763c4e549e892afaa69d1da73c",
+        "sourceHash": "b7bb85c2b1a8aadf0ef314fb5de06c50a1b4d2fabb60f1339ece977922f43083",
+        "protocolHash": "9de2619fd8a998b626545c81368f57456a44dda7db854222489bd4dfce2d36a9",
+        "manifestSha256": "24912361161361695647811c0ad4acccb6fcf1830985feca72a5b0afeefed3ec",
+        "stdoutSha256": "60ac4a9bba19cf81bce03121b4939693c278da5b7f5bf9c804b7aabf5e328270",
+        "semanticSha256": "defce5375fcbf5139219678b00006497bb826a7946c706c0e040e04e79a3f6dd",
+        "caseDocumentSha256": "9fabbea09392e518f7dfca41bf0f879fb9bb6675a798b4d6ccadc754a39f7470",
+        "projectId": "1db3c882-c2a3-4982-b428-ab7e3c6c7cca",
+        "epoch": "abad0c94-6230-4be6-9b3c-12309367c81e",
+        "draftId": 4,
+        "chapterNumber": 2,
+        "version": 1,
+        "status": "draft",
+        "contentSha256": "c8b29e929e34b57e7af41aae94cbc0f4c027eab21c0cfd4daf08a2501b21da66",
+        "byteSize": 3889,
+        "units": 1053,
+        "packetFiles": [
+          {
+            "name": "project.db",
+            "sha256": "29894f46a48e17d8967ad327e00015177d5f1c2e38841b980194ea1d932bb7fe",
+            "bytes": 684032
+          },
+          {
+            "name": "project.db-wal",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          },
+          {
+            "name": "project.db-shm",
+            "sha256": "fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb",
+            "bytes": 32768
+          }
+        ],
+        "assets": [
+          {
+            "path": ".ai-novel/project.json",
+            "sha256": "bd8db2b455b2a680b902ca0f39ba18b52e610babe8339a6cea106c2321342673",
+            "bytes": 207
+          },
+          {
+            "path": ".ai-novel/portable-runtime-freeze.json",
+            "sha256": "a733557b80c14be843d4754a0abbfc231da8c07fee00cac6354a5116e5e7eff6",
+            "bytes": 30282
+          },
+          {
+            "path": ".ai-novel/portable-transfer-authority.json",
+            "sha256": "0b96934e1c18d67c539d6a0b5522e248bcd3899d955859ab4c6269abfdb96625",
+            "bytes": 828
+          },
+          {
+            "path": ".ai-novel/portable-knowledge-source.json",
+            "sha256": "b4ecc0da2f3630da440e64c2f2956ac0c96cc94bac4e2aefe0963dd3e960e915",
+            "bytes": 29
+          }
+        ]
+      },
+      "authorItems": [
+        {
+          "category": "本章实际代价",
+          "severity": "error",
+          "description": "原稿只回顾前章已付六枚的支出或留下将来责任，尚未兑现本章新的具体已付出后果。只修复本章实际代价未兑现的问题，保留原作者事实，不指定代价金额、物品或发生方式。",
+          "quote": "她低下头，从皮包里抽出记录本，翻到末尾，在“等待雨停”下面又添了一行字：午后二次申请，被拒。预约费六枚，已扣，不退。",
+          "decision": "apply",
+          "origin": "author"
+        },
+        {
+          "category": "今天/明天矛盾",
+          "severity": "error",
+          "description": "同一记录日期同时写成今天与明天，表述互相矛盾。修正这两句的矛盾，保持前章异常类型和同日午后时点，不指定正确日期、异常原因或新增知情事实。",
+          "quote": "“记录上写的是今天。”林澄说，“旧钟慢了一刻，记录却已经走到了明天。如果今天进不去，明天再核，记录上的日期就成真了。”",
+          "decision": "apply",
+          "origin": "author"
+        }
+      ],
+      "attemptPolicy": {
+        "milestone": "diagnostic",
+        "arms": [
+          "candidate"
+        ],
+        "operationId": "固定稿首审",
+        "primaryPurpose": "review-chapter",
+        "repairPurpose": "review-chapter-rebuild",
+        "maxRepairAttempts": 1,
+        "reviewRebuild": {
+          "operationId": "修后完整复核",
+          "primaryPurpose": "review-chapter",
+          "repairPurpose": "review-chapter-rebuild",
+          "maxRepairAttempts": 1
+        }
+      },
+      "operations": [
+        {
+          "id": "固定稿首审",
+          "kind": "review"
+        },
+        {
+          "id": "作者确认一次修稿",
+          "kind": "refine"
+        },
+        {
+          "id": "修后完整复核",
+          "kind": "final-review"
+        }
+      ],
+      "finalUnitRange": {
+        "minimum": 842,
+        "maximum": 1170
+      },
+      "automatedOutcomeCeiling": "pending-independent-diagnostic-oracle-review"
+    },
     "shared-input-diagnostic": {
       "milestone": "diagnostic",
       "nonQualification": true,

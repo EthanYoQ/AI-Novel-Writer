@@ -18,7 +18,8 @@ import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolated
   rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures, fetchProviderResponse, measurePromptBytes,
   BRIDGE_SETTLEMENT_DEADLINE_MS, BRIDGE_SPAWN_TIMEOUT_MS, BRIDGE_TEST_TIMEOUT_MS,
   C16_C18_ATTEMPT_POLICY, validateCandidateContinuityResults, runProductionBridge, runProductionPhasePair, summarizeDraftReconciliation,
-  continuityCaseOperations, FINALIZED_CHARACTER_OPERATION_IDS, draftCondenseFor, syntheticDraftCondensePlan } from '../quality-modernization-driver.mjs'
+  continuityCaseOperations, FINALIZED_CHARACTER_OPERATION_IDS, draftCondenseFor, syntheticDraftCondensePlan,
+  BOUNDED_REVISION_DIAGNOSTIC, assertBoundedRevisionSource } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, readVerifiedRecoveryCandidateSupplement,
   readVerifiedDirectPersistedDraftEvidence, recordPersistedDraftObservation,
   safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
@@ -28,11 +29,242 @@ import { countDraftUnits, draftTargetUnitRange } from '../../src/shared/draft-un
 import { freezeChapterGoals } from '../../src/shared/chapter-goal-review'
 import { draftReconciliationBlock, parseDraftReconciliation } from '../../src/shared/draft-reconciliation'
 import { parseReviewGenerationResult } from '../../src/shared/review-generation-report'
+import { createHumanConfirmedReviewSnapshot, renderHumanConfirmedReviewBrief } from '../../src/shared/human-confirmed-review'
 
 const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
 const semanticPath = path.join(ROOT, protocol.fixturePath)
 const protocolBinding = currentProtocolBinding()
+
+test('bounded-revision diagnostic consumes only fixed C17-A saved source and five native permits', () => {
+  const selected = selectPhase(protocol, 'bounded-revision-diagnostic', 'diagnostic')
+  assert.deepEqual(selected.caseIds, ['C17-A'])
+  assert.deepEqual(selected.arms, ['candidate'])
+  assert.equal(selected.nonQualification, true)
+  assert.equal(selected.minPhysicalRequests, 3)
+  assert.equal(selected.maxPhysicalRequests, 5)
+  assert.equal(selected.source.contentSha256, 'c8b29e929e34b57e7af41aae94cbc0f4c027eab21c0cfd4daf08a2501b21da66')
+  assert.deepEqual(selected.operations.map(item => item.kind), ['review', 'refine', 'final-review'])
+  assert.equal(forwardReasoningFor(protocol, selected.phase, selected.milestone).reasoningOverride, 'high')
+  const windows = qualificationBridgeWindows({ ...selected, target: { arm: 'candidate' }, action: 'execute',
+    forwardReasoning: forwardReasoningFor(protocol, selected.phase, selected.milestone),
+    forwardQualificationWindow: forwardQualificationWindowFor(protocol, selected.phase, selected.milestone) })
+  assert.equal(windows.maxCalls, 5)
+  assert.throws(() => selectPhase(protocol, selected.phase, 'final'), /PHASE_MILESTONE_MISMATCH/)
+  const drift = structuredClone(protocol)
+  drift.phases[selected.phase].maxPhysicalRequests = 6
+  assert.throws(() => selectPhase(drift, selected.phase, 'diagnostic'), /BOUNDED_REVISION_REGISTRATION_MISMATCH/)
+  assert.throws(() => assertBoundedRevisionSource({ id: 4, chapterNumber: 2, version: 2, status: 'draft', content: '' }), /SOURCE_MISMATCH/)
+  assert.equal(selected.source.byteSize, 3889)
+  assert.equal(selected.source.units, 1053)
+  assert.deepEqual(selected.finalUnitRange, { minimum: 842, maximum: 1170 })
+})
+
+test('bounded-revision confirmation and retained owner evidence reject missing, wrong-source, ignored-item and extra-call claims', () => {
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/bounded-revision-'))
+  // Exercise the actual receipt consumer with an explicit test source identity; the real registration above stays immutable.
+  const policy = structuredClone(BOUNDED_REVISION_DIAGNOSTIC), content = '正文'.repeat(526) + '稿'
+  Object.assign(policy.source, { contentSha256: hash(content), byteSize: Buffer.byteLength(content), units: countDraftUnits(content) })
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-driver.mjs'), 'utf8')
+  const functions = driver.slice(driver.indexOf('export function assertBoundedRevisionSource'), driver.indexOf('export function productionBridgeHash')).replaceAll('export function', 'function')
+  const parser = driver.slice(driver.indexOf('const reviewParseFailure ='), driver.indexOf('function verifiedPrimarySyntaxFailure'))
+  const stable = value => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([left], [right]) => left.localeCompare(right))) : item)
+  const api = vm.runInNewContext(`${functions}\n${parser}\n({ boundedRevisionItems, validateBoundedRevisionDiagnostic })`,
+    { BOUNDED_REVISION_DIAGNOSTIC: policy, fs, path, Buffer, digest: hash, countProjectedDraftUnits: countDraftUnits,
+      stableEvidence: stable, parseReviewGenerationResult, stripDraftThinkingTags: value => value, SyntaxError })
+  const draft = { id: 4, chapterNumber: 2, version: 1, status: 'draft', content }
+  const report = { summary: '原始 AI 审稿', items: [{ category: '事实', severity: 'unknown', description: 'AI 未确认项', quote: '正文' }] }
+  const sourceReview = { id: 1, sourceDraft: draft }, originalReport = JSON.stringify(report)
+  const items = api.boundedRevisionItems(report, sourceReview, draft)
+  assert.equal(JSON.stringify(report), originalReport)
+  assert.equal(items[0].decision, 'ignore')
+  assert.equal(items[0].origin, 'ai')
+  assert.equal(JSON.stringify(items.slice(1)), JSON.stringify(policy.authorItems))
+  assert.equal(api.boundedRevisionItems({ ...report, items: [] }, sourceReview, draft).length, 2, 'all-pass never skips the two author items')
+  assert.throws(() => api.boundedRevisionItems(report, { ...sourceReview, sourceDraft: { ...draft, version: 2 } }, draft), /CONFIRMATION_SOURCE_MISMATCH/)
+  const confirmation = createHumanConfirmedReviewSnapshot({ sourceReviewId: 1, sourceDraft: draft,
+    summary: report.summary, authorGuidance: '', items })
+  assert.ok(confirmation)
+  const brief = renderHumanConfirmedReviewBrief(confirmation, 'zh-CN')
+  assert.ok(!brief.includes(report.items[0].description))
+  for (const item of policy.authorItems) assert.ok(brief.includes(item.description))
+  const artifact = (name, text, extra = {}) => {
+    const outputPath = path.join(directory, name)
+    fs.writeFileSync(outputPath, text)
+    return { outputPath, contentHash: hash(text), ...extra }
+  }
+  const finalText = '正文'.repeat(500), mergeHash = hash(finalText)
+  const inputHash = 'd'.repeat(64)
+  const result = { arm: 'candidate', phase: 'bounded-revision-diagnostic', milestone: 'diagnostic', caseId: 'C17-A',
+    invocationId: 'current', qualification: 'non-qualification-diagnostic', codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64),
+    driverHash: 'c'.repeat(64), ...protocolBinding, diagnosticInputHash: inputHash, projectEpoch: 'fresh-epoch',
+    physicalProject: { projectId: 'fresh-project' }, saved: { contentHash: mergeHash, units: 1000 },
+    boundedRevision: { source: artifact('source.txt', content, { draftId: 4, version: 1 }),
+      review: artifact('review.json', originalReport, { reviewId: 1, sourceHash: hash(content) }),
+      confirmation: artifact('confirmation.json', JSON.stringify(confirmation), { reviewId: 2 }),
+      revision: artifact('revision.txt', finalText, { revisionId: 1 }), finalDraft: artifact('saved.txt', finalText),
+      finalReview: artifact('final-review.json', originalReport, { reviewId: 3, sourceHash: mergeHash }), mergeHash,
+      mergeReceipt: { revisionId: 1, targetDraftId: 4, chapterNumber: 2, version: 1, status: 'revised', wordCount: 1000 },
+      provenance: { inputHash, restoration: { originProjectId: policy.source.projectId, targetProjectId: 'fresh-project' } } },
+    operations: [], attempts: [], ownerTerminal: [] }
+  for (const [index, operation] of policy.operations.entries()) {
+    const purpose = operation.kind === 'refine' ? 'refine-from-review' : 'review-chapter'
+    const actual = { attemptId: `attempt-${index}`, runId: `run-${index}`, rootActionId: `root-${index}`,
+      projectId: 'fresh-project', epoch: 'fresh-epoch', purpose }
+    const saved = result.boundedRevision[operation.kind === 'review' ? 'review' : operation.kind === 'refine' ? 'revision' : 'finalReview']
+    const physical = artifact(`physical-${index}.txt`, operation.kind === 'refine' ? finalText
+      : JSON.stringify({ ...report, items: report.items.map(item => ({ ...item, severity: 'warning' })) }))
+    result.operations.push({ operation: operation.id, kind: operation.kind, handle: actual, outputHash: saved.contentHash })
+    result.attempts.push({ attemptId: `candidate:${actual.attemptId}`, outputPath: physical.outputPath,
+      visibleTextHash: physical.contentHash, finishReason: 'stop', requestedOutputTokens: 16384,
+      nativePlannedAttempt: { status: 'dispatch-marked', requestedOutputTokens: 16384 },
+      binding: { invocationId: result.invocationId, phase: result.phase, operation: operation.id, actual,
+        codeSha: result.codeSha, sourceHash: result.sourceHash, driverHash: result.driverHash, protocolHash: result.protocolHash,
+        diagnosticSourceHash: hash(policy.source), diagnosticInputHash: inputHash } })
+    result.ownerTerminal.push({ attemptId: actual.attemptId, status: 'settled', finishReason: 'stop', purpose,
+      textHash: physical.contentHash, artifactId: `artifact-${index}`, hasFormalEffect: true })
+  }
+  try {
+    assert.equal(api.validateBoundedRevisionDiagnostic(result).status, 'pending-independent-diagnostic-oracle-review')
+    for (const changed of [
+      { ...confirmation, sourceDraft: undefined }, { ...confirmation, sourceDraft: { ...draft, version: 2 } },
+      { ...confirmation, sourceReviewId: 2 }, { ...confirmation, items: items.map((item, index) => index ? item : { ...item, decision: 'apply' }) },
+      { ...confirmation, kind: undefined },
+    ]) {
+      result.boundedRevision.confirmation = artifact('confirmation.json', JSON.stringify(changed), { reviewId: 2 })
+      assert.equal(api.validateBoundedRevisionDiagnostic(result).valid, false)
+    }
+    result.boundedRevision.confirmation = artifact('confirmation.json', JSON.stringify(confirmation), { reviewId: 2 })
+    for (const change of [
+      value => { value.attempts[1].binding.actual.purpose = 'refine-from-review-continuation' },
+      value => { value.attempts[0].requestedOutputTokens = 2672 },
+      value => { value.ownerTerminal[2].status = 'unknown' },
+      value => { value.attempts.push(structuredClone(value.attempts[1])) },
+      value => { value.attempts.reverse() },
+      value => { value.boundedRevision.finalReview = undefined },
+      value => { value.boundedRevision.mergeReceipt.targetDraftId = 5 },
+    ]) {
+      const altered = structuredClone(result); change(altered)
+      assert.equal(api.validateBoundedRevisionDiagnostic(altered).valid, false)
+    }
+    const extra = structuredClone(result)
+    const primary = extra.attempts[0]
+    fs.writeFileSync(primary.outputPath, '{"items":[')
+    primary.visibleTextHash = hash('{"items":[')
+    Object.assign(extra.ownerTerminal[0], { textHash: primary.visibleTextHash, hasFormalEffect: false })
+    const rebuild = structuredClone(result.attempts[0]), terminal = structuredClone(result.ownerTerminal[0])
+    rebuild.outputPath = artifact('rebuild.txt', fs.readFileSync(rebuild.outputPath, 'utf8')).outputPath
+    fs.writeFileSync(rebuild.outputPath, JSON.stringify({ ...report, items: report.items.map(item => ({ ...item, severity: 'warning' })) }))
+    rebuild.binding.actual.attemptId = 'rebuild'; rebuild.binding.actual.purpose = 'review-chapter-rebuild'; rebuild.attemptId = 'candidate:rebuild'
+    terminal.attemptId = 'rebuild'; terminal.purpose = 'review-chapter-rebuild'; terminal.artifactId = 'rebuild-artifact'
+    extra.attempts.splice(1, 0, rebuild); extra.ownerTerminal.splice(1, 0, terminal)
+    assert.equal(api.validateBoundedRevisionDiagnostic(extra).valid, true)
+    const validReport = JSON.stringify({ ...report, items: report.items.map(item => ({ ...item, severity: 'warning' })) })
+    fs.writeFileSync(primary.outputPath, validReport)
+    primary.visibleTextHash = hash(validReport); extra.ownerTerminal[0].textHash = primary.visibleTextHash
+    assert.equal(api.validateBoundedRevisionDiagnostic(extra).valid, false, 'valid review does not authorize a content retry')
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('bounded-revision ledger accepts exactly the registered five purposes and refuses source or invocation drift', () => {
+  const phase = 'bounded-revision-diagnostic', registration = protocol.phases[phase]
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/bounded-ledger-'))
+  const ledger = path.join(directory, 'synthetic-ledger.jsonl')
+  const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', codeSha: 'a'.repeat(40),
+    sourceHash: 'a'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64), milestone: 'diagnostic', phase,
+    invocationId: 'current', caseId: 'C17-A', diagnosticSourceHash: hash(registration.source), diagnosticInputHash: 'd'.repeat(64), ...protocolBinding }
+  const sequence = [[0, 'review-chapter'], [0, 'review-chapter-rebuild'], [1, 'refine-from-review'], [2, 'review-chapter'], [2, 'review-chapter-rebuild']]
+  const reserve = (index, purpose, extra = {}) => ({ type: 'reserve', attemptId: `candidate:attempt-${index}-${purpose}`,
+    binding: { ...binding, operation: registration.operations[index].id,
+      actual: { attemptId: `attempt-${index}-${purpose}`, runId: `run-${index}`, rootActionId: `root-${index}`,
+        projectId: 'fresh-project', epoch: 'fresh-epoch', purpose }, ...extra } })
+  try {
+    assert.throws(() => updateLedger(ledger, reserve(0, 'review-chapter-rebuild'), { campaignMode: 'synthetic' }), /ALREADY_DISPATCHED/)
+    assert.throws(() => validateCampaignBinding(reserve(1, 'refine-from-review-continuation').binding, { campaignMode: 'synthetic', protocol }), /INVALID_CAMPAIGN_BINDING/)
+    assert.throws(() => validateCampaignBinding(reserve(0, 'review-chapter', { diagnosticSourceHash: 'f'.repeat(64) }).binding,
+      { campaignMode: 'synthetic', protocol }), /INVALID_CAMPAIGN_BINDING/)
+    for (const [index, purpose] of sequence) {
+      const event = reserve(index, purpose)
+      updateLedger(ledger, event, { campaignMode: 'synthetic' })
+      updateLedger(ledger, { type: 'dispatch', attemptId: event.attemptId }, { campaignMode: 'synthetic' })
+      updateLedger(ledger, { type: 'settle', attemptId: event.attemptId, finishReason: 'stop' }, { campaignMode: 'synthetic' })
+      if (index === 0 && purpose === 'review-chapter') {
+        const prefix = fs.readFileSync(ledger)
+        for (const change of [{ invocationId: 'other' }, { diagnosticInputHash: 'f'.repeat(64) }])
+          assert.throws(() => updateLedger(ledger, reserve(1, 'refine-from-review', change), { campaignMode: 'synthetic' }), /ALREADY_DISPATCHED/)
+        assert.equal(Buffer.compare(prefix, fs.readFileSync(ledger)), 0)
+      }
+    }
+    const bytes = fs.readFileSync(ledger)
+    for (const change of [{}, { invocationId: 'other' }, { diagnosticInputHash: 'f'.repeat(64) }])
+      assert.throws(() => updateLedger(ledger, reserve(1, 'refine-from-review', change), { campaignMode: 'synthetic' }), /ALREADY_DISPATCHED/)
+    assert.equal(Buffer.compare(bytes, fs.readFileSync(ledger)), 0)
+    assert.equal(fs.readFileSync(ledger, 'utf8').trimEnd().split('\n').length, 15)
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('bounded-revision first and final review rebuild require same-source STOP parse failure and native artifact evidence', () => {
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/bounded-review-gate-'))
+  const policy = BOUNDED_REVISION_DIAGNOSTIC.attemptPolicy
+  const reviewSource = { draftId: 4, version: 1, contentHash: BOUNDED_REVISION_DIAGNOSTIC.source.contentSha256 }
+  const malformed = '{"items":['
+  try {
+    for (const operation of [policy.operationId, policy.reviewRebuild.operationId]) {
+      const owner = { attemptId: operation, runId: `run-${operation}`, rootActionId: `root-${operation}`,
+        projectId: 'fresh-project', epoch: 'fresh-epoch', purpose: 'review-chapter' }
+      const outputPath = path.join(directory, `${operation}.txt`)
+      fs.writeFileSync(outputPath, malformed)
+      const attemptId = `candidate:${owner.attemptId}`
+      const binding = { operation, actual: owner, reviewSource }
+      const evidence = { attempt: { attemptId, binding, outputPath, visibleTextHash: hash(malformed) },
+        ownerArtifactHash: hash(malformed), reviewReportAbsent: true, events: [
+          { type: 'reserve', attemptId, binding }, { type: 'dispatch', attemptId }, { type: 'settle', attemptId, finishReason: 'stop' }] }
+      const dispatch = (proof, source = reviewSource) => {
+        const gate = createOperationDispatchGate({ repairPolicy: policy, readPrimaryEvidence: () => proof })
+        gate(operation, owner, reviewSource)
+        return () => gate(operation, { ...owner, attemptId: `rebuild-${operation}`, purpose: 'review-chapter-rebuild' }, source)
+      }
+      const permitted = dispatch(evidence)
+      assert.doesNotThrow(permitted)
+      assert.throws(permitted, /MODEL_REQUEST_REJECTED/)
+      assert.throws(dispatch({ ...evidence, ownerArtifactHash: hash('different') }), /MODEL_REQUEST_REJECTED/)
+      assert.throws(dispatch({ ...evidence, reviewReportAbsent: false }), /MODEL_REQUEST_REJECTED/)
+      assert.throws(dispatch({ ...evidence, events: evidence.events.map((event, index) => index === 2 ? { ...event, finishReason: 'length' } : event) }), /MODEL_REQUEST_REJECTED/)
+      assert.throws(dispatch(evidence, { ...reviewSource, version: 2 }), /MODEL_REQUEST_REJECTED/)
+      fs.writeFileSync(outputPath, JSON.stringify({ summary: '问题仍未解决', items: [{ category: '事实', severity: 'warning', description: '保持原发现', quote: '正文' }] }))
+      evidence.attempt.visibleTextHash = hash(fs.readFileSync(outputPath)); evidence.ownerArtifactHash = evidence.attempt.visibleTextHash
+      assert.throws(dispatch(evidence), /MODEL_REQUEST_REJECTED/, 'semantic findings cannot authorize a retry')
+    }
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('bounded-revision missing execute receipt keeps consumption unknown and retained receipt preserves actual counts', () => {
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/bounded-missing-receipt-'))
+  const driver = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-driver.mjs'), 'utf8')
+  const start = driver.indexOf("  if (options.phase === 'bounded-revision-diagnostic') {", driver.indexOf('export function runProductionPhasePair'))
+  const end = driver.indexOf("  if (options.phase === 'c16-c18') {", start)
+  const execute = new Function('options', 'prepared', 'executionTargets', 'common', 'parityHash', 'fs', 'path',
+    'runProductionBridge', 'validateBoundedRevisionDiagnostic', 'invocationId', driver.slice(start, end))
+  let calls = 0
+  try {
+    for (const count of [null, 0, 3, 5]) {
+      const receiptPath = path.join(directory, `${count}.json`)
+      if (count !== null) fs.writeFileSync(receiptPath, JSON.stringify({ status: 'passed', physicalModelRequests: count, syntheticDispatches: 0 }))
+      const result = execute({ phase: 'bounded-revision-diagnostic' }, [], { candidate: { isolationRoot: directory } },
+        {}, 'parity', fs, path, request => {
+          calls++
+          assert.equal(request.action, 'execute')
+          throw Object.assign(new Error('PRODUCTION_BRIDGE_FAILED'), { receiptPath })
+        }, () => assert.fail('failed bridge cannot enter the pending diagnostic validator'), 'probe')
+      assert.equal(result.status, 'failed')
+      assert.equal(result.physicalModelRequests, count)
+      assert.equal(result.qualityQualification, 'not-run')
+      assert.equal(result.formalSampleQualification, 'not-run')
+    }
+    assert.equal(calls, 4)
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
 
 test('shared-input diagnostic registers one candidate and rejects a second physical slot', async () => {
   const phase = 'shared-input-diagnostic'
@@ -1220,7 +1452,7 @@ this.restoreGrantIssuer = restoreGrantIssuer`, sandbox)
   // baseline 臂不经过恢复调用：c16-c18 只对 candidate 派发 execute，桥内断言 candidate，恢复类型只在 continuityRun 内取得。
   const driver = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-driver.mjs'), 'utf8')
   assert.match(driver, /runProductionBridge\(\{ \.\.\.common, caseId: item\.id, target: executionTargets\.candidate, action: 'execute'/)
-  assert.match(fixture, /if \(continuityRun\) \{\s*assert\.equal\(candidate, true, 'CANDIDATE_REQUIRED'\)/)
+  assert.match(fixture, /if \(continuityRun \|\| boundedRun\) \{\s*assert\.equal\(candidate, true, 'CANDIDATE_REQUIRED'\)/)
   assert.match(fixture, /const restorationKinds = continuityRun \? /)
 })
 
@@ -1580,7 +1812,7 @@ test('C16–C18 ca466d9a/73b46513 段（第580–648行）按同一规则分两�
   // 新协议字节 hash 与被取代的 a0a14777 不同，runner 读写两入口都按链末端取历史范围。
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
   assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, ca466d9a, protocol\.historicalC1673b46513Boundary\)/)
-  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trusted625bfda8Events/)
+  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedA763f510Events/)
 })
 
 test('新登记续写直接首稿，旧对账可读但当前实验拒绝额外发送', () => {
@@ -2798,10 +3030,10 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
       `${fixture.slice(repairStart, repairEnd)}\nreturn structuredSyntaxRepair`)
     const checkAuthority = new Function('operationKind', 'candidate', 'request', 'db', 'chapter', 'promptText',
       'preflight', 'authorityFacts', 'predecessorReadbacks', 'naturalPredecessorText', 'scene', 'structuredSyntaxRepair',
-      `const fullRun = request.phase === 'full', continuityRun = false, reviewedRun = false;\n${fixture.slice(checkStart, checkEnd)}`)
+      `const fullRun = request.phase === 'full', continuityRun = false, reviewedRun = false, boundedRun = false;\n${fixture.slice(checkStart, checkEnd)}`)
     const readAuthorityEvidence = new Function('operationKind', 'candidate', 'request', 'authorityFacts', 'sha',
       'promptText', 'structuredSyntaxRepair', 'predecessorReadbacks', 'db', 'chapter',
-      `const continuityRun = false, reviewedRun = false; return ${fixture.slice(evidenceStart, evidenceEnd).trim().replace(/,$/, '')}`)
+      `const continuityRun = false, reviewedRun = false, boundedRun = false; return ${fixture.slice(evidenceStart, evidenceEnd).trim().replace(/,$/, '')}`)
     const facts = ['fact sent', 'fact absent from repair']
     const request = { phase: 'early-budget', chapterNumber: 1 }
     const ledgerPath = path.join(dir, 'ledger.jsonl')
@@ -3447,7 +3679,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     'historicalC16Ee3435ecBoundary', 'historicalC16Ccc70b31Boundary', 'historicalC16C9b88510Boundary', 'historicalC16D8a30c11Boundary',
     'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary', 'historicalC16B42cfc55Boundary',
     'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
-    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary']
+    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -3525,6 +3757,8 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1161, real.boundaries.historicalC1670407421Boundary), 1182)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1182, real.boundaries.historicalC16D712808cBoundary), 1194)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1194, real.boundaries.historicalC16625bfda8Boundary), 1212)
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1212, real.boundaries.historicalC16D515b666Boundary), 1251)
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1251, real.boundaries.historicalC16A763f510Boundary), 1287)
     assert.equal(validatePhysicalLedger(ledger), ledger)
     fs.writeFileSync(file, synthetic.raw)
     const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
@@ -3539,6 +3773,16 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
       /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
     fs.writeFileSync(ledger, real.raw)
     fs.writeFileSync(file, synthetic.raw)
+    for (const name of ['historicalC16D515b666Boundary', 'historicalC16A763f510Boundary']) {
+      const registered = real.boundaries[name]
+      const changed = raw => raw.replace(`"codeSha":"${registered.armBindings.candidate.codeSha}"`, `"codeSha":"${'f'.repeat(40)}"`)
+      fs.writeFileSync(ledger, changed(real.raw))
+      assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+      fs.writeFileSync(file, changed(synthetic.raw))
+      assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+      fs.writeFileSync(ledger, real.raw)
+      fs.writeFileSync(file, synthetic.raw)
+    }
     const changed1194 = raw => raw.replace('"type":"unknown","attemptId":"candidate:8ca854ac-09bc-4430-8ebe-7dea43ce89f3"',
       '"type":"settle","attemptId":"candidate:8ca854ac-09bc-4430-8ebe-7dea43ce89f3"')
     fs.writeFileSync(ledger, changed1194(real.raw))

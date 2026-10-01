@@ -8,7 +8,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import os from 'node:os'
 import { runProductionCommandProbe, runProductionPhasePair, runProductionBridge, copyIsolatedRealModelConfig,
-  assertSharedInputDiagnostic, productionBridgeHash, productionExecutionRuntime, productionScenario, PRODUCTION_BRIDGE, PHASE_SCENARIOS } from './quality-modernization-driver.mjs'
+  assertSharedInputDiagnostic, BOUNDED_REVISION_DIAGNOSTIC, readBoundedRevisionSource,
+  productionBridgeHash, productionExecutionRuntime, productionScenario, PRODUCTION_BRIDGE, PHASE_SCENARIOS } from './quality-modernization-driver.mjs'
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CACHE = path.join(ROOT, '.runtime', '.cache', 'novel-quality-modernization')
@@ -128,10 +129,16 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
     || !phase.caseIds.includes(binding.caseId)
     || !phase.operations.some(operation => operation.id === binding.operation && (!operation.caseIds || operation.caseIds.includes(binding.caseId)))) fail('INVALID_CAMPAIGN_BINDING')
   if ((['full', 'c16-c18'].includes(binding.phase)) !== (binding.milestone === 'final')
-    || (binding.phase === 'shared-input-diagnostic') !== (binding.milestone === 'diagnostic')
+    || (['shared-input-diagnostic', 'bounded-revision-diagnostic'].includes(binding.phase)) !== (binding.milestone === 'diagnostic')
     || binding.phase === 'shared-input-diagnostic' && (binding.arm !== 'candidate'
       || phase.nonQualification !== true || phase.maxPhysicalRequests !== 1
       || binding.messagesSha256 !== phase.messagesSha256 || binding.originalMessagesSha256 !== phase.originalMessagesSha256)
+    || binding.phase === 'bounded-revision-diagnostic' && (!isDeepStrictEqual(phase, BOUNDED_REVISION_DIAGNOSTIC)
+      || binding.diagnosticSourceHash !== hash(phase.source) || !/^[a-f0-9]{64}$/u.test(binding.diagnosticInputHash ?? '')
+      || binding.actual?.projectId === phase.source.projectId || binding.actual?.epoch === phase.source.epoch
+      || !(phase.operations.find(item => item.id === binding.operation)?.kind === 'refine'
+        ? binding.actual?.purpose === 'refine-from-review'
+        : ['review-chapter', 'review-chapter-rebuild'].includes(binding.actual?.purpose)))
     || phase.arms && !phase.arms.includes(binding.arm)
     || binding.phase === 'full' && !phase.operations.some(operation => operation.id === binding.operation
       && (operation.kind !== 'directory' || binding.caseId.endsWith('/1')))) fail('INVALID_CAMPAIGN_BINDING')
@@ -212,7 +219,9 @@ export function validatePhysicalLedger(file) {
   const sharedInput7203443d = validateHistoricalSupersessionBoundary(raw, r9337909d, protocol.historicalSharedInput7203443dBoundary)
   const c1670407421 = validateHistoricalSupersessionBoundary(raw, sharedInput7203443d, protocol.historicalC1670407421Boundary)
   const d712808c = validateHistoricalSupersessionBoundary(raw, c1670407421, protocol.historicalC16D712808cBoundary)
-  validateHistoricalSupersessionBoundary(raw, d712808c, protocol.historicalC16625bfda8Boundary)
+  const r625bfda8 = validateHistoricalSupersessionBoundary(raw, d712808c, protocol.historicalC16625bfda8Boundary)
+  const d515b666 = validateHistoricalSupersessionBoundary(raw, r625bfda8, protocol.historicalC16D515b666Boundary)
+  validateHistoricalSupersessionBoundary(raw, d515b666, protocol.historicalC16A763f510Boundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -325,8 +334,10 @@ export function withLedgerReconciliation(ledgerPath, campaignMode, run) {
 export function selectPhase(protocol, phase, milestone = 'early') {
   if (!['early', 'post-ui', 'final', 'diagnostic'].includes(milestone)) fail('INVALID_MILESTONE')
   if (!Object.hasOwn(protocol.phases, phase)) fail('INVALID_PHASE')
+  if (phase === 'bounded-revision-diagnostic' && !isDeepStrictEqual(protocol.phases[phase], BOUNDED_REVISION_DIAGNOSTIC))
+    fail('BOUNDED_REVISION_REGISTRATION_MISMATCH')
   if ((['full', 'c16-c18'].includes(phase)) !== (milestone === 'final')
-    || (phase === 'shared-input-diagnostic') !== (milestone === 'diagnostic')) fail('PHASE_MILESTONE_MISMATCH')
+    || (['shared-input-diagnostic', 'bounded-revision-diagnostic'].includes(phase)) !== (milestone === 'diagnostic')) fail('PHASE_MILESTONE_MISMATCH')
   return { phase, milestone, ...protocol.phases[phase],
     ...(milestone === 'post-ui' ? protocol.phases[phase].postUi ?? {} : {}) }
 }
@@ -343,11 +354,15 @@ export function forwardReasoningFor(protocol, phase, milestone) {
     || !isDeepStrictEqual(Object.keys(high).sort(), ['baseRevision', 'limits', 'reasoningOverride', 'revision'])
     || high.revision !== 'fixed-high-zero-temperature-v1' || high.baseRevision !== zero.revision
     || high.reasoningOverride !== 'high')) fail('FORWARD_HIGH_REGISTRATION_MISMATCH')
-  const scope = registration?.scopes?.find(item => item.phase === phase && item.milestone === milestone)
+  const bounded = phase === 'bounded-revision-diagnostic'
+  if (bounded && (!high || !protocol.forwardQualificationWindowExperiment)) fail('BOUNDED_REVISION_REGISTRATION_MISMATCH')
+  const scope = bounded ? { phase, milestone, caseIds: selectPhase(protocol, phase, milestone).caseIds }
+    : registration?.scopes?.find(item => item.phase === phase && item.milestone === milestone)
   if (!scope) return null
   if (!isDeepStrictEqual(scope.caseIds, selectPhase(protocol, phase, milestone).caseIds)) fail('FORWARD_REASONING_SCOPE_MISMATCH')
   if (zero === undefined) return registration
-  const effective = { ...registration, revision: zero.revision, model: { ...registration.model, temperature: zero.temperature }, limits: zero.limits }
+  const effective = { ...registration, ...(bounded ? { scopes: [scope] } : {}), revision: zero.revision,
+    model: { ...registration.model, temperature: zero.temperature }, limits: zero.limits }
   return high === undefined ? effective : { ...effective, revision: high.revision, reasoningOverride: high.reasoningOverride,
     wire: { ...effective.wire, candidate: { ...effective.wire.candidate, reasoning_effort: high.reasoningOverride } }, limits: high.limits }
 }
@@ -366,7 +381,7 @@ export function forwardQualificationWindowFor(protocol, phase, milestone) {
     if (!isDeepStrictEqual(scope.caseIds, selectPhase(protocol, scope.phase, scope.milestone).caseIds))
       fail('FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH')
   const scope = registration.scopes.find(item => item.phase === phase && item.milestone === milestone)
-  if (!scope) return null
+  if (!scope && phase !== 'bounded-revision-diagnostic') return null
   if (reasoning?.revision !== protocol.forwardHighReasoningExperiment.revision)
     fail('FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH')
   return registration
@@ -682,6 +697,14 @@ export function updateLedger(file, event, options = {}) {
       const trusted625bfda8Events = r625bfda8Boundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedD712808cEvents, r625bfda8Boundary)
         : trustedD712808cEvents
+      const d515b666Boundary = options.campaignMode === 'real'
+        ? protocol.historicalC16D515b666Boundary : options.historicalC16D515b666Boundary
+      const trustedD515b666Events = d515b666Boundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trusted625bfda8Events, d515b666Boundary) : trusted625bfda8Events
+      const a763f510Boundary = options.campaignMode === 'real'
+        ? protocol.historicalC16A763f510Boundary : options.historicalC16A763f510Boundary
+      const trustedA763f510Events = a763f510Boundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedD515b666Events, a763f510Boundary) : trustedD515b666Events
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
       // 未登记 operations 的阶段在这里 fail closed。
@@ -692,6 +715,19 @@ export function updateLedger(file, event, options = {}) {
         const occupied = [...reserved.values()].filter(row => statuses.get(row.attemptId) !== 'cancel')
         if (binding.phase === 'shared-input-diagnostic') {
           if (occupied.some(row => row.binding.phase === binding.phase)) fail('SHARED_INPUT_DIAGNOSTIC_ALREADY_DISPATCHED')
+          return 'nonQualificationDiagnostic'
+        }
+        if (binding.phase === 'bounded-revision-diagnostic') {
+          const prior = occupied.filter(row => row.binding.phase === binding.phase)
+          const matches = prior.filter(row => row.binding.operation === binding.operation)
+          if (prior.some(row => row.binding.invocationId !== binding.invocationId
+            || row.binding.diagnosticInputHash !== binding.diagnosticInputHash)
+            || prior.length >= BOUNDED_REVISION_DIAGNOSTIC.maxPhysicalRequests
+            || matches.length >= (binding.actual.purpose === 'refine-from-review' ? 1 : 2)
+            || binding.actual.purpose === 'review-chapter' && matches.length !== 0
+            || binding.actual.purpose === 'review-chapter-rebuild' && (matches.length !== 1
+              || matches[0].binding.actual.purpose !== 'review-chapter'))
+            fail('BOUNDED_REVISION_DIAGNOSTIC_ALREADY_DISPATCHED')
           return 'nonQualificationDiagnostic'
         }
         const slot = value => `${value.milestone}:${value.phase}:${value.caseId}:${value.arm}:${value.operation}`
@@ -708,7 +744,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trusted625bfda8Events
+          const superseded = index >= trustedHistoricalEvents && index < trustedA763f510Events
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)
@@ -836,6 +872,13 @@ export function main(argv) {
     const scenario = productionScenario(phase, selection.milestone)
     if (!scenario) return { status: 'blocked', code: 'PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED', selection, physicalModelRequests: 0 }
     assertScenarioMatchesProtocol(selection, scenario, path.join(ROOT, protocol.fixturePath))
+    let diagnosticInputPath
+    if (phase === 'bounded-revision-diagnostic') {
+      if (!args['--diagnostic-input']) fail('BOUNDED_REVISION_INPUT_REQUIRED')
+      diagnosticInputPath = real(args['--diagnostic-input'])
+      if (!inside(real(path.join(ROOT, '.runtime/.cache')), diagnosticInputPath)) fail('BOUNDED_REVISION_INPUT_PATH')
+      readBoundedRevisionSource(diagnosticInputPath)
+    }
     const mode = command === 'dry-run' || args['--dry-run'] ? 'synthetic' : args['--mode']
     if (!['synthetic', 'real'].includes(mode)) fail('EXPLICIT_PROVIDER_MODE_REQUIRED')
     if (mode === 'real' && (!targets.baseline.modelId || !targets.candidate.modelId)) fail('FROZEN_SAFE_MODEL_REQUIRED')
@@ -849,6 +892,7 @@ export function main(argv) {
       scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, evaluationPolicy: selection.evaluationPolicy, order: protocol.order,
       forwardReasoning: forwardReasoningFor(protocol, phase, selection.milestone),
       forwardQualificationWindow: forwardQualificationWindowFor(protocol, phase, selection.milestone),
+      diagnosticInputPath,
       ...currentProtocolBinding(), semanticPath: path.join(ROOT, protocol.fixturePath),
       templatesPath: path.join(evidenceRoot, 'baseline-templates.json'), ledgerPath }))
     inspectTarget(targets.baseline); inspectTarget(targets.candidate)
@@ -866,7 +910,8 @@ export function main(argv) {
   const selection = selectPhase(protocol, command, args['--milestone'] || (command === 'full' ? 'final' : 'early'))
   return { status: 'blocked', code: 'PRODUCTION_COMMAND_DRIVER_NOT_INTEGRATED', selection, parity, physicalModelRequests: 0, requiredOwner: 'S06A/S06B/S06C/S07/S10B/S11; 在 S14A 冻结前接入生产命令及逐物理请求账本' }
 }
-export const exitCodeForStatus = status => status === 'blocked' ? 2 : status === 'failed' ? 1 : status === 'pending-independent-oracle-review' ? 3 : 0
+export const exitCodeForStatus = status => status === 'blocked' ? 2 : status === 'failed' ? 1
+  : ['pending-independent-oracle-review', 'pending-independent-diagnostic-oracle-review'].includes(status) ? 3 : 0
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try { const result = main(process.argv.slice(2)); console.log(JSON.stringify(result, null, 2)); process.exitCode = exitCodeForStatus(result.status) }
   catch (error) { console.error(JSON.stringify({ status: 'blocked', code: /^[A-Z_]+$/.test(error.message) ? error.message : 'INVALID_OR_UNAVAILABLE_INPUT', physicalModelRequests: null, note: 'Inspect the retained campaign/target receipts; no unverified zero-call claim.' })); process.exitCode = 2 }

@@ -324,3 +324,17 @@ S07 early-budget 已接默认生产命令及最终 fetch 处的 reserve/dispatch
 N 只计算桥的外层兜底，不增加任何 dispatch 权限：C16-A/B/C 的 notes 加 cards 及已有两次 cards repair 为 4；C17-A 与 C18-A/B 的原续写恢复最多 8；C17-B 的 notes/cards 加续写为 12。`early-budget` post-UI 的目录3、正文8、首审2、修稿1、完整复评1 合计15；`early-context` post-UI 单正文为1；`early-review` post-UI 三操作为3。`full` 每次 bridge 只运行一个 operation：三章规划以产品 `planBlueprintGenerationCost(3).maxCalls` 取9，单章正文以已登记恢复上限取8，不拿完整旅程重置 native root。准备阶段无发送，只需一个有限兜底。任一 scope、case、operation、登记 hash 或实际请求参数漂移须在 reserve 前拒绝；同一解析结果写入父桥 spawn/Vitest config、fixture it/守护与回执。
 
 `historicalC16625bfda8Boundary` 从1194行接续至1212行，完整前缀 sha256 `e6fbc58d717e6acf9cb24cab41c14487cda670db73ab158c7c9a654629b5daa5`，精确认证六次 candidate 的 reserve→dispatch→终态（五次 settle、末次 unknown）及原 code/source/driver/parity 绑定。账本读写两入口都继承该段；旧1194及之前的原始字节前缀继续认证。新目标须绑定新的完整协议与桥 hash。任何技术或文学失败均停止依赖资格；本时间合同本身不证明模型能力、参数或代码改善、原失败根因及服务端实际采纳。
+
+## C17-A 固定保存稿有界修稿诊断（非资格）
+
+`bounded-revision-diagnostic` 仅运行 candidate / diagnostic / C17-A。唯一来源为 invocation `a763f510-eac5-4368-967e-0abb630ff597`、testedSha `889b5e23e57daa763c4e549e892afaa69d1da73c` 的第2章 draft4 / v1 / draft：完整正文3889字节、1053单位、SHA256 `c8b29e929e34b57e7af41aae94cbc0f4c027eab21c0cfd4daf08a2501b21da66`。源 packet manifest、主DB及对应 sidecars、project.json 和三个 portable 资产的完整身份登记在 phase 中。运行时以私有 `--diagnostic-input` 清单提供 `packetManifestPath`、`stdoutPath`、`sourceProjectRoot`，该清单须位于当前工作树 `.runtime/.cache`；路径不写进公共协议。
+
+准备阶段先验证所有源文件与完整正文，只复制冻结文件到隔离 donor，随后使用现有 portable export→restore 创建新 projectId / epoch，再由产品 IPC 读回完整 sourceDraft。缺文件、hash/version/status 不符或恢复身份无效，须在任何模型请求前停止。原项目、packet DB 原件、旧候选及 UNKNOWN 不修改、不重放。准备阶段不发送请求，也不据文件齐备宣称恢复通过。
+
+执行顺序固定为普通完整 `ReviewChapterCommand` → 持久化作者确认 → 一次 `RefineFromReviewCommand` → `db:revision-merge` → 普通完整 `ReviewChapterCommand`。首审原 AI 报告完整保存，全部 AI 项以 origin `ai` / `ignore` 原样留在确认记录；始终追加调用前冻结的两项 origin `author` / `apply`：本章新的具体实际代价未兑现，以及同一记录日期今天/明天矛盾。两项只提供原文问题，不指定新代价金额、物品、正确日期或异常原因。只有这两作者项进入修稿 brief；无确认、错误源稿/版本、无效持久记录均拒绝修稿。不得借用定向复核的旧 cycle resolved 状态，末审仍为普通完整审稿。
+
+最少3、最多5次物理请求：首审、一次修稿、末审各1次；两次审稿分别只可在同源、已 settle、真实 STOP 的语法或形状失败后执行一次产品既有 `review-chapter-rebuild`，必须同时核验完整物理输出 hash、native owner artifact 和未保存审稿效果。文学问题不能触发 rebuild。修稿 LENGTH、续写、额外请求或预算不符须在下一次 campaign reserve / HTTP 前拒绝；已消费请求保留，不退款、不降级。复用原 complete profile0、high、temperature0、creativeStrategy auto；本三主任务没有 draft budgetDemand，native 解析出的每次 output 预算须为16384。桥继承原生时间合同，N=5；原 scope/high/temperature/window 登记对象均不改变。
+
+原900±30%要求为630–1170，产品既有1053稿长80%–120%要求为842–1264，最终验收使用交集842–1170；原全部硬事实、事件、代价、时点和文学标准不变。保存正文、revision、merge receipt、确认、两份完整审稿与各次 actual owner/ledger 必须可独立核验。自动结果最多为 `pending-independent-diagnostic-oracle-review`；任何 missing/error/unknown 均不能自动 PASS。诊断不改变原七案 FAIL、qualification 或产品完成状态，也不证明首稿失败根因。
+
+`historicalC16D515b666Boundary` 认证1212→1251行：原 d515b666 / a8812b8f 的13次请求及原协议 hash `9de2619fd8a998b626545c81368f57456a44dda7db854222489bd4dfce2d36a9`，完整前缀 SHA256 `79f9ded8a2eebb55e8ea78d190e822836d5bf12e104d15d40a4aa5dac347dc92`。`historicalC16A763f510Boundary` 再认证1251→1287行：原 a763f510 / 889b5e23 的12次请求，完整前缀 SHA256 `dec581bd913e4ae841b00b3b4d78906b01a1231773900053c7cc6e33e4102ad2`。两入口依次认证原 armBindings、逐次 parity、reserve→dispatch→settle 与全部旧前缀；原账本字节及历史结论保持不变，之后的新请求绑定新协议与桥身份。

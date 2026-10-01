@@ -35,6 +35,134 @@ export const PRODUCTION_BRIDGE = 'scripts/fixtures/quality-modernization-product
 export const EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION = 's11-reference-no-actionable-review-v1'
 export const REVIEWED_DRAFT_PROTOCOL_REVISION = 's14b-reviewed-draft-v1'
 export const SPLIT_QUALITY_GATES_PROTOCOL_REVISION = 's14b-split-quality-gates-v1'
+export const BOUNDED_REVISION_DIAGNOSTIC = Object.freeze({
+  "caseId": "C17-A",
+  "caseIds": [
+    "C17-A"
+  ],
+  "sceneId": "场景1",
+  "chapterNumber": 2,
+  "milestone": "diagnostic",
+  "arms": [
+    "candidate"
+  ],
+  "nonQualification": true,
+  "scenarioRevision": "c17-a-saved-bounded-revision-diagnostic-v1",
+  "minPhysicalRequests": 3,
+  "maxPhysicalRequests": 5,
+  "actualMaxTokens": 16384,
+  "source": {
+    "invocationId": "a763f510-eac5-4368-967e-0abb630ff597",
+    "testedSha": "889b5e23e57daa763c4e549e892afaa69d1da73c",
+    "sourceHash": "b7bb85c2b1a8aadf0ef314fb5de06c50a1b4d2fabb60f1339ece977922f43083",
+    "protocolHash": "9de2619fd8a998b626545c81368f57456a44dda7db854222489bd4dfce2d36a9",
+    "manifestSha256": "24912361161361695647811c0ad4acccb6fcf1830985feca72a5b0afeefed3ec",
+    "stdoutSha256": "60ac4a9bba19cf81bce03121b4939693c278da5b7f5bf9c804b7aabf5e328270",
+    "semanticSha256": "defce5375fcbf5139219678b00006497bb826a7946c706c0e040e04e79a3f6dd",
+    "caseDocumentSha256": "9fabbea09392e518f7dfca41bf0f879fb9bb6675a798b4d6ccadc754a39f7470",
+    "projectId": "1db3c882-c2a3-4982-b428-ab7e3c6c7cca",
+    "epoch": "abad0c94-6230-4be6-9b3c-12309367c81e",
+    "draftId": 4,
+    "chapterNumber": 2,
+    "version": 1,
+    "status": "draft",
+    "contentSha256": "c8b29e929e34b57e7af41aae94cbc0f4c027eab21c0cfd4daf08a2501b21da66",
+    "byteSize": 3889,
+    "units": 1053,
+    "packetFiles": [
+      {
+        "name": "project.db",
+        "sha256": "29894f46a48e17d8967ad327e00015177d5f1c2e38841b980194ea1d932bb7fe",
+        "bytes": 684032
+      },
+      {
+        "name": "project.db-wal",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      },
+      {
+        "name": "project.db-shm",
+        "sha256": "fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb",
+        "bytes": 32768
+      }
+    ],
+    "assets": [
+      {
+        "path": ".ai-novel/project.json",
+        "sha256": "bd8db2b455b2a680b902ca0f39ba18b52e610babe8339a6cea106c2321342673",
+        "bytes": 207
+      },
+      {
+        "path": ".ai-novel/portable-runtime-freeze.json",
+        "sha256": "a733557b80c14be843d4754a0abbfc231da8c07fee00cac6354a5116e5e7eff6",
+        "bytes": 30282
+      },
+      {
+        "path": ".ai-novel/portable-transfer-authority.json",
+        "sha256": "0b96934e1c18d67c539d6a0b5522e248bcd3899d955859ab4c6269abfdb96625",
+        "bytes": 828
+      },
+      {
+        "path": ".ai-novel/portable-knowledge-source.json",
+        "sha256": "b4ecc0da2f3630da440e64c2f2956ac0c96cc94bac4e2aefe0963dd3e960e915",
+        "bytes": 29
+      }
+    ]
+  },
+  "authorItems": [
+    {
+      "category": "本章实际代价",
+      "severity": "error",
+      "description": "原稿只回顾前章已付六枚的支出或留下将来责任，尚未兑现本章新的具体已付出后果。只修复本章实际代价未兑现的问题，保留原作者事实，不指定代价金额、物品或发生方式。",
+      "quote": "她低下头，从皮包里抽出记录本，翻到末尾，在“等待雨停”下面又添了一行字：午后二次申请，被拒。预约费六枚，已扣，不退。",
+      "decision": "apply",
+      "origin": "author"
+    },
+    {
+      "category": "今天/明天矛盾",
+      "severity": "error",
+      "description": "同一记录日期同时写成今天与明天，表述互相矛盾。修正这两句的矛盾，保持前章异常类型和同日午后时点，不指定正确日期、异常原因或新增知情事实。",
+      "quote": "“记录上写的是今天。”林澄说，“旧钟慢了一刻，记录却已经走到了明天。如果今天进不去，明天再核，记录上的日期就成真了。”",
+      "decision": "apply",
+      "origin": "author"
+    }
+  ],
+  "attemptPolicy": {
+    "milestone": "diagnostic",
+    "arms": [
+      "candidate"
+    ],
+    "operationId": "固定稿首审",
+    "primaryPurpose": "review-chapter",
+    "repairPurpose": "review-chapter-rebuild",
+    "maxRepairAttempts": 1,
+    "reviewRebuild": {
+      "operationId": "修后完整复核",
+      "primaryPurpose": "review-chapter",
+      "repairPurpose": "review-chapter-rebuild",
+      "maxRepairAttempts": 1
+    }
+  },
+  "operations": [
+    {
+      "id": "固定稿首审",
+      "kind": "review"
+    },
+    {
+      "id": "作者确认一次修稿",
+      "kind": "refine"
+    },
+    {
+      "id": "修后完整复核",
+      "kind": "final-review"
+    }
+  ],
+  "finalUnitRange": {
+    "minimum": 842,
+    "maximum": 1170
+  },
+  "automatedOutcomeCeiling": "pending-independent-diagnostic-oracle-review"
+})
 export const CANDIDATE_QUALITY_COMPARISON_PROTOCOL_REVISION = 's14b-candidate-quality-and-comparison-v2'
 // 旧 v2（只采纳 error/warning）保留为历史 revision；按 v1→v2 先例不再作为可校验策略，旧目标因协议 hash 漂移拒绝。
 export const POST_UI_REVIEW_POLICY = Object.freeze({ revision: 's14b-post-ui-reviewed-draft-must-show-unknown-v3',
@@ -162,6 +290,148 @@ export function validateReviewedDraft(result) {
   } catch { return fail() }
 }
 const digest = value => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex')
+
+export function assertBoundedRevisionSource(draft) {
+  const source = BOUNDED_REVISION_DIAGNOSTIC.source
+  if (!draft || draft.id !== source.draftId || draft.chapterNumber !== source.chapterNumber
+    || draft.version !== source.version || draft.status !== source.status
+    || typeof draft.content !== 'string' || digest(draft.content) !== source.contentSha256
+    || Buffer.byteLength(draft.content) !== source.byteSize || countProjectedDraftUnits(draft.content) !== source.units)
+    throw new Error('BOUNDED_REVISION_SOURCE_MISMATCH')
+}
+
+/** Copy preparation reads frozen files only; SQLite may open only the later working donor. */
+export function readBoundedRevisionSource(inputPath) {
+  const input = JSON.parse(fs.readFileSync(inputPath, 'utf8')), source = BOUNDED_REVISION_DIAGNOSTIC.source
+  const readFrozen = (file, expectedHash, bytes) => {
+    const info = fs.lstatSync(file)
+    if (!info.isFile() || info.isSymbolicLink() || path.resolve(file) !== fs.realpathSync.native(file))
+      throw new Error('BOUNDED_REVISION_UNSAFE_SOURCE')
+    const body = fs.readFileSync(file)
+    if (digest(body) !== expectedHash || bytes !== undefined && body.length !== bytes)
+      throw new Error('BOUNDED_REVISION_SOURCE_FILE_DRIFT')
+    return body
+  }
+  const manifest = JSON.parse(readFrozen(input.packetManifestPath, source.manifestSha256))
+  const stdout = JSON.parse(readFrozen(input.stdoutPath, source.stdoutSha256))
+  if (manifest.invocationId !== source.invocationId || stdout.invocationId !== source.invocationId
+    || manifest.sourceHashes.codeSha !== source.testedSha || manifest.sourceHashes.sourceHash !== source.sourceHash
+    || manifest.sourceHashes.protocolHash !== source.protocolHash) throw new Error('BOUNDED_REVISION_SOURCE_MISMATCH')
+  const original = stdout.results.find(item => item.caseId === 'C17-A')
+  if (original?.codeSha !== source.testedSha || original.sourceHash !== source.sourceHash
+    || original.saved?.contentHash !== source.contentSha256 || original.saved.draftId !== source.draftId
+    || original.saved.version !== source.version || original.saved.chapterNumber !== source.chapterNumber
+    || original.saved.persistedBytes !== source.byteSize || original.saved.units !== source.units
+    || original.physicalProject.projectId !== source.projectId || original.projectEpoch !== source.epoch
+    || path.resolve(original.physicalProject.path) !== path.resolve(input.sourceProjectRoot))
+    throw new Error('BOUNDED_REVISION_SOURCE_MISMATCH')
+  const packetRoot = path.dirname(input.packetManifestPath)
+  const db = manifest.dbCopies.find(item => path.resolve(item.original) === path.resolve(input.sourceProjectRoot, '.ai-novel/project.db'))
+  if (!db || db.copiedSha256 !== source.packetFiles[0].sha256
+    || path.resolve(db.copy) !== path.resolve(packetRoot, 'db-copies/C17-A/project.db'))
+    throw new Error('BOUNDED_REVISION_SOURCE_MISMATCH')
+  const packetFiles = source.packetFiles.map(item => ({ ...item, sourcePath: path.join(path.dirname(db.copy), item.name),
+    bytes: readFrozen(path.join(path.dirname(db.copy), item.name), item.sha256, item.bytes) }))
+  const assets = source.assets.map(item => ({ ...item,
+    bytes: readFrozen(path.join(input.sourceProjectRoot, item.path), item.sha256, item.bytes) }))
+  if (JSON.parse(assets.find(item => item.path.endsWith('/project.json')).bytes).projectId !== source.projectId)
+    throw new Error('BOUNDED_REVISION_SOURCE_MISMATCH')
+  readFrozen(path.join(packetRoot, 'semantic-source.json'), source.semanticSha256)
+  const document = readFrozen(path.join(packetRoot, 'C17-A.md'), source.caseDocumentSha256).toString('utf8')
+  const section = document.slice(document.indexOf('### 正式保存的第2章完整正文：'))
+  const content = section.split('~~~~')[1]?.replace(/^\r?\n/u, '').replace(/\r?\n$/u, '')
+  const draft = { id: source.draftId, chapterNumber: source.chapterNumber, version: source.version, status: source.status, content }
+  assertBoundedRevisionSource(draft)
+  for (const item of BOUNDED_REVISION_DIAGNOSTIC.authorItems)
+    if (content.split(item.quote).length !== 2) throw new Error('BOUNDED_REVISION_AUTHOR_ANCHOR_MISMATCH')
+  return { inputHash: digest(fs.readFileSync(inputPath)), draft, assets, packetFiles, original }
+}
+
+export function boundedRevisionItems(report, sourceReview, draft) {
+  assertBoundedRevisionSource(draft)
+  if (!sourceReview?.id || stableEvidence(sourceReview.sourceDraft) !== stableEvidence(draft)
+    || !Array.isArray(report?.items)) throw new Error('BOUNDED_REVISION_CONFIRMATION_SOURCE_MISMATCH')
+  return [...report.items.map(item => ({ ...item, decision: 'ignore', origin: 'ai' })),
+    ...BOUNDED_REVISION_DIAGNOSTIC.authorItems]
+}
+
+export function validateBoundedRevisionDiagnostic(result) {
+  try {
+    const chain = result.boundedRevision, policy = BOUNDED_REVISION_DIAGNOSTIC
+    const readArtifact = item => {
+      const text = fs.readFileSync(item.outputPath, 'utf8')
+      if (digest(text) !== item.contentHash) throw new Error('artifact')
+      return text
+    }
+    if (result.arm !== 'candidate' || result.phase !== 'bounded-revision-diagnostic' || result.milestone !== 'diagnostic'
+      || result.caseId !== policy.caseId || result.qualification !== 'non-qualification-diagnostic'
+      || !chain || chain.source.contentHash !== policy.source.contentSha256
+      || chain.source.draftId !== policy.source.draftId || chain.source.version !== policy.source.version)
+      throw new Error('identity')
+    const original = readArtifact(chain.source), first = JSON.parse(readArtifact(chain.review))
+    const confirmation = JSON.parse(readArtifact(chain.confirmation))
+    const frozen = { id: policy.source.draftId, chapterNumber: 2, version: 1, status: 'draft', content: original }
+    assertBoundedRevisionSource(frozen)
+    if (confirmation.kind !== 'human-confirmed-review' || confirmation.schemaVersion !== 1
+      || confirmation.sourceReviewId !== chain.review.reviewId || !chain.confirmation.reviewId
+      || stableEvidence(confirmation.sourceDraft) !== stableEvidence(frozen)
+      || stableEvidence(confirmation.items) !== stableEvidence(boundedRevisionItems(first,
+        { id: chain.review.reviewId, sourceDraft: frozen }, frozen))) throw new Error('confirmation')
+    readArtifact(chain.revision)
+    const finalText = readArtifact(chain.finalDraft), finalReview = readArtifact(chain.finalReview)
+    if (!Array.isArray(JSON.parse(finalReview).items)) throw new Error('final-review')
+    if (chain.review.sourceHash !== digest(original)
+      || chain.finalReview.sourceHash !== chain.mergeHash || chain.revision.contentHash !== chain.mergeHash
+      || chain.finalDraft.contentHash !== chain.mergeHash || result.saved?.contentHash !== chain.mergeHash
+      || chain.mergeReceipt?.revisionId !== chain.revision.revisionId || chain.mergeReceipt.targetDraftId !== 4
+      || chain.mergeReceipt.status !== 'revised' || chain.mergeReceipt.chapterNumber !== 2 || chain.mergeReceipt.version !== 1
+      || chain.mergeReceipt.wordCount !== result.saved.units
+      || result.saved.units < policy.finalUnitRange.minimum || result.saved.units > policy.finalUnitRange.maximum
+      || countProjectedDraftUnits(finalText) !== result.saved.units) throw new Error('merge')
+    if (stableEvidence(result.operations.map(item => [item.operation, item.kind]))
+      !== stableEvidence(policy.operations.map(item => [item.id, item.kind]))) throw new Error('operations')
+    if (result.attempts.length < 3 || result.attempts.length > 5 || result.ownerTerminal.length !== result.attempts.length
+      || new Set(result.attempts.map(item => item.attemptId)).size !== result.attempts.length
+      || new Set(result.ownerTerminal.map(item => item.attemptId)).size !== result.attempts.length
+      || result.diagnosticInputHash !== chain.provenance.inputHash
+      || chain.provenance.restoration.originProjectId !== policy.source.projectId
+      || chain.provenance.restoration.targetProjectId !== result.physicalProject.projectId
+      || result.physicalProject.projectId === policy.source.projectId || result.projectEpoch === policy.source.epoch)
+      throw new Error('attempts')
+    const ordered = []
+    for (const operation of policy.operations) {
+      const attempts = result.attempts.filter(item => item.binding.operation === operation.id)
+      ordered.push(...attempts)
+      const purposes = attempts.map(item => item.binding.actual?.purpose)
+      if (stableEvidence(purposes) !== stableEvidence(operation.kind === 'refine' ? ['refine-from-review'] : ['review-chapter'])
+        && stableEvidence(purposes) !== stableEvidence(operation.kind === 'refine' ? [] : ['review-chapter', 'review-chapter-rebuild']))
+        throw new Error('purposes')
+      const savedOperation = result.operations.find(item => item.operation === operation.id)
+      const artifact = chain[operation.kind === 'review' ? 'review' : operation.kind === 'refine' ? 'revision' : 'finalReview']
+      if (savedOperation.outputHash !== artifact.contentHash
+        || attempts.length === 2 && !reviewParseFailure(fs.readFileSync(attempts[0].outputPath, 'utf8'))) throw new Error('operation-artifact')
+      if (operation.kind !== 'refine') parseReviewGenerationResult(stripDraftThinkingTags(fs.readFileSync(attempts.at(-1).outputPath, 'utf8')))
+      for (const attempt of attempts) {
+        const actual = attempt.binding.actual, terminal = result.ownerTerminal.find(item => item.attemptId === actual?.attemptId)
+        if (attempt.binding.invocationId !== result.invocationId || attempt.binding.phase !== result.phase
+          || attempt.binding.codeSha !== result.codeSha || attempt.binding.sourceHash !== result.sourceHash
+          || attempt.binding.driverHash !== result.driverHash || attempt.binding.protocolHash !== result.protocolHash
+          || attempt.binding.diagnosticInputHash !== result.diagnosticInputHash
+          || attempt.binding.diagnosticSourceHash !== digest(policy.source) || attempt.attemptId !== `candidate:${actual?.attemptId}`
+          || actual.projectId !== result.physicalProject.projectId || actual.epoch !== result.projectEpoch
+          || actual.runId !== savedOperation.handle?.runId || actual.rootActionId !== savedOperation.handle?.rootActionId
+          || terminal?.status !== 'settled' || terminal.finishReason !== 'stop' || terminal.purpose !== actual.purpose
+          || terminal.hasFormalEffect !== (attempt === attempts.at(-1)) || !terminal.artifactId
+          || terminal.textHash !== attempt.visibleTextHash || attempt.finishReason !== 'stop'
+          || attempt.nativePlannedAttempt?.requestedOutputTokens !== 16384 || attempt.nativePlannedAttempt.status !== 'dispatch-marked'
+          || digest(fs.readFileSync(attempt.outputPath)) !== attempt.visibleTextHash || attempt.requestedOutputTokens !== 16384)
+          throw new Error('owner')
+      }
+    }
+    if (stableEvidence(ordered.map(item => item.attemptId)) !== stableEvidence(result.attempts.map(item => item.attemptId))) throw new Error('order')
+    return { valid: true, status: policy.automatedOutcomeCeiling }
+  } catch { return { valid: false, status: 'failed', code: 'BOUNDED_REVISION_EVIDENCE_INVALID' } }
+}
 export function productionBridgeHash() {
   return digest([PRODUCTION_BRIDGE, 'scripts/quality-modernization-driver.mjs'].map(file => [file, digest(fs.readFileSync(path.join(ADAPTER_ROOT, file)))]))
 }
@@ -211,13 +481,16 @@ export function qualificationBridgeWindows(request) {
     throw new Error('FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH')
   if (Object.keys(request).some(key => /timeout|deadline/iu.test(key)))
     throw new Error('FORWARD_QUALIFICATION_WINDOW_REQUEST_MISMATCH')
-  const scope = registration.scopes.find(item => item.phase === request.phase && item.milestone === request.milestone)
+  const bounded = request.phase === 'bounded-revision-diagnostic'
+  const scope = bounded ? { caseIds: BOUNDED_REVISION_DIAGNOSTIC.caseIds }
+    : registration.scopes.find(item => item.phase === request.phase && item.milestone === request.milestone)
   const scenario = productionScenario(request.phase, request.milestone)
   if (!scope?.caseIds.includes(request.caseId) || !scenario
     || stableEvidence(request.attemptPolicy ?? null) !== stableEvidence(scenario.attemptPolicy ?? null)
     || stableEvidence(request.evaluationPolicy ?? null) !== stableEvidence(scenario.evaluationPolicy ?? null)
     || request.scenarioRevision !== scenario.scenarioRevision
-    || !['baseline', 'candidate'].includes(request.arm ?? request.target?.arm))
+    || !['baseline', 'candidate'].includes(request.arm ?? request.target?.arm)
+    || bounded && (request.milestone !== 'diagnostic' || (request.arm ?? request.target?.arm) !== 'candidate'))
     throw new Error('FORWARD_QUALIFICATION_WINDOW_SCOPE_MISMATCH')
   const attemptMs = MAIN_GENERATION_POLICY.budget.maxActiveElapsedMs + 60_000
   if (request.action === 'prepare') {
@@ -237,6 +510,7 @@ export function qualificationBridgeWindows(request) {
   const arm = request.arm ?? request.target.arm
   const policy = request.attemptPolicy
   const count = operation => {
+    if (bounded && ['review', 'final-review'].includes(operation.kind)) return 2
     if (operation.kind === 'character_cards' && request.phase === 'c16-c18') return 3
     if (operation.kind === 'directory' && structuredRecoveryFor(policy, arm)?.operationId === operation.id)
       return planBlueprintGenerationCost(request.phase === 'full' ? 3 : 1).maxCalls
@@ -487,6 +761,7 @@ export function syntheticDraftCondensePlan(options) {
 // the selected protocol phase before opening the gate, so a drift here fails closed
 // instead of quietly running a different experiment.
 export const PHASE_SCENARIOS = Object.freeze({
+  'bounded-revision-diagnostic': BOUNDED_REVISION_DIAGNOSTIC,
   'c16-c18': Object.freeze({
     caseId: 'C16-A', caseIds: Object.freeze(['C16-A', 'C16-B', 'C16-C', 'C17-A', 'C17-B', 'C18-A', 'C18-B']),
     sceneId: '场景1', chapterNumber: 2, milestone: 'final', arms: Object.freeze(['candidate']),
@@ -598,6 +873,8 @@ function verifiedPrimarySyntaxFailure(first, evidence, operationId, kind = 'dire
     || kind === 'review' && (evidence.reviewReportAbsent !== true
       || !first.reviewSource || !Number.isSafeInteger(first.reviewSource.draftId) || first.reviewSource.draftId <= 0
       || !/^[a-f0-9]{64}$/.test(first.reviewSource.contentHash ?? '')
+      || first.reviewSource.version !== undefined && (!Number.isSafeInteger(first.reviewSource.version)
+        || evidence.ownerArtifactHash !== attempt.visibleTextHash)
       || JSON.stringify(attempt.binding.reviewSource) !== JSON.stringify(first.reviewSource))
     || typeof attempt.outputPath !== 'string' || !/^[a-f0-9]{64}$/.test(attempt.visibleTextHash ?? '')) return false
   try {
@@ -790,8 +1067,9 @@ export function createOperationDispatchGate({ onReject, repairPolicy, readPrimar
     const cards = finalizationRepair && FINALIZED_CHARACTER_OPERATION_IDS.includes(operationId)
     const condensePolicy = draftCondense?.policy
     const condense = Boolean(condensePolicy?.maxCondenseAttempts === 1 && condensePolicy.operationIds?.includes(operationId))
-    const review = repairPolicy?.reviewRebuild?.operationId === operationId
-    const policy = review ? repairPolicy.reviewRebuild : repairPolicy
+    const finalReview = repairPolicy?.reviewRebuild?.operationId === operationId
+    const review = finalReview || repairPolicy?.operationId === operationId && repairPolicy.primaryPurpose === 'review-chapter'
+    const policy = finalReview ? repairPolicy.reviewRebuild : repairPolicy
     const policyApplies = policy?.operationId === operationId && policy.maxRepairAttempts === 1
     const identity = value => value && typeof value.attemptId === 'string' && value.attemptId
       && typeof value.runId === 'string' && value.runId && typeof value.projectId === 'string' && value.projectId
@@ -1563,6 +1841,7 @@ export function runProductionPhasePair(targets, options, bridge) {
     scenarioRevision: options.scenarioRevision ?? null, selectionDifference: options.selectionDifference ?? null,
     attemptPolicy: options.attemptPolicy ?? null,
     evaluationPolicy: options.evaluationPolicy ?? null,
+    ...(options.phase === 'bounded-revision-diagnostic' ? { diagnosticInputPath: options.diagnosticInputPath } : {}),
     ...(options.mode === 'synthetic' && options.development ? { syntheticReviewedDraftCase: options.syntheticReviewedDraftCase ?? 'multiple' } : {}),
     // 开发合成才登记超长首稿（默认章见 syntheticDraftCondensePlan）；still-over 用于复现原失败语义。
     ...syntheticDraftCondensePlan({ ...options, milestone: options.milestone ?? scenario.milestone }),
@@ -1572,6 +1851,17 @@ export function runProductionPhasePair(targets, options, bridge) {
     ledgerPath: options.ledgerPath, driverHash: productionBridgeHash() }
   const prepared = arms.map(arm => runProductionBridge({ ...common, target: executionTargets[arm], action: 'prepare' }))
   const parityHash = prepared[0].physicalProject.parityHash
+  if (options.phase === 'bounded-revision-diagnostic') {
+    let result
+    try { result = runProductionBridge({ ...common, target: executionTargets.candidate, action: 'execute', parityHash,
+      evidenceRoot: path.join(executionTargets.candidate.isolationRoot, 'execute') }) }
+    catch (error) { result = { ...(error.receiptPath && fs.existsSync(error.receiptPath) ? JSON.parse(fs.readFileSync(error.receiptPath)) : {}),
+      status: 'failed', code: error.message, receiptPath: error.receiptPath } }
+    const decision = result.status === 'passed' ? validateBoundedRevisionDiagnostic(result) : { status: 'failed' }
+    return { ...decision, invocationId, phase: options.phase, prepared, results: [result],
+      qualification: 'non-qualification-diagnostic', qualityQualification: 'not-run', formalSampleQualification: 'not-run',
+      physicalModelRequests: result.physicalModelRequests ?? null, syntheticDispatches: result.syntheticDispatches ?? 0 }
+  }
   if (options.phase === 'c16-c18') {
     const results = []
     const cases = JSON.parse(fs.readFileSync(options.semanticPath)).continuityQualificationCases

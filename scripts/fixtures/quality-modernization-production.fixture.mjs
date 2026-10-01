@@ -10,7 +10,8 @@ import { updateLedger, CAMPAIGN_ID, ROOT, forwardReasoningFor, forwardQualificat
 import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, createOperationDispatchGate,
   createOutboundPreflightAssert, assertForwardReasoning, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
   fetchProviderResponse, measurePromptBytes, qualificationBridgeWindows,
-  POST_UI_REVIEW_POLICY, reviewedDraftSelection,
+  POST_UI_REVIEW_POLICY, reviewedDraftSelection, BOUNDED_REVISION_DIAGNOSTIC,
+  readBoundedRevisionSource, assertBoundedRevisionSource, boundedRevisionItems,
   scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder,
   assertSharedInputDiagnostic } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, recordPersistedDraftObservation, safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
@@ -31,7 +32,7 @@ const json = file => JSON.parse(fs.readFileSync(file, 'utf8'))
 const save = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n')
 const templateKeysForPhase = phase => phase === 'c16-c18'
   ? ['generate_chapter_notes', 'update_character_cards', 'first_chapter_draft', 'next_chapter_draft']
-  : phase === 'early-review'
+  : ['early-review', 'bounded-revision-diagnostic'].includes(phase)
   ? ['consistency_check', 'refine_from_review']
   : ['chapter_blueprint_chunk', 'first_chapter_draft', 'next_chapter_draft']
 /** 合成正文按目标单位数配长：既不低于 70% 下限，也不触发自动续写。 */
@@ -202,6 +203,14 @@ test('isolated production commands persist the selected phase operations', async
   const target = request.target
   const fullRun = request.phase === 'full'
   const diagnosticRun = request.phase === 'shared-input-diagnostic'
+  const boundedRun = request.phase === 'bounded-revision-diagnostic'
+  const boundedSource = boundedRun ? readBoundedRevisionSource(request.diagnosticInputPath) : null
+  if (boundedRun) {
+    assert.equal(target.arm, 'candidate', 'BOUNDED_REVISION_CANDIDATE_REQUIRED')
+    assert.equal(request.milestone, 'diagnostic', 'BOUNDED_REVISION_SCOPE_INVALID')
+    assert.deepEqual(request.operations, BOUNDED_REVISION_DIAGNOSTIC.operations, 'BOUNDED_REVISION_SCOPE_INVALID')
+    assert.deepEqual(request.attemptPolicy, BOUNDED_REVISION_DIAGNOSTIC.attemptPolicy, 'BOUNDED_REVISION_SCOPE_INVALID')
+  }
   if (diagnosticRun) assert.equal(target.arm, 'candidate', 'SHARED_INPUT_DIAGNOSTIC_CANDIDATE_REQUIRED')
   const reviewedRun = Boolean(request.evaluationPolicy)
   if (reviewedRun) {
@@ -255,7 +264,7 @@ test('isolated production commands persist the selected phase operations', async
   const receipt = { schemaVersion: 1, invocationId: request.invocationId, arm: target.arm, mode: request.mode, action: request.action,
     protocolRevision: request.protocolRevision, protocolHash: request.protocolHash,
     phase: request.phase, milestone: request.milestone, caseId: request.caseId, sceneId: request.sceneId, chapterNumber: request.chapterNumber,
-    operations: [], qualification: diagnosticRun ? 'non-qualification-diagnostic' : request.development ? 'development-only-unfrozen' : 'frozen-target', codeSha: target.codeSha,
+    operations: [], qualification: diagnosticRun || boundedRun ? 'non-qualification-diagnostic' : request.development ? 'development-only-unfrozen' : 'frozen-target', codeSha: target.codeSha,
     sourceHash: target.sourceHash, driverHash: request.driverHash,
     modelParameters: { source: source.modelParameters, effective: effectiveModelParameters,
       registrationRevision: registeredForward?.revision ?? null },
@@ -289,8 +298,17 @@ test('isolated production commands persist the selected phase operations', async
     let project
     if (request.action === 'prepare') {
       assert.equal(fs.existsSync(projectFile), false, 'PHYSICAL_FIXTURE_ALREADY_EXISTS')
-      project = projectAccess.createProject(target.roots.project, scene.title)
-      if (candidate) database.createProjectDatabase(project.rootPath, Buffer.alloc(32, 7))
+      if (boundedRun) {
+        const donorRoot = path.join(target.roots.project, 'source-donor')
+        fs.mkdirSync(path.join(donorRoot, '.ai-novel'), { recursive: true })
+        for (const item of boundedSource.assets) fs.writeFileSync(path.join(donorRoot, item.path), item.bytes, { flag: 'wx' })
+        for (const item of boundedSource.packetFiles) fs.writeFileSync(path.join(donorRoot, '.ai-novel', item.name), item.bytes, { flag: 'wx' })
+        project = projectAccess.probeExistingProject(donorRoot)
+        assert.equal(project.projectId, BOUNDED_REVISION_DIAGNOSTIC.source.projectId, 'BOUNDED_REVISION_DONOR_IDENTITY')
+      } else {
+        project = projectAccess.createProject(target.roots.project, scene.title)
+        if (candidate) database.createProjectDatabase(project.rootPath, Buffer.alloc(32, 7))
+      }
       database.initProjectDatabase(project.rootPath, Buffer.alloc(32, 7))
       save(projectFile, project)
     } else {
@@ -323,6 +341,12 @@ test('isolated production commands persist the selected phase operations', async
       if (!handler) throw new Error(`UNREGISTERED_PRODUCTION_IPC:${channel}`)
       try {
         const result = await handler({ sender }, ...args)
+        if (boundedRun && channel === 'review-revision:prepare') {
+          (receipt.reviewPreparations ??= []).push({ operation: operationId, contextId: result.contextId,
+            sourceHash: result.context.sourceHash, sourceDraftHash: sha(result.context.source),
+            contentHash: sha(result.context.source.content), modelId: result.modelId ?? null,
+            parentRootActionId: result.parentRootActionId ?? null })
+        }
         if (continuityRun && ['finalization-generation:begin', 'finalization-generation:read'].includes(channel) && result) {
           finalizedContext = result.context
           if (operationKind === 'character_cards') {
@@ -366,7 +390,7 @@ test('isolated production commands persist the selected phase operations', async
     ;(await load('electron/controllers/fs-controller.ts')).registerFSController()
     ;(await load('electron/controllers/app-data-controller.ts')).registerAppDataController()
     ;(await load('electron/controllers/kb-controller.ts')).registerKBController()
-    if (continuityRun) {
+    if (continuityRun || boundedRun) {
       assert.equal(candidate, true, 'CANDIDATE_REQUIRED')
       ;(await load('electron/controllers/project-archive-controller.ts')).registerProjectArchiveController()
       ;(await load('electron/controllers/finalization-controller.ts')).registerFinalizationController()
@@ -404,7 +428,44 @@ test('isolated production commands persist the selected phase operations', async
     }
     const prompts = await load('src/services/prompt-templates.ts')
     const templateKeys = [...templateKeysForPhase(request.phase), ...(reviewedRun ? ['consistency_check', 'refine_from_review'] : [])]
-    if (request.action === 'prepare') {
+    if (boundedRun && request.action === 'prepare') {
+      assertBoundedRevisionSource(await invoke('db:draft-get-full', 4, project.rootPath, session))
+      const { externalFileGrants } = await load('electron/services/external-file-grant-service.ts')
+      const grantFor = restoreGrantIssuer(externalFileGrants, sender.id)
+      const archivePath = path.join(evidenceRoot, 'fixed-source.ainovel')
+      const targetProjectRoot = path.join(target.roots.project, 'c17-a-diagnostic')
+      const exported = await invoke('project:archive-export', { projectSession: session, targetArchiveGrantId: grantFor('create', archivePath) })
+      assert.ok(exported?.success, `BOUNDED_REVISION_EXPORT_FAILED:${exported?.error}`)
+      const restored = await invoke('project:archive-restore', { archiveGrantId: grantFor('read', archivePath), targetGrantId: grantFor('create', targetProjectRoot) })
+      assert.ok(restored?.success, `BOUNDED_REVISION_RESTORE_FAILED:${restored?.error}`)
+      assert.equal(restored.receipt.originProjectId, project.projectId, 'BOUNDED_REVISION_RESTORE_ORIGIN')
+      database.closeProjectDatabase(); projectAccess.invalidateCurrentSession()
+      project = projectAccess.probeExistingProject(targetProjectRoot)
+      assert.equal(project.projectId, restored.receipt.targetProjectId, 'BOUNDED_REVISION_RESTORE_IDENTITY')
+      assert.notEqual(project.projectId, BOUNDED_REVISION_DIAGNOSTIC.source.projectId, 'BOUNDED_REVISION_REUSED_PROJECT')
+      database.initProjectDatabase(project.rootPath, Buffer.alloc(32, 7)); db = database.getProjectDb()
+      lease = projectAccess.beginSession(project)
+      session = { projectId: project.projectId, projectPath: project.rootPath, leaseId: lease.leaseId }
+      projectStore.setState({ currentProject: { id: project.projectId, path: project.rootPath, name: scene.title, sessionLease: lease.leaseId, novelConfig: config } })
+      save(projectFile, project)
+      save(path.join(target.isolationRoot, 'bounded-source.json'), { inputHash: boundedSource.inputHash, restoration: restored.receipt })
+    }
+    if (boundedRun) {
+      assertBoundedRevisionSource(await invoke('db:draft-get-full', 4, project.rootPath, session))
+      const preparedSource = json(path.join(target.isolationRoot, 'bounded-source.json'))
+      assert.equal(preparedSource.inputHash, boundedSource.inputHash, 'BOUNDED_REVISION_INPUT_DRIFT')
+      assert.notEqual(session.leaseId, BOUNDED_REVISION_DIAGNOSTIC.source.epoch, 'BOUNDED_REVISION_REUSED_EPOCH')
+      receipt.projectEpoch = session.leaseId
+      receipt.restoration = preparedSource.restoration
+      receipt.diagnosticInputHash = boundedSource.inputHash
+      const originalPath = path.join(evidenceRoot, 'original-frozen.txt')
+      fs.writeFileSync(originalPath, boundedSource.draft.content, { flag: 'wx' })
+      receipt.boundedRevision = { source: { outputPath: originalPath, contentHash: sha(boundedSource.draft.content), draftId: 4, version: 1 },
+        provenance: { ...BOUNDED_REVISION_DIAGNOSTIC.source, inputHash: boundedSource.inputHash, restoration: preparedSource.restoration } }
+      if (request.action === 'prepare') save(request.templatesPath,
+        { baselineSha: target.codeSha, templates: templateKeys.map(key => structuredClone(prompts.getPromptTemplate(key))) })
+    }
+    if (request.action === 'prepare' && !boundedRun) {
       let templates
       if (!candidate || continuityRun || diagnosticRun) {
         templates = templateKeys.map(key => structuredClone(prompts.getPromptTemplate(key)))
@@ -514,7 +575,8 @@ test('isolated production commands persist the selected phase operations', async
       record.contentHash = sha(replaced.content); record.persistedBytes = Buffer.byteLength(replaced.content)
       save(file, previous)
     }
-    const predecessorRecords = fullRun
+    const predecessorRecords = boundedRun ? boundedSource.original.physicalProject.readback.predecessors.map(item => ({
+      ...item, draftId: Number(item.sourceId.split(':')[1]), required: true })) : fullRun
       ? request.chapterNumber > 1 ? [{ ...request.predecessor, sourceId: `candidate:${request.predecessor?.draftId}`, required: true }] : []
       : request.chapterNumber > 1 ? json(path.join(target.isolationRoot, 'predecessor.json')).candidates : []
     if (fullRun && request.chapterNumber > 1) {
@@ -729,6 +791,7 @@ test('isolated production commands persist the selected phase operations', async
     const { parseFinalizedCharacterStateResponse } = continuityRun ? await load('src/shared/finalized-continuity.ts') : {}
     const beforeOperationDispatch = createOperationDispatchGate({ repairPolicy, draftCondense, draftRecovery, structuredRecovery,
       finalizationRepair: continuityRun, readPrimaryEvidence: first => {
+      const boundedRun = request.phase === 'bounded-revision-diagnostic'
       const attemptId = `${target.arm}:${first.attemptId}`
       const matches = receipt.attempts.filter(attempt => attempt.attemptId === attemptId)
       if (matches.length !== 1) return null
@@ -749,9 +812,11 @@ test('isolated production commands persist the selected phase operations', async
         return { attempt: matches[0], events, finalizedCharacterInvalid, ownerArtifactHash: sha(saved.text) }
       }
       const reviewSource = first.reviewSource
-      const reviewReportAbsent = reviewSource && db.prepare('SELECT COUNT(*) FROM reviews WHERE base_draft_id=?')
-        .pluck().get(reviewSource.draftId) === 0
-      return { attempt: matches[0], events, reviewReportAbsent }
+      const reviewReportAbsent = boundedRun ? !JSON.parse(db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?')
+        .pluck().get(first.attemptId) ?? '{}').reviewRevisionEffect
+        : reviewSource && db.prepare('SELECT COUNT(*) FROM reviews WHERE base_draft_id=?').pluck().get(reviewSource.draftId) === 0
+      const ownerArtifact = boundedRun ? db.prepare('SELECT artifact_json FROM generation_artifacts WHERE attempt_id=?').pluck().get(first.attemptId) : null
+      return { attempt: matches[0], events, reviewReportAbsent, ...(ownerArtifact ? { ownerArtifactHash: sha(JSON.parse(ownerArtifact).text) } : {}) }
     }, onReject: rejection => {
       localDispatchGateRejection = { ...rejection, operation: operationId, runId: currentContext?.runId,
         projectId: session.projectId, chapterNumber: request.chapterNumber }
@@ -773,6 +838,11 @@ test('isolated production commands persist the selected phase operations', async
       if (candidate && request.mode === 'synthetic')
         preflight(body.stream_options?.include_usage === true, 'OPENAI_USAGE_STREAM_NOT_REQUESTED')
       preflight(currentContext && operationKind, 'PHYSICAL_REQUEST_OUTSIDE_COMMAND')
+      if (boundedRun) {
+        await Promise.all(streamSettlements)
+        preflight((body.max_tokens ?? body.max_completion_tokens) === 16384, 'BOUNDED_REVISION_RESOLVED_BUDGET_MISMATCH')
+        preflight(receipt.attempts.length < 5 && receipt.attempts.every(item => item.finishReason === 'stop'), 'BOUNDED_REVISION_ATTEMPT_BOUNDARY')
+      }
       let actual
       let materialDecision = null
       if (candidate) {
@@ -801,8 +871,10 @@ test('isolated production commands persist the selected phase operations', async
         catch (error) { preflight(false, error.message) }
       }
       // The registered extra call must carry its real product purpose before campaign reserve.
-      const draft = reviewedRun && operationKind === 'review' ? latestDraft() : null
-      const reviewSource = draft ? { draftId: draft.id, contentHash: sha(draft.content) } : undefined
+      const draft = (reviewedRun && operationKind === 'review' || boundedRun && ['review', 'final-review'].includes(operationKind)) ? latestDraft() : null
+      const reviewSource = draft ? { draftId: draft.id, contentHash: sha(draft.content), ...(boundedRun ? { version: draft.version } : {}) } : undefined
+      if (boundedRun) preflight(['review', 'final-review'].includes(operationKind)
+        ? ['review-chapter', 'review-chapter-rebuild'].includes(actual.purpose) : actual.purpose === 'refine-from-review', 'BOUNDED_REVISION_UNREGISTERED_PURPOSE')
       if (!diagnosticRun) {
       beforeOperationDispatch(operationId, actual ?? observedIpc, reviewSource)
       }
@@ -857,11 +929,11 @@ test('isolated production commands persist the selected phase operations', async
           preflight(promptText.includes(finding.finding_id), 'OUTBOUND_RECHECK_FINDING_ID_MISSING')
           preflight(promptText.includes(finding.target_id), 'OUTBOUND_RECHECK_TARGET_ID_MISSING')
         }
-      } else if ((request.phase === 'early-review' || reviewedRun) && operationKind === 'refine') {
+      } else if ((request.phase === 'early-review' || reviewedRun || boundedRun) && operationKind === 'refine') {
         const activeDraft = db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC,d.id DESC LIMIT 1')
           .pluck().get(chapter.number)
         preflight(typeof activeDraft === 'string' && promptText.includes(activeDraft), 'OUTBOUND_REFINE_SOURCE_DRAFT_MISSING')
-        if (reviewedRun) for (const fact of authorityFacts)
+        if (reviewedRun || boundedRun) for (const fact of authorityFacts)
           preflight(promptText.includes(fact), `OUTBOUND_ORACLE_AUTHORITY_MISSING:${fact}`)
       } else if (continuityRun && ['chapter_notes', 'character_cards'].includes(operationKind)) {
         const manifest = JSON.parse(db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(actual.runId)).sourceManifest
@@ -918,6 +990,7 @@ test('isolated production commands persist the selected phase operations', async
         parityId: request.parityHash, phase: request.phase, milestone: request.milestone, caseId: request.caseId,
         operation: operationId, ...(diagnosticRun ? { messagesSha256: request.diagnosticMessagesSha256,
           originalMessagesSha256: request.diagnosticOriginalMessagesSha256 } : {}), ...(reviewSource ? { reviewSource } : {}),
+        ...(boundedRun ? { diagnosticSourceHash: sha(BOUNDED_REVISION_DIAGNOSTIC.source), diagnosticInputHash: boundedSource.inputHash } : {}),
         ...(actual ? { actual } : { baselineIpc: observedIpc }) }
       record({ type: 'reserve', attemptId, binding })
       record({ type: 'dispatch', attemptId })
@@ -931,6 +1004,7 @@ test('isolated production commands persist the selected phase operations', async
         .map(record => ({ sourceId: `candidate:${record.draftId}`, revision: record.version, contentHash: record.materialContentHash,
           persistedContentHash: sha(record.content), persistedBytes: Buffer.byteLength(record.content, 'utf8'), markerHash: sha(record.marker) }))
       const requestReceipt = { attemptId, binding, requestedOutputTokens: body.max_tokens ?? body.max_completion_tokens,
+        ...(boundedRun ? { nativePlannedAttempt: JSON.parse(db.prepare('SELECT attempt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(actual.attemptId)) } : {}),
         ...(forwardReasoningEvidence ? { reasoning: forwardReasoningEvidence } : {}),
         compiledPromptHash: sha(body.messages), systemPromptHash: sha(body.messages.filter(message => message.role === 'system')),
         composedPromptBytes: measurePromptBytes(body.messages),
@@ -938,10 +1012,10 @@ test('isolated production commands persist the selected phase operations', async
         authorityEvidence: operationKind === 'recheck' && candidate
           ? { mergedDraftHash: sha(db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1')
               .pluck().get(chapter.number)), findingAnchorsSent: true }
-          : (request.phase === 'early-review' || reviewedRun) && operationKind === 'refine'
+          : (request.phase === 'early-review' || reviewedRun || boundedRun) && operationKind === 'refine'
             ? { sourceDraftHash: sha(db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC,d.id DESC LIMIT 1')
                 .pluck().get(chapter.number)), confirmedReviewBound: candidate ? materialDecision.included.some(item => item.sourceId.startsWith('review:confirmed:')) : true,
-              ...(reviewedRun ? { factHashes: authorityFacts.map(sha), allFactsSent: authorityFacts.every(fact => promptText.includes(fact)) } : {}) }
+              ...(reviewedRun || boundedRun ? { factHashes: authorityFacts.map(sha), allFactsSent: authorityFacts.every(fact => promptText.includes(fact)) } : {}) }
           : continuityRun && ['chapter_notes', 'character_cards'].includes(operationKind)
             ? { finalizedSource: finalizedContext.slot.source, contextHash: sha(finalizedContext) }
           : { factHashes: authorityFacts.map(sha), allFactsSent: authorityFacts.every(fact => promptText.includes(fact)),
@@ -1204,14 +1278,15 @@ test('isolated production commands persist the selected phase operations', async
         if (operationKind === 'review' || operationKind === 'final-review') {
           command = new (await load('src/services/workflows/commands/review-chapter.command.ts')).ReviewChapterCommand({
             draftPath, draftContent: sourceDraft.content, sourceDraft: frozenSource, chapterNumber: chapter.number,
-            reviewFocus: reviewedRun ? `核对本章全部必需事件、作者事实、字数、复述、自然度、人物动机和节奏可读性。只依据作者资料、蓝图及待审正文给出问题与原文证据；不得新增作者事实。\n${chapterGuidance}` : '只核对本章必需事件、作者事实与明确证据，不检查字数。对于“承担代价”，只有人物已经执行选择、具体损失或牺牲已经发生、后文没有反证，才算完成；签字认责或承诺以后负责不算代价。',
+            reviewFocus: reviewedRun || boundedRun ? `核对本章全部必需事件、作者事实、字数、复述、自然度、人物动机和节奏可读性。只依据作者资料、蓝图及待审正文给出问题与原文证据；不得新增作者事实。\n${chapterGuidance}` : '只核对本章必需事件、作者事实与明确证据，不检查字数。对于“承担代价”，只有人物已经执行选择、具体损失或牺牲已经发生、后文没有反证，才算完成；签字认责或承诺以后负责不算代价。',
           })
         } else if (operationKind === 'refine') {
           const sourceReview = await invoke('db:review-get-full', reviewState.reviewId, project.rootPath, session)
           assert.ok(sourceReview?.sourceDraft, 'SOURCE_REVIEW_NOT_PERSISTED')
           const report = JSON.parse(sourceReview.content)
           let cycleId, selected, selectedItems
-          if (reviewedRun) {
+          if (boundedRun) selectedItems = boundedRevisionItems(report, sourceReview, frozenSource)
+          else if (reviewedRun) {
             const { selected: items } = reviewedDraftSelection(report)
             assert.ok(items.length > 0, 'REVIEWED_DRAFT_NO_SELECTED_ITEMS')
             reviewedMustShowTexts = items.filter(item => item.severity === 'unknown').map(item => item.description.split('\n')[0])
@@ -1242,7 +1317,7 @@ test('isolated production commands persist the selected phase operations', async
           const human = await load('src/shared/human-confirmed-review.ts')
           const snapshot = human.createHumanConfirmedReviewSnapshot({ sourceReviewId: sourceReview.id,
             sourceDraft: sourceReview.sourceDraft, ...(cycleId ? { cycleId } : {}), summary: report.summary,
-            authorGuidance: reviewedRun ? `只修复本次全部已选问题，保留全部作者事实与必需事件，不新增物品史、人物身份或知情事实；其余内容保持不变。\n作者事实：\n${authorityFacts.join('\n')}\n本章必需事件：\n${chapter.requiredEvents.join('\n')}` : '只修复已选问题，其余正文保持不变。若问题要求人物在当章承担代价，必须同时满足三项：人物已经执行选择，具体损失或牺牲已经发生，后文不保留相反状态。签字认责、保证负责、简单否定翻转或承诺以后付出都不算代价。', items: selectedItems ?? [selected],
+            authorGuidance: reviewedRun || boundedRun ? `只修复本次全部已选问题，保留全部作者事实与必需事件，不新增物品史、人物身份或知情事实；其余内容保持不变。\n作者事实：\n${authorityFacts.join('\n')}\n本章必需事件：\n${chapter.requiredEvents.join('\n')}` : '只修复已选问题，其余正文保持不变。若问题要求人物在当章承担代价，必须同时满足三项：人物已经执行选择，具体损失或牺牲已经发生，后文不保留相反状态。签字认责、保证负责、简单否定翻转或承诺以后付出都不算代价。', items: selectedItems ?? [selected],
             ...(report.goalReview ? { goalReview: report.goalReview } : {}) })
           assert.ok(snapshot, 'CONFIRMATION_SNAPSHOT_INVALID')
           const confirmationContent = human.serializeHumanConfirmedReviewSnapshot(snapshot)
@@ -1252,10 +1327,15 @@ test('isolated production commands persist the selected phase operations', async
           reviewState.confirmation = { reviewId: confirmation.id, contentHash: sha(confirmationContent),
             selectedItemHash: sha(selectedItems ?? selected), selectedFindingIds: (selectedItems ?? [selected]).flatMap(item => item.findingId ? [item.findingId] : []),
             ...(cycleId ? { cycleId } : {}) }
-          if (reviewedRun) {
+          if (reviewedRun || boundedRun) {
             const confirmationPath = path.join(evidenceRoot, 'author-confirmation.json')
             fs.writeFileSync(confirmationPath, confirmationContent)
-            reviewedDraft.confirmation = artifact(confirmationPath, confirmationContent, { reviewId: confirmation.id })
+            ;(boundedRun ? receipt.boundedRevision : reviewedDraft).confirmation = artifact(confirmationPath, confirmationContent, { reviewId: confirmation.id })
+            if (boundedRun) {
+              const persisted = await invoke('db:review-get-full', confirmation.id, project.rootPath, session)
+              assert.equal(persisted.content, confirmationContent, 'BOUNDED_REVISION_CONFIRMATION_NOT_PERSISTED')
+              assert.deepEqual(persisted.sourceDraft, frozenSource, 'BOUNDED_REVISION_CONFIRMATION_SOURCE_DRIFT')
+            }
           }
           command = new (await load('src/services/workflows/commands/refine-from-review.command.ts')).RefineFromReviewCommand({
             draftPath, draftContent: sourceDraft.content, sourceDraft: frozenSource, chapterNumber: chapter.number,
@@ -1360,10 +1440,11 @@ test('isolated production commands persist the selected phase operations', async
         reviewState.review = { reviewId: stored.id, contentHash: sha(stored.content), ...(cycleId ? { cycleId } : {}) }
         operationReceipt.outputHash = reviewState.review.contentHash
         reviewState.source = { draftId: sourceDraft.id, contentHash: sha(sourceDraft.content) }
-        if (reviewedRun) {
+        if (reviewedRun || boundedRun) {
           fs.writeFileSync(outputPath, stored.content)
           const savedReview = artifact(outputPath, stored.content, { reviewId: stored.id, sourceHash: sha(sourceDraft.content) })
-          if (operationKind === 'review') {
+          if (boundedRun) receipt.boundedRevision[operationKind === 'review' ? 'review' : 'finalReview'] = savedReview
+          else if (operationKind === 'review') {
             reviewedDraft.review = savedReview
             const { selected, disposition } = reviewedDraftSelection(JSON.parse(stored.content))
             reviewedDraft.selectedCount = selected.length
@@ -1380,12 +1461,14 @@ test('isolated production commands persist the selected phase operations', async
           expectedDraftContent: sourceDraft.content, mergedContent: revision.body, wordCount: countUnits(revision.body) }, project.rootPath, session)
         assert.ok(merged?.success && merged.receipt, 'TARGETED_REVISION_NOT_MERGED')
         reviewState.merge = { mergedHash: sha(revision.body), ...(merged.receipt.reviewCycle ?? {}) }
-        if (reviewedRun) {
+        if (reviewedRun || boundedRun) {
           fs.writeFileSync(outputPath, revision.body)
           operationReceipt.outputHash = sha(revision.body)
-          reviewedDraft.revision = artifact(outputPath, revision.body, { revisionId: revision.id })
-          reviewedDraft.mergeHash = sha(latestDraft().content)
-          assert.equal(reviewedDraft.mergeHash, reviewedDraft.revision.contentHash, 'REVIEWED_DRAFT_MERGE_MISMATCH')
+          const chain = boundedRun ? receipt.boundedRevision : reviewedDraft
+          chain.revision = artifact(outputPath, revision.body, { revisionId: revision.id })
+          chain.mergeHash = sha(latestDraft().content)
+          if (boundedRun) chain.mergeReceipt = merged.receipt
+          assert.equal(chain.mergeHash, chain.revision.contentHash, 'REVIEWED_DRAFT_MERGE_MISMATCH')
         }
       } else if (operationKind === 'recheck') {
         const stored = await invoke('db:review-get-latest', sourceDraft.id, project.rootPath, session)
@@ -1415,11 +1498,11 @@ test('isolated production commands persist the selected phase operations', async
       const draft = db.prepare('SELECT d.*,c.body AS content FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC').all(chapter.number)
       assert.equal(draft.length, 1, 'ACTUAL_DRAFT_NOT_SAVED')
       const units = countUnits(draft[0].content)
-      if (reviewedRun) {
+      if (reviewedRun || boundedRun) {
         const finalPath = path.join(evidenceRoot, 'reviewed-final-draft.txt')
         fs.writeFileSync(finalPath, draft[0].content)
-        reviewedDraft.finalDraft = artifact(finalPath, draft[0].content, { draftId: draft[0].id, version: draft[0].version })
-        receipt.reviewedDraft = reviewedDraft
+        ;(boundedRun ? receipt.boundedRevision : reviewedDraft).finalDraft = artifact(finalPath, draft[0].content, { draftId: draft[0].id, version: draft[0].version })
+        if (reviewedRun) receipt.reviewedDraft = reviewedDraft
       }
       recordPersistedDraftObservation(receipt, { chapterNumber: chapter.number, targetUnits: chapter.targetUnits,
         units, contentHash: sha(draft[0].content) })
@@ -1448,7 +1531,7 @@ test('isolated production commands persist the selected phase operations', async
           && receipt.attempts.some(other => other.binding.operation === repairPolicy.operationId
             && other.binding.actual?.purpose === repairPolicy.repairPurpose)
         // C16 原生修复与 C17/C18、post-UI 候选的唯一压缩同规则：同一 operation 只有末次 attempt 带正式效果。
-        const supersededAttempt = (continuityRun || structuredRecovery && attempt.binding.actual.purpose.startsWith('chapter-blueprint-directory') || draftRecovery && attempt.binding.actual.purpose.startsWith('chapter-draft'))
+        const supersededAttempt = (boundedRun || continuityRun || structuredRecovery && attempt.binding.actual.purpose.startsWith('chapter-blueprint-directory') || draftRecovery && attempt.binding.actual.purpose.startsWith('chapter-draft'))
           && receipt.attempts.filter(other => other.binding.operation === attempt.binding.operation).at(-1) !== attempt
         const condensedPrimary = condensePolicy && attempt.binding.actual.purpose === condensePolicy.primaryPurpose
           && receipt.attempts.some(other => other.binding.operation === attempt.binding.operation
