@@ -195,6 +195,28 @@ describe('review and revision generation through the actual owner and SQLite', (
       expect(f.spy).toHaveBeenCalledTimes(1)
     } finally { reopened.suspendForProjectClose() }
   })
+  it('derives review-fix lineage with portable NULL history and rejects malformed history', async () => {
+    const f = fixture(), history = await f.run('refine-draft')
+    const original = await f.run(), saved = f.owner.commitReview(original)
+    // Portable export retains the attempt row while projecting its machine usage receipt to SQL NULL.
+    f.db.prepare('UPDATE generation_attempts SET usage_receipt_json=NULL WHERE run_id=?').run(history.handle.runId)
+    const snapshot = createHumanConfirmedReviewSnapshot({ sourceReviewId: saved.id, sourceDraft: saved.source,
+      summary: '作者确认', authorGuidance: '', items: [{ category: '表达', severity: 'warning',
+        description: '补充动作', decision: 'apply', origin: 'author' }] })!
+    const content = serializeHumanConfirmedReviewSnapshot(snapshot)
+    const confirmation = ReviewRepository.create({ baseDraftId: 1, content, expectedSource: saved.source }, f.db)
+    const request: PrepareReviewRevisionRequest = { operation: 'refine-from-review', draftId: 1,
+      expectedDraft: { chapterNumber: 1, version: 1, status: 'draft', contentHash: textHash(prose) },
+      authorInputs: [], uiLocale: 'zh-CN', reviewSourceId: confirmation.id, confirmedReviewContent: content }
+    const prepared = f.owner.prepareReviewRevision(request)
+    expect(prepared.parentRootActionId).toBe(original.handle.rootActionId)
+    expect(prepared.modelId).toBe('synthetic')
+    expect(f.spy).toHaveBeenCalledTimes(2)
+    expect(f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE run_id=?')
+      .pluck().get(history.handle.runId)).toBeNull()
+    f.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE run_id=?').run('{', history.handle.runId)
+    expect(() => f.owner.prepareReviewRevision(request)).toThrow(SyntaxError)
+  })
   it('derives review-fix lineage from the saved original review and refuses confirmation changes', async () => {
     const f = fixture(), original = await f.run(), saved = f.owner.commitReview(original)
     const snapshot = createHumanConfirmedReviewSnapshot({ sourceReviewId: saved.id, sourceDraft: saved.source, summary: '作者确认', authorGuidance: '保持克制', items: [{ category: '表达', severity: 'warning', description: '补充动作', decision: 'apply', origin: 'ai' }] })

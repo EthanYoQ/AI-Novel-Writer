@@ -53,7 +53,7 @@ export class ReviewRevisionGeneration {
   }
   /** Formal effects seal the proof they reference. Retrying their saved ACK remains read-only. */
   assertMutable(runId: string): void {
-    if (this.attempts(runId).some(row => JSON.parse(row.usage_receipt_json).reviewRevisionEffect))
+    if (this.attempts(runId).some(row => JSON.parse(row.usage_receipt_json)?.reviewRevisionEffect))
       throw new Error('GENERATION_REVIEW_ALREADY_SAVED')
   }
   private requireRun(handle: MainGenerationRunHandle): DurableGenerationRun {
@@ -91,7 +91,7 @@ export class ReviewRevisionGeneration {
       preflightFindings: context.preflightFindings }), null, 2)
   }
   private saved(run: DurableGenerationRun): { effect: Effect; receipt: ReviewRevisionCommitReceipt } | undefined {
-    const rows = this.attempts(run.runId).filter(row => JSON.parse(row.usage_receipt_json).reviewRevisionEffect)
+    const rows = this.attempts(run.runId).filter(row => JSON.parse(row.usage_receipt_json)?.reviewRevisionEffect)
     if (rows.length > 1) throw new Error('GENERATION_REVIEW_RECEIPT_INVALID')
     if (!rows[0]) return undefined
     const effect = JSON.parse(rows[0].usage_receipt_json).reviewRevisionEffect as Effect
@@ -121,7 +121,7 @@ export class ReviewRevisionGeneration {
       if (plan.disposition !== 'required' || !frozenPlan || !isDeepStrictEqual(frozenPlan, context.recheck))
         throw new Error('GENERATION_REVIEW_LINEAGE_UNPROVEN')
       const matching = this.attempts().filter(row => {
-        const effect = JSON.parse(row.usage_receipt_json).reviewRevisionEffect as Effect | undefined
+        const effect = JSON.parse(row.usage_receipt_json)?.reviewRevisionEffect as Effect | undefined
         return effect?.kind === 'review' && effect.id === plan.reviewId
       })
       if (matching.length !== 1) throw new Error('GENERATION_REVIEW_LINEAGE_UNPROVEN')
@@ -133,7 +133,7 @@ export class ReviewRevisionGeneration {
     }
     if (!context.confirmation) return {}
     const matching = this.attempts().filter(row => {
-      const effect = JSON.parse(row.usage_receipt_json).reviewRevisionEffect as Effect | undefined
+      const effect = JSON.parse(row.usage_receipt_json)?.reviewRevisionEffect as Effect | undefined
       return effect?.kind === 'review' && effect.id === context.confirmation!.snapshot.sourceReviewId
     })
     if (matching.length !== 1) throw new Error('GENERATION_REVIEW_LINEAGE_UNPROVEN')
