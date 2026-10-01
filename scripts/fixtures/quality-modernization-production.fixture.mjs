@@ -1484,6 +1484,16 @@ test('isolated production commands persist the selected phase operations', async
           })
         }
       }
+      if (continuityRun && continuityCase.kind === 'extraction' && operationKind === 'character_cards') {
+        const source = finalizedContext.slot.source
+        assert.deepEqual(source, receipt.finalizationEvidence.source, 'FINALIZATION_STEPS_SOURCE_DIVERGED')
+        const roster = await invoke('db:character-roster-read', project.rootPath, session)
+        const beforePath = path.join(evidenceRoot, `before-cards-${source.finalizationId}.json`)
+        const beforeText = JSON.stringify(roster.entries, null, 2)
+        fs.writeFileSync(beforePath, beforeText)
+        receipt.finalizationEvidence.cardsBeforeReadback = { invocationId: request.invocationId, source,
+          revision: roster.revision, identityRevision: roster.identityRevision, rosterHash: sha(beforeText), outputPath: beforePath }
+      }
       const result = await command.execute(params)
       await Promise.all(streamSettlements)
       if (!fullRun || operationKind !== 'directory') assert.deepEqual(db.prepare('SELECT chapter_number,title,role,purpose,key_events,characters,user_guidance FROM blueprints WHERE chapter_number>1 ORDER BY chapter_number').all(), authorBlueprints, 'OUTSIDE_RANGE_REWRITTEN')
@@ -1527,10 +1537,10 @@ test('isolated production commands persist the selected phase operations', async
           receipt.finalizationEvidence.derivedApplied = provenance?.kind === 'derived'
             && provenance.source.finalizationId === slot.source.finalizationId
           const cardsPath = path.join(evidenceRoot, `derived-cards-${slot.source.finalizationId}.json`)
-          const cardsText = JSON.stringify(roster.entries.map(entry => ({ characterId: entry.characterId, name: entry.name,
-            currentState: entry.currentState ?? null })), null, 2)
+          const cardsText = JSON.stringify(roster.entries, null, 2)
           fs.writeFileSync(cardsPath, cardsText)
-          receipt.finalizationEvidence.cardsReadback = { characterId: finalizedCharacterId,
+          receipt.finalizationEvidence.cardsReadback = { characterId: finalizedCharacterId, source: slot.source, invocationId: request.invocationId,
+            revision: roster.revision, identityRevision: roster.identityRevision,
             sourceFinalizationId: provenance?.source?.finalizationId ?? null, rosterHash: sha(cardsText), outputPath: cardsPath }
           if (request.mode === 'synthetic') {
             assert.equal(character?.currentState?.recentEvents, '发现日期异常，决定到现场核查', 'DERIVED_STATE_NOT_APPLIED')
