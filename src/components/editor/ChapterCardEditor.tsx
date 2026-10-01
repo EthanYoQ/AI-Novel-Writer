@@ -30,6 +30,7 @@ import { Input } from '../ui/Input'
 import { Textarea } from '../ui/Textarea'
 import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
+import { chapterRoleOptions, getChapterRoleLabels } from '../../shared/chapter-role'
 import { cn } from '../../lib/utils'
 import { toast } from '../ui/Toast'
 import { confirm } from '../ui/Confirm'
@@ -57,8 +58,6 @@ import {
   AuthoritativeChapterSequenceError,
   readAuthoritativeNextChapter,
 } from '../../services/authoritative-chapter-sequence'
-
-const ROLES = ['建置', '铺垫', '发展', '冲突', '高潮', '转折', '收尾']
 
 const ROLE_COLORS: Record<string, string> = {
   高潮: 'bg-red-500/20 text-[var(--color-error-text)]',
@@ -142,15 +141,10 @@ export default function ChapterCardEditor({
     if (targetIndex >= 0) setSelectedIdx(targetIndex)
   }, [initialChapterNumber, loading])
 
-  const roleLabel = (role: string) => text(role, ({
-    建置: 'Setup',
-    铺垫: 'Foreshadowing',
-    发展: 'Development',
-    冲突: 'Conflict',
-    高潮: 'Climax',
-    转折: 'Turning point',
-    收尾: 'Resolution',
-  } as Record<string, string>)[role] ?? role)
+  const roleLabel = (role: string) => {
+    const labels = getChapterRoleLabels(role)
+    return labels ? text(labels.zhCN, labels.enUS) : role
+  }
 
   const applyVisibleDraftState = useCallback((nextBlueprints: ChapterBlueprint[], nextDirty: Set<number>) => {
     blueprintsRef.current = nextBlueprints
@@ -981,7 +975,9 @@ export default function ChapterCardEditor({
                   <div>
                     <Label>{text('章节定位', 'Chapter role')}</Label>
                     <NativeSelect value={selected.role} onChange={e => updateField('role', e.target.value)}>
-                      {ROLES.map(r => <option key={r} value={r}>{roleLabel(r)}</option>)}
+                      {chapterRoleOptions(selected.role).map(({ value, labels }) => (
+                        <option key={value} value={value}>{labels ? text(labels.zhCN, labels.enUS) : value}</option>
+                      ))}
                     </NativeSelect>
                   </div>
                   <div>

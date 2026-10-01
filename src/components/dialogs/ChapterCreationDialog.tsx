@@ -35,16 +35,7 @@ import {
 } from '../project-session-gate'
 import type { ModelProfile, ProjectSessionContext } from '../../shared/ipc-channels'
 import ConsistencyPreflightPanel from './ConsistencyPreflightPanel'
-
-const CHAPTER_ROLES = [
-  { value: '开篇', en: 'Opening' },
-  { value: '铺垫', en: 'Setup' },
-  { value: '发展', en: 'Development' },
-  { value: '冲突', en: 'Conflict' },
-  { value: '高潮', en: 'Climax' },
-  { value: '转折', en: 'Turning point' },
-  { value: '收尾', en: 'Resolution' },
-]
+import { chapterRoleOptions } from '../../shared/chapter-role'
 
 interface Props {
   isOpen: boolean
@@ -499,8 +490,8 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
                 <div>
                   <Label>{text('章节定位', 'Chapter role')}</Label>
                   <NativeSelect value={role} onChange={(e) => setRole(e.target.value)}>
-                    {CHAPTER_ROLES.map(({ value, en }) => (
-                      <option key={value} value={value}>{text(value, en)}</option>
+                    {chapterRoleOptions(role).map(({ value, labels }) => (
+                      <option key={value} value={value}>{labels ? text(labels.zhCN, labels.enUS) : value}</option>
                     ))}
                   </NativeSelect>
                 </div>
