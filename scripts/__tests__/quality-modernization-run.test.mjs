@@ -969,6 +969,7 @@ test('固定 high/零温度只在原五个 scope 生效，并在读回及 wire �
 
 test('前向资格窗口只继承 high 的五个 scope，按本次 bridge 的已登记动作确定三层兜底', () => {
   const window = protocol.forwardQualificationWindowExperiment
+  assert.equal(window.revision, 'native-budget-aligned-qualification-window-v2')
   assert.deepEqual(Object.keys(window).sort(), ['baseHash', 'limits', 'revision', 'scopes'])
   assert.equal(window.baseHash, hash(protocol.forwardHighReasoningExperiment))
   assert.deepEqual(window.scopes, protocol.forwardReasoningExperiment.scopes)
@@ -1002,7 +1003,8 @@ test('前向资格窗口只继承 high 的五个 scope，按本次 bridge 的已
     attemptMs: BRIDGE_SETTLEMENT_DEADLINE_MS, spawnMs: BRIDGE_SPAWN_TIMEOUT_MS,
     testMs: BRIDGE_TEST_TIMEOUT_MS, maxCalls: null, revision: null })
   for (const change of [{ baseHash: 'f'.repeat(64) }, { scopes: window.scopes.slice(1) },
-    { revision: 'wrong' }, { extra: true }])
+    { revision: 'wrong' }, { revision: 'native-budget-aligned-qualification-window-v1' },
+    { limits: window.limits + ' changed' }, { extra: true }])
     assert.throws(() => forwardQualificationWindowFor({ ...protocol,
       forwardQualificationWindowExperiment: { ...window, ...change } }, 'c16-c18', 'final'),
     /FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH/)
@@ -4369,7 +4371,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     'historicalC16Ee3435ecBoundary', 'historicalC16Ccc70b31Boundary', 'historicalC16C9b88510Boundary', 'historicalC16D8a30c11Boundary',
     'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary', 'historicalC16B42cfc55Boundary',
     'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
-    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary']
+    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -4456,6 +4458,17 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1296, { ...interrupted,
       reserveAttempts: interrupted.reserveAttempts.map((item, index) => index === 17 ? { ...item, terminal: 'settle' } : item),
     }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    const closed = real.boundaries.historicalC169182d475Boundary
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1350, closed), 1419)
+    assert.equal(closed.reserveAttempts.length, 23)
+    assert.ok(closed.reserveAttempts.every(item => item.terminal === 'settle'
+      && item.invocationId === '9182d475-c42a-4a96-bfea-99ab4e7bd842'))
+    assert.equal(closed.armBindings.candidate.codeSha, '990f8bb51d8c686e9400c014ffc46c632558beca')
+    for (const field of ['codeSha', 'sourceHash', 'driverHash'])
+      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1350, { ...closed,
+        armBindings: { candidate: { ...closed.armBindings.candidate,
+          [field]: 'f'.repeat(closed.armBindings.candidate[field].length) } },
+      }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
     assert.equal(validatePhysicalLedger(ledger), ledger)
     fs.writeFileSync(file, synthetic.raw)
     const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
@@ -4479,7 +4492,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
       /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
     fs.writeFileSync(ledger, real.raw)
     fs.writeFileSync(file, synthetic.raw)
-    for (const name of ['historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalC16071156e5Boundary']) {
+    for (const name of ['historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary']) {
       const registered = real.boundaries[name]
       const changed = raw => raw.replace(`"codeSha":"${registered.armBindings.candidate.codeSha}"`, `"codeSha":"${'f'.repeat(40)}"`)
       fs.writeFileSync(ledger, changed(real.raw))

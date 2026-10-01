@@ -62,7 +62,7 @@
     "limits": "One prospective complete seven-case qualification at temperature 0 and reasoning high within the inherited C16, post-UI and full scopes. Preserve the original source, oracles, budgets, arm order, 480-second deadline, prior max results and physical ledger. No causal improvement or stability claim; stop dependent work on any technical or quality failure."
   },
   "forwardQualificationWindowExperiment": {
-    "revision": "native-budget-aligned-qualification-window-v1",
+    "revision": "native-budget-aligned-qualification-window-v2",
     "baseHash": "39d2606076046d2e5307abf9be392abf0a4c4c46dbe9c235851de95016fbbf95",
     "scopes": [
       { "phase": "c16-c18", "milestone": "final", "caseIds": ["C16-A", "C16-B", "C16-C", "C17-A", "C17-B", "C18-A", "C18-B"] },
@@ -71,7 +71,7 @@
       { "phase": "early-review", "milestone": "post-ui", "caseIds": ["场景3/2"] },
       { "phase": "full", "milestone": "final", "caseIds": ["场景1/1", "场景1/2", "场景1/3", "场景2/1", "场景2/2", "场景2/3", "场景3/1", "场景3/2", "场景3/3"] }
     ],
-    "limits": "One new prospective complete seven-case qualification at the unchanged temperature 0 and reasoning high, followed by the inherited dependent scopes only if prior gates pass. Native product budgets remain unchanged. The experimental attempt watchdog is native ordinary-root maximum plus 60000 ms settlement; parent and test windows are bounded by the registered operations' existing physical-call ceilings. The prior 480-second high qualification is consumed and its UNKNOWN remains unchanged. No technical or literary result is carried forward; any failure stops dependent work."
+    "limits": "One new prospective repaired-subject complete seven-case qualification after the shared ordinary-review default-scope repair at f625f1f54b7b4669c90f3359df052284f8d87d4d and actual C16 before/after observations, using a fresh committed subject freeze and all seven new cases from C16-A at the unchanged temperature 0 and reasoning high, followed by the inherited dependent scopes only if prior gates pass. The prior native-budget-aligned-qualification-window-v1 qualification invocation 9182d475-c42a-4a96-bfea-99ab4e7bd842 tested 990f8bb51d8c686e9400c014ffc46c632558beca is consumed; both fresh three-stage whole FAIL and all historical failures/UNKNOWN remain unchanged. No automatic rerun, case substitution, six-plus-one stitching or best-of selection. Native product budgets and registered physical-call ceilings remain unchanged. The experimental attempt watchdog is native ordinary-root maximum plus 60000 ms settlement; parent and test windows are bounded by the registered operations' existing physical-call ceilings. The prior 480-second high qualification is consumed and its UNKNOWN remains unchanged. No technical or literary result is carried forward; any failure stops dependent work."
   },
   "historicalIntentionToTreat": {
     "decisionRevision": "s10b-paired-hard-gate-v1",
@@ -2506,6 +2506,160 @@
       {"attemptId": "candidate:f278ee93-b867-43e3-be01-3a81aa7c7f18", "invocationId": "071156e5-db17-4823-96e2-007c4e232e9e", "terminal": "settle", "parityId": "afba514b0a39c254433fe0f5bbd864a4f0c86f808bf02f7464dcb479055b7fe6"},
       {"attemptId": "candidate:35c5e850-285b-4160-994d-cf2d3327fc0e", "invocationId": "071156e5-db17-4823-96e2-007c4e232e9e", "terminal": "settle", "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"},
       {"attemptId": "candidate:5d0933d2-8d48-4a3b-8d14-2d87f74bf5ae", "invocationId": "071156e5-db17-4823-96e2-007c4e232e9e", "terminal": "unknown", "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"}
+    ]
+  },
+  "historicalC169182d475Boundary": {
+    "fromEventCount": 1350,
+    "eventCount": 1419,
+    "rawBytesSha256": "304c6979c2b89ddf93f8522f61118a4e86f21c15cb207599c02b8d8a067d7168",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "4bf14374512f8128e6f107cfd04acf5cfb024b0d3ebb20e4aab072714263162e",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "990f8bb51d8c686e9400c014ffc46c632558beca",
+        "sourceHash": "c90cc6baa4fecc2b6cbfc6ece5057ea2507e93f44b19f3e6f5cfc15acafb4d9f",
+        "driverHash": "2a61fd40ee6057c97b28fa168ed908a59e2d13e835a9f539d84f88f9baf83c2f"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:b05a3e3d-6305-4cd2-906b-daffee0cc260",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "75b569aecd386bf18c07df24343db062d42ef25d13b115aa822c50b914d5d897"
+      },
+      {
+        "attemptId": "candidate:6f57d1f2-5e62-4a20-9846-f0128d1e9afb",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "75b569aecd386bf18c07df24343db062d42ef25d13b115aa822c50b914d5d897"
+      },
+      {
+        "attemptId": "candidate:b0bfaf7b-8362-47c3-84fc-f43ebc0d7acb",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bc7e1a868a6618ea536e2b05b4b9674ece7a0d2d17c0d0edb793499f6ae65576"
+      },
+      {
+        "attemptId": "candidate:4fca9335-4562-4deb-a863-d00f29043620",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bc7e1a868a6618ea536e2b05b4b9674ece7a0d2d17c0d0edb793499f6ae65576"
+      },
+      {
+        "attemptId": "candidate:68734bd0-4bcd-427d-9c54-2e7eabea5dd4",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"
+      },
+      {
+        "attemptId": "candidate:7ba4c5f7-5b6e-413c-a75a-369c8f8576b0",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"
+      },
+      {
+        "attemptId": "candidate:af9a125d-a12c-4dac-b0c5-2a3dbbdc3bce",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"
+      },
+      {
+        "attemptId": "candidate:ca69f182-3cf7-4741-be84-3270ade3bf20",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"
+      },
+      {
+        "attemptId": "candidate:700b5a42-2e7c-4f5e-8202-434d65db7d7f",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"
+      },
+      {
+        "attemptId": "candidate:3504b0bd-09e4-4713-9e5d-5fe176847755",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"
+      },
+      {
+        "attemptId": "candidate:d91a54b4-5f86-438a-a36d-998643441ec5",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "afba514b0a39c254433fe0f5bbd864a4f0c86f808bf02f7464dcb479055b7fe6"
+      },
+      {
+        "attemptId": "candidate:580c4faf-06fa-4b57-abaa-6a4d81ce7596",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "afba514b0a39c254433fe0f5bbd864a4f0c86f808bf02f7464dcb479055b7fe6"
+      },
+      {
+        "attemptId": "candidate:83afad76-5f9f-46ea-88a1-58a1e9d4116c",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "afba514b0a39c254433fe0f5bbd864a4f0c86f808bf02f7464dcb479055b7fe6"
+      },
+      {
+        "attemptId": "candidate:8ea87fc4-0866-4a21-b486-42bef835fb74",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "afba514b0a39c254433fe0f5bbd864a4f0c86f808bf02f7464dcb479055b7fe6"
+      },
+      {
+        "attemptId": "candidate:b2768c2d-3258-4172-9b14-12e5e225b161",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"
+      },
+      {
+        "attemptId": "candidate:fffe10be-d3eb-4dc6-8af8-b2df6328767d",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"
+      },
+      {
+        "attemptId": "candidate:ec9cc1ab-b0d8-4971-9ca4-04adb66e5291",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"
+      },
+      {
+        "attemptId": "candidate:3233ca1c-658b-4f8a-ae49-efa4a66efbc4",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"
+      },
+      {
+        "attemptId": "candidate:35ff88df-6357-4cf5-a908-1c5ef32d0d09",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"
+      },
+      {
+        "attemptId": "candidate:64838522-7814-4fa1-b44d-dec75f109c04",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"
+      },
+      {
+        "attemptId": "candidate:22451f89-8b7c-421f-b5fe-68aacda93a7c",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"
+      },
+      {
+        "attemptId": "candidate:1d167bd8-0c8f-4225-8873-201075b73f37",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"
+      },
+      {
+        "attemptId": "candidate:8d3a8225-9cff-4446-90ec-33b0426a2bd6",
+        "invocationId": "9182d475-c42a-4a96-bfea-99ab4e7bd842",
+        "terminal": "settle",
+        "parityId": "bdae7a05a3a78b02b630d24258c4ccad46b281997f21b1968366f217c2229cf0"
+      }
     ]
   }
 }

@@ -378,6 +378,10 @@ N 只计算桥的外层兜底，不增加任何 dispatch 权限：C16-A/B/C 的 
 
 `historicalC16625bfda8Boundary` 从1194行接续至1212行，完整前缀 sha256 `e6fbc58d717e6acf9cb24cab41c14487cda670db73ab158c7c9a654629b5daa5`，精确认证六次 candidate 的 reserve→dispatch→终态（五次 settle、末次 unknown）及原 code/source/driver/parity 绑定。账本读写两入口都继承该段；旧1194及之前的原始字节前缀继续认证。新目标须绑定新的完整协议与桥 hash。任何技术或文学失败均停止依赖资格；本时间合同本身不证明模型能力、参数或代码改善、原失败根因及服务端实际采纳。
 
+`forwardQualificationWindowExperiment` 的现行前瞻登记为 `native-budget-aligned-qualification-window-v2`：原 v1 已由 tested `990f8bb51d8c686e9400c014ffc46c632558beca`、invocation `9182d475-c42a-4a96-bfea-99ab4e7bd842` 的完整七案消费，两名 fresh 评审各三阶段后的 whole FAIL 及一次限定仲裁均保留。v2 只另授权 ONE 轮修复 subject 的全新完整七案：先完成 `f625f1f54b7b4669c90f3359df052284f8d87d4d` 的 ZH/EN 共同 ordinary-review default scope 修复与 C16 原生前后状态观测，再按新提交 SHA/完整协议/driver 重新冻结，从 C16-A 开始七案全部重做。原素材、全部目标与评分、严格引文、原 AI 选择、0 / high 参数、native 预算及物理调用上界逐项不变；不得自动重跑、换案例、6+1 拼接或 best-of。只有本新完整七案通过后，才继承原 post-UI 三 selector 与 full 双臂依赖；任何失败仍停止依赖，不挪用原轮成功分项或改判旧 FAIL/UNKNOWN。
+
+`historicalC169182d475Boundary` 原样接在071的1350行边界之后，认证第1351–1419行：上述9182 invocation 的23次 candidate reserve→dispatch→settle / 23 STOP、0 UNKNOWN、0 open，原 protocol hash `4bf14374512f8128e6f107cfd04acf5cfb024b0d3ebb20e4aab072714263162e`、tested990/source/driver与逐 attempt parity 均保持原绑定。完整1419行 raw SHA-256 `304c6979c2b89ddf93f8522f61118a4e86f21c15cb207599c02b8d8a067d7168`，原1350行前缀 `bca9e2a94ab5a25248f8c5ca714e019d21933f1c083652dfcf8ebd331e59fd3c` 不改。账本读写两入口只加性认证此已闭合历史，不写原账本、不免计请求、不改旧071 UNKNOWN或9182 FAIL；后续新 reserve 必须重新绑定当前协议。
+
 ## C17-A 固定保存稿有界修稿诊断（非资格）
 
 此诊断含预置作者纠错项，只验证给定问题后的修稿；不证明 AI 自主发现，也不能放行[新资格](#ai-review-final-manuscript)。已开始的实验保留原登记及证据，不中途改成 AI-only 实验。
