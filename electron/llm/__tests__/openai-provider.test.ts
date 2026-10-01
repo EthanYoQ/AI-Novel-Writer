@@ -767,6 +767,8 @@ describe('OpenAIProvider opencode Go compatibility', () => {
     baseUrl: 'https://opencode.ai/zen/go/v1',
   }
 
+  const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
+
   function responseMock() {
     return {
       ok: true,
@@ -778,63 +780,115 @@ describe('OpenAIProvider opencode Go compatibility', () => {
     return { ok: true, body: { getReader: () => sseReader(...messages) } }
   }
 
-  it('sends a stable session id and an ai-novel-writer user agent to the opencode Go gateway in normal and streaming requests', async () => {
+  function sessionIdsOf(fetchMock: ReturnType<typeof vi.fn>): Array<string | undefined> {
+    return fetchMock.mock.calls.map(
+      ([, request]) => (request.headers as Record<string, string>)['x-opencode-session'],
+    )
+  }
+
+  it('keeps the caller-supplied conversation id stable across normal, streaming, and separate provider instances', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(responseMock())
       .mockResolvedValueOnce(streamMock('data: [DONE]\n\n'))
+      .mockResolvedValueOnce(responseMock())
     vi.stubGlobal('fetch', fetchMock)
 
     await new OpenAIProvider().generate(opencodeGoModel, [{ role: 'user', content: '普通正文' }], {
       temperature: 0.2,
       maxTokens: 512,
+      conversationId: 'generation-run-1',
     })
     await new OpenAIProvider().generateStream(opencodeGoModel, [{ role: 'user', content: '流式正文' }], {
       temperature: 0.2,
       maxTokens: 512,
+      conversationId: 'generation-run-1',
       signal: new AbortController().signal,
       onChunk: vi.fn(),
       onDone: vi.fn(),
       onError: vi.fn(),
     })
+    await new OpenAIProvider().generate(opencodeGoModel, [{ role: 'user', content: '重试正文' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+      conversationId: 'generation-run-1',
+    })
 
-    const headersPerCall = fetchMock.mock.calls.map(([, request]) => request.headers as Record<string, string>)
-    const sessionIds = headersPerCall.map(headers => headers['x-opencode-session'])
-    expect(sessionIds).toHaveLength(2)
-    for (const sessionId of sessionIds) {
-      expect(sessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu)
-    }
-    expect(new Set(sessionIds).size).toBe(1)
-    for (const headers of headersPerCall) {
-      expect(headers['User-Agent']).toMatch(/^ai-novel-writer\//u)
-      expect(headers['Authorization']).toBe('Bearer pst-test-token')
-      expect(headers['Content-Type']).toBe('application/json')
+    expect(sessionIdsOf(fetchMock)).toEqual(['generation-run-1', 'generation-run-1', 'generation-run-1'])
+    for (const [, request] of fetchMock.mock.calls) {
+      expect((request.headers as Record<string, string>)['User-Agent']).toMatch(/^ai-novel-writer\//u)
+      expect((request.headers as Record<string, string>)['Authorization']).toBe('Bearer pst-test-token')
+      expect((request.headers as Record<string, string>)['Content-Type']).toBe('application/json')
     }
   })
 
-  it('does not send the opencode Go session header to the pay-per-token Zen gateway', async () => {
+  it('keeps distinct conversations on distinct opencode Go session ids', async () => {
     const fetchMock = vi.fn().mockResolvedValue(responseMock())
     vi.stubGlobal('fetch', fetchMock)
 
-    await new OpenAIProvider().generate(
-      { ...opencodeGoModel, baseUrl: 'https://opencode.ai/zen/v1' },
-      [{ role: 'user', content: '正文' }],
-      { temperature: 0.2, maxTokens: 512 },
-    )
+    await new OpenAIProvider().generate(opencodeGoModel, [{ role: 'user', content: '项目A' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+      conversationId: 'generation-run-1',
+    })
+    await new OpenAIProvider().generate(opencodeGoModel, [{ role: 'user', content: '项目B' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+      conversationId: 'generation-run-2',
+    })
 
-    const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>
-    expect(headers).not.toHaveProperty('x-opencode-session')
+    expect(sessionIdsOf(fetchMock)).toEqual(['generation-run-1', 'generation-run-2'])
   })
 
-  it('does not send the opencode Go session header to other OpenAI-compatible gateways', async () => {
+  it('falls back to a per-request session id when no conversation scope is supplied', async () => {
     const fetchMock = vi.fn().mockResolvedValue(responseMock())
     vi.stubGlobal('fetch', fetchMock)
 
-    await new OpenAIProvider().generate(fixedTemperatureKimiModel, [{ role: 'user', content: '正文' }], {
+    await new OpenAIProvider().generate(opencodeGoModel, [{ role: 'user', content: '探测一' }], {
+      temperature: 0.2,
+      maxTokens: 512,
+    })
+    await new OpenAIProvider().generate(opencodeGoModel, [{ role: 'user', content: '探测二' }], {
       temperature: 0.2,
       maxTokens: 512,
     })
 
+    const sessionIds = sessionIdsOf(fetchMock)
+    for (const sessionId of sessionIds) {
+      expect(sessionId).toMatch(UUID_PATTERN)
+    }
+    expect(new Set(sessionIds).size).toBe(2)
+  })
+
+  it('sends the Go session header for the trailing-slash Go base URL', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(responseMock())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new OpenAIProvider().generate(
+      { ...opencodeGoModel, baseUrl: 'https://opencode.ai/zen/go/v1///' },
+      [{ role: 'user', content: '正文' }],
+      { temperature: 0.2, maxTokens: 512, conversationId: 'generation-run-1' },
+    )
+
+    expect(sessionIdsOf(fetchMock)).toEqual(['generation-run-1'])
+  })
+
+  it.each([
+    ['the pay-per-token Zen gateway', 'https://opencode.ai/zen/v1'],
+    ['a non-Go opencode path segment', 'https://opencode.ai/zen/good/v1'],
+    ['a plain-HTTP opencode endpoint', 'http://opencode.ai/zen/go/v1'],
+    ['another OpenAI-compatible gateway', 'https://gateway.example/v1'],
+  ])('does not send the Go session header or app user agent to %s', async (_case, baseUrl) => {
+    const fetchMock = vi.fn().mockResolvedValue(responseMock())
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new OpenAIProvider().generate(
+      { ...opencodeGoModel, baseUrl },
+      [{ role: 'user', content: '正文' }],
+      { temperature: 0.2, maxTokens: 512, conversationId: 'generation-run-1' },
+    )
+
     const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>
     expect(headers).not.toHaveProperty('x-opencode-session')
+    expect(headers).not.toHaveProperty('User-Agent')
   })
 })

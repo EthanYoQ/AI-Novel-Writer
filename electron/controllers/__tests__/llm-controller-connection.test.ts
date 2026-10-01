@@ -652,3 +652,53 @@ describe('llm project statistics', () => {
     }))
   })
 })
+
+describe('llm conversation scoping for gateway session affinity', () => {
+  function conversationHandler(channel: 'llm:generate' | 'llm:generate-stream'): IpcHandler {
+    const registered = mocks.handlers.get(channel)
+    if (!registered) throw new Error(`Missing ${channel} handler`)
+    return registered
+  }
+
+  it('forwards the execution lease id as the conversation scope of normal and streaming generation', async () => {
+    const begin = mocks.handlers.get('llm:begin-execution-lease')
+    if (!begin) throw new Error('Missing llm:begin-execution-lease handler')
+    const beginResult = await begin({}, deepSeekModel.id) as { success: boolean; lease?: { leaseId: string } }
+    if (!beginResult.success || !beginResult.lease) throw new Error('Failed to begin execution lease')
+    const request = {
+      modelId: deepSeekModel.id,
+      modelExecutionLeaseId: beginResult.lease.leaseId,
+      messages: [{ role: 'user' as const, content: 'write' }],
+      purpose: 'chapter-draft',
+    }
+
+    await conversationHandler('llm:generate')({}, request)
+    await conversationHandler('llm:generate-stream')({ sender: {} }, 'lease-stream-1', request)
+
+    expect(mocks.generate.mock.calls[0]?.[2]).toMatchObject({ conversationId: beginResult.lease.leaseId })
+    expect(mocks.generateStream.mock.calls[0]?.[2]).toMatchObject({ conversationId: beginResult.lease.leaseId })
+  })
+
+  it('leaves generation without an execution lease on the provider single-request fallback', async () => {
+    const request = {
+      modelId: deepSeekModel.id,
+      messages: [{ role: 'user' as const, content: 'write' }],
+      purpose: 'chapter-draft',
+    }
+
+    await conversationHandler('llm:generate')({}, request)
+    await conversationHandler('llm:generate-stream')({ sender: {} }, 'unleased-stream-1', request)
+
+    const generateOptions = mocks.generate.mock.calls[0]?.[2] as { conversationId?: string }
+    const streamOptions = mocks.generateStream.mock.calls[0]?.[2] as { conversationId?: string }
+    expect(generateOptions.conversationId).toBeUndefined()
+    expect(streamOptions.conversationId).toBeUndefined()
+  })
+
+  it('does not give the connection probe a creative conversation scope', async () => {
+    await connectionHandler()({}, deepSeekModel)
+
+    const options = mocks.generate.mock.calls[0]?.[2] as { conversationId?: string }
+    expect(options.conversationId).toBeUndefined()
+  })
+})
