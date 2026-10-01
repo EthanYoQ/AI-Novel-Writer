@@ -418,8 +418,8 @@ Return JSON only, with no Markdown, preface, analysis, plan, code fence, or reas
 Output the complete revised manuscript as plain prose only. Do not include Markdown, a preface, an explanation, analysis, or screenplay formatting. Separate every paragraph with one blank line.`,
   },
   consistency_check: {
-    systemRole: 'You are a rigorous fiction continuity editor. Review only objectively verifiable story facts and never grade subjective prose style. Use explicit categories and concrete textual evidence.',
-    content: `Review the chapter for objective continuity and causal problems.
+    systemRole: 'You are a rigorous fiction editor. Review objectively verifiable factual continuity, causality and motivation, explicit required goals for this chapter, and unnecessary complete retellings of prior events. Never grade prose or style preferences.',
+    content: `Review the chapter for objectively verifiable continuity, causality, explicit required goals for this chapter, and unnecessary complete retellings of prior events.
 
 [Chapter under review]
 {{chapter_content}}
@@ -434,17 +434,18 @@ Output the complete revised manuscript as plain prose only. Do not include Markd
 {{world_building}}
 
 [Review principles]
-1. Report only issues supported by a specific quotation from the chapter.
+1. Use items for issues located in the chapter under review. Every error or warning must quote one contiguous, locatable passage from that chapter.
 2. Prefer no issue over an invented issue. A checked dimension with no verified problem may be omitted or represented by one pass item; do not pad the item count.
-3. Do not report style preferences or optional craft suggestions. Report only verifiable contradictions or causal failures.
-4. Every reported issue must be independently checkable by another editor.
+3. Check factual continuity, independently verifiable causality and motivation, explicit required goals for this chapter, and unnecessary complete retellings of prior events. Exclude prose or style preferences and optional creative advice.
+4. Every reported issue must be independently checkable by another editor. Do not require the author to invent new costs or plot events.
 
 [Review dimensions]
 1. Plot continuity against prior context.
-2. Causal logic, motivation, and factual plausibility.
+2. Causality and motivation: identify conflicts between established action conditions, causal connections or character motives and this chapter's actions or results, or concrete gaps that prevent an event from making sense. Explain them from the manuscript and original materials, not personal preferences.
 3. Character location, capability, physical state, and emotional state.
-4. Connections between chapters, including hooks and setup.
-5. Existing foreshadowing that should be addressed, and new facts that contradict it.`,
+4. Locate contradictions or causal gaps in this chapter's connections to legitimate prior context, foreshadowing or hooks.
+5. Explicit required goals for this chapter: check the original goals supplied with the request under the existing goalReviews contract. Identify the original goal when it is missing or lacks evidence; do not invent a manuscript quotation or repeat the same goal issue in items.
+6. Prior-event retelling: locate passages that completely retell an event that already happened without providing necessary new information, action or change. Explain which prior event is repeated and why the passage adds no new progression.`,
     systemSuffix: `[Author-requested review focus — prioritize when present]
 {{review_focus}}
 
@@ -452,7 +453,7 @@ Output the complete revised manuscript as plain prose only. Do not include Markd
 Output exactly one JSON object in this shape:
 {"items":[{"category":"plot continuity","severity":"pass","description":"No contradiction found"},{"category":"causal logic","severity":"error","quote":"exact source sentence","description":"verified problem"}],"summary":"one-sentence overall assessment"}
 
-severity must be error, warning, or pass. Return 1–10 items total. A review dimension does not need its own item; do not add pass items merely to cover categories, and never repeat the same issue. Keep each quote within 160 characters, each description within 200 characters, and summary within 120 characters. quote may be omitted only for pass items. Do not output Markdown, explanation, or reasoning.`,
+severity must be error (a serious objective problem in the review scope), warning (a smaller or local objective problem), or pass (no specific issue found in that dimension). Return 1–10 items total. A review dimension does not need its own item; do not add pass items merely to cover categories, and never repeat the same issue. Keep each quote within 160 characters, each description within 200 characters, and summary within 120 characters. quote may be omitted only for pass items. Do not output Markdown, explanation, or reasoning.`,
   },
   refine_from_review: {
     systemRole: 'You are a rigorous fiction editor who fixes only explicitly confirmed problems without unnecessary rewriting. Prefer the smallest complete change that resolves each confirmed item.',
