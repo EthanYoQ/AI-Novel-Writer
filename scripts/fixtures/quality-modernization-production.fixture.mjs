@@ -1052,7 +1052,7 @@ test('isolated production commands persist the selected phase operations', async
           text = JSON.stringify({ updates: [{ characterId: character.characterId,
             currentState: { recentEvents: '发现日期异常，决定到现场核查', mentalState: '决定核查' }, evidence: { text: identity.content } }] })
         }
-        else if (reviewedRun && ['review', 'final-review'].includes(operationKind)) {
+        else if ((reviewedRun || boundedRun) && ['review', 'final-review'].includes(operationKind)) {
           const current = latestDraft().content
           const issues = reviewedSyntheticIssues.filter(item => current.includes(item.quote))
           const actionable = operationKind === 'review' ? issues : request.syntheticReviewedDraftCase === 'final-fail'
@@ -1077,7 +1077,11 @@ test('isolated production commands persist the selected phase operations', async
           assert.equal(typeof current, 'string', 'REVIEW_SOURCE_DRAFT_MISSING')
           text = current
           if (request.mode === 'synthetic') {
-            text = reviewedRun ? reviewedSyntheticIssues.reduce((value, item) => value.replace(item.quote, item.replacement), current)
+            text = boundedRun ? current
+              .replace(BOUNDED_REVISION_DIAGNOSTIC.authorItems[0].quote, BOUNDED_REVISION_DIAGNOSTIC.authorItems[0].quote
+                .replace('预约费六枚，已扣，不退。', '她当场交出当天剩下的工钱，收据盖章后这笔钱已扣下；原来的预约费六枚仍不退。'))
+              .replace(BOUNDED_REVISION_DIAGNOSTIC.authorItems[1].quote, '“记录上的日期和今天对不上。”林澄说，“旧钟慢了一刻，两处偏差都还得核查。今天进不去，我们就只能继续等许可。”')
+              : reviewedRun ? reviewedSyntheticIssues.reduce((value, item) => value.replace(item.quote, item.replacement), current)
               + reviewedMustShowTexts.map(goal => `\n${goal}。`).join('')
               : current.replace(REVIEW_DEFECT, REVIEW_FIX)
             assert.notEqual(text, current, 'SYNTHETIC_TARGETED_REVISION_MISSING')

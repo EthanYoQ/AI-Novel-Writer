@@ -4253,13 +4253,38 @@ test('S14B reviewed refine rejects any missing registered author fact before res
   }
 })
 
+test('bounded-revision synthetic response switch covers refine and both ordinary reviews without changing real draft', () => {
+  const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
+  const constants = fixture.slice(fixture.indexOf('const REVIEW_DEFECT ='), fixture.indexOf('const naturalPredecessorText ='))
+  const start = fixture.indexOf("        let text, syntheticFinish = 'stop'")
+  const end = fixture.indexOf('        // Development transport', start)
+  assert.ok(start >= 0 && end > start)
+  const generate = new Function('request', 'operationKind', 'current', 'assert', 'BOUNDED_REVISION_DIAGNOSTIC',
+    `${constants}\nconst diagnosticRun = false, reviewedRun = false, boundedRun = true;
+     const chapter = { number: 2, requiredEvents: ['核查遇阻', '承担代价'] };
+     const promptText = '', reviewedSyntheticIssues = [], reviewedMustShowTexts = [];
+     const db = { prepare: () => ({ pluck: () => ({ get: () => current }) }) }, latestDraft = () => ({ content: current });
+     ${fixture.slice(start, end)} return text`)
+  const current = [...BOUNDED_REVISION_DIAGNOSTIC.authorItems.map(item => item.quote),
+    '林澄在廊下等雨停。'.repeat(100)].join('\n\n')
+  const response = (mode, operation) => generate({ mode }, operation, current, assert, BOUNDED_REVISION_DIAGNOSTIC)
+  const revision = response('synthetic', 'refine')
+  assert.notEqual(revision, current)
+  for (const item of BOUNDED_REVISION_DIAGNOSTIC.authorItems) assert.equal(revision.includes(item.quote), false)
+  assert.ok(revision.endsWith(current.split('\n\n').at(-1)), 'complete unaffected prose must remain intact')
+  assert.ok(countDraftUnits(revision) >= Math.floor(countDraftUnits(current) * 0.8)
+    && countDraftUnits(revision) <= Math.ceil(countDraftUnits(current) * 1.2))
+  for (const operation of ['review', 'final-review']) assert.doesNotThrow(() => parseReviewGenerationResult(response('synthetic', operation)))
+  assert.equal(response('real', 'refine'), current)
+})
+
 test('S14B reviewed refine keeps real draft intact and applies targeted quotes only to synthetic output', () => {
   const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
   const start = fixture.indexOf("        else if (operationKind === 'refine') {")
   const end = fixture.indexOf("        } else if (operationKind === 'recheck')", start)
   assert.ok(start >= 0 && end > start)
   const generator = new Function('request', 'db', 'reviewedSyntheticIssues', 'assert', 'REVIEW_DEFECT', 'REVIEW_FIX', 'reviewedMustShowTexts',
-    `let text; const operationKind = 'refine', reviewedRun = true, chapter = { number: 1 }; if (false) {} ${fixture.slice(start, end)} } return text`)
+    `let text; const operationKind = 'refine', reviewedRun = true, boundedRun = false, chapter = { number: 1 }; if (false) {} ${fixture.slice(start, end)} } return text`)
   const generate = (...args) => generator(...args, [])
   const quote = 'synthetic quote', replacement = 'synthetic replacement'
   const issues = [{ quote, replacement }]
