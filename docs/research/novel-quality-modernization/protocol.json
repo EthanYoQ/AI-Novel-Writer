@@ -877,6 +877,38 @@
       }
     ]
   },
+  "historicalBoundedRevisionE41a3f0aBoundary": {
+    "fromEventCount": 1287,
+    "eventCount": 1296,
+    "rawBytesSha256": "468507e3eac5beb4241c4f22fc22083e1559e841a3ba0c794a01dd7e389c9c2c",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "9f20e2f4cf181241650b133601cb6477f01b3a631494fcf736997cf6ad9d7862",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "b66d0f4403826195e564bb86aa11d429d99766ca",
+        "sourceHash": "2faa4242dea4fc433910ca386f6d27373f398a128df9e749151ff41f19713522",
+        "driverHash": "2986e16bc1ed35ae781ef87b84e528e8a63c6fbc682c0b217ffc720ea9f743b3",
+        "parityId": "cb2e5c94951051d00d5620212d3e5f2568ab16ee3df5daacdaf7e1f29dc1de39"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:112d75f8-ce47-4d94-8766-535749b3c053",
+        "invocationId": "e41a3f0a-750b-4bd3-aa85-f2cb41d9fbaa",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:21c1d01d-5f00-4ca4-8316-9b98388cd633",
+        "invocationId": "e41a3f0a-750b-4bd3-aa85-f2cb41d9fbaa",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:860ead40-1ba4-4f8a-847c-7a0a29bdc8e8",
+        "invocationId": "e41a3f0a-750b-4bd3-aa85-f2cb41d9fbaa",
+        "terminal": "settle"
+      }
+    ]
+  },
   "phases": {
     "bounded-revision-diagnostic": {
       "caseId": "C17-A",
@@ -1062,6 +1094,23 @@
           "maxCondenseAttempts": 1,
           "trigger": "settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum",
           "formalEffect": "last-attempt-only"
+        },
+        "operationId": "续写成稿首审",
+        "primaryPurpose": "review-chapter",
+        "repairPurpose": "review-chapter-rebuild",
+        "maxRepairAttempts": 1,
+        "trigger": "settled-stop-parse-or-shape-failure-with-native-artifact-hash",
+        "reviewRebuild": {
+          "operationId": "续写成稿完整复审",
+          "primaryPurpose": "review-chapter",
+          "repairPurpose": "review-chapter-rebuild",
+          "maxRepairAttempts": 1
+        },
+        "refinementRecovery": {
+          "operationId": "续写成稿一次修稿",
+          "purpose": "refine-from-review",
+          "maxAttempts": 4,
+          "trigger": "settled-length-same-confirmation-visible-append-with-progress"
         }
       },
       "arms": ["candidate"],
@@ -1098,20 +1147,76 @@
         }
       },
       "stopPolicy": {
-        "technicalFailure": "任一案或操作技术失败即停止发送，保留该失败及后续逐案NOT RUN；不得以12次最小路径合计冒充七案资格",
+        "technicalFailure": "任一案或操作技术失败即停止发送，保留该失败及后续逐案NOT RUN；不得以源操作12次或整七案16次最小路径合计冒充七案资格",
         "semanticFailureOrUnknown": "真实执行后的独立评审才裁决语义；FAIL或UNKNOWN保留全部已发送结果、原案结论及原文证据，不补采、不改判、不挑最佳；未满足七案逐案资格不得汇总PASS",
         "attemptAccounting": "每个真实发送含准备、失败、unknown、允许的修复、登记的唯一压缩，历史对账仍按原登记读取；逐attempt reserve/dispatch/settle或unknown；无发送不记已发",
-        "repair": "仅定稿角色状态（含C17-B恢复副本重新定稿角色状态）现有同run/root且有持久失败artifact的原生repair可用；C17/C18续写只额外登记产品原生的唯一一次chapter-draft-condense：须同run/root/项目/epoch的chapter-draft首请求已结算为stop，且其hash可复核输出按生产countDraftUnits超出draftTargetUnitRange上限，压缩请求携带与续写相同的作者资料、oracle事实、必需前驱和替换来源，只有末次压缩attempt可带正式效果；压缩后仍越界或未完整结束按原失败语义暂停。第二次压缩、未越界压缩或任何其他失败都不获新的重试权，不放宽事实门或篇幅门。新run不再调用或注入生成前对账，首个物理请求必须为chapter-draft；作者、定稿、蓝图仍完整送入。历史对账attempt按原冻结登记和原hash读取，旧产品run恢复仍保留必要的对账识别与预算计数；不新增重试权"
+        "repair": "仅定稿角色状态（含C17-B恢复副本重新定稿角色状态）现有同run/root且有持久失败artifact的原生repair可用；C17/C18续写只额外登记产品原生的唯一一次chapter-draft-condense：须同run/root/项目/epoch的chapter-draft首请求已结算为stop，且其hash可复核输出按生产countDraftUnits超出draftTargetUnitRange上限，压缩请求携带与续写相同的作者资料、oracle事实、必需前驱和替换来源，只有末次压缩attempt可带正式效果；压缩后仍越界或未完整结束按原失败语义暂停。第二次压缩、未越界压缩或任何其他失败都不获新的重试权，不放宽事实门或篇幅门。新run不再调用或注入生成前对账，首个物理请求必须为chapter-draft；作者、定稿、蓝图仍完整送入。历史对账attempt按原冻结登记和原hash读取，旧产品run恢复仍保留必要的对账识别与预算计数；不新增重试权；本revision的四条成稿链另显式登记：普通首审和普通全文复审各只在同源settled STOP原始产物经hash及owner证明为parse/shape失败时，允许一次review-chapter-rebuild；同一持久AI-only确认只允许一次语义Refine，initial加最多3次原生LENGTH可见append，须同run/root/项目/epoch且有进展，完整composition及artifact身份可复核。STOP内容不佳、缺goal、降级证据、机械unknown、无进展、missing/error/unknown均不授权补采或语义重试；无可执行AI项以首稿为终点，保留原始和保存报告及机械unknown，不自动PASS。"
       },
-      "minimumCalls": 12,
-      "scope": "candidate-only七案例；C16三组notes/cards=6，local及DAV各两组续写=4，C17-B恢复副本重新定稿后处理notes/cards=2；新run直接首稿，最短12次；cards原生repair、正文有界续写与唯一压缩按既有每run/root预算和触发条件逐次记账，准备、失败请求另逐实际记账；v7源文与语义oracle不变",
+      "evaluationPolicy": {
+        "revision": "ai-review-final-manuscript-v1",
+        "caseIds": [
+          "C17-A",
+          "C17-B",
+          "C18-A",
+          "C18-B"
+        ],
+        "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+        "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+        "confirmation": "preauthorized-ai-only-persisted-original-items-with-native-findingIds",
+        "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+        "endpoint": "native-merge-then-ordinary-full-review",
+        "automaticCeiling": "pending-independent-oracle-review",
+        "physicalRequests": {
+          "sourceMinimum": 12,
+          "sourceMaximum": 48,
+          "manuscriptMinimum": 1,
+          "manuscriptMaximum": 8,
+          "minimum": 16,
+          "maximum": 80
+        }
+      },
+      "minimumCalls": 16,
+      "scope": "candidate-only原七案例；C16三组notes/cards=6，local及DAV各两组续写=4，C17-B恢复副本重新定稿后处理notes/cards=2；新run直接首稿，原源操作最短12次、最多48次；cards原生repair、正文有界续写与唯一压缩按既有每run/root预算和触发条件逐次记账。四续写各普通首审，只有原始AI可执行发现才持久确认、一次语义修稿、原生merge与普通全文复审；每链1–8次，整七案最短16次、最多80次，四篇均修稿的正常路径24次；准备、失败请求另逐实际记账；v7源文与语义oracle不变，自动最高pending-independent-oracle-review",
       "operations": [
         { "id": "定稿章节要点", "kind": "chapter_notes", "caseIds": ["C16-A", "C16-B", "C16-C"], "allocation": "C16ExistingExtraction" },
         { "id": "定稿角色状态", "kind": "character_cards", "caseIds": ["C16-A", "C16-B", "C16-C"], "allocation": "C16ExistingExtraction" },
         { "id": "本地恢复后续写", "kind": "draft", "restore": "local", "caseIds": ["C17-A", "C17-B"], "allocation": "C17C18RestoreContinue" },
         { "id": "DAV选定世代恢复后续写", "kind": "draft", "restore": "webdav", "caseIds": ["C18-A", "C18-B"], "allocation": "C17C18RestoreContinue" },
         { "id": "恢复副本重新定稿章节要点", "kind": "chapter_notes", "caseIds": ["C17-B"], "allocation": "failedRetryRepairReviewReserve" },
-        { "id": "恢复副本重新定稿角色状态", "kind": "character_cards", "caseIds": ["C17-B"], "allocation": "failedRetryRepairReviewReserve" }
+        { "id": "恢复副本重新定稿角色状态", "kind": "character_cards", "caseIds": ["C17-B"], "allocation": "failedRetryRepairReviewReserve" },
+        {
+          "id": "续写成稿首审",
+          "kind": "review",
+          "caseIds": [
+            "C17-A",
+            "C17-B",
+            "C18-A",
+            "C18-B"
+          ],
+          "allocation": "failedRetryRepairReviewReserve"
+        },
+        {
+          "id": "续写成稿一次修稿",
+          "kind": "refine",
+          "caseIds": [
+            "C17-A",
+            "C17-B",
+            "C18-A",
+            "C18-B"
+          ],
+          "allocation": "failedRetryRepairReviewReserve"
+        },
+        {
+          "id": "续写成稿完整复审",
+          "kind": "final-review",
+          "caseIds": [
+            "C17-A",
+            "C17-B",
+            "C18-A",
+            "C18-B"
+          ],
+          "allocation": "failedRetryRepairReviewReserve"
+        }
       ]
     },
     "early-budget": {

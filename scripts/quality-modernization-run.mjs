@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import os from 'node:os'
 import { runProductionCommandProbe, runProductionPhasePair, runProductionBridge, copyIsolatedRealModelConfig,
-  assertSharedInputDiagnostic, BOUNDED_REVISION_DIAGNOSTIC, readBoundedRevisionSource,
+  assertSharedInputDiagnostic, BOUNDED_REVISION_DIAGNOSTIC, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, readBoundedRevisionSource,
   productionBridgeHash, productionExecutionRuntime, productionScenario, PRODUCTION_BRIDGE, PHASE_SCENARIOS } from './quality-modernization-driver.mjs'
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -140,6 +140,10 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
         ? binding.actual?.purpose === 'refine-from-review'
         : ['review-chapter', 'review-chapter-rebuild'].includes(binding.actual?.purpose)))
     || phase.arms && !phase.arms.includes(binding.arm)
+    || binding.phase === 'c16-c18' && ['review', 'refine', 'final-review'].includes(phase.operations.find(item => item.id === binding.operation)?.kind)
+      && (binding.evaluationPolicyHash !== hash(AI_REVIEW_FINAL_MANUSCRIPT_POLICY)
+        || !(phase.operations.find(item => item.id === binding.operation).kind === 'refine'
+          ? binding.actual?.purpose === 'refine-from-review' : ['review-chapter', 'review-chapter-rebuild'].includes(binding.actual?.purpose)))
     || binding.phase === 'full' && !phase.operations.some(operation => operation.id === binding.operation
       && (operation.kind !== 'directory' || binding.caseId.endsWith('/1')))) fail('INVALID_CAMPAIGN_BINDING')
   if (binding.arm === 'candidate' && (!binding.actual || ['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch']
@@ -221,7 +225,8 @@ export function validatePhysicalLedger(file) {
   const d712808c = validateHistoricalSupersessionBoundary(raw, c1670407421, protocol.historicalC16D712808cBoundary)
   const r625bfda8 = validateHistoricalSupersessionBoundary(raw, d712808c, protocol.historicalC16625bfda8Boundary)
   const d515b666 = validateHistoricalSupersessionBoundary(raw, r625bfda8, protocol.historicalC16D515b666Boundary)
-  validateHistoricalSupersessionBoundary(raw, d515b666, protocol.historicalC16A763f510Boundary)
+  const a763f510 = validateHistoricalSupersessionBoundary(raw, d515b666, protocol.historicalC16A763f510Boundary)
+  validateHistoricalSupersessionBoundary(raw, a763f510, protocol.historicalBoundedRevisionE41a3f0aBoundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -336,6 +341,8 @@ export function selectPhase(protocol, phase, milestone = 'early') {
   if (!Object.hasOwn(protocol.phases, phase)) fail('INVALID_PHASE')
   if (phase === 'bounded-revision-diagnostic' && !isDeepStrictEqual(protocol.phases[phase], BOUNDED_REVISION_DIAGNOSTIC))
     fail('BOUNDED_REVISION_REGISTRATION_MISMATCH')
+  if (phase === 'c16-c18' && !isDeepStrictEqual(protocol.phases[phase].evaluationPolicy, AI_REVIEW_FINAL_MANUSCRIPT_POLICY))
+    fail('AI_MANUSCRIPT_REGISTRATION_MISMATCH')
   if ((['full', 'c16-c18'].includes(phase)) !== (milestone === 'final')
     || (['shared-input-diagnostic', 'bounded-revision-diagnostic'].includes(phase)) !== (milestone === 'diagnostic')) fail('PHASE_MILESTONE_MISMATCH')
   return { phase, milestone, ...protocol.phases[phase],
@@ -705,6 +712,10 @@ export function updateLedger(file, event, options = {}) {
         ? protocol.historicalC16A763f510Boundary : options.historicalC16A763f510Boundary
       const trustedA763f510Events = a763f510Boundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedD515b666Events, a763f510Boundary) : trustedD515b666Events
+      const e41a3f0aBoundary = options.campaignMode === 'real'
+        ? protocol.historicalBoundedRevisionE41a3f0aBoundary : options.historicalBoundedRevisionE41a3f0aBoundary
+      const trustedE41a3f0aEvents = e41a3f0aBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedA763f510Events, e41a3f0aBoundary) : trustedA763f510Events
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
       // 未登记 operations 的阶段在这里 fail closed。
@@ -744,7 +755,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedA763f510Events
+          const superseded = index >= trustedHistoricalEvents && index < trustedE41a3f0aEvents
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)

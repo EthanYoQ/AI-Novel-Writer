@@ -14,11 +14,14 @@ const ADAPTER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 // The gate and post-run check use the same production parser as ReviewChapterCommand.
 const reviewParserBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/shared/review-generation-report.ts')],
   bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
-const { parseReviewGenerationResult } = await import(`data:text/javascript;base64,${Buffer.from(reviewParserBundle).toString('base64')}`)
+const { parseReviewGenerationResult, buildReviewGenerationReport } = await import(`data:text/javascript;base64,${Buffer.from(reviewParserBundle).toString('base64')}`)
 // 压缩稿（此后被审；未修稿时即保存的正文）由主进程按同一份生产清洗从末次压缩原文组合（generation-run-repository 的 draft-visible-v1 组合）。
 const draftVisibleBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/shared/draft-visible-text.ts')],
   bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
 const { sanitizeDraftText, stripDraftThinkingTags, composeDraftVisibleContinuation } = await import(`data:text/javascript;base64,${Buffer.from(draftVisibleBundle).toString('base64')}`)
+const appendBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/shared/visible-continuation.ts')],
+  bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
+const { composeVisibleContinuation } = await import(`data:text/javascript;base64,${Buffer.from(appendBundle).toString('base64')}`)
 const blueprintBundle = buildSync({ entryPoints: [path.join(ADAPTER_ROOT, 'src/shared/blueprint-semantic-contract.ts')],
   bundle: true, platform: 'node', format: 'esm', write: false }).outputFiles[0].text
 const { parseBlueprintSemanticResponseText } = await import(`data:text/javascript;base64,${Buffer.from(blueprintBundle).toString('base64')}`)
@@ -35,6 +38,18 @@ export const PRODUCTION_BRIDGE = 'scripts/fixtures/quality-modernization-product
 export const EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION = 's11-reference-no-actionable-review-v1'
 export const REVIEWED_DRAFT_PROTOCOL_REVISION = 's14b-reviewed-draft-v1'
 export const SPLIT_QUALITY_GATES_PROTOCOL_REVISION = 's14b-split-quality-gates-v1'
+export const AI_REVIEW_FINAL_MANUSCRIPT_POLICY = Object.freeze({
+  revision: 'ai-review-final-manuscript-v1',
+  caseIds: ['C17-A', 'C17-B', 'C18-A', 'C18-B'],
+  selection: 'formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown',
+  softwareFindings: 'separate-frozen-consistency-preflight-provenance',
+  confirmation: 'preauthorized-ai-only-persisted-original-items-with-native-findingIds',
+  noAction: 'first-draft-endpoint-with-original-raw-and-saved-review',
+  endpoint: 'native-merge-then-ordinary-full-review',
+  automaticCeiling: 'pending-independent-oracle-review',
+  physicalRequests: { sourceMinimum: 12, sourceMaximum: 48, manuscriptMinimum: 1,
+    manuscriptMaximum: 8, minimum: 16, maximum: 80 },
+})
 export const BOUNDED_REVISION_DIAGNOSTIC = Object.freeze({
   "caseId": "C17-A",
   "caseIds": [
@@ -242,6 +257,33 @@ export function reviewedDraftSelection(report) {
   return { selected, disposition: selected.length ? 'revised-once'
     : report.items.some(item => item.severity === 'unknown')
       ? 'no-actionable-review-with-unresolved-goals' : 'no-actionable-review' }
+}
+
+/** Select only discoveries present in the formal raw report; normalization is not a discovery. */
+export function aiReviewFinalManuscriptSelection({ rawContent, savedContent, context }) {
+  if (context?.operation !== 'review-chapter' || context.recheck || !context.source?.content)
+    throw new Error('AI_REVIEW_CONTEXT_INVALID')
+  const raw = parseReviewGenerationResult(rawContent)
+  const build = (content, frozenGoals = context.frozenGoals) => buildReviewGenerationReport({ content,
+    sourceContent: context.source.content, frozenGoals, writingLanguage: context.writingLanguage,
+    uiLocale: context.uiLocale, preflightFindings: context.preflightFindings })
+  const report = build(rawContent)
+  if (savedContent !== JSON.stringify(report, null, 2)) throw new Error('AI_REVIEW_SAVED_REPORT_MISMATCH')
+  const eligibleGoals = new Set()
+  for (const goal of context.frozenGoals.items) {
+    const matches = Array.isArray(raw.goalReviews) ? raw.goalReviews.filter(item => item?.id === goal.id) : []
+    if (matches.length !== 1 || !['unmet', 'unknown'].includes(matches[0].status)) continue
+    const isolated = build(JSON.stringify({ ...raw, goalReviews: matches }),
+      { ...context.frozenGoals, coverage: 'complete', items: [goal] }).goalReview
+    if (isolated.coverage === 'complete' && isolated.items[0].status === matches[0].status
+      && (matches[0].status === 'unmet' || /^ch\d+:(?:keyEvents|mustShow):\d+$/u.test(goal.id))) eligibleGoals.add(goal.id)
+  }
+  // General items retain parser order; goal projections retain frozen goal order. Preflight items remain separate.
+  const aiItems = report.items.filter(item => raw.items.some(candidate => stableEvidence(candidate) === stableEvidence(item))
+    && ['error', 'warning'].includes(item.severity) || item.goalId && eligibleGoals.has(item.goalId)
+      && ['error', 'unknown'].includes(item.severity))
+  const softwareItems = report.items.filter(item => item.stableFactKey && item.sourceChapter !== undefined)
+  return { selected: aiItems, softwareItems, disposition: aiItems.length ? 'revised-once' : 'no-actionable-review' }
 }
 /** The S14B endpoint is immutable evidence, not a second product revision workflow. */
 export function validateReviewedDraft(result) {
@@ -511,6 +553,10 @@ export function qualificationBridgeWindows(request) {
   const policy = request.attemptPolicy
   const count = operation => {
     if (bounded && ['review', 'final-review'].includes(operation.kind)) return 2
+    if (request.evaluationPolicy?.revision === AI_REVIEW_FINAL_MANUSCRIPT_POLICY.revision) {
+      if (['review', 'final-review'].includes(operation.kind)) return 2
+      if (operation.kind === 'refine') return 4
+    }
     if (operation.kind === 'character_cards' && request.phase === 'c16-c18') return 3
     if (operation.kind === 'directory' && structuredRecoveryFor(policy, arm)?.operationId === operation.id)
       return planBlueprintGenerationCost(request.phase === 'full' ? 3 : 1).maxCalls
@@ -729,6 +775,12 @@ export function runProductionBridge(request) {
  * 上限时，才许可一次 chapter-draft-condense；它不是任意失败的新重试权，正式效果只能落在末次 attempt。
  */
 export const C16_C18_ATTEMPT_POLICY = Object.freeze({ milestone: 'final', arms: Object.freeze(['candidate']),
+  operationId: '续写成稿首审', primaryPurpose: 'review-chapter', repairPurpose: 'review-chapter-rebuild', maxRepairAttempts: 1,
+  trigger: 'settled-stop-parse-or-shape-failure-with-native-artifact-hash',
+  reviewRebuild: Object.freeze({ operationId: '续写成稿完整复审', primaryPurpose: 'review-chapter',
+    repairPurpose: 'review-chapter-rebuild', maxRepairAttempts: 1 }),
+  refinementRecovery: Object.freeze({ operationId: '续写成稿一次修稿', purpose: 'refine-from-review', maxAttempts: 4,
+    trigger: 'settled-length-same-confirmation-visible-append-with-progress' }),
   draftRecovery: draftRecoveryPolicy(['本地恢复后续写', 'DAV选定世代恢复后续写']),
   draftCondense: Object.freeze({ operationIds: Object.freeze(['本地恢复后续写', 'DAV选定世代恢复后续写']),
     primaryPurpose: 'chapter-draft', condensePurpose: 'chapter-draft-condense', maxCondenseAttempts: 1,
@@ -767,6 +819,7 @@ export const PHASE_SCENARIOS = Object.freeze({
     sceneId: '场景1', chapterNumber: 2, milestone: 'final', arms: Object.freeze(['candidate']),
     scenarioRevision: 'c16-c18-candidate-production-path-v7',
     attemptPolicy: C16_C18_ATTEMPT_POLICY,
+    evaluationPolicy: AI_REVIEW_FINAL_MANUSCRIPT_POLICY,
     // 新运行直接首稿；历史对账收据仍由原冻结协议识别，不在当前实验登记发送。
     // v4（用户批准的 harness 变更）：C17-B 恢复副本内重新定稿后按产品定稿路径紧接生产后处理，
     // notes/cards 各为独立登记 operation，与 C16 同一 RunFinalizePostProcessCommand 入口，绑定新 finalizationId。
@@ -777,6 +830,8 @@ export const PHASE_SCENARIOS = Object.freeze({
       Object.freeze({ id: 'DAV选定世代恢复后续写', kind: 'draft', restore: 'webdav', caseIds: Object.freeze(['C18-A', 'C18-B']) }),
       Object.freeze({ id: '恢复副本重新定稿章节要点', kind: 'chapter_notes', caseIds: Object.freeze(['C17-B']) }),
       Object.freeze({ id: '恢复副本重新定稿角色状态', kind: 'character_cards', caseIds: Object.freeze(['C17-B']) }),
+      ...[['续写成稿首审', 'review'], ['续写成稿一次修稿', 'refine'], ['续写成稿完整复审', 'final-review']]
+        .map(([id, kind]) => Object.freeze({ id, kind, caseIds: AI_REVIEW_FINAL_MANUSCRIPT_POLICY.caseIds })),
     ]),
   }),
   full: Object.freeze({
@@ -837,7 +892,9 @@ export const PHASE_SCENARIOS = Object.freeze({
  */
 export function continuityCaseOperations(caseId) {
   const operations = PHASE_SCENARIOS['c16-c18'].operations.filter(operation => operation.caseIds.includes(caseId))
-  return [...operations.filter(operation => !operation.restore), ...operations.filter(operation => operation.restore)]
+  return [...operations.filter(operation => ['chapter_notes', 'character_cards'].includes(operation.kind)),
+    ...operations.filter(operation => operation.restore),
+    ...operations.filter(operation => ['review', 'refine', 'final-review'].includes(operation.kind))]
 }
 /** 登记为定稿角色状态的 operation（含 C17-B 重新定稿后处理）共用产品原生 repair 的门禁规则。 */
 export const FINALIZED_CHARACTER_OPERATION_IDS = Object.freeze(PHASE_SCENARIOS['c16-c18'].operations
@@ -1022,10 +1079,11 @@ function verifiedRecoveryOutput(owner, evidence, operationId) {
  * `draftCondense.maximum` come from the production counter and draftTargetUnitRange.
  */
 export function createOperationDispatchGate({ onReject, repairPolicy, readPrimaryEvidence, finalizationRepair = false, draftCondense = null,
-  draftRecovery = null, structuredRecovery = null } = {}) {
+  draftRecovery = null, structuredRecovery = null, refinementRecovery = null } = {}) {
   const dispatched = new Map()
   const draftAttempts = new Map()
   const structuredAttempts = new Map()
+  const refinementAttempts = new Map()
   const reject = (operationId, reason) => {
     const rejection = Object.freeze({ code: 'UNREGISTERED_ADDITIONAL_MODEL_REQUEST',
       operationId: operationId || null, reason, beforeDispatch: true })
@@ -1037,6 +1095,36 @@ export function createOperationDispatchGate({ onReject, repairPolicy, readPrimar
   return (operationId, owner, reviewSource) => {
     const first = dispatched.get(operationId)
     if (owner?.purpose?.startsWith('chapter-draft-reconcile')) reject(operationId, 'duplicate-operation')
+    if (refinementRecovery?.operationId === operationId) {
+      const history = refinementAttempts.get(operationId) ?? []
+      try {
+        if (!owner || owner.purpose !== refinementRecovery.purpose || history.length >= refinementRecovery.maxAttempts
+          || !['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch'].every(key => typeof owner[key] === 'string' && owner[key])
+          || ![reviewSource?.draftId, reviewSource?.version, reviewSource?.confirmationId].every(value => Number.isInteger(value) && value > 0)
+          || !CONTENT_HASH.test(reviewSource.contentHash ?? '') || !CONTENT_HASH.test(reviewSource.confirmationHash ?? '')
+          || history.some(prior => !sameRun(prior, owner) || stableEvidence(prior.reviewSource) !== stableEvidence(reviewSource)))
+          throw new Error('REFINEMENT_RECOVERY_OWNER_MISMATCH')
+        let text = '', artifactIds = []
+        for (const prior of history) {
+          const evidence = readPrimaryEvidence?.(prior)
+          const { output, finishReason } = verifiedRecoveryOutput(prior, evidence, operationId)
+          if (finishReason !== 'length') throw new Error('REFINEMENT_RECOVERY_NOT_LENGTH')
+          if (!evidence.ownerArtifactId) throw new Error('REFINEMENT_COMPOSITION_UNPROVEN')
+          artifactIds.push(evidence.ownerArtifactId)
+          const next = text ? composeVisibleContinuation(text, stripDraftThinkingTags(output)) : stripDraftThinkingTags(output).trim()
+          if ((next.match(/[\p{L}\p{N}]/gu)?.length ?? 0) <= (text.match(/[\p{L}\p{N}]/gu)?.length ?? 0))
+            throw new Error('REFINEMENT_RECOVERY_NO_PROGRESS')
+          text = next
+        }
+        if (history.length) {
+          const composition = readPrimaryEvidence?.(history.at(-1))?.composition
+          if (composition?.algorithm !== 'visible-append-v1' || composition.textHash !== digest(text)
+            || stableEvidence(composition.artifactIds) !== stableEvidence(artifactIds)) throw new Error('REFINEMENT_COMPOSITION_UNPROVEN')
+        }
+        refinementAttempts.set(operationId, [...history, { ...owner, reviewSource }])
+        return
+      } catch { reject(operationId, 'refinement-recovery-not-authorized') }
+    }
     if (structuredRecovery?.policy.operationId === operationId) {
       const history = structuredAttempts.get(operationId) ?? []
       try {
@@ -1167,7 +1255,7 @@ function draftRecoveryReceiptFailure(result, operationId, policy, arm, reviewed 
       }
       return { output, finishReason: attempt.finishReason }
     })
-    const sourceHash = reviewed ? result.reviewedDraft?.initial?.contentHash : result.saved?.contentHash ?? result.draftObservation?.contentHash
+    const sourceHash = result.aiReviewedDraft?.initial?.contentHash ?? (reviewed ? result.reviewedDraft?.initial?.contentHash : result.saved?.contentHash ?? result.draftObservation?.contentHash)
     if (!state.complete || digest(state.text) !== sourceHash) return 'DRAFT_RECOVERY_SAVED_MISMATCH'
     return null
   } catch { return 'DRAFT_RECOVERY_EVIDENCE_INVALID' }
@@ -1869,7 +1957,7 @@ export function runProductionPhasePair(targets, options, bridge) {
     for (const [index, item] of cases.entries()) {
       const operations = continuityCaseOperations(item.id)
       // 抽取案恰为 notes/cards；恢复案恰一个同 kind 续写，只有带 sourceSuffix 的恢复案（C17-B）前置重新定稿后处理 notes/cards。
-      const postProcess = operations.filter(operation => !operation.restore), restore = operations.filter(operation => operation.restore)
+      const postProcess = operations.filter(operation => ['chapter_notes', 'character_cards'].includes(operation.kind)), restore = operations.filter(operation => operation.restore)
       if ((item.kind === 'extraction' ? restore.length !== 0 || postProcess.length !== 2
         : restore.length !== 1 || restore[0].restore !== item.kind || postProcess.length !== (item.sourceSuffix ? 2 : 0))
         || postProcess.some((operation, index) => operation.kind !== ['chapter_notes', 'character_cards'][index])) throw new Error('CONTINUITY_CASES_NOT_REGISTERED')
@@ -2005,21 +2093,149 @@ export function summarizeDraftReconciliation(results) {
     prompt: result.draftReconciliation.prompt ?? null, output: result.draftReconciliation.output ?? null,
     blockHash: result.draftReconciliation.blockHash ?? null }] : [])
 }
+export function validateAiReviewedManuscript(result) {
+  const chain = result.aiReviewedDraft
+  const read = item => {
+    const body = fs.readFileSync(item.outputPath, 'utf8')
+    if (digest(body) !== item.contentHash) throw new Error('AI_MANUSCRIPT_ARTIFACT_MISMATCH')
+    return body
+  }
+  let db
+  try {
+    db = new (createRequire(import.meta.url)('better-sqlite3'))(result.physicalProject.dbPath, { readonly: true, fileMustExist: true })
+    const initial = read(chain.initial), final = read(chain.finalDraft)
+    const review = (kind, saved, source) => {
+      const operation = result.operations.find(item => item.kind === kind), provenance = operation?.reviewProvenance
+      const attempts = result.attempts.filter(item => item.binding.operation === operation?.operation)
+      const formal = result.ownerTerminal.filter(item => attempts.some(attempt => attempt.binding.actual.attemptId === item.attemptId)
+        && item.reviewRevisionEffect?.kind === 'review' && item.reviewRevisionEffect.id === saved.reviewId)
+      if (formal.length !== 1 || formal[0].attemptId !== provenance?.attemptId) throw new Error('AI_REVIEW_FORMAL_EFFECT_NOT_UNIQUE')
+      const terminal = formal[0], attempt = attempts.find(item => item.binding.actual.attemptId === terminal.attemptId)
+      const row = db.prepare(`SELECT a.attempt_json,a.usage_receipt_json,g.artifact_json,r.binding_json,r.root_action_id
+        FROM generation_attempts a JOIN generation_artifacts g ON g.attempt_id=a.attempt_id JOIN generation_runs r ON r.run_id=a.run_id
+        WHERE a.attempt_id=? AND a.run_id=?`).get(terminal.attemptId, operation.handle.runId)
+      if (!row) throw new Error('AI_REVIEW_OWNER_MISSING')
+      const usage = JSON.parse(row.usage_receipt_json), artifact = JSON.parse(row.artifact_json), binding = JSON.parse(row.binding_json)
+      const context = binding.sourceManifest.reviewRevisionContext, effect = usage.reviewRevisionEffect
+      const reportBody = db.prepare('SELECT c.body FROM reviews r JOIN contents c ON c.id=r.content_id WHERE r.id=?').pluck().get(saved.reviewId)
+      if (JSON.parse(row.attempt_json).status !== 'settled' || terminal.status !== 'settled' || attempt.finishReason !== 'stop'
+        || usage.result?.finishReason !== 'stop' || !['review-chapter', 'review-chapter-rebuild'].includes(usage.purpose)
+        || usage.purpose !== attempt.binding.actual.purpose || binding.projectId !== result.physicalProject.projectId
+        || binding.epoch !== result.projectEpoch || row.root_action_id !== operation.handle.rootActionId
+        || stableEvidence(effect) !== stableEvidence(provenance.effect) || stableEvidence(effect) !== stableEvidence(terminal.reviewRevisionEffect)
+        || effect.contentHash !== saved.contentHash || reportBody !== read(saved) || context.source.content !== source
+        || context.sourceHash !== digest(source) || digest(context) !== effect.contextHash
+        || effect.artifact.artifactId !== artifact.artifactId || effect.artifact.revision !== artifact.revision
+        || effect.artifact.textHash !== artifact.textHash || artifact.textHash !== digest(artifact.text)
+        || terminal.artifactId !== artifact.artifactId || terminal.artifactRevision !== artifact.revision
+        || terminal.textHash !== attempt.visibleTextHash || artifact.textHash !== attempt.visibleTextHash
+        || digest(fs.readFileSync(attempt.outputPath, 'utf8')) !== artifact.textHash) throw new Error('AI_REVIEW_PROVENANCE_MISMATCH')
+      if (attempts.length === 2 && (attempts[0].binding.actual.purpose !== 'review-chapter'
+        || attempt !== attempts[1] || attempt.binding.actual.purpose !== 'review-chapter-rebuild'
+        || attempts[0].finishReason !== 'stop' || !reviewParseFailure(fs.readFileSync(attempts[0].outputPath, 'utf8'))))
+        throw new Error('AI_REVIEW_REBUILD_NOT_REGISTERED')
+      return { ...aiReviewFinalManuscriptSelection({ rawContent: artifact.text, savedContent: reportBody, context }), context, report: JSON.parse(reportBody) }
+    }
+    const first = review('review', chain.review, initial)
+    if (first.context.source.id !== chain.initial.draftId || first.context.source.chapterNumber !== chain.initial.chapterNumber
+      || first.context.source.version !== chain.initial.version || first.context.source.status !== chain.initial.status
+      || chain.finalDraft.draftId !== chain.initial.draftId) throw new Error('AI_MANUSCRIPT_SOURCE_IDENTITY_MISMATCH')
+    const selectedIndexes = first.report.items.flatMap((item, index) => first.selected.some(selected => stableEvidence(selected) === stableEvidence(item)) ? [index] : [])
+    if (first.selected.length !== chain.selectedCount || digest(first.selected) !== chain.selectedItemsHash
+      || stableEvidence(selectedIndexes) !== stableEvidence(chain.selectedIndexes)
+      || stableEvidence(first.softwareItems) !== stableEvidence(chain.softwareItems) || first.disposition !== chain.disposition)
+      throw new Error('AI_REVIEW_SELECTION_MISMATCH')
+    if (first.selected.length === 0) {
+      if (chain.confirmation || chain.revision || chain.finalReview || final !== initial) throw new Error('AI_REVIEW_NO_ACTION_MISMATCH')
+    } else {
+      const confirmationBody = read(chain.confirmation), confirmation = JSON.parse(confirmationBody)
+      const persisted = db.prepare('SELECT c.body FROM reviews r JOIN contents c ON c.id=r.content_id WHERE r.id=?').pluck().get(chain.confirmation.reviewId)
+      if (persisted !== confirmationBody || confirmation.sourceReviewId !== chain.review.reviewId
+        || stableEvidence(confirmation.sourceDraft) !== stableEvidence(first.context.source)
+        || confirmation.summary !== first.report.summary || stableEvidence(confirmation.goalReview) !== stableEvidence(first.report.goalReview)
+        || confirmation.items?.length !== first.report.items.length) throw new Error('AI_REVIEW_CONFIRMATION_MISMATCH')
+      for (const [index, item] of confirmation.items.entries()) {
+        const { findingId, decision, origin, ...original } = item
+        const finding = findingId && db.prepare('SELECT problem_text,category FROM review_findings WHERE cycle_id=? AND finding_id=?')
+          .get(confirmation.cycleId, findingId)
+        if (origin !== 'ai' || decision !== (selectedIndexes.includes(index) ? 'apply' : 'ignore')
+          || stableEvidence(original) !== stableEvidence(first.report.items[index])
+          || selectedIndexes.includes(index) && (!finding || finding.problem_text !== item.description || finding.category !== item.category))
+          throw new Error('AI_REVIEW_CONFIRMATION_ITEMS_MISMATCH')
+      }
+      const revision = read(chain.revision), operation = result.operations.find(item => item.kind === 'refine')
+      const attempts = result.attempts.filter(item => item.binding.operation === operation.operation)
+      let composed = ''
+      for (const [index, attempt] of attempts.entries()) {
+        const output = fs.readFileSync(attempt.outputPath, 'utf8'), previous = composed
+        const terminal = result.ownerTerminal.find(item => item.attemptId === attempt.binding.actual.attemptId)
+        const row = db.prepare(`SELECT a.attempt_json,a.usage_receipt_json,g.artifact_json FROM generation_attempts a
+          JOIN generation_artifacts g ON g.attempt_id=a.attempt_id WHERE a.attempt_id=? AND a.run_id=?`)
+          .get(attempt.binding.actual.attemptId, operation.handle.runId)
+        if (!row) throw new Error('AI_REVISION_OWNER_MISSING')
+        const usage = JSON.parse(row.usage_receipt_json), artifact = JSON.parse(row.artifact_json)
+        composed = composed ? composeVisibleContinuation(composed, stripDraftThinkingTags(output)) : stripDraftThinkingTags(output).trim()
+        if (digest(output) !== attempt.visibleTextHash || attempt.binding.actual.purpose !== 'refine-from-review'
+          || attempt.finishReason !== (index === attempts.length - 1 ? 'stop' : 'length')
+          || JSON.parse(row.attempt_json).status !== 'settled' || terminal?.status !== 'settled'
+          || usage.purpose !== attempt.binding.actual.purpose || usage.result?.finishReason !== attempt.finishReason
+          || artifact.text !== output || artifact.textHash !== attempt.visibleTextHash || terminal.textHash !== artifact.textHash
+          || terminal.artifactId !== artifact.artifactId || terminal.artifactRevision !== artifact.revision
+          || attempt.binding.actual.runId !== operation.handle.runId || attempt.binding.actual.rootActionId !== operation.handle.rootActionId
+          || (composed.match(/[\p{L}\p{N}]/gu)?.length ?? 0) <= (previous.match(/[\p{L}\p{N}]/gu)?.length ?? 0)) throw new Error('AI_REVISION_COMPOSITION_MISMATCH')
+      }
+      const terminal = result.ownerTerminal.find(item => item.attemptId === attempts.at(-1).binding.actual.attemptId)
+      const run = db.prepare('SELECT binding_json,root_action_id FROM generation_runs WHERE run_id=?').get(operation.handle.runId)
+      const binding = JSON.parse(run.binding_json)
+      const context = binding.sourceManifest.reviewRevisionContext
+      const effects = db.prepare('SELECT usage_receipt_json,attempt_json FROM generation_attempts WHERE run_id=?').all(operation.handle.runId)
+        .filter(row => JSON.parse(row.usage_receipt_json)?.reviewRevisionEffect)
+      const persistedRevision = db.prepare('SELECT r.status,r.review_source_id,c.body FROM revisions r JOIN contents c ON c.id=r.content_id WHERE r.id=?').get(chain.revision.revisionId)
+      if (effects.length !== 1 || JSON.parse(effects[0].attempt_json).status !== 'settled'
+        || stableEvidence(JSON.parse(effects[0].usage_receipt_json).reviewRevisionEffect) !== stableEvidence(terminal.reviewRevisionEffect)
+        || binding.projectId !== result.physicalProject.projectId || binding.epoch !== result.projectEpoch || run.root_action_id !== operation.handle.rootActionId
+        || persistedRevision?.status !== 'merged' || persistedRevision.review_source_id !== chain.confirmation.reviewId || persistedRevision.body !== revision
+        || terminal.reviewRevisionEffect?.kind !== 'revision' || terminal.reviewRevisionEffect.id !== chain.revision.revisionId
+        || terminal.reviewRevisionEffect.contentHash !== digest(revision) || digest(context) !== terminal.reviewRevisionEffect.contextHash
+        || context.confirmation?.content !== confirmationBody || context.confirmation.reviewSourceId !== chain.confirmation.reviewId
+        || context.confirmation.originalReviewContentHash !== chain.review.contentHash
+        || stableEvidence(context.source) !== stableEvidence(first.context.source) || composed !== revision || revision !== final
+        || chain.composition.algorithm !== 'visible-append-v1' || chain.composition.textHash !== digest(revision)
+        || terminal.reviewRevisionEffect.compositionHash !== chain.composition.textHash
+        || stableEvidence(JSON.parse(effects[0].usage_receipt_json).visibleComposition) !== stableEvidence(chain.composition)
+        || stableEvidence(chain.composition.artifactIds) !== stableEvidence(attempts.map(attempt => result.ownerTerminal
+          .find(item => item.attemptId === attempt.binding.actual.attemptId).artifactId))
+        || chain.mergeHash !== digest(final) || chain.mergeReceipt?.revisionId !== chain.revision.revisionId
+        || chain.mergeReceipt.reviewCycle?.cycleId !== confirmation.cycleId) throw new Error('AI_REVISION_MERGE_MISMATCH')
+      const finalReview = review('final-review', chain.finalReview, final)
+      if (finalReview.context.recheck || chain.finalReview.reviewId === chain.review.reviewId) throw new Error('AI_FINAL_REVIEW_NOT_ORDINARY')
+      const units = countProjectedDraftUnits(final), sourceUnits = countProjectedDraftUnits(initial)
+      if (units < Math.floor(sourceUnits * 0.8) || units > Math.ceil(sourceUnits * 1.2)) throw new Error('AI_REVISION_LENGTH_MISMATCH')
+    }
+    const draft = db.prepare('SELECT d.version,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(chain.finalDraft.draftId)
+    if (draft?.body !== final || draft.version !== chain.finalDraft.version || digest(final) !== result.saved?.contentHash
+      || digest(final) !== result.draftObservation?.contentHash || countProjectedDraftUnits(final) !== result.saved.units
+      || !withinTargetUnits(result.draftObservation, result.protocolRevision, 'candidate')) throw new Error('AI_FINAL_DB_MISMATCH')
+    return null
+  } catch (error) { return error.message } finally { db?.close() }
+}
 export function validateCandidateContinuityResults(results, mode) {
   const fail = code => ({ status: 'failed', candidateFailure: code })
   const condense = PHASE_SCENARIOS['c16-c18'].attemptPolicy.draftCondense
   if (results.length !== 7 || results.some(result => result.status !== 'passed' || result.arm !== 'candidate'
     || result.phase !== 'c16-c18' || result.mode !== mode)) return fail('CANDIDATE_OPERATION_MISSING')
+  if (results.some(result => stableEvidence(result.evaluationPolicy) !== stableEvidence(AI_REVIEW_FINAL_MANUSCRIPT_POLICY)
+    || result.invocationId !== results[0].invocationId || result.protocolHash !== results[0].protocolHash)) return fail('AI_MANUSCRIPT_POLICY_MISMATCH')
   if (stableEvidence(results.map(result => result.caseId)) !== stableEvidence(PHASE_SCENARIOS['c16-c18'].caseIds)) return fail('CANDIDATE_CASE_MISMATCH')
   const source = results[0].physicalProject?.projectId
   if (!source || results.slice(0, 3).some(result => result.physicalProject?.projectId !== source)) return fail('FINALIZATION_EFFECT_MISSING')
   // 有定稿后处理 operation 的案例（C16 三案与 C17-B）逐案核对正式效果与来源绑定。
-  for (const result of results.filter(item => continuityCaseOperations(item.caseId).some(operation => !operation.restore))) {
+  for (const result of results.filter(item => continuityCaseOperations(item.caseId).some(operation => ['chapter_notes', 'character_cards'].includes(operation.kind)))) {
     const failure = finalizationEvidenceBound(result)
     if (failure) return fail(failure)
   }
   for (const [index, result] of results.entries()) {
-    const expected = continuityCaseOperations(result.caseId)
+    const expected = continuityCaseOperations(result.caseId).filter(item => !['refine', 'final-review'].includes(item.kind) || result.aiReviewedDraft?.selectedCount > 0)
     if (stableEvidence(result.operations?.map(item => item.operation)) !== stableEvidence(expected.map(item => item.id))) return fail('CANDIDATE_OPERATION_MISMATCH')
     if (!Array.isArray(result.attempts) || !Array.isArray(result.ownerTerminal)
       || result.ownerTerminal.length !== result.attempts.length) return fail('ACTUAL_OWNER_ARTIFACT_MISMATCH')
@@ -2031,7 +2247,8 @@ export function validateCandidateContinuityResults(results, mode) {
       const attempts = all
       const recoveryPolicy = draftRecoveryFor(PHASE_SCENARIOS['c16-c18'].attemptPolicy, 'candidate')
       const recoverable = operation.kind === 'draft' && recoveryPolicy?.operationIds.includes(operation.operation)
-      if (attempts.length < 1 || attempts.length > (recoverable ? recoveryPolicy.maxAttempts : operation.kind === 'character_cards' ? 3 : condensable ? 2 : 1)) return fail('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+      const manuscript = ['review', 'refine', 'final-review'].includes(operation.kind)
+      if (attempts.length < 1 || attempts.length > (recoverable ? recoveryPolicy.maxAttempts : operation.kind === 'character_cards' ? 3 : manuscript ? operation.kind === 'refine' ? 4 : 2 : condensable ? 2 : 1)) return fail('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
       const ownerMismatch = attempt => {
         const actual = attempt.binding?.actual, terminal = result.ownerTerminal.find(item => item.attemptId === actual?.attemptId)
         return !actual || actual.projectId !== result.physicalProject.projectId || actual.epoch !== result.projectEpoch
@@ -2048,11 +2265,13 @@ export function validateCandidateContinuityResults(results, mode) {
       for (const [ordinal, attempt] of attempts.entries()) {
         const actual = attempt.binding?.actual, terminal = ownerMismatch(attempt)
         if (recoverable) { if (!terminal) return fail('ACTUAL_OWNER_IDENTITY_MISMATCH'); continue }
-        if (!terminal || terminal.finishReason !== 'stop'
+        if (!terminal || terminal.finishReason !== (operation.kind === 'refine' && ordinal < attempts.length - 1 ? 'length' : 'stop')
           || terminal.hasFormalEffect !== (ordinal === attempts.length - 1)
           || ordinal === 0 && actual.purpose !== (operation.kind === 'chapter_notes' ? 'finalized-chapter-notes'
-            : operation.kind === 'character_cards' ? 'finalized-character-state' : 'chapter-draft')
-          || ordinal > 0 && actual.purpose !== (condensable ? condense.condensePurpose : `finalized-character-state:repair:${ordinal}`))
+            : operation.kind === 'character_cards' ? 'finalized-character-state' : operation.kind === 'refine' ? 'refine-from-review'
+              : manuscript ? 'review-chapter' : 'chapter-draft')
+          || ordinal > 0 && actual.purpose !== (operation.kind === 'refine' ? 'refine-from-review' : manuscript ? 'review-chapter-rebuild'
+            : condensable ? condense.condensePurpose : `finalized-character-state:repair:${ordinal}`))
           return fail('ACTUAL_OWNER_IDENTITY_MISMATCH')
       }
       // 登记的唯一压缩：首稿 hash 可复核且超出上限（生产计数），末次压缩稿才是正式保存的在范围正文。
@@ -2068,6 +2287,10 @@ export function validateCandidateContinuityResults(results, mode) {
       || index >= 5 && (!result.restoration.selectedGenerationId || result.restoration.bindingMode !== 'origin-readonly')))
       return fail('RESTORE_IDENTITY_MISMATCH')
     if (index >= 3 && !admittedPredecessorBound(result)) return fail('PREDECESSOR_AFTER_REPLACEMENT_MISMATCH')
+    if (index >= 3) {
+      const failure = validateAiReviewedManuscript(result)
+      if (failure) return fail(failure)
+    }
   }
   if (new Set(results.slice(3).map(result => result.physicalProject.projectId)).size !== 4) return fail('RESTORE_IDENTITY_MISMATCH')
   if (!authorProtectionSatisfied(results[1], mode) || !results[1].sourceReplacement || !results[2].sourceReplacement

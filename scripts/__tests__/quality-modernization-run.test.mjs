@@ -1,4 +1,4 @@
-import { test } from 'vitest'
+import { test, vi } from 'vitest'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -19,7 +19,8 @@ import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolated
   BRIDGE_SETTLEMENT_DEADLINE_MS, BRIDGE_SPAWN_TIMEOUT_MS, BRIDGE_TEST_TIMEOUT_MS,
   C16_C18_ATTEMPT_POLICY, validateCandidateContinuityResults, runProductionBridge, runProductionPhasePair, summarizeDraftReconciliation,
   continuityCaseOperations, FINALIZED_CHARACTER_OPERATION_IDS, draftCondenseFor, syntheticDraftCondensePlan,
-  BOUNDED_REVISION_DIAGNOSTIC, assertBoundedRevisionSource } from '../quality-modernization-driver.mjs'
+  BOUNDED_REVISION_DIAGNOSTIC, assertBoundedRevisionSource, AI_REVIEW_FINAL_MANUSCRIPT_POLICY,
+  aiReviewFinalManuscriptSelection, validateAiReviewedManuscript } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, readVerifiedRecoveryCandidateSupplement,
   readVerifiedDirectPersistedDraftEvidence, recordPersistedDraftObservation,
   safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
@@ -28,13 +29,205 @@ import { POST_UI_REVIEW_POLICY, reviewedDraftSelection, validateReviewedDraft, p
 import { countDraftUnits, draftTargetUnitRange } from '../../src/shared/draft-units'
 import { freezeChapterGoals } from '../../src/shared/chapter-goal-review'
 import { draftReconciliationBlock, parseDraftReconciliation } from '../../src/shared/draft-reconciliation'
-import { parseReviewGenerationResult } from '../../src/shared/review-generation-report'
+import { parseReviewGenerationResult, buildReviewGenerationReport } from '../../src/shared/review-generation-report'
 import { createHumanConfirmedReviewSnapshot, renderHumanConfirmedReviewBrief } from '../../src/shared/human-confirmed-review'
+import { composeVisibleContinuation } from '../../src/shared/visible-continuation'
+vi.mock('../../electron/database', () => ({ getProjectDb: () => null, getCurrentProjectPath: () => null }))
 
 const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
 const semanticPath = path.join(ROOT, protocol.fixturePath)
 const protocolBinding = currentProtocolBinding()
+
+test('AI final manuscript registers the unchanged seven sources plus four bounded native review chains', () => {
+  const scenario = productionScenario('c16-c18', 'final')
+  assert.equal(scenario.evaluationPolicy?.revision, 'ai-review-final-manuscript-v1')
+  assert.deepEqual(scenario.evaluationPolicy.physicalRequests, { sourceMinimum: 12, sourceMaximum: 48,
+    manuscriptMinimum: 1, manuscriptMaximum: 8, minimum: 16, maximum: 80 })
+  assert.deepEqual(continuityCaseOperations('C16-A').map(item => item.kind), ['chapter_notes', 'character_cards'])
+  assert.deepEqual(continuityCaseOperations('C17-B').map(item => item.kind),
+    ['chapter_notes', 'character_cards', 'draft', 'review', 'refine', 'final-review'])
+  assert.equal(BOUNDED_REVISION_DIAGNOSTIC.maxPhysicalRequests, 5)
+})
+
+test('AI final manuscript distinguishes raw goal discoveries from mechanical unknown and software preflight', () => {
+  const context = { operation: 'review-chapter', source: { content: '林岚提着账册，站在柜台外。' }, writingLanguage: 'zh-CN', uiLocale: 'zh-CN',
+    frozenGoals: { chapterNumber: 1, coverage: 'complete', items: [
+      { id: 'ch1:keyEvents:1', text: '当章归还借书' }, { id: 'ch1:mustShow:1', text: '林岚提着账册' }] },
+    preflightFindings: [{ severity: 'warning', stableFactKey: 'native-preflight', sourceChapter: 0,
+      issue: { zhCN: '原生软件预检', enUS: 'Native preflight' }, evidence: '林岚提着账册' }] }
+  const general = { category: '表达', severity: 'warning', description: '调整柜台描述', quote: '柜台外' }
+  const unknown = context.frozenGoals.items.map(goal => ({ id: goal.id, status: 'unknown', description: '正文证据不足，无法确认。', evidence: [] }))
+  const select = goals => {
+    const rawContent = JSON.stringify({ summary: '普通审稿', items: [general], ...(goals === undefined ? {} : { goalReviews: goals }) })
+    const savedContent = JSON.stringify(buildReviewGenerationReport({ content: rawContent, sourceContent: context.source.content,
+      frozenGoals: context.frozenGoals, writingLanguage: context.writingLanguage, uiLocale: context.uiLocale,
+      preflightFindings: context.preflightFindings }), null, 2)
+    return { ...aiReviewFinalManuscriptSelection({ rawContent, savedContent, context }), rawContent, savedContent }
+  }
+  const discovered = select(unknown)
+  assert.deepEqual(discovered.selected.map(item => item.goalId ?? null), [null, 'ch1:keyEvents:1', 'ch1:mustShow:1'])
+  assert.deepEqual(discovered.selected.slice(1).map(item => item.severity), ['unknown', 'unknown'])
+  assert.equal(discovered.softwareItems[0].stableFactKey, 'native-preflight')
+  for (const goals of [undefined, [], [...unknown, unknown[0]], [{ ...unknown[0], id: 'invented' }],
+    [{ ...unknown[0], description: '' }], [{ ...unknown[0], status: 'completed' }], [{ ...unknown[0], status: 'unmet' }],
+    [{ ...unknown[0], evidence: [{ quote: '不在原稿' }] }], [{ ...unknown[0], status: 'invented' }]]) {
+    const result = select(goals)
+    assert.equal(result.selected.some(item => item.goalId === 'ch1:keyEvents:1'), false)
+    assert.deepEqual(result.selected.filter(item => !item.goalId), [general])
+  }
+  assert.throws(() => aiReviewFinalManuscriptSelection({ rawContent: discovered.rawContent,
+    savedContent: discovered.savedContent.replace('柜台描述', '人工补题'), context }), /SAVED_REPORT_MISMATCH/)
+})
+
+test('AI final manuscript native main owner persists keyEvents unknown confirmation, one revision, merge and ordinary final review', async () => {
+  const [{ initializeLegacyBaselineSchema }, { getDesktopMigrationRegistry, CURRENT_DESKTOP_SCHEMA_VERSION }, { SqliteSchemaAdapter },
+    { migrateSchema }, { createMainGenerationOwner }, { ModelExecutionLeaseRegistry }, { MAIN_GENERATION_POLICY: policy },
+    { buildGenerationSourceBinding, rebuildGenerationSourceBinding }, { generationOutputContract }, { ReviewRepository },
+    { ReviewCycleRepository }, { RevisionRepository }, { serializeHumanConfirmedReviewSnapshot }] = await Promise.all([
+      import('../../electron/migrations/baseline-schema'), import('../../electron/migrations/desktop-registry'),
+      import('../../electron/migrations/sqlite-schema-adapter'), import('../../electron/migrations/runner'),
+      import('../../electron/services/main-generation-owner'), import('../../electron/services/model-execution-lease'),
+      import('../../electron/services/main-generation-plan'), import('../../electron/services/generation-source-binding'),
+      import('../../src/shared/generation-owner-contract'), import('../../electron/repositories/review-repository'),
+      import('../../electron/repositories/review-cycle-repository'), import('../../electron/repositories/revision-repository'),
+      import('../../src/shared/human-confirmed-review') ])
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/ai-final-native-'))
+  const dbPath = path.join(directory, 'project.db'), db = new Database(dbPath)
+  let owner
+  try {
+    db.transaction(() => initializeLegacyBaselineSchema(db))()
+    migrateSchema(new SqliteSchemaAdapter(db), getDesktopMigrationRegistry(), CURRENT_DESKTOP_SCHEMA_VERSION)
+    const prose = '林岚走进北塔，灯火照亮了石阶。'.repeat(70)
+    db.exec("INSERT INTO project_core(id,project_name,words_per_chapter,world_setting) VALUES('main','原生合成',900,'【第1章必现】林岚携带一本账册'); INSERT INTO blueprints(chapter_number,title,key_events) VALUES(1,'北塔','当章归还借书');")
+    db.prepare('INSERT INTO contents(id,body) VALUES(1,?)').run(prose)
+    db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,?)").run(countDraftUnits(prose))
+    const model = { id: 'synthetic', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1', apiKey: 'synthetic',
+      baseUrl: 'https://api.openai.com/v1', temperature: 0, maxTokens: 2048, purposes: ['generation'],
+      capabilities: { contextWindowTokens: 32768, maxOutputTokens: 2048, reasoning: false, structuredOutput: true, usage: true } }
+    const deps = { db, projectStorageRoot: directory, globalDataRoot: directory, readBuiltinPrompt: () => '冻结合成模板' }
+    let response, calls = 0
+    owner = createMainGenerationOwner({ database: db, projectId: 'project', epoch: 'epoch', assertCurrent: () => {},
+      leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model,
+      dispatch: async (_request, options) => { calls++; options.onVisible({ kind: 'delta', text: response }); return { finishReason: 'stop',
+        usage: { promptTokens: 100, completionTokens: 60, reasoningTokens: 0, totalTokens: 160,
+          accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true } } },
+      buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch: 'epoch',
+        modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
+      rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, 'epoch', modelReceipt, policy).binding })
+    const prepared = owner.prepareReviewRevision({ operation: 'review-chapter', draftId: 1,
+      expectedDraft: { chapterNumber: 1, version: 1, status: 'draft', contentHash: hash(prose) }, authorInputs: [], uiLocale: 'zh-CN' })
+    assert.deepEqual(prepared.context.frozenGoals.items.map(item => item.id), ['ch1:keyEvents:1', 'ch1:mustShow:1'])
+    response = JSON.stringify({ summary: '普通首审', items: [{ category: '表达', severity: 'pass', description: '保持原稿' }],
+      goalReviews: prepared.context.frozenGoals.items.map(goal => ({ id: goal.id, status: 'unknown', description: '正文未显示该当章动作。', evidence: [] })) })
+    const sourceDraft = prepared.context.source
+    const begin = { operation: 'review-chapter', uiActionNonce: 'first', modelId: model.id, chapterNumber: 1, selectedDraftIds: [1],
+      selectedFinalizedDraftIds: [], promptKeys: ['consistency_check'], skillStages: ['review'], output: 'structured-data',
+      reviewRevisionContextId: prepared.contextId, authorInputs: [{ id: 'review-revision-context', text: JSON.stringify(prepared.context) }] }
+    const first = owner.begin(begin), prompt = '正常审稿'
+    const decision = { version: 1, verdict: 'admitted', promptHash: hash(prompt), capacity: { maxInputUnits: 18000, methodVersion: 'utf8-bytes-v1', admittedUnits: 0 }, coverage: { required: 0, included: 0, complete: true }, included: [], omitted: [] }
+    owner.bindMaterialDecision(first.handle, decision)
+    const generated = await owner.execute({ handle: first.handle, invocationNonce: 'first', task: { purpose: 'review-chapter', output: 'structured-data', messages: [{ role: 'user', content: prompt }] } })
+    const artifact = generated.run.artifacts.at(-1)
+    const saved = owner.commitReview({ contextId: prepared.contextId, handle: first.handle,
+      artifact: { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash } })
+    const selection = aiReviewFinalManuscriptSelection({ rawContent: response, savedContent: saved.content, context: prepared.context })
+    assert.equal(selection.selected.length, 2)
+    const report = JSON.parse(saved.content), cycle = ReviewCycleRepository.getByReviewId(saved.id, db)
+    const fixture = fixtureSource(), start = fixture.indexOf('          else if (aiReviewRun) {', fixture.indexOf("if (boundedRun) selectedItems = boundedRevisionItems"))
+    const end = fixture.indexOf('          else if (reviewedRun)', start)
+    const selectNativeItems = new Function('report', 'sourceReview', 'frozenSource', 'aiReviewedDraft', 'invoke', 'project', 'session', 'assert',
+      `return (async () => { let cycleId, selectedItems; const aiReviewRun = true; if (false) {} ${fixture.slice(start, end)} return {cycleId,selectedItems}; })()`)
+    const mapped = await selectNativeItems(report, ReviewRepository.getFull(saved.id, db), sourceDraft,
+      { selectedIndexes: report.items.flatMap((item, index) => selection.selected.some(selected => hash(selected) === hash(item)) ? [index] : []) },
+      async (channel, id) => { assert.equal(channel, 'db:review-cycle-get'); return ReviewCycleRepository.getByReviewId(id, db) }, { rootPath: directory }, {}, assert)
+    const items = mapped.selectedItems
+    assert.equal(mapped.cycleId, cycle.cycleId)
+    assert.ok(cycle.findings.every(item => item.status === 'unverified' && !item.targetId), 'missing quote retains native unverified/null-target truth')
+    const snapshot = createHumanConfirmedReviewSnapshot({ sourceReviewId: saved.id, sourceDraft, cycleId: cycle.cycleId, summary: report.summary,
+      authorGuidance: '只修复已选问题，其余正文保留。', items, goalReview: report.goalReview })
+    const content = serializeHumanConfirmedReviewSnapshot(snapshot)
+    const confirmation = ReviewRepository.create({ baseDraftId: 1, content, expectedSource: sourceDraft }, db)
+    const refineRequest = { operation: 'refine-from-review', draftId: 1, expectedDraft: { chapterNumber: 1, version: 1, status: 'draft', contentHash: hash(prose) },
+      authorInputs: [], uiLocale: 'zh-CN', reviewSourceId: confirmation.id, confirmedReviewContent: content }
+    assert.throws(() => owner.prepareReviewRevision({ ...refineRequest, reviewSourceId: undefined }), /CONFIRM|REVIEW/)
+    assert.throws(() => owner.prepareReviewRevision({ ...refineRequest, expectedDraft: { ...refineRequest.expectedDraft, version: 2 } }), /REVIEW_SOURCE_CHANGED/)
+    const ignored = serializeHumanConfirmedReviewSnapshot({ ...snapshot, items: snapshot.items.map(item => ({ ...item, decision: 'ignore' })) })
+    const ignoredRow = ReviewRepository.create({ baseDraftId: 1, content: ignored, expectedSource: sourceDraft }, db)
+    assert.throws(() => owner.prepareReviewRevision({ ...refineRequest, reviewSourceId: ignoredRow.id, confirmedReviewContent: ignored }), /CONFIRM|REVIEW/)
+    assert.equal(calls, 1, 'invalid confirmations are rejected before dispatch')
+    const refine = owner.prepareReviewRevision(refineRequest)
+    assert.equal(refine.parentRootActionId, first.handle.rootActionId)
+    const brief = renderHumanConfirmedReviewBrief(refine.context.confirmation.snapshot, 'zh-CN')
+    assert.ok(brief.includes('当章归还借书') && brief.includes('林岚携带一本账册'))
+    assert.equal(brief.includes('保持原稿'), false, 'ignored AI item does not enter revision brief')
+    response = `${prose}\n林岚把借书归还柜台，携带账册离开。`
+    const revisionBegin = owner.begin({ ...begin, operation: 'refine-from-review', uiActionNonce: 'refine', promptKeys: ['refine_from_review'], skillStages: ['refinement'],
+      output: 'visible-text', reviewRevisionContextId: refine.contextId, parentRootActionId: refine.parentRootActionId,
+      authorInputs: [{ id: 'review-revision-context', text: JSON.stringify(refine.context) }] })
+    owner.bindMaterialDecision(revisionBegin.handle, { ...decision,
+      capacity: { ...decision.capacity, admittedUnits: Buffer.byteLength(brief) }, coverage: { required: 1, included: 1, complete: true },
+      included: [{ sourceId: `review:confirmed:${confirmation.id}`, revision: confirmation.id, contentHash: hash(brief),
+        category: 'author', required: true, units: Buffer.byteLength(brief) }] })
+    const revisionOutput = await owner.execute({ handle: revisionBegin.handle, invocationNonce: 'refine', task: { purpose: 'refine-from-review', output: 'visible-text', messages: [{ role: 'user', content: prompt }] } })
+    const revisionArtifact = revisionOutput.run.artifacts.at(-1)
+    const composition = owner.composeVisible(revisionBegin.handle, [revisionArtifact.artifactId], hash(response), 'visible-append-v1')
+    const revision = owner.commitRevision({ contextId: refine.contextId, handle: revisionBegin.handle, expectedCompositionHash: composition.textHash })
+    const merge = RevisionRepository.mergeIntoDraft({ revisionId: revision.id, targetDraftId: 1, expectedDraftContent: prose, mergedContent: response, wordCount: countDraftUnits(response) }, db)
+    assert.equal(merge.reviewCycle.cycleId, cycle.cycleId)
+    const finalPrepared = owner.prepareReviewRevision({ operation: 'review-chapter', draftId: 1,
+      expectedDraft: { chapterNumber: 1, version: 1, status: 'revised', contentHash: hash(response) }, authorInputs: [], uiLocale: 'zh-CN' })
+    assert.equal(finalPrepared.context.recheck, undefined)
+    assert.equal(finalPrepared.context.source.content, response)
+    const revisedProse = response
+    response = JSON.stringify({ summary: '普通全文复审', items: [{ category: '表达', severity: 'pass', description: '正文已回读' }],
+      goalReviews: finalPrepared.context.frozenGoals.items.map(goal => ({ id: goal.id, status: 'completed', description: '已有正文证据。',
+        evidence: [{ quote: '林岚把借书归还柜台，携带账册离开。' }] })) })
+    const finalBegin = owner.begin({ ...begin, uiActionNonce: 'final', reviewRevisionContextId: finalPrepared.contextId,
+      authorInputs: [{ id: 'review-revision-context', text: JSON.stringify(finalPrepared.context) }] })
+    owner.bindMaterialDecision(finalBegin.handle, decision)
+    const finalOutput = await owner.execute({ handle: finalBegin.handle, invocationNonce: 'final', task: { purpose: 'review-chapter',
+      output: 'structured-data', messages: [{ role: 'user', content: prompt }] } })
+    const finalArtifact = finalOutput.run.artifacts.at(-1)
+    const finalSaved = owner.commitReview({ contextId: finalPrepared.contextId, handle: finalBegin.handle,
+      artifact: { artifactId: finalArtifact.artifactId, revision: finalArtifact.revision, textHash: finalArtifact.textHash } })
+    assert.equal(ReviewRepository.getFull(finalSaved.id, db).sourceDraft.content, revisedProse)
+    assert.equal(ReviewCycleRepository.getByReviewId(saved.id, db).recheckCount, 0, 'ordinary review does not resolve old cycle')
+    assert.equal(calls, 3)
+    const save = (name, body, extra = {}) => { const outputPath = path.join(directory, name); fs.writeFileSync(outputPath, body)
+      return { ...extra, outputPath, contentHash: hash(body) } }
+    const rows = db.prepare(`SELECT a.attempt_id,a.run_id,a.root_action_id,a.attempt_json,a.usage_receipt_json,g.artifact_json
+      FROM generation_attempts a JOIN generation_artifacts g ON g.attempt_id=a.attempt_id ORDER BY a.rowid`).all()
+    const handles = [first.handle, revisionBegin.handle, finalBegin.handle], kinds = ['review', 'refine', 'final-review']
+    const operations = rows.map((row, index) => ({ operation: kinds[index], kind: kinds[index], handle: handles[index],
+      ...(index !== 1 ? { reviewProvenance: { attemptId: row.attempt_id, effect: JSON.parse(row.usage_receipt_json).reviewRevisionEffect } } : {}) }))
+    const attempts = rows.map((row, index) => ({ ...save(`raw-${index}.txt`, JSON.parse(row.artifact_json).text),
+      visibleTextHash: JSON.parse(row.artifact_json).textHash, finishReason: 'stop', binding: { operation: kinds[index],
+        actual: { attemptId: row.attempt_id, purpose: JSON.parse(row.usage_receipt_json).purpose, ...handles[index] } } }))
+    const ownerTerminal = rows.map(row => { const artifact = JSON.parse(row.artifact_json), usage = JSON.parse(row.usage_receipt_json)
+      return { attemptId: row.attempt_id, status: JSON.parse(row.attempt_json).status, artifactId: artifact.artifactId,
+        artifactRevision: artifact.revision, textHash: artifact.textHash, reviewRevisionEffect: usage.reviewRevisionEffect } })
+    const result = { physicalProject: { projectId: 'project', dbPath }, projectEpoch: 'epoch', operations, attempts, ownerTerminal,
+      protocolRevision: protocolBinding.protocolRevision, saved: { contentHash: hash(revisedProse), units: countDraftUnits(revisedProse) },
+      draftObservation: { chapterNumber: 1, targetUnits: 900, units: countDraftUnits(revisedProse), contentHash: hash(revisedProse), persisted: true },
+      aiReviewedDraft: { initial: save('initial.txt', prose, { draftId: 1, chapterNumber: 1, version: 1, status: 'draft' }),
+        review: save('first-review.json', saved.content, { reviewId: saved.id }), selectedCount: selection.selected.length,
+        selectedIndexes: report.items.flatMap((item, index) => item.goalId ? [index] : []), selectedItemsHash: hash(selection.selected),
+        softwareItems: selection.softwareItems, disposition: selection.disposition,
+        confirmation: save('confirmation.json', content, { reviewId: confirmation.id }), revision: save('revision.txt', revisedProse, { revisionId: revision.id }),
+        mergeHash: hash(revisedProse), mergeReceipt: merge, composition: { algorithm: composition.algorithm, textHash: composition.textHash,
+          artifactIds: composition.artifactIds, sources: composition.sources },
+        finalReview: save('final-review.json', finalSaved.content, { reviewId: finalSaved.id }),
+        finalDraft: save('final.txt', revisedProse, { draftId: 1, version: 1 }) } }
+    assert.equal(validateAiReviewedManuscript(result), null)
+    const corrupt = structuredClone(result); corrupt.aiReviewedDraft.selectedItemsHash = hash('author supplementation')
+    assert.equal(validateAiReviewedManuscript(corrupt), 'AI_REVIEW_SELECTION_MISMATCH')
+    const forged = structuredClone(result); forged.operations[0].reviewProvenance.effect.artifact.textHash = hash('different raw')
+    assert.equal(validateAiReviewedManuscript(forged), 'AI_REVIEW_PROVENANCE_MISMATCH')
+    const compositionDrift = structuredClone(result); compositionDrift.aiReviewedDraft.composition.sources[0].textHash = hash('other source')
+    assert.equal(validateAiReviewedManuscript(compositionDrift), 'AI_REVISION_MERGE_MISMATCH')
+  } finally { owner?.suspendForProjectClose(); db.close(); fs.rmSync(directory, { recursive: true, force: true }) }
+})
 
 test('bounded-revision diagnostic consumes only fixed C17-A saved source and five native permits', () => {
   const selected = selectPhase(protocol, 'bounded-revision-diagnostic', 'diagnostic')
@@ -204,13 +397,13 @@ test('bounded-revision ledger accepts exactly the registered five purposes and r
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
-test('bounded-revision first and final review rebuild require same-source STOP parse failure and native artifact evidence', () => {
+test('bounded-revision and AI manuscript first and final review rebuild require same-source STOP parse failure and native artifact evidence', () => {
   const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/bounded-review-gate-'))
-  const policy = BOUNDED_REVISION_DIAGNOSTIC.attemptPolicy
   const reviewSource = { draftId: 4, version: 1, contentHash: BOUNDED_REVISION_DIAGNOSTIC.source.contentSha256 }
   const malformed = '{"items":['
   try {
-    for (const operation of [policy.operationId, policy.reviewRebuild.operationId]) {
+    for (const policy of [BOUNDED_REVISION_DIAGNOSTIC.attemptPolicy, C16_C18_ATTEMPT_POLICY])
+      for (const operation of [policy.operationId, policy.reviewRebuild.operationId]) {
       const owner = { attemptId: operation, runId: `run-${operation}`, rootActionId: `root-${operation}`,
         projectId: 'fresh-project', epoch: 'fresh-epoch', purpose: 'review-chapter' }
       const outputPath = path.join(directory, `${operation}.txt`)
@@ -236,6 +429,51 @@ test('bounded-revision first and final review rebuild require same-source STOP p
       evidence.attempt.visibleTextHash = hash(fs.readFileSync(outputPath)); evidence.ownerArtifactHash = evidence.attempt.visibleTextHash
       assert.throws(dispatch(evidence), /MODEL_REQUEST_REJECTED/, 'semantic findings cannot authorize a retry')
     }
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('AI manuscript refinement permits at most four same-confirmation native appends with settled LENGTH and progress', () => {
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/ai-refine-gate-'))
+  const policy = C16_C18_ATTEMPT_POLICY.refinementRecovery, operation = policy.operationId
+  const source = { draftId: 4, version: 1, contentHash: hash('完整首稿'), confirmationId: 2, confirmationHash: hash('持久确认') }
+  const owners = Array.from({ length: 5 }, (_, index) => ({ attemptId: `refine-${index}`, runId: 'refine-run', rootActionId: 'refine-root',
+    projectId: 'fresh-project', epoch: 'fresh-epoch', purpose: policy.purpose }))
+  try {
+    let composed = ''
+    const proofs = owners.map((owner, index) => {
+      const output = `第${index}段当章动作。`.repeat(12), outputPath = path.join(directory, `${index}.txt`)
+      fs.writeFileSync(outputPath, output)
+      composed = index ? composeVisibleContinuation(composed, output) : output
+      const attemptId = `candidate:${owner.attemptId}`, binding = { operation, actual: owner, reviewSource: source }
+      return { attempt: { attemptId, binding, outputPath, visibleTextHash: hash(output) }, ownerArtifactHash: hash(output),
+        ownerArtifactId: `artifact-${index}`, composition: { algorithm: 'visible-append-v1', textHash: hash(composed),
+          artifactIds: owners.slice(0, index + 1).map((_, ordinal) => `artifact-${ordinal}`) },
+        events: [{ type: 'reserve', attemptId, binding }, { type: 'dispatch', attemptId }, { type: 'settle', attemptId, finishReason: 'length' }] }
+    })
+    const gateFor = values => createOperationDispatchGate({ refinementRecovery: policy,
+      readPrimaryEvidence: owner => values[owners.findIndex(item => item.attemptId === owner.attemptId)] })
+    const gate = gateFor(proofs)
+    for (const owner of owners.slice(0, 4)) assert.doesNotThrow(() => gate(operation, owner, source))
+    assert.throws(() => gate(operation, owners[4], source), /MODEL_REQUEST_REJECTED/)
+    const second = (values = proofs, owner = owners[1], bound = source) => {
+      const candidate = gateFor(values); candidate(operation, owners[0], source)
+      return () => candidate(operation, owner, bound)
+    }
+    for (const finishReason of ['stop', 'unknown']) {
+      const values = structuredClone(proofs); values[0].events[2].finishReason = finishReason
+      assert.throws(second(values), /MODEL_REQUEST_REJECTED/)
+    }
+    for (const bound of [{ ...source, version: 2 }, { ...source, confirmationId: 3 }])
+      assert.throws(second(proofs, owners[1], bound), /MODEL_REQUEST_REJECTED/)
+    assert.throws(second(proofs, { ...owners[1], rootActionId: 'other' }), /MODEL_REQUEST_REJECTED/)
+    const forged = structuredClone(proofs); forged[0].composition.artifactIds = ['different-native-artifact']
+    assert.throws(second(forged), /MODEL_REQUEST_REJECTED/)
+    const unresolved = gateFor(proofs)
+    assert.throws(() => unresolved(operation, owners[0], { ...source, draftId: undefined }), /MODEL_REQUEST_REJECTED/)
+    const noProgress = gateFor(proofs); noProgress(operation, owners[0], source); noProgress(operation, owners[1], source)
+    fs.writeFileSync(proofs[1].attempt.outputPath, fs.readFileSync(proofs[0].attempt.outputPath))
+    proofs[1].attempt.visibleTextHash = proofs[0].attempt.visibleTextHash; proofs[1].ownerArtifactHash = proofs[0].ownerArtifactHash
+    assert.throws(() => noProgress(operation, owners[2], source), /MODEL_REQUEST_REJECTED/)
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
@@ -502,8 +740,8 @@ test('前向资格窗口只继承 high 的五个 scope，按本次 bridge 的已
     attemptMs: 3_660_000, spawnMs: calls * 3_660_000 + 60_000, testMs: calls * 3_660_000 + 120_000,
     maxCalls: calls, revision: window.revision })
   for (const id of ['C16-A', 'C16-B', 'C16-C']) expected(request('c16-c18', 'final', id), 4)
-  for (const id of ['C17-A', 'C18-A', 'C18-B']) expected(request('c16-c18', 'final', id), 8)
-  expected(request('c16-c18', 'final', 'C17-B'), 12)
+  for (const id of ['C17-A', 'C18-A', 'C18-B']) expected(request('c16-c18', 'final', id), 16)
+  expected(request('c16-c18', 'final', 'C17-B'), 20)
   expected(request('early-budget', 'post-ui', '场景1/1'), 15)
   expected(request('early-context', 'post-ui', '场景2/3'), 1)
   expected(request('early-review', 'post-ui', '场景3/2'), 3)
@@ -540,7 +778,7 @@ test('父桥实际生成配置和 spawn options 使用同一已登记窗口，�
   const phase = 'c16-c18', milestone = 'final', caseId = 'C17-B'
   const request = { target, action: 'execute', mode: 'synthetic', phase, milestone, caseId,
     operations: continuityCaseOperations(caseId), attemptPolicy: selectPhase(protocol, phase, milestone).attemptPolicy,
-    evaluationPolicy: null, scenarioRevision: selectPhase(protocol, phase, milestone).scenarioRevision,
+    evaluationPolicy: selectPhase(protocol, phase, milestone).evaluationPolicy, scenarioRevision: selectPhase(protocol, phase, milestone).scenarioRevision,
     forwardReasoning: forwardReasoningFor(protocol, phase, milestone),
     forwardQualificationWindow: forwardQualificationWindowFor(protocol, phase, milestone) }
   const original = childProcess.spawnSync
@@ -555,7 +793,7 @@ test('父桥实际生成配置和 spawn options 使用同一已登记窗口，�
     syncBuiltinESMExports()
     const output = runProductionBridge(request)
     const windows = qualificationBridgeWindows(request)
-    assert.equal(windows.maxCalls, 12)
+    assert.equal(windows.maxCalls, 20)
     assert.equal(captured.options.timeout, windows.spawnMs)
     assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'execute-request.json'))).forwardQualificationWindow.revision,
       request.forwardQualificationWindow.revision)
@@ -926,15 +1164,15 @@ test('c16-c18 keeps candidate qualification and the two allocations separate', (
     assert.throws(() => assertScenarioMatchesProtocol(changed, scenario, semanticPath), /SCENARIO_PROTOCOL_MISMATCH/)
   }
   assert.deepEqual(scenario.arms, ['candidate'])
-  assert.equal(scenario.operations.length, 6)
+  assert.equal(scenario.operations.length, 9)
   assert.equal(protocol.allocation.C16ExistingExtraction, 6)
   assert.equal(protocol.allocation.C17C18RestoreContinue, 4)
   // C17-B 重新定稿后处理仍计余量；新 run 省去四次对账，80 次计划分配与原预算保护不变。
   assert.equal(Object.values(protocol.allocation).reduce((a, b) => a + b, 0), 80)
-  assert.equal(protocol.phases['c16-c18'].minimumCalls, 12)
+  assert.equal(protocol.phases['c16-c18'].minimumCalls, 16)
   assert.match(protocol.phases['c16-c18'].scope, /新run直接首稿/)
-  assert.match(protocol.phases['c16-c18'].scope, /最短12次.*既有每run\/root预算/)
-  assert.deepEqual(protocol.phases['c16-c18'].operations.slice(4).map(item => [item.id, item.kind, item.caseIds, item.allocation]), [
+  assert.match(protocol.phases['c16-c18'].scope, /源操作最短12次.*既有每run\/root预算.*整七案最短16次、最多80次/)
+  assert.deepEqual(protocol.phases['c16-c18'].operations.slice(4, 6).map(item => [item.id, item.kind, item.caseIds, item.allocation]), [
     ['恢复副本重新定稿章节要点', 'chapter_notes', ['C17-B'], 'failedRetryRepairReviewReserve'],
     ['恢复副本重新定稿角色状态', 'character_cards', ['C17-B'], 'failedRetryRepairReviewReserve']])
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/c16-ledger-test-'))
@@ -944,7 +1182,7 @@ test('c16-c18 keeps candidate qualification and the two allocations separate', (
       const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', ...protocolBinding, arm: 'candidate',
         codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
         phase: 'c16-c18', milestone: 'final', caseId: operation.caseIds.at(-1), operation: operation.id,
-        actual: { attemptId: operation.id, runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch' } }
+        evaluationPolicyHash: hash(AI_REVIEW_FINAL_MANUSCRIPT_POLICY), actual: { attemptId: operation.id, runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: operation.kind === 'refine' ? 'refine-from-review' : 'review-chapter' } }
       assert.throws(() => validateCampaignBinding({ ...binding, arm: 'baseline' }, { campaignMode: 'synthetic', protocol }), /INVALID_CAMPAIGN_BINDING/)
       updateLedger(file, { type: 'reserve', attemptId: operation.id, binding }, { campaignMode: 'synthetic' })
     }
@@ -956,13 +1194,13 @@ test('c16-c18 keeps candidate qualification and the two allocations separate', (
     { campaignMode: 'synthetic', protocol }), /INVALID_CAMPAIGN_BINDING/)
     const rows = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse)
     assert.deepEqual(rows.map(row => row.allocation), ['C16ExistingExtraction', 'C16ExistingExtraction', 'C17C18RestoreContinue', 'C17C18RestoreContinue',
-      'failedRetryRepairReviewReserve', 'failedRetryRepairReviewReserve'])
+      'failedRetryRepairReviewReserve', 'failedRetryRepairReviewReserve', 'failedRetryRepairReviewReserve', 'failedRetryRepairReviewReserve', 'failedRetryRepairReviewReserve'])
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   // 案例到 operation 的映射只由登记 caseIds 决定：C17-B 先后处理 notes→cards 再本地续写，其余恢复案只续写。
   assert.deepEqual(Object.fromEntries(scenario.caseIds.map(caseId => [caseId, continuityCaseOperations(caseId).map(item => item.id)])), {
     'C16-A': ['定稿章节要点', '定稿角色状态'], 'C16-B': ['定稿章节要点', '定稿角色状态'], 'C16-C': ['定稿章节要点', '定稿角色状态'],
-    'C17-A': ['本地恢复后续写'], 'C17-B': ['恢复副本重新定稿章节要点', '恢复副本重新定稿角色状态', '本地恢复后续写'],
-    'C18-A': ['DAV选定世代恢复后续写'], 'C18-B': ['DAV选定世代恢复后续写'] })
+    'C17-A': ['本地恢复后续写', '续写成稿首审', '续写成稿一次修稿', '续写成稿完整复审'], 'C17-B': ['恢复副本重新定稿章节要点', '恢复副本重新定稿角色状态', '本地恢复后续写', '续写成稿首审', '续写成稿一次修稿', '续写成稿完整复审'],
+    'C18-A': ['DAV选定世代恢复后续写', '续写成稿首审', '续写成稿一次修稿', '续写成稿完整复审'], 'C18-B': ['DAV选定世代恢复后续写', '续写成稿首审', '续写成稿一次修稿', '续写成稿完整复审'] })
   for (const mutate of [
     value => { value.operations[4].caseIds = ['C17-A', 'C17-B'] },
     value => { value.operations[5].kind = 'chapter_notes' },
@@ -1139,7 +1377,7 @@ test('合成 transport 可复现 C17/C18 超长→唯一压缩→在范围，以
   const fixture = fixtureSource()
   assert.match(fixture, /draftCondense && request\.mode === 'synthetic' && operationKind === 'draft'\s*\? syntheticDraftUnitsGoal\(request\.syntheticDraftCondense, request\.caseId, actual\.purpose, chapter\.targetUnits, draftCondense\.maximum\)/)
   assert.match(fixture, /assert\.equal\(visible\.DRAFT_CONDENSE_PURPOSE, condensePolicy\.condensePurpose, 'DRAFT_CONDENSE_PURPOSE_MISMATCH'\)/)
-  assert.match(fixture, /createOperationDispatchGate\(\{ repairPolicy, draftCondense, draftRecovery, structuredRecovery,\s*finalizationRepair: continuityRun,/)
+  assert.match(fixture, /createOperationDispatchGate\(\{ repairPolicy, draftCondense, draftRecovery, structuredRecovery,[\s\S]*?finalizationRepair: continuityRun,/)
   assert.match(fixture, /draftCondense = \{ policy: condensePolicy, targetUnits, maximum: draftTargetUnitRange\(targetUnits\)\.maximum,\s*measureUnits: text => countUnits\(visible\.sanitizeDraftText\(redactVisibleCompletionText\(text\)\)\) \}/)
   // 压缩发出前先等首稿流结算，门禁才能读到 settle 与 hash。
   assert.match(fixture, /if \(\(draftRecovery \|\| condensePolicy\) && operationKind === 'draft'\) await Promise\.all\(streamSettlements\)/)
@@ -1168,8 +1406,16 @@ function continuityResults(dir, { condensedIndex = null, primaryText, savedUnits
     const parityHash = hash(readback)
     const admitted = readback.predecessors[0]
     const attempts = [], ownerTerminal = []
+    const manuscriptContent = '甲'.repeat(savedUnits), manuscriptId = 100 + index
+    const reviewContext = { version: 1, operation: 'review-chapter', source: { id: manuscriptId, chapterNumber: 2,
+      version: 1, status: 'draft', content: manuscriptContent }, sourceHash: hash(manuscriptContent),
+      frozenGoals: { chapterNumber: 2, coverage: 'not_configured', items: [] }, writingLanguage: 'zh-CN', uiLocale: 'zh-CN', preflightFindings: [] }
+    const rawReport = JSON.stringify({ summary: '未发现问题', items: [{ category: '表达', severity: 'pass', description: '无可采纳项' }] })
+    const reportBody = JSON.stringify(buildReviewGenerationReport({ content: rawReport, sourceContent: manuscriptContent,
+      frozenGoals: reviewContext.frozenGoals, writingLanguage: 'zh-CN', uiLocale: 'zh-CN', preflightFindings: [] }), null, 2)
+    let aiReviewedDraft, dbPath
     let draftReconciliation
-    const receiptOps = continuityCaseOperations(caseId).map(operation => {
+    const receiptOps = continuityCaseOperations(caseId).filter(operation => !['refine', 'final-review'].includes(operation.kind)).map(operation => {
       const handle = { runId: `run-${index}-${operation.kind}`, rootActionId: `root-${index}-${operation.kind}` }
       if (operation.kind === 'draft' && reconcile) {
         // v5：登记续写的首个物理请求是唯一一次生成前定稿对账；提示与输出落盘并以 hash 绑定。
@@ -1193,18 +1439,40 @@ function continuityResults(dir, { condensedIndex = null, primaryText, savedUnits
           firstDraftAttemptId: `${index}-draft-0`, injectedIntoFirstDraft: Boolean(block), authorMaterialAttempts: block ? draftCount - 1 : 0 }
       }
       const purposes = operation.kind === 'chapter_notes' ? ['finalized-chapter-notes'] : operation.kind === 'character_cards'
-        ? ['finalized-character-state'] : index === condensedIndex ? ['chapter-draft', 'chapter-draft-condense'] : ['chapter-draft']
+        ? ['finalized-character-state'] : operation.kind === 'review' ? ['review-chapter'] : index === condensedIndex ? ['chapter-draft', 'chapter-draft-condense'] : ['chapter-draft']
       purposes.forEach((purpose, ordinal) => {
         const attemptId = `${index}-${operation.kind}-${ordinal}`
-        const output = write(`${attemptId}.txt`, ordinal === 0 && purposes.length === 2 ? primaryText : operation.kind === 'draft' ? '甲'.repeat(savedUnits) : `output ${attemptId}`)
+        const output = write(`${attemptId}.txt`, ordinal === 0 && purposes.length === 2 ? primaryText : operation.kind === 'draft' ? manuscriptContent : operation.kind === 'review' ? rawReport : `output ${attemptId}`)
         attempts.push({ attemptId: `candidate:${attemptId}`, ...output, finishReason: 'stop', binding: { operation: operation.id, phase: 'c16-c18',
-          arm: 'candidate', invocationId: 'invocation', parityId: parityHash,
+          arm: 'candidate', invocationId: 'invocation', parityId: parityHash, evaluationPolicyHash: hash(AI_REVIEW_FINAL_MANUSCRIPT_POLICY),
           actual: { attemptId, projectId, epoch, ...handle, purpose } },
           ...(operation.kind === 'draft' ? { optionalMaterialEvidence: { materialDecision: { included: [
             { sourceId: admitted.sourceId, revision: admitted.revision, category: 'finalized-history' }] } } } : {}) })
         ownerTerminal.push({ attemptId, artifactId: `artifact-${attemptId}`, textHash: output.visibleTextHash, purpose,
-          finishReason: 'stop', hasFormalEffect: ordinal === purposes.length - 1 })
+          finishReason: 'stop', status: 'settled', hasFormalEffect: ordinal === purposes.length - 1 })
       })
+      if (operation.kind === 'review') {
+        const attempt = attempts.at(-1), terminal = ownerTerminal.at(-1)
+        const effect = { kind: 'review', id: 1, index: 1, contextHash: hash(reviewContext), contentHash: hash(reportBody),
+          artifact: { artifactId: terminal.artifactId, revision: 1, textHash: attempt.visibleTextHash } }
+        terminal.artifactRevision = 1; terminal.reviewRevisionEffect = effect
+        const initial = write(`${index}-initial.txt`, manuscriptContent), review = write(`${index}-saved-review.json`, reportBody)
+        aiReviewedDraft = { initial: { outputPath: initial.outputPath, contentHash: initial.visibleTextHash, draftId: manuscriptId, chapterNumber: 2, version: 1, status: 'draft' },
+          review: { outputPath: review.outputPath, contentHash: review.visibleTextHash, reviewId: 1 },
+          selectedCount: 0, selectedIndexes: [], selectedItemsHash: hash([]), softwareItems: [], disposition: 'no-actionable-review',
+          finalDraft: { outputPath: initial.outputPath, contentHash: initial.visibleTextHash, draftId: manuscriptId, version: 1 } }
+        dbPath = path.join(dir, `${index}-review.db`)
+        const db = new Database(dbPath)
+        try {
+          db.exec('CREATE TABLE IF NOT EXISTS generation_attempts(attempt_id,run_id,attempt_json,usage_receipt_json); CREATE TABLE IF NOT EXISTS generation_artifacts(attempt_id,artifact_json); CREATE TABLE IF NOT EXISTS generation_runs(run_id,root_action_id,binding_json); CREATE TABLE IF NOT EXISTS contents(id,body); CREATE TABLE IF NOT EXISTS reviews(id,content_id); CREATE TABLE IF NOT EXISTS drafts(id,version,content_id); DELETE FROM generation_attempts; DELETE FROM generation_artifacts; DELETE FROM generation_runs; DELETE FROM contents; DELETE FROM reviews; DELETE FROM drafts;')
+          db.prepare('INSERT INTO generation_attempts VALUES(?,?,?,?)').run(terminal.attemptId, handle.runId, JSON.stringify({ status: 'settled' }), JSON.stringify({ purpose: 'review-chapter', result: { finishReason: 'stop' }, reviewRevisionEffect: effect }))
+          db.prepare('INSERT INTO generation_artifacts VALUES(?,?)').run(terminal.attemptId, JSON.stringify({ ...effect.artifact, text: rawReport }))
+          db.prepare('INSERT INTO generation_runs VALUES(?,?,?)').run(handle.runId, handle.rootActionId, JSON.stringify({ projectId, epoch, sourceManifest: { reviewRevisionContext: reviewContext } }))
+          db.prepare('INSERT INTO contents VALUES(1,?),(2,?)').run(manuscriptContent, reportBody)
+          db.exec(`INSERT INTO reviews VALUES(1,2); INSERT INTO drafts VALUES(${manuscriptId},1,1);`)
+        } finally { db.close() }
+        return { operation: operation.id, kind: operation.kind, handle, reviewProvenance: { attemptId: terminal.attemptId, effect } }
+      }
       return { operation: operation.id, kind: operation.kind, handle }
     })
     const formal = attempts.filter(attempt => attempt.binding.operation === '定稿角色状态').at(-1)
@@ -1219,7 +1487,9 @@ function continuityResults(dir, { condensedIndex = null, primaryText, savedUnits
       cardsReadback: { characterId: 'character', sourceFinalizationId: source.finalizationId },
       ...(index === 1 ? { authorProtected, authorProtection } : {}) }
     return { status: 'passed', arm: 'candidate', phase: 'c16-c18', mode, caseId, invocationId: 'invocation',
-      protocolRevision: protocolBinding.protocolRevision, physicalProject: { projectId, parityHash, readback }, projectEpoch: epoch,
+      protocolRevision: protocolBinding.protocolRevision, evaluationPolicy: AI_REVIEW_FINAL_MANUSCRIPT_POLICY,
+      physicalProject: { projectId, parityHash, readback, ...(dbPath ? { dbPath } : {}) }, projectEpoch: epoch,
+      ...(aiReviewedDraft ? { aiReviewedDraft, saved: { contentHash: hash(manuscriptContent), units: savedUnits } } : {}),
       operations: receiptOps, attempts, ownerTerminal, physicalModelRequests: mode === 'real' ? attempts.length : 0,
       ...(draftReconciliation ? { draftReconciliation } : {}),
       syntheticDispatches: mode === 'synthetic' ? attempts.length : 0,
@@ -1362,7 +1632,7 @@ test('C17-B 重新定稿后处理：notes/cards 绑定替换后的新 finalizati
     check(repaired(2), { status: 'passed' })
     check(repaired(3), { status: 'passed' })
     check(repaired(3, 'real'), { status: 'pending-independent-oracle-review' }, 'real repairs', 'real')
-    assert.equal(repaired(3, 'real')[4].attempts.length, 5, 'notes 1 + cards 3 + draft 1')
+    assert.equal(repaired(3, 'real')[4].attempts.length, 6, 'notes 1 + cards 3 + draft 1 + first review 1')
     check(repaired(4), failure('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'))
     const earlyEffect = repaired(2)
     earlyEffect[4].ownerTerminal.find(item => item.attemptId === '4-character_cards-0').hasFormalEffect = true
@@ -1503,7 +1773,7 @@ test('C17-B 替换后前驱：readback 与 parity 记录续写实际纳入的新
     const { syntheticDraftText } = syntheticLengthHelpers()
     const condensed = continuityResults(dir, { condensedIndex: 4, primaryText: syntheticDraftText(countDraftUnits, C17_RANGE.maximum + 60) })
     check(condensed, { status: 'passed' })
-    condensed[4].attempts.at(-1).optionalMaterialEvidence.materialDecision.included[0].sourceId = 'finalized:3'
+    condensed[4].attempts.filter(attempt => attempt.binding.actual.purpose.startsWith('chapter-draft')).at(-1).optionalMaterialEvidence.materialDecision.included[0].sourceId = 'finalized:3'
     check(condensed, failure)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   // 桥侧：替换后按同一 parityPredecessors 重算 readback 与 parity，替换前原样另存，其后 dispatch 绑定新 parity。
@@ -1548,7 +1818,7 @@ test('c16-c18 v7 场景沿用有界恢复、条件作者保护与 C17-B 重新�
   assert.match(selection.caseOracles['C17-B'].automatic[0], /RunFinalizePostProcessCommand对新finalizationId重新生成/)
   assert.match(selection.caseOracles['C17-B'].automatic[1], /predecessorsBeforeReplacement/)
   assert.match(selection.stopPolicy.repair, /含C17-B恢复副本重新定稿角色状态/)
-  assert.match(selection.stopPolicy.technicalFailure, /12次最小路径/)
+  assert.match(selection.stopPolicy.technicalFailure, /源操作12次或整七案16次最小路径/)
   assert.match(selection.caseOracles['C16-B'].automatic[0], /未提议时记authorProtection=untriggered/)
   assert.match(selection.caseOracles['C16-B'].automatic[0], /合成transport必提议冲突值，仍须有候选/)
   assert.deepEqual(selection.attemptPolicy, C16_C18_ATTEMPT_POLICY)
@@ -1812,7 +2082,7 @@ test('C16–C18 ca466d9a/73b46513 段（第580–648行）按同一规则分两�
   // 新协议字节 hash 与被取代的 a0a14777 不同，runner 读写两入口都按链末端取历史范围。
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
   assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, ca466d9a, protocol\.historicalC1673b46513Boundary\)/)
-  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedA763f510Events/)
+  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedE41a3f0aEvents/)
 })
 
 test('新登记续写直接首稿，旧对账可读但当前实验拒绝额外发送', () => {
@@ -1821,7 +2091,7 @@ test('新登记续写直接首稿，旧对账可读但当前实验拒绝额外�
     assert.equal(C16_C18_ATTEMPT_POLICY.draftReconcile, undefined)
     const current = continuityResults(dir)
     assert.deepEqual(validateCandidateContinuityResults(current, 'synthetic'), { status: 'passed' })
-    assert.equal(current.reduce((sum, item) => sum + item.syntheticDispatches, 0), 12)
+    assert.equal(current.reduce((sum, item) => sum + item.syntheticDispatches, 0), 16)
     assert.deepEqual(summarizeDraftReconciliation(current), [])
     const legacy = continuityResults(dir, { reconcile: true })
     assert.equal(validateCandidateContinuityResults(legacy, 'synthetic').status, 'failed')
@@ -3030,10 +3300,10 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
       `${fixture.slice(repairStart, repairEnd)}\nreturn structuredSyntaxRepair`)
     const checkAuthority = new Function('operationKind', 'candidate', 'request', 'db', 'chapter', 'promptText',
       'preflight', 'authorityFacts', 'predecessorReadbacks', 'naturalPredecessorText', 'scene', 'structuredSyntaxRepair',
-      `const fullRun = request.phase === 'full', continuityRun = false, reviewedRun = false, boundedRun = false;\n${fixture.slice(checkStart, checkEnd)}`)
+      `const fullRun = request.phase === 'full', continuityRun = false, reviewedRun = false, boundedRun = false, aiReviewRun = false;\n${fixture.slice(checkStart, checkEnd)}`)
     const readAuthorityEvidence = new Function('operationKind', 'candidate', 'request', 'authorityFacts', 'sha',
       'promptText', 'structuredSyntaxRepair', 'predecessorReadbacks', 'db', 'chapter',
-      `const continuityRun = false, reviewedRun = false, boundedRun = false; return ${fixture.slice(evidenceStart, evidenceEnd).trim().replace(/,$/, '')}`)
+      `const continuityRun = false, reviewedRun = false, boundedRun = false, aiReviewRun = false; return ${fixture.slice(evidenceStart, evidenceEnd).trim().replace(/,$/, '')}`)
     const facts = ['fact sent', 'fact absent from repair']
     const request = { phase: 'early-budget', chapterNumber: 1 }
     const ledgerPath = path.join(dir, 'ledger.jsonl')
@@ -3679,7 +3949,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     'historicalC16Ee3435ecBoundary', 'historicalC16Ccc70b31Boundary', 'historicalC16C9b88510Boundary', 'historicalC16D8a30c11Boundary',
     'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary', 'historicalC16B42cfc55Boundary',
     'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
-    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary']
+    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -4237,7 +4507,7 @@ test('S14B reviewed refine rejects any missing registered author fact before res
   assert.ok(checkStart > 0 && checkEnd > checkStart && reserve > checkEnd)
   const check = new Function('candidate', 'db', 'chapter', 'promptText', 'authorityFacts', 'preflight',
     'request', 'structuredSyntaxRepair',
-    `const operationKind = 'refine', reviewedRun = true, continuityRun = false, fullRun = false;\n${fixture.slice(checkStart, checkEnd)}`)
+    `const operationKind = 'refine', reviewedRun = true, continuityRun = false, fullRun = false, aiReviewRun = false;\n${fixture.slice(checkStart, checkEnd)}`)
   const chapter = source.scenes[0].chapters[0]
   const facts = Object.values(chapter.oracle).flatMap(value => Array.isArray(value) ? value : [value])
   assert.equal(facts.length, 6)
@@ -4260,7 +4530,7 @@ test('bounded-revision synthetic response switch covers refine and both ordinary
   const end = fixture.indexOf('        // Development transport', start)
   assert.ok(start >= 0 && end > start)
   const generate = new Function('request', 'operationKind', 'current', 'assert', 'BOUNDED_REVISION_DIAGNOSTIC',
-    `${constants}\nconst diagnosticRun = false, reviewedRun = false, boundedRun = true;
+    `${constants}\nconst diagnosticRun = false, reviewedRun = false, boundedRun = true, aiReviewRun = false;
      const chapter = { number: 2, requiredEvents: ['核查遇阻', '承担代价'] };
      const promptText = '', reviewedSyntheticIssues = [], reviewedMustShowTexts = [];
      const db = { prepare: () => ({ pluck: () => ({ get: () => current }) }) }, latestDraft = () => ({ content: current });
@@ -4284,7 +4554,7 @@ test('S14B reviewed refine keeps real draft intact and applies targeted quotes o
   const end = fixture.indexOf("        } else if (operationKind === 'recheck')", start)
   assert.ok(start >= 0 && end > start)
   const generator = new Function('request', 'db', 'reviewedSyntheticIssues', 'assert', 'REVIEW_DEFECT', 'REVIEW_FIX', 'reviewedMustShowTexts',
-    `let text; const operationKind = 'refine', reviewedRun = true, boundedRun = false, chapter = { number: 1 }; if (false) {} ${fixture.slice(start, end)} } return text`)
+    `let text; const operationKind = 'refine', reviewedRun = true, boundedRun = false, aiReviewRun = false, chapter = { number: 1 }; if (false) {} ${fixture.slice(start, end)} } return text`)
   const generate = (...args) => generator(...args, [])
   const quote = 'synthetic quote', replacement = 'synthetic replacement'
   const issues = [{ quote, replacement }]
@@ -4943,7 +5213,7 @@ test('S14B post-UI 压缩的 fixture 接线：登记只对候选臂取到，首�
     const selectEnd = fixture.indexOf('    let draftCondense = null', selectStart)
     assert.ok(selectStart > 0 && selectEnd > selectStart)
     const select = new Function('request', 'target', 'continuityRun', 'draftCondenseFor',
-      `${fixture.slice(selectStart, selectEnd)}\nreturn { repairPolicy, condensePolicy }`)
+      `const aiReviewRun = false; ${fixture.slice(selectStart, selectEnd)}\nreturn { repairPolicy, condensePolicy }`)
     const policy = postUiPolicy()
     const pick = (request, arm, continuityRun = false) => select(request, { arm }, continuityRun, draftCondenseFor)
     const postUi = { milestone: 'post-ui', attemptPolicy: policy }
@@ -5026,7 +5296,7 @@ test('合成 transport 可复现 S14B post-UI 候选：超长首稿→唯一压�
   const driver = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-driver.mjs'), 'utf8')
   // 登记按臂取：baseline 不加载生产压缩常量，其 gate 的 draftCondense 恒为 null。
   assert.match(fixture, /const condensePolicy = policyEligible \? draftCondenseFor\(request\.attemptPolicy, target\.arm\) : null/)
-  assert.match(fixture, /const repairPolicy = policyEligible && !continuityRun \? request\.attemptPolicy : null/)
+  assert.match(fixture, /const repairPolicy = policyEligible && \(!continuityRun \|\| aiReviewRun\) \? request\.attemptPolicy : null/)
   assert.match(fixture, /request\.attemptPolicy\?\.draftRecovery \|\| request\.attemptPolicy\?\.draftCondense/)
   assert.match(fixture, /const condensedPrimary = condensePolicy && attempt\.binding\.actual\.purpose === condensePolicy\.primaryPurpose/)
   assert.match(fixture, /assert\.equal\(terminal\.hasFormalEffect, !repairedDirectory && !supersededAttempt && !condensedPrimary\)/)
@@ -5714,7 +5984,7 @@ test('full 压缩的 fixture 接线（行为）：登记只对候选臂取到，
     const selectStart = fixture.indexOf('    const policyEligible ='), selectEnd = fixture.indexOf('    let draftCondense = null', selectStart)
     assert.ok(selectStart > 0 && selectEnd > selectStart)
     const select = new Function('request', 'target', 'continuityRun', 'draftCondenseFor',
-      `${fixture.slice(selectStart, selectEnd)}\nreturn { repairPolicy, condensePolicy }`)
+      `const aiReviewRun = false; ${fixture.slice(selectStart, selectEnd)}\nreturn { repairPolicy, condensePolicy }`)
     const policy = PHASE_SCENARIOS.full.attemptPolicy
     const request = { phase: 'full', milestone: 'final', chapterNumber: 2, attemptPolicy: policy }
     const candidate = select(request, { arm: 'candidate' }, false, draftCondenseFor)
