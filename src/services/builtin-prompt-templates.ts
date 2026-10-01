@@ -971,7 +971,9 @@ export const BUILTIN_PROMPTS: PromptTemplate[] = [
 
 请严格输出以下 JSON 格式：
 
-{"items":[{"category":"剧情连贯性","severity":"pass","description":"未发现与前文矛盾"},{"category":"剧情合理性","severity":"error","quote":"原文中的具体句子","description":"问题描述"},{"category":"角色状态","severity":"warning","quote":"原文句子","description":"轻微不一致说明"}],"summary":"一句话总体评价"}
+{"items":[{"category":"剧情连贯性","description":"未发现与前文矛盾","severity":"pass"},{"category":"剧情合理性","quote":"原文中的具体句子","description":"具体客观缺陷及其成立依据","severity":"error"},{"category":"角色状态","quote":"原文句子","description":"具体轻微不一致及其成立依据","severity":"warning"}],"summary":"一句话总体评价"}
+
+items 按 category、quote、description、severity 顺序输出：先核对正文引文与原材料，在 description 说明判断依据，最后确定 severity。description 必须说明当前正文的具体客观缺陷才可标为 error/warning，并解释该问题为何成立；若结论为合理、符合要求或未发现问题，该项应为 pass 或省略。全文未发现具体问题时，保留一条 pass；确有客观问题仍须按严重程度报告 error/warning。
 
 severity 取值：error=严重的上述客观问题，强烈建议修复；warning=较轻或局部的上述客观问题，酌情修复；pass=该维度未发现具体问题。
 全部 items 必须为 1–10 条；不要求每个检查维度单列一项，不得为覆盖类别而凑 pass 项，同一问题不得重复。每项 quote 不超过 160 字，description 不超过 200 字；summary 不超过 120 字。quote 字段在 pass 时可省略。`,

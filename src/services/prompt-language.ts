@@ -451,7 +451,9 @@ Output the complete revised manuscript as plain prose only. Do not include Markd
 
 [JSON output contract]
 Output exactly one JSON object in this shape:
-{"items":[{"category":"plot continuity","severity":"pass","description":"No contradiction found"},{"category":"causal logic","severity":"error","quote":"exact source sentence","description":"verified problem"}],"summary":"one-sentence overall assessment"}
+{"items":[{"category":"plot continuity","description":"No contradiction found","severity":"pass"},{"category":"causal logic","quote":"exact source sentence","description":"specific objective defect and why it is a problem","severity":"error"}],"summary":"one-sentence overall assessment"}
+
+Return item fields in category, quote, description, severity order: first check the draft excerpt against the source materials, explain the judgment in description, then choose severity. Use error/warning only when description identifies a specific objective defect in the current draft and explains why it is a problem. If the conclusion is reasonable, meets requirements, or no issue found, use pass or omit the item. If the whole draft has no specific issue, keep one pass item. Still report genuine objective problems as error/warning according to their severity.
 
 severity must be error (a serious objective problem in the review scope), warning (a smaller or local objective problem), or pass (no specific issue found in that dimension). Return 1–10 items total. A review dimension does not need its own item; do not add pass items merely to cover categories, and never repeat the same issue. Keep each quote within 160 characters, each description within 200 characters, and summary within 120 characters. quote may be omitted only for pass items. Do not output Markdown, explanation, or reasoning.`,
   },

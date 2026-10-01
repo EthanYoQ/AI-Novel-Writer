@@ -1191,7 +1191,7 @@ describe('ReviewChapterCommand reasoning stage', () => {
   it.each([
     ['zh-CN', 'default'], ['zh-CN', 'custom'],
     ['en-US', 'default'], ['en-US', 'custom'],
-  ] as const)('sends evidence boundaries in the %s/%s ordinary review request', async (writingLanguage, templateSource) => {
+  ] as const)('sends evidence and classification boundaries in %s/%s ordinary and rebuilt review requests', async (writingLanguage, templateSource) => {
     const authorFact = 'AUTHOR_FACT_SENTINEL'
     const worldFact = 'WORLD_FACT_SENTINEL'
     const source = 'DRAFT_CONTENT_SENTINEL'
@@ -1205,7 +1205,8 @@ describe('ReviewChapterCommand reasoning stage', () => {
       } : null,
     }))
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
-      .mockResolvedValue({ content: PASSING_REVIEW_JSON, finishReason: 'stop' })
+      .mockResolvedValueOnce({ content: '{"summary":', finishReason: 'stop' })
+      .mockResolvedValueOnce({ content: PASSING_REVIEW_JSON, finishReason: 'stop' })
     stubIpc(vi.fn(async (channel: string) => {
       if (channel === 'fs:list-dir') return [{ name: promptFile, path: promptPath, isDir: false }]
       if (channel === 'fs:read-file') return { success: true, content: JSON.stringify({
@@ -1228,10 +1229,7 @@ describe('ReviewChapterCommand reasoning stage', () => {
       step: {}, context: { ...workflowContext(), writingLanguage }, callbacks: callbacks(),
     })
 
-    expect(completeWithLease).toHaveBeenCalledOnce()
-    const request = completeWithLease.mock.calls[0]![0].messages.map(message => message.content).join('\n')
-    for (const material of [authorFact, worldFact, source, 'CURRENT_CHAPTER_GOAL_SENTINEL']) expect(request).toContain(material)
-    expect(request.includes(customMarker)).toBe(templateSource === 'custom')
+    expect(completeWithLease).toHaveBeenCalledTimes(2)
     const requiredClauses = writingLanguage === 'zh-CN' ? [
       '是权威事实', '【角色状态】只是既往章节摘要', '同一对象、时点及条件', '合理兼容解释',
       '未再次说明、未触碰或未明确位置', '新进展可以发生在同一时段或地点',
@@ -1253,7 +1251,36 @@ describe('ReviewChapterCommand reasoning stage', () => {
       'recounting an old result does not satisfy it', 'positive, locatable prose', 'absence of contradiction is insufficient',
       'unknown, not proof of non-occurrence', 'verbatim, contiguous excerpt that occurs exactly once',
     ]
-    expect(requiredClauses.filter(clause => !request.includes(clause))).toEqual([])
+    const classificationClauses = writingLanguage === 'zh-CN' ? [
+      'category、quote、description、severity',
+      'description 必须说明当前正文的具体客观缺陷才可标为 error/warning',
+      '若结论为合理、符合要求或未发现问题，该项应为 pass 或省略',
+      '全文未发现具体问题时，保留一条 pass',
+      '确有客观问题仍须按严重程度报告 error/warning',
+    ] : [
+      'category, quote, description, severity order',
+      'Use error/warning only when description identifies a specific objective defect in the current draft',
+      'If the conclusion is reasonable, meets requirements, or no issue found, use pass or omit the item',
+      'If the whole draft has no specific issue, keep one pass item',
+      'Still report genuine objective problems as error/warning according to their severity',
+    ]
+    for (const [index, [completion]] of completeWithLease.mock.calls.entries()) {
+      const request = completion.messages.map(message => message.content).join('\n')
+      for (const material of [authorFact, worldFact, source, 'CURRENT_CHAPTER_GOAL_SENTINEL']) expect(request).toContain(material)
+      expect(request.includes(customMarker)).toBe(templateSource === 'custom')
+      expect(requiredClauses.filter(clause => !request.includes(clause))).toEqual([])
+      expect.soft(classificationClauses.filter(clause => !request.includes(clause))).toEqual([])
+      const example = JSON.parse(request.match(/^\{"items":\[[^\n]+\}$/mu)![0]) as { items: Array<{ quote?: string }> }
+      for (const item of example.items) {
+        expect.soft(Object.keys(item)).toEqual(item.quote === undefined
+          ? ['category', 'description', 'severity']
+          : ['category', 'quote', 'description', 'severity'])
+      }
+      if (index === 1) {
+        const rebuildContract = request.slice(request.lastIndexOf(writingLanguage === 'zh-CN' ? '【硬性要求】' : '[Hard requirement]'))
+        expect.soft(classificationClauses.filter(clause => !rebuildContract.includes(clause))).toEqual([])
+      }
+    }
   })
 
   it('uses finalized continuity as the only established-history source in the review request', async () => {
