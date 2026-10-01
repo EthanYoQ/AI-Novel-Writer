@@ -214,7 +214,7 @@ test('isolated production commands persist the selected phase operations', async
   }
   if (diagnosticRun) assert.equal(target.arm, 'candidate', 'SHARED_INPUT_DIAGNOSTIC_CANDIDATE_REQUIRED')
   const aiReviewRun = request.evaluationPolicy?.revision === AI_REVIEW_FINAL_MANUSCRIPT_POLICY.revision
-    && (request.phase === 'c16-c18' || request.milestone === 'post-ui' && ['early-budget', 'early-context', 'early-review'].includes(request.phase))
+    && (fullRun || request.phase === 'c16-c18' || request.milestone === 'post-ui' && ['early-budget', 'early-context', 'early-review'].includes(request.phase))
   if (aiReviewRun) assert.deepEqual(request.evaluationPolicy, productionScenario(request.phase, request.milestone).evaluationPolicy, 'AI_REVIEW_POLICY_DRIFT')
   if (request.phase === 'c16-c18') assert.deepEqual(request.evaluationPolicy, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, 'AI_REVIEW_POLICY_DRIFT')
   const reviewedRun = Boolean(request.evaluationPolicy) && !aiReviewRun
@@ -594,9 +594,11 @@ test('isolated production commands persist the selected phase operations', async
       ...item, draftId: Number(item.sourceId.split(':')[1]), required: true })) : fullRun
       ? request.chapterNumber > 1 ? [{ ...request.predecessor, sourceId: `candidate:${request.predecessor?.draftId}`, required: true }] : []
       : request.chapterNumber > 1 ? json(path.join(target.isolationRoot, 'predecessor.json')).candidates : []
+    if (fullRun && aiReviewRun && request.chapterNumber === 1) assert.equal(request.predecessor ?? null, null, 'FULL_FIRST_CHAPTER_PREDECESSOR_FORBIDDEN')
     if (fullRun && request.chapterNumber > 1) {
       assert.equal(request.predecessor?.projectId, project.projectId, 'FULL_PREDECESSOR_PROJECT_MISMATCH')
       assert.equal(request.predecessor?.chapterNumber, request.chapterNumber - 1, 'FULL_PREDECESSOR_CHAPTER_MISMATCH')
+      if (aiReviewRun) assert.equal(request.predecessor?.arm, target.arm, 'FULL_PREDECESSOR_ARM_MISMATCH')
     }
     receipt.predecessor = fullRun ? request.predecessor ?? null : undefined
     // 每一条前驱都必须在使用前从生产 IPC 原样读回；command 只消费这些 readback，绝不旁路注入正文。
@@ -606,10 +608,30 @@ test('isolated production commands persist the selected phase operations', async
       assert.equal(sha(full?.content ?? ''), record.contentHash, 'PREDECESSOR_SOURCE_CHANGED')
       assert.equal(full?.version, record.version, 'PREDECESSOR_VERSION_CHANGED')
       assert.equal(full?.chapterNumber, record.chapterNumber, 'PREDECESSOR_CHAPTER_CHANGED')
+      if (fullRun && aiReviewRun) assert.equal(full?.status, record.status, 'PREDECESSOR_STATUS_CHANGED')
       assert.equal(Buffer.byteLength(full?.content ?? '', 'utf8'), record.persistedBytes, 'PREDECESSOR_BYTES_CHANGED')
       predecessorReadbacks.push({ chapterNumber: record.chapterNumber, draftId: record.draftId, sourceId: record.sourceId,
-        version: record.version, content: full.content, marker: record.marker, required: record.required,
+        version: record.version, content: full.content, ...(fullRun && aiReviewRun ? { status: full.status } : {}), marker: record.marker, required: record.required,
         materialContentHash: record.materialContentHash })
+    }
+    // Accepted is an experiment endpoint, not a finalized chapter. Re-read the real row before each consumer.
+    const readAcceptedPredecessor = async () => {
+      if (!fullRun || !aiReviewRun || request.chapterNumber === 1) return null
+      const previous = await invoke('db:draft-get-full', request.predecessor.draftId, project.rootPath, session)
+      const expected = request.predecessor
+      assert.equal(expected.arm, target.arm, 'FULL_PREDECESSOR_ARM_MISMATCH')
+      assert.equal(expected.projectId, project.projectId, 'FULL_PREDECESSOR_PROJECT_MISMATCH')
+      assert.equal(expected.chapterNumber, chapter.number - 1, 'FULL_PREDECESSOR_CHAPTER_MISMATCH')
+      assert.deepEqual({ draftId: previous?.id, chapterNumber: previous?.chapterNumber, version: previous?.version,
+        status: previous?.status, contentHash: sha(previous?.content ?? ''), persistedBytes: Buffer.byteLength(previous?.content ?? '', 'utf8') },
+      { draftId: expected.draftId, chapterNumber: expected.chapterNumber, version: expected.version, status: expected.status,
+        contentHash: expected.contentHash, persistedBytes: expected.persistedBytes }, 'FULL_ACCEPTED_PREDECESSOR_CHANGED')
+      return previous
+    }
+    if (fullRun && aiReviewRun && request.chapterNumber > 1) {
+      const previous = await readAcceptedPredecessor(), outputPath = path.join(evidenceRoot, 'accepted-predecessor.txt')
+      fs.writeFileSync(outputPath, previous.content)
+      receipt.acceptedPredecessor = { ...request.predecessor, outputPath }
     }
     const core = db.prepare('SELECT project_name,genre,target_audience,total_chapters,words_per_chapter,writing_language,global_guidance,core_outline,world_setting,protagonist_profile,premise,worldbuilding,characters_arch,synopsis FROM project_core WHERE id=?').get('main')
     const physicalTemplates = []
@@ -994,7 +1016,7 @@ test('isolated production commands persist the selected phase operations', async
         }
         }
       }
-      if (candidate && fullRun && request.chapterNumber > 1) {
+      if (candidate && fullRun && request.chapterNumber > 1 && operationKind === 'draft') {
         const predecessor = predecessorReadbacks[0]
         preflight(materialDecision?.included.some(item => item.sourceId === predecessor.sourceId
           && item.revision === predecessor.version), 'FULL_PREDECESSOR_MATERIAL_BINDING_MISMATCH')
@@ -1021,6 +1043,25 @@ test('isolated production commands persist the selected phase operations', async
         }
         for (const forbidden of ['本夹具', '作者提供的前情', REVIEW_FIX])
           preflight(!promptText.includes(forbidden), `REVIEW_PROMPT_PRIVATE_FIXTURE_LEAK:${forbidden}`)
+      }
+      let predecessorConsumption
+      if (fullRun && aiReviewRun && request.chapterNumber > 1 && ['draft', 'review', 'final-review'].includes(operationKind)) {
+        const previous = await readAcceptedPredecessor()
+        const ending = previousChapterEnding(previous.content)
+        const ranges = operationKind === 'draft' ? [...previous.content.matchAll(/\S[\s\S]*?(?=\n\s*\n|$)/gu)]
+          .flatMap(match => { const text = match[0].trimEnd(); return text && promptText.includes(text)
+            ? [{ start: match.index, end: match.index + text.length }] : [] }) : [{ start: 0, end: previous.content.length }]
+        if (operationKind === 'draft') {
+          preflight(promptText.includes(ending), 'FULL_ACCEPTED_ENDING_NOT_SENT')
+          const start = previous.content.lastIndexOf(ending)
+          preflight(start >= 0, 'FULL_ACCEPTED_ENDING_RANGE_INVALID')
+          if (!ranges.some(range => range.start <= start && range.end >= start + ending.length)) ranges.push({ start, end: start + ending.length })
+        } else preflight(promptText.includes(previous.content), 'FULL_REVIEW_ACCEPTED_PREDECESSOR_NOT_SENT')
+        predecessorConsumption = { selected: request.predecessor, mode: operationKind === 'draft' ? 'native-paragraphs-and-ending' : 'reviewFocus-complete-body',
+          messageRoles: [...new Set(body.messages.filter(message => message.content?.includes(operationKind === 'draft' ? ending : previous.content)).map(message => message.role))],
+          ranges: ranges.map(({ start, end }) => ({ start, end, contentHash: sha(previous.content.slice(start, end)),
+            bytes: Buffer.byteLength(previous.content.slice(start, end), 'utf8') })),
+          ...(candidate && operationKind === 'draft' ? { materialSource: materialDecision.included.find(item => item.sourceId === `candidate:${previous.id}`) } : {}) }
       }
       // phase / caseId / operation 全部来自本次选定的协议阶段，账本按协议逐字校验。
       const binding = { campaignId: CAMPAIGN_ID, invocationId: request.invocationId, mode: request.mode, arm: target.arm,
@@ -1049,6 +1090,7 @@ test('isolated production commands persist the selected phase operations', async
         compiledPromptHash: sha(body.messages), systemPromptHash: sha(body.messages.filter(message => message.role === 'system')),
         composedPromptBytes: measurePromptBytes(body.messages),
         requestBodyBytes: Buffer.byteLength(typeof options.body === 'string' ? options.body : '', 'utf8'),
+        ...(predecessorConsumption ? { predecessorConsumption } : {}),
         authorityEvidence: operationKind === 'recheck' && candidate
           ? { mergedDraftHash: sha(db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1')
               .pluck().get(chapter.number)), findingAnchorsSent: true }
@@ -1288,6 +1330,7 @@ test('isolated production commands persist the selected phase operations', async
       operationId = operation.id
       if (reviewedRun && ['refine', 'final-review'].includes(operationKind) && reviewedDraft.selectedCount === 0) continue
       if (aiReviewedDraft && ['refine', 'final-review'].includes(operationKind) && aiReviewedDraft.selectedCount === 0) continue
+      const acceptedPrevious = ['draft', 'review', 'final-review'].includes(operationKind) ? await readAcceptedPredecessor() : null
       currentContext = { runId: randomUUID(), projectPath: project.rootPath, projectSession: session, writingLanguage: 'zh-CN',
         uiLocale: 'zh-CN', generationModelId: model.id, data: { architecture: authorityText, existingBlueprints: [] }, cancelled: false }
       const params = { context: currentContext, callbacks, step: { id: operationId, title: operationId } }
@@ -1339,7 +1382,9 @@ test('isolated production commands persist the selected phase operations', async
           }
           command = new (await load('src/services/workflows/commands/review-chapter.command.ts')).ReviewChapterCommand({
             draftPath, draftContent: sourceDraft.content, sourceDraft: frozenSource, chapterNumber: chapter.number,
-            reviewFocus: aiReviewRun ? '' : reviewedRun || boundedRun ? `核对本章全部必需事件、作者事实、字数、复述、自然度、人物动机和节奏可读性。只依据作者资料、蓝图及待审正文给出问题与原文证据；不得新增作者事实。\n${chapterGuidance}` : '只核对本章必需事件、作者事实与明确证据，不检查字数。对于“承担代价”，只有人物已经执行选择、具体损失或牺牲已经发生、后文没有反证，才算完成；签字认责或承诺以后负责不算代价。',
+            reviewFocus: aiReviewRun ? acceptedPrevious
+              ? `本臂前章已接受参考稿（未定稿；只核对与原文的连续性，不新增作者事实）。\n来源：${JSON.stringify(request.predecessor)}\n${acceptedPrevious.content}` : ''
+              : reviewedRun || boundedRun ? `核对本章全部必需事件、作者事实、字数、复述、自然度、人物动机和节奏可读性。只依据作者资料、蓝图及待审正文给出问题与原文证据；不得新增作者事实。\n${chapterGuidance}` : '只核对本章必需事件、作者事实与明确证据，不检查字数。对于“承担代价”，只有人物已经执行选择、具体损失或牺牲已经发生、后文没有反证，才算完成；签字认责或承诺以后负责不算代价。',
           })
         } else if (operationKind === 'refine') {
           const sourceReview = await invoke('db:review-get-full', reviewState.reviewId, project.rootPath, session)
@@ -1652,6 +1697,7 @@ test('isolated production commands persist the selected phase operations', async
       recordPersistedDraftObservation(receipt, { chapterNumber: chapter.number, targetUnits: chapter.targetUnits,
         units, contentHash: sha(draft[0].content) })
       receipt.saved = { chapterNumber: chapter.number, targetUnits: chapter.targetUnits,
+        ...(fullRun && aiReviewRun ? { status: draft[0].status } : {}),
         draftId: draft[0].id, version: draft[0].version, contentHash: sha(draft[0].content), units, persistedBytes: Buffer.byteLength(draft[0].content, 'utf8'),
         blueprintChapterNumbers: db.prepare('SELECT chapter_number FROM blueprints ORDER BY chapter_number').all().map(row => row.chapter_number) }
     }

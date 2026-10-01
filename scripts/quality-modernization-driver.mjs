@@ -569,7 +569,8 @@ export function qualificationBridgeWindows(request) {
   const bounded = request.phase === 'bounded-revision-diagnostic'
   const scope = bounded ? { caseIds: BOUNDED_REVISION_DIAGNOSTIC.caseIds }
     : registration.scopes.find(item => item.phase === request.phase && item.milestone === request.milestone)
-  const scenario = productionScenario(request.phase, request.milestone)
+  const scenario = request.phase === 'full' && request.scenarioRevision === PHASE_SCENARIOS.full.scenarioRevision
+    ? PHASE_SCENARIOS.full : productionScenario(request.phase, request.milestone)
   if (!scope?.caseIds.includes(request.caseId) || !scenario
     || stableEvidence(request.attemptPolicy ?? null) !== stableEvidence(scenario.attemptPolicy ?? null)
     || stableEvidence(request.evaluationPolicy ?? null) !== stableEvidence(scenario.evaluationPolicy ?? null)
@@ -586,11 +587,12 @@ export function qualificationBridgeWindows(request) {
   }
   const operations = request.operations
   const expected = request.phase === 'c16-c18' ? continuityCaseOperations(request.caseId)
-    : request.phase === 'full' ? scenario.operations.filter(item => item.id === operations?.[0]?.id && item.kind === operations?.[0]?.kind
-      && (item.kind !== 'directory' || request.caseId.endsWith('/1')))
+    : request.phase === 'full' ? operations?.[0]?.kind === 'draft' && scenario.evaluationPolicy
+      ? scenario.operations.slice(1) : scenario.operations.filter(item => item.id === operations?.[0]?.id && item.kind === operations?.[0]?.kind
+        && (item.kind !== 'directory' || request.caseId.endsWith('/1')))
       : scenario.operations
   if (request.action !== 'execute' || stableEvidence(operations) !== stableEvidence(expected)
-    || request.phase === 'full' && expected.length !== 1)
+    || request.phase === 'full' && expected.length !== (operations?.[0]?.kind === 'draft' && scenario.evaluationPolicy ? 4 : 1))
     throw new Error('FORWARD_QUALIFICATION_WINDOW_SCOPE_MISMATCH')
   const arm = request.arm ?? request.target.arm
   const policy = request.attemptPolicy
@@ -945,8 +947,22 @@ export const FINALIZED_CHARACTER_OPERATION_IDS = Object.freeze(PHASE_SCENARIOS['
 export function productionScenario(phase, milestone) {
   const scenario = PHASE_SCENARIOS[phase]
   if (!scenario) throw new Error('PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED')
+  if (phase === 'full' && milestone === 'final') return { ...scenario, ...FULL_AI_REVIEW_SCENARIO }
   return milestone === 'post-ui' && POST_UI_AI_REVIEW_SCENARIOS[phase] ? { ...scenario, ...POST_UI_AI_REVIEW_SCENARIOS[phase] } : scenario
 }
+
+export const FULL_AI_REVIEW_SCENARIO = Object.freeze({
+  scenarioRevision: 's14b-full-ai-review-final-manuscript-v1', minimumCalls: 42, maximumPlannedCalls: 342,
+  evaluationPolicy: { ...AI_REVIEW_FINAL_MANUSCRIPT_POLICY, caseIds: PHASE_SCENARIOS.full.caseIds,
+    physicalRequests: { minimum: 42, maximum: 342, sourceMinimum: 24, sourceMaximum: 198, manuscriptMinimum: 1, manuscriptMaximum: 8 },
+    armAsymmetry: POST_UI_AI_REVIEW_SCENARIOS['early-context'].evaluationPolicy.armAsymmetry },
+  attemptPolicy: { ...FULL_ATTEMPT_POLICY,
+    reviewRebuild: { operationId: '成稿首审', primaryPurpose: 'review-chapter', repairPurpose: 'review-chapter-rebuild', maxRepairAttempts: 1 },
+    finalReviewRebuild: { operationId: '成稿完整复评', primaryPurpose: 'review-chapter', repairPurpose: 'review-chapter-rebuild', maxRepairAttempts: 1 },
+    refinementRecovery: { operationId: '成稿一次修稿', purpose: 'refine-from-review', maxAttempts: 4,
+      trigger: 'settled-length-same-confirmation-visible-append-with-progress' } },
+  operations: [...PHASE_SCENARIOS.full.operations, ...POST_UI_BUDGET.operations.slice(2)],
+})
 
 // Keep this predicate byte-for-byte equivalent to the product's direct JSON syntax test.
 const repairableDirectJsonSyntax = content => {
@@ -1895,21 +1911,67 @@ export function fullExecutionSchedule(order) {
   return [...chapters.filter(step => step.chapterNumber === 1).map(step => ({ ...step, operation: scenario.operations[0] })), ...chapters]
 }
 
+/** Verify the accepted same-arm DB source separately from the native excerpts sent to draft requests. */
+export function validateFullAcceptedPredecessor(result, previous) {
+  if (!previous) return result.acceptedPredecessor || result.attempts.some(item => item.predecessorConsumption)
+    ? 'FULL_PREDECESSOR_MISMATCH' : null
+  let db
+  try {
+    const { outputPath, ...identity } = result.acceptedPredecessor ?? {}
+    if (stableEvidence(identity) !== stableEvidence(previous) || previous.arm !== result.arm
+      || previous.projectId !== result.physicalProject.projectId || previous.chapterNumber !== result.chapterNumber - 1)
+      return 'FULL_PREDECESSOR_MISMATCH'
+    const content = fs.readFileSync(outputPath, 'utf8')
+    db = new (createRequire(import.meta.url)('better-sqlite3'))(result.physicalProject.dbPath, { readonly: true, fileMustExist: true })
+    const current = db.prepare('SELECT d.id,d.chapter_number,d.version,d.status,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC,d.id DESC LIMIT 1').get(previous.chapterNumber)
+    if (digest(content) !== previous.contentHash || Buffer.byteLength(content, 'utf8') !== previous.persistedBytes
+      || current?.id !== previous.draftId || current.version !== previous.version || current.status !== previous.status
+      || current.body !== content) return 'FULL_ACCEPTED_PREDECESSOR_CHANGED'
+    for (const operation of result.operations.filter(item => ['draft', 'review', 'final-review'].includes(item.kind))) {
+      const attempts = result.attempts.filter(item => item.binding.operation === operation.operation)
+      if (!attempts.length) return 'FULL_PREDECESSOR_CONSUMPTION_MISSING'
+      for (const attempt of attempts) {
+        const consumption = attempt.predecessorConsumption
+        if (stableEvidence(consumption?.selected) !== stableEvidence(previous) || !Array.isArray(consumption?.ranges)
+          || !consumption.ranges.length || consumption.ranges.some(range => !validCount(range.start) || !validCount(range.end, range.start + 1)
+            || range.end > content.length || range.contentHash !== digest(content.slice(range.start, range.end))
+            || range.bytes !== Buffer.byteLength(content.slice(range.start, range.end), 'utf8')))
+          return 'FULL_PREDECESSOR_CONSUMPTION_MISMATCH'
+        if (operation.kind !== 'draft') {
+          if (consumption.mode !== 'reviewFocus-complete-body' || consumption.ranges.length !== 1
+            || consumption.ranges[0].start !== 0 || consumption.ranges[0].end !== content.length)
+            return 'FULL_REVIEW_PREDECESSOR_INCOMPLETE'
+        } else if (consumption.mode !== 'native-paragraphs-and-ending'
+          || result.arm === 'candidate' && (consumption.materialSource?.sourceId !== `candidate:${previous.draftId}`
+            || consumption.materialSource.revision !== previous.version || !CONTENT_HASH.test(consumption.materialSource.contentHash ?? '')))
+          return 'FULL_DRAFT_PREDECESSOR_MISMATCH'
+      }
+    }
+    return null
+  } catch { return 'FULL_PREDECESSOR_EVIDENCE_INVALID' }
+  finally { db?.close() }
+}
+
 export function classifyFullProduction(results, { mode, order }) {
   const schedule = fullExecutionSchedule(order)
+  const aiReviewed = results.some(result => result.evaluationPolicy?.revision === AI_REVIEW_FINAL_MANUSCRIPT_POLICY.revision)
+  const scenario = aiReviewed ? productionScenario('full', 'final') : PHASE_SCENARIOS.full
   const fail = pairFailure => ({ status: 'failed', qualityQualification: 'automatic-gate-failed', pairFailure })
   if (results.length !== schedule.length) return fail('FULL_OPERATION_COVERAGE_MISMATCH')
   const projects = new Map(), predecessors = new Map()
   for (const [index, step] of schedule.entries()) {
     const result = results[index], key = `${step.sceneId}:${step.arm}`
     if (result?.status !== 'passed') return fail('FULL_OPERATION_FAILED')
+    const operations = aiReviewed && step.operation.kind === 'draft'
+      ? scenario.operations.slice(1).filter(item => !['refine', 'final-review'].includes(item.kind) || result.aiReviewedDraft?.selectedCount > 0) : [step.operation]
     const mismatch = validatePairedReceipt(result, { mode, arm: step.arm, phase: 'full',
-      scenario: { caseId: step.caseId, operations: [step.operation], attemptPolicy: PHASE_SCENARIOS.full.attemptPolicy },
+      scenario: { ...scenario, caseId: step.caseId, chapterNumber: step.chapterNumber, operations,
+        evaluationPolicy: step.operation.kind === 'draft' ? scenario.evaluationPolicy : undefined },
       protocolRevision: results[0].protocolRevision, protocolHash: results[0].protocolHash })
     if (mismatch) return fail(mismatch)
     if (result.invocationId !== results[0].invocationId || result.milestone !== 'final'
       || result.chapterNumber !== step.chapterNumber || result.sceneId !== step.sceneId
-      || result.operations?.length !== 1 || result.operations[0].operation !== step.operation.id)
+      || result.operations?.length !== operations.length || result.operations[0].operation !== step.operation.id)
       return fail('FULL_ORDER_MISMATCH')
     const projectId = result.physicalProject?.projectId
     if (!projectId || projects.has(key) && projects.get(key) !== projectId
@@ -1928,17 +1990,26 @@ export function classifyFullProduction(results, { mode, order }) {
       || !withinTargetUnits(result.draftObservation, result.protocolRevision, result.arm)) return fail('FULL_DRAFT_INVALID')
     const previous = predecessors.get(key) ?? null
     if (stableEvidence(result.predecessor ?? null) !== stableEvidence(previous)) return fail('FULL_PREDECESSOR_MISMATCH')
+    if (aiReviewed) {
+      const failure = validateFullAcceptedPredecessor(result, previous)
+      if (failure) return fail(failure)
+    }
     predecessors.set(key, { projectId, chapterNumber: result.saved.chapterNumber, draftId: result.saved.draftId,
-      version: result.saved.version, contentHash: result.saved.contentHash, persistedBytes: result.saved.persistedBytes })
+      version: result.saved.version, contentHash: result.saved.contentHash, persistedBytes: result.saved.persistedBytes,
+      ...(aiReviewed ? { arm: result.arm, status: result.saved.status } : {}) })
   }
   return { status: mode === 'synthetic' ? 'passed' : 'pending-independent-oracle-review',
     qualityQualification: mode === 'synthetic' ? 'not-run' : 'pending-independent-oracle-review',
-    pendingOracleDimensions: ['required-events', 'facts', 'recap', 'style'] }
+    pendingOracleDimensions: ['required-events', 'facts', 'recap', 'style'],
+    ...(aiReviewed ? { evaluationPolicy: scenario.evaluationPolicy, discoveryQualification: 'pending-independent-oracle-review',
+      finalManuscriptQualification: 'pending-independent-oracle-review' } : {}) }
 }
 
 function runProductionFull(targets, options, bridge = runProductionBridge) {
-  if (options.scenarioRevision !== PHASE_SCENARIOS.full.scenarioRevision
-    || stableEvidence(options.attemptPolicy ?? null) !== stableEvidence(PHASE_SCENARIOS.full.attemptPolicy) || options.milestone !== 'final'
+  const scenario = options.evaluationPolicy ? productionScenario('full', 'final') : PHASE_SCENARIOS.full
+  if (options.scenarioRevision !== scenario.scenarioRevision
+    || stableEvidence(options.attemptPolicy ?? null) !== stableEvidence(scenario.attemptPolicy)
+    || stableEvidence(options.evaluationPolicy ?? null) !== stableEvidence(scenario.evaluationPolicy ?? null) || options.milestone !== 'final'
     || !options.protocolRevision || !CONTENT_HASH.test(options.protocolHash ?? '')
     || ['baseline', 'candidate'].some(arm => targets[arm].protocolRevision !== options.protocolRevision
       || targets[arm].protocolHash !== options.protocolHash)) throw new Error('PROTOCOL_BINDING_MISMATCH')
@@ -1967,7 +2038,7 @@ function runProductionFull(targets, options, bridge = runProductionBridge) {
   for (const [index, step] of schedule.entries()) {
     const key = `${step.sceneId}:${step.arm}`, target = executionTargets.get(key)
     const request = { ...common, target, caseId: step.caseId, sceneId: step.sceneId,
-      chapterNumber: step.chapterNumber, operations: [step.operation],
+      chapterNumber: step.chapterNumber, operations: step.operation.kind === 'draft' && scenario.evaluationPolicy ? scenario.operations.slice(1) : [step.operation],
       templatesPath: `${options.templatesPath}.${step.sceneId}.json`,
       evidenceRoot: path.join(target.isolationRoot, `step-${index}`),
       predecessor: predecessors.get(key) ?? null,
@@ -1975,9 +2046,18 @@ function runProductionFull(targets, options, bridge = runProductionBridge) {
     try {
       const result = bridge({ ...request, action: 'execute' })
       results.push(result)
+      if (scenario.evaluationPolicy && step.operation.kind === 'draft') {
+        const operations = request.operations.filter(item => !['refine', 'final-review'].includes(item.kind) || result.aiReviewedDraft?.selectedCount > 0)
+        const failure = validatePairedReceipt(result, { mode: options.mode, arm: step.arm, phase: 'full',
+          scenario: { ...scenario, caseId: step.caseId, chapterNumber: step.chapterNumber, operations },
+          protocolRevision: options.protocolRevision, protocolHash: options.protocolHash })
+          ?? validateFullAcceptedPredecessor(result, request.predecessor)
+        if (failure) { result.status = 'failed'; result.code = failure; break }
+      }
       if (step.operation.kind === 'draft') predecessors.set(key, { projectId: result.physicalProject.projectId,
         chapterNumber: result.saved.chapterNumber, draftId: result.saved.draftId, version: result.saved.version,
-        contentHash: result.saved.contentHash, persistedBytes: result.saved.persistedBytes })
+        contentHash: result.saved.contentHash, persistedBytes: result.saved.persistedBytes,
+        ...(scenario.evaluationPolicy ? { arm: result.arm, status: result.saved.status } : {}) })
     } catch (error) {
       const receipt = error.receiptPath && fs.existsSync(error.receiptPath) ? JSON.parse(fs.readFileSync(error.receiptPath, 'utf8')) : {}
       results.push({ ...receipt, arm: step.arm, caseId: step.caseId, status: 'failed', code: error.message, receiptPath: error.receiptPath })
@@ -1987,7 +2067,7 @@ function runProductionFull(targets, options, bridge = runProductionBridge) {
   return { ...classifyFullProduction(results, options), phase: 'full', invocationId, order: options.order,
     qualification: options.development ? 'development-only-unfrozen' : `${options.mode}-production-path-only`,
     protocolRevision: options.protocolRevision, protocolHash: options.protocolHash, scenarioRevision: options.scenarioRevision,
-    attemptPolicy: options.attemptPolicy, prepared, results, notRun: schedule.slice(results.length),
+    attemptPolicy: options.attemptPolicy, ...(scenario.evaluationPolicy ? { evaluationPolicy: scenario.evaluationPolicy } : {}), prepared, results, notRun: schedule.slice(results.length),
     physicalModelRequests: results.reduce((sum, result) => sum + (result.physicalModelRequests ?? 0), 0),
     syntheticDispatches: results.reduce((sum, result) => sum + (result.syntheticDispatches ?? 0), 0) }
 }
@@ -2354,11 +2434,12 @@ export function validateAiReviewedManuscript(result) {
       const units = countProjectedDraftUnits(final), sourceUnits = countProjectedDraftUnits(initial)
       if (units < Math.floor(sourceUnits * 0.8) || units > Math.ceil(sourceUnits * 1.2)) throw new Error('AI_REVISION_LENGTH_MISMATCH')
     }
-    const draft = db.prepare('SELECT d.version,d.chapter_number,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(chain.finalDraft.draftId)
+    const draft = db.prepare(`SELECT d.version,d.chapter_number${result.phase === 'full' ? ',d.status' : ''},c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?`).get(chain.finalDraft.draftId)
     if (draft?.body !== final || draft.version !== chain.finalDraft.version || draft.chapter_number !== chain.initial.chapterNumber
       || chain.finalDraft.draftId !== result.saved?.draftId || chain.finalDraft.version !== result.saved?.version
       || chain.initial.chapterNumber !== result.saved?.chapterNumber || digest(final) !== result.saved?.contentHash
       || digest(final) !== result.draftObservation?.contentHash || countProjectedDraftUnits(final) !== result.saved.units
+      || result.phase === 'full' && (draft.status !== result.saved.status || !['draft', 'revised'].includes(draft.status))
       || !withinTargetUnits(result.draftObservation, result.protocolRevision, result.arm)) throw new Error('AI_FINAL_DB_MISMATCH')
     return null
   } catch (error) { return error.message } finally { db?.close() }

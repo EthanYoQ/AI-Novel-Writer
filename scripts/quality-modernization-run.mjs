@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import os from 'node:os'
 import { runProductionCommandProbe, runProductionPhasePair, runProductionBridge, copyIsolatedRealModelConfig,
-  assertSharedInputDiagnostic, BOUNDED_REVISION_DIAGNOSTIC, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, POST_UI_AI_REVIEW_SCENARIOS, readBoundedRevisionSource,
+  assertSharedInputDiagnostic, BOUNDED_REVISION_DIAGNOSTIC, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, POST_UI_AI_REVIEW_SCENARIOS, FULL_AI_REVIEW_SCENARIO, readBoundedRevisionSource,
   productionBridgeHash, productionExecutionRuntime, productionScenario, PRODUCTION_BRIDGE, PHASE_SCENARIOS } from './quality-modernization-driver.mjs'
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -124,7 +124,7 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
   assertProtocolBinding(binding)
   const registeredPhase = protocol.phases[binding.phase]
   const phase = registeredPhase && { ...registeredPhase,
-    ...(binding.milestone === 'post-ui' ? registeredPhase.postUiAiReview ?? registeredPhase.postUi ?? {} : {}) }
+    ...(binding.milestone === 'post-ui' ? registeredPhase.postUiAiReview ?? registeredPhase.postUi ?? {} : binding.phase === 'full' ? registeredPhase.aiReviewFinal ?? {} : {}) }
   if (!phase || !Array.isArray(phase.operations) || !Array.isArray(phase.caseIds)
     || !phase.caseIds.includes(binding.caseId)
     || !phase.operations.some(operation => operation.id === binding.operation && (!operation.caseIds || operation.caseIds.includes(binding.caseId)))) fail('INVALID_CAMPAIGN_BINDING')
@@ -346,10 +346,11 @@ export function selectPhase(protocol, phase, milestone = 'early') {
     fail('AI_MANUSCRIPT_REGISTRATION_MISMATCH')
   if (milestone === 'post-ui' && POST_UI_AI_REVIEW_SCENARIOS[phase]
     && !isDeepStrictEqual(protocol.phases[phase].postUiAiReview, POST_UI_AI_REVIEW_SCENARIOS[phase])) fail('AI_MANUSCRIPT_REGISTRATION_MISMATCH')
+  if (phase === 'full' && !isDeepStrictEqual(protocol.phases.full.aiReviewFinal, FULL_AI_REVIEW_SCENARIO)) fail('AI_MANUSCRIPT_REGISTRATION_MISMATCH')
   if ((['full', 'c16-c18'].includes(phase)) !== (milestone === 'final')
     || (['shared-input-diagnostic', 'bounded-revision-diagnostic'].includes(phase)) !== (milestone === 'diagnostic')) fail('PHASE_MILESTONE_MISMATCH')
   return { phase, milestone, ...protocol.phases[phase],
-    ...(milestone === 'post-ui' ? protocol.phases[phase].postUiAiReview ?? protocol.phases[phase].postUi ?? {} : {}) }
+    ...(milestone === 'post-ui' ? protocol.phases[phase].postUiAiReview ?? protocol.phases[phase].postUi ?? {} : phase === 'full' ? protocol.phases.full.aiReviewFinal ?? {} : {}) }
 }
 export function forwardReasoningFor(protocol, phase, milestone) {
   const registration = protocol.forwardReasoningExperiment
@@ -748,7 +749,7 @@ export function updateLedger(file, event, options = {}) {
         const suffix = { 'early-budget': 'Budget', 'early-context': 'Context', 'early-review': 'Review' }[binding.phase]
         if (!suffix && !['full', 'c16-c18'].includes(binding.phase)) fail('INVALID_CAMPAIGN_BINDING')
         const primary = ['full', 'c16-c18'].includes(binding.phase)
-          ? protocol.phases[binding.phase].operations.find(operation => operation.id === binding.operation).allocation
+          ? protocol.phases[binding.phase].operations.find(operation => operation.id === binding.operation)?.allocation ?? 'failedRetryRepairReviewReserve'
           : `${binding.milestone === 'early' ? 'early' : 'postUi'}${suffix}`
         const repeatedSlot = occupied.some(row => slot(row.binding) === slot(binding))
         const primaryUsed = occupied.filter(row => row.allocation === primary).length

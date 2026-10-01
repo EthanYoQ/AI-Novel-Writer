@@ -124,9 +124,10 @@ test('the registered watchdog permits a controlled 600000ms completion through t
   vi.spyOn(https, 'get').mockImplementation(deny)
   syncBuiltinESMExports()
   const protocol = JSON.parse(fs.readFileSync(path.join(root, 'docs/research/novel-quality-modernization/protocol.json')))
+  const scenario = productionScenario('c16-c18', 'final')
   const request = { action: 'execute', phase: 'c16-c18', milestone: 'final', caseId: 'C16-A', arm: 'candidate',
-    operations: continuityCaseOperations('C16-A'), attemptPolicy: productionScenario('c16-c18', 'final').attemptPolicy,
-    scenarioRevision: productionScenario('c16-c18', 'final').scenarioRevision, evaluationPolicy: null,
+    operations: continuityCaseOperations('C16-A'), attemptPolicy: scenario.attemptPolicy,
+    scenarioRevision: scenario.scenarioRevision, evaluationPolicy: scenario.evaluationPolicy,
     forwardReasoning: forwardReasoningFor(protocol, 'c16-c18', 'final'),
     forwardQualificationWindow: forwardQualificationWindowFor(protocol, 'c16-c18', 'final') }
   const windows = qualificationBridgeWindows(request)

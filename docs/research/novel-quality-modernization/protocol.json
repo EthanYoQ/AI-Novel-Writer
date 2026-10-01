@@ -1685,6 +1685,136 @@
       ]
     },
     "full": {
+      "aiReviewFinal": {
+        "scenarioRevision": "s14b-full-ai-review-final-manuscript-v1",
+        "minimumCalls": 42,
+        "maximumPlannedCalls": 342,
+        "evaluationPolicy": {
+          "revision": "ai-review-final-manuscript-v1",
+          "caseIds": [
+            "场景1/1",
+            "场景1/2",
+            "场景1/3",
+            "场景2/1",
+            "场景2/2",
+            "场景2/3",
+            "场景3/1",
+            "场景3/2",
+            "场景3/3"
+          ],
+          "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+          "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+          "confirmation": "preauthorized-ai-only-persisted-original-items-with-native-findingIds",
+          "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+          "endpoint": "native-merge-then-ordinary-full-review",
+          "automaticCeiling": "pending-independent-oracle-review",
+          "physicalRequests": {
+            "minimum": 42,
+            "maximum": 342,
+            "sourceMinimum": 24,
+            "sourceMaximum": 198,
+            "manuscriptMinimum": 1,
+            "manuscriptMaximum": 8
+          },
+          "armAsymmetry": {
+            "baseline": "Native keyEvents only; no mustShow, findingId, targeted cycle or durable owner artifact; original 8192 per-request budget retained.",
+            "candidate": "Native keyEvents/mustShow and actual persisted cycle findingIds; own root/model budgets retained.",
+            "claim": "Record native selection, source, parameter and condense differences; no improvement claim from this asymmetry."
+          }
+        },
+        "attemptPolicy": {
+          "milestone": "final",
+          "arms": [
+            "baseline",
+            "candidate"
+          ],
+          "draftRecovery": {
+            "operationIds": [
+              "连续章节正文"
+            ],
+            "arms": [
+              "baseline",
+              "candidate"
+            ],
+            "maxAttempts": 8,
+            "maxContinuationRounds": 7,
+            "maxNoProgressRecoveries": 1,
+            "baselineMinimumRatio": 0.8,
+            "candidateMinimumRatio": 0.7,
+            "minimumProgressUnits": 300,
+            "trigger": "settled-hash-verified-short-stop-or-length",
+            "formalEffect": "last-attempt-only",
+            "armAsymmetry": "baseline 2264390d uses its original 80% continuation minimum and has no upper-bound stop or condense; candidate uses draftTargetUnitRange and may condense the composed draft. Both retain their own eight-attempt root budget."
+          },
+          "structuredRecovery": {
+            "operationId": "三章规划",
+            "arms": [
+              "baseline",
+              "candidate"
+            ],
+            "budget": "planBlueprintGenerationCost",
+            "maxSyntaxRepairs": 1,
+            "maxCompactFallbacksPerChapter": 1,
+            "trigger": "settled-length-or-production-blueprint-decode-failure",
+            "order": "depth-first-half-split",
+            "armAsymmetry": "Both arms use their existing structured executor; candidate now rebuilds value_too_long without mechanical truncation. No baseline product code is changed."
+          },
+          "draftCondense": {
+            "operationIds": [
+              "连续章节正文"
+            ],
+            "arms": [
+              "candidate"
+            ],
+            "primaryPurpose": "chapter-draft",
+            "condensePurpose": "chapter-draft-condense",
+            "maxCondenseAttempts": 1,
+            "trigger": "settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum",
+            "formalEffect": "last-attempt-only"
+          },
+          "armAsymmetry": "candidate（产品自 f00b612b 起）可对超出 draftTargetUnitRange 上限的章节首稿发一次产品原生压缩 chapter-draft-condense，并登记为该章「连续章节正文」的正式效果；baseline 2264390d 没有该产品能力、不登记压缩，首稿超上限即按原字数门失败；两臂是否触发压缩及各章压缩后正文长度的差异来自该不对称，不得据此单独声称相对改善",
+          "reviewRebuild": {
+            "operationId": "成稿首审",
+            "primaryPurpose": "review-chapter",
+            "repairPurpose": "review-chapter-rebuild",
+            "maxRepairAttempts": 1
+          },
+          "finalReviewRebuild": {
+            "operationId": "成稿完整复评",
+            "primaryPurpose": "review-chapter",
+            "repairPurpose": "review-chapter-rebuild",
+            "maxRepairAttempts": 1
+          },
+          "refinementRecovery": {
+            "operationId": "成稿一次修稿",
+            "purpose": "refine-from-review",
+            "maxAttempts": 4,
+            "trigger": "settled-length-same-confirmation-visible-append-with-progress"
+          }
+        },
+        "operations": [
+          {
+            "id": "三章规划",
+            "kind": "directory"
+          },
+          {
+            "id": "连续章节正文",
+            "kind": "draft"
+          },
+          {
+            "id": "成稿首审",
+            "kind": "review"
+          },
+          {
+            "id": "成稿一次修稿",
+            "kind": "refine"
+          },
+          {
+            "id": "成稿完整复评",
+            "kind": "final-review"
+          }
+        ]
+      },
       "caseIds": [
         "场景1/1",
         "场景1/2",
