@@ -25,6 +25,7 @@
 - [`0019-remove-real-call-hard-cap.md`](adr/0019-remove-real-call-hard-cap.md) 取代冻结实验合同的全局 80 次调用硬帽；80 保留为计划分配额，逐请求记账和产品安全限额继续有效。
 - [`0020-legacy-project-copy-import.md`](adr/0020-legacy-project-copy-import.md) 将旧小说兼容改为保留原件的完整项目导入，禁止 AI 重建或覆盖既有设定；取代旧根退役/永久拒写要求。[现行 F05](research/novel-quality-modernization/frontend-transition-specs.md#f05--最终-v3-功能及桌面体验资格) 同时拥有新版编辑交互验收，旧版性能基线不再阻断新版。
 - [现行字数标准](research/novel-quality-modernization/quality-protocol.md#现行字数标准) 自 2026-09-20 起将冻结规格中的 ±20% 取代为 ±30%；旧规格与实验回执保留原字节和历史结论。
+- [AI 自主审稿与成稿资格](research/novel-quality-modernization/quality-protocol.md#ai-review-final-manuscript) 自 2026-10-01 获用户批准：未来写作资格同时验 AI 自主发现和审修后的最终稿，取代部分首稿直接终点与人工补题路线。机器接线和真实资格另行验证，历史结果不改判。
 
 ## Program v3 开发入口
 

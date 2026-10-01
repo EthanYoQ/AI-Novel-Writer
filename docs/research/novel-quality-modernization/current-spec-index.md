@@ -1,6 +1,6 @@
 # Program v3 全部 34 个 Spec 的现行审查入口
 
-整理日期：2026-09-26；章节材料与生成行为于 2026-09-30 补充澄清。范围为本轮重构的 24 个核心 Spec 和 10 个整合 Spec，不包含独立 DSH 插件或其他路线图。本索引整理已接受的要求，不新增产品范围，也不证明实现、验收或发布完成。
+整理日期：2026-09-26；章节材料与生成行为于 2026-09-30 补充澄清，2026-10-01 纳入用户批准的 AI 自主审稿与成稿资格。范围为本轮重构的 24 个核心 Spec 和 10 个整合 Spec，不包含独立 DSH 插件或其他路线图。本索引整理已接受的要求，不新增产品范围，也不证明实现、验收或发布完成。
 
 ## 使用方法与权威顺序
 
@@ -11,6 +11,8 @@
 5. 实际进度以唯一私有当前检查点及其绑定证据为准；[历史证据索引](evidence-index.md)与日期化 handoff 只证明各自范围。审查启动时固定代码 SHA、比较基线、工作区文档 hash 和未提交排除项，不把后续修改默认为已审。
 
 ## 所有审查共同适用的修订
+
+S06C/S10B/S11、S14A/B/C 及 F05 的相关消费者还须应用[AI 自主审稿与成稿资格](quality-protocol.md#ai-review-final-manuscript)：未来续写、post-UI 和 full 同时评审 AI 自主发现与最终成文；首稿不再单独决定资格，人工补题不能证明审修闭环。批准不代表已接线或验证；生效状态见质量协议，实际证据见唯一检查点，不沿用旧诊断成功替代新资格。
 
 S06A、S09B、S10A/S10B 及 S14A/B 还须应用[章节材料与生成行为澄清](delivery-contract-delta-2026-09-21.md#章节材料与生成行为澄清2026-09-30)：明确前驱结尾的必需性、任务间共享证据语义、时间默认、地点提取、新 run 直接首稿与旧对账恢复、计划与禁令边界、蓝图完整重建和有界续写实验接线。该澄清不替代真实验收，不改历史失败。
 
@@ -46,11 +48,11 @@ S06A、S09B、S10A/S10B 及 S14A/B 还须应用[章节材料与生成行为澄�
 | [S09C UI/Agent 稳定引用](../../plans/novel-quality-modernization/specs/S09C.md) | C04/C13/C16。V3 角色、图谱、头像和 Agent 全入口使用稳定 ID；历史边保留与当前活跃投影分开，退役身份不复活。 |
 | [S10A 有来源上下文选择](../../plans/novel-quality-modernization/specs/S10A.md) | C02/C03。纯选择、当前候选准入、原文 hash/UTF-16 span、事实来源；首页/图谱/头像信息不得自动塞入 prompt。 |
 | [S10B 章节共享证据](../../plans/novel-quality-modernization/specs/S10B.md) | C03/C06。写稿/审稿/修稿共享可复算章节证据；现行质量协议解释历史 revision、参考臂例外和 ±30%。长文截断与上下文复述是不同症状，不能用单一测试互相代证。 |
-| [S11 审稿至复核闭环](../../plans/novel-quality-modernization/specs/S11.md) | C05、[现行 S14B 增量](frontend-transition-specs.md#s14b--写作质量与-post-ui)。finding 绑定原文/锚点；显式当章必现的无旧引文目标仅经作者选择进入一次修稿与受限复核。实质改稿与 merge、resolved 分开；无法证明解决则 unknown/unresolved/作者决定，不能伪 PASS。历史参考臂特例只按质量协议的加性裁决解释。 |
+| [S11 审稿至复核闭环](../../plans/novel-quality-modernization/specs/S11.md) | C05、[现行 S14B 增量](frontend-transition-specs.md#s14b--写作质量与-post-ui)及 AI 自主审稿新政策。finding 绑定原文或明确目标；无旧引文的必需目标经真实 AI 指出并由作者选择后修稿，不伪造引文。首审漏检、确认、实质改稿、merge 和 resolved 分别核验；人工补题不能作为自主发现通过证据。未知与未解决不伪 PASS，历史参考臂按原范围解释。 |
 | [S12 导入 effect ledger](../../plans/novel-quality-modernization/specs/S12.md) | C01/C03/C08/C09。取消/重启/重试、输入来源、单完成账本和真实进度；V3 UI 接原 owner，不引入第二导入状态机。与 A11 旧项目副本导入区别核验，不能互相替代。 |
 | [S13 legacy 退场](../../plans/novel-quality-modernization/specs/S13.md) | C09 及现行 S13。独立核心清理先做，UI 清理等 F04/F05 确定性 Final；保留有消费者的 importer/shared/baseline/许可。完整出口不等 post-UI，不以词法零命中为唯一标准。 |
 | [S14A 集成与冻结](../../plans/novel-quality-modernization/specs/S14A.md) | 现行 S14A。关键接线、默认、版本、质量/迁移/发布工具先完成；实际双目标 dry-run 后绑定 subjectSha。完整实验 driver 就绪义务不能被 early-budget 局部冻结覆盖。 |
-| [S14B 写作质量裁决](../../plans/novel-quality-modernization/specs/S14B.md) | 现行 S14B 和质量协议。三场景×三章×双臂，实际前章给同臂后章，固定交错顺序、oracle 与独立盲评；未来新冻结样本分开 candidate 自身资格与三维相对改善声明。post-UI 仅在语义/断言/前驱相符时复用。保留失败，不抽样挑优。 |
+| [S14B 写作质量裁决](../../plans/novel-quality-modernization/specs/S14B.md) | 现行 S14B 和质量协议。三场景×三章×双臂，实际接受的修后稿或自然满足的首稿给同臂后章，固定交错顺序、oracle 与独立盲评；新政策同时审 AI 自主发现和最终稿，自身资格与三维相对改善声明分开。post-UI 仅在语义/操作/断言/前驱及审稿评审相符时复用。保留失败，不抽样挑优。 |
 | [S14C 旧项目与恢复](../../plans/novel-quality-modernization/specs/S14C.md) | ADR 0020、C17/C18、现行 S14C。两旧版资料保全、新旧副本独立、目标恢复、配置/安装与平台证据；局部导入 PASS 不等于安装升级或完整平台资格。 |
 | [S14D 三目标桌面资格](../../plans/novel-quality-modernization/specs/S14D.md) | 现行 S14D 与 release profile。Windows x64/macOS ARM64/macOS x64 的实际包、安装启动/native/平台语义，汇合有效 S14B/C。只出资格，不能代 R01 发布。 |
 
@@ -75,4 +77,4 @@ S06A、S09B、S10A/S10B 及 S14A/B 还须应用[章节材料与生成行为澄�
 - **Spec** 按上述 34 项原合同加现行替代逐项审实现完整性、错误行为和越界；“历史已审”不是本次完整覆盖证明，但无新变更或反例也不重开已关闭 finding。
 - 两轴使用同一固定代码范围，分别记录实际覆盖及未审项。测试、脚本、配置和直接合同消费者不能因默认过滤而消失；无关插件不混入本轮。
 - 实现审查、确定性测试、真实模型文学质量、安装包资格、提交及发布是不同层次。缺模型/平台证据记待验或阻断，不伪装成代码缺陷；代码无 finding 也不等于产品可发布。
-- S00 的完整阶段驱动、S14B 的正式质量、C16 既有提取与 C17/C18 恢复后继续创作证据、S14C/D 的平台资格及 R01/G02 交付须核对启动时的真实状态。full 的规划/正文不代替 C16/C17 的独立操作。不要从“已整理全部 Spec”推导“全部 Spec 已完成”。
+- S00 的完整阶段驱动、S14B 的正式质量与自主审稿、C16 既有提取与 C17/C18 恢复后继续创作证据、S14C/D 的平台资格及 R01/G02 交付须核对启动时的真实状态。full 的规划/正文/审修不代替 C16/C17 的独立操作。不要从“已整理全部 Spec”推导“全部 Spec 已完成”。

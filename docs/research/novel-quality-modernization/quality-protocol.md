@@ -1,6 +1,53 @@
 # 中文质量预注册：Program v3 S00
 
-现行 decision revision 为 `s14b-candidate-quality-and-comparison-v2`；`s14b-split-quality-gates-v1`、`s14b-reviewed-draft-v1` 及其结论保留为历史。candidate 字数标准仍采用 `draft-units-tolerance-30-v1`（2026-09-20 用户决定）；未来 post-UI 测试的评估策略 revision 为 `s14b-post-ui-reviewed-draft-must-show-unknown-v3`（用户批准采纳必现目标 unknown）；`s14b-post-ui-reviewed-draft-unknown-oracle-v2`（2026-09-27 用户批准 unknown 单独终点）保留为历史。保留 `pacing-readability-v1` 节奏规则。完整机器协议及其他 revision 见 [`protocol.json`](protocol.json)；新协议完整字节 hash 须重新冻结，旧目标拒绝漂移。本文件负责解释执行规则与冻结合同的显式取代关系。S10B/S11 的历史场景、失败和加性裁决保留各自版本；[日期化交接](../../handoffs/2026-09-20-program-v3-s11-pause-handoff.md)只证明当时状态，当前进度读唯一私有当前检查点。全部 Spec 的适用关系见[现行索引](current-spec-index.md)。合成验证、真实模型结果与文学质量结论分开记录。
+**2026-10-01 用户批准的现行目标**：[AI 自主审稿与成稿资格](#ai-review-final-manuscript)。它替代未来资格中的首稿直接终点和人工补题路线；下列既有机器 revision 是已实现登记，不代表新政策已接线或通过。执行线程须先同步 protocol/driver/fixture 并重新冻结受影响目标；文档更新不改变正在运行的旧实验。
+
+已实现的机器 decision revision 为 `s14b-candidate-quality-and-comparison-v2`；`s14b-split-quality-gates-v1`、`s14b-reviewed-draft-v1` 及其结论保留为历史。candidate 字数标准仍采用 `draft-units-tolerance-30-v1`（2026-09-20 用户决定）；既有 post-UI 评估策略 revision 为 `s14b-post-ui-reviewed-draft-must-show-unknown-v3`（采纳必现目标 unknown）；`s14b-post-ui-reviewed-draft-unknown-oracle-v2`（2026-09-27 用户批准 unknown 单独终点）保留为历史。保留 `pacing-readability-v1` 节奏规则。完整机器协议及其他 revision 见 [`protocol.json`](protocol.json)；新协议完整字节 hash 须重新冻结，旧目标拒绝漂移。本文件负责解释执行规则与冻结合同的显式取代关系。S10B/S11 的历史场景、失败和加性裁决保留各自版本；[日期化交接](../../handoffs/2026-09-20-program-v3-s11-pause-handoff.md)只证明当时状态，当前进度读唯一私有当前检查点。全部 Spec 的适用关系见[现行索引](current-spec-index.md)。合成验证、真实模型结果与文学质量结论分开记录。
+
+<a id="ai-review-final-manuscript"></a>
+
+## AI 自主审稿与成稿资格（2026-10-01）
+
+**决定与边界**：首稿允许有待修问题；交付须同时证明软件/AI 能自行指出关键问题，以及经作者批准的修稿能达到原成文标准。作者负责采纳和合并，不承担替审稿系统找错的验收职责。此决定不承诺所有首稿必过，也不默认自动修改作品。产品保留作者自由补充意见的能力，但人工补题所得结果只证明辅助修稿，不能作为本政策的审修闭环通过证据。
+
+**生效状态**：用户已批准，机器接线与真实资格待完成。当前 `protocol.json` 尚未以本政策登记各受影响阶段。后续实施先登记选择规则、操作、来源、预算和停止条件，再冻结执行；不得只改 Markdown 就使用旧机器协议宣称新资格。以下旧 revision、固定稿诊断和历史结论按原范围保留。
+
+### 范围及替代关系
+
+| 消费者 | 新资格要求 |
+| --- | --- |
+| C16–C18 完整七案 | C16 三案保留原提取、作者值保护及来源义务；四个 C17/C18 续写案例改为首稿、AI 首审、条件修稿/复审、最终稿联合评估。完整七案来自同一新冻结实验，不拼接历史六案与新单案。 |
+| S14B 待完成 post-UI | budget/context 的生成稿采用本链；review 的既有缺陷稿审修链直接检验自主发现和修复，不重复增加同义操作。各 selector 保留自身原材料、触发和断言；不重开已完成历史 early 实验。 |
+| S14B full | 保留三场景、每场景三章、双臂十八章及原顺序；每章经本链确定最终正文后，才供同臂下一章读取。不得评审修后稿、实际续写却使用旧首稿。 |
+| S06C、S10B、S11 与 F05 审修入口 | 复用生产审稿、确认、修稿、合并、普通复审；只修实际缺口，不另建事实库、planner、评分平台或全自动无限循环。 |
+
+新规则取代下文 post-UI v3 的仅 mustShow unknown 可采纳范围，以及 full/C17–C18 只评生成稿的终点；保留其他材料、语义、样本、参数、恢复、计费和来源约束。先前“人工补充遗漏后成稿”的条件设计不再作为未来资格依据。含预置作者问题的固定稿诊断仍是非资格实验，即使修后通过，也不能放行新的自主审修资格。
+
+### 生产路径与批准范围
+
+1. 保存实际首稿。首审使用正常生产入口及原作者要求、蓝图、所选前驱、正文和合法上下文；不向模型注入 oracle、独立评审答案、历史失败标签、为本次稿件预填的纠错项或人工正确答案。原有作者材料必须可得，不把禁止补题误解为删减正常上下文。
+2. 完整保存首次 AI 审稿报告。测试在调用前预授权采纳该报告中的 error/warning，以及绑定明确当章必需目标、具体指出缺失或证据不足的 unknown，按原报告顺序处理；后者可来自蓝图 keyEvents 或显式 mustShow，不再仅限 mustShow。普通笼统 unknown 与覆盖不全不自动进入修稿；纯风格偏好不另立必修目标，unknown 保留原状态，不改称已确认错误。选择沿用报告的结构化字段与来源，不新增模型筛选调用；实际语义是否足以行动由独立评审核验，不能靠人工改写报告补足。
+3. 确认快照只采用真实 AI 项及其来源。测试操作者不能新增 author/apply 项、改写成已知答案、借 reviewFocus 定向提示已知错误，或在发送后补题。软件的确定性投影若来自 AI 对相应目标的真实结论可以沿用；机械缺项补出的 unknown 不能冒称 AI 已发现语义问题。正常用户仍可拒绝建议或自行编辑，这不构成本资格的自动发现证据。
+4. 无可采纳项时，保留原稿和完整报告，不制造修稿。存在可采纳项时，经真实确认执行一次定点修稿、差异合并及一次普通全文复审；修稿以保全无关内容为原则，完整输出仍走已有保存和合并路径。测试预授权合并须事先明确，不能冒称作者现场确认；不择优回退首稿，不直接把 merge 或模型 pass 当作 resolved。
+5. 原稿、报告、确认、修订、合并、复审和最终数据库正文沿用现有来源记录。审稿看到的稿件必须与其报告绑定，后章读到的前驱必须是本臂实际接受的最终稿。缺失目标类 finding 的消费者适配须最小修复，不伪造引文、findingId 或状态绕过产品规则。
+
+### 同时评审发现能力和最终成文
+
+两名未参与实现的独立评审沿用原评审流程：先依据原作者材料和首稿列出有原文依据的合同缺陷，再核对原始 AI 报告、实际修订和最终稿。独立评审结果只用于判定，不回灌同一轮模型纠错。现有报告增加以下分项即可，不新增评分服务或专用测试平台。
+
+- **首稿表现**：记录未经语义修稿的通过/失败/分歧及原因，作为能力指标；首稿失败不再单独否决可合格的审修闭环。提取案例和技术请求成功数不得混入写作首稿通过率。
+- **自主发现**：原事实、时间、必需事件、来源及原可读底线中的具体阻断缺陷，须在首次有效 AI 报告中得到足以采取行动的定位或目标说明；只说“再检查一下”或机械覆盖 unknown 不算发现。遗漏事件不要求伪造不存在的正文引文，但须明确是哪项原目标、缺什么。具体漏检即本分项 FAIL，即使后续偶然改对也不补算；严重误报或要求违反作者事实同样失败。一般风格偏好不升级为阻断。首稿无缺陷时记录该案未触发检出，不据此宣称检出率 100%。
+- **修复与最终稿**：适用的事实/时间、全部必需事件、±30%、来源、复述、自然度、动机和节奏标准保持；修稿还遵守既有内容保全与相对篇幅合同。核对原问题解决且无新增阻断。复审漏掉仍存在或新引入的阻断问题，不能以模型 pass 代替通过。
+- **资格与成本**：candidate 自主发现和最终成文两项均须通过，技术/来源证据完整；证据不足为 INCONCLUSIVE，分歧沿用最多一次独立仲裁。保留首稿、修后结果、未触发项、模型漏检/误报及实际请求成本，不用单一平均分冲销具体失败。自动 runner 仍最高 pending，不能自行作文学裁决。
+
+固定失败稿的未获提示的原始首审若已有完整来源，可只读核查其发现能力，避免重跑同样的审稿；其人工补题修稿不能混成 AI-only 成功，也不能替代未来完整新实验。当前无缺陷的新稿不需要人为造错；已知失败稿及既有 review 案例承担真实检出验证，synthetic 只证明接线。
+
+### 调用、参考臂与执行顺序
+
+- 每篇最多一次语义修稿。无修稿通常新增一次首审；触发修稿通常新增首审、修稿、复审三次请求。结构化语法修复只沿用该入口明确登记的许可；文学失败不触发格式修复、续写或第二次语义修稿。实际最大调用、token/时间预算由执行线程依据生产操作计算并在运行前登记；旧最短请求数不再代表新链，80 仍只是计划分配额。
+- baseline 保持原代码，通过其真实已有入口执行预登记审修；不伪造 candidate 的目标投影或复核能力。不可用的对应能力及参数/选择不对称单列披露。技术和前驱证据仍须完整，baseline 自主发现/文学失败不自动否决合格 candidate，也不据不对称单独宣称改善。
+- 先检查当前真实首审的自主发现证据，必要时只修已证明的生产缺口；然后完成新政策接线、针对性零模型验证和一次独立切片审查，取得完整七案新资格，再按既有顺序执行 post-UI/full。审修接线可提前独立完成；不因文档变化重跑无关产品、UI、平台或已关闭审查。
+- 一次修稿失败如实保留并诊断，不盲重试、不改样本或标准；这不是允许跳过缺陷，也不是用户日后编辑次数上限。历史 FAIL、旧请求和原始报告不改判；仅同步受到新政策影响的活跃规格/计划和机器消费者，不修改冻结 Spec、DAG、manifest 或旧证据。平台、发布和 Issue 结案仍按各自合同。
 
 ## S14B 未来样本的门禁拆分
 
@@ -21,6 +68,8 @@
 与 baseline 的自然度、人物动机、节奏比较另逐章逐维披露：两名盲评引用两臂原文并说明可比性；可比时记优/平/劣，不可比的该维记 INCONCLUSIVE，不得当作平或改善。相对劣或不可比不改变已成立的 candidate 自身资格；改善声明只能引用可比且有两名评审一致证据的章节与维度。至少两个场景各一章一个维度一致优、其余章节逐维可比且无劣，才可称整体样本改善；存在较弱或不可比维度，只能在证据覆盖的范围内称改善并完整披露，不能称整体 non-inferior 或全面优于参考。自动 runner 最高只报 pending-independent-oracle-review，文学裁决由独立评审作出，不从模型审稿结果推算。此拆分只适用于新冻结目标；历史 FAIL/INCONCLUSIVE、原评分、旧账本与原目标不追溯改判。
 
 ## 测试专用成稿评估（第一切片）
+
+本节保存已实现的 post-UI v3 及更早政策。未来新资格的采纳范围、自主发现评审和覆盖阶段由[2026-10-01 决定](#ai-review-final-manuscript)取代；旧实验仍按原登记解释。
 
 产品已支持作者显式的 `【第N章必现】` 目标及作者选择后的一次修稿；这不自动改变测试预授权，必须另有测试政策决定。用户已批准以下决定，现行 post-UI 评估策略为 `s14b-post-ui-reviewed-draft-must-show-unknown-v3`，场景 revision 现为 `s14b-post-ui-reviewed-budget-review-rebuild-must-show-v3`（v2 保留为历史；v3 相对 v2 只增加候选臂的唯一原生压缩登记，见下文 S07 段），只适用于未来一轮 S14B post-UI 固定实验场景1/1；early、full、C16–C18 的选择与场景不变。新场景 revision 只增加上述输入标记，继承原 `s14b-post-ui-reviewed-budget-review-rebuild-v1` 的全部登记，包括 `指定范围生成` 的一次结构化语法修复和 `成稿首审` 的一次 `review-chapter-rebuild`（见下文 S07 段），并非不带 rebuild 的新场景。
 
@@ -197,6 +246,8 @@ baseline `2264390d` 保持原源码及实际行为：正文下限 80%，候选 7
 
 ## Full 连续生产执行
 
+以下是已实现的 full v2。未来新资格须按[AI 自主审稿与成稿资格](#ai-review-final-manuscript)增加逐章审修及最终前驱接线；原十八章、六项目、顺序与来源义务保留，下文“没有审修链”及请求数量仅描述旧 revision。
+
 `full` 固定为 `final` milestone，执行登记 `s14b-full-continuous-project-v2`（v1 保留为历史；v2 相对 v1 只增加下文单列披露的候选臂唯一原生压缩登记）。每场景每臂只 prepare 一个独立物理项目，三章持续重开其原 SQLite 数据库。先完成六次 `三章规划`：场景1 baseline/candidate、场景2 candidate/baseline、场景3 baseline/candidate；每次通过 `GenerateDirectoryCommand` 生成并保存第1至3章蓝图。随后按 protocol.order 的原 seed、caseIds 与九组 armsByChapter 顺序完成十八次 `连续章节正文`。规划分配 `finalPlanning=6`，正文分配 `finalChapters=18`，full 最小物理请求数合计24；重复 slot 仍归失败/重试余量，不重置历史占用。
 
 后章 `GenerateDraftCommand` 读取本臂已保存蓝图；前驱由本臂实际生成并保存的上一章收据指定项目、章节、draftId、version、正文 hash 和字节数，再经生产 `db:draft-get-full` 核验原文。正文通过既有 selectedCandidateDrafts 路径送入提示词，发送前检查真实前章结尾与 candidate 来源绑定。full 不使用 early-context 的作者预置前情或可选旧档，也不使用 early-review 的预置缺陷稿。两臂起始作者资料、模型、模板和 Skill 绑定必须相同；各臂生成后的蓝图和正文允许不同，初始 parity 与逐章前驱证据分别记录。
@@ -221,6 +272,8 @@ node scripts/quality-modernization-run.mjs full --targets <新HEAD冻结双目�
 合成路径只验证24次边界（默认开发合成含候选场景1/2 的1次压缩，共25次 dispatch）、18章落盘及接续，`qualityQualification=not-run`；正式执行仍须满足 S14B 前置，自动结果最高为 `pending-independent-oracle-review`。C16 既有提取6次及 C17/C18 恢复继续4次仍是单独义务，full 不替代其执行、记账或验收。
 
 ## C16、C17、C18与编辑门
+
+以下保留已实现的七案路径；未来完整七案按[AI 自主审稿与成稿资格](#ai-review-final-manuscript)替代四篇续写的评估终点，C16 提取与各恢复路径的技术、来源义务不变。
 
 `c16-c18` 是 `final` 下独立的 candidate-only 阶段，复用四个生产操作：定稿章节要点、角色状态、本地归档恢复后续写、WebDAV 选定世代恢复后续写。`continuityQualificationCases` 登记七个案例：C16-A 有效来源更新 derived、C16-B author 冲突、C16-C 同章重新定稿替换旧源，各执行 notes/cards 两次，归入原 `C16ExistingExtraction` 的6次；C17-A 恢复有效 source、C17-B 恢复后正常重新定稿使旧 derived 失效、C18-A 选定世代、C18-B 两完整分支明确选一，各执行一次 `GenerateDraftCommand`，归入原 `C17C18RestoreContinue` 的4次。准备、重试及角色状态原生 repair 如产生请求，均逐实际 attempt 记账；repair 仅接受同 run/root 的持久前序失败 artifact。早门和 full 的双臂设计不变，本阶段不触发 full 的6次规划/18章判定。离线合成通过只证明接线，正式质量资格仍需冻结输入、真实执行及独立 oracle 审核。
 
@@ -326,6 +379,8 @@ N 只计算桥的外层兜底，不增加任何 dispatch 权限：C16-A/B/C 的 
 `historicalC16625bfda8Boundary` 从1194行接续至1212行，完整前缀 sha256 `e6fbc58d717e6acf9cb24cab41c14487cda670db73ab158c7c9a654629b5daa5`，精确认证六次 candidate 的 reserve→dispatch→终态（五次 settle、末次 unknown）及原 code/source/driver/parity 绑定。账本读写两入口都继承该段；旧1194及之前的原始字节前缀继续认证。新目标须绑定新的完整协议与桥 hash。任何技术或文学失败均停止依赖资格；本时间合同本身不证明模型能力、参数或代码改善、原失败根因及服务端实际采纳。
 
 ## C17-A 固定保存稿有界修稿诊断（非资格）
+
+此诊断含预置作者纠错项，只验证给定问题后的修稿；不证明 AI 自主发现，也不能放行[新资格](#ai-review-final-manuscript)。已开始的实验保留原登记及证据，不中途改成 AI-only 实验。
 
 `bounded-revision-diagnostic` 仅运行 candidate / diagnostic / C17-A。唯一来源为 invocation `a763f510-eac5-4368-967e-0abb630ff597`、testedSha `889b5e23e57daa763c4e549e892afaa69d1da73c` 的第2章 draft4 / v1 / draft：完整正文3889字节、1053单位、SHA256 `c8b29e929e34b57e7af41aae94cbc0f4c027eab21c0cfd4daf08a2501b21da66`。源 packet manifest、主DB及对应 sidecars、project.json 和三个 portable 资产的完整身份登记在 phase 中。运行时以私有 `--diagnostic-input` 清单提供 `packetManifestPath`、`stdoutPath`、`sourceProjectRoot`，该清单须位于当前工作树 `.runtime/.cache`；路径不写进公共协议。
 
