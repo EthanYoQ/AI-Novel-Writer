@@ -7,14 +7,15 @@ import { getDesktopMigrationRegistry, CURRENT_DESKTOP_SCHEMA_VERSION } from '../
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { migrateSchema } from '../../migrations/runner'
 import { createMainGenerationOwner } from '../main-generation-owner'
-import { batchRootBudget, MAIN_GENERATION_POLICY } from '../main-generation-plan'
+import { batchRootBudget, buildMainGenerationPlan, MAIN_GENERATION_POLICY } from '../main-generation-plan'
 import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
 import { getBuiltinPromptTemplate } from '../../../src/services/builtin-prompt-templates'
 import { readBuiltinWritingSkill } from '../../../src/shared/builtin-writing-skills'
 import type { BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
 import { generationOutputContract, MAX_BATCH_CHAPTERS } from '../../../src/shared/generation-owner-contract'
-import { textHash } from '../../repositories/generation-run-repository'
+import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
+import type { GenerationTask } from '../../../src/services/generation/generation-harness'
 import { composeVisibleContinuation } from '../../../src/shared/visible-continuation'
 import { sanitizeDraftText } from '../../../src/shared/draft-visible-text'
 import { DRAFT_RECONCILE_PURPOSE, parseDraftReconciliation, renderDraftReconciliationBlock } from '../../../src/shared/draft-reconciliation'
@@ -497,6 +498,77 @@ it('freezes a purpose-specific output exception and rejects all undeclared chang
 })
 
 describe('main generation owner with actual SQLite and provider adapter', () => {
+  it.each(['chapter-blueprint-directory', 'chapter-blueprint-directory:compact-single:chapter-1'])(
+    'sends the planned native wire for %s and recovers its full LENGTH candidate without committing or redispatching', async purpose => {
+      const fetch = syntheticStream(), f = fixture()
+      const authorInputs = [
+        { id: 'directory:pacing-guidance', text: '  前缓后急\r\n' },
+        { id: 'directory:author-config', text: '{"totalChapters":1,"wordsPerChapter":4000}' },
+        { id: 'directory:requested-range', text: '{"mode":"full","startChapter":1,"endChapter":1}' },
+      ]
+      const view = f.owner.begin({ operation: 'chapter-blueprint-directory', uiActionNonce: 'directory', modelId: f.model.id,
+        selectedBlueprintChapterNumbers: [1], selectedDraftIds: [], selectedFinalizedDraftIds: [],
+        promptKeys: ['chapter_blueprint_chunk'], skillStages: ['planning'], authorInputs, output: 'structured-data' })
+      const prompt = '为第1章生成完整蓝图，保留作者事实；必须且只能返回 chapterNumber=1 的一项。'
+      const directoryTask: GenerationTask = { purpose, output: 'structured-data', messages: [
+        { role: 'system', content: '你是一位经验丰富的章节架构师。' }, { role: 'user', content: prompt },
+      ], ...(purpose.includes(':compact-single:') ? { promptBudget: { limitUtf8Bytes: 32 * 1024,
+        sections: [{ sectionName: 'target-chapter', messageIndex: 1, finalText: 'chapterNumber=1' }] } } : {}) }
+      const repository = new GenerationRunRepository(() => f.db), frozen = repository.get(view.handle.runId)
+      const budget = repository.budget(view.handle.rootActionId)
+      const plan = buildMainGenerationPlan(f.model,
+        frozen.binding.sourceManifest.modelReceipt as Parameters<typeof buildMainGenerationPlan>[1], directoryTask, budget)
+      expect(plan.requestedOutputTokens).toBe(2048)
+      expect(plan.reservedTokens).toBeLessThanOrEqual(budget.policy.maxTokenLiability - view.ledger!.tokenLiability)
+      const candidate = ' \r\n{"blueprints":[{"chapterNumber":1,"title":"完整原始候选","keyEvents":"作者事实保留"}]}\n  '
+      const formalBefore = BlueprintRepository.getAll(), databasePath = f.db.name
+      fetch.mockImplementationOnce(async (_url, options) => {
+        const body = JSON.parse(options.body as string)
+        expect(body.messages).toEqual(directoryTask.messages)
+        expect(body.max_completion_tokens).toBe(plan.requestedOutputTokens)
+        expect(body.max_tokens).toBeUndefined()
+        expect(repository.budget(view.handle.rootActionId).attempts[0]).toMatchObject({ status: 'dispatch-marked',
+          requestedOutputTokens: body.max_completion_tokens, reservedTokens: plan.reservedTokens })
+        return { ok: true, body: new ReadableStream({ start(controller) {
+          const chunk = { choices: [{ delta: { content: candidate }, finish_reason: 'length' }] }
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(chunk)}\n\ndata: {"choices":[],"usage":{"prompt_tokens":50,"completion_tokens":12,"total_tokens":62}}\n\ndata: [DONE]\n\n`))
+          controller.close()
+        } }) }
+      })
+      const result = await f.owner.execute({ handle: view.handle, invocationNonce: 'directory-length', task: directoryTask })
+      expect(result.outcome).toMatchObject({ status: 'incomplete', finishReason: 'length', content: candidate, receipt: { purpose } })
+      const reference = result.outcome.receipt.visibleArtifact!, durable = repository.receipt(reference.attemptId)
+      expect(durable.run.runId).toBe(view.handle.runId)
+      expect(durable.artifact).toMatchObject({ artifactId: reference.artifactId, attemptId: reference.attemptId,
+        rootActionId: view.handle.rootActionId, text: candidate, textHash: textHash(candidate), fingerprint: frozen.binding.fingerprint })
+      expect(result.run.artifacts[0]).toMatchObject({ artifactId: reference.artifactId, status: 'failed', text: candidate,
+        revision: reference.revision, durableRevision: reference.revision })
+      expect(result.run.budgetDiagnostics![0]).toMatchObject({ requestedOutputTokens: plan.requestedOutputTokens,
+        reservedTokens: plan.reservedTokens, actualState: 'settled', finishReason: 'length', actual: { input: 50, completion: 12, total: 62 } })
+      expect(result.run.ledger).toMatchObject({ physicalRequests: 1, tokenLiability: 62, policy: budget.policy })
+      expect(f.owner.readVisibleComposition(view.handle)).toBeNull()
+      expect(BlueprintRepository.getAll()).toEqual(formalBefore)
+      expect(f.db.prepare('SELECT COUNT(*) FROM blueprint_commit_operations').pluck().get()).toBe(0)
+      const reopened = f.reopen(), restored = reopened.read(view.handle)
+      expect(f.db.name).toBe(databasePath)
+      expect(restored.artifacts).toEqual(result.run.artifacts)
+      expect(restored.budgetDiagnostics).toEqual(result.run.budgetDiagnostics)
+      expect(reopened.readContext(view.handle)).toMatchObject({ attemptedPurposes: [purpose], authorInputs })
+      const reopenedRepository = new GenerationRunRepository(() => f.db)
+      expect(reopenedRepository.receipt(reference.attemptId).artifact).toEqual(durable.artifact)
+      expect(reopenedRepository.get(view.handle.runId).binding.sourceRefs).toEqual(frozen.binding.sourceRefs)
+      const resumed = await reopened.resume(view.handle)
+      expect(resumed.handle).toMatchObject({ epoch: 'epoch-2', rootActionId: view.handle.rootActionId })
+      expect(resumed.candidates).toEqual(result.run.candidates)
+      expect(resumed.ledger).toMatchObject({ physicalRequests: 1, tokenLiability: result.run.ledger!.tokenLiability,
+        policy: result.run.ledger!.policy })
+      expect(reopened.readVisibleComposition(resumed.handle)).toBeNull()
+      expect(reopened.listDirectoryProgress()).toEqual([])
+      expect(BlueprintRepository.getAll()).toEqual(formalBefore)
+      expect(f.db.prepare('SELECT COUNT(*) FROM blueprint_commit_operations').pluck().get()).toBe(0)
+      expect(fetch).toHaveBeenCalledTimes(1)
+    },
+  )
   it('marks before sending, preserves exact visible text and replays one durable nonce without network', async () => {
     const reasoning: string[] = [], fetch = syntheticStream(), f = fixture(undefined, false, event => reasoning.push(event.text)), view = f.owner.begin(f.begin)
     fetch.mockImplementationOnce(async (...args) => {
