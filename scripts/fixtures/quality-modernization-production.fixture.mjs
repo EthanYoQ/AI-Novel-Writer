@@ -257,7 +257,12 @@ test('isolated production commands persist the selected phase operations', async
     assert.ok(authorityText.includes(fact), `ORACLE_FACT_NOT_IN_AUTHOR_AUTHORITY:${fact}`)
   const contextSelection = request.phase === 'early-context' ? scene.contextSelection : null
   if (request.phase === 'early-context') {
-    assert.equal(contextSelection?.scenarioRevision, request.scenarioRevision, 'CONTEXT_SCENARIO_REVISION_MISMATCH')
+    assert.ok(['early', 'post-ui'].includes(request.milestone), 'CONTEXT_SCENARIO_REVISION_MISMATCH')
+    const executionScenario = productionScenario(request.phase, request.milestone)
+    assert.equal(contextSelection?.scenarioRevision, productionScenario(request.phase, 'early').scenarioRevision, 'CONTEXT_SCENARIO_REVISION_MISMATCH')
+    assert.equal(request.scenarioRevision, executionScenario.scenarioRevision, 'CONTEXT_SCENARIO_REVISION_MISMATCH')
+    assert.deepEqual(request.evaluationPolicy ?? null, executionScenario.evaluationPolicy ?? null, 'CONTEXT_EVALUATION_POLICY_MISMATCH')
+    assert.deepEqual(request.selectionDifference, executionScenario.selectionDifference, 'CONTEXT_SELECTION_DIFFERENCE_MISMATCH')
     assert.ok(Array.isArray(contextSelection.optionalPredecessors) && contextSelection.optionalPredecessors.length > 0,
       'OPTIONAL_PREDECESSORS_NOT_REGISTERED')
   }
@@ -605,6 +610,11 @@ test('isolated production commands persist the selected phase operations', async
     const predecessorReadbacks = []
     for (const record of predecessorRecords) {
       const full = await invoke('db:draft-get-full', record.draftId, project.rootPath, session)
+      if (request.phase === 'early-context' && request.milestone === 'post-ui') {
+        assert.equal(full?.id, record.draftId, 'PREDECESSOR_ID_CHANGED')
+        assert.equal(record.sourceId, `candidate:${full.id}`, 'PREDECESSOR_SOURCE_ID_CHANGED')
+        assert.equal(full.status, 'draft', 'PREDECESSOR_STATUS_CHANGED')
+      }
       assert.equal(sha(full?.content ?? ''), record.contentHash, 'PREDECESSOR_SOURCE_CHANGED')
       assert.equal(full?.version, record.version, 'PREDECESSOR_VERSION_CHANGED')
       assert.equal(full?.chapterNumber, record.chapterNumber, 'PREDECESSOR_CHAPTER_CHANGED')
@@ -1021,7 +1031,7 @@ test('isolated production commands persist the selected phase operations', async
         preflight(materialDecision?.included.some(item => item.sourceId === predecessor.sourceId
           && item.revision === predecessor.version), 'FULL_PREDECESSOR_MATERIAL_BINDING_MISMATCH')
       }
-      if (candidate && request.phase === 'early-context') {
+      if (candidate && request.phase === 'early-context' && operationKind === 'draft') {
         preflight(userMessages.length === 1, 'CANDIDATE_USER_MESSAGE_NOT_UNIQUE')
         preflight(userPromptHash === materialDecision.promptHash, 'MATERIAL_DECISION_PROMPT_HASH_MISMATCH')
         const requiredPredecessor = predecessorReadbacks.find(record => record.required)
@@ -1382,8 +1392,12 @@ test('isolated production commands persist the selected phase operations', async
           }
           command = new (await load('src/services/workflows/commands/review-chapter.command.ts')).ReviewChapterCommand({
             draftPath, draftContent: sourceDraft.content, sourceDraft: frozenSource, chapterNumber: chapter.number,
-            reviewFocus: aiReviewRun ? acceptedPrevious
-              ? `本臂前章已接受参考稿（未定稿；只核对与原文的连续性，不新增作者事实）。\n来源：${JSON.stringify(request.predecessor)}\n${acceptedPrevious.content}` : ''
+            reviewFocus: aiReviewRun ? [
+              fullRun || request.phase === 'early-budget' && request.milestone === 'post-ui' ? chapterGuidance : '',
+              acceptedPrevious ? `本臂前章已接受参考稿（未定稿；只核对与原文的连续性，不新增作者事实）。\n来源：${JSON.stringify(request.predecessor)}\n${acceptedPrevious.content}` : '',
+              request.phase === 'early-context' && request.milestone === 'post-ui'
+                ? predecessorReadbacks.filter(record => record.required).map(record => `本臂当前选用的前章候选（未定稿；只核对与原文的连续性，不新增作者事实）。\n${record.content}`).join('\n') : '',
+            ].filter(Boolean).join('\n')
               : reviewedRun || boundedRun ? `核对本章全部必需事件、作者事实、字数、复述、自然度、人物动机和节奏可读性。只依据作者资料、蓝图及待审正文给出问题与原文证据；不得新增作者事实。\n${chapterGuidance}` : '只核对本章必需事件、作者事实与明确证据，不检查字数。对于“承担代价”，只有人物已经执行选择、具体损失或牺牲已经发生、后文没有反证，才算完成；签字认责或承诺以后负责不算代价。',
           })
         } else if (operationKind === 'refine') {

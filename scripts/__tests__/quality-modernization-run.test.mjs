@@ -266,9 +266,9 @@ test('post-UI baseline uses its native review projection, persisted AI-only conf
     noAction.aiReviewedDraft.composition = result.aiReviewedDraft.composition
     assert.equal(validateAiReviewedManuscript(noAction), 'AI_REVIEW_NO_ACTION_MISMATCH')
     // The full adapter passes the accepted complete predecessor through the frozen command's existing reviewFocus.
-    const fixture = fixtureSource(), focusStart = fixture.indexOf('reviewFocus: aiReviewRun ? acceptedPrevious')
+    const fixture = fixtureSource(), focusStart = fixture.indexOf('reviewFocus: aiReviewRun ?')
     const focusEnd = fixture.indexOf('\n          })', focusStart)
-    const focus = new Function('acceptedPrevious', 'request', `const aiReviewRun = true; return ({ ${fixture.slice(focusStart, focusEnd)} }).reviewFocus`)
+    const focus = new Function('acceptedPrevious', 'request', `const aiReviewRun = true, fullRun = true, chapterGuidance = "本章时点：测试作者时点"; return ({ ${fixture.slice(focusStart, focusEnd)} }).reviewFocus`)
     const previous = { ...currentDraft }, expected = { projectId: session.projectId, arm: 'baseline', chapterNumber: 1,
       draftId: 1, version: 1, status: 'revised', contentHash: hash(previous.content), persistedBytes: Buffer.byteLength(previous.content) }
     currentDraft = { id: 2, chapterNumber: 2, version: 1, status: 'draft', content: '次日上午，林岚回到柜台。'.repeat(70) }
@@ -277,6 +277,7 @@ test('post-UI baseline uses its native review projection, persisted AI-only conf
     await new ReviewChapterCommand({ draftPath: 'vela://draft/ch2/v1', draftContent: currentDraft.content, sourceDraft: currentDraft,
       chapterNumber: 2, reviewFocus: focus(previous, { predecessor: expected }) }, dependencies).execute(params())
     assert.ok(requests.at(-1).messages.some(item => item.content.includes(previous.content)))
+    assert.ok(requests.at(-1).messages.some(item => item.content.includes("本章时点：测试作者时点")))
     assert.ok(requests.at(-1).messages.some(item => item.content.includes(JSON.stringify(expected))))
     assert.equal(requests.at(-1).plan.maxOutputTokens, 8192)
     assert.equal(savedReview.sourceDraft.chapterNumber, 2)
@@ -438,8 +439,8 @@ test('AI final manuscript native main owner persists keyEvents unknown confirmat
     db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(2,2,1,'draft',20,?)").run(countDraftUnits(nextContent))
     const expected = { arm: 'candidate', projectId: 'project', chapterNumber: 1, draftId: 1, version: 1,
       status: 'revised', contentHash: hash(revisedProse), persistedBytes: Buffer.byteLength(revisedProse) }
-    const focusStart = fixture.indexOf('reviewFocus: aiReviewRun ? acceptedPrevious'), focusEnd = fixture.indexOf('\n          })', focusStart)
-    const focus = new Function('acceptedPrevious', 'request', `const aiReviewRun = true; return ({ ${fixture.slice(focusStart, focusEnd)} }).reviewFocus`)(
+    const focusStart = fixture.indexOf('reviewFocus: aiReviewRun ?'), focusEnd = fixture.indexOf('\n          })', focusStart)
+    const focus = new Function('acceptedPrevious', 'request', `const aiReviewRun = true, fullRun = true, chapterGuidance = "本章时点：测试作者时点"; return ({ ${fixture.slice(focusStart, focusEnd)} }).reviewFocus`)(
       { content: revisedProse }, { predecessor: expected })
     const preparedNext = owner.prepareReviewRevision({ operation: 'review-chapter', draftId: 2,
       expectedDraft: { chapterNumber: 2, version: 1, status: 'draft', contentHash: hash(nextContent) },
@@ -457,6 +458,7 @@ test('AI final manuscript native main owner persists keyEvents unknown confirmat
     command.callLLMWithBoundedCompletion = async (userPrompt, systemPrompt) => {
       const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }]
       assert.ok(messages.some(item => item.content.includes(revisedProse)))
+      assert.ok(messages.some(item => item.content.includes('本章时点：测试作者时点')))
       assert.ok(messages.some(item => item.content.includes(JSON.stringify(expected))))
       response = JSON.stringify({ summary: '普通首审', items: [{ category: '表达', severity: 'pass', description: '原稿回读' }], goalReviews: [] })
       const output = await owner.execute({ handle: next.handle, invocationNonce: 'next', task: { purpose: 'review-chapter', output: 'structured-data', messages } })
@@ -3636,7 +3638,7 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
     const repairStart = fixture.indexOf('      const structuredSyntaxRepair =', gateCall)
     const repairEnd = fixture.indexOf('      const attemptId =', repairStart)
     const checkStart = fixture.indexOf("      if (operationKind === 'recheck' && candidate)")
-    const checkEnd = fixture.indexOf("      if (candidate && request.phase === 'early-context')", checkStart)
+    const checkEnd = fixture.indexOf("      if (candidate && request.phase === 'early-context'", checkStart)
     const reserve = fixture.indexOf("record({ type: 'reserve', attemptId, binding })", checkEnd)
     const evidenceStart = fixture.indexOf('authorityEvidence: operationKind ===') + 'authorityEvidence: '.length
     const evidenceEnd = fixture.indexOf('\n        userPromptHash,', evidenceStart)
@@ -4286,6 +4288,75 @@ test('旧 reviewed-draft 段认证两次 invocation 和末项 unknown', () => {
     reserveAttempts: [...attempts, attempts[0]] }), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
 })
 
+test('AI 首审只为 full 和 post-UI budget 补作者指导，原前驱与其他 selector 字节不变', () => {
+  const fixture = fixtureSource(), start = fixture.indexOf('reviewFocus: aiReviewRun ?')
+  const end = fixture.indexOf('\n          })', start)
+  const focus = new Function('request', 'acceptedPrevious', 'chapterGuidance',
+    `const aiReviewRun = true, fullRun = request.phase === 'full', predecessorReadbacks = []; return ({ ${fixture.slice(start, end)} }).reviewFocus`)
+  const guidance = '只依据作者素材。\n本章时点：当天清晨'
+  const previous = { content: '前章已接受正文。' }, predecessor = { draftId: 7, version: 3, contentHash: hash(previous.content) }
+  const old = `本臂前章已接受参考稿（未定稿；只核对与原文的连续性，不新增作者事实）。\n来源：${JSON.stringify(predecessor)}\n${previous.content}`
+  for (const phase of ['full', 'early-budget', 'c16-c18', 'early-context', 'early-review']) {
+    const request = { phase, milestone: phase === 'full' || phase === 'c16-c18' ? 'final' : 'post-ui', predecessor }
+    const missingAuthorConsumer = ['full', 'early-budget'].includes(phase)
+    assert.equal(focus(request, null, guidance), missingAuthorConsumer ? guidance : '')
+    assert.equal(focus(request, previous, guidance), missingAuthorConsumer ? `${guidance}\n${old}` : old)
+  }
+})
+
+test('post-UI context 执行 revision 关联原语义 selector，漂移与错误 selectionDifference 仍拒绝', () => {
+  const fixture = fixtureSource(), start = fixture.indexOf("  const contextSelection = request.phase === 'early-context'")
+  const end = fixture.indexOf('  // 长设定', start)
+  const check = new Function('assert', 'productionScenario', 'request', 'scene', fixture.slice(start, end))
+  const scene = source.scenes[1]
+  for (const milestone of ['early', 'post-ui']) {
+    const scenario = productionScenario('early-context', milestone)
+    const request = { phase: 'early-context', milestone, scenarioRevision: scenario.scenarioRevision, selectionDifference: scenario.selectionDifference,
+      evaluationPolicy: scenario.evaluationPolicy }
+    assert.doesNotThrow(() => check(assert, productionScenario, request, scene))
+    assert.throws(() => check(assert, productionScenario, { ...request, scenarioRevision: 'unregistered' }, scene), /CONTEXT_SCENARIO_REVISION_MISMATCH/)
+    assert.throws(() => check(assert, productionScenario, { ...request, selectionDifference: {} }, scene), /CONTEXT_SELECTION_DIFFERENCE_MISMATCH/)
+    assert.throws(() => check(assert, productionScenario, { ...request, evaluationPolicy: {} }, scene), /CONTEXT_EVALUATION_POLICY_MISMATCH/)
+    assert.throws(() => check(assert, productionScenario, request, { ...scene, contextSelection: { ...scene.contextSelection, scenarioRevision: scenario.scenarioRevision + '-drift' } }), /CONTEXT_SCENARIO_REVISION_MISMATCH/)
+    assert.throws(() => check(assert, productionScenario, { ...request, milestone: 'final' }, scene), /CONTEXT_SCENARIO_REVISION_MISMATCH/)
+  }
+})
+
+test('context 审稿传选定候选原文，身份漂移与写稿材料错配仍拒绝', async () => {
+  const fixture = fixtureSource(), start = fixture.indexOf('reviewFocus: aiReviewRun ?')
+  const focus = new Function('predecessorReadbacks', 'sha',
+    `const aiReviewRun = true, fullRun = false, acceptedPrevious = null, request = {phase:'early-context',milestone:'post-ui'};
+    return ({ ${fixture.slice(start, fixture.indexOf('\n          })', start))} }).reviewFocus`)
+  const required = { draftId: 9, chapterNumber: 2, version: 4, content: '已选前章的真实正文。', required: true }
+  const actual = focus([required, { ...required, draftId: 10, content: '未选候选秘密。', required: false }], hash)
+  assert.ok(actual.includes(required.content))
+  assert.ok(actual.includes('当前选用的前章候选（未定稿'))
+  assert.ok(!actual.includes('draftId') && !actual.includes(hash(required.content)))
+  assert.ok(!actual.includes('未选候选秘密'))
+  const gateStart = fixture.indexOf("      if (candidate && request.phase === 'early-context'")
+  const gateEnd = fixture.indexOf("      if (request.phase === 'early-review'", gateStart)
+  const gate = new Function('operationKind', 'materialDecision', 'preflight', `const candidate=true, request={phase:'early-context'},
+    userMessages=[{content:'正文'}], userPromptHash='prompt', promptText='实际前情', scene={authorPredecessor:'实际前情'},
+    predecessorReadbacks=[{draftId:9, required:true}]; ${fixture.slice(gateStart, gateEnd)}`)
+  for (const kind of ['review', 'refine', 'final-review'])
+    assert.doesNotThrow(() => gate(kind, { included: [{sourceId:'author:review-focus'}] }, createOutboundPreflightAssert([])))
+  assert.doesNotThrow(() => gate('draft', {promptHash:'prompt', included:[{sourceId:'candidate:9',required:true}]}, createOutboundPreflightAssert([])))
+  assert.throws(() => gate('draft', {promptHash:'prompt', included:[{sourceId:'candidate:10',required:true}]}, createOutboundPreflightAssert([])), /CANDIDATE_REQUIRED_PREDECESSOR_RECEIPT_MISSING/)
+  const readStart = fixture.indexOf('    const predecessorReadbacks = []')
+  const readEnd = fixture.indexOf('    // Accepted is an experiment endpoint', readStart)
+  const read = new Function('assert', 'sha', 'row', 'record', `return (async () => {
+    const request={phase:'early-context',milestone:'post-ui'}, fullRun=false, aiReviewRun=true,
+      predecessorRecords=[record], project={rootPath:'test'}, session={}, invoke=async () => row;
+    ${fixture.slice(readStart, readEnd)} return predecessorReadbacks;
+  })()`)
+  const row = { id:9, chapterNumber:2, version:4, status:'draft', content:required.content }
+  const record = { ...required, sourceId:'candidate:9', contentHash:hash(required.content), persistedBytes:Buffer.byteLength(required.content) }
+  assert.equal((await read(assert, hash, row, record))[0].content, required.content)
+  for (const [field, value, error] of [['id',10,'ID'], ['status','finalized','STATUS'], ['version',5,'VERSION'], ['content','变化正文','SOURCE']])
+    await assert.rejects(read(assert, hash, {...row,[field]:value}, record), new RegExp(`PREDECESSOR_${error}_CHANGED`))
+  await assert.rejects(read(assert, hash, row, {...record,sourceId:'candidate:10'}), /PREDECESSOR_SOURCE_ID_CHANGED/)
+})
+
 test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂移', () => {
   const boundary = protocol.historicalS14BSplitBoundary
   assert.equal(boundary.fromEventCount, 345)
@@ -4867,7 +4938,7 @@ test('early-review 从生产定稿历史发送必需前章，而不是借当前�
 test('S14B reviewed refine rejects any missing registered author fact before reserve on both arms', () => {
   const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
   const checkStart = fixture.indexOf("      if (operationKind === 'recheck' && candidate)")
-  const checkEnd = fixture.indexOf("      if (candidate && request.phase === 'early-context')", checkStart)
+  const checkEnd = fixture.indexOf("      if (candidate && request.phase === 'early-context'", checkStart)
   const reserve = fixture.indexOf("record({ type: 'reserve', attemptId, binding })", checkEnd)
   assert.ok(checkStart > 0 && checkEnd > checkStart && reserve > checkEnd)
   const check = new Function('candidate', 'db', 'chapter', 'promptText', 'authorityFacts', 'preflight',
