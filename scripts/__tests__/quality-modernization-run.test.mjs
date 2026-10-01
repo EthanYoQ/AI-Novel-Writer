@@ -3276,9 +3276,9 @@ test('full accepted predecessor reads the current same-arm final DB row and pres
     db.exec('CREATE TABLE contents(id INTEGER PRIMARY KEY,body TEXT); CREATE TABLE drafts(id INTEGER PRIMARY KEY,chapter_number INTEGER,version INTEGER,status TEXT,content_id INTEGER);')
     db.prepare('INSERT INTO contents(id,body) VALUES(1,?)').run(final)
     db.prepare("INSERT INTO drafts VALUES(1,1,1,'revised',1)").run()
-    const fixture = fixtureSource(), start = fixture.indexOf('    const readAcceptedPredecessor = async () => {'), end = fixture.indexOf('\n    if (fullRun && aiReviewRun', start)
+    const fixture = fixtureSource().replace(/\r\n/g, '\n'), start = fixture.indexOf('    const readAcceptedPredecessor = async () => {'), end = fixture.indexOf('\n    if (fullRun && aiReviewRun', start)
     const read = new Function('invoke', 'request', 'target', 'project', 'chapter', 'assert', 'sha', 'Buffer',
-      `const fullRun = true, aiReviewRun = true, session = {}; ${fixture.slice(start, end)} return readAcceptedPredecessor()`)
+      `const fullRun = true, aiReviewRun = true, session = {}; ${fixture.slice(start, end)}\nreturn readAcceptedPredecessor()`)
     const invoke = async (_channel, id) => { const row = db.prepare('SELECT d.*,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(id)
       return row && { id: row.id, chapterNumber: row.chapter_number, version: row.version, status: row.status, content: row.body } }
     const request = { chapterNumber: 2, predecessor: expected }
