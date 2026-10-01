@@ -45,25 +45,29 @@ export function buildChapterGoalReviewPrompt(goals: FrozenChapterGoals, language
 保留原有 summary 与 items 通用审稿格式，并在同一 JSON 根对象增加 goalReviews 数组（不受通用 items 的条数限制）。
 按 id、evidence、description、status 顺序逐项返回 {"id":"原始id","evidence":[{"quote":"当前正文逐字引文"}],"description":"逐个列出目标原文中的每个当章子动作及其判断，再汇总","status":"completed|unmet|unknown"}，不得删项、改写目标或自创 id。
 依次判断：
-1. 先按原意区分当章行动与背景/未来约束；仅当目标要求达成约定时，本章达成约定即可，不要求提前执行。背景、purpose、未来计划不是已发生事实，也不自动变成到期行动。
+1. 先按原意区分当章行动与背景/未来约束，并判断目标是否要求本章新发生，还是明确要求回顾或维持已有状态；仅当目标要求达成约定时，本章达成约定即可，不要求提前执行。背景、purpose、未来计划不是已发生事实，也不自动变成到期行动。
+随后在 description 中对照拟引用的 evidence：根据已提供的前章与当前正文，说明引文事件发生于前章、本章还是尚未发生，是旧结果的复述/持续状态，还是本章新动作及实际后果。只有目标要求本章新发生时，旧结果不能代替；明确要求回顾或维持状态时按原义核实，不要求另造动作或代价。若目标要求本章新发生却只有旧结果或时点不明，且无明确延期、拒绝或相反结果的正文证据，按下述 unknown 处理，不凭引文存在判 completed。
 2. 当章到期行动有明确延期、拒绝或相反结果的正文证据 → unmet。准备/承诺不能代替要求现在完成的行动；部分完成不等于整项目标完成。
 3. 全部到期动作有完成证据，或正文明确支持该项约束 → completed。标识含 mustShow 的目标必须有正文中积极、可定位的明示证据；背景一致或没有矛盾不算完成。
 4. 仅未提及、无法判断或证据不足 → unknown，不能以“没写到”断言“没发生”。必现目标完全未展示也为 unknown，可由作者明确纳入一次修稿。普通背景只检查矛盾。例如要求归还借书，正文只写走进图书馆：应 unknown，不能判 unmet。
 最后汇总所有子动作：任一 unmet → unmet；否则任一 unknown → unknown；仅全部完成 → completed。不得用多数已完成掩盖一个延期或不明子动作。
 completed/unmet 都须当前正文逐字证据；unknown 可 evidence:[]。不拼接或改写引文，不引用计划证明行动；引文存在不证明推断成立。不检查字数或强求背景细节。
 目标原文与作者确认设定冲突时，无论正文是否写出该冲突内容，都判 unknown（不判 completed 或 unmet），并在 description 说明冲突，仍不得改写目标。
+同一事实在当前正文有多处日期或状态表述时，沿用上述时点对照，先比较所指时点及正文是否交代变化或解释。若同一时点的表述互相矛盾且没有正文解释，将具体冲突写入已有通用 items：quote 选一处唯一可定位的逐字连续引文，在 description 指明与另一处表述的冲突，不拼接引文，不猜未写明的日期或原因。
 冻结清单：${JSON.stringify(goals)}`,
     `[Current chapter goal checklist | software-frozen]
 Keep the existing summary/items review contract and add goalReviews to the same JSON root (not subject to the general items limit).
 Return fields in id, evidence, description, status order: {"id":"original id","evidence":[{"quote":"verbatim current draft excerpt"}],"description":"list every current-chapter sub-action in the original goal with its judgment, then summarize","status":"completed|unmet|unknown"}. Do not delete/rewrite goals or invent IDs.
 Decide in order:
-1. Distinguish actions due now from background/future constraints. An agreement goal only requires the agreement, not early execution. Background, purpose and future plans are not established events or automatically due actions.
+1. Distinguish actions due now from background/future constraints, and decide whether the goal requires something new in this chapter or explicitly asks for a recap or maintenance of an existing state. An agreement goal only requires the agreement, not early execution. Background, purpose and future plans are not established events or automatically due actions.
+Then compare the proposed evidence in description: using the supplied previous chapter and current draft, state whether the quoted event occurred in the previous chapter, occurs in this chapter, or has not occurred, and whether it recounts an old result/continuing state or shows a new action and actual consequence. If the goal requires a new action or consequence in this chapter, recounting an old result does not satisfy it. Honor explicit recap or maintenance goals without inventing another action or cost. For a goal requiring something new in this chapter, evidence limited to an old result or unclear timing is unknown unless the draft explicitly proves postponement, refusal or an opposite outcome; a locatable quote alone does not establish completed.
 2. Explicit draft evidence of postponement, refusal or an opposite outcome for a due action → unmet. Preparation/promises cannot replace execution due now; partial completion is not whole-goal completion.
 3. Evidence completes every due action or explicitly supports the constraint → completed. A mustShow goal requires positive, locatable prose showing it; background consistency or absence of contradiction is insufficient.
 4. Mere omission, ambiguity or insufficient evidence → unknown, not proof of non-occurrence. A completely unshown mustShow goal is unknown and may enter one revision when the author explicitly applies it. Ordinary background is checked only for contradiction. Example: a goal requires returning a library book, but the draft only describes entering the library: unknown, not unmet.
 Aggregate last: any unmet → unmet; otherwise any unknown → unknown; only all completed → completed. A completed majority cannot hide one postponed or uncertain sub-action.
 completed/unmet require verbatim current-draft evidence; unknown may use evidence:[]. Do not combine/rewrite quotations or cite plans as proof. Locatable evidence does not prove an inference. Do not check length or demand background detail.
 If a goal's text conflicts with author-confirmed settings, judge it unknown (never completed or unmet) whether or not the draft contains the conflicting content, and explain the conflict in description. Still do not rewrite the goal.
+When the current draft gives multiple dates or states for the same fact, use the same timing comparison: first compare the times they refer to and whether the prose establishes a change or explanation. If statements about the same time contradict each other without an explanation in the draft, report the specific conflict in the existing general items: use one uniquely locatable, verbatim, contiguous excerpt as quote and identify its conflict with the other statement in description. Do not join excerpts or invent an unstated date or cause.
 Frozen checklist: ${JSON.stringify(goals)}`)
 }
 
