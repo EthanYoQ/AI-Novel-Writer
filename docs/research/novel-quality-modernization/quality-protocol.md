@@ -393,3 +393,9 @@ N 只计算桥的外层兜底，不增加任何 dispatch 权限：C16-A/B/C 的 
 原900±30%要求为630–1170，产品既有1053稿长80%–120%要求为842–1264，最终验收使用交集842–1170；原全部硬事实、事件、代价、时点和文学标准不变。保存正文、revision、merge receipt、确认、两份完整审稿与各次 actual owner/ledger 必须可独立核验。自动结果最多为 `pending-independent-diagnostic-oracle-review`；任何 missing/error/unknown 均不能自动 PASS。诊断不改变原七案 FAIL、qualification 或产品完成状态，也不证明首稿失败根因。
 
 `historicalC16D515b666Boundary` 认证1212→1251行：原 d515b666 / a8812b8f 的13次请求及原协议 hash `9de2619fd8a998b626545c81368f57456a44dda7db854222489bd4dfce2d36a9`，完整前缀 SHA256 `79f9ded8a2eebb55e8ea78d190e822836d5bf12e104d15d40a4aa5dac347dc92`。`historicalC16A763f510Boundary` 再认证1251→1287行：原 a763f510 / 889b5e23 的12次请求，完整前缀 SHA256 `dec581bd913e4ae841b00b3b4d78906b01a1231773900053c7cc6e33e4102ad2`。两入口依次认证原 armBindings、逐次 parity、reserve→dispatch→settle 与全部旧前缀；原账本字节及历史结论保持不变，之后的新请求绑定新协议与桥身份。
+
+## 071156e5 系统重启中断记录
+
+`historicalC16071156e5Boundary` 接续 `historicalBoundedRevisionE41a3f0aBoundary` 的1296行，认证至1350行：invocation `071156e5-db17-4823-96e2-007c4e232e9e`、candidate code `205cbb94cc6aadd1af9e3729f9bb878cc2985c1e` 在原协议 hash `a901864d5dafbd8bad9698032c8bbf69e06608422181a93e3fb42a7b0013e35f` 下的18次请求，其中17次 settle/STOP，末次 `candidate:5d0933d2-8d48-4a3b-8d14-2d87f74bf5ae` 为 unknown。2026-10-01 15:03（Asia/Singapore）系统重启中断运行；末次 owner 持久记录仍为 dispatch-marked，artifact 为 revision 0 的空 partial，无持久终态。确认运行进程退出后，仅通过原冻结 runner 追加这一条 unknown；它记录结果未知，不判为模型或产品失败。
+
+完整1350行前缀 SHA256 为 `bca9e2a94ab5a25248f8c5ca714e019d21933f1c083652dfcf8ebd331e59fd3c`；原1296行前缀 `468507e3eac5beb4241c4f22fc22083e1559e841a3ba0c794a01dd7e389c9c2c` 及追加前1349行字节保持不变。账本读写两入口沿用现有 validator，认证原 code/source/driver、逐 attempt parity、invocation 和 reserve→dispatch→终态。该实验整体保留 INCOMPLETE，无完整七案 stdout 或退出回执；C17-A/B 已完成材料只供独立诊断，不能据局部材料放行资格。此加性认证不改历史评分、场景、预算、原冻结目标或旧 receipt，也不作文学裁决。
