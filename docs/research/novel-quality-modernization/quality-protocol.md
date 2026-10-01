@@ -1,6 +1,6 @@
 # 中文质量预注册：Program v3 S00
 
-**2026-10-01 用户批准的现行目标**：[AI 自主审稿与成稿资格](#ai-review-final-manuscript)。它替代未来资格中的首稿直接终点和人工补题路线；下列既有机器 revision 是已实现登记，不代表新政策已接线或通过。执行线程须先同步 protocol/driver/fixture 并重新冻结受影响目标；文档更新不改变正在运行的旧实验。
+**2026-10-01 用户批准的现行目标**：[AI 自主审稿与成稿资格](#ai-review-final-manuscript)。它替代未来资格中的首稿直接终点和人工补题路线；现行政策已完成 protocol/driver/fixture 接线并重新冻结受影响目标，真实质量、平台和发布状态以唯一私有当前检查点为准。文档更新不改变正在运行的旧实验。
 
 已实现的机器 decision revision 为 `s14b-candidate-quality-and-comparison-v2`；`s14b-split-quality-gates-v1`、`s14b-reviewed-draft-v1` 及其结论保留为历史。candidate 字数标准仍采用 `draft-units-tolerance-30-v1`（2026-09-20 用户决定）；既有 post-UI 评估策略 revision 为 `s14b-post-ui-reviewed-draft-must-show-unknown-v3`（采纳必现目标 unknown）；`s14b-post-ui-reviewed-draft-unknown-oracle-v2`（2026-09-27 用户批准 unknown 单独终点）保留为历史。保留 `pacing-readability-v1` 节奏规则。完整机器协议及其他 revision 见 [`protocol.json`](protocol.json)；新协议完整字节 hash 须重新冻结，旧目标拒绝漂移。本文件负责解释执行规则与冻结合同的显式取代关系。S10B/S11 的历史场景、失败和加性裁决保留各自版本；[日期化交接](../../handoffs/2026-09-20-program-v3-s11-pause-handoff.md)只证明当时状态，当前进度读唯一私有当前检查点。全部 Spec 的适用关系见[现行索引](current-spec-index.md)。合成验证、真实模型结果与文学质量结论分开记录。
 
@@ -10,7 +10,7 @@
 
 **决定与边界**：首稿允许有待修问题；交付须同时证明软件/AI 能自行指出关键问题，以及经作者批准的修稿能达到原成文标准。作者负责采纳和合并，不承担替审稿系统找错的验收职责。此决定不承诺所有首稿必过，也不默认自动修改作品。产品保留作者自由补充意见的能力，但人工补题所得结果只证明辅助修稿，不能作为本政策的审修闭环通过证据。
 
-**生效状态**：用户已批准，机器接线与真实资格待完成。当前 `protocol.json` 尚未以本政策登记各受影响阶段。后续实施先登记选择规则、操作、来源、预算和停止条件，再冻结执行；不得只改 Markdown 就使用旧机器协议宣称新资格。以下旧 revision、固定稿诊断和历史结论按原范围保留。
+**生效状态**：用户已批准；`protocol.json` 已按本政策登记完整七案、post-UI 与 full，driver 与 fixture 已接线，受影响目标已重新冻结。接线和 synthetic/packet 校验不代表真实质量、平台或发布通过，当前状态以唯一私有当前检查点为准。以下旧 revision、固定稿诊断和历史结论按原范围保留。
 
 ### 范围及替代关系
 
