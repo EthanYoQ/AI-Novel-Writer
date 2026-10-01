@@ -16,7 +16,7 @@ import {
   type GenerationRuntimeEnvironment,
 } from '../../../generation/generation-runtime'
 import { GenerationHarnessError } from '../../../generation/generation-harness'
-import { clearProjectCustomPrompts } from '../../../prompt-templates'
+import { clearProjectCustomPrompts, getBuiltinPromptTemplate } from '../../../prompt-templates'
 import { RefineDraftCommand as RuntimeRefineDraftCommand } from '../refine-draft.command'
 import { RefineFromReviewCommand as RuntimeRefineFromReviewCommand } from '../refine-from-review.command'
 import { ReviewChapterCommand as RuntimeReviewChapterCommand } from '../review-chapter.command'
@@ -421,7 +421,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
     }
 
     expect(observed.get('refine-draft')).toContain('Revise the chapter manuscript')
-    expect(observed.get('review-chapter')).toContain('Review the chapter for objective continuity')
+    expect(observed.get('review-chapter')).toContain('Review the chapter for objectively verifiable continuity')
     expect(observed.get('refine-from-review')).toContain('Revise the chapter using only the confirmed review checklist')
     for (const request of observed.values()) {
       expect(request).not.toContain('你是一位功力深厚的文学编辑')
@@ -1186,6 +1186,74 @@ describe('ReviewChapterCommand reasoning stage', () => {
     expect(replacementRequest).toContain('SOURCE_DRAFT_HEAD')
     expect(replacementRequest).toContain('SOURCE_DRAFT_MIDDLE_CONFLICT')
     expect(replacementRequest).toContain('SOURCE_DRAFT_TAIL')
+  })
+
+  it.each([
+    ['zh-CN', 'default'], ['zh-CN', 'custom'],
+    ['en-US', 'default'], ['en-US', 'custom'],
+  ] as const)('sends evidence boundaries in the %s/%s ordinary review request', async (writingLanguage, templateSource) => {
+    const authorFact = 'AUTHOR_FACT_SENTINEL'
+    const worldFact = 'WORLD_FACT_SENTINEL'
+    const source = 'DRAFT_CONTENT_SENTINEL'
+    const customMarker = 'CUSTOM_REVIEW_TEMPLATE_SENTINEL'
+    const promptFile = `consistency_check.${writingLanguage}.json`
+    const promptPath = `${PROJECT_PATH}/.ai-novel/prompts/${promptFile}`
+    useProjectStore.setState(state => ({
+      currentProject: state.currentProject ? {
+        ...state.currentProject,
+        novelConfig: { ...state.currentProject.novelConfig, writingLanguage, protagonistProfile: authorFact },
+      } : null,
+    }))
+    const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
+      .mockResolvedValue({ content: PASSING_REVIEW_JSON, finishReason: 'stop' })
+    stubIpc(vi.fn(async (channel: string) => {
+      if (channel === 'fs:list-dir') return [{ name: promptFile, path: promptPath, isDir: false }]
+      if (channel === 'fs:read-file') return { success: true, content: JSON.stringify({
+        ...getBuiltinPromptTemplate('consistency_check', writingLanguage)!, writingLanguage,
+        content: `${customMarker}\n{{chapter_content}}\n{{world_building}}`,
+      }) }
+      if (channel === 'db:continuity-list-before' || channel === 'db:character-get-all' || channel === 'db:blueprint-get-all') return []
+      if (channel === 'db:project-core-get') return { worldbuilding: worldFact }
+      if (channel === 'db:blueprint-get') return {
+        chapterNumber: 1, title: 'Current chapter', role: 'opening', purpose: '',
+        keyEvents: 'CURRENT_CHAPTER_GOAL_SENTINEL', characters: [], suspenseHook: '', userGuidance: '', notes: '', notesUpdatedAt: '',
+      }
+      if (channel === 'db:draft-get-meta') return { id: 1, chapterNumber: 1, version: 1, status: 'draft', source: 'write' }
+      if (channel === 'db:review-next-index') return 1
+      if (channel === 'db:review-create') return { success: true, id: 77 }
+      throw new Error(`unexpected IPC: ${channel}`)
+    }), async () => templateSource === 'custom')
+
+    await chapterReviewCommand(completeWithLease, source).execute({
+      step: {}, context: { ...workflowContext(), writingLanguage }, callbacks: callbacks(),
+    })
+
+    expect(completeWithLease).toHaveBeenCalledOnce()
+    const request = completeWithLease.mock.calls[0]![0].messages.map(message => message.content).join('\n')
+    for (const material of [authorFact, worldFact, source, 'CURRENT_CHAPTER_GOAL_SENTINEL']) expect(request).toContain(material)
+    expect(request.includes(customMarker)).toBe(templateSource === 'custom')
+    const requiredClauses = writingLanguage === 'zh-CN' ? [
+      '是权威事实', '【角色状态】只是既往章节摘要', '同一对象、时点及条件', '合理兼容解释',
+      '未再次说明、未触碰或未明确位置', '新进展可以发生在同一时段或地点',
+      '由其必然推出的前提矛盾，必须报告为 error 或 warning',
+      '待审全文中所有可能满足目标的动作与实际后果', '不能因一处候选证据是旧结果',
+      '不以更换钟点或场景为额外条件', '原文明确的时点或场景要求仍须核实',
+      '不得自行增加门槛', '具体实际后果', '泛泛不便、旧损失或未来承诺',
+      '旧结果不能代替', '积极、可定位的明示证据', '没有矛盾不算完成',
+      'unknown，不能以“没写到”断言“没发生”', '逐字连续、且全文仅出现一次',
+    ] : [
+      'worldbuilding settings are authoritative facts', 'character states are only summaries',
+      'same subject, time and conditions', 'reasonable compatible interpretation',
+      'Mere omission, lack of contact or an unstated location', 'New progress can occur within the same time period or location',
+      'premise that necessarily follows from it, report it as an error or warning',
+      'whole draft for all actions and actual consequences', 'one candidate excerpt recounts an old result',
+      'different clock time or scene is not an extra prerequisite', 'explicitly stated timing or scene requirements still need to be checked',
+      'do not invent a higher threshold',
+      'concrete actual consequence', 'vague inconvenience, old loss or future promise',
+      'recounting an old result does not satisfy it', 'positive, locatable prose', 'absence of contradiction is insufficient',
+      'unknown, not proof of non-occurrence', 'verbatim, contiguous excerpt that occurs exactly once',
+    ]
+    expect(requiredClauses.filter(clause => !request.includes(clause))).toEqual([])
   })
 
   it('uses finalized continuity as the only established-history source in the review request', async () => {
