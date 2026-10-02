@@ -11,6 +11,7 @@ import {
 import { requireWorkflowProjectSession, workflowUiText } from '../workflow-project-session'
 import { countDraftUnits } from '../../../shared/draft-units'
 import { selectFrozenReviewRevisionMaterials } from './review-revision-materials'
+import { promptLanguageText } from '../../prompt-language'
 
 function appendCompleteRevisionContract(prompt: string, source: string, writingLanguage: 'zh-CN' | 'en-US'): string {
   const sourceUnits = countDraftUnits(source)
@@ -18,7 +19,10 @@ function appendCompleteRevisionContract(prompt: string, source: string, writingL
   const contract = writingLanguage === 'en-US'
     ? `[Complete-revision hard constraint]\nThe frozen source contains ${sourceUnits} prose units. Output the complete revised chapter, between ${range.minimum} and ${range.maximum} prose units (80%-120% of the source). Preserve every unaffected paragraph or line in full. Do not summarize, excerpt, collapse repeated passages, or use placeholders. Apply only the confirmed findings. If a confirmed finding requires an action or result to occur in this chapter, the added action or result must itself satisfy the finding's target meaning and must already have happened in the prose. For a cost or loss, show the concrete consequence already lost, spent, or endured; signing, accepting responsibility, or saying that a character will pay later remains a promise and is not the cost itself. Merely reversing a negation, or stating an abstract decision, plan, promise, or commitment, does not count. Reconcile later paragraphs so they do not preserve a state that contradicts the new event. Output revision prose only.`
     : `【完整修稿硬约束】\n冻结源稿共 ${sourceUnits} 个正文单位。必须输出修订后的完整章节，长度须在 ${range.minimum}-${range.maximum} 个正文单位之间（源稿的 80%-120%）。所有未受影响的段落或行必须完整保留；不得摘要、节选、合并重复段落或使用占位符。只处理已确认的问题。若已确认问题要求当章发生动作或结果，新增动作或结果本身必须满足该问题的目标语义，并且已经在正文中发生。对于代价或损失，必须写出已经失去、消耗或承受的具体后果；签字、认责或声称以后负责仍只是承诺，不是代价本身。简单否定翻转，或抽象的决定、计划、承诺、保证，均不算完成。必须同步修正后文，不得保留与新增事件相反的状态。最终只输出修订后正文。`
-  return `${prompt}\n\n${contract}`
+  const scope = promptLanguageText(writingLanguage,
+    '确认 AI 意见只确定处理范围，不确认其事实判断或替换方案。先按作者事实、前驱原文和正文的对象、时点及条件核对拟修改的事实；最小变化不得优先于来源一致。建议无来源支持或与来源冲突时，不照搬，改用来源支持且能解决原问题的最小修法；仍无法确定时保留不确定性，不编造替换事实。作者亲写的明确要求仍按作者指导执行。',
+    'Confirming an AI finding selects the scope, not its factual claims or proposed replacement. Check the proposed factual change against author facts, predecessor prose and the manuscript for the same subject, time and conditions; minimal edits must not override consistency with sources. If a suggestion is unsupported or conflicts with sources, do not copy it: use the smallest source-supported remedy that resolves the original issue. If the facts remain uncertain, preserve that uncertainty rather than inventing a replacement fact. Explicit author-written requests remain author guidance.')
+  return `${prompt}\n\n${contract}\n\n${scope}`
 }
 
 export interface RefineFromReviewParams extends ReviewRevisionCommandSource {
@@ -76,12 +80,19 @@ export class RefineFromReviewCommand extends ReviewRevisionCommand {
         '审稿修稿必需材料超出上下文容量，已停止修稿。请精简必需材料后重试。',
         'The confirmed review checklist exceeds the context capacity, so the revision stopped. Trim the review items and try again.'))
     }
+    const aiReviewSourceId = `review:confirmed:${frozen.confirmation!.reviewSourceId}`
+    const basis = admission.admitted.filter(material => material.identity.sourceId !== aiReviewSourceId)
+      .map(material => material.text).join('\n\n')
     const builder = new ChapterPromptBuilder(template, frozen.writingLanguage)
-      .withReviewReport(admission.admitted.map(material => material.text).join('\n\n'))
+      .withReviewReport(admission.admitted.filter(material => material.identity.sourceId === aiReviewSourceId)
+        .map(material => material.text).join('\n\n'))
       .withDraftContent(frozen.source.content)
       .withGlobalGuidance(frozen.config.globalGuidance || '')
       .withUserRefinePrompt('')
-    const prompt = appendCompleteRevisionContract(builder.build(), frozen.source.content, frozen.writingLanguage)
+    const prompt = appendCompleteRevisionContract([
+      promptLanguageText(frozen.writingLanguage, '【修稿依据｜作者材料与前驱原文】', '[Revision sources | author material and predecessor prose]'),
+      basis, builder.build(),
+    ].join('\n\n'), frozen.source.content, frozen.writingLanguage)
     await this.bindMaterialDecision(params, admission.decision, prompt)
     return this.generateRevision(prepared, params, prompt, builder.getSystemRole())
   }

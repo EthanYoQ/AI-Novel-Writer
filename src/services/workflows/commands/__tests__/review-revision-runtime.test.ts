@@ -202,6 +202,56 @@ describe('review/revision consumers using the main contract (synthetic transport
     },
   )
 
+  it.each(['zh-CN', 'en-US'] as const)('keeps author and predecessor evidence outside the AI review slot in %s', async writingLanguage => {
+    const predecessor = '前驱原文：双方已交还印章。'
+    const authorRequest = '作者明确要求：保留城门场景。'
+    const f = setup([{ content: revised, finishReason: 'stop' }], [{
+      draftId: 7, chapterNumber: 0, chapterTitle: '前章', chapterNotes: predecessor, sourceStatus: 'current', facts: [],
+    }])
+    useProjectStore.setState(state => ({ currentProject: { ...state.currentProject!,
+      novelConfig: { ...state.currentProject!.novelConfig, writingLanguage } } }))
+    f.args.context.writingLanguage = writingLanguage
+    let frozenBytes = ''
+    const invoke = f.fixture.invoke.bind(f.fixture)
+    vi.spyOn(f.fixture, 'invoke').mockImplementation(async (channel, ...args) => {
+      const result = await invoke(channel, ...args)
+      if (channel === 'review-revision:prepare') {
+        const prepared = result as NonNullable<typeof f.fixture.prepared>
+        const snapshot = prepared.context.confirmation!.snapshot
+        prepared.context.confirmation!.snapshot = { ...snapshot, items: [...snapshot.items,
+          { category: '作者要求', severity: 'warning', description: authorRequest, decision: 'apply', origin: 'author' }] }
+        frozenBytes = JSON.stringify(prepared.context)
+        f.fixture.prepared = structuredClone(prepared)
+      }
+      return result
+    })
+    await f.command('refine-from-review').execute(f.args)
+    const frozen = f.fixture.prepared!.context
+    expect(JSON.stringify(frozen)).toBe(frozenBytes)
+    const prompt = f.provider.mock.calls[0]![0].find(message => message.role === 'user')!.content
+    const reportStart = writingLanguage === 'zh-CN' ? '\n【审稿报告】\n' : '\n[Confirmed review checklist]\n'
+    const reportEnd = writingLanguage === 'zh-CN' ? '\n【待修稿内容】\n' : '\n[Source manuscript]\n'
+    const [basis, rest] = prompt.split(reportStart)
+    const report = rest!.split(reportEnd)[0]!
+    const author = reviewRevisionAuthorMaterial(frozen)
+    const ai = reviewRevisionAiBrief(frozen)
+    expect(basis).toContain(author)
+    expect(basis).toContain(predecessor)
+    expect(basis).toContain(authorRequest)
+    expect(report.trim()).toBe(ai)
+    expect(prompt).toContain(writingLanguage === 'zh-CN'
+      ? '确认 AI 意见只确定处理范围，不确认其事实判断或替换方案'
+      : 'Confirming an AI finding selects the scope, not its factual claims or proposed replacement')
+    expect(prompt).toContain(writingLanguage === 'zh-CN'
+      ? '作者亲写的明确要求仍按作者指导执行'
+      : 'Explicit author-written requests remain author guidance')
+    expect(f.fixture.materialDecisions[0]).toMatchObject({ promptHash: hash(prompt), coverage: { complete: true },
+      included: [expect.objectContaining({ sourceId: 'author:required', contentHash: hash(author) }),
+        expect.objectContaining({ sourceId: 'finalized:7', contentHash: hash(predecessor) }),
+        expect.objectContaining({ sourceId: 'review:confirmed:10', contentHash: hash(ai) })] })
+    expect(f.provider).toHaveBeenCalledOnce()
+  })
+
   it('stops before requesting a model when frozen author facts exceed the 8MiB material safety bound', async () => {
     const f = setup([])
     const invoke = f.fixture.invoke.bind(f.fixture)
