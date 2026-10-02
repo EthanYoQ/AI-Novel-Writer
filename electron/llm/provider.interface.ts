@@ -17,6 +17,13 @@ export interface LLMGenerateOptions {
   outputTokenParameter?: 'max_completion_tokens'
   responseFormat?: { type: string }
   reasoning?: ProviderReasoningDirective
+  /**
+   * Caller-scoped logical session identity, forwarded verbatim to gateways
+   * that require per-conversation routing affinity (opencode Go). Providers
+   * must treat a missing value as a single-request scope, never a shared
+   * process default.
+   */
+  conversationId?: string
 }
 
 export interface LLMStreamOptions extends LLMGenerateOptions {
