@@ -12,11 +12,11 @@ describe('provider catalog', () => {
     const profile = { provider: 'siliconflow', protocol: 'openai',
       baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'Qwen/Qwen3.8-27B' }
     expect(resolveModelProfileBudgetCapabilities(profile)).toMatchObject({ contextWindowTokens: 262144, maxOutputTokens: 16384 })
-    expect(resolveModelProfileBudgetCapabilities({ ...profile, provider: 'openai' }))
+    expect(resolveModelProfileBudgetCapabilities({ ...profile, provider: 'custom' }))
       .toEqual(resolveModelProfileBudgetCapabilities(profile))
     for (const overrides of [{ baseUrl: 'https://api.siliconflow.com/v1' },
       { baseUrl: 'https://api.siliconflow.cn/v1?proxy=1' }, { modelName: 'Qwen/Qwen3.8-27B-other' },
-      { provider: 'custom' }, { protocol: 'gemini' }]) {
+      { protocol: 'gemini' }]) {
       expect(resolveModelProfileBudgetCapabilities({ ...profile, ...overrides })).toBeUndefined()
       expect(resolveModelProfileReasoningMapping({ ...profile, ...overrides })).toBeUndefined()
     }
@@ -195,7 +195,6 @@ describe('provider catalog', () => {
     { baseUrl: 'https://api.siliconflow.cn/v1#other' },
     { modelName: 'deepseek-ai/DeepSeek-V4-Pro-2026' },
     { modelName: 'deepseek-ai/DeepSeek-V4-Flash-2026' },
-    { provider: 'custom' },
     { protocol: 'anthropic' },
   ])('does not promote SiliconFlow budget or family matches into reasoning evidence: %j', overrides => {
     expect(resolveModelProfileReasoningMapping({ provider: 'openai', protocol: 'openai',

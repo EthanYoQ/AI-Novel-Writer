@@ -78,7 +78,8 @@ export function resolveModelExecutionCapabilityEvidence(
   const explicitContextWindow = positiveInteger(model.capabilities?.contextWindowTokens)
   const explicitOutputCap = positiveInteger(model.capabilities?.maxOutputTokens)
   const legacyOutputCap = positiveInteger(model.maxTokens)
-  const operationalOutputCap = explicitOutputCap ?? legacyOutputCap
+  const operationalOutputCap = explicitOutputCap && legacyOutputCap
+    ? Math.min(explicitOutputCap, legacyOutputCap) : explicitOutputCap ?? legacyOutputCap
   const verifiedOutputLimit = positiveInteger(verified?.maxOutputTokens)
   const unconstrainedOutputTokens = verifiedOutputLimit && operationalOutputCap
     ? Math.min(verifiedOutputLimit, operationalOutputCap)
@@ -124,6 +125,7 @@ function modelRevision(model: ModelProfile): string {
     maxTokens: model.maxTokens,
     capabilities: model.capabilities ?? null,
     reasoningOverride: model.reasoningOverride ?? 'auto',
+    ...(model.reasoningMapping ? { reasoningMapping: model.reasoningMapping } : {}),
     purposes: model.purposes,
     embeddingOptions: model.embeddingOptions ?? null,
   })

@@ -62,7 +62,7 @@ async function renderSettings(
   onClose = vi.fn(),
   persisted = true,
 ) {
-  const saveModel = vi.fn(async () => true)
+  const saveModel = vi.fn<(model: ModelProfile) => Promise<boolean>>(async () => true)
   const setDefaultModel = vi.fn(async () => true)
   useLayoutStore.setState({ settingsSection: 'llm' })
   useLocaleStore.setState({ locale })
@@ -106,6 +106,69 @@ afterEach(async () => {
 })
 
 describe('model discovery settings flow', () => {
+  it.each([
+    { baseUrl: 'https://api.x.ai/v1', value: 'grok-4.5', declared: undefined, context: 500000, output: 8192 },
+    { baseUrl: 'https://new.test/v1', value: 'unlisted', declared: { contextWindowTokens: 64000, maxOutputTokens: 12000, reasoning: true }, context: 64000, output: 12000 },
+  ])('applies endpoint selection metadata and preserves the author limit: $value', async ({ baseUrl, value, declared, context, output }) => {
+    const model = savedProfile({ baseUrl, maxTokens: 2048 })
+    const discoverModels = vi.fn(async () => ({ success: true as const,
+      models: [{ id: value, name: value, value, capabilities: declared }] }))
+    const { saveModel } = await renderSettings(model, discoverModels)
+    await act(async () => {
+      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
+      await page.getByLabelText('端点模型列表').selectOptions(value)
+      await expect.element(page.getByLabelText('上下文窗口', { exact: true })).toHaveValue(context)
+      await page.getByLabelText('上下文窗口', { exact: true }).fill('32000')
+      await page.getByRole('button', { name: '高级设置', exact: true }).click()
+      await page.getByLabelText('最大输出 Token', { exact: true }).fill('1024')
+      await page.getByRole('button', { name: '获取模型列表', exact: true }).click()
+    })
+    expect(saveModel).not.toHaveBeenCalled()
+    await expect.element(page.getByLabelText('最大输出 Token', { exact: true })).toHaveValue(1024)
+    await act(async () => { await page.getByRole('button', { name: '保存配置', exact: true }).click() })
+    expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ modelName: value, maxTokens: 1024,
+      capabilities: expect.objectContaining({ contextWindowTokens: 32000, maxOutputTokens: output, reasoning: true }),
+      capabilitySources: expect.objectContaining({ contextWindowTokens: 'manual', maxOutputTokens: declared ? 'endpoint' : 'preset' }) }))
+    const saved = saveModel.mock.calls[0][0] as unknown as ModelProfile
+    await act(async () => { useLLMStore.setState({ models: [JSON.parse(JSON.stringify(saved))] }) })
+    await act(async () => { await page.getByRole('button', { name: '编辑', exact: true }).click() })
+    expect(container?.querySelector('[data-capability-sources]')?.textContent).toContain('上下文：手动设置')
+    expect(container?.querySelector('[data-capability-sources]')?.textContent).toContain(declared ? '模型输出容量：接口取得' : '模型输出容量：资料匹配')
+  })
+
+  it('applies, rejects and clears an advanced mapping before saving', async () => {
+    const { saveModel } = await renderSettings(savedProfile(), vi.fn())
+    await act(async () => {
+      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: '高级设置', exact: true }).click()
+      await page.getByText('高级参数映射', { exact: true }).click()
+      await page.getByLabelText('推理参数映射 JSON').fill('{broken')
+      await page.getByRole('button', { name: '应用映射', exact: true }).click()
+    })
+    await expect.element(page.getByRole('alert')).toHaveTextContent('映射无效')
+    const mapping = { adapter: 'openai-reasoning-effort', supportedEfforts: ['xhigh'], providerValues: { xhigh: 'Extra' } }
+    await act(async () => {
+      await page.getByLabelText('推理参数映射 JSON').fill(JSON.stringify(mapping))
+      await page.getByRole('button', { name: '应用映射', exact: true }).click()
+      await page.getByLabelText('模型推理覆盖').selectOptions('xhigh')
+    })
+    expect(container?.textContent).toContain('reasoning_effort=Extra')
+    await act(async () => {
+      await page.getByLabelText('推理参数映射 JSON').fill(JSON.stringify({ adapter: 'deepseek-v4-thinking',
+        supportedEfforts: ['off', 'high'], providerValues: { off: 'disabled', high: 'enabled' } }))
+      await page.getByRole('button', { name: '应用映射', exact: true }).click()
+    })
+    expect(container?.textContent).toContain('仅支持思考开关')
+    await act(async () => {
+      await page.getByLabelText('推理参数映射 JSON').fill('')
+      await page.getByRole('button', { name: '应用映射', exact: true }).click()
+      await page.getByLabelText('模型推理覆盖').selectOptions('off')
+    })
+    expect(container?.textContent).toContain('未发送 / 供应商默认')
+    await act(async () => { await page.getByRole('button', { name: '保存配置', exact: true }).click() })
+    expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ reasoningMapping: undefined, reasoningOverride: 'off' }))
+  })
   it('does not discover when settings opens and refreshes explicitly with the current form configuration', async () => {
     const model = savedProfile()
     const discoverModels = vi.fn(async () => ({
@@ -204,7 +267,7 @@ describe('model discovery settings flow', () => {
     await vi.waitFor(() => expect(saveModel).toHaveBeenCalledWith(model))
   })
 
-  it('selects a discovered id without inference and saves only after explicit confirmation', async () => {
+  it('clears stale capabilities for an unknown selected id and saves only after confirmation', async () => {
     const model = savedProfile({
       capabilities: {
         contextWindowTokens: 32_768,
@@ -249,6 +312,9 @@ describe('model discovery settings flow', () => {
     expect(saveModel).toHaveBeenCalledWith({
       ...model,
       modelName: 'provider/model-b',
+      capabilities: undefined,
+      capabilitySources: { contextWindowTokens: 'unknown', maxOutputTokens: 'unknown', reasoning: 'unknown', structuredOutput: 'unknown', usage: 'unknown' },
+      reasoningOverride: 'auto',
     })
     expect(setDefaultModel).not.toHaveBeenCalled()
     expect(useLLMStore.getState().defaultModelId).toBe(model.id)
@@ -283,6 +349,9 @@ describe('model discovery settings flow', () => {
     await vi.waitFor(() => expect(saveModel).toHaveBeenCalledWith({
       ...model,
       modelName: 'manual-fallback-model',
+      capabilities: undefined,
+      capabilitySources: { contextWindowTokens: 'unknown', maxOutputTokens: 'unknown', reasoning: 'unknown', structuredOutput: 'unknown', usage: 'unknown' },
+      reasoningOverride: 'auto',
     }))
   })
 

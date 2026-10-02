@@ -20,6 +20,11 @@ const openAIModel: ModelProfile = {
 }
 
 describe('generation parameter policy', () => {
+  it('keeps a lower author output limit when capability metadata declares more', () => {
+    const constraints = resolveGenerationCapabilityConstraints({ ...openAIModel, maxTokens: 1024,
+      capabilities: { contextWindowTokens: 131072, maxOutputTokens: 32768, reasoning: false, structuredOutput: false, usage: false } })
+    expect(constraints.userMaxOutputTokens).toBe(1024)
+  })
   it('separates a verified provider limit from a larger user operational cap', () => {
     const constraints = resolveGenerationCapabilityConstraints({
       ...openAIModel,

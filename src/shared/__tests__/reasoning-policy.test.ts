@@ -130,7 +130,7 @@ describe('reasoning policy', () => {
       model: { ...grok, reasoningOverride: 'off' },
       creativeStrategy: 'fluent-drafting',
       stage: 'drafting',
-    })).toMatchObject({ requested: 'off', effective: 'low', status: 'forced' })
+    })).toMatchObject({ requested: 'off', effective: null, status: 'unsupported' })
   })
 
   it('suppresses reasoning fields for unknown custom endpoints and unverified built-in models', () => {

@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { R3_NATIVE_REVISION_DIAGNOSTIC as policy, productionScenario, qualificationBridgeWindows,
-  assertForwardReasoning, readR3NativeSource } from '../quality-modernization-driver.mjs'
+  assertForwardReasoning, readR3NativeSource, streamEventStructure } from '../quality-modernization-driver.mjs'
 import { ROOT, CAMPAIGN_ID, currentProtocolBinding, selectPhase, forwardReasoningFor,
   forwardQualificationWindowFor, hash, updateLedger } from '../quality-modernization-run.mjs'
 
@@ -54,4 +54,70 @@ test('R3 native registration rejects altered source and cannot restart spent dia
     assert.equal(original.trim().split('\n').length, 3)
     assert.equal(JSON.parse(original.split('\n')[0]).allocation, 'nonQualificationDiagnostic')
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+
+test('R3 replacement preserves the authenticated UNKNOWN and permits only one new eight-call invocation', () => {
+  const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', 'r3-replacement-' + randomUUID())
+  fs.mkdirSync(directory, { recursive: true })
+  try {
+    const ledger = path.join(directory, 'ledger.jsonl')
+    const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', ...currentProtocolBinding(),
+      codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
+      phase, milestone: 'diagnostic', caseId: 'R3', operation: policy.operations[0].id, invocationId: policy.replacementOf,
+      diagnosticInputHash: policy.source.contextSha256, diagnosticSourceHash: hash(policy.source),
+      evaluationPolicyHash: hash(policy.evaluationPolicy), actual: { attemptId: 'old', runId: 'run', rootActionId: 'root',
+        projectId: 'isolated-project', epoch: 'isolated-epoch', purpose: 'review-chapter' } }
+    const oldBinding = { ...binding, protocolHash: protocol.historicalR3NativeD12c4111Boundary.protocolHash }
+    const original = [{ type: 'reserve', attemptId: 'candidate:old', binding: oldBinding, allocation: 'nonQualificationDiagnostic' },
+      { type: 'dispatch', attemptId: 'candidate:old' }, { type: 'unknown', attemptId: 'candidate:old' }]
+      .map(row => JSON.stringify(row) + '\n').join('')
+    const boundary = { fromEventCount: 0, eventCount: 3, rawBytesSha256: hash(original),
+      protocolRevision: oldBinding.protocolRevision, protocolHash: oldBinding.protocolHash,
+      reserveAttempts: [{ attemptId: 'candidate:old', invocationId: policy.replacementOf, terminal: 'unknown' }] }
+    const options = { campaignMode: 'synthetic', historicalR3NativeD12c4111Boundary: boundary }
+    fs.writeFileSync(ledger, original)
+    const invocationId = randomUUID()
+    const reserve = (attemptId, operation, purpose, invocation = invocationId) => ({ type: 'reserve', attemptId,
+      binding: { ...binding, operation, invocationId: invocation, actual: { ...binding.actual, attemptId, purpose } } })
+    assert.throws(() => updateLedger(ledger, reserve('reused', policy.operations[0].id, 'review-chapter', policy.replacementOf), options), /ATTEMPT_UNAVAILABLE/)
+    assert.throws(() => updateLedger(ledger, reserve('bad-boundary', policy.operations[0].id, 'review-chapter'), {
+      ...options, historicalR3NativeD12c4111Boundary: { ...boundary, rawBytesSha256: '0'.repeat(64) } }), /SUPERSESSION_DRIFT/)
+    const schedule = [
+      [0, 'review-chapter', 'stop'], [0, 'review-chapter-rebuild', 'stop'],
+      [1, 'refine-from-review', 'length'], [1, 'refine-from-review', 'length'],
+      [1, 'refine-from-review', 'length'], [1, 'refine-from-review', 'stop'],
+      [2, 'review-chapter', 'stop'], [2, 'review-chapter-rebuild', 'stop'],
+    ]
+    for (const [index, [operation, purpose, finishReason]] of schedule.entries()) {
+      const attemptId = 'candidate:new-' + index
+      updateLedger(ledger, reserve(attemptId, policy.operations[operation].id, purpose), options)
+      updateLedger(ledger, { type: 'dispatch', attemptId }, options)
+      updateLedger(ledger, { type: 'settle', attemptId, finishReason }, options)
+    }
+    assert.throws(() => updateLedger(ledger, reserve('ninth', policy.operations[2].id, 'review-chapter-rebuild'), options), /ATTEMPT_UNAVAILABLE/)
+    assert.throws(() => updateLedger(ledger, reserve('third-invocation', policy.operations[0].id, 'review-chapter', randomUUID()), options), /ATTEMPT_UNAVAILABLE/)
+    assert.ok(fs.readFileSync(ledger, 'utf8').startsWith(original))
+    // A second UNKNOWN neither refunds this registration nor permits continuation.
+    fs.writeFileSync(ledger, original)
+    updateLedger(ledger, reserve('candidate:unknown', policy.operations[0].id, 'review-chapter'), options)
+    updateLedger(ledger, { type: 'dispatch', attemptId: 'candidate:unknown' }, options)
+    updateLedger(ledger, { type: 'unknown', attemptId: 'candidate:unknown' }, options)
+    assert.throws(() => updateLedger(ledger, reserve('continue', policy.operations[0].id, 'review-chapter-rebuild'), options), /ATTEMPT_UNAVAILABLE/)
+    assert.throws(() => updateLedger(ledger, reserve('restart', policy.operations[0].id, 'review-chapter', randomUUID()), options), /ATTEMPT_UNAVAILABLE/)
+    assert.ok(fs.readFileSync(ledger, 'utf8').startsWith(original))
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('SSE terminal shape records explicit null versus missing without leaking provider text', () => {
+  const event = { id: 'secret-id', error: { message: 'secret-error' }, usage: { private: 'secret-usage' },
+    choices: [{ finish_reason: null, delta: { content: 'secret-body', reasoning_content: 'secret-reasoning' } }] }
+  assert.deepEqual(streamEventStructure(event), { choicesType: 'array', choicesCount: 1,
+    finishType: 'null', finish: null, contentType: 'string', reasoningType: 'string', usageType: 'object', errorType: 'object' })
+  assert.equal(streamEventStructure({ choices: [] }).finishType, 'undefined')
+  event.choices[0].finish_reason = 'secret-unrecognized-finish'
+  assert.equal(streamEventStructure(event).finish, null)
+  assert.ok(!JSON.stringify(streamEventStructure(event)).includes('secret'))
+  event.choices[0].finish_reason = 'stop'
+  assert.equal(streamEventStructure(event).finish, 'stop')
 })

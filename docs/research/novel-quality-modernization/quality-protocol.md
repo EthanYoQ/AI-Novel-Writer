@@ -8,13 +8,15 @@
 
 ## 线程 10 候选接线（已实现，尚未取得正式资格）
 
+产品预算和自动参数匹配按 [S07 现行增量](../../plans/novel-quality-modernization/specs/S07.md#generic-model-compatibility)执行。实验的模型、参数和次数登记只约束该实验，不成为产品型号名单。未知能力按运行估算记录；估算不足不等同硬上限违约。此修改不证明此前空响应已解决，历史请求与结论保留。
+
 当前工作候选增加 `s14b-candidate-only-three-rounds-v1`。历史登记保留；新 revision 使用候选自己的生产模板、三个持续项目和短细纲原生产操作。实现、独审及真实验收进度以唯一检查点为准，不能把本段当作已冻结或文学通过声明。
 
 2026-10-02 用户追加的[模型差异与软件交付规则](thread10-delivery-plan.md#2026-10-02-用户追加模型差异与软件交付)优先适用。替代模型须在同案例真实软件流程通过，才能结束该范围的软件修复循环。直连 API 成功仅为开发比较，不能替代原生准入、材料装配、真实请求、保存及读回。机器评分及历史结果不改判，未运行批次不记 PASS。post-UI 原生技术检查继续使用已登记阶段及唯一物理账本。
 
 - `freeze-targets --output <新私有 targets.json> --model-id <已安全配置的 id>` 在新 revision 下只冻结 candidate；不再要求 baseline。配置就绪后用 `register-batch --targets <targets.json> --output <新私有 batch.json>` 预登记代码、协议、模型配置 hash、30 个案例槽位及实际 invocation。
 - 正式 `c16-c18 --targets ... --mode real --physical-ledger ... --batch ... --round 1|2|3` 与 `full ... --batch ... --round 1` 消费同一批次。继续执行使用相同 batch/round，读取已有执行记录；已发送且结果不明的位置保留失败并对账，不换 invocation 重抽。后继缺少有效保存稿时保留 NOT_RUN，其他独立链继续。
-- 新正文每条在同一 root 先执行一次 `chapter-draft-short-outline`，其实际产物不得用于正文组合或可信派生；正文和恢复沿用其原产物与组合提示身份。四条恢复写作的一轮原生请求登记为 20–84；三个持续项目九章为 30–180。三轮加持续写作合计预计 90–432 次请求，具体包含原生格式恢复、续写和压缩的实际分支。80 是历史计划额，不是硬帽；开发筛选和独有 post-UI 请求另记实际数量，不填正式分母。
+- 新正文每条在同一 root 先执行一次 `chapter-draft-short-outline`，其实际产物用于正文组合，但不作为可信派生来源；正文和恢复沿用其原产物与组合提示身份。四条恢复写作的一轮原生请求登记为 20–84；三个持续项目九章为 30–180。三轮加持续写作合计预计 90–432 次请求，具体包含原生格式恢复、续写和压缩的实际分支。80 是历史计划额，不是硬帽；开发筛选和独有 post-UI 请求另记实际数量，不填正式分母。
 - 保存稿的 `currentReviewState` 绑定当前正文 hash 及终局 review/cycle。前章经已有选稿路径继续，不定稿、不 waive；技术结果和独立语义结论分别保留。
 - `adjudicate-batch --batch <batch.json> --reviews <双评与争议裁决.json>` 验证各槽位实际结果 hash 和两名独立评审，仅对分歧要求仲裁，再执行线程 10 第 5 节阈值。自动执行器仍不能产生文学 PASS；开发合成材料不能代替正式样本。
 
@@ -474,6 +476,10 @@ N 只计算桥的外层兜底，不增加任何 dispatch 权限：C16-A/B/C 的 
 
 流程为真实模型准入、材料装配、普通首审、实际 AI 问题确认、一次修稿合并、保存读回及普通末审。首审必须自行发现原问题，不提供作者纠错答案。新报告及请求不冒充原直连请求；原 Pro 报告和 root 不改标为 Qwen。没有有效 AI 问题时保留实际结果，不能补题后判闭环通过。软件处理器、provider、持久化均走原路径；该生产桥不证明鼠标操作或完整桌面呈现。
 
-本次配置为 `Qwen/Qwen3.8-27B`、`https://api.siliconflow.cn/v1`、`reasoning_effort=medium`、temperature 0、max_tokens 16384；不发送 `enable_thinking`。产品可用上下文保守取 262144。请求使用既有 total-bounded 路径，完整预留 1048576，UNKNOWN 保留责任，可信用量结算释放余量。该预留是工程判断，依据[型号说明](https://www.siliconflow.cn/models)、[总上下文截断规则](https://docs.siliconflow.cn/docs/userguide/capabilities/reasoning)及[Qwen 扩展容量](https://huggingface.co/Qwen/Qwen3.8-27B)。它不是两次响应实测出的绝对计费上限，也不放宽其他型号的准入。
+首次登记的配置为 `Qwen/Qwen3.8-27B`、`https://api.siliconflow.cn/v1`、`reasoning_effort=medium`、temperature 0、max_tokens 16384；不发送 `enable_thinking`。当时产品可用上下文取 262144。请求采用 total-bounded 路径，预留 1048576，可信用量结算释放余量。该预留是当时的工程判断，依据[型号说明](https://www.siliconflow.cn/models)、[总上下文截断规则](https://docs.siliconflow.cn/docs/userguide/capabilities/reasoning)及[Qwen 扩展容量](https://huggingface.co/Qwen/Qwen3.8-27B)。它不是响应实测出的绝对计费上限。该记录保留原解释；后续产品预算按通用模型兼容规则处理，不能把此实验参数作为其他型号的准入要求。费用结算与正文完成分别记录。
 
 正常闭环为三次请求。最多八次仅供现有格式重建和 LENGTH 续写使用，不能因语义失败重抽。实际发送继续由受控 runner 写唯一物理账本。保存身份、来源、请求参数及原始输出必须可复核。自动技术完成最多记待独立语义判读；只有真实保存稿符合原案例事实，才能支持该案例的模型差异归因。一次成功不等于长期稳定或完整文学资格。
+
+首次 invocation `d12c4111-285e-41a7-8bcc-4b7f9afd0681` 保留 UNKNOWN。首审无可见正文，也没有 `finish_reason`。原生费用已按可信用量 4577 结算，不能据此认定正文完成。`historicalR3NativeD12c4111Boundary` 只认证原1596行及身份，不改账本或结果。
+
+`replacementOf` 登记一次后续检查，沿用原案例、提示及模型参数。只排除已认证旧 invocation 的占用；新 invocation 最多八次，第三次执行仍拒绝。通用兼容修复后重新冻结候选，不挪用旧源码身份。末尾 SSE 仅留结构和结束字段，不存思考正文。成功后结束本项检查；再次同类 UNKNOWN 时停止无变化重发，按具体证据定位。

@@ -9,7 +9,7 @@ import { test, vi } from 'vitest'
 import { updateLedger, CAMPAIGN_ID, ROOT, forwardReasoningFor, forwardQualificationWindowFor } from '../quality-modernization-run.mjs'
 import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, createOperationDispatchGate,
   createOutboundPreflightAssert, assertForwardReasoning, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
-  fetchProviderResponse, measurePromptBytes, qualificationBridgeWindows,
+  fetchProviderResponse, measurePromptBytes, qualificationBridgeWindows, streamEventStructure,
   POST_UI_REVIEW_POLICY, reviewedDraftSelection, R3_NATIVE_REVISION_DIAGNOSTIC, readR3NativeSource, BOUNDED_REVISION_DIAGNOSTIC,
   AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, aiReviewFinalManuscriptSelection, productionScenario, loadBaselineReviewContract,
   readBoundedRevisionSource, assertBoundedRevisionSource, boundedRevisionItems,
@@ -1307,6 +1307,7 @@ test('isolated production commands persist the selected phase operations', async
           let dataLines = []
           const streamProgress = requestReceipt.streamProgress = { bodyBytes: 0, contentEvents: 0, reasoningEvents: 0,
             sawDone: false, sawFinish: false, firstByteMs: null, lastByteMs: null }
+          if (request.phase === 'r3-native-revision-diagnostic') streamProgress.tailEvents = []
           const reader = ledgerBody.getReader(), decoder = new TextDecoder()
           try {
             for (;;) {
@@ -1333,7 +1334,12 @@ test('isolated production commands persist the selected phase operations', async
                 const data = dataLines.join('\n').trim(); dataLines = []
                 if (!data) continue
                 if (data === '[DONE]') { sawDone = streamProgress.sawDone = true; break }
-                try { const event = JSON.parse(data); const reason = event.choices?.[0]?.finish_reason
+                try { const event = JSON.parse(data)
+                  if (streamProgress.tailEvents) {
+                    streamProgress.tailEvents.push(streamEventStructure(event))
+                    if (streamProgress.tailEvents.length > 3) streamProgress.tailEvents.shift()
+                  }
+                  const reason = event.choices?.[0]?.finish_reason
                   const content = event.choices?.[0]?.delta?.content
                   const reasoning = event.choices?.[0]?.delta?.reasoning_content
                   if (typeof content === 'string') { visibleText += content; streamProgress.contentEvents++ }

@@ -251,7 +251,8 @@ export function validatePhysicalLedger(file) {
   const d021261f = validateHistoricalSupersessionBoundary(raw, r87266499, protocol.historicalC16D021261fBoundary)
   const r09ad48e1 = validateHistoricalSupersessionBoundary(raw, d021261f, protocol.historicalC1609ad48e1Boundary)
   const separated = validateHistoricalSupersessionBoundary(raw, r09ad48e1, protocol.historicalSeparatedReviewB89b011aBoundary)
-  validateHistoricalSupersessionBoundary(raw, separated, protocol.historicalPostUi83573613Boundary)
+  const postUi83573613 = validateHistoricalSupersessionBoundary(raw, separated, protocol.historicalPostUi83573613Boundary)
+  validateHistoricalSupersessionBoundary(raw, postUi83573613, protocol.historicalR3NativeD12c4111Boundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -823,6 +824,10 @@ export function updateLedger(file, event, options = {}) {
         ? protocol.historicalPostUi83573613Boundary : options.historicalPostUi83573613Boundary
       const trustedPostUi83573613Events = postUi83573613Boundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedSeparatedReviewB89b011aEvents, postUi83573613Boundary) : trustedSeparatedReviewB89b011aEvents
+      const r3NativeBoundary = options.campaignMode === 'real'
+        ? protocol.historicalR3NativeD12c4111Boundary : options.historicalR3NativeD12c4111Boundary
+      const trustedR3NativeEvents = r3NativeBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedPostUi83573613Events, r3NativeBoundary) : trustedPostUi83573613Events
       // 阶段决定首选分配桶：early 阶段用 early*，post-UI 重跑用 postUi*；
       // 同一 slot 的重复发送或已超出计划样本量的发送归入失败/修复余量。
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
@@ -848,7 +853,13 @@ export function updateLedger(file, event, options = {}) {
           return 'nonQualificationDiagnostic'
         }
         if (binding.phase === 'r3-native-revision-diagnostic') {
-          const prior = [...reserved.values()].filter(row => row.binding.phase === binding.phase)
+          const replacementOf = R3_NATIVE_REVISION_DIAGNOSTIC.replacementOf
+          if (binding.invocationId === replacementOf) fail('R3_NATIVE_ATTEMPT_UNAVAILABLE')
+          // Only this authenticated historical invocation is outside the new registration.
+          const prior = [...reserved.values()].filter(row => row.binding.phase === binding.phase
+            && !(r3NativeBoundary && trustedR3NativeEvents > trustedPostUi83573613Events
+              && row.binding.invocationId === replacementOf
+              && r3NativeBoundary.reserveAttempts.some(item => item.attemptId === row.attemptId)))
           const matches = prior.filter(row => row.binding.operation === binding.operation)
           const operations = R3_NATIVE_REVISION_DIAGNOSTIC.operations
           const index = operations.findIndex(item => item.id === binding.operation)
@@ -892,7 +903,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedPostUi83573613Events
+          const superseded = index >= trustedHistoricalEvents && index < trustedR3NativeEvents
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)

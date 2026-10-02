@@ -69,11 +69,21 @@ export interface GenerationRunServiceDependencies {
 }
 export function settleProviderUsage(usage: GenerationProviderUsage | null, policy: ProviderUsagePolicy): GenerationUsageReceipt {
     const conservative: GenerationUsageReceipt = { policy, trusted: false };
-    if (!usage?.trusted || usage.accounting === 'unknown' || usage.accounting !== policy.reasoning)
+    if (!usage?.trusted)
         return conservative;
     const { promptTokens: p, completionTokens: c, reasoningTokens: r, totalTokens: t } = usage;
     if (p === null || c === null || !Number.isSafeInteger(p) || !Number.isSafeInteger(c) || p < 0 || c < 0
         || r !== null && (!Number.isSafeInteger(r) || r < 0) || t !== null && (!Number.isSafeInteger(t) || t < 0))
+        return conservative;
+    if (policy.reasoning === 'unknown') {
+        // Trust only a reported, arithmetically consistent total. The adapter's
+        // protocol label cannot establish an unknown supplier's billing rules.
+        if (t === null || !Number.isSafeInteger(p + c)
+            || !(t === p + c && (r === null || r <= c) || r !== null && t === p + c + r)) return conservative;
+        return { policy, trusted: true, inputTokens: p, completionTokens: c,
+            ...(r !== null ? { reasoningTokens: r } : {}), actualTokens: t };
+    }
+    if (usage.accounting === 'unknown' || usage.accounting !== policy.reasoning)
         return conservative;
     if (usage.accounting === 'included-in-completion' && r !== null && r > c)
         return conservative;
@@ -109,10 +119,10 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
             if (failedRoots.has(run.rootActionId))
                 throw new Error('GENERATION_STORAGE_FAILED');
             const { usagePolicy: policy } = request;
-            if (!policy.canBoundTotalLiability || !policy.estimatorVersion || !Number.isSafeInteger(policy.safetyMarginTokens) || policy.safetyMarginTokens < 0
+            if (typeof policy.canBoundTotalLiability !== 'boolean' || !policy.estimatorVersion || !Number.isSafeInteger(policy.safetyMarginTokens) || policy.safetyMarginTokens < 0
                 || ![request.inputUpperBoundTokens, request.reasoningUpperBoundTokens].every(v => Number.isSafeInteger(v) && v >= 0)
                 || request.reservedTokens < request.inputUpperBoundTokens + request.requestedOutputTokens + request.reasoningUpperBoundTokens + policy.safetyMarginTokens)
-                throw new Error('GENERATION_LIABILITY_UNBOUNDED');
+                throw new Error('GENERATION_RESERVATION_INVALID');
             let receipt: GenerationExecutionReceipt;
             try {
                 receipt = deps.repository.reserve(request.runId, request.invocationNonce, requestHash, request.reservedTokens, request.requestedOutputTokens, policy, request.purpose, request.replayTask, request.budgetDecision, request.reconciliationInjected);

@@ -7,12 +7,14 @@
 2026-10-02 用户追加的[模型差异与软件交付规则](thread10-delivery-plan.md#2026-10-02-用户追加模型差异与软件交付)优先适用。替代模型须在同案例真实软件流程通过，才能据此排除该范围的编排问题。直连 API 成功不能替代此条件。文学资格未完成的事实与数据保护要求保留。
 
 1. 每项均读下表链接的**原 Spec 全文**，以及[核心 C01–C09](../../plans/novel-quality-modernization/03-CONTRACTS-AND-GATES.md)和 [Program v3 C10–C18 与旧 24 项覆盖表](../../plans/novel-quality-program-v3-2026-09-13/05-INTEGRATION-CONTRACT.md)中适用的条款。表内摘要是定位提示，不删减未列出的义务。
-2. 按[交付 delta](delivery-contract-delta-2026-09-21.md)应用替代关系；[线程 10 交付计划](thread10-delivery-plan.md)拥有本次产品增量、采样裁决和实施顺序，[现行变更规格](frontend-transition-specs.md)拥有其余前端、导入、交互及交付出口，[质量协议](quality-protocol.md)拥有机器接线说明与历史登记。新要求已生效但尚待实现；旧冻结原文和机器限制不能否决该要求，也不能被当作新资格就绪。[ADR 0019](../../adr/0019-remove-real-call-hard-cap.md)、[ADR 0020](../../adr/0020-legacy-project-copy-import.md)分别拥有调用上限调整和完整旧项目导入决定。
+2. 按[交付 delta](delivery-contract-delta-2026-09-21.md)应用替代关系；[线程 10 交付计划](thread10-delivery-plan.md)拥有采样裁决、实施顺序及其余本次产品增量。[S07 现行增量](../../plans/novel-quality-modernization/specs/S07.md#generic-model-compatibility)独占通用模型兼容和自动参数匹配的详细要求。[现行变更规格](frontend-transition-specs.md)拥有其余前端、导入、交互及交付出口，[质量协议](quality-protocol.md)拥有机器接线说明与历史登记。新要求已生效，但不证明实现或资格完成；旧冻结原文不能否决新要求。[ADR 0019](../../adr/0019-remove-real-call-hard-cap.md)、[ADR 0020](../../adr/0020-legacy-project-copy-import.md)分别拥有调用上限调整和完整旧项目导入决定。
 3. [实施计划](frontend-transition-plan.md)拥有当前依赖与调度，[执行规则](../../agents/delivery.md)拥有派工、模型和审查流程，包括 2026-10-01 生效的新建子 Agent 默认继承主线程模型与推理强度。冻结 DAG、旧执行矩阵、旧模型禁令和 `NOT STARTED` 是当时的规划，不是当前任务状态；旧环境快照、handoff 与审查收据中的模型配置只记录历史，不能覆盖现行派工规则。
 4. 冻结 Spec 中的拟新增文件和示例命令须映射到实际 owner、消费者和现行入口；名字不同本身不构成缺陷。实际缺少合同要求的行为仍是缺口，不能通过修改规格消除。
 5. 实际进度以唯一私有当前检查点及其绑定证据为准；[历史证据索引](evidence-index.md)与日期化 handoff 只证明各自范围。审查启动时固定代码 SHA、比较基线、工作区文档 hash 和未提交排除项，不把后续修改默认为已审。
 
 ## 所有审查共同适用的修订
+
+C01/S07、F05/U03 及全部生成消费者应用 [S07.M01–M04](../../plans/novel-quality-modernization/specs/S07.md#generic-model-compatibility)。高级设置的通用 OpenAI 入口须支持未登记的兼容型号。选模后的容量和思考映射须进入实际请求。未知容量、运行估算和已验证硬上限分别记录；根预算、未知结果及保存保护保留。验收引用 S07.A01–A07，历史冻结仍按原合同解释。
 
 S06B/C、S07、S09B、S10A/B、S11、S00/S14A/B/C 及 F05 的消费者须应用线程 10：补齐审修依据、区分 AI 建议与作者事实，新增自动短细纲及其来源/恢复，接入 candidate-only 多轮资格。保留[AI 自主审稿与作者批准](quality-protocol.md#ai-review-final-manuscript)；人工补题与开发比较不能代替正式闭环，旧诊断成功不填新名额。
 
@@ -43,7 +45,7 @@ S06A、S09B、S10A/B 及 S14A/B 继续应用[2026-09-30 材料澄清](delivery-c
 | [S06B 正文与批量恢复](../../plans/novel-quality-modernization/specs/S06B.md) | C01–C03、线程 10 切片 B。单章/批量共同路径自动短细纲后写正文，实际产物、来源和调用归原根预算；正文开始后恢复保持原细纲与组合提示身份。流式前缀、保存、取消及直接前驱保护保留，UI 终态不领先持久化。 |
 | [S06C 审稿修稿 run 归一](../../plans/novel-quality-modernization/specs/S06C.md) | C01–C03/C05、线程 10 切片 A。审修及复核消费已捕获的前驱、作者事实与目标；作者选择 AI 意见不把建议变成作者事实。归原动作和预算，保持 finding、合并、恢复与全章末审边界。 |
 | [S06D Agent 与工具子任务](../../plans/novel-quality-modernization/specs/S06D.md) | C01–C03。Agent/工具生成不旁路父动作、来源准入、预算和用户可见恢复；不借此扩展 DSH 插件范围。 |
-| [S07 任务预算、范围与诊断](../../plans/novel-quality-modernization/specs/S07.md) | C01/C06、线程 10、质量协议及 ADR 0019。短细纲纳入原根预算，新模型仅为有实用收益的胜者核实容量/参数与责任上限后接入；能力未知保护不撤。candidate 字数 ±30%，原生请求逐次结算，API 开发日志单列。 |
+| [S07 任务预算、范围与诊断](../../plans/novel-quality-modernization/specs/S07.md) | C01/C06、S07.M01–M04、质量协议及 ADR 0019。现行增量拥有移除型号白名单、通用选模、容量资料及思考映射；验收见 S07.A01–A07。短细纲归原根预算；运行估算不冒充硬上限。candidate 字数 ±30%，原生请求逐次结算，API 开发日志单列。 |
 | [S08 稳定角色 ID](../../plans/novel-quality-modernization/specs/S08.md) | C04/C08/C13/C16。有来源的身份迁移、歧义拒绝、历史引用、头像到稳定 ID 映射；不按名字相似度猜合并。 |
 | [S09A 角色/蓝图 proposal](../../plans/novel-quality-modernization/specs/S09A.md) | C04/C16。身份与关系提议、作者批准及正式提交边界；区别 S09B 已获授权的非冲突 derived 自动更新，不能笼统要求所有字段都手动批准。 |
 | [S09B 连续性、定稿与导入身份](../../plans/novel-quality-modernization/specs/S09B.md) | C04/C16。当前权威定稿、来源顺序、字段 CAS；非冲突 derived 自动演进，作者值/非空 legacy 值保全，冲突或身份歧义才提议。线程 10 的细纲不是定稿或可信派生来源；计划不能冒充已发生事实，不增加独立提取调用。 |
@@ -69,7 +71,7 @@ S06A、S09B、S10A/B 及 S14A/B 继续应用[2026-09-30 材料澄清](delivery-c
 | [B01 完整归档与新副本恢复](../../plans/novel-quality-program-v3-2026-09-13/specs/B01.md) | C17。当前项目一致性归档、资产/来源/可读权威、新 projectId/epoch、历史 nonReplayable；不携机器权限/秘密、不重放旧任务。ADR 0020 的离线旧源例外不放宽此路径。 |
 | [B02 手动 WebDAV](../../plans/novel-quality-program-v3-2026-09-13/specs/B02.md) | C18。手动不可变完整世代、分叉/持久父世代、新副本恢复、OS 凭据与可见 session-only 降级；首版非 E2E，不做实时同步。B01 管资产/权限，不要求服务支持 CAS 才能备份。 |
 | [F04 V3 主入口](../../plans/novel-quality-program-v3-2026-09-13/specs/F04.md) | 全部呈现要求读现行 F04，原业务能力和已知缺陷修复保留。薄切片一次视觉确认、完整业务接线、编辑/任务/保存状态连续；不重做已确认视觉方案。 |
-| [F05 全功能与桌面体验](../../plans/novel-quality-program-v3-2026-09-13/specs/F05.md) | 现行 F05、[153-action 冻结并集](../../plans/novel-quality-program-v3-2026-09-13/09-FEATURE-UNION.md)、[证据分层](feature-evidence-levels.json)。能力不删；A11/U15.A02/U06 按明确修订，Final 与 post-UI 分开，IME 豁免单独计数。 |
+| [F05 全功能与桌面体验](../../plans/novel-quality-program-v3-2026-09-13/specs/F05.md) | 现行 F05、[153-action 冻结并集](../../plans/novel-quality-program-v3-2026-09-13/09-FEATURE-UNION.md)、[证据分层](feature-evidence-levels.json)。U03 按 S07 验证通用选模、参数保存和实际请求。能力不删；A11/U15.A02/U06 按明确修订，Final 与 post-UI 分开，IME 豁免单独计数。 |
 | [R01 精确产物发布](../../plans/novel-quality-program-v3-2026-09-13/specs/R01.md) | 现行 R01、release profile。实际被测产物、来源/hash/版本/update metadata、双语限制说明和发布授权；Draft PR 不等于发布，未签名按既有 profile 披露而不加购买证书门。 |
 | [G02 按交付关闭 Issue](../../plans/novel-quality-program-v3-2026-09-13/specs/G02.md) | C15、现行 G02。逐症状到已发布能力及用户入口证据；只有具备相应授权才写评论/关闭/回读。未发布、未验证或有反例的项保持未结案。 |
 

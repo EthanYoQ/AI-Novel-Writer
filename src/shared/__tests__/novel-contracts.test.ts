@@ -51,10 +51,11 @@ describe('S01共享契约（纯合成，不是生产持久化资格）', () => {
     expect(() => assertAttemptTransition('unknown', 'reserved')).toThrow()
     expect(() => assertAttemptTransition('dispatch-marked', 'cancelled-before-dispatch')).toThrow()
   })
-  it('未知usage保守占用，超估实记且停止下一请求', () => {
+  it('未知usage保守占用，超估实记并受根额度限制', () => {
     expect(tokenLiability({ ...attempt('一'), status: 'unknown' })).toBe(100)
     expect(tokenLiability({ ...attempt('一'), status: 'settled', actualTokens: 150 })).toBe(150)
-    expect(() => assertReservation(root, { ...budget, maxTokenLiability: 1000 }, [{ ...attempt('一'), status: 'settled', actualTokens: 150 }], attempt('二'), 0)).toThrow('USAGE_EXCEEDED_RESERVATION')
+    expect(() => assertReservation(root, { ...budget, maxTokenLiability: 1000 }, [{ ...attempt('一'), status: 'settled', actualTokens: 150 }], attempt('二'), 0)).not.toThrow()
+    expect(() => assertReservation(root, { ...budget, maxTokenLiability: 200 }, [{ ...attempt('一'), status: 'settled', actualTokens: 150 }], attempt('二'), 0)).toThrow('ROOT_BUDGET_EXHAUSTED')
     expect(tokenLiability({ ...attempt('一'), status: 'cancelled-before-dispatch' })).toBe(0)
   })
   it('可见快照只接受同attempt同epoch单调前缀及真实文本hash', async () => {

@@ -19,6 +19,20 @@ function plan(profile = model(), input = task, budget = ledger()) {
 const gemini = () => model({ provider: 'gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', modelName: 'gemini-2.5-flash-lite', reasoningOverride: 'medium' })
 const silicon = () => model({ baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash', capabilities: { contextWindowTokens: 65536, maxOutputTokens: 8192, reasoning: false, structuredOutput: false, usage: false } })
 
+it.each([task, { ...task, budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 1000, segmentable: false } } as GenerationTask])(
+  'plans unregistered compatible models as estimates without inventing capability: %j', input => {
+    const result = plan(model({ provider: 'custom', baseUrl: 'http://localhost:8000/v1', modelName: 'hand-entered' }), input)
+    expect(result.usagePolicy).toMatchObject({ canBoundTotalLiability: false, reasoning: 'unknown' })
+    expect(result.requestedOutputTokens).toBe(input.budgetDemand ? 2912 : 8192)
+    expect(result.reservedTokens).toBe(result.inputUpperBoundTokens + result.requestedOutputTokens + 512)
+    expect(result.options.reasoning).toBeUndefined()
+    if (input.budgetDemand) expect(result.budgetDecision?.reasons).toContainEqual({ code: 'model-capability-unknown', selected: true })
+    const qwen = plan(model({ provider: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'Qwen/Qwen3.8-27B' }), input)
+    expect(qwen.options.reasoning).toBeUndefined()
+    expect(qwen.usagePolicy).toMatchObject({ canBoundTotalLiability: false, reasoning: 'unknown' })
+    expect(qwen.requestedOutputTokens).toBeGreaterThan(0)
+  })
+
 describe('fixed Qwen native admission', () => {
   const qwen = () => model({ provider: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1',
     modelName: 'Qwen/Qwen3.8-27B', maxTokens: 16384, reasoningOverride: 'medium' })
@@ -33,7 +47,7 @@ describe('fixed Qwen native admission', () => {
     expect(result.requestedOutputTokens).toBe(input.budgetDemand ? 2912 : 16384)
     expect(plan({ ...qwen(), maxTokens: 32768 }, input).requestedOutputTokens).toBe(input.budgetDemand ? 2912 : 16384)
     expect(result.options.reasoning).toEqual({ adapter: 'openai-reasoning-effort', reasoningEffort: 'medium' })
-    expect(plan({ ...qwen(), provider: 'openai' }, input).reservedTokens).toBe(1048576)
+    expect(plan({ ...qwen(), provider: 'custom' }, input)).toEqual(result)
     budget.attempts = [1, 2].map(index => ({ attemptId: `q-${index}`, reservationId: `r-${index}`,
       rootActionId: '根', status: 'unknown', reservedTokens: 1048576, requestedOutputTokens: 16384, actualTokens: 100 }))
     expect(() => plan(qwen(), input, budget)).toThrow('ROOT_BUDGET_EXHAUSTED')
@@ -49,10 +63,14 @@ describe('fixed Qwen native admission', () => {
     { baseUrl: 'https://api.siliconflow.com/v1' }, { baseUrl: 'http://api.siliconflow.cn/v1' },
     { baseUrl: 'https://api.siliconflow.cn/v2' }, { baseUrl: 'https://api.siliconflow.cn/v1?proxy=1' },
     { baseUrl: 'https://api.siliconflow.cn.evil.test/v1' }, { modelName: 'Qwen/Qwen3.8-27B-other' },
-    { provider: 'custom' }, { protocol: 'gemini' },
+    { protocol: 'gemini' },
     { reasoningOverride: 'auto' }, { reasoningOverride: 'high' }, { reasoningOverride: 'low' },
-  ] as Partial<ModelProfile>[])('refuses unregistered Qwen configuration %j', overrides => {
-    for (const input of inputs) expect(() => plan({ ...qwen(), ...overrides }, input)).toThrow()
+  ] as Partial<ModelProfile>[])('does not invent Qwen mappings for unmatched settings %j', overrides => {
+    for (const input of inputs) {
+      const result = plan({ ...qwen(), ...overrides }, input)
+      expect(result.options.reasoning).toBeUndefined()
+      expect(result.usagePolicy.canBoundTotalLiability).toBe(false)
+    }
   })
 })
 
@@ -98,9 +116,10 @@ describe('main generation physical liability planning without provider calls', (
     expect(result.reservedTokens).toBe(10000)
     expect(result.usagePolicy.reasoning).toBe('separately-billed')
   })
-  it('allows known Gemini explicit zero but refuses an unknown thinking mapping', () => {
+  it('distinguishes known Gemini zero from an unknown thinking estimate', () => {
     expect(plan({ ...gemini(), reasoningOverride: 'off' }).reasoningUpperBoundTokens).toBe(0)
-    expect(() => plan({ ...gemini(), modelName: 'gemini-unknown' })).toThrow('GENERATION_LIABILITY_UNBOUNDED')
+    expect(plan({ ...gemini(), modelName: 'gemini-unknown' }).usagePolicy)
+      .toMatchObject({ canBoundTotalLiability: false, reasoning: 'unknown' })
   })
   it('reserves the full Silicon V4 1M despite smaller user context and feature claims', () => {
     const result = plan(silicon())
@@ -139,11 +158,11 @@ describe('main generation physical liability planning without provider calls', (
     expect(() => plan(model(), { ...task, [key]: 1 } as GenerationTask)).toThrow('GENERATION_SEMANTIC_TASK_INVALID')
   })
   it.each(['https://proxy.example/v1', 'http://api.openai.com/v1', 'https://api.openai.com.evil.example/v1', 'https://api.openai.com:444/v1', 'https://user@api.openai.com/v1'])('does not trust endpoint claims: %s', baseUrl => {
-    expect(() => plan(model({ baseUrl }))).toThrow('GENERATION_LIABILITY_UNBOUNDED')
+    expect(plan(model({ baseUrl })).usagePolicy.canBoundTotalLiability).toBe(false)
   })
   it('does not trust an arbitrary Silicon model or protocol claim', () => {
-    expect(() => plan({ ...silicon(), modelName: 'unknown-model' })).toThrow('GENERATION_LIABILITY_UNBOUNDED')
-    expect(() => plan(model({ protocol: 'gemini' }))).toThrow('GENERATION_LIABILITY_UNBOUNDED')
+    expect(plan({ ...silicon(), modelName: 'unknown-model' }).usagePolicy.canBoundTotalLiability).toBe(false)
+    expect(plan(model({ protocol: 'gemini' })).usagePolicy.canBoundTotalLiability).toBe(false)
   })
 })
 
@@ -157,9 +176,8 @@ it.each([
   expect(receipt.capabilityEvidence.source.featureFlags).toBe('unknown')
   expect(receipt.capabilityEvidence.reasoning).toBeNull()
   expect(receipt.capabilityEvidence.usage).toBeNull()
-  // 官方 host 只证明协议边界，不证明模型容量。未知模型现在连无 demand 的任务
-  // 也必须在这里预检拒绝，而不是凭 host 加用户上限继续发送。
-  expect(() => buildMainGenerationPlan(profile, receipt, task, ledger())).toThrow('GENERATION_MODEL_CAPABILITY_UNKNOWN')
+  // 兼容请求可按运行估算发送，官方 host 不会补成已验证型号能力。
+  expect(buildMainGenerationPlan(profile, receipt, task, ledger()).usagePolicy.canBoundTotalLiability).toBe(false)
 })
 
 it('caps output at the main per-request policy even when the profile permits more', () => {
@@ -257,9 +275,11 @@ describe('S07 semantic pre-dispatch integration', () => {
     expect(JSON.stringify(input)).toBe(bytes)
   })
   it('cannot treat an unknown model plus a large user limit as capability proof', () => {
-    expect(() => plan(model({ modelName: 'unknown-future-model', maxTokens: 128000,
+    const result = plan(model({ modelName: 'unknown-future-model', maxTokens: 128000,
       capabilities: { contextWindowTokens: 128000, maxOutputTokens: 128000, reasoning: false, usage: true, structuredOutput: true } }),
-    draft(900))).toThrow('GENERATION_MODEL_CAPABILITY_UNKNOWN')
+    draft(900))
+    expect(result.usagePolicy.canBoundTotalLiability).toBe(false)
+    expect(result.budgetDecision?.reasons).toContainEqual({ code: 'model-capability-unknown', selected: true })
   })
   it('refuses an indivisible draft when only the user output cap is too small', () => {
     expect(() => plan(model({

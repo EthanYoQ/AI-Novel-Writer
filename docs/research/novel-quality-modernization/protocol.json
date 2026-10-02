@@ -947,6 +947,29 @@
     ],
     "limits": "Immutable historical Pro post-UI requests; no new qualification claim."
   },
+  "historicalR3NativeD12c4111Boundary": {
+    "fromEventCount": 1593,
+    "eventCount": 1596,
+    "rawBytesSha256": "f6c7860a9b8ab6c1208f2874daa24a9cd88992f6898163694f076af4f9d5d31a",
+    "protocolRevision": "s14b-candidate-only-three-rounds-v1",
+    "protocolHash": "04a668a676024fe68bd92b3180f251360839c6f9b77c6cf4737d322513e7722e",
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:39bb2b4e-3e44-4b67-8ba9-488931c13c81",
+        "invocationId": "d12c4111-285e-41a7-8bcc-4b7f9afd0681",
+        "terminal": "unknown"
+      }
+    ],
+    "armBindings": {
+      "candidate": {
+        "codeSha": "34bb14cf74cd5e4d8e416f943fd5c4526062a8b4",
+        "sourceHash": "33eb561ae368d1bf216094f70e17d1fc1080066858c2541b5f34643cafb2062d",
+        "driverHash": "80a5564d34c099223030a7129488a253f6e4f7b2dee76aa2e411bf7bc7a26359",
+        "parityId": "f949a741088fa19051227a843d504f13919d0fc92b2eb7999c210794a836d363"
+      }
+    },
+    "limits": "Preserve the original UNKNOWN. One registered replacement invocation only; no automatic retry after another UNKNOWN."
+  },
   "phases": {
     "r3-native-revision-diagnostic": {
       "caseId": "R3",
@@ -961,6 +984,7 @@
       ],
       "nonQualification": true,
       "scenarioRevision": "r3-native-revision-diagnostic-v1",
+      "replacementOf": "d12c4111-285e-41a7-8bcc-4b7f9afd0681",
       "minPhysicalRequests": 3,
       "maxPhysicalRequests": 8,
       "model": {

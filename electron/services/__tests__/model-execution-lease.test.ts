@@ -43,6 +43,11 @@ describe('ModelExecutionLeaseRegistry', () => {
     expect(credentialChange.capabilityEvidence.subjectFingerprint).toBe(base.capabilityEvidence.subjectFingerprint)
     const reasoningChange = createModelExecutionLeaseReceipt({ ...modelProfile(), reasoningOverride: 'off' }, options)
     expect(reasoningChange.modelRevision).not.toBe(base.modelRevision)
+    const mappingChange = createModelExecutionLeaseReceipt({ ...modelProfile(), reasoningMapping: {
+      adapter: 'openai-reasoning-effort', supportedEfforts: ['xhigh'], providerValues: { xhigh: 'Extra' },
+    }, maxTokens: 1024 }, options)
+    expect(mappingChange.modelRevision).not.toBe(base.modelRevision)
+    expect(mappingChange.capabilityEvidence.maxOutputTokens).toBe(1024)
     expect(() => createModelExecutionLeaseReceipt({ ...modelProfile(), baseUrl: 'synthetic-invalid-secret' }, options))
       .toThrow('模型端点地址无效')
   })

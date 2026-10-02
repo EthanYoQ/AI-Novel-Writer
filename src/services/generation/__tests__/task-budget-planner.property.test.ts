@@ -138,22 +138,23 @@ describe('S07 task budget planner invariants', () => {
     }), { numRuns: 600 })
   })
 
-  it('fails closed whenever the model capability is unknown', () => {
+  it('preserves unknown capability without inventing a model bound', () => {
     fc.assert(fc.property(plannerInput, input => {
       if (input.capability.modelContextWindowTokens !== null && input.capability.modelMaxOutputTokens !== null) return
       const decision = planTaskBudget(input)
-      expect(decision.decision).toBe('capacity-conflict')
       expect(decision.reasons.some(reason => reason.code === 'model-capability-unknown')).toBe(true)
+      if (input.capability.modelMaxOutputTokens === null) expect(decision.reasons.some(reason => reason.code === 'model-output-cap')).toBe(false)
+      if (input.capability.modelContextWindowTokens === null) expect(decision.reasons.some(reason => reason.code === 'model-context-cap')).toBe(false)
     }), { numRuns: 600 })
   })
 
-  it('reports an unbounded liability protocol as a conflict', () => {
+  it('keeps unknown liability visible while respecting the root estimate', () => {
     fc.assert(fc.property(plannerInput, input => {
       // 能力未知会先命中它自己的冲突，这里要单独隔离协议责任这一条。
       fc.pre(input.capability.modelContextWindowTokens !== null && input.capability.modelMaxOutputTokens !== null)
       const decision = planTaskBudget({ ...input, liability: { mode: 'unknown' } })
-      expect(decision.decision).toBe('capacity-conflict')
       expect(decision.reasons.some(reason => reason.code === 'liability-bound-unknown')).toBe(true)
+      expect(decision.reservationLiabilityTokens).toBeLessThanOrEqual(input.root.remainingTokenLiability)
     }), { numRuns: 200 })
   })
 

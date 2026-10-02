@@ -93,6 +93,32 @@ describe('automatic short outline binding', () => {
     coverage: { required: 1, included: 1, complete: true }, included: [{ sourceId: 'author:required', revision: 1, contentHash: 'a'.repeat(64), category: 'author' as const, required: true, units: 1 }], omitted: [] }
   const outlineTask = { purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text' as const, messages: [{ role: 'user' as const, content: outlinePrompt }] }
   const draftTask = (content: string) => ({ ...task, messages: [{ role: 'user' as const, content }] })
+  it('sends a hand-entered model through the native adapter for outline then prose with unknown usage', async () => {
+    const f = fixture()
+    Object.assign(f.model, { provider: 'custom', baseUrl: 'http://localhost:8000/v1', modelName: 'hand-entered', capabilities: null })
+    const fetch = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body))
+      expect(body.model).toBe('hand-entered')
+      expect(body).not.toHaveProperty('reasoning_effort')
+      const content = body.messages[0].content === outlinePrompt ? outline : '正文。'
+      return { ok: true, body: new ReadableStream({ start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`))
+        controller.close()
+      } }) }
+    })
+    vi.stubGlobal('fetch', fetch)
+    const run = f.owner.begin({ ...f.begin, materialDecision: decision })
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'outline', task: outlineTask })
+    const drafted = await f.owner.execute({ handle: run.handle, invocationNonce: 'prose', task: draftTask(composed) })
+    expect(drafted.outcome).toMatchObject({ status: 'completed', content: '正文。' })
+    expect(drafted.run.ledger).toMatchObject({ physicalRequests: 2 })
+    const repository = new GenerationRunRepository(() => f.db)
+    expect(repository.budget(run.handle.rootActionId).attempts.every(attempt => attempt.status === 'unknown' && attempt.reservedTokens > 0)).toBe(true)
+    const owner = f.reopen(), resumed = await owner.resume(run.handle)
+    await owner.execute({ handle: resumed.handle, invocationNonce: 'prose', task: draftTask(composed) })
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(owner.readContext(resumed.handle).draftShortOutline?.completedOutput).toBe(outline)
+  })
   it('requires and consumes its native artifact, then preserves the exact draft task across reopen', async () => {
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
       options.onVisible({ kind: 'delta', text: (request as { task: GenerationTask }).task.purpose === DRAFT_SHORT_OUTLINE_PURPOSE ? outline : '正文。' })

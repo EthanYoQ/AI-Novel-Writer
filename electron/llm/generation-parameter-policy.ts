@@ -66,14 +66,15 @@ export function resolveGenerationCapabilityConstraints(
   const verified = resolveModelProfileBudgetCapabilities(model)
   const modelContextWindowTokens = positiveInteger(verified?.contextWindowTokens)
   const modelMaxOutputTokens = positiveInteger(verified?.maxOutputTokens)
+  const userOutputLimits = [positiveInteger(model.capabilities?.maxOutputTokens), positiveInteger(model.maxTokens)]
+    .filter((value): value is number => value !== null)
   return Object.freeze({
     modelContextWindowTokens,
     modelMaxOutputTokens,
     modelContextSource: modelContextWindowTokens === null ? 'unknown' : 'verified-provider-preset',
     modelOutputSource: modelMaxOutputTokens === null ? 'unknown' : 'verified-provider-preset',
     userContextWindowTokens: positiveInteger(model.capabilities?.contextWindowTokens),
-    userMaxOutputTokens: positiveInteger(model.capabilities?.maxOutputTokens)
-      ?? positiveInteger(model.maxTokens),
+    userMaxOutputTokens: userOutputLimits.length ? Math.min(...userOutputLimits) : null,
   })
 }
 
@@ -99,10 +100,12 @@ export function resolveGenerationParameters(
     creativeStrategy: request.creativeStrategy,
     stage: request.reasoningStage,
   })
+  const limits = resolveGenerationCapabilityConstraints(model)
 
   return {
     temperature: usesFixedKimiTemperature ? undefined : model.temperature,
-    maxTokens: request.maxTokens ?? model.maxTokens,
+    maxTokens: Math.min(request.maxTokens ?? Infinity, limits.userMaxOutputTokens ?? model.maxTokens,
+      limits.modelMaxOutputTokens ?? Infinity),
     ...(request.responseFormat ? { responseFormat: request.responseFormat } : {}),
     ...(reasoningResolution.providerDirective
       ? { reasoning: reasoningResolution.providerDirective }

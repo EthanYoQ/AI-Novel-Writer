@@ -25,6 +25,36 @@ function fixture() {
 }
 const usage: GenerationProviderUsage = { promptTokens: 50, completionTokens: 50, totalTokens: 100, reasoningTokens: 20, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true };
 describe('single durable generation owner', () => {
+    it('rejects an invalid reservation before dispatch independently of unknown model liability', async () => {
+        const f = fixture(), run = f.repository.open(f.open), dispatch = vi.fn();
+        const request = { ...f.request(run.runId), reservedTokens: 199,
+            usagePolicy: { ...f.policy, canBoundTotalLiability: false } };
+        await expect(createGenerationRunService({ repository: f.repository, dispatch }).execute(request))
+            .rejects.toThrow('GENERATION_RESERVATION_INVALID');
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(f.repository.budget(run.rootActionId).attempts).toHaveLength(0);
+    });
+    it('settles estimated overruns in full and permits the next bounded step after reopening', async () => {
+        const f = fixture(), run = f.repository.open(f.open);
+        const dispatch = vi.fn(async () => ({ usage: { ...usage, promptTokens: 200, totalTokens: 250 }, finishReason: 'stop' }));
+        const request = (nonce: string) => ({ ...f.request(run.runId, nonce), usagePolicy: { ...f.policy, reasoning: 'unknown' as const, canBoundTotalLiability: false } });
+        const first = await createGenerationRunService({ repository: f.repository, dispatch }).execute(request('outline'));
+        expect(first.attempt).toMatchObject({ status: 'settled', reservedTokens: 200, actualTokens: 250 });
+        expect(first.budget.blockedCode).toBeNull();
+        const reopened = new GenerationRunRepository(() => f.db);
+        const service = createGenerationRunService({ repository: reopened, dispatch });
+        const second = await service.execute(request('prose'));
+        expect(second.attempt.actualTokens).toBe(250);
+        expect(second.budget.attempts).toHaveLength(2);
+        await expect(service.execute(request('extra'))).rejects.toThrow('ROOT_BUDGET_EXHAUSTED');
+        expect(dispatch).toHaveBeenCalledTimes(2);
+    });
+    it('does not infer unknown billing from the adapter label or missing totals', () => {
+        const policy = { ...fixture().policy, reasoning: 'unknown' as const, canBoundTotalLiability: false };
+        for (const totalTokens of [null, 1, 101]) expect(settleProviderUsage({ ...usage, totalTokens }, policy).trusted).toBe(false);
+        expect(settleProviderUsage({ ...usage, accounting: 'unknown', totalTokens: 120 }, policy))
+            .toMatchObject({ trusted: true, actualTokens: 120, policy: { reasoning: 'unknown', canBoundTotalLiability: false } });
+    });
     it('mints stable nonce root/run across service restarts without expanding budget', () => { const f = fixture(), a = f.repository.open(f.open); expect(f.repository.open({ ...f.open, epoch: 'new' })).toEqual(a); expect(() => f.repository.open({ ...f.open, budget: { ...f.open.budget, maxPhysicalRequests: 99 } })).toThrow('GENERATION_NONCE_CONFLICT'); });
     it('checks reservation and marks durably before exactly one dispatch for duplicate invocation', async () => {
         const f = fixture();

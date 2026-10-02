@@ -79,7 +79,7 @@ describe('ModelSettings capability evidence', () => {
     const evidence = container?.querySelector('[data-capability-evidence="unknown"]')
     expect(evidence?.textContent).toContain('模型能力尚未验证')
     expect(evidence?.textContent).toContain('不能证明服务商支持该容量')
-    expect(evidence?.textContent).toContain('发送前说明并停止')
+    expect(evidence?.textContent).toContain('按用户设置与任务额度估算')
   })
 
   it('renders the evidence explanation in English', async () => {

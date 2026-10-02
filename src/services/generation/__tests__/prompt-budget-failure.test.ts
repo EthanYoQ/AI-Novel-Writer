@@ -70,7 +70,8 @@ describe('writing skill prompt budget diagnostics', () => {
   it.each([
     ['TASK_BUDGET_CAPACITY_CONFLICT', null, 'capacity-preflight'],
     ['TASK_BUDGET_CAPACITY_CONFLICT:single-item-capacity-conflict', null, 'capacity-preflight'],
-    ["Error invoking remote method 'generation:run': Error: TASK_BUDGET_CAPACITY_CONFLICT:model-capability-unknown", null, 'capacity-preflight'],
+    ["Error invoking remote method 'generation:run': Error: TASK_BUDGET_CAPACITY_CONFLICT:single-item-capacity-conflict", null, 'capacity-preflight'],
+    ['GENERATION_RESERVATION_INVALID', null, 'unknown'],
     ['TASK_BUDGET_SPLIT_REQUIRED:scope-split', null, 'capacity-preflight'],
     // 主进程预检实际抛出的是带 SCOPE_ 的拼写，批执行器也按它解析。
     ['TASK_BUDGET_SCOPE_SPLIT_REQUIRED:7', null, 'capacity-preflight'],

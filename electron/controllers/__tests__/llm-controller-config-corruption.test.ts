@@ -45,6 +45,19 @@ afterEach(() => {
 })
 
 describe('model configuration corruption boundary', () => {
+  it('saves a validated advanced mapping and rejects malformed mappings without changing the file', async () => {
+    const profile = { id: 'mapped', protocol: 'openai', reasoningMapping: {
+      adapter: 'openai-reasoning-effort', supportedEfforts: ['xhigh'], providerValues: { xhigh: 'Extra' },
+    } }
+    await expect(handler('llm:save-model')({}, profile)).resolves.toEqual({ success: true })
+    const file = path.join(velaHome, 'models.json')
+    const before = fs.readFileSync(file)
+    expect(JSON.parse(before.toString())[0].reasoningMapping).toEqual(profile.reasoningMapping)
+    await expect(handler('llm:save-model')({}, { ...profile, reasoningMapping: {
+      ...profile.reasoningMapping, providerValues: { xhigh: 100 },
+    } })).resolves.toMatchObject({ success: false, error: expect.stringContaining('INVALID_REASONING_MAPPING') })
+    expect(fs.readFileSync(file)).toEqual(before)
+  })
   it('refuses to overwrite an existing malformed models file when saving a model', async () => {
     const modelsPath = path.join(velaHome, 'models.json')
     const originalBytes = Buffer.from('{BROKEN_MODELS_SECRET_MARKER', 'utf8')

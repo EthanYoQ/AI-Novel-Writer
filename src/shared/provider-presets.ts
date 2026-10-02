@@ -4,6 +4,7 @@
  */
 
 import type { VerifiedReasoningMapping } from './reasoning-types'
+import { isReasoningMapping } from './reasoning-types'
 
 /** 单个模型的预设 — name + 该模型的输出 token 上限 */
 export interface ModelPreset {
@@ -52,6 +53,7 @@ export interface ModelCapabilityProfile {
   modelName?: unknown
   maxTokens?: unknown
   capabilities?: ModelCapabilities | null
+  reasoningMapping?: VerifiedReasoningMapping
 }
 
 /** 单个服务商的预设配置 */
@@ -496,17 +498,13 @@ export function resolveModelProfileBudgetCapabilities(
   profile: ModelCapabilityProfile,
 ): ResolvedModelBudgetCapabilities | undefined {
   if (
-    typeof profile.provider !== 'string'
-    || typeof profile.protocol !== 'string'
+    typeof profile.protocol !== 'string'
     || typeof profile.modelName !== 'string'
   ) return undefined
 
-  const provider = profile.provider
   const protocol = profile.protocol
   const modelName = profile.modelName.trim()
-  const preset = BUILTIN_PRESETS.find(candidate => (
-    candidate.provider === provider || candidate.budgetProviderAliases?.includes(provider)
-  ) && candidate.protocol === protocol && matchesBudgetCapabilityEndpoint(candidate, profile.baseUrl))
+  const preset = BUILTIN_PRESETS.find(candidate => candidate.protocol === protocol && matchesBudgetCapabilityEndpoint(candidate, profile.baseUrl))
   if (
     !preset
   ) return undefined
@@ -535,15 +533,14 @@ export function resolveModelProfileCapabilities(
   profile: ModelCapabilityProfile,
 ): ModelCapabilities | undefined {
   if (
-    typeof profile.provider !== 'string'
-    || typeof profile.protocol !== 'string'
+    typeof profile.protocol !== 'string'
     || typeof profile.modelName !== 'string'
   ) return undefined
 
-  const provider = profile.provider
   const protocol = profile.protocol
   const modelName = profile.modelName.trim()
-  const preset = BUILTIN_PRESETS.find(candidate => candidate.provider === provider)
+  const preset = BUILTIN_PRESETS.find(candidate => candidate.protocol === protocol
+    && normalizedOfficialBaseUrl(profile.baseUrl) === normalizedOfficialBaseUrl(candidate.baseUrl))
   if (
     !preset
     || preset.protocol !== protocol
@@ -564,20 +561,22 @@ export function resolveModelProfileCapabilities(
 export function resolveModelProfileReasoningMapping(
   profile: ModelCapabilityProfile,
 ): VerifiedReasoningMapping | undefined {
+  if (profile.reasoningMapping !== undefined) {
+    const mapping = profile.reasoningMapping
+    return isReasoningMapping(mapping)
+      && (profile.protocol === 'gemini') === (mapping.adapter === 'gemini-thinking-budget')
+      ? mapping : undefined
+  }
   if (
-    typeof profile.provider !== 'string'
-    || typeof profile.protocol !== 'string'
+    typeof profile.protocol !== 'string'
     || typeof profile.modelName !== 'string'
   ) return undefined
 
-  const provider = profile.provider
   const protocol = profile.protocol
   const modelName = profile.modelName.trim()
-  // The existing OpenAI-compatible label is supported only at this preset's
-  // exact official endpoint; budget aliases do not grant request features.
-  const preset = BUILTIN_PRESETS.find(candidate => (
-    candidate.provider === provider || provider === 'openai' && candidate.provider === 'siliconflow'
-  ) && candidate.protocol === protocol
+  // Display labels do not define endpoint capabilities. Budget aliases still
+  // do not grant request features without an exact endpoint mapping.
+  const preset = BUILTIN_PRESETS.find(candidate => candidate.protocol === protocol
     && normalizedOfficialBaseUrl(profile.baseUrl) === normalizedOfficialBaseUrl(candidate.baseUrl))
   if (!preset) return undefined
 

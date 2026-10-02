@@ -74,9 +74,10 @@ export class OpenAIProvider implements ILLMProvider {
       body.reasoning_effort = opts.reasoning.reasoningEffort
     }
 
-    if (opts.reasoning?.adapter === 'deepseek-v4-thinking' && model.provider === 'deepseek') {
+    if (opts.reasoning?.adapter === 'deepseek-v4-thinking'
+      && resolveModelProfileReasoningMapping(model)?.adapter === 'deepseek-v4-thinking') {
       body.thinking = { type: opts.reasoning.thinking }
-      if (opts.reasoning.thinking === 'enabled') {
+      if (opts.reasoning.thinking === 'enabled' && opts.reasoning.reasoningEffort !== undefined) {
         body.reasoning_effort = opts.reasoning.reasoningEffort
       }
     }

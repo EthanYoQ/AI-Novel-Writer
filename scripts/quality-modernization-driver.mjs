@@ -53,6 +53,7 @@ export const AI_REVIEW_FINAL_MANUSCRIPT_POLICY = Object.freeze({
 export const R3_NATIVE_REVISION_DIAGNOSTIC = Object.freeze({
   caseId: 'R3', caseIds: ['R3'], sceneId: '场景1', chapterNumber: 2, milestone: 'diagnostic',
   arms: ['candidate'], nonQualification: true, scenarioRevision: 'r3-native-revision-diagnostic-v1',
+  replacementOf: 'd12c4111-285e-41a7-8bcc-4b7f9afd0681',
   minPhysicalRequests: 3, maxPhysicalRequests: 8,
   model: { provider: 'openai', protocol: 'openai', baseUrl: 'https://api.siliconflow.cn/v1',
     modelName: 'Qwen/Qwen3.8-27B', temperature: 0, maxTokens: 16384, reasoningOverride: 'medium' },
@@ -72,6 +73,17 @@ export const R3_NATIVE_REVISION_DIAGNOSTIC = Object.freeze({
   evaluationPolicy: { ...AI_REVIEW_FINAL_MANUSCRIPT_POLICY, caseIds: ['R3'],
     physicalRequests: { minimum: 3, maximum: 8, manuscriptMinimum: 1, manuscriptMaximum: 8 } },
 })
+
+// Only shape and standard terminal enums; never provider text, IDs or reasoning.
+export function streamEventStructure(event) {
+  const type = value => value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value
+  const choice = event?.choices?.[0]
+  const finish = choice?.finish_reason
+  return { choicesType: type(event?.choices), choicesCount: Array.isArray(event?.choices) ? event.choices.length : null,
+    finishType: type(finish), finish: ['stop', 'length', 'content_filter', 'tool_calls', 'function_call', 'error', 'network_error'].includes(finish) ? finish : null,
+    contentType: type(choice?.delta?.content), reasoningType: type(choice?.delta?.reasoning_content),
+    usageType: type(event?.usage), errorType: type(event?.error) }
+}
 
 // Fixed historical input is read as bytes. Only a copied donor may be opened by SQLite.
 export function readR3NativeSource(inputPath) {

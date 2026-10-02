@@ -1,6 +1,6 @@
 # 现行变更规格：核心收尾与 V3 时尚杂志接入
 
-本文件拥有已接受的前端与交付合同修订；全部 34 项原 Spec 的适用关系见[现行审查索引](current-spec-index.md)。2026-10-02 的产品增量和新资格由[线程 10 交付计划](thread10-delivery-plan.md)拥有，要求已生效，机器接线尚待实现。本文件不是剩余任务清单，实际进度读唯一私有当前检查点。
+本文件拥有已接受的前端与交付合同修订；全部 34 项原 Spec 的适用关系见[现行审查索引](current-spec-index.md)。2026-10-02 的产品增量和新资格由[线程 10 交付计划](thread10-delivery-plan.md)调度。通用模型兼容与自动参数匹配的详细要求由 [S07 现行增量](../../plans/novel-quality-modernization/specs/S07.md#generic-model-compatibility)拥有，其余本次增量仍读线程 10 计划。要求生效不证明实现完成；实际进度读唯一私有当前检查点。
 
 基础规格于 2026-09-22 双审通过，见[审计记录](frontend-transition-audit-2026-09-22.md)。2026-09-24 用户授权的 A11 完整项目导入与 U06 编辑交互修订单独定向审计，状态见[实施计划](frontend-transition-plan.md)，不沿用旧审计结论。视觉仍为 PR #262 V3 时尚杂志；替代范围见[交付 delta](delivery-contract-delta-2026-09-21.md)，未明确替代的合同继续有效。
 
@@ -41,6 +41,8 @@
 ## F05 — 最终 V3 功能及桌面体验资格
 
 输入：核心可交接、F04 薄切片视觉确认与完整接入。旧 Writer 不再收齐旧 F05；旧未完成项迁到 V3 验证，不能把取消旧布局测试写成原 F05 PASS。
+
+U03 模型设置同时应用 [S07.M01–M04 与 S07.A01–A07](../../plans/novel-quality-modernization/specs/S07.md#generic-model-compatibility)。通用 OpenAI 入口支持未登记的兼容型号；自动容量和思考映射须进入保存、重开及实际请求。复用现有设置与主进程证据，不另建全厂商测试矩阵。只有下拉框或预览通过，不能证明调用接线完成。
 
 复用现有 `scripts/renderer-surface-e2e.mjs`、`scripts/f05-u*-journey.mjs`、browser fixtures、`feature-evidence-levels.json` 和 execution checker。只适配变更入口与断言；多个动作共用旅程、进程、项目、包与回执。153 个 ID 最终均有有效能力证据；未变核心可沿用，新 V3 接线须新证据。完整 coverage checker 只约束最终 F05，不成为核心里程碑前置门。
 

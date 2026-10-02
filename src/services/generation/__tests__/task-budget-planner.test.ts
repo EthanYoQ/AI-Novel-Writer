@@ -91,7 +91,7 @@ describe('S07 task budget planner', () => {
     expect(decision.reasons).toContainEqual({ code: 'draft-segmentation-disabled', selected: true })
   })
 
-  it('does not let a user-entered 128K limit stand in for unknown model capability', () => {
+  it('uses a user operational limit without upgrading unknown model capability', () => {
     const decision = planTaskBudget(fixture(chineseDraft(900), {
       capability: {
         modelContextWindowTokens: null,
@@ -104,9 +104,9 @@ describe('S07 task budget planner', () => {
     }))
 
     expect(decision).toMatchObject({
-      decision: 'capacity-conflict',
-      selectedQuantity: 0,
-      reservationLiabilityTokens: 0,
+      decision: 'ready',
+      selectedQuantity: 900,
+      reservationLiabilityTokens: 4184,
     })
     expect(decision.reasons).toContainEqual({ code: 'model-capability-unknown', selected: true })
   })
@@ -309,7 +309,7 @@ describe('S07 task budget planner', () => {
     })
   })
 
-  it('fails closed when total liability cannot be bounded or the parent remainder cannot reserve it', () => {
+  it('records unknown liability and refuses an unaffordable known envelope', () => {
     expect(planTaskBudget(fixture(chineseDraft(900), {
       liability: { mode: 'unknown' },
     })).reasons).toContainEqual({ code: 'liability-bound-unknown', selected: true })

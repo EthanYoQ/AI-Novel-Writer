@@ -262,23 +262,21 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
   ]
   if (input.capability.modelContextWindowTokens === null || input.capability.modelMaxOutputTokens === null) {
     reasons.push({ code: 'model-capability-unknown', selected: true })
-    return conflict(input, requestedQuantity, requestedOutputTokens, reasons)
   }
   if (input.liability.mode === 'unknown') {
     reasons.push({ code: 'liability-bound-unknown', selected: true })
-    return conflict(input, requestedQuantity, requestedOutputTokens, reasons)
   }
 
   const modelContext = input.capability.modelContextWindowTokens
-  const effectiveContext = Math.min(modelContext, input.capability.userContextWindowTokens ?? modelContext)
+  const effectiveContext = Math.min(modelContext ?? Infinity, input.capability.userContextWindowTokens ?? Infinity)
   const fixedReasoningTokens = input.liability.mode === 'separate-bounded'
     ? input.liability.reasoningUpperBoundTokens
     : 0
   const outputLimits: Array<{ code: TaskBudgetReasonCode; value: number }> = [
-    { code: 'model-output-cap', value: input.capability.modelMaxOutputTokens },
+    ...(input.capability.modelMaxOutputTokens === null ? [] : [{ code: 'model-output-cap' as const, value: input.capability.modelMaxOutputTokens }]),
     { code: 'root-output-cap', value: input.root.maxOutputPerRequest },
-    { code: 'model-context-cap', value: effectiveContext
-      - input.inputEstimate.upperBoundTokens - fixedReasoningTokens - input.safetyMarginTokens },
+    ...(Number.isFinite(effectiveContext) ? [{ code: modelContext === null ? 'user-context-cap' as const : 'model-context-cap' as const,
+      value: effectiveContext - input.inputEstimate.upperBoundTokens - fixedReasoningTokens - input.safetyMarginTokens }] : []),
   ]
   if (input.capability.userMaxOutputTokens !== null) {
     outputLimits.push({ code: 'user-output-cap', value: input.capability.userMaxOutputTokens })
@@ -287,7 +285,7 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
     reasons.push({
       code: 'user-context-cap',
       valueTokens: input.capability.userContextWindowTokens,
-      selected: input.capability.userContextWindowTokens <= modelContext,
+      selected: input.capability.userContextWindowTokens <= (modelContext ?? Infinity),
     })
   }
 
@@ -299,7 +297,9 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
         - input.inputEstimate.upperBoundTokens - fixedReasoningTokens - input.safetyMarginTokens,
     })
     reasons.push({ code: 'protocol-reasoning-reserve', valueTokens: fixedReasoningTokens, selected: true })
-  } else if (input.liability.mode === 'included-in-output') {
+  } else if (input.liability.mode === 'included-in-output' || input.liability.mode === 'unknown') {
+    // An unknown protocol gets an estimate, not a claim of zero reasoning.
+    // The persisted usage policy retains the distinction at settlement.
     outputLimits.push({
       code: 'root-remaining-cap',
       value: input.root.remainingTokenLiability

@@ -6,7 +6,7 @@ import {
   resolveModelProfileBudgetCapabilities,
   type ModelCapabilities,
 } from '../../shared/provider-presets'
-import { createModelProfileDraft } from '../../shared/model-profile-draft'
+import { applyModelProfileSelection, createModelProfileDraft, modelCapabilitySource } from '../../shared/model-profile-draft'
 import { randomUUID } from '../../utils/id'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -14,7 +14,7 @@ import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
 import { cn } from '../../lib/utils'
 import { useLocaleStore } from '../../stores/locale-store'
-import ReasoningPolicySettings from './ReasoningPolicySettings'
+import ReasoningPolicySettings, { ModelCapabilitySources } from './ReasoningPolicySettings'
 
 /** 模型设置面板 — 在侧边栏 settings 视图中展示 */
 export default function ModelSettings() {
@@ -153,7 +153,8 @@ function ModelForm({
   const [testResult, setTestResult] = useState<{ success: boolean, error?: string } | null>(null)
 
   const update = <K extends keyof ModelProfile>(key: K, value: ModelProfile[K]) => {
-    onChange({ ...model, [key]: value })
+    onChange(!model.purposes.includes('embedding') && ['modelName', 'baseUrl', 'protocol', 'provider'].includes(key)
+      ? applyModelProfileSelection(model, { [key]: value }) : { ...model, [key]: value })
   }
 
   const currentCapabilities: ModelCapabilities = {
@@ -168,7 +169,11 @@ function ModelForm({
 
   const updateCapabilities = (next: Partial<ModelCapabilities>) => {
     const capabilities = { ...currentCapabilities, ...next }
-    onChange({ ...model, capabilities, maxTokens: capabilities.maxOutputTokens })
+    const capabilitySources: NonNullable<ModelProfile['capabilitySources']> = {}
+    for (const key of Object.keys(currentCapabilities) as Array<keyof ModelCapabilities>) {
+      capabilitySources[key] = key in next ? 'manual' : modelCapabilitySource(model, key)
+    }
+    onChange({ ...model, capabilities, capabilitySources })
   }
 
   const handleTest = async () => {
@@ -245,8 +250,8 @@ function ModelForm({
             </div>
             <div>
               {text(
-                '这里填写的数值只是用户运行上限，不能证明服务商支持该容量；容量未知时会在发送前说明并停止。',
-                'Values entered here are user operational limits, not proof of provider capacity; unknown capacity is explained and stopped before sending.',
+                '这里填写的数值只是用户运行上限，不能证明服务商支持该容量。容量未知时按用户设置与任务额度估算，不保证供应商容量或费用上限。',
+                'Values entered here are operational limits, not proof of provider capacity. Unknown capacity uses estimates from your settings and task budget, without guaranteeing provider capacity or cost limits.',
               )}
             </div>
           </>
@@ -282,14 +287,15 @@ function ModelForm({
           <Input
             type="number"
             min={0}
-            value={currentCapabilities.maxOutputTokens}
-            onChange={(e) => updateCapabilities({ maxOutputTokens: e.target.value === '' ? 0 : parseInt(e.target.value) || 0 })}
+            value={model.maxTokens}
+            onChange={(e) => update('maxTokens', e.target.value === '' ? 0 : parseInt(e.target.value) || 0)}
           />
         </div>
       </div>
 
       <div>
         <div>
+          <ModelCapabilitySources model={model} />
           <Label>{text('温度', 'Temperature')}</Label>
           <Input 
             value={String(model.temperature)} 

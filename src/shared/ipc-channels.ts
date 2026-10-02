@@ -21,6 +21,7 @@ import type {
   CreativeStrategy,
   GenerationReasoningStage,
   ReasoningOverride,
+  VerifiedReasoningMapping,
 } from './reasoning-types'
 import type { EmbeddingOptions } from './embedding-options'
 import type { ModelCapabilities } from './provider-presets'
@@ -513,6 +514,8 @@ export interface DiscoveredModel {
   name: string
   /** Value that can be saved in ModelProfile.modelName. */
   value: string
+  /** Only explicit, unambiguous declarations from the endpoint response. */
+  capabilities?: Partial<ModelCapabilities>
 }
 
 export type ModelDiscoveryErrorCode =
@@ -806,11 +809,15 @@ export interface ModelProfile {
   temperature: number
   /** 新配置使用的端点能力；旧配置缺失时继续使用 maxTokens。 */
   capabilities?: ModelCapabilities
+  /** Configuration provenance only; never grants verified provider bounds. */
+  capabilitySources?: Partial<Record<keyof ModelCapabilities, 'endpoint' | 'preset' | 'manual' | 'unknown'>>
   /** 旧配置和当前执行路径使用的输出 token 上限，保持兼容。 */
   maxTokens: number
   purposes: Array<'generation' | 'refinement' | 'summary' | 'embedding'>
   /** Profile-scoped advanced request; `auto` defers to project strategy and purpose. */
   reasoningOverride?: ReasoningOverride
+  /** Explicit advanced wire mapping; omitted profiles use endpoint metadata. */
+  reasoningMapping?: VerifiedReasoningMapping
   /** 仅用于 Embedding 模型；旧配置省略时沿用原有默认行为。 */
   embeddingOptions?: EmbeddingOptions
 }

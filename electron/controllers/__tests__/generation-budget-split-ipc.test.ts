@@ -26,7 +26,7 @@ const Database = createRequire(import.meta.url)('better-sqlite3') as typeof impo
 
 /**
  * 三个模型都指向官方 OpenAI host。已知模型带 verified 预算，未知模型带同样的
- * 用户上限但没有 provider 容量证据。旧实现会让未知模型沿无 demand 分支发送。
+ * 用户上限但没有 provider 容量证据；未知容量不作为调用白名单。
  */
 const known: ModelProfile = { id: 'known', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1',
   baseUrl: 'https://api.openai.com/v1', apiKey: 'synthetic-only', maxTokens: 16_384, temperature: 0.7, purposes: ['generation'] }
@@ -163,13 +163,16 @@ describe('S07 budget admission through the actually registered generation IPC', 
     expect(await ledger(handle)).toBe(1)
   })
 
-  it('fails closed over IPC for an unknown model on an official host without a demand', async () => {
+  it('dispatches an unregistered model through IPC with an estimated reservation', async () => {
     const fetch = syntheticProvider()
     const handle = await begin('unknown')
-    await expect(run(task, '未知模型', handle)).rejects.toThrow('GENERATION_MODEL_CAPABILITY_UNKNOWN')
+    await run(task, '未知模型', handle)
 
-    expect(fetch).not.toHaveBeenCalled()
-    expect(attemptCount()).toBe(0)
-    expect(await ledger(handle)).toBe(0)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(attemptCount()).toBe(1)
+    expect(await ledger(handle)).toBe(1)
+    const stored = getProjectDb()!.prepare('SELECT attempt_json, usage_receipt_json FROM generation_attempts').get() as { attempt_json: string; usage_receipt_json: string }
+    expect(JSON.parse(stored.attempt_json).reservedTokens).toBeGreaterThan(0)
+    expect(JSON.parse(stored.usage_receipt_json).usagePolicy.canBoundTotalLiability).toBe(false)
   })
 })

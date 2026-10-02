@@ -4,6 +4,7 @@ import { OpenAIProvider } from '../openai-provider'
 import { resolveOpenAIChatCompletionsUrl } from '../openai-compatible-endpoint'
 import { resolveGenerationParameters } from '../generation-parameter-policy'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
+import { BUILTIN_PRESETS } from '../../../src/shared/provider-presets'
 
 const novelAIModel: ModelProfile = {
   id: 'novelai-test',
@@ -64,6 +65,46 @@ afterEach(() => {
 })
 
 describe('SiliconFlow explicit reasoning requests', () => {
+  it('uses a persisted explicit mapping and keeps switch-only requests free of effort fields', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const model: ModelProfile = { ...novelAIModel, provider: 'custom', baseUrl: 'https://unlisted.test/v1', modelName: 'unlisted',
+      reasoningOverride: 'xhigh', reasoningMapping: { adapter: 'openai-reasoning-effort',
+        supportedEfforts: ['xhigh'], providerValues: { xhigh: 'Extra' } } }
+    await new OpenAIProvider().generate(model, [], resolveGenerationParameters(model, {}))
+    expect(requestBody(fetchMock).reasoning_effort).toBe('Extra')
+    fetchMock.mockClear()
+    const remapped: ModelProfile = { ...model, reasoningMapping: {
+      adapter: 'deepseek-v4-thinking', supportedEfforts: ['xhigh'], providerValues: { xhigh: 'max' },
+    } }
+    await new OpenAIProvider().generate(remapped, [], resolveGenerationParameters(remapped, {}))
+    expect(requestBody(fetchMock)).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'max' })
+    for (const reasoningOverride of ['high', 'off'] as const) {
+      fetchMock.mockClear()
+      const toggle: ModelProfile = { ...model, reasoningOverride, reasoningMapping: {
+        adapter: 'deepseek-v4-thinking', supportedEfforts: ['off', 'high'], providerValues: { off: 'disabled', high: 'enabled' },
+      } }
+      await new OpenAIProvider().generate(toggle, [], resolveGenerationParameters(toggle, {}))
+      expect(requestBody(fetchMock).thinking).toEqual({ type: reasoningOverride === 'off' ? 'disabled' : 'enabled' })
+      expect(requestBody(fetchMock)).not.toHaveProperty('reasoning_effort')
+    }
+  })
+  it('serializes the registered xhigh string and omits an unsupported off request', async () => {
+    BUILTIN_PRESETS.push({ provider: 'synthetic-effort', baseUrl: 'https://effort.test/v1', protocol: 'openai', embeddingModels: [],
+      models: [{ name: 'synthetic', maxTokens: 2048, reasoningMapping: { adapter: 'openai-reasoning-effort',
+        supportedEfforts: ['xhigh'], providerValues: { xhigh: 'Extra' } } }] })
+    try {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [] }) })
+      vi.stubGlobal('fetch', fetchMock)
+      const model: ModelProfile = { ...novelAIModel, provider: 'custom', baseUrl: 'https://effort.test/v1', modelName: 'synthetic', reasoningOverride: 'xhigh' }
+      await new OpenAIProvider().generate(model, [], resolveGenerationParameters(model, {}))
+      expect(requestBody(fetchMock).reasoning_effort).toBe('Extra')
+      fetchMock.mockClear()
+      const off = { ...model, reasoningOverride: 'off' as const }
+      await new OpenAIProvider().generate(off, [], resolveGenerationParameters(off, {}))
+      expect(requestBody(fetchMock)).not.toHaveProperty('reasoning_effort')
+    } finally { BUILTIN_PRESETS.pop() }
+  })
   it('sends Qwen medium through both native transports without enable_thinking', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok: true, json: async () => ({ choices: [{ message: { content: '正文' }, finish_reason: 'stop' }] }) })
@@ -91,7 +132,6 @@ describe('SiliconFlow explicit reasoning requests', () => {
   it.each([
     { baseUrl: 'https://api.siliconflow.com/v1' },
     { modelName: 'deepseek-ai/DeepSeek-V4-Pro-2026' },
-    { provider: 'custom' as const },
     { protocol: 'gemini' as const },
   ])('does not serialize a SiliconFlow directive for an unmatched profile: %j', async overrides => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [] }) })
@@ -111,7 +151,7 @@ describe('SiliconFlow explicit reasoning requests', () => {
       .mockResolvedValueOnce({ ok: true, json: async () => ({ choices: [{ message: { content: '正文' }, finish_reason: 'stop' }] }) })
       .mockResolvedValueOnce({ ok: true, body: { getReader: () => sseReader('data: [DONE]\n\n') } })
     vi.stubGlobal('fetch', fetchMock)
-    const model = { ...silicon, reasoningOverride }
+    const model = { ...silicon, provider: 'custom' as const, reasoningOverride }
     const options = resolveGenerationParameters(model, { reasoningStage: 'drafting', maxTokens: 2672 })
     const provider = new OpenAIProvider()
     await provider.generate(model, [{ role: 'user', content: '写正文' }], options)
@@ -131,7 +171,7 @@ describe('SiliconFlow explicit reasoning requests', () => {
   it.each(['auto', 'off', 'low', 'medium'] as const)('omits unverified %s controls even when the project requests max', async reasoningOverride => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [] }) })
     vi.stubGlobal('fetch', fetchMock)
-    const model = { ...silicon, reasoningOverride }
+    const model = { ...silicon, provider: 'custom' as const, reasoningOverride }
     await new OpenAIProvider().generate(model, [], resolveGenerationParameters(model, { creativeStrategy: 'deep-planning', reasoningStage: 'planning' }))
     expect(requestBody(fetchMock)).not.toHaveProperty('enable_thinking')
     expect(requestBody(fetchMock)).not.toHaveProperty('reasoning_effort')
