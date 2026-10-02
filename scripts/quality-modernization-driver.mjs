@@ -548,7 +548,7 @@ export const BRIDGE_SPAWN_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 3 + 60_00
 export const BRIDGE_TEST_TIMEOUT_MS = BRIDGE_SPAWN_TIMEOUT_MS + 60_000
 // post-UI 每臂最多 15 个登记 attempt：目录 3、正文 8、首审 2、修稿 1、复评 1；产品自身 root 预算仍先行约束。
 export const BRIDGE_REVIEWED_TEST_TIMEOUT_MS = BRIDGE_SETTLEMENT_DEADLINE_MS * 15 + 120_000
-const QUALIFICATION_WINDOW_HASH = '27ff092cf9da1e8597df841d3eb51ef9a364f3ec88abd076d85a1468e1fd0645'
+const QUALIFICATION_WINDOW_HASH = '64d634a4fa20fbafbbe3103c43e4a2c9959e3a6be64aaed7404060ff5be5932b'
 
 /** Resolve only the registered bridge fallback; native owner budgets and dispatch gates remain authoritative. */
 export function qualificationBridgeWindows(request) {
@@ -571,9 +571,10 @@ export function qualificationBridgeWindows(request) {
     testMs: request.evaluationPolicy ? BRIDGE_REVIEWED_TEST_TIMEOUT_MS : BRIDGE_TEST_TIMEOUT_MS,
     maxCalls: null, revision: null }
   if (digest(registration) !== QUALIFICATION_WINDOW_HASH
-    || registration.revision !== 'native-budget-aligned-qualification-window-v4'
+    || registration.revision !== 'native-budget-aligned-qualification-window-v5'
     || request.forwardReasoning?.revision !== 'fixed-high-zero-temperature-v1'
     || request.forwardReasoning.model?.temperature !== 0
+    || request.phase !== 'bounded-revision-diagnostic' && request.forwardReasoning.model?.modelName !== 'deepseek-ai/DeepSeek-V4-Pro'
     || request.forwardReasoning.reasoningOverride !== 'high'
     || MAIN_GENERATION_POLICY.budget.maxActiveElapsedMs !== 3_600_000)
     throw new Error('FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH')
@@ -651,6 +652,7 @@ export function assertForwardReasoning(registration, { arm, phase, milestone, ca
   if (!scope || caseId && !scope.caseIds.includes(caseId) || !['baseline', 'candidate'].includes(arm)
     || !(effort === 'max' || effort === 'high' && registration.revision === 'fixed-high-zero-temperature-v1'
       && registration.model?.temperature === 0)
+    || effort === 'high' && phase !== 'bounded-revision-diagnostic' && registration.model?.modelName !== 'deepseek-ai/DeepSeek-V4-Pro'
     || registration.creativeStrategy !== 'auto' || registration.wireParity !== false
     || registration.wire?.candidate?.enable_thinking !== true || registration.wire.candidate.reasoning_effort !== effort
     || registration.wire?.baseline?.enable_thinking !== 'absent' || registration.wire.baseline.reasoning_effort !== 'absent'

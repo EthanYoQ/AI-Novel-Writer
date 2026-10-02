@@ -61,8 +61,8 @@
     "reasoningOverride": "high",
     "limits": "One prospective complete seven-case qualification at temperature 0 and reasoning high within the inherited C16, post-UI and full scopes. Preserve the original source, oracles, budgets, arm order, 480-second deadline, prior max results and physical ledger. No causal improvement or stability claim; stop dependent work on any technical or quality failure."
   },
-  "forwardQualificationWindowExperiment": {
-    "revision": "native-budget-aligned-qualification-window-v4",
+  "forwardModelExperiment": {
+    "revision": "fixed-pro-high-zero-v1",
     "baseHash": "39d2606076046d2e5307abf9be392abf0a4c4c46dbe9c235851de95016fbbf95",
     "scopes": [
       { "phase": "c16-c18", "milestone": "final", "caseIds": ["C16-A", "C16-B", "C16-C", "C17-A", "C17-B", "C18-A", "C18-B"] },
@@ -71,7 +71,20 @@
       { "phase": "early-review", "milestone": "post-ui", "caseIds": ["场景3/2"] },
       { "phase": "full", "milestone": "final", "caseIds": ["场景1/1", "场景1/2", "场景1/3", "场景2/1", "场景2/2", "场景2/3", "场景3/1", "场景3/2", "场景3/3"] }
     ],
-    "limits": "One new prospective repaired-subject complete seven-case qualification after the independently reviewed ordinary-review classification-consistency repair at 68a0a4d79f1cc0b2dacd4c00b1fd535ad3644aaa. The 09b6b7e5 author-fact compatibility and full-draft goal-evidence rules remain unchanged. The frozen testedSHA must come from a later committed clean subject including this policy registration and is distinct from the product-repair SHA. Start from C16-A with all seven new cases at unchanged temperature 0, reasoning high and native auto/default behavior; inherited post-UI and full scopes open only if every prior gate passes. The prior native-budget-aligned-qualification-window-v3 invocation d021261f-ef32-45d2-937e-a004483a1634 tested ee52863638b24683e3d083513a6a7ef5f6ded408 is consumed and closed FAIL: C16-A/B/C and C17-A are four technical PASS, C17-B failed GENERATION_REVIEW_REVISION_NOOP, and C18-A/B were NOT_RUN. All thirteen real attempts settled STOP, with zero LENGTH/UNKNOWN/open; whole dual-oracle and dependent post-UI/full were not started. The NOOP guard remains unchanged. The prior v2 invocation 87266499-46a4-4784-87d3-aac2cc4d2074 tested 06a40497a24aa0e5e2cdca04a280159e2b1513bd remains closed WHOLE FAIL; both fresh three-stage whole FAIL and the one limited adjudication remain closed. The prior v1 invocation 9182d475-c42a-4a96-bfea-99ab4e7bd842 tested 990f8bb51d8c686e9400c014ffc46c632558beca, the consumed 480-second high qualification, and all historical failures/UNKNOWN remain unchanged. No old technical or literary result, including the four d021 PASS, is carried forward. No automatic rerun or old-SHA reroll, case substitution, six-plus-one stitching, best-of selection, relaxed standards or additional budget. Native product budgets and registered physical-call ceilings remain unchanged. The experimental attempt watchdog remains native ordinary-root maximum plus 60000 ms settlement; parent and test windows remain bounded by the registered operations' existing physical-call ceilings. Any failure stops dependent work. This limits text registers scope and closure, not a budget or timeout change."
+    "modelName": "deepseek-ai/DeepSeek-V4-Pro",
+    "limits": "One prospective complete seven-case qualification on the clean committed subject containing parser commit fe6619314f9f2c747a87782d57e57ae12fda3fb2, exact Pro preset commit b05e53ec51a32a51fffae101ca1738f3621b4049 and this policy registration. Use the same SiliconFlow deepseek-ai/DeepSeek-V4-Pro profile for every generation, derived extraction, review and refinement operation. Preserve temperature 0, reasoning high, native auto/default request behavior, profile maxTokens 16384, all original cases, sources, oracles, scoring, arm order, production budgets and physical-call ceilings. Supplier undisclosed weights revision remains unknown. Record this software plus configuration as one subject; do not claim an isolated parser/model causal effect or qualification of every supported model. Only a complete literary seven-case PASS with fresh dual three-stage oracles opens the inherited post-UI and full scopes; both later arms use the same model configuration through their original production paths. The b89b011a diagnostic is permanently closed with two STOP and four NOT_RUN. The 09ad48e1 seven-case literary FAIL and all historical failures and UNKNOWN remain unchanged. No new six-slot screening, old-run continuation, mixed-model best-of, six-plus-one stitching, old PASS carryover, automatic rerun, repeated sampling, relaxed standard, extra model calls or extra budget. Any technical or literary failure stops dependent work."
+  },
+  "forwardQualificationWindowExperiment": {
+    "revision": "native-budget-aligned-qualification-window-v5",
+    "baseHash": "9e3371b8af9eca199e7e2869dc20c1f7207536d499a42508a882b2d5e18e278b",
+    "scopes": [
+      { "phase": "c16-c18", "milestone": "final", "caseIds": ["C16-A", "C16-B", "C16-C", "C17-A", "C17-B", "C18-A", "C18-B"] },
+      { "phase": "early-budget", "milestone": "post-ui", "caseIds": ["场景1/1"] },
+      { "phase": "early-context", "milestone": "post-ui", "caseIds": ["场景2/3"] },
+      { "phase": "early-review", "milestone": "post-ui", "caseIds": ["场景3/2"] },
+      { "phase": "full", "milestone": "final", "caseIds": ["场景1/1", "场景1/2", "场景1/3", "场景2/1", "场景2/2", "场景2/3", "场景3/1", "场景3/2", "场景3/3"] }
+    ],
+    "limits": "One prospective complete seven-case qualification on the clean committed subject containing parser commit fe6619314f9f2c747a87782d57e57ae12fda3fb2, exact Pro preset commit b05e53ec51a32a51fffae101ca1738f3621b4049 and this policy registration. Use the same SiliconFlow deepseek-ai/DeepSeek-V4-Pro profile for every generation, derived extraction, review and refinement operation. Preserve temperature 0, reasoning high, native auto/default request behavior, profile maxTokens 16384, all original cases, sources, oracles, scoring, arm order, production budgets and physical-call ceilings. Supplier undisclosed weights revision remains unknown. Record this software plus configuration as one subject; do not claim an isolated parser/model causal effect or qualification of every supported model. Only a complete literary seven-case PASS with fresh dual three-stage oracles opens the inherited post-UI and full scopes; both later arms use the same model configuration through their original production paths. The b89b011a diagnostic is permanently closed with two STOP and four NOT_RUN. The 09ad48e1 seven-case literary FAIL and all historical failures and UNKNOWN remain unchanged. No new six-slot screening, old-run continuation, mixed-model best-of, six-plus-one stitching, old PASS carryover, automatic rerun, repeated sampling, relaxed standard, extra model calls or extra budget. Any technical or literary failure stops dependent work."
   },
   "historicalIntentionToTreat": {
     "decisionRevision": "s10b-paired-hard-gate-v1",
@@ -3125,6 +3138,34 @@
         "invocationId": "09ad48e1-ad68-427e-b00a-1a19408586a5",
         "terminal": "settle",
         "parityId": "49a487e2af22847b6e50cf26efe8baaf794636e6e375feb4b9fc101a5bcd71f0"
+      }
+    ]
+  },
+  "historicalSeparatedReviewB89b011aBoundary": {
+    "fromEventCount": 1578,
+    "eventCount": 1584,
+    "rawBytesSha256": "d38fa5488c22b4b167fdc84b5b333ea065982ba644e9571fcad8cc0eabb2d9c7",
+    "protocolRevision": "s14b-candidate-quality-and-comparison-v2",
+    "protocolHash": "0be54d8a160fda43caffa3bafe3c1c4233ca5177df7b72d86fe411b0902e0824",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "cf8f58170d72ea414b0d3fb26d50ef5034efe004",
+        "sourceHash": "a21aceae7eb0fd664c53efd200233dad89518fa04d634e4070ce0216c3e3e7cb",
+        "driverHash": "8cba635db5221c368316768a54becfb04566a084ce6078667c4e2ebd22ce77d7"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:af14f2d5-57fa-4af0-bc3a-13a89c88c792",
+        "invocationId": "b89b011a-40b0-4c7a-bf1e-15d2bbdc40d6",
+        "terminal": "settle",
+        "parityId": "23ccd07e1a04838dba0a388ba4aed272f7ad0d79d699f213e3c8b242836bb9a8"
+      },
+      {
+        "attemptId": "candidate:04e7af01-83b7-45c4-b940-96ec1bb642c8",
+        "invocationId": "b89b011a-40b0-4c7a-bf1e-15d2bbdc40d6",
+        "terminal": "settle",
+        "parityId": "23ccd07e1a04838dba0a388ba4aed272f7ad0d79d699f213e3c8b242836bb9a8"
       }
     ]
   }

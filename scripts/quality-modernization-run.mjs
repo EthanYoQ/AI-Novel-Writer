@@ -243,7 +243,8 @@ export function validatePhysicalLedger(file) {
   const r9182d475 = validateHistoricalSupersessionBoundary(raw, r071156e5, protocol.historicalC169182d475Boundary)
   const r87266499 = validateHistoricalSupersessionBoundary(raw, r9182d475, protocol.historicalC1687266499Boundary)
   const d021261f = validateHistoricalSupersessionBoundary(raw, r87266499, protocol.historicalC16D021261fBoundary)
-  validateHistoricalSupersessionBoundary(raw, d021261f, protocol.historicalC1609ad48e1Boundary)
+  const r09ad48e1 = validateHistoricalSupersessionBoundary(raw, d021261f, protocol.historicalC1609ad48e1Boundary)
+  validateHistoricalSupersessionBoundary(raw, r09ad48e1, protocol.historicalSeparatedReviewB89b011aBoundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -390,6 +391,7 @@ export function forwardReasoningFor(protocol, phase, milestone) {
   const registration = protocol.forwardReasoningExperiment
   const zero = protocol.forwardTemperatureExperiment
   const high = protocol.forwardHighReasoningExperiment
+  const model = protocol.forwardModelExperiment
   if ((zero !== undefined || high !== undefined) && (!registration || !zero || typeof zero !== 'object'
     || hash(registration) !== '2600c33e729b32d5d604645cfa833608f15dce588fea055788ad82f6d3ea6fc0'
     || !isDeepStrictEqual(Object.keys(zero).sort(), ['baseRevision', 'limits', 'revision', 'temperature'])
@@ -399,6 +401,12 @@ export function forwardReasoningFor(protocol, phase, milestone) {
     || !isDeepStrictEqual(Object.keys(high).sort(), ['baseRevision', 'limits', 'reasoningOverride', 'revision'])
     || high.revision !== 'fixed-high-zero-temperature-v1' || high.baseRevision !== zero.revision
     || high.reasoningOverride !== 'high')) fail('FORWARD_HIGH_REGISTRATION_MISMATCH')
+  if (model !== undefined && (!high || !model
+    || !isDeepStrictEqual(Object.keys(model).sort(), ['baseHash', 'limits', 'modelName', 'revision', 'scopes'])
+    || model.revision !== 'fixed-pro-high-zero-v1' || model.baseHash !== hash(high)
+    || model.modelName !== 'deepseek-ai/DeepSeek-V4-Pro'
+    || !isDeepStrictEqual(model.scopes, registration.scopes)
+    || hash(model) !== '9e3371b8af9eca199e7e2869dc20c1f7207536d499a42508a882b2d5e18e278b')) fail('FORWARD_MODEL_REGISTRATION_MISMATCH')
   const bounded = phase === 'bounded-revision-diagnostic'
   if (bounded && (!high || !protocol.forwardQualificationWindowExperiment)) fail('BOUNDED_REVISION_REGISTRATION_MISMATCH')
   const scope = bounded ? { phase, milestone, caseIds: selectPhase(protocol, phase, milestone).caseIds }
@@ -407,19 +415,21 @@ export function forwardReasoningFor(protocol, phase, milestone) {
   if (!isDeepStrictEqual(scope.caseIds, selectPhase(protocol, phase, milestone).caseIds)) fail('FORWARD_REASONING_SCOPE_MISMATCH')
   if (zero === undefined) return registration
   const effective = { ...registration, ...(bounded ? { scopes: [scope] } : {}), revision: zero.revision,
-    model: { ...registration.model, temperature: zero.temperature }, limits: zero.limits }
+    model: { ...registration.model, temperature: zero.temperature,
+      ...(!bounded && model ? { modelName: model.modelName } : {}) }, limits: zero.limits }
   return high === undefined ? effective : { ...effective, revision: high.revision, reasoningOverride: high.reasoningOverride,
-    wire: { ...effective.wire, candidate: { ...effective.wire.candidate, reasoning_effort: high.reasoningOverride } }, limits: high.limits }
+    wire: { ...effective.wire, candidate: { ...effective.wire.candidate, reasoning_effort: high.reasoningOverride } },
+    limits: !bounded && model ? model.limits : high.limits }
 }
 export function forwardQualificationWindowFor(protocol, phase, milestone) {
   const registration = protocol.forwardQualificationWindowExperiment
   const reasoning = forwardReasoningFor(protocol, phase, milestone)
   if (registration === undefined) return null
-  if (!protocol.forwardHighReasoningExperiment || !protocol.forwardTemperatureExperiment
+  if (!protocol.forwardHighReasoningExperiment || !protocol.forwardTemperatureExperiment || !protocol.forwardModelExperiment
     || !isDeepStrictEqual(Object.keys(registration ?? {}).sort(), ['baseHash', 'limits', 'revision', 'scopes'])
-    || registration.revision !== 'native-budget-aligned-qualification-window-v4'
-    || registration.baseHash !== hash(protocol.forwardHighReasoningExperiment)
-    || hash(registration) !== '27ff092cf9da1e8597df841d3eb51ef9a364f3ec88abd076d85a1468e1fd0645'
+    || registration.revision !== 'native-budget-aligned-qualification-window-v5'
+    || registration.baseHash !== hash(protocol.forwardModelExperiment)
+    || hash(registration) !== '64d634a4fa20fbafbbe3103c43e4a2c9959e3a6be64aaed7404060ff5be5932b'
     || !isDeepStrictEqual(registration.scopes, protocol.forwardReasoningExperiment.scopes))
     fail('FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH')
   for (const scope of registration.scopes)
@@ -774,6 +784,10 @@ export function updateLedger(file, event, options = {}) {
         ? protocol.historicalC1609ad48e1Boundary : options.historicalC1609ad48e1Boundary
       const trusted09ad48e1Events = r09ad48e1Boundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedD021261fEvents, r09ad48e1Boundary) : trustedD021261fEvents
+      const separatedReviewB89b011aBoundary = options.campaignMode === 'real'
+        ? protocol.historicalSeparatedReviewB89b011aBoundary : options.historicalSeparatedReviewB89b011aBoundary
+      const trustedSeparatedReviewB89b011aEvents = separatedReviewB89b011aBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trusted09ad48e1Events, separatedReviewB89b011aBoundary) : trusted09ad48e1Events
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
       // 未登记 operations 的阶段在这里 fail closed。
@@ -827,7 +841,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trusted09ad48e1Events
+          const superseded = index >= trustedHistoricalEvents && index < trustedSeparatedReviewB89b011aEvents
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)

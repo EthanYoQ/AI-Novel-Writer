@@ -69,7 +69,7 @@ describe('SiliconFlow explicit reasoning requests', () => {
 
   it.each([
     { baseUrl: 'https://api.siliconflow.com/v1' },
-    { modelName: 'deepseek-ai/DeepSeek-V4-Pro' },
+    { modelName: 'deepseek-ai/DeepSeek-V4-Pro-2026' },
     { provider: 'custom' as const },
     { protocol: 'gemini' as const },
   ])('does not serialize a SiliconFlow directive for an unmatched profile: %j', async overrides => {

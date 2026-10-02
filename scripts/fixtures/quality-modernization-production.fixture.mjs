@@ -238,8 +238,7 @@ test('isolated production commands persist the selected phase operations', async
   assert.deepEqual(request.forwardQualificationWindow ?? null, registeredWindow, 'FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH')
   const windows = qualificationBridgeWindows(request)
   const effectiveModelParameters = { ...source.modelParameters,
-    ...(['fixed-zero-temperature-max-v1', 'fixed-high-zero-temperature-v1'].includes(registeredForward?.revision)
-      ? { temperature: registeredForward.model.temperature } : {}),
+    ...(registeredForward ? { ...registeredForward.model, endpointHost: new URL(registeredForward.model.baseUrl).host } : {}),
     ...(separatedRun ? { temperature: diagnosticRegistration.model.temperature } : {}) }
   const continuityCase = continuityRun ? source.continuityQualificationCases.find(item => item.id === request.caseId) : null
   if (continuityRun) assert.ok(continuityCase && continuityCase.sceneId === request.sceneId
