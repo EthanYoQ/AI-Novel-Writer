@@ -247,7 +247,7 @@ describe('Agent GenerationRuntime boundary', () => {
     expect(userPayload).toContain('User input: Review chapter 1 with @architecture')
     expect(userPayload).toContain('# Chapter Review')
     expect(userPayload).toContain('[Prefetched context @read_architecture]')
-    expect(userPayload).toContain('The following context was requested with @ and fetched automatically:')
+    expect(userPayload).toContain('The following context was requested with @ and fetched automatically')
     expect(modelPayload).not.toMatch(/[\u3400-\u9fff]/u)
     expect(prefetchExecute).toHaveBeenCalledOnce()
   })
@@ -303,5 +303,69 @@ describe('Agent GenerationRuntime boundary', () => {
       creativeStrategy: 'consistency-first',
       budget: AGENT_GENERATION_BUDGET,
     })
+  })
+
+  /**
+   * 先生定的铁律：**同一轮对话里不允许重复 @ 同样内容**。
+   * 重复 @ 只会让同一份全文被反复拼进提示词（白烧 token、击穿上下文预算），
+   * 对模型没有任何额外信息量。这里用「手打 3 次 @architecture」来钉住这个行为。
+   */
+  it('prefetches a repeated @ mention only once per turn', async () => {
+    useLocaleStore.setState({ locale: 'zh-CN', initialized: true })
+    useProjectStore.setState({
+      currentProject: {
+        id: 'project-a',
+        sessionLease: 'lease-a',
+        path: 'C:/novels/project-a',
+        name: 'Project A',
+        characterStates: '',
+        createdAt: '',
+        updatedAt: '',
+        novelConfig: { writingLanguage: 'zh-CN' },
+      } as never,
+    })
+    promptCatalog.clearProject()
+    vi.spyOn(ipcPromptPersistence, 'loadProject').mockResolvedValue({ templates: [], diagnostics: [] })
+    await skillRegistry.loadAll()
+
+    const prefetchExecute = vi.fn(async () => ({ success: true, content: '架构事实' }))
+    vi.spyOn(toolRegistry, 'get').mockImplementation(name => name === 'read_architecture'
+      ? {
+          name,
+          description: 'Read architecture',
+          parameters: { type: 'object', properties: {} },
+          source: 'builtin',
+          execute: prefetchExecute,
+        } as never
+      : undefined)
+
+    const complete = vi.fn<GenerationSession['complete']>().mockResolvedValue(completed('完成', 1))
+    // 显式标注类型而不是用 as unknown 断言：与前面几个用例保持一致，
+    // 也让 operation 参数有确定的类型（否则 tsconfig 的 noImplicitAny 会报错）。
+    const runtime: GenerationRuntime = {
+      execute: async operation => operation({
+        session: {
+          complete,
+          budget: {
+            maxAttempts: AGENT_GENERATION_BUDGET.maxAttempts,
+            maxRequestedOutputTokens: AGENT_GENERATION_BUDGET.maxRequestedOutputTokens,
+            maxRequestedOutputTokensPerAttempt: AGENT_GENERATION_BUDGET.maxRequestedOutputTokensPerAttempt,
+            deadlineAt: Date.now() + AGENT_GENERATION_BUDGET.deadlineMs,
+          },
+        },
+      }),
+      close: vi.fn(async () => {}),
+    }
+    generationRuntime.create.mockResolvedValue(runtime)
+    useAgentStore.getState().createConversation()
+
+    await useAgentStore.getState().sendMessage('@architecture @architecture @architecture 这章怎么写')
+
+    expect(prefetchExecute).toHaveBeenCalledOnce()
+    const userPayload = [...(complete.mock.calls[0]?.[0]?.messages ?? [])]
+      .reverse()
+      .find(message => message.role === 'user')?.content ?? ''
+    // 同一份内容只应出现一次，不能因为 @ 了三遍就拼三份。
+    expect(userPayload.split('[预加载上下文 @read_architecture]').length - 1).toBe(1)
   })
 })

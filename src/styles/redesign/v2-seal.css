@@ -1,0 +1,117 @@
+/* ============================================================================
+ * v2 定稿印章（后处理状态）
+ *
+ * 先生的明确要求：「第1章定稿 完成（3/3）这样的通知条不需要有背景，
+ * 样式请用 demo 那种印章一样的，盖在文章末尾右下角即可。」
+ *
+ * 所以这里不是「换皮的横条」，而是把成功态真的做成一枚盖上去的印：
+ *   · 不铺底色，只有朱砂描的双线框与字（无背景）
+ *   · 微微歪一点（-7deg），像手工盖的
+ *   · 定位在正文纸面的右下角（文章末尾），不占版面
+ *   · 处理中是同一枚印的「淡印」（虚线、更透明）
+ *   · 只有失败时才变成可点重试的告警卡（否则重试入口就没了）
+ * ========================================================================== */
+
+/* ===== 落点：盖在正文纸页上（父容器是 DraftEditor 的 relative 正文区）=====
+ * 先生的两轮要求叠在一起：
+ *   · 第一轮：位置往左 50px、整体放大到 120%
+ *   · 第二轮：「应放在正文、草稿文字内容的中间偏右一点点；窗口一变就飘走、
+ *            没盖在文本内容上，这不行」
+ *
+ * 飘走的根因：原来的 right:74px 是相对「外层滚动容器」算的。正文纸页
+ * （.cm-content）是 max-width 1080px、margin 0 auto 居中的 —— 窗口一宽，
+ * 居中的纸页往里缩，印章却还牢牢贴着容器右边缘，于是慢慢滑出纸面。
+ *
+ * 现在的做法：把定位基准换成「纸页本体」——
+ * 纸页宽度 = min(1080px, 容器宽 - 88px)，其中 88px 是 .cm-scroller 左右各 44px
+ * 的纸外留白（见 v2-editor.css 的 border 写法）。用同样的宽度 + 居中，
+ * 无论窗口怎么变，印章都留在纸面上。 */
+html[data-ui='v2'] .v2-postprocess-seal-host {
+  position: absolute;
+  left: 50%;
+  bottom: 36px;
+  width: min(1080px, calc(100% - 88px));
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  align-items: flex-end;
+  /* 「中间偏右一点点」：justify-content:center 之下，padding-left 会让内容中心
+     右移它的一半 —— 24% 即右移纸页宽度的约 12%。 */
+  justify-content: center;
+  padding-left: 24%;
+  /* 印章是装饰，不吃正文的点击与选区 */
+  pointer-events: none;
+}
+
+/* 失败时换回可交互的告警卡，否则「重试」点不动 */
+html[data-ui='v2'] .v2-postprocess-seal-host:has(.v2-postprocess-card) {
+  pointer-events: auto;
+}
+
+/* ===== 印章本体 ===== */
+html[data-ui='v2'] .v2-seal-stamp {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 9px 13px 10px;
+  border: 2px solid var(--seal);
+  border-radius: 7px;
+  color: var(--seal);
+  /* 印章用楷体，落款感更足；篆体字体不一定装了，楷体是稳的 */
+  font-family: var(--kai);
+  line-height: 1.15;
+  letter-spacing: 0.14em;
+  text-indent: 0.14em;
+  /* 先生要求放大到 120%：以右下角为锚点缩放，避免放大后又往右顶出去 */
+  transform: rotate(-7deg) scale(1.2);
+  transform-origin: 100% 100%;
+  /* 关键：不铺底色，只留框与字 */
+  background: transparent;
+  opacity: 0.82;
+  user-select: none;
+}
+
+/* 内圈细线：让「双线框」的身份一眼可辨 */
+html[data-ui='v2'] .v2-seal-stamp::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+html[data-ui='v2'] .v2-seal-stamp b {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-indent: 0.18em;
+}
+
+html[data-ui='v2'] .v2-seal-stamp > span {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-indent: 0;
+  opacity: 0.85;
+}
+
+/* 处理中：同一枚印的「淡印」 */
+html[data-ui='v2'] .v2-seal-stamp--progress {
+  opacity: 0.5;
+  border-style: dashed;
+}
+
+html[data-ui='v2'] .v2-seal-stamp--progress::before {
+  border-style: dashed;
+}
+
+/* 失败告警卡落在纸面时：给纸面留一点可读的底，并限制宽度
+ *（宽度上限原先挂在 host 上，改用纸页对齐的 flex 容器后挪到这里） */
+html[data-ui='v2'] .v2-postprocess-card {
+  max-width: min(420px, 100%);
+  box-shadow: 0 1px 2px rgba(90, 70, 30, 0.08), 0 14px 34px -22px rgba(90, 70, 30, 0.5);
+}

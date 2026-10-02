@@ -11,12 +11,12 @@ import {
 
 describe('narrative thread AI candidate boundary', () => {
   it.each([
-    ['generatePlanCandidates', 'zh-CN', { status: 'failed', content: '', finishReason: 'error' }, '叙事线索计划候选生成未完整完成'],
-    ['generatePlanCandidates', 'en-US', { status: 'failed', content: '', finishReason: 'error' }, 'Narrative-thread plan candidate generation did not complete.'],
-    ['generatePlanCandidates', 'zh-CN', { status: 'completed', content: '{"candidates":[]}', finishReason: 'stop' }, '模型未返回有效的叙事线索计划候选'],
-    ['generatePlanCandidates', 'en-US', { status: 'completed', content: '{"candidates":[]}', finishReason: 'stop' }, 'The model did not return any valid narrative-thread plan candidates.'],
-    ['generateEventCandidates', 'zh-CN', { status: 'failed', content: '', finishReason: 'error' }, '叙事线索事件候选生成未完整完成'],
-    ['generateEventCandidates', 'en-US', { status: 'failed', content: '', finishReason: 'error' }, 'Narrative-thread event candidate generation did not complete.'],
+    ['generatePlanCandidates', 'zh-CN', { status: 'failed', content: '', finishReason: 'error' }, '伏笔计划候选生成未完整完成'],
+    ['generatePlanCandidates', 'en-US', { status: 'failed', content: '', finishReason: 'error' }, 'Foreshadowing plan candidate generation did not complete.'],
+    ['generatePlanCandidates', 'zh-CN', { status: 'completed', content: '{"candidates":[]}', finishReason: 'stop' }, '模型未返回有效的伏笔计划候选'],
+    ['generatePlanCandidates', 'en-US', { status: 'completed', content: '{"candidates":[]}', finishReason: 'stop' }, 'The model did not return any valid foreshadowing plan candidates.'],
+    ['generateEventCandidates', 'zh-CN', { status: 'failed', content: '', finishReason: 'error' }, '伏笔事件候选生成未完整完成'],
+    ['generateEventCandidates', 'en-US', { status: 'failed', content: '', finishReason: 'error' }, 'Foreshadowing event candidate generation did not complete.'],
     ['generateEventCandidates', 'zh-CN', { status: 'completed', content: '{"candidates":[]}', finishReason: 'stop' }, '模型未返回带有效定稿证据的事件候选'],
     ['generateEventCandidates', 'en-US', { status: 'completed', content: '{"candidates":[]}', finishReason: 'stop' }, 'The model did not return any event candidates with valid finalized-manuscript evidence.'],
   ] as const)('localizes %s failures for %s', async (method, writingLanguage, outcome, expected) => {

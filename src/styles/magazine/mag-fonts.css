@@ -1,0 +1,381 @@
+/* ============================================================================
+ * v3「时尚杂志」字体系统（2026-09-16 新建 · 先生授权从美学系统引入装饰字体）
+ *
+ * 时装刊的字体语言是多种声音的对比，而不是一种：
+ *   · 刊头 / 刊名   —— 超粗无衬线（Lanxi-超粗黑），硬、响亮、有版面重量
+ *   · 装饰拉丁      —— 英文花体（Lanxi-GreatVibes）—— 杂志封面的签名式装饰
+ *   · 极细对照      —— Lanxi-静黑超细 —— 粗细对比是时装刊的灵魂
+ *   · 内页大标题    —— 思源宋（Noto Serif SC，全覆盖 · 可变字重）
+ *                     2026-09-17 第十五轮顶替掉原先的「高对比宋」朗宋，见下面令牌注释
+ *   · 数字与编号    —— Inter 的 tabular 数字，位宽稳定
+ *   · 界面正文      —— 思源黑体 / 跟随作者在设置里选的界面字体
+ *
+ * ── 字体来源与授权 ────────────────────────────────────────────────────────
+ * 五款装饰字体取自「美学系统」内置精选（dsh-raw-html-v2/assets/fonts，26 款
+ * 全部开源可商用，OFL 系），已复制进本仓库 public/fonts/v3/（合计 6.14MB），
+ * 随应用一起打包分发。
+ *
+ * ── 分家纪律（先生定调 + 2026-09-16 血泪教训）─────────────────────────────
+ * 本文件的令牌定义**一律不带 `html` 前缀**。
+ * 原因：App.tsx 把 data-ui / data-v2-theme / data-mag 挂了**两处** ——
+ * <html> 和 <div class="app-skin-root">；而 v2-themes.css 的色板选择器不带
+ * html 前缀，会同时命中这两层。若 mag 层只写 html[...]，就只会命中 <html>，
+ * app-skin-root 上的令牌会掉回 v2 的老值 —— 「怎么改都还是米黄」正是如此。
+ * 不带 html 前缀时：v2 下 data-mag 不存在，本层天然不匹配，绝不影响 V2。
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/* ---- v3 专属装饰字体（@font-face 是全局声明，但只有 v3 的规则引用它们，
+        v2 / v1 不会触发下载，等于零影响）---- */
+@font-face {
+  font-family: 'Lanxi-GreatVibes';
+  src: url('/fonts/v3/Lanxi-GreatVibes.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Lanxi-超粗黑';
+  src: url('/fonts/v3/Lanxi-超粗黑.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Lanxi-静黑超细';
+  src: url('/fonts/v3/Lanxi-静黑超细.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Lanxi-点黑';
+  src: url('/fonts/v3/Lanxi-点黑.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Lanxi-朗宋';
+  src: url('/fonts/v3/Lanxi-朗宋.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+
+[data-ui='v2'][data-mag] {
+  /* 刊头与刊名：超粗无衬线 —— 时装刊的「刊头声音」 */
+  --mag-font-display: 'Lanxi-超粗黑', 'Noto Sans SC', 'Inter', system-ui, sans-serif;
+
+  /* 装饰拉丁：英文花体（封面签名式装饰） */
+  --mag-font-script: 'Lanxi-GreatVibes', 'Inter', cursive;
+
+  /* 极细：与超粗形成对比的另一个极端 */
+  --mag-font-thin: 'Lanxi-静黑超细', 'Noto Sans SC', system-ui, sans-serif;
+
+  /* 几何黑：栏目名与控件 */
+  --mag-font-geo: 'Lanxi-点黑', 'Noto Sans SC', system-ui, sans-serif;
+
+  /**
+   * 内页大标题（**2026-09-17 第十五轮换将**）—— 从 `Lanxi-朗宋` 换成思源宋。
+   *
+   * 先生：「你找一个海报类的、符合杂志感觉的、覆盖率全面的艺术字体来替换现在的吧，
+   * 现在这个 Lanxi-朗宋，好像不太符合我们的要求？」
+   *
+   * 换的理由（前两条与 3.22 那件书名的事同源）：
+   *   · **辨识度**：朗宋是「高对比宋」—— 横细竖粗悬殊，小字号下横笔发虚，
+   *     这正是本文件第八节为人物档案正文踩过的那个坑；
+   *   · **覆盖**：它是从美学系统引进的装饰字体（字形按固定文案挑选），
+   *     渲染作者任意文本时会缺字 / 回落混排；
+   *   · **气质**：先生说它「不符合要求」—— 高对比宋偏书卷气，
+   *     而杂志的标题要**字面更大、笔画更匀、分量更足**。
+   *
+   * 替代品选 **思源宋体（Noto Serif SC / Source Han Serif SC）**：
+   *   · **全覆盖**：CJK 四万余汉字，本机即装有 `NotoSerifSC-VF.ttf`（可变字重，24MB）；
+   *   · **杂志正解**：Monocle / Kinfolk 那一路杂志的标题字就是现代宋 ——
+   *     它靠**字面与分量**出海报感，不靠花哨；
+   *   · **可变字重 100–900**：大标题能拉到 600–700 把力量做出来（见下面各条规则）；
+   *   · 开源可商用（SIL OFL），与已打包的五款同源，零授权风险。
+   *
+   * 注：本机那些**真·海报体**（方正综艺 1.8MB / 汉仪大黑 2.6MB / 造字工房典黑 1.5MB）
+   * 体积都只有 1–2MB —— 那是 GB2312 级别的子集，用上去等于把缺字问题再请回来。
+   * 所以「海报感」这件事，这一版靠**字重**而不是再换一款花体字。
+   */
+  --mag-font-title: var(--mag-font-name);
+
+
+  /**
+   * 长文阅读字体（2026-09-17 新增）。
+   *
+   * 先生：「现在人物档案正文内容字体非常不利于阅读。不是时尚杂志那种
+   * 利于轻松阅读的字体。」
+   *
+   * 对。此前正文与标题共用 `--mag-font-title`（Lanxi-朗宋 = **高对比宋**）——
+   * 高对比宋的笔画粗细悬殊，**在大字号标题上是味道，在小字号正文里是负担**：
+   * 横细到发虚、竖又压得很重，读两行眼睛就累。
+   *
+   * 杂志的做法本来就是分开的：标题用高对比，正文用**阅读宋**（笔画匀、字面大、
+   * 小字号下依然清楚）。这里取思源宋体优先、宋体兜底、西文衬线收尾 ——
+   * 全是系统已有的字体栈，不额外打包文件。
+   */
+  --mag-font-read: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', Georgia, serif;
+
+  /* 界面正文：跟随「设置 → 界面字体」；作者未选时落到思源黑体 */
+  --mag-font-ui: var(--font-sans, 'Noto Sans SC', system-ui, sans-serif);
+
+  /**
+   * 作品名专用（书名 / 项目名）—— **2026-09-17 第十五轮新增**。
+   *
+   * 先生：「书架预览……魅魔小姐今天也是勇敢的圣骑士，这个字体不太好，
+   * 因为好多文字这个字体都不能识别，你需要换一个识别率高的文字来。」
+   *
+   * 原先书名走 `--mag-font-title`（Lanxi-朗宋，**高对比宋**）。它有两处毛病，
+   * 而且第一处是本项目**已经踩过一次的老坑**（见下面第八节的那段调查）：
+   *   · 高对比宋的笔画粗细悬殊 —— 小字号下横细到发虚，「一眼认不出是哪个字」；
+   *   · 它是从美学系统引进的**子集化**字体（字形按固定文案挑选）——
+   *     而书名是**作者自己写的任意文本**：表外的字只能回落到另一种字体，
+   *     同一行里两种字混排，看上去就是「好多字不是这个字体」。
+   *     （哪一条占主导没有实测到底：两条都真实存在，处方是同一条。）
+   *
+   * 因此立一条纪律：**凡渲染用户任意文本的地方，一律不用装饰字体**，
+   * 只用系统全字库字体栈。这个令牌就是给那条纪律用的 ——
+   * 它刻意**不含任何 Lanxi 字体**，从第一项起就是全字库：
+   *   思源宋 → 宋体（Windows 自带，全覆盖）/ 宋体-简（macOS）→ 西文衬线兜底。
+   * 笔画匀、字面大，抬头一眼就认得出。
+   *
+   * **同日晚些时候**（先生要换掉朗宋）：思源宋把 `--mag-font-title` 也一并接管了 ——
+   * 于是「内页大标题」与「作品名」从此是同一套字，气质统一，
+   * 也不会再出现「某个地方的字跟别处不一样」。栈里 `Noto Serif SC` 排第一，
+   * 因为本机装的就是它（`C:\Windows\Fonts\NotoSerifSC-VF.ttf`，可变字重）。
+   */
+  --mag-font-name: 'Noto Serif SC', 'Source Han Serif SC', 'Source Han Serif CN',
+    'Songti SC', 'SimSun', 'STSong', Georgia, serif;
+
+  /**
+   * 作品名专用 · 无衬线版 —— 给**小字号**的用户文本用（书脊书名、图谱首字）。
+   *
+   * 书脊那条链路上先生定过一条：小字号下宋体的横细竖粗会糊成一列点，要用
+   * 无衬线（见 mag-pages §8·B）。所以这里的取舍是「无衬线」不变、
+   * 只把**装饰字体**换成系统全字库 —— 两个要求同时满足。
+   */
+  --mag-font-name-ui: 'Source Han Sans SC', 'Noto Sans SC', 'Microsoft YaHei',
+    'PingFang SC', 'Hiragino Sans GB', system-ui, sans-serif;
+
+  /* 数字与编号：Inter，配 tabular-nums 位宽稳定 */
+  --mag-font-num: 'Inter', Georgia, 'Songti SC', serif;
+
+  /* 眉标：Inter 打底，中文字落回思源黑体 */
+  --mag-font-kicker: 'Inter', 'Noto Sans SC', system-ui, sans-serif;
+
+  /* ---- 桥接产品既有的字体令牌 ----
+   * v2 的 --serif 是 Georgia + 宋体；杂志版换成高对比宋，
+   * 让全站走 h1…h4 的地方一起换上。 */
+  --serif: var(--mag-font-title);
+}
+
+/* ==========================================================================
+ * 一、刊头（Masthead）—— 超粗刊名 + 花体英文签名
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .bookname b {
+  font-family: var(--mag-font-display);
+  font-weight: 400; /* Lanxi-超粗黑 本身就是最粗档，不再叠加字重 */
+  font-size: 25px;
+  letter-spacing: 0.01em;
+}
+
+/* 刊名右侧的花体英文签名 —— 时装刊封面上最典型的装饰 */
+html[data-ui='v2'][data-mag] .bookname::after {
+  content: 'Novel';
+  margin-left: 11px;
+  font-family: var(--mag-font-script);
+  font-size: 21px;
+  line-height: 1;
+  color: var(--seal);
+  letter-spacing: 0.01em;
+  transform: rotate(-3deg);
+}
+
+html[data-ui='v2'][data-mag] .bookname span {
+  font-family: var(--mag-font-kicker);
+  font-weight: 500;
+}
+
+/* 刊头期号块 —— 杂志刊头的标志性元素：刊名之后一条竖线，再压期号与年份。
+ * 用罗马数字写年份（MMXXVI）是时装刊的常见排法，比阿拉伯数字更「刊」。 */
+html[data-ui='v2'][data-mag] .bookname span::after {
+  content: 'VOL. 01 · MMXXVI';
+  margin-left: 11px;
+  padding-left: 11px;
+  border-left: 1px solid var(--line2);
+  font-family: var(--mag-font-num);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  color: var(--faint);
+  vertical-align: 1px;
+}
+
+/* ==========================================================================
+ * 二、书脊栏目索引 —— 几何黑栏目名 + Inter 编号 + 极细刊名
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .spine .sbtn > span:not(.pdot) {
+  font-family: var(--mag-font-geo);
+  font-weight: 400;
+}
+
+html[data-ui='v2'][data-mag] .spine .sbtn::after {
+  font-family: var(--mag-font-num);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+html[data-ui='v2'][data-mag] .spine.v2-spine::after {
+  font-family: var(--mag-font-thin);
+  letter-spacing: 0.34em;
+}
+
+/* ==========================================================================
+ * 三、页头 —— 思源宋大标题 + 极细眉标
+ *
+ * 字重第十五轮从 400 提到 **600**：思源宋是**可变字体**（wght 100–900），
+ * 先生要的「海报感」在这里就是字面重量 —— 现代宋在 600 上既压得住版面，
+ * 又不像书法体那样抢戏。这也是「换字体」之外的第二个动作，见令牌注释。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .pagehead h1 {
+  font-family: var(--mag-font-title);
+  font-weight: 600;
+}
+
+html[data-ui='v2'][data-mag] .pagehead .ph-k,
+html[data-ui='v2'][data-mag] .v2-current-eyebrow,
+html[data-ui='v2'][data-mag] .v2-shelf-eyebrow,
+html[data-ui='v2'][data-mag] .settings-top .eyebrow,
+html[data-ui='v2'][data-mag] .sidebar .side-sec,
+html[data-ui='v2'][data-mag] .side-head {
+  font-family: var(--mag-font-kicker);
+}
+
+/* 眉标里的中英混排：拉丁走 Inter，中文落回极细黑 */
+html[data-ui='v2'][data-mag] .pagehead .ph-k {
+  font-weight: 400;
+}
+
+/* 侧栏分组的编号：Inter 等宽数字，与栏目名对齐成一条竖线 */
+html[data-ui='v2'][data-mag] .sidebar .side-sec::before {
+  font-family: var(--mag-font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+ * 四、菜单目录页 —— 条目编号 + 目录眉标
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .tb-menu::before,
+html[data-ui='v2'][data-mag] .tb-menu button::before {
+  font-family: var(--mag-font-kicker);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================
+ * 五、数字场合 —— 统计、期号、页码一律 Inter 等宽
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .v2-current-stats b,
+html[data-ui='v2'][data-mag] .v2-current-volume,
+html[data-ui='v2'][data-mag] .v2-shelf-count {
+  font-family: var(--mag-font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-ui='v2'][data-mag] .home-current-title {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 首页刊名：超粗无衬线（杂志封面刊名） */
+html[data-ui='v2'][data-mag] .home-hero-title {
+  font-family: var(--mag-font-display);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+/* 首页题记：思源宋 + 稍大字号，像杂志的引文（引文保持 400，不做海报化） */
+html[data-ui='v2'][data-mag] .v2-shelf-verse {
+  font-family: var(--mag-font-title);
+}
+
+/* ==========================================================================
+ * 六、对话框与卡片标题 —— 统一到思源宋（第十五轮起字重 600）
+ * ======================================================================== */
+[data-ui='v2'][data-mag] [role='dialog'] h2,
+[data-ui='v2'][data-mag] [role='alertdialog'] h2 {
+  font-family: var(--mag-font-title);
+  font-weight: 600;
+}
+
+html[data-ui='v2'][data-mag] .v2-current-card .home-current-title {
+  /* 书名是作者的任意文本 —— 走 `--mag-font-name`（纯系统全字库），
+     不用装饰字体。见该令牌上的注释。
+     第十五轮字重提到 **700**：书名是卡片的绝对主角，这一档是「海报标题」的分量。 */
+  font-family: var(--mag-font-name);
+  font-weight: 700;
+}
+
+/* 工作区卡片小标题：几何黑，硬朗 */
+html[data-ui='v2'][data-mag] .skin-workspace-page [class~='rounded-xl'][class~='border'][class~='p-4'] > h3 {
+  font-family: var(--mag-font-geo);
+}
+
+/* ==========================================================================
+ * 七、按钮 —— 几何黑，时装刊的控件语气
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .v2-btn {
+  font-family: var(--mag-font-geo);
+  letter-spacing: 0.03em;
+}
+
+/* ==========================================================================
+ * 八、长文阅读排版 —— 标题与正文字体分家（2026-09-17 新增）
+ *
+ * 先生：「现在人物档案正文内容字体非常不利于阅读。不是时尚杂志那种
+ * 利于轻松阅读的字体。」
+ *
+ * 查证属实：此前正文与标题共用 `--mag-font-title`（Lanxi-朗宋，**高对比宋**）。
+ * 高对比宋的笔画粗细悬殊 —— 大字号标题上是味道，小字号正文里是负担：
+ * 横细到发虚、竖又压得重，读两行眼睛就累。
+ *
+ * 杂志本来就是分开的：**标题用高对比宋，正文用阅读宋**。这里把长文改到
+ * `--mag-font-read`（思源宋 → 宋体 → 西文衬线），并把字号与行高给足 ——
+ * 「利于轻松阅读」的一半在字体，另一半在字号与行距。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .archive-section p,
+html[data-ui='v2'][data-mag] .archive-lead,
+html[data-ui='v2'][data-mag] .archive-view p,
+html[data-ui='v2'][data-mag] .archive-item,
+html[data-ui='v2'][data-mag] .archive-item p,
+html[data-ui='v2'][data-mag] .relation-visual-meta .quote,
+html[data-ui='v2'][data-mag] .relation-role-copy {
+  font-family: var(--mag-font-read);
+  font-size: 14.5px;
+  line-height: 1.95;
+  letter-spacing: 0.012em;
+}
+
+/* 字段名与定义项用几何黑：与正文拉开主次，也更好扫读 */
+html[data-ui='v2'][data-mag] .archive-item b,
+html[data-ui='v2'][data-mag] .relation-info-grid dt {
+  font-family: var(--mag-font-geo);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+}
+
+/* 档案分节的小标题：眉标语气，不抢正文 */
+html[data-ui='v2'][data-mag] .archive-section h3 {
+  font-family: var(--mag-font-kicker);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+}
+
+/* 引文块（角色的性格、题记那一类）：给出与正文不同的呼吸 */
+html[data-ui='v2'][data-mag] .relation-visual-meta .quote,
+html[data-ui='v2'][data-mag] .archive-lead {
+  font-size: 15px;
+  line-height: 2;
+  color: var(--ink);
+}
+

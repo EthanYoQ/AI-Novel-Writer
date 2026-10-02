@@ -143,7 +143,7 @@ export default function PromptSettings() {
   return (
     <div className="space-y-2" key={refreshKey}>
       {globalLoadError && (
-        <div className="px-3 py-2 rounded-lg text-xs bg-red-500/10 text-[var(--color-error-text)] border border-red-500/20">
+        <div className="v2-notice px-3 py-2 rounded-lg text-xs bg-red-500/10 text-[var(--color-error-text)] border border-red-500/20" data-tone="error">
           <AlertTriangle size={13} className="inline mr-1" />
           {globalLoadError}
         </div>
@@ -151,7 +151,7 @@ export default function PromptSettings() {
       {projectLoadError
         && projectLoadError.projectId === projectSession?.projectId
         && projectLoadError.leaseId === projectSession.leaseId && (
-        <div className="px-3 py-2 rounded-lg text-xs bg-red-500/10 text-[var(--color-error-text)] border border-red-500/20">
+        <div className="v2-notice px-3 py-2 rounded-lg text-xs bg-red-500/10 text-[var(--color-error-text)] border border-red-500/20" data-tone="error">
           <AlertTriangle size={13} className="inline mr-1" />
           {projectLoadError.message}
         </div>
@@ -503,11 +503,12 @@ function TemplateItem({
           {saveResult && (
             <div
               className={cn(
-                'text-xs px-3 py-1.5 rounded-lg',
+                'v2-notice text-xs px-3 py-1.5 rounded-lg',
                 saveResult.type === 'success'
                   ? 'bg-green-500/10 text-[var(--color-success-text)] border border-green-500/20'
                   : 'bg-red-500/10 text-[var(--color-error-text)] border border-red-500/20'
               )}
+              data-tone={saveResult.type === 'success' ? 'success' : 'error'}
             >
               {saveResult.type === 'success'
                 ? <CheckCircle2 size={13} className="inline mr-1" />

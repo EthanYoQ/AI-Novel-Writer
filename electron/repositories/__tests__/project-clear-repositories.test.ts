@@ -83,6 +83,7 @@ function createRealProjectDb(): BetterSqlite3.Database {
       abilities TEXT DEFAULT '',
       motivation TEXT DEFAULT '',
       relationships TEXT DEFAULT '',
+      relationship_notes TEXT DEFAULT '',
       arc TEXT DEFAULT '',
       notes TEXT DEFAULT '',
       cs_location TEXT DEFAULT '',
@@ -242,6 +243,32 @@ describe('project clear repositories', () => {
       expect(fs.existsSync(userFile)).toBe(true)
       expect(fs.existsSync(path.join(projectPath, '.vela', 'trash'))).toBe(true)
       expect(result.physicalFilesDeleted).toBe(2)
+    } finally {
+      fs.rmSync(projectPath, { recursive: true, force: true })
+    }
+  })
+
+  it('removes the architecture checkpoint when creative fields are cleared', () => {
+    const db = createMockDb()
+    const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'writer-clear-arch-'))
+    fs.mkdirSync(path.join(projectPath, '.vela'), { recursive: true })
+    const checkpoint = path.join(projectPath, '.vela', 'partial_arch.json')
+    const unrelatedState = path.join(projectPath, '.vela', 'lancedb')
+    fs.writeFileSync(checkpoint, '{"synopsis_result":"旧大纲"}')
+    fs.mkdirSync(unrelatedState, { recursive: true })
+    vi.mocked(getProjectDb).mockReturnValue(db as never)
+    vi.mocked(getCurrentProjectPath).mockReturnValue(projectPath)
+
+    try {
+      // 只清蓝图时不得碰架构检查点。
+      ProjectClearRepository.clearGeneratedData({ blueprints: true })
+      expect(fs.existsSync(checkpoint)).toBe(true)
+
+      ProjectClearRepository.clearGeneratedData({ creativeFields: true })
+
+      // 残留的检查点会让「情节大纲续批」以「与数据库原文不一致」永久失败。
+      expect(fs.existsSync(checkpoint)).toBe(false)
+      expect(fs.existsSync(unrelatedState)).toBe(true)
     } finally {
       fs.rmSync(projectPath, { recursive: true, force: true })
     }

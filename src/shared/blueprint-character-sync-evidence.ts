@@ -11,8 +11,12 @@ export interface BlueprintCharacterSyncFactSource {
 export interface BlueprintCharacterSyncRosterFact {
   name: string
   relationships: readonly { target: string; relation: string }[]
-  /** Retained only so verification can prove free text is not accepted as structured evidence. */
-  legacyRelationshipNotes?: string
+  /**
+   * 关系备注（作者的自由文本原话）。它与结构化边并存、互不压制，因此不再让
+   * 蓝图同步跳过该角色的关系事实校验：备注里的话不构成结构化证据，但也不再
+   * 让「名单缺少关系事实」被静默放过。
+   */
+  relationshipNotes?: string
 }
 
 interface RelationshipFact {
@@ -75,10 +79,6 @@ export function blueprintCharacterSyncFactError(
       const from = rosterByName.get(characterRosterIdentityKey(fact.from))
       const to = rosterByName.get(characterRosterIdentityKey(fact.to))
       if (!from || !to) continue
-      // Legacy relationship prose remains authoritative read-only evidence.
-      // Blueprint sync must not force a lossy conversion merely to close its
-      // post-commit bookkeeping operation.
-      if (from.legacyRelationshipNotes || to.legacyRelationshipNotes) continue
       if (
         !relationshipSatisfied(from, to.name, fact.relation)
         || !relationshipSatisfied(to, from.name, fact.relation)

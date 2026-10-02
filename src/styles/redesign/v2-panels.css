@@ -1,0 +1,167 @@
+/* ============================================================================
+ * v2 助手面板、底部面板与通用容器
+ *
+ * 可用钩子来自产品 index.css 的 .writer-* 系列与 agent 组件自带的
+ * .artifact-card / .confirm-card / .tool-call-block 等类；agent 内部大量
+ * 使用 Tailwind 碎类（text-xs / px-3 …），没有稳定类名的部分只能靠容器继承，
+ * 因此这里优先保证「底色、边框、圆角、字号基线」与 demo 一致。
+ *
+ * 无层样式，优先于任何 @layer。
+ * ========================================================================== */
+
+/* ===== 助手面板（对应 demo 的 .aipanel：纸底 + 左侧 1px 线） ===== */
+html[data-ui='v2'] .writer-ai-panel {
+  background: var(--paper);
+  border-left: 1px solid var(--line);
+  color: var(--ink);
+}
+
+/* AI 输出（Agent 工作记录）面板的根元素只声明了 flex 列，没有宽度 ——
+ * 于是它按内容收缩，右侧空出一条缝（先生：把面板整体左移，那条缝还会更大，
+ * 那正是 v1 放「右侧工具按钮栏」的位置，v2 已经不需要了）。
+ * 让侧栏里的面板一律撑满，右边缘就始终贴住窗口。 */
+html[data-ui='v2'] .aipanel-host > .writer-ai-panel,
+html[data-ui='v2'] .aipanel-host > .aipanel {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+/* 面板头：demo 的 .ai-head（40px 高 / 鲸字头像 / 标题+副题 / 右侧动作组）。
+ * 头像与标题的字号来自 shell.css 的 .ai-head 规则，这里只补产品独有的两点。 */
+html[data-ui='v2'] .ai-head-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+html[data-ui='v2'] .ai-head .agent-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* ===== 助手输入框（demo renderAIPanel 的输入块）=====
+ * demo：panel2 底 + line2 描边 + 10px 圆角 + 7px/9px 内边距，里面是透明无边框的 textarea。
+ * 产品的外层样式写在 React 内联 style 里，所以用「局部变量重绑定」让它取到 demo 值 ——
+ * 经典界面（v1）下这三个变量没有定义，组件完全走原值，逐像素不变。 */
+html[data-ui='v2'] .agent-input {
+  --agent-input-bg: var(--panel2);
+  --agent-input-border: var(--line2);
+  --agent-input-radius: 10px;
+  padding: 7px 9px;
+}
+
+/* ===== 面板标题（demo 的 .side-head：小字号、宽字距、弱化色）===== */
+html[data-ui='v2'] .panel-header {
+  font-size: var(--v2-fs-micro);
+  font-weight: 700;
+  letter-spacing: var(--v2-ls-eyebrow);
+  color: var(--muted);
+}
+
+/* ===== 树节点（demo .tree-row：31px 高 / 7px 圆角 / 墨色文字）===== */
+html[data-ui='v2'] .tree-item {
+  border-radius: 7px;
+  font-size: var(--v2-fs-body);
+  color: var(--ink2);
+}
+
+html[data-ui='v2'] .tree-item:hover {
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--ink);
+}
+
+/* ===== 工具按钮 ===== */
+html[data-ui='v2'] .tool-btn {
+  border-radius: 7px;
+  color: var(--muted);
+}
+
+html[data-ui='v2'] .tool-btn:hover {
+  background: var(--white);
+  color: var(--ink);
+}
+
+/* ===== 助手输入框 ===== */
+html[data-ui='v2'] .agent-textarea {
+  font-size: var(--v2-fs-body);
+  line-height: var(--v2-lh-ui);
+  color: var(--ink);
+}
+
+html[data-ui='v2'] .agent-textarea::placeholder {
+  color: var(--faint);
+}
+
+/* ===== agent 卡片（产出物 / 确认卡 / 工具调用块）===== */
+html[data-ui='v2'] .artifact-card,
+html[data-ui='v2'] .confirm-card,
+html[data-ui='v2'] .tool-call-block {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--v2-card-radius);
+  box-shadow: var(--shadow);
+}
+
+html[data-ui='v2'] .artifact-name,
+html[data-ui='v2'] .tool-call-name {
+  color: var(--ink);
+  font-size: var(--v2-fs-body);
+}
+
+html[data-ui='v2'] .artifact-type {
+  color: var(--muted);
+  font-size: var(--v2-fs-tiny);
+}
+
+html[data-ui='v2'] .tool-call-header {
+  border-bottom-color: var(--line);
+}
+
+html[data-ui='v2'] .tool-call-params,
+html[data-ui='v2'] .tool-call-result {
+  background: var(--panel2);
+  border-radius: 8px;
+  color: var(--ink2);
+  font-size: var(--v2-fs-tiny);
+}
+
+html[data-ui='v2'] .confirm-card-header {
+  border-bottom: 1px solid var(--line);
+}
+
+html[data-ui='v2'] .confirm-card-btn {
+  border-radius: 7px;
+  font-size: var(--v2-fs-body);
+}
+
+/* ===== 底部面板表格（任务 / 日志 / 模型）===== */
+html[data-ui='v2'] .writer-task-table {
+  font-size: var(--v2-fs-body);
+  color: var(--ink2);
+}
+
+html[data-ui='v2'] .writer-task-table th {
+  font-size: var(--v2-fs-tiny);
+  font-weight: 700;
+  letter-spacing: var(--v2-ls-label);
+  color: var(--muted);
+}
+
+html[data-ui='v2'] .writer-task-table tr:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+/* ===== 工作区承载面：改用纸色而非产品的深色壳 ===== */
+html[data-ui='v2'] .writer-shell-surface {
+  background-color: var(--panel);
+  color: var(--ink);
+}
+
+html[data-ui='v2'] .writer-panel-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}

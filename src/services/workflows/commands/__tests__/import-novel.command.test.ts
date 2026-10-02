@@ -685,7 +685,7 @@ describe('InferGlobalSettingsCommand', () => {
     useLLMStore.setState({ defaultModelId: 'model-a', generateStream })
 
     await expect(new InferGlobalSettingsCommand().execute({ step: {}, context: createContext(), callbacks }))
-      .rejects.toThrow(/本次请求长度限制/)
+      .rejects.toThrow(/最大长度/)
     expect(generateStream).toHaveBeenCalledTimes(2)
     expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
       'kb:search', 'kb:search', 'kb:search', 'kb:search',

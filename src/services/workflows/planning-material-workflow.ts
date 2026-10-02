@@ -1,5 +1,6 @@
 import { globalEventBus } from '../../shared/event-bus'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
+import type { CharacterRosterEntry } from '../../shared/character-roster'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../shared/project-session-context'
 import { localize } from '../../i18n/core'
 import type { Locale } from '../../i18n/types'
@@ -15,6 +16,17 @@ export interface PlanningMaterialWorkflowParams {
 
 export interface PlanningMaterialCharacterWorkflowParams extends PlanningMaterialWorkflowParams {
   generationModelId: string
+  /**
+   * 提取完成后的**唯一交付口**（方案 A）。
+   *
+   * 工作流只负责提取；候选的去留由作者在 CharacterCardCandidateDialog 里决定。
+   * 这个回调必须由调用方提供并弹出预览确认面板 —— 旧实现把「确认」写成工作流的
+   * 第二步，结果作者既看不到候选内容、也没有勾选机会，工作流还照样报成功。
+   *
+   * 传空数组是合法结果：资料里确实没有明确角色。调用方必须据此给出中性提示，
+   * 而不是把「0 条」当成「导入成功」。
+   */
+  onCandidatesReady: (candidates: readonly CharacterRosterEntry[]) => void
 }
 
 export function createPlanningMaterialWorkflow(
@@ -89,6 +101,10 @@ export function createPlanningMaterialCharacterExtractionWorkflow(
   ))
   const projectSession = Object.freeze({ ...params.projectSession })
   const materials = params.materials.map(material => Object.freeze({ ...material }))
+  const onCandidatesReady = params.onCandidatesReady
+
+  /** 候选只在本次执行里流转；完成回调靠这个闭包取到它们。 */
+  let extracted: CharacterRosterEntry[] = []
 
   return {
     type: 'post_process',
@@ -101,24 +117,31 @@ export function createPlanningMaterialCharacterExtractionWorkflow(
     steps: [
       {
         name: text('生成待确认角色卡', 'Generate character-card candidates'),
-        description: text('只生成资料中的明确事实，确认前不写入角色名单', 'Generate only explicit facts without changing the roster before confirmation'),
+        description: text(
+          '只生成资料中的明确事实，确认前不写入角色名单',
+          'Generate only explicit facts without changing the roster before confirmation',
+        ),
         executor: async (step, context, callbacks) => {
-          const { ExtractPlanningMaterialCharactersCommand } = await import('./commands/planning-material.command')
-          return new ExtractPlanningMaterialCharactersCommand(materials).execute({ step, context, callbacks })
-        },
-      },
-      {
-        name: text('确认并导入角色卡', 'Confirm and import character cards'),
-        description: text('把已确认候选原子合并到角色名单，并保留作者手工字段', 'Atomically merge confirmed candidates while preserving author-edited fields'),
-        executor: async (step, context, callbacks) => {
-          const { CommitPlanningMaterialCharactersCommand } = await import('./commands/planning-material.command')
-          await new CommitPlanningMaterialCharactersCommand().execute({ step, context, callbacks })
+          const { ExtractPlanningMaterialCharactersCommand, readExtractedCharacterCandidates } = await import(
+            './commands/planning-material.command'
+          )
+          const preview = await new ExtractPlanningMaterialCharactersCommand(materials)
+            .execute({ step, context, callbacks })
+          // 只读回候选，绝不在这里写库 —— 写入是作者的确认动作，不是工作流的。
+          extracted = readExtractedCharacterCandidates(context)
+          return preview
         },
       },
     ],
     onComplete: {
-      mode: 'silent',
-      message: text('创作资料角色卡已导入', 'Character cards from the planning material were imported'),
+      /**
+       * 必须是 'open'：workflow-store 只在 mode === 'open' 时调用 openResult。
+       * 写成 'silent' 会让候选连一个预览入口都没有 —— 那正是旧实现的病灶：
+       * 工作流跑完、界面报成功，而作者从未被问过一句。
+       */
+      mode: 'open',
+      message: text('角色卡候选已生成，等你确认', 'Character-card candidates are ready for review'),
+      openResult: () => { onCandidatesReady(Object.freeze([...extracted])) },
     },
   }
 }

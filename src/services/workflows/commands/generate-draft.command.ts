@@ -47,6 +47,7 @@ import {
   type SelectedCandidateDraft,
 } from '../chapter-materials'
 import type { DraftSourceDependency } from '../../../shared/draft-source-dependency'
+import type { WorldSettingEntry } from '../../../shared/world-setting'
 
 export { countDraftUnits } from '../../../shared/draft-units'
 export { previousChapterEnding } from '../chapter-materials'
@@ -60,91 +61,18 @@ const CROSS_CHAPTER_REUSE_ENGLISH_NGRAM_CHARS = 20
 const CROSS_CHAPTER_REUSE_LONG_RUN_CHARS = 80
 const ACTIVE_THREAD_CONTEXT_MAX_CHARS = 1200
 const ACTIVE_THREAD_CONTEXT_MAX_ITEMS = 6
-const STREAM_PREVIEW_INTERVAL_MS = 250
-
-type ChapterHeading = Readonly<{
-  lineIndex: number
-  from: number
-  to: number
-  markdownLevel: number
-}>
-
-function parseChapterHeading(line: string, lineIndex: number): ChapterHeading | null {
-  const match = /^\s*(?:(#{1,6})[\t ]+)?(?:第\s*([1-9]\d*)(?:\s*[–—-]\s*([1-9]\d*))?\s*章|Chapters?[\t ]+([1-9]\d*)(?:[\t ]*[–—-][\t ]*([1-9]\d*))?)(?=[\t ]*(?:[:：.．—-]|$))/iu.exec(line)
-  if (!match) return null
-  // Bare headings must use the production outline's explicit title separator.
-  if (!match[1] && !/^[\t ]*[:：]\s*\S/u.test(line.slice(match[0].length))) return null
-  const from = Number(match[2] ?? match[4])
-  const to = Number(match[3] ?? match[5] ?? from)
-  return {
-    lineIndex,
-    from,
-    to,
-    markdownLevel: match[1]?.length ?? 0,
-  }
-}
 
 /**
- * Project an explicitly chapter-structured synopsis onto one chapter without
- * cutting any selected section. Ambiguous or unlocatable structures stay
- * verbatim so author facts are never discarded on a guess.
+ * 章节引用注入世界观设定的上限（先生定的铁律：每章只注入被引用的，绝不全量）。
+ *
+ * 这两个数与「单条截断」一起构成三道闸门：即使作者把上百条设定挂到同一章，
+ * 进提示词的也是一个常数级文本量，不会把上下文预算打穿。
  */
-export function synopsisForDraftChapter(synopsis: string, chapterNumber: number): string {
-  // Quoted examples can contain chapter-like headings; do not interpret them.
-  if (/^\s*(?:`{3,}|~{3,})/mu.test(synopsis)) return synopsis.trim()
-  const lines = synopsis.trim().split(/\r?\n/u)
-  const headings = lines
-    .map((line, lineIndex) => parseChapterHeading(line, lineIndex))
-    .filter((heading): heading is ChapterHeading => heading !== null)
-  if (headings.length < 2) return synopsis.trim()
-
-  const firstLevel = headings[0]!.markdownLevel
-  const hasConsistentHeadingStyle = headings.every(heading => heading.markdownLevel === firstLevel)
-  const hasStrictChapterOrder = headings.every((heading, index) => (
-    heading.from <= heading.to
-    && (index === 0 || heading.from > headings[index - 1]!.to)
-  ))
-  const currentHeadings = headings.filter(heading => heading.from <= chapterNumber && chapterNumber <= heading.to)
-  if (!hasConsistentHeadingStyle || !hasStrictChapterOrder || currentHeadings.length !== 1) {
-    return synopsis.trim()
-  }
-
-  const headingsByLine = new Map(headings.map(heading => [heading.lineIndex, heading]))
-  let activeRange: Pick<ChapterHeading, 'from' | 'to'> | null = null
-  const projected: string[] = []
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    const line = lines[lineIndex]!
-    const chapterHeading = headingsByLine.get(lineIndex)
-    if (chapterHeading) {
-      activeRange = chapterHeading
-    } else {
-      const markdownHeading = /^\s*(#{1,6})\s+/u.exec(line)
-      if (markdownHeading && (firstLevel === 0 || markdownHeading[1]!.length <= firstLevel)) {
-        activeRange = null
-      }
-    }
-    if (
-      activeRange === null
-      || (activeRange.from <= chapterNumber && chapterNumber <= activeRange.to)
-    ) projected.push(line)
-  }
-  return projected.join('\n').trim()
-}
-
-function exactParagraphs(values: readonly string[]): ReadonlySet<string> {
-  return new Set(values.flatMap(value => (
-    value.split(/\r?\n\s*\r?\n/u).map(paragraph => paragraph.trim()).filter(Boolean)
-  )))
-}
-
-function withoutExactParagraphDuplicates(content: string, duplicates: ReadonlySet<string>): string {
-  return content
-    .split(/\r?\n\s*\r?\n/u)
-    .map(paragraph => paragraph.trim())
-    .filter(paragraph => paragraph && !duplicates.has(paragraph))
-    .join('\n\n')
-}
-
+const CHAPTER_WORLD_SETTING_MAX_ENTRIES = 8
+const CHAPTER_WORLD_SETTING_TOTAL_MAX_CHARS = 2400
+/** 单条设定的正文上限；超过就退回用摘要（摘要本来就是为进提示词准备的）。 */
+const CHAPTER_WORLD_SETTING_CONTENT_MAX_CHARS = 1200
+const STREAM_PREVIEW_INTERVAL_MS = 250
 export function sanitizeDraftText(text: string): string {
   const cleaned = stripThinkingTags(text)
     .replace(/^\s*(?:点我继续生成后续内容|继续生成后续内容|请点击继续|未完待续)\s*$/gmi, '')
@@ -382,6 +310,93 @@ async function sha256Hex(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
+type ChapterHeading = Readonly<{
+  lineIndex: number
+  from: number
+  to: number
+  markdownLevel: number
+}>
+
+function parseChapterHeading(line: string, lineIndex: number): ChapterHeading | null {
+  const match = /^\s*(?:(#{1,6})[\t ]+)?(?:第\s*([1-9]\d*)(?:\s*[–—-]\s*([1-9]\d*))?\s*章|Chapters?[\t ]+([1-9]\d*)(?:[\t ]*[–—-][\t ]*([1-9]\d*))?)(?=[\t ]*(?:[:：.．—-]|$))/iu.exec(line)
+  if (!match) return null
+  // Bare headings must use the production outline's explicit title separator.
+  if (!match[1] && !/^[\t ]*[:：]\s*\S/u.test(line.slice(match[0].length))) return null
+  const from = Number(match[2] ?? match[4])
+  const to = Number(match[3] ?? match[5] ?? from)
+  return {
+    lineIndex,
+    from,
+    to,
+    markdownLevel: match[1]?.length ?? 0,
+  }
+}
+
+/**
+ * Project an explicitly chapter-structured synopsis onto one chapter without
+ * cutting any selected section. Ambiguous or unlocatable structures stay
+ * verbatim so author facts are never discarded on a guess.
+ *
+ * 这一层是「章节级生成」的关键：大纲里前后各章的段落不进本章提示词，
+ * 提示词长度因此与全书章节数无关，模型也不会被后面章节的情节带跑。
+ */
+export function synopsisForDraftChapter(synopsis: string, chapterNumber: number): string {
+  // Quoted examples can contain chapter-like headings; do not interpret them.
+  if (/^\s*(?:`{3,}|~{3,})/mu.test(synopsis)) return synopsis.trim()
+  const lines = synopsis.trim().split(/\r?\n/u)
+  const headings = lines
+    .map((line, lineIndex) => parseChapterHeading(line, lineIndex))
+    .filter((heading): heading is ChapterHeading => heading !== null)
+  if (headings.length < 2) return synopsis.trim()
+
+  const firstLevel = headings[0]!.markdownLevel
+  const hasConsistentHeadingStyle = headings.every(heading => heading.markdownLevel === firstLevel)
+  const hasStrictChapterOrder = headings.every((heading, index) => (
+    heading.from <= heading.to
+    && (index === 0 || heading.from > headings[index - 1]!.to)
+  ))
+  const currentHeadings = headings.filter(heading => heading.from <= chapterNumber && chapterNumber <= heading.to)
+  if (!hasConsistentHeadingStyle || !hasStrictChapterOrder || currentHeadings.length !== 1) {
+    return synopsis.trim()
+  }
+
+  const headingsByLine = new Map(headings.map(heading => [heading.lineIndex, heading]))
+  let activeRange: Pick<ChapterHeading, 'from' | 'to'> | null = null
+  const projected: string[] = []
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex]!
+    const chapterHeading = headingsByLine.get(lineIndex)
+    if (chapterHeading) {
+      activeRange = chapterHeading
+    } else {
+      const markdownHeading = /^\s*(#{1,6})\s+/u.exec(line)
+      if (markdownHeading && (firstLevel === 0 || markdownHeading[1]!.length <= firstLevel)) {
+        activeRange = null
+      }
+    }
+    if (
+      activeRange === null
+      || (activeRange.from <= chapterNumber && chapterNumber <= activeRange.to)
+    ) projected.push(line)
+  }
+  return projected.join('\n').trim()
+}
+
+function exactParagraphs(values: readonly string[]): ReadonlySet<string> {
+  return new Set(values.flatMap(value => (
+    value.split(/\r?\n\s*\r?\n/u).map(paragraph => paragraph.trim()).filter(Boolean)
+  )))
+}
+
+/** 作者在小说配置里已经写过的事实不再重复注入一次（同一段只出现一次）。 */
+function withoutExactParagraphDuplicates(content: string, duplicates: ReadonlySet<string>): string {
+  return content
+    .split(/\r?\n\s*\r?\n/u)
+    .map(paragraph => paragraph.trim())
+    .filter(paragraph => paragraph && !duplicates.has(paragraph))
+    .join('\n\n')
+}
+
 /** Join a visible continuation without allowing a repeated prompt tail to count as new prose. */
 export function appendVisibleDraftContinuation(draft: string, continuation: string): string {
   return appendVisibleTextContinuation(draft, continuation, sanitizeDraftText)
@@ -428,9 +443,12 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       'Building chapter context...',
     ))
 
-    const { coreOutline, worldSetting, goldenFinger, protagonistProfile } = novelConfig
-    const authoredConfigFacts = [coreOutline, worldSetting, goldenFinger, protagonistProfile]
-      .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+    const authoredConfigFacts = [
+      novelConfig.coreOutline,
+      novelConfig.worldSetting,
+      novelConfig.goldenFinger,
+      novelConfig.protagonistProfile,
+    ].filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
     const architecture = await this.readArchitecture(
       expectedProjectPath,
       projectSession,
@@ -486,6 +504,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     // 以最大化 LLM 上下文缓存命中率
     // ==========================================
     const writingStyle = novelConfig.writingStyle?.trim() || ''
+    const { coreOutline, worldSetting, goldenFinger, protagonistProfile } = novelConfig
     const promptOnlyConfigKeys = new Set([
       'globalGuidance',
       'writingStyle',
@@ -498,6 +517,87 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       Object.entries(novelConfig).filter(([key]) => !promptOnlyConfigKeys.has(key)),
     )
     const novelConfigFactsJson = JSON.stringify(novelConfigFacts, null, 2)
+
+    /**
+     * 作者在本章蓝图页 @ 引用的世界观设定（「本章引用」区）。
+     *
+     * 先生定的路线里，每章只注入三类内容：**作者 @ 引用的** + AI 自己检索到的 + 知识库 topK。
+     * 知识库那一路在下面已接好，这里补上「作者 @ 引用的」这一路 ——
+     * 此前 chapter_world_settings 表、IPC、store、UI 都已齐备，只差这一处消费方。
+     *
+     * 两道路径读取：先取本章引用的 id 列表，再取设定条目，按 id 匹配。
+     * 不依赖渲染层 store：store 只在设定面板挂载时才加载，工作流不能假设它已被填充。
+     */
+    let chapterWorldSettingReferences: ChapterMaterialReference[] = []
+    try {
+      // ⚠️ 这里**不能**用 invokeWithProjectSession：`world-setting:*` 不在 ipc-client 的
+      // 项目会话通道清单里（它不借用会话身份，而是靠显式传入的 expectedProjectPath，
+      // 由主进程 guardProject 校验）。用错会立刻抛「通道不属于项目会话范围」，
+      // 而那段异常又会被下面的 catch 吞掉 —— 表现就是「引用的设定静默没进提示词」。
+      const refs = await ipc.invoke(
+        'world-setting:list-chapter-refs',
+        this.chapterInfo.chapterNumber,
+        expectedProjectPath,
+      )
+      if (Array.isArray(refs) && refs.length > 0) {
+        const entries = await ipc.invoke('world-setting:list', expectedProjectPath)
+        if (Array.isArray(entries)) {
+          const byId = new Map<number, WorldSettingEntry>()
+          for (const entry of entries) {
+            if (entry && typeof entry === 'object' && typeof entry.id === 'number') byId.set(entry.id, entry)
+          }
+          // 按作者在引用区里的排列顺序取，保持可控、可预期。
+          const referenced = refs
+            .map(ref => (ref && typeof ref === 'object' && typeof ref.settingId === 'number'
+              ? byId.get(ref.settingId)
+              : undefined))
+            .filter((entry): entry is WorldSettingEntry => Boolean(entry))
+            // 闸门：pending 候选绝不进上下文 —— 那是 AI 或作者还没确认的东西，
+            // 喂进去会让猜测自我强化（这是设定库自建立起就守住的规则）。
+            .filter(entry => entry.status !== 'pending')
+
+          const blocks: string[] = []
+          let usedChars = 0
+          for (const entry of referenced) {
+            if (blocks.length >= CHAPTER_WORLD_SETTING_MAX_ENTRIES) break
+            const detail = typeof entry.content === 'string' && entry.content.trim().length > 0
+              && entry.content.trim().length <= CHAPTER_WORLD_SETTING_CONTENT_MAX_CHARS
+              ? entry.content.trim()
+              : (entry.summary ?? '').trim()
+            if (!detail) continue
+            const name = entry.name.trim()
+            if (!name || !detail) continue
+            const block = `- ${name}：${detail}`
+            if (usedChars + block.length > CHAPTER_WORLD_SETTING_TOTAL_MAX_CHARS) break
+            blocks.push(block)
+            usedChars += block.length
+          }
+
+          if (blocks.length > 0) {
+            const header = promptLanguageText(
+              writingLanguage,
+              '【作者为本章引用的世界观设定（优先于既往正文；与作者原文冲突时以作者原文为准）】',
+              '[World-setting entries the author referenced for this chapter (take precedence over earlier prose; the author\'s own text wins on conflict)]',
+            )
+            const body = `${header}\n${blocks.join('\n')}`
+            chapterWorldSettingReferences = [{ text: body, rendered: body }]
+            callbacks.log(uiText(
+              `  已注入本章引用的设定 ${blocks.length} 条`,
+              `  Injected ${blocks.length} referenced world-setting entry(ies) for this chapter`,
+            ))
+          }
+        }
+      }
+    } catch (error) {
+      // 读取失败按「本章没有引用」处理，绝不打断生成 —— 但**不静默**：
+      // 这条链路一旦出问题，作者只会看到「引用的设定没进提示词」这种无从下手的现象，
+      // 所以要在日志里留下确切原因（不抛错、不阻断）。
+      callbacks.log(uiText(
+        `  读取本章引用的世界观设定失败，已跳过：${error instanceof Error ? error.message : String(error)}`,
+        `  Could not read this chapter's referenced world settings; skipped: ${error instanceof Error ? error.message : String(error)}`,
+      ))
+    }
+
     let knowledgeReferences: ChapterMaterialReference[] = []
     try {
       callbacks.log(uiText(
@@ -584,8 +684,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
         writingLanguage,
       )
       callbacks.log(uiText(
-        `  已加载相关活跃叙事线索（${activeThreads.count} 条）`,
-        `  Loaded relevant active narrative threads (${activeThreads.count})`,
+        `  已加载相关活跃伏笔（${activeThreads.count} 条）`,
+        `  Loaded relevant active foreshadowing (${activeThreads.count})`,
       ))
       activeThreadContext = activeThreads.text
       promptBuilder
@@ -616,10 +716,13 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     }
     const chapterMaterials = assembleChapterMaterials({
       writingLanguage,
-      authorProjectFacts: authoredConfigFacts,
+      authorProjectFacts: [coreOutline, worldSetting, goldenFinger, protagonistProfile]
+        .filter((value): value is string => typeof value === 'string' && Boolean(value.trim())),
       characterProfiles,
       futurePlans: futureBlueprintsStr,
       references: [
+        // 作者的显式引用排在最前：它是最强的意图信号，也必须最不容易被预算挤掉。
+        ...chapterWorldSettingReferences,
         ...(activeThreadContext ? [{ text: activeThreadContext, rendered: activeThreadContext }] : []),
         ...knowledgeReferences,
       ],
@@ -1198,6 +1301,7 @@ ${visibleTail}`,
     if (core?.premise) parts.push(withoutExactParagraphDuplicates(core.premise, duplicates))
     if (core?.worldbuilding) parts.push(withoutExactParagraphDuplicates(core.worldbuilding, duplicates))
     if (core?.synopsis) {
+      // 只带本章段落：大纲里其余章节既不进上下文，也不会被模型当成"已发生"。
       parts.push(withoutExactParagraphDuplicates(
         synopsisForDraftChapter(core.synopsis, chapterNumber),
         duplicates,
@@ -1270,12 +1374,14 @@ ${visibleTail}`,
           const relation = relationship.relation?.trim()
           if (target && relation) facts.push(`relationship: ${target} (${relation})`)
         }
-        const legacyRelationshipNotes = card.legacyRelationshipNotes?.trim()
-        if (legacyRelationshipNotes) {
+        // 关系备注是作者事实的一部分（与结构化边并存），正常注入，不再标成
+        // 「来源未知」的降级信息。
+        const relationshipNotes = card.relationshipNotes?.trim()
+        if (relationshipNotes) {
           facts.push(promptLanguageText(
             writingLanguage,
-            `relationship（legacy 来源未知）: ${legacyRelationshipNotes}`,
-            `relationship (legacy provenance unknown): ${legacyRelationshipNotes}`,
+            `relationship notes: ${relationshipNotes}`,
+            `relationship notes: ${relationshipNotes}`,
           ))
         }
         for (const field of CHARACTER_STATE_TEXT_FIELDS) {

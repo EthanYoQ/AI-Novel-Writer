@@ -37,7 +37,7 @@ vi.mock('../../services/ipc-client', () => ({
               const relationships = relationshipText ? JSON.parse(relationshipText) : []
               return { ...card, relationships }
             } catch {
-              return { ...card, relationships: [], legacyRelationshipNotes: relationshipText }
+              return { ...card, relationships: [], relationshipNotes: relationshipText }
             }
           }),
         }

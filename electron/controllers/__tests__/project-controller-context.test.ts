@@ -138,6 +138,8 @@ vi.mock('../../repositories/project-core-repository', () => ({
 
 vi.mock('../../services/project-access', () => ({
   projectAccess: mocks.projectAccess,
+  // 「最近项目」用它确认项目是否还在；漏掉它会让判定在测试里失真。
+  PROJECT_MANIFEST_RELATIVE_PATH: '.vela/project.json',
 }))
 
 import { registerProjectController } from '../project-controller'
@@ -1004,5 +1006,45 @@ describe('project controller project identity', () => {
         error: expect.stringContaining('当前数据库'),
       })
     expect(mocks.removeDirectoryWithWindowsRetry).not.toHaveBeenCalled()
+  })
+
+  /**
+   * 作者在资源管理器里删掉（或搬走）整个小说文件夹之后，书架不该继续摆着
+   * 打不开的「幽灵书」。判据取「目录还在」：删掉整个文件夹时它自然不成立，
+   * 而清单文件缺失/改名时不会误杀作者还在写的书。
+   */
+  it('hides recent projects whose folder is gone, without touching the stored list', async () => {
+    const aliveRoot = 'C:\\novels\\still-here'
+    const removedRoot = 'C:\\novels\\deleted-by-author'
+    mocks.existingPaths.add(path.resolve(aliveRoot))
+    const alive = { name: 'still-here', path: aliveRoot, updatedAt: '2026-01-02T00:00:00.000Z' }
+    const removed = { name: 'deleted-by-author', path: removedRoot, updatedAt: '2026-01-01T00:00:00.000Z' }
+    mocks.recentProjects = [alive, removed]
+
+    await expect(handler('project:recent-list')()).resolves.toEqual([alive])
+    /**
+     * 过滤只发生在显示层。**绝不写回存储** —— 写回是不可逆操作，判据一旦有偏差
+     * 就会把作者的项目列表永久清空（真发生过一次）。
+     */
+    expect(mocks.writeJsonFile).not.toHaveBeenCalled()
+  })
+
+  it('keeps every recent project when their folders are all still there', async () => {
+    const aliveRoot = 'C:\\novels\\still-here'
+    mocks.existingPaths.add(path.resolve(aliveRoot))
+    const alive = { name: 'still-here', path: aliveRoot, updatedAt: '2026-01-02T00:00:00.000Z' }
+    mocks.recentProjects = [alive]
+
+    await expect(handler('project:recent-list')()).resolves.toEqual([alive])
+    expect(mocks.writeJsonFile).not.toHaveBeenCalled()
+  })
+
+  it('falls back to an empty list when nothing is left, still without touching the stored list', async () => {
+    mocks.recentProjects = [
+      { name: 'gone', path: 'C:\\novels\\gone', updatedAt: '2026-01-01T00:00:00.000Z' },
+    ]
+
+    await expect(handler('project:recent-list')()).resolves.toEqual([])
+    expect(mocks.writeJsonFile).not.toHaveBeenCalled()
   })
 })

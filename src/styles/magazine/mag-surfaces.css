@@ -1,0 +1,458 @@
+/* ============================================================================
+ * 「时尚杂志」面与浮层（v3）—— 对话框 / 弹出菜单 / 卡片 / 书架首页 / 工具条
+ *
+ * 这一层用「语义选择器」而非组件类名下手：
+ *   Radix 会稳定输出 [role='dialog'] / [role='alertdialog'] /
+ *   [role='menu'] / [role='listbox'] / [role='menuitem'] / [role='option']。
+ *   覆盖这几个 role，等于一次性统一了全站所有对话框与下拉菜单 ——
+ *   无论它们是哪个组件渲染的、Portal 到哪一层。
+ *
+ * 杂志化的三个动作：
+ *   ① 浮层从「圆角卡片」变成「纸页」：圆角 10~14px → 3~4px，描边 1px 实线
+ *   ② 标题从 15px 提到 20px 衬线 —— 对话框的标题也该是标题
+ *   ③ 悬停反馈改用墨色淡染，深色主题下不再出现发灰的白叠加
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 1. 遮罩与对话框
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] [class*='backdrop-blur-sm'] {
+  background: var(--color-backdrop);
+  backdrop-filter: none !important;
+}
+
+html[data-ui='v2'][data-mag] [role='dialog'],
+html[data-ui='v2'][data-mag] [role='alertdialog'] {
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  /* 顶部压一条 4px 珊瑚朱 —— 与首页卡片、书脊选中块同一种「压边色带」，
+     对话框因此不再是「浮起来的白盒子」，而是一页有版头的纸。 */
+  border-top: 4px solid var(--seal);
+  border-radius: var(--mag-r-sheet);
+  color: var(--ink);
+  /* 组件用内联 style 写死了旧阴影，只能沿用 !important */
+  box-shadow: var(--mag-shadow-pop) !important;
+}
+
+/* 对话框标题：15px → 20px，衬线，字距收紧 */
+html[data-ui='v2'] [role='dialog'] h2,
+html[data-ui='v2'] [role='alertdialog'] h2 {
+  font-size: 20px;
+}
+
+html[data-ui='v2'][data-mag] [role='dialog'] h2,
+html[data-ui='v2'][data-mag] [role='alertdialog'] h2 {
+  font-family: var(--serif);
+  font-weight: 700;
+  letter-spacing: var(--mag-ls-head);
+}
+
+html[data-ui='v2'][data-mag] [role='dialog'] h2,
+html[data-ui='v2'][data-mag] [role='alertdialog'] h2 {
+  color: var(--ink);
+}
+
+/* 对话框内的三级标题 */
+html[data-ui='v2'] [role='dialog'] h3,
+html[data-ui='v2'] [role='alertdialog'] h3 {
+  font-size: 16px;
+}
+
+html[data-ui='v2'][data-mag] [role='dialog'] h3,
+html[data-ui='v2'][data-mag] [role='alertdialog'] h3 {
+  font-family: var(--serif);
+  font-weight: 700;
+}
+
+html[data-ui='v2'] [role='dialog'] p,
+html[data-ui='v2'] [role='alertdialog'] p {
+  font-size: var(--mag-fs-body);
+}
+
+html[data-ui='v2'][data-mag] [role='dialog'] p,
+html[data-ui='v2'][data-mag] [role='alertdialog'] p {
+  line-height: var(--mag-lh-read);
+}
+
+html[data-ui='v2'][data-mag] [role='dialog'] p,
+html[data-ui='v2'][data-mag] [role='alertdialog'] p {
+  color: var(--ink2);
+}
+
+html[data-ui='v2'] [role='dialog'] label,
+html[data-ui='v2'] [role='alertdialog'] label {
+  font-size: var(--mag-fs-label);
+}
+
+/* ==========================================================================
+ * 2. 弹出菜单与下拉选择
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] [role='menu'],
+html[data-ui='v2'][data-mag] [role='listbox'] {
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  border-radius: var(--mag-r-card);
+  padding: 6px;
+  color: var(--ink);
+  box-shadow: var(--mag-shadow-pop);
+}
+
+html[data-ui='v2'] [role='menuitem'],
+html[data-ui='v2'] [role='option'] {
+  font-size: var(--mag-fs-body);
+}
+
+html[data-ui='v2'][data-mag] [role='menuitem'],
+html[data-ui='v2'][data-mag] [role='option'] {
+  letter-spacing: 0.01em;
+}
+
+html[data-ui='v2'][data-mag] [role='menuitem'],
+html[data-ui='v2'][data-mag] [role='option'] {
+  border-radius: var(--mag-r-hair);
+  color: var(--ink2);
+}
+
+/* 悬停 / 键盘高亮：墨色淡染，四套主题统一 */
+html[data-ui='v2'][data-mag] [role='menuitem']:hover,
+html[data-ui='v2'][data-mag] [role='menuitem'][data-highlighted],
+html[data-ui='v2'][data-mag] [role='option']:hover,
+html[data-ui='v2'][data-mag] [role='option'][data-highlighted] {
+  background: var(--color-hover);
+  color: var(--ink);
+}
+
+/* 选中项（下拉选择器当前值）用红字标记，是杂志的「当前页」语义 */
+html[data-ui='v2'][data-mag] [role='option'][aria-selected='true'] {
+  font-weight: 600;
+}
+
+html[data-ui='v2'][data-mag] [role='option'][aria-selected='true'] {
+  color: var(--seal);
+}
+
+html[data-ui='v2'] [role='dialog'] input,
+html[data-ui='v2'] [role='alertdialog'] input,
+html[data-ui='v2'] [role='dialog'] textarea,
+html[data-ui='v2'] [role='alertdialog'] textarea {
+  font-size: var(--mag-fs-body);
+}
+
+html[data-ui='v2'][data-mag] [role='dialog'] input,
+html[data-ui='v2'][data-mag] [role='alertdialog'] input,
+html[data-ui='v2'][data-mag] [role='dialog'] textarea,
+html[data-ui='v2'][data-mag] [role='alertdialog'] textarea {
+  border-radius: var(--mag-r-hair);
+}
+
+/* 提示气泡：v2 的圆角与内距在小字下偏挤 */
+html[data-ui='v2'] [role='tooltip'] {
+  font-size: 12.5px;
+}
+
+html[data-ui='v2'][data-mag] [role='tooltip'] {
+  line-height: 1.5;
+}
+
+html[data-ui='v2'][data-mag] [role='tooltip'] {
+  border-radius: var(--mag-r-hair);
+  padding: 6px 10px;
+}
+
+/* ==========================================================================
+ * 3. 卡片与面板
+ * 杂志不用投影堆层级：卡片一律「1px 描边 + 直角」，靠留白分区。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .writer-panel-card,
+html[data-ui='v2'][data-mag] .v2-card {
+  border-radius: var(--mag-r-card);
+}
+
+/* ==========================================================================
+ * 4. 书架首页（先生打开软件看到的第一屏，值得单独雕）
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .v2-shelf-inner {
+  padding: 64px 52px 76px;
+}
+
+html[data-ui='v2'][data-mag] .v2-shelf-hero {
+  gap: 30px;
+  margin-bottom: 44px;
+}
+
+/* ---- 首页 Hero 刊标（v3）—— 与刊头同一枚「双页 W」----
+ * 沿革：原来是竖长朱砂印（seal-100.png）→ 杂志版一度换成实心珊瑚朱色块 +
+ * 竖排「AI小说作家」。先生 2026-09-17 挑了双页 W 之后，这里也换成它：
+ * 撤掉朱砂底与竖排刊名，标识就是图形本身（后页墨色、前页栏目色）。
+ * Hero 行因此从「竖长印章」变成「方形刊标」，与刊头那枚同族、同比例。 */
+html[data-ui='v2'][data-mag] .shlogo img {
+  display: none;
+}
+
+html[data-ui='v2'][data-mag] .shlogo {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 88px;
+  height: 88px;
+  background: transparent;
+}
+
+html[data-ui='v2'][data-mag] .shlogo::after {
+  content: none;
+}
+
+html[data-ui='v2'][data-mag] .shlogo svg {
+  display: block;
+  /* 朱砂框体与白笔都由 MagLogo 自己填（品牌色恒为朱砂），这里不再给 color */
+}
+
+/* ---- 首页 Hero 版式：杂志的封面（2026-09-16 精修）----
+ * 刊标 → 巨幅刊名 → 导语 → 题记（引文）。这是打开软件的第一眼，
+ * 尺寸要给足：「巨大的标题 vs 极小的眉标」这个落差的张力才是杂志味。 */
+html[data-ui='v2'][data-mag] .home-hero-title {
+  font-family: var(--serif);
+  font-size: 46px;
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+}
+
+html[data-ui='v2'][data-mag] .v2-shelf-lede {
+  font-size: 15px;
+  line-height: 1.85;
+  color: var(--ink2);
+  margin-top: 10px;
+  max-width: 46ch;
+}
+
+/* 题记：杂志的引文块 —— 一道珊瑚朱竖线起头，衬线大字 */
+html[data-ui='v2'][data-mag] .v2-shelf-verse {
+  font-family: var(--serif);
+  font-size: 19px;
+  line-height: 2;
+  color: var(--ink2);
+  padding-left: 26px;
+  border-left: 3px solid var(--seal);
+}
+
+/* ★ 眉标 9.5px → 12px：保留 0.24em 的宽字距，但要有分量 */
+html[data-ui='v2'] .v2-shelf-eyebrow {
+  font-size: 12px;
+}
+
+/* 首页眉标：与子菜单页头同一套语言 —— 短横线起头，颜色即栏目索引 */
+html[data-ui='v2'][data-mag] .v2-shelf-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  letter-spacing: 0.24em;
+  color: var(--seal);
+}
+
+html[data-ui='v2'][data-mag] .v2-shelf-eyebrow::before {
+  content: '';
+  flex: none;
+  width: 26px;
+  height: 3px;
+  background: var(--seal);
+}
+
+html[data-ui='v2'][data-mag] .v2-shelf-eyebrow {
+  margin-bottom: 10px;
+}
+
+html[data-ui='v2'] .v2-shelf-lede {
+  font-size: 15px;
+}
+
+html[data-ui='v2'][data-mag] .v2-shelf-lede {
+  line-height: 1.85;
+}
+
+html[data-ui='v2'][data-mag] .v2-shelf-lede {
+  margin-top: 10px;
+}
+
+html[data-ui='v2'] .v2-shelf-verse {
+  font-size: 17px;
+}
+
+html[data-ui='v2'][data-mag] .v2-shelf-verse {
+  line-height: 2.05;
+}
+
+html[data-ui='v2'][data-mag] .v2-shelf-verse {
+  padding-left: 26px;
+}
+
+/* 当前项目大字卡：杂志的「本期主打」 */
+/* 当前项目大字卡：杂志的「本期主打」—— 顶上压一条珊瑚朱色带，纸面浮起来 */
+html[data-ui='v2'][data-mag] .v2-current-card {
+  padding: 40px 40px 34px;
+  margin-bottom: 36px;
+  border-radius: var(--mag-r-card);
+  border-top: 4px solid var(--seal);
+  box-shadow: var(--mag-shadow-sheet);
+}
+
+html[data-ui='v2'] .v2-current-lede {
+  font-size: 15px;
+}
+
+html[data-ui='v2'][data-mag] .v2-current-lede {
+  line-height: 1.85;
+}
+
+/* 分节标题 */
+/* 分节标题：底下的线从 1px 淡灰换成 3px 墨黑 —— 版面的分栏线 */
+html[data-ui='v2'][data-mag] .v2-shelf-section-head {
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+  border-bottom: 3px solid var(--ink);
+}
+
+html[data-ui='v2'] .v2-shelf-section-head b {
+  font-size: 17px;
+}
+
+html[data-ui='v2'][data-mag] .v2-shelf-section-head b {
+  font-family: var(--serif);
+  font-weight: 700;
+  letter-spacing: var(--mag-ls-head);
+}
+
+html[data-ui='v2'] .v2-shelf-count {
+  font-size: 12.5px;
+}
+
+/* 桌面快捷卡（新建 / 导入 / 打开） */
+html[data-ui='v2'][data-mag] .v2-desk-cards {
+  gap: 16px;
+}
+
+/* 桌面快捷卡（新建 / 导入 / 打开）：三张卡三色顶带 —— 首页也要有多彩分栏 */
+html[data-ui='v2'][data-mag] .v2-desk-card {
+  border-radius: var(--mag-r-card);
+  padding: 22px 22px;
+  border-top: 4px solid var(--mag-sec-2);
+}
+
+html[data-ui='v2'][data-mag] .v2-desk-card:nth-child(1) {
+  border-top-color: var(--mag-sec-1);
+}
+
+html[data-ui='v2'][data-mag] .v2-desk-card:nth-child(2) {
+  border-top-color: var(--mag-sec-2);
+}
+
+html[data-ui='v2'][data-mag] .v2-desk-card:nth-child(3) {
+  border-top-color: var(--mag-sec-3);
+}
+
+/* 引言块：杂志的「引文」用一道竖色条起头 */
+html[data-ui='v2'][data-mag] .v2-shelf-verse {
+  border-left: 3px solid var(--seal);
+}
+
+html[data-ui='v2'] .v2-desk-copy b {
+  font-size: 15.5px;
+}
+
+html[data-ui='v2'][data-mag] .v2-desk-copy b {
+  font-family: var(--serif);
+  font-weight: 700;
+}
+
+html[data-ui='v2'] .v2-desk-copy span {
+  font-size: 13px;
+}
+
+html[data-ui='v2'][data-mag] .v2-desk-copy span {
+  line-height: 1.65;
+}
+
+/* ==========================================================================
+ * 5. 编辑器顶部工具条
+ *
+ * 产品有两档固定高度：h-10（40px，草稿编辑区）与 h-9（36px）。
+ * 后者是人物档案 / 叙事线索 / 世界设定 / 故事架构 / 知识库这几个编辑器共用的
+ * 那一条 `.flex.items-center.justify-between.gap-2.px-3.h-9.flex-shrink-0` ——
+ * 先生说的「其他子菜单也有类似情况」，指的就是它。
+ *
+ * 字号整体上提后 36/40px 会把内容顶格，故统一抬到 --mag-h-tool（46px）一档。
+ * 同时允许换行：右侧按钮组较多或窗口较窄时整组落到下一行，
+ * 而不是把每个按钮压到内容宽以下、文字随之折断（这正是「按钮挤压」的成因）。
+ * ======================================================================== */
+/* ---- 工具条：装帧重做（2026-09-16）----
+ * 各编辑器的顶部工具条没有语义类名，只有一串 Tailwind 工具类，
+ * 所以这里继续用结构选择器命中它（v2-editor-chrome.css 同款命中方式）。
+ * 杂志化的三个动作：底边从 1px 淡线换成 2px 墨线；渐变底换成实心纸面；
+ * 左缘压一条 4px 珊瑚朱色标 —— 与书脊、页头是同一套「色标起点」语言。
+ * flex-wrap 保留：按钮多或窗口窄时整组落到下一行，而不是把文字压折。 */
+html[data-ui='v2'][data-mag] .flex.items-center.justify-between.gap-2.px-3.h-9.flex-shrink-0,
+html[data-ui='v2'][data-mag] .flex.items-center.justify-between.gap-2.px-3.h-10.flex-shrink-0 {
+  position: relative;
+  min-height: var(--mag-h-tool);
+  height: auto;
+  flex-wrap: wrap;
+  row-gap: 6px;
+  padding-left: 22px;
+  padding-right: 20px;
+  background-image: none;
+  background: var(--panel);
+  border-bottom: 2px solid var(--ink);
+}
+
+html[data-ui='v2'][data-mag] .flex.items-center.justify-between.gap-2.px-3.h-9.flex-shrink-0::before,
+html[data-ui='v2'][data-mag] .flex.items-center.justify-between.gap-2.px-3.h-10.flex-shrink-0::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 9px;
+  bottom: 9px;
+  width: 4px;
+  background: var(--seal);
+}
+
+html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-9.flex-shrink-0 > div:first-child > .font-medium,
+html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-10.flex-shrink-0 > div:first-child > .font-medium {
+  font-size: 15px;
+}
+
+html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-9.flex-shrink-0 > div:first-child > [class*='text-[0.7rem]'],
+html[data-ui='v2'] .flex.items-center.justify-between.gap-2.px-3.h-10.flex-shrink-0 > div:first-child > [class*='text-[0.7rem]'] {
+  font-size: 12.5px;
+}
+
+/* ==========================================================================
+ * 6. 底部面板（任务 / 日志 / 模型）
+ * ======================================================================== */
+html[data-ui='v2'] .writer-task-table > .no-select .uppercase.tracking-widest {
+  font-size: 12px;
+}
+
+html[data-ui='v2'][data-mag] .writer-task-table > .no-select .uppercase.tracking-widest {
+  letter-spacing: var(--mag-ls-kicker);
+}
+
+html[data-ui='v2'] .writer-task-table > .no-select [class*='text-[0.68rem]'] {
+  font-size: 12px;
+}
+
+/* ==========================================================================
+ * 7. 空状态与提示
+ * ======================================================================== */
+html[data-ui='v2'] .v2-current-empty {
+  font-size: var(--mag-fs-body);
+}
+
+html[data-ui='v2'][data-mag] .v2-current-empty {
+  line-height: var(--mag-lh-read);
+}
+
+/* 顶栏「帮助」按钮与快捷入口：与 .tb-btn 保持同一档高度 */
+html[data-ui='v2'][data-mag] .tb-btn.tb-quickstart {
+  border-radius: var(--mag-r-hair);
+}

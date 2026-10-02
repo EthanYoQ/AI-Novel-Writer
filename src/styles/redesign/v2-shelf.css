@@ -1,0 +1,554 @@
+/* ============================================================================
+ * 书架首页样式（WelcomePageV2）
+ *
+ * demo 的 viewShelf() 用大量内联 style 拼装；这里把可复用的部分收成类，
+ * 内联只留背景图与一次性尺寸。归入 @layer components，遵循 index.css 头部约定。
+ * ========================================================================== */
+@layer components {
+
+[data-ui='v2'] .v2-shelf-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 54px 46px 64px;
+}
+
+/* ===== Hero：印章 + 书名 + 竖排题记 ===== */
+[data-ui='v2'] .v2-shelf-hero {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  margin-bottom: 36px;
+}
+
+[data-ui='v2'] .v2-shelf-eyebrow {
+  font-size: 9.5px;
+  letter-spacing: 0.3em;
+  color: var(--seal);
+  font-weight: 700;
+  margin-bottom: 7px;
+}
+
+[data-ui='v2'] .v2-shelf-lede {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 8px;
+  line-height: 1.9;
+}
+
+[data-ui='v2'] .v2-shelf-verse {
+  flex: none;
+  text-align: right;
+  border-left: 1px solid var(--line);
+  padding-left: 22px;
+  font-family: var(--kai);
+  font-size: 15px;
+  color: var(--ink2);
+  line-height: 2.1;
+  letter-spacing: 0.12em;
+}
+
+/* ===== 当前项目大字卡 ===== */
+[data-ui='v2'] .v2-current-card {
+  padding: 32px 34px 26px;
+  margin-bottom: 30px;
+  cursor: pointer;
+  background: var(--panel);
+}
+
+/* 正在预览书架上另一本书：给一圈朱砂细描边，避免和「当前项目」混淆 */
+
+/* 那本书还没有进度快照时的提示 */
+[data-ui='v2'] .v2-current-empty {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 16px 0 6px;
+  line-height: 1.9;
+}
+
+[data-ui='v2'] .v2-current-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+[data-ui='v2'] .v2-current-eyebrow {
+  font-size: 9.5px;
+  letter-spacing: 0.22em;
+  color: var(--seal);
+  font-weight: 700;
+}
+
+[data-ui='v2'] .v2-current-path {
+  font-family: var(--serif);
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 10px;
+  line-height: 1.9;
+  letter-spacing: 0.015em;
+  word-break: break-all;
+}
+
+[data-ui='v2'] .v2-current-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+/* ===== 当前项目卡的信息区（照 demo viewShelf 的版式与实际数值）=====
+ * demo 把这一块写成内联样式，这里落成语义类，数值一一对应：
+ *   顶行卷次 10.5px、题材行 12px/.08em、简介 serif 13px/1.95/max-width 760px、
+ *   数据行 gap 44px + 上下虚线、工序圆点 13px、焦点卡 radius 11px。 */
+
+/* 顶行右侧的卷次 */
+[data-ui='v2'] .v2-current-volume {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+/* 书名与题材标签同一基线；**不换行** —— 书名长了靠缩字号解决，而不是把题材挤到第二排 */
+[data-ui='v2'] .v2-current-titlerow {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  flex-wrap: nowrap;
+  margin-top: 2px;
+  min-width: 0;
+}
+
+/* 字号由 JS 按书名长度算出（--current-title-size），52px 是 demo 给短书名定的上限 */
+[data-ui='v2'] .v2-current-titlerow .home-current-title {
+  font-size: var(--current-title-size, 52px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* 题材标签永远完整，不被书名挤压 */
+[data-ui='v2'] .v2-current-genres {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+/* 一句话简介 */
+[data-ui='v2'] .v2-current-lede {
+  max-width: 760px;
+  font-family: var(--serif);
+  font-size: 13px;
+  color: var(--ink2);
+  margin-top: 10px;
+  line-height: 1.95;
+  letter-spacing: 0.015em;
+}
+
+/* 数据行：全书字数 / 当前章字数 / 已定稿章节 */
+[data-ui='v2'] .v2-current-stats {
+  display: flex;
+  gap: 44px;
+  margin: 18px 0 16px;
+  padding: 13px 0;
+  border-top: 1px dashed var(--line2);
+  border-bottom: 1px dashed var(--line2);
+}
+
+[data-ui='v2'] .v2-current-stats > div > b {
+  display: block;
+  font-size: 19px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-ui='v2'] .v2-current-stats > div > b em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+[data-ui='v2'] .v2-current-stats > div > span {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* 取不到数据时留白，不摆假数字 */
+[data-ui='v2'] .v2-current-stats > div > b.is-empty {
+  color: var(--faint);
+  font-size: 15px;
+  font-weight: 400;
+}
+
+[data-ui='v2'] .v2-current-stats .is-accent {
+  color: var(--seal);
+}
+
+/* 工序进度（demo 的六段：配置 → 架构 → 蓝图 → 草稿 → 审稿 → 定稿） */
+[data-ui='v2'] .v2-current-flow {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+[data-ui='v2'] .v2-current-flow .flink {
+  flex: 1;
+  min-width: 14px;
+  height: 1px;
+  background: var(--line2);
+  margin: 0 7px;
+}
+
+[data-ui='v2'] .v2-current-flow .flink.done {
+  background: var(--green);
+}
+
+[data-ui='v2'] .v2-current-flow .fstep {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+[data-ui='v2'] .v2-current-flow .fstep.done {
+  color: var(--ink2);
+}
+
+[data-ui='v2'] .v2-current-flow .fstep.now {
+  color: var(--seal);
+  font-weight: 700;
+}
+
+[data-ui='v2'] .v2-current-flow .fdot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  color: #fff;
+  background: var(--panel);
+  border: 1.5px solid var(--line2);
+  flex: none;
+}
+
+[data-ui='v2'] .v2-current-flow .fstep.done .fdot {
+  background: var(--green);
+  border-color: var(--green);
+}
+
+[data-ui='v2'] .v2-current-flow .fstep.now .fdot {
+  background: var(--seal);
+  border-color: var(--seal);
+}
+
+/* 焦点章节：第 N 章 + 「上一笔停在」 + 续写进度 */
+[data-ui='v2'] .v2-current-focus {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 13px 17px;
+  margin-bottom: 18px;
+}
+
+[data-ui='v2'] .v2-current-focus .fc-main {
+  flex: 1;
+  min-width: 0;
+}
+
+[data-ui='v2'] .v2-current-focus .fc-title {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+[data-ui='v2'] .v2-current-focus .fc-note {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+[data-ui='v2'] .v2-current-focus .fc-progress {
+  font-size: 11px;
+  color: var(--ink2);
+  font-family: var(--mono);
+  flex: none;
+}
+
+/* CTA 行：主按钮 + 次按钮 + 右侧三个状态点 */
+[data-ui='v2'] .v2-current-cta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+[data-ui='v2'] .v2-current-cta .v2-current-actions {
+  margin-top: 0;
+}
+
+[data-ui='v2'] .v2-current-signals {
+  margin-left: auto;
+  display: flex;
+  gap: 16px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+[data-ui='v2'] .v2-current-signals > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+[data-ui='v2'] .v2-current-signals .dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex: none;
+}
+
+[data-ui='v2'] .v2-current-signals .dot.warn { background: var(--warn); }
+[data-ui='v2'] .v2-current-signals .dot.ok { background: var(--green); }
+[data-ui='v2'] .v2-current-signals .dot.idle { background: var(--line2); }
+
+
+/* ===== 书架标题行 ===== */
+[data-ui='v2'] .v2-shelf-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+[data-ui='v2'] .v2-shelf-section-head b {
+  font-size: 13.5px;
+}
+
+[data-ui='v2'] .v2-shelf-count {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.16em;
+}
+
+/* ===== 书案三卡 ===== */
+[data-ui='v2'] .v2-desk-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 32px;
+}
+
+[data-ui='v2'] .v2-desk-card {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  width: 100%;
+  padding: 18px 20px;
+  cursor: pointer;
+  text-align: left;
+}
+
+[data-ui='v2'] .v2-desk-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 11px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--tint);
+  background: color-mix(in srgb, var(--tint) 12%, transparent);
+}
+
+[data-ui='v2'] .v2-desk-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+[data-ui='v2'] .v2-desk-copy b {
+  font-size: 13.5px;
+  display: block;
+}
+
+[data-ui='v2'] .v2-desk-copy span {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+[data-ui='v2'] .v2-desk-arrow {
+  color: var(--faint);
+  flex: none;
+  transition: 0.18s;
+}
+
+[data-ui='v2'] .v2-desk-card:hover .v2-desk-arrow {
+  color: var(--seal);
+  transform: translateX(3px);
+}
+
+[data-ui='v2'] .v2-shelf-foot {
+  text-align: center;
+  font-size: 10px;
+  color: var(--faint);
+  letter-spacing: 0.16em;
+}
+
+/* ===== 窄窗降级 ===== */
+@media (max-width: 900px) {
+  [data-ui='v2'] .v2-shelf-verse {
+    display: none;
+  }
+
+  [data-ui='v2'] .v2-desk-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+} /* @layer components */
+
+/* ==========================================================================
+ * 书籍字数提示不被书架容器裁切（先生：书籍下方的长条小框被背景框截掉）
+ *
+ * .book-meta 绝对定位在书脊下方 43px 处（bottom:-43px），而书架容器是固定高
+ * 320px 的 overflow:hidden 裁剪盒 —— 溢出的部分被切掉，提示成了半截。
+ *
+ * 注意这里**不是层级问题**：overflow 的剪裁发生在绘制之前，z-index 再高也突破
+ * 不了（它本来就有 z-index:90，照样被切）。正解是让容器不再裁切。
+ * 书籍本体仍完全落在容器内，视觉不受影响。
+ * ======================================================================== */
+
+[data-ui='v2'] .v6shelf .shelf {
+  overflow: visible;
+}
+
+/* ==========================================================================
+ * 书脊上的书名字号（先生：「新书在书架上，书脊显示的字体特别小，
+ * 特别是我的书名很短，结果字体反而很小看不清。」）
+ *
+ * 覆盖 shell.css（demo 原样式）的两条，它们叠加起来正好把新书的书名毁掉：
+ *
+ *   ① 字号被绑死在**书脊厚度**上：`font-size: min(13px, calc(var(--width) - 3px))`。
+ *      而厚度由 `spineDimensions()` 按**总字数**换算（章数 × 每章字数 → 页数 → 毫米），
+ *      下限 10px。实测：约 3 万字的新书书脊只有 10px → 字号被压到 min(13, 7) = **7px**。
+ *      大致要写到 13 万字以上，书脊才够宽、字号才吃得到 13px 的上限。
+ *      → 加一个可读下限：clamp(12px, …)。
+ *        书脊只有 10px 时文字会横向溢出约 2px，被 .spine 的 overflow:hidden 裁掉
+ *        左右各 1px —— 中文字形通常不贴到 em 框边缘，这点裁剪只是削掉一点空白，
+ *        远比原来的 7px 清楚。若日后觉得边缘发紧，可把 spineDimensions 的最小宽度
+ *        （现在是 10px）提到 14px，溢出就完全没有了。
+ *
+ *   ② `.title` 的内边距写死 `left:12px; right:12px`，而书脊常窄于 24px ——
+ *      容器宽度被算成 0，`justify-content:center` 于是把整列竖排文字推到右侧。
+ *      实测「新书」的书名偏移书脊中心 24.8px，几乎贴在书脊右缘外。
+ *      → 改为 left/right 归零：竖排文字在水平方向本来就只需要一个字号那么宽，
+ *        让容器铺满书脊，flex 的居中才有意义。宽书脊下效果与原来一致（都是居中）。
+ * ======================================================================== */
+
+[data-ui='v2'] .v6shelf .title {
+  left: 0;
+  right: 0;
+  font-size: clamp(12px, calc(var(--width) - 3px), 13px);
+}
+
+/* ==========================================================================
+ * 书架预览面板：点选不同书籍时不再抖动
+ *
+ * 先生问「怎么才能做到无感」。先看抖动的根因 —— **面板高度随内容变化**：
+ *   · 简介长短不一（这本三行、那本一行）        → 高度跳一次
+ *   · 有无快照 / 有无计划章数 / 有无题材标签    → 多一段或少一段，再跳一次
+ *   · peekState 先 loading 再落数据             → 内容再换一次
+ *   布局一动，面板连同下方按钮整体位移，观感就是「抖」。
+ *
+ * 正解不是加过渡动画 —— 那只会把一次抖动拉成一段缓慢的抽动，更难受。
+ * 而是**让可变内容各自占据固定高度**：字数多寡只在内部裁切，永不改变面板骨架。
+ * 简介按 3 行定档（line-height 1.95 → 5.85em）：短简介留白，长简介截断，
+ * 面板高度于是与「点的是哪本书」彻底无关。
+ * ======================================================================== */
+
+[data-ui='v2'] .v2-current-lede {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  overflow: hidden;
+  /* 三行高度恒定：短简介也占满，骨架不因文字长短而变 */
+  min-height: 1.95em;
+}
+
+/* 状态说明段（正在读取 / 无快照…）同样预留一行，避免加载态切到真实数据的跳动 */
+[data-ui='v2'] .v2-current-empty {
+  min-height: 1.95em;
+}
+
+/* ==========================================================================
+ * 预览面板定高 —— 书架位置恒定（先生：抖动来自下方书架被推挤）
+ *
+ * 上一轮固定了简介与状态段，但那是"每个片段各自固定"，整个面板仍会因
+ * 其它内容（题材标签有无、计划章数有无、统计数字异步落值）而改变高度，
+ * 于是下方的书架被推上推下 —— 这才是先生看到的抖。
+ *
+ * 正解是把**面板骨架本身定死**：高度写定、内容在内部裁切（.card 自带
+ * overflow:hidden，无需重复声明）。注意必须用 height 而非 min-height ——
+ * min-height 只是下限，内容一多照样撑开，抖动照旧。
+ *
+ * 预留一个变量便于微调：需要改高度时只动 --v2-preview-height 一处即可。
+ * ======================================================================== */
+
+[data-ui='v2'] .v2-current-card {
+  min-height: var(--v2-preview-height, 270px);
+}
+
+/* ==========================================================================
+ * 预览面板的内容栅格（先生：简介最多一排、名字一排、其余各就各位）
+ *
+ * 每一块都有确定的高度，于是「面板总高」与「点的是哪本书」彻底无关：
+ *   眉标行 / 名字行 / 题材行 / 简介行 / 统计区 / 阶段区 / 章节卡
+ * 内容多寡只在各自框内裁切（简介已收成一排），绝不改变面板骨架。
+ * 名字与题材都不换行：名字长时由 JS 缩字号（--current-title-size），
+ * 因此这一行的高度在任何书名下都相同。
+ * ======================================================================== */
+
+[data-ui='v2'] .v2-current-titlerow {
+  min-height: 2.6em;      /* 名字一排：字号会缩，行高不变 */
+  align-items: baseline;
+}
+
+[data-ui='v2'] .v2-current-head {
+  min-height: 1.6em;      /* 眉标 + 徽标 + 计划章数：有无内容都占同一行高 */
+}
+
+[data-ui='v2'] .v2-current-stats {
+  min-height: 4.6em;      /* 全书字数 / 当前章字数 / 已定稿章节：数据异步落值也不改高度 */
+}
+
+/* ==========================================================================
+ * 首页隐藏竖向滚动条（先生：这很不好看，鼠标能滚就行）
+ *
+ * 注意手法：不是 overflow:hidden —— 那会把滚动能力一起砍掉。
+ * 而是把滚动条本身「画成零宽」：滚动条消失，滚轮/触控板照常滚动。
+ * 三个属性各管一片浏览器：scrollbar-width 是标准、-ms- 管旧 Edge、
+ * ::-webkit-scrollbar 管 Chromium（Electron 走这条）。
+ * ======================================================================== */
+
+[data-ui='v2'] .v2-shelf-page {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+[data-ui='v2'] .v2-shelf-page::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}

@@ -1,0 +1,8 @@
+tree 5f72f8478a2e47e01bb60a441f0fbf70fa2eea32
+parent 250ec6649da2ff4b66f5b9f9ca6429dd0b551791
+author plolpl789 <1580274248@qq.com> 1789643727 +0800
+committer plolpl789 <1580274248@qq.com> 1789651803 +0800
+
+feat: 1.1.0 墨纸书斋新 UI 与本地写作 Skill 导入
+
+新 UI 墨纸书斋完整落地，融合上游 1.1.0 全部功能；新增本地写作 Skill 导入与中文技能名自动标识符。

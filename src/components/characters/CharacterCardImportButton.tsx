@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
-import { ClipboardPaste, FileUp } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { ClipboardPaste, FileUp, X } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useLLMStore } from '../../stores/llm-store'
+import { useCharacterStore } from '../../stores/character-store'
+import { characterRosterEntriesFromCards } from '../../services/character-roster-client'
 import { useLayoutStore } from '../../stores/layout-store'
 import { useWorkflowStore, workflowResourceConflictMessage } from '../../stores/workflow-store'
-import { selectPlanningMaterials, type PlanningMaterial } from '../../services/knowledge-service'
+import { appendPlanningMaterials, selectPlanningMaterials, type PlanningMaterial } from '../../services/knowledge-service'
 import { createPlanningMaterialCharacterExtractionWorkflow } from '../../services/workflows/planning-material-workflow'
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { appErrorMessage } from '../../i18n/app-errors'
@@ -13,7 +15,10 @@ import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } 
 import { Button } from '../ui/Button'
 import { confirm } from '../ui/Confirm'
 import { toast } from '../ui/Toast'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../ui/Dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/Dialog'
+import PageHead from '../ui/PageHead'
+import CharacterCardCandidateDialog from './CharacterCardCandidateDialog'
+import { useCharacterCardCandidates } from './use-character-card-candidates'
 
 interface Props { projectKey: string; compact?: boolean; disabled?: boolean }
 
@@ -72,6 +77,11 @@ export function CharacterCardImportButton(props: Props) {
 
 function SessionImportButton({ session, compact, disabled }: Props & { session: ProjectSessionContext }) {
   const { locale, text } = useLocaleStore()
+  const existingCharacters = useCharacterStore(state => state.characters)
+  const existingEntries = useMemo(
+    () => characterRosterEntriesFromCards(existingCharacters),
+    [existingCharacters],
+  )
   const sessionKey = importSessionKey(session)
   const draft = useSyncExternalStore(
     subscribeImportDraft,
@@ -82,15 +92,28 @@ function SessionImportButton({ session, compact, disabled }: Props & { session: 
   }, [sessionKey])
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  /** 这一批候选对应的草稿：只有真正写入成功后，才据此清空输入。 */
+  const draftRef = useRef<ImportDraft>(EMPTY_IMPORT_DRAFT)
+  const candidateFlow = useCharacterCardCandidates({
+    onCommitted: () => { clearImportDraftIfCurrent(sessionKey, draftRef.current) },
+  })
   const label = text('粘贴 / 导入角色卡', 'Paste / import character cards')
 
   async function chooseFiles() {
-    const draftWhenSelected = draft
     setBusy(true)
     try {
       const selected = await selectPlanningMaterials()
-      if (isProjectSessionCurrent(session) && selected.length && readImportDraft(sessionKey) === draftWhenSelected) {
-        writeImportDraft(sessionKey, { source: draftWhenSelected.source, files: selected })
+      if (!isProjectSessionCurrent(session) || selected.length === 0) return
+      // 追加而不是替换：先生常常从不同文件夹分几次挑资料，前一次的选择不能丢。
+      // 取「当前」草稿而不是捕获值 —— 选择期间作者可能还在改粘贴框。
+      const latest = readImportDraft(sessionKey)
+      const { files, skipped } = appendPlanningMaterials(latest.files, selected)
+      writeImportDraft(sessionKey, { source: latest.source, files })
+      if (skipped > 0) {
+        toast.info(text(
+          `已追加 ${files.length - latest.files.length} 个文件；另有 ${skipped} 个与已选内容完全相同，未重复加入。`,
+          `Added ${files.length - latest.files.length} file(s); ${skipped} were identical to files already selected.`,
+        ))
       }
     } catch (error) {
       if (isProjectSessionCurrent(session)) toast.error(appErrorMessage(locale, error))
@@ -127,7 +150,19 @@ function SessionImportButton({ session, compact, disabled }: Props & { session: 
         toast.warning(text('模型配置已改变，请重新确认后发送。', 'The model configuration changed. Confirm again before sending.'))
         return
       }
-      const workflow = createPlanningMaterialCharacterExtractionWorkflow({ projectSession: session, materials, generationModelId: model.id }, locale)
+      const workflow = createPlanningMaterialCharacterExtractionWorkflow({
+        projectSession: session,
+        materials,
+        generationModelId: model.id,
+        /**
+         * 提取完成后**唯一**的交付口：工作流只负责提取，候选的去留由作者决定。
+         * 这里弹预览确认面板，绝不自动写库。
+         */
+        onCandidatesReady: ready => {
+          draftRef.current = submittedDraft
+          candidateFlow.deliver(ready, session)
+        },
+      }, locale)
       const conflict = useWorkflowStore.getState().getResourceConflict(workflow)
       if (conflict) {
         toast.warning(workflowResourceConflictMessage(locale, conflict.title))
@@ -135,16 +170,21 @@ function SessionImportButton({ session, compact, disabled }: Props & { session: 
       }
       setOpen(false)
       useLayoutStore.getState().openBottomTab('tasks')
-      const runId = await useWorkflowStore.getState().startWorkflow(workflow, true)
+      /**
+       * 单步工作流，刻意**不再**用步进模式（第二个参数 false）。
+       * 旧实现传 true，于是「确认」被降级成任务面板里的一个「继续」按钮 ——
+       * 作者看不到候选、也没有勾选机会，一旦没留意那个等待状态，导入就永远不发生。
+       */
+      const runId = await useWorkflowStore.getState().startWorkflow(workflow, false)
       if (!isProjectSessionCurrent(session)) return
       const run = useWorkflowStore.getState().history.find(candidate => candidate.id === runId)
-      if (run?.status === 'completed') {
-        clearImportDraftIfCurrent(sessionKey, submittedDraft)
-        toast.success(text('角色卡已导入角色名单', 'Character cards imported into the roster'))
-      } else {
-        setOpen(true)
-        toast.warning(text('导入未完成，输入内容已保留；请查看任务详情。', 'Import did not complete. Your input has been kept; check the task details.'))
-      }
+      // 成功路径已由 onCandidatesReady 交付候选（或给出了 0 条的中性提示），
+      // 输入草稿要留到真正写入成功后才清空，所以这里不做任何收尾。
+      // hasPending 用 ref 判断：候选面板已经开着时绝不重开输入框，
+      // 否则两个对话框叠加，作者会以为出了故障。
+      if (run?.status === 'completed' || candidateFlow.hasPending()) return
+      setOpen(true)
+      toast.warning(text('提取未完成，输入内容已保留；请查看任务详情。', 'Extraction did not complete. Your input has been kept; check the task details.'))
     } catch (error) {
       if (isProjectSessionCurrent(session)) {
         setOpen(true)
@@ -160,20 +200,70 @@ function SessionImportButton({ session, compact, disabled }: Props & { session: 
       <ClipboardPaste size={14} />{!compact && label}
     </Button>
     <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value) }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{label}</DialogTitle>
-          <DialogDescription>{text('粘贴完整角色卡，或选择资料文件。AI 提取后由你预览确认，不会自动保存。', 'Paste full character cards or choose files. Preview and confirm the AI extraction before saving.')}</DialogDescription>
+      <DialogContent
+        className="max-w-[480px]"
+        /* 先生：这里常常粘着整段角色卡，误点蒙版关掉会吓一跳（草稿虽在，但体验很差）。 */
+        onPointerDownOutside={(event) => event.preventDefault()}
+      >
+        <DialogHeader className="app-dialog-head">
+          <DialogTitle className="sr-only">{label}</DialogTitle>
+          <PageHead
+            kicker={text('CAST · 导入角色卡', 'CAST · IMPORT')}
+            title={label}
+            description={text('粘贴完整角色卡，或选择资料文件。AI 提取后由你预览确认，不会自动保存。', 'Paste full character cards or choose files. Preview and confirm the AI extraction before saving.')}
+          />
         </DialogHeader>
-        <div className="p-6 space-y-3">
+        <div className="px-5 py-4 space-y-3">
           <textarea aria-label={text('角色卡全文', 'Full character-card text')} value={draft.source} onChange={event => {
             const nextSource = event.target.value
             writeImportDraft(sessionKey, { source: nextSource, files: draft.files })
           }} disabled={busy} rows={9} className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg)] p-2 text-sm" />
-          <Button variant="outline" size="sm" disabled={busy} onClick={() => void chooseFiles()}><FileUp size={14} />{text('选择文件', 'Choose files')}</Button>
-          {draft.files.length > 0 && <div className="text-xs break-all">{draft.files.map(file => file.fileName).join('、')} <Button variant="ghost" size="sm" disabled={busy} onClick={() => {
-            writeImportDraft(sessionKey, { source: draft.source, files: [] })
-          }}>{text('清除文件', 'Clear files')}</Button></div>}
+          <Button variant="outline" size="sm" disabled={busy} title={text('可多次选择，文件会累加', 'Choose as many times as you like; files accumulate')} onClick={() => void chooseFiles()}><FileUp size={14} />{text('选择文件', 'Choose files')}</Button>
+          {draft.files.length > 0 && (
+            <div
+              className="rounded border border-[var(--color-border)] overflow-hidden"
+              style={{ backgroundColor: 'var(--color-sidebar)' }}
+            >
+              <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)]">
+                <span className="text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                  {text(`已选择 ${draft.files.length} 个文件`, `${draft.files.length} file(s) selected`)}
+                </span>
+                <Button variant="ghost" size="sm" disabled={busy} onClick={() => {
+                  writeImportDraft(sessionKey, { source: draft.source, files: [] })
+                }}>{text('清除文件', 'Clear files')}</Button>
+              </div>
+              {/* 逐个文件一行：序号 / 文件名 / 字数 / 单独移除 —— 选中多个资料时一眼看得清。 */}
+              <div className="px-3 py-2 space-y-1" style={{ maxHeight: '148px', overflowY: 'auto' }}>
+                {draft.files.map((file, index) => (
+                  <div key={`${file.fileName}-${index}`} className="flex items-center gap-2 text-xs">
+                    <span className="flex-shrink-0 tabular-nums" style={{ color: 'var(--color-text-muted)' }}>
+                      {String(index + 1).padStart(2, '0')}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate" title={file.fileName} style={{ color: 'var(--color-text-secondary)' }}>
+                      {file.fileName}
+                    </span>
+                    <span className="flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>
+                      {text(`${file.text.length.toLocaleString()} 字`, `${file.text.length.toLocaleString()} chars`)}
+                    </span>
+                    <button
+                      type="button"
+                      className="flex-shrink-0 rounded p-0.5 hover:bg-[var(--color-hover)]"
+                      aria-label={text(`移除 ${file.fileName}`, `Remove ${file.fileName}`)}
+                      disabled={busy}
+                      onClick={() => {
+                        writeImportDraft(sessionKey, {
+                          source: draft.source,
+                          files: draft.files.filter((_, fileIndex) => fileIndex !== index),
+                        })
+                      }}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="ghost" disabled={busy} onClick={() => setOpen(false)}>{text('暂不导入', 'Not now')}</Button>
@@ -181,5 +271,14 @@ function SessionImportButton({ session, compact, disabled }: Props & { session: 
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <CharacterCardCandidateDialog
+      open={candidateFlow.open}
+      candidates={candidateFlow.candidates}
+      existingEntries={existingEntries}
+      busy={candidateFlow.busy}
+      error={candidateFlow.error}
+      onClose={candidateFlow.discard}
+      onConfirm={(selected, overwriteExisting) => { void candidateFlow.submit(selected, overwriteExisting) }}
+    />
   </>
 }

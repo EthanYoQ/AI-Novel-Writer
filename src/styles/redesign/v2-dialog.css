@@ -1,0 +1,262 @@
+/* ============================================================================
+ * v2 对话框、遮罩与弹出菜单
+ *
+ * 数值取自 demo：
+ *   .mask 278-279   rgba(43,38,28,.42) 墨色半透，无毛玻璃
+ *   .modal 280-289  14px 圆角 / 1px --line2 描边 / 0 30px 80px -20px 深投影
+ *                   标题衬线 15px / m-body 16px 18px / m-foot 右对齐
+ *
+ * 钩子选择器用 ARIA role（[role='dialog'] / [role='menu']），
+ * 这是 Radix 稳定输出的语义属性，比 Tailwind 生成类名可靠得多。
+ * 无层样式，优先于任何 @layer。
+ * ========================================================================== */
+
+/* ===== 遮罩：换成 demo 的墨色半透，去掉毛玻璃 ===== */
+html[data-ui='v2'] [class*='backdrop-blur-sm'] {
+  background: rgba(43, 38, 28, 0.42);
+  backdrop-filter: none !important;
+}
+
+/* ===== 对话框本体 ===== */
+html[data-ui='v2'] [role='dialog'],
+html[data-ui='v2'] [role='alertdialog'] {
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  border-radius: var(--v2-modal-radius);
+  color: var(--ink);
+  /* 组件用内联 style 写死了旧阴影，只能 !important 覆盖 */
+  box-shadow: 0 30px 80px -20px rgba(40, 30, 10, 0.5) !important;
+}
+
+/* 标题：demo 的 .modal .m-head b —— 衬线 15px */
+html[data-ui='v2'] [role='dialog'] h2,
+html[data-ui='v2'] [role='alertdialog'] h2 {
+  font-family: var(--serif);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+
+/* 正文与说明：改用墨色与 demo 的正文行高 */
+html[data-ui='v2'] [role='dialog'] p,
+html[data-ui='v2'] [role='alertdialog'] p {
+  color: var(--ink2);
+  line-height: var(--v2-lh-read);
+}
+
+/* ===== 弹出菜单 ===== */
+html[data-ui='v2'] [role='menu'],
+html[data-ui='v2'] [role='listbox'] {
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: 0 14px 34px -18px rgba(40, 30, 10, 0.45);
+  color: var(--ink);
+}
+
+html[data-ui='v2'] [role='menuitem'],
+html[data-ui='v2'] [role='option'] {
+  border-radius: 7px;
+  font-size: var(--v2-fs-body);
+  color: var(--ink2);
+}
+
+html[data-ui='v2'] [role='menuitem']:hover,
+html[data-ui='v2'] [role='menuitem'][data-highlighted],
+html[data-ui='v2'] [role='option']:hover,
+html[data-ui='v2'] [role='option'][data-highlighted] {
+  background: var(--white);
+  color: var(--ink);
+}
+
+/* ===== 输入类弹出（下拉/选择器）===== */
+html[data-ui='v2'] [role='dialog'] input,
+html[data-ui='v2'] [role='alertdialog'] input,
+html[data-ui='v2'] [role='dialog'] textarea,
+html[data-ui='v2'] [role='alertdialog'] textarea {
+  border-radius: var(--v2-field-radius);
+  font-size: var(--v2-field-fs);
+}
+
+/* ===== 弹窗标头：与各子菜单页头（PageHead）同一套三层语言 =====
+ * 先生：这类弹出来的子菜单（新建小说项目 / 小说导入与仿写）要有统一规范与设计美感 ——
+ * 标头就是各子菜单页头那套：朱砂小字眉标 → 衬线标题 → 次要色说明。
+ * 但弹窗不是整页，所以要在页头度量上收一档：
+ *   · 标题收到 21px（v2 的页头是 33px，塞进 420–560px 的框里会顶满一整行）；
+ *   · 去掉页头自带的下外边距与杂志分栏线 —— 分隔交给 DialogHeader 自己的 border-bottom，
+ *     否则弹窗标头下面会出现两条并排的线。
+ * 选择器同时写 data-mag 版本：杂志皮肤在 v2 之后加载且特异度相当，必须压过它。 */
+html[data-ui='v2'] .app-dialog-head .pagehead,
+html[data-ui='v2'][data-mag] .app-dialog-head .pagehead {
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+html[data-ui='v2'] .app-dialog-head .pagehead h1,
+html[data-ui='v2'][data-mag] .app-dialog-head .pagehead h1 {
+  font-size: 21px;
+  line-height: 1.35;
+}
+
+html[data-ui='v2'] .app-dialog-head .pagehead .ph-k,
+html[data-ui='v2'][data-mag] .app-dialog-head .pagehead .ph-k {
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  margin-bottom: 5px;
+}
+
+html[data-ui='v2'] .app-dialog-head .pagehead .ph-d,
+html[data-ui='v2'][data-mag] .app-dialog-head .pagehead .ph-d {
+  font-size: 11.5px;
+  line-height: 1.65;
+  margin-top: 5px;
+}
+
+/* ============================================================================
+ * 退出确认：未保存内容清单
+ *
+ * 先生：退出时只说一句「另一个项目仍有未保存内容」，用户既不知道是哪部作品、
+ * 也不知道是哪个地方，只能自己一部一部去找。清单把「哪部作品 → 哪个编辑器」
+ * 逐条摆出来，每条都带「前往此处」直接跳过去；红字提示也由散字改成整幅警示条，
+ * 永远占满内容宽度，不再飘在中间。
+ *
+ * 配色走 v2 token 并写 v1 兜底（--panel2 → --color-hover 之类），两套皮肤都成立；
+ * 度量沿用弹窗标头那套：24px 左右边距、8-10px 分组步长、9.5–13.5px 小字阶梯。
+ * 无层样式，优先于任何 @layer。
+ * ========================================================================== */
+
+.exit-unsaved {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 24px 16px;
+  /* 未保存内容可能很多 —— 清单自己滚动，标头与按钮始终留在原位 */
+  max-height: min(46vh, 320px);
+  overflow-y: auto;
+}
+
+.exit-unsaved-group {
+  background: var(--panel2, var(--color-hover));
+  border: 1px solid var(--line, var(--color-border));
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.exit-unsaved-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.exit-unsaved-project {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--serif, Georgia, 'Songti SC', serif);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink, var(--color-text));
+}
+
+.exit-unsaved-tag {
+  flex: none;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  border-radius: 4px;
+  padding: 1.5px 6px;
+}
+
+/* 当前作品：低调，只作归属说明 */
+.exit-unsaved-tag-here {
+  background: var(--white, var(--color-sidebar));
+  color: var(--muted, var(--color-text-muted));
+}
+
+/* 另一部作品：朱砂淡底 —— 退出时替它保存不了，这一档必须跳出来 */
+.exit-unsaved-tag-away {
+  background: rgba(var(--seal-rgb, 169, 50, 38), 0.14);
+  color: var(--seal, var(--color-accent));
+}
+
+.exit-unsaved-path {
+  margin-top: 3px;
+  font-family: var(--mono, ui-monospace, Menlo, Consolas, monospace);
+  font-size: 9.5px;
+  line-height: 1.5;
+  /* 用 --muted 而不是最弱的 --faint：这行路径是「哪部作品」的凭据，
+     要能一眼读出来，只比正文弱一档。 */
+  color: var(--muted, var(--color-text-muted));
+  word-break: break-all;
+}
+
+.exit-unsaved-list {
+  list-style: none;
+  margin: 9px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.exit-unsaved-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px dashed var(--line, var(--color-border));
+}
+
+.exit-unsaved-item:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.exit-unsaved-editor {
+  flex: none;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--seal, var(--color-accent));
+}
+
+.exit-unsaved-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--ink2, var(--color-text));
+}
+
+.exit-unsaved-jump {
+  margin-left: auto;
+}
+
+/* 失败提示：整幅警示条，左对齐占满内容宽度 */
+.exit-unsaved-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 12px 24px 0;
+  padding: 8px 11px;
+  border: 1px solid rgba(var(--seal-rgb, 169, 50, 38), 0.22);
+  border-left-width: 2px;
+  border-radius: 8px;
+  background: rgba(var(--seal-rgb, 169, 50, 38), 0.07);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--ink, var(--color-text));
+}
+
+.exit-unsaved-alert svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--seal, var(--color-accent));
+}

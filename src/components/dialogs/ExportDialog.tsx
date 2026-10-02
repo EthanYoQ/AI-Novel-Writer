@@ -79,7 +79,11 @@ export default function ExportDialog({ isOpen, onClose }: Props) {
 
   return (
     <Dialog open={isOpen} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-[480px]">
+      <DialogContent
+        className="max-w-[480px]"
+        /* 先生：格式与目标目录选到一半，误点蒙版关掉就得重选。 */
+        onPointerDownOutside={(event) => event.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Download size={16} className="text-[var(--color-accent)]" />
@@ -125,9 +129,9 @@ export default function ExportDialog({ isOpen, onClose }: Props) {
           {/* 结果 */}
           {result && (
             <div className={cn(
-              'p-3 rounded-lg text-xs',
+              'v2-notice p-3 rounded-lg text-xs',
               result.success ? 'bg-green-500/10 text-[var(--color-success-text)]' : 'bg-red-500/10 text-[var(--color-error-text)]'
-            )}>
+            )} data-tone={result.success ? 'success' : 'error'}>
               {result.success ? <CheckCircle2 size={14} className="inline mr-1" /> : <XCircle size={14} className="inline mr-1" />}
               {result.success ? text(`已导出到：${result.path}`, `Exported to: ${result.path}`) : result.error}
             </div>

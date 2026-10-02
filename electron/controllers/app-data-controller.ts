@@ -1,14 +1,20 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
-import { app, ipcMain } from 'electron'
+import { app, dialog, ipcMain } from 'electron'
 import type { AppPromptLoadReceipt, AppPromptTemplate } from '../../src/shared/ipc-channels'
 import type { WritingLanguage } from '../../src/shared/writing-language'
 import {
   inspectWritingSkillMarkdown,
   parseGitHubWritingSkillUrl,
+  resolveWritingSkillIdentity,
+  rewriteWritingSkillIdentity,
+  UNNAMED_WRITING_SKILL,
   type InstalledWritingSkill,
+  type LocalWritingSkillInspection,
   type RemoteWritingSkillInspection,
+  type ResolvedWritingSkillIdentity,
+  type WritingSkillInspection,
 } from '../../src/shared/writing-skills'
 import { mainText } from '../i18n'
 import { VELA_HOME, writeJsonFile } from '../utils/config-utils'
@@ -125,6 +131,57 @@ function ensureOwnedSkillTarget(name: string): { directory: string; filePath: st
   return { directory, filePath }
 }
 
+const LOCAL_WRITING_SKILL_EXTENSIONS = new Set(['.md', '.markdown'])
+
+/**
+ * 安全读取用户选中的本地 SKILL.md。
+ *
+ * 与 GitHub 来源共用同一条内容检查链路；这里只负责「把文件安全地读成文本」：
+ * 只接受 Markdown、拒绝符号链接与非普通文件、限制 64 KiB（与远程下载同源上限）。
+ */
+function readLocalWritingSkillFile(filePath: string): string {
+  if (!LOCAL_WRITING_SKILL_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
+    throw new Error(text('请选择 .md 格式的 SKILL.md 文件', 'Choose a SKILL.md file in .md format'))
+  }
+  const fileInfo = fs.lstatSync(filePath)
+  if (fileInfo.isSymbolicLink()) {
+    throw new Error(text('拒绝导入符号链接文件', 'Refusing to import a symlinked file'))
+  }
+  if (!fileInfo.isFile()) {
+    throw new Error(text('请选择一个 SKILL.md 文件', 'Choose a SKILL.md file'))
+  }
+  if (fileInfo.size > MAX_WRITING_SKILL_BYTES) {
+    throw new Error(text('SKILL.md 超过 64 KiB', 'SKILL.md is larger than 64 KiB'))
+  }
+  const raw = fs.readFileSync(filePath, 'utf8')
+  if (Buffer.byteLength(raw, 'utf8') > MAX_WRITING_SKILL_BYTES) {
+    throw new Error(text('SKILL.md 超过 64 KiB', 'SKILL.md is larger than 64 KiB'))
+  }
+  return raw
+}
+
+/**
+ * 解析本地 SKILL.md 在技能库里的最终身份。
+ *
+ * - 声明名已是 ASCII 标识符：原样沿用，内容一字不改写
+ * - 声明名是中文等非法值：派生稳定标识符，原名留给界面显示
+ * - 完全没有 frontmatter name：退回文件名，走同一条派生路径
+ */
+function resolveLocalSkillIdentity(
+  inspected: WritingSkillInspection,
+  filePath: string,
+): ResolvedWritingSkillIdentity {
+  const fileName = path.basename(filePath)
+  const declaredName = inspected.metadata.name === UNNAMED_WRITING_SKILL
+    ? path.basename(fileName, path.extname(fileName))
+    : inspected.metadata.name
+  return resolveWritingSkillIdentity({
+    ...inspected.metadata,
+    name: declaredName,
+    displayName: inspected.metadata.displayName ?? declaredName,
+  })
+}
+
 function githubRawUrl(owner: string, repo: string, ref: string, filePath: string): string {
   const segments = [owner, repo, ref, ...filePath.split('/')].map(encodeURIComponent)
   return `https://raw.githubusercontent.com/${segments.join('/')}`
@@ -205,6 +262,11 @@ function promptLanguageFromFilename(filename: string): WritingLanguage | undefin
  */
 export function registerAppDataController(): void {
   const inspectedWritingSkills = new Map<string, Pick<RemoteWritingSkillInspection, 'contentSha256' | 'resolvedUrl'>>()
+  // 本地导入与 GitHub 安装同构：只允许导入「刚刚检查过、且哈希未变」的那个文件。
+  const inspectedLocalWritingSkills = new Map<string, {
+    contentSha256: string
+    identity: ResolvedWritingSkillIdentity
+  }>()
   ipcMain.handle('prompt:load-global', async (): Promise<AppPromptLoadReceipt> => {
     const promptsDirectory = path.join(VELA_HOME, 'prompts')
     if (!fs.existsSync(promptsDirectory)) return { templates: [], diagnostics: [] }
@@ -371,6 +433,124 @@ export function registerAppDataController(): void {
         language: inspection.metadata.language,
         compatible: true,
         utf8Bytes: inspection.utf8Bytes,
+      }
+      return { success: true, skill }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  // 选文件与检查分成两步：选中的路径先回填到界面上的来源栏，
+  // 由作者决定要检查哪个文件后再触发只读检查，与 GitHub 来源的交互保持一致。
+  ipcMain.handle('skills:pick-local-file', async () => {
+    try {
+      let selected: { canceled: boolean; filePaths: string[] }
+      try {
+        selected = await dialog.showOpenDialog({
+          title: text('选择本地 SKILL.md', 'Choose a local SKILL.md'),
+          properties: ['openFile'],
+          filters: [{ name: 'SKILL.md (Markdown)', extensions: ['md', 'markdown'] }],
+        })
+      } catch {
+        throw new Error(text('无法打开文件选择器', 'Could not open the file picker'))
+      }
+      if (selected.canceled || selected.filePaths.length === 0) {
+        return { success: true, cancelled: true }
+      }
+      if (selected.filePaths.length !== 1) {
+        throw new Error(text('请一次只选择一个 SKILL.md 文件', 'Select exactly one SKILL.md file'))
+      }
+      return { success: true, filePath: selected.filePaths[0] }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('skills:inspect-local', async (_event, filePath: string) => {
+    try {
+      if (typeof filePath !== 'string' || filePath.length === 0 || filePath.length > 4_096) {
+        throw new Error(text('本地 Skill 路径无效', 'The local skill path is invalid'))
+      }
+      // 与 GitHub 来源走同一套内容检查：只读检查，不写任何文件。
+      const raw = readLocalWritingSkillFile(filePath)
+      const inspected = inspectWritingSkillMarkdown(raw)
+      const contentSha256 = createHash('sha256').update(raw, 'utf8').digest('hex')
+      const identity = resolveLocalSkillIdentity(inspected, filePath)
+      inspectedLocalWritingSkills.set(filePath, { contentSha256, identity })
+
+      const inspection: LocalWritingSkillInspection = {
+        metadata: inspected.metadata,
+        compatible: inspected.compatible,
+        reasons: inspected.reasons,
+        suggestedStage: inspected.suggestedStage,
+        utf8Bytes: inspected.utf8Bytes,
+        fileName: path.basename(filePath),
+        filePath,
+        contentSha256,
+        displayName: identity.displayName,
+        skillId: identity.skillId,
+        declaredName: identity.declaredName,
+        identifierGenerated: identity.identifierGenerated,
+      }
+      return { success: true, inspection }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('skills:install-local', async (_event, filePath: string) => {
+    try {
+      if (typeof filePath !== 'string' || filePath.length === 0 || filePath.length > 4_096) {
+        throw new Error(text('本地 Skill 路径无效', 'The local skill path is invalid'))
+      }
+      const confirmedInspection = inspectedLocalWritingSkills.get(filePath)
+      if (!confirmedInspection) {
+        throw new Error(text(
+          '请先检查该本地 Writing Skill，再确认导入',
+          'Inspect this local Writing Skill before confirming the import',
+        ))
+      }
+      inspectedLocalWritingSkills.delete(filePath)
+
+      // 重新读取并按哈希复核：渲染进程提供的内容永不作为导入输入。
+      const raw = readLocalWritingSkillFile(filePath)
+      const contentSha256 = createHash('sha256').update(raw, 'utf8').digest('hex')
+      if (contentSha256 !== confirmedInspection.contentSha256) {
+        throw new Error(text(
+          'Writing Skill 在检查后已发生变化，请重新检查',
+          'The Writing Skill changed after inspection; inspect it again',
+        ))
+      }
+      const inspected = inspectWritingSkillMarkdown(raw)
+      if (!inspected.compatible) {
+        throw new Error(text(
+          `该 Skill 不是自包含提示词：${inspected.reasons.join(', ')}`,
+          `This is not a self-contained prompt skill: ${inspected.reasons.join(', ')}`,
+        ))
+      }
+      // 身份同样在主进程重新解析：渲染层给出的标识符不作数。
+      const identity = resolveLocalSkillIdentity(inspected, filePath)
+      const requestedDirectory = writingSkillDirectory(identity.skillId)
+      if (fs.existsSync(requestedDirectory)) {
+        throw new Error(text(
+          `同名 Writing Skill 已安装：${identity.skillId}`,
+          `A Writing Skill with this name is already installed: ${identity.skillId}`,
+        ))
+      }
+      // 复用与 GitHub 安装完全相同的受管目录校验与写入权限。
+      const target = ensureOwnedSkillTarget(identity.skillId)
+      // 只有标识符是派生出来时才改写 frontmatter；声明名本就合法则内容原样落库。
+      const stored = identity.identifierGenerated
+        ? rewriteWritingSkillIdentity(raw, identity)
+        : raw
+      fs.writeFileSync(target.filePath, stored, { encoding: 'utf8', mode: 0o600 })
+      const skill: InstalledWritingSkill = {
+        name: identity.skillId,
+        source: 'user',
+        version: inspected.metadata.version,
+        language: inspected.metadata.language,
+        compatible: true,
+        utf8Bytes: inspected.utf8Bytes,
       }
       return { success: true, skill }
     } catch (error) {

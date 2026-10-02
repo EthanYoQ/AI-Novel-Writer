@@ -11,7 +11,7 @@
 <h1 align="center">AI Novel Writer / AI 小说作家</h1>
 
 <p align="center">
-  An AI-powered novel writing studio designed to plan, draft, and refine long-form fiction.. It organizes “premise → characters → worldbuilding → chapter blueprints → draft → review → revision → final” as a traceable writing workflow. You configure the model; your project material stays on your computer.
+  A local-first desktop workspace for long-form fiction. It organizes “premise → characters → worldbuilding → chapter blueprints → draft → review → revision → final” as a traceable writing workflow. You configure the model; your project material stays on your computer.
 </p>
 
 <p align="center">

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+﻿import { useState, useCallback, useRef, useEffect } from 'react'
 import { Save, RefreshCw, Sparkles, Loader2, AlertTriangle, FileText } from 'lucide-react'
 import { renderIcon } from '../panels/sidebar/sidebar-icons'
 
@@ -489,17 +489,19 @@ function ArchFileViewerSession({
             <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
           </Button>
 
-          {/* 保存按钮（有修改时才显示） */}
-          {!isCharacterProjection && isDirty && (
+          {/* 保存按钮
+              先生：按钮常驻 —— 未修改显示「已保存」、改动了显示「保存」。
+              早先是 {isDirty && <按钮>}，一保存按钮就消失，反馈无处可落。 */}
+          {!isCharacterProjection && (
             <Button
               variant="outline"
               size="sm"
               onClick={() => handleSave(currentContentRef.current)}
-              disabled={saving || !projectMatches}
+              disabled={saving || !projectMatches || !isDirty}
               title={text('保存（Cmd+S）', 'Save (Cmd+S)')}
             >
               <Save size={12} />
-              {text('保存', 'Save')}
+              {isDirty ? text('保存', 'Save') : text('已保存', 'Saved')}
             </Button>
           )}
 

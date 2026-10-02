@@ -1,0 +1,920 @@
+/* ============================================================================
+ * 「时尚杂志」外壳（v3）
+ *
+ * 覆盖范围：页面的「装订」部分 —— 刊头顶栏、栏目索引（书脊）、目录侧栏、
+ * 标签页、状态栏、拖拽把手。
+ *
+ * 覆盖难度分两档（已核对源码）：
+ *   · shell.css 的 258 处尺寸全部包在 @layer components 内 ——
+ *     本文件是「无层样式」，优先级天然高于任何 @layer，无需拼特异性。
+ *   · v2-sidebar.css 等是无层的，靠 [data-mag] 把特异性顶到 (0,4,1) 以上。
+ *
+ * 杂志化的四个动作（全站统一）：
+ *   ① 刊头化：顶栏加高到 64px，底部压一条 2px 墨色刊头线
+ *   ② 索引化：书脊从 60 → 76px，按钮 50×47 → 60×56，字号 9px → 11.5px
+ *   ③ 目录化：侧栏分组标题改成宽字距眉标，树行 31 → 34px
+ *   ④ 直角化：一切圆角收到 2px，层次交给细线与留白，不再用投影
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 0. 骨架度量 —— shell.css 的 :root 变量在这里被接管
+ * （这些变量名不带 v2 前缀，是 demo 自己的命名，需单独覆盖）
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] {
+  --h-title: var(--mag-h-masthead);
+  --h-status: var(--mag-h-status);
+  --h-tab: var(--mag-h-tab);
+  --h-tool: var(--mag-h-tool);
+  --w-spine: var(--mag-w-spine);
+  /* demo 的投影在杂志里找不到位置：层次靠线与留白 */
+  --shadow: var(--mag-shadow-none);
+}
+
+/* ==========================================================================
+ * 1. 刊头顶栏（Masthead）
+ * 杂志的第一眼就是刊头：更高的天头、更大更挺的刊名、底下一道压得很实的墨线。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .titlebar {
+  position: relative;
+  height: var(--mag-h-masthead);
+  gap: 16px;
+  padding: var(--mag-band) 20px 0 22px;
+  background: var(--chrome1);
+  border-bottom: 3px solid var(--ink);
+}
+
+/* 刊头彩带：七个创作栏目各占一段，颜色即索引。
+   用 linear-gradient 的硬边双位语法分段，不需要新增任何 DOM。
+   2026-09-17：整条压淡，把满色让给下面那枚「定位标」—— 彩带是索引，定位标是「我在哪」。 */
+html[data-ui='v2'][data-mag] .titlebar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--mag-band);
+  opacity: 0.5;
+  background: linear-gradient(
+    90deg,
+    var(--mag-sec-1) 0 14.2857%,
+    var(--mag-sec-2) 14.2857% 28.5714%,
+    var(--mag-sec-3) 28.5714% 42.8571%,
+    var(--mag-sec-4) 42.8571% 57.1428%,
+    var(--mag-sec-5) 57.1428% 71.4285%,
+    var(--mag-sec-6) 71.4285% 85.7142%,
+    var(--mag-sec-7) 85.7142% 100%
+  );
+}
+
+/* ---- 彩带定位标（2026-09-17 新增）----
+ * 先生要的「刊头彩带 / 书脊选中块 / 编辑区底色 / 侧栏选中行四处同步」里的第一处。
+ * 定位标是一格**满色**的色块，压在当前栏目那一段上，并比彩带高 2px（微微鼓起）；
+ * 换栏目时它**滑**到新的一段（280ms），而不是跳过去。
+ *
+ * 落点用**属性选择器**而不是 `calc(var(--pos) * 14.2857%)`：
+ * 实测 Chromium 里那条 calc 算不出百分比（left 恒为 0），而且自定义属性被移除后
+ * 伪元素的 fallback 也不刷新。属性一换、规则直接命中，稳且可读。
+ * 颜色仍取 --mag-active-sec（那个变量只用来取色，实测正常）。
+ *
+ * `data-active-sec` 由 ShellV2 写在 <html> 上；落到工具区时属性被移除，
+ * 定位标随之淡出 —— 彩色只标记创作的位置。 */
+html[data-ui='v2'][data-mag] .titlebar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 14.2857%;
+  height: calc(var(--mag-band) + 2px);
+  background: var(--mag-active-sec, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    left 280ms cubic-bezier(0.16, 0.84, 0.24, 1),
+    background-color 200ms linear,
+    opacity 160ms linear;
+}
+
+html[data-ui='v2'][data-mag][data-active-sec] .titlebar::after {
+  opacity: 1;
+}
+
+html[data-ui='v2'][data-mag][data-active-sec='1'] .titlebar::after { left: 0%; }
+html[data-ui='v2'][data-mag][data-active-sec='2'] .titlebar::after { left: 14.2857%; }
+html[data-ui='v2'][data-mag][data-active-sec='3'] .titlebar::after { left: 28.5714%; }
+html[data-ui='v2'][data-mag][data-active-sec='4'] .titlebar::after { left: 42.8571%; }
+html[data-ui='v2'][data-mag][data-active-sec='5'] .titlebar::after { left: 57.1428%; }
+html[data-ui='v2'][data-mag][data-active-sec='6'] .titlebar::after { left: 71.4285%; }
+html[data-ui='v2'][data-mag][data-active-sec='7'] .titlebar::after { left: 85.7142%; }
+
+/* ---- 刊标（v3）—— **双页 W** ----
+ * 沿革：v1 是朱砂方印 → v2 是「方块 + 一个字」→ v3 初版是一枚竖长的书脊块
+ * （26×38 + 装饰细带 + 竖排「作」字）。先生看过六款候选后挑了 NO.02：
+ *   「双页 W —— 两页对折的纸并立成 W。不画书，只画『翻到一半』的那个角度。」
+ * 所以：撤掉朱砂底、装饰带与那个「作」字 —— 标识**就是图形本身**，
+ * 后页取墨色、前页取当前栏目色（见 `MagLogo.tsx`），随栏目一起换色。 */
+html[data-ui='v2'][data-mag] .sealmark img {
+  display: none;
+}
+
+html[data-ui='v2'][data-mag] .sealmark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  /* 32px 与 v2 的印章同高 —— 刊头高度不动 */
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  overflow: visible;
+}
+
+/* 老的朱砂书脊块：细带与竖排「作」字一并撤掉 */
+html[data-ui='v2'][data-mag] .sealmark::before,
+html[data-ui='v2'][data-mag] .sealmark::after {
+  content: none;
+}
+
+html[data-ui='v2'][data-mag] .sealmark svg {
+  display: block;
+  /* 颜色不用在这里给：框体的朱砂与框内白笔都由 MagLogo 自己填，
+     品牌色恒为朱砂（`--mag-brand-seal` 兜底 #C8564A），不跟栏目换色。 */
+}
+
+/* 悬停：前页那一笔往右挪半格 —— 像把摊开的那一页又翻了一点。
+   只用 transform，不动布局；160ms，与 V3 的动效纪律一致。 */
+html[data-ui='v2'][data-mag] .brand:hover .maglogo-front {
+  transform: translateX(1.5px);
+  transition: transform 160ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+/* 刊名：衬线、加大、字距微收 —— 这是整个界面的「报头」 */
+html[data-ui='v2'][data-mag] .bookname {
+  gap: 11px;
+}
+
+html[data-ui='v2'] .bookname b {
+  font-size: 20px;
+}
+
+/* 刊名：衬线、加到 24px、字距微收 —— 整个界面的「报头」，
+   必须和旁边的按钮拉开尺寸差，否则刊头就退回成工具栏。 */
+html[data-ui='v2'][data-mag] .bookname b {
+  font-family: var(--serif);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* 刊名旁的副标（体裁 / 阶段）：小字，但不再小于 12px */
+html[data-ui='v2'] .bookname span {
+  font-size: 12.5px;
+}
+
+html[data-ui='v2'][data-mag] .bookname span {
+  letter-spacing: 0.02em;
+}
+
+html[data-ui='v2'][data-mag] .bookname span {
+  color: var(--muted);
+}
+
+/* ==========================================================================
+ * 1·B 刊头的响应式（2026-09-17 第十五轮新增）
+ *
+ * 先生：「给上方顶栏的那些图标、内容、字、按钮加入响应式，现在反馈说
+ * 窗口一缩小，顶栏内容全部就挤压在一起了。」
+ *
+ * 查证（读基座 shell.css 与 TitleBarV2 的 JSX）：顶栏是一条 flex 长链 ——
+ *   刊标 → 分隔 → 书名（24px 宋 + 文件名）→ 保存态 → 六道工序 → 分隔 →
+ *   模型胶囊 → 文件 → 分隔 → 缩放×3 → 主题 → 语言 → 帮助 → 助手 → 设置 →
+ *   分隔 → 窗口控制×3
+ * 其中**只有 `.flow`（六道工序）带 `flex: 1`** —— 也就是只有它肯让位；
+ * 而它的工序标签是 `white-space: nowrap`：窗口一窄，工序条被压到 0 宽、
+ * 内容却不肯折行，于是溢出重叠。与此同时 `.tb-btn` 一族（基座没给 flex，
+ * 默认 `0 1 auto`）也一起被挤，nowrap 的按钮文字互相压 —— 这就是先生看到的
+ * 「全部挤压在一起」。**不是哪一处写错了，而是没有一处主动让位。**
+ *
+ * 所以这一节做两件事：
+ *   ① **定规矩**：控件一律 `flex: none`（永不压扁）；弹性只留给工序条与书名，
+ *      并给它们 `min-width: 0` + 溢出裁剪/省略号 —— 让位时是「收窄」不是「溢出」。
+ *   ② **分档主动收起**：按窗口宽度逐级让位，顺序是**先收装饰、后收信息** ——
+ *      期号花体 → 工序文字 → 按钮文字 → 间距与装饰件 → 缩放数字。
+ *      **功能按钮一个都不删**（收掉文字的按钮都还挂着 title 提示）。
+ * ======================================================================== */
+
+/* ---- ① 定规矩：谁可以让位、谁绝不让位 ---- */
+html[data-ui='v2'][data-mag] .titlebar > * {
+  flex: none;                 /* 默认：控件保持自身宽度，不会被压扁 */
+}
+
+html[data-ui='v2'][data-mag] .titlebar .flow {
+  flex: 1 1 auto;             /* 工序条：唯一的主弹性块 */
+  min-width: 0;
+  overflow: hidden;           /* 压到多窄都只是裁掉，不溢出 */
+}
+
+html[data-ui='v2'][data-mag] .titlebar .bookname {
+  flex: 0 1 auto;             /* 书名：次级弹性块（项目名长了先自己收窄） */
+  min-width: 0;
+  overflow: hidden;
+}
+
+html[data-ui='v2'][data-mag] .titlebar .bookname b,
+html[data-ui='v2'][data-mag] .titlebar .bookname span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;    /* 长项目名收成省略号，而不是把右边全顶出去 */
+}
+
+html[data-ui='v2'][data-mag] .titlebar .modelpill {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- ② 分档让位（顶栏占满窗口，所以按视口宽度分档）---- */
+
+/* ≤1500：工序条先收成「点 + 线」—— 进度信息还在（点位与状态色），只是不要文字 */
+@media (max-width: 1500px) {
+  html[data-ui='v2'][data-mag] .titlebar .fnode .flb { display: none; }
+  html[data-ui='v2'][data-mag] .titlebar .flink { width: 14px; }
+}
+
+/* ≤1320：撤掉纯装饰（刊名的花体 Novel 与期刊号），它们是刊头的气派，不是信息 */
+@media (max-width: 1320px) {
+  html[data-ui='v2'][data-mag] .titlebar .bookname::after,
+  html[data-ui='v2'][data-mag] .titlebar .bookname span::after { content: none; }
+  html[data-ui='v2'][data-mag] .titlebar { gap: 11px; }
+}
+
+/* ≤1180：按钮的文字标签收掉，只留图标（title 提示仍在）；
+   工序条再瘦一档；刊名缩小一级 */
+@media (max-width: 1180px) {
+  html[data-ui='v2'][data-mag] .titlebar .tb-btn > span:not(.zoom-label) { display: none; }
+  html[data-ui='v2'][data-mag] .titlebar .tb-btn > span + svg { display: none; } /* 下拉箭头 */
+  html[data-ui='v2'][data-mag] .titlebar .tb-btn { padding: 0 7px; }
+  html[data-ui='v2'][data-mag] .titlebar .fnode .fdot { width: 9px; height: 9px; }
+  html[data-ui='v2'][data-mag] .titlebar .fnode .fdot svg,
+  html[data-ui='v2'][data-mag] .titlebar .flink { width: 8px; }
+  html[data-ui='v2'][data-mag] .titlebar .bookname b { font-size: 21px; }
+}
+
+/* ≤1040：保存态收成图标、当前文件名收起、模型胶囊限宽省略 */
+@media (max-width: 1040px) {
+  html[data-ui='v2'][data-mag] .titlebar .saved { font-size: 0; gap: 0; }
+  html[data-ui='v2'][data-mag] .titlebar .bookname span { display: none; }
+  html[data-ui='v2'][data-mag] .titlebar .modelpill { max-width: 104px; }
+  html[data-ui='v2'][data-mag] .titlebar { gap: 9px; padding-right: 12px; }
+}
+
+/* ≤900：只留骨架 —— 分隔条撤掉、缩放数字撤掉、刊标缩一档、工序条整条收起。
+   到这一步窗口已经放不下一整条刊头了，保功能、弃排场。 */
+@media (max-width: 900px) {
+  html[data-ui='v2'][data-mag] .titlebar .tbdiv { display: none; }
+  html[data-ui='v2'][data-mag] .titlebar .zoom-label { display: none; }
+  html[data-ui='v2'][data-mag] .titlebar .sealmark,
+  html[data-ui='v2'][data-mag] .titlebar .sealmark svg { width: 26px; height: 26px; }
+  html[data-ui='v2'][data-mag] .titlebar .bookname b { font-size: 18px; }
+  html[data-ui='v2'][data-mag] .titlebar .flow { display: none; }
+  html[data-ui='v2'][data-mag] .titlebar { gap: 7px; }
+}
+
+html[data-ui='v2'] .saved {
+  font-size: 12px;
+}
+
+html[data-ui='v2'][data-mag] .saved {
+  gap: 5px;
+}
+
+html[data-ui='v2'][data-mag] .saved svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* 顶栏的分隔竖线：细而高，像版面里的栏线 */
+html[data-ui='v2'][data-mag] .tbdiv {
+  height: 24px;
+}
+
+/* ---- 创作流程（六道工序）----
+   字号 10.5 → 12px，圆点 13 → 15px，连接线拉长一点，整条流程才不显得挤。 */
+html[data-ui='v2'] .fnode .flb {
+  font-size: 12px;
+}
+
+html[data-ui='v2'][data-mag] .fnode .flb {
+  letter-spacing: 0.01em;
+}
+
+html[data-ui='v2'] .fnode .fdot {
+  font-size: 9px;
+}
+
+html[data-ui='v2'][data-mag] .fnode .fdot {
+  width: 15px;
+  height: 15px;
+}
+
+html[data-ui='v2'][data-mag] .flink {
+  width: 26px;
+}
+
+html[data-ui='v2'] .chprog {
+  font-size: 12px;
+}
+
+html[data-ui='v2'][data-mag] .chprog {
+  gap: 8px;
+}
+
+html[data-ui='v2'][data-mag] .chprog .bar {
+  width: 72px;
+  height: 3px;
+  border-radius: 0;
+}
+
+html[data-ui='v2'][data-mag] .chprog .bar i {
+  border-radius: 0;
+}
+
+/* ---- 模型徽标 ---- */
+html[data-ui='v2'] .modelpill {
+  font-size: 12.5px;
+}
+
+html[data-ui='v2'][data-mag] .modelpill {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--mag-r-hair);
+}
+
+/* ==========================================================================
+ * 2. 栏目索引（书脊 Spine）—— 2026-09-16 装帧重做
+ *
+ * 从「图标条」改成「刊物的脊」。时装刊的书脊不是一排按钮，是栏目索引带：
+ *   · 编号（衬线 01–07）压在上，栏目名竖排在下 —— 中文刊的骨头
+ *   · 左缘 5px 栏目色条：七个创作栏目七色，颜色即索引
+ *   · 选中整块上色并向右出血 5px，压过栏线 —— 整版规矩，只留这一处越界
+ *   · 底部接一行竖排刊名，像一本真书的脊
+ *
+ * 分配（nth-child 位置已核对 SpineNav.tsx 的真实 DOM）：
+ *   1–7  = 书架/目录/人物/设定/伏笔/蓝图/知识库 —— 创作栏目，上色 + 编号
+ *   8    = .sgrow（占位撑开）  9 = .sdiv（分隔线）
+ *   10–13 = 任务/日志/模型/设置 —— 工具区，中性灰、不编号、不占彩色
+ *
+ * 图标在杂志版里被隐去：书脊是「刊物的脊」而非工具栏，栏目名已是中文实词，
+ * 图标在此是冗余。若要找回，只需撤掉下面那条 display:none。
+ * ======================================================================== */
+/* ⚠ 作用域必须带 `.v2-spine`（SpineNav 的根类）——
+ *  书架的每本书脊也叫 `.spine`（BookShelf.tsx），裸 `.spine` 会把导航书脊的
+ *  94px 宽度、纸白底色、竖排刊名一起套到书上：书全变成大胖子、书名被挤没。
+ *  2026-09-17 由阅读截图追到此处。 */
+html[data-ui='v2'][data-mag] .spine.v2-spine {
+  width: var(--mag-w-spine);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  /* v2 用深墨底加渐变模拟书脊厚度；杂志要的是纸白索引带，彩色才立得住 */
+  background: var(--paper);
+  border-right: 1px solid var(--line);
+  /* 选中块的出血不能被裁掉 */
+  overflow: visible;
+}
+
+html[data-ui='v2'][data-mag] .spine .sbtn {
+  position: relative;
+  width: 100%;
+  height: auto;
+  min-height: var(--mag-sech);
+  margin: 0;
+  padding: 11px 0 13px;
+  gap: 8px;
+  border-radius: 0;
+  border-bottom: 1px solid var(--line);
+  /* 未选中的栏目也带一层极淡的栏目色 —— 整条书脊因此是一条柔和的彩带，
+     而不是「白底加七根竖线」。工具区没有 --mag-sec，这一层自然为空。 */
+  background: color-mix(in srgb, var(--mag-sec, transparent) 8%, transparent);
+  color: var(--ink2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* 选中块的「出血」用缓动推出去，鼠标划过书脊时整条索引带是活的 */
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease,
+    margin-right 0.26s cubic-bezier(0.2, 0.85, 0.3, 1);
+}
+
+/* 图标隐去 —— 书脊不是工具栏 */
+html[data-ui='v2'][data-mag] .spine .sbtn > svg {
+  display: none;
+}
+
+/* 编号：衬线小字。::after 在 DOM 顺序上排在文字之后，
+   用 order:-1 把它顶到竖排栏目名之上。 */
+html[data-ui='v2'][data-mag] .spine .sbtn::after {
+  order: -1;
+  font-family: Georgia, 'Songti SC', serif;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  color: currentColor;
+  opacity: 0.5;
+}
+
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(1)::after { content: '01'; }
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(2)::after { content: '02'; }
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(3)::after { content: '03'; }
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(4)::after { content: '04'; }
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(5)::after { content: '05'; }
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(6)::after { content: '06'; }
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(7)::after { content: '07'; }
+
+/* 左缘栏目色条 */
+html[data-ui='v2'][data-mag] .spine .sbtn::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--mag-secmark);
+  background: var(--mag-sec, transparent);
+}
+
+/* 七个创作栏目各领一色 */
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(1) { --mag-sec: var(--mag-sec-1); }
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(2) { --mag-sec: var(--mag-sec-2); }
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(3) { --mag-sec: var(--mag-sec-3); }
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(4) { --mag-sec: var(--mag-sec-4); }
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(5) { --mag-sec: var(--mag-sec-5); }
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(6) { --mag-sec: var(--mag-sec-6); }
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(7) { --mag-sec: var(--mag-sec-7); }
+
+/* ★ 字号层（v2 与 v3 共用）：9px → 11.5px，先生说的「细小得看不清」最典型的一处 */
+html[data-ui='v2'] .sbtn span {
+  font-size: 11.5px;
+}
+
+/* 栏目名竖排 —— 本方案最「杂志」的一笔。
+ *
+ * ★ 2026-09-16 修正（先生实测：英文版导航栏「放不下、爆炸了」）：
+ * 原先写的是 text-orientation: upright —— 它强迫**拉丁字母也直立**，
+ * 于是 "Blueprint" 九个字母竖着摞成 ~126px，把 70px 高的栏目块直接撑爆。
+ * 真实书脊上的西文是**旋转 90° 横躺**的，正解是 mixed（也是 CSS 默认值）：
+ * 中文直立、拉丁旋转，一个长单词竖排后只占「文字宽度」那一截高度。
+ * 中文（书架/目录…）不受影响，仍是直立竖排。 */
+html[data-ui='v2'][data-mag] .spine .sbtn > span:not(.pdot) {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-size: 12.5px;
+  font-weight: 500;
+  /* 字距按「最长的西文栏目名」标定（先生实测英文版导航栏撑爆过）：
+   * mixed 下拉丁旋转 90° 竖躺，一个词的竖排长度 ≈ 它的文字宽度。
+   * Blueprint 9 字母在 12.5px + 0.06em 下约 68px，正好落在 70px 块内；
+   * 中文两字仅约 27px，两个语言共用同一档都不会溢出。 */
+  letter-spacing: 0.06em;
+  line-height: 1;
+  color: inherit;
+  /* 双保险：任何超长单词都不允许撑破栏目块 */
+  max-height: 100%;
+  overflow: hidden;
+}
+
+/* 任务运行中的脉冲点：钉在块右上角，不参与竖排流 */
+html[data-ui='v2'][data-mag] .spine .pdot {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+}
+
+html[data-ui='v2'][data-mag] .spine .sbtn:hover {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+html[data-ui='v2'][data-mag] .spine .sbtn:hover > span:not(.pdot) {
+  color: var(--ink);
+}
+
+/* 选中：整块上色 + 向右出血，压过栏线。工具区没有 --mag-sec，回落到深墨。 */
+html[data-ui='v2'][data-mag] .spine .sbtn.on {
+  background: var(--mag-sec, var(--jade));
+  color: #FFFFFF;
+  margin-right: calc(-1 * var(--mag-bleed));
+  border-bottom-color: transparent;
+  z-index: 1;
+}
+
+html[data-ui='v2'][data-mag] .spine .sbtn.on::before {
+  background: transparent;
+}
+
+html[data-ui='v2'][data-mag] .spine .sbtn.on > span:not(.pdot) {
+  font-weight: 600;
+  color: #FFFFFF;
+}
+
+/* 工具区（任务/日志/模型/设置）：更矮、更淡，与创作栏目分清主次 */
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(n + 10) {
+  min-height: 58px;
+}
+
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(n + 10) > span:not(.pdot) {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+html[data-ui='v2'][data-mag] .spine .sbtn:nth-child(n + 10).on > span:not(.pdot) {
+  color: #FFFFFF;
+}
+
+/* 分隔线横贯书脊 */
+html[data-ui='v2'][data-mag] .sdiv {
+  width: 100%;
+  height: 1px;
+  margin: 10px 0;
+  background: var(--line2);
+}
+
+/* 书脊底部：竖排刊名 —— 像一本真书的脊。
+   书脊高度随窗口走，窄屏放不下一整行，所以给一个块向上限：
+   超出时文字自动换到左边第二列（vertical-rl 的换行方向），不会被裁断。 */
+html[data-ui='v2'][data-mag] .spine.v2-spine::after {
+  content: 'AI-NOVEL-WRITER';
+  order: 99;
+  align-self: center;
+  flex: 0 0 auto;
+  max-height: 170px;
+  padding: 18px 0 16px;
+  writing-mode: vertical-rl;
+  font-family: Georgia, 'Songti SC', serif;
+  font-size: 8px;
+  line-height: 1.4;
+  letter-spacing: 0.12em;
+  color: var(--faint);
+}
+
+/* ==========================================================================
+ * 3. 目录侧栏（Contents）
+ * 杂志的目录页：栏目分组用小字宽距眉标，条目给足行高，读起来是「一览」。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .sidebar {
+  background: var(--paper);
+  border-right: 1px solid var(--line);
+  /* 目录页的分组编号从这里起算（见下方 .side-sec::before） */
+  counter-reset: magsec;
+}
+
+html[data-ui='v2'] .side-head {
+  font-size: 12px;
+}
+
+html[data-ui='v2'][data-mag] .side-head {
+  letter-spacing: var(--mag-ls-label);
+}
+
+html[data-ui='v2'][data-mag] .side-head {
+  height: 44px;
+  gap: 9px;
+  padding: 0 16px;
+  color: var(--ink2);
+  border-bottom: 1px solid var(--line);
+}
+
+html[data-ui='v2'][data-mag] .side-head .dotm {
+  width: 6px;
+  height: 6px;
+}
+
+html[data-ui='v2'][data-mag] .side-body {
+  padding: 10px 0 16px;
+}
+
+/* ★ 分组眉标：9.5px → 11.5px，字距放宽，像杂志的栏目名 */
+html[data-ui='v2'] .side-sec {
+  font-size: 11.5px;
+}
+
+html[data-ui='v2'][data-mag] .side-sec {
+  letter-spacing: var(--mag-ls-kicker);
+  font-weight: 700;
+}
+
+html[data-ui='v2'][data-mag] .side-sec {
+  color: var(--muted);
+  padding: 16px 16px 6px;
+}
+
+html[data-ui='v2'][data-mag] .side-sec:first-child {
+  padding-top: 8px;
+}
+
+/* ---- 目录页的分组编号 ----
+ * 时装刊的目录里，栏目名前面总有一个编号。用 CSS counter 自动生成，
+ * 分组是数据驱动的、数量会变，所以不能用写死的 content —— counter 才跟得上。 */
+html[data-ui='v2'][data-mag] .side-sec {
+  counter-increment: magsec;
+}
+
+html[data-ui='v2'][data-mag] .side-sec::before {
+  content: counter(magsec, decimal-leading-zero);
+  margin-right: 9px;
+  font-family: Georgia, 'Songti SC', serif;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  color: var(--seal);
+  opacity: 0.85;
+}
+
+/* ---- 目录条目 ----
+   行高保持 v2 的 31px：ProjectTree 在 TS 里按这个高度算状态圆点的垂直居中
+   （rowHeight = 31），CSS 与它必须一致，否则圆点会偏离中心。
+   杂志化因此只动「字号、字距、圆角、配色」，不动行高。 */
+html[data-ui='v2'] .tree-row,
+html[data-ui='v2'] .tree-grp {
+  font-size: 14px;
+}
+
+html[data-ui='v2'][data-mag] .tree-row,
+html[data-ui='v2'][data-mag] .tree-grp {
+  letter-spacing: 0;
+}
+
+html[data-ui='v2'][data-mag] .tree-row,
+html[data-ui='v2'][data-mag] .tree-grp {
+  height: 31px;
+  margin: 0 8px;
+  padding-right: 12px;
+  border-radius: var(--mag-r-hair);
+}
+
+html[data-ui='v2'][data-mag] .tree-grp {
+  font-weight: 600;
+}
+
+html[data-ui='v2'][data-mag] .tree-grp {
+  padding-left: 9px;
+}
+
+html[data-ui='v2'][data-mag] .tree-row {
+  padding-left: 12px;
+  border-left: 2px solid transparent;
+}
+
+html[data-ui='v2'][data-mag] .tree-row:hover,
+html[data-ui='v2'][data-mag] .tree-grp:hover {
+  /* 悬停的底色由 mag-pages.css 的「扫入层」承担（与按钮同族的 V3 语言）。
+     这里显式透明：V3 里「悬停只是变个底色」这件事不存在。 */
+  background: transparent;
+}
+
+/* 选中态：杂志的目录不做「白底浮起」，而是整行反白 ——
+   手指划过目录、那一条被压成实心的感觉。这是本次装帧里最直接的一处对比。
+   2026-09-17：反白改用**当前栏目色**（--mag-active-sec，由 ShellV2 写在 <html> 上）——
+   于是「刊头定位标 / 书脊选中块 / 编辑区顶带 / 侧栏选中行」四处在同一时刻是同一个颜色。 */
+html[data-ui='v2'][data-mag] .tree-row.on {
+  background: var(--mag-active-sec, var(--seal));
+  color: #FFFFFF;
+  border-left-color: transparent;
+  box-shadow: none;
+}
+
+html[data-ui='v2'][data-mag] .tree-row.on svg {
+  color: #FFFFFF;
+}
+
+html[data-ui='v2'][data-mag] .tree-row.on .bdg {
+  background: color-mix(in srgb, #FFFFFF 24%, transparent);
+  color: #FFFFFF;
+}
+
+html[data-ui='v2'][data-mag] .tree-row svg,
+html[data-ui='v2'][data-mag] .tree-grp svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* ★ 行尾徽章：9.5px → 11.5px */
+html[data-ui='v2'] .tree-row .bdg,
+html[data-ui='v2'] .tree-grp .prg {
+  font-size: 11.5px;
+}
+
+html[data-ui='v2'][data-mag] .tree-sub {
+  margin: 0 8px 2px 27px;
+  padding-left: 6px;
+  border-left: 1px solid var(--line);
+}
+
+html[data-ui='v2'] .decompose-sub .tree-row {
+  font-size: 13px;
+}
+
+html[data-ui='v2'][data-mag] .decompose-sub .tree-row {
+  height: 29px;
+}
+
+/* ==========================================================================
+ * 4. 产品侧栏（Sidebar 组件）
+ *
+ * 产品侧栏走的是 Tailwind 类 + .tree-item 钩子，覆盖在无层的 v2-sidebar.css 里。
+ * 这里用 [data-mag] 把特异性顶到 (0,4,1)，压过它的 (0,3,1)。
+ * ======================================================================== */
+html[data-ui='v2'] .sidebar-host .tree-item {
+  font-size: 14px;
+}
+
+html[data-ui='v2'][data-mag] .sidebar-host .tree-item {
+  letter-spacing: 0;
+}
+
+html[data-ui='v2'][data-mag] .sidebar-host .tree-item {
+  height: 31px;
+  margin: 0 8px;
+  padding-right: 12px;
+  gap: 9px;
+  border-radius: var(--mag-r-hair);
+}
+
+html[data-ui='v2'][data-mag] .sidebar-host .tree-item:hover {
+  background: var(--color-hover);
+}
+
+html[data-ui='v2'][data-mag] .sidebar-host .tree-item.active {
+  background: color-mix(in srgb, var(--seal) 7%, transparent);
+  color: var(--ink);
+  border-left-color: var(--seal);
+  box-shadow: none;
+}
+
+html[data-ui='v2'][data-mag] .sidebar-host .tree-item > svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* 侧栏里的说明小字：v2 压到 10.5px，这里回到 12.5px */
+html[data-ui='v2'] .sidebar-host .writer-project-tree [class~='text-xs']:not([class~='font-semibold']) {
+  font-size: var(--mag-fs-note);
+}
+
+/* 项目名一行 */
+html[data-ui='v2'] .sidebar-host .writer-project-tree [class~='text-xs'][class~='font-semibold'] {
+  font-size: var(--mag-fs-body);
+}
+
+/* 行尾小徽章 9.5px → 11.5px */
+html[data-ui='v2'] .sidebar-host [class~='text-[0.7rem]'],
+html[data-ui='v2'] .sidebar-host [class~='text-[0.65rem]'] {
+  font-size: var(--mag-fs-micro);
+}
+
+/* 侧栏面板头（目录 / 人物 / 素材…）*/
+html[data-ui='v2'] .sidebar-host .panel-header {
+  font-size: 12px;
+}
+
+html[data-ui='v2'][data-mag] .sidebar-host .panel-header {
+  letter-spacing: var(--mag-ls-label);
+}
+
+/* ==========================================================================
+ * 5. 标签页
+ * 杂志的页签：字大一点、选中态用一条实心红压顶，不用圆角胶囊。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .tabbar {
+  height: var(--mag-h-tab);
+  background: var(--paper2);
+  border-bottom: 1px solid var(--line);
+  /* 编辑区顶带：与刊头定位标、书脊选中块、侧栏选中行同一个栏目色。
+     用 inset 阴影而不是 border-top —— 不动盒模型，也不会把标签栏顶下去。 */
+  box-shadow: inset 0 2px 0 var(--mag-active-sec, transparent);
+  transition: box-shadow 200ms linear;
+}
+
+html[data-ui='v2'] .tab {
+  font-size: 13.5px;
+}
+
+html[data-ui='v2'][data-mag] .tab {
+  letter-spacing: 0;
+}
+
+html[data-ui='v2'][data-mag] .tab {
+  gap: 8px;
+  padding: 0 15px;
+}
+
+html[data-ui='v2'][data-mag] .tab:hover {
+  background: var(--color-hover);
+}
+
+html[data-ui='v2'][data-mag] .tab svg {
+  width: 14px;
+  height: 14px;
+}
+
+html[data-ui='v2'][data-mag] .tab .tn {
+  max-width: 170px;
+}
+
+html[data-ui='v2'][data-mag] .tab.on {
+  font-weight: 600;
+}
+
+html[data-ui='v2'][data-mag] .tab.on {
+  background: var(--panel);
+}
+
+html[data-ui='v2'][data-mag] .tab.on::before {
+  height: 3px;
+}
+
+html[data-ui='v2'][data-mag] .tab .tx {
+  width: 19px;
+  height: 19px;
+  border-radius: var(--mag-r-hair);
+}
+
+html[data-ui='v2'][data-mag] .tab .tx:hover {
+  background: var(--color-active);
+}
+
+html[data-ui='v2'][data-mag] .tabbar .tb-side {
+  gap: 3px;
+  padding: 0 7px;
+}
+
+/* ==========================================================================
+ * 6. 状态栏（版权行）
+ * 杂志的页脚：一行小字，深墨底、浅字，安静地待在最下面。
+ * ======================================================================== */
+html[data-ui='v2'] .statusbar {
+  font-size: 12px;
+}
+
+html[data-ui='v2'][data-mag] .statusbar {
+  letter-spacing: 0.02em;
+}
+
+html[data-ui='v2'][data-mag] .statusbar {
+  position: relative;
+  height: var(--mag-h-status);
+  padding: 0 14px;
+  gap: 14px;
+}
+
+/* 页脚的「地线」：与刊头顶端的彩带同源、更细一档 —— 天地呼应。
+   杂志的页脚（folio）本来就是这样一条压边的线。 */
+html[data-ui='v2'][data-mag] .statusbar::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--mag-sec-1) 0 14.2857%,
+    var(--mag-sec-2) 14.2857% 28.5714%,
+    var(--mag-sec-3) 28.5714% 42.8571%,
+    var(--mag-sec-4) 42.8571% 57.1428%,
+    var(--mag-sec-5) 57.1428% 71.4285%,
+    var(--mag-sec-6) 71.4285% 85.7142%,
+    var(--mag-sec-7) 85.7142% 100%
+  );
+}
+
+/* ==========================================================================
+ * 7. 拖拽把手
+ * 只在悬停 / 拖动时显形：细，且用主题红 —— 与书脊的选中条同一处强调色。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .grip:hover,
+html[data-ui='v2'][data-mag] .grip.on {
+  background: color-mix(in srgb, var(--seal) 42%, transparent);
+}
+
+/* ==========================================================================
+ * 8. 底部面板容器与编辑区纸面
+ * ======================================================================== */
+/* ---- 编辑区：彩底压白纸（2026-09-16 装帧 · 二改加栏线）----
+ * 先生要的「全新体验」里最直接的一处：正文不再是白底上的一块白，
+ * 而是**一张白纸压在彩色的版面上**。
+ * 彩底取「当前强调色 5% 混纸色」——四套主题自动跟色，不用逐套写值。
+ * 二改再铺一层 64px 的竖向栏线网格 —— 与首页背景是同一套网格，
+ * 切进编辑器时「还是一本刊」这件事被视觉确认了一次。 */
+html[data-ui='v2'][data-mag] .editor {
+  background-color: color-mix(in srgb, var(--seal) 5%, var(--paper2));
+  background-image: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--ink) 2.5%, transparent) 0 1px,
+    transparent 1px 64px
+  );
+}
+
+html[data-ui='v2'][data-mag] .v2-bottom {
+  border-top: 2px solid var(--ink);
+  background: var(--paper);
+}

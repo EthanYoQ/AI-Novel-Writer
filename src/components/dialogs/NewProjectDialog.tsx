@@ -3,8 +3,9 @@ import { FolderOpen, Sparkles } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { ipc } from '../../services/ipc-client'
 import {
-  Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
+  Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle,
 } from '../ui/Dialog'
+import PageHead from '../ui/PageHead'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Label } from '../ui/Label'
@@ -56,13 +57,23 @@ export default function NewProjectDialog({ open, onClose }: NewProjectDialogProp
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-[420px]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Sparkles size={18} className="text-[var(--color-accent)]" />
-            {text('新建小说项目', 'New novel project')}
-          </DialogTitle>
-          <DialogDescription>{text('填写作品名称和保存位置，其余配置在项目内完成', 'Enter a title and save location; configure the rest inside the project.')}</DialogDescription>
+      <DialogContent
+        className="max-w-[420px]"
+        /* 先生：作品名与保存位置填到一半，误点蒙版关掉就得重填。 */
+        onPointerDownOutside={(event) => event.preventDefault()}
+      >
+        {/*
+          先生：这类弹出来的子菜单要有统一规范与设计美感 —— 标头沿用各子菜单页头
+          （PageHead）那套语言：朱砂小字眉标 → 衬线标题 → 次要色说明。
+          DialogTitle 保留为 sr-only，无障碍名称不至于丢。
+        */}
+        <DialogHeader className="app-dialog-head">
+          <DialogTitle className="sr-only">{text('新建小说项目', 'New novel project')}</DialogTitle>
+          <PageHead
+            kicker={text('NEW PROJECT · 新建项目', 'NEW PROJECT')}
+            title={text('新建小说项目', 'New novel project')}
+            description={text('填写作品名称和保存位置，其余配置在项目内完成。', 'Enter a title and save location; configure the rest inside the project.')}
+          />
         </DialogHeader>
 
         {/* 表单 */}

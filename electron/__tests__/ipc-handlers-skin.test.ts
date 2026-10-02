@@ -30,10 +30,15 @@ vi.mock('../controllers/kb-controller', () => ({ registerKBController: vi.fn() }
 vi.mock('../controllers/import-controller', () => ({ registerImportController: vi.fn() }))
 vi.mock('../controllers/official-homepage-controller', () => ({ registerOfficialHomepageController: vi.fn() }))
 vi.mock('../controllers/model-provider-resource-controller', () => ({ registerModelProviderResourceController: vi.fn() }))
+vi.mock('../controllers/external-ai-audit-controller', () => ({ registerExternalAiAuditController: vi.fn() }))
+vi.mock('../controllers/external-ai-audit-file-controller', () => ({ registerExternalAiAuditFileController: vi.fn() }))
 vi.mock('../controllers/finalization-controller', () => ({ registerFinalizationController: vi.fn() }))
 vi.mock('../controllers/chapter-lifecycle-controller', () => ({ registerChapterLifecycleController: vi.fn() }))
 vi.mock('../controllers/external-file-grant-controller', () => ({ registerExternalFileGrantController: vi.fn() }))
 vi.mock('../controllers/app-data-controller', () => ({ registerAppDataController: vi.fn() }))
+vi.mock('../controllers/character-avatar-controller', () => ({ registerCharacterAvatarController: vi.fn() }))
+// 新增 controller 必须在这里同步补 mock，否则真实模块会被加载（测试未 mock electron.ipcMain）而崩掉。
+vi.mock('../controllers/world-setting-controller', () => ({ registerWorldSettingController: vi.fn() }))
 
 import { registerIPCHandlers } from '../ipc-handlers'
 

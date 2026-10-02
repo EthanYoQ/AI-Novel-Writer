@@ -4,6 +4,8 @@ import type {
   ProjectSessionContext,
 } from '../../../shared/ipc-channels'
 import type { DraftStatus } from '../../../shared/draft-status'
+import type { StickyNote } from '../../../shared/sticky-note'
+import { stickyTabPath } from '../../../shared/sticky-note'
 import { ipc } from '../../../services/ipc-client'
 import { useEditorStore } from '../../../stores/editor-store'
 import { useProjectStore } from '../../../stores/project-store'
@@ -102,7 +104,7 @@ export async function openArchFile(filePath: string, name: string): Promise<void
 export function openBuiltinEditor(
   id: string,
   name: string,
-  type: 'chapter-card' | 'character' | 'world-building' | 'narrative-thread',
+  type: 'chapter-card' | 'character' | 'world-building' | 'narrative-thread' | 'knowledge' | 'relationship-graph' | 'world-setting',
   narrativeThreadView?: 'plot-tree' | 'plans',
   chapterNumber?: number,
 ): void {
@@ -116,6 +118,32 @@ export function openBuiltinEditor(
       : {}),
     ...(type === 'chapter-card' && chapterNumber !== undefined ? { chapterNumber } : {}),
     ...(projectKey ? { projectKey } : {}),
+  })
+}
+
+/**
+ * 打开一张便利贴。
+ *
+ * 与草稿 / 正文一样按项目会话隔离：'sticky-note' 已在 editor-store 的
+ * PROJECT_SCOPED_BUILTIN_TYPES 里，标签 id 会被自动加上 projectKey，
+ * 所以同一张便利贴在两本书之间不会串（先生要的正是「切项目本子也换」）。
+ *
+ * 这里刻意**不走 openBuiltinEditor** —— 那个函数是同步的、全程不做会话校验，
+ * 档案里已注明它和 openArchFile 的差别。便利贴虽然不参与创作链路，但它会写库，
+ * 切换项目那一刻的竞态必须挡住。
+ */
+export function openStickyNote(note: StickyNote): void {
+  const projectKey = useProjectStore.getState().currentProject?.path
+  if (!projectKey) return
+  const filePath = stickyTabPath(note.noteId)
+  useEditorStore.getState().openFile({
+    id: filePath,
+    name: note.title.trim() || useLocaleStore.getState().text('未命名便利贴', 'Untitled note'),
+    type: 'sticky-note',
+    filePath,
+    content: note.body,
+    savedContent: note.body,
+    projectKey,
   })
 }
 

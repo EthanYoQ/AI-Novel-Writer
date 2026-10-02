@@ -9,6 +9,7 @@ const ERROR_KEYS = {
   EMBEDDING_MODEL_NOT_CONFIGURED: 'error.embeddingModelNotConfigured',
   PROJECT_STORAGE_PATH_UNSUPPORTED: 'error.projectStoragePathUnsupported',
   PROJECT_ROOT_REQUIRED: 'error.projectRootRequired',
+  DATABASE_ERROR: 'error.databaseError',
 } as const
 
 function readCode(error: unknown): AppErrorCode | undefined {

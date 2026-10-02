@@ -223,6 +223,19 @@ export class PostProcessPromptBuilder extends BasePromptBuilder {
       : JSON.stringify(json, null, 2);
     return this;
   }
+
+  /**
+   * 本章引用的世界观条目（定稿后落袋用）。
+   *
+   * 只传「作者为本章声明引用的」条目 —— 与写稿、审稿的注入范围保持一致：
+   * 定稿归纳只能动作者声明过的设定，不能凭正文去改全库。
+   */
+  withReferencedEntriesJson(json: string | object) {
+    this.variables.referenced_entries_json = typeof json === 'string'
+      ? json
+      : JSON.stringify(json, null, 2);
+    return this;
+  }
 }
 
 /**

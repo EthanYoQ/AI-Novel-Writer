@@ -28,6 +28,7 @@ import type { WritingLanguage } from '../../../shared/writing-language'
 import {
   CHARACTER_ROSTER_SCHEMA_VERSION,
   CHARACTER_ROSTER_ROLES,
+  characterRosterIdentityKey,
   type CharacterRosterCommitRequest,
   type CharacterRosterEntry,
 } from '../../../shared/character-roster'
@@ -128,6 +129,13 @@ export class PlotOutlineResumeAvailableError extends Error {
   }
 }
 
+/**
+ * 世界观生成未能完整写入、但已完成部分已保存为候选时抛出的错误。
+ *
+ * 「未能完整写入」包括三类：输出长度中断后自动续写仍不完整、生成期间正式
+ * 世界观被作者改动、生成期间故事前提/小说配置/模板发生变化。三者都**不覆盖**
+ * 正式世界观，只把结果留作候选，供作者查看、复制或稍后续写。
+ */
 export const WORLD_BUILDING_RESUME_ERROR_CODE = 'architecture-world-building-resume-available'
 
 export class WorldBuildingResumeAvailableError extends Error {
@@ -1599,6 +1607,21 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
     const renderedMarkdown = commitResult.receipt.snapshot.renderedMarkdown
     const characterCount = commitResult.receipt.snapshot.entries.length
 
+    // 架构重新生成是覆盖语义：主进程会移除不在本轮名单中的旧角色。这一步必须
+    // 对作者可见 —— 否则「重新生成后设定没换」的错觉会再次出现。
+    const nextRosterKeys = new Set(
+      candidate.entries.map(entry => characterRosterIdentityKey(entry.name)),
+    )
+    const removedCharacterNames = currentRoster.entries
+      .filter(entry => !nextRosterKeys.has(characterRosterIdentityKey(entry.name)))
+      .map(entry => entry.name)
+    if (removedCharacterNames.length > 0) {
+      callbacks.log(text(
+        `本次覆盖已移除 ${removedCharacterNames.length} 个不在新名单中的旧角色：${removedCharacterNames.join('、')}`,
+        `This overwrite removed ${removedCharacterNames.length} previous character(s) absent from the new roster: ${removedCharacterNames.join(', ')}`,
+      ))
+    }
+
     // 事务 receipt 是取消边界：提交成功后不再把已保存的角色事实误报为零写入取消。
     if (context.cancelled) {
       this.notifyRefresh(['characterCards'], expectedProjectPath, projectSession)
@@ -1695,13 +1718,21 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
     const requestedStepGuidance = ((context.data.stepGuidance as Record<string, string>) || {}).worldbuilding || ''
     const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
     context.data.partial = partial
+
+    /**
+     * 正式世界观与「生成时的输入事实」各留一个指纹：
+     *   · expectedDbHash —— 候选/结果生成那一刻的正式世界观；
+     *   · factsFingerprint —— 那一刻的前提、小说配置、步骤指导与模板。
+     * 写库前两者都要复查，任一处变化都只留候选、绝不覆盖作者改动。
+     */
     let stepGuidance = requestedStepGuidance
     let seedText = ''
     let expectedDbHash = synopsisFactsFingerprint([core?.worldbuilding || ''])
 
     if (resumeRequested) {
       seedText = recoverableWorldBuildingCandidate(partial)
-      if (!seedText
+      if (
+        !seedText
         || partial.world_building_step_guidance === undefined
         || !partial.world_building_facts_fingerprint
         || !partial.world_building_db_hash
@@ -1749,20 +1780,16 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
       reasoningStage: 'planning' as const,
       writingSkillStage: 'planning' as const,
     }
+
     let result: string
     let persistedCandidate = seedText
     try {
       if (!seedText) {
-        const initial = await this.callLLMResult(
-          taskPrompt,
-          systemPrompt,
-          callbacks,
-          llmOptions,
-          context,
-        )
+        const initial = await this.callLLMResult(taskPrompt, systemPrompt, callbacks, llmOptions, context)
         if (initial.finishReason === 'stop') {
           result = initial.content
         } else if (initial.finishReason === 'length' && initial.content.trim()) {
+          // 首段就撞上长度上限：先把已完成部分落成候选，再自动续写一次。
           persistedCandidate = initial.content.trim()
           await this.persistWorldBuildingCandidate(
             projectSession,
@@ -1802,6 +1829,7 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
       }
     } catch (error) {
       if (context.cancelled) throw error
+      // 续写耗尽、无进展等仍然留下了可见文本：落盘为候选，绝不静默丢弃。
       if (persistedCandidate) {
         await this.persistWorldBuildingCandidate(
           projectSession,
@@ -1826,13 +1854,10 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
     const latestTemplate = await resolvePromptTemplate('world_building', projectSession, writingLanguage)
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
-    const latestCore = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:project-core-get',
-      expectedProjectPath,
-    )
+    const latestCore = await ipc.invokeWithProjectSession(projectSession, 'db:project-core-get', expectedProjectPath)
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
+
     const latestProject = useProjectStore.getState().currentProject
     const latestFactsFingerprint = latestProject && latestTemplate
       ? synopsisFactsFingerprint([
@@ -1846,6 +1871,12 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
       latestCore?.worldbuilding || '',
     ]) !== expectedDbHash
     const sourceFactsChanged = latestFactsFingerprint !== factsFingerprint
+
+    /**
+     * 写库前的最后一次复查 —— 这一层保护决定「作者的改动会不会被生成结果覆盖」。
+     * 生成期间作者改了正式世界观、故事前提、小说配置或世界观模板中的任何一项，
+     * 本次结果都只作为候选保存，正式内容一字不动。
+     */
     if (formalWorldBuildingChanged || sourceFactsChanged) {
       await this.persistWorldBuildingCandidate(
         projectSession,
@@ -1865,6 +1896,7 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
           : 'The formal worldbuilding changed while generation was running. This result was kept as a candidate and did not overwrite the author edit; you can view or copy it.',
       ))
     }
+
     const heading = promptLanguageText(writingLanguage, '世界观', 'Worldbuilding')
     await writeArchToDb(
       'worldbuilding',
@@ -1877,6 +1909,7 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
     this.assertNotCancelled(context)
 
     partial.world_building_result = result
+    // 正式写入成功即撤掉候选痕迹，避免下次误当成「未完成」。
     delete partial.world_building_partial_result
     delete partial.world_building_incomplete
     delete partial.world_building_facts_fingerprint
@@ -1899,6 +1932,10 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
     return result
   }
 
+  /**
+   * 把未完成的世界观写成候选（**不是**正式世界观）。
+   * 候选连同它的输入指纹一起落进架构检查点，供作者查看 / 复制 / 稍后续写。
+   */
   private async persistWorldBuildingCandidate(
     projectSession: ProjectSessionContext,
     expectedProjectPath: string,
@@ -1910,7 +1947,8 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
   ): Promise<void> {
     this.assertNotCancelled(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
-    const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, projectSession)
+    const partial = (context.data.partial as PartialArchData)
+      || await loadPartialData(expectedProjectPath, projectSession)
     partial.world_building_partial_result = candidate
     partial.world_building_incomplete = true
     partial.world_building_facts_fingerprint = factsFingerprint

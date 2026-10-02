@@ -17,6 +17,35 @@ export interface PlanningMaterial {
   text: string
 }
 
+function planningMaterialKey(material: PlanningMaterial): string {
+  return `${material.fileName}\u0000${material.text}`
+}
+
+/**
+ * 把新选中的资料**追加**到已选列表。
+ *
+ * 分几次从不同文件夹挑资料是常见操作，之前每次选择都会替换掉上一次的结果。
+ * 去重只看「文件名 + 内容」完全相同的项：同名但内容不同的文件仍然各自保留，
+ * 不会悄悄吞掉先生的资料。
+ */
+export function appendPlanningMaterials(
+  existing: readonly PlanningMaterial[],
+  selected: readonly PlanningMaterial[],
+): { files: PlanningMaterial[]; skipped: number } {
+  const known = new Set(existing.map(planningMaterialKey))
+  const appended: PlanningMaterial[] = []
+  for (const material of selected) {
+    const key = planningMaterialKey(material)
+    if (known.has(key)) continue
+    known.add(key)
+    appended.push(material)
+  }
+  return {
+    files: [...existing, ...appended],
+    skipped: selected.length - appended.length,
+  }
+}
+
 export class KnowledgeBaseServiceError extends Error {
   constructor(public readonly code: AppErrorCode, message?: string) {
     super(message ?? code)
@@ -133,8 +162,7 @@ export async function removeKnowledgeDocument(docId: string, expectedProjectPath
 }
 
 /** 读取用户通过系统文件选择器明确授权的创作资料。 */
-export async function selectPlanningMaterials(): Promise<PlanningMaterial[]> {
-  const grants = await ipc.invoke('dialog:select-knowledge-files')
+export async function selectPlanningMaterials(): Promise<PlanningMaterial[]> {  const grants = await ipc.invoke('dialog:select-knowledge-files')
   if (!grants) return []
   const materials: PlanningMaterial[] = []
   for (const grant of grants) {

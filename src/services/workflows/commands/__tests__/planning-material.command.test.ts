@@ -4,8 +4,8 @@ import { useLLMStore } from '../../../../stores/llm-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
 import {
-  CommitPlanningMaterialCharactersCommand,
   ExtractPlanningMaterialCharactersCommand as RuntimeCommand,
+  readExtractedCharacterCandidates,
 } from '../planning-material.command'
 import { workflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
 
@@ -50,7 +50,7 @@ describe('planning material character extraction', () => {
     })
   })
 
-  it('keeps extracted candidates uncommitted until the confirmation command runs', async () => {
+  it('stages extracted candidates without writing the roster', async () => {
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       if (channel === 'db:character-roster-read') {
         return { status: 'ready', revision: 4, entries: [] }
@@ -95,28 +95,15 @@ describe('planning material character extraction', () => {
     expect(preview).toContain('45')
     expect(preview).toContain('守馆二十年')
     expect(preview).toContain('保护幸存者')
-    expect(invoke).not.toHaveBeenCalledWith(
-      'db:character-roster-commit',
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
-    )
-
-    await new CommitPlanningMaterialCharactersCommand().execute({ step: {}, context, callbacks })
-
+    // 提取本身绝不写库：写入是作者的确认动作（见 planning-material-character-commit）。
+    expect(invoke).not.toHaveBeenCalled()
+    expect(readExtractedCharacterCandidates(context)).toEqual([
+      expect.objectContaining({ name: '周岚', role: 'supporting' }),
+    ])
     expect(generateStream).toHaveBeenCalledOnce()
-    expect(invoke).toHaveBeenCalledWith(
-      'db:character-roster-commit',
-      expect.objectContaining({
-        intent: 'novel_import',
-        entries: [expect.objectContaining({ name: '周岚', role: 'supporting' })],
-      }),
-      projectPath,
-      projectSession,
-    )
   })
 
-  it('does not commit extracted candidates after confirmation is cancelled', async () => {
+  it('never writes the roster even when the run is cancelled afterwards', async () => {
     const invoke = vi.fn()
     vi.stubGlobal('window', {
       velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
@@ -138,10 +125,12 @@ describe('planning material character extraction', () => {
     await new ExtractPlanningMaterialCharactersCommand([
       { fileName: '人物设定.md', text: '周岚是配角。' },
     ]).execute({ step: {}, context, callbacks })
+    // 作者随后放弃这批候选：工作流侧不留任何写入痕迹，名单只能被确认动作改变。
     context.cancelled = true
 
-    await expect(new CommitPlanningMaterialCharactersCommand().execute({ step: {}, context, callbacks }))
-      .rejects.toThrow('工作流已取消')
+    expect(readExtractedCharacterCandidates(context)).toEqual([
+      expect.objectContaining({ name: '周岚', role: 'supporting' }),
+    ])
     expect(generateStream).toHaveBeenCalledOnce()
     expect(invoke).not.toHaveBeenCalled()
   })
@@ -339,17 +328,8 @@ describe('planning material character extraction', () => {
       text: `${'设定'.repeat(5_950)}周岚守馆二十年并隐瞒历史事故。\n\n${'后续'.repeat(60)}周岚曾负责事故善后，并拒绝公开幸存者名单。`,
     }])
     const preview = await command.execute({ step: {}, context, callbacks })
-    await new CommitPlanningMaterialCharactersCommand().execute({ step: {}, context, callbacks })
-
-    const commitRequest = invoke.mock.calls.find(([channel]) => channel === 'db:character-roster-commit')?.[1] as {
-      entries: Array<{
-        name: string
-        background: string
-        notes: string
-        relationships: Array<{ target: string; relation: string }>
-      }>
-    }
-    const zhouLan = commitRequest.entries.filter(character => character.name === '周岚')
+    // 合并与去重发生在提取阶段，因此候选本身就是最终交给作者确认的内容。
+    const zhouLan = readExtractedCharacterCandidates(context).filter(character => character.name === '周岚')
     expect(preview).toContain('守馆二十年；曾负责事故善后')
     expect(preview).toContain('隐瞒历史事故；拒绝公开幸存者名单')
     expect(zhouLan).toEqual([expect.objectContaining({
@@ -418,9 +398,10 @@ describe('planning material character extraction', () => {
   )
 
   it.each([
-    ['missing', { name: '林晓' }],
-    ['unsupported', { name: '林晓', role: 'mentor' }],
-  ] as const)('rejects a %s character role before committing the roster', async (_case, card) => {
+    ['missing', { name: '林晓' }, 'supporting'],
+    ['unsupported', { name: '林晓', role: 'mentor' }, 'supporting'],
+    ['Chinese-labelled', { name: '林晓', role: '反派' }, 'antagonist'],
+  ] as const)('normalizes a %s character role instead of dropping the card', async (_case, card, expectedRole) => {
     const invoke = vi.fn()
     vi.stubGlobal('window', {
       velaAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn() },
@@ -442,9 +423,12 @@ describe('planning material character extraction', () => {
       { fileName: '人物设定.md', text: '林晓负责指导调查。' },
     ])
 
-    await expect(command.execute({ step: {}, context, callbacks })).rejects.toThrow(
-      '角色卡提取失败（code=invalid_output；reason=invalid_item）。',
-    )
+    // 定位写得不规范不该毁掉整张卡：按最不意外的定位收纳，由作者在候选面板里改。
+    await command.execute({ step: {}, context, callbacks })
+
+    expect(readExtractedCharacterCandidates(context)).toEqual([
+      expect.objectContaining({ name: '林晓', role: expectedRole }),
+    ])
     expect(invoke).not.toHaveBeenCalledWith(
       'db:character-roster-commit',
       expect.anything(),
@@ -517,10 +501,7 @@ describe('planning material character extraction', () => {
   it.each([
     ['missing characterCards', { sourceId: '1:1' }],
     ['non-array characterCards', { sourceId: '1:1', characterCards: {} }],
-    ['invalid card member', { sourceId: '1:1', characterCards: [null] }],
-    ['invalid optional field', { sourceId: '1:1', characterCards: [{ name: '林晓', role: 'protagonist', age: 18 }] }],
-    ['invalid relationship member', { sourceId: '1:1', characterCards: [{ name: '林晓', role: 'protagonist', relationships: [{ target: '周岚' }] }] }],
-  ] as const)('rejects %s instead of filtering the bad shape into an empty result', async (_case, result) => {
+  ] as const)('fails closed when %s is unusable at the envelope level', async (_case, result) => {
     const generateStream = vi.fn(async (_messages, streamCallbacks) => {
       streamCallbacks.onDone?.(JSON.stringify({ results: [result] }), undefined, 'stop')
       return 'planning-material-request'
@@ -535,6 +516,50 @@ describe('planning material character extraction', () => {
 
     expect(generateStream).toHaveBeenCalledOnce()
     expect(context.data).not.toHaveProperty('planningMaterialCharacterCandidates')
+  })
+
+  it.each([
+    [
+      'a null card member',
+      { sourceId: '1:1', characterCards: [null, { name: '林晓', role: 'protagonist' }] },
+      ['林晓'],
+    ],
+    [
+      'a numeric optional field',
+      { sourceId: '1:1', characterCards: [{ name: '林晓', role: 'protagonist', age: 18 }] },
+      ['林晓'],
+    ],
+    [
+      'a relationship without a relation label',
+      { sourceId: '1:1', characterCards: [{ name: '林晓', role: 'protagonist', relationships: [{ target: '周岚' }] }] },
+      ['林晓'],
+    ],
+    [
+      'a card written with Chinese field names',
+      { sourceId: '1:1', characterCards: [{ 姓名: '林晓', 定位: '主角', 性格: '谨慎', 关系网: '周岚：师徒' }] },
+      ['林晓'],
+    ],
+    [
+      'an aliased card array key',
+      { sourceId: '1:1', characters: [{ name: '林晓', role: 'protagonist' }] },
+      ['林晓'],
+    ],
+  ] as const)('salvages the usable part of %s instead of failing the whole batch', async (_case, result, expectedNames) => {
+    // 「玩家角色卡格式乱飞」的兜底：字段名、可选字段形态、关系写法、数组键名
+    // 的偏差都不该让整批提取失败 —— 认得出的部分照样进候选，作者再核对。
+    const generateStream = vi.fn(async (_messages, streamCallbacks) => {
+      streamCallbacks.onDone?.(JSON.stringify({ results: [result] }), undefined, 'stop')
+      return 'planning-material-request'
+    })
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+
+    const preview = await new ExtractPlanningMaterialCharactersCommand([
+      { fileName: '人物设定.md', text: '林晓是十八岁的主角，认识周岚。' },
+    ]).execute({ step: {}, context, callbacks })
+
+    expect(generateStream).toHaveBeenCalledOnce()
+    expect(readExtractedCharacterCandidates(context).map(entry => entry.name)).toEqual([...expectedNames])
+    expect(preview).toContain(expectedNames[0])
   })
 
   it('runs the 16-call minimum boundary and includes the final material chunk', async () => {

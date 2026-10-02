@@ -34,10 +34,12 @@ describe('blueprint character-sync fact evidence', () => {
     ])).toMatch(/临时盟友/u)
   })
 
-  it('does not force legacy relationship prose into a lossy structured conversion', () => {
+  it('no longer exempts a relationship note from relationship-fact verification', () => {
+    // 关系备注与结构化边并存：备注不再让校验静默放行 —— 缺结构化边就是缺边，
+    // 蓝图同步会先把关系补成边，因此这里报错是真实缺口而不是误报。
     expect(blueprintCharacterSyncFactError(blueprints, [
-      { name: '林岚', relationships: [], legacyRelationshipNotes: '作者手工关系原文' },
-      { name: '周砚', relationships: [], legacyRelationshipNotes: '作者手工关系原文' },
-    ])).toBeUndefined()
+      { name: '林岚', relationships: [], relationshipNotes: '作者手工关系原文' },
+      { name: '周砚', relationships: [], relationshipNotes: '作者手工关系原文' },
+    ])).toMatch(/临时盟友/u)
   })
 })

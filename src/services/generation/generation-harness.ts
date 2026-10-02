@@ -44,7 +44,13 @@ export interface PromptBudgetSection {
 }
 
 export interface PromptBudgetPolicy {
-  limitUtf8Bytes: number
+  /**
+   * 调用方显式指定的字节上限。
+   *
+   * 省略时由**模型上下文**推导（见 `deriveDefaultPromptBudgetUtf8Bytes`）——
+   * 刻意不在调用方给缺省值：写死的缺省与模型能力无关，大窗口模型会被它误伤。
+   */
+  limitUtf8Bytes?: number
   sections: readonly PromptBudgetSection[]
 }
 
@@ -267,6 +273,70 @@ export function safeReceiptPurpose(purpose: string): string {
 
 const CONTEXT_SAFETY_RESERVE_TOKENS = 512
 
+/**
+ * 调用方没有显式给上限时，缺省闸门由**模型上下文**推导而来。
+ *
+ * 起因（先生实测报错）：
+ *   「提示词共 47,331 UTF-8 字节，超过上限 32,768 字节 …… 模型上下文：1,000,000 tokens；
+ *     估算输入：18,696 tokens；结果码：PROMPT_BUDGET_EXHAUSTED」
+ * 一个一百万 token 窗口的模型，被一个与它毫无关系的 32 KB 字节数挡住。原因是
+ * `base-command` 曾把写死的 32 KB 当缺省上限（当时的注释：宁可偏严，可能误报）。
+ * 而「偏严」的代价会直接落在作者身上：只要绑定的写作 Skill 稍大，正常修稿就发不出去 ——
+ * 而且**只有注入写作 Skill 的请求才走这条预算检查**，所以问题在作者导入 Skill 之后才暴露。
+ *
+ * 于是把缺省闸门从「魔数」换成「模型能力的一部分」：
+ *   可用输入字节 ≈ 上下文窗口 × 每 token 字节数 × 输入占比，
+ *   再夹在 `[DEFAULT_PROMPT_BUDGET_UTF8_BYTES, MAX_DEFAULT_PROMPT_BUDGET_UTF8_BYTES]` 之间。
+ *
+ * 三条边界，缺一不可：
+ * · **下限仍是 32 KB** —— 对「窗口未知」或「小窗口」的模型，本次改动**行为完全不变**
+ *   （推导值小于 32 KB 时一律取 32 KB），不存在任何放宽；
+ * · **上限 512 KB** —— 防呆仍在：提示词不会因为窗口大就无上限膨胀；
+ * · **调用方显式给的上限照旧优先** —— 刻意收紧的调用方（如结构化修复）不受影响。
+ *
+ * 换算口径取 1 token ≈ 3 UTF-8 字节：本产品以中文为主，一个汉字 3 字节、约合 1 token，
+ * 英文则 1 token ≈ 4 字节 —— 取 3 是偏保守的一侧（宁可低估可用字节）。
+ * 真正的安全线仍是下面那条 token 级的上下文判定，本闸门只负责「防呆」。
+ */
+export const DEFAULT_PROMPT_BUDGET_UTF8_BYTES = 32 * 1024
+export const MAX_DEFAULT_PROMPT_BUDGET_UTF8_BYTES = 512 * 1024
+const PROMPT_BUDGET_UTF8_BYTES_PER_TOKEN = 3
+const PROMPT_BUDGET_INPUT_CONTEXT_SHARE = 0.5
+
+/**
+ * 按模型上下文推导缺省字节闸门。窗口未知（第三方/本地端点常见）或非法时回落到 32 KB 保守值。
+ * 刻意导出：这是策略边界，值得被单测钉住。
+ */
+export function deriveDefaultPromptBudgetUtf8Bytes(
+  contextWindowTokens: number | null,
+): number {
+  if (
+    contextWindowTokens === null
+    || !Number.isSafeInteger(contextWindowTokens)
+    || contextWindowTokens <= 0
+  ) {
+    return DEFAULT_PROMPT_BUDGET_UTF8_BYTES
+  }
+  const derived = Math.floor(
+    contextWindowTokens * PROMPT_BUDGET_UTF8_BYTES_PER_TOKEN * PROMPT_BUDGET_INPUT_CONTEXT_SHARE,
+  )
+  return Math.min(
+    MAX_DEFAULT_PROMPT_BUDGET_UTF8_BYTES,
+    Math.max(DEFAULT_PROMPT_BUDGET_UTF8_BYTES, derived),
+  )
+}
+
+/**
+ * 上下文窗口未知时的保守输入上限（估算 token）。
+ *
+ * `resolveInitialCapabilities` 默认把 `contextWindowTokens` 置为 null，
+ * 于是 `contextAvailableOutputTokens` 也是 null，`<= 0` 那条判定**整条被跳过** ——
+ * 对任何没有上报窗口的第三方 / 本地端点，这个"总预算"实际上不存在，输入想多长就多长。
+ * 这里补一道仅告警的兜底：不阻断生成（避免误伤大窗口模型），但把明显失控的调用
+ * 记进日志，便于定位"模型没收到我的设定/蓝图"这类静默截断问题。
+ */
+const UNKNOWN_WINDOW_INPUT_WARN_TOKENS = 24_000
+
 function utf8Bytes(value: string): number {
   return new TextEncoder().encode(value).byteLength
 }
@@ -288,7 +358,10 @@ function createPromptBudgetReport(input: {
   reservedOutputTokens: number
   modelId: string
 }): PromptBudgetReport {
-  if (!Number.isSafeInteger(input.policy.limitUtf8Bytes) || input.policy.limitUtf8Bytes <= 0) {
+  // 调用方显式给的上限优先；没给就按模型上下文推导（窗口未知时回落到 32 KB 保守值）
+  const limitUtf8Bytes = input.policy.limitUtf8Bytes
+    ?? deriveDefaultPromptBudgetUtf8Bytes(input.contextWindowTokens)
+  if (!Number.isSafeInteger(limitUtf8Bytes) || limitUtf8Bytes <= 0) {
     throw new GenerationHarnessError('INVALID_POLICY', '提示词字节上限必须是正整数。')
   }
 
@@ -349,12 +422,12 @@ function createPromptBudgetReport(input: {
   ))
   const effectiveLimitUtf8Bytes = exceededSectionLimits.length > 0
     ? Math.min(
-        input.policy.limitUtf8Bytes,
+        limitUtf8Bytes,
         ...exceededSectionLimits.map(section => (
           totalUtf8Bytes - section.report.utf8Bytes + section.limitUtf8Bytes!
         )),
       )
-    : input.policy.limitUtf8Bytes
+    : limitUtf8Bytes
   const errorCode: PromptBudgetResultCode = totalUtf8Bytes > effectiveLimitUtf8Bytes
     ? 'PROMPT_BUDGET_EXHAUSTED'
     : 'OK'
@@ -622,6 +695,19 @@ export function createGenerationHarness(dependencies: {
                 estimatedInputTokens,
                 sections: promptBudgetCandidate?.sections,
               }),
+            )
+          }
+          // 窗口未知时上面那条判定整条失效（contextAvailableOutputTokens 恒为 null）。
+          // 这里补一道仅告警的兜底，不让它彻底静默：明显超标的调用会在控制台留痕。
+          if (
+            contextAvailableOutputTokens === null
+            && estimatedInputTokens > UNKNOWN_WINDOW_INPUT_WARN_TOKENS
+          ) {
+            console.warn(
+              '[GenerationPromptBudget] 模型上下文窗口未知，无法校验输入长度：'
+              + `估算输入约 ${estimatedInputTokens} tokens（超过保守参考值 ${UNKNOWN_WINDOW_INPUT_WARN_TOKENS}）。`
+              + '若模型报错或内容缺失，请检查提示词注入量。'
+              + ` modelId=${frozenIdentity.id}`,
             )
           }
 

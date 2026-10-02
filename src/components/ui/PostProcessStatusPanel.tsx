@@ -34,6 +34,14 @@ interface PostProcessStatusPanelProps {
   onStatusLoad?: (hasFailure: boolean) => void
   /** 额外 CSS 类名 */
   className?: string
+  /**
+   * 呈现方式。
+   *
+   * - `bar`（默认）：经典界面的横条，带底色，占一行版面。
+   * - `seal`：墨纸书斋的「印章」—— 全部成功时不吃版面，只在纸面右下角盖一枚
+   *   朱砂印；处理中盖同样形状的淡印；只有失败时才展开成可重试的告警卡。
+   */
+  appearance?: 'bar' | 'seal'
 }
 
 type StepPresentation = 'success' | 'pending' | 'failed'
@@ -54,12 +62,43 @@ function getStepPresentation(step: PostProcessStatus['steps'][string]): StepPres
   return hasFailureEvidence ? 'failed' : 'pending'
 }
 
+/**
+ * 定稿印章（墨纸书斋）。
+ *
+ * demo 的「印章」语言：朱砂描双线框、篆楷字、微微歪一点，是「盖」在纸上的，
+ * 所以**不铺底色**，只留边框与字 —— 这也是先生明确要求的：
+ * 「通知条不需要有背景，用印章盖在文章末尾右下角即可」。
+ */
+function SealStamp({
+  tone,
+  title,
+  sub,
+  hint,
+}: {
+  tone: 'done' | 'progress'
+  title: string
+  sub: string
+  hint?: string
+}) {
+  return (
+    <div
+      className={`v2-seal-stamp v2-seal-stamp--${tone}`}
+      role="status"
+      title={hint}
+    >
+      <b>{title}</b>
+      <span>{sub}</span>
+    </div>
+  )
+}
+
 export function PostProcessStatusPanel({
   scope,
   onRetry,
   defaultExpanded = false,
   onStatusLoad,
   className,
+  appearance = 'bar',
 }: PostProcessStatusPanelProps) {
   const [status, setStatus] = useState<PostProcessStatus | null>(null)
   const [expanded, setExpanded] = useState(defaultExpanded)
@@ -135,7 +174,26 @@ export function PostProcessStatusPanel({
   const hasFailure = failedSteps.length > 0
   const hasCriticalFailure = failedSteps.some(({ step }) => step.critical)
 
+  // 印章模式
+  const sealMode = appearance === 'seal'
+  const sealHostClassName = 'v2-postprocess-seal-host'
+
   if (!hasFailure && pendingSteps.length > 0) {
+    if (sealMode) {
+      return (
+        <div className={cn(sealHostClassName, className)}>
+          <SealStamp
+            tone="progress"
+            title={text('定稿中', 'Finalizing')}
+            sub={`${successCount}/${totalCount}`}
+            hint={text(
+              `${status.sourceLabel} 正在处理（${successCount}/${totalCount}）`,
+              `${status.sourceLabel} processing (${successCount}/${totalCount})`,
+            )}
+          />
+        </div>
+      )
+    }
     return (
       <div className={cn(
         'flex items-center gap-1.5 px-2 py-1 rounded text-[10px] text-[var(--color-text-secondary)]',
@@ -152,6 +210,21 @@ export function PostProcessStatusPanel({
   }
 
   if (!hasFailure) {
+    if (sealMode) {
+      return (
+        <div className={cn(sealHostClassName, className)}>
+          <SealStamp
+            tone="done"
+            title={text('已定稿', 'Finalized')}
+            sub={`${successCount}/${totalCount}`}
+            hint={text(
+              `${status.sourceLabel} 完成（${successCount}/${totalCount}）`,
+              `${status.sourceLabel} complete (${successCount}/${totalCount})`,
+            )}
+          />
+        </div>
+      )
+    }
     return (
       <div className={cn(
         'flex items-center gap-1.5 px-2 py-1 rounded text-[10px] text-[var(--color-success-text,#386042)]',
@@ -167,14 +240,14 @@ export function PostProcessStatusPanel({
     )
   }
 
-  // 有失败 → 显示带折叠的详情面板
-  return (
+  // 有失败 → 显示带折叠的详情面板（印章模式下同样收在右下角，但保留可点的重试入口）
+  const failureCard = (
     <div className={cn(
       'rounded-md border overflow-hidden',
       hasCriticalFailure
         ? 'border-red-500 bg-red-500/8'
         : 'border-amber-500 bg-amber-500/8',
-      className,
+      sealMode ? 'v2-postprocess-card backdrop-blur-sm' : className,
     )}>
       {/* 折叠头部 */}
       <button
@@ -292,4 +365,9 @@ export function PostProcessStatusPanel({
       )}
     </div>
   )
+
+  if (sealMode) {
+    return <div className={cn(sealHostClassName, className)}>{failureCard}</div>
+  }
+  return failureCard
 }

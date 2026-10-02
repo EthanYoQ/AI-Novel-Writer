@@ -1,0 +1,256 @@
+/**
+ * 侧栏树里「上一级夹着的东西」自己那条虚线。
+ *
+ * ── 先生 2026-09-20 定的规矩（原话，两次澄清后的最终版）────────────────────
+ *   「如果一个便利贴没进夹子，那它本身就是和夹子共线的。而夹子里的便利贴应该
+ *     从夹子的标题文字的最左边的位置算起，再往右边缩进去 10px 放置自己。
+ *     然后这些夹子中便利贴共享夹子内的虚线。」
+ *
+ * 于是侧栏里**两种线**，各表各的意思：
+ *   · 夹子自己 + 没进夹子的便利贴 —— 同一条线（v2 基座按 padding-left 画的那条，23px）：
+ *     「这些都摆在外面」；
+ *   · 夹子里那些条目 —— **另一条线**，位置在夹子标题文字的左缘；
+ *     同一夹子里的条目共用它，看起来就是「夹子往下延申的那一段」。
+ *
+ * ── 位置从哪来 ──────────────────────────────────────────────────────────────
+ * 线位与缩进都**不是拍脑袋的常数**，是量出来的：文件夹行的标题文字左缘在行内
+ * 74px（padding-left 30 + 折叠箭头 + 图标 + 两处间距共 44）。所以
+ *   · 夹内条目缩进 84px（= 74 + 10，正是先生要的「往右缩进 10px」）；
+ *   · 线画在 74px。
+ * 两个值经 `--tree-child-line` 由调用方传进来，各树可以不一样 —— 草稿箱上一级的
+ * 文字左缘与便利贴不同，线自然也该跟着走。
+ *
+ * 特异性写作 `.sidebar-host.sidebar-host` 是有意的：基座那条（按 padding-left 定位）
+ * 是 (0,4,2)，同分就得赌样式表加载顺序；重复一个类顶到 (0,5,2) 才稳。
+ * v2 基座只读，规则只能写在这里。
+ *
+ * 选择器不限定 `.tree-item`：草稿箱里那条「草稿_v1」是 `relative` 容器、
+ * 不带 tree-item 类，但它同样要「贴着所属章节往下延申」。
+ */
+
+html[data-ui='v2'] .sidebar-host.sidebar-host [data-tree-child]::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--tree-child-line, 23px);
+  width: 0;
+  border-left: 1px dashed var(--line2);
+  pointer-events: none;
+}
+
+/* ==========================================================================
+ * 侧栏行的两态：**正在看** / **悬停** —— 一套口径，四主题 · 两皮肤
+ *
+ * 先生 2026-09-20 连测三轮的原话：
+ *   「我当前正在正文栏目查看那个项目下的内容，那么这个项目在项目结构下的标题入口
+ *     就应该做一个背景变色？来提示用户。不然用户都不知道自己在看哪个地方的内容！」
+ *   「而且正文、草稿、便利贴的具体的内容标题入口，我鼠标悬停上去虽然会变成小手
+ *     图标，但是也没任何按钮反馈，让人根本不知道自己有没有选对章节」
+ *   「我实际测试，V2，只显示 草稿、正文、便利贴的 3级入口标题栏，2级章节，1级的
+ *     草稿箱，这些是没反应。V3版本更是什么反应都没有。而且故事架构下面的那些标题
+ *     内容、小说配置也是没反应的」
+ *
+ * 两轮实测（`_probe-active-row.mjs`：打开先生 Electron 正在加载的那个 dev 页面量真值）
+ * 查出的原因有两条，**一条都不是「被更高级的样式拦住」**：
+ *
+ *   ① **一大半的行根本没有选中态代码**。全树当时只有三处挂了 `.active`
+ *      （正文条目 / 草稿条目 / 便利贴条目）；小说配置、章节蓝图、伏笔、
+ *      故事架构的组行与每一份架构文件、草稿箱的组行与每一章的章节行、
+ *      便利贴的组行 —— 一行都没有。那一半在 `sidebar-active-entry.ts`
+ *      与各组件里补齐（这跟样式无关，样式再怎么写也点不亮没加类的行）。
+ *
+ *   ② **颜色本身在深色主题下失效**。基座拿「白」当悬停与选中的基色，可两套深色主题里
+ *      `--white` 本身就是深色：星汉 #112440 压侧栏底 #07101C、黑夜 #3C4145 压 #25282B，
+ *      深色叠深色，肉眼分不出来；悬停那层还是 65% 透明的白雾，实测 ΔL ≈ 0。
+ *
+ * 这一节是 ② 的修法：底色一律取**强调色** `--seal` —— 深底上它是提亮，浅底上它是
+ * 染色，四套主题两套皮肤一套口径，**不再按主题分支**（上一版只改了深色主题，
+ * 浅色主题的悬停 ΔL 只有 10，仍然勉强）。三档浓度：悬停轻 / 选中重 / 折叠组行最重。
+ *
+ * 用 `!important` 定音是有意的：这里要压的是三套皮肤各自那条**同分**的选中规则
+ * （基座 v2-sidebar.css 的 (0,4,1)、杂志 mag-shell.css 的 (0,5,1)，以及
+ * @layer components 里 v1 那两条）——胜负不该靠样式表加载顺序赌。
+ * 范围一律收在 `.sidebar-host` 内，侧栏之外一个字都不碰。
+ * ======================================================================== */
+
+/* ==========================================================================
+ * ① 三级选中 —— 「一笔色标 + 一层淡染」，不是三块实心砖
+ *
+ * 先生看过实心版之后：「哎，还是太丑了。有没有更高明，更好看，更美观优雅的处理方式？」
+ *
+ * 复盘（蓝汐的错）：丑在**用「填充」表达层级** —— 三个满色块并排，等于每一层都在喊，
+ * 谁也没比谁轻；而且紫/蓝/红三个色相彼此无关，并排像红绿灯；白字更让侧栏凭空
+ * 多出三块反白区，与纸墨 / 星空的底打架。
+ *
+ * 高明的分工是：
+ *   · 层级 → 交给**形状**（色标由短到长：40% / 55% / 100%）与**深浅**（5% / 8% / 12%）
+ *   · 颜色 → 只占左缘**那一笔**（3px 宽），不再整块涂满
+ * 于是三层同时亮时，眼睛读到的是「三枚由轻到重的索引块」，而不是三块颜色。
+ *
+ * 先生要的紫 / 蓝 / 红**保留**（那是他定的分级），只是从「整块」收进「一笔」；
+ * 色值沿用 v3 栏目色标的两组值并按主题分组 —— 深色主题下不提亮的话，
+ * 靛蓝那一笔在深空底上根本立不住。
+ *
+ * 实的对照图见 `_probe-sidebar-look.mjs`（同一棵树上渲染五种做法）。
+ * ======================================================================== */
+
+/**
+ * 两套皮肤各用**自己那套色**（先生 2026-09-20 第三轮：「V2 版本的颜色应该和 V3
+ * 做出点区别才对」）。
+ *
+ *   · v3「时尚杂志」→ 藕紫 / 靛蓝 / 珊瑚朱：直接取栏目七色（mag-sec-5 / 2 / 1），
+ *     与书脊色标、刊头彩带同源 —— 杂志的每一栏都有自己的颜色。
+ *   · v2「墨纸书斋」→ 墨青 / 赭石 / 朱砂：取自它自己的墨阶与朱砂
+ *     （--jade / --gold2 / --seal，见 v2-themes.css），由冷到暖、由沉到艳，
+ *     是书斋里「墨 → 赭石印泥 → 朱砂印」那一套，不是杂志的七色。
+ *
+ * 深色主题（星汉 / 黑夜）各自再提亮一档：深底上不提亮，冷色那一笔会糊掉。
+ */
+html[data-ui='v2'][data-mag] {
+  --sidebar-lv1: #7A5B7E;   /* 藕紫   · 1 级 */
+  --sidebar-lv2: #27407A;   /* 靛蓝   · 2 级 */
+  --sidebar-lv3: #C8564A;   /* 珊瑚朱 · 3 级 */
+}
+
+html[data-ui='v2']:not([data-mag]) {
+  --sidebar-lv1: #33404F;   /* 松烟墨 · 1 级 */
+  --sidebar-lv2: #8C6F3B;   /* 赭石   · 2 级 */
+  --sidebar-lv3: #A93226;   /* 朱砂   · 3 级 */
+}
+
+html[data-ui='v2'][data-mag]:is([data-v2-theme='1'], [data-v2-theme='3']) {
+  --sidebar-lv1: #B48FB8;
+  --sidebar-lv2: #6E8FD0;
+  --sidebar-lv3: #E08A7A;
+}
+
+html[data-ui='v2']:not([data-mag]):is([data-v2-theme='1'], [data-v2-theme='3']) {
+  --sidebar-lv1: #7C97B0;   /* 墨青 · 提亮 */
+  --sidebar-lv2: #C9A85F;   /* 赭石 · 提亮 */
+  --sidebar-lv3: #E0736A;   /* 朱砂 · 提亮 */
+}
+
+/**
+ * 色标本体：一笔，宽 3px、长 12px，**三级等高**，**位置跟着行的缩进走**。
+ *
+ * 高度原本是「层级越高越长」（40% / 55% / 100%），先生看过之后否了
+ * （第三轮：「色标的高度我建议都和1级的保持一致吧，主要是2级，3级Y轴太高了不好看」）。
+ * 于是统一到 1 级那一档，并且**改用固定像素而不是百分比** ——
+ * 三级行高本就不同（`.tree-item` 31px，而草稿 / 便利贴条目只有约 24px），
+ * 用百分比所谓的「同一档」量出来会长短不一；12px 正是 1 级 40% 的实测值。
+ * 层级改由**颜色**与**缩进位置**表达 —— 那两样本来就在说话。
+ */
+html[data-ui='v2'] .sidebar-host.sidebar-host .active[data-level] {
+  background-repeat: no-repeat !important;
+  background-position: var(--row-mark-x, 0px) center !important;
+  border-left-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/**
+ * 色标与**目录标题共享同一套缩进关系**（先生 2026-09-20 第二轮：「三色印签也应该
+ * 是和目录标题一样有对应的缩进关系的」）。
+ *
+ * 规矩一句话：色标落在**该行内容左缘再往左 10px** 处，也就是 `padding-left − 10`：
+ *   1 级（缩进 10）→ 0      2 级（缩进 26 / 30）→ 16 / 20      3 级（缩进 74）→ 64
+ * 于是三笔色标天然排成一道台阶 —— 缩进回答「你在第几层」，色标跟着缩进走，
+ * 两条信息合成一句话，而不是两套互不相干的竖线。
+ *
+ * 位置由**行自己**用 `--row-mark-x` 声明（组件内联写那个变量），不靠
+ * `[style*='padding-left: …']` 去猜：React 会把四个方向的 padding 合并成
+ * `padding: 3px 8px 3px 74px` 简写，属性子串匹配当场失效（这条踩过，
+ * 草稿条目与便利贴条目就是这么漏掉的）。声明式永远比解析字符串稳。
+ */
+
+html[data-ui='v2'] .sidebar-host.sidebar-host .active[data-level='1'] {
+  background-image: linear-gradient(var(--sidebar-lv1), var(--sidebar-lv1)) !important;
+  background-size: 3px 12px !important;
+  background-color: color-mix(in srgb, var(--sidebar-lv1) 5%, transparent) !important;
+}
+
+html[data-ui='v2'] .sidebar-host.sidebar-host .active[data-level='2'] {
+  background-image: linear-gradient(var(--sidebar-lv2), var(--sidebar-lv2)) !important;
+  background-size: 3px 12px !important;
+  background-color: color-mix(in srgb, var(--sidebar-lv2) 8%, transparent) !important;
+}
+
+html[data-ui='v2'] .sidebar-host.sidebar-host .active[data-level='3'] {
+  background-image: linear-gradient(var(--sidebar-lv3), var(--sidebar-lv3)) !important;
+  background-size: 3px 12px !important;
+  background-color: color-mix(in srgb, var(--sidebar-lv3) 12%, transparent) !important;
+}
+
+/**
+ * 亮行的字提到常态墨色（**不用白字**）：淡底上白字读不出来；
+ * 提墨既保住可读性，又比加粗安静。只动直接子 span（真正的文字），
+ * 不去碰行尾那颗删除按钮里的图标。
+ */
+html[data-ui='v2'] .sidebar-host.sidebar-host .active[data-level] > span {
+  color: var(--color-text) !important;
+}
+
+/**
+ * ② 3 级条目也要有**同一个框体**，而且左右都要对齐。
+ *
+ * 先生 2026-09-20 第二轮：「现在的草稿、正文、便签这种 3 级的进入标题按钮，
+ * 好像没做背景框体约束？它们和 2 级、1 级的完全不一样。」
+ * 第三轮又补一刀：「你没发现，现在 3 级框体没和 1 级 2 级对齐吗，左边要长处一大截。」
+ *
+ * 查证：1 / 2 级都是 `.tree-item`，那个类自带 `margin: 0 7px` 与 `border-radius: 7px`
+ * （见 v2-sidebar.css 第 5 节）—— 框体是**从 7px 起、到右 7px 止**的圆角小框；
+ * 而草稿条目与便利贴条目当年为了跟草稿行逐字同构，刻意去掉了 `.tree-item`
+ * （那个类带着 2px 左边框与 8px 间距，会破坏对齐），于是它们既没有圆角，
+ * 左边也从 0 起 —— 比 1 / 2 级整整**长出一大截**。
+ *
+ * 补左边距要连内边距一起减，否则字会跟着右移。而内边距不必另写一个变量：
+ * 行已经声明了 `--row-mark-x`（色标位置 = 内容左缘 − 10），反推即有
+ *   内容左缘 = mark + 10  →  减掉 7px 外边距后 = mark + 3
+ *   色标位置本身也要减 7（它跟着行盒一起右移）
+ * 于是**内容与色标的相对关系分毫不动**，只是整块框往右收进 7px，与 1 / 2 级齐平。
+ */
+html[data-ui='v2'] .sidebar-host.sidebar-host [data-level='3']:not(.tree-item) {
+  margin-left: 7px;
+  margin-right: 7px;
+  border-radius: 7px;
+  padding-left: calc(var(--row-mark-x, 0px) + 3px) !important;
+}
+
+html[data-ui='v2'] .sidebar-host.sidebar-host [data-level='3']:not(.tree-item).active {
+  background-position: calc(var(--row-mark-x, 0px) - 7px) center !important;
+}
+
+/* v3 杂志：一律 8px 外边距 + 发丝直角（mag-shell.css 给 .tree-item 的同款几何） */
+html[data-ui='v2'][data-mag] .sidebar-host.sidebar-host [data-level='3']:not(.tree-item) {
+  margin-left: 8px;
+  margin-right: 8px;
+  border-radius: 2px;
+  padding-left: calc(var(--row-mark-x, 0px) + 2px) !important;
+}
+
+html[data-ui='v2'][data-mag] .sidebar-host.sidebar-host [data-level='3']:not(.tree-item).active {
+  background-position: calc(var(--row-mark-x, 0px) - 8px) center !important;
+}
+
+/* ①b 兜底：万一将来有行忘了标层级，仍给一层强调色淡底，不至于「点了没反应」 */
+html[data-ui='v2'] .sidebar-host.sidebar-host .active:not([data-level]) {
+  background-color: color-mix(in srgb, var(--seal) 26%, transparent) !important;
+}
+
+html[data-ui='v2']:not([data-mag]) .sidebar-host.sidebar-host .active:not([data-level]) {
+  box-shadow: inset 2px 0 0 var(--seal);
+}
+
+/* ③ 悬停 —— v2 皮肤（非杂志版）：基座那层「白雾」在深色主题里等于没有，
+   统一换成强调色（浅色主题下它就是一层淡染色，同样是可见的）。 */
+html[data-ui='v2']:not([data-mag]) .sidebar-host.sidebar-host .tree-item:hover {
+  background-color: color-mix(in srgb, var(--seal) 16%, transparent);
+}
+
+/* ④ 悬停 —— 没有 `.tree-item` 的那几行（草稿条目、便利贴条目：为了与草稿箱的
+   缩进对齐，当年改成了 `relative flex`）。杂志版的扫入层只写给 `.tree-item`，
+   这几行一直落在外面，靠 Tailwind 的 `--color-hover`（v3 里是 6% 的墨/白）——
+   实测几乎看不见。这里给它们同一档静态底，两套皮肤都吃。 */
+html[data-ui='v2'] .sidebar-host.sidebar-host [class~='hover:bg-[var(--color-hover)]']:hover {
+  background-color: color-mix(in srgb, var(--seal) 18%, transparent);
+}

@@ -230,8 +230,8 @@ export default function ConfigImpactPreview({ preview, selectedKeys, onSelection
         }))}
       />
       <ImpactList
-        title={text('活跃叙事线索', 'Active narrative threads')}
-        empty={text('没有活跃线索', 'No active narrative threads')}
+        title={text('活跃伏笔', 'Active foreshadowing')}
+        empty={text('没有活跃伏笔', 'No active foreshadowing')}
         items={preview.activeThreads.map(thread => ({
           key: `thread:${thread.id}`,
           title: thread.title,

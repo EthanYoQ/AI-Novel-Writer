@@ -13,7 +13,7 @@ export interface EditorTabSaveSnapshot {
 export interface EditorTab {
   id: string
   name: string
-  type: 'chapter' | 'outline' | 'character' | 'config' | 'diff' | 'chapter-card' | 'world-building' | 'arch-file' | 'version-history' | 'review-report' | 'narrative-thread'
+  type: 'chapter' | 'outline' | 'character' | 'config' | 'diff' | 'chapter-card' | 'world-building' | 'arch-file' | 'version-history' | 'review-report' | 'narrative-thread' | 'knowledge' | 'relationship-graph' | 'world-setting' | 'sticky-note'
   filePath?: string
   content?: string
   /** 架构文档已持久化的基准内容，用于跨 Tab/项目切换后恢复脏状态。 */
@@ -85,8 +85,13 @@ interface EditorState {
   ) => void
   /** 关闭 Tab */
   closeTab: (tabId: string) => void
-  /** 激活 Tab */
-  setActiveTab: (tabId: string) => void
+  /**
+   * 激活 Tab。
+   *
+   * 允许置空：v2 的书架栏目是「栏目首页」，它不占标签，因此进入书架时
+   * 中央纸面没有焦点页面（对齐 demo: navGo('home') → S.activeTab=null）。
+   */
+  setActiveTab: (tabId: string | null) => void
   /**
    * 更新 Tab 内容（标记 dirty）
    * 仅在「用户修改」时调用，会亮起未保存指示灯。
@@ -131,6 +136,11 @@ const PROJECT_SCOPED_BUILTIN_TYPES = new Set<EditorTab['type']>([
   'version-history',
   'diff',
   'narrative-thread',
+  'knowledge',
+  'relationship-graph',
+  // 便利贴必须是项目作用域：先生要的是「切项目，本子也跟着换」。
+  // 少了这一行，同一张便利贴的 tab 会在两本书之间串用。
+  'sticky-note',
 ])
 
 export interface EditorExitSaveHandler {
@@ -395,33 +405,29 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     set({ tabs: [], activeTabId: null })
   },
 
+  /**
+   * 关掉某个项目的标签 —— **不动它的草稿账本**。
+   *
+   * 切换作品时必须把上一部作品的标签收起来（否则看起来像串了书），但标签
+   * 只是草稿的显示层：未保存内容真正存放在按 projectKey 索引的草稿账本里
+   * （见 project-editor-draft-ledger）。原先这里连账本一起删，于是「在 A 里
+   * 改了角色卡没保存 → 打开 B → 回 A」的改动就永久消失，而同一份账本在
+   * countUnsavedEditorItems 里又是被当作「未保存内容」保护的 —— 两处自相矛盾。
+   *
+   * 现在只收标签、留账本：交互不变（书架上点另一本书，上一本的标签照常关闭），
+   * 但重新打开那部作品时 rebaseProjectEditorDraft 会把草稿原样恢复，
+   * 退出守卫也仍然数得到这份未保存内容。
+   */
   clearProjectTabs: (projectKey) => {
     for (const tab of get().tabs) {
       if (tab.projectKey === projectKey) removeEditorExitSaveHandlers(tab)
     }
     set((state) => {
       const tabs = state.tabs.filter(tab => tab.projectKey !== projectKey)
-      const draftLedgers = Object.fromEntries(
-        Object.entries(state.draftLedgers).map(([key, content]) => {
-          try {
-            const parsed = JSON.parse(content) as {
-              version?: unknown
-              projects?: Array<{ projectKey?: unknown }>
-            }
-            if (parsed.version !== 1 || !Array.isArray(parsed.projects)) return [key, content]
-            return [key, JSON.stringify({
-              ...parsed,
-              projects: parsed.projects.filter(project => project.projectKey !== projectKey),
-            })]
-          } catch {
-            return [key, content]
-          }
-        }),
-      )
       const activeTabId = state.activeTabId && tabs.some(tab => tab.id === state.activeTabId)
         ? state.activeTabId
         : (tabs.at(-1)?.id ?? null)
-      return { tabs, activeTabId, draftLedgers }
+      return { tabs, activeTabId }
     })
   },
 }))

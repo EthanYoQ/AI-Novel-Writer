@@ -1,20 +1,14 @@
 import type { PlanningMaterial } from '../../knowledge-service'
-import { ipc } from '../../ipc-client'
 import { characterRosterEntriesFromCards } from '../../character-roster-client'
-import {
-  CHARACTER_ROSTER_SCHEMA_VERSION,
-  type CharacterRosterCommitRequest,
-  type CharacterRosterEntry,
-} from '../../../shared/character-roster'
-import { CHARACTER_ROLES, CHARACTER_ROLE_LABELS } from '../../../shared/character-role'
+import type { CharacterRosterEntry } from '../../../shared/character-roster'
+import { CHARACTER_ROLES, CHARACTER_ROLE_LABELS, normalizeCharacterRole } from '../../../shared/character-role'
+import { CHARACTER_ARRAY_KEYS, CHARACTER_FIELD_ALIASES } from '../character-card-fields'
 import { StructuredContractDiagnostic } from '../../../shared/structured-contract-diagnostic'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../../shared/project-session-context'
 import { useProjectStore } from '../../../stores/project-store'
+import { useCharacterStore } from '../../../stores/character-store'
 import { promptLanguageText } from '../../prompt-language'
-import {
-  normalizeCharacterRelationshipEdges,
-  parseCharacterCardsFromModelOrSource,
-} from '../character-card-normalizer'
+import { parseCharacterCardsFromModelOrSource } from '../character-card-normalizer'
 import { createStructuredBatchExecutor, type StructuredBatchContract } from '../structured-batch-executor'
 import { requireWorkflowProjectSession, workflowUiText, workflowWritingLanguage } from '../workflow-project-session'
 import {
@@ -48,9 +42,6 @@ const MATERIAL_CHARACTER_TEXT_FIELDS = [
 function mergeMaterialCharacterFacts(
   cards: readonly Record<string, unknown>[],
 ): Array<Record<string, unknown>> {
-  const names = new Set(cards.flatMap(card => (
-    typeof card.name === 'string' && card.name.trim() ? [card.name.trim()] : []
-  )))
   const byName = new Map<string, Record<string, unknown>>()
 
   for (const card of cards) {
@@ -70,10 +61,13 @@ function mergeMaterialCharacterFacts(
       ))
       if (facts.length > 0) merged[field] = [...new Set(facts)].join('；')
     }
-    merged.relationships = normalizeCharacterRelationshipEdges([
+    // 关系原样并集交给归一化层拆分：能确定目标的成结构化边，其余（目标尚未
+    // 成卡、名字写法不一致、散文式描述）原样留作关系备注。这里不做过滤，
+    // 否则同名角色跨块出现时会把作者/模型给的关系原文整段丢掉。
+    merged.relationships = [
       ...(Array.isArray(existing.relationships) ? existing.relationships : []),
       ...(Array.isArray(card.relationships) ? card.relationships : []),
-    ], names, name)
+    ]
     byName.set(key, merged)
   }
 
@@ -117,6 +111,54 @@ function materialChunks(materials: readonly PlanningMaterial[]): MaterialChunk[]
   })
 }
 
+/** 字段别名索引：中文字段名与常见变体都指向规范键。 */
+const MATERIAL_FIELD_ALIAS_INDEX: Map<string, string> = (() => {
+  const index = new Map<string, string>()
+  for (const [canonical, aliases] of Object.entries(CHARACTER_FIELD_ALIASES)) {
+    index.set(canonical.trim().toLocaleLowerCase('en-US'), canonical)
+    for (const alias of aliases) {
+      index.set(alias.trim().toLocaleLowerCase('en-US'), canonical)
+    }
+  }
+  return index
+})()
+
+/**
+ * 把模型给出的字段名归一到规范键。
+ *
+ * 「格式乱飞的角色卡也能被整理进正确的结构」就靠这一步：此前一个中文字段名
+ * （「姓名」「关系网」）就会让整批提取以 invalid_item 失败，作者只拿到一句报错。
+ * 认不出来的键直接丢弃，不牵连同一张卡里其余已经认出来的字段。
+ */
+function canonicalizeMaterialCard(card: Record<string, unknown>): Record<string, unknown> {
+  const canonical: Record<string, unknown> = {}
+  for (const [rawKey, value] of Object.entries(card)) {
+    const key = MATERIAL_FIELD_ALIAS_INDEX.get(rawKey.trim().toLocaleLowerCase('en-US'))
+    if (!key || canonical[key] !== undefined) continue
+    canonical[key] = value
+  }
+  return canonical
+}
+
+/** 文本字段容错：字符串直接用，数组（如能力列表）用「；」拼起来。 */
+function materialTextValue(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (Array.isArray(value)) {
+    return value
+      .map(entry => (typeof entry === 'string' ? entry.trim() : ''))
+      .filter(Boolean)
+      .join('；')
+  }
+  return ''
+}
+
+/** 关系字段原样交给归一化层：数组、对象映射、纯文本三种形态它都认。 */
+function materialRelationshipValue(value: unknown): unknown {
+  if (Array.isArray(value) || typeof value === 'string') return value
+  if (value && typeof value === 'object') return value
+  return undefined
+}
+
 function parseExtraction(content: string): MaterialExtraction[] {
   const trimmed = content.trim()
   const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu.exec(trimmed)
@@ -125,72 +167,54 @@ function parseExtraction(content: string): MaterialExtraction[] {
     throw new StructuredContractDiagnostic('invalid_envelope', '$')
   }
   const rootRecord = root as Record<string, unknown>
-  if (Object.keys(rootRecord).some(key => key !== 'results')) {
-    throw new StructuredContractDiagnostic('unexpected_item', '$')
-  }
-  if (!Array.isArray(rootRecord.results)) {
-    throw new StructuredContractDiagnostic(
-      Object.hasOwn(rootRecord, 'results') ? 'invalid_type' : 'missing_field',
-      '$.results',
-    )
-  }
-  const resultKeys = new Set(['sourceId', 'characterCards'])
-  const cardKeys = new Set([
-    'name', 'role', ...MATERIAL_CHARACTER_TEXT_FIELDS, 'relationships',
-  ])
   const requireNonEmptyText = (value: unknown, path: string): string => {
     if (typeof value !== 'string') throw new StructuredContractDiagnostic('invalid_type', path)
     if (!value.trim()) throw new StructuredContractDiagnostic('empty_value', path)
     return value
   }
-  return rootRecord.results.map((candidate, resultIndex) => {
+  // 结果信封之外的顶层键直接忽略：真正不可省的是 results 数组本身。
+  const rawResults = rootRecord.results
+  if (!Array.isArray(rawResults)) {
+    throw new StructuredContractDiagnostic(
+      Object.hasOwn(rootRecord, 'results') ? 'invalid_type' : 'missing_field',
+      '$.results',
+    )
+  }
+  return rawResults.map((candidate, resultIndex) => {
     const resultPath = `$.results[${resultIndex}]`
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
       throw new StructuredContractDiagnostic('invalid_type', resultPath)
     }
     const value = candidate as Record<string, unknown>
-    for (const key of Object.keys(value)) {
-      if (!resultKeys.has(key)) throw new StructuredContractDiagnostic('unexpected_item', `${resultPath}.${key}`)
-    }
     const sourceId = requireNonEmptyText(value.sourceId, `${resultPath}.sourceId`)
-    if (!Array.isArray(value.characterCards)) {
+    // 卡片数组的键名也容错：characterCards / characters / 角色卡 / 人物 …… 都认。
+    const cardsKey = Object.keys(value).find(key => (
+      (CHARACTER_ARRAY_KEYS as readonly string[]).includes(key)
+    ))
+    const rawCards = cardsKey ? value[cardsKey] : undefined
+    if (!Array.isArray(rawCards)) {
       throw new StructuredContractDiagnostic(
-        Object.hasOwn(value, 'characterCards') ? 'invalid_type' : 'missing_field',
+        cardsKey ? 'invalid_type' : 'missing_field',
         `${resultPath}.characterCards`,
       )
     }
-    const characterCards = value.characterCards.map((card, cardIndex) => {
-      const cardPath = `${resultPath}.characterCards[${cardIndex}]`
-      if (!card || typeof card !== 'object' || Array.isArray(card)) {
-        throw new StructuredContractDiagnostic('invalid_type', cardPath)
+    const characterCards = rawCards.flatMap((card) => {
+      if (!card || typeof card !== 'object' || Array.isArray(card)) return []
+      const cardValue = canonicalizeMaterialCard(card as Record<string, unknown>)
+      const name = materialTextValue(cardValue.name)
+      // 没有姓名的「卡」不是角色：丢掉它，但不牵连同一批里的其他角色。
+      if (!name) return []
+      const cleaned: Record<string, unknown> = {
+        name,
+        role: normalizeCharacterRole(materialTextValue(cardValue.role)),
       }
-      const cardValue = card as Record<string, unknown>
-      for (const key of Object.keys(cardValue)) {
-        if (!cardKeys.has(key)) throw new StructuredContractDiagnostic('unexpected_item', `${cardPath}.${key}`)
-      }
-      requireNonEmptyText(cardValue.name, `${cardPath}.name`)
-      requireNonEmptyText(cardValue.role, `${cardPath}.role`)
       for (const field of MATERIAL_CHARACTER_TEXT_FIELDS) {
-        if (Object.hasOwn(cardValue, field)) requireNonEmptyText(cardValue[field], `${cardPath}.${field}`)
+        const text = materialTextValue(cardValue[field])
+        if (text) cleaned[field] = text
       }
-      if (Object.hasOwn(cardValue, 'relationships')) {
-        if (!Array.isArray(cardValue.relationships)) {
-          throw new StructuredContractDiagnostic('invalid_type', `${cardPath}.relationships`)
-        }
-        for (const [relationshipIndex, relationship] of cardValue.relationships.entries()) {
-          const relationshipPath = `${cardPath}.relationships[${relationshipIndex}]`
-          if (!relationship || typeof relationship !== 'object' || Array.isArray(relationship)) {
-            throw new StructuredContractDiagnostic('invalid_type', relationshipPath)
-          }
-          const relationshipValue = relationship as Record<string, unknown>
-          if (Object.keys(relationshipValue).some(key => key !== 'target' && key !== 'relation')) {
-            throw new StructuredContractDiagnostic('unexpected_item', relationshipPath)
-          }
-          requireNonEmptyText(relationshipValue.target, `${relationshipPath}.target`)
-          requireNonEmptyText(relationshipValue.relation, `${relationshipPath}.relation`)
-        }
-      }
-      return cardValue
+      const relationships = materialRelationshipValue(cardValue.relationships)
+      if (relationships !== undefined) cleaned.relationships = relationships
+      return [cleaned]
     })
     return {
       sourceId,
@@ -232,9 +256,15 @@ function formatCandidatePreview(
             .map(relationship => `${relationship.target}: ${relationship.relation}`)
             .join(text('；', '; '))}`]
         : []),
+      ...(entry.relationshipNotes?.trim()
+        ? [`- ${text('关系备注', 'Relationship notes')}: ${entry.relationshipNotes}`]
+        : []),
     ]
     return `### ${index + 1}. ${entry.name}\n${rows.join('\n')}`
   })
+  const hasAnyRelationship = entries.some(entry => (
+    entry.relationships.length > 0 || entry.relationshipNotes?.trim()
+  ))
   return [
     text(
       `## 待确认角色卡候选（${entries.length}）`,
@@ -244,6 +274,10 @@ function formatCandidatePreview(
       '以下候选尚未写入角色名单。请核对后再确认导入；已有作者手工字段会保留。',
       'These candidates have not been saved. Review them before confirming import; existing author-edited fields will be preserved.',
     ),
+    ...(hasAnyRelationship ? [] : [text(
+      '⚠ 这批候选里没有出现任何角色关系。若资料中确实写了关系，可以导入后到角色档案里补充，或把关系写进资料再提取一次。',
+      '⚠ No relationships were found in these candidates. If the material did describe them, add them from the character profile after import, or include them in the material and extract again.',
+    )]),
     ...sections,
   ].join('\n\n')
 }
@@ -348,7 +382,15 @@ export class ExtractPlanningMaterialCharactersCommand extends BaseWorkflowComman
     }
 
     const rawCards = mergeMaterialCharacterFacts(extraction.items.flatMap(result => result.characterCards))
-    const cards = parseCharacterCardsFromModelOrSource(JSON.stringify({ characterCards: rawCards }), '')
+    // 关系能不能成边要看**完整名单**：只认本批候选，会把「与项目里已有角色之间
+    // 的关系」误判成无主文本、白白留成关系备注（已验证的真实缺口）。名单直接
+    // 取内存里的角色 store —— 提取阶段不为一次只读再发 IPC，也不碰持久层。
+    const existingCharacterNames = useCharacterStore.getState().characters.map(card => card.name)
+    const cards = parseCharacterCardsFromModelOrSource(
+      JSON.stringify({ characterCards: rawCards }),
+      '',
+      existingCharacterNames,
+    )
     const entries = characterRosterEntriesFromCards(cards)
     this.assertNotCancelled(context)
     context.data[PLANNING_MATERIAL_CHARACTER_CANDIDATES] = entries
@@ -367,61 +409,24 @@ export class ExtractPlanningMaterialCharactersCommand extends BaseWorkflowComman
   }
 }
 
-export class CommitPlanningMaterialCharactersCommand extends BaseWorkflowCommand<void> {
-  async execute({ context, callbacks }: CommandExecuteParams): Promise<void> {
-    const projectSession = requireWorkflowProjectSession(context)
-    const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
-    if (!sameProjectSessionContext(
-      projectSession,
-      projectSessionContextFromProject(useProjectStore.getState().currentProject),
-    )) throw new Error(text('当前项目已切换，角色导入已停止', 'The project changed, so character import stopped.'))
-
-    this.assertNotCancelled(context)
-    const entries = context.data[PLANNING_MATERIAL_CHARACTER_CANDIDATES] as CharacterRosterEntry[] | undefined
-    if (!entries) throw new Error(text(
-      '缺少已预览的角色卡候选，未写入角色名单',
-      'No reviewed character-card candidates are available; the character roster was not changed.',
-    ))
-    if (entries.length === 0) {
-      callbacks.setProgress(100)
-      callbacks.log(text('没有待导入的角色卡', 'There are no character cards to import.'))
-      return
-    }
-
-    const roster = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:character-roster-read',
-      projectSession.projectPath,
-    )
-    if (roster.status !== 'ready' && roster.status !== 'empty') {
-      throw new Error(text(
-        '角色名单当前不可安全导入，请先修复旧角色数据',
-        'The character roster cannot be imported safely until legacy character data is repaired.',
-      ))
-    }
-    this.assertNotCancelled(context)
-    const commit = await ipc.invokeWithProjectSession(
-      projectSession,
-      'db:character-roster-commit',
-      {
-        operationId: `planning-material-${context.runId}`,
-        expectedRevision: roster.revision,
-        schemaVersion: CHARACTER_ROSTER_SCHEMA_VERSION,
-        entries,
-        intent: 'novel_import',
-      } satisfies CharacterRosterCommitRequest,
-      projectSession.projectPath,
-    )
-    if (!commit.success) throw new Error(commit.error || text(
-      '角色卡未能保存',
-      'The extracted character cards could not be saved.',
-    ))
-
-    callbacks.setProgress(100)
-    callbacks.log(text(
-      `已确认并合并 ${entries.length} 张角色卡，作者手工字段保持不变`,
-      `Confirmed and merged ${entries.length} character cards; author-edited fields were preserved.`,
-    ))
-    this.notifyRefresh(['characterCards'], projectSession.projectPath, projectSession)
-  }
+/**
+ * 提取命令产出的候选读回口。
+ *
+ * 方案 A：工作流只做提取，候选必须交给 CharacterCardCandidateDialog 让作者
+ * 逐条过目；工作流的完成回调通过本函数取到它们，再交付给界面。
+ *
+ * 返回**深拷贝**：候选随后会经过勾选、改分类等界面操作，不该回头污染
+ * 工作流上下文里的那一份（工作流可能在重试或恢复时再次读到它）。
+ */
+export function readExtractedCharacterCandidates(
+  context: { data: Record<string, unknown> },
+): CharacterRosterEntry[] {
+  const value = context.data[PLANNING_MATERIAL_CHARACTER_CANDIDATES]
+  if (!Array.isArray(value)) return []
+  return (value as CharacterRosterEntry[]).map(entry => ({
+    ...entry,
+    relationships: Array.isArray(entry.relationships)
+      ? entry.relationships.map(relationship => ({ ...relationship }))
+      : [],
+  }))
 }

@@ -17,6 +17,8 @@ import {
 } from '../../shared/writing-language'
 import type { GeneratableField } from '../../services/workflows/commands/generate-field.command'
 import { Button } from '../ui/Button'
+import PagePlate from '../layout/v2/magazine/PagePlate'
+import { PlateChecks, PlateFigure } from '../layout/v2/magazine/PlateFigures'
 import { Input } from '../ui/Input'
 import { Textarea } from '../ui/Textarea'
 import { NativeSelect } from '../ui/NativeSelect'
@@ -71,9 +73,21 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
     })
   }, [projectKey])
 
+  /**
+   * 先生：未修改显示「已保存」、改动了才显示「保存」。
+   * 本页直接读写 store（单一数据源），没有现成的脏标记，故记一个本地标记。
+   *
+   * 标记不存布尔值，而是「被改脏的是哪个项目」：`configDirty` 由它与当前
+   * projectKey 是否相等派生。这样切换项目天然就是「已保存」，不需要 effect
+   * 去同步 setState（effect 里同步 setState 会引发级联渲染）。
+   */
+  const [dirtyProjectKey, setDirtyProjectKey] = useState<string | null>(null)
+  const configDirty = dirtyProjectKey === projectKey
+
   // 直接写 Store — 消除双向同步风险
   const update = <K extends keyof NovelConfig>(key: K, value: NovelConfig[K]) => {
     if (!config) return
+    setDirtyProjectKey(projectKey)
     const projectSession = captureProjectSession(currentProject)
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     updateNovelConfig({ [key]: value }, projectSession)
@@ -88,6 +102,7 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
       const saved = await saveProject(projectSession)
       if (!isProjectSessionCurrent(projectSession)) return
       if (!saved) throw new Error(text('项目配置未能写入磁盘', 'The project configuration could not be written to disk.'))
+      setDirtyProjectKey(null)
       addLog('info', text('小说配置已保存', 'Novel configuration saved'))
     } catch (error) {
       if (!isProjectSessionCurrent(projectSession)) return
@@ -164,33 +179,74 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
   }
 
   const genres = ['玄幻', '仙侠', '都市', '科幻', '历史', '军事', '游戏', '末世', '悬疑', '灵异', '言情', '古言', '现言', '奇幻', '武侠', '轻小说', '同人', '职场']
+
+  /**
+   * 配置完成度清单：这一页最该被看见的，是「这本作品还差哪几项没定」。
+   * 每一项都对应页面上真实存在的一个字段 —— 不凑数、不装饰。
+   */
+  const configChecklist = [
+    { label: text('题材', 'Genre'), done: Boolean(config?.genre) },
+    { label: text('子类型', 'Sub-genre'), done: Boolean(config?.subGenre) },
+    { label: text('目标读者', 'Audience'), done: Boolean(config?.targetAudience) },
+    { label: text('剧情结构', 'Structure'), done: Boolean(config?.plotStructure) },
+    { label: text('叙事视角', 'POV'), done: Boolean(config?.narrativePOV) },
+    { label: text('总章数', 'Chapters'), done: Number(config?.totalChapters) > 0 },
+    { label: text('单章字数', 'Words/ch'), done: Number(config?.wordsPerChapter) > 0 },
+    { label: text('核心大纲', 'Outline'), done: Boolean(config?.coreOutline?.trim()) },
+    { label: text('世界观', 'World'), done: Boolean(config?.worldSetting?.trim()) },
+    { label: text('金手指', 'Hook'), done: Boolean(config?.goldenFinger?.trim()) },
+    { label: text('主角档案', 'Protagonist'), done: Boolean(config?.protagonistProfile?.trim()) },
+    { label: text('写作风格', 'Style'), done: Boolean(config?.writingStyle?.trim()) },
+  ]
   const dormantThreshold = resolveNarrativeThreadDormantThreshold(
     config.narrativeThreadDormantChapterThreshold,
   )
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-8 py-6">
-        {/* 头部 */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h2 className="text-lg font-bold" style={{ color: 'var(--color-text)' }}>
-              {text('小说配置', 'Novel configuration')}
-            </h2>
-            <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
-              {text('定义你的小说基本信息和写作参数', 'Define the novel’s core information and writing parameters.')}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="ai" onClick={handleAIGenerate}>
-              <Sparkles size={13} /> {text('AI 填充配置', 'Fill with AI')}
-            </Button>
-            <Button variant="outline" onClick={handleSave} disabled={saving}>
-              <Save size={13} /> {saving ? text('保存中...', 'Saving...') : text('保存', 'Save')}
-            </Button>
-          </div>
-        </div>
+      {/* 页头统一提到内容区顶层：与其它子菜单同一位置、同一宽度（先生：整整齐齐） */}
+      <div className="pagehead-strip">
+        <PagePlate
+          section="project"
+          /* 数据图形：十二项配置的完成度 —— 一个方格一项，定了的填实 */
+          figure={(
+            <PlateFigure caption={text(
+              `已定 ${configChecklist.filter(item => item.done).length} / ${configChecklist.length} 项`,
+              `${configChecklist.filter(item => item.done).length} of ${configChecklist.length} set`,
+            )}>
+              <PlateChecks items={configChecklist} />
+            </PlateFigure>
+          )}
+          kicker={text('NOVEL CONFIG · 小说配置', 'NOVEL CONFIG')}
+          title={text('小说配置', 'Novel configuration')}
+          description={text(
+            '定义你的小说基本信息和写作参数',
+            'Define the novel’s core information and writing parameters.',
+          )}
+          actions={(
+            <>
+              <button className="btn ai sm" type="button" onClick={handleAIGenerate}>
+                <Sparkles size={11} /> {text('AI 填充配置', 'Fill with AI')}
+              </button>
+              {/* 先生：这个按钮一点击就抽搐。根因是 saving 期间文案从「保存」变成
+                  「保存中…」，按钮宽度随之变化，把紧邻的「AI 填充配置」一起挤动，
+                  看着就像抽了一下。固定最小宽度后，切换文案不再改变按钮尺寸。 */}
+              <button
+                className="btn outline sm"
+                type="button"
+                onClick={handleSave}
+                disabled={saving || !configDirty}
+                style={{ minWidth: 88 }}
+              >
+                <Save size={11} /> {configDirty ? text('保存', 'Save') : text('已保存', 'Saved')}
+              </button>
+            </>
+          )}
+        />
+      </div>
 
+      {/* 先生：正文栏里各子菜单的内容宽度统一以「剧情线」计划清单的 mx-auto max-w-5xl 为准 */}
+      <div className="mx-auto max-w-5xl px-8 pb-6">
         {/* 配置表单 */}
         <div className="space-y-5">
           {/* 基本信息 */}
@@ -313,8 +369,8 @@ function NovelConfigEditorSession({ projectKey }: { projectKey: string }) {
           <Section
             title={text('质量与连续性', 'Quality and continuity')}
             desc={text(
-              '控制叙事线索多久未推进后显示沉寂提醒；逾期状态仍按目标章节即时计算。',
-              'Controls when an unadvanced narrative thread shows a dormant reminder. Overdue state is still computed from its target chapters.',
+              '控制伏笔多久未推进后显示沉寂提醒；逾期状态仍按目标章节即时计算。',
+              'Controls when an unadvanced foreshadowing plan shows a dormant reminder. Overdue state is still computed from its target chapters.',
             )}
           >
             <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 items-end">

@@ -19,8 +19,9 @@ import {
   loadAuthorImportChapterNumbers,
 } from '../../services/workflows/import-workflow'
 import {
-  Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription,
+  Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle,
 } from '../ui/Dialog'
+import PageHead from '../ui/PageHead'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { Label } from '../ui/Label'
@@ -517,16 +518,32 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-[560px]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <FileUp size={18} className="text-[var(--color-accent)]" />
+      {/* data-tour：新手引导的导入教程要指向这块面板（卡片贴它右侧放，避免遮挡） */}
+      <DialogContent
+        className="max-w-[560px]"
+        data-tour="import-panel"
+        /* 先生：导入的用途、文件与参数填到一半，误点蒙版关掉就得重来。 */
+        onPointerDownOutside={(event) => event.preventDefault()}
+      >
+        {/*
+          先生：弹出来的子菜单要有统一规范 —— 标头沿用各子菜单页头（PageHead）那套语言：
+          朱砂小字眉标 → 衬线标题 → 次要色说明。两种用途各给一条眉标，
+          标题与说明随用途切换。DialogTitle 保留为 sr-only，无障碍名称不至于丢。
+        */}
+        <DialogHeader className="app-dialog-head">
+          <DialogTitle className="sr-only">
             {purpose === 'reference'
-              ? text('小说拆解与仿写', 'Novel analysis and style study')
+              ? text('小说导入与仿写', 'Novel import and style study')
               : text('导入作者原稿', 'Import author manuscript')}
           </DialogTitle>
-          <DialogDescription>
-            {purpose === 'reference'
+          <PageHead
+            kicker={purpose === 'reference'
+              ? text('NOVEL IMPORT · 小说导入', 'NOVEL IMPORT')
+              : text('MANUSCRIPT IMPORT · 原稿导入', 'MANUSCRIPT IMPORT')}
+            title={purpose === 'reference'
+              ? text('小说导入与仿写', 'Novel import and style study')
+              : text('导入作者原稿', 'Import author manuscript')}
+            description={purpose === 'reference'
               ? text(
                   '选择参考小说文件，AI 将执行结构拆解、文风提取、蓝图反推，并生成后续写作可用的仿写约束。',
                   'Select reference novel files. AI will analyze their structure and style, infer blueprints, and create imitation constraints for future writing.',
@@ -535,7 +552,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                   '选择我的原稿文件，按章节号导入为当前项目的不可变权威定稿；不会进入参考语料或触发仿写拆解。',
                   'Select manuscript files to import by chapter number as immutable authoritative finalized text in the current project. They are not added to the reference corpus or imitation analysis.',
                 )}
-          </DialogDescription>
+          />
         </DialogHeader>
 
         <div className="px-5 py-4 space-y-4 max-h-[60vh] overflow-y-auto">

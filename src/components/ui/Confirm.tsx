@@ -89,7 +89,10 @@ function ConfirmDialog({
       }}
       onClick={handleCancel}
     >
-      {/* 弹窗主体 */}
+      {/* 弹窗主体
+          先生：删除这类警示面板要做成 Windows 那种 7:1 的长条形 —— 宽 700、高约 100，
+          标题与说明在左、按钮在右，一行排开，不再是一块方方正正的小砖头。
+          （原先用 zoom: 1.5 放大，那会把宽度顶到 1050px，与 7:1 冲突，故改为直接给尺寸。） */}
       <div
         role="dialog"
         aria-modal="true"
@@ -98,9 +101,13 @@ function ConfirmDialog({
           border: '1px solid var(--color-border)',
           borderRadius: 'var(--radius-2xl)',
           boxShadow: 'var(--shadow-popover)',
-          padding: '20px 24px',
-          minWidth: 320,
-          maxWidth: 460,
+          width: 700,
+          maxWidth: 'calc(100vw - 48px)',
+          minHeight: 100,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 16,
+          padding: '18px 22px',
           /* CSS 动画，使用 both 从而提前应用 0% 关键帧，彻底杜绝闪烁现象 */
           animation: isExiting
             ? 'dialog-exit 0.15s ease-out both'
@@ -108,26 +115,48 @@ function ConfirmDialog({
         }}
         onClick={e => e.stopPropagation()}
       >
-        {/* 标题 */}
-        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-text)', marginBottom: 10 }}>
-          {resolvedTitle}
+        {/* 文字区：标头 + 说明，占满中间
+            先生第 ⑤ 条：这类弹出来的子菜单要有统一规范与设计美感 ——
+            这里套用各子菜单页头（PageHead）的同一套语言：
+            朱砂小字眉标 → 衬线标题 → 次要色说明。 */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: 9,
+              fontWeight: 700,
+              letterSpacing: '0.22em',
+              color: 'var(--color-accent)',
+              marginBottom: 5,
+            }}
+          >
+            {danger ? text('CONFIRM · 确认', 'CONFIRM') : text('NOTICE · 提示', 'NOTICE')}
+          </div>
+          <div
+            style={{
+              fontFamily: 'var(--serif)',
+              fontSize: 14,
+              fontWeight: 600,
+              letterSpacing: '0.01em',
+              color: 'var(--color-text)',
+              marginBottom: 4,
+            }}
+          >
+            {resolvedTitle}
+          </div>
+          <div
+            style={{
+              fontSize: 12,
+              color: 'var(--color-text-secondary)',
+              lineHeight: 1.55,
+              whiteSpace: 'pre-wrap',
+            }}
+          >
+            {message}
+          </div>
         </div>
 
-        {/* 消息体 */}
-        <div
-          style={{
-            fontSize: 12,
-            color: 'var(--color-text-secondary)',
-            lineHeight: 1.65,
-            whiteSpace: 'pre-wrap',
-            marginBottom: 20,
-          }}
-        >
-          {message}
-        </div>
-
-        {/* 按钮区 */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        {/* 按钮区：贴右，不参与压缩 */}
+        <div style={{ flex: 'none', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <Button variant="ghost" size="sm" onClick={handleCancel}>
             {resolvedCancelText}
           </Button>

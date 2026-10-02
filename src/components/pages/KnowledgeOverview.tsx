@@ -1,11 +1,13 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
-  Database, BookOpen, FileText,
+  BookOpen, FileText,
   Search, RefreshCw, Layers, Zap, Server, Activity, Trash2, AlertTriangle, Upload,
 } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 import { EmptyState } from '../ui/EmptyState'
+import PagePlate from '../layout/v2/magazine/PagePlate'
+import { PlateFigure, PlateLibrary } from '../layout/v2/magazine/PlateFigures'
 import { useProjectStore } from '../../stores/project-store'
 import { cn } from '../../lib/utils'
 import { toast } from '../ui/Toast'
@@ -24,6 +26,8 @@ import {
 } from '../../services/workflows/planning-material-workflow'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useLayoutStore } from '../../stores/layout-store'
+import { useCharacterStore } from '../../stores/character-store'
+import { characterRosterEntriesFromCards } from '../../services/character-roster-client'
 import { appErrorMessage } from '../../i18n/app-errors'
 import { ipc } from '../../services/ipc-client'
 import {
@@ -32,6 +36,8 @@ import {
 } from '../project-session-gate'
 import { sameProjectSessionContext } from '../../shared/project-session-context'
 import { getVectorRebuildPresentation } from './knowledge-rebuild-presentation'
+import CharacterCardCandidateDialog from '../characters/CharacterCardCandidateDialog'
+import { useCharacterCardCandidates } from '../characters/use-character-card-candidates'
 
 /**
  * 知识库概览页面 — LanceDB 向量数据库的管理中心
@@ -52,6 +58,15 @@ export default function KnowledgeOverview() {
 
   const currentProject = useProjectStore(s => s.currentProject)
   const { locale, text } = useLocaleStore()
+  /** 角色卡候选的确认-提交控制器：与角色栏的「粘贴 / 导入角色卡」共用同一套状态机。 */
+  const candidateFlow = useCharacterCardCandidates()
+  const characterCards = useCharacterStore(state => state.characters)
+  // 同名识别与合并窗口要用当前名单（与角色栏共用同一个 store），
+  // 转成角色名单条目形状后才有结构化的关系字段。
+  const characterRosterEntries = useMemo(
+    () => characterRosterEntriesFromCards(characterCards),
+    [characterCards],
+  )
 
   const loadData = useCallback(async () => {
     const projectSession = captureProjectSession(currentProject)
@@ -315,6 +330,12 @@ export default function KnowledgeOverview() {
         projectSession,
         materials,
         generationModelId: model.id,
+        /**
+         * 提取完成后**唯一**的交付口：弹候选预览面板让作者勾选，绝不自动写库。
+         * 旧实现在这里直接 await 一个步进工作流 —— 确认被降级成任务面板里的
+         * 一个「继续」按钮，作者既看不到候选内容，也没人告诉他还差一步。
+         */
+        onCandidatesReady: ready => { candidateFlow.deliver(ready, projectSession) },
       })
       const conflict = useWorkflowStore.getState().getResourceConflict(extractionWorkflow)
       if (conflict) {
@@ -322,7 +343,7 @@ export default function KnowledgeOverview() {
         return
       }
       useLayoutStore.getState().openBottomTab('tasks')
-      await useWorkflowStore.getState().startWorkflow(extractionWorkflow, true)
+      await useWorkflowStore.getState().startWorkflow(extractionWorkflow, false)
     } catch (error) {
       if (isProjectSessionCurrent(projectSession)) toast.error(appErrorMessage(locale, error))
     } finally {
@@ -332,53 +353,67 @@ export default function KnowledgeOverview() {
 
   return (
     <div className="skin-workspace-page h-full overflow-y-auto" style={{ backgroundColor: 'var(--color-editor-bg)' }}>
-      <div className="max-w-4xl mx-auto px-8 py-6">
+      {/* 页头统一提到内容区顶层：与其它子菜单同一位置、同一宽度（先生：整整齐齐） */}
+      <div className="pagehead-strip">
+        <PagePlate
+          section="knowledge"
+          /* 数据图形：文献结构 —— 投进去的是几份资料，AI 拿到的是几千个语义块。
+             这一页最该被看见的一件事就是这两级之间的落差。 */
+          figure={(
+            <PlateFigure caption={text(
+              `${stats.documentCount} 份资料 · ${stats.totalChunks} 个切片`,
+              `${stats.documentCount} documents · ${stats.totalChunks} chunks`,
+            )}>
+              <PlateLibrary documents={stats.documentCount} chunks={stats.totalChunks} />
+            </PlateFigure>
+          )}
+          facts={text(
+            `${stats.vectorDimension} 维向量 · 定稿后自动入库`,
+            `${stats.vectorDimension}-dimensional · finalized chapters are indexed automatically`,
+          )}
+          kicker={text('LIBRARY · 知识库', 'LIBRARY')}
+          title={text('知识库', 'Knowledge base')}
+          description={text(
+            '基于 LanceDB 的本地向量数据库，定稿后自动入库，为 AI 写作提供语义检索上下文',
+            'A local LanceDB vector database. Finalized chapters are indexed automatically to provide retrieval context for AI writing.',
+          )}
+          actions={(
+            <>
+              <button
+                className="btn outline sm"
+                type="button"
+                onClick={handleImportPlanningMaterials}
+                disabled={importing}
+              >
+                {importing ? <RefreshCw size={11} className="animate-spin" /> : <Upload size={11} />}
+                {text('导入创作资料', 'Import planning material')}
+              </button>
+              <button
+                className="btn outline sm"
+                type="button"
+                onClick={handleClearKnowledgeBase}
+                disabled={clearing || (stats.documentCount === 0 && stats.totalChunks === 0)}
+              >
+                {clearing ? <RefreshCw size={11} className="animate-spin" /> : <Trash2 size={11} />}
+                {text('清空知识库', 'Clear knowledge base')}
+              </button>
+            </>
+          )}
+        />
+      </div>
 
-        {/* ===== 标题 ===== */}
-        <div className="flex items-center gap-3 mb-6">
-          <div
-            className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ background: 'var(--color-accent)' }}
-          >
-            <Database size={20} className="text-white" />
-          </div>
-          <div>
-            <h2 className="text-lg font-bold text-[var(--color-text)]">{text('知识库', 'Knowledge base')}</h2>
-            <p className="text-xs text-[var(--color-text-muted)]">
-              {text('基于 LanceDB 的本地向量数据库，定稿后自动入库，为 AI 写作提供语义检索上下文', 'A local LanceDB vector database. Finalized chapters are indexed automatically to provide retrieval context for AI writing.')}
-            </p>
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            <Button
-              variant="outline"
-              className="text-xs"
-              onClick={handleImportPlanningMaterials}
-              disabled={importing}
-            >
-              {importing ? <RefreshCw size={13} className="animate-spin" /> : <Upload size={13} />}
-              {text('导入创作资料', 'Import planning material')}
-            </Button>
-            <Button
-              variant="outline"
-              className="text-xs"
-              onClick={handleClearKnowledgeBase}
-              disabled={clearing || (stats.documentCount === 0 && stats.totalChunks === 0)}
-            >
-              {clearing ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
-              {text('清空知识库', 'Clear knowledge base')}
-            </Button>
-          </div>
-        </div>
-
+      {/* 先生：正文栏里各子菜单的内容宽度统一以「剧情线」计划清单的 mx-auto max-w-5xl 为准 */}
+      <div className="mx-auto max-w-5xl px-8 pb-6">
         {loadError && (
-          <div className="mb-6 flex items-start gap-2 rounded-xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-xs text-[var(--color-error-text)]">
+          <div className="v2-notice mb-6 flex items-start gap-2 rounded-xl border border-red-500/25 bg-red-500/10 px-4 py-3 text-xs text-[var(--color-error-text)]" data-tone="error">
             <AlertTriangle size={15} className="mt-0.5 flex-shrink-0" />
             <span>{loadError}</span>
           </div>
         )}
 
-        {/* ===== 统计卡片 ===== */}
-        <div className="grid grid-cols-4 gap-3 mb-6">
+        {/* ===== 统计卡片 =====
+            骨架照 demo（shell.css 526 行 .knowledge-stats），不再手工写间距 */}
+        <div className="knowledge-stats">
           <StatCard icon={<FileText size={14} />} label={text('文档数量', 'Documents')} value={stats.documentCount} />
           <StatCard icon={<Layers size={14} />} label={text('知识切片', 'Chunks')} value={stats.totalChunks} />
           <StatCard
@@ -413,10 +448,13 @@ export default function KnowledgeOverview() {
           >
             <div className="flex items-center justify-between px-4 py-3">
               <div className="flex items-center gap-2">
-                <div className={cn(
-                  'w-8 h-8 rounded-lg flex items-center justify-center',
-                  rebuildPresentation.kind === 'missing-vectors' ? 'bg-amber-500/15' : 'bg-blue-500/15',
-                )}>
+                <div
+                  className={cn(
+                    'v2-tone-soft w-8 h-8 rounded-lg flex items-center justify-center',
+                    rebuildPresentation.kind === 'missing-vectors' ? 'bg-amber-500/15' : 'bg-blue-500/15',
+                  )}
+                  data-tone={rebuildPresentation.kind === 'missing-vectors' ? 'warning' : 'info'}
+                >
                   <Zap size={16} className={rebuildPresentation.kind === 'missing-vectors' ? 'text-[var(--color-warning)]' : 'text-[var(--color-info)]'} />
                 </div>
                 <div>
@@ -462,68 +500,76 @@ export default function KnowledgeOverview() {
             </div>
             {/* 进度条（回填时显示） */}
             {backfilling && (
-              <div className={cn('h-1 w-full', rebuildPresentation.kind === 'missing-vectors' ? 'bg-amber-500/10' : 'bg-blue-500/10')}>
-                <div className={cn(
-                  'h-full animate-pulse rounded-full w-full',
-                  rebuildPresentation.kind === 'missing-vectors'
-                    ? 'bg-gradient-to-r from-amber-500 to-amber-300'
-                    : 'bg-gradient-to-r from-blue-500 to-blue-300',
-                )} />
+              <div
+                className={cn('v2-tone-soft h-1 w-full', rebuildPresentation.kind === 'missing-vectors' ? 'bg-amber-500/10' : 'bg-blue-500/10')}
+                data-tone={rebuildPresentation.kind === 'missing-vectors' ? 'warning' : 'info'}
+              >
+                <div
+                  className={cn(
+                    'v2-tone-fill h-full animate-pulse rounded-full w-full',
+                    rebuildPresentation.kind === 'missing-vectors'
+                      ? 'bg-gradient-to-r from-amber-500 to-amber-300'
+                      : 'bg-gradient-to-r from-blue-500 to-blue-300',
+                  )}
+                  data-tone={rebuildPresentation.kind === 'missing-vectors' ? 'warning' : 'info'}
+                />
               </div>
             )}
           </div>
         )}
 
-        {/* ===== 语义检索区域 ===== */}
-        <div
-          className="rounded-xl border border-[var(--color-border)] mb-6 overflow-hidden"
-          style={{ backgroundColor: 'var(--color-sidebar)' }}
-        >
-          <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)]">
+        {/* ===== 语义检索区域 =====
+            骨架照 demo（shell.css 540–545 行 .knowledge-search / -head / -body），
+            连同卡片底色、42px 头部、输入框规格都由皮肤接管。 */}
+        <div className="knowledge-search card">
+          <div className="knowledge-search-head">
             <Search size={14} className="text-[var(--color-accent)] flex-shrink-0" />
             <span className="text-sm font-semibold text-[var(--color-text)]">{text('语义检索', 'Semantic search')}</span>
             {/* 检索模式标签 */}
             <span className={cn(
-              'text-[0.65rem] px-1.5 py-0.5 rounded-full font-medium',
+              'v2-status-badge text-[0.65rem] px-1.5 py-0.5 rounded-full font-medium',
               hasVectors
                 ? 'bg-emerald-500/15 text-[var(--color-success-text)]'
                 : 'bg-blue-500/15 text-[var(--color-category-progress-text)]'
-            )}>
+            )} data-tone={hasVectors ? 'success' : 'info'}>
               {searchMode}
             </span>
             <span className="text-[0.7rem] text-[var(--color-text-muted)] ml-auto">
               {hasVectors ? text('BM25 + 向量近邻融合', 'BM25 + vector nearest-neighbor fusion') : text('配置 Embedding 模型后自动升级为混合检索', 'Configure an embedding model to enable hybrid search')}
             </span>
           </div>
-          <div className="px-4 py-3">
-            <div className="flex items-center gap-2">
+          {/* 骨架照 demo（shell.css 543–545 行 .knowledge-search-body）
+              —— 它自身就是 display:flex + gap:8px，所以这里不能再套一层 flex 容器，
+              否则内层宽度由内容决定、右边会空出一大块（先生报的）。
+              主输入框靠 .knowledge-search-body input{flex:1} 自然占满。 */}
+          <div className="knowledge-search-body">
+            <Input
+              className="h-9"
+              placeholder={text('输入查询内容，如：主角的能力体系、世界观核心设定...', 'Search for protagonist abilities, core world rules, and more...')}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+            />
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <span className="text-[0.7rem] text-[var(--color-text-muted)]">Top</span>
+              {/* 先生：Top 栏太短，拉到能舒服显示两位数 */}
               <Input
-                className="flex-1 h-9"
-                placeholder={text('输入查询内容，如：主角的能力体系、世界观核心设定...', 'Search for protagonist abilities, core world rules, and more...')}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                type="number"
+                min={1}
+                max={50}
+                value={topK}
+                onChange={(e) => setTopK(Math.max(1, Math.min(50, Number(e.target.value) || 10)))}
+                className="w-16 h-9 text-xs text-center"
               />
-              <div className="flex items-center gap-1 flex-shrink-0">
-                <span className="text-[0.7rem] text-[var(--color-text-muted)]">Top</span>
-                <Input
-                  type="number"
-                  min={1}
-                  max={50}
-                  value={topK}
-                  onChange={(e) => setTopK(Math.max(1, Math.min(50, Number(e.target.value) || 10)))}
-                  className="w-12 h-7 text-xs rounded px-1.5 text-center"
-                />
-              </div>
-              <Button
-                variant="ai"
-                onClick={handleSearch}
-                disabled={searching}
-              >
-                {searching ? <RefreshCw size={13} className="animate-spin" /> : <Search size={13} />}
-                {text('检索', 'Search')}
-              </Button>
             </div>
+            <Button
+              variant="ai"
+              onClick={handleSearch}
+              disabled={searching}
+            >
+              {searching ? <RefreshCw size={13} className="animate-spin" /> : <Search size={13} />}
+              {text('检索', 'Search')}
+            </Button>
           </div>
 
           {/* 检索结果 */}
@@ -552,11 +598,11 @@ export default function KnowledgeOverview() {
                         {r.fileName}
                       </span>
                       <span className={cn(
-                        'text-[0.7rem] px-1.5 py-0.5 rounded font-mono',
+                        'v2-status-badge text-[0.7rem] px-1.5 py-0.5 rounded font-mono',
                         r.score > 0.8 ? 'bg-green-500/20 text-[var(--color-success-text)]' :
                         r.score > 0.6 ? 'bg-yellow-500/20 text-[var(--color-warning-text)]' :
                         'bg-[var(--color-hover)] text-[var(--color-text-muted)]'
-                      )}>
+                      )} data-tone={r.score > 0.8 ? 'success' : r.score > 0.6 ? 'warning' : 'muted'}>
                         {r.score === 0.5 ? text('全文匹配', 'Text match') : text(`相似度 ${(r.score * 100).toFixed(1)}%`, `${(r.score * 100).toFixed(1)}% similarity`)}
                       </span>
                     </div>
@@ -571,12 +617,25 @@ export default function KnowledgeOverview() {
         </div>
 
       </div>
+      <CharacterCardCandidateDialog
+        open={candidateFlow.open}
+        candidates={candidateFlow.candidates}
+        existingEntries={characterRosterEntries}
+        busy={candidateFlow.busy}
+        error={candidateFlow.error}
+        onClose={candidateFlow.discard}
+        onConfirm={(selected, overwriteExisting) => { void candidateFlow.submit(selected, overwriteExisting) }}
+      />
     </div>
   )
 }
 
-/** 统计卡片子组件 */
-function StatCard({ icon, label, value, accent, badge, badgeColor }: {
+/** 统计卡片子组件
+ *  先生：不要再用内联样式「手工模仿」demo 了 —— 直接把骨架换成 demo 的，
+ *  皮肤（shell.css 524–531 行的 .knowledge-stat 一整套）就会自动生效。
+ *  demo 的结构是三段式：<span> 标签 / <b> 数值 / <em> 小字；
+ *  带徽标的那种（检索模式）走 demo 的 .retrieval + .ks-label 分支。 */
+function StatCard({ icon, label, value, accent, badge }: {
   icon: React.ReactNode
   label: string
   value: number | string
@@ -585,30 +644,16 @@ function StatCard({ icon, label, value, accent, badge, badgeColor }: {
   badgeColor?: string
 }) {
   return (
-    <div
-      className="rounded-xl p-4 border border-[var(--color-border)]"
-      style={{ backgroundColor: 'var(--color-sidebar)' }}
-    >
-      <div className="flex items-center gap-2 mb-2">
-        <span className="text-[var(--color-text-muted)]">{icon}</span>
-        <span className="text-xs text-[var(--color-text-muted)]">{label}</span>
-      </div>
-      <div className="flex items-center gap-2">
-        <div className={cn(
-          'text-2xl font-bold',
-          accent ? 'text-[var(--color-accent)]' : 'text-[var(--color-text)]'
-        )}>
-          {value}
+    <div className={cn('knowledge-stat card', accent && 'engine', badge && 'retrieval')}>
+      {badge ? (
+        <div className="ks-label">
+          <span>{icon}{label}</span>
+          <em>{badge}</em>
         </div>
-        {badge && (
-          <span
-            className="text-[0.6rem] px-1.5 py-0.5 rounded-full font-medium"
-            style={{ backgroundColor: `color-mix(in srgb, ${badgeColor} 12%, transparent)`, color: badgeColor }}
-          >
-            {badge}
-          </span>
-        )}
-      </div>
+      ) : (
+        <span>{icon}{label}</span>
+      )}
+      <b>{value}</b>
     </div>
   )
 }

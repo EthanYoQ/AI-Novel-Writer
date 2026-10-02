@@ -1,6 +1,12 @@
 import { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from './provider.interface'
 import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 
+/**
+ * 单次非流式请求的超时（毫秒）。
+ * 覆盖「测试连接」等不经生成 harness 的路径 —— 那里没有会话级 deadline 兜底。
+ */
+const GEMINI_REQUEST_TIMEOUT_MS = 120_000
+
 export class GeminiProvider implements ILLMProvider {
   private applyReasoning(
     generationConfig: Record<string, unknown>,
@@ -68,6 +74,9 @@ export class GeminiProvider implements ILLMProvider {
           'x-goog-api-key': model.apiKey,
         },
         body: JSON.stringify(body),
+        // 与 OpenAI provider 同理：非流式调用没有 harness 的会话 deadline 兜底，
+        // 必须自带单请求超时，否则不响应的端点会让调用方永久等待。
+        signal: AbortSignal.timeout(GEMINI_REQUEST_TIMEOUT_MS),
       })
 
       if (!res.ok) {

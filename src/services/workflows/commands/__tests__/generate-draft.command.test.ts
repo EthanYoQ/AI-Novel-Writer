@@ -314,8 +314,6 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     wordsTarget?: number
     premise?: string
     charactersArch?: string
-    worldbuilding?: string
-    synopsis?: string
     blueprints?: Array<{ chapterNumber: number; title: string; keyEvents: string }>
     userGuidance?: string
     globalGuidance?: string
@@ -353,6 +351,10 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       content: string
     }>
     knowledgeResults?: Array<{ text: string; score: number; fileName: string }>
+    /** 本章蓝图页 @ 引用的世界观设定 id 列表（chapter_world_settings）。 */
+    chapterWorldSettingRefs?: Array<{ chapterNumber: number; settingId: number; source?: string }>
+    /** 设定库条目；生成写稿时会按上面的 id 取用。 */
+    worldSettingEntries?: Array<Record<string, unknown>>
     keyEvents?: string
     suspenseHook?: string
     knowledgeQueryHint?: string
@@ -372,8 +374,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         return {
           premise: options.premise ?? '故事前提',
           charactersArch: options.charactersArch ?? '',
-          worldbuilding: options.worldbuilding ?? '',
-          synopsis: options.synopsis ?? '',
+          worldbuilding: '',
+          synopsis: '',
         }
       }
       if (channel === 'db:blueprint-get-all') return options.blueprints ?? []
@@ -445,6 +447,9 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
           : null
       }
       if (channel === 'kb:search-writing-context') return options.knowledgeResults ?? []
+      // 世界观设定：默认空，避免影响既有用例；本章引用的用例按需注入。
+      if (channel === 'world-setting:list-chapter-refs') return options.chapterWorldSettingRefs ?? []
+      if (channel === 'world-setting:list') return options.worldSettingEntries ?? []
       if (channel === 'db:character-get-all') return options.characterCards ?? []
       if (channel === 'db:character-roster-read') return {
         status: 'ready',
@@ -992,6 +997,75 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     )
   })
 
+  /**
+   * 先生定的路线：每章只注入「作者 @ 引用的 + AI 检索到的 + 知识库 topK」。
+   * 这里守住第一类 —— 作者在章节蓝图页「本章引用」区挂上的世界观设定。
+   * 此前 chapter_world_settings 表、IPC、store、UI 都已齐备，只缺这个消费方。
+   */
+  it('injects only the world-setting entries the author referenced for this chapter', async () => {
+    let observedTask: GenerationTask | undefined
+    const runtime = fakeRuntime((_attempt, task) => {
+      observedTask = task
+      return outcome('新章正文。'.repeat(125), 'stop')
+    })
+    const { invoke, context, callbacks, command } = setup({
+      runtime,
+      // 用首章：非首章会强制要求上一章有必需定稿来源，那不是本用例要覆盖的东西。
+      chapterNumber: 1,
+      // 目标字数压低，让本用例的短正文能满足最低完成度门禁（本用例只关心提示词内容）。
+      wordsTarget: 300,
+      chapterWorldSettingRefs: [
+        { chapterNumber: 1, settingId: 11, source: 'manual' },
+        { chapterNumber: 1, settingId: 22, source: 'manual' },
+      ],
+      worldSettingEntries: [
+        {
+          id: 11,
+          name: '青云宗',
+          summary: '北方第一大宗，垄断灵脉。',
+          content: '青云宗以灵脉立宗，掌门玄阳子闭关三百年。',
+          status: 'confirmed',
+          category: 'faction',
+        },
+        {
+          // 未确认的候选绝不能进上下文：喂进去会让猜测自我强化。
+          id: 22,
+          name: '待定设定哨兵',
+          summary: 'PENDING_ENTRY_MUST_NOT_REACH_PROVIDER',
+          content: '',
+          status: 'pending',
+          category: 'faction',
+        },
+        {
+          // 没有被本章引用 —— 也不该出现（绝不全量注入）。
+          id: 33,
+          name: '未引用设定哨兵',
+          summary: 'UNREFERENCED_ENTRY_MUST_NOT_REACH_PROVIDER',
+          content: '',
+          status: 'confirmed',
+          category: 'geography',
+        },
+      ],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
+    expect(prompt).toContain('作者为本章引用的世界观设定')
+    expect(prompt).toContain('青云宗')
+    expect(prompt).toContain('青云宗以灵脉立宗，掌门玄阳子闭关三百年。')
+    expect(prompt).not.toContain('PENDING_ENTRY_MUST_NOT_REACH_PROVIDER')
+    expect(prompt).not.toContain('未引用设定哨兵')
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('已注入本章引用的设定 1 条'))
+    // 参数只有「章节号 + 项目路径」：这两个通道不借用会话身份，
+    // 靠显式 expectedProjectPath 由主进程校验（用 invokeWithProjectSession 会直接抛错）。
+    expect(invoke).toHaveBeenCalledWith(
+      'world-setting:list-chapter-refs',
+      1,
+      projectPath,
+    )
+  })
+
   it('captures final provider requests without legacy characters_arch, currentState, or chapter summaries', async () => {
     const runtime = fakeOutcomes(
       outcome('初'.repeat(100), 'length', 1),
@@ -1016,7 +1090,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         role: 'protagonist',
         personality: 'AUTHOR_PROFILE_SENTINEL',
         relationships: [{ target: '周砚', relation: '父子' }],
-        legacyRelationshipNotes: '旧纸档记载两人曾是师徒',
+        relationshipNotes: '旧纸档记载两人曾是师徒',
         currentState: {
           location: '作者指定的码头',
           recentEvents: 'OLD_CURRENT_STATE_SENTINEL',
@@ -1053,7 +1127,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       expect(prompt).toContain('AUTHOR_PROFILE_SENTINEL')
       expect(prompt).toContain('location@chapter1: 作者指定的码头')
       expect(prompt).toContain('relationship: 周砚 (父子)')
-      expect(prompt).toContain('relationship（legacy 来源未知）: 旧纸档记载两人曾是师徒')
+      expect(prompt).toContain('relationship notes: 旧纸档记载两人曾是师徒')
       expect(prompt).toContain('林岚扶住墙')
       expect(prompt).toContain('我不会交给你')
       expect(prompt).not.toContain('LEGACY_CHARACTERS_ARCH_SENTINEL')
@@ -1542,58 +1616,6 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(completePrompt).toContain(coreOutline)
   })
 
-  it.each(['## ', ''])('bounds an explicit long chapter outline with heading prefix %j while retaining author facts', async (headingPrefix) => {
-    const worldbuilding = [
-      '世界规则开始：月桂港每天只有一次退潮。',
-      '港务规则必须服从潮汐钟。'.repeat(1_000),
-      '世界观尾部关键事实：顾舟不会游泳。',
-    ].join('\n')
-    const synopsis = (outsideChapterSize: number) => `# 全书总纲
-全局关键事实：潮门真相只能在终章揭晓。
-
-${headingPrefix}第1章：失钟
-第一章非当前内容开始。${'旧案延展。'.repeat(outsideChapterSize)}第一章非当前内容结束。
-
-${headingPrefix}第2章：回港
-当前章关键事实：顾舟必须在退潮前拿回潮汐钟。
-
-${headingPrefix}第3章：潮门
-第三章非当前内容开始。${'后续延展。'.repeat(outsideChapterSize)}第三章非当前内容结束。
-
-## 全局禁则
-全局尾部关键事实：任何人不得提前知道潮门来源。`
-    const run = async (outline: string) => {
-      const runtime = fakeOutcomes(outcome(`${'正文'.repeat(250)}。`, 'stop'))
-      const { context, callbacks, command } = setup({
-        runtime,
-        chapterNumber: 2,
-        wordsTarget: 500,
-        previousFinalizedContent: '第一章定稿原文。',
-        worldbuilding,
-        worldSetting: worldbuilding,
-        coreOutline: '作者核心事实：顾舟必须查清潮门来源。',
-        synopsis: outline,
-      })
-
-      await command.execute({ step: {}, context, callbacks })
-      return runtime.complete.mock.calls[0]?.[0].messages
-        .find(message => message.role === 'user')?.content ?? ''
-    }
-
-    const shortPrompt = await run(synopsis(2))
-    const longPrompt = await run(synopsis(4_000))
-
-    expect(longPrompt).toContain('全局关键事实：潮门真相只能在终章揭晓')
-    expect(longPrompt).toContain('当前章关键事实：顾舟必须在退潮前拿回潮汐钟')
-    expect(longPrompt).toContain('全局尾部关键事实：任何人不得提前知道潮门来源')
-    expect(longPrompt).toContain('世界观尾部关键事实：顾舟不会游泳')
-    expect(longPrompt).toContain('作者核心事实：顾舟必须查清潮门来源')
-    expect(longPrompt).not.toContain('第一章非当前内容开始')
-    expect(longPrompt).not.toContain('第三章非当前内容开始')
-    expect(longPrompt.length).toBe(shortPrompt.length)
-    expect(longPrompt.match(/世界观尾部关键事实：顾舟不会游泳/gu)).toHaveLength(1)
-  })
-
   it.each([
     ['zh-CN', '文风仅用于选择表达方式', '作者明确事实与指导、实际前文、本章关键因果和本章篇幅优先'],
     ['en-US', 'Writing style selects expression only', 'actual prior prose'],
@@ -2021,7 +2043,7 @@ ${headingPrefix}第3章：潮门
     const threadContextEnd = prompt.indexOf('\n\n', threadContextStart)
     expect(threadContextEnd).toBeGreaterThan(threadContextStart)
     expect(threadContextEnd - threadContextStart).toBeLessThanOrEqual(1200)
-    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('活跃叙事线索（6 条）'))
+    expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining('活跃伏笔（6 条）'))
     expect(invoke).toHaveBeenCalledWith(
       'db:narrative-thread-list-relevant',
       expect.objectContaining({ chapterNumber: 5, characters: ['林岚'] }),
@@ -2618,7 +2640,7 @@ ${headingPrefix}第3章：潮门
     })
 
     await expect(command.execute({ step: {}, context, callbacks }))
-      .rejects.toThrow('AI 输出达到本次请求长度限制，尚未完整生成')
+      .rejects.toThrow('AI 输出达到模型最大长度，结果不完整')
     expect(runtime.complete).toHaveBeenCalledTimes(8)
     expectNoDraftPersistence(invoke)
   })

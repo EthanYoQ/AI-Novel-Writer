@@ -25,10 +25,14 @@ export interface PartialArchData {
   character_dynamics_result?: string
   character_state_result?: string
   world_building_result?: string
+  /** 世界观输出达到长度上限时保存的未完成候选；不写入正式 worldbuilding。 */
   world_building_partial_result?: string
   world_building_incomplete?: boolean
+  /** 候选赖以生成的输入指纹；项目事实变化后禁止自动续写。 */
   world_building_facts_fingerprint?: string
+  /** 候选创建时正式世界观的指纹；避免恢复时覆盖后来编辑的完整成果。 */
   world_building_db_hash?: string
+  /** 候选实际使用的作者步骤指导；恢复时沿用，不读取新输入。 */
   world_building_step_guidance?: string
   synopsis_result?: string
   /** 情节大纲在上一次生成中被输出长度中断；synopsis_result 为已完成部分。 */

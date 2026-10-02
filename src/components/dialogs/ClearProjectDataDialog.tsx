@@ -142,22 +142,44 @@ function ClearProjectDataDialogContents({
         }}
         onClick={event => event.stopPropagation()}
       >
+        {/* 标头 —— 先生第 ⑤ 条：这类弹出来的子菜单要有统一规范与设计美感。
+            套用与各子菜单页头（PageHead）同一套语言：朱砂小字眉标 → 衬线标题 → 次要色说明。 */}
         <div
-          className="flex items-center gap-2 px-4 py-3"
+          className="px-5 py-4"
           style={{ borderBottom: '1px solid var(--color-border)' }}
         >
-          <Trash2 size={16} style={{ color: 'var(--color-error)' }} />
-          <div className="min-w-0 flex-1">
+          <div
+            style={{
+              fontSize: 9,
+              fontWeight: 700,
+              letterSpacing: '0.22em',
+              color: 'var(--color-accent)',
+              marginBottom: 6,
+            }}
+          >
+            {text('DANGER · 危险操作', 'DANGER')}
+          </div>
+          <div className="flex items-center gap-2">
+            <Trash2 size={16} style={{ color: 'var(--color-error)', flexShrink: 0 }} />
             <div
               id="clear-project-data-title"
-              className="text-sm font-semibold"
-              style={{ color: 'var(--color-text)' }}
+              className="min-w-0 flex-1"
+              style={{
+                fontFamily: 'var(--serif)',
+                fontSize: 16,
+                fontWeight: 600,
+                letterSpacing: '0.01em',
+                color: 'var(--color-text)',
+              }}
             >
               {text('清除项目生成内容', 'Clear generated project data')}
             </div>
-            <div className="mt-0.5 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-              {text('此操作只清除所选生成数据，不删除项目目录、角色卡或模型配置。', 'Only the selected generated data will be removed. The project folder, character cards, and model settings are preserved.')}
-            </div>
+          </div>
+          <div
+            className="mt-1.5 text-xs"
+            style={{ color: 'var(--color-text-muted)', lineHeight: 1.65 }}
+          >
+            {text('此操作只清除所选生成数据，不删除项目目录、角色卡或模型配置。', 'Only the selected generated data will be removed. The project folder, character cards, and model settings are preserved.')}
           </div>
         </div>
 

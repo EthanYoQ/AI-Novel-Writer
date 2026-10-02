@@ -1,0 +1,541 @@
+/* ============================================================================
+ * 档案铭牌（Character Profile Plate）—— v3「时尚杂志」的页头版式
+ *
+ * ── 它取代的是「三行文字」的旧页头 ──────────────────────────────────────────
+ * 先生 2026-09-16 的原话：
+ *   「连 CAST · 人物档案 / 布兰·史塔克 / 主角 · 最近更新：第 2 章 这种标头
+ *     都还是一直在沿用我们之前的设计风格和思路。都不敢自己做点 SVG 效果。」
+ *
+ * 旧 .pagehead 的骨架是：小字眉标 → 大字标题 → 小字说明 + 右侧按钮。
+ * 那是**标题行**的思路，换字体换字号都改不掉骨架。这一版把信息**画出来**：
+ *
+ *   · 自绘 SVG 栏目徽记（三个方点 + 连线）
+ *   · 自绘 SVG 关系缩略网（这位角色与谁相连；未建档的端点画成虚线圈）
+ *   · 期刊化的章号块（最近更新 / 02 / 章 —— 右侧一枚大数字）
+ *   · 方形头像（印刷品是方的）
+ *
+ * ── 版面结构（一屏一焦点：左上是主角名，右下是操作）────────────────────────
+ *
+ *   ┌CAST┬─[徽记][头像][ 人物名 ………………… ][ 最近更新 02 章 ]─┬ [操作组] ┐
+ *   │竖排│                                                      │        │
+ *   │    │  [ 关系缩略网 ]  ───  主角 · 视角人物                  │        │
+ *   └────┴──────────────────────────────────────────────────────┴────────┘
+ *                                    ↑ 3px 墨线收口（与全站页头同一收口）
+ *
+ * ── 配色 ────────────────────────────────────────────────────────────────────
+ * 强调色一律是 `var(--mag-sec)` —— 即**当前栏目色**（由编辑区的 data-sec 决定）。
+ * 于是标头的颜色、它背后的版面底色、左缘色带、书脊上那一格，永远是同一个值。
+ * ========================================================================== */
+
+html[data-ui='v2'][data-mag] .mag-plate {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 16px;
+  padding: 20px 0 16px;
+  margin-bottom: 22px;
+  /* 先生（2026-09-17，在关系图谱截图上画了一个红叉）：「横线删去」——
+     那条 3px 收口墨线把版面切成两半，太压抑。
+     页头与内容的分界交给留白，不交给线。 */
+  border-bottom: 0;
+}
+
+/* 右侧一列：期刊化读数在上、操作组在下，一起贴住版心右缘 */
+html[data-ui='v2'][data-mag] .mag-plate .mp-aside {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-left: auto;
+}
+
+/* ---- 竖排栏目名：把这一页钉在「人物」这一栏上 ---- */
+html[data-ui='v2'][data-mag] .mag-plate .mp-spine {
+  flex: 0 0 auto;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-family: var(--mag-font-geo);
+  font-size: 12px;
+  letter-spacing: 0.34em;
+  color: var(--mag-sec);
+  user-select: none;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-main {
+  flex: 1;
+  min-width: 0;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* ---- 栏目徽记：自绘 SVG，不是图标库 ----
+ * 选择器不绑 .mag-plate —— 徽记是独立组件，放在侧栏、标签页里也该取当前栏目色。 */
+html[data-ui='v2'][data-mag] .mp-sigil {
+  flex: 0 0 26px;
+  display: block;
+}
+
+html[data-ui='v2'][data-mag] .mp-sigil-node {
+  fill: var(--mag-sec, var(--seal));
+  opacity: 0.5;
+}
+
+html[data-ui='v2'][data-mag] .mp-sigil-node.is-lead {
+  opacity: 1;
+}
+
+html[data-ui='v2'][data-mag] .mp-sigil-link {
+  stroke: var(--mag-sec, var(--seal));
+  stroke-width: 1;
+  opacity: 0.4;
+}
+
+/* ---- 侧栏空态里的徽记：取**当前栏目色**（2026-09-17 第十五轮）----
+ * 徽记内部一律取 `var(--mag-sec, var(--seal))`，而侧栏不在编辑区那套
+ * `[data-sec]` 作用域里 —— `--mag-sec` 是空的，会落回品牌朱砂，
+ * 「每个栏目一个颜色」这层意思就丢了（先生换掉那六个 Lucide 图标，
+ * 要的正是「栏目自己的图形 + 栏目自己的色」）。
+ * 所以只在**徽记这一棵子树**上把 `--mag-sec` 供起来：
+ * `--mag-active-sec` 是 ShellV2 写在 <html> 上的当前栏目色。
+ * 刻意不用 `.sidebar-host { --mag-sec: … }` 那种写法 ——
+ * 那会连侧栏的悬停扫入层一起改色，属于擅自加戏。 */
+html[data-ui='v2'][data-mag] .sidebar-host .mag-sigil {
+  --mag-sec: var(--mag-active-sec, var(--seal));
+}
+
+/* ---- 肖像框：杂志内页的肖像，不是 v2 的圆头像 ----
+ * 先生：「你把我的角色头像那弄没了？…你可以设置一个符合杂志感觉的新头像，
+ * 设置弄新的头像交互谱。但不能把我本来的功能给阉割掉了。」
+ *   ① 尺寸给足 96px（v2 是 75px 圆头像）
+ *   ② 印刷品是方的：直角 + 2px 墨线外框
+ *   ③ 换头像的入口看得见：悬停整块栏目色覆盖层 + 自绘图标 + 字样
+ *   ④ 权限规则不变：只有编辑态才渲染入口，改动保存档案后才落库
+ */
+html[data-ui='v2'][data-mag] .mag-plate .mp-portrait {
+  position: relative;
+  flex: 0 0 96px;
+  width: 96px;
+  height: 96px;
+  overflow: hidden;
+  background: var(--panel2);
+  border: 2px solid var(--ink);
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-portrait img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-portrait-initial {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-family: var(--mag-font-display);
+  font-size: 46px;
+  line-height: 1;
+  color: var(--mag-sec);
+  background: color-mix(in srgb, var(--mag-sec) 8%, var(--paper));
+}
+
+/* 悬停覆盖层：整块栏目色 + 白图标白字 —— 入口必须一眼看得见 */
+html[data-ui='v2'][data-mag] .mag-plate .mp-portrait-hit {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+  color: #FFFFFF;
+  background: color-mix(in srgb, var(--mag-sec) 88%, var(--ink));
+  opacity: 0;
+  transition: opacity 180ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-portrait:hover .mp-portrait-hit,
+html[data-ui='v2'][data-mag] .mag-plate .mp-portrait-hit:focus-visible {
+  opacity: 1;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-portrait-hit:disabled {
+  cursor: default;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-portrait-label {
+  font-family: var(--mag-font-geo);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+}
+
+/* 自绘的换图图标：后框是原来的照片（描边），前框是换上的（实心） */
+html[data-ui='v2'][data-mag] .mp-swap-back {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  opacity: 0.55;
+}
+
+html[data-ui='v2'][data-mag] .mp-swap-front {
+  fill: currentColor;
+}
+
+/* 角标：杂志图片的印记，也是「这块可以点」的静默提示；悬停时让位给覆盖层 */
+html[data-ui='v2'][data-mag] .mag-plate .mp-portrait-corner {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  width: 10px;
+  height: 10px;
+  background: var(--mag-sec);
+  transition: opacity 180ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-portrait:hover .mp-portrait-corner {
+  opacity: 0;
+}
+
+/* ---- 标题块 ---- */
+html[data-ui='v2'][data-mag] .mag-plate .mp-titles {
+  flex: 1;
+  min-width: 0;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-kicker {
+  font-family: var(--mag-font-kicker);
+  font-size: var(--mag-fs-kicker);
+  font-weight: 600;
+  letter-spacing: var(--mag-ls-kicker);
+  color: var(--mag-sec);
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-name {
+  margin: 5px 0 0;
+  font-family: var(--mag-font-display);
+  font-weight: 400;
+  font-size: 40px;
+  line-height: 1.04;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+/* ---- 章号块：期刊页码的排法 ----
+ * 「主角 · 最近更新：第 2 章」那条文字串，收进这一格大数字里。 */
+html[data-ui='v2'][data-mag] .mag-plate .mp-chapter {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  /* 在右侧列里，它靠右站 —— 不再需要 v2 那条「与标题分开」的竖线 */
+  justify-content: flex-end;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-chapter-label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-family: var(--mag-font-kicker);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  color: var(--muted);
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-chapter-no {
+  font-family: var(--mag-font-num);
+  font-size: 44px;
+  font-weight: 700;
+  line-height: 0.78;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+  color: var(--mag-sec);
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-chapter-unit {
+  font-family: var(--mag-font-kicker);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+/* ---- 数据行：关系缩略网 + 定位 ---- */
+html[data-ui='v2'][data-mag] .mag-plate .mp-data {
+  display: flex;
+  align-items: flex-end;
+  gap: 24px;
+  margin-top: 14px;
+  /* 与标题左缘对齐：徽记 26 + 行距 16 */
+  padding-left: 42px;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-net {
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-net-link {
+  stroke: var(--ink);
+  stroke-opacity: 0.22;
+  stroke-width: 1;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-net-node {
+  fill: var(--mag-sec);
+  fill-opacity: 0.55;
+}
+
+/* 未建档的端点：虚线圈 —— 缺档是事实，就该看得见 */
+html[data-ui='v2'][data-mag] .mag-plate .mp-net-node.is-missing {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-net-center {
+  fill: var(--mag-sec);
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-net-caption {
+  margin: 5px 0 0;
+  font-family: var(--mag-font-kicker);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-net-caption b {
+  font-weight: 500;
+  color: var(--mag-sec);
+}
+
+/* ---- 角色定位：方印，不是一行小字 ----
+ * 旧的「主角 · 最近更新：第 2 章」是一行文字；这里把定位做成**实心方印**
+ * （白字压栏目色），与全站的方形印签同一套语言 —— 它是标记，不是注释。 */
+html[data-ui='v2'][data-mag] .mag-plate .mp-facts {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 2px;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-fact-role {
+  padding: 3px 9px 4px;
+  background: var(--mag-sec);
+  color: #FFFFFF;
+  font-family: var(--mag-font-geo);
+  font-size: 12.5px;
+  letter-spacing: 0.1em;
+  line-height: 1.3;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-fact-kind {
+  font-family: var(--mag-font-kicker);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--muted);
+}
+
+/* ---- 定位句：与标题左缘对齐（徽记 26 + 行距 16） ---- */
+html[data-ui='v2'][data-mag] .mag-plate .mp-lede {
+  margin: 12px 0 0 42px;
+  max-width: 46ch;
+  font-family: var(--mag-font-title);
+  font-size: 15px;
+  line-height: var(--mag-lh-read);
+  color: var(--muted);
+}
+
+/* ---- 数据行里的读数块（图形旁边的小字事实） ---- */
+html[data-ui='v2'][data-mag] .mag-plate .mp-facts-block {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding-bottom: 2px;
+  font-family: var(--mag-font-kicker);
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+html[data-ui='v2'][data-mag] .mag-plate .mp-facts-block b {
+  font-weight: 500;
+  color: var(--mag-sec);
+}
+
+/* ---- 徽记里的描边件（同心方框、书、骨架那一类图形用线不用点） ---- */
+html[data-ui='v2'][data-mag] .mp-sigil-frame {
+  fill: none;
+  stroke: var(--mag-sec, var(--seal));
+  stroke-width: 1.3;
+  opacity: 0.75;
+}
+
+/* ---- 数据图形：竖刻线 / 方格 / 伏笔线 ----
+ * 形状即语义（见 PlateFigures.tsx 的文件头）：刻线读数量、方格读完成度、线型读状态。
+ * 颜色只用当前栏目色与墨阶，不引入第五种颜色。 */
+
+html[data-ui='v2'][data-mag] .mp-fig-base,
+html[data-ui='v2'][data-mag] .mp-fig-thread-line {
+  stroke: var(--ink);
+  stroke-opacity: 0.18;
+  stroke-width: 1;
+}
+
+/* 竖刻线：高的是多数派，最高的那根用满色点出来 */
+html[data-ui='v2'][data-mag] .mp-fig-tick {
+  fill: color-mix(in srgb, var(--mag-sec, var(--seal)) 45%, transparent);
+}
+
+html[data-ui='v2'][data-mag] .mp-fig-tick.is-peak {
+  fill: var(--mag-sec, var(--seal));
+}
+
+/* 完成度方格：没定的留空框，定了的填实 */
+html[data-ui='v2'][data-mag] .mp-fig-check {
+  fill: none;
+  stroke: color-mix(in srgb, var(--ink) 22%, transparent);
+  stroke-width: 1;
+}
+
+html[data-ui='v2'][data-mag] .mp-fig-check.is-done {
+  fill: var(--mag-sec, var(--seal));
+  stroke: var(--mag-sec, var(--seal));
+}
+
+/* 伏笔方点：线型即状态 —— 已收实心、推进中空心描边、已埋半透明、
+   计划中虚线、弃置极淡。一眼就能读出「这条线走到哪一步了」。 */
+html[data-ui='v2'][data-mag] .mp-fig-thread {
+  stroke-width: 1.2;
+}
+
+html[data-ui='v2'][data-mag] .mp-fig-thread.is-resolved {
+  fill: var(--mag-sec, var(--seal));
+  stroke: var(--mag-sec, var(--seal));
+}
+
+html[data-ui='v2'][data-mag] .mp-fig-thread.is-progressing {
+  fill: none;
+  stroke: var(--mag-sec, var(--seal));
+  stroke-width: 1.8;
+}
+
+html[data-ui='v2'][data-mag] .mp-fig-thread.is-planted {
+  fill: color-mix(in srgb, var(--mag-sec, var(--seal)) 45%, transparent);
+  stroke: none;
+}
+
+html[data-ui='v2'][data-mag] .mp-fig-thread.is-planned {
+  fill: none;
+  stroke: var(--ink);
+  stroke-opacity: 0.35;
+  stroke-dasharray: 2 1.5;
+}
+
+html[data-ui='v2'][data-mag] .mp-fig-thread.is-abandoned {
+  fill: none;
+  stroke: var(--ink);
+  stroke-opacity: 0.2;
+}
+
+/* ==========================================================================
+ * 紧凑铭牌（.mag-plate.is-compact）—— 浮层里的页头
+ *
+ * 页面级用一个「大版铭牌」（竖排栏目名 + 自绘徽记 + 期刊化读数，见上）；
+ * 对话框与侧栏面板里放不下那一套，于是给它一个**同族但更轻**的版本：
+ *   · 左缘 3px 栏目色竖条代替徽记（省掉 26px 宽度）
+ *   · 标题 22px 高对比宋（页面级是 40px 超粗黑）
+ *   · 没有竖排英文名、没有大数字、没有数据图形
+ *   · 收口线 1px（页面级 3px）—— 同一族，轻一档
+ * 全站 9 处浮层页头共用这一套（见 components/ui/PageHead.tsx）。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .mag-plate.is-compact {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  padding: 0 0 12px 15px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line2);
+}
+
+html[data-ui='v2'][data-mag] .mag-plate.is-compact::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 2px;
+  bottom: 13px;
+  width: 3px;
+  background: var(--mag-sec, var(--seal));
+}
+
+html[data-ui='v2'][data-mag] .mag-plate.is-compact .mp-main {
+  flex: 1;
+  min-width: 0;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate.is-compact .mp-kicker {
+  font-size: 10.5px;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate.is-compact .mp-name {
+  margin: 5px 0 0;
+  font-family: var(--mag-font-title);
+  /* 第十五轮：字重 600 —— 思源宋是可变字体，浮层页头虽小（22px）
+     也要有「海报标题」的分量，不能是一根细宋。 */
+  font-weight: 600;
+  font-size: 22px;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate.is-compact .mp-lede {
+  margin: 7px 0 0;
+  max-width: 56ch;
+  font-size: 12.5px;
+  line-height: 1.72;
+}
+
+html[data-ui='v2'][data-mag] .mag-plate.is-compact .mp-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+/* 文献结构（PlateLibrary）：资料方块 / 切片刻线 / 「还有多少」的小字 */
+html[data-ui='v2'][data-mag] .mp-fig-doc {
+  fill: var(--mag-sec, var(--seal));
+  fill-opacity: 0.85;
+}
+
+html[data-ui='v2'][data-mag] .mp-fig-chunk {
+  fill: color-mix(in srgb, var(--mag-sec, var(--seal)) 40%, transparent);
+}
+
+html[data-ui='v2'][data-mag] .mp-fig-more {
+  fill: var(--muted);
+  font-family: var(--mag-font-num);
+  font-size: 10px;
+}
+
+/* ---- 右侧操作组：与期刊化读数同列，一起贴住版心右缘 ---- */
+html[data-ui='v2'][data-mag] .mag-plate .mp-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}

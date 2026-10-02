@@ -22,6 +22,7 @@ import {
 import { Input } from '../ui/Input'
 import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
+import PagePlate from '../layout/v2/magazine/PagePlate'
 import { Textarea } from '../ui/Textarea'
 import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../project-session-gate'
 import { useProjectStore } from '../../stores/project-store'
@@ -213,26 +214,34 @@ const SEVERITY_META: Record<ReviewIssue['severity'], {
   colorClass: string
   bgClass: string
   borderClass: string
+  /** v2 语义档位：底色与描边由 v2-atomic.css 从语义色淡染
+   *  （问题卡片走 .v2-tone-soft、图例小标走 .v2-status-badge）。
+   *  v1 下这两个钩子没有定义，元素仍走上面那套 Tailwind 原色，逐像素不变。 */
+  tone: string
 }> = {
   unknown: {
     colorClass: 'text-[var(--color-text-muted)]',
     bgClass: 'bg-[var(--color-bg-elevated)]',
     borderClass: 'border-[var(--color-border)]',
+    tone: 'muted',
   },
   error: {
     colorClass: 'text-[var(--color-error-text)]',
     bgClass: 'bg-red-500/10',
     borderClass: 'border-red-500/30',
+    tone: 'error',
   },
   warning: {
     colorClass: 'text-[var(--color-warning-text)]',
     bgClass: 'bg-yellow-500/10',
     borderClass: 'border-yellow-500/30',
+    tone: 'warning',
   },
   pass: {
     colorClass: 'text-[var(--color-success-text)]',
     bgClass: 'bg-green-500/10',
     borderClass: 'border-green-500/30',
+    tone: 'success',
   },
 }
 
@@ -761,41 +770,64 @@ function ReviewReportSession({
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-2xl mx-auto px-6 py-4">
-        {/* 统计栏 */}
-        <div className="flex items-center gap-4 mb-4 pb-3 border-b border-[var(--color-border)]">
-          <h3 className="text-base font-bold text-[var(--color-text)]">{text('审稿报告', 'Review report')}</h3>
-          <div className="flex items-center gap-3 text-xs ml-auto">
-            {errorCount > 0 && (
-              <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-red-500/20 text-[var(--color-error-text)]">
-                <SeverityIcon severity="error" /> {errorCount} {errorCopy.countLabel}
+      {/* 页头统一提到内容区顶层：与其它子菜单同一位置、同一宽度（先生：整整齐齐） */}
+      <div className="pagehead-strip">
+        <PagePlate
+          section="project"
+          /* 读数就是这一页的全部要点：一共查出多少条、其中多少是硬伤。
+             这里不硬塞数据图形 —— 两个数字用文字比画成两根刻线更清楚（图必有义）。 */
+          metric={{
+            label: text('问题', 'ISSUES'),
+            value: String(items.length),
+          }}
+          facts={text(
+            `${errorCount} 处错误 · ${warningCount} 处警告`,
+            `${errorCount} errors · ${warningCount} warnings`,
+          )}
+          kicker={text('REVIEW · 审稿报告', 'REVIEW')}
+          title={text('审稿报告', 'Review report')}
+          description={text(
+            '逐条阅读本次审稿发现的问题，确认要修的部分后据此发起修稿',
+            'Read every reported issue, confirm the ones to fix, then start a revision from them.',
+          )}
+          actions={(
+            <div className="flex items-center gap-3 text-xs">
+              {errorCount > 0 && (
+                <span className="v2-status-badge flex items-center gap-1 px-2 py-0.5 rounded bg-red-500/20 text-[var(--color-error-text)]" data-tone="error">
+                  <SeverityIcon severity="error" /> {errorCount} {errorCopy.countLabel}
+                </span>
+              )}
+              {warningCount > 0 && (
+                <span className="v2-status-badge flex items-center gap-1 px-2 py-0.5 rounded bg-yellow-500/20 text-[var(--color-warning-text)]" data-tone="warning">
+                  <SeverityIcon severity="warning" /> {warningCount} {warningCopy.countLabel}
+                </span>
+              )}
+              {/* 上游 1.1.0：证据不足的审稿项单列「待核实」，既不当作通过，也不默认纳入修稿 */}
+              {unknownCount > 0 && (
+                <span className="v2-status-badge flex items-center gap-1 px-2 py-0.5 rounded text-[var(--color-text-muted)]" data-tone="muted">
+                  <SeverityIcon severity="unknown" /> {unknownCount} {text('待核实', 'unverified')}
+                </span>
+              )}
+              <span className="v2-status-badge flex items-center gap-1 px-2 py-0.5 rounded bg-green-500/20 text-[var(--color-success-text)]" data-tone="success">
+                <SeverityIcon severity="pass" /> {passCount} {passCopy.countLabel}
               </span>
-            )}
-            {warningCount > 0 && (
-              <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-yellow-500/20 text-[var(--color-warning-text)]">
-                <SeverityIcon severity="warning" /> {warningCount} {warningCopy.countLabel}
-              </span>
-            )}
-            {unknownCount > 0 && (
-              <span className="flex items-center gap-1 text-[var(--color-text-muted)]">
-                <SeverityIcon severity="unknown" /> {unknownCount} {text('待核实', 'unverified')}
-              </span>
-            )}
-            <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-green-500/20 text-[var(--color-success-text)]">
-              <SeverityIcon severity="pass" /> {passCount} {passCopy.countLabel}
-            </span>
-            {/* 图例帮助按钮 */}
-            <button
-              className="flex items-center justify-center rounded-full hover:bg-[var(--color-hover)] transition-colors"
-              style={{ width: 22, height: 22 }}
-              onClick={() => setShowLegend(!showLegend)}
-              title={text('颜色说明', 'Color legend')}
-            >
-              <HelpCircle size={14} style={{ color: 'var(--color-text-muted)' }} />
-            </button>
-          </div>
-        </div>
+              {/* 图例帮助按钮 */}
+              <button
+                className="flex items-center justify-center rounded-full hover:bg-[var(--color-hover)] transition-colors"
+                style={{ width: 22, height: 22 }}
+                onClick={() => setShowLegend(!showLegend)}
+                title={text('颜色说明', 'Color legend')}
+              >
+                <HelpCircle size={14} style={{ color: 'var(--color-text-muted)' }} />
+              </button>
+            </div>
+          )}
+        />
+      </div>
 
+      {/* 先生：正文栏里各子菜单的内容宽度统一以「剧情线」计划清单的 mx-auto max-w-5xl 为准；
+          左右内距统一 px-8，才能与上方标头的 32px 左边缘连成一条线 */}
+      <div className="mx-auto max-w-5xl px-8 pb-4">
         {/* 颜色图例说明 */}
         {showLegend && (
           <div
@@ -811,10 +843,13 @@ function ReviewReportSession({
               const copy = severityCopy(sev, text)
               return (
                 <div key={sev} className="flex items-center gap-2">
-                  <span className={cn(
-                    'inline-flex items-center gap-1 px-2 py-0.5 rounded',
-                    meta.bgClass, meta.colorClass
-                  )}>
+                  <span
+                    className={cn(
+                      'v2-status-badge inline-flex items-center gap-1 px-2 py-0.5 rounded',
+                      meta.bgClass, meta.colorClass
+                    )}
+                    data-tone={meta.tone}
+                  >
                     <SeverityIcon severity={sev} /> {copy.label}
                   </span>
                   <span style={{ color: 'var(--color-text-secondary)' }}>
@@ -877,9 +912,10 @@ function ReviewReportSession({
                       <div
                         key={item.id}
                         className={cn(
-                          'px-3 py-2 rounded-md border text-xs leading-relaxed',
+                          'v2-tone-soft px-3 py-2 rounded-md border text-xs leading-relaxed',
                           meta.borderClass, meta.bgClass
                         )}
+                        data-tone={meta.tone}
                       >
                         <div className="flex items-start gap-2">
                           <SeverityIcon severity={item.severity} />
@@ -1232,7 +1268,11 @@ function ConfirmedRevisionDialog({ snapshot, writingLanguage, onClose, onStart }
     <Dialog open onOpenChange={(open) => {
       if (!open && !starting) onClose()
     }}>
-      <DialogContent className="max-w-[520px]">
+      <DialogContent
+        className="max-w-[520px]"
+        /* 先生：这里带着刚勾好的审稿项，误点蒙版关掉就得重新过一遍清单。 */
+        onPointerDownOutside={(event) => event.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles size={15} className="text-[var(--color-accent)]" />

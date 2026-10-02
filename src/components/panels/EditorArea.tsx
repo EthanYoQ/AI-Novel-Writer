@@ -1,4 +1,4 @@
-import { X, FileText, Settings, Users, ArrowLeftRight, MoreHorizontal, BookOpen, History, ClipboardCheck, Globe, Save, ChevronLeft, ChevronRight, PenTool, Check } from 'lucide-react'
+import { X, FileText, Settings, Users, Network, ArrowLeftRight, MoreHorizontal, BookOpen, History, ClipboardCheck, Globe, Compass, Save, ChevronLeft, ChevronRight, PenTool, Check, StickyNote } from 'lucide-react'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { ContextMenu, type ContextMenuEntry } from '../ui/ContextMenu'
 import {
@@ -8,15 +8,19 @@ import { Button } from '../ui/Button'
 import CodeMirrorEditor from '../editor/CodeMirrorEditor'
 import NovelConfigEditor from '../editor/NovelConfigEditor'
 import CharacterEditor from '../editor/CharacterEditor'
+import RelationsEditor from '../editor/RelationsEditor'
 import ChapterCardEditor from '../editor/ChapterCardEditor'
 import WorldBuildingEditor from '../editor/WorldBuildingEditor'
+import WorldSettingEditor from '../editor/WorldSettingEditor'
 import ArchFileViewer from '../editor/ArchFileViewer'
 import DraftEditor from '../editor/DraftEditor'
 import VersionHistory from '../editor/VersionHistory'
 import ReviewReport from '../editor/ReviewReport'
 import NarrativeThreadEditor from '../editor/NarrativeThreadEditor'
 import ThreeWayMerge from '../editor/ThreeWayMerge'  // 保留引用以防其他入口使用
-import WelcomePage from '../pages/WelcomePage'
+import WelcomePageLegacy from '../pages/WelcomePage'
+import WelcomePageV2 from '../pages/v2/WelcomePageV2'
+import { useUiVersionStore, isModernShell } from '../../stores/ui-version-store'
 import KnowledgeOverview from '../pages/KnowledgeOverview'
 import { useProjectStore } from '../../stores/project-store'
 import { registerEditorExitSaveHandler, useEditorStore, type EditorTab } from '../../stores/editor-store'
@@ -35,6 +39,10 @@ import {
 } from '../project-session-gate'
 
 import { savePhysicalChapterForSession } from './editor-area-physical-save'
+import EditorTabStripV2 from './editor-chrome/EditorTabStripV2'
+import { syncRailForTab } from '../layout/v2/rail-routing'
+import { sameProjectPathKey } from '../../shared/project-session-context'
+import StickyNoteEditor from '../editor/StickyNoteEditor'
 import '../editor/novel-editor.css'
 
 // ─── 正文章节编辑器包装层（含字数信息栏） ─────────────────────────────────────────────
@@ -126,13 +134,21 @@ function ProseEditorWrapper({
         </div>
       </div>
 
-      {/* 编辑器主体 */}
-      <div className="flex-1 overflow-hidden">
+      {/*
+        编辑器主体 —— 与草稿的 DraftEditor 逐项对齐（先生：完全一样处理）。
+
+        原先这里有三处与草稿不同，正是不写字的祸根：
+          · 缺 `relative`：CodeMirror 内部那层 `absolute inset-0` 找不到定位祖先；
+          · 给 CodeMirrorEditor 传了 key：让它随 tab 身份反复重建；
+          · 没显式传 editable：与草稿走的是两条分支。
+        现在三项都照草稿来 —— 草稿怎么写，这里就怎么写。
+      */}
+      <div className="flex-1 overflow-hidden relative">
         <CodeMirrorEditor
-          key={tab.id}
           mode="prose"
           content={tab.content ?? ''}
           filePath={tab.filePath}
+          editable
           hideStatusBar
           onCharCountChange={setWordCount}
           onChange={(text) => {
@@ -162,6 +178,16 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
   const closeTab = useEditorStore(s => s.closeTab)
   const setActiveTab = useEditorStore(s => s.setActiveTab)
   const sidebarView = useLayoutStore((s) => s.sidebarView)
+  const activeRailItem = useLayoutStore((s) => s.activeRailItem)
+  /**
+   * 界面版本必须在所有 Hooks 之前定下来：现代外壳（v2 墨纸书斋 / v3 时尚杂志）
+   * 的标签栏回调、栏目同步都要用它，而这些回调定义在下面一堆 useCallback /
+   * useEffect 里。
+   */
+  const uiVersion = useUiVersionStore((s) => s.uiVersion)
+  const isV2 = isModernShell(uiVersion)
+  const focusMode = useLayoutStore((s) => s.focusMode)
+  const toggleFocusMode = useLayoutStore((s) => s.toggleFocusMode)
 
 
 
@@ -173,6 +199,36 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
   useEffect(() => {
     const projectPath = currentProject?.path
     if (!projectPath) return
+
+    /**
+     * ① 切到另一部作品时，把上一部作品留下的标签一并关掉。
+     *
+     * 先生：在书架上点了另一本书之后，上一本书的角色 / 知识库 / 伏笔等面板都要关闭，
+     * 不能跟着新书留在标签栏上（否则看起来像串了书）。
+     */
+    const staleProjects = new Set<string>()
+    for (const tab of useEditorStore.getState().tabs) {
+      if (tab.projectKey && !sameProjectPathKey(tab.projectKey, projectPath)) {
+        staleProjects.add(tab.projectKey)
+      }
+    }
+    for (const staleKey of staleProjects) {
+      useEditorStore.getState().clearProjectTabs(staleKey)
+    }
+
+    /**
+     * ② 打开作品即落到「目录」栏目上。
+     *
+     * 先生：目录继承书架、是第二个位。用户通常是从书架点书进来的，此刻栏目还停在
+     * 书架上，正文栏会继续显示书架、看不到刚打开的作品 —— 这里把它带到目录，
+     * 正文栏随之显示这部作品的小说配置。
+     */
+    useLayoutStore.getState().syncRailForPage('project', 'project')
+
+    /**
+     * ③ 激活这部作品自己的配置 Tab（既有行为：openFile 会复用同项目的配置 Tab，
+     *    并保留其它项目的未保存 Tab）。
+     */
     openFile({
       id: 'config',
       name: useLocaleStore.getState().text('小说配置', 'Novel configuration'),
@@ -181,14 +237,18 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
     })
   }, [currentProject?.path, openFile])
 
-  // 防御性兜底：tabs 有内容但 activeTabId 无效时，激活第一个 tab
+  // 防御性兜底：tabs 有内容但 activeTabId 无效时，激活第一个 tab。
+  // 书架栏目除外 —— 这是「栏目首页不占标签」的例外：此时中央就该是书架，
+  // 若在这里替用户挑一个标签激活，点书架会被立刻弹回某个页面，并与栏目同步
+  // 来回打架（先生实测表现为「回不去书架、软件变卡」）。
   const activeTab = tabs.find((t) => t.id === activeTabId)
   useEffect(() => {
+    if (isV2 && activeRailItem === 'home') return
     if (tabs.length > 0 && !activeTab) {
       setActiveTab(tabs[0].id)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabs.length, activeTab])
+  }, [tabs.length, activeTab, isV2, activeRailItem])
 
   // Tab 条自动滚动到当前活跃 Tab
   const tabBarRef = useRef<HTMLDivElement>(null)
@@ -198,6 +258,29 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
       activeTabRef.current.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })
     }
   }, [activeTabId])
+
+  /**
+   * 激活标签并同步侧栏语境。
+   *
+   * 对齐 demo 的 clickTab：点页签不只是换纸面，还要把书脊语境带过去，
+   * 避免出现「左侧高亮一个栏目、中央显示另一个页面」。v1 不做这件事（经典界面
+   * 的侧栏与正文本来就是两套独立路由），所以同步逻辑在 rail-routing 里自带版本判断。
+   */
+  /* eslint-disable react-hooks/preserve-manual-memoization -- setActiveTab 来自 zustand store，引用稳定，React Compiler 误判为可变更依赖 */
+  const activateTab = useCallback((tabId: string) => {
+    setActiveTab(tabId)
+    if (isV2) syncRailForTab(tabId)
+  }, [isV2, setActiveTab])
+  /* eslint-enable react-hooks/preserve-manual-memoization */
+
+  /**
+   * 焦点变化（含关闭标签后的自动转移、AI 生成完成自动开页）都要让栏目跟上，
+   * 否则书脊高亮会停留在上一个页面所属的栏目。
+   */
+  useEffect(() => {
+    if (!isV2) return
+    syncRailForTab(activeTabId)
+  }, [isV2, activeTabId])
 
   /** 点击左右箭头时切换到上/下一个 Tab */
   const switchTab = useCallback((direction: 'left' | 'right') => {
@@ -209,8 +292,8 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
     } else {
       nextIndex = currentIndex >= tabs.length - 1 ? 0 : currentIndex + 1
     }
-    setActiveTab(tabs[nextIndex].id)
-  }, [tabs, activeTabId, setActiveTab])
+    activateTab(tabs[nextIndex].id)
+  }, [tabs, activeTabId, activateTab])
 
   // ===== 三个点菜单状态 =====
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
@@ -414,10 +497,52 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
     ]
   }, [tabs, activeTabId, tryCloseTab, tryBatchClose, setActiveTab, text])
 
-  // ===== 条件渲染 =====
+  /**
+   * 欢迎页分流：v2 走「墨纸书斋」书架首页（腊梅底 + 印章 Hero + 拟真书柜），
+   * v1 保持经典欢迎页。两者的 props 形状一致，所以后续两处调用点无需改动。
+   */
+  const WelcomePage = isV2 ? WelcomePageV2 : WelcomePageLegacy
+
+  /**
+   * ===== v2：正文栏 = 统一标签容器 =====
+   *
+   * demo 的规则只有一条（renderEditBody 注释）：中央纸面 = activeTab 指向的页面，
+   * 书架栏目除外。人物档案 / 知识库 / 关系图 / 世界词条 / 伏笔一律以标签承载，
+   * 不再存在盖在标签栏上面的整页子面板。
+   *
+   * 未打开项目时仍是整页书架 —— 没有项目就没有标签可言，这一点与经典界面一致。
+   */
+  /**
+   * v2 的书架首页：正文栏的兜底页面。
+   *
+   * 两条规则合起来就是先生要的：
+   *  · 点书脊上的「书架」→ 任何栏目下都能回到首页（判定依据是栏目，不是有没有项目）
+   *  · 还没打开作品时，无论点哪个栏目，正文栏都**留在首页**，不跟着栏目跳 ——
+   *    栏目只切侧栏的内容与高亮（侧栏显示「图标 + 请先打开项目」）
+   */
+  if (isV2 && (activeRailItem === 'home' || !currentProject)) {
+    return (
+      <WelcomePage
+        onNewProject={() => {
+          useLayoutStore.getState().openNewProject()
+        }}
+        onOpenProject={async () => {
+          const folder = await ipc.invoke('dialog:select-folder')
+          if (folder) {
+            useProjectStore.getState().openProject(folder)
+          }
+        }}
+        onImportNovel={() => {
+          useLayoutStore.getState().openImportNovel()
+        }}
+      />
+    )
+  }
+
+  // ===== 以下整页分流只服务经典界面（v1），v2 一律走标签容器 =====
 
   // 侧栏为「主页」时，中间区域显示欢迎页
-  if (sidebarView === 'home') {
+  if (!isV2 && sidebarView === 'home') {
     return (
       <WelcomePage
         onNewProject={() => {
@@ -437,7 +562,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
   }
 
   // 侧栏为「角色管理」时，中间区域固定展示角色编辑器（跳过 Tab 系统）
-  if (sidebarView === 'characters') {
+  if (!isV2 && sidebarView === 'characters') {
     return (
       <div
         className="skin-workspace-page w-full h-full flex flex-col overflow-hidden"
@@ -449,11 +574,17 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
   }
 
   // 侧栏为「知识库」时，中间区域固定展示向量数据库查询界面（跳过 Tab 系统）
-  if (sidebarView === 'knowledge') {
+  if (!isV2 && sidebarView === 'knowledge') {
     return <KnowledgeOverview />
   }
 
-  // 未打开项目时显示欢迎页
+  /**
+   * 未打开项目时显示欢迎页。
+   *
+   * 这一步对 v2 同样成立：v2 的无项目情形已在上面短路成整页书架，走到这里的 v2
+   * 一定有项目。保留无条件形式是为了让 TypeScript 收窄 currentProject ——
+   * 下面的渲染分派全部依赖它非空。
+   */
   if (!currentProject) {
     return (
       <WelcomePage
@@ -472,7 +603,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
   }
 
   // 有项目但没有打开的 Tab
-  if (tabs.length === 0) {
+  if (!isV2 && tabs.length === 0) {
     return (
       <div
         className="skin-workspace-page w-full h-full flex flex-col overflow-hidden"
@@ -494,19 +625,60 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
   const TabIcon = ({ type }: { type: EditorTab['type'] }) => {
     if (type === 'config') return <Settings size={14} />
     if (type === 'character') return <Users size={14} />
+    if (type === 'relationship-graph') return <Network size={14} />
     if (type === 'diff') return <ArrowLeftRight size={14} />
     if (type === 'chapter-card') return <BookOpen size={14} />
     if (type === 'world-building') return <Globe size={14} />
+    // 世界观设定（书脊「世界」按钮）与故事架构是两页，图标也分开，免得两个标签长得一样。
+    if (type === 'world-setting') return <Compass size={14} />
     if (type === 'version-history') return <History size={14} />
     if (type === 'review-report') return <ClipboardCheck size={14} />
+    if (type === 'sticky-note') return <StickyNote size={14} />
     return <FileText size={14} />
   }
 
+  /** v2 空页提示（demo 的 emptyPane 按栏目给下一步） */
+  const v2EmptyHint = sidebarView === 'characters'
+    ? text('在左侧人物列表中选择一位角色，打开她的档案', 'Pick a character on the left to open her profile')
+    : sidebarView === 'knowledge'
+      ? text('在左侧知识库中选择一篇文档', 'Pick a document in the library on the left')
+      : text('在左侧目录中点开一章开始写作', 'Open a chapter from the contents on the left to start writing')
+
   return (
     <div
-      className="skin-workspace-page w-full h-full flex flex-col overflow-hidden"
-      style={{ backgroundColor: 'var(--color-editor-bg)' }}
+      className={isV2
+        ? 'skin-workspace-page v2-editor-page w-full h-full flex flex-col overflow-hidden'
+        : 'skin-workspace-page w-full h-full flex flex-col overflow-hidden'}
+      style={isV2 ? undefined : { backgroundColor: 'var(--color-editor-bg)' }}
     >
+      {/*
+        v2 标签栏：demo 的 .tabbar 真实 DOM（shell.css 原生类名），
+        不再用内联样式 + 结构选择器去模拟。
+      */}
+      {isV2 && (
+        <EditorTabStripV2
+          tabs={tabs}
+          activeTabId={activeTabId}
+          focusMode={focusMode}
+          onActivate={activateTab}
+          onClose={tryCloseTab}
+          onContextMenu={(tabId, event) => {
+            activateTab(tabId)
+            setTabMenu({ tabId, position: { x: event.clientX, y: event.clientY } })
+          }}
+          onPrev={() => switchTab('left')}
+          onNext={() => switchTab('right')}
+          onOpenList={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect()
+            setMoreMenuPosition({ x: rect.right - 200, y: rect.bottom + 4 })
+            setMoreMenuOpen(true)
+          }}
+          onToggleFocus={toggleFocusMode}
+        />
+      )}
+
+      {!isV2 && (
+      <>
       {/* Tab 条：左右箭头 + 可横向滚动区域 + 三个点菜单 */}
       <div
         className="no-select flex items-center flex-shrink-0"
@@ -622,11 +794,32 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
           </button>
         </div>
       </div>
+      </>
+      )}
 
+      {/* 编辑区主体：v2 用 demo 的 .edit-body 语义容器（滚动交给各页面自己管） */}
+      <div className={isV2 ? 'edit-body' : 'flex-1 overflow-hidden'}>
+        {/*
+          v2 的书架栏目是「栏目首页」：它不占标签，中央直接显示书架
+          （对齐 demo：S.spine==='home' 时 renderEditBody 先短路到书架）。
+        */}
+        {isV2 && sidebarView === 'home' && (
+          <WelcomePage
+            onNewProject={onNewProject}
+            onOpenProject={async () => {
+              const folder = await ipc.invoke('dialog:select-folder')
+              if (folder) {
+                useProjectStore.getState().openProject(folder)
+              }
+            }}
+            onImportNovel={() => {
+              useLayoutStore.getState().openImportNovel()
+            }}
+          />
+        )}
 
-
-      {/* 编辑区主体 */}
-      <div className="flex-1 overflow-hidden">
+        {(!isV2 || sidebarView !== 'home') && (
+        <>
         {activeTab?.type === 'chapter' && activeTab.projectKey === currentProject.path && (
           activeTab.filePath?.startsWith('vela://draft/')
           || activeTab.filePath?.startsWith('vela://manuscript/')
@@ -698,6 +891,23 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
         {activeTab?.type === 'config' && activeTab.projectKey && (
           <NovelConfigEditor key={activeTab.id} projectKey={activeTab.projectKey} />
         )}
+        {/*
+          便利贴：先生 2026-09-20 定的做法 —— 「看下草稿箱的编辑器怎么处理的，
+          我们完全一样处理」。所以它由 StickyNoteEditor 承载，那个组件逐行照
+          DraftEditor 的编辑器部分写（顶栏结构 / 编辑区 relative / 保存按钮常驻
+          / CodeMirror 不传 key 且显式 editable），只剥掉修稿审稿定稿这些会写
+          创作事实的按钮 —— 便利贴不参与任何创作链路。
+        */}
+        {activeTab?.type === 'sticky-note'
+          && activeTab.projectKey === currentProject.path
+          && activeTab.filePath && (
+          <StickyNoteEditor
+            key={activeTab.id}
+            tabId={activeTab.id}
+            filePath={activeTab.filePath}
+            content={activeTab.content ?? ''}
+          />
+        )}
         {activeTab?.type === 'outline' && (
           <div className="h-full overflow-y-auto p-6">
             <pre
@@ -711,6 +921,13 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
         {activeTab?.type === 'character' && activeTab.projectKey && (
           <CharacterEditor key={activeTab.id} projectKey={activeTab.projectKey} />
         )}
+        {/*
+          人物关系图谱：和人物档案平级的独立标签（先生：塞在档案里会回不去档案）。
+          v2 渲染移植自 demo 的 RelationMap，v1 仍是 Canvas 版 —— 分流在组件内部。
+        */}
+        {activeTab?.type === 'relationship-graph' && activeTab.projectKey && (
+          <RelationsEditor key={activeTab.id} projectKey={activeTab.projectKey} />
+        )}
         {activeTab?.type === 'chapter-card' && activeTab.projectKey && (
           <ChapterCardEditor
             key={activeTab.id}
@@ -721,6 +938,15 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
         {activeTab?.type === 'world-building' && activeTab.projectKey && (
           <WorldBuildingEditor key={activeTab.id} projectKey={activeTab.projectKey} />
         )}
+        {/*
+          世界观设定：只由书脊「世界」按钮打开（先占位页）。
+          先生：它和上面的故事架构是两回事 —— 故事架构是四段式架构文件（入口在目录），
+          世界观设定将来放世界观、势力等设定条目。原先「世界」按钮借用了
+          WorldBuildingEditor，等于把故事架构当成世界观在弹，现已拆开。
+        */}
+        {activeTab?.type === 'world-setting' && (
+          <WorldSettingEditor key={activeTab.id} />
+        )}
         {activeTab?.type === 'narrative-thread' && activeTab.projectKey === currentProject.path && (
           <NarrativeThreadEditor
             key={activeTab.id}
@@ -728,6 +954,13 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
             initialView={activeTab.narrativeThreadView ?? 'plans'}
             viewRequest={activeTab.narrativeThreadViewRequest}
           />
+        )}
+        {/*
+          知识库：v2 之前它是一块盖在正文区上的整页子面板（sidebarView==='knowledge'），
+          现在和人物档案一样以标签承载 —— 点左侧导航即开页，切走再回来内容还在。
+        */}
+        {activeTab?.type === 'knowledge' && activeTab.projectKey === currentProject.path && (
+          <KnowledgeOverview />
         )}
         {activeTab?.type === 'arch-file' && activeTab.filePath && activeTab.projectKey && (
           <ArchFileViewer
@@ -860,7 +1093,19 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
             </div>
           </DialogContent>
         </Dialog>
+        </>
+        )}
 
+        {/*
+          空页提示（对齐 demo 的 emptyPane）：栏目不同，下一步该去哪也不同。
+          产品不替用户自作主张开页面，只告诉他这一栏的入口在哪。
+        */}
+        {isV2 && sidebarView !== 'home' && !activeTab && (
+          <div className="empty-center">
+            <PenTool size={34} strokeWidth={1.2} aria-hidden="true" />
+            <span className="big">{v2EmptyHint}</span>
+          </div>
+        )}
       </div>
 
       {/* Tab 右键菜单 */}

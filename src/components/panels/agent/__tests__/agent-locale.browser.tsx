@@ -78,8 +78,6 @@ describe('Agent reachable UI locale', () => {
 
     expect(container.textContent).toContain('Commands')
     expect(container.textContent).toContain('Show available commands and features')
-    expect(container.textContent).toContain('Reference context')
-    expect(container.textContent).toContain('Story architecture')
     expect(container.textContent).toContain('Coming soon')
     expect(container.textContent).toContain('AI Writing Assistant')
 

@@ -409,7 +409,11 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-[540px]">
+      <DialogContent
+        className="max-w-[540px]"
+        /* 先生：章节参数与模型选择填到一半，误点蒙版关掉就得重配。 */
+        onPointerDownOutside={(event) => event.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles size={16} className="text-[var(--color-accent)]" />
@@ -418,12 +422,12 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
           <DialogDescription>
             {text('配置章节参数后启动 AI 创作流水线', 'Configure the chapter, then start the AI writing pipeline.')}
             {loadedFromBlueprint && (
-              <span className="ml-2 text-[0.7rem] px-1.5 py-0.5 rounded-full bg-green-500/15 text-[var(--color-success-text)]">
+              <span className="v2-status-badge ml-2 text-[0.7rem] px-1.5 py-0.5 rounded-full bg-green-500/15 text-[var(--color-success-text)]" data-tone="success">
                 {text('已从章节蓝图预填', 'Filled from chapter blueprint')}
               </span>
             )}
             {loadedFromHistory && !loadedFromBlueprint && (
-              <span className="ml-2 text-[0.7rem] px-1.5 py-0.5 rounded-full" style={{ backgroundColor: 'rgba(var(--color-accent-rgb), 0.15)', color: 'var(--color-accent)' }}>
+              <span className="v2-status-badge ml-2 text-[0.7rem] px-1.5 py-0.5 rounded-full" data-tone="accent">
                 {text('已自动填入上次参数', 'Last-used settings restored')}
               </span>
             )}
@@ -589,7 +593,7 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
             </DialogFooter>
             {/* 前置校验失败提示（呈现在 Footer 下方） */}
             {(authorityError ?? guardError) && (
-              <div className="mx-5 mb-4 flex items-start gap-2 px-3 py-2.5 rounded-lg text-xs bg-yellow-500/10 border border-yellow-500/30 text-[var(--color-warning-text)]">
+              <div className="v2-notice mx-5 mb-4 flex items-start gap-2 px-3 py-2.5 rounded-lg text-xs bg-yellow-500/10 border border-yellow-500/30 text-[var(--color-warning-text)]" data-tone="warning">
                 <AlertCircle size={13} className="flex-shrink-0 mt-0.5 text-[var(--color-warning)]" />
                 <span className="whitespace-pre-line">{authorityError ?? guardError}</span>
               </div>

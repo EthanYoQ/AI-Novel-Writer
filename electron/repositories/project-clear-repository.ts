@@ -88,6 +88,17 @@ export class ProjectClearRepository {
         const movedFiles = options.generatedText && projectPath
             ? moveGeneratedFilesToTrash(projectPath)
             : []
+        // 清空创作字段会连同 characters 表一起清掉，自定义头像（只以文件名记在
+        // 那一行里）若不删就留下永远无人引用的图片文件。
+        const avatarDirectory = options.creativeFields && projectPath
+            ? path.join(projectPath, '.vela', 'avatars')
+            : null
+        // 架构生成检查点保存着 premise / 世界观 / 情节大纲的片段与指纹。清空
+        // 创作字段后它必然与新数据库正文不一致：残留会让下一次「情节大纲续批」
+        // 直接以「检查点正文与数据库原文不一致，无法安全续写」失败。
+        const architectureCheckpoint = options.creativeFields && projectPath
+            ? path.join(projectPath, '.vela', 'partial_arch.json')
+            : null
         const cleared: ProjectClearScope[] = []
 
         try {
@@ -138,6 +149,26 @@ export class ProjectClearRepository {
 
             tx()
             removeMovedFiles(movedFiles)
+            if (avatarDirectory) {
+                // 文件删除发生在事务提交之后，无法回滚；失败时留一个孤儿目录
+                // 只占磁盘、不影响创作事实，因此不让它把已完成的清除判成失败。
+                try {
+                    fs.rmSync(avatarDirectory, { recursive: true, force: true })
+                } catch {
+                    console.warn('[Vela ProjectClear] 头像目录清理失败，已跳过。')
+                }
+            }
+            if (architectureCheckpoint) {
+                // 同样在事务提交之后：失败不回滚，但必须留下可定位的告警路径，
+                // 否则残留检查点会让「情节大纲续批」以不一致为由永久失败。
+                try {
+                    fs.rmSync(architectureCheckpoint, { force: true })
+                } catch {
+                    console.warn(
+                        `[Vela ProjectClear] 架构检查点清理失败，请手工删除：${architectureCheckpoint}`,
+                    )
+                }
+            }
             return { cleared, physicalFilesDeleted: movedFiles.length }
         } catch (error) {
             restoreMovedFiles(movedFiles)

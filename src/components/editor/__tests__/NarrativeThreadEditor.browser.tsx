@@ -277,7 +277,7 @@ describe('NarrativeThreadEditor', () => {
         plotTreeGenerator={plotTreeGenerator}
       />,
     ))
-    await vi.waitFor(() => expect(container?.textContent).toContain('请先添加章节蓝图、定稿或叙事线索'))
+    await vi.waitFor(() => expect(container?.textContent).toContain('请先添加章节蓝图、定稿或伏笔'))
 
     const generate = Array.from(container!.querySelectorAll('button'))
       .find(button => button.textContent?.includes('生成剧情树'))
@@ -677,7 +677,7 @@ describe('NarrativeThreadEditor', () => {
 
   it('creates a plan and confirms an event from a finalized chapter', async () => {
     await act(async () => root?.render(<NarrativeThreadEditor projectKey={PROJECT_PATH} />))
-    await vi.waitFor(() => expect(container?.textContent).toContain('暂无伏笔或叙事线索'))
+    await vi.waitFor(() => expect(container?.textContent).toContain('暂无伏笔'))
 
     const fields = container!.querySelectorAll<HTMLInputElement>('input')
     await act(async () => {
@@ -705,7 +705,7 @@ describe('NarrativeThreadEditor', () => {
     await vi.waitFor(() => expect(container?.textContent).toContain('门上的三道刻痕'))
 
     await act(async () => Array.from(container!.querySelectorAll('button')).find(button => button.textContent?.includes('删除'))?.click())
-    await vi.waitFor(() => expect(container?.textContent).toContain('暂无伏笔或叙事线索'))
+    await vi.waitFor(() => expect(container?.textContent).toContain('暂无伏笔'))
   })
 
   it('renders status history and actions in English after rebuilding the view', async () => {
@@ -720,7 +720,13 @@ describe('NarrativeThreadEditor', () => {
     await act(async () => root?.render(<NarrativeThreadEditor projectKey={PROJECT_PATH} />))
 
     await vi.waitFor(() => {
-      expect(container?.textContent).toContain('Plot tree & narrative threads')
+      /**
+       * 页头标题的英文文案：实现里是 `Plot tree & foreshadowing`
+       * （「剧情树**与伏笔**」的直译，与书脊栏目名 THREADS 同一套用词）。
+       * 这条断言原来写的是 `Plot tree & narrative threads` —— 那是更早一版的措辞，
+       * 与界面实际显示不一致，属于测试没跟上实现（2026-09-17 校正）。
+       */
+      expect(container?.textContent).toContain('Plot tree & foreshadowing')
       expect(container?.textContent).toContain('Progressing')
       expect(container?.textContent).toContain('Chapter 1')
       expect(container?.textContent).toContain('Confirm finalized event')

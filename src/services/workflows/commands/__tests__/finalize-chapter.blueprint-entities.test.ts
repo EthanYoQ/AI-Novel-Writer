@@ -157,6 +157,11 @@ describe('FinalizeChapterCommand blueprint character fallback', () => {
           return { success: true, updated: true }
         case 'db:character-roster-read':
           return { status: 'empty', revision: 0, entries: [] }
+        // 本章没有引用任何世界观设定 → 落袋步骤不写任何东西（设定库也是空的）。
+        case 'world-setting:list-chapter-refs':
+          return []
+        case 'world-setting:list':
+          return []
         default:
           throw new Error(`unexpected IPC: ${channel}`)
       }

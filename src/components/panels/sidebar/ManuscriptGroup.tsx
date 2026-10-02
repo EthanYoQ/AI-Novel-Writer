@@ -2,12 +2,13 @@
  * ManuscriptGroup — 正文章节折叠组（已定稿章节列表）
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { AlertTriangle, ChevronRight, ChevronDown, FileText, FolderOpen, Copy, PenTool, RotateCcw, Trash2 } from 'lucide-react'
 import type { FileNode, ProjectSessionContext } from '../../../shared/ipc-channels'
 import type { ChapterDeletionOperation } from '../../../shared/chapter-deletion'
 import { ipc } from '../../../services/ipc-client'
 import { useProjectStore } from '../../../stores/project-store'
+import { useEditorStore } from '../../../stores/editor-store'
 import { toast } from '../../ui/Toast'
 import { globalEventBus } from '../../../shared/event-bus'
 import { useLocaleStore } from '../../../stores/locale-store'
@@ -24,6 +25,12 @@ import {
   confirmLegacyKnowledgeAbsentAndContinue,
   deleteFinalizedChapter,
 } from './finalized-chapter-deletion'
+/**
+ * 「正在看的那一行」的样式表（`.active` 的底色与左缘条）。
+ * 草稿箱与便利贴早就各自 import 了它，正文章节此前只挂类、没带表 ——
+ * 一旦这两兄弟不在树上（或换了渲染顺序），这一页的选中态就会跟着消失。
+ */
+import './tree-child-indent.css'
 
 type ManuscriptFileNode = FileNode & { chapterTitle?: string }
 
@@ -101,7 +108,15 @@ async function readChapterTitle(
 // ===== 正文章节组件 =====
 
 export default function ManuscriptGroup({ files, projectPath }: { files: ManuscriptFileNode[]; projectPath: string }) {
-  const [open, setOpen] = useState(true)
+  /**
+   * 当前打开的那一页的文件路径 —— 侧栏据此点亮「正在看的那一章」。
+   * 选择器返回字符串（可能 undefined），zustand 按值比较，不会反复重渲染。
+   */
+  const activeFilePath = useEditorStore(s => (
+    s.tabs.find(tab => tab.id === s.activeTabId)?.filePath
+  ))
+  // 先生：正文章节不要一打开就全摊开，默认收起。
+  const [open, setOpen] = useState(false)
   const text = useLocaleStore(s => s.text)
   const currentProject = useProjectStore(s => s.currentProject)
   const [deletionState, setDeletionState] = useState<{
@@ -171,6 +186,20 @@ export default function ManuscriptGroup({ files, projectPath }: { files: Manuscr
 
   // 只显示正文章节（过滤掉旧的 _notes 文件）
   const chapterFiles = files.filter(f => !f.name.includes('_notes'))
+
+  /**
+   * 这一组里，有没有**正文栏正在看的那一章** —— 有就让组标题行也点亮。
+   *
+   * 先生原话：「我当前正在正文栏目查看那个项目下的内容，那么这个项目在项目结构
+   * 下的标题入口就应该做一个背景变色？来提示用户。不然用户都不知道自己在看
+   * 哪个地方的内容！」
+   *
+   * 为什么这盏灯必须落在**组标题行**上：这一组默认是收起的（先生定的「正文章节
+   * 不要一打开就全摊开」），折叠时里面的章节条目一个都不露脸 —— 只点亮条目行，
+   * 等于一行提示都没有。组标题行是折叠态下唯一还在的「方位标」。
+   */
+  const hasActiveChapter = activeFilePath !== undefined
+    && chapterFiles.some(f => f.path === activeFilePath)
 
   const fetchIncompleteDeletions = useCallback(async (projectSession: ProjectSessionContext) => {
     const requestId = ++deletionLoadSequence.current
@@ -277,7 +306,8 @@ export default function ManuscriptGroup({ files, projectPath }: { files: Manuscr
   return (
     <div>
       <div
-        className="tree-item gap-1.5 cursor-pointer select-none"
+        data-level={1}
+        className={`tree-item gap-1.5 cursor-pointer select-none${hasActiveChapter ? ' active' : ''}`}
         style={{ paddingLeft: 10 }}
         onClick={() => setOpen(v => !v)}
       >
@@ -286,7 +316,8 @@ export default function ManuscriptGroup({ files, projectPath }: { files: Manuscr
           : <ChevronRight size={12} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
         }
         <PenTool size={14} style={{ color: 'var(--color-text-muted)' }} />
-        <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>{text('正文章节', 'Manuscript chapters')}</span>
+        {/* 先生：正文章节不是最重要的项，不必加黑 —— 常规字重即可 */}
+        <span className="text-[14px]" style={{ color: 'var(--color-text)', fontWeight: 400 }}>{text('正文章节', 'Manuscript chapters')}</span>
         {chapterFiles.length > 0 && (
           <span className="ml-auto text-[0.7rem]" style={{ color: 'var(--color-text-muted)' }}>
             {text(`${chapterFiles.length} 章`, `${chapterFiles.length} chapters`)}
@@ -344,11 +375,21 @@ export default function ManuscriptGroup({ files, projectPath }: { files: Manuscr
               const displayName = getDisplay(f)
               const chapterMatch = f.name.replace(/\.[^.]+$/, '').match(/^chapter_(\d+)$/)
               const chapterNumber = chapterMatch ? Number(chapterMatch[1]) : undefined
+              /**
+               * 这一章正是当前打开的那一页？点亮它。
+               *
+               * 先生：「我当前正在正文栏目查看那个项目下的内容，那么这个项目在项目结构
+               * 下的标题入口就应该做一个背景变色？来提示用户。不然用户都不知道自己
+               * 在看哪个地方的内容！」—— 用项目里现成的 `.tree-item.active`。
+               */
+              const isActive = activeFilePath === f.path
               return (
                 <div
                   key={f.path}
-                  className="tree-item gap-1.5 cursor-pointer"
-                  style={{ paddingLeft: 30 }}
+                  data-level={2}
+                  className={`tree-item gap-1.5 cursor-pointer${isActive ? ' active' : ''}`}
+                  /** 选中色标跟着缩进走：缩进 30 → 色标落在 20（内容左缘再往左 10px）。 */
+                  style={{ paddingLeft: 30, '--row-mark-x': '20px' } as CSSProperties}
                   onClick={() => openChapterFile(f.path, displayName)}
                   onContextMenu={e => showSidebarMenu([
                     {

@@ -1,0 +1,463 @@
+/* ============================================================================
+ * 「时尚杂志」排版（v3）—— 本主题的主战场
+ *
+ * 一、要解决什么
+ *   产品全站的正文主力是 Tailwind 的 text-xs（12px，全站 346 处），
+ *   子菜单页头的眉标更是压到了 9px、说明 11.5px、按钮里的字 11px。
+ *   在 2K 屏上这一整套是「细小得看不清」，也是先生最直接的抱怨。
+ *   本文件把整套字号往上提一个档，并顺手把标题拉到与正文形成对比的尺寸。
+ *
+ * 二、为什么直接覆盖 Tailwind 工具类
+ *   Tailwind 的工具类住在 @layer utilities 里，而本文件是「无层样式」——
+ *   按 CSS 层叠规则，未分层声明的优先级高于任何 @layer，与特异性无关。
+ *   加上 html[data-ui='v2'][data-mag] 这层前缀，既压得住工具类，
+ *   又保证 v1 / v2（没有 data-mag 属性）逐像素不受影响。
+ *
+ * 三、杂志的两个呼吸点
+ *   ① 眉标（kicker）—— 小而挺、宽字距、杂志红。它是版面的「栏目索引」，
+ *      尺寸可以小，但绝不能糊：11px 配 0.2em 字距是它的下限。
+ *   ② 大标题 —— 衬线体、字距收紧、尺寸跳到正文的 2 倍以上。
+ *      「巨大的标题 vs 极小的眉标」这个落差的张力，才是杂志的味道。
+ * ========================================================================== */
+
+/* ==========================================================================
+ * 1. 根与继承
+ * ======================================================================== */
+html[data-ui='v2'] {
+  /* 标题一律走衬线。产品的 --serif 原本是 Georgia + 宋体系，
+     这里换到思源宋体优先 —— 可变字重、笔画更利落，接近时装刊的正文标题。
+     （in index.css @font-face 已注册，无需网络） */
+  /* 中文正文在屏上略松一点更好认；不改字体族，尊重先生在设置里选的界面字体 */
+  font-size: var(--mag-fs-body);
+}
+
+html[data-ui='v2'][data-mag] {
+  line-height: var(--mag-lh-ui);
+  letter-spacing: var(--mag-ls-body);
+  text-rendering: optimizeLegibility;
+}
+
+html[data-ui='v2'][data-mag] {
+  --serif: 'Noto Serif SC', 'Source Han Serif SC', Georgia, 'Songti SC', 'STSong', serif;
+}
+
+/* 标题类元素统一衬线：杂志的身份从这一条开始 */
+html[data-ui='v2'][data-mag] h1,
+html[data-ui='v2'][data-mag] h2,
+html[data-ui='v2'][data-mag] h3,
+html[data-ui='v2'][data-mag] h4 {
+  font-family: var(--serif);
+  letter-spacing: var(--mag-ls-head);
+  line-height: var(--mag-lh-head);
+  font-weight: 700;
+}
+
+/* 编辑器内部是「写作者的纸」，版式由编辑器自己管，杂志排版不越界 */
+html[data-ui='v2'][data-mag] .cm-editor h1,
+html[data-ui='v2'][data-mag] .cm-editor h2,
+html[data-ui='v2'][data-mag] .cm-editor h3,
+html[data-ui='v2'][data-mag] .monaco-editor h1,
+html[data-ui='v2'][data-mag] .monaco-editor h2,
+html[data-ui='v2'][data-mag] .monaco-editor h3,
+html[data-ui='v2'][data-mag] .cm-content,
+html[data-ui='v2'][data-mag] .cm-gutters {
+  font-family: inherit;
+  letter-spacing: normal;
+}
+
+/* ==========================================================================
+ * 2. Tailwind 文本阶梯 —— 整体上提一档
+ *
+ * 对照表（旧 → 新）：
+ *   text-[9px]   → 11.5px   最小档也不再小于 11px
+ *   text-[10px]  → 12px
+ *   text-[11px]  → 12.5px
+ *   text-xs      → 13.5px   ★ 全站主力，346 处，+12.5%
+ *   text-[12px]  → 13.5px
+ *   text-sm      → 14.5px   ★ 第二主力，90 处
+ *   text-[14px]  → 14.5px
+ *   text-base    → 16px
+ *   text-lg      → 19px
+ *   text-xl      → 22px
+ *   text-2xl     → 27px
+ *   text-3xl     → 34px
+ * 行高一并给出，避免「字放大了、行距没跟上」的拥挤。
+ * ======================================================================== */
+html[data-ui='v2'] .text-\[9px\] {
+  font-size: 11.5px;
+}
+
+html[data-ui='v2'][data-mag] .text-\[9px\] {
+  line-height: 1.45;
+}
+
+html[data-ui='v2'] .text-\[10px\] {
+  font-size: 12px;
+}
+
+html[data-ui='v2'][data-mag] .text-\[10px\] {
+  line-height: 1.45;
+}
+
+html[data-ui='v2'] .text-\[11px\] {
+  font-size: 12.5px;
+}
+
+html[data-ui='v2'][data-mag] .text-\[11px\] {
+  line-height: 1.5;
+}
+
+html[data-ui='v2'] .text-xs {
+  font-size: 13.5px;
+}
+
+html[data-ui='v2'][data-mag] .text-xs {
+  line-height: 1.55;
+}
+
+html[data-ui='v2'] .text-\[12px\] {
+  font-size: 13.5px;
+}
+
+html[data-ui='v2'][data-mag] .text-\[12px\] {
+  line-height: 1.55;
+}
+
+html[data-ui='v2'] .text-\[13px\] {
+  font-size: 14px;
+}
+
+html[data-ui='v2'][data-mag] .text-\[13px\] {
+  line-height: 1.55;
+}
+
+html[data-ui='v2'] .text-sm {
+  font-size: 14.5px;
+}
+
+html[data-ui='v2'][data-mag] .text-sm {
+  line-height: 1.6;
+}
+
+html[data-ui='v2'] .text-\[14px\] {
+  font-size: 14.5px;
+}
+
+html[data-ui='v2'][data-mag] .text-\[14px\] {
+  line-height: 1.6;
+}
+
+html[data-ui='v2'] .text-\[15px\] {
+  font-size: 15.5px;
+}
+
+html[data-ui='v2'][data-mag] .text-\[15px\] {
+  line-height: 1.6;
+}
+
+html[data-ui='v2'] .text-base {
+  font-size: 16px;
+}
+
+html[data-ui='v2'][data-mag] .text-base {
+  line-height: 1.65;
+}
+
+html[data-ui='v2'] .text-lg {
+  font-size: 19px;
+}
+
+html[data-ui='v2'][data-mag] .text-lg {
+  line-height: 1.5;
+}
+
+html[data-ui='v2'] .text-xl {
+  font-size: 22px;
+}
+
+html[data-ui='v2'][data-mag] .text-xl {
+  line-height: 1.45;
+}
+
+html[data-ui='v2'] .text-2xl {
+  font-size: 27px;
+}
+
+html[data-ui='v2'][data-mag] .text-2xl {
+  line-height: 1.35;
+}
+
+html[data-ui='v2'] .text-3xl {
+  font-size: 34px;
+}
+
+html[data-ui='v2'][data-mag] .text-3xl {
+  line-height: 1.3;
+}
+
+/* rem 写法（产品里偶有用到，如 text-[0.7rem] 的快捷键小字） */
+html[data-ui='v2'] .text-\[0\.7rem\] {
+  font-size: 12.5px;
+}
+
+html[data-ui='v2'][data-mag] .text-\[0\.7rem\] {
+  line-height: 1.5;
+}
+
+html[data-ui='v2'] .text-\[0\.75rem\] {
+  font-size: 13px;
+}
+
+html[data-ui='v2'][data-mag] .text-\[0\.75rem\] {
+  line-height: 1.5;
+}
+
+html[data-ui='v2'] .text-\[0\.8rem\] {
+  font-size: 13.5px;
+}
+
+html[data-ui='v2'][data-mag] .text-\[0\.8rem\] {
+  line-height: 1.55;
+}
+
+html[data-ui='v2'] .text-\[0\.85rem\] {
+  font-size: 14px;
+}
+
+html[data-ui='v2'][data-mag] .text-\[0\.85rem\] {
+  line-height: 1.55;
+}
+
+html[data-ui='v2'] .text-\[0\.9rem\] {
+  font-size: 15px;
+}
+
+html[data-ui='v2'][data-mag] .text-\[0\.9rem\] {
+  line-height: 1.6;
+}
+
+/* ==========================================================================
+ * 3. 子菜单页头（.pagehead）—— 全站 11 个子菜单共用，杂志化的主舞台
+ *
+ * 旧：眉标 9px / 标题 21px / 说明 11.5px，彼此挤在一起，层级几乎拉不开
+ * 新：眉标 12px 宽字距 / 标题 33px 衬线 / 说明 14px，并压一条 2px 墨色分栏线
+ * 页头下面那条线是杂志的招牌手法：它把「刊头」和「正文」明确切开，
+ * 版面立刻有了上下结构，而不是一段一段往下堆。
+ * ======================================================================== */
+html[data-ui='v2'][data-mag] .pagehead {
+  align-items: flex-end;
+  gap: 20px;
+  margin-bottom: 22px;
+  padding-bottom: 16px;
+  border-bottom: var(--mag-rule-strong);
+}
+
+/* 眉标：栏目的索引标记。小而挺 + 宽字距 + 杂志红 */
+html[data-ui='v2'] .pagehead .ph-k {
+  font-size: 12px;
+}
+
+html[data-ui='v2'][data-mag] .pagehead .ph-k {
+  font-family: var(--sans);
+  font-weight: 700;
+  letter-spacing: var(--mag-ls-kicker);
+  text-transform: uppercase;
+  line-height: 1.3;
+}
+
+html[data-ui='v2'][data-mag] .pagehead .ph-k {
+  color: var(--seal);
+  margin-bottom: 8px;
+}
+
+/* 大标题：衬线 + 收紧字距，尺寸拉到正文的两倍以上 */
+html[data-ui='v2'] .pagehead h1 {
+  font-size: 33px;
+}
+
+html[data-ui='v2'][data-mag] .pagehead h1 {
+  font-family: var(--serif);
+  font-weight: 700;
+  letter-spacing: var(--mag-ls-head);
+  line-height: var(--mag-lh-tight);
+}
+
+html[data-ui='v2'][data-mag] .pagehead h1 {
+  color: var(--ink);
+}
+
+/* 说明：比正文略大一点的导语，读起来像杂志的 deck（副题） */
+html[data-ui='v2'] .pagehead .ph-d {
+  font-size: 14px;
+}
+
+html[data-ui='v2'][data-mag] .pagehead .ph-d {
+  line-height: 1.65;
+}
+
+html[data-ui='v2'][data-mag] .pagehead .ph-d {
+  color: var(--muted);
+  margin-top: 9px;
+}
+
+html[data-ui='v2'][data-mag] .pagehead .ph-a {
+  gap: 10px;
+  align-items: center;
+}
+
+/* 页头的版心与留白：正文栏同样是 1024px，两侧边缘才能连成一条线。
+   上留白给足 —— 杂志的页头需要「抬头」的空间。 */
+html[data-ui='v2'][data-mag] .pagehead-strip {
+  padding: 30px 36px 22px;
+  max-width: 1080px;
+}
+
+/* 页头动作组：按钮高一档、字大一档、圆角收到直角，
+   与正文的按钮同源（都吃 --v2-btn-* 令牌） */
+html[data-ui='v2'] .pagehead-strip button,
+html[data-ui='v2'] .pagehead-strip .badge {
+  font-size: 13.5px;
+}
+
+html[data-ui='v2'][data-mag] .pagehead-strip button,
+html[data-ui='v2'][data-mag] .pagehead-strip .badge {
+  height: 32px;
+  min-height: 32px;
+  border-radius: var(--mag-r-hair);
+}
+
+html[data-ui='v2'][data-mag] .pagehead-strip button svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* ---- 第二套页头（.v2-pagehead 家族）----
+   产品里还有一个用钩子类渲染的页头（v2-editor-chrome.css 内），
+   规格与 .pagehead 平行。这里给它同一套杂志值，两套页头才不会各长各的。 */
+html[data-ui='v2'][data-mag] .v2-pagehead {
+  padding-bottom: 16px;
+  border-bottom: var(--mag-rule-strong);
+  margin-bottom: 22px;
+  align-items: flex-end;
+  gap: 20px;
+}
+
+html[data-ui='v2'] .v2-ph-k {
+  font-size: 12px;
+}
+
+html[data-ui='v2'][data-mag] .v2-ph-k {
+  font-family: var(--sans);
+  font-weight: 700;
+  letter-spacing: var(--mag-ls-kicker);
+  line-height: 1.3;
+}
+
+html[data-ui='v2'][data-mag] .v2-ph-k {
+  color: var(--seal);
+  margin-bottom: 8px;
+}
+
+html[data-ui='v2'] .v2-pagehead h1,
+html[data-ui='v2'] .v2-pagehead h2 {
+  font-size: 31px;
+}
+
+html[data-ui='v2'][data-mag] .v2-pagehead h1,
+html[data-ui='v2'][data-mag] .v2-pagehead h2 {
+  font-family: var(--serif);
+  font-weight: 700;
+  letter-spacing: var(--mag-ls-head);
+  line-height: var(--mag-lh-tight);
+}
+
+html[data-ui='v2'] .v2-ph-d {
+  font-size: 14px;
+}
+
+html[data-ui='v2'][data-mag] .v2-ph-d {
+  line-height: 1.65;
+}
+
+html[data-ui='v2'][data-mag] .v2-ph-d {
+  color: var(--muted);
+  margin-top: 9px;
+}
+
+html[data-ui='v2'][data-mag] .v2-ph-a {
+  gap: 10px;
+}
+
+/* ==========================================================================
+ * 4. 通用分节标题 —— 面板里的小节、卡片组的标题
+ * 用法约定（已在产品中存在，这里只统一气质）：
+ *   大节标题走衬线，小节标记走宽字距小字
+ * ======================================================================== */
+html[data-ui='v2'] .panel-title,
+html[data-ui='v2'] .section-title,
+html[data-ui='v2'] .page-title {
+  font-size: var(--mag-fs-subhead);
+}
+
+html[data-ui='v2'][data-mag] .panel-title,
+html[data-ui='v2'][data-mag] .section-title,
+html[data-ui='v2'][data-mag] .page-title {
+  font-family: var(--serif);
+  font-weight: 700;
+  letter-spacing: var(--mag-ls-head);
+  line-height: var(--mag-lh-head);
+}
+
+/* ==========================================================================
+ * 5. 正文可读性 —— 长段落的中文行距与两端对齐
+ * 只作用于阅读型容器，界面控件不受影响（控件要的是紧凑，不是舒展）
+ * ======================================================================== */
+html[data-ui='v2'] .prose,
+html[data-ui='v2'] .markdown-body,
+html[data-ui='v2'] .manuscript-paragraph {
+  font-size: var(--mag-fs-lead);
+}
+
+html[data-ui='v2'][data-mag] .prose,
+html[data-ui='v2'][data-mag] .markdown-body,
+html[data-ui='v2'][data-mag] .manuscript-paragraph {
+  line-height: var(--mag-lh-read);
+  letter-spacing: var(--mag-ls-body);
+}
+
+/* ---- 成书纸页：按中文书籍排版（2026-09-16 装帧）----
+ * 先生的软件写的是中文小说，「成书纸页」就该是书籍的排法：
+ * 段首缩进两个字、两端对齐到字界。只作用于 .manuscript-paragraph
+ * （语义明确的「成书段落」），界面里的说明文字一律不受影响。
+ * 仍然带 [data-mag]，v1 / v2 逐像素不变。 */
+html[data-ui='v2'][data-mag] .manuscript-paragraph {
+  text-indent: 2em;
+  text-align: justify;
+  text-justify: inter-ideograph;
+}
+
+/* 说明性小字：统一给到 12.5px，不再出现 10px 以下的说明文字 */
+html[data-ui='v2'] small {
+  font-size: 12.5px;
+}
+
+html[data-ui='v2'][data-mag] small {
+  line-height: 1.55;
+}
+
+/* ==========================================================================
+ * 6. 等宽与代码 —— 数字要对齐，代码要稳
+ * ========================================================================== */
+html[data-ui='v2'][data-mag] code,
+html[data-ui='v2'][data-mag] pre,
+html[data-ui='v2'][data-mag] kbd,
+html[data-ui='v2'][data-mag] samp {
+  font-family: var(--mono);
+  letter-spacing: 0;
+}
+
+/* 表格里的数字用等宽对齐 —— 杂志的表格也要精确 */
+html[data-ui='v2'][data-mag] td,
+html[data-ui='v2'][data-mag] th {
+  font-variant-numeric: tabular-nums;
+}

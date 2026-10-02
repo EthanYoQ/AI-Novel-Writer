@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Sparkles, CheckCircle2, Circle, RefreshCw, FileText, BookOpen, AlertTriangle, FolderTree, Eye, Copy } from 'lucide-react'
+import { Sparkles, CheckCircle2, Circle, RefreshCw, BookOpen, AlertTriangle, FolderTree } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
-import { useWorkflowStore } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { renderIcon } from '../panels/sidebar/sidebar-icons'
 
@@ -9,6 +8,8 @@ import ArchitectureConfirmDialog from '../dialogs/ArchitectureConfirmDialog'
 
 import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
+import PagePlate from '../layout/v2/magazine/PagePlate'
+import { PlateChecks, PlateFigure } from '../layout/v2/magazine/PlateFigures'
 import { ipc } from '../../services/ipc-client'
 
 import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
@@ -35,7 +36,6 @@ import {
   hasVisiblePartialSynopsisMarker,
   isRecoverableSynopsisCheckpoint,
   isUsableSynopsisCheckpoint,
-  recoverableWorldBuildingCandidate,
 } from '../../services/workflows/commands/architecture.command'
 
 type ArchStepKey = 'premise' | 'characters' | 'worldbuilding' | 'synopsis'
@@ -64,9 +64,6 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   const currentProject = useProjectStore(s => s.currentProject)
   const text = useLocaleStore(s => s.text)
   const projectMatches = currentProject?.path === projectKey
-  const latestArchitectureTerminalRunId = useWorkflowStore(state => (
-    state.history.find(run => run.type === 'architecture_generation' && run.projectPath === projectKey)?.id ?? null
-  ))
   const [archStatus, setArchStatus] = useState<Record<string, boolean>>({})
   const [wordCounts, setWordCounts] = useState<Record<string, number>>({})
   const [synopsisIncomplete, setSynopsisIncomplete] = useState(false)
@@ -74,9 +71,6 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   const [synopsisCoveredTo, setSynopsisCoveredTo] = useState<number>(0)
   const [synopsisTotalChapters, setSynopsisTotalChapters] = useState<number>(0)
   const [synopsisBusy, setSynopsisBusy] = useState(false)
-  const [worldBuildingCandidate, setWorldBuildingCandidate] = useState('')
-  const [worldBuildingBusy, setWorldBuildingBusy] = useState(false)
-  const [showWorldBuildingCandidate, setShowWorldBuildingCandidate] = useState(false)
   const [pendingSynopsisRange, setPendingSynopsisRange] = useState<{ from: number; to: number } | null>(null)
   const [loading, setLoading] = useState(true)
   const [showArchDialog, setShowArchDialog] = useState(false)
@@ -102,8 +96,6 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       setSynopsisRecoveryFailed(false)
       setSynopsisCoveredTo(0)
       setSynopsisTotalChapters(0)
-      setWorldBuildingCandidate('')
-      setShowWorldBuildingCandidate(false)
       setLoading(false)
       return
     }
@@ -119,7 +111,6 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     let interrupted = false
     let recoveryFailed = false
     let coveredTo = 0
-    let recoveredWorldBuildingCandidate = ''
     const dbSynopsis = core?.synopsis || ''
     const totalChapters = Number(core?.totalChapters ?? currentProject?.novelConfig?.totalChapters) || 0
     const writingLanguage = (core?.writingLanguage ?? currentProject?.novelConfig?.writingLanguage) === 'en-US'
@@ -136,7 +127,6 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       const partial = partialResult?.success === true
         ? (partialResult as { data?: Record<string, unknown> }).data
         : undefined
-      recoveredWorldBuildingCandidate = recoverableWorldBuildingCandidate(partial)
       const checkpointUsable = isUsableSynopsisCheckpoint(
         partial,
         dbSynopsis,
@@ -157,7 +147,6 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       interrupted = false
       recoveryFailed = visiblyPartial
       coveredTo = 0
-      recoveredWorldBuildingCandidate = ''
     }
     const status: Record<string, boolean> = {
       premise: (core?.premise?.length ?? 0) > 50,
@@ -181,8 +170,6 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     setSynopsisRecoveryFailed(recoveryFailed && Boolean(status.synopsis))
     setSynopsisCoveredTo(coveredTo)
     setSynopsisTotalChapters(totalChapters)
-    setWorldBuildingCandidate(recoveredWorldBuildingCandidate)
-    if (!recoveredWorldBuildingCandidate) setShowWorldBuildingCandidate(false)
     setLoading(false)
     // ✅ 只依赖 path 字符串，避免 novelConfig 等变化导致 loadStatus 重建
   }, [currentProject, projectKey, projectMatches, rosterSnapshot])
@@ -190,7 +177,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
   useEffect(() => {
     const timer = setTimeout(() => { void loadStatus() }, 0)
     return () => clearTimeout(timer)
-  }, [latestArchitectureTerminalRunId, loadStatus])
+  }, [loadStatus])
 
   // 监听 EventBus 事件，刷新后处理状态面板
   useEffect(() => {
@@ -315,46 +302,6 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     }
   }
 
-  /** 从本项目保存的未完成候选继续生成世界观。 */
-  const handleResumeWorldBuilding = async () => {
-    const projectSession = captureProjectSession(currentProject)
-    if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
-    if (!isProjectSessionCurrent(projectSession) || worldBuildingBusy || !worldBuildingCandidate) return
-    setWorldBuildingBusy(true)
-    try {
-      await launchCreativeWorkflow({
-        workflow: 'generate_architecture',
-        selectedSteps: ['worldbuilding'],
-        resumeWorldBuilding: true,
-      }, projectSession)
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      const { toast } = await import('../ui/Toast')
-      toast.error(text(`续写启动失败：${detail}`, `Failed to start the continuation: ${detail}`))
-    } finally {
-      setWorldBuildingBusy(false)
-    }
-  }
-
-  const copyWorldBuildingCandidate = async () => {
-    const projectSession = captureProjectSession(currentProject)
-    if (!projectMatches
-      || !projectSession
-      || !isProjectSessionPath(projectSession, projectKey)
-      || !isProjectSessionCurrent(projectSession)
-      || !worldBuildingCandidate
-    ) return
-    try {
-      await navigator.clipboard.writeText(worldBuildingCandidate)
-      const { toast } = await import('../ui/Toast')
-      toast.success(text('世界观未完成候选已复制', 'Incomplete worldbuilding candidate copied.'))
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
-      const { toast } = await import('../ui/Toast')
-      toast.error(text(`复制失败：${detail}`, `Copy failed: ${detail}`))
-    }
-  }
-
   /** 续批入口：打开生成弹窗并预填下一批范围（从 coveredTo+1 起，默认带本批上限，
    * 上限可在弹窗内调整）。避免一次请求剩余全部章节再次触发超长输出。 */
   const handleContinueOutlineBatch = async () => {
@@ -411,50 +358,82 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* 顶部工具栏 */}
-      <div
-        className="flex items-center justify-between gap-2 px-3 h-10 flex-shrink-0 border-b"
-        style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-sidebar)' }}
-      >
-        <div className="flex items-center gap-1.5">
-          <FolderTree size={14} style={{ color: 'var(--color-text-muted)' }} />
-          <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>
-            {text('故事架构', 'Story architecture')}
-          </span>
+      {/* 页头统一提到内容区顶层：与其它子菜单同一位置、同一宽度（先生：整整齐齐） */}
+      <div className="pagehead-strip">
+        <PagePlate
+          section="project"
+          /* 数据图形：四份架构文件的完成度 —— 一个方格一份，生成了的填实。
+             「还差哪一份没生成」是这一页最该被看见的一件事。 */
+          figure={(
+            <PlateFigure caption={text(
+              `${generatedCount} / ${ARCH_FILES.length} 份架构已生成`,
+              `${generatedCount} of ${ARCH_FILES.length} generated`,
+            )}>
+              <PlateChecks items={ARCH_FILES.map(file => ({
+                label: text(file.labelZh, file.labelEn),
+                done: Boolean(archStatus[file.key])
+                  && !(file.key === 'synopsis' && synopsisRecoveryFailed),
+              }))} />
+            </PlateFigure>
+          )}
+          kicker={text('ARCHITECTURE · 故事架构', 'ARCHITECTURE')}
+          title={text('故事架构', 'Story architecture')}
+          description={text(
+            '生成故事架构，作为正文写作的事实源，点击对应框体即可进入查看详细内容。',
+            'Generate the story architecture — the source of truth for the draft. Click a card to open its details.',
+          )}
+          actions={(
+            <div className="flex items-center gap-1.5">
+              <button
+                className="btn ghost sm"
+                type="button"
+                onClick={loadStatus}
+                title={text('刷新状态', 'Refresh status')}
+                /* 上游 1.1.0 的 browser 用例按可访问名「刷新状态」定位这个按钮；
+                   新 UI 把可见文字收短成「刷新」，用 aria-label 保住完整可访问名 */
+                aria-label={text('刷新状态', 'Refresh status')}
+              >
+                <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
+                {text('刷新', 'Reload')}
+              </button>
+              {/* AI 生成架构 — 与小说配置/章节蓝图保持一致的按钮位置与规格 */}
+              <button
+                className="btn ai sm"
+                type="button"
+                onClick={openGenerateDialog}
+                title={text('AI 生成故事架构（选择要生成的步骤）', 'Generate story architecture (choose steps to generate)')}
+              >
+                <Sparkles size={11} />
+                {text('AI 生成架构', 'Generate story architecture')}
+              </button>
+            </div>
+          )}
+        >
+          <FolderTree
+            size={13}
+            style={{
+              display: 'inline-block',
+              verticalAlign: 'middle',
+              marginRight: 5,
+              color: 'var(--color-text-muted)',
+            }}
+          />
           <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
             {generatedCount}/{ARCH_FILES.length} {text('已生成', 'generated')}
           </span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={loadStatus}
-            title={text('刷新状态', 'Refresh status')}
-          >
-            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-          </Button>
-          {/* AI 生成架构 — 与小说配置/章节蓝图保持一致的按钮位置 */}
-          <Button
-            variant="ai"
-            size="sm"
-            onClick={openGenerateDialog}
-            title={text('AI 生成故事架构（选择要生成的步骤）', 'Generate story architecture (choose steps to generate)')}
-          >
-            <Sparkles size={12} />
-            {text('AI 生成架构', 'Generate story architecture')}
-          </Button>
-        </div>
+        </PagePlate>
       </div>
 
-      {/* 文件卡片列表 */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      {/* 文件卡片列表
+          先生：正文栏里各子菜单的内容宽度要统一，以「剧情线」计划清单的
+          mx-auto max-w-5xl 为准 —— 所以这里也限宽居中，不再撑满整栏。
+          排列方式照 demo 的故事架构页（demo 3064 行）：两列网格、12px 间距。 */}
+      <div className="flex-1 overflow-y-auto mx-auto w-full max-w-5xl px-8 py-4 grid grid-cols-2 gap-3 content-start">
         {ARCH_FILES.map(f => {
           const generated = archStatus[f.key]
           const synopsisNeedsRecovery = f.key === 'synopsis' && synopsisRecoveryFailed
           const words = wordCounts[f.key] ?? 0
           const isCharacters = f.key === 'characters'
-          const isWorldBuildingCandidate = f.key === 'worldbuilding' && Boolean(worldBuildingCandidate)
           const rosterNeedsAttention = isCharacters && rosterPresentation
             && rosterPresentation.kind !== 'ready'
             && rosterPresentation.kind !== 'empty'
@@ -464,22 +443,25 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
             ? 'var(--color-error, #ef4444)'
             : rosterNeedsAttention
               ? 'var(--color-warning)'
-              : synopsisNeedsRecovery
-                ? 'var(--color-warning)'
-                : isWorldBuildingCandidate
-                  ? 'var(--color-warning)'
-               : generated
-                    ? 'var(--color-success)'
-                    : 'var(--color-border)'
+            : synopsisNeedsRecovery
+              ? 'var(--color-warning)'
+              : generated
+              ? 'var(--color-success)'
+              : 'var(--color-border)'
           return (
-            <div key={f.key} className="space-y-2">
+            <div key={f.key}>
               <div
-                className="rounded-lg border p-4 flex items-center gap-4 cursor-pointer transition-all"
+                /* 先生：框体要 demo 那种观感 —— 挂上 demo 的 .card 骨架
+                   （shell.css 253 行：圆角 12px + border + box-shadow:var(--shadow)）。
+                   动态的状态边框色与底色仍由内联给出，压在上面。 */
+                className="card cursor-pointer transition-all h-full flex flex-col gap-2 overflow-hidden min-h-0"
                 style={{
+                  /* 尺寸照 demo 3068：padding 16px 18px */
+                  padding: '16px 18px',
                   borderColor: cardBorderColor,
                   backgroundColor: rosterPresentation?.kind === 'failed_with_data_preserved'
                     || rosterPresentation?.kind === 'inconsistent'
-                    ? 'rgba(239, 68, 68, 0.03)'
+                    ? 'color-mix(in srgb, var(--color-error) 4%, transparent)'
                     : 'var(--color-panel)',
                   opacity: loading ? 0.6 : 1,
                 }}
@@ -488,54 +470,66 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                 onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = cardBorderColor}
                 title={`${text('点击查看', 'Open')} — ${text(f.descZh, f.descEn)}`}
               >
-                {/* 状态图标 */}
-                {isWorldBuildingCandidate || synopsisNeedsRecovery
-                  ? <AlertTriangle size={18} style={{ flexShrink: 0, color: 'var(--color-warning)' }} />
-                  : generated
-                    ? <CheckCircle2 size={18} style={{ flexShrink: 0, color: 'var(--color-success)' }} />
-                    : <Circle size={18} style={{ flexShrink: 0, color: 'var(--color-text-muted)' }} />
-                }
-
-                {/* 图标 */}
-                <span className="flex-shrink-0" style={{ color: generated ? 'var(--color-text-secondary)' : 'var(--color-text-muted)' }}>{renderIcon(f.iconName, 24)}</span>
-
-                {/* 标题 + 描述 */}
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>
-                    {text(f.labelZh, f.labelEn)}
-                  </div>
-                  <div className="text-xs mt-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                    {text(f.descZh, f.descEn)}
-                  </div>
-                  {isCharacters && rosterPresentation && (
-                    <div
-                      role="status"
-                      className="text-xs mt-1 leading-5"
-                      style={{
-                        color: rosterNeedsAttention
-                          ? 'var(--color-warning-text)'
-                          : 'var(--color-text-muted)',
-                      }}
-                    >
-                      {rosterPresentation.label} · {rosterPresentation.description}
+                {/* 顶行：logo 方块 + 标题 + 状态图标
+                    logo 照 demo 3069 —— 34×34、圆角 9px、黛蓝底浅金字，比原来的裸图标醒目得多 */}
+                <div className="flex items-center gap-2.5">
+                  <span
+                    style={{
+                      width: 34,
+                      height: 34,
+                      borderRadius: 9,
+                      background: 'var(--jade)',
+                      color: '#EDE7D6',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flex: 'none',
+                    }}
+                  >
+                    {renderIcon(f.iconName, 18)}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate" style={{ color: 'var(--color-text)' }}>
+                      {text(f.labelZh, f.labelEn)}
                     </div>
-                  )}
+                  </div>
+                  {/* 状态图标 */}
+                  {generated
+                    ? synopsisNeedsRecovery
+                      ? <AlertTriangle size={16} style={{ flexShrink: 0, color: 'var(--color-warning)' }} />
+                      : <CheckCircle2 size={16} style={{ flexShrink: 0, color: 'var(--color-success)' }} />
+                    : <Circle size={16} style={{ flexShrink: 0, color: 'var(--color-text-muted)' }} />
+                  }
                 </div>
 
-                {/* 右侧状态标签 / 字数 / 提取按钮 */}
-                <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                {/* 描述 */}
+                <div className="text-xs flex-1" style={{ color: 'var(--color-text-muted)', lineHeight: 1.65 }}>
+                  {text(f.descZh, f.descEn)}
+                </div>
+                {isCharacters && rosterPresentation && (
+                  <div
+                    role="status"
+                    className="text-xs leading-5"
+                    style={{
+                      color: rosterNeedsAttention
+                        ? 'var(--color-warning-text)'
+                        : 'var(--color-text-muted)',
+                    }}
+                  >
+                    {rosterPresentation.label} · {rosterPresentation.description}
+                  </div>
+                )}
+
+                {/* 状态徽标 / 字数 / 提取按钮 —— 先生：这些要老实待在框体里、落在右下角。
+                    mt-auto 贴住卡底，justify-end 靠右；同一行的两张卡因此等高对齐。 */}
+                <div className="flex flex-wrap items-center justify-end gap-2 mt-auto pt-1">
                   {isCharacters && rosterPresentation ? (
                     <>
+                      {/* 先生：不要 v1/v2 两套格式来回切 —— 这一列的徽标一律走 v2 的钩子。
+                          内联 style 的优先级高于任何 CSS 规则，留着它就会把新格式压住。 */}
                       <span
-                        className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium"
-                        style={{
-                          backgroundColor: rosterNeedsAttention
-                            ? 'rgba(245, 158, 11, 0.12)'
-                            : 'rgba(34, 197, 94, 0.1)',
-                          color: rosterNeedsAttention
-                            ? 'var(--color-warning-text)'
-                            : 'var(--color-success-text)',
-                        }}
+                        className="v2-status-badge text-[0.7rem] px-1.5 py-0.5 rounded"
+                        data-tone={rosterNeedsAttention ? 'warning' : 'success'}
                       >
                         {rosterPresentation.label}
                       </span>
@@ -545,72 +539,25 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                         </span>
                       )}
                     </>
-                  ) : isWorldBuildingCandidate ? (
-                    <>
-                      <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-yellow-500/15 text-[var(--color-warning-text)]">
-                        {text(
-                          generated ? '正式内容保留 · 有未完成候选' : '未完成候选 · 未写入正式内容',
-                          generated ? 'Formal content kept · incomplete candidate' : 'Incomplete candidate · not formal content',
-                        )}
-                      </span>
-                      {generated && (
-                        <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                          {words.toLocaleString()} {text('字符（正式内容）', 'characters (formal)')}
-                        </span>
-                      )}
-                      <div className="flex flex-wrap justify-end gap-1 mt-0.5">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setShowWorldBuildingCandidate(value => !value)
-                          }}
-                        >
-                          <Eye size={12} />
-                          {showWorldBuildingCandidate ? text('收起候选', 'Hide candidate') : text('查看候选', 'View candidate')}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            void copyWorldBuildingCandidate()
-                          }}
-                        >
-                          <Copy size={12} />
-                          {text('复制', 'Copy')}
-                        </Button>
-                        <Button
-                          size="sm"
-                          disabled={worldBuildingBusy}
-                          className="gap-1.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white border-none"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            void handleResumeWorldBuilding()
-                          }}
-                        >
-                          <RefreshCw size={12} className={worldBuildingBusy ? 'animate-spin' : ''} />
-                          {worldBuildingBusy ? text('续写中...', 'Resuming...') : text('断点续写', 'Resume')}
-                        </Button>
-                      </div>
-                    </>
                   ) : generated ? (
                     <>
+                      {/* 上游 1.1.0：大纲分批生成后的四种真实状态 —— 检查点不可恢复 / 已存部分 / 已覆盖至第 N 章待续批 / 已生成
+                          先生的规矩：不搞 v1/v2 两套格式来回切，这一列一律走 v2 的状态徽标钩子 ——
+                          加粗与否、什么底色，全由钩子按语义档位给，颜色不再各写一份。 */}
                       {f.key === 'synopsis' && synopsisRecoveryFailed ? (
-                        <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-yellow-500/15 text-[var(--color-warning-text)]">
+                        <span className="v2-status-badge text-[0.7rem] px-1.5 py-0.5 rounded" data-tone="warning">
                           {text('不完整 · 检查点不可恢复', 'Incomplete · checkpoint unavailable')}
                         </span>
                       ) : f.key === 'synopsis' && synopsisIncomplete ? (
-                        <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-yellow-500/15 text-[var(--color-warning-text)]">
+                        <span className="v2-status-badge text-[0.7rem] px-1.5 py-0.5 rounded" data-tone="warning">
                           {text('不完整 · 已存部分', 'Incomplete · partial saved')}
                         </span>
                       ) : f.key === 'synopsis' && synopsisCoveredTo > 0 && synopsisCoveredTo < synopsisTotalChapters ? (
-                        <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-yellow-500/15 text-[var(--color-warning-text)]">
+                        <span className="v2-status-badge text-[0.7rem] px-1.5 py-0.5 rounded" data-tone="warning">
                           {text(`已覆盖至第 ${synopsisCoveredTo} 章 · 待续批`, `Covered to ch. ${synopsisCoveredTo} · pending`)}
                         </span>
                       ) : (
-                        <span className="text-[0.7rem] px-1.5 py-0.5 rounded font-medium bg-green-500/10 text-[var(--color-success-text)]">
+                        <span className="v2-status-badge text-[0.7rem] px-1.5 py-0.5 rounded" data-tone="success">
                           {text('已生成', 'Generated')}
                         </span>
                       )}
@@ -666,10 +613,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                       )}
                     </>
                   ) : (
-                    <span
-                      className="text-[0.7rem] px-1.5 py-0.5 rounded"
-                      style={{ backgroundColor: 'rgba(var(--color-accent-rgb,99 102 241),0.1)', color: 'var(--color-accent)' }}
-                    >
+                    <span className="v2-status-badge text-[0.7rem] px-1.5 py-0.5 rounded" data-tone="accent">
                       {text('待生成', 'Not generated')}
                     </span>
                   )}
@@ -692,28 +636,10 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                       {extracting ? text('处理中...', 'Working...') : rosterPresentation.actionLabel}
                     </Button>
                   )}
-                  {/* 查看箭头提示 */}
-                  {generated && !(isCharacters && !loading && canRepairRoster) && (
-                    <span className="text-[0.7rem] flex items-center gap-0.5" style={{ color: 'var(--color-text-muted)' }}>
-                      <FileText size={10} /> {text('点击查看', 'Open')}
-                    </span>
-                  )}
+                  {/* 先生：卡片下方那行「点击查看」灰字已删 —— 整张卡都可点，
+                      进页的说明统一写在页头那一句里。 */}
                 </div>
               </div>
-              {isWorldBuildingCandidate && showWorldBuildingCandidate && (
-                <div
-                  role="status"
-                  className="rounded-lg border p-3"
-                  style={{ borderColor: 'var(--color-warning)', backgroundColor: 'var(--color-panel)' }}
-                >
-                  <div className="text-xs font-medium mb-2" style={{ color: 'var(--color-warning-text)' }}>
-                    {text('世界观未完成候选（不会自动写入正式世界观）', 'Incomplete worldbuilding candidate (not written to formal worldbuilding)')}
-                  </div>
-                  <pre className="text-xs whitespace-pre-wrap max-h-64 overflow-y-auto" style={{ color: 'var(--color-text-secondary)' }}>
-                    {worldBuildingCandidate}
-                  </pre>
-                </div>
-              )}
             </div>
           )
         })}

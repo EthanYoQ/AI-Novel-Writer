@@ -7,13 +7,14 @@ import {
   Image,
   AtSign,
   Workflow,
+  X,
 } from 'lucide-react'
 import { useAgentStore, type AgentMode } from '../../../stores/agent-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import type { ModelProfile } from '../../../shared/ipc-channels'
 import { useOutsideClick } from '../../../hooks/useOutsideClick'
 import SlashCommandMenu from './SlashCommandMenu'
-import MentionMenu from './MentionMenu'
+import MentionMenu, { type MentionAnchor } from './MentionMenu'
 import type { SlashCommand, MentionTarget } from '../../../services/agent/intent-router'
 import { useLocaleStore } from '../../../stores/locale-store'
 
@@ -28,7 +29,10 @@ export default function AgentInputBox() {
   const text = useLocaleStore(s => s.text)
   const [inputText, setInputText] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const { generating, sendMessage, cancelGeneration, getActiveConversation, setMode, setModelId } = useAgentStore()
+  const {
+    generating, sendMessage, cancelGeneration, getActiveConversation, setMode, setModelId,
+    pendingMentions, addPendingMention, removePendingMention, clearPendingMentions,
+  } = useAgentStore()
   const models = useLLMStore(s => s.models)
   const defaultModelId = useLLMStore(s => s.defaultModelId)
 
@@ -51,6 +55,8 @@ export default function AgentInputBox() {
   const [showSlashMenu, setShowSlashMenu] = useState(false)
   const [slashQuery, setSlashQuery] = useState('')
   const [showMentionMenu, setShowMentionMenu] = useState(false)
+  /** 输入框在屏幕上的位置：@ 菜单贴着它展开。 */
+  const [mentionAnchor, setMentionAnchor] = useState<MentionAnchor | null>(null)
   const [mentionQuery, setMentionQuery] = useState('')
 
   // 检测输入是否触发 / 或 @ 菜单
@@ -73,6 +79,17 @@ export default function AgentInputBox() {
       const afterAt = value.slice(lastAt + 1)
       // 如果 @ 后面没有空格，视为正在输入提及
       if (!afterAt.includes(' ')) {
+        // 记下输入框位置：菜单要贴着它展开（先生：就近才符合操作逻辑）
+        const rect = textareaRef.current?.getBoundingClientRect()
+        if (rect && typeof window !== 'undefined') {
+          setMentionAnchor({
+            left: rect.left,
+            top: rect.top,
+            bottom: rect.bottom,
+            viewportHeight: window.innerHeight,
+            viewportWidth: window.innerWidth,
+          })
+        }
         setMentionQuery(afterAt)
         setShowMentionMenu(true)
         setShowSlashMenu(false)
@@ -101,14 +118,13 @@ export default function AgentInputBox() {
   // 选择 @ 提及
   const handleMentionSelect = useCallback((target: MentionTarget) => {
     setShowMentionMenu(false)
-    // 替换最后一个 @ 及其后面的文字为 @displayName
-    const lastAt = inputText.lastIndexOf('@')
-    if (lastAt >= 0) {
-      const before = inputText.slice(0, lastAt)
-      setInputText(`${before}@${target.displayName} `)
-    }
+    /**
+     * 先生：@ **只是把内容攒进引用清单**，不写进正文、更不触发对话 ——
+     * 作者可以连着 @ 主角、配角、几条设定，凑齐了再一起发送。
+     */
+    addPendingMention(target)
     textareaRef.current?.focus()
-  }, [inputText])
+  }, [addPendingMention])
 
   const contextRef = useRef<HTMLDivElement>(null)
   const modeRef = useRef<HTMLDivElement>(null)
@@ -160,11 +176,15 @@ export default function AgentInputBox() {
       await cancelGeneration()
       return
     }
-    if (!inputText.trim()) return
+    if (!inputText.trim() && pendingMentions.length === 0) return
     const text = inputText
+    // 引用只在**发送这一刻**拼进消息（先生：@ 是攒引用，不是发消息）。
+    // 拼成 `@名字 …` 后仍走既有的 mention 预取机制，所以上下文照旧自动带进来。
+    const mentionPrefix = pendingMentions.map(item => `@${item.displayName}`).join(' ')
     setInputText('')
-    await sendMessage(text)
-  }, [generating, inputText, sendMessage, cancelGeneration])
+    clearPendingMentions()
+    await sendMessage(mentionPrefix ? `${mentionPrefix} ${text}`.trim() : text)
+  }, [generating, inputText, pendingMentions, sendMessage, cancelGeneration, clearPendingMentions])
 
   /** 键盘事件：Enter 发送，Shift+Enter 换行 */
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -185,15 +205,18 @@ export default function AgentInputBox() {
     }
   }
 
-  const canSend = !generating && inputText.trim().length > 0
+  // 只有引用、没有文字也允许发送：作者可能只想把这几条内容交给 AI
+  const canSend = !generating && (inputText.trim().length > 0 || pendingMentions.length > 0)
 
   return (
     <div
-      className="relative flex flex-col gap-0 p-1.5"
+      className="agent-input relative flex flex-col gap-0 p-1.5"
       style={{
-        backgroundColor: 'var(--color-hover)',
-        border: '1px solid var(--color-border)',
-        borderRadius: 'var(--radius-md)',  /* 4px 方正风格 */
+        /* 三个变量只在 v2 被重绑成 demo 的输入框外观（见 v2-panels.css）；
+           经典界面下退回产品原值，v1 逐像素不变。 */
+        backgroundColor: 'var(--agent-input-bg, var(--color-hover))',
+        border: '1px solid var(--agent-input-border, var(--color-border))',
+        borderRadius: 'var(--agent-input-radius, var(--radius-md))',
       }}
     >
       {/* / 命令菜单 */}
@@ -206,11 +229,36 @@ export default function AgentInputBox() {
       )}
 
       {/* @ 提及菜单 */}
+      {/* 已引用内容（先生：@ 可以连续攒多条，逐个可移除） */}
+      {pendingMentions.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1 px-1 pb-1">
+          {pendingMentions.map(item => (
+            <span
+              key={item.value}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px]"
+              style={{ backgroundColor: 'var(--color-hover)', color: 'var(--color-text-secondary)' }}
+              title={item.hint ?? item.displayName}
+            >
+              @{item.displayName}
+              <button
+                type="button"
+                className="cursor-pointer opacity-60 hover:opacity-100"
+                aria-label={text('移除引用', 'Remove reference')}
+                onClick={() => removePendingMention(item.value)}
+              >
+                <X size={9} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
       {showMentionMenu && (
         <MentionMenu
           query={mentionQuery}
           onSelect={handleMentionSelect}
           onClose={() => setShowMentionMenu(false)}
+          anchor={mentionAnchor}
         />
       )}
 
@@ -417,15 +465,14 @@ export default function AgentInputBox() {
           <button
             onClick={handleSendOrStop}
             disabled={!generating && !canSend}
-            className="flex items-center justify-center w-6 h-6 transition-all duration-150"
+            className="btn primary sm flex items-center justify-center transition-all duration-150"
             style={{
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: generating
-                ? 'var(--color-text-secondary)'
-                : canSend
-                ? 'var(--color-accent)'
-                : 'rgba(128,128,128,0.3)',
-              color: '#ffffff',
+              /* 外形交给 demo 的 .btn.primary.sm（朱砂底 / 25px 高 / 7px 圆角），
+                 这里只留禁用态与停止态的可读性处理 */
+              /* 先生：发送按钮下移 2px，与左侧控件在视觉基线上对齐 */
+              marginTop: 2,
+              minWidth: 32,
+              ...(generating ? { background: 'var(--ink2)' } : {}),
               cursor: !generating && !canSend ? 'not-allowed' : 'pointer',
               opacity: !generating && !canSend ? 0.5 : 1,
             }}

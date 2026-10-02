@@ -201,8 +201,8 @@ describe('planning material import disclosure', () => {
       generationModelId: model.id,
       resourceKeys: ['character-roster'],
     })
-    expect(startWorkflow.mock.calls[1]?.[0].steps).toHaveLength(2)
-    expect(startWorkflow.mock.calls[1]?.[1]).toBe(true)
+    expect(startWorkflow.mock.calls[1]?.[0].steps).toHaveLength(1)
+    expect(startWorkflow.mock.calls[1]?.[1]).toBe(false)
     expect(useLayoutStore.getState()).toMatchObject({ bottomPanelOpen: true, bottomTab: 'tasks' })
   })
 })

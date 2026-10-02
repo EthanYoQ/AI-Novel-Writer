@@ -4,10 +4,6 @@ on:
   pull_request:
     branches: [master]
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore:
-      - '**/*.md'
-      - 'LICENSE'
-      - 'docs/**'
   workflow_dispatch:
 
 # Test untrusted PR code without repository write access or model credentials.

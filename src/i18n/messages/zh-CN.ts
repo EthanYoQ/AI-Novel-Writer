@@ -37,6 +37,7 @@ export const zhCN = {
   'error.embeddingModelNotConfigured': '请先配置向量模型。',
   'error.projectStoragePathUnsupported': '项目路径过深，部分本地存储不可用。请将整个项目文件夹移动到更靠近磁盘根目录的位置（例如 D:\\Novels），然后重试。',
   'error.projectRootRequired': '请选择项目根目录，也就是包含 .vela/project.json 的小说文件夹；不要选择它的上级文件夹。',
+  'error.databaseError': '项目数据库读写失败，请重试；若反复出现，请检查项目文件夹是否可写。',
   'error.unknown': '发生错误：{message}',
   'project.backupUnavailable': '备份功能将在后续版本实现',
   'project.current': '当前项目：{name}',
