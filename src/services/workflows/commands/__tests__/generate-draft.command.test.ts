@@ -269,7 +269,7 @@ function fakeRuntime(
 ) {
   let attempt = 0
   const reconcile = vi.fn(async (task: GenerationTask) => reconcileAttempt(task))
-  const outline = vi.fn(async (_task: GenerationTask) => outcome('目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。', 'stop'))
+  const outline = vi.fn<(task: GenerationTask) => Promise<GenerationOutcome>>(async () => outcome('目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。', 'stop'))
   const complete = vi.fn(async (task: GenerationTask, options?: { signal?: AbortSignal }) => {
     attempt += 1
     return completeAttempt(attempt, task, options)

@@ -222,6 +222,7 @@ function fileTree(): FileNode[] {
 
 function installIpc() {
   let batch: GenerationBatchProgress | undefined
+  let generationAttempt = 0
   const views = new Map<string, MainGenerationRunView>()
   const selections = new Map<string, BeginGenerationRequest>()
   const compositions = new Map<string, VisibleCompositionReceipt>()
@@ -268,12 +269,15 @@ function installIpc() {
     }
     if (channel === 'generation:read' || channel === 'generation:cancel') return structuredClone(views.get((args[0] as MainGenerationRunHandle).runId))
     if (channel === 'generation:execute') {
-      const request = args[0] as { handle: MainGenerationRunHandle }
+      const request = args[0] as { handle: MainGenerationRunHandle; task: { purpose: string } }
       const view = views.get(request.handle.runId)!
-      const text = draftCompletions[draftCompletionIndex++] ?? DRAFT_TEXT
-      if (changeDefaultAfterFirstDraft && draftCompletionIndex === 1) useLLMStore.setState({ defaultModelId: 'changed-default-model' })
-      if (deferDraftCompletion) await new Promise<void>(resolve => pendingDraftCompletions.push(resolve))
-      const artifact = { ...view.handle, artifactId: `${view.handle.runId}:artifact`, attemptId: `${view.handle.runId}:attempt`,
+      const isOutline = request.task.purpose === 'chapter-draft-short-outline'
+      const text = isOutline ? '目标：收到匿名信；行动：沈砺拆信检查署名；结果：开始调查。'
+        : draftCompletions[draftCompletionIndex++] ?? DRAFT_TEXT
+      if (!isOutline && changeDefaultAfterFirstDraft && draftCompletionIndex === 1) useLLMStore.setState({ defaultModelId: 'changed-default-model' })
+      if (!isOutline && deferDraftCompletion) await new Promise<void>(resolve => pendingDraftCompletions.push(resolve))
+      const attempt = ++generationAttempt
+      const artifact = { ...view.handle, artifactId: `${view.handle.runId}:artifact:${attempt}`, attemptId: `${view.handle.runId}:attempt:${attempt}`,
         revision: 1, durableRevision: 1, text, textHash: await hashAuthorText(text), status: 'completed' as const }
       view.artifacts = [artifact]
       emit('generation:snapshot', artifact)
@@ -281,8 +285,8 @@ function installIpc() {
         model: { id: 'grok-browser', configurationRevision: 'a'.repeat(64), endpointFingerprint: 'b'.repeat(64) },
         capabilities: { contextWindowTokens: null, maxOutputTokens: 4096, reasoning: false, structuredOutput: false, usage: false,
           source: { contextWindowTokens: 'unknown', maxOutputTokens: 'user-operational-cap', featureFlags: 'unknown' } },
-        budget: { attempt: draftCompletionIndex, maxAttempts: 32, requestedOutputTokens: 4096,
-          cumulativeRequestedOutputTokens: draftCompletionIndex * 4096, maxRequestedOutputTokens: 2000000,
+        budget: { attempt, maxAttempts: 32, requestedOutputTokens: 4096,
+          cumulativeRequestedOutputTokens: attempt * 4096, maxRequestedOutputTokens: 2000000,
           maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: view.budget.deadlineAt }, finishReason: 'stop',
         visibleArtifact: { artifactId: artifact.artifactId, attemptId: artifact.attemptId, revision: 1, textHash: artifact.textHash },
       } }
