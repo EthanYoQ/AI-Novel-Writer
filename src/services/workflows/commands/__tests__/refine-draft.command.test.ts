@@ -423,7 +423,7 @@ describe('RefineDraftCommand bounded visible completion', () => {
 
     expect(observed.get('refine-draft')).toContain('Revise the chapter manuscript')
     expect(observed.get('review-chapter')).toContain('Review the chapter for objectively verifiable continuity')
-    expect(observed.get('refine-from-review')).toContain('Revise the chapter using only the confirmed review checklist')
+    expect(observed.get('refine-from-review')).toContain('Resolve the selected issues established by the sources')
     for (const request of observed.values()) {
       expect(request).not.toContain('你是一位功力深厚的文学编辑')
       expect(request).not.toContain('你是一位严谨的小说质量监督编辑')
@@ -858,8 +858,8 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
     expect(prompt).not.toContain('这个被作者忽略，不能送入模型。')
     expect(prompt).not.toContain('原始 AI 总结绝不能进入修稿提示。')
     expect(prompt).not.toContain('瞬态 UI 提示不得绕过确认快照。')
-    expect(prompt).toContain('若已确认问题要求当章发生动作或结果')
-    expect(prompt).toContain('新增动作或结果本身必须满足该问题的目标语义')
+    expect(prompt).toContain('若成立的问题或作者明确要求当章发生动作或结果')
+    expect(prompt).toContain('新增动作或结果本身必须满足该要求的目标语义')
     expect(prompt).toContain('已经失去、消耗或承受的具体后果')
     expect(prompt).toContain('签字、认责或声称以后负责仍只是承诺')
     expect(prompt).toContain('不得保留与新增事件相反的状态')

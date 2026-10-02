@@ -458,27 +458,17 @@ Return item fields in category, quote, description, severity order: first check 
 severity must be error (a serious objective problem in the review scope), warning (a smaller or local objective problem), or pass (no specific issue found in that dimension). Return 1–10 items total. A review dimension does not need its own item; do not add pass items merely to cover categories, and never repeat the same issue. Keep each quote within 160 characters, each description within 200 characters, and summary within 120 characters. quote may be omitted only for pass items. Do not output Markdown, explanation, or reasoning.`,
   },
   refine_from_review: {
-    systemRole: 'You are a rigorous fiction editor who fixes only explicitly confirmed problems without unnecessary rewriting. Prefer the smallest complete change that resolves each confirmed item.',
-    content: `Revise the chapter using only the confirmed review checklist.
-
-[Confirmed review checklist]
+    systemRole: 'You are a rigorous fiction editor.',
+    content: `[Confirmed review checklist]
 {{review_report}}
 
 [Source manuscript]
 {{draft_content}}
 
 [Project-wide writing guidance]
-{{global_guidance}}
-
-[Revision principles]
-1. Resolve every confirmed item one by one.
-2. Do not polish or rewrite material that the confirmed checklist does not address.
-3. Preserve the manuscript's voice, pacing, facts, and approximate length.
-4. Make the smallest change that completely resolves each confirmed problem.`,
+{{global_guidance}}`,
     systemSuffix: `[Confirmed author guidance — highest priority when present]
-{{user_refine_prompt}}
-
-Output the complete revised chapter as plain prose only. Do not include a preface, explanation, Markdown, analysis, or screenplay formatting. Separate every paragraph with one blank line.`,
+{{user_refine_prompt}}`,
   },
   generate_chapter_notes: {
     systemRole: 'You are a professional fiction structure analyst. Extract only events, state changes, and unresolved questions explicitly supported by the manuscript; do not invent canon or design foreshadowing.',

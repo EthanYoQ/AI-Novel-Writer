@@ -14,7 +14,8 @@ import { reviewRevisionAiBrief, reviewRevisionAuthorMaterial, type ReviewRevisio
 import { MATERIAL_DECISION_MAX_INPUT_UNITS } from '../../../../shared/generation-owner-contract'
 import type { ReviewRevisionCommandSource } from '../review-revision-command'
 import { createHumanConfirmedReviewSnapshot, serializeHumanConfirmedReviewSnapshot } from '../../../../shared/human-confirmed-review'
-import { clearProjectCustomPrompts } from '../../../prompt-templates'
+import { clearProjectCustomPrompts, getBuiltinPromptTemplate, getPromptSource } from '../../../prompt-templates'
+import { ipcPromptPersistence } from '../../../prompt-catalog'
 import type { FinalizedContinuityProjection } from '../../../../shared/finalized-continuity'
 import { countDraftUnits } from '../../../../shared/draft-units'
 
@@ -202,7 +203,7 @@ describe('review/revision consumers using the main contract (synthetic transport
     },
   )
 
-  it.each(['zh-CN', 'en-US'] as const)('keeps author and predecessor evidence outside the AI review slot in %s', async writingLanguage => {
+  it.each(['zh-CN', 'en-US'] as const)('uses one default revision task contract with intact source partitions in %s', async writingLanguage => {
     const predecessor = '前驱原文：双方已交还印章。'
     const authorRequest = '作者明确要求：保留城门场景。'
     const f = setup([{ content: revised, finishReason: 'stop' }], [{
@@ -239,6 +240,15 @@ describe('review/revision consumers using the main contract (synthetic transport
     expect(basis).toContain(predecessor)
     expect(basis).toContain(authorRequest)
     expect(report.trim()).toBe(ai)
+    const messages = f.provider.mock.calls[0]![0].map(message => message.content).join('\n')
+    expect(messages).not.toMatch(/精准修复|一条一条逐项解决|改得越少越好|Revise the chapter using only the confirmed|Resolve every confirmed item one by one|Prefer the smallest complete change/)
+    const contractHeading = writingLanguage === 'zh-CN' ? '【完整修稿任务合同】' : '[Complete revision task contract]'
+    expect(prompt.split(contractHeading)).toHaveLength(2)
+    const contract = prompt.split(contractHeading)[1]!
+    expect(contract).toContain(writingLanguage === 'zh-CN' ? '解决经来源核实后成立的问题' : 'Resolve the selected issues established by the sources')
+    expect(contract).toContain('80%-120%')
+    expect(contract).toContain(writingLanguage === 'zh-CN' ? '纯文本' : 'plain prose')
+    expect(contract).toContain(writingLanguage === 'zh-CN' ? '段落之间保留一个空行' : 'one blank line between paragraphs')
     expect(prompt).toContain(writingLanguage === 'zh-CN'
       ? '确认 AI 意见只确定处理范围，不确认其事实判断或替换方案'
       : 'Confirming an AI finding selects the scope, not its factual claims or proposed replacement')
@@ -249,6 +259,29 @@ describe('review/revision consumers using the main contract (synthetic transport
       included: [expect.objectContaining({ sourceId: 'author:required', contentHash: hash(author) }),
         expect.objectContaining({ sourceId: 'finalized:7', contentHash: hash(predecessor) }),
         expect.objectContaining({ sourceId: 'review:confirmed:10', contentHash: hash(ai) })] })
+    expect(f.provider).toHaveBeenCalledOnce()
+  })
+
+  it('resolves and consumes the project custom review-revision template and guidance', async () => {
+    const f = setup([{ content: revised, finishReason: 'stop' }])
+    const template = { ...getBuiltinPromptTemplate('refine_from_review', 'zh-CN')!,
+      systemRole: 'CUSTOM_REVIEW_ROLE', taskGuidance: 'CUSTOM_AUTHOR_GUIDANCE',
+      content: 'CUSTOM_REVIEW_TASK\n{{review_report}}\n{{draft_content}}\n{{global_guidance}}' }
+    const load = vi.spyOn(ipcPromptPersistence, 'loadProject').mockResolvedValue({ templates: [template], diagnostics: [] })
+    await f.command('refine-from-review').execute(f.args)
+    expect(load).toHaveBeenCalledWith(session)
+    expect(getPromptSource('refine_from_review', session)).toBe('project')
+    const messages = f.provider.mock.calls[0]![0]
+    expect(messages.find(message => message.role === 'system')!.content).toContain('CUSTOM_REVIEW_ROLE')
+    const prompt = messages.find(message => message.role === 'user')!.content
+    expect(prompt).toContain('CUSTOM_REVIEW_TASK')
+    expect(prompt).toContain('CUSTOM_AUTHOR_GUIDANCE')
+    expect(prompt).toContain(source.content)
+    expect(prompt).toContain(reviewRevisionAiBrief(f.fixture.prepared!.context))
+    expect(prompt).toContain(reviewRevisionAuthorMaterial(f.fixture.prepared!.context))
+    expect(prompt).toContain('【完整修稿任务合同】')
+    expect(f.fixture.materialDecisions[0]?.promptHash).toBe(hash(prompt))
+    expect(f.fixture.selections[0]).toMatchObject({ parentRootActionId: 'fixture-review-root' })
     expect(f.provider).toHaveBeenCalledOnce()
   })
 
@@ -381,7 +414,7 @@ describe('review/revision consumers using the main contract (synthetic transport
     english.args.context.uiLocale = 'en-US'
     await english.command('refine-from-review').execute(english.args)
     const prompt = english.provider.mock.calls[0]![0].find(message => message.role === 'user')!.content
-    expect(prompt).toContain('[Complete-revision hard constraint]')
+    expect(prompt).toContain('[Complete revision task contract]')
     expect(prompt).toContain('Preserve every unaffected paragraph or line in full')
     expect(prompt).toContain('Do not summarize, excerpt, collapse repeated passages, or use placeholders')
     expect(english.fixture.materialDecisions[0]?.promptHash).toBe(hash(prompt))
