@@ -15,6 +15,7 @@ import { MATERIAL_DECISION_CATEGORIES, MATERIAL_DECISION_MAX_INPUT_UNITS, MATERI
     MATERIAL_DECISION_UNIT_METHOD_VERSION } from '../../src/shared/generation-owner-contract';
 import type { GenerationKnowledgeSnapshot } from '../../src/shared/generation-knowledge';
 import type { ReviewRevisionContext } from '../../src/shared/review-revision-generation';
+import { reviewRevisionAuthorMaterial, reviewRevisionAiBrief } from '../../src/shared/review-revision-generation';
 import { captureReviewRevisionContext, reviewRevisionRequest } from './review-revision-context';
 import type { AgentGenerationInput } from '../../src/shared/agent-generation';
 import { buildAgentGenerationContext, validateAgentGenerationInput } from './agent-generation-context';
@@ -201,7 +202,7 @@ function decisionSources(value: unknown, kind: 'included' | 'omitted'): (Materia
         const semantic = sourceId === 'author:required'
             ? category === 'author' && required && revision === 1
             : sourceId.startsWith('review:confirmed:')
-                ? category === 'author' && required && revision === suffix
+                ? (category === 'author' || category === 'future-plan') && required && revision === suffix
                 : sourceId.startsWith('finalized:')
                     ? category === 'finalized-history' && revision === suffix
                     : sourceId.startsWith('candidate:')
@@ -227,17 +228,20 @@ function compareDecisionIdentity(left: { sourceId: string; revision: number; con
 }
 function freezeMaterialDecision(value: unknown): MaterialDecisionReceipt {
     const reconciled = !!value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'reconciliationPromptHash');
-    const record = decisionFields(value, ['version', 'verdict', 'promptHash', ...(reconciled ? ['reconciliationPromptHash'] : []), 'capacity', 'coverage', 'included', 'omitted']);
+    const outlined = !!value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'shortOutlinePromptHash');
+    const record = decisionFields(value, ['version', 'verdict', 'promptHash', ...(reconciled ? ['reconciliationPromptHash'] : []), ...(outlined ? ['shortOutlinePromptHash'] : []), 'capacity', 'coverage', 'included', 'omitted']);
     if (record.version !== MATERIAL_DECISION_RECEIPT_VERSION || record.verdict !== 'admitted')
         fail('GENERATION_MATERIAL_DECISION_INVALID');
     if (typeof record.promptHash !== 'string' || !isContentHash(record.promptHash)
-        || reconciled && (typeof record.reconciliationPromptHash !== 'string' || !isContentHash(record.reconciliationPromptHash)))
+        || reconciled && (typeof record.reconciliationPromptHash !== 'string' || !isContentHash(record.reconciliationPromptHash))
+        || outlined && (reconciled || typeof record.shortOutlinePromptHash !== 'string' || !isContentHash(record.shortOutlinePromptHash)))
         fail('GENERATION_MATERIAL_DECISION_INVALID');
     const capacity = decisionFields(record.capacity, ['maxInputUnits', 'methodVersion', 'admittedUnits']);
     const coverage = decisionFields(record.coverage, ['required', 'included', 'complete']);
     const frozen: MaterialDecisionReceipt = {
         version: MATERIAL_DECISION_RECEIPT_VERSION, verdict: 'admitted', promptHash: record.promptHash,
         ...(reconciled ? { reconciliationPromptHash: record.reconciliationPromptHash as string } : {}),
+        ...(outlined ? { shortOutlinePromptHash: record.shortOutlinePromptHash as string } : {}),
         capacity: { maxInputUnits: decisionCount(capacity.maxInputUnits, 1, MATERIAL_DECISION_MAX_INPUT_UNITS),
             methodVersion: decisionEnum(capacity.methodVersion, [MATERIAL_DECISION_UNIT_METHOD_VERSION]),
             admittedUnits: decisionCount(capacity.admittedUnits, 0, MATERIAL_DECISION_MAX_INPUT_UNITS) },
@@ -310,20 +314,23 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
                 && !input.selectedFinalizedDraftIds.includes(Number(item.sourceId.slice('finalized:'.length)))))
             fail('GENERATION_MATERIAL_DECISION_INVALID');
     }
-    if (materialDecision && ['review-chapter', 'refine-draft'].includes(input.operation)) {
-        const admitted = new Set((input.reviewRevisionContext?.history ?? []).flatMap(item => item.identity
-            ? [decisionIdentity(item.identity)] : []));
-        if ([...materialDecision.included, ...materialDecision.omitted]
-            .some(item => !item.sourceId.startsWith('finalized:') || !admitted.has(decisionIdentity(item))))
-            fail('GENERATION_MATERIAL_DECISION_INVALID');
-    }
-    if (materialDecision && input.operation === 'refine-from-review') {
-        const reviewSourceId = input.reviewRevisionContext?.confirmation?.reviewSourceId;
-        const expected = `review:confirmed:${reviewSourceId}`;
-        if (!Number.isSafeInteger(reviewSourceId) || reviewSourceId! < 1
-            || materialDecision.included.length !== 1 || materialDecision.omitted.length !== 0
-            || materialDecision.included[0]!.sourceId !== expected || materialDecision.included[0]!.revision !== reviewSourceId)
-            fail('GENERATION_MATERIAL_DECISION_INVALID');
+    if (materialDecision && ['review-chapter', 'refine-draft', 'refine-from-review'].includes(input.operation)) {
+        const context = input.reviewRevisionContext;
+        const reviewSourceId = context?.confirmation?.reviewSourceId;
+        // Historical confirmations had one author-category receipt. Preserve that frozen contract.
+        const legacyConfirmation = input.operation === 'refine-from-review' && Number.isSafeInteger(reviewSourceId) && reviewSourceId! > 0
+            && materialDecision.included.length === 1 && materialDecision.omitted.length === 0
+            && materialDecision.included[0]!.sourceId === `review:confirmed:${reviewSourceId}`
+            && materialDecision.included[0]!.revision === reviewSourceId && materialDecision.included[0]!.category === 'author';
+        const admitted = new Set([...(context?.history ?? []), ...(context?.predecessor ? [context.predecessor] : [])]
+            .flatMap(item => item.identity ? [decisionIdentity(item.identity)] : []));
+        if (!legacyConfirmation && [...materialDecision.included, ...materialDecision.omitted].some(item => {
+            if (item.sourceId === 'author:required') return !context || item.contentHash !== hash(reviewRevisionAuthorMaterial(context));
+            if (item.sourceId.startsWith('review:confirmed:')) return input.operation !== 'refine-from-review' || !context?.confirmation
+                || item.sourceId !== `review:confirmed:${reviewSourceId}` || item.category !== 'future-plan'
+                || item.contentHash !== hash(reviewRevisionAiBrief(context));
+            return !admitted.has(decisionIdentity(item));
+        })) fail('GENERATION_MATERIAL_DECISION_INVALID');
     }
     const materialDecisionHash = materialDecision ? hash(stable(materialDecision)) : undefined;
     const transferAuthority = readPortableCurrentAuthority({ database: deps.db, projectStorageRoot: deps.projectStorageRoot, projectId: input.projectId });

@@ -9,6 +9,8 @@ import type { BlueprintForPreflight, ConsistencyFinding } from './consistency-pr
 import type { FinalizedContinuityProjection, FinalizedSourceIdentity } from './finalized-continuity'
 import type { HumanConfirmedReviewSnapshot } from './human-confirmed-review'
 import type { ReviewCycleRecheckContext } from './review-cycle'
+import { renderHumanConfirmedReviewBrief } from './human-confirmed-review'
+import { writingLanguageText } from './writing-language'
 
 export type ReviewRevisionOperation = 'review-chapter' | 'refine-draft' | 'refine-from-review'
 /** Asserts the author's selected version; prose and all stored facts are loaded by main. */
@@ -41,7 +43,7 @@ export interface ReviewMaterialIdentity {
   revision: number
   /** SHA-256 of the unmodified UTF-8 bytes of the material source. */
   contentHash: string
-  provenance: 'finalized' | 'legacy' | 'author' | 'derived' | 'unknown'
+  provenance: 'finalized' | 'legacy' | 'author' | 'derived' | 'generated' | 'unknown'
 }
 export interface ReviewFinalizedMaterial {
   draftId: number
@@ -67,11 +69,58 @@ export interface ReviewRevisionContext {
   characterStates: string
   worldbuilding: string
   history: ReviewFinalizedMaterial[]
+  /** Exact saved predecessor bound by the source draft, never an inferred latest version. */
+  predecessor?: ReviewFinalizedMaterial
   blueprints: BlueprintForPreflight[]
   frozenGoals: FrozenChapterGoals
   preflightFindings: ConsistencyFinding[]
   confirmation?: { reviewSourceId: number; content: string; originalReviewContentHash: string; snapshot: HumanConfirmedReviewSnapshot }
   recheck?: ReviewCycleRecheckContext
+}
+
+/** Task approval does not turn an AI-proposed replacement into an author fact. */
+export function reviewRevisionAiBrief(context: ReviewRevisionContext): string {
+  const snapshot = context.confirmation?.snapshot
+  return snapshot ? renderHumanConfirmedReviewBrief({ ...snapshot, authorGuidance: '',
+    items: snapshot.items.filter(item => item.origin === 'ai') }, context.writingLanguage) : ''
+}
+
+/** One immutable author-material block shared by renderer admission and main hash validation. */
+export function reviewRevisionAuthorMaterial(context: ReviewRevisionContext): string {
+  const text = (zh: string, en: string) => writingLanguageText(context.writingLanguage, zh, en)
+  const snapshot = context.confirmation?.snapshot
+  // Keep each source label, but emit an identical text/prefix only at its longest source.
+  // The frozen originals stay intact for recovery and source validation.
+  const sources: [string, string | undefined][] = [
+    ['config.worldSetting', context.config.worldSetting],
+    ['config.coreOutline', context.config.coreOutline],
+    ['worldbuilding', context.worldbuilding],
+  ]
+  sources.sort((a, b) => (b[1]?.length ?? 0) - (a[1]?.length ?? 0))
+  const authorText = (source: string, value: string | undefined) => {
+    const original = value && sources.find(([, candidate]) => candidate?.startsWith(value))
+    return original && original[0] !== source
+      ? text(`（本来源原文与 ${original[0]} 的完整前缀相同，见该来源原文。）`,
+        `(This source exactly matches a complete prefix of ${original[0]}; see that original text.)`)
+      : value
+  }
+  return [
+    text('【作者确认项目配置｜约束而非已发生事实】', '[Author-confirmed project configuration | constraints, not established history]'),
+    JSON.stringify({ ...context.config, ...(context.operation === 'refine-draft' ? { writingStyle: undefined } : {}), globalGuidance: undefined,
+      coreOutline: authorText('config.coreOutline', context.config.coreOutline),
+      worldSetting: authorText('config.worldSetting', context.config.worldSetting) }, null, 2),
+    text('【作者全局创作指导｜约束而非已发生事实】', '[Author global creative guidance | constraints, not established history]'),
+    context.config.globalGuidance,
+    text('【世界观设定】', '[Worldbuilding]'), authorText('worldbuilding', context.worldbuilding),
+    text('【作者角色状态｜以标注时点为准】', '[Author character state | scoped to its annotated time]'), context.characterStates,
+    text('【当前及未来蓝图/计划｜非既定历史】', '[Current and future blueprints/plans | not established history]'),
+    JSON.stringify(context.blueprints, null, 2),
+    text('【本章冻结目标｜须由正文证明】', '[Frozen chapter goals | require manuscript evidence]'),
+    JSON.stringify(context.frozenGoals),
+    ...context.authorInputs.map(input => input.text),
+    ...(snapshot ? [renderHumanConfirmedReviewBrief({ ...snapshot,
+      items: snapshot.items.filter(item => item.origin === 'author') }, context.writingLanguage)] : []),
+  ].filter(Boolean).join('\n\n')
 }
 export interface PreparedReviewRevisionContext {
   contextId: string

@@ -1231,7 +1231,7 @@ describe('ReviewChapterCommand reasoning stage', () => {
 
     expect(completeWithLease).toHaveBeenCalledTimes(2)
     const requiredClauses = writingLanguage === 'zh-CN' ? [
-      '是权威事实', '【角色状态】只是既往章节摘要', '同一对象、时点及条件', '合理兼容解释',
+      '是权威事实', '作者角色状态按标注时点理解', '同一对象、时点及条件', '合理兼容解释',
       '未再次说明、未触碰或未明确位置', '新进展可以发生在同一时段或地点',
       '由其必然推出的前提矛盾，必须报告为 error 或 warning',
       '待审全文中所有可能满足目标的动作与实际后果', '不能因一处候选证据是旧结果',
@@ -1240,7 +1240,7 @@ describe('ReviewChapterCommand reasoning stage', () => {
       '旧结果不能代替', '积极、可定位的明示证据', '没有矛盾不算完成',
       'unknown，不能以“没写到”断言“没发生”', '逐字连续、且全文仅出现一次',
     ] : [
-      'worldbuilding settings are authoritative facts', 'character states are only summaries',
+      'worldbuilding settings are authoritative facts', 'author character states apply at their annotated time',
       'same subject, time and conditions', 'reasonable compatible interpretation',
       'Mere omission, lack of contact or an unstated location', 'New progress can occur within the same time period or location',
       'premise that necessarily follows from it, report it as an error or warning',
@@ -1352,7 +1352,7 @@ describe('ReviewChapterCommand reasoning stage', () => {
     const reviewRequest = completeWithLease.mock.calls[0]?.[0].messages
       .map(message => message.content).join('\n') ?? ''
     expect(reviewRequest).toContain('FINALIZED_HISTORY_FACT')
-    expect(reviewRequest).toContain('唯一已发生事实源')
+    expect(reviewRequest).toContain('定稿历史')
     expect(reviewRequest).toContain('【作者全局创作指导｜约束而非已发生事实】')
     expect(reviewRequest).toContain('AUTHOR_GLOBAL_GUIDANCE')
     expect(reviewRequest).toContain('【作者确认项目配置｜约束而非已发生事实】')
@@ -1516,7 +1516,7 @@ describe('ReviewChapterCommand reasoning stage', () => {
 })
 
 describe('审稿/审稿修稿走同一条准入（S10B-2）', () => {
-  const HUGE_HISTORY = '长'.repeat(7_000)
+  const HUGE_HISTORY = '长'.repeat(9_000)
 
   function reviewHistoryIpc(projections: unknown[]) {
     return vi.fn(async (channel: string) => {
@@ -1541,7 +1541,7 @@ describe('审稿/审稿修稿走同一条准入（S10B-2）', () => {
 
     await expect(chapterReviewCommand(completeWithLease, '顾舟检查码头的潮汐钟。', 2).execute({
       step: {}, context: workflowContext(), callbacks: callbacks(),
-    })).rejects.toThrow('审稿的必需材料（前一章定稿）超出上下文容量')
+    })).rejects.toThrow('审稿的必需材料超出上下文容量')
 
     expect(completeWithLease).not.toHaveBeenCalled()
   })
@@ -1563,7 +1563,7 @@ describe('审稿/审稿修稿走同一条准入（S10B-2）', () => {
     const request = completeWithLease.mock.calls[0]?.[0].messages
       .map(message => message.content).join('\n') ?? ''
     // 必需锚点在，超预算的可选块整体省略（不是截断），块头措辞不变。
-    expect(request).toContain('### 第2章 近章')
+    expect(request).toContain('【第2章定稿历史】')
     expect(request).toContain('第二章定稿正文。')
     expect(request).not.toContain('第一章超长标记')
   })
@@ -1572,7 +1572,7 @@ describe('审稿/审稿修稿走同一条准入（S10B-2）', () => {
     const confirmationContent = confirmedReviewContent({
       sourceDraft: { ...CONFIRMED_SOURCE_DRAFT, content: '原稿正文。'.repeat(250) },
       items: [{
-        category: '连续性', severity: 'error', description: '问'.repeat(7_000), decision: 'apply', origin: 'ai',
+        category: '连续性', severity: 'error', description: '问'.repeat(9_000), decision: 'apply', origin: 'ai',
       }],
     })
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
@@ -1581,14 +1581,14 @@ describe('审稿/审稿修稿走同一条准入（S10B-2）', () => {
     await expect(reviewCommand(completeWithLease, CONFIRMED_SOURCE_DRAFT.content, {
       confirmedReviewContent: confirmationContent,
     }).execute({ step: {}, context: workflowContext(), callbacks: callbacks() }))
-      .rejects.toThrow('已确认的审稿清单超出上下文容量')
+      .rejects.toThrow('审稿修稿必需材料超出上下文容量')
 
     expect(completeWithLease).not.toHaveBeenCalled()
   })
 })
 
 describe('修稿路径不再整段拼接（S10B-2）', () => {
-  const HUGE_HISTORY = '长'.repeat(7_000)
+  const HUGE_HISTORY = '长'.repeat(9_000)
   const SOURCE = '原稿正文。'.repeat(250)
   const REVISION = '修订正文。'.repeat(250)
 
@@ -1656,7 +1656,7 @@ describe('修稿路径不再整段拼接（S10B-2）', () => {
 
     await expect(refineCommand(completeWithLease, 3).execute({
       step: {}, context: workflowContext(), callbacks: callbacks(),
-    })).rejects.toThrow('修稿的必需材料（前一章定稿）超出上下文容量')
+    })).rejects.toThrow('修稿的必需材料超出上下文容量')
 
     expect(completeWithLease).not.toHaveBeenCalled()
   })

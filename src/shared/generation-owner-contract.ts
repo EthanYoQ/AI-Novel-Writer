@@ -88,6 +88,8 @@ export interface MaterialDecisionReceipt {
    * 或恰好多出由对账输出重算的注入块（见 `src/shared/draft-reconciliation.ts`）。
    */
   reconciliationPromptHash?: string
+  /** Frozen input identity of the automatic outline; absent on historical runs. */
+  shortOutlinePromptHash?: string
   /** admittedUnits 只统计被选来源块，不冒充完整 user prompt 的总字节数。 */
   capacity: { maxInputUnits: number; methodVersion: typeof MATERIAL_DECISION_UNIT_METHOD_VERSION; admittedUnits: number }
   coverage: { required: number; included: number; complete: boolean }
@@ -130,6 +132,8 @@ export interface GenerationRecoveryContext {
    * 完整结束的对账输出；首稿已发出时，只有主进程复核到首稿提示确实带了注入块才返回，否则为 null。
    */
   draftReconciliation?: { artifactIds: string[]; completedOutput: string | null }
+  /** Native artifacts and the original dispatched draft task, never trusted prose evidence. */
+  draftShortOutline?: { artifactIds: string[]; completedOutput: string | null; promptHash: string; initialDraftTask?: GenerationTask }
   /** Present only when the originally selected drafts still match their frozen source references. */
   selectedDrafts?: PreparedDraftContext['selectedDrafts']
 }

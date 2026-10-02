@@ -1,17 +1,16 @@
 import type { CommandExecuteParams, WorkflowGenerationRuntimeDependencies } from './base-command'
 import type { PreparedReviewRevisionContext } from '../../../shared/review-revision-generation'
 import { ReviewRevisionCommand, type ReviewRevisionCommandSource } from './review-revision-command'
-import { hasIncludedReviewItems, parseHumanConfirmedReviewSnapshot, renderHumanConfirmedReviewBrief } from '../../../shared/human-confirmed-review'
-import { hashAuthorText } from '../../../shared/source-ref'
+import { hasIncludedReviewItems, parseHumanConfirmedReviewSnapshot } from '../../../shared/human-confirmed-review'
 import { resolvePromptTemplate } from '../../prompt-templates'
 import { ChapterPromptBuilder } from '../../prompts/prompt-builder'
 import {
   ChapterMaterialCapacityError,
-  selectReviewRevisionMaterials,
   type ReviewRevisionMaterialAdmission,
 } from '../chapter-materials'
 import { requireWorkflowProjectSession, workflowUiText } from '../workflow-project-session'
 import { countDraftUnits } from '../../../shared/draft-units'
+import { selectFrozenReviewRevisionMaterials } from './review-revision-materials'
 
 function appendCompleteRevisionContract(prompt: string, source: string, writingLanguage: 'zh-CN' | 'en-US'): string {
   const sourceUnits = countDraftUnits(source)
@@ -67,33 +66,18 @@ export class RefineFromReviewCommand extends ReviewRevisionCommand {
     const projectSession = requireWorkflowProjectSession(params.context)
     const template = await resolvePromptTemplate('refine_from_review', projectSession, frozen.writingLanguage)
     if (!template) throw new Error(workflowUiText(params.context, '未找到审稿修复模板', 'The review-based revision template was not found.'))
-    // 本入口的证据材料就是人工确认快照渲染出的清单：它是作者已确认的事实，
-    // 因此按 author 来源、必需材料进同一条准入。措辞不变，渲染文本逐字透传。
-    const reviewBrief = renderHumanConfirmedReviewBrief(confirmation, frozen.writingLanguage)
     const current = { projectId: projectSession.projectId, epoch: projectSession.leaseId }
     let admission: ReviewRevisionMaterialAdmission
     try {
-      admission = selectReviewRevisionMaterials({
-        current,
-        writingLanguage: frozen.writingLanguage,
-        materials: [{
-          identity: { projectId: current.projectId, sourceId: `review:confirmed:${frozen.confirmation!.reviewSourceId}`,
-            revision: frozen.confirmation!.reviewSourceId, contentHash: await hashAuthorText(reviewBrief),
-            provenance: 'author' },
-          category: 'author',
-          required: true,
-          text: reviewBrief,
-        }],
-        relevanceTerms: [],
-      })
+      admission = await selectFrozenReviewRevisionMaterials(frozen, current)
     } catch (error) {
       if (!(error instanceof ChapterMaterialCapacityError)) throw error
       throw new Error(workflowUiText(params.context,
-        '已确认的审稿清单超出上下文容量，已停止修稿。请精简审稿项后重试。',
+        '审稿修稿必需材料超出上下文容量，已停止修稿。请精简必需材料后重试。',
         'The confirmed review checklist exceeds the context capacity, so the revision stopped. Trim the review items and try again.'))
     }
     const builder = new ChapterPromptBuilder(template, frozen.writingLanguage)
-      .withReviewReport(admission.admitted[0]?.text ?? '')
+      .withReviewReport(admission.admitted.map(material => material.text).join('\n\n'))
       .withDraftContent(frozen.source.content)
       .withGlobalGuidance(frozen.config.globalGuidance || '')
       .withUserRefinePrompt('')

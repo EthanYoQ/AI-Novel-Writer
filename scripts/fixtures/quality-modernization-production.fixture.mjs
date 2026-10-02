@@ -11,7 +11,7 @@ import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, 
   createOutboundPreflightAssert, assertForwardReasoning, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
   fetchProviderResponse, measurePromptBytes, qualificationBridgeWindows,
   POST_UI_REVIEW_POLICY, reviewedDraftSelection, BOUNDED_REVISION_DIAGNOSTIC,
-  AI_REVIEW_FINAL_MANUSCRIPT_POLICY, aiReviewFinalManuscriptSelection, productionScenario, loadBaselineReviewContract,
+  AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, aiReviewFinalManuscriptSelection, productionScenario, loadBaselineReviewContract,
   readBoundedRevisionSource, assertBoundedRevisionSource, boundedRevisionItems,
   scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder,
   assertSharedInputDiagnostic } from '../quality-modernization-driver.mjs'
@@ -152,7 +152,7 @@ function readCommittedDraftChapterInfo(db, chapter, projectPath, chapterGuidance
     wordsTarget: chapter.targetUnits }
 }
 function draftPromptIncludesCommittedBlueprint(userPrompt, chapterInfo, purpose) {
-  const initial = purpose === 'chapter-draft'
+  const initial = purpose === 'chapter-draft' || purpose === 'chapter-draft-short-outline'
   // 登记的唯一压缩与续写携带同一作者资料块：【本章蓝图】紧接【全局写作要求】。
   if (!initial && !['chapter-draft-continuation', 'chapter-draft-no-progress-recovery', 'chapter-draft-condense'].includes(purpose)) return false
   const heading = initial ? chapterInfo.chapterNumber === 1 ? '【本章信息】' : '【本章写作方向与核心任务】' : '【本章蓝图】'
@@ -219,8 +219,9 @@ test('isolated production commands persist the selected phase operations', async
   if (diagnosticRun) assert.equal(target.arm, 'candidate', 'SHARED_INPUT_DIAGNOSTIC_CANDIDATE_REQUIRED')
   const aiReviewRun = request.evaluationPolicy?.revision === AI_REVIEW_FINAL_MANUSCRIPT_POLICY.revision
     && (fullRun || request.phase === 'c16-c18' || request.milestone === 'post-ui' && ['early-budget', 'early-context', 'early-review'].includes(request.phase))
-  if (aiReviewRun) assert.deepEqual(request.evaluationPolicy, productionScenario(request.phase, request.milestone).evaluationPolicy, 'AI_REVIEW_POLICY_DRIFT')
-  if (request.phase === 'c16-c18') assert.deepEqual(request.evaluationPolicy, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, 'AI_REVIEW_POLICY_DRIFT')
+  if (aiReviewRun) assert.deepEqual(request.evaluationPolicy, productionScenario(request.phase, request.milestone, request.protocolRevision).evaluationPolicy, 'AI_REVIEW_POLICY_DRIFT')
+  if (request.phase === 'c16-c18') assert.deepEqual(request.evaluationPolicy,
+    productionScenario(request.phase, request.milestone, request.protocolRevision).evaluationPolicy, 'AI_REVIEW_POLICY_DRIFT')
   const reviewedRun = Boolean(request.evaluationPolicy) && !aiReviewRun
   if (reviewedRun) {
     assert.equal(request.phase, 'early-budget', 'REVIEWED_DRAFT_SCOPE_INVALID')
@@ -245,7 +246,8 @@ test('isolated production commands persist the selected phase operations', async
     && continuityCase.chapterNumber === request.chapterNumber, 'CONTINUITY_CASE_NOT_REGISTERED')
   const continuitySource = continuityRun ? source.continuityQualificationCases.find(item => item.id === 'C16-A')?.finalizedSource : null
   if (continuityRun) {
-    assert.equal(continuitySource?.scenarioRevision, request.scenarioRevision, 'CONTINUITY_SOURCE_REVISION_MISMATCH')
+    assert.equal(continuitySource?.scenarioRevision, productionScenario('c16-c18', 'final').scenarioRevision, 'CONTINUITY_SOURCE_REVISION_MISMATCH')
+    assert.equal(request.scenarioRevision, productionScenario('c16-c18', 'final', request.protocolRevision).scenarioRevision, 'CONTINUITY_EXECUTION_REVISION_MISMATCH')
     assert.ok(typeof continuitySource?.content === 'string' && continuitySource.content.trim(), 'CONTINUITY_SOURCE_MISSING')
   }
   const scene = source.scenes.find(value => value.id === request.sceneId)
@@ -262,7 +264,7 @@ test('isolated production commands persist the selected phase operations', async
   const contextSelection = request.phase === 'early-context' ? scene.contextSelection : null
   if (request.phase === 'early-context') {
     assert.ok(['early', 'post-ui'].includes(request.milestone), 'CONTEXT_SCENARIO_REVISION_MISMATCH')
-    const executionScenario = productionScenario(request.phase, request.milestone)
+    const executionScenario = productionScenario(request.phase, request.milestone, request.protocolRevision)
     assert.equal(contextSelection?.scenarioRevision, productionScenario(request.phase, 'early').scenarioRevision, 'CONTEXT_SCENARIO_REVISION_MISMATCH')
     assert.equal(request.scenarioRevision, executionScenario.scenarioRevision, 'CONTEXT_SCENARIO_REVISION_MISMATCH')
     assert.deepEqual(request.evaluationPolicy ?? null, executionScenario.evaluationPolicy ?? null, 'CONTEXT_EVALUATION_POLICY_MISMATCH')
@@ -276,6 +278,7 @@ test('isolated production commands persist the selected phase operations', async
   if (reviewedRun) assert.ok(scenarioAuthorSettingLines(scene, request.scenarioRevision).length, 'REVIEWED_SCENARIO_AUTHOR_LINE_MISSING')
   const load = relative => import(/* @vite-ignore */ pathToFileURL(path.join(target.repositoryRoot, relative)).href)
   const receipt = { schemaVersion: 1, invocationId: request.invocationId, arm: target.arm, mode: request.mode, action: request.action,
+    ...(request.sampling ? { sampling: { ...request.sampling, slot: `${request.phase}:${request.caseId}` } } : {}),
     protocolRevision: request.protocolRevision, protocolHash: request.protocolHash,
     phase: request.phase, milestone: request.milestone, caseId: request.caseId, sceneId: request.sceneId, chapterNumber: request.chapterNumber,
     operations: [], qualification: diagnosticRun || boundedRun ? 'non-qualification-diagnostic' : request.development ? 'development-only-unfrozen' : 'frozen-target', codeSha: target.codeSha,
@@ -491,10 +494,10 @@ test('isolated production commands persist the selected phase operations', async
     }
     if (request.action === 'prepare' && !boundedRun) {
       let templates
-      if (!candidate || continuityRun || diagnosticRun) {
+      if (!candidate || continuityRun || diagnosticRun || request.protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION) {
         templates = templateKeys.map(key => structuredClone(prompts.getPromptTemplate(key)))
         assert.ok(templates.every(template => template?.content && template.key))
-        save(request.templatesPath, { baselineSha: target.codeSha, templates })
+        save(request.templatesPath, { sourceArm: target.arm, sourceSha: target.codeSha, templates })
       } else templates = json(request.templatesPath).templates
       fs.mkdirSync(path.join(target.roots.config, 'prompts'), { recursive: true })
       for (const template of templates) save(path.join(target.roots.config, 'prompts', `${template.key}.json`), template)
@@ -652,7 +655,11 @@ test('isolated production commands persist the selected phase operations', async
     for (const key of templateKeys) physicalTemplates.push(await prompts.resolvePromptTemplate(key, session, 'zh-CN'))
     const expectedTemplates = json(request.templatesPath).templates
     assert.deepEqual(physicalTemplates, expectedTemplates, 'ACTUAL_TEMPLATE_PARITY_FAILED')
-    receipt.promptMapping = { baselineSha: json(request.templatesPath).baselineSha,
+    const templateSource = json(request.templatesPath)
+    if (request.protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION)
+      assert.ok(templateSource.sourceArm === 'candidate' && templateSource.sourceSha === target.codeSha, 'CANDIDATE_TEMPLATE_SOURCE_MISMATCH')
+    receipt.promptMapping = { sourceArm: templateSource.sourceArm, sourceSha: templateSource.sourceSha,
+      baselineSha: templateSource.baselineSha,
       guidanceHash: sha(source.template), templates: physicalTemplates.map(template => ({ key: template.key,
         templateHash: sha(template), contentHash: sha(template.content) })) }
     const actualModel = (await invoke('llm:list-models')).find(value => value.id === model.id)
@@ -837,10 +844,11 @@ test('isolated production commands persist the selected phase operations', async
     const draftRecovery = recoveryPolicy ? { policy: recoveryPolicy, arm: target.arm, targetUnits: chapter.targetUnits } : null
     if (recoveryPolicy) {
       const { DRAFT_GENERATION_BUDGET } = await load('src/services/workflows/commands/generate-draft.command.ts')
-      assert.equal(recoveryPolicy.maxAttempts, DRAFT_GENERATION_BUDGET.maxAttempts, 'DRAFT_RECOVERY_BUDGET_MISMATCH')
+      assert.equal(recoveryPolicy.maxAttempts + Number(Boolean(request.attemptPolicy?.shortOutline)), DRAFT_GENERATION_BUDGET.maxAttempts, 'DRAFT_RECOVERY_BUDGET_MISMATCH')
     }
     const { parseFinalizedCharacterStateResponse } = continuityRun ? await load('src/shared/finalized-continuity.ts') : {}
     const beforeOperationDispatch = createOperationDispatchGate({ repairPolicy, draftCondense, draftRecovery, structuredRecovery,
+      shortOutline: request.attemptPolicy?.shortOutline,
       refinementRecovery: aiReviewRun ? request.attemptPolicy.refinementRecovery : null,
       finalizationRepair: continuityRun, readPrimaryEvidence: first => {
       const boundedRun = request.phase === 'bounded-revision-diagnostic'
@@ -860,7 +868,8 @@ test('isolated production commands persist the selected phase operations', async
         || (request.attemptPolicy?.draftRecovery || request.attemptPolicy?.draftCondense) && operationKind === 'draft')) {
         const artifact = db.prepare('SELECT artifact_json FROM generation_artifacts WHERE attempt_id=?').pluck().get(first.attemptId)
         if (!artifact) return null
-        if (['draft', 'directory'].includes(operationKind)) return { attempt: matches[0], events, ownerArtifactHash: sha(JSON.parse(artifact).text) }
+        if (['draft', 'directory'].includes(operationKind)) return { attempt: matches[0], events,
+          ownerArtifactHash: sha(JSON.parse(artifact).text), ownerArtifactId: JSON.parse(artifact).artifactId }
         if (aiReviewRun && ['review', 'final-review', 'refine'].includes(operationKind)) {
           const usage = JSON.parse(db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(first.attemptId))
           return { attempt: matches[0], events, ownerArtifactHash: sha(JSON.parse(artifact).text), ownerArtifactId: JSON.parse(artifact).artifactId,
@@ -994,7 +1003,8 @@ test('isolated production commands persist the selected phase operations', async
         const text = userMessages.length === 1 ? userMessages[0].content : ''
         preflight(!text.includes('【本章与定稿对账') && !text.includes('[Reconciliation with finalized chapters'), 'DRAFT_GENERATED_PLAN_INJECTED')
         preflight(!materialDecision?.reconciliationPromptHash, 'DRAFT_RECONCILE_NOT_REGISTERED')
-        if (actual.purpose === 'chapter-draft') preflight(sha(text) === materialDecision.promptHash, 'DRAFT_INITIAL_PROMPT_DRIFT')
+        if (actual.purpose === 'chapter-draft' && !request.attemptPolicy?.shortOutline)
+          preflight(sha(text) === materialDecision.promptHash, 'DRAFT_INITIAL_PROMPT_DRIFT')
       }
       if (operationKind === 'recheck' && candidate) {
         const merged = db.prepare('SELECT c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1')
@@ -1039,7 +1049,8 @@ test('isolated production commands persist the selected phase operations', async
       }
       if (candidate && request.phase === 'early-context' && operationKind === 'draft') {
         preflight(userMessages.length === 1, 'CANDIDATE_USER_MESSAGE_NOT_UNIQUE')
-        preflight(userPromptHash === materialDecision.promptHash, 'MATERIAL_DECISION_PROMPT_HASH_MISMATCH')
+        if (!request.attemptPolicy?.shortOutline)
+          preflight(userPromptHash === materialDecision.promptHash, 'MATERIAL_DECISION_PROMPT_HASH_MISMATCH')
         const requiredPredecessor = predecessorReadbacks.find(record => record.required)
         preflight(requiredPredecessor && promptText.includes(scene.authorPredecessor),
           'CANDIDATE_REQUIRED_PREDECESSOR_NOT_SENT')
@@ -1073,7 +1084,8 @@ test('isolated production commands persist the selected phase operations', async
           preflight(start >= 0, 'FULL_ACCEPTED_ENDING_RANGE_INVALID')
           if (!ranges.some(range => range.start <= start && range.end >= start + ending.length)) ranges.push({ start, end: start + ending.length })
         } else preflight(promptText.includes(previous.content), 'FULL_REVIEW_ACCEPTED_PREDECESSOR_NOT_SENT')
-        predecessorConsumption = { selected: request.predecessor, mode: operationKind === 'draft' ? 'native-paragraphs-and-ending' : 'reviewFocus-complete-body',
+        predecessorConsumption = { selected: request.predecessor, mode: operationKind === 'draft' ? 'native-paragraphs-and-ending'
+          : request.protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION ? 'captured-predecessor' : 'reviewFocus-complete-body',
           messageRoles: [...new Set(body.messages.filter(message => message.content?.includes(operationKind === 'draft' ? ending : previous.content)).map(message => message.role))],
           ranges: ranges.map(({ start, end }) => ({ start, end, contentHash: sha(previous.content.slice(start, end)),
             bytes: Buffer.byteLength(previous.content.slice(start, end), 'utf8') })),
@@ -1081,6 +1093,7 @@ test('isolated production commands persist the selected phase operations', async
       }
       // phase / caseId / operation 全部来自本次选定的协议阶段，账本按协议逐字校验。
       const binding = { campaignId: CAMPAIGN_ID, invocationId: request.invocationId, mode: request.mode, arm: target.arm,
+        ...(request.sampling ? { sampling: { ...request.sampling, slot: `${request.phase}:${request.caseId}` } } : {}),
         protocolRevision: request.protocolRevision, protocolHash: request.protocolHash,
         codeSha: target.codeSha, sourceHash: target.sourceHash, driverHash: request.driverHash,
         parityId: request.parityHash, phase: request.phase, milestone: request.milestone, caseId: request.caseId,
@@ -1232,7 +1245,7 @@ test('isolated production commands persist the selected phase operations', async
         // Development transport exercises the existing product recovery branches; real/frozen requests never enter here.
         if (request.development && request.mode === 'synthetic') {
           const purpose = (actual ?? observedIpc).purpose
-          const recoverDraft = draftRecovery && operationKind === 'draft'
+          const recoverDraft = draftRecovery && operationKind === 'draft' && purpose !== 'chapter-draft-short-outline'
             && (request.caseId === 'C17-A' || request.caseId === 'C18-A' || request.caseId === '场景1/2'
               || reviewedRun || fullRun && request.caseId === '场景1/1')
           if (recoverDraft) {
@@ -1253,6 +1266,10 @@ test('isolated production commands persist the selected phase operations', async
             invalid.blueprints[0].keyEvents = '超'.repeat(4001)
             text = JSON.stringify(invalid)
           }
+        }
+        if ((actual ?? observedIpc).purpose === 'chapter-draft-short-outline') {
+          text = `本章写作短细纲：依据本章既定目标展开具体行动和结果，先前已经完成的事件只作背景。${chapter.requiredEvents.join('；')}。保留作者时点、身份和约束，结尾停在本章结果。`
+          syntheticFinish = 'stop'
         }
         const promptTokens = Math.max(1, Math.ceil(Buffer.byteLength(JSON.stringify(body.messages), 'utf8') / 4))
         const completionTokens = Math.max(1, Math.ceil(Buffer.byteLength(text, 'utf8') / 4))
@@ -1425,8 +1442,8 @@ test('isolated production commands persist the selected phase operations', async
             draftPath, draftContent: sourceDraft.content, sourceDraft: frozenSource, chapterNumber: chapter.number,
             reviewFocus: aiReviewRun ? [
               fullRun || request.phase === 'early-budget' && request.milestone === 'post-ui' ? chapterGuidance : '',
-              acceptedPrevious ? `本臂前章已接受参考稿（未定稿；只核对与原文的连续性，不新增作者事实）。\n来源：${JSON.stringify(request.predecessor)}\n${acceptedPrevious.content}` : '',
-              request.phase === 'early-context' && request.milestone === 'post-ui'
+              acceptedPrevious && !request.attemptPolicy?.shortOutline ? `本臂前章已接受参考稿（未定稿；只核对与原文的连续性，不新增作者事实）。\n来源：${JSON.stringify(request.predecessor)}\n${acceptedPrevious.content}` : '',
+              !request.attemptPolicy?.shortOutline && request.phase === 'early-context' && request.milestone === 'post-ui'
                 ? predecessorReadbacks.filter(record => record.required).map(record => `本臂当前选用的前章候选（未定稿；只核对与原文的连续性，不新增作者事实）。\n${record.content}`).join('\n') : '',
             ].filter(Boolean).join('\n')
               : reviewedRun || boundedRun ? `核对本章全部必需事件、作者事实、字数、复述、自然度、人物动机和节奏可读性。只依据作者资料、蓝图及待审正文给出问题与原文证据；不得新增作者事实。\n${chapterGuidance}` : '只核对本章必需事件、作者事实与明确证据，不检查字数。对于“承担代价”，只有人物已经执行选择、具体损失或牺牲已经发生、后文没有反证，才算完成；签字认责或承诺以后负责不算代价。',
@@ -1755,6 +1772,16 @@ test('isolated production commands persist the selected phase operations', async
         ...(fullRun && aiReviewRun ? { status: draft[0].status } : {}),
         draftId: draft[0].id, version: draft[0].version, contentHash: sha(draft[0].content), units, persistedBytes: Buffer.byteLength(draft[0].content, 'utf8'),
         blueprintChapterNumbers: db.prepare('SELECT chapter_number FROM blueprints ORDER BY chapter_number').all().map(row => row.chapter_number) }
+      if (candidate && aiReviewRun && request.protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION) {
+        const terminalReview = aiReviewedDraft.finalReview ?? aiReviewedDraft.review
+        assert.equal(terminalReview.sourceHash, receipt.saved.contentHash, 'CURRENT_REVIEW_SOURCE_MISMATCH')
+        const cycle = await invoke('db:review-cycle-get', terminalReview.reviewId, project.rootPath, session)
+        assert.ok(cycle?.cycleId, 'CURRENT_REVIEW_CYCLE_MISSING')
+        receipt.currentReviewState = { contentHash: receipt.saved.contentHash, reviewId: terminalReview.reviewId,
+          reviewContentHash: terminalReview.contentHash, cycleId: cycle.cycleId,
+          findings: db.prepare('SELECT finding_id AS findingId,status,target_id AS targetId FROM review_findings WHERE cycle_id=? ORDER BY finding_id')
+            .all(cycle.cycleId) }
+      }
     }
     if (candidate) {
       receipt.ownerTerminal = db.prepare('SELECT a.attempt_id,a.attempt_json,a.usage_receipt_json,g.artifact_json FROM generation_attempts a JOIN generation_artifacts g ON g.attempt_id=a.attempt_id ORDER BY a.rowid').all()

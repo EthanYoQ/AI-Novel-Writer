@@ -22,6 +22,7 @@ import type { GenerationRunServiceDependencies } from '../generation-run-service
 import type { PrepareReviewRevisionRequest } from '../../../src/shared/review-revision-generation'
 import { verifyM03ReviewCycle } from '../../migrations/m03-review-cycle'
 import { countDraftUnits } from '../../../src/shared/draft-units'
+import { selectFrozenReviewRevisionMaterials } from '../../../src/services/workflows/commands/review-revision-materials'
 
 vi.mock('../../database', () => ({ getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn(() => null) }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -68,6 +69,33 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   return { get db() { return db }, owner, makeOwner, reopenStorage, prepare, selection, run, spy, deps }
 }
 describe('review and revision generation through the actual owner and SQLite', () => {
+  it('captures only the saved predecessor bound by the source draft and rejects changed predecessor bytes', () => {
+    const f = fixture()
+    f.db.exec('UPDATE drafts SET chapter_number=2 WHERE id=1')
+    f.db.prepare('INSERT INTO contents(id,body) VALUES(2,?)').run('已选前驱：钥匙已经交出。')
+    f.db.prepare('INSERT INTO contents(id,body) VALUES(3,?)').run('未选版本：钥匙仍在手中。')
+    f.db.exec("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(2,1,1,'draft',2,10),(3,1,2,'draft',3,10)")
+    f.db.prepare('UPDATE drafts SET source_dependencies=? WHERE id=1').run(JSON.stringify([{ kind: 'candidate', draftId: 2, contentHash: textHash('已选前驱：钥匙已经交出。') }]))
+    const request: PrepareReviewRevisionRequest = { operation: 'review-chapter', draftId: 1,
+      expectedDraft: { chapterNumber: 2, version: 1, status: 'draft', contentHash: textHash(prose) }, authorInputs: [], uiLocale: 'zh-CN' }
+    const frozen = f.owner.prepareReviewRevision(request).context
+    expect(frozen.predecessor).toMatchObject({ draftId: 2, content: '已选前驱：钥匙已经交出。',
+      identity: { sourceId: 'candidate:2', revision: 1, provenance: 'generated' } })
+    expect(JSON.stringify(frozen)).not.toContain('未选版本：钥匙仍在手中。')
+    f.db.exec("UPDATE contents SET body='前驱已被改动' WHERE id=2")
+    expect(() => f.owner.prepareReviewRevision(request)).toThrow('GENERATION_REVIEW_HISTORY_CHANGED')
+  })
+  it('admits the renderer author-material receipt through main and retains the frozen recovery context', async () => {
+    const f = fixture(), prepared = f.prepare(), selection = f.selection(prepared)
+    const admission = await selectFrozenReviewRevisionMaterials(prepared.context, { projectId: 'project', epoch: 'epoch-1' })
+    const prompt = admission.admitted.map(material => material.text).join('\n\n')
+    const view = f.owner.begin(selection)
+    f.owner.bindMaterialDecision(view.handle, { ...admission.decision, promptHash: textHash(prompt) })
+    await f.owner.execute({ handle: view.handle, invocationNonce: 'materials', task: { purpose: 'review-chapter',
+      output: 'structured-data', messages: [{ role: 'user', content: prompt }] } })
+    expect(f.spy).toHaveBeenCalledTimes(1)
+    expect(f.owner.readReviewRevisionRecovery(view.handle).context).toEqual(prepared.context)
+  })
   it('requires main context and rejects forged context and hashes before dispatch', () => {
     const f = fixture(), selection = f.selection(f.prepare())
     expect(() => f.owner.begin({ ...selection, reviewRevisionContextId: undefined })).toThrow('GENERATION_REVIEW_CONTEXT_REQUIRED')

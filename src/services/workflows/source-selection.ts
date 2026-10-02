@@ -71,6 +71,8 @@ export interface SourceSelectionInput {
   current: ProjectEpoch
   candidates: readonly MaterialCandidate[]
   capacity: { maxInputUnits: number; methodVersion: string }
+  /** Optional material may enter only while total included units stay below this local ceiling. */
+  optionalMaterialCeiling?: number
   relevanceTerms: readonly string[]
 }
 
@@ -210,7 +212,8 @@ export function selectChapterSources(input: SourceSelectionInput): SourceSelecti
       continue
     }
     const cost = blocks.reduce((sum, piece) => sum + unitOf(piece.text), 0)
-    if (cost > remaining) {
+    if (cost > remaining || !candidate.required && input.optionalMaterialCeiling !== undefined
+      && input.capacity.maxInputUnits - remaining + cost > input.optionalMaterialCeiling) {
       block(candidate, 'budget')
       continue
     }

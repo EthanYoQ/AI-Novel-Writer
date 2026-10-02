@@ -19,6 +19,7 @@ import type { GenerationTask } from '../../../src/services/generation/generation
 import { composeVisibleContinuation } from '../../../src/shared/visible-continuation'
 import { sanitizeDraftText } from '../../../src/shared/draft-visible-text'
 import { DRAFT_RECONCILE_PURPOSE, parseDraftReconciliation, renderDraftReconciliationBlock } from '../../../src/shared/draft-reconciliation'
+import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock } from '../../../src/shared/draft-short-outline'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
 import { PostProcessRepository } from '../../repositories/post-process-repository'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
@@ -80,6 +81,68 @@ function syntheticStream() {
   vi.stubGlobal('fetch', fetch)
   return fetch
 }
+
+describe('automatic short outline binding', () => {
+  const base = '原目标：读信。作者约束：不得离开房间。'
+  const outlinePrompt = '短细纲输入'
+  const outline = '前驱：信已送到；行动：在房内读信；结果：获知消息。'
+  const composed = `${base}\n\n${draftShortOutlineBlock('zh-CN', outline)}`
+  const decision = { version: 1 as const, verdict: 'admitted' as const,
+    promptHash: textHash(base), shortOutlinePromptHash: textHash(outlinePrompt),
+    capacity: { maxInputUnits: 8000, methodVersion: 'utf8-bytes-v1' as const, admittedUnits: 1 },
+    coverage: { required: 1, included: 1, complete: true }, included: [{ sourceId: 'author:required', revision: 1, contentHash: 'a'.repeat(64), category: 'author' as const, required: true, units: 1 }], omitted: [] }
+  const outlineTask = { purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text' as const, messages: [{ role: 'user' as const, content: outlinePrompt }] }
+  const draftTask = (content: string) => ({ ...task, messages: [{ role: 'user' as const, content }] })
+  it('requires and consumes its native artifact, then preserves the exact draft task across reopen', async () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
+      options.onVisible({ kind: 'delta', text: (request as { task: GenerationTask }).task.purpose === DRAFT_SHORT_OUTLINE_PURPOSE ? outline : '正文。' })
+      return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch)
+    const run = f.owner.begin({ ...f.begin, materialDecision: decision })
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'skip', task: draftTask(base) })).rejects.toThrow('GENERATION_DRAFT_SHORT_OUTLINE_REQUIRED')
+    const planned = await f.owner.execute({ handle: run.handle, invocationNonce: 'outline', task: outlineTask })
+    expect(planned.run.artifacts[0]).toMatchObject({ text: outline, compositionEligible: false })
+    expect(() => f.owner.composeVisible(run.handle, [planned.run.artifacts[0]!.artifactId], textHash(outline), 'draft-visible-v1')).toThrow('GENERATION_COMPOSITION_SOURCE_INVALID')
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'omit', task: draftTask(base) })).rejects.toThrow('GENERATION_MATERIAL_PROMPT_MISMATCH')
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'draft', task: draftTask(composed) })
+    const owner = f.reopen()
+    const resumed = await owner.resume(run.handle)
+    expect(owner.readContext(resumed.handle).draftShortOutline).toMatchObject({ completedOutput: outline, promptHash: textHash(outlinePrompt), initialDraftTask: draftTask(composed) })
+    await expect(owner.execute({ handle: resumed.handle, invocationNonce: 'replan', task: outlineTask })).rejects.toThrow('GENERATION_DRAFT_SHORT_OUTLINE_ALREADY_ATTEMPTED')
+    await expect(owner.execute({ handle: resumed.handle, invocationNonce: 'replace', task: draftTask(composed + '改目标') })).rejects.toThrow('GENERATION_MATERIAL_PROMPT_MISMATCH')
+    expect(dispatch).toHaveBeenCalledTimes(2)
+  })
+  it.each(['length', 'error', 'empty'] as const)('never admits prose or resends a failed outline: %s', async failure => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      if (failure !== 'empty') options.onVisible({ kind: 'delta', text: '未完成的细纲' })
+      return { finishReason: failure === 'empty' ? 'stop' : failure, usage: null }
+    })
+    const f = fixture(dispatch)
+    const run = f.owner.begin({ ...f.begin, materialDecision: decision })
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'outline', task: outlineTask })
+    const owner = f.reopen()
+    const resumed = await owner.resume(run.handle)
+    expect(owner.readContext(resumed.handle).draftShortOutline?.completedOutput).toBeNull()
+    await expect(owner.execute({ handle: resumed.handle, invocationNonce: 'prose', task: draftTask(composed) })).rejects.toThrow('GENERATION_DRAFT_SHORT_OUTLINE_REQUIRED')
+    await expect(owner.execute({ handle: resumed.handle, invocationNonce: 'again', task: outlineTask })).rejects.toThrow('GENERATION_DRAFT_SHORT_OUTLINE_ALREADY_ATTEMPTED')
+    expect(dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('reuses the completed outline after a crash before prose without a second outline request', async () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
+      options.onVisible({ kind: 'delta', text: (request as { task: GenerationTask }).task.purpose === DRAFT_SHORT_OUTLINE_PURPOSE ? outline : '正文。' })
+      return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch)
+    const run = f.owner.begin({ ...f.begin, materialDecision: decision })
+    const planned = await f.owner.execute({ handle: run.handle, invocationNonce: 'outline', task: outlineTask })
+    const owner = f.reopen(), resumed = await owner.resume(run.handle)
+    expect(owner.readContext(resumed.handle).draftShortOutline).toEqual({ artifactIds: [planned.run.artifacts[0]!.artifactId], completedOutput: outline, promptHash: textHash(outlinePrompt) })
+    const drafted = await owner.execute({ handle: resumed.handle, invocationNonce: 'prose', task: draftTask(composed) })
+    expect(drafted.run.ledger?.physicalRequests).toBe(2)
+    expect(drafted.run.handle.rootActionId).toBe(run.handle.rootActionId)
+  })
+})
 
 it('applies the current project strategy through the main owner while keeping model override and source freeze', async () => {
   const reasoning: unknown[] = []

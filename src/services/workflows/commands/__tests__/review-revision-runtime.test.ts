@@ -10,7 +10,8 @@ import { useEditorStore } from '../../../../stores/editor-store'
 import { useLLMStore } from '../../../../stores/llm-store'
 import type { WorkflowContext } from '../../../../stores/workflow-store'
 import type { LLMFinishReason } from '../../../../shared/ipc-channels'
-import type { ReviewRevisionOperation } from '../../../../shared/review-revision-generation'
+import { reviewRevisionAiBrief, reviewRevisionAuthorMaterial, type ReviewRevisionOperation } from '../../../../shared/review-revision-generation'
+import { MATERIAL_DECISION_MAX_INPUT_UNITS } from '../../../../shared/generation-owner-contract'
 import type { ReviewRevisionCommandSource } from '../review-revision-command'
 import { createHumanConfirmedReviewSnapshot, serializeHumanConfirmedReviewSnapshot } from '../../../../shared/human-confirmed-review'
 import { clearProjectCustomPrompts } from '../../../prompt-templates'
@@ -91,6 +92,131 @@ beforeEach(() => {
 afterEach(() => { clearProjectCustomPrompts(); vi.restoreAllMocks(); vi.unstubAllGlobals(); useProjectStore.setState({ currentProject: null }) })
 
 describe('review/revision consumers using the main contract (synthetic transport)', () => {
+  it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)('passes the complete required set beyond 24k to the actual %s request', async operation => {
+    const f = setup([{ content: operation === 'review-chapter' ? review : revised, finishReason: 'stop' }])
+    const setting = '独有作者事实。'.repeat(900)
+    const predecessor = '前驱独有原文。'.repeat(320)
+    let frozenBytes = ''
+    const invoke = f.fixture.invoke.bind(f.fixture)
+    vi.spyOn(f.fixture, 'invoke').mockImplementation(async (channel, ...args) => {
+      const result = await invoke(channel, ...args)
+      if (channel === 'review-revision:prepare') {
+        const prepared = result as NonNullable<typeof f.fixture.prepared>
+        prepared.context.config.worldSetting = setting
+        prepared.context.predecessor = { draftId: 8, chapterNumber: 0, chapterTitle: '', content: predecessor,
+          identity: { projectId: session.projectId, sourceId: 'candidate:8', revision: 1,
+            contentHash: hash(predecessor), provenance: 'generated' } }
+        frozenBytes = JSON.stringify(prepared.context)
+        f.fixture.prepared = structuredClone(prepared)
+      }
+      return result
+    })
+    await f.command(operation).execute(f.args)
+    expect(JSON.stringify(f.fixture.prepared!.context)).toBe(frozenBytes)
+    const prompt = f.provider.mock.calls[0]![0].find(message => message.role === 'user')!.content
+    const author = reviewRevisionAuthorMaterial(f.fixture.prepared!.context)
+    expect(prompt).toContain(author)
+    expect(prompt).toContain(predecessor)
+    if (operation === 'refine-from-review') expect(prompt).toContain(reviewRevisionAiBrief(f.fixture.prepared!.context))
+    expect(f.fixture.materialDecisions[0]?.capacity.admittedUnits).toBeGreaterThan(24_000)
+    expect(f.fixture.materialDecisions[0]?.capacity.maxInputUnits).toBe(MATERIAL_DECISION_MAX_INPUT_UNITS)
+    expect(f.fixture.materialDecisions[0]?.coverage.complete).toBe(true)
+    expect(f.fixture.materialDecisions[0]?.promptHash).toBe(hash(prompt))
+    expect(f.fixture.materialDecisions[0]?.included.find(item => item.sourceId === 'author:required')?.contentHash).toBe(hash(author))
+    expect(f.fixture.materialDecisions[0]?.included.find(item => item.sourceId === 'candidate:8')?.contentHash).toBe(hash(predecessor))
+  })
+
+  it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)(
+    'admits long author text once without changing the frozen %s sources', async operation => {
+      const f = setup([{ content: operation === 'review-chapter' ? review : revised, finishReason: 'stop' }])
+      const prefix = '登记日期仅为核查线索。'.repeat(100)
+      const setting = prefix + '仓库独有作者规定。'.repeat(400)
+      const invoke = f.fixture.invoke.bind(f.fixture)
+      vi.spyOn(f.fixture, 'invoke').mockImplementation(async (channel, ...args) => {
+        const result = await invoke(channel, ...args)
+        if (channel === 'review-revision:prepare') {
+          const prepared = result as NonNullable<typeof f.fixture.prepared>
+          prepared.context.config.coreOutline = prefix
+          prepared.context.config.worldSetting = setting
+          prepared.context.worldbuilding = prefix
+          f.fixture.prepared = structuredClone(prepared)
+        }
+        return result
+      })
+      await f.command(operation).execute(f.args)
+      const frozen = f.fixture.prepared!.context
+      expect(frozen.config.coreOutline).toBe(prefix)
+      expect(frozen.config.worldSetting).toBe(setting)
+      expect(frozen.worldbuilding).toBe(prefix)
+      const author = reviewRevisionAuthorMaterial(frozen)
+      expect(author.split(prefix)).toHaveLength(2)
+      expect(author).toContain(setting)
+      expect(author).toContain('"coreOutline"')
+      expect(author).toContain('【世界观设定】')
+      expect(f.provider).toHaveBeenCalledOnce()
+      expect(f.fixture.materialDecisions[0]?.capacity.maxInputUnits).toBe(MATERIAL_DECISION_MAX_INPUT_UNITS)
+      expect(f.fixture.materialDecisions[0]?.coverage.complete).toBe(true)
+    },
+  )
+
+  it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)(
+    'sends frozen author facts, goals and predecessor in the actual %s request', async operation => {
+      const f = setup([{ content: operation === 'review-chapter' ? review : revised, finishReason: 'stop' }], [{
+        draftId: 7, chapterNumber: 0, chapterTitle: '历史章', chapterNotes: '前驱已交出钥匙。', sourceStatus: 'current', facts: [],
+      }])
+      const invoke = f.fixture.invoke.bind(f.fixture)
+      vi.spyOn(f.fixture, 'invoke').mockImplementation(async (channel, ...args) => {
+        const result = await invoke(channel, ...args)
+        if (channel === 'review-revision:prepare') {
+          const prepared = result as NonNullable<typeof f.fixture.prepared>
+          prepared.context.worldbuilding = '作者硬事实：钟楼没有地下室。'
+          prepared.context.predecessor = { draftId: 8, chapterNumber: 0, chapterTitle: '', content: '已选保存前驱：角色仍未定稿。',
+            identity: { projectId: session.projectId, sourceId: 'candidate:8', revision: 1,
+              contentHash: hash('已选保存前驱：角色仍未定稿。'), provenance: 'generated' } }
+          prepared.context.blueprints = [{ chapterNumber: 1, title: '开门', keyEvents: '本章必须交出印章', characters: [], role: '', purpose: '', suspenseHook: '', userGuidance: '', notes: '' }]
+          if (prepared.context.confirmation) prepared.context.confirmation.snapshot = {
+            ...prepared.context.confirmation.snapshot, items: [
+              { category: '地点', severity: 'warning', description: '把钟楼改成地下室。', decision: 'apply', origin: 'ai' },
+              { category: '作者要求', severity: 'warning', description: '保留钟楼场景。', decision: 'apply', origin: 'author' },
+            ],
+          }
+          f.fixture.prepared = structuredClone(prepared)
+        }
+        return result
+      })
+      await f.command(operation).execute(f.args)
+      const prompt = f.provider.mock.calls[0]![0].find(message => message.role === 'user')!.content
+      expect(prompt).toContain('前驱已交出钥匙。')
+      expect(prompt).toContain('已选保存前驱：角色仍未定稿。')
+      expect(prompt).toContain('不覆盖作者设定')
+      expect(prompt).toContain('作者硬事实：钟楼没有地下室。')
+      expect(prompt).toContain('本章必须交出印章')
+      expect(f.fixture.materialDecisions[0]?.included.map(item => item.sourceId)).toContain('author:required')
+      if (operation === 'refine-from-review') {
+        expect(prompt).toContain('选择 AI 意见只授权处理问题')
+        expect(prompt).toContain('作者确认的额外指导')
+        expect(prompt).toContain('[AI 意见] 把钟楼改成地下室。')
+        expect(prompt).toContain('[作者亲写] 保留钟楼场景。')
+        expect(f.fixture.materialDecisions[0]?.included.find(item => item.sourceId === 'review:confirmed:10')?.category).toBe('future-plan')
+      }
+    },
+  )
+
+  it('stops before requesting a model when frozen author facts exceed the 8MiB material safety bound', async () => {
+    const f = setup([])
+    const invoke = f.fixture.invoke.bind(f.fixture)
+    vi.spyOn(f.fixture, 'invoke').mockImplementation(async (channel, ...args) => {
+      const result = await invoke(channel, ...args)
+      if (channel === 'review-revision:prepare') {
+        const prepared = result as NonNullable<typeof f.fixture.prepared>
+        prepared.context.worldbuilding = 'A'.repeat(MATERIAL_DECISION_MAX_INPUT_UNITS + 1)
+        f.fixture.prepared = structuredClone(prepared)
+      }
+      return result
+    })
+    await expect(f.command('refine-from-review').execute(f.args)).rejects.toThrow('必需材料超出上下文容量')
+    expect(f.provider).not.toHaveBeenCalled()
+  })
   it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)(
     'binds %s admission to the exact initial user message before the first provider request',
     async operation => {
@@ -106,11 +232,11 @@ describe('review/revision consumers using the main contract (synthetic transport
       expect(f.fixture.materialDecisions[0]?.coverage.complete).toBe(true)
       if (operation === 'refine-from-review') {
         // The material authority is the persisted human-confirmation row (10), not its original AI review (9).
-        expect(f.fixture.materialDecisions[0]?.included.map(item => item.sourceId)).toEqual(['review:confirmed:10'])
-        expect(f.fixture.materialDecisions[0]?.included.map(item => item.revision)).toEqual([10])
+        expect(f.fixture.materialDecisions[0]?.included.map(item => item.sourceId)).toEqual(['author:required', 'review:confirmed:10'])
+        expect(f.fixture.materialDecisions[0]?.included.map(item => item.revision)).toEqual([1, 10])
       } else {
-        expect(f.fixture.materialDecisions[0]?.included).toEqual([])
-        expect(f.fixture.materialDecisions[0]?.capacity.admittedUnits).toBe(0)
+        expect(f.fixture.materialDecisions[0]?.included.map(item => item.sourceId)).toEqual(['author:required'])
+        expect(f.fixture.materialDecisions[0]?.capacity.admittedUnits).toBeGreaterThan(0)
       }
     },
   )
@@ -125,8 +251,10 @@ describe('review/revision consumers using the main contract (synthetic transport
     expect(prompt).toContain('不得拼接多个位置、改写原文或包含省略号')
     expect(prompt).toContain('优先选择足以证明问题的最短完整句')
     expect(prompt).toContain('需要多处证据时拆成多个 evidence 项')
-    expect(prompt).toContain('【作者设定优先】【作者确认项目配置】与【世界观设定】是权威事实；【角色状态】只是既往章节摘要，不在此列。')
+    expect(prompt).toContain('【作者设定优先】【作者确认项目配置】与【世界观设定】是权威事实；作者角色状态按标注时点理解；历史派生摘要不能覆盖作者事实。')
     expect(prompt).toContain('即使蓝图、章节计划或冻结目标写法相反，也不得因此放过。')
+    expect(prompt).toContain('在 goalReviews.description 中简述目标要求、正文证据及其时态')
+    expect(prompt).toContain('只要求维持状态时，不强造新事件')
   })
 
   it('renders the unique contiguous evidence-anchor constraint for an English ordinary review', async () => {
@@ -141,7 +269,7 @@ describe('review/revision consumers using the main contract (synthetic transport
     expect(prompt).toContain('one verbatim, contiguous excerpt that occurs exactly once')
     expect(prompt).toContain('Do not combine multiple locations')
     expect(prompt).toContain('use separate evidence entries')
-    expect(prompt).toContain('[Author settings take priority] The author-confirmed project configuration and the worldbuilding settings are authoritative facts; character states are only summaries of earlier chapters and are not included.')
+    expect(prompt).toContain('[Author settings take priority] The author-confirmed project configuration and the worldbuilding settings are authoritative facts; author character states apply at their annotated time; historical derived summaries cannot override author facts.')
     expect(prompt).toContain('even when a blueprint, chapter plan or frozen goal says otherwise.')
   })
 
@@ -302,7 +430,7 @@ describe('review/revision consumers using the main contract (synthetic transport
   })
 
   it('persists malformed one-time recheck output as unknown without a replacement model call', async () => {
-    const historySentinel = 'RECHECK_MUST_NOT_CLAIM_OR_RENDER_FINALIZED_HISTORY'
+    const historySentinel = 'RECHECK_FROZEN_PREDECESSOR_EVIDENCE'
     const f = setup([{ content: 'not-json', finishReason: 'stop' }], [{
       draftId: 7, chapterNumber: 0, chapterTitle: '历史章', chapterNotes: historySentinel,
       sourceStatus: 'current', facts: [],
@@ -325,11 +453,12 @@ describe('review/revision consumers using the main contract (synthetic transport
     expect(prompt).toContain('签字认责或简单否定翻转都不能证明结果已经实现')
     expect(prompt).toContain('已经失去、消耗或承受的具体后果')
     expect(prompt).toContain('后文不得保留相反状态')
-    expect(prompt).not.toContain(historySentinel)
+    expect(prompt).toContain(historySentinel)
     expect(prompt).not.toContain('证据锚点硬约束')
     expect(prompt).not.toContain('[Strict evidence-anchor constraint]')
-    expect(f.fixture.materialDecisions[0]?.included).toEqual([])
-    expect(f.fixture.materialDecisions[0]?.capacity.admittedUnits).toBe(0)
+    expect(f.fixture.materialDecisions[0]?.included.map(item => item.sourceId)).toEqual(['author:required', 'finalized:7'])
+    expect(f.fixture.materialDecisions[0]?.capacity.admittedUnits).toBeGreaterThan(0)
+    expect(prompt).toContain('核对改法是否与上述作者事实、前驱及本章目标冲突')
     expect(f.fixture.recovery!.attemptedPurposes).toEqual(['review-chapter'])
     expect(result).toContain('复核输出无效')
     expect(result).toContain('"severity": "unknown"')

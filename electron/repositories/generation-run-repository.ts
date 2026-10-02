@@ -5,6 +5,7 @@ import type { VisibleCompositionReceipt, VisibleCompositionAlgorithm, DirectoryG
 import { composeVisibleContinuation, VISIBLE_CONTINUATION_VERSION } from '../../src/shared/visible-continuation';
 import { composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, sanitizeDraftText } from '../../src/shared/draft-visible-text';
 import { DRAFT_RECONCILE_PURPOSE } from '../../src/shared/draft-reconciliation';
+import { DRAFT_SHORT_OUTLINE_PURPOSE } from '../../src/shared/draft-short-outline';
 import { countDraftUnits, draftTargetUnitRange } from '../../src/shared/draft-units';
 import { getProjectDb } from '../database';
 import type { PortableRuntimeFreezeTable } from '../services/portable-runtime-freeze';
@@ -238,7 +239,7 @@ export class GenerationRunRepository {
                 attempt_id: string; run_id: string; status: string; ordinal: number; usage_receipt_json: string;
             } | undefined;
             if (!row || row.run_id !== runId || row.status === 'discarded' || row.ordinal <= previousOrdinal
-                || JSON.parse(row.usage_receipt_json).purpose === DRAFT_RECONCILE_PURPOSE)
+                || [DRAFT_RECONCILE_PURPOSE, DRAFT_SHORT_OUTLINE_PURPOSE].includes(JSON.parse(row.usage_receipt_json).purpose))
                 fail('GENERATION_COMPOSITION_SOURCE_INVALID');
             const receipt = this.receipt(row.attempt_id), artifact = receipt.artifact!;
             if (!['settled', 'unknown'].includes(receipt.attempt.status) || !artifact.text.trim())

@@ -1,19 +1,16 @@
 import type { CommandExecuteParams, WorkflowGenerationRuntimeDependencies } from './base-command'
 import type { ChapterInfo } from '../chapter-workflow'
-import type { PreparedReviewRevisionContext, ReviewRevisionContext } from '../../../shared/review-revision-generation'
+import type { PreparedReviewRevisionContext } from '../../../shared/review-revision-generation'
 import { ReviewRevisionCommand, type ReviewRevisionCommandSource } from './review-revision-command'
 import { resolvePromptTemplate } from '../../prompt-templates'
 import { ChapterPromptBuilder } from '../../prompts/prompt-builder'
 import { promptLanguageText } from '../../prompt-language'
 import {
   ChapterMaterialCapacityError,
-  selectReviewRevisionMaterials,
-  unknownReviewMaterialIdentity,
-  type ChapterMaterialIdentity,
-  type ReviewRevisionMaterial,
   type ReviewRevisionMaterialAdmission,
 } from '../chapter-materials'
 import { requireWorkflowProjectSession, workflowUiText } from '../workflow-project-session'
+import { selectFrozenReviewRevisionMaterials } from './review-revision-materials'
 
 export interface RefineDraftParams extends ReviewRevisionCommandSource {
   chapterInfo: ChapterInfo
@@ -22,21 +19,7 @@ export interface RefineDraftParams extends ReviewRevisionCommandSource {
   shortSummary?: string
 }
 
-/**
- * 修稿路径的材料候选：材料文本就是定稿原文本身，因此准入没有改变集合时
- * `join('\n\n')` 的结果与接入前逐字节相同。前一章的定稿是必需锚点。
- *
- * 导出是为了让 `context-entry-parity.test.ts` 驱动本入口**真实的**装配缝，
- * 而不是在测试里另写一份近似实现。
- */
-export function refineHistoryMaterials(frozen: ReviewRevisionContext, current: ChapterMaterialIdentity): ReviewRevisionMaterial[] {
-  return frozen.history.map(item => ({
-    identity: item.identity ?? unknownReviewMaterialIdentity(current),
-    category: 'finalized-history',
-    required: item.chapterNumber === frozen.source.chapterNumber - 1,
-    text: item.content,
-  }))
-}
+export { reviewHistoryMaterials as refineHistoryMaterials } from './review-revision-materials'
 
 export class RefineDraftCommand extends ReviewRevisionCommand {
   constructor(params: RefineDraftParams, dependencies?: WorkflowGenerationRuntimeDependencies) {
@@ -66,12 +49,7 @@ export class RefineDraftCommand extends ReviewRevisionCommand {
     const current = { projectId: projectSession.projectId, epoch: projectSession.leaseId }
     let admission: ReviewRevisionMaterialAdmission
     try {
-      admission = selectReviewRevisionMaterials({
-        current,
-        writingLanguage: language,
-        materials: refineHistoryMaterials(frozen, current),
-        relevanceTerms: [blueprint?.title ?? '', blueprint?.keyEvents ?? '', ...(blueprint?.characters ?? [])],
-      })
+      admission = await selectFrozenReviewRevisionMaterials(frozen, current)
     } catch (error) {
       if (!(error instanceof ChapterMaterialCapacityError)) throw error
       const blocked = error.decision.decision === 'capacity-conflict'
@@ -81,11 +59,11 @@ export class RefineDraftCommand extends ReviewRevisionCommand {
         `  必需材料超出上下文容量（${error.decision.decision}）：${blocked}`,
         `  Required material exceeds the context capacity (${error.decision.decision}): ${blocked}`))
       throw new Error(workflowUiText(params.context,
-        '本章修稿的必需材料（前一章定稿）超出上下文容量，已停止修稿。请精简该章定稿材料后重试。',
-        'The required material for this revision (the previous chapter\'s finalized manuscript) exceeds the context capacity, so the revision stopped. Trim that chapter and try again.'))
+        '本章修稿的必需材料超出上下文容量，已停止修稿。请精简相关作者材料或前驱后重试。',
+        'The required material for this revision exceeds the context capacity, so the revision stopped. Trim the required author material or predecessor and try again.'))
     }
-    // 准入只决定成员；顺序仍是定稿历史的原有顺序，因此集合未变时提示词逐字节不变。
-    const historySummary = admission.admitted.map(material => material.text).join('\n\n')
+    // Render only admitted materials; the frozen source text is never truncated.
+    const historySummary = admission.admitted.filter(material => material.category === 'finalized-history').map(material => material.text).join('\n\n')
     const builder = new ChapterPromptBuilder(template, language)
       .withDraftContent(frozen.source.content)
       .withChapterInfo({ projectPath: params.context.projectPath, chapterNumber: frozen.source.chapterNumber,
@@ -97,7 +75,7 @@ export class RefineDraftCommand extends ReviewRevisionCommand {
       .withWordNumber(frozen.config.wordsPerChapter)
       .withWritingStyle(frozen.config.writingStyle || '')
       .withUserRefinePrompt(userPromptBlock)
-    const prompt = builder.build()
+    const prompt = [builder.build(), ...admission.admitted.filter(material => material.category !== 'finalized-history').map(material => material.text)].join('\n\n')
     await this.bindMaterialDecision(params, admission.decision, prompt)
     return this.generateRevision(prepared, params, prompt, builder.getSystemRole())
   }

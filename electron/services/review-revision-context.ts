@@ -110,6 +110,24 @@ export function captureReviewRevisionContext(db: Database.Database, request: Pre
       return { draftId: row.id, chapterNumber: row.chapter_number, chapterTitle: row.chapter_title ?? '', content: row.body,
         identity: materialIdentity, ...(sourceIdentity ? { source: sourceIdentity } : {}), ...(projection ? { projection } : {}) }
     })
+    // The draft already records the author's selected predecessor. Never substitute a newer row.
+    const dependencies = JSON.parse(db.prepare('SELECT source_dependencies FROM drafts WHERE id=?').pluck().get(source.id) as string)
+    if (!Array.isArray(dependencies)) throw new Error('GENERATION_REVIEW_HISTORY_CHANGED')
+    let predecessor: ReviewRevisionContext['predecessor']
+    for (const dependency of dependencies) {
+      if (dependency?.kind !== undefined && dependency.kind !== 'candidate') continue
+      if (!Number.isSafeInteger(dependency?.draftId) || typeof dependency.contentHash !== 'string')
+        throw new Error('GENERATION_REVIEW_HISTORY_CHANGED')
+      const row = db.prepare('SELECT d.id,d.chapter_number,d.version,d.status,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?')
+        .get(dependency.draftId) as { id: number; chapter_number: number; version: number; status: string; body: string } | undefined
+      if (!row || textHash(row.body) !== dependency.contentHash || !['draft', 'revised', 'reviewed', 'finalized'].includes(row.status))
+        throw new Error('GENERATION_REVIEW_HISTORY_CHANGED')
+      if (row.chapter_number !== source.chapterNumber - 1 || history.some(item => item.draftId === row.id)) continue
+      if (predecessor) throw new Error('GENERATION_REVIEW_HISTORY_CHANGED')
+      predecessor = { draftId: row.id, chapterNumber: row.chapter_number, chapterTitle: '', content: row.body,
+        identity: { projectId, sourceId: `candidate:${row.id}`, revision: row.version,
+          contentHash: dependency.contentHash, provenance: 'generated' } }
+    }
     const activeIds = new Set((db.prepare('SELECT character_id FROM characters WHERE retired=0').all() as { character_id: string }[]).map(row => row.character_id))
     const authorCards = CharacterRepository.getAll(db).filter(card => card.characterId && activeIds.has(card.characterId))
     const stateLines = authorCards.flatMap(card => {
@@ -127,7 +145,7 @@ export function captureReviewRevisionContext(db: Database.Database, request: Pre
     return { version: 1, operation: request.operation, source, sourceHash: textHash(source.content), config,
       writingLanguage: core.writingLanguage, uiLocale: request.uiLocale, authorInputs: structuredClone(request.authorInputs),
       characterStates: stateLines.join('\n') || (core.writingLanguage === 'en-US' ? '(none)' : '（暂无）'),
-      worldbuilding: core.worldbuilding, history, blueprints,
+      worldbuilding: core.worldbuilding, history, blueprints, ...(predecessor ? { predecessor } : {}),
       frozenGoals: freezeChapterGoals(source.chapterNumber, currentBlueprint?.keyEvents,
         [core.worldSetting, ...authorCards.map(card => card.notes)]),
       preflightFindings: currentBlueprint ? findBlueprintContinuityRisks(history.flatMap(item => item.projection ? [item.projection] : []), currentBlueprint, ConsistencyExemptionRepository.list(db)) : [],

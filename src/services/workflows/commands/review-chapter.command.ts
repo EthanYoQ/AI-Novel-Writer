@@ -1,5 +1,5 @@
 import type { CommandExecuteParams, WorkflowGenerationRuntimeDependencies } from './base-command'
-import type { PreparedReviewRevisionContext, ReviewRevisionContext } from '../../../shared/review-revision-generation'
+import type { PreparedReviewRevisionContext } from '../../../shared/review-revision-generation'
 import { ReviewRevisionCommand, type ReviewRevisionCommandSource } from './review-revision-command'
 import { parseReviewGenerationResult } from '../../../shared/review-generation-report'
 import { buildChapterGoalReviewPrompt } from '../../../shared/chapter-goal-review'
@@ -8,13 +8,10 @@ import { ReviewPromptBuilder } from '../../prompts/prompt-builder'
 import { promptLanguageText } from '../../prompt-language'
 import {
   ChapterMaterialCapacityError,
-  selectReviewRevisionMaterials,
-  unknownReviewMaterialIdentity,
-  type ChapterMaterialIdentity,
-  type ReviewRevisionMaterial,
   type ReviewRevisionMaterialAdmission,
 } from '../chapter-materials'
 import { ipc } from '../../ipc-client'
+import { selectFrozenReviewRevisionMaterials } from './review-revision-materials'
 import { requireWorkflowProjectSession, workflowUiText } from '../workflow-project-session'
 
 export interface ReviewChapterParams extends ReviewRevisionCommandSource {
@@ -23,44 +20,7 @@ export interface ReviewChapterParams extends ReviewRevisionCommandSource {
   expectedMergedHash?: string
 }
 
-type ReviewHistoryItem = ReviewRevisionContext['history'][number]
-
-/** 单条已定稿历史在审稿提示词里的块；措辞与接入准入层之前逐字相同。 */
-function historyBlock(item: ReviewHistoryItem, language: ReviewRevisionContext['writingLanguage']): string {
-  const text = (zh: string, en: string) => promptLanguageText(language, zh, en)
-  return [
-    text(`### 第${item.chapterNumber}章 ${item.chapterTitle}`, `### Chapter ${item.chapterNumber}: ${item.chapterTitle}`),
-    item.content,
-    ...(item.projection?.sourceStatus === 'current' ? (item.projection.facts ?? []).map(fact => text(
-      `- [${fact.category}] ${fact.statement}（来源第${fact.sourceChapter}章；证据：${fact.evidence}）`,
-      `- [${fact.category}] ${fact.statement} (source: Chapter ${fact.sourceChapter}; evidence: ${fact.evidence})`,
-    )) : []),
-  ].filter(Boolean).join('\n')
-}
-
-/**
- * 审稿路径的材料候选：历史原文逐字保留原有块头，身份只由主进程给出。
- * 前一章的定稿是审稿的连续性锚点，因此是必需材料：装不下就显式失败，不静默省略。
- *
- * 导出是为了让 `context-entry-parity.test.ts` 驱动本入口**真实的**装配缝，
- * 而不是在测试里另写一份近似实现。
- */
-export function reviewHistoryMaterials(frozen: ReviewRevisionContext, current: ChapterMaterialIdentity): ReviewRevisionMaterial[] {
-  return frozen.history.map(item => ({
-    identity: item.identity ?? unknownReviewMaterialIdentity(current),
-    category: 'finalized-history',
-    required: item.chapterNumber === frozen.source.chapterNumber - 1,
-    text: historyBlock(item, frozen.writingLanguage),
-  }))
-}
-
-function formatHistory(frozen: ReviewRevisionContext, admitted: readonly ReviewRevisionMaterial[]): string {
-  const text = (zh: string, en: string) => promptLanguageText(frozen.writingLanguage, zh, en)
-  const header = text('【已确认定稿历史｜唯一已发生事实源】', '[Finalized history | the only source of events that have already happened]')
-  if (!frozen.history.length) return `${header}\n${text('（当前章节之前没有已定稿历史）', '(there is no finalized history before the current chapter)')}`
-  // 准入只决定成员；顺序仍是历史原有顺序，因此集合未变时提示词逐字节不变。
-  return [header, ...admitted.map(material => material.text)].join('\n\n')
-}
+export { reviewHistoryMaterials } from './review-revision-materials'
 
 export class ReviewChapterCommand extends ReviewRevisionCommand {
   constructor(params: ReviewChapterParams, dependencies?: WorkflowGenerationRuntimeDependencies) {
@@ -83,22 +43,11 @@ export class ReviewChapterCommand extends ReviewRevisionCommand {
     const template = await resolvePromptTemplate('consistency_check', projectSession, language)
     if (!template) throw new Error(text('未找到审稿模板', 'The review prompt template was not found.'))
     // 与写稿路径同一套准入：材料成员由合同判定，绝不按「最近/相关」自行拼凑。
-    const reviewBlueprint = frozen.blueprints.find(blueprint => blueprint.chapterNumber === frozen.source.chapterNumber)
-    const reviewMaterials = frozen.recheck
-      ? []
-      : reviewHistoryMaterials(frozen, { projectId: projectSession.projectId, epoch: projectSession.leaseId })
     let admission: ReviewRevisionMaterialAdmission
     try {
-      admission = selectReviewRevisionMaterials({
-        current: { projectId: projectSession.projectId, epoch: projectSession.leaseId },
-        writingLanguage: language,
-        materials: reviewMaterials,
-        relevanceTerms: frozen.recheck
-          ? []
-          : [reviewBlueprint?.title ?? '', reviewBlueprint?.keyEvents ?? '', ...(reviewBlueprint?.characters ?? [])],
-      })
+      admission = await selectFrozenReviewRevisionMaterials(frozen, { projectId: projectSession.projectId, epoch: projectSession.leaseId })
     } catch (error) {
-      // 必需材料（前一章定稿）装不下：显式失败，绝不静默省略必需事实。
+      // 必需材料装不下：显式失败，绝不静默省略必需事实。
       if (!(error instanceof ChapterMaterialCapacityError)) throw error
       const blocked = error.decision.decision === 'capacity-conflict'
         ? `${error.decision.blockingSourceId}:${error.decision.blockingReason}`
@@ -106,31 +55,29 @@ export class ReviewChapterCommand extends ReviewRevisionCommand {
       params.callbacks.log(text(`  必需材料超出上下文容量（${error.decision.decision}）：${blocked}`,
         `  Required material exceeds the context capacity (${error.decision.decision}): ${blocked}`))
       throw new Error(text(
-        '本章审稿的必需材料（前一章定稿）超出上下文容量，已停止审稿。请精简该章定稿材料后重试。',
-        'The required material for this review (the previous chapter\'s finalized manuscript) exceeds the context capacity, so the review stopped. Trim that chapter and try again.',
+        '本章审稿的必需材料超出上下文容量，已停止审稿。请精简相关作者材料或前驱后重试。',
+        'The required material for this review exceeds the context capacity, so the review stopped. Trim the required author material or predecessor and try again.',
       ))
     }
     const builder = new ReviewPromptBuilder(template, language)
       .withChapterContent(frozen.source.content)
       .withCharacterStates(frozen.characterStates)
-      .withGlobalSummary(formatHistory(frozen, admission.admitted))
+      .withGlobalSummary(admission.admitted.filter(material => material.category === 'finalized-history').map(material => material.text).join('\n\n'))
       .withWorldBuilding(frozen.worldbuilding)
       .withReviewFocus(frozen.authorInputs.find(input => input.id === 'review-focus')?.text || '')
-    const guidance = frozen.config.globalGuidance?.trim() || promptLanguageText(language, '（无作者全局创作指导）', '(no author global creative guidance)')
     const ordinaryReviewPrompt = [
       builder.build(),
-      promptLanguageText(language, `【作者全局创作指导｜约束而非已发生事实】\n${guidance}`, `[Author global creative guidance | constraint, not established history]\n${guidance}`),
-      promptLanguageText(language, `【作者确认项目配置｜约束而非已发生事实】\n${JSON.stringify(frozen.config, null, 2)}`,
-        `[Author-confirmed project configuration | constraint, not established history]\n${JSON.stringify(frozen.config, null, 2)}`),
-      promptLanguageText(language, '【当前及未来蓝图/计划｜非既定历史】', '[Current and future blueprints/plans | not established history]'),
-      JSON.stringify(frozen.blueprints, null, 2),
+      ...admission.admitted.filter(material => material.category !== 'finalized-history').map(material => material.text),
       promptLanguageText(language,
-        '【作者设定优先】【作者确认项目配置】与【世界观设定】是权威事实；【角色状态】只是既往章节摘要，不在此列。报告矛盾前，须说明作者设定或其必然前提与正文对同一对象、时点及条件的陈述为何不能同时成立，并纳入正文已有的兼容描述。正文未再次说明、未触碰或未明确位置，不证明权威状态已改变；存在合理兼容解释时，不得将推断当作事实矛盾要求修稿。新进展可以发生在同一时段或地点；作者未明确要求更换时点或场景时，不得强加，也不能因未更换就断言没有推进。若正文确实与作者事实或由其必然推出的前提矛盾，必须报告为 error 或 warning；即使蓝图、章节计划或冻结目标写法相反，也不得因此放过。',
-        '[Author settings take priority] The author-confirmed project configuration and the worldbuilding settings are authoritative facts; character states are only summaries of earlier chapters and are not included. Before reporting a contradiction, explain why the author setting or its necessary premise and the draft cannot both be true for the same subject, time and conditions, considering compatible descriptions already present in the draft. Mere omission, lack of contact or an unstated location does not establish that an authoritative state has changed. Where a reasonable compatible interpretation exists, do not demand revision based on an inferred factual contradiction. New progress can occur within the same time period or location; do not require a time or scene change that the author has not specified, or infer no progress merely because neither changed. If the draft truly contradicts an author fact or a premise that necessarily follows from it, report it as an error or warning, even when a blueprint, chapter plan or frozen goal says otherwise.'),
+        '【作者设定优先】【作者确认项目配置】与【世界观设定】是权威事实；作者角色状态按标注时点理解；历史派生摘要不能覆盖作者事实。报告矛盾前，须说明作者设定或其必然前提与正文对同一对象、时点及条件的陈述为何不能同时成立，并纳入正文已有的兼容描述。正文未再次说明、未触碰或未明确位置，不证明权威状态已改变；存在合理兼容解释时，不得将推断当作事实矛盾要求修稿。新进展可以发生在同一时段或地点；作者未明确要求更换时点或场景时，不得强加，也不能因未更换就断言没有推进。若正文确实与作者事实或由其必然推出的前提矛盾，必须报告为 error 或 warning；即使蓝图、章节计划或冻结目标写法相反，也不得因此放过。',
+        '[Author settings take priority] The author-confirmed project configuration and the worldbuilding settings are authoritative facts; author character states apply at their annotated time; historical derived summaries cannot override author facts. Before reporting a contradiction, explain why the author setting or its necessary premise and the draft cannot both be true for the same subject, time and conditions, considering compatible descriptions already present in the draft. Mere omission, lack of contact or an unstated location does not establish that an authoritative state has changed. Where a reasonable compatible interpretation exists, do not demand revision based on an inferred factual contradiction. New progress can occur within the same time period or location; do not require a time or scene change that the author has not specified, or infer no progress merely because neither changed. If the draft truly contradicts an author fact or a premise that necessarily follows from it, report it as an error or warning, even when a blueprint, chapter plan or frozen goal says otherwise.'),
       promptLanguageText(language,
         '【证据锚点硬约束】每个 error/warning 的 items[].quote 必须是待审正文中逐字连续、且全文仅出现一次的单一摘录；不得拼接多个位置、改写原文或包含省略号。优先选择足以证明问题的最短完整句。goalReviews[].evidence 中的每个 quote 也必须分别满足上述约束；需要多处证据时拆成多个 evidence 项，绝不可在一个 quote 中拼接。',
         '[Strict evidence-anchor constraint] Each items[].quote for an error/warning must be one verbatim, contiguous excerpt that occurs exactly once in the draft under review. Do not combine multiple locations, rewrite the text, or include ellipses. Prefer the shortest complete sentence that proves the issue. Every quote in goalReviews[].evidence must independently satisfy the same constraint; when multiple excerpts are needed, use separate evidence entries and never combine them in one quote.'),
       buildChapterGoalReviewPrompt(frozen.frozenGoals, language),
+      promptLanguageText(language,
+        '【简短证据核对】在 goalReviews.description 中简述目标要求、正文证据及其时态：本章已发生、旧事回顾或未来计划。要求当章推进时，旧事或计划不算完成；只要求维持状态时，不强造新事件。合理的新动作不必在前文预先出现。不要输出长篇推理。',
+        '[Brief evidence check] In goalReviews.description briefly state the required goal, manuscript evidence and whether it is a current-chapter event, recollection or future plan. Recollection/plans do not satisfy required new progress; state-maintenance goals do not require invented events. Reasonable new actions need not appear in earlier chapters. No lengthy reasoning.'),
     ].join('\n\n')
     const reviewPrompt = frozen.recheck ? [
       promptLanguageText(language,
@@ -138,11 +85,15 @@ export class ReviewChapterCommand extends ReviewRevisionCommand {
         '[One-time targeted recheck] Recheck only the findings below. Do not add, remove, merge, or rewrite findingId/targetId.'),
       promptLanguageText(language, '【人工合并后的正文】', '[Author-merged draft]'),
       frozen.source.content,
+      ...admission.admitted.map(material => material.text),
       promptLanguageText(language, '【需复核的原始证据锚点】', '[Original evidence anchors to recheck]'),
       JSON.stringify(frozen.recheck.findings, null, 2),
       promptLanguageText(language,
         '判断 resolved 时必须同时核对每项 problem 与 expected（如有）；正文只是改变、移除原句或换一种错误说法，不代表问题已解决。若 finding 要求当章动作或结果，新增动作或结果本身必须满足目标语义；计划、决定、承诺、保证、签字认责或简单否定翻转都不能证明结果已经实现。对于代价或损失，证据必须写出已经失去、消耗或承受的具体后果，并且后文不得保留相反状态。仅当合并后正文中的唯一新证据确实满足原始问题语义与预期时，才可令 resolved=true。',
         'When deciding resolved, check each finding\'s problem and expected semantics (when present). Merely changing or removing the old sentence, or restating the same error, does not resolve the finding. If a finding requires a current-chapter action or result, the added action or result must itself satisfy the target meaning; a plan, decision, promise, commitment, signature accepting responsibility, or simple negation flip is not evidence that the result was achieved. For a cost or loss, evidence must show the concrete consequence already lost, spent, or endured, and later prose must not preserve a contradictory state. Set resolved=true only when unique new evidence in the merged draft actually satisfies the original problem and expectation.'),
+      promptLanguageText(language,
+        '核对改法是否与上述作者事实、前驱及本章目标冲突；冲突或依据不足时不能标已解决。只裁决原 finding，全章末审仍负责发现新问题。',
+        'Check whether the remedy conflicts with author facts, the predecessor or chapter goals above. A conflict or insufficient support cannot be marked resolved. Adjudicate only the original findings; the final whole-chapter review still checks new issues.'),
       promptLanguageText(language,
         '【硬性 JSON 合同】只输出 {"summary":"...","items":[...]}。items 必须对上述每个 finding 恰好一项，字段仅为 findingId、targetId、resolved、evidenceQuote、reason。evidenceQuote 必须逐字来自合并后正文且只能出现一次；无法确认时仍返回该 finding，并令 resolved=false，说明证据不足。不得输出 Markdown、解释或思考过程。',
         '[Strict JSON contract] Output only {"summary":"...","items":[...]}. Include exactly one item for every finding above, with only findingId, targetId, resolved, evidenceQuote, and reason. evidenceQuote must be verbatim from the merged draft and occur exactly once. If uncertain, still return the finding with resolved=false and explain the lack of evidence. No Markdown, explanation, or reasoning.'),

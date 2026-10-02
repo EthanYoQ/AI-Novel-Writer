@@ -134,8 +134,8 @@ describe('S10B-1b single authority', () => {
  * S10B-2 三类入口（写 / 审 / 修）的共享准入。
  *
  * 这三个入口的材料装配各写各的（来源族群与渲染措辞本来就不同），但**准入语义只有一套**：
- * 三者最终都调用同一个 `selectChapterSources`，容量、固定内容哈希、必需覆盖与失败
- * 语义因此必须逐条一致。这个套件用同一组情形驱动三个入口**真实的**装配缝，
+ * 三者最终都调用同一个 `selectChapterSources`，固定内容哈希与必需覆盖规则一致；
+ * 写稿保留局部材料额度，审修的完整请求容量由主进程裁决。这个套件驱动三个入口真实的装配缝，
  * 断言的是共享规则本身，而不是「各自能跑」。
  */
 const PARITY_IDENTITY = { projectId: '项目', epoch: '会话' }
@@ -217,10 +217,16 @@ const ENTRY_POINTS: readonly EntryPoint[] = [
 ]
 
 describe('S10B-2 写/审/修共享同一套准入语义', () => {
-  it.each(ENTRY_POINTS)('$name 对装不下的必需材料显式失败，绝不静默丢弃', async ({ run }) => {
-    const outcome = await run('长'.repeat(7_000), [])
-    expect(outcome.failure).toEqual({ code: 'CHAPTER_MATERIAL_CAPACITY_CONFLICT', decision: 'capacity-conflict' })
-    expect(outcome.visibleText).toBe('')
+  it.each(ENTRY_POINTS)('$name 保留自己的容量职责且不静默丢弃必需材料', async ({ name, run }) => {
+    const required = '长'.repeat(9_000)
+    const outcome = await run(required, [])
+    if (name === '写稿 generate-draft') {
+      expect(outcome.failure).toEqual({ code: 'CHAPTER_MATERIAL_CAPACITY_CONFLICT', decision: 'capacity-conflict' })
+      expect(outcome.visibleText).toBe('')
+    } else {
+      expect(outcome.failure).toBeNull()
+      expect(outcome.visibleText).toContain(required)
+    }
   })
 
   it.each(ENTRY_POINTS)('$name 整体省略超预算的可选材料，绝不截断', async ({ run }) => {

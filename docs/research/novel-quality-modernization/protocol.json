@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "id": "novel-quality-program-v3-80-v1",
-  "decisionRevision": "s14b-candidate-quality-and-comparison-v2",
+  "decisionRevision": "s14b-candidate-only-three-rounds-v1",
   "status": "approved-requires-committed-target-freeze-before-experiment",
   "language": "zh-CN",
   "decisionPolicy": {
@@ -3168,5 +3168,905 @@
         "parityId": "23ccd07e1a04838dba0a388ba4aed272f7ad0d79d699f213e3c8b242836bb9a8"
       }
     ]
+  },
+  "candidateOnlyQualification": {
+    "revision": "s14b-candidate-only-three-rounds-v1",
+    "arms": [
+      "candidate"
+    ],
+    "templateSource": "candidate-native",
+    "rounds": 3,
+    "order": {
+      "seed": "program-v3-2026-09-13-fixed-v1",
+      "armsByChapter": [
+        "candidate",
+        "candidate",
+        "candidate",
+        "candidate",
+        "candidate",
+        "candidate",
+        "candidate",
+        "candidate",
+        "candidate"
+      ]
+    },
+    "sampling": {
+      "writing": {
+        "total": 21,
+        "minimumSuccess": 18,
+        "recovered": {
+          "total": 12,
+          "minimumSuccess": 10
+        },
+        "continuous": {
+          "total": 9,
+          "minimumSuccess": 7
+        }
+      },
+      "extraction": {
+        "total": 9,
+        "protectionAndSource": 9,
+        "minimumSemanticSuccess": 8,
+        "allowedFailure": "one-minor-omission-only"
+      },
+      "silentAuthorHardConstraintFailures": 0,
+      "otherSilentSemanticFailures": 1,
+      "retry": "resume-unsent-slots-only",
+      "continuation": "preauthorized-preserve-saved-draft-and-unresolved-state"
+    },
+    "scenarios": {
+      "c16-c18/final": {
+        "caseId": "C16-A",
+        "caseIds": [
+          "C16-A",
+          "C16-B",
+          "C16-C",
+          "C17-A",
+          "C17-B",
+          "C18-A",
+          "C18-B"
+        ],
+        "sceneId": "场景1",
+        "chapterNumber": 2,
+        "milestone": "final",
+        "arms": [
+          "candidate"
+        ],
+        "scenarioRevision": "c16-c18-candidate-production-path-v7-candidate-only-v1",
+        "attemptPolicy": {
+          "milestone": "final",
+          "arms": [
+            "candidate"
+          ],
+          "operationId": "续写成稿首审",
+          "primaryPurpose": "review-chapter",
+          "repairPurpose": "review-chapter-rebuild",
+          "maxRepairAttempts": 1,
+          "trigger": "settled-stop-parse-or-shape-failure-with-native-artifact-hash",
+          "reviewRebuild": {
+            "operationId": "续写成稿完整复审",
+            "primaryPurpose": "review-chapter",
+            "repairPurpose": "review-chapter-rebuild",
+            "maxRepairAttempts": 1
+          },
+          "refinementRecovery": {
+            "operationId": "续写成稿一次修稿",
+            "purpose": "refine-from-review",
+            "maxAttempts": 4,
+            "trigger": "settled-length-same-confirmation-visible-append-with-progress"
+          },
+          "draftRecovery": {
+            "operationIds": [
+              "本地恢复后续写",
+              "DAV选定世代恢复后续写"
+            ],
+            "arms": [
+              "candidate"
+            ],
+            "maxAttempts": 8,
+            "maxContinuationRounds": 7,
+            "maxNoProgressRecoveries": 1,
+            "baselineMinimumRatio": 0.8,
+            "candidateMinimumRatio": 0.7,
+            "minimumProgressUnits": 300,
+            "trigger": "settled-hash-verified-short-stop-or-length",
+            "formalEffect": "last-attempt-only",
+            "armAsymmetry": "baseline 2264390d uses its original 80% continuation minimum and has no upper-bound stop or condense; candidate uses draftTargetUnitRange and may condense the composed draft. Both retain their own eight-attempt root budget."
+          },
+          "draftCondense": {
+            "operationIds": [
+              "本地恢复后续写",
+              "DAV选定世代恢复后续写"
+            ],
+            "arms": [
+              "candidate"
+            ],
+            "primaryPurpose": "chapter-draft",
+            "condensePurpose": "chapter-draft-condense",
+            "maxCondenseAttempts": 1,
+            "trigger": "settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum",
+            "formalEffect": "last-attempt-only"
+          },
+          "shortOutline": {
+            "purpose": "chapter-draft-short-outline",
+            "operationIds": [
+              "本地恢复后续写",
+              "DAV选定世代恢复后续写"
+            ],
+            "maxAttempts": 1,
+            "trigger": "new-draft-before-prose-same-root-native-artifact"
+          }
+        },
+        "evaluationPolicy": {
+          "revision": "ai-review-final-manuscript-v1",
+          "caseIds": [
+            "C17-A",
+            "C17-B",
+            "C18-A",
+            "C18-B"
+          ],
+          "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+          "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+          "confirmation": "preauthorized-ai-only-persisted-original-items-with-native-findingIds",
+          "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+          "endpoint": "native-merge-then-ordinary-full-review",
+          "automaticCeiling": "pending-independent-oracle-review",
+          "physicalRequests": {
+            "sourceMinimum": 16,
+            "sourceMaximum": 52,
+            "manuscriptMinimum": 1,
+            "manuscriptMaximum": 8,
+            "minimum": 20,
+            "maximum": 84
+          },
+          "armAsymmetry": "candidate-only; no comparative claim"
+        },
+        "operations": [
+          {
+            "id": "定稿章节要点",
+            "kind": "chapter_notes",
+            "caseIds": [
+              "C16-A",
+              "C16-B",
+              "C16-C"
+            ]
+          },
+          {
+            "id": "定稿角色状态",
+            "kind": "character_cards",
+            "caseIds": [
+              "C16-A",
+              "C16-B",
+              "C16-C"
+            ]
+          },
+          {
+            "id": "本地恢复后续写",
+            "kind": "draft",
+            "restore": "local",
+            "caseIds": [
+              "C17-A",
+              "C17-B"
+            ]
+          },
+          {
+            "id": "DAV选定世代恢复后续写",
+            "kind": "draft",
+            "restore": "webdav",
+            "caseIds": [
+              "C18-A",
+              "C18-B"
+            ]
+          },
+          {
+            "id": "恢复副本重新定稿章节要点",
+            "kind": "chapter_notes",
+            "caseIds": [
+              "C17-B"
+            ]
+          },
+          {
+            "id": "恢复副本重新定稿角色状态",
+            "kind": "character_cards",
+            "caseIds": [
+              "C17-B"
+            ]
+          },
+          {
+            "id": "续写成稿首审",
+            "kind": "review",
+            "caseIds": [
+              "C17-A",
+              "C17-B",
+              "C18-A",
+              "C18-B"
+            ]
+          },
+          {
+            "id": "续写成稿一次修稿",
+            "kind": "refine",
+            "caseIds": [
+              "C17-A",
+              "C17-B",
+              "C18-A",
+              "C18-B"
+            ]
+          },
+          {
+            "id": "续写成稿完整复审",
+            "kind": "final-review",
+            "caseIds": [
+              "C17-A",
+              "C17-B",
+              "C18-A",
+              "C18-B"
+            ]
+          }
+        ],
+        "templateSource": "candidate-native",
+        "minimumCalls": 20,
+        "maximumPlannedCalls": 84
+      },
+      "full/final": {
+        "caseIds": [
+          "场景1/1",
+          "场景1/2",
+          "场景1/3",
+          "场景2/1",
+          "场景2/2",
+          "场景2/3",
+          "场景3/1",
+          "场景3/2",
+          "场景3/3"
+        ],
+        "milestone": "final",
+        "scenarioRevision": "s14b-full-ai-review-final-manuscript-v1-candidate-only-v1",
+        "attemptPolicy": {
+          "milestone": "final",
+          "arms": [
+            "candidate"
+          ],
+          "draftRecovery": {
+            "operationIds": [
+              "连续章节正文"
+            ],
+            "arms": [
+              "candidate"
+            ],
+            "maxAttempts": 8,
+            "maxContinuationRounds": 7,
+            "maxNoProgressRecoveries": 1,
+            "baselineMinimumRatio": 0.8,
+            "candidateMinimumRatio": 0.7,
+            "minimumProgressUnits": 300,
+            "trigger": "settled-hash-verified-short-stop-or-length",
+            "formalEffect": "last-attempt-only",
+            "armAsymmetry": "baseline 2264390d uses its original 80% continuation minimum and has no upper-bound stop or condense; candidate uses draftTargetUnitRange and may condense the composed draft. Both retain their own eight-attempt root budget."
+          },
+          "structuredRecovery": {
+            "operationId": "三章规划",
+            "arms": [
+              "baseline",
+              "candidate"
+            ],
+            "budget": "planBlueprintGenerationCost",
+            "maxSyntaxRepairs": 1,
+            "maxCompactFallbacksPerChapter": 1,
+            "trigger": "settled-length-or-production-blueprint-decode-failure",
+            "order": "depth-first-half-split",
+            "armAsymmetry": "Both arms use their existing structured executor; candidate now rebuilds value_too_long without mechanical truncation. No baseline product code is changed."
+          },
+          "draftCondense": {
+            "operationIds": [
+              "连续章节正文"
+            ],
+            "arms": [
+              "candidate"
+            ],
+            "primaryPurpose": "chapter-draft",
+            "condensePurpose": "chapter-draft-condense",
+            "maxCondenseAttempts": 1,
+            "trigger": "settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum",
+            "formalEffect": "last-attempt-only"
+          },
+          "armAsymmetry": "candidate（产品自 f00b612b 起）可对超出 draftTargetUnitRange 上限的章节首稿发一次产品原生压缩 chapter-draft-condense，并登记为该章「连续章节正文」的正式效果；baseline 2264390d 没有该产品能力、不登记压缩，首稿超上限即按原字数门失败；两臂是否触发压缩及各章压缩后正文长度的差异来自该不对称，不得据此单独声称相对改善",
+          "reviewRebuild": {
+            "operationId": "成稿首审",
+            "primaryPurpose": "review-chapter",
+            "repairPurpose": "review-chapter-rebuild",
+            "maxRepairAttempts": 1
+          },
+          "finalReviewRebuild": {
+            "operationId": "成稿完整复评",
+            "primaryPurpose": "review-chapter",
+            "repairPurpose": "review-chapter-rebuild",
+            "maxRepairAttempts": 1
+          },
+          "refinementRecovery": {
+            "operationId": "成稿一次修稿",
+            "purpose": "refine-from-review",
+            "maxAttempts": 4,
+            "trigger": "settled-length-same-confirmation-visible-append-with-progress"
+          },
+          "shortOutline": {
+            "purpose": "chapter-draft-short-outline",
+            "operationIds": [
+              "连续章节正文"
+            ],
+            "maxAttempts": 1,
+            "trigger": "new-draft-before-prose-same-root-native-artifact"
+          }
+        },
+        "operations": [
+          {
+            "id": "三章规划",
+            "kind": "directory"
+          },
+          {
+            "id": "连续章节正文",
+            "kind": "draft"
+          },
+          {
+            "id": "成稿首审",
+            "kind": "review"
+          },
+          {
+            "id": "成稿一次修稿",
+            "kind": "refine"
+          },
+          {
+            "id": "成稿完整复评",
+            "kind": "final-review"
+          }
+        ],
+        "minimumCalls": 30,
+        "maximumPlannedCalls": 180,
+        "evaluationPolicy": {
+          "revision": "ai-review-final-manuscript-v1",
+          "caseIds": [
+            "场景1/1",
+            "场景1/2",
+            "场景1/3",
+            "场景2/1",
+            "场景2/2",
+            "场景2/3",
+            "场景3/1",
+            "场景3/2",
+            "场景3/3"
+          ],
+          "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+          "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+          "confirmation": "preauthorized-ai-only-persisted-original-items-with-native-findingIds",
+          "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+          "endpoint": "native-merge-then-ordinary-full-review",
+          "automaticCeiling": "pending-independent-oracle-review",
+          "physicalRequests": {
+            "minimum": 30,
+            "maximum": 180,
+            "sourceMinimum": 21,
+            "sourceMaximum": 108,
+            "manuscriptMinimum": 1,
+            "manuscriptMaximum": 8
+          },
+          "armAsymmetry": "candidate-only; no comparative claim"
+        },
+        "arms": [
+          "candidate"
+        ],
+        "templateSource": "candidate-native"
+      },
+      "early-budget/early": {
+        "caseId": "场景1/1",
+        "sceneId": "场景1",
+        "chapterNumber": 1,
+        "milestone": "early",
+        "scenarioRevision": "s14b-post-ui-budget-syntax-repair-v1-candidate-only-v1",
+        "attemptPolicy": {
+          "milestone": "early",
+          "arms": [
+            "candidate"
+          ],
+          "operationId": "指定范围生成",
+          "primaryPurpose": "chapter-blueprint-directory",
+          "repairPurpose": "chapter-blueprint-directory:structured-syntax-repair",
+          "maxRepairAttempts": 1,
+          "reviewRebuild": {
+            "operationId": "成稿首审",
+            "primaryPurpose": "review-chapter",
+            "repairPurpose": "review-chapter-rebuild",
+            "maxRepairAttempts": 1
+          },
+          "draftRecovery": {
+            "operationIds": [
+              "900单位正文"
+            ],
+            "arms": [
+              "candidate"
+            ],
+            "maxAttempts": 8,
+            "maxContinuationRounds": 7,
+            "maxNoProgressRecoveries": 1,
+            "baselineMinimumRatio": 0.8,
+            "candidateMinimumRatio": 0.7,
+            "minimumProgressUnits": 300,
+            "trigger": "settled-hash-verified-short-stop-or-length",
+            "formalEffect": "last-attempt-only",
+            "armAsymmetry": "baseline 2264390d uses its original 80% continuation minimum and has no upper-bound stop or condense; candidate uses draftTargetUnitRange and may condense the composed draft. Both retain their own eight-attempt root budget."
+          },
+          "draftCondense": {
+            "operationIds": [
+              "900单位正文"
+            ],
+            "arms": [
+              "candidate"
+            ],
+            "primaryPurpose": "chapter-draft",
+            "condensePurpose": "chapter-draft-condense",
+            "maxCondenseAttempts": 1,
+            "trigger": "settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum",
+            "formalEffect": "last-attempt-only"
+          },
+          "shortOutline": {
+            "purpose": "chapter-draft-short-outline",
+            "operationIds": [
+              "900单位正文"
+            ],
+            "maxAttempts": 1,
+            "trigger": "new-draft-before-prose-same-root-native-artifact"
+          }
+        },
+        "operations": [
+          {
+            "id": "指定范围生成",
+            "kind": "directory"
+          },
+          {
+            "id": "900单位正文",
+            "kind": "draft"
+          }
+        ],
+        "arms": [
+          "candidate"
+        ],
+        "templateSource": "candidate-native",
+        "minimumCalls": 4,
+        "maximumPlannedCalls": 20
+      },
+      "early-budget/post-ui": {
+        "caseId": "场景1/1",
+        "sceneId": "场景1",
+        "chapterNumber": 1,
+        "milestone": "post-ui",
+        "scenarioRevision": "s14b-post-ui-ai-review-final-early-budget-v1-candidate-only-v1",
+        "attemptPolicy": {
+          "milestone": "post-ui",
+          "arms": [
+            "candidate"
+          ],
+          "operationId": "指定范围生成",
+          "primaryPurpose": "chapter-blueprint-directory",
+          "repairPurpose": "chapter-blueprint-directory:structured-syntax-repair",
+          "maxRepairAttempts": 1,
+          "reviewRebuild": {
+            "operationId": "成稿首审",
+            "primaryPurpose": "review-chapter",
+            "repairPurpose": "review-chapter-rebuild",
+            "maxRepairAttempts": 1
+          },
+          "draftRecovery": {
+            "operationIds": [
+              "900单位正文"
+            ],
+            "arms": [
+              "candidate"
+            ],
+            "maxAttempts": 8,
+            "maxContinuationRounds": 7,
+            "maxNoProgressRecoveries": 1,
+            "baselineMinimumRatio": 0.8,
+            "candidateMinimumRatio": 0.7,
+            "minimumProgressUnits": 300,
+            "trigger": "settled-hash-verified-short-stop-or-length",
+            "formalEffect": "last-attempt-only",
+            "armAsymmetry": "baseline 2264390d uses its original 80% continuation minimum and has no upper-bound stop or condense; candidate uses draftTargetUnitRange and may condense the composed draft. Both retain their own eight-attempt root budget."
+          },
+          "structuredRecovery": {
+            "operationId": "指定范围生成",
+            "arms": [
+              "baseline",
+              "candidate"
+            ],
+            "budget": "planBlueprintGenerationCost",
+            "maxSyntaxRepairs": 1,
+            "maxCompactFallbacksPerChapter": 1,
+            "trigger": "settled-length-or-production-blueprint-decode-failure",
+            "order": "depth-first-half-split",
+            "armAsymmetry": "Both arms use their existing structured executor; candidate now rebuilds value_too_long without mechanical truncation. No baseline product code is changed."
+          },
+          "draftCondense": {
+            "operationIds": [
+              "900单位正文"
+            ],
+            "arms": [
+              "candidate"
+            ],
+            "primaryPurpose": "chapter-draft",
+            "condensePurpose": "chapter-draft-condense",
+            "maxCondenseAttempts": 1,
+            "trigger": "settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum",
+            "formalEffect": "last-attempt-only"
+          },
+          "finalReviewRebuild": {
+            "operationId": "成稿完整复评",
+            "primaryPurpose": "review-chapter",
+            "repairPurpose": "review-chapter-rebuild",
+            "maxRepairAttempts": 1
+          },
+          "refinementRecovery": {
+            "operationId": "成稿一次修稿",
+            "purpose": "refine-from-review",
+            "maxAttempts": 4,
+            "trigger": "settled-length-same-confirmation-visible-append-with-progress"
+          },
+          "shortOutline": {
+            "purpose": "chapter-draft-short-outline",
+            "operationIds": [
+              "900单位正文"
+            ],
+            "maxAttempts": 1,
+            "trigger": "new-draft-before-prose-same-root-native-artifact"
+          }
+        },
+        "operations": [
+          {
+            "id": "指定范围生成",
+            "kind": "directory"
+          },
+          {
+            "id": "900单位正文",
+            "kind": "draft"
+          },
+          {
+            "id": "成稿首审",
+            "kind": "review"
+          },
+          {
+            "id": "成稿一次修稿",
+            "kind": "refine"
+          },
+          {
+            "id": "成稿完整复评",
+            "kind": "final-review"
+          }
+        ],
+        "minimumCalls": 4,
+        "maximumPlannedCalls": 20,
+        "evaluationPolicy": {
+          "revision": "ai-review-final-manuscript-v1",
+          "caseIds": [
+            "场景1/1"
+          ],
+          "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+          "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+          "confirmation": "preauthorized-ai-only-persisted-original-items-with-native-findingIds",
+          "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+          "endpoint": "native-merge-then-ordinary-full-review",
+          "automaticCeiling": "pending-independent-oracle-review",
+          "physicalRequests": {
+            "minimum": 4,
+            "maximum": 20,
+            "manuscriptMinimum": 1,
+            "manuscriptMaximum": 8
+          },
+          "armAsymmetry": "candidate-only; no comparative claim"
+        },
+        "arms": [
+          "candidate"
+        ],
+        "templateSource": "candidate-native"
+      },
+      "early-context/early": {
+        "caseId": "场景2/3",
+        "sceneId": "场景2",
+        "chapterNumber": 3,
+        "milestone": "early",
+        "scenarioRevision": "s10b-early-context-selection-difference-v3-candidate-only-v1",
+        "selectionDifference": {
+          "requireDifferentPromptHash": false,
+          "requireDifferentPromptBytes": false,
+          "requireCandidateBudgetOmission": true,
+          "requireCandidateRequiredCoverage": true,
+          "requireBaselineSentCandidateOmission": false,
+          "requirePhysicalProjectParity": false
+        },
+        "operations": [
+          {
+            "id": "长设定第三章正文",
+            "kind": "draft"
+          }
+        ],
+        "arms": [
+          "candidate"
+        ],
+        "templateSource": "candidate-native",
+        "minimumCalls": 3,
+        "maximumPlannedCalls": 17,
+        "attemptPolicy": {
+          "arms": [
+            "candidate"
+          ],
+          "milestone": "early",
+          "draftRecovery": {
+            "operationIds": [
+              "长设定第三章正文"
+            ],
+            "arms": [
+              "candidate"
+            ],
+            "maxAttempts": 8,
+            "maxContinuationRounds": 7,
+            "maxNoProgressRecoveries": 1,
+            "baselineMinimumRatio": 0.8,
+            "candidateMinimumRatio": 0.7,
+            "minimumProgressUnits": 300,
+            "trigger": "settled-hash-verified-short-stop-or-length",
+            "formalEffect": "last-attempt-only",
+            "armAsymmetry": "baseline 2264390d uses its original 80% continuation minimum and has no upper-bound stop or condense; candidate uses draftTargetUnitRange and may condense the composed draft. Both retain their own eight-attempt root budget."
+          },
+          "draftCondense": {
+            "operationIds": [
+              "长设定第三章正文"
+            ],
+            "arms": [
+              "candidate"
+            ],
+            "primaryPurpose": "chapter-draft",
+            "condensePurpose": "chapter-draft-condense",
+            "maxCondenseAttempts": 1,
+            "trigger": "settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum",
+            "formalEffect": "last-attempt-only"
+          },
+          "shortOutline": {
+            "purpose": "chapter-draft-short-outline",
+            "operationIds": [
+              "长设定第三章正文"
+            ],
+            "maxAttempts": 1,
+            "trigger": "new-draft-before-prose-same-root-native-artifact"
+          }
+        }
+      },
+      "early-context/post-ui": {
+        "caseId": "场景2/3",
+        "sceneId": "场景2",
+        "chapterNumber": 3,
+        "milestone": "post-ui",
+        "scenarioRevision": "s14b-post-ui-ai-review-final-early-context-v1-candidate-only-v1",
+        "selectionDifference": {
+          "requireDifferentPromptHash": false,
+          "requireDifferentPromptBytes": false,
+          "requireCandidateBudgetOmission": true,
+          "requireCandidateRequiredCoverage": true,
+          "requireBaselineSentCandidateOmission": false,
+          "requirePhysicalProjectParity": false
+        },
+        "operations": [
+          {
+            "id": "长设定第三章正文",
+            "kind": "draft"
+          },
+          {
+            "id": "成稿首审",
+            "kind": "review"
+          },
+          {
+            "id": "成稿一次修稿",
+            "kind": "refine"
+          },
+          {
+            "id": "成稿完整复评",
+            "kind": "final-review"
+          }
+        ],
+        "minimumCalls": 3,
+        "maximumPlannedCalls": 17,
+        "evaluationPolicy": {
+          "revision": "ai-review-final-manuscript-v1",
+          "caseIds": [
+            "场景2/3"
+          ],
+          "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+          "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+          "confirmation": "preauthorized-ai-only-persisted-original-items-with-native-findingIds",
+          "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+          "endpoint": "native-merge-then-ordinary-full-review",
+          "automaticCeiling": "pending-independent-oracle-review",
+          "physicalRequests": {
+            "minimum": 3,
+            "maximum": 17,
+            "manuscriptMinimum": 1,
+            "manuscriptMaximum": 8
+          },
+          "armAsymmetry": "candidate-only; no comparative claim"
+        },
+        "attemptPolicy": {
+          "milestone": "post-ui",
+          "arms": [
+            "candidate"
+          ],
+          "operationId": "成稿首审",
+          "primaryPurpose": "review-chapter",
+          "repairPurpose": "review-chapter-rebuild",
+          "maxRepairAttempts": 1,
+          "reviewRebuild": {
+            "operationId": "成稿完整复评",
+            "primaryPurpose": "review-chapter",
+            "repairPurpose": "review-chapter-rebuild",
+            "maxRepairAttempts": 1
+          },
+          "refinementRecovery": {
+            "operationId": "成稿一次修稿",
+            "purpose": "refine-from-review",
+            "maxAttempts": 4,
+            "trigger": "settled-length-same-confirmation-visible-append-with-progress"
+          },
+          "draftRecovery": {
+            "operationIds": [
+              "长设定第三章正文"
+            ],
+            "arms": [
+              "candidate"
+            ],
+            "maxAttempts": 8,
+            "maxContinuationRounds": 7,
+            "maxNoProgressRecoveries": 1,
+            "baselineMinimumRatio": 0.8,
+            "candidateMinimumRatio": 0.7,
+            "minimumProgressUnits": 300,
+            "trigger": "settled-hash-verified-short-stop-or-length",
+            "formalEffect": "last-attempt-only",
+            "armAsymmetry": "baseline 2264390d uses its original 80% continuation minimum and has no upper-bound stop or condense; candidate uses draftTargetUnitRange and may condense the composed draft. Both retain their own eight-attempt root budget."
+          },
+          "draftCondense": {
+            "operationIds": [
+              "长设定第三章正文"
+            ],
+            "arms": [
+              "candidate"
+            ],
+            "primaryPurpose": "chapter-draft",
+            "condensePurpose": "chapter-draft-condense",
+            "maxCondenseAttempts": 1,
+            "trigger": "settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum",
+            "formalEffect": "last-attempt-only"
+          },
+          "shortOutline": {
+            "purpose": "chapter-draft-short-outline",
+            "operationIds": [
+              "长设定第三章正文"
+            ],
+            "maxAttempts": 1,
+            "trigger": "new-draft-before-prose-same-root-native-artifact"
+          }
+        },
+        "arms": [
+          "candidate"
+        ],
+        "templateSource": "candidate-native"
+      },
+      "early-review/early": {
+        "caseId": "场景3/2",
+        "sceneId": "场景3",
+        "chapterNumber": 2,
+        "milestone": "early",
+        "scenarioRevision": "s11-early-review-per-attempt-deadline-v3-candidate-only-v1",
+        "operations": [
+          {
+            "id": "审稿",
+            "kind": "review"
+          },
+          {
+            "id": "定向修稿",
+            "kind": "refine"
+          },
+          {
+            "id": "一次复核",
+            "kind": "recheck"
+          }
+        ],
+        "arms": [
+          "candidate"
+        ],
+        "templateSource": "candidate-native",
+        "minimumCalls": 1,
+        "maximumPlannedCalls": 8,
+        "attemptPolicy": {
+          "arms": [
+            "candidate"
+          ],
+          "milestone": "early",
+          "shortOutline": {
+            "purpose": "chapter-draft-short-outline",
+            "operationIds": [],
+            "maxAttempts": 1,
+            "trigger": "new-draft-before-prose-same-root-native-artifact"
+          }
+        }
+      },
+      "early-review/post-ui": {
+        "caseId": "场景3/2",
+        "sceneId": "场景3",
+        "chapterNumber": 2,
+        "milestone": "post-ui",
+        "scenarioRevision": "s14b-post-ui-ai-review-final-early-review-v1-candidate-only-v1",
+        "operations": [
+          {
+            "id": "审稿",
+            "kind": "review"
+          },
+          {
+            "id": "定向修稿",
+            "kind": "refine"
+          },
+          {
+            "id": "一次复核",
+            "kind": "final-review"
+          }
+        ],
+        "minimumCalls": 1,
+        "maximumPlannedCalls": 8,
+        "evaluationPolicy": {
+          "revision": "ai-review-final-manuscript-v1",
+          "caseIds": [
+            "场景3/2"
+          ],
+          "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+          "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+          "confirmation": "preauthorized-ai-only-persisted-original-items-with-native-findingIds",
+          "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+          "endpoint": "native-merge-then-ordinary-full-review",
+          "automaticCeiling": "pending-independent-oracle-review",
+          "physicalRequests": {
+            "minimum": 1,
+            "maximum": 8,
+            "manuscriptMinimum": 1,
+            "manuscriptMaximum": 8
+          },
+          "armAsymmetry": "candidate-only; no comparative claim"
+        },
+        "attemptPolicy": {
+          "milestone": "post-ui",
+          "arms": [
+            "candidate"
+          ],
+          "operationId": "审稿",
+          "primaryPurpose": "review-chapter",
+          "repairPurpose": "review-chapter-rebuild",
+          "maxRepairAttempts": 1,
+          "reviewRebuild": {
+            "operationId": "一次复核",
+            "primaryPurpose": "review-chapter",
+            "repairPurpose": "review-chapter-rebuild",
+            "maxRepairAttempts": 1
+          },
+          "refinementRecovery": {
+            "operationId": "定向修稿",
+            "purpose": "refine-from-review",
+            "maxAttempts": 4,
+            "trigger": "settled-length-same-confirmation-visible-append-with-progress"
+          },
+          "shortOutline": {
+            "purpose": "chapter-draft-short-outline",
+            "operationIds": [],
+            "maxAttempts": 1,
+            "trigger": "new-draft-before-prose-same-root-native-artifact"
+          }
+        },
+        "arms": [
+          "candidate"
+        ],
+        "templateSource": "candidate-native"
+      }
+    }
   }
 }

@@ -17,6 +17,7 @@ import { MATERIAL_DECISION_MAX_INPUT_UNITS, MATERIAL_DECISION_RECEIPT_VERSION, t
 import { captureReviewRevisionContext } from '../review-revision-context';
 import { textHash } from '../../repositories/generation-run-repository';
 import type { PrepareReviewRevisionRequest } from '../../../src/shared/review-revision-generation';
+import { selectFrozenReviewRevisionMaterials } from '../../../src/services/workflows/commands/review-revision-materials';
 import { FinalizationRepository } from '../../repositories/finalization-repository';
 import { createProjectArchiveRoundtripFixture } from '../../../test/desktop/project-archive.fixture';
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3');
@@ -545,5 +546,25 @@ describe('material decision receipt binding (S10B step 3)', () => {
             coverage: { required: 0, included: 0, complete: true }, included: [], omitted: [],
         });
         expect(decisionOf(f.build().binding)?.promptHash).toBe(hash('初始用户提示词'));
+    });
+
+    it('binds and restores the complete required review receipt above the former 24k local allowance', async () => {
+        const f = receiptFixture();
+        f.db.prepare('UPDATE project_core SET global_guidance=?').run('作者独有事实。'.repeat(1_200));
+        const context = captureReviewRevisionContext(f.db, { operation: 'review-chapter', draftId: 1,
+            expectedDraft: { chapterNumber: 2, version: 1, status: 'draft', contentHash: textHash('原文\r\n汉字。') },
+            authorInputs: [], uiLocale: 'zh-CN' }, f.input.projectId);
+        const admission = await selectFrozenReviewRevisionMaterials(context, { projectId: f.input.projectId, epoch: f.input.epoch });
+        expect(admission.decision.capacity.admittedUnits).toBeGreaterThan(24_000);
+        expect(admission.decision.capacity.maxInputUnits).toBe(MATERIAL_DECISION_MAX_INPUT_UNITS);
+        expect(admission.decision.coverage.complete).toBe(true);
+        const input: GenerationSourceBindingInput = { ...f.input, operation: 'review-chapter',
+            selectedDraftIds: [1], selectedFinalizedDraftIds: [], promptKeys: ['consistency_check'], skillStages: ['review'],
+            reviewRevisionContext: context, materialDecision: { ...admission.decision, promptHash: hash('完整审稿提示词') } };
+        const binding = buildGenerationSourceBinding(f.deps, input).binding;
+        expect(decisionOf(binding)).toEqual(input.materialDecision);
+        const restored = rebuildGenerationSourceBinding(f.deps, binding, 'reopened').binding;
+        expect(compareGenerationSourceBindings(binding, restored)).toBe(true);
+        expect(decisionOf(restored)).toEqual(input.materialDecision);
     });
 });

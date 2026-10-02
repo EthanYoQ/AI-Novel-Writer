@@ -1,57 +1,71 @@
 # 中文质量预注册：Program v3 S00
 
-**2026-10-01 用户批准的现行目标**：[AI 自主审稿与成稿资格](#ai-review-final-manuscript)。它替代未来资格中的首稿直接终点和人工补题路线；现行政策已完成 protocol/driver/fixture 接线并重新冻结受影响目标，真实质量、平台和发布状态以唯一私有当前检查点为准。文档更新不改变正在运行的旧实验。
+**2026-10-02 现行要求**：[线程 10 交付计划](thread10-delivery-plan.md)拥有材料补齐、自动短细纲、有界模型筛选、candidate-only 多轮采样与裁决；保留下文[AI 自主审稿与作者批准](#ai-review-final-manuscript)。工作候选已实现产品能力和新机器协议，正式资格仍待验证，不能直接用旧 targets 或 Pro 登记开跑新资格。旧冻结原文和机器限制是历史合同或实现差距，不能否决已批准的前向要求，也不能充当就绪证据。
 
-已实现的机器 decision revision 为 `s14b-candidate-quality-and-comparison-v2`；`s14b-split-quality-gates-v1`、`s14b-reviewed-draft-v1` 及其结论保留为历史。candidate 字数标准仍采用 `draft-units-tolerance-30-v1`（2026-09-20 用户决定）；既有 post-UI 评估策略 revision 为 `s14b-post-ui-reviewed-draft-must-show-unknown-v3`（采纳必现目标 unknown）；`s14b-post-ui-reviewed-draft-unknown-oracle-v2`（2026-09-27 用户批准 unknown 单独终点）保留为历史。保留 `pacing-readability-v1` 节奏规则。完整机器协议及其他 revision 见 [`protocol.json`](protocol.json)；新协议完整字节 hash 须重新冻结，旧目标拒绝漂移。本文件负责解释执行规则与冻结合同的显式取代关系。S10B/S11 的历史场景、失败和加性裁决保留各自版本；[日期化交接](../../handoffs/2026-09-20-program-v3-s11-pause-handoff.md)只证明当时状态，当前进度读唯一私有当前检查点。全部 Spec 的适用关系见[现行索引](current-spec-index.md)。合成验证、真实模型结果与文学质量结论分开记录。
+历史基准 `c0d3b3790efc7799d61869b0d733c45d92a241fb` 的 `protocol.json` 为旧 decision revision `s14b-candidate-quality-and-comparison-v2`，含旧自主审修和 Pro 登记；它不具备线程 10 所需的候选自有模板/冻结、三轮归属、短细纲操作与恢复、批次裁决。现行 runner/driver/fixture 使用下节的新 revision；正式运行前须重新冻结实际 subject、完整协议 hash、配置和操作。±30% 的 `draft-units-tolerance-30-v1`、`pacing-readability-v1` 及未被取代的来源/预算保护保留。下文旧 revision、调用分配、账本行号/hash 和实验结果按各自登记解释，全部历史字节与失败不改。实际进度只读唯一私有检查点；全部 Spec 的适用关系见[现行索引](current-spec-index.md)。
 
 <a id="ai-review-final-manuscript"></a>
+
+## 线程 10 候选接线（已实现，尚未取得正式资格）
+
+当前工作候选增加 `s14b-candidate-only-three-rounds-v1`。历史登记保留；新 revision 使用候选自己的生产模板、三个持续项目和短细纲原生产操作。实现、独审及真实验收进度以唯一检查点为准，不能把本段当作已冻结或文学通过声明。
+
+- `freeze-targets --output <新私有 targets.json> --model-id <已安全配置的 id>` 在新 revision 下只冻结 candidate；不再要求 baseline。配置就绪后用 `register-batch --targets <targets.json> --output <新私有 batch.json>` 预登记代码、协议、模型配置 hash、30 个案例槽位及实际 invocation。
+- 正式 `c16-c18 --targets ... --mode real --physical-ledger ... --batch ... --round 1|2|3` 与 `full ... --batch ... --round 1` 消费同一批次。继续执行使用相同 batch/round，读取已有执行记录；已发送且结果不明的位置保留失败并对账，不换 invocation 重抽。后继缺少有效保存稿时保留 NOT_RUN，其他独立链继续。
+- 新正文每条在同一 root 先执行一次 `chapter-draft-short-outline`，其实际产物不得用于正文组合或可信派生；正文和恢复沿用其原产物与组合提示身份。四条恢复写作的一轮原生请求登记为 20–84；三个持续项目九章为 30–180。三轮加持续写作合计预计 90–432 次请求，具体包含原生格式恢复、续写和压缩的实际分支。80 是历史计划额，不是硬帽；开发筛选和独有 post-UI 请求另记实际数量，不填正式分母。
+- 保存稿的 `currentReviewState` 绑定当前正文 hash 及终局 review/cycle。前章经已有选稿路径继续，不定稿、不 waive；技术结果和独立语义结论分别保留。
+- `adjudicate-batch --batch <batch.json> --reviews <双评与争议裁决.json>` 验证各槽位实际结果 hash 和两名独立评审，仅对分歧要求仲裁，再执行线程 10 第 5 节阈值。自动执行器仍不能产生文学 PASS；开发合成材料不能代替正式样本。
+
+模型筛选结束后才固定本轮生成、审稿、修稿配置。既有 Pro 登记仅是当前已接通配置，不表示筛选已完成或最终已选定。
 
 ## AI 自主审稿与成稿资格（2026-10-01）
 
 **决定与边界**：首稿允许有待修问题；交付须同时证明软件/AI 能自行指出关键问题，以及经作者批准的修稿能达到原成文标准。作者负责采纳和合并，不承担替审稿系统找错的验收职责。此决定不承诺所有首稿必过，也不默认自动修改作品。产品保留作者自由补充意见的能力，但人工补题所得结果只证明辅助修稿，不能作为本政策的审修闭环通过证据。
 
-**生效状态**：用户已批准；`protocol.json` 已按本政策登记完整七案、post-UI 与 full，driver 与 fixture 已接线，受影响目标已重新冻结。接线和 synthetic/packet 校验不代表真实质量、平台或发布通过，当前状态以唯一私有当前检查点为准。以下旧 revision、固定稿诊断和历史结论按原范围保留。
+**生效状态**：2026-10-01 的自主审修边界继续有效；其旧单轮样本、双臂和先全绿后续的调度已由线程 10 取代。旧政策接线不代表新细纲、多轮、candidate-only 或批次裁决已实现；当前证据见唯一检查点，固定稿人工补题诊断仍不作正式资格。
 
 ### 范围及替代关系
 
 | 消费者 | 新资格要求 |
 | --- | --- |
-| C16–C18 完整七案 | C16 三案保留原提取、作者值保护及来源义务；四个 C17/C18 续写案例改为首稿、AI 首审、条件修稿/复审、最终稿联合评估。完整七案来自同一新冻结实验，不拼接历史六案与新单案。 |
-| S14B 待完成 post-UI | budget/context 的生成稿采用本链；review 的既有缺陷稿审修链直接检验自主发现和修复，不重复增加同义操作。各 selector 保留自身原材料、触发和断言；不重开已完成历史 early 实验。 |
-| S14B full | 保留三场景、每场景三章、双臂十八章及原顺序；每章经本链确定最终正文后，才供同臂下一章读取。不得评审修后稿、实际续写却使用旧首稿。 |
-| S06C、S10B、S11 与 F05 审修入口 | 复用生产审稿、确认、修稿、合并、普通复审；只修实际缺口，不另建事实库、planner、评分平台或全自动无限循环。 |
+| C16–C18 完整七案 | 同一冻结 candidate 跑三轮；C16 派生资料另算，四个恢复续写案按完整审修闭环评估。样本分母、最低要求、容错与零容忍项只读线程 10 第 5 节，不拼接历史 PASS。 |
+| S14B 待完成 post-UI | candidate 的 budget/context/review 保留独有材料、触发、作者确认、保存和确定性断言；条件完全相符才复用新批次证据，否则独有旅程执行一次。额外语义结果披露，不叠文学全绿门、不填正式分母。 |
+| S14B full | 原三场景各一持续项目、各三章；后章从 selectedCandidateDrafts 读取本项目实际保存稿，可按预登记带问题继续，不伪定稿。与三轮恢复续写联合按线程 10 裁决。 |
+| S06B/C、S10A/B、S11 与 F05 | 新 run 自动短细纲后写正文；审修补齐已有依据，保留确认、合并、复核和恢复边界。复用共同入口与原根预算，不另建状态库、评测平台或无限循环。 |
 
-新规则取代下文 post-UI v3 的仅 mustShow unknown 可采纳范围，以及 full/C17–C18 只评生成稿的终点；保留其他材料、语义、样本、参数、恢复、计费和来源约束。先前“人工补充遗漏后成稿”的条件设计不再作为未来资格依据。含预置作者问题的固定稿诊断仍是非资格实验，即使修后通过，也不能放行新的自主审修资格。
+新规则继续取代下文 post-UI v3 的仅 mustShow unknown 可采纳范围及只评生成稿的终点；本次样本、配置选择、操作和调度变更以线程 10 为准，其余作者材料、成文标准、恢复、计费和来源保护保留。含预置作者问题的固定稿诊断只证明辅助修稿，即使修后通过也不放行正式资格。
 
 ### 生产路径与批准范围
 
-1. 保存实际首稿。首审使用正常生产入口及原作者要求、蓝图、所选前驱、正文和合法上下文；不向模型注入 oracle、独立评审答案、历史失败标签、为本次稿件预填的纠错项或人工正确答案。原有作者材料必须可得，不把禁止补题误解为删减正常上下文。
+1. 新生成按线程 10 保存实际短细纲及首稿，旧稿审修不强制补细纲。首审使用原作者要求、蓝图、所选前驱、正文和合法上下文，不能把细纲当作事实或已完成目标；不注入 oracle、独立评审答案、历史失败标签或预填纠错项。已有作者材料必须可得，不把禁止补题误解为删减正常上下文。
 2. 完整保存首次 AI 审稿报告。测试在调用前预授权采纳该报告中的 error/warning，以及绑定明确当章必需目标、具体指出缺失或证据不足的 unknown，按原报告顺序处理；后者可来自蓝图 keyEvents 或显式 mustShow，不再仅限 mustShow。普通笼统 unknown 与覆盖不全不自动进入修稿；纯风格偏好不另立必修目标，unknown 保留原状态，不改称已确认错误。选择沿用报告的结构化字段与来源，不新增模型筛选调用；实际语义是否足以行动由独立评审核验，不能靠人工改写报告补足。
-3. 确认快照只采用真实 AI 项及其来源。测试操作者不能新增 author/apply 项、改写成已知答案、借 reviewFocus 定向提示已知错误，或在发送后补题。软件的确定性投影若来自 AI 对相应目标的真实结论可以沿用；机械缺项补出的 unknown 不能冒称 AI 已发现语义问题。正常用户仍可拒绝建议或自行编辑，这不构成本资格的自动发现证据。
+3. 确认快照只采用真实 AI 项及其来源；选择意见只授权处理问题，不把 AI 提议的替换事实变成作者事实，修稿仍须核对已捕获依据。测试操作者不能新增 author/apply 项、改写成已知答案、借 reviewFocus 提示已知错误，或在发送后补题。AI 对相应目标的真实结论可作确定性投影；机械缺项补出的 unknown 不算自主发现。正常用户仍可拒绝建议或自行编辑，这不构成本资格的自动发现证据。
 4. 无可采纳项时，保留原稿和完整报告，不制造修稿。存在可采纳项时，经真实确认执行一次定点修稿、差异合并及一次普通全文复审；修稿以保全无关内容为原则，完整输出仍走已有保存和合并路径。测试预授权合并须事先明确，不能冒称作者现场确认；不择优回退首稿，不直接把 merge 或模型 pass 当作 resolved。
-5. 原稿、报告、确认、修订、合并、复审和最终数据库正文沿用现有来源记录。审稿看到的稿件必须与其报告绑定，后章读到的前驱必须是本臂实际接受的最终稿。缺失目标类 finding 的消费者适配须最小修复，不伪造引文、findingId 或状态绕过产品规则。
+5. 原稿、报告、确认、修订、合并、复审和最终数据库正文沿用现有来源记录。后章读取本项目实际保存的首稿或修后稿，允许按预登记保留问题继续；未解决状态按当前保存稿 hash 对应的终局报告/周期判断，不扫描旧 cycle 代判新稿。缺失目标类 finding 不伪造引文、findingId 或状态；定向复核不替代全章末审。
 
 ### 同时评审发现能力和最终成文
 
-两名未参与实现的独立评审沿用原评审流程：先依据原作者材料和首稿列出有原文依据的合同缺陷，再核对原始 AI 报告、实际修订和最终稿。独立评审结果只用于判定，不回灌同一轮模型纠错。现有报告增加以下分项即可，不新增评分服务或专用测试平台。
+两名未参与实现的独立评审各按案一次评完整闭环：先依据原作者材料判断首稿，再核对 AI 原始报告、实际修订和最终稿。每案只记结论、错误类型、短引文和证据位置，只仲裁分歧，不叠三阶段双评。结果不回灌同一轮模型纠错；现有报告分列以下项目即可。
 
 - **首稿表现**：记录未经语义修稿的通过/失败/分歧及原因，作为能力指标；首稿失败不再单独否决可合格的审修闭环。提取案例和技术请求成功数不得混入写作首稿通过率。
 - **自主发现**：原事实、时间、必需事件、来源及原可读底线中的具体阻断缺陷，须在首次有效 AI 报告中得到足以采取行动的定位或目标说明；只说“再检查一下”或机械覆盖 unknown 不算发现。遗漏事件不要求伪造不存在的正文引文，但须明确是哪项原目标、缺什么。具体漏检即本分项 FAIL，即使后续偶然改对也不补算；严重误报或要求违反作者事实同样失败。一般风格偏好不升级为阻断。首稿无缺陷时记录该案未触发检出，不据此宣称检出率 100%。
 - **修复与最终稿**：适用的事实/时间、全部必需事件、±30%、来源、复述、自然度、动机和节奏标准保持；修稿还遵守既有内容保全与相对篇幅合同。核对原问题解决且无新增阻断。复审漏掉仍存在或新引入的阻断问题，不能以模型 pass 代替通过。
-- **资格与成本**：candidate 自主发现和最终成文两项均须通过，技术/来源证据完整；证据不足为 INCONCLUSIVE，分歧沿用最多一次独立仲裁。保留首稿、修后结果、未触发项、模型漏检/误报及实际请求成本，不用单一平均分冲销具体失败。自动 runner 仍最高 pending，不能自行作文学裁决。
+- **资格与成本**：单条成功须自主发现与最终成文均符合要求、技术/来源证据完整；证据不足为 INCONCLUSIVE。批次按线程 10 的固定分母、有限失败及零容忍项判定，不把失败条目改作 PASS。保留未触发项、漏检/误报和实际请求成本；自动 runner 最高 pending，不能作文学裁决。
 
 固定失败稿的未获提示的原始首审若已有完整来源，可只读核查其发现能力，避免重跑同样的审稿；其人工补题修稿不能混成 AI-only 成功，也不能替代未来完整新实验。当前无缺陷的新稿不需要人为造错；已知失败稿及既有 review 案例承担真实检出验证，synthetic 只证明接线。
 
 ### 调用、参考臂与执行顺序
 
-- 每篇最多一次语义修稿。无修稿通常新增一次首审；触发修稿通常新增首审、修稿、复审三次请求。结构化语法修复只沿用该入口明确登记的许可；文学失败不触发格式修复、续写或第二次语义修稿。实际最大调用、token/时间预算由执行线程依据生产操作计算并在运行前登记；旧最短请求数不再代表新链，80 仍只是计划分配额。
-- baseline 保持原代码，通过其真实已有入口执行预登记审修；不伪造 candidate 的目标投影或复核能力。不可用的对应能力及参数/选择不对称单列披露。技术和前驱证据仍须完整，baseline 自主发现/文学失败不自动否决合格 candidate，也不据不对称单独宣称改善。
-- 先检查当前真实首审的自主发现证据，必要时只修已证明的生产缺口；然后完成新政策接线、针对性零模型验证和一次独立切片审查，取得完整七案新资格，再按既有顺序执行 post-UI/full。审修接线可提前独立完成；不因文档变化重跑无关产品、UI、平台或已关闭审查。
-- 一次修稿失败如实保留并诊断，不盲重试、不改样本或标准；这不是允许跳过缺陷，也不是用户日后编辑次数上限。历史 FAIL、旧请求和原始报告不改判；仅同步受到新政策影响的活跃规格/计划和机器消费者，不修改冻结 Spec、DAG、manifest 或旧证据。平台、发布和 Issue 结案仍按各自合同。
+- 新细纲及实际恢复分支纳入原根预算；每篇最多一次语义修稿和一次普通全章末审，不叠同义默认定向复核。实际操作、请求上限和时间/token 预算须先登记，不能把旧最短请求数当新链总量。
+- 新正式资格只运行 candidate；旧 baseline 字节和参考臂规则仅解释旧实验，另有改善声明需求才另行比较。模型筛选按线程 10 有界执行，开发结果不能替代产品准入、原生接线或正式名额。
+- 先完成产品切片与受影响接线检查，再冻结新批次；七案三轮、连续写作和 post-UI 按自身前置交错，不等待单轮全绿，不增加全绿彩排。达到批准批次出口即结束采样。
+- 单条失败原样保留；按线程 10 区分语义失败、无有效保存稿、来源/恢复错误与共享数据故障，决定继续其他槽位或停止受影响链。历史 FAIL、账本、Spec/DAG/manifest 不改；平台、发布与 Issue 义务保留。
 
 ## S14B 未来样本的门禁拆分
 
-本 revision 仅适用于新冻结的 post-UI 与最终18章；事先冻结同一场景、seed、两臂顺序、次数和停止条件。生产链先通过技术门：baseline 原生产代码和原稿/成稿真实保存，正文 hash、来源、请求及项目身份、审修链、前驱和物理账本均可核验；candidate 同样须有完整技术终点。baseline 若在本地字数门抛错、缺 saved/后续审修或 full 前驱不可达，仍是技术无效，整组不得通过。第346–390行历史账本以原始字节 SHA-256 和15组 reserve/dispatch/settle 加性认证，原345行边界及全部历史失败不改。invocation `6df8518d-30ec-4b7c-9828-2393e751becf` 原 INCONCLUSIVE 不追溯改判。
+**历史范围**：本节保存 `s14b-candidate-quality-and-comparison-v2` 及其历史账本解释，标题“未来”指该 revision 登记时的未来样本。其必需双臂、逐章全过及相对比较义务已由线程 10 取代；不是当前开跑指令。行号均指物理账本行，不是本文件行。
+
+该 revision 当时只适用于新冻结的 post-UI 与最终18章，冻结同一场景、seed、两臂顺序、次数和停止条件。其技术门要求 baseline 原生产代码和原稿/成稿真实保存，正文 hash、来源、请求及项目身份、审修链、前驱和物理账本可核验，candidate 同样有完整技术终点；baseline 本地字数门抛错、缺 saved/审修或 full 前驱不可达均使整组技术无效。第346–390行历史账本以原始字节 SHA-256 和15组 reserve/dispatch/settle 加性认证，原345行边界及全部历史失败不改。invocation `6df8518d-30ec-4b7c-9828-2393e751becf` 原 INCONCLUSIVE 不追溯改判。
 
 第391–408行是旧 `s14b-split-quality-gates-v1` 协议在 invocation `0807270b-f5c5-495c-bd71-5f1d6e9a32c1` 下已经结算的六次真实请求：baseline 与 candidate 各三次，均为 reserve→dispatch→settle。`protocol.json` 的 `historicalPostUi408Boundary` 以原始前408行 SHA-256、顺序、attempt/invocation、终态和两臂 code/source/driver/parity 身份认证这一段；原390行边界和历史结论不改。第409行起的新增 reserve 必须使用当前协议 revision 与完整字节 hash；这次加性认证不恢复旧目标资格，也不将先前失败的 C16 预检 记成已派发。继续真实 C16 前须按新协议 hash 重新冻结目标。
 
@@ -69,9 +83,9 @@
 
 ## 测试专用成稿评估（第一切片）
 
-本节保存已实现的 post-UI v3 及更早政策。未来新资格的采纳范围、自主发现评审和覆盖阶段由[2026-10-01 决定](#ai-review-final-manuscript)取代；旧实验仍按原登记解释。
+**历史范围**：本节仅解释 post-UI v3 及更早政策，以下“新场景”“新目标”和调用数均指各旧 revision 当时的登记。其采纳范围后来由[自主审稿决定](#ai-review-final-manuscript)扩展，双臂、样本和资格顺序现由线程 10 取代；不据本节开跑新资格。
 
-产品已支持作者显式的 `【第N章必现】` 目标及作者选择后的一次修稿；这不自动改变测试预授权，必须另有测试政策决定。用户已批准以下决定，现行 post-UI 评估策略为 `s14b-post-ui-reviewed-draft-must-show-unknown-v3`，场景 revision 现为 `s14b-post-ui-reviewed-budget-review-rebuild-must-show-v3`（v2 保留为历史；v3 相对 v2 只增加候选臂的唯一原生压缩登记，见下文 S07 段），只适用于未来一轮 S14B post-UI 固定实验场景1/1；early、full、C16–C18 的选择与场景不变。新场景 revision 只增加上述输入标记，继承原 `s14b-post-ui-reviewed-budget-review-rebuild-v1` 的全部登记，包括 `指定范围生成` 的一次结构化语法修复和 `成稿首审` 的一次 `review-chapter-rebuild`（见下文 S07 段），并非不带 rebuild 的新场景。
+产品的作者显式 `【第N章必现】` 目标及作者选择后的一次修稿不自动改变测试预授权。当时批准的 post-UI 策略为 `s14b-post-ui-reviewed-draft-must-show-unknown-v3`，对应场景 `s14b-post-ui-reviewed-budget-review-rebuild-must-show-v3`（v2 保留；v3 只增加候选臂唯一原生压缩登记，见下文 S07 段），范围是一轮固定场景1/1，当时未扩展 early/full/C16–C18。该场景保留输入标记及原 `s14b-post-ui-reviewed-budget-review-rebuild-v1` 的全部登记，包括 `指定范围生成` 的一次语法修复和 `成稿首审` 的一次 `review-chapter-rebuild`。
 
 - 输入标记：该场景 revision 只在场景1作者世界设定末尾加入独立一行 `【第1章必现】林澄保管铜钥匙`（语义源 `scenarioAuthorSettingLines`）；原场景其余事实、事件、字数和 oracle 不变，其他 milestone/场景 revision 的作者设定字节不变。
 - 选择范围：首审报告中全部 error/warning，加上 `goalId` 匹配 `^ch\d+:mustShow:\d+$`（本场景即 `ch1:mustShow:K`）且 severity 为 unknown 的项，按原报告顺序；与 error/warning 共用至多一次修稿与一次普通复评，`maxRevisions` 仍为 1。其余 unknown（蓝图 keyEvents、覆盖不完整）不采纳。
@@ -81,7 +95,7 @@
 
 以下 `s14b-post-ui-reviewed-draft-unknown-oracle-v2` 段落及 `s14b-post-ui-reviewed-budget-review-rebuild-v1` 场景保留为历史 revision：它只采纳 error/warning；现行 driver 不再按其校验，旧目标因协议 hash 漂移被拒绝属预期，旧结论不追溯改判。除上述选择范围外，v3 沿用其余执行规则。
 
-`s14b-post-ui-reviewed-draft-unknown-oracle-v2` 仅适用于未来 `post-ui early-budget` 资格测试；本切片不扩展 full、early-context 或 S11，不改变软件默认创作、自动审稿、确认、修稿或定稿流程。两臂均调用既有生产入口：生成并保存初稿、普通审稿；报告存在 error/warning 时，即使同时有 unknown，也只按原报告顺序预先授权采纳全部 error/warning，保存确认快照，执行一次修稿并接受唯一修订，再对修后全文普通审稿一次。全部 pass 时保留初稿，记录 `no-actionable-review`。仅 pass/unknown 且没有 error/warning 时，冻结初稿与完整原报告，记录单独的 `no-actionable-review-with-unresolved-goals`；不确认、不修稿、不复审，不把 unknown 改为 pass。复评仍有问题也不追加修稿或改选初稿。确认与合并是测试预授权规则，不冒称作者现场逐项核实。
+`s14b-post-ui-reviewed-draft-unknown-oracle-v2` 当时仅适用于 `post-ui early-budget`，未扩展 full、early-context 或 S11，也未改变软件默认创作与作者批准流程。其两臂调用既有生产入口：生成保存初稿、普通审稿；存在 error/warning 时按报告顺序预授权采纳全部 error/warning，即使同时有 unknown 也不采纳 unknown，随后一次修稿、合并和普通全章复审。全 pass 保留初稿并记 `no-actionable-review`；仅 pass/unknown 记 `no-actionable-review-with-unresolved-goals`，不确认、修稿或复审。复评有问题也不再修或改选初稿；确认和合并仅为该实验的预授权。
 
 两臂复评均使用普通审稿入口，不冒充旧版具有候选版原生定向复核状态机；既有 finding 状态不因此改为 resolved。初稿、原审稿、确认快照、唯一修订、合并正文和复评分别保留文件与 hash，最终评审正文须与数据库回读和 receipt 一致。请求按真实 attempt 继续 reserve/dispatch/settle/unknown；策略、协议字节、驱动、实际代码 SHA 和来源均随新目标冻结。旧目标拒绝新协议；真实执行前须将此前账本完整前缀重新登记为只读历史，不能改写原账本。
 
@@ -89,21 +103,21 @@
 
 ## 现行交付顺序与复用
 
-[现行变更规格](frontend-transition-specs.md)与[实施计划](frontend-transition-plan.md)区分核心可交接和最终产品资格：当前弃用 Writer 不再收齐旧 F05，核心工作与 PR #262 V3 接入可按依赖推进。新 V3 的 F04 完成、F05 确定性 Final 及 S13 完整清理后，S14A 才冻结最终候选。三份 post-UI 在冻结后与 S14B 共用配置核验和实际双臂零模型 dry-run；在最终汇合前保持待资格，不能提前写 F05 整体 PASS。核心里程碑不代替模型、升级或发布门。
+[现行变更规格](frontend-transition-specs.md)与[实施计划](frontend-transition-plan.md)保留核心、V3、F05 确定性 Final、S13 和 S14A 的依赖。[线程 10](thread10-delivery-plan.md)接好 candidate-only 新协议并冻结后，正式批次与 post-UI 可在自身前置满足后交错；S14C/D 独立准备在隔离环境推进。post-UI 未完成不能提前写 F05 整体 PASS，核心里程碑不代替升级或发布资格。
 
-post-UI 样本只在固定案例的触发条件、断言、两臂原始产物及独立评审完整覆盖最终案例时复用；逐 case 记录原 receipt、实际 `testedSha` 和断言对应。未覆盖案例照常执行。原始失败、物理账本和历史结论不改写；仅因文档变化不重跑模型。相关代码、配置或 driver 变化按实际影响重新资格。
+post-UI 只有同版本、入口、材料、操作及全部断言相符才复用正式批次证据，逐 case 记录原 receipt、`testedSha` 和对应关系；否则独有旅程执行一次。确定性断言必须通过，额外语义结果披露，不另叠文学全绿门或改变正式分母；新发现的严重作者/数据问题及可复现缺陷照常处理。原始失败、账本和历史结论不改，仅文档变化不重跑模型。
 
 ## 现行字数标准
 
 自本 revision 起，生产草稿目标与后续质量验收统一采用 **±30%（70%–130%）**，逐章判定。计数仍使用 `src/shared/draft-units.ts` 的 v3 draft-units 算法，下界向下取整、上界向上取整；900、2000、3000 单位的区间分别为 630–1170、1400–2600、2100–3900。
 
-本 delta 仅取代冻结内核包 `01-PLAN.md`、`03-CONTRACTS-AND-GATES.md` C06、`specs/S07.md` 与 `specs/S14B.md` 的 ±20% 字数约束，并随 Program v3 覆盖合同一起使用。冻结包字节保持不变；所有必需事件、事实、复述与独立文学评审门继续有效。旧版 baseline 仍是冻结参考，其本地字数门及失败证据按原代码的 ±20% 解释，再按本文件的参考臂裁决规则处理；不修改旧版，不把参考失败自动等同于 candidate 失败。candidate 必须通过现行绝对门。
+本 delta 取代冻结内核包 `01-PLAN.md`、`03-CONTRACTS-AND-GATES.md` C06、`specs/S07.md` 与 `specs/S14B.md` 的 ±20% 字数约束。冻结包不变，每条仍按事实、事件、复述与可读标准判分，批次按线程 10 裁决。历史 baseline 的本地字数门按原代码 ±20% 及当时参考臂规则解释，不改旧版或追溯改判；新正式资格不要求参考臂。
 
 旧协议、原始产物和历史 PASS/FAIL 保留原标准，不按 ±30% 追溯改判，也不因此重启已完成的 S10B/S11。新实验必须提交并重新冻结当前 candidate、协议 hash 和 revision；已有 target 不能继续冒用。旧版 222 行认证边界的原始 SHA256 `00e07f37fd55e9c0c7cc304ab81c61a17df3956f0e7402cb6d3ac0c1c6fcf6d4` 保持有效；当前协议将其超集前 231 行（新增一次 post-UI 正式 FAIL 的三组 reserve→dispatch→settle）原字节认证为新边界。既有账本和该次 FAIL 不改写，新请求继续进入同一账本。此政策调整与确定性测试本身不构成最终模型质量资格。
 
 ## 冻结样本与判断
 
-三场景分别为旧港来信、山城药铺、长夜观星台，每场景三章，目标依次为900、2000、3000生产draft-units单位；两臂最终共18章。逐章±30%、所有必需事件、身份/时间/知情/物品/计划历史零错误是并列硬门。不得用跨章平均或自然度弥补事实失败。
+连续写作保留旧港来信、山城药铺、长夜观星台三个场景，每个 candidate 项目三章，目标依次为900、2000、3000生产 draft-units；恢复续写来自七案三轮。C16 与写作的分母、批次通过线和零容忍项统一见[线程 10 第 5 节](thread10-delivery-plan.md)。每条事实、事件、字数、来源或可读性失败均保留原判，不用批次容错改写单条结果。
 
 未来新冻结的盲评包须依据作者素材、当章事件与实际蓝图区分以下三类，逐项注明类别、来源和核查证据；上述 unknown 终点补证同样按此区分：
 
@@ -111,15 +125,17 @@ post-UI 样本只在固定案例的触发条件、断言、两臂原始产物及
 - 当章冻结的必需事件与蓝图明确指定的呈现：须有积极、可回查的原文证据；不能用背景设定或未见矛盾代替实际发生或呈现。
 - 有限视角下的人物猜测与世界事实分开判断；不能仅凭人物尚未确认就认定作者事实被改写，正文明确建立相反事实仍为 FAIL，实质歧义仍为 INCONCLUSIVE。
 
-此分类只澄清未来测试的举证规则，不改变既有硬门、两名独立盲评与一次仲裁要求、机器协议字节或 revision，也不改变软件默认流程。`77928d0b` 本次原 FAIL、原盲评和 rubric 保持不变，不追溯改判，不授权同案再采。
+此分类继续作为举证规则；批次资格和评审次数按线程 10，不靠本段假定机器协议已更新。`77928d0b` 原 FAIL、原盲评和 rubric 保持不变，不追溯改判或补位。
 
-每臂前章独立生成、保存并供本臂后章使用。早期第二章案例使用语义源指定的作者前情，不能把另一臂的输出借入。S00 的 legacy/canonical 语义包仍只是格式合同材料；S07 early-budget 另从同一语义源构造各目标原生物理项目，并经实际 SQLite、提示词读取和模型配置入口回读 parity。此构造不声称验证旧项目迁移或其他阶段的项目 fixture。
+每个持续项目只准备一次；后章读取本项目实际保存前驱，可按预登记带问题继续，不借其他项目正文、不伪定稿。旧 early 第二章的作者前情及 S00 legacy/canonical 语义包只证明各自范围；历史 S07 的原生项目/parity 回读不证明旧项目迁移或新资格接线。
 
-复述判定：标注前章完整事件与本章非必要回顾的UTF-16 spans，以生产单位计数；重复既有完整事件超过本章10%失败。必须保存原文及hash，不能只按字符串相似度替代人工事件定位。后续新冻结的 post-UI 与最终18章按本文件开头的 candidate 自身资格及独立比较拆分执行。节奏可读底线为：主要动作及顺序可追踪、必需情节实际发生、关键选择及其结果可识别、重复描写或心理回绕没有实质阻断本章推进。两名独立评审须对自然度、动机、节奏分别按预先冻结的最低描述及本节节奏四项判断，保留原文证据；一次仲裁及证据不足的 INCONCLUSIVE 规则同上。事实、必需事件、字数±30%、复述≤10%及来源门不变。本节对新目标取代冻结 S14B 的三维相对无劣资格门；逐章逐维比较继续披露并只支持有证据的改善声明。历史 FAIL 和原评分不追溯改判。
+复述判定：标注前章完整事件与本章非必要回顾的 UTF-16 spans，以生产单位计数；重复既有完整事件超过本章10%失败。保存原文及 hash，不以字符串相似度代替事件定位。自然度要求表达通顺、符合语境，无妨碍理解的持续机械重复或语气断裂；人物动机要求关键选择有已知目标、处境及事实依据，无无据重大反转；节奏要求动作顺序可追踪、必需情节实际发生、关键选择及结果可识别、重复描写或心理回绕不实质阻断推进。两名独立评审按冻结标准和短原文证据判单条结果，分歧只仲裁争议项。正式批次不强制旧版逐维比较；另作改善声明须另有可比证据，历史 FAIL 和原评分不改。
 
-顺序固定在协议中，最终同时间窗交错两臂。seed固定；主集成者看输出前生成随机匿名标签并私存映射。远端版本不能锁定则记录可能漂移。所有失败、中止、缺章、重试进入意向分析表，旧S00输出不能代替最终baseline。
+新协议在发送前固定 seed、案例顺序、batch/round/slot 和实际配置；主集成者看输出前生成匿名标签并私存映射。远端版本不能锁定就记录可能漂移。失败、中止、缺章、重试和 NOT_RUN 均保留，未发送位置可按原身份继续，已发送结果未知先对账；不选择最好一轮，不用历史或开发输出补位。
 
 ### S10B 决策 revision
+
+本节仅解释 S10B 历史 revision、原 invocation 和账本认证；“新冻结”“当前 binding”指对应登记当时的状态，不是线程 10 开跑指令。
 
 `s10b-reference-baseline-v2` 只改变成对结果的裁决，不改 campaign、语义样本、物理账本或历史事实。冻结 baseline 是参考臂：只有其本地 `TARGET_UNITS_FAILED` 同时带有结构化字数门身份、持久化观察和 hash 可复核正文时，才记为 `reference-nonconforming`，不再自动否决满足绝对门的 candidate。baseline 的 provider/IPC 失败、缺产物或产物不可验证仍是无效对照，整对失败；不得用错误字符串猜测原因。
 
@@ -128,6 +144,8 @@ post-UI 样本只在固定案例的触发条件、断言、两臂原始产物及
 旧 revision `s10b-paired-hard-gate-v1` 的两次失败 invocation `5b460511-b426-42e1-b8c3-903ff25668f9`、`f5291452-2bf6-4344-9677-d8cc75bbb7c6` 永久保留在 intention-to-treat 中；本 revision 不追溯改判、不删除、不挑优。S10B scenario v1 invocation `e8900180-945a-4211-b0c9-8427389c0625` 同样永久保留：两位独立评审一致判定 candidate 虽通过绝对事件、事实与 recap，但自然度、节奏、人物动机三维均劣于 reference，质量结论为 FAIL。scenario v2 invocation `5a7f78fd-d0db-4b63-8564-bdce426b73f0` 也永久保留：实际正文在两位独立评审中都发生时点与节奏失败；但该 pair 同时违反生成权威与前驱准入前提，因此只能记为 `observed-quality-failure-experiment-inconclusive`，不能用于 candidate 因果归因，也不能放行。scenario v3 改用第三章：第二章作者前情是唯一必需当前前驱，第一章中性旧档是独立的可选当前候选，从而符合主进程“每章只允许当前草稿”的来源约束；逐章时点写入作者可见 guidance。可选旧档仍可按预算省略，必需前驱装不下则容量冲突。协议文件完整字节 hash 与 `decisionRevision` 必须同时写入新冻结目标、每条新 reserve 和每份桥收据。协议以 `historicalLedgerBoundary` 及已登记的 supersession 边界逐段冻结既有物理账本的原始字节 hash；具体行数、证据 invocation 与 reserve attempt 以 `protocol.json` 为准；历史段内 legacy/旧 binding 只读保留，第580行起的每条 reserve 一律必须等于当前 binding。任一前缀缺失、字节漂移或新 reserve 缺少当前 binding 均拒绝；旧 target 在协议漂移后 fail closed，必须重新冻结才能实验。
 
 ### S11 场景 revision
+
+本节仅解释历史 early-review revision 及加性裁决；其双臂和单次复核记录不替代线程 10 的正式批次与普通全章末审。
 
 `s11-early-review-per-attempt-deadline-v3` 只用于新的 `early-review` 冻结目标。它保留 v2 的已实现代价语义与两臂三操作、同 root、逐层 hash、一次复核和全部物理账本要求，并继续固定 `model-positive-is-pending-author-verification-v2`：模型给出的唯一逐字证据只证明证据可定位，不能独自把 finding 写成 `resolved`；正向判断落为 `unknown` 等待作者核实，负向判断仍可落为 `unresolved`，不增加第二次复核。历史收据继续按各自版本验证。
 
@@ -143,9 +161,9 @@ v2 invocation `70964dde-14b2-437a-9dc1-414f6a06c040` 永久保留为 invalid ref
 
 **2026-09-18 用户决定移除真实调用硬上限。** 原先的 80 次总帽不再拒绝请求；它降级为**计划分配额**（协议里的 `plannedCallAllocation`），用于一致性校验与汇报。这是对冻结规划 `docs/plans/novel-quality-modernization/03-CONTRACTS-AND-GATES.md` 中"不擅自扩帽"一句的**有意取代**，记录见 `docs/adr/0019-remove-real-call-hard-cap.md`。受审规划字节未被改写。
 
-计划分配（仍是分阶段设计的样本量，不是上限）：S00 0；early三门4+2+6；post-UI重跑三门4+2+6；最终18章；规划6；C16既有提取6；备份恢复继续创作4；失败/重试/修复/审稿/复核余量22，合计80。一次逻辑动作可能消耗多次物理调用；此表是可容纳的最小路径，不保证输出、自动续写或失败路径都在配额内成功。
+历史分配为：S00 0；early三门4+2+6；post-UI三门4+2+6；最终18章；规划6；C16提取6；恢复继续4；失败/重试/修复/审稿/复核余量22，合计80。这是旧样本设计，不是新批次操作清单或上限。线程 10 新细纲、审修、三轮及连续九章的实际调用组成与预估总量须先登记；一次逻辑动作可能多次发送，不能写死理想请求数。
 
-**上限是决策，记账是证据。** 硬上限移除后，账本的地位更重要而不是更轻：每一次真实发送（包括失败、unknown、重试）仍必须逐条进入同一账本，花费因此仍然完整可审计。移除的是"拒绝"，不是"记录"。
+**上限是决策，记账是证据。** 原生接线检查和正式实验的每次真实发送（包括失败、unknown、重试）继续逐条进入唯一物理账本。线程 10 的直连 API 开发筛选单独保存有界请求日志，不能手写正式账本、复用已关闭 diagnostic 额度或虚构未登记 milestone；其汇总进入唯一检查点，不是第二份资格账本。
 
 正式集成必须固定 `.runtime/.cache/novel-quality-modernization/physical-ledger.jsonl` 为本次campaign唯一账本，所有owner消费它。`updateLedger`持有排他wx锁，逐条append+fsync；锁存在不抢占，残缺记录拒绝继续。reserve先占位，dispatch先落盘再发网络；仅reserve可取消释放，dispatch后settle/unknown均占位。重试用新attempt，不能复用未知请求。调用后缺失usage仍以预留保守记账；本账本仅管实验物理次数，产品token/时间预算仍需S07 C01生产账本，不能拿这个替代。
 
@@ -155,11 +173,13 @@ S07 的 early-budget 驱动在每次最终 provider fetch 前持锁 reserve→di
 
 2026-09-19 在 `972a073` 工作树只读核对：`protocol.json` 已使用 `plannedCallAllocation: 80`，`id` 保留 `novel-quality-program-v3-80-v1`；[ADR0019](../../adr/0019-remove-real-call-hard-cap.md) 第 5 项要求执行账本使用 `novel-quality-program-v3-uncapped-v1`。`scripts/quality-modernization-run.mjs` 的 `CAMPAIGN_ID_SUPERSESSION` / `campaignIdFor` 已显式映射二者，并导出 `CAMPAIGN_ID`。这不是尚待实现的映射，也不能仅凭字面差异判定混账。接手时仍须核对实际 runner/bridge/manifest 与历史账本的身份一致性；本次只读源码核对不代替运行证据。不要直接修改协议 ID、重命名旧账本或重复实现映射。
 
-获准安全参数：provider=`openai`、protocol=`openai`、endpointHost=`api.siliconflow.cn`、modelName=`deepseek-ai/DeepSeek-V4-Flash`、temperature=0.7、maxTokens=16384。配置declared context=null/output=16384/reasoning=false/structuredOutput=false/usage=false不等于实测能力；不推测结构化支持、usage或上下文上限。密钥只通过现有安全模型入口，禁止fixture/receipt/日志携带密钥或密钥hash。旧qualification driver模拟的其他模型名称仅是其自带模拟样本，绝不是正式获准provider配置。
+历史 Flash 登记参数：provider=`openai`、protocol=`openai`、endpointHost=`api.siliconflow.cn`、modelName=`deepseek-ai/DeepSeek-V4-Flash`、temperature=0.7、maxTokens=16384。它不固定线程 10 的胜出配置；新候选配置按计划筛选、接入与冻结。declared context=null/output=16384/reasoning=false/structuredOutput=false/usage=false 不等于实测能力。凭据仍走现有安全读取，不写入 fixture/receipt/日志或保存其 hash；模拟模型名称不构成真实配置证据。
 
-前瞻推理配置以 `protocol.json.forwardReasoningExperiment` 的 `fixed-max-natural-wire-asymmetry-v1` 登记为准，只覆盖 C16–C18 七案、post-UI 三个固定 selector、final full；须先完成 C16 七案 candidate 绝对门再推进其依赖。两臂实际模型配置均须读回 `reasoningOverride=max`，项目策略均为 `creativeStrategy=auto`，且 provider/protocol/baseUrl/modelName 精确匹配登记。candidate 的每个物理请求自然发送 `enable_thinking:true`、`reasoning_effort:max`；冻结旧 baseline 自然省略两个字段，`false`、`null` 都不算缺席；两臂都不得发送 `thinking_budget`。逐请求在现有 requestReceipt 中保存非敏感解析状态、字段 presence/value 与实际 `requestedOutputTokens`（来自当次 `max_tokens`），先核对再 reserve/dispatch，不改写出站 body。原六参数、作者素材 parity 不变；同配置偏好不冒称 wire parity（登记为 `false`）。这次只固定 max，不先试 high 或选优；不能据此作参数或代码因果改善声明，不可比相对维度记 INCONCLUSIVE，candidate 全部绝对门与 baseline 完整技术端点不减。语义源、oracle、温度 0.7、profile 上限 16384、原预算、顺序、历史失败与唯一原账本均保持。出站证据不能证明服务端实际模型身份或思考模式；没有服务端 metadata 就记未验证。新协议完整字节 hash 漂移，旧目标不得复用，须重新冻结并先跑零模型 dry-run。
+旧 `protocol.json.forwardReasoningExperiment` 的 `fixed-max-natural-wire-asymmetry-v1` 曾覆盖 C16–C18、三个 post-UI selector 和 full，并以先通过七案作为后续前置；该顺序及 max-only 限制不适用于线程 10。该旧登记要求两臂回读 `reasoningOverride=max`、`creativeStrategy=auto` 及相同 provider/protocol/baseUrl/modelName，candidate 自然发送 `enable_thinking:true`、`reasoning_effort:max`，baseline 自然省略，两臂均无 `thinking_budget`。原请求收据保留 presence/value、实际 `requestedOutputTokens`、作者素材及 wire 不对称；不改出站 body 或历史结论。出站证据不能证明服务端实际身份/思考模式，没有 metadata 记未验证；这一证据边界继续适用于新筛选与资格。
 
 ## 可运行入口及证据边界
+
+以下是旧 revision 的实际机械入口；`help` 可用于查询，其他示例只解释旧双目标/旧阶段，不能作为线程 10 新资格命令。新参数必须等实际 CLI 和协议接好后核实，本文不预造。
 
 ```
 node scripts/quality-modernization-run.mjs help
@@ -180,7 +200,9 @@ schemaVersion=1 的 S00 manifests 保持历史探针行为，formal 阶段仍返
 
 ## S07 默认生产双路径与冻结顺序
 
-新桥位于 `scripts/fixtures/quality-modernization-production.fixture.mjs`。它实例化各目标的默认 `GenerateDirectoryCommand`、`GenerateDraftCommand`，不传 `createRuntime`、completion、repository 或 command dependencies。Electron 的传输外壳由测试桥实现，处理器、项目权限、模型租约、provider、解析、提交均调用各目标实际源码；SQLite 使用真实隔离文件。候选臂走已注册的 generation main owner，基线走其原有 renderer runtime 和注册 LLM controller。两者都在同一个最终 fetch 边界切换 synthetic/real；不存在直接 API 质量实验器。
+**旧双路径范围**：本节保存 S07 及旧 post-UI revision 的生产桥、调用许可、模板和冻结方式；双臂、调用数与命令不直接适用于线程 10。未被取代的真实入口、来源、预算、凭据和身份检查继续保留，新配置与操作须显式接线。
+
+生产桥位于 `scripts/fixtures/quality-modernization-production.fixture.mjs`，实例化默认 `GenerateDirectoryCommand`、`GenerateDraftCommand`，不注入替代 command dependencies。Electron 传输外壳由桥实现，处理器、权限、租约、provider、解析和提交调用实际源码，SQLite 使用真实隔离文件。旧 candidate 走 generation main owner，baseline 走原 renderer runtime/LLM controller，均在最终 fetch 边界切换 synthetic/real。正式原生资格继续走此入口；线程 10 允许的直连 API 仅用于独立开发筛选，不能代替正式接线。
 
 candidate 每次发送前从实际 fixture 数据库查询唯一 `dispatch-marked` attempt，并核对当前默认 command 持有的 project/epoch/root/run、attemptId 和真正输出上限；零条、多条或不匹配都拒发。收尾再核对原 attempt 的 stop、artifact 与正式 effect。已知 stop 且 usage 不可信时保留产品账本的 unknown liability，不谎称可信用量或失败退款。baseline 不伪造它没有的 main attempt，使用独立物理 ID 并绑定原实现哈希。
 
@@ -192,18 +214,18 @@ S14B post-UI 场景 revision `s14b-post-ui-reviewed-budget-review-rebuild-must-s
 
 生效范围只限未来的 post-UI 冻结目标与真实执行；旧目标因协议完整字节 hash 漂移而拒绝，须重新冻结。不对称披露：评估策略 `armAsymmetry.condense` 增补一句——candidate 含原生压缩登记、baseline 无；两臂是否触发压缩及压缩后正文长度的差异来自该不对称，不得据此单独声称相对改善（随协议、pair manifest 与每臂 receipt 披露）。历史保留：post-UI invocation `ba2d34ab-a4f6-4283-bed1-eb2bffa8b5aa`（v2、candidate `a618c122`）中 candidate 首稿 1210 单位超出上限 1170，第二次原生压缩因未登记而没有进入账本，随后以 `GENERATION_DRAFT_LENGTH_OUT_OF_RANGE` 失败，永久保留为失败，不改判、不补采、不按本变更追溯；更早的 post-UI 结果同样按原结论保留。本变更改变的是今后 post-UI 的登记规则，不是对 `ba2d34ab` 或任何历史结果的重判。历史账本段登记见下文 C16、C17、C18 一节的“九、账本历史边界”。
 
-两臂的模板输入采用对称映射：从不可变 baseline `2264390d6fb8b052cc14736d544df0cc74516649` 提取 `chapter_blueprint_chunk` 和 `first_chapter_draft` 的完整原模板；两臂作为相同的自定义作者模板读回。语义源那句无占位符的 `template` 完整写入双方 `globalGuidance`，不会用它覆盖生产模板并丢掉作者素材。模板原字节、guidance 字节、实际项目回读哈希保存在私有 receipt；各臂编译后的 system/完整 prompt 哈希另列，允许体现实现差异。角色原始名字与身份约束完整保存在作者素材及主角档案，本门不凭名字凭空创建已批准角色卡。第二、三章作者预置蓝图用于验证本次第1章范围提交没有改写范围外内容。
+旧双臂模板从不可变 baseline `2264390d6fb8b052cc14736d544df0cc74516649` 提取 `chapter_blueprint_chunk` 和 `first_chapter_draft`，作为相同自定义作者模板回读；无占位符的语义源 `template` 写入 `globalGuidance`，不覆盖完整生产模板。原模板、guidance、项目回读和编译 prompt 身份均保留。线程 10 须改为 candidate 自己的真实生产模板来源，不能只删双臂检查而继续依赖 baseline 导出。作者名字/身份和范围外蓝图保全检查不撤。
 
 执行环境由每臂实际探针及冻结 manifest 决定，不沿用历史运行的 Node/Electron ABI 数字。基线若使用 Electron executable 的 `ELECTRON_RUN_AS_NODE=1`，仍须核对该 executable、实际 ABI 和其自身 better-sqlite3；候选同样实际加载其对应运行时的 better-sqlite3 并查询。不能把 package 版本或历史 native 收据当加载证明；共享工作树的 ABI 切换串行，不改基线源码。差异写入 manifest，不声称环境完全相同，也不声称这是安装版 Electron UI 验收。
 
-开发阶段先运行（只能生成 `development-only-unfrozen` 收据）：
+旧双臂 revision 的开发示例（只生成 `development-only-unfrozen`，不支持线程 10 新资格）：
 
 ```powershell
 node scripts/quality-modernization-run.mjs development-synthetic --baseline-root <已登记baseline工作树> --output .runtime/.cache/novel-quality-modernization/s07-development-targets.json
 node node_modules/vitest/vitest.mjs run scripts/__tests__/quality-modernization-run.test.mjs
 ```
 
-主集成者完成本片全部源码与驱动提交后，才冻结正式目标：
+旧双臂 revision 的正式冻结示例；新 candidate-only 冻结须等实际实现，不照抄下列 baseline 参数：
 
 ```powershell
 node scripts/quality-modernization-run.mjs freeze-targets --baseline-root <同一baseline工作树> --output .runtime/.cache/novel-quality-modernization/s07-targets.json --model-id <获准模型ID>
@@ -212,7 +234,7 @@ node scripts/quality-modernization-run.mjs dry-run --targets .runtime/.cache/nov
 
 freeze 拒绝未提交 candidate、未提交驱动、变更的 baseline；manifest 绑定目标源、执行工具、桥、native 二进制和固定启动身份。每次执行在其四个隔离根下建立新的短路径子目录，dry-run 不污染随后真实执行的项目。原有目录/receipt 不覆盖，所有输出与失败保留。
 
-真实执行由主集成者在候选提交与 dry-run 通过后顺序开展。先通过已有安全配置路径，把获准模型记录注入每臂 manifest 指定的隔离 `config/models.json`，不从脚本自动寻找用户 home，不把 key 或其 hash 放进参数、fixture 或 receipt。驱动只读取明确模型 ID，核对预注册 provider、protocol、modelName、endpointHost、temperature 与 maxTokens，拒绝无凭据或参数漂移：
+旧 early-budget 真实执行示例如下，不能用于启动线程 10 新资格。其凭据边界继续有效：只经既有安全配置路径写入 manifest 指定的隔离配置，不自动搜用户 home，不把 key 或其 hash 放进参数、fixture 或 receipt；驱动核对明确模型 ID 与实际冻结参数，拒绝无凭据或漂移。
 
 ```powershell
 node scripts/quality-modernization-run.mjs early-budget --targets .runtime/.cache/novel-quality-modernization/s07-targets.json --milestone early --mode real
@@ -222,7 +244,7 @@ node scripts/quality-modernization-run.mjs early-budget --targets .runtime/.cach
 
 ## C16–C18 v7 专用定稿来源（前向场景修订）
 
-现行场景为 `c16-c18-candidate-production-path-v7`。`semantic-source.json` 的 C16-A `finalizedSource` 固定为该 revision 的专用作者定稿：清晨发现记录日期与旧钟不符；同日午后，人物因缺少通行许可在现场核查启动前被拒，林澄已损失不退还的六枚铜币预约费；铜钥匙保管、沈岸尚不知地图、核查尚未开始、异常原因未明均明确。它经原生产草稿保存和定稿入口成为后处理实际读取的第1章 snapshot，替代 C16–C18 原来过短的前情；全局 `authorPredecessor` 及 post-UI/full 输入正文不变。
+本节保存 `c16-c18-candidate-production-path-v7` 的来源登记；线程 10 保留这些原案例材料，新轮次和操作仍须重新接线。`semantic-source.json` 的 C16-A `finalizedSource` 为专用作者定稿：清晨发现记录日期与旧钟不符；同日午后，人物缺通行许可，在现场核查启动前被拒，林澄损失不退还的六枚铜币预约费；铜钥匙保管、沈岸尚不知地图、核查尚未开始、异常原因未明均明确。它经生产草稿保存和定稿入口成为后处理读取的第1章 snapshot；全局 `authorPredecessor` 及 post-UI/full 输入正文未随该 v7 改动。
 
 B/C 继续追加原核查安排与“尚未开始、等待雨停”更正；C17-B 继续在恢复副本重新定稿，撤回旧安排并等待新许可；C17/C18 仍从实际选定的来源继承已发生的拒绝、损失及未决异常。没有写入已完成核查再试图用后缀抹除历史。`targetCharacterName` 明确登记林澄为原作者状态保全/冲突断言的目标；fixture 从生产定稿 identity 唯一解析其稳定 ID，不再假设正文只出现一个人物。原七案 oracle、顺序、操作、预算及最短16次物理调用不变；v7 仅补齐正向覆盖所需来源，不增加产品能力。语义源、协议、前驱正文和实际 parity/hash 必须重新冻结，不能声称与旧输入相同；旧 scenario revision 在现行 fixture 入口拒绝，历史重放须使用对应旧 fixture。
 
@@ -230,9 +252,9 @@ ac3af420 的 C16-A 独评及唯一仲裁为 INCONCLUSIVE，C18-B 自然度为 FA
 
 ## H5 有界生产恢复登记（恢复策略继续适用）
 
-该次只补 harness 合同，不增加产品能力，登记 C16–C18 `c16-c18-candidate-production-path-v6`、full `s14b-full-continuous-project-v3`、post-UI `s14b-post-ui-reviewed-budget-review-rebuild-must-show-v4`；C16 现已由上节 v7 场景取代，恢复策略不变。下文旧 revision 段落保留历史解释，额外调用资格以本节和现行 `protocol.json` 为准。三个场景及协议完整字节 hash 均须重新冻结；该次登记时的唯一物理账本历史边界为 861 行，后续历史边界见下文，全部历史失败不变。
+本节解释 H5 当时为 C16–C18 v6、full v3、post-UI v4 登记的已有恢复能力；C16 来源随后改为 v7。原预算、来源和恢复保护继续适用，但以下旧请求数、双臂包络不能作为新资格许可。线程 10 须额外接好短细纲操作、产物和恢复身份，并同步实际机器登记；不能假定原 reconciliation 分支自动支持它。该次历史边界为861行，后续边界和全部失败保留。
 
-正文恢复复用生产 `DRAFT_GENERATION_BUDGET.maxAttempts=8`，包括同一 root 内首稿、续写、无进展恢复与唯一压缩；旧 run 已发对账仍计入这八次，新 run 不再发送对账，不另外给八次重试。最多七轮 continuation；正常 stop 但短于该臂生产下限或 length 才可继续；length 且可见新增不足 300 单位时丢弃该段，至多一次 no-progress recovery。候选超过上限后走既有唯一全文压缩，baseline 无此能力。门禁逐次核对同 run/root/project/epoch、唯一 attempt、reserve→dispatch→settle、stop/length 终态、落盘原文 hash，候选另核对 main owner artifact。未结算、错身份、错误触发、超次数和未知用途在 reserve 前拒绝；原 token、截止时间和上下文预算仍由实际生产 session 约束。
+既有正文恢复使用 `DRAFT_GENERATION_BUDGET.maxAttempts=8`，同一 root 的首稿、续写、无进展恢复与唯一压缩共享，旧 run 已发 reconciliation 也计入；线程 10 短细纲仍消费原根预算，不能另给八次重试。原有正常 stop 过短/length 的续写、length 新增不足300单位时至多一次 no-progress recovery，以及候选唯一超长压缩触发保持。每次核对同 run/root/project/epoch、attempt、物理结算和原文 hash/main artifact；未结算、错身份、超限及未登记用途拒发，实际 token/时间/上下文预算继续由生产 session 约束。
 
 结果侧按生产 `sanitizeDraftText` / `composeDraftVisibleContinuation` 重放有效片段，保留每次原文及无进展失败候选；压缩以完整新稿取代此前组合。末次才可有正式效果，最终组合 hash 必须等于 full/C16–C18 保存稿或 post-UI 被审初稿；后续修稿、复评与 full 下一章前驱继续绑定既有链，篇幅门、事实门、盲评均不放宽。
 
@@ -240,13 +262,13 @@ ac3af420 的 C16-A 独评及唯一仲裁为 INCONCLUSIVE，C18-B 自然度为 FA
 
 baseline `2264390d` 保持原源码及实际行为：正文下限 80%，候选 70%；baseline 没有 durable RootAction，收据以实际 renderer command run 作为同一 session 预算根，不冒称 main owner；其历史结构化 decoder 会对部分 value_too_long 机械截断。harness 从冻结 baseline 工作树只读编译该 decoder，用于门禁与收据回放，候选始终调用当前严格语义 parser。两臂恢复与压缩触发差异必须披露，不据此单独声称质量改善。
 
-最短路径不变：C16–C18 16 次，full 24 次，post-UI 6 次。post-UI 登记包络为两臂各 `3+8+2+1+1=15`，`maximumPlannedCalls=30`；full 登记包络为六次三章规划各最多 9、十八次正文各最多 8，即最多 198 次，且原 token/时间预算可能更早耗尽。80 次计划分配和各桶额度按 ADR0019 保持不变；额外物理请求照常进入同一账本既有失败/重试/修复余量分类，不合并、不漏记，也不以计划额度替代生产 root 预算。
+H5 当时登记的最短路径为 C16–C18 16次、full 24次、post-UI 6次；post-UI 两臂各 `3+8+2+1+1=15`，`maximumPlannedCalls=30`，full 六次规划各最多9加十八次正文各最多8，共198次包络，native 预算可能更早耗尽。这些仅是旧操作组合；新组合由执行线程按实际生产路径计算。80仍为计划额，原生物理调用照常逐次写原账本，不以计划额代替 root 预算。
 
 开发合成对所有候选目录注入超长字段，检验生产拆批与完整重建；正文覆盖短 stop、length、重复无进展、恢复后压缩。任何 compact 提示若丢失原 oracle 事实，仍由原出站事实门拒绝并保留失败，不能缩小注入场景或减弱事实门来改判通过。开发合成仅证明接线与门禁，物理模型请求必须为 0；真实质量和正式冻结须另行完成。
 
 ## Full 连续生产执行
 
-以下是已实现的 full v2。未来新资格须按[AI 自主审稿与成稿资格](#ai-review-final-manuscript)增加逐章审修及最终前驱接线；原十八章、六项目、顺序与来源义务保留，下文“没有审修链”及请求数量仅描述旧 revision。
+**历史范围**：以下只保存 full v2 的六项目/十八章、双臂顺序、失败停发、压缩和调用数，以及对应开发/正式 CLI。其“没有审修链”不是现行产品要求。线程 10 取代为 candidate 三个持续项目、自动短细纲与完整审修闭环，允许按预登记用带问题保存稿继续；新机器接线尚待完成，不运行下列旧命令来充当新资格。
 
 `full` 固定为 `final` milestone，执行登记 `s14b-full-continuous-project-v2`（v1 保留为历史；v2 相对 v1 只增加下文单列披露的候选臂唯一原生压缩登记）。每场景每臂只 prepare 一个独立物理项目，三章持续重开其原 SQLite 数据库。先完成六次 `三章规划`：场景1 baseline/candidate、场景2 candidate/baseline、场景3 baseline/candidate；每次通过 `GenerateDirectoryCommand` 生成并保存第1至3章蓝图。随后按 protocol.order 的原 seed、caseIds 与九组 armsByChapter 顺序完成十八次 `连续章节正文`。规划分配 `finalPlanning=6`，正文分配 `finalChapters=18`，full 最小物理请求数合计24；重复 slot 仍归失败/重试余量，不重置历史占用。
 
@@ -273,7 +295,7 @@ node scripts/quality-modernization-run.mjs full --targets <新HEAD冻结双目�
 
 ## C16、C17、C18与编辑门
 
-以下保留已实现的七案路径；未来完整七案按[AI 自主审稿与成稿资格](#ai-review-final-manuscript)替代四篇续写的评估终点，C16 提取与各恢复路径的技术、来源义务不变。
+**历史与机械边界**：以下保留原七案 operation、v2–v7 变更及账本原始身份。旧轮数、最短调用、双臂 full 与遇单项失败停止全部后续的规则只适用于各旧 revision；线程 10 改用三轮、21条写作闭环与有界停链，新机器分派待实现。原提取、作者值、恢复来源和分支保护不撤；以下历史登记中的“本轮”“当前协议”“新目标”均指其登记当时，不授权启动旧实验。
 
 `c16-c18` 是 `final` 下独立的 candidate-only 阶段，复用四个生产操作：定稿章节要点、角色状态、本地归档恢复后续写、WebDAV 选定世代恢复后续写。`continuityQualificationCases` 登记七个案例：C16-A 有效来源更新 derived、C16-B author 冲突、C16-C 同章重新定稿替换旧源，各执行 notes/cards 两次，归入原 `C16ExistingExtraction` 的6次；C17-A 恢复有效 source、C17-B 恢复后正常重新定稿使旧 derived 失效、C18-A 选定世代、C18-B 两完整分支明确选一，各执行一次 `GenerateDraftCommand`，归入原 `C17C18RestoreContinue` 的4次。准备、重试及角色状态原生 repair 如产生请求，均逐实际 attempt 记账；repair 仅接受同 run/root 的持久前序失败 artifact。早门和 full 的双臂设计不变，本阶段不触发 full 的6次规划/18章判定。离线合成通过只证明接线，正式质量资格仍需冻结输入、真实执行及独立 oracle 审核。
 
@@ -285,7 +307,7 @@ C16–C18 场景 revision `c16-c18-candidate-production-path-v4` 是用户批准
 
 v4 的最短物理路径由10次增为12次（C17-B 多 notes 与 cards 各一次）；两次按既有做法计入失败/修复/审修余量 `failedRetryRepairReviewReserve` 并单独披露，80次计划分配与各桶数额不变，cards 原生 repair 与唯一压缩仍逐实际 attempt 记账。历史 invocation `ca466d9a`（`FINALIZATION_EFFECT_MISSING`）与 `73b46513`（C17-B 独立评审 FAIL，评审 `review-r1.md`、`review-r2.md`）按原结论永久保留，不按 v4 重新评判；旧目标因协议字节 hash 漂移拒绝，须重新冻结。
 
-当前前向操作登记（2026-09-30）：新 run 不再发出或注入生成前对账，首个请求为 `chapter-draft`，其 prompt 与已绑定 `materialDecision.promptHash` 一致；继续/压缩保留原作者、定稿和蓝图材料。C16–C18 七案最短 12 次（提取 6、C17-B 重新定稿后处理 2、四次首稿 4），开发合成另按既有 H5 计划覆盖续写、无进展恢复与压缩，实际调用逐次计账，不把最短路径当固定总数；正式合成及真实模式不注入这些开发计划。原每 run/root 最多 8 次以及 token、时间、连续性、恢复和压缩触发条件不变，省下的对账不授权额外重试。当前 dispatch 与结果校验拒绝任何新对账；旧收据摘要、账本历史边界及产品旧 run 恢复仍识别原对账，不篡改其 hash 或把其产物当正文。此为产品删去冗余规划后的实验操作登记对齐，保留 v7 source、全部 caseOracles 与评分；包括 63a44636 在内的旧 FAIL 不改判。下列 v5 段落保留为历史登记，关于“必发、最短16次、缺少即失败”的规则不适用于此后的新运行。
+2026-09-30 的旧操作登记取消新 run 的 reconciliation，并以 `chapter-draft` 为首请求、绑定 `materialDecision.promptHash`；当时七案最短12次（提取6、C17-B后处理2、首稿4），开发合成另覆盖 H5 支路。这一“直接正文”安排现由线程 10 的自动短细纲取代，旧最短数不是新操作许可。旧 reconciliation 的收据/hash/预算及原 run 恢复继续识别，不把它当正文或作者事实；新细纲需另接原生来源和恢复，正文开始后不得换计划。v7 材料和历史 FAIL 保留；以下 v5 的必发对账及16次最短路径只解释当时实验。
 
 C16–C18 场景 revision `c16-c18-candidate-production-path-v5` 是用户批准的 harness 与评分规则变更，与同期产品变更分开说明。产品变更（另一 owner，不在本节范围）：`GenerateDraftCommand` 在首稿前新增一次“生成前定稿对账”物理调用（用途 `chapter-draft-reconcile`，review 推理档，≤1024 tokens），仅在直接前驱为已纳入定稿、本章无未定稿候选且蓝图有 keyEvents/purpose 时触发；其 JSON 输出渲染为注入块，放进首稿提示与续写/压缩作者资料块，失败或不可解析时按原提示继续；材料准入收据可选新增 `reconciliationPromptHash`。本节只记录 harness/评分如何承接它。
 
@@ -331,7 +353,7 @@ C17覆盖正文/头像/知识原文保全、新项目ID与稳定领域ID、当�
 
 ## 后续阶段接线边界
 
-S07 early-budget 已接默认生产命令及最终 fetch 处的 reserve/dispatch/settle/unknown，未新增生产 observer hook。后续阶段须复用同一总账和实际项目回读，绑定各自 phase/milestone/原 attempt，不能在高层一次 run 扣一次。S10B提供上下文证据、S11提供审稿→定向修稿→唯一复核，保存输出、模板/Skill与compiled prompt哈希；不要另建直接API实验器。主集成者固定唯一总账与未消费阶段预留、出两臂manifest、盲评映射、post-UI与最终subject冻结。未实现的阶段正式运行保持blocked。
+原生接线检查和正式阶段继续复用现有生产入口、唯一物理账本与项目回读，逐 attempt 绑定实际 phase/milestone、来源、模板/Skill 和 compiled prompt hash；不能一次 run 只扣一次。线程 10 的 harness owner 负责新 candidate-only 模板/manifest、细纲和恢复操作、轮次及批次裁决；未实现前不能开跑新资格。API 开发筛选获准单列有界日志，不替代原生检查，不手写正式账本或复用关闭的诊断额度。
 
 启动冻结补充：manifest.environment绑定实际 executable 字节hash、版本与module ABI，以及 esbuild/vitest/Electron/better-sqlite3 安装manifest路径、版本、hash。schemaVersion=1 的 nativeProfile 仅为历史旁证，原 node-js 探针不加载 native；schemaVersion=2 另绑定实际加载并查询过的 SQLite binary。startup 固定执行器与已hash驱动，不接受任意命令；实际无shell argv写入每次桥接收据。正式执行前后重新验证 source/tools/adapter/environment/startup，任何漂移拒绝。early-budget每臂显式包含一次范围生成与一次正文生成，early/post-UI各4次；22次失败余量及总计80次均为计划分配，不是调用硬帽。
 
@@ -346,15 +368,19 @@ S07 early-budget 已接默认生产命令及最终 fetch 处的 reserve/dispatch
 十六、账本历史边界：`historicalC169337909dBoundary` 接在上述边界后，覆盖第1123–1158行（1122 → 1158）。真实 invocation `9337909d-a526-4684-b5ff-80cad9206d3a` 的12次 candidate 请求均有 reserve→dispatch→settle，原 stdout 记录7案、12次物理请求、0次 syntheticDispatches、12次 finishReason `stop`，退出码3，状态仍为 `pending-independent-oracle-review`。执行时协议 revision 为 `s14b-candidate-quality-and-comparison-v2`、原协议 hash 为 `924513bae3afc3e7495eeb6d7f873f83795d0695975f678d04ebff66d19ec8d2`；candidate codeSha `2e3500b828e9e17d376a2451d53a7639bf1eed7f`、sourceHash `3b52d46f48c541637da3f324de0f01b45be5e5169301166657dd3687759a4ab4`、driverHash `976988e954c9cb1864c65aab33295a18b4917ab499ce6df643e34e1ec4f6571f`，各 attempt 的 parityId 按原账本逐项冻结。唯一物理账本前1122行 sha256 仍为 `a925a7775242c79909da3a23004cd0bb4fe58fd2cea73b63897b727bd298a236`，至1158行完整 sha256 为 `1e6d8af44ddeec1b8973e2635999e693bd0c378c9204a7846f4064f530861866`；原 stdout `2e3500b8-c16-final-real.stdout.json` sha256 为 `75b343e267b3df96b63098682decc5b7a8dd477a807186cc8353936c6830d014`，原 targets `s14b-2e3500b8-c16-final-targets.json` sha256 为 `9baf40de4d942b7f313dcbc8d940f1a1ca6883bdb691e15251776b741fa34a2c`。本段只认证历史物理身份；语义结论由独立审查另行裁定，实际模型元数据未验证，不据自动 casePASS 宣称质量通过。runner 读写两入口接续至第1158行，之后新 reserve 仍须满足当前协议。
 ## 9337909d 共享输入事实提取诊断（非资格）
 
+本节是一项已消费的历史一次诊断，只解释原材料与调用；不开放重跑或占用线程 10 的开发筛选名额。
+
 `protocol.json` 的 `shared-input-diagnostic` 只登记 C17-A/C18-A 共有原始消息的一次 candidate 提取任务。私有输入包保留原 system/user 全文、原始材料三项 hash、原收据与测试 SHA；新请求将原两段全文各作为明确标界的引用资料，并以新的 system 和末尾任务要求五列表格。消息角色和包装已改变，不能称为相同请求，也不向模型提供历史失败正文或正确答案。
 
 该诊断最多一次物理请求，任何 `stop`、`length`、`unknown` 或技术失败都不重试；新请求经现有 generation owner/controller、出站预检和逐请求账本。输出交两名独立评审按调用前冻结的私有判据判断；技术/语义不确定均为 `UNKNOWN`。结果只说明同一原材料在提取任务下的一次表现，不证明原写作失败的根因，不改变七案资格、历史 FAIL、baseline、post-UI/full 门禁或原 0.7 / max 参数配置。
 
 ## 固定零温度配置资格（非因果实验）
 
+**历史范围**：本节及后续 high、预算窗口、Pro 各节保存旧前瞻登记和原账本身份；这些登记已不拥有下一步。其先七案全绿、固定唯一参数、双臂和禁止新比较等限制不适用于获准的线程 10 计划。原调用和失败仍按原规则解释，新的开发比较与正式三轮必须另按新计划接线，不能重开旧额度。
+
 `forwardTemperatureExperiment` 仅在原 `forwardReasoningExperiment` 已登记的 C16 七案、post-UI 三个 selector 和 final full 范围生效，继承原范围与 caseIds，固定两臂模型 profile 的 `temperature: 0`。原 max 登记对象及语义源中的 `temperature: 0.7` 均原样保留；执行回执分别记录源参数和本次登记的有效参数。9337909d 的历史 `shared-input-diagnostic` 不属于此范围，仍为 0.7 / max 的历史一次非资格调用。
 
-实际模型配置回读与每次出站请求须满足新登记的 0、原 provider/protocol/modelName/maxTokens、原每操作 `max_tokens` 预算。candidate 自然发送 `enable_thinking: true` / `reasoning_effort: max`，baseline 自然缺席这两个字段；创作策略仍为 `auto`。未登记温度、错误 base revision、旧 max 对象或 case 范围漂移在 reserve 前拒绝。此轮只判断新固定配置下的既有绝对资格，不能以参数或两臂 wire 不对称宣称代码改善、先前失败根因或稳定性；C16 七案未通过不得进入 post-UI/full。
+该旧登记要求回读与出站温度0，原 provider/protocol/modelName/maxTokens 及每操作预算匹配；candidate 发 `enable_thinking: true` / `reasoning_effort: max`，baseline 自然省略，策略为 `auto`。未登记参数或 scope 漂移在 reserve 前拒绝。它只判断当时固定配置的资格，不证明代码改善、旧失败根因或稳定性；当时七案前置现已由线程 10 的批次规则取代。
 
 唯一物理账本的 `historicalSharedInput7203443dBoundary` 接在 `historicalC169337909dBoundary` 后，认证第1159–1161行（1158 → 1161）：真实 invocation `7203443d-d7aa-46e1-82b4-37ab1d392df5` 的单次 candidate 诊断 reserve→dispatch→settle，原协议 hash `7b6d01e3fd8788bedabd768a1757da4aa8cbc71358948e14a667e07e8b0f6bd6`，至1161行完整 sha256 `3a0293bce8c9d2123ea69f07c48fdca92d613ae1430fddfc27a57b504daec1dc`。该历史调用继续占用诊断唯一额度，不因本协议 revision 更新而重新开放；诊断结论和历史七案 FAIL 不改判。
 
@@ -364,7 +390,7 @@ S07 early-budget 已接默认生产命令及最终 fetch 处的 reserve/dispatch
 
 前文 max-only 与 0/max 的限制属于各自冻结的历史资格。`forwardHighReasoningExperiment` 是新增的 `fixed-high-zero-temperature-v1` 登记，继承上述 max 对象的原五个 scope、caseIds、原两臂温度 0 与全部七案/后续门禁；原 max 和零温度登记对象逐项不变。只将实际 `reasoningOverride` 固定为 `high`：candidate 自然发送 `enable_thinking: true` / `reasoning_effort: high`，baseline 的两个字段仍自然缺席，两臂不得有 `thinking_budget`。执行回执继续分别保留语义源的 0.7 参数和本次有效的 0 / high 参数，9337909d 的历史 `shared-input-diagnostic` 仍为已经消费的一次 0.7 / max 非资格诊断。原模型身份、`creativeStrategy: auto`、每操作预算、16384 profile 上限、480 秒截止、素材与 oracle 均不变。未登记 high、旧登记或 scope 漂移，以及读回或 wire 不符，须在物理 reserve 前拒绝。
 
-新配置只进行一次从 C16-A 开始的完整七案前向资格；任何技术 UNKNOWN/FAIL 或原文学门失败均保留并停止依赖推进，不拼接前次成功案或自动再换参数。此实验只检验固定 high / 0 在原期限内能否完成并满足原绝对门，不追认 704/d712 根因，不把旧 0.7/max 或 0/max 失败改判，也不证明参数或代码改善、服务端实际模型模式或稳定性。只有完整七案按原规则通过，才按原顺序进入既定 post-UI/full。
+该 high / 0 登记只授权过一次从 C16-A 开始的完整七案，原技术或文学失败均按当时规则停依赖、不拼接成功项。它不追认704/d712根因、不改旧失败，也不证明参数/代码改善或服务端实际模式。旧先全绿后 post-UI/full 的顺序已被线程 10 取代，不能据本段再启动一次旧资格。
 
 `historicalC16D712808cBoundary` 从1182行接续第1183–1194行，原始完整前缀 sha256 为 `74fa8d5a7f056f2e8b5321dca40f08bc631194add392c03eaeb755033341bf1c`。真实 invocation `d712808c-5336-4abc-bd7e-cd9d0d061300` 的四次 candidate 请求均有 reserve→dispatch→终态，前三次 settle，末次 C16-B 为 `BRIDGE_SETTLEMENT_DEADLINE_EXCEEDED` UNKNOWN；原 `44bcc601` code、`3b52d46f` source、`3e76921f` driver 与逐次 parity 绑定在协议历史项中。四次物理请求均已占用，不退款、不得拼接或改判。账本读写两入口都认证这一段，后续 reserve 使用新协议身份。
 
@@ -372,7 +398,7 @@ S07 early-budget 已接默认生产命令及最终 fetch 处的 reserve/dispatch
 
 `forwardQualificationWindowExperiment` 是独立于上述 high 登记的新时间合同；它以原 `forwardHighReasoningExperiment` 完整对象 hash 为基，逐字继承原五个 scope、两臂 0 / high 参数和自然不对称 wire。旧 high 登记中的 480 秒限制与真实 `625bfda8-9451-4027-8f8c-762e665f0ffb` 结论均不改：该次只完成 C16-A/B，C16-C 的 cards 在第六次物理请求于桥内 480 秒到期后记为 UNKNOWN，余四案未运行。六次请求已消费，不能把五次 settle 拼入新样本，也不能把技术 UNKNOWN 改判为文学结果。
 
-新登记只授权一次从 C16-A 开始的完整七案；原绝对门、七案、作者资料、模型输入、每操作调用许可与 native 预算均不变。产品普通 root 的 `maxActiveElapsedMs` 仍为 3,600,000 毫秒，并由原 owner/repository 按实际累计活动时间、epoch 与 token/call 上限先行约束。实验桥的每 attempt 守护仅作兜底：3,600,000 加 60,000 毫秒结算余量；父进程上限为本次 bridge 已登记最大物理请求数 N × 3,660,000 加 60,000 毫秒，Vitest 上限再加 60,000 毫秒。若 native 先到期，仍记 UNKNOWN 并拒绝迟到成功。未登记路径继续使用原 480,000 / 1,500,000 / 1,560,000 毫秒（reviewed 原专用测试窗保留）；不能从请求传任意 timeout。
+该窗口登记当时只授权一轮完整七案，未改变案例、输入、操作许可或 native 预算。产品普通 root 的 `maxActiveElapsedMs` 为3,600,000毫秒，由 owner/repository 按累计活动时间、epoch及token/call上限先行约束；桥每 attempt 兜底为3,600,000加60,000毫秒，父进程按登记请求数 N × 3,660,000加60,000，Vitest再加60,000。native先到期仍记UNKNOWN、拒绝迟到成功；未登记路径使用原480,000 / 1,500,000 / 1,560,000毫秒及原reviewed测试窗，不接任意timeout。线程 10 新操作组成须据实际入口重新核对，不能沿用旧 N 冒充新链覆盖。
 
 N 只计算桥的外层兜底，不增加任何 dispatch 权限：C16-A/B/C 的 notes 加 cards 及已有两次 cards repair 为 4；C17-A 与 C18-A/B 的原续写恢复最多 8；C17-B 的 notes/cards 加续写为 12。`early-budget` post-UI 的目录3、正文8、首审2、修稿1、完整复评1 合计15；`early-context` post-UI 单正文为1；`early-review` post-UI 三操作为3。`full` 每次 bridge 只运行一个 operation：三章规划以产品 `planBlueprintGenerationCost(3).maxCalls` 取9，单章正文以已登记恢复上限取8，不拿完整旅程重置 native root。准备阶段无发送，只需一个有限兜底。任一 scope、case、operation、登记 hash 或实际请求参数漂移须在 reserve 前拒绝；同一解析结果写入父桥 spawn/Vitest config、fixture it/守护与回执。
 
@@ -396,13 +422,15 @@ N 只计算桥的外层兜底，不增加任何 dispatch 权限：C16-A/B/C 的 
 
 ## Pro / high / 零温度前瞻完整资格
 
-现行 `forwardModelExperiment` 为 `fixed-pro-high-zero-v1`，只有 revision/baseHash/scopes/modelName/limits 五字段；baseHash 绑定原 high 登记 `39d2606076046d2e5307abf9be392abf0a4c4c46dbe9c235851de95016fbbf95`，登记 canonical hash 为 `9e3371b8af9eca199e7e2869dc20c1f7207536d499a42508a882b2d5e18e278b`。原 max/zero/high 登记及 Flash source 不改，五个原资格 scope 的完整有效配置统一为 `deepseek-ai/DeepSeek-V4-Pro`，保留 high runtime revision、0/high/auto、16384 profile 上限及各臂自己的原生 wire。`forwardQualificationWindowExperiment` 更新为四字段的 `native-budget-aligned-qualification-window-v5`，baseHash 绑定本模型登记；不新增诊断或第六个资格 scope。
+**旧登记，尚未 real**：`forwardModelExperiment` 的 `fixed-pro-high-zero-v1` 仍保存在旧机器协议，只有 revision/baseHash/scopes/modelName/limits 五字段；baseHash 绑定原 high 登记 `39d2606076046d2e5307abf9be392abf0a4c4c46dbe9c235851de95016fbbf95`，canonical hash 为 `9e3371b8af9eca199e7e2869dc20c1f7207536d499a42508a882b2d5e18e278b`。其五个旧 scope 统一使用 `deepseek-ai/DeepSeek-V4-Pro`、0/high/auto、16384 profile及各臂原生wire；对应窗口为四字段 `native-budget-aligned-qualification-window-v5`，baseHash绑定该模型登记。原 max/zero/high及Flash source字节保留。
 
-该登记只前瞻授权一个包含 parser 提交 `fe6619314f9f2c747a87782d57e57ae12fda3fb2`、Pro 精确 preset 提交 `b05e53ec51a32a51fffae101ca1738f3621b4049` 和本政策提交的 committed clean subject，从 C16-A 重新完成全部七案。最终 testedSHA 待本政策独立审查、提交及干净冻结后确定。所有生成、派生提取、普通审稿、修稿及末审使用同一 Pro 配置；未来双臂沿各自原生产路径使用相同模型配置，不支持时拒绝或 INCONCLUSIVE，不静默混模型。供应商未披露的 weights revision 仍 UNKNOWN；软件与配置作为一个 subject，不声称单独 parser/model 因果效果或所有模型的资格。
+该旧方案原拟在包含 parser `fe6619314f9f2c747a87782d57e57ae12fda3fb2`、Pro preset `b05e53ec51a32a51fffae101ca1738f3621b4049` 的干净 subject 上跑同一 Pro 配置的完整七案，并把全绿作为后续双臂前置。线程 10 已取代这一下一步：先修材料与细纲，再有界筛选配置、接好新 candidate-only revision后冻结；不能直接运行旧Pro targets来确认旧问题。供应商未披露的weights revision仍UNKNOWN，旧登记也不证明Pro质量或因果改善。
 
-原案例、素材、目标与事实规则、oracle、评分、selector、arm 顺序、auto/default 请求行为、原生预算、watchdog 和物理调用上界保持。只有新整轮文学七案 PASS 且完成 fresh 双评三阶段才打开继承的 post-UI/full；任何技术或文学失败停止依赖。旧09ad文学 FAIL、所有历史 FAIL/UNKNOWN、b89两次 STOP 与四槽 NOT_RUN 不改判；不新开六槽筛选、不续旧轮、不混模型择优、不拼6+1、不带旧 PASS、不自动重跑或反复抽样、不放宽标准、不增加调用或预算。80仍是计划分配额。
+旧09ad文学 FAIL、所有历史 FAIL/UNKNOWN、b89两次 STOP与四槽 NOT_RUN保持原判，不重开原诊断。当前允许的模型比较、三轮采样、评审次数、单项失败后继续和post-UI出口只由线程 10规定；旧“七案全绿、三阶段双评、禁止比较”不再是现行义务。原作者材料与成文底线、数据/来源保护及产品预算继续有效，80仍是计划额。
 
 ## 保存正文的分工审稿诊断（非资格，已关闭）
+
+以下是已关闭诊断的登记说明，不是新任务清单；剩余槽位仍关闭，线程 10 的 API 筛选使用新计划规定的独立开发日志。
 
 新增 `separated-review-diagnostic` / `separated-review-diagnostic-3x2-v1`，保留旧 shared-input 登记与已消费额度，不新增第六个资格 scope。三份材料固定为09ad的 C18-A 首稿、C17-A 实际终稿，以及872的 C18-B 原正常误报对照，分别带原作者、历史、目标资料；不向提示词加入评审答案或缺陷标签。协议逐槽绑定原 invocation/testedSHA、完整正文、原 context、材料及最终 system/user 消息 hash，私有输入原始字节 hash 也必须一致，无占位 hash 放行。执行身份须另行冻结为本切片独立审查后的 committed clean subject，不能复用旧 targets。
 
@@ -418,7 +446,7 @@ N 只计算桥的外层兜底，不增加任何 dispatch 权限：C16-A/B/C 的 
 
 ## C17-A 固定保存稿有界修稿诊断（非资格）
 
-此诊断含预置作者纠错项，只验证给定问题后的修稿；不证明 AI 自主发现，也不能放行[新资格](#ai-review-final-manuscript)。已开始的实验保留原登记及证据，不中途改成 AI-only 实验。
+以下仅保存旧固定稿诊断的登记与证据，不据本节启动新调用。该诊断含预置作者纠错项，只验证给定问题后的修稿，不证明AI自主发现、不能放行[新资格](#ai-review-final-manuscript)，也不改成AI-only实验。
 
 `bounded-revision-diagnostic` 仅运行 candidate / diagnostic / C17-A。唯一来源为 invocation `a763f510-eac5-4368-967e-0abb630ff597`、testedSha `889b5e23e57daa763c4e549e892afaa69d1da73c` 的第2章 draft4 / v1 / draft：完整正文3889字节、1053单位、SHA256 `c8b29e929e34b57e7af41aae94cbc0f4c027eab21c0cfd4daf08a2501b21da66`。源 packet manifest、主DB及对应 sidecars、project.json 和三个 portable 资产的完整身份登记在 phase 中。运行时以私有 `--diagnostic-input` 清单提供 `packetManifestPath`、`stdoutPath`、`sourceProjectRoot`，该清单须位于当前工作树 `.runtime/.cache`；路径不写进公共协议。
 

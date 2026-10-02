@@ -8,6 +8,7 @@ import type { ModelProfile, ModelExecutionLeaseReceipt, LLMFinishReason } from '
 import type { CreativeStrategy } from '../../src/shared/reasoning-types'
 import { tokenLiability } from '../../src/shared/generation-contract'
 import { DRAFT_RECONCILE_PURPOSE, stripDraftReconciliationBlock } from '../../src/shared/draft-reconciliation'
+import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock, stripDraftShortOutlineBlock } from '../../src/shared/draft-short-outline'
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
 import { getCurrentProjectPath } from '../database'
 import { ModelExecutionLeaseRegistry, createModelExecutionLeaseReceipt } from './model-execution-lease'
@@ -143,6 +144,20 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     }
     return null
   }
+  const shortOutlineContext = (run: DurableGenerationRun): GenerationRecoveryContext['draftShortOutline'] => {
+    const decision = run.binding.sourceManifest.materialDecision as MaterialDecisionReceipt | undefined
+    if (!decision?.shortOutlinePromptHash) return undefined
+    const attempts = runAttempts(run.runId).filter(attempt => attempt.status !== 'cancelled-before-dispatch')
+    const outlines = attempts.filter(attempt => attempt.purpose === DRAFT_SHORT_OUTLINE_PURPOSE)
+    const receipts = outlines.map(attempt => repository.receipt(attempt.attemptId))
+    const completed = receipts.find(receipt => !receipt.failureCode && receipt.result?.finishReason === 'stop' && receipt.artifact?.text.trim())
+    const firstDraft = attempts.find(attempt => attempt.purpose === 'chapter-draft')
+    const usage = firstDraft ? deps.database.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(firstDraft.attemptId) as string : null
+    const initialDraftTask = usage ? JSON.parse(usage).replayTask as GenerationTask | undefined : undefined
+    return { artifactIds: receipts.flatMap(receipt => receipt.artifact ? [receipt.artifact.artifactId] : []),
+      completedOutput: completed?.artifact?.text ?? null, promptHash: decision.shortOutlinePromptHash,
+      ...(initialDraftTask ? { initialDraftTask } : {}) }
+  }
   const snapshotOf = (receipt: GenerationExecutionReceipt): MainGenerationSnapshot | null => {
     const artifact = receipt.artifact
     if (!artifact) return null
@@ -155,7 +170,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       && receipt.budget.root.status !== 'cancelled' && ['stop', 'length'].includes(receipt.result?.finishReason ?? '')
       && Boolean(artifact.text.trim()) && deps.database.prepare("SELECT 1 FROM generation_artifacts WHERE artifact_id=? AND status<>'discarded'").pluck().get(artifact.artifactId) === 1
       // 生成前定稿对账的输出只是依据，永不作为正文候选参与组合。
-      && attemptPurpose(receipt.attempt.attemptId) !== DRAFT_RECONCILE_PURPOSE
+      && ![DRAFT_RECONCILE_PURPOSE, DRAFT_SHORT_OUTLINE_PURPOSE].includes(attemptPurpose(receipt.attempt.attemptId) as typeof DRAFT_RECONCILE_PURPOSE)
     return { ...handleOf(receipt.run), epoch: artifact.epoch, artifactId: artifact.artifactId, attemptId: artifact.attemptId,
       revision: artifact.revision, durableRevision: artifact.revision, text: artifact.text, textHash: artifact.textHash, status, compositionEligible }
   }
@@ -413,7 +428,29 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       // 写稿首个物理请求可以是生成前定稿对账：只能有一次、只能最先，提示须与收据绑定的哈希一致。
       const reconciliationHash = materialOperation === 'chapter-draft' ? materialDecision.reconciliationPromptHash : undefined
       const onlyReconciled = !!reconciliationHash && prior.length > 0 && prior.every(attempt => attempt.purpose === DRAFT_RECONCILE_PURPOSE)
-      if (task.purpose === DRAFT_RECONCILE_PURPOSE) {
+      if (materialDecision.shortOutlinePromptHash) {
+        const outline = shortOutlineContext(run)!
+        if (materialOperation !== 'chapter-draft') throw new Error('GENERATION_MATERIAL_PROMPT_MISMATCH')
+        if (task.purpose === DRAFT_SHORT_OUTLINE_PURPOSE) {
+          const replay = prior.length === 1 && prior[0]!.purpose === task.purpose && prior[0]!.invocationNonce === request.invocationNonce
+          if (prior.length && !replay) throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_ALREADY_ATTEMPTED')
+          if (userPrompt === null || textHash(userPrompt) !== materialDecision.shortOutlinePromptHash)
+            throw new Error('GENERATION_MATERIAL_PROMPT_MISMATCH')
+        } else {
+          if (!outline.completedOutput) throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_REQUIRED')
+          const original = outline.initialDraftTask
+          if (task.purpose === 'chapter-draft') {
+            const stripped = userPrompt === null ? null : stripDraftShortOutlineBlock(userPrompt, outline.completedOutput)
+            if (stripped === null || textHash(stripped) !== materialDecision.promptHash
+              || original && !isDeepStrictEqual(original, task)) throw new Error('GENERATION_MATERIAL_PROMPT_MISMATCH')
+          } else if (!original || !['chapter-draft-continuation', 'chapter-draft-no-progress-recovery', 'chapter-draft-condense'].includes(task.purpose)
+            || !task.messages.some(message => message.role === 'user' && ['zh-CN', 'en-US'].some(language => message.content.includes(draftShortOutlineBlock(language as 'zh-CN' | 'en-US', outline.completedOutput!))))
+            || !isDeepStrictEqual(task.messages.filter(message => message.role === 'system'), original.messages.filter(message => message.role === 'system')))
+            throw new Error('GENERATION_MATERIAL_PROMPT_MISMATCH')
+        }
+      } else if (task.purpose === DRAFT_SHORT_OUTLINE_PURPOSE) {
+        throw new Error('GENERATION_MATERIAL_PROMPT_MISMATCH')
+      } else if (task.purpose === DRAFT_RECONCILE_PURPOSE) {
         const replay = prior.length === 1 && prior[0]!.invocationNonce === request.invocationNonce
         if (!reconciliationHash || prior.length && !replay || userPrompt === null || textHash(userPrompt) !== reconciliationHash)
           throw new Error('GENERATION_MATERIAL_PROMPT_MISMATCH')
@@ -460,7 +497,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       requestedOutputTokens: plan.requestedOutputTokens, inputUpperBoundTokens: plan.inputUpperBoundTokens,
       reasoningUpperBoundTokens: plan.reasoningUpperBoundTokens, usagePolicy: plan.usagePolicy, purpose: task.purpose,
       ...(plan.budgetDecision ? { budgetDecision: plan.budgetDecision } : {}),
-      ...(run.binding.sourceManifest.importSlot ? { replayTask: task } : {}),
+      ...(run.binding.sourceManifest.importSlot || materialDecision?.shortOutlinePromptHash ? { replayTask: task } : {}),
       ...(reconciliationInjected ? { reconciliationInjected } : {}),
       ...(agentExecution ? { agentToolNames: (run.binding.sourceManifest.agentContext as AgentGenerationContext).input.tools.map(tool => tool.name) } : {}) })
     if (receipt.failureCode || receipt.unsavedTail) volatileReceipts.set(receipt.attempt.attemptId, receipt)
@@ -545,6 +582,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       selectedBlueprintChapterNumbers: structuredClone(manifest.selectedBlueprintChapterNumbers as number[] ?? []), composition,
       lastCompositionFinishReason: last ? repository.receipt(last).result?.finishReason ?? null : null,
       attemptedPurposes: rows.map(row => JSON.parse(row.usage_receipt_json).purpose ?? 'unknown'),
+      ...(materialDecision?.shortOutlinePromptHash ? { draftShortOutline: shortOutlineContext(run) } : {}),
       ...(rows.some(row => JSON.parse(row.usage_receipt_json).purpose === DRAFT_RECONCILE_PURPOSE) ? { draftReconciliation: {
         artifactIds: rows.filter(row => JSON.parse(row.usage_receipt_json).purpose === DRAFT_RECONCILE_PURPOSE)
           .flatMap(row => { const artifact = repository.receipt(row.attempt_id).artifact; return artifact ? [artifact.artifactId] : [] }),

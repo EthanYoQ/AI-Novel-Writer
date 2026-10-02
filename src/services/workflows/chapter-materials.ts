@@ -235,7 +235,7 @@ const REQUIRED_SOURCE_ID = 'author:required'
 // 写稿路径在 `assembleChapterMaterials` 里把「渲染」和「准入」合在一个函数里，因为材料文本
 // 本身由它生成。审/修入口的材料文本由各自命令按**原有措辞**渲染好后传入，所以这里只做准入。
 // 成员判定的语义与写稿路径完全一致：同一份不可变内容只进一次、未知来源不得进入、
-// 必需材料装不下时显式失败——因为两条路径最终都调用同一个 `selectChapterSources`。
+// 来源与覆盖仍由同一个 selectChapterSources 校验；审修的完整请求容量由 main 准入。
 
 /** 审稿/修稿入口的一条材料：主进程捕获的身份 + 该入口自己的渲染文本。 */
 export interface ReviewRevisionMaterial {
@@ -267,9 +267,9 @@ function materialIdentityKey(identity: { sourceId: string; revision: number; con
 }
 
 /**
- * 审稿/修稿入口与写稿路径共享的准入权威。必需材料装不下时抛与写稿路径同一个
- * `ChapterMaterialCapacityError`（稳定错误码 `CHAPTER_MATERIAL_CAPACITY_CONFLICT`），
- * 绝不静默截断或丢掉必需材料。
+ * 审稿/修稿入口共享来源与覆盖校验。合法必需材料保留到现有收据安全上限，
+ * 完整模型请求由 main 准入；局部选材额度只限制可选历史，不裁掉必需材料。
+ * 来源或安全上限冲突仍抛 ChapterMaterialCapacityError。
  *
  * 会话租约在这里按**当前会话**补上：冻结材料身份是会话无关的（不含 `epoch`），而
  * `SourceRef` 必须带上活跃租约才能通过 `sameProjectEpoch`。重开同一项目后租约变化，
@@ -295,14 +295,15 @@ export function selectReviewRevisionMaterials(input: {
     required: material.required,
     text: material.text,
   }))
-  // 容量与写稿路径同源：同一份码元预算、同一个估算器版本。
+  // The receipt limit is already in UTF-8 units; it is not a model window or a character allowance.
   const capacity = {
-    maxInputUnits: (input.budgetChars ?? MATERIAL_BUDGET_CHARS) * BYTES_PER_BUDGET_CHAR[input.writingLanguage],
+    maxInputUnits: MATERIAL_DECISION_MAX_INPUT_UNITS,
     methodVersion: MATERIAL_DECISION_UNIT_METHOD_VERSION,
   }
   const selection = selectChapterSources({
     current: input.current,
     capacity,
+    optionalMaterialCeiling: (input.budgetChars ?? MATERIAL_BUDGET_CHARS) * BYTES_PER_BUDGET_CHAR[input.writingLanguage],
     relevanceTerms: input.relevanceTerms,
     candidates,
   })

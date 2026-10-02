@@ -39,6 +39,29 @@ import { resolveModelExecutionCapabilityEvidence } from '../../electron/services
 import { OpenAIProvider } from '../../electron/llm/openai-provider'
 vi.mock('../../electron/database', () => ({ getProjectDb: () => null, getCurrentProjectPath: () => null }))
 
+// These receipts exercise the retained two-arm revision. Candidate-only qualification
+// has its own current-protocol tests; do not reinterpret historical fixtures as new samples.
+vi.mock('node:fs', async importOriginal => {
+  const original = await importOriginal()
+  const nativeFs = original.default
+  const protocolFile = new URL('../../docs/research/novel-quality-modernization/protocol.json', import.meta.url)
+  const { fileURLToPath } = await import('node:url')
+  const { resolve } = await import('node:path')
+  let historicalText
+  const readFileSync = (file, options) => {
+    const bytes = nativeFs.readFileSync(file, options)
+    if (typeof file !== 'string' || resolve(file) !== fileURLToPath(protocolFile)) return bytes
+    if (!historicalText) {
+      const protocol = JSON.parse(bytes)
+      protocol.decisionRevision = 's14b-candidate-quality-and-comparison-v2'
+      delete protocol.candidateOnlyQualification
+      historicalText = JSON.stringify(protocol, null, 2) + '\n'
+    }
+    return typeof bytes === 'string' ? historicalText : Buffer.from(historicalText)
+  }
+  return { ...original, default: { ...nativeFs, readFileSync }, readFileSync }
+})
+
 const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
 const semanticPath = path.join(ROOT, protocol.fixturePath)
@@ -946,8 +969,10 @@ test('separated-review diagnostic runs six zero-model owner slots and preserves 
           .map(key => [key, registered.operations.find(item => item.id === row.binding.operation)[key]])) } })
     fs.writeFileSync(persisted, rows.map(JSON.stringify).join('\n') + '\n')
     const restarted = spawnSync(process.execPath, ['--input-type=module', '-e',
-      `import fs from 'node:fs';import {updateLedger} from ${JSON.stringify(pathToFileURL(path.join(ROOT, 'scripts/quality-modernization-run.mjs')).href)};
+      `import fs from 'node:fs';import {updateLedger,currentProtocolBinding} from ${JSON.stringify(pathToFileURL(path.join(ROOT, 'scripts/quality-modernization-run.mjs')).href)};
        const rows=fs.readFileSync(process.argv[1],'utf8').trimEnd().split('\\n').map(JSON.parse);
+       for(const row of rows)if(row.type==='reserve')Object.assign(row.binding,currentProtocolBinding());
+       fs.writeFileSync(process.argv[1],rows.map(JSON.stringify).join('\\n')+'\\n');
        const binding={...rows[0].binding,invocationId:'00000000-0000-4000-8000-000000000099',codeSha:'f'.repeat(40)};
        try{updateLedger(process.argv[1],{type:'reserve',attemptId:'fresh-process-seventh',binding},{campaignMode:'synthetic'});process.exitCode=1}
        catch(error){console.log(error.message);if(error.message!=='SEPARATED_REVIEW_DIAGNOSTIC_SLOT_UNAVAILABLE')process.exitCode=2}`, persisted],
@@ -2249,7 +2274,7 @@ this.restoreGrantIssuer = restoreGrantIssuer`, sandbox)
   assert.match(fixture, /assert\.notEqual\(project\.projectId, origin\.projectId, 'RESTORE_IDENTITY_REUSED'\)/)
   // baseline 臂不经过恢复调用：c16-c18 只对 candidate 派发 execute，桥内断言 candidate，恢复类型只在 continuityRun 内取得。
   const driver = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-driver.mjs'), 'utf8')
-  assert.match(driver, /runProductionBridge\(\{ \.\.\.common, caseId: item\.id, target: executionTargets\.candidate, action: 'execute'/)
+  assert.match(driver, /executeRecordedStep\(\{ \.\.\.common, caseId: item\.id, target: executionTargets\.candidate/)
   assert.match(fixture, /if \(continuityRun \|\| boundedRun\) \{\s*assert\.equal\(candidate, true, 'CANDIDATE_REQUIRED'\)/)
   assert.match(fixture, /const restorationKinds = continuityRun \? /)
 })
@@ -2315,7 +2340,7 @@ test('c16-c18 v7 专用定稿拒绝旧revision，保留非连续性阶段前情�
   const fixture = fixtureSource()
   const start = fixture.indexOf('  const continuitySource =')
   const end = fixture.indexOf('  const scene =', start)
-  const select = new Function('source', 'request', 'continuityRun', 'assert', `${fixture.slice(start, end)}\nreturn continuitySource`)
+  const select = new Function('productionScenario', `return (source, request, continuityRun, assert) => { ${fixture.slice(start, end)}\nreturn continuitySource }`)(productionScenario)
   const current = PHASE_SCENARIOS['c16-c18'].scenarioRevision
   const selected = select(source, { scenarioRevision: current }, true, assert)
   assert.equal(selected, source.continuityQualificationCases[0].finalizedSource)
@@ -2329,7 +2354,7 @@ test('c16-c18 v7 专用定稿拒绝旧revision，保留非连续性阶段前情�
   for (const fact of ['同日午后', '缺少通行许可', '六枚铜币预约费已被扣除', '不予退还',
     '铜钥匙始终由林澄保管', '雨停前沈岸不知道信封内有地图', '现场核查尚未开始', '原因仍未查明']) assert.ok(selected.content.includes(fact))
   for (const revision of ['c16-c18-candidate-production-path-v6', undefined])
-    assert.throws(() => select(source, { scenarioRevision: revision }, true, assert), /CONTINUITY_SOURCE_REVISION_MISMATCH/)
+    assert.throws(() => select(source, { scenarioRevision: revision }, true, assert), /CONTINUITY_EXECUTION_REVISION_MISMATCH/)
   assert.equal(select(source, { scenarioRevision: current }, false, assert), null)
   assert.equal(source.scenes[0].authorPredecessor, '作者提供的前情：档案员林澄在清晨发现记录上的日期与旧钟不符，决定到现场核查；尚未核查成功。')
   const byId = id => source.continuityQualificationCases.find(item => item.id === id)
@@ -4411,7 +4436,7 @@ test('early-context 按协议取 caseId/operation，额度走 earlyContext/postU
     // 错 caseId、错 operation、未登记阶段（full 只有 caseIds）一律拒绝。
     assert.throws(() => record({ type: 'reserve', attemptId: 'wrong-case', binding: { ...binding, caseId: '场景1/1' } }), /INVALID_CAMPAIGN_BINDING/)
     assert.throws(() => record({ type: 'reserve', attemptId: 'wrong-op', binding: { ...binding, operation: 'directory' } }), /INVALID_CAMPAIGN_BINDING/)
-    assert.throws(() => record({ type: 'reserve', attemptId: 'wrong-phase', binding: { ...binding, phase: 'full', caseId: '场景2/3' } }), /INVALID_CAMPAIGN_BINDING/)
+    assert.throws(() => record({ type: 'reserve', attemptId: 'wrong-phase', binding: { ...binding, phase: 'full', caseId: '场景2/3' } }), /PHASE_MILESTONE_MISMATCH/)
     assert.throws(() => record({ type: 'reserve', attemptId: 'wrong-early-budget-op', binding: { ...binding, phase: 'early-budget', caseId: '场景1/1', operation: '长设定第三章正文' } }), /INVALID_CAMPAIGN_BINDING/)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })

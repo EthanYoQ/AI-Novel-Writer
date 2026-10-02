@@ -8,8 +8,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import os from 'node:os'
 import { runProductionCommandProbe, runProductionPhasePair, runProductionBridge, copyIsolatedRealModelConfig,
-  assertSharedInputDiagnostic, BOUNDED_REVISION_DIAGNOSTIC, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, POST_UI_AI_REVIEW_SCENARIOS, FULL_AI_REVIEW_SCENARIO, readBoundedRevisionSource,
-  productionBridgeHash, productionExecutionRuntime, productionScenario, PRODUCTION_BRIDGE, PHASE_SCENARIOS } from './quality-modernization-driver.mjs'
+  assertSharedInputDiagnostic, BOUNDED_REVISION_DIAGNOSTIC, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, POST_UI_AI_REVIEW_SCENARIOS, FULL_AI_REVIEW_SCENARIO, readBoundedRevisionSource,
+  productionBridgeHash, productionExecutionRuntime, productionScenario, PRODUCTION_BRIDGE, PHASE_SCENARIOS,
+  validateCandidateContinuityResults, fullExecutionSchedule, validatePairedReceipt, validateFullAcceptedPredecessor, modelConfigurationHash, executionRecordIdentity } from './quality-modernization-driver.mjs'
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const CACHE = path.join(ROOT, '.runtime', '.cache', 'novel-quality-modernization')
@@ -122,9 +123,8 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
   // current revision, so only the stable envelope is rechecked here.
   if (historical) return
   assertProtocolBinding(binding)
-  const registeredPhase = protocol.phases[binding.phase]
-  const phase = registeredPhase && { ...registeredPhase,
-    ...(binding.milestone === 'post-ui' ? registeredPhase.postUiAiReview ?? registeredPhase.postUi ?? {} : binding.phase === 'full' ? registeredPhase.aiReviewFinal ?? {} : {}) }
+  validateCandidateSampling(binding, protocol)
+  const phase = protocol.phases[binding.phase] && selectPhase(protocol, binding.phase, binding.milestone)
   if (!phase || !Array.isArray(phase.operations) || !Array.isArray(phase.caseIds)
     || !phase.caseIds.includes(binding.caseId)
     || !phase.operations.some(operation => operation.id === binding.operation && (!operation.caseIds || operation.caseIds.includes(binding.caseId)))) fail('INVALID_CAMPAIGN_BINDING')
@@ -133,7 +133,7 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
     || binding.phase === 'shared-input-diagnostic' && (binding.arm !== 'candidate'
       || phase.nonQualification !== true || phase.maxPhysicalRequests !== 1
       || binding.messagesSha256 !== phase.messagesSha256 || binding.originalMessagesSha256 !== phase.originalMessagesSha256)
-    || binding.phase === 'bounded-revision-diagnostic' && (!isDeepStrictEqual(phase, BOUNDED_REVISION_DIAGNOSTIC)
+    || binding.phase === 'bounded-revision-diagnostic' && (!isDeepStrictEqual(protocol.phases[binding.phase], BOUNDED_REVISION_DIAGNOSTIC)
       || binding.diagnosticSourceHash !== hash(phase.source) || !/^[a-f0-9]{64}$/u.test(binding.diagnosticInputHash ?? '')
       || binding.actual?.projectId === phase.source.projectId || binding.actual?.epoch === phase.source.epoch
       || !(phase.operations.find(item => item.id === binding.operation)?.kind === 'refine'
@@ -384,8 +384,13 @@ export function selectPhase(protocol, phase, milestone = 'early') {
   if (phase === 'full' && !isDeepStrictEqual(protocol.phases.full.aiReviewFinal, FULL_AI_REVIEW_SCENARIO)) fail('AI_MANUSCRIPT_REGISTRATION_MISMATCH')
   if ((['full', 'c16-c18'].includes(phase)) !== (milestone === 'final')
     || (['shared-input-diagnostic', 'separated-review-diagnostic', 'bounded-revision-diagnostic'].includes(phase)) !== (milestone === 'diagnostic')) fail('PHASE_MILESTONE_MISMATCH')
-  return { phase, milestone, ...protocol.phases[phase],
-    ...(milestone === 'post-ui' ? protocol.phases[phase].postUiAiReview ?? protocol.phases[phase].postUi ?? {} : phase === 'full' ? protocol.phases.full.aiReviewFinal ?? {} : {}) }
+  const selected = { ...protocol.phases[phase],
+    ...(milestone === 'post-ui' ? protocol.phases[phase].postUiAiReview ?? protocol.phases[phase].postUi ?? {} : phase === 'full' ? protocol.phases.full.aiReviewFinal ?? {} : {}), phase, milestone }
+  if (protocol.decisionRevision !== CANDIDATE_ONLY_PROTOCOL_REVISION || milestone === 'diagnostic') return selected
+  const current = productionScenario(phase, milestone, protocol.decisionRevision)
+  if (!isDeepStrictEqual(protocol.candidateOnlyQualification?.scenarios?.[`${phase}/${milestone}`], current))
+    fail('CANDIDATE_ONLY_REGISTRATION_MISMATCH')
+  return { ...selected, ...current, phase, milestone }
 }
 export function forwardReasoningFor(protocol, phase, milestone) {
   const registration = protocol.forwardReasoningExperiment
@@ -472,6 +477,12 @@ export function assertScenarioMatchesProtocol(selection, scenario, semanticPath)
 }
 export function validatePair(targets, observations) {
   const [a, b] = [targets.baseline, targets.candidate]
+  if (b?.protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION) {
+    if (a || b.arm !== 'candidate' || observations.length !== 1) fail('CANDIDATE_ONLY_TARGET_REQUIRED')
+    if (b.subjectSha !== b.codeSha) fail('CANDIDATE_SUBJECT_MISMATCH')
+    if (b.fixture.format !== 'canonical') fail('FIXTURE_FORMAT_MISMATCH')
+    return { parityId: hash({ semantic: b.fixture.semanticHash, parameters: b.fixture.parametersHash }), qualification: 'target-identity-only' }
+  }
   if (!a || !b || a.arm !== 'baseline' || b.arm !== 'candidate') fail('TWO_ARMS_REQUIRED')
   if (a.codeSha === b.codeSha || observations[0].sourceHash === observations[1].sourceHash || observations[0].repositoryRoot === observations[1].repositoryRoot) fail('IDENTICAL_IMPLEMENTATIONS')
   if (b.subjectSha !== b.codeSha) fail('CANDIDATE_SUBJECT_MISMATCH')
@@ -521,14 +532,17 @@ export function createProductionTargets(baselineRoot, output, { development = fa
   fs.mkdirSync(path.dirname(outputPath), { recursive: true })
   if (!inside(real(CACHE), real(path.dirname(outputPath))) || fs.existsSync(outputPath)) fail('TARGET_OUTPUT_NOT_NEW_PRIVATE_FILE')
   if (!development) assertFormalTargetCandidateClean(ROOT)
-  if (git(baselineRoot, ['rev-parse', 'HEAD']) !== '2264390d6fb8b052cc14736d544df0cc74516649') fail('BASELINE_SHA_MISMATCH')
-  if (git(baselineRoot, ['diff', 'HEAD', '--name-only'])) fail('TARGET_TRACKED_DIRTY')
+  const candidateOnly = currentProtocolBinding().protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION
+  if (!candidateOnly) {
+    if (git(baselineRoot, ['rev-parse', 'HEAD']) !== '2264390d6fb8b052cc14736d544df0cc74516649') fail('BASELINE_SHA_MISMATCH')
+    if (git(baselineRoot, ['diff', 'HEAD', '--name-only'])) fail('TARGET_TRACKED_DIRTY')
+  }
   // Keep the actual project below the production Windows path limit; no bypass.
   const root = createShortIsolationRoot()
   const semanticSource = read(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json'))
   const fixtureExports = buildFixtureExports(semanticSource)
   const protocolBinding = currentProtocolBinding()
-  const targets = Object.fromEntries(['baseline', 'candidate'].map(arm => {
+  const targets = Object.fromEntries((candidateOnly ? ['candidate'] : ['baseline', 'candidate']).map(arm => {
     const repositoryRoot = real(arm === 'baseline' ? baselineRoot : ROOT), isolationRoot = path.join(root, arm === 'baseline' ? 'b' : 'c')
     const roots = Object.fromEntries(['userData', 'config', 'project', 'legacySource'].map((key, index) => [key, path.join(isolationRoot, ['u', 'c', 'p', 'l'][index])]))
     Object.values(roots).forEach(directory => fs.mkdirSync(directory, { recursive: true }))
@@ -796,6 +810,7 @@ export function updateLedger(file, event, options = {}) {
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
       const allocationFor = binding => {
         const occupied = [...reserved.values()].filter(row => statuses.get(row.attemptId) !== 'cancel')
+        assertCandidateSlotAvailable(occupied, binding)
         if (binding.phase === 'separated-review-diagnostic') {
           // Fixed registration, not invocation/SHA: restarting cannot refund a slot.
           const prior = [...reserved.values()].filter(row => row.binding.phase === binding.phase)
@@ -869,15 +884,183 @@ export function updateLedger(file, event, options = {}) {
 }
 export const developmentLedgerPath = (root, phase) => path.join(CACHE, `synthetic-ledger-${path.basename(root)}-${phase}.jsonl`)
 
+/** One frozen batch: all three seven-case rounds plus the nine continuous chapters. */
+export function candidateBatchSlots() {
+  return [1, 2, 3].flatMap(round => PHASE_SCENARIOS['c16-c18'].caseIds.map(caseId =>
+    ({ phase: 'c16-c18', round, caseId, slot: `c16-c18:${caseId}` })))
+    .concat(PHASE_SCENARIOS.full.caseIds.map(caseId => ({ phase: 'full', round: 1, caseId, slot: `full:${caseId}` })))
+}
+
+/** Only independently adjudicated cases enter this calculation; technical completion is separate. */
+export function aggregateCandidateJudgments(decisions) {
+  const slots = candidateBatchSlots()
+  if (!Array.isArray(decisions) || decisions.length !== slots.length || slots.some(slot =>
+    decisions.filter(item => item.phase === slot.phase && item.round === slot.round && item.caseId === slot.caseId).length !== 1))
+    fail('CANDIDATE_DENOMINATOR_MISMATCH')
+  if (decisions.some(item => !['success', 'minor-omission', 'failure', 'inconclusive', 'not-run'].includes(item.outcome)
+    || !['passed', 'failed', 'not-run'].includes(item.technical) || !['passed', 'failed', 'inconclusive'].includes(item.integrity)
+    || ['silentHardConstraint', 'silentOther', 'unresolvedCritical'].some(key => typeof item[key] !== 'boolean')))
+    fail('CANDIDATE_JUDGMENT_INVALID')
+  const success = item => item.technical === 'passed' && item.integrity === 'passed' && item.outcome === 'success'
+    && !item.silentHardConstraint && !item.silentOther && !item.unresolvedCritical
+  const summarize = items => ({ total: items.length, success: items.filter(success).length })
+  const extractionItems = decisions.filter(item => item.caseId.startsWith('C16'))
+  const recoveredItems = decisions.filter(item => item.phase === 'c16-c18' && !item.caseId.startsWith('C16'))
+  const continuousItems = decisions.filter(item => item.phase === 'full')
+  const writingItems = [...recoveredItems, ...continuousItems]
+  const extraction = summarize(extractionItems), recovered = summarize(recoveredItems), continuous = summarize(continuousItems)
+  const writing = summarize(writingItems)
+  const silentHardConstraint = writingItems.filter(item => item.silentHardConstraint).length
+  const silentOther = writingItems.filter(item => item.silentOther).length
+  const integrityFailure = decisions.some(item => item.integrity === 'failed')
+  const unresolvedCritical = decisions.some(item => item.unresolvedCritical || item.integrity === 'inconclusive')
+  const extractionAllowed = extractionItems.every(item => success(item)
+    || item.technical === 'passed' && item.integrity === 'passed' && item.outcome === 'minor-omission'
+      && !item.silentHardConstraint && !item.silentOther && !item.unresolvedCritical)
+  const meetsThresholds = extraction.success >= 8 && extractionAllowed && recovered.success >= 10
+    && continuous.success >= 7 && writing.success >= 18 && silentOther <= 1
+  return { status: integrityFailure || silentHardConstraint > 0 ? 'failed' : unresolvedCritical ? 'inconclusive'
+    : meetsThresholds ? 'passed' : 'failed', extraction, recovered, continuous, writing,
+    silentHardConstraint, silentOther, integrityFailure, unresolvedCritical }
+}
+
+export function assertCandidateSlotAvailable(reserves, binding) {
+  if (!binding.sampling) return
+  const prior = reserves.filter(row => row.binding?.sampling?.batchId === binding.sampling.batchId)
+  if (prior.some(row => ['codeSha', 'sourceHash', 'protocolHash', 'driverHash']
+    .some(key => row.binding[key] !== binding[key]))) fail('CANDIDATE_BATCH_DRIFT')
+  if (prior.some(row => row.binding.sampling.round === binding.sampling.round
+    && row.binding.sampling.slot === binding.sampling.slot && row.binding.invocationId !== binding.invocationId))
+    fail('CANDIDATE_SLOT_ALREADY_SENT')
+}
+
+function validateCandidateSampling(binding, protocol) {
+  if (binding.protocolRevision !== CANDIDATE_ONLY_PROTOCOL_REVISION || binding.milestone !== 'final') return
+  if (binding.mode === 'synthetic' && !binding.sampling) return
+  const sample = binding.sampling
+  if (!sample || !candidateBatchSlots().some(slot => slot.phase === binding.phase && slot.caseId === binding.caseId
+    && slot.round === sample.round && slot.slot === sample.slot)) fail('CANDIDATE_SAMPLE_REQUIRED')
+  const file = real(sample.batchPath)
+  if (!inside(real(CACHE), file) || hash(fs.readFileSync(file)) !== sample.batchHash) fail('CANDIDATE_BATCH_DRIFT')
+  const batch = read(file)
+  if (batch.batchId !== sample.batchId || batch.protocolHash !== binding.protocolHash
+    || batch.modelConfigurationHash !== sample.modelConfigurationHash
+    || batch.protocolRevision !== binding.protocolRevision || batch.subjectSha !== binding.codeSha
+    || batch.sourceHash !== binding.sourceHash || !isDeepStrictEqual(batch.slots, candidateBatchSlots())
+    || !isDeepStrictEqual(batch.samplingPolicy, protocol.candidateOnlyQualification.sampling)
+    || batch.executions.find(item => item.phase === binding.phase && item.round === sample.round)?.invocationId !== binding.invocationId)
+    fail('CANDIDATE_BATCH_DRIFT')
+}
+
+export function registerCandidateBatch(targets, output) {
+  const target = targets.candidate, protocol = read(PROTOCOL_PATH)
+  if (target?.protocolRevision !== CANDIDATE_ONLY_PROTOCOL_REVISION || targets.baseline || target.developmentOnly)
+    fail('CANDIDATE_FROZEN_TARGET_REQUIRED')
+  inspectTarget(target)
+  const profiles = read(path.join(target.roots.config, 'models.json'))
+  const model = (Array.isArray(profiles) ? profiles : [profiles]).find(item => item.id === target.modelId)
+  if (!model?.apiKey) fail('SAFE_MODEL_UNAVAILABLE')
+  const file = path.resolve(output)
+  if (!inside(CACHE, file) || !inside(real(CACHE), real(path.dirname(file)))) fail('CANDIDATE_BATCH_PATH_INVALID')
+  const batch = { batchId: randomUUID(), ...currentProtocolBinding(), subjectSha: target.codeSha,
+    sourceHash: target.sourceHash, targetsHash: hash(targets), modelId: target.modelId,
+    modelConfigurationHash: modelConfigurationHash(model),
+    samplingPolicy: protocol.candidateOnlyQualification.sampling, slots: candidateBatchSlots(),
+    executions: [{ phase: 'c16-c18', round: 1 }, { phase: 'c16-c18', round: 2 },
+      { phase: 'c16-c18', round: 3 }, { phase: 'full', round: 1 }].map(item => ({ ...item, invocationId: randomUUID() })) }
+  fs.writeFileSync(file, JSON.stringify(batch, null, 2) + '\n', { flag: 'wx' })
+  return { status: 'registered', batchPath: file, batchHash: hash(fs.readFileSync(file)), ...batch, physicalModelRequests: 0 }
+}
+
+/** Adjudication consumes frozen execution evidence and two independent case reviews. */
+export function adjudicateCandidateBatch(batchPath, reviewsPath) {
+  const batch = read(batchPath), reviews = read(reviewsPath)
+  if (reviews.batchId !== batch.batchId || reviews.batchHash !== hash(fs.readFileSync(batchPath))
+    || reviews.reviewers?.length !== 2 || new Set(reviews.reviewers.map(item => item.id)).size !== 2
+    || reviews.reviewers.some(item => typeof item.id !== 'string' || !item.id || !Array.isArray(item.cases)))
+    fail('INDEPENDENT_REVIEWS_REQUIRED')
+  const protocol = read(PROTOCOL_PATH)
+  if (!isDeepStrictEqual(batch.slots, candidateBatchSlots()) || batch.protocolRevision !== CANDIDATE_ONLY_PROTOCOL_REVISION
+    || batch.protocolHash !== currentProtocolBinding().protocolHash
+    || !isDeepStrictEqual(batch.samplingPolicy, protocol.candidateOnlyQualification.sampling)
+    || !isDeepStrictEqual(batch.executions?.map(({ phase, round }) => ({ phase, round })),
+      [{ phase: 'c16-c18', round: 1 }, { phase: 'c16-c18', round: 2 }, { phase: 'c16-c18', round: 3 }, { phase: 'full', round: 1 }])
+    || batch.executions.some(item => typeof item.invocationId !== 'string' || !item.invocationId)
+    || new Set(batch.executions.map(item => item.invocationId)).size !== 4) fail('CANDIDATE_BATCH_DRIFT')
+  const samplingFor = round => ({ batchId: batch.batchId, batchPath: real(batchPath), batchHash: reviews.batchHash,
+    modelConfigurationHash: batch.modelConfigurationHash, round })
+  const records = new Map(batch.executions.map(execution => {
+    const file = `${batchPath}.${execution.phase}.round-${execution.round}.execution.json`
+    if (!fs.existsSync(file)) fail('CANDIDATE_EXECUTION_MISSING')
+    const record = read(file)
+    if (record.identity !== executionRecordIdentity({ invocationId: execution.invocationId, protocolHash: batch.protocolHash,
+      sampling: samplingFor(execution.round), phase: execution.phase, mode: 'real' })) fail('CANDIDATE_BATCH_DRIFT')
+    return [`${execution.phase}:${execution.round}`, record]
+  }))
+  const continuityOutcomes = new Map([1, 2, 3].map(round => {
+    const record = records.get(`c16-c18:${round}`)
+    return [round, validateCandidateContinuityResults(PHASE_SCENARIOS['c16-c18'].caseIds.map(id => record.results[id] ?? { caseId: id,
+      status: 'not-run', protocolRevision: batch.protocolRevision }), 'real',
+      { sourceProjectId: record.prepared?.[0]?.physicalProject?.projectId }).caseOutcomes]
+  }))
+  const schedule = fullExecutionSchedule(protocol.candidateOnlyQualification.order, batch.protocolRevision)
+  const fields = ['outcome', 'integrity', 'firstDraft', 'autonomousDetection', 'severeFalsePositive', 'revisionIntroducedDefect',
+    'finalQuality', 'silentHardConstraint', 'silentOther', 'unresolvedCritical']
+  const decisions = batch.slots.map(slot => {
+    const record = records.get(`${slot.phase}:${slot.round}`)
+    const result = slot.phase === 'c16-c18' ? record.results[slot.caseId]
+      : record.results[String(schedule.findIndex(step => step.caseId === slot.caseId && step.operation.kind === 'draft'))]
+    if (!result) fail('CANDIDATE_EXECUTION_MISSING')
+    const execution = batch.executions.find(item => item.phase === slot.phase && item.round === slot.round)
+    if (!isDeepStrictEqual(result.sampling, { ...samplingFor(slot.round), slot: slot.slot })
+      || result.invocationId !== execution.invocationId || result.sourceHash !== batch.sourceHash
+      || result.phase !== slot.phase || result.mode !== 'real' || result.arm !== 'candidate'
+      || result.caseId !== slot.caseId || result.protocolRevision !== batch.protocolRevision
+      || result.protocolHash !== batch.protocolHash || result.codeSha !== batch.subjectSha) fail('CANDIDATE_BATCH_DRIFT')
+    const matching = list => list.filter(item => item.phase === slot.phase && item.round === slot.round && item.caseId === slot.caseId)
+    const pair = reviews.reviewers.map(reviewer => {
+      const entries = matching(reviewer.cases)
+      if (entries.length !== 1 || entries[0].evidenceHash !== hash(result) || !entries[0].evidence) fail('CASE_REVIEW_EVIDENCE_REQUIRED')
+      return entries[0]
+    })
+    const project = item => Object.fromEntries(fields.map(key => [key, item[key]]))
+    let decision = pair[0]
+    const disputed = fields.filter(key => !isDeepStrictEqual(pair[0][key], pair[1][key]))
+    if (disputed.length) {
+      const arbitration = matching(reviews.arbitrations ?? [])
+      if (arbitration.length !== 1 || arbitration[0].evidenceHash !== hash(result) || !arbitration[0].evidence)
+        fail('CASE_REVIEW_DISAGREEMENT_UNRESOLVED')
+      decision = { ...pair[0], ...Object.fromEntries(disputed.map(key => [key, arbitration[0][key]])) }
+    }
+    const scenario = productionScenario(slot.phase, 'final', batch.protocolRevision)
+    const fullFailure = slot.phase === 'full' && result.status === 'passed'
+      ? validatePairedReceipt(result, { mode: 'real', arm: 'candidate', phase: 'full',
+        scenario: { ...scenario, caseId: slot.caseId, chapterNumber: Number(slot.caseId.split('/')[1]),
+          operations: scenario.operations.filter(item => item.kind !== 'directory'
+            && (!['refine', 'final-review'].includes(item.kind) || result.aiReviewedDraft?.selectedCount > 0)) },
+        protocolRevision: batch.protocolRevision, protocolHash: batch.protocolHash })
+        ?? validateFullAcceptedPredecessor(result, result.predecessor ?? null) : null
+    const technical = slot.phase === 'c16-c18'
+      ? continuityOutcomes.get(slot.round)?.find(item => item.caseId === slot.caseId)?.status === 'pending-independent-oracle-review' ? 'passed' : 'failed'
+      : result.status === 'passed' && !fullFailure ? 'passed' : result.status === 'not-run' ? 'not-run' : 'failed'
+    if (!slot.caseId.startsWith('C16') && decision.outcome === 'success' && (decision.finalQuality !== 'pass'
+      || !['pass', 'fail'].includes(decision.firstDraft) || decision.firstDraft === 'fail' && decision.autonomousDetection !== 'sufficient'
+      || decision.severeFalsePositive !== false || decision.revisionIntroducedDefect !== false)) fail('WRITING_CLOSURE_NOT_SUCCESSFUL')
+    return { ...slot, ...project(decision), technical, evidenceHash: hash(result) }
+  })
+  return { ...aggregateCandidateJudgments(decisions), batchId: batch.batchId, batchHash: reviews.batchHash,
+    reviewers: reviews.reviewers.map(item => item.id), decisions }
+}
+
 export function main(argv) {
   let [command = 'help', ...rest] = argv
-  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <freeze-targets|development-synthetic|shared-input-diagnostic|separated-review-diagnostic|baseline-probe|dry-run|early-budget|early-context|early-review|full|c16-c18> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>]; shared-input-diagnostic/separated-review-diagnostic: --diagnostic-input <frozen private JSON> --mode synthetic|real [--targets <frozen targets> | --baseline-root <baseline> --output <new private targets>] ; freeze-targets/development-synthetic: --baseline-root <existing worktree> --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full|c16-c18 (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
+  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <register-batch|adjudicate-batch|freeze-targets|development-synthetic|shared-input-diagnostic|separated-review-diagnostic|baseline-probe|dry-run|early-budget|early-context|early-review|full|c16-c18> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>] [--batch <registered batch.json> --round 1|2|3 (real final only)]; register-batch: --targets <frozen targets> --output <new private batch.json>; adjudicate-batch: --batch <batch.json> --reviews <two independent case reviews.json>; shared-input-diagnostic/separated-review-diagnostic: --diagnostic-input <frozen private JSON> --mode synthetic|real [--targets <frozen targets> | --baseline-root <baseline> --output <new private targets>] ; freeze-targets/development-synthetic: --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full|c16-c18 (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
   if (command.startsWith('--')) { rest = argv; command = 'phase-options' }
   const args = {}
   for (let i = 0; i < rest.length; i++) {
     const key = rest[i]
     if (key === '--dry-run') { if (args[key]) fail('INVALID_ARGUMENT'); args[key] = true; continue }
-    if (!['--targets', '--milestone', '--mode', '--baseline-root', '--output', '--model-id', '--protocol', '--phase', '--scenario', '--physical-ledger', '--diagnostic-input'].includes(key) || !rest[i + 1] || args[key]) fail('INVALID_ARGUMENT')
+    if (!['--targets', '--milestone', '--mode', '--baseline-root', '--output', '--model-id', '--protocol', '--phase', '--scenario', '--physical-ledger', '--diagnostic-input', '--batch', '--round', '--reviews'].includes(key) || !rest[i + 1] || args[key]) fail('INVALID_ARGUMENT')
     args[key] = rest[++i]
   }
   if (command === 'phase-options') command = args['--phase'] || fail('INVALID_PHASE')
@@ -962,39 +1145,48 @@ export function main(argv) {
       actual: result.attempts[0].binding.actual, finishReason: result.ownerTerminal.finishReason }
   }
   if (['freeze-targets', 'development-synthetic'].includes(command)) {
-    if (!args['--baseline-root'] || !args['--output'] || args['--mode'] === 'real') fail('TARGET_PREPARATION_ARGUMENTS_REQUIRED')
+    if (protocol.decisionRevision !== CANDIDATE_ONLY_PROTOCOL_REVISION && !args['--baseline-root'] || !args['--output'] || args['--mode'] === 'real') fail('TARGET_PREPARATION_ARGUMENTS_REQUIRED')
     if (command === 'freeze-targets' && args['--scenario']) fail('INVALID_ARGUMENT')
     const prepared = createProductionTargets(args['--baseline-root'], args['--output'], { development: command === 'development-synthetic', modelId: args['--model-id'] })
     if (command === 'freeze-targets') return prepared
     // 零模型开发路径只跑已登记的场景；默认仍是 early-budget，逐字保持原有行为。
     // 它永远只产出 development-only-unfrozen 收据，不构成冻结目标资格。
     const phase = args['--scenario'] ?? 'early-budget'
-    const scenario = productionScenario(phase, args['--milestone'] ?? PHASE_SCENARIOS[phase]?.milestone)
+    const scenario = productionScenario(phase, args['--milestone'] ?? PHASE_SCENARIOS[phase]?.milestone, protocol.decisionRevision)
     if (!scenario) fail('PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED')
     const selection = selectPhase(protocol, phase, args['--milestone'] ?? scenario.milestone)
     assertScenarioMatchesProtocol(selection, scenario, path.join(ROOT, protocol.fixturePath))
     const developmentLedger = developmentLedgerPath(prepared.root, phase)
     if (fs.existsSync(developmentLedger)) fail('DEVELOPMENT_LEDGER_COLLISION')
     const result = withLedgerReconciliation(developmentLedger, 'synthetic', () => runProductionPhasePair(prepared.targets, { phase, development: true, mode: 'synthetic', milestone: selection.milestone,
-      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, evaluationPolicy: selection.evaluationPolicy, order: protocol.order,
+      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, evaluationPolicy: selection.evaluationPolicy, order: protocol.candidateOnlyQualification?.order ?? protocol.order,
       forwardReasoning: forwardReasoningFor(protocol, phase, selection.milestone),
       forwardQualificationWindow: forwardQualificationWindowFor(protocol, phase, selection.milestone),
       ...currentProtocolBinding(),
-      semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(prepared.root, 'baseline-templates.json'), ledgerPath: developmentLedger }))
+      semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(prepared.root, 'candidate-templates.json'), ledgerPath: developmentLedger }))
     fs.writeFileSync(path.join(prepared.root, `development-receipt-${phase}.json`), JSON.stringify(result, null, 2))
     return { ...result, evidenceRoot: prepared.root, targetsPath: prepared.path }
+  }
+  if (command === 'register-batch') {
+    if (!args['--targets'] || !args['--output']) fail('CANDIDATE_BATCH_ARGUMENTS_REQUIRED')
+    return registerCandidateBatch(read(args['--targets']), args['--output'])
+  }
+  if (command === 'adjudicate-batch') {
+    if (!args['--batch'] || !args['--reviews']) fail('CANDIDATE_ADJUDICATION_ARGUMENTS_REQUIRED')
+    return adjudicateCandidateBatch(real(args['--batch']), real(args['--reviews']))
   }
   if (!['baseline-probe', 'dry-run', ...Object.keys(protocol.phases)].includes(command)) fail('INVALID_COMMAND')
   if (!args['--targets']) fail('TARGETS_REQUIRED')
   const targets = read(args['--targets'])
   if (targets.baseline?.schemaVersion === 2 || targets.candidate?.schemaVersion === 2) {
-    if (targets.baseline?.schemaVersion !== 2 || targets.candidate?.schemaVersion !== 2) fail('TWO_PRODUCTION_ARMS_REQUIRED')
-    if (targets.baseline.developmentOnly || targets.candidate.developmentOnly) fail('DEVELOPMENT_TARGET_NOT_QUALIFIED')
-    const observations = [inspectTarget(targets.baseline), inspectTarget(targets.candidate)]
+    const arms = protocol.decisionRevision === CANDIDATE_ONLY_PROTOCOL_REVISION ? ['candidate'] : ['baseline', 'candidate']
+    if (arms.some(arm => targets[arm]?.schemaVersion !== 2)) fail('PRODUCTION_TARGET_REQUIRED')
+    if (arms.some(arm => targets[arm].developmentOnly)) fail('DEVELOPMENT_TARGET_NOT_QUALIFIED')
+    const observations = arms.map(arm => inspectTarget(targets[arm]))
     validatePair(targets, observations)
     const phase = command === 'dry-run' ? 'early-budget' : command
     const selection = selectPhase(protocol, phase, args['--milestone'] || PHASE_SCENARIOS[phase]?.milestone || 'early')
-    const scenario = productionScenario(phase, selection.milestone)
+    const scenario = productionScenario(phase, selection.milestone, protocol.decisionRevision)
     if (!scenario) return { status: 'blocked', code: 'PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED', selection, physicalModelRequests: 0 }
     assertScenarioMatchesProtocol(selection, scenario, path.join(ROOT, protocol.fixturePath))
     let diagnosticInputPath
@@ -1006,21 +1198,35 @@ export function main(argv) {
     }
     const mode = command === 'dry-run' || args['--dry-run'] ? 'synthetic' : args['--mode']
     if (!['synthetic', 'real'].includes(mode)) fail('EXPLICIT_PROVIDER_MODE_REQUIRED')
-    if (mode === 'real' && (!targets.baseline.modelId || !targets.candidate.modelId)) fail('FROZEN_SAFE_MODEL_REQUIRED')
+    if (mode === 'real' && arms.some(arm => !targets[arm].modelId)) fail('FROZEN_SAFE_MODEL_REQUIRED')
     if ((mode === 'real') !== Boolean(args['--physical-ledger'])) fail('PHYSICAL_LEDGER_ARGUMENT_MISMATCH')
     const pairLedgerPath = mode === 'real' ? validatePhysicalLedger(args['--physical-ledger']) : null
-    const evidenceRoot = fs.mkdtempSync(path.join(CACHE, `s07-${mode}-`))
+    let samplingOptions = {}
+    if (protocol.decisionRevision === CANDIDATE_ONLY_PROTOCOL_REVISION && selection.milestone === 'final' && mode === 'real') {
+      if (!args['--batch'] || !args['--round']) fail('CANDIDATE_BATCH_ARGUMENTS_REQUIRED')
+      const batchPath = real(args['--batch']), batch = read(batchPath), round = Number(args['--round'])
+      const execution = batch.executions?.find(item => item.phase === phase && item.round === round)
+      if (!inside(real(CACHE), batchPath) || batch.targetsHash !== hash(targets) || !execution
+        || batch.protocolHash !== currentProtocolBinding().protocolHash) fail('CANDIDATE_BATCH_DRIFT')
+      samplingOptions = { invocationId: execution.invocationId,
+        sampling: { batchId: batch.batchId, batchPath, batchHash: hash(fs.readFileSync(batchPath)),
+          modelConfigurationHash: batch.modelConfigurationHash, round },
+        executionRecordPath: `${batchPath}.${phase}.round-${round}.execution.json` }
+    } else if (args['--batch'] || args['--round']) fail('CANDIDATE_BATCH_SCOPE_MISMATCH')
+    const evidenceRoot = samplingOptions.executionRecordPath
+      ? `${samplingOptions.executionRecordPath}.evidence` : fs.mkdtempSync(path.join(CACHE, `s07-${mode}-`))
+    fs.mkdirSync(evidenceRoot, { recursive: true })
     const ledgerPath = pairLedgerPath ?? path.join(evidenceRoot, 'synthetic-ledger.jsonl')
     // 真实或合成的成对执行失败时先对账：子进程被杀不会执行桥内结算，
     // 只有调用方还活着，这是保证每次发送都有终态的最后一道。
-    const result = withLedgerReconciliation(ledgerPath, mode, () => runProductionPhasePair(targets, { phase, mode, milestone: selection.milestone,
-      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, evaluationPolicy: selection.evaluationPolicy, order: protocol.order,
+    const result = withLedgerReconciliation(ledgerPath, mode, () => runProductionPhasePair(targets, { ...samplingOptions, phase, mode, milestone: selection.milestone,
+      scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, evaluationPolicy: selection.evaluationPolicy, order: protocol.candidateOnlyQualification?.order ?? protocol.order,
       forwardReasoning: forwardReasoningFor(protocol, phase, selection.milestone),
       forwardQualificationWindow: forwardQualificationWindowFor(protocol, phase, selection.milestone),
       diagnosticInputPath,
       ...currentProtocolBinding(), semanticPath: path.join(ROOT, protocol.fixturePath),
-      templatesPath: path.join(evidenceRoot, 'baseline-templates.json'), ledgerPath }))
-    inspectTarget(targets.baseline); inspectTarget(targets.candidate)
+      templatesPath: path.join(evidenceRoot, 'candidate-templates.json'), ledgerPath }))
+    arms.forEach(arm => inspectTarget(targets[arm]))
     fs.writeFileSync(path.join(evidenceRoot, 'receipt.json'), JSON.stringify(result, null, 2))
     return { ...result, selection, evidenceRoot }
   }

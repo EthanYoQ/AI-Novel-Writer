@@ -179,6 +179,7 @@ export const BOUNDED_REVISION_DIAGNOSTIC = Object.freeze({
   "automatedOutcomeCeiling": "pending-independent-diagnostic-oracle-review"
 })
 export const CANDIDATE_QUALITY_COMPARISON_PROTOCOL_REVISION = 's14b-candidate-quality-and-comparison-v2'
+export const CANDIDATE_ONLY_PROTOCOL_REVISION = 's14b-candidate-only-three-rounds-v1'
 // 旧 v2（只采纳 error/warning）保留为历史 revision；按 v1→v2 先例不再作为可校验策略，旧目标因协议 hash 漂移拒绝。
 export const POST_UI_REVIEW_POLICY = Object.freeze({ revision: 's14b-post-ui-reviewed-draft-must-show-unknown-v3',
   selection: 'all-error-warning-and-must-show-unknown-in-report-order', mustShowGoalId: '^ch\\d+:mustShow:\\d+$',
@@ -261,9 +262,11 @@ const AUTHOR_SETTING_LINES_REVISION = Object.freeze({
   's14b-post-ui-reviewed-budget-review-rebuild-must-show-v3': 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2',
   's14b-post-ui-reviewed-budget-review-rebuild-must-show-v4': 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2' })
 /** 场景 revision 在语义源登记的作者设定附加行。 */
-export const scenarioAuthorSettingLines = (scene, scenarioRevision) => scenarioRevision
-  ? scene?.scenarioAuthorSettingLines?.[scenarioRevision === POST_UI_AI_REVIEW_SCENARIOS['early-budget'].scenarioRevision
-    ? 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2' : AUTHOR_SETTING_LINES_REVISION[scenarioRevision] ?? scenarioRevision] ?? [] : []
+export const scenarioAuthorSettingLines = (scene, scenarioRevision) => {
+  const sourceRevision = scenarioRevision?.replace(/-candidate-only-v1$/u, '')
+  return sourceRevision ? scene?.scenarioAuthorSettingLines?.[sourceRevision === POST_UI_AI_REVIEW_SCENARIOS['early-budget'].scenarioRevision
+    ? 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2' : AUTHOR_SETTING_LINES_REVISION[sourceRevision] ?? sourceRevision] ?? [] : []
+}
 /** 作者世界设定：只有登记了该场景 revision 附加行的场景才追加独立行，其余 revision 字节不变。 */
 export function scenarioAuthorSetting(scene, scenarioRevision) {
   return [scene?.material, scene?.longSetting, ...scenarioAuthorSettingLines(scene, scenarioRevision)].filter(Boolean).join('\n')
@@ -584,7 +587,7 @@ export function qualificationBridgeWindows(request) {
   const scope = bounded ? { caseIds: BOUNDED_REVISION_DIAGNOSTIC.caseIds }
     : registration.scopes.find(item => item.phase === request.phase && item.milestone === request.milestone)
   const scenario = request.phase === 'full' && request.scenarioRevision === PHASE_SCENARIOS.full.scenarioRevision
-    ? PHASE_SCENARIOS.full : productionScenario(request.phase, request.milestone)
+    ? PHASE_SCENARIOS.full : productionScenario(request.phase, request.milestone, request.protocolRevision)
   if (!scope?.caseIds.includes(request.caseId) || !scenario
     || stableEvidence(request.attemptPolicy ?? null) !== stableEvidence(scenario.attemptPolicy ?? null)
     || stableEvidence(request.evaluationPolicy ?? null) !== stableEvidence(scenario.evaluationPolicy ?? null)
@@ -625,7 +628,8 @@ export function qualificationBridgeWindows(request) {
       return 1 + policy.reviewRebuild.maxRepairAttempts
     return 1
   }
-  const maxCalls = operations.reduce((sum, operation) => sum + count(operation), 0)
+  const maxCalls = operations.reduce((sum, operation) => sum + count(operation)
+    + Number(Boolean(policy?.shortOutline?.operationIds.includes(operation.id))), 0)
   return { attemptMs, spawnMs: maxCalls * attemptMs + 60_000,
     testMs: maxCalls * attemptMs + 120_000, maxCalls, revision: registration.revision }
 }
@@ -994,11 +998,33 @@ export function continuityCaseOperations(caseId) {
 /** 登记为定稿角色状态的 operation（含 C17-B 重新定稿后处理）共用产品原生 repair 的门禁规则。 */
 export const FINALIZED_CHARACTER_OPERATION_IDS = Object.freeze(PHASE_SCENARIOS['c16-c18'].operations
   .filter(operation => operation.kind === 'character_cards').map(operation => operation.id))
-export function productionScenario(phase, milestone) {
+export function productionScenario(phase, milestone, protocolRevision) {
   const scenario = PHASE_SCENARIOS[phase]
   if (!scenario) throw new Error('PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED')
-  if (phase === 'full' && milestone === 'final') return { ...scenario, ...FULL_AI_REVIEW_SCENARIO }
-  return milestone === 'post-ui' && POST_UI_AI_REVIEW_SCENARIOS[phase] ? { ...scenario, ...POST_UI_AI_REVIEW_SCENARIOS[phase] } : scenario
+  const selected = phase === 'full' && milestone === 'final' ? { ...scenario, ...FULL_AI_REVIEW_SCENARIO }
+    : milestone === 'post-ui' && POST_UI_AI_REVIEW_SCENARIOS[phase] ? { ...scenario, ...POST_UI_AI_REVIEW_SCENARIOS[phase] } : scenario
+  if (protocolRevision !== CANDIDATE_ONLY_PROTOCOL_REVISION || milestone === 'diagnostic') return selected
+  const draftIds = selected.operations.filter(operation => operation.kind === 'draft').map(operation => operation.id)
+  const counts = phase === 'c16-c18' ? [20, 84] : phase === 'full' ? [30, 180]
+    : phase === 'early-budget' ? [4, 20] : phase === 'early-context' ? [3, 17] : [1, 8]
+  return { ...selected, milestone, arms: ['candidate'], templateSource: 'candidate-native',
+    minimumCalls: counts[0], maximumPlannedCalls: counts[1],
+    ...(selected.evaluationPolicy ? { evaluationPolicy: { ...selected.evaluationPolicy,
+      physicalRequests: { ...selected.evaluationPolicy.physicalRequests, minimum: counts[0], maximum: counts[1],
+        ...(phase === 'c16-c18' ? { sourceMinimum: 16, sourceMaximum: 52 }
+          : phase === 'full' ? { sourceMinimum: 21, sourceMaximum: 108 } : {}) },
+      armAsymmetry: 'candidate-only; no comparative claim' } } : {}),
+    scenarioRevision: `${selected.scenarioRevision}-candidate-only-v1`,
+    ...(selected.selectionDifference ? { selectionDifference: { ...selected.selectionDifference,
+      requireDifferentPromptHash: false, requireDifferentPromptBytes: false,
+      requireBaselineSentCandidateOmission: false, requirePhysicalProjectParity: false } } : {}),
+    attemptPolicy: { ...selected.attemptPolicy, arms: ['candidate'], milestone,
+      ...(draftIds.length ? { draftRecovery: { ...draftRecoveryPolicy(draftIds), arms: ['candidate'] },
+        draftCondense: { operationIds: draftIds, arms: ['candidate'], primaryPurpose: 'chapter-draft',
+          condensePurpose: 'chapter-draft-condense', maxCondenseAttempts: 1,
+          trigger: 'settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum', formalEffect: 'last-attempt-only' } } : {}),
+      shortOutline: { purpose: 'chapter-draft-short-outline', operationIds: draftIds, maxAttempts: 1,
+        trigger: 'new-draft-before-prose-same-root-native-artifact' } } }
 }
 
 export const FULL_AI_REVIEW_SCENARIO = Object.freeze({
@@ -1188,8 +1214,9 @@ function verifiedRecoveryOutput(owner, evidence, operationId) {
  * `draftCondense.maximum` come from the production counter and draftTargetUnitRange.
  */
 export function createOperationDispatchGate({ onReject, repairPolicy, readPrimaryEvidence, finalizationRepair = false, draftCondense = null,
-  draftRecovery = null, structuredRecovery = null, refinementRecovery = null } = {}) {
+  draftRecovery = null, structuredRecovery = null, refinementRecovery = null, shortOutline = null } = {}) {
   const dispatched = new Map()
+  const outlines = new Map()
   const draftAttempts = new Map()
   const structuredAttempts = new Map()
   const refinementAttempts = new Map()
@@ -1203,6 +1230,20 @@ export function createOperationDispatchGate({ onReject, repairPolicy, readPrimar
     && left.projectId === right.projectId && left.epoch === right.epoch && left.attemptId !== right.attemptId
   return (operationId, owner, reviewSource) => {
     const first = dispatched.get(operationId)
+    if (shortOutline?.operationIds.includes(operationId)) {
+      const outline = outlines.get(operationId)
+      if (owner?.purpose === shortOutline.purpose) {
+        if (outline || first || shortOutline.maxAttempts !== 1) reject(operationId, 'short-outline-already-sent')
+        outlines.set(operationId, { ...owner })
+        return
+      }
+      try {
+        if (!outline || !sameRun(outline, owner)) throw new Error('SHORT_OUTLINE_OWNER_MISMATCH')
+        const evidence = readPrimaryEvidence?.(outline)
+        const { output, finishReason } = verifiedRecoveryOutput(outline, evidence, operationId)
+        if (finishReason !== 'stop' || !output.trim() || !evidence.ownerArtifactId) throw new Error('SHORT_OUTLINE_INCOMPLETE')
+      } catch { reject(operationId, 'short-outline-not-completed') }
+    }
     if (owner?.purpose?.startsWith('chapter-draft-reconcile')) reject(operationId, 'duplicate-operation')
     if (refinementRecovery?.operationId === operationId) {
       const history = refinementAttempts.get(operationId) ?? []
@@ -1381,6 +1422,30 @@ export function validatePairedReceipt(result, { mode, arm, phase, scenario, prot
     return 'PAIR_BINDING_MISMATCH'
   if (!Array.isArray(result.attempts))
     return 'TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH'
+  if (scenario.attemptPolicy?.shortOutline && !scenario.evaluationPolicy) {
+    const policy = scenario.attemptPolicy.shortOutline
+    const outlines = result.attempts.filter(attempt => attempt.binding.actual?.purpose === policy.purpose)
+    const drafts = scenario.operations.filter(operation => policy.operationIds.includes(operation.id))
+    if (outlines.length !== drafts.length) return 'SHORT_OUTLINE_COVERAGE_MISMATCH'
+    for (const operation of drafts) {
+      const attempts = result.attempts.filter(attempt => attempt.binding.operation === operation.id)
+      const outline = attempts[0], owner = outline?.binding.actual
+      const terminal = result.ownerTerminal?.find(item => item.attemptId === owner?.attemptId)
+      if (owner?.purpose !== policy.purpose || !terminal?.artifactId || terminal.status !== 'settled'
+        || terminal.finishReason !== 'stop' || terminal.hasFormalEffect || terminal.textHash !== outline.visibleTextHash
+        || attempts.length < 2 || attempts[1].binding.actual?.purpose !== 'chapter-draft'
+        || attempts.some(attempt => ['runId', 'rootActionId', 'projectId', 'epoch'].some(key => attempt.binding.actual?.[key] !== owner[key])))
+        return 'SHORT_OUTLINE_OWNER_MISMATCH'
+      try { if (!fs.readFileSync(outline.outputPath, 'utf8').trim() || digest(fs.readFileSync(outline.outputPath)) !== outline.visibleTextHash) return 'SHORT_OUTLINE_ARTIFACT_MISMATCH' }
+      catch { return 'SHORT_OUTLINE_ARTIFACT_MISSING' }
+    }
+    const prose = result.attempts.filter(attempt => !outlines.includes(attempt))
+    const attemptPolicy = { ...scenario.attemptPolicy, shortOutline: undefined }
+    return validatePairedReceipt({ ...result, attempts: prose,
+      ownerTerminal: result.ownerTerminal?.filter(item => !outlines.some(attempt => attempt.binding.actual.attemptId === item.attemptId)),
+      physicalModelRequests: mode === 'real' ? prose.length : 0, syntheticDispatches: mode === 'synthetic' ? prose.length : 0 },
+    { mode, arm, phase, scenario: { ...scenario, attemptPolicy }, protocolRevision, protocolHash })
+  }
   if (scenario.evaluationPolicy?.revision === AI_REVIEW_FINAL_MANUSCRIPT_POLICY.revision) {
     if (stableEvidence(result.evaluationPolicy) !== stableEvidence(scenario.evaluationPolicy)
       || result.aiReviewedDraft?.initial?.chapterNumber !== scenario.chapterNumber
@@ -1940,19 +2005,23 @@ export function readBaselineFailureEvidence(receipt, receiptPath) {
   }
 }
 
-export function copyIsolatedRealModelConfig(original, roots) {
+export const modelConfigurationHash = model => digest(Object.fromEntries(Object.entries(model).filter(([key]) => key !== 'apiKey')))
+
+export function copyIsolatedRealModelConfig(original, roots, expectedHash) {
   // Copy only the approved generation profile; a default model would also start an unregistered embedding request.
   const models = JSON.parse(fs.readFileSync(path.join(original.roots.config, 'models.json'), 'utf8'))
   const model = (Array.isArray(models) ? models : [models]).find(value => value.id === original.modelId)
   if (!model?.apiKey) throw new Error('SAFE_MODEL_UNAVAILABLE')
+  if (expectedHash && modelConfigurationHash(model) !== expectedHash) throw new Error('CANDIDATE_MODEL_CONFIGURATION_DRIFT')
   fs.writeFileSync(path.join(roots.config, 'models.json'), JSON.stringify([model]), { mode: 0o600 })
   fs.writeFileSync(path.join(roots.config, 'config.json'), JSON.stringify({ locale: 'zh-CN' }))
 }
 
-export function fullExecutionSchedule(order) {
+export function fullExecutionSchedule(order, protocolRevision) {
   const scenario = PHASE_SCENARIOS.full
+  const candidateOnly = protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION
   if (order?.seed !== 'program-v3-2026-09-13-fixed-v1' || order.armsByChapter?.length !== 9
-    || order.armsByChapter.some((arms, index) => arms !== (index % 2 ? 'candidate,baseline' : 'baseline,candidate')))
+    || order.armsByChapter.some((arms, index) => arms !== (candidateOnly ? 'candidate' : index % 2 ? 'candidate,baseline' : 'baseline,candidate')))
     throw new Error('FULL_ORDER_MISMATCH')
   const chapters = scenario.caseIds.flatMap((caseId, index) => order.armsByChapter[index].split(',').map(arm => ({
     caseId, sceneId: caseId.split('/')[0], chapterNumber: Number(caseId.split('/')[1]), arm,
@@ -1988,7 +2057,7 @@ export function validateFullAcceptedPredecessor(result, previous) {
             || range.bytes !== Buffer.byteLength(content.slice(range.start, range.end), 'utf8')))
           return 'FULL_PREDECESSOR_CONSUMPTION_MISMATCH'
         if (operation.kind !== 'draft') {
-          if (consumption.mode !== 'reviewFocus-complete-body' || consumption.ranges.length !== 1
+          if (consumption.mode !== (result.protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION ? 'captured-predecessor' : 'reviewFocus-complete-body') || consumption.ranges.length !== 1
             || consumption.ranges[0].start !== 0 || consumption.ranges[0].end !== content.length)
             return 'FULL_REVIEW_PREDECESSOR_INCOMPLETE'
         } else if (consumption.mode !== 'native-paragraphs-and-ending'
@@ -2003,9 +2072,9 @@ export function validateFullAcceptedPredecessor(result, previous) {
 }
 
 export function classifyFullProduction(results, { mode, order }) {
-  const schedule = fullExecutionSchedule(order)
+  const schedule = fullExecutionSchedule(order, results[0]?.protocolRevision)
   const aiReviewed = results.some(result => result.evaluationPolicy?.revision === AI_REVIEW_FINAL_MANUSCRIPT_POLICY.revision)
-  const scenario = aiReviewed ? productionScenario('full', 'final') : PHASE_SCENARIOS.full
+  const scenario = aiReviewed ? productionScenario('full', 'final', results[0]?.protocolRevision) : PHASE_SCENARIOS.full
   const fail = pairFailure => ({ status: 'failed', qualityQualification: 'automatic-gate-failed', pairFailure })
   if (results.length !== schedule.length) return fail('FULL_OPERATION_COVERAGE_MISMATCH')
   const projects = new Map(), predecessors = new Map()
@@ -2055,19 +2124,68 @@ export function classifyFullProduction(results, { mode, order }) {
       finalManuscriptQualification: 'pending-independent-oracle-review' } : {}) }
 }
 
+export function executionRecordIdentity(options) {
+  return digest(JSON.stringify({ invocationId: options.invocationId, protocolHash: options.protocolHash,
+    sampling: options.sampling, phase: options.phase, mode: options.mode }))
+}
+function executionRecord(options) {
+  if (!options.executionRecordPath) return { results: {} }
+  const identity = executionRecordIdentity(options)
+  if (!fs.existsSync(options.executionRecordPath)) return { identity, results: {} }
+  const record = JSON.parse(fs.readFileSync(options.executionRecordPath))
+  if (record.identity !== identity) throw new Error('EXECUTION_RECORD_DRIFT')
+  return record
+}
+
+function saveExecutionRecord(options, record) {
+  if (!options.executionRecordPath) return
+  const temporary = `${options.executionRecordPath}.tmp`
+  fs.writeFileSync(temporary, JSON.stringify(record, null, 2) + '\n')
+  fs.renameSync(temporary, options.executionRecordPath)
+}
+
+/** Resume only unsent work. An interrupted sent step is retained, never blindly replayed. */
+function executeRecordedStep(request, options, record, key, bridge) {
+  if (record.results[key]) return record.results[key]
+  const operations = new Set(request.operations.map(item => item.id))
+  const ledger = fs.existsSync(request.ledgerPath) ? fs.readFileSync(request.ledgerPath, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)) : []
+  const reserved = ledger.filter(row => row.type === 'reserve' && row.binding?.invocationId === request.invocationId
+    && row.binding.caseId === request.caseId && operations.has(row.binding.operation))
+  let result
+  if (reserved.length) {
+    const receiptPath = path.join(request.evidenceRoot ?? request.target.isolationRoot, 'execute-receipt.json')
+    result = fs.existsSync(receiptPath) ? JSON.parse(fs.readFileSync(receiptPath))
+      : { status: 'failed', code: 'SENT_STEP_OUTCOME_UNKNOWN', receiptPath }
+  } else {
+    try { result = bridge({ ...request, action: 'execute' }) }
+    catch (error) { result = { ...(error.receiptPath && fs.existsSync(error.receiptPath) ? JSON.parse(fs.readFileSync(error.receiptPath)) : {}),
+      status: 'failed', code: error.message, receiptPath: error.receiptPath } }
+  }
+  result = { ...result, caseId: request.caseId, arm: request.target.arm, phase: request.phase,
+    invocationId: result.invocationId ?? request.invocationId, mode: result.mode ?? request.mode,
+    codeSha: result.codeSha ?? request.target.codeSha, sourceHash: result.sourceHash ?? request.target.sourceHash,
+    protocolRevision: request.protocolRevision, protocolHash: request.protocolHash,
+    ...(request.sampling ? { sampling: { ...request.sampling, slot: `${request.phase}:${request.caseId}` } } : {}) }
+  record.results[key] = result
+  saveExecutionRecord(options, record)
+  return result
+}
+
 function runProductionFull(targets, options, bridge = runProductionBridge) {
-  const scenario = options.evaluationPolicy ? productionScenario('full', 'final') : PHASE_SCENARIOS.full
+  const scenario = options.evaluationPolicy ? productionScenario('full', 'final', options.protocolRevision) : PHASE_SCENARIOS.full
+  const arms = scenario.arms ?? ['baseline', 'candidate']
   if (options.scenarioRevision !== scenario.scenarioRevision
     || stableEvidence(options.attemptPolicy ?? null) !== stableEvidence(scenario.attemptPolicy)
     || stableEvidence(options.evaluationPolicy ?? null) !== stableEvidence(scenario.evaluationPolicy ?? null) || options.milestone !== 'final'
     || !options.protocolRevision || !CONTENT_HASH.test(options.protocolHash ?? '')
-    || ['baseline', 'candidate'].some(arm => targets[arm].protocolRevision !== options.protocolRevision
+    || arms.some(arm => targets[arm].protocolRevision !== options.protocolRevision
       || targets[arm].protocolHash !== options.protocolHash)) throw new Error('PROTOCOL_BINDING_MISMATCH')
-  const schedule = fullExecutionSchedule(options.order), invocationId = randomUUID()
-  const executionTargets = new Map(), prepared = [], results = [], predecessors = new Map()
+  const schedule = fullExecutionSchedule(options.order, options.protocolRevision), invocationId = options.invocationId ?? randomUUID()
+  const record = executionRecord(options)
+  const executionTargets = new Map(record.targets ?? []), prepared = record.prepared ?? [], results = [], predecessors = new Map(), stopped = new Set()
   const common = { ...options, syntheticDraftCondense: undefined, ...syntheticDraftCondensePlan(options), invocationId, driverHash: productionBridgeHash(), phase: 'full' }
-  for (const [sceneIndex, sceneId] of ['场景1', '场景2', '场景3'].entries()) {
-    for (const arm of ['baseline', 'candidate']) {
+  if (!record.prepared) for (const [sceneIndex, sceneId] of ['场景1', '场景2', '场景3'].entries()) {
+    for (const arm of arms) {
       const original = targets[arm], directoryId = `${invocationId.slice(0, 6)}${sceneIndex}`
       const roots = Object.fromEntries(Object.entries(original.roots).map(([name, directory]) => [name, path.join(directory, directoryId)]))
       const isolationRoot = path.join(original.isolationRoot, 'invocations', invocationId, String(sceneIndex))
@@ -2075,7 +2193,7 @@ function runProductionFull(targets, options, bridge = runProductionBridge) {
         if (fs.existsSync(directory)) throw new Error('INVOCATION_DIRECTORY_COLLISION')
         fs.mkdirSync(directory, { recursive: true })
       }
-      if (options.mode === 'real') copyIsolatedRealModelConfig(original, roots)
+      if (options.mode === 'real') copyIsolatedRealModelConfig(original, roots, options.sampling?.modelConfigurationHash)
       const target = { ...original, isolationRoot, roots, declaredIsolationRoot: original.isolationRoot, declaredRoots: original.roots }
       executionTargets.set(`${sceneId}:${arm}`, target)
       const preparation = bridge({ ...common, target, action: 'prepare', sceneId,
@@ -2085,8 +2203,18 @@ function runProductionFull(targets, options, bridge = runProductionBridge) {
       if (peer && peer.physicalProject.parityHash !== preparation.physicalProject.parityHash) throw new Error('ACTUAL_PROJECT_PARITY_FAILED')
     }
   }
+  record.targets = [...executionTargets]; record.prepared = prepared
+  saveExecutionRecord(options, record)
   for (const [index, step] of schedule.entries()) {
     const key = `${step.sceneId}:${step.arm}`, target = executionTargets.get(key)
+    if (stopped.has(key)) {
+      const notRun = { status: 'not-run', code: 'PREDECESSOR_UNAVAILABLE', caseId: step.caseId, arm: step.arm,
+        invocationId, phase: 'full', mode: options.mode, sourceHash: target.sourceHash,
+        codeSha: target.codeSha, protocolRevision: options.protocolRevision, protocolHash: options.protocolHash,
+        ...(options.sampling ? { sampling: { ...options.sampling, slot: `full:${step.caseId}` } } : {}) }
+      results.push(notRun); record.results[String(index)] = notRun; saveExecutionRecord(options, record)
+      continue
+    }
     const request = { ...common, target, caseId: step.caseId, sceneId: step.sceneId,
       chapterNumber: step.chapterNumber, operations: step.operation.kind === 'draft' && scenario.evaluationPolicy ? scenario.operations.slice(1) : [step.operation],
       templatesPath: `${options.templatesPath}.${step.sceneId}.json`,
@@ -2094,15 +2222,24 @@ function runProductionFull(targets, options, bridge = runProductionBridge) {
       predecessor: predecessors.get(key) ?? null,
       parityHash: prepared.find(item => item.sceneId === step.sceneId && item.arm === step.arm).physicalProject.parityHash }
     try {
-      const result = bridge({ ...request, action: 'execute' })
+      const result = executeRecordedStep(request, options, record, String(index), bridge)
       results.push(result)
+      if (result.status !== 'passed') {
+        stopped.add(key)
+        if (options.protocolRevision !== CANDIDATE_ONLY_PROTOCOL_REVISION) break
+        continue
+      }
       if (scenario.evaluationPolicy && step.operation.kind === 'draft') {
         const operations = request.operations.filter(item => !['refine', 'final-review'].includes(item.kind) || result.aiReviewedDraft?.selectedCount > 0)
         const failure = validatePairedReceipt(result, { mode: options.mode, arm: step.arm, phase: 'full',
           scenario: { ...scenario, caseId: step.caseId, chapterNumber: step.chapterNumber, operations },
           protocolRevision: options.protocolRevision, protocolHash: options.protocolHash })
           ?? validateFullAcceptedPredecessor(result, request.predecessor)
-        if (failure) { result.status = 'failed'; result.code = failure; break }
+        if (failure) {
+          result.status = 'failed'; result.code = failure; stopped.add(key); saveExecutionRecord(options, record)
+          if (options.protocolRevision !== CANDIDATE_ONLY_PROTOCOL_REVISION) break
+          continue
+        }
       }
       if (step.operation.kind === 'draft') predecessors.set(key, { projectId: result.physicalProject.projectId,
         chapterNumber: result.saved.chapterNumber, draftId: result.saved.draftId, version: result.saved.version,
@@ -2111,10 +2248,14 @@ function runProductionFull(targets, options, bridge = runProductionBridge) {
     } catch (error) {
       const receipt = error.receiptPath && fs.existsSync(error.receiptPath) ? JSON.parse(fs.readFileSync(error.receiptPath, 'utf8')) : {}
       results.push({ ...receipt, arm: step.arm, caseId: step.caseId, status: 'failed', code: error.message, receiptPath: error.receiptPath })
-      break
+      stopped.add(key)
+      if (options.protocolRevision !== CANDIDATE_ONLY_PROTOCOL_REVISION) break
     }
   }
   return { ...classifyFullProduction(results, options), phase: 'full', invocationId, order: options.order,
+    ...(options.protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION ? { continuationDecisions: results.filter(result => result.saved).map(result => ({
+      caseId: result.caseId, saved: result.saved, currentReviewState: result.currentReviewState,
+      choice: 'preauthorized-retain-saved-draft-with-unresolved-state' })) } : {}),
     qualification: options.development ? 'development-only-unfrozen' : `${options.mode}-production-path-only`,
     protocolRevision: options.protocolRevision, protocolHash: options.protocolHash, scenarioRevision: options.scenarioRevision,
     attemptPolicy: options.attemptPolicy, ...(scenario.evaluationPolicy ? { evaluationPolicy: scenario.evaluationPolicy } : {}), prepared, results, notRun: schedule.slice(results.length),
@@ -2122,9 +2263,9 @@ function runProductionFull(targets, options, bridge = runProductionBridge) {
     syntheticDispatches: results.reduce((sum, result) => sum + (result.syntheticDispatches ?? 0), 0) }
 }
 
-export function runProductionPhasePair(targets, options, bridge) {
+export function runProductionPhasePair(targets, options, bridge = runProductionBridge) {
   if (options.phase === 'full') return runProductionFull(targets, options, bridge)
-  const scenario = productionScenario(options.phase, options.milestone)
+  const scenario = productionScenario(options.phase, options.milestone, options.protocolRevision)
   const arms = scenario.arms ?? ['baseline', 'candidate']
   if ((scenario.scenarioRevision ?? null) !== (options.scenarioRevision ?? null)
     || stableEvidence(scenario.selectionDifference ?? null) !== stableEvidence(options.selectionDifference ?? null)
@@ -2133,17 +2274,19 @@ export function runProductionPhasePair(targets, options, bridge) {
     throw new Error('SCENARIO_PROTOCOL_MISMATCH')
   if (!options.protocolRevision || !/^[a-f0-9]{64}$/.test(options.protocolHash ?? '')
     || arms.some(arm => targets[arm].protocolRevision !== options.protocolRevision || targets[arm].protocolHash !== options.protocolHash)) throw new Error('PROTOCOL_BINDING_MISMATCH')
-  const invocationId = randomUUID()
+  const invocationId = options.invocationId ?? randomUUID()
+  const record = executionRecord(options)
   const directoryId = invocationId.slice(0, 8)
-  const executionTargets = Object.fromEntries(arms.map(arm => {
+  const executionTargets = record.targets ?? Object.fromEntries(arms.map(arm => {
     const original = targets[arm], roots = Object.fromEntries(Object.entries(original.roots).map(([key, directory]) => [key, path.join(directory, directoryId)]))
     const isolationRoot = path.join(original.isolationRoot, 'invocations', invocationId)
     for (const directory of [isolationRoot, ...Object.values(roots)]) if (fs.existsSync(directory)) throw new Error('INVOCATION_DIRECTORY_COLLISION')
     for (const directory of [isolationRoot, ...Object.values(roots)]) fs.mkdirSync(directory, { recursive: true })
-    if (options.mode === 'real') copyIsolatedRealModelConfig(original, roots)
+    if (options.mode === 'real') copyIsolatedRealModelConfig(original, roots, options.sampling?.modelConfigurationHash)
     return [arm, { ...original, isolationRoot, roots, declaredIsolationRoot: original.isolationRoot, declaredRoots: original.roots }]
   }))
   const common = { invocationId, mode: options.mode ?? 'synthetic', development: options.development === true,
+    ...(options.sampling ? { sampling: options.sampling } : {}),
     protocolRevision: options.protocolRevision, protocolHash: options.protocolHash,
     forwardReasoning: options.forwardReasoning ?? null,
     forwardQualificationWindow: options.forwardQualificationWindow ?? null,
@@ -2158,7 +2301,9 @@ export function runProductionPhasePair(targets, options, bridge) {
     phase: options.phase, caseId: scenario.caseId, sceneId: scenario.sceneId, chapterNumber: scenario.chapterNumber,
     operations: scenario.operations, semanticPath: options.semanticPath, templatesPath: options.templatesPath,
     ledgerPath: options.ledgerPath, driverHash: productionBridgeHash() }
-  const prepared = arms.map(arm => runProductionBridge({ ...common, target: executionTargets[arm], action: 'prepare' }))
+  const prepared = record.prepared ?? arms.map(arm => bridge({ ...common, target: executionTargets[arm], action: 'prepare' }))
+  record.targets = executionTargets; record.prepared = prepared
+  saveExecutionRecord(options, record)
   const parityHash = prepared[0].physicalProject.parityHash
   if (options.phase === 'bounded-revision-diagnostic') {
     let result
@@ -2183,15 +2328,16 @@ export function runProductionPhasePair(targets, options, bridge) {
         : restore.length !== 1 || restore[0].restore !== item.kind || postProcess.length !== (item.sourceSuffix ? 2 : 0))
         || postProcess.some((operation, index) => operation.kind !== ['chapter_notes', 'character_cards'][index])) throw new Error('CONTINUITY_CASES_NOT_REGISTERED')
       try {
-        results.push(runProductionBridge({ ...common, caseId: item.id, target: executionTargets.candidate, action: 'execute', operations,
-          parityHash, evidenceRoot: path.join(executionTargets.candidate.isolationRoot, `step-${index}`) }))
+        results.push(executeRecordedStep({ ...common, caseId: item.id, target: executionTargets.candidate, operations,
+          parityHash, evidenceRoot: path.join(executionTargets.candidate.isolationRoot, `step-${index}`) }, options, record, item.id, bridge))
       } catch (error) {
         results.push({ ...(error.receiptPath && fs.existsSync(error.receiptPath) ? JSON.parse(fs.readFileSync(error.receiptPath)) : {}),
           status: 'failed', code: error.message, receiptPath: error.receiptPath })
-        break
+        if (options.protocolRevision !== CANDIDATE_ONLY_PROTOCOL_REVISION) break
       }
     }
-    const validation = validateCandidateContinuityResults(results, common.mode)
+    const validation = validateCandidateContinuityResults(results, common.mode,
+      { sourceProjectId: prepared[0].physicalProject.projectId })
     return { ...validation, phase: options.phase, invocationId, parityHash, prepared, results,
       draftReconciliation: summarizeDraftReconciliation(results),
       qualification: options.development ? 'development-only-unfrozen' : `${common.mode}-production-path-only`,
@@ -2204,8 +2350,8 @@ export function runProductionPhasePair(targets, options, bridge) {
       physicalModelRequests: results.reduce((sum, result) => sum + (result.physicalModelRequests ?? 0), 0),
       syntheticDispatches: results.reduce((sum, result) => sum + (result.syntheticDispatches ?? 0), 0) }
   }
-  if (prepared[1].physicalProject.parityHash !== parityHash) throw new Error('ACTUAL_PROJECT_PARITY_FAILED')
-  const results = ['baseline', 'candidate'].map(arm => {
+  if (prepared[1] && prepared[1].physicalProject.parityHash !== parityHash) throw new Error('ACTUAL_PROJECT_PARITY_FAILED')
+  const results = arms.map(arm => {
     try { return runProductionBridge({ ...common, target: executionTargets[arm], action: 'execute', parityHash }) }
     catch (error) {
       // A bridge refusal is a recorded outcome, not a harness crash: keep the receipt's
@@ -2217,7 +2363,8 @@ export function runProductionPhasePair(targets, options, bridge) {
         reason: receipt.error ?? null, receiptPath: error.receiptPath }
     }
   })
-  const decision = classifyProductionPair(results, { mode: common.mode, phase: options.phase })
+  const decision = arms.length === 1 ? classifyCandidateProduction(results[0], { mode: common.mode, phase: options.phase, scenario })
+    : classifyProductionPair(results, { mode: common.mode, phase: options.phase })
   return { ...decision, qualification: options.development ? 'development-only-unfrozen' : `${common.mode}-production-path-only`,
     phase: options.phase, caseId: scenario.caseId, operations: scenario.operations.map(operation => operation.id),
     physicalModelRequests: results.reduce((sum, result) => sum + (result.physicalModelRequests ?? 0), 0), syntheticDispatches: results.reduce((sum, result) => sum + (result.syntheticDispatches ?? 0), 0),
@@ -2225,6 +2372,16 @@ export function runProductionPhasePair(targets, options, bridge) {
     scenarioRevision: common.scenarioRevision, selectionDifferencePolicy: common.selectionDifference,
     ...(common.evaluationPolicy ? { evaluationPolicy: common.evaluationPolicy } : {}),
     invocationId, parityHash, prepared, results }
+}
+
+function classifyCandidateProduction(result, { mode, phase, scenario }) {
+  const operations = scenario.operations.filter(item => !['refine', 'final-review'].includes(item.kind) || result.aiReviewedDraft?.selectedCount > 0)
+  const failure = result.status !== 'passed' ? result.code ?? 'CANDIDATE_OPERATION_FAILED'
+    : validatePairedReceipt(result, { mode, arm: 'candidate', phase, scenario: { ...scenario, operations },
+      protocolRevision: result.protocolRevision, protocolHash: result.protocolHash })
+  return failure ? { status: 'failed', qualityQualification: 'not-run', pairFailure: failure }
+    : { status: mode === 'synthetic' ? 'passed' : 'pending-independent-oracle-review',
+      qualityQualification: mode === 'synthetic' ? 'not-run' : 'pending-independent-oracle-review' }
 }
 
 /**
@@ -2485,6 +2642,13 @@ export function validateAiReviewedManuscript(result) {
       if (units < Math.floor(sourceUnits * 0.8) || units > Math.ceil(sourceUnits * 1.2)) throw new Error('AI_REVISION_LENGTH_MISMATCH')
     }
     const draft = db.prepare(`SELECT d.version,d.chapter_number${result.phase === 'full' ? ',d.status' : ''},c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?`).get(chain.finalDraft.draftId)
+    if (result.protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION) {
+      const terminalReview = chain.finalReview ?? chain.review
+      const cycleId = db.prepare('SELECT cycle_id FROM review_cycles WHERE review_id=?').pluck().get(terminalReview.reviewId)
+      const current = { contentHash: digest(final), reviewId: terminalReview.reviewId, reviewContentHash: terminalReview.contentHash,
+        cycleId, findings: db.prepare('SELECT finding_id AS findingId,status,target_id AS targetId FROM review_findings WHERE cycle_id=? ORDER BY finding_id').all(cycleId) }
+      if (!cycleId || stableEvidence(result.currentReviewState) !== stableEvidence(current)) throw new Error('CURRENT_REVIEW_STATE_MISMATCH')
+    }
     if (draft?.body !== final || draft.version !== chain.finalDraft.version || draft.chapter_number !== chain.initial.chapterNumber
       || chain.finalDraft.draftId !== result.saved?.draftId || chain.finalDraft.version !== result.saved?.version
       || chain.initial.chapterNumber !== result.saved?.chapterNumber || digest(final) !== result.saved?.contentHash
@@ -2494,22 +2658,67 @@ export function validateAiReviewedManuscript(result) {
     return null
   } catch (error) { return error.message } finally { db?.close() }
 }
-export function validateCandidateContinuityResults(results, mode) {
+export function validateCandidateContinuityResults(results, mode, scope = null) {
+  const fail = code => ({ status: 'failed', candidateFailure: code })
+  const currentScenario = productionScenario('c16-c18', 'final', results[0]?.protocolRevision)
+  if (currentScenario.attemptPolicy.shortOutline && !scope?.caseIds) {
+    const sourceProjectId = scope?.sourceProjectId
+      ?? results.find(result => result.caseId?.startsWith('C16') && result.physicalProject?.projectId)?.physicalProject.projectId
+    const caseOutcomes = currentScenario.caseIds.map(caseId => {
+      const matching = results.filter(result => result.caseId === caseId)
+      const outcome = matching.length === 1 ? validateCandidateContinuityResults(matching, mode,
+        { caseIds: [caseId], sourceProjectId }) : fail('CANDIDATE_CASE_MISMATCH')
+      return { caseId, ...outcome }
+    })
+    return { status: caseOutcomes.some(item => item.status === 'failed') ? 'failed'
+      : mode === 'real' ? 'pending-independent-oracle-review' : 'passed', caseOutcomes }
+  }
+  if (currentScenario.attemptPolicy.shortOutline) {
+    const projected = []
+    for (const result of results) {
+      if (result.status !== 'passed' || !Array.isArray(result.attempts) || !Array.isArray(result.ownerTerminal))
+        return fail('CANDIDATE_OPERATION_MISSING')
+      const draft = result.operations?.find(operation => operation.kind === 'draft')
+      if (draft) {
+        const attempts = result.attempts.filter(attempt => attempt.binding.operation === draft.operation)
+        const failure = validatePairedReceipt({ ...result, attempts, operations: [draft],
+          ownerTerminal: result.ownerTerminal.filter(item => attempts.some(attempt => attempt.binding.actual.attemptId === item.attemptId)),
+          physicalModelRequests: mode === 'real' ? attempts.length : 0, syntheticDispatches: mode === 'synthetic' ? attempts.length : 0 },
+        { mode, arm: 'candidate', phase: 'c16-c18', scenario: { ...currentScenario, caseId: result.caseId,
+          operations: currentScenario.operations.filter(operation => operation.id === draft.operation), evaluationPolicy: null,
+          attemptPolicy: { ...currentScenario.attemptPolicy, operationId: null } },
+          protocolRevision: result.protocolRevision, protocolHash: result.protocolHash })
+        if (failure) return fail(failure)
+      }
+      const outlines = result.attempts.filter(attempt => attempt.binding.actual?.purpose === 'chapter-draft-short-outline')
+      if (!draft && outlines.length) return fail('UNREGISTERED_SHORT_OUTLINE')
+      projected.push({ ...result, attempts: result.attempts.filter(attempt => !outlines.includes(attempt)),
+        ownerTerminal: result.ownerTerminal.filter(item => !outlines.some(attempt => attempt.binding.actual.attemptId === item.attemptId)),
+        physicalModelRequests: result.physicalModelRequests - (mode === 'real' ? outlines.length : 0),
+        syntheticDispatches: result.syntheticDispatches - (mode === 'synthetic' ? outlines.length : 0) })
+    }
+    return validateContinuityCore(projected, mode, currentScenario, scope)
+  }
+  return validateContinuityCore(results, mode, currentScenario)
+}
+function validateContinuityCore(results, mode, currentScenario, scope = null) {
   const fail = code => ({ status: 'failed', candidateFailure: code })
   const condense = PHASE_SCENARIOS['c16-c18'].attemptPolicy.draftCondense
-  if (results.length !== 7 || results.some(result => result.status !== 'passed' || result.arm !== 'candidate'
+  const expectedCaseIds = scope?.caseIds ?? PHASE_SCENARIOS['c16-c18'].caseIds
+  if (results.length !== expectedCaseIds.length || results.some(result => result.status !== 'passed' || result.arm !== 'candidate'
     || result.phase !== 'c16-c18' || result.mode !== mode)) return fail('CANDIDATE_OPERATION_MISSING')
-  if (results.some(result => stableEvidence(result.evaluationPolicy) !== stableEvidence(AI_REVIEW_FINAL_MANUSCRIPT_POLICY)
+  if (results.some(result => stableEvidence(result.evaluationPolicy) !== stableEvidence(currentScenario.evaluationPolicy)
     || result.invocationId !== results[0].invocationId || result.protocolHash !== results[0].protocolHash)) return fail('AI_MANUSCRIPT_POLICY_MISMATCH')
-  if (stableEvidence(results.map(result => result.caseId)) !== stableEvidence(PHASE_SCENARIOS['c16-c18'].caseIds)) return fail('CANDIDATE_CASE_MISMATCH')
-  const source = results[0].physicalProject?.projectId
-  if (!source || results.slice(0, 3).some(result => result.physicalProject?.projectId !== source)) return fail('FINALIZATION_EFFECT_MISSING')
+  if (stableEvidence(results.map(result => result.caseId)) !== stableEvidence(expectedCaseIds)) return fail('CANDIDATE_CASE_MISMATCH')
+  const source = scope ? scope.sourceProjectId : results[0].physicalProject?.projectId
+  if (!source || results.filter(result => result.caseId.startsWith('C16')).some(result => result.physicalProject?.projectId !== source)) return fail('FINALIZATION_EFFECT_MISSING')
   // 有定稿后处理 operation 的案例（C16 三案与 C17-B）逐案核对正式效果与来源绑定。
   for (const result of results.filter(item => continuityCaseOperations(item.caseId).some(operation => ['chapter_notes', 'character_cards'].includes(operation.kind)))) {
     const failure = finalizationEvidenceBound(result)
     if (failure) return fail(failure)
   }
-  for (const [index, result] of results.entries()) {
+  for (const result of results) {
+    const index = PHASE_SCENARIOS['c16-c18'].caseIds.indexOf(result.caseId)
     const expected = continuityCaseOperations(result.caseId).filter(item => !['refine', 'final-review'].includes(item.kind) || result.aiReviewedDraft?.selectedCount > 0)
     if (stableEvidence(result.operations?.map(item => item.operation)) !== stableEvidence(expected.map(item => item.id))) return fail('CANDIDATE_OPERATION_MISMATCH')
     if (!Array.isArray(result.attempts) || !Array.isArray(result.ownerTerminal)
@@ -2567,9 +2776,12 @@ export function validateCandidateContinuityResults(results, mode) {
       if (failure) return fail(failure)
     }
   }
-  if (new Set(results.slice(3).map(result => result.physicalProject.projectId)).size !== 4) return fail('RESTORE_IDENTITY_MISMATCH')
-  if (!authorProtectionSatisfied(results[1], mode) || !results[1].sourceReplacement || !results[2].sourceReplacement
-    || !results[4].restoration.sourceReplacement || results[6].restoration.branchGenerationIds?.length !== 2)
+  const restored = results.filter(result => !result.caseId.startsWith('C16'))
+  if (new Set(restored.map(result => result.physicalProject.projectId)).size !== restored.length) return fail('RESTORE_IDENTITY_MISMATCH')
+  if (results.some(result => result.caseId === 'C16-B' && (!authorProtectionSatisfied(result, mode) || !result.sourceReplacement)
+    || result.caseId === 'C16-C' && !result.sourceReplacement
+    || result.caseId === 'C17-B' && !result.restoration.sourceReplacement
+    || result.caseId === 'C18-B' && result.restoration.branchGenerationIds?.length !== 2))
     return fail('CONTINUITY_CASE_EVIDENCE_MISSING')
   return { status: mode === 'real' ? 'pending-independent-oracle-review' : 'passed' }
 }

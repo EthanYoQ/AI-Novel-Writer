@@ -230,6 +230,12 @@ export function renderHumanConfirmedReviewBrief(
   const appliedItems = snapshot.items.filter(item => item.decision === 'apply')
   const sections: string[] = []
 
+  if (appliedItems.some(item => item.origin === 'ai')) {
+    sections.push(writingLanguageText(writingLanguage,
+      '【AI 意见边界】选择 AI 意见只授权处理问题，不把建议中的替换事实变成作者事实。先核对作者材料、前驱和正文；错误或无依据的改法不得照抄。作者亲写要求另行标注。',
+      '[AI suggestion boundary] Selecting an AI finding authorizes addressing the issue; proposed replacement facts do not become author facts. Check author material, predecessor and manuscript first; do not copy an incorrect or unsupported remedy. Author-written requests are labeled separately.'))
+  }
+
   if (appliedItems.some(item => item.severity === 'unknown')) {
     sections.push(writingLanguageText(
       writingLanguage,
@@ -253,7 +259,9 @@ export function renderHumanConfirmedReviewBrief(
               `\n  Source excerpt: ${item.quote.trim()}`,
             )
           : ''
-        return `${index + 1}. [${item.category} / ${item.severity}] ${item.description}${quote}`
+        const origin = writingLanguageText(writingLanguage,
+          item.origin === 'author' ? '作者亲写' : 'AI 意见', item.origin === 'author' ? 'Author-written' : 'AI suggestion')
+        return `${index + 1}. [${item.category} / ${item.severity}] [${origin}] ${item.description}${quote}`
       }),
     ].join('\n'))
   }

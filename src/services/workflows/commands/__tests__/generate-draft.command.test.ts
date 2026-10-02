@@ -25,6 +25,7 @@ import type {
 import { EN_US_BUILTIN_PROMPTS } from '../../../prompt-language'
 import { BUILTIN_PROMPTS, clearProjectCustomPrompts } from '../../../prompt-templates'
 import { composeDraftVisibleContinuation, DRAFT_VISIBLE_TEXT_VERSION } from '../../../../shared/draft-visible-text'
+import { stripDraftShortOutlineBlock } from '../../../../shared/draft-short-outline'
 import { parseDraftReconciliation, renderDraftReconciliationBlock } from '../../../../shared/draft-reconciliation'
 import { appendVisibleTextContinuation } from '../../bounded-completion'
 import {
@@ -268,12 +269,13 @@ function fakeRuntime(
 ) {
   let attempt = 0
   const reconcile = vi.fn(async (task: GenerationTask) => reconcileAttempt(task))
+  const outline = vi.fn(async (_task: GenerationTask) => outcome('目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。', 'stop'))
   const complete = vi.fn(async (task: GenerationTask, options?: { signal?: AbortSignal }) => {
     attempt += 1
     return completeAttempt(attempt, task, options)
   })
   const routed = async (task: GenerationTask, options?: { signal?: AbortSignal }) => task.purpose === 'chapter-draft-reconcile'
-    ? reconcile(task) : complete(task, options)
+    ? reconcile(task) : task.purpose === 'chapter-draft-short-outline' ? outline(task) : complete(task, options)
   const execute = vi.fn(async (operation: (scope: GenerationRuntimeScope) => Promise<unknown>) => operation({
     session: {
       budget: {
@@ -289,7 +291,7 @@ function fakeRuntime(
   const runtime = { execute, close } as unknown as GenerationRuntime
   const createRuntime = vi.fn<GenerateDraftCommandDependencies['createRuntime']>()
     .mockResolvedValue(runtime)
-  return { complete, reconcile, execute, close, createRuntime }
+  return { complete, reconcile, outline, execute, close, createRuntime }
 }
 
 function fakeOutcomes(...outcomes: GenerationOutcome[]) {
@@ -642,6 +644,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     f.invoke.mockImplementation(async (channel, ...args) => {
       if (channel === 'generation:begin' || channel === 'generation:read') return view
       if (channel === 'generation:execute') {
+        if ((args[0] as { task: GenerationTask }).task.purpose === 'chapter-draft-short-outline')
+          return { outcome: outcome('目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。', 'stop'), run: view }
         if (edit) useProjectStore.setState(state => ({ currentProject: { ...state.currentProject!,
           novelConfig: { ...state.currentProject!.novelConfig, worldSetting: '作者刚补写的世界设定' } } }))
         const result = outcome(raw, 'stop')
@@ -661,7 +665,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       expect(f.callbacks.replaceText).toHaveBeenLastCalledWith(text)
     } else await expect(f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })).resolves.toBe(text)
     expect(legacy.createRuntime).not.toHaveBeenCalled()
-    expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:execute')).toHaveLength(1)
+    expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:execute')).toHaveLength(2)
     expect(f.invoke.mock.calls.some(([channel]) => channel === 'db:draft-create' || channel === 'db:draft-next-version' || channel === 'db:recovery-candidate-record')).toBe(false)
   })
 
@@ -680,6 +684,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     f.invoke.mockImplementation(async (channel, ...args) => {
       if (channel === 'generation:begin' || channel === 'generation:read') return view
       if (channel === 'generation:execute') {
+        if ((args[0] as { task: GenerationTask }).task.purpose === 'chapter-draft-short-outline')
+          return { outcome: outcome('目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。', 'stop'), run: view }
         const condense = (args[0] as { task: GenerationTask }).task.purpose === 'chapter-draft-condense'
         const text = condense ? condensed : draft
         const result = outcome(text, 'stop')
@@ -705,7 +711,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(legacy.createRuntime).not.toHaveBeenCalled()
     expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:compose-visible').map(([, , ids]) => ids))
       .toEqual([['原片'], ['原片', '压缩片']])
-    expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:execute')).toHaveLength(2)
+    expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:execute')).toHaveLength(3)
     expect(f.invoke.mock.calls.some(([channel]) => channel === 'db:draft-create' || channel === 'db:recovery-candidate-record')).toBe(false)
   })
 
@@ -745,6 +751,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     f.invoke.mockImplementation(async (channel, ...args) => {
       if (channel === 'generation:begin' || channel === 'generation:read') return view
       if (channel === 'generation:execute') {
+        if ((args[0] as { task: GenerationTask }).task.purpose === 'chapter-draft-short-outline')
+          return { outcome: outcome('目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。', 'stop'), run: view }
         const result = outcome(text, 'stop')
         result.receipt.visibleArtifact = {
           artifactId: '超长正文片',
@@ -775,7 +783,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const executed = f.invoke.mock.calls.filter(([channel]) => channel === 'generation:execute')
     // 新 run 直接生成正文，唯一压缩仍使用同一 run。
     expect(executed.map(([, request]) => (request as { task: GenerationTask }).task.purpose))
-      .toEqual(['chapter-draft', 'chapter-draft-condense'])
+      .toEqual(['chapter-draft-short-outline', 'chapter-draft', 'chapter-draft-condense'])
     expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:compose-visible')).toHaveLength(1)
     expect(f.invoke).toHaveBeenCalledWith('generation:pause', handle, f.context.projectSession)
     expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:commit-draft')).toBe(false)
@@ -808,6 +816,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         lastCompositionFinishReason: finishReason, attemptedPurposes: ['chapter-draft'],
         ...(state === 'saved-ack-lost' ? { savedDraft: { success: true, id: 18, version: 1, content: expected, contentHash: hash(expected) } } : {}) }
       if (channel === 'generation:execute') {
+        if ((args[0] as { task: GenerationTask }).task.purpose === 'chapter-draft-short-outline')
+          return { outcome: outcome('目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。', 'stop'), run: view }
         expect((args[0] as { task: GenerationTask }).task.purpose).toBe('chapter-draft-continuation')
         const result = outcome(addition, 'stop')
         result.receipt.visibleArtifact = { artifactId: '续片', attemptId: '续请求', revision: 1, textHash: hash(addition) }
@@ -861,6 +871,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         // 首稿发出时未带注入块：主进程不再提供对账结果，续写与首稿保持一致。
         draftReconciliation: { artifactIds: ['对账片'], completedOutput: withoutBlock ? null : recorded } }
       if (channel === 'generation:execute') {
+        if ((args[0] as { task: GenerationTask }).task.purpose === 'chapter-draft-short-outline')
+          return { outcome: outcome('目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。', 'stop'), run: view }
         const task = (args[0] as { task: GenerationTask }).task
         executed.push(task)
         const text = task.purpose === 'chapter-draft' ? initial : addition
@@ -910,6 +922,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         composition: { algorithm: 'draft-visible-v1', text: seed, textHash: hash(seed), artifactIds: ['原片'], sources: [] },
         lastCompositionFinishReason: 'stop', attemptedPurposes: attempted }
       if (channel === 'generation:execute') {
+        if ((args[0] as { task: GenerationTask }).task.purpose === 'chapter-draft-short-outline')
+          return { outcome: outcome('目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。', 'stop'), run: view }
         expect((args[0] as { task: GenerationTask }).task.purpose).toBe('chapter-draft-condense')
         expect((args[0] as { task: GenerationTask }).task.messages.at(-1)!.content).toContain(`【待压缩正文】\n${seed}`)
         const result = outcome(condensed, 'stop')
@@ -977,6 +991,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         composition: null, lastCompositionFinishReason: scenario.finishReason, attemptedPurposes: ['chapter-draft'] }
       if (channel === 'generation:read') return view
       if (channel === 'generation:execute') {
+        if ((args[0] as { task: GenerationTask }).task.purpose === 'chapter-draft-short-outline')
+          return { outcome: outcome('目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。', 'stop'), run: view }
         expect((args[0] as { handle: MainGenerationRunHandle }).handle).toEqual(handle)
         const result = outcome(text, 'stop')
         result.receipt.visibleArtifact = { artifactId: '重试正文片', attemptId: '重试物理请求', revision: 1, textHash: hash(text) }
@@ -1012,6 +1028,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     f.invoke.mockImplementation(async (channel, ...args) => {
       if (channel === 'generation:begin' || channel === 'generation:read') return view
       if (channel === 'generation:execute') {
+        if ((args[0] as { task: GenerationTask }).task.purpose === 'chapter-draft-short-outline')
+          return { outcome: outcome('目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。', 'stop'), run: view }
         purposes.push((args[0] as { task: GenerationTask }).task.purpose)
         const raw = fragments[attempt]
         const result = outcome(raw, attempt === 2 ? 'stop' : 'length')
@@ -1448,6 +1466,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     let call = 0
     const receipt = leaseReceipt()
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>(async () => {
+      if (completeWithLease.mock.calls.length === 1) return { content: '本章短细纲。', finishReason: 'stop' }
       call += 1
       if (call === 1) {
         selectedModelId = 'model-b'
@@ -1473,12 +1492,14 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(environment.snapshotDefaultModelId).toHaveBeenCalledOnce()
     expect(environment.beginModelExecution).toHaveBeenCalledOnce()
     expect(environment.beginModelExecution).toHaveBeenCalledWith('model-a')
-    expect(completeWithLease).toHaveBeenCalledTimes(2)
+    expect(completeWithLease).toHaveBeenCalledTimes(3)
     expect(completeWithLease.mock.calls.map(([request]) => request.leaseId)).toEqual([
+      'draft-lease-a',
       'draft-lease-a',
       'draft-lease-a',
     ])
     expect(completeWithLease.mock.calls.map(([request]) => request.plan.maxOutputTokens)).toEqual([
+      8192,
       8192,
       8192,
     ])
@@ -1607,7 +1628,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(decision?.included.map(item => item.sourceId)).toContain('author:required')
     expect(decision?.included.map(item => item.sourceId)).toContain('finalized:41')
     const prompt = observedTask?.messages.find(message => message.role === 'user')?.content ?? ''
-    expect(decision?.promptHash).toBe(createHash('sha256').update(prompt).digest('hex'))
+    expect(decision?.promptHash).toBe(createHash('sha256').update(stripDraftShortOutlineBlock(prompt, '目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。')!).digest('hex'))
     expect(prompt).toContain('【定稿原文 · 第1章 · draft 41】')
     expect(prompt).toContain('上一章定稿结尾哨兵。')
     // 脱敏：收据只是编号、原因码与数字，没有任何材料正文。
@@ -2426,7 +2447,76 @@ ${headingPrefix}第3章：潮门
     expect(continuationTask!.messages[1]!.content).toContain(continuationTail)
   })
 
-  describe('new runs draft directly from author and finalized material', () => {
+  describe('automatic short outline', () => {
+    it.each(['before-prose', 'after-prose', 'changed-prompt', 'missing-task'] as const)('resumes with the original outline and prompt identity: %s', async state => {
+      const hash = (text: string) => createHash('sha256').update(text).digest('hex')
+      const planningRuntime = fakeOutcomes(outcome('潮'.repeat(900), 'stop'))
+      const initial = setup({ runtime: planningRuntime, wordsTarget: 900 })
+      await initial.command.execute({ step: {}, context: initial.context, callbacks: initial.callbacks })
+      const initialTask = structuredClone(planningRuntime.complete.mock.calls[0]![0])
+      if (state === 'changed-prompt') initialTask.messages[1]!.content += '不同的原始提示'
+      const handle: MainGenerationRunHandle = { projectId: 'generation-runtime', epoch: 'lease-generation-runtime', rootActionId: 'outline-root', runId: 'outline-run' }
+      const f = setup({ runtime: fakeOutcomes(), mainDefault: true, resumeHandle: handle, wordsTarget: 900 })
+      f.context.generationModelId = '合成模型'
+      const before = state === 'before-prose'
+      const seed = '潮'.repeat(500), addition = '灯'.repeat(400)
+      const expected = before ? '潮'.repeat(900) : composeDraftVisibleContinuation(seed, addition)
+      const view: MainGenerationRunView = { handle, status: 'running', nonReplayable: false, artifacts: [],
+        budget: { maxAttempts: 32, maxRequestedOutputTokens: 2000000, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: Date.now() + 3600000 } }
+      const original = f.invoke.getMockImplementation()!
+      const executed: GenerationTask[] = []
+      f.invoke.mockImplementation(async (channel, ...args) => {
+        if (channel === 'generation:read') return view
+        if (channel === 'generation:read-context') return { handle, operation: 'chapter-draft', chapterNumber: 1,
+          authorInputs: planningRuntime.createRuntime.mock.calls[0]![1]!.selection.authorInputs,
+          selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1, 2, 3, 4, 5, 6],
+          knowledgeSnapshot: { version: 1, state: 'empty', storageState: 'absent', query: '第一章 开端', topK: 5, canonicalRevision: null, documentsRevision: null, items: [] },
+          composition: before ? null : { algorithm: 'draft-visible-v1', text: seed, textHash: hash(seed), artifactIds: ['original'], sources: [] },
+          lastCompositionFinishReason: before ? null : 'length',
+          attemptedPurposes: before ? ['chapter-draft-short-outline'] : ['chapter-draft-short-outline', 'chapter-draft'],
+          draftShortOutline: { artifactIds: ['outline'], completedOutput: '目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。',
+            promptHash: planningRuntime.createRuntime.mock.calls[0]![1]!.selection.materialDecision!.shortOutlinePromptHash,
+            ...(!before && state !== 'missing-task' ? { initialDraftTask: initialTask } : {}) } }
+        if (channel === 'generation:execute') {
+          const task = (args[0] as { task: GenerationTask }).task
+          executed.push(task)
+          const text = before ? expected : addition
+          const result = outcome(text, 'stop')
+          result.receipt.visibleArtifact = { artifactId: 'new', attemptId: 'new-attempt', revision: 1, textHash: hash(text) }
+          return { outcome: result, run: view }
+        }
+        if (channel === 'generation:compose-visible') return { algorithm: 'draft-visible-v1', artifactIds: args[1], text: expected, textHash: hash(expected), sources: [] }
+        if (channel === 'generation:commit-draft') return { success: true, id: 18, version: 1, content: expected, contentHash: hash(expected) }
+        return original(channel, ...args)
+      })
+      if (state === 'changed-prompt' || state === 'missing-task') {
+        await expect(f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })).rejects.toThrow('GENERATION_DRAFT_SHORT_OUTLINE_IDENTITY_CHANGED')
+        expect(executed).toHaveLength(0)
+      } else {
+        await expect(f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })).resolves.toBe(expected)
+        expect(executed.map(task => task.purpose)).toEqual([before ? 'chapter-draft' : 'chapter-draft-continuation'])
+        expect(executed[0]!.messages.at(-1)!.content).toContain('行动与结果：本章读完信')
+      }
+    })
+    it('consumes one outline before drafting and continuing under the same runtime', async () => {
+      const runtime = fakeOutcomes(outcome('初'.repeat(100), 'length'), outcome('续'.repeat(400), 'stop'))
+      const f = setup({ runtime, wordsTarget: 500 })
+      await f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
+      expect(runtime.outline).toHaveBeenCalledTimes(1)
+      expect(runtime.createRuntime).toHaveBeenCalledTimes(1)
+      for (const [task] of runtime.complete.mock.calls) expect(task.messages.at(-1)!.content).toContain('行动与结果：本章读完信')
+    })
+    it('fails the outline explicitly without drafting or saving its text as prose', async () => {
+      const runtime = fakeOutcomes(outcome('正文'.repeat(250), 'stop'))
+      runtime.outline.mockResolvedValue(outcome('未完成的计划', 'length'))
+      const f = setup({ runtime, wordsTarget: 500 })
+      await expect(f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })).rejects.toThrow('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
+      expect(runtime.complete).not.toHaveBeenCalled()
+      expect(f.invoke.mock.calls.some(([channel]) => channel === 'db:draft-create' || channel === 'db:recovery-candidate-record')).toBe(false)
+    })
+  })
+
+  describe('new runs draft from author and finalized material plus a short outline', () => {
     it.each(['zh-CN', 'en-US'] as const)('starts with the %s draft and preserves required material through continuation', async writingLanguage => {
       const runtime = fakeRuntime(attempt => attempt === 1 ? outcome('初'.repeat(100), 'length', 1) : outcome(`${'续'.repeat(400)}。`, 'stop', 2),
         () => { throw new Error('new runs must not ask for generated planning') })
@@ -2453,7 +2543,7 @@ ${headingPrefix}第3章：潮门
       const initial = runtime.complete.mock.calls[0]![0].messages.at(-1)!.content
       const decision = runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision
       expect(decision?.reconciliationPromptHash).toBeUndefined()
-      expect(decision?.promptHash).toBe(createHash('sha256').update(initial).digest('hex'))
+      expect(decision?.promptHash).toBe(createHash('sha256').update(stripDraftShortOutlineBlock(initial, '目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。')!).digest('hex'))
     })
 
     it.each(['zh-CN', 'en-US'] as const)('preserves %s source and requirements in the single condense request without generated planning', async writingLanguage => {
@@ -3138,7 +3228,7 @@ ${headingPrefix}第3章：潮门
 
     await expect(command.execute({ step: {}, context, callbacks })).resolves.toContain('正文')
 
-    expect(completeWithLease).toHaveBeenCalledOnce()
+    expect(completeWithLease).toHaveBeenCalledTimes(2)
     const physicalRequest = completeWithLease.mock.calls[0]![0]
     const promptChars = physicalRequest.messages.reduce((sum, message) => sum + message.content.length, 0)
     expect(promptChars).toBeGreaterThan(30_000)

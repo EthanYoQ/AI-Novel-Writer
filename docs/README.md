@@ -26,14 +26,15 @@
 - [`0020-legacy-project-copy-import.md`](adr/0020-legacy-project-copy-import.md) 将旧小说兼容改为保留原件的完整项目导入，禁止 AI 重建或覆盖既有设定；取代旧根退役/永久拒写要求。[现行 F05](research/novel-quality-modernization/frontend-transition-specs.md#f05--最终-v3-功能及桌面体验资格) 同时拥有新版编辑交互验收，旧版性能基线不再阻断新版。
 - [现行字数标准](research/novel-quality-modernization/quality-protocol.md#现行字数标准) 自 2026-09-20 起将冻结规格中的 ±20% 取代为 ±30%；旧规格与实验回执保留原字节和历史结论。
 - [AI 自主审稿与成稿资格](research/novel-quality-modernization/quality-protocol.md#ai-review-final-manuscript) 自 2026-10-01 获用户批准：未来写作资格同时验 AI 自主发现和审修后的最终稿，取代部分首稿直接终点与人工补题路线。机器接线和真实资格另行验证，历史结果不改判。
+- [线程 10 交付计划](research/novel-quality-modernization/thread10-delivery-plan.md) 自 2026-10-02 拥有材料补齐、自动短细纲、有界模型筛选及 candidate-only 多轮资格，取代单轮七案全绿前置、必需双臂和旧 Pro 唯一下一实验。它是生效要求，新增能力与机器协议待实现；冻结旧文与旧协议限制保留为历史和实现差距，不能否决新要求，也不能冒充新资格就绪。
 
 ## Program v3 开发入口
 
 1. [全部 34 项现行 Spec 索引](research/novel-quality-modernization/current-spec-index.md)：开发及代码审查的统一入口，逐项连接原合同和现行替代；原 Spec 的 NOT STARTED 不代表当前进度。
-2. [当前实施计划](research/novel-quality-modernization/frontend-transition-plan.md)与[现行变更规格](research/novel-quality-modernization/frontend-transition-specs.md)：核心收尾、V3 接入与最终资格的依赖和出口。审计结论只覆盖各自日期的合同；实际进度读唯一私有当前检查点。
+2. [线程 10 交付计划](research/novel-quality-modernization/thread10-delivery-plan.md)是本次产品增量、采样裁决和实施顺序的唯一 owner；[总实施计划](research/novel-quality-modernization/frontend-transition-plan.md)与[现行变更规格](research/novel-quality-modernization/frontend-transition-specs.md)保留 V3、导入、平台和发布出口。审计结论只覆盖各自日期的合同；实际进度读唯一私有当前检查点。
 3. [交付 delta](research/novel-quality-modernization/delivery-contract-delta-2026-09-21.md)：明确替代冻结合同哪些条款；[执行规则](agents/delivery.md)管理 Skills、调试和审查。
 4. [冻结 Program v3](plans/novel-quality-program-v3-2026-09-13/00-START-HERE.md)：34 节点原合同与未被替代的核心要求；其 DAG/NOT STARTED 不代表当前调度或状态。
-5. [实施证据索引](research/novel-quality-modernization/evidence-index.md)与[质量协议](research/novel-quality-modernization/quality-protocol.md)：历史证据与现行实验规则分开，历史 PASS 不自动成为新前端资格。
+5. [实施证据索引](research/novel-quality-modernization/evidence-index.md)与[质量协议](research/novel-quality-modernization/quality-protocol.md)：保存历史证据、机器接线说明与实现差距；新资格规则引用线程 10，旧 CLI 和历史 PASS 不自动成为新资格。
 
 本机续开发快照使用 `docs/handoffs/` 下日期化文件；包含本机路径或未公开证据的文件默认仅供本地接管，不作为公共导航的必需依赖。公开提交前单独脱敏并核对链接。
 

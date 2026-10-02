@@ -11,7 +11,7 @@ import {
   selectReviewRevisionMaterials,
   type ReviewRevisionMaterial,
 } from '../chapter-materials'
-import type { MaterialDecisionDraft } from '../../../shared/generation-owner-contract'
+import { MATERIAL_DECISION_MAX_INPUT_UNITS, type MaterialDecisionDraft } from '../../../shared/generation-owner-contract'
 import type { ReviewMaterialIdentity } from '../../../shared/review-revision-generation'
 
 /** S10B-1a：该接缝现在需要项目身份并额外返回差异清单，测试里用固定身份。 */
@@ -982,10 +982,10 @@ describe('审稿/修稿入口的共享准入（selectReviewRevisionMaterials）'
     expect(admission.selection.decision).toBe('ready')
   })
 
-  it('fails explicitly（与写稿路径同一错误码）when required material alone exceeds the capacity', () => {
+  it('fails explicitly when required material alone exceeds the shared 8MiB safety bound', () => {
     let error: unknown
     try {
-      select([material('finalized:1', hash('a'), '长'.repeat(7_000), { required: true })])
+      select([material('finalized:1', hash('a'), 'a'.repeat(MATERIAL_DECISION_MAX_INPUT_UNITS + 1), { required: true })])
     } catch (cause) { error = cause }
     expect(error).toBeInstanceOf(ChapterMaterialCapacityError)
     expect((error as ChapterMaterialCapacityError).code).toBe('CHAPTER_MATERIAL_CAPACITY_CONFLICT')
@@ -994,6 +994,25 @@ describe('审稿/修稿入口的共享准入（selectReviewRevisionMaterials）'
       blockingSourceId: 'finalized:1',
       blockingReason: 'budget',
     })
+  })
+
+  it('admits required text above the local ceiling without admitting optional history above its remaining allowance', () => {
+    const required = '长'.repeat(9_000)
+    const admission = select([
+      material('finalized:1', hash('a'), required, { required: true }),
+      material('finalized:2', hash('b'), '可选历史'),
+    ], 8_000)
+    expect(admission.admitted.map(item => item.text)).toEqual([required])
+    expect(admission.decision.capacity).toMatchObject({ maxInputUnits: MATERIAL_DECISION_MAX_INPUT_UNITS, admittedUnits: 27_000 })
+    expect(admission.selection.omissions).toContainEqual(expect.objectContaining({ sourceId: 'finalized:2', reason: 'budget' }))
+
+    const bounded = select([
+      material('finalized:1', hash('a'), '前'.repeat(6_000), { required: true }),
+      material('finalized:2', hash('b'), '小'.repeat(1_000)),
+      material('finalized:3', hash('c'), '大'.repeat(1_500)),
+    ], 8_000)
+    expect(bounded.admitted.map(item => item.identity.sourceId)).toEqual(['finalized:1', 'finalized:2'])
+    expect(bounded.selection.omissions).toContainEqual(expect.objectContaining({ sourceId: 'finalized:3', reason: 'budget' }))
   })
 
   it('lets optional material compete for the budget while the required anchor survives', () => {
@@ -1222,7 +1241,7 @@ describe('材料准入的脱敏收据（MaterialDecisionReceipt）', () => {
     expect(admission.decision).toEqual({
       version: 1,
       verdict: 'admitted',
-      capacity: { maxInputUnits: 18_000, methodVersion: 'utf8-bytes-v1', admittedUnits: 0 },
+      capacity: { maxInputUnits: MATERIAL_DECISION_MAX_INPUT_UNITS, methodVersion: 'utf8-bytes-v1', admittedUnits: 0 },
       coverage: { required: 0, included: 0, complete: true },
       included: [],
       omitted: [],

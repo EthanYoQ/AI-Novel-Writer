@@ -1,5 +1,6 @@
 import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, DRAFT_VISIBLE_TEXT_VERSION } from '../../../shared/draft-visible-text'
 import { DRAFT_RECONCILE_PURPOSE, draftReconciliationBlock } from '../../../shared/draft-reconciliation'
+import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlinePrompt, draftShortOutlineBlock } from '../../../shared/draft-short-outline'
 export { sanitizeDraftText } from '../../../shared/draft-visible-text'
 import { createWorkflowMainGenerationRuntime, type WorkflowMainGenerationRequest } from '../workflow-main-generation'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
@@ -7,6 +8,7 @@ import { formatResourceUri } from '../../../shared/project-paths'
 import {
   BaseWorkflowCommand,
   injectWritingSkillIntoSession,
+  injectWritingSkillIntoTask,
   type CommandExecuteParams,
   type LLMCompletion,
 } from './base-command'
@@ -217,7 +219,7 @@ function createDraftStreamPreview(
 }
 
 export const DRAFT_GENERATION_BUDGET = Object.freeze({
-  maxAttempts: 8,
+  maxAttempts: 9,
   maxRequestedOutputTokens: 32_768,
   maxRequestedOutputTokensPerAttempt: 8192,
   deadlineMs: 20 * 60_000,
@@ -831,7 +833,11 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       .filter(Boolean)
       .join('\n\n')
     const prompt = composeInitialPrompt('')
-    const materialDecision = { ...chapterMaterials.decision, promptHash: await hashAuthorText(prompt) }
+    const outlinePrompt = draftShortOutlinePrompt(writingLanguage, prompt)
+    const withSkill = (content: string) => injectWritingSkillIntoTask({ purpose: 'chapter-draft', output: 'visible-text',
+      messages: [{ role: 'user', content }] }, context, 'drafting').task.messages[0]!.content
+    const materialDecision = { ...chapterMaterials.decision, promptHash: await hashAuthorText(withSkill(prompt)),
+      ...(!this.resumeHandle ? { shortOutlinePromptHash: await hashAuthorText(withSkill(outlinePrompt)) } : {}) }
     const previousEnding = chapterMaterials.previousEnding
 
     callbacks.log(uiText(
@@ -842,6 +848,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     let alreadySaved = false
     let draftPersisted = false
     let recoverableDraftCandidate = ''
+    let planning = true
     const workflowStepId = step && typeof step === 'object' && 'id' in step && typeof step.id === 'string'
       ? step.id
       : 'generate-draft'
@@ -852,9 +859,12 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       let cleanDraftText: string
       let acknowledgedPreview = ''
       // 对账输出不是正文：对账请求进行期间不把它的快照显示到写作面板。
-      const mainCallbacks = callbacks.replaceText ? { ...callbacks,
-        replaceText: (text: string) => { callbacks.replaceText?.(composeDraftVisibleContinuation(acknowledgedPreview, text)) },
-      } : callbacks
+      const mainCallbacks = { ...callbacks,
+        appendText: (text: string) => { if (!planning) callbacks.appendText(text) },
+        ...(callbacks.replaceText ? { replaceText: (text: string) => {
+          if (!planning) callbacks.replaceText?.(composeDraftVisibleContinuation(acknowledgedPreview, text))
+        } } : {}),
+      }
       try {
         const generationModelId = workflowGenerationModelId(context)
         const priorSave = this.resumeHandle
@@ -892,7 +902,9 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             ? await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: context.mainGenerationRunHandle! })
             : null
           if (this.resumeHandle && !mainOwned) throw new Error('GENERATION_DRAFT_LEGACY_RESUME_REFUSED')
-          const reconciliationArtifactIds = new Set(recovery?.draftReconciliation?.artifactIds ?? [])
+          const reconciliationArtifactIds = new Set([...(recovery?.draftReconciliation?.artifactIds ?? []), ...(recovery?.draftShortOutline?.artifactIds ?? [])])
+          const outlinedOnly = !!recovery?.draftShortOutline?.completedOutput && !recovery.composition
+            && recovery.attemptedPurposes.every(purpose => purpose === DRAFT_SHORT_OUTLINE_PURPOSE)
           // 对账已完成而首稿尚未发出（如进程在两者之间中断）：沿用记录的对账结果直接生成首稿。
           const reconciledOnly = !!recovery && !recovery.composition && !recovery.savedDraft && recovery.attemptedPurposes.length > 0
             && recovery.attemptedPurposes.every(purpose => purpose === DRAFT_RECONCILE_PURPOSE)
@@ -909,7 +921,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             && !failedBatchView.unsavedTails?.some(tail => tail.text.trim())
           if (recovery && (recovery.operation !== 'chapter-draft'
             || recovery.chapterNumber !== this.chapterInfo.chapterNumber
-            || !retryFailedBatch && !reconciledOnly && (!recovery.composition || recovery.composition.algorithm !== DRAFT_VISIBLE_TEXT_VERSION
+            || !retryFailedBatch && !reconciledOnly && !outlinedOnly && (!recovery.composition || recovery.composition.algorithm !== DRAFT_VISIBLE_TEXT_VERSION
               || !['stop', 'length'].includes(recovery.lastCompositionFinishReason ?? ''))))
             throw new Error('GENERATION_DRAFT_RECOVERY_EVIDENCE_REQUIRED')
           const expectedInputs = [{ id: 'draft:chapter-info', text: JSON.stringify(writerChapterInfo) },
@@ -947,7 +959,29 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             ))
           }
           const recordedReconciliation = recovery?.draftReconciliation?.completedOutput
-          const reconciliationBlock = recordedReconciliation ? draftReconciliationBlock(writingLanguage, recordedReconciliation) : ''
+          let shortOutline = recovery?.draftShortOutline?.completedOutput ?? ''
+          if (!recovery) {
+            callbacks.log(uiText('生成短细纲...', 'Generating a short chapter outline...'))
+            const outlined = await draftingSession.complete({ purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text',
+              reasoningStage: 'planning', budgetDemand: { kind: 'draft-units', writingLanguage, requestedUnits: 500, segmentable: false },
+              messages: [{ role: 'user', content: outlinePrompt }] }, { signal: cancellation.signal })
+            if (outlined.status !== 'completed' || outlined.finishReason !== 'stop' || !outlined.content.trim())
+              throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
+            shortOutline = outlined.content
+            logDraftAttempt(callbacks, context, { zhCN: '短细纲', enUS: 'Short outline' }, outlined.receipt)
+          }
+          if (recovery?.draftShortOutline && !shortOutline) throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
+          const reconciliationBlock = [recordedReconciliation ? draftReconciliationBlock(writingLanguage, recordedReconciliation) : '',
+            shortOutline ? draftShortOutlineBlock(writingLanguage, shortOutline) : ''].filter(Boolean).join('\n\n')
+          const initialPrompt = shortOutline ? `${prompt}\n\n${draftShortOutlineBlock(writingLanguage, shortOutline)}`
+            : composeInitialPrompt(reconciliationBlock)
+          const originalDraftTask = recovery?.draftShortOutline?.initialDraftTask
+          if (recovery?.draftShortOutline && (recovery.draftShortOutline.promptHash !== await hashAuthorText(withSkill(outlinePrompt))
+            || recovery.attemptedPurposes.includes('chapter-draft') && !originalDraftTask
+            || originalDraftTask && (originalDraftTask.messages.find(message => message.role === 'user')?.content !== withSkill(initialPrompt)
+              || originalDraftTask.messages.find(message => message.role === 'system')?.content !== systemRole)))
+            throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_IDENTITY_CHANGED')
+          planning = false
           this.assertNotCancelled(context)
           callbacks.setProgress(10)
           const preview = createDraftStreamPreview(
@@ -972,7 +1006,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
                 output: 'visible-text',
                 messages: [
                   { role: 'system', content: systemRole },
-                  { role: 'user', content: composeInitialPrompt(reconciliationBlock) },
+                  { role: 'user', content: initialPrompt },
                 ],
               }, {
                 signal: cancellation.signal,
