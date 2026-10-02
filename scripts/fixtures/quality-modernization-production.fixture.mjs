@@ -10,7 +10,7 @@ import { updateLedger, CAMPAIGN_ID, ROOT, forwardReasoningFor, forwardQualificat
 import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, createOperationDispatchGate,
   createOutboundPreflightAssert, assertForwardReasoning, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
   fetchProviderResponse, measurePromptBytes, qualificationBridgeWindows, streamEventStructure,
-  POST_UI_REVIEW_POLICY, reviewedDraftSelection, R3_NATIVE_REVISION_DIAGNOSTIC, readR3NativeSource, BOUNDED_REVISION_DIAGNOSTIC,
+  POST_UI_REVIEW_POLICY, reviewedDraftSelection, R3_NATIVE_REVISION_DIAGNOSTIC, r3ModelForOperation, modelConfigurationHash, readR3NativeSource, BOUNDED_REVISION_DIAGNOSTIC,
   AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, aiReviewFinalManuscriptSelection, productionScenario, loadBaselineReviewContract,
   readBoundedRevisionSource, assertBoundedRevisionSource, boundedRevisionItems,
   scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder,
@@ -241,7 +241,7 @@ test('isolated production commands persist the selected phase operations', async
     request.phase, request.milestone)
   assert.deepEqual(request.forwardQualificationWindow ?? null, registeredWindow, 'FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH')
   const windows = qualificationBridgeWindows(request)
-  const effectiveModelParameters = { ...source.modelParameters,
+  let effectiveModelParameters = { ...source.modelParameters,
     ...(registeredForward ? { ...registeredForward.model, endpointHost: new URL(registeredForward.model.baseUrl).host } : {}),
     ...(separatedRun ? { temperature: diagnosticRegistration.model.temperature } : {}) }
   const continuityCase = continuityRun ? source.continuityQualificationCases.find(item => item.id === request.caseId) : null
@@ -410,6 +410,18 @@ test('isolated production commands persist the selected phase operations', async
       apiKey: 'synthetic-quality-never-network', baseUrl: `https://${effectiveModelParameters.endpointHost}/v1`, purposes: ['generation'] }
     delete model.parameterStatus
     if (request.forwardReasoning || diagnosticRun) model.reasoningOverride = diagnosticRun ? diagnosticRegistration.model.reasoningOverride : request.forwardReasoning.reasoningOverride
+    let r3Models = null
+    if (r3Run) {
+      assert.deepEqual(target.r3StageProfiles, copiedPolicy.profiles, 'R3_NATIVE_MODEL_MISMATCH')
+      const configured = request.mode === 'real' ? json(path.join(target.roots.config, 'models.json'))
+        : Object.values(copiedPolicy.profiles).map(profile => ({ ...profile.model, apiKey: 'synthetic-quality-never-network' }))
+      r3Models = Object.fromEntries(Object.entries(copiedPolicy.profiles).map(([key, profile]) => {
+        const selected = configured.find(value => value.id === profile.profileId)
+        assert.ok(selected?.apiKey && modelConfigurationHash(selected) === profile.configurationHash, 'R3_NATIVE_MODEL_MISMATCH')
+        return [key, selected]
+      }))
+      model = r3Models.flash
+    }
     if (request.mode === 'real') {
       if (request.development || !target.modelId) throw new Error('FROZEN_SAFE_MODEL_REQUIRED')
       model = json(path.join(target.roots.config, 'models.json')).find(value => value.id === target.modelId)
@@ -419,7 +431,7 @@ test('isolated production commands persist the selected phase operations', async
       assert.equal(new URL(model.baseUrl).host, effectiveModelParameters.endpointHost)
     } else if (request.mode !== 'synthetic') throw new Error('INVALID_PROVIDER_MODE')
     if (request.action === 'prepare' && request.mode === 'synthetic') {
-      save(path.join(target.roots.config, 'models.json'), [model])
+      save(path.join(target.roots.config, 'models.json'), r3Models ? Object.values(r3Models) : [model])
       save(path.join(target.roots.config, 'config.json'), { theme: 'dark', locale: 'zh-CN' })
     }
     const llm = (await load('electron/controllers/llm-controller.ts')).registerLLMController()
@@ -682,7 +694,7 @@ test('isolated production commands persist the selected phase operations', async
       baselineSha: templateSource.baselineSha,
       guidanceHash: sha(source.template), templates: physicalTemplates.map(template => ({ key: template.key,
         templateHash: sha(template), contentHash: sha(template.content) })) }
-    const actualModel = (await invoke('llm:list-models')).find(value => value.id === model.id)
+    let actualModel = (await invoke('llm:list-models')).find(value => value.id === model.id)
     assert.ok(actualModel)
     const actualCreativeStrategy = candidate
       ? db.prepare("SELECT creative_strategy FROM project_core WHERE id='main'").pluck().get()
@@ -695,14 +707,14 @@ test('isolated production commands persist the selected phase operations', async
         model: Object.fromEntries(['provider', 'protocol', 'baseUrl', 'modelName', 'temperature', 'maxTokens']
           .map(key => [key, actualModel[key]])) }
     }
-    const reasoningResolution = request.forwardReasoning && candidate
+    let reasoningResolution = request.forwardReasoning && candidate
       ? (await load('src/shared/reasoning-policy.ts')).resolveReasoningPolicy({ model: actualModel,
         creativeStrategy: actualCreativeStrategy, stage: 'general' }) : null
     const safeModel = Object.fromEntries(['provider', 'protocol', 'modelName', 'temperature', 'maxTokens', 'baseUrl'].map(key => [key, actualModel[key]]))
     const authorBlueprints = db.prepare('SELECT chapter_number,title,role,purpose,key_events,characters,user_guidance FROM blueprints WHERE chapter_number>1 ORDER BY chapter_number').all()
     const skillBindings = await (await load('src/services/agent/writing-skill-bindings.ts')).loadWritingSkillBindings(session)
     assert.deepEqual(skillBindings.bindings, {}, 'UNREGISTERED_WRITING_SKILL')
-    sourceParity = { core, authorBlueprints, model: safeModel, templates: physicalTemplates, skills: skillBindings.bindings,
+    sourceParity = { core, authorBlueprints, model: safeModel, ...(r3Run ? { stageProfiles: copiedPolicy.profiles } : {}), templates: physicalTemplates, skills: skillBindings.bindings,
       predecessors: parityPredecessors(predecessorReadbacks),
       semanticHash: sha(source), guidanceHash: sha(source.template) }
     if (fullRun) {
@@ -922,7 +934,7 @@ test('isolated production commands persist the selected phase operations', async
       let forwardReasoningEvidence = null
       if (request.forwardReasoning) {
         try { forwardReasoningEvidence = assertForwardReasoning(request.forwardReasoning, { arm: target.arm,
-          phase: request.phase, milestone: request.milestone, caseId: request.caseId, model: actualModel,
+          phase: request.phase, milestone: request.milestone, caseId: request.caseId, model: actualModel, operationId,
           creativeStrategy: actualCreativeStrategy, resolution: reasoningResolution, body }) }
         catch (error) { preflight(false, error.message) }
       }
@@ -939,7 +951,17 @@ test('isolated production commands persist the selected phase operations', async
       if (candidate) {
         actual = selectOwnerDispatch(db, currentContext.mainGenerationRunHandle, session, body)
         const run = db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').get(actual.runId)
-        materialDecision = JSON.parse(run.binding_json).sourceManifest?.materialDecision ?? null
+        const manifest = JSON.parse(run.binding_json).sourceManifest
+        materialDecision = manifest?.materialDecision ?? null
+        if (r3Run) {
+          const profile = r3ModelForOperation(operationId)
+          const configured = json(path.join(target.roots.config, 'models.json')).find(value => value.id === profile.profileId)
+          preflight(modelConfigurationHash(configured) === profile.configurationHash, 'R3_NATIVE_MODEL_CONFIGURATION_DRIFT')
+          const expected = (await load('electron/services/model-execution-lease.ts')).createModelExecutionLeaseReceipt(configured,
+            { leaseId: 'diagnostic-readback', createdAt: 0, expiresAt: 1 })
+          for (const key of ['modelId', 'modelName', 'modelRevision', 'provider', 'protocol', 'endpointFingerprint'])
+            preflight(manifest.modelReceipt?.[key] === expected[key], 'R3_NATIVE_OWNER_MODEL_MISMATCH')
+        }
         if (!['directory', 'chapter_notes', 'character_cards', 'diagnostic'].includes(operationKind)) preflight(materialDecision, 'MATERIAL_DECISION_RECEIPT_MISSING')
       }
       const observedIpc = candidate ? null : pendingBaselineIpc
@@ -1124,6 +1146,7 @@ test('isolated production commands persist the selected phase operations', async
         ...(separatedRun ? { diagnosticId: request.diagnosticId, diagnosticInputHash: request.diagnosticInputHash,
           ...Object.fromEntries(['sourceId', 'role', 'originalInvocationId', 'originalTestedSha', 'contentSha256', 'contextHash', 'materialsSha256', 'messagesSha256']
             .map(key => [key, diagnosticSlot[key]])) } : {}),
+        ...(r3Run ? { stageModel: { profileId: r3ModelForOperation(operationId).profileId, configurationHash: r3ModelForOperation(operationId).configurationHash } } : {}),
         ...(copiedRun ? { diagnosticSourceHash: sha(copiedPolicy.source), diagnosticInputHash: boundedSource.inputHash } : {}),
         ...(aiReviewRun ? { evaluationPolicyHash: sha(request.evaluationPolicy) } : {}),
         ...(actual ? { actual } : { baselineIpc: observedIpc }) }
@@ -1414,6 +1437,16 @@ test('isolated production commands persist the selected phase operations', async
     for (const operation of request.operations) {
       operationKind = operation.kind
       operationId = operation.id
+      if (r3Run) {
+        const profile = r3ModelForOperation(operationId)
+        model = r3Models[copiedPolicy.operationProfiles[operationId]]
+        actualModel = (await invoke('llm:list-models')).find(value => value.id === profile.profileId)
+        assertForwardReasoning(request.forwardReasoning, { arm: target.arm, phase: request.phase, milestone: request.milestone,
+          caseId: request.caseId, operationId, model: actualModel, creativeStrategy: actualCreativeStrategy })
+        reasoningResolution = (await load('src/shared/reasoning-policy.ts')).resolveReasoningPolicy({ model: actualModel,
+          creativeStrategy: actualCreativeStrategy, stage: 'general' })
+        effectiveModelParameters = { ...profile.model, endpointHost: new URL(profile.model.baseUrl).host }
+      }
       if (reviewedRun && ['refine', 'final-review'].includes(operationKind) && reviewedDraft.selectedCount === 0) continue
       if (aiReviewedDraft && ['refine', 'final-review'].includes(operationKind) && aiReviewedDraft.selectedCount === 0) continue
       const acceptedPrevious = ['draft', 'review', 'final-review'].includes(operationKind) ? await readAcceptedPredecessor() : null

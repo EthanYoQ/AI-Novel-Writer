@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import os from 'node:os'
 import { runProductionCommandProbe, runProductionPhasePair, runProductionBridge, copyIsolatedRealModelConfig,
-  assertSharedInputDiagnostic, R3_NATIVE_REVISION_DIAGNOSTIC, readR3NativeSource, BOUNDED_REVISION_DIAGNOSTIC, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, POST_UI_AI_REVIEW_SCENARIOS, FULL_AI_REVIEW_SCENARIO, readBoundedRevisionSource,
+  assertSharedInputDiagnostic, R3_NATIVE_REVISION_DIAGNOSTIC, r3ModelForOperation, readR3NativeSource, BOUNDED_REVISION_DIAGNOSTIC, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, POST_UI_AI_REVIEW_SCENARIOS, FULL_AI_REVIEW_SCENARIO, readBoundedRevisionSource,
   productionBridgeHash, productionExecutionRuntime, productionScenario, PRODUCTION_BRIDGE, PHASE_SCENARIOS,
   validateCandidateContinuityResults, fullExecutionSchedule, validatePairedReceipt, validateFullAcceptedPredecessor, modelConfigurationHash, executionRecordIdentity } from './quality-modernization-driver.mjs'
 
@@ -150,6 +150,8 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
   if (binding.arm === 'candidate' && (!binding.actual || ['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch']
     .some(key => typeof binding.actual[key] !== 'string' || !binding.actual[key]))) fail('ACTUAL_OWNER_ATTEMPT_REQUIRED')
   if (binding.phase === 'r3-native-revision-diagnostic') {
+    const profile = r3ModelForOperation(binding.operation)
+    if (binding.stageModel?.profileId !== profile.profileId || binding.stageModel?.configurationHash !== profile.configurationHash) fail('R3_NATIVE_MODEL_MISMATCH')
     if (binding.diagnosticInputHash !== R3_NATIVE_REVISION_DIAGNOSTIC.source.contextSha256
       || binding.diagnosticSourceHash !== hash(R3_NATIVE_REVISION_DIAGNOSTIC.source)
       || binding.actual?.projectId === R3_NATIVE_REVISION_DIAGNOSTIC.source.projectId
@@ -252,7 +254,8 @@ export function validatePhysicalLedger(file) {
   const r09ad48e1 = validateHistoricalSupersessionBoundary(raw, d021261f, protocol.historicalC1609ad48e1Boundary)
   const separated = validateHistoricalSupersessionBoundary(raw, r09ad48e1, protocol.historicalSeparatedReviewB89b011aBoundary)
   const postUi83573613 = validateHistoricalSupersessionBoundary(raw, separated, protocol.historicalPostUi83573613Boundary)
-  validateHistoricalSupersessionBoundary(raw, postUi83573613, protocol.historicalR3NativeD12c4111Boundary)
+  const r3Native = validateHistoricalSupersessionBoundary(raw, postUi83573613, protocol.historicalR3NativeD12c4111Boundary)
+  validateHistoricalSupersessionBoundary(raw, r3Native, protocol.historicalR3ClosedCce6f01aBoundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -404,7 +407,7 @@ export function selectPhase(protocol, phase, milestone = 'early') {
 export function forwardReasoningFor(protocol, phase, milestone) {
   if (phase === 'r3-native-revision-diagnostic') {
     const selected = selectPhase(protocol, phase, milestone)
-    return { revision: selected.scenarioRevision, model: selected.model, reasoningOverride: 'medium', creativeStrategy: 'auto',
+    return { revision: selected.scenarioRevision, model: selected.model, reasoningOverride: selected.model.reasoningOverride, creativeStrategy: 'auto',
       scopes: [{ phase, milestone, caseIds: selected.caseIds }] }
   }
   const registration = protocol.forwardReasoningExperiment
@@ -541,7 +544,10 @@ export function inspectTarget(target) {
   return { repositoryRoot, sourceHash, roots, driver }
 }
 
-export function createProductionTargets(baselineRoot, output, { development = false, modelId } = {}) {
+export function createProductionTargets(baselineRoot, output, { development = false, modelId, phase, modelSources } = {}) {
+  const r3 = phase === 'r3-native-revision-diagnostic'
+  if (phase && !r3 || modelSources && !r3 || r3 && !development && !modelSources) fail('R3_NATIVE_MODEL_SOURCES_REQUIRED')
+  if (r3 && !development) git(ROOT, ['merge-base', '--is-ancestor', R3_NATIVE_REVISION_DIAGNOSTIC.requiredProductSha, 'HEAD'])
   const outputPath = path.resolve(output)
   if (!inside(CACHE, path.dirname(outputPath))) fail('TARGET_OUTPUT_NOT_NEW_PRIVATE_FILE')
   fs.mkdirSync(path.dirname(outputPath), { recursive: true })
@@ -569,7 +575,21 @@ export function createProductionTargets(baselineRoot, output, { development = fa
       sourceHash: hashSourceTree(repositoryRoot), executionToolsHash: hashExecutionTools(repositoryRoot), runnerAdapterHash: runnerAdapterHash(),
       isolationRoot, roots, fixture: { path: fixturePath, format: fixture.format, semanticHash: fixture.semanticHash, parametersHash: fixture.parametersHash },
       driver: { kind: 'production-command-physical-project-v2', adapterRoot: ROOT, path: PRODUCTION_BRIDGE, sha256: productionBridgeHash() },
-      ...(modelId ? { modelId } : {}), ...(development ? { developmentOnly: true } : {}) }
+      ...(r3 ? { modelId: R3_NATIVE_REVISION_DIAGNOSTIC.model.id, r3StageProfiles: R3_NATIVE_REVISION_DIAGNOSTIC.profiles } : modelId ? { modelId } : {}), ...(development ? { developmentOnly: true } : {}) }
+    if (r3 && !development) {
+      if (modelId && modelId !== target.modelId) fail('R3_NATIVE_MODEL_MISMATCH')
+      const profiles = Object.values(target.r3StageProfiles).map(profile => {
+        const source = modelSources[profile.profileId]
+        if (!source || !path.isAbsolute(source.sourceRoot) || source.profileId !== profile.profileId
+          || source.configurationHash !== profile.configurationHash) fail('R3_NATIVE_MODEL_MISMATCH')
+        const model = read(path.join(real(source.sourceRoot), 'c', 'c', 'models.json')).find(value => value.id === profile.profileId)
+        if (!model?.apiKey || modelConfigurationHash(model) !== profile.configurationHash) fail('R3_NATIVE_MODEL_MISMATCH')
+        return model
+      })
+      target.r3ModelSources = structuredClone(modelSources)
+      fs.writeFileSync(path.join(roots.config, 'models.json'), JSON.stringify(profiles), { mode: 0o600 })
+      fs.writeFileSync(path.join(roots.config, 'config.json'), JSON.stringify({ locale: 'zh-CN' }))
+    }
     if (arm === 'candidate') target.subjectSha = target.codeSha
     target.environment = freezeProductionEnvironment(target); target.startup = fixedStartup(target)
     if (!development) inspectTarget(target)
@@ -828,6 +848,10 @@ export function updateLedger(file, event, options = {}) {
         ? protocol.historicalR3NativeD12c4111Boundary : options.historicalR3NativeD12c4111Boundary
       const trustedR3NativeEvents = r3NativeBoundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedPostUi83573613Events, r3NativeBoundary) : trustedPostUi83573613Events
+      const r3ClosedBoundary = options.campaignMode === 'real'
+        ? protocol.historicalR3ClosedCce6f01aBoundary : options.historicalR3ClosedCce6f01aBoundary
+      const trustedR3ClosedEvents = r3ClosedBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedR3NativeEvents, r3ClosedBoundary) : trustedR3NativeEvents
       // 阶段决定首选分配桶：early 阶段用 early*，post-UI 重跑用 postUi*；
       // 同一 slot 的重复发送或已超出计划样本量的发送归入失败/修复余量。
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
@@ -853,16 +877,20 @@ export function updateLedger(file, event, options = {}) {
           return 'nonQualificationDiagnostic'
         }
         if (binding.phase === 'r3-native-revision-diagnostic') {
-          const replacementOf = R3_NATIVE_REVISION_DIAGNOSTIC.replacementOf
-          if (binding.invocationId === replacementOf) fail('R3_NATIVE_ATTEMPT_UNAVAILABLE')
-          // Only this authenticated historical invocation is outside the new registration.
+          const closed = R3_NATIVE_REVISION_DIAGNOSTIC.closedInvocations
+          if (closed.includes(binding.invocationId)) fail('R3_NATIVE_ATTEMPT_UNAVAILABLE')
           const prior = [...reserved.values()].filter(row => row.binding.phase === binding.phase
-            && !(r3NativeBoundary && trustedR3NativeEvents > trustedPostUi83573613Events
-              && row.binding.invocationId === replacementOf
-              && r3NativeBoundary.reserveAttempts.some(item => item.attemptId === row.attemptId)))
+            && ![r3NativeBoundary, r3ClosedBoundary].some(boundary => boundary
+              && closed.includes(row.binding.invocationId)
+              && boundary.reserveAttempts.some(item => item.attemptId === row.attemptId)))
           const matches = prior.filter(row => row.binding.operation === binding.operation)
           const operations = R3_NATIVE_REVISION_DIAGNOSTIC.operations
           const index = operations.findIndex(item => item.id === binding.operation)
+          const firstReview = prior.find(row => row.binding.operation === operations[0].id)
+          if (firstReview && (binding.actual.projectId !== firstReview.binding.actual.projectId
+            || binding.actual.epoch !== firstReview.binding.actual.epoch
+            || (index < 2 ? binding.actual.rootActionId !== firstReview.binding.actual.rootActionId
+              : binding.actual.rootActionId === firstReview.binding.actual.rootActionId))) fail('R3_NATIVE_ROOT_MISMATCH')
           if (prior.length >= R3_NATIVE_REVISION_DIAGNOSTIC.maxPhysicalRequests
             || prior.some(row => ['invocationId', 'codeSha', 'sourceHash', 'driverHash', 'diagnosticInputHash']
               .some(key => row.binding[key] !== binding[key]))
@@ -903,7 +931,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedR3NativeEvents
+          const superseded = index >= trustedHistoricalEvents && index < trustedR3ClosedEvents
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)
@@ -1101,13 +1129,13 @@ export function adjudicateCandidateBatch(batchPath, reviewsPath) {
 
 export function main(argv) {
   let [command = 'help', ...rest] = argv
-  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <register-batch|adjudicate-batch|freeze-targets|development-synthetic|shared-input-diagnostic|separated-review-diagnostic|baseline-probe|dry-run|early-budget|early-context|early-review|full|c16-c18> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>] [--batch <registered batch.json> --round 1|2|3 (real final only)]; register-batch: --targets <frozen targets> --output <new private batch.json>; adjudicate-batch: --batch <batch.json> --reviews <two independent case reviews.json>; shared-input-diagnostic/separated-review-diagnostic: --diagnostic-input <frozen private JSON> --mode synthetic|real [--targets <frozen targets> | --baseline-root <baseline> --output <new private targets>] ; freeze-targets/development-synthetic: --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full|c16-c18 (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
+  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <register-batch|adjudicate-batch|freeze-targets|development-synthetic|shared-input-diagnostic|separated-review-diagnostic|baseline-probe|dry-run|early-budget|early-context|early-review|full|c16-c18> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>] [--batch <registered batch.json> --round 1|2|3 (real final only)]; register-batch: --targets <frozen targets> --output <new private batch.json>; adjudicate-batch: --batch <batch.json> --reviews <two independent case reviews.json>; shared-input-diagnostic/separated-review-diagnostic: --diagnostic-input <frozen private JSON> --mode synthetic|real [--targets <frozen targets> | --baseline-root <baseline> --output <new private targets>] ; R3 freeze-targets: --phase r3-native-revision-diagnostic --diagnostic-models <private profile source roots.json> --output <new private targets>; r3-native-revision-diagnostic: --targets <frozen targets> --milestone diagnostic --diagnostic-input <frozen R3.context.json> --mode real --physical-ledger <canonical ledger>; freeze-targets/development-synthetic: --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full|c16-c18 (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
   if (command.startsWith('--')) { rest = argv; command = 'phase-options' }
   const args = {}
   for (let i = 0; i < rest.length; i++) {
     const key = rest[i]
     if (key === '--dry-run') { if (args[key]) fail('INVALID_ARGUMENT'); args[key] = true; continue }
-    if (!['--targets', '--milestone', '--mode', '--baseline-root', '--output', '--model-id', '--protocol', '--phase', '--scenario', '--physical-ledger', '--diagnostic-input', '--batch', '--round', '--reviews'].includes(key) || !rest[i + 1] || args[key]) fail('INVALID_ARGUMENT')
+    if (!['--targets', '--milestone', '--mode', '--baseline-root', '--output', '--model-id', '--protocol', '--phase', '--scenario', '--physical-ledger', '--diagnostic-input', '--diagnostic-models', '--batch', '--round', '--reviews'].includes(key) || !rest[i + 1] || args[key]) fail('INVALID_ARGUMENT')
     args[key] = rest[++i]
   }
   if (command === 'phase-options') command = args['--phase'] || fail('INVALID_PHASE')
@@ -1194,7 +1222,8 @@ export function main(argv) {
   if (['freeze-targets', 'development-synthetic'].includes(command)) {
     if (protocol.decisionRevision !== CANDIDATE_ONLY_PROTOCOL_REVISION && !args['--baseline-root'] || !args['--output'] || args['--mode'] === 'real') fail('TARGET_PREPARATION_ARGUMENTS_REQUIRED')
     if (command === 'freeze-targets' && args['--scenario']) fail('INVALID_ARGUMENT')
-    const prepared = createProductionTargets(args['--baseline-root'], args['--output'], { development: command === 'development-synthetic', modelId: args['--model-id'] })
+    const prepared = createProductionTargets(args['--baseline-root'], args['--output'], { development: command === 'development-synthetic', modelId: args['--model-id'], phase: args['--phase'] ?? (args['--scenario'] === 'r3-native-revision-diagnostic' ? args['--scenario'] : undefined),
+      modelSources: args['--diagnostic-models'] ? read(real(args['--diagnostic-models'])) : undefined })
     if (command === 'freeze-targets') return prepared
     // 零模型开发路径只跑已登记的场景；默认仍是 early-budget，逐字保持原有行为。
     // 它永远只产出 development-only-unfrozen 收据，不构成冻结目标资格。

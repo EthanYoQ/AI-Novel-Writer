@@ -970,6 +970,82 @@
     },
     "limits": "Preserve the original UNKNOWN. One registered replacement invocation only; no automatic retry after another UNKNOWN."
   },
+  "historicalR3ClosedCce6f01aBoundary": {
+    "fromEventCount": 1596,
+    "eventCount": 1626,
+    "rawBytesSha256": "b76386bce14bf17faa33ea520fee1ffb4060fa0e51547ce142ab8dc7c3131f72",
+    "protocolRevision": "s14b-candidate-only-three-rounds-v1",
+    "protocolHash": "e08ec98568e14feee7052aa1b9c60b4d08dd9ac59130c9f17a58d82ab0699d01",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "cce6f01a0c46f5f810513d4a7cfc293326dae809",
+        "sourceHash": "5cc38462579937c9a54fa35fe924673f73846b1e22feda28d95994100f235e14",
+        "driverHash": "a550c32e000034267c6f245244e7bd85fb9349b650540f173bc68550bf0a6995"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:fa4113b0-7437-417b-a7b2-246901d94258",
+        "invocationId": "5d9f3a04-7111-4151-9323-55ec2d1141a6",
+        "terminal": "settle",
+        "parityId": "f949a741088fa19051227a843d504f13919d0fc92b2eb7999c210794a836d363"
+      },
+      {
+        "attemptId": "candidate:06eebbd7-6036-4d88-8858-ef9ad1d1942a",
+        "invocationId": "c7b0d3e2-f00e-414a-a90a-1fb7b2f40f56",
+        "terminal": "settle",
+        "parityId": "016f8d164b4ede8d2be0a578e1a524fc5a519f132dcb9b286ee69485fc136e76"
+      },
+      {
+        "attemptId": "candidate:92c53361-057a-4b52-92b5-e32534084a51",
+        "invocationId": "c7b0d3e2-f00e-414a-a90a-1fb7b2f40f56",
+        "terminal": "settle",
+        "parityId": "016f8d164b4ede8d2be0a578e1a524fc5a519f132dcb9b286ee69485fc136e76"
+      },
+      {
+        "attemptId": "candidate:fd9f7d35-5253-4d24-9a36-a645912c44ce",
+        "invocationId": "c7b0d3e2-f00e-414a-a90a-1fb7b2f40f56",
+        "terminal": "settle",
+        "parityId": "016f8d164b4ede8d2be0a578e1a524fc5a519f132dcb9b286ee69485fc136e76"
+      },
+      {
+        "attemptId": "candidate:98ca68ee-7340-40a7-a29c-444c6faca2af",
+        "invocationId": "c7b0d3e2-f00e-414a-a90a-1fb7b2f40f56",
+        "terminal": "settle",
+        "parityId": "016f8d164b4ede8d2be0a578e1a524fc5a519f132dcb9b286ee69485fc136e76"
+      },
+      {
+        "attemptId": "candidate:21e4a899-afbb-47e6-9f99-0b3e100b6271",
+        "invocationId": "c7b0d3e2-f00e-414a-a90a-1fb7b2f40f56",
+        "terminal": "settle",
+        "parityId": "016f8d164b4ede8d2be0a578e1a524fc5a519f132dcb9b286ee69485fc136e76"
+      },
+      {
+        "attemptId": "candidate:0824c2d0-f50a-43ca-88eb-810040edba81",
+        "invocationId": "c7b0d3e2-f00e-414a-a90a-1fb7b2f40f56",
+        "terminal": "settle",
+        "parityId": "016f8d164b4ede8d2be0a578e1a524fc5a519f132dcb9b286ee69485fc136e76"
+      },
+      {
+        "attemptId": "candidate:f70f3da2-43c0-45fe-aefc-c394b873dc36",
+        "invocationId": "f7b7160b-b8f4-474e-9c05-d30fe6bf0ae7",
+        "terminal": "settle",
+        "parityId": "9710b7f7044f4831f770ec1aea01da7b6f15367b3a44aaff49aaa88912290c66"
+      },
+      {
+        "attemptId": "candidate:3dbe6af4-c55c-431d-b0e2-50c1d677ad4d",
+        "invocationId": "f7b7160b-b8f4-474e-9c05-d30fe6bf0ae7",
+        "terminal": "settle",
+        "parityId": "9710b7f7044f4831f770ec1aea01da7b6f15367b3a44aaff49aaa88912290c66"
+      },
+      {
+        "attemptId": "candidate:3ff90d2e-c209-462b-8b77-89466366219d",
+        "invocationId": "f7b7160b-b8f4-474e-9c05-d30fe6bf0ae7",
+        "terminal": "settle",
+        "parityId": "9710b7f7044f4831f770ec1aea01da7b6f15367b3a44aaff49aaa88912290c66"
+      }
+    ]
+  },
   "phases": {
     "r3-native-revision-diagnostic": {
       "caseId": "R3",
@@ -983,18 +1059,31 @@
         "candidate"
       ],
       "nonQualification": true,
-      "scenarioRevision": "r3-native-revision-diagnostic-v1",
-      "replacementOf": "d12c4111-285e-41a7-8bcc-4b7f9afd0681",
+      "scenarioRevision": "r3-native-flash-qwen-flash-v2",
       "minPhysicalRequests": 3,
       "maxPhysicalRequests": 8,
       "model": {
+        "id": "33eb8a3a-614d-49be-8b1a-6d6d451d9c6d",
+        "name": "硅基流动",
         "provider": "openai",
         "protocol": "openai",
+        "modelName": "deepseek-ai/DeepSeek-V4-Flash",
         "baseUrl": "https://api.siliconflow.cn/v1",
-        "modelName": "Qwen/Qwen3.8-27B",
         "temperature": 0,
         "maxTokens": 16384,
-        "reasoningOverride": "medium"
+        "purposes": [
+          "generation",
+          "refinement",
+          "summary"
+        ],
+        "capabilities": {
+          "contextWindowTokens": null,
+          "maxOutputTokens": 16384,
+          "reasoning": false,
+          "structuredOutput": false,
+          "usage": false
+        },
+        "reasoningOverride": "high"
       },
       "source": {
         "projectId": "efc9b59a-a9f8-4223-8c1c-add48b21d579",
@@ -1069,6 +1158,65 @@
           "manuscriptMinimum": 1,
           "manuscriptMaximum": 8
         }
+      },
+      "closedInvocations": [
+        "d12c4111-285e-41a7-8bcc-4b7f9afd0681",
+        "5d9f3a04-7111-4151-9323-55ec2d1141a6"
+      ],
+      "requiredProductSha": "6d5c631f35a6e2c864937958c43200cb5af446bf",
+      "profiles": {
+        "flash": {
+          "profileId": "33eb8a3a-614d-49be-8b1a-6d6d451d9c6d",
+          "configurationHash": "da1ec991888099953d636ebff28a3883b59c2b86298098cb5b4e9cbc336e466c",
+          "model": {
+            "id": "33eb8a3a-614d-49be-8b1a-6d6d451d9c6d",
+            "name": "硅基流动",
+            "provider": "openai",
+            "protocol": "openai",
+            "modelName": "deepseek-ai/DeepSeek-V4-Flash",
+            "baseUrl": "https://api.siliconflow.cn/v1",
+            "temperature": 0,
+            "maxTokens": 16384,
+            "purposes": [
+              "generation",
+              "refinement",
+              "summary"
+            ],
+            "capabilities": {
+              "contextWindowTokens": null,
+              "maxOutputTokens": 16384,
+              "reasoning": false,
+              "structuredOutput": false,
+              "usage": false
+            },
+            "reasoningOverride": "high"
+          }
+        },
+        "qwen": {
+          "profileId": "fa609022-5583-4825-a532-1ef787433626",
+          "configurationHash": "4d75f9769c9d7c56d582c109444c11f96a899be99fe401ad14132d4055e461bb",
+          "model": {
+            "id": "fa609022-5583-4825-a532-1ef787433626",
+            "name": "R3 Qwen native diagnostic",
+            "provider": "openai",
+            "protocol": "openai",
+            "modelName": "Qwen/Qwen3.8-27B",
+            "baseUrl": "https://api.siliconflow.cn/v1",
+            "temperature": 0,
+            "maxTokens": 16384,
+            "purposes": [
+              "generation",
+              "refinement",
+              "summary"
+            ],
+            "reasoningOverride": "medium"
+          }
+        }
+      },
+      "operationProfiles": {
+        "R3普通首审": "flash",
+        "R3一次修稿": "qwen",
+        "R3普通末审": "flash"
       }
     },
     "separated-review-diagnostic": {

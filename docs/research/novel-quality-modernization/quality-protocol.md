@@ -482,4 +482,44 @@ N 只计算桥的外层兜底，不增加任何 dispatch 权限：C16-A/B/C 的 
 
 首次 invocation `d12c4111-285e-41a7-8bcc-4b7f9afd0681` 保留 UNKNOWN。首审无可见正文，也没有 `finish_reason`。原生费用已按可信用量 4577 结算，不能据此认定正文完成。`historicalR3NativeD12c4111Boundary` 只认证原1596行及身份，不改账本或结果。
 
-`replacementOf` 登记一次后续检查，沿用原案例、提示及模型参数。只排除已认证旧 invocation 的占用；新 invocation 最多八次，第三次执行仍拒绝。通用兼容修复后重新冻结候选，不挪用旧源码身份。末尾 SSE 仅留结构和结束字段，不存思考正文。成功后结束本项检查；再次同类 UNKNOWN 时停止无变化重发，按具体证据定位。
+历史 `replacementOf` 曾登记一次后续检查，沿用原案例、提示及模型参数。只排除已认证旧 invocation 的占用；新 invocation 最多八次，第三次执行仍拒绝。通用兼容修复后重新冻结候选，不挪用旧源码身份。末尾 SSE 仅留结构和结束字段，不存思考正文。成功后结束本项检查；再次同类 UNKNOWN 时停止无变化重发，按具体证据定位。
+
+
+当前前向登记为 `r3-native-flash-qwen-flash-v2`。
+前两次登记已结束，不复用其额度。
+历史1626行按原始字节与逐次身份认证。
+账本前缀 SHA256：
+`b76386bce14bf17faa33ea520fee1ffb4060fa0e51547ce142ab8dc7c3131f72`。
+修稿选模产品基线为 `6d5c631f35a6e2c864937958c43200cb5af446bf`。
+冻结候选必须包含该提交。
+
+首审和末审固定使用 DeepSeek-V4-Flash high。
+修稿固定使用 Qwen3.8-27B medium。
+两者均为 temperature 0、max_tokens 16384。
+逐阶段绑定 profile ID 和非秘密配置 hash。
+逐请求核对实际选模、配置及推理参数。
+来源根仅放私有输入及冻结 targets。
+同 ID 的其他来源配置不能替代。
+不在网络层临时替换模型。
+
+首审按现有规则确认全部可采纳意见。
+保留原顺序，不按案例关键词挑选。
+首审与修稿沿用同一累计预算 root。
+普通末审按产品设计新建 root。
+正常三次，最多为 2 + 4 + 2 次。
+附加请求仅限合法格式重建和 LENGTH 续写。
+同阶段恢复保持原 profile 和预算。
+无可采纳意见、UNKNOWN 或来源漂移即停。
+保存失败或达到物理上限也立即停止。
+末审为终点，不追加第二轮修稿。
+本登记仅允许一个新 invocation。
+
+私有模型输入按 profile ID 索引。
+每项含 sourceRoot、profileId、configurationHash。
+sourceRoot 指向原隔离根，其配置位于 c/c。
+冻结及执行沿用以下入口：
+
+```text
+node scripts/quality-modernization-run.mjs freeze-targets --phase r3-native-revision-diagnostic --diagnostic-models <private-model-sources.json> --output <new-targets.json>
+node scripts/quality-modernization-run.mjs r3-native-revision-diagnostic --targets <new-targets.json> --milestone diagnostic --diagnostic-input <original-R3.context.json> --mode real --physical-ledger <canonical-ledger.jsonl>
+```
