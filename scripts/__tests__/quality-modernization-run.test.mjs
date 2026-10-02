@@ -6739,6 +6739,7 @@ test('full 收据负例：baseline 压缩、第二次压缩、仍越界、保存
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
+// 99 次真实持久化更新需要集成测试时限；本项验证记账合同，不是性能合同。
 test('full 预算：压缩 attempt 与首稿同 slot，计入失败/重试/修复余量；候选 9 章全压缩最坏 +9，不改计划分配', () => {
   const dir = postUiEvidenceDir('full-condense-budget-')
   try {
@@ -6775,7 +6776,7 @@ test('full 预算：压缩 attempt 与首稿同 slot，计入失败/重试/修�
     assert.equal(Object.values(protocol.allocation).reduce((sum, value) => sum + value, 0), protocol.plannedCallAllocation)
     assert.equal(protocol.plannedCallAllocation, 80)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
-})
+}, 10_000)
 
 test('full 压缩的 fixture 接线（行为）：登记只对候选臂取到，首稿证据取 owner artifact 原文 hash，并与 driver 门禁联通', () => {
   const dir = postUiEvidenceDir('full-condense-wiring-')
