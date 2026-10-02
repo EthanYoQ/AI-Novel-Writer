@@ -136,7 +136,8 @@ test('post-UI baseline uses its native review projection, persisted AI-only conf
       const target = path.join(repositoryRoot, file.path)
       fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, file.content, { flag: 'wx' })
     }
-    const load = file => import(pathToFileURL(path.join(repositoryRoot, file)).href)
+    // Match relative imports so Vitest shares one frozen database module instance.
+    const load = file => import(path.join(repositoryRoot, file))
     const [{ ReviewChapterCommand }, { RefineFromReviewCommand }, { useProjectStore }, { useEditorStore },
       { createGenerationRuntime }, nativeConfirmation, { ReviewRepository }, { RevisionRepository }, database] = await Promise.all([
       load('src/services/workflows/commands/review-chapter.command.ts'), load('src/services/workflows/commands/refine-from-review.command.ts'),

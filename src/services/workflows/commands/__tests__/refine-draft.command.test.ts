@@ -8,6 +8,7 @@ import {
   type HumanConfirmedReviewSnapshotInput,
 } from '../../../../shared/human-confirmed-review'
 import type { ModelExecutionLeaseReceipt } from '../../../../shared/ipc-channels'
+import { MATERIAL_DECISION_MAX_INPUT_UNITS } from '../../../../shared/generation-owner-contract'
 import { useEditorStore } from '../../../../stores/editor-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
@@ -1531,11 +1532,11 @@ describe('审稿/审稿修稿走同一条准入（S10B-2）', () => {
     })
   }
 
-  it('stops the review with a stable error when the required previous-chapter material alone exceeds the capacity', async () => {
+  it('stops the review with a stable error when the required previous-chapter material exceeds the 8MiB safety bound', async () => {
     // 前一章的定稿是审稿的连续性锚点：装不下就显式失败，绝不静默省略必需事实、也不截断。
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
     stubIpc(reviewHistoryIpc([{
-      draftId: 7, chapterNumber: 1, chapterTitle: '离港', chapterNotes: HUGE_HISTORY,
+      draftId: 7, chapterNumber: 1, chapterTitle: '离港', chapterNotes: 'A'.repeat(MATERIAL_DECISION_MAX_INPUT_UNITS + 1),
       sourceStatus: 'current', facts: [],
     }]))
 
@@ -1568,11 +1569,11 @@ describe('审稿/审稿修稿走同一条准入（S10B-2）', () => {
     expect(request).not.toContain('第一章超长标记')
   })
 
-  it('stops the confirmed-review revision when the confirmed checklist alone exceeds the capacity', async () => {
+  it('stops the confirmed-review revision when the confirmed checklist exceeds the 8MiB safety bound', async () => {
     const confirmationContent = confirmedReviewContent({
       sourceDraft: { ...CONFIRMED_SOURCE_DRAFT, content: '原稿正文。'.repeat(250) },
       items: [{
-        category: '连续性', severity: 'error', description: '问'.repeat(9_000), decision: 'apply', origin: 'ai',
+        category: '连续性', severity: 'error', description: 'A'.repeat(MATERIAL_DECISION_MAX_INPUT_UNITS + 1), decision: 'apply', origin: 'ai',
       }],
     })
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
@@ -1647,10 +1648,10 @@ describe('修稿路径不再整段拼接（S10B-2）', () => {
     expect(prompt).not.toContain('第一章超长标记')
   })
 
-  it('stops the refinement when the required previous-chapter material alone exceeds the capacity', async () => {
+  it('stops the refinement when the required previous-chapter material exceeds the 8MiB safety bound', async () => {
     const completeWithLease = vi.fn<GenerationRuntimeEnvironment['completeWithLease']>()
     stubIpc(historyIpc([
-      { draftId: 2, chapterNumber: 2, chapterTitle: '近章', chapterNotes: `第二章超长标记${HUGE_HISTORY}`,
+      { draftId: 2, chapterNumber: 2, chapterTitle: '近章', chapterNotes: 'A'.repeat(MATERIAL_DECISION_MAX_INPUT_UNITS + 1),
         sourceStatus: 'current', facts: [] },
     ], 3))
 
