@@ -2276,7 +2276,8 @@ this.restoreGrantIssuer = restoreGrantIssuer`, sandbox)
   // baseline 臂不经过恢复调用：c16-c18 只对 candidate 派发 execute，桥内断言 candidate，恢复类型只在 continuityRun 内取得。
   const driver = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-driver.mjs'), 'utf8')
   assert.match(driver, /executeRecordedStep\(\{ \.\.\.common, caseId: item\.id, target: executionTargets\.candidate/)
-  assert.match(fixture, /if \(continuityRun \|\| boundedRun\) \{\s*assert\.equal\(candidate, true, 'CANDIDATE_REQUIRED'\)/)
+  assert.match(fixture, /const copiedRun = boundedRun \|\| r3Run/)
+  assert.match(fixture, /if \(continuityRun \|\| copiedRun\) \{\s*assert\.equal\(candidate, true, 'CANDIDATE_REQUIRED'\)/)
   assert.match(fixture, /const restorationKinds = continuityRun \? /)
 })
 
@@ -2636,7 +2637,7 @@ test('C16–C18 ca466d9a/73b46513 段（第580–648行）按同一规则分两�
   // 新协议字节 hash 与被取代的 a0a14777 不同，runner 读写两入口都按链末端取历史范围。
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
   assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, ca466d9a, protocol\.historicalC1673b46513Boundary\)/)
-  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedSeparatedReviewB89b011aEvents/)
+  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedR3NativeEvents/)
 })
 
 test('新登记续写直接首稿，旧对账可读但当前实验拒绝额外发送', () => {
@@ -3953,7 +3954,7 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
       && repairEnd > repairStart && checkStart > repairEnd && checkEnd > checkStart && reserve > checkEnd
       && evidenceStart > 0 && evidenceEnd > evidenceStart)
     const readPrimaryEvidence = new Function('first', 'receipt', 'request', 'authorityFacts', 'sha', 'fs', 'target',
-      `const continuityRun = false, baselineContract = null, operationKind = 'directory';\n${fixture.slice(proofStart, proofEnd)}`)
+      `const r3Run = false, continuityRun = false, baselineContract = null, operationKind = 'directory';\n${fixture.slice(proofStart, proofEnd)}`)
     const isStructuredSyntaxRepair = new Function('repairPolicy', 'operationId', 'actual', 'observedIpc',
       `${fixture.slice(repairStart, repairEnd)}\nreturn structuredSyntaxRepair`)
     const checkAuthority = new Function('operationKind', 'candidate', 'request', 'db', 'chapter', 'promptText',
@@ -4678,7 +4679,8 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     'historicalC16Ee3435ecBoundary', 'historicalC16Ccc70b31Boundary', 'historicalC16C9b88510Boundary', 'historicalC16D8a30c11Boundary',
     'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary', 'historicalC16B42cfc55Boundary',
     'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
-    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary', 'historicalC1609ad48e1Boundary', 'historicalSeparatedReviewB89b011aBoundary']
+    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary', 'historicalC1609ad48e1Boundary', 'historicalSeparatedReviewB89b011aBoundary',
+    'historicalPostUi83573613Boundary', 'historicalR3NativeD12c4111Boundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -6032,7 +6034,7 @@ test('S14B post-UI 压缩的 fixture 接线：登记只对候选臂取到，首�
     const proofEnd = fixture.indexOf('    }, onReject:', proofStart)
     assert.ok(proofStart > 0 && proofEnd > proofStart)
     const readEvidence = new Function('first', 'receipt', 'request', 'authorityFacts', 'sha', 'fs', 'target', 'operationKind', 'db', 'continuityRun',
-      `const baselineContract = null, finalizedContext = null, parseFinalizedCharacterStateResponse = null;\n${fixture.slice(proofStart, proofEnd)}`)
+      `const r3Run = false, baselineContract = null, finalizedContext = null, parseFinalizedCharacterStateResponse = null;\n${fixture.slice(proofStart, proofEnd)}`)
     const { syntheticDraftText } = syntheticLengthHelpers()
     const overText = syntheticDraftText(countDraftUnits, POST_UI_RANGE.maximum + 90)
     const first = { attemptId: 'primary', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: 'chapter-draft' }
@@ -6799,7 +6801,7 @@ test('full 压缩的 fixture 接线（行为）：登记只对候选臂取到，
     const proofStart = fixture.indexOf('readPrimaryEvidence: first => {') + 'readPrimaryEvidence: first => {'.length
     const proofEnd = fixture.indexOf('    }, onReject:', proofStart)
     const readEvidence = new Function('first', 'receipt', 'request', 'authorityFacts', 'sha', 'fs', 'target', 'operationKind', 'db', 'continuityRun',
-      `const baselineContract = null, finalizedContext = null, parseFinalizedCharacterStateResponse = null;\n${fixture.slice(proofStart, proofEnd)}`)
+      `const r3Run = false, baselineContract = null, finalizedContext = null, parseFinalizedCharacterStateResponse = null;\n${fixture.slice(proofStart, proofEnd)}`)
     const { syntheticDraftText } = syntheticLengthHelpers()
     const overText = syntheticDraftText(countDraftUnits, FULL_RANGE.maximum + 90), inRange = syntheticDraftText(countDraftUnits, FULL_TARGET)
     const first = { attemptId: 'primary', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: 'chapter-draft' }

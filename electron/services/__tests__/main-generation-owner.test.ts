@@ -852,7 +852,7 @@ describe('durable character proposals from actual generation artifacts', () => {
     expect(f.owner.characterProposals.cancel({ proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision }).status).toBe('cancelled')
     expect(f.owner.characterProposals.read(batch.proposalBatchId).items).toHaveLength(2)
     expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
-  })
+  }, 15_000) // Full on-disk migration and proposal writes exceeded 7s on the macOS x64 runner.
 })
 
 describe('main draft persistence and batch lineage', () => {

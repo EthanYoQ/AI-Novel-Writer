@@ -20,7 +20,7 @@ const start = fixture.indexOf(open), end = fixture.indexOf(close, start) + close
 assert.ok(start >= 0 && end > start && fixture.indexOf(open, start + 1) < 0)
 // Execute the production fixture's anonymous consumer, with only its lexical inputs supplied.
 const consume = new Function('ledgerBody', 'supervisor', 'attemptId', 'physicalOutputPath',
-  'requestReceipt', 'streamSettlements', 'fs', 'sha', 'dispatchAt', fixture.slice(start, end))
+  'requestReceipt', 'streamSettlements', 'fs', 'sha', 'dispatchAt', 'request', fixture.slice(start, end))
 const sha = value => createHash('sha256').update(value).digest('hex')
 const event = payload => `data: ${JSON.stringify(payload)}\n\n`
 const content = text => event({ choices: [{ delta: { content: text }, finish_reason: 'stop' }] })
@@ -80,7 +80,7 @@ test('the actual tee consumer settles a complete DONE without waiting for body E
       events.push({ type: 'reserve', attemptId: id }, { type: 'dispatch', attemptId: id })
       supervisor.watch(id, abort)
       const outputPath = path.join(directory, `${item.name}.txt`), settlements = []
-      consume(ledgerBody, supervisor, id, outputPath, receipt, settlements, fs, sha, performance.now())
+      consume(ledgerBody, supervisor, id, outputPath, receipt, settlements, fs, sha, performance.now(), { phase: 'early-budget' })
       await Promise.all([new OpenAIProvider().generateStream(model, [{ role: 'user', content: 'offline' }], {
         maxTokens: 2672, temperature: 0, visibleOnly: true, signal: abort.signal,
         onChunk: value => owner.chunks.push(value), onReasoning: value => owner.reasoning.push(value),
@@ -157,7 +157,7 @@ test('the registered watchdog permits a controlled 600000ms completion through t
     events.push({ type: 'reserve', attemptId: id }, { type: 'dispatch', attemptId: id })
     supervisor.watch(id, watchdog)
     const settlements = [], outputPath = path.join(directory, 'output.txt')
-    consume(ledgerBody, supervisor, id, outputPath, receipt, settlements, fs, sha, 0)
+    consume(ledgerBody, supervisor, id, outputPath, receipt, settlements, fs, sha, 0, request)
     const generated = new OpenAIProvider().generateStream(model, [{ role: 'user', content: 'offline' }], {
       maxTokens: 2672, temperature: 0, visibleOnly: true, signal: AbortSignal.any([watchdog.signal, native.signal]),
       onChunk: () => {}, onDone: value => { owner.done = value }, onError: error => { owner.error = error },
