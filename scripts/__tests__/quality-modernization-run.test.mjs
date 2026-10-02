@@ -33,6 +33,9 @@ import { draftReconciliationBlock, parseDraftReconciliation } from '../../src/sh
 import { parseReviewGenerationResult, buildReviewGenerationReport } from '../../src/shared/review-generation-report'
 import { createHumanConfirmedReviewSnapshot, renderHumanConfirmedReviewBrief } from '../../src/shared/human-confirmed-review'
 import { composeVisibleContinuation } from '../../src/shared/visible-continuation'
+import { buildMainGenerationPlan, MAIN_GENERATION_POLICY } from '../../electron/services/main-generation-plan'
+import { resolveModelExecutionCapabilityEvidence } from '../../electron/services/model-execution-lease'
+import { OpenAIProvider } from '../../electron/llm/openai-provider'
 vi.mock('../../electron/database', () => ({ getProjectDb: () => null, getCurrentProjectPath: () => null }))
 
 const source = JSON.parse(fs.readFileSync(path.join(ROOT, 'test/fixtures/novel-quality-modernization/semantic-source.json')))
@@ -760,6 +763,12 @@ test('separated-review diagnostic freezes six slots without reopening qualificat
   assert.deepEqual(selected.arms, ['candidate'])
   assert.deepEqual(selected.caseIds, ['source-1', 'source-2', 'source-3'])
   assert.equal(selected.maxPhysicalRequests, 6)
+  assert.equal(selected.responseFormat, 'native-default')
+  assert.equal(selected.diagnosticInputHash, '22d1feeb9f596346e4fc9697b25b2e03a2cda67b6df0e395ea25987b55603e33')
+  for (const responseFormat of [undefined, null, { type: 'json_object' }])
+    assert.throws(() => selectPhase({ ...protocol, phases: { ...protocol.phases,
+      'separated-review-diagnostic': { ...selected, responseFormat } } }, 'separated-review-diagnostic', 'diagnostic'),
+    /SEPARATED_REVIEW_DIAGNOSTIC_REGISTRATION_MISMATCH/)
   assert.deepEqual(selected.operations.map(item => item.id),
     ['source-1-goal', 'source-1-fact', 'source-2-goal', 'source-2-fact', 'source-3-goal', 'source-3-fact'])
   const hashes = ['feee1bdaa2a508811bb0fd52aad30229c6334311b8d89aaeaf9c85934023e890',
@@ -796,7 +805,8 @@ test('separated-review diagnostic runs six zero-model owner slots and preserves 
     return { ...slot, materialsSourceId: source.id, contentSha256: hash(source.materials.source.content),
       contextHash: hash(source.frozenContext), materialsSha256: hash(source.materials), messages, messagesSha256: hash(messages) }
   })
-  const input = { schemaVersion: 1, diagnosticId: registered.diagnosticId, sources, operations }
+  const input = { schemaVersion: 1, diagnosticId: registered.diagnosticId, sources, operations,
+    modelParameters: { responseFormat: 'native-default' } }
   const inputBytes = Buffer.from(JSON.stringify(input)), inputHash = hash(inputBytes)
   const registration = { ...registered, diagnosticInputHash: inputHash,
     operations: operations.map(({ messages, materialsSourceId, ...slot }) => slot) }
@@ -824,19 +834,35 @@ test('separated-review diagnostic runs six zero-model owner slots and preserves 
       return originalRead.call(this, name, ...args)
     }
     const results = []
+    const model = { ...registration.model, id: 'registered-diagnostic', apiKey: '' }
+    const capabilityEvidence = resolveModelExecutionCapabilityEvidence(model)
+    assert.equal(capabilityEvidence.structuredOutput, null)
+    const provider = new OpenAIProvider()
     for (const [index, slot] of operations.entries()) {
-      const body = { model: registration.model.modelName, messages: slot.messages, temperature: 0, max_tokens: 2672,
-        enable_thinking: true, reasoning_effort: 'high', response_format: { type: 'json_object' }, stream: true, stream_options: { include_usage: true } }
+      const plan = buildMainGenerationPlan(model, { capabilityEvidence },
+        { purpose: `separated-review-${slot.role}`, output: 'structured-data', messages: slot.messages, reasoningStage: 'review' },
+        { policy: MAIN_GENERATION_POLICY.budget, attempts: [] }, 'auto')
+      const body = provider.buildRequestBody(model, slot.messages, plan.options, true)
+      assert.equal(Object.hasOwn(plan.options, 'responseFormat'), false)
+      assert.equal(Object.hasOwn(body, 'response_format'), false)
+      assert.equal(plan.requestedOutputTokens, body.max_tokens)
+      assert.equal(plan.reservedTokens, 1048576)
       const options = { arm: 'candidate', model: registration.model, body, reserved: index, operation: slot.id, inputHash }
       assert.doesNotThrow(() => assertSharedInputDiagnostic(registration, input, options))
       if (index === 0) {
         for (const changed of [{ inputHash: 'f'.repeat(64) }, { operation: 'not-registered' }, { reserved: 1 },
           { model: { ...registration.model, temperature: 0.7 } }, { body: { ...body, max_tokens: 16385 } },
-          { body: { ...body, response_format: undefined } },
+          ...[{ type: 'json_object' }, 'native-default', null, undefined].map(response_format => ({ body: { ...body, response_format } })),
           { body: { ...body, messages: [{ ...slot.messages[0], content: 'changed' }, slot.messages[1]] } }])
           assert.throws(() => assertSharedInputDiagnostic(registration, input, { ...options, ...changed }), /SEPARATED_REVIEW_DIAGNOSTIC_/)
         const changed = structuredClone(input); changed.sources[0].materials.source.content += '!'
         assert.throws(() => assertSharedInputDiagnostic(registration, changed, options), /SEPARATED_REVIEW_DIAGNOSTIC_INPUT_MISMATCH/)
+        for (const responseFormat of [undefined, null, { type: 'json_object' }]) {
+          assert.throws(() => assertSharedInputDiagnostic(registration, { ...input, modelParameters: { responseFormat } }, options),
+            /SEPARATED_REVIEW_DIAGNOSTIC_INPUT_MISMATCH/)
+          assert.throws(() => assertSharedInputDiagnostic({ ...registration, responseFormat }, input, options),
+            /SEPARATED_REVIEW_DIAGNOSTIC_INPUT_MISMATCH/)
+        }
       }
       const binding = bindingFor(slot, index), attemptId = `candidate:unit-${index}`
       const root = path.join(directory, slot.id); fs.mkdirSync(root)

@@ -923,7 +923,8 @@
         "source-3"
       ],
       "maxPhysicalRequests": 6,
-      "diagnosticInputHash": "0d55626e391d99de4b0c7b4b66278e7c39a191a774993e52f645c64d505222fa",
+      "diagnosticInputHash": "22d1feeb9f596346e4fc9697b25b2e03a2cda67b6df0e395ea25987b55603e33",
+      "responseFormat": "native-default",
       "model": {
         "provider": "openai",
         "protocol": "openai",

@@ -361,6 +361,7 @@ export function selectPhase(protocol, phase, milestone = 'early') {
   if (phase === 'separated-review-diagnostic') {
     const registration = protocol.phases[phase]
     if (registration.diagnosticId !== 'separated-review-diagnostic-3x2-v1' || registration.nonQualification !== true
+      || registration.responseFormat !== 'native-default'
       || registration.maxPhysicalRequests !== 6 || !isDeepStrictEqual(registration.arms, ['candidate'])
       || !isDeepStrictEqual(registration.caseIds, ['source-1', 'source-2', 'source-3'])
       || !/^[a-f0-9]{64}$/u.test(registration.diagnosticInputHash ?? '')

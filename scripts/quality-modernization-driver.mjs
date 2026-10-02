@@ -680,6 +680,7 @@ export function assertSharedInputDiagnostic(registration, input, { arm, model, b
     const supplied = input?.operations?.find(item => item.id === operation)
     const source = input?.sources?.find(item => item.id === slot?.sourceId)
     if (!slot || !supplied || !source || registration.nonQualification !== true || registration.maxPhysicalRequests !== 6
+      || registration.responseFormat !== 'native-default' || input?.modelParameters?.responseFormat !== 'native-default'
       || arm !== 'candidate' || input?.diagnosticId !== registration.diagnosticId
       || !/^[a-f0-9]{64}$/u.test(registration.diagnosticInputHash ?? '') || inputHash !== registration.diagnosticInputHash
       || input.sources.length !== 3 || input.operations.length !== 6 || registration.operations.length !== 6
@@ -704,7 +705,7 @@ export function assertSharedInputDiagnostic(registration, input, { arm, model, b
       || digest(body.messages) !== slot.messagesSha256 || !Number.isSafeInteger(body.max_tokens)
       || body.max_tokens <= 0 || body.max_tokens > registration.model.maxTokens
       || body.enable_thinking !== true || body.reasoning_effort !== 'high' || Object.hasOwn(body, 'thinking_budget')
-      || body.response_format?.type !== 'json_object'
+      || Object.hasOwn(body, 'response_format')
       || body.stream !== true || body.stream_options?.include_usage !== true))
       throw new Error('SEPARATED_REVIEW_DIAGNOSTIC_WIRE_MISMATCH')
     return supplied
