@@ -53,7 +53,6 @@ export function buildChapterGoalReviewPrompt(goals: FrozenChapterGoals, language
 最后汇总所有子动作：任一 unmet → unmet；否则任一 unknown → unknown；仅全部完成 → completed。不得用多数已完成掩盖一个延期或不明子动作。
 completed/unmet 都须当前正文逐字证据；unknown 可 evidence:[]。不拼接或改写引文，不引用计划证明行动；引文存在不证明推断成立。不检查字数或强求背景细节。
 目标原文与作者确认设定冲突时，无论正文是否写出该冲突内容，都判 unknown（不判 completed 或 unmet），并在 description 说明冲突，仍不得改写目标。
-同一事实在当前正文有多处日期或状态表述时，沿用上述时点对照，先比较所指时点及正文是否交代变化或解释。若同一时点的表述互相矛盾且没有正文解释，将具体冲突写入已有通用 items：quote 选一处唯一可定位的逐字连续引文，在 description 指明与另一处表述的冲突，不拼接引文，不猜未写明的日期或原因。
 冻结清单：${JSON.stringify(goals)}`,
     `[Current chapter goal checklist | software-frozen]
 Keep the existing summary/items review contract and add goalReviews to the same JSON root (not subject to the general items limit).
@@ -67,7 +66,6 @@ Then first check the whole draft for all actions and actual consequences that co
 Aggregate last: any unmet → unmet; otherwise any unknown → unknown; only all completed → completed. A completed majority cannot hide one postponed or uncertain sub-action.
 completed/unmet require verbatim current-draft evidence; unknown may use evidence:[]. Do not combine/rewrite quotations or cite plans as proof. Locatable evidence does not prove an inference. Do not check length or demand background detail.
 If a goal's text conflicts with author-confirmed settings, judge it unknown (never completed or unmet) whether or not the draft contains the conflicting content, and explain the conflict in description. Still do not rewrite the goal.
-When the current draft gives multiple dates or states for the same fact, use the same timing comparison: first compare the times they refer to and whether the prose establishes a change or explanation. If statements about the same time contradict each other without an explanation in the draft, report the specific conflict in the existing general items: use one uniquely locatable, verbatim, contiguous excerpt as quote and identify its conflict with the other statement in description. Do not join excerpts or invent an unstated date or cause.
 Frozen checklist: ${JSON.stringify(goals)}`)
 }
 

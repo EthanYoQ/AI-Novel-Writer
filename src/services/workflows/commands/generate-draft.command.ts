@@ -1,3 +1,4 @@
+import { chapterTimeContinuity } from '../../../shared/chapter-time-continuity'
 import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, DRAFT_VISIBLE_TEXT_VERSION } from '../../../shared/draft-visible-text'
 import { DRAFT_RECONCILE_PURPOSE, draftReconciliationBlock } from '../../../shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlinePrompt, draftShortOutlineBlock } from '../../../shared/draft-short-outline'
@@ -419,7 +420,7 @@ function chapterExecutionContractText(writingLanguage: WritingLanguage, chapterI
 【前文计划与本章决定】人物的等待、暂停或撤回是当时的计划状态，不是作者禁令；本章可以先写出人物基于既有事实作出的新决定、理由及连续性依据，再推进或替换计划，但不能违反作者明确禁令、必需呈现或既成事实。
 【本章事件兑现】作者或本章蓝图要求在本章发生的事件，必须在本章通过具体行动及其实际后果发生；复述、确认或记账前章已发生的结果不能替代本章要求发生的动作或结果。
 【前文待核实问题】定稿只发现疑点、提出猜测或写明待核实时，不能把某一解释、原因或哪一方出错写成已确认事实；本章可以通过新线索和调查推进并解决疑点，但须先写出与既有事实相容且足以支持结论的核验过程与证据，证据不足时保留疑点，结论的方向、时间和因果前后必须一致。
-【时间承接】本章紧接上一章结尾：作者没有写明跨日或时间间隔时，视为同一天内的紧接发展，上一章事件就发生在不久之前，不得写成“昨天”“昨夜”“前一天”。已定稿事件的时点以定稿原文和【本章写作方向】里的时点说明为准，本章提到这些事件时须按该时点换算（例如定稿写“黄昏”、本章时点为“同日深夜”，则那些事件发生在“黄昏时”“傍晚那会儿”；定稿写“傍晚”、本章时点为“次日上午”，则写“昨晚”“昨天傍晚”）。` : ''}
+${chapterTimeContinuity('zh-CN')}` : ''}
 【操作边界】本合同不扩大本次请求的操作范围：续写及无进展恢复只接续已有正文，不重写旧文；已达目标篇幅时只补完断句并收束。压缩只删减既有正文，不新增情节或修补缺失事件。`,
     `[Current-chapter execution contract]
 [Author tasks for this chapter] Follow the author text according to its meaning: events and outcomes explicitly required in this chapter must be realized through manuscript action or outcome. Ongoing states, knowledge boundaries, prohibitions, and style requests are narrative constraints; do not add or repeatedly confirm actions, dialogue, or explanations merely to prove compliance. Follow the reveal timing specified by the author; do not present what is reserved for later chapters as already completed. Still carry out explicitly requested recollections, flashbacks, actions, reveals, or repetition. Each later action must continue from the item ownership, character knowledge, and plan-completion state actually established in the prose.
@@ -428,7 +429,7 @@ function chapterExecutionContractText(writingLanguage: WritingLanguage, chapterI
 [Prior plans and current decisions] Characters' waiting, paused, or withdrawn plans describe their prior intention, not an author prohibition; this chapter may first show a new decision grounded in established facts, the character's reason, and continuity evidence, then advance or replace the plan without violating explicit author prohibitions, required on-page events, or completed facts.
 [Required events in this chapter] Events required by the author or this chapter blueprint to happen in this chapter must happen through concrete action and actual consequence here; merely repeating, confirming, or accounting for an outcome already completed in an earlier chapter cannot replace the action or outcome required in this chapter.
 [Unverified prior questions] If a finalized chapter only discovers a discrepancy, raises a suspicion, or leaves a question for verification, do not present an explanation, cause, or which side is wrong as confirmed. This chapter may pursue new clues and resolve the question, but first show a verification process and evidence sufficient for a conclusion consistent with established facts; otherwise keep it unresolved. The conclusion's direction, timing, and causality must remain consistent throughout.
-[Time continuity] This chapter follows directly on the previous chapter's ending: when the author states no day change or time gap, treat it as a continuation within the same day; events of the previous chapter happened a little while ago and must not be written as "yesterday", "last night", or "the day before". The time of finalized events is fixed by the finalized text and by the time stated in [Chapter brief]; when this chapter mentions those events, convert their time accordingly (for example, if the finalized text says "dusk" and this chapter is "late the same night", those events happened "at dusk" or "earlier this evening"; if it says "evening" and this chapter is "the next morning", write "last night" or "yesterday evening").` : ''}
+${chapterTimeContinuity('en-US')}` : ''}
 [Operation boundary] This contract does not expand the current request's scope: continuation and no-progress recovery only append to existing prose without rewriting it; at the target length, only finish the truncated sentence and close. Condensing only cuts existing prose and must not add plot or repair missing events.`,
   )
   return { rules, authorItems: promptLanguageText(writingLanguage, zhItems, enItems) }

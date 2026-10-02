@@ -27,6 +27,7 @@ import { RefineFromReviewCommand } from '../../../src/services/workflows/command
 import { useProjectStore } from '../../../src/stores/project-store'
 import { useEditorStore } from '../../../src/stores/editor-store'
 import type { WorkflowContext } from '../../../src/stores/workflow-store'
+import * as reviewRevisionMaterials from '../../../src/shared/review-revision-generation'
 
 vi.mock('../../database', () => ({ getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn(() => null) }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -75,6 +76,29 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   return { get db() { return db }, owner, makeOwner, reopenStorage, prepare, selection, run, spy, deps }
 }
 describe('review and revision generation through the actual owner and SQLite', () => {
+  it('explicitly refuses recovery of the old combined blueprint material hash while retaining its artifact', async () => {
+    const current = reviewRevisionMaterials.reviewRevisionAuthorMaterial
+    const legacy = vi.spyOn(reviewRevisionMaterials, 'reviewRevisionAuthorMaterial').mockImplementation(context => current(context).replace([
+      '【本章作者指导｜约束】', JSON.stringify(context.blueprints.filter(item => item.chapterNumber === context.source.chapterNumber), null, 2),
+      '【后续蓝图/计划｜非既定历史】', JSON.stringify(context.blueprints.filter(item => item.chapterNumber !== context.source.chapterNumber), null, 2),
+    ].join('\n\n'), ['【当前及未来蓝图/计划｜非既定历史】', JSON.stringify(context.blueprints, null, 2)].join('\n\n')))
+    const f = fixture(), prepared = f.prepare(), selection = f.selection(prepared)
+    const admission = await selectFrozenReviewRevisionMaterials(prepared.context, { projectId: 'project', epoch: 'epoch-1' })
+    const prompt = admission.admitted.map(item => item.text).join('\n\n')
+    expect(prompt).toContain('【当前及未来蓝图/计划｜非既定历史】')
+    const view = f.owner.begin(selection)
+    f.owner.bindMaterialDecision(view.handle, { ...admission.decision, promptHash: textHash(prompt) })
+    await f.owner.execute({ handle: view.handle, invocationNonce: 'old-material', task: { purpose: 'review-chapter', output: 'structured-data', messages: [{ role: 'user', content: prompt }] } })
+    const artifact = f.owner.read(view.handle).artifacts[0]!
+    legacy.mockRestore()
+    f.owner.suspendForProjectClose()
+    const reopened = f.reopenStorage()
+    expect(reopened.readReviewRevisionRecovery(view.handle)).toMatchObject({ sourceStatus: 'conflict', canResume: false })
+    await expect(reopened.resume(view.handle)).rejects.toThrow('GENERATION_MATERIAL_DECISION_INVALID')
+    expect(reopened.read(view.handle).candidates?.[0]?.text).toBe(artifact.text)
+    expect(f.spy).toHaveBeenCalledTimes(1)
+    expect(f.db.prepare('SELECT COUNT(*) FROM reviews').pluck().get()).toBe(0)
+  })
   it.each(['revision-model', 'synthetic', undefined])('uses the selected revision model %s through the real command and retains it on recovery', async selectedModelId => {
     let invocation = 0
     const f = fixture(async (_request, options) => {

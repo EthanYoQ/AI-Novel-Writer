@@ -451,7 +451,7 @@ Output the complete revised manuscript as plain prose only. Do not include Markd
 
 [JSON output contract]
 Output exactly one JSON object in this shape:
-{"items":[{"category":"plot continuity","description":"No contradiction found","severity":"pass"},{"category":"causal logic","quote":"exact source sentence","description":"specific objective defect and why it is a problem","severity":"error"}],"summary":"one-sentence overall assessment"}
+{"items":[{"category":"plot continuity","description":"[Actual subject and source checked, and the comparison result; do not copy this placeholder]","severity":"pass"},{"category":"causal logic","quote":"exact source sentence","description":"specific objective defect and why it is a problem","severity":"error"}],"summary":"one-sentence overall assessment"}
 
 Return item fields in category, quote, description, severity order: first check the draft excerpt against the source materials, explain the judgment in description, then choose severity. Use error/warning only when description identifies a specific objective defect in the current draft and explains why it is a problem. If the conclusion is reasonable, meets requirements, or no issue found, use pass or omit the item. If the whole draft has no specific issue, keep one pass item. Still report genuine objective problems as error/warning according to their severity.
 

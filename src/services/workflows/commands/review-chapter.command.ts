@@ -1,3 +1,4 @@
+import { reviewTimeContinuity } from '../../../shared/chapter-time-continuity'
 import type { CommandExecuteParams, WorkflowGenerationRuntimeDependencies } from './base-command'
 import type { PreparedReviewRevisionContext } from '../../../shared/review-revision-generation'
 import { ReviewRevisionCommand, type ReviewRevisionCommandSource } from './review-revision-command'
@@ -69,11 +70,18 @@ export class ReviewChapterCommand extends ReviewRevisionCommand {
       builder.build(),
       ...admission.admitted.filter(material => material.category !== 'finalized-history').map(material => material.text),
       promptLanguageText(language,
-        '【作者设定优先】【作者确认项目配置】与【世界观设定】是权威事实；作者角色状态按标注时点理解；历史派生摘要不能覆盖作者事实。报告矛盾前，须说明作者设定或其必然前提与正文对同一对象、时点及条件的陈述为何不能同时成立，并纳入正文已有的兼容描述。正文未再次说明、未触碰或未明确位置，不证明权威状态已改变；存在合理兼容解释时，不得将推断当作事实矛盾要求修稿。新进展可以发生在同一时段或地点；作者未明确要求更换时点或场景时，不得强加，也不能因未更换就断言没有推进。若正文确实与作者事实或由其必然推出的前提矛盾，必须报告为 error 或 warning；即使蓝图、章节计划或冻结目标写法相反，也不得因此放过。',
-        '[Author settings take priority] The author-confirmed project configuration and the worldbuilding settings are authoritative facts; author character states apply at their annotated time; historical derived summaries cannot override author facts. Before reporting a contradiction, explain why the author setting or its necessary premise and the draft cannot both be true for the same subject, time and conditions, considering compatible descriptions already present in the draft. Mere omission, lack of contact or an unstated location does not establish that an authoritative state has changed. Where a reasonable compatible interpretation exists, do not demand revision based on an inferred factual contradiction. New progress can occur within the same time period or location; do not require a time or scene change that the author has not specified, or infer no progress merely because neither changed. If the draft truly contradicts an author fact or a premise that necessarily follows from it, report it as an error or warning, even when a blueprint, chapter plan or frozen goal says otherwise.'),
+        '【作者设定优先】【作者确认项目配置】与【世界观设定】是权威事实；作者角色状态按标注时点理解；历史派生摘要不能覆盖作者事实。报告矛盾前，须说明作者设定或其必然前提与正文对同一对象、时点及条件的陈述为何不能同时成立，并纳入正文已有的兼容描述。正文未再次说明、未触碰或未明确位置，不证明权威状态已改变；存在合理兼容解释时，不得将推断当作事实矛盾要求修稿；但时间词明确指向前章事件时，必须按事件顺序换算核对，不得用假设另有同类事件来放行。新进展可以发生在同一时段或地点；作者未明确要求更换时点或场景时，不得强加，也不能因未更换就断言没有推进。若正文确实与作者事实或由其必然推出的前提矛盾，必须报告为 error 或 warning；即使蓝图、章节计划或冻结目标写法相反，也不得因此放过。',
+        '[Author settings take priority] The author-confirmed project configuration and the worldbuilding settings are authoritative facts; author character states apply at their annotated time; historical derived summaries cannot override author facts. Before reporting a contradiction, explain why the author setting or its necessary premise and the draft cannot both be true for the same subject, time and conditions, considering compatible descriptions already present in the draft. Mere omission, lack of contact or an unstated location does not establish that an authoritative state has changed. Where a reasonable compatible interpretation exists, do not demand revision based on an inferred factual contradiction; however, an explicit time reference to a previous-chapter event must be checked against the event sequence, not excused by inventing another similar event. New progress can occur within the same time period or location; do not require a time or scene change that the author has not specified, or infer no progress merely because neither changed. If the draft truly contradicts an author fact or a premise that necessarily follows from it, report it as an error or warning, even when a blueprint, chapter plan or frozen goal says otherwise.'),
       promptLanguageText(language,
         '【证据锚点硬约束】每个 error/warning 的 items[].quote 必须是待审正文中逐字连续、且全文仅出现一次的单一摘录；不得拼接多个位置、改写原文或包含省略号。优先选择足以证明问题的最短完整句。goalReviews[].evidence 中的每个 quote 也必须分别满足上述约束；需要多处证据时拆成多个 evidence 项，绝不可在一个 quote 中拼接。',
         '[Strict evidence-anchor constraint] Each items[].quote for an error/warning must be one verbatim, contiguous excerpt that occurs exactly once in the draft under review. Do not combine multiple locations, rewrite the text, or include ellipses. Prefer the shortest complete sentence that proves the issue. Every quote in goalReviews[].evidence must independently satisfy the same constraint; when multiple excerpts are needed, use separate evidence entries and never combine them in one quote.'),
+      reviewTimeContinuity(language),
+      promptLanguageText(language,
+        "【时间一致性检查】核对三类情况：（1）正文指向前章事件的相对时间词，按前驱事件顺序与本章作者指导换算；（2）正文事件时点与作者设定或前驱写明时点是否一致；（3）同一事件的多处日期、时点或状态是否一致。同一事实在当前正文有多处日期或状态表述时，先比较所指时点及正文是否交代变化或解释。若同一时点的表述互相矛盾且没有正文解释，将具体冲突写入已有通用 items：quote 选一处唯一可定位的逐字连续引文，在 description 指明与另一处表述的冲突，不拼接引文，不猜未写明的日期或原因。 冲突报 error 或 warning，quote 选含冲突时间词或状态的当前正文句子。建议只能使用不新增具体时点的表述，或来源在同一动作处写明的时点。",
+        "[Temporal consistency checks] Check (1) relative time references to previous-chapter events against the predecessor event sequence and current author guidance; (2) event times against explicit author or predecessor timing; (3) multiple dates, times or states for the same event. When the current draft gives multiple dates or states for the same fact, first compare the times they refer to and whether the prose establishes a change or explanation. If statements about the same time contradict each other without an explanation in the draft, report the specific conflict in the existing general items: use one uniquely locatable, verbatim, contiguous excerpt as quote and identify its conflict with the other statement in description. Do not join excerpts or invent an unstated date or cause. Report conflicts as error or warning, quoting the current manuscript sentence containing the conflicting time or state. Recommend wording without a new specific time, or a time stated at that same action in the source."),
+      promptLanguageText(language,
+        '【pass 依据】pass 必须写明实际核对的对象与来源，以及对照结果；不得照抄格式示例或用无依据套话替代核对。',
+        '[Pass evidence] A pass must name the actual subject and source checked, and the comparison result; never copy the format example or substitute unsupported stock conclusions for checking.'),
       buildChapterGoalReviewPrompt(frozen.frozenGoals, language),
       promptLanguageText(language,
         '【简短证据核对】在 goalReviews.description 中简述目标要求、正文证据及其时态：本章已发生、旧事回顾或未来计划。要求当章推进时，旧事或计划不算完成；只要求维持状态时，不强造新事件。合理的新动作不必在前文预先出现。不要输出长篇推理。',
@@ -86,6 +94,9 @@ export class ReviewChapterCommand extends ReviewRevisionCommand {
       promptLanguageText(language, '【人工合并后的正文】', '[Author-merged draft]'),
       frozen.source.content,
       ...admission.admitted.map(material => material.text),
+      reviewTimeContinuity(language),
+      promptLanguageText(language, '改法引入来源不支持的具体时点时，不能判为 resolved。',
+        'A remedy introducing a specific time unsupported by the sources must not be marked resolved.'),
       promptLanguageText(language, '【需复核的原始证据锚点】', '[Original evidence anchors to recheck]'),
       JSON.stringify(frozen.recheck.findings, null, 2),
       promptLanguageText(language,

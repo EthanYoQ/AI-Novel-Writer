@@ -93,6 +93,60 @@ beforeEach(() => {
 afterEach(() => { clearProjectCustomPrompts(); vi.restoreAllMocks(); vi.unstubAllGlobals(); useProjectStore.setState({ currentProject: null }) })
 
 describe('review/revision consumers using the main contract (synthetic transport)', () => {
+  it.each(['zh-CN', 'en-US'] as const)('sends temporal checks and separated author constraints through all review consumers in %s', async language => {
+    const project = useProjectStore.getState().currentProject!
+    useProjectStore.setState({ currentProject: { ...project, novelConfig: { ...project.novelConfig, writingLanguage: language } } })
+    for (const operation of ['review-chapter', 'refine-from-review', 'recheck'] as const) {
+      clearProjectCustomPrompts()
+      const f = setup([{ content: operation === 'refine-from-review' ? revised : review, finishReason: 'stop' }])
+      f.args.context.writingLanguage = language
+      const original = f.fixture.invoke.bind(f.fixture)
+      vi.spyOn(f.fixture, 'invoke').mockImplementation(async (channel, ...args) => {
+        const result = await original(channel, ...args)
+        if (channel === 'review-revision:prepare') {
+          const prepared = result as NonNullable<typeof f.fixture.prepared>
+          prepared.context.blueprints = [{ chapterNumber: 1, title: 'Current', keyEvents: '', characters: [],
+            role: '', purpose: '', suspenseHook: '', notes: '', userGuidance: 'CURRENT_AUTHOR_TIME' },
+          { chapterNumber: 2, title: 'Future', keyEvents: 'FUTURE_PLAN', characters: [],
+            role: '', purpose: '', suspenseHook: '', notes: '', userGuidance: '' }]
+          f.fixture.prepared = structuredClone(prepared)
+        }
+        return result
+      })
+      if (operation === 'review-chapter') {
+        const builtin = getBuiltinPromptTemplate('consistency_check', language)!
+        expect(builtin.systemSuffix).not.toContain(language === 'zh-CN' ? '未发现与前文矛盾' : 'No contradiction found')
+        vi.spyOn(ipcPromptPersistence, 'loadProject').mockResolvedValue({ templates: [{ ...builtin, writingLanguage: language,
+          content: 'PERSISTED_TEMPLATE\n{{chapter_content}}', systemSuffix: 'OLD_PASS_EXAMPLE' }], diagnostics: [] })
+      }
+      if (operation === 'recheck') {
+        const selected = { draftPath: 'ai-novel://draft/1', draftContent: source.content, chapterNumber: 1,
+          sourceDraft: { id: 1, chapterNumber: 1, version: 1, status: 'draft' as const, contentRevision: 1 } }
+        f.fixture.selected = selected
+        await new ReviewChapterCommand({ ...selected, reviewCycleId: 'cycle-1', expectedMergedHash: hash(source.content) }, f.dependencies).execute(f.args)
+      } else await f.command(operation).execute(f.args)
+      const prompt = f.provider.mock.calls[0]![0].find(message => message.role === 'user')!.content
+      expect(prompt).toContain(language === 'zh-CN' ? '【时间承接】' : '[Time continuity]')
+      expect(prompt).toContain(language === 'zh-CN' ? '正文自身明确写出的跨日或时间间隔优先于同日默认' : 'An explicit day change or time gap in the manuscript takes priority over the same-day default')
+      expect(prompt).toContain(language === 'zh-CN' ? '前面最近的明确时点' : 'nearest preceding explicit time')
+      expect(prompt).toContain(language === 'zh-CN' ? 'AI 建议中的具体时点不构成来源依据' : 'A specific time proposed by AI is not source evidence')
+      const author = reviewRevisionAuthorMaterial(f.fixture.prepared!.context)
+      const boundary = language === 'zh-CN' ? '【后续蓝图/计划｜非既定历史】' : '[Future blueprints/plans | not established history]'
+      expect(author.split(boundary)[0]).toContain('CURRENT_AUTHOR_TIME')
+      expect(author.split(boundary)[0]).not.toContain('FUTURE_PLAN')
+      expect(author.split(boundary)[1]).toContain('FUTURE_PLAN')
+      expect(prompt).toContain(author)
+      expect(f.fixture.materialDecisions[0]?.included.find(item => item.sourceId === 'author:required')?.contentHash).toBe(hash(author))
+      if (operation === 'review-chapter') {
+        expect(prompt).toContain('PERSISTED_TEMPLATE')
+        expect(prompt).toContain(language === 'zh-CN' ? '【时间一致性检查】' : '[Temporal consistency checks]')
+        expect(prompt).toContain(language === 'zh-CN' ? 'pass 必须写明实际核对的对象与来源' : 'A pass must name the actual subject and source checked')
+      }
+      if (operation === 'refine-from-review') expect(prompt).toContain(reviewRevisionAiBrief(f.fixture.prepared!.context))
+      if (operation === 'recheck') expect(prompt).toContain(language === 'zh-CN' ? '不能判为 resolved' : 'must not be marked resolved')
+      vi.restoreAllMocks()
+    }
+  })
   it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)('passes the complete required set beyond 24k to the actual %s request', async operation => {
     const f = setup([{ content: operation === 'review-chapter' ? review : revised, finishReason: 'stop' }])
     const setting = '独有作者事实。'.repeat(900)
