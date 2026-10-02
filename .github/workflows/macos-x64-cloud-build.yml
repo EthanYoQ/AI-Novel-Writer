@@ -1,44 +1,41 @@
-name: macOS Intel x64 cloud package qualification
+name: macOS Intel x64 timeout diagnostic (70e1c3d8)
 
 on:
   workflow_dispatch:
     inputs:
       expected_sha:
-        description: Full immutable commit SHA to qualify
+        description: Fixed source commit for the one-off serial test diagnostic
         required: true
-        type: string
-      release_tag:
-        description: Intended tag; qualification does not create it
-        required: true
-        type: string
-      release_version:
-        description: Frozen application version
-        required: true
-        type: string
-      profile_path:
-        description: Repository-relative frozen release profile
-        required: true
-        default: .release/release-profile.json
+        default: 70e1c3d893e0f6f0aff76b2c03debecd0513231e
         type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: macos-x64-cloud-build-${{ inputs.expected_sha }}-${{ inputs.release_version }}
+  group: thread10-x64-diagnostic-70e1c3d8
   cancel-in-progress: false
 
 jobs:
-  package-and-qualify:
+  diagnose:
     runs-on: macos-15-intel
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
-      - name: Check out source
+      - name: Check out fixed diagnostic source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: ${{ inputs.expected_sha }}
+          ref: 70e1c3d893e0f6f0aff76b2c03debecd0513231e
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify fixed source identity
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          test "$EXPECTED_SHA" = '70e1c3d893e0f6f0aff76b2c03debecd0513231e'
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git rev-parse HEAD
 
       - name: Set up pnpm
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
@@ -52,84 +49,31 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Initialize macOS x64 v2 acceptance evidence
-        env:
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          RELEASE_VERSION: ${{ inputs.release_version }}
-          PROFILE_PATH: ${{ inputs.profile_path }}
+      - name: Record diagnostic runtime
         run: |
           set -euo pipefail
-          test "$EXPECTED_SHA" = "$(git rev-parse HEAD)"
-          test "$RELEASE_TAG" = "v$RELEASE_VERSION"
-          test "$PROFILE_PATH" = '.release/release-profile.json'
-          git ls-files --error-unmatch -- "$PROFILE_PATH" >/dev/null
-          evidence_root="$RUNNER_TEMP/ai-novel-release-evidence-$GITHUB_RUN_ID"
-          node scripts/release-evidence-v2.mjs init --platform macos-x64 --evidence-root "$evidence_root" --repository "$GITHUB_REPOSITORY" --commit "$EXPECTED_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --runner-label 'macos-15-intel' --image-os "$ImageOS" --image-version "$ImageVersion" --expected-node-version 22.23.1 --expected-pnpm-version 11.11.0 --workflow-path '.github/workflows/macos-x64-cloud-build.yml' --workflow-name 'macOS Intel x64 cloud package qualification' --actor "$GITHUB_ACTOR" --event "$GITHUB_EVENT_NAME" --dispatch-inputs-json '{}'
-          common_root="$RUNNER_TEMP/macos-x64-qualified"
-          legacy_release_root="$RUNNER_TEMP/macos-x64-legacy-release"
-          node .release/scripts/freeze-release-contract.mjs --repository "$GITHUB_REPOSITORY" --expected-sha "$EXPECTED_SHA" --tag "$RELEASE_TAG" --version "$RELEASE_VERSION" --profile "$PROFILE_PATH" --output-root "$common_root" --platform macos-x64 --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --workflow '.github/workflows/macos-x64-cloud-build.yml' --actor "$GITHUB_ACTOR" --event "$GITHUB_EVENT_NAME"
-          echo "AI_NOVEL_RELEASE_EVIDENCE_ROOT=$evidence_root" >> "$GITHUB_ENV"
-          echo "AI_NOVEL_COMMON_EVIDENCE_ROOT=$common_root" >> "$GITHUB_ENV"
-          echo "AI_NOVEL_LEGACY_RELEASE_ROOT=$legacy_release_root" >> "$GITHUB_ENV"
+          node -e "const os = require('node:os'); console.log(JSON.stringify({ availableParallelism: os.availableParallelism(), cpus: os.cpus().length, node: process.version, platform: process.platform, arch: process.arch }, null, 2)); if (process.platform !== 'darwin' || process.arch !== 'x64' || process.version !== 'v22.23.1') throw new Error('Unexpected diagnostic runtime')"
+          test "$(pnpm --version)" = '11.11.0'
 
       - name: Install locked dependencies
-        run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step install-locked-dependencies -- pnpm install --frozen-lockfile
-
-      - name: Verify Intel LanceDB native binding
-        run: |
-          node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step verify-lancedb-darwin-x64-binding -- env NAPI_RS_ENFORCE_VERSION_CHECK=1 node -e "if (process.platform !== 'darwin' || process.arch !== 'x64') throw new Error('Expected an Intel macOS runner'); const fs = require('node:fs'); const path = require('node:path'); const binding = require('@lancedb/lancedb-darwin-x64'); const lancedb = require('@lancedb/lancedb'); const packageVersion = JSON.parse(fs.readFileSync(path.join(path.dirname(require.resolve('@lancedb/lancedb')), '..', 'package.json'), 'utf8')).version; const bindingVersion = JSON.parse(fs.readFileSync(path.join(path.dirname(require.resolve('@lancedb/lancedb-darwin-x64')), 'package.json'), 'utf8')).version; if (packageVersion !== bindingVersion) throw new Error('LanceDB native binding version does not match the JavaScript package'); if (typeof binding.Connection !== 'function' || typeof lancedb.connect !== 'function') throw new Error('LanceDB Intel native binding did not load')"
-
-      - name: Install Playwright Chromium
-        run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step install-playwright-chromium -- pnpm exec playwright install chromium
-
-      - name: Run renderer browser tests
-        run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step renderer-browser-tests -- pnpm run test:browser
+        run: pnpm install --frozen-lockfile
 
       - name: Build native secure helper for macOS tests
         run: |
-          node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step build-native-secure-helper -- bash -lc 'clang -fobjc-arc -framework Foundation electron/security/darwin-safe-file-system.m -o electron/security/darwin-safe-file-system && chmod +x electron/security/darwin-safe-file-system'
+          set -euo pipefail
+          clang -fobjc-arc -framework Foundation electron/security/darwin-safe-file-system.m -o electron/security/darwin-safe-file-system
+          chmod +x electron/security/darwin-safe-file-system
 
       - name: Resolve macOS test temp directory
         run: |
           node -e "const fs = require('node:fs'); const os = require('node:os'); const original = os.tmpdir(); const physical = fs.realpathSync.native(original); fs.appendFileSync(process.env.GITHUB_ENV, 'TMPDIR=' + physical + '\n'); console.log('tempAlias=' + (physical !== original))"
 
-      - name: Run test suite
-        run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step test-suite -- pnpm test
-
-      - name: Build unsigned macOS Intel x64 package
-        run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step build-macos-x64-package -- pnpm run build:mac:x64:artifacts
-
-      - name: Run mounted-DMG smoke
-        run: node scripts/release-evidence-v2.mjs record --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --step mounted-dmg-smoke -- env AI_NOVEL_RELEASE_TARGET_ARCH=x64 pnpm run smoke:mac-dmg
-
-      - name: Record verified toolchain
-        if: ${{ success() }}
+      - name: Run four test files serially with unchanged default timeout
         run: |
-          test "$(uname -m)" = 'x86_64'
-          test "$(pnpm --version)" = '11.11.0'
-          test "$(node --version | sed 's/^v//')" = '22.23.1'
-          echo "AI_NOVEL_CLOUD_BUILD_PNPM_VERSION=$(pnpm --version)" >> "$GITHUB_ENV"
-
-      - name: Finalize macOS x64 v2 acceptance receipts
-        if: ${{ success() }}
-        run: |
-          set -euo pipefail
-          version='${{ inputs.release_version }}'
-          node scripts/release-evidence-v2.mjs finalize --platform macos-x64 --evidence-root "$AI_NOVEL_RELEASE_EVIDENCE_ROOT" --release-root "release/$version"
-          node .release/scripts/project-legacy-qualification.mjs --platform macos-x64 --version "$version" --source-root "release/$version" --output-root "$AI_NOVEL_LEGACY_RELEASE_ROOT" --profile '${{ inputs.profile_path }}'
-          raw_hash="$(node --input-type=module -e "import{createHash}from'node:crypto';import{readFileSync}from'node:fs';process.stdout.write(createHash('sha256').update(readFileSync('pnpm-lock.yaml')).digest('hex'))")"
-          canonical_hash="$(node --input-type=module -e "import{canonicalPnpmLockfileSha256}from'./scripts/canonical-pnpm-lockfile-hash.mjs';process.stdout.write(canonicalPnpmLockfileSha256('./pnpm-lock.yaml'))")"
-          node scripts/release-evidence-v2.mjs verify-bundle --platform macos-x64 --bundle-root "$AI_NOVEL_LEGACY_RELEASE_ROOT" --expected-commit '${{ inputs.expected_sha }}' --expected-lockfile-sha256 "$canonical_hash" --expected-lockfile-raw-sha256 "$raw_hash" --version "$version" --repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --expected-workflow-path '.github/workflows/macos-x64-cloud-build.yml' --expected-workflow-name 'macOS Intel x64 cloud package qualification' --expected-actor "$GITHUB_ACTOR" --expected-event "$GITHUB_EVENT_NAME"
-          node .release/scripts/finalize-legacy-qualification.mjs --platform macos-x64 --legacy-root "$AI_NOVEL_LEGACY_RELEASE_ROOT" --output-root "$AI_NOVEL_COMMON_EVIDENCE_ROOT" --profile '${{ inputs.profile_path }}' --expected-sha '${{ inputs.expected_sha }}' --version "$version"
-
-      - name: Upload runtime-verified macOS Intel x64 package
-        if: ${{ success() }}
-        id: upload-qualified
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: qualified-macos-x64
-          retention-days: 14
-          compression-level: 0
-          if-no-files-found: error
-          path: ${{ runner.temp }}/macos-x64-qualified
+          set -euxo pipefail
+          pnpm exec vitest run \
+            scripts/__tests__/quality-modernization-run.test.mjs \
+            electron/services/__tests__/main-generation-owner.test.ts \
+            electron/services/__tests__/portable-project-format.test.ts \
+            electron/services/__tests__/project-access.test.ts \
+            --maxWorkers=1 --reporter=verbose
