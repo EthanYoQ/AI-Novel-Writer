@@ -8,6 +8,20 @@ import {
 } from '../provider-presets'
 
 describe('provider catalog', () => {
+  it('keeps scoped Qwen capacity on the exact CN endpoint and model', () => {
+    const profile = { provider: 'siliconflow', protocol: 'openai',
+      baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'Qwen/Qwen3.8-27B' }
+    expect(resolveModelProfileBudgetCapabilities(profile)).toMatchObject({ contextWindowTokens: 262144, maxOutputTokens: 16384 })
+    expect(resolveModelProfileBudgetCapabilities({ ...profile, provider: 'openai' }))
+      .toEqual(resolveModelProfileBudgetCapabilities(profile))
+    for (const overrides of [{ baseUrl: 'https://api.siliconflow.com/v1' },
+      { baseUrl: 'https://api.siliconflow.cn/v1?proxy=1' }, { modelName: 'Qwen/Qwen3.8-27B-other' },
+      { provider: 'custom' }, { protocol: 'gemini' }]) {
+      expect(resolveModelProfileBudgetCapabilities({ ...profile, ...overrides })).toBeUndefined()
+      expect(resolveModelProfileReasoningMapping({ ...profile, ...overrides })).toBeUndefined()
+    }
+  })
+
   it('exposes xAI Grok through its documented OpenAI-compatible preset', () => {
     const xai = createProviderCatalog().find((preset) => preset.provider === 'xai')
 

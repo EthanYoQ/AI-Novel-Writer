@@ -64,6 +64,27 @@ afterEach(() => {
 })
 
 describe('SiliconFlow explicit reasoning requests', () => {
+  it('sends Qwen medium through both native transports without enable_thinking', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ choices: [{ message: { content: '正文' }, finish_reason: 'stop' }] }) })
+      .mockResolvedValueOnce({ ok: true, body: { getReader: () => sseReader('data: [DONE]\n\n') } })
+    vi.stubGlobal('fetch', fetchMock)
+    const model: ModelProfile = { ...novelAIModel, provider: 'siliconflow',
+      baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'Qwen/Qwen3.8-27B', reasoningOverride: 'medium', maxTokens: 16384 }
+    const options = resolveGenerationParameters(model, { reasoningStage: 'review' })
+    const provider = new OpenAIProvider()
+    await provider.generate(model, [], options)
+    await provider.generateStream(model, [], { ...options, signal: new AbortController().signal,
+      onChunk: vi.fn(), onDone: vi.fn(), onError: vi.fn() })
+    for (const [url, request] of fetchMock.mock.calls) {
+      expect(url).toBe('https://api.siliconflow.cn/v1/chat/completions')
+      const body = JSON.parse(String((request as RequestInit).body))
+      expect(body).toMatchObject({ model: 'Qwen/Qwen3.8-27B', reasoning_effort: 'medium', max_tokens: 16384 })
+      expect(body).not.toHaveProperty('enable_thinking')
+      expect(body).not.toHaveProperty('thinking_budget')
+    }
+  })
+
   const silicon: ModelProfile = { ...novelAIModel, provider: 'openai',
     baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash' }
 

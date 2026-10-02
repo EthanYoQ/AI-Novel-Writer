@@ -19,6 +19,43 @@ function plan(profile = model(), input = task, budget = ledger()) {
 const gemini = () => model({ provider: 'gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', modelName: 'gemini-2.5-flash-lite', reasoningOverride: 'medium' })
 const silicon = () => model({ baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash', capabilities: { contextWindowTokens: 65536, maxOutputTokens: 8192, reasoning: false, structuredOutput: false, usage: false } })
 
+describe('fixed Qwen native admission', () => {
+  const qwen = () => model({ provider: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1',
+    modelName: 'Qwen/Qwen3.8-27B', maxTokens: 16384, reasoningOverride: 'medium' })
+  const inputs: GenerationTask[] = [task, { ...task, budgetDemand: {
+    kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 1000, segmentable: false,
+  } }]
+
+  it.each(inputs)('reserves the independent envelope and settles actual usage: %j', input => {
+    const budget = ledger()
+    const result = plan(qwen(), input, budget)
+    expect(result.reservedTokens).toBe(1048576)
+    expect(result.requestedOutputTokens).toBe(input.budgetDemand ? 2912 : 16384)
+    expect(plan({ ...qwen(), maxTokens: 32768 }, input).requestedOutputTokens).toBe(input.budgetDemand ? 2912 : 16384)
+    expect(result.options.reasoning).toEqual({ adapter: 'openai-reasoning-effort', reasoningEffort: 'medium' })
+    expect(plan({ ...qwen(), provider: 'openai' }, input).reservedTokens).toBe(1048576)
+    budget.attempts = [1, 2].map(index => ({ attemptId: `q-${index}`, reservationId: `r-${index}`,
+      rootActionId: '根', status: 'unknown', reservedTokens: 1048576, requestedOutputTokens: 16384, actualTokens: 100 }))
+    expect(() => plan(qwen(), input, budget)).toThrow('ROOT_BUDGET_EXHAUSTED')
+    budget.attempts[0].status = 'settled'
+    expect(() => plan(qwen(), input, budget)).toThrow('ROOT_BUDGET_EXHAUSTED')
+    budget.attempts[1].status = 'settled'
+    expect(plan(qwen(), input, budget).reservedTokens).toBe(1048576)
+    expect(() => plan(qwen(), { ...input, messages: [{ role: 'user', content: 'x'.repeat(262144) }] }))
+      .toThrow(input.budgetDemand ? 'TASK_BUDGET_CAPACITY_CONFLICT' : 'GENERATION_INPUT_CAPACITY_EXCEEDED')
+  })
+
+  it.each([
+    { baseUrl: 'https://api.siliconflow.com/v1' }, { baseUrl: 'http://api.siliconflow.cn/v1' },
+    { baseUrl: 'https://api.siliconflow.cn/v2' }, { baseUrl: 'https://api.siliconflow.cn/v1?proxy=1' },
+    { baseUrl: 'https://api.siliconflow.cn.evil.test/v1' }, { modelName: 'Qwen/Qwen3.8-27B-other' },
+    { provider: 'custom' }, { protocol: 'gemini' },
+    { reasoningOverride: 'auto' }, { reasoningOverride: 'high' }, { reasoningOverride: 'low' },
+  ] as Partial<ModelProfile>[])('refuses unregistered Qwen configuration %j', overrides => {
+    for (const input of inputs) expect(() => plan({ ...qwen(), ...overrides }, input)).toThrow()
+  })
+})
+
 describe('main generation physical liability planning without provider calls', () => {
   it.each(['high', 'max'] as const)('keeps SiliconFlow output and liability unchanged for explicit %s', reasoningOverride => {
     for (const input of [task, { ...task, budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 1000, segmentable: false } } as GenerationTask]) {

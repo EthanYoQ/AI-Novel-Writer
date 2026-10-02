@@ -257,6 +257,26 @@ export function createProviderCatalog(): ProviderPreset[] {
           },
         },
       },
+      {
+        name: 'Qwen/Qwen3.8-27B',
+        // Scoped native support: only the explicitly configured medium effort.
+        // https://huggingface.co/Qwen/Qwen3.8-27B
+        reasoningMapping: {
+          adapter: 'openai-reasoning-effort',
+          supportedEfforts: ['medium'],
+          providerValues: { medium: 'medium' },
+        },
+        maxTokens: 16_384,
+        budgetCapabilities: {
+          contextWindowTokens: 262_144,
+          // Conservative supported output, not a claim of the model's maximum.
+          maxOutputTokens: 16_384,
+          evidence: {
+            sourceUrl: 'https://www.siliconflow.cn/models',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
     ],
     embeddingModels: ['BAAI/bge-m3'],
     embeddingModelCapabilities: {
@@ -492,6 +512,9 @@ export function resolveModelProfileBudgetCapabilities(
   ) return undefined
 
   const model = preset.models.find(candidate => candidate.name === modelName)
+  // Qwen evidence is scoped to the published CN endpoint, not the V4 alias.
+  if (modelName === 'Qwen/Qwen3.8-27B'
+    && normalizedOfficialBaseUrl(profile.baseUrl) !== 'https://api.siliconflow.cn/v1') return undefined
   const dedicated = validatedBudgetCapabilities(model?.budgetCapabilities)
   if (dedicated) return dedicated
 

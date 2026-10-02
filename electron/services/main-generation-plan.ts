@@ -95,13 +95,23 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
   const gemini = host === 'generativelanguage.googleapis.com' && model.protocol === 'gemini'
   const siliconV4 = ['api.siliconflow.cn', 'api.siliconflow.com'].includes(host) && model.protocol === 'openai'
     && /^(?:Pro\/)?deepseek-ai\/DeepSeek-V4(?:-Flash|-Pro)?(?:-\d{4})?$/iu.test(model.modelName)
+  const siliconQwen = host === 'api.siliconflow.cn' && model.protocol === 'openai'
+    && ['siliconflow', 'openai'].includes(model.provider)
+    && endpoint.pathname.replace(/\/+$/u, '') === '/v1' && !endpoint.search && !endpoint.hash
+    && model.modelName === 'Qwen/Qwen3.8-27B' && model.reasoningOverride === 'medium'
+  // Qwen's usable capacity remains 256K. Reserve the model card's expanded 1M
+  // envelope conservatively under the provider's context truncation policy:
+  // https://docs.siliconflow.cn/docs/userguide/capabilities/reasoning
+  // https://huggingface.co/Qwen/Qwen3.8-27B
+  // This is engineering headroom, not an empirically proven billing maximum.
+  const totalBounded = siliconV4 || siliconQwen
   const evidence = receipt.capabilityEvidence
   const safety = MAIN_GENERATION_POLICY.safetyMarginTokens
   const remaining = budget.policy.maxTokenLiability - budget.attempts.reduce((sum, attempt) => sum + tokenLiability(attempt), 0)
   const parameters = resolveGenerationParameters(model, { creativeStrategy,
     reasoningStage: task.reasoningStage ?? (task.output === 'visible-text' ? 'drafting' : 'planning') })
   const geminiReasoning = parameters.reasoning?.adapter === 'gemini-thinking-budget' ? parameters.reasoning.thinkingBudget : null
-  const canBound = openai || deepseek || siliconV4 || gemini && geminiReasoning !== null && geminiReasoning >= 0
+  const canBound = openai || deepseek || totalBounded || gemini && geminiReasoning !== null && geminiReasoning >= 0
   if (!canBound) throw new Error('GENERATION_LIABILITY_UNBOUNDED')
   const separateReasoning = gemini ? geminiReasoning! : 0
   // One admission gate for every main task, with or without a semantic demand.
@@ -115,14 +125,14 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
     throw new Error('GENERATION_MODEL_CAPABILITY_UNKNOWN')
   }
   if (task.budgetDemand) {
-    if (remaining <= 0 || siliconV4 && remaining < 1_048_576) throw new Error('ROOT_BUDGET_EXHAUSTED')
+    if (remaining <= 0 || totalBounded && remaining < 1_048_576) throw new Error('ROOT_BUDGET_EXHAUSTED')
     const decision = planTaskBudget({
       stage: task.reasoningStage ?? (task.output === 'visible-text' ? 'drafting' : 'planning'),
       demand: task.budgetDemand,
       inputEstimate: { upperBoundTokens: inputUpperBoundTokens, estimatorVersion: MAIN_GENERATION_POLICY.estimatorVersion },
       capability,
       root: { remainingTokenLiability: remaining, maxOutputPerRequest: budget.policy.maxOutputPerRequest },
-      liability: siliconV4 ? { mode: 'total-bounded', totalLiabilityUpperBoundTokens: 1_048_576 }
+      liability: totalBounded ? { mode: 'total-bounded', totalLiabilityUpperBoundTokens: 1_048_576 }
         : gemini ? { mode: 'separate-bounded', reasoningUpperBoundTokens: separateReasoning } : { mode: 'included-in-output' },
       safetyMarginTokens: safety,
     })
@@ -140,10 +150,10 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
       reasoningUpperBoundTokens: decision.reasoningUpperBoundTokens, requestedOutputTokens: decision.reservedOutputTokens,
     }
   }
-  // A Silicon V4 attempt is admitted only when the root can still carry its
-  // full documented-context liability. Report exhausted root accounting before
+  // A total-bounded attempt requires room for its full reservation envelope.
+  // Report exhausted root accounting before
   // deriving a misleading non-positive per-request input capacity.
-  if (siliconV4 && remaining < 1_048_576) throw new Error('ROOT_BUDGET_EXHAUSTED')
+  if (totalBounded && remaining < 1_048_576) throw new Error('ROOT_BUDGET_EXHAUSTED')
   // Same capability merge as planTaskBudget: the verified model limits are only
   // ever narrowed by the user's ModelSettings limits, the root ceiling/remaining
   // liability and the input occupancy. The lease's frozen evidence numbers are
@@ -155,9 +165,9 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
     effectiveContext - inputUpperBoundTokens - separateReasoning - safety)
   if (!Number.isSafeInteger(requestedOutputTokens) || requestedOutputTokens <= 0) throw new Error('GENERATION_INPUT_CAPACITY_EXCEEDED')
   // SiliconFlow max_tokens excludes reasoning, and thinking_budget is not a hard
-  // stop for every model. Reserve its full documented context ceiling instead.
+  // stop for every model. Reserve the separately selected envelope instead.
   // This is a reservation, never a claim that the model consumed that many tokens.
-  const reasoningUpperBoundTokens = siliconV4
+  const reasoningUpperBoundTokens = totalBounded
     ? 1_048_576 - inputUpperBoundTokens - requestedOutputTokens - safety : separateReasoning
   const reservedTokens = inputUpperBoundTokens + requestedOutputTokens + reasoningUpperBoundTokens + safety
   if (reservedTokens > remaining) throw new Error('ROOT_BUDGET_EXHAUSTED')

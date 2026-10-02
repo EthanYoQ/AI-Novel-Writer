@@ -17,6 +17,18 @@ const geminiFlashLite: ModelProfile = {
 }
 
 describe('reasoning policy', () => {
+  it('supports only explicit Qwen medium without forcing other requests', () => {
+    const model: ModelProfile = { ...geminiFlashLite, provider: 'siliconflow', protocol: 'openai',
+      baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'Qwen/Qwen3.8-27B' }
+    expect(resolveReasoningPolicy({ model: { ...model, reasoningOverride: 'medium' }, stage: 'review' }))
+      .toEqual({ requested: 'medium', effective: 'medium', status: 'mapped', source: 'model-override',
+        providerDirective: { adapter: 'openai-reasoning-effort', reasoningEffort: 'medium' } })
+    for (const reasoningOverride of [undefined, 'auto', 'off', 'low', 'high', 'max'] as const) {
+      expect(resolveReasoningPolicy({ model: { ...model, reasoningOverride }, stage: 'planning' }))
+        .toMatchObject({ effective: null, status: 'unsupported' })
+    }
+  })
+
   const silicon: ModelProfile = { ...geminiFlashLite, provider: 'openai', protocol: 'openai',
     baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash' }
 
