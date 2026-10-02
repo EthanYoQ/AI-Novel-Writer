@@ -810,7 +810,8 @@ test('separated-review diagnostic runs six zero-model owner slots and preserves 
     modelParameters: { responseFormat: 'native-default' } }
   const inputBytes = Buffer.from(JSON.stringify(input)), inputHash = hash(inputBytes)
   const registration = { ...registered, diagnosticInputHash: inputHash,
-    operations: operations.map(({ messages, materialsSourceId, ...slot }) => slot) }
+    operations: operations.map(operation => Object.fromEntries(Object.entries(operation)
+      .filter(([key]) => key !== 'messages' && key !== 'materialsSourceId'))) }
   const bytes = Buffer.from(JSON.stringify({ ...protocol, phases: { ...protocol.phases, [phase]: registration } }))
   const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/separated-review-test-'))
   const ledger = path.join(directory, 'synthetic-ledger.jsonl'), originalRead = fs.readFileSync
@@ -3886,7 +3887,7 @@ test('syntax repair gate requires settled malformed primary output, not purpose 
       `${fixture.slice(repairStart, repairEnd)}\nreturn structuredSyntaxRepair`)
     const checkAuthority = new Function('operationKind', 'candidate', 'request', 'db', 'chapter', 'promptText',
       'preflight', 'authorityFacts', 'predecessorReadbacks', 'naturalPredecessorText', 'scene', 'structuredSyntaxRepair',
-      `const fullRun = request.phase === 'full', continuityRun = false, reviewedRun = false, boundedRun = false, aiReviewRun = false;\n${fixture.slice(checkStart, checkEnd)}`)
+      `const fullRun = request.phase === 'full', diagnosticRun = false, continuityRun = false, reviewedRun = false, boundedRun = false, aiReviewRun = false;\n${fixture.slice(checkStart, checkEnd)}`)
     const readAuthorityEvidence = new Function('operationKind', 'candidate', 'request', 'authorityFacts', 'sha',
       'promptText', 'structuredSyntaxRepair', 'predecessorReadbacks', 'db', 'chapter',
       `const separatedRun = false, continuityRun = false, reviewedRun = false, boundedRun = false, aiReviewRun = false; return ${fixture.slice(evidenceStart, evidenceEnd).trim().replace(/,$/, '')}`)
@@ -5244,7 +5245,7 @@ test('bounded-revision synthetic response switch covers refine and both ordinary
   const end = fixture.indexOf('        // Development transport', start)
   assert.ok(start >= 0 && end > start)
   const generate = new Function('request', 'operationKind', 'current', 'assert', 'BOUNDED_REVISION_DIAGNOSTIC',
-    `${constants}\nconst diagnosticRun = false, reviewedRun = false, boundedRun = true, aiReviewRun = false;
+    `${constants}\nconst separatedRun = false, diagnosticRun = false, reviewedRun = false, boundedRun = true, aiReviewRun = false;
      const chapter = { number: 2, requiredEvents: ['核查遇阻', '承担代价'] };
      const promptText = '', reviewedSyntheticIssues = [], reviewedMustShowTexts = [];
      const db = { prepare: () => ({ pluck: () => ({ get: () => current }) }) }, latestDraft = () => ({ content: current });

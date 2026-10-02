@@ -75,7 +75,7 @@ function isReviewResult(value: unknown): value is ReviewResult {
     ))
 }
 
-/** Parse one visible JSON report without accepting prose, partial JSON or model-owned source keys. */
+/** Parse one visible JSON report; blank pass quotes are omitted without relaxing the model shape gate. */
 export function parseReviewGenerationResult(content: string): ReviewResult {
   const trimmed = content.trim()
   const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu.exec(trimmed)
@@ -88,7 +88,7 @@ export function parseReviewGenerationResult(content: string): ReviewResult {
       category: item.category,
       severity: item.severity,
       description: boundText(item.description, REVIEW_DESCRIPTION_MAX_CHARACTERS),
-      ...(item.quote === undefined
+      ...(item.quote === undefined || (item.severity === 'pass' && !item.quote.trim())
         ? {}
         : { quote: boundText(item.quote, REVIEW_QUOTE_MAX_CHARACTERS) }),
     })),

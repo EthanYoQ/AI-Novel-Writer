@@ -25,12 +25,17 @@ function build(overrides: Partial<Parameters<typeof buildReviewGenerationReport>
 }
 
 describe('parseReviewGenerationResult', () => {
-  it('accepts one strict JSON object or the original JSON fence and preserves category bytes', () => {
-    const content = JSON.stringify({ ...passing, items: [{ ...passingItem, category: '  原始类别  ' }] })
-    const expected = { ...passing, items: [{ ...passingItem, category: '  原始类别  ' }] }
+  it('accepts one strict JSON object or the original JSON fence and preserves category bytes and nonempty pass quotes', () => {
+    const content = JSON.stringify({ ...passing, items: [{ ...passingItem, category: '  原始类别  ', quote: '  原文。  ' }] })
+    const expected = { ...passing, items: [{ ...passingItem, category: '  原始类别  ', quote: '原文。' }] }
     expect(parseReviewGenerationResult(content)).toEqual(expected)
     expect(parseReviewGenerationResult(` \n\`\`\`JSON\t\r\n${content}\r\n\`\`\` \n`)).toEqual(expected)
     expect(parseReviewGenerationResult(JSON.stringify({ ...passing, items: Array.from({ length: 10 }, () => passingItem) })).items).toHaveLength(10)
+  })
+
+  it.each(['', ' \t\r\n '])('omits an empty pass quote just like an absent quote: %j', quote => {
+    expect(parseReviewGenerationResult(JSON.stringify({ ...passing, items: [{ ...passingItem, quote }] })))
+      .toEqual(parseReviewGenerationResult(JSON.stringify(passing)))
   })
 
   it('bounds summary, description and quote by Unicode characters without splitting surrogate pairs', () => {
@@ -57,7 +62,6 @@ describe('parseReviewGenerationResult', () => {
     ['blank category', { ...passing, items: [{ ...passingItem, category: ' ' }] }],
     ['non-string description', { ...passing, items: [{ ...passingItem, description: 1 }] }],
     ['blank description', { ...passing, items: [{ ...passingItem, description: '\n' }] }],
-    ['blank optional quote', { ...passing, items: [{ ...passingItem, quote: ' ' }] }],
     ['non-string quote', { ...passing, items: [{ ...passingItem, quote: null }] }],
     ['extra root key', { ...passing, approved: true }],
     ['model normalized goal contract', { ...passing, goalReview: {} }],
@@ -68,7 +72,10 @@ describe('parseReviewGenerationResult', () => {
   })
 
   it.each(['error', 'warning'])('requires a nonempty quote for %s', severity => {
-    expect(() => parseReviewGenerationResult(JSON.stringify({ ...passing, items: [{ ...passingItem, severity }] }))).toThrow()
+    for (const quote of [undefined, '', ' \t\n ']) {
+      expect(() => parseReviewGenerationResult(JSON.stringify({ ...passing, items: [{ ...passingItem, severity, quote }] })))
+        .toThrow('invalid review contract')
+    }
     const item = { ...passingItem, severity, quote: '原文。' }
     expect(parseReviewGenerationResult(JSON.stringify({ ...passing, items: [item] })).items).toEqual([item])
   })
