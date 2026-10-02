@@ -10,6 +10,8 @@
 
 当前工作候选增加 `s14b-candidate-only-three-rounds-v1`。历史登记保留；新 revision 使用候选自己的生产模板、三个持续项目和短细纲原生产操作。实现、独审及真实验收进度以唯一检查点为准，不能把本段当作已冻结或文学通过声明。
 
+2026-10-02 用户追加的[模型差异与软件交付规则](thread10-delivery-plan.md#2026-10-02-用户追加模型差异与软件交付)解除已确认模型失败对软件交付的单独阻断。机器评分及历史结果不改判，未运行批次不记 PASS。post-UI 原生技术检查继续使用已登记阶段及唯一物理账本。
+
 - `freeze-targets --output <新私有 targets.json> --model-id <已安全配置的 id>` 在新 revision 下只冻结 candidate；不再要求 baseline。配置就绪后用 `register-batch --targets <targets.json> --output <新私有 batch.json>` 预登记代码、协议、模型配置 hash、30 个案例槽位及实际 invocation。
 - 正式 `c16-c18 --targets ... --mode real --physical-ledger ... --batch ... --round 1|2|3` 与 `full ... --batch ... --round 1` 消费同一批次。继续执行使用相同 batch/round，读取已有执行记录；已发送且结果不明的位置保留失败并对账，不换 invocation 重抽。后继缺少有效保存稿时保留 NOT_RUN，其他独立链继续。
 - 新正文每条在同一 root 先执行一次 `chapter-draft-short-outline`，其实际产物不得用于正文组合或可信派生；正文和恢复沿用其原产物与组合提示身份。四条恢复写作的一轮原生请求登记为 20–84；三个持续项目九章为 30–180。三轮加持续写作合计预计 90–432 次请求，具体包含原生格式恢复、续写和压缩的实际分支。80 是历史计划额，不是硬帽；开发筛选和独有 post-UI 请求另记实际数量，不填正式分母。
