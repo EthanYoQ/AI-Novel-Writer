@@ -169,7 +169,8 @@ export class ReviewRevisionGeneration {
       || !isDeepStrictEqual(selection.authorInputs, [{ id: 'review-revision-context', text: JSON.stringify(context) }])
       || (prepared.parentRootActionId !== undefined && selection.parentRootActionId !== prepared.parentRootActionId)
       || (prepared.parentRootActionId === undefined && selection.parentRootActionId !== undefined)
-      || prepared.modelId && selection.modelId !== prepared.modelId) throw new Error('GENERATION_REVIEW_CONTEXT_MISMATCH')
+      // The confirmed review proves lineage, not the model choice of a new revision stage.
+      || !context.confirmation && prepared.modelId && selection.modelId !== prepared.modelId) throw new Error('GENERATION_REVIEW_CONTEXT_MISMATCH')
     if (!isDeepStrictEqual(context, captureReviewRevisionContext(this.db, reviewRevisionRequest(context), this.scope.projectId,
       context.recheck?.version))
       || !isDeepStrictEqual(this.parent(context), prepared.parentRootActionId ? { parentRootActionId: prepared.parentRootActionId, modelId: prepared.modelId } : {}))

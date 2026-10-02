@@ -80,7 +80,10 @@ export abstract class ReviewRevisionCommand extends BaseWorkflowCommand<string> 
     this.assertNotCancelled(params.context)
     params.context.writingLanguage = prepared.context.writingLanguage
     params.context.uiLocale = prepared.context.uiLocale
-    if (prepared.modelId) params.context.generationModelId = prepared.modelId
+    // A new confirmed revision may select its own model; recovery keeps the stage's frozen model.
+    if (prepared.modelId && (this.recovery || !prepared.context.confirmation || !params.context.generationModelId?.trim())) {
+      params.context.generationModelId = prepared.modelId
+    }
     const finalized = prepared.context.source.status === 'finalized'
     return this.executeWithGenerationRuntime('text', params, async () => {
       const receipt = await this.generateAndCommit(prepared, params)

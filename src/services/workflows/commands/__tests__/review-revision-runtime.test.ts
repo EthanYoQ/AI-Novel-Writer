@@ -386,9 +386,8 @@ describe('review/revision consumers using the main contract (synthetic transport
     expect(f.writes()).toBe(0)
   })
 
-  it('forwards the main-proved review root/model and only confirmed decisions to review refinement', async () => {
+  it('defaults to the main-proved review model and forwards its root and only confirmed decisions', async () => {
     const f = setup([{ content: revised, finishReason: 'stop' }])
-    f.args.context.generationModelId = 'renderer-selected-other-model'
     await f.command('refine-from-review').execute(f.args)
     expect(f.fixture.selections[0]).toMatchObject({ parentRootActionId: 'fixture-review-root' })
     expect(f.dependencies.createRuntime.mock.calls[0]![0]).toMatchObject({ modelId: 'model-a' })

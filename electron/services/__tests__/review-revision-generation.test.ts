@@ -23,11 +23,15 @@ import type { PrepareReviewRevisionRequest } from '../../../src/shared/review-re
 import { verifyM03ReviewCycle } from '../../migrations/m03-review-cycle'
 import { countDraftUnits } from '../../../src/shared/draft-units'
 import { selectFrozenReviewRevisionMaterials } from '../../../src/services/workflows/commands/review-revision-materials'
+import { RefineFromReviewCommand } from '../../../src/services/workflows/commands/refine-from-review.command'
+import { useProjectStore } from '../../../src/stores/project-store'
+import { useEditorStore } from '../../../src/stores/editor-store'
+import type { WorkflowContext } from '../../../src/stores/workflow-store'
 
 vi.mock('../../database', () => ({ getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn(() => null) }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const cleanup: (() => void)[] = []
-afterEach(() => { for (const dispose of cleanup.splice(0)) dispose(); vi.restoreAllMocks() })
+afterEach(() => { for (const dispose of cleanup.splice(0)) dispose(); vi.restoreAllMocks(); vi.unstubAllGlobals(); useProjectStore.setState({ currentProject: null }) })
 const prose = '林岚走进北塔，灯火照亮了石阶。'.repeat(20)
 const revisedProse = prose.replace('灯火', '月光')
 const report = JSON.stringify({ summary: '检查完成', items: [{ category: '表达', severity: 'warning', description: '补充动作细节', quote: '林岚走进北塔' }] })
@@ -48,9 +52,11 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   db.prepare('INSERT INTO contents(id,body) VALUES(1,?)').run(prose)
   db.exec("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(1,1,1,'draft',1,280)")
   const model: ModelProfile = { id: 'synthetic', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1', apiKey: 'synthetic-key', baseUrl: 'https://api.openai.com/v1', temperature: 0.7, maxTokens: 2048, purposes: ['generation'], capabilities: { contextWindowTokens: 32768, maxOutputTokens: 2048, reasoning: false, structuredOutput: true, usage: true } }
+  const loadModel = (id: string) => id === model.id ? model : id === 'revision-model'
+    ? { ...model, id, modelName: 'gpt-4.1-mini', maxTokens: 1024 } : null
   const spy = vi.fn<GenerationRunServiceDependencies['dispatch']>(dispatch ?? (async (_request, options) => { options.onVisible({ kind: 'delta', text: report }); return { finishReason: 'stop', usage: null } }))
   const deps = { db, projectStorageRoot: root, globalDataRoot: root, readBuiltinPrompt: () => '冻结的合成提示词' }
-  const makeOwner = (epoch: string) => createMainGenerationOwner({ database: db, projectId: 'project', epoch, assertCurrent: () => {}, leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch: spy,
+  const makeOwner = (epoch: string) => createMainGenerationOwner({ database: db, projectId: 'project', epoch, assertCurrent: () => {}, leases: new ModelExecutionLeaseRegistry({ loadModel }), loadModel, dispatch: spy,
     buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch, modelReceipt, policy: MAIN_GENERATION_POLICY, outputContract: generationOutputContract(selection) }).binding,
     rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, MAIN_GENERATION_POLICY).binding })
   const owner = makeOwner('epoch-1')
@@ -69,6 +75,75 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   return { get db() { return db }, owner, makeOwner, reopenStorage, prepare, selection, run, spy, deps }
 }
 describe('review and revision generation through the actual owner and SQLite', () => {
+  it.each(['revision-model', 'synthetic', undefined])('uses the selected revision model %s through the real command and retains it on recovery', async selectedModelId => {
+    let invocation = 0
+    const f = fixture(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: ++invocation === 1 ? report : revisedProse })
+      return { finishReason: 'stop', usage: { promptTokens: 60, completionTokens: 40, totalTokens: 100,
+        reasoningTokens: 0, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true } }
+    })
+    const original = await f.run(), saved = f.owner.commitReview(original)
+    const content = serializeHumanConfirmedReviewSnapshot(createHumanConfirmedReviewSnapshot({ sourceReviewId: saved.id,
+      sourceDraft: saved.source, summary: '确认修稿', authorGuidance: '保留原文', items: [{ category: '表达',
+        severity: 'warning', description: '补充动作细节', decision: 'apply', origin: 'ai' }] })!)
+    const confirmation = ReviewRepository.create({ baseDraftId: 1, content, expectedSource: saved.source }, f.db)
+    const projectPath = f.deps.projectStorageRoot
+    const projectSession = { projectId: 'project', projectPath, leaseId: 'epoch-1' }
+    useProjectStore.setState({ currentProject: { id: 'project', path: projectPath, name: '合成', sessionLease: 'epoch-1' } as never })
+    useEditorStore.setState({ tabs: [], activeTabId: null, draftLedgers: {} })
+    let failSave = true
+    let failDispatch = true
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      const input = args[0]
+      switch (channel) {
+        case 'review-revision:prepare': return f.owner.prepareReviewRevision(input as PrepareReviewRevisionRequest)
+        case 'review-revision:read-recovery': return f.owner.readReviewRevisionRecovery((input as { handle: typeof original.handle }).handle)
+        case 'review-revision:commit-revision':
+          if (failSave) { failSave = false; throw new Error('SYNTHETIC_SAVE_ACK_FAILURE') }
+          return f.owner.commitRevision(input as Parameters<typeof f.owner.commitRevision>[0])
+        case 'generation:begin': return f.owner.begin(input as BeginGenerationRequest)
+        case 'generation:read': return f.owner.read(input as typeof original.handle)
+        case 'generation:resume': return f.owner.resume(input as typeof original.handle)
+        case 'generation:execute':
+          if (failDispatch) { failDispatch = false; throw new Error('SYNTHETIC_BEFORE_DISPATCH') }
+          return f.owner.execute(input as Parameters<typeof f.owner.execute>[0])
+        case 'generation:bind-material-decision': {
+          const request = input as { handle: typeof original.handle; materialDecision: Parameters<typeof f.owner.bindMaterialDecision>[1] }
+          return f.owner.bindMaterialDecision(request.handle, request.materialDecision)
+        }
+        case 'generation:read-visible-composition': return f.owner.readVisibleComposition(input as typeof original.handle)
+        case 'generation:compose-visible': return f.owner.composeVisible(input as typeof original.handle, args[1] as string[], args[2] as string)
+        case 'prompt:load-global': return { templates: [], diagnostics: [] }
+        case 'fs:check-exists': return false
+        default: throw new Error(`Unexpected test IPC: ${channel}`)
+      }
+    })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke, on: () => () => {} } })
+    const context: WorkflowContext = { runId: 'selected-revision', projectPath, projectSession,
+      generationModelId: selectedModelId, writingLanguage: 'zh-CN', uiLocale: 'zh-CN', data: {}, cancelled: false }
+    const callbacks = { log: vi.fn(), appendText: vi.fn(), replaceText: vi.fn(), setProgress: vi.fn() }
+    const command = new RefineFromReviewCommand({ draftPath: 'ai-novel://draft/1', draftContent: prose,
+      chapterNumber: 1, sourceDraft: { ...saved.source, contentRevision: 1 }, reviewSourceId: confirmation.id,
+      confirmedReviewContent: content, userRefinePrompt: '' })
+    const expectedModel = selectedModelId ?? 'synthetic'
+    await expect(command.execute({ context, callbacks, step: {} })).rejects.toThrow('SYNTHETIC_BEFORE_DISPATCH')
+    const handle = context.mainGenerationRunHandle!
+    expect(f.owner.readReviewRevisionRecovery(handle).modelId).toBe(expectedModel)
+    context.generationModelId = expectedModel === 'synthetic' ? 'revision-model' : 'synthetic'
+    await expect(command.execute({ context, callbacks, step: {} })).rejects.toThrow('SYNTHETIC_SAVE_ACK_FAILURE')
+    expect(f.spy.mock.calls.map(([request]) => (request as { model: ModelProfile }).model.id)).toEqual(['synthetic', expectedModel])
+    const revisionRequest = f.spy.mock.calls[1]![0] as { model: ModelProfile }
+    expect(revisionRequest.model.maxTokens).toBe(expectedModel === 'revision-model' ? 1024 : 2048)
+    expect(handle.rootActionId).toBe(original.handle.rootActionId)
+    expect(f.owner.read(handle).ledger).toMatchObject({ physicalRequests: 2, tokenLiability: 200 })
+    expect(f.owner.readReviewRevisionRecovery(handle).modelId).toBe(expectedModel)
+    context.generationModelId = expectedModel === 'synthetic' ? 'revision-model' : 'synthetic'
+    await expect(command.execute({ context, callbacks, step: {} })).resolves.toBe(revisedProse)
+    expect(context.generationModelId).toBe(expectedModel)
+    expect(f.spy).toHaveBeenCalledTimes(2)
+    expect(f.owner.readReviewRevisionRecovery(handle).saved?.content).toBe(revisedProse)
+    expect(f.db.prepare('SELECT review_source_id FROM revisions').pluck().get()).toBe(confirmation.id)
+  })
   it('captures only the saved predecessor bound by the source draft and rejects changed predecessor bytes', () => {
     const f = fixture()
     f.db.exec('UPDATE drafts SET chapter_number=2 WHERE id=1')
