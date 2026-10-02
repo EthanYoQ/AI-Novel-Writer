@@ -108,7 +108,7 @@ post-UI budget/context/review 保留独有材料、触发、作者确认、保�
 
 ## S14D — 三目标包资格
 
-输入：S14A 候选与有效 S14B/post-UI、S14C 结论。按当前 .release/release-profile.json 和 workflows 验 Windows x64、macOS ARM64、macOS x64 的真实包、安装/启动、native 及平台特有语义，不在每个平台重复全部普通组件/文学矩阵。
+输入：S14A 候选、post-UI 技术断言通过和有效 S14C 结论。S14B 分列软件缺陷、模型局限及文学资格状态。按用户追加规则确认的模型局限不单独阻断汇合；未获文学资格须披露，不能改记 PASS。保存、来源、恢复和作者值保护的缺陷仍须解决。按当前 .release/release-profile.json 和 workflows 验 Windows x64、macOS ARM64、macOS x64 的真实包、安装/启动、native 及平台特有语义，不在每个平台重复全部普通组件/文学矩阵。
 
 现有云端权限与发布策略不变；没有授权则交具体待授权项。证据沿用保留 SHA/影响判断，新发布包有准确 hash/来源/资格。Windows native 并发崩溃按可达性和对应环境定位，单文件 PASS 不自动关闭。纯文档不重跑全部资格。
 
