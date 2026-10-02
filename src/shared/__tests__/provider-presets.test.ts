@@ -122,7 +122,10 @@ describe('provider catalog', () => {
     })).toEqual(gemini?.models.find(model => model.name === 'gemini-2.5-flash-lite')?.capabilities)
   })
 
-  it('publishes conservative SiliconFlow budget facts and explicit reasoning mapping separately', () => {
+  it.each([
+    ['deepseek-ai/DeepSeek-V4-Flash', 'https://www.siliconflow.com/models/deepseek-v4-flash'],
+    ['deepseek-ai/DeepSeek-V4-Pro', 'https://www.siliconflow.com/models/deepseek-v4-pro'],
+  ])('publishes conservative SiliconFlow budget facts and explicit reasoning mapping separately: %s', (modelName, sourceUrl) => {
     const siliconflow = createProviderCatalog().find((preset) => preset.provider === 'siliconflow')
 
     expect(siliconflow).toMatchObject({
@@ -132,7 +135,7 @@ describe('provider catalog', () => {
       protocol: 'openai',
     })
     expect(siliconflow?.models).toContainEqual({
-      name: 'deepseek-ai/DeepSeek-V4-Flash',
+      name: modelName,
       maxTokens: 16_384,
       reasoningMapping: {
         adapter: 'siliconflow-v4-thinking',
@@ -143,26 +146,28 @@ describe('provider catalog', () => {
         contextWindowTokens: 1_000_000,
         maxOutputTokens: 393_000,
         evidence: {
-          sourceUrl: 'https://www.siliconflow.com/models/deepseek-v4-flash',
+          sourceUrl,
           calibration: 'conservative-provider-documentation',
         },
       },
     })
-    expect(siliconflow?.models[0]?.capabilities).toBeUndefined()
+    expect(siliconflow?.models.find(model => model.name === modelName)?.capabilities).toBeUndefined()
   })
 
-  it('resolves the approved OpenAI-compatible SiliconFlow profile without changing its provider', () => {
-    expect(resolveModelProfileBudgetCapabilities({
-      provider: 'openai',
-      protocol: 'openai',
-      baseUrl: 'https://api.siliconflow.cn/v1',
-      modelName: 'deepseek-ai/DeepSeek-V4-Flash',
-      maxTokens: 16_384,
-    })).toMatchObject({
-      contextWindowTokens: 1_000_000,
-      maxOutputTokens: 393_000,
+  it.each(['deepseek-ai/DeepSeek-V4-Flash', 'deepseek-ai/DeepSeek-V4-Pro'])(
+    'resolves the approved OpenAI-compatible SiliconFlow profile without changing its provider: %s', modelName => {
+      const profile = { provider: 'openai', protocol: 'openai', baseUrl: 'https://api.siliconflow.cn/v1',
+        modelName, maxTokens: 16_384 }
+      expect(resolveModelProfileBudgetCapabilities(profile)).toMatchObject({
+        contextWindowTokens: 1_000_000,
+        maxOutputTokens: 393_000,
+      })
+      expect(resolveModelProfileReasoningMapping(profile)).toMatchObject({
+        adapter: 'siliconflow-v4-thinking',
+        supportedEfforts: ['high', 'max'],
+        providerValues: { high: 'high', max: 'max' },
+      })
     })
-  })
 
   it.each([
     { baseUrl: 'https://api.siliconflow.com/v1' },
@@ -174,7 +179,7 @@ describe('provider catalog', () => {
     { baseUrl: 'https://user@api.siliconflow.cn/v1' },
     { baseUrl: 'https://api.siliconflow.cn/v1?route=other' },
     { baseUrl: 'https://api.siliconflow.cn/v1#other' },
-    { modelName: 'deepseek-ai/DeepSeek-V4-Pro' },
+    { modelName: 'deepseek-ai/DeepSeek-V4-Pro-2026' },
     { modelName: 'deepseek-ai/DeepSeek-V4-Flash-2026' },
     { provider: 'custom' },
     { protocol: 'anthropic' },
@@ -183,9 +188,10 @@ describe('provider catalog', () => {
       baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash', ...overrides })).toBeUndefined()
   })
 
-  it('normalizes the official SiliconFlow trailing slash for reasoning', () => {
+  it.each(['deepseek-ai/DeepSeek-V4-Flash', 'deepseek-ai/DeepSeek-V4-Pro'])(
+    'normalizes the official SiliconFlow trailing slash for reasoning: %s', modelName => {
     expect(resolveModelProfileReasoningMapping({ provider: 'siliconflow', protocol: 'openai',
-      baseUrl: 'https://api.siliconflow.cn/v1/', modelName: 'deepseek-ai/DeepSeek-V4-Flash' }))
+      baseUrl: 'https://api.siliconflow.cn/v1/', modelName }))
       .toMatchObject({ adapter: 'siliconflow-v4-thinking' })
   })
 
@@ -194,23 +200,24 @@ describe('provider catalog', () => {
     'https://api.siliconflow.cn/v1/',
     'https://api.siliconflow.com/v1',
   ])('resolves the exact SiliconFlow model budget on an official endpoint: %s', (baseUrl) => {
-    expect(resolveModelProfileBudgetCapabilities({
-      provider: 'siliconflow',
-      protocol: 'openai',
-      baseUrl,
-      modelName: 'deepseek-ai/DeepSeek-V4-Flash',
-    })).toEqual({
-      contextWindowTokens: 1_000_000,
-      maxOutputTokens: 393_000,
-      evidence: {
-        sourceUrl: 'https://www.siliconflow.com/models/deepseek-v4-flash',
-        calibration: 'conservative-provider-documentation',
-      },
-    })
+    for (const [modelName, sourceUrl] of [
+      ['deepseek-ai/DeepSeek-V4-Flash', 'https://www.siliconflow.com/models/deepseek-v4-flash'],
+      ['deepseek-ai/DeepSeek-V4-Pro', 'https://www.siliconflow.com/models/deepseek-v4-pro'],
+    ]) {
+      const profile = { provider: 'siliconflow', protocol: 'openai', baseUrl, modelName }
+      expect(resolveModelProfileBudgetCapabilities(profile)).toEqual({
+        contextWindowTokens: 1_000_000,
+        maxOutputTokens: 393_000,
+        evidence: { sourceUrl, calibration: 'conservative-provider-documentation' },
+      })
+      if (baseUrl === 'https://api.siliconflow.com/v1') expect(resolveModelProfileReasoningMapping(profile)).toBeUndefined()
+    }
   })
 
   it.each([
     { baseUrl: 'https://proxy.example.test/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash' },
+    { baseUrl: 'https://proxy.example.test/v1', modelName: 'deepseek-ai/DeepSeek-V4-Pro' },
+    { baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Pro-2026' },
     { baseUrl: 'http://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash' },
     { baseUrl: 'https://api.siliconflow.cn', modelName: 'deepseek-ai/DeepSeek-V4-Flash' },
     { baseUrl: 'https://api.siliconflow.cn/v1?tenant=x', modelName: 'deepseek-ai/DeepSeek-V4-Flash' },

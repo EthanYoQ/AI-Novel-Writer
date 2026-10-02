@@ -239,6 +239,24 @@ export function createProviderCatalog(): ProviderPreset[] {
           },
         },
       },
+      {
+        name: 'deepseek-ai/DeepSeek-V4-Pro',
+        // https://docs.siliconflow.cn/docs/api/chat-completions-post
+        reasoningMapping: {
+          adapter: 'siliconflow-v4-thinking',
+          supportedEfforts: ['high', 'max'],
+          providerValues: { high: 'high', max: 'max' },
+        },
+        maxTokens: 16_384,
+        budgetCapabilities: {
+          contextWindowTokens: 1_000_000,
+          maxOutputTokens: 393_000,
+          evidence: {
+            sourceUrl: 'https://www.siliconflow.com/models/deepseek-v4-pro',
+            calibration: 'conservative-provider-documentation',
+          },
+        },
+      },
     ],
     embeddingModels: ['BAAI/bge-m3'],
     embeddingModelCapabilities: {
