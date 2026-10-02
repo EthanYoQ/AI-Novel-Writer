@@ -169,7 +169,12 @@ export function registerLLMController() {
       const result = await provider.generate(
         model,
         request.messages,
-        resolveGenerationParameters(model, request),
+        {
+          ...resolveGenerationParameters(model, request),
+          // One execution lease spans one logical generation run; its id is the
+          // gateway conversation scope so retries keep session affinity.
+          conversationId: request.modelExecutionLeaseId,
+        },
       )
       recordProviderOutcome(request, model, startedAt, result)
       return result
@@ -190,7 +195,12 @@ export function registerLLMController() {
       return { requestId, started: false, error: String(error) }
     }
     if (!model) return { requestId, started: false }
-    const generationParameters = resolveGenerationParameters(model, request)
+    const generationParameters = {
+      ...resolveGenerationParameters(model, request),
+      // Same scope as llm:generate: the execution lease, when present, marks
+      // one logical generation run for gateway session affinity.
+      conversationId: request.modelExecutionLeaseId,
+    }
 
     const abortController = new AbortController()
     const startedAt = Date.now()

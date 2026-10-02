@@ -1,6 +1,26 @@
 import { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from './provider.interface'
 import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 import { resolveOpenAIChatCompletionsUrl } from './openai-compatible-endpoint'
+import { version as appVersion } from '../../package.json'
+
+const OPENCODE_GO_USER_AGENT = `ai-novel-writer/${appVersion}`
+
+function isOpencodeGoBaseUrl(baseUrl: string): boolean {
+  try {
+    const endpoint = new URL(baseUrl.trim())
+    const configuredPath = endpoint.pathname.replace(/\/+$/u, '')
+    return endpoint.protocol === 'https:'
+      && endpoint.hostname === 'opencode.ai'
+      && (configuredPath === '/zen/go' || configuredPath.startsWith('/zen/go/'))
+  } catch {
+    return false
+  }
+}
+
+// opencode Go requires a stable per-conversation session id for routing and
+// prompt caching. The caller supplies that conversation scope; a missing scope
+// degrades to a per-request id so one-off operations never share session
+// affinity with creative runs.
 
 export class OpenAIProvider implements ILLMProvider {
   private normalizeFinishReason(reason: string | null | undefined): LLMFinishReason {
@@ -66,6 +86,18 @@ export class OpenAIProvider implements ILLMProvider {
     return body
   }
 
+  private buildRequestHeaders(model: ModelProfile, conversationId?: string): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${model.apiKey}`,
+    }
+    if (isOpencodeGoBaseUrl(model.baseUrl)) {
+      headers['x-opencode-session'] = conversationId || crypto.randomUUID()
+      headers['User-Agent'] = OPENCODE_GO_USER_AGENT
+    }
+    return headers
+  }
+
   async generate(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMGenerateOptions): Promise<LLMResponse> {
     try {
       const url = resolveOpenAIChatCompletionsUrl(model.baseUrl, model.provider)
@@ -73,10 +105,7 @@ export class OpenAIProvider implements ILLMProvider {
 
       const res = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${model.apiKey}`,
-        },
+        headers: this.buildRequestHeaders(model, opts.conversationId),
         body: JSON.stringify(body),
       })
 
@@ -136,10 +165,7 @@ export class OpenAIProvider implements ILLMProvider {
 
       const res = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${model.apiKey}`,
-        },
+        headers: this.buildRequestHeaders(model, opts.conversationId),
         body: JSON.stringify(body),
         signal: opts.signal,
       })
