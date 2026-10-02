@@ -4,7 +4,7 @@
 
 ## 使用方法与权威顺序
 
-2026-10-02 用户追加的[模型差异与软件交付规则](thread10-delivery-plan.md#2026-10-02-用户追加模型差异与软件交付)优先适用。已确认的模型内容失败不单独阻断软件交付；文学资格未完成的事实与数据保护要求保留。
+2026-10-02 用户追加的[模型差异与软件交付规则](thread10-delivery-plan.md#2026-10-02-用户追加模型差异与软件交付)优先适用。替代模型须在同案例真实软件流程通过，才能据此排除该范围的编排问题。直连 API 成功不能替代此条件。文学资格未完成的事实与数据保护要求保留。
 
 1. 每项均读下表链接的**原 Spec 全文**，以及[核心 C01–C09](../../plans/novel-quality-modernization/03-CONTRACTS-AND-GATES.md)和 [Program v3 C10–C18 与旧 24 项覆盖表](../../plans/novel-quality-program-v3-2026-09-13/05-INTEGRATION-CONTRACT.md)中适用的条款。表内摘要是定位提示，不删减未列出的义务。
 2. 按[交付 delta](delivery-contract-delta-2026-09-21.md)应用替代关系；[线程 10 交付计划](thread10-delivery-plan.md)拥有本次产品增量、采样裁决和实施顺序，[现行变更规格](frontend-transition-specs.md)拥有其余前端、导入、交互及交付出口，[质量协议](quality-protocol.md)拥有机器接线说明与历史登记。新要求已生效但尚待实现；旧冻结原文和机器限制不能否决该要求，也不能被当作新资格就绪。[ADR 0019](../../adr/0019-remove-real-call-hard-cap.md)、[ADR 0020](../../adr/0020-legacy-project-copy-import.md)分别拥有调用上限调整和完整旧项目导入决定。

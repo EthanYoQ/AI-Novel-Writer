@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import os from 'node:os'
 import { runProductionCommandProbe, runProductionPhasePair, runProductionBridge, copyIsolatedRealModelConfig,
-  assertSharedInputDiagnostic, BOUNDED_REVISION_DIAGNOSTIC, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, POST_UI_AI_REVIEW_SCENARIOS, FULL_AI_REVIEW_SCENARIO, readBoundedRevisionSource,
+  assertSharedInputDiagnostic, R3_NATIVE_REVISION_DIAGNOSTIC, readR3NativeSource, BOUNDED_REVISION_DIAGNOSTIC, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, POST_UI_AI_REVIEW_SCENARIOS, FULL_AI_REVIEW_SCENARIO, readBoundedRevisionSource,
   productionBridgeHash, productionExecutionRuntime, productionScenario, PRODUCTION_BRIDGE, PHASE_SCENARIOS,
   validateCandidateContinuityResults, fullExecutionSchedule, validatePairedReceipt, validateFullAcceptedPredecessor, modelConfigurationHash, executionRecordIdentity } from './quality-modernization-driver.mjs'
 
@@ -129,7 +129,7 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
     || !phase.caseIds.includes(binding.caseId)
     || !phase.operations.some(operation => operation.id === binding.operation && (!operation.caseIds || operation.caseIds.includes(binding.caseId)))) fail('INVALID_CAMPAIGN_BINDING')
   if ((['full', 'c16-c18'].includes(binding.phase)) !== (binding.milestone === 'final')
-    || (['shared-input-diagnostic', 'separated-review-diagnostic', 'bounded-revision-diagnostic'].includes(binding.phase)) !== (binding.milestone === 'diagnostic')
+    || (['shared-input-diagnostic', 'separated-review-diagnostic', 'bounded-revision-diagnostic', 'r3-native-revision-diagnostic'].includes(binding.phase)) !== (binding.milestone === 'diagnostic')
     || binding.phase === 'shared-input-diagnostic' && (binding.arm !== 'candidate'
       || phase.nonQualification !== true || phase.maxPhysicalRequests !== 1
       || binding.messagesSha256 !== phase.messagesSha256 || binding.originalMessagesSha256 !== phase.originalMessagesSha256)
@@ -149,6 +149,12 @@ export function validateCampaignBinding(binding, { campaignMode, protocol, histo
       && (operation.kind !== 'directory' || binding.caseId.endsWith('/1')))) fail('INVALID_CAMPAIGN_BINDING')
   if (binding.arm === 'candidate' && (!binding.actual || ['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch']
     .some(key => typeof binding.actual[key] !== 'string' || !binding.actual[key]))) fail('ACTUAL_OWNER_ATTEMPT_REQUIRED')
+  if (binding.phase === 'r3-native-revision-diagnostic') {
+    if (binding.diagnosticInputHash !== R3_NATIVE_REVISION_DIAGNOSTIC.source.contextSha256
+      || binding.diagnosticSourceHash !== hash(R3_NATIVE_REVISION_DIAGNOSTIC.source)
+      || binding.actual?.projectId === R3_NATIVE_REVISION_DIAGNOSTIC.source.projectId
+      || binding.actual?.epoch === R3_NATIVE_REVISION_DIAGNOSTIC.source.epoch) fail('R3_NATIVE_SOURCE_BINDING_MISMATCH')
+  }
   if (binding.phase === 'separated-review-diagnostic') {
     selectPhase(protocol, binding.phase, binding.milestone)
     const slot = phase.operations.find(item => item.id === binding.operation)
@@ -244,7 +250,8 @@ export function validatePhysicalLedger(file) {
   const r87266499 = validateHistoricalSupersessionBoundary(raw, r9182d475, protocol.historicalC1687266499Boundary)
   const d021261f = validateHistoricalSupersessionBoundary(raw, r87266499, protocol.historicalC16D021261fBoundary)
   const r09ad48e1 = validateHistoricalSupersessionBoundary(raw, d021261f, protocol.historicalC1609ad48e1Boundary)
-  validateHistoricalSupersessionBoundary(raw, r09ad48e1, protocol.historicalSeparatedReviewB89b011aBoundary)
+  const separated = validateHistoricalSupersessionBoundary(raw, r09ad48e1, protocol.historicalSeparatedReviewB89b011aBoundary)
+  validateHistoricalSupersessionBoundary(raw, separated, protocol.historicalPostUi83573613Boundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -357,6 +364,7 @@ export function withLedgerReconciliation(ledgerPath, campaignMode, run) {
 export function selectPhase(protocol, phase, milestone = 'early') {
   if (!['early', 'post-ui', 'final', 'diagnostic'].includes(milestone)) fail('INVALID_MILESTONE')
   if (!Object.hasOwn(protocol.phases, phase)) fail('INVALID_PHASE')
+  if (phase === 'r3-native-revision-diagnostic' && !isDeepStrictEqual(protocol.phases[phase], R3_NATIVE_REVISION_DIAGNOSTIC)) fail('R3_NATIVE_REGISTRATION_MISMATCH')
   if (phase === 'bounded-revision-diagnostic' && !isDeepStrictEqual(protocol.phases[phase], BOUNDED_REVISION_DIAGNOSTIC))
     fail('BOUNDED_REVISION_REGISTRATION_MISMATCH')
   if (phase === 'separated-review-diagnostic') {
@@ -383,7 +391,7 @@ export function selectPhase(protocol, phase, milestone = 'early') {
     && !isDeepStrictEqual(protocol.phases[phase].postUiAiReview, POST_UI_AI_REVIEW_SCENARIOS[phase])) fail('AI_MANUSCRIPT_REGISTRATION_MISMATCH')
   if (phase === 'full' && !isDeepStrictEqual(protocol.phases.full.aiReviewFinal, FULL_AI_REVIEW_SCENARIO)) fail('AI_MANUSCRIPT_REGISTRATION_MISMATCH')
   if ((['full', 'c16-c18'].includes(phase)) !== (milestone === 'final')
-    || (['shared-input-diagnostic', 'separated-review-diagnostic', 'bounded-revision-diagnostic'].includes(phase)) !== (milestone === 'diagnostic')) fail('PHASE_MILESTONE_MISMATCH')
+    || (['shared-input-diagnostic', 'separated-review-diagnostic', 'bounded-revision-diagnostic', 'r3-native-revision-diagnostic'].includes(phase)) !== (milestone === 'diagnostic')) fail('PHASE_MILESTONE_MISMATCH')
   const selected = { ...protocol.phases[phase],
     ...(milestone === 'post-ui' ? protocol.phases[phase].postUiAiReview ?? protocol.phases[phase].postUi ?? {} : phase === 'full' ? protocol.phases.full.aiReviewFinal ?? {} : {}), phase, milestone }
   if (protocol.decisionRevision !== CANDIDATE_ONLY_PROTOCOL_REVISION || milestone === 'diagnostic') return selected
@@ -393,6 +401,11 @@ export function selectPhase(protocol, phase, milestone = 'early') {
   return { ...selected, ...current, phase, milestone }
 }
 export function forwardReasoningFor(protocol, phase, milestone) {
+  if (phase === 'r3-native-revision-diagnostic') {
+    const selected = selectPhase(protocol, phase, milestone)
+    return { revision: selected.scenarioRevision, model: selected.model, reasoningOverride: 'medium', creativeStrategy: 'auto',
+      scopes: [{ phase, milestone, caseIds: selected.caseIds }] }
+  }
   const registration = protocol.forwardReasoningExperiment
   const zero = protocol.forwardTemperatureExperiment
   const high = protocol.forwardHighReasoningExperiment
@@ -427,6 +440,7 @@ export function forwardReasoningFor(protocol, phase, milestone) {
     limits: !bounded && model ? model.limits : high.limits }
 }
 export function forwardQualificationWindowFor(protocol, phase, milestone) {
+  if (phase === 'r3-native-revision-diagnostic') { selectPhase(protocol, phase, milestone); return null }
   const registration = protocol.forwardQualificationWindowExperiment
   const reasoning = forwardReasoningFor(protocol, phase, milestone)
   if (registration === undefined) return null
@@ -805,6 +819,10 @@ export function updateLedger(file, event, options = {}) {
       // 绑定校验的 phase / caseId / operation 全部取自协议本身：阶段必须先存在、
       // caseId 必须在该阶段登记、operation 必须是该阶段登记的 operation id。
       // 未登记 operations 的阶段在这里 fail closed。
+      const postUi83573613Boundary = options.campaignMode === 'real'
+        ? protocol.historicalPostUi83573613Boundary : options.historicalPostUi83573613Boundary
+      const trustedPostUi83573613Events = postUi83573613Boundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedSeparatedReviewB89b011aEvents, postUi83573613Boundary) : trustedSeparatedReviewB89b011aEvents
       // 阶段决定首选分配桶：early 阶段用 early*，post-UI 重跑用 postUi*；
       // 同一 slot 的重复发送或已超出计划样本量的发送归入失败/修复余量。
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
@@ -827,6 +845,24 @@ export function updateLedger(file, event, options = {}) {
         }
         if (binding.phase === 'shared-input-diagnostic') {
           if (occupied.some(row => row.binding.phase === binding.phase)) fail('SHARED_INPUT_DIAGNOSTIC_ALREADY_DISPATCHED')
+          return 'nonQualificationDiagnostic'
+        }
+        if (binding.phase === 'r3-native-revision-diagnostic') {
+          const prior = [...reserved.values()].filter(row => row.binding.phase === binding.phase)
+          const matches = prior.filter(row => row.binding.operation === binding.operation)
+          const operations = R3_NATIVE_REVISION_DIAGNOSTIC.operations
+          const index = operations.findIndex(item => item.id === binding.operation)
+          if (prior.length >= R3_NATIVE_REVISION_DIAGNOSTIC.maxPhysicalRequests
+            || prior.some(row => ['invocationId', 'codeSha', 'sourceHash', 'driverHash', 'diagnosticInputHash']
+              .some(key => row.binding[key] !== binding[key]))
+            || matches.length >= (operations[index].kind === 'refine' ? 4 : 2)
+            || binding.actual.purpose === 'review-chapter' && matches.length !== 0
+            || binding.actual.purpose === 'review-chapter-rebuild' && matches.length !== 1
+            || operations[index].kind === 'refine' && matches.length > 0
+              && events.find(event => event.attemptId === matches.at(-1).attemptId && event.type === 'settle')?.finishReason !== 'length'
+            || operations.slice(0, index).some(item => !prior.some(row => row.binding.operation === item.id))
+            || prior.some(row => operations.findIndex(item => item.id === row.binding.operation) > index)
+            || prior.some(row => statuses.get(row.attemptId) !== 'settle')) fail('R3_NATIVE_ATTEMPT_UNAVAILABLE')
           return 'nonQualificationDiagnostic'
         }
         if (binding.phase === 'bounded-revision-diagnostic') {
@@ -856,7 +892,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedSeparatedReviewB89b011aEvents
+          const superseded = index >= trustedHistoricalEvents && index < trustedPostUi83573613Events
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)
@@ -1159,6 +1195,7 @@ export function main(argv) {
     const developmentLedger = developmentLedgerPath(prepared.root, phase)
     if (fs.existsSync(developmentLedger)) fail('DEVELOPMENT_LEDGER_COLLISION')
     const result = withLedgerReconciliation(developmentLedger, 'synthetic', () => runProductionPhasePair(prepared.targets, { phase, development: true, mode: 'synthetic', milestone: selection.milestone,
+      diagnosticInputPath: args['--diagnostic-input'],
       scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, evaluationPolicy: selection.evaluationPolicy, order: protocol.candidateOnlyQualification?.order ?? protocol.order,
       forwardReasoning: forwardReasoningFor(protocol, phase, selection.milestone),
       forwardQualificationWindow: forwardQualificationWindowFor(protocol, phase, selection.milestone),
@@ -1190,11 +1227,12 @@ export function main(argv) {
     if (!scenario) return { status: 'blocked', code: 'PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED', selection, physicalModelRequests: 0 }
     assertScenarioMatchesProtocol(selection, scenario, path.join(ROOT, protocol.fixturePath))
     let diagnosticInputPath
-    if (phase === 'bounded-revision-diagnostic') {
+    if (['bounded-revision-diagnostic', 'r3-native-revision-diagnostic'].includes(phase)) {
       if (!args['--diagnostic-input']) fail('BOUNDED_REVISION_INPUT_REQUIRED')
       diagnosticInputPath = real(args['--diagnostic-input'])
       if (!inside(real(path.join(ROOT, '.runtime/.cache')), diagnosticInputPath)) fail('BOUNDED_REVISION_INPUT_PATH')
-      readBoundedRevisionSource(diagnosticInputPath)
+      if (phase === 'r3-native-revision-diagnostic') readR3NativeSource(diagnosticInputPath)
+      else readBoundedRevisionSource(diagnosticInputPath)
     }
     const mode = command === 'dry-run' || args['--dry-run'] ? 'synthetic' : args['--mode']
     if (!['synthetic', 'real'].includes(mode)) fail('EXPLICIT_PROVIDER_MODE_REQUIRED')

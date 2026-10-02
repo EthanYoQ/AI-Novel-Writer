@@ -922,7 +922,131 @@
       }
     ]
   },
+  "historicalPostUi83573613Boundary": {
+    "fromEventCount": 1584,
+    "eventCount": 1593,
+    "rawBytesSha256": "3329b7dde867544fdc6e30476d18e2ed7583a1e116e7c44fc7f8de55055162c9",
+    "protocolRevision": "s14b-candidate-only-three-rounds-v1",
+    "protocolHash": "d8763da8a694fea741249a7be98c14f30e35b2509e9ef929ab566dfddb32066e",
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:037f5f9a-4fbd-4783-b68b-f0320f86c367",
+        "invocationId": "83573613-169b-4810-b874-97daca5b9ddf",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:9a26eb92-6981-4025-bf94-dd19a7a4d08f",
+        "invocationId": "83573613-169b-4810-b874-97daca5b9ddf",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:5b5922ff-2141-4c5a-ae9f-15499396332f",
+        "invocationId": "83573613-169b-4810-b874-97daca5b9ddf",
+        "terminal": "settle"
+      }
+    ],
+    "limits": "Immutable historical Pro post-UI requests; no new qualification claim."
+  },
   "phases": {
+    "r3-native-revision-diagnostic": {
+      "caseId": "R3",
+      "caseIds": [
+        "R3"
+      ],
+      "sceneId": "场景1",
+      "chapterNumber": 2,
+      "milestone": "diagnostic",
+      "arms": [
+        "candidate"
+      ],
+      "nonQualification": true,
+      "scenarioRevision": "r3-native-revision-diagnostic-v1",
+      "minPhysicalRequests": 3,
+      "maxPhysicalRequests": 8,
+      "model": {
+        "provider": "openai",
+        "protocol": "openai",
+        "baseUrl": "https://api.siliconflow.cn/v1",
+        "modelName": "Qwen/Qwen3.8-27B",
+        "temperature": 0,
+        "maxTokens": 16384,
+        "reasoningOverride": "medium"
+      },
+      "source": {
+        "projectId": "efc9b59a-a9f8-4223-8c1c-add48b21d579",
+        "epoch": "86ef0216-7c47-4eed-b51f-3449aef0ca68",
+        "contentSha256": "7f35eabd2fcb65677bc7505c143255ee5aa36f0e664390879604d3091723efd4",
+        "contextSha256": "4cb5a188693d3293afa96f9d99c59c595c37ef48029d1afa1945d1b8a60a2a0b",
+        "exportManifestSha256": "1714681b52c97b16bd4405289184d13b9fab8a9ee8018e9b1176f35667896fb2",
+        "packetManifestSha256": "00517e3921cb6ffa1b6703b029e61c24fccd7cbd7ed1502d5ef8489bbd5e3877",
+        "assets": [
+          {
+            "path": ".ai-novel/project.json",
+            "sha256": "2b5ad3984308abcc3a1c25177c52505f2360d69a2371d5bf82aa9fe0f756436b"
+          },
+          {
+            "path": ".ai-novel/portable-runtime-freeze.json",
+            "sha256": "108071a42d343cf145cd37f0fb2047f84fa8066886694157227ba88eb519de91"
+          }
+        ]
+      },
+      "operations": [
+        {
+          "id": "R3普通首审",
+          "kind": "review"
+        },
+        {
+          "id": "R3一次修稿",
+          "kind": "refine"
+        },
+        {
+          "id": "R3普通末审",
+          "kind": "final-review"
+        }
+      ],
+      "attemptPolicy": {
+        "milestone": "diagnostic",
+        "arms": [
+          "candidate"
+        ],
+        "reviewRebuild": {
+          "operationId": "R3普通首审",
+          "primaryPurpose": "review-chapter",
+          "repairPurpose": "review-chapter-rebuild",
+          "maxRepairAttempts": 1
+        },
+        "finalReviewRebuild": {
+          "operationId": "R3普通末审",
+          "primaryPurpose": "review-chapter",
+          "repairPurpose": "review-chapter-rebuild",
+          "maxRepairAttempts": 1
+        },
+        "refinementRecovery": {
+          "operationId": "R3一次修稿",
+          "purpose": "refine-from-review",
+          "maxAttempts": 4,
+          "trigger": "settled-length-same-confirmation-visible-append-with-progress"
+        }
+      },
+      "evaluationPolicy": {
+        "revision": "ai-review-final-manuscript-v1",
+        "caseIds": [
+          "R3"
+        ],
+        "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+        "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+        "confirmation": "preauthorized-ai-only-persisted-original-items-with-native-findingIds",
+        "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+        "endpoint": "native-merge-then-ordinary-full-review",
+        "automaticCeiling": "pending-independent-oracle-review",
+        "physicalRequests": {
+          "minimum": 3,
+          "maximum": 8,
+          "manuscriptMinimum": 1,
+          "manuscriptMaximum": 8
+        }
+      }
+    },
     "separated-review-diagnostic": {
       "diagnosticId": "separated-review-diagnostic-3x2-v1",
       "milestone": "diagnostic",

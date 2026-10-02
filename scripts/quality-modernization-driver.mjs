@@ -50,6 +50,58 @@ export const AI_REVIEW_FINAL_MANUSCRIPT_POLICY = Object.freeze({
   physicalRequests: { sourceMinimum: 12, sourceMaximum: 48, manuscriptMinimum: 1,
     manuscriptMaximum: 8, minimum: 16, maximum: 80 },
 })
+export const R3_NATIVE_REVISION_DIAGNOSTIC = Object.freeze({
+  caseId: 'R3', caseIds: ['R3'], sceneId: '场景1', chapterNumber: 2, milestone: 'diagnostic',
+  arms: ['candidate'], nonQualification: true, scenarioRevision: 'r3-native-revision-diagnostic-v1',
+  minPhysicalRequests: 3, maxPhysicalRequests: 8,
+  model: { provider: 'openai', protocol: 'openai', baseUrl: 'https://api.siliconflow.cn/v1',
+    modelName: 'Qwen/Qwen3.8-27B', temperature: 0, maxTokens: 16384, reasoningOverride: 'medium' },
+  source: { projectId: 'efc9b59a-a9f8-4223-8c1c-add48b21d579', epoch: '86ef0216-7c47-4eed-b51f-3449aef0ca68',
+    contentSha256: '7f35eabd2fcb65677bc7505c143255ee5aa36f0e664390879604d3091723efd4',
+    contextSha256: '4cb5a188693d3293afa96f9d99c59c595c37ef48029d1afa1945d1b8a60a2a0b',
+    exportManifestSha256: '1714681b52c97b16bd4405289184d13b9fab8a9ee8018e9b1176f35667896fb2',
+    packetManifestSha256: '00517e3921cb6ffa1b6703b029e61c24fccd7cbd7ed1502d5ef8489bbd5e3877',
+    assets: [{ path: '.ai-novel/project.json', sha256: '2b5ad3984308abcc3a1c25177c52505f2360d69a2371d5bf82aa9fe0f756436b' },
+      { path: '.ai-novel/portable-runtime-freeze.json', sha256: '108071a42d343cf145cd37f0fb2047f84fa8066886694157227ba88eb519de91' }] },
+  operations: [{ id: 'R3普通首审', kind: 'review' }, { id: 'R3一次修稿', kind: 'refine' }, { id: 'R3普通末审', kind: 'final-review' }],
+  attemptPolicy: { milestone: 'diagnostic', arms: ['candidate'],
+    reviewRebuild: { operationId: 'R3普通首审', primaryPurpose: 'review-chapter', repairPurpose: 'review-chapter-rebuild', maxRepairAttempts: 1 },
+    finalReviewRebuild: { operationId: 'R3普通末审', primaryPurpose: 'review-chapter', repairPurpose: 'review-chapter-rebuild', maxRepairAttempts: 1 },
+    refinementRecovery: { operationId: 'R3一次修稿', purpose: 'refine-from-review', maxAttempts: 4,
+      trigger: 'settled-length-same-confirmation-visible-append-with-progress' } },
+  evaluationPolicy: { ...AI_REVIEW_FINAL_MANUSCRIPT_POLICY, caseIds: ['R3'],
+    physicalRequests: { minimum: 3, maximum: 8, manuscriptMinimum: 1, manuscriptMaximum: 8 } },
+})
+
+// Fixed historical input is read as bytes. Only a copied donor may be opened by SQLite.
+export function readR3NativeSource(inputPath) {
+  const policy = R3_NATIVE_REVISION_DIAGNOSTIC.source
+  const read = (file, expected) => {
+    const info = fs.lstatSync(file), bytes = fs.readFileSync(file)
+    if (!info.isFile() || info.isSymbolicLink() || path.resolve(file) !== fs.realpathSync.native(file)
+      || digest(bytes) !== expected) throw new Error('R3_NATIVE_SOURCE_DRIFT')
+    return bytes
+  }
+  const contextBytes = read(inputPath, policy.contextSha256), context = JSON.parse(contextBytes)
+  const exported = JSON.parse(read(path.join(path.dirname(inputPath), 'manifest.json'), policy.exportManifestSha256))
+  const entry = exported.cases.find(item => item.id === 'R3')
+  if (entry.context.sha256 !== policy.contextSha256 || digest(context.source.content) !== policy.contentSha256)
+    throw new Error('R3_NATIVE_SOURCE_DRIFT')
+  const packetRoot = path.dirname(path.dirname(entry.sourcePacket.path))
+  read(entry.sourcePacket.path, entry.sourcePacket.sha256)
+  const manifest = JSON.parse(read(path.join(packetRoot, 'manifest.json'), policy.packetManifestSha256))
+  const stdout = JSON.parse(read(manifest.inputs.stdout.path, manifest.inputs.stdout.sha256))
+  const original = stdout.results.find(item => item.caseId === 'C17-A')
+  if (original.physicalProject.projectId !== policy.projectId || original.projectEpoch !== policy.epoch)
+    throw new Error('R3_NATIVE_SOURCE_DRIFT')
+  const copy = manifest.dbCopies.find(item => path.resolve(item.copy) === path.resolve(packetRoot, 'db-copies/C17-A/project.db'))
+  const packetFiles = [{ name: 'project.db', bytes: read(copy.copy, copy.copiedSha256) },
+    ...['-wal', '-shm'].map(suffix => ({ name: 'project.db' + suffix,
+      bytes: read(copy.copy + suffix, copy.sourceFiles[suffix].sha256) }))]
+  const assets = policy.assets.map(item => ({ ...item, bytes: read(path.join(original.physicalProject.path, item.path), item.sha256) }))
+  return { inputHash: digest(contextBytes), context, draft: context.source, original, packetFiles, assets }
+}
+
 export const BOUNDED_REVISION_DIAGNOSTIC = Object.freeze({
   "caseId": "C17-A",
   "caseIds": [
@@ -555,6 +607,19 @@ const QUALIFICATION_WINDOW_HASH = '64d634a4fa20fbafbbe3103c43e4a2c9959e3a6be64aa
 
 /** Resolve only the registered bridge fallback; native owner budgets and dispatch gates remain authoritative. */
 export function qualificationBridgeWindows(request) {
+  if (request.phase === 'r3-native-revision-diagnostic') {
+    const policy = R3_NATIVE_REVISION_DIAGNOSTIC
+    if (request.milestone !== 'diagnostic' || (request.arm ?? request.target?.arm) !== 'candidate'
+      || request.caseId !== 'R3' || request.scenarioRevision !== policy.scenarioRevision
+      || stableEvidence(request.operations) !== stableEvidence(policy.operations)
+      || stableEvidence(request.attemptPolicy) !== stableEvidence(policy.attemptPolicy)
+      || stableEvidence(request.evaluationPolicy) !== stableEvidence(policy.evaluationPolicy)
+      || request.forwardQualificationWindow != null || Object.keys(request).some(key => /timeout|deadline/iu.test(key)))
+      throw new Error('R3_NATIVE_SCOPE_MISMATCH')
+    const attemptMs = MAIN_GENERATION_POLICY.budget.maxActiveElapsedMs + 60_000
+    return { attemptMs, spawnMs: attemptMs * policy.maxPhysicalRequests + 60_000,
+      testMs: attemptMs * policy.maxPhysicalRequests + 120_000, maxCalls: policy.maxPhysicalRequests, revision: policy.scenarioRevision }
+  }
   if (request.phase === 'separated-review-diagnostic') {
     const phase = JSON.parse(fs.readFileSync(path.join(ADAPTER_ROOT, 'docs/research/novel-quality-modernization/protocol.json'))).phases[request.phase]
     const slot = phase?.operations?.find(item => item.id === request.operationId)
@@ -651,6 +716,19 @@ export function createOutboundPreflightAssert(failures) {
 
 /** Forward-only experiment: verify the saved preference separately from each arm's natural wire. */
 export function assertForwardReasoning(registration, { arm, phase, milestone, caseId, model, creativeStrategy, resolution, body }) {
+  if (phase === 'r3-native-revision-diagnostic') {
+    const expected = R3_NATIVE_REVISION_DIAGNOSTIC.model
+    if (arm !== 'candidate' || milestone !== 'diagnostic' || caseId !== 'R3' || creativeStrategy !== 'auto'
+      || registration?.revision !== R3_NATIVE_REVISION_DIAGNOSTIC.scenarioRevision
+      || Object.entries(expected).some(([key, value]) => model?.[key] !== value)) throw new Error('R3_NATIVE_MODEL_MISMATCH')
+    if (body === undefined) return null
+    if (body.model !== expected.modelName || body.temperature !== 0 || (body.max_tokens ?? body.max_completion_tokens) !== 16384
+      || body.reasoning_effort !== 'medium' || Object.hasOwn(body, 'enable_thinking') || Object.hasOwn(body, 'thinking_budget')
+      || resolution?.requested !== 'medium' || resolution.effective !== 'medium' || resolution.status !== 'mapped'
+      || resolution.source !== 'model-override') throw new Error('R3_NATIVE_WIRE_MISMATCH')
+    return { requested: 'medium', effective: 'medium', status: resolution.status, source: resolution.source,
+      wire: { reasoning_effort: { present: true, value: 'medium' }, enable_thinking: { present: false }, thinking_budget: { present: false } } }
+  }
   const scope = registration?.scopes?.find(item => item.phase === phase && item.milestone === milestone)
   const effort = registration?.reasoningOverride
   if (!scope || caseId && !scope.caseIds.includes(caseId) || !['baseline', 'candidate'].includes(arm)
@@ -913,6 +991,7 @@ export function syntheticDraftCondensePlan(options) {
 // instead of quietly running a different experiment.
 export const PHASE_SCENARIOS = Object.freeze({
   'bounded-revision-diagnostic': BOUNDED_REVISION_DIAGNOSTIC,
+  'r3-native-revision-diagnostic': R3_NATIVE_REVISION_DIAGNOSTIC,
   'c16-c18': Object.freeze({
     caseId: 'C16-A', caseIds: Object.freeze(['C16-A', 'C16-B', 'C16-C', 'C17-A', 'C17-B', 'C18-A', 'C18-B']),
     sceneId: '场景1', chapterNumber: 2, milestone: 'final', arms: Object.freeze(['candidate']),
@@ -999,6 +1078,7 @@ export function continuityCaseOperations(caseId) {
 export const FINALIZED_CHARACTER_OPERATION_IDS = Object.freeze(PHASE_SCENARIOS['c16-c18'].operations
   .filter(operation => operation.kind === 'character_cards').map(operation => operation.id))
 export function productionScenario(phase, milestone, protocolRevision) {
+  if (phase === 'r3-native-revision-diagnostic') return R3_NATIVE_REVISION_DIAGNOSTIC
   const scenario = PHASE_SCENARIOS[phase]
   if (!scenario) throw new Error('PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED')
   const selected = phase === 'full' && milestone === 'final' ? { ...scenario, ...FULL_AI_REVIEW_SCENARIO }
@@ -2293,7 +2373,7 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
     scenarioRevision: options.scenarioRevision ?? null, selectionDifference: options.selectionDifference ?? null,
     attemptPolicy: options.attemptPolicy ?? null,
     evaluationPolicy: options.evaluationPolicy ?? null,
-    ...(options.phase === 'bounded-revision-diagnostic' ? { diagnosticInputPath: options.diagnosticInputPath } : {}),
+    ...(['bounded-revision-diagnostic', 'r3-native-revision-diagnostic'].includes(options.phase) ? { diagnosticInputPath: options.diagnosticInputPath } : {}),
     ...(options.mode === 'synthetic' && options.development ? { syntheticReviewedDraftCase: options.syntheticReviewedDraftCase ?? 'multiple' } : {}),
     // 开发合成才登记超长首稿（默认章见 syntheticDraftCondensePlan）；still-over 用于复现原失败语义。
     ...syntheticDraftCondensePlan({ ...options, milestone: options.milestone ?? scenario.milestone }),
@@ -2365,7 +2445,7 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
   })
   const decision = arms.length === 1 ? classifyCandidateProduction(results[0], { mode: common.mode, phase: options.phase, scenario })
     : classifyProductionPair(results, { mode: common.mode, phase: options.phase })
-  return { ...decision, qualification: options.development ? 'development-only-unfrozen' : `${common.mode}-production-path-only`,
+  return { ...decision, qualification: options.phase === 'r3-native-revision-diagnostic' ? 'non-qualification-diagnostic' : options.development ? 'development-only-unfrozen' : `${common.mode}-production-path-only`,
     phase: options.phase, caseId: scenario.caseId, operations: scenario.operations.map(operation => operation.id),
     physicalModelRequests: results.reduce((sum, result) => sum + (result.physicalModelRequests ?? 0), 0), syntheticDispatches: results.reduce((sum, result) => sum + (result.syntheticDispatches ?? 0), 0),
     protocolRevision: common.protocolRevision, protocolHash: common.protocolHash,
@@ -2376,6 +2456,8 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
 
 function classifyCandidateProduction(result, { mode, phase, scenario }) {
   const operations = scenario.operations.filter(item => !['refine', 'final-review'].includes(item.kind) || result.aiReviewedDraft?.selectedCount > 0)
+  if (phase === 'r3-native-revision-diagnostic' && result.status === 'passed' && !result.aiReviewedDraft?.selectedCount)
+    return { status: 'failed', code: 'R3_NATIVE_NO_ACTIONABLE_REVIEW', qualityQualification: 'not-run' }
   const failure = result.status !== 'passed' ? result.code ?? 'CANDIDATE_OPERATION_FAILED'
     : validatePairedReceipt(result, { mode, arm: 'candidate', phase, scenario: { ...scenario, operations },
       protocolRevision: result.protocolRevision, protocolHash: result.protocolHash })
