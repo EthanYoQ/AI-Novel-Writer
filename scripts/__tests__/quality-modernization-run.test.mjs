@@ -5,6 +5,7 @@ import path from 'node:path'
 import vm from 'node:vm'
 import process from 'node:process'
 import { Buffer } from 'node:buffer'
+import { createHash } from 'node:crypto'
 import childProcess, { spawnSync } from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
 import { pathToFileURL } from 'node:url'
@@ -813,7 +814,18 @@ test('separated-review diagnostic runs six zero-model owner slots and preserves 
   const bytes = Buffer.from(JSON.stringify({ ...protocol, phases: { ...protocol.phases, [phase]: registration } }))
   const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/separated-review-test-'))
   const ledger = path.join(directory, 'synthetic-ledger.jsonl'), originalRead = fs.readFileSync
+  const diagnosticInputPath = path.join(directory, 'diagnostic-input.json')
+  fs.writeFileSync(diagnosticInputPath, inputBytes)
   const fixture = originalRead(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8').replaceAll('\r\n', '\n')
+  const preflightStart = fixture.indexOf('        try { assertSharedInputDiagnostic(registered, input,')
+  const preflightEnd = fixture.indexOf('        preflight(actual.purpose', preflightStart)
+  assert.ok(preflightStart > 0 && preflightEnd > preflightStart)
+  const assertInputFile = new Function('registered', 'input', 'options', 'request', 'fs', 'assertSharedInputDiagnostic', 'createHash',
+    `${fixture.split('\n').find(line => line.startsWith('const sha ='))}
+     const target = { arm: options.arm }, actualModel = options.model, actualCreativeStrategy = actualModel.creativeStrategy;
+     const { body, reserved, operation: operationId } = options;
+     const preflight = (valid, message) => { if (!valid) throw new Error(message) };
+     ${fixture.slice(preflightStart, preflightEnd)}`)
   const start = fixture.indexOf("    if (diagnosticRun) {\n      operationKind = 'diagnostic'")
   const end = fixture.indexOf('    const callbacks = {', start)
   assert.ok(start > 0 && end > start)
@@ -848,9 +860,11 @@ test('separated-review diagnostic runs six zero-model owner slots and preserves 
       assert.equal(plan.requestedOutputTokens, body.max_tokens)
       assert.equal(plan.reservedTokens, 1048576)
       const options = { arm: 'candidate', model: registration.model, body, reserved: index, operation: slot.id, inputHash }
-      assert.doesNotThrow(() => assertSharedInputDiagnostic(registration, input, options))
+      assert.ok(Buffer.isBuffer(fs.readFileSync(diagnosticInputPath)))
+      assert.doesNotThrow(() => assertInputFile(registration, input, options, { diagnosticInputPath }, fs, assertSharedInputDiagnostic, createHash))
       if (index === 0) {
-        for (const changed of [{ inputHash: 'f'.repeat(64) }, { operation: 'not-registered' }, { reserved: 1 },
+        for (const changed of [{ inputHash: 'f'.repeat(64) }, { inputHash: hash(JSON.stringify(fs.readFileSync(diagnosticInputPath))) },
+          { operation: 'not-registered' }, { reserved: 1 },
           { model: { ...registration.model, temperature: 0.7 } }, { body: { ...body, max_tokens: 16385 } },
           ...[{ type: 'json_object' }, 'native-default', null, undefined].map(response_format => ({ body: { ...body, response_format } })),
           { body: { ...body, messages: [{ ...slot.messages[0], content: 'changed' }, slot.messages[1]] } }])
@@ -863,6 +877,11 @@ test('separated-review diagnostic runs six zero-model owner slots and preserves 
           assert.throws(() => assertSharedInputDiagnostic({ ...registration, responseFormat }, input, options),
             /SEPARATED_REVIEW_DIAGNOSTIC_INPUT_MISMATCH/)
         }
+        fs.writeFileSync(diagnosticInputPath, Buffer.concat([inputBytes, Buffer.from(' ')]))
+        try {
+          assert.throws(() => assertInputFile(registration, input, options, { diagnosticInputPath }, fs, assertSharedInputDiagnostic, createHash),
+            /SEPARATED_REVIEW_DIAGNOSTIC_INPUT_MISMATCH/)
+        } finally { fs.writeFileSync(diagnosticInputPath, inputBytes) }
       }
       const binding = bindingFor(slot, index), attemptId = `candidate:unit-${index}`
       const root = path.join(directory, slot.id); fs.mkdirSync(root)
@@ -936,6 +955,21 @@ test('separated-review diagnostic runs six zero-model owner slots and preserves 
     assert.equal(restarted.stdout.trim(), 'SEPARATED_REVIEW_DIAGNOSTIC_SLOT_UNAVAILABLE')
     assert.equal(originalRead(persisted, 'utf8').trimEnd().split('\n').length, 18)
   } finally { fs.readFileSync = originalRead; fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('diagnostic authority routing preserves missing-fact rejection for qualification', () => {
+  const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8').replaceAll('\r\n', '\n')
+  const start = fixture.indexOf('      } else if (!structuredSyntaxRepair) {')
+  const end = fixture.indexOf('      if (candidate && fullRun', start)
+  assert.ok(start > 0 && end > start)
+  const flags = fixture.split('\n').filter(line => line.startsWith('  const separatedRun =') || line.startsWith('  const diagnosticRun =')).join('\n')
+  const check = new Function('request', 'authorityFacts', 'promptText', 'preflight',
+    `${flags}\nconst structuredSyntaxRepair = false; if (false) {\n${fixture.slice(start, end)}`)
+  const preflight = (valid, message) => { if (!valid) throw new Error(message) }
+  for (const phase of ['shared-input-diagnostic', 'separated-review-diagnostic'])
+    assert.doesNotThrow(() => check({ phase, chapterNumber: 1 }, ['当天清晨'], '原登记诊断消息', preflight))
+  for (const phase of ['c16-c18', 'early-review', 'full', 'bounded-revision-diagnostic'])
+    assert.throws(() => check({ phase, chapterNumber: 1 }, ['当天清晨'], '缺失作者事实', preflight), /OUTBOUND_ORACLE_AUTHORITY_MISSING:当天清晨/)
 })
 
 test('shared-input diagnostic registers one candidate and rejects a second physical slot', async () => {

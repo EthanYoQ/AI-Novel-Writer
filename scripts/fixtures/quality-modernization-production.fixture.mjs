@@ -974,7 +974,7 @@ test('isolated production commands persist the selected phase operations', async
           enableThinking: body.enable_thinking, reasoningEffort: body.reasoning_effort,
           stream: body.stream, usageStream: body.stream_options?.include_usage, hasThinkingBudget: Object.hasOwn(body, 'thinking_budget') }
         try { assertSharedInputDiagnostic(registered, input, { arm: target.arm, model: { ...actualModel, creativeStrategy: actualCreativeStrategy }, body, reserved,
-          operation: operationId, inputHash: sha(fs.readFileSync(request.diagnosticInputPath)) }) }
+          operation: operationId, inputHash: createHash('sha256').update(fs.readFileSync(request.diagnosticInputPath)).digest('hex') }) }
         catch (error) { preflight(false, error.message) }
         preflight(actual.purpose === (separatedRun ? `separated-review-${diagnosticSlot.role}` : 'shared-input-fact-extraction'), 'SHARED_INPUT_DIAGNOSTIC_PURPOSE_MISMATCH')
         if (separatedRun) preflight(receipt.attempts.length === 0, 'SEPARATED_REVIEW_DIAGNOSTIC_ONE_ATTEMPT_REQUIRED')
@@ -1022,7 +1022,7 @@ test('isolated production commands persist the selected phase operations', async
           && promptText.includes(finalizedContext.identity.content), 'FINALIZATION_FROZEN_SOURCE_MISMATCH')
         preflight(JSON.stringify(body.messages.slice(0, task.messages.length)) === JSON.stringify(task.messages), 'FINALIZATION_FROZEN_TASK_MISMATCH')
       } else if (!structuredSyntaxRepair) {
-        if (request.phase !== 'shared-input-diagnostic') {
+        if (!diagnosticRun) {
         for (const fact of authorityFacts)
           preflight(promptText.includes(fact), `OUTBOUND_ORACLE_AUTHORITY_MISSING:${fact}`)
         if (request.chapterNumber > 1) {
