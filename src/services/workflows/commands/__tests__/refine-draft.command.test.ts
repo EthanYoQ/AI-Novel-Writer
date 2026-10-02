@@ -850,8 +850,8 @@ describe('RefineFromReviewCommand bounded visible completion', () => {
       'db:review-get-full',
       CONFIRMATION_REVIEW_ID,
     )
-    expect(createRuntime.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ modelId: 'model-a' }))
-    expect(begunModelIds).toEqual(['model-a'])
+    expect(createRuntime.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ modelId: 'grok-selected-model' }))
+    expect(begunModelIds).toEqual(['grok-selected-model'])
     const prompt = completeWithLease.mock.calls[0]?.[0].messages.map(message => message.content).join('\n') ?? ''
     expect(prompt).toContain('只修复这个已确认的问题。')
     expect(prompt).toContain('保留开头的悬念。')
