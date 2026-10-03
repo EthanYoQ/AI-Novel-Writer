@@ -8,6 +8,7 @@ import { GenerationRunRepository, textHash } from '../repositories/generation-ru
 import { SummaryRepository } from '../repositories/summary-repository'
 import { normalizeFinalizedCharacterProposalSource } from './finalized-character-generation-proof'
 import { readLegacyRosterGenerationProof } from './legacy-roster-generation-proof'
+import type { ArchitectureDerivationVersion } from '../../src/shared/character-proposal-parser'
 
 export interface CharacterProposalProof {
   items: Omit<CharacterProposalItem, 'resolution'>[]
@@ -17,6 +18,7 @@ export interface CharacterProposalProof {
 }
 interface Envelope {
   version: 1
+  architectureDerivationVersion?: 2
   projectId: string
   proof: CharacterProposalProof
   batch: CharacterProposalBatch
@@ -29,10 +31,10 @@ const fields = ['name', 'role', 'gender', 'age', 'appearance', 'personality', 'b
 const nonempty = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
 export class CharacterProposalService {
   constructor(private readonly db: Database.Database, private readonly projectId: string,
-    private readonly prove: (source: CharacterProposalSource, forWrite: boolean) => CharacterProposalProof) {}
-  private sourceProof(source: CharacterProposalSource, forWrite: boolean): CharacterProposalProof {
+    private readonly prove: (source: CharacterProposalSource, forWrite: boolean, version: ArchitectureDerivationVersion) => CharacterProposalProof) {}
+  private sourceProof(source: CharacterProposalSource, forWrite: boolean, version: ArchitectureDerivationVersion): CharacterProposalProof {
     // The source and durable envelope share one JSON representation, including omitted optional fields.
-    return JSON.parse(JSON.stringify(this.prove(source, forWrite))) as CharacterProposalProof
+    return JSON.parse(JSON.stringify(this.prove(source, forWrite, version))) as CharacterProposalProof
   }
   private revision(): number { return (this.db.prepare("SELECT revision FROM character_identity_meta WHERE id='main'").get() as { revision: number }).revision }
   private write(envelope: Envelope): void {
@@ -61,8 +63,10 @@ export class CharacterProposalService {
     try { envelope = JSON.parse(row.raw_value) as Envelope } catch { throw new Error('CHARACTER_PROPOSAL_RECEIPT_INVALID') }
     if (!envelope || envelope.version !== 1 || envelope.projectId !== this.projectId || !envelope.batch
       || envelope.batch.proposalBatchId !== proposalBatchId) throw new Error('CHARACTER_PROPOSAL_RECEIPT_INVALID')
+    if (envelope.architectureDerivationVersion !== undefined && (envelope.architectureDerivationVersion !== 2
+      || envelope.batch.source?.kind !== 'generation' || envelope.batch.source.inputKind !== 'architecture')) throw new Error('CHARACTER_PROPOSAL_RECEIPT_INVALID')
     let currentProof: CharacterProposalProof
-    try { currentProof = this.sourceProof(envelope.batch.source, false) } catch (error) {
+    try { currentProof = this.sourceProof(envelope.batch.source, false, envelope.architectureDerivationVersion ?? 1) } catch (error) {
       if (envelope.batch?.source?.kind === 'finalized-generation' && (error as Error).message !== 'CHARACTER_PROPOSAL_SOURCE_INVALID')
         throw new Error('CHARACTER_PROPOSAL_SOURCE_CHANGED')
       throw error
@@ -131,10 +135,15 @@ export class CharacterProposalService {
           if (this.db.prepare('SELECT 1 FROM character_identity_proposals WHERE proposal_id=?').get(proposalBatchId)) return this.read(proposalBatchId)
         }
       }
-      const proof = this.sourceProof(source, true)
       const proposalBatchId = `cpb:${textHash(JSON.stringify([this.projectId, source]))}`
       const existing = this.db.prepare('SELECT 1 FROM character_identity_proposals WHERE proposal_id=?').get(proposalBatchId)
-      if (existing) return this.read(proposalBatchId)
+      if (existing) {
+        const envelope = this.readEnvelope(proposalBatchId)
+        this.sourceProof(source, true, envelope.architectureDerivationVersion ?? 1)
+        return structuredClone(envelope.batch)
+      }
+      const architectureDerivationVersion = source?.kind === 'generation' && source.inputKind === 'architecture' ? 2 : undefined
+      const proof = this.sourceProof(source, true, architectureDerivationVersion ?? 1)
       const revision = this.revision(), snapshot = this.identitySnapshot()
       const items = proof.items.map(item => ({ ...structuredClone(item), resolution: resolveScopedCharacterIdentity(
         snapshot.aliases.map(alias => ({ ...alias, projectId: this.projectId })),
@@ -143,7 +152,8 @@ export class CharacterProposalService {
       for (const item of items) if (source.kind !== 'finalized-generation' && item.resolution.status === 'unresolved') item.resolution = resolveScopedCharacterIdentity(
         snapshot.aliases.map(alias => ({ ...alias, projectId: this.projectId })), { name: item.fields.name, projectId: this.projectId, revision })
       const batch: CharacterProposalBatch = { proposalBatchId, revision, status: 'pending-approval', source: structuredClone(source), items }
-      const envelope: Envelope = { version: 1, projectId: this.projectId, proof: structuredClone(proof), batch }
+      const envelope: Envelope = { version: 1, ...(architectureDerivationVersion ? { architectureDerivationVersion } : {}),
+        projectId: this.projectId, proof: structuredClone(proof), batch }
       const encoded = JSON.stringify(envelope)
       this.db.prepare('INSERT INTO character_identity_proposals(proposal_id,owner_character_id,source_key,source_hash,raw_value,candidate_ids_json) VALUES(?,NULL,?,?,?,?)')
         .run(proposalBatchId, `character-proposal-v1:${this.projectId}`, textHash(encoded), encoded, '[]')
@@ -192,7 +202,7 @@ export class CharacterProposalService {
       }
       if (batch.status !== 'pending-approval') throw new Error('CHARACTER_PROPOSAL_CANCELLED')
       if (request.expectedRevision !== batch.revision || this.revision() !== batch.revision) throw new Error('CHARACTER_ID_REVISION_CONFLICT')
-      const proof = this.sourceProof(batch.source, true)
+      const proof = this.sourceProof(batch.source, true, envelope.architectureDerivationVersion ?? 1)
       if (!proof.provenance || !['generated', 'derived'].includes(proof.provenance.kind)) throw new Error('CHARACTER_PROPOSAL_PROVENANCE_REQUIRED')
       if (request.selections.length !== byKey.size || new Set(request.selections.map(item => item.selectionKey)).size !== byKey.size) throw new Error('CHARACTER_APPROVAL_SELECTION_INVALID')
       if (edits?.some(edit => !request.selections.some(selection => selection.selectionKey === edit.selectionKey && selection.action !== 'keep-unresolved')))

@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
 import type { CharacterProposalItem, CharacterProposalSource } from '../../src/shared/character-proposal'
 import type { GenerationAuthorInput } from '../../src/shared/generation-owner-contract'
-import { characterProposalMaterialChunks, parseArchitectureCharacterProposal, parsePlanningMaterialCharacterProposal } from '../../src/shared/character-proposal-parser'
+import { characterProposalMaterialChunks, parseArchitectureCharacterProposal, parsePlanningMaterialCharacterProposal, type ArchitectureDerivationVersion } from '../../src/shared/character-proposal-parser'
 import { GenerationRunRepository, textHash } from '../repositories/generation-run-repository'
 import type { BlueprintData } from '../repositories/blueprint-repository'
 import type { CharacterProposalProof } from './character-proposal-service'
@@ -11,7 +11,8 @@ import { proveFinalizedCharacterGeneration } from './finalized-character-generat
 import { readLegacyRosterGenerationProof } from './legacy-roster-generation-proof'
 
 export function proveCharacterProposal(db: Database.Database, runs: GenerationRunRepository, projectId: string,
-  source: CharacterProposalSource, forWrite: boolean, assertSources: (handle: MainGenerationRunHandle, committedBlueprintChapters?: number[]) => void): CharacterProposalProof {
+  source: CharacterProposalSource, forWrite: boolean, assertSources: (handle: MainGenerationRunHandle, committedBlueprintChapters?: number[]) => void,
+  architectureDerivationVersion: ArchitectureDerivationVersion = 2): CharacterProposalProof {
   if (!source || typeof source !== 'object') throw new Error('CHARACTER_PROPOSAL_SOURCE_INVALID')
   if (source.kind === 'legacy-roster-generation') {
     const result = readLegacyRosterGenerationProof(db, runs, projectId, source)
@@ -100,7 +101,7 @@ export function proveCharacterProposal(db: Database.Database, runs: GenerationRu
   if (source.inputKind === 'architecture') {
     const manifest = artifacts.find(item => item.artifactId === source.manifestArtifactId)
     if (!manifest || run.binding.sourceManifest.operation !== 'character-architecture') throw new Error('CHARACTER_PROPOSAL_MANIFEST_INVALID')
-    items = parseArchitectureCharacterProposal({ manifest, details: artifacts.filter(item => item !== manifest) })
+    items = parseArchitectureCharacterProposal({ manifest, details: artifacts.filter(item => item !== manifest) }, architectureDerivationVersion)
   } else {
     if (source.manifestArtifactId || run.binding.sourceManifest.operation !== 'planning-material-character-extraction') throw new Error('CHARACTER_PROPOSAL_SOURCE_INVALID')
     const inputs = run.binding.sourceManifest.authorInputs as GenerationAuthorInput[]

@@ -601,7 +601,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       ...(manifest.batchId ? { batchId: manifest.batchId as string } : {}) }
   }
   const readBatch = (batchId: string) => { assertCurrent(); return draftEffects.readBatch(batchId, deps.projectId) }
-  const characters = new CharacterProposalService(deps.database, deps.projectId, (source, forWrite) => {
+  const characters = new CharacterProposalService(deps.database, deps.projectId, (source, forWrite, version) => {
     assertCurrent(); return proveCharacterProposal(deps.database, repository, deps.projectId, source, forWrite, (handle, committedBlueprintChapters) => {
       const run = requireRun(handle)
       const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
@@ -611,7 +611,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
           .map(({ epoch: _epoch, ...ref }) => { void _epoch; return ref }) })
       const matches = committedBlueprintChapters ? isDeepStrictEqual(projection(run.binding), projection(current)) : compareGenerationSourceBindings(run.binding, current)
       if (repository.budget(run.rootActionId).root.status === 'cancelled' || !matches) throw new Error('CHARACTER_PROPOSAL_SOURCE_CHANGED')
-    })
+    }, version)
   })
   const imports = new ImportGeneration(deps.database, repository, deps.projectId)
   const legacyRosters = new LegacyRosterGeneration(deps.database, repository, deps.projectId, characters)

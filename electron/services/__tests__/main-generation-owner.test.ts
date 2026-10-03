@@ -28,6 +28,8 @@ import type { GenerationRunServiceDependencies } from '../generation-run-service
 import { getProjectDb } from '../../database'
 import { BlueprintRepository, type BlueprintRangeCommitRequest } from '../../repositories/blueprint-repository'
 import { commitCharacterIdentities } from '../../repositories/character-roster-repository'
+import { proveCharacterProposal } from '../generation-character-proposal-proof'
+import { CHARACTER_DETAIL_DESCRIPTION_FIELDS, CHARACTER_STATE_TEXT_FIELDS } from '../../../src/shared/character-proposal-parser'
 vi.mock('../../database', () => ({ getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn(() => null) }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const cleanups: (() => void)[] = []
@@ -840,6 +842,90 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
 })
 
 describe('durable character proposals from actual generation artifacts', () => {
+  async function architectureProposed() {
+    const description = `${'众人声称他背叛了同伴，'.repeat(15)}但这些传闻并不属实，他从未背叛同伴。`
+    const state = `${'旁人声称宝剑已经失窃，'.repeat(10)}消息并不属实，宝剑仍在木箱里。`
+    const slots = ['林岚', '同伴', '证人'].map((name, index) => ({ slotId: `slot-${index}`, name,
+      role: index === 0 ? 'protagonist' : 'supporting', narrativeDuty: '查清传闻', relations: [] }))
+    const entries = slots.map(({ slotId, name, role }) => ({ slotId, name, role, gender: '未知', age: 18,
+      ...Object.fromEntries(CHARACTER_DETAIL_DESCRIPTION_FIELDS.map(field => [field, `  ${description}  `])),
+      currentState: { ...Object.fromEntries(CHARACTER_STATE_TEXT_FIELDS.map(field => [field, `  ${state}  `])), updatedAtChapter: 19 } }))
+    const outputs = [JSON.stringify({ slots }), JSON.stringify({ entries })]
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: outputs[dispatch.mock.calls.length - 1] }); return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch)
+    const run = f.owner.begin({ ...f.begin, operation: 'character-architecture', output: 'structured-data',
+      promptKeys: ['character_dynamics'], skillStages: ['planning'] })
+    for (const purpose of ['character-architecture-manifest', 'character-architecture-details']) {
+      await f.owner.execute({ handle: run.handle, invocationNonce: purpose, task: { ...task, purpose, output: 'structured-data' } })
+    }
+    const artifacts = f.owner.read(run.handle).artifacts
+    const source = { kind: 'generation' as const, inputKind: 'architecture' as const, handle: run.handle,
+      manifestArtifactId: artifacts[0].artifactId,
+      artifacts: artifacts.map(({ artifactId, revision, textHash }) => ({ artifactId, revision, textHash })) }
+    return { ...f, fixture: f, source, dispatch, description, state, artifacts }
+  }
+  it.each([1, 2] as const)('keeps architecture derivation v%s through stage, reopen, approval and replay', async version => {
+    const f = await architectureProposed()
+    let batch = f.owner.characterProposals.stage(f.source)
+    const readEnvelope = () => f.fixture.db.prepare('SELECT raw_value,source_hash FROM character_identity_proposals WHERE proposal_id=?')
+      .get(batch.proposalBatchId) as { raw_value: string; source_hash: string }
+    if (version === 1) {
+      // Historical fixture: the old release persisted this proof without a derivation marker.
+      const envelope = JSON.parse(readEnvelope().raw_value)
+      envelope.proof = proveCharacterProposal(f.fixture.db, new GenerationRunRepository(() => f.fixture.db), 'project', f.source, false, () => {}, 1)
+      envelope.batch.items = envelope.proof.items.map((item: { selectionKey: string }) => ({ ...item,
+        resolution: batch.items.find(candidate => candidate.selectionKey === item.selectionKey)!.resolution }))
+      delete envelope.architectureDerivationVersion
+      const encoded = JSON.stringify(envelope)
+      f.fixture.db.prepare('UPDATE character_identity_proposals SET raw_value=?,source_hash=? WHERE proposal_id=?')
+        .run(encoded, textHash(encoded), batch.proposalBatchId)
+      batch = envelope.batch
+    }
+    const expected = version === 1 ? Array.from(f.description).slice(0, 120).join('') : f.description
+    for (const field of CHARACTER_DETAIL_DESCRIPTION_FIELDS) expect(batch.items[0].fields[field]).toBe(expected)
+    const pendingEnvelope = readEnvelope()
+    expect(JSON.parse(pendingEnvelope.raw_value).architectureDerivationVersion).toBe(version === 2 ? 2 : undefined)
+    expect(f.owner.characterProposals.stage(f.source)).toEqual(batch)
+    expect(readEnvelope()).toEqual(pendingEnvelope)
+    const reopened = f.reopen()
+    expect(reopened.characterProposals.read(batch.proposalBatchId)).toEqual(batch)
+    expect(reopened.characterProposals.stage(f.source)).toEqual(batch)
+    expect(readEnvelope()).toEqual(pendingEnvelope)
+    expect(() => reopened.characterProposals.stage({ ...f.source, artifacts: f.source.artifacts.map((artifact, index) =>
+      index === 0 ? { ...artifact, textHash: '0'.repeat(64) } : artifact) })).toThrow('CHARACTER_PROPOSAL_ARTIFACT_INVALID')
+    const request = { proposalBatchId: batch.proposalBatchId, expectedRevision: batch.revision, operationId: `adopt-architecture-v${version}`,
+      selections: batch.items.map(item => ({ selectionKey: item.selectionKey, action: 'create' as const })) }
+    const approved = reopened.characterProposals.approve(request)
+    const saved = f.fixture.db.prepare('SELECT appearance,personality,background,abilities,motivation,arc,notes FROM characters').all()
+    expect(saved).toHaveLength(3)
+    for (const row of saved) expect(row).toEqual(Object.fromEntries(CHARACTER_DETAIL_DESCRIPTION_FIELDS.map(field => [field, expected])))
+    const approvedEnvelope = readEnvelope()
+    expect(JSON.parse(approvedEnvelope.raw_value).architectureDerivationVersion).toBe(version === 2 ? 2 : undefined)
+    const again = f.reopen()
+    expect(again.characterProposals.read(batch.proposalBatchId)).toEqual(approved.batch)
+    expect(again.characterProposals.approve(request)).toEqual(approved)
+    // Adoption changes the roster source; a stage replay must retain its write-currentness gate.
+    expect(() => again.characterProposals.stage(f.source)).toThrow('CHARACTER_PROPOSAL_SOURCE_CHANGED')
+    expect(readEnvelope()).toEqual(approvedEnvelope)
+    expect(again.read(f.source.handle).artifacts).toEqual(f.artifacts)
+    f.fixture.db.exec("UPDATE project_core SET global_guidance='作者改动来源'")
+    expect(() => again.characterProposals.stage(f.source)).toThrow('CHARACTER_PROPOSAL_SOURCE_CHANGED')
+    expect(readEnvelope()).toEqual(approvedEnvelope)
+    expect(f.dispatch).toHaveBeenCalledTimes(2)
+  })
+  it.each(['unknown', 'misplaced'] as const)('rejects an %s architecture derivation marker', async mutation => {
+    const f = mutation === 'unknown' ? await architectureProposed() : await proposed()
+    const batch = f.owner.characterProposals.stage(f.source)
+    const envelope = JSON.parse(f.db.prepare('SELECT raw_value FROM character_identity_proposals WHERE proposal_id=?').pluck().get(batch.proposalBatchId) as string)
+    envelope.architectureDerivationVersion = mutation === 'unknown' ? 3 : 2
+    const encoded = JSON.stringify(envelope)
+    f.db.prepare('UPDATE character_identity_proposals SET raw_value=?,source_hash=? WHERE proposal_id=?').run(encoded, textHash(encoded), batch.proposalBatchId)
+    expect(() => f.owner.characterProposals.read(batch.proposalBatchId)).toThrow('CHARACTER_PROPOSAL_RECEIPT_INVALID')
+    expect(() => f.owner.characterProposals.stage(f.source)).toThrow('CHARACTER_PROPOSAL_RECEIPT_INVALID')
+    expect(f.db.prepare('SELECT COUNT(*) FROM characters').pluck().get()).toBe(0)
+  })
   async function proposed() {
     const output = JSON.stringify({ results: ['1:1', '2:1'].map(sourceId => ({ sourceId, characterCards: [{ name: '林岚', role: 'supporting', background: '模型背景', appearance: '模型外貌', notes: `来源${sourceId}` }] })) })
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {

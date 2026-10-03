@@ -2041,7 +2041,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(domainIpcChannels(invoke)).toEqual(['db:project-core-get'])
   })
 
-  it('trims and Unicode-bounds valid AI character descriptions before proposal staging', async () => {
+  it('trims complete AI character descriptions without deleting their ending before proposal staging', async () => {
     const descriptionFields = [
       'appearance', 'personality', 'background', 'abilities', 'motivation', 'arc', 'notes',
     ] as const
@@ -2058,8 +2058,8 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       ...rosterEntries[0]!,
       currentState: { ...rosterEntries[0]!.currentState! },
     }
-    for (const field of descriptionFields) modelEntry[field] = `  ${boundedDescription}尾  `
-    for (const field of stateFields) modelEntry.currentState![field] = `  ${boundedState}尾  `
+    for (const field of descriptionFields) modelEntry[field] = `  ${boundedDescription}但传闻并不属实，他从未背叛同伴。  `
+    for (const field of stateFields) modelEntry.currentState![field] = `  ${boundedState}消息并不属实，宝剑仍在木箱里。  `
     modelEntry.currentState!.recentEvents = `  ${mayaRecentEvents}  `
     const modelEntries = [modelEntry, ...rosterEntries.slice(1)]
     const generateStream = createResponseStream(twoStageResponses(modelEntries))
@@ -2070,7 +2070,7 @@ describe('GenerateCharactersCommand structured roster seam', () => {
         case 'character-proposal:stage': return proposalBatchFixture((args[0] as { source: CharacterProposalSource }).source)
         case 'prompt:load-global': return { templates: [], diagnostics: [] }
         case 'fs:check-exists': return false
-        case 'db:project-core-get': return { premise: '这是一段足够长且包含明确冲突的故事前提，用于验证模型生成的少量超长自由描述会在严格结构验证前确定性收束。' }
+        case 'db:project-core-get': return { premise: '这是一段足够长且包含明确冲突的故事前提，用于验证模型生成的完整自由描述必须保留尾部澄清句，并且不得静默丢失否定事实或改变作者材料中的原始含义。' }
         case 'db:character-roster-read':
           return { ...readyRoster, revision: 0, migrationState: 'empty', entries: [], renderedMarkdown: '' }
         case 'db:character-roster-commit': {
@@ -2111,9 +2111,12 @@ describe('GenerateCharactersCommand structured roster seam', () => {
       name: rosterEntries[0]!.name,
       role: rosterEntries[0]!.role,
     })
-    for (const field of descriptionFields) expect(committed?.[field]).toBe(boundedDescription)
-    for (const field of stateFields) expect(committed?.currentState?.[field]).toBe(boundedState)
-    expect(committed?.currentState?.recentEvents).toBe(Array.from(mayaRecentEvents).slice(0, 80).join(''))
+    for (const field of descriptionFields) {
+      expect(candidate.fields[field]).toBe(modelEntry[field]!.trim())
+      expect(committed?.[field]).toBe(modelEntry[field]!.trim())
+    }
+    for (const field of stateFields) expect(committed?.currentState?.[field]).toBe(modelEntry.currentState![field]!.trim())
+    expect(committed?.currentState?.recentEvents).toBe(mayaRecentEvents)
     expect(domainIpcChannels(invoke)).toContain('character-proposal:stage')
     expect(domainIpcChannels(invoke)).not.toContain('db:character-roster-commit')
   })

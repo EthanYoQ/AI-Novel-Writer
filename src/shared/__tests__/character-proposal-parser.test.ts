@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { characterProposalMaterialChunks, decodeCharacterDetails, extractSingleCompleteJsonObject, parseArchitectureCharacterProposal, parsePlanningMaterialCharacterProposal } from '../character-proposal-parser'
+import { CHARACTER_DETAIL_DESCRIPTION_FIELDS, CHARACTER_STATE_TEXT_FIELDS, characterProposalMaterialChunks, decodeCharacterDetails, extractSingleCompleteJsonObject, parseArchitectureCharacterProposal, parsePlanningMaterialCharacterProposal, validateCharacterDetail } from '../character-proposal-parser'
 
 function architecture() {
   const slots = ['同名', '同名', '反派'].map((name, index) => ({ slotId: `slot-${index}`, name,
@@ -13,6 +13,26 @@ function architecture() {
     details: [{ artifactId: 'details', text: JSON.stringify({ entries }) }] }
 }
 describe('main-safe source-local character proposal parsing', () => {
+  it('preserves complete architecture descriptions and states including a late denial', () => {
+    const fixture = architecture()
+    const description = `${'众人声称他背叛了同伴，'.repeat(15)}但这些传闻并不属实，他从未背叛同伴。`
+    const state = `${'旁人声称宝剑已经失窃，'.repeat(10)}消息并不属实，宝剑仍在木箱里。`
+    for (const field of CHARACTER_DETAIL_DESCRIPTION_FIELDS) fixture.entries[0][field] = `  ${description}  `
+    const rawState = fixture.entries[0].currentState as Record<string, unknown>
+    for (const field of CHARACTER_STATE_TEXT_FIELDS) rawState[field] = `  ${state}  `
+    fixture.details[0].text = JSON.stringify({ entries: fixture.entries })
+    const decoded = decodeCharacterDetails(fixture.details[0].text)[0]
+    expect(validateCharacterDetail(decoded)).toBeUndefined()
+    for (const field of CHARACTER_DETAIL_DESCRIPTION_FIELDS) expect(decoded[field]).toBe(description)
+    for (const field of CHARACTER_STATE_TEXT_FIELDS) expect(decoded.currentState?.[field]).toBe(state)
+    const proposed = parseArchitectureCharacterProposal(fixture)[0]
+    for (const field of CHARACTER_DETAIL_DESCRIPTION_FIELDS) expect(proposed.fields[field]).toBe(description)
+    expect(proposed.rawValue).toMatchObject({ detail: fixture.entries[0] })
+    const legacy = decodeCharacterDetails(fixture.details[0].text, 1)[0]
+    for (const field of CHARACTER_DETAIL_DESCRIPTION_FIELDS) expect(legacy[field]).toBe(Array.from(description).slice(0, 120).join(''))
+    for (const field of CHARACTER_STATE_TEXT_FIELDS) expect(legacy.currentState?.[field]).toBe(Array.from(state).slice(0, 80).join(''))
+    expect(validateCharacterDetail(legacy, 1)).toBeUndefined()
+  })
   it('optionally rejects outer arrays without changing the existing object extraction default', () => {
     const object = JSON.stringify({ entries: [{ notes: '括号 [、]、} 与转义 "引号" 和 \\。' }] })
     expect(extractSingleCompleteJsonObject(`说明\n[${object}]\n结束`)).toBe(object)

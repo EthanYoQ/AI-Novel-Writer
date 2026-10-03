@@ -5,6 +5,7 @@ import { CHARACTER_ROLES } from './character-role'
 import type { CharacterProposalItem } from './character-proposal'
 
 export interface CharacterProposalArtifact { artifactId: string; text: string }
+export type ArchitectureDerivationVersion = 1 | 2
 type ParsedProposal = Omit<CharacterProposalItem, 'resolution'>
 
 function uniqueKeys(keys: readonly string[]): void {
@@ -14,17 +15,17 @@ function uniqueKeys(keys: readonly string[]): void {
 /** The caller proves ledger ownership/currentness. This parser proves source-local coverage only. */
 export function parseArchitectureCharacterProposal(input: {
   manifest: CharacterProposalArtifact; details: readonly CharacterProposalArtifact[]
-}): ParsedProposal[] {
+}, version: ArchitectureDerivationVersion = 2): ParsedProposal[] {
   uniqueKeys([input.manifest.artifactId, ...input.details.map(item => item.artifactId)])
   const slots = decodeCharacterIdentityManifest(input.manifest.text)
   const byId = new Map(slots.map(slot => [slot.slotId, slot]))
   const records = input.details.flatMap(artifact => {
     const root = JSON.parse(extractSingleCompleteJsonObject(artifact.text)) as Record<string, unknown>
     if (Object.keys(root).some(key => key !== 'entries')) throw new Error('CHARACTER_PROPOSAL_ENVELOPE_INVALID')
-    const decoded = decodeCharacterDetails(artifact.text)
+    const decoded = decodeCharacterDetails(artifact.text, version)
     if (!decoded.length) throw new Error('CHARACTER_PROPOSAL_EMPTY_DETAILS')
     return decoded.map((entry, index) => {
-      const invalid = validateCharacterDetail(entry)
+      const invalid = validateCharacterDetail(entry, version)
       if (invalid) throw new Error(invalid)
       const slot = byId.get(entry.slotId)
       if (!slot || slot.name !== entry.name || slot.role !== entry.role) throw new Error('CHARACTER_PROPOSAL_SLOT_MISMATCH')
@@ -213,7 +214,7 @@ export function normalizeCharacterSlotId(value: unknown): string | undefined {
     : undefined
 }
 
-export function validateCharacterDetail(output: CharacterDetailOutput): string | undefined {
+export function validateCharacterDetail(output: CharacterDetailOutput, version: ArchitectureDerivationVersion = 2): string | undefined {
   const slotId = typeof output.slotId === 'string' && output.slotId.trim() ? output.slotId.trim() : 'unknown'
   const invalid = (field: string, reason: string) => `角色详情 slotId=${slotId} 字段 ${field} ${reason}`
   for (const field of [
@@ -224,7 +225,7 @@ export function validateCharacterDetail(output: CharacterDetailOutput): string |
     if (typeof value !== 'string' || !value.trim()) return invalid(field, '必须是非空文本')
   }
   for (const field of CHARACTER_DETAIL_DESCRIPTION_FIELDS) {
-    if (Array.from(output[field].trim()).length > CHARACTER_DETAIL_DESCRIPTION_MAX_CHARS) {
+    if (version === 1 && Array.from(output[field].trim()).length > CHARACTER_DETAIL_DESCRIPTION_MAX_CHARS) {
       return invalid(field, `不得超过 ${CHARACTER_DETAIL_DESCRIPTION_MAX_CHARS} 字符`)
     }
   }
@@ -236,7 +237,7 @@ export function validateCharacterDetail(output: CharacterDetailOutput): string |
     for (const field of CHARACTER_STATE_TEXT_FIELDS) {
       const value = output.currentState[field]
       if (typeof value !== 'string' || !value.trim()) return invalid(`currentState.${field}`, '必须是非空文本')
-      if (Array.from(value.trim()).length > CHARACTER_STATE_TEXT_MAX_CHARS) {
+      if (version === 1 && Array.from(value.trim()).length > CHARACTER_STATE_TEXT_MAX_CHARS) {
         return invalid(`currentState.${field}`, `不得超过 ${CHARACTER_STATE_TEXT_MAX_CHARS} 字符`)
       }
     }
@@ -258,9 +259,9 @@ export function normalizeDetailStringList(value: unknown, separator: string): un
   return normalized.join(separator)
 }
 
-export function normalizeBoundedDetailText(value: unknown, maxChars: number): unknown {
+export function normalizeBoundedDetailText(value: unknown, maxChars?: number): unknown {
   if (typeof value !== 'string') return value
-  return Array.from(value.trim()).slice(0, maxChars).join('')
+  return maxChars === undefined ? value.trim() : Array.from(value.trim()).slice(0, maxChars).join('')
 }
 
 export interface MaterialExtraction {
@@ -355,7 +356,7 @@ export function parseMaterialExtraction(content: string): MaterialExtraction[] {
 }
 
 
-export function decodeCharacterDetails(content: string): CharacterDetailOutput[] {
+export function decodeCharacterDetails(content: string, version: ArchitectureDerivationVersion = 2): CharacterDetailOutput[] {
   const parsed = JSON.parse(extractSingleCompleteJsonObject(content)) as { entries?: unknown }
   if (!Array.isArray(parsed.entries)) throw new Error('角色详情响应缺少 entries')
   return parsed.entries.map((candidate) => {
@@ -365,7 +366,7 @@ export function decodeCharacterDetails(content: string): CharacterDetailOutput[]
     for (const field of CHARACTER_DETAIL_DESCRIPTION_FIELDS) {
       normalizedCandidate[field] = normalizeBoundedDetailText(
         candidate[field],
-        CHARACTER_DETAIL_DESCRIPTION_MAX_CHARS,
+        version === 1 ? CHARACTER_DETAIL_DESCRIPTION_MAX_CHARS : undefined,
       )
     }
     let currentState: unknown = candidate.currentState
@@ -381,7 +382,7 @@ export function decodeCharacterDetails(content: string): CharacterDetailOutput[]
       for (const field of CHARACTER_STATE_TEXT_FIELDS) {
         normalizedState[field] = normalizeBoundedDetailText(
           normalizedState[field],
-          CHARACTER_STATE_TEXT_MAX_CHARS,
+          version === 1 ? CHARACTER_STATE_TEXT_MAX_CHARS : undefined,
         )
       }
       currentState = normalizedState
