@@ -38,6 +38,40 @@ function modelProfile(): ModelProfile {
 }
 
 describe('ModelExecutionLeaseRegistry', () => {
+  it('plans identical DeepSeek requests for root and v1 endpoints while preserving the lower author cap', async () => {
+    const task: GenerationTask = { purpose: 'chapter-review', output: 'structured-data',
+      messages: [{ role: 'user', content: '请输出 JSON 审稿报告。' }] }
+    const plans = [], requests = []
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(
+      'data: {"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    for (const baseUrl of ['https://api.deepseek.com', 'https://api.deepseek.com/v1']) {
+      const profile = { ...modelProfile(), baseUrl, maxTokens: 1024 }
+      const receipt = new ModelExecutionLeaseRegistry({ loadModel: () => profile }).begin(profile.id)
+      expect(receipt.capabilityEvidence).toMatchObject({ maxOutputTokens: 1024, structuredOutput: true,
+        source: { featureFlags: 'verified-provider-preset' } })
+      const plan = buildMainGenerationPlan(profile, receipt, task, {
+        root: { projectId: 'p', epoch: 'e', rootActionId: 'r', operation: '审稿', uiActionNonce: 'n', frozenInputHash: 'a'.repeat(64), status: 'active' },
+        policy: { ...MAIN_GENERATION_POLICY.budget }, attempts: [], activeElapsedMs: 0, blockedCode: null,
+      })
+      expect(plan.requestedOutputTokens).toBe(1024)
+      plans.push(plan)
+      const onError = vi.fn()
+      await new OpenAIProvider().generateStream(profile, [...task.messages], {
+        ...plan.options, signal: new AbortController().signal, onChunk: vi.fn(), onDone: vi.fn(), onError,
+      })
+      expect(onError).not.toHaveBeenCalled()
+      const [url, request] = fetchMock.mock.calls.at(-1)!
+      requests.push({ url, body: JSON.parse(request.body) })
+    }
+    expect(plans[1]).toEqual(plans[0])
+    expect(requests[1]).toEqual(requests[0])
+    expect(requests[0]).toMatchObject({ url: 'https://api.deepseek.com/v1/chat/completions',
+      body: { response_format: { type: 'json_object' }, max_tokens: 1024 } })
+  })
+
   it.each([
     { modelName: 'Qwen/Qwen3.8-27B', json: true },
     { modelName: 'deepseek-ai/DeepSeek-V4-Flash', json: true },

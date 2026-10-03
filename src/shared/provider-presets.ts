@@ -440,6 +440,7 @@ function normalizedOfficialBaseUrl(value: unknown): string | null {
       || endpoint.hash
     ) return null
     endpoint.pathname = endpoint.pathname.replace(/\/+$/u, '') || '/'
+    if (endpoint.origin === 'https://api.deepseek.com' && endpoint.pathname === '/v1') endpoint.pathname = '/'
     return endpoint.toString().replace(/\/$/u, '')
   } catch {
     return null

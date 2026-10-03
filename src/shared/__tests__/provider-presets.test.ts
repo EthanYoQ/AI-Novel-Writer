@@ -49,11 +49,12 @@ describe('provider catalog', () => {
     }))
   })
 
-  it('resolves provider facts only for an exact official provider, protocol, endpoint and model', () => {
+  it.each(['https://api.deepseek.com', 'https://api.deepseek.com/', 'https://api.deepseek.com/v1', 'https://api.deepseek.com/v1/'])(
+    'resolves official DeepSeek facts for %s', (baseUrl) => {
     const legacy = {
       provider: 'deepseek',
       protocol: 'openai',
-      baseUrl: 'https://api.deepseek.com/',
+      baseUrl,
       modelName: 'deepseek-v4-flash',
       maxTokens: 100_000,
       capabilities: null,
@@ -103,6 +104,21 @@ describe('provider catalog', () => {
       providerValues: { off: 'disabled', low: 'low', high: 'high', max: 'max' },
       requestAliases: { medium: 'high' },
     })
+    expect(resolveModelProfileBudgetCapabilities(legacy)).toEqual({ contextWindowTokens: 1_000_000, maxOutputTokens: 384_000 })
+  })
+
+  it('does not grant DeepSeek facts to other endpoints, protocols or models', () => {
+    const profile = { provider: 'deepseek', protocol: 'openai', baseUrl: 'https://api.deepseek.com/v1', modelName: 'deepseek-v4-flash' }
+    for (const overrides of [
+      ...['https://proxy.example/v1', 'https://api.deepseek.com/proxy/v1', 'https://api.deepseek.com/v2',
+        'http://api.deepseek.com/v1', 'https://api.deepseek.com:8443/v1', 'https://api.deepseek.com/v1?tenant=other',
+        'https://api.deepseek.com/v1#other', 'https://user:password@api.deepseek.com/v1'].map(baseUrl => ({ baseUrl })),
+      { protocol: 'gemini' }, { modelName: 'deepseek-v4-flash-other' },
+    ]) {
+      expect(resolveModelProfileCapabilities({ ...profile, ...overrides })).toBeUndefined()
+      expect(resolveModelProfileBudgetCapabilities({ ...profile, ...overrides })).toBeUndefined()
+      expect(resolveModelProfileReasoningMapping({ ...profile, ...overrides })).toBeUndefined()
+    }
   })
 
   it('publishes Gemini 2.5 Flash-Lite as one exact official capability fact', () => {

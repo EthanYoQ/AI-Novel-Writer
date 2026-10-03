@@ -8,7 +8,8 @@ import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { migrateSchema } from '../../migrations/runner'
 import { createMainGenerationOwner } from '../main-generation-owner'
 import { batchRootBudget, buildMainGenerationPlan, MAIN_GENERATION_POLICY } from '../main-generation-plan'
-import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
+import { createModelExecutionLeaseReceipt, ModelExecutionLeaseRegistry } from '../model-execution-lease'
+import * as providerPresets from '../../../src/shared/provider-presets'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
 import { getBuiltinPromptTemplate } from '../../../src/services/builtin-prompt-templates'
 import { readBuiltinWritingSkill } from '../../../src/shared/builtin-writing-skills'
@@ -760,15 +761,75 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     f.owner.discardCandidate(view.handle, result.run.artifacts[0].artifactId)
     expect(() => f.owner.suspendForProjectClose()).not.toThrow()
   })
-  it('reopens a real database and authorizes a new epoch without rewriting old candidate identity', async () => {
+  it('rejects changed legacy DeepSeek capability receipts and preserves unknown work through explicit restart', async () => {
+    const resolveCapabilities = providerPresets.resolveModelProfileCapabilities
+    const legacyCapabilities = vi.spyOn(providerPresets, 'resolveModelProfileCapabilities').mockImplementation(profile =>
+      profile.baseUrl === 'https://api.deepseek.com/v1' ? undefined : resolveCapabilities(profile))
+    cleanups.push(() => legacyCapabilities.mockRestore())
+    const prefix = '  旧运行已收到的正文前缀。\r\n'
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: prefix }); return { usage: null, finishReason: 'length' }
+    })
+    const f = fixture(dispatch)
+    Object.assign(f.model, { provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', modelName: 'deepseek-v4-flash' })
+    const identityOptions = { leaseId: 'fixture', createdAt: 0, expiresAt: 1 }
+    const oldReceipt = createModelExecutionLeaseReceipt(f.model, identityOptions)
+    expect(oldReceipt.capabilityEvidence).toMatchObject({ structuredOutput: null, source: { featureFlags: 'unknown' } })
+    const view = f.owner.begin(f.begin)
+    let repository = new GenerationRunRepository(() => f.db)
+    const frozen = repository.get(view.handle.runId).binding
+    const generated = await f.owner.execute({ handle: view.handle, invocationNonce: 'legacy-prefix', task })
+    const artifact = repository.receipt(generated.outcome.receipt.visibleArtifact!.attemptId)
+    expect(artifact.attempt.status).toBe('unknown')
+    expect(artifact.artifact).toMatchObject({ text: prefix, textHash: textHash(prefix) })
+    const liability = generated.run.ledger!.tokenLiability
+    expect(liability).toBeGreaterThan(0)
+
+    legacyCapabilities.mockRestore()
+    const currentReceipt = createModelExecutionLeaseReceipt(f.model, identityOptions)
+    expect(currentReceipt).toMatchObject({ modelRevision: oldReceipt.modelRevision,
+      endpointFingerprint: oldReceipt.endpointFingerprint,
+      capabilityEvidence: { subjectFingerprint: oldReceipt.capabilityEvidence.subjectFingerprint,
+        structuredOutput: true, source: { featureFlags: 'verified-provider-preset' } } })
+    await expect(f.owner.execute({ handle: view.handle, invocationNonce: 'changed-capability', task })).rejects.toThrow('GENERATION_SOURCE_CHANGED')
+    const reopened = f.reopen()
+    await expect(reopened.resume(view.handle)).rejects.toThrow('GENERATION_RECOVERY_UNAUTHORIZED')
+    repository = new GenerationRunRepository(() => f.db)
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    expect(f.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(1)
+    expect(repository.budget(view.handle.rootActionId).attempts).toEqual([artifact.attempt])
+    expect(repository.get(view.handle.runId).binding).toEqual(frozen)
+    expect(repository.receipt(artifact.attempt.attemptId).artifact).toEqual(artifact.artifact)
+    expect(reopened.read(view.handle).ledger).toMatchObject({ physicalRequests: 1, tokenLiability: liability })
+
+    const restarted = reopened.restart(view.handle, { ...f.begin, uiActionNonce: 'explicit-new-action' })
+    expect(restarted.handle.rootActionId).not.toBe(view.handle.rootActionId)
+    expect(restarted.handle.runId).not.toBe(view.handle.runId)
+    expect(restarted.ledger).toMatchObject({ physicalRequests: 0, tokenLiability: 0 })
+    expect(repository.get(restarted.handle.runId).binding.sourceManifest.modelReceipt).toMatchObject({
+      capabilityEvidence: { structuredOutput: true, source: { featureFlags: 'verified-provider-preset' } },
+    })
+    expect(repository.get(restarted.handle.runId).binding.fingerprint.modelLeaseRevision).not.toBe(frozen.fingerprint.modelLeaseRevision)
+    expect(reopened.read(view.handle)).toMatchObject({ status: 'cancelled', ledger: { physicalRequests: 1, tokenLiability: liability } })
+    expect(repository.get(view.handle.runId).binding).toEqual(frozen)
+    expect(repository.budget(view.handle.rootActionId).attempts).toEqual([artifact.attempt])
+    expect(repository.receipt(artifact.attempt.attemptId).artifact).toEqual(artifact.artifact)
+    await reopened.execute({ handle: restarted.handle, invocationNonce: 'new-action-call', task })
+    expect(dispatch).toHaveBeenCalledTimes(2)
+    expect(f.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(2)
+  })
+  it.each(['openai', 'deepseek'])('reopens a real database with unchanged %s capabilities without rewriting old candidate identity', async (provider) => {
     const dispatch = vi.fn(async (_request, options) => { options.onVisible({ kind: 'delta', text: '候选' }); return { usage: null, finishReason: 'stop' } })
-    const f = fixture(dispatch), view = f.owner.begin(f.begin)
+    const f = fixture(dispatch)
+    if (provider === 'deepseek') Object.assign(f.model, { provider, baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash' })
+    const view = f.owner.begin(f.begin)
     await f.owner.execute({ handle: view.handle, invocationNonce: 'call', task })
     const reopened = f.reopen(), old = reopened.read(view.handle)
     expect(old.nonReplayable).toBe(true)
     await expect(reopened.execute({ handle: view.handle, invocationNonce: 'again', task })).rejects.toThrow('GENERATION_EPOCH_STALE')
     const resumed = await reopened.resume(view.handle)
     expect(resumed.handle.epoch).toBe('epoch-2')
+    expect(resumed.handle.rootActionId).toBe(view.handle.rootActionId)
     expect(resumed.artifacts).toHaveLength(0)
     expect(resumed.candidates?.[0].epoch).toBe('epoch-1')
     await reopened.execute({ handle: resumed.handle, invocationNonce: 'new-call', task })
