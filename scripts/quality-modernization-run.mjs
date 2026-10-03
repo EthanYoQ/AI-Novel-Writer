@@ -269,7 +269,8 @@ export function validatePhysicalLedger(file) {
   const r3V3 = validateHistoricalSupersessionBoundary(raw, r3Dc9, protocol.historicalR3Native49e1c0adBoundary)
   const r3V4 = validateHistoricalSupersessionBoundary(raw, r3V3, protocol.historicalR3Native6e38e5ddBoundary)
   const r3V5 = validateHistoricalSupersessionBoundary(raw, r3V4, protocol.historicalR3Native11152245Boundary)
-  validateHistoricalSupersessionBoundary(raw, r3V5, protocol.historicalR3NativeC9e7c71eBoundary)
+  const r3V6First = validateHistoricalSupersessionBoundary(raw, r3V5, protocol.historicalR3NativeC9e7c71eBoundary)
+  validateHistoricalSupersessionBoundary(raw, r3V6First, protocol.historicalR3NativeD51580fcBoundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -895,6 +896,10 @@ export function updateLedger(file, event, options = {}) {
         ? protocol.historicalR3NativeC9e7c71eBoundary : options.historicalR3NativeC9e7c71eBoundary
       const trustedR3SameGroupEvents = r3SameGroupBoundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedR3CurrentEvents, r3SameGroupBoundary) : trustedR3CurrentEvents
+      const r3V6Boundary = options.campaignMode === 'real'
+        ? protocol.historicalR3NativeD51580fcBoundary : options.historicalR3NativeD51580fcBoundary
+      const trustedR3V6Events = r3V6Boundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedR3SameGroupEvents, r3V6Boundary) : trustedR3SameGroupEvents
       // 阶段决定首选分配桶：early 阶段用 early*，post-UI 重跑用 postUi*；
       // 同一 slot 的重复发送或已超出计划样本量的发送归入失败/修复余量。
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
@@ -923,13 +928,11 @@ export function updateLedger(file, event, options = {}) {
           const closed = R3_NATIVE_REVISION_DIAGNOSTIC.closedInvocations
           if (closed.includes(binding.invocationId)) fail('R3_NATIVE_ATTEMPT_UNAVAILABLE')
           const campaign = [...reserved.values()].filter(row => row.binding.phase === binding.phase
-            && ![r3NativeBoundary, r3ClosedBoundary, r3Dc9Boundary, r3V3Boundary, r3V4Boundary, r3CurrentBoundary].some(boundary => boundary
+            && ![r3NativeBoundary, r3ClosedBoundary, r3Dc9Boundary, r3V3Boundary, r3V4Boundary, r3CurrentBoundary, r3SameGroupBoundary, r3V6Boundary].some(boundary => boundary
               && closed.includes(row.binding.invocationId)
               && boundary.reserveAttempts.some(item => item.attemptId === row.attemptId)))
           if (campaign.length >= R3_NATIVE_REVISION_DIAGNOSTIC.maxTotalPhysicalRequests
-              || campaign.some(row => !r3SameGroupBoundary?.reserveAttempts.some(item => item.attemptId === row.attemptId
-                && item.invocationId === R3_NATIVE_REVISION_DIAGNOSTIC.runs[0].invocationId)
-                && ['codeSha', 'sourceHash', 'driverHash', 'diagnosticInputHash']
+            || campaign.some(row => ['codeSha', 'sourceHash', 'driverHash', 'diagnosticInputHash']
               .some(key => row.binding[key] !== binding[key]))) fail('R3_NATIVE_EXECUTION_DRIFT')
           if (campaign.some(row => row.binding.invocationId !== binding.invocationId
             && (row.binding.actual.projectId === binding.actual.projectId || row.binding.actual.epoch === binding.actual.epoch)))
@@ -986,7 +989,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedR3SameGroupEvents
+          const superseded = index >= trustedHistoricalEvents && index < trustedR3V6Events
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)

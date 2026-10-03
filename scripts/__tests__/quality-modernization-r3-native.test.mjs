@@ -59,19 +59,27 @@ test('R3 review admits one same-purpose replacement only after authenticated LEN
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
-test('R3 Flash forward group preserves v5, its unused slot, and the qualification Qwen profile', () => {
+test('R3 GLM forward group preserves all Flash outcomes and the qualification Qwen profile', () => {
   assert.equal(hash(protocol.historicalR3NativeRegistration49e1c0ad), '7d59b55e6aff45a7b0b9487721eeb89f26ab826d1981cf3733d9873cec11be39')
   assert.equal(hash(protocol.historicalR3NativeRegistration6e38e5dd), 'a15f9ee248e830463d83458128232b2c131c17111d5df0cde8a8b5a28bc03387')
   const previous = protocol.historicalR3NativeRegistration11152245
   assert.equal(hash(previous), '4154cf33b1ba3ead4ea61dfcfc23b735686590bdfbf9c93ac6ad1e4f21f1ddfa')
   assert.notEqual(policy.scenarioRevision, previous.scenarioRevision)
-  assert.deepEqual(policy.closedInvocations, [...previous.closedInvocations, ...previous.runs.map(item => item.invocationId), policy.runs[0].invocationId])
-  assert.ok(policy.runs.slice(1).every(item => !policy.closedInvocations.includes(item.invocationId)))
+  const flash = protocol.historicalR3NativeRegistrationD51580fc
+  assert.deepEqual(policy.closedInvocations, [...new Set([...flash.closedInvocations, ...flash.runs.map(item => item.invocationId)])])
+  assert.ok(policy.runs.every(item => !policy.closedInvocations.includes(item.invocationId)))
   for (const key of ['source', 'operations', 'evaluationPolicy', 'minPhysicalRequests', 'maxPhysicalRequests', 'maxTotalPhysicalRequests'])
     assert.deepEqual(policy[key], previous[key])
   const frozen = protocol.historicalR3NativeRegistrationC9e7c71e
   assert.equal(hash(frozen), '2fe255679f107679d4ee2cbebcd85d4d40434a4eec4f13248bc8551282bbb871')
-  assert.deepEqual(policy.runs, frozen.runs)
+  assert.deepEqual(flash.runs, frozen.runs)
+  assert.equal(policy.scenarioRevision, 'r3-native-siliconflow-glm53-three-runs-v7')
+  assert.ok(policy.runs.every(item => !flash.runs.some(old => old.invocationId === item.invocationId)))
+  assert.deepEqual(policy.attemptPolicy, flash.attemptPolicy)
+  const flashBoundary = protocol.historicalR3NativeD51580fcBoundary
+  assert.deepEqual([flashBoundary.fromEventCount, flashBoundary.eventCount], [1671, 1686])
+  assert.deepEqual(flashBoundary.reserveAttempts.map(item => item.terminal), ['settle','settle','settle','settle','unknown'])
+  assert.equal(flashBoundary.rawBytesSha256, '846293c04c383bcef68277cc435f759a9902d6c7ee70021b842ff921bcbed730')
   assert.deepEqual(frozen.attemptPolicy, previous.attemptPolicy)
   assert.deepEqual(policy.attemptPolicy, { ...frozen.attemptPolicy,
     reviewRebuild: { ...frozen.attemptPolicy.reviewRebuild, maxLengthReplacements: 1 },
@@ -81,8 +89,8 @@ test('R3 Flash forward group preserves v5, its unused slot, and the qualificatio
   assert.equal(policy.acceptance.scope, 'new-group-only-no-historical-reclassification-or-section-5-waiver')
   assert.equal(policy.acceptance.stop, 'when-two-of-three-impossible-remaining-NOT_RUN-no-redraw')
   assert.equal(policy.requiredProductSha, '6cf907211208d506b0afe6210128bfcfe5fb9dfd')
-  assert.equal(policy.model.modelName, 'deepseek-flash')
-  assert.equal(hash(policy.model), '0eec6083f152f15548e9acf680803e79365d1d76a4763f2b1c58529451a244df')
+  assert.equal(policy.model.modelName, 'zai-org/GLM-5.3')
+  assert.equal(hash(policy.model), '17abb4be95b4caac723b84962ae6a4d1ed3f73e833c53f9a3e8566b7af5fc2c1')
   for (const operation of policy.operations) assert.deepEqual(r3ModelForOperation(operation.id).model, policy.model)
   assert.deepEqual(QUALIFICATION_STAGE_MODELS.profiles.qwen, previous.profiles.qwen)
   const boundary = protocol.historicalR3Native11152245Boundary
@@ -93,7 +101,7 @@ test('R3 Flash forward group preserves v5, its unused slot, and the qualificatio
   assert.equal(hash(protocol.forwardStageModels), '74f050828841a88f6972d2e54f4e0ab6403b1131b6591592137008fc9621e21b')
 })
 
-test('R3 native stage profiles freeze Flash/Flash/Flash and retain the native deadline', () => {
+test('R3 native stage profiles freeze GLM/GLM/GLM and retain the native deadline', () => {
   assert.deepEqual(selectPhase(protocol, phase, 'diagnostic').operations, policy.operations)
   assert.deepEqual(productionScenario(phase, 'diagnostic'), policy)
   assert.throws(() => selectPhase(protocol, phase, 'final'), /MILESTONE/)
@@ -102,10 +110,10 @@ test('R3 native stage profiles freeze Flash/Flash/Flash and retain the native de
     const profile = r3ModelForOperation(operation.id), effort = profile.model.reasoningOverride
     const input = { arm: 'candidate', phase, milestone: 'diagnostic', caseId: 'R3', operationId: operation.id, model: profile.model,
       creativeStrategy: 'auto', resolution: { requested: effort, effective: effort, status: 'mapped', source: 'model-override' },
-      body: { model: profile.model.modelName, temperature: 0, max_tokens: 16384, thinking: { type: 'enabled' }, reasoning_effort: 'high',
+      body: { model: profile.model.modelName, temperature: 0, max_tokens: 16384, reasoning_effort: 'high',
         ...(operation.kind === 'refine' ? {} : { response_format: { type: 'json_object' } }) } }
     assert.equal(assertForwardReasoning(registration, input).effective, effort)
-    for (const change of [{ reasoning_effort: 'medium' }, { thinking: { type: 'disabled' } }, { enable_thinking: true }, { thinking_budget: 16384 }, { max_tokens: 8192 }, { model: 'deepseek-v4-flash' }])
+    for (const change of [{ reasoning_effort: 'medium' }, { thinking: { type: 'enabled' } }, { thinking: { type: 'disabled' } }, { enable_thinking: true }, { thinking_budget: 16384 }, { max_tokens: 8192 }, { model: 'deepseek-v4-flash' }])
       assert.throws(() => assertForwardReasoning(registration, { ...input, body: { ...input.body, ...change } }), /WIRE/)
     assert.throws(() => assertForwardReasoning(registration, { ...input, model: { ...profile.model, modelName: 'deepseek-ai/DeepSeek-V4-Pro' } }), /MODEL/)
   }
@@ -127,7 +135,7 @@ test('R3 native registration rejects altered source and cannot restart spent dia
     const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', ...currentProtocolBinding(),
       codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
       phase, milestone: 'diagnostic', caseId: 'R3', operation: policy.operations[0].id, invocationId: r3DiagnosticInvocation(2),
-      stageModel: { profileId: policy.profiles.flash.profileId, configurationHash: policy.profiles.flash.configurationHash },
+      stageModel: { profileId: policy.profiles.glm.profileId, configurationHash: policy.profiles.glm.configurationHash },
       diagnosticInputHash: policy.source.contextSha256, diagnosticSourceHash: hash(policy.source),
       evaluationPolicyHash: hash(policy.evaluationPolicy), actual: { attemptId: 'first', runId: 'run', rootActionId: 'root',
         projectId: 'new-project', epoch: 'new-epoch', purpose: 'review-chapter' } }
@@ -137,7 +145,7 @@ test('R3 native registration rejects altered source and cannot restart spent dia
     updateLedger(ledger, { type: 'dispatch', attemptId: 'candidate:first' }, { campaignMode: 'synthetic' })
     updateLedger(ledger, { type: 'settle', attemptId: 'candidate:first', finishReason: 'stop' }, { campaignMode: 'synthetic' })
     assert.throws(() => updateLedger(ledger, reserve('restart', { invocationId: randomUUID() }), { campaignMode: 'synthetic' }), /ATTEMPT_UNAVAILABLE/)
-    for (const slot of protocol.historicalR3NativeRegistration11152245.runs)
+    for (const slot of protocol.historicalR3NativeRegistrationD51580fc.runs)
       assert.throws(() => updateLedger(ledger, reserve('closed-' + slot.run, { invocationId: slot.invocationId }), { campaignMode: 'synthetic' }), /ATTEMPT_UNAVAILABLE/)
     const original = fs.readFileSync(ledger, 'utf8')
     assert.equal(original.trim().split('\n').length, 3)
@@ -151,6 +159,8 @@ test.each([
   ['historicalR3Native49e1c0adBoundary', 3],
   ['historicalR3Native6e38e5ddBoundary', 6],
   ['historicalR3Native11152245Boundary', 9],
+  ['historicalR3NativeC9e7c71eBoundary', 12],
+  ['historicalR3NativeD51580fcBoundary', 13],
 ])('R3 registered run preserves authenticated UNKNOWN in %s and caps its eight-call invocation', (boundaryKey, closedIndex) => {
   const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', 'r3-replacement-' + randomUUID())
   fs.mkdirSync(directory, { recursive: true })
@@ -206,14 +216,14 @@ test.each([
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
-test('R3 same-group frozen slot stays spent in the 24-call budget while only later slots accept the new subject', () => {
+test('R3 v7 excludes the authenticated closed Flash group from its new budget without rewriting UNKNOWN', () => {
   const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', `r3-history-${randomUUID()}`)
   fs.mkdirSync(directory, { recursive: true })
   try {
     const ledger = path.join(directory, 'ledger.jsonl'), profile = r3ModelForOperation(policy.operations[0].id)
     const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', ...currentProtocolBinding(),
       codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
-      phase, milestone: 'diagnostic', caseId: 'R3', operation: policy.operations[0].id, invocationId: policy.runs[0].invocationId,
+      phase, milestone: 'diagnostic', caseId: 'R3', operation: policy.operations[0].id, invocationId: protocol.historicalR3NativeRegistrationD51580fc.runs[0].invocationId,
       stageModel: { profileId: profile.profileId, configurationHash: profile.configurationHash },
       diagnosticInputHash: policy.source.contextSha256, diagnosticSourceHash: hash(policy.source), evaluationPolicyHash: hash(policy.evaluationPolicy),
       actual: { attemptId: 'old', runId: 'old-run', rootActionId: 'old-root', projectId: 'old-project', epoch: 'old-epoch', purpose: 'review-chapter' } }
@@ -221,29 +231,27 @@ test('R3 same-group frozen slot stays spent in the 24-call budget while only lat
       const reserveAttempts = []
       const rows = Array.from({ length: count }, (_, index) => {
         const attemptId = 'candidate:old-' + index
-        reserveAttempts.push({ attemptId, invocationId: binding.invocationId, terminal: 'settle' })
+        reserveAttempts.push({ attemptId, invocationId: binding.invocationId, terminal: index === count - 1 ? 'unknown' : 'settle' })
         return [{ type: 'reserve', attemptId, binding, allocation: 'nonQualificationDiagnostic' },
-          { type: 'dispatch', attemptId }, { type: 'settle', attemptId, finishReason: 'length' }]
+          { type: 'dispatch', attemptId }, { type: index === count - 1 ? 'unknown' : 'settle', attemptId, ...(index === count - 1 ? {} : { finishReason: 'stop' }) }]
       }).flat()
       const raw = rows.map(row => JSON.stringify(row) + '\n').join('')
       fs.writeFileSync(ledger, raw)
-      return { raw, options: { campaignMode: 'synthetic', historicalR3NativeC9e7c71eBoundary: {
+      return { raw, options: { campaignMode: 'synthetic', historicalR3NativeD51580fcBoundary: {
         fromEventCount: 0, eventCount: rows.length, rawBytesSha256: hash(raw), protocolRevision: binding.protocolRevision,
         protocolHash: binding.protocolHash, reserveAttempts } } }
     }
     const next = { type: 'reserve', attemptId: 'candidate:new', binding: { ...binding, codeSha: 'e'.repeat(40), driverHash: 'f'.repeat(64),
       invocationId: policy.runs[1].invocationId, actual: { ...binding.actual, attemptId: 'new', runId: 'new-run', rootActionId: 'new-root', projectId: 'new-project', epoch: 'new-epoch' } } }
-    const first = frozen(1)
-    assert.throws(() => updateLedger(ledger, { ...next, binding: { ...next.binding, invocationId: policy.runs[0].invocationId } }, first.options), /ATTEMPT_UNAVAILABLE/)
-    assert.throws(() => updateLedger(ledger, next, { ...first.options, historicalR3NativeC9e7c71eBoundary: {
-      ...first.options.historicalR3NativeC9e7c71eBoundary, rawBytesSha256: '0'.repeat(64) } }), /SUPERSESSION_DRIFT/)
+    const first = frozen(6)
+    assert.throws(() => updateLedger(ledger, { ...next, binding: { ...next.binding, invocationId: binding.invocationId } }, first.options), /ATTEMPT_UNAVAILABLE/)
+    assert.throws(() => updateLedger(ledger, next, { ...first.options, historicalR3NativeD51580fcBoundary: {
+      ...first.options.historicalR3NativeD51580fcBoundary, rawBytesSha256: '0'.repeat(64) } }), /SUPERSESSION_DRIFT/)
     updateLedger(ledger, next, first.options)
     assert.ok(fs.readFileSync(ledger, 'utf8').startsWith(first.raw))
-    assert.equal(fs.readFileSync(ledger, 'utf8').trimEnd().split('\n').map(JSON.parse).filter(row => row.type === 'reserve').length, 2)
-    // Synthetic boundary saturation isolates the existing campaign cap; no physical calls are made.
-    const full = frozen(24)
-    assert.throws(() => updateLedger(ledger, next, full.options), /EXECUTION_DRIFT/)
-    assert.equal(fs.readFileSync(ledger, 'utf8'), full.raw)
+    assert.equal(fs.readFileSync(ledger, 'utf8').trimEnd().split('\n').map(JSON.parse).filter(row => row.type === 'reserve').length, 7)
+    assert.equal(JSON.parse(first.raw.trimEnd().split('\n').at(-1)).type, 'unknown')
+    assert.equal(policy.maxTotalPhysicalRequests, 24)
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
@@ -261,7 +269,7 @@ test('SSE terminal shape records explicit null versus missing without leaking pr
 })
 
 
-test('R3 config copy retains only the hash-bound Flash profile and rejects a same-id Pro replacement', () => {
+test('R3 config copy retains only the hash-bound GLM profile and rejects a same-id Pro replacement', () => {
   const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', 'r3-profile-' + randomUUID())
   fs.mkdirSync(directory, { recursive: true })
   const source = path.join(directory, 'source'), target = path.join(directory, 'target')
@@ -279,7 +287,7 @@ test('R3 config copy retains only the hash-bound Flash profile and rejects a sam
 })
 
 
-test('R3 remaining fixed runs own independent state; UNKNOWN and historical slot one remain spent', () => {
+test('R3 three fixed GLM runs own independent state; UNKNOWN is spent and a fourth run is rejected', () => {
   const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', 'r3-three-' + randomUUID())
   fs.mkdirSync(directory, { recursive: true })
   const ledger = path.join(directory, 'ledger.jsonl')
@@ -295,11 +303,11 @@ test('R3 remaining fixed runs own independent state; UNKNOWN and historical slot
       evaluationPolicyHash: hash(policy.evaluationPolicy), actual: { attemptId: 'attempt-' + run, runId: 'run-' + run,
         rootActionId: 'root-' + run, projectId: 'project-' + run, epoch: 'epoch-' + run, purpose: 'review-chapter' } })
     const options = { campaignMode: 'synthetic' }
-    for (const run of [2, 3]) {
+    for (const run of [1, 2, 3]) {
       const attemptId = 'candidate:run-' + run, value = binding(run)
-      if (run > 2) {
+      if (run > 1) {
         assert.throws(() => updateLedger(ledger, { type: 'reserve', attemptId,
-          binding: { ...value, actual: { ...value.actual, projectId: 'project-2' } } }, options), /ISOLATION_REUSED/)
+          binding: { ...value, actual: { ...value.actual, projectId: 'project-1' } } }, options), /ISOLATION_REUSED/)
         assert.throws(() => updateLedger(ledger, { type: 'reserve', attemptId,
           binding: { ...value, codeSha: 'e'.repeat(40) } }, options), /EXECUTION_DRIFT/)
       }
@@ -311,7 +319,6 @@ test('R3 remaining fixed runs own independent state; UNKNOWN and historical slot
     }
     assert.throws(() => updateLedger(ledger, { type: 'reserve', attemptId: 'candidate:fourth',
       binding: { ...binding(3), invocationId: randomUUID() } }, options), /ATTEMPT_UNAVAILABLE/)
-    assert.equal(fs.readFileSync(ledger, 'utf8').trim().split('\n').length, 6)
-    assert.throws(() => updateLedger(ledger, { type: 'reserve', attemptId: 'spent-slot-1', binding: binding(1) }, options), /ATTEMPT_UNAVAILABLE/)
+    assert.equal(fs.readFileSync(ledger, 'utf8').trim().split('\n').length, 9)
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
