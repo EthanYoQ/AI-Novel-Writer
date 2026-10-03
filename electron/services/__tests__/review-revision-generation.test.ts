@@ -76,6 +76,55 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   return { get db() { return db }, owner, makeOwner, reopenStorage, prepare, selection, run, spy, deps }
 }
 describe('review and revision generation through the actual owner and SQLite', () => {
+  it.each([
+    'Here is the truth: I never left the island. Everyone who said otherwise was lying.',
+    '以下是我从父亲遗物中找到的最后一份内容。它改变了我们所有人的命运。',
+  ].flatMap(opening => ['commit', 'recovery'].map(path => ({ opening, path }))))(
+    'accepts narrative prose unchanged on $path: $opening', async ({ opening, path }) => {
+      const content = `${opening}\n\n${revisedProse}`
+      const f = fixture(async (_request, options) => {
+        options.onVisible({ kind: 'delta', text: content }); return { finishReason: 'stop', usage: null }
+      })
+      const request = await f.run('refine-draft')
+      const composition = f.owner.composeVisible(request.handle, [request.artifact.artifactId], textHash(content), 'visible-append-v1')
+      if (path === 'commit') {
+        const saved = f.owner.commitRevision({ contextId: request.contextId, handle: request.handle,
+          expectedCompositionHash: composition.textHash })
+        expect(RevisionRepository.getFull(saved.id, f.db)?.content).toBe(content)
+        return
+      }
+      f.owner.suspendForProjectClose()
+      const reopened = f.reopenStorage()
+      try {
+        const resumed = await reopened.resume(request.handle)
+        const recovery = reopened.readReviewRevisionRecovery(resumed.handle)
+        expect(recovery).toMatchObject({ canResume: true, sourceStatus: 'current', lastCompositionFinishReason: 'stop' })
+        const saved = reopened.commitRevision({ contextId: recovery.contextId!, handle: resumed.handle,
+          expectedCompositionHash: composition.textHash })
+        expect(saved.content).toBe(content)
+        expect(RevisionRepository.getFull(saved.id, f.db)?.content).toBe(content)
+        expect(reopened.readReviewRevisionRecovery(resumed.handle).saved?.content).toBe(content)
+        expect(f.spy).toHaveBeenCalledTimes(1)
+      } finally { reopened.suspendForProjectClose() }
+    },
+  )
+
+  it.each(['以下是修订后的完整正文：', '以下是修订后的完整章节正文：', 'Here is the revised chapter:'])(
+    'rejects explicit output introductions on commit and recovery: %s', async opening => {
+      const content = `${opening}\n\n${revisedProse}`
+      const f = fixture(async (_request, options) => {
+        options.onVisible({ kind: 'delta', text: content }); return { finishReason: 'stop', usage: null }
+      })
+      const request = await f.run('refine-draft')
+      const composition = f.owner.composeVisible(request.handle, [request.artifact.artifactId], textHash(content), 'visible-append-v1')
+      expect(() => f.owner.commitRevision({ contextId: request.contextId, handle: request.handle,
+        expectedCompositionHash: composition.textHash })).toThrow('首段元话术')
+      expect(f.owner.readReviewRevisionRecovery(request.handle).canResume).toBe(false)
+      expect(f.db.prepare('SELECT COUNT(*) FROM revisions').pluck().get()).toBe(0)
+      expect(f.owner.read(request.handle).candidates?.[0]?.text).toBe(content)
+    },
+  )
+
   it.each([1, 2] as const)('reopens long saved reports with report version %i and refuses a changed version', async version => {
     const output = { summary: '🌙'.repeat(121) + '保留结论', items: [{ category: '表达', severity: 'pass',
       description: '已经核对的原文。'.repeat(30) + '但这只是猜测，不应修改。', quote: prose }],

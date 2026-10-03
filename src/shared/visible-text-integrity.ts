@@ -42,7 +42,11 @@ export function assertMechanicallyCompleteVisibleText(content: string, uiLocale:
   const opening = trimmed.split(/\r?\n/u).map(line => line.trim()).find(Boolean) ?? ''
   if (
     visibleProseUnitCount(opening) <= MAX_META_OPENING_VISIBLE_UNITS
-    && /^(?:(?:以下|下面)(?:是|为).{0,40}(?:修订|修改|重写|生成|完成|提供|正文|章节|内容)|(?:根据|按照)(?:您|用户).{0,40}(?:要求|指示)|这是(?:我为您|根据您的要求).{0,30}(?:修订|修改|重写|生成)|here\s+is|below\s+is|as\s+requested|certainly[,!:]?\s+(?:here\s+is|i(?:'ve|\s+have))|i\s+(?:have\s+(?:revised|rewritten|generated)|will\s+(?:provide|write|revise))\b)/iu.test(opening)
+    && (
+      /^(?:以下|下面)(?:是|为)(?:(?:根据|按照)(?:您|用户)(?:的)?(?:要求|指示))?(?:(?:修订|修改|重写|生成|完成|提供)(?:后)?的?)?(?:完整的?)?(?:正文|章节(?:正文)?|内容)\s*(?:[：:]|[。.!！]?$)/u.test(opening)
+      || /^(?:certainly[,!:]?\s+)?(?:here|below)\s+is\s+(?:(?:the|your)\s+)?(?:(?:revised|rewritten|generated|complete|full|updated|requested)\s+)*(?:text|chapter|content|revision|version|draft|prose)\s*(?:[:：]|[.!]?$)/iu.test(opening)
+      || /^(?:(?:根据|按照)(?:您|用户).{0,40}(?:要求|指示)|这是(?:我为您|根据您的要求).{0,30}(?:修订|修改|重写|生成)|as\s+requested|certainly[,!:]?\s+i(?:'ve|\s+have)|i\s+(?:have\s+(?:revised|rewritten|generated)|will\s+(?:provide|write|revise))\b)/iu.test(opening)
+    )
   ) {
     throw mechanicalCompletionError(uiLocale, '首段元话术', 'opening meta commentary')
   }

@@ -1,4 +1,5 @@
 import { composeVisibleContinuation, VISIBLE_CONTINUATION_VERSION } from '../../../shared/visible-continuation'
+import { assertMechanicallyCompleteVisibleText } from '../../../shared/visible-text-integrity'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -10,6 +11,25 @@ import {
 } from '../bounded-completion'
 
 describe('bounded completion', () => {
+  describe.each([
+    'Here is the truth: I never left the island. Everyone who said otherwise was lying.',
+    '以下是我从父亲遗物中找到的最后一份内容。它改变了我们所有人的命运。',
+    'Below is the valley where my brother disappeared. I had returned to find him.',
+  ])('narrative opening: %s', content => {
+    it('passes the shared mechanical integrity gate', () => {
+      expect(() => assertMechanicallyCompleteVisibleText(content, 'zh-CN')).not.toThrow()
+    })
+
+    it('returns the complete prose unchanged without a continuation', async () => {
+      const requestContinuation = vi.fn()
+      await expect(completeBoundedCompletion({
+        initial: { content, finishReason: 'stop' }, mode: 'append-visible-text', maxContinuations: 3,
+        originalPrompt: '输出完整正文', writingLanguage: 'zh-CN', requestContinuation,
+      })).resolves.toBe(content)
+      expect(requestContinuation).not.toHaveBeenCalled()
+    })
+  })
+
   it.each([
     {
       mode: 'replace-structured-output' as const,
@@ -236,6 +256,8 @@ describe('bounded completion', () => {
     ['a code fence', `\`\`\`markdown\n${'完整正文。'.repeat(40)}\n\`\`\``, '代码围栏'],
     ['opening meta-talk', `以下是根据您的要求修订后的完整章节。\n\n${'完整正文。'.repeat(40)}`, '首段元话术'],
     ['single-line opening meta-talk', `以下是根据您的要求修订后的完整章节。\n${'完整正文。'.repeat(40)}`, '首段元话术'],
+    ...['以下是修订后的完整正文：', '以下是修订后的完整章节正文：', 'Here is the revised chapter:', 'Below is the complete text:']
+      .map(opening => ['explicit output introduction', `${opening}\n\n${'完整正文。'.repeat(40)}`, '首段元话术']),
     ['a truncation marker', `${'完整正文。'.repeat(40)}\n\n…[内容已按上下文预算截断]…`, '截断标记'],
     ['an orphan think fragment', `${'完整正文。'.repeat(40)}\n\n</think`, 'think 标签残片'],
     ['an obvious repeated paragraph', `${'重复段落内容。'.repeat(20)}\n\n${'重复段落内容。'.repeat(20)}`, '重复段落'],
