@@ -104,12 +104,35 @@ beforeEach(() => {
 afterEach(() => { clearProjectCustomPrompts(); vi.restoreAllMocks(); vi.unstubAllGlobals(); useProjectStore.setState({ currentProject: null }) })
 
 describe('review/revision consumers using the main contract (synthetic transport)', () => {
-  it.each(['zh-CN', 'en-US'] as const)('delivers event-source pairing to initial and ordinary final review requests in %s', async language => {
+  it.each(['zh-CN', 'en-US'] as const)('limits ordinary time judgments to draft precision while preserving conflict checks in %s', async language => {
     const project = useProjectStore.getState().currentProject!
     useProjectStore.setState({ currentProject: { ...project, novelConfig: { ...project.novelConfig, writingLanguage: language } } })
-    for (const [version, content] of [[1, source.content], [2, revised]] as const) {
+    const predecessor = language === 'zh-CN'
+      ? '正午，信使抵达。入夜后，他封好了包裹。'
+      : 'At noon, the courier arrived. After nightfall, he sealed the parcel.'
+    const broadReference = language === 'zh-CN'
+      ? '他收起之前封好的包裹。'
+      : 'He picked up the parcel he had sealed earlier.'
+    const specificConflict = language === 'zh-CN'
+      ? '他收起昨天封好的包裹，又说那是今早封好的。'
+      : 'He picked up the parcel sealed yesterday, then said he had sealed it this morning.'
+    for (const version of [1, 2]) for (const content of [broadReference, specificConflict]) {
       const f = setup([{ content: review, finishReason: 'stop' }], [], { ...source, version, content })
       f.args.context.writingLanguage = language
+      const invoke = f.fixture.invoke.bind(f.fixture)
+      vi.spyOn(f.fixture, 'invoke').mockImplementation(async (channel, ...args) => {
+        const result = await invoke(channel, ...args)
+        if (channel === 'review-revision:prepare') {
+          const prepared = result as NonNullable<typeof f.fixture.prepared>
+          prepared.context.predecessor = { draftId: 8, chapterNumber: 0, chapterTitle: '', content: predecessor,
+            identity: { projectId: session.projectId, sourceId: 'candidate:8', revision: 1,
+              contentHash: hash(predecessor), provenance: 'generated' } }
+          prepared.context.frozenGoals = { chapterNumber: 1, coverage: 'complete',
+            items: [{ id: 'ch1:keyEvents:1', text: 'Carry the parcel' }] }
+          f.fixture.prepared = structuredClone(prepared)
+        }
+        return result
+      })
       await f.command('review-chapter', {
         sourceDraft: { id: 1, chapterNumber: 1, version, status: 'draft', contentRevision: version },
       }).execute(f.args)
@@ -117,18 +140,35 @@ describe('review/revision consumers using the main contract (synthetic transport
       expect(f.provider).toHaveBeenCalledOnce()
       expect(f.fixture.prepared!.context.recheck).toBeUndefined()
       expect(prompt).toContain(content)
+      expect(prompt).toContain(predecessor)
+      expect(prompt).toContain('ch1:keyEvents:1')
+      expect(prompt).toContain('Carry the parcel')
+      expect(prompt).toContain('goalReviews')
+      expect(prompt).toContain('"summary"')
+      expect(prompt).toContain('"items"')
       expect(prompt).toContain(language === 'zh-CN'
-        ? '每个时间判断（包括 pass）的 items[].description 先注明来源章节'
-        : 'For every temporal judgment (including pass), begin items[].description with the source chapter')
+        ? '只核对正文实际表达的时间精度'
+        : 'Check only the time precision actually expressed in the draft')
       expect(prompt).toContain(language === 'zh-CN'
-        ? '分别摘录同一事件的短原句和支配其时点的短原句'
-        : 'separate short verbatim excerpts for that same event and the time anchor governing it')
+        ? '顺序一致则不补推更精确的历史日期或时段'
+        : 'if consistent, do not infer a more precise historical date or time period')
       expect(prompt).toContain(language === 'zh-CN'
-        ? '再给比较结论及必要修法'
-        : 'then give the comparison result and any necessary remedy')
+        ? '明确日期、时段和相对时间须对照作者时点与前驱同一事件'
+        : 'Check explicit dates, time periods and relative times against author timing and the same predecessor event')
       expect(prompt).toContain(language === 'zh-CN'
-        ? '无法支持具体时点时，保留不确定性'
-        : 'If the sources do not support a specific time, preserve that uncertainty')
+        ? '真实冲突报 error 或 warning：quote 定位当前正文的冲突句'
+        : 'Report genuine conflicts as error or warning: quote the conflicting current-draft sentence')
+      expect(prompt).toContain(language === 'zh-CN'
+        ? '无法确定时保留不确定性'
+        : 'Preserve uncertainty when it cannot be determined')
+      expect(prompt).toContain(language === 'zh-CN'
+        ? '全文未发现具体问题时，保留一条 pass'
+        : 'If the whole draft has no specific issue, keep one pass item')
+      expect(prompt).toContain(language === 'zh-CN'
+        ? '不必逐项展开无问题内容的历史时点'
+        : 'do not expand the historical timing of each problem-free detail')
+      expect(prompt).not.toContain(language === 'zh-CN' ? '每个时间判断（包括 pass）' : 'For every temporal judgment (including pass)')
+      expect(prompt).not.toContain(language === 'zh-CN' ? '【时间承接】' : '[Time continuity]')
       expect(prompt).toContain(language === 'zh-CN'
         ? '逐字连续、且全文仅出现一次的单一摘录'
         : 'one verbatim, contiguous excerpt that occurs exactly once in the draft under review')
@@ -169,7 +209,9 @@ describe('review/revision consumers using the main contract (synthetic transport
         await new ReviewChapterCommand({ ...selected, reviewCycleId: 'cycle-1', expectedMergedHash: hash(source.content) }, f.dependencies).execute(f.args)
       } else await f.command(operation).execute(f.args)
       const prompt = f.provider.mock.calls[0]![0].find(message => message.role === 'user')!.content
-      expect(prompt).toContain(language === 'zh-CN' ? '【时间承接】' : '[Time continuity]')
+      expect(prompt).toContain(operation === 'review-chapter'
+        ? language === 'zh-CN' ? '按前章结尾同日紧接核对' : 'check a same-day continuation from the previous ending'
+        : language === 'zh-CN' ? '【时间承接】' : '[Time continuity]')
       expect(prompt).toContain(language === 'zh-CN' ? '正文自身明确写出的跨日或时间间隔优先于同日默认' : 'An explicit day change or time gap in the manuscript takes priority over the same-day default')
       expect(prompt).toContain(language === 'zh-CN' ? '前面最近的明确时点' : 'nearest preceding explicit time')
       expect(prompt).toContain(language === 'zh-CN' ? 'AI 建议中的具体时点不构成来源依据' : 'A specific time proposed by AI is not source evidence')
@@ -183,7 +225,7 @@ describe('review/revision consumers using the main contract (synthetic transport
       if (operation === 'review-chapter') {
         expect(prompt).toContain('PERSISTED_TEMPLATE')
         expect(prompt).toContain(language === 'zh-CN' ? '【时间一致性检查】' : '[Temporal consistency checks]')
-        expect(prompt).toContain(language === 'zh-CN' ? 'pass 必须写明实际核对的对象与来源' : 'A pass must name the actual subject and source checked')
+        expect(prompt).toContain(language === 'zh-CN' ? 'pass 简述实际核对的对象、来源与对照结果即可' : 'Briefly state the actual subject, source checked and comparison result for a pass')
       }
       if (operation === 'refine-from-review') expect(prompt).toContain(reviewRevisionAiBrief(f.fixture.prepared!.context))
       if (operation === 'recheck') expect(prompt).toContain(language === 'zh-CN' ? '不能判为 resolved' : 'must not be marked resolved')
