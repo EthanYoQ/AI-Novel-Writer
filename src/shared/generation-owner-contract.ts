@@ -26,7 +26,7 @@ export interface VisibleCompositionReceipt {
   sources: { artifactId: string; revision: number; textHash: string }[]
   authorInputs?: GenerationAuthorInput[]
 }
-export type VisibleCompositionAlgorithm = 'visible-append-v1' | 'draft-visible-v1'
+export type VisibleCompositionAlgorithm = 'visible-append-v1' | import('./draft-visible-text').DraftVisibleTextVersion
 /**
  * S10B 章节材料准入裁决的脱敏收据。
  *

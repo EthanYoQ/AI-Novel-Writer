@@ -23,7 +23,7 @@ import type { BeginGenerationRequest, BeginGenerationBatchRequest, GenerationBat
 import type { MainGenerationRunHandle, MainGenerationRunView } from '../../../services/generation/generation-runtime'
 import type { GenerationOutcome } from '../../../services/generation/generation-harness'
 import { hashAuthorText } from '../../../shared/source-ref'
-import { composeDraftVisibleContinuation } from '../../../shared/draft-visible-text'
+import { composeDraftVisibleContinuation, isDraftVisibleTextVersion } from '../../../shared/draft-visible-text'
 import { countDraftUnits } from '../../../services/workflows/commands/generate-draft.command'
 
 const PROJECT_PATH = 'C:\\novels\\batch-completion-mode'
@@ -295,8 +295,10 @@ function installIpc() {
     if (channel === 'generation:compose-visible') {
       const handle = args[0] as MainGenerationRunHandle, ids = args[1] as string[]
       const view = views.get(handle.runId)!
-      const text = ids.reduce((text, id) => composeDraftVisibleContinuation(text, view.artifacts.find(item => item.artifactId === id)!.text), '')
-      const receipt: VisibleCompositionReceipt = { algorithm: 'draft-visible-v1', text, textHash: await hashAuthorText(text),
+      const algorithm = args[3]
+      if (!isDraftVisibleTextVersion(algorithm)) throw new Error('GENERATION_COMPOSITION_ALGORITHM_INVALID')
+      const text = ids.reduce((text, id) => composeDraftVisibleContinuation(text, view.artifacts.find(item => item.artifactId === id)!.text, algorithm), '')
+      const receipt: VisibleCompositionReceipt = { algorithm, text, textHash: await hashAuthorText(text),
         artifactIds: ids, sources: view.artifacts.map(item => ({ artifactId: item.artifactId, revision: item.revision, textHash: item.textHash })) }
       expect(receipt.textHash).toBe(args[2]); compositions.set(handle.runId, receipt); return receipt
     }

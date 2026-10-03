@@ -4,6 +4,7 @@ import type { MainGenerationRunHandle } from '../../src/services/generation/gene
 import { MAX_BATCH_CHAPTERS, type GenerationBatchIntent, type GenerationBatchProgress, type GenerationDraftCommitReceipt, type GenerationDraftCommitRequest } from '../../src/shared/generation-owner-contract'
 import type { DraftSourceDependency } from '../../src/shared/draft-source-dependency'
 import { countDraftUnits, draftTargetUnitRange } from '../../src/shared/draft-units'
+import { isDraftVisibleTextVersion } from '../../src/shared/draft-visible-text'
 import { GenerationRunRepository, textHash, type DurableGenerationRun } from '../repositories/generation-run-repository'
 import { DraftRepository } from '../repositories/draft-repository'
 
@@ -36,7 +37,7 @@ export class GenerationDraftEffects {
     if (!stored) return null
     const run = this.runs.get(row.run_id), composition = this.runs.readVisibleComposition(run.runId)
     const draft = this.db.prepare('SELECT d.id,d.version,d.chapter_number,c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?').get(stored.id) as { id: number; version: number; chapter_number: number; body: string } | undefined
-    if (!draft || !composition || composition.algorithm !== 'draft-visible-v1' || stored.success !== true
+    if (!draft || !composition || !isDraftVisibleTextVersion(composition.algorithm) || stored.success !== true
       || stored.chapterNumber !== run.binding.sourceManifest.chapterNumber || stored.chapterNumber !== draft.chapter_number
       || stored.version !== draft.version || stored.contentHash !== textHash(stored.content) || stored.contentHash !== composition.textHash
       || stored.content !== composition.text || stored.content !== draft.body || stored.batchId !== run.binding.sourceManifest.batchId
@@ -101,7 +102,7 @@ export class GenerationDraftEffects {
       }
       assertSources()
       const composition = this.runs.readVisibleComposition(run.runId)
-      if (!composition || composition.algorithm !== 'draft-visible-v1' || composition.textHash !== request.expectedCompositionHash)
+      if (!composition || !isDraftVisibleTextVersion(composition.algorithm) || composition.textHash !== request.expectedCompositionHash)
         throw new Error('GENERATION_DRAFT_COMPOSITION_REQUIRED')
       const target = Number((run.binding.sourceManifest.authorInputs as { id: string; text: string }[] | undefined)?.find(item => item.id === 'draft:target-units')?.text)
       if (!Number.isSafeInteger(target) || target < 1) throw new Error('GENERATION_DRAFT_INCOMPLETE')

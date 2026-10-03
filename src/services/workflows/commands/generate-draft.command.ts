@@ -1,5 +1,5 @@
 import { chapterTimeContinuity } from '../../../shared/chapter-time-continuity'
-import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, DRAFT_VISIBLE_TEXT_VERSION } from '../../../shared/draft-visible-text'
+import { sanitizeDraftText, composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, DRAFT_VISIBLE_TEXT_VERSION, isDraftVisibleTextVersion, type DraftVisibleTextVersion } from '../../../shared/draft-visible-text'
 import { DRAFT_RECONCILE_PURPOSE, draftReconciliationBlock } from '../../../shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlinePrompt, draftShortOutlineBlock } from '../../../shared/draft-short-outline'
 export { sanitizeDraftText } from '../../../shared/draft-visible-text'
@@ -508,8 +508,9 @@ async function sha256Hex(value: string): Promise<string> {
 }
 
 /** Join a visible continuation without allowing a repeated prompt tail to count as new prose. */
-export function appendVisibleDraftContinuation(draft: string, continuation: string): string {
-  return composeDraftVisibleContinuation(draft, continuation)
+export function appendVisibleDraftContinuation(draft: string, continuation: string,
+  version: DraftVisibleTextVersion = DRAFT_VISIBLE_TEXT_VERSION): string {
+  return composeDraftVisibleContinuation(draft, continuation, version)
 }
 
 export class GenerateDraftCommand extends BaseWorkflowCommand {
@@ -859,11 +860,12 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       let runtime: GenerationRuntime | null = null
       let cleanDraftText: string
       let acknowledgedPreview = ''
+      let compositionVersion: DraftVisibleTextVersion = DRAFT_VISIBLE_TEXT_VERSION
       // 对账输出不是正文：对账请求进行期间不把它的快照显示到写作面板。
       const mainCallbacks = { ...callbacks,
         appendText: (text: string) => { if (!planning) callbacks.appendText(text) },
         ...(callbacks.replaceText ? { replaceText: (text: string) => {
-          if (!planning) callbacks.replaceText?.(composeDraftVisibleContinuation(acknowledgedPreview, text))
+          if (!planning) callbacks.replaceText?.(composeDraftVisibleContinuation(acknowledgedPreview, text, compositionVersion))
         } } : {}),
       }
       try {
@@ -922,9 +924,11 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             && !failedBatchView.unsavedTails?.some(tail => tail.text.trim())
           if (recovery && (recovery.operation !== 'chapter-draft'
             || recovery.chapterNumber !== this.chapterInfo.chapterNumber
-            || !retryFailedBatch && !reconciledOnly && !outlinedOnly && (!recovery.composition || recovery.composition.algorithm !== DRAFT_VISIBLE_TEXT_VERSION
+            || !retryFailedBatch && !reconciledOnly && !outlinedOnly && (!recovery.composition || !isDraftVisibleTextVersion(recovery.composition.algorithm)
               || !['stop', 'length'].includes(recovery.lastCompositionFinishReason ?? ''))))
             throw new Error('GENERATION_DRAFT_RECOVERY_EVIDENCE_REQUIRED')
+          if (recovery?.composition && isDraftVisibleTextVersion(recovery.composition.algorithm))
+            compositionVersion = recovery.composition.algorithm
           const expectedInputs = [{ id: 'draft:chapter-info', text: JSON.stringify(writerChapterInfo) },
             { id: 'draft:author-config', text: JSON.stringify(novelConfig) },
             { id: 'draft:target-units', text: String(targetChars) }]
@@ -945,8 +949,8 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             const hash = await sha256Hex(text)
             const expectedIds = [...acknowledgedIds, artifact.artifactId]
             const receipt = await ipc.invokeWithProjectSession(projectSession, 'generation:compose-visible',
-              handle, expectedIds, hash, DRAFT_VISIBLE_TEXT_VERSION)
-            if (receipt.text !== text || receipt.textHash !== hash || receipt.algorithm !== DRAFT_VISIBLE_TEXT_VERSION
+              handle, expectedIds, hash, compositionVersion)
+            if (receipt.text !== text || receipt.textHash !== hash || receipt.algorithm !== compositionVersion
               || JSON.stringify(receipt.artifactIds) !== JSON.stringify(expectedIds))
               throw new Error('GENERATION_COMPOSITION_RECEIPT_MISMATCH')
             acknowledgedIds = [...receipt.artifactIds]
@@ -1033,7 +1037,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
               `  初始生成响应结束：finishReason=${initialCompletion.finishReason}`,
               `  Initial generation response ended: finishReason=${initialCompletion.finishReason}`,
             ))
-            initialVisibleDraft = sanitizeDraftText(this.stripThinkingTags(initialCompletion.content))
+            initialVisibleDraft = sanitizeDraftText(this.stripThinkingTags(initialCompletion.content), compositionVersion)
             initialFinishReason = initialCompletion.finishReason
             initialFailureCode = initialOutcome.receipt.failureCode
             initialReasoning = initialOutcome.receipt.capabilities.reasoning === true
@@ -1049,6 +1053,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           this.assertNotCancelled(context)
           const completedDraft = await this.extendDraftIfNeeded({
             session: draftingSession,
+            compositionVersion,
             mainOwned,
             acknowledge,
             signal: cancellation.signal,
@@ -1074,6 +1079,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           recoverableDraftCandidate = completedDraft
           const lengthCheckedDraft = await this.condenseDraftIfNeeded({
             session: draftingSession,
+            compositionVersion,
             acknowledge,
             signal: cancellation.signal,
             draft: completedDraft,
@@ -1324,6 +1330,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
 
   private async extendDraftIfNeeded(params: {
     session: GenerationSession
+    compositionVersion: DraftVisibleTextVersion
     mainOwned?: boolean
     acknowledge?: (outcome: GenerationOutcome, text: string) => Promise<void>
     signal: AbortSignal
@@ -1387,7 +1394,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       const remaining = Math.max(0, params.targetChars - currentChars)
       const ceiling = Math.max(0, range.maximum - currentChars)
       const allowance = remaining > 0 ? Math.min(remaining, ceiling) : Math.min(150, ceiling)
-      const visibleTail = sanitizeDraftText(draft).slice(-CONTINUE_PROMPT_MAX_CHARS)
+      const visibleTail = sanitizeDraftText(draft, params.compositionVersion).slice(-CONTINUE_PROMPT_MAX_CHARS)
       const recoveryInstruction = recoveryPending
         ? promptLanguageText(
             params.writingLanguage,
@@ -1491,10 +1498,11 @@ ${visibleTail}`,
       ))
       this.assertNotCancelled(params.context)
       const beforeChars = countDraftUnits(draft)
-      const visibleAddition = sanitizeDraftText(this.stripThinkingTags(addition.content))
+      const visibleAddition = sanitizeDraftText(this.stripThinkingTags(addition.content), params.compositionVersion)
       const candidateDraft = appendVisibleDraftContinuation(
         draft,
         visibleAddition,
+        params.compositionVersion,
       )
       const mergedDelta = countDraftUnits(candidateDraft) - beforeChars
       const accepted = addition.finishReason === 'stop' || mergedDelta >= 300
@@ -1567,6 +1575,7 @@ ${visibleTail}`,
    */
   private async condenseDraftIfNeeded(params: {
     session: GenerationSession
+    compositionVersion: DraftVisibleTextVersion
     acknowledge: (outcome: GenerationOutcome, text: string) => Promise<void>
     signal: AbortSignal
     draft: string
@@ -1648,7 +1657,7 @@ ${params.draft}`,
         ],
       }, { signal: params.signal })
       logDraftAttempt(params.callbacks, params.context, { zhCN: '压缩修订', enUS: 'Condense revision' }, outcome.receipt)
-      condensed = sanitizeDraftText(this.stripThinkingTags(outcome.content))
+      condensed = sanitizeDraftText(this.stripThinkingTags(outcome.content), params.compositionVersion)
       const units = countDraftUnits(condensed)
       const accepted = outcome.finishReason === 'stop' && units >= range.minimum && units <= range.maximum
       params.callbacks.log(uiText(

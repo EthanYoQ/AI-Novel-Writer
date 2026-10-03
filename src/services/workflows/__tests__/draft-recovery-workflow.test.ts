@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { GenerationRecoveryContext } from '../../../shared/generation-owner-contract'
+import { DRAFT_VISIBLE_TEXT_VERSION, composeDraftVisibleContinuation, type DraftVisibleTextVersion } from '../../../shared/draft-visible-text'
 import type { StepCallbacks, WorkflowContext, WorkflowDefinition, WorkflowStep } from '../../../stores/workflow-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { createDraftRecoveryWorkflow } from '../draft-recovery-workflow'
@@ -17,14 +18,14 @@ function recoveryFixture(): GenerationRecoveryContext {
     authorInputs: [{ id: 'draft:chapter-info', text: JSON.stringify(info) },
       { id: 'draft:author-config', text: '{}' }, { id: 'draft:target-units', text: '900' }],
     selectedDraftIds: [], selectedDrafts: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [2, 3, 4, 5, 6, 7],
-    composition: { algorithm: 'draft-visible-v1', artifactIds: ['original-artifact'], text: content, textHash: hash(content), sources: [] },
+    composition: { algorithm: DRAFT_VISIBLE_TEXT_VERSION, artifactIds: ['original-artifact'], text: content, textHash: hash(content), sources: [] },
     lastCompositionFinishReason: 'length', attemptedPurposes: ['chapter-draft'],
     knowledgeSnapshot: { version: 1, state: 'empty', storageState: 'absent', query: '作者附加检索词 潮声 亮灯',
       topK: 5, canonicalRevision: null, documentsRevision: null, items: [] } }
 }
 
 function bridge(recovery: GenerationRecoveryContext) {
-  const invoke = vi.fn(async (channel: string) => {
+  const invoke = vi.fn(async (channel: string): Promise<unknown> => {
     if (channel === 'generation:read-context') return structuredClone(recovery)
     if (channel === 'db:draft-list-all') return []
     if (channel === 'db:draft-get-latest') throw new Error('CONTEXT_READING_REACHED')
@@ -89,3 +90,31 @@ it('未保存候选沿主进程确认的前章内容恢复，不重新选择前�
   await expect(createDraftRecoveryWorkflow(session, handle)).resolves.toMatchObject({ projectSession: session })
   expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['generation:read-context'])
 })
+
+it.each(['draft-visible-v1', DRAFT_VISIBLE_TEXT_VERSION, null] as const)(
+  '显式选择原始片段沿用已有算法，无组合时使用新算法：%s', async storedAlgorithm => {
+    const recovery = recoveryFixture()
+    const refrain = '海上的钟声穿过二十年前的雨夜，他重新读出刻在石碑上的誓言：无论谁来到门前，我们都将为他留下一盏灯。'
+    const raw = `少年时。\n\n${refrain}\n\n二十年后。\n\n${refrain}`
+    const algorithm: DraftVisibleTextVersion = storedAlgorithm ?? DRAFT_VISIBLE_TEXT_VERSION
+    const expected = composeDraftVisibleContinuation('', raw, algorithm)
+    if (storedAlgorithm) recovery.composition!.algorithm = storedAlgorithm
+    else recovery.composition = null
+    const invoke = bridge(recovery)
+    const original = invoke.getMockImplementation()!
+    const resumedHandle = { ...handle, epoch: session.leaseId }
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:resume') return { handle: resumedHandle, artifacts: [
+        { artifactId: 'original-artifact', text: raw, compositionEligible: true },
+      ] }
+      if (channel === 'generation:compose-visible') {
+        expect(args.slice(0, 4)).toEqual([resumedHandle, ['original-artifact'], hash(expected), algorithm])
+        recovery.composition = { algorithm, text: expected, textHash: hash(expected), artifactIds: ['original-artifact'], sources: [] }
+        return recovery.composition
+      }
+      return original(channel)
+    })
+    await expect(createDraftRecoveryWorkflow(session, handle, ['original-artifact'])).resolves.toMatchObject({ projectSession: session })
+    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('generation:execute')
+  },
+)

@@ -4,7 +4,7 @@ import type { WorkflowDefinition } from '../../stores/workflow-store'
 import { workflowResourceKey } from '../../stores/workflow-store'
 import { ipc } from '../ipc-client'
 import { createMainGenerationTransport } from '../generation/main-generation-transport'
-import { composeDraftVisibleContinuation, DRAFT_VISIBLE_TEXT_VERSION } from '../../shared/draft-visible-text'
+import { composeDraftVisibleContinuation, DRAFT_VISIBLE_TEXT_VERSION, isDraftVisibleTextVersion } from '../../shared/draft-visible-text'
 import { hashAuthorText } from '../../shared/source-ref'
 import { GenerateDraftCommand } from './commands/generate-draft.command'
 import type { ChapterInfo } from './chapter-workflow'
@@ -32,12 +32,14 @@ export async function createDraftRecoveryWorkflow(
       if (!candidate || candidate.compositionEligible !== true) throw new Error('GENERATION_COMPOSITION_SELECTION_INVALID')
       return candidate
     })
-    const text = selected.reduce((text, candidate) => composeDraftVisibleContinuation(text, candidate.text), '')
+    const algorithm = recovery.composition?.algorithm ?? DRAFT_VISIBLE_TEXT_VERSION
+    if (!isDraftVisibleTextVersion(algorithm)) throw new Error('GENERATION_DRAFT_RECOVERY_EVIDENCE_REQUIRED')
+    const text = selected.reduce((text, candidate) => composeDraftVisibleContinuation(text, candidate.text, algorithm), '')
     await ipc.invokeWithProjectSession(session, 'generation:compose-visible', handle, [...selectedArtifactIds],
-      await hashAuthorText(text), DRAFT_VISIBLE_TEXT_VERSION)
+      await hashAuthorText(text), algorithm)
     recovery = await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle })
   }
-  if (!recovery.savedDraft && (!recovery.composition || recovery.composition.algorithm !== DRAFT_VISIBLE_TEXT_VERSION))
+  if (!recovery.savedDraft && (!recovery.composition || !isDraftVisibleTextVersion(recovery.composition.algorithm)))
     throw new Error('GENERATION_DRAFT_RECOVERY_EVIDENCE_REQUIRED')
   const infoText = recovery.authorInputs.find(input => input.id === 'draft:chapter-info')?.text
   const targetText = recovery.authorInputs.find(input => input.id === 'draft:target-units')?.text

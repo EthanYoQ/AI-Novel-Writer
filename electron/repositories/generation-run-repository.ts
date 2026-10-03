@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import type { VisibleCompositionReceipt, VisibleCompositionAlgorithm, DirectoryGenerationProgress } from '../../src/shared/generation-owner-contract';
 import { composeVisibleContinuation, VISIBLE_CONTINUATION_VERSION } from '../../src/shared/visible-continuation';
-import { composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, sanitizeDraftText } from '../../src/shared/draft-visible-text';
+import { composeDraftVisibleContinuation, DRAFT_CONDENSE_PURPOSE, isDraftVisibleTextVersion, sanitizeDraftText } from '../../src/shared/draft-visible-text';
 import { DRAFT_RECONCILE_PURPOSE } from '../../src/shared/draft-reconciliation';
 import { DRAFT_SHORT_OUTLINE_PURPOSE } from '../../src/shared/draft-short-outline';
 import { countDraftUnits, draftTargetUnitRange } from '../../src/shared/draft-units';
@@ -230,7 +230,7 @@ export class GenerationRunRepository {
         });
     }
     private visibleComposition(runId: string, artifactIds: string[], algorithm: VisibleCompositionAlgorithm = VISIBLE_CONTINUATION_VERSION): VisibleCompositionReceipt {
-        if (!['visible-append-v1', 'draft-visible-v1'].includes(algorithm)) fail('GENERATION_COMPOSITION_ALGORITHM_INVALID');
+        if (algorithm !== 'visible-append-v1' && !isDraftVisibleTextVersion(algorithm)) fail('GENERATION_COMPOSITION_ALGORITHM_INVALID');
         if (!Array.isArray(artifactIds) || !artifactIds.length || artifactIds.length > 32
             || artifactIds.some(id => typeof id !== 'string' || !id) || new Set(artifactIds).size !== artifactIds.length)
             fail('GENERATION_COMPOSITION_INVALID');
@@ -249,10 +249,11 @@ export class GenerationRunRepository {
             if (!['stop', 'length'].includes(receipt.result?.finishReason ?? ''))
                 fail('GENERATION_COMPOSITION_SOURCE_UNTRUSTED');
             // 超长正文的唯一压缩修订：只能作为最后一个来源，以完整结束的全文替换此前正文，且必须真正缩短。
-            const condense = algorithm === 'draft-visible-v1' && JSON.parse(row.usage_receipt_json).purpose === DRAFT_CONDENSE_PURPOSE;
+            const draftAlgorithm = isDraftVisibleTextVersion(algorithm) ? algorithm : undefined;
+            const condense = draftAlgorithm !== undefined && JSON.parse(row.usage_receipt_json).purpose === DRAFT_CONDENSE_PURPOSE;
             if (condense && (!sources.length || index !== artifactIds.length - 1)) fail('GENERATION_COMPOSITION_SOURCE_INVALID');
-            const next = condense ? sanitizeDraftText(artifact.text) : algorithm === 'draft-visible-v1'
-                ? sources.length ? composeDraftVisibleContinuation(text, artifact.text) : sanitizeDraftText(artifact.text)
+            const next = condense ? sanitizeDraftText(artifact.text, draftAlgorithm) : draftAlgorithm
+                ? sources.length ? composeDraftVisibleContinuation(text, artifact.text, draftAlgorithm) : sanitizeDraftText(artifact.text, draftAlgorithm)
                 : sources.length ? composeVisibleContinuation(text, artifact.text) : artifact.text.trim();
             if (!next.trim()) fail('GENERATION_COMPOSITION_NO_PROGRESS');
             if (condense) {
@@ -263,7 +264,7 @@ export class GenerationRunRepository {
                 if (receipt.result?.finishReason !== 'stop' || countDraftUnits(next) >= countDraftUnits(text)
                     || countDraftUnits(text) <= draftTargetUnitRange(target).maximum) fail('GENERATION_COMPOSITION_NO_PROGRESS');
             } else {
-                if (algorithm === 'draft-visible-v1' && sources.length && receipt.result?.finishReason === 'length'
+                if (draftAlgorithm && sources.length && receipt.result?.finishReason === 'length'
                     && countDraftUnits(next) - countDraftUnits(text) < 300) fail('GENERATION_COMPOSITION_NO_PROGRESS');
                 if (sources.length && (next.match(/[\p{L}\p{N}]/gu)?.length ?? 0) <= (text.match(/[\p{L}\p{N}]/gu)?.length ?? 0))
                     fail('GENERATION_COMPOSITION_NO_PROGRESS');

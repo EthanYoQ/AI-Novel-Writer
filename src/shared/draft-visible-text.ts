@@ -1,6 +1,10 @@
 import { composeVisibleContinuation } from './visible-continuation'
 
-export const DRAFT_VISIBLE_TEXT_VERSION = 'draft-visible-v1' as const
+export const DRAFT_VISIBLE_TEXT_VERSION = 'draft-visible-v2' as const
+export type DraftVisibleTextVersion = 'draft-visible-v1' | typeof DRAFT_VISIBLE_TEXT_VERSION
+export function isDraftVisibleTextVersion(value: unknown): value is DraftVisibleTextVersion {
+  return value === 'draft-visible-v1' || value === DRAFT_VISIBLE_TEXT_VERSION
+}
 /** 超长正文唯一一次压缩修订的尝试用途；主进程组合时以其全文替换此前正文。 */
 export const DRAFT_CONDENSE_PURPOSE = 'chapter-draft-condense' as const
 
@@ -26,25 +30,26 @@ export function stripDraftThinkingTags(text: string): string {
   return cleaned.replace(/<\/?think>/gi, '').trim()
 }
 
-export function sanitizeDraftText(text: string): string {
+export function sanitizeDraftText(text: string, version: DraftVisibleTextVersion = DRAFT_VISIBLE_TEXT_VERSION): string {
   const cleaned = stripDraftThinkingTags(text)
     .replace(/^\s*(?:点我继续生成后续内容|继续生成后续内容|请点击继续|未完待续)\s*$/gmi, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 
   const paragraphs = cleaned.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean)
+  if (version !== 'draft-visible-v1') return paragraphs.join('\n\n')
+  // Existing v1 receipts must retain their exact projection and hash on recovery.
   const seen = new Set<string>()
-  const deduped: string[] = []
-  for (const paragraph of paragraphs) {
+  return paragraphs.filter(paragraph => {
     const key = paragraph.replace(/\s+/g, '')
-    if (key.length >= 40 && seen.has(key)) continue
+    if (key.length >= 40 && seen.has(key)) return false
     if (key.length >= 40) seen.add(key)
-    deduped.push(paragraph)
-  }
-  return deduped.join('\n\n').trim()
+    return true
+  }).join('\n\n')
 }
 
 /** Pure projection of independent raw-visible artifacts; source artifacts stay unchanged. */
-export function composeDraftVisibleContinuation(existing: string, addition: string): string {
-  return sanitizeDraftText(composeVisibleContinuation(sanitizeDraftText(existing), sanitizeDraftText(addition)))
+export function composeDraftVisibleContinuation(existing: string, addition: string,
+  version: DraftVisibleTextVersion = DRAFT_VISIBLE_TEXT_VERSION): string {
+  return sanitizeDraftText(composeVisibleContinuation(sanitizeDraftText(existing, version), sanitizeDraftText(addition, version)), version)
 }

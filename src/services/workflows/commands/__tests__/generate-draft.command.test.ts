@@ -52,7 +52,7 @@ describe('generate draft command text cleanup', () => {
     const second = `${'林舟守在海港等待潮汐。'.repeat(8)}\n\n钟楼终于亮起灯。`
     const original = [first, second]
     const oldProjection = sanitizeDraftText(appendVisibleTextContinuation(sanitizeDraftText(first), sanitizeDraftText(second)))
-    expect(DRAFT_VISIBLE_TEXT_VERSION).toBe('draft-visible-v1')
+    expect(DRAFT_VISIBLE_TEXT_VERSION).toBe('draft-visible-v2')
     expect(composeDraftVisibleContinuation(first, second)).toBe(oldProjection)
     expect([first, second]).toEqual(original)
     expect(composeDraftVisibleContinuation(first, second)).not.toContain('内部推理')
@@ -126,17 +126,14 @@ describe('generate draft command text cleanup', () => {
     expect(text).toBe('林岚推开办公室的门。')
   })
 
-  it('deduplicates repeated long paragraphs while keeping distinct paragraphs', () => {
-    const repeated = '林岚握紧手中的U盘，屏幕蓝光映在她的指节上，走廊尽头传来压低的脚步声，她没有回头，只把那串航班编号重新敲进检索框。'
-    const unique = '周砚没有立刻回答，只把监控画面停在三点十七分。'
-    const text = sanitizeDraftText(`${repeated}
+  it('preserves the same long refrain in two different scenes', () => {
+    const refrain = '他又读了一遍石碑上的旧誓言，声音一字不差，像是在回答二十年前的自己：无论谁来到门前，我们都将为他留下一盏灯。'
+    const first = `第一次仪式开始了。\n\n${refrain}`
+    const second = `二十年后，他带着女儿再次站在石碑前。\n\n${refrain}`
+    const manuscript = `${first}\n\n${second}`
 
-${unique}
-
-${repeated}`)
-
-    expect(text.match(/林岚握紧手中的U盘/g)).toHaveLength(1)
-    expect(text).toContain(unique)
+    expect(sanitizeDraftText(manuscript)).toBe(manuscript)
+    expect(composeDraftVisibleContinuation(first, second)).toBe(manuscript)
   })
 
   it('counts Chinese characters and English words for auto-continue thresholds', () => {
@@ -653,8 +650,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         return { outcome: result, run: view }
       }
       if (channel === 'generation:compose-visible') {
-        expect(args.slice(0, 4)).toEqual([handle, ['正文片'], hash(text), 'draft-visible-v1'])
-        return { algorithm: 'draft-visible-v1', artifactIds: ['正文片'], text, textHash: hash(text), sources: [] }
+        expect(args.slice(0, 4)).toEqual([handle, ['正文片'], hash(text), DRAFT_VISIBLE_TEXT_VERSION])
+        return { algorithm: DRAFT_VISIBLE_TEXT_VERSION, artifactIds: ['正文片'], text, textHash: hash(text), sources: [] }
       }
       if (channel === 'generation:commit-draft') return { success: true, id: 17, version: 2, content: text, contentHash: hash(text) }
       return original(channel, ...args)
@@ -696,7 +693,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         const ids = args[1] as string[]
         const text = ids.length === 1 ? draft : condensed
         expect(args[2]).toBe(hash(text))
-        return { algorithm: 'draft-visible-v1', artifactIds: ids, text, textHash: hash(text), sources: [] }
+        return { algorithm: DRAFT_VISIBLE_TEXT_VERSION, artifactIds: ids, text, textHash: hash(text), sources: [] }
       }
       if (channel === 'generation:commit-draft') {
         expect((args[0] as { expectedCompositionHash: string }).expectedCompositionHash).toBe(hash(condensed))
@@ -764,7 +761,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       }
       if (channel === 'generation:compose-visible') {
         return {
-          algorithm: 'draft-visible-v1',
+          algorithm: DRAFT_VISIBLE_TEXT_VERSION,
           artifactIds: ['超长正文片'],
           text,
           textHash: hash(text),
@@ -791,14 +788,15 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     expect(f.callbacks.replaceText).toHaveBeenLastCalledWith(text)
   })
 
-  it.each(['stop', 'length', 'saved-ack-lost'] as const)('默认恢复沿精确组合与 %s 终态，不重发初始正文', async (state) => {
-    const finishReason = state === 'saved-ack-lost' ? 'stop' : state
+  it.each(['stop', 'length', 'saved-ack-lost', 'legacy-length'] as const)('默认恢复沿精确组合与 %s 终态，不重发初始正文', async (state) => {
+    const finishReason = state === 'saved-ack-lost' ? 'stop' : state === 'legacy-length' ? 'length' : state
+    const algorithm = state === 'legacy-length' ? 'draft-visible-v1' : DRAFT_VISIBLE_TEXT_VERSION
     const handle: MainGenerationRunHandle = { projectId: 'generation-runtime', epoch: state === 'saved-ack-lost' ? '已关闭旧会话' : 'lease-generation-runtime', rootActionId: '原根', runId: '原正文' }
     const f = setup({ runtime: fakeOutcomes(), mainDefault: true, resumeHandle: handle, wordsTarget: 900 })
     f.context.generationModelId = '合成模型'
     const seed = '潮'.repeat(finishReason === 'stop' ? 900 : 500)
-    const addition = '灯'.repeat(500) + '。'
-    const expected = finishReason === 'stop' ? seed : composeDraftVisibleContinuation(seed, addition)
+    const addition = (state === 'legacy-length' ? `二十年后。\n\n${seed}\n\n` : '') + '灯'.repeat(500) + '。'
+    const expected = finishReason === 'stop' ? seed : composeDraftVisibleContinuation(seed, addition, algorithm)
     const hash = (text: string) => createHash('sha256').update(text).digest('hex')
     const view: MainGenerationRunView = { handle, status: 'running', nonReplayable: false, artifacts: [],
       budget: { maxAttempts: 32, maxRequestedOutputTokens: 2000000, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: Date.now() + 3600000 } }
@@ -812,7 +810,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
           { id: 'draft:target-units', text: '900' },
         ], selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1, 2, 3, 4, 5, 6],
         knowledgeSnapshot: { version: 1, state: 'empty', storageState: 'absent', query: '第一章 开端', topK: 5, canonicalRevision: null, documentsRevision: null, items: [] },
-        composition: { algorithm: 'draft-visible-v1', text: seed, textHash: hash(seed), artifactIds: ['原片'], sources: [] },
+        composition: { algorithm, text: seed, textHash: hash(seed), artifactIds: ['原片'], sources: [] },
         lastCompositionFinishReason: finishReason, attemptedPurposes: ['chapter-draft'],
         ...(state === 'saved-ack-lost' ? { savedDraft: { success: true, id: 18, version: 1, content: expected, contentHash: hash(expected) } } : {}) }
       if (channel === 'generation:execute') {
@@ -825,7 +823,9 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       }
       if (channel === 'generation:compose-visible') {
         expect(args[1]).toEqual(['原片', '续片'])
-        return { algorithm: 'draft-visible-v1', artifactIds: ['原片', '续片'], text: expected, textHash: hash(expected), sources: [] }
+        expect(args[2]).toBe(hash(expected))
+        expect(args[3]).toBe(algorithm)
+        return { algorithm, artifactIds: ['原片', '续片'], text: expected, textHash: hash(expected), sources: [] }
       }
       if (channel === 'generation:commit-draft') return { success: true, id: 18, version: 1, content: expected, contentHash: hash(expected) }
       return original(channel, ...args)
@@ -865,7 +865,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
           { id: 'draft:target-units', text: '900' },
         ], selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1, 2, 3, 4, 5, 6],
         knowledgeSnapshot: { version: 1, state: 'empty', storageState: 'absent', query: '第一章 开端', topK: 5, canonicalRevision: null, documentsRevision: null, items: [] },
-        composition: !draftPending ? { algorithm: 'draft-visible-v1', text: seed, textHash: hash(seed), artifactIds: ['原片'], sources: [] } : null,
+        composition: !draftPending ? { algorithm: DRAFT_VISIBLE_TEXT_VERSION, text: seed, textHash: hash(seed), artifactIds: ['原片'], sources: [] } : null,
         lastCompositionFinishReason: !draftPending ? 'length' : null,
         attemptedPurposes: !draftPending ? ['chapter-draft-reconcile', 'chapter-draft'] : ['chapter-draft-reconcile'],
         // 首稿发出时未带注入块：主进程不再提供对账结果，续写与首稿保持一致。
@@ -881,7 +881,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         return { outcome: result, run: view }
       }
       if (channel === 'generation:compose-visible') {
-        return { algorithm: 'draft-visible-v1', artifactIds: args[1], text: expected, textHash: hash(expected), sources: [] }
+        return { algorithm: DRAFT_VISIBLE_TEXT_VERSION, artifactIds: args[1], text: expected, textHash: hash(expected), sources: [] }
       }
       if (channel === 'generation:commit-draft') return { success: true, id: 18, version: 1, content: expected, contentHash: hash(expected) }
       return original(channel, ...args)
@@ -898,9 +898,10 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
   })
 
   it.each([
-    { attempted: ['chapter-draft'], condenses: true },
-    { attempted: ['chapter-draft', 'chapter-draft-condense'], condenses: false },
-  ])('resumes a paused over-range composition through the single condense revision: $condenses', async ({ attempted, condenses }) => {
+    { attempted: ['chapter-draft'], condenses: true, algorithm: DRAFT_VISIBLE_TEXT_VERSION },
+    { attempted: ['chapter-draft'], condenses: true, algorithm: 'draft-visible-v1' as const },
+    { attempted: ['chapter-draft', 'chapter-draft-condense'], condenses: false, algorithm: DRAFT_VISIBLE_TEXT_VERSION },
+  ])('resumes a paused $algorithm composition through the single condense revision: $condenses', async ({ attempted, condenses, algorithm }) => {
     const handle: MainGenerationRunHandle = { projectId: 'generation-runtime', epoch: 'lease-generation-runtime', rootActionId: '超长根', runId: '超长暂停' }
     const f = setup({ runtime: fakeOutcomes(), mainDefault: true, resumeHandle: handle, wordsTarget: 900 })
     f.context.generationModelId = '合成模型'
@@ -919,7 +920,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
           { id: 'draft:target-units', text: '900' },
         ], selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1, 2, 3, 4, 5, 6],
         knowledgeSnapshot: { version: 1, state: 'empty', storageState: 'absent', query: '第一章 开端', topK: 5, canonicalRevision: null, documentsRevision: null, items: [] },
-        composition: { algorithm: 'draft-visible-v1', text: seed, textHash: hash(seed), artifactIds: ['原片'], sources: [] },
+        composition: { algorithm, text: seed, textHash: hash(seed), artifactIds: ['原片'], sources: [] },
         lastCompositionFinishReason: 'stop', attemptedPurposes: attempted }
       if (channel === 'generation:execute') {
         if ((args[0] as { task: GenerationTask }).task.purpose === 'chapter-draft-short-outline')
@@ -932,7 +933,8 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       }
       if (channel === 'generation:compose-visible') {
         expect(args[1]).toEqual(['原片', '压缩片'])
-        return { algorithm: 'draft-visible-v1', artifactIds: ['原片', '压缩片'], text: condensed, textHash: hash(condensed), sources: [] }
+        expect(args[3]).toBe(algorithm)
+        return { algorithm, artifactIds: ['原片', '压缩片'], text: condensed, textHash: hash(condensed), sources: [] }
       }
       if (channel === 'generation:commit-draft') return { success: true, id: 19, version: 1, content: condensed, contentHash: hash(condensed) }
       if (channel === 'generation:pause') return { ...view, status: 'paused' }
@@ -998,7 +1000,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         result.receipt.visibleArtifact = { artifactId: '重试正文片', attemptId: '重试物理请求', revision: 1, textHash: hash(text) }
         return { outcome: result, run: view }
       }
-      if (channel === 'generation:compose-visible') return { algorithm: 'draft-visible-v1',
+      if (channel === 'generation:compose-visible') return { algorithm: DRAFT_VISIBLE_TEXT_VERSION,
         artifactIds: ['重试正文片'], text, textHash: hash(text), sources: [] }
       if (channel === 'generation:commit-draft') return { success: true, id: 23, version: 1,
         content: text, contentHash: hash(text) }
@@ -1041,7 +1043,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         const ids = args[1] as string[]
         expect(ids).not.toContain('片1')
         composed = ids.reduce((text, id) => composeDraftVisibleContinuation(text, fragments[Number(id.slice(1))]), '')
-        return { algorithm: 'draft-visible-v1', text: composed, textHash: hash(composed), artifactIds: ids, sources: [] }
+        return { algorithm: DRAFT_VISIBLE_TEXT_VERSION, text: composed, textHash: hash(composed), artifactIds: ids, sources: [] }
       }
       if (channel === 'generation:commit-draft') return { success: true, id: 21, version: 1, content: composed, contentHash: hash(composed) }
       return original(channel, ...args)
@@ -2471,7 +2473,7 @@ ${headingPrefix}第3章：潮门
           authorInputs: planningRuntime.createRuntime.mock.calls[0]![1]!.selection.authorInputs,
           selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1, 2, 3, 4, 5, 6],
           knowledgeSnapshot: { version: 1, state: 'empty', storageState: 'absent', query: '第一章 开端', topK: 5, canonicalRevision: null, documentsRevision: null, items: [] },
-          composition: before ? null : { algorithm: 'draft-visible-v1', text: seed, textHash: hash(seed), artifactIds: ['original'], sources: [] },
+          composition: before ? null : { algorithm: DRAFT_VISIBLE_TEXT_VERSION, text: seed, textHash: hash(seed), artifactIds: ['original'], sources: [] },
           lastCompositionFinishReason: before ? null : 'length',
           attemptedPurposes: before ? ['chapter-draft-short-outline'] : ['chapter-draft-short-outline', 'chapter-draft'],
           draftShortOutline: { artifactIds: ['outline'], completedOutput: '目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。',
@@ -2485,7 +2487,7 @@ ${headingPrefix}第3章：潮门
           result.receipt.visibleArtifact = { artifactId: 'new', attemptId: 'new-attempt', revision: 1, textHash: hash(text) }
           return { outcome: result, run: view }
         }
-        if (channel === 'generation:compose-visible') return { algorithm: 'draft-visible-v1', artifactIds: args[1], text: expected, textHash: hash(expected), sources: [] }
+        if (channel === 'generation:compose-visible') return { algorithm: DRAFT_VISIBLE_TEXT_VERSION, artifactIds: args[1], text: expected, textHash: hash(expected), sources: [] }
         if (channel === 'generation:commit-draft') return { success: true, id: 18, version: 1, content: expected, contentHash: hash(expected) }
         return original(channel, ...args)
       })

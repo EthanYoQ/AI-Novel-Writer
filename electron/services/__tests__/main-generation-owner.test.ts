@@ -17,7 +17,7 @@ import { generationOutputContract, MAX_BATCH_CHAPTERS } from '../../../src/share
 import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
 import type { GenerationTask } from '../../../src/services/generation/generation-harness'
 import { composeVisibleContinuation } from '../../../src/shared/visible-continuation'
-import { sanitizeDraftText } from '../../../src/shared/draft-visible-text'
+import { sanitizeDraftText, DRAFT_VISIBLE_TEXT_VERSION, type DraftVisibleTextVersion } from '../../../src/shared/draft-visible-text'
 import { DRAFT_RECONCILE_PURPOSE, parseDraftReconciliation, renderDraftReconciliationBlock } from '../../../src/shared/draft-reconciliation'
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock } from '../../../src/shared/draft-short-outline'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
@@ -131,7 +131,7 @@ describe('automatic short outline binding', () => {
     await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'skip', task: draftTask(base) })).rejects.toThrow('GENERATION_DRAFT_SHORT_OUTLINE_REQUIRED')
     const planned = await f.owner.execute({ handle: run.handle, invocationNonce: 'outline', task: outlineTask })
     expect(planned.run.artifacts[0]).toMatchObject({ text: outline, compositionEligible: false })
-    expect(() => f.owner.composeVisible(run.handle, [planned.run.artifacts[0]!.artifactId], textHash(outline), 'draft-visible-v1')).toThrow('GENERATION_COMPOSITION_SOURCE_INVALID')
+    expect(() => f.owner.composeVisible(run.handle, [planned.run.artifacts[0]!.artifactId], textHash(outline), DRAFT_VISIBLE_TEXT_VERSION)).toThrow('GENERATION_COMPOSITION_SOURCE_INVALID')
     await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'omit', task: draftTask(base) })).rejects.toThrow('GENERATION_MATERIAL_PROMPT_MISMATCH')
     await f.owner.execute({ handle: run.handle, invocationNonce: 'draft', task: draftTask(composed) })
     const owner = f.reopen()
@@ -428,7 +428,7 @@ describe('pre-draft finalized reconciliation binding', () => {
     expect(reconciled.outcome.content).toBe(output)
     // 对账产物只作依据：不能作为正文候选组合。
     expect(reconciled.run.artifacts[0]).toMatchObject({ text: output, compositionEligible: false })
-    expect(() => f.owner.composeVisible(run.handle, [reconciled.outcome.receipt.visibleArtifact!.artifactId], textHash(output), 'draft-visible-v1'))
+    expect(() => f.owner.composeVisible(run.handle, [reconciled.outcome.receipt.visibleArtifact!.artifactId], textHash(output), DRAFT_VISIBLE_TEXT_VERSION))
       .toThrow('GENERATION_COMPOSITION_SOURCE_INVALID')
     expect(f.owner.readContext(run.handle).draftReconciliation).toEqual({
       artifactIds: [reconciled.outcome.receipt.visibleArtifact!.artifactId], completedOutput: output })
@@ -909,12 +909,13 @@ describe('main draft persistence and batch lineage', () => {
     const f = fixture(dispatch)
     return { ...f, fixture: f, dispatch }
   }
-  async function generate(f: ReturnType<typeof drafting>, selection: BeginGenerationRequest) {
+  async function generate(f: ReturnType<typeof drafting>, selection: BeginGenerationRequest,
+    algorithm: DraftVisibleTextVersion = DRAFT_VISIBLE_TEXT_VERSION) {
     const run = f.owner.begin(selection)
     const execution = await f.owner.execute({ handle: run.handle, invocationNonce: `draft:${selection.chapterNumber}`, task })
     const raw = execution.run.artifacts[0]!
-    const visible = sanitizeDraftText(raw.text)
-    f.owner.composeVisible(run.handle, [raw.artifactId], textHash(visible), 'draft-visible-v1')
+    const visible = sanitizeDraftText(raw.text, algorithm)
+    f.owner.composeVisible(run.handle, [raw.artifactId], textHash(visible), algorithm)
     return { run, raw, request: { handle: run.handle, chapterNumber: selection.chapterNumber!, source: 'write' as const,
       expectedCompositionHash: textHash(visible), ...(selection.batchId ? { batchId: selection.batchId } : {}) } }
   }
@@ -927,6 +928,54 @@ describe('main draft persistence and batch lineage', () => {
     expect(reopened.commitDraft(generated.request)).toEqual(saved)
     expect(reopened.readContext(generated.run.handle)).toMatchObject({ savedDraft: saved, attemptedPurposes: ['chapter-draft'] })
     expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+    expect(f.dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('preserves a repeated refrain through composition, draft persistence and reopening', async () => {
+    const refrain = '他又读了一遍石碑上的旧誓言，声音一字不差，像是在回答二十年前的自己：无论谁来到门前，我们都将为他留下一盏灯。'
+    const manuscript = `第一次仪式开始了。\n\n${refrain}\n\n二十年后，他带着女儿再次站在石碑前。\n\n${refrain}`
+    const f = drafting(manuscript), generated = await generate(f, { ...f.begin,
+      authorInputs: [{ id: 'draft:target-units', text: '120' }] })
+    expect(f.owner.readVisibleComposition(generated.run.handle)?.text).toBe(manuscript)
+    const saved = f.owner.commitDraft(generated.request)
+    expect(saved.content).toBe(manuscript)
+    const reopened = f.reopen()
+    expect(reopened.readVisibleComposition(generated.run.handle)?.text).toBe(manuscript)
+    expect(reopened.readContext(generated.run.handle).savedDraft).toEqual(saved)
+    expect(reopened.commitDraft(generated.request)).toEqual(saved)
+    expect(reopened.read(generated.run.handle).artifacts[0]).toEqual(generated.raw)
+    expect(generated.raw.text).toBe(`${manuscript}\n点我继续生成后续内容`)
+    expect(f.dispatch).toHaveBeenCalledTimes(1)
+  })
+  it.each([false, true])('reads an original v1 composition without changing its hash or saved draft: saved=%s', async savedBeforeReopen => {
+    const refrain = '他又读了一遍石碑上的旧誓言，声音一字不差，像是在回答二十年前的自己：无论谁来到门前，我们都将为他留下一盏灯。'
+    const first = `第一次仪式开始了。\n\n${refrain}`
+    const laterScene = '二十年后，他带着女儿再次站在石碑前。'
+    const manuscript = `${first}\n\n${laterScene}\n\n${refrain}`
+    const legacyVisible = `${first}\n\n${laterScene}`
+    const f = drafting(manuscript), generated = await generate(f, { ...f.begin,
+      authorInputs: [{ id: 'draft:target-units', text: '80' }] }, 'draft-visible-v1')
+    const saved = savedBeforeReopen ? f.owner.commitDraft(generated.request) : undefined
+    const row = f.db.prepare('SELECT attempt_id,usage_receipt_json FROM generation_attempts WHERE run_id=?')
+      .get(generated.run.handle.runId) as { attempt_id: string; usage_receipt_json: string }
+    const usage = JSON.parse(row.usage_receipt_json)
+    expect(usage.visibleComposition).toMatchObject({ algorithm: 'draft-visible-v1', textHash: textHash(legacyVisible) })
+    expect(() => f.owner.composeVisible(generated.run.handle, [generated.raw.artifactId], textHash(manuscript), DRAFT_VISIBLE_TEXT_VERSION))
+      .toThrow('GENERATION_COMPOSITION_ALGORITHM_CHANGED')
+    const reopened = f.reopen()
+    expect(reopened.read(generated.run.handle).artifacts[0]).toEqual(generated.raw)
+    expect(reopened.readVisibleComposition(generated.run.handle)?.text).toBe(legacyVisible)
+    expect(reopened.readContext(generated.run.handle).composition?.text).toBe(legacyVisible)
+    if (saved) {
+      expect(saved.content).toBe(legacyVisible)
+      expect(reopened.readContext(generated.run.handle).savedDraft).toEqual(saved)
+      expect(reopened.commitDraft(generated.request)).toEqual(saved)
+      expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+    }
+    expect(f.fixture.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(row.attempt_id))
+      .toBe(row.usage_receipt_json)
+    usage.visibleComposition.textHash = textHash(manuscript)
+    f.fixture.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify(usage), row.attempt_id)
+    expect(() => reopened.readVisibleComposition(generated.run.handle)).toThrow('GENERATION_COMPOSITION_INTEGRITY_FAILED')
     expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
   it('keeps an oversized composition reviewable without creating a draft', async () => {
@@ -954,9 +1003,9 @@ describe('main draft persistence and batch lineage', () => {
     const condense = await f.owner.execute({ handle: generated.run.handle, invocationNonce: 'draft:condense',
       task: { ...task, purpose: 'chapter-draft-condense' } })
     const condensedId = condense.run.artifacts.at(-1)!.artifactId
-    expect(() => f.owner.composeVisible(generated.run.handle, [condensedId], textHash(draftText), 'draft-visible-v1'))
+    expect(() => f.owner.composeVisible(generated.run.handle, [condensedId], textHash(draftText), DRAFT_VISIBLE_TEXT_VERSION))
       .toThrow('GENERATION_COMPOSITION_SOURCE_INVALID')
-    const composed = f.owner.composeVisible(generated.run.handle, [generated.raw.artifactId, condensedId], textHash(draftText), 'draft-visible-v1')
+    const composed = f.owner.composeVisible(generated.run.handle, [generated.raw.artifactId, condensedId], textHash(draftText), DRAFT_VISIBLE_TEXT_VERSION)
     expect(composed.text).toBe(draftText)
     const saved = f.owner.commitDraft({ ...generated.request, expectedCompositionHash: textHash(draftText) })
     expect(saved.content).toBe(draftText)
@@ -975,7 +1024,7 @@ describe('main draft persistence and batch lineage', () => {
       task: { ...task, purpose: 'chapter-draft-condense' } })
     const longer = `${draftText}城门外的风更紧了。`
     expect(() => f.owner.composeVisible(generated.run.handle, [generated.raw.artifactId, condense.run.artifacts.at(-1)!.artifactId],
-      textHash(longer), 'draft-visible-v1')).toThrow('GENERATION_COMPOSITION_NO_PROGRESS')
+      textHash(longer), DRAFT_VISIBLE_TEXT_VERSION)).toThrow('GENERATION_COMPOSITION_NO_PROGRESS')
     expect(f.owner.readVisibleComposition(generated.run.handle)?.text).toBe(draftText)
   })
   it('refuses a condense revision that replaces a draft already within the frozen target maximum', async () => {
@@ -990,7 +1039,7 @@ describe('main draft persistence and batch lineage', () => {
     const condense = await f.owner.execute({ handle: generated.run.handle, invocationNonce: 'draft:condense',
       task: { ...task, purpose: 'chapter-draft-condense' } })
     expect(() => f.owner.composeVisible(generated.run.handle, [generated.raw.artifactId, condense.run.artifacts.at(-1)!.artifactId],
-      textHash(shorter), 'draft-visible-v1')).toThrow('GENERATION_COMPOSITION_NO_PROGRESS')
+      textHash(shorter), DRAFT_VISIBLE_TEXT_VERSION)).toThrow('GENERATION_COMPOSITION_NO_PROGRESS')
     expect(f.owner.readVisibleComposition(generated.run.handle)?.text).toBe(draftText)
   })
   it.each([
@@ -1034,13 +1083,13 @@ describe('main draft persistence and batch lineage', () => {
     expect(f.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(0)
     expect(f.owner.readVisibleComposition(generated.run.handle)?.text).toBe(draftText)
   })
-  it('keeps chapter lineage, pending recovery identity and the original batch root', async () => {
+  it.each(['draft-visible-v1', DRAFT_VISIBLE_TEXT_VERSION] as const)('keeps %s chapter lineage, pending recovery identity and the original batch root', async algorithm => {
     const f = drafting()
     f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(2,'第二章')")
     const batch = f.owner.beginBatch({ mode: 'draft_review', range: { startChapter: 1, endChapter: 2 }, targetUnits: 20,
       uiActionNonce: 'batch', modelId: f.model.id, authorInputs, promptKeys: f.begin.promptKeys, skillStages: [] })
     const selection = { ...f.begin, authorInputs, batchId: batch.batchId, parentRootActionId: batch.rootHandle.rootActionId }
-    const first = await generate(f, selection), saved = f.owner.commitDraft(first.request)
+    const first = await generate(f, selection, algorithm), saved = f.owner.commitDraft(first.request)
     expect(f.owner.readBatch(batch.batchId).nextChapterNumber).toBe(2)
     expect(() => f.owner.begin({ ...selection, chapterNumber: 2, uiActionNonce: 'chapter2' })).toThrow('GENERATION_BATCH_LINEAGE_INVALID')
     const materialDecision: NonNullable<BeginGenerationRequest['materialDecision']> = {
