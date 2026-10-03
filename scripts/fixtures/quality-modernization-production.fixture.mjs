@@ -15,7 +15,7 @@ import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, 
   AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, aiReviewFinalManuscriptSelection, productionScenario, loadBaselineReviewContract,
   readBoundedRevisionSource, assertBoundedRevisionSource, boundedRevisionItems,
   scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder,
-  assertSharedInputDiagnostic, validateAiReviewedManuscript } from '../quality-modernization-driver.mjs'
+  assertSharedInputDiagnostic, validateAiReviewedManuscript, reviewLengthRecoveryFor } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, recordPersistedDraftObservation, safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
 import { safeTransportError } from '../../src/shared/generation-contract'
 
@@ -287,7 +287,7 @@ test('isolated production commands persist the selected phase operations', async
   const load = relative => import(/* @vite-ignore */ pathToFileURL(path.join(target.repositoryRoot, relative)).href)
   const receipt = { schemaVersion: 1, invocationId: request.invocationId, arm: target.arm, mode: request.mode, action: request.action,
     ...(request.sampling ? { sampling: { ...request.sampling, slot: `${request.phase}:${request.caseId}` } } : {}),
-    protocolRevision: request.protocolRevision, protocolHash: request.protocolHash,
+    protocolRevision: request.protocolRevision, protocolHash: request.protocolHash, scenarioRevision: request.scenarioRevision,
     phase: request.phase, milestone: request.milestone, caseId: request.caseId, sceneId: request.sceneId, chapterNumber: request.chapterNumber,
     operations: [], qualification: diagnosticRun || copiedRun ? 'non-qualification-diagnostic' : request.development ? 'development-only-unfrozen' : 'frozen-target', codeSha: target.codeSha,
     sourceHash: target.sourceHash, driverHash: request.driverHash,
@@ -904,9 +904,10 @@ test('isolated production commands persist the selected phase operations', async
         reviewReportAbsent: !reviewState.baselineCreate || reviewState.baselineCreate.attemptId !== attemptId,
         ...(operationKind === 'refine' ? { composition: refinementComposition,
           composeVisibleText: baselineContract.appendVisibleTextContinuation, redactVisibleText: baselineContract.redactVisibleCompletionText } : {}) }
-      // 压缩的首稿证据只取 owner artifact 原文 hash（C17/C18 与 post-UI 候选同规则）；post-UI 其余 operation 仍走审稿证据。
+      // 原生恢复只读该 attempt 的原始 artifact 与正式效果；同一草稿的旧审稿不代替本次 owner 证据。
       if (target.arm === 'candidate' && (r3Run || continuityRun || request.attemptPolicy?.structuredRecovery && operationKind === 'directory'
-        || (request.attemptPolicy?.draftRecovery || request.attemptPolicy?.draftCondense) && operationKind === 'draft')) {
+        || (request.attemptPolicy?.draftRecovery || request.attemptPolicy?.draftCondense) && operationKind === 'draft'
+        || ['review', 'final-review'].includes(operationKind) && reviewLengthRecoveryFor(receipt, operationId))) {
         const artifact = db.prepare('SELECT artifact_json FROM generation_artifacts WHERE attempt_id=?').pluck().get(first.attemptId)
         if (!artifact) return null
         if (['draft', 'directory'].includes(operationKind)) return { attempt: matches[0], events,
@@ -980,7 +981,8 @@ test('isolated production commands persist the selected phase operations', async
         && observedIpc.epoch === session.leaseId, 'BASELINE_IPC_DISPATCH_IDENTITY_MISMATCH')
       if (repairPolicy && operationId === repairPolicy.operationId
         && (actual ?? observedIpc).purpose === repairPolicy.repairPurpose) await Promise.all(streamSettlements)
-      const reviewRepairPolicy = [repairPolicy?.reviewRebuild, repairPolicy?.finalReviewRebuild].find(item => item?.operationId === operationId)
+      const reviewRepairPolicy = [repairPolicy, repairPolicy?.reviewRebuild, repairPolicy?.finalReviewRebuild]
+        .find(item => item?.operationId === operationId && item.primaryPurpose === 'review-chapter')
       if (reviewRepairPolicy?.operationId === operationId
         && (reviewRepairPolicy.maxLengthReplacements === 1
           || (actual ?? observedIpc).purpose === reviewRepairPolicy.repairPurpose)) await Promise.all(streamSettlements)
@@ -1882,10 +1884,11 @@ test('isolated production commands persist the selected phase operations', async
             hasFormalEffect: Boolean(usage.directoryProgress || usage.draftCommit || usage.reviewRevisionEffect || usage.finalizationEffect) } })
       assert.equal(receipt.ownerTerminal.length, receipt.attempts.length, 'OWNER_ATTEMPT_COVERAGE_MISMATCH')
       // Validate the complete saved report before accepting an empty, superseded LENGTH artifact.
-      if (r3Run) assert.equal(validateAiReviewedManuscript(receipt), null, 'R3_REVIEW_RECOVERY_PROVENANCE_MISMATCH')
+      if (receipt.operations.some(operation => reviewLengthRecoveryFor(receipt, operation.operation)))
+        assert.equal(validateAiReviewedManuscript(receipt), null, 'REVIEW_RECOVERY_PROVENANCE_MISMATCH')
       for (const attempt of receipt.attempts) {
         const terminal = receipt.ownerTerminal.find(row => row.attemptId === attempt.binding.actual.attemptId)
-        const replacedReviewLength = r3Run && attempt.finishReason === 'length'
+        const replacedReviewLength = Boolean(reviewLengthRecoveryFor(receipt, attempt.binding.operation)) && attempt.finishReason === 'length'
           && ['review-chapter', 'review-chapter-rebuild'].includes(attempt.binding.actual.purpose)
           && receipt.attempts.filter(other => other.binding.operation === attempt.binding.operation).at(-1) !== attempt
         assert.ok(terminal && ['settled', 'unknown'].includes(terminal.status))
@@ -1899,7 +1902,8 @@ test('isolated production commands persist the selected phase operations', async
           && receipt.attempts.some(other => other.binding.operation === repairPolicy.operationId
             && other.binding.actual?.purpose === repairPolicy.repairPurpose)
         // C16 原生修复与 C17/C18、post-UI 候选的唯一压缩同规则：同一 operation 只有末次 attempt 带正式效果。
-        const supersededAttempt = (copiedRun || continuityRun || structuredRecovery && attempt.binding.actual.purpose.startsWith('chapter-blueprint-directory') || draftRecovery && attempt.binding.actual.purpose.startsWith('chapter-draft'))
+        const supersededAttempt = (copiedRun || continuityRun || reviewLengthRecoveryFor(receipt, attempt.binding.operation)
+          || structuredRecovery && attempt.binding.actual.purpose.startsWith('chapter-blueprint-directory') || draftRecovery && attempt.binding.actual.purpose.startsWith('chapter-draft'))
           && receipt.attempts.filter(other => other.binding.operation === attempt.binding.operation).at(-1) !== attempt
         const condensedPrimary = condensePolicy && attempt.binding.actual.purpose === condensePolicy.primaryPurpose
           && receipt.attempts.some(other => other.binding.operation === attempt.binding.operation
@@ -1923,7 +1927,7 @@ test('isolated production commands persist the selected phase operations', async
       const rows = ledgerEvents.filter(event => event.attemptId === attempt.attemptId)
       assert.deepEqual(rows.map(event => event.type), ['reserve', 'dispatch', 'settle'], 'PHYSICAL_LEDGER_COVERAGE_MISMATCH')
       assert.deepEqual(rows[0].binding, attempt.binding, 'PHYSICAL_LEDGER_BINDING_MISMATCH')
-      const replacedReviewLength = candidate && r3Run && attempt.finishReason === 'length'
+      const replacedReviewLength = candidate && Boolean(reviewLengthRecoveryFor(receipt, attempt.binding.operation)) && attempt.finishReason === 'length'
         && ['review-chapter', 'review-chapter-rebuild'].includes(attempt.binding.actual.purpose)
         && receipt.attempts.filter(other => other.binding.operation === attempt.binding.operation).at(-1) !== attempt
       assert.ok(attempt.outputPath && (attempt.visibleTextHash !== sha('') || replacedReviewLength), 'PHYSICAL_OUTPUT_MISSING')

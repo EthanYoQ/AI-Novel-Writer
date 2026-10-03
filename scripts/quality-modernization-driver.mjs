@@ -370,7 +370,7 @@ const AUTHOR_SETTING_LINES_REVISION = Object.freeze({
   's14b-post-ui-reviewed-budget-review-rebuild-must-show-v4': 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2' })
 /** 场景 revision 在语义源登记的作者设定附加行。 */
 export const scenarioAuthorSettingLines = (scene, scenarioRevision) => {
-  const sourceRevision = scenarioRevision?.replace(/-candidate-only-v1$/u, '')
+  const sourceRevision = scenarioRevision?.replace(/-candidate-only-v[12]$/u, '')
   return sourceRevision ? scene?.scenarioAuthorSettingLines?.[sourceRevision === POST_UI_AI_REVIEW_SCENARIOS['early-budget'].scenarioRevision
     ? 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2' : AUTHOR_SETTING_LINES_REVISION[sourceRevision] ?? sourceRevision] ?? [] : []
 }
@@ -1159,6 +1159,9 @@ export function productionScenario(phase, milestone, protocolRevision) {
   const selected = phase === 'full' && milestone === 'final' ? { ...scenario, ...FULL_AI_REVIEW_SCENARIO }
     : milestone === 'post-ui' && POST_UI_AI_REVIEW_SCENARIOS[phase] ? { ...scenario, ...POST_UI_AI_REVIEW_SCENARIOS[phase] } : scenario
   if (protocolRevision !== CANDIDATE_ONLY_PROTOCOL_REVISION || milestone === 'diagnostic') return selected
+  const reviewLengthRecovery = Boolean(selected.evaluationPolicy && ['final', 'post-ui'].includes(milestone))
+  const recoverReview = policy => reviewLengthRecovery && policy?.primaryPurpose === 'review-chapter'
+    ? { ...policy, maxLengthReplacements: 1 } : policy
   const draftIds = selected.operations.filter(operation => operation.kind === 'draft').map(operation => operation.id)
   const counts = phase === 'c16-c18' ? [20, 84] : phase === 'full' ? [30, 180]
     : phase === 'early-budget' ? [4, 20] : phase === 'early-context' ? [3, 17] : [1, 8]
@@ -1169,11 +1172,13 @@ export function productionScenario(phase, milestone, protocolRevision) {
         ...(phase === 'c16-c18' ? { sourceMinimum: 16, sourceMaximum: 52 }
           : phase === 'full' ? { sourceMinimum: 21, sourceMaximum: 108 } : {}) },
       armAsymmetry: 'candidate-only; no comparative claim' } } : {}),
-    scenarioRevision: `${selected.scenarioRevision}-candidate-only-v1`,
+    scenarioRevision: `${selected.scenarioRevision}-candidate-only-${reviewLengthRecovery ? 'v2' : 'v1'}`,
     ...(selected.selectionDifference ? { selectionDifference: { ...selected.selectionDifference,
       requireDifferentPromptHash: false, requireDifferentPromptBytes: false,
       requireBaselineSentCandidateOmission: false, requirePhysicalProjectParity: false } } : {}),
-    attemptPolicy: { ...selected.attemptPolicy, arms: ['candidate'], milestone,
+    attemptPolicy: { ...recoverReview(selected.attemptPolicy), arms: ['candidate'], milestone,
+      ...Object.fromEntries(['reviewRebuild', 'finalReviewRebuild'].filter(key => selected.attemptPolicy?.[key])
+        .map(key => [key, recoverReview(selected.attemptPolicy[key])])),
       ...(draftIds.length ? { draftRecovery: { ...draftRecoveryPolicy(draftIds), arms: ['candidate'] },
         draftCondense: { operationIds: draftIds, arms: ['candidate'], primaryPurpose: 'chapter-draft',
           condensePurpose: 'chapter-draft-condense', maxCondenseAttempts: 1,
@@ -1378,6 +1383,20 @@ export function reviewRecoveryAllowed(history, purpose, policy) {
     && history.filter(item => item.purpose === purpose).length === 1
   return last.finishReason === 'stop' && last.purpose === policy.primaryPurpose && purpose === policy.repairPurpose
     && !history.some(item => item.purpose === policy.repairPurpose)
+}
+
+/** Only the forward candidate scenarios opt in; historical receipts keep their registered interpretation. */
+export function reviewLengthRecoveryFor(result, operationId) {
+  if (result.arm === 'baseline') return null
+  let policy
+  if (result.phase === 'r3-native-revision-diagnostic') policy = R3_NATIVE_REVISION_DIAGNOSTIC.attemptPolicy
+  else if (result.arm === 'candidate' && result.protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION
+    && ['final', 'post-ui'].includes(result.milestone)) {
+    const scenario = productionScenario(result.phase, result.milestone, result.protocolRevision)
+    if (result.scenarioRevision === scenario.scenarioRevision) policy = scenario.attemptPolicy
+  }
+  return [policy, policy?.reviewRebuild, policy?.finalReviewRebuild]
+    .find(item => item?.operationId === operationId && item.maxLengthReplacements === 1) ?? null
 }
 /**
  * Only a settled, hash-verified parse failure — or, for a registered draft operation, a settled
@@ -2691,9 +2710,7 @@ export function validateAiReviewedManuscript(result) {
     const review = (kind, saved, source) => {
       const operation = result.operations.find(item => item.kind === kind), provenance = operation?.reviewProvenance
       const attempts = result.attempts.filter(item => item.binding.operation === operation?.operation)
-      const recoveryPolicy = result.phase === 'r3-native-revision-diagnostic' && !baselineContract
-        ? [R3_NATIVE_REVISION_DIAGNOSTIC.attemptPolicy.reviewRebuild, R3_NATIVE_REVISION_DIAGNOSTIC.attemptPolicy.finalReviewRebuild]
-          .find(item => item.operationId === operation?.operation) : null
+      const recoveryPolicy = reviewLengthRecoveryFor(result, operation?.operation)
       if (attempts.length < 1 || attempts.length > (recoveryPolicy?.maxLengthReplacements === 1 ? 4 : 2)
         || (attempts[0].binding.actual ?? attempts[0].binding.baselineIpc)?.purpose !== 'review-chapter') throw new Error('AI_REVIEW_ATTEMPT_COUNT_MISMATCH')
       if (baselineContract) {
@@ -2966,7 +2983,8 @@ function validateContinuityCore(results, mode, currentScenario, scope = null) {
       const recoveryPolicy = draftRecoveryFor(PHASE_SCENARIOS['c16-c18'].attemptPolicy, 'candidate')
       const recoverable = operation.kind === 'draft' && recoveryPolicy?.operationIds.includes(operation.operation)
       const manuscript = ['review', 'refine', 'final-review'].includes(operation.kind)
-      if (attempts.length < 1 || attempts.length > (recoverable ? recoveryPolicy.maxAttempts : operation.kind === 'character_cards' ? 3 : manuscript ? operation.kind === 'refine' ? 4 : 2 : condensable ? 2 : 1)) return fail('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
+      const reviewRecovery = ['review', 'final-review'].includes(operation.kind) ? reviewLengthRecoveryFor(result, operation.operation) : null
+      if (attempts.length < 1 || attempts.length > (recoverable ? recoveryPolicy.maxAttempts : operation.kind === 'character_cards' ? 3 : manuscript ? operation.kind === 'refine' || reviewRecovery ? 4 : 2 : condensable ? 2 : 1)) return fail('TARGET_OPERATION_ATTEMPT_COUNT_MISMATCH')
       const ownerMismatch = attempt => {
         const actual = attempt.binding?.actual, terminal = result.ownerTerminal.find(item => item.attemptId === actual?.attemptId)
         return !actual || actual.projectId !== result.physicalProject.projectId || actual.epoch !== result.projectEpoch
@@ -2983,6 +3001,14 @@ function validateContinuityCore(results, mode, currentScenario, scope = null) {
       for (const [ordinal, attempt] of attempts.entries()) {
         const actual = attempt.binding?.actual, terminal = ownerMismatch(attempt)
         if (recoverable) { if (!terminal) return fail('ACTUAL_OWNER_IDENTITY_MISMATCH'); continue }
+        if (reviewRecovery) {
+          if (!terminal || terminal.status !== 'settled' || terminal.finishReason !== attempt.finishReason
+            || !(ordinal === attempts.length - 1 ? ['stop'] : ['stop', 'length']).includes(terminal.finishReason)
+            || terminal.hasFormalEffect !== (ordinal === attempts.length - 1)
+            || !reviewRecoveryAllowed(attempts.slice(0, ordinal).map(item => ({ purpose: item.binding.actual.purpose,
+              finishReason: item.finishReason })), actual.purpose, reviewRecovery)) return fail('ACTUAL_OWNER_IDENTITY_MISMATCH')
+          continue
+        }
         if (!terminal || terminal.finishReason !== (operation.kind === 'refine' && ordinal < attempts.length - 1 ? 'length' : 'stop')
           || terminal.hasFormalEffect !== (ordinal === attempts.length - 1)
           || ordinal === 0 && actual.purpose !== (operation.kind === 'chapter_notes' ? 'finalized-chapter-notes'

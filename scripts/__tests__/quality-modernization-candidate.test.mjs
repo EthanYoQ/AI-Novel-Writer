@@ -4,7 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { productionScenario, fullExecutionSchedule, runProductionPhasePair, executionRecordIdentity,
-  QUALIFICATION_STAGE_MODELS, qualificationModelForOperation, assertForwardReasoning, copyIsolatedRealModelConfig } from '../quality-modernization-driver.mjs'
+  QUALIFICATION_STAGE_MODELS, qualificationModelForOperation, assertForwardReasoning, copyIsolatedRealModelConfig,
+  createOperationDispatchGate, reviewLengthRecoveryFor, scenarioAuthorSetting } from '../quality-modernization-driver.mjs'
 import { ROOT, validatePair, candidateBatchSlots, assertCandidateSlotAvailable, aggregateCandidateJudgments, selectPhase, hash, adjudicateCandidateBatch,
   forwardReasoningFor, forwardQualificationWindowFor } from '../quality-modernization-run.mjs'
 import { targetUnitRange } from '../quality-modernization-receipt.mjs'
@@ -14,6 +15,55 @@ import { resolveReasoningPolicy } from '../../src/shared/reasoning-policy'
 import { OpenAIProvider } from '../../electron/llm/openai-provider'
 
 const revision = 's14b-candidate-only-three-rounds-v1'
+
+test('formal review admits the native same-purpose replacement after settled empty LENGTH', () => {
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/formal-review-length-'))
+  try {
+    const scenario = productionScenario('full', 'final', revision), operation = scenario.attemptPolicy.reviewRebuild.operationId
+    const source = { draftId: 1, version: 1, contentHash: 'a'.repeat(64) }
+    const first = { attemptId: 'first', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: 'review-chapter' }
+    const outputPath = path.join(directory, 'empty.txt'); fs.writeFileSync(outputPath, '')
+    const attempt = { attemptId: 'candidate:first', outputPath, visibleTextHash: hash(''), binding: { operation, actual: first, reviewSource: source } }
+    const evidence = {
+      attempt, ownerArtifactHash: hash(''), reviewReportAbsent: true,
+      events: [{ type: 'reserve', attemptId: attempt.attemptId, binding: attempt.binding },
+        { type: 'dispatch', attemptId: attempt.attemptId }, { type: 'settle', attemptId: attempt.attemptId, finishReason: 'length' }],
+    }
+    const create = (proof = evidence) => createOperationDispatchGate({ repairPolicy: scenario.attemptPolicy, readPrimaryEvidence: () => proof })
+    const gate = create()
+    gate(operation, first, source)
+    assert.doesNotThrow(() => gate(operation, { ...first, attemptId: 'replacement' }, source))
+    assert.throws(() => gate(operation, { ...first, attemptId: 'third' }, source), /MODEL_REQUEST_REJECTED/)
+    for (const proof of [{ ...evidence, events: evidence.events.slice(0, 2) },
+      { ...evidence, events: evidence.events.map(row => row.type === 'settle' ? { ...row, finishReason: 'unknown' } : row) },
+      { ...evidence, ownerArtifactHash: hash('wrong') }, { ...evidence, reviewReportAbsent: false }]) {
+      const rejected = create(proof); rejected(operation, first, source)
+      assert.throws(() => rejected(operation, { ...first, attemptId: 'replacement' }, source), /MODEL_REQUEST_REJECTED/)
+    }
+    const drift = create(); drift(operation, first, source)
+    assert.throws(() => drift(operation, { ...first, attemptId: 'replacement' }, { ...source, version: 2 }), /MODEL_REQUEST_REJECTED/)
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('forward formal review recovery preserves old scenarios, author input and every planned budget', () => {
+  const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
+  for (const [phase, milestone, minimum, maximum] of [['c16-c18', 'final', 20, 84], ['full', 'final', 30, 180],
+    ['early-budget', 'post-ui', 4, 20], ['early-context', 'post-ui', 3, 17], ['early-review', 'post-ui', 1, 8]]) {
+    const scenario = selectPhase(protocol, phase, milestone), old = productionScenario(phase, milestone)
+    assert.deepEqual([scenario.minimumCalls, scenario.maximumPlannedCalls], [minimum, maximum])
+    assert.equal(scenario.evaluationPolicy.physicalRequests.manuscriptMaximum, 8)
+    const receipt = { ...scenario, arm: 'candidate', protocolRevision: revision }
+    for (const operation of scenario.operations.filter(item => ['review', 'final-review'].includes(item.kind))) {
+      assert.equal(reviewLengthRecoveryFor(receipt, operation.id)?.maxLengthReplacements, 1)
+      assert.equal(reviewLengthRecoveryFor({ ...receipt, scenarioRevision: scenario.scenarioRevision.replace(/v2$/, 'v1') }, operation.id), null)
+      assert.equal(reviewLengthRecoveryFor({ ...receipt, arm: 'baseline' }, operation.id), null)
+    }
+    for (const policy of [old.attemptPolicy, old.attemptPolicy.reviewRebuild, old.attemptPolicy.finalReviewRebuild].filter(Boolean))
+      assert.equal(policy.maxLengthReplacements, undefined)
+    const scene = { material: '原作者设定', scenarioAuthorSettingLines: { 's14b-post-ui-reviewed-budget-review-rebuild-must-show-v2': ['【第1章必现】原作者目标'] } }
+    assert.equal(scenarioAuthorSetting(scene, scenario.scenarioRevision), scenarioAuthorSetting(scene, scenario.scenarioRevision.replace(/v2$/, 'v1')))
+  }
+})
 
 test('formal operation profiles preserve Pro generation and Qwen review wire without changing windows', () => {
   const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))

@@ -4913,7 +4913,7 @@
         "arms": [
           "candidate"
         ],
-        "scenarioRevision": "c16-c18-candidate-production-path-v7-candidate-only-v1",
+        "scenarioRevision": "c16-c18-candidate-production-path-v7-candidate-only-v2",
         "attemptPolicy": {
           "milestone": "final",
           "arms": [
@@ -4928,7 +4928,8 @@
             "operationId": "续写成稿完整复审",
             "primaryPurpose": "review-chapter",
             "repairPurpose": "review-chapter-rebuild",
-            "maxRepairAttempts": 1
+            "maxRepairAttempts": 1,
+            "maxLengthReplacements": 1
           },
           "refinementRecovery": {
             "operationId": "续写成稿一次修稿",
@@ -4968,6 +4969,7 @@
             "trigger": "settled-stop-or-length-hash-verified-composed-units-above-draftTargetUnitRange-maximum",
             "formalEffect": "last-attempt-only"
           },
+          "maxLengthReplacements": 1,
           "shortOutline": {
             "purpose": "chapter-draft-short-outline",
             "operationIds": [
@@ -5101,7 +5103,7 @@
           "场景3/3"
         ],
         "milestone": "final",
-        "scenarioRevision": "s14b-full-ai-review-final-manuscript-v1-candidate-only-v1",
+        "scenarioRevision": "s14b-full-ai-review-final-manuscript-v1-candidate-only-v2",
         "attemptPolicy": {
           "milestone": "final",
           "arms": [
@@ -5155,13 +5157,15 @@
             "operationId": "成稿首审",
             "primaryPurpose": "review-chapter",
             "repairPurpose": "review-chapter-rebuild",
-            "maxRepairAttempts": 1
+            "maxRepairAttempts": 1,
+            "maxLengthReplacements": 1
           },
           "finalReviewRebuild": {
             "operationId": "成稿完整复评",
             "primaryPurpose": "review-chapter",
             "repairPurpose": "review-chapter-rebuild",
-            "maxRepairAttempts": 1
+            "maxRepairAttempts": 1,
+            "maxLengthReplacements": 1
           },
           "refinementRecovery": {
             "operationId": "成稿一次修稿",
@@ -5318,7 +5322,7 @@
         "sceneId": "场景1",
         "chapterNumber": 1,
         "milestone": "post-ui",
-        "scenarioRevision": "s14b-post-ui-ai-review-final-early-budget-v1-candidate-only-v1",
+        "scenarioRevision": "s14b-post-ui-ai-review-final-early-budget-v1-candidate-only-v2",
         "attemptPolicy": {
           "milestone": "post-ui",
           "arms": [
@@ -5332,7 +5336,8 @@
             "operationId": "成稿首审",
             "primaryPurpose": "review-chapter",
             "repairPurpose": "review-chapter-rebuild",
-            "maxRepairAttempts": 1
+            "maxRepairAttempts": 1,
+            "maxLengthReplacements": 1
           },
           "draftRecovery": {
             "operationIds": [
@@ -5381,7 +5386,8 @@
             "operationId": "成稿完整复评",
             "primaryPurpose": "review-chapter",
             "repairPurpose": "review-chapter-rebuild",
-            "maxRepairAttempts": 1
+            "maxRepairAttempts": 1,
+            "maxLengthReplacements": 1
           },
           "refinementRecovery": {
             "operationId": "成稿一次修稿",
@@ -5522,7 +5528,7 @@
         "sceneId": "场景2",
         "chapterNumber": 3,
         "milestone": "post-ui",
-        "scenarioRevision": "s14b-post-ui-ai-review-final-early-context-v1-candidate-only-v1",
+        "scenarioRevision": "s14b-post-ui-ai-review-final-early-context-v1-candidate-only-v2",
         "selectionDifference": {
           "requireDifferentPromptHash": false,
           "requireDifferentPromptBytes": false,
@@ -5583,7 +5589,8 @@
             "operationId": "成稿完整复评",
             "primaryPurpose": "review-chapter",
             "repairPurpose": "review-chapter-rebuild",
-            "maxRepairAttempts": 1
+            "maxRepairAttempts": 1,
+            "maxLengthReplacements": 1
           },
           "refinementRecovery": {
             "operationId": "成稿一次修稿",
@@ -5591,6 +5598,7 @@
             "maxAttempts": 4,
             "trigger": "settled-length-same-confirmation-visible-append-with-progress"
           },
+          "maxLengthReplacements": 1,
           "draftRecovery": {
             "operationIds": [
               "长设定第三章正文"
@@ -5679,7 +5687,7 @@
         "sceneId": "场景3",
         "chapterNumber": 2,
         "milestone": "post-ui",
-        "scenarioRevision": "s14b-post-ui-ai-review-final-early-review-v1-candidate-only-v1",
+        "scenarioRevision": "s14b-post-ui-ai-review-final-early-review-v1-candidate-only-v2",
         "operations": [
           {
             "id": "审稿",
@@ -5728,7 +5736,8 @@
             "operationId": "一次复核",
             "primaryPurpose": "review-chapter",
             "repairPurpose": "review-chapter-rebuild",
-            "maxRepairAttempts": 1
+            "maxRepairAttempts": 1,
+            "maxLengthReplacements": 1
           },
           "refinementRecovery": {
             "operationId": "定向修稿",
@@ -5736,6 +5745,7 @@
             "maxAttempts": 4,
             "trigger": "settled-length-same-confirmation-visible-append-with-progress"
           },
+          "maxLengthReplacements": 1,
           "shortOutline": {
             "purpose": "chapter-draft-short-outline",
             "operationIds": [],

@@ -22,7 +22,8 @@ import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolated
   C16_C18_ATTEMPT_POLICY, validateCandidateContinuityResults, runProductionBridge, runProductionPhasePair, summarizeDraftReconciliation,
   continuityCaseOperations, FINALIZED_CHARACTER_OPERATION_IDS, draftCondenseFor, syntheticDraftCondensePlan,
   BOUNDED_REVISION_DIAGNOSTIC, assertBoundedRevisionSource, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, R3_NATIVE_REVISION_DIAGNOSTIC,
-  aiReviewFinalManuscriptSelection, validateAiReviewedManuscript, validatePairedReceipt, loadBaselineReviewContract, POST_UI_BUDGET } from '../quality-modernization-driver.mjs'
+  aiReviewFinalManuscriptSelection, validateAiReviewedManuscript, validatePairedReceipt, loadBaselineReviewContract, POST_UI_BUDGET,
+  CANDIDATE_ONLY_PROTOCOL_REVISION, reviewLengthRecoveryFor } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, readVerifiedRecoveryCandidateSupplement,
   readVerifiedDirectPersistedDraftEvidence, recordPersistedDraftObservation,
   safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
@@ -314,7 +315,9 @@ test('post-UI baseline uses its native review projection, persisted AI-only conf
   } finally { vi.unstubAllGlobals(); nativeDatabase?.closeProjectDatabase(); fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
-test.each([false, true])('AI final manuscript native main owner persists keyEvents unknown confirmation, one revision, merge and ordinary final review (LENGTH replacement=%s)', async (lengthRecovery) => {
+test.each([false, true, 'formal'])('AI final manuscript native main owner persists keyEvents unknown confirmation, one revision, merge and ordinary final review (LENGTH replacement=%s)', async (lengthRecovery) => {
+  const formal = lengthRecovery === 'formal'
+  const scenario = formal ? productionScenario('full', 'final', CANDIDATE_ONLY_PROTOCOL_REVISION) : null
   const [{ initializeLegacyBaselineSchema }, { getDesktopMigrationRegistry, CURRENT_DESKTOP_SCHEMA_VERSION }, { SqliteSchemaAdapter },
     { migrateSchema }, { createMainGenerationOwner }, { ModelExecutionLeaseRegistry }, { MAIN_GENERATION_POLICY: policy },
     { buildGenerationSourceBinding, rebuildGenerationSourceBinding }, { generationOutputContract }, { ReviewRepository },
@@ -394,7 +397,7 @@ test.each([false, true])('AI final manuscript native main owner persists keyEven
     const ignored = serializeHumanConfirmedReviewSnapshot({ ...snapshot, items: snapshot.items.map(item => ({ ...item, decision: 'ignore' })) })
     const ignoredRow = ReviewRepository.create({ baseDraftId: 1, content: ignored, expectedSource: sourceDraft }, db)
     assert.throws(() => owner.prepareReviewRevision({ ...refineRequest, reviewSourceId: ignoredRow.id, confirmedReviewContent: ignored }), /CONFIRM|REVIEW/)
-    assert.equal(calls, 1 + Number(lengthRecovery), 'invalid confirmations are rejected before dispatch')
+    assert.equal(calls, 1 + Number(Boolean(lengthRecovery)), 'invalid confirmations are rejected before dispatch')
     const refine = owner.prepareReviewRevision(refineRequest)
     assert.equal(refine.parentRootActionId, first.handle.rootActionId)
     const brief = renderHumanConfirmedReviewBrief(refine.context.confirmation.snapshot, 'zh-CN')
@@ -425,20 +428,30 @@ test.each([false, true])('AI final manuscript native main owner persists keyEven
     const finalBegin = owner.begin({ ...begin, uiActionNonce: 'final', reviewRevisionContextId: finalPrepared.contextId,
       authorInputs: [{ id: 'review-revision-context', text: JSON.stringify(finalPrepared.context) }] })
     owner.bindMaterialDecision(finalBegin.handle, decision)
-    const finalOutput = await owner.execute({ handle: finalBegin.handle, invocationNonce: 'final', task: { purpose: 'review-chapter',
+    if (formal) {
+      const complete = response; response = '{invalid'
+      await owner.execute({ handle: finalBegin.handle, invocationNonce: 'final-invalid', task: { purpose: 'review-chapter',
+        output: 'structured-data', messages: [{ role: 'user', content: prompt }] } })
+      response = ''; finishReason = 'length'
+      await owner.execute({ handle: finalBegin.handle, invocationNonce: 'final-length', task: { purpose: 'review-chapter-rebuild',
+        output: 'structured-data', messages: [{ role: 'user', content: prompt }] } })
+      response = complete; finishReason = 'stop'
+    }
+    const finalOutput = await owner.execute({ handle: finalBegin.handle, invocationNonce: 'final', task: { purpose: formal ? 'review-chapter-rebuild' : 'review-chapter',
       output: 'structured-data', messages: [{ role: 'user', content: prompt }] } })
     const finalArtifact = finalOutput.run.artifacts.at(-1)
     const finalSaved = owner.commitReview({ contextId: finalPrepared.contextId, handle: finalBegin.handle,
       artifact: { artifactId: finalArtifact.artifactId, revision: finalArtifact.revision, textHash: finalArtifact.textHash } })
     assert.equal(ReviewRepository.getFull(finalSaved.id, db).sourceDraft.content, revisedProse)
     assert.equal(ReviewCycleRepository.getByReviewId(saved.id, db).recheckCount, 0, 'ordinary review does not resolve old cycle')
-    assert.equal(calls, 3 + Number(lengthRecovery))
+    assert.equal(calls, 3 + Number(Boolean(lengthRecovery)) + (formal ? 2 : 0))
     const save = (name, body, extra = {}) => { const outputPath = path.join(directory, name); fs.writeFileSync(outputPath, body)
       return { ...extra, outputPath, contentHash: hash(body) } }
     const rows = db.prepare(`SELECT a.attempt_id,a.run_id,a.root_action_id,a.attempt_json,a.usage_receipt_json,g.artifact_json
       FROM generation_attempts a JOIN generation_artifacts g ON g.attempt_id=a.attempt_id ORDER BY a.rowid`).all()
     const handles = [first.handle, revisionBegin.handle, finalBegin.handle], kinds = ['review', 'refine', 'final-review']
-    const operationIds = lengthRecovery ? R3_NATIVE_REVISION_DIAGNOSTIC.operations.map(item => item.id) : kinds
+    const operationIds = formal ? scenario.operations.filter(item => kinds.includes(item.kind)).map(item => item.id)
+      : lengthRecovery ? R3_NATIVE_REVISION_DIAGNOSTIC.operations.map(item => item.id) : kinds
     const operations = handles.map((handle, index) => {
       const row = rows.filter(item => item.run_id === handle.runId).at(-1)
       return { operation: operationIds[index], kind: kinds[index], handle,
@@ -446,17 +459,21 @@ test.each([false, true])('AI final manuscript native main owner persists keyEven
     })
     const attempts = rows.map((row, index) => {
       const stage = handles.findIndex(handle => handle.runId === row.run_id)
-      return { ...save('raw-' + index + '.txt', JSON.parse(row.artifact_json).text),
+      const context = [prepared.context, refine.context, finalPrepared.context][stage]
+      return { ...save('raw-' + index + '.txt', JSON.parse(row.artifact_json).text), attemptId: `candidate:${row.attempt_id}`,
+        authorityEvidence: { allFactsSent: true, factHashes: [] },
         visibleTextHash: JSON.parse(row.artifact_json).textHash, finishReason: JSON.parse(row.usage_receipt_json).result.finishReason,
-        binding: { operation: operationIds[stage], actual: { attemptId: row.attempt_id,
+        binding: { operation: operationIds[stage], reviewSource: { draftId: context.source.id, version: context.source.version, contentHash: hash(context.source.content) }, actual: { attemptId: row.attempt_id,
           purpose: JSON.parse(row.usage_receipt_json).purpose, ...handles[stage] } } }
     })
     const ownerTerminal = rows.map(row => { const artifact = JSON.parse(row.artifact_json), usage = JSON.parse(row.usage_receipt_json)
       return { attemptId: row.attempt_id, status: JSON.parse(row.attempt_json).status, artifactId: artifact.artifactId,
         artifactRevision: artifact.revision, textHash: artifact.textHash, reviewRevisionEffect: usage.reviewRevisionEffect,
         finishReason: usage.result.finishReason, purpose: usage.purpose, trustedUsage: true, hasFormalEffect: Boolean(usage.reviewRevisionEffect) } })
-    const result = { ...(lengthRecovery ? { phase: 'r3-native-revision-diagnostic', arm: 'candidate' } : {}), physicalProject: { projectId: 'project', dbPath }, projectEpoch: 'epoch', operations, attempts, ownerTerminal,
-      protocolRevision: protocolBinding.protocolRevision, saved: { draftId: 1, chapterNumber: 1, version: 1, contentHash: hash(revisedProse), units: countDraftUnits(revisedProse) },
+    const result = { ...(lengthRecovery ? { phase: formal ? 'full' : 'r3-native-revision-diagnostic', arm: 'candidate' } : {}),
+      ...(formal ? { milestone: 'final', scenarioRevision: scenario.scenarioRevision } : {}), physicalProject: { projectId: 'project', dbPath }, projectEpoch: 'epoch', operations, attempts, ownerTerminal,
+      protocolRevision: formal ? CANDIDATE_ONLY_PROTOCOL_REVISION : protocolBinding.protocolRevision,
+      saved: { draftId: 1, chapterNumber: 1, version: 1, status: 'revised', contentHash: hash(revisedProse), units: countDraftUnits(revisedProse) },
       draftObservation: { chapterNumber: 1, targetUnits: 900, units: countDraftUnits(revisedProse), contentHash: hash(revisedProse), persisted: true },
       aiReviewedDraft: { initial: save('initial.txt', prose, { draftId: 1, chapterNumber: 1, version: 1, status: 'draft' }),
         review: save('first-review.json', saved.content, { reviewId: saved.id }), selectedCount: selection.selected.length,
@@ -467,20 +484,90 @@ test.each([false, true])('AI final manuscript native main owner persists keyEven
           artifactIds: composition.artifactIds, sources: composition.sources },
         finalReview: save('final-review.json', finalSaved.content, { reviewId: finalSaved.id }),
         finalDraft: save('final.txt', revisedProse, { draftId: 1, version: 1 }) } }
+    if (formal) {
+      const cycleId = db.prepare('SELECT cycle_id FROM review_cycles WHERE review_id=?').pluck().get(finalSaved.id)
+      result.currentReviewState = { contentHash: hash(revisedProse), reviewId: finalSaved.id, reviewContentHash: hash(finalSaved.content), cycleId,
+        findings: db.prepare('SELECT finding_id AS findingId,status,target_id AS targetId FROM review_findings WHERE cycle_id=? ORDER BY finding_id').all(cycleId) }
+    }
     assert.equal(validateAiReviewedManuscript(result), null)
     if (!lengthRecovery) assert.equal(validateAiReviewedManuscript({ ...result, phase: 'full', saved: { ...result.saved, status: 'revised' } }), null)
     if (!lengthRecovery) assert.equal(validateAiReviewedManuscript({ ...result, phase: 'full', saved: { ...result.saved, status: 'draft' } }), 'AI_FINAL_DB_MISMATCH')
     if (lengthRecovery) {
       const terminalStart = fixture.indexOf('      assert.equal(receipt.ownerTerminal.length'),
         terminalEnd = fixture.indexOf('\n    }\n    if (restorationKind)', terminalStart)
-      new Function('receipt', 'validateAiReviewedManuscript', 'assert', 'sha', `
-        const r3Run = true, aiReviewRun = true, copiedRun = true, structuredRecovery = null, draftRecovery = null,
+      new Function('receipt', 'validateAiReviewedManuscript', 'reviewLengthRecoveryFor', 'assert', 'sha', `
+        const aiReviewRun = true, copiedRun = ${!formal}, structuredRecovery = null, draftRecovery = null,
           repairPolicy = null, continuityRun = false, condensePolicy = null, request = { mode: 'synthetic' };
-        ${fixture.slice(terminalStart, terminalEnd)}`)(result, validateAiReviewedManuscript, assert, hash)
+        ${fixture.slice(terminalStart, terminalEnd)}`)(result, validateAiReviewedManuscript, reviewLengthRecoveryFor, assert, hash)
       const drift = structuredClone(result); drift.attempts[0].finishReason = 'unknown'
       assert.equal(validateAiReviewedManuscript(drift), 'AI_REVIEW_RECOVERY_PROVENANCE_MISMATCH')
       const sourceDrift = structuredClone(result); sourceDrift.attempts[0].binding.actual.rootActionId = 'different-root'
       assert.equal(validateAiReviewedManuscript(sourceDrift), 'AI_REVIEW_REBUILD_NOT_REGISTERED')
+      if (formal) {
+        const historical = { ...result, scenarioRevision: scenario.scenarioRevision.replace(/v2$/, 'v1') }
+        assert.equal(validateAiReviewedManuscript(historical), 'AI_REVIEW_REBUILD_NOT_REGISTERED')
+        const ledgerPath = path.join(directory, 'physical-ledger.jsonl')
+        fs.writeFileSync(ledgerPath, attempts.flatMap(attempt => [
+          { type: 'reserve', attemptId: attempt.attemptId, binding: attempt.binding }, { type: 'dispatch', attemptId: attempt.attemptId },
+          { type: 'settle', attemptId: attempt.attemptId, finishReason: attempt.finishReason },
+        ]).map(row => JSON.stringify(row)).join('\n') + '\n')
+        const proofStart = fixture.indexOf('readPrimaryEvidence: first => {') + 'readPrimaryEvidence: first => {'.length
+        const proofEnd = fixture.indexOf('    }, onReject:', proofStart)
+        const readEvidence = new Function('first', 'receipt', 'request', 'db', 'fs', 'sha', 'reviewLengthRecoveryFor', 'operationId', 'operationKind', `
+          const r3Run = false, continuityRun = false, baselineContract = null, aiReviewRun = true,
+            target = { arm: 'candidate' }, authorityFacts = [];
+          ${fixture.slice(proofStart, proofEnd)}`)
+        const request = { attemptPolicy: scenario.attemptPolicy, ledgerPath }
+        for (const operation of operations.filter(item => item.kind !== 'refine')) {
+          const gate = createOperationDispatchGate({ repairPolicy: scenario.attemptPolicy,
+            readPrimaryEvidence: first => readEvidence(first, result, request, db, fs, hash, reviewLengthRecoveryFor, operation.operation, operation.kind) })
+          for (const attempt of attempts.filter(item => item.binding.operation === operation.operation))
+            assert.doesNotThrow(() => gate(operation.operation, attempt.binding.actual, attempt.binding.reviewSource))
+        }
+        const physicalStart = fixture.indexOf('    const ledgerEvents =', terminalEnd)
+        const physicalEnd = fixture.indexOf('    assertNoOutboundPreflightFailures(receipt)', physicalStart)
+        new Function('receipt', 'request', 'fs', 'assert', 'sha', 'reviewLengthRecoveryFor', `const candidate = true;
+          ${fixture.slice(physicalStart, physicalEnd)}`)(result, request, fs, assert, hash, reviewLengthRecoveryFor)
+
+        // C17-A public consumer around the actual saved review/revision rows above.
+        // Only the preceding draft/outline dispatches are local fixture evidence.
+        const continuity = productionScenario('c16-c18', 'final', CANDIDATE_ONLY_PROTOCOL_REVISION)
+        const c17 = structuredClone(result), draftOperation = continuity.operations.find(item => item.restore === 'local')
+        const predecessor = { sourceId: 'finalized:prior', revision: 1, required: true }
+        const readback = { predecessors: [predecessor] }, parityHash = hash(readback)
+        Object.assign(c17, { status: 'passed', mode: 'synthetic', phase: 'c16-c18', caseId: 'C17-A',
+          invocationId: '11111111-1111-4111-8111-111111111111', protocolHash: hash('formal-c17-test'),
+          scenarioRevision: continuity.scenarioRevision, evaluationPolicy: continuity.evaluationPolicy,
+          physicalProject: { ...c17.physicalProject, readback, parityHash },
+          restoration: { originProjectId: 'original-project', targetProjectId: 'project', transferReceiptHash: hash('local-transfer'), sourceUnchanged: true, oldWorkFrozen: true } })
+        const names = new Map(c17.operations.map(item => [item.operation, continuity.operations.find(value => value.kind === item.kind).id]))
+        for (const operation of c17.operations) operation.operation = names.get(operation.operation)
+        for (const attempt of c17.attempts) attempt.binding.operation = names.get(attempt.binding.operation)
+        const draftHandle = { runId: 'source-run', rootActionId: 'source-root', projectId: 'project', epoch: 'epoch' }
+        const sourceAttempts = ['chapter-draft-short-outline', 'chapter-draft'].map((purpose, index) => {
+          const attemptId = `source-${index}`, artifact = save(`${purpose}.txt`, index ? prose : '本章保持原作者事件顺序。')
+          c17.ownerTerminal.unshift({ attemptId, artifactId: `artifact-${attemptId}`, status: 'settled', purpose,
+            finishReason: 'stop', textHash: artifact.contentHash, hasFormalEffect: index === 1 })
+          return { attemptId: `candidate:${attemptId}`, outputPath: artifact.outputPath, visibleTextHash: artifact.contentHash, finishReason: 'stop',
+            binding: { operation: draftOperation.id, actual: { ...draftHandle, attemptId, purpose } },
+            optionalMaterialEvidence: { materialDecision: { included: [predecessor] } } }
+        })
+        c17.operations.unshift({ operation: draftOperation.id, kind: 'draft', handle: draftHandle })
+        c17.attempts.unshift(...sourceAttempts)
+        for (const attempt of c17.attempts) Object.assign(attempt.binding, { phase: c17.phase, arm: c17.arm, mode: c17.mode,
+          caseId: c17.caseId, milestone: c17.milestone, invocationId: c17.invocationId, protocolRevision: c17.protocolRevision,
+          protocolHash: c17.protocolHash, parityId: parityHash })
+        c17.physicalModelRequests = 0; c17.syntheticDispatches = c17.attempts.length
+        const checkC17 = value => validateCandidateContinuityResults([value], 'synthetic', { caseIds: ['C17-A'], sourceProjectId: 'original-project' })
+        assert.deepEqual(checkC17(c17), { status: 'passed' })
+        assert.equal(checkC17({ ...c17, scenarioRevision: c17.scenarioRevision.replace(/v2$/, 'v1') }).candidateFailure, 'ACTUAL_OWNER_IDENTITY_MISMATCH')
+        for (const mutate of [value => { value.ownerTerminal.find(item => item.attemptId === attempts[0].binding.actual.attemptId).status = 'unknown' },
+          value => { value.attempts[2].binding.actual.rootActionId = 'wrong-root' },
+          value => { value.ownerTerminal.find(item => item.attemptId === attempts[0].binding.actual.attemptId).hasFormalEffect = true }]) {
+          const changed = structuredClone(c17); mutate(changed)
+          assert.equal(checkC17(changed).candidateFailure, 'ACTUAL_OWNER_IDENTITY_MISMATCH')
+        }
+      }
     }
     const corrupt = structuredClone(result); corrupt.aiReviewedDraft.selectedItemsHash = hash('author supplementation')
     assert.equal(validateAiReviewedManuscript(corrupt), 'AI_REVIEW_SELECTION_MISMATCH')
@@ -526,7 +613,7 @@ test.each([false, true])('AI final manuscript native main owner persists keyEven
         artifact: { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash } }).content }
     await command.generateAndCommit(preparedNext, { context: { mainGenerationRunHandle: next.handle, projectPath: directory, projectSession: { projectId: 'project', leaseId: 'epoch', projectPath: directory },
       writingLanguage: 'zh-CN', uiLocale: 'zh-CN' }, callbacks: { log() {}, appendText() {} } })
-    assert.equal(calls, 4 + Number(lengthRecovery))
+    assert.equal(calls, 4 + Number(Boolean(lengthRecovery)) + (formal ? 2 : 0))
     assert.equal(ReviewRepository.getFull(db.prepare('SELECT MAX(id) FROM reviews').pluck().get(), db).sourceDraft.chapterNumber, 2)
     vi.unstubAllGlobals()
   } finally { vi.unstubAllGlobals(); owner?.suspendForProjectClose(); db.close(); fs.rmSync(directory, { recursive: true, force: true }) }
@@ -6080,7 +6167,7 @@ test('S14B post-UI 压缩的 fixture 接线：登记只对候选臂取到，首�
     const proofStart = fixture.indexOf('readPrimaryEvidence: first => {') + 'readPrimaryEvidence: first => {'.length
     const proofEnd = fixture.indexOf('    }, onReject:', proofStart)
     assert.ok(proofStart > 0 && proofEnd > proofStart)
-    const readEvidence = new Function('first', 'receipt', 'request', 'authorityFacts', 'sha', 'fs', 'target', 'operationKind', 'db', 'continuityRun',
+    const readEvidence = new Function('first', 'receipt', 'request', 'authorityFacts', 'sha', 'fs', 'target', 'operationKind', 'db', 'continuityRun', 'reviewLengthRecoveryFor', 'operationId',
       `const r3Run = false, baselineContract = null, finalizedContext = null, parseFinalizedCharacterStateResponse = null;\n${fixture.slice(proofStart, proofEnd)}`)
     const { syntheticDraftText } = syntheticLengthHelpers()
     const overText = syntheticDraftText(countDraftUnits, POST_UI_RANGE.maximum + 90)
@@ -6096,7 +6183,7 @@ test('S14B post-UI 压缩的 fixture 接线：登记只对候选臂取到，首�
     let artifact = JSON.stringify({ text: overText })
     const db = { prepare: () => ({ pluck: () => ({ get: () => artifact }) }) }
     const reader = (kind, request = { attemptPolicy: policy, ledgerPath }, receipt = { attempts: [attempt] }) => first =>
-      readEvidence(first, receipt, request, facts, hash, fs, { arm: 'candidate' }, kind, db, false)
+      readEvidence(first, receipt, request, facts, hash, fs, { arm: 'candidate' }, kind, db, false, reviewLengthRecoveryFor, POST_UI_DRAFT)
     const draftCondense = { policy: policy.draftCondense, maximum: POST_UI_RANGE.maximum, measureUnits: countDraftUnits }
     const dispatch = (readPrimaryEvidence, owner = { ...first, attemptId: 'condense', purpose: 'chapter-draft-condense' }) => {
       const gate = createOperationDispatchGate({ repairPolicy: policy, draftCondense, readPrimaryEvidence })
