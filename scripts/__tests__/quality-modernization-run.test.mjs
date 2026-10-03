@@ -137,7 +137,7 @@ test('post-UI baseline uses its native review projection, persisted AI-only conf
       fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, file.content, { flag: 'wx' })
     }
     // Match relative imports so Vitest shares one frozen database module instance.
-    const load = file => import(path.join(repositoryRoot, file))
+    const load = file => import(path.join(repositoryRoot, file).replaceAll('\\', '/').replace(/\.ts$/u, ''))
     const [{ ReviewChapterCommand }, { RefineFromReviewCommand }, { useProjectStore }, { useEditorStore },
       { createGenerationRuntime }, nativeConfirmation, { ReviewRepository }, { RevisionRepository }, database] = await Promise.all([
       load('src/services/workflows/commands/review-chapter.command.ts'), load('src/services/workflows/commands/refine-from-review.command.ts'),
@@ -872,8 +872,10 @@ test('separated-review diagnostic runs six zero-model owner slots and preserves 
     }
     const results = []
     const model = { ...registration.model, id: 'registered-diagnostic', apiKey: '' }
-    const capabilityEvidence = resolveModelExecutionCapabilityEvidence(model)
-    assert.equal(capabilityEvidence.structuredOutput, null)
+    const currentCapabilityEvidence = resolveModelExecutionCapabilityEvidence(model)
+    assert.equal(currentCapabilityEvidence.structuredOutput, true)
+    // Replay the historical frozen native-default lease without changing its registration.
+    const capabilityEvidence = { ...currentCapabilityEvidence, structuredOutput: null }
     const provider = new OpenAIProvider()
     for (const [index, slot] of operations.entries()) {
       const plan = buildMainGenerationPlan(model, { capabilityEvidence },
@@ -888,6 +890,13 @@ test('separated-review diagnostic runs six zero-model owner slots and preserves 
       assert.ok(Buffer.isBuffer(fs.readFileSync(diagnosticInputPath)))
       assert.doesNotThrow(() => assertInputFile(registration, input, options, { diagnosticInputPath }, fs, assertSharedInputDiagnostic, createHash))
       if (index === 0) {
+        const currentPlan = buildMainGenerationPlan(model, { capabilityEvidence: currentCapabilityEvidence },
+          { purpose: `separated-review-${slot.role}`, output: 'structured-data', messages: slot.messages, reasoningStage: 'review' },
+          { policy: MAIN_GENERATION_POLICY.budget, attempts: [] }, 'auto')
+        const currentBody = provider.buildRequestBody(model, slot.messages, currentPlan.options, true)
+        assert.deepEqual(currentBody.response_format, { type: 'json_object' })
+        assert.throws(() => assertSharedInputDiagnostic(registration, input, { ...options, body: currentBody }),
+          /SEPARATED_REVIEW_DIAGNOSTIC_WIRE_MISMATCH/)
         for (const changed of [{ inputHash: 'f'.repeat(64) }, { inputHash: hash(JSON.stringify(fs.readFileSync(diagnosticInputPath))) },
           { operation: 'not-registered' }, { reserved: 1 },
           { model: { ...registration.model, temperature: 0.7 } }, { body: { ...body, max_tokens: 16385 } },
@@ -4051,6 +4060,9 @@ test('post-UI 首审只以已结算的同稿产品解析失败许可一次重建
     const invalidShape = run(proof(schemaInvalid))
     assert.doesNotThrow(invalidShape, 'product-rejected schema may rebuild once')
     assert.throws(invalidShape, /MODEL_REQUEST_REJECTED/, 'a second schema rebuild is rejected before reserve')
+    const ambiguous = run(proof(`${adverse}\n${unknown}`))
+    assert.doesNotThrow(ambiguous, 'ambiguous reports remain a product parse failure')
+    assert.throws(ambiguous, /MODEL_REQUEST_REJECTED/, 'ambiguous output allows only one rebuild')
     const savedOutput = process.env.S14B_REVIEW_INVALID_OUTPUT
     if (savedOutput) {
       const captured = fs.readFileSync(savedOutput, 'utf8')
@@ -4063,6 +4075,7 @@ test('post-UI 首审只以已结算的同稿产品解析失败许可一次重建
     for (const [label, evidence] of [
       ['valid unfavorable review', proof(adverse)],
       ['valid unknown review', proof(unknown)],
+      ['valid prose-wrapped review', proof(`审稿结果如下：\n${adverse}\n审稿结束。`)],
       ['thinking wrapper needs product redaction', proof('<think>analysis</think>```json\n{"items":[]}\n```')],
       ['unsettled primary', proof(malformed, { terminal: 'dispatch' })],
       ['already saved review', proof(malformed, { absent: false })],
@@ -4680,7 +4693,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary', 'historicalC16B42cfc55Boundary',
     'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
     'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary', 'historicalC1609ad48e1Boundary', 'historicalSeparatedReviewB89b011aBoundary',
-    'historicalPostUi83573613Boundary', 'historicalR3NativeD12c4111Boundary', 'historicalR3ClosedCce6f01aBoundary', 'historicalR3NativeDc9b7cbdBoundary', 'historicalR3Native49e1c0adBoundary']
+    'historicalPostUi83573613Boundary', 'historicalR3NativeD12c4111Boundary', 'historicalR3ClosedCce6f01aBoundary', 'historicalR3NativeDc9b7cbdBoundary', 'historicalR3Native49e1c0adBoundary', 'historicalR3Native6e38e5ddBoundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -4819,6 +4832,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
         }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1626, real.boundaries.historicalR3NativeDc9b7cbdBoundary), 1629)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1629, real.boundaries.historicalR3Native49e1c0adBoundary), 1641)
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1641, real.boundaries.historicalR3Native6e38e5ddBoundary), 1650)
     assert.equal(validatePhysicalLedger(ledger), ledger)
     fs.writeFileSync(file, synthetic.raw)
     const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
@@ -4846,7 +4860,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
       /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
     fs.writeFileSync(ledger, real.raw)
     fs.writeFileSync(file, synthetic.raw)
-    for (const name of ['historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary', 'historicalC1609ad48e1Boundary', 'historicalSeparatedReviewB89b011aBoundary']) {
+    for (const name of ['historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary', 'historicalC1609ad48e1Boundary', 'historicalSeparatedReviewB89b011aBoundary', 'historicalR3Native6e38e5ddBoundary']) {
       const registered = real.boundaries[name]
       const changed = raw => raw.replace(`"codeSha":"${registered.armBindings.candidate.codeSha}"`, `"codeSha":"${'f'.repeat(40)}"`)
       fs.writeFileSync(ledger, changed(real.raw))

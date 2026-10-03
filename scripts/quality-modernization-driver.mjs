@@ -1193,7 +1193,14 @@ const reviewParseFailure = content => {
   // The command strips thinking tags first; avoid classifying an unstripped artifact as a parse failure.
   if (/<\/?think>/iu.test(content)) return false
   try { parseReviewGenerationResult(content); return false }
-  catch (error) { return error instanceof SyntaxError || error?.message === 'invalid review contract' }
+  catch (error) {
+    return error instanceof SyntaxError || [
+      'invalid review contract',
+      'AI 返回包含截断 JSON 对象片段',
+      'AI 返回包含多个完整 JSON 对象，无法确定唯一结构化结果',
+      'AI 返回未包含一个完整 JSON 对象',
+    ].includes(error?.message)
+  }
 }
 function verifiedPrimarySyntaxFailure(first, evidence, operationId, kind = 'directory', condense = null) {
   const attempt = evidence?.attempt, rows = evidence?.events

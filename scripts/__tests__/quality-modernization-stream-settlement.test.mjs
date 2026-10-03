@@ -9,6 +9,7 @@ import https from 'node:https'
 import { createHash } from 'node:crypto'
 import { syncBuiltinESMExports } from 'node:module'
 import { OpenAIProvider } from '../../electron/llm/openai-provider'
+import { safeTransportError } from '../../src/shared/generation-contract'
 import { createAttemptSupervisor, qualificationBridgeWindows, productionScenario, continuityCaseOperations } from '../quality-modernization-driver.mjs'
 import { forwardReasoningFor, forwardQualificationWindowFor } from '../quality-modernization-run.mjs'
 
@@ -20,7 +21,7 @@ const start = fixture.indexOf(open), end = fixture.indexOf(close, start) + close
 assert.ok(start >= 0 && end > start && fixture.indexOf(open, start + 1) < 0)
 // Execute the production fixture's anonymous consumer, with only its lexical inputs supplied.
 const consume = new Function('ledgerBody', 'supervisor', 'attemptId', 'physicalOutputPath',
-  'requestReceipt', 'streamSettlements', 'fs', 'sha', 'dispatchAt', 'request', fixture.slice(start, end))
+  'requestReceipt', 'streamSettlements', 'fs', 'sha', 'dispatchAt', 'request', 'safeTransportError', fixture.slice(start, end))
 const sha = value => createHash('sha256').update(value).digest('hex')
 const event = payload => `data: ${JSON.stringify(payload)}\n\n`
 const content = text => event({ choices: [{ delta: { content: text }, finish_reason: 'stop' }] })
@@ -80,7 +81,7 @@ test('the actual tee consumer settles a complete DONE without waiting for body E
       events.push({ type: 'reserve', attemptId: id }, { type: 'dispatch', attemptId: id })
       supervisor.watch(id, abort)
       const outputPath = path.join(directory, `${item.name}.txt`), settlements = []
-      consume(ledgerBody, supervisor, id, outputPath, receipt, settlements, fs, sha, performance.now(), { phase: 'early-budget' })
+      consume(ledgerBody, supervisor, id, outputPath, receipt, settlements, fs, sha, performance.now(), { phase: 'early-budget' }, safeTransportError)
       await Promise.all([new OpenAIProvider().generateStream(model, [{ role: 'user', content: 'offline' }], {
         maxTokens: 2672, temperature: 0, visibleOnly: true, signal: abort.signal,
         onChunk: value => owner.chunks.push(value), onReasoning: value => owner.reasoning.push(value),
@@ -92,8 +93,12 @@ test('the actual tee consumer settles a complete DONE without waiting for body E
       assert.deepEqual(events.map(value => value.type), ['reserve', 'dispatch', item.terminal], item.name)
       assert.equal(fs.readFileSync(outputPath, 'utf8'), item.output, item.name)
       assert.equal(receipt.finishReason, item.finish, item.name)
+      const interrupted = !item.close && item.terminal === 'unknown'
       assert.deepEqual(receipt.streamProgress && Object.keys(receipt.streamProgress).sort(),
-        ['bodyBytes', 'contentEvents', 'firstByteMs', 'lastByteMs', 'reasoningEvents', 'sawDone', 'sawFinish'], item.name)
+        ['bodyBytes', 'contentEvents', 'endedMs', 'firstByteMs', 'lastByteMs',
+          ...(interrupted ? ['readFailure'] : []), 'reasoningEvents', 'sawDone', 'sawFinish'], item.name)
+      assert.ok(Number.isFinite(receipt.streamProgress.endedMs) && receipt.streamProgress.endedMs >= 0, item.name)
+      if (interrupted) assert.deepEqual(receipt.streamProgress.readFailure, { errorName: 'AbortError' }, item.name)
       assert.equal(receipt.streamProgress.bodyBytes > 0, item.parts.length > 0, item.name)
       assert.equal(receipt.streamProgress.contentEvents, item.parts.some(part => /"content":/u.test(part)) ? 1 : 0, item.name)
       assert.equal(receipt.streamProgress.reasoningEvents, item.name === 'reasoning-heartbeat' ? 1 : 0, item.name)
@@ -102,6 +107,7 @@ test('the actual tee consumer settles a complete DONE without waiting for body E
       if (item.parts.length) {
         assert.ok(Number.isFinite(receipt.streamProgress.firstByteMs) && receipt.streamProgress.firstByteMs >= 0, item.name)
         assert.ok(receipt.streamProgress.lastByteMs >= receipt.streamProgress.firstByteMs, item.name)
+        assert.ok(receipt.streamProgress.endedMs >= receipt.streamProgress.lastByteMs, item.name)
       } else assert.deepEqual([receipt.streamProgress.firstByteMs, receipt.streamProgress.lastByteMs], [null, null], item.name)
       assert.equal(owner.done, item.terminal === 'settle' ? '正文' : undefined, item.name)
       if (item.name === 'reasoning-heartbeat') assert.equal(owner.reasoning.length, 1)
@@ -157,7 +163,7 @@ test('the registered watchdog permits a controlled 600000ms completion through t
     events.push({ type: 'reserve', attemptId: id }, { type: 'dispatch', attemptId: id })
     supervisor.watch(id, watchdog)
     const settlements = [], outputPath = path.join(directory, 'output.txt')
-    consume(ledgerBody, supervisor, id, outputPath, receipt, settlements, fs, sha, 0, request)
+    consume(ledgerBody, supervisor, id, outputPath, receipt, settlements, fs, sha, 0, request, safeTransportError)
     const generated = new OpenAIProvider().generateStream(model, [{ role: 'user', content: 'offline' }], {
       maxTokens: 2672, temperature: 0, visibleOnly: true, signal: AbortSignal.any([watchdog.signal, native.signal]),
       onChunk: () => {}, onDone: value => { owner.done = value }, onError: error => { owner.error = error },

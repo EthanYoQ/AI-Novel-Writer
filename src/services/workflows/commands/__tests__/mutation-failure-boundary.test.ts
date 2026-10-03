@@ -1129,7 +1129,7 @@ describe('workflow mutation failure boundaries', () => {
     expect(observedReviewPrompt).not.toContain('每个 category 至少输出一条记录')
   })
 
-  it('accepts the packaged DeepSeek review envelope and bounds its quoted evidence', async () => {
+  it.each(['fenced', 'prose-wrapped'])('accepts a %s review envelope and bounds its quoted evidence', async (envelope) => {
     const review = {
       items: [
         { category: '剧情连贯性', severity: 'pass', description: '本章为故事开端，情节内部逻辑自洽。' },
@@ -1139,7 +1139,9 @@ describe('workflow mutation failure boundaries', () => {
       ],
       summary: '章节结构扎实，但存在两处轻微不一致。',
     }
-    const response = `\`\`\`json\n${JSON.stringify(review, null, 2)}\n\`\`\``
+    const response = envelope === 'fenced'
+      ? `\`\`\`json\n${JSON.stringify(review, null, 2)}\n\`\`\``
+      : `PRIVATE_PREFIX ${JSON.stringify(review)} PRIVATE_SUFFIX`
     let persistedContent = ''
     const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
       if (channel === 'kb:search') return []
@@ -1175,15 +1177,14 @@ describe('workflow mutation failure boundaries', () => {
     expect(persisted.items[4]).toMatchObject({ severity: 'unknown' })
     expect(Array.from(persisted.items[1]!.quote!)).toHaveLength(160)
     expect(persisted.items[1]!.quote).toBe('潮'.repeat(160))
+    expect(persistedContent).not.toContain('PRIVATE_PREFIX')
+    expect(persistedContent).not.toContain('PRIVATE_SUFFIX')
   })
 
   it.each([
     ['invalid JSON', 'not-json PRIVATE_REVIEW_SENTINEL'],
     ['incomplete JSON', '{"summary":"ok","items":['],
-    ['prose around valid JSON', `PRIVATE_PREFIX ${JSON.stringify({
-      summary: 'ok',
-      items: [{ category: 'continuity', severity: 'pass', description: 'No conflict found.' }],
-    })} PRIVATE_SUFFIX`],
+    ['prose around an invalid contract', 'PRIVATE_PREFIX {} PRIVATE_SUFFIX'],
     ['invalid contract', '{}'],
     ['empty items', JSON.stringify({ summary: 'ok', items: [] })],
     ['more than ten items', JSON.stringify({
@@ -1283,8 +1284,8 @@ describe('workflow mutation failure boundaries', () => {
       uiLocale: 'en-US' as const,
       writingLanguage: 'zh-CN' as const,
       response: 'not-json',
-      expectedLog: 'The review result failed validation (the output is not complete JSON (it may be truncated by the model output limit)); requesting one complete replacement...',
-      expectedError: 'The AI review response was invalid twice (the replacement output is still not complete JSON)',
+      expectedLog: 'The review result failed validation (the output does not match the review-report contract (missing, oversized, or extra fields)); requesting one complete replacement...',
+      expectedError: 'The AI review response was invalid twice (the replacement output still does not match the review-report contract)',
       expectedPrompt: '上一轮审稿输出未通过合同校验',
     },
     {
