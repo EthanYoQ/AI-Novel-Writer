@@ -43,7 +43,7 @@ S06A、S09B、S10A/B 及 S14A/B 继续应用[2026-09-30 材料澄清](delivery-c
 | [S05 持久生成 owner 与 CAS](../../plans/novel-quality-modernization/specs/S05.md) | C01–C03。根动作/物理 attempt/预算持久化、unknown 不盲重发、候选与 epoch/revision CAS；供唯一 V3 壳读取状态，不增第二 run owner。80 硬帽撤销不撤销产品预算。 |
 | [S06A 结构化规划恢复](../../plans/novel-quality-modernization/specs/S06A.md) | C01–C03。架构/角色/蓝图等实际入口接同一 run 与恢复；结构化修复归原根预算，正式提交有持久证据。 |
 | [S06B 正文与批量恢复](../../plans/novel-quality-modernization/specs/S06B.md) | C01–C03、线程 10 切片 B。单章/批量共同路径自动短细纲后写正文，实际产物、来源和调用归原根预算；正文开始后恢复保持原细纲与组合提示身份。流式前缀、保存、取消及直接前驱保护保留，UI 终态不领先持久化。 |
-| [S06C 审稿修稿 run 归一](../../plans/novel-quality-modernization/specs/S06C.md) | C01–C03/C05、线程 10 切片 A。审修及复核消费已捕获的前驱、作者事实与目标；作者选择 AI 意见不把建议变成作者事实。归原动作和预算，保持 finding、合并、恢复与全章末审边界。 |
+| [S06C 审稿修稿 run 归一](../../plans/novel-quality-modernization/specs/S06C.md) | C01–C03/C05、线程 10 切片 A。审修及复核消费已捕获的前驱、作者事实与目标；作者选择 AI 意见不把建议变成作者事实。普通审稿应用[完整报告提取与错误归因](../../plans/novel-quality-modernization/specs/S06C.md#review-output-reception)，不降低字段或事实要求，也不改历史评分。归原动作和预算，保持 finding、合并、恢复与全章末审边界。 |
 | [S06D Agent 与工具子任务](../../plans/novel-quality-modernization/specs/S06D.md) | C01–C03。Agent/工具生成不旁路父动作、来源准入、预算和用户可见恢复；不借此扩展 DSH 插件范围。 |
 | [S07 任务预算、范围与诊断](../../plans/novel-quality-modernization/specs/S07.md) | C01/C06、S07.M01–M04、质量协议及 ADR 0019。现行增量拥有移除型号白名单、通用选模、容量资料及思考映射；验收见 S07.A01–A07。短细纲归原根预算；运行估算不冒充硬上限。candidate 字数 ±30%，原生请求逐次结算，API 开发日志单列。 |
 | [S08 稳定角色 ID](../../plans/novel-quality-modernization/specs/S08.md) | C04/C08/C13/C16。有来源的身份迁移、歧义拒绝、历史引用、头像到稳定 ID 映射；不按名字相似度猜合并。 |
