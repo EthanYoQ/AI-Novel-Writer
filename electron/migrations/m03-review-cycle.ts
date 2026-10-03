@@ -170,7 +170,7 @@ function proveEffect(db: Database.Database, row: AttemptRow, expected: {
   const stored = effect(row)
   if (!stored || stored.kind !== expected.kind || stored.id !== expected.id || stored.index !== expected.index
     || stored.contentHash !== expected.contentHash || !HASH.test(String(stored.contextHash))) return false
-  if (stored.reportVersion !== undefined && (stored.reportVersion !== 2 || expected.kind !== 'review' || expected.recheck)) return false
+  if (stored.reportVersion !== undefined && (stored.reportVersion !== 2 || expected.kind !== 'review')) return false
   const allowed = expected.kind === 'revision'
     ? ['artifact', 'compositionHash', 'contentHash', 'contextHash', 'id', 'index', 'kind']
     : ['artifact', 'contentHash', 'contextHash', 'id', 'index', 'kind', ...(stored.reportVersion === 2 ? ['reportVersion'] : [])]
@@ -233,7 +233,8 @@ function proveEffect(db: Database.Database, row: AttemptRow, expected: {
   if (expected.kind === 'review') {
     const frozen = context as unknown as ReviewRevisionContext
     const rebuilt = JSON.stringify(expected.recheck
-      ? (() => { const report = buildReviewCycleRecheckReport(artifact.text as string, frozen.source.content, expected.recheck!, frozen.uiLocale)
+      ? (() => { const report = buildReviewCycleRecheckReport(artifact.text as string, frozen.source.content, expected.recheck!, frozen.uiLocale,
+        stored.reportVersion === 2 ? 2 : 1)
         return { summary: report.summary, items: report.items } })()
       : buildReviewGenerationReport({ content: artifact.text as string,
         sourceContent: frozen.source.content, frozenGoals: frozen.frozenGoals, writingLanguage: frozen.writingLanguage,

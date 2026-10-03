@@ -14,6 +14,35 @@ const root: RootAction = { ...identity, rootActionId: '根动作', operation: '�
 const attempt = (id: string): PhysicalAttempt => ({ attemptId: id, reservationId: id, rootActionId: root.rootActionId, status: 'reserved', reservedTokens: 100, requestedOutputTokens: 80 })
 const budget = { maxPhysicalRequests: 2, maxTokenLiability: 200, maxOutputPerRequest: 80, maxActiveElapsedMs: 1000 }
 
+describe('recheck report envelopes', () => {
+  const context: ReviewCycleRecheckContext = { version: 2, cycleId: 'cycle', comparisonVersion: 1,
+    mergedHash: h, findingSetHash: h, findings: [{ findingId: 'finding', targetId: 'target', category: '连续性',
+      kind: 'objective', problem: '地点冲突' }] }
+  const output = JSON.stringify({ summary: '完整复核结论', items: [{ findingId: 'finding', targetId: 'target',
+    resolved: true, evidenceQuote: '甲在城外', reason: '正文提供了新地点，仍需作者核实。' }] })
+  it.each([
+    `说明\n${output}\n结束`,
+    `说明\n\`\`\`json\n${output}\n\`\`\`\n结束`,
+    `\`\`\`\n${output}\n\`\`\``,
+  ])('preserves fields from one complete wrapped recheck: %s', wrapped => {
+    const report = buildReviewCycleRecheckReport(wrapped, '甲在城外。', context, 'zh-CN')
+    expect(report.validModelOutput).toBe(true)
+    expect(report.summary).toBe('完整复核结论')
+    expect(report.items[0]).toMatchObject({ severity: 'unknown', resolved: false, quote: '甲在城外',
+      description: expect.stringContaining('正文提供了新地点，仍需作者核实。') })
+    expect(report.decisions[0].status).toBe('unknown')
+    expect(buildReviewCycleRecheckReport(wrapped, '甲在城外。', context, 'zh-CN', 1).validModelOutput).toBe(false)
+  })
+  it.each([`${output}\n${output}`, output.slice(0, -1), `${output}\n{"summary":`, `[${output}]`])(
+    'keeps ambiguous, truncated and array recheck envelopes invalid: %s', content => {
+      const report = buildReviewCycleRecheckReport(content, '甲在城外。', context, 'zh-CN')
+      expect(report.validModelOutput).toBe(false)
+      expect(report.items[0]).not.toHaveProperty('quote')
+      expect(report.decisions[0].status).toBe('unknown')
+    },
+  )
+})
+
 describe('S01共享契约（纯合成，不是生产持久化资格）', () => {
   it('原文UTF8哈希不规范化，UTF16范围不会误用码点长度', async () => {
     const text = '甲𠀀乙'

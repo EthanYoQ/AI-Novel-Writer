@@ -10,6 +10,7 @@ import { BlueprintRepository } from '../../repositories/blueprint-repository'
 import { verifyM03ReviewCycle, canonicalM03FindingSetHash } from '../../migrations/m03-review-cycle'
 import { createCanonicalProjectManifest } from '../../../src/shared/project-format'
 import { buildReviewGenerationReport } from '../../../src/shared/review-generation-report'
+import type { ReviewCycleRecheckContext } from '../../../src/shared/review-cycle'
 import { extractPortableProjectArchive } from '../portable-project-archive'
 import { restorePortableProject } from '../project-restore-service'
 import { ReviewRevisionGeneration } from '../review-revision-generation'
@@ -184,8 +185,8 @@ function seedProject(f: Fixture, secret = 'token-绝不外带'): { body: string;
 }
 
 function seedMergedCycle(f: Fixture, config: Record<string, unknown> = {}, recheckReceipt?: Record<string, unknown>,
-  reportOptions: { longReport?: boolean; reportVersion?: 2 } = {}): {
-  cycleId: string; body: string; mergedHash: string; reviewBody: string
+  reportOptions: { longReport?: boolean; reportVersion?: 2; recheckReportVersion?: 1 | 2 } = {}): {
+  cycleId: string; body: string; mergedHash: string; reviewBody: string; recheckBody?: string
 } {
   const db = new Database(f.databasePath)
   db.pragma('foreign_keys = ON')
@@ -221,15 +222,17 @@ function seedMergedCycle(f: Fixture, config: Record<string, unknown> = {}, reche
       uiActionNonce: 'merge', frozenInputHash: hash(source), rootActionId: root, status: 'active' }),
     JSON.stringify({ maxPhysicalRequests: 1, maxTokenLiability: 100, maxOutputPerRequest: 100, maxActiveElapsedMs: 1000 }))
   const attempt = (kind: 'review' | 'revision', id: number, index: number, content: string, output: string,
-    confirmation?: object) => {
-    const attemptId = `attempt-${kind}`, runId = `run-${kind}`, artifactId = `artifact-${kind}`
+    confirmation?: object, recheck?: ReviewCycleRecheckContext) => {
+    const label = recheck ? 'recheck' : kind
+    const attemptId = `attempt-${label}`, runId = `run-${label}`, artifactId = `artifact-${label}`
+    const frozenSource = recheck ? body : source
     const operation = kind === 'review' ? 'review-chapter' : 'refine-from-review'
-    const context = { version: 1, operation, sourceHash: hash(source),
-      source: { id: draftId, chapterNumber: 1, version: 1, status: 'draft', content: source },
+    const context = { version: 1, operation, sourceHash: hash(frozenSource),
+      source: { id: draftId, chapterNumber: 1, version: 1, status: recheck ? 'revised' : 'draft', content: frozenSource },
       config, writingLanguage: 'zh-CN', uiLocale: 'zh-CN', authorInputs: [], characterStates: '（暂无）',
       worldbuilding: '', history: [], blueprints: [],
       frozenGoals: { chapterNumber: 1, coverage: 'not_configured', items: [] }, preflightFindings: [],
-      ...(confirmation ? { confirmation } : {}) }
+      ...(confirmation ? { confirmation } : {}), ...(recheck ? { recheck } : {}) }
     const fingerprint = Object.fromEntries([
       'chapterBriefHash', 'authorGuidanceHash', 'dependencyHash', 'contextSnapshotHash', 'templateHash',
       'skillSnapshotHash', 'modelLeaseRevision', 'policyHash', 'outputContractHash',
@@ -237,24 +240,26 @@ function seedMergedCycle(f: Fixture, config: Record<string, unknown> = {}, reche
     const artifact = { artifactId, attemptId, rootActionId: root, projectId: f.projectId, epoch: 'epoch',
       fingerprint, revision: 1, text: output, textHash: hash(output) }
     const artifactRef = { artifactId, revision: 1, textHash: hash(output) }
+    const reportVersion = recheck ? reportOptions.recheckReportVersion === 2 ? 2 : undefined : reportOptions.reportVersion
     const effect = { kind, id, index, contentHash: hash(content), contextHash: hash(JSON.stringify(context)),
       artifact: artifactRef, ...(kind === 'revision' ? { compositionHash: hash(content) }
-        : reportOptions.reportVersion === undefined ? {} : { reportVersion: reportOptions.reportVersion }) }
+        : reportVersion === undefined ? {} : { reportVersion }) }
     db.prepare('INSERT INTO generation_runs(run_id,root_action_id,binding_json,status,created_at_ms,open_key) VALUES(?,?,?,?,?,?)')
       .run(runId, root, JSON.stringify({ projectId: f.projectId, epoch: 'epoch', fingerprint,
         sourceManifest: { operation, secretRef: 'private-credential-sentinel',
           machinePath: 'C:\\Users\\EthanQ\\private-machine-sentinel',
           reviewRevisionContext: context, reviewRevisionContextHash: effect.contextHash,
           authorInputs: [{ id: 'review-revision-context', text: JSON.stringify(context) }] } }),
-      'completed', 1, `open-${kind}`)
+      'completed', 1, `open-${label}`)
     db.prepare(`INSERT INTO generation_attempts(attempt_id,reservation_id,run_id,root_action_id,attempt_json,
-      usage_receipt_json,invocation_nonce) VALUES(?,?,?,?,?,?,?)`).run(attemptId, `reservation-${kind}`, runId, root,
-      JSON.stringify({ attemptId, reservationId: `reservation-${kind}`, rootActionId: root, status: 'settled',
+      usage_receipt_json,invocation_nonce) VALUES(?,?,?,?,?,?,?)`).run(attemptId, `reservation-${label}`, runId, root,
+      JSON.stringify({ attemptId, reservationId: `reservation-${label}`, rootActionId: root, status: 'settled',
         reservedTokens: 100, requestedOutputTokens: 100, actualTokens: 1 }),
       JSON.stringify({ artifactIdentity: { artifactId, epoch: 'epoch', fingerprint }, result: { usage: null, finishReason: 'stop' },
-        reviewRevisionEffect: effect, ...(kind === 'review' && recheckReceipt ? { reviewCycleRecheck: recheckReceipt } : {}),
+        reviewRevisionEffect: effect, ...(kind === 'review' && (recheck || recheckReceipt)
+          ? { reviewCycleRecheck: recheck ?? recheckReceipt } : {}),
         ...(kind === 'revision' ? { visibleComposition: { algorithm: 'visible-append-v1',
-          textHash: hash(content), artifactIds: [artifactId], sources: [artifactRef] } } : {}) }), `nonce-${kind}`)
+          textHash: hash(content), artifactIds: [artifactId], sources: [artifactRef] } } : {}) }), `nonce-${label}`)
     db.prepare('INSERT INTO generation_artifacts(artifact_id,attempt_id,run_id,artifact_json,revision,status) VALUES(?,?,?,?,1,?)')
       .run(artifactId, attemptId, runId, JSON.stringify(artifact), 'partial')
   }
@@ -268,8 +273,21 @@ function seedMergedCycle(f: Fixture, config: Record<string, unknown> = {}, reche
       hash(reviewBody), confirmationId, hash(confirmationBody), revisionId, hash(source),
       canonicalM03FindingSetHash([]), 1, 'merge-committed', hash(body), 0, null)
     db.prepare('INSERT INTO review_cycle_merges(cycle_id,body) VALUES(?,?)').run(cycleId, body)
+    let recheckBody: string | undefined
+    if (reportOptions.recheckReportVersion) {
+      const recheck: ReviewCycleRecheckContext = { version: 2, cycleId, comparisonVersion: 1,
+        mergedHash: hash(body), findingSetHash: canonicalM03FindingSetHash([]), findings: [] }
+      const output = `复核说明\n\`\`\`json\n${JSON.stringify({ summary: '保留完整复核说明。', items: [] })}\n\`\`\`\n说明结束`
+      recheckBody = JSON.stringify({ summary: reportOptions.recheckReportVersion === 2
+        ? '保留完整复核说明。' : '复核输出无效；受影响项目保持待核实。', items: [] }, null, 2)
+      const recheckId = Number(db.prepare(`INSERT INTO reviews(base_draft_id,review_index,source_draft_chapter_number,
+        source_draft_version,source_draft_status,source_content,content_id) VALUES(?,3,1,1,'revised',?,?)`)
+        .run(draftId, body, addContent(recheckBody)).lastInsertRowid)
+      attempt('review', recheckId, 3, recheckBody, output, undefined, recheck)
+      db.prepare('UPDATE review_cycles SET recheck_count=1,recheck_attempt_id=? WHERE cycle_id=?').run('attempt-recheck', cycleId)
+    }
     if (!verifyM03ReviewCycle(db)) throw new Error('MERGED_CYCLE_FIXTURE_INVALID')
-    return { cycleId, body, mergedHash: hash(body), reviewBody }
+    return { cycleId, body, mergedHash: hash(body), reviewBody, recheckBody }
   } finally { db.close() }
 }
 
@@ -283,6 +301,29 @@ afterEach(() => {
 })
 
 describe('portable project export service', { timeout: 20_000 }, () => {
+  it.each([1, 2] as const)('roundtrips a wrapped recheck with report derivation v%i and unchanged saved ACK', async version => {
+    const f = fixture(), seeded = seedMergedCycle(f, {}, undefined, { recheckReportVersion: version })
+    await exportPortableProject(input(f))
+    const targetRoot = path.join(f.base, 'restored-recheck')
+    await restorePortableProject({ archivePath: f.target, targetProjectRoot: targetRoot })
+    const restored = new Database(path.join(targetRoot, '.ai-novel', 'project.db'), { readonly: true })
+    try {
+      const usage = JSON.parse(restored.prepare("SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id='attempt-recheck'")
+        .pluck().get() as string)
+      expect(usage.reviewRevisionEffect.reportVersion).toBe(version === 2 ? 2 : undefined)
+      expect(usage.reviewCycleRecheck.version).toBe(2)
+      expect(verifyM03ReviewCycle(restored)).toBe(true)
+      const runs = new GenerationRunRepository(() => restored), run = runs.get('run-recheck')
+      const scope = { projectId: run.binding.projectId, epoch: run.binding.epoch }
+      const service = new ReviewRevisionGeneration(restored, runs, scope, () => {})
+      const saved = service.commitReview({ contextId: 'saved-replay', handle: { ...scope, rootActionId: run.rootActionId, runId: run.runId },
+        artifact: usage.reviewRevisionEffect.artifact }, () => { throw new Error('SAVED_REPLAY_MUST_NOT_RESUME') })
+      expect(saved.content).toBe(seeded.recheckBody)
+      expect(saved.contentHash).toBe(hash(seeded.recheckBody!))
+      expect(runs.receipt('attempt-recheck').artifact?.text).toContain('复核说明\n```json\n')
+    } finally { restored.close() }
+  })
+
   it.each([1, 2] as const)('roundtrips an immutable v7 merged cycle and saved report version %i', async version => {
     const f = fixture()
     const seeded = seedMergedCycle(f, {}, undefined, { longReport: true, ...(version === 2 ? { reportVersion: 2 } : {}) })

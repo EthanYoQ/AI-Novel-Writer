@@ -310,7 +310,7 @@ describe('M03 review cycle migration', () => {
     } finally { db.close() }
   })
 
-  it('accepts one same-root recheck bound to the merged hash and new finding evidence', () => {
+  it.each([1, 2] as const)('accepts one same-root recheck with report derivation v%i and bound evidence', reportVersion => {
     const db = fixture()
     try {
       db.transaction(() => applyM03ReviewCycle(db))()
@@ -329,10 +329,11 @@ describe('M03 review cycle migration', () => {
           category: 'continuity', kind: 'objective', problem: finding.problemText, expected: finding.expectedText!,
           sourceSpan: finding.source.span!, occurrence: 1,
           sourceExcerpt: excerpt }] }
-      const recheckArtifactText = JSON.stringify({ summary: '连续性问题已解决。',
+      const output = JSON.stringify({ summary: '连续性问题已解决。',
         items: [{ findingId: 'finding-1', targetId: 'target-1', resolved: true, evidenceQuote: '再确认门闩完好',
           reason: '合并稿已明确门闩完好。' }] })
-      const built = buildReviewCycleRecheckReport(recheckArtifactText, merged, recheckContext, 'zh-CN')
+      const recheckArtifactText = reportVersion === 2 ? `复核说明\n\`\`\`json\n${output}\n\`\`\`\n说明结束` : output
+      const built = buildReviewCycleRecheckReport(recheckArtifactText, merged, recheckContext, 'zh-CN', reportVersion)
       const recheckBody = JSON.stringify({ summary: built.summary, items: built.items }, null, 2)
       const reviewItem = (JSON.parse(recheckBody) as { items: unknown[] }).items[0]
       const evidenceHash = hash(JSON.stringify({ findingId: 'finding-1', targetId: 'target-1', reviewItemIndex: 0,
@@ -346,7 +347,8 @@ describe('M03 review cycle migration', () => {
         VALUES(?,3,1,1,'revised',?,?)`).run(seeded.draftId, merged, content(db, recheckBody)).lastInsertRowid)
       attempt(db, seeded.root, 'attempt-recheck', { kind: 'review', entityId: recheckReviewId, index: 3,
         contentHash: hash(recheckBody), source: merged, sourceId: seeded.draftId,
-        sourceStatus: 'revised', artifactText: recheckArtifactText, recheck: recheckContext, reviewCycleRecheck: recheck })
+        sourceStatus: 'revised', artifactText: recheckArtifactText, recheck: recheckContext, reviewCycleRecheck: recheck,
+        ...(reportVersion === 2 ? { reportVersion } : {}) })
       db.prepare(`UPDATE review_cycles SET revision_status='merge-committed',merged_hash=?,recheck_count=1,recheck_attempt_id=?,finding_set_hash=? WHERE cycle_id='cycle-1'`)
         .run(hash(merged), 'attempt-recheck', findingSetHash)
       db.prepare(`UPDATE review_findings SET span_start=?,span_end=?,excerpt_hash=?,occurrence=1,problem_text=?,expected_text=?,
@@ -368,6 +370,13 @@ describe('M03 review cycle migration', () => {
       db.prepare("UPDATE review_findings SET evidence_hash=? WHERE cycle_id='cycle-1'").run(evidenceHash)
       expect(verifyM03ReviewCycle(db)).toBe(true)
       const originalReceipt = db.prepare("SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id='attempt-recheck'").pluck().get() as string
+      if (reportVersion === 2) {
+        const changed = JSON.parse(originalReceipt)
+        delete changed.reviewRevisionEffect.reportVersion
+        db.prepare("UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id='attempt-recheck'").run(JSON.stringify(changed))
+        expect(verifyM03ReviewCycle(db)).toBe(false)
+        db.prepare("UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id='attempt-recheck'").run(originalReceipt)
+      }
       db.prepare("UPDATE generation_attempts SET usage_receipt_json=json_set(usage_receipt_json,'$.reviewCycleRecheck.mergedHash',?) WHERE attempt_id='attempt-recheck'")
         .run('d'.repeat(64))
       expect(verifyM03ReviewCycle(db)).toBe(false)

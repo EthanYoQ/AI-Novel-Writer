@@ -83,7 +83,7 @@ export class ReviewRevisionGeneration {
         if (receipt?.version === 1 || receipt?.version === 2) persistedVersion = receipt.version
       } catch { /* Invalid persisted receipts fail later proof checks; do not downgrade current policy. */ }
       const policy = { ...context.recheck, version: persistedVersion ?? 2 } as const
-      const built = buildReviewCycleRecheckReport(artifact.text, context.source.content, policy, context.uiLocale)
+      const built = buildReviewCycleRecheckReport(artifact.text, context.source.content, policy, context.uiLocale, reportVersion)
       return JSON.stringify({ summary: built.summary, items: built.items }, null, 2)
     }
     return JSON.stringify(buildReviewGenerationReport({ content: artifact.text, sourceContent: context.source.content,
@@ -96,7 +96,7 @@ export class ReviewRevisionGeneration {
     if (!rows[0]) return undefined
     const effect = JSON.parse(rows[0].usage_receipt_json).reviewRevisionEffect as Effect
     const context = this.context(run), proof = this.proveArtifact(run, effect.artifact)
-    if (effect.reportVersion !== undefined && (effect.reportVersion !== 2 || effect.kind !== 'review' || context.recheck))
+    if (effect.reportVersion !== undefined && (effect.reportVersion !== 2 || effect.kind !== 'review'))
       throw new Error('GENERATION_REVIEW_RECEIPT_INVALID')
     if (proof.row.attempt_id !== rows[0].attempt_id || effect.contextHash !== contextHash(context)
       || effect.kind !== (context.operation === 'review-chapter' ? 'review' : 'revision')) throw new Error('GENERATION_REVIEW_RECEIPT_INVALID')
@@ -204,7 +204,7 @@ export class ReviewRevisionGeneration {
       const result = ReviewRepository.create({ baseDraftId: context.source.id, content, expectedSource: context.source }, this.db)
       const contentHash = textHash(content)
       const receipt = this.record(run, request.artifact, { kind: 'review', id: result.id, index: result.reviewIndex, contentHash,
-        ...(context.recheck ? {} : { reportVersion: 2 }) })
+        reportVersion: 2 })
       if (context.recheck) {
         const policy = { ...context.recheck, version: 2 } as const
         const built = buildReviewCycleRecheckReport(proof.artifact.text, context.source.content, policy, context.uiLocale)

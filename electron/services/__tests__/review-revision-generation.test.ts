@@ -542,7 +542,7 @@ describe('review and revision generation through the actual owner and SQLite', (
     expect(f.db.prepare('SELECT COUNT(*) FROM generation_attempts').pluck().get()).toBe(attemptsBeforeNoOpMerge)
     expect(f.spy).toHaveBeenCalledTimes(dispatchesBeforeNoOpMerge)
   })
-  it('resumes a settled v1 recheck after upgrade and projects model-positive output to unknown', async () => {
+  it.each([1, 2] as const)('resumes a settled semantic v1 recheck and replays wrapped report derivation v%i', async reportVersion => {
     const source = prose + '门闩上的裂纹仍在。'
     const revised = prose + '门闩上的裂纹已用石蜡封住。'
     const targetedReport = JSON.stringify({ summary: '发现门闩事实需要修复。',
@@ -605,8 +605,8 @@ describe('review and revision generation through the actual owner and SQLite', (
     f.owner.bindMaterialDecision(recheckView.handle, materialDecision(recheckPrompt))
     const finding = f.db.prepare('SELECT finding_id,target_id FROM review_findings WHERE cycle_id=? AND target_id IS NOT NULL')
       .get(cycle.cycle_id) as { finding_id: string; target_id: string }
-    recheckOutput = JSON.stringify({ summary: '模型认为已经修复。', items: [{ findingId: finding.finding_id,
-      targetId: finding.target_id, resolved: true, evidenceQuote: '门闩上的裂纹已用石蜡封住', reason: '正文出现新证据。' }] })
+    recheckOutput = `复核说明\n\`\`\`json\n${JSON.stringify({ summary: '模型认为已经修复。', items: [{ findingId: finding.finding_id,
+      targetId: finding.target_id, resolved: true, evidenceQuote: '门闩上的裂纹已用石蜡封住', reason: '正文出现新证据。' }] })}\n\`\`\`\n说明结束`
     const storedBinding = JSON.parse(f.db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?')
       .pluck().get(recheckView.handle.runId) as string)
     storedBinding.sourceManifest.reviewRevisionContext.recheck.version = 1
@@ -630,6 +630,10 @@ describe('review and revision generation through the actual owner and SQLite', (
         artifact: { artifactId: recheckArtifact.artifactId, revision: recheckArtifact.revision, textHash: recheckArtifact.textHash } }
       const savedRecheck = reopened.commitReview(commit)
       expect(savedRecheck.reviewCycle).toMatchObject({ cycleId: cycle.cycle_id, recheckCount: 1, disposition: 'completed' })
+      const parsed = JSON.parse(savedRecheck.content)
+      expect(parsed.summary).toBe('模型认为已经修复。')
+      expect(parsed.items[0]).toMatchObject({ severity: 'unknown', resolved: false,
+        quote: '门闩上的裂纹已用石蜡封住', description: expect.stringContaining('正文出现新证据。') })
       expect(reopened.commitReview(commit)).toEqual(savedRecheck)
       expect(f.db.prepare('SELECT status FROM review_findings').pluck().get()).toBe('unknown')
       expect(f.db.prepare("SELECT json_extract(usage_receipt_json,'$.reviewCycleRecheck.version') FROM generation_attempts WHERE attempt_id=?")
@@ -642,6 +646,43 @@ describe('review and revision generation through the actual owner and SQLite', (
         expectedDraft: { chapterNumber: 1, version: 1, status: 'revised', contentHash: textHash(revised) },
         reviewCycleId: cycle.cycle_id, expectedMergedHash: cycle.merged_hash, authorInputs: [], uiLocale: 'zh-CN' }))
         .toThrow('GENERATION_REVIEW_RECHECK_NOT_REQUIRED')
+      const usage = JSON.parse(f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?')
+        .pluck().get(recheckArtifact.attemptId) as string)
+      expect(usage.reviewRevisionEffect.reportVersion).toBe(2)
+      let expectedSaved = savedRecheck
+      if (reportVersion === 1) {
+        // Historical strict parsing kept this complete wrapped artifact but saved an invalid-output report.
+        const content = JSON.stringify({ summary: '复核输出无效；受影响项目保持待核实。', items: [{
+          category: parsed.items[0].category, severity: 'unknown', findingId: finding.finding_id,
+          targetId: finding.target_id, description: '复核未提供唯一且可验证的新证据。',
+        }] }, null, 2)
+        delete usage.reviewRevisionEffect.reportVersion
+        usage.reviewRevisionEffect.contentHash = textHash(content)
+        f.db.prepare('UPDATE contents SET body=? WHERE id=(SELECT content_id FROM reviews WHERE id=?)').run(content, savedRecheck.id)
+        f.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?')
+          .run(JSON.stringify(usage), recheckArtifact.attemptId)
+        expectedSaved = { ...savedRecheck, content, contentHash: textHash(content) }
+      }
+      reopened.suspendForProjectClose()
+      const again = f.reopenStorage()
+      try {
+        expect(again.readReviewRevisionRecovery(resumed.handle).saved).toEqual(expectedSaved)
+        expect(again.commitReview(commit)).toEqual(expectedSaved)
+        expect(verifyM03ReviewCycle(f.db)).toBe(true)
+        expect(JSON.parse(f.db.prepare('SELECT artifact_json FROM generation_artifacts WHERE artifact_id=?')
+          .pluck().get(recheckArtifact.artifactId) as string).text).toBe(recheckOutput)
+        for (const version of [3, reportVersion === 1 ? 2 : undefined]) {
+          const changed = structuredClone(usage)
+          if (version === undefined) delete changed.reviewRevisionEffect.reportVersion
+          else changed.reviewRevisionEffect.reportVersion = version
+          f.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?')
+            .run(JSON.stringify(changed), recheckArtifact.attemptId)
+          expect(() => again.commitReview(commit)).toThrow('GENERATION_REVIEW_RECEIPT_INVALID')
+          f.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?')
+            .run(JSON.stringify(usage), recheckArtifact.attemptId)
+        }
+        expect(f.spy).toHaveBeenCalledTimes(3)
+      } finally { again.suspendForProjectClose() }
     } finally { reopened.suspendForProjectClose() }
   })
   it('refuses a legacy AI review without an owner effect instead of opening a new budget root', () => {

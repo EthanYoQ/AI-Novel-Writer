@@ -1,6 +1,8 @@
 import { isContentHash, type SourceRef } from './source-ref'
 import { parseChapterGoalReview } from './chapter-goal-review'
 import type { HumanConfirmedReviewSnapshot } from './human-confirmed-review'
+import { extractSingleCompleteJsonObject } from './character-proposal-parser'
+import type { ReviewReportVersion } from './review-generation-report'
 
 export type ReviewFindingStatus = 'unverified' | 'unresolved' | 'unknown' | 'resolved' | 'author-waived'
 export interface ReviewFinding {
@@ -145,11 +147,12 @@ export function classifyFindingEvidenceChange(source: string, merged: string,
   return merged.includes(excerpt) ? 'unchanged' : 'changed'
 }
 
-function parseRecheckItems(content: string): { summary: string; items: ReviewCycleRecheckModelItem[] } | null {
+function parseRecheckItems(content: string, reportVersion: ReviewReportVersion): { summary: string; items: ReviewCycleRecheckModelItem[] } | null {
   try {
     const trimmed = content.trim()
     const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu.exec(trimmed)
-    const parsed = JSON.parse(fenced?.[1]?.trim() ?? trimmed) as Record<string, unknown>
+    const parsed = JSON.parse(reportVersion === 1 ? fenced?.[1]?.trim() ?? trimmed
+      : extractSingleCompleteJsonObject(content, true)) as Record<string, unknown>
     if (!parsed || Array.isArray(parsed) || Object.keys(parsed).some(key => !['summary', 'items'].includes(key))
       || typeof parsed.summary !== 'string' || !parsed.summary.trim() || !Array.isArray(parsed.items)) return null
     const items: ReviewCycleRecheckModelItem[] = []
@@ -168,10 +171,10 @@ function parseRecheckItems(content: string): { summary: string; items: ReviewCyc
   } catch { return null }
 }
 
-/** Canonicalizes valid, missing, duplicate, or malformed model output without ever inventing a green result. */
+/** Preserves saved parsing by reportVersion; context.version independently governs semantic resolution. */
 export function buildReviewCycleRecheckReport(content: string, merged: string,
-  context: ReviewCycleRecheckContext, uiLocale: 'zh-CN' | 'en-US'): ReviewCycleRecheckReport {
-  const parsed = parseRecheckItems(content)
+  context: ReviewCycleRecheckContext, uiLocale: 'zh-CN' | 'en-US', reportVersion: ReviewReportVersion = 2): ReviewCycleRecheckReport {
+  const parsed = parseRecheckItems(content, reportVersion)
   const counts = new Map<string, number>()
   for (const item of parsed?.items ?? []) counts.set(item.findingId, (counts.get(item.findingId) ?? 0) + 1)
   const items: Array<Record<string, unknown>> = []

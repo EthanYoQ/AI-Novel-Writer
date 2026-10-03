@@ -609,8 +609,7 @@ function projectReviewUsage(value: unknown): Record<string, unknown> | null {
     'kind', 'id', 'index', 'contentHash', 'contextHash', 'artifact', 'compositionHash', 'reportVersion',
   ])
   if (effect.kind !== 'review' && effect.kind !== 'revision') fail('PORTABLE_UNSAFE_PROJECTION')
-  if (effect.reportVersion !== undefined && (effect.reportVersion !== 2 || effect.kind !== 'review'
-    || usage.reviewCycleRecheck !== undefined)) fail('PORTABLE_UNSAFE_PROJECTION')
+  if (effect.reportVersion !== undefined && (effect.reportVersion !== 2 || effect.kind !== 'review')) fail('PORTABLE_UNSAFE_PROJECTION')
   const projected: Record<string, unknown> = {
     artifactIdentity: { artifactId: safeId(identity.artifactId), epoch: safeId(identity.epoch),
       fingerprint: projectReviewFingerprint(identity.fingerprint) },
