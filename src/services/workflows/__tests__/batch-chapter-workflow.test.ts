@@ -213,6 +213,20 @@ describe('batch chapter workflow limits', () => {
 })
 
 describe('batch chapter workflow generation model selection', () => {
+  it.each(['发展', '开篇', '双线交汇', ' 高潮 ', '', '   ', undefined])(
+    'passes stored blueprint role %j unchanged to the draft command', async role => {
+      doubles.invokeWithProjectSession.mockImplementation(async (_session, channel) => {
+        if (channel === 'db:blueprint-get') return { chapterNumber: 1, title: 'Chapter 1', role }
+        if (channel === 'db:draft-get-latest') return null
+        throw new Error(`Unexpected IPC: ${channel}`)
+      })
+      const workflow = createBatchChapterWorkflow({ projectPath, projectSession: projectSession(),
+        startChapterNumber: 1, chapterCount: 1, generationModelId: 'batch-model', completionMode: 'draft_review' })
+      await useWorkflowStore.getState().startWorkflow(workflow)
+      expect(doubles.generateDraftChapterInfos).toEqual([expect.objectContaining({ role: role ?? '发展' })])
+    },
+  )
+
   it('freezes one per-chapter target into the definition and every draft command', async () => {
     const input = {
       projectPath,

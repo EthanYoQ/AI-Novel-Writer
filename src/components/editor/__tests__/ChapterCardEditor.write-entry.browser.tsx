@@ -94,6 +94,7 @@ function installIpc(options: {
         ? { success: false, error: options.saveError }
         : { success: true }
     }
+    if (channel === 'db:blueprint-upsert') return { success: true }
     if (channel === 'fs:list-dir') return []
     throw new Error(`unexpected IPC ${channel}`)
   })
@@ -146,6 +147,39 @@ afterEach(async () => {
 })
 
 describe('ChapterCardEditor writing entry', () => {
+  it.each(['发展', '开篇', '双线交汇', ' 双线交汇 ', ' 高潮 ', '', '   '])(
+    'preserves role %j through selection, blueprint save and writing prefill', async stored => {
+      const invoke = installIpc({ blueprints: [{ ...blueprint(1), role: stored }] })
+      await renderEditor()
+      await vi.waitFor(() => expect(container?.querySelector('select')?.value).toBe(stored.trim() ? stored : ''))
+      expect(container?.querySelector('select')?.selectedOptions[0]?.textContent).toBe(stored.trim() ? stored : '未设定')
+      const buttons = Array.from(container!.querySelectorAll('button'))
+      await act(async () => buttons.find(button => button.textContent?.trim() === '保存')!.click())
+      await vi.waitFor(() => expect(invoke.mock.calls.find(call => call[0] === 'db:blueprint-upsert')?.[1])
+        .toEqual(expect.objectContaining({ role: stored })))
+      await act(async () => buttons.find(button => button.textContent?.trim() === '写作此章')!.click())
+      expect(useLayoutStore.getState().chapterCreationPrefill?.role).toBe(stored)
+    },
+  )
+
+  it('saves and passes the author-selected replacement role', async () => {
+    const invoke = installIpc({ blueprints: [{ ...blueprint(1), role: ' 双线交汇 ' }] })
+    await renderEditor()
+    await vi.waitFor(() => expect(container?.querySelector('select')?.value).toBe(' 双线交汇 '))
+    await act(async () => {
+      const select = container!.querySelector('select')!
+      select.value = '高潮'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.trim() === '保存')!.click())
+    await vi.waitFor(() => expect(invoke.mock.calls.find(call => call[0] === 'db:blueprint-upsert')?.[1])
+      .toEqual(expect.objectContaining({ role: '高潮' })))
+    await act(async () => Array.from(container!.querySelectorAll('button'))
+      .find(button => button.textContent?.trim() === '写作此章')!.click())
+    expect(useLayoutStore.getState().chapterCreationPrefill?.role).toBe('高潮')
+  })
+
   it('propagates blueprint save failure to the exit gate', async () => {
     installIpc({ saveError: '蓝图写入失败' })
     useEditorStore.setState({

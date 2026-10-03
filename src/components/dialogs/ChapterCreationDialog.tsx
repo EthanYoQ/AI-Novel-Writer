@@ -37,15 +37,7 @@ import {
 import type { ModelProfile, ProjectSessionContext } from '../../shared/ipc-channels'
 import ConsistencyPreflightPanel from './ConsistencyPreflightPanel'
 
-const CHAPTER_ROLES = [
-  { value: '开篇', en: 'Opening' },
-  { value: '铺垫', en: 'Setup' },
-  { value: '发展', en: 'Development' },
-  { value: '冲突', en: 'Conflict' },
-  { value: '高潮', en: 'Climax' },
-  { value: '转折', en: 'Turning point' },
-  { value: '收尾', en: 'Resolution' },
-]
+import { chapterRoleOptions, chapterRoleSelectValue } from '../../shared/chapter-role'
 
 interface Props {
   isOpen: boolean
@@ -184,7 +176,7 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
             // 历史记录仅恢复创作参数；章号始终服从不可变定稿事实源。
             setChapterNumber(nextChapterNumber)
             setTitle('') // 标题不继承，让用户自填
-            setRole(last.role || '发展')
+            setRole(last.role ?? '发展')
             setPurpose(last.purpose || '')
             setKeyEvents(last.keyEvents || '')
             setCharacters(last.characters || '')
@@ -219,7 +211,7 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
         // 使用章节蓝图预填数据
         setChapterNumber(Number(prefill.chapterNumber) || 1)
         setTitle(String(prefill.title || ''))
-        setRole(String(prefill.role || '发展'))
+        setRole(String(prefill.role ?? '发展'))
         setPurpose(String(prefill.purpose || ''))
         setKeyEvents(String(prefill.keyEvents || ''))
         setCharacters(String(prefill.characters || ''))
@@ -499,9 +491,9 @@ function ChapterCreationDialogSession({ isOpen, onClose, prefill }: Props) {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label>{text('章节定位', 'Chapter role')}</Label>
-                  <NativeSelect value={role} onChange={(e) => setRole(e.target.value)}>
-                    {CHAPTER_ROLES.map(({ value, en }) => (
-                      <option key={value} value={value}>{text(value, en)}</option>
+                  <NativeSelect value={chapterRoleSelectValue(role)} onChange={(e) => setRole(e.target.value)}>
+                    {chapterRoleOptions(role).map(({ value, labels }) => (
+                      <option key={value} value={value}>{labels ? text(labels.zhCN, labels.enUS) : value}</option>
                     ))}
                   </NativeSelect>
                 </div>

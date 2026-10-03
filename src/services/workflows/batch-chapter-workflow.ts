@@ -83,7 +83,7 @@ function toChapterInfo(
     projectPath,
     chapterNumber: blueprint.chapterNumber,
     title: blueprint.title || `第${blueprint.chapterNumber}章`,
-    role: blueprint.role || '发展',
+    role: blueprint.role ?? '发展',
     purpose: blueprint.purpose || '',
     characters: Array.isArray(blueprint.characters) ? blueprint.characters : [],
     keyEvents: blueprint.keyEvents || '',
