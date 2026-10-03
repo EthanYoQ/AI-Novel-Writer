@@ -1,4 +1,125 @@
 {
+  "historicalR3Native49e1c0adBoundary": {
+    "fromEventCount": 1629,
+    "eventCount": 1641,
+    "rawBytesSha256": "765a88d92f4442c3e4b6c6182e1007d4f064402867acad68bbc611f2f04124f1",
+    "protocolRevision": "s14b-candidate-only-three-rounds-v1",
+    "protocolHash": "44f1e3993fa5c67eb167a487881b58244601aa482af9b7c9ce5214de0eeae0cc",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "49e1c0adc50c779e25324db99fe33cd354f5ac07",
+        "sourceHash": "b9599292b7ca264fa8c1e310f6448c5236b8ed059d062872fa8ecf954ef9fabc",
+        "driverHash": "6ae535853d3081ea7fa696c8fc898137f1caead2c9d70d1f0c0d5b8a291eb779",
+        "parityId": "baab3e649e66e379cd645e8b1e5f2ed9de6176de8d5409b92c0fb026c5f488fa"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:ca334e17-03b5-4106-972a-692f02e3f3f2",
+        "invocationId": "6869a6a8-6bf4-4608-a7a1-d8fb67a9a469",
+        "terminal": "unknown"
+      },
+      {
+        "attemptId": "candidate:a73bbcab-dcbf-4757-90ed-084b5e6d443f",
+        "invocationId": "ed4d076b-aa3f-40d6-8991-ce7df3915cf8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:d5673f95-ef49-497b-ad1f-9e8a2eb84fae",
+        "invocationId": "ed4d076b-aa3f-40d6-8991-ce7df3915cf8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:2eb622ce-57a2-47bb-aba9-6fce41821e22",
+        "invocationId": "ed4d076b-aa3f-40d6-8991-ce7df3915cf8",
+        "terminal": "settle"
+      }
+    ]
+  },
+  "forwardStageModels": {
+    "revision": "candidate-operation-models-v1",
+    "requiredProductSha": "e28bd876bdad317d18e431c6b553a0e69961caea",
+    "scopes": [
+      {
+        "phase": "c16-c18",
+        "milestone": "final"
+      },
+      {
+        "phase": "full",
+        "milestone": "final"
+      },
+      {
+        "phase": "early-budget",
+        "milestone": "post-ui"
+      },
+      {
+        "phase": "early-context",
+        "milestone": "post-ui"
+      },
+      {
+        "phase": "early-review",
+        "milestone": "post-ui"
+      }
+    ],
+    "profiles": {
+      "pro": {
+        "profileId": "33eb8a3a-614d-49be-8b1a-6d6d451d9c6d",
+        "configurationHash": "1ed5734321462414ff067da4d3ba7445825a07344efea774e05cf651b5976ca6",
+        "model": {
+          "id": "33eb8a3a-614d-49be-8b1a-6d6d451d9c6d",
+          "name": "硅基流动",
+          "provider": "openai",
+          "protocol": "openai",
+          "modelName": "deepseek-ai/DeepSeek-V4-Pro",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "temperature": 0,
+          "maxTokens": 16384,
+          "purposes": [
+            "generation",
+            "refinement",
+            "summary"
+          ],
+          "capabilities": {
+            "contextWindowTokens": null,
+            "maxOutputTokens": 16384,
+            "reasoning": false,
+            "structuredOutput": false,
+            "usage": false
+          },
+          "reasoningOverride": "high"
+        }
+      },
+      "qwen": {
+        "profileId": "fa609022-5583-4825-a532-1ef787433626",
+        "configurationHash": "4d75f9769c9d7c56d582c109444c11f96a899be99fe401ad14132d4055e461bb",
+        "model": {
+          "id": "fa609022-5583-4825-a532-1ef787433626",
+          "name": "R3 Qwen native diagnostic",
+          "provider": "openai",
+          "protocol": "openai",
+          "modelName": "Qwen/Qwen3.8-27B",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "temperature": 0,
+          "maxTokens": 16384,
+          "purposes": [
+            "generation",
+            "refinement",
+            "summary"
+          ],
+          "reasoningOverride": "medium"
+        }
+      }
+    },
+    "operationKinds": {
+      "directory": "pro",
+      "draft": "pro",
+      "chapter_notes": "pro",
+      "character_cards": "pro",
+      "review": "qwen",
+      "refine": "qwen",
+      "final-review": "qwen"
+    }
+  },
   "schemaVersion": 2,
   "id": "novel-quality-program-v3-80-v1",
   "decisionRevision": "s14b-candidate-only-three-rounds-v1",

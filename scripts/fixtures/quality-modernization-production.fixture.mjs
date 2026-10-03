@@ -11,6 +11,7 @@ import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, 
   createOutboundPreflightAssert, assertForwardReasoning, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
   fetchProviderResponse, measurePromptBytes, qualificationBridgeWindows, streamEventStructure,
   POST_UI_REVIEW_POLICY, reviewedDraftSelection, R3_NATIVE_REVISION_DIAGNOSTIC, r3ModelForOperation, modelConfigurationHash, readR3NativeSource, BOUNDED_REVISION_DIAGNOSTIC,
+  QUALIFICATION_STAGE_MODELS, qualificationModelForOperation,
   AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, aiReviewFinalManuscriptSelection, productionScenario, loadBaselineReviewContract,
   readBoundedRevisionSource, assertBoundedRevisionSource, boundedRevisionItems,
   scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder,
@@ -237,6 +238,9 @@ test('isolated production commands persist the selected phase operations', async
   const registeredForward = forwardReasoningFor(json(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')),
     request.phase, request.milestone)
   assert.deepEqual(request.forwardReasoning ?? null, registeredForward, 'FORWARD_REGISTRATION_MISMATCH')
+  const stageProfiles = registeredForward?.stageModels?.profiles
+  const modelForOperation = operationId => r3Run ? r3ModelForOperation(operationId)
+    : qualificationModelForOperation(request.phase, request.milestone, operationId)
   const registeredWindow = forwardQualificationWindowFor(json(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')),
     request.phase, request.milestone)
   assert.deepEqual(request.forwardQualificationWindow ?? null, registeredWindow, 'FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH')
@@ -303,7 +307,7 @@ test('isolated production commands persist the selected phase operations', async
   let davFetch = null
   globalThis.fetch = async (...args) => davFetch ? davFetch(...args) : rejectOutsidePhysicalBoundary(receipt)
   let database, projectAccess, currentContext, sourceParity, countUnits, recoveryRows, localDispatchGateRejection
-  let secret = null
+  let secrets = []
   const safeDiagnostic = value => safeReceiptDiagnostic(value, request.mode)
   const streamSettlements = []
   try {
@@ -410,28 +414,31 @@ test('isolated production commands persist the selected phase operations', async
       apiKey: 'synthetic-quality-never-network', baseUrl: `https://${effectiveModelParameters.endpointHost}/v1`, purposes: ['generation'] }
     delete model.parameterStatus
     if (request.forwardReasoning || diagnosticRun) model.reasoningOverride = diagnosticRun ? diagnosticRegistration.model.reasoningOverride : request.forwardReasoning.reasoningOverride
-    let r3Models = null
-    if (r3Run) {
-      assert.deepEqual(target.r3StageProfiles, copiedPolicy.profiles, 'R3_NATIVE_MODEL_MISMATCH')
+    let stageModels = null
+    if (r3Run || stageProfiles) {
+      const profiles = stageProfiles ?? copiedPolicy.profiles
+      assert.deepEqual(stageProfiles ? target.stageModels : target.r3StageProfiles,
+        stageProfiles ? QUALIFICATION_STAGE_MODELS : copiedPolicy.profiles, 'REGISTERED_STAGE_MODEL_MISMATCH')
       const configured = request.mode === 'real' ? json(path.join(target.roots.config, 'models.json'))
-        : Object.values(copiedPolicy.profiles).map(profile => ({ ...profile.model, apiKey: 'synthetic-quality-never-network' }))
-      r3Models = Object.fromEntries(Object.entries(copiedPolicy.profiles).map(([key, profile]) => {
+        : Object.values(profiles).map(profile => ({ ...profile.model, apiKey: 'synthetic-quality-never-network' }))
+      stageModels = Object.fromEntries(Object.values(profiles).map(profile => {
         const selected = configured.find(value => value.id === profile.profileId)
         assert.ok(selected?.apiKey && modelConfigurationHash(selected) === profile.configurationHash, 'R3_NATIVE_MODEL_MISMATCH')
-        return [key, selected]
+        return [profile.profileId, selected]
       }))
-      model = r3Models[copiedPolicy.operationProfiles[copiedPolicy.operations[0].id]]
+      model = stageModels[modelForOperation(r3Run ? copiedPolicy.operations[0].id : undefined).profileId]
+      secrets = Object.values(stageModels).map(value => value.apiKey).filter(Boolean)
     }
     if (request.mode === 'real') {
       if (request.development || !target.modelId) throw new Error('FROZEN_SAFE_MODEL_REQUIRED')
       model = json(path.join(target.roots.config, 'models.json')).find(value => value.id === target.modelId)
       if (!model || typeof model.apiKey !== 'string' || !model.apiKey) throw new Error('SAFE_MODEL_UNAVAILABLE')
-      secret = model.apiKey
+      if (!secrets.includes(model.apiKey)) secrets.push(model.apiKey)
       for (const key of ['provider', 'protocol', 'modelName', 'temperature', 'maxTokens']) assert.equal(model[key], effectiveModelParameters[key], 'MODEL_PARAMETER_MISMATCH')
       assert.equal(new URL(model.baseUrl).host, effectiveModelParameters.endpointHost)
     } else if (request.mode !== 'synthetic') throw new Error('INVALID_PROVIDER_MODE')
     if (request.action === 'prepare' && request.mode === 'synthetic') {
-      save(path.join(target.roots.config, 'models.json'), r3Models ? Object.values(r3Models) : [model])
+      save(path.join(target.roots.config, 'models.json'), stageModels ? Object.values(stageModels) : [model])
       save(path.join(target.roots.config, 'config.json'), { theme: 'dark', locale: 'zh-CN' })
     }
     const llm = (await load('electron/controllers/llm-controller.ts')).registerLLMController()
@@ -714,7 +721,7 @@ test('isolated production commands persist the selected phase operations', async
     const authorBlueprints = db.prepare('SELECT chapter_number,title,role,purpose,key_events,characters,user_guidance FROM blueprints WHERE chapter_number>1 ORDER BY chapter_number').all()
     const skillBindings = await (await load('src/services/agent/writing-skill-bindings.ts')).loadWritingSkillBindings(session)
     assert.deepEqual(skillBindings.bindings, {}, 'UNREGISTERED_WRITING_SKILL')
-    sourceParity = { core, authorBlueprints, model: safeModel, ...(r3Run ? { stageProfiles: copiedPolicy.profiles } : {}), templates: physicalTemplates, skills: skillBindings.bindings,
+    sourceParity = { core, authorBlueprints, model: safeModel, ...(r3Run || stageProfiles ? { stageProfiles: stageProfiles ?? copiedPolicy.profiles } : {}), templates: physicalTemplates, skills: skillBindings.bindings,
       predecessors: parityPredecessors(predecessorReadbacks),
       semanticHash: sha(source), guidanceHash: sha(source.template) }
     if (fullRun) {
@@ -953,8 +960,8 @@ test('isolated production commands persist the selected phase operations', async
         const run = db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').get(actual.runId)
         const manifest = JSON.parse(run.binding_json).sourceManifest
         materialDecision = manifest?.materialDecision ?? null
-        if (r3Run) {
-          const profile = r3ModelForOperation(operationId)
+        if (r3Run || stageProfiles) {
+          const profile = modelForOperation(operationId)
           const configured = json(path.join(target.roots.config, 'models.json')).find(value => value.id === profile.profileId)
           preflight(modelConfigurationHash(configured) === profile.configurationHash, 'R3_NATIVE_MODEL_CONFIGURATION_DRIFT')
           const expected = (await load('electron/services/model-execution-lease.ts')).createModelExecutionLeaseReceipt(configured,
@@ -1146,7 +1153,7 @@ test('isolated production commands persist the selected phase operations', async
         ...(separatedRun ? { diagnosticId: request.diagnosticId, diagnosticInputHash: request.diagnosticInputHash,
           ...Object.fromEntries(['sourceId', 'role', 'originalInvocationId', 'originalTestedSha', 'contentSha256', 'contextHash', 'materialsSha256', 'messagesSha256']
             .map(key => [key, diagnosticSlot[key]])) } : {}),
-        ...(r3Run ? { stageModel: { profileId: r3ModelForOperation(operationId).profileId, configurationHash: r3ModelForOperation(operationId).configurationHash } } : {}),
+        ...(r3Run || stageProfiles ? { stageModel: { profileId: modelForOperation(operationId).profileId, configurationHash: modelForOperation(operationId).configurationHash } } : {}),
         ...(copiedRun ? { diagnosticSourceHash: sha(copiedPolicy.source), diagnosticInputHash: boundedSource.inputHash } : {}),
         ...(aiReviewRun ? { evaluationPolicyHash: sha(request.evaluationPolicy) } : {}),
         ...(actual ? { actual } : { baselineIpc: observedIpc }) }
@@ -1445,9 +1452,9 @@ test('isolated production commands persist the selected phase operations', async
     for (const operation of request.operations) {
       operationKind = operation.kind
       operationId = operation.id
-      if (r3Run) {
-        const profile = r3ModelForOperation(operationId)
-        model = r3Models[copiedPolicy.operationProfiles[operationId]]
+      if (r3Run || stageProfiles) {
+        const profile = modelForOperation(operationId)
+        model = stageModels[profile.profileId]
         actualModel = (await invoke('llm:list-models')).find(value => value.id === profile.profileId)
         assertForwardReasoning(request.forwardReasoning, { arm: target.arm, phase: request.phase, milestone: request.milestone,
           caseId: request.caseId, operationId, model: actualModel, creativeStrategy: actualCreativeStrategy })
@@ -1941,7 +1948,7 @@ test('isolated production commands persist the selected phase operations', async
       requestBodyBytes: attempt.requestBodyBytes }))
     receipt.composedPromptBytes = receipt.attempts.reduce((sum, attempt) => sum + (attempt.composedPromptBytes ?? 0), 0)
     const serialized = JSON.stringify(receipt, null, 2) + '\n'
-    const receiptBytes = secret ? serialized.split(secret).join('[REDACTED]') : serialized
+    const receiptBytes = secrets.reduce((text, secret) => text.split(secret).join('[REDACTED]'), serialized)
     fs.writeFileSync(request.receiptPath, receiptBytes)
     if (recoveryRows) projectRecoveryCandidateSupplement({ request, requestBytes, receipt: JSON.parse(receiptBytes), receiptBytes,
       ledgerBytes: fs.readFileSync(request.ledgerPath, 'utf8'), recoveryRows, targetUnits: chapter.targetUnits,

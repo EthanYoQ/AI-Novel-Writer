@@ -3,11 +3,74 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { productionScenario, fullExecutionSchedule, runProductionPhasePair, executionRecordIdentity } from '../quality-modernization-driver.mjs'
-import { ROOT, validatePair, candidateBatchSlots, assertCandidateSlotAvailable, aggregateCandidateJudgments, selectPhase, hash, adjudicateCandidateBatch } from '../quality-modernization-run.mjs'
+import { productionScenario, fullExecutionSchedule, runProductionPhasePair, executionRecordIdentity,
+  QUALIFICATION_STAGE_MODELS, qualificationModelForOperation, assertForwardReasoning, copyIsolatedRealModelConfig } from '../quality-modernization-driver.mjs'
+import { ROOT, validatePair, candidateBatchSlots, assertCandidateSlotAvailable, aggregateCandidateJudgments, selectPhase, hash, adjudicateCandidateBatch,
+  forwardReasoningFor, forwardQualificationWindowFor } from '../quality-modernization-run.mjs'
 import { targetUnitRange } from '../quality-modernization-receipt.mjs'
+import { buildMainGenerationPlan, MAIN_GENERATION_POLICY } from '../../electron/services/main-generation-plan'
+import { resolveModelExecutionCapabilityEvidence } from '../../electron/services/model-execution-lease'
+import { resolveReasoningPolicy } from '../../src/shared/reasoning-policy'
+import { OpenAIProvider } from '../../electron/llm/openai-provider'
 
 const revision = 's14b-candidate-only-three-rounds-v1'
+
+test('formal operation profiles preserve Pro generation and Qwen review wire without changing windows', () => {
+  const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
+  assert.deepEqual(protocol.forwardStageModels, QUALIFICATION_STAGE_MODELS)
+  const provider = new OpenAIProvider(), messages = [{ role: 'user', content: 'offline parameter preview' }]
+  for (const { phase, milestone } of QUALIFICATION_STAGE_MODELS.scopes) {
+    const scenario = selectPhase(protocol, phase, milestone), registration = forwardReasoningFor(protocol, phase, milestone)
+    assert.equal(forwardQualificationWindowFor(protocol, phase, milestone).revision, 'native-budget-aligned-qualification-window-v5')
+    for (const operation of scenario.operations) {
+      const profile = qualificationModelForOperation(phase, milestone, operation.id)
+      const review = ['review', 'refine', 'final-review'].includes(operation.kind)
+      assert.equal(profile, QUALIFICATION_STAGE_MODELS.profiles[review ? 'qwen' : 'pro'])
+      const model = { ...profile.model, apiKey: 'synthetic-never-network' }
+      const capabilityEvidence = resolveModelExecutionCapabilityEvidence(model)
+      const plan = buildMainGenerationPlan(model, { capabilityEvidence }, { purpose: review ? 'review-chapter' : 'chapter-draft',
+        output: review ? 'structured-data' : 'visible-text', messages, reasoningStage: review ? 'review' : 'general' },
+      { policy: MAIN_GENERATION_POLICY.budget, attempts: [] }, 'auto')
+      const body = provider.buildRequestBody(model, messages, plan.options, true)
+      const resolution = resolveReasoningPolicy({ model, creativeStrategy: 'auto', stage: 'general' })
+      const input = { arm: 'candidate', phase, milestone, caseId: scenario.caseIds[0], operationId: operation.id,
+        model, body, resolution, creativeStrategy: 'auto' }
+      assert.equal(assertForwardReasoning(registration, input).effective, review ? 'medium' : 'high')
+      assert.equal(body.model, profile.model.modelName)
+      assert.equal(body.max_tokens, 16384)
+      assert.equal(body.temperature, 0)
+      assert.equal(body.enable_thinking, true)
+      assert.equal(Object.hasOwn(body, 'reasoning_effort'), !review)
+      assert.equal(body.thinking_budget, review ? 16384 : undefined)
+      if (review) {
+        assert.equal(plan.usagePolicy.canBoundTotalLiability, false)
+        assert.equal(plan.reasoningUpperBoundTokens, 16384)
+        assert.equal(plan.reservedTokens, plan.inputUpperBoundTokens + 16384 + 16384 + MAIN_GENERATION_POLICY.safetyMarginTokens)
+      }
+      assert.throws(() => assertForwardReasoning(registration, { ...input,
+        model: QUALIFICATION_STAGE_MODELS.profiles[review ? 'pro' : 'qwen'].model }), /CONFIGURATION_DRIFT/)
+      if (review) assert.throws(() => assertForwardReasoning(registration, { ...input,
+        body: { ...body, reasoning_effort: 'medium' } }), /WIRE_MISMATCH/)
+    }
+    assert.throws(() => qualificationModelForOperation(phase, milestone, 'unregistered'), /OPERATION_MODEL_MISSING/)
+  }
+  assert.throws(() => forwardReasoningFor({ ...protocol, forwardStageModels: undefined }, 'full', 'final'), /REGISTRATION_MISMATCH/)
+})
+
+test('formal config copying binds both profiles and rejects drift before any request', () => {
+  const root = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/stage-profiles-'))
+  const destination = path.join(root, 'copy'); fs.mkdirSync(destination)
+  const models = Object.values(QUALIFICATION_STAGE_MODELS.profiles).map(profile => ({ ...profile.model, apiKey: 'synthetic-never-network' }))
+  const target = { roots: { config: root }, modelId: models[0].id, stageModels: QUALIFICATION_STAGE_MODELS }
+  try {
+    fs.writeFileSync(path.join(root, 'models.json'), JSON.stringify(models))
+    copyIsolatedRealModelConfig(target, { config: destination }, hash(QUALIFICATION_STAGE_MODELS.profiles))
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(destination, 'models.json'))), models)
+    models[1].reasoningOverride = 'high'
+    fs.writeFileSync(path.join(root, 'models.json'), JSON.stringify(models))
+    assert.throws(() => copyIsolatedRealModelConfig(target, { config: destination }, hash(QUALIFICATION_STAGE_MODELS.profiles)), /CONFIGURATION_DRIFT/)
+  } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
 
 test('candidate qualification freezes and schedules only its own implementation', () => {
   const candidate = { arm: 'candidate', codeSha: 'a'.repeat(40), subjectSha: 'a'.repeat(40),

@@ -87,6 +87,36 @@ export function r3ModelForOperation(operationId) {
   return profile
 }
 
+// Forward qualification only. Historical Pro and R3 registrations retain their own identities.
+export const QUALIFICATION_STAGE_MODELS = Object.freeze({
+  revision: 'candidate-operation-models-v1',
+  requiredProductSha: 'e28bd876bdad317d18e431c6b553a0e69961caea',
+  scopes: [{ phase: 'c16-c18', milestone: 'final' }, { phase: 'full', milestone: 'final' },
+    ...['early-budget', 'early-context', 'early-review'].map(phase => ({ phase, milestone: 'post-ui' }))],
+  profiles: {
+    pro: { profileId: '33eb8a3a-614d-49be-8b1a-6d6d451d9c6d',
+      configurationHash: '1ed5734321462414ff067da4d3ba7445825a07344efea774e05cf651b5976ca6',
+      model: { id: '33eb8a3a-614d-49be-8b1a-6d6d451d9c6d', name: '硅基流动', provider: 'openai', protocol: 'openai',
+        modelName: 'deepseek-ai/DeepSeek-V4-Pro', baseUrl: 'https://api.siliconflow.cn/v1', temperature: 0, maxTokens: 16384,
+        purposes: ['generation', 'refinement', 'summary'], capabilities: { contextWindowTokens: null, maxOutputTokens: 16384,
+          reasoning: false, structuredOutput: false, usage: false }, reasoningOverride: 'high' } },
+    qwen: R3_NATIVE_REVISION_DIAGNOSTIC.profiles.qwen,
+  },
+  operationKinds: { directory: 'pro', draft: 'pro', chapter_notes: 'pro', character_cards: 'pro',
+    review: 'qwen', refine: 'qwen', 'final-review': 'qwen' },
+})
+
+export function qualificationModelForOperation(phase, milestone, operationId) {
+  if (!QUALIFICATION_STAGE_MODELS.scopes.some(scope => scope.phase === phase && scope.milestone === milestone))
+    throw new Error('QUALIFICATION_MODEL_SCOPE_MISMATCH')
+  // The initial project/prepare identity remains Pro; each registered command selects its own profile.
+  if (operationId === undefined) return QUALIFICATION_STAGE_MODELS.profiles.pro
+  const kind = productionScenario(phase, milestone, CANDIDATE_ONLY_PROTOCOL_REVISION).operations.find(item => item.id === operationId)?.kind
+  const profile = QUALIFICATION_STAGE_MODELS.profiles[QUALIFICATION_STAGE_MODELS.operationKinds[kind]]
+  if (!profile) throw new Error('QUALIFICATION_OPERATION_MODEL_MISSING')
+  return profile
+}
+
 // Only shape and standard terminal enums; never provider text, IDs or reasoning.
 export function streamEventStructure(event) {
   const type = value => value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value
@@ -741,11 +771,17 @@ export function createOutboundPreflightAssert(failures) {
 
 /** Forward-only experiment: verify the saved preference separately from each arm's natural wire. */
 export function assertForwardReasoning(registration, { arm, phase, milestone, caseId, model, creativeStrategy, resolution, body, operationId }) {
-  if (phase === 'r3-native-revision-diagnostic') {
-    const profile = r3ModelForOperation(operationId ?? R3_NATIVE_REVISION_DIAGNOSTIC.operations[0].id)
+  const staged = registration?.stageModels
+  if (staged && (stableEvidence(staged) !== stableEvidence(QUALIFICATION_STAGE_MODELS)
+    || arm !== 'candidate' || !registration.scopes?.some(scope => scope.phase === phase && scope.milestone === milestone
+      && (!caseId || scope.caseIds.includes(caseId))))) throw new Error('QUALIFICATION_MODEL_SCOPE_MISMATCH')
+  const stageProfile = staged ? qualificationModelForOperation(phase, milestone, operationId) : null
+  if (stageProfile && modelConfigurationHash(model) !== stageProfile.configurationHash) throw new Error('QUALIFICATION_MODEL_CONFIGURATION_DRIFT')
+  if (phase === 'r3-native-revision-diagnostic' || stageProfile?.model.modelName === 'Qwen/Qwen3.8-27B') {
+    const profile = stageProfile ?? r3ModelForOperation(operationId ?? R3_NATIVE_REVISION_DIAGNOSTIC.operations[0].id)
     const expected = profile.model
-    if (arm !== 'candidate' || milestone !== 'diagnostic' || caseId !== 'R3' || creativeStrategy !== 'auto'
-      || registration?.revision !== R3_NATIVE_REVISION_DIAGNOSTIC.scenarioRevision
+    if (arm !== 'candidate' || !staged && (milestone !== 'diagnostic' || caseId !== 'R3'
+      || registration?.revision !== R3_NATIVE_REVISION_DIAGNOSTIC.scenarioRevision) || creativeStrategy !== 'auto'
       || modelConfigurationHash(model) !== profile.configurationHash) throw new Error('R3_NATIVE_MODEL_MISMATCH')
     if (body === undefined) return null
     if (body.model !== expected.modelName || body.temperature !== 0 || (body.max_tokens ?? body.max_completion_tokens) !== 16384
@@ -957,12 +993,12 @@ export function runProductionBridge(request) {
   const result = spawnSync(runtime.executable, argv, { cwd: target.repositoryRoot, env, encoding: 'utf8',
     // Attempt 先由登记的桥内守护收口，再由父进程 spawn、最后 Vitest 兜底。
     timeout: windows.spawnMs, maxBuffer: 4 * 1024 * 1024, windowsHide: true })
-  const secret = request.mode === 'real'
-    ? JSON.parse(fs.readFileSync(path.join(target.roots.config, 'models.json'), 'utf8')).find(model => model.id === target.modelId)?.apiKey : null
-  const redact = value => secret ? String(value ?? '').split(secret).join('[REDACTED]') : String(value ?? '')
+  const secrets = request.mode === 'real'
+    ? JSON.parse(fs.readFileSync(path.join(target.roots.config, 'models.json'), 'utf8')).map(model => model.apiKey).filter(Boolean) : []
+  const redact = value => secrets.reduce((text, secret) => text.split(secret).join('[REDACTED]'), String(value ?? ''))
   fs.writeFileSync(path.join(evidenceRoot, `${request.action}-stdout.log`), redact(result.stdout))
   fs.writeFileSync(path.join(evidenceRoot, `${request.action}-stderr.log`), redact(result.stderr))
-  for (const file of [report, request.receiptPath]) if (secret && fs.existsSync(file)) fs.writeFileSync(file, redact(fs.readFileSync(file, 'utf8')))
+  for (const file of [report, request.receiptPath]) if (secrets.length && fs.existsSync(file)) fs.writeFileSync(file, redact(fs.readFileSync(file, 'utf8')))
   const receipt = fs.existsSync(request.receiptPath) ? JSON.parse(fs.readFileSync(request.receiptPath, 'utf8')) : null
   if (result.status !== 0 || !receipt || !['prepared', 'passed'].includes(receipt.status)) {
     throw Object.assign(new Error('PRODUCTION_BRIDGE_FAILED'), { detail: receipt?.error, receiptPath: request.receiptPath,
@@ -2117,8 +2153,10 @@ export const modelConfigurationHash = model => digest(Object.fromEntries(Object.
 export function copyIsolatedRealModelConfig(original, roots, expectedHash) {
   // Copy only the approved generation profile; a default model would also start an unregistered embedding request.
   const models = JSON.parse(fs.readFileSync(path.join(original.roots.config, 'models.json'), 'utf8'))
-  const profiles = original.r3StageProfiles
+  const profiles = original.stageModels ? Object.values(QUALIFICATION_STAGE_MODELS.profiles) : original.r3StageProfiles
     ? Object.values(R3_NATIVE_REVISION_DIAGNOSTIC.profiles) : [{ profileId: original.modelId, configurationHash: expectedHash }]
+  if (original.stageModels && (stableEvidence(original.stageModels) !== stableEvidence(QUALIFICATION_STAGE_MODELS)
+    || expectedHash && expectedHash !== digest(QUALIFICATION_STAGE_MODELS.profiles))) throw new Error('QUALIFICATION_MODEL_CONFIGURATION_DRIFT')
   if (original.r3StageProfiles && stableEvidence(original.r3StageProfiles) !== stableEvidence(R3_NATIVE_REVISION_DIAGNOSTIC.profiles))
     throw new Error('R3_NATIVE_MODEL_MISMATCH')
   const selected = profiles.map(profile => {
