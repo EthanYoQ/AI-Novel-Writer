@@ -11,10 +11,11 @@ import { generationOutputContract } from '../../../src/shared/generation-owner-c
 import { getProjectDb } from '../../database'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
 import { NarrativeThreadRepository } from '../../repositories/narrative-thread-repository'
-import { textHash } from '../../repositories/generation-run-repository'
+import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
+import { provenGraphOwnEventIds } from '../graph-generation'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
-import type { GraphGenerationInput } from '../../../src/shared/graph-generation'
+import type { GraphGenerationEffect, GraphGenerationInput } from '../../../src/shared/graph-generation'
 
 vi.mock('../../database', async original => ({...await original<typeof import('../../database')>(),getProjectDb:vi.fn()}))
 const Database=createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
@@ -103,6 +104,68 @@ it.each(['unknown','length','bad-json'] as const)('%s保留原文且不修复/�
  const next=f.reopen();await next.executeGraphGeneration({handle})
  expect(next.readGraphGeneration({handle}).result).toBeUndefined()
  expect(f.spy).toHaveBeenCalledTimes(1)
+})
+
+it.each(['plan','event'] as const)('%s合法空数组与非法或部分非法输出分开，重开保留原文且不重发',async kind=>{
+ const valid=kind==='plan'?JSON.parse(planOutput).candidates[0]:{type:'planted',evidence:'铜钥匙',reason:'发现'}
+ const invalid=kind==='plan'?{...valid,authorIntent:'甲'.repeat(1001)}:{...valid,evidence:'不存在的银钥匙'}
+ for(const candidates of [[],undefined,[invalid],[valid,invalid]]) {
+  const output=JSON.stringify(candidates===undefined?{wrong:[]}:{candidates})
+  const f=fixture(async(_r,o)=>{o.onVisible({kind:'delta',text:output});return {finishReason:'stop',usage:null}})
+  const handle=f.begin(kind==='plan'?{kind,chapterNumber:1}:{kind,planId:1,draftId:1}).view.handle
+  await f.owner.executeGraphGeneration({handle})
+  const attemptId=f.db.prepare('SELECT attempt_id FROM generation_attempts').pluck().get() as string
+  const original=new GenerationRunRepository(()=>f.db).receipt(attemptId).artifact!
+  const artifact={artifactId:original.artifactId,revision:original.revision,textHash:original.textHash}
+  const next=f.reopen(),recovery=next.readGraphGeneration({handle})
+  expect(recovery.effects).toEqual([])
+  if(candidates?.length===0) expect(recovery.result).toEqual({kind,candidates:[]})
+  else {
+   expect(recovery.result).toBeUndefined()
+   expect(()=>next.confirmGraphGeneration({handle,artifact,index:0})).toThrow('NARRATIVE_THREAD_CANDIDATES_INVALID')
+  }
+  expect(new GenerationRunRepository(()=>f.db).receipt(attemptId).artifact).toEqual(original)
+  expect(original.text).toBe(output)
+  expect(f.db.prepare('SELECT COUNT(*) FROM narrative_thread_plans').pluck().get()).toBe(1)
+  expect(f.db.prepare('SELECT COUNT(*) FROM narrative_thread_confirmations').pluck().get()).toBe(0)
+  await next.executeGraphGeneration({handle})
+  expect(f.spy).toHaveBeenCalledTimes(1)
+ }
+})
+
+it.each(['plan','event'] as const)('旧%s过滤后的已存index和ACK可重放，原混合结果不能新采用',async kind=>{
+ const candidates=kind==='plan'?JSON.parse(planOutput).candidates:[{type:'planted',evidence:'铜钥匙',reason:'发现'},{type:'progressing',evidence:'钟声',reason:'推进'}]
+ const output=JSON.stringify({candidates:[null,...candidates]})
+ const f=fixture(async(_r,o)=>{o.onVisible({kind:'delta',text:output});return {finishReason:'stop',usage:null}})
+ const opened=f.begin(kind==='plan'?{kind,chapterNumber:1}:{kind,planId:1,draftId:1}),handle=opened.view.handle
+ await f.owner.executeGraphGeneration({handle})
+ const row=f.db.prepare('SELECT attempt_id,usage_receipt_json FROM generation_attempts').get() as {attempt_id:string;usage_receipt_json:string}
+ const original=new GenerationRunRepository(()=>f.db).receipt(row.attempt_id).artifact!
+ const artifact={artifactId:original.artifactId,revision:original.revision,textHash:original.textHash}
+ // Frozen legacy layout: filtering null made the first valid candidate index 0.
+ const saved:GraphGenerationEffect=kind==='plan'
+  ?{success:true,index:0,kind,plan:NarrativeThreadRepository.createPlan(candidates[0],f.db)}
+  :{success:true,index:0,kind,event:NarrativeThreadRepository.confirmEvent({...candidates[0],planId:1,draftId:1},f.db)}
+ const effect={version:1,artifact,index:0,contextHash:textHash(JSON.stringify(opened.context)),receipt:saved,receiptHash:textHash(JSON.stringify(saved))}
+ const usage={...JSON.parse(row.usage_receipt_json),graphEffects:[effect]}
+ const sealed=JSON.stringify(usage)
+ f.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(sealed,row.attempt_id)
+ const next=f.reopen(),before=f.db.prepare('SELECT total_changes()').pluck().get()
+ const recovery=next.readGraphGeneration({handle})
+ expect(recovery.effects).toEqual([saved])
+ expect(recovery.result).toBeUndefined()
+ expect(recovery.sourceStatus).toBe('current')
+ expect(next.confirmGraphGeneration({handle,artifact,index:0})).toEqual(saved)
+ expect(()=>next.confirmGraphGeneration({handle,artifact,index:1})).toThrow('NARRATIVE_THREAD_CANDIDATES_INVALID')
+ if(saved.kind==='event') expect(provenGraphOwnEventIds(f.db,opened.context)).toEqual([saved.event.id])
+ expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(before)
+ expect(f.db.prepare('SELECT usage_receipt_json FROM generation_attempts').pluck().get()).toBe(sealed)
+ expect(new GenerationRunRepository(()=>f.db).receipt(row.attempt_id).artifact).toEqual(original)
+ expect(f.spy).toHaveBeenCalledTimes(1)
+ // A self-consistent receipt hash cannot move a saved effect to another candidate.
+ effect.index=1;effect.receipt={...saved,index:1};effect.receiptHash=textHash(JSON.stringify(effect.receipt))
+ f.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify(usage),row.attempt_id)
+ expect(()=>next.readGraphGeneration({handle})).toThrow('GENERATION_GRAPH_EFFECT_INVALID')
 })
 
 it('来源变化与伪artifact拒绝采用，写入失败回滚effect和计划',async()=>{

@@ -51,9 +51,16 @@ function record(value: unknown): Record<string, unknown> | null {
 const MAX_PLAN_CANDIDATES = 8
 const MAX_EVENT_CANDIDATES = 5
 
-function candidatesFromJson(content: string, limit: number): unknown[] {
+function invalidCandidates(legacyStoredEffect: boolean): [] {
+  if (!legacyStoredEffect) throw new Error('NARRATIVE_THREAD_CANDIDATES_INVALID')
+  return []
+}
+
+function candidatesFromJson(content: string, limit: number, legacyStoredEffect: boolean): unknown[] {
   const parsed = record(JSON.parse(content.trim()))
-  return Array.isArray(parsed?.candidates) ? parsed.candidates.slice(0, limit) : []
+  if (!Array.isArray(parsed?.candidates)) return invalidCandidates(legacyStoredEffect)
+  if (!legacyStoredEffect && parsed.candidates.length > limit) return invalidCandidates(false)
+  return parsed.candidates.slice(0, limit)
 }
 
 function boundedText(value: unknown, maxLength: number): string | null {
@@ -65,10 +72,12 @@ function boundedText(value: unknown, maxLength: number): string | null {
 export function parseNarrativeThreadPlanCandidates(
   content: string,
   totalChapters: number,
+  /** Only for proving already stored graph effects with their original filtered indices. */
+  legacyStoredEffect = false,
 ): NarrativeThreadPlanCandidate[] {
-  return candidatesFromJson(content, MAX_PLAN_CANDIDATES).flatMap((candidate) => {
+  return candidatesFromJson(content, MAX_PLAN_CANDIDATES, legacyStoredEffect).flatMap((candidate) => {
     const value = record(candidate)
-    if (!value) return []
+    if (!value) return invalidCandidates(legacyStoredEffect)
     const title = boundedText(value.title, 120)
     const type = boundedText(value.type, 60)
     const authorIntent = boundedText(value.authorIntent, 1000)
@@ -79,7 +88,7 @@ export function parseNarrativeThreadPlanCandidates(
       || (targetStartChapter as number) > totalChapters
       || !Number.isSafeInteger(targetEndChapter) || (targetEndChapter as number) < (targetStartChapter as number)
       || (targetEndChapter as number) > totalChapters) {
-      return []
+      return invalidCandidates(legacyStoredEffect)
     }
     return [{
       title,
@@ -94,14 +103,17 @@ export function parseNarrativeThreadPlanCandidates(
 export function parseNarrativeThreadEventCandidates(
   content: string,
   finalizedContent: string,
+  /** Only for proving already stored graph effects with their original filtered indices. */
+  legacyStoredEffect = false,
 ): NarrativeThreadEventCandidate[] {
   const normalizedSource = finalizedContent.replace(/\s+/gu, '')
-  return candidatesFromJson(content, MAX_EVENT_CANDIDATES).flatMap((candidate) => {
+  return candidatesFromJson(content, MAX_EVENT_CANDIDATES, legacyStoredEffect).flatMap((candidate) => {
     const value = record(candidate)
-    if (!value || !['planted', 'progressing', 'resolved', 'abandoned'].includes(String(value.type))) return []
+    if (!value || !legacyStoredEffect && typeof value.type !== 'string'
+      || !['planted', 'progressing', 'resolved', 'abandoned'].includes(String(value.type))) return invalidCandidates(legacyStoredEffect)
     const evidence = boundedText(value.evidence, 240)
     const reason = boundedText(value.reason, 500)
-    if (!evidence || !reason || !normalizedSource.includes(evidence.replace(/\s+/gu, ''))) return []
+    if (!evidence || !reason || !normalizedSource.includes(evidence.replace(/\s+/gu, ''))) return invalidCandidates(legacyStoredEffect)
     return [{ type: value.type as NarrativeThreadEventType, evidence, reason }]
   })
 }

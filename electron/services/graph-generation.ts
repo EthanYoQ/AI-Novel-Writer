@@ -11,14 +11,14 @@ import { PlotTreeRepository } from '../repositories/plot-tree-repository'
 import { NarrativeThreadRepository } from '../repositories/narrative-thread-repository'
 
 interface StoredGraphEffect { version: 1; artifact: GraphGenerationArtifact; index: number; contextHash: string; receipt: GraphGenerationEffect; receiptHash: string }
-export function deriveGraphGenerationResult(context: GraphGenerationContext, text: string): GraphGenerationResult {
+export function deriveGraphGenerationResult(context: GraphGenerationContext, text: string, legacyStoredEffect = false): GraphGenerationResult {
   if (context.kind === 'plot') {
     const result = derivePlotTreeSnapshot(text, context.sources, context.createdAt)
     return { kind: 'plot', snapshot: result.snapshot, derivation: result.kind }
   }
   return context.kind === 'plan'
-    ? { kind: 'plan', candidates: parseNarrativeThreadPlanCandidates(text, context.totalChapters) }
-    : { kind: 'event', candidates: parseNarrativeThreadEventCandidates(text, context.content) }
+    ? { kind: 'plan', candidates: parseNarrativeThreadPlanCandidates(text, context.totalChapters, legacyStoredEffect) }
+    : { kind: 'event', candidates: parseNarrativeThreadEventCandidates(text, context.content, legacyStoredEffect) }
 }
 export class GraphGeneration {
   constructor(private readonly db: Database.Database, private readonly runs: GenerationRunRepository, private readonly projectId: string) {}
@@ -35,7 +35,7 @@ export class GraphGeneration {
     if (!task || textHash(JSON.stringify(task)) !== run.binding.sourceManifest.graphGenerationTaskHash) throw new Error('GENERATION_GRAPH_TASK_INVALID')
     return structuredClone(task)
   }
-  private proof(run: DurableGenerationRun, reference: GraphGenerationArtifact) {
+  private proof(run: DurableGenerationRun, reference: GraphGenerationArtifact, legacyStoredEffect = false) {
     if (!reference || Object.keys(reference).some(key => !['artifactId', 'revision', 'textHash'].includes(key))) throw new Error('GENERATION_GRAPH_ARTIFACT_INVALID')
     const row = this.db.prepare('SELECT run_id,attempt_id,status FROM generation_artifacts WHERE artifact_id=?').get(reference.artifactId) as { run_id: string; attempt_id: string; status: string } | undefined
     if (!row || row.run_id !== run.runId || row.status === 'discarded') throw new Error('GENERATION_GRAPH_ARTIFACT_INVALID')
@@ -43,7 +43,7 @@ export class GraphGeneration {
     if (!artifact || artifact.revision !== reference.revision || artifact.textHash !== reference.textHash || textHash(artifact.text) !== reference.textHash || !artifact.text.trim()
       || receipt.failureCode || !['settled', 'unknown'].includes(receipt.attempt.status) || receipt.result?.finishReason !== 'stop') throw new Error('GENERATION_GRAPH_ARTIFACT_INVALID')
     const context = readGraphGenerationContext(run)
-    return { attemptId: row.attempt_id, artifact, context, result: deriveGraphGenerationResult(context, artifact.text) }
+    return { attemptId: row.attempt_id, artifact, context, result: deriveGraphGenerationResult(context, artifact.text, legacyStoredEffect) }
   }
   private assertEffectPayload(context: GraphGenerationContext, result: GraphGenerationResult, effect: GraphGenerationEffect) {
     if (effect.success !== true || effect.kind !== result.kind || !Number.isSafeInteger(effect.index) || effect.index < 0) throw new Error('GENERATION_GRAPH_EFFECT_INVALID')
@@ -69,7 +69,8 @@ export class GraphGeneration {
       if (saved === undefined) continue
       if (!Array.isArray(saved) || saved.length > 8) throw new Error('GENERATION_GRAPH_EFFECT_INVALID')
       for (const effect of saved) {
-        const proof = this.proof(run, effect.artifact)
+        // Saved indices used the original filtering projection; new adoption never uses it.
+        const proof = this.proof(run, effect.artifact, true)
         if (effect.version !== 1 || proof.attemptId !== row.attempt_id || effect.contextHash !== textHash(JSON.stringify(context))
           || effect.index !== effect.receipt?.index || textHash(JSON.stringify(effect.receipt)) !== effect.receiptHash || effects.some(item => item.index === effect.index)) throw new Error('GENERATION_GRAPH_EFFECT_INVALID')
         this.assertEffectPayload(context, proof.result, effect.receipt)
@@ -98,13 +99,14 @@ export class GraphGeneration {
   }
   confirm(handle: MainGenerationRunHandle, reference: GraphGenerationArtifact, index: number, assertSources: (run: DurableGenerationRun) => void): GraphGenerationEffect {
     return this.db.transaction(() => {
-      const run = this.require(handle), proof = this.proof(run, reference)
+      const run = this.require(handle)
       if (!Number.isSafeInteger(index) || index < 0) throw new Error('GENERATION_GRAPH_SELECTION_INVALID')
       const saved = this.storedEffects(run).find(item => item.index === index)
       if (saved) {
         if (!isDeepStrictEqual(saved.artifact, reference)) throw new Error('GENERATION_GRAPH_EFFECT_CONFLICT')
         return structuredClone(saved.receipt)
       }
+      const proof = this.proof(run, reference)
       assertSources(run)
       let receipt: GraphGenerationEffect
       if (proof.result.kind === 'plot' && proof.context.kind === 'plot') {

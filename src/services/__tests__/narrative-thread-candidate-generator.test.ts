@@ -111,7 +111,7 @@ describe('narrative thread AI candidate boundary', () => {
 
   it('accepts up to eight useful foreshadowing plan candidates', () => {
     const candidates = parseNarrativeThreadPlanCandidates(JSON.stringify({
-      candidates: Array.from({ length: 9 }, (_, index) => ({
+      candidates: Array.from({ length: 8 }, (_, index) => ({
         title: `线索 ${index + 1}`,
         type: '伏笔',
         targetStartChapter: 1,
@@ -147,32 +147,49 @@ describe('narrative thread AI candidate boundary', () => {
     expect(candidates[0]).not.toHaveProperty('evidence')
   })
 
-  it('filters plan candidates outside the frozen project chapter range', () => {
-    const candidates = parseNarrativeThreadPlanCandidates(JSON.stringify({
+  it('rejects the whole result when a plan is outside the frozen chapter range', () => {
+    expect(() => parseNarrativeThreadPlanCandidates(JSON.stringify({
       candidates: [
         { title: '校庆直播', type: '主线', targetStartChapter: 2, targetEndChapter: 4, authorIntent: '第四章回收。' },
         { title: '毕业后重逢', type: '伏笔', targetStartChapter: 2, targetEndChapter: 18, authorIntent: '远期回收。' },
       ],
-    }), 4)
-
-    expect(candidates.map(candidate => candidate.title)).toEqual(['校庆直播'])
+    }), 4)).toThrow('NARRATIVE_THREAD_CANDIDATES_INVALID')
   })
 
-  it('accepts only bounded event candidates whose short evidence appears in the frozen finalized text', () => {
+  it('rejects the whole result when an event has invalid evidence or type', () => {
     const finalized = '林岚推开旧仓库的门，发现门框上有三道平行刻痕。她没有声张。'
-    const candidates = parseNarrativeThreadEventCandidates(JSON.stringify({
+    expect(() => parseNarrativeThreadEventCandidates(JSON.stringify({
       candidates: [
         { type: 'planted', evidence: '门框上有三道平行刻痕', reason: '第一章完成埋设。' },
         { type: 'resolved', evidence: '正文中不存在的银钥匙', reason: '不能确认。' },
         { type: 'planned', evidence: '她没有声张', reason: '非法事件类型。' },
       ],
-    }), finalized)
+    }), finalized)).toThrow('NARRATIVE_THREAD_CANDIDATES_INVALID')
+  })
 
-    expect(candidates).toEqual([{
-      type: 'planted',
-      evidence: '门框上有三道平行刻痕',
-      reason: '第一章完成埋设。',
-    }])
+  it.each(['plan', 'event'] as const)('distinguishes a valid empty %s list from an invalid envelope', kind => {
+    const parse = (content: string) => kind === 'plan'
+      ? parseNarrativeThreadPlanCandidates(content, 4)
+      : parseNarrativeThreadEventCandidates(content, '铜钥匙')
+    expect(parse('{"candidates":[]}')).toEqual([])
+    for (const content of ['{}', '[]', '{"candidates":null}', '{"candidates":[null]}']) {
+      expect(() => parse(content)).toThrow('NARRATIVE_THREAD_CANDIDATES_INVALID')
+    }
+  })
+
+  it.each(['plan', 'event'] as const)('rejects overlong and excess %s candidates instead of silently dropping them', kind => {
+    const valid = kind === 'plan'
+      ? { title: '铜钥匙', type: '伏笔', targetStartChapter: 1, targetEndChapter: 3, authorIntent: '打开北塔' }
+      : { type: 'planted', evidence: '铜钥匙', reason: '发现钥匙' }
+    const invalid = kind === 'plan' ? { ...valid, authorIntent: '甲'.repeat(1001) } : { ...valid, reason: '甲'.repeat(501) }
+    const parse = (candidates: unknown[]) => kind === 'plan'
+      ? parseNarrativeThreadPlanCandidates(JSON.stringify({ candidates }), 4)
+      : parseNarrativeThreadEventCandidates(JSON.stringify({ candidates }), '铜钥匙')
+    expect(parse([valid])).toEqual([valid])
+    for (const candidates of [[invalid], [valid, invalid], Array.from({ length: kind === 'plan' ? 9 : 6 }, () => valid)]) {
+      expect(() => parse(candidates)).toThrow('NARRATIVE_THREAD_CANDIDATES_INVALID')
+    }
+    expect(() => parse([{ ...valid, type: ['planted'] }])).toThrow('NARRATIVE_THREAD_CANDIDATES_INVALID')
   })
 
   it('freezes the user-selected model into one existing generation runtime request', async () => {
