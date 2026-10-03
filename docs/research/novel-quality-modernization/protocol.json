@@ -1,4 +1,276 @@
 {
+  "historicalR3NativeRegistrationC9e7c71e": {
+    "caseId": "R3",
+    "caseIds": [
+      "R3"
+    ],
+    "sceneId": "场景1",
+    "chapterNumber": 2,
+    "milestone": "diagnostic",
+    "arms": [
+      "candidate"
+    ],
+    "nonQualification": true,
+    "scenarioRevision": "r3-native-official-flash-three-runs-v6",
+    "minPhysicalRequests": 3,
+    "maxPhysicalRequests": 8,
+    "model": {
+      "id": "7935a372-b853-4408-9374-9fdb272a78f9",
+      "name": "R3 official DeepSeek Flash native diagnostic",
+      "provider": "deepseek",
+      "protocol": "openai",
+      "modelName": "deepseek-flash",
+      "baseUrl": "https://api.deepseek.com",
+      "temperature": 0,
+      "maxTokens": 16384,
+      "purposes": [
+        "generation",
+        "refinement",
+        "summary"
+      ],
+      "reasoningOverride": "high",
+      "capabilities": {
+        "contextWindowTokens": 1048576,
+        "maxOutputTokens": 393216,
+        "reasoning": true,
+        "structuredOutput": true,
+        "usage": true
+      },
+      "capabilitySources": {
+        "contextWindowTokens": "endpoint",
+        "maxOutputTokens": "endpoint",
+        "reasoning": "manual",
+        "structuredOutput": "manual",
+        "usage": "manual"
+      },
+      "reasoningMapping": {
+        "adapter": "deepseek-v4-thinking",
+        "supportedEfforts": [
+          "off",
+          "low",
+          "high",
+          "max"
+        ],
+        "providerValues": {
+          "off": "disabled",
+          "low": "low",
+          "high": "high",
+          "max": "max"
+        },
+        "requestAliases": {
+          "medium": "high"
+        }
+      }
+    },
+    "source": {
+      "projectId": "efc9b59a-a9f8-4223-8c1c-add48b21d579",
+      "epoch": "86ef0216-7c47-4eed-b51f-3449aef0ca68",
+      "contentSha256": "7f35eabd2fcb65677bc7505c143255ee5aa36f0e664390879604d3091723efd4",
+      "contextSha256": "4cb5a188693d3293afa96f9d99c59c595c37ef48029d1afa1945d1b8a60a2a0b",
+      "exportManifestSha256": "1714681b52c97b16bd4405289184d13b9fab8a9ee8018e9b1176f35667896fb2",
+      "packetManifestSha256": "00517e3921cb6ffa1b6703b029e61c24fccd7cbd7ed1502d5ef8489bbd5e3877",
+      "assets": [
+        {
+          "path": ".ai-novel/project.json",
+          "sha256": "2b5ad3984308abcc3a1c25177c52505f2360d69a2371d5bf82aa9fe0f756436b"
+        },
+        {
+          "path": ".ai-novel/portable-runtime-freeze.json",
+          "sha256": "108071a42d343cf145cd37f0fb2047f84fa8066886694157227ba88eb519de91"
+        }
+      ]
+    },
+    "operations": [
+      {
+        "id": "R3普通首审",
+        "kind": "review"
+      },
+      {
+        "id": "R3一次修稿",
+        "kind": "refine"
+      },
+      {
+        "id": "R3普通末审",
+        "kind": "final-review"
+      }
+    ],
+    "attemptPolicy": {
+      "milestone": "diagnostic",
+      "arms": [
+        "candidate"
+      ],
+      "reviewRebuild": {
+        "operationId": "R3普通首审",
+        "primaryPurpose": "review-chapter",
+        "repairPurpose": "review-chapter-rebuild",
+        "maxRepairAttempts": 1
+      },
+      "finalReviewRebuild": {
+        "operationId": "R3普通末审",
+        "primaryPurpose": "review-chapter",
+        "repairPurpose": "review-chapter-rebuild",
+        "maxRepairAttempts": 1
+      },
+      "refinementRecovery": {
+        "operationId": "R3一次修稿",
+        "purpose": "refine-from-review",
+        "maxAttempts": 4,
+        "trigger": "settled-length-same-confirmation-visible-append-with-progress"
+      }
+    },
+    "evaluationPolicy": {
+      "revision": "ai-review-final-manuscript-v1",
+      "caseIds": [
+        "R3"
+      ],
+      "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+      "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+      "confirmation": "preauthorized-ai-only-persisted-original-items-with-native-findingIds",
+      "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+      "endpoint": "native-merge-then-ordinary-full-review",
+      "automaticCeiling": "pending-independent-oracle-review",
+      "physicalRequests": {
+        "minimum": 3,
+        "maximum": 8,
+        "manuscriptMinimum": 1,
+        "manuscriptMaximum": 8
+      }
+    },
+    "closedInvocations": [
+      "d12c4111-285e-41a7-8bcc-4b7f9afd0681",
+      "5d9f3a04-7111-4151-9323-55ec2d1141a6",
+      "2b5963de-23b3-4e5c-8c16-8997fa021aa0",
+      "6869a6a8-6bf4-4608-a7a1-d8fb67a9a469",
+      "ed4d076b-aa3f-40d6-8991-ce7df3915cf8",
+      "5331273c-d6f5-4019-82ce-15261ee03abb",
+      "352c14db-202f-4158-a295-dd8a68a21227",
+      "f4957c39-0be7-4d42-8492-b8f72fd20b95",
+      "5fc84331-ffc9-4b32-941c-5d11e1178bc5",
+      "9e1d7e92-ba12-48f9-bf57-e469b349bf6a",
+      "abb5c15a-e030-4a12-85d2-4416da1fedff",
+      "f4299c56-60a9-4911-b441-e6909c06abb0"
+    ],
+    "requiredProductSha": "6cf907211208d506b0afe6210128bfcfe5fb9dfd",
+    "profiles": {
+      "flash": {
+        "profileId": "7935a372-b853-4408-9374-9fdb272a78f9",
+        "configurationHash": "0eec6083f152f15548e9acf680803e79365d1d76a4763f2b1c58529451a244df",
+        "model": {
+          "id": "7935a372-b853-4408-9374-9fdb272a78f9",
+          "name": "R3 official DeepSeek Flash native diagnostic",
+          "provider": "deepseek",
+          "protocol": "openai",
+          "modelName": "deepseek-flash",
+          "baseUrl": "https://api.deepseek.com",
+          "temperature": 0,
+          "maxTokens": 16384,
+          "purposes": [
+            "generation",
+            "refinement",
+            "summary"
+          ],
+          "reasoningOverride": "high",
+          "capabilities": {
+            "contextWindowTokens": 1048576,
+            "maxOutputTokens": 393216,
+            "reasoning": true,
+            "structuredOutput": true,
+            "usage": true
+          },
+          "capabilitySources": {
+            "contextWindowTokens": "endpoint",
+            "maxOutputTokens": "endpoint",
+            "reasoning": "manual",
+            "structuredOutput": "manual",
+            "usage": "manual"
+          },
+          "reasoningMapping": {
+            "adapter": "deepseek-v4-thinking",
+            "supportedEfforts": [
+              "off",
+              "low",
+              "high",
+              "max"
+            ],
+            "providerValues": {
+              "off": "disabled",
+              "low": "low",
+              "high": "high",
+              "max": "max"
+            },
+            "requestAliases": {
+              "medium": "high"
+            }
+          }
+        }
+      }
+    },
+    "operationProfiles": {
+      "R3普通首审": "flash",
+      "R3一次修稿": "flash",
+      "R3普通末审": "flash"
+    },
+    "runs": [
+      {
+        "run": 1,
+        "invocationId": "fbbb909d-f2f6-449e-8af1-bbbc82d8bb20"
+      },
+      {
+        "run": 2,
+        "invocationId": "a0ab647c-d914-4734-a704-4522da47807c"
+      },
+      {
+        "run": 3,
+        "invocationId": "12baea73-3050-4f3e-b5a9-b4cae7abc179"
+      }
+    ],
+    "maxTotalPhysicalRequests": 24,
+    "acceptance": {
+      "minimumCompletedLoops": 2,
+      "maximumUnsupportedTimeChanges": 0,
+      "denominator": 3,
+      "automaticCeiling": "pending-independent-oracle-review",
+      "semanticRule": "delivery-plan-section-3-forward-2026-10-03",
+      "unsupportedTime": "forbid-asserted-fact-mandatory-fix-actual-revision-or-trusted-derivation",
+      "unadoptedWrongAlternative": {
+        "allRequired": [
+          "autonomous-correct-localization",
+          "not-author-fact-or-mandatory-fix",
+          "complete-original-evidence-received",
+          "autonomous-rejection-by-revision",
+          "valid-final-manuscript-full-review-save-readback"
+        ],
+        "retain": "first-review-quality-defect",
+        "exclude": "human-edited-opinions-replacement-answer-or-false-finding-closure"
+      },
+      "stop": "when-two-of-three-impossible-remaining-NOT_RUN-no-redraw",
+      "scope": "new-group-only-no-historical-reclassification-or-section-5-waiver",
+      "runtime": "existing-node-product-owner-commands-sqlite-not-electron-ui"
+    }
+  },
+  "historicalR3NativeC9e7c71eBoundary": {
+    "fromEventCount": 1668,
+    "eventCount": 1671,
+    "rawBytesSha256": "0f892dcbd3edd2cc3e107b2459217fdf25146f51a1bc067a1d2ee73249827920",
+    "protocolRevision": "s14b-candidate-only-three-rounds-v1",
+    "protocolHash": "c72a39447627ee13bb0990a08c048727840445ae0f294d3eb515fc54699ab461",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "c9e7c71ea7a03d466d90db5a08c6d2b9cd540d90",
+        "sourceHash": "c99bc64232853d2d650ffca8de935b995bdcb4aebe7db5b9ac38b4a625a178e0",
+        "driverHash": "79d1b08561c68cd85b2d4cf06de99b877593e2b3267b7b594e41397d6db28865",
+        "parityId": "9259e85a80c84e9f51439c023f77224c64a6f67479282ee809fd55ef4e028e02"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:df8720ae-f294-49c0-a9fe-33d8e403304f",
+        "invocationId": "fbbb909d-f2f6-449e-8af1-bbbc82d8bb20",
+        "terminal": "settle"
+      }
+    ],
+    "limits": "Same v6 group: slot 1 remains TECHNICAL_FAIL and spent one request. Original slots 2/3 only; denominator 3, eight per slot and 24 per group remain unchanged. No replay or refund."
+  },
   "historicalR3NativeRegistration11152245": {
     "caseId": "R3",
     "caseIds": [
@@ -1897,13 +2169,15 @@
           "operationId": "R3普通首审",
           "primaryPurpose": "review-chapter",
           "repairPurpose": "review-chapter-rebuild",
-          "maxRepairAttempts": 1
+          "maxRepairAttempts": 1,
+          "maxLengthReplacements": 1
         },
         "finalReviewRebuild": {
           "operationId": "R3普通末审",
           "primaryPurpose": "review-chapter",
           "repairPurpose": "review-chapter-rebuild",
-          "maxRepairAttempts": 1
+          "maxRepairAttempts": 1,
+          "maxLengthReplacements": 1
         },
         "refinementRecovery": {
           "operationId": "R3一次修稿",
@@ -1942,7 +2216,8 @@
         "5fc84331-ffc9-4b32-941c-5d11e1178bc5",
         "9e1d7e92-ba12-48f9-bf57-e469b349bf6a",
         "abb5c15a-e030-4a12-85d2-4416da1fedff",
-        "f4299c56-60a9-4911-b441-e6909c06abb0"
+        "f4299c56-60a9-4911-b441-e6909c06abb0",
+        "fbbb909d-f2f6-449e-8af1-bbbc82d8bb20"
       ],
       "requiredProductSha": "6cf907211208d506b0afe6210128bfcfe5fb9dfd",
       "profiles": {

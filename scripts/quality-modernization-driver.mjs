@@ -64,9 +64,9 @@ export const R3_NATIVE_REVISION_DIAGNOSTIC = Object.freeze({
   "model": {"id":"7935a372-b853-4408-9374-9fdb272a78f9","name":"R3 official DeepSeek Flash native diagnostic","provider":"deepseek","protocol":"openai","modelName":"deepseek-flash","baseUrl":"https://api.deepseek.com","temperature":0,"maxTokens":16384,"purposes":["generation","refinement","summary"],"reasoningOverride":"high","capabilities":{"contextWindowTokens":1048576,"maxOutputTokens":393216,"reasoning":true,"structuredOutput":true,"usage":true},"capabilitySources":{"contextWindowTokens":"endpoint","maxOutputTokens":"endpoint","reasoning":"manual","structuredOutput":"manual","usage":"manual"},"reasoningMapping":{"adapter":"deepseek-v4-thinking","supportedEfforts":["off","low","high","max"],"providerValues":{"off":"disabled","low":"low","high":"high","max":"max"},"requestAliases":{"medium":"high"}}},
   "source": {"projectId":"efc9b59a-a9f8-4223-8c1c-add48b21d579","epoch":"86ef0216-7c47-4eed-b51f-3449aef0ca68","contentSha256":"7f35eabd2fcb65677bc7505c143255ee5aa36f0e664390879604d3091723efd4","contextSha256":"4cb5a188693d3293afa96f9d99c59c595c37ef48029d1afa1945d1b8a60a2a0b","exportManifestSha256":"1714681b52c97b16bd4405289184d13b9fab8a9ee8018e9b1176f35667896fb2","packetManifestSha256":"00517e3921cb6ffa1b6703b029e61c24fccd7cbd7ed1502d5ef8489bbd5e3877","assets":[{"path":".ai-novel/project.json","sha256":"2b5ad3984308abcc3a1c25177c52505f2360d69a2371d5bf82aa9fe0f756436b"},{"path":".ai-novel/portable-runtime-freeze.json","sha256":"108071a42d343cf145cd37f0fb2047f84fa8066886694157227ba88eb519de91"}]},
   "operations": [{"id":"R3普通首审","kind":"review"},{"id":"R3一次修稿","kind":"refine"},{"id":"R3普通末审","kind":"final-review"}],
-  "attemptPolicy": {"milestone":"diagnostic","arms":["candidate"],"reviewRebuild":{"operationId":"R3普通首审","primaryPurpose":"review-chapter","repairPurpose":"review-chapter-rebuild","maxRepairAttempts":1},"finalReviewRebuild":{"operationId":"R3普通末审","primaryPurpose":"review-chapter","repairPurpose":"review-chapter-rebuild","maxRepairAttempts":1},"refinementRecovery":{"operationId":"R3一次修稿","purpose":"refine-from-review","maxAttempts":4,"trigger":"settled-length-same-confirmation-visible-append-with-progress"}},
+  "attemptPolicy": {"milestone":"diagnostic","arms":["candidate"],"reviewRebuild":{"operationId":"R3普通首审","primaryPurpose":"review-chapter","repairPurpose":"review-chapter-rebuild","maxRepairAttempts":1,"maxLengthReplacements":1},"finalReviewRebuild":{"operationId":"R3普通末审","primaryPurpose":"review-chapter","repairPurpose":"review-chapter-rebuild","maxRepairAttempts":1,"maxLengthReplacements":1},"refinementRecovery":{"operationId":"R3一次修稿","purpose":"refine-from-review","maxAttempts":4,"trigger":"settled-length-same-confirmation-visible-append-with-progress"}},
   "evaluationPolicy": {"revision":"ai-review-final-manuscript-v1","caseIds":["R3"],"selection":"formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown","softwareFindings":"separate-frozen-consistency-preflight-provenance","confirmation":"preauthorized-ai-only-persisted-original-items-with-native-findingIds","noAction":"first-draft-endpoint-with-original-raw-and-saved-review","endpoint":"native-merge-then-ordinary-full-review","automaticCeiling":"pending-independent-oracle-review","physicalRequests":{"minimum":3,"maximum":8,"manuscriptMinimum":1,"manuscriptMaximum":8}},
-  "closedInvocations": ["d12c4111-285e-41a7-8bcc-4b7f9afd0681","5d9f3a04-7111-4151-9323-55ec2d1141a6","2b5963de-23b3-4e5c-8c16-8997fa021aa0","6869a6a8-6bf4-4608-a7a1-d8fb67a9a469","ed4d076b-aa3f-40d6-8991-ce7df3915cf8","5331273c-d6f5-4019-82ce-15261ee03abb","352c14db-202f-4158-a295-dd8a68a21227","f4957c39-0be7-4d42-8492-b8f72fd20b95","5fc84331-ffc9-4b32-941c-5d11e1178bc5","9e1d7e92-ba12-48f9-bf57-e469b349bf6a","abb5c15a-e030-4a12-85d2-4416da1fedff","f4299c56-60a9-4911-b441-e6909c06abb0"],
+  "closedInvocations": ["d12c4111-285e-41a7-8bcc-4b7f9afd0681","5d9f3a04-7111-4151-9323-55ec2d1141a6","2b5963de-23b3-4e5c-8c16-8997fa021aa0","6869a6a8-6bf4-4608-a7a1-d8fb67a9a469","ed4d076b-aa3f-40d6-8991-ce7df3915cf8","5331273c-d6f5-4019-82ce-15261ee03abb","352c14db-202f-4158-a295-dd8a68a21227","f4957c39-0be7-4d42-8492-b8f72fd20b95","5fc84331-ffc9-4b32-941c-5d11e1178bc5","9e1d7e92-ba12-48f9-bf57-e469b349bf6a","abb5c15a-e030-4a12-85d2-4416da1fedff","f4299c56-60a9-4911-b441-e6909c06abb0","fbbb909d-f2f6-449e-8af1-bbbc82d8bb20"],
   "requiredProductSha": "6cf907211208d506b0afe6210128bfcfe5fb9dfd",
   "profiles": {"flash":{"profileId":"7935a372-b853-4408-9374-9fdb272a78f9","configurationHash":"0eec6083f152f15548e9acf680803e79365d1d76a4763f2b1c58529451a244df","model":{"id":"7935a372-b853-4408-9374-9fdb272a78f9","name":"R3 official DeepSeek Flash native diagnostic","provider":"deepseek","protocol":"openai","modelName":"deepseek-flash","baseUrl":"https://api.deepseek.com","temperature":0,"maxTokens":16384,"purposes":["generation","refinement","summary"],"reasoningOverride":"high","capabilities":{"contextWindowTokens":1048576,"maxOutputTokens":393216,"reasoning":true,"structuredOutput":true,"usage":true},"capabilitySources":{"contextWindowTokens":"endpoint","maxOutputTokens":"endpoint","reasoning":"manual","structuredOutput":"manual","usage":"manual"},"reasoningMapping":{"adapter":"deepseek-v4-thinking","supportedEfforts":["off","low","high","max"],"providerValues":{"off":"disabled","low":"low","high":"high","max":"max"},"requestAliases":{"medium":"high"}}}}},
   "operationProfiles": {"R3普通首审":"flash","R3一次修稿":"flash","R3普通末审":"flash"},
@@ -1370,6 +1370,15 @@ function verifiedRecoveryOutput(owner, evidence, operationId) {
     || attempt.binding.actual && evidence.ownerArtifactHash !== attempt.visibleTextHash) throw new Error('RECOVERY_SOURCE_HASH_MISMATCH')
   return { output, finishReason: events[2].finishReason }
 }
+// R3 keeps its total eight-call budget; each native review purpose can replace one LENGTH result.
+export function reviewRecoveryAllowed(history, purpose, policy) {
+  if (!history.length) return purpose === policy.primaryPurpose
+  const last = history.at(-1)
+  if (last.finishReason === 'length') return policy.maxLengthReplacements === 1 && purpose === last.purpose
+    && history.filter(item => item.purpose === purpose).length === 1
+  return last.finishReason === 'stop' && last.purpose === policy.primaryPurpose && purpose === policy.repairPurpose
+    && !history.some(item => item.purpose === policy.repairPurpose)
+}
 /**
  * Only a settled, hash-verified parse failure — or, for a registered draft operation, a settled
  * over-length primary draft — may add one physical request. `draftCondense.measureUnits` and
@@ -1382,6 +1391,7 @@ export function createOperationDispatchGate({ onReject, repairPolicy, readPrimar
   const draftAttempts = new Map()
   const structuredAttempts = new Map()
   const refinementAttempts = new Map()
+  const reviewAttempts = new Map()
   const reject = (operationId, reason) => {
     const rejection = Object.freeze({ code: 'UNREGISTERED_ADDITIONAL_MODEL_REQUEST',
       operationId: operationId || null, reason, beforeDispatch: true })
@@ -1476,6 +1486,24 @@ export function createOperationDispatchGate({ onReject, repairPolicy, readPrimar
     const identity = value => value && typeof value.attemptId === 'string' && value.attemptId
       && typeof value.runId === 'string' && value.runId && typeof value.projectId === 'string' && value.projectId
       && typeof value.epoch === 'string' && value.epoch
+    if (review && policyApplies && policy.maxLengthReplacements === 1) {
+      const history = reviewAttempts.get(operationId) ?? []
+      try {
+        if (!identity(owner) || !Number.isSafeInteger(reviewSource?.draftId) || reviewSource.draftId <= 0
+          || !/^[a-f0-9]{64}$/.test(reviewSource.contentHash ?? '')) throw new Error('REVIEW_SOURCE_MISSING')
+        const settled = history.map(previous => {
+          const evidence = readPrimaryEvidence?.(previous)
+          if (!sameRun(previous, owner) || JSON.stringify(previous.reviewSource) !== JSON.stringify(reviewSource)
+            || JSON.stringify(evidence?.attempt?.binding.reviewSource) !== JSON.stringify(reviewSource)
+            || evidence?.reviewReportAbsent !== true) throw new Error('REVIEW_SOURCE_CHANGED')
+          return { purpose: previous.purpose, ...verifiedRecoveryOutput(previous, evidence, operationId) }
+        })
+        if (!reviewRecoveryAllowed(settled, owner.purpose, policy)
+          || settled.at(-1)?.finishReason === 'stop' && !reviewParseFailure(settled.at(-1).output)) throw new Error('REVIEW_RECOVERY_UNREGISTERED')
+        reviewAttempts.set(operationId, [...history, { ...owner, reviewSource }])
+        return
+      } catch { reject(operationId, 'review-recovery-unregistered') }
+    }
     const hasSyntaxProof = () => {
       try { return verifiedPrimarySyntaxFailure(first, readPrimaryEvidence?.(first), operationId,
         cards ? 'cards' : condense ? 'condense' : review ? 'review' : 'directory', condense ? draftCondense : null) }
@@ -2663,7 +2691,10 @@ export function validateAiReviewedManuscript(result) {
     const review = (kind, saved, source) => {
       const operation = result.operations.find(item => item.kind === kind), provenance = operation?.reviewProvenance
       const attempts = result.attempts.filter(item => item.binding.operation === operation?.operation)
-      if (attempts.length < 1 || attempts.length > 2
+      const recoveryPolicy = result.phase === 'r3-native-revision-diagnostic' && !baselineContract
+        ? [R3_NATIVE_REVISION_DIAGNOSTIC.attemptPolicy.reviewRebuild, R3_NATIVE_REVISION_DIAGNOSTIC.attemptPolicy.finalReviewRebuild]
+          .find(item => item.operationId === operation?.operation) : null
+      if (attempts.length < 1 || attempts.length > (recoveryPolicy?.maxLengthReplacements === 1 ? 4 : 2)
         || (attempts[0].binding.actual ?? attempts[0].binding.baselineIpc)?.purpose !== 'review-chapter') throw new Error('AI_REVIEW_ATTEMPT_COUNT_MISMATCH')
       if (baselineContract) {
         const native = operation.baselineReviewProvenance, attempt = attempts.at(-1), owner = attempt.binding.baselineIpc
@@ -2706,7 +2737,35 @@ export function validateAiReviewedManuscript(result) {
         || terminal.artifactId !== artifact.artifactId || terminal.artifactRevision !== artifact.revision
         || terminal.textHash !== attempt.visibleTextHash || artifact.textHash !== attempt.visibleTextHash
         || digest(fs.readFileSync(attempt.outputPath, 'utf8')) !== artifact.textHash) throw new Error('AI_REVIEW_PROVENANCE_MISMATCH')
-      if (attempts.length === 2 && (attempts[0].binding.actual.purpose !== 'review-chapter'
+      if (recoveryPolicy?.maxLengthReplacements === 1) {
+        if (attempt !== attempts.at(-1)) throw new Error('AI_REVIEW_RECOVERY_PROVENANCE_MISMATCH')
+        const history = []
+        for (const item of attempts) {
+          const actual = item.binding.actual
+          if (!reviewRecoveryAllowed(history, actual.purpose, recoveryPolicy)
+            || history.at(-1)?.finishReason === 'stop' && !reviewParseFailure(history.at(-1).output)
+            || ['runId', 'rootActionId', 'projectId', 'epoch', 'modelExecutionLeaseId'].some(key => actual[key] !== attempt.binding.actual[key])
+            || stableEvidence(item.binding.reviewSource) !== stableEvidence(attempt.binding.reviewSource)) throw new Error('AI_REVIEW_REBUILD_NOT_REGISTERED')
+          const raw = fs.readFileSync(item.outputPath, 'utf8')
+          if (item !== attempt) {
+            const prefix = db.prepare(`SELECT a.attempt_json,a.usage_receipt_json,g.artifact_json,r.binding_json,r.root_action_id
+              FROM generation_attempts a JOIN generation_artifacts g ON g.attempt_id=a.attempt_id JOIN generation_runs r ON r.run_id=a.run_id
+              WHERE a.attempt_id=? AND a.run_id=?`).get(actual.attemptId, operation.handle.runId)
+            const observed = result.ownerTerminal.find(value => value.attemptId === actual.attemptId)
+            if (!prefix || !observed) throw new Error('AI_REVIEW_RECOVERY_PROVENANCE_MISMATCH')
+            const priorUsage = JSON.parse(prefix.usage_receipt_json), priorArtifact = JSON.parse(prefix.artifact_json)
+            if (JSON.parse(prefix.attempt_json).status !== 'settled' || observed.status !== 'settled'
+              || !['stop', 'length'].includes(item.finishReason) || priorUsage.result?.finishReason !== item.finishReason
+              || priorUsage.purpose !== actual.purpose || priorUsage.reviewRevisionEffect || observed.reviewRevisionEffect
+              || prefix.binding_json !== row.binding_json || prefix.root_action_id !== row.root_action_id
+              || priorArtifact.artifactId !== observed.artifactId || priorArtifact.revision !== observed.artifactRevision
+              || priorArtifact.text !== raw || priorArtifact.textHash !== digest(raw)
+              || item.visibleTextHash !== priorArtifact.textHash || observed.textHash !== priorArtifact.textHash)
+              throw new Error('AI_REVIEW_RECOVERY_PROVENANCE_MISMATCH')
+          }
+          history.push({ purpose: actual.purpose, finishReason: item.finishReason, output: raw })
+        }
+      } else if (attempts.length === 2 && (attempts[0].binding.actual.purpose !== 'review-chapter'
         || attempt !== attempts[1] || attempt.binding.actual.purpose !== 'review-chapter-rebuild'
         || attempts[0].finishReason !== 'stop' || !reviewParseFailure(fs.readFileSync(attempts[0].outputPath, 'utf8'))))
         throw new Error('AI_REVIEW_REBUILD_NOT_REGISTERED')

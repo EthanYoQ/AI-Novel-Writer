@@ -21,7 +21,7 @@ import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolated
   BRIDGE_SETTLEMENT_DEADLINE_MS, BRIDGE_SPAWN_TIMEOUT_MS, BRIDGE_TEST_TIMEOUT_MS,
   C16_C18_ATTEMPT_POLICY, validateCandidateContinuityResults, runProductionBridge, runProductionPhasePair, summarizeDraftReconciliation,
   continuityCaseOperations, FINALIZED_CHARACTER_OPERATION_IDS, draftCondenseFor, syntheticDraftCondensePlan,
-  BOUNDED_REVISION_DIAGNOSTIC, assertBoundedRevisionSource, AI_REVIEW_FINAL_MANUSCRIPT_POLICY,
+  BOUNDED_REVISION_DIAGNOSTIC, assertBoundedRevisionSource, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, R3_NATIVE_REVISION_DIAGNOSTIC,
   aiReviewFinalManuscriptSelection, validateAiReviewedManuscript, validatePairedReceipt, loadBaselineReviewContract, POST_UI_BUDGET } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, readVerifiedRecoveryCandidateSupplement,
   readVerifiedDirectPersistedDraftEvidence, recordPersistedDraftObservation,
@@ -314,7 +314,7 @@ test('post-UI baseline uses its native review projection, persisted AI-only conf
   } finally { vi.unstubAllGlobals(); nativeDatabase?.closeProjectDatabase(); fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
-test('AI final manuscript native main owner persists keyEvents unknown confirmation, one revision, merge and ordinary final review', async () => {
+test.each([false, true])('AI final manuscript native main owner persists keyEvents unknown confirmation, one revision, merge and ordinary final review (LENGTH replacement=%s)', async (lengthRecovery) => {
   const [{ initializeLegacyBaselineSchema }, { getDesktopMigrationRegistry, CURRENT_DESKTOP_SCHEMA_VERSION }, { SqliteSchemaAdapter },
     { migrateSchema }, { createMainGenerationOwner }, { ModelExecutionLeaseRegistry }, { MAIN_GENERATION_POLICY: policy },
     { buildGenerationSourceBinding, rebuildGenerationSourceBinding }, { generationOutputContract }, { ReviewRepository },
@@ -340,10 +340,10 @@ test('AI final manuscript native main owner persists keyEvents unknown confirmat
       baseUrl: 'https://api.openai.com/v1', temperature: 0, maxTokens: 2048, purposes: ['generation'],
       capabilities: { contextWindowTokens: 32768, maxOutputTokens: 2048, reasoning: false, structuredOutput: true, usage: true } }
     const deps = { db, projectStorageRoot: directory, globalDataRoot: directory, readBuiltinPrompt: () => '冻结合成模板' }
-    let response, calls = 0
+    let response, calls = 0, finishReason = 'stop'
     owner = createMainGenerationOwner({ database: db, projectId: 'project', epoch: 'epoch', assertCurrent: () => {},
       leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model,
-      dispatch: async (_request, options) => { calls++; options.onVisible({ kind: 'delta', text: response }); return { finishReason: 'stop',
+      dispatch: async (_request, options) => { calls++; options.onVisible({ kind: 'delta', text: response }); return { finishReason,
         usage: { promptTokens: 100, completionTokens: 60, reasoningTokens: 0, totalTokens: 160,
           accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true } } },
       buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch: 'epoch',
@@ -361,6 +361,11 @@ test('AI final manuscript native main owner persists keyEvents unknown confirmat
     const first = owner.begin(begin), prompt = '正常审稿'
     const decision = { version: 1, verdict: 'admitted', promptHash: hash(prompt), capacity: { maxInputUnits: 18000, methodVersion: 'utf8-bytes-v1', admittedUnits: 0 }, coverage: { required: 0, included: 0, complete: true }, included: [], omitted: [] }
     owner.bindMaterialDecision(first.handle, decision)
+    if (lengthRecovery) {
+      const complete = response; response = ''; finishReason = 'length'
+      await owner.execute({ handle: first.handle, invocationNonce: 'length', task: { purpose: 'review-chapter', output: 'structured-data', messages: [{ role: 'user', content: prompt }] } })
+      response = complete; finishReason = 'stop'
+    }
     const generated = await owner.execute({ handle: first.handle, invocationNonce: 'first', task: { purpose: 'review-chapter', output: 'structured-data', messages: [{ role: 'user', content: prompt }] } })
     const artifact = generated.run.artifacts.at(-1)
     const saved = owner.commitReview({ contextId: prepared.contextId, handle: first.handle,
@@ -389,7 +394,7 @@ test('AI final manuscript native main owner persists keyEvents unknown confirmat
     const ignored = serializeHumanConfirmedReviewSnapshot({ ...snapshot, items: snapshot.items.map(item => ({ ...item, decision: 'ignore' })) })
     const ignoredRow = ReviewRepository.create({ baseDraftId: 1, content: ignored, expectedSource: sourceDraft }, db)
     assert.throws(() => owner.prepareReviewRevision({ ...refineRequest, reviewSourceId: ignoredRow.id, confirmedReviewContent: ignored }), /CONFIRM|REVIEW/)
-    assert.equal(calls, 1, 'invalid confirmations are rejected before dispatch')
+    assert.equal(calls, 1 + Number(lengthRecovery), 'invalid confirmations are rejected before dispatch')
     const refine = owner.prepareReviewRevision(refineRequest)
     assert.equal(refine.parentRootActionId, first.handle.rootActionId)
     const brief = renderHumanConfirmedReviewBrief(refine.context.confirmation.snapshot, 'zh-CN')
@@ -427,21 +432,30 @@ test('AI final manuscript native main owner persists keyEvents unknown confirmat
       artifact: { artifactId: finalArtifact.artifactId, revision: finalArtifact.revision, textHash: finalArtifact.textHash } })
     assert.equal(ReviewRepository.getFull(finalSaved.id, db).sourceDraft.content, revisedProse)
     assert.equal(ReviewCycleRepository.getByReviewId(saved.id, db).recheckCount, 0, 'ordinary review does not resolve old cycle')
-    assert.equal(calls, 3)
+    assert.equal(calls, 3 + Number(lengthRecovery))
     const save = (name, body, extra = {}) => { const outputPath = path.join(directory, name); fs.writeFileSync(outputPath, body)
       return { ...extra, outputPath, contentHash: hash(body) } }
     const rows = db.prepare(`SELECT a.attempt_id,a.run_id,a.root_action_id,a.attempt_json,a.usage_receipt_json,g.artifact_json
       FROM generation_attempts a JOIN generation_artifacts g ON g.attempt_id=a.attempt_id ORDER BY a.rowid`).all()
     const handles = [first.handle, revisionBegin.handle, finalBegin.handle], kinds = ['review', 'refine', 'final-review']
-    const operations = rows.map((row, index) => ({ operation: kinds[index], kind: kinds[index], handle: handles[index],
-      ...(index !== 1 ? { reviewProvenance: { attemptId: row.attempt_id, effect: JSON.parse(row.usage_receipt_json).reviewRevisionEffect } } : {}) }))
-    const attempts = rows.map((row, index) => ({ ...save(`raw-${index}.txt`, JSON.parse(row.artifact_json).text),
-      visibleTextHash: JSON.parse(row.artifact_json).textHash, finishReason: 'stop', binding: { operation: kinds[index],
-        actual: { attemptId: row.attempt_id, purpose: JSON.parse(row.usage_receipt_json).purpose, ...handles[index] } } }))
+    const operationIds = lengthRecovery ? R3_NATIVE_REVISION_DIAGNOSTIC.operations.map(item => item.id) : kinds
+    const operations = handles.map((handle, index) => {
+      const row = rows.filter(item => item.run_id === handle.runId).at(-1)
+      return { operation: operationIds[index], kind: kinds[index], handle,
+        ...(index !== 1 ? { reviewProvenance: { attemptId: row.attempt_id, effect: JSON.parse(row.usage_receipt_json).reviewRevisionEffect } } : {}) }
+    })
+    const attempts = rows.map((row, index) => {
+      const stage = handles.findIndex(handle => handle.runId === row.run_id)
+      return { ...save('raw-' + index + '.txt', JSON.parse(row.artifact_json).text),
+        visibleTextHash: JSON.parse(row.artifact_json).textHash, finishReason: JSON.parse(row.usage_receipt_json).result.finishReason,
+        binding: { operation: operationIds[stage], actual: { attemptId: row.attempt_id,
+          purpose: JSON.parse(row.usage_receipt_json).purpose, ...handles[stage] } } }
+    })
     const ownerTerminal = rows.map(row => { const artifact = JSON.parse(row.artifact_json), usage = JSON.parse(row.usage_receipt_json)
       return { attemptId: row.attempt_id, status: JSON.parse(row.attempt_json).status, artifactId: artifact.artifactId,
-        artifactRevision: artifact.revision, textHash: artifact.textHash, reviewRevisionEffect: usage.reviewRevisionEffect } })
-    const result = { physicalProject: { projectId: 'project', dbPath }, projectEpoch: 'epoch', operations, attempts, ownerTerminal,
+        artifactRevision: artifact.revision, textHash: artifact.textHash, reviewRevisionEffect: usage.reviewRevisionEffect,
+        finishReason: usage.result.finishReason, purpose: usage.purpose, trustedUsage: true, hasFormalEffect: Boolean(usage.reviewRevisionEffect) } })
+    const result = { ...(lengthRecovery ? { phase: 'r3-native-revision-diagnostic', arm: 'candidate' } : {}), physicalProject: { projectId: 'project', dbPath }, projectEpoch: 'epoch', operations, attempts, ownerTerminal,
       protocolRevision: protocolBinding.protocolRevision, saved: { draftId: 1, chapterNumber: 1, version: 1, contentHash: hash(revisedProse), units: countDraftUnits(revisedProse) },
       draftObservation: { chapterNumber: 1, targetUnits: 900, units: countDraftUnits(revisedProse), contentHash: hash(revisedProse), persisted: true },
       aiReviewedDraft: { initial: save('initial.txt', prose, { draftId: 1, chapterNumber: 1, version: 1, status: 'draft' }),
@@ -454,8 +468,20 @@ test('AI final manuscript native main owner persists keyEvents unknown confirmat
         finalReview: save('final-review.json', finalSaved.content, { reviewId: finalSaved.id }),
         finalDraft: save('final.txt', revisedProse, { draftId: 1, version: 1 }) } }
     assert.equal(validateAiReviewedManuscript(result), null)
-    assert.equal(validateAiReviewedManuscript({ ...result, phase: 'full', saved: { ...result.saved, status: 'revised' } }), null)
-    assert.equal(validateAiReviewedManuscript({ ...result, phase: 'full', saved: { ...result.saved, status: 'draft' } }), 'AI_FINAL_DB_MISMATCH')
+    if (!lengthRecovery) assert.equal(validateAiReviewedManuscript({ ...result, phase: 'full', saved: { ...result.saved, status: 'revised' } }), null)
+    if (!lengthRecovery) assert.equal(validateAiReviewedManuscript({ ...result, phase: 'full', saved: { ...result.saved, status: 'draft' } }), 'AI_FINAL_DB_MISMATCH')
+    if (lengthRecovery) {
+      const terminalStart = fixture.indexOf('      assert.equal(receipt.ownerTerminal.length'),
+        terminalEnd = fixture.indexOf('\n    }\n    if (restorationKind)', terminalStart)
+      new Function('receipt', 'validateAiReviewedManuscript', 'assert', 'sha', `
+        const r3Run = true, aiReviewRun = true, copiedRun = true, structuredRecovery = null, draftRecovery = null,
+          repairPolicy = null, continuityRun = false, condensePolicy = null, request = { mode: 'synthetic' };
+        ${fixture.slice(terminalStart, terminalEnd)}`)(result, validateAiReviewedManuscript, assert, hash)
+      const drift = structuredClone(result); drift.attempts[0].finishReason = 'unknown'
+      assert.equal(validateAiReviewedManuscript(drift), 'AI_REVIEW_RECOVERY_PROVENANCE_MISMATCH')
+      const sourceDrift = structuredClone(result); sourceDrift.attempts[0].binding.actual.rootActionId = 'different-root'
+      assert.equal(validateAiReviewedManuscript(sourceDrift), 'AI_REVIEW_REBUILD_NOT_REGISTERED')
+    }
     const corrupt = structuredClone(result); corrupt.aiReviewedDraft.selectedItemsHash = hash('author supplementation')
     assert.equal(validateAiReviewedManuscript(corrupt), 'AI_REVIEW_SELECTION_MISMATCH')
     const forged = structuredClone(result); forged.operations[0].reviewProvenance.effect.artifact.textHash = hash('different raw')
@@ -500,7 +526,7 @@ test('AI final manuscript native main owner persists keyEvents unknown confirmat
         artifact: { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash } }).content }
     await command.generateAndCommit(preparedNext, { context: { mainGenerationRunHandle: next.handle, projectPath: directory, projectSession: { projectId: 'project', leaseId: 'epoch', projectPath: directory },
       writingLanguage: 'zh-CN', uiLocale: 'zh-CN' }, callbacks: { log() {}, appendText() {} } })
-    assert.equal(calls, 4)
+    assert.equal(calls, 4 + Number(lengthRecovery))
     assert.equal(ReviewRepository.getFull(db.prepare('SELECT MAX(id) FROM reviews').pluck().get(), db).sourceDraft.chapterNumber, 2)
     vi.unstubAllGlobals()
   } finally { vi.unstubAllGlobals(); owner?.suspendForProjectClose(); db.close(); fs.rmSync(directory, { recursive: true, force: true }) }
@@ -2647,7 +2673,7 @@ test('C16–C18 ca466d9a/73b46513 段（第580–648行）按同一规则分两�
   // 新协议字节 hash 与被取代的 a0a14777 不同，runner 读写两入口都按链末端取历史范围。
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
   assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, ca466d9a, protocol\.historicalC1673b46513Boundary\)/)
-  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedR3CurrentEvents/)
+  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedR3SameGroupEvents/)
 })
 
 test('新登记续写直接首稿，旧对账可读但当前实验拒绝额外发送', () => {
@@ -4694,7 +4720,8 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary', 'historicalC16B42cfc55Boundary',
     'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
     'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary', 'historicalC1609ad48e1Boundary', 'historicalSeparatedReviewB89b011aBoundary',
-    'historicalPostUi83573613Boundary', 'historicalR3NativeD12c4111Boundary', 'historicalR3ClosedCce6f01aBoundary', 'historicalR3NativeDc9b7cbdBoundary', 'historicalR3Native49e1c0adBoundary', 'historicalR3Native6e38e5ddBoundary']
+    'historicalPostUi83573613Boundary', 'historicalR3NativeD12c4111Boundary', 'historicalR3ClosedCce6f01aBoundary', 'historicalR3NativeDc9b7cbdBoundary', 'historicalR3Native49e1c0adBoundary', 'historicalR3Native6e38e5ddBoundary',
+    'historicalR3Native11152245Boundary', 'historicalR3NativeC9e7c71eBoundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -4834,6 +4861,8 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1626, real.boundaries.historicalR3NativeDc9b7cbdBoundary), 1629)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1629, real.boundaries.historicalR3Native49e1c0adBoundary), 1641)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1641, real.boundaries.historicalR3Native6e38e5ddBoundary), 1650)
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1650, real.boundaries.historicalR3Native11152245Boundary), 1668)
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1668, real.boundaries.historicalR3NativeC9e7c71eBoundary), 1671)
     assert.equal(validatePhysicalLedger(ledger), ledger)
     fs.writeFileSync(file, synthetic.raw)
     const options = { campaignMode: 'synthetic', ...synthetic.boundaries }

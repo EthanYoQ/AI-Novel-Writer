@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import os from 'node:os'
 import { runProductionCommandProbe, runProductionPhasePair, runProductionBridge, copyIsolatedRealModelConfig,
-  QUALIFICATION_STAGE_MODELS, qualificationModelForOperation,
+  QUALIFICATION_STAGE_MODELS, qualificationModelForOperation, reviewRecoveryAllowed,
   assertSharedInputDiagnostic, R3_NATIVE_REVISION_DIAGNOSTIC, r3DiagnosticInvocation, r3ModelForOperation, readR3NativeSource, BOUNDED_REVISION_DIAGNOSTIC, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, POST_UI_AI_REVIEW_SCENARIOS, FULL_AI_REVIEW_SCENARIO, readBoundedRevisionSource,
   productionBridgeHash, productionExecutionRuntime, productionScenario, PRODUCTION_BRIDGE, PHASE_SCENARIOS,
   validateCandidateContinuityResults, fullExecutionSchedule, validatePairedReceipt, validateFullAcceptedPredecessor, modelConfigurationHash, executionRecordIdentity } from './quality-modernization-driver.mjs'
@@ -268,7 +268,8 @@ export function validatePhysicalLedger(file) {
   const r3Dc9 = validateHistoricalSupersessionBoundary(raw, r3Closed, protocol.historicalR3NativeDc9b7cbdBoundary)
   const r3V3 = validateHistoricalSupersessionBoundary(raw, r3Dc9, protocol.historicalR3Native49e1c0adBoundary)
   const r3V4 = validateHistoricalSupersessionBoundary(raw, r3V3, protocol.historicalR3Native6e38e5ddBoundary)
-  validateHistoricalSupersessionBoundary(raw, r3V4, protocol.historicalR3Native11152245Boundary)
+  const r3V5 = validateHistoricalSupersessionBoundary(raw, r3V4, protocol.historicalR3Native11152245Boundary)
+  validateHistoricalSupersessionBoundary(raw, r3V5, protocol.historicalR3NativeC9e7c71eBoundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -890,6 +891,10 @@ export function updateLedger(file, event, options = {}) {
         ? protocol.historicalR3Native11152245Boundary : options.historicalR3Native11152245Boundary
       const trustedR3CurrentEvents = r3CurrentBoundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedR3V4Events, r3CurrentBoundary) : trustedR3V4Events
+      const r3SameGroupBoundary = options.campaignMode === 'real'
+        ? protocol.historicalR3NativeC9e7c71eBoundary : options.historicalR3NativeC9e7c71eBoundary
+      const trustedR3SameGroupEvents = r3SameGroupBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedR3CurrentEvents, r3SameGroupBoundary) : trustedR3CurrentEvents
       // 阶段决定首选分配桶：early 阶段用 early*，post-UI 重跑用 postUi*；
       // 同一 slot 的重复发送或已超出计划样本量的发送归入失败/修复余量。
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
@@ -922,7 +927,9 @@ export function updateLedger(file, event, options = {}) {
               && closed.includes(row.binding.invocationId)
               && boundary.reserveAttempts.some(item => item.attemptId === row.attemptId)))
           if (campaign.length >= R3_NATIVE_REVISION_DIAGNOSTIC.maxTotalPhysicalRequests
-            || campaign.some(row => ['codeSha', 'sourceHash', 'driverHash', 'diagnosticInputHash']
+              || campaign.some(row => !r3SameGroupBoundary?.reserveAttempts.some(item => item.attemptId === row.attemptId
+                && item.invocationId === R3_NATIVE_REVISION_DIAGNOSTIC.runs[0].invocationId)
+                && ['codeSha', 'sourceHash', 'driverHash', 'diagnosticInputHash']
               .some(key => row.binding[key] !== binding[key]))) fail('R3_NATIVE_EXECUTION_DRIFT')
           if (campaign.some(row => row.binding.invocationId !== binding.invocationId
             && (row.binding.actual.projectId === binding.actual.projectId || row.binding.actual.epoch === binding.actual.epoch)))
@@ -939,9 +946,12 @@ export function updateLedger(file, event, options = {}) {
           if (prior.length >= R3_NATIVE_REVISION_DIAGNOSTIC.maxPhysicalRequests
             || prior.some(row => ['invocationId', 'codeSha', 'sourceHash', 'driverHash', 'diagnosticInputHash']
               .some(key => row.binding[key] !== binding[key]))
-            || matches.length >= (operations[index].kind === 'refine' ? 4 : 2)
-            || binding.actual.purpose === 'review-chapter' && matches.length !== 0
-            || binding.actual.purpose === 'review-chapter-rebuild' && matches.length !== 1
+            || matches.length >= 4
+            || operations[index].kind !== 'refine' && !reviewRecoveryAllowed(matches.map(row => ({
+              purpose: row.binding.actual.purpose,
+              finishReason: events.find(event => event.attemptId === row.attemptId && event.type === 'settle')?.finishReason,
+            })), binding.actual.purpose, index === 0 ? R3_NATIVE_REVISION_DIAGNOSTIC.attemptPolicy.reviewRebuild
+              : R3_NATIVE_REVISION_DIAGNOSTIC.attemptPolicy.finalReviewRebuild)
             || operations[index].kind === 'refine' && matches.length > 0
               && events.find(event => event.attemptId === matches.at(-1).attemptId && event.type === 'settle')?.finishReason !== 'length'
             || operations.slice(0, index).some(item => !prior.some(row => row.binding.operation === item.id))
@@ -976,7 +986,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedR3CurrentEvents
+          const superseded = index >= trustedHistoricalEvents && index < trustedR3SameGroupEvents
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { R3_NATIVE_REVISION_DIAGNOSTIC as policy, productionScenario, qualificationBridgeWindows,
+import { R3_NATIVE_REVISION_DIAGNOSTIC as policy, productionScenario, qualificationBridgeWindows, createOperationDispatchGate,
   assertForwardReasoning, readR3NativeSource, streamEventStructure, r3DiagnosticInvocation, r3ModelForOperation, copyIsolatedRealModelConfig, QUALIFICATION_STAGE_MODELS } from '../quality-modernization-driver.mjs'
 import { ROOT, CAMPAIGN_ID, currentProtocolBinding, selectPhase, forwardReasoningFor,
   forwardQualificationWindowFor, hash, updateLedger } from '../quality-modernization-run.mjs'
@@ -11,16 +11,72 @@ import { ROOT, CAMPAIGN_ID, currentProtocolBinding, selectPhase, forwardReasonin
 const phase = 'r3-native-revision-diagnostic'
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
 
+test('R3 review admits one same-purpose replacement only after authenticated LENGTH, including empty visible output', () => {
+  const directory = path.join(ROOT, '.runtime/.cache', `r3-length-${randomUUID()}`)
+  fs.mkdirSync(directory, { recursive: true })
+  try {
+    const operation = policy.operations[0].id, source = { draftId: 1, contentHash: 'a'.repeat(64), version: 1 }
+    const first = { attemptId: 'first', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: 'review-chapter' }
+    const outputPath = path.join(directory, 'empty.txt')
+    fs.writeFileSync(outputPath, '')
+    const attempt = { attemptId: 'candidate:first', binding: { operation, actual: first, reviewSource: source }, outputPath, visibleTextHash: hash('') }
+    let finishReason = 'length'
+    const evidence = () => ({ attempt, ownerArtifactHash: hash(''), reviewReportAbsent: true,
+      events: [{ type: 'reserve', attemptId: attempt.attemptId, binding: attempt.binding },
+        { type: 'dispatch', attemptId: attempt.attemptId }, { type: 'settle', attemptId: attempt.attemptId, finishReason }] })
+    const gate = () => createOperationDispatchGate({ repairPolicy: policy.attemptPolicy, readPrimaryEvidence: evidence })
+    const admitted = gate()
+    admitted(operation, first, source)
+    assert.doesNotThrow(() => admitted(operation, { ...first, attemptId: 'second' }, source))
+    assert.throws(() => admitted(operation, { ...first, attemptId: 'third' }, source), /MODEL_REQUEST_REJECTED/)
+    for (const terminal of ['stop', 'unknown']) {
+      finishReason = terminal
+      const rejected = gate(); rejected(operation, first, source)
+      assert.throws(() => rejected(operation, { ...first, attemptId: 'second' }, source), /MODEL_REQUEST_REJECTED/)
+    }
+    finishReason = 'length'
+    const drift = gate(); drift(operation, first, source)
+    assert.throws(() => drift(operation, { ...first, attemptId: 'second' }, { ...source, version: 2 }), /MODEL_REQUEST_REJECTED/)
+    const outputs = new Map()
+    const chain = createOperationDispatchGate({ repairPolicy: policy.attemptPolicy, readPrimaryEvidence: owner => {
+      const prior = outputs.get(owner.attemptId), filename = path.join(directory, owner.attemptId + '.txt')
+      fs.writeFileSync(filename, prior.output)
+      const record = { attemptId: 'candidate:' + owner.attemptId, outputPath: filename, visibleTextHash: hash(prior.output),
+        binding: { operation, actual: owner, reviewSource: source } }
+      return { attempt: record, ownerArtifactHash: record.visibleTextHash, reviewReportAbsent: true,
+        events: [{ type: 'reserve', attemptId: record.attemptId, binding: record.binding },
+          { type: 'dispatch', attemptId: record.attemptId }, { type: 'settle', attemptId: record.attemptId, finishReason: prior.finishReason }] }
+    } })
+    for (const [index, [purpose, terminal, output]] of [
+      ['review-chapter', 'length', ''], ['review-chapter', 'stop', '{invalid'],
+      ['review-chapter-rebuild', 'length', ''], ['review-chapter-rebuild', 'stop', '{}'],
+    ].entries()) {
+      const owner = { ...first, attemptId: 'chain-' + index, purpose }
+      assert.doesNotThrow(() => chain(operation, owner, source))
+      outputs.set(owner.attemptId, { finishReason: terminal, output })
+    }
+    assert.throws(() => chain(operation, { ...first, attemptId: 'chain-4', purpose: 'review-chapter-rebuild' }, source), /MODEL_REQUEST_REJECTED/)
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
 test('R3 Flash forward group preserves v5, its unused slot, and the qualification Qwen profile', () => {
   assert.equal(hash(protocol.historicalR3NativeRegistration49e1c0ad), '7d59b55e6aff45a7b0b9487721eeb89f26ab826d1981cf3733d9873cec11be39')
   assert.equal(hash(protocol.historicalR3NativeRegistration6e38e5dd), 'a15f9ee248e830463d83458128232b2c131c17111d5df0cde8a8b5a28bc03387')
   const previous = protocol.historicalR3NativeRegistration11152245
   assert.equal(hash(previous), '4154cf33b1ba3ead4ea61dfcfc23b735686590bdfbf9c93ac6ad1e4f21f1ddfa')
   assert.notEqual(policy.scenarioRevision, previous.scenarioRevision)
-  assert.deepEqual(policy.closedInvocations, [...previous.closedInvocations, ...previous.runs.map(item => item.invocationId)])
-  assert.ok(policy.runs.every(item => !policy.closedInvocations.includes(item.invocationId)))
-  for (const key of ['source', 'operations', 'attemptPolicy', 'evaluationPolicy', 'minPhysicalRequests', 'maxPhysicalRequests', 'maxTotalPhysicalRequests'])
+  assert.deepEqual(policy.closedInvocations, [...previous.closedInvocations, ...previous.runs.map(item => item.invocationId), policy.runs[0].invocationId])
+  assert.ok(policy.runs.slice(1).every(item => !policy.closedInvocations.includes(item.invocationId)))
+  for (const key of ['source', 'operations', 'evaluationPolicy', 'minPhysicalRequests', 'maxPhysicalRequests', 'maxTotalPhysicalRequests'])
     assert.deepEqual(policy[key], previous[key])
+  const frozen = protocol.historicalR3NativeRegistrationC9e7c71e
+  assert.equal(hash(frozen), '2fe255679f107679d4ee2cbebcd85d4d40434a4eec4f13248bc8551282bbb871')
+  assert.deepEqual(policy.runs, frozen.runs)
+  assert.deepEqual(frozen.attemptPolicy, previous.attemptPolicy)
+  assert.deepEqual(policy.attemptPolicy, { ...frozen.attemptPolicy,
+    reviewRebuild: { ...frozen.attemptPolicy.reviewRebuild, maxLengthReplacements: 1 },
+    finalReviewRebuild: { ...frozen.attemptPolicy.finalReviewRebuild, maxLengthReplacements: 1 } })
+  assert.deepEqual([protocol.historicalR3NativeC9e7c71eBoundary.fromEventCount, protocol.historicalR3NativeC9e7c71eBoundary.eventCount], [1668, 1671])
   for (const [key, value] of Object.entries(previous.acceptance)) assert.deepEqual(policy.acceptance[key], value)
   assert.equal(policy.acceptance.scope, 'new-group-only-no-historical-reclassification-or-section-5-waiver')
   assert.equal(policy.acceptance.stop, 'when-two-of-three-impossible-remaining-NOT_RUN-no-redraw')
@@ -70,7 +126,7 @@ test('R3 native registration rejects altered source and cannot restart spent dia
     assert.throws(() => readR3NativeSource(input), /SOURCE_DRIFT/)
     const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', ...currentProtocolBinding(),
       codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
-      phase, milestone: 'diagnostic', caseId: 'R3', operation: policy.operations[0].id, invocationId: r3DiagnosticInvocation(1),
+      phase, milestone: 'diagnostic', caseId: 'R3', operation: policy.operations[0].id, invocationId: r3DiagnosticInvocation(2),
       stageModel: { profileId: policy.profiles.flash.profileId, configurationHash: policy.profiles.flash.configurationHash },
       diagnosticInputHash: policy.source.contextSha256, diagnosticSourceHash: hash(policy.source),
       evaluationPolicyHash: hash(policy.evaluationPolicy), actual: { attemptId: 'first', runId: 'run', rootActionId: 'root',
@@ -116,7 +172,7 @@ test.each([
       reserveAttempts: [{ attemptId: 'candidate:old', invocationId: policy.closedInvocations[closedIndex], terminal: 'unknown' }] }
     const options = { campaignMode: 'synthetic', [boundaryKey]: boundary }
     fs.writeFileSync(ledger, original)
-    const invocationId = r3DiagnosticInvocation(1)
+    const invocationId = r3DiagnosticInvocation(2)
     const reserve = (attemptId, operation, purpose, invocation = invocationId) => ({ type: 'reserve', attemptId,
       binding: { ...binding, operation, invocationId: invocation,
         stageModel: { profileId: r3ModelForOperation(operation).profileId, configurationHash: r3ModelForOperation(operation).configurationHash },
@@ -125,7 +181,7 @@ test.each([
     assert.throws(() => updateLedger(ledger, reserve('bad-boundary', policy.operations[0].id, 'review-chapter'), {
       ...options, [boundaryKey]: { ...boundary, rawBytesSha256: '0'.repeat(64) } }), /SUPERSESSION_DRIFT/)
     const schedule = [
-      [0, 'review-chapter', 'stop'], [0, 'review-chapter-rebuild', 'stop'],
+      [0, 'review-chapter', 'length'], [0, 'review-chapter', 'stop'],
       [1, 'refine-from-review', 'length'], [1, 'refine-from-review', 'length'],
       [1, 'refine-from-review', 'length'], [1, 'refine-from-review', 'stop'],
       [2, 'review-chapter', 'stop'], [2, 'review-chapter-rebuild', 'stop'],
@@ -147,6 +203,47 @@ test.each([
     assert.throws(() => updateLedger(ledger, reserve('continue', policy.operations[0].id, 'review-chapter-rebuild'), options), /ATTEMPT_UNAVAILABLE/)
     assert.throws(() => updateLedger(ledger, reserve('restart', policy.operations[0].id, 'review-chapter', randomUUID()), options), /ATTEMPT_UNAVAILABLE/)
     assert.ok(fs.readFileSync(ledger, 'utf8').startsWith(original))
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('R3 same-group frozen slot stays spent in the 24-call budget while only later slots accept the new subject', () => {
+  const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', `r3-history-${randomUUID()}`)
+  fs.mkdirSync(directory, { recursive: true })
+  try {
+    const ledger = path.join(directory, 'ledger.jsonl'), profile = r3ModelForOperation(policy.operations[0].id)
+    const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', ...currentProtocolBinding(),
+      codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
+      phase, milestone: 'diagnostic', caseId: 'R3', operation: policy.operations[0].id, invocationId: policy.runs[0].invocationId,
+      stageModel: { profileId: profile.profileId, configurationHash: profile.configurationHash },
+      diagnosticInputHash: policy.source.contextSha256, diagnosticSourceHash: hash(policy.source), evaluationPolicyHash: hash(policy.evaluationPolicy),
+      actual: { attemptId: 'old', runId: 'old-run', rootActionId: 'old-root', projectId: 'old-project', epoch: 'old-epoch', purpose: 'review-chapter' } }
+    const frozen = count => {
+      const reserveAttempts = []
+      const rows = Array.from({ length: count }, (_, index) => {
+        const attemptId = 'candidate:old-' + index
+        reserveAttempts.push({ attemptId, invocationId: binding.invocationId, terminal: 'settle' })
+        return [{ type: 'reserve', attemptId, binding, allocation: 'nonQualificationDiagnostic' },
+          { type: 'dispatch', attemptId }, { type: 'settle', attemptId, finishReason: 'length' }]
+      }).flat()
+      const raw = rows.map(row => JSON.stringify(row) + '\n').join('')
+      fs.writeFileSync(ledger, raw)
+      return { raw, options: { campaignMode: 'synthetic', historicalR3NativeC9e7c71eBoundary: {
+        fromEventCount: 0, eventCount: rows.length, rawBytesSha256: hash(raw), protocolRevision: binding.protocolRevision,
+        protocolHash: binding.protocolHash, reserveAttempts } } }
+    }
+    const next = { type: 'reserve', attemptId: 'candidate:new', binding: { ...binding, codeSha: 'e'.repeat(40), driverHash: 'f'.repeat(64),
+      invocationId: policy.runs[1].invocationId, actual: { ...binding.actual, attemptId: 'new', runId: 'new-run', rootActionId: 'new-root', projectId: 'new-project', epoch: 'new-epoch' } } }
+    const first = frozen(1)
+    assert.throws(() => updateLedger(ledger, { ...next, binding: { ...next.binding, invocationId: policy.runs[0].invocationId } }, first.options), /ATTEMPT_UNAVAILABLE/)
+    assert.throws(() => updateLedger(ledger, next, { ...first.options, historicalR3NativeC9e7c71eBoundary: {
+      ...first.options.historicalR3NativeC9e7c71eBoundary, rawBytesSha256: '0'.repeat(64) } }), /SUPERSESSION_DRIFT/)
+    updateLedger(ledger, next, first.options)
+    assert.ok(fs.readFileSync(ledger, 'utf8').startsWith(first.raw))
+    assert.equal(fs.readFileSync(ledger, 'utf8').trimEnd().split('\n').map(JSON.parse).filter(row => row.type === 'reserve').length, 2)
+    // Synthetic boundary saturation isolates the existing campaign cap; no physical calls are made.
+    const full = frozen(24)
+    assert.throws(() => updateLedger(ledger, next, full.options), /EXECUTION_DRIFT/)
+    assert.equal(fs.readFileSync(ledger, 'utf8'), full.raw)
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
@@ -182,7 +279,7 @@ test('R3 config copy retains only the hash-bound Flash profile and rejects a sam
 })
 
 
-test('R3 three fixed runs own independent state; UNKNOWN is spent and a fourth run is rejected', () => {
+test('R3 remaining fixed runs own independent state; UNKNOWN and historical slot one remain spent', () => {
   const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', 'r3-three-' + randomUUID())
   fs.mkdirSync(directory, { recursive: true })
   const ledger = path.join(directory, 'ledger.jsonl')
@@ -198,11 +295,11 @@ test('R3 three fixed runs own independent state; UNKNOWN is spent and a fourth r
       evaluationPolicyHash: hash(policy.evaluationPolicy), actual: { attemptId: 'attempt-' + run, runId: 'run-' + run,
         rootActionId: 'root-' + run, projectId: 'project-' + run, epoch: 'epoch-' + run, purpose: 'review-chapter' } })
     const options = { campaignMode: 'synthetic' }
-    for (const run of [1, 2, 3]) {
+    for (const run of [2, 3]) {
       const attemptId = 'candidate:run-' + run, value = binding(run)
-      if (run > 1) {
+      if (run > 2) {
         assert.throws(() => updateLedger(ledger, { type: 'reserve', attemptId,
-          binding: { ...value, actual: { ...value.actual, projectId: 'project-1' } } }, options), /ISOLATION_REUSED/)
+          binding: { ...value, actual: { ...value.actual, projectId: 'project-2' } } }, options), /ISOLATION_REUSED/)
         assert.throws(() => updateLedger(ledger, { type: 'reserve', attemptId,
           binding: { ...value, codeSha: 'e'.repeat(40) } }, options), /EXECUTION_DRIFT/)
       }
@@ -214,6 +311,7 @@ test('R3 three fixed runs own independent state; UNKNOWN is spent and a fourth r
     }
     assert.throws(() => updateLedger(ledger, { type: 'reserve', attemptId: 'candidate:fourth',
       binding: { ...binding(3), invocationId: randomUUID() } }, options), /ATTEMPT_UNAVAILABLE/)
-    assert.equal(fs.readFileSync(ledger, 'utf8').trim().split('\n').length, 9)
+    assert.equal(fs.readFileSync(ledger, 'utf8').trim().split('\n').length, 6)
+    assert.throws(() => updateLedger(ledger, { type: 'reserve', attemptId: 'spent-slot-1', binding: binding(1) }, options), /ATTEMPT_UNAVAILABLE/)
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })

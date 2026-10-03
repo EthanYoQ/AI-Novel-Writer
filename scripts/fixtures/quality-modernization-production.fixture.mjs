@@ -15,7 +15,7 @@ import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, 
   AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, aiReviewFinalManuscriptSelection, productionScenario, loadBaselineReviewContract,
   readBoundedRevisionSource, assertBoundedRevisionSource, boundedRevisionItems,
   scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder,
-  assertSharedInputDiagnostic } from '../quality-modernization-driver.mjs'
+  assertSharedInputDiagnostic, validateAiReviewedManuscript } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, recordPersistedDraftObservation, safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
 import { safeTransportError } from '../../src/shared/generation-contract'
 
@@ -982,7 +982,8 @@ test('isolated production commands persist the selected phase operations', async
         && (actual ?? observedIpc).purpose === repairPolicy.repairPurpose) await Promise.all(streamSettlements)
       const reviewRepairPolicy = [repairPolicy?.reviewRebuild, repairPolicy?.finalReviewRebuild].find(item => item?.operationId === operationId)
       if (reviewRepairPolicy?.operationId === operationId
-        && (actual ?? observedIpc).purpose === reviewRepairPolicy.repairPurpose) await Promise.all(streamSettlements)
+        && (reviewRepairPolicy.maxLengthReplacements === 1
+          || (actual ?? observedIpc).purpose === reviewRepairPolicy.repairPurpose)) await Promise.all(streamSettlements)
       if (continuityRun && operationKind === 'character_cards' && actual.purpose.includes(':repair:')) await Promise.all(streamSettlements)
       if ((draftRecovery || condensePolicy) && operationKind === 'draft') await Promise.all(streamSettlements)
       if (aiReviewRun && operationKind === 'refine') await Promise.all(streamSettlements)
@@ -1880,14 +1881,19 @@ test('isolated production commands persist the selected phase operations', async
             ...(aiReviewRun ? { artifactRevision: artifact.revision, ...(usage.reviewRevisionEffect ? { reviewRevisionEffect: usage.reviewRevisionEffect } : {}) } : {}),
             hasFormalEffect: Boolean(usage.directoryProgress || usage.draftCommit || usage.reviewRevisionEffect || usage.finalizationEffect) } })
       assert.equal(receipt.ownerTerminal.length, receipt.attempts.length, 'OWNER_ATTEMPT_COVERAGE_MISMATCH')
+      // Validate the complete saved report before accepting an empty, superseded LENGTH artifact.
+      if (r3Run) assert.equal(validateAiReviewedManuscript(receipt), null, 'R3_REVIEW_RECOVERY_PROVENANCE_MISMATCH')
       for (const attempt of receipt.attempts) {
         const terminal = receipt.ownerTerminal.find(row => row.attemptId === attempt.binding.actual.attemptId)
+        const replacedReviewLength = r3Run && attempt.finishReason === 'length'
+          && ['review-chapter', 'review-chapter-rebuild'].includes(attempt.binding.actual.purpose)
+          && receipt.attempts.filter(other => other.binding.operation === attempt.binding.operation).at(-1) !== attempt
         assert.ok(terminal && ['settled', 'unknown'].includes(terminal.status))
         if (structuredRecovery && attempt.binding.actual.purpose.startsWith('chapter-blueprint-directory') || draftRecovery && attempt.binding.actual.purpose.startsWith('chapter-draft')
-          || aiReviewRun && attempt.binding.actual.purpose === 'refine-from-review') assert.ok(['stop', 'length'].includes(terminal.finishReason))
+          || aiReviewRun && attempt.binding.actual.purpose === 'refine-from-review' || replacedReviewLength) assert.ok(['stop', 'length'].includes(terminal.finishReason))
         else assert.equal(terminal.finishReason, 'stop')
         assert.equal(terminal.purpose, attempt.binding.actual.purpose)
-        assert.ok(terminal.artifactId && terminal.textHash !== sha(''), 'OWNER_ARTIFACT_MISSING')
+        assert.ok(terminal.artifactId && (terminal.textHash !== sha('') || replacedReviewLength), 'OWNER_ARTIFACT_MISSING')
         const repairedDirectory = repairPolicy && attempt.binding.operation === repairPolicy.operationId
           && attempt.binding.actual.purpose === repairPolicy.primaryPurpose
           && receipt.attempts.some(other => other.binding.operation === repairPolicy.operationId
@@ -1917,7 +1923,10 @@ test('isolated production commands persist the selected phase operations', async
       const rows = ledgerEvents.filter(event => event.attemptId === attempt.attemptId)
       assert.deepEqual(rows.map(event => event.type), ['reserve', 'dispatch', 'settle'], 'PHYSICAL_LEDGER_COVERAGE_MISMATCH')
       assert.deepEqual(rows[0].binding, attempt.binding, 'PHYSICAL_LEDGER_BINDING_MISMATCH')
-      assert.ok(attempt.outputPath && attempt.visibleTextHash !== sha(''), 'PHYSICAL_OUTPUT_MISSING')
+      const replacedReviewLength = candidate && r3Run && attempt.finishReason === 'length'
+        && ['review-chapter', 'review-chapter-rebuild'].includes(attempt.binding.actual.purpose)
+        && receipt.attempts.filter(other => other.binding.operation === attempt.binding.operation).at(-1) !== attempt
+      assert.ok(attempt.outputPath && (attempt.visibleTextHash !== sha('') || replacedReviewLength), 'PHYSICAL_OUTPUT_MISSING')
       assert.equal(sha(fs.readFileSync(attempt.outputPath, 'utf8')), attempt.visibleTextHash, 'PHYSICAL_OUTPUT_HASH_MISMATCH')
     }
     assertNoOutboundPreflightFailures(receipt)
