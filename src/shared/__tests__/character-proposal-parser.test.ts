@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { characterProposalMaterialChunks, decodeCharacterDetails, parseArchitectureCharacterProposal, parsePlanningMaterialCharacterProposal } from '../character-proposal-parser'
+import { characterProposalMaterialChunks, decodeCharacterDetails, extractSingleCompleteJsonObject, parseArchitectureCharacterProposal, parsePlanningMaterialCharacterProposal } from '../character-proposal-parser'
 
 function architecture() {
   const slots = ['同名', '同名', '反派'].map((name, index) => ({ slotId: `slot-${index}`, name,
@@ -13,6 +13,14 @@ function architecture() {
     details: [{ artifactId: 'details', text: JSON.stringify({ entries }) }] }
 }
 describe('main-safe source-local character proposal parsing', () => {
+  it('optionally rejects outer arrays without changing the existing object extraction default', () => {
+    const object = JSON.stringify({ entries: [{ notes: '括号 [、]、} 与转义 "引号" 和 \\。' }] })
+    expect(extractSingleCompleteJsonObject(`说明\n[${object}]\n结束`)).toBe(object)
+    expect(() => extractSingleCompleteJsonObject(`说明\n[${object}]\n结束`, true)).toThrow('未包含一个完整 JSON 对象')
+    expect(() => extractSingleCompleteJsonObject(`说明\n[${object}`, true)).toThrow('截断')
+    expect(extractSingleCompleteJsonObject(`说明\n${object}\n结束`, true)).toBe(object)
+    expect(extractSingleCompleteJsonObject(`说明中的数组 []\n${object}\n结束`, true)).toBe(object)
+  })
   it('keeps equal names distinct, exact slot relationships and raw dynamic provenance', () => {
     const fixture = architecture(), result = parseArchitectureCharacterProposal(fixture)
     expect(result.map(item => item.fields.name)).toEqual(['同名', '同名', '反派'])

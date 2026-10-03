@@ -85,6 +85,17 @@ function setup(responses: Response[], projections: FinalizedContinuityProjection
     changeSource: () => { current = { ...activeSource, content: activeSource.content + '作者已保存修改' } } }
 }
 
+it('saves a unique complete report surrounded by prose after one model response', async () => {
+  const wrapped = `检查结果如下：\n\`\`\`json\n${review}\n\`\`\`\n检查结束。`
+  const f = setup([{ content: wrapped, finishReason: 'stop' }])
+  await f.command('review-chapter').execute(f.args)
+  expect(f.provider).toHaveBeenCalledTimes(1)
+  expect(f.fixture.calls.filter(call => call.channel === 'review-revision:commit-review')).toHaveLength(1)
+  expect(f.writes()).toBe(1)
+  expect(f.fixture.recovery?.latestArtifact?.text).toBe(wrapped)
+  expect(JSON.parse(f.fixture.recovery!.saved!.content).items[0]).toEqual(JSON.parse(review).items[0])
+})
+
 beforeEach(() => {
   useProjectStore.setState({ currentProject: { id: session.projectId, path: projectPath, name: 'Synthetic', sessionLease: session.leaseId,
     novelConfig: { wordsPerChapter: 300, globalGuidance: '冻结项目指导', writingLanguage: 'zh-CN' } } as never })

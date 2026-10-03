@@ -95,7 +95,7 @@ export const CHARACTER_STATE_TEXT_FIELDS = [
 ] as const
 
 function findCompleteJsonObjectEnd(source: string, start: number): number | undefined {
-  let depth = 0
+  const closers: string[] = []
   let inString = false
   let escaped = false
   for (let index = start; index < source.length; index += 1) {
@@ -113,34 +113,38 @@ function findCompleteJsonObjectEnd(source: string, start: number): number | unde
 
     if (char === '"') {
       inString = true
-    } else if (char === '{') {
-      depth += 1
-    } else if (char === '}') {
-      depth -= 1
-      if (depth === 0) return index
-      if (depth < 0) return undefined
+    } else if (char === '{' || char === '[') {
+      closers.push(char === '{' ? '}' : ']')
+    } else if (char === '}' || char === ']') {
+      if (closers.pop() !== char) return undefined
+      if (closers.length === 0) return index
     }
   }
   return undefined
 }
 
-export function extractSingleCompleteJsonObject(content: string): string {
+/** Review generation skips whole arrays instead of selecting their inner objects; character defaults stay unchanged. */
+export function extractSingleCompleteJsonObject(content: string, excludeArrayRoots = false): string {
   const source = stripThinkingTags(content).trim()
   const candidates: string[] = []
   let searchFrom = 0
   while (searchFrom < source.length) {
-    const start = source.indexOf('{', searchFrom)
+    const objectStart = source.indexOf('{', searchFrom)
+    const arrayStart = excludeArrayRoots ? source.indexOf('[', searchFrom) : -1
+    const start = arrayStart === -1 ? objectStart : objectStart === -1 ? arrayStart : Math.min(objectStart, arrayStart)
     if (start === -1) break
     const end = findCompleteJsonObjectEnd(source, start)
     if (end === undefined) throw new Error('AI 返回包含截断 JSON 对象片段')
 
     const candidate = source.slice(start, end + 1)
+    let parsed: unknown
     try {
-      if (isRecord(JSON.parse(candidate))) candidates.push(candidate)
+      parsed = JSON.parse(candidate)
     } catch {
       // Keep scanning for the one complete JSON object; malformed candidates
       // are not repaired or accepted.
     }
+    if (isRecord(parsed)) candidates.push(candidate)
     searchFrom = end + 1
   }
 

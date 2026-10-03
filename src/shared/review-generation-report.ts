@@ -10,6 +10,8 @@ import {
   type ReviewLike,
 } from './consistency-preflight'
 import type { WritingLanguage } from './writing-language'
+import { extractSingleCompleteJsonObject } from './character-proposal-parser'
+import { stripDraftThinkingTags } from './draft-visible-text'
 
 const REVIEW_SUMMARY_MAX_CHARACTERS = 120
 const REVIEW_DESCRIPTION_MAX_CHARACTERS = 200
@@ -75,11 +77,16 @@ function isReviewResult(value: unknown): value is ReviewResult {
     ))
 }
 
-/** Parse one visible JSON report; blank pass quotes are omitted without relaxing the model shape gate. */
+/** Accept one complete visible report with optional prose/fences; retain the model shape gate. */
 export function parseReviewGenerationResult(content: string): ReviewResult {
-  const trimmed = content.trim()
-  const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu.exec(trimmed)
-  const parsed: unknown = JSON.parse(fenced?.[1]?.trim() ?? trimmed)
+  const trimmed = stripDraftThinkingTags(content)
+  const fenced = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu.exec(trimmed)
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(fenced?.[1]?.trim() ?? trimmed)
+  } catch {
+    parsed = JSON.parse(extractSingleCompleteJsonObject(trimmed, true))
+  }
   if (!isReviewShape(parsed)) throw new Error('invalid review contract')
   const bounded: ReviewResult = {
     ...(parsed.goalReviews === undefined ? {} : { goalReviews: parsed.goalReviews }),

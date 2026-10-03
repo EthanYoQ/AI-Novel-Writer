@@ -69,6 +69,10 @@ describe('parseReviewGenerationResult', () => {
     ['model source chapter', { ...passing, items: [{ ...passingItem, sourceChapter: 1 }] }],
   ])('rejects %s before normalization', (_label, value) => {
     expect(() => parseReviewGenerationResult(JSON.stringify(value))).toThrow('invalid review contract')
+    if (value && !Array.isArray(value)) {
+      expect(() => parseReviewGenerationResult(`审查结果：\n\`\`\`json\n${JSON.stringify(value)}\n\`\`\`\n以上。`))
+        .toThrow('invalid review contract')
+    }
   })
 
   it.each(['error', 'warning'])('requires a nonempty quote for %s', severity => {
@@ -81,13 +85,48 @@ describe('parseReviewGenerationResult', () => {
   })
 
   it.each([
-    '{"summary":"broken",',
     `explanation ${JSON.stringify(passing)}`,
-    `${JSON.stringify(passing)} ${JSON.stringify(passing)}`,
     `\`\`\`\n${JSON.stringify(passing)}\n\`\`\``,
     `<think>private</think>${JSON.stringify(passing)}`,
-  ])('does not salvage arbitrary wrappers or partial JSON: %s', content => {
-    expect(() => parseReviewGenerationResult(content)).toThrow(SyntaxError)
+    `审查结果：\n\`\`\`json\n${JSON.stringify(passing)}\n\`\`\`\n以上。`,
+  ])('accepts a unique complete visible report without regenerating its wrapper: %s', content => {
+    expect(parseReviewGenerationResult(content)).toEqual(passing)
+  })
+
+  it('keeps quoted brackets, escaped quotes and backslashes inside the complete report', () => {
+    const report = { summary: '检查结束。', items: [{ category: '表达', severity: 'warning',
+      description: '原句含有 }、[ 和 "引号"，保留 \\ 标记。', quote: '他说："{先关门}"。' }] }
+    expect(parseReviewGenerationResult(`说明\n${JSON.stringify(report)}\n结束`)).toEqual(report)
+  })
+
+  it.each([
+    '{"summary":"broken",',
+    `${JSON.stringify(passing)} ${JSON.stringify({ ...passing, summary: '另一个结论。' })}`,
+    `${JSON.stringify(passing)} ${JSON.stringify(passing)}`,
+    `{"metadata":true}\n${JSON.stringify(passing)}`,
+    `${JSON.stringify(passing)}\n{"summary":"尚未结束`,
+    `<think>${JSON.stringify(passing)}</think>没有最终报告`,
+    `<think>${JSON.stringify(passing)}`,
+  ])('rejects ambiguity, truncation and hidden-only reports: %s', content => {
+    expect(() => parseReviewGenerationResult(content)).toThrow()
+  })
+
+  it('excludes a complete hidden candidate before selecting the visible report', () => {
+    expect(parseReviewGenerationResult(`<think>${JSON.stringify({ ...passing, summary: '隐藏候选。' })}</think>结果如下\n${JSON.stringify(passing)}`))
+      .toEqual(passing)
+  })
+
+  it.each([
+    `说明\n[${JSON.stringify(passing)}]\n结束`,
+    `说明\n[${JSON.stringify(passing)}`,
+    `说明\n[[${JSON.stringify(passing)}]\n结束`,
+    `说明\n\`\`\`json\n[${JSON.stringify(passing)}]\n\`\`\`\n结束`,
+  ])('rejects complete or truncated array roots without selecting their inner report: %s', content => {
+    expect(() => parseReviewGenerationResult(content)).toThrow()
+  })
+  it('ignores a complete explanatory array without selecting any nested report', () => {
+    const hiddenByArray = { ...passing, summary: '数组内候选不能成为报告。' }
+    expect(parseReviewGenerationResult(`说明 []\n[${JSON.stringify(hiddenByArray)}]\n报告\n${JSON.stringify(passing)}`)).toEqual(passing)
   })
 })
 
