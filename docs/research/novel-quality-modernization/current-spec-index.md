@@ -18,6 +18,8 @@ C01/S07、F05/U03 及全部生成消费者应用 [S07.M01–M04](../../plans/nov
 
 S06B/C、S07、S09B、S10A/B、S11、S00/S14A/B/C 及 F05 的消费者须应用线程 10：补齐审修依据、区分 AI 建议与作者事实，新增自动短细纲及其来源/恢复，接入 candidate-only 多轮资格。保留[AI 自主审稿与作者批准](quality-protocol.md#ai-review-final-manuscript)；人工补题与开发比较不能代替正式闭环，旧诊断成功不填新名额。
 
+2026-10-03 用户补充：F04 吸收 [#309 的章节定位保真要求](frontend-transition-specs.md#chapter-role-preservation)；F05 补[空项目真实创作旅程](thread10-delivery-plan.md#empty-project-real-journey)，涉及 S06A、S09A/B、S10A/B、S11 的实际串联。Flash/GLM 问题按线程 10 第 3 节及 S07.M05 分开验运行、恢复和审修质量，不因只修运行器而关闭全部问题。三项未达出口不能称完整 V3 交付。
+
 S06A、S09B、S10A/B 及 S14A/B 继续应用[2026-09-30 材料澄清](delivery-contract-delta-2026-09-21.md#章节材料与生成行为澄清2026-09-30)中未被取代的前驱、共享证据、时间、地点、计划/禁令、完整蓝图与有界续写要求。“新 run 直接正文”已由自动短细纲取代；旧 reconciliation 的身份与恢复保留。全部新增要求仍待真实接线和验收，历史失败不改判。
 
 | 主题 | 现行解释与精确来源 |

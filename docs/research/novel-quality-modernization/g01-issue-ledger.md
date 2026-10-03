@@ -21,7 +21,7 @@
 
 原 G01 在 2026-09-13 读取时十项均开放，现为五项开放（#187/#213/#219/#221/#224）、五项关闭（#191/#199/#205/#211/#222）。旧 v1.1.0 的 #199/#205 合并与发布包含关系、#211 后续合并、#222 窄内部清理都保留原有历史归因；不把这些旧结论重算成当前 V3 通过，也不因新的统一前端要求重开已关 Issue。#191 的迁移关闭只表示管理位置变化。
 
-其余 15 个开放项也已读取正文和评论。以下只作症状归属与证据核对，不新增实施任务，也不声称全部解决。
+其余 15 个开放项也已读取正文和评论。以下以症状归属与证据核对为主；2026-10-03 用户另行批准 #306/#309 的最小移植，其他条目不因此新增实施范围。
 
 | 其余开放项 | 当前证据与未覆盖范围 |
 | --- | --- |
@@ -32,7 +32,7 @@
 | [#280 输入 Tokens 偏高](https://github.com/EthanYoQ/AI-Novel-Writer/issues/280) | S07 预算及 S10B 上下文。旧版源码支持完整 synopsis 参与输入，但约 5 万 Tokens 的单次/累计归因未证实。仍缺入口、模型、请求次数与实际用量；与 #187 输出限制分开，不能截掉作者证据来降低统计。 |
 | [#265 角色跨视图/保存](https://github.com/EthanYoQ/AI-Novel-Writer/issues/265)、[#245 删除范围](https://github.com/EthanYoQ/AI-Novel-Writer/issues/245) | F04/S09B 角色投影与稿件版本消费者。既有导入、派生及原稿保护证据不覆盖全部原报告。#265 分开核对字段保存、投影同步、关系连线；#245 仍需删除入口及前后版本数量，不能把同一版本消失当作无关版本误删，也不能反向认定没有误删。 |
 | [#241 导入/拆解失败](https://github.com/EthanYoQ/AI-Novel-Writer/issues/241)、[#247 导入入口无响应](https://github.com/EthanYoQ/AI-Novel-Writer/issues/247)、[#248 选目录闪退](https://github.com/EthanYoQ/AI-Novel-Writer/issues/248) | F04 文件入口与导入消费者。历史 F05/native 及旧项目副本平台资格仅覆盖原步骤。#241 的读 TXT、第二章、进度回退、全局推演分别待定位；#247 仍缺具体入口/选择框状态，#248 仍缺版本及故障模块。通用选择目录成功不能替“对话框内新建目录后确认”复现。 |
-| [#306 章节定位显示](https://github.com/EthanYoQ/AI-Novel-Writer/issues/306) | F04 蓝图编辑/创作弹窗。远端已有固定词表与自定义值缺口的确定性核对，非完整 UI 复现；仍需实际组件显示和保存不改原值的证据。本次未将该单列为已修。 |
+| [#306 章节定位显示](https://github.com/EthanYoQ/AI-Novel-Writer/issues/306) | F04 蓝图编辑/创作弹窗。2026-10-03 在 #230 的 `1d51bfa8` 核实两套词表、自定义/空白显示和空字符串初始化缺口。用户批准最小吸收 [#309](https://github.com/EthanYoQ/AI-Novel-Writer/pull/309)，参考 head `af283f5b`，作者 SIRIUS（skywolf123）。产品要求及测试归[现行 F04](frontend-transition-specs.md#chapter-role-preservation)；尚无本轮移植提交或组件通过证据，保持待修。不得引入 #308、合并 master 或关闭 PR/Issue。 |
 | [#279 功能待办](https://github.com/EthanYoQ/AI-Novel-Writer/issues/279)、[#310 审稿架构提案](https://github.com/EthanYoQ/AI-Novel-Writer/issues/310) | 独立提案。#279 各子项独立评估；#310 的判断模型路由尚非已批准实施合同。保留问题与建议，不把新模型接入、穷举审查或整份待办扩大为本轮修复。 |
 
 本次核对 [v1.1.0](https://github.com/EthanYoQ/AI-Novel-Writer/releases/tag/v1.1.0) 仍是最新公开正式版，绑定 `879f83521414f66019488462830c3134c77dc4f8`。#201/#202/#203/#208 的合并提交均为该提交的祖先，#212 则不是；当前修复尚无公开 Release 包含证据。
