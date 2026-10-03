@@ -59,7 +59,17 @@ test('R3 review admits one same-purpose replacement only after authenticated LEN
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
-test('R3 Flash v8 preserves prior groups and closes the unused GLM third slot', () => {
+test('R3 Flash v9 preserves prior groups and closes the unused v8 third slot', () => {
+  const v8 = protocol.historicalR3NativeRegistration2d67a3aa
+  assert.equal(hash(v8), '4fa86ac4573c41bf4fb7a2be8c8d8220e0c2db81c614c8fe784adcda005aafe1')
+  assert.deepEqual(policy.closedInvocations, [...v8.closedInvocations, ...v8.runs.map(item => item.invocationId)])
+  assert.equal(v8.runs[2].invocationId, '73b0ca6a-a5bd-4493-a7b2-1e01d5eee005')
+  const v8Boundary = protocol.historicalR3Native2d67a3aaBoundary
+  assert.deepEqual([v8Boundary.fromEventCount, v8Boundary.eventCount, v8Boundary.reserveAttempts.length], [1704, 1725, 7])
+  assert.equal(v8Boundary.rawBytesSha256, '8ecbfc167800b5f2a92f99f74f21a62755198d0bb97e8b46e6600528413d5546')
+  assert.ok(v8Boundary.reserveAttempts.every(item => item.terminal === 'settle' && item.invocationId !== v8.runs[2].invocationId))
+  assert.deepEqual(policy.acceptance, v8.acceptance)
+  assert.equal(new Set(policy.runs.map(item => item.invocationId)).size, 3)
   assert.equal(hash(protocol.historicalR3NativeRegistration49e1c0ad), '7d59b55e6aff45a7b0b9487721eeb89f26ab826d1981cf3733d9873cec11be39')
   assert.equal(hash(protocol.historicalR3NativeRegistration6e38e5dd), 'a15f9ee248e830463d83458128232b2c131c17111d5df0cde8a8b5a28bc03387')
   const previous = protocol.historicalR3NativeRegistration11152245
@@ -67,7 +77,7 @@ test('R3 Flash v8 preserves prior groups and closes the unused GLM third slot', 
   assert.notEqual(policy.scenarioRevision, previous.scenarioRevision)
   const flash = protocol.historicalR3NativeRegistrationD51580fc
   const glm = protocol.historicalR3NativeRegistrationAd650e85
-  assert.deepEqual(policy.closedInvocations, [...glm.closedInvocations, ...glm.runs.map(item => item.invocationId)])
+  assert.deepEqual(v8.closedInvocations, [...glm.closedInvocations, ...glm.runs.map(item => item.invocationId)])
   assert.equal(glm.runs[2].invocationId, '66ac671a-2481-4917-8272-6a2aeef62738')
   assert.deepEqual([protocol.historicalR3NativeAd650e85Boundary.fromEventCount, protocol.historicalR3NativeAd650e85Boundary.eventCount], [1686, 1704])
   assert.ok(protocol.historicalR3NativeAd650e85Boundary.reserveAttempts.every(item => item.invocationId !== glm.runs[2].invocationId))
@@ -77,7 +87,7 @@ test('R3 Flash v8 preserves prior groups and closes the unused GLM third slot', 
   const frozen = protocol.historicalR3NativeRegistrationC9e7c71e
   assert.equal(hash(frozen), '2fe255679f107679d4ee2cbebcd85d4d40434a4eec4f13248bc8551282bbb871')
   assert.deepEqual(flash.runs, frozen.runs)
-  assert.equal(policy.scenarioRevision, 'r3-native-official-flash-three-runs-v8')
+  assert.equal(policy.scenarioRevision, 'r3-native-official-flash-three-runs-v9')
   assert.ok(policy.runs.every(item => !flash.runs.some(old => old.invocationId === item.invocationId)))
   assert.deepEqual(policy.attemptPolicy, flash.attemptPolicy)
   const flashBoundary = protocol.historicalR3NativeD51580fcBoundary
@@ -92,7 +102,7 @@ test('R3 Flash v8 preserves prior groups and closes the unused GLM third slot', 
   for (const [key, value] of Object.entries(previous.acceptance)) assert.deepEqual(policy.acceptance[key], value)
   assert.equal(policy.acceptance.scope, 'new-group-only-no-historical-reclassification-or-section-5-waiver')
   assert.equal(policy.acceptance.stop, 'when-two-of-three-impossible-remaining-NOT_RUN-no-redraw')
-  assert.equal(policy.requiredProductSha, '8c1e74ae096863809a3821cddf5bf81e984823a9')
+  assert.equal(policy.requiredProductSha, '69ed2a2f23699320a4758ce6e10ac893b2a84977')
   assert.equal(policy.model.modelName, 'deepseek-flash')
   assert.equal(hash(policy.model), '0eec6083f152f15548e9acf680803e79365d1d76a4763f2b1c58529451a244df')
   for (const operation of policy.operations) assert.deepEqual(r3ModelForOperation(operation.id).model, policy.model)
@@ -149,7 +159,7 @@ test('R3 native registration rejects altered source and cannot restart spent dia
     updateLedger(ledger, { type: 'dispatch', attemptId: 'candidate:first' }, { campaignMode: 'synthetic' })
     updateLedger(ledger, { type: 'settle', attemptId: 'candidate:first', finishReason: 'stop' }, { campaignMode: 'synthetic' })
     assert.throws(() => updateLedger(ledger, reserve('restart', { invocationId: randomUUID() }), { campaignMode: 'synthetic' }), /ATTEMPT_UNAVAILABLE/)
-    for (const slot of [...protocol.historicalR3NativeRegistrationD51580fc.runs, ...protocol.historicalR3NativeRegistrationAd650e85.runs])
+    for (const slot of [...protocol.historicalR3NativeRegistrationD51580fc.runs, ...protocol.historicalR3NativeRegistrationAd650e85.runs, ...protocol.historicalR3NativeRegistration2d67a3aa.runs])
       assert.throws(() => updateLedger(ledger, reserve('closed-' + slot.run, { invocationId: slot.invocationId }), { campaignMode: 'synthetic' }), /ATTEMPT_UNAVAILABLE/)
     const original = fs.readFileSync(ledger, 'utf8')
     assert.equal(original.trim().split('\n').length, 3)
@@ -166,6 +176,7 @@ test.each([
   ['historicalR3NativeC9e7c71eBoundary', 12],
   ['historicalR3NativeD51580fcBoundary', 13],
   ['historicalR3NativeAd650e85Boundary', 15],
+  ['historicalR3Native2d67a3aaBoundary', 18],
 ])('R3 registered run preserves authenticated UNKNOWN in %s and caps its eight-call invocation', (boundaryKey, closedIndex) => {
   const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', 'r3-replacement-' + randomUUID())
   fs.mkdirSync(directory, { recursive: true })
