@@ -626,6 +626,65 @@ describe('GenerateCharactersCommand structured roster seam', () => {
     expect(englishCallbacks.log).toHaveBeenCalledWith('Plot outline generated; the full outline is ready.')
   })
 
+  it('preserves the full worldbuilding task through append and persisted seed recovery with unknown capacity', async () => {
+    const middleRule = 'AUTHOR_MIDDLE_RULE: Magic cannot restore a dead person.'
+    const authorGuidance = `${'Earlier author facts. '.repeat(400)}\n${middleRule}\n${'Later author facts. '.repeat(400)}`
+    const novelConfig = { writingLanguage: 'en-US' as const, genre: 'fantasy', globalGuidance: authorGuidance }
+    useProjectStore.setState({ currentProject: { ...project(projectAPath), novelConfig } as never })
+    const initial = `EARLY_VISIBLE_TEXT\n${'The river divides the two kingdoms. '.repeat(100)}\nLATEST_VISIBLE_TEXT`
+    const second = 'The southern king taxes every crossing.'
+    const final = 'The northern villages maintain a hidden ferry.'
+    const generateStream = createResponseStream([initial, second, final], ['length', 'length', 'stop'])
+    useLLMStore.setState({ defaultModelId: 'model-1', generateStream })
+    let partialFile: Record<string, unknown> = {}
+    const invoke = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return false
+      if (channel === 'db:project-core-get') return {
+        premise: 'A cartographer must expose the false border before the river kingdoms go to war.',
+        worldbuilding: 'The existing author-approved worldbuilding.',
+      }
+      if (channel === 'fs:read-json') return { success: true, data: structuredClone(partialFile) }
+      if (channel === 'fs:write-json') {
+        partialFile = structuredClone(args[1] as Record<string, unknown>)
+        return { success: true }
+      }
+      if (channel === 'db:project-core-update') return { success: true }
+      throw new Error(`Unexpected IPC channel: ${channel}`)
+    })
+    vi.stubGlobal('window', {
+      aiNovelAPI: { invoke, on: vi.fn(), once: vi.fn(), send: vi.fn(), setZoomLevel: vi.fn(), setZoomFactor: vi.fn(), getZoomLevel: vi.fn() },
+    })
+    const snapshot = { expectedProjectPath: projectAPath, novelConfig } as never
+    const makeContext = (): WorkflowContext => ({ ...context, writingLanguage: 'en-US', uiLocale: 'en-US', data: {} })
+    await expect(new GenerateWorldBuildingCommand(snapshot, workflowRuntimeDependencies)
+      .execute({ step: {}, context: makeContext(), callbacks })).rejects.toThrow('The incomplete candidate was saved')
+    expect(generateStream).toHaveBeenCalledTimes(2)
+    expect(partialFile.world_building_partial_result).toContain(initial)
+    expect(partialFile.world_building_partial_result).toContain(second)
+    expect(domainIpcChannels(invoke)).not.toContain('db:project-core-update')
+
+    await expect(new GenerateWorldBuildingCommand(snapshot, workflowRuntimeDependencies, {
+      resumeWorldBuilding: true,
+      resumeHandle: { projectId: 'main', epoch: 'lease-main', rootActionId: 'fixture-root', runId: 'fixture-run' },
+    }).execute({ step: {}, context: makeContext(), callbacks })).resolves.toContain(final)
+
+    expect(generateStream).toHaveBeenCalledTimes(3)
+    const originalPrompt = generateStream.mock.calls[0]![0].find(message => message.role === 'user')!.content
+    expect(originalPrompt).toContain(middleRule)
+    expect(originalPrompt.length).toBeGreaterThan(12_000)
+    for (const [messages] of generateStream.mock.calls.slice(1)) {
+      const continuationPrompt = messages.find(message => message.role === 'user')!.content
+      expect(continuationPrompt).toContain(originalPrompt)
+      expect(continuationPrompt).not.toContain('EARLY_VISIBLE_TEXT')
+    }
+    expect(partialFile.world_building_partial_result).toBeUndefined()
+    expect(partialFile.world_building_result).toContain(initial)
+    expect(partialFile.world_building_result).toContain(second)
+    expect(partialFile.world_building_result).toContain(final)
+    expect(domainIpcChannels(invoke).filter(channel => channel === 'db:project-core-update')).toHaveLength(1)
+  })
+
   it('uses the frozen English UI locale for premise logs and an empty-result error', async () => {
     const novelConfig = {
       writingLanguage: 'zh-CN',

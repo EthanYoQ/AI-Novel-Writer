@@ -285,11 +285,6 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       originalPrompt: prompt,
       writingLanguage: workflowWritingLanguage(context),
       uiLocale: context.uiLocale ?? 'zh-CN',
-      promptBudget: {
-        contextWindowTokens: completion.receipt.capabilities.contextWindowTokens,
-        maxOutputTokens: completion.receipt.budget.requestedOutputTokens,
-        systemPromptChars: systemPrompt.length,
-      },
       preserveCompleteStructuredPrompt: continuation.mode === 'replace-structured-output'
         && options?.promptBudget !== undefined,
       isCancelled: () => context.cancelled,
@@ -364,7 +359,6 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     }
     let continuationCount = 0
     let initial: { content: string; finishReason: LLMFinishReason }
-    let initialReceipt: LLMCompletion['receipt'] | undefined
     if (seed) {
       initial = { content: seed, finishReason: 'length' }
     } else {
@@ -376,7 +370,6 @@ export abstract class BaseWorkflowCommand<TResult = string> {
         options.context,
       )
       initial = first
-      initialReceipt = first.receipt
       await persistComposition(first)
     }
     const prefix = options.taskLabel ? `${options.taskLabel} ` : ''
@@ -391,13 +384,6 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       originalPrompt: options.taskPrompt,
       writingLanguage: workflowWritingLanguage(options.context),
       uiLocale: options.context.uiLocale ?? 'zh-CN',
-      promptBudget: seed
-        ? undefined
-        : {
-            contextWindowTokens: initialReceipt?.capabilities?.contextWindowTokens,
-            maxOutputTokens: initialReceipt?.budget?.requestedOutputTokens,
-            systemPromptChars: options.systemPrompt.length,
-          },
       isCancelled: () => options.context.cancelled,
       redactVisibleText: redactedText => this.stripThinkingTags(redactedText),
       requestContinuation: async continuationPrompt => {

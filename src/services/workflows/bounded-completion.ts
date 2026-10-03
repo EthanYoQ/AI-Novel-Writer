@@ -2,9 +2,7 @@ import { buildStructuredReplacementPrompt } from '../../shared/structured-replac
 import { composeVisibleContinuation, CONTINUATION_VISIBLE_TAIL_CHARS } from '../../shared/visible-continuation'
 import {
   assertMechanicallyCompleteVisibleText,
-  EN_US_TRUNCATION_MARKER,
   visibleProseUnitCount,
-  ZH_CN_TRUNCATION_MARKER,
 } from '../../shared/visible-text-integrity'
 import type { LLMFinishReason } from '../../shared/ipc-channels'
 import type { WritingLanguage } from '../../shared/writing-language'
@@ -15,12 +13,6 @@ import { stripThinkingTags } from './workflow-utils'
 const MAX_BOUNDED_CONTINUATIONS = 7
 const MAX_STRUCTURED_CONTINUATIONS = 2
 const MAX_TEXT_CONTINUATIONS = 3
-const SAFE_UNKNOWN_CONTINUATION_PROMPT_CHARS = 5376
-const CONTEXT_SAFETY_RESERVE_TOKENS = 512
-const ESTIMATED_CHARS_PER_TOKEN = 1.5
-const MAX_CONTINUATION_PROMPT_CHARS = 12_000
-const MIN_ORIGINAL_TASK_CHARS = 256
-const MIN_VISIBLE_REFERENCE_CHARS = 192
 
 export type BoundedCompletionMode = 'append-visible-text' | 'replace-structured-output'
 
@@ -53,17 +45,6 @@ export function getBoundedCompletionFailureCode(
   return error instanceof BoundedCompletionFailure ? error.failureCode : undefined
 }
 
-/**
- * The continuation module owns prompt composition, so callers provide only
- * the model limits it needs to reserve a bounded input slice. `null` means
- * unknown and intentionally falls back to the conservative 8k window.
- */
-export interface BoundedCompletionPromptBudget {
-  contextWindowTokens?: number | null
-  maxOutputTokens?: number | null
-  systemPromptChars?: number
-}
-
 export interface BoundedCompletionRequest {
   initial: BoundedCompletion
   mode: BoundedCompletionMode
@@ -71,7 +52,6 @@ export interface BoundedCompletionRequest {
   originalPrompt: string
   writingLanguage: WritingLanguage
   uiLocale?: Locale
-  promptBudget?: BoundedCompletionPromptBudget
   preserveCompleteStructuredPrompt?: boolean
   requestContinuation: (prompt: string) => Promise<BoundedCompletion>
   isCancelled?: () => boolean
@@ -216,79 +196,6 @@ function assertValidContinuationLimit(
   }
 }
 
-function positiveSafeInteger(value: unknown): number | null {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
-    ? value
-    : null
-}
-
-function nonNegativeSafeInteger(value: unknown): number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
-    ? value
-    : 0
-}
-
-function insufficientContextBudgetError(uiLocale: Locale): Error {
-  return new Error(localize(
-    uiLocale,
-    '当前模型上下文预算不足以安全续写，结果未被保存。' +
-      '请提高上下文窗口、降低最大输出 Tokens，或缩短本次任务后重试。',
-    'The current model context budget is too small for a safe continuation, so the result was not saved. ' +
-      'Increase the context window, lower the maximum output tokens, or shorten the task and try again.',
-  ))
-}
-
-function continuationPromptCharBudget(uiLocale: Locale, budget?: BoundedCompletionPromptBudget): number {
-  const contextWindowTokens = positiveSafeInteger(budget?.contextWindowTokens)
-  if (contextWindowTokens === null) {
-    // Unknown means unknown: bound the continuation prompt by product policy,
-    // but never invent an 8k model window and subtract the leased output cap.
-    const availableChars = SAFE_UNKNOWN_CONTINUATION_PROMPT_CHARS
-      - nonNegativeSafeInteger(budget?.systemPromptChars)
-    if (availableChars <= 0) throw insufficientContextBudgetError(uiLocale)
-    return Math.min(MAX_CONTINUATION_PROMPT_CHARS, availableChars)
-  }
-  const maxOutputTokens = positiveSafeInteger(budget?.maxOutputTokens)
-  if (maxOutputTokens === null) throw insufficientContextBudgetError(uiLocale)
-  const inputTokens = contextWindowTokens - maxOutputTokens - CONTEXT_SAFETY_RESERVE_TOKENS
-  const availableChars = Math.floor(inputTokens * ESTIMATED_CHARS_PER_TOKEN)
-    - nonNegativeSafeInteger(budget?.systemPromptChars)
-  const boundedChars = Math.min(MAX_CONTINUATION_PROMPT_CHARS, availableChars)
-  if (inputTokens <= 0 || boundedChars <= 0) throw insufficientContextBudgetError(uiLocale)
-  return boundedChars
-}
-
-function truncationMarker(writingLanguage: WritingLanguage): string {
-  return writingLanguage === 'en-US' ? EN_US_TRUNCATION_MARKER : ZH_CN_TRUNCATION_MARKER
-}
-
-function truncateWithHeadAndTail(
-  text: string,
-  maxChars: number,
-  writingLanguage: WritingLanguage,
-): string {
-  if (text.length <= maxChars) return text
-  const marker = truncationMarker(writingLanguage)
-  if (maxChars <= marker.length + 2) return text.slice(-maxChars)
-  const preservedChars = maxChars - marker.length
-  const headChars = Math.ceil(preservedChars * 0.6)
-  const tailChars = preservedChars - headChars
-  return `${text.slice(0, headChars)}${marker}${text.slice(-tailChars)}`
-}
-
-function truncateVisibleReference(
-  mode: BoundedCompletionMode,
-  text: string,
-  maxChars: number,
-  writingLanguage: WritingLanguage,
-): string {
-  if (text.length <= maxChars) return text
-  const marker = truncationMarker(writingLanguage)
-  return mode === 'append-visible-text'
-    ? `${marker}${text.slice(-Math.max(0, maxChars - marker.length))}`
-    : truncateWithHeadAndTail(text, maxChars, writingLanguage)
-}
-
 function buildTextContinuationPrompt(
   originalPrompt: string,
   visibleText: string,
@@ -310,48 +217,6 @@ function buildTextContinuationPrompt(
       + `- Output only new visible prose. Do not repeat, summarize, explain, use Markdown, or reveal reasoning.\n`
       + `- Continue naturally from the end of the completed text and finish the original task.`,
   )
-}
-
-function buildContinuationPrompt(
-  mode: BoundedCompletionMode,
-  originalPrompt: string,
-  visibleText: string,
-  maxChars: number,
-  writingLanguage: WritingLanguage,
-  uiLocale: Locale,
-): string {
-  const build = (original: string, visible: string) => mode === 'replace-structured-output'
-    ? buildStructuredReplacementPrompt(original, visible, writingLanguage)
-    : buildTextContinuationPrompt(original, visible, writingLanguage)
-  // The empty form includes all fixed instructions and is intentionally a
-  // conservative overhead estimate because it uses the visible fallback text.
-  const variableBudget = maxChars - build('', '').length
-  const originalMinimum = originalPrompt ? Math.min(MIN_ORIGINAL_TASK_CHARS, originalPrompt.length) : 0
-  const visibleMinimum = visibleText ? Math.min(MIN_VISIBLE_REFERENCE_CHARS, visibleText.length) : 0
-  if (variableBudget < originalMinimum + visibleMinimum) {
-    throw insufficientContextBudgetError(uiLocale)
-  }
-
-  const originalBudget = originalPrompt
-    ? Math.min(originalPrompt.length, Math.max(originalMinimum, Math.floor(variableBudget * 0.6)))
-    : 0
-  const visibleBudget = visibleText
-    ? Math.min(visibleText.length, Math.max(visibleMinimum, variableBudget - originalBudget))
-    : 0
-
-  // Reallocate unused room so a short contract never starves the visible
-  // reference, and vice versa.
-  let remainingBudget = variableBudget - originalBudget - visibleBudget
-  const expandedOriginalBudget = Math.min(originalPrompt.length, originalBudget + remainingBudget)
-  remainingBudget -= expandedOriginalBudget - originalBudget
-  const expandedVisibleBudget = Math.min(visibleText.length, visibleBudget + remainingBudget)
-
-  const prompt = build(
-    truncateWithHeadAndTail(originalPrompt, expandedOriginalBudget, writingLanguage),
-    truncateVisibleReference(mode, visibleText, expandedVisibleBudget, writingLanguage),
-  )
-  if (prompt.length > maxChars) throw insufficientContextBudgetError(uiLocale)
-  return prompt
 }
 
 /**
@@ -388,13 +253,10 @@ export async function completeBoundedCompletion(request: BoundedCompletionReques
             content,
             request.writingLanguage,
           )
-        : buildContinuationPrompt(
-            request.mode,
+        : buildTextContinuationPrompt(
             request.originalPrompt,
             content,
-            continuationPromptCharBudget(uiLocale, request.promptBudget),
             request.writingLanguage,
-            uiLocale,
           )
       next = await request.requestContinuation(continuationPrompt)
     } catch (error) {
