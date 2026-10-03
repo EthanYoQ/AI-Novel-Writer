@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
+import type { GenerationTask } from '../../../src/services/generation/generation-harness'
+import { OpenAIProvider } from '../../llm/openai-provider'
+import { buildMainGenerationPlan, MAIN_GENERATION_POLICY } from '../main-generation-plan'
 import {
   createModelExecutionLeaseReceipt,
   ModelExecutionLeaseError,
@@ -9,6 +12,8 @@ import {
 } from '../model-execution-lease'
 
 const ORIGINAL_KEY = 'lease-test-secret-original'
+
+afterEach(() => vi.unstubAllGlobals())
 
 function modelProfile(): ModelProfile {
   return {
@@ -33,6 +38,50 @@ function modelProfile(): ModelProfile {
 }
 
 describe('ModelExecutionLeaseRegistry', () => {
+  it.each([
+    { modelName: 'Qwen/Qwen3.8-27B', json: true },
+    { modelName: 'deepseek-ai/DeepSeek-V4-Flash', json: true },
+    { modelName: 'deepseek-ai/DeepSeek-V4-Pro', json: true },
+    { provider: 'custom', baseUrl: 'https://api.siliconflow.cn/v1/', json: true },
+    { baseUrl: 'https://api.siliconflow.com/v1', json: false },
+    { baseUrl: 'https://proxy.example/v1', json: false },
+    { baseUrl: 'https://api.siliconflow.cn/v1?route=other', json: false },
+    { protocol: 'gemini', json: false },
+    { modelName: 'Qwen/Qwen3.8-27B-other', json: false },
+    { output: 'visible-text', json: false },
+  ] as Array<Partial<ModelProfile> & { output?: GenerationTask['output']; json: boolean }>)(
+    'carries scoped JSON support from a new lease through planning to the provider request: %j', async ({ json, output, ...overrides }) => {
+      const profile: ModelProfile = { ...modelProfile(), provider: 'openai',
+        baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'Qwen/Qwen3.8-27B',
+        capabilities: undefined, ...overrides }
+      const receipt = new ModelExecutionLeaseRegistry({ loadModel: () => profile }).begin(profile.id)
+      expect(receipt.capabilityEvidence).toMatchObject({
+        contextWindowTokens: null, maxOutputTokens: 8192, reasoning: null, usage: null,
+        structuredOutput: json || output === 'visible-text' ? true : null,
+        source: { contextWindowTokens: 'unknown', maxOutputTokens: 'legacy-profile', featureFlags: 'unknown' },
+      })
+      const task: GenerationTask = { purpose: 'chapter-review', output: output ?? 'structured-data',
+        messages: [{ role: 'user', content: '请输出 JSON 审稿报告。' }] }
+      const plan = buildMainGenerationPlan(profile, receipt, task, {
+        root: { projectId: 'p', epoch: 'e', rootActionId: 'r', operation: '审稿', uiActionNonce: 'n', frozenInputHash: 'a'.repeat(64), status: 'active' },
+        policy: { ...MAIN_GENERATION_POLICY.budget }, attempts: [], activeElapsedMs: 0, blockedCode: null,
+      })
+      const fetchMock = vi.fn().mockResolvedValue(new Response(
+        'data: {"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      ))
+      vi.stubGlobal('fetch', fetchMock)
+      const onDone = vi.fn(), onError = vi.fn()
+      await new OpenAIProvider().generateStream(profile, [...task.messages], {
+        ...plan.options, signal: new AbortController().signal, onChunk: vi.fn(), onDone, onError,
+      })
+      expect(onError).not.toHaveBeenCalled()
+      expect(onDone).toHaveBeenCalledWith('{}', undefined, 'stop')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))
+      expect(body.response_format).toEqual(json ? { type: 'json_object' } : undefined)
+    })
+
   it('keeps credentials out of stable receipt identity while including the reasoning policy', () => {
     const options = { leaseId: 'fixture', createdAt: 0, expiresAt: 1 }
     const base = createModelExecutionLeaseReceipt(modelProfile(), options)

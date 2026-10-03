@@ -4,7 +4,7 @@ import type {
   ModelExecutionLeaseReceipt,
   ModelProfile,
 } from '../../src/shared/ipc-channels'
-import { resolveModelProfileCapabilities } from '../../src/shared/provider-presets'
+import { resolveModelProfileCapabilities, resolveModelProfileStructuredOutput } from '../../src/shared/provider-presets'
 
 const DEFAULT_MODEL_EXECUTION_LEASE_TTL_MS = 4 * 60 * 60 * 1_000
 
@@ -105,13 +105,14 @@ export function resolveModelExecutionCapabilityEvidence(
           ? 'user-operational-cap'
           : 'unknown',
       maxOutputTokens: maxOutputSource,
+      // A separately declared JSON feature does not verify the whole feature group.
       featureFlags: verified ? 'verified-provider-preset' : 'unknown',
     },
     subjectFingerprint,
     contextWindowTokens: contextWindowTokens ?? null,
     maxOutputTokens,
     reasoning: verified?.reasoning ?? null,
-    structuredOutput: verified?.structuredOutput ?? null,
+    structuredOutput: verified?.structuredOutput ?? resolveModelProfileStructuredOutput(model) ?? null,
     usage: verified?.usage ?? null,
   }
 }

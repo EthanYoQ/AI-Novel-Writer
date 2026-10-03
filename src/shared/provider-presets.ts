@@ -11,6 +11,8 @@ export interface ModelPreset {
   name: string
   /** Model-specific capability metadata. `maxTokens` remains the legacy output limit. */
   capabilities?: ModelCapabilities
+  /** Independently verified JSON-mode support; does not imply other feature or capacity facts. */
+  structuredOutput?: boolean
   /** Verified capacity facts used only for budget planning, independent of feature flags. */
   budgetCapabilities?: ModelBudgetCapabilities
   /** Provider request mapping verified against the official model documentation. */
@@ -221,6 +223,8 @@ export function createProviderCatalog(): ProviderPreset[] {
     models: [
       {
         name: 'deepseek-ai/DeepSeek-V4-Flash',
+        // JSON mode: https://docs.siliconflow.cn/docs/api/chat-completions-post
+        structuredOutput: true,
         // https://docs.siliconflow.cn/docs/api/chat-completions-post
         reasoningMapping: {
           adapter: 'siliconflow-v4-thinking',
@@ -243,6 +247,8 @@ export function createProviderCatalog(): ProviderPreset[] {
       },
       {
         name: 'deepseek-ai/DeepSeek-V4-Pro',
+        // JSON mode: https://docs.siliconflow.cn/docs/userguide/guides/json-mode
+        structuredOutput: true,
         // https://docs.siliconflow.cn/docs/api/chat-completions-post
         reasoningMapping: {
           adapter: 'siliconflow-v4-thinking',
@@ -261,6 +267,8 @@ export function createProviderCatalog(): ProviderPreset[] {
       },
       {
         name: 'Qwen/Qwen3.8-27B',
+        // JSON mode: https://docs.siliconflow.cn/docs/userguide/guides/json-mode
+        structuredOutput: true,
         // Application-selected budget, not a provider-defined medium effort.
         // https://docs.siliconflow.cn/docs/userguide/capabilities/reasoning
         reasoningMapping: {
@@ -551,6 +559,15 @@ export function resolveModelProfileCapabilities(
 
   const model = preset.models.find(candidate => candidate.name === modelName)
   return validatedCapabilities(model?.capabilities)
+}
+
+/** Resolve one declared feature on the exact catalog endpoint, protocol and model. */
+export function resolveModelProfileStructuredOutput(profile: ModelCapabilityProfile): boolean | undefined {
+  if (typeof profile.protocol !== 'string' || typeof profile.modelName !== 'string') return undefined
+  const modelName = profile.modelName.trim()
+  const preset = BUILTIN_PRESETS.find(candidate => candidate.protocol === profile.protocol
+    && normalizedOfficialBaseUrl(profile.baseUrl) === normalizedOfficialBaseUrl(candidate.baseUrl))
+  return preset?.models.find(candidate => candidate.name === modelName)?.structuredOutput
 }
 
 /**

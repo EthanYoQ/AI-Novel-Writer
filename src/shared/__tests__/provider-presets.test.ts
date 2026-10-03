@@ -150,6 +150,7 @@ describe('provider catalog', () => {
     })
     expect(siliconflow?.models).toContainEqual({
       name: modelName,
+      structuredOutput: true,
       maxTokens: 16_384,
       reasoningMapping: {
         adapter: 'siliconflow-v4-thinking',
