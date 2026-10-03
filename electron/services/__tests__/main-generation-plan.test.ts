@@ -4,6 +4,7 @@ import type { GenerationTask } from '../../../src/services/generation/generation
 import type { GenerationBudgetReceipt } from '../../repositories/generation-run-repository'
 import { createModelExecutionLeaseReceipt } from '../model-execution-lease'
 import { batchRootBudget, buildMainGenerationPlan, MAIN_GENERATION_POLICY } from '../main-generation-plan'
+import { settleProviderUsage } from '../generation-run-service'
 
 const task: GenerationTask = { purpose: 'chapter:draft', output: 'visible-text', messages: [{ role: 'user', content: '雨夜，铜钥匙落在门前。' }] }
 function model(overrides: Partial<ModelProfile> = {}): ModelProfile {
@@ -40,21 +41,33 @@ describe('fixed Qwen native admission', () => {
     kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 1000, segmentable: false,
   } }]
 
-  it.each(inputs)('reserves the independent envelope and settles actual usage: %j', input => {
+  it.each(inputs)('reserves separate Qwen budgets without claiming a hard bound: %j', input => {
     const budget = ledger()
     const result = plan(qwen(), input, budget)
-    expect(result.reservedTokens).toBe(1048576)
+    expect(result.reasoningUpperBoundTokens).toBe(16384)
+    expect(result.reservedTokens).toBe(result.inputUpperBoundTokens + result.requestedOutputTokens + 16384 + 512)
+    expect(result.usagePolicy).toMatchObject({ canBoundTotalLiability: false, reasoning: 'unknown' })
     expect(result.requestedOutputTokens).toBe(input.budgetDemand ? 2912 : 16384)
+    expect(settleProviderUsage({ promptTokens: 100, completionTokens: 20000, reasoningTokens: 18000,
+      totalTokens: 20100, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true }, result.usagePolicy))
+      .toMatchObject({ trusted: true, actualTokens: 20100, reasoningTokens: 18000 })
+    expect(settleProviderUsage(null, result.usagePolicy).trusted).toBe(false)
     expect(plan({ ...qwen(), maxTokens: 32768 }, input).requestedOutputTokens).toBe(input.budgetDemand ? 2912 : 16384)
-    expect(result.options.reasoning).toEqual({ adapter: 'openai-reasoning-effort', reasoningEffort: 'medium' })
+    expect(result.options.reasoning).toEqual({ adapter: 'openai-thinking-budget', thinkingBudget: 16384 })
     expect(plan({ ...qwen(), provider: 'custom' }, input)).toEqual(result)
+    if (input.budgetDemand) expect(result.budgetDecision?.reasons).toContainEqual({ code: 'liability-bound-unknown', selected: true })
+    budget.policy.maxTokenLiability = result.reservedTokens * 2
     budget.attempts = [1, 2].map(index => ({ attemptId: `q-${index}`, reservationId: `r-${index}`,
-      rootActionId: '根', status: 'unknown', reservedTokens: 1048576, requestedOutputTokens: 16384, actualTokens: 100 }))
+      rootActionId: '根', status: 'unknown', reservedTokens: result.reservedTokens, requestedOutputTokens: result.requestedOutputTokens, actualTokens: 100 }))
     expect(() => plan(qwen(), input, budget)).toThrow('ROOT_BUDGET_EXHAUSTED')
-    budget.attempts[0].status = 'settled'
-    expect(() => plan(qwen(), input, budget)).toThrow('ROOT_BUDGET_EXHAUSTED')
-    budget.attempts[1].status = 'settled'
-    expect(plan(qwen(), input, budget).reservedTokens).toBe(1048576)
+    budget.attempts.forEach(attempt => { attempt.status = 'settled' })
+    expect(plan(qwen(), input, budget).reservedTokens).toBe(result.reservedTokens)
+    const off = plan({ ...qwen(), reasoningOverride: 'off' }, input)
+    expect(off.reasoningUpperBoundTokens).toBe(0)
+    expect(off.reservedTokens).toBe(off.inputUpperBoundTokens + off.requestedOutputTokens + 512)
+    const manual = plan({ ...qwen(), reasoningMapping: { adapter: 'openai-thinking-budget', supportedEfforts: ['medium'], providerValues: { medium: 4096 } } }, input)
+    expect(manual.reasoningUpperBoundTokens).toBe(4096)
+    expect(manual.reservedTokens).toBe(manual.inputUpperBoundTokens + manual.requestedOutputTokens + 4096 + 512)
     expect(() => plan(qwen(), { ...input, messages: [{ role: 'user', content: 'x'.repeat(262144) }] }))
       .toThrow(input.budgetDemand ? 'TASK_BUDGET_CAPACITY_CONFLICT' : 'GENERATION_INPUT_CAPACITY_EXCEEDED')
   })

@@ -106,17 +106,20 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
   const capability = resolveGenerationCapabilityConstraints(model)
   const { modelContextWindowTokens: modelContext, modelMaxOutputTokens: modelOutput } = capability
   const knownCapacity = modelContext !== null && modelOutput !== null
-  const totalBounded = knownCapacity && (siliconV4 || siliconQwen)
   const evidence = receipt.capabilityEvidence
   const safety = MAIN_GENERATION_POLICY.safetyMarginTokens
   const remaining = budget.policy.maxTokenLiability - budget.attempts.reduce((sum, attempt) => sum + tokenLiability(attempt), 0)
   const parameters = resolveGenerationParameters(model, { creativeStrategy,
     reasoningStage: task.reasoningStage ?? (task.output === 'visible-text' ? 'drafting' : 'planning') })
   const geminiReasoning = parameters.reasoning?.adapter === 'gemini-thinking-budget' ? parameters.reasoning.thinkingBudget : null
+  const compatibleReasoning = parameters.reasoning?.adapter === 'openai-thinking-budget' ? parameters.reasoning.thinkingBudget : null
+  // An explicit compatible budget sizes both billed output parts. It does not
+  // prove the service enforces a hard limit; preserve estimate settlement.
+  const totalBounded = compatibleReasoning === null && knownCapacity && (siliconV4 || siliconQwen)
   // The catalog supplies bounds, not permission to use a compatible model.
   // Missing bounds produce an operational estimate and remain unknown.
-  const canBound = !model.reasoningMapping && knownCapacity && (openai || deepseek || siliconV4 || gemini && geminiReasoning !== null && geminiReasoning >= 0)
-  const separateReasoning = geminiReasoning ?? 0
+  const canBound = compatibleReasoning === null && !model.reasoningMapping && knownCapacity && (openai || deepseek || siliconV4 || gemini && geminiReasoning !== null && geminiReasoning >= 0)
+  const separateReasoning = compatibleReasoning ?? geminiReasoning ?? 0
   const usagePolicy: ProviderUsagePolicy = { estimatorVersion: MAIN_GENERATION_POLICY.estimatorVersion,
     safetyMarginTokens: safety, reasoning: !canBound ? 'unknown' : model.protocol === 'gemini' ? 'separately-billed' : 'included-in-completion',
     canBoundTotalLiability: canBound }
@@ -129,7 +132,7 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
       capability,
       root: { remainingTokenLiability: remaining, maxOutputPerRequest: budget.policy.maxOutputPerRequest },
       liability: totalBounded ? { mode: 'total-bounded', totalLiabilityUpperBoundTokens: 1_048_576 }
-        : !canBound ? { mode: 'unknown' }
+        : !canBound ? { mode: 'unknown', reasoningUpperBoundTokens: separateReasoning }
           : gemini ? { mode: 'separate-bounded', reasoningUpperBoundTokens: separateReasoning } : { mode: 'included-in-output' },
       safetyMarginTokens: safety,
     })

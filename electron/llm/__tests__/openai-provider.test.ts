@@ -105,7 +105,7 @@ describe('SiliconFlow explicit reasoning requests', () => {
       expect(requestBody(fetchMock)).not.toHaveProperty('reasoning_effort')
     } finally { BUILTIN_PRESETS.pop() }
   })
-  it('sends Qwen medium through both native transports without enable_thinking', async () => {
+  it('sends independent Qwen thinking and answer budgets through both native transports', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok: true, json: async () => ({ choices: [{ message: { content: '正文' }, finish_reason: 'stop' }] }) })
       .mockResolvedValueOnce({ ok: true, body: { getReader: () => sseReader('data: [DONE]\n\n') } })
@@ -120,14 +120,37 @@ describe('SiliconFlow explicit reasoning requests', () => {
     for (const [url, request] of fetchMock.mock.calls) {
       expect(url).toBe('https://api.siliconflow.cn/v1/chat/completions')
       const body = JSON.parse(String((request as RequestInit).body))
-      expect(body).toMatchObject({ model: 'Qwen/Qwen3.8-27B', reasoning_effort: 'medium', max_tokens: 16384 })
-      expect(body).not.toHaveProperty('enable_thinking')
-      expect(body).not.toHaveProperty('thinking_budget')
+      expect(body).toMatchObject({ model: 'Qwen/Qwen3.8-27B', enable_thinking: true, thinking_budget: 16384, max_tokens: 16384 })
+      expect(body).not.toHaveProperty('reasoning_effort')
     }
   })
 
   const silicon: ModelProfile = { ...novelAIModel, provider: 'openai',
     baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash' }
+
+  it('honors manual numeric budgets, omits the budget when off, and keeps unknown services standard', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const profile: ModelProfile = { ...novelAIModel, provider: 'custom', baseUrl: 'https://api.siliconflow.cn/v1',
+      modelName: 'Qwen/Qwen3.8-27B', maxTokens: 1024, reasoningOverride: 'medium', reasoningMapping: {
+        adapter: 'openai-thinking-budget', supportedEfforts: ['off', 'medium'], providerValues: { off: 0, medium: 4096 },
+      } }
+    for (const reasoningOverride of ['medium', 'off'] as const) {
+      fetchMock.mockClear()
+      const selected = { ...profile, reasoningOverride }
+      await new OpenAIProvider().generate(selected, [], resolveGenerationParameters(selected, {}))
+      expect(requestBody(fetchMock)).toMatchObject({ max_tokens: 1024, enable_thinking: reasoningOverride !== 'off' })
+      expect(requestBody(fetchMock)).not.toHaveProperty('reasoning_effort')
+      if (reasoningOverride === 'off') expect(requestBody(fetchMock)).not.toHaveProperty('thinking_budget')
+      else expect(requestBody(fetchMock).thinking_budget).toBe(4096)
+    }
+    fetchMock.mockClear()
+    const unknown = { ...profile, baseUrl: 'https://unknown.test/v1', reasoningMapping: undefined }
+    await new OpenAIProvider().generate(unknown, [], resolveGenerationParameters(unknown, {}))
+    expect(requestBody(fetchMock)).toMatchObject({ max_tokens: 1024 })
+    expect(requestBody(fetchMock)).not.toHaveProperty('enable_thinking')
+    expect(requestBody(fetchMock)).not.toHaveProperty('thinking_budget')
+  })
 
   it.each([
     { baseUrl: 'https://api.siliconflow.com/v1' },

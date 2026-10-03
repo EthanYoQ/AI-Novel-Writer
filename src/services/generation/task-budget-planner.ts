@@ -61,7 +61,7 @@ export type TaskBudgetLiabilityBound =
       /** Physical upper bound for input + output + reasoning + the safety margin. */
       totalLiabilityUpperBoundTokens: number
     }
-  | { mode: 'unknown' }
+  | { mode: 'unknown'; reasoningUpperBoundTokens?: number }
 
 export interface TaskBudgetPlannerInput {
   stage: GenerationReasoningStage
@@ -250,6 +250,8 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
       !== (input.capability.modelOutputSource === 'unknown')) fail()
   if (input.liability.mode === 'separate-bounded') {
     nonNegativeInteger(input.liability.reasoningUpperBoundTokens)
+  } else if (input.liability.mode === 'unknown') {
+    nonNegativeInteger(input.liability.reasoningUpperBoundTokens ?? 0)
   } else if (input.liability.mode === 'total-bounded') {
     positiveInteger(input.liability.totalLiabilityUpperBoundTokens)
   }
@@ -269,8 +271,8 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
 
   const modelContext = input.capability.modelContextWindowTokens
   const effectiveContext = Math.min(modelContext ?? Infinity, input.capability.userContextWindowTokens ?? Infinity)
-  const fixedReasoningTokens = input.liability.mode === 'separate-bounded'
-    ? input.liability.reasoningUpperBoundTokens
+  const fixedReasoningTokens = input.liability.mode === 'separate-bounded' || input.liability.mode === 'unknown'
+    ? input.liability.reasoningUpperBoundTokens ?? 0
     : 0
   const outputLimits: Array<{ code: TaskBudgetReasonCode; value: number }> = [
     ...(input.capability.modelMaxOutputTokens === null ? [] : [{ code: 'model-output-cap' as const, value: input.capability.modelMaxOutputTokens }]),
@@ -290,7 +292,7 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
   }
 
   let totalEnvelopeTokens: number | null = null
-  if (input.liability.mode === 'separate-bounded') {
+  if (input.liability.mode === 'separate-bounded' || input.liability.mode === 'unknown' && fixedReasoningTokens > 0) {
     outputLimits.push({
       code: 'root-remaining-cap',
       value: input.root.remainingTokenLiability

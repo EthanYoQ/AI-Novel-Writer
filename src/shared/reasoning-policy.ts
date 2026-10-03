@@ -107,9 +107,9 @@ export function resolveReasoningPolicy(input: {
     : override
   const mapping = resolveModelProfileReasoningMapping(input.model)
   if (!mapping) return { requested, effective: null, status: 'unsupported', source }
-  // This scoped Qwen integration must not silently promote or cap other efforts.
+  // Only explicitly selected application budgets are defined for this Qwen integration.
   if (!input.model.reasoningMapping && input.model.modelName === 'Qwen/Qwen3.8-27B'
-    && (source !== 'model-override' || requested !== 'medium')) {
+    && (source !== 'model-override' || requested !== 'medium' && requested !== 'off')) {
     return { requested, effective: null, status: 'unsupported', source }
   }
   // Only explicit, documented SiliconFlow choices are supported. Preserve

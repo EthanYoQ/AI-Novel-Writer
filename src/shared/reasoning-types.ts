@@ -31,6 +31,11 @@ export type ProviderReasoningDirective =
       thinkingBudget: number
     }
   | {
+      adapter: 'openai-thinking-budget'
+      /** Zero disables thinking; positive values budget thinking separately from the answer. */
+      thinkingBudget: number
+    }
+  | {
       adapter: 'deepseek-v4-thinking'
       thinking: 'disabled'
     }
@@ -52,7 +57,7 @@ export interface VerifiedReasoningMapping {
 export function isReasoningMapping(value: unknown): value is VerifiedReasoningMapping {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const mapping = value as VerifiedReasoningMapping
-  if (!['openai-reasoning-effort', 'deepseek-v4-thinking', 'siliconflow-v4-thinking', 'gemini-thinking-budget'].includes(mapping.adapter)
+  if (!['openai-reasoning-effort', 'openai-thinking-budget', 'deepseek-v4-thinking', 'siliconflow-v4-thinking', 'gemini-thinking-budget'].includes(mapping.adapter)
     || !Array.isArray(mapping.supportedEfforts) || !mapping.supportedEfforts.length
     || mapping.supportedEfforts.length > REASONING_EFFORTS.length
     || new Set(mapping.supportedEfforts).size !== mapping.supportedEfforts.length
@@ -65,8 +70,9 @@ export function isReasoningMapping(value: unknown): value is VerifiedReasoningMa
     if (mapping.adapter === 'openai-reasoning-effort') {
       if (typeof wire !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(wire)) return false
       if (effort === 'off' && !['off', 'none', 'disabled'].includes(wire)) return false
-    } else if (mapping.adapter === 'gemini-thinking-budget') {
+    } else if (mapping.adapter === 'gemini-thinking-budget' || mapping.adapter === 'openai-thinking-budget') {
       if (typeof wire !== 'number' || !Number.isSafeInteger(wire) || wire < 0 || effort === 'off' && wire !== 0) return false
+      if (mapping.adapter === 'openai-thinking-budget' && effort !== 'off' && wire === 0) return false
     } else if (mapping.adapter === 'deepseek-v4-thinking') {
       if (typeof wire !== 'string' || (effort === 'off' ? wire !== 'disabled' : !['enabled', 'low', 'high', 'max'].includes(wire))) return false
     } else if (!['high', 'max'].includes(effort) || wire !== effort) return false

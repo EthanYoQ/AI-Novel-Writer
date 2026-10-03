@@ -68,6 +68,13 @@ export class OpenAIProvider implements ILLMProvider {
       body.reasoning_effort = opts.reasoning.reasoningEffort
     }
 
+    if (opts.reasoning?.adapter === 'openai-thinking-budget' && !isNovelAI
+      && resolveModelProfileReasoningMapping(model)?.adapter === 'openai-thinking-budget') {
+      body.enable_thinking = opts.reasoning.thinkingBudget > 0
+      // A disabled request omits the numeric field: zero need not be a legal provider budget.
+      if (opts.reasoning.thinkingBudget > 0) body.thinking_budget = opts.reasoning.thinkingBudget
+    }
+
     if (opts.reasoning?.adapter === 'siliconflow-v4-thinking'
       && resolveModelProfileReasoningMapping(model)?.adapter === 'siliconflow-v4-thinking') {
       body.enable_thinking = true

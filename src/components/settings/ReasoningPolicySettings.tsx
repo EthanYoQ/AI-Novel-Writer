@@ -141,7 +141,9 @@ export function ModelReasoningOverrideSettings({
         {effortLabel(resolution.requested)} → {effortLabel(resolution.effective)}
         <span className="ml-1 text-[var(--color-text-muted)]">({statusLabel(resolution.status)})</span>
         {resolution.providerDirective && <span className="ml-1" data-reasoning-wire>
-          {resolution.providerDirective.adapter === 'gemini-thinking-budget'
+          {resolution.providerDirective.adapter === 'openai-thinking-budget'
+            ? `enable_thinking=${resolution.providerDirective.thinkingBudget > 0}${resolution.providerDirective.thinkingBudget > 0 ? `; thinking_budget=${resolution.providerDirective.thinkingBudget}` : ''}`
+            : resolution.providerDirective.adapter === 'gemini-thinking-budget'
             ? `thinking_budget=${resolution.providerDirective.thinkingBudget}`
             : resolution.providerDirective.adapter === 'deepseek-v4-thinking'
               ? `thinking=${resolution.providerDirective.thinking}${resolution.providerDirective.thinking === 'enabled' && resolution.providerDirective.reasoningEffort ? `; reasoning_effort=${resolution.providerDirective.reasoningEffort}` : ''}`
@@ -192,6 +194,10 @@ export function ModelReasoningOverrideSettings({
         <p className="text-xs">{model.reasoningMapping ? text('手动设置', 'Manual setting')
           : mapping ? text('资料匹配', 'Catalog match') : text('未识别 / 服务默认', 'Unknown / provider default')}</p>
         {switchOnly && <p className="text-xs">{text('仅支持思考开关', 'Thinking toggle only')}</p>}
+        {mapping?.adapter === 'openai-thinking-budget' && <p className="text-xs">{text(
+          '数字预算是应用映射，不是服务对同名档位的定义。思考预算与最终回答上限分别发送。',
+          'The numeric budget is an application mapping, not a provider-defined effort. Thinking and final-answer limits are sent separately.',
+        )}</p>}
         {outcome(text('章节起草', 'Chapter drafting'), drafting)}
         {outcome(text('故事规划', 'Story planning'), planning)}
         {outcome(text('审稿与修订', 'Review and revision'), review)}

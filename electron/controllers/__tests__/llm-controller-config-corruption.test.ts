@@ -45,6 +45,23 @@ afterEach(() => {
 })
 
 describe('model configuration corruption boundary', () => {
+  it('persists a numeric thinking mapping across reload and refuses an off value that enables thinking', async () => {
+    const profile = { id: 'numeric', protocol: 'openai', reasoningOverride: 'medium', reasoningMapping: {
+      adapter: 'openai-thinking-budget', supportedEfforts: ['off', 'medium'], providerValues: { off: 0, medium: 4096 },
+    } }
+    await expect(handler('llm:save-model')({}, profile)).resolves.toEqual({ success: true })
+    const file = path.join(velaHome, 'models.json')
+    const before = fs.readFileSync(file)
+    vi.resetModules()
+    await (await import('../../services/__tests__/global-data-fixture')).prepareGlobalDataFixture(fixtureRoot)
+    ;(await import('../llm-controller')).registerLLMController()
+    const reloaded = await handler('llm:list-models')({})
+    expect(reloaded).toEqual([expect.objectContaining(profile)])
+    await expect(handler('llm:save-model')({}, { ...profile, reasoningMapping: {
+      ...profile.reasoningMapping, providerValues: { off: 4096, medium: 4096 },
+    } })).resolves.toMatchObject({ success: false, error: expect.stringContaining('INVALID_REASONING_MAPPING') })
+    expect(fs.readFileSync(file)).toEqual(before)
+  })
   it('saves a validated advanced mapping and rejects malformed mappings without changing the file', async () => {
     const profile = { id: 'mapped', protocol: 'openai', reasoningMapping: {
       adapter: 'openai-reasoning-effort', supportedEfforts: ['xhigh'], providerValues: { xhigh: 'Extra' },

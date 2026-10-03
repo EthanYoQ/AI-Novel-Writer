@@ -261,12 +261,12 @@ export function createProviderCatalog(): ProviderPreset[] {
       },
       {
         name: 'Qwen/Qwen3.8-27B',
-        // Scoped native support: only the explicitly configured medium effort.
-        // https://huggingface.co/Qwen/Qwen3.8-27B
+        // Application-selected budget, not a provider-defined medium effort.
+        // https://docs.siliconflow.cn/docs/userguide/capabilities/reasoning
         reasoningMapping: {
-          adapter: 'openai-reasoning-effort',
-          supportedEfforts: ['medium'],
-          providerValues: { medium: 'medium' },
+          adapter: 'openai-thinking-budget',
+          supportedEfforts: ['off', 'medium'],
+          providerValues: { off: 0, medium: 16_384 },
         },
         maxTokens: 16_384,
         budgetCapabilities: {

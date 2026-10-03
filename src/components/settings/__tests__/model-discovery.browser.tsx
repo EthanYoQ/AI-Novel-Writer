@@ -106,6 +106,35 @@ afterEach(async () => {
 })
 
 describe('model discovery settings flow', () => {
+  it('previews and preserves separate Qwen thinking budgets after saving and reopening', async () => {
+    const model = savedProfile({ baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'Qwen/Qwen3.8-27B',
+      maxTokens: 16384, reasoningOverride: 'medium' })
+    const { saveModel } = await renderSettings(model, vi.fn())
+    await act(async () => {
+      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: '高级设置', exact: true }).click()
+    })
+    expect(container?.textContent).toContain('数字预算是应用映射')
+    expect(container?.querySelector('[data-reasoning-wire]')?.textContent).toBe('enable_thinking=true; thinking_budget=16384')
+    const mapping = { adapter: 'openai-thinking-budget', supportedEfforts: ['off', 'medium'], providerValues: { off: 0, medium: 4096 } }
+    await act(async () => {
+      await page.getByText('高级参数映射', { exact: true }).click()
+      await page.getByLabelText('推理参数映射 JSON').fill(JSON.stringify(mapping))
+      await page.getByRole('button', { name: '应用映射', exact: true }).click()
+      await page.getByRole('button', { name: '保存配置', exact: true }).click()
+    })
+    expect(saveModel).toHaveBeenCalledWith(expect.objectContaining({ reasoningMapping: mapping, reasoningOverride: 'medium', maxTokens: 16384 }))
+    const saved = saveModel.mock.calls[0][0]
+    await act(async () => { useLLMStore.setState({ models: [JSON.parse(JSON.stringify(saved))] }) })
+    await act(async () => {
+      await page.getByRole('button', { name: '编辑', exact: true }).click()
+      await page.getByRole('button', { name: '高级设置', exact: true }).click()
+    })
+    expect(container?.querySelector('[data-reasoning-wire]')?.textContent).toBe('enable_thinking=true; thinking_budget=4096')
+    await act(async () => { await page.getByLabelText('模型推理覆盖').selectOptions('off') })
+    expect(container?.querySelector('[data-reasoning-wire]')?.textContent).toBe('enable_thinking=false')
+  })
+
   it.each([
     { baseUrl: 'https://api.x.ai/v1', value: 'grok-4.5', declared: undefined, context: 500000, output: 8192 },
     { baseUrl: 'https://new.test/v1', value: 'unlisted', declared: { contextWindowTokens: 64000, maxOutputTokens: 12000, reasoning: true }, context: 64000, output: 12000 },
