@@ -51,26 +51,35 @@ export const AI_REVIEW_FINAL_MANUSCRIPT_POLICY = Object.freeze({
     manuscriptMaximum: 8, minimum: 16, maximum: 80 },
 })
 export const R3_NATIVE_REVISION_DIAGNOSTIC = Object.freeze({
-  caseId: "R3",
-  caseIds: ["R3"],
-  sceneId: "场景1",
-  chapterNumber: 2,
-  milestone: "diagnostic",
-  arms: ["candidate"],
-  nonQualification: true,
-  scenarioRevision: "r3-native-flash-qwen-flash-v2",
-  minPhysicalRequests: 3,
-  maxPhysicalRequests: 8,
-  model: {"id":"33eb8a3a-614d-49be-8b1a-6d6d451d9c6d","name":"硅基流动","provider":"openai","protocol":"openai","modelName":"deepseek-ai/DeepSeek-V4-Flash","baseUrl":"https://api.siliconflow.cn/v1","temperature":0,"maxTokens":16384,"purposes":["generation","refinement","summary"],"capabilities":{"contextWindowTokens":null,"maxOutputTokens":16384,"reasoning":false,"structuredOutput":false,"usage":false},"reasoningOverride":"high"},
-  source: {"projectId":"efc9b59a-a9f8-4223-8c1c-add48b21d579","epoch":"86ef0216-7c47-4eed-b51f-3449aef0ca68","contentSha256":"7f35eabd2fcb65677bc7505c143255ee5aa36f0e664390879604d3091723efd4","contextSha256":"4cb5a188693d3293afa96f9d99c59c595c37ef48029d1afa1945d1b8a60a2a0b","exportManifestSha256":"1714681b52c97b16bd4405289184d13b9fab8a9ee8018e9b1176f35667896fb2","packetManifestSha256":"00517e3921cb6ffa1b6703b029e61c24fccd7cbd7ed1502d5ef8489bbd5e3877","assets":[{"path":".ai-novel/project.json","sha256":"2b5ad3984308abcc3a1c25177c52505f2360d69a2371d5bf82aa9fe0f756436b"},{"path":".ai-novel/portable-runtime-freeze.json","sha256":"108071a42d343cf145cd37f0fb2047f84fa8066886694157227ba88eb519de91"}]},
-  operations: [{"id":"R3普通首审","kind":"review"},{"id":"R3一次修稿","kind":"refine"},{"id":"R3普通末审","kind":"final-review"}],
-  attemptPolicy: {"milestone":"diagnostic","arms":["candidate"],"reviewRebuild":{"operationId":"R3普通首审","primaryPurpose":"review-chapter","repairPurpose":"review-chapter-rebuild","maxRepairAttempts":1},"finalReviewRebuild":{"operationId":"R3普通末审","primaryPurpose":"review-chapter","repairPurpose":"review-chapter-rebuild","maxRepairAttempts":1},"refinementRecovery":{"operationId":"R3一次修稿","purpose":"refine-from-review","maxAttempts":4,"trigger":"settled-length-same-confirmation-visible-append-with-progress"}},
-  evaluationPolicy: {"revision":"ai-review-final-manuscript-v1","caseIds":["R3"],"selection":"formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown","softwareFindings":"separate-frozen-consistency-preflight-provenance","confirmation":"preauthorized-ai-only-persisted-original-items-with-native-findingIds","noAction":"first-draft-endpoint-with-original-raw-and-saved-review","endpoint":"native-merge-then-ordinary-full-review","automaticCeiling":"pending-independent-oracle-review","physicalRequests":{"minimum":3,"maximum":8,"manuscriptMinimum":1,"manuscriptMaximum":8}},
-  closedInvocations: ["d12c4111-285e-41a7-8bcc-4b7f9afd0681","5d9f3a04-7111-4151-9323-55ec2d1141a6"],
-  requiredProductSha: "6d5c631f35a6e2c864937958c43200cb5af446bf",
-  profiles: {"flash":{"profileId":"33eb8a3a-614d-49be-8b1a-6d6d451d9c6d","configurationHash":"da1ec991888099953d636ebff28a3883b59c2b86298098cb5b4e9cbc336e466c","model":{"id":"33eb8a3a-614d-49be-8b1a-6d6d451d9c6d","name":"硅基流动","provider":"openai","protocol":"openai","modelName":"deepseek-ai/DeepSeek-V4-Flash","baseUrl":"https://api.siliconflow.cn/v1","temperature":0,"maxTokens":16384,"purposes":["generation","refinement","summary"],"capabilities":{"contextWindowTokens":null,"maxOutputTokens":16384,"reasoning":false,"structuredOutput":false,"usage":false},"reasoningOverride":"high"}},"qwen":{"profileId":"fa609022-5583-4825-a532-1ef787433626","configurationHash":"4d75f9769c9d7c56d582c109444c11f96a899be99fe401ad14132d4055e461bb","model":{"id":"fa609022-5583-4825-a532-1ef787433626","name":"R3 Qwen native diagnostic","provider":"openai","protocol":"openai","modelName":"Qwen/Qwen3.8-27B","baseUrl":"https://api.siliconflow.cn/v1","temperature":0,"maxTokens":16384,"purposes":["generation","refinement","summary"],"reasoningOverride":"medium"}}},
-  operationProfiles: {"R3普通首审":"flash","R3一次修稿":"qwen","R3普通末审":"flash"},
+  "caseId": "R3",
+  "caseIds": ["R3"],
+  "sceneId": "场景1",
+  "chapterNumber": 2,
+  "milestone": "diagnostic",
+  "arms": ["candidate"],
+  "nonQualification": true,
+  "scenarioRevision": "r3-native-qwen-three-runs-v3",
+  "minPhysicalRequests": 3,
+  "maxPhysicalRequests": 8,
+  "model": {"id":"fa609022-5583-4825-a532-1ef787433626","name":"R3 Qwen native diagnostic","provider":"openai","protocol":"openai","modelName":"Qwen/Qwen3.8-27B","baseUrl":"https://api.siliconflow.cn/v1","temperature":0,"maxTokens":16384,"purposes":["generation","refinement","summary"],"reasoningOverride":"medium"},
+  "source": {"projectId":"efc9b59a-a9f8-4223-8c1c-add48b21d579","epoch":"86ef0216-7c47-4eed-b51f-3449aef0ca68","contentSha256":"7f35eabd2fcb65677bc7505c143255ee5aa36f0e664390879604d3091723efd4","contextSha256":"4cb5a188693d3293afa96f9d99c59c595c37ef48029d1afa1945d1b8a60a2a0b","exportManifestSha256":"1714681b52c97b16bd4405289184d13b9fab8a9ee8018e9b1176f35667896fb2","packetManifestSha256":"00517e3921cb6ffa1b6703b029e61c24fccd7cbd7ed1502d5ef8489bbd5e3877","assets":[{"path":".ai-novel/project.json","sha256":"2b5ad3984308abcc3a1c25177c52505f2360d69a2371d5bf82aa9fe0f756436b"},{"path":".ai-novel/portable-runtime-freeze.json","sha256":"108071a42d343cf145cd37f0fb2047f84fa8066886694157227ba88eb519de91"}]},
+  "operations": [{"id":"R3普通首审","kind":"review"},{"id":"R3一次修稿","kind":"refine"},{"id":"R3普通末审","kind":"final-review"}],
+  "attemptPolicy": {"milestone":"diagnostic","arms":["candidate"],"reviewRebuild":{"operationId":"R3普通首审","primaryPurpose":"review-chapter","repairPurpose":"review-chapter-rebuild","maxRepairAttempts":1},"finalReviewRebuild":{"operationId":"R3普通末审","primaryPurpose":"review-chapter","repairPurpose":"review-chapter-rebuild","maxRepairAttempts":1},"refinementRecovery":{"operationId":"R3一次修稿","purpose":"refine-from-review","maxAttempts":4,"trigger":"settled-length-same-confirmation-visible-append-with-progress"}},
+  "evaluationPolicy": {"revision":"ai-review-final-manuscript-v1","caseIds":["R3"],"selection":"formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown","softwareFindings":"separate-frozen-consistency-preflight-provenance","confirmation":"preauthorized-ai-only-persisted-original-items-with-native-findingIds","noAction":"first-draft-endpoint-with-original-raw-and-saved-review","endpoint":"native-merge-then-ordinary-full-review","automaticCeiling":"pending-independent-oracle-review","physicalRequests":{"minimum":3,"maximum":8,"manuscriptMinimum":1,"manuscriptMaximum":8}},
+  "closedInvocations": ["d12c4111-285e-41a7-8bcc-4b7f9afd0681","5d9f3a04-7111-4151-9323-55ec2d1141a6","2b5963de-23b3-4e5c-8c16-8997fa021aa0"],
+  "requiredProductSha": "e28bd876bdad317d18e431c6b553a0e69961caea",
+  "profiles": {"qwen":{"profileId":"fa609022-5583-4825-a532-1ef787433626","configurationHash":"4d75f9769c9d7c56d582c109444c11f96a899be99fe401ad14132d4055e461bb","model":{"id":"fa609022-5583-4825-a532-1ef787433626","name":"R3 Qwen native diagnostic","provider":"openai","protocol":"openai","modelName":"Qwen/Qwen3.8-27B","baseUrl":"https://api.siliconflow.cn/v1","temperature":0,"maxTokens":16384,"purposes":["generation","refinement","summary"],"reasoningOverride":"medium"}}},
+  "operationProfiles": {"R3普通首审":"qwen","R3一次修稿":"qwen","R3普通末审":"qwen"},
+  "runs": [{"run":1,"invocationId":"6869a6a8-6bf4-4608-a7a1-d8fb67a9a469"},{"run":2,"invocationId":"ed4d076b-aa3f-40d6-8991-ce7df3915cf8"},{"run":3,"invocationId":"5331273c-d6f5-4019-82ce-15261ee03abb"}],
+  "maxTotalPhysicalRequests": 24,
+  "acceptance": {"minimumCompletedLoops":2,"maximumUnsupportedTimeChanges":0,"denominator":3,"automaticCeiling":"pending-independent-oracle-review"},
 })
+
+export function r3DiagnosticInvocation(run) {
+  const slot = R3_NATIVE_REVISION_DIAGNOSTIC.runs.find(item => String(item.run) === String(run))
+  if (!slot) throw new Error('R3_NATIVE_RUN_NOT_REGISTERED')
+  return slot.invocationId
+}
 
 export function r3ModelForOperation(operationId) {
   const profile = R3_NATIVE_REVISION_DIAGNOSTIC.profiles[R3_NATIVE_REVISION_DIAGNOSTIC.operationProfiles[operationId]]
@@ -740,14 +749,12 @@ export function assertForwardReasoning(registration, { arm, phase, milestone, ca
       || modelConfigurationHash(model) !== profile.configurationHash) throw new Error('R3_NATIVE_MODEL_MISMATCH')
     if (body === undefined) return null
     if (body.model !== expected.modelName || body.temperature !== 0 || (body.max_tokens ?? body.max_completion_tokens) !== 16384
-      || body.reasoning_effort !== expected.reasoningOverride
-      || (profile === R3_NATIVE_REVISION_DIAGNOSTIC.profiles.flash ? body.enable_thinking !== true : Object.hasOwn(body, 'enable_thinking'))
-      || Object.hasOwn(body, 'thinking_budget')
+      || Object.hasOwn(body, 'reasoning_effort') || body.enable_thinking !== true || body.thinking_budget !== 16384
       || resolution?.requested !== expected.reasoningOverride || resolution.effective !== expected.reasoningOverride || resolution.status !== 'mapped'
       || resolution.source !== 'model-override') throw new Error('R3_NATIVE_WIRE_MISMATCH')
     return { requested: expected.reasoningOverride, effective: expected.reasoningOverride, status: resolution.status, source: resolution.source,
-      wire: { reasoning_effort: { present: true, value: expected.reasoningOverride },
-        enable_thinking: Object.hasOwn(body, 'enable_thinking') ? { present: true, value: body.enable_thinking } : { present: false }, thinking_budget: { present: false } } }
+      wire: { reasoning_effort: { present: false },
+        enable_thinking: { present: true, value: true }, thinking_budget: { present: true, value: 16384 } } }
   }
   const scope = registration?.scopes?.find(item => item.phase === phase && item.milestone === milestone)
   const effort = registration?.reasoningOverride
@@ -2382,6 +2389,8 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
   if (!options.protocolRevision || !/^[a-f0-9]{64}$/.test(options.protocolHash ?? '')
     || arms.some(arm => targets[arm].protocolRevision !== options.protocolRevision || targets[arm].protocolHash !== options.protocolHash)) throw new Error('PROTOCOL_BINDING_MISMATCH')
   const invocationId = options.invocationId ?? randomUUID()
+  if (options.phase === 'r3-native-revision-diagnostic'
+    && !R3_NATIVE_REVISION_DIAGNOSTIC.runs.some(item => item.invocationId === invocationId)) throw new Error('R3_NATIVE_RUN_NOT_REGISTERED')
   const record = executionRecord(options)
   const directoryId = invocationId.slice(0, 8)
   const executionTargets = record.targets ?? Object.fromEntries(arms.map(arm => {

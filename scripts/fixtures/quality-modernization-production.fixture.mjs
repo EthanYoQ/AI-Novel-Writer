@@ -420,7 +420,7 @@ test('isolated production commands persist the selected phase operations', async
         assert.ok(selected?.apiKey && modelConfigurationHash(selected) === profile.configurationHash, 'R3_NATIVE_MODEL_MISMATCH')
         return [key, selected]
       }))
-      model = r3Models.flash
+      model = r3Models[copiedPolicy.operationProfiles[copiedPolicy.operations[0].id]]
     }
     if (request.mode === 'real') {
       if (request.development || !target.modelId) throw new Error('FROZEN_SAFE_MODEL_REQUIRED')
@@ -1184,6 +1184,14 @@ test('isolated production commands persist the selected phase operations', async
         userPromptHash, optionalMaterialEvidence: { registered: registeredOptional, sent: sentOptional,
           sentSourceIds: sentOptional.map(record => record.sourceId),
           ...(candidate ? { materialDecision } : {}) } }
+      if (r3Run) {
+        const messagesPath = path.join(evidenceRoot, `r3-request-messages-${receipt.attempts.length + 1}.json`)
+        const messages = JSON.stringify(body.messages)
+        fs.writeFileSync(messagesPath, messages, { flag: 'wx' })
+        requestReceipt.requestMessages = { path: messagesPath, sha256: sha(messages), bytes: Buffer.byteLength(messages) }
+        assert.equal(requestReceipt.requestMessages.sha256, requestReceipt.compiledPromptHash)
+        assert.equal(requestReceipt.requestMessages.bytes, requestReceipt.composedPromptBytes)
+      }
       receipt.attempts.push(requestReceipt)
       if (separatedRun) {
         const outputPath = path.join(evidenceRoot, 'diagnostic-request-body.json')
