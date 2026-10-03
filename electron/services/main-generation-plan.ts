@@ -125,6 +125,12 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
     canBoundTotalLiability: canBound }
   if (task.budgetDemand) {
     if (remaining <= 0 || totalBounded && remaining < 1_048_576) throw new Error('ROOT_BUDGET_EXHAUSTED')
+    const separateOutput = totalBounded || model.protocol === 'gemini' || geminiReasoning !== null
+      || compatibleReasoning !== null || parameters.reasoning?.adapter === 'siliconflow-v4-thinking'
+    const thinkingDisabled = parameters.reasoning?.adapter === 'deepseek-v4-thinking'
+      ? parameters.reasoning.thinking === 'disabled'
+      : parameters.reasoning?.adapter === 'openai-reasoning-effort'
+        && ['off', 'none', 'disabled'].includes(parameters.reasoning.reasoningEffort)
     const decision = planTaskBudget({
       stage: task.reasoningStage ?? (task.output === 'visible-text' ? 'drafting' : 'planning'),
       demand: task.budgetDemand,
@@ -134,6 +140,7 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
       liability: totalBounded ? { mode: 'total-bounded', totalLiabilityUpperBoundTokens: 1_048_576 }
         : !canBound ? { mode: 'unknown', reasoningUpperBoundTokens: separateReasoning }
           : gemini ? { mode: 'separate-bounded', reasoningUpperBoundTokens: separateReasoning } : { mode: 'included-in-output' },
+      outputAllocation: separateOutput || thinkingDisabled ? 'semantic-estimate' : 'available-ceiling',
       safetyMarginTokens: safety,
     })
     // No reservation or dispatch occurs for a larger semantic scope. The caller

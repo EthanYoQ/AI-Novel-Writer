@@ -112,6 +112,7 @@ export interface GenerationDraftCommitRequest {
   source: 'write'
   batchId?: string
 }
+export type ShortOutlineRetry = { kind: 'available'; failedAttemptId: string } | { kind: 'unavailable' }
 export interface GenerationRecoveryContext {
   modelId: string
   handle: MainGenerationRunHandle
@@ -133,7 +134,7 @@ export interface GenerationRecoveryContext {
    */
   draftReconciliation?: { artifactIds: string[]; completedOutput: string | null }
   /** Native artifacts and the original dispatched draft task, never trusted prose evidence. */
-  draftShortOutline?: { artifactIds: string[]; completedOutput: string | null; promptHash: string; initialDraftTask?: GenerationTask }
+  draftShortOutline?: { artifactIds: string[]; completedOutput: string | null; promptHash: string; initialDraftTask?: GenerationTask; retry: ShortOutlineRetry }
   /** Present only when the originally selected drafts still match their frozen source references. */
   selectedDrafts?: PreparedDraftContext['selectedDrafts']
 }
@@ -225,6 +226,7 @@ export interface GenerationOwnerChannels {
   'generation:prepare-draft-context': { args: [PrepareDraftContextRequest]; return: PreparedDraftContext }
   'generation:commit-draft': { args: [GenerationDraftCommitRequest]; return: GenerationDraftCommitReceipt }
   'generation:read-context': { args: [{ handle: MainGenerationRunHandle }]; return: GenerationRecoveryContext }
+  'generation:retry-draft-short-outline': { args: [{ handle: MainGenerationRunHandle; failedAttemptId: string }]; return: MainGenerationExecuteReceipt }
   'generation:begin-batch': { args: [BeginGenerationBatchRequest]; return: GenerationBatchProgress }
   'generation:read-batch': { args: [{ batchId: string }]; return: GenerationBatchProgress }
   'generation:list-batches': { args: []; return: GenerationBatchProgress[] }

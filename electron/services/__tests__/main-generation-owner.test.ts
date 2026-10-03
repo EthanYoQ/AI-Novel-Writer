@@ -17,6 +17,7 @@ import type { BeginGenerationRequest } from '../../../src/shared/generation-owne
 import { generationOutputContract, MAX_BATCH_CHAPTERS } from '../../../src/shared/generation-owner-contract'
 import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
 import type { GenerationTask } from '../../../src/services/generation/generation-harness'
+import { formatGenerationBudgetDiagnostic } from '../../../src/services/generation/prompt-budget-failure'
 import { composeVisibleContinuation } from '../../../src/shared/visible-continuation'
 import { sanitizeDraftText, DRAFT_VISIBLE_TEXT_VERSION, type DraftVisibleTextVersion } from '../../../src/shared/draft-visible-text'
 import { DRAFT_RECONCILE_PURPOSE, parseDraftReconciliation, renderDraftReconciliationBlock } from '../../../src/shared/draft-reconciliation'
@@ -98,6 +99,40 @@ describe('automatic short outline binding', () => {
     coverage: { required: 1, included: 1, complete: true }, included: [{ sourceId: 'author:required', revision: 1, contentHash: 'a'.repeat(64), category: 'author' as const, required: true, units: 1 }], omitted: [] }
   const outlineTask = { purpose: DRAFT_SHORT_OUTLINE_PURPOSE, output: 'visible-text' as const, messages: [{ role: 'user' as const, content: outlinePrompt }] }
   const draftTask = (content: string) => ({ ...task, messages: [{ role: 'user' as const, content }] })
+  it('retries one settled empty outline under the original root and preserves old invocations across reopen', async () => {
+    let calls = 0
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      if (++calls > 1) options.onVisible({ kind: 'delta', text: outline })
+      return { finishReason: calls === 1 ? 'length' : 'stop', usage: {
+        promptTokens: 8093, completionTokens: 1712, totalTokens: 9805, reasoningTokens: 1712,
+        accounting: 'unknown', totalIncludesReasoning: true, trusted: true,
+      } }
+    })
+    const f = fixture(dispatch)
+    Object.assign(f.model, { provider: 'custom', modelName: 'hand-entered', capabilities: null })
+    const run = f.owner.begin({ ...f.begin, materialDecision: decision })
+    const failed = await f.owner.execute({ handle: run.handle, invocationNonce: 'outline', task: outlineTask })
+    const failedAttemptId = failed.outcome.receipt.visibleArtifact!.attemptId
+    const before = f.db.prepare('SELECT * FROM generation_attempts WHERE attempt_id=?').get(failedAttemptId)
+    const owner = f.reopen(), resumed = await owner.resume(run.handle)
+    expect(owner.readContext(resumed.handle).draftShortOutline?.retry).toEqual({ kind: 'available', failedAttemptId })
+    const [retried, duplicate] = await Promise.all([
+      owner.retryDraftShortOutline({ handle: resumed.handle, failedAttemptId }),
+      owner.retryDraftShortOutline({ handle: resumed.handle, failedAttemptId }),
+    ])
+    expect(retried.outcome).toMatchObject({ status: 'completed', content: outline })
+    expect(duplicate.outcome.receipt.visibleArtifact).toEqual(retried.outcome.receipt.visibleArtifact)
+    expect(retried.run.handle.rootActionId).toBe(run.handle.rootActionId)
+    expect(retried.run.ledger).toMatchObject({ physicalRequests: 2, tokenLiability: 19610 })
+    expect(f.db.prepare('SELECT * FROM generation_attempts WHERE attempt_id=?').get(failedAttemptId)).toEqual(before)
+    expect(owner.readContext(resumed.handle).draftShortOutline?.retry).toEqual({ kind: 'unavailable' })
+    const reopened = f.reopen(), next = await reopened.resume(resumed.handle)
+    expect((await reopened.retryDraftShortOutline({ handle: next.handle, failedAttemptId })).outcome.content).toBe(outline)
+    expect((await reopened.execute({ handle: next.handle, invocationNonce: 'outline', task: outlineTask })).outcome.content).toBe('')
+    await expect(reopened.execute({ handle: next.handle, invocationNonce: 'outline', task: { ...outlineTask, reasoningStage: 'general' } })).rejects.toThrow('GENERATION_INVOCATION_CONFLICT')
+    await expect(reopened.execute({ handle: next.handle, invocationNonce: 'third', task: outlineTask })).rejects.toThrow('GENERATION_DRAFT_SHORT_OUTLINE_ALREADY_ATTEMPTED')
+    expect(dispatch).toHaveBeenCalledTimes(2)
+  })
   it('sends a hand-entered model through the native adapter for outline then prose with unknown usage', async () => {
     const f = fixture()
     Object.assign(f.model, { provider: 'custom', baseUrl: 'http://localhost:8000/v1', modelName: 'hand-entered', capabilities: null })
@@ -123,6 +158,72 @@ describe('automatic short outline binding', () => {
     await owner.execute({ handle: resumed.handle, invocationNonce: 'prose', task: draftTask(composed) })
     expect(fetch).toHaveBeenCalledTimes(2)
     expect(owner.readContext(resumed.handle).draftShortOutline?.completedOutput).toBe(outline)
+  })
+  it.each(['length', 'stop'] as const)('keeps the second %s failure and never authorizes a third outline', async finishReason => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => ({ finishReason,
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, reasoningTokens: null, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true } }))
+    const f = fixture(dispatch), run = f.owner.begin({ ...f.begin, materialDecision: decision })
+    const first = await f.owner.execute({ handle: run.handle, invocationNonce: 'first', task: outlineTask })
+    const failedAttemptId = first.outcome.receipt.visibleArtifact!.attemptId
+    const retried = await f.owner.retryDraftShortOutline({ handle: run.handle, failedAttemptId })
+    expect(f.owner.readContext(run.handle).draftShortOutline?.retry).toEqual({ kind: 'unavailable' })
+    await expect(f.owner.retryDraftShortOutline({ handle: run.handle, failedAttemptId: retried.outcome.receipt.visibleArtifact!.attemptId })).rejects.toThrow('GENERATION_DRAFT_SHORT_OUTLINE_RETRY_UNAVAILABLE')
+    await f.owner.retryDraftShortOutline({ handle: run.handle, failedAttemptId })
+    expect(dispatch).toHaveBeenCalledTimes(2)
+    expect(f.owner.read(run.handle).ledger?.physicalRequests).toBe(2)
+  })
+  it.each(['unknown-usage', 'reserved', 'dispatch-marked', 'content_filter', 'unknown-finish', 'blocked', 'cancelled',
+    'time-exhausted', 'tokens-exhausted', 'requests-exhausted', 'source-changed', 'model-changed', 'task-changed', 'wrong-attempt',
+    'chapter-draft', 'chapter-draft-continuation', 'chapter-draft-no-progress-recovery', 'chapter-draft-condense'] as const)(
+    'rejects unsafe outline retry without a new attempt: %s', async state => {
+      const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => ({
+        finishReason: state === 'content_filter' ? 'content_filter' : state === 'unknown-finish' ? 'unknown' : 'length',
+        usage: state === 'unknown-usage' ? null : { promptTokens: 10, completionTokens: 2, totalTokens: 12,
+          reasoningTokens: null, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true },
+      }))
+      const f = fixture(dispatch), run = f.owner.begin({ ...f.begin, materialDecision: decision })
+      const first = await f.owner.execute({ handle: run.handle, invocationNonce: 'first', task: outlineTask })
+      const failedAttemptId = first.outcome.receipt.visibleArtifact!.attemptId
+      const repository = new GenerationRunRepository(() => f.db)
+      if (state === 'blocked') repository.block(run.handle.rootActionId, 'GENERATION_STORAGE_FAILED')
+      if (state === 'cancelled') f.owner.cancel(run.handle)
+      if (state === 'reserved' || state === 'dispatch-marked') {
+        const attempt = repository.receipt(failedAttemptId).attempt
+        f.db.prepare('UPDATE generation_attempts SET attempt_json=? WHERE attempt_id=?').run(JSON.stringify({ ...attempt, status: state }), failedAttemptId)
+      }
+      if (state === 'time-exhausted') f.db.prepare('UPDATE generation_roots SET active_elapsed_ms=? WHERE root_action_id=?').run(MAIN_GENERATION_POLICY.budget.maxActiveElapsedMs, run.handle.rootActionId)
+      if (state === 'tokens-exhausted' || state === 'requests-exhausted') f.db.prepare('UPDATE generation_roots SET budget_json=? WHERE root_action_id=?')
+        .run(JSON.stringify({ ...MAIN_GENERATION_POLICY.budget, ...(state === 'tokens-exhausted' ? { maxTokenLiability: 12 } : { maxPhysicalRequests: 1 }) }), run.handle.rootActionId)
+      if (state === 'source-changed') f.db.exec("UPDATE project_core SET global_guidance='作者改了约束'")
+      if (state === 'model-changed') f.model.temperature = 0.1
+      if (state === 'task-changed') {
+        const stored = JSON.parse(f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(failedAttemptId) as string)
+        stored.replayTask.reasoningStage = 'general'
+        f.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify(stored), failedAttemptId)
+      }
+      if (state.startsWith('chapter-draft')) repository.reserve(run.handle.runId, 'body-started', 'b'.repeat(64), 100, 20, undefined, state)
+      if (state !== 'wrong-attempt') expect(f.owner.readContext(run.handle).draftShortOutline?.retry).toEqual({ kind: 'unavailable' })
+      await expect(f.owner.retryDraftShortOutline({ handle: run.handle, failedAttemptId: state === 'wrong-attempt' ? 'another-attempt' : failedAttemptId })).rejects.toThrow()
+      expect(dispatch).toHaveBeenCalledTimes(1)
+    },
+  )
+  it.each(['reserved', 'dispatch-marked', 'unknown'] as const)('reads an existing %s retry nonce without redispatch', async status => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => ({ finishReason: 'length',
+      usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, reasoningTokens: null, accounting: 'included-in-completion', totalIncludesReasoning: true, trusted: true } }))
+    const f = fixture(dispatch), run = f.owner.begin({ ...f.begin, materialDecision: decision })
+    const first = await f.owner.execute({ handle: run.handle, invocationNonce: 'first', task: outlineTask })
+    const failedAttemptId = first.outcome.receipt.visibleArtifact!.attemptId
+    const repository = new GenerationRunRepository(() => f.db)
+    const requestHash = textHash(JSON.stringify([outlineTask, repository.get(run.handle.runId).binding.fingerprint.modelLeaseRevision, repository.get(run.handle.runId).binding.fingerprint.policyHash]))
+    const reserved = repository.reserve(run.handle.runId, `draft-short-outline-retry:${failedAttemptId}`, requestHash, 100, 20, undefined, outlineTask.purpose, outlineTask)
+    f.db.prepare('UPDATE generation_attempts SET attempt_json=? WHERE attempt_id=?').run(JSON.stringify({ ...reserved.attempt, status }), reserved.attempt.attemptId)
+    const receipt = await f.owner.retryDraftShortOutline({ handle: run.handle, failedAttemptId })
+    expect(receipt.outcome.finishReason).toBe('unknown')
+    expect(receipt.outcome.receipt.visibleArtifact?.attemptId).toBe(reserved.attempt.attemptId)
+    const reopened = f.reopen(), resumed = await reopened.resume(run.handle)
+    expect((await reopened.retryDraftShortOutline({ handle: resumed.handle, failedAttemptId })).outcome.receipt.visibleArtifact?.attemptId)
+      .toBe(reserved.attempt.attemptId)
+    expect(dispatch).toHaveBeenCalledTimes(1)
   })
   it('requires and consumes its native artifact, then preserves the exact draft task across reopen', async () => {
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
@@ -168,7 +269,7 @@ describe('automatic short outline binding', () => {
     const run = f.owner.begin({ ...f.begin, materialDecision: decision })
     const planned = await f.owner.execute({ handle: run.handle, invocationNonce: 'outline', task: outlineTask })
     const owner = f.reopen(), resumed = await owner.resume(run.handle)
-    expect(owner.readContext(resumed.handle).draftShortOutline).toEqual({ artifactIds: [planned.run.artifacts[0]!.artifactId], completedOutput: outline, promptHash: textHash(outlinePrompt) })
+    expect(owner.readContext(resumed.handle).draftShortOutline).toEqual({ artifactIds: [planned.run.artifacts[0]!.artifactId], completedOutput: outline, promptHash: textHash(outlinePrompt), retry: { kind: 'unavailable' } })
     const drafted = await owner.execute({ handle: resumed.handle, invocationNonce: 'prose', task: draftTask(composed) })
     expect(drafted.run.ledger?.physicalRequests).toBe(2)
     expect(drafted.run.handle.rootActionId).toBe(run.handle.rootActionId)
@@ -592,6 +693,25 @@ it('freezes a purpose-specific output exception and rejects all undeclared chang
 })
 
 describe('main generation owner with actual SQLite and provider adapter', () => {
+  it('shows semantic 1712 and physical 16384 from the durable owner diagnostic with reservation 50410', async () => {
+    const f = fixture(async () => ({ finishReason: 'length', usage: null }))
+    Object.assign(f.model, { provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', modelName: 'deepseek-flash',
+      temperature: 0, maxTokens: 16384, reasoningOverride: 'high',
+      reasoningMapping: { adapter: 'deepseek-v4-thinking', supportedEfforts: ['off', 'high'], providerValues: { off: 'disabled', high: 'high' } },
+      capabilities: { contextWindowTokens: 1048576, maxOutputTokens: 393216, reasoning: true, structuredOutput: true, usage: true } })
+    const run = f.owner.begin(f.begin)
+    const receipt = await f.owner.execute({ handle: run.handle, invocationNonce: 'semantic-physical', task: {
+      purpose: 'chapter-draft', output: 'visible-text', reasoningStage: 'planning',
+      budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 500, segmentable: false },
+      messages: [{ role: 'user', content: 'a'.repeat(33446) }],
+    } })
+    const diagnostic = receipt.run.budgetDiagnostics![0]!
+    const stored = new GenerationRunRepository(() => f.db).receipt(diagnostic.attemptId)
+    expect(stored.budgetDecision).toMatchObject({ requestedOutputTokens: 1712, reservedOutputTokens: 16384 })
+    expect(stored.attempt).toMatchObject({ requestedOutputTokens: 16384, reservedTokens: 50410 })
+    expect(formatGenerationBudgetDiagnostic(diagnostic, 'zh-CN')).toContain('语义输出估算 1,712 tokens，物理输出上限 16,384 tokens，总预留 50,410 tokens')
+    expect(f.reopen().read(run.handle).budgetDiagnostics).toEqual(receipt.run.budgetDiagnostics)
+  })
   it.each(['chapter-blueprint-directory', 'chapter-blueprint-directory:compact-single:chapter-1'])(
     'sends the planned native wire for %s and recovers its full LENGTH candidate without committing or redispatching', async purpose => {
       const fetch = syntheticStream(), f = fixture()

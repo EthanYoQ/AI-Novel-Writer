@@ -209,6 +209,35 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     const documents = await connection.createTable('documents', [{ id: '原始资料', fileName: '设定资料.md', chunkCount: 1, corpusKind: 'project-knowledge' }])
     chunks.close(); documents.close(); connection.close()
   }
+  it('routes the explicit outline retry through project authority and SQLite without accepting renderer task or nonce', async () => {
+    const { selection } = await prepareDraft()
+    const prompt = '保留作者事实，规划细纲。'
+    selection.materialDecision = { ...materialDecision(), shortOutlinePromptHash: textHash(prompt) }
+    let physicalCalls = 0
+    const fetch = vi.fn(async () => ({ ok: true, body: new ReadableStream({ start(controller) {
+      const retried = ++physicalCalls === 2
+      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content: retried ? '完整的细纲。' : '' }, finish_reason: retried ? 'stop' : 'length' }] })}\n\ndata: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}\n\ndata: [DONE]\n\n`))
+      controller.close()
+    } }) }))
+    vi.stubGlobal('fetch', fetch)
+    vi.stubGlobal('window', { aiNovelAPI: { invoke: (channel: string, ...args: unknown[]) => mocks.handlers.get(channel)!({ sender }, ...args) } })
+    const run = await invoke('generation:begin', selection)
+    const failed = await invoke('generation:execute', { handle: run.handle, invocationNonce: 'original',
+      task: { purpose: 'chapter-draft-short-outline', output: 'visible-text', messages: [{ role: 'user', content: prompt }] } })
+    const failedAttemptId = failed.outcome.receipt.visibleArtifact!.attemptId
+    await invoke('generation:pause', run.handle)
+    const resumed = await invoke('generation:resume', run.handle)
+    const before = getProjectDb()!.prepare('SELECT * FROM generation_attempts WHERE attempt_id=?').get(failedAttemptId)
+    const payload = { handle: resumed.handle, failedAttemptId, invocationNonce: 'renderer-chosen', task: { messages: [{ role: 'user', content: '替换原提示' }] } }
+    await expect(mocks.handlers.get('generation:retry-draft-short-outline')!({ sender }, payload, { ...session, leaseId: 'stale' })).rejects.toThrow()
+    const retried = await ipc.invokeWithProjectSession(session, 'generation:retry-draft-short-outline', payload)
+    expect(retried.outcome).toMatchObject({ status: 'completed', content: '完整的细纲。' })
+    expect(retried.run.handle.rootActionId).toBe(run.handle.rootActionId)
+    expect(getProjectDb()!.prepare('SELECT * FROM generation_attempts WHERE attempt_id=?').get(failedAttemptId)).toEqual(before)
+    expect(getProjectDb()!.prepare('SELECT invocation_nonce FROM generation_attempts ORDER BY rowid').pluck().all())
+      .toEqual(['original', `draft-short-outline-retry:${failedAttemptId}`])
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
   async function selectedSourceFixture() {
     const database = getProjectDb()!
     database.exec("INSERT INTO blueprints(chapter_number,title) VALUES(1,'北岸'),(2,'灯塔'),(3,'港口')")

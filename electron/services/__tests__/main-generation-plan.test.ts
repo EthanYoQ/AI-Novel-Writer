@@ -24,7 +24,7 @@ it.each([task, { ...task, budgetDemand: { kind: 'draft-units', writingLanguage: 
   'plans unregistered compatible models as estimates without inventing capability: %j', input => {
     const result = plan(model({ provider: 'custom', baseUrl: 'http://localhost:8000/v1', modelName: 'hand-entered' }), input)
     expect(result.usagePolicy).toMatchObject({ canBoundTotalLiability: false, reasoning: 'unknown' })
-    expect(result.requestedOutputTokens).toBe(input.budgetDemand ? 2912 : 8192)
+    expect(result.requestedOutputTokens).toBe(8192)
     expect(result.reservedTokens).toBe(result.inputUpperBoundTokens + result.requestedOutputTokens + 512)
     expect(result.options.reasoning).toBeUndefined()
     if (input.budgetDemand) expect(result.budgetDecision?.reasons).toContainEqual({ code: 'model-capability-unknown', selected: true })
@@ -309,5 +309,104 @@ describe('S07 semantic pre-dispatch integration', () => {
     const input = draft(900)
     Object.assign(input.budgetDemand!, { maxTokens: 9 })
     expect(() => plan(known(), input)).toThrow('GENERATION_SEMANTIC_TASK_INVALID')
+  })
+})
+
+describe('semantic demand with shared reasoning completion', () => {
+  const profile = () => model({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com',
+    modelName: 'deepseek-flash', temperature: 0, maxTokens: 16384, reasoningOverride: 'high',
+    capabilities: { contextWindowTokens: 1048576, maxOutputTokens: 393216, reasoning: true, structuredOutput: true, usage: true },
+    reasoningMapping: { adapter: 'deepseek-v4-thinking', supportedEfforts: ['off', 'high'],
+      providerValues: { off: 'disabled', high: 'high' } } })
+  const outline: GenerationTask = { purpose: 'chapter-draft-short-outline', output: 'visible-text', reasoningStage: 'planning',
+    messages: [{ role: 'user', content: 'x'.repeat(33446) }],
+    budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 500, segmentable: false } }
+
+  it('reserves the physical ceiling while keeping the 500-unit semantic demand and unknown liability', () => {
+    const original = JSON.stringify(outline)
+    const result = plan(profile(), outline)
+    expect(result.budgetDecision).toMatchObject({ decision: 'ready', requestedQuantity: 500, selectedQuantity: 500,
+      requestedOutputTokens: 1712, reservedOutputTokens: 16384, reservationLiabilityTokens: 50410 })
+    expect(result).toMatchObject({ inputUpperBoundTokens: 33514, requestedOutputTokens: 16384,
+      reservedTokens: 50410, reasoningUpperBoundTokens: 0,
+      usagePolicy: { reasoning: 'unknown', canBoundTotalLiability: false } })
+    expect(result.budgetDecision?.reasons).toContainEqual({ code: 'liability-bound-unknown', selected: true })
+    expect(result.budgetDecision?.reasons).toContainEqual({ code: 'output-allocation-ceiling', valueTokens: 16384, selected: true })
+    expect(result.options).toMatchObject({ maxTokens: 16384, temperature: 0,
+      reasoning: { adapter: 'deepseek-v4-thinking', thinking: 'enabled', reasoningEffort: 'high' } })
+    expect(JSON.stringify(outline)).toBe(original)
+  })
+
+  it.each([
+    ['chapter-draft', 'drafting', 1000],
+    ['chapter-draft-continuation', 'drafting', 150],
+    ['chapter-draft-no-progress-recovery', 'drafting', 1],
+    ['chapter-draft-condense', 'drafting', 1000],
+  ] as const)('uses the same allocation for %s', (purpose, reasoningStage, requestedUnits) => {
+    const result = plan(profile(), { ...outline, purpose, reasoningStage,
+      budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits, segmentable: false } })
+    expect(result.options.maxTokens).toBe(16384)
+    expect(result.budgetDecision?.requestedOutputTokens).toBe(512 + Math.ceil(requestedUnits * 12 / 5))
+  })
+
+  it.each(['chapter-blueprint-directory', 'structured-syntax-repair'])('allocates shared completion for %s', purpose => {
+    const result = plan(profile(), { ...outline, purpose, output: 'structured-data',
+      budgetDemand: { kind: 'structured-items', writingLanguage: 'zh-CN', requestedItems: 1 } })
+    expect(result.budgetDecision).toMatchObject({ requestedOutputTokens: 3584, reservedOutputTokens: 16384 })
+  })
+
+  it.each(['user-output', 'user-context', 'root-output', 'root-remaining'] as const)(
+    'honors a lower %s ceiling and rejects semantic demand that no longer fits', limit => {
+      const bounded = profile(), budget = ledger()
+      if (limit === 'user-output') bounded.maxTokens = 2000
+      if (limit === 'user-context') bounded.capabilities = { contextWindowTokens: 36026, maxOutputTokens: 393216,
+        reasoning: true, structuredOutput: true, usage: true }
+      if (limit === 'root-output') budget.policy.maxOutputPerRequest = 2000
+      if (limit === 'root-remaining') budget.policy.maxTokenLiability = 36026
+      expect(plan(bounded, outline, budget).options.maxTokens).toBe(2000)
+      const larger: GenerationTask = { ...outline,
+        budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 1000, segmentable: false } }
+      expect(() => plan(bounded, larger, budget)).toThrow('TASK_BUDGET_CAPACITY_CONFLICT')
+    })
+
+  it('honors verified model output and context below user limits', () => {
+    const bounded = model({ modelName: 'gpt-3.5-turbo', maxTokens: 100000 })
+    const small: GenerationTask = { ...outline, messages: [{ role: 'user', content: 'outline' }] }
+    expect(plan(bounded, small).options.maxTokens).toBe(4096)
+    expect(plan(bounded, { ...small, messages: [{ role: 'user', content: 'x'.repeat(13805) }] }).options.maxTokens).toBe(2000)
+    expect(() => plan(bounded, outline)).toThrow('TASK_BUDGET_CAPACITY_CONFLICT')
+  })
+
+  it('does not treat an absent directive or an unsupported off request as disabled thinking', () => {
+    const unsupported = { ...profile(), reasoningMapping: undefined }
+    for (const reasoningOverride of ['auto', 'off'] as const) {
+      const result = plan({ ...unsupported, reasoningOverride }, outline)
+      expect(result.options.reasoning).toBeUndefined()
+      expect(result.options.maxTokens).toBe(16384)
+      expect(result.usagePolicy).toMatchObject({ reasoning: 'unknown', canBoundTotalLiability: false })
+    }
+  })
+
+  it.each(['off', 'none', 'disabled', 'high'])('uses the actual OpenAI directive %s', reasoningEffort => {
+    const result = plan({ ...profile(), reasoningMapping: { adapter: 'openai-reasoning-effort',
+      supportedEfforts: ['high'], providerValues: { high: reasoningEffort } } }, outline)
+    expect(result.options.maxTokens).toBe(reasoningEffort === 'high' ? 16384 : 1712)
+    expect(result.usagePolicy.canBoundTotalLiability).toBe(false)
+  })
+
+  it('preserves disabled, numeric and separate-output allocations', () => {
+    for (const bounded of [
+      { ...profile(), reasoningOverride: 'off' as const },
+      { ...profile(), reasoningMapping: { adapter: 'openai-thinking-budget' as const,
+        supportedEfforts: ['high' as const], providerValues: { high: 4096 } } },
+      { ...gemini(), maxTokens: 16384 },
+      { ...gemini(), modelName: 'gemini-unknown', maxTokens: 16384 },
+      { ...silicon(), reasoningOverride: 'high' as const },
+    ]) {
+      expect(plan(bounded, outline).options.maxTokens).toBe(1712)
+    }
+    const envelope = plan({ ...silicon(), reasoningOverride: 'high' }, outline)
+    expect(envelope.reservedTokens).toBe(1048576)
+    expect(envelope.reasoningUpperBoundTokens).toBe(1048576 - 33514 - 1712 - 512)
   })
 })

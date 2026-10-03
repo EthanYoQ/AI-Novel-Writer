@@ -2450,6 +2450,77 @@ ${headingPrefix}第3章：潮门
   })
 
   describe('automatic short outline', () => {
+    it.each(['stop', 'length', 'empty', 'cancelled', 'not-durable', 'outline-as-prose'] as const)(
+      'resumes before the one outline retry and checks its durable context before drafting: %s', async finish => {
+        const hash = (text: string) => createHash('sha256').update(text).digest('hex')
+        const planned = fakeOutcomes(outcome('潮'.repeat(900), 'stop'))
+        const initial = setup({ runtime: planned, wordsTarget: 900 })
+        await initial.command.execute({ step: {}, context: initial.context, callbacks: initial.callbacks })
+        const selection = planned.createRuntime.mock.calls[0]![1]!.selection
+        const oldHandle: MainGenerationRunHandle = { projectId: 'generation-runtime', epoch: 'old-epoch', rootActionId: 'outline-root', runId: 'outline-run' }
+        const handle = { ...oldHandle, epoch: 'lease-generation-runtime' }
+        const f = setup({ runtime: fakeOutcomes(), mainDefault: true, resumeHandle: oldHandle, wordsTarget: 900 })
+        f.context.generationModelId = '合成模型'
+        const outline = '目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。'
+        const expected = '潮'.repeat(900)
+        const view: MainGenerationRunView = { handle, status: 'running', nonReplayable: false, artifacts: [],
+          budget: { maxAttempts: 32, maxRequestedOutputTokens: 2000000, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: Date.now() + 3600000 } }
+        let resumed = false, retried = false
+        let cancelRetry: (() => void) | undefined
+        const original = f.invoke.getMockImplementation()!
+        f.invoke.mockImplementation(async (channel, ...args) => {
+          if (channel === 'generation:read') return resumed ? view : { ...view, handle: oldHandle, status: 'paused', nonReplayable: true }
+          if (channel === 'generation:resume') { resumed = true; return view }
+          if (channel === 'generation:read-context') return { handle: resumed ? handle : oldHandle, operation: 'chapter-draft', chapterNumber: 1,
+            authorInputs: selection.authorInputs, selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1, 2, 3, 4, 5, 6],
+            knowledgeSnapshot: { version: 1, state: 'empty', storageState: 'absent', query: '第一章 开端', topK: 5, canonicalRevision: null, documentsRevision: null, items: [] },
+            composition: null, lastCompositionFinishReason: null, attemptedPurposes: ['chapter-draft-short-outline'],
+            draftShortOutline: { artifactIds: retried && finish !== 'not-durable' ? ['old-outline', 'retry-outline'] : ['old-outline'],
+              completedOutput: retried ? outline : null, promptHash: selection.materialDecision!.shortOutlinePromptHash,
+              retry: retried ? { kind: 'unavailable' } : { kind: 'available', failedAttemptId: 'failed' } } }
+          if (channel === 'generation:retry-draft-short-outline') {
+            expect(resumed).toBe(true)
+            expect(args[0]).toEqual({ handle, failedAttemptId: 'failed' })
+            retried = true
+            if (finish === 'cancelled') {
+              setTimeout(() => { f.context.cancelled = true }, 0)
+              await new Promise<void>(resolve => { cancelRetry = resolve })
+            }
+            const result = outcome(finish === 'empty' ? '' : outline, finish === 'length' || finish === 'cancelled' ? 'length' : 'stop')
+            result.receipt.visibleArtifact = { artifactId: 'retry-outline', attemptId: 'retried', revision: 1, textHash: hash(result.content) }
+            return { outcome: result, run: view }
+          }
+          if (channel === 'generation:cancel') { cancelRetry?.(); return { ...view, status: 'cancelled' } }
+          if (channel === 'generation:execute') {
+            expect(retried).toBe(true)
+            expect((args[0] as { task: GenerationTask }).task.purpose).toBe('chapter-draft')
+            const result = outcome(expected, 'stop')
+            result.receipt.visibleArtifact = { artifactId: finish === 'outline-as-prose' ? 'retry-outline' : 'prose', attemptId: 'prose-attempt', revision: 1, textHash: hash(expected) }
+            return { outcome: result, run: view }
+          }
+          if (channel === 'generation:compose-visible') {
+            expect(args[1]).toEqual(['prose'])
+            return { algorithm: DRAFT_VISIBLE_TEXT_VERSION, artifactIds: ['prose'], text: expected, textHash: hash(expected), sources: [] }
+          }
+          if (channel === 'generation:commit-draft') return { success: true, id: 18, version: 1, content: expected, contentHash: hash(expected) }
+          return original(channel, ...args)
+        })
+        const execution = f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })
+        if (finish === 'stop') {
+          await expect(execution).resolves.toBe(expected)
+          const calls = f.invoke.mock.calls.map(([channel]) => channel)
+          const retryIndex = calls.indexOf('generation:retry-draft-short-outline')
+          expect(calls.slice(retryIndex + 1, calls.indexOf('generation:execute'))).toContain('generation:read-context')
+          expect(calls.indexOf('generation:compose-visible')).toBeLessThan(calls.indexOf('generation:commit-draft'))
+        } else {
+          await expect(execution).rejects.toThrow(finish === 'cancelled' ? '工作流已取消' : finish === 'outline-as-prose' ? 'GENERATION_COMPOSITION_SOURCE_INVALID' : 'GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
+          expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:commit-draft')).toBe(false)
+          if (finish !== 'outline-as-prose') expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:execute')).toBe(false)
+        }
+        expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:retry-draft-short-outline')).toHaveLength(1)
+        if (finish === 'cancelled') expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:cancel')).toHaveLength(1)
+      },
+    )
     it.each(['before-prose', 'after-prose', 'changed-prompt', 'missing-task'] as const)('resumes with the original outline and prompt identity: %s', async state => {
       const hash = (text: string) => createHash('sha256').update(text).digest('hex')
       const planningRuntime = fakeOutcomes(outcome('潮'.repeat(900), 'stop'))

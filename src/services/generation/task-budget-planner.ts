@@ -76,11 +76,13 @@ export interface TaskBudgetPlannerInput {
     maxOutputPerRequest: number
   }
   liability: TaskBudgetLiabilityBound
+  outputAllocation?: 'semantic-estimate' | 'available-ceiling'
   safetyMarginTokens: number
 }
 
 export type TaskBudgetReasonCode =
   | 'task-demand'
+  | 'output-allocation-ceiling'
   | 'input-upper-bound'
   | 'safety-margin'
   | 'model-context-cap'
@@ -354,7 +356,11 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
     return conflict(input, requestedQuantity, requestedOutputTokens, reasons)
   }
 
-  const reservedOutputTokens = outputTokensFor(input.stage, input.demand, selectedQuantity)
+  const decision = selectedQuantity < requestedQuantity ? 'split-required' : 'ready'
+  const useAvailableCeiling = decision === 'ready' && input.outputAllocation === 'available-ceiling'
+  const reservedOutputTokens = useAvailableCeiling
+    ? availableOutputTokens : outputTokensFor(input.stage, input.demand, selectedQuantity)
+  if (useAvailableCeiling) reasons.push({ code: 'output-allocation-ceiling', valueTokens: reservedOutputTokens, selected: true })
   const reasoningUpperBoundTokens = totalEnvelopeTokens === null
     ? fixedReasoningTokens
     : Math.max(0, totalEnvelopeTokens
@@ -365,7 +371,6 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
     + reasoningUpperBoundTokens
     + input.safetyMarginTokens
   )
-  const decision = selectedQuantity < requestedQuantity ? 'split-required' : 'ready'
   if (decision === 'split-required') reasons.push({ code: 'scope-split', valueTokens: reservedOutputTokens, selected: true })
   return Object.freeze({
     policyVersion: S07_TASK_BUDGET_POLICY.version,

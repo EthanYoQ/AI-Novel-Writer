@@ -48,6 +48,19 @@ function execute(workflow: WorkflowDefinition) {
 
 afterEach(() => { vi.unstubAllGlobals(); useProjectStore.setState(originalStore, true) })
 
+it.each(['failed', 'completed'] as const)('没有正文时可从原入口恢复细纲：%s', async state => {
+  const recovery = recoveryFixture()
+  recovery.composition = null
+  recovery.lastCompositionFinishReason = null
+  recovery.attemptedPurposes = ['chapter-draft-short-outline']
+  recovery.draftShortOutline = { artifactIds: ['outline'], promptHash: 'a'.repeat(64),
+    completedOutput: state === 'completed' ? '完整细纲' : null,
+    retry: state === 'failed' ? { kind: 'available', failedAttemptId: 'failed' } : { kind: 'unavailable' } }
+  const invoke = bridge(recovery)
+  await expect(createDraftRecoveryWorkflow(session, handle)).resolves.toMatchObject({ generationModelId: 'synthetic-model' })
+  expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['generation:read-context'])
+})
+
 it('从原资料快照恢复附加检索词，不发起新的准备或检索', async () => {
   const invoke = bridge(recoveryFixture())
   const workflow = await createDraftRecoveryWorkflow(session, handle)

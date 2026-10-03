@@ -120,6 +120,7 @@ export function classifyGenerationFailure(
 
 const REASON_LABELS: Readonly<Record<TaskBudgetReasonCode, readonly [string, string]>> = Object.freeze({
   'task-demand': ['任务完整范围', 'Complete task scope'],
+  'output-allocation-ceiling': ['物理输出使用可用上限', 'Physical output uses the available ceiling'],
   'input-upper-bound': ['输入估计上界', 'Input estimate upper bound'],
   'safety-margin': ['上下文安全余量', 'Context safety margin'],
   'model-context-cap': ['模型上下文剩余空间', 'Remaining model context'],
@@ -183,6 +184,12 @@ export function formatGenerationBudgetDiagnostic(
           : (locale === 'zh-CN' ? '用量待确认' : 'Usage pending confirmation')
     : failureCategoryLabel(category, locale)
   const requested = formatInteger(diagnostic.requestedOutputTokens, locale)
+  const semanticTokens = diagnostic.reasons.find(reason => reason.code === 'task-demand')?.valueTokens
+  const output = semanticTokens !== undefined && semanticTokens !== diagnostic.requestedOutputTokens
+    ? locale === 'zh-CN'
+      ? `语义输出估算 ${formatInteger(semanticTokens, locale)} tokens，物理输出上限 ${requested} tokens`
+      : `semantic output estimate ${formatInteger(semanticTokens, locale)} tokens, physical output limit ${requested} tokens`
+    : locale === 'zh-CN' ? `需求输出 ${requested} tokens` : `requested output ${requested} tokens`
   const reserved = formatInteger(diagnostic.reservedTokens, locale)
   const selectedReasons = diagnostic.reasons
     .filter(reason => reason.selected)
@@ -194,18 +201,18 @@ export function formatGenerationBudgetDiagnostic(
       : `Decision factors: ${selectedReasons.join(', ')}.`
   if (diagnostic.actualState === 'not-dispatched') {
     return locale === 'zh-CN'
-      ? `${categoryText}；需求输出 ${requested} tokens，原总预留 ${reserved} tokens；请求未发送，预留已释放。${reasonSuffix}`
-      : `${categoryText}; requested output ${requested} tokens, original total reservation ${reserved} tokens; no request was sent and the reservation was released. ${reasonSuffix}`.trim()
+      ? `${categoryText}；${output}，原总预留 ${reserved} tokens；请求未发送，预留已释放。${reasonSuffix}`
+      : `${categoryText}; ${output}, original total reservation ${reserved} tokens; no request was sent and the reservation was released. ${reasonSuffix}`.trim()
   }
   if (diagnostic.actualState === 'unknown') {
     return locale === 'zh-CN'
-      ? `${categoryText}；需求输出 ${requested} tokens，总预留 ${reserved} tokens；实际用量未知，父任务仍按预留额度保守记账。${reasonSuffix}`
-      : `${categoryText}; requested output ${requested} tokens, total reserved ${reserved} tokens; actual usage is unknown, so the parent task conservatively keeps the reservation. ${reasonSuffix}`.trim()
+      ? `${categoryText}；${output}，总预留 ${reserved} tokens；实际用量未知，父任务仍按预留额度保守记账。${reasonSuffix}`
+      : `${categoryText}; ${output}, total reserved ${reserved} tokens; actual usage is unknown, so the parent task conservatively keeps the reservation. ${reasonSuffix}`.trim()
   }
   if (diagnostic.actualState === 'reserved') {
     return locale === 'zh-CN'
-      ? `${categoryText}；需求输出 ${requested} tokens，总预留 ${reserved} tokens；请求尚未结算。${reasonSuffix}`
-      : `${categoryText}; requested output ${requested} tokens, total reserved ${reserved} tokens; the request has not settled yet. ${reasonSuffix}`.trim()
+      ? `${categoryText}；${output}，总预留 ${reserved} tokens；请求尚未结算。${reasonSuffix}`
+      : `${categoryText}; ${output}, total reserved ${reserved} tokens; the request has not settled yet. ${reasonSuffix}`.trim()
   }
   const actual = diagnostic.actual
   const total = actual?.total === null || actual?.total === undefined
@@ -220,8 +227,8 @@ export function formatGenerationBudgetDiagnostic(
         .join(locale === 'zh-CN' ? '、' : ', ')
     : (locale === 'zh-CN' ? '分项未知' : 'breakdown unknown')
   return locale === 'zh-CN'
-    ? `${categoryText}；需求输出 ${requested} tokens，总预留 ${reserved} tokens；实际总量 ${total}（${parts}）。${reasonSuffix}`
-    : `${categoryText}; requested output ${requested} tokens, total reserved ${reserved} tokens; actual total ${total} (${parts}). ${reasonSuffix}`.trim()
+    ? `${categoryText}；${output}，总预留 ${reserved} tokens；实际总量 ${total}（${parts}）。${reasonSuffix}`
+    : `${categoryText}; ${output}, total reserved ${reserved} tokens; actual total ${total} (${parts}). ${reasonSuffix}`.trim()
 }
 
 /** Formats only the safe byte report; prompt fragments never cross this boundary. */

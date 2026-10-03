@@ -39,7 +39,9 @@ export async function createDraftRecoveryWorkflow(
       await hashAuthorText(text), algorithm)
     recovery = await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle })
   }
-  if (!recovery.savedDraft && (!recovery.composition || !isDraftVisibleTextVersion(recovery.composition.algorithm)))
+  const outlineOnly = !recovery.composition && recovery.attemptedPurposes.every(purpose => purpose === 'chapter-draft-short-outline')
+    && (recovery.draftShortOutline?.completedOutput || recovery.draftShortOutline?.retry?.kind === 'available')
+  if (!recovery.savedDraft && !outlineOnly && (!recovery.composition || !isDraftVisibleTextVersion(recovery.composition.algorithm)))
     throw new Error('GENERATION_DRAFT_RECOVERY_EVIDENCE_REQUIRED')
   const infoText = recovery.authorInputs.find(input => input.id === 'draft:chapter-info')?.text
   const targetText = recovery.authorInputs.find(input => input.id === 'draft:target-units')?.text

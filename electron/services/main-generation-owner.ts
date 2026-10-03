@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
-import type { BeginGenerationRequest, ExecuteGenerationRequest, BeginGenerationBatchRequest, GenerationDraftCommitRequest, GenerationRecoveryContext, MaterialDecisionReceipt, VisibleCompositionAlgorithm } from '../../src/shared/generation-owner-contract'
+import type { BeginGenerationRequest, ExecuteGenerationRequest, BeginGenerationBatchRequest, GenerationDraftCommitRequest, GenerationRecoveryContext, MaterialDecisionReceipt, VisibleCompositionAlgorithm, GenerationOwnerChannels, ShortOutlineRetry } from '../../src/shared/generation-owner-contract'
 import { isDraftVisibleTextVersion } from '../../src/shared/draft-visible-text'
 import { generationOutputContract, type GenerationAuthorInput } from '../../src/shared/generation-owner-contract'
 import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot } from '../../src/services/generation/generation-runtime'
@@ -138,6 +138,49 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const runAttempts = (runId: string) => (deps.database.prepare('SELECT attempt_id,invocation_nonce,attempt_json,usage_receipt_json FROM generation_attempts WHERE run_id=? ORDER BY rowid').all(runId) as { attempt_id: string; invocation_nonce: string; attempt_json: string; usage_receipt_json: string }[])
     .map(row => ({ attemptId: row.attempt_id, invocationNonce: row.invocation_nonce, status: String(JSON.parse(row.attempt_json).status),
       purpose: String(JSON.parse(row.usage_receipt_json).purpose ?? 'unknown') }))
+  const readFailedShortOutlineTask = (run: DurableGenerationRun, failedAttemptId: string): GenerationTask => {
+    const decision = run.binding.sourceManifest.materialDecision as MaterialDecisionReceipt | undefined
+    const first = runAttempts(run.runId)[0]
+    if (run.binding.sourceManifest.operation !== 'chapter-draft' || !decision?.shortOutlinePromptHash
+      || !first || first.attemptId !== failedAttemptId || first.purpose !== DRAFT_SHORT_OUTLINE_PURPOSE)
+      throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_RETRY_UNAVAILABLE')
+    const receipt = volatileReceipts.get(failedAttemptId) ?? repository.receipt(failedAttemptId)
+    if (receipt.attempt.status !== 'settled' || receipt.failureCode || receipt.unsavedTail || !receipt.artifact
+      || !(receipt.result?.finishReason === 'length' || receipt.result?.finishReason === 'stop' && !receipt.artifact.text.trim()))
+      throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_RETRY_UNAVAILABLE')
+    const usage: { replayTask?: GenerationTask; requestHash?: string } = JSON.parse(deps.database.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(failedAttemptId) as string)
+    const task = usage.replayTask
+    if (!task) throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_TASK_INVALID')
+    assertSemanticGenerationTask(task)
+    const prompts = task.messages.filter(message => message.role === 'user')
+    if (task.purpose !== DRAFT_SHORT_OUTLINE_PURPOSE || task.output !== 'visible-text' || prompts.length !== 1
+      || textHash(prompts[0]!.content) !== decision.shortOutlinePromptHash
+      || textHash(JSON.stringify([task, run.binding.fingerprint.modelLeaseRevision, run.binding.fingerprint.policyHash])) !== usage.requestHash)
+      throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_TASK_INVALID')
+    if (!compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))))
+      throw new Error('GENERATION_SOURCE_CHANGED')
+    return task
+  }
+  const assertShortOutlineRetryAvailable = (run: DurableGenerationRun, failedAttemptId: string) => {
+    const task = readFailedShortOutlineTask(run, failedAttemptId)
+    const budget = repository.budget(run.rootActionId)
+    if (runAttempts(run.runId).length !== 1 || repository.readVisibleComposition(run.runId) || draftEffects.readCommit(run.runId)
+      || !['running', 'paused', 'failed'].includes(run.status) || !['active', 'paused'].includes(budget.root.status)
+      || budget.blockedCode || budget.attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status))
+      || budget.attempts.filter(attempt => attempt.status !== 'cancelled-before-dispatch').length >= budget.policy.maxPhysicalRequests
+      || budget.attempts.reduce((sum, attempt) => sum + tokenLiability(attempt), 0) >= budget.policy.maxTokenLiability
+      || budget.activeElapsedMs >= budget.policy.maxActiveElapsedMs)
+      throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_RETRY_UNAVAILABLE')
+    return task
+  }
+  const shortOutlineRetry = (run: DurableGenerationRun): ShortOutlineRetry => {
+    const failedAttemptId = runAttempts(run.runId)[0]?.attemptId
+    if (failedAttemptId) {
+      try { assertShortOutlineRetryAvailable(run, failedAttemptId); return { kind: 'available', failedAttemptId } }
+      catch { return { kind: 'unavailable' } }
+    }
+    return { kind: 'unavailable' }
+  }
   /** 最近一次完整结束（stop、无失败码）的对账原始输出。 */
   const completedReconciliationOutput = (runId: string): string | null => {
     for (const attempt of runAttempts(runId).filter(item => item.purpose === DRAFT_RECONCILE_PURPOSE).reverse()) {
@@ -157,7 +200,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const usage = firstDraft ? deps.database.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(firstDraft.attemptId) as string : null
     const initialDraftTask = usage ? JSON.parse(usage).replayTask as GenerationTask | undefined : undefined
     return { artifactIds: receipts.flatMap(receipt => receipt.artifact ? [receipt.artifact.artifactId] : []),
-      completedOutput: completed?.artifact?.text ?? null, promptHash: decision.shortOutlinePromptHash,
+      completedOutput: completed?.artifact?.text ?? null, promptHash: decision.shortOutlinePromptHash, retry: shortOutlineRetry(run),
       ...(initialDraftTask ? { initialDraftTask } : {}) }
   }
   const snapshotOf = (receipt: GenerationExecutionReceipt): MainGenerationSnapshot | null => {
@@ -208,7 +251,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const usage = receipt.result?.usage
       return {
         attemptId: attempt.attemptId, plannerVersion: receipt.budgetDecision?.policyVersion,
-        requestedOutputTokens: receipt.budgetDecision?.requestedOutputTokens ?? attempt.requestedOutputTokens,
+        requestedOutputTokens: attempt.requestedOutputTokens,
         reservedTokens: attempt.reservedTokens,
         actualState: attempt.status === 'cancelled-before-dispatch' ? 'not-dispatched' : attempt.status === 'settled' ? 'settled' : ['reserved', 'dispatch-marked'].includes(attempt.status) ? 'reserved' : 'unknown',
         actual: usage?.trusted ? { input: usage.inputTokens ?? null, completion: usage.completionTokens ?? null,
@@ -409,7 +452,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return { outcome: finishReason === 'stop' ? { status: 'completed', content, finishReason, receipt: details }
       : { status: 'incomplete', content, finishReason, receipt: details }, run: viewOf(repository.get(receipt.run.runId)) }
   }
-  const execute = async (request: ExecuteGenerationRequest, agentExecution = false, importExecution = false, editorExecution = false, finalizationExecution = false, graphExecution = false, legacyExecution = false): Promise<MainGenerationExecuteReceipt> => {
+  const execute = async (request: ExecuteGenerationRequest, agentExecution = false, importExecution = false, editorExecution = false, finalizationExecution = false, graphExecution = false, legacyExecution = false, shortOutlineRetryAttemptId?: string): Promise<MainGenerationExecuteReceipt> => {
     const run = requireRun(request.handle, true)
     if (run.binding.sourceManifest.operation === 'agent-round' && !agentExecution) throw new Error('GENERATION_AGENT_ADMISSION_REQUIRED')
     if (run.binding.sourceManifest.importSlot && !importExecution) throw new Error('GENERATION_IMPORT_ADMISSION_REQUIRED')
@@ -436,8 +479,6 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         const outline = shortOutlineContext(run)!
         if (materialOperation !== 'chapter-draft') throw new Error('GENERATION_MATERIAL_PROMPT_MISMATCH')
         if (task.purpose === DRAFT_SHORT_OUTLINE_PURPOSE) {
-          const replay = prior.length === 1 && prior[0]!.purpose === task.purpose && prior[0]!.invocationNonce === request.invocationNonce
-          if (prior.length && !replay) throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_ALREADY_ATTEMPTED')
           if (userPrompt === null || textHash(userPrompt) !== materialDecision.shortOutlinePromptHash)
             throw new Error('GENERATION_MATERIAL_PROMPT_MISMATCH')
         } else {
@@ -480,7 +521,13 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       return inFlight.promise
     }
     const existing = repository.findInvocation(run.runId, request.invocationNonce, requestHash)
-    if (existing && existing.attempt.status !== 'dispatch-marked' && existing.attempt.status !== 'reserved') return outcomeOf(volatileReceipts.get(existing.attempt.attemptId) ?? existing, task)
+    if (existing && (task.purpose === DRAFT_SHORT_OUTLINE_PURPOSE || existing.attempt.status !== 'dispatch-marked' && existing.attempt.status !== 'reserved')) return outcomeOf(volatileReceipts.get(existing.attempt.attemptId) ?? existing, task)
+    if (task.purpose === DRAFT_SHORT_OUTLINE_PURPOSE && runAttempts(run.runId).length) {
+      if (!shortOutlineRetryAttemptId) throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_ALREADY_ATTEMPTED')
+      const original = assertShortOutlineRetryAvailable(run, shortOutlineRetryAttemptId)
+      if (request.invocationNonce !== `draft-short-outline-retry:${shortOutlineRetryAttemptId}` || !isDeepStrictEqual(task, original))
+        throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_TASK_INVALID')
+    }
     reviewRevisions.assertMutable(run.runId)
     imports.assertMutable(run)
     finalizations.assertMutable(run)
@@ -512,6 +559,12 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     })()
     pending.set(key, { hash: requestHash, promise: operation })
     try { return await operation } finally { pending.delete(key) }
+  }
+  const retryDraftShortOutline = async (request: GenerationOwnerChannels['generation:retry-draft-short-outline']['args'][0]) => {
+    const run = requireRun(request.handle, true)
+    const task = readFailedShortOutlineTask(run, request.failedAttemptId)
+    return execute({ handle: request.handle, invocationNonce: `draft-short-outline-retry:${request.failedAttemptId}`, task },
+      false, false, false, false, false, false, request.failedAttemptId)
   }
   const resume = async (handle: MainGenerationRunHandle) => {
     const run = requireRun(handle)
@@ -994,7 +1047,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     readReviewRevisionRecovery: (handle: MainGenerationRunHandle) => reviewRevisions.readRecovery(handle,
       run => compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))),
       run => viewOf(run).candidates?.at(-1)),
-    readContext, readBatch, prepareDraftContext, preparedKnowledge, draftPreparationBinding,
+    readContext, readBatch, prepareDraftContext, preparedKnowledge, draftPreparationBinding, retryDraftShortOutline,
     beginBatch: (request: BeginGenerationBatchRequest) => {
       assertGenerationBatchIntent(request)
       const { mode, range, targetUnits, ...intent } = request

@@ -158,6 +158,41 @@ it.each([true, false])('写稿恢复面板不把生成前定稿对账产物列�
   expect(container.querySelectorAll('input[type=checkbox]')).toHaveLength(withDraft ? 1 : 0)
 })
 
+it.each(['failed', 'completed'] as const)('无正文时从原恢复列表进入 %s 细纲任务', async state => {
+  const session = { projectId: '细纲海港', leaseId: '新会话', projectPath: 'C:/合成细纲海港' }
+  const handle: MainGenerationRunHandle = { projectId: session.projectId, epoch: '旧会话', rootActionId: '原预算', runId: '原细纲任务' }
+  const view = { handle, status: 'paused', nonReplayable: true, artifacts: [], ledger: { physicalRequests: 1 } }
+  const info = { chapterNumber: 1, title: '海港', characters: [] }
+  const invoke = vi.fn(async (channel: string) => {
+    if (channel === 'generation:list') return [view]
+    if (channel === 'generation:list-batches' || channel === 'db:recovery-candidate-list') return []
+    if (channel === 'generation:read-context') return { handle, operation: 'chapter-draft', chapterNumber: 1, modelId: '原模型',
+      authorInputs: [{ id: 'draft:chapter-info', text: JSON.stringify(info) }, { id: 'draft:target-units', text: '1000' }],
+      selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1], composition: null,
+      lastCompositionFinishReason: null, attemptedPurposes: ['chapter-draft-short-outline'],
+      draftShortOutline: { artifactIds: ['原细纲'], completedOutput: state === 'completed' ? '完整细纲，不能作为正文显示' : null,
+        promptHash: 'a'.repeat(64), retry: state === 'failed' ? { kind: 'available', failedAttemptId: '原失败' } : { kind: 'unavailable' } } }
+    throw new Error(`未配置调用：${channel}`)
+  })
+  Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: () => () => {} } })
+  const startWorkflow = vi.fn().mockResolvedValue('恢复工作流')
+  useProjectStore.setState({ currentProject: { id: session.projectId, path: session.projectPath, name: '细纲海港', sessionLease: session.leaseId, novelConfig: {} } as never })
+  useWorkflowStore.setState({ activeRuns: [], history: [], currentRun: null, startWorkflow })
+  useLocaleStore.setState({ locale: 'zh-CN' })
+  container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container)
+  await act(async () => root!.render(<AIOutputPanel />))
+  const text = state === 'failed' ? '重做一次细纲并继续写稿' : '沿原细纲继续写稿'
+  await vi.waitFor(() => expect(container!.textContent).toContain(text))
+  expect(container.textContent).not.toContain('完整细纲，不能作为正文显示')
+  expect(container.querySelectorAll('input[type=checkbox]')).toHaveLength(0)
+  const button = [...container.querySelectorAll('button')].find(item => item.textContent === text)!
+  expect(button.disabled).toBe(false)
+  await act(async () => button.click())
+  await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
+  expect(startWorkflow.mock.calls[0][0]).toMatchObject({ generationModelId: '原模型', projectSession: session, resourceKeys: ['chapter:1'] })
+  expect(invoke.mock.calls.every(([channel]) => !['generation:begin', 'generation:execute', 'generation:retry-draft-short-outline'].includes(channel))).toBe(true)
+})
+
 it.each(['unknown', 'conflict', 'cancelled'] as const)('助手恢复卡只显示可见回复并保留 %s 边界', async state => {
   const { useAgentStore } = await import('../../../stores/agent-store')
   const { useLayoutStore } = await import('../../../stores/layout-store')

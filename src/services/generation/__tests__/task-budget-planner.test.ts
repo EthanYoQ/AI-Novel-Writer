@@ -43,6 +43,24 @@ const chineseItems = (requestedItems: number): TaskBudgetDemand => ({
 })
 
 describe('S07 task budget planner', () => {
+  it('keeps semantic sizing separate from available physical allocation', () => {
+    const decision = planTaskBudget(fixture(chineseDraft(500, false), {
+      outputAllocation: 'available-ceiling',
+      liability: { mode: 'unknown' },
+      root: { remainingTokenLiability: 100_000, maxOutputPerRequest: 16_384 },
+    }))
+    expect(decision).toMatchObject({ decision: 'ready', requestedQuantity: 500, selectedQuantity: 500,
+      requestedOutputTokens: 1712, reservedOutputTokens: 16384, reservationLiabilityTokens: 17896 })
+    expect(decision.reasons).toContainEqual({ code: 'liability-bound-unknown', selected: true })
+  })
+
+  it('preserves scope splits before allocating a physical request', () => {
+    const input = fixture(chineseItems(200), {
+      root: { remainingTokenLiability: 100_000, maxOutputPerRequest: 16_384 },
+    })
+    expect(planTaskBudget({ ...input, outputAllocation: 'available-ceiling' })).toEqual(planTaskBudget(input))
+  })
+
   it.each([
     [900, 2_672],
     [2_000, 5_312],

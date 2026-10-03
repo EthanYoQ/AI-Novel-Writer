@@ -105,20 +105,23 @@ test('formal operations use one official Flash profile and native wire without c
 })
 
 test.each([
-  ['chapter-draft-short-outline', 'planning', 500],
-  ['chapter-draft', 'drafting', 900],
-])('formal task output budgets admit %s only with the planned owner budget', (purpose, reasoningStage, requestedUnits) => {
+  ['chapter-draft-short-outline', 'planning', 500, 16384],
+  ['chapter-draft', 'drafting', 900, 16384],
+  ['chapter-draft-short-outline', 'planning', 500, 3000],
+  ['chapter-draft', 'drafting', 900, 3000],
+])('formal task output budgets admit %s at %s with %i units and a %i-token owner budget', (purpose, reasoningStage, requestedUnits, maxOutputPerRequest) => {
   const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
   const registration = forwardReasoningFor(protocol, 'full', 'final')
   const model = { ...QUALIFICATION_STAGE_MODELS.profiles.flash.model, apiKey: 'synthetic-never-network' }
   const task = { purpose, reasoningStage, output: 'visible-text', messages: [{ role: 'user', content: 'offline task budget preview' }],
     budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits, segmentable: false } }
   const plan = buildMainGenerationPlan(model, { capabilityEvidence: resolveModelExecutionCapabilityEvidence(model) }, task,
-    { policy: MAIN_GENERATION_POLICY.budget, attempts: [] }, 'auto')
+    { policy: { ...MAIN_GENERATION_POLICY.budget, maxOutputPerRequest }, attempts: [] }, 'auto')
   const body = new OpenAIProvider().buildRequestBody(model, task.messages, plan.options, true)
   const input = { arm: 'candidate', phase: 'full', milestone: 'final', caseId: '场景1/1', operationId: '连续章节正文',
     model, body, creativeStrategy: 'auto', resolution: resolveReasoningPolicy({ model, creativeStrategy: 'auto', stage: reasoningStage }) }
-  assert.ok(plan.requestedOutputTokens > 0 && plan.requestedOutputTokens < model.maxTokens)
+  assert.ok(plan.budgetDecision.requestedOutputTokens > 0 && plan.budgetDecision.requestedOutputTokens < model.maxTokens)
+  assert.equal(plan.requestedOutputTokens, maxOutputPerRequest)
   assert.equal(body.max_tokens, plan.requestedOutputTokens)
   assert.equal(assertForwardReasoning(registration, input).effective, 'high')
   const completionBody = { ...body, max_tokens: undefined, max_completion_tokens: plan.requestedOutputTokens }

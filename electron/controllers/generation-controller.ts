@@ -212,6 +212,11 @@ export function registerGenerationController(options: {
     const started = await guardKnowledge(owner, context.knowledgeSnapshot, () => ({ result: owner.execute(request) }))
     return started.result
   })
+  register('generation:retry-draft-short-outline', 1, async (owner, request) => {
+    const context = owner.readContext(request.handle)
+    const started = await guardKnowledge(owner, context.knowledgeSnapshot, () => ({ result: owner.retryDraftShortOutline(request) }))
+    return started.result
+  })
   register('generation:read', 1, (owner, handle) => owner.read(handle))
   register('generation:compose-visible', 4, (owner, handle, ids, hash, algorithm) => owner.composeVisible(handle, ids, hash, algorithm))
   register('generation:commit-draft', 1, (owner, request) => {

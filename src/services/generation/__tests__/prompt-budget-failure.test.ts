@@ -67,6 +67,20 @@ describe('writing skill prompt budget diagnostics', () => {
     expect(message).toContain('仍按预留额度保守记账')
   })
 
+  it.each(['zh-CN', 'en-US'] as const)('explains semantic sizing and physical allocation in %s without upgrading unknown usage', locale => {
+    const message = formatGenerationBudgetDiagnostic({
+      attemptId: 'shared-completion', requestedOutputTokens: 16384, reservedTokens: 50410,
+      actual: null, actualState: 'unknown', reasons: [
+        { code: 'task-demand', valueTokens: 1712, selected: true },
+        { code: 'output-allocation-ceiling', valueTokens: 16384, selected: true },
+        { code: 'liability-bound-unknown', selected: true },
+      ],
+    }, locale)
+    expect(message).toContain(locale === 'zh-CN' ? '语义输出估算 1,712 tokens' : 'semantic output estimate 1,712 tokens')
+    expect(message).toContain(locale === 'zh-CN' ? '物理输出上限 16,384 tokens' : 'physical output limit 16,384 tokens')
+    expect(message).toContain(locale === 'zh-CN' ? '实际用量未知' : 'actual usage is unknown')
+  })
+
   it.each([
     ['TASK_BUDGET_CAPACITY_CONFLICT', null, 'capacity-preflight'],
     ['TASK_BUDGET_CAPACITY_CONFLICT:single-item-capacity-conflict', null, 'capacity-preflight'],

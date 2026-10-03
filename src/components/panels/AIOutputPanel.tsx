@@ -314,7 +314,8 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
       setAgentRuns(agentContexts.flatMap(result => result.status === 'fulfilled' ? [result.value] : []))
       setEditorRuns(editorContexts.flatMap(result => result.status === 'fulfilled' ? [result.value] : []))
       setRuns(contexts.filter(item => item.recovery.operation === 'chapter-draft' && !item.recovery.batchId
-        && (item.recovery.composition || withoutDraftReconciliationArtifacts([...item.view.artifacts, ...(item.view.candidates ?? [])], item.recovery).length
+        && (item.recovery.composition || item.recovery.draftShortOutline?.completedOutput || item.recovery.draftShortOutline?.retry?.kind === 'available'
+          || withoutDraftReconciliationArtifacts([...item.view.artifacts, ...(item.view.candidates ?? [])], item.recovery).length
           || item.view.unsavedTails?.length)))
       setBatches(progress.filter(item => item.nextChapterNumber !== null))
       setError([...reviewContexts, ...agentContexts, ...editorContexts].some(result => result.status === 'rejected') ? runText(locale, '部分任务暂时无法读取，其他候选仍可恢复。', 'Some tasks could not be loaded; the other candidates remain available.') : '')
@@ -412,6 +413,8 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
     {visibleRuns.map(({ view, recovery }) => {
       const artifacts = withoutDraftReconciliationArtifacts([...new Map([...view.artifacts, ...(view.candidates ?? [])].map(item => [item.artifactId, item])).values()], recovery)
       const picked = selection[view.handle.runId] ?? []
+      const outlineOnly = !recovery.composition && recovery.attemptedPurposes.every(purpose => purpose === 'chapter-draft-short-outline')
+        && (recovery.draftShortOutline?.completedOutput || recovery.draftShortOutline?.retry?.kind === 'available')
       return <article key={view.handle.runId} className="mb-3">
         <p>{runText(locale, `第${recovery.chapterNumber}章候选`, `Chapter ${recovery.chapterNumber} candidate`)}</p>
         <GenerationBudgetDiagnostics diagnostics={view.budgetDiagnostics} locale={locale} />
@@ -429,10 +432,13 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
           <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} onClick={() => { void act(() => navigator.clipboard.writeText(tail.text)) }}>{runText(locale, '复制', 'Copy')}</button>
         </div>)}
         <p>{runText(locale, '勾选顺序决定续接顺序；未完成或来源冲突的片段仍可复制。', 'Selection order determines continuation order. Incomplete or conflicted text can still be copied.')}</p>
-        <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} disabled={busy || (!picked.length && !recovery.composition)} onClick={() => { void act(async () => {
+        <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} disabled={busy || (!picked.length && !recovery.composition && !outlineOnly)} onClick={() => { void act(async () => {
           const workflow = await createDraftRecoveryWorkflow(session, view.handle, picked.length ? [...picked] : undefined)
           await useWorkflowStore.getState().startWorkflow(workflow)
-        }) }}>{runText(locale, '确认继续已选正文', 'Confirm selected draft continuation')}</button>
+        }) }}>{outlineOnly ? recovery.draftShortOutline?.retry?.kind === 'available'
+          ? runText(locale, '重做一次细纲并继续写稿', 'Retry outline once and continue drafting')
+          : runText(locale, '沿原细纲继续写稿', 'Continue drafting with the saved outline')
+          : runText(locale, '确认继续已选正文', 'Confirm selected draft continuation')}</button>
       </article>
     })}
   </section>
