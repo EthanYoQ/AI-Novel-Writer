@@ -88,7 +88,7 @@ test('formal operations use one official Flash profile and native wire without c
         model, body, resolution, creativeStrategy: 'auto' }
       assert.equal(assertForwardReasoning(registration, input).effective, 'high')
       assert.equal(body.model, profile.model.modelName)
-      assert.equal(body.max_tokens, 16384)
+      assert.equal(body.max_tokens, 32768)
       assert.equal(body.temperature, 0)
       assert.deepEqual(body.thinking, { type: 'enabled' })
       assert.equal(body.reasoning_effort, 'high')
@@ -105,8 +105,8 @@ test('formal operations use one official Flash profile and native wire without c
 })
 
 test.each([
-  ['chapter-draft-short-outline', 'planning', 500, 16384],
-  ['chapter-draft', 'drafting', 900, 16384],
+  ['chapter-draft-short-outline', 'planning', 500, 32768],
+  ['chapter-draft', 'drafting', 900, 32768],
   ['chapter-draft-short-outline', 'planning', 500, 3000],
   ['chapter-draft', 'drafting', 900, 3000],
 ])('formal task output budgets admit %s at %s with %i units and a %i-token owner budget', (purpose, reasoningStage, requestedUnits, maxOutputPerRequest) => {
@@ -302,14 +302,13 @@ test('adjudication binds all terminal states to the batch and only arbitrates di
     assert.equal(decision.silentHardConstraint, true)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
-test('freeze consumer copies one registered Flash source for formal and R3 targets and rejects drift', () => {
+test('freeze consumer copies the registered Flash source for each formal or R3 phase and rejects drift', () => {
   const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/single-model-freeze-'))
   const profile = QUALIFICATION_STAGE_MODELS.profiles.flash
   const sourceRoot = path.join(directory, 'source')
   fs.mkdirSync(path.join(sourceRoot, 'c', 'c'), { recursive: true })
   const modelFile = path.join(sourceRoot, 'c', 'c', 'models.json')
   const model = { ...profile.model, apiKey: 'synthetic-never-network' }
-  fs.writeFileSync(modelFile, JSON.stringify([model]))
   const source = { sourceRoot, profileId: profile.profileId, configurationHash: profile.configurationHash }
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8').replaceAll('\r\n', '\n')
   const start = runner.indexOf('export function createProductionTargets(')
@@ -326,19 +325,25 @@ test('freeze consumer copies one registered Flash source for formal and R3 targe
     freezeProductionEnvironment: () => ({}), fixedStartup: () => ({}),
     inspectTarget(target) {
       inspected.push(target)
-      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(target.roots.config, 'models.json'))), [model])
-      assert.equal(target.modelId, profile.profileId)
     } }
   const freeze = new Function(...Object.keys(dependencies), body + '\nreturn createProductionTargets')(...Object.values(dependencies))
   try {
     for (const phase of ['full', 'r3-native-revision-diagnostic']) {
+      const phaseProfile = phase === 'full' ? profile : R3_NATIVE_REVISION_DIAGNOSTIC.profiles.flash
+      const phaseModel = { ...phaseProfile.model, apiKey: 'synthetic-never-network' }
+      fs.writeFileSync(modelFile, JSON.stringify([phaseModel]))
+      const phaseSource = { sourceRoot, profileId: phaseProfile.profileId, configurationHash: phaseProfile.configurationHash }
       const output = path.join(directory, phase + '.json')
-      const result = freeze(undefined, output, { phase, modelSources: { [profile.profileId]: source } })
+      const result = freeze(undefined, output, { phase, modelSources: { [phaseProfile.profileId]: phaseSource } })
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(inspected.at(-1).roots.config, 'models.json'))), [phaseModel])
       assert.equal(result.physicalModelRequests, 0)
       assert.equal(Object.keys(result.targets).length, 1)
       assert.equal(result.targets.candidate.modelId, profile.profileId)
     }
     assert.equal(inspected.length, 2)
+    assert.throws(() => freeze(undefined, path.join(directory, 'old-formal-source.json'),
+      { phase: 'full', modelSources: { [profile.profileId]: { ...source,
+        configurationHash: R3_NATIVE_REVISION_DIAGNOSTIC.profiles.flash.configurationHash } } }), /MODEL_MISMATCH/)
     for (const change of [{ profileId: 'unregistered' }, { configurationHash: '0'.repeat(64) }, { sourceRoot: 'relative-root' }])
       assert.throws(() => freeze(undefined, path.join(directory, randomUUID() + '.json'),
         { phase: 'full', modelSources: { [profile.profileId]: { ...source, ...change } } }), /MODEL_MISMATCH/)

@@ -106,13 +106,13 @@ test('R3 Flash v9 preserves prior groups and closes the unused v8 third slot', (
   assert.equal(policy.model.modelName, 'deepseek-flash')
   assert.equal(hash(policy.model), '0eec6083f152f15548e9acf680803e79365d1d76a4763f2b1c58529451a244df')
   for (const operation of policy.operations) assert.deepEqual(r3ModelForOperation(operation.id).model, policy.model)
-  assert.deepEqual(QUALIFICATION_STAGE_MODELS.profiles.flash.model, policy.model)
+  assert.deepEqual(QUALIFICATION_STAGE_MODELS.profiles.flash.model, { ...policy.model, maxTokens: 32768 })
   const boundary = protocol.historicalR3Native11152245Boundary
   assert.deepEqual([boundary.fromEventCount, boundary.eventCount, boundary.reserveAttempts.length], [1650, 1668, 6])
   assert.equal(boundary.rawBytesSha256, '747454c7085bb348a9d939952ebf5b51cc7026d586d679bc85db8968537d93fd')
   assert.ok(boundary.reserveAttempts.every(item => item.terminal === 'settle' && item.invocationId !== previous.runs[2].invocationId))
   assert.deepEqual(QUALIFICATION_STAGE_MODELS, protocol.forwardStageModels)
-  assert.equal(protocol.forwardStageModels.revision, 'candidate-single-official-flash-v2')
+  assert.equal(protocol.forwardStageModels.revision, 'candidate-single-official-flash-cap32-v3')
 })
 
 test('R3 native stage profiles freeze Flash for review, revision and final review and retain the native deadline', () => {
@@ -185,7 +185,7 @@ test.each([
     const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', ...currentProtocolBinding(),
       codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
       phase, milestone: 'diagnostic', caseId: 'R3', operation: policy.operations[0].id, invocationId: policy.closedInvocations[closedIndex],
-      stageModel: { profileId: QUALIFICATION_STAGE_MODELS.profiles.flash.profileId, configurationHash: QUALIFICATION_STAGE_MODELS.profiles.flash.configurationHash },
+      stageModel: { profileId: policy.profiles.flash.profileId, configurationHash: policy.profiles.flash.configurationHash },
       diagnosticInputHash: policy.source.contextSha256, diagnosticSourceHash: hash(policy.source),
       evaluationPolicyHash: hash(policy.evaluationPolicy), actual: { attemptId: 'old', runId: 'run', rootActionId: 'root',
         projectId: 'isolated-project', epoch: 'isolated-epoch', purpose: 'review-chapter' } }

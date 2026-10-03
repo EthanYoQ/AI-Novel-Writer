@@ -89,14 +89,14 @@ export function r3ModelForOperation(operationId) {
 
 // Forward qualification only. Historical Pro and R3 registrations retain their own identities.
 export const QUALIFICATION_STAGE_MODELS = Object.freeze({
-  revision: 'candidate-single-official-flash-v2',
+  revision: 'candidate-single-official-flash-cap32-v3',
   requiredProductSha: '8c1e74ae096863809a3821cddf5bf81e984823a9',
   scopes: [{ phase: 'c16-c18', milestone: 'final' }, { phase: 'full', milestone: 'final' },
     ...['early-budget', 'early-context', 'early-review'].map(phase => ({ phase, milestone: 'post-ui' }))],
   profiles: {
     flash: { profileId: '7935a372-b853-4408-9374-9fdb272a78f9',
-      configurationHash: '0eec6083f152f15548e9acf680803e79365d1d76a4763f2b1c58529451a244df',
-      model: {id: '7935a372-b853-4408-9374-9fdb272a78f9',name: 'R3 official DeepSeek Flash native diagnostic',provider: 'deepseek',protocol: 'openai',modelName: 'deepseek-flash',baseUrl: 'https://api.deepseek.com',temperature: 0,maxTokens: 16384,purposes: ['generation','refinement','summary'],reasoningOverride: 'high',capabilities: {contextWindowTokens: 1048576,maxOutputTokens: 393216,reasoning: true,structuredOutput: true,usage: true},capabilitySources: {contextWindowTokens: 'endpoint',maxOutputTokens: 'endpoint',reasoning: 'manual',structuredOutput: 'manual',usage: 'manual'},reasoningMapping: {adapter: 'deepseek-v4-thinking',supportedEfforts: ['off','low','high','max'],providerValues: {off: 'disabled',low: 'low',high: 'high',max: 'max'},requestAliases: {medium: 'high'}}} },
+      configurationHash: '9a36c2c26b83a0e2e4b3ab1bc0f998a366140c0a3bb91c8444699dd88e31ba44',
+      model: {id: '7935a372-b853-4408-9374-9fdb272a78f9',name: 'R3 official DeepSeek Flash native diagnostic',provider: 'deepseek',protocol: 'openai',modelName: 'deepseek-flash',baseUrl: 'https://api.deepseek.com',temperature: 0,maxTokens: 32768,purposes: ['generation','refinement','summary'],reasoningOverride: 'high',capabilities: {contextWindowTokens: 1048576,maxOutputTokens: 393216,reasoning: true,structuredOutput: true,usage: true},capabilitySources: {contextWindowTokens: 'endpoint',maxOutputTokens: 'endpoint',reasoning: 'manual',structuredOutput: 'manual',usage: 'manual'},reasoningMapping: {adapter: 'deepseek-v4-thinking',supportedEfforts: ['off','low','high','max'],providerValues: {off: 'disabled',low: 'low',high: 'high',max: 'max'},requestAliases: {medium: 'high'}}} },
   },
   operationKinds: { directory: 'flash', draft: 'flash', chapter_notes: 'flash', character_cards: 'flash',
     review: 'flash', refine: 'flash', 'final-review': 'flash' },
