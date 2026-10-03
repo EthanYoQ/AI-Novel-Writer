@@ -2760,7 +2760,7 @@ test('C16–C18 ca466d9a/73b46513 段（第580–648行）按同一规则分两�
   // 新协议字节 hash 与被取代的 a0a14777 不同，runner 读写两入口都按链末端取历史范围。
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8')
   assert.match(runner, /validateHistoricalSupersessionBoundary\(raw, ca466d9a, protocol\.historicalC1673b46513Boundary\)/)
-  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedR3V6Events/)
+  assert.match(runner, /const superseded = index >= trustedHistoricalEvents && index < trustedR3V7Events/)
 })
 
 test('新登记续写直接首稿，旧对账可读但当前实验拒绝额外发送', () => {
@@ -4808,7 +4808,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
     'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary', 'historicalC1609ad48e1Boundary', 'historicalSeparatedReviewB89b011aBoundary',
     'historicalPostUi83573613Boundary', 'historicalR3NativeD12c4111Boundary', 'historicalR3ClosedCce6f01aBoundary', 'historicalR3NativeDc9b7cbdBoundary', 'historicalR3Native49e1c0adBoundary', 'historicalR3Native6e38e5ddBoundary',
-    'historicalR3Native11152245Boundary', 'historicalR3NativeC9e7c71eBoundary', 'historicalR3NativeD51580fcBoundary']
+    'historicalR3Native11152245Boundary', 'historicalR3NativeC9e7c71eBoundary', 'historicalR3NativeD51580fcBoundary', 'historicalR3NativeAd650e85Boundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -4951,6 +4951,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1650, real.boundaries.historicalR3Native11152245Boundary), 1668)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1668, real.boundaries.historicalR3NativeC9e7c71eBoundary), 1671)
     assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1671, real.boundaries.historicalR3NativeD51580fcBoundary), 1686)
+    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1686, real.boundaries.historicalR3NativeAd650e85Boundary), 1704)
     assert.equal(validatePhysicalLedger(ledger), ledger)
     fs.writeFileSync(file, synthetic.raw)
     const options = { campaignMode: 'synthetic', ...synthetic.boundaries }

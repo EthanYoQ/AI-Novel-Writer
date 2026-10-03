@@ -58,19 +58,19 @@ export const R3_NATIVE_REVISION_DIAGNOSTIC = Object.freeze({
   "milestone": "diagnostic",
   "arms": ["candidate"],
   "nonQualification": true,
-  "scenarioRevision": "r3-native-siliconflow-glm53-three-runs-v7",
+  "scenarioRevision": "r3-native-official-flash-three-runs-v8",
   "minPhysicalRequests": 3,
   "maxPhysicalRequests": 8,
-  "model": {"id":"b8ca7fe3-c252-4f57-9a02-8c04857b26a6","name":"R3 SiliconFlow GLM 5.3 native diagnostic","provider":"openai","protocol":"openai","modelName":"zai-org/GLM-5.3","baseUrl":"https://api.siliconflow.cn/v1","temperature":0,"maxTokens":16384,"purposes":["generation","refinement","summary"],"reasoningOverride":"high","capabilities":{"contextWindowTokens":1000000,"maxOutputTokens":128000,"reasoning":true,"structuredOutput":true,"usage":true},"capabilitySources":{"contextWindowTokens":"manual","maxOutputTokens":"manual","reasoning":"manual","structuredOutput":"manual","usage":"manual"},"reasoningMapping":{"adapter":"openai-reasoning-effort","supportedEfforts":["low","high","max"],"providerValues":{"low":"low","high":"high","max":"max"}}},
+  "model": {"id":"7935a372-b853-4408-9374-9fdb272a78f9","name":"R3 official DeepSeek Flash native diagnostic","provider":"deepseek","protocol":"openai","modelName":"deepseek-flash","baseUrl":"https://api.deepseek.com","temperature":0,"maxTokens":16384,"purposes":["generation","refinement","summary"],"reasoningOverride":"high","capabilities":{"contextWindowTokens":1048576,"maxOutputTokens":393216,"reasoning":true,"structuredOutput":true,"usage":true},"capabilitySources":{"contextWindowTokens":"endpoint","maxOutputTokens":"endpoint","reasoning":"manual","structuredOutput":"manual","usage":"manual"},"reasoningMapping":{"adapter":"deepseek-v4-thinking","supportedEfforts":["off","low","high","max"],"providerValues":{"off":"disabled","low":"low","high":"high","max":"max"},"requestAliases":{"medium":"high"}}},
   "source": {"projectId":"efc9b59a-a9f8-4223-8c1c-add48b21d579","epoch":"86ef0216-7c47-4eed-b51f-3449aef0ca68","contentSha256":"7f35eabd2fcb65677bc7505c143255ee5aa36f0e664390879604d3091723efd4","contextSha256":"4cb5a188693d3293afa96f9d99c59c595c37ef48029d1afa1945d1b8a60a2a0b","exportManifestSha256":"1714681b52c97b16bd4405289184d13b9fab8a9ee8018e9b1176f35667896fb2","packetManifestSha256":"00517e3921cb6ffa1b6703b029e61c24fccd7cbd7ed1502d5ef8489bbd5e3877","assets":[{"path":".ai-novel/project.json","sha256":"2b5ad3984308abcc3a1c25177c52505f2360d69a2371d5bf82aa9fe0f756436b"},{"path":".ai-novel/portable-runtime-freeze.json","sha256":"108071a42d343cf145cd37f0fb2047f84fa8066886694157227ba88eb519de91"}]},
   "operations": [{"id":"R3普通首审","kind":"review"},{"id":"R3一次修稿","kind":"refine"},{"id":"R3普通末审","kind":"final-review"}],
   "attemptPolicy": {"milestone":"diagnostic","arms":["candidate"],"reviewRebuild":{"operationId":"R3普通首审","primaryPurpose":"review-chapter","repairPurpose":"review-chapter-rebuild","maxRepairAttempts":1,"maxLengthReplacements":1},"finalReviewRebuild":{"operationId":"R3普通末审","primaryPurpose":"review-chapter","repairPurpose":"review-chapter-rebuild","maxRepairAttempts":1,"maxLengthReplacements":1},"refinementRecovery":{"operationId":"R3一次修稿","purpose":"refine-from-review","maxAttempts":4,"trigger":"settled-length-same-confirmation-visible-append-with-progress"}},
   "evaluationPolicy": {"revision":"ai-review-final-manuscript-v1","caseIds":["R3"],"selection":"formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown","softwareFindings":"separate-frozen-consistency-preflight-provenance","confirmation":"preauthorized-ai-only-persisted-original-items-with-native-findingIds","noAction":"first-draft-endpoint-with-original-raw-and-saved-review","endpoint":"native-merge-then-ordinary-full-review","automaticCeiling":"pending-independent-oracle-review","physicalRequests":{"minimum":3,"maximum":8,"manuscriptMinimum":1,"manuscriptMaximum":8}},
-  "closedInvocations": ["d12c4111-285e-41a7-8bcc-4b7f9afd0681","5d9f3a04-7111-4151-9323-55ec2d1141a6","2b5963de-23b3-4e5c-8c16-8997fa021aa0","6869a6a8-6bf4-4608-a7a1-d8fb67a9a469","ed4d076b-aa3f-40d6-8991-ce7df3915cf8","5331273c-d6f5-4019-82ce-15261ee03abb","352c14db-202f-4158-a295-dd8a68a21227","f4957c39-0be7-4d42-8492-b8f72fd20b95","5fc84331-ffc9-4b32-941c-5d11e1178bc5","9e1d7e92-ba12-48f9-bf57-e469b349bf6a","abb5c15a-e030-4a12-85d2-4416da1fedff","f4299c56-60a9-4911-b441-e6909c06abb0","fbbb909d-f2f6-449e-8af1-bbbc82d8bb20","a0ab647c-d914-4734-a704-4522da47807c","12baea73-3050-4f3e-b5a9-b4cae7abc179"],
-  "requiredProductSha": "6cf907211208d506b0afe6210128bfcfe5fb9dfd",
-  "profiles": {"glm":{"profileId":"b8ca7fe3-c252-4f57-9a02-8c04857b26a6","configurationHash":"17abb4be95b4caac723b84962ae6a4d1ed3f73e833c53f9a3e8566b7af5fc2c1","model":{"id":"b8ca7fe3-c252-4f57-9a02-8c04857b26a6","name":"R3 SiliconFlow GLM 5.3 native diagnostic","provider":"openai","protocol":"openai","modelName":"zai-org/GLM-5.3","baseUrl":"https://api.siliconflow.cn/v1","temperature":0,"maxTokens":16384,"purposes":["generation","refinement","summary"],"reasoningOverride":"high","capabilities":{"contextWindowTokens":1000000,"maxOutputTokens":128000,"reasoning":true,"structuredOutput":true,"usage":true},"capabilitySources":{"contextWindowTokens":"manual","maxOutputTokens":"manual","reasoning":"manual","structuredOutput":"manual","usage":"manual"},"reasoningMapping":{"adapter":"openai-reasoning-effort","supportedEfforts":["low","high","max"],"providerValues":{"low":"low","high":"high","max":"max"}}}}},
-  "operationProfiles": {"R3普通首审":"glm","R3一次修稿":"glm","R3普通末审":"glm"},
-  "runs": [{"run":1,"invocationId":"e111a7c1-232d-40ae-8756-652314995816"},{"run":2,"invocationId":"820ab4bf-be8f-468f-b8b9-293dc444e10a"},{"run":3,"invocationId":"66ac671a-2481-4917-8272-6a2aeef62738"}],
+  "closedInvocations": ["d12c4111-285e-41a7-8bcc-4b7f9afd0681","5d9f3a04-7111-4151-9323-55ec2d1141a6","2b5963de-23b3-4e5c-8c16-8997fa021aa0","6869a6a8-6bf4-4608-a7a1-d8fb67a9a469","ed4d076b-aa3f-40d6-8991-ce7df3915cf8","5331273c-d6f5-4019-82ce-15261ee03abb","352c14db-202f-4158-a295-dd8a68a21227","f4957c39-0be7-4d42-8492-b8f72fd20b95","5fc84331-ffc9-4b32-941c-5d11e1178bc5","9e1d7e92-ba12-48f9-bf57-e469b349bf6a","abb5c15a-e030-4a12-85d2-4416da1fedff","f4299c56-60a9-4911-b441-e6909c06abb0","fbbb909d-f2f6-449e-8af1-bbbc82d8bb20","a0ab647c-d914-4734-a704-4522da47807c","12baea73-3050-4f3e-b5a9-b4cae7abc179","e111a7c1-232d-40ae-8756-652314995816","820ab4bf-be8f-468f-b8b9-293dc444e10a","66ac671a-2481-4917-8272-6a2aeef62738"],
+  "requiredProductSha": "8c1e74ae096863809a3821cddf5bf81e984823a9",
+  "profiles": {"flash":{"profileId":"7935a372-b853-4408-9374-9fdb272a78f9","configurationHash":"0eec6083f152f15548e9acf680803e79365d1d76a4763f2b1c58529451a244df","model":{"id":"7935a372-b853-4408-9374-9fdb272a78f9","name":"R3 official DeepSeek Flash native diagnostic","provider":"deepseek","protocol":"openai","modelName":"deepseek-flash","baseUrl":"https://api.deepseek.com","temperature":0,"maxTokens":16384,"purposes":["generation","refinement","summary"],"reasoningOverride":"high","capabilities":{"contextWindowTokens":1048576,"maxOutputTokens":393216,"reasoning":true,"structuredOutput":true,"usage":true},"capabilitySources":{"contextWindowTokens":"endpoint","maxOutputTokens":"endpoint","reasoning":"manual","structuredOutput":"manual","usage":"manual"},"reasoningMapping":{"adapter":"deepseek-v4-thinking","supportedEfforts":["off","low","high","max"],"providerValues":{"off":"disabled","low":"low","high":"high","max":"max"},"requestAliases":{"medium":"high"}}}}},
+  "operationProfiles": {"R3普通首审":"flash","R3一次修稿":"flash","R3普通末审":"flash"},
+  "runs": [{"run":1,"invocationId":"a3a8a3fe-7393-4260-8601-ef365f511872"},{"run":2,"invocationId":"07433184-dc4a-400d-9324-d331e0ddae60"},{"run":3,"invocationId":"73b0ca6a-a5bd-4493-a7b2-1e01d5eee005"}],
   "maxTotalPhysicalRequests": 24,
   "acceptance": {"minimumCompletedLoops":2,"maximumUnsupportedTimeChanges":0,"denominator":3,"automaticCeiling":"pending-independent-oracle-review","semanticRule":"delivery-plan-section-3-forward-2026-10-03","unsupportedTime":"forbid-asserted-fact-mandatory-fix-actual-revision-or-trusted-derivation","unadoptedWrongAlternative":{"allRequired":["autonomous-correct-localization","not-author-fact-or-mandatory-fix","complete-original-evidence-received","autonomous-rejection-by-revision","valid-final-manuscript-full-review-save-readback"],"retain":"first-review-quality-defect","exclude":"human-edited-opinions-replacement-answer-or-false-finding-closure"},"stop":"when-two-of-three-impossible-remaining-NOT_RUN-no-redraw","scope":"new-group-only-no-historical-reclassification-or-section-5-waiver","runtime":"existing-node-product-owner-commands-sqlite-not-electron-ui"},
 })
@@ -89,28 +89,23 @@ export function r3ModelForOperation(operationId) {
 
 // Forward qualification only. Historical Pro and R3 registrations retain their own identities.
 export const QUALIFICATION_STAGE_MODELS = Object.freeze({
-  revision: 'candidate-operation-models-v1',
-  requiredProductSha: 'e28bd876bdad317d18e431c6b553a0e69961caea',
+  revision: 'candidate-single-official-flash-v2',
+  requiredProductSha: '8c1e74ae096863809a3821cddf5bf81e984823a9',
   scopes: [{ phase: 'c16-c18', milestone: 'final' }, { phase: 'full', milestone: 'final' },
     ...['early-budget', 'early-context', 'early-review'].map(phase => ({ phase, milestone: 'post-ui' }))],
   profiles: {
-    pro: { profileId: '33eb8a3a-614d-49be-8b1a-6d6d451d9c6d',
-      configurationHash: '1ed5734321462414ff067da4d3ba7445825a07344efea774e05cf651b5976ca6',
-      model: { id: '33eb8a3a-614d-49be-8b1a-6d6d451d9c6d', name: '硅基流动', provider: 'openai', protocol: 'openai',
-        modelName: 'deepseek-ai/DeepSeek-V4-Pro', baseUrl: 'https://api.siliconflow.cn/v1', temperature: 0, maxTokens: 16384,
-        purposes: ['generation', 'refinement', 'summary'], capabilities: { contextWindowTokens: null, maxOutputTokens: 16384,
-          reasoning: false, structuredOutput: false, usage: false }, reasoningOverride: 'high' } },
-    qwen: {"profileId":"fa609022-5583-4825-a532-1ef787433626","configurationHash":"4d75f9769c9d7c56d582c109444c11f96a899be99fe401ad14132d4055e461bb","model":{"id":"fa609022-5583-4825-a532-1ef787433626","name":"R3 Qwen native diagnostic","provider":"openai","protocol":"openai","modelName":"Qwen/Qwen3.8-27B","baseUrl":"https://api.siliconflow.cn/v1","temperature":0,"maxTokens":16384,"purposes":["generation","refinement","summary"],"reasoningOverride":"medium"}},
+    flash: { profileId: '7935a372-b853-4408-9374-9fdb272a78f9',
+      configurationHash: '0eec6083f152f15548e9acf680803e79365d1d76a4763f2b1c58529451a244df',
+      model: {id: '7935a372-b853-4408-9374-9fdb272a78f9',name: 'R3 official DeepSeek Flash native diagnostic',provider: 'deepseek',protocol: 'openai',modelName: 'deepseek-flash',baseUrl: 'https://api.deepseek.com',temperature: 0,maxTokens: 16384,purposes: ['generation','refinement','summary'],reasoningOverride: 'high',capabilities: {contextWindowTokens: 1048576,maxOutputTokens: 393216,reasoning: true,structuredOutput: true,usage: true},capabilitySources: {contextWindowTokens: 'endpoint',maxOutputTokens: 'endpoint',reasoning: 'manual',structuredOutput: 'manual',usage: 'manual'},reasoningMapping: {adapter: 'deepseek-v4-thinking',supportedEfforts: ['off','low','high','max'],providerValues: {off: 'disabled',low: 'low',high: 'high',max: 'max'},requestAliases: {medium: 'high'}}} },
   },
-  operationKinds: { directory: 'pro', draft: 'pro', chapter_notes: 'pro', character_cards: 'pro',
-    review: 'qwen', refine: 'qwen', 'final-review': 'qwen' },
+  operationKinds: { directory: 'flash', draft: 'flash', chapter_notes: 'flash', character_cards: 'flash',
+    review: 'flash', refine: 'flash', 'final-review': 'flash' },
 })
 
 export function qualificationModelForOperation(phase, milestone, operationId) {
   if (!QUALIFICATION_STAGE_MODELS.scopes.some(scope => scope.phase === phase && scope.milestone === milestone))
     throw new Error('QUALIFICATION_MODEL_SCOPE_MISMATCH')
-  // The initial project/prepare identity remains Pro; each registered command selects its own profile.
-  if (operationId === undefined) return QUALIFICATION_STAGE_MODELS.profiles.pro
+  if (operationId === undefined) return QUALIFICATION_STAGE_MODELS.profiles.flash
   const kind = productionScenario(phase, milestone, CANDIDATE_ONLY_PROTOCOL_REVISION).operations.find(item => item.id === operationId)?.kind
   const profile = QUALIFICATION_STAGE_MODELS.profiles[QUALIFICATION_STAGE_MODELS.operationKinds[kind]]
   if (!profile) throw new Error('QUALIFICATION_OPERATION_MODEL_MISSING')
@@ -697,7 +692,10 @@ export function qualificationBridgeWindows(request) {
     || registration.revision !== 'native-budget-aligned-qualification-window-v5'
     || request.forwardReasoning?.revision !== 'fixed-high-zero-temperature-v1'
     || request.forwardReasoning.model?.temperature !== 0
-    || request.phase !== 'bounded-revision-diagnostic' && request.forwardReasoning.model?.modelName !== 'deepseek-ai/DeepSeek-V4-Pro'
+    || request.phase !== 'bounded-revision-diagnostic' && (request.forwardReasoning.stageModels
+      ? stableEvidence(request.forwardReasoning.stageModels) !== stableEvidence(QUALIFICATION_STAGE_MODELS)
+        || modelConfigurationHash(request.forwardReasoning.model) !== QUALIFICATION_STAGE_MODELS.profiles.flash.configurationHash
+      : request.forwardReasoning.model?.modelName !== 'deepseek-ai/DeepSeek-V4-Pro')
     || request.forwardReasoning.reasoningOverride !== 'high'
     || MAIN_GENERATION_POLICY.budget.maxActiveElapsedMs !== 3_600_000)
     throw new Error('FORWARD_QUALIFICATION_WINDOW_REGISTRATION_MISMATCH')
@@ -777,32 +775,22 @@ export function assertForwardReasoning(registration, { arm, phase, milestone, ca
       && (!caseId || scope.caseIds.includes(caseId))))) throw new Error('QUALIFICATION_MODEL_SCOPE_MISMATCH')
   const stageProfile = staged ? qualificationModelForOperation(phase, milestone, operationId) : null
   if (stageProfile && modelConfigurationHash(model) !== stageProfile.configurationHash) throw new Error('QUALIFICATION_MODEL_CONFIGURATION_DRIFT')
-  if (phase === 'r3-native-revision-diagnostic' || stageProfile?.model.modelName === 'Qwen/Qwen3.8-27B') {
+  if (phase === 'r3-native-revision-diagnostic' || stageProfile) {
     const profile = stageProfile ?? r3ModelForOperation(operationId ?? R3_NATIVE_REVISION_DIAGNOSTIC.operations[0].id)
     const expected = profile.model
     if (arm !== 'candidate' || !staged && (milestone !== 'diagnostic' || caseId !== 'R3'
       || registration?.revision !== R3_NATIVE_REVISION_DIAGNOSTIC.scenarioRevision) || creativeStrategy !== 'auto'
       || modelConfigurationHash(model) !== profile.configurationHash) throw new Error('R3_NATIVE_MODEL_MISMATCH')
     if (body === undefined) return null
-    if (phase === 'r3-native-revision-diagnostic') {
-      // The registered GLM profile uses the standard reasoning_effort mapping only.
-      if (body.model !== expected.modelName || body.temperature !== expected.temperature
-        || (body.max_tokens ?? body.max_completion_tokens) !== expected.maxTokens
-        || Object.hasOwn(body, 'thinking') || body.reasoning_effort !== 'high'
-        || Object.hasOwn(body, 'enable_thinking') || Object.hasOwn(body, 'thinking_budget')
-        || resolution?.requested !== expected.reasoningOverride || resolution.effective !== expected.reasoningOverride
-        || resolution.status !== 'mapped' || resolution.source !== 'model-override') throw new Error('R3_NATIVE_WIRE_MISMATCH')
-      return { requested: expected.reasoningOverride, effective: expected.reasoningOverride, status: resolution.status, source: resolution.source,
-        wire: { thinking: { present: false }, reasoning_effort: { present: true, value: 'high' },
-          enable_thinking: { present: false }, thinking_budget: { present: false } } }
-    }
-    if (body.model !== expected.modelName || body.temperature !== 0 || (body.max_tokens ?? body.max_completion_tokens) !== 16384
-      || Object.hasOwn(body, 'reasoning_effort') || body.enable_thinking !== true || body.thinking_budget !== 16384
-      || resolution?.requested !== expected.reasoningOverride || resolution.effective !== expected.reasoningOverride || resolution.status !== 'mapped'
-      || resolution.source !== 'model-override') throw new Error('R3_NATIVE_WIRE_MISMATCH')
+    if (body.model !== expected.modelName || body.temperature !== expected.temperature
+      || (body.max_tokens ?? body.max_completion_tokens) !== expected.maxTokens
+      || body.thinking?.type !== 'enabled' || body.reasoning_effort !== expected.reasoningOverride
+      || Object.hasOwn(body, 'enable_thinking') || Object.hasOwn(body, 'thinking_budget')
+      || resolution?.requested !== expected.reasoningOverride || resolution.effective !== expected.reasoningOverride
+      || resolution.status !== 'mapped' || resolution.source !== 'model-override') throw new Error('R3_NATIVE_WIRE_MISMATCH')
     return { requested: expected.reasoningOverride, effective: expected.reasoningOverride, status: resolution.status, source: resolution.source,
-      wire: { reasoning_effort: { present: false },
-        enable_thinking: { present: true, value: true }, thinking_budget: { present: true, value: 16384 } } }
+      wire: { thinking: { present: true, value: { type: 'enabled' } }, reasoning_effort: { present: true, value: expected.reasoningOverride },
+        enable_thinking: { present: false }, thinking_budget: { present: false } } }
   }
   const scope = registration?.scopes?.find(item => item.phase === phase && item.milestone === milestone)
   const effort = registration?.reasoningOverride

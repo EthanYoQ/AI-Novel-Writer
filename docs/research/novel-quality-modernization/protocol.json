@@ -1,4 +1,296 @@
 {
+  "historicalR3NativeRegistrationAd650e85": {
+    "caseId": "R3",
+    "caseIds": [
+      "R3"
+    ],
+    "sceneId": "场景1",
+    "chapterNumber": 2,
+    "milestone": "diagnostic",
+    "arms": [
+      "candidate"
+    ],
+    "nonQualification": true,
+    "scenarioRevision": "r3-native-siliconflow-glm53-three-runs-v7",
+    "minPhysicalRequests": 3,
+    "maxPhysicalRequests": 8,
+    "model": {
+      "id": "b8ca7fe3-c252-4f57-9a02-8c04857b26a6",
+      "name": "R3 SiliconFlow GLM 5.3 native diagnostic",
+      "provider": "openai",
+      "protocol": "openai",
+      "modelName": "zai-org/GLM-5.3",
+      "baseUrl": "https://api.siliconflow.cn/v1",
+      "temperature": 0,
+      "maxTokens": 16384,
+      "purposes": [
+        "generation",
+        "refinement",
+        "summary"
+      ],
+      "reasoningOverride": "high",
+      "capabilities": {
+        "contextWindowTokens": 1000000,
+        "maxOutputTokens": 128000,
+        "reasoning": true,
+        "structuredOutput": true,
+        "usage": true
+      },
+      "capabilitySources": {
+        "contextWindowTokens": "manual",
+        "maxOutputTokens": "manual",
+        "reasoning": "manual",
+        "structuredOutput": "manual",
+        "usage": "manual"
+      },
+      "reasoningMapping": {
+        "adapter": "openai-reasoning-effort",
+        "supportedEfforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "providerValues": {
+          "low": "low",
+          "high": "high",
+          "max": "max"
+        }
+      }
+    },
+    "source": {
+      "projectId": "efc9b59a-a9f8-4223-8c1c-add48b21d579",
+      "epoch": "86ef0216-7c47-4eed-b51f-3449aef0ca68",
+      "contentSha256": "7f35eabd2fcb65677bc7505c143255ee5aa36f0e664390879604d3091723efd4",
+      "contextSha256": "4cb5a188693d3293afa96f9d99c59c595c37ef48029d1afa1945d1b8a60a2a0b",
+      "exportManifestSha256": "1714681b52c97b16bd4405289184d13b9fab8a9ee8018e9b1176f35667896fb2",
+      "packetManifestSha256": "00517e3921cb6ffa1b6703b029e61c24fccd7cbd7ed1502d5ef8489bbd5e3877",
+      "assets": [
+        {
+          "path": ".ai-novel/project.json",
+          "sha256": "2b5ad3984308abcc3a1c25177c52505f2360d69a2371d5bf82aa9fe0f756436b"
+        },
+        {
+          "path": ".ai-novel/portable-runtime-freeze.json",
+          "sha256": "108071a42d343cf145cd37f0fb2047f84fa8066886694157227ba88eb519de91"
+        }
+      ]
+    },
+    "operations": [
+      {
+        "id": "R3普通首审",
+        "kind": "review"
+      },
+      {
+        "id": "R3一次修稿",
+        "kind": "refine"
+      },
+      {
+        "id": "R3普通末审",
+        "kind": "final-review"
+      }
+    ],
+    "attemptPolicy": {
+      "milestone": "diagnostic",
+      "arms": [
+        "candidate"
+      ],
+      "reviewRebuild": {
+        "operationId": "R3普通首审",
+        "primaryPurpose": "review-chapter",
+        "repairPurpose": "review-chapter-rebuild",
+        "maxRepairAttempts": 1,
+        "maxLengthReplacements": 1
+      },
+      "finalReviewRebuild": {
+        "operationId": "R3普通末审",
+        "primaryPurpose": "review-chapter",
+        "repairPurpose": "review-chapter-rebuild",
+        "maxRepairAttempts": 1,
+        "maxLengthReplacements": 1
+      },
+      "refinementRecovery": {
+        "operationId": "R3一次修稿",
+        "purpose": "refine-from-review",
+        "maxAttempts": 4,
+        "trigger": "settled-length-same-confirmation-visible-append-with-progress"
+      }
+    },
+    "evaluationPolicy": {
+      "revision": "ai-review-final-manuscript-v1",
+      "caseIds": [
+        "R3"
+      ],
+      "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+      "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+      "confirmation": "preauthorized-ai-only-persisted-original-items-with-native-findingIds",
+      "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+      "endpoint": "native-merge-then-ordinary-full-review",
+      "automaticCeiling": "pending-independent-oracle-review",
+      "physicalRequests": {
+        "minimum": 3,
+        "maximum": 8,
+        "manuscriptMinimum": 1,
+        "manuscriptMaximum": 8
+      }
+    },
+    "closedInvocations": [
+      "d12c4111-285e-41a7-8bcc-4b7f9afd0681",
+      "5d9f3a04-7111-4151-9323-55ec2d1141a6",
+      "2b5963de-23b3-4e5c-8c16-8997fa021aa0",
+      "6869a6a8-6bf4-4608-a7a1-d8fb67a9a469",
+      "ed4d076b-aa3f-40d6-8991-ce7df3915cf8",
+      "5331273c-d6f5-4019-82ce-15261ee03abb",
+      "352c14db-202f-4158-a295-dd8a68a21227",
+      "f4957c39-0be7-4d42-8492-b8f72fd20b95",
+      "5fc84331-ffc9-4b32-941c-5d11e1178bc5",
+      "9e1d7e92-ba12-48f9-bf57-e469b349bf6a",
+      "abb5c15a-e030-4a12-85d2-4416da1fedff",
+      "f4299c56-60a9-4911-b441-e6909c06abb0",
+      "fbbb909d-f2f6-449e-8af1-bbbc82d8bb20",
+      "a0ab647c-d914-4734-a704-4522da47807c",
+      "12baea73-3050-4f3e-b5a9-b4cae7abc179"
+    ],
+    "requiredProductSha": "6cf907211208d506b0afe6210128bfcfe5fb9dfd",
+    "profiles": {
+      "glm": {
+        "profileId": "b8ca7fe3-c252-4f57-9a02-8c04857b26a6",
+        "configurationHash": "17abb4be95b4caac723b84962ae6a4d1ed3f73e833c53f9a3e8566b7af5fc2c1",
+        "model": {
+          "id": "b8ca7fe3-c252-4f57-9a02-8c04857b26a6",
+          "name": "R3 SiliconFlow GLM 5.3 native diagnostic",
+          "provider": "openai",
+          "protocol": "openai",
+          "modelName": "zai-org/GLM-5.3",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "temperature": 0,
+          "maxTokens": 16384,
+          "purposes": [
+            "generation",
+            "refinement",
+            "summary"
+          ],
+          "reasoningOverride": "high",
+          "capabilities": {
+            "contextWindowTokens": 1000000,
+            "maxOutputTokens": 128000,
+            "reasoning": true,
+            "structuredOutput": true,
+            "usage": true
+          },
+          "capabilitySources": {
+            "contextWindowTokens": "manual",
+            "maxOutputTokens": "manual",
+            "reasoning": "manual",
+            "structuredOutput": "manual",
+            "usage": "manual"
+          },
+          "reasoningMapping": {
+            "adapter": "openai-reasoning-effort",
+            "supportedEfforts": [
+              "low",
+              "high",
+              "max"
+            ],
+            "providerValues": {
+              "low": "low",
+              "high": "high",
+              "max": "max"
+            }
+          }
+        }
+      }
+    },
+    "operationProfiles": {
+      "R3普通首审": "glm",
+      "R3一次修稿": "glm",
+      "R3普通末审": "glm"
+    },
+    "runs": [
+      {
+        "run": 1,
+        "invocationId": "e111a7c1-232d-40ae-8756-652314995816"
+      },
+      {
+        "run": 2,
+        "invocationId": "820ab4bf-be8f-468f-b8b9-293dc444e10a"
+      },
+      {
+        "run": 3,
+        "invocationId": "66ac671a-2481-4917-8272-6a2aeef62738"
+      }
+    ],
+    "maxTotalPhysicalRequests": 24,
+    "acceptance": {
+      "minimumCompletedLoops": 2,
+      "maximumUnsupportedTimeChanges": 0,
+      "denominator": 3,
+      "automaticCeiling": "pending-independent-oracle-review",
+      "semanticRule": "delivery-plan-section-3-forward-2026-10-03",
+      "unsupportedTime": "forbid-asserted-fact-mandatory-fix-actual-revision-or-trusted-derivation",
+      "unadoptedWrongAlternative": {
+        "allRequired": [
+          "autonomous-correct-localization",
+          "not-author-fact-or-mandatory-fix",
+          "complete-original-evidence-received",
+          "autonomous-rejection-by-revision",
+          "valid-final-manuscript-full-review-save-readback"
+        ],
+        "retain": "first-review-quality-defect",
+        "exclude": "human-edited-opinions-replacement-answer-or-false-finding-closure"
+      },
+      "stop": "when-two-of-three-impossible-remaining-NOT_RUN-no-redraw",
+      "scope": "new-group-only-no-historical-reclassification-or-section-5-waiver",
+      "runtime": "existing-node-product-owner-commands-sqlite-not-electron-ui"
+    }
+  },
+  "historicalR3NativeAd650e85Boundary": {
+    "fromEventCount": 1686,
+    "eventCount": 1704,
+    "rawBytesSha256": "9925500f300a46d8b58cdd0ebe9456eb2363cc3b90007156a7e0e3db14cd3ea5",
+    "protocolRevision": "s14b-candidate-only-three-rounds-v1",
+    "protocolHash": "bbd43c66845f8c148fa5df83fa86ca43f06da4779598e38748d567de23f4ea04",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "ad650e8571a2254814b5793b649875887ce62f12",
+        "sourceHash": "c99bc64232853d2d650ffca8de935b995bdcb4aebe7db5b9ac38b4a625a178e0",
+        "driverHash": "9a4bd9866049a2d8fa27bf944634527b71da12a19757c62c8522b183a49fdc6d",
+        "parityId": "795a326abbb334d7bb3e2b8f975eddd6542b6e1919604a56ce5a880d6613bb41"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:c969e1c7-0432-46e4-a1e3-9785b6105c24",
+        "invocationId": "e111a7c1-232d-40ae-8756-652314995816",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:70ae3bd8-832c-41c3-b23d-7f7fb52738a3",
+        "invocationId": "e111a7c1-232d-40ae-8756-652314995816",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:8375d092-d41f-47fa-89e8-bc6c3e108d23",
+        "invocationId": "e111a7c1-232d-40ae-8756-652314995816",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:306cf5f4-3b5a-445d-91f2-305408ee9406",
+        "invocationId": "820ab4bf-be8f-468f-b8b9-293dc444e10a",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:da4a5f4d-078d-4703-8c39-38f9f19a4861",
+        "invocationId": "820ab4bf-be8f-468f-b8b9-293dc444e10a",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:c3c49bbf-3425-48a4-bd78-74bbd77b29d3",
+        "invocationId": "820ab4bf-be8f-468f-b8b9-293dc444e10a",
+        "terminal": "settle"
+      }
+    ],
+    "limits": "Closed v7 GLM group: six STOP requests in slots 1 and 2; semantic group FAIL; slot 3 NOT_RUN under the registered stop rule. No replay, reclassification or claim that GLM is fixed."
+  },
   "historicalR3NativeRegistrationD51580fc": {
     "caseId": "R3",
     "caseIds": [
@@ -1206,8 +1498,8 @@
     ]
   },
   "forwardStageModels": {
-    "revision": "candidate-operation-models-v1",
-    "requiredProductSha": "e28bd876bdad317d18e431c6b553a0e69961caea",
+    "revision": "candidate-single-official-flash-v2",
+    "requiredProductSha": "8c1e74ae096863809a3821cddf5bf81e984823a9",
     "scopes": [
       {
         "phase": "c16-c18",
@@ -1231,16 +1523,16 @@
       }
     ],
     "profiles": {
-      "pro": {
-        "profileId": "33eb8a3a-614d-49be-8b1a-6d6d451d9c6d",
-        "configurationHash": "1ed5734321462414ff067da4d3ba7445825a07344efea774e05cf651b5976ca6",
+      "flash": {
+        "profileId": "7935a372-b853-4408-9374-9fdb272a78f9",
+        "configurationHash": "0eec6083f152f15548e9acf680803e79365d1d76a4763f2b1c58529451a244df",
         "model": {
-          "id": "33eb8a3a-614d-49be-8b1a-6d6d451d9c6d",
-          "name": "硅基流动",
-          "provider": "openai",
+          "id": "7935a372-b853-4408-9374-9fdb272a78f9",
+          "name": "R3 official DeepSeek Flash native diagnostic",
+          "provider": "deepseek",
           "protocol": "openai",
-          "modelName": "deepseek-ai/DeepSeek-V4-Pro",
-          "baseUrl": "https://api.siliconflow.cn/v1",
+          "modelName": "deepseek-flash",
+          "baseUrl": "https://api.deepseek.com",
           "temperature": 0,
           "maxTokens": 16384,
           "purposes": [
@@ -1248,45 +1540,50 @@
             "refinement",
             "summary"
           ],
+          "reasoningOverride": "high",
           "capabilities": {
-            "contextWindowTokens": null,
-            "maxOutputTokens": 16384,
-            "reasoning": false,
-            "structuredOutput": false,
-            "usage": false
+            "contextWindowTokens": 1048576,
+            "maxOutputTokens": 393216,
+            "reasoning": true,
+            "structuredOutput": true,
+            "usage": true
           },
-          "reasoningOverride": "high"
-        }
-      },
-      "qwen": {
-        "profileId": "fa609022-5583-4825-a532-1ef787433626",
-        "configurationHash": "4d75f9769c9d7c56d582c109444c11f96a899be99fe401ad14132d4055e461bb",
-        "model": {
-          "id": "fa609022-5583-4825-a532-1ef787433626",
-          "name": "R3 Qwen native diagnostic",
-          "provider": "openai",
-          "protocol": "openai",
-          "modelName": "Qwen/Qwen3.8-27B",
-          "baseUrl": "https://api.siliconflow.cn/v1",
-          "temperature": 0,
-          "maxTokens": 16384,
-          "purposes": [
-            "generation",
-            "refinement",
-            "summary"
-          ],
-          "reasoningOverride": "medium"
+          "capabilitySources": {
+            "contextWindowTokens": "endpoint",
+            "maxOutputTokens": "endpoint",
+            "reasoning": "manual",
+            "structuredOutput": "manual",
+            "usage": "manual"
+          },
+          "reasoningMapping": {
+            "adapter": "deepseek-v4-thinking",
+            "supportedEfforts": [
+              "off",
+              "low",
+              "high",
+              "max"
+            ],
+            "providerValues": {
+              "off": "disabled",
+              "low": "low",
+              "high": "high",
+              "max": "max"
+            },
+            "requestAliases": {
+              "medium": "high"
+            }
+          }
         }
       }
     },
     "operationKinds": {
-      "directory": "pro",
-      "draft": "pro",
-      "chapter_notes": "pro",
-      "character_cards": "pro",
-      "review": "qwen",
-      "refine": "qwen",
-      "final-review": "qwen"
+      "directory": "flash",
+      "draft": "flash",
+      "chapter_notes": "flash",
+      "character_cards": "flash",
+      "review": "flash",
+      "refine": "flash",
+      "final-review": "flash"
     }
   },
   "schemaVersion": 2,
@@ -2372,16 +2669,16 @@
         "candidate"
       ],
       "nonQualification": true,
-      "scenarioRevision": "r3-native-siliconflow-glm53-three-runs-v7",
+      "scenarioRevision": "r3-native-official-flash-three-runs-v8",
       "minPhysicalRequests": 3,
       "maxPhysicalRequests": 8,
       "model": {
-        "id": "b8ca7fe3-c252-4f57-9a02-8c04857b26a6",
-        "name": "R3 SiliconFlow GLM 5.3 native diagnostic",
-        "provider": "openai",
+        "id": "7935a372-b853-4408-9374-9fdb272a78f9",
+        "name": "R3 official DeepSeek Flash native diagnostic",
+        "provider": "deepseek",
         "protocol": "openai",
-        "modelName": "zai-org/GLM-5.3",
-        "baseUrl": "https://api.siliconflow.cn/v1",
+        "modelName": "deepseek-flash",
+        "baseUrl": "https://api.deepseek.com",
         "temperature": 0,
         "maxTokens": 16384,
         "purposes": [
@@ -2391,30 +2688,35 @@
         ],
         "reasoningOverride": "high",
         "capabilities": {
-          "contextWindowTokens": 1000000,
-          "maxOutputTokens": 128000,
+          "contextWindowTokens": 1048576,
+          "maxOutputTokens": 393216,
           "reasoning": true,
           "structuredOutput": true,
           "usage": true
         },
         "capabilitySources": {
-          "contextWindowTokens": "manual",
-          "maxOutputTokens": "manual",
+          "contextWindowTokens": "endpoint",
+          "maxOutputTokens": "endpoint",
           "reasoning": "manual",
           "structuredOutput": "manual",
           "usage": "manual"
         },
         "reasoningMapping": {
-          "adapter": "openai-reasoning-effort",
+          "adapter": "deepseek-v4-thinking",
           "supportedEfforts": [
+            "off",
             "low",
             "high",
             "max"
           ],
           "providerValues": {
+            "off": "disabled",
             "low": "low",
             "high": "high",
             "max": "max"
+          },
+          "requestAliases": {
+            "medium": "high"
           }
         }
       },
@@ -2509,20 +2811,23 @@
         "f4299c56-60a9-4911-b441-e6909c06abb0",
         "fbbb909d-f2f6-449e-8af1-bbbc82d8bb20",
         "a0ab647c-d914-4734-a704-4522da47807c",
-        "12baea73-3050-4f3e-b5a9-b4cae7abc179"
+        "12baea73-3050-4f3e-b5a9-b4cae7abc179",
+        "e111a7c1-232d-40ae-8756-652314995816",
+        "820ab4bf-be8f-468f-b8b9-293dc444e10a",
+        "66ac671a-2481-4917-8272-6a2aeef62738"
       ],
-      "requiredProductSha": "6cf907211208d506b0afe6210128bfcfe5fb9dfd",
+      "requiredProductSha": "8c1e74ae096863809a3821cddf5bf81e984823a9",
       "profiles": {
-        "glm": {
-          "profileId": "b8ca7fe3-c252-4f57-9a02-8c04857b26a6",
-          "configurationHash": "17abb4be95b4caac723b84962ae6a4d1ed3f73e833c53f9a3e8566b7af5fc2c1",
+        "flash": {
+          "profileId": "7935a372-b853-4408-9374-9fdb272a78f9",
+          "configurationHash": "0eec6083f152f15548e9acf680803e79365d1d76a4763f2b1c58529451a244df",
           "model": {
-            "id": "b8ca7fe3-c252-4f57-9a02-8c04857b26a6",
-            "name": "R3 SiliconFlow GLM 5.3 native diagnostic",
-            "provider": "openai",
+            "id": "7935a372-b853-4408-9374-9fdb272a78f9",
+            "name": "R3 official DeepSeek Flash native diagnostic",
+            "provider": "deepseek",
             "protocol": "openai",
-            "modelName": "zai-org/GLM-5.3",
-            "baseUrl": "https://api.siliconflow.cn/v1",
+            "modelName": "deepseek-flash",
+            "baseUrl": "https://api.deepseek.com",
             "temperature": 0,
             "maxTokens": 16384,
             "purposes": [
@@ -2532,52 +2837,57 @@
             ],
             "reasoningOverride": "high",
             "capabilities": {
-              "contextWindowTokens": 1000000,
-              "maxOutputTokens": 128000,
+              "contextWindowTokens": 1048576,
+              "maxOutputTokens": 393216,
               "reasoning": true,
               "structuredOutput": true,
               "usage": true
             },
             "capabilitySources": {
-              "contextWindowTokens": "manual",
-              "maxOutputTokens": "manual",
+              "contextWindowTokens": "endpoint",
+              "maxOutputTokens": "endpoint",
               "reasoning": "manual",
               "structuredOutput": "manual",
               "usage": "manual"
             },
             "reasoningMapping": {
-              "adapter": "openai-reasoning-effort",
+              "adapter": "deepseek-v4-thinking",
               "supportedEfforts": [
+                "off",
                 "low",
                 "high",
                 "max"
               ],
               "providerValues": {
+                "off": "disabled",
                 "low": "low",
                 "high": "high",
                 "max": "max"
+              },
+              "requestAliases": {
+                "medium": "high"
               }
             }
           }
         }
       },
       "operationProfiles": {
-        "R3普通首审": "glm",
-        "R3一次修稿": "glm",
-        "R3普通末审": "glm"
+        "R3普通首审": "flash",
+        "R3一次修稿": "flash",
+        "R3普通末审": "flash"
       },
       "runs": [
         {
           "run": 1,
-          "invocationId": "e111a7c1-232d-40ae-8756-652314995816"
+          "invocationId": "a3a8a3fe-7393-4260-8601-ef365f511872"
         },
         {
           "run": 2,
-          "invocationId": "820ab4bf-be8f-468f-b8b9-293dc444e10a"
+          "invocationId": "07433184-dc4a-400d-9324-d331e0ddae60"
         },
         {
           "run": 3,
-          "invocationId": "66ac671a-2481-4917-8272-6a2aeef62738"
+          "invocationId": "73b0ca6a-a5bd-4493-a7b2-1e01d5eee005"
         }
       ],
       "maxTotalPhysicalRequests": 24,

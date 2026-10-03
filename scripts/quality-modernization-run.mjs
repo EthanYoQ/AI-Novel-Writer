@@ -270,7 +270,8 @@ export function validatePhysicalLedger(file) {
   const r3V4 = validateHistoricalSupersessionBoundary(raw, r3V3, protocol.historicalR3Native6e38e5ddBoundary)
   const r3V5 = validateHistoricalSupersessionBoundary(raw, r3V4, protocol.historicalR3Native11152245Boundary)
   const r3V6First = validateHistoricalSupersessionBoundary(raw, r3V5, protocol.historicalR3NativeC9e7c71eBoundary)
-  validateHistoricalSupersessionBoundary(raw, r3V6First, protocol.historicalR3NativeD51580fcBoundary)
+  const r3V6 = validateHistoricalSupersessionBoundary(raw, r3V6First, protocol.historicalR3NativeD51580fcBoundary)
+  validateHistoricalSupersessionBoundary(raw, r3V6, protocol.historicalR3NativeAd650e85Boundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -458,7 +459,7 @@ export function forwardReasoningFor(protocol, phase, milestone) {
     && QUALIFICATION_STAGE_MODELS.scopes.some(item => item.phase === phase && item.milestone === milestone)
   if (staged && !isDeepStrictEqual(protocol.forwardStageModels, QUALIFICATION_STAGE_MODELS)) fail('QUALIFICATION_MODEL_REGISTRATION_MISMATCH')
   return high === undefined ? effective : { ...effective, revision: high.revision, reasoningOverride: high.reasoningOverride,
-    ...(staged ? { stageModels: QUALIFICATION_STAGE_MODELS } : {}),
+    ...(staged ? { stageModels: QUALIFICATION_STAGE_MODELS, model: QUALIFICATION_STAGE_MODELS.profiles.flash.model } : {}),
     wire: { ...effective.wire, candidate: { ...effective.wire.candidate, reasoning_effort: high.reasoningOverride } },
     limits: !bounded && model ? model.limits : high.limits }
 }
@@ -597,7 +598,7 @@ export function createProductionTargets(baselineRoot, output, { development = fa
       isolationRoot, roots, fixture: { path: fixturePath, format: fixture.format, semanticHash: fixture.semanticHash, parametersHash: fixture.parametersHash },
       driver: { kind: 'production-command-physical-project-v2', adapterRoot: ROOT, path: PRODUCTION_BRIDGE, sha256: productionBridgeHash() },
       ...(r3 ? { modelId: R3_NATIVE_REVISION_DIAGNOSTIC.model.id, r3StageProfiles: R3_NATIVE_REVISION_DIAGNOSTIC.profiles }
-        : staged ? { modelId: QUALIFICATION_STAGE_MODELS.profiles.pro.profileId, stageModels: QUALIFICATION_STAGE_MODELS }
+        : staged ? { modelId: QUALIFICATION_STAGE_MODELS.profiles.flash.profileId, stageModels: QUALIFICATION_STAGE_MODELS }
           : modelId ? { modelId } : {}), ...(development ? { developmentOnly: true } : {}) }
     if ((r3 || staged) && !development) {
       if (modelId && modelId !== target.modelId) fail('R3_NATIVE_MODEL_MISMATCH')
@@ -900,6 +901,10 @@ export function updateLedger(file, event, options = {}) {
         ? protocol.historicalR3NativeD51580fcBoundary : options.historicalR3NativeD51580fcBoundary
       const trustedR3V6Events = r3V6Boundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedR3SameGroupEvents, r3V6Boundary) : trustedR3SameGroupEvents
+      const r3V7Boundary = options.campaignMode === 'real'
+        ? protocol.historicalR3NativeAd650e85Boundary : options.historicalR3NativeAd650e85Boundary
+      const trustedR3V7Events = r3V7Boundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedR3V6Events, r3V7Boundary) : trustedR3V6Events
       // 阶段决定首选分配桶：early 阶段用 early*，post-UI 重跑用 postUi*；
       // 同一 slot 的重复发送或已超出计划样本量的发送归入失败/修复余量。
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
@@ -928,7 +933,7 @@ export function updateLedger(file, event, options = {}) {
           const closed = R3_NATIVE_REVISION_DIAGNOSTIC.closedInvocations
           if (closed.includes(binding.invocationId)) fail('R3_NATIVE_ATTEMPT_UNAVAILABLE')
           const campaign = [...reserved.values()].filter(row => row.binding.phase === binding.phase
-            && ![r3NativeBoundary, r3ClosedBoundary, r3Dc9Boundary, r3V3Boundary, r3V4Boundary, r3CurrentBoundary, r3SameGroupBoundary, r3V6Boundary].some(boundary => boundary
+            && ![r3NativeBoundary, r3ClosedBoundary, r3Dc9Boundary, r3V3Boundary, r3V4Boundary, r3CurrentBoundary, r3SameGroupBoundary, r3V6Boundary, r3V7Boundary].some(boundary => boundary
               && closed.includes(row.binding.invocationId)
               && boundary.reserveAttempts.some(item => item.attemptId === row.attemptId)))
           if (campaign.length >= R3_NATIVE_REVISION_DIAGNOSTIC.maxTotalPhysicalRequests
@@ -989,7 +994,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedR3V6Events
+          const superseded = index >= trustedHistoricalEvents && index < trustedR3V7Events
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)
@@ -1192,7 +1197,7 @@ export function adjudicateCandidateBatch(batchPath, reviewsPath) {
 
 export function main(argv) {
   let [command = 'help', ...rest] = argv
-  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <register-batch|adjudicate-batch|freeze-targets|development-synthetic|shared-input-diagnostic|separated-review-diagnostic|baseline-probe|dry-run|early-budget|early-context|early-review|full|c16-c18> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>] [--batch <registered batch.json> --round 1|2|3 (real final only)]; register-batch: --targets <frozen targets> --output <new private batch.json>; adjudicate-batch: --batch <batch.json> --reviews <two independent case reviews.json>; shared-input-diagnostic/separated-review-diagnostic: --diagnostic-input <frozen private JSON> --mode synthetic|real [--targets <frozen targets> | --baseline-root <baseline> --output <new private targets>] ; formal freeze-targets: --model-sources <private Pro and Qwen profile sources.json> --output <new private targets>; R3 freeze-targets: --phase r3-native-revision-diagnostic --diagnostic-models <private profile source roots.json> --output <new private targets>; r3-native-revision-diagnostic: --targets <frozen targets> --diagnostic-run 1|2|3 --milestone diagnostic --diagnostic-input <frozen R3.context.json> --mode real --physical-ledger <canonical ledger>; freeze-targets/development-synthetic: --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full|c16-c18 (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
+  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <register-batch|adjudicate-batch|freeze-targets|development-synthetic|shared-input-diagnostic|separated-review-diagnostic|baseline-probe|dry-run|early-budget|early-context|early-review|full|c16-c18> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>] [--batch <registered batch.json> --round 1|2|3 (real final only)]; register-batch: --targets <frozen targets> --output <new private batch.json>; adjudicate-batch: --batch <batch.json> --reviews <two independent case reviews.json>; shared-input-diagnostic/separated-review-diagnostic: --diagnostic-input <frozen private JSON> --mode synthetic|real [--targets <frozen targets> | --baseline-root <baseline> --output <new private targets>] ; formal freeze-targets: --model-sources <private registered Flash profile sources.json> --output <new private targets>; R3 freeze-targets: --phase r3-native-revision-diagnostic --diagnostic-models <private profile source roots.json> --output <new private targets>; r3-native-revision-diagnostic: --targets <frozen targets> --diagnostic-run 1|2|3 --milestone diagnostic --diagnostic-input <frozen R3.context.json> --mode real --physical-ledger <canonical ledger>; freeze-targets/development-synthetic: --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full|c16-c18 (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
   if (command.startsWith('--')) { rest = argv; command = 'phase-options' }
   const args = {}
   for (let i = 0; i < rest.length; i++) {

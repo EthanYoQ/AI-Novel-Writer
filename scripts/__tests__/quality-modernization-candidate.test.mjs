@@ -5,9 +5,9 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { productionScenario, fullExecutionSchedule, runProductionPhasePair, executionRecordIdentity,
   QUALIFICATION_STAGE_MODELS, qualificationModelForOperation, assertForwardReasoning, copyIsolatedRealModelConfig,
-  createOperationDispatchGate, reviewLengthRecoveryFor, scenarioAuthorSetting } from '../quality-modernization-driver.mjs'
+  createOperationDispatchGate, reviewLengthRecoveryFor, scenarioAuthorSetting, R3_NATIVE_REVISION_DIAGNOSTIC, modelConfigurationHash } from '../quality-modernization-driver.mjs'
 import { ROOT, validatePair, candidateBatchSlots, assertCandidateSlotAvailable, aggregateCandidateJudgments, selectPhase, hash, adjudicateCandidateBatch,
-  forwardReasoningFor, forwardQualificationWindowFor } from '../quality-modernization-run.mjs'
+  forwardReasoningFor, forwardQualificationWindowFor, buildFixtureExports, currentProtocolBinding } from '../quality-modernization-run.mjs'
 import { targetUnitRange } from '../quality-modernization-receipt.mjs'
 import { buildMainGenerationPlan, MAIN_GENERATION_POLICY } from '../../electron/services/main-generation-plan'
 import { resolveModelExecutionCapabilityEvidence } from '../../electron/services/model-execution-lease'
@@ -65,7 +65,7 @@ test('forward formal review recovery preserves old scenarios, author input and e
   }
 })
 
-test('formal operation profiles preserve Pro generation and Qwen review wire without changing windows', () => {
+test('formal operations use one official Flash profile and native wire without changing windows', () => {
   const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
   assert.deepEqual(protocol.forwardStageModels, QUALIFICATION_STAGE_MODELS)
   const provider = new OpenAIProvider(), messages = [{ role: 'user', content: 'offline parameter preview' }]
@@ -75,7 +75,7 @@ test('formal operation profiles preserve Pro generation and Qwen review wire wit
     for (const operation of scenario.operations) {
       const profile = qualificationModelForOperation(phase, milestone, operation.id)
       const review = ['review', 'refine', 'final-review'].includes(operation.kind)
-      assert.equal(profile, QUALIFICATION_STAGE_MODELS.profiles[review ? 'qwen' : 'pro'])
+      assert.equal(profile, QUALIFICATION_STAGE_MODELS.profiles.flash)
       const model = { ...profile.model, apiKey: 'synthetic-never-network' }
       const capabilityEvidence = resolveModelExecutionCapabilityEvidence(model)
       const plan = buildMainGenerationPlan(model, { capabilityEvidence }, { purpose: review ? 'review-chapter' : 'chapter-draft',
@@ -85,21 +85,17 @@ test('formal operation profiles preserve Pro generation and Qwen review wire wit
       const resolution = resolveReasoningPolicy({ model, creativeStrategy: 'auto', stage: 'general' })
       const input = { arm: 'candidate', phase, milestone, caseId: scenario.caseIds[0], operationId: operation.id,
         model, body, resolution, creativeStrategy: 'auto' }
-      assert.equal(assertForwardReasoning(registration, input).effective, review ? 'medium' : 'high')
+      assert.equal(assertForwardReasoning(registration, input).effective, 'high')
       assert.equal(body.model, profile.model.modelName)
       assert.equal(body.max_tokens, 16384)
       assert.equal(body.temperature, 0)
-      assert.equal(body.enable_thinking, true)
-      assert.equal(Object.hasOwn(body, 'reasoning_effort'), !review)
-      assert.equal(body.thinking_budget, review ? 16384 : undefined)
-      if (review) {
-        assert.equal(plan.usagePolicy.canBoundTotalLiability, false)
-        assert.equal(plan.reasoningUpperBoundTokens, 16384)
-        assert.equal(plan.reservedTokens, plan.inputUpperBoundTokens + 16384 + 16384 + MAIN_GENERATION_POLICY.safetyMarginTokens)
-      }
+      assert.deepEqual(body.thinking, { type: 'enabled' })
+      assert.equal(body.reasoning_effort, 'high')
+      assert.equal(body.enable_thinking, undefined)
+      assert.equal(body.thinking_budget, undefined)
       assert.throws(() => assertForwardReasoning(registration, { ...input,
-        model: QUALIFICATION_STAGE_MODELS.profiles[review ? 'pro' : 'qwen'].model }), /CONFIGURATION_DRIFT/)
-      if (review) assert.throws(() => assertForwardReasoning(registration, { ...input,
+        model: { ...model, modelName: 'Qwen/Qwen3.8-27B' } }), /CONFIGURATION_DRIFT/)
+      assert.throws(() => assertForwardReasoning(registration, { ...input,
         body: { ...body, reasoning_effort: 'medium' } }), /WIRE_MISMATCH/)
     }
     assert.throws(() => qualificationModelForOperation(phase, milestone, 'unregistered'), /OPERATION_MODEL_MISSING/)
@@ -107,7 +103,7 @@ test('formal operation profiles preserve Pro generation and Qwen review wire wit
   assert.throws(() => forwardReasoningFor({ ...protocol, forwardStageModels: undefined }, 'full', 'final'), /REGISTRATION_MISMATCH/)
 })
 
-test('formal config copying binds both profiles and rejects drift before any request', () => {
+test('formal config copying binds one shared profile and rejects drift before any request', () => {
   const root = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/stage-profiles-'))
   const destination = path.join(root, 'copy'); fs.mkdirSync(destination)
   const models = Object.values(QUALIFICATION_STAGE_MODELS.profiles).map(profile => ({ ...profile.model, apiKey: 'synthetic-never-network' }))
@@ -116,7 +112,7 @@ test('formal config copying binds both profiles and rejects drift before any req
     fs.writeFileSync(path.join(root, 'models.json'), JSON.stringify(models))
     copyIsolatedRealModelConfig(target, { config: destination }, hash(QUALIFICATION_STAGE_MODELS.profiles))
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(destination, 'models.json'))), models)
-    models[1].reasoningOverride = 'high'
+    models[0].reasoningOverride = 'low'
     fs.writeFileSync(path.join(root, 'models.json'), JSON.stringify(models))
     assert.throws(() => copyIsolatedRealModelConfig(target, { config: destination }, hash(QUALIFICATION_STAGE_MODELS.profiles)), /CONFIGURATION_DRIFT/)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
@@ -265,4 +261,52 @@ test('adjudication binds all terminal states to the batch and only arbitrates di
     assert.equal(decision.firstDraft, 'pass')
     assert.equal(decision.silentHardConstraint, true)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+test('freeze consumer copies one registered Flash source for formal and R3 targets and rejects drift', () => {
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/single-model-freeze-'))
+  const profile = QUALIFICATION_STAGE_MODELS.profiles.flash
+  const sourceRoot = path.join(directory, 'source')
+  fs.mkdirSync(path.join(sourceRoot, 'c', 'c'), { recursive: true })
+  const modelFile = path.join(sourceRoot, 'c', 'c', 'models.json')
+  const model = { ...profile.model, apiKey: 'synthetic-never-network' }
+  fs.writeFileSync(modelFile, JSON.stringify([model]))
+  const source = { sourceRoot, profileId: profile.profileId, configurationHash: profile.configurationHash }
+  const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8').replaceAll('\r\n', '\n')
+  const start = runner.indexOf('export function createProductionTargets(')
+  const body = runner.slice(start, runner.indexOf('export function probeTarget(', start)).replace('export function', 'function')
+  const inspected = []
+  const dependencies = { fs, path, ROOT, CACHE: directory, QUALIFICATION_STAGE_MODELS, R3_NATIVE_REVISION_DIAGNOSTIC,
+    CANDIDATE_ONLY_PROTOCOL_REVISION: revision, PRODUCTION_BRIDGE: 'scripts/fixtures/quality-modernization-production.fixture.mjs',
+    fail: code => { throw new Error(code) }, git: (_root, args) => args[0] === 'rev-parse' ? 'a'.repeat(40) : '',
+    inside: (root, target) => !path.relative(root, target).startsWith('..') && !path.isAbsolute(path.relative(root, target)),
+    real: fs.realpathSync, native: () => '/offline', process: { platform: 'linux' }, read: file => JSON.parse(fs.readFileSync(file)),
+    assertFormalTargetCandidateClean() {}, createShortIsolationRoot: () => fs.mkdtempSync(path.join(directory, 'target-')),
+    buildFixtureExports, currentProtocolBinding, hashSourceTree: () => 'b'.repeat(64), hashExecutionTools: () => 'c'.repeat(64),
+    runnerAdapterHash: () => 'd'.repeat(64), productionBridgeHash: () => 'e'.repeat(64), modelConfigurationHash,
+    freezeProductionEnvironment: () => ({}), fixedStartup: () => ({}),
+    inspectTarget(target) {
+      inspected.push(target)
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(target.roots.config, 'models.json'))), [model])
+      assert.equal(target.modelId, profile.profileId)
+    } }
+  const freeze = new Function(...Object.keys(dependencies), body + '\nreturn createProductionTargets')(...Object.values(dependencies))
+  try {
+    for (const phase of ['full', 'r3-native-revision-diagnostic']) {
+      const output = path.join(directory, phase + '.json')
+      const result = freeze(undefined, output, { phase, modelSources: { [profile.profileId]: source } })
+      assert.equal(result.physicalModelRequests, 0)
+      assert.equal(Object.keys(result.targets).length, 1)
+      assert.equal(result.targets.candidate.modelId, profile.profileId)
+    }
+    assert.equal(inspected.length, 2)
+    for (const change of [{ profileId: 'unregistered' }, { configurationHash: '0'.repeat(64) }, { sourceRoot: 'relative-root' }])
+      assert.throws(() => freeze(undefined, path.join(directory, randomUUID() + '.json'),
+        { phase: 'full', modelSources: { [profile.profileId]: { ...source, ...change } } }), /MODEL_MISMATCH/)
+    fs.writeFileSync(modelFile, JSON.stringify([{ ...model, apiKey: '' }]))
+    assert.throws(() => freeze(undefined, path.join(directory, 'missing-key.json'),
+      { phase: 'full', modelSources: { [profile.profileId]: source } }), /MODEL_MISMATCH/)
+    fs.writeFileSync(modelFile, JSON.stringify([{ ...model, modelName: 'Qwen/Qwen3.8-27B' }]))
+    assert.throws(() => freeze(undefined, path.join(directory, 'mixed.json'),
+      { phase: 'full', modelSources: { [profile.profileId]: source } }), /MODEL_MISMATCH/)
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
