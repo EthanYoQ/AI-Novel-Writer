@@ -384,10 +384,13 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
       <GenerationBudgetDiagnostics diagnostics={view.budgetDiagnostics} locale={locale} />
       {view.ledger && <p>{runText(locale, `已用 ${view.ledger.physicalRequests} 次请求`, `${view.ledger.physicalRequests} requests used`)}</p>}
       {recovery.sourceStatus === 'conflict' && !recovery.saved && <p>{runText(locale, '来源已变化；候选仍可复制，不能直接保存。', 'Sources changed; copy the candidate to preserve it. Direct saving is unavailable.')}</p>}
-      {recovery.sourceStatus === 'current' && !recovery.saved && !recovery.canResume && <p>{runText(locale,
+      {recovery.sourceStatus === 'current' && !recovery.saved && !recovery.canResume && recovery.context.operation !== 'review-chapter' && <p>{runText(locale,
         '候选未通过保存校验；可复制保留，请从原稿重新发起任务。',
         'The candidate failed save validation. Copy it if needed, then start a new action from the source draft.')}</p>}
-      {requestsReview && <p>{runText(locale, '尚无完整审稿报告。重新审稿会重新调用模型；原稿保留。', 'No complete review report is available. Reviewing again sends a new model request; the source draft is preserved.')}</p>}
+      {recovery.sourceStatus === 'current' && view.status !== 'cancelled' && !recovery.saved && !recovery.canResume && recovery.context.operation === 'review-chapter' && <p>{runText(locale,
+        '当前任务的审稿请求次数已用尽。原稿保留，可从原稿发起新的审稿任务。',
+        'This task has used all review attempts. The source draft is preserved. Start a new review task from the source draft.')}</p>}
+      {requestsReview && recovery.sourceStatus === 'current' && view.status !== 'cancelled' && recovery.canResume && <p>{runText(locale, '尚无完整审稿报告。重新审稿会重新调用模型；原稿保留。', 'No complete review report is available. Reviewing again sends a new model request; the source draft is preserved.')}</p>}
       {(view.candidates ?? view.artifacts).map(artifact => <div key={artifact.artifactId}>
         <span className="whitespace-pre-wrap">{artifact.text.slice(0, 180)}</span>
         <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} onClick={() => { void act(() => navigator.clipboard.writeText(artifact.text)) }}>{runText(locale, '复制', 'Copy')}</button>

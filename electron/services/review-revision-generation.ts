@@ -280,8 +280,12 @@ export class ReviewRevisionGeneration {
       const attempt = id && this.db.prepare('SELECT attempt_id FROM generation_artifacts WHERE artifact_id=?').pluck().get(id) as string | undefined
       return attempt ? this.runs.receipt(attempt).result?.finishReason ?? null : null
     }
-    const lastCompositionFinishReason = finish(last)
+    const lastCompositionFinishReason = finish(last), latestArtifactFinishReason = finish(latestArtifact?.artifactId)
+    const attemptedPurposes = this.attempts(run.runId).map(row => JSON.parse(row.usage_receipt_json).purpose ?? 'unknown')
     let canResume = current
+    if (!saved && context.operation === 'review-chapter' && latestArtifactFinishReason === 'length'
+      && attemptedPurposes.filter(purpose => purpose === 'review-chapter').length >= 2
+      && !attemptedPurposes.includes('review-chapter-rebuild')) canResume = false
     if (!saved && context.operation !== 'review-chapter' && composition && lastCompositionFinishReason === 'stop') {
       try {
         assertMateriallyCompleteRevision(context.source.content, composition.text, context.config.wordsPerChapter, context.uiLocale)
@@ -291,8 +295,7 @@ export class ReviewRevisionGeneration {
     return { handle: handleOf(run), context: structuredClone(context), modelId: (run.binding.sourceManifest.modelReceipt as { modelId: string }).modelId,
       sourceStatus: current ? 'current' : 'conflict', canResume, ...(saved ? { saved } : {}),
       ...(canResume && !saved ? { contextId: this.remember(context).contextId } : {}), ...(composition ? { composition } : {}),
-      lastCompositionFinishReason, ...(latestArtifact ? { latestArtifact, latestArtifactFinishReason: finish(latestArtifact.artifactId) } : {}),
-      attemptedPurposes: this.attempts(run.runId).map(row => JSON.parse(row.usage_receipt_json).purpose ?? 'unknown') }
+      lastCompositionFinishReason, ...(latestArtifact ? { latestArtifact, latestArtifactFinishReason } : {}), attemptedPurposes }
   }
   close(): void { this.contexts.clear() }
 }
