@@ -63,8 +63,18 @@ export function chapterRoleOptions(current: unknown): ChapterRoleOption[] {
     value: role,
     labels: CHAPTER_ROLE_LABELS[role],
   }))
-  const raw = typeof current === 'string' ? current.trim() : ''
-  if (!raw) return [{ value: '', labels: CHAPTER_ROLE_UNSET_LABELS }, ...options]
+  const raw = typeof current === 'string' ? current : ''
+  if (!raw.trim()) return [{ value: '', labels: CHAPTER_ROLE_UNSET_LABELS }, ...options]
   if (!CHAPTER_ROLE_SET.has(raw)) options.push({ value: raw, labels: null })
   return options
+}
+
+/**
+ * The display value for a role <select>: the stored value when it is
+ * non-blank, otherwise the unset option's value. Trimming only decides
+ * "unset" here; it never rewrites the stored string, so a padded custom label
+ * still matches its option and stays selected.
+ */
+export function chapterRoleSelectValue(current: unknown): string {
+  return typeof current === 'string' && current.trim() ? current : ''
 }

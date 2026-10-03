@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { CHAPTER_ROLES, chapterRoleOptions, getChapterRoleLabels } from '../chapter-role'
+import {
+  CHAPTER_ROLES,
+  chapterRoleOptions,
+  chapterRoleSelectValue,
+  getChapterRoleLabels,
+} from '../chapter-role'
 
 describe('chapter role vocabulary', () => {
   it('shares one canonical list whose opening label is 建置', () => {
@@ -38,5 +43,29 @@ describe('chapter role vocabulary', () => {
     expect(chapterRoleOptions('')[0]).toEqual({ value: '', labels: { zhCN: '未设定', enUS: 'Not set' } })
     expect(chapterRoleOptions('   ')[0]?.value).toBe('')
     expect(chapterRoleOptions('高潮').some(option => option.value === '')).toBe(false)
+  })
+
+  it('keeps a padded custom value exact so its option still matches the select', () => {
+    const stored = ' 双线交汇 '
+    expect(chapterRoleOptions(stored).at(-1)).toEqual({ value: stored, labels: null })
+    expect(chapterRoleSelectValue(stored)).toBe(stored)
+  })
+
+  it('keeps a padded canonical value exact so it is shown verbatim rather than rewritten', () => {
+    expect(chapterRoleOptions(' 高潮 ').at(-1)).toEqual({ value: ' 高潮 ', labels: null })
+    expect(chapterRoleSelectValue(' 高潮 ')).toBe(' 高潮 ')
+  })
+
+  it('maps only blank values to the unset select value without rewriting them', () => {
+    expect(chapterRoleSelectValue('')).toBe('')
+    expect(chapterRoleSelectValue('   ')).toBe('')
+    expect(chapterRoleSelectValue(undefined)).toBe('')
+    expect(chapterRoleOptions('   ')[0]?.value).toBe('')
+  })
+
+  it('lists the legacy 开篇 as a custom option rather than dropping it', () => {
+    const options = chapterRoleOptions('开篇')
+    expect(options.map(option => option.value)).toEqual([...CHAPTER_ROLES, '开篇'])
+    expect(chapterRoleSelectValue('开篇')).toBe('开篇')
   })
 })

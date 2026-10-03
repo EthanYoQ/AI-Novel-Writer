@@ -30,7 +30,7 @@ import { Input } from '../ui/Input'
 import { Textarea } from '../ui/Textarea'
 import { Label } from '../ui/Label'
 import { NativeSelect } from '../ui/NativeSelect'
-import { chapterRoleOptions, getChapterRoleLabels } from '../../shared/chapter-role'
+import { chapterRoleOptions, chapterRoleSelectValue, getChapterRoleLabels } from '../../shared/chapter-role'
 import { cn } from '../../lib/utils'
 import { toast } from '../ui/Toast'
 import { confirm } from '../ui/Confirm'
@@ -974,7 +974,7 @@ export default function ChapterCardEditor({
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <Label>{text('章节定位', 'Chapter role')}</Label>
-                    <NativeSelect value={selected.role} onChange={e => updateField('role', e.target.value)}>
+                    <NativeSelect value={chapterRoleSelectValue(selected.role)} onChange={e => updateField('role', e.target.value)}>
                       {chapterRoleOptions(selected.role).map(({ value, labels }) => (
                         <option key={value} value={value}>{labels ? text(labels.zhCN, labels.enUS) : value}</option>
                       ))}
