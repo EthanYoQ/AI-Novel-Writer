@@ -5,7 +5,8 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { productionScenario, fullExecutionSchedule, runProductionPhasePair, executionRecordIdentity,
   QUALIFICATION_STAGE_MODELS, qualificationModelForOperation, assertForwardReasoning, copyIsolatedRealModelConfig,
-  createOperationDispatchGate, reviewLengthRecoveryFor, scenarioAuthorSetting, R3_NATIVE_REVISION_DIAGNOSTIC, modelConfigurationHash } from '../quality-modernization-driver.mjs'
+  createOperationDispatchGate, reviewLengthRecoveryFor, scenarioAuthorSetting, R3_NATIVE_REVISION_DIAGNOSTIC, modelConfigurationHash,
+  selectOwnerDispatch } from '../quality-modernization-driver.mjs'
 import { ROOT, validatePair, candidateBatchSlots, assertCandidateSlotAvailable, aggregateCandidateJudgments, selectPhase, hash, adjudicateCandidateBatch,
   forwardReasoningFor, forwardQualificationWindowFor, buildFixtureExports, currentProtocolBinding } from '../quality-modernization-run.mjs'
 import { targetUnitRange } from '../quality-modernization-receipt.mjs'
@@ -101,6 +102,42 @@ test('formal operations use one official Flash profile and native wire without c
     assert.throws(() => qualificationModelForOperation(phase, milestone, 'unregistered'), /OPERATION_MODEL_MISSING/)
   }
   assert.throws(() => forwardReasoningFor({ ...protocol, forwardStageModels: undefined }, 'full', 'final'), /REGISTRATION_MISMATCH/)
+})
+
+test.each([
+  ['chapter-draft-short-outline', 'planning', 500],
+  ['chapter-draft', 'drafting', 900],
+])('formal task output budgets admit %s only with the planned owner budget', (purpose, reasoningStage, requestedUnits) => {
+  const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
+  const registration = forwardReasoningFor(protocol, 'full', 'final')
+  const model = { ...QUALIFICATION_STAGE_MODELS.profiles.flash.model, apiKey: 'synthetic-never-network' }
+  const task = { purpose, reasoningStage, output: 'visible-text', messages: [{ role: 'user', content: 'offline task budget preview' }],
+    budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits, segmentable: false } }
+  const plan = buildMainGenerationPlan(model, { capabilityEvidence: resolveModelExecutionCapabilityEvidence(model) }, task,
+    { policy: MAIN_GENERATION_POLICY.budget, attempts: [] }, 'auto')
+  const body = new OpenAIProvider().buildRequestBody(model, task.messages, plan.options, true)
+  const input = { arm: 'candidate', phase: 'full', milestone: 'final', caseId: '场景1/1', operationId: '连续章节正文',
+    model, body, creativeStrategy: 'auto', resolution: resolveReasoningPolicy({ model, creativeStrategy: 'auto', stage: reasoningStage }) }
+  assert.ok(plan.requestedOutputTokens > 0 && plan.requestedOutputTokens < model.maxTokens)
+  assert.equal(body.max_tokens, plan.requestedOutputTokens)
+  assert.equal(assertForwardReasoning(registration, input).effective, 'high')
+  const completionBody = { ...body, max_tokens: undefined, max_completion_tokens: plan.requestedOutputTokens }
+  assert.equal(assertForwardReasoning(registration, { ...input, body: completionBody }).effective, 'high')
+  for (const max_tokens of [undefined, null, 0, -1, 1.5, String(plan.requestedOutputTokens), NaN, Infinity,
+    Number.MAX_SAFE_INTEGER + 1, model.maxTokens + 1])
+    assert.throws(() => assertForwardReasoning(registration, { ...input, body: { ...body, max_tokens } }), /R3_NATIVE_WIRE_MISMATCH/)
+  assert.throws(() => assertForwardReasoning(registration, { ...input, model: { ...model, maxTokens: model.maxTokens - 1 } }),
+    /QUALIFICATION_MODEL_CONFIGURATION_DRIFT/)
+  const handle = { runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch' }
+  const session = { projectId: handle.projectId, leaseId: handle.epoch }
+  const row = { attempt_id: 'attempt', run_id: handle.runId, root_action_id: handle.rootActionId,
+    binding_json: JSON.stringify(handle), usage_receipt_json: JSON.stringify({ purpose }),
+    attempt_json: JSON.stringify({ attemptId: 'attempt', requestedOutputTokens: plan.requestedOutputTokens }) }
+  const db = { prepare: () => ({ all: () => [row] }) }
+  for (const wire of [body, completionBody])
+    assert.deepEqual(selectOwnerDispatch(db, handle, session, wire), { ...handle, attemptId: 'attempt', purpose })
+  assert.throws(() => selectOwnerDispatch(db, handle, session, { ...body, max_tokens: plan.requestedOutputTokens - 1 }),
+    /OWNER_DISPATCH_IDENTITY_MISMATCH/)
 })
 
 test('formal config copying binds one shared profile and rejects drift before any request', () => {

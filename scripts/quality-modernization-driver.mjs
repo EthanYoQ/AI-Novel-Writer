@@ -782,8 +782,10 @@ export function assertForwardReasoning(registration, { arm, phase, milestone, ca
       || registration?.revision !== R3_NATIVE_REVISION_DIAGNOSTIC.scenarioRevision) || creativeStrategy !== 'auto'
       || modelConfigurationHash(model) !== profile.configurationHash) throw new Error('R3_NATIVE_MODEL_MISMATCH')
     if (body === undefined) return null
+    const outputTokens = body.max_tokens ?? body.max_completion_tokens
     if (body.model !== expected.modelName || body.temperature !== expected.temperature
-      || (body.max_tokens ?? body.max_completion_tokens) !== expected.maxTokens
+      || (stageProfile ? !Number.isSafeInteger(outputTokens) || outputTokens <= 0 || outputTokens > expected.maxTokens
+        : outputTokens !== expected.maxTokens)
       || body.thinking?.type !== 'enabled' || body.reasoning_effort !== expected.reasoningOverride
       || Object.hasOwn(body, 'enable_thinking') || Object.hasOwn(body, 'thinking_budget')
       || resolution?.requested !== expected.reasoningOverride || resolution.effective !== expected.reasoningOverride
