@@ -5,7 +5,7 @@ import type { MainGenerationRunHandle, MainGenerationSnapshot } from '../../src/
 import type { BeginGenerationRequest } from '../../src/shared/generation-owner-contract'
 import type { PrepareReviewRevisionRequest, PreparedReviewRevisionContext, ReviewGenerationCommitRequest,
   RevisionGenerationCommitRequest, ReviewRevisionCommitReceipt, ReviewRevisionContext, ReviewRevisionRecovery } from '../../src/shared/review-revision-generation'
-import { buildReviewGenerationReport } from '../../src/shared/review-generation-report'
+import { buildReviewGenerationReport, type ReviewReportVersion } from '../../src/shared/review-generation-report'
 import { buildReviewCycleRecheckReport, isNoopRevision } from '../../src/shared/review-cycle'
 import { countDraftUnits } from '../../src/shared/draft-units'
 import { assertMateriallyCompleteRevision } from '../../src/services/workflows/commands/refinement-completeness'
@@ -18,7 +18,7 @@ import { captureReviewRevisionContext, reviewRevisionRequest, REVIEW_REVISION_OP
 type ArtifactRef = ReviewGenerationCommitRequest['artifact']
 interface Effect {
   kind: 'review' | 'revision'; id: number; index: number; contentHash: string; contextHash: string
-  artifact: ArtifactRef; compositionHash?: string
+  artifact: ArtifactRef; compositionHash?: string; reportVersion?: 2
 }
 interface AttemptRow { attempt_id: string; run_id: string; usage_receipt_json: string }
 const handleOf = (run: DurableGenerationRun): MainGenerationRunHandle => ({ projectId: run.binding.projectId,
@@ -73,7 +73,7 @@ export class ReviewRevisionGeneration {
       || !['settled', 'unknown'].includes(receipt.attempt.status)) throw new Error('GENERATION_REVIEW_ARTIFACT_INVALID')
     return { row, receipt, artifact }
   }
-  private reviewBody(run: DurableGenerationRun, reference: ArtifactRef): string {
+  private reviewBody(run: DurableGenerationRun, reference: ArtifactRef, reportVersion: ReviewReportVersion = 2): string {
     const context = this.context(run), { row, artifact } = this.proveArtifact(run, reference)
     if (context.recheck) {
       const attempt = this.attempts(run.runId).find(candidate => candidate.attempt_id === row.attempt_id)
@@ -88,7 +88,7 @@ export class ReviewRevisionGeneration {
     }
     return JSON.stringify(buildReviewGenerationReport({ content: artifact.text, sourceContent: context.source.content,
       frozenGoals: context.frozenGoals, writingLanguage: context.writingLanguage, uiLocale: context.uiLocale,
-      preflightFindings: context.preflightFindings }), null, 2)
+      preflightFindings: context.preflightFindings, reportVersion }), null, 2)
   }
   private saved(run: DurableGenerationRun): { effect: Effect; receipt: ReviewRevisionCommitReceipt } | undefined {
     const rows = this.attempts(run.runId).filter(row => JSON.parse(row.usage_receipt_json)?.reviewRevisionEffect)
@@ -96,12 +96,14 @@ export class ReviewRevisionGeneration {
     if (!rows[0]) return undefined
     const effect = JSON.parse(rows[0].usage_receipt_json).reviewRevisionEffect as Effect
     const context = this.context(run), proof = this.proveArtifact(run, effect.artifact)
+    if (effect.reportVersion !== undefined && (effect.reportVersion !== 2 || effect.kind !== 'review' || context.recheck))
+      throw new Error('GENERATION_REVIEW_RECEIPT_INVALID')
     if (proof.row.attempt_id !== rows[0].attempt_id || effect.contextHash !== contextHash(context)
       || effect.kind !== (context.operation === 'review-chapter' ? 'review' : 'revision')) throw new Error('GENERATION_REVIEW_RECEIPT_INVALID')
     const row = effect.kind === 'review' ? ReviewRepository.getFull(effect.id, this.db) : RevisionRepository.getFull(effect.id, this.db)
     const index = row && ('reviewIndex' in row ? row.reviewIndex : row.revisionIndex)
     const composition = effect.kind === 'revision' ? this.runs.readVisibleComposition(run.runId) : undefined
-    const body = effect.kind === 'review' ? this.reviewBody(run, effect.artifact) : composition?.text.trim()
+    const body = effect.kind === 'review' ? this.reviewBody(run, effect.artifact, effect.reportVersion ?? 1) : composition?.text.trim()
     if (!row || row.baseDraftId !== context.source.id || index !== effect.index || !isDeepStrictEqual(row.sourceDraft, context.source)
       || effect.contentHash !== textHash(row.content) || row.content !== body
       || effect.kind === 'revision' && (composition?.algorithm !== 'visible-append-v1' || composition.textHash !== effect.compositionHash
@@ -201,7 +203,8 @@ export class ReviewRevisionGeneration {
       const content = this.reviewBody(run, request.artifact)
       const result = ReviewRepository.create({ baseDraftId: context.source.id, content, expectedSource: context.source }, this.db)
       const contentHash = textHash(content)
-      const receipt = this.record(run, request.artifact, { kind: 'review', id: result.id, index: result.reviewIndex, contentHash })
+      const receipt = this.record(run, request.artifact, { kind: 'review', id: result.id, index: result.reviewIndex, contentHash,
+        ...(context.recheck ? {} : { reportVersion: 2 }) })
       if (context.recheck) {
         const policy = { ...context.recheck, version: 2 } as const
         const built = buildReviewCycleRecheckReport(proof.artifact.text, context.source.content, policy, context.uiLocale)

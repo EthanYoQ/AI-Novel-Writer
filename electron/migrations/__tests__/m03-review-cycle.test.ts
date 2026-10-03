@@ -27,7 +27,7 @@ function content(db: import('better-sqlite3').Database, body: string): number {
 function attempt(db: import('better-sqlite3').Database, root: string, id: string, input: {
   kind: 'review' | 'revision'; entityId: number; index: number; contentHash: string; source: string
   sourceId: number; sourceChapterNumber?: number; sourceVersion?: number; sourceStatus?: 'draft' | 'revised'
-  artifactText: string; confirmation?: object; recheck?: ReviewCycleRecheckContext; reviewCycleRecheck?: object
+  artifactText: string; confirmation?: object; recheck?: ReviewCycleRecheckContext; reviewCycleRecheck?: object; reportVersion?: 2
 }): void {
   const operation = input.kind === 'review' ? 'review-chapter' : 'refine-from-review'
   const context = { version: 1, operation, sourceHash: hash(input.source),
@@ -51,6 +51,7 @@ function attempt(db: import('better-sqlite3').Database, root: string, id: string
   const artifactRef = { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash }
   const effect = { kind: input.kind, id: input.entityId, index: input.index, contentHash: input.contentHash,
     contextHash: hash(JSON.stringify(context)), artifact: artifactRef,
+    ...(input.reportVersion === undefined ? {} : { reportVersion: input.reportVersion }),
     ...(input.kind === 'revision' ? { compositionHash: input.contentHash } : {}) }
   const usage = { artifactIdentity: { artifactId: artifact.artifactId, epoch: artifact.epoch, fingerprint },
     result: { usage: null, finishReason: 'stop' }, reviewRevisionEffect: effect,
@@ -64,13 +65,14 @@ function attempt(db: import('better-sqlite3').Database, root: string, id: string
     .run(artifact.artifactId, id, `run-${id}`, JSON.stringify(artifact), artifact.revision, 'partial')
 }
 
-function seedValid(db: import('better-sqlite3').Database) {
+function seedValid(db: import('better-sqlite3').Database, options: { longReport?: boolean; reportVersion?: 2 } = {}) {
   const source = '甲推开门，雨水顺着袖口落下。'
-  const reviewArtifactText = JSON.stringify({ summary: '发现一处连续性问题。',
-    items: [{ category: 'continuity', severity: 'warning', description: '门闩状态需确认。', quote: '甲推开门' }] })
+  const reviewArtifactText = JSON.stringify({ summary: options.longReport ? '核对连续性。'.repeat(30) + '保留限定。' : '发现一处连续性问题。',
+    items: [{ category: 'continuity', severity: 'warning', description: options.longReport
+      ? '门闩状态需确认。'.repeat(30) + '仅按原文判断。' : '门闩状态需确认。', quote: '甲推开门' }] })
   const reviewBody = JSON.stringify(buildReviewGenerationReport({ content: reviewArtifactText, sourceContent: source,
     frozenGoals: { chapterNumber: 1, coverage: 'not_configured', items: [] }, writingLanguage: 'zh-CN', uiLocale: 'zh-CN',
-    preflightFindings: [] }), null, 2)
+    preflightFindings: [], reportVersion: options.reportVersion ?? 1 }), null, 2)
   const draftId = Number(db.prepare("INSERT INTO drafts(chapter_number,version,status,content_id) VALUES(1,1,'draft',?)").run(content(db, source)).lastInsertRowid)
   const reviewId = Number(db.prepare(`INSERT INTO reviews(base_draft_id,review_index,source_draft_chapter_number,source_draft_version,source_draft_status,source_content,content_id)
     VALUES(?,1,1,1,'draft',?,?)`).run(draftId, source, content(db, reviewBody)).lastInsertRowid)
@@ -85,7 +87,7 @@ function seedValid(db: import('better-sqlite3').Database) {
     .run(draftId, confirmationId, source, content(db, revisionBody)).lastInsertRowid)
   const root = 'root-1'
   attempt(db, root, 'attempt-review', { kind: 'review', entityId: reviewId, index: 1, contentHash: hash(reviewBody),
-    source, sourceId: draftId, artifactText: reviewArtifactText })
+    source, sourceId: draftId, artifactText: reviewArtifactText, reportVersion: options.reportVersion })
   attempt(db, root, 'attempt-revision', { kind: 'revision', entityId: revisionId, index: 1, contentHash: hash(revisionBody),
     source, sourceId: draftId, artifactText: revisionBody, confirmation: { reviewSourceId: confirmationId, content: confirmationBody,
       originalReviewContentHash: hash(reviewBody), snapshot: JSON.parse(confirmationBody) } })
@@ -123,6 +125,23 @@ function rewriteRevisionConfirmationProof(db: import('better-sqlite3').Database,
 }
 
 describe('M03 review cycle migration', () => {
+  it.each([1, 2] as const)('verifies long report version %i without reinterpreting retained bytes', version => {
+    const db = fixture()
+    try {
+      db.transaction(() => applyM03ReviewCycle(db))()
+      seedValid(db, { longReport: true, ...(version === 2 ? { reportVersion: 2 } : {}) })
+      expect(verifyM03ReviewCycle(db)).toBe(true)
+      const raw = db.prepare("SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id='attempt-review'").pluck().get() as string
+      for (const changedVersion of [version === 1 ? 2 : undefined, 3]) {
+        const usage = JSON.parse(raw)
+        if (changedVersion === undefined) delete usage.reviewRevisionEffect.reportVersion
+        else usage.reviewRevisionEffect.reportVersion = changedVersion
+        db.prepare("UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id='attempt-review'").run(JSON.stringify(usage))
+        expect(verifyM03ReviewCycle(db)).toBe(false)
+      }
+    } finally { db.close() }
+  })
+
   it('requires the central transaction and creates empty tables without backfilling or changing old rows', () => {
     const db = fixture()
     try {

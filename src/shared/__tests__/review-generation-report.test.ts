@@ -38,14 +38,36 @@ describe('parseReviewGenerationResult', () => {
       .toEqual(parseReviewGenerationResult(JSON.stringify(passing)))
   })
 
-  it('bounds summary, description and quote by Unicode characters without splitting surrogate pairs', () => {
-    const result = parseReviewGenerationResult(JSON.stringify({
+  it('preserves complete Unicode fields while retaining explicit legacy replay', () => {
+    const content = JSON.stringify({
       summary: ` ${'🌙'.repeat(121)} `,
       items: [{ category: '人物', severity: 'warning', description: ` ${'言'.repeat(201)} `, quote: ` ${'𠮷'.repeat(161)} ` }],
-    }))
-    expect(result.summary).toBe('🌙'.repeat(120))
-    expect(result.items[0]?.description).toBe('言'.repeat(200))
-    expect(result.items[0]?.quote).toBe('𠮷'.repeat(160))
+    })
+    const result = parseReviewGenerationResult(content)
+    expect(result.summary).toBe('🌙'.repeat(121))
+    expect(result.items[0]?.description).toBe('言'.repeat(201))
+    expect(result.items[0]?.quote).toBe('𠮷'.repeat(161))
+    const legacy = parseReviewGenerationResult(content, 1)
+    expect(legacy.summary).toBe('🌙'.repeat(120))
+    expect(legacy.items[0]?.description).toBe('言'.repeat(200))
+    expect(legacy.items[0]?.quote).toBe('𠮷'.repeat(160))
+  })
+
+  it('retains a long qualification and the complete uniquely locatable quote', () => {
+    const prefix = '他说，' + '这是一段重复出现的回忆，'.repeat(18)
+    const quote = prefix + '最后一次发生在清晨。'
+    const sourceContent = quote + '\n' + prefix + '最后一次发生在傍晚。'
+    const description = '需要结合当前段落与前文的关系核对，'.repeat(15) + '但这只是人物的错误猜测，客观叙述并无矛盾，不应修改。'
+    const summary = '核对人物陈述与客观事实。'.repeat(12) + '保留末尾限定。'
+    const frozenGoals = freezeChapterGoals(1, '确认时间')
+    const result = build({ content: JSON.stringify({ summary, items: [{ category: '时间', severity: 'warning', description, quote }],
+      goalReviews: [{ id: frozenGoals.items[0]!.id, status: 'completed', description: '时间已确认。', evidence: [{ quote }] }] }),
+      sourceContent, frozenGoals })
+    expect(result.summary).toBe(summary)
+    expect(result.items[0]?.description).toBe(description)
+    expect(result.items[0]?.quote).toBe(quote)
+    expect(sourceContent.split(result.items[0]!.quote as string)).toHaveLength(2)
+    expect(sourceContent.split(quote.slice(0, 160))).toHaveLength(3)
   })
 
   it.each([

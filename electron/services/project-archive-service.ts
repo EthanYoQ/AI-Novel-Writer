@@ -606,9 +606,11 @@ function projectReviewUsage(value: unknown): Record<string, unknown> | null {
   const identity = object(usage.artifactIdentity, ['artifactId', 'epoch', 'fingerprint'])
   const result = object(usage.result, ['usage', 'finishReason', 'failureCode'])
   const effect = object(usage.reviewRevisionEffect, [
-    'kind', 'id', 'index', 'contentHash', 'contextHash', 'artifact', 'compositionHash',
+    'kind', 'id', 'index', 'contentHash', 'contextHash', 'artifact', 'compositionHash', 'reportVersion',
   ])
   if (effect.kind !== 'review' && effect.kind !== 'revision') fail('PORTABLE_UNSAFE_PROJECTION')
+  if (effect.reportVersion !== undefined && (effect.reportVersion !== 2 || effect.kind !== 'review'
+    || usage.reviewCycleRecheck !== undefined)) fail('PORTABLE_UNSAFE_PROJECTION')
   const projected: Record<string, unknown> = {
     artifactIdentity: { artifactId: safeId(identity.artifactId), epoch: safeId(identity.epoch),
       fingerprint: projectReviewFingerprint(identity.fingerprint) },
@@ -616,6 +618,7 @@ function projectReviewUsage(value: unknown): Record<string, unknown> | null {
     reviewRevisionEffect: { kind: effect.kind, id: safeInteger(effect.id, 1), index: safeInteger(effect.index, 1),
       contentHash: contentHash(effect.contentHash), contextHash: contentHash(effect.contextHash),
       artifact: projectReviewArtifactRef(effect.artifact),
+      ...(effect.reportVersion === 2 ? { reportVersion: 2 } : {}),
       ...(effect.kind === 'revision' ? { compositionHash: contentHash(effect.compositionHash) } : {}) },
   }
   if (usage.visibleComposition !== undefined) {

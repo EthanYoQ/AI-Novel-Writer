@@ -12,6 +12,8 @@ import { createCanonicalProjectManifest } from '../../../src/shared/project-form
 import { buildReviewGenerationReport } from '../../../src/shared/review-generation-report'
 import { extractPortableProjectArchive } from '../portable-project-archive'
 import { restorePortableProject } from '../project-restore-service'
+import { ReviewRevisionGeneration } from '../review-revision-generation'
+import { GenerationRunRepository } from '../../repositories/generation-run-repository'
 import {
   exportPortableProject,
   type ExportPortableProjectInput,
@@ -181,19 +183,21 @@ function seedProject(f: Fixture, secret = 'token-绝不外带'): { body: string;
   } finally { db.close() }
 }
 
-function seedMergedCycle(f: Fixture, config: Record<string, unknown> = {}, recheckReceipt?: Record<string, unknown>): {
-  cycleId: string; body: string; mergedHash: string
+function seedMergedCycle(f: Fixture, config: Record<string, unknown> = {}, recheckReceipt?: Record<string, unknown>,
+  reportOptions: { longReport?: boolean; reportVersion?: 2 } = {}): {
+  cycleId: string; body: string; mergedHash: string; reviewBody: string
 } {
   const db = new Database(f.databasePath)
   db.pragma('foreign_keys = ON')
   try {
-  const source = '甲推开门，雨水顺着袖口落下。'
+  const source = reportOptions.longReport ? '甲推开门，'.repeat(40) + '但这只是传闻。' : '甲推开门，雨水顺着袖口落下。'
   const body = '甲推开门，作者手工合并了新正文。'
-  const reviewOutput = JSON.stringify({ summary: '检查完成', items: [{ category: 'continuity',
-    severity: 'warning', description: '门闩状态需确认。', quote: '甲推开门' }] })
+  const reviewOutput = JSON.stringify({ summary: reportOptions.longReport ? '核对原文。'.repeat(30) + '保留限定。' : '检查完成', items: [{ category: 'continuity',
+    severity: 'warning', description: reportOptions.longReport ? '门闩状态需确认。'.repeat(30) + '但这只是传闻。' : '门闩状态需确认。',
+    quote: reportOptions.longReport ? source : '甲推开门' }] })
   const reviewBody = JSON.stringify(buildReviewGenerationReport({ content: reviewOutput, sourceContent: source,
     frozenGoals: { chapterNumber: 1, coverage: 'not_configured', items: [] }, writingLanguage: 'zh-CN', uiLocale: 'zh-CN',
-    preflightFindings: [] }), null, 2)
+    preflightFindings: [], reportVersion: reportOptions.reportVersion ?? 1 }), null, 2)
   const addContent = (value: string) => Number(db.prepare('INSERT INTO contents(body) VALUES(?)').run(value).lastInsertRowid)
   const draftId = Number(db.prepare("INSERT INTO drafts(chapter_number,version,status,content_id) VALUES(1,1,'revised',?)")
     .run(addContent(body)).lastInsertRowid)
@@ -234,7 +238,8 @@ function seedMergedCycle(f: Fixture, config: Record<string, unknown> = {}, reche
       fingerprint, revision: 1, text: output, textHash: hash(output) }
     const artifactRef = { artifactId, revision: 1, textHash: hash(output) }
     const effect = { kind, id, index, contentHash: hash(content), contextHash: hash(JSON.stringify(context)),
-      artifact: artifactRef, ...(kind === 'revision' ? { compositionHash: hash(content) } : {}) }
+      artifact: artifactRef, ...(kind === 'revision' ? { compositionHash: hash(content) }
+        : reportOptions.reportVersion === undefined ? {} : { reportVersion: reportOptions.reportVersion }) }
     db.prepare('INSERT INTO generation_runs(run_id,root_action_id,binding_json,status,created_at_ms,open_key) VALUES(?,?,?,?,?,?)')
       .run(runId, root, JSON.stringify({ projectId: f.projectId, epoch: 'epoch', fingerprint,
         sourceManifest: { operation, secretRef: 'private-credential-sentinel',
@@ -264,7 +269,7 @@ function seedMergedCycle(f: Fixture, config: Record<string, unknown> = {}, reche
       canonicalM03FindingSetHash([]), 1, 'merge-committed', hash(body), 0, null)
     db.prepare('INSERT INTO review_cycle_merges(cycle_id,body) VALUES(?,?)').run(cycleId, body)
     if (!verifyM03ReviewCycle(db)) throw new Error('MERGED_CYCLE_FIXTURE_INVALID')
-    return { cycleId, body, mergedHash: hash(body) }
+    return { cycleId, body, mergedHash: hash(body), reviewBody }
   } finally { db.close() }
 }
 
@@ -278,9 +283,9 @@ afterEach(() => {
 })
 
 describe('portable project export service', { timeout: 20_000 }, () => {
-  it('roundtrips an immutable v7 merged cycle with its body and bound hash', async () => {
+  it.each([1, 2] as const)('roundtrips an immutable v7 merged cycle and saved report version %i', async version => {
     const f = fixture()
-    const seeded = seedMergedCycle(f)
+    const seeded = seedMergedCycle(f, {}, undefined, { longReport: true, ...(version === 2 ? { reportVersion: 2 } : {}) })
     await exportPortableProject(input(f))
     const targetRoot = path.join(f.base, 'restored')
     await restorePortableProject({ archivePath: f.target, targetProjectRoot: targetRoot })
@@ -297,6 +302,18 @@ describe('portable project export service', { timeout: 20_000 }, () => {
         .pluck().get() as string
       expect(restoredBinding).not.toContain('private-credential-sentinel')
       expect(restoredBinding).not.toContain('private-machine-sentinel')
+      const usage = JSON.parse(restored.prepare("SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id='attempt-review'")
+        .pluck().get() as string)
+      expect(usage.reviewRevisionEffect.reportVersion).toBe(version === 2 ? 2 : undefined)
+      expect(verifyM03ReviewCycle(restored)).toBe(true)
+      const runs = new GenerationRunRepository(() => restored), run = runs.get('run-review')
+      const scope = { projectId: run.binding.projectId, epoch: run.binding.epoch }
+      const service = new ReviewRevisionGeneration(restored, runs, scope, () => {})
+      const saved = service.commitReview({ contextId: 'saved-replay', handle: { ...scope, rootActionId: run.rootActionId, runId: run.runId },
+        artifact: usage.reviewRevisionEffect.artifact }, () => { throw new Error('SAVED_REPLAY_MUST_NOT_RESUME') })
+      expect(saved.content).toBe(seeded.reviewBody)
+      expect(saved.contentHash).toBe(hash(seeded.reviewBody))
+      expect(saved.source.content).toBe(JSON.parse(restoredBinding).sourceManifest.reviewRevisionContext.source.content)
     } finally { restored.close() }
   })
 

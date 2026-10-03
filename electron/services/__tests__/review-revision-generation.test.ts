@@ -76,6 +76,55 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   return { get db() { return db }, owner, makeOwner, reopenStorage, prepare, selection, run, spy, deps }
 }
 describe('review and revision generation through the actual owner and SQLite', () => {
+  it.each([1, 2] as const)('reopens long saved reports with report version %i and refuses a changed version', async version => {
+    const output = { summary: '🌙'.repeat(121) + '保留结论', items: [{ category: '表达', severity: 'pass',
+      description: '已经核对的原文。'.repeat(30) + '但这只是猜测，不应修改。', quote: prose }],
+      goalReviews: [{ id: 'ch1:keyEvents:1', status: 'completed', description: '进入北塔。', evidence: [{ quote: prose }] }] }
+    const f = fixture(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: JSON.stringify(output) }); return { finishReason: 'stop', usage: null }
+    })
+    f.db.prepare('UPDATE blueprints SET key_events=? WHERE chapter_number=1').run('林岚走进北塔')
+    const request = await f.run(), saved = f.owner.commitReview(request)
+    const parsed = JSON.parse(saved.content)
+    expect(parsed.summary).toBe(output.summary)
+    expect(parsed.items[0]).toEqual(output.items[0])
+    const row = f.db.prepare('SELECT attempt_id,usage_receipt_json FROM generation_attempts').get() as {
+      attempt_id: string; usage_receipt_json: string }
+    const usage = JSON.parse(row.usage_receipt_json)
+    expect(usage.reviewRevisionEffect.reportVersion).toBe(2)
+    let expected = saved
+    if (version === 1) {
+      // Retained v1 bytes are constructed independently of the new parser.
+      const legacy = JSON.parse(saved.content)
+      legacy.summary = Array.from(output.summary).slice(0, 120).join('')
+      legacy.items[0].description = Array.from(output.items[0]!.description).slice(0, 200).join('')
+      legacy.items[0].quote = Array.from(prose).slice(0, 160).join('')
+      const content = JSON.stringify(legacy, null, 2), contentHash = textHash(content)
+      delete usage.reviewRevisionEffect.reportVersion
+      usage.reviewRevisionEffect.contentHash = contentHash
+      f.db.prepare('UPDATE contents SET body=? WHERE id=(SELECT content_id FROM reviews WHERE id=?)').run(content, saved.id)
+      f.db.prepare('UPDATE review_cycles SET review_content_hash=? WHERE review_id=?').run(contentHash, saved.id)
+      f.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify(usage), row.attempt_id)
+      expected = { ...saved, content, contentHash }
+    }
+    f.owner.suspendForProjectClose()
+    const reopened = f.reopenStorage()
+    try {
+      expect(reopened.readReviewRevisionRecovery(request.handle).saved).toEqual(expected)
+      expect(reopened.commitReview(request)).toEqual(expected)
+      expect(verifyM03ReviewCycle(f.db)).toBe(true)
+      expect(f.spy).toHaveBeenCalledTimes(1)
+      for (const changedVersion of [version === 1 ? 2 : undefined, 3]) {
+        const changed = structuredClone(usage)
+        if (changedVersion === undefined) delete changed.reviewRevisionEffect.reportVersion
+        else changed.reviewRevisionEffect.reportVersion = changedVersion
+        f.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify(changed), row.attempt_id)
+        expect(() => reopened.readReviewRevisionRecovery(request.handle)).toThrow('GENERATION_REVIEW_RECEIPT_INVALID')
+        expect(verifyM03ReviewCycle(f.db)).toBe(false)
+      }
+    } finally { reopened.suspendForProjectClose() }
+  })
+
   it('explicitly refuses recovery of the old combined blueprint material hash while retaining its artifact', async () => {
     const current = reviewRevisionMaterials.reviewRevisionAuthorMaterial
     const legacy = vi.spyOn(reviewRevisionMaterials, 'reviewRevisionAuthorMaterial').mockImplementation(context => current(context).replace([

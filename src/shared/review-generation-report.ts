@@ -16,6 +16,7 @@ import { stripDraftThinkingTags } from './draft-visible-text'
 const REVIEW_SUMMARY_MAX_CHARACTERS = 120
 const REVIEW_DESCRIPTION_MAX_CHARACTERS = 200
 const REVIEW_QUOTE_MAX_CHARACTERS = 160
+export type ReviewReportVersion = 1 | 2
 
 interface ReviewResultItem extends Record<string, unknown> {
   category: string
@@ -30,14 +31,14 @@ interface ReviewResult extends Record<string, unknown> {
   goalReviews?: unknown
 }
 
-function isBoundedText(value: unknown, maxCharacters: number): value is string {
+function isNonemptyText(value: unknown): value is string {
   return typeof value === 'string'
     && Boolean(value.trim())
-    && Array.from(value.trim()).length <= maxCharacters
 }
 
-function boundText(value: string, maxCharacters: number): string {
-  return Array.from(value.trim()).slice(0, maxCharacters).join('')
+function reportText(value: string, maxCharacters: number, version: ReviewReportVersion): string {
+  // V1 is retained only to prove already-saved reports against their original bytes.
+  return version === 1 ? Array.from(value.trim()).slice(0, maxCharacters).join('') : value.trim()
 }
 
 function isReviewShape(value: unknown): value is ReviewResult {
@@ -69,16 +70,17 @@ function isReviewShape(value: unknown): value is ReviewResult {
 
 function isReviewResult(value: unknown): value is ReviewResult {
   return isReviewShape(value)
-    && isBoundedText(value.summary, REVIEW_SUMMARY_MAX_CHARACTERS)
+    && isNonemptyText(value.summary)
     && value.items.every(item => (
       Boolean(item.category.trim())
-      && isBoundedText(item.description, REVIEW_DESCRIPTION_MAX_CHARACTERS)
-      && (item.quote === undefined || isBoundedText(item.quote, REVIEW_QUOTE_MAX_CHARACTERS))
+      && isNonemptyText(item.description)
+      && (item.quote === undefined || isNonemptyText(item.quote))
     ))
 }
 
 /** Accept one complete visible report with optional prose/fences; retain the model shape gate. */
-export function parseReviewGenerationResult(content: string): ReviewResult {
+export function parseReviewGenerationResult(content: string, reportVersion: ReviewReportVersion = 2): ReviewResult {
+  if (reportVersion !== 1 && reportVersion !== 2) throw new Error('invalid review contract')
   const trimmed = stripDraftThinkingTags(content)
   const fenced = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu.exec(trimmed)
   let parsed: unknown
@@ -90,14 +92,14 @@ export function parseReviewGenerationResult(content: string): ReviewResult {
   if (!isReviewShape(parsed)) throw new Error('invalid review contract')
   const bounded: ReviewResult = {
     ...(parsed.goalReviews === undefined ? {} : { goalReviews: parsed.goalReviews }),
-    summary: boundText(parsed.summary, REVIEW_SUMMARY_MAX_CHARACTERS),
+    summary: reportText(parsed.summary, REVIEW_SUMMARY_MAX_CHARACTERS, reportVersion),
     items: parsed.items.map(item => ({
       category: item.category,
       severity: item.severity,
-      description: boundText(item.description, REVIEW_DESCRIPTION_MAX_CHARACTERS),
+      description: reportText(item.description, REVIEW_DESCRIPTION_MAX_CHARACTERS, reportVersion),
       ...(item.quote === undefined || (item.severity === 'pass' && !item.quote.trim())
         ? {}
-        : { quote: boundText(item.quote, REVIEW_QUOTE_MAX_CHARACTERS) }),
+        : { quote: reportText(item.quote, REVIEW_QUOTE_MAX_CHARACTERS, reportVersion) }),
     })),
   }
   if (!isReviewResult(bounded)) throw new Error('invalid review contract')
@@ -112,8 +114,9 @@ export function buildReviewGenerationReport(input: {
   writingLanguage: WritingLanguage
   uiLocale: Locale
   preflightFindings: readonly ConsistencyFinding[]
+  reportVersion?: ReviewReportVersion
 }): ReviewLike & { items: Array<Record<string, unknown>> } {
-  const parsedResult: ReviewLike = parseReviewGenerationResult(input.content)
+  const parsedResult: ReviewLike = parseReviewGenerationResult(input.content, input.reportVersion)
   const goalReview = normalizeChapterGoalReview(
     parsedResult.goalReviews,
     input.frozenGoals,
