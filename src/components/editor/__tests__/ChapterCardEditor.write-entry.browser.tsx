@@ -88,6 +88,8 @@ function installIpc(options: {
       return { success: true, cleared: ['generatedText'] }
     }
     if (channel === 'fs:list-dir') return []
+    if (channel === 'db:blueprint-upsert') return { success: true }
+    if (channel === 'db:blueprint-upsert-many') return { success: true }
     throw new Error(`unexpected IPC ${channel}`)
   })
   Object.defineProperty(window, 'velaAPI', {
@@ -303,5 +305,61 @@ describe('ChapterCardEditor writing entry', () => {
     })
 
     expect(container?.textContent).not.toContain('检测到后续正文但第 1 章尚未写作')
+  })
+
+  it('keeps a padded custom role selected and saves it unchanged', async () => {
+    const stored = ' 双线交汇 '
+    const invoke = installIpc({ blueprints: [{ ...blueprint(1), role: stored }] })
+
+    await renderEditor()
+    await vi.waitFor(() => {
+      const select = Array.from(container?.querySelectorAll('select') ?? [])
+        .find(candidate => candidate.options.length >= 7) as HTMLSelectElement | undefined
+      expect(select).toBeDefined()
+      expect(select?.value).toBe(stored)
+      expect(select?.selectedIndex).toBe((select?.options.length ?? 0) - 1)
+    })
+
+    const saveOne = Array.from(container?.querySelectorAll<HTMLButtonElement>('button') ?? [])
+      .find(button => button.textContent?.trim() === '保存')
+    expect(saveOne).toBeDefined()
+    await act(async () => saveOne?.click())
+
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith(
+      'db:blueprint-upsert',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    ))
+    const savedCall = invoke.mock.calls.find(call => call[0] === 'db:blueprint-upsert')
+    expect(savedCall?.[1]).toEqual(expect.objectContaining({ role: stored }))
+  })
+
+  it('shows the unset option for a whitespace-only role without rewriting it on save', async () => {
+    const invoke = installIpc({ blueprints: [{ ...blueprint(1), role: '   ' }] })
+
+    await renderEditor()
+    await vi.waitFor(() => {
+      const select = Array.from(container?.querySelectorAll('select') ?? [])
+        .find(candidate => candidate.options.length >= 7) as HTMLSelectElement | undefined
+      expect(select).toBeDefined()
+      expect(select?.value).toBe('')
+      expect(select?.selectedIndex).toBe(0)
+      expect(select?.options[0]?.textContent).toBe('未设定')
+    })
+
+    const saveOne = Array.from(container?.querySelectorAll<HTMLButtonElement>('button') ?? [])
+      .find(button => button.textContent?.trim() === '保存')
+    expect(saveOne).toBeDefined()
+    await act(async () => saveOne?.click())
+
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith(
+      'db:blueprint-upsert',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    ))
+    const savedCall = invoke.mock.calls.find(call => call[0] === 'db:blueprint-upsert')
+    expect(savedCall?.[1]).toEqual(expect.objectContaining({ role: '   ' }))
   })
 })
