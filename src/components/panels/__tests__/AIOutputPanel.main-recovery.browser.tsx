@@ -54,20 +54,26 @@ it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)('中�
   await vi.waitFor(() => expect(container!.textContent).toContain('来源已变化；候选仍可复制'))
   const recoverButton = () => [...container!.querySelectorAll('button')].find(item => item.textContent === (operation === 'review-chapter' ? '重新审稿' : '恢复此审修任务'))!
   expect(recoverButton().disabled).toBe(true)
-  if (operation === 'review-chapter') expect(container.textContent).toContain('重新审稿会重新调用模型；原稿保留。')
+  if (operation === 'review-chapter') {
+    expect(container.textContent).not.toContain('重新审稿会重新调用模型')
+    expect(container.textContent).not.toContain('次数已用尽')
+  }
   expect(container.textContent).toContain(content)
   expect(container.textContent).toContain('已用 3 次请求')
   await expect(createReviewRevisionRecoveryWorkflow(session, handle)).rejects.toThrow('GENERATION_REVIEW_SOURCE_CHANGED')
   sourceStatus = 'current'; canResume = true
   await act(async () => root!.render(<AIOutputPanel key="刷新当前源" />))
   await vi.waitFor(() => expect(recoverButton().disabled).toBe(false))
+  if (operation === 'review-chapter') expect(container!.textContent).toContain('重新审稿会重新调用模型；原稿保留。')
   await act(async () => recoverButton().click())
   await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledOnce())
   expect(startWorkflow.mock.calls[0][0]).toMatchObject({ generationModelId: '原模型', projectSession: session, resourceKeys: ['chapter:2'] })
   expect(invoke.mock.calls.some(([channel]) => ['generation:begin', 'generation:resume', 'generation:execute', 'db:revision-replace-pending'].includes(channel))).toBe(false)
   canResume = false
   await act(async () => root!.render(<AIOutputPanel key="仅可复制" />))
-  await vi.waitFor(() => expect(container!.textContent).toContain('候选未通过保存校验；可复制保留，请从原稿重新发起任务。'))
+  await vi.waitFor(() => expect(container!.textContent).toContain(operation === 'review-chapter'
+    ? '当前任务的审稿请求次数已用尽。原稿保留，可从原稿发起新的审稿任务。'
+    : '候选未通过保存校验；可复制保留，请从原稿重新发起任务。'))
   expect(recoverButton().disabled).toBe(true)
   await expect(createReviewRevisionRecoveryWorkflow(session, handle)).rejects.toThrow('GENERATION_REVIEW_RECOVERY_COPY_ONLY')
   saved = true; sourceStatus = 'conflict'
@@ -77,6 +83,53 @@ it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)('中�
   expect(open.disabled).toBe(false)
   await act(async () => open.click())
   await vi.waitFor(() => expect(startWorkflow).toHaveBeenCalledTimes(2))
+})
+
+it.each(['zh-CN', 'en-US'] as const)('耗尽或取消的审稿保留复制且不承诺新请求（%s）', async locale => {
+  const session = { projectId: '耗尽审稿', leaseId: '当前会话', projectPath: 'C:/合成耗尽审稿' }
+  const handle: MainGenerationRunHandle = { projectId: session.projectId, epoch: session.leaseId, rootActionId: '原预算', runId: '原审稿' }
+  const content = '林岚到达海港，未完整的审稿候选仍应保留。'
+  const view = { handle, status: 'failed', artifacts: [{ ...handle, artifactId: '候选', attemptId: '第二次审稿',
+    text: content, textHash: 'a'.repeat(64), revision: 1, durableRevision: 1, status: 'completed' }], ledger: { physicalRequests: 2 } }
+  const recovery = { handle, modelId: '原模型', sourceStatus: 'current', canResume: false,
+    context: { operation: 'review-chapter', source: { id: 3, chapterNumber: 2, version: 1, status: 'draft', content }, uiLocale: locale },
+    latestArtifact: view.artifacts[0], latestArtifactFinishReason: 'length', attemptedPurposes: ['review-chapter', 'review-chapter'] }
+  const invoke = vi.fn(async (channel: string) => {
+    if (channel === 'generation:list') return [view]
+    if (channel === 'generation:list-batches' || channel === 'db:recovery-candidate-list') return []
+    if (channel === 'generation:read-context') return { handle, operation: 'review-chapter' }
+    if (channel === 'review-revision:read-recovery') return recovery
+    throw new Error(`Unexpected action: ${channel}`)
+  })
+  Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: () => () => {} } })
+  const startWorkflow = vi.fn(), writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue()
+  useProjectStore.setState({ currentProject: { id: session.projectId, path: session.projectPath, name: '耗尽审稿', sessionLease: session.leaseId, novelConfig: {} } as never })
+  useWorkflowStore.setState({ activeRuns: [], history: [], currentRun: null, startWorkflow })
+  useLocaleStore.setState({ locale })
+  container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container)
+  await act(async () => root!.render(<AIOutputPanel />))
+  await vi.waitFor(() => expect(container!.textContent).toContain(content))
+  const recoverButton = () => [...container!.querySelectorAll('button')].find(item => item.textContent === (locale === 'zh-CN' ? '重新审稿' : 'Review again'))!
+  const promise = locale === 'zh-CN' ? '重新审稿会重新调用模型' : 'Reviewing again sends a new model request'
+  const exhausted = locale === 'zh-CN'
+    ? '当前任务的审稿请求次数已用尽。原稿保留，可从原稿发起新的审稿任务。'
+    : 'This task has used all review attempts. The source draft is preserved. Start a new review task from the source draft.'
+  expect(recoverButton().disabled).toBe(true)
+  await act(async () => recoverButton().click())
+  expect(startWorkflow).not.toHaveBeenCalled()
+  const copy = [...container.querySelectorAll('button')].find(item => item.textContent === (locale === 'zh-CN' ? '复制' : 'Copy'))!
+  expect(copy.disabled).toBe(false)
+  await act(async () => copy.click())
+  expect(writeText).toHaveBeenCalledWith(content)
+  expect.soft(container.textContent).not.toContain(promise)
+  expect.soft(container.textContent).toContain(exhausted)
+  view.status = 'cancelled'; recovery.canResume = true
+  await act(async () => root!.render(<AIOutputPanel key="已取消" />))
+  await vi.waitFor(() => expect(container!.textContent).toContain(content))
+  expect(recoverButton().disabled).toBe(true)
+  expect.soft(container.textContent).not.toContain(promise)
+  expect(container.textContent).not.toContain(exhausted)
+  expect(invoke.mock.calls.some(([channel]) => ['generation:begin', 'generation:resume', 'generation:execute'].includes(channel))).toBe(false)
 })
 
 it.each(['completed', 'failed'] as const)('中文恢复面板按明确组合资格恢复 %s 片段，不猜最新候选', async (status) => {

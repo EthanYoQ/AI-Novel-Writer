@@ -306,6 +306,45 @@ describe('review and revision generation through the actual owner and SQLite', (
     expect(f.db.prepare('SELECT COUNT(*) FROM reviews').pluck().get()).toBe(0)
     expect(f.owner.read(request.handle).candidates).toHaveLength(1)
   })
+  it.each([['length', report], ['stop', report], ['stop', 'bad-json']] as const)(
+    'limits exhausted review recovery without blocking STOP save or rebuild (%s, %s)', async (finishReason, text) => {
+      let calls = 0
+      const f = fixture(async (_request, options) => {
+        options.onVisible({ kind: 'delta', text }); return { finishReason: calls++ === 0 ? 'length' : finishReason, usage: null }
+      })
+      const request = await f.run()
+      expect(f.owner.readReviewRevisionRecovery(request.handle)).toMatchObject({ canResume: true, sourceStatus: 'current' })
+      const execute = (purpose: 'review-chapter' | 'review-chapter-rebuild') => f.owner.execute({ handle: request.handle,
+        invocationNonce: purpose, task: { purpose, output: 'structured-data', messages: [{ role: 'user', content: '检查冻结正文' }] } })
+      await execute('review-chapter')
+      const recovery = f.owner.readReviewRevisionRecovery(request.handle)
+      expect(recovery.attemptedPurposes).toEqual(['review-chapter', 'review-chapter'])
+      expect(recovery.latestArtifactFinishReason).toBe(finishReason)
+      expect(recovery.saved).toBeUndefined()
+      expect.soft(recovery.canResume).toBe(finishReason === 'stop')
+      if (finishReason === 'length') {
+        expect.soft(recovery.contextId).toBeUndefined()
+        expect(f.db.prepare('SELECT body FROM contents WHERE id=1').pluck().get()).toBe(prose)
+        expect(f.db.prepare('SELECT COUNT(*) FROM reviews').pluck().get()).toBe(0)
+        expect(f.spy).toHaveBeenCalledTimes(2)
+        return
+      }
+      expect(recovery.contextId).toEqual(expect.any(String))
+      const artifact = recovery.latestArtifact!
+      const commit = { contextId: recovery.contextId!, handle: request.handle,
+        artifact: { artifactId: artifact.artifactId, revision: artifact.revision, textHash: artifact.textHash } }
+      if (text === report) {
+        expect(f.owner.commitReview(commit)).toMatchObject({ success: true, kind: 'review' })
+        expect(f.spy).toHaveBeenCalledTimes(2)
+      } else {
+        expect(() => f.owner.commitReview(commit)).toThrow()
+        await execute('review-chapter-rebuild')
+        expect(f.owner.readReviewRevisionRecovery(request.handle)).toMatchObject({ canResume: true,
+          attemptedPurposes: ['review-chapter', 'review-chapter', 'review-chapter-rebuild'] })
+        expect(f.spy).toHaveBeenCalledTimes(3)
+      }
+    },
+  )
   it('saves a review once and replays its saved ACK', async () => {
     const f = fixture(), request = await f.run(), saved = f.owner.commitReview(request)
     expect(saved).toMatchObject({ success: true, kind: 'review' })
