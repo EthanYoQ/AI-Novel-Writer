@@ -115,7 +115,8 @@ it('V3 1440×900 的持久正文候选文字按钮不竖排或溢出', async () 
     invoke: async (channel: string) => {
       if (channel === 'generation:list') return [view]
       if (channel === 'generation:list-batches' || channel === 'db:recovery-candidate-list') return []
-      if (channel === 'generation:read-context') return { handle, operation: 'chapter-draft', chapterNumber: 1, composition: null }
+      if (channel === 'generation:read-context') return { handle, operation: 'chapter-draft', chapterNumber: 1,
+        composition: null, attemptedPurposes: ['chapter-draft'] }
       throw new Error(`Unexpected IPC: ${channel}`)
     },
     on: () => () => {},
