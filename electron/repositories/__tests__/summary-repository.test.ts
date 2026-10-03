@@ -31,6 +31,24 @@ afterEach(() => {
 })
 
 describe('finalized continuity projection', () => {
+  it('persists and reads a complete long fact and evidence without losing its final correction', () => {
+    const content = '阿青听说宝剑已经售出，' + '这个尚未证实的消息在客栈内被反复转述，'.repeat(20) + '但消息并不属实，宝剑仍在木箱里。'
+    const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
+      operationId: 'continuity-long-correction',
+      chapters: [{ chapterNumber: 1, title: '宝剑', content, wordCount: countDraftUnits(content) }],
+    })
+    const draft = receipt.drafts[0]!
+    const facts = [{ category: 'plot' as const, entities: ['阿青'], statement: content, sourceChapter: 1, evidence: content }]
+    SummaryRepository.saveFinalizedContinuity({
+      draftId: draft.draftId, chapterNumber: 1, chapterNotes: content, facts,
+      projectionGeneration: projectionGeneration(),
+      source: { draftId: draft.draftId, finalizationId: draft.finalizationId, chapterNumber: 1, contentHash: draft.contentHash },
+    })
+
+    expect(SummaryRepository.listFinalizedContinuityBefore(2)[0]).toMatchObject({ chapterNotes: content, facts })
+    expect(SummaryRepository.readFinalizedSource(draft.draftId)).toMatchObject({ status: 'valid', snapshot: { content } })
+  })
+
   it('persists chapter facts against a finalized draft even when no blueprint exists', () => {
     const content = '第一章正文尾声：银色怀表在午夜停摆。'
     const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
@@ -196,7 +214,7 @@ describe('finalized continuity projection', () => {
       .toThrow(/失效水位已推进/u)
   })
 
-  it('rejects unbounded or cross-chapter continuity facts', () => {
+  it('rejects cross-chapter continuity facts', () => {
     const content = '定稿正文。'
     const receipt = FinalizedDraftImportRepository.commit(projectRoot, {
       operationId: 'continuity-invalid-fact',
@@ -218,9 +236,9 @@ describe('finalized continuity projection', () => {
       facts: [{
         category: 'plot',
         entities: [],
-        statement: 'x'.repeat(281),
+        statement: '定稿事实。',
         sourceChapter: 2,
-        evidence: '短证据',
+        evidence: content,
       }],
     })).toThrow('连续性事实参数无效')
   })

@@ -8,6 +8,7 @@ import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
 import { MAIN_GENERATION_POLICY } from '../main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
+import { SummaryRepository } from '../../repositories/summary-repository'
 import { getProjectDb } from '../../database'
 import { textHash } from '../../repositories/generation-run-repository'
 import { generationOutputContract, type BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
@@ -113,6 +114,34 @@ it.each([undefined, 'en-US'] as const)('notes源文支持合同随完整冻结�
   expect(f.owner.commitFinalizationGeneration({ handle: recovery.view.handle, artifact: f.artifactOf(receipt) })).toMatchObject({ chapterNotes: notes })
   expect(f.db.prepare('SELECT content_snapshot FROM finalization_outbox').pluck().get()).toBe(content)
   expect(f.dispatch).toHaveBeenCalledTimes(1)
+})
+
+it('notes提交和重开回读保留长事实末尾更正，不重算原ACK或覆盖作者后改', async () => {
+ const content = '阿青听说宝剑已经售出，' + '这个尚未证实的消息在客栈内被反复转述，'.repeat(20) + '但消息并不属实，宝剑仍在木箱里。'
+ const f = fixture(async (_request, options) => {
+  options.onVisible({ kind: 'delta', text: content }); return { finishReason: 'stop', usage: null }
+ }, { content })
+ const slot = { source: f.prepared.context.source, stepKey: 'chapter_notes' as const }
+ const recovery = f.owner.beginFinalizationGeneration({ slot, modelId: 'synthetic' })
+ const generated = await f.owner.executeFinalizationGeneration({ handle: recovery.view.handle })
+ const request = { handle: recovery.view.handle, artifact: f.artifactOf(generated) }
+ const saved = f.owner.commitFinalizationGeneration(request)
+ expect(SummaryRepository.listFinalizedContinuityBefore(2, f.db)[0]?.facts).toEqual([
+  expect.objectContaining({ statement: content, evidence: content, sourceChapter: 1 }),
+ ])
+ expect(saved).toMatchObject({ chapterNotes: content, factCount: 1 })
+ f.db.prepare('UPDATE blueprints SET notes=? WHERE chapter_number=1').run('作者后改的章节要点')
+ const next = f.reopen()
+ const before = f.db.prepare('SELECT total_changes()').pluck().get()
+ expect(next.commitFinalizationGeneration(request)).toEqual(saved)
+ expect(f.db.prepare('SELECT total_changes()').pluck().get()).toBe(before)
+ expect(SummaryRepository.listFinalizedContinuityBefore(2, f.db)[0]?.facts).toEqual([
+  expect.objectContaining({ statement: content, evidence: content }),
+ ])
+ expect(f.db.prepare('SELECT notes FROM blueprints').pluck().get()).toBe('作者后改的章节要点')
+ expect(next.read(request.handle).artifacts).toEqual(generated.run.artifacts)
+ expect(f.db.prepare('SELECT content_snapshot FROM finalization_outbox').pluck().get()).toBe(content)
+ expect(f.dispatch).toHaveBeenCalledTimes(1)
 })
 
 it('notes与blueprint及ACK同TX，注入写失败全部回滚；重复ACK零写',async()=>{

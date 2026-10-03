@@ -5,6 +5,14 @@ import { BUILTIN_PROMPTS } from '../../../prompt-templates'
 import { buildFinalizedContinuityFacts } from '../finalize-chapter.command'
 
 describe('buildFinalizedContinuityFacts', () => {
+  it('preserves a long statement and its complete evidence including a final correction', () => {
+    const statement = '阿青听说宝剑已经售出，' + '这个尚未证实的消息在客栈内被反复转述，'.repeat(20) + '但消息并不属实，宝剑仍在木箱里。'
+
+    expect(buildFinalizedContinuityFacts(1, statement, statement, ['阿青'])).toEqual([{
+      category: 'plot', entities: ['阿青'], statement, sourceChapter: 1, evidence: statement,
+    }])
+  })
+
   it('classifies an explicit character death as character state', () => {
     const finalizedContent = '韩峥被洪水卷入排水井，当场死亡。'
 

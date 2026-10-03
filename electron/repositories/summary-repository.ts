@@ -102,9 +102,7 @@ function normalizedFacts(value: unknown, chapterNumber: number): FinalizedContin
       || entities.length > 8
       || entities.some(entity => !entity || entity.length > 80)
       || !statement
-      || statement.length > 280
       || !evidence
-      || evidence.length > 240
     ) throw new Error('连续性事实参数无效')
     return {
       category: fact.category as FinalizedContinuityFact['category'],

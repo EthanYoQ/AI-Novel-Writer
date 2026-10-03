@@ -1,8 +1,6 @@
 import type { FinalizedCharacterContext, FinalizedContinuityFact, FinalizedContinuityFactCategory } from './finalized-continuity'
 
 const CONTINUITY_FACT_LIMIT = 12
-const CONTINUITY_STATEMENT_LIMIT = 280
-const CONTINUITY_EVIDENCE_LIMIT = 240
 
 function factCategory(statement: string): FinalizedContinuityFactCategory {
   if (/(?:角色|状态|持有|受伤|位于|死亡|身亡|牺牲|去世|character|holds?|injur|location|dead|died|deceased)/iu.test(statement)) return 'character-state'
@@ -53,7 +51,7 @@ function evidenceExcerpt(content: string, statement: string, entities: readonly 
     .sort((left, right) => right.score - left.score)
   const minimumScore = factEntities.length > 0 ? 1 : 2
   const matched = ranked.find(candidate => candidate.score >= minimumScore && candidate.supported)?.sentence
-  return (matched ?? '').slice(0, CONTINUITY_EVIDENCE_LIMIT).trim()
+  return matched ?? ''
 }
 
 export function buildFinalizedContinuityFacts(
@@ -80,7 +78,7 @@ export function buildFinalizedContinuityFacts(
       ? [{
           category: factCategory(statement),
           entities: factEntities,
-          statement: statement.slice(0, CONTINUITY_STATEMENT_LIMIT),
+          statement,
           sourceChapter: chapterNumber,
           evidence,
           ...(characterRefs ? { characterRefs } : {}),
