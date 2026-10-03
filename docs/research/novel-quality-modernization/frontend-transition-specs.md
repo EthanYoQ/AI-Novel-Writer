@@ -111,7 +111,7 @@ U03 模型设置同时应用 [S07.M01–M04 与 S07.A01–A07](../../plans/novel
 
 ## S14B — 写作质量与 post-UI
 
-模型差异与当前审稿缺口分别按[线程 10 第 1、3 节](thread10-delivery-plan.md)处理。不要求全部兼容模型通过相同质量测试；但 Flash 运行/恢复、GLM 错误修稿的现行出口不能靠披露限制跳过。正式文学批次仍须完成，未完成时记未获资格，不能称完整 V3 交付。
+模型差异与当前审稿缺口按[采用配置的最小资格路线](thread10-delivery-plan.md#native-configuration-route)处理。Flash 桌面运行/恢复仍须验证；GLM 原案复验如实结案，不要求全部兼容模型通过。采用配置必须在原问题场景取得资格，不能仅披露限制或换样本跳过；确定性软件缺陷必须修复。新测试按[同模型要求](thread10-delivery-plan.md#single-model-qualification)前向登记，正式文学批次仍须完成，未完成不能称完整 V3 交付。
 
 **现行合同**：按[线程 10 第 4–6 节](thread10-delivery-plan.md)完成 candidate-only 七案三轮与三个持续项目九章；C16 另算，写作闭环合并裁决，不再要求某一轮七案全绿或强制 baseline。保留[AI 自主发现与作者批准](quality-protocol.md#ai-review-final-manuscript)、最终成文标准及历史失败。新增产品和机器协议待实现，旧登记、旧 CLI 或人工补题诊断不能放行新资格。
 
