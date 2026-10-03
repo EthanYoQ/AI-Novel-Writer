@@ -70,7 +70,7 @@ export interface StructuredBatchReceipt {
   requestedTokens: number
   attempts: readonly GenerationAttemptReceipt[]
   compactSingleFallbackCount?: number
-  /** Physical provider faults that were retried within the same batch. */
+  /** Physical provider faults that were retried, accumulated across all batches. */
   providerRetryCount?: number
 }
 
@@ -130,6 +130,12 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
     }
   }
 
+  /**
+   * Backoff for a provider retry was interrupted by cancellation. The run must
+   * surface as cancelled, not as the provider failure that preceded the wait.
+   */
+  class ProviderRetryCancelledError extends Error {}
+
   return {
     async execute(input) {
       const attemptReceipts: GenerationAttemptReceipt[] = []
@@ -179,6 +185,8 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
       const completeWithProviderRetry = async (
         task: GenerationTask,
       ): Promise<GenerationOutcome> => {
+        // Per-batch retry budget; reset for every batch so the limit stays
+        // local while `receipt.providerRetryCount` accumulates across the run.
         let providerRetries = 0
         for (;;) {
           let outcome: GenerationOutcome
@@ -190,18 +198,22 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
             if (error.code !== 'PROVIDER_REQUEST_FAILED' || providerRetries >= PROVIDER_RETRY_LIMIT) {
               throw error
             }
-            providerRetries += 1
-            receipt.providerRetryCount = providerRetries
-            if (!await waitBeforeProviderRetry(providerRetries)) throw error
+            // Account for the retry only once the backoff completes: a wait
+            // interrupted by cancellation never makes the physical call.
+            const retryIndex = providerRetries + 1
+            if (!await waitBeforeProviderRetry(retryIndex)) throw new ProviderRetryCancelledError()
+            providerRetries = retryIndex
+            receipt.providerRetryCount = (receipt.providerRetryCount ?? 0) + 1
             continue
           }
           recordAttempt(outcome.receipt)
           const isTransient = outcome.status === 'incomplete'
             && outcome.finishReason === 'error'
           if (!isTransient || providerRetries >= PROVIDER_RETRY_LIMIT) return outcome
-          providerRetries += 1
-          receipt.providerRetryCount = providerRetries
-          if (!await waitBeforeProviderRetry(providerRetries)) return outcome
+          const retryIndex = providerRetries + 1
+          if (!await waitBeforeProviderRetry(retryIndex)) return outcome
+          providerRetries = retryIndex
+          receipt.providerRetryCount = (receipt.providerRetryCount ?? 0) + 1
         }
       }
 
@@ -546,7 +558,9 @@ export function createStructuredBatchExecutor<TInput, TOutput>(dependencies: {
       } catch (error) {
         if (error instanceof PromptBudgetExceededError) throw error
         let failure: StructuredBatchFailure
-        if (error instanceof ExecutionFailure) {
+        if (error instanceof ProviderRetryCancelledError) {
+          failure = { code: 'cancelled', reason: 'cancelled', message: '结构化生成已取消' }
+        } else if (error instanceof ExecutionFailure) {
           failure = error.failure
         } else if (error instanceof GenerationAttemptError) {
           // A retried attempt is already recorded; only a terminal one that

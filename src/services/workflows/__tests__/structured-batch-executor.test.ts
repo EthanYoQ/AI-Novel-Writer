@@ -1317,6 +1317,98 @@ describe('StructuredBatchExecutor seam', () => {
     expect(generate).toHaveBeenCalledTimes(2)
   })
 
+  it('accumulates provider retries across batches instead of overwriting the receipt', async () => {
+    let firstBatchAttempts = 0
+    const generate = vi.fn<AttemptHandler>(async request => {
+      if (request.items[0] === 1) {
+        firstBatchAttempts += 1
+        return firstBatchAttempts === 1
+          ? { status: 'failed', reason: 'server_error', requestedTokens: 100 }
+          : { status: 'completed', content: blueprintJson(request.items), requestedTokens: 100 }
+      }
+      return { status: 'failed', reason: 'server_error', requestedTokens: 100 }
+    })
+    const executor = createStructuredBatchExecutor({
+      contract: blueprintContract,
+      session: createSession(generate),
+    })
+
+    const result = await executor.execute({
+      items: [1, 2],
+      limits: { maxBatchItems: 1 },
+    })
+
+    // Batch 1 retried once; batch 2 exhausted its two retries. The receipt must
+    // report all three, not the last batch's two.
+    expect(result.receipt.providerRetryCount).toBe(3)
+    expect(generate).toHaveBeenCalledTimes(5)
+  })
+
+  it('reports cancellation instead of a provider failure when aborted during retry backoff', async () => {
+    const controller = new AbortController()
+    const complete = vi.fn<GenerationSession['complete']>(async () => {
+      if (complete.mock.calls.length === 1) {
+        throw new GenerationAttemptError(
+          'PROVIDER_REQUEST_FAILED',
+          '模型请求失败。',
+          attemptReceipt(1, 100, 100, 'error'),
+        )
+      }
+      throw new Error('the cancelled retry must not start another physical request')
+    })
+    const executor = createStructuredBatchExecutor({
+      contract: blueprintContract,
+      session: { complete },
+    })
+    const execute = executor.execute({
+      items: [1, 2, 3, 4, 5],
+      signal: controller.signal,
+      limits: { maxBatchItems: 5 },
+    })
+    setTimeout(() => controller.abort(), 20)
+
+    const result = await execute
+
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { code: 'cancelled', reason: 'cancelled' },
+      receipt: { calls: 1, requestedTokens: 100 },
+    })
+    expect(result).not.toHaveProperty('items')
+    expect(complete).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not count a retry whose backoff was cancelled by a transient outcome', async () => {
+    const controller = new AbortController()
+    const complete = vi.fn<GenerationSession['complete']>(async () => {
+      controller.abort()
+      return {
+        status: 'incomplete',
+        content: '',
+        finishReason: 'error',
+        receipt: attemptReceipt(1, 100, 100, 'error'),
+      }
+    })
+    const executor = createStructuredBatchExecutor({
+      contract: blueprintContract,
+      session: { complete },
+    })
+
+    const result = await executor.execute({
+      items: [1, 2, 3, 4, 5],
+      signal: controller.signal,
+      limits: { maxBatchItems: 5 },
+    })
+
+    // The wait is aborted, so the retry never happens and must not be reported.
+    expect(result).toMatchObject({
+      ok: false,
+      failure: { code: 'cancelled', reason: 'cancelled' },
+      receipt: { calls: 1, requestedTokens: 100 },
+    })
+    expect(complete).toHaveBeenCalledTimes(1)
+  })
+
   it('does not split a five-item batch after a safety-filtered outcome', async () => {
     const generate = vi.fn<AttemptHandler>(async () => ({
       status: 'incomplete',
