@@ -104,6 +104,38 @@ beforeEach(() => {
 afterEach(() => { clearProjectCustomPrompts(); vi.restoreAllMocks(); vi.unstubAllGlobals(); useProjectStore.setState({ currentProject: null }) })
 
 describe('review/revision consumers using the main contract (synthetic transport)', () => {
+  it.each(['zh-CN', 'en-US'] as const)('delivers event-source pairing to initial and ordinary final review requests in %s', async language => {
+    const project = useProjectStore.getState().currentProject!
+    useProjectStore.setState({ currentProject: { ...project, novelConfig: { ...project.novelConfig, writingLanguage: language } } })
+    for (const [version, content] of [[1, source.content], [2, revised]] as const) {
+      const f = setup([{ content: review, finishReason: 'stop' }], [], { ...source, version, content })
+      f.args.context.writingLanguage = language
+      await f.command('review-chapter', {
+        sourceDraft: { id: 1, chapterNumber: 1, version, status: 'draft', contentRevision: version },
+      }).execute(f.args)
+      const prompt = f.provider.mock.calls[0]![0].find(message => message.role === 'user')!.content
+      expect(f.provider).toHaveBeenCalledOnce()
+      expect(f.fixture.prepared!.context.recheck).toBeUndefined()
+      expect(prompt).toContain(content)
+      expect(prompt).toContain(language === 'zh-CN'
+        ? '每个时间判断（包括 pass）的 items[].description 先注明来源章节'
+        : 'For every temporal judgment (including pass), begin items[].description with the source chapter')
+      expect(prompt).toContain(language === 'zh-CN'
+        ? '分别摘录同一事件的短原句和支配其时点的短原句'
+        : 'separate short verbatim excerpts for that same event and the time anchor governing it')
+      expect(prompt).toContain(language === 'zh-CN'
+        ? '再给比较结论及必要修法'
+        : 'then give the comparison result and any necessary remedy')
+      expect(prompt).toContain(language === 'zh-CN'
+        ? '无法支持具体时点时，保留不确定性'
+        : 'If the sources do not support a specific time, preserve that uncertainty')
+      expect(prompt).toContain(language === 'zh-CN'
+        ? '逐字连续、且全文仅出现一次的单一摘录'
+        : 'one verbatim, contiguous excerpt that occurs exactly once in the draft under review')
+      expect(f.fixture.materialDecisions[0]?.promptHash).toBe(hash(prompt))
+    }
+  })
+
   it.each(['zh-CN', 'en-US'] as const)('sends temporal checks and separated author constraints through all review consumers in %s', async language => {
     const project = useProjectStore.getState().currentProject!
     useProjectStore.setState({ currentProject: { ...project, novelConfig: { ...project.novelConfig, writingLanguage: language } } })
