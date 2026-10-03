@@ -4,16 +4,17 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { R3_NATIVE_REVISION_DIAGNOSTIC as policy, productionScenario, qualificationBridgeWindows,
-  assertForwardReasoning, readR3NativeSource, streamEventStructure, r3DiagnosticInvocation, r3ModelForOperation, copyIsolatedRealModelConfig } from '../quality-modernization-driver.mjs'
+  assertForwardReasoning, readR3NativeSource, streamEventStructure, r3DiagnosticInvocation, r3ModelForOperation, copyIsolatedRealModelConfig, QUALIFICATION_STAGE_MODELS } from '../quality-modernization-driver.mjs'
 import { ROOT, CAMPAIGN_ID, currentProtocolBinding, selectPhase, forwardReasoningFor,
   forwardQualificationWindowFor, hash, updateLedger } from '../quality-modernization-run.mjs'
 
 const phase = 'r3-native-revision-diagnostic'
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
 
-test('R3 forward group preserves the closed registration and only changes the new semantic scope', () => {
-  const previous = protocol.historicalR3NativeRegistration49e1c0ad
-  assert.equal(hash(previous), '7d59b55e6aff45a7b0b9487721eeb89f26ab826d1981cf3733d9873cec11be39')
+test('R3 forward group preserves v4 and changes only product binding and fresh slots', () => {
+  assert.equal(hash(protocol.historicalR3NativeRegistration49e1c0ad), '7d59b55e6aff45a7b0b9487721eeb89f26ab826d1981cf3733d9873cec11be39')
+  const previous = protocol.historicalR3NativeRegistration6e38e5dd
+  assert.equal(hash(previous), 'a15f9ee248e830463d83458128232b2c131c17111d5df0cde8a8b5a28bc03387')
   assert.notEqual(policy.scenarioRevision, previous.scenarioRevision)
   assert.deepEqual(policy.closedInvocations, [...previous.closedInvocations, ...previous.runs.map(item => item.invocationId)])
   assert.ok(policy.runs.every(item => !policy.closedInvocations.includes(item.invocationId)))
@@ -22,6 +23,9 @@ test('R3 forward group preserves the closed registration and only changes the ne
   for (const [key, value] of Object.entries(previous.acceptance)) assert.deepEqual(policy.acceptance[key], value)
   assert.equal(policy.acceptance.scope, 'new-group-only-no-historical-reclassification-or-section-5-waiver')
   assert.equal(policy.acceptance.stop, 'when-two-of-three-impossible-remaining-NOT_RUN-no-redraw')
+  assert.equal(policy.requiredProductSha, 'a95693cf6a64488bfc33d41880e3a50917dc4de6')
+  assert.deepEqual(QUALIFICATION_STAGE_MODELS, protocol.forwardStageModels)
+  assert.equal(hash(protocol.forwardStageModels), '74f050828841a88f6972d2e54f4e0ab6403b1131b6591592137008fc9621e21b')
 })
 
 test('R3 native stage profiles freeze Qwen/Qwen/Qwen and retain the native deadline', () => {
@@ -33,7 +37,8 @@ test('R3 native stage profiles freeze Qwen/Qwen/Qwen and retain the native deadl
     const profile = r3ModelForOperation(operation.id), effort = profile.model.reasoningOverride
     const input = { arm: 'candidate', phase, milestone: 'diagnostic', caseId: 'R3', operationId: operation.id, model: profile.model,
       creativeStrategy: 'auto', resolution: { requested: effort, effective: effort, status: 'mapped', source: 'model-override' },
-      body: { model: profile.model.modelName, temperature: 0, max_tokens: 16384, enable_thinking: true, thinking_budget: 16384 } }
+      body: { model: profile.model.modelName, temperature: 0, max_tokens: 16384, enable_thinking: true, thinking_budget: 16384,
+        ...(operation.kind === 'refine' ? {} : { response_format: { type: 'json_object' } }) } }
     assert.equal(assertForwardReasoning(registration, input).effective, effort)
     for (const change of [{ reasoning_effort: 'medium' }, { enable_thinking: false }, { thinking_budget: 8192 }, { max_tokens: 8192 }, { model: 'deepseek-ai/DeepSeek-V4-Pro' }])
       assert.throws(() => assertForwardReasoning(registration, { ...input, body: { ...input.body, ...change } }), /WIRE/)
@@ -77,6 +82,7 @@ test('R3 native registration rejects altered source and cannot restart spent dia
 test.each([
   ['historicalR3NativeD12c4111Boundary', 0],
   ['historicalR3Native49e1c0adBoundary', 3],
+  ['historicalR3Native6e38e5ddBoundary', 6],
 ])('R3 registered run preserves authenticated UNKNOWN in %s and caps its eight-call invocation', (boundaryKey, closedIndex) => {
   const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', 'r3-replacement-' + randomUUID())
   fs.mkdirSync(directory, { recursive: true })

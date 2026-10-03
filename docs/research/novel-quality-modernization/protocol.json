@@ -1,4 +1,216 @@
 {
+  "historicalR3NativeRegistration6e38e5dd": {
+    "caseId": "R3",
+    "caseIds": [
+      "R3"
+    ],
+    "sceneId": "场景1",
+    "chapterNumber": 2,
+    "milestone": "diagnostic",
+    "arms": [
+      "candidate"
+    ],
+    "nonQualification": true,
+    "scenarioRevision": "r3-native-qwen-three-runs-v4",
+    "minPhysicalRequests": 3,
+    "maxPhysicalRequests": 8,
+    "model": {
+      "id": "fa609022-5583-4825-a532-1ef787433626",
+      "name": "R3 Qwen native diagnostic",
+      "provider": "openai",
+      "protocol": "openai",
+      "modelName": "Qwen/Qwen3.8-27B",
+      "baseUrl": "https://api.siliconflow.cn/v1",
+      "temperature": 0,
+      "maxTokens": 16384,
+      "purposes": [
+        "generation",
+        "refinement",
+        "summary"
+      ],
+      "reasoningOverride": "medium"
+    },
+    "source": {
+      "projectId": "efc9b59a-a9f8-4223-8c1c-add48b21d579",
+      "epoch": "86ef0216-7c47-4eed-b51f-3449aef0ca68",
+      "contentSha256": "7f35eabd2fcb65677bc7505c143255ee5aa36f0e664390879604d3091723efd4",
+      "contextSha256": "4cb5a188693d3293afa96f9d99c59c595c37ef48029d1afa1945d1b8a60a2a0b",
+      "exportManifestSha256": "1714681b52c97b16bd4405289184d13b9fab8a9ee8018e9b1176f35667896fb2",
+      "packetManifestSha256": "00517e3921cb6ffa1b6703b029e61c24fccd7cbd7ed1502d5ef8489bbd5e3877",
+      "assets": [
+        {
+          "path": ".ai-novel/project.json",
+          "sha256": "2b5ad3984308abcc3a1c25177c52505f2360d69a2371d5bf82aa9fe0f756436b"
+        },
+        {
+          "path": ".ai-novel/portable-runtime-freeze.json",
+          "sha256": "108071a42d343cf145cd37f0fb2047f84fa8066886694157227ba88eb519de91"
+        }
+      ]
+    },
+    "operations": [
+      {
+        "id": "R3普通首审",
+        "kind": "review"
+      },
+      {
+        "id": "R3一次修稿",
+        "kind": "refine"
+      },
+      {
+        "id": "R3普通末审",
+        "kind": "final-review"
+      }
+    ],
+    "attemptPolicy": {
+      "milestone": "diagnostic",
+      "arms": [
+        "candidate"
+      ],
+      "reviewRebuild": {
+        "operationId": "R3普通首审",
+        "primaryPurpose": "review-chapter",
+        "repairPurpose": "review-chapter-rebuild",
+        "maxRepairAttempts": 1
+      },
+      "finalReviewRebuild": {
+        "operationId": "R3普通末审",
+        "primaryPurpose": "review-chapter",
+        "repairPurpose": "review-chapter-rebuild",
+        "maxRepairAttempts": 1
+      },
+      "refinementRecovery": {
+        "operationId": "R3一次修稿",
+        "purpose": "refine-from-review",
+        "maxAttempts": 4,
+        "trigger": "settled-length-same-confirmation-visible-append-with-progress"
+      }
+    },
+    "evaluationPolicy": {
+      "revision": "ai-review-final-manuscript-v1",
+      "caseIds": [
+        "R3"
+      ],
+      "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+      "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+      "confirmation": "preauthorized-ai-only-persisted-original-items-with-native-findingIds",
+      "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+      "endpoint": "native-merge-then-ordinary-full-review",
+      "automaticCeiling": "pending-independent-oracle-review",
+      "physicalRequests": {
+        "minimum": 3,
+        "maximum": 8,
+        "manuscriptMinimum": 1,
+        "manuscriptMaximum": 8
+      }
+    },
+    "closedInvocations": [
+      "d12c4111-285e-41a7-8bcc-4b7f9afd0681",
+      "5d9f3a04-7111-4151-9323-55ec2d1141a6",
+      "2b5963de-23b3-4e5c-8c16-8997fa021aa0",
+      "6869a6a8-6bf4-4608-a7a1-d8fb67a9a469",
+      "ed4d076b-aa3f-40d6-8991-ce7df3915cf8",
+      "5331273c-d6f5-4019-82ce-15261ee03abb"
+    ],
+    "requiredProductSha": "57e1178cdfe1aba0e27d13d93632d5f2df601de9",
+    "profiles": {
+      "qwen": {
+        "profileId": "fa609022-5583-4825-a532-1ef787433626",
+        "configurationHash": "4d75f9769c9d7c56d582c109444c11f96a899be99fe401ad14132d4055e461bb",
+        "model": {
+          "id": "fa609022-5583-4825-a532-1ef787433626",
+          "name": "R3 Qwen native diagnostic",
+          "provider": "openai",
+          "protocol": "openai",
+          "modelName": "Qwen/Qwen3.8-27B",
+          "baseUrl": "https://api.siliconflow.cn/v1",
+          "temperature": 0,
+          "maxTokens": 16384,
+          "purposes": [
+            "generation",
+            "refinement",
+            "summary"
+          ],
+          "reasoningOverride": "medium"
+        }
+      }
+    },
+    "operationProfiles": {
+      "R3普通首审": "qwen",
+      "R3一次修稿": "qwen",
+      "R3普通末审": "qwen"
+    },
+    "runs": [
+      {
+        "run": 1,
+        "invocationId": "352c14db-202f-4158-a295-dd8a68a21227"
+      },
+      {
+        "run": 2,
+        "invocationId": "f4957c39-0be7-4d42-8492-b8f72fd20b95"
+      },
+      {
+        "run": 3,
+        "invocationId": "5fc84331-ffc9-4b32-941c-5d11e1178bc5"
+      }
+    ],
+    "maxTotalPhysicalRequests": 24,
+    "acceptance": {
+      "minimumCompletedLoops": 2,
+      "maximumUnsupportedTimeChanges": 0,
+      "denominator": 3,
+      "automaticCeiling": "pending-independent-oracle-review",
+      "semanticRule": "delivery-plan-section-3-forward-2026-10-03",
+      "unsupportedTime": "forbid-asserted-fact-mandatory-fix-actual-revision-or-trusted-derivation",
+      "unadoptedWrongAlternative": {
+        "allRequired": [
+          "autonomous-correct-localization",
+          "not-author-fact-or-mandatory-fix",
+          "complete-original-evidence-received",
+          "autonomous-rejection-by-revision",
+          "valid-final-manuscript-full-review-save-readback"
+        ],
+        "retain": "first-review-quality-defect",
+        "exclude": "human-edited-opinions-replacement-answer-or-false-finding-closure"
+      },
+      "stop": "when-two-of-three-impossible-remaining-NOT_RUN-no-redraw",
+      "scope": "new-group-only-no-historical-reclassification-or-section-5-waiver",
+      "runtime": "existing-node-product-owner-commands-sqlite-not-electron-ui"
+    }
+  },
+  "historicalR3Native6e38e5ddBoundary": {
+    "fromEventCount": 1641,
+    "eventCount": 1650,
+    "rawBytesSha256": "1d52a82777cb19a489314d916ede16c60eeb4d878033ea0b120076fe610b7200",
+    "protocolRevision": "s14b-candidate-only-three-rounds-v1",
+    "protocolHash": "1d5d659a042db3c23ec15fbecc255daaa26131dfbebe52808e7c61517200ea45",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "6e38e5ddd57670e694a908a337e5665a798f932b",
+        "sourceHash": "a62887b37d939c7c671168463a7bb70ee4ec86e9ecee302c1d226214043b54d3",
+        "driverHash": "75280bcdec3d8c70233dd2be34f8a911c9cba925aa6a06b49f50923762c58c72",
+        "parityId": "baab3e649e66e379cd645e8b1e5f2ed9de6176de8d5409b92c0fb026c5f488fa"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:91ffbdc9-4804-494a-ad7b-d289ba85633a",
+        "invocationId": "352c14db-202f-4158-a295-dd8a68a21227",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:4ec66711-ab4b-4bc3-b36d-d663b1e80a1a",
+        "invocationId": "352c14db-202f-4158-a295-dd8a68a21227",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:5c6101db-0448-40c3-9c42-43adadd6020c",
+        "invocationId": "352c14db-202f-4158-a295-dd8a68a21227",
+        "terminal": "unknown"
+      }
+    ],
+    "limits": "Historical v4 user-stopped run: two settled requests and one UNKNOWN; slots 2/3 NOT_RUN. No replay, refund or reclassification."
+  },
   "historicalR3NativeRegistration49e1c0ad": {
     "caseId": "R3",
     "caseIds": [
@@ -1363,7 +1575,7 @@
         "candidate"
       ],
       "nonQualification": true,
-      "scenarioRevision": "r3-native-qwen-three-runs-v4",
+      "scenarioRevision": "r3-native-qwen-three-runs-v5",
       "minPhysicalRequests": 3,
       "maxPhysicalRequests": 8,
       "model": {
@@ -1462,9 +1674,12 @@
         "2b5963de-23b3-4e5c-8c16-8997fa021aa0",
         "6869a6a8-6bf4-4608-a7a1-d8fb67a9a469",
         "ed4d076b-aa3f-40d6-8991-ce7df3915cf8",
-        "5331273c-d6f5-4019-82ce-15261ee03abb"
+        "5331273c-d6f5-4019-82ce-15261ee03abb",
+        "352c14db-202f-4158-a295-dd8a68a21227",
+        "f4957c39-0be7-4d42-8492-b8f72fd20b95",
+        "5fc84331-ffc9-4b32-941c-5d11e1178bc5"
       ],
-      "requiredProductSha": "57e1178cdfe1aba0e27d13d93632d5f2df601de9",
+      "requiredProductSha": "a95693cf6a64488bfc33d41880e3a50917dc4de6",
       "profiles": {
         "qwen": {
           "profileId": "fa609022-5583-4825-a532-1ef787433626",
@@ -1495,15 +1710,15 @@
       "runs": [
         {
           "run": 1,
-          "invocationId": "352c14db-202f-4158-a295-dd8a68a21227"
+          "invocationId": "9e1d7e92-ba12-48f9-bf57-e469b349bf6a"
         },
         {
           "run": 2,
-          "invocationId": "f4957c39-0be7-4d42-8492-b8f72fd20b95"
+          "invocationId": "abb5c15a-e030-4a12-85d2-4416da1fedff"
         },
         {
           "run": 3,
-          "invocationId": "5fc84331-ffc9-4b32-941c-5d11e1178bc5"
+          "invocationId": "f4299c56-60a9-4911-b441-e6909c06abb0"
         }
       ],
       "maxTotalPhysicalRequests": 24,
