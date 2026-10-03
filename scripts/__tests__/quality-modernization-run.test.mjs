@@ -137,13 +137,13 @@ test('post-UI baseline uses its native review projection, persisted AI-only conf
       const target = path.join(repositoryRoot, file.path)
       fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, file.content, { flag: 'wx' })
     }
-    // Match relative imports so Vitest shares one frozen database module instance.
+    // Concurrent dynamic entries can evaluate their shared frozen database module twice in Vitest.
     const load = file => import(path.join(repositoryRoot, file).replaceAll('\\', '/').replace(/\.ts$/u, ''))
     const [{ ReviewChapterCommand }, { RefineFromReviewCommand }, { useProjectStore }, { useEditorStore },
-      { createGenerationRuntime }, nativeConfirmation, { ReviewRepository }, { RevisionRepository }, database] = await Promise.all([
-      load('src/services/workflows/commands/review-chapter.command.ts'), load('src/services/workflows/commands/refine-from-review.command.ts'),
-      load('src/stores/project-store.ts'), load('src/stores/editor-store.ts'), load('src/services/generation/generation-runtime.ts'),
-      load('src/shared/human-confirmed-review.ts'), load('electron/repositories/review-repository.ts'), load('electron/repositories/revision-repository.ts'), load('electron/database.ts') ])
+      { createGenerationRuntime }, nativeConfirmation, { ReviewRepository }, { RevisionRepository }, database] = [
+      await load('src/services/workflows/commands/review-chapter.command.ts'), await load('src/services/workflows/commands/refine-from-review.command.ts'),
+      await load('src/stores/project-store.ts'), await load('src/stores/editor-store.ts'), await load('src/services/generation/generation-runtime.ts'),
+      await load('src/shared/human-confirmed-review.ts'), await load('electron/repositories/review-repository.ts'), await load('electron/repositories/revision-repository.ts'), await load('electron/database.ts') ]
     nativeDatabase = database
     const nativeDatabaseRead = database.getProjectDb
     // Initialize the frozen module's private state, which its repository getters actually read.
