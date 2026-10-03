@@ -1,6 +1,7 @@
+import { redactVisibleCompletionText } from '../bounded-completion'
 import { reviewTimeContinuity } from '../../../shared/chapter-time-continuity'
 import type { CommandExecuteParams, WorkflowGenerationRuntimeDependencies } from './base-command'
-import type { PreparedReviewRevisionContext } from '../../../shared/review-revision-generation'
+import type { PreparedReviewRevisionContext, ReviewRevisionRecovery } from '../../../shared/review-revision-generation'
 import { ReviewRevisionCommand, type ReviewRevisionCommandSource } from './review-revision-command'
 import { parseReviewGenerationResult } from '../../../shared/review-generation-report'
 import { buildChapterGoalReviewPrompt } from '../../../shared/chapter-goal-review'
@@ -23,6 +24,13 @@ export interface ReviewChapterParams extends ReviewRevisionCommandSource {
 
 export { reviewHistoryMaterials } from './review-revision-materials'
 
+/** Uses the same contract for recovery UI and the zero-request save path. */
+export function canCommitRecoveredReview(recovery: ReviewRevisionRecovery | undefined): boolean {
+  if (!recovery?.latestArtifact || recovery.latestArtifactFinishReason !== 'stop') return false
+  if (recovery.context.recheck) return true
+  try { parseReviewGenerationResult(redactVisibleCompletionText(recovery.latestArtifact.text)); return true } catch { return false }
+}
+
 export class ReviewChapterCommand extends ReviewRevisionCommand {
   constructor(params: ReviewChapterParams, dependencies?: WorkflowGenerationRuntimeDependencies) {
     super('review-chapter', params, params.reviewFocus ? [{ id: 'review-focus', text: params.reviewFocus }] : [], {
@@ -31,11 +39,7 @@ export class ReviewChapterCommand extends ReviewRevisionCommand {
   }
 
   protected async generateAndCommit(prepared: PreparedReviewRevisionContext, params: CommandExecuteParams) {
-    if (this.recovery?.latestArtifact && this.recovery.latestArtifactFinishReason === 'stop') {
-      let valid = Boolean(prepared.context.recheck)
-      if (!valid) try { parseReviewGenerationResult(this.stripThinkingTags(this.recovery.latestArtifact.text)); valid = true } catch { /* Repair invalid JSON below. */ }
-      if (valid) return this.commitReview(prepared, params)
-    }
+    if (canCommitRecoveredReview(this.recovery)) return this.commitReview(prepared, params)
     const frozen = prepared.context
     const language = frozen.writingLanguage
     const text = (zh: string, en: string) => workflowUiText(params.context, zh, en)

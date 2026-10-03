@@ -48,6 +48,7 @@ export interface GenerationUsageReceipt {
     agentResponse?: { version: 1; visibleText: string; toolCalls: { name: string; arguments: Record<string, unknown> }[] };
 }
 export interface GenerationExecutionReceipt {
+    diagnostics?: import('../../src/shared/generation-contract').GenerationTransportDiagnostics;
     budgetDecision?: import('../../src/services/generation/task-budget-planner').TaskBudgetDecision;
     run: DurableGenerationRun;
     attempt: PhysicalAttempt;
@@ -213,6 +214,7 @@ export class GenerationRunRepository {
             || textHash(visible.text) !== visible.textHash)) fail('ARTIFACT_INTEGRITY_FAILED');
         const usage = JSON.parse(row.usage_receipt_json);
         return { run, attempt: JSON.parse(row.attempt_json), artifact: visible, budget: this.budget(run.rootActionId), result: usage.result ?? null,
+            ...(usage.result?.diagnostics ? { diagnostics: usage.result.diagnostics } : {}),
             ...(usage.result?.failureCode ? { failureCode: usage.result.failureCode } : {}),
             ...(usage.budgetDecision ? { budgetDecision: usage.budgetDecision } : {}) };
     }
@@ -365,7 +367,8 @@ export class GenerationRunRepository {
             return next;
         });
     }
-    settle(attemptId: string, usage: GenerationUsageReceipt | null, finishReason: string | null = null, failureCode?: string): GenerationExecutionReceipt {
+    settle(attemptId: string, usage: GenerationUsageReceipt | null, finishReason: string | null = null, failureCode?: string,
+        diagnostics?: import('../../src/shared/generation-contract').GenerationTransportDiagnostics): GenerationExecutionReceipt {
         return this.transaction(() => {
             const receipt = this.receipt(attemptId);
             assertAttemptTransition(receipt.attempt.status, usage?.trusted ? 'settled' : 'unknown');
@@ -373,7 +376,7 @@ export class GenerationRunRepository {
             if (usage?.trusted)
                 receipt.attempt.actualTokens = usage.actualTokens;
             const old = this.db().prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(attemptId) as string;
-            this.db().prepare('UPDATE generation_attempts SET attempt_json=?,usage_receipt_json=? WHERE attempt_id=?').run(encode(receipt.attempt), encode({ ...JSON.parse(old), result: { usage, finishReason, ...(failureCode ? { failureCode } : {}) } }), attemptId);
+            this.db().prepare('UPDATE generation_attempts SET attempt_json=?,usage_receipt_json=? WHERE attempt_id=?').run(encode(receipt.attempt), encode({ ...JSON.parse(old), result: { usage, finishReason, ...(failureCode ? { failureCode } : {}), ...(diagnostics ? { diagnostics } : {}) } }), attemptId);
             // Old receipts without a policy retain their original hard-bound rule.
             // Estimated overruns remain actual root usage, never clipped or erased.
             if (JSON.parse(old).usagePolicy?.canBoundTotalLiability !== false

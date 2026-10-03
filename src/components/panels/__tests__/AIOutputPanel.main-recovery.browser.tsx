@@ -52,8 +52,9 @@ it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)('中�
   container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container)
   await act(async () => root!.render(<AIOutputPanel />))
   await vi.waitFor(() => expect(container!.textContent).toContain('来源已变化；候选仍可复制'))
-  const recoverButton = () => [...container!.querySelectorAll('button')].find(item => item.textContent === '恢复此审修任务')!
+  const recoverButton = () => [...container!.querySelectorAll('button')].find(item => item.textContent === (operation === 'review-chapter' ? '重新审稿' : '恢复此审修任务'))!
   expect(recoverButton().disabled).toBe(true)
+  if (operation === 'review-chapter') expect(container.textContent).toContain('重新审稿会重新调用模型；原稿保留。')
   expect(container.textContent).toContain(content)
   expect(container.textContent).toContain('已用 3 次请求')
   await expect(createReviewRevisionRecoveryWorkflow(session, handle)).rejects.toThrow('GENERATION_REVIEW_SOURCE_CHANGED')

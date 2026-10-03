@@ -3,7 +3,7 @@ import { useLLMStore } from '../../stores/llm-store'
 import type { BeginGenerationRequest } from '../../shared/generation-owner-contract'
 import { createMainGenerationTransport } from '../generation/main-generation-transport'
 import { createMainOwnedGenerationRuntime, type GenerationRuntime, type MainGenerationRunHandle, type MainGenerationRunView, type MainGenerationSnapshot } from '../generation/generation-runtime'
-import type { GenerationSession } from '../generation/generation-harness'
+import { GenerationAttemptError, type GenerationSession } from '../generation/generation-harness'
 import { requireWorkflowProjectSession } from './workflow-project-session'
 import { ipc } from '../ipc-client'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../shared/project-session-context'
@@ -43,12 +43,14 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
   let cancelPromise: Promise<unknown> | undefined
   let cancelFailure: unknown
   let importOrdinal = 0
+  let operation = request.selection.operation
   let importStage = false
   let unsubscribeReasoning: (() => void) | undefined
   const clearReasoning = () => useWorkflowReasoningStore.getState().clear(context.runId)
   const displayed = new Map<string, string>()
   const onSnapshot = (snapshot: MainGenerationSnapshot) => {
     if (closed) return
+    if (snapshot.diagnostics) callbacks.setGenerationActivity?.({ operation, diagnostics: snapshot.diagnostics })
     if (callbacks.replaceText) callbacks.replaceText(snapshot.text)
     else {
       const previous = displayed.get(snapshot.artifactId) ?? ''
@@ -66,6 +68,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
   const open = async (selection: WorkflowMainGenerationSelection) => {
     if (closed || context.cancelled) throw new Error('GENERATION_WORKFLOW_CANCELLED')
     const { resumeHandle, onRunOpened, ...intent } = selection
+    operation = selection.operation
     importOrdinal = 0
     importStage = !!intent.importSlot
     const importRecovery = intent.importSlot ? await ipc.invokeWithProjectSession(projectSession, 'import-generation:read', { slot: intent.importSlot }) : null
@@ -134,6 +137,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
       const abort = () => { void cancel() }
       options?.signal?.addEventListener('abort', abort, { once: true })
       busy = true
+      callbacks.setGenerationActivity?.({ operation })
       try {
         if (importStage) {
           const receipt = await ipc.invokeWithProjectSession(projectSession, 'import-generation:execute', { handle: view.handle, ordinal: importOrdinal++, task,
@@ -146,7 +150,14 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
           return receipt.outcome
         }
         // Keep this nonce for the entire request; transport failures never mint a retry.
-        return await inner!.execute(({ session: owned }) => owned.complete(task, { invocationNonce }))
+        const outcome = await inner!.execute(({ session: owned }) => owned.complete(task, { invocationNonce }))
+        if (outcome.receipt.diagnostics) callbacks.setGenerationActivity?.({ operation, diagnostics: outcome.receipt.diagnostics })
+        return outcome
+      } catch (error) {
+        if (error instanceof GenerationAttemptError && error.receipt.diagnostics) {
+          callbacks.setGenerationActivity?.({ operation, diagnostics: error.receipt.diagnostics })
+        }
+        throw error
       } finally { busy = false; options?.signal?.removeEventListener('abort', abort) }
     },
   }

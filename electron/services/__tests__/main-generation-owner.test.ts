@@ -33,7 +33,8 @@ const cleanups: (() => void)[] = []
 afterEach(() => { vi.unstubAllGlobals(); for (const cleanup of cleanups.splice(0)) cleanup() })
 const task = { purpose: 'chapter-draft', output: 'visible-text' as const, messages: [{ role: 'user' as const, content: '保留作者事实，创作中文段落。' }] }
 function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silicon = false,
-  onReasoning?: (event: { projectId: string; epoch: string; rootActionId: string; runId: string; attemptId: string; text: string }) => void) {
+  onReasoning?: (event: { projectId: string; epoch: string; rootActionId: string; runId: string; attemptId: string; text: string }) => void,
+  onSnapshot?: import('../main-generation-owner').MainGenerationOwnerDependencies['onSnapshot']) {
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/s05-owner-tests')
   fs.mkdirSync(base, { recursive: true })
   const root = fs.mkdtempSync(path.join(base, 'owner-'))
@@ -57,6 +58,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silico
       assertCurrent: () => { if (!current || capturedEpoch !== epoch || capturedDb !== db) throw new Error('GENERATION_EPOCH_STALE') },
       leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch,
       onReasoning,
+      onSnapshot,
       buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(sourceDeps, { ...selection, projectId: 'project', epoch: capturedEpoch,
         modelReceipt, policy: MAIN_GENERATION_POLICY, outputContract: generationOutputContract(selection) }).binding,
       rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDeps, previous, capturedEpoch, modelReceipt, MAIN_GENERATION_POLICY).binding,
@@ -679,6 +681,47 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     await f.owner.execute({ handle: view.handle, invocationNonce: 'call', task })
     expect(fetch).toHaveBeenCalledTimes(1)
     expect(f.owner.list()[0].ledger?.physicalRequests).toBe(1)
+  })
+  it('retains safe stream diagnostics through the owner, SQLite reopen and snapshot IPC without retry', async () => {
+    const snapshots: import('../../../src/services/generation/generation-runtime').MainGenerationSnapshot[] = []
+    const f = fixture(undefined, false, undefined, snapshot => snapshots.push(snapshot)), view = f.owner.begin(f.begin)
+    let read = 0
+    const fetch = vi.fn(async () => ({ ok: true, status: 200, body: { getReader: () => ({ read: async () => {
+      if (read++ === 0) return { done: false, value: new TextEncoder().encode('data: {"choices":[{"delta":{"reasoning_content":"private thought"}}]}\n\n') }
+      throw new TypeError('secret endpoint', { cause: Object.assign(new Error('secret raw cause'), { code: 'UND_ERR_BODY_TIMEOUT' }) })
+    } }) } }))
+    vi.stubGlobal('fetch', fetch)
+    const result = await f.owner.execute({ handle: view.handle, invocationNonce: 'timeout', task })
+    expect(result.outcome).toMatchObject({ status: 'incomplete', content: '', receipt: { failureCode: 'NETWORK_ERROR',
+      diagnostics: { phase: 'stream', endReason: 'failed', causeCode: 'UND_ERR_BODY_TIMEOUT', httpStatus: 200, reasoningEvents: 1, visibleEvents: 0 } } })
+    expect(snapshots.some(snapshot => snapshot.text === '' && snapshot.diagnostics?.httpStatus === 200)).toBe(true)
+    const stored = new GenerationRunRepository(() => f.db).receipt(result.outcome.receipt.visibleArtifact!.attemptId)
+    expect(stored.diagnostics).toEqual(result.outcome.receipt.diagnostics)
+    expect(stored.attempt.status).toBe('unknown')
+    expect(stored.attempt.actualTokens).toBeUndefined()
+    expect(JSON.stringify(stored)).not.toMatch(/private thought|secret endpoint|secret raw cause/)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+  it('ends an actively cancelled reasoning stream and releases its active clock without releasing unknown liability', async () => {
+    const f = fixture(), view = f.owner.begin(f.begin)
+    let started!: () => void
+    const reading = new Promise<void>(resolve => { started = resolve })
+    let reads = 0
+    vi.stubGlobal('fetch', vi.fn(async (_url, request: RequestInit) => ({ ok: true, status: 200,
+      body: { getReader: () => ({ read: async () => {
+        if (reads++ === 0) return { done: false, value: new TextEncoder().encode('data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}\n\n') }
+        started()
+        return new Promise((_resolve, reject) => request.signal!.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true }))
+      } }) } })))
+    const pending = f.owner.execute({ handle: view.handle, invocationNonce: 'cancel-thinking', task })
+    await reading
+    f.owner.cancel(view.handle)
+    const result = await pending
+    expect(result.outcome).toMatchObject({ status: 'incomplete', content: '', receipt: { diagnostics: { endReason: 'cancelled', reasoningEvents: 1 } } })
+    expect(result.run.ledger).toMatchObject({ physicalRequests: 1, tokenLiability: expect.any(Number) })
+    expect(result.run.ledger!.tokenLiability).toBeGreaterThan(0)
+    expect(f.db.prepare('SELECT active_since_ms FROM generation_roots').pluck().get()).toBeNull()
+    expect(f.owner.read(view.handle).status).toBe('cancelled')
   })
   it('rejects changed author sources and renderer physical controls before reserving or sending', async () => {
     const dispatch = vi.fn(), f = fixture(dispatch), view = f.owner.begin(f.begin)

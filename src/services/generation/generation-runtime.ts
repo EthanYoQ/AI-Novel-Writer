@@ -79,6 +79,7 @@ export interface MainGenerationRunHandle {
   runId: string
 }
 export interface MainGenerationSnapshot extends MainGenerationRunHandle {
+  diagnostics?: import('../../shared/generation-contract').GenerationTransportDiagnostics
   artifactId: string
   attemptId: string
   revision: number
@@ -183,7 +184,9 @@ export async function createMainOwnedGenerationRuntime(options: MainOwnedGenerat
         if (previous.status !== 'running' && (captured.status !== previous.status || captured.textHash !== previous.textHash || captured.revision !== previous.revision)
           || captured.durableRevision < previous.durableRevision || !captured.text.startsWith(previous.text)
           || captured.revision === previous.revision && captured.textHash !== previous.textHash) throw new Error('MAIN_SNAPSHOT_REGRESSION')
-        if (captured.revision === previous.revision && captured.durableRevision === previous.durableRevision && captured.status === previous.status) return
+        if (!captured.diagnostics || previous.diagnostics && captured.diagnostics.elapsedMs < previous.diagnostics.elapsedMs) captured.diagnostics = previous.diagnostics
+        if (captured.revision === previous.revision && captured.durableRevision === previous.durableRevision && captured.status === previous.status
+          && JSON.stringify(captured.diagnostics) === JSON.stringify(previous.diagnostics)) return
       }
       snapshots.set(captured.artifactId, Object.freeze(captured))
       options.onSnapshot?.(captured)

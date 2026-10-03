@@ -4,6 +4,7 @@ import { resolveOpenAIChatCompletionsUrl } from './openai-compatible-endpoint'
 import { VisibleStreamFilter } from './visible-stream'
 import { resolveModelProfileReasoningMapping } from '../../src/shared/provider-presets'
 import { version as appVersion } from '../../package.json'
+import { safeTransportError, type GenerationTransportDiagnostics } from '../../src/shared/generation-contract'
 
 const OPENCODE_GO_USER_AGENT = `ai-novel-writer/${appVersion}`
 
@@ -168,15 +169,35 @@ export class OpenAIProvider implements ILLMProvider {
   }
 
   async generateStream(model: ModelProfile, messages: Array<{ role: string; content: string }>, opts: LLMStreamOptions): Promise<void> {
+    const started = performance.now()
+    const diagnostics: GenerationTransportDiagnostics = { startedAt: Date.now(), elapsedMs: 0,
+      firstResponseMs: null, lastResponseMs: null, lastOutputMs: null, phase: 'request', visibleEvents: 0, reasoningEvents: 0 }
+    let notifiedAt = -Infinity
+    const notify = (force = false) => {
+      diagnostics.elapsedMs = Math.max(0, Math.round(performance.now() - started))
+      if (!force && !diagnostics.endReason && diagnostics.elapsedMs - notifiedAt < 250) return
+      notifiedAt = diagnostics.elapsedMs
+      try { opts.onDiagnostics?.({ ...diagnostics }) } catch { /* Display metadata cannot change generation. */ }
+    }
+    const output = (kind: 'visibleEvents' | 'reasoningEvents') => {
+      const firstOutput = diagnostics.lastOutputMs === null
+      diagnostics[kind]++
+      diagnostics.lastOutputMs = Math.max(0, Math.round(performance.now() - started))
+      notify(firstOutput)
+    }
     let fullText = ''
     const visible = new VisibleStreamFilter()
-    const inBandReasoning = new InBandReasoningStream(opts.onReasoning)
+    const reasoning = (chunk: string) => { output('reasoningEvents'); opts.onReasoning?.(chunk) }
+    const inBandReasoning = new InBandReasoningStream(reasoning)
     let usage: TokenUsage | undefined
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+    let protocolError: string | undefined
     const fail = (error: string) => {
       const visibleCandidate = opts.visibleOnly ? visible.text : this.stripThinking(fullText)
       opts.onError(error, visibleCandidate || undefined, usage)
     }
 
+    notify()
     try {
       const url = resolveOpenAIChatCompletionsUrl(model.baseUrl, model.provider)
       const body = this.buildRequestBody(model, messages, opts, true)
@@ -187,18 +208,28 @@ export class OpenAIProvider implements ILLMProvider {
         body: JSON.stringify(body),
         signal: opts.signal,
       })
+      diagnostics.phase = 'response'
+      if (Number.isInteger(res.status)) diagnostics.httpStatus = res.status
+      notify(true)
 
       if (!res.ok) {
-        const text = await res.text()
-        opts.onError(`API 调用失败 (${res.status}): ${text}`)
+        diagnostics.endReason = 'failed'
+        diagnostics.errorCode = 'HTTP_ERROR'
+        notify()
+        void res.body?.cancel().catch(() => {})
+        fail(`API 调用失败 (${res.status})`)
         return
       }
 
-      const reader = res.body?.getReader()
+      reader = res.body?.getReader()
       if (!reader) {
-        opts.onError('无法读取响应流')
+        diagnostics.endReason = 'failed'
+        diagnostics.errorCode = 'RESPONSE_BODY_MISSING'
+        notify()
+        fail('无法读取响应流')
         return
       }
+      diagnostics.phase = 'stream'
 
       const decoder = new TextDecoder()
       let isThinking = false
@@ -231,12 +262,8 @@ export class OpenAIProvider implements ILLMProvider {
         }
         const payload = parsed as Record<string, unknown>
         if (Object.hasOwn(payload, 'error')) {
-          const providerError = payload.error
-          const message = providerError !== null && typeof providerError === 'object'
-            && typeof (providerError as Record<string, unknown>).message === 'string'
-            ? (providerError as Record<string, unknown>).message
-            : '供应商返回流式错误'
-          fatalError = `供应商返回流式错误：${message}`
+          fatalError = '供应商返回流式错误'
+          diagnostics.errorCode = 'PROVIDER_STREAM_ERROR'
           return
         }
 
@@ -304,13 +331,13 @@ export class OpenAIProvider implements ILLMProvider {
           return
         }
 
-        if (delta.reasoning_content) opts.onReasoning?.(delta.reasoning_content)
+        if (delta.reasoning_content) reasoning(delta.reasoning_content as string)
         if (typeof delta.content === 'string') inBandReasoning.push(delta.content)
 
         if (opts.visibleOnly) {
           if (typeof delta.content === 'string') {
             const chunk = visible.push(delta.content)
-            if (chunk) opts.onChunk(chunk)
+            if (chunk) { output('visibleEvents'); opts.onChunk(chunk) }
           }
           return
         }
@@ -331,6 +358,7 @@ export class OpenAIProvider implements ILLMProvider {
           emitChunk += delta.content
         }
         if (emitChunk) {
+          if (delta.content) output('visibleEvents')
           fullText += emitChunk
           opts.onChunk(emitChunk)
         }
@@ -377,6 +405,13 @@ export class OpenAIProvider implements ILLMProvider {
       while (!fatalError && !sawDone) {
         const { done, value } = await reader.read()
         if (done) break
+        if (value.byteLength) {
+          const elapsed = Math.max(0, Math.round(performance.now() - started))
+          const firstResponse = diagnostics.firstResponseMs === null
+          diagnostics.firstResponseMs ??= elapsed
+          diagnostics.lastResponseMs = elapsed
+          notify(firstResponse)
+        }
         processText(decoder.decode(value, { stream: true }))
       }
 
@@ -385,10 +420,14 @@ export class OpenAIProvider implements ILLMProvider {
       }
 
       if (fatalError) {
+        diagnostics.errorCode ??= 'STREAM_INVALID'
+        protocolError = fatalError
         throw new Error(fatalError)
       }
 
       if (!sawDone) {
+        diagnostics.errorCode = 'STREAM_INCOMPLETE'
+        protocolError = '响应流在完成标记前结束，生成结果不完整'
         throw new Error('响应流在完成标记前结束，生成结果不完整')
       }
 
@@ -398,13 +437,23 @@ export class OpenAIProvider implements ILLMProvider {
         fullText += closeTag
       }
 
+      diagnostics.phase = 'complete'
+      diagnostics.endReason = 'completed'
+      notify()
       opts.onDone(opts.visibleOnly ? visible.text : this.stripThinking(fullText), usage, finishReason)
     } catch (error) {
-      if ((error as Error).name === 'AbortError') {
+      Object.assign(diagnostics, safeTransportError(error))
+      diagnostics.endReason = opts.signal.aborted ? 'cancelled' : 'failed'
+      notify()
+      if (diagnostics.endReason === 'cancelled') {
         fail('已取消生成')
       } else {
-        fail(String(error))
+        fail(protocolError ?? '响应流未正常完成')
       }
+    } finally {
+      // Do not wait for a remote stream to settle before releasing the local task.
+      void reader?.cancel?.().catch(() => {})
+      reader?.releaseLock?.()
     }
   }
 }

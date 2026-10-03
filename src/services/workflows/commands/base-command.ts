@@ -441,7 +441,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
     if (context && execution.context !== context) {
       throw new Error('生成调用上下文与当前命令执行期不一致。')
     }
-    callbacks.setProgress(10)
+    if (options?.writingSkillStage !== 'review') callbacks.setProgress(10)
     try {
       const writingSkillStage = options?.writingSkillStage
       const baseTask: GenerationTask = {
@@ -470,7 +470,7 @@ export abstract class BaseWorkflowCommand<TResult = string> {
       this.assertNotCancelled(context)
       const content = this.stripThinkingTags(outcome.content)
       if (!execution.mainOwned) callbacks.appendText(content)
-      callbacks.setProgress(90)
+      if (options?.writingSkillStage !== 'review') callbacks.setProgress(90)
       return {
         content,
         finishReason: outcome.finishReason,

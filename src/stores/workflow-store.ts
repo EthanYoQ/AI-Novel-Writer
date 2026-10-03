@@ -1,3 +1,4 @@
+import type { GenerationTransportDiagnostics } from '../shared/generation-contract'
 import type { CharacterProposalBatch } from '../shared/character-proposal'
 import { createCharacterProposalChoices, type CharacterProposalChoices } from '../services/character-proposal-choices'
 import { create } from 'zustand'
@@ -66,6 +67,7 @@ export interface WorkflowStep {
   failureCode?: WorkflowFailureCode
   /** Safe structured byte attribution for a prompt-budget preflight failure. */
   promptBudgetReport?: PromptBudgetReport
+  generationActivity?: { operation: string; diagnostics?: GenerationTransportDiagnostics }
   startedAt?: string
   completedAt?: string
   logs: string[]
@@ -180,6 +182,7 @@ export interface StepCallbacks {
   setProgress: (progress: number) => void
   /** 保存本步骤最近一次模型调用的安全提示词预算摘要。 */
   setPromptBudgetReport?: (report: PromptBudgetReport) => void
+  setGenerationActivity?: (activity: NonNullable<WorkflowStep['generationActivity']>) => void
   /** 流式文本追加 */
   appendText: (text: string) => void
   /** 用一份安全的临时或终态文本替换当前步骤输出。 */
@@ -777,6 +780,9 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         log: (message) => {
           appendStepLogById(set, run.id, i, message)
           get().addLog('info', `  ${message}`, context.uiLocale)
+        },
+        setGenerationActivity: (generationActivity) => {
+          updateStepById(set, run.id, i, { generationActivity })
         },
         setProgress: (progress) => {
           updateStepById(set, run.id, i, { progress })

@@ -17,6 +17,7 @@ import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, 
   scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder,
   assertSharedInputDiagnostic } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, recordPersistedDraftObservation, safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
+import { safeTransportError } from '../../src/shared/generation-contract'
 
 // This adapter replaces the Electron transport, never a command/runtime/repository.
 // The final provider fetch is the sole synthetic/real response switch.
@@ -293,7 +294,8 @@ test('isolated production commands persist the selected phase operations', async
     modelParameters: { source: source.modelParameters, effective: effectiveModelParameters,
       registrationRevision: registeredForward?.revision ?? null },
     ...(reviewedRun || aiReviewRun ? { evaluationPolicy: request.evaluationPolicy } : {}),
-    runtime: { node: process.version, abi: process.versions.modules }, physicalModelRequests: 0, syntheticDispatches: 0,
+    runtime: { node: process.version, abi: process.versions.modules, undici: process.versions.undici ?? null,
+      electron: process.versions.electron ?? null, chrome: process.versions.chrome ?? null }, physicalModelRequests: 0, syntheticDispatches: 0,
     invocations: [], attempts: [], status: 'running' }
   const candidate = target.arm === 'candidate'
   const baselineContract = !candidate && aiReviewRun ? loadBaselineReviewContract(target.repositoryRoot) : null
@@ -1340,6 +1342,7 @@ test('isolated production commands persist the selected phase operations', async
           ? new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } })
           : await fetchProviderResponse(originalFetch, url, { ...options, signal }, receipt.fetchFailures ??= [], safeDiagnostic)
         const [providerBody, ledgerBody] = response.body.tee()
+        requestReceipt.httpStatus = response.status
         streamSettlements.push((async () => {
           let finishReason = null, buffer = '', visibleText = '', interrupted = false, malformed = false, sawDone = false
           let dataLines = []
@@ -1387,8 +1390,11 @@ test('isolated production commands persist the selected phase operations', async
               }
               if (sawDone || next.done) break
             }
-          } catch { interrupted = true }
-          finally { if (sawDone) void reader.cancel().catch(() => {}); reader.releaseLock() }
+          } catch (error) { interrupted = true; streamProgress.readFailure = safeTransportError(error) }
+          finally {
+            streamProgress.endedMs = Math.max(0, Math.round(performance.now() - dispatchAt))
+            if (sawDone) void reader.cancel().catch(() => {}); reader.releaseLock()
+          }
           supervisor.terminal(attemptId, sawDone && finishReason && !interrupted && !malformed ? 'settle' : 'unknown', finishReason ? { finishReason } : {})
           fs.writeFileSync(physicalOutputPath, visibleText)
           requestReceipt.outputPath = physicalOutputPath
@@ -1938,6 +1944,16 @@ test('isolated production commands persist the selected phase operations', async
     await Promise.allSettled(streamSettlements)
     supervisor.dispose()
     globalThis.fetch = originalFetch
+    // Reuse the owner's safe terminal metadata even when an incomplete report aborted the command.
+    try {
+      const finalDb = database?.getProjectDb()
+      if (candidate && finalDb?.open && receipt.attempts.length) for (const attempt of receipt.attempts) {
+        const row = finalDb.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?')
+          .pluck().get(attempt.binding.actual.attemptId)
+        const diagnostics = row && JSON.parse(row).result?.diagnostics
+        if (diagnostics) attempt.transportDiagnostics = diagnostics
+      }
+    } catch { receipt.transportDiagnosticsUnavailable = true }
     database?.closeProjectDatabase(); projectAccess?.invalidateCurrentSession()
     vi.unstubAllGlobals()
     // 每臂的请求规模证据（纯数字，不含提示词原文与凭据），两臂因此可在不花真实调用时比较。

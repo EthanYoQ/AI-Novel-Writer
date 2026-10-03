@@ -5,6 +5,7 @@ import { resolveOpenAIChatCompletionsUrl } from '../openai-compatible-endpoint'
 import { resolveGenerationParameters } from '../generation-parameter-policy'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import { BUILTIN_PRESETS } from '../../../src/shared/provider-presets'
+import type { GenerationTransportDiagnostics } from '../../../src/shared/generation-contract'
 
 const novelAIModel: ModelProfile = {
   id: 'novelai-test',
@@ -62,6 +63,52 @@ function sseReader(...messages: Array<string | Uint8Array>) {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
+
+it.each(['UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET', 'private-provider-secret'])('keeps safe read-stream cause %s and distinguishes heartbeat from output', async causeCode => {
+  let clock = 0
+  vi.spyOn(performance, 'now').mockImplementation(() => clock)
+  const snapshots: GenerationTransportDiagnostics[] = [], onError = vi.fn(), onDone = vi.fn()
+  const chunks = [': heartbeat\n\n', 'data: {"choices":[{"delta":{"reasoning_content":"private reasoning"}}]}\n\n',
+    'data: {"choices":[{"delta":{"content":"正文"}}]}\n\n']
+  const reader = { read: vi.fn(async () => {
+    clock += 1000
+    const chunk = chunks.shift()
+    if (chunk) return { done: false, value: new TextEncoder().encode(chunk) }
+    throw new TypeError('private URL and credentials', { cause: Object.assign(new Error('private raw cause'), { code: causeCode }) })
+  }), cancel: vi.fn(async () => {}), releaseLock: vi.fn() }
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, body: { getReader: () => reader } }))
+  await new OpenAIProvider().generateStream(novelAIModel, [], { temperature: 0, maxTokens: 512,
+    signal: new AbortController().signal, visibleOnly: true, onChunk: vi.fn(), onDone, onError,
+    onDiagnostics: value => snapshots.push(value) })
+  expect(snapshots.find(value => value.lastResponseMs === 1000)).toMatchObject({ lastOutputMs: null, visibleEvents: 0, reasoningEvents: 0 })
+  expect(snapshots.at(-1)).toMatchObject({ elapsedMs: 4000, firstResponseMs: 1000, lastResponseMs: 3000,
+    lastOutputMs: 3000, httpStatus: 200, phase: 'stream', endReason: 'failed', errorName: 'TypeError', visibleEvents: 1, reasoningEvents: 1 })
+  expect(snapshots.at(-1)?.causeCode).toBe(causeCode.startsWith('UND_ERR_') ? causeCode : undefined)
+  expect(JSON.stringify(snapshots)).not.toContain('private')
+  expect(onError).toHaveBeenCalledExactlyOnceWith('响应流未正常完成', '正文', undefined)
+  expect(onDone).not.toHaveBeenCalled()
+  expect(reader.cancel).toHaveBeenCalledOnce()
+  expect(reader.releaseLock).toHaveBeenCalledOnce()
+})
+
+it.each([false, true])('classifies AbortError from the actual caller signal (aborted=%s)', async aborted => {
+  const controller = new AbortController(), snapshots: GenerationTransportDiagnostics[] = []
+  const onError = vi.fn(), onDone = vi.fn()
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, body: { getReader: () => ({
+    read: async () => {
+      if (aborted) controller.abort()
+      throw new DOMException('private abort origin', 'AbortError')
+    },
+  }) } }))
+  await new OpenAIProvider().generateStream(novelAIModel, [], { temperature: 0, maxTokens: 512,
+    signal: controller.signal, visibleOnly: true, onChunk: vi.fn(), onDone, onError,
+    onDiagnostics: value => snapshots.push(value) })
+  expect(snapshots.at(-1)).toMatchObject({ phase: 'stream', errorName: 'AbortError', endReason: aborted ? 'cancelled' : 'failed' })
+  expect(onError).toHaveBeenCalledExactlyOnceWith(aborted ? '已取消生成' : '响应流未正常完成', undefined, undefined)
+  expect(onDone).not.toHaveBeenCalled()
+  expect(JSON.stringify(snapshots)).not.toContain('private abort origin')
 })
 
 describe('SiliconFlow explicit reasoning requests', () => {
@@ -832,7 +879,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     })
 
     expect(onDone).not.toHaveBeenCalled()
-    expect(onError).toHaveBeenCalledWith(expect.stringContaining('CONTROLLED_PROVIDER_ERROR'), 'HEAD', undefined)
+    expect(onError).toHaveBeenCalledWith('供应商返回流式错误', 'HEAD', undefined)
   })
 
   it('does not swallow an onChunk consumer exception as malformed provider data', async () => {
@@ -860,7 +907,7 @@ describe('OpenAIProvider NovelAI compatibility', () => {
     })
 
     expect(onDone).not.toHaveBeenCalled()
-    expect(onError).toHaveBeenCalledWith(expect.stringContaining('CONTROLLED_CONSUMER_REJECTION'), 'HEADMIDDLE', undefined)
+    expect(onError).toHaveBeenCalledWith('响应流未正常完成', 'HEADMIDDLE', undefined)
   })
 
   it('accepts comments, usage-only events, and empty deltas as legal control traffic', async () => {

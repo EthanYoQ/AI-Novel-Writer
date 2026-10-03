@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { useWorkflowReasoningStore } from '../../../stores/workflow-reasoning-store'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
@@ -370,4 +371,35 @@ describe('AIOutputPanel prompt budget failure', () => {
       .some(button => button.textContent?.includes('打开小说配置'))).toBe(false)
     expect(useEditorStore.getState().tabs).toEqual([])
   })
+})
+
+
+it('shows review waiting and output age without a percentage and keeps stop immediately reachable', async () => {
+  const run = activeEnglishBlueprintRun()
+  run.uiLocale = 'zh-CN'
+  run.steps[0].progress = 10
+  run.steps[0].generationActivity = { operation: 'review-chapter', diagnostics: {
+    startedAt: Date.now() - 60000, elapsedMs: 60000, firstResponseMs: 3000, lastResponseMs: 10000,
+    lastOutputMs: 5000, phase: 'stream', visibleEvents: 0, reasoningEvents: 10,
+  } }
+  useWorkflowReasoningStore.getState().append(run.id, 'attempt', '持续思考的展示内容')
+  const cancel = vi.fn()
+  useWorkflowStore.setState({ activeRuns: [run], currentRun: run, history: [], cancelWorkflow: cancel })
+  await act(async () => root!.render(<AIOutputPanel />))
+  expect(container!.textContent).toContain('已等待 60秒')
+  expect(container!.textContent).toContain('距最近响应 50秒')
+  expect(container!.textContent).toContain('距最近有效输出 55秒（含思考）')
+  expect(container!.textContent).toContain('尚无完整审稿报告')
+  expect(container!.textContent).not.toContain('10%')
+  expect(container!.textContent).not.toContain('思考中...')
+  expect(cancel).not.toHaveBeenCalled()
+  await act(async () => useWorkflowStore.setState({ activeRuns: [{ ...run, steps: [{ ...run.steps[0],
+    generationActivity: { operation: 'review-chapter', diagnostics: { ...run.steps[0].generationActivity!.diagnostics!,
+      elapsedMs: 70000, lastResponseMs: 70000, lastOutputMs: 70000, reasoningEvents: 20 } },
+  }] }] }))
+  expect(container!.textContent).toContain('距最近有效输出 0秒（含思考）')
+  const stop = [...container!.querySelectorAll('button')].find(button => button.textContent?.includes('中止生成'))!
+  await act(async () => stop.click())
+  expect(cancel).toHaveBeenCalledExactlyOnceWith(run.id)
+  await act(async () => useWorkflowReasoningStore.getState().clear(run.id))
 })

@@ -85,6 +85,7 @@ async function dispatchProvider(value: unknown, options: Parameters<GenerationRu
     ...plan.options, signal: options.signal, visibleOnly: true,
     onChunk: text => options.onVisible({ kind: 'delta', text }),
     onReasoning: options.onReasoning,
+    onDiagnostics: options.onDiagnostics,
     onUsageEvidence: value => { evidence = value },
     onDone: (text, _usage, reason) => { options.onVisible({ kind: 'cumulative', text }); finishReason = reason },
     onError: error => {
@@ -172,6 +173,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       // 生成前定稿对账的输出只是依据，永不作为正文候选参与组合。
       && ![DRAFT_RECONCILE_PURPOSE, DRAFT_SHORT_OUTLINE_PURPOSE].includes(attemptPurpose(receipt.attempt.attemptId) as typeof DRAFT_RECONCILE_PURPOSE)
     return { ...handleOf(receipt.run), epoch: artifact.epoch, artifactId: artifact.artifactId, attemptId: artifact.attemptId,
+      ...(receipt.diagnostics ? { diagnostics: receipt.diagnostics } : {}),
       revision: artifact.revision, durableRevision: artifact.revision, text: artifact.text, textHash: artifact.textHash, status, compositionEligible }
   }
   const service = createGenerationRunService({ repository, dispatch: deps.dispatch ?? dispatchProvider,
@@ -184,7 +186,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     onSnapshot: event => {
       if (closed || event.storageFailed) return
       const snapshot = snapshotOf(repository.receipt(event.attemptId))
-      if (snapshot) deps.onSnapshot?.(snapshot)
+      if (snapshot) deps.onSnapshot?.({ ...snapshot, ...(event.diagnostics ? { diagnostics: event.diagnostics } : {}) })
     },
   })
   service.recoverInterrupted()
@@ -390,6 +392,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const safeFailureCode = receipt.failureCode === 'GENERATION_PROVIDER_FAILED' ? 'GENERATION_PROVIDER_FAILED'
       : receipt.failureCode === 'NETWORK_ERROR' ? 'NETWORK_ERROR' : undefined
     const details: GenerationAttemptReceipt = { purpose: task.purpose,
+      ...(receipt.diagnostics ? { diagnostics: receipt.diagnostics } : {}),
       ...(safeFailureCode ? { failureCode: safeFailureCode } : {}),
       ...(receipt.artifact ? { visibleArtifact: { artifactId: receipt.artifact.artifactId, attemptId: receipt.attempt.attemptId,
         revision: receipt.artifact.revision, textHash: receipt.artifact.textHash } } : {}),

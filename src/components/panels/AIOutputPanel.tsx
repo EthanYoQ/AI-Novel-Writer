@@ -1,3 +1,4 @@
+import { canCommitRecoveredReview } from '../../services/workflows/commands/review-chapter.command'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import GenerationBudgetDiagnostics from './GenerationBudgetDiagnostics'
 import type { GenerationBatchProgress, GenerationRecoveryContext } from '../../shared/generation-owner-contract'
@@ -374,7 +375,9 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
         await useAgentStore.getState().resumeGeneration(recovery.handle)
       }) }}>{runText(locale, '恢复此助手任务', 'Recover this assistant task')}</button>
     </article>)}
-    {visibleReviews.map(({ view, recovery }) => <article key={view.handle.runId} className="mb-3">
+    {visibleReviews.map(({ view, recovery }) => {
+      const requestsReview = recovery.context.operation === 'review-chapter' && !recovery.saved && !canCommitRecoveredReview(recovery)
+      return <article key={view.handle.runId} className="mb-3">
       <p>{runText(locale, `第${recovery.context.source.chapterNumber}章${recovery.context.operation === 'review-chapter' ? '审稿' : '修稿'}候选`,
         `Chapter ${recovery.context.source.chapterNumber} ${recovery.context.operation === 'review-chapter' ? 'review' : 'revision'} candidate`)}</p>
       <GenerationBudgetDiagnostics diagnostics={view.budgetDiagnostics} locale={locale} />
@@ -383,6 +386,7 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
       {recovery.sourceStatus === 'current' && !recovery.saved && !recovery.canResume && <p>{runText(locale,
         '候选未通过保存校验；可复制保留，请从原稿重新发起任务。',
         'The candidate failed save validation. Copy it if needed, then start a new action from the source draft.')}</p>}
+      {requestsReview && <p>{runText(locale, '尚无完整审稿报告。重新审稿会重新调用模型；原稿保留。', 'No complete review report is available. Reviewing again sends a new model request; the source draft is preserved.')}</p>}
       {(view.candidates ?? view.artifacts).map(artifact => <div key={artifact.artifactId}>
         <span className="whitespace-pre-wrap">{artifact.text.slice(0, 180)}</span>
         <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} onClick={() => { void act(() => navigator.clipboard.writeText(artifact.text)) }}>{runText(locale, '复制', 'Copy')}</button>
@@ -395,8 +399,8 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
         onClick={() => { void act(async () => {
           const workflow = await createReviewRevisionRecoveryWorkflow(session, view.handle)
           await useWorkflowStore.getState().startWorkflow(workflow)
-        }) }}>{recovery.saved ? runText(locale, '打开已保存结果', 'Open saved result') : runText(locale, '恢复此审修任务', 'Recover this review or revision')}</button>
-    </article>)}
+        }) }}>{recovery.saved ? runText(locale, '打开已保存结果', 'Open saved result') : requestsReview ? runText(locale, '重新审稿', 'Review again') : runText(locale, '恢复此审修任务', 'Recover this review or revision')}</button>
+    </article>})}
     {visibleBatches.map(batch => <article key={batch.batchId} className="mb-3">
       <p>{runText(locale, `批量正文：已保存 ${batch.completedChapters.length} 章，下一章 ${batch.nextChapterNumber}`,
         `Batch drafts: ${batch.completedChapters.length} saved; next chapter ${batch.nextChapterNumber}`)}</p>
@@ -611,7 +615,7 @@ function ActiveRunView({
       )}
 
       {/* 整体进度条（细线） */}
-      <div className="flex-shrink-0" style={{ height: 2, backgroundColor: 'var(--color-border)' }}>
+      {currentStep?.generationActivity?.operation !== 'review-chapter' && <div className="flex-shrink-0" style={{ height: 2, backgroundColor: 'var(--color-border)' }}>
         <div
           style={{
             height: '100%',
@@ -621,7 +625,7 @@ function ActiveRunView({
             transition: 'width 0.6s ease',
           }}
         />
-      </div>
+      </div>}
 
       {/* 滚动内容区 */}
       <div
@@ -646,6 +650,7 @@ function ActiveRunView({
 
           {run.status === 'failed' && (
             <WorkflowFailureNotice
+              generationActivity={failedStep?.generationActivity ?? currentStep?.generationActivity}
               title={run.title}
               errorCode={run.errorCode ?? failedStep?.errorCode}
               failureCode={run.failureCode ?? currentStep?.failureCode}
@@ -788,7 +793,7 @@ function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep, trans
         </span>
 
         {/* 进度 */}
-        {isRunning && step.progress !== undefined && (
+        {isRunning && step.progress !== undefined && step.generationActivity?.operation !== 'review-chapter' && (
           <span className="font-mono text-[0.62rem] flex-shrink-0 opacity-60">
             {step.progress}%
           </span>
@@ -811,6 +816,8 @@ function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep, trans
         )}
       </div>
 
+      {isRunning && isActiveRun && step.generationActivity?.operation === 'review-chapter' && <ReviewWaitStatus step={step} locale={locale} />}
+
       {/* 展开的对应输出数据 */}
       {expanded && hasOutput && (
         <div className="pl-[4px] pr-1 pt-1 pb-3 text-xs w-full max-w-full break-words">
@@ -818,7 +825,7 @@ function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep, trans
           {displayedThinking && (
             <ThinkingBlock
               thinking={displayedThinking}
-              showCursor={isRunning && isActiveRun && !content}
+              showCursor={isRunning && isActiveRun && !content && step.generationActivity?.operation !== 'review-chapter'}
               hasContent={!!content}
               locale={locale}
             />
@@ -843,7 +850,31 @@ function StepOutputBlock({ step, index, total, isActiveRun, isCurrentStep, trans
   )
 }
 
+function ReviewWaitStatus({ step, locale }: { step: WorkflowStep; locale: Locale }) {
+  const diagnostics = step.generationActivity?.diagnostics
+  const [clock, setClock] = useState({ source: diagnostics, elapsed: diagnostics?.elapsedMs ?? 0 })
+  useEffect(() => {
+    const receivedAt = performance.now()
+    const timer = window.setInterval(() => setClock({ source: diagnostics,
+      elapsed: (diagnostics?.elapsedMs ?? 0) + performance.now() - receivedAt }), 1000)
+    return () => window.clearInterval(timer)
+  }, [diagnostics])
+  const elapsed = clock.source === diagnostics ? clock.elapsed : diagnostics?.elapsedMs ?? 0
+  const seconds = (ms: number) => `${Math.floor(Math.max(0, ms) / 1000)}${locale === 'en-US' ? 's' : '秒'}`
+  const response = diagnostics?.lastResponseMs
+  const output = diagnostics?.lastOutputMs
+  return <div className="px-2 py-1 text-xs" role="status" style={{ color: 'var(--color-text-secondary)' }}>
+    <p>{runText(locale, `已等待 ${seconds(elapsed)}`, `Waited ${seconds(elapsed)}`)}</p>
+    <p>{!diagnostics ? runText(locale, '响应时间暂不可用。', 'Response timing is unavailable.') : response == null ? runText(locale, '尚未收到响应。', 'No response received yet.')
+      : runText(locale, `距最近响应 ${seconds(elapsed - response)}`, `Last response ${seconds(elapsed - response)} ago`)}</p>
+    <p>{!diagnostics ? runText(locale, '有效输出时间暂不可用。', 'Output timing is unavailable.') : output == null ? runText(locale, '尚未收到有效输出；连接心跳不代表审稿进度。', 'No output yet; connection heartbeats do not indicate review progress.')
+      : runText(locale, `距最近有效输出 ${seconds(elapsed - output)}（含思考）`, `Last output ${seconds(elapsed - output)} ago (including reasoning)`)}</p>
+    <p>{runText(locale, '尚无完整审稿报告。等待期间可随时中止。', 'No complete review report yet. You can stop while waiting.')}</p>
+  </div>
+}
+
 function WorkflowFailureNotice({
+  generationActivity,
   title,
   errorCode,
   failureCode,
@@ -857,6 +888,7 @@ function WorkflowFailureNotice({
   resumingSynopsis = false,
   onResumeSynopsis,
 }: {
+  generationActivity?: WorkflowStep['generationActivity']
   title: string
   errorCode?: string
   failureCode?: WorkflowFailureCode
@@ -878,6 +910,7 @@ function WorkflowFailureNotice({
     locale,
     isUnpersistedChapterDraft,
     promptBudgetReport,
+    generationActivity,
   )
   const matchesCurrentProject = sameProjectPathKey(projectPath, currentProject?.path)
     && sameProjectSessionContext(

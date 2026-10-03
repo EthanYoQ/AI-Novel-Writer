@@ -165,6 +165,7 @@ export interface CompletionPort {
 }
 
 export interface GenerationAttemptReceipt {
+  diagnostics?: import('../../shared/generation-contract').GenerationTransportDiagnostics
   /** Main's immutable durable candidate identity; absent on unmigrated legacy execution. */
   visibleArtifact?: { artifactId: string; attemptId: string; revision: number; textHash: string }
   /** Safe semantic task label; never contains prompt, output, endpoint, or credentials. */

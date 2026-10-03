@@ -28,6 +28,20 @@ async function snapshot(text = '雨夜', revision = 1, durableRevision = revisio
 }
 
 describe('main owned generation facade', () => {
+  it('forwards diagnostics with unchanged empty artifacts and ignores stale metadata', async () => {
+    const f = fixture(), shown = vi.fn(), runtime = await createGenerationRuntime({ runHandle: handle, onSnapshot: shown }, f.transport)
+    const empty = await snapshot('', 0)
+    const diagnostics = { startedAt: 1000, elapsedMs: 10, firstResponseMs: 10, lastResponseMs: 10, lastOutputMs: null,
+      phase: 'stream' as const, visibleEvents: 0, reasoningEvents: 0 }
+    f.emit({ ...empty, diagnostics })
+    f.emit({ ...empty, diagnostics: { ...diagnostics, elapsedMs: 20, lastOutputMs: 20, reasoningEvents: 1 } })
+    f.emit({ ...empty, diagnostics })
+    await runtime.read()
+    expect(shown).toHaveBeenCalledTimes(2)
+    expect(shown).toHaveBeenLastCalledWith(expect.objectContaining({ text: '', revision: 0,
+      diagnostics: expect.objectContaining({ elapsedMs: 20, reasoningEvents: 1 }) }))
+    await runtime.close()
+  })
   it('仅转发主进程句柄和语义请求，不经旧模型store或新预算', async () => {
     const f = fixture(); const oldProvider = vi.spyOn(useLLMStore.getState(), 'generateStream')
     try {

@@ -1,5 +1,35 @@
 import { hashAuthorText, isContentHash, sameProjectEpoch, type FrozenInputFingerprint, type ProjectEpoch } from './source-ref'
 
+/** Safe transport metadata; all relative times use the request's monotonic clock. */
+export interface GenerationTransportDiagnostics {
+  startedAt: number
+  elapsedMs: number
+  firstResponseMs: number | null
+  lastResponseMs: number | null
+  lastOutputMs: number | null
+  httpStatus?: number
+  phase: 'request' | 'response' | 'stream' | 'complete'
+  endReason?: 'completed' | 'cancelled' | 'failed'
+  errorName?: string
+  errorCode?: string
+  causeCode?: string
+  visibleEvents: number
+  reasoningEvents: number
+}
+
+/** Never copy error messages: provider errors can contain URLs, credentials or output. */
+export function safeTransportError(error: unknown): Pick<GenerationTransportDiagnostics, 'errorName' | 'errorCode' | 'causeCode'> {
+  const codes = new Set(['UND_ERR_BODY_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET',
+    'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'ABORT_ERR', 'ERR_STREAM_PREMATURE_CLOSE'])
+  const record = error && typeof error === 'object' ? error as Record<string, unknown> : {}
+  const cause = record.cause && typeof record.cause === 'object' ? record.cause as Record<string, unknown> : {}
+  return {
+    ...(['Error', 'TypeError', 'AbortError', 'TimeoutError', 'SocketError', 'BodyTimeoutError', 'HeadersTimeoutError', 'ConnectTimeoutError'].includes(String(record.name)) ? { errorName: String(record.name) } : {}),
+    ...(typeof record.code === 'string' && codes.has(record.code) ? { errorCode: record.code } : {}),
+    ...(typeof cause.code === 'string' && codes.has(cause.code) ? { causeCode: cause.code } : {}),
+  }
+}
+
 export interface RootAction extends ProjectEpoch {
   rootActionId: string; operation: string; uiActionNonce: string; frozenInputHash: string
   status: 'active' | 'paused' | 'cancelled' | 'sealed'

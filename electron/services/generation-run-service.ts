@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import { safeTransportError, type GenerationTransportDiagnostics } from '../../src/shared/generation-contract';
 import { GenerationRunRepository, type OpenGenerationRunRequest, type RunBinding, type GenerationExecutionReceipt, type GenerationUsageReceipt } from '../repositories/generation-run-repository';
 import type { ProviderUsagePolicy } from '../../src/shared/generation-contract';
 import { parseAgentResponseProtocol, projectInterruptedAgentVisibleText } from '../../src/shared/agent-response-protocol';
@@ -55,6 +56,7 @@ export interface GenerationRunServiceDependencies {
         signal: AbortSignal;
         onVisible: (event: VisibleGenerationEvent) => void;
         onReasoning?: (text: string) => void;
+        onDiagnostics?: (diagnostics: GenerationTransportDiagnostics) => void;
     }) => Promise<GenerationDispatchResult>;
     /** Renderer-only projection. Reasoning never enters an artifact or receipt. */
     onReasoning?: (event: { runId: string; rootActionId: string; attemptId: string; text: string }) => void;
@@ -64,6 +66,7 @@ export interface GenerationRunServiceDependencies {
         durableText: string;
         durableRevision: number;
         storageFailed: boolean;
+        diagnostics?: GenerationTransportDiagnostics;
     }) => void;
     validateRecovery?: (previous: RunBinding, next: RunBinding) => Promise<boolean>;
 }
@@ -141,10 +144,12 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 return receipt;
             const attemptId = receipt.attempt.attemptId, controller = new AbortController();
             let text = receipt.artifact!.text, durable = text, revision = receipt.artifact!.revision, storageFailed = false, streamFailed = false, terminal = false, suspended = false;
+            let diagnostics: GenerationTransportDiagnostics | undefined;
+            let diagnosticsAt = performance.now();
             let agentProtocolText = '';
             const events = new Map<string, string>();
             const notify = () => { try {
-                deps.onSnapshot?.({ attemptId, visibleText: text, durableText: durable, durableRevision: revision, storageFailed });
+                deps.onSnapshot?.({ attemptId, visibleText: text, durableText: durable, durableRevision: revision, storageFailed, diagnostics });
             }
             catch { /* UI notification cannot alter durable accounting */ } };
             const flush = () => {
@@ -201,7 +206,12 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                     failedRoots.add(run.rootActionId);
                 } controller.abort(); }, remaining);
                 const cancelled = new Promise<never>((_resolve, reject) => { const abort = () => reject(new Error('GENERATION_CANCELLED')); controller.signal.addEventListener('abort', abort, { once: true }); removeAbortListener = () => controller.signal.removeEventListener('abort', abort); });
-                const provider = deps.dispatch(request.providerRequest, { signal: controller.signal, onReasoning: chunk => {
+                const provider = deps.dispatch(request.providerRequest, { signal: controller.signal, onDiagnostics: value => {
+                        if (terminal || storageFailed || controller.signal.aborted) return;
+                        diagnostics = { ...value };
+                        diagnosticsAt = performance.now();
+                        notify();
+                    }, onReasoning: chunk => {
                         if (terminal || storageFailed || controller.signal.aborted || !chunk) return;
                         try { deps.onReasoning?.({ runId: run.runId, rootActionId: run.rootActionId, attemptId, text: chunk }); }
                         catch { /* A display-only event cannot alter durable generation. */ }
@@ -255,9 +265,12 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                 }
                 else retainInterruptedAgentText();
                 flush();
-                receipt = deps.repository.settle(attemptId, usage, storageFailed ? 'error' : result.finishReason);
+                receipt = deps.repository.settle(attemptId, usage, storageFailed ? 'error' : result.finishReason, undefined, diagnostics);
             }
             catch (error) {
+                if (diagnostics && !diagnostics.endReason) diagnostics = { ...diagnostics, ...safeTransportError(error),
+                    elapsedMs: diagnostics.elapsedMs + Math.max(0, Math.round(performance.now() - diagnosticsAt)),
+                    endReason: controller.signal.aborted ? 'cancelled' : 'failed' };
                 retainInterruptedAgentText();
                 flush();
                 try {
@@ -265,10 +278,12 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
                     const current = deps.repository.receipt(attemptId);
                     if (current.attempt.status === 'dispatch-marked') {
                         // Persist only stable categories, never provider text that may contain credentials or prompts.
-                        const known = error instanceof Error && /^(NETWORK_ERROR|ECONNRESET|ETIMEDOUT|FETCH_FAILED)$/.test(error.message) ? 'NETWORK_ERROR' : 'GENERATION_PROVIDER_FAILED';
+                        const networkCode = diagnostics?.causeCode ?? diagnostics?.errorCode;
+                        const known = networkCode && /^(UND_ERR_|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ERR_STREAM_PREMATURE_CLOSE)/.test(networkCode)
+                            || error instanceof Error && /^(NETWORK_ERROR|ECONNRESET|ETIMEDOUT|FETCH_FAILED)$/.test(error.message) ? 'NETWORK_ERROR' : 'GENERATION_PROVIDER_FAILED';
                         const failureCode = storageFailed ? 'GENERATION_STORAGE_FAILED' : timedOut ? 'ROOT_BUDGET_EXHAUSTED'
                             : streamFailed ? 'GENERATION_STREAM_INVALID' : controller.signal.aborted ? 'GENERATION_CANCELLED' : known;
-                        receipt = deps.repository.settle(attemptId, null, null, failureCode);
+                        receipt = deps.repository.settle(attemptId, null, null, failureCode, diagnostics);
                     }
                     else
                         receipt = current;

@@ -5,6 +5,7 @@ import type {
   TokenUsage,
 } from '../../src/shared/ipc-channels'
 import type { ProviderReasoningDirective } from '../../src/shared/reasoning-types'
+import type { GenerationTransportDiagnostics } from '../../src/shared/generation-contract'
 
 /** A provider may report success only with explicit semantic stop evidence. */
 export type LLMResponse = SharedLLMResponse
@@ -27,6 +28,7 @@ export interface LLMGenerateOptions {
 }
 
 export interface LLMStreamOptions extends LLMGenerateOptions {
+  onDiagnostics?: (diagnostics: GenerationTransportDiagnostics) => void
   signal: AbortSignal
   /** The durable owner receives only visible content, preserving its exact whitespace. */
   visibleOnly?: boolean

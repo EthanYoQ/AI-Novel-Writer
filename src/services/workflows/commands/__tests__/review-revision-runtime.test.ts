@@ -496,6 +496,24 @@ describe('review/revision consumers using the main contract (synthetic transport
     expect(f.provider).not.toHaveBeenCalled()
   })
 
+  it('keeps an unknown review unsaved, then uses one explicit request to review again and zero requests to reopen', async () => {
+    const f = setup([{ content: '', finishReason: 'unknown' }, { content: review, finishReason: 'stop' }])
+    const command = f.command('review-chapter')
+    await expect(command.execute(f.args)).rejects.toThrow()
+    expect(f.provider).toHaveBeenCalledOnce()
+    expect(f.writes()).toBe(0)
+    expect(f.fixture.recovery?.saved).toBeUndefined()
+    await expect(f.backend('db:draft-get-full')).resolves.toEqual(source)
+    await command.execute(f.args)
+    expect(f.provider).toHaveBeenCalledTimes(2)
+    expect(f.writes()).toBe(1)
+    await command.execute(f.args)
+    expect(f.provider).toHaveBeenCalledTimes(2)
+    expect(f.writes()).toBe(1)
+    expect(f.args.callbacks.setProgress.mock.calls.flat()).not.toContain(10)
+    expect(f.args.callbacks.setProgress.mock.calls.flat()).not.toContain(90)
+  })
+
   it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)('retries %s storage using the original artifact without loading a new template or requesting again', async operation => {
     const f = setup([{ content: operation === 'review-chapter' ? review : revised, finishReason: 'stop' }])
     const command = f.command(operation)

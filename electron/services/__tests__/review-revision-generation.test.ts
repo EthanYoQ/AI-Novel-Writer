@@ -588,6 +588,14 @@ describe('review and revision generation through the actual owner and SQLite', (
     expect(f.owner.read(view.handle).artifacts.every(artifact => artifact.text === '')).toBe(true)
     expect(f.spy).toHaveBeenCalledTimes(1)
   })
+  it('keeps the draft and rejects an empty review after an unknown stream failure', async () => {
+    const f = fixture(async () => { throw new Error('NETWORK_ERROR') }), request = await f.run()
+    expect(() => f.owner.commitReview(request)).toThrow('GENERATION_REVIEW_ARTIFACT_INVALID')
+    expect(f.db.prepare('SELECT COUNT(*) FROM reviews').pluck().get()).toBe(0)
+    expect(f.db.prepare('SELECT body FROM contents WHERE id=(SELECT content_id FROM drafts WHERE id=1)').pluck().get()).toBe(prose)
+    expect(f.owner.readReviewRevisionRecovery(request.handle).saved).toBeUndefined()
+    expect(f.spy).toHaveBeenCalledTimes(1)
+  })
   it('does not turn length-terminated revision text into a formal revision', async () => {
     const f = fixture(async (_request, options) => { options.onVisible({ kind: 'delta', text: prose }); return { finishReason: 'length', usage: null } }), request = await f.run('refine-draft')
     const composition = f.owner.composeVisible(request.handle, [request.artifact.artifactId], textHash(prose), 'visible-append-v1')
