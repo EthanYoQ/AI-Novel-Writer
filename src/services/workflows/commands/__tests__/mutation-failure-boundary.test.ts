@@ -1049,7 +1049,7 @@ describe('workflow mutation failure boundaries', () => {
     expect(useEditorStore.getState().tabs).toEqual([])
   })
 
-  it('bounds free text and saves a structurally valid five-item review', async () => {
+  it('preserves complete item text and saves a structurally valid five-item review', async () => {
     const review = {
       summary: '总'.repeat(121),
       items: [
@@ -1119,8 +1119,7 @@ describe('workflow mutation failure boundaries', () => {
       items: Array<{ description: string; quote?: string }>
     }
     expect(persisted.summary).toContain('待核实')
-    expect(persisted.items.slice(0, 5).map(item => Array.from(item.description).length)).toEqual([200, 200, 157, 200, 200])
-    expect(persisted.items.slice(0, 5).map(item => item.quote === undefined ? 0 : Array.from(item.quote).length)).toEqual([154, 147, 0, 0, 69])
+    expect(persisted.items.slice(0, review.items.length)).toEqual(review.items)
     expect(persisted.items[5]).toMatchObject({ severity: 'unknown' })
     expect(useEditorStore.getState().tabs).toHaveLength(1)
     expect(observedReviewPrompt).toContain('全部 items 必须为 1–10 条')
@@ -1129,7 +1128,7 @@ describe('workflow mutation failure boundaries', () => {
     expect(observedReviewPrompt).not.toContain('每个 category 至少输出一条记录')
   })
 
-  it.each(['fenced', 'prose-wrapped'])('accepts a %s review envelope and bounds its quoted evidence', async (envelope) => {
+  it.each(['fenced', 'prose-wrapped'])('accepts a %s review envelope and preserves its complete item text and quoted evidence', async (envelope) => {
     const review = {
       items: [
         { category: '剧情连贯性', severity: 'pass', description: '本章为故事开端，情节内部逻辑自洽。' },
@@ -1175,8 +1174,7 @@ describe('workflow mutation failure boundaries', () => {
     const persisted = JSON.parse(persistedContent) as typeof review
     expect(persisted.items).toHaveLength(5)
     expect(persisted.items[4]).toMatchObject({ severity: 'unknown' })
-    expect(Array.from(persisted.items[1]!.quote!)).toHaveLength(160)
-    expect(persisted.items[1]!.quote).toBe('潮'.repeat(160))
+    expect(persisted.items.slice(0, review.items.length)).toEqual(review.items)
     expect(persistedContent).not.toContain('PRIVATE_PREFIX')
     expect(persistedContent).not.toContain('PRIVATE_SUFFIX')
   })

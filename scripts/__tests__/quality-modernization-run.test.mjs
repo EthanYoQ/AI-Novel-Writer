@@ -2419,6 +2419,7 @@ test('c16-c18 v7 场景沿用有界恢复、条件作者保护与 C17-B 重新�
     ['arms', 'maxRepairAttempts', 'milestone', 'operationId', 'primaryPurpose', 'repairPurpose', 'reviewRebuild'])
 })
 
+// 26 组夹具串行重建 104 次 SQLite 审稿库；本项验证证据合同，不是性能合同。
 test('C16-B 作者保护按正式产物是否提议改写而条件判定：真实未触发可过，提议无候选、证据缺失或畸形均失败，合成仍强制候选', () => {
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/author-protection-test-'))
   try {
@@ -2487,7 +2488,7 @@ test('C16-B 作者保护按正式产物是否提议改写而条件判定：真�
   assert.match(fixture, /sha\(formalText\) === formal\.visibleTextHash && sha\(fs\.readFileSync\(formal\.outputPath, 'utf8'\)\) === formal\.visibleTextHash/)
   assert.match(fixture, /parseFinalizedCharacterStateResponse\(formalText, finalizedContext\.identity\)\.updates/)
   assert.match(fixture, /if \(request\.mode === 'synthetic'\) \{\s*assert\.equal\(proposed, true, 'SYNTHETIC_AUTHOR_CONFLICT_NOT_PROPOSED'\)\s*assert\.equal\(receipt\.finalizationEvidence\.authorProtected, true, 'AUTHOR_CONFLICT_CANDIDATE_MISSING'\)/)
-})
+}, 10_000)
 
 test('C16 c9b88510/d8a30c11 段（第508–579行）按 ccc70b31 规则分两段加性登记，链在其后且真实账本只读回放', () => {
   const ccc = protocol.historicalC16Ccc70b31Boundary
