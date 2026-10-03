@@ -267,7 +267,8 @@ export function validatePhysicalLedger(file) {
   const r3Closed = validateHistoricalSupersessionBoundary(raw, r3Native, protocol.historicalR3ClosedCce6f01aBoundary)
   const r3Dc9 = validateHistoricalSupersessionBoundary(raw, r3Closed, protocol.historicalR3NativeDc9b7cbdBoundary)
   const r3V3 = validateHistoricalSupersessionBoundary(raw, r3Dc9, protocol.historicalR3Native49e1c0adBoundary)
-  validateHistoricalSupersessionBoundary(raw, r3V3, protocol.historicalR3Native6e38e5ddBoundary)
+  const r3V4 = validateHistoricalSupersessionBoundary(raw, r3V3, protocol.historicalR3Native6e38e5ddBoundary)
+  validateHistoricalSupersessionBoundary(raw, r3V4, protocol.historicalR3Native11152245Boundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -881,10 +882,14 @@ export function updateLedger(file, event, options = {}) {
         ? protocol.historicalR3Native49e1c0adBoundary : options.historicalR3Native49e1c0adBoundary
       const trustedR3V3Events = r3V3Boundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedR3Dc9Events, r3V3Boundary) : trustedR3Dc9Events
-      const r3CurrentBoundary = options.campaignMode === 'real'
+      const r3V4Boundary = options.campaignMode === 'real'
         ? protocol.historicalR3Native6e38e5ddBoundary : options.historicalR3Native6e38e5ddBoundary
+      const trustedR3V4Events = r3V4Boundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedR3V3Events, r3V4Boundary) : trustedR3V3Events
+      const r3CurrentBoundary = options.campaignMode === 'real'
+        ? protocol.historicalR3Native11152245Boundary : options.historicalR3Native11152245Boundary
       const trustedR3CurrentEvents = r3CurrentBoundary
-        ? validateHistoricalSupersessionBoundary(rawLedger, trustedR3V3Events, r3CurrentBoundary) : trustedR3V3Events
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedR3V4Events, r3CurrentBoundary) : trustedR3V4Events
       // 阶段决定首选分配桶：early 阶段用 early*，post-UI 重跑用 postUi*；
       // 同一 slot 的重复发送或已超出计划样本量的发送归入失败/修复余量。
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
@@ -913,7 +918,7 @@ export function updateLedger(file, event, options = {}) {
           const closed = R3_NATIVE_REVISION_DIAGNOSTIC.closedInvocations
           if (closed.includes(binding.invocationId)) fail('R3_NATIVE_ATTEMPT_UNAVAILABLE')
           const campaign = [...reserved.values()].filter(row => row.binding.phase === binding.phase
-            && ![r3NativeBoundary, r3ClosedBoundary, r3Dc9Boundary, r3V3Boundary, r3CurrentBoundary].some(boundary => boundary
+            && ![r3NativeBoundary, r3ClosedBoundary, r3Dc9Boundary, r3V3Boundary, r3V4Boundary, r3CurrentBoundary].some(boundary => boundary
               && closed.includes(row.binding.invocationId)
               && boundary.reserveAttempts.some(item => item.attemptId === row.attemptId)))
           if (campaign.length >= R3_NATIVE_REVISION_DIAGNOSTIC.maxTotalPhysicalRequests

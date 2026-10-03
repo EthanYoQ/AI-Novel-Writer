@@ -11,24 +11,33 @@ import { ROOT, CAMPAIGN_ID, currentProtocolBinding, selectPhase, forwardReasonin
 const phase = 'r3-native-revision-diagnostic'
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
 
-test('R3 forward group preserves v4 and changes only product binding and fresh slots', () => {
+test('R3 Flash forward group preserves v5, its unused slot, and the qualification Qwen profile', () => {
   assert.equal(hash(protocol.historicalR3NativeRegistration49e1c0ad), '7d59b55e6aff45a7b0b9487721eeb89f26ab826d1981cf3733d9873cec11be39')
-  const previous = protocol.historicalR3NativeRegistration6e38e5dd
-  assert.equal(hash(previous), 'a15f9ee248e830463d83458128232b2c131c17111d5df0cde8a8b5a28bc03387')
+  assert.equal(hash(protocol.historicalR3NativeRegistration6e38e5dd), 'a15f9ee248e830463d83458128232b2c131c17111d5df0cde8a8b5a28bc03387')
+  const previous = protocol.historicalR3NativeRegistration11152245
+  assert.equal(hash(previous), '4154cf33b1ba3ead4ea61dfcfc23b735686590bdfbf9c93ac6ad1e4f21f1ddfa')
   assert.notEqual(policy.scenarioRevision, previous.scenarioRevision)
   assert.deepEqual(policy.closedInvocations, [...previous.closedInvocations, ...previous.runs.map(item => item.invocationId)])
   assert.ok(policy.runs.every(item => !policy.closedInvocations.includes(item.invocationId)))
-  for (const key of ['source', 'model', 'profiles', 'operationProfiles', 'operations', 'attemptPolicy', 'evaluationPolicy', 'minPhysicalRequests', 'maxPhysicalRequests', 'maxTotalPhysicalRequests'])
+  for (const key of ['source', 'operations', 'attemptPolicy', 'evaluationPolicy', 'minPhysicalRequests', 'maxPhysicalRequests', 'maxTotalPhysicalRequests'])
     assert.deepEqual(policy[key], previous[key])
   for (const [key, value] of Object.entries(previous.acceptance)) assert.deepEqual(policy.acceptance[key], value)
   assert.equal(policy.acceptance.scope, 'new-group-only-no-historical-reclassification-or-section-5-waiver')
   assert.equal(policy.acceptance.stop, 'when-two-of-three-impossible-remaining-NOT_RUN-no-redraw')
-  assert.equal(policy.requiredProductSha, 'a95693cf6a64488bfc33d41880e3a50917dc4de6')
+  assert.equal(policy.requiredProductSha, '6cf907211208d506b0afe6210128bfcfe5fb9dfd')
+  assert.equal(policy.model.modelName, 'deepseek-flash')
+  assert.equal(hash(policy.model), '0eec6083f152f15548e9acf680803e79365d1d76a4763f2b1c58529451a244df')
+  for (const operation of policy.operations) assert.deepEqual(r3ModelForOperation(operation.id).model, policy.model)
+  assert.deepEqual(QUALIFICATION_STAGE_MODELS.profiles.qwen, previous.profiles.qwen)
+  const boundary = protocol.historicalR3Native11152245Boundary
+  assert.deepEqual([boundary.fromEventCount, boundary.eventCount, boundary.reserveAttempts.length], [1650, 1668, 6])
+  assert.equal(boundary.rawBytesSha256, '747454c7085bb348a9d939952ebf5b51cc7026d586d679bc85db8968537d93fd')
+  assert.ok(boundary.reserveAttempts.every(item => item.terminal === 'settle' && item.invocationId !== previous.runs[2].invocationId))
   assert.deepEqual(QUALIFICATION_STAGE_MODELS, protocol.forwardStageModels)
   assert.equal(hash(protocol.forwardStageModels), '74f050828841a88f6972d2e54f4e0ab6403b1131b6591592137008fc9621e21b')
 })
 
-test('R3 native stage profiles freeze Qwen/Qwen/Qwen and retain the native deadline', () => {
+test('R3 native stage profiles freeze Flash/Flash/Flash and retain the native deadline', () => {
   assert.deepEqual(selectPhase(protocol, phase, 'diagnostic').operations, policy.operations)
   assert.deepEqual(productionScenario(phase, 'diagnostic'), policy)
   assert.throws(() => selectPhase(protocol, phase, 'final'), /MILESTONE/)
@@ -37,10 +46,10 @@ test('R3 native stage profiles freeze Qwen/Qwen/Qwen and retain the native deadl
     const profile = r3ModelForOperation(operation.id), effort = profile.model.reasoningOverride
     const input = { arm: 'candidate', phase, milestone: 'diagnostic', caseId: 'R3', operationId: operation.id, model: profile.model,
       creativeStrategy: 'auto', resolution: { requested: effort, effective: effort, status: 'mapped', source: 'model-override' },
-      body: { model: profile.model.modelName, temperature: 0, max_tokens: 16384, enable_thinking: true, thinking_budget: 16384,
+      body: { model: profile.model.modelName, temperature: 0, max_tokens: 16384, thinking: { type: 'enabled' }, reasoning_effort: 'high',
         ...(operation.kind === 'refine' ? {} : { response_format: { type: 'json_object' } }) } }
     assert.equal(assertForwardReasoning(registration, input).effective, effort)
-    for (const change of [{ reasoning_effort: 'medium' }, { enable_thinking: false }, { thinking_budget: 8192 }, { max_tokens: 8192 }, { model: 'deepseek-ai/DeepSeek-V4-Pro' }])
+    for (const change of [{ reasoning_effort: 'medium' }, { thinking: { type: 'disabled' } }, { enable_thinking: true }, { thinking_budget: 16384 }, { max_tokens: 8192 }, { model: 'deepseek-v4-flash' }])
       assert.throws(() => assertForwardReasoning(registration, { ...input, body: { ...input.body, ...change } }), /WIRE/)
     assert.throws(() => assertForwardReasoning(registration, { ...input, model: { ...profile.model, modelName: 'deepseek-ai/DeepSeek-V4-Pro' } }), /MODEL/)
   }
@@ -62,7 +71,7 @@ test('R3 native registration rejects altered source and cannot restart spent dia
     const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', ...currentProtocolBinding(),
       codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
       phase, milestone: 'diagnostic', caseId: 'R3', operation: policy.operations[0].id, invocationId: r3DiagnosticInvocation(1),
-      stageModel: { profileId: policy.profiles.qwen.profileId, configurationHash: policy.profiles.qwen.configurationHash },
+      stageModel: { profileId: policy.profiles.flash.profileId, configurationHash: policy.profiles.flash.configurationHash },
       diagnosticInputHash: policy.source.contextSha256, diagnosticSourceHash: hash(policy.source),
       evaluationPolicyHash: hash(policy.evaluationPolicy), actual: { attemptId: 'first', runId: 'run', rootActionId: 'root',
         projectId: 'new-project', epoch: 'new-epoch', purpose: 'review-chapter' } }
@@ -72,6 +81,8 @@ test('R3 native registration rejects altered source and cannot restart spent dia
     updateLedger(ledger, { type: 'dispatch', attemptId: 'candidate:first' }, { campaignMode: 'synthetic' })
     updateLedger(ledger, { type: 'settle', attemptId: 'candidate:first', finishReason: 'stop' }, { campaignMode: 'synthetic' })
     assert.throws(() => updateLedger(ledger, reserve('restart', { invocationId: randomUUID() }), { campaignMode: 'synthetic' }), /ATTEMPT_UNAVAILABLE/)
+    for (const slot of protocol.historicalR3NativeRegistration11152245.runs)
+      assert.throws(() => updateLedger(ledger, reserve('closed-' + slot.run, { invocationId: slot.invocationId }), { campaignMode: 'synthetic' }), /ATTEMPT_UNAVAILABLE/)
     const original = fs.readFileSync(ledger, 'utf8')
     assert.equal(original.trim().split('\n').length, 3)
     assert.equal(JSON.parse(original.split('\n')[0]).allocation, 'nonQualificationDiagnostic')
@@ -83,6 +94,7 @@ test.each([
   ['historicalR3NativeD12c4111Boundary', 0],
   ['historicalR3Native49e1c0adBoundary', 3],
   ['historicalR3Native6e38e5ddBoundary', 6],
+  ['historicalR3Native11152245Boundary', 9],
 ])('R3 registered run preserves authenticated UNKNOWN in %s and caps its eight-call invocation', (boundaryKey, closedIndex) => {
   const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', 'r3-replacement-' + randomUUID())
   fs.mkdirSync(directory, { recursive: true })
@@ -91,7 +103,7 @@ test.each([
     const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', ...currentProtocolBinding(),
       codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
       phase, milestone: 'diagnostic', caseId: 'R3', operation: policy.operations[0].id, invocationId: policy.closedInvocations[closedIndex],
-      stageModel: { profileId: policy.profiles.qwen.profileId, configurationHash: policy.profiles.qwen.configurationHash },
+      stageModel: { profileId: QUALIFICATION_STAGE_MODELS.profiles.qwen.profileId, configurationHash: QUALIFICATION_STAGE_MODELS.profiles.qwen.configurationHash },
       diagnosticInputHash: policy.source.contextSha256, diagnosticSourceHash: hash(policy.source),
       evaluationPolicyHash: hash(policy.evaluationPolicy), actual: { attemptId: 'old', runId: 'run', rootActionId: 'root',
         projectId: 'isolated-project', epoch: 'isolated-epoch', purpose: 'review-chapter' } }
@@ -152,7 +164,7 @@ test('SSE terminal shape records explicit null versus missing without leaking pr
 })
 
 
-test('R3 config copy retains only the hash-bound Qwen profile and rejects a same-id Pro replacement', () => {
+test('R3 config copy retains only the hash-bound Flash profile and rejects a same-id Pro replacement', () => {
   const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', 'r3-profile-' + randomUUID())
   fs.mkdirSync(directory, { recursive: true })
   const source = path.join(directory, 'source'), target = path.join(directory, 'target')
