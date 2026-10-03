@@ -908,7 +908,7 @@ export function updateLedger(file, event, options = {}) {
           const closed = R3_NATIVE_REVISION_DIAGNOSTIC.closedInvocations
           if (closed.includes(binding.invocationId)) fail('R3_NATIVE_ATTEMPT_UNAVAILABLE')
           const campaign = [...reserved.values()].filter(row => row.binding.phase === binding.phase
-            && ![r3NativeBoundary, r3ClosedBoundary, r3Dc9Boundary].some(boundary => boundary
+            && ![r3NativeBoundary, r3ClosedBoundary, r3Dc9Boundary, r3CurrentBoundary].some(boundary => boundary
               && closed.includes(row.binding.invocationId)
               && boundary.reserveAttempts.some(item => item.attemptId === row.attemptId)))
           if (campaign.length >= R3_NATIVE_REVISION_DIAGNOSTIC.maxTotalPhysicalRequests

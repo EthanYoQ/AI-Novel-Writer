@@ -58,7 +58,7 @@ export const R3_NATIVE_REVISION_DIAGNOSTIC = Object.freeze({
   "milestone": "diagnostic",
   "arms": ["candidate"],
   "nonQualification": true,
-  "scenarioRevision": "r3-native-qwen-three-runs-v3",
+  "scenarioRevision": "r3-native-qwen-three-runs-v4",
   "minPhysicalRequests": 3,
   "maxPhysicalRequests": 8,
   "model": {"id":"fa609022-5583-4825-a532-1ef787433626","name":"R3 Qwen native diagnostic","provider":"openai","protocol":"openai","modelName":"Qwen/Qwen3.8-27B","baseUrl":"https://api.siliconflow.cn/v1","temperature":0,"maxTokens":16384,"purposes":["generation","refinement","summary"],"reasoningOverride":"medium"},
@@ -66,13 +66,13 @@ export const R3_NATIVE_REVISION_DIAGNOSTIC = Object.freeze({
   "operations": [{"id":"R3普通首审","kind":"review"},{"id":"R3一次修稿","kind":"refine"},{"id":"R3普通末审","kind":"final-review"}],
   "attemptPolicy": {"milestone":"diagnostic","arms":["candidate"],"reviewRebuild":{"operationId":"R3普通首审","primaryPurpose":"review-chapter","repairPurpose":"review-chapter-rebuild","maxRepairAttempts":1},"finalReviewRebuild":{"operationId":"R3普通末审","primaryPurpose":"review-chapter","repairPurpose":"review-chapter-rebuild","maxRepairAttempts":1},"refinementRecovery":{"operationId":"R3一次修稿","purpose":"refine-from-review","maxAttempts":4,"trigger":"settled-length-same-confirmation-visible-append-with-progress"}},
   "evaluationPolicy": {"revision":"ai-review-final-manuscript-v1","caseIds":["R3"],"selection":"formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown","softwareFindings":"separate-frozen-consistency-preflight-provenance","confirmation":"preauthorized-ai-only-persisted-original-items-with-native-findingIds","noAction":"first-draft-endpoint-with-original-raw-and-saved-review","endpoint":"native-merge-then-ordinary-full-review","automaticCeiling":"pending-independent-oracle-review","physicalRequests":{"minimum":3,"maximum":8,"manuscriptMinimum":1,"manuscriptMaximum":8}},
-  "closedInvocations": ["d12c4111-285e-41a7-8bcc-4b7f9afd0681","5d9f3a04-7111-4151-9323-55ec2d1141a6","2b5963de-23b3-4e5c-8c16-8997fa021aa0"],
-  "requiredProductSha": "e28bd876bdad317d18e431c6b553a0e69961caea",
+  "closedInvocations": ["d12c4111-285e-41a7-8bcc-4b7f9afd0681","5d9f3a04-7111-4151-9323-55ec2d1141a6","2b5963de-23b3-4e5c-8c16-8997fa021aa0","6869a6a8-6bf4-4608-a7a1-d8fb67a9a469","ed4d076b-aa3f-40d6-8991-ce7df3915cf8","5331273c-d6f5-4019-82ce-15261ee03abb"],
+  "requiredProductSha": "57e1178cdfe1aba0e27d13d93632d5f2df601de9",
   "profiles": {"qwen":{"profileId":"fa609022-5583-4825-a532-1ef787433626","configurationHash":"4d75f9769c9d7c56d582c109444c11f96a899be99fe401ad14132d4055e461bb","model":{"id":"fa609022-5583-4825-a532-1ef787433626","name":"R3 Qwen native diagnostic","provider":"openai","protocol":"openai","modelName":"Qwen/Qwen3.8-27B","baseUrl":"https://api.siliconflow.cn/v1","temperature":0,"maxTokens":16384,"purposes":["generation","refinement","summary"],"reasoningOverride":"medium"}}},
   "operationProfiles": {"R3普通首审":"qwen","R3一次修稿":"qwen","R3普通末审":"qwen"},
-  "runs": [{"run":1,"invocationId":"6869a6a8-6bf4-4608-a7a1-d8fb67a9a469"},{"run":2,"invocationId":"ed4d076b-aa3f-40d6-8991-ce7df3915cf8"},{"run":3,"invocationId":"5331273c-d6f5-4019-82ce-15261ee03abb"}],
+  "runs": [{"run":1,"invocationId":"352c14db-202f-4158-a295-dd8a68a21227"},{"run":2,"invocationId":"f4957c39-0be7-4d42-8492-b8f72fd20b95"},{"run":3,"invocationId":"5fc84331-ffc9-4b32-941c-5d11e1178bc5"}],
   "maxTotalPhysicalRequests": 24,
-  "acceptance": {"minimumCompletedLoops":2,"maximumUnsupportedTimeChanges":0,"denominator":3,"automaticCeiling":"pending-independent-oracle-review"},
+  "acceptance": {"minimumCompletedLoops":2,"maximumUnsupportedTimeChanges":0,"denominator":3,"automaticCeiling":"pending-independent-oracle-review","semanticRule":"delivery-plan-section-3-forward-2026-10-03","unsupportedTime":"forbid-asserted-fact-mandatory-fix-actual-revision-or-trusted-derivation","unadoptedWrongAlternative":{"allRequired":["autonomous-correct-localization","not-author-fact-or-mandatory-fix","complete-original-evidence-received","autonomous-rejection-by-revision","valid-final-manuscript-full-review-save-readback"],"retain":"first-review-quality-defect","exclude":"human-edited-opinions-replacement-answer-or-false-finding-closure"},"stop":"when-two-of-three-impossible-remaining-NOT_RUN-no-redraw","scope":"new-group-only-no-historical-reclassification-or-section-5-waiver","runtime":"existing-node-product-owner-commands-sqlite-not-electron-ui"},
 })
 
 export function r3DiagnosticInvocation(run) {
