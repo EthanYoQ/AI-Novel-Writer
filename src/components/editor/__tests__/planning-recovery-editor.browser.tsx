@@ -116,6 +116,89 @@ function button(label: string): HTMLButtonElement {
 function noModel() { expect(invoke.mock.calls.some(([channel]) => channel === 'generation:execute' || channel === 'generation:begin' || channel === 'generation:restart')).toBe(false) }
 
 describe('planning recovery editors', () => {
+  for (const language of ['zh-CN', 'en-US'] as const) {
+    for (const keepTail of [true, false]) {
+      it(`outline author tail ${language} saves a completed prefix with ${keepTail ? 'old' : 'deleted'} machine progress`, async () => {
+        const english = language === 'en-US'
+        const title = english ? '# Plot Outline' : '# 情节大纲'
+        const body = english ? '## Chapter 1: Rain\nThe author keeps every clue.\n\n> Author note: preserve this quotation.' : '## 第1章：雨夜\n作者保留每一条线索。\n\n> 作者笔记：保留这段引文。'
+        const oldTail = english ? '> This outline covers chapters 1-2 of 3; the remaining chapters will be generated in later batches.' : '> 本大纲已覆盖至第 2 章（全书 3 章），其余章节将在后续批次继续生成。'
+        const newTail = english ? '> This outline covers chapters 1-1 of 3; the remaining chapters will be generated in later batches.' : '> 本大纲已覆盖至第 1 章（全书 3 章），其余章节将在后续批次继续生成。'
+        context = fixture('outline')
+        if (!context.plotOutline || !context.plotOutlineRecovery) throw new Error('Missing outline fixture')
+        context.plotOutline.sourceExpected.writingLanguage = language
+        context.plotOutline.composition = { algorithm: 'chapter-outline-v3', text: body, textHash: 'a'.repeat(64), artifactIds: ['chapter-1'], sources: [], chapters: [{ chapterNumber: 1, artifactIds: ['chapter-1'], textHash: 'a'.repeat(64) }] }
+        context.plotOutline.cursor = { kind: 'stopped', chapterNumber: 2, reason: 'attempts-exhausted' }
+        context.plotOutlineRecovery.completeChapters = [1]
+        const prefix = `${title}\n\n${body}`
+        const original = `${prefix}\n\n${english ? '## Chapter 2: Unfinished' : '## 第2章：未完成'}\n截断\n\n${oldTail}`
+        context.plotOutlineRecovery.draft = original
+        await render('outline')
+        await edit(prefix + (keepTail ? `\n\n${oldTail}` : ''))
+        await act(async () => button('保存').click())
+        const expected = `${prefix}\n\n${newTail}`
+        expect(savedPayload).toMatchObject({ synopsis: expected, expected: context.plotOutline.sourceExpected, authorRecovery: { committedRange: { from: 1, to: 1 } } })
+        expect(useEditorStore.getState().tabs[0]).toMatchObject({ content: expected, savedContent: expected, originalContent: original, dirty: false })
+        expect(editor().state.doc.toString()).toBe(expected)
+        await act(async () => editor().contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 's', code: 'KeyS', ctrlKey: true, bubbles: true, cancelable: true })))
+        expect(invoke.mock.calls.filter(([name]) => name === 'db:project-core-synopsis-commit')).toHaveLength(1)
+        noModel()
+      })
+    }
+  }
+  it('outline author tail preserves an edited quotation instead of treating it as machine progress', async () => {
+    context = fixture('outline')
+    const authored = '# 情节大纲\n\n## 第1章：雨夜\n作者正文。\n\n> 本大纲已覆盖至第 2 章（全书 3 章），其余章节将在后续批次继续生成。作者要求保留。'
+    await render('outline'); await edit(authored)
+    await act(async () => button('保存').click())
+    const expected = authored + '\n\n> 本大纲已覆盖至第 1 章（全书 3 章），其余章节将在后续批次继续生成。'
+    expect(savedPayload).toMatchObject({ synopsis: expected })
+    expect(editor().state.doc.toString()).toBe(expected)
+    noModel()
+  })
+  it.each([false, true])('outline author tail retains the existing outside prefix and rejects changes=%s', async changed => {
+    context = fixture('outline')
+    if (!context.plotOutline || !context.plotOutlineRecovery) throw new Error('Missing outline fixture')
+    const existing = '# 情节大纲\n\n## 第1章：原章\n不可改写的原文。\n\n> 本大纲已覆盖至第 1 章（全书 3 章），其余章节将在后续批次继续生成。'
+    context.plotOutline.sourceExpected.synopsis = existing
+    context.plotOutline.range = { from: 2, to: 3 }
+    context.plotOutline.confirmedPrefix = '## 第1章：原章\n不可改写的原文。'
+    context.plotOutlineRecovery.draft = '# 情节大纲\n\n## 第1章：原章\n不可改写的原文。\n\n## 第2章：恢复\n截断\n\n> 本大纲已覆盖至第 2 章（全书 3 章），其余章节将在后续批次继续生成。'
+    await render('outline')
+    const authored = '# 情节大纲\n\n## 第1章：原章\n' + (changed ? '被篡改的原文。' : '不可改写的原文。') + '\n\n## 第2章：恢复\n作者补齐的正文。'
+    await edit(authored)
+    await act(async () => button('保存').click())
+    if (changed) {
+      expect(savedPayload).toBeUndefined()
+      expect(editor().state.doc.toString()).toBe(authored)
+      expect(useEditorStore.getState().tabs[0].dirty).toBe(true)
+    } else {
+      expect(savedPayload).toMatchObject({ synopsis: authored + '\n\n> 本大纲已覆盖至第 2 章（全书 3 章），其余章节将在后续批次继续生成。' })
+      expect(useEditorStore.getState().tabs[0].dirty).toBe(false)
+    }
+    noModel()
+  })
+  it.each([false, true])('outline author tail freezes canonical payload across lost ACK and later edits=%s', async laterEdit => {
+    context = fixture('outline')
+    await render('outline')
+    const authored = '# 情节大纲\n\n## 第1章：雨夜\n作者补齐的正文。'
+    const canonical = authored + '\n\n> 本大纲已覆盖至第 1 章（全书 3 章），其余章节将在后续批次继续生成。'
+    await edit(authored)
+    pendingSave = async () => { throw new Error('IPC_ACK_LOST_AFTER_COMMIT') }
+    await act(async () => button('保存').click())
+    expect(savedPayload).toMatchObject({ synopsis: canonical })
+    const first = structuredClone(savedPayload)
+    const later = authored + '\n作者在回包丢失后继续输入。'
+    if (laterEdit) await edit(later)
+    await act(async () => root.render(null))
+    await render('outline')
+    pendingSave = async () => ({ success: true })
+    await act(async () => button('保存').click())
+    expect(savedPayload).toEqual(first)
+    expect(useEditorStore.getState().tabs[0]).toMatchObject({ content: laterEdit ? later : canonical, savedContent: canonical, dirty: laterEdit })
+    expect(editor().state.doc.toString()).toBe(laterEdit ? later : canonical)
+    noModel()
+  })
   for (const kind of ['outline', 'blueprint'] as const) {
     const channel = kind === 'outline' ? 'db:project-core-synopsis-commit' : 'db:blueprint-commit-range'
     const validText = () => kind === 'outline' ? renderPlotOutlineRange('## 第1章：雨夜\n找到信件。', { from: 1, to: 1 }, sourceExpected) : blueprintText
