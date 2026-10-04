@@ -3027,6 +3027,44 @@
   },
   "phases": {
     "planning-native-diagnostic": {
+      "savedOutlineContinuation": {
+        "continuationId": "planning-six-chapters-saved-outline-v1",
+        "manifestHash": "de0a2de0013447f214b88057456fca6fb099f9bd2dc91ba42b40e7aecd9a1d86",
+        "sourceHash": "5be2790970555a59c29b73294f5b286721e3bbd392014f34c570904745735b75",
+        "projectId": "c502670c-1694-4984-8155-95e6d934bb5a",
+        "attempts": [
+          {
+            "attemptId": "candidate:fd293bd6-589f-47db-8947-30132684d0b0",
+            "bindingHash": "dd0a7a01a836575e6a14a732c16b2427a28f2e4231b41d1966fdb3b78658e119",
+            "terminal": "settle"
+          },
+          {
+            "attemptId": "candidate:f04d0231-c110-47de-b137-055a72ba4f22",
+            "bindingHash": "2843fa5a0bb44937aa5805a3d368fe567ce6607f77b51dc81c584f0b687686f5",
+            "terminal": "settle"
+          },
+          {
+            "attemptId": "candidate:3bd51970-2452-4264-b962-ba78fab1a0b6",
+            "bindingHash": "0daa907997ca8c3a31a243e6a93f12bfab9d4fdbbf2991441a70c1628ce0e160",
+            "terminal": "settle"
+          },
+          {
+            "attemptId": "candidate:33e62580-80f6-4ca8-95da-ba13915f7cf8",
+            "bindingHash": "55a96274dfc90e8c6abf93c8d5d4bbe458dbfe3ca5f90999001832953c4dc022",
+            "terminal": "settle"
+          },
+          {
+            "attemptId": "candidate:396d4123-5734-46d1-b569-8e1b497a4a5d",
+            "bindingHash": "991e334452af667290f7d0fb059f5817a43049b693d351d0c1d91de7f94719d2",
+            "terminal": "settle"
+          },
+          {
+            "attemptId": "candidate:e3dad1bc-81bc-40f3-a214-1f4ed2ba39fa",
+            "bindingHash": "d633fbe3aff9a38544d17ccbcaf6656d466adc9a4427a2a907279cfc54ba2fcd",
+            "terminal": "unknown"
+          }
+        ]
+      },
       "sceneId": "场景1",
       "caseId": "planning-six-chapters",
       "caseIds": [
@@ -7056,5 +7094,53 @@
         "terminal": "settle"
       }
     ]
+  },
+  "historicalPlanningSavedOutlineBoundary": {
+    "fromEventCount": 1809,
+    "eventCount": 1827,
+    "rawBytesSha256": "9d76dd42a40355150ca8c8b21c3035ccb8f9d0c9cc5ae7a7991bfad361acfe31",
+    "protocolRevision": "s14b-candidate-only-three-rounds-v1",
+    "protocolHash": "bf40f2f900c6633463b59133cc72a244f88d12942d4e517237373ca7cc9e5c9d",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "3d90f75d9c28a77a53be6e3b4c63e2d42d018a77",
+        "sourceHash": "5be2790970555a59c29b73294f5b286721e3bbd392014f34c570904745735b75",
+        "driverHash": "ca8f04c1ebfe698dfcfe67439db7563380c29294f755073b1d6ea503387deae0",
+        "parityId": "6139cef0432d2b0f7a16d28284b10564b7cb478b11ffd6c54d179370b5b7d770"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:fd293bd6-589f-47db-8947-30132684d0b0",
+        "invocationId": "68fe991e-9b6b-4ba5-9734-2623477af7c1",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:f04d0231-c110-47de-b137-055a72ba4f22",
+        "invocationId": "68fe991e-9b6b-4ba5-9734-2623477af7c1",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:3bd51970-2452-4264-b962-ba78fab1a0b6",
+        "invocationId": "68fe991e-9b6b-4ba5-9734-2623477af7c1",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:33e62580-80f6-4ca8-95da-ba13915f7cf8",
+        "invocationId": "68fe991e-9b6b-4ba5-9734-2623477af7c1",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:396d4123-5734-46d1-b569-8e1b497a4a5d",
+        "invocationId": "68fe991e-9b6b-4ba5-9734-2623477af7c1",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:e3dad1bc-81bc-40f3-a214-1f4ed2ba39fa",
+        "invocationId": "68fe991e-9b6b-4ba5-9734-2623477af7c1",
+        "terminal": "unknown"
+      }
+    ],
+    "limits": "Six historical outline requests remain five STOP and one UNKNOWN. The saved six-chapter synopsis permits only the fixed diagnostic continuation. No refund, replay, literary qualification or historical reclassification."
   }
 }

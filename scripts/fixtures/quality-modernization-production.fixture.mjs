@@ -13,7 +13,7 @@ import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, 
   POST_UI_REVIEW_POLICY, reviewedDraftSelection, R3_NATIVE_REVISION_DIAGNOSTIC, r3ModelForOperation, modelConfigurationHash, readR3NativeSource, BOUNDED_REVISION_DIAGNOSTIC,
   QUALIFICATION_STAGE_MODELS, qualificationModelForOperation,
   SAVED_NATIVE_REVIEW_DIAGNOSTIC, readSavedNativeSource,
-  PLANNING_NATIVE_DIAGNOSTIC, PLANNING_STAGE_MODELS, readPlanningNativeSource,
+  PLANNING_NATIVE_DIAGNOSTIC, PLANNING_STAGE_MODELS, readPlanningNativeSource, readPlanningResumeSource,
   AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, aiReviewFinalManuscriptSelection, productionScenario, loadBaselineReviewContract,
   readBoundedRevisionSource, assertBoundedRevisionSource, boundedRevisionItems,
   scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder,
@@ -218,6 +218,12 @@ test('isolated production commands persist the selected phase operations', async
   const savedRun = request.phase === 'saved-native-review-diagnostic'
   const planningRun = request.phase === 'planning-native-diagnostic'
   const planningSource = planningRun ? readPlanningNativeSource(request.diagnosticInputPath) : null
+  const planningResume = request.resumeSourcePath ? readPlanningResumeSource(request.resumeSourcePath) : null
+  if (planningResume) {
+    assert.ok(planningRun && ['resume-from-saved-outline', 'complete'].includes(request.nativeAction), 'PLANNING_RESUME_SCOPE_MISMATCH')
+    assert.deepEqual(request.savedOutlineContinuation, { continuationId: planningResume.manifest.continuationId,
+      manifestHash: planningResume.manifestHash }, 'PLANNING_RESUME_MANIFEST_DRIFT')
+  }
   const copiedRun = boundedRun || r3Run || savedRun
   const boundedSource = savedRun ? readSavedNativeSource(request.diagnosticInputPath, request.caseId)
     : r3Run ? readR3NativeSource(request.diagnosticInputPath) : boundedRun ? readBoundedRevisionSource(request.diagnosticInputPath) : null
@@ -842,6 +848,24 @@ test('isolated production commands persist the selected phase operations', async
     const core = db.prepare('SELECT project_name,genre,target_audience,total_chapters,words_per_chapter,writing_language,global_guidance,core_outline,world_setting,protagonist_profile,premise,worldbuilding,characters_arch,synopsis FROM project_core WHERE id=?').get('main')
     const physicalTemplates = []
     for (const key of templateKeys) physicalTemplates.push(await prompts.resolvePromptTemplate(key, session, 'zh-CN'))
+    if (planningResume) {
+      const manifest = planningResume.manifest
+      assert.equal(project.projectId, manifest.project.projectId, 'PLANNING_RESUME_PROJECT_DRIFT')
+      assert.equal(path.resolve(project.rootPath), path.resolve(manifest.project.path), 'PLANNING_RESUME_PROJECT_DRIFT')
+      assert.notEqual(session.leaseId, manifest.project.epoch, 'PLANNING_RESUME_REUSED_EPOCH')
+      assert.equal(sha(core.synopsis), manifest.synopsisHash, 'PLANNING_RESUME_SYNOPSIS_DRIFT')
+      assert.deepEqual([...core.synopsis.matchAll(/^#{0,6}\s*第(\d+)章[^\n]*$/gmu)].map(item => Number(item[1])), [1, 2, 3, 4, 5, 6], 'PLANNING_NATIVE_SAVED_OUTLINE_INCOMPLETE')
+      assert.deepEqual(physicalTemplates, planningResume.templates.templates, 'PLANNING_RESUME_TEMPLATE_DRIFT')
+      const templateProvenance = { ...manifest.references.templates, sourceSha: planningResume.templates.sourceSha }
+      if (request.action === 'resume-preflight') {
+        const snapshot = { sourceArm: target.arm, sourceSha: target.codeSha, templates: physicalTemplates, predecessor: templateProvenance }
+        if (fs.existsSync(request.templatesPath)) assert.deepEqual(json(request.templatesPath), snapshot, 'PLANNING_RESUME_TEMPLATE_DRIFT')
+        else fs.writeFileSync(request.templatesPath, JSON.stringify(snapshot, null, 2) + '\n', { flag: 'wx' })
+      }
+      receipt.savedOutlineContinuation = { ...request.savedOutlineContinuation, synopsisHash: manifest.synopsisHash,
+        sourceSha: manifest.sourceSha, sourceEpoch: manifest.project.epoch, preparationSource: manifest.references.preparation,
+        failedReviewSource: manifest.references.failedReview, templatesSource: templateProvenance }
+    }
     const expectedTemplates = json(request.templatesPath).templates
     assert.deepEqual(physicalTemplates, expectedTemplates, 'ACTUAL_TEMPLATE_PARITY_FAILED')
     const templateSource = json(request.templatesPath)
@@ -883,12 +907,19 @@ test('isolated production commands persist the selected phase operations', async
       assert.equal(prepared.inputHash, planningSource.inputHash, 'PLANNING_SOURCE_INPUT_DRIFT')
       assert.deepEqual(JSON.parse(JSON.stringify((await invoke('db:character-roster-read', project.rootPath, session)).entries)), prepared.roster, 'PLANNING_SOURCE_ROSTER_DRIFT')
       receipt.planningSource = { ...prepared, path: path.join(target.isolationRoot, 'planning-source.json') }
+      if (planningResume) assert.equal(sha(prepared.roster), planningResume.manifest.project.rosterHash, 'PLANNING_RESUME_ROSTER_DRIFT')
     }
     receipt.physicalProject = { path: project.rootPath, dbPath: db.name, projectId: project.projectId,
       format: candidate ? 'canonical' : 'legacy', parityHash: sha(sourceParity), readback: sourceParity }
     if (request.action === 'prepare') { assertNoOutboundPreflightFailures(receipt); receipt.status = 'prepared'; return }
     if (continuityRun) request.parityHash = sha(sourceParity)
     else assert.equal(sha(sourceParity), request.parityHash, 'PHYSICAL_PROJECT_PARITY_CHANGED')
+    if (request.action === 'resume-preflight') {
+      assert.ok(planningResume && request.operations.length === 0, 'PLANNING_RESUME_PREFLIGHT_SCOPE_MISMATCH')
+      assertNoOutboundPreflightFailures(receipt)
+      receipt.status = 'prepared'
+      return
+    }
 
     // C17-B 的登记 operation 先是重新定稿后处理、后是续写：恢复类型取自本案唯一的续写 operation，而非首项。
     const restorationKinds = continuityRun ? [...new Set(request.operations.flatMap(operation => operation.restore ? [operation.restore] : []))] : []
@@ -1095,6 +1126,11 @@ test('isolated production commands persist the selected phase operations', async
       const preflight = createOutboundPreflightAssert(receipt.preflightFailures ??= [])
       if (planningRun) {
         readPlanningNativeSource(request.diagnosticInputPath)
+        if (planningResume) {
+          readPlanningResumeSource(request.resumeSourcePath)
+          const saved = await invoke('db:project-core-get', project.rootPath, session)
+          preflight(sha(saved.synopsis) === planningResume.manifest.synopsisHash, 'PLANNING_RESUME_SYNOPSIS_DRIFT')
+        }
         await Promise.all(streamSettlements)
       }
       preflight(new URL(String(url)).host === effectiveModelParameters.endpointHost, 'UNREGISTERED_PROVIDER_HOST')
@@ -1338,7 +1374,8 @@ test('isolated production commands persist the selected phase operations', async
         ...(r3Run || stageProfiles ? { stageModel: { profileId: modelForOperation(operationId).profileId, configurationHash: modelForOperation(operationId).configurationHash } } : {}),
         ...(copiedRun ? { diagnosticSourceHash: sha(copiedPolicy.source), diagnosticInputHash: boundedSource.inputHash } : {}),
         ...(planningRun ? { diagnosticSourceHash: planningSource.sourceHash, diagnosticInputHash: planningSource.inputHash,
-          planningRange: PLANNING_NATIVE_DIAGNOSTIC.operations.find(item => item.id === operationId)?.range ?? PLANNING_NATIVE_DIAGNOSTIC.range } : {}),
+          planningRange: PLANNING_NATIVE_DIAGNOSTIC.operations.find(item => item.id === operationId)?.range ?? PLANNING_NATIVE_DIAGNOSTIC.range,
+          ...(planningResume ? { savedOutlineContinuation: request.savedOutlineContinuation } : {}) } : {}),
         ...(aiReviewRun ? { evaluationPolicyHash: sha(request.evaluationPolicy) } : {}),
         ...(actual ? { actual } : { baselineIpc: observedIpc }) }
       // 发送规模证据：只记字节数，绝不记提示词原文或凭据，好让两臂在不花真实调用的前提下可比。

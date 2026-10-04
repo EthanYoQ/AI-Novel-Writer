@@ -11,6 +11,7 @@ import { runProductionCommandProbe, runProductionPhasePair, runProductionBridge,
   QUALIFICATION_STAGE_MODELS, qualificationModelForOperation, reviewRecoveryAllowed,
   SAVED_NATIVE_REVIEW_DIAGNOSTIC, savedNativeOperations, readSavedNativeSource,
   PLANNING_NATIVE_DIAGNOSTIC, PLANNING_STAGE_MODELS, planningNativeOperations, readPlanningNativeSource,
+  readPlanningResumeSource, planningResumeTarget, planningSavedOutlineAttempts,
   assertSharedInputDiagnostic, R3_NATIVE_REVISION_DIAGNOSTIC, r3DiagnosticInvocation, r3ModelForOperation, readR3NativeSource, BOUNDED_REVISION_DIAGNOSTIC, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, POST_UI_AI_REVIEW_SCENARIOS, FULL_AI_REVIEW_SCENARIO, readBoundedRevisionSource,
   productionBridgeHash, productionExecutionRuntime, productionScenario, PRODUCTION_BRIDGE, PHASE_SCENARIOS,
   validateCandidateContinuityResults, fullExecutionSchedule, validatePairedReceipt, validateFullAcceptedPredecessor, modelConfigurationHash, executionRecordIdentity } from './quality-modernization-driver.mjs'
@@ -304,7 +305,8 @@ export function validatePhysicalLedger(file) {
   const r3V7 = validateHistoricalSupersessionBoundary(raw, r3V6, protocol.historicalR3NativeAd650e85Boundary)
   const r3V8 = validateHistoricalSupersessionBoundary(raw, r3V7, protocol.historicalR3Native2d67a3aaBoundary)
   const r3V9 = validateHistoricalSupersessionBoundary(raw, r3V8, protocol.historicalR3NativeC907f174Boundary)
-  validateHistoricalSupersessionBoundary(raw, r3V9, protocol.historicalSavedNativeBoundary)
+  const saved = validateHistoricalSupersessionBoundary(raw, r3V9, protocol.historicalSavedNativeBoundary)
+  validateHistoricalSupersessionBoundary(raw, saved, protocol.historicalPlanningSavedOutlineBoundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -613,12 +615,14 @@ export function inspectTarget(target) {
   return { repositoryRoot, sourceHash, roots, driver }
 }
 
-export function createProductionTargets(baselineRoot, output, { development = false, modelId, phase, modelSources } = {}) {
+export function createProductionTargets(baselineRoot, output, { development = false, modelId, phase, modelSources, resumeSourcePath } = {}) {
   const r3 = phase === 'r3-native-revision-diagnostic'
   const planning = phase === 'planning-native-diagnostic'
+  const resume = resumeSourcePath ? readPlanningResumeSource(resumeSourcePath) : null
+  if (resume && (!planning || development || baselineRoot || modelId || modelSources)) fail('PLANNING_RESUME_FREEZE_SCOPE_MISMATCH')
   const stages = planning ? PLANNING_STAGE_MODELS : QUALIFICATION_STAGE_MODELS
   const staged = !phase || planning || phase === 'saved-native-review-diagnostic' || QUALIFICATION_STAGE_MODELS.scopes.some(scope => scope.phase === phase)
-  if (phase && !r3 && !staged || modelSources && !r3 && !staged || (r3 || staged) && !development && !modelSources) fail('REGISTERED_MODEL_SOURCES_REQUIRED')
+  if (phase && !r3 && !staged || modelSources && !r3 && !staged || (r3 || staged) && !development && !modelSources && !resume) fail('REGISTERED_MODEL_SOURCES_REQUIRED')
   if (r3 && !development) git(ROOT, ['merge-base', '--is-ancestor', R3_NATIVE_REVISION_DIAGNOSTIC.requiredProductSha, 'HEAD'])
   if (staged && !development) git(ROOT, ['merge-base', '--is-ancestor', QUALIFICATION_STAGE_MODELS.requiredProductSha, 'HEAD'])
   const outputPath = path.resolve(output)
@@ -626,6 +630,18 @@ export function createProductionTargets(baselineRoot, output, { development = fa
   fs.mkdirSync(path.dirname(outputPath), { recursive: true })
   if (!inside(real(CACHE), real(path.dirname(outputPath))) || fs.existsSync(outputPath)) fail('TARGET_OUTPUT_NOT_NEW_PRIVATE_FILE')
   if (!development) assertFormalTargetCandidateClean(ROOT)
+  if (resume) {
+    const base = resume.baseTargets.candidate, repositoryRoot = real(ROOT), codeSha = git(repositoryRoot, ['rev-parse', 'HEAD'])
+    const target = { ...base, repositoryRoot, codeSha, subjectSha: codeSha, ...currentProtocolBinding(),
+      sourceHash: hashSourceTree(repositoryRoot), executionToolsHash: hashExecutionTools(repositoryRoot), runnerAdapterHash: runnerAdapterHash(),
+      driver: { kind: 'production-command-physical-project-v2', adapterRoot: ROOT, path: PRODUCTION_BRIDGE, sha256: productionBridgeHash() } }
+    planningResumeTarget(target, resume)
+    target.environment = freezeProductionEnvironment(target); target.startup = fixedStartup(target)
+    inspectTarget(target)
+    const targets = { candidate: target }
+    fs.writeFileSync(outputPath, JSON.stringify(targets, null, 2) + '\n', { flag: 'wx' })
+    return { targets, path: outputPath, root: target.isolationRoot, physicalModelRequests: 0, qualification: 'frozen-identity-only-not-run' }
+  }
   const candidateOnly = currentProtocolBinding().protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION
   if (!candidateOnly) {
     if (git(baselineRoot, ['rev-parse', 'HEAD']) !== '2264390d6fb8b052cc14736d544df0cc74516649') fail('BASELINE_SHA_MISMATCH')
@@ -967,6 +983,9 @@ export function updateLedger(file, event, options = {}) {
       const savedBoundary = options.campaignMode === 'real' ? protocol.historicalSavedNativeBoundary : options.historicalSavedNativeBoundary
       const trustedSavedEvents = savedBoundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedR3V9Events, savedBoundary) : trustedR3V9Events
+      const planningBoundary = options.campaignMode === 'real' ? protocol.historicalPlanningSavedOutlineBoundary : options.historicalPlanningSavedOutlineBoundary
+      const trustedPlanningEvents = planningBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedSavedEvents, planningBoundary) : trustedSavedEvents
       // 阶段决定首选分配桶：early 阶段用 early*，post-UI 重跑用 postUi*；
       // 同一 slot 的重复发送或已超出计划样本量的发送归入失败/修复余量。
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
@@ -976,20 +995,23 @@ export function updateLedger(file, event, options = {}) {
         if (binding.phase === 'planning-native-diagnostic') {
           const policy = PLANNING_NATIVE_DIAGNOSTIC
           const prior = [...reserved.values()].filter(row => row.binding.phase === binding.phase)
+          const savedOutline = planningSavedOutlineAttempts(binding, prior, statuses)
           const matches = prior.filter(row => row.binding.operation === binding.operation)
           const index = policy.operations.findIndex(item => item.id === binding.operation), kind = policy.operations[index].kind
           const outcome = row => events.find(event => event.attemptId === row.attemptId && event.type === 'settle')?.finishReason
           const repair = [policy.attemptPolicy.reviewRebuild, policy.attemptPolicy.finalReviewRebuild].find(item => item.operationId === binding.operation)
           if (prior.length >= policy.maxPhysicalRequests || matches.length >= policy.physicalRequestBounds[binding.operation]
-            || prior.some(row => statuses.get(row.attemptId) !== 'settle'
+            || prior.some(row => !savedOutline.has(row.attemptId) && (statuses.get(row.attemptId) !== 'settle'
               || ['invocationId', 'codeSha', 'sourceHash', 'driverHash', 'diagnosticInputHash', 'diagnosticSourceHash'].some(key => row.binding[key] !== binding[key])
-              || row.binding.actual.projectId !== binding.actual.projectId)
+              || row.binding.actual.projectId !== binding.actual.projectId
+              || !isDeepStrictEqual(row.binding.savedOutlineContinuation, binding.savedOutlineContinuation)))
             || matches.some(row => ['runId', 'rootActionId', 'epoch'].some(key => row.binding.actual[key] !== binding.actual[key]))
             || prior.some(row => row.binding.operation !== binding.operation && row.binding.actual.rootActionId === binding.actual.rootActionId
               && !(['review', 'refine', 'final-review'].includes(kind)
                 && ['review', 'refine', 'final-review'].includes(policy.operations.find(item => item.id === row.binding.operation)?.kind)))
             || prior.some(row => policy.operations.findIndex(item => item.id === row.binding.operation) > index)
-            || policy.operations.slice(0, index).some(item => !prior.some(row => row.binding.operation === item.id && outcome(row) === 'stop'))
+            || policy.operations.slice(0, index).some(item => !prior.some(row => row.binding.operation === item.id
+              && (outcome(row) === 'stop' || savedOutline.has(row.attemptId))))
             || repair && !reviewRecoveryAllowed(matches.map(row => ({ purpose: row.binding.actual.purpose, finishReason: outcome(row) })), binding.actual.purpose, repair)
             || kind === 'refine' && matches.length && outcome(matches.at(-1)) !== 'length'
             || kind === 'outline' && matches.some(row => row.binding.actual.purpose === binding.actual.purpose))
@@ -1101,7 +1123,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedSavedEvents
+          const superseded = index >= trustedHistoricalEvents && index < trustedPlanningEvents
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)
@@ -1304,18 +1326,19 @@ export function adjudicateCandidateBatch(batchPath, reviewsPath) {
 
 export function main(argv) {
   let [command = 'help', ...rest] = argv
-  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <register-batch|adjudicate-batch|freeze-targets|development-synthetic|shared-input-diagnostic|separated-review-diagnostic|baseline-probe|dry-run|early-budget|early-context|early-review|full|c16-c18> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>] [--batch <registered batch.json> --round 1|2|3 (real final only)]; register-batch: --targets <frozen targets> --output <new private batch.json>; adjudicate-batch: --batch <batch.json> --reviews <two independent case reviews.json>; shared-input-diagnostic/separated-review-diagnostic: --diagnostic-input <frozen private JSON> --mode synthetic|real [--targets <frozen targets> | --baseline-root <baseline> --output <new private targets>] ; formal freeze-targets: --model-sources <private registered Flash profile sources.json> --output <new private targets>; R3 freeze-targets: --phase r3-native-revision-diagnostic --diagnostic-models <private profile source roots.json> --output <new private targets>; r3-native-revision-diagnostic: --targets <frozen targets> --diagnostic-run 1|2|3 --milestone diagnostic --diagnostic-input <frozen R3.context.json> --mode real --physical-ledger <canonical ledger>; saved-native-review-diagnostic: --targets <frozen Flash cap32 targets> --milestone diagnostic --diagnostic-input <fixed private JSON> --native-case saved-c18-b-negative|saved-c17-a-control --native-action prepare|review|complete --mode synthetic|real [--approval <original report reference JSON>] [--physical-ledger <canonical ledger, real mode>]; planning-native-diagnostic: --targets <frozen Flash cap64 targets> --milestone diagnostic --diagnostic-input <fixed private JSON> --native-case planning-six-chapters --native-action prepare|review|complete --mode synthetic|real [--approval <approved original report finding IDs JSON>] [--physical-ledger <canonical ledger, real mode>]; freeze-targets/development-synthetic: --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full|c16-c18 (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
+  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <register-batch|adjudicate-batch|freeze-targets|development-synthetic|shared-input-diagnostic|separated-review-diagnostic|baseline-probe|dry-run|early-budget|early-context|early-review|full|c16-c18> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>] [--batch <registered batch.json> --round 1|2|3 (real final only)]; register-batch: --targets <frozen targets> --output <new private batch.json>; adjudicate-batch: --batch <batch.json> --reviews <two independent case reviews.json>; shared-input-diagnostic/separated-review-diagnostic: --diagnostic-input <frozen private JSON> --mode synthetic|real [--targets <frozen targets> | --baseline-root <baseline> --output <new private targets>] ; formal freeze-targets: --model-sources <private registered Flash profile sources.json> --output <new private targets>; R3 freeze-targets: --phase r3-native-revision-diagnostic --diagnostic-models <private profile source roots.json> --output <new private targets>; r3-native-revision-diagnostic: --targets <frozen targets> --diagnostic-run 1|2|3 --milestone diagnostic --diagnostic-input <frozen R3.context.json> --mode real --physical-ledger <canonical ledger>; saved-native-review-diagnostic: --targets <frozen Flash cap32 targets> --milestone diagnostic --diagnostic-input <fixed private JSON> --native-case saved-c18-b-negative|saved-c17-a-control --native-action prepare|review|complete --mode synthetic|real [--approval <original report reference JSON>] [--physical-ledger <canonical ledger, real mode>]; planning-native-diagnostic: --targets <frozen Flash cap64 targets> --milestone diagnostic --diagnostic-input <fixed private JSON> --native-case planning-six-chapters --native-action prepare|review|resume-from-saved-outline|complete --mode synthetic|real [--resume-source <fixed saved-outline manifest; also required for its freeze-targets and complete>] [--approval <approved original report finding IDs JSON>] [--physical-ledger <canonical ledger, real mode>]; freeze-targets/development-synthetic: --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full|c16-c18 (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
   if (command.startsWith('--')) { rest = argv; command = 'phase-options' }
   const args = {}
   for (let i = 0; i < rest.length; i++) {
     const key = rest[i]
     if (key === '--dry-run') { if (args[key]) fail('INVALID_ARGUMENT'); args[key] = true; continue }
-    if (!['--targets', '--milestone', '--mode', '--baseline-root', '--output', '--model-id', '--protocol', '--phase', '--scenario', '--physical-ledger', '--diagnostic-input', '--diagnostic-models', '--model-sources', '--diagnostic-run', '--batch', '--round', '--reviews', '--native-case', '--native-action', '--approval'].includes(key) || !rest[i + 1] || args[key]) fail('INVALID_ARGUMENT')
+    if (!['--targets', '--milestone', '--mode', '--baseline-root', '--output', '--model-id', '--protocol', '--phase', '--scenario', '--physical-ledger', '--diagnostic-input', '--diagnostic-models', '--model-sources', '--diagnostic-run', '--batch', '--round', '--reviews', '--native-case', '--native-action', '--approval', '--resume-source'].includes(key) || !rest[i + 1] || args[key]) fail('INVALID_ARGUMENT')
     args[key] = rest[++i]
   }
   if (command === 'phase-options') command = args['--phase'] || fail('INVALID_PHASE')
   const savedNative = command === 'saved-native-review-diagnostic'
   const planningNative = command === 'planning-native-diagnostic'
+  if (args['--resume-source'] && !planningNative && !(command === 'freeze-targets' && args['--phase'] === 'planning-native-diagnostic')) fail('PLANNING_RESUME_SOURCE_REQUIRED')
   if (savedNative) savedNativeOperations(args['--native-case'], args['--native-action'])
   else if (planningNative) planningNativeOperations(args['--native-case'], args['--native-action'])
   else if (args['--native-case'] || args['--native-action'] || args['--approval']) fail('SAVED_NATIVE_SCOPE_MISMATCH')
@@ -1400,7 +1423,8 @@ export function main(argv) {
     if (protocol.decisionRevision !== CANDIDATE_ONLY_PROTOCOL_REVISION && !args['--baseline-root'] || !args['--output'] || args['--mode'] === 'real') fail('TARGET_PREPARATION_ARGUMENTS_REQUIRED')
     if (command === 'freeze-targets' && args['--scenario']) fail('INVALID_ARGUMENT')
     const prepared = createProductionTargets(args['--baseline-root'], args['--output'], { development: command === 'development-synthetic', modelId: args['--model-id'], phase: args['--phase'] ?? (args['--scenario'] === 'r3-native-revision-diagnostic' ? args['--scenario'] : undefined),
-      modelSources: args['--model-sources'] || args['--diagnostic-models'] ? read(real(args['--model-sources'] ?? args['--diagnostic-models'])) : undefined })
+      modelSources: args['--model-sources'] || args['--diagnostic-models'] ? read(real(args['--model-sources'] ?? args['--diagnostic-models'])) : undefined,
+      resumeSourcePath: args['--resume-source'] })
     if (command === 'freeze-targets') return prepared
     // 零模型开发路径只跑已登记的场景；默认仍是 early-budget，逐字保持原有行为。
     // 它永远只产出 development-only-unfrozen 收据，不构成冻结目标资格。
@@ -1479,7 +1503,7 @@ export function main(argv) {
       scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, evaluationPolicy: selection.evaluationPolicy, order: protocol.candidateOnlyQualification?.order ?? protocol.order,
       forwardReasoning: forwardReasoningFor(protocol, phase, selection.milestone),
       forwardQualificationWindow: forwardQualificationWindowFor(protocol, phase, selection.milestone),
-      diagnosticInputPath, ...(savedNative || planningNative ? { caseId: args['--native-case'], nativeAction: args['--native-action'], approvalPath: args['--approval'] } : {}),
+      diagnosticInputPath, ...(savedNative || planningNative ? { caseId: args['--native-case'], nativeAction: args['--native-action'], approvalPath: args['--approval'], resumeSourcePath: args['--resume-source'] } : {}),
       ...currentProtocolBinding(), semanticPath: path.join(ROOT, protocol.fixturePath),
       templatesPath: path.join(evidenceRoot, 'candidate-templates.json'), ledgerPath })
     arms.forEach(arm => inspectTarget(targets[arm]))

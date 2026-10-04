@@ -157,11 +157,71 @@ export function savedNativeOperations(caseId, action) {
     && (action === 'complete' ? item.kind !== 'review' : item.kind === 'review'))
 }
 
-export function planningNativeOperations(caseId, action) {
+export function planningNativeOperations(caseId, action, bridgeAction) {
   const policy = PLANNING_NATIVE_DIAGNOSTIC
-  if (caseId !== policy.caseId || !['prepare', 'review', 'complete'].includes(action)) throw new Error('PLANNING_NATIVE_SCOPE_MISMATCH')
+  if (caseId !== policy.caseId || !['prepare', 'review', 'complete', 'resume-from-saved-outline'].includes(action)) throw new Error('PLANNING_NATIVE_SCOPE_MISMATCH')
+  if (bridgeAction === 'resume-preflight') {
+    if (action !== 'resume-from-saved-outline') throw new Error('PLANNING_NATIVE_SCOPE_MISMATCH')
+    return []
+  }
+  if (action === 'resume-from-saved-outline') return policy.operations.filter(item => ['directory', 'draft', 'review'].includes(item.kind))
   return policy.operations.filter(item => action === 'complete' ? ['refine', 'final-review'].includes(item.kind)
     : !['refine', 'final-review'].includes(item.kind))
+}
+
+export function readPlanningResumeSource(file) {
+  const bytes = fs.readFileSync(file), registration = PLANNING_NATIVE_DIAGNOSTIC.savedOutlineContinuation
+  if (digest(bytes) !== registration.manifestHash) throw new Error('PLANNING_RESUME_MANIFEST_DRIFT')
+  const manifest = JSON.parse(bytes)
+  const evidence = Object.fromEntries(Object.entries(manifest.references).map(([key, reference]) => {
+    const content = fs.readFileSync(reference.path)
+    if (digest(content) !== reference.sha256) throw new Error('PLANNING_RESUME_SOURCE_DRIFT')
+    return [key, JSON.parse(content)]
+  }))
+  const { baseTargets, execution, preparation, failedReview, templates, planningSource, physicalProject } = evidence
+  const base = baseTargets.candidate, runtime = execution.target, policy = PLANNING_NATIVE_DIAGNOSTIC
+  const artifact = failedReview.recovery?.artifacts?.find(item => item.artifactId === manifest.sixthArtifact.artifactId)
+  if (manifest.continuationId !== registration.continuationId || manifest.invocationId !== policy.invocationId
+    || manifest.caseId !== policy.caseId || manifest.sourceHash !== registration.sourceHash
+    || manifest.project.projectId !== registration.projectId || digest(manifest.attempts) !== digest(registration.attempts)
+    || baseTargets.baseline || digest(base) !== execution.targetHash || base.codeSha !== manifest.sourceSha
+    || base.sourceHash !== manifest.sourceHash || templates.sourceSha !== manifest.sourceSha || templates.sourceArm !== 'candidate'
+    || preparation.status !== 'prepared' || failedReview.status !== 'failed'
+    || preparation.physicalProject.projectId !== manifest.project.projectId || physicalProject.projectId !== manifest.project.projectId
+    || path.resolve(physicalProject.rootPath) !== path.resolve(manifest.project.path)
+    || failedReview.projectEpoch !== manifest.project.epoch || digest(planningSource.roster) !== manifest.project.rosterHash
+    || digest(failedReview.savedEvidence.core.synopsis) !== manifest.synopsisHash
+    || artifact?.attemptId !== manifest.sixthArtifact.attemptId || digest(artifact?.text ?? '') !== manifest.sixthArtifact.textHash
+    || execution.ledgerPath !== manifest.ledger.path) throw new Error('PLANNING_RESUME_SOURCE_MISMATCH')
+  const roots = Object.fromEntries(Object.entries(base.roots).map(([key, directory]) => [key, path.join(directory, policy.invocationId.slice(0, 8))]))
+  if (digest(runtime.roots) !== digest(roots) || runtime.isolationRoot !== path.join(base.isolationRoot, 'invocations', policy.invocationId)
+    || digest(runtime.declaredRoots) !== digest(base.roots) || runtime.declaredIsolationRoot !== base.isolationRoot)
+    throw new Error('PLANNING_RESUME_ROOTS_MISMATCH')
+  const raw = fs.readFileSync(manifest.ledger.path, 'utf8'), lines = raw.split('\n')
+  if (lines.length <= manifest.ledger.eventCount || digest(lines.slice(0, manifest.ledger.eventCount).join('\n') + '\n') !== manifest.ledger.rawBytesSha256)
+    throw new Error('PLANNING_RESUME_LEDGER_DRIFT')
+  return { manifest, ...evidence, manifestHash: registration.manifestHash }
+}
+
+export function planningResumeTarget(base, source) {
+  if (base.sourceHash !== source.manifest.sourceHash
+    || ['roots', 'isolationRoot', 'fixture', 'stageModels', 'modelId'].some(key => digest(base[key]) !== digest(source.baseTargets.candidate[key])))
+    throw new Error('PLANNING_RESUME_TARGET_DRIFT')
+  return { ...base, isolationRoot: source.execution.target.isolationRoot, roots: source.execution.target.roots,
+    declaredIsolationRoot: base.isolationRoot, declaredRoots: base.roots }
+}
+
+export function planningSavedOutlineAttempts(binding, prior, statuses) {
+  if (!binding.savedOutlineContinuation) return new Set()
+  const registration = PLANNING_NATIVE_DIAGNOSTIC.savedOutlineContinuation
+  if (stableEvidence(binding.savedOutlineContinuation) !== stableEvidence({ continuationId: registration.continuationId, manifestHash: registration.manifestHash })
+    || binding.sourceHash !== registration.sourceHash || binding.actual.projectId !== registration.projectId
+    || PLANNING_NATIVE_DIAGNOSTIC.operations.find(item => item.id === binding.operation)?.kind === 'outline'
+    || registration.attempts.some(item => {
+      const row = prior.find(value => value.attemptId === item.attemptId)
+      return !row || digest(row.binding) !== item.bindingHash || statuses.get(item.attemptId) !== item.terminal
+    })) throw new Error('PLANNING_RESUME_PREFIX_MISMATCH')
+  return new Set(registration.attempts.map(item => item.attemptId))
 }
 
 export function readPlanningNativeSource(inputPath) {
@@ -434,6 +494,44 @@ const planningRootBudgets = Object.fromEntries(planningActions.map(action => {
   return [action.id, newMainGenerationPolicy(selection, planningModel).budget]
 }))
 export const PLANNING_NATIVE_DIAGNOSTIC = Object.freeze({
+  savedOutlineContinuation: {
+    "continuationId": "planning-six-chapters-saved-outline-v1",
+    "manifestHash": "de0a2de0013447f214b88057456fca6fb099f9bd2dc91ba42b40e7aecd9a1d86",
+    "sourceHash": "5be2790970555a59c29b73294f5b286721e3bbd392014f34c570904745735b75",
+    "projectId": "c502670c-1694-4984-8155-95e6d934bb5a",
+    "attempts": [
+      {
+        "attemptId": "candidate:fd293bd6-589f-47db-8947-30132684d0b0",
+        "bindingHash": "dd0a7a01a836575e6a14a732c16b2427a28f2e4231b41d1966fdb3b78658e119",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:f04d0231-c110-47de-b137-055a72ba4f22",
+        "bindingHash": "2843fa5a0bb44937aa5805a3d368fe567ce6607f77b51dc81c584f0b687686f5",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:3bd51970-2452-4264-b962-ba78fab1a0b6",
+        "bindingHash": "0daa907997ca8c3a31a243e6a93f12bfab9d4fdbbf2991441a70c1628ce0e160",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:33e62580-80f6-4ca8-95da-ba13915f7cf8",
+        "bindingHash": "55a96274dfc90e8c6abf93c8d5d4bbe458dbfe3ca5f90999001832953c4dc022",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:396d4123-5734-46d1-b569-8e1b497a4a5d",
+        "bindingHash": "991e334452af667290f7d0fb059f5817a43049b693d351d0c1d91de7f94719d2",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:e3dad1bc-81bc-40f3-a214-1f4ed2ba39fa",
+        "bindingHash": "d633fbe3aff9a38544d17ccbcaf6656d466adc9a4427a2a907279cfc54ba2fcd",
+        "terminal": "unknown"
+      }
+    ]
+  },
   sceneId: '场景1', caseId: 'planning-six-chapters', caseIds: ['planning-six-chapters'], chapterNumber: 1,
   milestone: 'diagnostic', arms: ['candidate'], nonQualification: true, allocation: 'nonQualificationDiagnostic',
   scenarioRevision: 'planning-six-chapters-native-cap64-v2', formalDenominatorContribution: 0,
@@ -832,13 +930,13 @@ export function qualificationBridgeWindows(request) {
     const policy = planning ? PLANNING_NATIVE_DIAGNOSTIC : SAVED_NATIVE_REVIEW_DIAGNOSTIC
     if (request.milestone !== 'diagnostic' || (request.arm ?? request.target?.arm) !== 'candidate'
       || request.scenarioRevision !== policy.scenarioRevision
-      || stableEvidence(request.operations) !== stableEvidence((planning ? planningNativeOperations : savedNativeOperations)(request.caseId, request.nativeAction))
+      || stableEvidence(request.operations) !== stableEvidence((planning ? planningNativeOperations : savedNativeOperations)(request.caseId, request.nativeAction, request.action))
       || stableEvidence(request.attemptPolicy) !== stableEvidence(policy.attemptPolicy)
       || stableEvidence(request.evaluationPolicy) !== stableEvidence(policy.evaluationPolicy)
       || request.forwardQualificationWindow != null || Object.keys(request).some(key => /timeout|deadline/iu.test(key)))
       throw new Error('SAVED_NATIVE_SCOPE_MISMATCH')
     const attemptMs = MAIN_GENERATION_POLICY.budget.maxActiveElapsedMs + 60_000
-    const maxCalls = request.action === 'prepare' ? 0 : planning
+    const maxCalls = ['prepare', 'resume-preflight'].includes(request.action) ? 0 : planning
       ? request.operations.reduce((sum, item) => sum + policy.physicalRequestBounds[item.id], 0) : request.operations.length * 4
     return { attemptMs, spawnMs: Math.max(1, maxCalls) * attemptMs + 60_000,
       testMs: Math.max(1, maxCalls) * attemptMs + 120_000, maxCalls, revision: policy.scenarioRevision }
@@ -2708,7 +2806,8 @@ export function classifyFullProduction(results, { mode, order }) {
 
 export function executionRecordIdentity(options) {
   return digest(JSON.stringify({ invocationId: options.invocationId, protocolHash: options.protocolHash,
-    sampling: options.sampling, phase: options.phase, mode: options.mode }))
+    sampling: options.sampling, phase: options.phase, mode: options.mode,
+    ...(options.savedOutlineContinuation ? { savedOutlineContinuation: options.savedOutlineContinuation } : {}) }))
 }
 function executionRecord(options) {
   if (!options.executionRecordPath) return { results: {} }
@@ -2855,20 +2954,28 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
     const operationsFor = planning ? planningNativeOperations : savedNativeOperations
     const operations = operationsFor(caseId, nativeAction)
     const source = planning ? readPlanningNativeSource(options.diagnosticInputPath) : readSavedNativeSource(options.diagnosticInputPath, caseId)
+    const resume = options.resumeSourcePath ? readPlanningResumeSource(options.resumeSourcePath) : null
+    if (resume && (!planning || !['resume-from-saved-outline', 'complete'].includes(nativeAction))
+      || nativeAction === 'resume-from-saved-outline' && !resume) throw new Error('PLANNING_RESUME_SOURCE_REQUIRED')
     const original = targets.candidate, invocationId = planning ? policy.invocationId : source.source.invocationId
     if (!original || targets.baseline || original.protocolHash !== options.protocolHash
       || original.protocolRevision !== options.protocolRevision || options.mode === 'real' && original.developmentOnly)
       throw new Error('SAVED_NATIVE_TARGET_MISMATCH')
-    const recordPath = id => `${options.diagnosticInputPath}.${options.mode}.${id}.execution.json`
-    const bound = { ...options, invocationId, executionRecordPath: recordPath(caseId) }
+    const recordPath = id => resume ? `${resume.manifest.references.execution.path}.${resume.manifest.continuationId}.execution.json`
+      : `${options.diagnosticInputPath}.${options.mode}.${id}.execution.json`
+    if (resume && options.executionRecordPath && path.resolve(options.executionRecordPath) !== path.resolve(recordPath(caseId)))
+      throw new Error('PLANNING_RESUME_RECORD_PATH_MISMATCH')
+    const continuation = resume ? { continuationId: resume.manifest.continuationId, manifestHash: resume.manifestHash } : null
+    const bound = { ...options, invocationId, executionRecordPath: recordPath(caseId), ...(resume ? { savedOutlineContinuation: continuation } : {}) }
     const record = executionRecord(bound)
     if (record.targetHash && record.targetHash !== digest(original)) throw new Error('SAVED_NATIVE_TARGET_DRIFT')
-    if (nativeAction === 'complete' && !record.results.review) throw new Error('SAVED_NATIVE_FIRST_REVIEW_REQUIRED')
+    const firstReviewKey = resume ? 'resume-from-saved-outline' : 'review'
+    if (nativeAction === 'complete' && !record.results[firstReviewKey]) throw new Error('SAVED_NATIVE_FIRST_REVIEW_REQUIRED')
     let approval, firstReview
     if (nativeAction === 'complete' || !planning && nativeAction === 'review' && caseId === policy.caseIds[1]) {
       approval = JSON.parse(fs.readFileSync(options.approvalPath))
       const negativeRecord = caseId === policy.caseIds[0] ? record : JSON.parse(fs.readFileSync(recordPath(policy.caseIds[0])))
-      const prior = negativeRecord.results[nativeAction === 'complete' ? 'review' : 'complete']
+      const prior = negativeRecord.results[nativeAction === 'complete' ? firstReviewKey : 'complete']
       if (!prior?.receiptPath || path.resolve(approval.receiptPath) !== path.resolve(prior.receiptPath)) throw new Error('SAVED_NATIVE_APPROVAL_RECEIPT_MISMATCH')
       const bytes = fs.readFileSync(prior.receiptPath), receipt = JSON.parse(bytes)
       const review = nativeAction === 'complete' ? receipt.aiReviewedDraft?.review : receipt.aiReviewedDraft?.finalReview
@@ -2883,6 +2990,15 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
       firstReview = nativeAction === 'complete' ? receipt : undefined
     } else if (options.approvalPath) throw new Error('SAVED_NATIVE_APPROVAL_SCOPE_MISMATCH')
     let target = record.target
+    if (resume) {
+      const expected = planningResumeTarget(original, resume)
+      if (target && digest(target) !== digest(expected) || record.savedOutlineContinuation && stableEvidence(record.savedOutlineContinuation) !== stableEvidence(continuation)
+        || path.resolve(options.ledgerPath) !== path.resolve(resume.manifest.ledger.path)) throw new Error('PLANNING_RESUME_TARGET_DRIFT')
+      target = expected
+      record.target = target; record.targetHash = digest(original); record.savedOutlineContinuation = continuation
+      record.preparationSource = resume.manifest.references.preparation
+      saveExecutionRecord(bound, record)
+    }
     if (!target) {
       const directoryId = invocationId.slice(0, 8)
       const roots = Object.fromEntries(Object.entries(original.roots).map(([key, directory]) => [key, path.join(directory, directoryId)]))
@@ -2895,14 +3011,24 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
       record.target = target; record.targetHash = digest(original)
       saveExecutionRecord(bound, record)
     }
-    const templatesPath = path.join(target.isolationRoot, planning ? 'planning-native-templates.json' : 'saved-native-templates.json')
+    const resumeEvidence = resume ? `${bound.executionRecordPath}.evidence` : null
+    if (resume) fs.mkdirSync(resumeEvidence, { recursive: true })
+    const templatesPath = path.join(resumeEvidence ?? target.isolationRoot, planning ? 'planning-native-templates.json' : 'saved-native-templates.json')
     const common = { ...options, ...bound, target, invocationId, nativeAction, caseId, operations, templatesPath,
       sceneId: policy.sceneId, chapterNumber: policy.chapterNumber, scenarioRevision: policy.scenarioRevision,
       attemptPolicy: policy.attemptPolicy, evaluationPolicy: policy.evaluationPolicy, driverHash: productionBridgeHash(),
       approval, firstReview, ledgerPath: record.ledgerPath ?? options.ledgerPath }
     if (record.ledgerPath && path.resolve(record.ledgerPath) !== path.resolve(options.ledgerPath)) throw new Error('SAVED_NATIVE_LEDGER_DRIFT')
     record.ledgerPath = options.ledgerPath
-    if (!record.prepared) {
+    if (resume && !record.preflight) {
+      if (nativeAction === 'complete') throw new Error('SAVED_NATIVE_PREPARATION_REQUIRED')
+      record.preflight = bridge({ ...common, parityHash: resume.preparation.physicalProject.parityHash,
+        action: 'resume-preflight', mode: 'synthetic', operations: operationsFor(caseId, nativeAction, 'resume-preflight'),
+        evidenceRoot: path.join(resumeEvidence, 'preflight') })
+      record.templatesHash = digest(fs.readFileSync(templatesPath))
+      saveExecutionRecord(bound, record)
+    }
+    if (!resume && !record.prepared) {
       if (nativeAction === 'complete') throw new Error('SAVED_NATIVE_PREPARATION_REQUIRED')
       record.prepared = bridge({ ...common, mode: 'synthetic', nativeAction: 'prepare', action: 'prepare',
         operations: operationsFor(caseId, 'prepare') })
@@ -2910,11 +3036,18 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
     }
     if (nativeAction === 'prepare') return { status: 'prepared', physicalModelRequests: 0, prepared: record.prepared,
       executionRecordPath: bound.executionRecordPath, qualification: 'non-qualification-diagnostic' }
-    if (options.mode === 'real' && !record.results[nativeAction]) copyIsolatedRealModelConfig(original, target.roots)
-    const result = executeRecordedStep({ ...common, parityHash: record.prepared.physicalProject.parityHash,
-      evidenceRoot: path.join(target.isolationRoot, nativeAction) }, bound, record, nativeAction, bridge)
+    if (resume && digest(fs.readFileSync(templatesPath)) !== record.templatesHash) throw new Error('PLANNING_RESUME_TEMPLATE_DRIFT')
+    if (!resume && options.mode === 'real' && !record.results[nativeAction]) copyIsolatedRealModelConfig(original, target.roots)
+    const result = executeRecordedStep({ ...common, parityHash: (resume ? record.preflight : record.prepared).physicalProject.parityHash,
+      evidenceRoot: path.join(resumeEvidence ?? target.isolationRoot, nativeAction) }, bound, record, nativeAction, bridge)
+    const journey = resume ? fs.readFileSync(options.ledgerPath, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+      .filter(row => row.type === 'reserve' && row.binding.invocationId === invocationId && row.binding.caseId === caseId) : []
     return { status: result.status === 'passed' ? 'pending-independent-oracle-review' : 'failed',
       qualification: 'non-qualification-diagnostic', formalDenominatorContribution: 0, results: [result],
+      ...(resume ? { savedOutlineContinuation: continuation, journeyRequests: { historical: resume.manifest.attempts.length,
+        continuation: new Set(journey.map(row => row.attemptId).filter(id => !resume.manifest.attempts.some(item => item.attemptId === id))).size,
+        total: new Set(journey.map(row => row.attemptId)).size,
+        historicalUnknown: resume.manifest.attempts.filter(item => item.terminal === 'unknown').map(item => item.attemptId) } } : {}),
       executionRecordPath: bound.executionRecordPath, physicalModelRequests: result.physicalModelRequests ?? 0,
       notRun: result.status === 'passed' ? [] : planning ? operations.filter(item => !result.operations?.some(done => done.operation === item.id)).map(item => item.id) : ['control-review'] }
   }
