@@ -19,7 +19,7 @@ import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { launchCreativeWorkflow } from '../../services/workflows/creative-workflow-launcher'
 import { createArchitectureWorkflow } from '../../services/workflows/architecture-workflow'
-import { validPlotOutlineAuthorPrefix } from '../../shared/plot-outline-contract'
+import { renderPlotOutlineSynopsis, validPlotOutlineAuthorPrefix } from '../../shared/plot-outline-contract'
 import { useWorkflowStore } from '../../stores/workflow-store'
 import { globalEventBus } from '../../shared/event-bus'
 import {
@@ -241,10 +241,19 @@ function ArchFileViewerSession({
         let submission = pending
         if (!submission) {
           const committedRange = { from: progress.range.from, to: Number(authorEndRef.current) }
-          if (!validPlotOutlineAuthorPrefix(md, progress, committedRange)) throw new Error(text('请保留连续完整章节，并移除所选保存终点之后的未完成内容。原有范围外内容须保持不变。', 'Keep complete consecutive chapters and remove incomplete content after the selected ending chapter. Preserve the original content outside this range.'))
+          let synopsis = md.trimEnd()
+          if (!validPlotOutlineAuthorPrefix(synopsis, progress, committedRange)) {
+            const expected = progress.sourceExpected
+            const title = renderPlotOutlineSynopsis('', expected.totalChapters, expected)
+            const generatedTo = Math.min(progress.range.from + (progress.composition?.chapters?.length ?? 0), progress.range.to)
+            const oldTail = renderPlotOutlineSynopsis('', generatedTo, expected).slice(title.length)
+            if (oldTail && candidate.draft.endsWith(oldTail) && synopsis.endsWith(oldTail)) synopsis = synopsis.slice(0, -oldTail.length)
+            synopsis = synopsis.trimEnd() + renderPlotOutlineSynopsis('', committedRange.to, expected).slice(title.length)
+          }
+          if (!validPlotOutlineAuthorPrefix(synopsis, progress, committedRange)) throw new Error(text('请保留连续完整章节，并移除所选保存终点之后的未完成内容。原有范围外内容须保持不变。', 'Keep complete consecutive chapters and remove incomplete content after the selected ending chapter. Preserve the original content outside this range.'))
           submission = {
             ...submittedSnapshot, status: 'pending', channel: 'db:project-core-synopsis-commit',
-            request: { synopsis: md, expected: progress.sourceExpected,
+            request: { synopsis, expected: progress.sourceExpected,
               authorRecovery: { sourceHandle: candidate.sourceHandle, leaseEpoch: candidate.leaseEpoch, operationId, committedRange } },
           } satisfies PlanningRecoverySaveSnapshot
           useEditorStore.getState().setPlanningSaveSnapshot(tabId, submission)
@@ -256,7 +265,15 @@ function ArchFileViewerSession({
         if (!result.success && !pending && isProjectSessionCurrent(session)) useEditorStore.getState().setPlanningSaveSnapshot(tabId, undefined)
         requireIpcSuccess(result, '保存恢复大纲')
         if (!isProjectSessionCurrent(session)) return
-        submittedSnapshot = submission
+        submittedSnapshot = { ...submission, content: submission.request.synopsis }
+        const currentTab = useEditorStore.getState().tabs.find(tab => tab.id === tabId)
+        if (submission.content !== submittedSnapshot.content && currentTab?.content === submission.content
+          && (currentTab.contentRevision ?? 0) === submission.contentRevision && currentContentRef.current === submission.content) {
+          currentContentRef.current = submittedSnapshot.content
+          setEditorContent(submittedSnapshot.content)
+          useEditorStore.getState().syncTabContent(tabId, submittedSnapshot.content)
+          submittedSnapshot.contentRevision = useEditorStore.getState().tabs.find(tab => tab.id === tabId)?.contentRevision ?? 0
+        }
         useEditorStore.getState().setPlanningSaveSnapshot(tabId, { ...submission, status: 'saved' })
         setRecoveryError('')
       } else if (filePath.startsWith('ai-novel://core/')) {
