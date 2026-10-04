@@ -617,14 +617,15 @@ export function inspectTarget(target) {
 
 export function createProductionTargets(baselineRoot, output, { development = false, modelId, phase, modelSources, resumeSourcePath } = {}) {
   const r3 = phase === 'r3-native-revision-diagnostic'
+  const saved = phase === 'saved-native-review-diagnostic'
   const planning = phase === 'planning-native-diagnostic'
   const resume = resumeSourcePath ? readPlanningResumeSource(resumeSourcePath) : null
   if (resume && (!planning || development || baselineRoot || modelId || modelSources)) fail('PLANNING_RESUME_FREEZE_SCOPE_MISMATCH')
   const stages = planning ? PLANNING_STAGE_MODELS : QUALIFICATION_STAGE_MODELS
-  const staged = !phase || planning || phase === 'saved-native-review-diagnostic' || QUALIFICATION_STAGE_MODELS.scopes.some(scope => scope.phase === phase)
-  if (phase && !r3 && !staged || modelSources && !r3 && !staged || (r3 || staged) && !development && !modelSources && !resume) fail('REGISTERED_MODEL_SOURCES_REQUIRED')
+  const staged = !phase || planning || QUALIFICATION_STAGE_MODELS.scopes.some(scope => scope.phase === phase)
+  if (phase && !r3 && !saved && !staged || modelSources && !r3 && !saved && !staged || (r3 || saved || staged) && !development && !modelSources && !resume) fail('REGISTERED_MODEL_SOURCES_REQUIRED')
   if (r3 && !development) git(ROOT, ['merge-base', '--is-ancestor', R3_NATIVE_REVISION_DIAGNOSTIC.requiredProductSha, 'HEAD'])
-  if (staged && !development) git(ROOT, ['merge-base', '--is-ancestor', QUALIFICATION_STAGE_MODELS.requiredProductSha, 'HEAD'])
+  if ((staged || saved) && !development) git(ROOT, ['merge-base', '--is-ancestor', QUALIFICATION_STAGE_MODELS.requiredProductSha, 'HEAD'])
   const outputPath = path.resolve(output)
   if (!inside(CACHE, path.dirname(outputPath))) fail('TARGET_OUTPUT_NOT_NEW_PRIVATE_FILE')
   fs.mkdirSync(path.dirname(outputPath), { recursive: true })
@@ -665,11 +666,13 @@ export function createProductionTargets(baselineRoot, output, { development = fa
       isolationRoot, roots, fixture: { path: fixturePath, format: fixture.format, semanticHash: fixture.semanticHash, parametersHash: fixture.parametersHash },
       driver: { kind: 'production-command-physical-project-v2', adapterRoot: ROOT, path: PRODUCTION_BRIDGE, sha256: productionBridgeHash() },
       ...(r3 ? { modelId: R3_NATIVE_REVISION_DIAGNOSTIC.model.id, r3StageProfiles: R3_NATIVE_REVISION_DIAGNOSTIC.profiles }
+        : saved ? { modelId: SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile.profileId }
         : staged ? { modelId: stages.profiles.flash.profileId, stageModels: stages }
           : modelId ? { modelId } : {}), ...(development ? { developmentOnly: true } : {}) }
-    if ((r3 || staged) && !development) {
+    if ((r3 || saved || staged) && !development) {
       if (modelId && modelId !== target.modelId) fail('R3_NATIVE_MODEL_MISMATCH')
-      const profiles = Object.values(staged ? stages.profiles : target.r3StageProfiles).map(profile => {
+      const profiles = (saved ? [SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile]
+        : Object.values(staged ? stages.profiles : target.r3StageProfiles)).map(profile => {
         const source = modelSources[profile.profileId]
         if (!source || !path.isAbsolute(source.sourceRoot) || source.profileId !== profile.profileId
           || source.configurationHash !== profile.configurationHash) fail('R3_NATIVE_MODEL_MISMATCH')
@@ -986,6 +989,12 @@ export function updateLedger(file, event, options = {}) {
       const planningBoundary = options.campaignMode === 'real' ? protocol.historicalPlanningSavedOutlineBoundary : options.historicalPlanningSavedOutlineBoundary
       const trustedPlanningEvents = planningBoundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedSavedEvents, planningBoundary) : trustedSavedEvents
+      const planning91Boundary = options.campaignMode === 'real' ? protocol.historicalPlanning91f59903Boundary : options.historicalPlanning91f59903Boundary
+      const trustedPlanning91Events = planning91Boundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedPlanningEvents, planning91Boundary) : trustedPlanningEvents
+      const savedPostUiBoundary = options.campaignMode === 'real' ? protocol.historicalSavedPostUi94e9b048Boundary : options.historicalSavedPostUi94e9b048Boundary
+      const trustedSavedPostUiEvents = savedPostUiBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedPlanning91Events, savedPostUiBoundary) : trustedPlanning91Events
       // 阶段决定首选分配桶：early 阶段用 early*，post-UI 重跑用 postUi*；
       // 同一 slot 的重复发送或已超出计划样本量的发送归入失败/修复余量。
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
@@ -1020,7 +1029,8 @@ export function updateLedger(file, event, options = {}) {
         }
         if (binding.phase === 'saved-native-review-diagnostic') {
           const policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC
-          const prior = [...reserved.values()].filter(row => row.binding.phase === binding.phase)
+          const prior = [...reserved.values()].filter(row => row.binding.phase === binding.phase
+            && policy.sources.some(source => source.invocationId === row.binding.invocationId))
           const matches = prior.filter(row => row.binding.operation === binding.operation)
           const index = policy.operations.findIndex(item => item.id === binding.operation)
           const kind = policy.operations[index].kind
@@ -1123,7 +1133,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedPlanningEvents
+          const superseded = index >= trustedHistoricalEvents && index < trustedSavedPostUiEvents
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)
@@ -1326,7 +1336,7 @@ export function adjudicateCandidateBatch(batchPath, reviewsPath) {
 
 export function main(argv) {
   let [command = 'help', ...rest] = argv
-  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <register-batch|adjudicate-batch|freeze-targets|development-synthetic|shared-input-diagnostic|separated-review-diagnostic|baseline-probe|dry-run|early-budget|early-context|early-review|full|c16-c18> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>] [--batch <registered batch.json> --round 1|2|3 (real final only)]; register-batch: --targets <frozen targets> --output <new private batch.json>; adjudicate-batch: --batch <batch.json> --reviews <two independent case reviews.json>; shared-input-diagnostic/separated-review-diagnostic: --diagnostic-input <frozen private JSON> --mode synthetic|real [--targets <frozen targets> | --baseline-root <baseline> --output <new private targets>] ; formal freeze-targets: --model-sources <private registered Flash profile sources.json> --output <new private targets>; R3 freeze-targets: --phase r3-native-revision-diagnostic --diagnostic-models <private profile source roots.json> --output <new private targets>; r3-native-revision-diagnostic: --targets <frozen targets> --diagnostic-run 1|2|3 --milestone diagnostic --diagnostic-input <frozen R3.context.json> --mode real --physical-ledger <canonical ledger>; saved-native-review-diagnostic: --targets <frozen Flash cap32 targets> --milestone diagnostic --diagnostic-input <fixed private JSON> --native-case saved-c18-b-negative|saved-c17-a-control --native-action prepare|review|complete --mode synthetic|real [--approval <original report reference JSON>] [--physical-ledger <canonical ledger, real mode>]; planning-native-diagnostic: --targets <frozen Flash cap64 targets> --milestone diagnostic --diagnostic-input <fixed private JSON> --native-case planning-six-chapters --native-action prepare|review|resume-from-saved-outline|complete --mode synthetic|real [--resume-source <fixed saved-outline manifest; also required for its freeze-targets and complete>] [--approval <approved original report finding IDs JSON>] [--physical-ledger <canonical ledger, real mode>]; freeze-targets/development-synthetic: --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full|c16-c18 (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
+  if (['help', '--help', '-h'].includes(command)) return { usage: 'node scripts/quality-modernization-run.mjs <register-batch|adjudicate-batch|freeze-targets|development-synthetic|shared-input-diagnostic|separated-review-diagnostic|baseline-probe|dry-run|early-budget|early-context|early-review|full|c16-c18> --targets <json> [--milestone early|post-ui|final] [--mode synthetic|real] [--physical-ledger <existing d103 ledger, real only>] [--batch <registered batch.json> --round 1|2|3 (real final only)]; register-batch: --targets <frozen targets> --output <new private batch.json>; adjudicate-batch: --batch <batch.json> --reviews <two independent case reviews.json>; shared-input-diagnostic/separated-review-diagnostic: --diagnostic-input <frozen private JSON> --mode synthetic|real [--targets <frozen targets> | --baseline-root <baseline> --output <new private targets>] ; formal freeze-targets: --model-sources <private registered Flash profile sources.json> --output <new private targets>; R3 freeze-targets: --phase r3-native-revision-diagnostic --diagnostic-models <private profile source roots.json> --output <new private targets>; r3-native-revision-diagnostic: --targets <frozen targets> --diagnostic-run 1|2|3 --milestone diagnostic --diagnostic-input <frozen R3.context.json> --mode real --physical-ledger <canonical ledger>; saved-native-review-diagnostic: --targets <frozen saved diagnostic Pro cap32 targets> --milestone diagnostic --diagnostic-input <fixed private JSON> --native-case saved-c18-b-negative|saved-c17-a-control --native-action prepare|review|complete --mode synthetic|real [--approval <original report reference JSON>] [--physical-ledger <canonical ledger, real mode>]; planning-native-diagnostic: --targets <frozen Flash cap64 targets> --milestone diagnostic --diagnostic-input <fixed private JSON> --native-case planning-six-chapters --native-action prepare|review|resume-from-saved-outline|complete --mode synthetic|real [--resume-source <fixed saved-outline manifest; also required for its freeze-targets and complete>] [--approval <approved original report finding IDs JSON>] [--physical-ledger <canonical ledger, real mode>]; freeze-targets/development-synthetic: --output <new private targets.json> [--model-id <safely provisioned id>] [--scenario early-budget|early-context|early-review|full|c16-c18 (development-synthetic only; default early-budget)]', physicalModelRequests: 0 }
   if (command.startsWith('--')) { rest = argv; command = 'phase-options' }
   const args = {}
   for (let i = 0; i < rest.length; i++) {

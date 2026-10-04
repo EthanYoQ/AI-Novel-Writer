@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { R3_NATIVE_REVISION_DIAGNOSTIC as policy, productionScenario, qualificationBridgeWindows, createOperationDispatchGate,
-  assertForwardReasoning, readR3NativeSource, streamEventStructure, r3DiagnosticInvocation, r3ModelForOperation, copyIsolatedRealModelConfig, QUALIFICATION_STAGE_MODELS,
+  assertForwardReasoning, readR3NativeSource, streamEventStructure, r3DiagnosticInvocation, r3ModelForOperation, copyIsolatedRealModelConfig, QUALIFICATION_STAGE_MODELS, modelConfigurationHash,
   SAVED_NATIVE_REVIEW_DIAGNOSTIC as savedPolicy, savedNativeOperations, reviewLengthRecoveryFor,
   PLANNING_NATIVE_DIAGNOSTIC as planningPolicy, planningNativeOperations, planningOutlineState, structuredRecoveryState, validatePairedReceipt } from '../quality-modernization-driver.mjs'
 import { ROOT, CAMPAIGN_ID, currentProtocolBinding, selectPhase, forwardReasoningFor,
@@ -214,6 +214,82 @@ test('planning ledger derives the action envelope and rejects spent or shared ro
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 }, 30000)
 
+test('saved Pro registration preserves the source cases and verifies the complete model and wire', () => {
+  const previous = protocol.historicalSavedNativeRegistration94e9b048
+  assert.deepEqual(selectPhase(protocol, 'saved-native-review-diagnostic', 'diagnostic'), { ...savedPolicy, phase: 'saved-native-review-diagnostic' })
+  assert.deepEqual(savedPolicy.sources.map(source => ({ ...source, invocationId: undefined })), previous.sources.map(source => ({ ...source, invocationId: undefined })))
+  assert.ok(savedPolicy.sources.every(source => !previous.sources.some(old => old.invocationId === source.invocationId)))
+  for (const key of ['diagnosticInputHash', 'operations', 'attemptPolicy', 'evaluationPolicy', 'stop', 'expectedPhysicalRequests', 'maxPhysicalRequests'])
+    assert.deepEqual(savedPolicy[key], previous[key])
+  assert.deepEqual(previous.modelProfile, QUALIFICATION_STAGE_MODELS.profiles.flash)
+  assert.equal(savedPolicy.modelProfile.model.modelName, 'deepseek-v4-pro')
+  const phase = 'saved-native-review-diagnostic', registration = forwardReasoningFor(protocol, phase, 'diagnostic')
+  const model = savedPolicy.modelProfile.model
+  const input = { arm: 'candidate', phase, milestone: 'diagnostic', caseId: savedPolicy.caseIds[0], operationId: 'negative-review',
+    creativeStrategy: 'auto', model, resolution: { requested: 'high', effective: 'high', status: 'mapped', source: 'model-override' },
+    body: { model: model.modelName, temperature: 0, max_tokens: 32768, thinking: { type: 'enabled' }, reasoning_effort: 'high' } }
+  assert.doesNotThrow(() => assertForwardReasoning(registration, input))
+  for (const change of [{ model: 'deepseek-flash' }, { temperature: 1 }, { max_tokens: 32769 }, { reasoning_effort: 'low' }])
+    assert.throws(() => assertForwardReasoning(registration, { ...input, body: { ...input.body, ...change } }), /MISMATCH/)
+  assert.throws(() => assertForwardReasoning(registration, { ...input, model: { ...model, name: 'changed' } }), /R3_NATIVE_MODEL_MISMATCH/)
+  const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8').replaceAll('\r\n', '\n')
+  const start = fixture.indexOf('    let stageModels = null'), end = fixture.indexOf("    if (request.mode === 'real')", start)
+  const profileStart = fixture.indexOf('  const stageProfiles ='), profileEnd = fixture.indexOf('  const registeredWindow =', profileStart)
+  const choose = new Function('target', 'configured', 'savedPolicy', 'assert', 'modelConfigurationHash', `
+    const savedRun = true, planningRun = false, r3Run = false,
+      SAVED_NATIVE_REVIEW_DIAGNOSTIC = savedPolicy, request = { mode: 'real' }, path = { join: () => '' },
+      json = () => configured;
+    let model, secrets;
+    ${fixture.slice(profileStart, profileEnd)}
+    ${fixture.slice(start, end)}
+    return model;
+  `)
+  const configured = [{ ...model, apiKey: 'synthetic-never-network' }], target = { modelId: model.id, roots: { config: 'offline' } }
+  assert.deepEqual(choose(target, configured, savedPolicy, assert, modelConfigurationHash), configured[0])
+  assert.throws(() => choose({ ...target, modelId: previous.modelProfile.profileId }, configured, savedPolicy, assert, modelConfigurationHash), /REGISTERED_STAGE_MODEL_MISMATCH/)
+  assert.throws(() => choose(target, [{ ...configured[0], name: 'changed' }], savedPolicy, assert, modelConfigurationHash), /R3_NATIVE_MODEL_MISMATCH/)
+})
+
+test('saved Pro budget excludes closed Flash identities but preserves same-group history and global replay checks', () => {
+  const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', `saved-forward-${randomUUID()}`)
+  fs.mkdirSync(directory, { recursive: true })
+  try {
+    const slot = savedPolicy.sources[0], profile = savedPolicy.modelProfile
+    const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', ...currentProtocolBinding(),
+      codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
+      phase: 'saved-native-review-diagnostic', milestone: 'diagnostic', caseId: slot.caseId, operation: 'negative-review', invocationId: slot.invocationId,
+      stageModel: { profileId: profile.profileId, configurationHash: profile.configurationHash },
+      diagnosticInputHash: savedPolicy.diagnosticInputHash, diagnosticSourceHash: hash(slot), evaluationPolicyHash: hash(savedPolicy.evaluationPolicy),
+      actual: { attemptId: 'new', runId: 'run', rootActionId: 'root', projectId: 'project', epoch: 'epoch', purpose: 'review-chapter' } }
+    const ledger = path.join(directory, 'ledger.jsonl')
+    const old = protocol.historicalSavedNativeRegistration94e9b048
+    const historical = (invocationId, terminal = 'settle', finishReason = 'stop') => {
+      const rows = [{ type: 'reserve', attemptId: 'candidate:old', allocation: 'nonQualificationDiagnostic',
+        binding: { ...binding, protocolHash: 'f'.repeat(64), invocationId } },
+      { type: 'dispatch', attemptId: 'candidate:old' }, { type: terminal, attemptId: 'candidate:old', finishReason }]
+      const raw = rows.map(row => JSON.stringify(row)).join('\n') + '\n'; fs.writeFileSync(ledger, raw)
+      return { campaignMode: 'synthetic', historicalSavedPostUi94e9b048Boundary: { fromEventCount: 0, eventCount: 3,
+        rawBytesSha256: hash(raw), protocolRevision: binding.protocolRevision, protocolHash: 'f'.repeat(64),
+        reserveAttempts: [{ attemptId: 'candidate:old', invocationId, terminal }] } }
+    }
+    const reserve = (options, id = 'candidate:new', actual = binding.actual) => updateLedger(ledger,
+      { type: 'reserve', attemptId: id, binding: { ...binding, actual } }, options)
+    let options = historical(old.sources[0].invocationId)
+    assert.throws(() => reserve(options, 'candidate:old'), /INVALID_RESERVATION/)
+    assert.doesNotThrow(() => reserve(options))
+    options = historical(slot.invocationId, 'unknown')
+    assert.throws(() => reserve(options), /SAVED_NATIVE_ATTEMPT_UNAVAILABLE/)
+    options = historical(slot.invocationId)
+    assert.throws(() => reserve(options), /SAVED_NATIVE_ATTEMPT_UNAVAILABLE/, 'a changed protocol hash cannot refund a settled primary')
+    options = historical(slot.invocationId, 'settle', 'length')
+    assert.throws(() => reserve(options, 'candidate:new', { ...binding.actual, rootActionId: 'different-root' }), /SAVED_NATIVE_ATTEMPT_UNAVAILABLE/)
+    assert.doesNotThrow(() => reserve(options), 'same-root registered length replacement remains available')
+    options = historical(old.sources[0].invocationId)
+    fs.writeFileSync(ledger, fs.readFileSync(ledger, 'utf8').replace('nonQualificationDiagnostic', 'changedAllocation'))
+    assert.throws(() => reserve(options), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
 test('saved native mapping permits its real bounded recovery sequences and rejects a fifth request per operation', () => {
   const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', `saved-recovery-${randomUUID()}`)
   fs.mkdirSync(directory, { recursive: true })
@@ -274,7 +350,7 @@ test('saved native checks reject cross-case operations and spent or unknown requ
   const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', `saved-native-${randomUUID()}`)
   fs.mkdirSync(directory, { recursive: true })
   try {
-    const slot = scenario.sources[0], profile = QUALIFICATION_STAGE_MODELS.profiles.flash
+    const slot = scenario.sources[0], profile = savedPolicy.modelProfile
     const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', ...currentProtocolBinding(),
       codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
       phase, milestone: 'diagnostic', caseId: slot.caseId, operation: 'negative-review', invocationId: slot.invocationId,

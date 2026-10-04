@@ -119,15 +119,15 @@ export function qualificationModelForOperation(phase, milestone, operationId) {
 
 export const SAVED_NATIVE_REVIEW_DIAGNOSTIC = Object.freeze({
   sceneId: '场景1', chapterNumber: 2, milestone: 'diagnostic', arms: ['candidate'], nonQualification: true,
-  scenarioRevision: 'saved-native-review-two-cases-v1', formalDenominatorContribution: 0,
+  scenarioRevision: 'saved-native-review-pro-two-cases-v2', formalDenominatorContribution: 0,
   expectedPhysicalRequests: 4, maxPhysicalRequests: 16,
   diagnosticInputHash: '0d1ceb6e9c24e612e5fb035e62bc293eb5b971aa64b97fa46d3178b5f6436041',
   caseIds: ['saved-c18-b-negative', 'saved-c17-a-control'],
   sources: [
-    { caseId: 'saved-c18-b-negative', provenance: 'C18-B', invocationId: 'eb8a6d91-a23d-4f57-94ac-b07f8dc04d32',
+    { caseId: 'saved-c18-b-negative', provenance: 'C18-B', invocationId: '3c521df7-f5be-4033-8c11-e7417b3daf13',
       projectId: '607d093c-f681-4edc-a391-32624e39502d', epoch: '73236077-1daf-4089-8082-e8cf95c9e9d8',
       contentSha256: '4f0b7930b9c56a2520f5de1b12ab46d29ac4284932d6783b66c6b6d85f775a11' },
-    { caseId: 'saved-c17-a-control', provenance: 'C17-A', invocationId: '284aa0cc-ae44-43a8-86d0-a7c7e403c8fb',
+    { caseId: 'saved-c17-a-control', provenance: 'C17-A', invocationId: '4fddc1e9-f2c7-4a38-ace0-5faad3c2b2a5',
       projectId: '00c718a0-851d-43bf-8d66-a145210072ac', epoch: '70ffe6fb-ced1-43fb-9d4f-0faae3aa72b5',
       contentSha256: '80429e53ab637acddb37ea054a034998251e9306df4dac74c4dd71c79fa607e2' },
   ],
@@ -145,7 +145,7 @@ export const SAVED_NATIVE_REVIEW_DIAGNOSTIC = Object.freeze({
   evaluationPolicy: { ...AI_REVIEW_FINAL_MANUSCRIPT_POLICY, caseIds: ['saved-c18-b-negative', 'saved-c17-a-control'],
     confirmation: 'agent-semantic-approval-references-original-report-and-native-findings',
     physicalRequests: { minimum: 1, maximum: 16, manuscriptMinimum: 1, manuscriptMaximum: 12 } },
-  modelProfile: QUALIFICATION_STAGE_MODELS.profiles.flash,
+  modelProfile: {"profileId":"e764a293-6736-4d9e-97d1-f56b452c086c","configurationHash":"a17de74faa2a1ea029cb7a144c4df074107274ea25cb2555f518f5214d873421","model":{"id":"e764a293-6736-4d9e-97d1-f56b452c086c","name":"Thread12 official DeepSeek V4 Pro high 32768","provider":"deepseek","protocol":"openai","modelName":"deepseek-v4-pro","baseUrl":"https://api.deepseek.com","temperature":0,"maxTokens":32768,"purposes":["generation","refinement","summary"],"reasoningOverride":"high","capabilities":{"contextWindowTokens":1000000,"maxOutputTokens":384000,"reasoning":true,"structuredOutput":true,"usage":true},"capabilitySources":{"contextWindowTokens":"preset","maxOutputTokens":"preset","reasoning":"preset","structuredOutput":"preset","usage":"preset"},"reasoningMapping":{"adapter":"deepseek-v4-thinking","supportedEfforts":["off","low","high","max"],"providerValues":{"off":"disabled","low":"low","high":"high","max":"max"},"requestAliases":{"medium":"high"}}}},
   stop: 'negative-detection-or-closure-or-technical-failure-ends-check-control-NOT_RUN',
 })
 
@@ -3037,7 +3037,8 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
     if (nativeAction === 'prepare') return { status: 'prepared', physicalModelRequests: 0, prepared: record.prepared,
       executionRecordPath: bound.executionRecordPath, qualification: 'non-qualification-diagnostic' }
     if (resume && digest(fs.readFileSync(templatesPath)) !== record.templatesHash) throw new Error('PLANNING_RESUME_TEMPLATE_DRIFT')
-    if (!resume && options.mode === 'real' && !record.results[nativeAction]) copyIsolatedRealModelConfig(original, target.roots)
+    if (!resume && options.mode === 'real' && !record.results[nativeAction]) copyIsolatedRealModelConfig(original, target.roots,
+      planning ? undefined : policy.modelProfile.configurationHash)
     const result = executeRecordedStep({ ...common, parityHash: (resume ? record.preflight : record.prepared).physicalProject.parityHash,
       evidenceRoot: path.join(resumeEvidence ?? target.isolationRoot, nativeAction) }, bound, record, nativeAction, bridge)
     const journey = resume ? fs.readFileSync(options.ledgerPath, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))

@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { productionScenario, fullExecutionSchedule, runProductionPhasePair, executionRecordIdentity,
   QUALIFICATION_STAGE_MODELS, qualificationModelForOperation, assertForwardReasoning, copyIsolatedRealModelConfig,
   createOperationDispatchGate, reviewLengthRecoveryFor, scenarioAuthorSetting, R3_NATIVE_REVISION_DIAGNOSTIC, modelConfigurationHash,
-  selectOwnerDispatch } from '../quality-modernization-driver.mjs'
+  selectOwnerDispatch, SAVED_NATIVE_REVIEW_DIAGNOSTIC } from '../quality-modernization-driver.mjs'
 import { ROOT, validatePair, candidateBatchSlots, assertCandidateSlotAvailable, aggregateCandidateJudgments, selectPhase, hash, adjudicateCandidateBatch,
   forwardReasoningFor, forwardQualificationWindowFor, buildFixtureExports, currentProtocolBinding } from '../quality-modernization-run.mjs'
 import { targetUnitRange } from '../quality-modernization-receipt.mjs'
@@ -302,7 +302,7 @@ test('adjudication binds all terminal states to the batch and only arbitrates di
     assert.equal(decision.silentHardConstraint, true)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
-test('freeze consumer copies the registered Flash source for each formal or R3 phase and rejects drift', () => {
+test('freeze consumer copies saved Pro and formal or R3 Flash sources and rejects drift', () => {
   const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/single-model-freeze-'))
   const profile = QUALIFICATION_STAGE_MODELS.profiles.flash
   const sourceRoot = path.join(directory, 'source')
@@ -314,7 +314,7 @@ test('freeze consumer copies the registered Flash source for each formal or R3 p
   const start = runner.indexOf('export function createProductionTargets(')
   const body = runner.slice(start, runner.indexOf('export function probeTarget(', start)).replace('export function', 'function')
   const inspected = []
-  const dependencies = { fs, path, ROOT, CACHE: directory, QUALIFICATION_STAGE_MODELS, R3_NATIVE_REVISION_DIAGNOSTIC,
+  const dependencies = { fs, path, ROOT, CACHE: directory, QUALIFICATION_STAGE_MODELS, R3_NATIVE_REVISION_DIAGNOSTIC, SAVED_NATIVE_REVIEW_DIAGNOSTIC,
     CANDIDATE_ONLY_PROTOCOL_REVISION: revision, PRODUCTION_BRIDGE: 'scripts/fixtures/quality-modernization-production.fixture.mjs',
     fail: code => { throw new Error(code) }, git: (_root, args) => args[0] === 'rev-parse' ? 'a'.repeat(40) : '',
     inside: (root, target) => !path.relative(root, target).startsWith('..') && !path.isAbsolute(path.relative(root, target)),
@@ -328,8 +328,9 @@ test('freeze consumer copies the registered Flash source for each formal or R3 p
     } }
   const freeze = new Function(...Object.keys(dependencies), body + '\nreturn createProductionTargets')(...Object.values(dependencies))
   try {
-    for (const phase of ['full', 'r3-native-revision-diagnostic']) {
-      const phaseProfile = phase === 'full' ? profile : R3_NATIVE_REVISION_DIAGNOSTIC.profiles.flash
+    for (const phase of ['full', 'r3-native-revision-diagnostic', 'saved-native-review-diagnostic']) {
+      const phaseProfile = phase === 'full' ? profile : phase === 'saved-native-review-diagnostic'
+        ? SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile : R3_NATIVE_REVISION_DIAGNOSTIC.profiles.flash
       const phaseModel = { ...phaseProfile.model, apiKey: 'synthetic-never-network' }
       fs.writeFileSync(modelFile, JSON.stringify([phaseModel]))
       const phaseSource = { sourceRoot, profileId: phaseProfile.profileId, configurationHash: phaseProfile.configurationHash }
@@ -338,9 +339,25 @@ test('freeze consumer copies the registered Flash source for each formal or R3 p
       assert.deepEqual(JSON.parse(fs.readFileSync(path.join(inspected.at(-1).roots.config, 'models.json'))), [phaseModel])
       assert.equal(result.physicalModelRequests, 0)
       assert.equal(Object.keys(result.targets).length, 1)
-      assert.equal(result.targets.candidate.modelId, profile.profileId)
+      assert.equal(result.targets.candidate.modelId, phaseProfile.profileId)
+      const target = result.targets.candidate
+      if (phase === 'saved-native-review-diagnostic') {
+        assert.equal(target.stageModels, undefined)
+        assert.deepEqual(target.modelSources, { [phaseProfile.profileId]: phaseSource })
+        const destination = path.join(directory, 'saved-copy'); fs.mkdirSync(destination)
+        copyIsolatedRealModelConfig(target, { config: destination }, phaseProfile.configurationHash)
+        assert.deepEqual(JSON.parse(fs.readFileSync(path.join(destination, 'models.json'))), [phaseModel])
+        fs.writeFileSync(path.join(target.roots.config, 'models.json'), JSON.stringify([{ ...phaseModel, name: 'changed' }]))
+        assert.throws(() => copyIsolatedRealModelConfig(target, { config: destination }, phaseProfile.configurationHash), /CONFIGURATION_DRIFT/)
+        for (const change of [{ profileId: profile.profileId }, { configurationHash: profile.configurationHash }])
+          assert.throws(() => freeze(undefined, path.join(directory, randomUUID() + '.json'),
+            { phase, modelSources: { [phaseProfile.profileId]: { ...phaseSource, ...change } } }), /MODEL_MISMATCH/)
+        fs.writeFileSync(modelFile, JSON.stringify([{ ...phaseModel, capabilities: { ...phaseModel.capabilities, contextWindowTokens: 999999 } }]))
+        assert.throws(() => freeze(undefined, path.join(directory, randomUUID() + '.json'),
+          { phase, modelSources: { [phaseProfile.profileId]: phaseSource } }), /MODEL_MISMATCH/)
+      }
     }
-    assert.equal(inspected.length, 2)
+    assert.equal(inspected.length, 3)
     assert.throws(() => freeze(undefined, path.join(directory, 'old-formal-source.json'),
       { phase: 'full', modelSources: { [profile.profileId]: { ...source,
         configurationHash: R3_NATIVE_REVISION_DIAGNOSTIC.profiles.flash.configurationHash } } }), /MODEL_MISMATCH/)

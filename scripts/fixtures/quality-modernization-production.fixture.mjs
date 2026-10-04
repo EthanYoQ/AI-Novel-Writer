@@ -253,7 +253,7 @@ test('isolated production commands persist the selected phase operations', async
   const registeredForward = forwardReasoningFor(json(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')),
     request.phase, request.milestone)
   assert.deepEqual(request.forwardReasoning ?? null, registeredForward, 'FORWARD_REGISTRATION_MISMATCH')
-  const stageProfiles = planningRun ? PLANNING_STAGE_MODELS.profiles : savedRun ? QUALIFICATION_STAGE_MODELS.profiles : registeredForward?.stageModels?.profiles
+  const stageProfiles = planningRun ? PLANNING_STAGE_MODELS.profiles : savedRun ? { saved: SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile } : registeredForward?.stageModels?.profiles
   const modelForOperation = operationId => planningRun ? PLANNING_NATIVE_DIAGNOSTIC.modelProfile : savedRun ? SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile : r3Run ? r3ModelForOperation(operationId)
     : qualificationModelForOperation(request.phase, request.milestone, operationId)
   const registeredWindow = forwardQualificationWindowFor(json(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')),
@@ -448,7 +448,8 @@ test('isolated production commands persist the selected phase operations', async
     let stageModels = null
     if (r3Run || stageProfiles) {
       const profiles = stageProfiles ?? copiedPolicy.profiles
-      assert.deepEqual(stageProfiles ? target.stageModels : target.r3StageProfiles,
+      if (savedRun) assert.equal(target.modelId, SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile.profileId, 'REGISTERED_STAGE_MODEL_MISMATCH')
+      else assert.deepEqual(stageProfiles ? target.stageModels : target.r3StageProfiles,
         stageProfiles ? planningRun ? PLANNING_STAGE_MODELS : QUALIFICATION_STAGE_MODELS : copiedPolicy.profiles, 'REGISTERED_STAGE_MODEL_MISMATCH')
       const configured = request.mode === 'real' ? json(path.join(target.roots.config, 'models.json'))
         : Object.values(profiles).map(profile => ({ ...profile.model, apiKey: 'synthetic-quality-never-network' }))

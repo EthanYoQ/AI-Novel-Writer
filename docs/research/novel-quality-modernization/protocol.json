@@ -3398,7 +3398,7 @@
         "candidate"
       ],
       "nonQualification": true,
-      "scenarioRevision": "saved-native-review-two-cases-v1",
+      "scenarioRevision": "saved-native-review-pro-two-cases-v2",
       "formalDenominatorContribution": 0,
       "expectedPhysicalRequests": 4,
       "maxPhysicalRequests": 16,
@@ -3411,7 +3411,7 @@
         {
           "caseId": "saved-c18-b-negative",
           "provenance": "C18-B",
-          "invocationId": "eb8a6d91-a23d-4f57-94ac-b07f8dc04d32",
+          "invocationId": "3c521df7-f5be-4033-8c11-e7417b3daf13",
           "projectId": "607d093c-f681-4edc-a391-32624e39502d",
           "epoch": "73236077-1daf-4089-8082-e8cf95c9e9d8",
           "contentSha256": "4f0b7930b9c56a2520f5de1b12ab46d29ac4284932d6783b66c6b6d85f775a11"
@@ -3419,7 +3419,7 @@
         {
           "caseId": "saved-c17-a-control",
           "provenance": "C17-A",
-          "invocationId": "284aa0cc-ae44-43a8-86d0-a7c7e403c8fb",
+          "invocationId": "4fddc1e9-f2c7-4a38-ace0-5faad3c2b2a5",
           "projectId": "00c718a0-851d-43bf-8d66-a145210072ac",
           "epoch": "70ffe6fb-ced1-43fb-9d4f-0faae3aa72b5",
           "contentSha256": "80429e53ab637acddb37ea054a034998251e9306df4dac74c4dd71c79fa607e2"
@@ -3508,14 +3508,14 @@
         }
       },
       "modelProfile": {
-        "profileId": "7935a372-b853-4408-9374-9fdb272a78f9",
-        "configurationHash": "9a36c2c26b83a0e2e4b3ab1bc0f998a366140c0a3bb91c8444699dd88e31ba44",
+        "profileId": "e764a293-6736-4d9e-97d1-f56b452c086c",
+        "configurationHash": "a17de74faa2a1ea029cb7a144c4df074107274ea25cb2555f518f5214d873421",
         "model": {
-          "id": "7935a372-b853-4408-9374-9fdb272a78f9",
-          "name": "R3 official DeepSeek Flash native diagnostic",
+          "id": "e764a293-6736-4d9e-97d1-f56b452c086c",
+          "name": "Thread12 official DeepSeek V4 Pro high 32768",
           "provider": "deepseek",
           "protocol": "openai",
-          "modelName": "deepseek-flash",
+          "modelName": "deepseek-v4-pro",
           "baseUrl": "https://api.deepseek.com",
           "temperature": 0,
           "maxTokens": 32768,
@@ -3526,18 +3526,18 @@
           ],
           "reasoningOverride": "high",
           "capabilities": {
-            "contextWindowTokens": 1048576,
-            "maxOutputTokens": 393216,
+            "contextWindowTokens": 1000000,
+            "maxOutputTokens": 384000,
             "reasoning": true,
             "structuredOutput": true,
             "usage": true
           },
           "capabilitySources": {
-            "contextWindowTokens": "endpoint",
-            "maxOutputTokens": "endpoint",
-            "reasoning": "manual",
-            "structuredOutput": "manual",
-            "usage": "manual"
+            "contextWindowTokens": "preset",
+            "maxOutputTokens": "preset",
+            "reasoning": "preset",
+            "structuredOutput": "preset",
+            "usage": "preset"
           },
           "reasoningMapping": {
             "adapter": "deepseek-v4-thinking",
@@ -7142,5 +7142,318 @@
       }
     ],
     "limits": "Six historical outline requests remain five STOP and one UNKNOWN. The saved six-chapter synopsis permits only the fixed diagnostic continuation. No refund, replay, literary qualification or historical reclassification."
+  },
+  "historicalSavedNativeRegistration94e9b048": {
+    "sceneId": "场景1",
+    "chapterNumber": 2,
+    "milestone": "diagnostic",
+    "arms": [
+      "candidate"
+    ],
+    "nonQualification": true,
+    "scenarioRevision": "saved-native-review-two-cases-v1",
+    "formalDenominatorContribution": 0,
+    "expectedPhysicalRequests": 4,
+    "maxPhysicalRequests": 16,
+    "diagnosticInputHash": "0d1ceb6e9c24e612e5fb035e62bc293eb5b971aa64b97fa46d3178b5f6436041",
+    "caseIds": [
+      "saved-c18-b-negative",
+      "saved-c17-a-control"
+    ],
+    "sources": [
+      {
+        "caseId": "saved-c18-b-negative",
+        "provenance": "C18-B",
+        "invocationId": "eb8a6d91-a23d-4f57-94ac-b07f8dc04d32",
+        "projectId": "607d093c-f681-4edc-a391-32624e39502d",
+        "epoch": "73236077-1daf-4089-8082-e8cf95c9e9d8",
+        "contentSha256": "4f0b7930b9c56a2520f5de1b12ab46d29ac4284932d6783b66c6b6d85f775a11"
+      },
+      {
+        "caseId": "saved-c17-a-control",
+        "provenance": "C17-A",
+        "invocationId": "284aa0cc-ae44-43a8-86d0-a7c7e403c8fb",
+        "projectId": "00c718a0-851d-43bf-8d66-a145210072ac",
+        "epoch": "70ffe6fb-ced1-43fb-9d4f-0faae3aa72b5",
+        "contentSha256": "80429e53ab637acddb37ea054a034998251e9306df4dac74c4dd71c79fa607e2"
+      }
+    ],
+    "operations": [
+      {
+        "id": "negative-review",
+        "kind": "review",
+        "caseIds": [
+          "saved-c18-b-negative"
+        ]
+      },
+      {
+        "id": "negative-refine",
+        "kind": "refine",
+        "caseIds": [
+          "saved-c18-b-negative"
+        ]
+      },
+      {
+        "id": "negative-final-review",
+        "kind": "final-review",
+        "caseIds": [
+          "saved-c18-b-negative"
+        ]
+      },
+      {
+        "id": "control-review",
+        "kind": "review",
+        "caseIds": [
+          "saved-c17-a-control"
+        ]
+      }
+    ],
+    "attemptPolicy": {
+      "milestone": "diagnostic",
+      "arms": [
+        "candidate"
+      ],
+      "reviewRebuild": {
+        "operationId": "negative-review",
+        "primaryPurpose": "review-chapter",
+        "repairPurpose": "review-chapter-rebuild",
+        "maxRepairAttempts": 1,
+        "maxLengthReplacements": 1
+      },
+      "finalReviewRebuild": {
+        "operationId": "negative-final-review",
+        "primaryPurpose": "review-chapter",
+        "repairPurpose": "review-chapter-rebuild",
+        "maxRepairAttempts": 1,
+        "maxLengthReplacements": 1
+      },
+      "controlReviewRebuild": {
+        "operationId": "control-review",
+        "primaryPurpose": "review-chapter",
+        "repairPurpose": "review-chapter-rebuild",
+        "maxRepairAttempts": 1,
+        "maxLengthReplacements": 1
+      },
+      "refinementRecovery": {
+        "operationId": "negative-refine",
+        "purpose": "refine-from-review",
+        "maxAttempts": 4,
+        "trigger": "settled-length-same-confirmation-visible-append-with-progress"
+      }
+    },
+    "evaluationPolicy": {
+      "revision": "ai-review-final-manuscript-v1",
+      "caseIds": [
+        "saved-c18-b-negative",
+        "saved-c17-a-control"
+      ],
+      "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+      "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+      "confirmation": "agent-semantic-approval-references-original-report-and-native-findings",
+      "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+      "endpoint": "native-merge-then-ordinary-full-review",
+      "automaticCeiling": "pending-independent-oracle-review",
+      "physicalRequests": {
+        "minimum": 1,
+        "maximum": 16,
+        "manuscriptMinimum": 1,
+        "manuscriptMaximum": 12
+      }
+    },
+    "modelProfile": {
+      "profileId": "7935a372-b853-4408-9374-9fdb272a78f9",
+      "configurationHash": "9a36c2c26b83a0e2e4b3ab1bc0f998a366140c0a3bb91c8444699dd88e31ba44",
+      "model": {
+        "id": "7935a372-b853-4408-9374-9fdb272a78f9",
+        "name": "R3 official DeepSeek Flash native diagnostic",
+        "provider": "deepseek",
+        "protocol": "openai",
+        "modelName": "deepseek-flash",
+        "baseUrl": "https://api.deepseek.com",
+        "temperature": 0,
+        "maxTokens": 32768,
+        "purposes": [
+          "generation",
+          "refinement",
+          "summary"
+        ],
+        "reasoningOverride": "high",
+        "capabilities": {
+          "contextWindowTokens": 1048576,
+          "maxOutputTokens": 393216,
+          "reasoning": true,
+          "structuredOutput": true,
+          "usage": true
+        },
+        "capabilitySources": {
+          "contextWindowTokens": "endpoint",
+          "maxOutputTokens": "endpoint",
+          "reasoning": "manual",
+          "structuredOutput": "manual",
+          "usage": "manual"
+        },
+        "reasoningMapping": {
+          "adapter": "deepseek-v4-thinking",
+          "supportedEfforts": [
+            "off",
+            "low",
+            "high",
+            "max"
+          ],
+          "providerValues": {
+            "off": "disabled",
+            "low": "low",
+            "high": "high",
+            "max": "max"
+          },
+          "requestAliases": {
+            "medium": "high"
+          }
+        }
+      }
+    },
+    "stop": "negative-detection-or-closure-or-technical-failure-ends-check-control-NOT_RUN"
+  },
+  "historicalPlanning91f59903Boundary": {
+    "fromEventCount": 1827,
+    "eventCount": 1848,
+    "rawBytesSha256": "5fc78d6144f3b30eae0eaad069f139892bc6150002d3fc99c13ff27ba9446823",
+    "protocolRevision": "s14b-candidate-only-three-rounds-v1",
+    "protocolHash": "64f874a3200cac1ca989d7af9af421f36f48e6ba23b07596c25dd67c0f89b1b4",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "91f59903b92c307bd4704b109ba9256c45203b9e",
+        "sourceHash": "5be2790970555a59c29b73294f5b286721e3bbd392014f34c570904745735b75",
+        "driverHash": "8e649fdf4c5d92bb5ee156d1eb24a6ed0b6113e4a3b390b8441aea20172b95d0"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:ff940142-0667-4897-b657-8169611acad6",
+        "invocationId": "68fe991e-9b6b-4ba5-9734-2623477af7c1",
+        "terminal": "settle",
+        "parityId": "6139cef0432d2b0f7a16d28284b10564b7cb478b11ffd6c54d179370b5b7d770"
+      },
+      {
+        "attemptId": "candidate:716fc9e3-d2ad-4209-9c6c-bc4c28faf371",
+        "invocationId": "68fe991e-9b6b-4ba5-9734-2623477af7c1",
+        "terminal": "settle",
+        "parityId": "6139cef0432d2b0f7a16d28284b10564b7cb478b11ffd6c54d179370b5b7d770"
+      },
+      {
+        "attemptId": "candidate:cddb1a4c-124d-4c58-a3a5-b9ff3ff14078",
+        "invocationId": "68fe991e-9b6b-4ba5-9734-2623477af7c1",
+        "terminal": "settle",
+        "parityId": "6139cef0432d2b0f7a16d28284b10564b7cb478b11ffd6c54d179370b5b7d770"
+      },
+      {
+        "attemptId": "candidate:0a90445f-0252-463e-93f9-8046711ffd82",
+        "invocationId": "68fe991e-9b6b-4ba5-9734-2623477af7c1",
+        "terminal": "settle",
+        "parityId": "6139cef0432d2b0f7a16d28284b10564b7cb478b11ffd6c54d179370b5b7d770"
+      },
+      {
+        "attemptId": "candidate:0a9b90a2-85c6-4bff-9793-0f50d9ff9f3e",
+        "invocationId": "68fe991e-9b6b-4ba5-9734-2623477af7c1",
+        "terminal": "settle",
+        "parityId": "6139cef0432d2b0f7a16d28284b10564b7cb478b11ffd6c54d179370b5b7d770"
+      },
+      {
+        "attemptId": "candidate:ab96474d-ee49-40bf-a143-8e5ef93a632d",
+        "invocationId": "68fe991e-9b6b-4ba5-9734-2623477af7c1",
+        "terminal": "settle",
+        "parityId": "6139cef0432d2b0f7a16d28284b10564b7cb478b11ffd6c54d179370b5b7d770"
+      },
+      {
+        "attemptId": "candidate:e2f81190-7b7f-4954-80e9-1c563a68f984",
+        "invocationId": "68fe991e-9b6b-4ba5-9734-2623477af7c1",
+        "terminal": "settle",
+        "parityId": "6139cef0432d2b0f7a16d28284b10564b7cb478b11ffd6c54d179370b5b7d770"
+      }
+    ],
+    "limits": "Historical settled requests only. Preserve original results; no refund, replay, qualification or reclassification."
+  },
+  "historicalSavedPostUi94e9b048Boundary": {
+    "fromEventCount": 1848,
+    "eventCount": 1881,
+    "rawBytesSha256": "09b4a1dc4f01eadedc247a744876efbe16e51827e85b8b956958c9ae5d3ebd74",
+    "protocolRevision": "s14b-candidate-only-three-rounds-v1",
+    "protocolHash": "64f874a3200cac1ca989d7af9af421f36f48e6ba23b07596c25dd67c0f89b1b4",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "94e9b048dde0dac1707cef876f98ee88f7e5a82d",
+        "sourceHash": "5be2790970555a59c29b73294f5b286721e3bbd392014f34c570904745735b75",
+        "driverHash": "3772fbfd0e05b57f85ae000c0f89588e21fb59c31cdf2719eb6d616bb3d66af1"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:d5063afa-0a17-4af2-ae47-9ffbe83b20d2",
+        "invocationId": "eb8a6d91-a23d-4f57-94ac-b07f8dc04d32",
+        "terminal": "settle",
+        "parityId": "2a25c513b75d8c2440c5dd642d483247c2c66fd7fcb06537ee6490e5d8724c3c"
+      },
+      {
+        "attemptId": "candidate:1e9b8291-4091-4a99-88a1-e4b23a4ac3dd",
+        "invocationId": "9419d026-840e-42b2-8c90-7c1f017ee2cf",
+        "terminal": "settle",
+        "parityId": "2384ce4b476be177e935fc19a69badd5d0492076e87e4fbd1b47d8d236bf1b95"
+      },
+      {
+        "attemptId": "candidate:e5839442-9d00-4999-89bb-2c6348b000cf",
+        "invocationId": "9419d026-840e-42b2-8c90-7c1f017ee2cf",
+        "terminal": "settle",
+        "parityId": "2384ce4b476be177e935fc19a69badd5d0492076e87e4fbd1b47d8d236bf1b95"
+      },
+      {
+        "attemptId": "candidate:5ad0d9d5-e755-4581-a31d-bbbc93c34800",
+        "invocationId": "9419d026-840e-42b2-8c90-7c1f017ee2cf",
+        "terminal": "settle",
+        "parityId": "2384ce4b476be177e935fc19a69badd5d0492076e87e4fbd1b47d8d236bf1b95"
+      },
+      {
+        "attemptId": "candidate:3b4b259a-f679-4bb9-b63b-78bac01a1066",
+        "invocationId": "9419d026-840e-42b2-8c90-7c1f017ee2cf",
+        "terminal": "settle",
+        "parityId": "2384ce4b476be177e935fc19a69badd5d0492076e87e4fbd1b47d8d236bf1b95"
+      },
+      {
+        "attemptId": "candidate:09dfb3a8-5415-4d94-9436-f11f9716f829",
+        "invocationId": "27277bd5-6607-4ce8-b473-68232673fb12",
+        "terminal": "settle",
+        "parityId": "c1083a3a394639ae91fa9d00f2455a4620230c7e0792dbd376420c7f1f52c604"
+      },
+      {
+        "attemptId": "candidate:c1946311-5f70-4964-951d-f98b0249ccb3",
+        "invocationId": "27277bd5-6607-4ce8-b473-68232673fb12",
+        "terminal": "settle",
+        "parityId": "c1083a3a394639ae91fa9d00f2455a4620230c7e0792dbd376420c7f1f52c604"
+      },
+      {
+        "attemptId": "candidate:7885c332-b909-4a6b-b169-6185c7b79ba3",
+        "invocationId": "27277bd5-6607-4ce8-b473-68232673fb12",
+        "terminal": "settle",
+        "parityId": "c1083a3a394639ae91fa9d00f2455a4620230c7e0792dbd376420c7f1f52c604"
+      },
+      {
+        "attemptId": "candidate:28b48459-254c-4e18-b2c5-9ea57e6125a0",
+        "invocationId": "08f883bb-209b-40ee-a129-82777a3abc58",
+        "terminal": "settle",
+        "parityId": "81bd768434eebbb155478a1c958033a8e44cebd8790fa92eb04d025a0d45037e"
+      },
+      {
+        "attemptId": "candidate:5fe1858f-db52-42bb-91ce-7cad53f42d58",
+        "invocationId": "08f883bb-209b-40ee-a129-82777a3abc58",
+        "terminal": "settle",
+        "parityId": "81bd768434eebbb155478a1c958033a8e44cebd8790fa92eb04d025a0d45037e"
+      },
+      {
+        "attemptId": "candidate:d4c54f6f-bd5a-4712-b73b-e06671a026ae",
+        "invocationId": "08f883bb-209b-40ee-a129-82777a3abc58",
+        "terminal": "settle",
+        "parityId": "81bd768434eebbb155478a1c958033a8e44cebd8790fa92eb04d025a0d45037e"
+      }
+    ],
+    "limits": "Historical settled requests only. Preserve original results; no refund, replay, qualification or reclassification."
   }
 }
