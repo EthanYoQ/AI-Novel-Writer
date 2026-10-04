@@ -604,7 +604,7 @@ function projectReviewUsage(value: unknown): Record<string, unknown> | null {
   const usage = parseJson(value) as Record<string, unknown>
   if (!usage || typeof usage !== 'object' || Array.isArray(usage) || !usage.reviewRevisionEffect) return null
   const identity = object(usage.artifactIdentity, ['artifactId', 'epoch', 'fingerprint'])
-  const result = object(usage.result, ['usage', 'finishReason', 'failureCode'])
+  const result = object(usage.result, ['usage', 'finishReason', 'failureCode', 'diagnostics'])
   const effect = object(usage.reviewRevisionEffect, [
     'kind', 'id', 'index', 'contentHash', 'contextHash', 'artifact', 'compositionHash', 'reportVersion',
   ])
