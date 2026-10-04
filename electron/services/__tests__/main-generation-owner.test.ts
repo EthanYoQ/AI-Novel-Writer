@@ -714,6 +714,31 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     expect(formatGenerationBudgetDiagnostic(diagnostic, 'zh-CN')).toContain('语义输出估算 1,712 tokens，物理输出上限 16,384 tokens，总预留 50,410 tokens')
     expect(f.reopen().read(run.handle).budgetDiagnostics).toEqual(receipt.run.budgetDiagnostics)
   })
+  it.each([16384, 65536])('honors the finite user output limit %i on a new planning root at the provider boundary', async maxTokens => {
+    const fetch = syntheticStream(), f = fixture()
+    Object.assign(f.model, { provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash',
+      maxTokens, reasoningOverride: 'high',
+      capabilities: { contextWindowTokens: 262144, maxOutputTokens: maxTokens, reasoning: true, structuredOutput: true, usage: true },
+    } satisfies Partial<ModelProfile>)
+    const run = f.owner.begin({ operation: 'chapter-blueprint-directory', uiActionNonce: 'planning-output-limit', modelId: f.model.id,
+      selectedBlueprintChapterNumbers: [1], selectedDraftIds: [], selectedFinalizedDraftIds: [],
+      promptKeys: ['chapter_blueprint_chunk'], skillStages: ['planning'], output: 'structured-data', authorInputs: [
+        { id: 'directory:pacing-guidance', text: '' },
+        { id: 'directory:author-config', text: '{"totalChapters":1,"wordsPerChapter":4000}' },
+        { id: 'directory:requested-range', text: '{"mode":"full","startChapter":1,"endChapter":1}' },
+      ] })
+    const result = await f.owner.execute({ handle: run.handle, invocationNonce: 'blueprint', task: {
+      purpose: 'chapter-blueprint-directory', output: 'structured-data', reasoningStage: 'planning',
+      messages: [{ role: 'user', content: '为第1章生成完整蓝图，保留作者事实。' }],
+      budgetDemand: { kind: 'structured-items', writingLanguage: 'zh-CN', requestedItems: 1 },
+    } })
+    expect(result.outcome.status).toBe('completed')
+    expect(fetch).toHaveBeenCalledTimes(1)
+    const wire: unknown = JSON.parse(String(fetch.mock.calls[0]![1].body))
+    expect(wire).toMatchObject({ max_tokens: maxTokens })
+    const attempt = new GenerationRunRepository(() => f.db).budget(run.handle.rootActionId).attempts[0]
+    expect(attempt).toMatchObject({ status: 'settled', requestedOutputTokens: maxTokens })
+  })
   it.each(['chapter-blueprint-directory', 'chapter-blueprint-directory:compact-single:chapter-1'])(
     'sends the planned native wire for %s and recovers its full LENGTH candidate without committing or redispatching', async purpose => {
       const fetch = syntheticStream(), f = fixture()
