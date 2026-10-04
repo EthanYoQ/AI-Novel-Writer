@@ -37,7 +37,7 @@ import { createGenerationRunService, type GenerationRunServiceDependencies } fro
 import { createMainGenerationOwner } from '../main-generation-owner'
 import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
-import { MAIN_GENERATION_POLICY } from '../main-generation-plan'
+import { readMainGenerationPolicy } from '../main-generation-plan'
 import { generationOutputContract } from '../../../src/shared/generation-owner-contract'
 import { getBuiltinPromptTemplate } from '../../../src/services/builtin-prompt-templates'
 import { readBuiltinWritingSkill } from '../../../src/shared/builtin-writing-skills'
@@ -235,9 +235,9 @@ describe('portable project restore service', { timeout: 20_000 }, () => {
     })
     const owner = createMainGenerationOwner({ database: db, projectId, epoch, assertCurrent: () => undefined,
       leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch,
-      buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(dependencies, { ...selection, projectId, epoch,
-        modelReceipt, policy: MAIN_GENERATION_POLICY, outputContract: generationOutputContract(selection) }).binding,
-      rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(dependencies, previous, epoch, modelReceipt, MAIN_GENERATION_POLICY).binding })
+      buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(dependencies, { ...selection, projectId, epoch,
+        modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
+      rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(dependencies, previous, epoch, modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding })
     const next = owner.begin({ operation: 'chapter-draft', uiActionNonce: 'new', modelId: model.id, chapterNumber: 2,
       selectedDraftIds: [], selectedFinalizedDraftIds: [2], promptKeys: ['next_chapter_draft'], skillStages: [], output: 'visible-text' })
     expect(next.handle.projectId).toBe(projectId)

@@ -8,7 +8,7 @@ import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { migrateSchema } from '../../migrations/runner'
 import { createMainGenerationOwner } from '../main-generation-owner'
 import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
-import { MAIN_GENERATION_POLICY } from '../main-generation-plan'
+import { readMainGenerationPolicy } from '../main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
 import { commitCharacterIdentities } from '../../repositories/character-roster-repository'
@@ -52,9 +52,9 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   const owner = createMainGenerationOwner({ database: db, projectId: 'project', epoch: 'epoch',
     assertCurrent: () => { if (!current) throw new Error('GENERATION_EPOCH_STALE') },
     leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch: dispatchSpy,
-    buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch: 'epoch',
-      modelReceipt, policy: MAIN_GENERATION_POLICY, outputContract: generationOutputContract(selection) }).binding,
-    rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, 'epoch', modelReceipt, MAIN_GENERATION_POLICY).binding,
+    buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch: 'epoch',
+      modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
+    rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, 'epoch', modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
   })
   cleanup.push(() => { owner.suspendForProjectClose(); db.close(); fs.rmSync(root, { recursive: true, force: true }) })
   const prepared = owner.readFinalizedCharacterContext(1)

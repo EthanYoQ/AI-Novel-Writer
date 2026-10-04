@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import { freezeChapterGoals } from '../../../shared/chapter-goal-review'
 import type { ReviewRevisionContext } from '../../../shared/review-revision-generation'
+import { MATERIAL_DECISION_MAX_INPUT_UNITS } from '../../../shared/generation-owner-contract'
 import {
   ChapterMaterialCapacityError,
   assembleChapterMaterials,
@@ -62,10 +63,7 @@ describe('S10B write-path characterization (the composed prompt must not change)
   })
 
   it('fails explicitly when required author material alone exceeds the capacity', async () => {
-    // 决定 1B：作者资料、角色档案与后续计划现在是**受预算**的单一必需候选。
-    // 7000 字符的角色档案远超上限，于是整轮显式失败——既不截断，也不静默丢掉它，
-    // 更不会像旧遍历那样把它无界地发出去。
-    const input = { ...baseline(), characterProfiles: '主'.repeat(7_000), relevanceTerms: [] }
+    const input = { ...baseline(), characterProfiles: '主'.repeat(Math.ceil(MATERIAL_DECISION_MAX_INPUT_UNITS / 3)), relevanceTerms: [] }
     const error = await assembleChapterMaterials(input).catch(reason => reason)
     expect(error).toBeInstanceOf(ChapterMaterialCapacityError)
     expect((error as ChapterMaterialCapacityError).code).toBe('CHAPTER_MATERIAL_CAPACITY_CONFLICT')
@@ -218,7 +216,8 @@ const ENTRY_POINTS: readonly EntryPoint[] = [
 
 describe('S10B-2 写/审/修共享同一套准入语义', () => {
   it.each(ENTRY_POINTS)('$name 保留自己的容量职责且不静默丢弃必需材料', async ({ name, run }) => {
-    const required = '长'.repeat(9_000)
+    const required = '长'.repeat(name === '写稿 generate-draft'
+      ? Math.ceil(MATERIAL_DECISION_MAX_INPUT_UNITS / 3) : 9_000)
     const outcome = await run(required, [])
     if (name === '写稿 generate-draft') {
       expect(outcome.failure).toEqual({ code: 'CHAPTER_MATERIAL_CAPACITY_CONFLICT', decision: 'capacity-conflict' })

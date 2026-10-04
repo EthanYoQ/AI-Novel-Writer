@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { prepareCanonicalStorageFixture } from '../../../test/helpers/canonical-project-fixture'
 import { createMainGenerationOwner } from '../main-generation-owner'
 import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
-import { MAIN_GENERATION_POLICY } from '../main-generation-plan'
+import { readMainGenerationPolicy } from '../main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
 import { generationOutputContract } from '../../../src/shared/generation-owner-contract'
 import { getProjectDb } from '../../database'
@@ -56,8 +56,8 @@ function fixture(dispatch?:GenerationRunServiceDependencies['dispatch']) {
  const spy=vi.fn<GenerationRunServiceDependencies['dispatch']>(dispatch??(async(_request,options)=>{options.onVisible({kind:'delta',text:validOutput});return {finishReason:'stop',usage:null}}))
  const deps={db,projectStorageRoot:root,globalDataRoot:root,readBuiltinPrompt:(key:string)=>JSON.stringify({key,systemRole:'图谱编辑',content:'合成模板'})}
  const make=(epoch:string)=>createMainGenerationOwner({database:db,projectId:'project',epoch,assertCurrent:()=>{},leases:new ModelExecutionLeaseRegistry({loadModel:()=>model}),loadModel:()=>model,dispatch:spy,
-  buildBinding:(selection,receipt)=>buildGenerationSourceBinding(deps,{...selection,projectId:'project',epoch,modelReceipt:receipt,policy:MAIN_GENERATION_POLICY,outputContract:generationOutputContract(selection)}).binding,
-  rebuildBinding:(previous,receipt)=>rebuildGenerationSourceBinding(deps,previous,epoch,receipt,MAIN_GENERATION_POLICY).binding})
+  buildBinding:(selection,receipt,policy)=>buildGenerationSourceBinding(deps,{...selection,projectId:'project',epoch,modelReceipt:receipt,policy,outputContract:generationOutputContract(selection)}).binding,
+  rebuildBinding:(previous,receipt)=>rebuildGenerationSourceBinding(deps,previous,epoch,receipt,readMainGenerationPolicy(previous.sourceManifest.policy)).binding})
  const owner=make('epoch-1');const owners=[owner]
  cleanup.push(()=>{owners.forEach(item=>item.suspendForProjectClose());db.close();fs.rmSync(root,{recursive:true,force:true})})
  return {owner,get db(){return db},spy,begin:()=>owner.beginLegacyRosterGeneration({modelId:'synthetic',uiActionNonce:'旧名单修复'}),

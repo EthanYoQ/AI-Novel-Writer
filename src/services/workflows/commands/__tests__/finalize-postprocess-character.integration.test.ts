@@ -1,6 +1,6 @@
 import { createMainGenerationOwner } from '../../../../../electron/services/main-generation-owner'
 import { ModelExecutionLeaseRegistry } from '../../../../../electron/services/model-execution-lease'
-import { MAIN_GENERATION_POLICY } from '../../../../../electron/services/main-generation-plan'
+import { readMainGenerationPolicy } from '../../../../../electron/services/main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../../../../../electron/services/generation-source-binding'
 import { generationOutputContract } from '../../../../shared/generation-owner-contract'
 import { getBuiltinPromptTemplate } from '../../../builtin-prompt-templates'
@@ -60,8 +60,8 @@ function owner() {
         onError: error => reject(new Error(error)),
       }, model.id).catch(reject)
     }),
-    buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'test', epoch: 'lease-test', modelReceipt, policy: MAIN_GENERATION_POLICY, outputContract: generationOutputContract(selection) }).binding,
-    rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, 'lease-test', modelReceipt, MAIN_GENERATION_POLICY).binding,
+    buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'test', epoch: 'lease-test', modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
+    rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, 'lease-test', modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
   })
   return actualOwner
 }

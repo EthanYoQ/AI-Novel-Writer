@@ -5,7 +5,7 @@ import { createRequire } from 'node:module'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createMainGenerationOwner } from '../main-generation-owner'
 import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
-import { MAIN_GENERATION_POLICY } from '../main-generation-plan'
+import { readMainGenerationPolicy } from '../main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
 import { SummaryRepository } from '../../repositories/summary-repository'
@@ -54,9 +54,9 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], option
   const makeOwner = (epoch: string) => createMainGenerationOwner({ database: db, projectId: 'project', epoch,
     assertCurrent: () => { if (!current) throw new Error('GENERATION_EPOCH_STALE') },
     leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch: dispatchSpy,
-    buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch,
-      modelReceipt, policy: MAIN_GENERATION_POLICY, outputContract: generationOutputContract(selection) }).binding,
-    rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, MAIN_GENERATION_POLICY).binding,
+    buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch,
+      modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
+    rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
     transferOrigin: options.transferOrigin,
   })
   const owner=makeOwner('epoch')

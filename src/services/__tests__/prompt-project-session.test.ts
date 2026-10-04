@@ -284,8 +284,12 @@ describe('project custom prompt session ownership', () => {
     const sourceFiles = sourceFilesAt(workflowRoot)
     const unsafeLookups = sourceFiles.flatMap((file) => {
       const source = readFileSync(file, 'utf8')
+      const workflowSessions = [...source.matchAll(/\bconst\s+(\w+)\s*=\s*requireWorkflowProjectSession\(context\)/g)]
+        .map((match) => match[1])
       return [...source.matchAll(/(?:getPromptTemplate|resolvePromptTemplate)\(([^)]*)\)/g)]
-        .filter((match) => !match[0].startsWith('resolvePromptTemplate') || !match[1].includes('projectSession'))
+        .filter((match) => !match[0].startsWith('resolvePromptTemplate') || (
+          !match[1].includes('projectSession') && !workflowSessions.includes(match[1].split(',')[1]?.trim() ?? '')
+        ))
         .map((match) => `${file}:${source.slice(0, match.index).split('\n').length}`)
     })
 

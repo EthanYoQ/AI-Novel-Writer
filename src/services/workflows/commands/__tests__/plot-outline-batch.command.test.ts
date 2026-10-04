@@ -12,6 +12,7 @@ import {
 import { createWorkflowRuntimeDependencies } from './workflow-generation-runtime.fixture'
 import { clearProjectCustomPrompts, getBuiltinPromptTemplate } from '../../../prompt-templates'
 import { composeVisibleContinuation } from '../../../../shared/visible-continuation'
+import type { GenerationRecoveryContext, VisibleCompositionReceipt } from '../../../../shared/generation-owner-contract'
 
 /**
  * 情节大纲批次状态机：
@@ -244,24 +245,36 @@ function mainOwnedResponses(harness: IpcHarness, output: string | Error) {
   const handle = { projectId: 'main', epoch: 'lease-main', rootActionId: '合成恢复根', runId: '合成恢复运行' }
   const view = { handle, status: 'running', nonReplayable: false, artifacts: [], budget: { maxAttempts: 32, maxRequestedOutputTokens: 2097152, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: 9999999999999 } }
   const hash = async (value: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))), byte => byte.toString(16).padStart(2, '0')).join('')
-  let composition: { text: string; textHash: string; artifactIds: string[] } | null = null
+  let composition: VisibleCompositionReceipt | null = null
   const execute = vi.fn(async () => {
     if (output instanceof Error) throw output
     return { run: view, outcome: { status: 'completed', content: output, finishReason: 'stop', receipt: { finishReason: 'stop', visibleArtifact: { artifactId: '本批响应', attemptId: '本批尝试', revision: 1, textHash: await hash(output) } } } }
   })
   harness.invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
     if (channel === 'generation:begin' || channel === 'generation:read') return view
+    if (channel === 'generation:read-context') return {
+      modelId: 'model-1', handle, operation: 'generate-plot-outline',
+      authorInputs: [], selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [],
+      composition, lastCompositionFinishReason: null, attemptedPurposes: [], draftSave: { kind: 'absent' },
+    } satisfies GenerationRecoveryContext
     if (channel === 'generation:read-visible-composition') return composition
     if (channel === 'generation:execute') return execute()
     if (channel === 'generation:compose-visible') {
       const text = composeVisibleContinuation(composition?.text ?? '', output instanceof Error ? '' : output)
       expect(args[2]).toBe(await hash(text))
-      composition = { text, textHash: await hash(text), artifactIds: args[1] as string[] }
+      composition = {
+        algorithm: 'visible-append-v1', text, textHash: await hash(text), artifactIds: args[1] as string[],
+        sources: [...(composition?.sources ?? []), { artifactId: '本批响应', revision: 1, textHash: await hash(output instanceof Error ? '' : output) }],
+      }
       return composition
     }
     return original(channel, ...args)
   })
-  return { execute, setComposition: async (text: string) => { composition = { text, textHash: await hash(text), artifactIds: ['已确认增量'] } }, getComposition: () => composition }
+  return { execute, setComposition: async (text: string) => {
+    const textHash = await hash(text)
+    composition = { algorithm: 'visible-append-v1', text, textHash, artifactIds: ['已确认增量'],
+      sources: [{ artifactId: '已确认增量', revision: 1, textHash }] }
+  }, getComposition: () => composition }
 }
 
 function bodyOf(persisted: string): string {

@@ -7,7 +7,7 @@ import { AnalyzeWritingStyleCommand } from '../analyze-style.command'
 import { useProjectStore } from '../../../../stores/project-store'
 import { useLLMStore } from '../../../../stores/llm-store'
 import type { WorkflowContext } from '../../../../stores/workflow-store'
-import type { BeginGenerationRequest } from '../../../../shared/generation-owner-contract'
+import type { BeginGenerationRequest, GenerationRecoveryContext } from '../../../../shared/generation-owner-contract'
 import type { MainGenerationRunView } from '../../../generation/generation-runtime'
 
 const projectSession = { projectId: '合成项目', leaseId: '合成会话', projectPath: 'C:/合成项目' }
@@ -23,6 +23,11 @@ function fixture() {
     if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
     if (channel === 'fs:check-exists') return false
     if (channel === 'generation:begin' || channel === 'generation:read') return structuredClone(view)
+    if (channel === 'generation:read-context') return {
+      modelId: '合成模型', handle: structuredClone(view.handle), operation: 'generate-plot-outline',
+      authorInputs: [], selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [],
+      composition: null, lastCompositionFinishReason: null, attemptedPurposes: [], draftSave: { kind: 'absent' },
+    } satisfies GenerationRecoveryContext
     if (channel === 'generation:execute') return { run: structuredClone(view), outcome: { status: 'completed', content: '以具体动作呈现人物，短句与长句交替，保留雨夜的细微感官线索。', finishReason: 'stop', receipt: { finishReason: 'stop' } } }
     if (channel === 'db:project-core-commit-generated' || channel === 'project:save') return { success: true }
     if (channel === 'db:draft-get-max-finalized-chapter') return 1

@@ -4940,7 +4940,7 @@ const s14bHistoryTest = test.extend({
         'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
         'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary', 'historicalC1609ad48e1Boundary', 'historicalSeparatedReviewB89b011aBoundary',
         'historicalPostUi83573613Boundary', 'historicalR3NativeD12c4111Boundary', 'historicalR3ClosedCce6f01aBoundary', 'historicalR3NativeDc9b7cbdBoundary', 'historicalR3Native49e1c0adBoundary', 'historicalR3Native6e38e5ddBoundary',
-        'historicalR3Native11152245Boundary', 'historicalR3NativeC9e7c71eBoundary', 'historicalR3NativeD51580fcBoundary', 'historicalR3NativeAd650e85Boundary', 'historicalR3Native2d67a3aaBoundary', 'historicalR3NativeC907f174Boundary', 'historicalSavedNativeBoundary']
+        'historicalR3Native11152245Boundary', 'historicalR3NativeC9e7c71eBoundary', 'historicalR3NativeD51580fcBoundary', 'historicalR3NativeAd650e85Boundary', 'historicalR3Native2d67a3aaBoundary', 'historicalR3NativeC907f174Boundary', 'historicalSavedNativeBoundary', 'historicalPlanningSavedOutlineBoundary']
       const fixture = mode => {
         const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
           sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -5002,6 +5002,12 @@ const s14bHistoryTest = test.extend({
 })
 
 s14bHistoryTest('S14B 新 revision 认证历史边界与登记证据', ({ history: { real } }) => {
+  const planning = real.boundaries.historicalPlanningSavedOutlineBoundary
+  const planningTerminals = ['settle', 'settle', 'settle', 'settle', 'settle', 'unknown']
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1809, planning), 1827)
+  assert.deepEqual(planning.reserveAttempts.map(item => item.terminal), planningTerminals)
+  assert.deepEqual(real.raw.trimEnd().split('\n').slice(1809, 1827).map(JSON.parse)
+    .filter(row => ['settle', 'unknown'].includes(row.type)).map(row => row.type), planningTerminals)
   assert.ok(protocol.historicalC16D021261fBoundary, 'the consumed partial v3 window must be registered')
   assert.ok(protocol.historicalSeparatedReviewB89b011aBoundary, 'the consumed two-slot diagnostic must be historical')
   const boundary = protocol.historicalS14BSplitBoundary
@@ -5218,6 +5224,14 @@ s14bHistoryTest('S14B 新 revision 认证历史边界与登记证据', ({ histor
 
 s14bHistoryTest('S14B 新 revision 在账本读写两入口拒绝历史终态与代码身份漂移', ({ history: { real, synthetic, ledger, file } }) => {
   const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
+  const planningAttempt = real.boundaries.historicalPlanningSavedOutlineBoundary.reserveAttempts.at(-1).attemptId
+  const changedPlanning = raw => raw.replace(`"type":"unknown","attemptId":"${planningAttempt}"`,
+    `"type":"settle","attemptId":"${planningAttempt}"`)
+  fs.writeFileSync(ledger, changedPlanning(real.raw))
+  assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, changedPlanning(synthetic.raw))
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+    /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
   const changed1350 = raw => raw.replace('"type":"unknown","attemptId":"candidate:5d0933d2-8d48-4a3b-8d14-2d87f74bf5ae"',
     '"type":"settle","attemptId":"candidate:5d0933d2-8d48-4a3b-8d14-2d87f74bf5ae"')
   fs.writeFileSync(ledger, changed1350(real.raw))
