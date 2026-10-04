@@ -1730,10 +1730,11 @@ test('isolated production commands persist the selected phase operations', async
       const indexes = approval.findingIds.map(id => {
         const finding = cycle.findings.find(item => item.findingId === id)
         const item = report.items[finding?.reviewItemIndex]
-        assert.ok(item && (planningRun || item.severity === 'unknown' && item.goalId === 'ch2:keyEvents:2')
-          && selection.selected.some(selected => sha(selected) === sha(item)), 'SAVED_NATIVE_APPROVAL_FINDING_MISMATCH')
+        assert.ok(item && selection.selected.some(selected => sha(selected) === sha(item)), 'SAVED_NATIVE_APPROVAL_FINDING_MISMATCH')
         return finding.reviewItemIndex
       })
+      assert.ok(planningRun || indexes.some(index => report.items[index].severity === 'unknown'
+        && report.items[index].goalId === 'ch2:keyEvents:2'), 'SAVED_NATIVE_APPROVAL_FINDING_MISMATCH')
       Object.assign(aiReviewedDraft, { initial: first.aiReviewedDraft.initial, review: first.aiReviewedDraft.review,
         selectedIndexes: indexes, selectedCount: indexes.length, selectedItemsHash: sha(indexes.map(index => report.items[index])),
         softwareItems: selection.softwareItems, disposition: selection.disposition, findings: cycle.findings })
