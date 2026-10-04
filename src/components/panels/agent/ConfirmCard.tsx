@@ -9,6 +9,8 @@ import { ShieldAlert } from 'lucide-react'
 import type { ToolCallInfo } from '../../../services/agent/agent-engine'
 import { useAgentStore } from '../../../stores/agent-store'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { useProjectStore } from '../../../stores/project-store'
+import { resolveWritingLanguage, type WritingLanguage } from '../../../shared/writing-language'
 import ConfigImpactPreview, { useConfigImpactPreview } from './ConfigImpactPreview'
 import DomainProposalDiff, { useDomainProposalPreview } from './DomainProposalDiff'
 
@@ -19,6 +21,7 @@ interface Props {
 export default function ConfirmCard({ toolCall }: Props) {
   const { resolveToolConfirmation, cancelGeneration } = useAgentStore()
   const text = useLocaleStore(s => s.text)
+  const writingLanguage = useProjectStore(state => resolveWritingLanguage(state.currentProject?.novelConfig.writingLanguage))
   const { id, toolName, arguments: args } = toolCall
   const proposalPreview = useDomainProposalPreview(toolCall)
   const impactPreview = useConfigImpactPreview(toolCall, proposalPreview)
@@ -28,7 +31,7 @@ export default function ConfirmCard({ toolCall }: Props) {
   const canApprove = (!isDomainProposal || proposalPreview.kind === 'valid') && impactReady
 
   // 生成操作描述
-  const description = generateDescription(toolName, args, text)
+  const description = generateDescription(toolName, args, text, writingLanguage)
 
   return (
     <div className="confirm-card">
@@ -116,6 +119,7 @@ function generateDescription(
   toolName: string,
   args: Record<string, unknown>,
   text: ReturnType<typeof useLocaleStore.getState>['text'],
+  writingLanguage: WritingLanguage,
 ): string {
   switch (toolName) {
     case 'write_file':
@@ -129,6 +133,14 @@ function generateDescription(
         `Will open in the editor: ${args.file_path ?? 'Unknown file'}`,
       )
     case 'start_workflow':
+      if ((args.workflow === 'generate_architecture' || args.workflow === 'generate_blueprint')
+        && typeof args.start_chapter === 'number' && typeof args.chapter_count === 'number' && typeof args.target_units === 'number') {
+        const end = args.start_chapter + args.chapter_count - 1
+        const unit = writingLanguage === 'zh-CN' ? text('字', 'characters') : text('词', 'words')
+        const name = args.workflow === 'generate_architecture' ? text('故事架构', 'story architecture') : text('章节蓝图', 'chapter blueprints')
+        return text(`将生成${name}，范围为第 ${args.start_chapter}–${end} 章，每章规划目标 ${args.target_units} ${unit}。实际内容可多可少。`,
+          `Generate ${name} for chapters ${args.start_chapter}-${end}, targeting ${args.target_units} ${unit} per chapter. Actual content may be longer or shorter.`)
+      }
       return text(
         `将启动工作流：${args.workflow ?? '未知工作流'}${args.chapter_number ? `（第 ${args.chapter_number} 章）` : ''}`,
         `Will start workflow: ${args.workflow ?? 'Unknown workflow'}${args.chapter_number ? ` (Chapter ${args.chapter_number})` : ''}`,

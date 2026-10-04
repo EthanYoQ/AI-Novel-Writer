@@ -155,7 +155,7 @@ describe('workflow launch language seams', () => {
     await act(async () => page.getByRole('button', { name: '续批（第 21 章起）' }).click())
 
     await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的起始章' })).toHaveValue(21)
-    await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的结束章' })).toHaveValue(40)
+    await expect.element(page.getByRole('spinbutton', { name: '本次生成范围的结束章' })).toHaveValue(25)
   })
 
   it.each([

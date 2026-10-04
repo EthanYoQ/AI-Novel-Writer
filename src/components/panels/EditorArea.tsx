@@ -714,6 +714,7 @@ export default function EditorArea({ onNewProject }: EditorAreaProps) {
         {activeTab?.type === 'chapter-card' && activeTab.projectKey && (
           <ChapterCardEditor
             key={activeTab.id}
+            tabId={activeTab.id}
             projectKey={activeTab.projectKey}
             initialChapterNumber={activeTab.chapterNumber}
           />

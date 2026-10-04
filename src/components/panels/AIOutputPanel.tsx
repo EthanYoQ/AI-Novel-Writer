@@ -15,7 +15,7 @@ import {
   type WorkflowStep,
 } from '../../stores/workflow-store'
 import { useLayoutStore } from '../../stores/layout-store'
-import { useEditorStore } from '../../stores/editor-store'
+import { openPlanningRecoveryDraft, useEditorStore } from '../../stores/editor-store'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowReasoningStore } from '../../stores/workflow-reasoning-store'
 import {
@@ -274,6 +274,7 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
   session: ProjectSessionContext | null; locale: Locale; refreshKey: number
 }) {
   const [runs, setRuns] = useState<Array<{ view: MainGenerationRunView; recovery: GenerationRecoveryContext }>>([])
+  const [planningRuns, setPlanningRuns] = useState<GenerationRecoveryContext[]>([])
   const [batches, setBatches] = useState<GenerationBatchProgress[]>([])
   const [reviewRuns, setReviewRuns] = useState<Array<{ view: MainGenerationRunView; recovery: ReviewRevisionRecovery }>>([])
   const [agentRuns, setAgentRuns] = useState<import('../../shared/agent-generation').AgentGenerationRecovery[]>([])
@@ -310,6 +311,8 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
       const editorContexts = await Promise.allSettled(contexts.filter(item => item.recovery.operation === 'editor-inline')
         .map(({ view }) => ipc.invokeWithProjectSession(session, 'editor-inline:read-recovery', { handle: view.handle })))
       if (!active) return
+      setPlanningRuns(contexts.flatMap(item => (item.recovery.plotOutlineRecovery || item.recovery.blueprintRecovery)
+        && item.recovery.planningContinuation?.state !== 'complete' ? [item.recovery] : []))
       setReviewRuns(reviewContexts.flatMap(result => result.status === 'fulfilled' ? [result.value] : []))
       setAgentRuns(agentContexts.flatMap(result => result.status === 'fulfilled' ? [result.value] : []))
       setEditorRuns(editorContexts.flatMap(result => result.status === 'fulfilled' ? [result.value] : []))
@@ -330,13 +333,23 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
     finally { setBusy(false) }
   }
   const visibleRuns = runs.filter(item => item.view.handle.projectId === session.projectId)
+  const visiblePlanning = planningRuns.filter(item => item.handle.projectId === session.projectId)
   const visibleBatches = batches.filter(item => item.rootHandle.projectId === session.projectId)
   const visibleReviews = reviewRuns.filter(item => item.view.handle.projectId === session.projectId)
   const visibleAgents = agentRuns.filter(item => item.handle.projectId === session.projectId)
   const visibleEditors = editorRuns.filter(item => item.view.handle.projectId === session.projectId)
-  if (!visibleRuns.length && !visibleBatches.length && !visibleReviews.length && !visibleAgents.length && !visibleEditors.length && !error) return null
+  if (!visibleRuns.length && !visibleBatches.length && !visibleReviews.length && !visibleAgents.length && !visibleEditors.length && !visiblePlanning.length && !error) return null
   return <section className="max-h-80 overflow-y-auto border-b p-3 text-xs" aria-label={runText(locale, '持久正文候选', 'Saved draft candidates')}>
     {error && <p role="alert">{error}</p>}
+    {visiblePlanning.map(recovery => <article key={recovery.handle.runId} className="mb-3">
+      <p>{runText(locale, recovery.plotOutlineRecovery ? '大纲恢复稿' : '蓝图恢复稿', recovery.plotOutlineRecovery ? 'Outline recovery draft' : 'Blueprint recovery draft')}</p>
+      <p>{runText(locale, '自动生成已保留候选。可编辑并本地保存，或明确继续缺少的章节。', 'The candidate is preserved. Edit and save it locally, or explicitly generate the remaining chapters.')}</p>
+      <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} disabled={busy} onClick={() => { void act(async () => {
+        const fresh = await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle: recovery.handle })
+        if (!sameProjectSessionContext(session, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
+        openPlanningRecoveryDraft(fresh, session.projectPath, runText(locale, fresh.plotOutlineRecovery ? '大纲恢复稿' : '蓝图恢复稿', fresh.plotOutlineRecovery ? 'Outline recovery draft' : 'Blueprint recovery draft'))
+      }) }}>{runText(locale, '编辑恢复稿', 'Edit recovery draft')}</button>
+    </article>)}
     {visibleEditors.map(recovery => <article key={recovery.view.handle.runId} className="mb-3">
       <p>{runText(locale, '编辑器选区建议', 'Editor selection suggestion')}</p>
       <p className="whitespace-pre-wrap">{recovery.context.selectedText.slice(0, 100)}</p>

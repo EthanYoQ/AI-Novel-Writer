@@ -16,8 +16,8 @@ import type {
 } from '../../shared/ipc-channels'
 import { LOW_VRAM_EMBEDDING_OPTIONS, normalizeEmbeddingOptions } from '../../shared/embedding-options'
 import type { ModelCapabilities, ProviderPreset } from '../../shared/provider-presets'
-import { BUILTIN_PRESETS } from '../../shared/provider-presets'
-import { applyModelProfileSelection, createModelProfileDraft, modelCapabilitySource } from '../../shared/model-profile-draft'
+import { BUILTIN_PRESETS, resolveModelProfileBudgetCapabilities } from '../../shared/provider-presets'
+import { applyModelProfileSelection, createModelProfileDraft, DEFAULT_GENERATION_OUTPUT_TOKENS, modelCapabilitySource } from '../../shared/model-profile-draft'
 import type { ModelProviderResourceId } from '../../shared/model-provider-resources'
 import { randomUUID } from '../../utils/id'
 import { Button } from '../ui/Button'
@@ -519,6 +519,8 @@ function ModelForm({
     && currentCapabilities.contextWindowTokens !== null
     && currentCapabilities.contextWindowTokens > 0
     && model.maxTokens >= currentCapabilities.contextWindowTokens
+  const providerOutputLimit = resolveModelProfileBudgetCapabilities(model)?.maxOutputTokens
+  const effectiveOutputLimit = Math.min(model.maxTokens, currentCapabilities.maxOutputTokens, providerOutputLimit ?? Infinity)
 
   const updateCapabilities = (next: Partial<ModelCapabilities>) => {
     const capabilities = { ...currentCapabilities, ...next }
@@ -530,12 +532,13 @@ function ModelForm({
   }
 
   const resetAdvancedSettings = () => {
-    const presetModel = presetModels.find(candidate => candidate.name === model.modelName)
-    const defaultMaxOutputTokens = Math.min(presetModel?.maxTokens ?? 4096, 16_384)
+    const defaultMaxOutputTokens = Math.min(providerOutputLimit ?? DEFAULT_GENERATION_OUTPUT_TOKENS, DEFAULT_GENERATION_OUTPUT_TOKENS)
     onChange({
       ...model,
       temperature: 0.7,
       maxTokens: defaultMaxOutputTokens,
+      capabilities: { ...currentCapabilities, maxOutputTokens: providerOutputLimit ?? DEFAULT_GENERATION_OUTPUT_TOKENS },
+      capabilitySources: { ...model.capabilitySources, maxOutputTokens: providerOutputLimit === undefined ? 'unknown' : 'preset' },
       reasoningOverride: 'auto',
       reasoningMapping: undefined,
     })
@@ -935,6 +938,9 @@ function ModelForm({
                     onChange={event => updateCapabilities({ maxOutputTokens: Number(event.target.value) })} />
                 </div>
               </div>
+              <p className="text-xs text-[var(--color-text-secondary)]" data-effective-output-limit={effectiveOutputLimit}>
+                {text(`当前有效输出额度为 ${effectiveOutputLimit.toLocaleString()} Token。取作者设置、模型输出容量与已知服务商上限中的较小值；完整输入和本次剩余额度仍会影响请求。`, `Effective output allowance: ${effectiveOutputLimit.toLocaleString()} tokens. This uses the lowest configured or verified output limit. Prompt size and the remaining action allowance still affect each request.`)}
+              </p>
               {contextOutputConflict && (
                 <p
                   role="status"

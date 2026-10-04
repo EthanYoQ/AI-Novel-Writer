@@ -35,6 +35,9 @@ import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import { sameProjectSessionContext } from '../../shared/project-session-context'
 import type { MainGenerationRunHandle } from '../../services/generation/generation-runtime'
 import { architectureRecoveryHandle } from '../../shared/architecture-recovery-navigation'
+import { DEFAULT_PLANNING_ACTION_CHAPTERS } from '../../shared/plot-outline-contract'
+import type { GenerationRecoveryContext } from '../../shared/generation-owner-contract'
+import { openPlanningRecoveryDraft } from '../../stores/editor-store'
 import {
   hasVisiblePartialSynopsisMarker,
   isUsableSynopsisCheckpoint,
@@ -57,9 +60,6 @@ const ARCH_FILES: Array<{
     { key: 'synopsis', fileName: 'synopsis.md', labelZh: '情节大纲', labelEn: 'Plot outline', iconName: 'map', descZh: '结构推进 · 转折节奏 · 伏笔闭环', descEn: 'Story progression · turning points · setup and payoff' },
   ]
 
-/** 续批按钮默认的每批章数上限（可在弹窗内调整，避免一次请求剩余全部章节）。 */
-const CONTINUATION_BATCH_SPAN = 20
-
 /** 故事架构编辑器 — 显示四个架构文件状态，并提供 AI 生成入口 */
 export default function WorldBuildingEditor({ projectKey }: { projectKey: string }) {
   // ✅ 精确订阅，避免 novelConfig 等变化导致不必要的 loadStatus 重建
@@ -70,6 +70,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     state.history.find(run => run.type === 'architecture_generation' && run.projectPath === projectKey)?.id ?? null
   ))
   const [archStatus, setArchStatus] = useState<Record<string, boolean>>({})
+  const [planningRecovery, setPlanningRecovery] = useState<GenerationRecoveryContext | null>(null)
   const [wordCounts, setWordCounts] = useState<Record<string, number>>({})
   const [synopsisIncomplete, setSynopsisIncomplete] = useState(false)
   const [synopsisRecoveryFailed, setSynopsisRecoveryFailed] = useState(false)
@@ -133,6 +134,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     let recoveredSynopsisCandidate = ''
     let confirmedWorldHandle: MainGenerationRunHandle | null = null
     let confirmedSynopsisHandle: MainGenerationRunHandle | null = null
+    let recoveredPlanning: GenerationRecoveryContext | null = null
     const dbSynopsis = core?.synopsis || ''
     const totalChapters = Number(core?.totalChapters ?? currentProject?.novelConfig?.totalChapters) || 0
     const writingLanguage = (core?.writingLanguage ?? currentProject?.novelConfig?.writingLanguage) === 'en-US'
@@ -158,6 +160,15 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
         const handle = architectureRecoveryHandle(partial, kind, projectSession.projectId)
         if (!handle) continue
         try {
+          if (kind === 'synopsis') {
+            const context = await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle }).catch(() => null)
+            if (context?.plotOutlineRecovery) {
+              recoveredPlanning = context
+              recoveredSynopsisCandidate = context.plotOutlineRecovery.draft
+              confirmedSynopsisHandle = handle
+              continue
+            }
+          }
           const composition = await ipc.invokeWithProjectSession(projectSession, 'generation:read-visible-composition', handle)
           if (composition?.algorithm !== 'visible-append-v1' || !composition.text) continue
           if (kind === 'worldbuilding') {
@@ -210,6 +221,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     setSynopsisTotalChapters(totalChapters)
     setSynopsisCandidate(recoveredSynopsisCandidate)
     setSynopsisHandle(confirmedSynopsisHandle)
+    setPlanningRecovery(recoveredPlanning)
     setWorldHandle(confirmedWorldHandle)
     if (!recoveredSynopsisCandidate) setShowSynopsisCandidate(false)
     setWorldBuildingCandidate(recoveredWorldBuildingCandidate)
@@ -313,6 +325,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     selectedSteps: ArchStepKey[],
     stepGuidance: Record<string, string>,
     synopsisRange?: { from: number; to: number },
+    targetUnits?: number,
   ) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) throw new Error(text('项目会话已切换，未启动架构生成', 'The project session changed, so architecture generation was not started.'))
@@ -322,6 +335,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
       selectedSteps,
       stepGuidance,
       synopsisRange,
+      targetUnits,
     }, projectSession)
   }
 
@@ -398,7 +412,7 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
     if (from > synopsisTotalChapters || synopsisTotalChapters <= 0) return
     setPendingSynopsisRange({
       from,
-      to: Math.min(synopsisTotalChapters, from + CONTINUATION_BATCH_SPAN - 1),
+      to: Math.min(synopsisTotalChapters, from + DEFAULT_PLANNING_ACTION_CHAPTERS - 1),
     })
     setShowArchDialog(true)
   }
@@ -627,11 +641,14 @@ export default function WorldBuildingEditor({ projectKey }: { projectKey: string
                           className="gap-1.5 bg-gradient-to-r from-amber-500 to-orange-500 text-white border-none"
                           onClick={(e) => {
                             e.stopPropagation()
-                            void (isSynopsisCandidate ? handleResumeSynopsis() : handleResumeWorldBuilding())
+                            if (isSynopsisCandidate && planningRecovery) {
+                              const session = captureProjectSession(currentProject)
+                              if (session && isProjectSessionCurrent(session)) openPlanningRecoveryDraft(planningRecovery, projectKey, text('大纲恢复稿', 'Outline recovery draft'))
+                            } else void (isSynopsisCandidate ? handleResumeSynopsis() : handleResumeWorldBuilding())
                           }}
                         >
                           <RefreshCw size={12} className={candidateBusy ? 'animate-spin' : ''} />
-                          {candidateBusy ? text('续写中...', 'Resuming...') : text('断点续写', 'Resume')}
+                          {isSynopsisCandidate && planningRecovery ? text('编辑恢复稿', 'Edit recovery draft') : candidateBusy ? text('续写中...', 'Resuming...') : text('断点续写', 'Resume')}
                         </Button>
                       </div>
                       {!candidateHandle && <span role="status" className="text-xs text-[var(--color-warning-text)]">
