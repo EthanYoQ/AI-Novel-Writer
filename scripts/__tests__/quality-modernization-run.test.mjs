@@ -4926,442 +4926,463 @@ test('context 审稿传选定候选原文，身份漂移与写稿材料错配仍
   await assert.rejects(read(assert, hash, row, {...record,sourceId:'candidate:10'}), /PREDECESSOR_SOURCE_ID_CHANGED/)
 })
 
-test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂移', () => {
+const s14bHistoryTest = test.extend({
+  history: async ({}, use) => {
+    const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/split-boundary-'))
+    const ledger = path.join(dir, '.runtime/.cache/novel-quality-modernization/physical-ledger.jsonl')
+    const file = path.join(dir, 'synthetic-ledger.jsonl')
+    const originalSpawn = childProcess.spawnSync, originalRead = fs.readFileSync
+    try {
+      const archive = ['historicalSupersessionBoundary', 'historicalReviewedDraftBoundary',
+        'historicalReviewRebuildBoundary', 'historicalS14BSplitBoundary', 'historicalPostUi408Boundary',
+        'historicalC16Ee3435ecBoundary', 'historicalC16Ccc70b31Boundary', 'historicalC16C9b88510Boundary', 'historicalC16D8a30c11Boundary',
+        'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary', 'historicalC16B42cfc55Boundary',
+        'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
+        'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary', 'historicalC1609ad48e1Boundary', 'historicalSeparatedReviewB89b011aBoundary',
+        'historicalPostUi83573613Boundary', 'historicalR3NativeD12c4111Boundary', 'historicalR3ClosedCce6f01aBoundary', 'historicalR3NativeDc9b7cbdBoundary', 'historicalR3Native49e1c0adBoundary', 'historicalR3Native6e38e5ddBoundary',
+        'historicalR3Native11152245Boundary', 'historicalR3NativeC9e7c71eBoundary', 'historicalR3NativeD51580fcBoundary', 'historicalR3NativeAd650e85Boundary', 'historicalR3Native2d67a3aaBoundary', 'historicalR3NativeC907f174Boundary', 'historicalSavedNativeBoundary']
+      const fixture = mode => {
+        const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
+          sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
+          phase: 'early-budget', milestone: 'early', caseId: '场景1/1', operation: '指定范围生成' }
+        const rows = []
+        const triplet = (attemptId, extra = {}, terminal = 'settle') => rows.push(
+          { type: 'reserve', attemptId, binding: { ...binding, ...extra }, allocation: 'earlyBudget' },
+          { type: 'dispatch', attemptId }, { type: terminal, attemptId })
+        const frozen = Array.from({ length: protocol.historicalLedgerBoundary.eventCount / 3 }, (_, index) => `frozen-${index}`)
+        frozen.splice(-protocol.historicalLedgerBoundary.finalReserveAttemptIds.length,
+          protocol.historicalLedgerBoundary.finalReserveAttemptIds.length,
+          ...protocol.historicalLedgerBoundary.finalReserveAttemptIds)
+        frozen.forEach(id => triplet(id))
+        const boundaries = { historicalLedgerBoundary: { ...protocol.historicalLedgerBoundary,
+          rawBytesSha256: hash(rows.map(JSON.stringify).join('\n') + '\n') } }
+        for (const name of archive) {
+          const original = protocol[name]
+          const attempts = original.reserveAttempts ?? original.reserveAttemptIds.map(attemptId => ({
+            attemptId, invocationId: original.evidenceInvocationId, terminal: 'settle' }))
+          for (const item of attempts) {
+            const arm = item.attemptId.split(':')[0]
+            triplet(item.attemptId, { protocolRevision: original.protocolRevision,
+              protocolHash: original.protocolHash, invocationId: item.invocationId,
+              ...(original.armBindings ? { arm, ...original.armBindings[arm] } : {}),
+              ...(item.parityId ? { parityId: item.parityId } : {}) }, item.terminal)
+          }
+          boundaries[name] = { ...original, rawBytesSha256: hash(rows.map(JSON.stringify).join('\n') + '\n') }
+        }
+        return { raw: rows.map(JSON.stringify).join('\n') + '\n', boundaries, binding }
+      }
+      const real = fixture('real'), synthetic = fixture('synthetic')
+      const protocolBytes = Buffer.from(JSON.stringify({ ...protocol, ...real.boundaries }))
+      const gitDir = spawnSync('git', ['-C', ROOT, 'rev-parse', '--absolute-git-dir'], { encoding: 'utf8' })
+      assert.equal(gitDir.status, 0)
+      fs.mkdirSync(path.dirname(ledger), { recursive: true })
+      fs.writeFileSync(path.join(dir, '.git'), `gitdir: ${gitDir.stdout.trim()}\n`)
+      fs.writeFileSync(ledger, real.raw)
+      // Test-only inventory and protocol bytes; the real entry still checks the Git common dir,
+      // canonical ledger path, file identity and every historical boundary.
+      childProcess.spawnSync = function (command, args, options) {
+        if (command === 'git' && args?.slice(-3).join(' ') === 'worktree list --porcelain')
+          return { status: 0, stdout: `worktree ${dir}\nHEAD ${'a'.repeat(40)}\nbranch refs/heads/codex/program-v3-autonomous-continuation\n` }
+        return originalSpawn.call(this, command, args, options)
+      }
+      syncBuiltinESMExports()
+      fs.readFileSync = function (name, ...args) {
+        if (typeof name === 'string' && path.resolve(name) === path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json'))
+          return args[0] === 'utf8' ? protocolBytes.toString('utf8') : protocolBytes
+        return originalRead.call(this, name, ...args)
+      }
+      await use({ real, synthetic, ledger, file })
+    } finally {
+      fs.readFileSync = originalRead
+      childProcess.spawnSync = originalSpawn
+      syncBuiltinESMExports()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  },
+})
+
+s14bHistoryTest('S14B 新 revision 认证历史边界与登记证据', ({ history: { real } }) => {
   assert.ok(protocol.historicalC16D021261fBoundary, 'the consumed partial v3 window must be registered')
   assert.ok(protocol.historicalSeparatedReviewB89b011aBoundary, 'the consumed two-slot diagnostic must be historical')
   const boundary = protocol.historicalS14BSplitBoundary
   assert.equal(boundary.fromEventCount, 345)
   assert.equal(boundary.eventCount, 390)
-  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/split-boundary-'))
-  const ledger = path.join(dir, '.runtime/.cache/novel-quality-modernization/physical-ledger.jsonl')
-  const file = path.join(dir, 'synthetic-ledger.jsonl')
-  const archive = ['historicalSupersessionBoundary', 'historicalReviewedDraftBoundary',
-    'historicalReviewRebuildBoundary', 'historicalS14BSplitBoundary', 'historicalPostUi408Boundary',
-    'historicalC16Ee3435ecBoundary', 'historicalC16Ccc70b31Boundary', 'historicalC16C9b88510Boundary', 'historicalC16D8a30c11Boundary',
-    'historicalC16Ca466d9aBoundary', 'historicalC1673b46513Boundary', 'historicalC16Fa8806d7Boundary', 'historicalC16B42cfc55Boundary',
-    'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
-    'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary', 'historicalC1609ad48e1Boundary', 'historicalSeparatedReviewB89b011aBoundary',
-    'historicalPostUi83573613Boundary', 'historicalR3NativeD12c4111Boundary', 'historicalR3ClosedCce6f01aBoundary', 'historicalR3NativeDc9b7cbdBoundary', 'historicalR3Native49e1c0adBoundary', 'historicalR3Native6e38e5ddBoundary',
-    'historicalR3Native11152245Boundary', 'historicalR3NativeC9e7c71eBoundary', 'historicalR3NativeD51580fcBoundary', 'historicalR3NativeAd650e85Boundary', 'historicalR3Native2d67a3aaBoundary', 'historicalR3NativeC907f174Boundary', 'historicalSavedNativeBoundary']
-  const fixture = mode => {
-    const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
-      sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
-      phase: 'early-budget', milestone: 'early', caseId: '场景1/1', operation: '指定范围生成' }
-    const rows = []
-    const triplet = (attemptId, extra = {}, terminal = 'settle') => rows.push(
-      { type: 'reserve', attemptId, binding: { ...binding, ...extra }, allocation: 'earlyBudget' },
-      { type: 'dispatch', attemptId }, { type: terminal, attemptId })
-    const frozen = Array.from({ length: protocol.historicalLedgerBoundary.eventCount / 3 }, (_, index) => `frozen-${index}`)
-    frozen.splice(-protocol.historicalLedgerBoundary.finalReserveAttemptIds.length,
-      protocol.historicalLedgerBoundary.finalReserveAttemptIds.length,
-      ...protocol.historicalLedgerBoundary.finalReserveAttemptIds)
-    frozen.forEach(id => triplet(id))
-    const boundaries = { historicalLedgerBoundary: { ...protocol.historicalLedgerBoundary,
-      rawBytesSha256: hash(rows.map(JSON.stringify).join('\n') + '\n') } }
-    for (const name of archive) {
-      const original = protocol[name]
-      const attempts = original.reserveAttempts ?? original.reserveAttemptIds.map(attemptId => ({
-        attemptId, invocationId: original.evidenceInvocationId, terminal: 'settle' }))
-      for (const item of attempts) {
-        const arm = item.attemptId.split(':')[0]
-        triplet(item.attemptId, { protocolRevision: original.protocolRevision,
-          protocolHash: original.protocolHash, invocationId: item.invocationId,
-          ...(original.armBindings ? { arm, ...original.armBindings[arm] } : {}),
-          ...(item.parityId ? { parityId: item.parityId } : {}) }, item.terminal)
-      }
-      boundaries[name] = { ...original, rawBytesSha256: hash(rows.map(JSON.stringify).join('\n') + '\n') }
-    }
-    return { raw: rows.map(JSON.stringify).join('\n') + '\n', boundaries, binding }
-  }
-  const real = fixture('real'), synthetic = fixture('synthetic')
-  const protocolBytes = Buffer.from(JSON.stringify({ ...protocol, ...real.boundaries }))
-  const gitDir = spawnSync('git', ['-C', ROOT, 'rev-parse', '--absolute-git-dir'], { encoding: 'utf8' })
-  assert.equal(gitDir.status, 0)
-  const originalSpawn = childProcess.spawnSync, originalRead = fs.readFileSync
-  try {
-    fs.mkdirSync(path.dirname(ledger), { recursive: true })
-    fs.writeFileSync(path.join(dir, '.git'), `gitdir: ${gitDir.stdout.trim()}\n`)
-    fs.writeFileSync(ledger, real.raw)
-    // Test-only inventory and protocol bytes; the real entry still checks the Git common dir,
-    // canonical ledger path, file identity and every historical boundary.
-    childProcess.spawnSync = function (command, args, options) {
-      if (command === 'git' && args?.slice(-3).join(' ') === 'worktree list --porcelain')
-        return { status: 0, stdout: `worktree ${dir}\nHEAD ${'a'.repeat(40)}\nbranch refs/heads/codex/program-v3-autonomous-continuation\n` }
-      return originalSpawn.call(this, command, args, options)
-    }
-    syncBuiltinESMExports()
-    fs.readFileSync = function (name, ...args) {
-      if (typeof name === 'string' && path.resolve(name) === path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json'))
-        return args[0] === 'utf8' ? protocolBytes.toString('utf8') : protocolBytes
-      return originalRead.call(this, name, ...args)
-    }
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 345, real.boundaries.historicalS14BSplitBoundary), 390)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 390, real.boundaries.historicalPostUi408Boundary), 408)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 408, real.boundaries.historicalC16Ee3435ecBoundary), 432)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 432, real.boundaries.historicalC16Ccc70b31Boundary), 507)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 507, real.boundaries.historicalC16C9b88510Boundary), 546)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 546, real.boundaries.historicalC16D8a30c11Boundary), 579)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 579, real.boundaries.historicalC16Ca466d9aBoundary), 615)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 615, real.boundaries.historicalC1673b46513Boundary), 648)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 648, real.boundaries.historicalC16Fa8806d7Boundary), 690)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 690, real.boundaries.historicalC16B42cfc55Boundary), 738)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 738, real.boundaries.historicalC1667a57c04Boundary), 774)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 774, real.boundaries.historicalC162867cfa4Boundary), 828)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 828, real.boundaries.historicalPostUiBa2d34abBoundary), 843)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 843, real.boundaries.historicalPostUi1d0bdac3Boundary), 861)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 861, real.boundaries.historicalC16Ac3af420Boundary), 909)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 909, real.boundaries.historicalC16A9552e67Boundary), 957)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 957, real.boundaries.historicalC1663a44636Boundary), 1005)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1005, real.boundaries.historicalC16A4d2b6edBoundary), 1041)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1041, real.boundaries.historicalC160917fb36Boundary), 1080)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1080, real.boundaries.historicalC161aa5487eBoundary), 1122)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1122, real.boundaries.historicalC169337909dBoundary), 1158)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1158, real.boundaries.historicalSharedInput7203443dBoundary), 1161)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1161, real.boundaries.historicalC1670407421Boundary), 1182)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1182, real.boundaries.historicalC16D712808cBoundary), 1194)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1194, real.boundaries.historicalC16625bfda8Boundary), 1212)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1212, real.boundaries.historicalC16D515b666Boundary), 1251)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1251, real.boundaries.historicalC16A763f510Boundary), 1287)
-    const interrupted = real.boundaries.historicalC16071156e5Boundary
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1296, interrupted), 1350)
-    assert.equal(interrupted.reserveAttempts.length, 18)
-    assert.equal(interrupted.reserveAttempts.at(-1).terminal, 'unknown')
-    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1296, { ...interrupted,
-      reserveAttempts: interrupted.reserveAttempts.map((item, index) => index === 17 ? { ...item, terminal: 'settle' } : item),
-    }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    const closed = real.boundaries.historicalC169182d475Boundary
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1350, closed), 1419)
-    assert.equal(closed.reserveAttempts.length, 23)
-    assert.ok(closed.reserveAttempts.every(item => item.terminal === 'settle'
-      && item.invocationId === '9182d475-c42a-4a96-bfea-99ab4e7bd842'))
-    assert.equal(closed.armBindings.candidate.codeSha, '990f8bb51d8c686e9400c014ffc46c632558beca')
-    const consumed = real.boundaries.historicalC1687266499Boundary
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1419, consumed), 1485)
-    assert.equal(consumed.reserveAttempts.length, 22)
-    assert.ok(consumed.reserveAttempts.every(item => item.terminal === 'settle'
-      && item.invocationId === '87266499-46a4-4784-87d3-aac2cc4d2074'))
-    assert.equal(consumed.armBindings.candidate.codeSha, '06a40497a24aa0e5e2cdca04a280159e2b1513bd')
-    const partial = real.boundaries.historicalC16D021261fBoundary
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1485, partial), 1524)
-    assert.equal(partial.reserveAttempts.length, 13)
-    assert.ok(partial.reserveAttempts.every(item => item.terminal === 'settle'
-      && item.invocationId === 'd021261f-ef32-45d2-937e-a004483a1634'))
-    assert.equal(partial.armBindings.candidate.codeSha, 'ee52863638b24683e3d083513a6a7ef5f6ded408')
-    const failed = real.boundaries.historicalC1609ad48e1Boundary
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1524, failed), 1578)
-    assert.equal(failed.reserveAttempts.length, 18)
-    assert.ok(failed.reserveAttempts.every(item => item.terminal === 'settle'
-      && item.invocationId === '09ad48e1-ad68-427e-b00a-1a19408586a5'))
-    assert.equal(failed.armBindings.candidate.codeSha, '003a3f79f901a072d1ab633e3477ad307a542797')
-    const diagnostic = real.boundaries.historicalSeparatedReviewB89b011aBoundary
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1578, diagnostic), 1584)
-    assert.deepEqual(diagnostic.reserveAttempts.map(item => item.attemptId), [
-      'candidate:af14f2d5-57fa-4af0-bc3a-13a89c88c792', 'candidate:04e7af01-83b7-45c4-b940-96ec1bb642c8'])
-    assert.ok(diagnostic.reserveAttempts.every(item => item.terminal === 'settle'
-      && item.invocationId === 'b89b011a-40b0-4c7a-bf1e-15d2bbdc40d6'))
-    assert.equal(diagnostic.armBindings.candidate.codeSha, 'cf8f58170d72ea414b0d3fb26d50ef5034efe004')
-    for (const [field, value] of [['invocationId', '00000000-0000-4000-8000-000000000000'],
-      ['parityId', 'f'.repeat(64)], ['terminal', 'unknown']])
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1578, { ...diagnostic,
-        reserveAttempts: diagnostic.reserveAttempts.map((item, index) => index ? item : { ...item, [field]: value }) }),
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 345, real.boundaries.historicalS14BSplitBoundary), 390)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 390, real.boundaries.historicalPostUi408Boundary), 408)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 408, real.boundaries.historicalC16Ee3435ecBoundary), 432)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 432, real.boundaries.historicalC16Ccc70b31Boundary), 507)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 507, real.boundaries.historicalC16C9b88510Boundary), 546)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 546, real.boundaries.historicalC16D8a30c11Boundary), 579)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 579, real.boundaries.historicalC16Ca466d9aBoundary), 615)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 615, real.boundaries.historicalC1673b46513Boundary), 648)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 648, real.boundaries.historicalC16Fa8806d7Boundary), 690)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 690, real.boundaries.historicalC16B42cfc55Boundary), 738)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 738, real.boundaries.historicalC1667a57c04Boundary), 774)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 774, real.boundaries.historicalC162867cfa4Boundary), 828)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 828, real.boundaries.historicalPostUiBa2d34abBoundary), 843)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 843, real.boundaries.historicalPostUi1d0bdac3Boundary), 861)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 861, real.boundaries.historicalC16Ac3af420Boundary), 909)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 909, real.boundaries.historicalC16A9552e67Boundary), 957)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 957, real.boundaries.historicalC1663a44636Boundary), 1005)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1005, real.boundaries.historicalC16A4d2b6edBoundary), 1041)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1041, real.boundaries.historicalC160917fb36Boundary), 1080)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1080, real.boundaries.historicalC161aa5487eBoundary), 1122)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1122, real.boundaries.historicalC169337909dBoundary), 1158)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1158, real.boundaries.historicalSharedInput7203443dBoundary), 1161)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1161, real.boundaries.historicalC1670407421Boundary), 1182)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1182, real.boundaries.historicalC16D712808cBoundary), 1194)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1194, real.boundaries.historicalC16625bfda8Boundary), 1212)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1212, real.boundaries.historicalC16D515b666Boundary), 1251)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1251, real.boundaries.historicalC16A763f510Boundary), 1287)
+  const interrupted = real.boundaries.historicalC16071156e5Boundary
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1296, interrupted), 1350)
+  assert.equal(interrupted.reserveAttempts.length, 18)
+  assert.equal(interrupted.reserveAttempts.at(-1).terminal, 'unknown')
+  assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1296, { ...interrupted,
+    reserveAttempts: interrupted.reserveAttempts.map((item, index) => index === 17 ? { ...item, terminal: 'settle' } : item),
+  }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  const closed = real.boundaries.historicalC169182d475Boundary
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1350, closed), 1419)
+  assert.equal(closed.reserveAttempts.length, 23)
+  assert.ok(closed.reserveAttempts.every(item => item.terminal === 'settle'
+    && item.invocationId === '9182d475-c42a-4a96-bfea-99ab4e7bd842'))
+  assert.equal(closed.armBindings.candidate.codeSha, '990f8bb51d8c686e9400c014ffc46c632558beca')
+  const consumed = real.boundaries.historicalC1687266499Boundary
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1419, consumed), 1485)
+  assert.equal(consumed.reserveAttempts.length, 22)
+  assert.ok(consumed.reserveAttempts.every(item => item.terminal === 'settle'
+    && item.invocationId === '87266499-46a4-4784-87d3-aac2cc4d2074'))
+  assert.equal(consumed.armBindings.candidate.codeSha, '06a40497a24aa0e5e2cdca04a280159e2b1513bd')
+  const partial = real.boundaries.historicalC16D021261fBoundary
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1485, partial), 1524)
+  assert.equal(partial.reserveAttempts.length, 13)
+  assert.ok(partial.reserveAttempts.every(item => item.terminal === 'settle'
+    && item.invocationId === 'd021261f-ef32-45d2-937e-a004483a1634'))
+  assert.equal(partial.armBindings.candidate.codeSha, 'ee52863638b24683e3d083513a6a7ef5f6ded408')
+  const failed = real.boundaries.historicalC1609ad48e1Boundary
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1524, failed), 1578)
+  assert.equal(failed.reserveAttempts.length, 18)
+  assert.ok(failed.reserveAttempts.every(item => item.terminal === 'settle'
+    && item.invocationId === '09ad48e1-ad68-427e-b00a-1a19408586a5'))
+  assert.equal(failed.armBindings.candidate.codeSha, '003a3f79f901a072d1ab633e3477ad307a542797')
+  const diagnostic = real.boundaries.historicalSeparatedReviewB89b011aBoundary
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1578, diagnostic), 1584)
+  assert.deepEqual(diagnostic.reserveAttempts.map(item => item.attemptId), [
+    'candidate:af14f2d5-57fa-4af0-bc3a-13a89c88c792', 'candidate:04e7af01-83b7-45c4-b940-96ec1bb642c8'])
+  assert.ok(diagnostic.reserveAttempts.every(item => item.terminal === 'settle'
+    && item.invocationId === 'b89b011a-40b0-4c7a-bf1e-15d2bbdc40d6'))
+  assert.equal(diagnostic.armBindings.candidate.codeSha, 'cf8f58170d72ea414b0d3fb26d50ef5034efe004')
+  for (const [field, value] of [['invocationId', '00000000-0000-4000-8000-000000000000'],
+    ['parityId', 'f'.repeat(64)], ['terminal', 'unknown']])
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1578, { ...diagnostic,
+      reserveAttempts: diagnostic.reserveAttempts.map((item, index) => index ? item : { ...item, [field]: value }) }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  for (const [from, registered] of [[1485, partial], [1524, failed], [1578, diagnostic]]) {
+    for (const [field, value] of [['protocolRevision', 'unregistered'], ['protocolHash', 'f'.repeat(64)]])
+      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, from, { ...registered, [field]: value }),
       /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    for (const [from, registered] of [[1485, partial], [1524, failed], [1578, diagnostic]]) {
-      for (const [field, value] of [['protocolRevision', 'unregistered'], ['protocolHash', 'f'.repeat(64)]])
-        assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, from, { ...registered, [field]: value }),
-        /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, from, { ...registered,
+      reserveAttempts: [registered.reserveAttempts[1], registered.reserveAttempts[0], ...registered.reserveAttempts.slice(2)] }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  }
+  for (const [from, registered] of [[1350, closed], [1419, consumed], [1485, partial], [1524, failed], [1578, diagnostic]])
+    for (const field of ['codeSha', 'sourceHash', 'driverHash'])
       assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, from, { ...registered,
-        reserveAttempts: [registered.reserveAttempts[1], registered.reserveAttempts[0], ...registered.reserveAttempts.slice(2)] }),
-      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    }
-    for (const [from, registered] of [[1350, closed], [1419, consumed], [1485, partial], [1524, failed], [1578, diagnostic]])
-      for (const field of ['codeSha', 'sourceHash', 'driverHash'])
-        assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, from, { ...registered,
-          armBindings: { candidate: { ...registered.armBindings.candidate,
-            [field]: 'f'.repeat(registered.armBindings.candidate[field].length) } },
-        }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1626, real.boundaries.historicalR3NativeDc9b7cbdBoundary), 1629)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1629, real.boundaries.historicalR3Native49e1c0adBoundary), 1641)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1641, real.boundaries.historicalR3Native6e38e5ddBoundary), 1650)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1650, real.boundaries.historicalR3Native11152245Boundary), 1668)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1668, real.boundaries.historicalR3NativeC9e7c71eBoundary), 1671)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1671, real.boundaries.historicalR3NativeD51580fcBoundary), 1686)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1686, real.boundaries.historicalR3NativeAd650e85Boundary), 1704)
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1704, real.boundaries.historicalR3Native2d67a3aaBoundary), 1725)
-    const r3V9 = real.boundaries.historicalR3NativeC907f174Boundary
-    assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1725, r3V9), 1746)
-    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1725, { ...r3V9,
-      reserveAttempts: r3V9.reserveAttempts.map((item, index) => index ? item : { ...item, terminal: 'unknown' }) }),
-    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    assert.equal(validatePhysicalLedger(ledger), ledger)
-    assert.throws(() => updateLedger(ledger, { type: 'reserve', attemptId: 'invalid-current', binding: {} },
-      { campaignMode: 'real' }), /INVALID_CAMPAIGN_BINDING/)
-    assert.equal(fs.readFileSync(ledger, 'utf8'), real.raw)
-    fs.writeFileSync(file, synthetic.raw)
-    const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
-    assert.doesNotThrow(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt',
-      binding: { ...synthetic.binding, ...currentProtocolBinding() } }, options))
-    for (const registered of [partial, diagnostic])
-      assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'unregistered-historical-protocol',
-        binding: { ...synthetic.binding, protocolRevision: registered.protocolRevision, protocolHash: registered.protocolHash } }, options),
-      /PROTOCOL_DRIFT/)
-    const changed1350 = raw => raw.replace('"type":"unknown","attemptId":"candidate:5d0933d2-8d48-4a3b-8d14-2d87f74bf5ae"',
-      '"type":"settle","attemptId":"candidate:5d0933d2-8d48-4a3b-8d14-2d87f74bf5ae"')
-    fs.writeFileSync(ledger, changed1350(real.raw))
-    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, changed1350(synthetic.raw))
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
-      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(ledger, real.raw)
-    fs.writeFileSync(file, synthetic.raw)
-    const changed1182 = raw => raw.replace('"type":"unknown","attemptId":"candidate:44726846-b229-4dbc-96d3-568102e62c22"',
-      '"type":"settle","attemptId":"candidate:44726846-b229-4dbc-96d3-568102e62c22"')
-    fs.writeFileSync(ledger, changed1182(real.raw))
-    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, changed1182(synthetic.raw))
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
-      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(ledger, real.raw)
-    fs.writeFileSync(file, synthetic.raw)
-    for (const name of ['historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary', 'historicalC1609ad48e1Boundary', 'historicalSeparatedReviewB89b011aBoundary', 'historicalR3Native6e38e5ddBoundary', 'historicalR3NativeC907f174Boundary']) {
-      const registered = real.boundaries[name]
-      const changed = raw => raw.replace(`"codeSha":"${registered.armBindings.candidate.codeSha}"`, `"codeSha":"${'f'.repeat(40)}"`)
-      fs.writeFileSync(ledger, changed(real.raw))
-      assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-      fs.writeFileSync(file, changed(synthetic.raw))
-      assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-      fs.writeFileSync(ledger, real.raw)
-      fs.writeFileSync(file, synthetic.raw)
-    }
-    const changed1194 = raw => raw.replace('"type":"unknown","attemptId":"candidate:8ca854ac-09bc-4430-8ebe-7dea43ce89f3"',
-      '"type":"settle","attemptId":"candidate:8ca854ac-09bc-4430-8ebe-7dea43ce89f3"')
-    fs.writeFileSync(ledger, changed1194(real.raw))
-    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, changed1194(synthetic.raw))
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
-      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(ledger, real.raw)
-    fs.writeFileSync(file, synthetic.raw)
-    const d712 = real.boundaries.historicalC16D712808cBoundary
-    const changed1212 = raw => raw.replace('"type":"unknown","attemptId":"candidate:5fa5944d-d1e9-40a7-ad29-b18b2fee7680"',
-      '"type":"settle","attemptId":"candidate:5fa5944d-d1e9-40a7-ad29-b18b2fee7680"')
-    fs.writeFileSync(ledger, changed1212(real.raw))
-    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, changed1212(synthetic.raw))
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
-      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(ledger, real.raw)
-    fs.writeFileSync(file, synthetic.raw)
-    for (const field of ['codeSha', 'sourceHash', 'driverHash'])
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1182, { ...d712,
-        armBindings: { candidate: { ...d712.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
-      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    const ac3 = real.boundaries.historicalC16Ac3af420Boundary
-    const a955 = real.boundaries.historicalC16A9552e67Boundary
-    const r63 = real.boundaries.historicalC1663a44636Boundary
-    const a4 = real.boundaries.historicalC16A4d2b6edBoundary
-    const r0917 = real.boundaries.historicalC160917fb36Boundary
-    const r1aa = real.boundaries.historicalC161aa5487eBoundary
-    const r933 = real.boundaries.historicalC169337909dBoundary
-    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1080, r933), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
-    for (const field of ['codeSha', 'sourceHash', 'driverHash'])
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1122, { ...r933,
-        armBindings: { candidate: { ...r933.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
-      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    for (const [from, registered] of [[1122, r933], [1485, partial], [1524, failed]])
-      for (const [field, value] of [['attemptId', 'candidate:wrong'], ['invocationId', '00000000-0000-4000-8000-000000000000'],
-        ['terminal', 'unknown'], ['parityId', 'f'.repeat(64)]])
-        assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, from, { ...registered,
-          reserveAttempts: registered.reserveAttempts.map((item, index) => index === 0 ? { ...item, [field]: value } : item) }),
-        /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1041, r1aa), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
-    for (const field of ['codeSha', 'sourceHash', 'driverHash']) {
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1080, { ...r1aa,
-        armBindings: { candidate: { ...r1aa.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
-      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    }
-    for (const [field, value] of [['attemptId', 'candidate:wrong'], ['invocationId', '00000000-0000-4000-8000-000000000000'],
-      ['terminal', 'unknown'], ['parityId', 'f'.repeat(64)]]) {
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1080, { ...r1aa,
-        reserveAttempts: r1aa.reserveAttempts.map((item, index) => index === 0 ? { ...item, [field]: value } : item) }),
-      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    }
-    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1005, r0917), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
-    for (const field of ['codeSha', 'sourceHash', 'driverHash']) {
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1041, { ...r0917,
-        armBindings: { candidate: { ...r0917.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
-      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    }
-    for (const [field, value] of [['attemptId', 'candidate:wrong'], ['invocationId', '00000000-0000-4000-8000-000000000000'],
-      ['terminal', 'unknown'], ['parityId', 'f'.repeat(64)]]) {
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1041, { ...r0917,
-        reserveAttempts: r0917.reserveAttempts.map((item, index) => index === 0 ? { ...item, [field]: value } : item) }),
-      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    }
-    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 957, a4), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
-    for (const field of ['codeSha', 'sourceHash', 'driverHash']) {
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1005, { ...a4,
-        armBindings: { candidate: { ...a4.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
-      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    }
-    for (const [field, value] of [['attemptId', 'candidate:wrong'], ['invocationId', '00000000-0000-4000-8000-000000000000'],
-      ['terminal', 'unknown'], ['parityId', 'f'.repeat(64)]]) {
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1005, { ...a4,
-        reserveAttempts: a4.reserveAttempts.map((item, index) => index === 0 ? { ...item, [field]: value } : item) }),
-      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    }
-    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 909, r63), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
-    for (const field of ['codeSha', 'sourceHash', 'driverHash']) {
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 957, { ...r63,
-        armBindings: { candidate: { ...r63.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
-      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    }
-    for (const [field, value] of [['attemptId', 'candidate:wrong'], ['invocationId', '00000000-0000-4000-8000-000000000000'],
-      ['terminal', 'unknown'], ['parityId', 'f'.repeat(64)]]) {
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 957, { ...r63,
-        reserveAttempts: r63.reserveAttempts.map((item, index) => index === 0 ? { ...item, [field]: value } : item) }),
-      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    }
-    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 843, ac3), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
-    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 861, a955), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
-    for (const field of ['codeSha', 'sourceHash', 'driverHash']) {
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 909, { ...a955,
-        armBindings: { candidate: { ...a955.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
-      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    }
-    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 909, { ...a955,
-      reserveAttempts: a955.reserveAttempts.map((item, index) => index === 0 ? { ...item, parityId: 'f'.repeat(64) } : item) }),
-    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    for (const field of ['codeSha', 'sourceHash', 'driverHash']) {
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 861, { ...ac3,
-        armBindings: { candidate: { ...ac3.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
-      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    }
-    for (const [field, value] of [['attemptId', 'candidate:wrong'], ['invocationId', '00000000-0000-4000-8000-000000000000'],
-      ['terminal', 'unknown'], ['parityId', 'f'.repeat(64)]]) {
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 861, { ...ac3,
-        reserveAttempts: ac3.reserveAttempts.map((item, index) => index === 0 ? { ...item, [field]: value } : item) }),
-      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    }
-    const changed909 = raw => raw.trimEnd().split('\n').map((line, index) =>
-      index === 908 ? line.replace('"attemptId":"', '"attemptId":"tampered-') : line).join('\n') + '\n'
-    fs.writeFileSync(ledger, changed909(real.raw))
-    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, changed909(synthetic.raw))
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
-      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    const changed957 = raw => raw.trimEnd().split('\n').map((line, index) =>
-      index === 956 ? line.replace('"attemptId":"', '"attemptId":"tampered-') : line).join('\n') + '\n'
-    fs.writeFileSync(ledger, changed957(real.raw))
-    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, changed957(synthetic.raw))
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
-      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    const changed1005 = raw => raw.trimEnd().split('\n').map((line, index) =>
-      index === 1004 ? line.replace('"attemptId":"', '"attemptId":"tampered-') : line).join('\n') + '\n'
-    fs.writeFileSync(ledger, changed1005(real.raw))
-    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, changed1005(synthetic.raw))
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
-      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, synthetic.raw)
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'unregistered-63a44636',
-      binding: { ...synthetic.binding, protocolRevision: r63.protocolRevision, protocolHash: r63.protocolHash } }, options),
-    /PROTOCOL_DRIFT/)
-    const changed1041 = raw => raw.trimEnd().split('\n').map((line, index) =>
-      index === 1040 ? line.replace('"attemptId":"', '"attemptId":"tampered-') : line).join('\n') + '\n'
-    fs.writeFileSync(ledger, changed1041(real.raw))
-    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, changed1041(synthetic.raw))
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
-      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, synthetic.raw)
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'unregistered-a4d2b6ed',
-      binding: { ...synthetic.binding, protocolRevision: a4.protocolRevision, protocolHash: a4.protocolHash } }, options),
-    /PROTOCOL_DRIFT/)
-    const changed1080 = raw => raw.trimEnd().split('\n').map((line, index) =>
-      index === 1079 ? line.replace('"attemptId":"', '"attemptId":"tampered-') : line).join('\n') + '\n'
-    fs.writeFileSync(ledger, changed1080(real.raw))
-    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, changed1080(synthetic.raw))
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
-      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, synthetic.raw)
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'unregistered-0917fb36',
-      binding: { ...synthetic.binding, protocolRevision: r0917.protocolRevision, protocolHash: r0917.protocolHash } }, options),
-    /PROTOCOL_DRIFT/)
-    const changed1122 = raw => raw.trimEnd().split('\n').map((line, index) =>
-      index === 1121 ? line.replace('"attemptId":"', '"attemptId":"tampered-') : line).join('\n') + '\n'
-    fs.writeFileSync(ledger, changed1122(real.raw))
-    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, changed1122(synthetic.raw))
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
-      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, synthetic.raw)
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'unregistered-1aa5487e',
-      binding: { ...synthetic.binding, protocolRevision: r1aa.protocolRevision, protocolHash: r1aa.protocolHash } }, options),
-    /PROTOCOL_DRIFT/)
-    const changed1158 = raw => raw.trimEnd().split('\n').map((line, index) =>
-      index === 1157 ? line.replace('"attemptId":"', '"attemptId":"tampered-') : line).join('\n') + '\n'
-    fs.writeFileSync(ledger, changed1158(real.raw))
-    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, changed1158(synthetic.raw))
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
-      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, synthetic.raw)
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'unregistered-9337909d',
-      binding: { ...synthetic.binding, protocolRevision: r933.protocolRevision, protocolHash: r933.protocolHash } }, options),
-    /PROTOCOL_DRIFT/)
-    fs.writeFileSync(file, synthetic.raw + JSON.stringify({ type: 'reserve', attemptId: 'unregistered-ac3',
-      binding: { ...synthetic.binding, protocolRevision: ac3.protocolRevision, protocolHash: ac3.protocolHash },
-      allocation: 'failedRetryRepairReviewReserve' }) + '\n')
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt',
-      binding: { ...synthetic.binding, ...currentProtocolBinding() } }, options), /PROTOCOL_DRIFT/)
-    fs.writeFileSync(ledger, real.raw.split('\n').slice(0, 408).join('\n'))
-    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_MISSING/)
-    const changed408 = real.raw.trimEnd().split('\n')
-    changed408[407] = changed408[407].replace('"attemptId":"', '"attemptId":"tampered-')
-    fs.writeFileSync(ledger, changed408.join('\n') + '\n')
-    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(ledger, real.raw)
-    const tamper = raw => {
-      const lines = raw.trimEnd().split('\n')
-      lines[389] = lines[389].replace('"attemptId":"', '"attemptId":"tampered-')
-      return lines.join('\n') + '\n'
-    }
-    fs.writeFileSync(ledger, tamper(real.raw))
-    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    fs.writeFileSync(file, tamper(synthetic.raw))
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
-      /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
-    for (const [field, value] of [['codeSha', 'f'.repeat(40)], ['sourceHash', 'f'.repeat(64)],
-      ['driverHash', 'f'.repeat(64)], ['parityId', 'f'.repeat(64)]]) {
-      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 390, {
-        ...real.boundaries.historicalPostUi408Boundary,
-        armBindings: { ...real.boundaries.historicalPostUi408Boundary.armBindings,
-          baseline: { ...real.boundaries.historicalPostUi408Boundary.armBindings.baseline, [field]: value } },
+        armBindings: { candidate: { ...registered.armBindings.candidate,
+          [field]: 'f'.repeat(registered.armBindings.candidate[field].length) } },
       }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    }
-    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 390, {
-      ...real.boundaries.historicalPostUi408Boundary,
-      reserveAttempts: real.boundaries.historicalPostUi408Boundary.reserveAttempts.map((item, index) =>
-        index === 0 ? { ...item, terminal: 'unknown' } : item),
-    }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 390, {
-      ...real.boundaries.historicalPostUi408Boundary,
-      reserveAttempts: real.boundaries.historicalPostUi408Boundary.reserveAttempts.map((item, index) =>
-        index === 0 ? { ...item, attemptId: 'candidate:wrong' } : item),
-    }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
-    fs.writeFileSync(file, synthetic.raw + JSON.stringify({ type: 'reserve', attemptId: 'unregistered-old',
-      binding: { ...synthetic.binding, protocolRevision: protocol.historicalPostUi408Boundary.protocolRevision,
-        protocolHash: protocol.historicalPostUi408Boundary.protocolHash }, allocation: 'failedRetryRepairReviewReserve' }) + '\n')
-    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt',
-      binding: { ...synthetic.binding, ...currentProtocolBinding() } }, options), /PROTOCOL_DRIFT/)
-  } finally {
-    fs.readFileSync = originalRead
-    childProcess.spawnSync = originalSpawn
-    syncBuiltinESMExports()
-    fs.rmSync(dir, { recursive: true, force: true })
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1626, real.boundaries.historicalR3NativeDc9b7cbdBoundary), 1629)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1629, real.boundaries.historicalR3Native49e1c0adBoundary), 1641)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1641, real.boundaries.historicalR3Native6e38e5ddBoundary), 1650)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1650, real.boundaries.historicalR3Native11152245Boundary), 1668)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1668, real.boundaries.historicalR3NativeC9e7c71eBoundary), 1671)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1671, real.boundaries.historicalR3NativeD51580fcBoundary), 1686)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1686, real.boundaries.historicalR3NativeAd650e85Boundary), 1704)
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1704, real.boundaries.historicalR3Native2d67a3aaBoundary), 1725)
+  const r3V9 = real.boundaries.historicalR3NativeC907f174Boundary
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1725, r3V9), 1746)
+  assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1725, { ...r3V9,
+    reserveAttempts: r3V9.reserveAttempts.map((item, index) => index ? item : { ...item, terminal: 'unknown' }) }),
+  /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  const d712 = real.boundaries.historicalC16D712808cBoundary
+  for (const field of ['codeSha', 'sourceHash', 'driverHash'])
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1182, { ...d712,
+      armBindings: { candidate: { ...d712.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  const ac3 = real.boundaries.historicalC16Ac3af420Boundary
+  const a955 = real.boundaries.historicalC16A9552e67Boundary
+  const r63 = real.boundaries.historicalC1663a44636Boundary
+  const a4 = real.boundaries.historicalC16A4d2b6edBoundary
+  const r0917 = real.boundaries.historicalC160917fb36Boundary
+  const r1aa = real.boundaries.historicalC161aa5487eBoundary
+  const r933 = real.boundaries.historicalC169337909dBoundary
+  assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1080, r933), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+  for (const field of ['codeSha', 'sourceHash', 'driverHash'])
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1122, { ...r933,
+      armBindings: { candidate: { ...r933.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  for (const [from, registered] of [[1122, r933], [1485, partial], [1524, failed]])
+    for (const [field, value] of [['attemptId', 'candidate:wrong'], ['invocationId', '00000000-0000-4000-8000-000000000000'],
+      ['terminal', 'unknown'], ['parityId', 'f'.repeat(64)]])
+      assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, from, { ...registered,
+        reserveAttempts: registered.reserveAttempts.map((item, index) => index === 0 ? { ...item, [field]: value } : item) }),
+      /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1041, r1aa), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+  for (const field of ['codeSha', 'sourceHash', 'driverHash']) {
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1080, { ...r1aa,
+      armBindings: { candidate: { ...r1aa.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
   }
+  for (const [field, value] of [['attemptId', 'candidate:wrong'], ['invocationId', '00000000-0000-4000-8000-000000000000'],
+    ['terminal', 'unknown'], ['parityId', 'f'.repeat(64)]]) {
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1080, { ...r1aa,
+      reserveAttempts: r1aa.reserveAttempts.map((item, index) => index === 0 ? { ...item, [field]: value } : item) }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  }
+  assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1005, r0917), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+  for (const field of ['codeSha', 'sourceHash', 'driverHash']) {
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1041, { ...r0917,
+      armBindings: { candidate: { ...r0917.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  }
+  for (const [field, value] of [['attemptId', 'candidate:wrong'], ['invocationId', '00000000-0000-4000-8000-000000000000'],
+    ['terminal', 'unknown'], ['parityId', 'f'.repeat(64)]]) {
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1041, { ...r0917,
+      reserveAttempts: r0917.reserveAttempts.map((item, index) => index === 0 ? { ...item, [field]: value } : item) }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  }
+  assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 957, a4), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+  for (const field of ['codeSha', 'sourceHash', 'driverHash']) {
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1005, { ...a4,
+      armBindings: { candidate: { ...a4.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  }
+  for (const [field, value] of [['attemptId', 'candidate:wrong'], ['invocationId', '00000000-0000-4000-8000-000000000000'],
+    ['terminal', 'unknown'], ['parityId', 'f'.repeat(64)]]) {
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 1005, { ...a4,
+      reserveAttempts: a4.reserveAttempts.map((item, index) => index === 0 ? { ...item, [field]: value } : item) }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  }
+  assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 909, r63), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+  for (const field of ['codeSha', 'sourceHash', 'driverHash']) {
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 957, { ...r63,
+      armBindings: { candidate: { ...r63.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  }
+  for (const [field, value] of [['attemptId', 'candidate:wrong'], ['invocationId', '00000000-0000-4000-8000-000000000000'],
+    ['terminal', 'unknown'], ['parityId', 'f'.repeat(64)]]) {
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 957, { ...r63,
+      reserveAttempts: r63.reserveAttempts.map((item, index) => index === 0 ? { ...item, [field]: value } : item) }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  }
+  assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 843, ac3), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+  assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 861, a955), /INVALID_HISTORICAL_LEDGER_SUPERSESSION_BOUNDARY/)
+  for (const field of ['codeSha', 'sourceHash', 'driverHash']) {
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 909, { ...a955,
+      armBindings: { candidate: { ...a955.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  }
+  assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 909, { ...a955,
+    reserveAttempts: a955.reserveAttempts.map((item, index) => index === 0 ? { ...item, parityId: 'f'.repeat(64) } : item) }),
+  /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  for (const field of ['codeSha', 'sourceHash', 'driverHash']) {
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 861, { ...ac3,
+      armBindings: { candidate: { ...ac3.armBindings.candidate, [field]: 'f'.repeat(field === 'codeSha' ? 40 : 64) } } }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  }
+  for (const [field, value] of [['attemptId', 'candidate:wrong'], ['invocationId', '00000000-0000-4000-8000-000000000000'],
+    ['terminal', 'unknown'], ['parityId', 'f'.repeat(64)]]) {
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 861, { ...ac3,
+      reserveAttempts: ac3.reserveAttempts.map((item, index) => index === 0 ? { ...item, [field]: value } : item) }),
+    /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  }
+  for (const [field, value] of [['codeSha', 'f'.repeat(40)], ['sourceHash', 'f'.repeat(64)],
+    ['driverHash', 'f'.repeat(64)], ['parityId', 'f'.repeat(64)]]) {
+    assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 390, {
+      ...real.boundaries.historicalPostUi408Boundary,
+      armBindings: { ...real.boundaries.historicalPostUi408Boundary.armBindings,
+        baseline: { ...real.boundaries.historicalPostUi408Boundary.armBindings.baseline, [field]: value } },
+    }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  }
+  assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 390, {
+    ...real.boundaries.historicalPostUi408Boundary,
+    reserveAttempts: real.boundaries.historicalPostUi408Boundary.reserveAttempts.map((item, index) =>
+      index === 0 ? { ...item, terminal: 'unknown' } : item),
+  }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+  assert.throws(() => validateHistoricalSupersessionBoundary(real.raw, 390, {
+    ...real.boundaries.historicalPostUi408Boundary,
+    reserveAttempts: real.boundaries.historicalPostUi408Boundary.reserveAttempts.map((item, index) =>
+      index === 0 ? { ...item, attemptId: 'candidate:wrong' } : item),
+  }), /HISTORICAL_LEDGER_SUPERSESSION_EVIDENCE_MISSING/)
+})
+
+s14bHistoryTest('S14B 新 revision 在账本读写两入口拒绝历史终态与代码身份漂移', ({ history: { real, synthetic, ledger, file } }) => {
+  const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
+  const changed1350 = raw => raw.replace('"type":"unknown","attemptId":"candidate:5d0933d2-8d48-4a3b-8d14-2d87f74bf5ae"',
+    '"type":"settle","attemptId":"candidate:5d0933d2-8d48-4a3b-8d14-2d87f74bf5ae"')
+  fs.writeFileSync(ledger, changed1350(real.raw))
+  assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, changed1350(synthetic.raw))
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+    /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(ledger, real.raw)
+  fs.writeFileSync(file, synthetic.raw)
+  const changed1182 = raw => raw.replace('"type":"unknown","attemptId":"candidate:44726846-b229-4dbc-96d3-568102e62c22"',
+    '"type":"settle","attemptId":"candidate:44726846-b229-4dbc-96d3-568102e62c22"')
+  fs.writeFileSync(ledger, changed1182(real.raw))
+  assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, changed1182(synthetic.raw))
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+    /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(ledger, real.raw)
+  fs.writeFileSync(file, synthetic.raw)
+  for (const name of ['historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary', 'historicalC1609ad48e1Boundary', 'historicalSeparatedReviewB89b011aBoundary', 'historicalR3Native6e38e5ddBoundary', 'historicalR3NativeC907f174Boundary']) {
+    const registered = real.boundaries[name]
+    const changed = raw => raw.replace(`"codeSha":"${registered.armBindings.candidate.codeSha}"`, `"codeSha":"${'f'.repeat(40)}"`)
+    fs.writeFileSync(ledger, changed(real.raw))
+    assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    fs.writeFileSync(file, changed(synthetic.raw))
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+    fs.writeFileSync(ledger, real.raw)
+    fs.writeFileSync(file, synthetic.raw)
+  }
+  const changed1194 = raw => raw.replace('"type":"unknown","attemptId":"candidate:8ca854ac-09bc-4430-8ebe-7dea43ce89f3"',
+    '"type":"settle","attemptId":"candidate:8ca854ac-09bc-4430-8ebe-7dea43ce89f3"')
+  fs.writeFileSync(ledger, changed1194(real.raw))
+  assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, changed1194(synthetic.raw))
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+    /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(ledger, real.raw)
+  fs.writeFileSync(file, synthetic.raw)
+  const changed1212 = raw => raw.replace('"type":"unknown","attemptId":"candidate:5fa5944d-d1e9-40a7-ad29-b18b2fee7680"',
+    '"type":"settle","attemptId":"candidate:5fa5944d-d1e9-40a7-ad29-b18b2fee7680"')
+  fs.writeFileSync(ledger, changed1212(real.raw))
+  assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, changed1212(synthetic.raw))
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+    /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(ledger, real.raw)
+  fs.writeFileSync(file, synthetic.raw)
+})
+
+s14bHistoryTest('S14B 新 revision 在账本读写两入口拒绝前缀漂移并限制当前协议追加', ({ history: { real, synthetic, ledger, file } }) => {
+  const partial = real.boundaries.historicalC16D021261fBoundary
+  const diagnostic = real.boundaries.historicalSeparatedReviewB89b011aBoundary
+  const ac3 = real.boundaries.historicalC16Ac3af420Boundary
+  const r63 = real.boundaries.historicalC1663a44636Boundary
+  const a4 = real.boundaries.historicalC16A4d2b6edBoundary
+  const r0917 = real.boundaries.historicalC160917fb36Boundary
+  const r1aa = real.boundaries.historicalC161aa5487eBoundary
+  const r933 = real.boundaries.historicalC169337909dBoundary
+  assert.equal(validatePhysicalLedger(ledger), ledger)
+  assert.throws(() => updateLedger(ledger, { type: 'reserve', attemptId: 'invalid-current', binding: {} },
+    { campaignMode: 'real' }), /INVALID_CAMPAIGN_BINDING/)
+  assert.equal(fs.readFileSync(ledger, 'utf8'), real.raw)
+  fs.writeFileSync(file, synthetic.raw)
+  const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
+  assert.doesNotThrow(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt',
+    binding: { ...synthetic.binding, ...currentProtocolBinding() } }, options))
+  for (const registered of [partial, diagnostic])
+    assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'unregistered-historical-protocol',
+      binding: { ...synthetic.binding, protocolRevision: registered.protocolRevision, protocolHash: registered.protocolHash } }, options),
+    /PROTOCOL_DRIFT/)
+  const changed909 = raw => raw.trimEnd().split('\n').map((line, index) =>
+    index === 908 ? line.replace('"attemptId":"', '"attemptId":"tampered-') : line).join('\n') + '\n'
+  fs.writeFileSync(ledger, changed909(real.raw))
+  assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, changed909(synthetic.raw))
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+    /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  const changed957 = raw => raw.trimEnd().split('\n').map((line, index) =>
+    index === 956 ? line.replace('"attemptId":"', '"attemptId":"tampered-') : line).join('\n') + '\n'
+  fs.writeFileSync(ledger, changed957(real.raw))
+  assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, changed957(synthetic.raw))
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+    /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  const changed1005 = raw => raw.trimEnd().split('\n').map((line, index) =>
+    index === 1004 ? line.replace('"attemptId":"', '"attemptId":"tampered-') : line).join('\n') + '\n'
+  fs.writeFileSync(ledger, changed1005(real.raw))
+  assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, changed1005(synthetic.raw))
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+    /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, synthetic.raw)
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'unregistered-63a44636',
+    binding: { ...synthetic.binding, protocolRevision: r63.protocolRevision, protocolHash: r63.protocolHash } }, options),
+  /PROTOCOL_DRIFT/)
+  const changed1041 = raw => raw.trimEnd().split('\n').map((line, index) =>
+    index === 1040 ? line.replace('"attemptId":"', '"attemptId":"tampered-') : line).join('\n') + '\n'
+  fs.writeFileSync(ledger, changed1041(real.raw))
+  assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, changed1041(synthetic.raw))
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+    /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, synthetic.raw)
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'unregistered-a4d2b6ed',
+    binding: { ...synthetic.binding, protocolRevision: a4.protocolRevision, protocolHash: a4.protocolHash } }, options),
+  /PROTOCOL_DRIFT/)
+  const changed1080 = raw => raw.trimEnd().split('\n').map((line, index) =>
+    index === 1079 ? line.replace('"attemptId":"', '"attemptId":"tampered-') : line).join('\n') + '\n'
+  fs.writeFileSync(ledger, changed1080(real.raw))
+  assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, changed1080(synthetic.raw))
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+    /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, synthetic.raw)
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'unregistered-0917fb36',
+    binding: { ...synthetic.binding, protocolRevision: r0917.protocolRevision, protocolHash: r0917.protocolHash } }, options),
+  /PROTOCOL_DRIFT/)
+  const changed1122 = raw => raw.trimEnd().split('\n').map((line, index) =>
+    index === 1121 ? line.replace('"attemptId":"', '"attemptId":"tampered-') : line).join('\n') + '\n'
+  fs.writeFileSync(ledger, changed1122(real.raw))
+  assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, changed1122(synthetic.raw))
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+    /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, synthetic.raw)
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'unregistered-1aa5487e',
+    binding: { ...synthetic.binding, protocolRevision: r1aa.protocolRevision, protocolHash: r1aa.protocolHash } }, options),
+  /PROTOCOL_DRIFT/)
+  const changed1158 = raw => raw.trimEnd().split('\n').map((line, index) =>
+    index === 1157 ? line.replace('"attemptId":"', '"attemptId":"tampered-') : line).join('\n') + '\n'
+  fs.writeFileSync(ledger, changed1158(real.raw))
+  assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, changed1158(synthetic.raw))
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+    /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, synthetic.raw)
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'unregistered-9337909d',
+    binding: { ...synthetic.binding, protocolRevision: r933.protocolRevision, protocolHash: r933.protocolHash } }, options),
+  /PROTOCOL_DRIFT/)
+  fs.writeFileSync(file, synthetic.raw + JSON.stringify({ type: 'reserve', attemptId: 'unregistered-ac3',
+    binding: { ...synthetic.binding, protocolRevision: ac3.protocolRevision, protocolHash: ac3.protocolHash },
+    allocation: 'failedRetryRepairReviewReserve' }) + '\n')
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt',
+    binding: { ...synthetic.binding, ...currentProtocolBinding() } }, options), /PROTOCOL_DRIFT/)
+  fs.writeFileSync(ledger, real.raw.split('\n').slice(0, 408).join('\n'))
+  assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_MISSING/)
+  const changed408 = real.raw.trimEnd().split('\n')
+  changed408[407] = changed408[407].replace('"attemptId":"', '"attemptId":"tampered-')
+  fs.writeFileSync(ledger, changed408.join('\n') + '\n')
+  assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(ledger, real.raw)
+  const tamper = raw => {
+    const lines = raw.trimEnd().split('\n')
+    lines[389] = lines[389].replace('"attemptId":"', '"attemptId":"tampered-')
+    return lines.join('\n') + '\n'
+  }
+  fs.writeFileSync(ledger, tamper(real.raw))
+  assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, tamper(synthetic.raw))
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+    /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, synthetic.raw + JSON.stringify({ type: 'reserve', attemptId: 'unregistered-old',
+    binding: { ...synthetic.binding, protocolRevision: protocol.historicalPostUi408Boundary.protocolRevision,
+      protocolHash: protocol.historicalPostUi408Boundary.protocolHash }, allocation: 'failedRetryRepairReviewReserve' }) + '\n')
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt',
+    binding: { ...synthetic.binding, ...currentProtocolBinding() } }, options), /PROTOCOL_DRIFT/)
 })
 
 test('C16 ee3435ec 单臂历史段只在登记为历史时放行，之后严格按当前协议', () => {
