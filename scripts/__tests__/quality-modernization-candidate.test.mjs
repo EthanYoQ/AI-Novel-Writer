@@ -340,6 +340,7 @@ test('freeze consumer copies saved Pro and formal or R3 Flash sources and reject
       assert.equal(result.physicalModelRequests, 0)
       assert.equal(Object.keys(result.targets).length, 1)
       assert.equal(result.targets.candidate.modelId, phaseProfile.profileId)
+      if (phase === 'full') assert.equal(result.targets.candidate.modelId, 'e764a293-6736-4d9e-97d1-f56b452c086c')
       const target = result.targets.candidate
       if (phase === 'saved-native-review-diagnostic') {
         assert.equal(target.stageModels, undefined)
