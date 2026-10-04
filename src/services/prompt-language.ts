@@ -437,7 +437,7 @@ Output the complete revised manuscript as plain prose only. Do not include Markd
 1. Use items for issues located in the chapter under review. Every error or warning must quote one contiguous, locatable passage from that chapter.
 2. Prefer no issue over an invented issue. A checked dimension with no verified problem may be omitted or represented by one pass item; do not pad the item count.
 3. Check factual continuity, independently verifiable causality and motivation, explicit required goals for this chapter, and unnecessary complete retellings of prior events. Exclude prose or style preferences and optional creative advice.
-4. Every reported issue must be independently checkable by another editor. Do not require the author to invent new costs or plot events.
+4. Every reported issue must be independently checkable by another editor. Do not require the author to invent costs or plot events beyond what the original goals require.
 
 [Review dimensions]
 1. Plot continuity against prior context.
