@@ -1,4 +1,4 @@
-import { test } from 'vitest'
+import { afterEach, test, vi } from 'vitest'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -10,6 +10,30 @@ import { ROOT, CAMPAIGN_ID, currentProtocolBinding, selectPhase, forwardReasonin
 
 const phase = 'r3-native-revision-diagnostic'
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
+
+afterEach(() => {
+  vi.doUnmock('../quality-modernization-driver.mjs')
+  vi.restoreAllMocks()
+  vi.resetModules()
+})
+
+async function historicalOpenR3Runner(openInvocations = [policy.runs[1].invocationId]) {
+  const historical = structuredClone(protocol)
+  const registration = historical.phases[phase]
+  registration.closedInvocations = registration.closedInvocations.filter(id => !openInvocations.includes(id))
+  const bytes = Buffer.from(JSON.stringify(historical))
+  const originalRead = fs.readFileSync
+  vi.spyOn(fs, 'readFileSync').mockImplementation((file, ...args) => {
+    if (typeof file === 'string' && path.resolve(file) === path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json'))
+      return args[0] === 'utf8' ? bytes.toString('utf8') : bytes
+    return originalRead(file, ...args)
+  })
+  vi.doMock('../quality-modernization-driver.mjs', async importOriginal => ({
+    ...await importOriginal(), R3_NATIVE_REVISION_DIAGNOSTIC: registration,
+  }))
+  vi.resetModules()
+  return import('../quality-modernization-run.mjs')
+}
 
 test('R3 review admits one same-purpose replacement only after authenticated LENGTH, including empty visible output', () => {
   const directory = path.join(ROOT, '.runtime/.cache', `r3-length-${randomUUID()}`)
@@ -59,10 +83,14 @@ test('R3 review admits one same-purpose replacement only after authenticated LEN
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
-test('R3 Flash v9 preserves prior groups and closes the unused v8 third slot', () => {
+test('R3 Flash v9 authenticates its final history and closes all three slots without opening another group', () => {
   const v8 = protocol.historicalR3NativeRegistration2d67a3aa
   assert.equal(hash(v8), '4fa86ac4573c41bf4fb7a2be8c8d8220e0c2db81c614c8fe784adcda005aafe1')
-  assert.deepEqual(policy.closedInvocations, [...v8.closedInvocations, ...v8.runs.map(item => item.invocationId)])
+  assert.deepEqual(policy.closedInvocations, [...v8.closedInvocations, ...v8.runs.map(item => item.invocationId), ...policy.runs.map(item => item.invocationId)])
+  const v9Boundary = protocol.historicalR3NativeC907f174Boundary
+  assert.deepEqual([v9Boundary.fromEventCount, v9Boundary.eventCount, v9Boundary.reserveAttempts.length], [1725, 1746, 7])
+  assert.equal(v9Boundary.rawBytesSha256, 'ec2312dea6e415f1ee4db9638cab5ace127f39d62925f90f613461c373571692')
+  assert.deepEqual([...new Set(v9Boundary.reserveAttempts.map(item => item.invocationId))], policy.runs.map(item => item.invocationId))
   assert.equal(v8.runs[2].invocationId, '73b0ca6a-a5bd-4493-a7b2-1e01d5eee005')
   const v8Boundary = protocol.historicalR3Native2d67a3aaBoundary
   assert.deepEqual([v8Boundary.fromEventCount, v8Boundary.eventCount, v8Boundary.reserveAttempts.length], [1704, 1725, 7])
@@ -81,7 +109,7 @@ test('R3 Flash v9 preserves prior groups and closes the unused v8 third slot', (
   assert.equal(glm.runs[2].invocationId, '66ac671a-2481-4917-8272-6a2aeef62738')
   assert.deepEqual([protocol.historicalR3NativeAd650e85Boundary.fromEventCount, protocol.historicalR3NativeAd650e85Boundary.eventCount], [1686, 1704])
   assert.ok(protocol.historicalR3NativeAd650e85Boundary.reserveAttempts.every(item => item.invocationId !== glm.runs[2].invocationId))
-  assert.ok(policy.runs.every(item => !policy.closedInvocations.includes(item.invocationId)))
+  assert.ok(policy.runs.every(item => policy.closedInvocations.includes(item.invocationId)))
   for (const key of ['source', 'operations', 'evaluationPolicy', 'minPhysicalRequests', 'maxPhysicalRequests', 'maxTotalPhysicalRequests'])
     assert.deepEqual(policy[key], previous[key])
   const frozen = protocol.historicalR3NativeRegistrationC9e7c71e
@@ -155,15 +183,13 @@ test('R3 native registration rejects altered source and cannot restart spent dia
         projectId: 'new-project', epoch: 'new-epoch', purpose: 'review-chapter' } }
     const reserve = (attemptId, extra = {}) => ({ type: 'reserve', attemptId, binding: { ...binding, ...extra } })
     assert.throws(() => updateLedger(ledger, reserve('bad', { diagnosticInputHash: '0'.repeat(64) }), { campaignMode: 'synthetic' }), /SOURCE_BINDING/)
-    updateLedger(ledger, reserve('candidate:first'), { campaignMode: 'synthetic' })
-    updateLedger(ledger, { type: 'dispatch', attemptId: 'candidate:first' }, { campaignMode: 'synthetic' })
-    updateLedger(ledger, { type: 'settle', attemptId: 'candidate:first', finishReason: 'stop' }, { campaignMode: 'synthetic' })
+    for (const slot of policy.runs)
+      assert.throws(() => updateLedger(ledger, reserve('current-closed-' + slot.run, { invocationId: slot.invocationId }),
+        { campaignMode: 'synthetic' }), /^Error: R3_NATIVE_ATTEMPT_UNAVAILABLE$/)
     assert.throws(() => updateLedger(ledger, reserve('restart', { invocationId: randomUUID() }), { campaignMode: 'synthetic' }), /ATTEMPT_UNAVAILABLE/)
     for (const slot of [...protocol.historicalR3NativeRegistrationD51580fc.runs, ...protocol.historicalR3NativeRegistrationAd650e85.runs, ...protocol.historicalR3NativeRegistration2d67a3aa.runs])
       assert.throws(() => updateLedger(ledger, reserve('closed-' + slot.run, { invocationId: slot.invocationId }), { campaignMode: 'synthetic' }), /ATTEMPT_UNAVAILABLE/)
-    const original = fs.readFileSync(ledger, 'utf8')
-    assert.equal(original.trim().split('\n').length, 3)
-    assert.equal(JSON.parse(original.split('\n')[0]).allocation, 'nonQualificationDiagnostic')
+    assert.equal(fs.existsSync(ledger), false, 'closed registrations cannot append a reserve')
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
@@ -177,7 +203,9 @@ test.each([
   ['historicalR3NativeD51580fcBoundary', 13],
   ['historicalR3NativeAd650e85Boundary', 15],
   ['historicalR3Native2d67a3aaBoundary', 18],
-])('R3 registered run preserves authenticated UNKNOWN in %s and caps its eight-call invocation', (boundaryKey, closedIndex) => {
+  ['historicalR3NativeC907f174Boundary', 21],
+])('historical open R3 registration preserves authenticated UNKNOWN in %s and caps its eight-call invocation', async (boundaryKey, closedIndex) => {
+  const { updateLedger, currentProtocolBinding } = await historicalOpenR3Runner()
   const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', 'r3-replacement-' + randomUUID())
   fs.mkdirSync(directory, { recursive: true })
   try {
@@ -232,7 +260,8 @@ test.each([
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
 
-test('R3 v7 excludes the authenticated closed Flash group from its new budget without rewriting UNKNOWN', () => {
+test('historical open R3 registration excludes the authenticated closed Flash group without rewriting UNKNOWN', async () => {
+  const { updateLedger, currentProtocolBinding } = await historicalOpenR3Runner()
   const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', `r3-history-${randomUUID()}`)
   fs.mkdirSync(directory, { recursive: true })
   try {
@@ -303,7 +332,8 @@ test('R3 config copy retains only the hash-bound Flash profile and rejects a sam
 })
 
 
-test('R3 three fixed GLM runs own independent state; UNKNOWN is spent and a fourth run is rejected', () => {
+test('historical open R3 runs own independent state; UNKNOWN is spent and a fourth run is rejected', async () => {
+  const { updateLedger, currentProtocolBinding } = await historicalOpenR3Runner(policy.runs.map(item => item.invocationId))
   const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', 'r3-three-' + randomUUID())
   fs.mkdirSync(directory, { recursive: true })
   const ledger = path.join(directory, 'ledger.jsonl')

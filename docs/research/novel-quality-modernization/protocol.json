@@ -1,4 +1,63 @@
 {
+  "historicalR3NativeC907f174Boundary": {
+    "fromEventCount": 1725,
+    "eventCount": 1746,
+    "rawBytesSha256": "ec2312dea6e415f1ee4db9638cab5ace127f39d62925f90f613461c373571692",
+    "protocolRevision": "s14b-candidate-only-three-rounds-v1",
+    "protocolHash": "da8cb568380416f41204c79d810af584c0950b1aeada3c1062db5a874e341e1d",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "c907f174d75664e55c4d72bf98a8880df9de7c3e",
+        "sourceHash": "5840a88d9e2e37a8157637daaa697b721444b149f82de80869ebd297f294c52a",
+        "driverHash": "912bc6f80949ba49033b1bed00270dc8b9b4cd1b33062cdfb3a09d8f715d40d8"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:491084b3-6f5d-45c8-8340-529aab846203",
+        "invocationId": "580bf981-88fc-4020-bc83-f85b0150a1ef",
+        "parityId": "9259e85a80c84e9f51439c023f77224c64a6f67479282ee809fd55ef4e028e02",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:e7f5a88b-a54c-44c9-9bd3-8fdb6658eef3",
+        "invocationId": "c6a4ef7d-9dfb-4ec1-9913-fe2f8eca5036",
+        "parityId": "9259e85a80c84e9f51439c023f77224c64a6f67479282ee809fd55ef4e028e02",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:4f0953f7-e2d3-4ec9-9e3a-9d09f7da8c38",
+        "invocationId": "c6a4ef7d-9dfb-4ec1-9913-fe2f8eca5036",
+        "parityId": "9259e85a80c84e9f51439c023f77224c64a6f67479282ee809fd55ef4e028e02",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:66d36099-d939-451b-9d18-d8a41812bbfb",
+        "invocationId": "c6a4ef7d-9dfb-4ec1-9913-fe2f8eca5036",
+        "parityId": "9259e85a80c84e9f51439c023f77224c64a6f67479282ee809fd55ef4e028e02",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:52babe90-489c-429a-b400-883f181b5c3d",
+        "invocationId": "b9bbf64e-86b4-4804-8f09-7db161ce6517",
+        "parityId": "9259e85a80c84e9f51439c023f77224c64a6f67479282ee809fd55ef4e028e02",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:87003aaa-5ecd-46ce-a9b8-936615abf1d0",
+        "invocationId": "b9bbf64e-86b4-4804-8f09-7db161ce6517",
+        "parityId": "9259e85a80c84e9f51439c023f77224c64a6f67479282ee809fd55ef4e028e02",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:8581c0e7-3b5e-45d5-b54e-d6c6c662f36e",
+        "invocationId": "b9bbf64e-86b4-4804-8f09-7db161ce6517",
+        "parityId": "9259e85a80c84e9f51439c023f77224c64a6f67479282ee809fd55ef4e028e02",
+        "terminal": "settle"
+      }
+    ],
+    "limits": "Additive authentication of the seven historical R3 v9 requests. Preserve all original ledger bytes and FAIL/PASS/PASS outcomes; settled stop does not establish literary acceptance."
+  },
   "historicalR3NativeRegistration2d67a3aa": {
     "caseId": "R3",
     "caseIds": [
@@ -3127,7 +3186,10 @@
         "66ac671a-2481-4917-8272-6a2aeef62738",
         "a3a8a3fe-7393-4260-8601-ef365f511872",
         "07433184-dc4a-400d-9324-d331e0ddae60",
-        "73b0ca6a-a5bd-4493-a7b2-1e01d5eee005"
+        "73b0ca6a-a5bd-4493-a7b2-1e01d5eee005",
+        "580bf981-88fc-4020-bc83-f85b0150a1ef",
+        "c6a4ef7d-9dfb-4ec1-9913-fe2f8eca5036",
+        "b9bbf64e-86b4-4804-8f09-7db161ce6517"
       ],
       "requiredProductSha": "69ed2a2f23699320a4758ce6e10ac893b2a84977",
       "profiles": {
