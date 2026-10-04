@@ -11,8 +11,10 @@ import { verifyM03ReviewCycle, canonicalM03FindingSetHash } from '../../migratio
 import { createCanonicalProjectManifest } from '../../../src/shared/project-format'
 import { buildReviewGenerationReport } from '../../../src/shared/review-generation-report'
 import type { ReviewCycleRecheckContext } from '../../../src/shared/review-cycle'
+import type { GenerationTransportDiagnostics } from '../../../src/shared/generation-contract'
 import { extractPortableProjectArchive } from '../portable-project-archive'
 import { restorePortableProject } from '../project-restore-service'
+import { readPortableRuntimeFreeze } from '../portable-runtime-freeze'
 import { ReviewRevisionGeneration } from '../review-revision-generation'
 import { GenerationRunRepository } from '../../repositories/generation-run-repository'
 import {
@@ -185,7 +187,8 @@ function seedProject(f: Fixture, secret = 'token-绝不外带'): { body: string;
 }
 
 function seedMergedCycle(f: Fixture, config: Record<string, unknown> = {}, recheckReceipt?: Record<string, unknown>,
-  reportOptions: { longReport?: boolean; reportVersion?: 2; recheckReportVersion?: 1 | 2 } = {}): {
+  reportOptions: { longReport?: boolean; reportVersion?: 2; recheckReportVersion?: 1 | 2;
+    diagnostics?: GenerationTransportDiagnostics } = {}): {
   cycleId: string; body: string; mergedHash: string; reviewBody: string; recheckBody?: string
 } {
   const db = new Database(f.databasePath)
@@ -255,7 +258,8 @@ function seedMergedCycle(f: Fixture, config: Record<string, unknown> = {}, reche
       usage_receipt_json,invocation_nonce) VALUES(?,?,?,?,?,?,?)`).run(attemptId, `reservation-${label}`, runId, root,
       JSON.stringify({ attemptId, reservationId: `reservation-${label}`, rootActionId: root, status: 'settled',
         reservedTokens: 100, requestedOutputTokens: 100, actualTokens: 1 }),
-      JSON.stringify({ artifactIdentity: { artifactId, epoch: 'epoch', fingerprint }, result: { usage: null, finishReason: 'stop' },
+      JSON.stringify({ artifactIdentity: { artifactId, epoch: 'epoch', fingerprint }, result: { usage: null, finishReason: 'stop',
+        ...(reportOptions.diagnostics ? { diagnostics: reportOptions.diagnostics } : {}) },
         reviewRevisionEffect: effect, ...(kind === 'review' && (recheck || recheckReceipt)
           ? { reviewCycleRecheck: recheck ?? recheckReceipt } : {}),
         ...(kind === 'revision' ? { visibleComposition: { algorithm: 'visible-append-v1',
@@ -324,14 +328,28 @@ describe('portable project export service', { timeout: 20_000 }, () => {
     } finally { restored.close() }
   })
 
-  it.each([1, 2] as const)('roundtrips an immutable v7 merged cycle and saved report version %i', async version => {
+  it.each([1, 2] as const)('roundtrips an immutable v7 merged cycle and saved report version %i without local diagnostics', async version => {
     const f = fixture()
-    const seeded = seedMergedCycle(f, {}, undefined, { longReport: true, ...(version === 2 ? { reportVersion: 2 } : {}) })
+    const secret = 'private-diagnostics-sentinel'
+    const seeded = seedMergedCycle(f, {}, undefined, { longReport: true, ...(version === 2 ? { reportVersion: 2 } : {}),
+      diagnostics: { startedAt: 1, elapsedMs: 2, firstResponseMs: 1, lastResponseMs: 2, lastOutputMs: 2,
+        phase: 'complete', endReason: 'completed', visibleEvents: 1, reasoningEvents: 0, errorCode: secret } })
+    const sourceBefore = fs.readFileSync(f.databasePath)
     await exportPortableProject(input(f))
+    expect(fs.readFileSync(f.databasePath)).toEqual(sourceBefore)
+    expect(fs.readFileSync(f.target).includes(Buffer.from(secret))).toBe(false)
     const targetRoot = path.join(f.base, 'restored')
     await restorePortableProject({ archivePath: f.target, targetProjectRoot: targetRoot })
+    expect(fs.readFileSync(path.join(targetRoot, '.ai-novel', 'project.db')).includes(Buffer.from(secret))).toBe(false)
+    const freeze = readPortableRuntimeFreeze(targetRoot)
+    for (const attemptId of ['attempt-review', 'attempt-revision']) {
+      expect(() => freeze.assertMutable('generation_attempts', attemptId)).toThrow('PORTABLE_RUNTIME_FROZEN')
+    }
     const restored = new Database(path.join(targetRoot, '.ai-novel', 'project.db'), { readonly: true })
     try {
+      for (const receipt of restored.prepare('SELECT usage_receipt_json FROM generation_attempts').pluck().all() as string[]) {
+        expect(JSON.parse(receipt).result).toEqual({ finishReason: 'stop' })
+      }
       expect(restored.prepare('SELECT cycle_id,body FROM review_cycle_merges').get()).toEqual({
         cycle_id: seeded.cycleId, body: seeded.body,
       })
@@ -356,6 +374,19 @@ describe('portable project export service', { timeout: 20_000 }, () => {
       expect(saved.contentHash).toBe(hash(seeded.reviewBody))
       expect(saved.source.content).toBe(JSON.parse(restoredBinding).sourceManifest.reviewRevisionContext.source.content)
     } finally { restored.close() }
+  })
+
+  it('rejects unknown fields in a saved review result', async () => {
+    const f = fixture()
+    seedMergedCycle(f)
+    const db = new Database(f.databasePath)
+    try {
+      db.prepare("UPDATE generation_attempts SET usage_receipt_json=json_set(usage_receipt_json,'$.result.extra','private-extra-sentinel')").run()
+    } finally { db.close() }
+    const sourceBefore = fs.readFileSync(f.databasePath)
+    await expect(exportPortableProject(input(f))).rejects.toMatchObject({ code: 'PORTABLE_UNSAFE_PROJECTION' })
+    expect(fs.readFileSync(f.databasePath)).toEqual(sourceBefore)
+    expect(fs.existsSync(f.target)).toBe(false)
   })
 
   it.each([
