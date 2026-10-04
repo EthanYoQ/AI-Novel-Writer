@@ -112,6 +112,67 @@ export function qualificationModelForOperation(phase, milestone, operationId) {
   return profile
 }
 
+export const SAVED_NATIVE_REVIEW_DIAGNOSTIC = Object.freeze({
+  sceneId: '场景1', chapterNumber: 2, milestone: 'diagnostic', arms: ['candidate'], nonQualification: true,
+  scenarioRevision: 'saved-native-review-two-cases-v1', formalDenominatorContribution: 0,
+  expectedPhysicalRequests: 4, maxPhysicalRequests: 16,
+  diagnosticInputHash: '0d1ceb6e9c24e612e5fb035e62bc293eb5b971aa64b97fa46d3178b5f6436041',
+  caseIds: ['saved-c18-b-negative', 'saved-c17-a-control'],
+  sources: [
+    { caseId: 'saved-c18-b-negative', provenance: 'C18-B', invocationId: 'eb8a6d91-a23d-4f57-94ac-b07f8dc04d32',
+      projectId: '607d093c-f681-4edc-a391-32624e39502d', epoch: '73236077-1daf-4089-8082-e8cf95c9e9d8',
+      contentSha256: '4f0b7930b9c56a2520f5de1b12ab46d29ac4284932d6783b66c6b6d85f775a11' },
+    { caseId: 'saved-c17-a-control', provenance: 'C17-A', invocationId: '284aa0cc-ae44-43a8-86d0-a7c7e403c8fb',
+      projectId: '00c718a0-851d-43bf-8d66-a145210072ac', epoch: '70ffe6fb-ced1-43fb-9d4f-0faae3aa72b5',
+      contentSha256: '80429e53ab637acddb37ea054a034998251e9306df4dac74c4dd71c79fa607e2' },
+  ],
+  operations: [
+    { id: 'negative-review', kind: 'review', caseIds: ['saved-c18-b-negative'] },
+    { id: 'negative-refine', kind: 'refine', caseIds: ['saved-c18-b-negative'] },
+    { id: 'negative-final-review', kind: 'final-review', caseIds: ['saved-c18-b-negative'] },
+    { id: 'control-review', kind: 'review', caseIds: ['saved-c17-a-control'] },
+  ],
+  attemptPolicy: { milestone: 'diagnostic', arms: ['candidate'],
+    reviewRebuild: { operationId: 'negative-review', primaryPurpose: 'review-chapter', repairPurpose: 'review-chapter-rebuild', maxRepairAttempts: 1, maxLengthReplacements: 1 },
+    finalReviewRebuild: { operationId: 'negative-final-review', primaryPurpose: 'review-chapter', repairPurpose: 'review-chapter-rebuild', maxRepairAttempts: 1, maxLengthReplacements: 1 },
+    controlReviewRebuild: { operationId: 'control-review', primaryPurpose: 'review-chapter', repairPurpose: 'review-chapter-rebuild', maxRepairAttempts: 1, maxLengthReplacements: 1 },
+    refinementRecovery: { operationId: 'negative-refine', purpose: 'refine-from-review', maxAttempts: 4, trigger: 'settled-length-same-confirmation-visible-append-with-progress' } },
+  evaluationPolicy: { ...AI_REVIEW_FINAL_MANUSCRIPT_POLICY, caseIds: ['saved-c18-b-negative', 'saved-c17-a-control'],
+    confirmation: 'agent-semantic-approval-references-original-report-and-native-findings',
+    physicalRequests: { minimum: 1, maximum: 16, manuscriptMinimum: 1, manuscriptMaximum: 12 } },
+  modelProfile: QUALIFICATION_STAGE_MODELS.profiles.flash,
+  stop: 'negative-detection-or-closure-or-technical-failure-ends-check-control-NOT_RUN',
+})
+
+export function savedNativeOperations(caseId, action) {
+  const policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC
+  if (!policy.caseIds.includes(caseId) || !['prepare', 'review', 'complete'].includes(action)
+    || action === 'complete' && caseId !== policy.caseIds[0]) throw new Error('SAVED_NATIVE_SCOPE_MISMATCH')
+  return policy.operations.filter(item => item.caseIds.includes(caseId)
+    && (action === 'complete' ? item.kind !== 'review' : item.kind === 'review'))
+}
+
+export function readSavedNativeSource(inputPath, caseId) {
+  const bytes = fs.readFileSync(inputPath), policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC
+  if (digest(bytes) !== policy.diagnosticInputHash) throw new Error('SAVED_NATIVE_INPUT_DRIFT')
+  const input = JSON.parse(bytes), entry = input.cases.find(item => item.caseId === caseId)
+  const source = policy.sources.find(item => item.caseId === caseId)
+  if (!entry || !source) throw new Error('SAVED_NATIVE_CASE_MISMATCH')
+  const read = (file, expected) => {
+    const data = fs.readFileSync(file)
+    if (digest(data) !== expected) throw new Error('SAVED_NATIVE_SOURCE_DRIFT')
+    return data
+  }
+  const files = fs.readdirSync(entry.projectRoot, { recursive: true, withFileTypes: true })
+    .filter(item => item.isFile()).map(item => path.relative(entry.projectRoot, path.join(item.parentPath, item.name)).replaceAll('\\', '/')).sort()
+  if (stableEvidence(files) !== stableEvidence(entry.files.map(item => item.path).sort())) throw new Error('SAVED_NATIVE_MANIFEST_DRIFT')
+  const assets = entry.files.map(item => ({ ...item, bytes: read(path.join(entry.projectRoot, item.path), item.sha256) }))
+  if (digest(read(entry.draftPath, entry.draftHash)) !== source.contentSha256
+    || digest(entry.context.source.content) !== source.contentSha256) throw new Error('SAVED_NATIVE_SOURCE_DRIFT')
+  return { inputHash: digest(bytes), source, context: entry.context, draft: entry.context.source, assets, packetFiles: [],
+    original: JSON.parse(read(entry.originalReceipt, entry.originalReceiptHash)) }
+}
+
 // Only shape and standard terminal enums; never provider text, IDs or reasoning.
 export function streamEventStructure(event) {
   const type = value => value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value
@@ -657,6 +718,20 @@ const QUALIFICATION_WINDOW_HASH = '64d634a4fa20fbafbbe3103c43e4a2c9959e3a6be64aa
 
 /** Resolve only the registered bridge fallback; native owner budgets and dispatch gates remain authoritative. */
 export function qualificationBridgeWindows(request) {
+  if (request.phase === 'saved-native-review-diagnostic') {
+    const policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC
+    if (request.milestone !== 'diagnostic' || (request.arm ?? request.target?.arm) !== 'candidate'
+      || request.scenarioRevision !== policy.scenarioRevision
+      || stableEvidence(request.operations) !== stableEvidence(savedNativeOperations(request.caseId, request.nativeAction))
+      || stableEvidence(request.attemptPolicy) !== stableEvidence(policy.attemptPolicy)
+      || stableEvidence(request.evaluationPolicy) !== stableEvidence(policy.evaluationPolicy)
+      || request.forwardQualificationWindow != null || Object.keys(request).some(key => /timeout|deadline/iu.test(key)))
+      throw new Error('SAVED_NATIVE_SCOPE_MISMATCH')
+    const attemptMs = MAIN_GENERATION_POLICY.budget.maxActiveElapsedMs + 60_000
+    const maxCalls = request.action === 'prepare' ? 0 : request.operations.length * 4
+    return { attemptMs, spawnMs: Math.max(1, maxCalls) * attemptMs + 60_000,
+      testMs: Math.max(1, maxCalls) * attemptMs + 120_000, maxCalls, revision: policy.scenarioRevision }
+  }
   if (request.phase === 'r3-native-revision-diagnostic') {
     const policy = R3_NATIVE_REVISION_DIAGNOSTIC
     if (request.milestone !== 'diagnostic' || (request.arm ?? request.target?.arm) !== 'candidate'
@@ -769,22 +844,27 @@ export function createOutboundPreflightAssert(failures) {
 
 /** Forward-only experiment: verify the saved preference separately from each arm's natural wire. */
 export function assertForwardReasoning(registration, { arm, phase, milestone, caseId, model, creativeStrategy, resolution, body, operationId }) {
+  const saved = phase === 'saved-native-review-diagnostic'
+  if (saved && (registration?.revision !== SAVED_NATIVE_REVIEW_DIAGNOSTIC.scenarioRevision
+    || milestone !== 'diagnostic' || !SAVED_NATIVE_REVIEW_DIAGNOSTIC.caseIds.includes(caseId)
+    || operationId && !SAVED_NATIVE_REVIEW_DIAGNOSTIC.operations.some(item => item.id === operationId && item.caseIds.includes(caseId))))
+    throw new Error('SAVED_NATIVE_MODEL_SCOPE_MISMATCH')
   const staged = registration?.stageModels
   if (staged && (stableEvidence(staged) !== stableEvidence(QUALIFICATION_STAGE_MODELS)
     || arm !== 'candidate' || !registration.scopes?.some(scope => scope.phase === phase && scope.milestone === milestone
       && (!caseId || scope.caseIds.includes(caseId))))) throw new Error('QUALIFICATION_MODEL_SCOPE_MISMATCH')
   const stageProfile = staged ? qualificationModelForOperation(phase, milestone, operationId) : null
   if (stageProfile && modelConfigurationHash(model) !== stageProfile.configurationHash) throw new Error('QUALIFICATION_MODEL_CONFIGURATION_DRIFT')
-  if (phase === 'r3-native-revision-diagnostic' || stageProfile) {
-    const profile = stageProfile ?? r3ModelForOperation(operationId ?? R3_NATIVE_REVISION_DIAGNOSTIC.operations[0].id)
+  if (saved || phase === 'r3-native-revision-diagnostic' || stageProfile) {
+    const profile = saved ? SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile : stageProfile ?? r3ModelForOperation(operationId ?? R3_NATIVE_REVISION_DIAGNOSTIC.operations[0].id)
     const expected = profile.model
-    if (arm !== 'candidate' || !staged && (milestone !== 'diagnostic' || caseId !== 'R3'
+    if (arm !== 'candidate' || !saved && !staged && (milestone !== 'diagnostic' || caseId !== 'R3'
       || registration?.revision !== R3_NATIVE_REVISION_DIAGNOSTIC.scenarioRevision) || creativeStrategy !== 'auto'
       || modelConfigurationHash(model) !== profile.configurationHash) throw new Error('R3_NATIVE_MODEL_MISMATCH')
     if (body === undefined) return null
     const outputTokens = body.max_tokens ?? body.max_completion_tokens
     if (body.model !== expected.modelName || body.temperature !== expected.temperature
-      || (stageProfile ? !Number.isSafeInteger(outputTokens) || outputTokens <= 0 || outputTokens > expected.maxTokens
+      || (stageProfile || saved ? !Number.isSafeInteger(outputTokens) || outputTokens <= 0 || outputTokens > expected.maxTokens
         : outputTokens !== expected.maxTokens)
       || body.thinking?.type !== 'enabled' || body.reasoning_effort !== expected.reasoningOverride
       || Object.hasOwn(body, 'enable_thinking') || Object.hasOwn(body, 'thinking_budget')
@@ -1143,6 +1223,7 @@ export function continuityCaseOperations(caseId) {
 export const FINALIZED_CHARACTER_OPERATION_IDS = Object.freeze(PHASE_SCENARIOS['c16-c18'].operations
   .filter(operation => operation.kind === 'character_cards').map(operation => operation.id))
 export function productionScenario(phase, milestone, protocolRevision) {
+  if (phase === 'saved-native-review-diagnostic') return SAVED_NATIVE_REVIEW_DIAGNOSTIC
   if (phase === 'r3-native-revision-diagnostic') return R3_NATIVE_REVISION_DIAGNOSTIC
   const scenario = PHASE_SCENARIOS[phase]
   if (!scenario) throw new Error('PHASE_PRODUCTION_ADAPTER_NOT_INTEGRATED')
@@ -1379,13 +1460,14 @@ export function reviewRecoveryAllowed(history, purpose, policy) {
 export function reviewLengthRecoveryFor(result, operationId) {
   if (result.arm === 'baseline') return null
   let policy
-  if (result.phase === 'r3-native-revision-diagnostic') policy = R3_NATIVE_REVISION_DIAGNOSTIC.attemptPolicy
+  if (result.phase === 'saved-native-review-diagnostic') policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC.attemptPolicy
+  else if (result.phase === 'r3-native-revision-diagnostic') policy = R3_NATIVE_REVISION_DIAGNOSTIC.attemptPolicy
   else if (result.arm === 'candidate' && result.protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION
     && ['final', 'post-ui'].includes(result.milestone)) {
     const scenario = productionScenario(result.phase, result.milestone, result.protocolRevision)
     if (result.scenarioRevision === scenario.scenarioRevision) policy = scenario.attemptPolicy
   }
-  return [policy, policy?.reviewRebuild, policy?.finalReviewRebuild]
+  return [policy, policy?.reviewRebuild, policy?.finalReviewRebuild, policy?.controlReviewRebuild]
     .find(item => item?.operationId === operationId && item.maxLengthReplacements === 1) ?? null
 }
 /**
@@ -1488,7 +1570,7 @@ export function createOperationDispatchGate({ onReject, repairPolicy, readPrimar
     const cards = finalizationRepair && FINALIZED_CHARACTER_OPERATION_IDS.includes(operationId)
     const condensePolicy = draftCondense?.policy
     const condense = Boolean(condensePolicy?.maxCondenseAttempts === 1 && condensePolicy.operationIds?.includes(operationId))
-    const finalReview = [repairPolicy?.reviewRebuild, repairPolicy?.finalReviewRebuild].find(item => item?.operationId === operationId)
+    const finalReview = [repairPolicy?.reviewRebuild, repairPolicy?.finalReviewRebuild, repairPolicy?.controlReviewRebuild].find(item => item?.operationId === operationId)
     const review = finalReview || repairPolicy?.operationId === operationId && repairPolicy.primaryPurpose === 'review-chapter'
     const policy = finalReview ?? repairPolicy
     const policyApplies = policy?.operationId === operationId && policy.maxRepairAttempts === 1
@@ -2472,6 +2554,73 @@ function runProductionFull(targets, options, bridge = runProductionBridge) {
 }
 
 export function runProductionPhasePair(targets, options, bridge = runProductionBridge) {
+  if (options.phase === 'saved-native-review-diagnostic') {
+    const policy = SAVED_NATIVE_REVIEW_DIAGNOSTIC, caseId = options.caseId, nativeAction = options.nativeAction
+    const operations = savedNativeOperations(caseId, nativeAction)
+    const source = readSavedNativeSource(options.diagnosticInputPath, caseId)
+    const original = targets.candidate, invocationId = source.source.invocationId
+    if (!original || targets.baseline || original.protocolHash !== options.protocolHash
+      || original.protocolRevision !== options.protocolRevision || options.mode === 'real' && original.developmentOnly)
+      throw new Error('SAVED_NATIVE_TARGET_MISMATCH')
+    const recordPath = id => `${options.diagnosticInputPath}.${options.mode}.${id}.execution.json`
+    const bound = { ...options, invocationId, executionRecordPath: recordPath(caseId) }
+    const record = executionRecord(bound)
+    if (record.targetHash && record.targetHash !== digest(original)) throw new Error('SAVED_NATIVE_TARGET_DRIFT')
+    if (nativeAction === 'complete' && !record.results.review) throw new Error('SAVED_NATIVE_FIRST_REVIEW_REQUIRED')
+    let approval, firstReview
+    if (nativeAction === 'complete' || nativeAction === 'review' && caseId === policy.caseIds[1]) {
+      approval = JSON.parse(fs.readFileSync(options.approvalPath))
+      const negativeRecord = caseId === policy.caseIds[0] ? record : JSON.parse(fs.readFileSync(recordPath(policy.caseIds[0])))
+      const prior = negativeRecord.results[nativeAction === 'complete' ? 'review' : 'complete']
+      if (!prior?.receiptPath || path.resolve(approval.receiptPath) !== path.resolve(prior.receiptPath)) throw new Error('SAVED_NATIVE_APPROVAL_RECEIPT_MISMATCH')
+      const bytes = fs.readFileSync(prior.receiptPath), receipt = JSON.parse(bytes)
+      const review = nativeAction === 'complete' ? receipt.aiReviewedDraft?.review : receipt.aiReviewedDraft?.finalReview
+      if (digest(bytes) !== approval.receiptHash || receipt.status !== 'passed' || !review
+        || receipt.caseId !== policy.caseIds[0] || receipt.phase !== options.phase || receipt.protocolHash !== options.protocolHash
+        || receipt.sourceHash !== original.sourceHash || receipt.driverHash !== productionBridgeHash()
+        || review.reviewId !== approval.reviewId || review.contentHash !== approval.reportHash
+        || digest(fs.readFileSync(review.outputPath)) !== approval.reportHash
+        || approval.kind !== (nativeAction === 'complete' ? 'negative-detection' : 'negative-closure')
+        || nativeAction === 'complete' && (!Array.isArray(approval.findingIds) || approval.findingIds.length === 0
+          || new Set(approval.findingIds).size !== approval.findingIds.length)) throw new Error('SAVED_NATIVE_APPROVAL_MISMATCH')
+      firstReview = nativeAction === 'complete' ? receipt : undefined
+    } else if (options.approvalPath) throw new Error('SAVED_NATIVE_APPROVAL_SCOPE_MISMATCH')
+    let target = record.target
+    if (!target) {
+      const directoryId = invocationId.slice(0, 8)
+      const roots = Object.fromEntries(Object.entries(original.roots).map(([key, directory]) => [key, path.join(directory, directoryId)]))
+      const isolationRoot = path.join(original.isolationRoot, 'invocations', invocationId)
+      for (const directory of [isolationRoot, ...Object.values(roots)]) {
+        if (fs.existsSync(directory)) throw new Error('INVOCATION_DIRECTORY_COLLISION')
+        fs.mkdirSync(directory, { recursive: true })
+      }
+      target = { ...original, isolationRoot, roots, declaredIsolationRoot: original.isolationRoot, declaredRoots: original.roots }
+      record.target = target; record.targetHash = digest(original)
+      saveExecutionRecord(bound, record)
+    }
+    const templatesPath = path.join(target.isolationRoot, 'saved-native-templates.json')
+    const common = { ...options, ...bound, target, invocationId, nativeAction, caseId, operations, templatesPath,
+      sceneId: policy.sceneId, chapterNumber: 2, scenarioRevision: policy.scenarioRevision,
+      attemptPolicy: policy.attemptPolicy, evaluationPolicy: policy.evaluationPolicy, driverHash: productionBridgeHash(),
+      approval, firstReview, ledgerPath: record.ledgerPath ?? options.ledgerPath }
+    if (record.ledgerPath && path.resolve(record.ledgerPath) !== path.resolve(options.ledgerPath)) throw new Error('SAVED_NATIVE_LEDGER_DRIFT')
+    record.ledgerPath = options.ledgerPath
+    if (!record.prepared) {
+      if (nativeAction === 'complete') throw new Error('SAVED_NATIVE_PREPARATION_REQUIRED')
+      record.prepared = bridge({ ...common, mode: 'synthetic', nativeAction: 'prepare', action: 'prepare',
+        operations: savedNativeOperations(caseId, 'prepare') })
+      saveExecutionRecord(bound, record)
+    }
+    if (nativeAction === 'prepare') return { status: 'prepared', physicalModelRequests: 0, prepared: record.prepared,
+      executionRecordPath: bound.executionRecordPath, qualification: 'non-qualification-diagnostic' }
+    if (options.mode === 'real' && !record.results[nativeAction]) copyIsolatedRealModelConfig(original, target.roots)
+    const result = executeRecordedStep({ ...common, parityHash: record.prepared.physicalProject.parityHash,
+      evidenceRoot: path.join(target.isolationRoot, nativeAction) }, bound, record, nativeAction, bridge)
+    return { status: result.status === 'passed' ? 'pending-independent-oracle-review' : 'failed',
+      qualification: 'non-qualification-diagnostic', formalDenominatorContribution: 0, results: [result],
+      executionRecordPath: bound.executionRecordPath, physicalModelRequests: result.physicalModelRequests ?? 0,
+      notRun: result.status === 'passed' ? [] : ['control-review'] }
+  }
   if (options.phase === 'full') return runProductionFull(targets, options, bridge)
   const scenario = productionScenario(options.phase, options.milestone, options.protocolRevision)
   const arms = scenario.arms ?? ['baseline', 'candidate']
@@ -2697,7 +2846,8 @@ export function validateAiReviewedManuscript(result) {
     if (baselineContract && stableEvidence(baselineContract.sourceHashes) !== stableEvidence(result.baselineReviewNative.sourceHashes))
       throw new Error('BASELINE_AI_REVIEW_NATIVE_SOURCE_DRIFT')
     const initial = read(chain.initial), final = read(chain.finalDraft)
-    const review = (kind, saved, source) => {
+    const review = (kind, saved, source, evidence = result) => {
+      const result = evidence
       const operation = result.operations.find(item => item.kind === kind), provenance = operation?.reviewProvenance
       const attempts = result.attempts.filter(item => item.binding.operation === operation?.operation)
       const recoveryPolicy = reviewLengthRecoveryFor(result, operation?.operation)
@@ -2778,10 +2928,30 @@ export function validateAiReviewedManuscript(result) {
         throw new Error('AI_REVIEW_REBUILD_NOT_REGISTERED')
       return { ...aiReviewFinalManuscriptSelection({ rawContent: artifact.text, savedContent: reportBody, context }), context, report: JSON.parse(reportBody) }
     }
-    const first = review('review', chain.review, initial)
+    const savedNative = result.phase === 'saved-native-review-diagnostic'
+    let firstEvidence = result
+    if (savedNative && result.nativeApproval) {
+      const bytes = fs.readFileSync(result.nativeApproval.receiptPath)
+      if (digest(bytes) !== result.nativeApproval.receiptHash) throw new Error('SAVED_NATIVE_APPROVAL_RECEIPT_MISMATCH')
+      firstEvidence = JSON.parse(bytes)
+      if (firstEvidence.physicalProject.dbPath !== result.physicalProject.dbPath
+        || firstEvidence.physicalProject.projectId !== result.physicalProject.projectId) throw new Error('SAVED_NATIVE_APPROVAL_DATABASE_MISMATCH')
+    }
+    const first = review('review', chain.review, initial, firstEvidence)
     if (first.context.source.id !== chain.initial.draftId || first.context.source.chapterNumber !== chain.initial.chapterNumber
       || first.context.source.version !== chain.initial.version || first.context.source.status !== chain.initial.status
       || chain.finalDraft.draftId !== chain.initial.draftId) throw new Error('AI_MANUSCRIPT_SOURCE_IDENTITY_MISMATCH')
+    if (savedNative && !result.nativeApproval) {
+      if (chain.confirmation || chain.revision || chain.finalReview || final !== initial) throw new Error('SAVED_NATIVE_REVIEW_ONLY_MISMATCH')
+    }
+    if (!savedNative || result.nativeApproval) {
+    if (savedNative) {
+      const findings = firstEvidence.aiReviewedDraft.findings
+      const approvedIndexes = result.nativeApproval.findingIds.map(id => findings.find(item => item.findingId === id)?.reviewItemIndex)
+      if (approvedIndexes.some(index => !first.selected.some(item => stableEvidence(item) === stableEvidence(first.report.items[index]))))
+        throw new Error('SAVED_NATIVE_APPROVAL_FINDING_MISMATCH')
+      first.selected = approvedIndexes.map(index => first.report.items[index])
+    }
     const selectedIndexes = first.report.items.flatMap((item, index) => first.selected.some(selected => stableEvidence(selected) === stableEvidence(item)) ? [index] : [])
     if (first.selected.length !== chain.selectedCount || digest(first.selected) !== chain.selectedItemsHash
       || stableEvidence(selectedIndexes) !== stableEvidence(chain.selectedIndexes)
@@ -2881,6 +3051,7 @@ export function validateAiReviewedManuscript(result) {
         || finalReview.context.source.version !== chain.finalDraft.version) throw new Error('AI_FINAL_REVIEW_NOT_ORDINARY')
       const units = countProjectedDraftUnits(final), sourceUnits = countProjectedDraftUnits(initial)
       if (units < Math.floor(sourceUnits * 0.8) || units > Math.ceil(sourceUnits * 1.2)) throw new Error('AI_REVISION_LENGTH_MISMATCH')
+    }
     }
     const draft = db.prepare(`SELECT d.version,d.chapter_number${result.phase === 'full' ? ',d.status' : ''},c.body FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.id=?`).get(chain.finalDraft.draftId)
     if (result.protocolRevision === CANDIDATE_ONLY_PROTOCOL_REVISION) {

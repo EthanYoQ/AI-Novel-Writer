@@ -12,6 +12,7 @@ import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, 
   fetchProviderResponse, measurePromptBytes, qualificationBridgeWindows, streamEventStructure,
   POST_UI_REVIEW_POLICY, reviewedDraftSelection, R3_NATIVE_REVISION_DIAGNOSTIC, r3ModelForOperation, modelConfigurationHash, readR3NativeSource, BOUNDED_REVISION_DIAGNOSTIC,
   QUALIFICATION_STAGE_MODELS, qualificationModelForOperation,
+  SAVED_NATIVE_REVIEW_DIAGNOSTIC, readSavedNativeSource,
   AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, aiReviewFinalManuscriptSelection, productionScenario, loadBaselineReviewContract,
   readBoundedRevisionSource, assertBoundedRevisionSource, boundedRevisionItems,
   scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder,
@@ -212,9 +213,12 @@ test('isolated production commands persist the selected phase operations', async
   const diagnosticSlot = separatedRun ? diagnosticInput.operations.find(item => item.id === request.operationId) : null
   const boundedRun = request.phase === 'bounded-revision-diagnostic'
   const r3Run = request.phase === 'r3-native-revision-diagnostic'
-  const copiedRun = boundedRun || r3Run
-  const copiedPolicy = r3Run ? R3_NATIVE_REVISION_DIAGNOSTIC : BOUNDED_REVISION_DIAGNOSTIC
-  const boundedSource = r3Run ? readR3NativeSource(request.diagnosticInputPath) : boundedRun ? readBoundedRevisionSource(request.diagnosticInputPath) : null
+  const savedRun = request.phase === 'saved-native-review-diagnostic'
+  const copiedRun = boundedRun || r3Run || savedRun
+  const boundedSource = savedRun ? readSavedNativeSource(request.diagnosticInputPath, request.caseId)
+    : r3Run ? readR3NativeSource(request.diagnosticInputPath) : boundedRun ? readBoundedRevisionSource(request.diagnosticInputPath) : null
+  const copiedPolicy = savedRun ? { ...SAVED_NATIVE_REVIEW_DIAGNOSTIC, source: boundedSource.source }
+    : r3Run ? R3_NATIVE_REVISION_DIAGNOSTIC : BOUNDED_REVISION_DIAGNOSTIC
   if (boundedRun) {
     assert.equal(target.arm, 'candidate', 'BOUNDED_REVISION_CANDIDATE_REQUIRED')
     assert.equal(request.milestone, 'diagnostic', 'BOUNDED_REVISION_SCOPE_INVALID')
@@ -223,7 +227,7 @@ test('isolated production commands persist the selected phase operations', async
   }
   if (diagnosticRun) assert.equal(target.arm, 'candidate', 'SHARED_INPUT_DIAGNOSTIC_CANDIDATE_REQUIRED')
   const aiReviewRun = request.evaluationPolicy?.revision === AI_REVIEW_FINAL_MANUSCRIPT_POLICY.revision
-    && (r3Run || fullRun || request.phase === 'c16-c18' || request.milestone === 'post-ui' && ['early-budget', 'early-context', 'early-review'].includes(request.phase))
+    && (savedRun || r3Run || fullRun || request.phase === 'c16-c18' || request.milestone === 'post-ui' && ['early-budget', 'early-context', 'early-review'].includes(request.phase))
   if (aiReviewRun) assert.deepEqual(request.evaluationPolicy, productionScenario(request.phase, request.milestone, request.protocolRevision).evaluationPolicy, 'AI_REVIEW_POLICY_DRIFT')
   if (request.phase === 'c16-c18') assert.deepEqual(request.evaluationPolicy,
     productionScenario(request.phase, request.milestone, request.protocolRevision).evaluationPolicy, 'AI_REVIEW_POLICY_DRIFT')
@@ -239,8 +243,8 @@ test('isolated production commands persist the selected phase operations', async
   const registeredForward = forwardReasoningFor(json(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')),
     request.phase, request.milestone)
   assert.deepEqual(request.forwardReasoning ?? null, registeredForward, 'FORWARD_REGISTRATION_MISMATCH')
-  const stageProfiles = registeredForward?.stageModels?.profiles
-  const modelForOperation = operationId => r3Run ? r3ModelForOperation(operationId)
+  const stageProfiles = savedRun ? QUALIFICATION_STAGE_MODELS.profiles : registeredForward?.stageModels?.profiles
+  const modelForOperation = operationId => savedRun ? SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile : r3Run ? r3ModelForOperation(operationId)
     : qualificationModelForOperation(request.phase, request.milestone, operationId)
   const registeredWindow = forwardQualificationWindowFor(json(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')),
     request.phase, request.milestone)
@@ -329,7 +333,10 @@ test('isolated production commands persist the selected phase operations', async
       if (copiedRun) {
         const donorRoot = path.join(target.roots.project, 'source-donor')
         fs.mkdirSync(path.join(donorRoot, '.ai-novel'), { recursive: true })
-        for (const item of boundedSource.assets) fs.writeFileSync(path.join(donorRoot, item.path), item.bytes, { flag: 'wx' })
+        for (const item of boundedSource.assets) {
+          fs.mkdirSync(path.dirname(path.join(donorRoot, item.path)), { recursive: true })
+          fs.writeFileSync(path.join(donorRoot, item.path), item.bytes, { flag: 'wx' })
+        }
         for (const item of boundedSource.packetFiles) fs.writeFileSync(path.join(donorRoot, '.ai-novel', item.name), item.bytes, { flag: 'wx' })
         project = projectAccess.probeExistingProject(donorRoot)
         assert.equal(project.projectId, copiedPolicy.source.projectId, 'BOUNDED_REVISION_DONOR_IDENTITY')
@@ -378,12 +385,13 @@ test('isolated production commands persist the selected phase operations', async
             sourceDraftHash: sha(args[0].expectedSource), baseDraftId: args[0].baseDraftId }
         }
         if (copiedRun && channel === 'review-revision:prepare') {
-          if (r3Run) {
+          if (r3Run || savedRun) {
             const frozen = boundedSource.context, actual = result.context
             for (const key of ['config', 'worldbuilding', 'characterStates', 'blueprints', 'frozenGoals'])
               assert.deepEqual(actual[key], frozen[key], 'R3_NATIVE_MATERIAL_DRIFT:' + key)
             assert.deepEqual(actual.history.map(item => [item.chapterNumber, item.content]),
               frozen.history.map(item => [item.chapterNumber, item.content]), 'R3_NATIVE_PREDECESSOR_DRIFT')
+            if (savedRun) assert.deepEqual(actual.authorInputs, frozen.authorInputs, 'SAVED_NATIVE_AUTHOR_INPUT_DRIFT')
             if (receipt.operations.length === 0) assert.equal(sha(actual.source.content), copiedPolicy.source.contentSha256, 'R3_NATIVE_SOURCE_DRIFT')
           }
           (receipt.reviewPreparations ??= []).push({ operation: operationId, contextId: result.contextId,
@@ -459,7 +467,7 @@ test('isolated production commands persist the selected phase operations', async
       assert.equal(embedding, null, 'UNREGISTERED_EMBEDDING_CONFIGURATION')
     }
 
-    const config = r3Run ? boundedSource.context.config : { genre: '悬疑', targetAudience: '通用', totalChapters: scene.chapters.length, wordsPerChapter: scene.targetUnits,
+    const config = r3Run || savedRun ? boundedSource.context.config : { genre: '悬疑', targetAudience: '通用', totalChapters: scene.chapters.length, wordsPerChapter: scene.targetUnits,
       writingLanguage: 'zh-CN', creativeStrategy: 'auto', globalGuidance: source.template,
       coreOutline: scene.material, worldSetting: authorSetting, protagonistProfile: scene.characters.join('\n'),
       plotStructure: 'three_act', narrativePov: 'third_limited', writingStyle: '' }
@@ -492,7 +500,7 @@ test('isolated production commands persist the selected phase operations', async
       const { externalFileGrants } = await load('electron/services/external-file-grant-service.ts')
       const grantFor = restoreGrantIssuer(externalFileGrants, sender.id)
       const archivePath = path.join(evidenceRoot, 'fixed-source.ainovel')
-      const targetProjectRoot = path.join(target.roots.project, r3Run ? 'r3-native-diagnostic' : 'c17-a-diagnostic')
+      const targetProjectRoot = path.join(target.roots.project, savedRun ? request.caseId : r3Run ? 'r3-native-diagnostic' : 'c17-a-diagnostic')
       const exported = await invoke('project:archive-export', { projectSession: session, targetArchiveGrantId: grantFor('create', archivePath) })
       assert.ok(exported?.success, `BOUNDED_REVISION_EXPORT_FAILED:${exported?.error}`)
       const restored = await invoke('project:archive-restore', { archiveGrantId: grantFor('read', archivePath), targetGrantId: grantFor('create', targetProjectRoot) })
@@ -512,6 +520,13 @@ test('isolated production commands persist the selected phase operations', async
         assert.ok(created?.success && created.id, 'R3_NATIVE_SOURCE_NOT_SAVED')
         const readback = await invoke('db:draft-get-full', created.id, project.rootPath, session)
         assert.equal(sha(readback.content), copiedPolicy.source.contentSha256, 'R3_NATIVE_SOURCE_DRIFT')
+        save(request.templatesPath, { sourceArm: target.arm, sourceSha: target.codeSha,
+          templates: templateKeys.map(key => structuredClone(prompts.getPromptTemplate(key))) })
+      }
+      if (savedRun) {
+        const readback = await invoke('db:draft-get-full', boundedSource.draft.id, project.rootPath, session)
+        assert.deepEqual({ id: readback.id, chapterNumber: readback.chapterNumber, version: readback.version,
+          status: readback.status, content: readback.content }, boundedSource.draft, 'SAVED_NATIVE_RESTORED_DRAFT_DRIFT')
         save(request.templatesPath, { sourceArm: target.arm, sourceSha: target.codeSha,
           templates: templateKeys.map(key => structuredClone(prompts.getPromptTemplate(key))) })
       }
@@ -905,7 +920,7 @@ test('isolated production commands persist the selected phase operations', async
         ...(operationKind === 'refine' ? { composition: refinementComposition,
           composeVisibleText: baselineContract.appendVisibleTextContinuation, redactVisibleText: baselineContract.redactVisibleCompletionText } : {}) }
       // 原生恢复只读该 attempt 的原始 artifact 与正式效果；同一草稿的旧审稿不代替本次 owner 证据。
-      if (target.arm === 'candidate' && (r3Run || continuityRun || request.attemptPolicy?.structuredRecovery && operationKind === 'directory'
+      if (target.arm === 'candidate' && (request.phase === 'saved-native-review-diagnostic' || r3Run || continuityRun || request.attemptPolicy?.structuredRecovery && operationKind === 'directory'
         || (request.attemptPolicy?.draftRecovery || request.attemptPolicy?.draftCondense) && operationKind === 'draft'
         || ['review', 'final-review'].includes(operationKind) && reviewLengthRecoveryFor(receipt, operationId))) {
         const artifact = db.prepare('SELECT artifact_json FROM generation_artifacts WHERE attempt_id=?').pluck().get(first.attemptId)
@@ -1051,7 +1066,7 @@ test('isolated production commands persist the selected phase operations', async
           preflight(!materialDecision.included.some(item => item.category === 'derived-locator'), 'RESTORED_STALE_DERIVED_SENT')
         }
       }
-      if (r3Run) for (const item of boundedSource.context.history)
+      if (r3Run || savedRun) for (const item of boundedSource.context.history)
         preflight(promptText.includes(item.content), 'R3_NATIVE_FULL_PREDECESSOR_NOT_SENT')
       if (operationKind === 'draft') preflight(draftPromptIncludesCommittedBlueprint(userMessages.length === 1 ? userMessages[0].content : '',
         readCommittedDraftChapterInfo(db, chapter, project.rootPath, chapterGuidance), (actual ?? observedIpc).purpose), 'OUTBOUND_DRAFT_BLUEPRINT_MISSING')
@@ -1196,7 +1211,7 @@ test('isolated production commands persist the selected phase operations', async
         userPromptHash, optionalMaterialEvidence: { registered: registeredOptional, sent: sentOptional,
           sentSourceIds: sentOptional.map(record => record.sourceId),
           ...(candidate ? { materialDecision } : {}) } }
-      if (r3Run) {
+      if (r3Run || savedRun) {
         const messagesPath = path.join(evidenceRoot, `r3-request-messages-${receipt.attempts.length + 1}.json`)
         const messages = JSON.stringify(body.messages)
         fs.writeFileSync(messagesPath, messages, { flag: 'wx' })
@@ -1245,7 +1260,7 @@ test('isolated production commands persist the selected phase operations', async
         else if ((reviewedRun || boundedRun || aiReviewRun) && ['review', 'final-review'].includes(operationKind)) {
           const current = latestDraft().content
           const issues = reviewedSyntheticIssues.filter(item => current.includes(item.quote))
-          if (aiReviewRun && operationKind === 'review' && request.syntheticReviewedDraftCase !== 'none') issues.push({ category: '表达',
+          if (aiReviewRun && !savedRun && operationKind === 'review' && request.syntheticReviewedDraftCase !== 'none') issues.push({ category: '表达',
             severity: 'warning', description: '调整这一处用词。', quote: current.slice(0, 12) })
           const actionable = operationKind === 'review' ? issues : request.syntheticReviewedDraftCase === 'final-fail'
             ? [{ category: '自然度', severity: 'warning', description: '仍有重复描述，留给独立评审判断。', quote: current.split('\n')[2] }] : []
@@ -1256,8 +1271,11 @@ test('isolated production commands persist the selected phase operations', async
             items: actionable.length ? actionable.map(item => ({ category: item.category, severity: item.severity,
               description: item.description, quote: item.quote }))
               : [{ category: '本章目标', severity: 'pass', description: '本轮未发现需要修复的问题。' }],
-            goalReviews: [...chapter.requiredEvents.map((event, index) => ({ id: `ch${chapter.number}:keyEvents:${index + 1}`,
-              status: 'completed', description: `${event}已有正文证据。`, evidence: [{ quote: current.split('\n')[2] }] })),
+            goalReviews: [...chapter.requiredEvents.map((event, index) => savedRun && request.caseId === 'saved-c18-b-negative'
+              && operationKind === 'review' && index === 1
+              ? { id: `ch${chapter.number}:keyEvents:${index + 1}`, status: 'unknown', description: '零模型接线报告：当章实际代价缺少正文证据。', evidence: [] }
+              : { id: `ch${chapter.number}:keyEvents:${index + 1}`,
+                status: 'completed', description: `${event}已有正文证据。`, evidence: [{ quote: current.split('\n')[2] }] }),
             ...mustShowGoals.map(({ id, proof }) => current.includes(proof)
               ? { id, status: 'completed', description: '必现目标已有正文明示。', evidence: [{ quote: proof }] }
               : { id, status: 'unknown', description: '正文未明示该必现目标，无法确认。', evidence: [] })] })
@@ -1310,6 +1328,18 @@ test('isolated production commands persist the selected phase operations', async
         // Development transport exercises the existing product recovery branches; real/frozen requests never enter here.
         if (request.development && request.mode === 'synthetic') {
           const purpose = (actual ?? observedIpc).purpose
+          if (savedRun) {
+            const ordinal = receipt.attempts.filter(item => item.binding.operation === operationId).length
+            if (['review', 'final-review'].includes(operationKind) && ordinal < 4) {
+              text = ordinal === 2 ? '{invalid' : ''
+              syntheticFinish = ordinal === 2 ? 'stop' : 'length'
+            }
+            if (operationKind === 'refine') {
+              const width = Math.ceil(text.length / 4)
+              text = text.slice((ordinal - 1) * width, ordinal * width)
+              syntheticFinish = ordinal === 4 ? 'stop' : 'length'
+            }
+          }
           const recoverDraft = draftRecovery && operationKind === 'draft' && purpose !== 'chapter-draft-short-outline'
             && (request.caseId === 'C17-A' || request.caseId === 'C18-A' || request.caseId === '场景1/2'
               || reviewedRun || fullRun && request.caseId === '场景1/1')
@@ -1455,9 +1485,41 @@ test('isolated production commands persist the selected phase operations', async
       FROM drafts d JOIN contents c ON c.id=d.content_id WHERE d.chapter_number=? ORDER BY d.version DESC LIMIT 1`).get(chapter.number)
     const reviewState = {}
     const reviewedDraft = reviewedRun ? {} : null
-    const aiReviewedDraft = aiReviewRun && request.operations.some(item => ['draft', 'review'].includes(item.kind)) ? {} : null
+    const aiReviewedDraft = aiReviewRun && (savedRun || request.operations.some(item => ['draft', 'review'].includes(item.kind))) ? {} : null
     let reviewedMustShowTexts = []
     const artifact = (outputPath, content, extra = {}) => ({ ...extra, outputPath, contentHash: sha(content) })
+    if (savedRun && request.nativeAction === 'complete') {
+      const first = request.firstReview, approval = request.approval, sourceDraft = latestDraft()
+      assert.equal(first?.physicalProject?.projectId, project.projectId, 'SAVED_NATIVE_APPROVAL_PROJECT_MISMATCH')
+      assert.equal(path.resolve(first.physicalProject.dbPath), path.resolve(db.name), 'SAVED_NATIVE_APPROVAL_DATABASE_MISMATCH')
+      const stored = await invoke('db:review-get-full', approval.reviewId, project.rootPath, session)
+      assert.equal(sha(stored.content), approval.reportHash, 'SAVED_NATIVE_APPROVAL_REPORT_MISMATCH')
+      assert.deepEqual(stored.sourceDraft, { id: sourceDraft.id, chapterNumber: sourceDraft.chapterNumber,
+        version: sourceDraft.version, status: sourceDraft.status, content: sourceDraft.content }, 'SAVED_NATIVE_APPROVAL_SOURCE_MISMATCH')
+      const cycle = await invoke('db:review-cycle-get', approval.reviewId, project.rootPath, session)
+      const provenance = first.operations.find(item => item.operation === 'negative-review')?.reviewProvenance
+      assert.ok(provenance?.attemptId, 'SAVED_NATIVE_APPROVAL_PROVENANCE_MISSING')
+      const row = db.prepare(`SELECT a.usage_receipt_json,g.artifact_json,r.binding_json FROM generation_attempts a
+        JOIN generation_artifacts g ON g.attempt_id=a.attempt_id JOIN generation_runs r ON r.run_id=a.run_id WHERE a.attempt_id=?`).get(provenance.attemptId)
+      const raw = JSON.parse(row.artifact_json), usage = JSON.parse(row.usage_receipt_json)
+      assert.deepEqual(usage.reviewRevisionEffect, provenance.effect, 'SAVED_NATIVE_APPROVAL_EFFECT_DRIFT')
+      assert.equal(usage.reviewRevisionEffect.id, approval.reviewId, 'SAVED_NATIVE_APPROVAL_EFFECT_MISMATCH')
+      const selection = aiReviewFinalManuscriptSelection({ rawContent: raw.text, savedContent: stored.content,
+        context: JSON.parse(row.binding_json).sourceManifest.reviewRevisionContext })
+      const report = JSON.parse(stored.content)
+      const indexes = approval.findingIds.map(id => {
+        const finding = cycle.findings.find(item => item.findingId === id)
+        const item = report.items[finding?.reviewItemIndex]
+        assert.ok(item && item.severity === 'unknown' && item.goalId === 'ch2:keyEvents:2'
+          && selection.selected.some(selected => sha(selected) === sha(item)), 'SAVED_NATIVE_APPROVAL_FINDING_MISMATCH')
+        return finding.reviewItemIndex
+      })
+      Object.assign(aiReviewedDraft, { initial: first.aiReviewedDraft.initial, review: first.aiReviewedDraft.review,
+        selectedIndexes: indexes, selectedCount: indexes.length, selectedItemsHash: sha(indexes.map(index => report.items[index])),
+        softwareItems: selection.softwareItems, disposition: selection.disposition, findings: cycle.findings })
+      reviewState.reviewId = approval.reviewId
+      receipt.nativeApproval = approval
+    }
     for (const operation of request.operations) {
       operationKind = operation.kind
       operationId = operation.id
@@ -1525,7 +1587,7 @@ test('isolated production commands persist the selected phase operations', async
           }
           command = new (await load('src/services/workflows/commands/review-chapter.command.ts')).ReviewChapterCommand({
             draftPath, draftContent: sourceDraft.content, sourceDraft: frozenSource, chapterNumber: chapter.number,
-            reviewFocus: aiReviewRun ? [
+            reviewFocus: savedRun ? '' : aiReviewRun ? [
               fullRun || request.phase === 'early-budget' && request.milestone === 'post-ui' ? chapterGuidance : '',
               acceptedPrevious && !request.attemptPolicy?.shortOutline ? `本臂前章已接受参考稿（未定稿；只核对与原文的连续性，不新增作者事实）。\n来源：${JSON.stringify(request.predecessor)}\n${acceptedPrevious.content}` : '',
               !request.attemptPolicy?.shortOutline && request.phase === 'early-context' && request.milestone === 'post-ui'
@@ -1583,7 +1645,7 @@ test('isolated production commands persist the selected phase operations', async
           const human = await load('src/shared/human-confirmed-review.ts')
           const snapshot = human.createHumanConfirmedReviewSnapshot({ sourceReviewId: sourceReview.id,
             sourceDraft: sourceReview.sourceDraft, ...(cycleId ? { cycleId } : {}), summary: report.summary,
-            authorGuidance: r3Run ? '' : reviewedRun || boundedRun || aiReviewRun ? `只修复本次全部已选问题，保留全部作者事实与必需事件，不新增物品史、人物身份或知情事实；其余内容保持不变。\n作者事实：\n${authorityFacts.join('\n')}\n本章必需事件：\n${chapter.requiredEvents.join('\n')}` : '只修复已选问题，其余正文保持不变。若问题要求人物在当章承担代价，必须同时满足三项：人物已经执行选择，具体损失或牺牲已经发生，后文不保留相反状态。签字认责、保证负责、简单否定翻转或承诺以后付出都不算代价。', items: selectedItems ?? [selected],
+            authorGuidance: r3Run || savedRun ? '' : reviewedRun || boundedRun || aiReviewRun ? `只修复本次全部已选问题，保留全部作者事实与必需事件，不新增物品史、人物身份或知情事实；其余内容保持不变。\n作者事实：\n${authorityFacts.join('\n')}\n本章必需事件：\n${chapter.requiredEvents.join('\n')}` : '只修复已选问题，其余正文保持不变。若问题要求人物在当章承担代价，必须同时满足三项：人物已经执行选择，具体损失或牺牲已经发生，后文不保留相反状态。签字认责、保证负责、简单否定翻转或承诺以后付出都不算代价。', items: selectedItems ?? [selected],
             ...(report.goalReview ? { goalReview: report.goalReview } : {}) })
           assert.ok(snapshot, 'CONFIRMATION_SNAPSHOT_INVALID')
           const confirmationContent = human.serializeHumanConfirmedReviewSnapshot(snapshot)
@@ -1757,6 +1819,7 @@ test('isolated production commands persist the selected phase operations', async
                 selection.selected.some(selected => sha(selected) === sha(item)) ? [index] : [])
               aiReviewedDraft.softwareItems = selection.softwareItems
               aiReviewedDraft.disposition = selection.disposition
+              if (savedRun) aiReviewedDraft.findings = (await invoke('db:review-cycle-get', stored.id, project.rootPath, session)).findings
             }
           } else if (aiReviewRun) {
             const native = reviewState.baselineCreate

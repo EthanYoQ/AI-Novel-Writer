@@ -4,12 +4,66 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { R3_NATIVE_REVISION_DIAGNOSTIC as policy, productionScenario, qualificationBridgeWindows, createOperationDispatchGate,
-  assertForwardReasoning, readR3NativeSource, streamEventStructure, r3DiagnosticInvocation, r3ModelForOperation, copyIsolatedRealModelConfig, QUALIFICATION_STAGE_MODELS } from '../quality-modernization-driver.mjs'
+  assertForwardReasoning, readR3NativeSource, streamEventStructure, r3DiagnosticInvocation, r3ModelForOperation, copyIsolatedRealModelConfig, QUALIFICATION_STAGE_MODELS,
+  SAVED_NATIVE_REVIEW_DIAGNOSTIC as savedPolicy, savedNativeOperations, reviewLengthRecoveryFor } from '../quality-modernization-driver.mjs'
 import { ROOT, CAMPAIGN_ID, currentProtocolBinding, selectPhase, forwardReasoningFor,
   forwardQualificationWindowFor, hash, updateLedger } from '../quality-modernization-run.mjs'
 
 const phase = 'r3-native-revision-diagnostic'
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
+
+test('saved native mapping permits its real bounded recovery sequences and rejects a fifth request per operation', () => {
+  const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', `saved-recovery-${randomUUID()}`)
+  fs.mkdirSync(directory, { recursive: true })
+  const ledger = path.join(directory, 'ledger.jsonl'), phase = 'saved-native-review-diagnostic'
+  try {
+    for (const operation of savedPolicy.operations) {
+      const slot = savedPolicy.sources.find(item => operation.caseIds.includes(item.caseId))
+      const source = { draftId: 4, version: 1, contentHash: slot.contentSha256,
+        ...(operation.kind === 'refine' ? { confirmationId: 2, confirmationHash: 'f'.repeat(64) } : {}) }
+      const attempts = [], events = [], outputs = new Map()
+      const gate = createOperationDispatchGate({ repairPolicy: savedPolicy.attemptPolicy,
+        refinementRecovery: savedPolicy.attemptPolicy.refinementRecovery, readPrimaryEvidence: owner => {
+          const attempt = attempts.find(item => item.binding.actual.attemptId === owner.attemptId)
+          return { attempt, events: events.filter(item => item.attemptId === attempt.attemptId),
+            ownerArtifactHash: attempt.visibleTextHash, ownerArtifactId: owner.attemptId,
+            reviewReportAbsent: true, composition: { algorithm: 'visible-append-v1',
+              textHash: hash([...outputs.values()].join('\n\n')), artifactIds: [...outputs.keys()] } }
+        } })
+      const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', ...currentProtocolBinding(),
+        codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
+        phase, milestone: 'diagnostic', caseId: slot.caseId, operation: operation.id, invocationId: slot.invocationId,
+        stageModel: { profileId: savedPolicy.modelProfile.profileId, configurationHash: savedPolicy.modelProfile.configurationHash },
+        diagnosticInputHash: savedPolicy.diagnosticInputHash, diagnosticSourceHash: hash(slot),
+        evaluationPolicyHash: hash(savedPolicy.evaluationPolicy), reviewSource: source }
+      const purposes = operation.kind === 'refine' ? Array(4).fill('refine-from-review')
+        : ['review-chapter', 'review-chapter', 'review-chapter-rebuild', 'review-chapter-rebuild']
+      for (const [index, purpose] of purposes.entries()) {
+        const actual = { attemptId: `${operation.id}-${index}`, runId: operation.id, rootActionId: operation.id,
+          projectId: slot.caseId, epoch: operation.id, purpose }
+        gate(operation.id, actual, source)
+        const attemptId = `candidate:${actual.attemptId}`, outputPath = path.join(directory, actual.attemptId + '.txt')
+        const output = operation.kind === 'refine' ? ['甲','乙','丙','丁'][index].repeat(20) : index === 1 ? '{invalid' : index === 3 ? '{}' : ''
+        const finishReason = index === 3 || operation.kind !== 'refine' && index === 1 ? 'stop' : 'length'
+        fs.writeFileSync(outputPath, output)
+        const attempt = { attemptId, binding: { ...binding, actual }, outputPath, visibleTextHash: hash(output) }
+        for (const event of [{ type: 'reserve', attemptId, binding: attempt.binding }, { type: 'dispatch', attemptId },
+          { type: 'settle', attemptId, finishReason }]) {
+          updateLedger(ledger, event, { campaignMode: 'synthetic' }); events.push(event)
+        }
+        attempts.push(attempt); outputs.set(actual.attemptId, output)
+      }
+      const fifth = { ...attempts.at(-1).binding.actual, attemptId: operation.id + '-5' }
+      assert.throws(() => gate(operation.id, fifth, source), /MODEL_REQUEST_REJECTED/)
+      assert.throws(() => updateLedger(ledger, { type: 'reserve', attemptId: fifth.attemptId,
+        binding: { ...binding, actual: fifth } }, { campaignMode: 'synthetic' }), /SAVED_NATIVE_ATTEMPT_UNAVAILABLE/)
+      if (operation.kind !== 'refine') assert.ok(reviewLengthRecoveryFor({ phase, arm: 'candidate' }, operation.id))
+    }
+    assert.equal(fs.readFileSync(ledger, 'utf8').trim().split('\n').length, 48)
+    assert.deepEqual(savedNativeOperations(savedPolicy.caseIds[0], 'complete').map(item => item.id), ['negative-refine','negative-final-review'])
+    assert.throws(() => savedNativeOperations(savedPolicy.caseIds[1], 'complete'), /SCOPE/)
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
 
 test('saved native checks reject cross-case operations and spent or unknown requests across roots', () => {
   const phase = 'saved-native-review-diagnostic'

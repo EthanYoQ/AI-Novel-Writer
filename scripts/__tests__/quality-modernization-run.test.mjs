@@ -429,9 +429,9 @@ test('post-UI baseline uses its native review projection, persisted AI-only conf
     noAction.aiReviewedDraft.composition = result.aiReviewedDraft.composition
     assert.equal(validateAiReviewedManuscript(noAction), 'AI_REVIEW_NO_ACTION_MISMATCH')
     // The full adapter passes the accepted complete predecessor through the frozen command's existing reviewFocus.
-    const fixture = fixtureSource(), focusStart = fixture.indexOf('reviewFocus: aiReviewRun ?')
+    const fixture = fixtureSource(), focusStart = fixture.indexOf('reviewFocus: savedRun ?')
     const focusEnd = fixture.indexOf('\n          })', focusStart)
-    const focus = new Function('acceptedPrevious', 'request', `const aiReviewRun = true, fullRun = true, chapterGuidance = "本章时点：测试作者时点"; return ({ ${fixture.slice(focusStart, focusEnd)} }).reviewFocus`)
+    const focus = new Function('acceptedPrevious', 'request', `const savedRun = false, aiReviewRun = true, fullRun = true, chapterGuidance = "本章时点：测试作者时点"; return ({ ${fixture.slice(focusStart, focusEnd)} }).reviewFocus`)
     const previous = { ...currentDraft }, expected = { projectId: session.projectId, arm: 'baseline', chapterNumber: 1,
       draftId: 1, version: 1, status: 'revised', contentHash: hash(previous.content), persistedBytes: Buffer.byteLength(previous.content) }
     currentDraft = { id: 2, chapterNumber: 2, version: 1, status: 'draft', content: '次日上午，林岚回到柜台。'.repeat(70) }
@@ -717,8 +717,8 @@ test.each([false, true, 'formal'])('AI final manuscript native main owner persis
     db.prepare("INSERT INTO drafts(id,chapter_number,version,status,content_id,word_count) VALUES(2,2,1,'draft',20,?)").run(countDraftUnits(nextContent))
     const expected = { arm: 'candidate', projectId: 'project', chapterNumber: 1, draftId: 1, version: 1,
       status: 'revised', contentHash: hash(revisedProse), persistedBytes: Buffer.byteLength(revisedProse) }
-    const focusStart = fixture.indexOf('reviewFocus: aiReviewRun ?'), focusEnd = fixture.indexOf('\n          })', focusStart)
-    const focus = new Function('acceptedPrevious', 'request', `const aiReviewRun = true, fullRun = true, chapterGuidance = "本章时点：测试作者时点"; return ({ ${fixture.slice(focusStart, focusEnd)} }).reviewFocus`)(
+    const focusStart = fixture.indexOf('reviewFocus: savedRun ?'), focusEnd = fixture.indexOf('\n          })', focusStart)
+    const focus = new Function('acceptedPrevious', 'request', `const savedRun = false, aiReviewRun = true, fullRun = true, chapterGuidance = "本章时点：测试作者时点"; return ({ ${fixture.slice(focusStart, focusEnd)} }).reviewFocus`)(
       { content: revisedProse }, { predecessor: expected })
     const preparedNext = owner.prepareReviewRevision({ operation: 'review-chapter', draftId: 2,
       expectedDraft: { chapterNumber: 2, version: 1, status: 'draft', contentHash: hash(nextContent) },
@@ -4858,10 +4858,10 @@ test('旧 reviewed-draft 段认证两次 invocation 和末项 unknown', () => {
 })
 
 test('AI 首审只为 full 和 post-UI budget 补作者指导，原前驱与其他 selector 字节不变', () => {
-  const fixture = fixtureSource(), start = fixture.indexOf('reviewFocus: aiReviewRun ?')
+  const fixture = fixtureSource(), start = fixture.indexOf('reviewFocus: savedRun ?')
   const end = fixture.indexOf('\n          })', start)
   const focus = new Function('request', 'acceptedPrevious', 'chapterGuidance',
-    `const aiReviewRun = true, fullRun = request.phase === 'full', predecessorReadbacks = []; return ({ ${fixture.slice(start, end)} }).reviewFocus`)
+    `const savedRun = false, aiReviewRun = true, fullRun = request.phase === 'full', predecessorReadbacks = []; return ({ ${fixture.slice(start, end)} }).reviewFocus`)
   const guidance = '只依据作者素材。\n本章时点：当天清晨'
   const previous = { content: '前章已接受正文。' }, predecessor = { draftId: 7, version: 3, contentHash: hash(previous.content) }
   const old = `本臂前章已接受参考稿（未定稿；只核对与原文的连续性，不新增作者事实）。\n来源：${JSON.stringify(predecessor)}\n${previous.content}`
@@ -4892,9 +4892,9 @@ test('post-UI context 执行 revision 关联原语义 selector，漂移与错误
 })
 
 test('context 审稿传选定候选原文，身份漂移与写稿材料错配仍拒绝', async () => {
-  const fixture = fixtureSource(), start = fixture.indexOf('reviewFocus: aiReviewRun ?')
+  const fixture = fixtureSource(), start = fixture.indexOf('reviewFocus: savedRun ?')
   const focus = new Function('predecessorReadbacks', 'sha',
-    `const aiReviewRun = true, fullRun = false, acceptedPrevious = null, request = {phase:'early-context',milestone:'post-ui'};
+    `const savedRun = false, aiReviewRun = true, fullRun = false, acceptedPrevious = null, request = {phase:'early-context',milestone:'post-ui'};
     return ({ ${fixture.slice(start, fixture.indexOf('\n          })', start))} }).reviewFocus`)
   const required = { draftId: 9, chapterNumber: 2, version: 4, content: '已选前章的真实正文。', required: true }
   const actual = focus([required, { ...required, draftId: 10, content: '未选候选秘密。', required: false }], hash)
@@ -4942,7 +4942,7 @@ test('S14B 新 revision 认证历史末段并在账本读写两入口拒绝漂�
     'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
     'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary', 'historicalC1609ad48e1Boundary', 'historicalSeparatedReviewB89b011aBoundary',
     'historicalPostUi83573613Boundary', 'historicalR3NativeD12c4111Boundary', 'historicalR3ClosedCce6f01aBoundary', 'historicalR3NativeDc9b7cbdBoundary', 'historicalR3Native49e1c0adBoundary', 'historicalR3Native6e38e5ddBoundary',
-    'historicalR3Native11152245Boundary', 'historicalR3NativeC9e7c71eBoundary', 'historicalR3NativeD51580fcBoundary', 'historicalR3NativeAd650e85Boundary', 'historicalR3Native2d67a3aaBoundary', 'historicalR3NativeC907f174Boundary']
+    'historicalR3Native11152245Boundary', 'historicalR3NativeC9e7c71eBoundary', 'historicalR3NativeD51580fcBoundary', 'historicalR3NativeAd650e85Boundary', 'historicalR3Native2d67a3aaBoundary', 'historicalR3NativeC907f174Boundary', 'historicalSavedNativeBoundary']
   const fixture = mode => {
     const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
       sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -5610,7 +5610,7 @@ test('bounded-revision synthetic response switch covers refine and both ordinary
   const end = fixture.indexOf('        // Development transport', start)
   assert.ok(start >= 0 && end > start)
   const generate = new Function('request', 'operationKind', 'current', 'assert', 'BOUNDED_REVISION_DIAGNOSTIC',
-    `${constants}\nconst separatedRun = false, diagnosticRun = false, reviewedRun = false, boundedRun = true, aiReviewRun = false;
+    `${constants}\nconst separatedRun = false, diagnosticRun = false, reviewedRun = false, boundedRun = true, aiReviewRun = false, savedRun = false;
      const chapter = { number: 2, requiredEvents: ['核查遇阻', '承担代价'] };
      const promptText = '', reviewedSyntheticIssues = [], reviewedMustShowTexts = [];
      const db = { prepare: () => ({ pluck: () => ({ get: () => current }) }) }, latestDraft = () => ({ content: current });

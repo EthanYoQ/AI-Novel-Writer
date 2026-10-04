@@ -3026,6 +3026,177 @@
     "limits": "Closed historical no-action review; no refund, replay or reinterpretation."
   },
   "phases": {
+    "saved-native-review-diagnostic": {
+      "sceneId": "场景1",
+      "chapterNumber": 2,
+      "milestone": "diagnostic",
+      "arms": [
+        "candidate"
+      ],
+      "nonQualification": true,
+      "scenarioRevision": "saved-native-review-two-cases-v1",
+      "formalDenominatorContribution": 0,
+      "expectedPhysicalRequests": 4,
+      "maxPhysicalRequests": 16,
+      "diagnosticInputHash": "0d1ceb6e9c24e612e5fb035e62bc293eb5b971aa64b97fa46d3178b5f6436041",
+      "caseIds": [
+        "saved-c18-b-negative",
+        "saved-c17-a-control"
+      ],
+      "sources": [
+        {
+          "caseId": "saved-c18-b-negative",
+          "provenance": "C18-B",
+          "invocationId": "eb8a6d91-a23d-4f57-94ac-b07f8dc04d32",
+          "projectId": "607d093c-f681-4edc-a391-32624e39502d",
+          "epoch": "73236077-1daf-4089-8082-e8cf95c9e9d8",
+          "contentSha256": "4f0b7930b9c56a2520f5de1b12ab46d29ac4284932d6783b66c6b6d85f775a11"
+        },
+        {
+          "caseId": "saved-c17-a-control",
+          "provenance": "C17-A",
+          "invocationId": "284aa0cc-ae44-43a8-86d0-a7c7e403c8fb",
+          "projectId": "00c718a0-851d-43bf-8d66-a145210072ac",
+          "epoch": "70ffe6fb-ced1-43fb-9d4f-0faae3aa72b5",
+          "contentSha256": "80429e53ab637acddb37ea054a034998251e9306df4dac74c4dd71c79fa607e2"
+        }
+      ],
+      "operations": [
+        {
+          "id": "negative-review",
+          "kind": "review",
+          "caseIds": [
+            "saved-c18-b-negative"
+          ]
+        },
+        {
+          "id": "negative-refine",
+          "kind": "refine",
+          "caseIds": [
+            "saved-c18-b-negative"
+          ]
+        },
+        {
+          "id": "negative-final-review",
+          "kind": "final-review",
+          "caseIds": [
+            "saved-c18-b-negative"
+          ]
+        },
+        {
+          "id": "control-review",
+          "kind": "review",
+          "caseIds": [
+            "saved-c17-a-control"
+          ]
+        }
+      ],
+      "attemptPolicy": {
+        "milestone": "diagnostic",
+        "arms": [
+          "candidate"
+        ],
+        "reviewRebuild": {
+          "operationId": "negative-review",
+          "primaryPurpose": "review-chapter",
+          "repairPurpose": "review-chapter-rebuild",
+          "maxRepairAttempts": 1,
+          "maxLengthReplacements": 1
+        },
+        "finalReviewRebuild": {
+          "operationId": "negative-final-review",
+          "primaryPurpose": "review-chapter",
+          "repairPurpose": "review-chapter-rebuild",
+          "maxRepairAttempts": 1,
+          "maxLengthReplacements": 1
+        },
+        "controlReviewRebuild": {
+          "operationId": "control-review",
+          "primaryPurpose": "review-chapter",
+          "repairPurpose": "review-chapter-rebuild",
+          "maxRepairAttempts": 1,
+          "maxLengthReplacements": 1
+        },
+        "refinementRecovery": {
+          "operationId": "negative-refine",
+          "purpose": "refine-from-review",
+          "maxAttempts": 4,
+          "trigger": "settled-length-same-confirmation-visible-append-with-progress"
+        }
+      },
+      "evaluationPolicy": {
+        "revision": "ai-review-final-manuscript-v1",
+        "caseIds": [
+          "saved-c18-b-negative",
+          "saved-c17-a-control"
+        ],
+        "selection": "formal-raw-ai-error-warning-and-valid-keyEvents-mustShow-unknown",
+        "softwareFindings": "separate-frozen-consistency-preflight-provenance",
+        "confirmation": "agent-semantic-approval-references-original-report-and-native-findings",
+        "noAction": "first-draft-endpoint-with-original-raw-and-saved-review",
+        "endpoint": "native-merge-then-ordinary-full-review",
+        "automaticCeiling": "pending-independent-oracle-review",
+        "physicalRequests": {
+          "minimum": 1,
+          "maximum": 16,
+          "manuscriptMinimum": 1,
+          "manuscriptMaximum": 12
+        }
+      },
+      "modelProfile": {
+        "profileId": "7935a372-b853-4408-9374-9fdb272a78f9",
+        "configurationHash": "9a36c2c26b83a0e2e4b3ab1bc0f998a366140c0a3bb91c8444699dd88e31ba44",
+        "model": {
+          "id": "7935a372-b853-4408-9374-9fdb272a78f9",
+          "name": "R3 official DeepSeek Flash native diagnostic",
+          "provider": "deepseek",
+          "protocol": "openai",
+          "modelName": "deepseek-flash",
+          "baseUrl": "https://api.deepseek.com",
+          "temperature": 0,
+          "maxTokens": 32768,
+          "purposes": [
+            "generation",
+            "refinement",
+            "summary"
+          ],
+          "reasoningOverride": "high",
+          "capabilities": {
+            "contextWindowTokens": 1048576,
+            "maxOutputTokens": 393216,
+            "reasoning": true,
+            "structuredOutput": true,
+            "usage": true
+          },
+          "capabilitySources": {
+            "contextWindowTokens": "endpoint",
+            "maxOutputTokens": "endpoint",
+            "reasoning": "manual",
+            "structuredOutput": "manual",
+            "usage": "manual"
+          },
+          "reasoningMapping": {
+            "adapter": "deepseek-v4-thinking",
+            "supportedEfforts": [
+              "off",
+              "low",
+              "high",
+              "max"
+            ],
+            "providerValues": {
+              "off": "disabled",
+              "low": "low",
+              "high": "high",
+              "max": "max"
+            },
+            "requestAliases": {
+              "medium": "high"
+            }
+          }
+        }
+      },
+      "stop": "negative-detection-or-closure-or-technical-failure-ends-check-control-NOT_RUN"
+    },
     "r3-native-revision-diagnostic": {
       "caseId": "R3",
       "caseIds": [
@@ -6444,5 +6615,120 @@
         "templateSource": "candidate-native"
       }
     }
+  }
+,
+  "historicalSavedNativeBoundary": {
+    "fromEventCount": 1746,
+    "eventCount": 1809,
+    "rawBytesSha256": "53cba448cde35da1048ae65f66ab14dec8b100962601796b018d188b658ed5b7",
+    "protocolRevision": "s14b-candidate-only-three-rounds-v1",
+    "protocolHash": "613f7fcc049629c54935a44892e9453fce70845f2769820ca4357b075947f086",
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:dfc96841-b949-4c5e-b49a-cfff33e5e2e7",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:ac76983a-91ac-45f2-9669-0a41de708b96",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:37a4b934-44bb-4823-92ce-95d18c911bba",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:f299e20a-94b2-4c49-b056-457fc3ce3770",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:17872200-c125-4295-ac7a-d8e45c6e5ed3",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:f51fea42-ad06-4f53-8b2b-805f02c2a348",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:cbb3f6ff-1d9e-42ac-8b7f-8df3468b2685",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:d75809db-43fa-4b27-b462-f2b559562b1a",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:90e4f1b6-5b13-4a02-8c54-73a4cf788368",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:ce72b29b-a8e4-468b-8ce4-8c68dc301589",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:cf79482a-ca09-4e4a-998f-f9e305fb8f6e",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:d558113c-7d79-415c-af70-7f8fc13df435",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:b9f5c937-2670-4300-afc2-00298f61e74f",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:d9786b8f-24af-4a64-a8da-c7a5494c1f82",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:a953d73f-2d57-4be2-bcf0-c76973805668",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:b68a7c95-66a8-4562-b177-e5180819252e",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:0cd7b2d4-488d-4bbc-ac11-230bf6e7d9f2",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:27b4399a-e354-4439-a10c-1cb4e3c27236",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:1ae0c499-27c1-4f3a-b41f-b5fe4cf73a5d",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:e9e61bc1-acf2-4cff-bd51-bc3c4b2f53af",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      },
+      {
+        "attemptId": "candidate:b8cc7d46-a1b0-4c37-a041-47ea8eeaa407",
+        "invocationId": "c44a975f-5b9c-4797-8a13-4fbfa3e3d4e8",
+        "terminal": "settle"
+      }
+    ]
   }
 }
