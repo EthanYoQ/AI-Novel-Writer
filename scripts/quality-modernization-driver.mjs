@@ -94,7 +94,8 @@ export function r3ModelForOperation(operationId) {
 
 // Forward qualification only. Historical Pro and R3 registrations retain their own identities.
 export const QUALIFICATION_STAGE_MODELS = Object.freeze({
-  revision: 'candidate-single-official-flash-cap32-v3',
+  revision: 'candidate-single-official-pro-cap32-v1',
+  defaultProfile: 'pro',
   requiredProductSha: '8c1e74ae096863809a3821cddf5bf81e984823a9',
   scopes: [{ phase: 'c16-c18', milestone: 'final' }, { phase: 'full', milestone: 'final' },
     ...['early-budget', 'early-context', 'early-review'].map(phase => ({ phase, milestone: 'post-ui' }))],
@@ -102,15 +103,18 @@ export const QUALIFICATION_STAGE_MODELS = Object.freeze({
     flash: { profileId: '7935a372-b853-4408-9374-9fdb272a78f9',
       configurationHash: '9a36c2c26b83a0e2e4b3ab1bc0f998a366140c0a3bb91c8444699dd88e31ba44',
       model: {id: '7935a372-b853-4408-9374-9fdb272a78f9',name: 'R3 official DeepSeek Flash native diagnostic',provider: 'deepseek',protocol: 'openai',modelName: 'deepseek-flash',baseUrl: 'https://api.deepseek.com',temperature: 0,maxTokens: 32768,purposes: ['generation','refinement','summary'],reasoningOverride: 'high',capabilities: {contextWindowTokens: 1048576,maxOutputTokens: 393216,reasoning: true,structuredOutput: true,usage: true},capabilitySources: {contextWindowTokens: 'endpoint',maxOutputTokens: 'endpoint',reasoning: 'manual',structuredOutput: 'manual',usage: 'manual'},reasoningMapping: {adapter: 'deepseek-v4-thinking',supportedEfforts: ['off','low','high','max'],providerValues: {off: 'disabled',low: 'low',high: 'high',max: 'max'},requestAliases: {medium: 'high'}}} },
+    pro: { profileId: 'e764a293-6736-4d9e-97d1-f56b452c086c',
+      configurationHash: 'a17de74faa2a1ea029cb7a144c4df074107274ea25cb2555f518f5214d873421',
+      model: {id: 'e764a293-6736-4d9e-97d1-f56b452c086c',name: 'Thread12 official DeepSeek V4 Pro high 32768',provider: 'deepseek',protocol: 'openai',modelName: 'deepseek-v4-pro',baseUrl: 'https://api.deepseek.com',temperature: 0,maxTokens: 32768,purposes: ['generation','refinement','summary'],reasoningOverride: 'high',capabilities: {contextWindowTokens: 1000000,maxOutputTokens: 384000,reasoning: true,structuredOutput: true,usage: true},capabilitySources: {contextWindowTokens: 'preset',maxOutputTokens: 'preset',reasoning: 'preset',structuredOutput: 'preset',usage: 'preset'},reasoningMapping: {adapter: 'deepseek-v4-thinking',supportedEfforts: ['off','low','high','max'],providerValues: {off: 'disabled',low: 'low',high: 'high',max: 'max'},requestAliases: {medium: 'high'}}} },
   },
-  operationKinds: { directory: 'flash', draft: 'flash', chapter_notes: 'flash', character_cards: 'flash',
-    review: 'flash', refine: 'flash', 'final-review': 'flash' },
+  operationKinds: { directory: 'pro', draft: 'pro', chapter_notes: 'pro', character_cards: 'pro',
+    review: 'pro', refine: 'pro', 'final-review': 'pro' },
 })
 
 export function qualificationModelForOperation(phase, milestone, operationId) {
   if (!QUALIFICATION_STAGE_MODELS.scopes.some(scope => scope.phase === phase && scope.milestone === milestone))
     throw new Error('QUALIFICATION_MODEL_SCOPE_MISMATCH')
-  if (operationId === undefined) return QUALIFICATION_STAGE_MODELS.profiles.flash
+  if (operationId === undefined) return QUALIFICATION_STAGE_MODELS.profiles[QUALIFICATION_STAGE_MODELS.defaultProfile]
   const kind = productionScenario(phase, milestone, CANDIDATE_ONLY_PROTOCOL_REVISION).operations.find(item => item.id === operationId)?.kind
   const profile = QUALIFICATION_STAGE_MODELS.profiles[QUALIFICATION_STAGE_MODELS.operationKinds[kind]]
   if (!profile) throw new Error('QUALIFICATION_OPERATION_MODEL_MISSING')
@@ -1155,7 +1159,7 @@ export function qualificationBridgeWindows(request) {
     || request.forwardReasoning.model?.temperature !== 0
     || request.phase !== 'bounded-revision-diagnostic' && (request.forwardReasoning.stageModels
       ? stableEvidence(request.forwardReasoning.stageModels) !== stableEvidence(QUALIFICATION_STAGE_MODELS)
-        || modelConfigurationHash(request.forwardReasoning.model) !== QUALIFICATION_STAGE_MODELS.profiles.flash.configurationHash
+        || modelConfigurationHash(request.forwardReasoning.model) !== qualificationModelForOperation(request.phase, request.milestone).configurationHash
       : request.forwardReasoning.model?.modelName !== 'deepseek-ai/DeepSeek-V4-Pro')
     || request.forwardReasoning.reasoningOverride !== 'high'
     || MAIN_GENERATION_POLICY.budget.maxActiveElapsedMs !== 3_600_000)

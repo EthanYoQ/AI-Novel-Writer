@@ -311,7 +311,8 @@ export function validatePhysicalLedger(file) {
   const planning91 = validateHistoricalSupersessionBoundary(raw, planning, protocol.historicalPlanning91f59903Boundary)
   const savedPostUi = validateHistoricalSupersessionBoundary(raw, planning91, protocol.historicalSavedPostUi94e9b048Boundary)
   const savedPro = validateHistoricalSupersessionBoundary(raw, savedPostUi, protocol.historicalSavedProFirstReviewBoundary)
-  validateHistoricalSupersessionBoundary(raw, savedPro, protocol.historicalSavedProClosureBoundary)
+  const savedProClosure = validateHistoricalSupersessionBoundary(raw, savedPro, protocol.historicalSavedProClosureBoundary)
+  validateHistoricalSupersessionBoundary(raw, savedProClosure, protocol.historicalSavedProControlBoundary)
   return ledger
 }
 export function registeredCampaignWorktree(porcelain) {
@@ -513,7 +514,7 @@ export function forwardReasoningFor(protocol, phase, milestone) {
     && QUALIFICATION_STAGE_MODELS.scopes.some(item => item.phase === phase && item.milestone === milestone)
   if (staged && !isDeepStrictEqual(protocol.forwardStageModels, QUALIFICATION_STAGE_MODELS)) fail('QUALIFICATION_MODEL_REGISTRATION_MISMATCH')
   return high === undefined ? effective : { ...effective, revision: high.revision, reasoningOverride: high.reasoningOverride,
-    ...(staged ? { stageModels: QUALIFICATION_STAGE_MODELS, model: QUALIFICATION_STAGE_MODELS.profiles.flash.model } : {}),
+    ...(staged ? { stageModels: QUALIFICATION_STAGE_MODELS, model: qualificationModelForOperation(phase, milestone).model } : {}),
     wire: { ...effective.wire, candidate: { ...effective.wire.candidate, reasoning_effort: high.reasoningOverride } },
     limits: !bounded && model ? model.limits : high.limits }
 }
@@ -629,7 +630,8 @@ export function createProductionTargets(baselineRoot, output, { development = fa
   if (savedReview && (!saved || resume || development || baselineRoot || modelId || modelSources)) fail('SAVED_REVIEW_CONTINUATION_FREEZE_SCOPE_MISMATCH')
   if (resume && (!planning || development || baselineRoot || modelId || modelSources)) fail('PLANNING_RESUME_FREEZE_SCOPE_MISMATCH')
   const stages = planning ? PLANNING_STAGE_MODELS : QUALIFICATION_STAGE_MODELS
-  const staged = !phase || planning || QUALIFICATION_STAGE_MODELS.scopes.some(scope => scope.phase === phase)
+  const scope = QUALIFICATION_STAGE_MODELS.scopes.find(item => item.phase === (phase ?? 'full'))
+  const staged = planning || Boolean(scope)
   if (phase && !r3 && !saved && !staged || modelSources && !r3 && !saved && !staged || (r3 || saved || staged) && !development && !modelSources && !resume && !savedReview) fail('REGISTERED_MODEL_SOURCES_REQUIRED')
   if (r3 && !development) git(ROOT, ['merge-base', '--is-ancestor', R3_NATIVE_REVISION_DIAGNOSTIC.requiredProductSha, 'HEAD'])
   if ((staged || saved) && !development) git(ROOT, ['merge-base', '--is-ancestor', QUALIFICATION_STAGE_MODELS.requiredProductSha, 'HEAD'])
@@ -675,7 +677,8 @@ export function createProductionTargets(baselineRoot, output, { development = fa
       driver: { kind: 'production-command-physical-project-v2', adapterRoot: ROOT, path: PRODUCTION_BRIDGE, sha256: productionBridgeHash() },
       ...(r3 ? { modelId: R3_NATIVE_REVISION_DIAGNOSTIC.model.id, r3StageProfiles: R3_NATIVE_REVISION_DIAGNOSTIC.profiles }
         : saved ? { modelId: SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile.profileId }
-        : staged ? { modelId: stages.profiles.flash.profileId, stageModels: stages }
+        : staged ? { modelId: (planning ? stages.profiles.flash
+          : qualificationModelForOperation(scope.phase, scope.milestone)).profileId, stageModels: stages }
           : modelId ? { modelId } : {}), ...(development ? { developmentOnly: true } : {}) }
     if ((r3 || saved || staged) && !development) {
       if (modelId && modelId !== target.modelId) fail('R3_NATIVE_MODEL_MISMATCH')
@@ -1009,6 +1012,9 @@ export function updateLedger(file, event, options = {}) {
       const savedProClosureBoundary = options.campaignMode === 'real' ? protocol.historicalSavedProClosureBoundary : options.historicalSavedProClosureBoundary
       const trustedSavedProClosureEvents = savedProClosureBoundary
         ? validateHistoricalSupersessionBoundary(rawLedger, trustedSavedProEvents, savedProClosureBoundary) : trustedSavedProEvents
+      const savedProControlBoundary = options.campaignMode === 'real' ? protocol.historicalSavedProControlBoundary : options.historicalSavedProControlBoundary
+      const trustedSavedProControlEvents = savedProControlBoundary
+        ? validateHistoricalSupersessionBoundary(rawLedger, trustedSavedProClosureEvents, savedProControlBoundary) : trustedSavedProClosureEvents
       // 阶段决定首选分配桶：early 阶段用 early*，post-UI 重跑用 postUi*；
       // 同一 slot 的重复发送或已超出计划样本量的发送归入失败/修复余量。
       // ADR 0019 已移除硬上限：allocation 只分类和汇报，从不拒绝发送。
@@ -1149,7 +1155,7 @@ export function updateLedger(file, event, options = {}) {
       for (const [index, row] of events.entries()) {
         if (row.type === 'reserve') {
           const frozen = index < trustedHistoricalEvents
-          const superseded = index >= trustedHistoricalEvents && index < trustedSavedProClosureEvents
+          const superseded = index >= trustedHistoricalEvents && index < trustedSavedProControlEvents
           validateCampaignBinding(row.binding, { campaignMode: options.campaignMode, protocol, historical: frozen || superseded })
           if (!frozen && !superseded && row.allocation !== allocationFor(row.binding)) fail('CAMPAIGN_ALLOCATION_MISMATCH')
           reserved.set(row.attemptId, row)

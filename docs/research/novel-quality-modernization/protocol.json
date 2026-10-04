@@ -1867,7 +1867,8 @@
     ]
   },
   "forwardStageModels": {
-    "revision": "candidate-single-official-flash-cap32-v3",
+    "revision": "candidate-single-official-pro-cap32-v1",
+    "defaultProfile": "pro",
     "requiredProductSha": "8c1e74ae096863809a3821cddf5bf81e984823a9",
     "scopes": [
       {
@@ -1943,16 +1944,68 @@
             }
           }
         }
+      },
+      "pro": {
+        "profileId": "e764a293-6736-4d9e-97d1-f56b452c086c",
+        "configurationHash": "a17de74faa2a1ea029cb7a144c4df074107274ea25cb2555f518f5214d873421",
+        "model": {
+          "id": "e764a293-6736-4d9e-97d1-f56b452c086c",
+          "name": "Thread12 official DeepSeek V4 Pro high 32768",
+          "provider": "deepseek",
+          "protocol": "openai",
+          "modelName": "deepseek-v4-pro",
+          "baseUrl": "https://api.deepseek.com",
+          "temperature": 0,
+          "maxTokens": 32768,
+          "purposes": [
+            "generation",
+            "refinement",
+            "summary"
+          ],
+          "reasoningOverride": "high",
+          "capabilities": {
+            "contextWindowTokens": 1000000,
+            "maxOutputTokens": 384000,
+            "reasoning": true,
+            "structuredOutput": true,
+            "usage": true
+          },
+          "capabilitySources": {
+            "contextWindowTokens": "preset",
+            "maxOutputTokens": "preset",
+            "reasoning": "preset",
+            "structuredOutput": "preset",
+            "usage": "preset"
+          },
+          "reasoningMapping": {
+            "adapter": "deepseek-v4-thinking",
+            "supportedEfforts": [
+              "off",
+              "low",
+              "high",
+              "max"
+            ],
+            "providerValues": {
+              "off": "disabled",
+              "low": "low",
+              "high": "high",
+              "max": "max"
+            },
+            "requestAliases": {
+              "medium": "high"
+            }
+          }
+        }
       }
     },
     "operationKinds": {
-      "directory": "flash",
-      "draft": "flash",
-      "chapter_notes": "flash",
-      "character_cards": "flash",
-      "review": "flash",
-      "refine": "flash",
-      "final-review": "flash"
+      "directory": "pro",
+      "draft": "pro",
+      "chapter_notes": "pro",
+      "character_cards": "pro",
+      "review": "pro",
+      "refine": "pro",
+      "final-review": "pro"
     }
   },
   "schemaVersion": 2,
@@ -7543,5 +7596,28 @@
       }
     ],
     "limits": "Historical settled negative closure only. Keep all three requests counted while continuing the original control with at most four requests."
+  },
+  "historicalSavedProControlBoundary": {
+    "fromEventCount": 1890,
+    "eventCount": 1893,
+    "rawBytesSha256": "24d83749f82689568e94c2074554785f962de7a9fc50712bfc47d4c797170899",
+    "protocolRevision": "s14b-candidate-only-three-rounds-v1",
+    "protocolHash": "ee52cc7d87b0949a4e032890337ddffbc30bf42635f9ebb26398c4f8e15dca01",
+    "armBindings": {
+      "candidate": {
+        "codeSha": "e60cdb31e0760185a75552b5e694cb832cd0e580",
+        "sourceHash": "5be2790970555a59c29b73294f5b286721e3bbd392014f34c570904745735b75",
+        "driverHash": "e9410c80e60eaa612dd9f36305f0ee52fa313fcf4a59797bb385f129464996cd"
+      }
+    },
+    "reserveAttempts": [
+      {
+        "attemptId": "candidate:ff380645-1eec-4db9-a1a1-490b10ee07a5",
+        "invocationId": "4fddc1e9-f2c7-4a38-ace0-5faad3c2b2a5",
+        "terminal": "settle",
+        "parityId": "57fd4fa6846e89274a14366f0bc07970e8f07678d9beecce57b17c08e5c6b292"
+      }
+    ],
+    "limits": "Historical settled control only. Preserve all four diagnostic requests and original results; no refund, replay, qualification or reclassification."
   }
 }

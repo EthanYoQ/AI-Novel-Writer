@@ -4966,7 +4966,7 @@ const s14bHistoryTest = test.extend({
         'historicalC1667a57c04Boundary', 'historicalC162867cfa4Boundary', 'historicalPostUiBa2d34abBoundary', 'historicalPostUi1d0bdac3Boundary',
         'historicalC16Ac3af420Boundary', 'historicalC16A9552e67Boundary', 'historicalC1663a44636Boundary', 'historicalC16A4d2b6edBoundary', 'historicalC160917fb36Boundary', 'historicalC161aa5487eBoundary', 'historicalC169337909dBoundary', 'historicalSharedInput7203443dBoundary', 'historicalC1670407421Boundary', 'historicalC16D712808cBoundary', 'historicalC16625bfda8Boundary', 'historicalC16D515b666Boundary', 'historicalC16A763f510Boundary', 'historicalBoundedRevisionE41a3f0aBoundary', 'historicalC16071156e5Boundary', 'historicalC169182d475Boundary', 'historicalC1687266499Boundary', 'historicalC16D021261fBoundary', 'historicalC1609ad48e1Boundary', 'historicalSeparatedReviewB89b011aBoundary',
         'historicalPostUi83573613Boundary', 'historicalR3NativeD12c4111Boundary', 'historicalR3ClosedCce6f01aBoundary', 'historicalR3NativeDc9b7cbdBoundary', 'historicalR3Native49e1c0adBoundary', 'historicalR3Native6e38e5ddBoundary',
-        'historicalR3Native11152245Boundary', 'historicalR3NativeC9e7c71eBoundary', 'historicalR3NativeD51580fcBoundary', 'historicalR3NativeAd650e85Boundary', 'historicalR3Native2d67a3aaBoundary', 'historicalR3NativeC907f174Boundary', 'historicalSavedNativeBoundary', 'historicalPlanningSavedOutlineBoundary', 'historicalPlanning91f59903Boundary', 'historicalSavedPostUi94e9b048Boundary', 'historicalSavedProFirstReviewBoundary', 'historicalSavedProClosureBoundary']
+        'historicalR3Native11152245Boundary', 'historicalR3NativeC9e7c71eBoundary', 'historicalR3NativeD51580fcBoundary', 'historicalR3NativeAd650e85Boundary', 'historicalR3Native2d67a3aaBoundary', 'historicalR3NativeC907f174Boundary', 'historicalSavedNativeBoundary', 'historicalPlanningSavedOutlineBoundary', 'historicalPlanning91f59903Boundary', 'historicalSavedPostUi94e9b048Boundary', 'historicalSavedProFirstReviewBoundary', 'historicalSavedProClosureBoundary', 'historicalSavedProControlBoundary']
       const fixture = mode => {
         const binding = { campaignId: CAMPAIGN_ID, mode, arm: 'baseline', codeSha: 'a'.repeat(40),
           sourceHash: 'b'.repeat(64), driverHash: productionBridgeHash(), parityId: 'c'.repeat(64),
@@ -5028,6 +5028,9 @@ const s14bHistoryTest = test.extend({
 })
 
 s14bHistoryTest('S14B 新 revision 认证历史边界与登记证据', ({ history: { real } }) => {
+  const control = real.boundaries.historicalSavedProControlBoundary
+  assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1890, control), 1893)
+  assert.equal(control.reserveAttempts[0].invocationId, '4fddc1e9-f2c7-4a38-ace0-5faad3c2b2a5')
   const planning = real.boundaries.historicalPlanningSavedOutlineBoundary
   const planningTerminals = ['settle', 'settle', 'settle', 'settle', 'settle', 'unknown']
   assert.equal(validateHistoricalSupersessionBoundary(real.raw, 1809, planning), 1827)
@@ -5323,6 +5326,15 @@ s14bHistoryTest('S14B 新 revision 在账本读写两入口拒绝前缀漂移并
   const options = { campaignMode: 'synthetic', ...synthetic.boundaries }
   assert.doesNotThrow(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt',
     binding: { ...synthetic.binding, ...currentProtocolBinding() } }, options))
+  const changedControl = raw => raw.trimEnd().split('\n').map((line, index) =>
+    index === 1892 ? line.replace('"attemptId":"', '"attemptId":"tampered-') : line).join('\n') + '\n'
+  fs.writeFileSync(ledger, changedControl(real.raw))
+  assert.throws(() => validatePhysicalLedger(ledger), /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(ledger, real.raw)
+  fs.writeFileSync(file, changedControl(synthetic.raw))
+  assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'new-attempt', binding: {} }, options),
+    /HISTORICAL_LEDGER_SUPERSESSION_DRIFT/)
+  fs.writeFileSync(file, synthetic.raw)
   for (const registered of [partial, diagnostic])
     assert.throws(() => updateLedger(file, { type: 'reserve', attemptId: 'unregistered-historical-protocol',
       binding: { ...synthetic.binding, protocolRevision: registered.protocolRevision, protocolHash: registered.protocolHash } }, options),

@@ -426,6 +426,11 @@ test('saved first-review continuation preserves old files, counts the exact hist
     const oldProtocol = structuredClone(protocol); oldProtocol.phases[phase] = structuredClone(policy)
     delete oldProtocol.phases[phase].savedReviewContinuation; delete oldProtocol.historicalSavedProFirstReviewBoundary
     delete oldProtocol.historicalSavedProClosureBoundary
+    delete oldProtocol.historicalSavedProControlBoundary
+    oldProtocol.forwardStageModels.revision = 'candidate-single-official-flash-cap32-v3'
+    delete oldProtocol.forwardStageModels.defaultProfile
+    delete oldProtocol.forwardStageModels.profiles.pro
+    for (const kind of Object.keys(oldProtocol.forwardStageModels.operationKinds)) oldProtocol.forwardStageModels.operationKinds[kind] = 'flash'
     const sourceProtocolPath = write(path.join(directory, 'old-protocol.json'), oldProtocol), protocolHash = ref(sourceProtocolPath).sha256
     const base = { arm: 'candidate', roots, isolationRoot, ...oldTools, sourceHash: policy.savedReviewContinuation.sourceHash,
       driver: { sha256: oldTools.driverHash }, protocolHash, protocolRevision: protocol.decisionRevision, fixture: {}, modelId: policy.modelProfile.profileId, modelSources: {} }
@@ -793,7 +798,7 @@ test('R3 Flash v9 authenticates its final history and closes all three slots wit
   assert.equal(boundary.rawBytesSha256, '747454c7085bb348a9d939952ebf5b51cc7026d586d679bc85db8968537d93fd')
   assert.ok(boundary.reserveAttempts.every(item => item.terminal === 'settle' && item.invocationId !== previous.runs[2].invocationId))
   assert.deepEqual(QUALIFICATION_STAGE_MODELS, protocol.forwardStageModels)
-  assert.equal(protocol.forwardStageModels.revision, 'candidate-single-official-flash-cap32-v3')
+  assert.equal(protocol.forwardStageModels.revision, 'candidate-single-official-pro-cap32-v1')
 })
 
 test('R3 native stage profiles freeze Flash for review, revision and final review and retain the native deadline', () => {
@@ -817,7 +822,7 @@ test('R3 native stage profiles freeze Flash for review, revision and final revie
   const windows = qualificationBridgeWindows(request)
   assert.ok(windows.attemptMs > 3_600_000 && windows.spawnMs > windows.attemptMs * 8)
   assert.throws(() => qualificationBridgeWindows({ ...request, operations: policy.operations.slice(1) }), /SCOPE/)
-  assert.equal(forwardReasoningFor(protocol, 'early-review', 'post-ui').model.modelName, 'deepseek-flash')
+  assert.equal(forwardReasoningFor(protocol, 'early-review', 'post-ui').model.modelName, 'deepseek-v4-pro')
 })
 
 test('R3 native registration rejects altered source and cannot restart spent diagnostic slots', () => {

@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { productionScenario, fullExecutionSchedule, runProductionPhasePair, executionRecordIdentity,
   QUALIFICATION_STAGE_MODELS, qualificationModelForOperation, assertForwardReasoning, copyIsolatedRealModelConfig,
   createOperationDispatchGate, reviewLengthRecoveryFor, scenarioAuthorSetting, R3_NATIVE_REVISION_DIAGNOSTIC, modelConfigurationHash,
-  selectOwnerDispatch, SAVED_NATIVE_REVIEW_DIAGNOSTIC } from '../quality-modernization-driver.mjs'
+  selectOwnerDispatch, SAVED_NATIVE_REVIEW_DIAGNOSTIC, PLANNING_STAGE_MODELS } from '../quality-modernization-driver.mjs'
 import { ROOT, validatePair, candidateBatchSlots, assertCandidateSlotAvailable, aggregateCandidateJudgments, selectPhase, hash, adjudicateCandidateBatch,
   forwardReasoningFor, forwardQualificationWindowFor, buildFixtureExports, currentProtocolBinding } from '../quality-modernization-run.mjs'
 import { targetUnitRange } from '../quality-modernization-receipt.mjs'
@@ -66,7 +66,7 @@ test('forward formal review recovery preserves old scenarios, author input and e
   }
 })
 
-test('formal operations use one official Flash profile and native wire without changing windows', () => {
+test('formal operations use one official Pro profile and native wire without changing windows', () => {
   const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
   assert.deepEqual(protocol.forwardStageModels, QUALIFICATION_STAGE_MODELS)
   const provider = new OpenAIProvider(), messages = [{ role: 'user', content: 'offline parameter preview' }]
@@ -76,7 +76,7 @@ test('formal operations use one official Flash profile and native wire without c
     for (const operation of scenario.operations) {
       const profile = qualificationModelForOperation(phase, milestone, operation.id)
       const review = ['review', 'refine', 'final-review'].includes(operation.kind)
-      assert.equal(profile, QUALIFICATION_STAGE_MODELS.profiles.flash)
+      assert.equal(profile, QUALIFICATION_STAGE_MODELS.profiles.pro)
       const model = { ...profile.model, apiKey: 'synthetic-never-network' }
       const capabilityEvidence = resolveModelExecutionCapabilityEvidence(model)
       const plan = buildMainGenerationPlan(model, { capabilityEvidence }, { purpose: review ? 'review-chapter' : 'chapter-draft',
@@ -112,7 +112,7 @@ test.each([
 ])('formal task output budgets admit %s at %s with %i units and a %i-token owner budget', (purpose, reasoningStage, requestedUnits, maxOutputPerRequest) => {
   const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
   const registration = forwardReasoningFor(protocol, 'full', 'final')
-  const model = { ...QUALIFICATION_STAGE_MODELS.profiles.flash.model, apiKey: 'synthetic-never-network' }
+  const model = { ...QUALIFICATION_STAGE_MODELS.profiles.pro.model, apiKey: 'synthetic-never-network' }
   const task = { purpose, reasoningStage, output: 'visible-text', messages: [{ role: 'user', content: 'offline task budget preview' }],
     budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits, segmentable: false } }
   const plan = buildMainGenerationPlan(model, { capabilityEvidence: resolveModelExecutionCapabilityEvidence(model) }, task,
@@ -143,11 +143,11 @@ test.each([
     /OWNER_DISPATCH_IDENTITY_MISMATCH/)
 })
 
-test('formal config copying binds one shared profile and rejects drift before any request', () => {
+test('formal config copying binds both retained profiles and rejects drift before any request', () => {
   const root = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/stage-profiles-'))
   const destination = path.join(root, 'copy'); fs.mkdirSync(destination)
   const models = Object.values(QUALIFICATION_STAGE_MODELS.profiles).map(profile => ({ ...profile.model, apiKey: 'synthetic-never-network' }))
-  const target = { roots: { config: root }, modelId: models[0].id, stageModels: QUALIFICATION_STAGE_MODELS }
+  const target = { roots: { config: root }, modelId: QUALIFICATION_STAGE_MODELS.profiles.pro.profileId, stageModels: QUALIFICATION_STAGE_MODELS }
   try {
     fs.writeFileSync(path.join(root, 'models.json'), JSON.stringify(models))
     copyIsolatedRealModelConfig(target, { config: destination }, hash(QUALIFICATION_STAGE_MODELS.profiles))
@@ -302,19 +302,18 @@ test('adjudication binds all terminal states to the batch and only arbitrates di
     assert.equal(decision.silentHardConstraint, true)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
-test('freeze consumer copies saved Pro and formal or R3 Flash sources and rejects drift', () => {
+test('freeze consumer selects formal Pro, preserves diagnostic Flash and rejects source drift', () => {
   const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/single-model-freeze-'))
   const profile = QUALIFICATION_STAGE_MODELS.profiles.flash
   const sourceRoot = path.join(directory, 'source')
   fs.mkdirSync(path.join(sourceRoot, 'c', 'c'), { recursive: true })
   const modelFile = path.join(sourceRoot, 'c', 'c', 'models.json')
-  const model = { ...profile.model, apiKey: 'synthetic-never-network' }
   const source = { sourceRoot, profileId: profile.profileId, configurationHash: profile.configurationHash }
   const runner = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-run.mjs'), 'utf8').replaceAll('\r\n', '\n')
   const start = runner.indexOf('export function createProductionTargets(')
   const body = runner.slice(start, runner.indexOf('export function probeTarget(', start)).replace('export function', 'function')
   const inspected = []
-  const dependencies = { fs, path, ROOT, CACHE: directory, QUALIFICATION_STAGE_MODELS, R3_NATIVE_REVISION_DIAGNOSTIC, SAVED_NATIVE_REVIEW_DIAGNOSTIC,
+  const dependencies = { fs, path, ROOT, CACHE: directory, QUALIFICATION_STAGE_MODELS, qualificationModelForOperation, PLANNING_STAGE_MODELS, R3_NATIVE_REVISION_DIAGNOSTIC, SAVED_NATIVE_REVIEW_DIAGNOSTIC,
     CANDIDATE_ONLY_PROTOCOL_REVISION: revision, PRODUCTION_BRIDGE: 'scripts/fixtures/quality-modernization-production.fixture.mjs',
     fail: code => { throw new Error(code) }, git: (_root, args) => args[0] === 'rev-parse' ? 'a'.repeat(40) : '',
     inside: (root, target) => !path.relative(root, target).startsWith('..') && !path.isAbsolute(path.relative(root, target)),
@@ -328,15 +327,19 @@ test('freeze consumer copies saved Pro and formal or R3 Flash sources and reject
     } }
   const freeze = new Function(...Object.keys(dependencies), body + '\nreturn createProductionTargets')(...Object.values(dependencies))
   try {
-    for (const phase of ['full', 'r3-native-revision-diagnostic', 'saved-native-review-diagnostic']) {
-      const phaseProfile = phase === 'full' ? profile : phase === 'saved-native-review-diagnostic'
-        ? SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile : R3_NATIVE_REVISION_DIAGNOSTIC.profiles.flash
+    for (const phase of ['full', 'r3-native-revision-diagnostic', 'saved-native-review-diagnostic', 'planning-native-diagnostic']) {
+      const phaseProfile = phase === 'full' ? QUALIFICATION_STAGE_MODELS.profiles.pro : phase === 'saved-native-review-diagnostic'
+        ? SAVED_NATIVE_REVIEW_DIAGNOSTIC.modelProfile : phase === 'planning-native-diagnostic'
+          ? PLANNING_STAGE_MODELS.profiles.flash : R3_NATIVE_REVISION_DIAGNOSTIC.profiles.flash
       const phaseModel = { ...phaseProfile.model, apiKey: 'synthetic-never-network' }
-      fs.writeFileSync(modelFile, JSON.stringify([phaseModel]))
+      const phaseModels = phase === 'full' ? Object.values(QUALIFICATION_STAGE_MODELS.profiles).map(item => ({ ...item.model, apiKey: 'synthetic-never-network' })) : [phaseModel]
+      fs.writeFileSync(modelFile, JSON.stringify(phaseModels))
       const phaseSource = { sourceRoot, profileId: phaseProfile.profileId, configurationHash: phaseProfile.configurationHash }
       const output = path.join(directory, phase + '.json')
-      const result = freeze(undefined, output, { phase, modelSources: { [phaseProfile.profileId]: phaseSource } })
-      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(inspected.at(-1).roots.config, 'models.json'))), [phaseModel])
+      const modelSources = phase === 'full' ? Object.fromEntries(Object.values(QUALIFICATION_STAGE_MODELS.profiles).map(item =>
+        [item.profileId, { sourceRoot, profileId: item.profileId, configurationHash: item.configurationHash }])) : { [phaseProfile.profileId]: phaseSource }
+      const result = freeze(undefined, output, { phase, modelSources })
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(inspected.at(-1).roots.config, 'models.json'))), phaseModels)
       assert.equal(result.physicalModelRequests, 0)
       assert.equal(Object.keys(result.targets).length, 1)
       assert.equal(result.targets.candidate.modelId, phaseProfile.profileId)
@@ -358,18 +361,22 @@ test('freeze consumer copies saved Pro and formal or R3 Flash sources and reject
           { phase, modelSources: { [phaseProfile.profileId]: phaseSource } }), /MODEL_MISMATCH/)
       }
     }
-    assert.equal(inspected.length, 3)
+    assert.equal(inspected.length, 4)
+    const sources = Object.fromEntries(Object.values(QUALIFICATION_STAGE_MODELS.profiles).map(item =>
+      [item.profileId, { sourceRoot, profileId: item.profileId, configurationHash: item.configurationHash }]))
+    const models = Object.values(QUALIFICATION_STAGE_MODELS.profiles).map(item => ({ ...item.model, apiKey: 'synthetic-never-network' }))
+    fs.writeFileSync(modelFile, JSON.stringify(models))
     assert.throws(() => freeze(undefined, path.join(directory, 'old-formal-source.json'),
-      { phase: 'full', modelSources: { [profile.profileId]: { ...source,
+      { phase: 'full', modelSources: { ...sources, [profile.profileId]: { ...source,
         configurationHash: R3_NATIVE_REVISION_DIAGNOSTIC.profiles.flash.configurationHash } } }), /MODEL_MISMATCH/)
     for (const change of [{ profileId: 'unregistered' }, { configurationHash: '0'.repeat(64) }, { sourceRoot: 'relative-root' }])
       assert.throws(() => freeze(undefined, path.join(directory, randomUUID() + '.json'),
-        { phase: 'full', modelSources: { [profile.profileId]: { ...source, ...change } } }), /MODEL_MISMATCH/)
-    fs.writeFileSync(modelFile, JSON.stringify([{ ...model, apiKey: '' }]))
+        { phase: 'full', modelSources: { ...sources, [profile.profileId]: { ...source, ...change } } }), /MODEL_MISMATCH/)
+    fs.writeFileSync(modelFile, JSON.stringify(models.map(item => item.id === profile.profileId ? { ...item, apiKey: '' } : item)))
     assert.throws(() => freeze(undefined, path.join(directory, 'missing-key.json'),
-      { phase: 'full', modelSources: { [profile.profileId]: source } }), /MODEL_MISMATCH/)
-    fs.writeFileSync(modelFile, JSON.stringify([{ ...model, modelName: 'Qwen/Qwen3.8-27B' }]))
+      { phase: 'full', modelSources: { ...sources, [profile.profileId]: source } }), /MODEL_MISMATCH/)
+    fs.writeFileSync(modelFile, JSON.stringify(models.map(item => item.id === profile.profileId ? { ...item, modelName: 'Qwen/Qwen3.8-27B' } : item)))
     assert.throws(() => freeze(undefined, path.join(directory, 'mixed.json'),
-      { phase: 'full', modelSources: { [profile.profileId]: source } }), /MODEL_MISMATCH/)
+      { phase: 'full', modelSources: { ...sources, [profile.profileId]: source } }), /MODEL_MISMATCH/)
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 })
