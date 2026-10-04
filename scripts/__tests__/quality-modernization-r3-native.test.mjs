@@ -11,6 +11,35 @@ import { ROOT, CAMPAIGN_ID, currentProtocolBinding, selectPhase, forwardReasonin
 const phase = 'r3-native-revision-diagnostic'
 const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json')))
 
+test('saved native checks reject cross-case operations and spent or unknown requests across roots', () => {
+  const phase = 'saved-native-review-diagnostic'
+  const scenario = productionScenario(phase, 'diagnostic')
+  assert.ok(scenario, 'fixed saved native checks must have a production scenario')
+  const directory = path.join(ROOT, '.runtime/.cache/novel-quality-modernization', `saved-native-${randomUUID()}`)
+  fs.mkdirSync(directory, { recursive: true })
+  try {
+    const slot = scenario.sources[0], profile = QUALIFICATION_STAGE_MODELS.profiles.flash
+    const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', arm: 'candidate', ...currentProtocolBinding(),
+      codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: 'd'.repeat(64),
+      phase, milestone: 'diagnostic', caseId: slot.caseId, operation: 'negative-review', invocationId: slot.invocationId,
+      stageModel: { profileId: profile.profileId, configurationHash: profile.configurationHash },
+      diagnosticInputHash: scenario.diagnosticInputHash, diagnosticSourceHash: hash(slot),
+      evaluationPolicyHash: hash(scenario.evaluationPolicy), actual: { attemptId: 'first', runId: 'run', rootActionId: 'root',
+        projectId: 'new-project', epoch: 'new-epoch', purpose: 'review-chapter' } }
+    const ledger = path.join(directory, 'ledger.jsonl')
+    const reserve = (id, extra = {}) => updateLedger(ledger, { type: 'reserve', attemptId: id,
+      binding: { ...binding, ...extra } }, { campaignMode: 'synthetic' })
+    for (const extra of [{ caseId: scenario.sources[1].caseId }, { invocationId: policy.runs[0].invocationId },
+      { diagnosticInputHash: '0'.repeat(64) }, { operation: 'control-review' }])
+      assert.throws(() => reserve('bad', extra), /SAVED_NATIVE|INVALID_CAMPAIGN/)
+    assert.doesNotThrow(() => reserve('first'))
+    updateLedger(ledger, { type: 'dispatch', attemptId: 'first' }, { campaignMode: 'synthetic' })
+    updateLedger(ledger, { type: 'unknown', attemptId: 'first' }, { campaignMode: 'synthetic' })
+    assert.throws(() => reserve('retry', { actual: { ...binding.actual, attemptId: 'retry', rootActionId: 'new-root' } }), /SAVED_NATIVE/)
+    assert.equal(fs.readFileSync(ledger, 'utf8').trim().split('\n').length, 3)
+  } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+})
+
 afterEach(() => {
   vi.doUnmock('../quality-modernization-driver.mjs')
   vi.restoreAllMocks()
