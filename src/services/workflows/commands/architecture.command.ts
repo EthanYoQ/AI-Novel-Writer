@@ -3,6 +3,7 @@ import { decodeCharacterIdentityManifest, decodeCharacterDetails, validateCharac
 import type { CharacterProposalBatch } from '../../../shared/character-proposal'
 import { defaultCharacterProposalRelationships, defaultCharacterProposalSelections, formatCharacterProposalPreview } from '../character-proposal-preview'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
+import type { ArchitecturePlanningIntent } from '../../../shared/generation-owner-contract'
 import { CANONICAL_PROJECT_DIRECTORY } from '../../../shared/project-format'
 import {
   BaseWorkflowCommand,
@@ -46,9 +47,16 @@ import {
 
 // --- 基础工具库 ---
 
-function stepAuthorInputs(context: WorkflowContext, key: string, config: Readonly<NovelConfig>): { id: string; text: string }[] {
+function stepAuthorInputs(context: WorkflowContext, key: 'premise' | 'characters' | 'worldbuilding' | 'synopsis',
+  snapshot: ArchitectureProjectSnapshot, synopsisRange?: PlotOutlineChapterRange | null, resuming = false): { id: string; text: string }[] {
   const value = (context.data.stepGuidance as Record<string, unknown> | undefined)?.[key]
-  return [{ id: 'architecture:author-config', text: JSON.stringify(config) }, ...(typeof value === 'string' ? [{ id: `architecture:step-guidance:${key}`, text: value }] : [])]
+  const intent: ArchitecturePlanningIntent | undefined = snapshot.planningIntent ?? (resuming || context.mainGenerationRootHandle ? undefined : {
+    version: 'architecture-action-v1', priorSteps: key === 'synopsis' ? [] : [key],
+    synopsisRange: key === 'synopsis' ? synopsisRange ?? { from: 1, to: snapshot.novelConfig.totalChapters } : null,
+  })
+  return [{ id: 'architecture:author-config', text: JSON.stringify(snapshot.novelConfig) },
+    ...(intent ? [{ id: 'architecture:planning-intent', text: JSON.stringify(intent) }] : []),
+    ...(typeof value === 'string' ? [{ id: `architecture:step-guidance:${key}`, text: value }] : [])]
 }
 
 interface PartialArchData {
@@ -722,6 +730,7 @@ function promptUtf8Bytes(value: string): number { return new TextEncoder().encod
 export interface ArchitectureProjectSnapshot {
   expectedProjectPath: string
   novelConfig: Readonly<NovelConfig>
+  planningIntent?: ArchitecturePlanningIntent
 }
 
 function assertArchitectureProjectSessionCurrent(
@@ -1009,7 +1018,7 @@ export class GenerateCoreSeedCommand extends BaseWorkflowCommand<string> {
   async execute(params: CommandExecuteParams): Promise<string> {
     assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context), params.context)
     return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params), {
-      authorInputs: stepAuthorInputs(params.context, 'premise', this.snapshot.novelConfig),
+      authorInputs: stepAuthorInputs(params.context, 'premise', this.snapshot),
       operation: 'generate-core-seed', promptKeys: ['premise'], skillStages: ['planning'], output: 'visible-text',
     })
   }
@@ -1110,7 +1119,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
   async execute(params: CommandExecuteParams): Promise<string> {
     assertArchitectureProjectSessionCurrent(requireWorkflowProjectSession(params.context), params.context)
     return this.executeWithGenerationRuntime('character-architecture', params, () => this.executeWithinGeneration(params), {
-      authorInputs: stepAuthorInputs(params.context, 'characters', this.snapshot.novelConfig),
+      authorInputs: stepAuthorInputs(params.context, 'characters', this.snapshot),
       operation: 'character-architecture', promptKeys: ['character_dynamics'], skillStages: ['planning'], output: 'structured-data',
     })
   }
@@ -1397,7 +1406,7 @@ export class GenerateWorldBuildingCommand extends BaseWorkflowCommand<string> {
       'This legacy candidate has no persistent run record. It remains available to view or copy; explicitly restart generation.',
     ))
     return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params), {
-      authorInputs: stepAuthorInputs(params.context, 'worldbuilding', this.snapshot.novelConfig),
+      authorInputs: stepAuthorInputs(params.context, 'worldbuilding', this.snapshot, null, this.options.resumeWorldBuilding),
       operation: 'generate-world-building', promptKeys: ['world_building'], skillStages: ['planning'], output: 'visible-text',
       ...(this.options.resumeWorldBuilding ? { resumeHandle: this.options.resumeHandle } : {}),
       onRunOpened: async handle => {
@@ -1718,7 +1727,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       'This legacy candidate has no persistent run record. It remains available to view or copy; explicitly restart generation.',
     ))
     return this.executeWithGenerationRuntime('text', params, () => this.executeWithinGeneration(params), {
-      authorInputs: stepAuthorInputs(params.context, 'synopsis', this.snapshot.novelConfig),
+      authorInputs: stepAuthorInputs(params.context, 'synopsis', this.snapshot, this.options.synopsisRange, this.options.resumeSynopsis),
       operation: 'generate-plot-outline', promptKeys: ['synopsis'], skillStages: ['planning'], output: 'visible-text',
       ...(this.options.resumeSynopsis ? { resumeHandle: this.options.resumeHandle } : {}),
       onRunOpened: async handle => {

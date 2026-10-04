@@ -7,6 +7,9 @@ import { planTaskBudget, S07_TASK_BUDGET_POLICY, type TaskBudgetDecision } from 
 import { formatTaskBudgetDecisionFailure } from '../../src/services/generation/prompt-budget-failure'
 import type { LLMGenerateOptions } from '../llm/provider.interface'
 import type { CreativeStrategy } from '../../src/shared/reasoning-types'
+import { isDeepStrictEqual } from 'node:util'
+import type { ArchitecturePlanningIntent, BeginGenerationRequest, PlanningGenerationScope } from '../../src/shared/generation-owner-contract'
+import { planBlueprintGenerationCost } from '../../src/services/workflows/blueprint-batch-policy'
 
 /** Finite root ceilings and semantic sizing are frozen into each source binding. */
 export const MAIN_GENERATION_POLICY = Object.freeze({
@@ -18,6 +21,118 @@ export const MAIN_GENERATION_POLICY = Object.freeze({
   estimatorVersion: 'utf8-bytes-plus-chat-framing-v1',
   safetyMarginTokens: 512,
 })
+
+export type MainGenerationPolicy = typeof MAIN_GENERATION_POLICY | Readonly<Omit<typeof MAIN_GENERATION_POLICY, 'version' | 'budget'> & {
+  version: 's07-planning-v1'
+  budget: RootBudget
+  planning: PlanningGenerationScope
+}>
+
+function scaledRootBudget(requests: number, maxOutputPerRequest: number): RootBudget {
+  const base = MAIN_GENERATION_POLICY.budget
+  const maxPhysicalRequests = Math.max(base.maxPhysicalRequests, requests)
+  const budget = { maxPhysicalRequests,
+    maxTokenLiability: base.maxTokenLiability / base.maxPhysicalRequests * maxPhysicalRequests,
+    maxOutputPerRequest,
+    maxActiveElapsedMs: base.maxActiveElapsedMs / base.maxPhysicalRequests * maxPhysicalRequests }
+  if (Object.values(budget).some(value => !Number.isSafeInteger(value) || value <= 0)) throw new Error('GENERATION_PLANNING_BUDGET_INVALID')
+  return Object.freeze(budget)
+}
+
+function planningRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('GENERATION_PLANNING_INTENT_INVALID')
+  return value as Record<string, unknown>
+}
+
+function planningInput(selection: Pick<BeginGenerationRequest, 'authorInputs'>, id: string): Record<string, unknown> | undefined {
+  const inputs = selection.authorInputs?.filter(input => input.id === id) ?? []
+  if (!inputs.length) return undefined
+  if (inputs.length !== 1) throw new Error('GENERATION_PLANNING_INTENT_INVALID')
+  try { return planningRecord(JSON.parse(inputs[0].text)) }
+  catch { throw new Error('GENERATION_PLANNING_INTENT_INVALID') }
+}
+
+function planningRange(from: unknown, to: unknown): { from: number; to: number } {
+  if (typeof from !== 'number' || typeof to !== 'number' || !Number.isSafeInteger(from) || !Number.isSafeInteger(to)
+    || from < 1 || to < from) throw new Error('GENERATION_PLANNING_INTENT_INVALID')
+  return Object.freeze({ from, to })
+}
+
+function architectureIntent(value: unknown): ArchitecturePlanningIntent {
+  const record = planningRecord(value)
+  const order = ['premise', 'characters', 'worldbuilding'] as const
+  const steps = record.priorSteps
+  if (record.version !== 'architecture-action-v1' || !Array.isArray(steps)
+    || !isDeepStrictEqual(steps, order.filter(step => steps.includes(step))))
+    throw new Error('GENERATION_PLANNING_INTENT_INVALID')
+  const range = record.synopsisRange === null ? null : planningRecord(record.synopsisRange)
+  const intent = { version: 'architecture-action-v1' as const,
+    priorSteps: order.filter(step => steps.includes(step)),
+    synopsisRange: range === null ? null : planningRange(range.from, range.to) }
+  if (!isDeepStrictEqual(value, intent) || !intent.priorSteps.length && !intent.synopsisRange) throw new Error('GENERATION_PLANNING_INTENT_INVALID')
+  return Object.freeze({ ...intent, priorSteps: Object.freeze(intent.priorSteps) })
+}
+
+export function planningGenerationScope(selection: Pick<BeginGenerationRequest, 'operation' | 'authorInputs'>): PlanningGenerationScope | null {
+  if (selection.operation === 'chapter-blueprint-directory') {
+    const range = planningInput(selection, 'directory:requested-range')
+    const config = planningInput(selection, 'directory:author-config')
+    if (!range || !config || !['full', 'append'].includes(String(range.mode))) throw new Error('GENERATION_PLANNING_INTENT_INVALID')
+    const { from, to } = planningRange(range.startChapter, range.endChapter)
+    planningRange(to, config.totalChapters)
+    const requestedRange = { mode: range.mode as 'full' | 'append', startChapter: from, endChapter: to }
+    if (!isDeepStrictEqual(range, requestedRange)) throw new Error('GENERATION_PLANNING_INTENT_INVALID')
+    return Object.freeze({ kind: 'directory', requestedRange: Object.freeze(requestedRange) })
+  }
+  const step = selection.operation === 'generate-core-seed' ? 'premise'
+    : selection.operation === 'character-architecture' ? 'characters'
+      : selection.operation === 'generate-world-building' ? 'worldbuilding'
+        : selection.operation === 'generate-plot-outline' ? 'synopsis' : null
+  if (!step) return null
+  const provided = planningInput(selection, 'architecture:planning-intent')
+  const config = planningInput(selection, 'architecture:author-config')
+  const intent = architectureIntent(provided ?? { version: 'architecture-action-v1',
+    priorSteps: step === 'synopsis' ? [] : [step],
+    synopsisRange: step === 'synopsis' ? { from: 1, to: config?.totalChapters } : null })
+  if (step === 'synopsis' ? !intent.synopsisRange : !intent.priorSteps.includes(step)) throw new Error('GENERATION_PLANNING_OPERATION_NOT_SELECTED')
+  if (intent.synopsisRange) planningRange(intent.synopsisRange.to, config?.totalChapters)
+  return Object.freeze({ kind: 'architecture', intent, outlineProtocol: 'legacy-range-v1' })
+}
+
+export function newMainGenerationPolicy(selection: BeginGenerationRequest, model: ModelProfile): MainGenerationPolicy {
+  const planning = planningGenerationScope(selection)
+  if (!planning) return MAIN_GENERATION_POLICY
+  const limits = resolveGenerationCapabilityConstraints(model)
+  if (limits.userMaxOutputTokens === null) throw new Error('GENERATION_PLANNING_BUDGET_INVALID')
+  const cap = Math.min(limits.userMaxOutputTokens, limits.modelMaxOutputTokens ?? limits.userMaxOutputTokens)
+  const requests = planning.kind === 'directory'
+    ? planBlueprintGenerationCost(planning.requestedRange.endChapter - planning.requestedRange.startChapter + 1).recoveryCallBound
+    : planning.intent.priorSteps.reduce((sum, step) => sum + (step === 'premise' ? 1 : step === 'worldbuilding' ? 2
+      : 3 + (2 * 8 - Math.ceil(8 / 3)) + 1), 0)
+      + (planning.intent.synopsisRange ? 2 * (planning.intent.synopsisRange.to - planning.intent.synopsisRange.from + 1) : 0)
+  return Object.freeze({ ...MAIN_GENERATION_POLICY, version: 's07-planning-v1', planning, budget: scaledRootBudget(requests, cap) })
+}
+
+export function readMainGenerationPolicy(value: unknown): MainGenerationPolicy {
+  const record = planningRecord(value)
+  if (record.version === MAIN_GENERATION_POLICY.version && isDeepStrictEqual(value, MAIN_GENERATION_POLICY)) return MAIN_GENERATION_POLICY
+  if (record.version !== 's07-planning-v1') throw new Error('GENERATION_POLICY_UNSUPPORTED')
+  const budget = planningRecord(record.budget), scope = planningRecord(record.planning)
+  if (!isDeepStrictEqual(Object.keys(budget).sort(), Object.keys(MAIN_GENERATION_POLICY.budget).sort())
+    || Object.values(budget).some(number => typeof number !== 'number' || !Number.isSafeInteger(number) || number <= 0))
+    throw new Error('GENERATION_PLANNING_BUDGET_INVALID')
+  let planning: PlanningGenerationScope
+  if (scope.kind === 'architecture' && scope.outlineProtocol === 'legacy-range-v1') {
+    planning = { kind: 'architecture', intent: architectureIntent(scope.intent), outlineProtocol: scope.outlineProtocol }
+  } else if (scope.kind === 'directory') {
+    const range = planningRecord(scope.requestedRange), { from, to } = planningRange(range.startChapter, range.endChapter)
+    if (range.mode !== 'full' && range.mode !== 'append') throw new Error('GENERATION_PLANNING_INTENT_INVALID')
+    planning = { kind: 'directory', requestedRange: { mode: range.mode, startChapter: from, endChapter: to } }
+  } else throw new Error('GENERATION_POLICY_UNSUPPORTED')
+  if (!isDeepStrictEqual(value, { ...MAIN_GENERATION_POLICY, version: 's07-planning-v1', budget, planning }))
+    throw new Error('GENERATION_POLICY_UNSUPPORTED')
+  return value as MainGenerationPolicy
+}
 
 /**
  * 批量根预算按章数缩放（线程 10 复用原有写前调用余量）。
@@ -32,13 +147,8 @@ export const MAIN_GENERATION_POLICY = Object.freeze({
  */
 export const BATCH_ROOT_PHYSICAL_REQUESTS_PER_CHAPTER = 8
 export function batchRootBudget(chapterCount: number): RootBudget {
-  const base = MAIN_GENERATION_POLICY.budget
   if (!Number.isSafeInteger(chapterCount) || chapterCount < 1) throw new Error('GENERATION_BATCH_INTENT_INVALID')
-  const maxPhysicalRequests = Math.max(base.maxPhysicalRequests, chapterCount * BATCH_ROOT_PHYSICAL_REQUESTS_PER_CHAPTER)
-  return Object.freeze({ maxPhysicalRequests,
-    maxTokenLiability: base.maxTokenLiability / base.maxPhysicalRequests * maxPhysicalRequests,
-    maxOutputPerRequest: base.maxOutputPerRequest,
-    maxActiveElapsedMs: base.maxActiveElapsedMs / base.maxPhysicalRequests * maxPhysicalRequests })
+  return scaledRootBudget(chapterCount * BATCH_ROOT_PHYSICAL_REQUESTS_PER_CHAPTER, MAIN_GENERATION_POLICY.budget.maxOutputPerRequest)
 }
 
 export interface MainGenerationPlan {
@@ -83,7 +193,8 @@ export function assertSemanticGenerationTask(task: GenerationTask): void {
 }
 
 export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<ModelExecutionLeaseReceipt, 'capabilityEvidence'>,
-  task: GenerationTask, budget: GenerationBudgetReceipt, creativeStrategy: CreativeStrategy = 'auto'): MainGenerationPlan {
+  task: GenerationTask, budget: GenerationBudgetReceipt, creativeStrategy: CreativeStrategy = 'auto',
+  policy: MainGenerationPolicy = MAIN_GENERATION_POLICY): MainGenerationPlan {
   assertSemanticGenerationTask(task)
   const inputUpperBoundTokens = task.messages.reduce((sum, message) =>
     sum + Buffer.byteLength(message.content, 'utf8') + Buffer.byteLength(message.role) + 32, 32)
@@ -140,7 +251,7 @@ export function buildMainGenerationPlan(model: ModelProfile, receipt: Pick<Model
       liability: totalBounded ? { mode: 'total-bounded', totalLiabilityUpperBoundTokens: 1_048_576 }
         : !canBound ? { mode: 'unknown', reasoningUpperBoundTokens: separateReasoning }
           : gemini ? { mode: 'separate-bounded', reasoningUpperBoundTokens: separateReasoning } : { mode: 'included-in-output' },
-      outputAllocation: separateOutput || thinkingDisabled ? 'semantic-estimate' : 'available-ceiling',
+      outputAllocation: policy.version !== 's07-planning-v1' && (separateOutput || thinkingDisabled) ? 'semantic-estimate' : 'available-ceiling',
       safetyMarginTokens: safety,
     })
     // No reservation or dispatch occurs for a larger semantic scope. The caller

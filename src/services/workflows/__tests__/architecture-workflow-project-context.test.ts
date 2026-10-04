@@ -7,6 +7,9 @@ import { useLocaleStore } from '../../../stores/locale-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useProjectStore } from '../../../stores/project-store'
 import { createArchitectureWorkflow, createConfigGenerationWorkflow } from '../architecture-workflow'
+import { GeneratePlotArchitectureCommand } from '../commands/architecture.command'
+import type { BeginGenerationRequest } from '../../../shared/generation-owner-contract'
+import type { NovelConfig } from '../../../shared/ipc-channels'
 
 const originalLocale = useLocaleStore.getState().locale
 const originalDefaultModelId = useLLMStore.getState().defaultModelId
@@ -99,6 +102,40 @@ function arrangeConfigGenerationJourney(responses: Array<{ content: string; fini
 }
 
 describe('architecture workflow project context', () => {
+  it('sends the frozen whole-action intent on the first premise and builds only the explicit range for a standalone plot', async () => {
+    const projectSession = { projectId: 'project-A', leaseId: 'lease-A', projectPath: 'C:/projects/A' }
+    const novelConfig = { totalChapters: 200 } as NovelConfig
+    useProjectStore.setState({ currentProject: { id: projectSession.projectId, path: projectSession.projectPath,
+      sessionLease: projectSession.leaseId, name: 'A', novelConfig, characterStates: '', createdAt: '', updatedAt: '' } })
+    useLLMStore.setState({ defaultModelId: 'model' })
+    const begins: BeginGenerationRequest[] = []
+    const invoke = vi.fn(async (channel: string, request: BeginGenerationRequest) => {
+      if (channel === 'generation:begin') { begins.push(request); throw new Error('captured-first-begin') }
+      if (channel === 'fs:check-exists') return false
+      throw new Error(`unexpected IPC ${channel}`)
+    })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke, on: vi.fn(() => () => {}), once: vi.fn(), send: vi.fn() } })
+    const synopsisRange = { from: 11, to: 110 }
+    const selectedSteps: Array<'premise' | 'characters' | 'worldbuilding' | 'synopsis'> = ['synopsis', 'characters', 'premise', 'characters', 'worldbuilding']
+    const workflow = createArchitectureWorkflow({ projectPath: projectSession.projectPath, projectSession, selectedSteps, synopsisRange })
+    selectedSteps.splice(0)
+    synopsisRange.to = 200
+    const context = { runId: 'architecture-run', projectPath: projectSession.projectPath, projectSession,
+      writingLanguage: 'zh-CN' as const, uiLocale: 'zh-CN' as const, data: {}, cancelled: false }
+    const callbacks = { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() }
+    await expect(workflow.steps[0].executor({ id: 'premise', name: '', description: '', status: 'running', logs: [] }, context, callbacks)).rejects.toThrow('captured-first-begin')
+    expect(begins[0].operation).toBe('generate-core-seed')
+    expect(JSON.parse(begins[0].authorInputs!.find(input => input.id === 'architecture:planning-intent')!.text)).toEqual({
+      version: 'architecture-action-v1', priorSteps: ['premise', 'characters', 'worldbuilding'], synopsisRange: { from: 11, to: 110 },
+    })
+    const plot = new GeneratePlotArchitectureCommand(['synopsis'], { expectedProjectPath: projectSession.projectPath, novelConfig }, undefined,
+      { synopsisRange: { from: 151, to: 200 } })
+    await expect(plot.execute({ step: {}, context: { ...context, data: {} }, callbacks })).rejects.toThrow('captured-first-begin')
+    expect(JSON.parse(begins[1].authorInputs!.find(input => input.id === 'architecture:planning-intent')!.text)).toEqual({
+      version: 'architecture-action-v1', priorSteps: [], synopsisRange: { from: 151, to: 200 },
+    })
+  })
+
   it('creates visible workflow copy in English when the UI locale is English', () => {
     useLocaleStore.setState({ locale: 'en-US' })
     useProjectStore.setState({

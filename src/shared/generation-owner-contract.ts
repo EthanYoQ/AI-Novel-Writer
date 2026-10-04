@@ -7,6 +7,14 @@ import type { ImportRunExecutionAuthority } from './import-run'
 
 /** Raw text explicitly supplied for this author action, never inferred candidate text. */
 export interface GenerationAuthorInput { id: string; text: string }
+export type ArchitecturePlanningIntent = Readonly<{
+  version: 'architecture-action-v1'
+  priorSteps: readonly ('premise' | 'characters' | 'worldbuilding')[]
+  synopsisRange: Readonly<{ from: number; to: number }> | null
+}>
+export type PlanningGenerationScope =
+  | Readonly<{ kind: 'architecture'; intent: ArchitecturePlanningIntent; outlineProtocol: 'legacy-range-v1' }>
+  | Readonly<{ kind: 'directory'; requestedRange: Readonly<{ mode: 'full' | 'append'; startChapter: number; endChapter: number }> }>
 export interface DirectoryGenerationProgress {
   operationId: string
   payloadHash: string

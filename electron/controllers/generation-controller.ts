@@ -21,7 +21,7 @@ import { getProjectDataRoot } from '../services/project-data-locator'
 import { projectAccess } from '../services/project-access'
 import { ModelExecutionLeaseRegistry } from '../services/model-execution-lease'
 import { createMainGenerationOwner } from '../services/main-generation-owner'
-import { MAIN_GENERATION_POLICY, TaskBudgetPreflightError } from '../services/main-generation-plan'
+import { readMainGenerationPolicy, TaskBudgetPreflightError } from '../services/main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../services/generation-source-binding'
 import { readPortableCurrentAuthority } from '../services/portable-current-authority'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
@@ -93,10 +93,10 @@ export function registerGenerationController(options: {
         leases: options.modelExecutionLeases, loadModel: options.loadModel, beforeDispatch: options.applyProxyConfig,
         transferOrigin: () => readPortableCurrentAuthority({ database, projectStorageRoot: sourceDependencies.projectStorageRoot,
           projectId: captured.projectId })?.originProjectId,
-        buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(sourceDependencies, { ...selection,
-          projectId: captured.projectId, epoch: captured.leaseId, modelReceipt, policy: MAIN_GENERATION_POLICY, outputContract: generationOutputContract(selection) }).binding,
+        buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(sourceDependencies, { ...selection,
+          projectId: captured.projectId, epoch: captured.leaseId, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
         rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDependencies, previous, captured.leaseId,
-          modelReceipt, MAIN_GENERATION_POLICY).binding,
+          modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
         onSnapshot: snapshot => { for (const subscriber of subscribers) {
           if (subscriber.isDestroyed()) subscribers.delete(subscriber)
           else subscriber.send('generation:snapshot', snapshot)

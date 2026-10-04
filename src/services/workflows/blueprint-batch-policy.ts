@@ -16,10 +16,11 @@ export interface BlueprintGenerationCostPlan {
   semanticBatchCount: number
   /** Baseline calls when every semantic batch completes without splitting. */
   expectedCalls: number
-  /** Allowed physical-call ceiling after recursive-split/repair planning and the product hard cap. */
+  /** Legacy runtime allowance; new main-owned roots use recoveryCallBound. */
   maxCalls: number
+  recoveryCallBound: number
   maxCompactSingleFallbacks: number
-  /** True means the logical scope must be split into separate workflow runs. */
+  /** Legacy cost metadata, not an admission limit for main-owned roots. */
   exceedsHardLimit: boolean
   runtimeBudget: {
     maxAttempts: number
@@ -57,6 +58,7 @@ export function planBlueprintGenerationCost(chapterCount: number): BlueprintGene
     semanticBatchCount,
     expectedCalls: semanticBatchCount,
     maxCalls,
+    recoveryCallBound: uncappedMaxCalls,
     maxCompactSingleFallbacks,
     exceedsHardLimit: normalizedChapterCount > MAX_BLUEPRINT_CHAPTERS_PER_TASK,
     runtimeBudget: {
@@ -85,11 +87,11 @@ export function getBlueprintBatchAdvice(
   if (locale === 'en-US') {
     const estimate = plan === null
       ? ''
-      : ` Estimated baseline: ${plan.expectedCalls} model call(s); task allowance: up to ${plan.maxCalls}.`
+      : ` Estimated baseline: ${plan.expectedCalls} model call(s); automatic splitting and recovery: up to ${plan.recoveryCallBound}.`
     return `Each semantic batch contains at most 5 chapters; more chapters take more time and API calls.${estimate} Output-limited batches split automatically.`
   }
   const estimate = plan === null
     ? ''
-    : `预计至少 ${plan.expectedCalls} 次模型调用，本任务最多允许 ${plan.maxCalls} 次；`
+    : `预计至少 ${plan.expectedCalls} 次模型调用，自动分裂和恢复最多调用 ${plan.recoveryCallBound} 次；`
   return `每个语义批次最多 5 章；${estimate}章节越多耗时和调用次数越多，达到输出限制时会自动继续拆分。`
 }

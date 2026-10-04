@@ -1,6 +1,7 @@
 import { globalEventBus } from '../../shared/event-bus'
 import type { WorkflowGenerationRuntimeDependencies } from './commands/base-command'
 import type { MainGenerationRunHandle } from '../generation/generation-runtime'
+import type { ArchitecturePlanningIntent } from '../../shared/generation-owner-contract'
 import { workflowResourceKey, type WorkflowDefinition, type WorkflowContext, type StepCallbacks } from '../../stores/workflow-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useProjectStore } from '../../stores/project-store'
@@ -89,7 +90,7 @@ export function createArchitectureWorkflow(
     ? ['synopsis' as const]
     : resumingWorldBuilding
       ? ['worldbuilding' as const]
-      : params.selectedSteps ?? ['premise', 'characters', 'worldbuilding', 'synopsis']
+      : [...(params.selectedSteps ?? ['premise', 'characters', 'worldbuilding', 'synopsis'])]
   const expectedProjectPath = params.projectPath
   const project = useProjectStore.getState().currentProject
   const currentProjectSession = projectSessionContextFromProject(project)
@@ -103,9 +104,17 @@ export function createArchitectureWorkflow(
   }
   // 工厂在捕获配置快照的同一时刻绑定 lease，防止同路径重新打开后复用旧快照。
   const projectSession = Object.freeze({ ...params.projectSession })
+  const synopsisRange = sel.includes('synopsis')
+    ? Object.freeze({ ...(params.synopsisRange ?? { from: 1, to: project.novelConfig.totalChapters }) }) : null
+  const planningIntent: ArchitecturePlanningIntent | undefined = resumingSynopsis || resumingWorldBuilding ? undefined : Object.freeze({
+    version: 'architecture-action-v1',
+    priorSteps: Object.freeze((['premise', 'characters', 'worldbuilding'] as const).filter(step => sel.includes(step))),
+    synopsisRange,
+  })
   const projectSnapshot: ArchitectureProjectSnapshot = Object.freeze({
     expectedProjectPath,
     novelConfig: Object.freeze({ ...project.novelConfig }),
+    ...(planningIntent ? { planningIntent } : {}),
   })
   const stepDesc = (key: string, zhCNDesc: string, enUSDesc: string) => sel.includes(key as never)
     ? text(zhCNDesc, enUSDesc)
@@ -177,7 +186,7 @@ export function createArchitectureWorkflow(
         return new GeneratePlotArchitectureCommand(sel, projectSnapshot, undefined, {
           resumeSynopsis: params.resumeSynopsis,
           ...(resumingSynopsis ? { resumeHandle: await recoveryHandle(context, 'synopsis') } : {}),
-          synopsisRange: params.synopsisRange ?? null,
+          synopsisRange,
         }).execute({ step, context, callbacks })
       },
     },

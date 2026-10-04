@@ -14,7 +14,7 @@ import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunB
 import { getCurrentProjectPath } from '../database'
 import { ModelExecutionLeaseRegistry, createModelExecutionLeaseReceipt } from './model-execution-lease'
 import { createGenerationRunService, type GenerationRunServiceDependencies } from './generation-run-service'
-import { assertSemanticGenerationTask, batchRootBudget, buildMainGenerationPlan, MAIN_GENERATION_POLICY, type MainGenerationPlan } from './main-generation-plan'
+import { assertSemanticGenerationTask, batchRootBudget, buildMainGenerationPlan, MAIN_GENERATION_POLICY, newMainGenerationPolicy, planningGenerationScope, readMainGenerationPolicy, type MainGenerationPlan, type MainGenerationPolicy } from './main-generation-plan'
 import { LLMFactory } from '../llm/llm-factory'
 import type { GenerationAttemptReceipt, GenerationTask } from '../../src/services/generation/generation-harness'
 import type { ProviderUsageEvidence } from '../llm/provider.interface'
@@ -66,7 +66,7 @@ export interface MainGenerationOwnerDependencies {
   assertCurrent: () => void
   leases: ModelExecutionLeaseRegistry
   loadModel: (id: string) => ModelProfile | null
-  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string; reviewRevisionContext?: ReviewRevisionContext; agentInput?: AgentGenerationInput; agentSession?: { key: string; roundIndex: number }; editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot; graphGenerationInput?: GraphGenerationInput; graphGenerationKey?: string; legacyRosterKey?: string }, model: SafeGenerationModelReceipt) => RunBinding
+  buildBinding: (selection: BeginGenerationRequest & { knowledgeSnapshot?: GenerationKnowledgeSnapshot; finalizedCharacterContextHash?: string; reviewRevisionContext?: ReviewRevisionContext; agentInput?: AgentGenerationInput; agentSession?: { key: string; roundIndex: number }; editorInlineInput?: EditorInlineInput; finalizationGenerationSlot?: FinalizationGenerationSlot; graphGenerationInput?: GraphGenerationInput; graphGenerationKey?: string; legacyRosterKey?: string }, model: SafeGenerationModelReceipt, policy: MainGenerationPolicy) => RunBinding
   rebuildBinding: (previous: RunBinding, model: SafeGenerationModelReceipt) => RunBinding
   beforeDispatch?: () => void
   onSnapshot?: (snapshot: MainGenerationSnapshot) => void
@@ -124,11 +124,22 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const reviewRevisions = new ReviewRevisionGeneration(deps.database, repository, { projectId: deps.projectId, epoch: deps.epoch }, assertCurrent)
   const handleOf = (run: DurableGenerationRun): MainGenerationRunHandle => ({ projectId: run.binding.projectId,
     epoch: run.binding.epoch, rootActionId: run.rootActionId, runId: run.runId })
+  const rootPolicy = (rootActionId: string): MainGenerationPolicy => {
+    const runId = deps.database.prepare('SELECT run_id FROM generation_runs WHERE root_action_id=? ORDER BY rowid LIMIT 1').pluck().get(rootActionId)
+    if (typeof runId !== 'string') throw new Error('GENERATION_ROOT_MISSING')
+    const policy = readMainGenerationPolicy(repository.get(runId).binding.sourceManifest.policy)
+    if (policy.version === 's07-planning-v1' && !isDeepStrictEqual(policy.budget, repository.budget(rootActionId).policy))
+      throw new Error('GENERATION_POLICY_BUDGET_MISMATCH')
+    return policy
+  }
   const requireRun = (handle: MainGenerationRunHandle, execution = false) => {
     assertCurrent()
     const run = repository.get(handle.runId)
     if (run.binding.projectId !== deps.projectId || !isDeepStrictEqual(handleOf(run), handle)) throw new Error('GENERATION_RUN_IDENTITY_MISMATCH')
     if (execution && run.binding.epoch !== deps.epoch) throw new Error('GENERATION_EPOCH_STALE')
+    const policy = readMainGenerationPolicy(run.binding.sourceManifest.policy)
+    if (policy.version === 's07-planning-v1' && !isDeepStrictEqual(policy, rootPolicy(run.rootActionId)))
+      throw new Error('GENERATION_POLICY_BUDGET_MISMATCH')
     return run
   }
   const attemptPurpose = (attemptId: string): string => {
@@ -311,7 +322,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       selectedDraftIds: request.selectedDraftIds, selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: Array.from({ length: 6 }, (_, index) => request.chapterNumber + index),
       promptKeys: request.promptKeys, skillStages: request.skillStages, authorInputs: request.authorInputs, output: 'visible-text' as const,
       ...(request.batchId ? { batchId: request.batchId } : {}), ...(knowledgeSnapshot ? { knowledgeSnapshot: structuredClone(knowledgeSnapshot) } : {}) }
-    return deps.buildBinding(selection, receipt)
+    return deps.buildBinding(selection, receipt, MAIN_GENERATION_POLICY)
   }
   const prepareDraftContext = (request: PrepareDraftContextRequest, knowledgeSnapshot: GenerationKnowledgeSnapshot, beforeKnowledgeRead?: RunBinding): PreparedDraftContext => {
     const { binding, selectedDrafts } = deps.database.transaction(() => {
@@ -384,13 +395,23 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     }
     const lease = deps.leases.begin(selection.modelId)
     try {
+      const parentRootActionId = continuation?.sourceHandle.rootActionId ?? selection.parentRootActionId
+      const policy = parentRootActionId ? rootPolicy(parentRootActionId) : newMainGenerationPolicy(selection, deps.leases.resolve(lease.leaseId))
+      if (parentRootActionId && policy.version === 's07-planning-v1') {
+        const scope = planningGenerationScope(selection)
+        if (continuation && policy.planning.kind === 'directory' && scope?.kind === 'directory') {
+          if (!isDeepStrictEqual(continuation.remainingRange, { startChapter: scope.requestedRange.startChapter, endChapter: scope.requestedRange.endChapter }))
+            throw new Error('GENERATION_DIRECTORY_CONTINUATION_RANGE_CHANGED')
+        } else if (!isDeepStrictEqual(scope, policy.planning)) throw new Error('GENERATION_PLANNING_INTENT_CHANGED')
+      }
       const prepared = selection.preparationId ? preparations.get(selection.preparationId) : undefined
       if (selection.preparationId && (!prepared || selection.operation !== 'chapter-draft')) throw new Error('GENERATION_DRAFT_PREPARATION_REQUIRED')
       if (selection.operation === 'chapter-draft' && selection.preparationId && !selection.materialDecision)
         throw new Error('GENERATION_MATERIAL_DECISION_REQUIRED')
       const binding = deps.buildBinding({ ...selection, ...(prepared ? { knowledgeSnapshot: prepared.knowledgeSnapshot } : {}),
         ...(finalizedCharacterContextHash ? { finalizedCharacterContextHash } : {}),
-        ...(reviewRevision ? { reviewRevisionContext: reviewRevision.context } : {}) }, safeGenerationModelReceipt(lease))
+        ...(reviewRevision ? { reviewRevisionContext: reviewRevision.context } : {}) }, safeGenerationModelReceipt(lease), policy)
+      if (!isDeepStrictEqual(binding.sourceManifest.policy, policy)) throw new Error('GENERATION_POLICY_BINDING_MISMATCH')
       if (prepared && !preparationMatches(prepared.binding, binding)) throw new Error('GENERATION_DRAFT_PREPARATION_CHANGED')
       if (binding.projectId !== deps.projectId || binding.epoch !== deps.epoch) throw new Error('GENERATION_BINDING_INVALID')
       const run = deps.database.transaction(() => {
@@ -409,10 +430,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (agentWorkflow) repository.activateRootForCommittedStage(agentWorkflow.parentRootActionId, binding)
       if (importAdmission?.parentRootActionId) repository.activateRootForCommittedStage(importAdmission.parentRootActionId, binding)
       if (continuation && !continuation.continuationHandle) repository.activateRootForCommittedStage(continuation.sourceHandle.rootActionId, binding)
-      const parentRootActionId = continuation?.sourceHandle.rootActionId ?? selection.parentRootActionId
-      // 批量根按章数缩放（见 batchRootBudget）；子运行沿用其根已冻结的预算，其余新根不变。
       const budget = selection.batchIntent ? batchRootBudget(selection.batchIntent.range.endChapter - selection.batchIntent.range.startChapter + 1)
-        : parentRootActionId ? repository.budget(parentRootActionId).policy : MAIN_GENERATION_POLICY.budget
+        : parentRootActionId ? repository.budget(parentRootActionId).policy : policy.budget
       const next = service.open({ ...binding, operation: selection.operation, uiActionNonce: selection.uiActionNonce,
         frozenInputHash: textHash(JSON.stringify([binding.fingerprint, binding.contextSnapshotId, selection.output])),
         budget, parentRootActionId })
@@ -540,7 +559,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (!leaseId) throw new Error('GENERATION_RESUME_REQUIRED')
     const model = deps.leases.resolve(leaseId)
     const creativeStrategy = deps.database.prepare("SELECT creative_strategy FROM project_core WHERE id='main'").pluck().get() as CreativeStrategy | undefined
-    const plan = buildMainGenerationPlan(model, modelReceipt(run.binding), task, repository.budget(run.rootActionId), creativeStrategy)
+    const plan = buildMainGenerationPlan(model, modelReceipt(run.binding), task, repository.budget(run.rootActionId), creativeStrategy,
+      readMainGenerationPolicy(run.binding.sourceManifest.policy))
     deps.beforeDispatch?.()
     assertCurrent()
     const receipt = await service.execute({ runId: run.runId, invocationNonce: request.invocationNonce, requestHash,

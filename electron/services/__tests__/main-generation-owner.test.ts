@@ -6,14 +6,14 @@ import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema
 import { getDesktopMigrationRegistry, CURRENT_DESKTOP_SCHEMA_VERSION } from '../../migrations/desktop-registry'
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { migrateSchema } from '../../migrations/runner'
-import { createMainGenerationOwner } from '../main-generation-owner'
-import { batchRootBudget, buildMainGenerationPlan, MAIN_GENERATION_POLICY } from '../main-generation-plan'
+import { createMainGenerationOwner, safeGenerationModelReceipt } from '../main-generation-owner'
+import { batchRootBudget, buildMainGenerationPlan, MAIN_GENERATION_POLICY, readMainGenerationPolicy } from '../main-generation-plan'
 import { createModelExecutionLeaseReceipt, ModelExecutionLeaseRegistry } from '../model-execution-lease'
 import * as providerPresets from '../../../src/shared/provider-presets'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
 import { getBuiltinPromptTemplate } from '../../../src/services/builtin-prompt-templates'
 import { readBuiltinWritingSkill } from '../../../src/shared/builtin-writing-skills'
-import type { BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
+import type { ArchitecturePlanningIntent, BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
 import { generationOutputContract, MAX_BATCH_CHAPTERS } from '../../../src/shared/generation-owner-contract'
 import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
 import type { GenerationTask } from '../../../src/services/generation/generation-harness'
@@ -65,9 +65,9 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silico
       leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch,
       onReasoning,
       onSnapshot,
-      buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(sourceDeps, { ...selection, projectId: 'project', epoch: capturedEpoch,
-        modelReceipt, policy: MAIN_GENERATION_POLICY, outputContract: generationOutputContract(selection) }).binding,
-      rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDeps, previous, capturedEpoch, modelReceipt, MAIN_GENERATION_POLICY).binding,
+      buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(sourceDeps, { ...selection, projectId: 'project', epoch: capturedEpoch,
+        modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
+      rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(sourceDeps, previous, capturedEpoch, modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding,
     })
   }
   const owners = [makeOwner()]
@@ -81,14 +81,167 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silico
       const owner = makeOwner(); owners.push(owner); return owner },
   }
 }
-function syntheticStream() {
+function syntheticStream(includeUsage = true) {
   const fetch = vi.fn<(url: string, options: RequestInit) => Promise<{ ok: boolean; body: ReadableStream<Uint8Array> }>>(async () => ({ ok: true, body: new ReadableStream({ start(controller) {
-    controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"reasoning_content":"隐藏推理","content":" 正文\\n"},"finish_reason":"stop"}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":50,"completion_tokens":12,"total_tokens":62}}\n\ndata: [DONE]\n\n'))
+    controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"reasoning_content":"隐藏推理","content":" 正文\\n"},"finish_reason":"stop"}]}\n\n'
+      + (includeUsage ? 'data: {"choices":[],"usage":{"prompt_tokens":50,"completion_tokens":12,"total_tokens":62}}\n\n' : '') + 'data: [DONE]\n\n'))
     controller.close()
   } }) }))
   vi.stubGlobal('fetch', fetch)
   return fetch
 }
+
+describe('frozen planning roots', () => {
+  const fullIntent: ArchitecturePlanningIntent = { version: 'architecture-action-v1',
+    priorSteps: ['premise', 'characters', 'worldbuilding'], synopsisRange: { from: 1, to: 100 } }
+  function planningFixture() {
+    const f = fixture()
+    Object.assign(f.model, { provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash',
+      maxTokens: 65536, reasoningOverride: 'high',
+      capabilities: { contextWindowTokens: 262144, maxOutputTokens: 65536, reasoning: true, structuredOutput: true, usage: true },
+    } satisfies Partial<ModelProfile>)
+    return f
+  }
+  const architectureSelection = (f: ReturnType<typeof fixture>, intent: ArchitecturePlanningIntent, operation = 'generate-core-seed'): BeginGenerationRequest => ({
+    operation, uiActionNonce: operation, modelId: f.model.id, selectedDraftIds: [], selectedFinalizedDraftIds: [],
+    promptKeys: [operation === 'generate-plot-outline' ? 'synopsis' : 'premise'], skillStages: ['planning'], output: 'visible-text',
+    authorInputs: [{ id: 'architecture:author-config', text: '{"totalChapters":200}' },
+      { id: 'architecture:planning-intent', text: JSON.stringify(intent) }],
+  })
+  const directorySelection = (f: ReturnType<typeof fixture>, chapters: number): BeginGenerationRequest => ({
+    operation: 'chapter-blueprint-directory', uiActionNonce: 'directory', modelId: f.model.id, selectedDraftIds: [], selectedFinalizedDraftIds: [],
+    selectedBlueprintChapterNumbers: Array.from({ length: chapters }, (_, index) => index + 1),
+    promptKeys: ['chapter_blueprint_chunk'], skillStages: ['planning'], output: 'structured-data',
+    authorInputs: [{ id: 'directory:pacing-guidance', text: '' },
+      { id: 'directory:author-config', text: JSON.stringify({ totalChapters: chapters }) },
+      { id: 'directory:requested-range', text: JSON.stringify({ mode: 'full', startChapter: 1, endChapter: chapters }) }],
+  })
+  const plotTask: GenerationTask = { purpose: 'generate-plot-outline', output: 'visible-text', reasoningStage: 'planning', messages: [{ role: 'user', content: 'x' }] }
+
+  it('freezes the complete architecture on premise, shares liability with synopsis, and restores its exact legacy-range policy', async () => {
+    const fetch = syntheticStream(), f = planningFixture()
+    const root = f.owner.begin(architectureSelection(f, fullIntent))
+    expect(root.ledger!.policy).toEqual({ maxPhysicalRequests: 220, maxTokenLiability: 14417920, maxOutputPerRequest: 65536, maxActiveElapsedMs: 24750000 })
+    const repository = new GenerationRunRepository(() => f.db)
+    const policy = repository.get(root.handle.runId).binding.sourceManifest.policy
+    expect(policy).toMatchObject({ version: 's07-planning-v1', planning: { kind: 'architecture', intent: fullIntent, outlineProtocol: 'legacy-range-v1' }, budget: root.ledger!.policy })
+    await f.owner.execute({ handle: root.handle, invocationNonce: 'premise', task: { ...plotTask, purpose: 'generate-core-seed' } })
+    const childSelection = { ...architectureSelection(f, fullIntent, 'generate-plot-outline'), parentRootActionId: root.handle.rootActionId }
+    expect(() => f.owner.begin({ ...childSelection, ...architectureSelection(f, { ...fullIntent, synopsisRange: { from: 1, to: 200 } }, 'generate-plot-outline') }))
+      .toThrow('GENERATION_PLANNING_INTENT_CHANGED')
+    expect(() => f.owner.begin({ ...childSelection, operation: 'chapter-blueprint-directory' })).toThrow('GENERATION_PLANNING_INTENT_INVALID')
+    const child = f.owner.begin(childSelection)
+    expect(child.handle.rootActionId).toBe(root.handle.rootActionId)
+    expect(repository.get(child.handle.runId).binding.sourceManifest.policy).toEqual(policy)
+    expect(child.ledger).toMatchObject({ tokenLiability: 62, physicalRequests: 1 })
+    const reopened = f.reopen(), resumed = await reopened.resume(child.handle)
+    expect(resumed.ledger!.policy).toEqual(root.ledger!.policy)
+    await reopened.execute({ handle: resumed.handle, invocationNonce: 'synopsis', task: plotTask })
+    expect(fetch.mock.calls.map(call => JSON.parse(String(call[1].body)).max_tokens)).toEqual([65536, 65536])
+    expect(new GenerationRunRepository(() => f.db).get(child.handle.runId).binding.sourceManifest.policy).toEqual(policy)
+    expect(reopened.read(resumed.handle).ledger).toMatchObject({ tokenLiability: 124, physicalRequests: 2 })
+  })
+
+  it('freezes selected subsets and refuses an unselected child or invalid range before creating a run', () => {
+    const f = planningFixture()
+    const intent: ArchitecturePlanningIntent = { version: 'architecture-action-v1', priorSteps: ['worldbuilding'], synopsisRange: { from: 151, to: 200 } }
+    const root = f.owner.begin(architectureSelection(f, intent, 'generate-world-building'))
+    expect(root.ledger!.policy.maxPhysicalRequests).toBe(102)
+    expect(() => f.owner.begin({ ...architectureSelection(f, intent), parentRootActionId: root.handle.rootActionId })).toThrow('GENERATION_PLANNING_OPERATION_NOT_SELECTED')
+    for (const invalid of [
+      { ...fullIntent, priorSteps: ['characters', 'characters'] },
+      { ...fullIntent, synopsisRange: { from: 1, to: 201 } },
+      { ...fullIntent, synopsisRange: { from: 1, to: Number.MAX_SAFE_INTEGER + 1 } },
+    ]) {
+      const request = architectureSelection(f, fullIntent)
+      request.authorInputs![1].text = JSON.stringify(invalid)
+      expect(() => f.owner.begin(request)).toThrow('GENERATION_PLANNING_INTENT_INVALID')
+    }
+    const overflow = architectureSelection(f, { ...fullIntent, synopsisRange: { from: 1, to: Number.MAX_SAFE_INTEGER } })
+    overflow.authorInputs![0].text = JSON.stringify({ totalChapters: Number.MAX_SAFE_INTEGER })
+    expect(() => f.owner.begin(overflow)).toThrow('GENERATION_PLANNING_BUDGET_INVALID')
+    expect(f.db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(1)
+  })
+
+  it('refuses unknown saved policies and a root ledger that disagrees with its frozen planning budget', async () => {
+    const fetch = syntheticStream(), f = planningFixture()
+    const run = f.owner.begin(architectureSelection(f, fullIntent))
+    const bindingJson = f.db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(run.handle.runId)
+    f.db.prepare("UPDATE generation_runs SET binding_json=json_set(binding_json,'$.sourceManifest.policy.version','future-policy') WHERE run_id=?").run(run.handle.runId)
+    await expect(f.owner.resume(run.handle)).rejects.toThrow('GENERATION_POLICY_UNSUPPORTED')
+    f.db.prepare('UPDATE generation_runs SET binding_json=? WHERE run_id=?').run(bindingJson, run.handle.runId)
+    f.db.prepare("UPDATE generation_roots SET budget_json=json_set(budget_json,'$.maxPhysicalRequests',221) WHERE root_action_id=?").run(run.handle.rootActionId)
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'mismatch', task: plotTask })).rejects.toThrow('GENERATION_POLICY_BUDGET_MISMATCH')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('completes 200 chapters in 40 normal directory requests across a real reopen under one finite root', async () => {
+    const fetch = syntheticStream(), f = planningFixture()
+    let owner = f.owner, run = owner.begin(directorySelection(f, 200))
+    const original = run.handle.rootActionId
+    expect(run.ledger!.policy).toEqual({ maxPhysicalRequests: 561, maxTokenLiability: 36765696, maxOutputPerRequest: 65536, maxActiveElapsedMs: 63112500 })
+    for (let batch = 0; batch < 40; batch++) {
+      if (batch === 20) { owner = f.reopen(); run = await owner.resume(run.handle) }
+      const result = await owner.execute({ handle: run.handle, invocationNonce: `batch-${batch}`, task: {
+        purpose: 'chapter-blueprint-directory', output: 'structured-data', reasoningStage: 'planning',
+        messages: [{ role: 'user', content: `Chapters ${batch * 5 + 1}-${batch * 5 + 5}` }],
+        budgetDemand: { kind: 'structured-items', writingLanguage: 'zh-CN', requestedItems: 5 },
+      } })
+      expect(result.outcome.status).toBe('completed')
+    }
+    const budget = new GenerationRunRepository(() => f.db).budget(original)
+    expect(fetch).toHaveBeenCalledTimes(40)
+    expect(budget.attempts).toHaveLength(40)
+    expect(budget.attempts.every(attempt => attempt.status === 'settled' && attempt.requestedOutputTokens === 65536)).toBe(true)
+    expect(f.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(1)
+  })
+
+  it.each([
+    { name: '64K user', changes: {}, expected: 65536 },
+    { name: 'user', changes: { maxTokens: 16384 }, expected: 16384 },
+    { name: 'provider', changes: { provider: 'openai', baseUrl: 'https://api.openai.com/v1', modelName: 'gpt-4.1' }, expected: 32768 },
+    { name: 'context', changes: { capabilities: { contextWindowTokens: 4096, maxOutputTokens: 65536, reasoning: true, structuredOutput: true, usage: true } }, expected: 3515 },
+  ] satisfies { name: string; changes: Partial<ModelProfile>; expected: number }[])('honors the $name bound on a standalone plot wire', async ({ changes, expected }) => {
+    const fetch = syntheticStream(), f = planningFixture()
+    Object.assign(f.model, changes)
+    const intent: ArchitecturePlanningIntent = { version: 'architecture-action-v1', priorSteps: [], synopsisRange: { from: 11, to: 60 } }
+    const run = f.owner.begin(architectureSelection(f, intent, 'generate-plot-outline'))
+    expect(run.ledger!.policy.maxPhysicalRequests).toBe(100)
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'plot', task: plotTask })
+    const wire = JSON.parse(String(fetch.mock.calls[0]![1].body))
+    expect(wire.max_completion_tokens ?? wire.max_tokens).toBe(expected)
+  })
+
+  it('retains unknown usage liability and narrows the last request before the shared root is exhausted', async () => {
+    const fetch = syntheticStream(false), f = planningFixture()
+    Object.assign(f.model, { provider: 'openai', baseUrl: 'https://compatible.example/v1', modelName: 'custom-model', reasoningOverride: 'auto' })
+    const run = f.owner.begin(architectureSelection(f, { version: 'architecture-action-v1', priorSteps: [], synopsisRange: { from: 1, to: 1 } }, 'generate-plot-outline'))
+    for (let request = 0; request < 32; request++) await f.owner.execute({ handle: run.handle, invocationNonce: `unknown-${request}`, task: plotTask })
+    expect(JSON.parse(String(fetch.mock.calls[0]![1].body)).max_tokens).toBe(65536)
+    expect(JSON.parse(String(fetch.mock.calls[31]![1].body)).max_tokens).toBe(46944)
+    const budget = new GenerationRunRepository(() => f.db).budget(run.handle.rootActionId)
+    expect(budget.attempts.every(attempt => attempt.status === 'unknown')).toBe(true)
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'exhausted', task: plotTask })).rejects.toThrow('ROOT_BUDGET_EXHAUSTED')
+    expect(fetch).toHaveBeenCalledTimes(32)
+  })
+
+  it('resumes a pre-planning root and its child at the original 32K cap without upgrading its manifest', async () => {
+    const fetch = syntheticStream(), f = planningFixture(), selection = architectureSelection(f, fullIntent, 'generate-plot-outline')
+    selection.authorInputs = selection.authorInputs!.filter(input => input.id !== 'architecture:planning-intent')
+    const binding = buildGenerationSourceBinding({ db: f.db, projectStorageRoot: path.join(f.root, 'project'), globalDataRoot: path.join(f.root, 'global'),
+      readBuiltinPrompt: (key, language) => JSON.stringify(getBuiltinPromptTemplate(key, language)), readBuiltinSkill: readBuiltinWritingSkill },
+    { ...selection, projectId: 'project', epoch: 'epoch-1', modelReceipt: safeGenerationModelReceipt(createModelExecutionLeaseReceipt(f.model, { leaseId: 'legacy', createdAt: 0, expiresAt: 1 })),
+      policy: MAIN_GENERATION_POLICY, outputContract: 'visible-text' }).binding
+    const legacy = new GenerationRunRepository(() => f.db).open({ ...binding, operation: selection.operation, uiActionNonce: selection.uiActionNonce,
+      frozenInputHash: textHash(JSON.stringify([binding.fingerprint, binding.contextSnapshotId, selection.output])), budget: MAIN_GENERATION_POLICY.budget })
+    const owner = f.reopen(), restored = await owner.resume({ projectId: 'project', epoch: 'epoch-1', rootActionId: legacy.rootActionId, runId: legacy.runId })
+    const child = owner.begin({ ...architectureSelection(f, fullIntent, 'generate-plot-outline'), uiActionNonce: 'legacy-child', parentRootActionId: restored.handle.rootActionId })
+    await owner.execute({ handle: child.handle, invocationNonce: 'legacy-plot', task: plotTask })
+    expect(JSON.parse(String(fetch.mock.calls[0]![1].body)).max_tokens).toBe(32768)
+    expect(new GenerationRunRepository(() => f.db).get(child.handle.runId).binding.sourceManifest.policy).toEqual(MAIN_GENERATION_POLICY)
+    expect(restored.ledger!.policy).toEqual(MAIN_GENERATION_POLICY.budget)
+  })
+})
 
 describe('automatic short outline binding', () => {
   const base = '原目标：读信。作者约束：不得离开房间。'
@@ -364,13 +517,16 @@ describe('S07 durable task budget diagnostics', () => {
 describe('durable directory commit and remaining stage', () => {
   const directoryTask = { ...task, purpose: 'directory-batch', output: 'structured-data' as const }
   const authorInputs = [{ id: 'directory:pacing-guidance', text: '  前缓后急\r\n' }, { id: 'directory:author-config', text: '{"totalChapters":3}' }]
-  function directoryFixture() {
+  function directoryFixture(operation = 'directory', chapters = 3) {
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
       options.onVisible({ kind: 'delta', text: '[{"chapterNumber":1,"title":"启程"}]' })
       return { finishReason: 'stop', usage: null }
     })
     const f = fixture(dispatch)
-    const selection = { ...f.begin, operation: 'directory', selectedBlueprintChapterNumbers: [1, 2, 3], authorInputs, output: 'structured-data' as const }
+    const selection = { ...f.begin, operation, selectedBlueprintChapterNumbers: Array.from({ length: chapters }, (_, index) => index + 1),
+      authorInputs: operation === 'directory' ? authorInputs : [authorInputs[0],
+        { id: 'directory:author-config', text: JSON.stringify({ totalChapters: chapters }) },
+        { id: 'directory:requested-range', text: JSON.stringify({ mode: 'full', startChapter: 1, endChapter: chapters }) }], output: 'structured-data' as const }
     const run = f.owner.begin(selection)
     const request = (operationId: string, startChapter: number, endChapter: number): BlueprintRangeCommitRequest => ({
       operationId, mode: 'replace-range', startChapter, endChapter,
@@ -383,6 +539,23 @@ describe('durable directory commit and remaining stage', () => {
     }).immediate()
     return { ...f, fixture: f, selection, run, dispatch, request, commit }
   }
+  it('keeps the original 50-chapter planning allowance after committing a prefix and reopening its remaining range', async () => {
+    const f = directoryFixture('chapter-blueprint-directory', 50)
+    await f.owner.execute({ handle: f.run.handle, invocationNonce: 'prefix', task: directoryTask })
+    const policy = new GenerationRunRepository(() => f.fixture.db).get(f.run.handle.runId).binding.sourceManifest.policy
+    f.commit(f.owner, f.run.handle, f.request('planning-prefix', 1, 5), { startChapter: 1, endChapter: 50 })
+    const reopened = f.reopen()
+    const remaining = { ...f.selection, uiActionNonce: 'planning-remainder', continueDirectoryOperationId: 'planning-prefix',
+      authorInputs: f.selection.authorInputs.map(input => input.id === 'directory:requested-range'
+        ? { ...input, text: JSON.stringify({ mode: 'append', startChapter: 6, endChapter: 50 }) } : input) }
+    const next = reopened.begin(remaining)
+    expect(next.handle.rootActionId).toBe(f.run.handle.rootActionId)
+    expect(next.ledger).toMatchObject({ physicalRequests: 1, policy: { maxPhysicalRequests: 141 } })
+    expect(new GenerationRunRepository(() => f.fixture.db).get(next.handle.runId).binding.sourceManifest.policy).toEqual(policy)
+    await reopened.execute({ handle: next.handle, invocationNonce: 'remainder', task: directoryTask })
+    expect(f.dispatch).toHaveBeenCalledTimes(2)
+    expect(f.fixture.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(1)
+  })
   it('opens the default directory intent with explicitly empty pacing guidance', () => {
     const f = fixture()
     const run = f.owner.begin({ ...f.begin, operation: 'directory', output: 'structured-data', selectedBlueprintChapterNumbers: [1],
