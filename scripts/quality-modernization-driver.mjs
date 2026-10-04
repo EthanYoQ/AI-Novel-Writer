@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { createHash, randomUUID } from 'node:crypto'
 import { buildSync } from 'esbuild'
+import { reconcileDispatchedAttempts } from './quality-modernization-run.mjs'
 import { countProjectedDraftUnits, isExpectedReferenceEvidenceFailure, isVerifiedDirectPersistedDraftEvidence, isVerifiedRecoverySupplementEvidence,
   readVerifiedDirectPersistedDraftEvidence, readVerifiedRecoveryCandidateSupplement, targetUnitRange } from './quality-modernization-receipt.mjs'
 
@@ -1157,6 +1158,55 @@ export function createAttemptSupervisor({ record, deadlineMs = BRIDGE_SETTLEMENT
     openAttempts: () => open.size,
   }
 }
+export function writeProductionReceipt(file, receipt, secrets = []) {
+  const bytes = secrets.reduce((text, secret) => text.split(secret).join('[REDACTED]'), JSON.stringify(receipt, null, 2) + '\n')
+  const temporary = `${file}.${randomUUID()}.tmp`
+  try {
+    fs.writeFileSync(temporary, bytes, { flag: 'wx' })
+    fs.renameSync(temporary, file)
+  } finally { fs.rmSync(temporary, { force: true }) }
+  return bytes
+}
+
+function readBridgeReceipt(file) {
+  if (!fs.existsSync(file)) return null
+  try {
+    const receipt = JSON.parse(fs.readFileSync(file, 'utf8'))
+    if (!Array.isArray(receipt?.attempts) || receipt.attempts.some(attempt => !attempt?.attemptId || !attempt.binding)
+      || new Set(receipt.attempts.map(attempt => attempt.attemptId)).size !== receipt.attempts.length)
+      throw new Error('INVALID_ATTEMPTS')
+    return receipt
+  } catch (cause) { throw new Error('BRIDGE_RECEIPT_OWNERSHIP_INVALID', { cause }) }
+}
+
+function bridgeOwnedAttempts(request, receipt, previousIds) {
+  if (!receipt) return []
+  const owned = receipt.attempts.filter(attempt => !previousIds.has(attempt.attemptId))
+  if (!owned.length) return []
+  const expected = { ...Object.fromEntries(['invocationId', 'mode', 'phase', 'milestone', 'caseId', 'protocolRevision', 'protocolHash', 'driverHash']
+    .map(key => [key, request[key]])), arm: request.target.arm, codeSha: request.target.codeSha, sourceHash: request.target.sourceHash }
+  const reject = () => { throw new Error('BRIDGE_RECEIPT_OWNERSHIP_MISMATCH') }
+  if (receipt.action !== request.action || Object.entries(expected).some(([key, value]) => !value || receipt[key] !== value)) reject()
+  const physical = receipt.physicalProject
+  if (!physical?.path || !physical.projectId || !receipt.projectEpoch || !physical.parityHash) reject()
+  const projectPath = fs.realpathSync(physical.path)
+  const relative = path.relative(fs.realpathSync(request.target.roots.project), projectPath)
+  if (relative.startsWith('..') || path.isAbsolute(relative)) reject()
+  if (receipt.restoration && (receipt.restoration.targetProjectId !== physical.projectId
+    || !receipt.restoration.targetProjectRoot || fs.realpathSync(receipt.restoration.targetProjectRoot) !== projectPath)) reject()
+  for (const attempt of owned) {
+    const binding = attempt.binding, owner = request.target.arm === 'candidate' ? binding.actual : binding.baselineIpc
+    if (Object.entries(expected).some(([key, value]) => binding[key] !== value)
+      || !request.operations.some(operation => operation.id === binding.operation)
+      || binding.parityId !== physical.parityHash
+      || !owner || ['attemptId', 'runId', 'rootActionId', 'projectId', 'epoch', 'purpose'].some(key => typeof owner[key] !== 'string' || !owner[key])
+      || attempt.attemptId !== `${request.target.arm}:${owner.attemptId}`
+      || owner.projectId !== physical.projectId || owner.epoch !== receipt.projectEpoch
+      || request.target.arm === 'baseline' && owner.operationId !== binding.operation) reject()
+  }
+  return owned.map(({ attemptId, binding }) => ({ attemptId, binding }))
+}
+
 export function runProductionBridge(request) {
   const target = request.target
   const windows = qualificationBridgeWindows(request)
@@ -1165,59 +1215,82 @@ export function runProductionBridge(request) {
   const runtime = productionExecutionRuntime(target)
   const testTimeout = windows.testMs
   const requestFile = path.join(evidenceRoot, `${request.action}-request.json`)
-  const config = path.join(target.isolationRoot, 'production-bridge.vitest.config.mjs')
+  const config = path.join(evidenceRoot, `${request.action}-production-bridge.vitest.config.mjs`)
   const report = path.join(evidenceRoot, `${request.action}-vitest.json`)
   request.receiptPath = path.join(evidenceRoot, `${request.action}-receipt.json`)
-  fs.writeFileSync(requestFile, JSON.stringify(request, null, 2))
-  fs.writeFileSync(config, `export default ${JSON.stringify({
-    root: ADAPTER_ROOT,
-    resolve: { alias: { vitest: path.join(target.repositoryRoot, 'node_modules/vitest/dist/index.js'),
-      electron: path.join(target.repositoryRoot, 'node_modules/electron/index.js') } },
-    test: { include: [PRODUCTION_BRIDGE], exclude: [], environment: 'node',
-      globals: false, maxWorkers: 1, fileParallelism: false, testTimeout },
-  })}\n`)
-  const env = Object.fromEntries(['SystemRoot', 'WINDIR', 'PATH', 'PATHEXT', 'ComSpec'].filter(key => process.env[key]).map(key => [key, process.env[key]]))
-  Object.assign(env, { QUALITY_BRIDGE_REQUEST: requestFile, QUALITY_USER_DATA: target.roots.userData,
-    HOME: target.roots.userData, USERPROFILE: target.roots.userData, APPDATA: target.roots.userData, LOCALAPPDATA: target.roots.userData,
-    TEMP: target.isolationRoot, TMP: target.isolationRoot, AI_NOVEL_APP_DATA_HOME: target.roots.config,
-    AI_NOVEL_LEGACY_SOURCE_HOME: target.roots.legacySource,
-    AI_NOVEL_VELA_HOME: target.arm === 'baseline' ? target.roots.config : target.roots.legacySource,
-    ...(runtime.electronRunAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}) })
-  const guard = path.join(target.isolationRoot, 'network-denied.mjs')
-  if (request.mode === 'synthetic') fs.writeFileSync(guard, "import net from 'node:net'; import tls from 'node:tls'; import http from 'node:http'; import https from 'node:https'; import {syncBuiltinESMExports} from 'node:module'; const deny=()=>{throw new Error('NETWORK_FORBIDDEN')};globalThis.fetch=deny;net.Socket.prototype.connect=deny;tls.connect=deny;http.request=deny;http.get=deny;https.request=deny;https.get=deny;syncBuiltinESMExports();")
-  const argv = [...(request.mode === 'synthetic' ? ['--import', pathToFileURL(guard).href] : []), path.join(target.repositoryRoot, 'node_modules/vitest/vitest.mjs'), 'run', '--config', config,
-    '--reporter=json', `--outputFile=${report}`]
-  const result = spawnSync(runtime.executable, argv, { cwd: target.repositoryRoot, env, encoding: 'utf8',
-    // Attempt 先由登记的桥内守护收口，再由父进程 spawn、最后 Vitest 兜底。
-    timeout: windows.spawnMs, maxBuffer: 4 * 1024 * 1024, windowsHide: true })
-  const secrets = request.mode === 'real'
-    ? JSON.parse(fs.readFileSync(path.join(target.roots.config, 'models.json'), 'utf8')).map(model => model.apiKey).filter(Boolean) : []
-  const redact = value => secrets.reduce((text, secret) => text.split(secret).join('[REDACTED]'), String(value ?? ''))
-  fs.writeFileSync(path.join(evidenceRoot, `${request.action}-stdout.log`), redact(result.stdout))
-  fs.writeFileSync(path.join(evidenceRoot, `${request.action}-stderr.log`), redact(result.stderr))
-  for (const file of [report, request.receiptPath]) if (secrets.length && fs.existsSync(file)) fs.writeFileSync(file, redact(fs.readFileSync(file, 'utf8')))
-  const receipt = fs.existsSync(request.receiptPath) ? JSON.parse(fs.readFileSync(request.receiptPath, 'utf8')) : null
-  if (receipt?.runtimePaths && request.phase === 'planning-native-diagnostic') {
-    receipt.sourcePids = [...new Set([...receipt.sourcePids, result.pid])]
-    const processes = receipt.sourcePids.map(pid => {
-      try { process.kill(pid, 0); return { pid, exited: false } }
-      catch (error) { return { pid, exited: error.code === 'ESRCH' } }
-    })
-    const wal = `${receipt.runtimePaths.databasePath}-wal`
-    receipt.sourceClosure = { ...receipt.sourceClosure, processes, exitCode: result.status, signal: result.signal,
-      parentObservedWalBytes: fs.existsSync(wal) ? fs.statSync(wal).size : 0 }
-    receipt.sourceClosed = receipt.sourceClosure.databaseClosed === true && receipt.sourceClosure.walBytes === 0
-      && receipt.sourceClosure.parentObservedWalBytes === 0 && processes.every(item => item.exited)
-      && result.status !== null && result.signal === null
-    fs.writeFileSync(request.receiptPath, JSON.stringify(receipt, null, 2) + '\n')
-  }
-  if (result.status !== 0 || !receipt || !['prepared', 'passed'].includes(receipt.status)) {
-    throw Object.assign(new Error('PRODUCTION_BRIDGE_FAILED'), { detail: receipt?.error, receiptPath: request.receiptPath,
-      exitCode: result.status, stderrPath: path.join(evidenceRoot, `${request.action}-stderr.log`) })
-  }
-  const testReport = JSON.parse(fs.readFileSync(report, 'utf8'))
-  if (testReport.numPassedTests !== 1 || testReport.numTotalTests !== 1) throw new Error('PRODUCTION_BRIDGE_COVERAGE_MISMATCH')
-  return { ...receipt, command: { executable: runtime.executable, argv, cwd: target.repositoryRoot, shell: false }, receiptPath: request.receiptPath }
+  const lock = `${request.receiptPath}.lock`
+  let fd
+  try { fd = fs.openSync(lock, 'wx') }
+  catch (error) { if (error.code === 'EEXIST') throw new Error('PRODUCTION_BRIDGE_BUSY'); throw error }
+  try {
+    const previousIds = new Set((readBridgeReceipt(request.receiptPath)?.attempts ?? []).map(attempt => attempt.attemptId))
+    fs.writeFileSync(requestFile, JSON.stringify(request, null, 2))
+    fs.writeFileSync(config, `export default ${JSON.stringify({
+      root: ADAPTER_ROOT,
+      resolve: { alias: { vitest: path.join(target.repositoryRoot, 'node_modules/vitest/dist/index.js'),
+        electron: path.join(target.repositoryRoot, 'node_modules/electron/index.js') } },
+      test: { include: [PRODUCTION_BRIDGE], exclude: [], environment: 'node',
+        globals: false, maxWorkers: 1, fileParallelism: false, testTimeout },
+    })}\n`)
+    const env = Object.fromEntries(['SystemRoot', 'WINDIR', 'PATH', 'PATHEXT', 'ComSpec'].filter(key => process.env[key]).map(key => [key, process.env[key]]))
+    Object.assign(env, { QUALITY_BRIDGE_REQUEST: requestFile, QUALITY_USER_DATA: target.roots.userData,
+      HOME: target.roots.userData, USERPROFILE: target.roots.userData, APPDATA: target.roots.userData, LOCALAPPDATA: target.roots.userData,
+      TEMP: target.isolationRoot, TMP: target.isolationRoot, AI_NOVEL_APP_DATA_HOME: target.roots.config,
+      AI_NOVEL_LEGACY_SOURCE_HOME: target.roots.legacySource,
+      AI_NOVEL_VELA_HOME: target.arm === 'baseline' ? target.roots.config : target.roots.legacySource,
+      ...(runtime.electronRunAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}) })
+    const guard = path.join(evidenceRoot, `${request.action}-network-denied.mjs`)
+    if (request.mode === 'synthetic') fs.writeFileSync(guard, "import net from 'node:net'; import tls from 'node:tls'; import http from 'node:http'; import https from 'node:https'; import {syncBuiltinESMExports} from 'node:module'; const deny=()=>{throw new Error('NETWORK_FORBIDDEN')};globalThis.fetch=deny;net.Socket.prototype.connect=deny;tls.connect=deny;http.request=deny;http.get=deny;https.request=deny;https.get=deny;syncBuiltinESMExports();")
+    const argv = [...(request.mode === 'synthetic' ? ['--import', pathToFileURL(guard).href] : []), path.join(target.repositoryRoot, 'node_modules/vitest/vitest.mjs'), 'run', '--config', config,
+      '--reporter=json', `--outputFile=${report}`]
+    const result = spawnSync(runtime.executable, argv, { cwd: target.repositoryRoot, env, encoding: 'utf8',
+      timeout: windows.spawnMs, maxBuffer: 4 * 1024 * 1024, windowsHide: true })
+    let ownedAttempts = [], failure, output
+    try {
+      const receipt = readBridgeReceipt(request.receiptPath)
+      if (request.action === 'execute') ownedAttempts = bridgeOwnedAttempts(request, receipt, previousIds)
+      const secrets = request.mode === 'real'
+        ? JSON.parse(fs.readFileSync(path.join(target.roots.config, 'models.json'), 'utf8')).map(model => model.apiKey).filter(Boolean) : []
+      const redact = value => secrets.reduce((text, secret) => text.split(secret).join('[REDACTED]'), String(value ?? ''))
+      fs.writeFileSync(path.join(evidenceRoot, `${request.action}-stdout.log`), redact(result.stdout))
+      fs.writeFileSync(path.join(evidenceRoot, `${request.action}-stderr.log`), redact(result.stderr))
+      if (secrets.length && fs.existsSync(report)) fs.writeFileSync(report, redact(fs.readFileSync(report, 'utf8')))
+      if (receipt?.runtimePaths && request.phase === 'planning-native-diagnostic') {
+        receipt.sourcePids = [...new Set([...receipt.sourcePids, result.pid])]
+        const processes = receipt.sourcePids.map(pid => {
+          try { process.kill(pid, 0); return { pid, exited: false } }
+          catch (error) { return { pid, exited: error.code === 'ESRCH' } }
+        })
+        const wal = `${receipt.runtimePaths.databasePath}-wal`
+        receipt.sourceClosure = { ...receipt.sourceClosure, processes, exitCode: result.status, signal: result.signal,
+          parentObservedWalBytes: fs.existsSync(wal) ? fs.statSync(wal).size : 0 }
+        receipt.sourceClosed = receipt.sourceClosure.databaseClosed === true && receipt.sourceClosure.walBytes === 0
+          && receipt.sourceClosure.parentObservedWalBytes === 0 && processes.every(item => item.exited)
+          && result.status !== null && result.signal === null
+        writeProductionReceipt(request.receiptPath, receipt, secrets)
+      }
+      if (result.status !== 0 || !receipt || !['prepared', 'passed'].includes(receipt.status)) {
+        throw Object.assign(new Error('PRODUCTION_BRIDGE_FAILED'), { detail: receipt?.error, receiptPath: request.receiptPath,
+          exitCode: result.status, stderrPath: path.join(evidenceRoot, `${request.action}-stderr.log`) })
+      }
+      const testReport = JSON.parse(fs.readFileSync(report, 'utf8'))
+      if (testReport.numPassedTests !== 1 || testReport.numTotalTests !== 1) throw new Error('PRODUCTION_BRIDGE_COVERAGE_MISMATCH')
+      output = { ...receipt, command: { executable: runtime.executable, argv, cwd: target.repositoryRoot, shell: false }, receiptPath: request.receiptPath }
+    } catch (error) { failure = error }
+    try {
+      if (request.action === 'execute') reconcileDispatchedAttempts(request.ledgerPath, request.mode, ownedAttempts)
+    } catch (error) {
+      if (failure) {
+        const businessCode = ['PRODUCTION_BRIDGE_FAILED', 'PRODUCTION_BRIDGE_COVERAGE_MISMATCH'].includes(failure.message)
+          ? failure.message : 'PRODUCTION_BRIDGE_ERROR'
+        const cleanupCode = ['LEDGER_BUSY', 'LEDGER_OWNERSHIP_MISMATCH', 'INVALID_LEDGER_TRANSITION'].includes(error.message)
+          ? error.message : 'LEDGER_RECONCILIATION_ERROR'
+        failure = new AggregateError([failure, error], `${businessCode}_AND_${cleanupCode}`)
+      } else failure = error
+    }
+    if (failure) throw Object.assign(failure, { receiptPath: request.receiptPath })
+    return output
+  } finally { try { fs.closeSync(fd) } finally { fs.unlinkSync(lock) } }
 }
 
 /**

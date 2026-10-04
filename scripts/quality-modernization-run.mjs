@@ -388,30 +388,35 @@ export function buildFixtureExports(source) {
     format, semanticHash, parametersHash: hash(source.modelParameters), semantic: structuredClone(source),
   }]))
 }
-/**
- * 对账：任何已经 dispatch 但没有终态行的 attempt，补写 unknown。
- *
- * 子进程可能被 vitest 超时、spawnSync 超时或硬崩溃杀死，三种情况都不会执行桥内的
- * 结算路径；但调用方进程仍然活着。这是唯一能覆盖全部死法的地方，也是账本
- * 「每次真实发送都有终态」这条不变量的兜底。unknown 是真话：已发出、未观测到结果，
- * 按设计不得退款。并发下若终态已写入，转移非法，视为已结算。
- */
-export function reconcileDispatchedAttempts(file, campaignMode) {
-  if (!fs.existsSync(file)) return { reconciled: 0, dangling: 0 }
-  const rows = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
-  const terminal = new Set(rows.filter(row => ['settle', 'unknown', 'cancel'].includes(row.type)).map(row => row.attemptId))
-  const dangling = [...new Set(rows.filter(row => row.type === 'dispatch' && !terminal.has(row.attemptId)).map(row => row.attemptId))]
+export function reconcileDispatchedAttempts(file, campaignMode, ownedAttempts) {
+  if (!Array.isArray(ownedAttempts) || ownedAttempts.some(attempt => typeof attempt?.attemptId !== 'string'
+    || !attempt.attemptId || !attempt.binding || typeof attempt.binding !== 'object')
+    || new Set(ownedAttempts.map(attempt => attempt.attemptId)).size !== ownedAttempts.length) fail('LEDGER_OWNERSHIP_REQUIRED')
+  if (!ownedAttempts.length) return { reconciled: 0, dangling: 0 }
+  const readRows = () => fs.existsSync(file)
+    ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)) : []
+  const stateOf = (attempt, rows) => {
+    let state
+    for (const row of rows.filter(row => row.attemptId === attempt.attemptId)) {
+      if (state === undefined && row.type === 'reserve') {
+        if (!isDeepStrictEqual(row.binding, attempt.binding)) fail('LEDGER_OWNERSHIP_MISMATCH')
+      } else if (!(state === 'reserve' && ['dispatch', 'cancel'].includes(row.type)
+        || state === 'dispatch' && ['settle', 'unknown'].includes(row.type))) fail('INVALID_LEDGER_TRANSITION')
+      state = row.type
+    }
+    return state
+  }
+  const rows = readRows()
+  const dangling = ownedAttempts.filter(attempt => stateOf(attempt, rows) === 'dispatch')
   let reconciled = 0
-  for (const attemptId of dangling) {
-    try { updateLedger(file, { type: 'unknown', attemptId }, { campaignMode }); reconciled += 1 }
-    catch (error) { if (!/INVALID_LEDGER_TRANSITION/u.test(String(error.message))) throw error }
+  for (const attempt of dangling) {
+    try { updateLedger(file, { type: 'unknown', attemptId: attempt.attemptId }, { campaignMode }); reconciled += 1 }
+    catch (error) {
+      if (error.message !== 'INVALID_LEDGER_TRANSITION'
+        || !['settle', 'unknown', 'cancel'].includes(stateOf(attempt, readRows()))) throw error
+    }
   }
   return { reconciled, dangling: dangling.length }
-}
-
-/** 成对执行失败时先对账再抛出，保证失败路径也不留下悬空派发。 */
-export function withLedgerReconciliation(ledgerPath, campaignMode, run) {
-  try { return run() } finally { reconcileDispatchedAttempts(ledgerPath, campaignMode) }
 }
 
 export function selectPhase(protocol, phase, milestone = 'early') {
@@ -1364,33 +1369,27 @@ export function main(argv) {
       ...(separated ? { diagnosticId: registration.diagnosticId, diagnosticInputHash: hash(fs.readFileSync(inputPath)) } : {}),
       development: args['--mode'] === 'synthetic' }
     if (separated) {
-      const results = withLedgerReconciliation(ledgerPath, args['--mode'], () => {
-        const first = registration.operations[0]
-        const preparedReceipt = runProductionBridge({ ...common, action: 'prepare', operations: [first],
-          operationId: first.id, caseId: first.sourceId, evidenceRoot: path.join(evidenceRoot, 'prepare') })
-        const outputs = []
-        for (const slot of registration.operations) {
-          const executed = runProductionBridge({ ...common, action: 'execute', operations: [slot], operationId: slot.id,
-            caseId: slot.sourceId, parityHash: preparedReceipt.physicalProject.parityHash,
-            evidenceRoot: path.join(evidenceRoot, slot.id) })
-          if (executed.attempts.length !== 1 || executed.physicalModelRequests + executed.syntheticDispatches !== 1
-            || executed.ownerTerminal?.finishReason !== 'stop') fail('SEPARATED_REVIEW_DIAGNOSTIC_ONE_STOP_REQUIRED')
-          outputs.push(executed)
-        }
-        return outputs
-      })
+      const first = registration.operations[0]
+      const preparedReceipt = runProductionBridge({ ...common, action: 'prepare', operations: [first],
+        operationId: first.id, caseId: first.sourceId, evidenceRoot: path.join(evidenceRoot, 'prepare') })
+      const results = []
+      for (const slot of registration.operations) {
+        const executed = runProductionBridge({ ...common, action: 'execute', operations: [slot], operationId: slot.id,
+          caseId: slot.sourceId, parityHash: preparedReceipt.physicalProject.parityHash,
+          evidenceRoot: path.join(evidenceRoot, slot.id) })
+        if (executed.attempts.length !== 1 || executed.physicalModelRequests + executed.syntheticDispatches !== 1
+          || executed.ownerTerminal?.finishReason !== 'stop') fail('SEPARATED_REVIEW_DIAGNOSTIC_ONE_STOP_REQUIRED')
+        results.push(executed)
+      }
       return { status: 'diagnostic-only', qualityQualification: 'not-run', invocationId, inputPath,
         inputSha256: common.diagnosticInputHash, ledgerPath, evidenceRoot,
         physicalModelRequests: results.reduce((sum, item) => sum + item.physicalModelRequests, 0),
         syntheticDispatches: results.reduce((sum, item) => sum + item.syntheticDispatches, 0), results }
     }
-    const result = withLedgerReconciliation(ledgerPath, args['--mode'], () => {
-      const preparedReceipt = runProductionBridge({ ...common, action: 'prepare' })
-      const executed = runProductionBridge({ ...common, action: 'execute', parityHash: preparedReceipt.physicalProject.parityHash })
-      if (executed.attempts.length !== 1 || executed.physicalModelRequests + executed.syntheticDispatches !== 1)
-        fail('SHARED_INPUT_DIAGNOSTIC_ONE_REQUEST_REQUIRED')
-      return executed
-    })
+    const preparedReceipt = runProductionBridge({ ...common, action: 'prepare' })
+    const result = runProductionBridge({ ...common, action: 'execute', parityHash: preparedReceipt.physicalProject.parityHash })
+    if (result.attempts.length !== 1 || result.physicalModelRequests + result.syntheticDispatches !== 1)
+      fail('SHARED_INPUT_DIAGNOSTIC_ONE_REQUEST_REQUIRED')
     return { status: 'diagnostic-only', qualityQualification: 'not-run', physicalModelRequests: result.physicalModelRequests,
       syntheticDispatches: result.syntheticDispatches, invocationId, inputPath, inputSha256: hash(fs.readFileSync(inputPath)),
       ledgerPath, evidenceRoot, receiptPath: result.receiptPath, outputPath: result.operations[0].outputPath,
@@ -1412,13 +1411,13 @@ export function main(argv) {
     assertScenarioMatchesProtocol(selection, scenario, path.join(ROOT, protocol.fixturePath))
     const developmentLedger = developmentLedgerPath(prepared.root, phase)
     if (fs.existsSync(developmentLedger)) fail('DEVELOPMENT_LEDGER_COLLISION')
-    const result = withLedgerReconciliation(developmentLedger, 'synthetic', () => runProductionPhasePair(prepared.targets, { phase, development: true, mode: 'synthetic', milestone: selection.milestone,
+    const result = runProductionPhasePair(prepared.targets, { phase, development: true, mode: 'synthetic', milestone: selection.milestone,
       diagnosticInputPath: args['--diagnostic-input'], ...(diagnosticInvocationId ? { invocationId: diagnosticInvocationId } : {}),
       scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, evaluationPolicy: selection.evaluationPolicy, order: protocol.candidateOnlyQualification?.order ?? protocol.order,
       forwardReasoning: forwardReasoningFor(protocol, phase, selection.milestone),
       forwardQualificationWindow: forwardQualificationWindowFor(protocol, phase, selection.milestone),
       ...currentProtocolBinding(),
-      semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(prepared.root, 'candidate-templates.json'), ledgerPath: developmentLedger }))
+      semanticPath: path.join(ROOT, protocol.fixturePath), templatesPath: path.join(prepared.root, 'candidate-templates.json'), ledgerPath: developmentLedger })
     fs.writeFileSync(path.join(prepared.root, `development-receipt-${phase}.json`), JSON.stringify(result, null, 2))
     return { ...result, evidenceRoot: prepared.root, targetsPath: prepared.path }
   }
@@ -1476,15 +1475,13 @@ export function main(argv) {
     fs.mkdirSync(evidenceRoot, { recursive: true })
     const ledgerPath = pairLedgerPath ?? (planningNative ? path.join(CACHE, 'planning-native-synthetic-ledger.jsonl')
       : savedNative ? path.join(CACHE, 'saved-native-synthetic-ledger.jsonl') : path.join(evidenceRoot, 'synthetic-ledger.jsonl'))
-    // 真实或合成的成对执行失败时先对账：子进程被杀不会执行桥内结算，
-    // 只有调用方还活着，这是保证每次发送都有终态的最后一道。
-    const result = withLedgerReconciliation(ledgerPath, mode, () => runProductionPhasePair(targets, { ...samplingOptions, phase, mode, milestone: selection.milestone,
+    const result = runProductionPhasePair(targets, { ...samplingOptions, phase, mode, milestone: selection.milestone,
       scenarioRevision: selection.scenarioRevision, selectionDifference: selection.selectionDifference, attemptPolicy: selection.attemptPolicy, evaluationPolicy: selection.evaluationPolicy, order: protocol.candidateOnlyQualification?.order ?? protocol.order,
       forwardReasoning: forwardReasoningFor(protocol, phase, selection.milestone),
       forwardQualificationWindow: forwardQualificationWindowFor(protocol, phase, selection.milestone),
       diagnosticInputPath, ...(savedNative || planningNative ? { caseId: args['--native-case'], nativeAction: args['--native-action'], approvalPath: args['--approval'] } : {}),
       ...currentProtocolBinding(), semanticPath: path.join(ROOT, protocol.fixturePath),
-      templatesPath: path.join(evidenceRoot, 'candidate-templates.json'), ledgerPath }))
+      templatesPath: path.join(evidenceRoot, 'candidate-templates.json'), ledgerPath })
     arms.forEach(arm => inspectTarget(targets[arm]))
     fs.writeFileSync(path.join(evidenceRoot, 'receipt.json'), JSON.stringify(result, null, 2))
     return { ...result, selection, evidenceRoot }

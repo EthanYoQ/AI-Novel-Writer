@@ -10,7 +10,7 @@ import childProcess, { spawnSync } from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { gunzipSync } from 'node:zlib'
-import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, currentProtocolBinding, assertProtocolBinding, validateHistoricalLedgerBoundary, validateHistoricalSupersessionBoundary, validateCampaignBinding, buildFixtureExports, validatePair, selectPhase, forwardReasoningFor, forwardQualificationWindowFor, assertScenarioMatchesProtocol, reconcileDispatchedAttempts, withLedgerReconciliation, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles, assertFormalTargetCandidateClean, createShortIsolationRoot, assertOwnedIsolationRoot, validatePhysicalLedger, registeredCampaignWorktree, developmentLedgerPath } from '../quality-modernization-run.mjs'
+import { ROOT, PLANNED_CALL_ALLOCATION, CAMPAIGN_ID, campaignIdFor, hash, currentProtocolBinding, assertProtocolBinding, validateHistoricalLedgerBoundary, validateHistoricalSupersessionBoundary, validateCampaignBinding, buildFixtureExports, validatePair, selectPhase, forwardReasoningFor, forwardQualificationWindowFor, assertScenarioMatchesProtocol, reconcileDispatchedAttempts, updateLedger, main, inspectTarget, freezeEnvironment, fixedStartup, validateFrozenExecution, runnerAdapterHash, assertCommittedProductionFiles, assertFormalTargetCandidateClean, createShortIsolationRoot, assertOwnedIsolationRoot, validatePhysicalLedger, registeredCampaignWorktree, developmentLedgerPath } from '../quality-modernization-run.mjs'
 import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolatedRealModelConfig, PHASE_SCENARIOS, classifyProductionPair,
   fullExecutionSchedule, classifyFullProduction, validateFullAcceptedPredecessor,
   adjudicateEarlyReviewReferenceNonconformance, EARLY_REVIEW_REFERENCE_ADJUDICATION_REVISION,
@@ -23,7 +23,7 @@ import { COMMAND_PROBES, selectOwnerDispatch, productionBridgeHash, copyIsolated
   continuityCaseOperations, FINALIZED_CHARACTER_OPERATION_IDS, draftCondenseFor, draftRecoveryFor, syntheticDraftCondensePlan,
   BOUNDED_REVISION_DIAGNOSTIC, assertBoundedRevisionSource, AI_REVIEW_FINAL_MANUSCRIPT_POLICY, R3_NATIVE_REVISION_DIAGNOSTIC,
   aiReviewFinalManuscriptSelection, validateAiReviewedManuscript, validatePairedReceipt, loadBaselineReviewContract, POST_UI_BUDGET,
-  CANDIDATE_ONLY_PROTOCOL_REVISION, reviewLengthRecoveryFor } from '../quality-modernization-driver.mjs'
+  CANDIDATE_ONLY_PROTOCOL_REVISION, reviewLengthRecoveryFor, writeProductionReceipt } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, readVerifiedRecoveryCandidateSupplement,
   readVerifiedDirectPersistedDraftEvidence, recordPersistedDraftObservation,
   safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
@@ -1597,7 +1597,7 @@ test('父桥实际生成配置和 spawn options 使用同一已登记窗口，�
   try {
     childProcess.spawnSync = function (_executable, args, options) {
       captured = { args, options }
-      fs.writeFileSync(path.join(directory, 'execute-receipt.json'), JSON.stringify({ status: 'passed' }))
+      fs.writeFileSync(path.join(directory, 'execute-receipt.json'), JSON.stringify({ status: 'passed', attempts: [] }))
       fs.writeFileSync(path.join(directory, 'execute-vitest.json'), JSON.stringify({ numPassedTests: 1, numTotalTests: 1 }))
       return { status: 0, stdout: '', stderr: '' }
     }
@@ -1608,7 +1608,7 @@ test('父桥实际生成配置和 spawn options 使用同一已登记窗口，�
     assert.equal(captured.options.timeout, windows.spawnMs)
     assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'execute-request.json'))).forwardQualificationWindow.revision,
       request.forwardQualificationWindow.revision)
-    const config = fs.readFileSync(path.join(directory, 'production-bridge.vitest.config.mjs'), 'utf8')
+    const config = fs.readFileSync(path.join(directory, 'execute-production-bridge.vitest.config.mjs'), 'utf8')
     assert.ok(config.includes(`"testTimeout":${windows.testMs}`))
     assert.equal(output.status, 'passed')
     captured = null
@@ -6738,40 +6738,315 @@ test('S10B只把有可评审产物的baseline字数不合格降为reference-nonc
 test('调用方对账为悬空派发补写 unknown，且重复对账不写第二行', () => {
   const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/reconcile-test-'))
   const file = path.join(dir, 'physical-ledger.jsonl')
-  // 活动账本会按选定阶段校验绑定，所以这里用 early-context 的登记值。
   const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', ...protocolBinding, arm: 'baseline', codeSha: 'a'.repeat(40),
     sourceHash: 'c'.repeat(64), driverHash: 'd'.repeat(64), parityId: 'b'.repeat(64),
     phase: 'early-context', milestone: 'early', caseId: '场景2/3', operation: '长设定第三章正文' }
   try {
-    // 模拟子进程被超时杀死：reserve 与 dispatch 落盘，之后没有任何终态行。
     updateLedger(file, { type: 'reserve', attemptId: '被杀', binding }, { campaignMode: 'synthetic' })
     updateLedger(file, { type: 'dispatch', attemptId: '被杀' }, { campaignMode: 'synthetic' })
-    const first = reconcileDispatchedAttempts(file, 'synthetic')
+    const first = reconcileDispatchedAttempts(file, 'synthetic', [{ attemptId: '被杀', binding }])
     assert.deepEqual(first, { reconciled: 1, dangling: 1 })
     const rows = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
     assert.deepEqual(rows.map(row => row.type), ['reserve', 'dispatch', 'unknown'])
-    // 幂等：没有悬空派发时不再写，已有的 unknown 不被改写。
-    assert.deepEqual(reconcileDispatchedAttempts(file, 'synthetic'), { reconciled: 0, dangling: 0 })
+    assert.deepEqual(reconcileDispatchedAttempts(file, 'synthetic', [{ attemptId: '被杀', binding }]), { reconciled: 0, dangling: 0 })
     assert.equal(fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).length, 3)
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('调用方在桥返回失败对象时也结算悬空派发', () => {
-  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/reconcile-return-test-'))
-  const file = path.join(dir, 'synthetic-ledger.jsonl')
-  const binding = { campaignId: CAMPAIGN_ID, mode: 'synthetic', ...protocolBinding, arm: 'baseline', codeSha: 'a'.repeat(40),
-    sourceHash: 'c'.repeat(64), driverHash: 'd'.repeat(64), parityId: 'b'.repeat(64),
-    phase: 'early-context', milestone: 'early', caseId: '场景2/3', operation: '长设定第三章正文' }
-  try {
-    const result = withLedgerReconciliation(file, 'synthetic', () => {
-      updateLedger(file, { type: 'reserve', attemptId: '返回失败', binding }, { campaignMode: 'synthetic' })
-      updateLedger(file, { type: 'dispatch', attemptId: '返回失败' }, { campaignMode: 'synthetic' })
-      return { status: 'failed' }
+function ownershipRequest(directory) {
+  const roots = Object.fromEntries(['project', 'userData', 'config', 'legacySource'].map(key => [key, path.join(directory, key)]))
+  for (const root of Object.values(roots)) fs.mkdirSync(root, { recursive: true })
+  return { target: { arm: 'candidate', repositoryRoot: ROOT, isolationRoot: directory, roots,
+    codeSha: 'a'.repeat(40), sourceHash: 'c'.repeat(64) }, ...protocolBinding,
+    invocationId: 'shared-invocation', action: 'execute', mode: 'synthetic', phase: 'early-context', milestone: 'early',
+    caseId: '场景2/3', sceneId: '场景2', chapterNumber: 3, driverHash: 'd'.repeat(64), parityHash: 'b'.repeat(64),
+    operations: [{ id: '长设定第三章正文', kind: 'draft' }], ledgerPath: path.join(directory, 'ledger.jsonl') }
+}
+
+function ownershipReceipt(request, id = 'owned', arm = request.target.arm) {
+  const actual = { attemptId: id, runId: `run-${id}`, rootActionId: `root-${id}`,
+    projectId: `project-${id}`, epoch: `epoch-${id}`, purpose: 'chapter-draft' }
+  const binding = { campaignId: CAMPAIGN_ID, ...protocolBinding, invocationId: request.invocationId,
+    arm, mode: request.mode, phase: request.phase, milestone: request.milestone, caseId: request.caseId,
+    codeSha: request.target.codeSha, sourceHash: request.target.sourceHash, driverHash: request.driverHash,
+    parityId: request.parityHash, operation: request.operations[0].id,
+    ...(arm === 'candidate' ? { actual } : { baselineIpc: { ...actual, operationId: request.operations[0].id } }) }
+  return { ...Object.fromEntries(['invocationId', 'action', 'mode', 'phase', 'milestone', 'caseId', 'protocolRevision', 'protocolHash', 'driverHash'].map(key => [key, request[key]])),
+    codeSha: request.target.codeSha, sourceHash: request.target.sourceHash, arm, status: 'running',
+    physicalProject: { path: request.target.roots.project, projectId: actual.projectId, parityHash: request.parityHash },
+    projectEpoch: actual.epoch, attempts: [{ attemptId: `${arm}:${id}`, binding }] }
+}
+
+function withOwnershipBridge(run) {
+  const directory = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/ownership-'))
+  const request = ownershipRequest(directory), original = childProcess.spawnSync
+  const record = (attempt, terminal) => {
+    updateLedger(request.ledgerPath, { type: 'reserve', ...attempt }, { campaignMode: request.mode })
+    if (terminal !== 'reserve') updateLedger(request.ledgerPath, { type: 'dispatch', attemptId: attempt.attemptId })
+    if (terminal && terminal !== 'reserve') updateLedger(request.ledgerPath, { type: terminal, attemptId: attempt.attemptId, finishReason: 'stop' })
+  }
+  const mock = callback => {
+    childProcess.spawnSync = (_executable, argv, options) => callback(JSON.parse(fs.readFileSync(options.env.QUALITY_BRIDGE_REQUEST)), argv)
+    syncBuiltinESMExports()
+  }
+  try { run({ directory, request, record, mock, original }) }
+  finally { childProcess.spawnSync = original; syncBuiltinESMExports(); fs.rmSync(directory, { recursive: true, force: true }) }
+}
+
+test('bridge ownership: prepare leaves a foreign live dispatch unchanged and its STOP succeeds', () => {
+  withOwnershipBridge(({ request, record, mock }) => {
+    const foreign = ownershipReceipt(request, 'foreign').attempts[0]
+    record(foreign)
+    const before = fs.readFileSync(request.ledgerPath, 'utf8')
+    mock((child, argv) => {
+      writeProductionReceipt(child.receiptPath, { status: 'prepared', attempts: [] })
+      fs.writeFileSync(argv.find(arg => arg.startsWith('--outputFile=')).slice(13), JSON.stringify({ numPassedTests: 1, numTotalTests: 1 }))
+      return { status: 0, stdout: '', stderr: '' }
     })
-    assert.deepEqual(result, { status: 'failed' })
-    const rows = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
-    assert.deepEqual(rows.map(row => row.type), ['reserve', 'dispatch', 'unknown'])
-  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+    assert.equal(runProductionBridge({ ...request, action: 'prepare' }).status, 'prepared')
+    assert.equal(fs.readFileSync(request.ledgerPath, 'utf8'), before)
+    updateLedger(request.ledgerPath, { type: 'settle', attemptId: foreign.attemptId, finishReason: 'stop' })
+    assert.equal(JSON.parse(fs.readFileSync(request.ledgerPath, 'utf8').trim().split('\n').at(-1)).finishReason, 'stop')
+  })
+})
+
+test.each(['baseline', 'restored-candidate'])('bridge ownership: %s uses its receipt project and epoch', kind => {
+  withOwnershipBridge(({ request, record, mock }) => {
+    if (kind === 'baseline') request.target.arm = 'baseline'
+    const receipt = ownershipReceipt(request)
+    if (kind === 'restored-candidate') {
+      const restored = path.join(request.target.roots.project, 'restored')
+      fs.mkdirSync(restored)
+      receipt.physicalProject.path = restored
+      receipt.restoration = { originProjectId: 'donor', targetProjectId: receipt.physicalProject.projectId, targetProjectRoot: restored }
+    }
+    mock(child => { record(receipt.attempts[0]); writeProductionReceipt(child.receiptPath, receipt); return { status: 1, stdout: '', stderr: '' } })
+    assert.throws(() => runProductionBridge(request), /PRODUCTION_BRIDGE_FAILED/)
+    assert.deepEqual(fs.readFileSync(request.ledgerPath, 'utf8').trim().split('\n').map(JSON.parse).map(row => row.type), ['reserve', 'dispatch', 'unknown'])
+  })
+})
+
+test('bridge ownership: explicit scope preserves history, reserve-only and previous receipt attempts', () => {
+  withOwnershipBridge(({ request, record, mock }) => {
+    const old = ownershipReceipt(request, 'old'), receipt = ownershipReceipt(request)
+    const untouched = ['settle', 'unknown', 'reserve'].map(state => {
+      const attempt = ownershipReceipt(request, state).attempts[0]; record(attempt, state); return attempt
+    })
+    const cancelled = ownershipReceipt(request, 'cancel').attempts[0]
+    record(cancelled, 'reserve'); updateLedger(request.ledgerPath, { type: 'cancel', attemptId: cancelled.attemptId })
+    untouched.push(cancelled)
+    record(old.attempts[0]); writeProductionReceipt(path.join(request.target.isolationRoot, 'execute-receipt.json'), old)
+    const before = fs.readFileSync(request.ledgerPath, 'utf8')
+    mock(child => {
+      record(receipt.attempts[0]); writeProductionReceipt(child.receiptPath, { ...receipt, attempts: [...old.attempts, ...receipt.attempts] })
+      return { status: 1, stdout: '', stderr: '' }
+    })
+    assert.throws(() => runProductionBridge(request), /PRODUCTION_BRIDGE_FAILED/)
+    const after = fs.readFileSync(request.ledgerPath, 'utf8')
+    assert.ok(after.startsWith(before))
+    const rows = after.trim().split('\n').map(JSON.parse)
+    assert.deepEqual(rows.filter(row => row.type === 'unknown').map(row => row.attemptId), ['candidate:unknown', 'candidate:owned'])
+    assert.deepEqual(reconcileDispatchedAttempts(request.ledgerPath, 'synthetic', [...untouched, ...receipt.attempts]), { reconciled: 0, dangling: 0 })
+    assert.equal(fs.readFileSync(request.ledgerPath, 'utf8'), after)
+    assert.throws(() => reconcileDispatchedAttempts(request.ledgerPath, 'synthetic'), /LEDGER_OWNERSHIP_REQUIRED/)
+    const probe = vi.spyOn(fs, 'existsSync').mockImplementation(() => { throw new Error('UNEXPECTED_LEDGER_IO') })
+    try { assert.deepEqual(reconcileDispatchedAttempts(request.ledgerPath, 'synthetic', []), { reconciled: 0, dangling: 0 }) }
+    finally { probe.mockRestore() }
+  })
+})
+
+test.each(['checkpoint-before', 'reserve-before', 'dispatch-after', 'final-write-failed'])('bridge ownership: no-network child hard exit at %s', stage => {
+  withOwnershipBridge(({ request, directory, record, mock, original }) => {
+    const foreign = ownershipReceipt(request, 'foreign').attempts[0], receipt = ownershipReceipt(request)
+    record(foreign)
+    const before = fs.readFileSync(request.ledgerPath, 'utf8')
+    const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
+    const start = fixture.indexOf('      receipt.attempts.push(requestReceipt)')
+    const end = fixture.indexOf("      const dispatchAt = performance.now()", start)
+    assert.ok(start >= 0 && end > start, 'actual checkpoint must precede reserve/dispatch')
+    const sendBoundary = fixture.slice(start, end)
+    const childFile = path.join(directory, 'ownership-child.mjs')
+    fs.writeFileSync(childFile, `import fs from 'node:fs'; import vm from 'node:vm'; import path from 'node:path';
+const nativeRead = fs.readFileSync;
+fs.readFileSync = (file, options) => {
+  if (typeof file === 'string' && path.resolve(file) === ${JSON.stringify(path.join(ROOT, 'docs/research/novel-quality-modernization/protocol.json'))}) {
+    const text = ${JSON.stringify(JSON.stringify(protocol, null, 2) + '\n')}; return typeof options === 'string' ? text : Buffer.from(text);
+  }
+  return nativeRead(file, options);
+};
+const { writeProductionReceipt } = await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'scripts/quality-modernization-driver.mjs')).href)});
+const { updateLedger } = await import(${JSON.stringify(pathToFileURL(path.join(ROOT, 'scripts/quality-modernization-run.mjs')).href)});
+const request = JSON.parse(fs.readFileSync(process.argv[2]));
+const receipt = ${JSON.stringify(receipt)}, requestReceipt = receipt.attempts[0]; receipt.attempts = [];
+const stage = ${JSON.stringify(stage)}, attemptId = requestReceipt.attemptId, binding = requestReceipt.binding;
+const stop = () => process.kill(process.pid, 'SIGKILL');
+const record = event => { if (stage === 'reserve-before') stop(); updateLedger(request.ledgerPath, event, { campaignMode: request.mode }); };
+if (stage === 'checkpoint-before') stop();
+vm.runInNewContext(${JSON.stringify(sendBoundary)}, {receipt, requestReceipt, request, attemptId, binding, secrets: [], record, writeProductionReceipt});
+if (stage === 'final-write-failed') { receipt.status = 'passed'; fs.renameSync = () => { throw new Error('FINAL_RENAME_FAILED') }; try { writeProductionReceipt(request.receiptPath, receipt) } catch (error) { fs.writeFileSync(request.receiptPath + '.failure', error.message) } }
+stop();`)
+    mock((child, argv) => original(process.execPath, [...argv.slice(0, 2), childFile, path.join(directory, 'execute-request.json')], {
+      cwd: ROOT, encoding: 'utf8', windowsHide: true, timeout: 15_000 }))
+    assert.throws(() => runProductionBridge(request), /PRODUCTION_BRIDGE_FAILED/)
+    const after = fs.readFileSync(request.ledgerPath, 'utf8')
+    assert.ok(after.startsWith(before))
+    const rows = after.trim().split('\n').map(JSON.parse)
+    const dispatched = ['dispatch-after', 'final-write-failed'].includes(stage)
+    assert.deepEqual(rows.filter(row => row.type === 'unknown').map(row => row.attemptId), dispatched ? ['candidate:owned'] : [])
+    if (stage !== 'checkpoint-before') {
+      const checkpoint = JSON.parse(fs.readFileSync(request.receiptPath))
+      assert.equal(checkpoint.status, 'running')
+      assert.equal(checkpoint.attempts[0].binding.actual.projectId, 'project-owned')
+    }
+    if (stage === 'final-write-failed') assert.equal(fs.readFileSync(request.receiptPath + '.failure', 'utf8'), 'FINAL_RENAME_FAILED')
+    updateLedger(request.ledgerPath, { type: 'settle', attemptId: foreign.attemptId, finishReason: 'stop' })
+    assert.deepEqual(reconcileDispatchedAttempts(request.ledgerPath, 'synthetic', receipt.attempts), { reconciled: 0, dangling: 0 })
+  })
+})
+
+test('bridge ownership: atomic checkpoint redacts secrets and failed replacement preserves the last receipt', () => {
+  withOwnershipBridge(({ request, directory }) => {
+    const file = path.join(directory, 'checkpoint.json'), receipt = { ...ownershipReceipt(request), error: 'private-key' }
+    writeProductionReceipt(file, receipt, ['private-key'])
+    const before = fs.readFileSync(file, 'utf8')
+    assert.equal(JSON.parse(before).error, '[REDACTED]')
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw new Error('RENAME_DENIED') })
+    try { assert.throws(() => writeProductionReceipt(file, { ...receipt, status: 'passed' }, ['private-key']), /RENAME_DENIED/) }
+    finally { rename.mockRestore() }
+    assert.equal(fs.readFileSync(file, 'utf8'), before)
+  })
+})
+
+test('bridge ownership: a checkpoint write failure prevents reserve and dispatch at the fixture boundary', () => {
+  withOwnershipBridge(({ request }) => {
+    const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
+    const start = fixture.indexOf('      receipt.attempts.push(requestReceipt)')
+    const end = fixture.indexOf('      const dispatchAt = performance.now()', start)
+    assert.ok(start >= 0 && end > start)
+    const receipt = ownershipReceipt(request), requestReceipt = receipt.attempts[0]
+    receipt.attempts = []; request.receiptPath = path.join(request.target.isolationRoot, 'missing', 'receipt.json')
+    assert.throws(() => vm.runInNewContext(fixture.slice(start, end), { request, receipt, requestReceipt, secrets: [],
+      writeProductionReceipt, attemptId: requestReceipt.attemptId, binding: requestReceipt.binding,
+      record: event => updateLedger(request.ledgerPath, event) }), /ENOENT/)
+    assert.equal(fs.existsSync(request.ledgerPath), false)
+  })
+})
+
+test.each(['settle-race', 'invalid-foreign-transition'])('bridge ownership: reconcile accepts only a proven terminal after %s', scenario => {
+  withOwnershipBridge(({ request, record }) => {
+    const [attempt] = ownershipReceipt(request).attempts; record(attempt)
+    const originalOpen = fs.openSync
+    let injected = false
+    const open = vi.spyOn(fs, 'openSync').mockImplementation((file, flags, ...args) => {
+      if (file === `${request.ledgerPath}.lock` && !injected) {
+        injected = true
+        if (scenario === 'settle-race') updateLedger(request.ledgerPath, { type: 'settle', attemptId: attempt.attemptId, finishReason: 'stop' })
+        else fs.appendFileSync(request.ledgerPath, JSON.stringify({ type: 'dispatch', attemptId: 'unreserved-foreign' }) + '\n')
+      }
+      return originalOpen(file, flags, ...args)
+    })
+    try {
+      if (scenario === 'settle-race') assert.deepEqual(reconcileDispatchedAttempts(request.ledgerPath, 'synthetic', [attempt]), { reconciled: 0, dangling: 1 })
+      else assert.throws(() => reconcileDispatchedAttempts(request.ledgerPath, 'synthetic', [attempt]), /INVALID_LEDGER_TRANSITION/)
+    } finally { open.mockRestore() }
+    assert.equal(fs.readFileSync(request.ledgerPath, 'utf8').includes('"unknown"'), false)
+  })
+})
+
+test.each(['wrong-project', 'wrong-epoch', 'wrong-operation', 'wrong-restoration', 'outside-project', 'wrong-binding', 'invalid-receipt', 'ledger-busy', 'log-failed'])('bridge ownership: %s stays visible', defect => {
+  withOwnershipBridge(({ request, record, mock }) => {
+    const receipt = ownershipReceipt(request), attempt = receipt.attempts[0]
+    let write
+    mock(child => {
+      record(attempt)
+      if (defect === 'wrong-project') receipt.physicalProject.projectId = 'foreign'
+      if (defect === 'wrong-epoch') receipt.projectEpoch = 'foreign'
+      if (defect === 'wrong-operation') attempt.binding.operation = 'foreign'
+      if (defect === 'wrong-restoration') receipt.restoration = { targetProjectId: 'foreign', targetProjectRoot: receipt.physicalProject.path }
+      if (defect === 'outside-project') receipt.physicalProject.path = request.target.roots.userData
+      if (defect === 'wrong-binding') attempt.binding.actual.runId = 'foreign'
+      writeProductionReceipt(child.receiptPath, receipt)
+      if (defect === 'invalid-receipt') fs.writeFileSync(child.receiptPath, '{')
+      if (defect === 'ledger-busy') fs.writeFileSync(`${request.ledgerPath}.lock`, '')
+      if (defect === 'log-failed') {
+        const originalWrite = fs.writeFileSync
+        write = vi.spyOn(fs, 'writeFileSync').mockImplementation((file, ...args) => {
+          if (String(file).endsWith('-stdout.log')) throw new Error('LOG_FAILED')
+          return originalWrite(file, ...args)
+        })
+      }
+      return { status: 1, stdout: '', stderr: '' }
+    })
+    try {
+      assert.throws(() => runProductionBridge(request), error => {
+        if (defect === 'ledger-busy' || defect === 'wrong-binding') {
+          assert.equal(error.message, `PRODUCTION_BRIDGE_FAILED_AND_${defect === 'ledger-busy' ? 'LEDGER_BUSY' : 'LEDGER_OWNERSHIP_MISMATCH'}`)
+          assert.equal(error.errors[0].message, 'PRODUCTION_BRIDGE_FAILED')
+          assert.match(error.errors[1].message, /LEDGER_BUSY|LEDGER_OWNERSHIP_MISMATCH/)
+        } else assert.match(error.message, defect === 'log-failed' ? /LOG_FAILED/ : /BRIDGE_RECEIPT_OWNERSHIP/)
+        return true
+      })
+    } finally { write?.mockRestore() }
+    const terminal = fs.readFileSync(request.ledgerPath, 'utf8').trim().split('\n').map(JSON.parse).at(-1)
+    assert.equal(terminal.type, defect === 'log-failed' ? 'unknown' : 'dispatch')
+    assert.equal(fs.existsSync(`${request.receiptPath}.lock`), false)
+  })
+})
+
+test('bridge ownership: same receipt path cannot overwrite an active bridge and the owner releases its lock', () => {
+  withOwnershipBridge(({ request, mock, original }) => {
+    mock((child, argv) => {
+      writeProductionReceipt(child.receiptPath, { status: 'prepared', attempts: [] })
+      fs.writeFileSync(argv.find(arg => arg.startsWith('--outputFile=')).slice(13), JSON.stringify({ numPassedTests: 1, numTotalTests: 1 }))
+      const files = [child.receiptPath, path.join(request.target.isolationRoot, 'prepare-request.json'),
+        path.join(request.target.isolationRoot, 'prepare-vitest.json'), argv[argv.indexOf('--config') + 1]]
+      const before = files.map(file => fs.readFileSync(file, 'utf8'))
+      assert.throws(() => runProductionBridge({ ...request, action: 'prepare', invocationId: 'competitor' }), /PRODUCTION_BRIDGE_BUSY/)
+      const competitor = original(process.execPath, [...argv.slice(0, 2), '--input-type=module', '--eval',
+        `import { runProductionBridge } from ${JSON.stringify(pathToFileURL(path.join(ROOT, 'scripts/quality-modernization-driver.mjs')).href)};
+        try { runProductionBridge(${JSON.stringify({ ...request, action: 'prepare', invocationId: 'other-process' })}); process.exitCode = 1 }
+        catch (error) { console.log(error.message) }`], { encoding: 'utf8', windowsHide: true, timeout: 15_000 })
+      assert.equal(competitor.status, 0, competitor.stderr)
+      assert.equal(competitor.stdout.trim(), 'PRODUCTION_BRIDGE_BUSY')
+      assert.deepEqual(files.map(file => fs.readFileSync(file, 'utf8')), before)
+      assert.equal(fs.existsSync(`${child.receiptPath}.lock`), true)
+      return { status: 0, stdout: '', stderr: '' }
+    })
+    assert.equal(runProductionBridge({ ...request, action: 'prepare' }).status, 'prepared')
+    assert.equal(fs.existsSync(path.join(request.target.isolationRoot, 'prepare-receipt.json.lock')), false)
+  })
+})
+
+test.each([false, true])('bridge ownership: execution record retains both safe failure codes, unknown business error=%s', unknown => {
+  withOwnershipBridge(({ request, directory, record, mock }) => {
+    const receipt = ownershipReceipt(request), source = fs.readFileSync(path.join(ROOT, 'scripts/quality-modernization-driver.mjs'), 'utf8')
+    const functions = ['saveExecutionRecord', 'executeRecordedStep'].map(name => {
+      const start = source.indexOf(`function ${name}(`)
+      return source.slice(start, source.indexOf('\n}', start) + 2)
+    }).join('\n')
+    let write
+    mock(child => {
+      record(receipt.attempts[0]); writeProductionReceipt(child.receiptPath, receipt)
+      fs.writeFileSync(`${request.ledgerPath}.lock`, '')
+      if (unknown) {
+        const originalWrite = fs.writeFileSync
+        write = vi.spyOn(fs, 'writeFileSync').mockImplementation((file, ...args) => {
+          if (String(file).endsWith('-stdout.log')) throw new Error('DO_NOT_PERSIST_PRIVATE_TEXT')
+          return originalWrite(file, ...args)
+        })
+      }
+      return { status: 1, stdout: '', stderr: '' }
+    })
+    const executionRecordPath = path.join(directory, 'execution.json')
+    try {
+      vm.runInNewContext(`${functions}\nexecuteRecordedStep(request, options, record, 'draft', bridge)`, {
+        fs, path, request, options: { executionRecordPath }, record: { results: {} }, bridge: runProductionBridge })
+    } finally { write?.mockRestore() }
+    const serialized = fs.readFileSync(executionRecordPath, 'utf8'), result = JSON.parse(serialized).results.draft
+    assert.equal(result.status, 'failed')
+    assert.equal(result.code, `${unknown ? 'PRODUCTION_BRIDGE_ERROR' : 'PRODUCTION_BRIDGE_FAILED'}_AND_LEDGER_BUSY`)
+    assert.equal(serialized.includes('DO_NOT_PERSIST_PRIVATE_TEXT'), false)
+  })
 })
 
 test('development manifest拒绝formal，协议别名不接受不存在的旧路径', () => {

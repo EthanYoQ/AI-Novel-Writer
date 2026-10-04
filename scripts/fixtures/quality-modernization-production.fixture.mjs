@@ -7,7 +7,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { test, vi } from 'vitest'
 import { updateLedger, CAMPAIGN_ID, ROOT, forwardReasoningFor, forwardQualificationWindowFor } from '../quality-modernization-run.mjs'
-import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, createOperationDispatchGate,
+import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, createOperationDispatchGate, writeProductionReceipt,
   createOutboundPreflightAssert, assertForwardReasoning, rejectOutsidePhysicalBoundary, assertNoOutboundPreflightFailures,
   fetchProviderResponse, measurePromptBytes, qualificationBridgeWindows, streamEventStructure,
   POST_UI_REVIEW_POLICY, reviewedDraftSelection, R3_NATIVE_REVISION_DIAGNOSTIC, r3ModelForOperation, modelConfigurationHash, readR3NativeSource, BOUNDED_REVISION_DIAGNOSTIC,
@@ -1341,9 +1341,6 @@ test('isolated production commands persist the selected phase operations', async
           planningRange: PLANNING_NATIVE_DIAGNOSTIC.operations.find(item => item.id === operationId)?.range ?? PLANNING_NATIVE_DIAGNOSTIC.range } : {}),
         ...(aiReviewRun ? { evaluationPolicyHash: sha(request.evaluationPolicy) } : {}),
         ...(actual ? { actual } : { baselineIpc: observedIpc }) }
-      record({ type: 'reserve', attemptId, binding })
-      record({ type: 'dispatch', attemptId })
-      const dispatchAt = performance.now()
       // 发送规模证据：只记字节数，绝不记提示词原文或凭据，好让两臂在不花真实调用的前提下可比。
       const registeredOptional = predecessorReadbacks.filter(record => record.marker).map(record => ({
         sourceId: `candidate:${record.draftId}`, revision: record.version, contentHash: record.materialContentHash,
@@ -1384,12 +1381,16 @@ test('isolated production commands persist the selected phase operations', async
         assert.equal(requestReceipt.requestMessages.sha256, requestReceipt.compiledPromptHash)
         assert.equal(requestReceipt.requestMessages.bytes, requestReceipt.composedPromptBytes)
       }
-      receipt.attempts.push(requestReceipt)
       if (separatedRun) {
         const outputPath = path.join(evidenceRoot, 'diagnostic-request-body.json')
         fs.writeFileSync(outputPath, options.body)
         requestReceipt.diagnosticRequest = { outputPath, sha256: sha(options.body), bytes: Buffer.byteLength(options.body, 'utf8') }
       }
+      receipt.attempts.push(requestReceipt)
+      writeProductionReceipt(request.receiptPath, receipt, secrets)
+      record({ type: 'reserve', attemptId, binding })
+      record({ type: 'dispatch', attemptId })
+      const dispatchAt = performance.now()
       const physicalOutputPath = path.join(evidenceRoot, `physical-output-${receipt.attempts.length}.txt`)
       if (structuredRecovery && operationKind === 'directory') {
         const promptPath = path.join(evidenceRoot, `structured-prompt-${receipt.attempts.length}.txt`)
@@ -2310,9 +2311,7 @@ test('isolated production commands persist the selected phase operations', async
       mode: attempt.binding.mode, attemptId: attempt.attemptId, composedPromptBytes: attempt.composedPromptBytes,
       requestBodyBytes: attempt.requestBodyBytes }))
     receipt.composedPromptBytes = receipt.attempts.reduce((sum, attempt) => sum + (attempt.composedPromptBytes ?? 0), 0)
-    const serialized = JSON.stringify(receipt, null, 2) + '\n'
-    const receiptBytes = secrets.reduce((text, secret) => text.split(secret).join('[REDACTED]'), serialized)
-    fs.writeFileSync(request.receiptPath, receiptBytes)
+    const receiptBytes = writeProductionReceipt(request.receiptPath, receipt, secrets)
     if (recoveryRows) projectRecoveryCandidateSupplement({ request, requestBytes, receipt: JSON.parse(receiptBytes), receiptBytes,
       ledgerBytes: fs.readFileSync(request.ledgerPath, 'utf8'), recoveryRows, targetUnits: chapter.targetUnits,
       isolationRoot: target.isolationRoot, localDispatchGateRejection })
