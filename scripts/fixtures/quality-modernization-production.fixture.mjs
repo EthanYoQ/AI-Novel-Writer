@@ -15,7 +15,7 @@ import { selectOwnerDispatch, targetUnitsGateEvidence, createAttemptSupervisor, 
   AI_REVIEW_FINAL_MANUSCRIPT_POLICY, CANDIDATE_ONLY_PROTOCOL_REVISION, aiReviewFinalManuscriptSelection, productionScenario, loadBaselineReviewContract,
   readBoundedRevisionSource, assertBoundedRevisionSource, boundedRevisionItems,
   scenarioAuthorSetting, scenarioAuthorSettingLines, draftCondenseFor, draftRecoveryFor, structuredRecoveryFor, structuredRequestRange, blueprintRecoveryDecoder,
-  assertSharedInputDiagnostic, validateAiReviewedManuscript, reviewLengthRecoveryFor } from '../quality-modernization-driver.mjs'
+  assertSharedInputDiagnostic, validateAiReviewedManuscript, validatePairedReceipt, reviewLengthRecoveryFor } from '../quality-modernization-driver.mjs'
 import { projectRecoveryCandidateSupplement, recordPersistedDraftObservation, safeReceiptDiagnostic } from '../quality-modernization-receipt.mjs'
 import { safeTransportError } from '../../src/shared/generation-contract'
 
@@ -1873,6 +1873,7 @@ test('isolated production commands persist the selected phase operations', async
             .all(cycle.cycleId) }
       }
     }
+    const verifiedEmptyDraftAttempts = new Set()
     if (candidate) {
       receipt.ownerTerminal = db.prepare('SELECT a.attempt_id,a.attempt_json,a.usage_receipt_json,g.artifact_json FROM generation_attempts a JOIN generation_artifacts g ON g.attempt_id=a.attempt_id ORDER BY a.rowid').all()
         .filter(row => receipt.attempts.some(attempt => attempt.binding.actual.attemptId === row.attempt_id))
@@ -1883,6 +1884,31 @@ test('isolated production commands persist the selected phase operations', async
             ...(aiReviewRun ? { artifactRevision: artifact.revision, ...(usage.reviewRevisionEffect ? { reviewRevisionEffect: usage.reviewRevisionEffect } : {}) } : {}),
             hasFormalEffect: Boolean(usage.directoryProgress || usage.draftCommit || usage.reviewRevisionEffect || usage.finalizationEffect) } })
       assert.equal(receipt.ownerTerminal.length, receipt.attempts.length, 'OWNER_ATTEMPT_COVERAGE_MISMATCH')
+      for (const operation of request.operations.filter(item => item.kind === 'draft' && draftRecovery?.policy.operationIds.includes(item.id))) {
+        const persisted = receipt.operations.find(item => item.operation === operation.id && item.kind === 'draft')
+        const attempts = receipt.attempts.filter(item => item.binding.operation === operation.id)
+        const primary = attempts.find(item => item.binding.actual.purpose === 'chapter-draft')
+        const terminal = receipt.ownerTerminal.find(item => item.attemptId === primary?.binding.actual.attemptId)
+        if (!persisted?.handle || primary?.finishReason !== 'stop' || primary.visibleTextHash !== sha('')
+          || terminal?.status !== 'settled' || terminal.finishReason !== 'stop' || !terminal.artifactId
+          || terminal.textHash !== sha('') || terminal.hasFormalEffect
+          || attempts.some(attempt => {
+            const owner = attempt.binding.actual
+            return attempt.attemptId !== `candidate:${owner.attemptId}` || owner.runId !== persisted.handle.runId
+              || owner.rootActionId !== persisted.handle.rootActionId || owner.projectId !== receipt.physicalProject.projectId
+              || owner.epoch !== receipt.projectEpoch
+          })) continue
+        const projected = { ...receipt, operations: [persisted], attempts,
+          ownerTerminal: receipt.ownerTerminal.filter(item => attempts.some(attempt => attempt.binding.actual.attemptId === item.attemptId)),
+          saved: receipt.reviewedDraft?.initial ?? receipt.saved,
+          physicalModelRequests: request.mode === 'real' ? attempts.length : 0,
+          syntheticDispatches: request.mode === 'synthetic' ? attempts.length : 0 }
+        if (validatePairedReceipt(projected, { mode: request.mode, arm: 'candidate', phase: request.phase,
+          scenario: { ...request, operations: [operation], evaluationPolicy: null,
+            attemptPolicy: { ...request.attemptPolicy, operationId: null } },
+          protocolRevision: request.protocolRevision, protocolHash: request.protocolHash }) === null)
+          verifiedEmptyDraftAttempts.add(primary.attemptId)
+      }
       // Validate the complete saved report before accepting an empty, superseded LENGTH artifact.
       if (receipt.operations.some(operation => reviewLengthRecoveryFor(receipt, operation.operation)))
         assert.equal(validateAiReviewedManuscript(receipt), null, 'REVIEW_RECOVERY_PROVENANCE_MISMATCH')
@@ -1896,7 +1922,7 @@ test('isolated production commands persist the selected phase operations', async
           || aiReviewRun && attempt.binding.actual.purpose === 'refine-from-review' || replacedReviewLength) assert.ok(['stop', 'length'].includes(terminal.finishReason))
         else assert.equal(terminal.finishReason, 'stop')
         assert.equal(terminal.purpose, attempt.binding.actual.purpose)
-        assert.ok(terminal.artifactId && (terminal.textHash !== sha('') || replacedReviewLength), 'OWNER_ARTIFACT_MISSING')
+        assert.ok(terminal.artifactId && (terminal.textHash !== sha('') || replacedReviewLength || verifiedEmptyDraftAttempts.has(attempt.attemptId)), 'OWNER_ARTIFACT_MISSING')
         const repairedDirectory = repairPolicy && attempt.binding.operation === repairPolicy.operationId
           && attempt.binding.actual.purpose === repairPolicy.primaryPurpose
           && receipt.attempts.some(other => other.binding.operation === repairPolicy.operationId
@@ -1930,7 +1956,7 @@ test('isolated production commands persist the selected phase operations', async
       const replacedReviewLength = candidate && Boolean(reviewLengthRecoveryFor(receipt, attempt.binding.operation)) && attempt.finishReason === 'length'
         && ['review-chapter', 'review-chapter-rebuild'].includes(attempt.binding.actual.purpose)
         && receipt.attempts.filter(other => other.binding.operation === attempt.binding.operation).at(-1) !== attempt
-      assert.ok(attempt.outputPath && (attempt.visibleTextHash !== sha('') || replacedReviewLength), 'PHYSICAL_OUTPUT_MISSING')
+      assert.ok(attempt.outputPath && (attempt.visibleTextHash !== sha('') || replacedReviewLength || verifiedEmptyDraftAttempts.has(attempt.attemptId)), 'PHYSICAL_OUTPUT_MISSING')
       assert.equal(sha(fs.readFileSync(attempt.outputPath, 'utf8')), attempt.visibleTextHash, 'PHYSICAL_OUTPUT_HASH_MISMATCH')
     }
     assertNoOutboundPreflightFailures(receipt)
