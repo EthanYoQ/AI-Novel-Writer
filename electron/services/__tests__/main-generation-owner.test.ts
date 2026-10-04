@@ -1,3 +1,4 @@
+import { planBlueprintGenerationCost } from '../../../src/services/workflows/blueprint-batch-policy'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
@@ -7,7 +8,7 @@ import { getDesktopMigrationRegistry, CURRENT_DESKTOP_SCHEMA_VERSION } from '../
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { migrateSchema } from '../../migrations/runner'
 import { createMainGenerationOwner, safeGenerationModelReceipt } from '../main-generation-owner'
-import { batchRootBudget, buildMainGenerationPlan, MAIN_GENERATION_POLICY, readMainGenerationPolicy } from '../main-generation-plan'
+import { batchRootBudget, buildMainGenerationPlan, MAIN_GENERATION_POLICY, newMainGenerationPolicy, readMainGenerationPolicy } from '../main-generation-plan'
 import { createModelExecutionLeaseReceipt, ModelExecutionLeaseRegistry } from '../model-execution-lease'
 import * as providerPresets from '../../../src/shared/provider-presets'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
@@ -33,6 +34,10 @@ import { BlueprintRepository, type BlueprintRangeCommitRequest } from '../../rep
 import { commitCharacterIdentities } from '../../repositories/character-roster-repository'
 import { proveCharacterProposal } from '../generation-character-proposal-proof'
 import { CHARACTER_DETAIL_DESCRIPTION_FIELDS, CHARACTER_STATE_TEXT_FIELDS } from '../../../src/shared/character-proposal-parser'
+import { PLOT_OUTLINE_CONTENT, PLOT_OUTLINE_PROTOCOL, joinPlotOutlineEntries, plotOutlinePurpose, plotOutlineRequestContract, planningTargetInstruction, renderPlotOutlineSynopsis, renderPlotOutlineRange, type PlotOutlineProgress } from '../../../src/shared/plot-outline-contract'
+import { synopsisForDraftChapter } from '../../../src/services/workflows/commands/generate-draft.command'
+import { parseTextBlueprintsStrict } from '../../../src/services/workflows/directory-workflow'
+import { ProjectCoreRepository, type ProjectCoreSynopsisCommitRequest } from '../../repositories/project-core-repository'
 vi.mock('../../database', () => ({ getProjectDb: vi.fn(), getCurrentProjectPath: vi.fn(() => null) }))
 const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
 const cleanups: (() => void)[] = []
@@ -77,7 +82,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silico
     selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['first_chapter_draft'], skillStages: [], output: 'visible-text' }
   return { root, model, get db() { return db }, owner: owners[0], begin,
     invalidate: () => { current = false },
-    reopen: () => { owners.at(-1)!.suspendForProjectClose(); db.close(); db = new Database(path.join(root, 'project.db')); epoch = 'epoch-2';
+    reopen: () => { owners.at(-1)!.suspendForProjectClose(); db.close(); db = new Database(path.join(root, 'project.db')); epoch = `epoch-${owners.length + 1}`;
       const owner = makeOwner(); owners.push(owner); return owner },
   }
 }
@@ -90,12 +95,515 @@ function syntheticStream(includeUsage = true) {
   vi.stubGlobal('fetch', fetch)
   return fetch
 }
+function outlineTask(progress: PlotOutlineProgress): GenerationTask {
+  if (progress.cursor.kind !== 'request') throw new Error('TEST_EXPECTED_OUTLINE_REQUEST')
+  const { chapterNumber, attempt } = progress.cursor
+  return { purpose: plotOutlinePurpose(chapterNumber, attempt), output: 'visible-text', reasoningStage: 'planning',
+    messages: [{ role: 'user', content: `原始作者事实\n\n${plotOutlineRequestContract(progress, chapterNumber, attempt)}` }] }
+}
+function outlineSelection(f: ReturnType<typeof fixture>, to: number, from = 1): BeginGenerationRequest {
+  return { operation: 'generate-plot-outline', uiActionNonce: 'outline', modelId: f.model.id, selectedDraftIds: [], selectedFinalizedDraftIds: [],
+    promptKeys: ['synopsis'], skillStages: ['planning'], output: 'visible-text',
+    authorInputs: [{ id: 'architecture:author-config', text: JSON.stringify({ totalChapters: to }) },
+      { id: 'architecture:planning-intent', text: JSON.stringify({ version: 'architecture-action-v1', priorSteps: [], synopsisRange: { from, to } }) }] }
+}
+function acceptOutline(owner: ReturnType<typeof fixture>['owner'], handle: Parameters<typeof owner.read>[0]) {
+  const view = owner.read(handle), progress = view.plotOutline!
+  if (progress.cursor.kind !== 'accept') throw new Error('TEST_EXPECTED_OUTLINE_ACCEPT')
+  const text = joinPlotOutlineEntries(progress.composition?.text ?? '', progress.cursor.text)
+  return owner.composeVisible(handle, [...(progress.composition?.artifactIds ?? []), ...progress.cursor.artifactIds], textHash(text), PLOT_OUTLINE_PROTOCOL)
+}
+const outlineEntry = (chapter: number) => `## 第${chapter}章：线索${chapter}\n林岚确认第${chapter}份证词，与同伴商议下一步。`
+
+function openAggregateRun(f: ReturnType<typeof fixture>, selection: BeginGenerationRequest) {
+  const inputs = selection.authorInputs!
+  const intent = JSON.parse(inputs.find(item => item.id === 'architecture:planning-intent')?.text ?? 'null') as ArchitecturePlanningIntent | null
+  const requestedRange = JSON.parse(inputs.find(item => item.id === 'directory:requested-range')?.text ?? 'null') as { mode: 'full'; startChapter: number; endChapter: number } | null
+  const small = { ...selection, operation: 'chapter-draft', authorInputs: [] }
+  const base = newMainGenerationPolicy(small, f.model)
+  const requests = Math.max(32, intent ? 2 * (intent.synopsisRange!.to - intent.synopsisRange!.from + 1) : planBlueprintGenerationCost(requestedRange!.endChapter - requestedRange!.startChapter + 1).recoveryCallBound)
+  const policy = { ...base, budget: { ...base.budget, maxPhysicalRequests: requests,
+    maxTokenLiability: base.budget.maxTokenLiability / base.budget.maxPhysicalRequests * requests, maxActiveElapsedMs: requests * 112500 },
+    planning: intent ? { kind: 'architecture' as const, intent, outlineProtocol: PLOT_OUTLINE_PROTOCOL, outlineContent: PLOT_OUTLINE_CONTENT }
+      : { kind: 'directory' as const, requestedRange: requestedRange! } }
+  const binding = buildGenerationSourceBinding({ db: f.db, projectStorageRoot: path.join(f.root, 'project'), globalDataRoot: path.join(f.root, 'global'),
+    readBuiltinPrompt: (key, language) => JSON.stringify(getBuiltinPromptTemplate(key, language)), readBuiltinSkill: readBuiltinWritingSkill },
+  { ...selection, projectId: 'project', epoch: 'epoch-1', modelReceipt: safeGenerationModelReceipt(createModelExecutionLeaseReceipt(f.model, { leaseId: 'aggregate', createdAt: 0, expiresAt: 1 })), policy, outputContract: selection.output }).binding
+  const saved = new GenerationRunRepository(() => f.db).open({ ...binding, operation: selection.operation, uiActionNonce: selection.uiActionNonce,
+    frozenInputHash: textHash(JSON.stringify([binding.fingerprint, binding.contextSnapshotId, selection.output])), budget: policy.budget })
+  return f.owner.read({ projectId: 'project', epoch: 'epoch-1', rootActionId: saved.rootActionId, runId: saved.runId })
+}
+async function frozenAggregateRun(f: ReturnType<typeof fixture>, selection: BeginGenerationRequest) {
+  const run = openAggregateRun(f, selection)
+  new GenerationRunRepository(() => f.db).pause(run.handle.rootActionId)
+  return f.owner.resume(run.handle)
+}
+
+describe('chapter outline main authority', () => {
+  it.each(['zero-attempt', 'unknown-attempt'] as const)('saves author recovery after %s and freezes the old run without changing its six binding fields or liabilities', async mode => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => ({ finishReason: null, usage: null }))
+    const f = fixture(dispatch), run = f.owner.begin(outlineSelection(f, 3))
+    const repository = new GenerationRunRepository(() => f.db), binding = structuredClone(repository.get(run.handle.runId).binding)
+    const originalTask = outlineTask(f.owner.read(run.handle).plotOutline!)
+    if (mode === 'zero-attempt') {
+      await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'capacity-refused',
+        task: { ...originalTask, messages: [{ role: 'user', content: `${'A'.repeat(40000)}\n${originalTask.messages[0].content}` }] } }))
+        .rejects.toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
+    } else await f.owner.execute({ handle: run.handle, invocationNonce: 'unknown', task: originalTask })
+    const context = f.owner.readContext(run.handle), originalRoot = f.db.prepare('SELECT * FROM generation_roots').all()
+    const originalAttempts = f.db.prepare('SELECT * FROM generation_attempts').all()
+    expect(originalAttempts).toHaveLength(mode === 'zero-attempt' ? 0 : 1)
+    const payload: ProjectCoreSynopsisCommitRequest = {
+      synopsis: renderPlotOutlineSynopsis(outlineEntry(1), 1, context.plotOutline!.sourceExpected), expected: context.plotOutline!.sourceExpected,
+      authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.plotOutlineRecovery!.leaseEpoch, operationId: `author-${mode}`, committedRange: { from: 1, to: 1 } },
+    }
+    const saved = f.db.transaction(() => f.owner.commitPlotOutlineAuthorEdit(payload)).immediate()
+    expect(saved).toMatchObject({ kind: 'author-edit', remainingRange: { from: 2, to: 3 }, idempotent: false })
+    expect(ProjectCoreRepository.get(f.db)!.synopsis).toBe(payload.synopsis)
+    expect(repository.get(run.handle.runId).binding).toEqual(binding)
+    const stored = JSON.parse(f.db.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(run.handle.runId) as string)
+    expect(Object.keys(stored).sort()).toEqual([...Object.keys(binding), '$runEffects'].sort())
+    expect(stored.$runEffects).toEqual({ plotOutlineAuthorEdit: saved })
+    expect(f.owner.read(run.handle).nonReplayable).toBe(true)
+    expect(f.owner.readContext(run.handle).plotOutlineRecovery).toMatchObject({ draft: payload.synopsis, saved, writeState: { kind: 'blocked', reason: 'author-saved' } })
+    await expect(f.owner.resume(run.handle)).rejects.toThrow('GENERATION_PLOT_OUTLINE_AUTHOR_SAVED')
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'late', task: originalTask })).rejects.toThrow('GENERATION_PLOT_OUTLINE_AUTHOR_SAVED')
+    expect(() => repository.resume(run.handle.runId, binding)).toThrow('GENERATION_PLOT_OUTLINE_AUTHOR_SAVED')
+    expect(() => repository.replaceUnstartedBinding(run.handle.runId, binding, binding)).toThrow('GENERATION_PLOT_OUTLINE_AUTHOR_SAVED')
+    expect(() => repository.reserve(run.handle.runId, 'late', textHash('late'), 100, 10)).toThrow('GENERATION_PLOT_OUTLINE_AUTHOR_SAVED')
+    expect(() => f.owner.assertSynopsisCommit(run.handle, payload.synopsis, payload.expected)).toThrow('GENERATION_PLOT_OUTLINE_AUTHOR_SAVED')
+    expect(() => f.owner.composeVisible(run.handle, [], textHash(''), PLOT_OUTLINE_PROTOCOL)).toThrow('GENERATION_PLOT_OUTLINE_AUTHOR_SAVED')
+    expect(() => f.db.transaction(() => f.owner.commitPlotOutlineAuthorEdit({ ...payload, synopsis: payload.synopsis.replace('证词', '新证词') })).immediate())
+      .toThrow('GENERATION_PLOT_OUTLINE_AUTHOR_RECEIPT_CONFLICT')
+    expect(f.db.prepare('SELECT * FROM generation_roots').all()).toEqual(originalRoot)
+    expect(f.db.prepare('SELECT * FROM generation_attempts').all()).toEqual(originalAttempts)
+    const reopened = f.reopen(), fresh = reopened.readContext(run.handle).plotOutlineRecovery!
+    expect(fresh.sourceHandle).toEqual(run.handle)
+    expect(fresh.leaseEpoch).not.toBe(run.handle.epoch)
+    const repeated = { ...payload, authorRecovery: { ...payload.authorRecovery!, leaseEpoch: fresh.leaseEpoch } }
+    expect(f.db.transaction(() => reopened.commitPlotOutlineAuthorEdit(repeated)).immediate()).toEqual({ ...saved, idempotent: true })
+    expect(f.db.prepare('SELECT * FROM generation_roots').all()).toEqual(originalRoot)
+    expect(f.db.prepare('SELECT * FROM generation_attempts').all()).toEqual(originalAttempts)
+    f.db.prepare("UPDATE project_core SET synopsis='第三方新正文' WHERE id='main'").run()
+    expect(() => f.db.transaction(() => reopened.commitPlotOutlineAuthorEdit(repeated)).immediate()).toThrow('GENERATION_SOURCE_CHANGED')
+    expect(dispatch).toHaveBeenCalledTimes(mode === 'zero-attempt' ? 0 : 1)
+  })
+
+  it('keeps author recovery read-only while a physical request is in flight and preserves changed sources', async () => {
+    let finish!: () => void
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => {
+      await new Promise<void>(resolve => { finish = resolve })
+      return { finishReason: null, usage: null }
+    })
+    const f = fixture(dispatch), run = f.owner.begin(outlineSelection(f, 1))
+    const work = f.owner.execute({ handle: run.handle, invocationNonce: 'pending', task: outlineTask(f.owner.read(run.handle).plotOutline!) })
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1))
+    const context = f.owner.readContext(run.handle)
+    const payload: ProjectCoreSynopsisCommitRequest = { synopsis: renderPlotOutlineSynopsis(outlineEntry(1), 1, context.plotOutline!.sourceExpected),
+      expected: context.plotOutline!.sourceExpected, authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.plotOutlineRecovery!.leaseEpoch,
+        operationId: 'author-pending', committedRange: { from: 1, to: 1 } } }
+    expect(context.plotOutlineRecovery!.writeState).toEqual({ kind: 'blocked', reason: 'in-flight' })
+    expect(() => f.db.transaction(() => f.owner.commitPlotOutlineAuthorEdit(payload)).immediate()).toThrow('GENERATION_PLOT_OUTLINE_AUTHOR_IN_FLIGHT')
+    finish(); await work
+    f.db.exec("UPDATE project_core SET premise='作者已修改前提' WHERE id='main'")
+    expect(f.owner.readContext(run.handle).plotOutlineRecovery!.writeState).toEqual({ kind: 'blocked', reason: 'source-changed' })
+    expect(() => f.db.transaction(() => f.owner.commitPlotOutlineAuthorEdit(payload)).immediate()).toThrow('GENERATION_SOURCE_CHANGED')
+    expect(ProjectCoreRepository.get(f.db)!.synopsis).toBe('')
+  })
+
+  it('rolls back the formal author CAS if the same-transaction receipt cannot persist', () => {
+    const f = fixture(), run = f.owner.begin(outlineSelection(f, 1)), context = f.owner.readContext(run.handle)
+    const payload: ProjectCoreSynopsisCommitRequest = { synopsis: renderPlotOutlineSynopsis(outlineEntry(1), 1, context.plotOutline!.sourceExpected),
+      expected: context.plotOutline!.sourceExpected, authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.plotOutlineRecovery!.leaseEpoch,
+        operationId: 'author-storage-failure', committedRange: { from: 1, to: 1 } } }
+    const record = vi.spyOn(GenerationRunRepository.prototype, 'recordPlotOutlineAuthorEdit').mockImplementationOnce(() => { throw new Error('TEST_RECEIPT_STORAGE_FAILED') })
+    try {
+      expect(() => f.db.transaction(() => f.owner.commitPlotOutlineAuthorEdit(payload)).immediate()).toThrow('TEST_RECEIPT_STORAGE_FAILED')
+      expect(ProjectCoreRepository.get(f.db)!.synopsis).toBe('')
+      expect(new GenerationRunRepository(() => f.db).readPlotOutlineAuthorEdit(run.handle.runId)).toBeNull()
+    } finally { record.mockRestore() }
+  })
+
+  it('stops after two actual LENGTH outcomes without another physical request', async () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => ({ finishReason: 'length', usage: null }))
+    const f = fixture(dispatch), run = f.owner.begin(outlineSelection(f, 1))
+    for (const invocationNonce of ['normal', 'compact']) {
+      await f.owner.execute({ handle: run.handle, invocationNonce, task: outlineTask(f.owner.read(run.handle).plotOutline!) })
+    }
+    expect(f.owner.read(run.handle).plotOutline!.cursor).toEqual({ kind: 'stopped', chapterNumber: 1, reason: 'attempts-exhausted' })
+    expect(dispatch).toHaveBeenCalledTimes(2)
+    expect(new GenerationRunRepository(() => f.db).budget(run.handle.rootActionId).attempts).toHaveLength(2)
+  })
+
+  it.each(['normal', 'compact'] as const)('accepts a complete long %s STOP without losing its final fact', async accepted => {
+    const text = `## 第1章：完整长章\n${'原事实。'.repeat(400)}尾部硬事实：归还钥匙。`
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      if (accepted === 'compact' && dispatch.mock.calls.length === 1) return { finishReason: 'length', usage: null }
+      options.onVisible({ kind: 'delta', text })
+      return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch), run = f.owner.begin(outlineSelection(f, 1))
+    for (let index = 0; index < (accepted === 'normal' ? 1 : 2); index++)
+      await f.owner.execute({ handle: run.handle, invocationNonce: `long-${index}`, task: outlineTask(f.owner.read(run.handle).plotOutline!) })
+    expect(f.owner.read(run.handle).plotOutline!.cursor).toMatchObject({ kind: 'accept', text })
+    acceptOutline(f.owner, run.handle)
+    expect(f.owner.readVisibleComposition(run.handle)!.text).toBe(text)
+    expect(synopsisForDraftChapter(renderPlotOutlineSynopsis(text, 1, f.owner.read(run.handle).plotOutline!.sourceExpected), 1)).toContain('尾部硬事实：归还钥匙。')
+    expect(dispatch).toHaveBeenCalledTimes(accepted === 'normal' ? 1 : 2)
+  })
+
+  it('reopens after normal LENGTH, accepts one compact chapter and preserves its original target', async () => {
+    const requests: GenerationTask[] = []
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
+      requests.push((request as { task: GenerationTask }).task)
+      options.onVisible({ kind: 'delta', text: outlineEntry(1) })
+      return { finishReason: requests.length === 1 ? 'length' : 'stop', usage: null }
+    })
+    const f = fixture(dispatch), selection = outlineSelection(f, 1)
+    selection.authorInputs!.push({ id: 'planning:target-units', text: '777' })
+    const run = f.owner.begin(selection)
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'normal', task: outlineTask(run.plotOutline!) })
+    const owner = f.reopen(), resumed = await owner.resume(run.handle)
+    await owner.execute({ handle: resumed.handle, invocationNonce: 'compact', task: outlineTask(resumed.plotOutline!) })
+    acceptOutline(owner, resumed.handle)
+    expect(owner.readVisibleComposition(resumed.handle)!.text).toBe(outlineEntry(1))
+    expect(owner.readContext(resumed.handle).plotOutline!.targetUnits).toBe(777)
+    expect(requests.every(item => item.messages.some(message => message.role === 'system' && message.content.includes('777')))).toBe(true)
+    expect(requests.map(item => item.purpose)).toEqual(['plot-outline:chapter:1:normal', 'plot-outline:chapter:1:compact'])
+  })
+
+  it.each(['normal', 'compact'] as const)('keeps an unknown %s candidate and does not automatically resend it', async unknownKind => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
+      const kind = (request as { task: GenerationTask }).task.purpose.split(':').at(-1)
+      options.onVisible({ kind: 'delta', text: outlineEntry(1) })
+      return { finishReason: kind === unknownKind ? null : 'length', usage: null }
+    })
+    const f = fixture(dispatch), run = f.owner.begin(outlineSelection(f, 1))
+    let last = outlineTask(run.plotOutline!)
+    for (let index = 0; index < (unknownKind === 'normal' ? 1 : 2); index++) {
+      last = outlineTask(f.owner.read(run.handle).plotOutline!)
+      await f.owner.execute({ handle: run.handle, invocationNonce: last.purpose, task: last })
+    }
+    const before = new GenerationRunRepository(() => f.db).budget(run.handle.rootActionId)
+    const owner = f.reopen(), resumed = await owner.resume(run.handle)
+    expect(resumed.plotOutline!.cursor).toEqual({ kind: 'stopped', chapterNumber: 1, reason: 'unknown-completion' })
+    await expect(owner.execute({ handle: resumed.handle, invocationNonce: 'never-replay', task: last })).rejects.toThrow('GENERATION_DISPATCH_PLOT_OUTLINE_CURSOR')
+    expect(new GenerationRunRepository(() => f.db).budget(run.handle.rootActionId).attempts).toEqual(before.attempts)
+    expect(owner.readContext(resumed.handle).plotOutlineRecovery!.draft).toContain(outlineEntry(1))
+    expect(dispatch).toHaveBeenCalledTimes(before.attempts.length)
+  })
+
+  it.each(['text', 'revision', 'run'] as const)('rejects changed whole-chapter artifact %s before composition', async changed => {
+    const f = fixture(async (_request, options) => { options.onVisible({ kind: 'delta', text: outlineEntry(1) }); return { finishReason: 'stop', usage: null } })
+    const run = f.owner.begin(outlineSelection(f, 1))
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'normal', task: outlineTask(run.plotOutline!) })
+    const cursor = f.owner.read(run.handle).plotOutline!.cursor
+    if (cursor.kind !== 'accept') throw new Error('TEST_EXPECTED_OUTLINE_ACCEPT')
+    const ids = cursor.artifactIds
+    if (changed === 'text') f.db.prepare("UPDATE generation_artifacts SET artifact_json=json_set(artifact_json,'$.text','changed') WHERE artifact_id=?").run(ids[0])
+    if (changed === 'revision') f.db.prepare('UPDATE generation_artifacts SET revision=revision+1 WHERE artifact_id=?').run(ids[0])
+    if (changed === 'run') { const foreign = f.owner.begin({ ...f.begin, uiActionNonce: 'foreign' }); f.db.prepare('UPDATE generation_artifacts SET run_id=? WHERE artifact_id=?').run(foreign.handle.runId, ids[0]) }
+    expect(() => f.owner.composeVisible(run.handle, ids, textHash(cursor.text), PLOT_OUTLINE_PROTOCOL)).toThrow(/ARTIFACT_INTEGRITY_FAILED|GENERATION_COMPOSITION_SOURCE_INVALID|GENERATION_PLOT_OUTLINE_ENTRY_INVALID/u)
+  })
+
+  it.each([10, 50, 200])('accepts exactly %i chapters through persisted artifacts across reopen including the old 32 artifact boundary', async chapters => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
+      const purpose = (request as { task: GenerationTask }).task.purpose
+      const chapter = Number(purpose.split(':')[2])
+      options.onVisible({ kind: 'delta', text: outlineEntry(chapter) })
+      return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch)
+    f.db.prepare('UPDATE project_core SET total_chapters=?').run(chapters)
+    let owner = f.owner, run = await frozenAggregateRun(f, outlineSelection(f, chapters))
+    const rootId = run.handle.rootActionId
+    for (let chapter = 1; chapter <= chapters; chapter++) {
+      const request = { handle: run.handle, invocationNonce: `normal-${chapter}`, task: outlineTask(owner.read(run.handle).plotOutline!) }
+      const first = await owner.execute(request)
+      expect(first.run.plotOutline!.cursor).toMatchObject({ kind: 'accept', chapterNumber: chapter })
+      if (chapter === Math.min(chapters, 33)) {
+        owner = f.reopen(); run = await owner.resume(run.handle)
+        expect(owner.read(run.handle).plotOutline!.cursor).toMatchObject({ kind: 'accept', chapterNumber: chapter })
+        expect((await owner.execute({ ...request, handle: run.handle })).outcome.content).toBe(outlineEntry(chapter))
+      }
+      acceptOutline(owner, run.handle)
+    }
+    owner = f.reopen(); run = await owner.resume(run.handle)
+    const progress = owner.readContext(run.handle).plotOutline!
+    expect(progress.cursor).toEqual({ kind: 'complete' })
+    expect(progress.composition!.artifactIds).toHaveLength(chapters)
+    expect(progress.composition!.text).toBe(Array.from({ length: chapters }, (_, index) => outlineEntry(index + 1)).join('\n\n'))
+    const formal = renderPlotOutlineSynopsis(progress.composition!.text, chapters, progress.sourceExpected)
+    for (let chapter = 1; chapter <= chapters; chapter++) {
+      const selected = synopsisForDraftChapter(formal, chapter)
+      expect(selected).toContain(outlineEntry(chapter))
+      expect(selected.match(/^## 第\d+章/gmu)).toHaveLength(1)
+    }
+    expect(run.handle.rootActionId).toBe(rootId)
+    expect(dispatch).toHaveBeenCalledTimes(chapters)
+    const budget = new GenerationRunRepository(() => f.db).budget(rootId)
+    expect(budget.attempts.every(attempt => attempt.status === 'unknown' && attempt.reservedTokens > 0)).toBe(true)
+    expect(run.ledger!.tokenLiability).toBe(budget.attempts.reduce((sum, attempt) => sum + attempt.reservedTokens, 0))
+    await expect(owner.execute({ handle: run.handle, invocationNonce: 'extra', task: { ...task, purpose: plotOutlinePurpose(chapters + 1, 'normal') } })).rejects.toThrow('GENERATION_DISPATCH_PLOT_OUTLINE_CURSOR')
+  }, 120_000)
+
+  it.each([
+    { name: 'empty LENGTH', text: '', finishReason: 'length' },
+    { name: 'long STOP', text: `第1章：题\n${'字'.repeat(1201)}`, finishReason: 'stop' },
+    { name: 'mixed chapters', text: '第1章：题\n第一章正文。\nChapter 2: Extra\n额外正文。', finishReason: 'stop' },
+    { name: 'chapter group', text: '第1–2章：组\n合并正文。', finishReason: 'stop' },
+  ])('allows exactly one compact after $name and preserves the failed candidate', async failure => {
+    let count = 0
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      const first = ++count === 1
+      if (first ? failure.text : true) options.onVisible({ kind: 'delta', text: first ? failure.text : outlineEntry(1) })
+      return { finishReason: first ? failure.finishReason : 'stop', usage: null }
+    })
+    const f = fixture(dispatch), run = f.owner.begin(outlineSelection(f, 1))
+    const normal = outlineTask(run.plotOutline!)
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'normal', task: normal })
+    const failed = f.owner.read(run.handle)
+    const rowsBefore = f.db.prepare('SELECT * FROM generation_attempts ORDER BY rowid').all()
+    expect(failed.plotOutline!.cursor).toEqual({ kind: 'request', chapterNumber: 1, attempt: 'compact' })
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'new-normal', task: normal })).rejects.toThrow('GENERATION_DISPATCH_PLOT_OUTLINE_CURSOR')
+    const owner = f.reopen(), resumed = await owner.resume(run.handle)
+    const compact = outlineTask(resumed.plotOutline!)
+    const result = await owner.execute({ handle: resumed.handle, invocationNonce: 'compact', task: compact })
+    expect(result.run.plotOutline!.cursor.kind).toBe('accept')
+    expect(compact.messages[0].content).not.toContain(failure.text || 'candidate-must-not-be-included')
+    acceptOutline(owner, resumed.handle)
+    expect(owner.readVisibleComposition(resumed.handle)?.text).toBe(outlineEntry(1))
+    expect(f.db.prepare('SELECT * FROM generation_attempts ORDER BY rowid LIMIT 1').all()).toEqual(rowsBefore)
+    expect(new GenerationRunRepository(() => f.db).budget(run.handle.rootActionId).attempts).toHaveLength(2)
+    await expect(owner.execute({ handle: resumed.handle, invocationNonce: 'another-compact', task: compact })).rejects.toThrow('GENERATION_DISPATCH_PLOT_OUTLINE_CURSOR')
+    expect(dispatch).toHaveBeenCalledTimes(2)
+  })
+
+  it('refuses concurrent nonces and preserves a dispatched compact as unknown after actual close/reopen', async () => {
+    let started!: () => void
+    const dispatched = new Promise<void>(resolve => { started = resolve })
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      if (dispatch.mock.calls.length === 1) return { finishReason: 'length', usage: null }
+      options.onVisible({ kind: 'delta', text: '第1章：尚未确定\n片段' })
+      started()
+      return new Promise(() => {})
+    })
+    const f = fixture(dispatch), run = f.owner.begin(outlineSelection(f, 1))
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'normal', task: outlineTask(run.plotOutline!) })
+    const compact = outlineTask(f.owner.read(run.handle).plotOutline!)
+    const request = { handle: run.handle, invocationNonce: 'compact', task: compact }
+    const pending = f.owner.execute(request).catch(error => error)
+    const sameNonce = f.owner.execute(request).catch(error => error)
+    await dispatched
+    await expect(f.owner.execute({ ...request, invocationNonce: 'concurrent-compact' })).rejects.toThrow('GENERATION_DISPATCH_PLOT_OUTLINE_CURSOR')
+    const owner = f.reopen()
+    await Promise.all([pending, sameNonce])
+    const restored = await owner.resume(run.handle)
+    expect(restored.plotOutline!.cursor).toEqual({ kind: 'stopped', chapterNumber: 1, reason: 'unknown-completion' })
+    expect(restored.ledger!.physicalRequests).toBe(2)
+    expect(restored.ledger!.tokenLiability).toBeGreaterThan(0)
+    await expect(owner.execute({ ...request, handle: restored.handle, invocationNonce: 'post-restart' })).rejects.toThrow('GENERATION_DISPATCH_PLOT_OUTLINE_CURSOR')
+    expect(dispatch).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects wrong chapter, prefix substitution, forged origin and a second child before dispatch', async () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>()
+    const f = fixture(dispatch), selection = outlineSelection(f, 2), run = f.owner.begin(selection)
+    const correct = outlineTask(run.plotOutline!)
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'wrong-chapter', task: { ...correct, purpose: plotOutlinePurpose(2, 'normal') } })).rejects.toThrow('GENERATION_DISPATCH_PLOT_OUTLINE_CURSOR')
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'wrong-prefix', task: { ...correct, messages: [{ role: 'user', content: '替换前缀' }] } })).rejects.toThrow('GENERATION_DISPATCH_PLOT_OUTLINE_CURSOR')
+    expect(() => f.owner.begin({ ...selection, uiActionNonce: 'second-child', parentRootActionId: run.handle.rootActionId })).toThrow('GENERATION_PLOT_OUTLINE_RECOVERY_REQUIRED')
+    expect(() => f.owner.begin({ ...selection, uiActionNonce: 'forged', plotOutlineSource: { version: 1, core: {} } } as BeginGenerationRequest)).toThrow()
+    expect(f.db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(1)
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+})
+
+describe('explicit planning recovery with real SQLite', () => {
+  const blueprint = (chapterNumber: number, keyEvents = '作者补齐了完整行动、冲突与结果。') => ({ chapterNumber, title: `完整第${chapterNumber}章`, role: '转折',
+    purpose: '确认线索', keyEvents, characters: ['林岚'], relationshipHints: [], newCharacterCandidates: [], suspenseHook: '下一步核验证据。', userGuidance: '', notes: '', notesUpdatedAt: '' })
+  const directorySelection = (f: ReturnType<typeof fixture>, from = 1, to = 3): BeginGenerationRequest => ({
+    operation: 'chapter-blueprint-directory', uiActionNonce: 'blueprint-action', modelId: f.model.id,
+    selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1, 2, 3],
+    promptKeys: ['chapter_blueprint_chunk'], skillStages: ['planning'], output: 'structured-data', authorInputs: [
+      { id: 'planning:target-units', text: '700' }, { id: 'directory:pacing-guidance', text: '先核实证据。' },
+      { id: 'directory:author-config', text: '{"totalChapters":3}' },
+      { id: 'directory:requested-range', text: JSON.stringify({ mode: from === 1 ? 'full' : 'append', startChapter: from, endChapter: to }) },
+    ],
+  })
+  it('continues a zero-prefix double LENGTH only as one explicit new action and permanently closes old writes', async () => {
+    const raw = '## 第1章：未完成\n候选原文还未写完'
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => {
+      options.onVisible({ kind: 'delta', text: raw }); return { finishReason: 'length', usage: null }
+    })
+    const f = fixture(dispatch), run = f.owner.begin(outlineSelection(f, 3))
+    for (const nonce of ['normal', 'compact']) await f.owner.execute({ handle: run.handle, invocationNonce: nonce, task: outlineTask(f.owner.read(run.handle).plotOutline!) })
+    const attempts = f.db.prepare('SELECT * FROM generation_attempts').all()
+    expect(f.owner.readContext(run.handle)).toMatchObject({ plotOutlineRecovery: { draft: expect.stringContaining(raw) }, planningContinuation: { state: 'ready', remainingRange: { from: 1, to: 3 }, targetUnits: 600 } })
+    const nextInput = { ...outlineSelection(f, 3), uiActionNonce: 'explicit-next' }
+    const next = f.owner.restart(run.handle, nextInput)
+    expect(next.handle.rootActionId).not.toBe(run.handle.rootActionId)
+    expect(f.owner.restart(run.handle, { ...nextInput, uiActionNonce: 'same-confirmation-again' }).handle).toEqual(next.handle)
+    expect(f.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(2)
+    expect(f.db.prepare('SELECT * FROM generation_attempts').all()).toEqual(attempts)
+    expect(ProjectCoreRepository.get(f.db)!.synopsis).toBe('')
+    expect(dispatch).toHaveBeenCalledTimes(2)
+    await expect(f.owner.resume(run.handle)).rejects.toThrow('GENERATION_PLOT_OUTLINE_AUTHOR_SAVED')
+    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'late', task: { ...task, purpose: 'plot-outline:chapter:1:normal' } })).rejects.toThrow('GENERATION_PLOT_OUTLINE_AUTHOR_SAVED')
+    const repository = new GenerationRunRepository(() => f.db), binding = repository.get(run.handle.runId).binding
+    expect(() => repository.replaceUnstartedBinding(run.handle.runId, binding, binding)).toThrow('GENERATION_PLOT_OUTLINE_AUTHOR_SAVED')
+    expect(() => repository.reserve(run.handle.runId, 'late', textHash('late'), 100, 10)).toThrow('GENERATION_PLOT_OUTLINE_AUTHOR_SAVED')
+    const owner = f.reopen()
+    expect(owner.readContext(run.handle).planningContinuation).toMatchObject({ state: 'continued', nextHandle: next.handle })
+    expect(owner.restart(run.handle, nextInput).handle).toEqual(next.handle)
+  })
+  it('saves the accepted outline prefix without cost and authorizes only the remaining chapters', async () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
+      const chapter = Number((request as { task: GenerationTask }).task.purpose.split(':')[2])
+      options.onVisible({ kind: 'delta', text: outlineEntry(chapter) }); return { finishReason: chapter === 1 ? 'stop' : 'length', usage: null }
+    })
+    const f = fixture(dispatch), run = f.owner.begin(outlineSelection(f, 3))
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'one', task: outlineTask(run.plotOutline!) }); acceptOutline(f.owner, run.handle)
+    for (const nonce of ['normal-two', 'compact-two']) await f.owner.execute({ handle: run.handle, invocationNonce: nonce, task: outlineTask(f.owner.read(run.handle).plotOutline!) })
+    expect(f.owner.readContext(run.handle).planningContinuation?.state).toBe('save-prefix')
+    expect(() => f.owner.restart(run.handle, { ...outlineSelection(f, 3), uiActionNonce: 'not-yet' })).toThrow('GENERATION_PLANNING_CONTINUATION_SAVE_PREFIX')
+    const context = f.owner.readContext(run.handle), outline = context.plotOutline!
+    const payload: ProjectCoreSynopsisCommitRequest = { synopsis: renderPlotOutlineRange(outlineEntry(1), { from: 1, to: 1 }, outline.sourceExpected), expected: outline.sourceExpected,
+      authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.plotOutlineRecovery!.leaseEpoch, operationId: 'author-prefix', committedRange: { from: 1, to: 1 } } }
+    f.db.transaction(() => f.owner.commitPlotOutlineAuthorEdit(payload)).immediate()
+    const remaining = { ...outlineSelection(f, 3, 2), uiActionNonce: 'only-missing' }
+    expect(() => f.owner.restart(run.handle, { ...remaining, ...outlineSelection(f, 3), uiActionNonce: 'wrong-range' })).toThrow('GENERATION_PLANNING_CONTINUATION_RANGE_CHANGED')
+    const next = f.owner.restart(run.handle, remaining)
+    expect(next.plotOutline?.range).toEqual({ from: 2, to: 3 })
+    expect(next.plotOutline?.confirmedPrefix).toBe(outlineEntry(1))
+    expect(dispatch).toHaveBeenCalledTimes(3)
+  })
+  it('rejects explicit continuation while in flight or after a source change without creating a replacement', async () => {
+    let release!: () => void
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => {
+      await new Promise<void>(resolve => { release = resolve }); return { finishReason: null, usage: null }
+    })
+    const f = fixture(dispatch), run = f.owner.begin(outlineSelection(f, 1))
+    const work = f.owner.execute({ handle: run.handle, invocationNonce: 'pending', task: outlineTask(run.plotOutline!) })
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1))
+    const next = { ...outlineSelection(f, 1), uiActionNonce: 'explicit-next' }
+    expect(() => f.owner.restart(run.handle, next)).toThrow('GENERATION_PLANNING_CONTINUATION_IN_FLIGHT')
+    release(); await work
+    f.db.prepare("UPDATE project_core SET premise='作者新前提'").run()
+    expect(() => f.owner.restart(run.handle, next)).toThrow('GENERATION_PLANNING_CONTINUATION_SOURCE_CHANGED')
+    expect(f.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(1)
+  })
+  it('preserves the source tail byte for byte when an author repairs an earlier outline chapter', () => {
+    const f = fixture(), original = '# 情节大纲\n\n## 第1章：原一\n原文一。\n\n## 第2章：原二\n原文二。\n\n## 第3章：保留\n尾部事实与空格。  \n'
+    f.db.prepare('UPDATE project_core SET synopsis=?,total_chapters=3').run(original)
+    const run = f.owner.begin(outlineSelection(f, 2)), context = f.owner.readContext(run.handle), range = { from: 1, to: 1 }
+    const synopsis = renderPlotOutlineRange(outlineEntry(1), range, context.plotOutline!.sourceExpected)
+    const payload: ProjectCoreSynopsisCommitRequest = { synopsis, expected: context.plotOutline!.sourceExpected,
+      authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.plotOutlineRecovery!.leaseEpoch, operationId: 'replace-prefix', committedRange: range } }
+    f.db.transaction(() => f.owner.commitPlotOutlineAuthorEdit(payload)).immediate()
+    expect(ProjectCoreRepository.get(f.db)!.synopsis.slice(synopsis.indexOf('## 第2章'))).toBe(original.slice(original.indexOf('## 第2章')))
+  })
+  it('allows a corrected zero-prefix blueprint candidate to be saved at no model cost, preserves other rows, and continues missing chapters', async () => {
+    const raw = '{"blueprints":[{"chapterNumber":1,"title":"未完'
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => { options.onVisible({ kind: 'delta', text: raw }); return { finishReason: 'length', usage: null } })
+    const f = fixture(dispatch), run = f.owner.begin(directorySelection(f))
+    BlueprintRepository.upsert(blueprint(8, '范围外作者原文。'))
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'failed', task: { ...task, purpose: 'chapter-blueprint-directory', output: 'structured-data' } })
+    const context = f.owner.readContext(run.handle)
+    expect(context.blueprintRecovery).toMatchObject({ draft: raw, editRange: { from: 1, to: 3 }, writeState: 'ready' })
+    const before = f.db.prepare('SELECT * FROM generation_attempts').all(), outside = BlueprintRepository.getAll().find(item => item.chapterNumber === 8)
+    const characters = Array.from({ length: 13 }, (_, index) => `角色${index}`)
+    const repaired = { ...blueprint(1), title: '标题'.repeat(100), role: '角色作用'.repeat(100), purpose: '章节目的'.repeat(200),
+      keyEvents: '完整叙述。'.repeat(280) + '尾部必须保留。', suspenseHook: '悬念'.repeat(200), characters,
+      relationshipHints: characters.slice(1, 10).map(to => ({ from: characters[0], to, relation: '同行' })),
+      newCharacterCandidates: characters.map(name => ({ name, role: 'supporting' as const })),
+      userGuidance: '  作者指导保留原字节。\r\n', notes: '<think>作者备注中的原文标签</think>\n第二行。', notesUpdatedAt: '2026-10-04T13:00:00.000Z' }
+    const request: BlueprintRangeCommitRequest = { mode: 'replace-range', operationId: 'author-blueprint', startChapter: 1, endChapter: 1,
+      blueprints: parseTextBlueprintsStrict(JSON.stringify([repaired]), 1, 1, 'author'), authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.blueprintRecovery!.leaseEpoch } }
+    const save = () => f.db.transaction(() => f.owner.commitBlueprintAuthorEdit(request)).immediate()
+    const saved = save()
+    expect(saved.authorEdit).toMatchObject({ committedRange: { from: 1, to: 1 }, remainingRange: { from: 2, to: 3 } })
+    expect(save().idempotent).toBe(true)
+    const { relationshipHints, newCharacterCandidates, ...rowFields } = repaired
+    expect(BlueprintRepository.getAll().find(item => item.chapterNumber === 1)).toMatchObject(rowFields)
+    expect(BlueprintRepository.getCommittedRangeOperation(request.operationId)?.snapshot[0]).toMatchObject(repaired)
+    expect(BlueprintRepository.getCharacterSyncOperation(saved.characterSyncOperation.operationId)?.characterSyncInput[0]).toMatchObject({ relationshipHints, newCharacterCandidates })
+    expect(BlueprintRepository.getAll().find(item => item.chapterNumber === 8)).toEqual(outside)
+    expect(f.db.prepare('SELECT * FROM generation_attempts').all()).toEqual(before)
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    await expect(f.owner.resume(run.handle)).rejects.toThrow('GENERATION_PLOT_OUTLINE_AUTHOR_SAVED')
+    const replacement = f.owner.restart(run.handle, { ...directorySelection(f, 2), uiActionNonce: 'blueprint-missing' })
+    expect(replacement.handle.rootActionId).not.toBe(run.handle.rootActionId)
+    expect(f.owner.readContext(replacement.handle).planningContinuation).toMatchObject({ remainingRange: { from: 2, to: 3 }, targetUnits: 700 })
+    expect(f.owner.readContext(run.handle).blueprintRecovery!.draft).toBe(raw)
+  })
+  it.each(['directory-progress', 'author-saved'] as const)('rejects blueprint recovery writes when rebuilding sources fails after %s', async prefixKind => {
+    const raw = '{"blueprints":[{"chapterNumber":2,"title":"未完'
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>()
+      .mockImplementationOnce(async (_request, options) => { options.onVisible({ kind: 'delta', text: JSON.stringify([blueprint(1)]) }); return { finishReason: 'stop', usage: null } })
+      .mockImplementationOnce(async (_request, options) => { options.onVisible({ kind: 'delta', text: raw }); return { finishReason: 'length', usage: null } })
+    const f = fixture(dispatch), run = f.owner.begin(directorySelection(f))
+    const execute = (invocationNonce: string) => f.owner.execute({ handle: run.handle, invocationNonce,
+      task: { ...task, purpose: 'chapter-blueprint-directory', output: 'structured-data' } })
+    const prefix: BlueprintRangeCommitRequest = { mode: 'replace-range', operationId: 'valid-prefix', startChapter: 1, endChapter: 1,
+      blueprints: [blueprint(1)] }
+    await execute('complete-prefix')
+    await execute('incomplete-next')
+    if (prefixKind === 'directory-progress') f.db.transaction(() => {
+      const range = { startChapter: 1, endChapter: 3 }
+      const receipt = BlueprintRepository.commitRange(prefix, () => f.owner.assertSourcesCurrent(run.handle, range))
+      f.owner.recordDirectoryCommit(run.handle, range, receipt)
+    }).immediate()
+    const authorRecovery = { sourceHandle: run.handle, leaseEpoch: f.owner.readContext(run.handle).blueprintRecovery!.leaseEpoch }
+    const savedPrefix = { ...prefix, authorRecovery }
+    if (prefixKind === 'author-saved') f.db.transaction(() => f.owner.commitBlueprintAuthorEdit(savedPrefix)).immediate()
+    expect(f.owner.readContext(run.handle).planningContinuation).toMatchObject({ state: 'ready', remainingRange: { from: 2, to: 3 } })
+    expect(BlueprintRepository.getAll().find(item => item.chapterNumber === 1)?.keyEvents).toBe(blueprint(1).keyEvents)
+    const request = prefixKind === 'author-saved' ? savedPrefix : { ...prefix, authorRecovery, operationId: 'repair-next',
+      startChapter: 2, endChapter: 2, blueprints: [blueprint(2)] }
+    const save = () => f.db.transaction(() => f.owner.commitBlueprintAuthorEdit(request)).immediate()
+    const rows = BlueprintRepository.getAll(), operations = f.db.prepare('SELECT * FROM blueprint_commit_operations').all()
+    const attempts = f.db.prepare('SELECT * FROM generation_attempts').all(), runs = f.db.prepare('SELECT * FROM generation_runs').all()
+    const writingSkillsPath = path.join(f.root, 'project', 'writing-skills.json')
+    fs.writeFileSync(writingSkillsPath, JSON.stringify({ version: 2, bindings: {} }))
+    const context = f.owner.readContext(run.handle)
+    expect.soft(context.planningContinuation).toMatchObject({ state: 'source-changed', remainingRange: { from: 2, to: 3 } })
+    expect.soft(context.blueprintRecovery).toMatchObject({ draft: raw, editRange: { from: 2, to: 3 },
+      writeState: prefixKind === 'author-saved' ? 'author-saved' : 'source-changed' })
+    expect.soft(() => f.owner.restart(run.handle, { ...directorySelection(f, 2), uiActionNonce: 'blocked-next' }))
+      .toThrow('GENERATION_PLANNING_CONTINUATION_SOURCE_CHANGED')
+    expect.soft(save).toThrow(prefixKind === 'author-saved' ? 'GENERATION_SOURCE_CHANGED' : 'GENERATION_BLUEPRINT_AUTHOR_SOURCE_CHANGED')
+    expect.soft(BlueprintRepository.getAll()).toEqual(rows)
+    expect.soft(f.db.prepare('SELECT * FROM blueprint_commit_operations').all()).toEqual(operations)
+    expect.soft(f.db.prepare('SELECT * FROM generation_runs').all()).toEqual(runs)
+    expect.soft(f.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(1)
+    expect.soft(f.db.prepare('SELECT * FROM generation_attempts').all()).toEqual(attempts)
+    fs.unlinkSync(writingSkillsPath)
+    expect(save().idempotent).toBe(prefixKind === 'author-saved')
+    expect(save().idempotent).toBe(true)
+    expect(f.db.prepare('SELECT * FROM generation_attempts').all()).toEqual(attempts)
+    expect(dispatch).toHaveBeenCalledTimes(2)
+  })
+  it('rolls back corrected blueprints if the author receipt cannot persist and rejects malformed identities', () => {
+    const f = fixture(), run = f.owner.begin(directorySelection(f)), context = f.owner.readContext(run.handle)
+    const request: BlueprintRangeCommitRequest = { mode: 'replace-range', operationId: 'author-atomic', startChapter: 1, endChapter: 1,
+      blueprints: [blueprint(1)], authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.blueprintRecovery!.leaseEpoch } }
+    const before = BlueprintRepository.getAll()
+    expect(() => f.db.transaction(() => f.owner.commitBlueprintAuthorEdit({ ...request, blueprints: [{ ...blueprint(1), characters: ['林岚', '林岚'] }] })).immediate()).toThrow()
+    const write = vi.spyOn(GenerationRunRepository.prototype, 'recordBlueprintAuthorEdit').mockImplementationOnce(() => { throw new Error('TEST_RECEIPT_STORAGE_FAILED') })
+    try { expect(() => f.db.transaction(() => f.owner.commitBlueprintAuthorEdit(request)).immediate()).toThrow('TEST_RECEIPT_STORAGE_FAILED') }
+    finally { write.mockRestore() }
+    expect(BlueprintRepository.getAll()).toEqual(before)
+    expect(f.db.prepare('SELECT COUNT(*) FROM blueprint_commit_operations').pluck().get()).toBe(0)
+  })
+})
 
 describe('frozen planning roots', () => {
   const fullIntent: ArchitecturePlanningIntent = { version: 'architecture-action-v1',
-    priorSteps: ['premise', 'characters', 'worldbuilding'], synopsisRange: { from: 1, to: 100 } }
+    priorSteps: ['premise', 'characters', 'worldbuilding'], synopsisRange: { from: 1, to: 10 } }
   function planningFixture() {
     const f = fixture()
+    f.db.prepare('UPDATE project_core SET total_chapters=200').run()
     Object.assign(f.model, { provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash',
       maxTokens: 65536, reasoningOverride: 'high',
       capabilities: { contextWindowTokens: 262144, maxOutputTokens: 65536, reasoning: true, structuredOutput: true, usage: true },
@@ -117,17 +625,32 @@ describe('frozen planning roots', () => {
       { id: 'directory:requested-range', text: JSON.stringify({ mode: 'full', startChapter: 1, endChapter: chapters }) }],
   })
   const plotTask: GenerationTask = { purpose: 'generate-plot-outline', output: 'visible-text', reasoningStage: 'planning', messages: [{ role: 'user', content: 'x' }] }
+  async function legacyPlanningRun(f: ReturnType<typeof fixture>, intent: ArchitecturePlanningIntent) {
+    const selection = architectureSelection(f, intent, 'generate-plot-outline')
+    const current = { ...MAIN_GENERATION_POLICY, version: 's07-planning-v1' as const, budget: { ...MAIN_GENERATION_POLICY.budget, maxOutputPerRequest: 65536 } }
+    const requests = Math.max(32, 2 * (intent.synopsisRange!.to - intent.synopsisRange!.from + 1))
+    const policy = { ...current, budget: { ...current.budget, maxPhysicalRequests: requests, maxTokenLiability: requests * 65536,
+      maxActiveElapsedMs: requests * 112500 }, planning: { kind: 'architecture' as const, intent, outlineProtocol: 'legacy-range-v1' as const } }
+    const binding = buildGenerationSourceBinding({ db: f.db, projectStorageRoot: path.join(f.root, 'project'), globalDataRoot: path.join(f.root, 'global'),
+      readBuiltinPrompt: (key, language) => JSON.stringify(getBuiltinPromptTemplate(key, language)), readBuiltinSkill: readBuiltinWritingSkill },
+    { ...selection, projectId: 'project', epoch: 'epoch-1', modelReceipt: safeGenerationModelReceipt(createModelExecutionLeaseReceipt(f.model, { leaseId: 'legacy', createdAt: 0, expiresAt: 1 })),
+      policy, outputContract: 'visible-text' }).binding
+    const saved = new GenerationRunRepository(() => f.db).open({ ...binding, operation: selection.operation, uiActionNonce: selection.uiActionNonce,
+      frozenInputHash: textHash(JSON.stringify([binding.fingerprint, binding.contextSnapshotId, selection.output])), budget: policy.budget })
+    new GenerationRunRepository(() => f.db).pause(saved.rootActionId)
+    return f.owner.resume({ projectId: 'project', epoch: 'epoch-1', rootActionId: saved.rootActionId, runId: saved.runId })
+  }
 
-  it('freezes the complete architecture on premise, shares liability with synopsis, and restores its exact legacy-range policy', async () => {
+  it('freezes the complete architecture on premise, shares liability with synopsis, and restores its exact chapter policy', async () => {
     const fetch = syntheticStream(), f = planningFixture()
     const root = f.owner.begin(architectureSelection(f, fullIntent))
-    expect(root.ledger!.policy).toEqual({ maxPhysicalRequests: 220, maxTokenLiability: 14417920, maxOutputPerRequest: 65536, maxActiveElapsedMs: 24750000 })
+    expect(root.ledger!.policy).toEqual({ maxPhysicalRequests: 40, maxTokenLiability: 10485760, maxOutputPerRequest: 65536, maxActiveElapsedMs: 4500000 })
     const repository = new GenerationRunRepository(() => f.db)
     const policy = repository.get(root.handle.runId).binding.sourceManifest.policy
-    expect(policy).toMatchObject({ version: 's07-planning-v1', planning: { kind: 'architecture', intent: fullIntent, outlineProtocol: 'legacy-range-v1' }, budget: root.ledger!.policy })
+    expect(policy).toMatchObject({ version: 's07-capacity-v2', planning: { kind: 'architecture', intent: fullIntent, outlineProtocol: PLOT_OUTLINE_PROTOCOL }, budget: root.ledger!.policy })
     await f.owner.execute({ handle: root.handle, invocationNonce: 'premise', task: { ...plotTask, purpose: 'generate-core-seed' } })
     const childSelection = { ...architectureSelection(f, fullIntent, 'generate-plot-outline'), parentRootActionId: root.handle.rootActionId }
-    expect(() => f.owner.begin({ ...childSelection, ...architectureSelection(f, { ...fullIntent, synopsisRange: { from: 1, to: 200 } }, 'generate-plot-outline') }))
+    expect(() => f.owner.begin({ ...childSelection, ...architectureSelection(f, { ...fullIntent, synopsisRange: { from: 1, to: 9 } }, 'generate-plot-outline') }))
       .toThrow('GENERATION_PLANNING_INTENT_CHANGED')
     expect(() => f.owner.begin({ ...childSelection, operation: 'chapter-blueprint-directory' })).toThrow('GENERATION_PLANNING_INTENT_INVALID')
     const child = f.owner.begin(childSelection)
@@ -136,7 +659,7 @@ describe('frozen planning roots', () => {
     expect(child.ledger).toMatchObject({ tokenLiability: 62, physicalRequests: 1 })
     const reopened = f.reopen(), resumed = await reopened.resume(child.handle)
     expect(resumed.ledger!.policy).toEqual(root.ledger!.policy)
-    await reopened.execute({ handle: resumed.handle, invocationNonce: 'synopsis', task: plotTask })
+    await reopened.execute({ handle: resumed.handle, invocationNonce: 'synopsis', task: outlineTask(resumed.plotOutline!) })
     expect(fetch.mock.calls.map(call => JSON.parse(String(call[1].body)).max_tokens)).toEqual([65536, 65536])
     expect(new GenerationRunRepository(() => f.db).get(child.handle.runId).binding.sourceManifest.policy).toEqual(policy)
     expect(reopened.read(resumed.handle).ledger).toMatchObject({ tokenLiability: 124, physicalRequests: 2 })
@@ -144,9 +667,9 @@ describe('frozen planning roots', () => {
 
   it('freezes selected subsets and refuses an unselected child or invalid range before creating a run', () => {
     const f = planningFixture()
-    const intent: ArchitecturePlanningIntent = { version: 'architecture-action-v1', priorSteps: ['worldbuilding'], synopsisRange: { from: 151, to: 200 } }
+    const intent: ArchitecturePlanningIntent = { version: 'architecture-action-v1', priorSteps: ['worldbuilding'], synopsisRange: { from: 151, to: 160 } }
     const root = f.owner.begin(architectureSelection(f, intent, 'generate-world-building'))
-    expect(root.ledger!.policy.maxPhysicalRequests).toBe(102)
+    expect(root.ledger!.policy.maxPhysicalRequests).toBe(32)
     expect(() => f.owner.begin({ ...architectureSelection(f, intent), parentRootActionId: root.handle.rootActionId })).toThrow('GENERATION_PLANNING_OPERATION_NOT_SELECTED')
     for (const invalid of [
       { ...fullIntent, priorSteps: ['characters', 'characters'] },
@@ -159,7 +682,7 @@ describe('frozen planning roots', () => {
     }
     const overflow = architectureSelection(f, { ...fullIntent, synopsisRange: { from: 1, to: Number.MAX_SAFE_INTEGER } })
     overflow.authorInputs![0].text = JSON.stringify({ totalChapters: Number.MAX_SAFE_INTEGER })
-    expect(() => f.owner.begin(overflow)).toThrow('GENERATION_PLANNING_BUDGET_INVALID')
+    expect(() => f.owner.begin(overflow)).toThrow('GENERATION_PLANNING_RANGE_INVALID')
     expect(f.db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(1)
   })
 
@@ -175,11 +698,11 @@ describe('frozen planning roots', () => {
     expect(fetch).not.toHaveBeenCalled()
   })
 
-  it('completes 200 chapters in 40 normal directory requests across a real reopen under one finite root', async () => {
+  it('dispatches 40 normal directory requests for a 200 chapter scope across a real reopen under one finite root', async () => {
     const fetch = syntheticStream(), f = planningFixture()
-    let owner = f.owner, run = owner.begin(directorySelection(f, 200))
+    let owner = f.owner, run = await frozenAggregateRun(f, directorySelection(f, 200))
     const original = run.handle.rootActionId
-    expect(run.ledger!.policy).toEqual({ maxPhysicalRequests: 561, maxTokenLiability: 36765696, maxOutputPerRequest: 65536, maxActiveElapsedMs: 63112500 })
+    expect(run.ledger!.policy).toEqual({ maxPhysicalRequests: 561, maxTokenLiability: 147062784, maxOutputPerRequest: 65536, maxActiveElapsedMs: 63112500 })
     for (let batch = 0; batch < 40; batch++) {
       if (batch === 20) { owner = f.reopen(); run = await owner.resume(run.handle) }
       const result = await owner.execute({ handle: run.handle, invocationNonce: `batch-${batch}`, task: {
@@ -205,7 +728,7 @@ describe('frozen planning roots', () => {
     const fetch = syntheticStream(), f = planningFixture()
     Object.assign(f.model, changes)
     const intent: ArchitecturePlanningIntent = { version: 'architecture-action-v1', priorSteps: [], synopsisRange: { from: 11, to: 60 } }
-    const run = f.owner.begin(architectureSelection(f, intent, 'generate-plot-outline'))
+    const run = await legacyPlanningRun(f, intent)
     expect(run.ledger!.policy.maxPhysicalRequests).toBe(100)
     await f.owner.execute({ handle: run.handle, invocationNonce: 'plot', task: plotTask })
     const wire = JSON.parse(String(fetch.mock.calls[0]![1].body))
@@ -215,7 +738,7 @@ describe('frozen planning roots', () => {
   it('retains unknown usage liability and narrows the last request before the shared root is exhausted', async () => {
     const fetch = syntheticStream(false), f = planningFixture()
     Object.assign(f.model, { provider: 'openai', baseUrl: 'https://compatible.example/v1', modelName: 'custom-model', reasoningOverride: 'auto' })
-    const run = f.owner.begin(architectureSelection(f, { version: 'architecture-action-v1', priorSteps: [], synopsisRange: { from: 1, to: 1 } }, 'generate-plot-outline'))
+    const run = await legacyPlanningRun(f, { version: 'architecture-action-v1', priorSteps: [], synopsisRange: { from: 1, to: 1 } })
     for (let request = 0; request < 32; request++) await f.owner.execute({ handle: run.handle, invocationNonce: `unknown-${request}`, task: plotTask })
     expect(JSON.parse(String(fetch.mock.calls[0]![1].body)).max_tokens).toBe(65536)
     expect(JSON.parse(String(fetch.mock.calls[31]![1].body)).max_tokens).toBe(46944)
@@ -357,7 +880,8 @@ describe('automatic short outline binding', () => {
         f.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify(stored), failedAttemptId)
       }
       if (state.startsWith('chapter-draft')) repository.reserve(run.handle.runId, 'body-started', 'b'.repeat(64), 100, 20, undefined, state)
-      if (state !== 'wrong-attempt') expect(f.owner.readContext(run.handle).draftShortOutline?.retry).toEqual({ kind: 'unavailable' })
+      if (state === 'tokens-exhausted' || state === 'requests-exhausted') expect(() => f.owner.readContext(run.handle)).toThrow('GENERATION_POLICY_BUDGET_MISMATCH')
+      else if (state !== 'wrong-attempt') expect(f.owner.readContext(run.handle).draftShortOutline?.retry).toEqual({ kind: 'unavailable' })
       await expect(f.owner.retryDraftShortOutline({ handle: run.handle, failedAttemptId: state === 'wrong-attempt' ? 'another-attempt' : failedAttemptId })).rejects.toThrow()
       expect(dispatch).toHaveBeenCalledTimes(1)
     },
@@ -503,14 +1027,13 @@ describe('S07 durable task budget diagnostics', () => {
     expect(restored.budgetDiagnostics).toEqual(saved.run.budgetDiagnostics)
     expect(dispatch).toHaveBeenCalledTimes(1)
   })
-  it('rejects an indivisible oversized target before any physical reservation', async () => {
-    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(), f = fixture(dispatch, true)
+  it('lets the physical model capacity admit an indivisible target despite a larger semantic estimate', async () => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => ({ finishReason: 'stop', usage: null })), f = fixture(dispatch, true)
     const run = f.owner.begin(f.begin)
-    await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'too-large', task: { ...task,
-      budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 5000, segmentable: false } } })).rejects.toThrow('TASK_BUDGET_CAPACITY_CONFLICT')
-    expect(dispatch).not.toHaveBeenCalled()
-    expect(f.db.prepare('SELECT COUNT(*) FROM generation_attempts').pluck().get()).toBe(0)
-    expect(f.owner.read(run.handle).ledger?.physicalRequests).toBe(0)
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'physical-capacity', task: { ...task,
+      budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 5000, segmentable: false } } })
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    expect(new GenerationRunRepository(() => f.db).budget(run.handle.rootActionId).attempts[0].requestedOutputTokens).toBe(2048)
   })
 })
 
@@ -527,7 +1050,7 @@ describe('durable directory commit and remaining stage', () => {
       authorInputs: operation === 'directory' ? authorInputs : [authorInputs[0],
         { id: 'directory:author-config', text: JSON.stringify({ totalChapters: chapters }) },
         { id: 'directory:requested-range', text: JSON.stringify({ mode: 'full', startChapter: 1, endChapter: chapters }) }], output: 'structured-data' as const }
-    const run = f.owner.begin(selection)
+    const run = chapters > 10 ? openAggregateRun(f, selection) : f.owner.begin(selection)
     const request = (operationId: string, startChapter: number, endChapter: number): BlueprintRangeCommitRequest => ({
       operationId, mode: 'replace-range', startChapter, endChapter,
       blueprints: Array.from({ length: endChapter - startChapter + 1 }, (_, index) => ({ chapterNumber: startChapter + index,
@@ -541,13 +1064,15 @@ describe('durable directory commit and remaining stage', () => {
   }
   it('keeps the original 50-chapter planning allowance after committing a prefix and reopening its remaining range', async () => {
     const f = directoryFixture('chapter-blueprint-directory', 50)
+    new GenerationRunRepository(() => f.fixture.db).pause(f.run.handle.rootActionId)
+    await f.owner.resume(f.run.handle)
     await f.owner.execute({ handle: f.run.handle, invocationNonce: 'prefix', task: directoryTask })
     const policy = new GenerationRunRepository(() => f.fixture.db).get(f.run.handle.runId).binding.sourceManifest.policy
-    f.commit(f.owner, f.run.handle, f.request('planning-prefix', 1, 5), { startChapter: 1, endChapter: 50 })
+    f.commit(f.owner, f.run.handle, f.request('planning-prefix', 1, 40), { startChapter: 1, endChapter: 50 })
     const reopened = f.reopen()
     const remaining = { ...f.selection, uiActionNonce: 'planning-remainder', continueDirectoryOperationId: 'planning-prefix',
       authorInputs: f.selection.authorInputs.map(input => input.id === 'directory:requested-range'
-        ? { ...input, text: JSON.stringify({ mode: 'append', startChapter: 6, endChapter: 50 }) } : input) }
+        ? { ...input, text: JSON.stringify({ mode: 'append', startChapter: 41, endChapter: 50 }) } : input) }
     const next = reopened.begin(remaining)
     expect(next.handle.rootActionId).toBe(f.run.handle.rootActionId)
     expect(next.ledger).toMatchObject({ physicalRequests: 1, policy: { maxPhysicalRequests: 141 } })
@@ -868,6 +1393,74 @@ it('freezes a purpose-specific output exception and rejects all undeclared chang
 })
 
 describe('main generation owner with actual SQLite and provider adapter', () => {
+  it('freezes default five chapters and 600 units, admits ten and 1000, and keeps a complete longer outline', async () => {
+    const content = `## 第1章：完整情节\n${'完整行动与结果。'.repeat(200)}`
+    const f = fixture(async (_request, options) => { options.onVisible({ kind: 'delta', text: content }); return { finishReason: 'stop', usage: null } })
+    const defaultSelection = outlineSelection(f, 20)
+    defaultSelection.authorInputs = defaultSelection.authorInputs!.filter(item => item.id !== 'architecture:planning-intent')
+    const defaultRun = f.owner.begin(defaultSelection)
+    expect(defaultRun.plotOutline).toMatchObject({ range: { from: 1, to: 5 }, targetUnits: 600 })
+    const selected = { ...outlineSelection(f, 10), uiActionNonce: 'ten' }
+    selected.authorInputs!.push({ id: 'planning:target-units', text: '1000' })
+    const run = f.owner.begin(selected)
+    expect(run.plotOutline).toMatchObject({ range: { from: 1, to: 10 }, targetUnits: 1000 })
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'complete-long', task: outlineTask(run.plotOutline!) })
+    acceptOutline(f.owner, run.handle)
+    expect(f.owner.read(run.handle).plotOutline!.composition!.text).toBe(content)
+    expect(() => f.owner.begin({ ...outlineSelection(f, 11), uiActionNonce: 'eleven' })).toThrow('GENERATION_PLANNING_RANGE_INVALID')
+    expect(() => f.owner.begin({ ...selected, uiActionNonce: 'target-too-large', authorInputs: selected.authorInputs!.map(item => item.id === 'planning:target-units' ? { ...item, text: '1001' } : item) }))
+      .toThrow('GENERATION_PLANNING_TARGET_INVALID')
+    expect(f.db.prepare('SELECT COUNT(*) FROM generation_roots').pluck().get()).toBe(2)
+  })
+  it.each([65536, 32768])('uses actual context %i to admit or reject 43,699 bytes before reserving', async contextWindowTokens => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (_request, options) => { options.onVisible({kind:'delta',text:'{"blueprints":[]}'}); return {finishReason:'stop',usage:null} })
+    const f = fixture(dispatch)
+    Object.assign(f.model, { baseUrl:'https://compatible.example/v1', modelName:'custom', maxTokens:65536,
+      capabilities:{contextWindowTokens,maxOutputTokens:65536,reasoning:false,structuredOutput:true,usage:false} })
+    const run = f.owner.begin({ ...f.begin, operation:'chapter-blueprint-directory', output:'structured-data', authorInputs:[
+      {id:'directory:author-config',text:'{"totalChapters":1}'},{id:'directory:requested-range',text:'{"mode":"full","startChapter":1,"endChapter":1}'},
+    ] })
+    const request = {handle:run.handle,invocationNonce:'full-input',task:{purpose:'chapter-blueprint-directory',output:'structured-data' as const,
+      reasoningStage:'planning' as const,messages:[{role:'user' as const,content:'x'.repeat(43699)}],
+      budgetDemand:{kind:'structured-items' as const,requestedItems:1,writingLanguage:'zh-CN' as const}}}
+    if(contextWindowTokens===65536) {
+      await f.owner.execute(request)
+      expect(dispatch).toHaveBeenCalledTimes(1)
+      const sent=dispatch.mock.calls[0][0] as {task:GenerationTask;plan:{requestedOutputTokens:number;reservedTokens:number}}
+      expect(sent.task.messages.find(message=>message.role==='user')!.content).toBe(request.task.messages[0].content)
+      expect(sent.plan.requestedOutputTokens).toBeGreaterThan(0)
+      expect(sent.plan.reservedTokens).toBeLessThanOrEqual(contextWindowTokens)
+    } else {
+      await expect(f.owner.execute(request)).rejects.toThrow()
+      expect(dispatch).not.toHaveBeenCalled()
+      expect(new GenerationRunRepository(()=>f.db).budget(run.handle.rootActionId).attempts).toHaveLength(0)
+    }
+  })
+  it('compares old and new UNKNOWN roots with the same input, retaining all costs and all 32 new request slots', async () => {
+    const dispatch=vi.fn<GenerationRunServiceDependencies['dispatch']>(async()=>({finishReason:'stop',usage:null})), f=fixture(dispatch)
+    Object.assign(f.model,{baseUrl:'https://compatible.example/v1',modelName:'unknown-custom',maxTokens:65536,capabilities:undefined})
+    const sourceDeps={db:f.db,projectStorageRoot:path.join(f.root,'project'),globalDataRoot:path.join(f.root,'global'),
+      readBuiltinPrompt:(key:string,language:'zh-CN'|'en-US')=>JSON.stringify(getBuiltinPromptTemplate(key,language)),readBuiltinSkill:readBuiltinWritingSkill}
+    const binding=buildGenerationSourceBinding(sourceDeps,{...f.begin,projectId:'project',epoch:'epoch-1',
+      modelReceipt:safeGenerationModelReceipt(createModelExecutionLeaseReceipt(f.model,{leaseId:'old',createdAt:0,expiresAt:1})),policy:MAIN_GENERATION_POLICY,outputContract:'visible-text'}).binding
+    const repository=new GenerationRunRepository(()=>f.db), old=repository.open({...binding,operation:f.begin.operation,uiActionNonce:'old-root',
+      frozenInputHash:textHash(JSON.stringify([binding.fingerprint,binding.contextSnapshotId,f.begin.output])),budget:MAIN_GENERATION_POLICY.budget})
+    repository.pause(old.rootActionId)
+    const oldRun=await f.owner.resume({projectId:'project',epoch:'epoch-1',rootActionId:old.rootActionId,runId:old.runId})
+    const input={...task,messages:[{role:'user' as const,content:'x'.repeat(43699)}]}
+    for(let index=0;index<27;index++) await f.owner.execute({handle:oldRun.handle,invocationNonce:`old-${index}`,task:input})
+    await expect(f.owner.execute({handle:oldRun.handle,invocationNonce:'old-28',task:input})).rejects.toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
+    expect(repository.budget(old.rootActionId).policy).toEqual(MAIN_GENERATION_POLICY.budget)
+    const next=f.owner.begin({...f.begin,uiActionNonce:'new-root'})
+    for(let index=0;index<32;index++) await f.owner.execute({handle:next.handle,invocationNonce:`new-${index}`,task:input})
+    const budget=repository.budget(next.handle.rootActionId)
+    expect(budget.policy.maxTokenLiability).toBe(32*2_097_152)
+    expect(budget.attempts).toHaveLength(32)
+    expect(budget.attempts.every(attempt=>attempt.status==='unknown'&&attempt.requestedOutputTokens===65536)).toBe(true)
+    expect(budget.attempts.reduce((sum,attempt)=>sum+attempt.reservedTokens,0)).toBeGreaterThan(MAIN_GENERATION_POLICY.budget.maxTokenLiability)
+    await expect(f.owner.execute({handle:next.handle,invocationNonce:'new-33',task:input})).rejects.toThrow('ROOT_BUDGET_EXHAUSTED')
+    expect(dispatch).toHaveBeenCalledTimes(59)
+  })
   it('shows semantic 1712 and physical 16384 from the durable owner diagnostic with reservation 50410', async () => {
     const f = fixture(async () => ({ finishReason: 'length', usage: null }))
     Object.assign(f.model, { provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', modelName: 'deepseek-flash',
@@ -887,7 +1480,7 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
     expect(formatGenerationBudgetDiagnostic(diagnostic, 'zh-CN')).toContain('语义输出估算 1,712 tokens，物理输出上限 16,384 tokens，总预留 50,410 tokens')
     expect(f.reopen().read(run.handle).budgetDiagnostics).toEqual(receipt.run.budgetDiagnostics)
   })
-  it.each([16384, 65536])('honors the finite user output limit %i on a new planning root at the provider boundary', async maxTokens => {
+  it.each([16384, 32768, 65536])('honors the finite user output limit %i on a new planning root at the provider boundary', async maxTokens => {
     const fetch = syntheticStream(), f = fixture()
     Object.assign(f.model, { provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash',
       maxTokens, reasoningOverride: 'high',
@@ -926,6 +1519,7 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
       const prompt = '为第1章生成完整蓝图，保留作者事实；必须且只能返回 chapterNumber=1 的一项。'
       const directoryTask: GenerationTask = { purpose, output: 'structured-data', messages: [
         { role: 'system', content: '你是一位经验丰富的章节架构师。' }, { role: 'user', content: prompt },
+        { role: 'system', content: planningTargetInstruction('blueprint', 600, 'zh-CN') },
       ], ...(purpose.includes(':compact-single:') ? { promptBudget: { limitUtf8Bytes: 32 * 1024,
         sections: [{ sectionName: 'target-chapter', messageIndex: 1, finalText: 'chapterNumber=1' }] } } : {}) }
       const repository = new GenerationRunRepository(() => f.db), frozen = repository.get(view.handle.runId)
@@ -967,7 +1561,7 @@ describe('main generation owner with actual SQLite and provider adapter', () => 
       expect(f.db.name).toBe(databasePath)
       expect(restored.artifacts).toEqual(result.run.artifacts)
       expect(restored.budgetDiagnostics).toEqual(result.run.budgetDiagnostics)
-      expect(reopened.readContext(view.handle)).toMatchObject({ attemptedPurposes: [purpose], authorInputs })
+      expect(reopened.readContext(view.handle)).toMatchObject({ attemptedPurposes: [purpose], authorInputs: [...authorInputs, { id: 'planning:target-units', text: '600' }] })
       const reopenedRepository = new GenerationRunRepository(() => f.db)
       expect(reopenedRepository.receipt(reference.attemptId).artifact).toEqual(durable.artifact)
       expect(reopenedRepository.get(view.handle.runId).binding.sourceRefs).toEqual(frozen.binding.sourceRefs)

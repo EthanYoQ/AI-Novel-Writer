@@ -1,9 +1,11 @@
+import { parsePlanningTargetUnits, planningTargetInstruction, DEFAULT_PLANNING_ACTION_CHAPTERS } from '../../../shared/plot-outline-contract'
 import type { CharacterProposalChoices } from '../../character-proposal-choices'
 import { decodeCharacterIdentityManifest, decodeCharacterDetails, validateCharacterDetail, type CharacterIdentitySlot, type CharacterDetailOutput } from '../../../shared/character-proposal-parser'
 import type { CharacterProposalBatch } from '../../../shared/character-proposal'
 import { defaultCharacterProposalRelationships, defaultCharacterProposalSelections, formatCharacterProposalPreview } from '../character-proposal-preview'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
-import type { ArchitecturePlanningIntent } from '../../../shared/generation-owner-contract'
+import type { ArchitecturePlanningIntent, GenerationRecoveryContext } from '../../../shared/generation-owner-contract'
+import { PLOT_OUTLINE_PROTOCOL, plotOutlinePurpose, plotOutlineRequestContract, joinPlotOutlineEntries, renderPlotOutlineRange, type PlotOutlineProgress } from '../../../shared/plot-outline-contract'
 import { CANONICAL_PROJECT_DIRECTORY } from '../../../shared/project-format'
 import {
   BaseWorkflowCommand,
@@ -52,14 +54,15 @@ function stepAuthorInputs(context: WorkflowContext, key: 'premise' | 'characters
   const value = (context.data.stepGuidance as Record<string, unknown> | undefined)?.[key]
   const intent: ArchitecturePlanningIntent | undefined = snapshot.planningIntent ?? (resuming || context.mainGenerationRootHandle ? undefined : {
     version: 'architecture-action-v1', priorSteps: key === 'synopsis' ? [] : [key],
-    synopsisRange: key === 'synopsis' ? synopsisRange ?? { from: 1, to: snapshot.novelConfig.totalChapters } : null,
+    synopsisRange: key === 'synopsis' ? synopsisRange ?? { from: 1, to: Math.min(snapshot.novelConfig.totalChapters, DEFAULT_PLANNING_ACTION_CHAPTERS) } : null,
   })
-  return [{ id: 'architecture:author-config', text: JSON.stringify(snapshot.novelConfig) },
+  return [{ id: 'planning:target-units', text: String(parsePlanningTargetUnits(snapshot.targetUnits)) }, { id: 'architecture:author-config', text: JSON.stringify(snapshot.novelConfig) },
     ...(intent ? [{ id: 'architecture:planning-intent', text: JSON.stringify(intent) }] : []),
     ...(typeof value === 'string' ? [{ id: `architecture:step-guidance:${key}`, text: value }] : [])]
 }
 
 interface PartialArchData {
+  synopsis_protocol?: typeof PLOT_OUTLINE_PROTOCOL
   world_building_generation_handle?: MainGenerationRunHandle
   synopsis_generation_handle?: MainGenerationRunHandle
   premise_result?: string
@@ -94,6 +97,7 @@ interface PartialArchData {
 }
 
 const SYNOPSIS_CHECKPOINT_FIELDS = [
+  'synopsis_protocol',
   'synopsis_result',
   'synopsis_incomplete',
   'synopsis_covered_to',
@@ -577,6 +581,7 @@ export function isUsableSynopsisCheckpoint(
 ): boolean {
   if (!value || typeof value !== 'object') return false
   const partial = value as PartialArchData
+  if (partial.synopsis_protocol === PLOT_OUTLINE_PROTOCOL && partial.synopsis_incomplete && partial.synopsis_generation_handle) return true
   try {
     return assertCheckpointDbMirrorCurrent(
       partial,
@@ -728,6 +733,7 @@ const MAX_CHARACTER_STRUCTURED_CONTEXT_UTF8_BYTES = 32_768
 function promptUtf8Bytes(value: string): number { return new TextEncoder().encode(value).byteLength }
 
 export interface ArchitectureProjectSnapshot {
+  targetUnits?: number
   expectedProjectPath: string
   novelConfig: Readonly<NovelConfig>
   planningIntent?: ArchitecturePlanningIntent
@@ -1713,6 +1719,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       /** 从上次中断点续写当前批次（需要有效检查点：incomplete=true 且指纹匹配）。 */
       resumeSynopsis?: boolean
       resumeHandle?: MainGenerationRunHandle
+        restartHandle?: MainGenerationRunHandle
       /** 本次生成范围 [from..to]；缺省 = 第 1 章到全书（显式覆盖重写）。 */
       synopsisRange?: PlotOutlineChapterRange | null
     } = {},
@@ -1730,6 +1737,7 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       authorInputs: stepAuthorInputs(params.context, 'synopsis', this.snapshot, this.options.synopsisRange, this.options.resumeSynopsis),
       operation: 'generate-plot-outline', promptKeys: ['synopsis'], skillStages: ['planning'], output: 'visible-text',
       ...(this.options.resumeSynopsis ? { resumeHandle: this.options.resumeHandle } : {}),
+        ...(this.options.restartHandle ? { restartHandle: this.options.restartHandle } : {}),
       onRunOpened: async handle => {
         const session = requireWorkflowProjectSession(params.context)
         const partial = (params.context.data.partial as PartialArchData) || await loadPartialData(this.snapshot.expectedProjectPath, session)
@@ -1741,6 +1749,10 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
   }
 
   private async executeWithinGeneration({ context, callbacks }: CommandExecuteParams): Promise<string> {
+    if (this.requireGenerationExecution().mainOwned && context.mainGenerationRunHandle) {
+      const recovery = await ipc.invokeWithProjectSession(requireWorkflowProjectSession(context), 'generation:read-context', { handle: context.mainGenerationRunHandle })
+      if (recovery.plotOutline) return this.executeChapterOutline({ context, callbacks }, recovery, recovery.plotOutline)
+    }
     const text = (zhCNText: string, enUSText: string) => workflowUiText(context, zhCNText, enUSText)
     const projectSession = requireWorkflowProjectSession(context)
     assertArchitectureProjectSessionCurrent(projectSession, context)
@@ -2235,6 +2247,91 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
             : `Batch chapters ${from}-${to} generated; chapters ${to + 1}+ are still pending.`),
     ))
     return confirmedBody
+  }
+
+  private async executeChapterOutline({ context, callbacks }: Pick<CommandExecuteParams, 'context' | 'callbacks'>, recovery: GenerationRecoveryContext, initial: PlotOutlineProgress): Promise<string> {
+    const session = requireWorkflowProjectSession(context), handle = context.mainGenerationRunHandle!
+    const text = (zh: string, en: string) => workflowUiText(context, zh, en)
+    const { expectedProjectPath } = this.snapshot
+    const sourceExpected = initial.sourceExpected
+    const configInput = recovery.authorInputs.find(input => input.id === 'architecture:author-config')
+    if (!configInput) throw new Error('GENERATION_PLOT_OUTLINE_SOURCE_INVALID')
+    const config: NovelConfig = JSON.parse(configInput.text)
+    const guidance = recovery.authorInputs.find(input => input.id === 'architecture:step-guidance:synopsis')?.text ?? ''
+    const requestedGuidance = (context.data.stepGuidance as Record<string, unknown> | undefined)?.synopsis
+    if (this.options.resumeSynopsis && typeof requestedGuidance === 'string' && requestedGuidance !== guidance) throw new Error('GENERATION_PLOT_OUTLINE_GUIDANCE_CHANGED')
+    if (!sourceExpected.premise || !sourceExpected.charactersArch || !sourceExpected.worldbuilding) throw new Error(text('故事前提、角色图谱和世界观必须先完成。', 'Complete the premise, characters and worldbuilding first.'))
+    const language = sourceExpected.writingLanguage
+    const template = await resolvePromptTemplate('synopsis', session, language)
+    if (!template) throw new Error(text('模板丢失', 'The plot-outline template is missing.'))
+    const { getPlotStructureGuide, getNarrativePOVLabel } = await import('../architecture-workflow')
+    const promptBuilder = new ArchitecturePromptBuilder(template, language)
+      .withCoreSeed(sourceExpected.premise).withCharacterDynamics(sourceExpected.charactersArch).withWorldBuilding(sourceExpected.worldbuilding)
+      .withGenre(localizeNovelConfigFacts(config, language).genre).withNumberOfChapters(sourceExpected.totalChapters)
+      .withWordNumber(sourceExpected.wordsPerChapter)
+      .withPlotStructureGuide(getPlotStructureGuide(config.plotStructure || 'three_act', sourceExpected.totalChapters, language))
+      .withNarrativePov(getNarrativePOVLabel(config.narrativePOV || 'third_limited', language))
+      .withGlobalGuidance(sourceExpected.globalGuidance).withStepGuidance(guidance)
+    const representedConfig: Record<string, unknown> = { genre: config.genre, totalChapters: sourceExpected.totalChapters,
+      wordsPerChapter: sourceExpected.wordsPerChapter, plotStructure: config.plotStructure, narrativePOV: config.narrativePOV,
+      globalGuidance: sourceExpected.globalGuidance, writingLanguage: language }
+    const additionalConfig = Object.fromEntries(Object.entries(config).filter(([key, value]) => representedConfig[key] !== value))
+    const originalPrompt = [promptBuilder.build(), ...(Object.keys(additionalConfig).length ? [promptLanguageText(language,
+      `【其余冻结作者配置，须保留全部硬要求】\n${JSON.stringify(additionalConfig)}`,
+      `[Additional frozen author configuration; preserve all hard requirements]\n${JSON.stringify(additionalConfig)}`)] : [])].join('\n\n')
+    const partial = (context.data.partial as PartialArchData) || await loadPartialData(expectedProjectPath, session)
+    const factsFingerprint = synopsisInputsFingerprint(sourceExpected, guidance, initial.range, template)
+    const saveNavigation = async (outline: PlotOutlineProgress, complete = false) => {
+      partial.synopsis_protocol = PLOT_OUTLINE_PROTOCOL
+      partial.synopsis_generation_handle = handle
+      partial.synopsis_incomplete = !complete
+      partial.synopsis_range = { ...outline.range }
+      partial.synopsis_covered_to = complete ? outline.range.to : outline.range.from - 1
+      partial.synopsis_step_guidance = guidance
+      partial.synopsis_facts_fingerprint = factsFingerprint
+      const body = joinPlotOutlineEntries(outline.confirmedPrefix, outline.composition?.text ?? '')
+      partial.synopsis_body_hash = synopsisFactsFingerprint([body])
+      partial.synopsis_db_hash = synopsisFactsFingerprint([complete ? renderPlotOutlineRange(outline.composition?.text ?? '', outline.range, sourceExpected) : sourceExpected.synopsis])
+      if (complete) partial.synopsis_result = body
+      else delete partial.synopsis_result
+      context.data.partial = partial
+      await savePartialData(expectedProjectPath, partial, session, text('保存情节大纲检查点', 'Save plot-outline navigation'))
+    }
+    let outline = initial
+    await saveNavigation(outline)
+    while (outline.cursor.kind !== 'complete') {
+      this.assertNotCancelled(context)
+      assertArchitectureProjectSessionCurrent(session, context)
+      const cursor = outline.cursor
+      if (cursor.kind === 'stopped') throw new Error(text(
+        `第 ${cursor.chapterNumber} 章已停止自动生成，原因 ${cursor.reason}。已接受前缀和全部候选已保留，正式大纲未被覆盖。`,
+        `Automatic generation stopped at chapter ${cursor.chapterNumber}: ${cursor.reason}. The accepted prefix and all candidates remain saved; the formal outline was not overwritten.`))
+      if (cursor.kind === 'accept') {
+        const next = joinPlotOutlineEntries(outline.composition?.text ?? '', cursor.text)
+        await ipc.invokeWithProjectSession(session, 'generation:compose-visible', handle,
+          [...(outline.composition?.artifactIds ?? []), ...cursor.artifactIds], await hashAuthorText(next), PLOT_OUTLINE_PROTOCOL)
+
+      } else {
+        callbacks.log(text(`正在生成第 ${cursor.chapterNumber} 章大纲${cursor.attempt === 'compact' ? '，进行唯一一次原事实重建' : ''}。`,
+          `Generating the outline for chapter ${cursor.chapterNumber}${cursor.attempt === 'compact' ? ' with its single rebuild from original facts' : ''}.`))
+        await this.callLLMResult(`${originalPrompt}\n\n${plotOutlineRequestContract(outline, cursor.chapterNumber, cursor.attempt)}`,
+          `${promptBuilder.getSystemRole()}\n\n${planningTargetInstruction('outline', outline.targetUnits, language)}`, callbacks, { purpose: plotOutlinePurpose(cursor.chapterNumber, cursor.attempt), reasoningStage: 'planning', writingSkillStage: 'planning' }, context)
+      }
+      const current = await ipc.invokeWithProjectSession(session, 'generation:read', handle)
+      if (!current.plotOutline) throw new Error('GENERATION_PLOT_OUTLINE_SOURCE_INVALID')
+      outline = current.plotOutline
+      await saveNavigation(outline)
+    }
+    this.assertNotCancelled(context)
+    assertArchitectureProjectSessionCurrent(session, context)
+    const synopsis = renderPlotOutlineRange(outline.composition?.text ?? '', outline.range, sourceExpected)
+    const committed = await ipc.invokeWithProjectSession(session, 'db:project-core-synopsis-commit', { synopsis, expected: sourceExpected, generationRunHandle: handle }, expectedProjectPath)
+    requireIpcSuccess(committed, text('保存完整情节大纲', 'Save the complete plot outline'))
+    await saveNavigation(outline, true)
+    const { globalEventBus } = await import('../../../shared/event-bus')
+    globalEventBus.emit('ARCH_FILE_UPDATED', { fileName: 'synopsis.md', projectPath: expectedProjectPath, projectSession: session, runId: context.runId })
+    callbacks.log(text(`第 ${outline.range.from}–${outline.range.to} 章大纲已完整保存。`, `The complete outline for chapters ${outline.range.from}-${outline.range.to} was saved.`))
+    return synopsis
   }
 
   private async rollbackSynopsisCheckpoint(

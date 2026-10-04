@@ -32,8 +32,10 @@ import type { LegacyRosterGenerationContext } from '../../src/shared/legacy-rost
 import { captureLegacyRosterGenerationContext, legacyRosterGenerationTask } from './legacy-roster-generation-context';
 import { readPortableCurrentAuthority } from './portable-current-authority';
 import { currentCharacterProjection } from './current-character-projection';
+import { plotOutlinePolicy, plotOutlineExpected, plotOutlineConfirmedPrefix, type PlotOutlineSource } from '../../src/shared/plot-outline-contract';
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>;
 export interface GenerationSourceBindingInput {
+    plotOutlineSource?: PlotOutlineSource;
     projectId: string;
     epoch: string;
     operation: string;
@@ -537,6 +539,12 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         add('knowledge-selection', 0, stable(input.knowledgeSnapshot), 'unconfirmed-continuity', 'main-verified immutable knowledge selection and source identities');
         for (const item of input.knowledgeSnapshot.items) add(`kb:${item.documentId}:${item.chunkId}`, item.revision, item.text, 'unconfirmed-continuity', 'verified original knowledge passage');
     }
+    const outlinePolicy = plotOutlinePolicy({ operation: input.operation, policy: input.policy });
+    const plotOutlineSource = outlinePolicy ? input.plotOutlineSource ?? { version: 1 as const, core: facts.core as PlotOutlineSource['core'] } : undefined;
+    if (plotOutlineSource && outlinePolicy) {
+        plotOutlineConfirmedPrefix(plotOutlineExpected(plotOutlineSource), outlinePolicy.range);
+        add('plot-outline:origin', 0, stable(plotOutlineSource), 'author-constraint', 'main captured original project facts and synopsis for final outline compare-and-set');
+    }
     const agentContext = agentInput && agentPrompt ? buildAgentGenerationContext(agentInput, facts.core, facts.language, agentPrompt.selected, agentPrompt.builtin) : undefined;
     const editorInlineContext = editorInlineInput ? buildEditorInlineContext(editorInlineInput, facts.language, importPrompts.edit_selected_text!) : undefined;
     const finalizationContext = input.finalizationGenerationSlot ? captureFinalizationGenerationContext(deps.db, input.finalizationGenerationSlot, input, facts.language,
@@ -552,6 +560,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         fail('GENERATION_SOURCE_CHANGED_DURING_SNAPSHOT');
     const sourceManifest = { version: 1, ...(input.finalizedCharacterContextHash ? { finalizedCharacterContextHash: input.finalizedCharacterContextHash } : {}), operation: input.operation, ...(input.knowledgeSnapshot ? { knowledgeSnapshot: structuredClone(input.knowledgeSnapshot) } : {}), ...(input.batchId ? { batchId: input.batchId } : {}), ...(input.batchIntent ? { batchIntent: structuredClone(input.batchIntent) } : {}), ...(input.chapterNumber !== undefined ? { chapterNumber: input.chapterNumber } : {}), selectedDraftIds: [...input.selectedDraftIds], selectedFinalizedDraftIds: [...input.selectedFinalizedDraftIds], ...(blueprintChapters.length ? { selectedBlueprintChapterNumbers: [...blueprintChapters] } : {}), promptKeys: [...input.promptKeys], skillStages: [...input.skillStages], ...(authorInputs.length ? { authorInputs } : {}), ...(materialDecision ? { materialDecision, materialDecisionHash } : {}), modelReceipt, policy: input.policy, outputContract: input.outputContract };
     if (transferAuthority) Object.assign(sourceManifest, { portableTransferAuthority: transferAuthority });
+    if (plotOutlineSource) Object.assign(sourceManifest, { plotOutlineSource: structuredClone(plotOutlineSource) });
     if (input.reviewRevisionContext) Object.assign(sourceManifest, { reviewRevisionContext: structuredClone(input.reviewRevisionContext), reviewRevisionContextHash: hash(JSON.stringify(input.reviewRevisionContext)) });
     if (legacyContext) {
         const task = legacyRosterGenerationTask(legacyContext);

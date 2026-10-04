@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
+import { generationOutputContract, type BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
 import type { ModelProfile, ProjectSessionContext } from '../../../src/shared/ipc-channels'
 import type { MainGenerationRunHandle } from '../../../src/services/generation/generation-runtime'
 import type { GenerationTask } from '../../../src/services/generation/generation-harness'
@@ -11,7 +11,13 @@ import { ipc } from '../../../src/services/ipc-client'
 import { classifyGenerationFailure } from '../../../src/services/generation/prompt-budget-failure'
 import { projectAccess } from '../../services/project-access'
 import { createProjectDatabase, initProjectDatabase, closeProjectDatabase, getProjectDb } from '../../database'
-import { ModelExecutionLeaseRegistry } from '../../services/model-execution-lease'
+import { createModelExecutionLeaseReceipt, ModelExecutionLeaseRegistry } from '../../services/model-execution-lease'
+import { MAIN_GENERATION_POLICY } from '../../services/main-generation-plan'
+import { safeGenerationModelReceipt } from '../../services/main-generation-owner'
+import { buildGenerationSourceBinding } from '../../services/generation-source-binding'
+import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
+import { getProjectDataRoot } from '../../services/project-data-locator'
+import { getBuiltinPromptTemplate } from '../../../src/services/builtin-prompt-templates'
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>
 const mocks = vi.hoisted(() => ({ handlers: new Map<string, Handler>(), globalRoot: '' }))
@@ -66,16 +72,32 @@ afterEach(() => {
 
 /** Synthetic provider stream. Its call count is the physical model-call count. */
 function syntheticProvider(content = '中文候选') {
-  const fetch = vi.fn(async () => ({ ok: true, body: new ReadableStream({ start(controller) {
+  const fetch = vi.fn<(url: unknown, init?: RequestInit) => Promise<{ ok: boolean; body: ReadableStream<Uint8Array> }>>(async () => ({ ok: true, body: new ReadableStream({ start(controller) {
     controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`))
     controller.close()
   } }) }))
   vi.stubGlobal('fetch', fetch)
   return fetch
 }
-async function begin(modelId: string, extra: Partial<BeginGenerationRequest> = {}): Promise<MainGenerationRunHandle> {
-  const view = await ipc.invokeWithProjectSession(session, 'generation:begin', { operation: 'draft', uiActionNonce: `作者点击:${modelId}`,
-    modelId, chapterNumber: 1, selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['first_chapter_draft'], skillStages: [], output: 'visible-text', ...extra })
+async function begin(modelId: string, extra: Partial<BeginGenerationRequest> = {}, legacy = false): Promise<MainGenerationRunHandle> {
+  const selection: BeginGenerationRequest = { operation: 'draft', uiActionNonce: `作者点击:${modelId}`,
+    modelId, chapterNumber: 1, selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['first_chapter_draft'], skillStages: [], output: 'visible-text', ...extra }
+  if (legacy) {
+    const database = getProjectDb()!, repository = new GenerationRunRepository(() => database)
+    const binding = buildGenerationSourceBinding({ db: database, projectStorageRoot: getProjectDataRoot(session.projectPath),
+      globalDataRoot: mocks.globalRoot, readBuiltinPrompt: (key, language) => JSON.stringify(getBuiltinPromptTemplate(key, language)) },
+    { ...selection, projectId: session.projectId, epoch: session.leaseId, policy: MAIN_GENERATION_POLICY,
+      modelReceipt: safeGenerationModelReceipt(createModelExecutionLeaseReceipt(models[modelId], { leaseId: 'saved-legacy', createdAt: 0, expiresAt: 1 })),
+      outputContract: generationOutputContract(selection) }).binding
+    const run = repository.open({ ...binding, operation: selection.operation, uiActionNonce: selection.uiActionNonce,
+      frozenInputHash: textHash(JSON.stringify([binding.fingerprint, binding.contextSnapshotId, selection.output])), budget: MAIN_GENERATION_POLICY.budget })
+    repository.pause(run.rootActionId)
+    const view = await ipc.invokeWithProjectSession(session, 'generation:resume', { projectId: session.projectId,
+      epoch: session.leaseId, rootActionId: run.rootActionId, runId: run.runId })
+    expect(view.ledger?.policy).toEqual(MAIN_GENERATION_POLICY.budget)
+    return view.handle
+  }
+  const view = await ipc.invokeWithProjectSession(session, 'generation:begin', selection)
   return view.handle
 }
 function run(input: GenerationTask, nonce: string, handle: MainGenerationRunHandle) {
@@ -95,7 +117,7 @@ const demand = (overrides: Partial<{ kind: 'draft-units'; writingLanguage: 'zh-C
 describe('S07 budget admission through the actually registered generation IPC', () => {
   it('reports a safe split over IPC and reserves nothing before dispatch', async () => {
     const fetch = syntheticProvider()
-    const handle = await begin('known')
+    const handle = await begin('known', {}, true)
     const error = await rejectionOf(run(demand(), '超限拆分', handle))
     expect(error.message).toMatch(/^TASK_BUDGET_SCOPE_SPLIT_REQUIRED:\d+$/u)
     // 这条稳定类别必须被共享分类器识别成 preflight，而不是落到 unknown。
@@ -109,7 +131,7 @@ describe('S07 budget admission through the actually registered generation IPC', 
 
   it('reports a capacity conflict over IPC when the scope cannot be segmented', async () => {
     const fetch = syntheticProvider()
-    const handle = await begin('known')
+    const handle = await begin('known', {}, true)
     const error = await rejectionOf(run(demand({ segmentable: false }), '不可拆分', handle))
     expect(error.message).toContain('TASK_BUDGET_CAPACITY_CONFLICT')
     expect(classifyGenerationFailure(error.message, null)).toBe('capacity-preflight')
@@ -121,7 +143,7 @@ describe('S07 budget admission through the actually registered generation IPC', 
 
   it('reports a capacity conflict over IPC when one structured item cannot fit', async () => {
     const fetch = syntheticProvider()
-    const handle = await begin('tiny', { outputOverrides: [{ purpose: 'chapter:structured', output: 'structured-data' }] })
+    const handle = await begin('tiny', { outputOverrides: [{ purpose: 'chapter:structured', output: 'structured-data' }] }, true)
     await expect(run({ purpose: 'chapter:structured', output: 'structured-data',
       messages: [{ role: 'user', content: '保留作者事实，创作中文段落。' }],
       budgetDemand: { kind: 'structured-items', writingLanguage: 'zh-CN', requestedItems: 1 } }, '单项超限', handle))
@@ -130,6 +152,24 @@ describe('S07 budget admission through the actually registered generation IPC', 
     expect(fetch).not.toHaveBeenCalled()
     expect(attemptCount()).toBe(0)
     expect(await ledger(handle)).toBe(0)
+  })
+
+  it.each([true, false])('admits a new physical-capacity request with a soft unit target and segmentable=%s', async segmentable => {
+    const fetch = syntheticProvider(), handle = await begin('known')
+    await run(demand({ segmentable }), '新动作容量', handle)
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(attemptCount()).toBe(1)
+    expect(await ledger(handle)).toBe(1)
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body)).max_completion_tokens).toBe(16_384)
+  })
+
+  it('admits a new structured request within its physical output capacity', async () => {
+    const fetch = syntheticProvider(), handle = await begin('tiny', { outputOverrides: [{ purpose: 'chapter:structured', output: 'structured-data' }] })
+    await run({ purpose: 'chapter:structured', output: 'structured-data', messages: task.messages,
+      budgetDemand: { kind: 'structured-items', writingLanguage: 'zh-CN', requestedItems: 1 } }, '新单项容量', handle)
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(await ledger(handle)).toBe(1)
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body)).max_completion_tokens).toBe(1024)
   })
 
   it('persists the ready budget decision before dispatch and still reads it after reopen', async () => {

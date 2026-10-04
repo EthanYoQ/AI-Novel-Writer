@@ -73,7 +73,6 @@ describe('blueprint semantic contract', () => {
     ['characters', '林岚、周砚', 'invalid_type', 'blueprints[0].characters'],
     ['role', { label: '发展' }, 'invalid_type', 'blueprints[0].role'],
     ['keyEvents', ' ', 'empty_value', 'blueprints[0].keyEvents'],
-    ['keyEvents', '事'.repeat(1_201), 'value_too_long', 'blueprints[0].keyEvents'],
     ['suspenseHook', undefined, 'missing_field', 'blueprints[0].suspenseHook'],
   ])('reports a sanitized typed diagnostic for likely model shape at %s', (field, value, code, path) => {
     const candidate = validBlueprint()
@@ -91,9 +90,6 @@ describe('blueprint semantic contract', () => {
 
     expect(failure).toBeInstanceOf(StructuredContractDiagnostic)
     expect(failure).toMatchObject({ code, path, field })
-    if (code === 'value_too_long') {
-      expect(failure).toMatchObject({ actualCharacters: 1_201, maxCharacters: 1_200 })
-    }
     expect((failure as Error).message).not.toContain(JSON.stringify(value))
   })
 
@@ -104,31 +100,22 @@ describe('blueprint semantic contract', () => {
       .toContain('code=duplicate_item path=blueprint.characters')
   })
 
-  it('rejects semantically unbounded prose and lists even when the JSON shape is valid', () => {
-    expect(validateBlueprintSemanticItem(validBlueprint({ role: 'r'.repeat(120) })))
-      .toBeUndefined()
-    expect(validateBlueprintSemanticItem(validBlueprint({ role: 'r'.repeat(121) })))
-      .toContain('code=value_too_long path=blueprint.role')
-    expect(validateBlueprintSemanticItem(validBlueprint({ purpose: 'p'.repeat(240) })))
-      .toBeUndefined()
-    expect(validateBlueprintSemanticItem(validBlueprint({ purpose: 'p'.repeat(241) })))
-      .toContain('code=value_too_long path=blueprint.purpose')
-    expect(validateBlueprintSemanticItem(validBlueprint({ keyEvents: '事'.repeat(1_200) })))
-      .toBeUndefined()
-    expect(validateBlueprintSemanticItem(validBlueprint({ keyEvents: '事'.repeat(1_201) })))
-      .toContain('code=value_too_long path=blueprint.keyEvents field=keyEvents actualCharacters=1201 maxCharacters=1200')
-    expect(validateBlueprintSemanticItem(validBlueprint({
-      characters: Array.from({ length: 13 }, (_, index) => `角色${index}`),
-      relationships: [],
-    }))).toContain('code=invalid_value path=blueprint.characters')
-    expect(validateBlueprintSemanticItem(validBlueprint({
-      characters: ['林岚', '周砚'],
-      relationships: Array.from({ length: 9 }, () => ({
-        from: '林岚',
-        to: '周砚',
-        relation: '不同事件中的临时盟友',
-      })),
-    }))).toContain('code=invalid_value path=blueprint.relationships')
+  it('accepts long narrative fields, thirteen characters and candidates, and nine distinct relations', () => {
+    const characters = Array.from({ length: 13 }, (_, index) => `角色${index}`)
+    const candidate = validBlueprint({ title: '题'.repeat(500), role: 'r'.repeat(500), purpose: 'p'.repeat(1000),
+      keyEvents: '事'.repeat(2000), suspenseHook: '悬'.repeat(1000), characters,
+      newCharacterCandidates: characters.map(name => ({ name, role: 'supporting' })),
+      relationships: characters.slice(1, 10).map(to => ({ from: characters[0], to, relation: '同行' })),
+    })
+    expect(decodeBlueprintSemanticPayload([candidate], [1])[0]).toMatchObject({
+      title: candidate.title, role: candidate.role, purpose: candidate.purpose, keyEvents: candidate.keyEvents,
+      suspenseHook: candidate.suspenseHook, characters, newCharacterCandidates: candidate.newCharacterCandidates,
+      relationshipHints: candidate.relationships,
+    })
+    expect(validateBlueprintSemanticItem(validBlueprint({ characters: ['名'.repeat(33)], relationships: [] })))
+      .toContain('value_too_long')
+    const duplicate = { from: '林岚', to: '周砚', relation: '同行' }
+    expect(validateBlueprintSemanticItem(validBlueprint({ relationships: [duplicate, duplicate] }))).toContain('duplicate_item')
   })
 
   it('accepts an explicit empty relationship list but rejects malformed or dangling relationships', () => {
@@ -203,11 +190,10 @@ describe('blueprint semantic contract', () => {
       .toContain('suspenseHook 始终必填')
   })
 
-  it('gives key events a concise target below the hard maximum in both languages', () => {
-    expect(blueprintSemanticGenerationContract('en-US'))
-      .toContain('Keep keyEvents concise; aim for no more than 900 characters and never exceed the hard maximum of 1,200.')
-    expect(blueprintSemanticGenerationContract('zh-CN'))
-      .toContain('keyEvents 保持精炼，目标为 100–150 字符，绝不得超过 1200 字符硬上限。')
+  it('keeps narrative instructions free of the retired prose and count ceilings', () => {
+    for (const language of ['en-US', 'zh-CN'] as const) {
+      expect(blueprintSemanticGenerationContract(language)).not.toMatch(/1,?200|900|100–150|最多 12|at most 12/u)
+    }
   })
 
   it('requires exact chapter coverage with no missing, extra, or duplicate chapter', () => {

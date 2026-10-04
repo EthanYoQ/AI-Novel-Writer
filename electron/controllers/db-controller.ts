@@ -2,7 +2,7 @@ import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
 import { closeProjectDatabase, getCurrentProjectPath, getProjectDb } from '../database'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
-import { assertGenerationSourcesCurrent, assertImportGenerationSourcesCurrent, recordGenerationDirectoryCommit, withGenerationAgentChildEffect } from './generation-controller'
+import { assertGenerationSourcesCurrent, assertGenerationSynopsisCommit, commitGenerationPlotOutlineAuthorEdit, commitGenerationBlueprintAuthorEdit, assertImportGenerationSourcesCurrent, recordGenerationDirectoryCommit, withGenerationAgentChildEffect } from './generation-controller'
 import { projectAccess } from '../services/project-access'
 import { getProjectDataRoot } from '../services/project-data-locator'
 import { readPortableCurrentAuthority } from '../services/portable-current-authority'
@@ -196,8 +196,14 @@ export function registerDatabaseController() {
     expectedProjectPath: string,
   ) => {
     assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+    if (Object.hasOwn(request, 'authorRecovery')) {
+      const database = getProjectDb()
+      if (!database) throw new Error('GENERATION_DATABASE_NOT_READY')
+      const receipt = database.transaction(() => commitGenerationPlotOutlineAuthorEdit(request)).immediate()
+      return { success: true, receipt }
+    }
     const commit = () => {
-      if (request.generationRunHandle) assertGenerationSourcesCurrent(request.generationRunHandle)
+      if (request.generationRunHandle && assertGenerationSynopsisCommit(request.generationRunHandle, request.synopsis, request.expected)) return true
       return ProjectCoreRepository.commitSynopsis(request)
     }
     const database = getProjectDb()
@@ -546,6 +552,11 @@ export function registerDatabaseController() {
   ) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
+      if (request.authorRecovery) {
+        const database = getProjectDb()
+        if (!database) throw new Error('GENERATION_DATABASE_NOT_READY')
+        return { success: true, receipt: database.transaction(() => commitGenerationBlueprintAuthorEdit(request)).immediate() }
+      }
       if (!request.generationRunHandle) return { success: true, receipt: BlueprintRepository.commitRange(request) }
       const database = getProjectDb(), requested = request.generationRequestedRange ?? { startChapter: request.startChapter, endChapter: request.endChapter }
       if (!database) throw new Error('GENERATION_DATABASE_NOT_READY')

@@ -35,6 +35,7 @@ export type CreativeIntent =
   | { workflow: 'generate_draft'; chapterNumber: number }
   | {
       workflow: 'generate_architecture'
+      targetUnits?: number
       selectedSteps?: ArchitectureWorkflowParams['selectedSteps']
       stepGuidance?: Record<string, string>
       /** 情节大纲本次生成范围 [from..to]（缺省 = 第 1 章到全书）。 */
@@ -126,6 +127,7 @@ async function definitionFor(
     return createArchitectureWorkflow({
       projectPath: project.path,
       projectSession,
+      targetUnits: intent.targetUnits,
       selectedSteps: intent.selectedSteps,
       stepGuidance: intent.stepGuidance,
       synopsisRange: intent.synopsisRange ?? null,
@@ -182,6 +184,11 @@ export async function launchCreativeWorkflow(
     if (intent.workflow !== registration.workflow || intent.workflow === 'generate_draft' && intent.chapterNumber !== registration.chapterNumber
       || generationModelId && generationModelId !== registration.modelId) throw new Error('GENERATION_AGENT_WORKFLOW_INTENT_CHANGED')
     generationModelId = registration.modelId
+    if (registration.planning) {
+      const { from, to, targetUnits } = registration.planning
+      if (intent.workflow === 'generate_architecture') intent = { ...intent, synopsisRange: { from, to }, targetUnits }
+      else if (intent.workflow === 'generate_blueprint') intent = { ...intent, params: { mode: 'append', startChapter: from, count: to - from + 1, targetUnits } }
+    }
     const state = useWorkflowStore.getState()
     const existing = state.activeRuns.find(run => run.id === registration.registrationId) ?? state.history.find(run => run.id === registration.registrationId)
     if (existing || registration.childHandles.length) {

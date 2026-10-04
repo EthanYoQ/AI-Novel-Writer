@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
-import type { BeginGenerationRequest, ExecuteGenerationRequest, BeginGenerationBatchRequest, GenerationDraftCommitRequest, GenerationRecoveryContext, MaterialDecisionReceipt, VisibleCompositionAlgorithm, GenerationOwnerChannels, ShortOutlineRetry } from '../../src/shared/generation-owner-contract'
+import type { BeginGenerationRequest, ExecuteGenerationRequest, BeginGenerationBatchRequest, GenerationDraftCommitRequest, GenerationRecoveryContext, MaterialDecisionReceipt, VisibleCompositionAlgorithm, GenerationOwnerChannels, ShortOutlineRetry, PlanningContinuation } from '../../src/shared/generation-owner-contract'
 import { isDraftVisibleTextVersion } from '../../src/shared/draft-visible-text'
 import { generationOutputContract, type GenerationAuthorInput } from '../../src/shared/generation-owner-contract'
 import type { MainGenerationExecuteReceipt, MainGenerationRunHandle, MainGenerationRunView, MainGenerationSnapshot } from '../../src/services/generation/generation-runtime'
@@ -14,11 +14,12 @@ import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunB
 import { getCurrentProjectPath } from '../database'
 import { ModelExecutionLeaseRegistry, createModelExecutionLeaseReceipt } from './model-execution-lease'
 import { createGenerationRunService, type GenerationRunServiceDependencies } from './generation-run-service'
-import { assertSemanticGenerationTask, batchRootBudget, buildMainGenerationPlan, MAIN_GENERATION_POLICY, newMainGenerationPolicy, planningGenerationScope, readMainGenerationPolicy, type MainGenerationPlan, type MainGenerationPolicy } from './main-generation-plan'
+import { assertSemanticGenerationTask, buildMainGenerationPlan, MAIN_GENERATION_POLICY, newMainGenerationPolicy, planningGenerationScope, readMainGenerationPolicy, type MainGenerationPlan, type MainGenerationPolicy } from './main-generation-plan'
 import { LLMFactory } from '../llm/llm-factory'
 import type { GenerationAttemptReceipt, GenerationTask } from '../../src/services/generation/generation-harness'
 import type { ProviderUsageEvidence } from '../llm/provider.interface'
-import type { BlueprintRangeCommitReceipt } from '../repositories/blueprint-repository'
+import { BlueprintRepository, type BlueprintRangeCommitReceipt, type BlueprintRangeCommitRequest } from '../repositories/blueprint-repository'
+import { decodeBlueprintAuthorPayload } from '../../src/shared/blueprint-semantic-contract'
 import { GenerationDraftEffects, assertGenerationBatchIntent } from './generation-draft-effects'
 import { CharacterProposalService } from './character-proposal-service'
 import { proveCharacterProposal } from './generation-character-proposal-proof'
@@ -52,6 +53,8 @@ import { readPortableRuntimeFreeze } from './portable-runtime-freeze'
 import { readLegacyRosterSource, adoptLegacyCards } from './legacy-roster-source'
 import { buildLegacyRosterJsonRepairTask, buildLegacyRosterReplacementTask, parseLegacyRosterJson } from '../../src/shared/legacy-roster-generation-pure'
 import { validateGraphGenerationInput, readGraphGenerationContext } from './graph-generation-source'
+import { planningTargetInstruction, parsePlanningTargetUnits, renderPlotOutlineRange, plotOutlineRecoveryDraft, validPlotOutlineAuthorPrefix, type PlotOutlineSource, type PlotOutlineProgress, type PlotOutlineRecovery, type PlotOutlineAuthorEditReceipt } from '../../src/shared/plot-outline-contract'
+import { ProjectCoreRepository, type ProjectCoreSynopsisExpected, type ProjectCoreSynopsisCommitRequest } from '../repositories/project-core-repository'
 const graphOperations = { plot: 'plot-tree-snapshot', plan: 'narrative-thread-plan-candidate', event: 'narrative-thread-event-candidate' } as const
 
 export type SafeGenerationModelReceipt = Omit<ModelExecutionLeaseReceipt, 'leaseId' | 'createdAt' | 'expiresAt'>
@@ -128,7 +131,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const runId = deps.database.prepare('SELECT run_id FROM generation_runs WHERE root_action_id=? ORDER BY rowid LIMIT 1').pluck().get(rootActionId)
     if (typeof runId !== 'string') throw new Error('GENERATION_ROOT_MISSING')
     const policy = readMainGenerationPolicy(repository.get(runId).binding.sourceManifest.policy)
-    if (policy.version === 's07-planning-v1' && !isDeepStrictEqual(policy.budget, repository.budget(rootActionId).policy))
+    if (policy.version !== MAIN_GENERATION_POLICY.version && !isDeepStrictEqual(policy.budget, repository.budget(rootActionId).policy))
       throw new Error('GENERATION_POLICY_BUDGET_MISMATCH')
     return policy
   }
@@ -136,9 +139,11 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     assertCurrent()
     const run = repository.get(handle.runId)
     if (run.binding.projectId !== deps.projectId || !isDeepStrictEqual(handleOf(run), handle)) throw new Error('GENERATION_RUN_IDENTITY_MISMATCH')
+    if (execution) repository.assertPlotOutlineWritable(run.runId)
     if (execution && run.binding.epoch !== deps.epoch) throw new Error('GENERATION_EPOCH_STALE')
+    if (repository.isPrivatePlanningHistory(run.runId)) return run
     const policy = readMainGenerationPolicy(run.binding.sourceManifest.policy)
-    if (policy.version === 's07-planning-v1' && !isDeepStrictEqual(policy, rootPolicy(run.rootActionId)))
+    if (policy.version !== MAIN_GENERATION_POLICY.version && !isDeepStrictEqual(policy.budget, rootPolicy(run.rootActionId).budget))
       throw new Error('GENERATION_POLICY_BUDGET_MISMATCH')
     return run
   }
@@ -214,19 +219,17 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       completedOutput: completed?.artifact?.text ?? null, promptHash: decision.shortOutlinePromptHash, retry: shortOutlineRetry(run),
       ...(initialDraftTask ? { initialDraftTask } : {}) }
   }
-  const snapshotOf = (receipt: GenerationExecutionReceipt): MainGenerationSnapshot | null => {
+  const snapshotOf = (receipt: GenerationExecutionReceipt, visiblePurpose?: { purpose: string }): MainGenerationSnapshot | null => {
     const artifact = receipt.artifact
     if (!artifact) return null
     const terminal = ['settled', 'unknown', 'cancelled-before-dispatch'].includes(receipt.attempt.status)
     const status = !terminal ? 'running' : receipt.failureCode ? 'failed' : receipt.result?.finishReason === 'stop' ? 'completed'
       : receipt.attempt.status === 'cancelled-before-dispatch' || receipt.budget.root.status === 'cancelled' ? 'cancelled'
         : receipt.result?.finishReason ? 'failed' : 'unknown'
-    // Unknown usage liability can coexist with a persisted, trusted stop/length result.
     const compositionEligible = ['settled', 'unknown'].includes(receipt.attempt.status) && !receipt.failureCode
       && receipt.budget.root.status !== 'cancelled' && ['stop', 'length'].includes(receipt.result?.finishReason ?? '')
-      && Boolean(artifact.text.trim()) && deps.database.prepare("SELECT 1 FROM generation_artifacts WHERE artifact_id=? AND status<>'discarded'").pluck().get(artifact.artifactId) === 1
-      // 生成前定稿对账的输出只是依据，永不作为正文候选参与组合。
-      && ![DRAFT_RECONCILE_PURPOSE, DRAFT_SHORT_OUTLINE_PURPOSE].includes(attemptPurpose(receipt.attempt.attemptId) as typeof DRAFT_RECONCILE_PURPOSE)
+      && Boolean(artifact.text.trim()) && (visiblePurpose !== undefined || deps.database.prepare("SELECT 1 FROM generation_artifacts WHERE artifact_id=? AND status<>'discarded'").pluck().get(artifact.artifactId) === 1)
+      && ![DRAFT_RECONCILE_PURPOSE, DRAFT_SHORT_OUTLINE_PURPOSE].includes((visiblePurpose?.purpose ?? attemptPurpose(receipt.attempt.attemptId)) as typeof DRAFT_RECONCILE_PURPOSE)
     return { ...handleOf(receipt.run), epoch: artifact.epoch, artifactId: artifact.artifactId, attemptId: artifact.attemptId,
       ...(receipt.diagnostics ? { diagnostics: receipt.diagnostics } : {}),
       revision: artifact.revision, durableRevision: artifact.revision, text: artifact.text, textHash: artifact.textHash, status, compositionEligible }
@@ -251,14 +254,15 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     return safeGenerationModelReceipt(createModelExecutionLeaseReceipt(model, { leaseId: 'read-only-evidence', createdAt: 0, expiresAt: 0 }))
   }
   const viewOf = (run: DurableGenerationRun): MainGenerationRunView => {
-    const budget = repository.budget(run.rootActionId)
-    const visibleIds = new Set(repository.listCandidates().map(artifact => artifact.artifactId))
-    const candidates = budget.attempts.map(attempt => volatileReceipts.get(attempt.attemptId) ?? repository.receipt(attempt.attemptId))
+    const { budget, plotOutline, attempts } = repository.readRunView(run.runId)
+    const visibleIds = new Map(attempts.filter(item => item.candidate).map(item => [item.receipt.artifact!.artifactId, { purpose: item.usage.purpose ?? 'unknown' }]))
+    const receipts = attempts.map(item => volatileReceipts.get(item.receipt.attempt.attemptId) ?? item.receipt)
+    const candidates = receipts
       .filter(receipt => receipt.run.runId === run.runId && receipt.artifact && visibleIds.has(receipt.artifact.artifactId))
-      .map(receipt => ({ ...snapshotOf(receipt)!, fingerprint: receipt.artifact!.fingerprint, nonReplayable: true as const }))
+      .map(receipt => ({ ...snapshotOf(receipt, visibleIds.get(receipt.artifact!.artifactId))!, fingerprint: receipt.artifact!.fingerprint, nonReplayable: true as const }))
     const artifacts = candidates.filter(artifact => artifact.epoch === run.binding.epoch)
-    const budgetDiagnostics: NonNullable<MainGenerationRunView['budgetDiagnostics']> = budget.attempts.map(attempt => {
-      const receipt = volatileReceipts.get(attempt.attemptId) ?? repository.receipt(attempt.attemptId)
+    const budgetDiagnostics: NonNullable<MainGenerationRunView['budgetDiagnostics']> = receipts.map(receipt => {
+      const attempt = receipt.attempt
       const usage = receipt.result?.usage
       return {
         attemptId: attempt.attemptId, plannerVersion: receipt.budgetDecision?.policyVersion,
@@ -272,8 +276,11 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       }
     })
     return { handle: handleOf(run), status: run.status as MainGenerationRunView['status'], operation: run.binding.sourceManifest.operation as string,
+      ...(plotOutline ? { plotOutline } : {}),
       budgetDiagnostics,
-      nonReplayable: run.binding.epoch !== deps.epoch || run.status !== 'running' || !!budget.blockedCode,
+      nonReplayable: run.binding.epoch !== deps.epoch || run.status !== 'running' || !!budget.blockedCode
+        || repository.isPrivatePlanningHistory(run.runId) || !!repository.readPlanningContinuation(run.runId)
+        || !!(plotOutline && repository.readPlotOutlineAuthorEdit(run.runId)),
       budget: { maxAttempts: budget.policy.maxPhysicalRequests, maxRequestedOutputTokens: budget.policy.maxTokenLiability,
         maxRequestedOutputTokensPerAttempt: budget.policy.maxOutputPerRequest,
         deadlineAt: Date.now() + Math.max(0, budget.policy.maxActiveElapsedMs - budget.activeElapsedMs) },
@@ -322,7 +329,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       selectedDraftIds: request.selectedDraftIds, selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: Array.from({ length: 6 }, (_, index) => request.chapterNumber + index),
       promptKeys: request.promptKeys, skillStages: request.skillStages, authorInputs: request.authorInputs, output: 'visible-text' as const,
       ...(request.batchId ? { batchId: request.batchId } : {}), ...(knowledgeSnapshot ? { knowledgeSnapshot: structuredClone(knowledgeSnapshot) } : {}) }
-    return deps.buildBinding(selection, receipt, MAIN_GENERATION_POLICY)
+    const policy = request.batchId ? rootPolicy(draftEffects.readBatch(request.batchId, deps.projectId).rootHandle.rootActionId)
+      : newMainGenerationPolicy(selection, model)
+    return deps.buildBinding(selection, receipt, policy)
   }
   const prepareDraftContext = (request: PrepareDraftContextRequest, knowledgeSnapshot: GenerationKnowledgeSnapshot, beforeKnowledgeRead?: RunBinding): PreparedDraftContext => {
     const { binding, selectedDrafts } = deps.database.transaction(() => {
@@ -396,13 +405,28 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const lease = deps.leases.begin(selection.modelId)
     try {
       const parentRootActionId = continuation?.sourceHandle.rootActionId ?? selection.parentRootActionId
-      const policy = parentRootActionId ? rootPolicy(parentRootActionId) : newMainGenerationPolicy(selection, deps.leases.resolve(lease.leaseId))
-      if (parentRootActionId && policy.version === 's07-planning-v1') {
-        const scope = planningGenerationScope(selection)
+      const scope = planningGenerationScope(selection)
+      if (scope) {
+        const rangeEnd = scope.kind === 'directory' ? scope.requestedRange.endChapter : scope.intent.synopsisRange?.to
+        if (rangeEnd !== undefined && rangeEnd > (ProjectCoreRepository.get(deps.database)?.totalChapters ?? 0))
+          throw new Error('GENERATION_PLANNING_RANGE_INVALID')
+        const targets = selection.authorInputs?.filter(input => input.id === 'planning:target-units') ?? []
+        if (targets.length > 1) throw new Error('GENERATION_PLANNING_TARGET_INVALID')
+        const targetUnits = parsePlanningTargetUnits(targets.length ? Number(targets[0].text) : undefined)
+        selection = { ...selection, authorInputs: [...(selection.authorInputs ?? []).filter(input => input.id !== 'planning:target-units'),
+          { id: 'planning:target-units', text: String(targetUnits) }] }
+      }
+      let policy = parentRootActionId ? rootPolicy(parentRootActionId) : newMainGenerationPolicy(selection, deps.leases.resolve(lease.leaseId))
+      if (parentRootActionId && agentWorkflow && scope) policy = { ...policy, planning: scope }
+      else if (parentRootActionId && policy.planning) {
         if (continuation && policy.planning.kind === 'directory' && scope?.kind === 'directory') {
           if (!isDeepStrictEqual(continuation.remainingRange, { startChapter: scope.requestedRange.startChapter, endChapter: scope.requestedRange.endChapter }))
             throw new Error('GENERATION_DIRECTORY_CONTINUATION_RANGE_CHANGED')
-        } else if (!isDeepStrictEqual(scope, policy.planning)) throw new Error('GENERATION_PLANNING_INTENT_CHANGED')
+        } else if (scope?.kind === 'architecture' && policy.planning.kind === 'architecture'
+          ? !isDeepStrictEqual(scope.intent, policy.planning.intent) : !isDeepStrictEqual(scope, policy.planning)) throw new Error('GENERATION_PLANNING_INTENT_CHANGED')
+        const rootRunId = deps.database.prepare('SELECT run_id FROM generation_runs WHERE root_action_id=? ORDER BY rowid LIMIT 1').pluck().get(parentRootActionId) as string
+        const target = (repository.get(rootRunId).binding.sourceManifest.authorInputs as GenerationAuthorInput[] | undefined)?.find(input => input.id === 'planning:target-units')
+        if (target && !isDeepStrictEqual(target, selection.authorInputs?.find(input => input.id === target.id))) throw new Error('GENERATION_PLANNING_TARGET_CHANGED')
       }
       const prepared = selection.preparationId ? preparations.get(selection.preparationId) : undefined
       if (selection.preparationId && (!prepared || selection.operation !== 'chapter-draft')) throw new Error('GENERATION_DRAFT_PREPARATION_REQUIRED')
@@ -430,11 +454,14 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (agentWorkflow) repository.activateRootForCommittedStage(agentWorkflow.parentRootActionId, binding)
       if (importAdmission?.parentRootActionId) repository.activateRootForCommittedStage(importAdmission.parentRootActionId, binding)
       if (continuation && !continuation.continuationHandle) repository.activateRootForCommittedStage(continuation.sourceHandle.rootActionId, binding)
-      const budget = selection.batchIntent ? batchRootBudget(selection.batchIntent.range.endChapter - selection.batchIntent.range.startChapter + 1)
-        : parentRootActionId ? repository.budget(parentRootActionId).policy : policy.budget
+      const budget = parentRootActionId ? repository.budget(parentRootActionId).policy : policy.budget
       const next = service.open({ ...binding, operation: selection.operation, uiActionNonce: selection.uiActionNonce,
         frozenInputHash: textHash(JSON.stringify([binding.fingerprint, binding.contextSnapshotId, selection.output])),
         budget, parentRootActionId })
+      if (parentRootActionId && repository.readPlotOutline(next.runId)) {
+        const rows = deps.database.prepare('SELECT run_id FROM generation_runs WHERE root_action_id=?').all(parentRootActionId) as { run_id: string }[]
+        if (rows.some(row => row.run_id !== next.runId && repository.readPlotOutline(row.run_id))) throw new Error('GENERATION_PLOT_OUTLINE_RECOVERY_REQUIRED')
+      }
       if (continuation?.continuationHandle && continuation.continuationHandle.runId !== next.runId) throw new Error('GENERATION_DIRECTORY_CONTINUATION_EXISTS')
       if (batch?.currentChapterRunHandle && batch.currentChapterRunHandle.runId !== next.runId) throw new Error('GENERATION_BATCH_RECOVERY_REQUIRED')
       if (continuation && !continuation.continuationHandle) repository.bindDirectoryContinuation(continuation.operationId, handleOf(next))
@@ -481,6 +508,14 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     if (run.binding.sourceManifest.operation === 'legacy-character-roster-repair' && !legacyExecution) throw new Error('GENERATION_LEGACY_ADMISSION_REQUIRED')
     assertSemanticGenerationTask(request.task)
     const task = structuredClone(request.task)
+    if (['generate-plot-outline', 'chapter-blueprint-directory'].includes(String(run.binding.sourceManifest.operation))
+      && (run.binding.sourceManifest.authorInputs as GenerationAuthorInput[] | undefined)?.some(input => input.id === 'planning:target-units')) {
+      const target = (run.binding.sourceManifest.authorInputs as GenerationAuthorInput[]).find(input => input.id === 'planning:target-units')!
+      const language = deps.database.prepare("SELECT writing_language FROM project_core WHERE id='main'").pluck().get() === 'en-US' ? 'en-US' : 'zh-CN'
+      const instruction = planningTargetInstruction(run.binding.sourceManifest.operation === 'generate-plot-outline' ? 'outline' : 'blueprint', parsePlanningTargetUnits(Number(target.text)), language)
+      if (!task.messages.some(message => message.role === 'system' && message.content.includes(instruction)))
+        task.messages = [...task.messages, { role: 'system', content: instruction }]
+    }
     const materialDecision = run.binding.sourceManifest.materialDecision as MaterialDecisionReceipt | undefined
     const materialOperation = String(run.binding.sourceManifest.operation)
     if ((!materialDecision && ['review-chapter', 'refine-draft', 'refine-from-review'].includes(materialOperation))
@@ -541,6 +576,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     }
     const existing = repository.findInvocation(run.runId, request.invocationNonce, requestHash)
     if (existing && (task.purpose === DRAFT_SHORT_OUTLINE_PURPOSE || existing.attempt.status !== 'dispatch-marked' && existing.attempt.status !== 'reserved')) return outcomeOf(volatileReceipts.get(existing.attempt.attemptId) ?? existing, task)
+    repository.assertPlotOutlineRequest(run.runId, task.purpose, task)
     if (task.purpose === DRAFT_SHORT_OUTLINE_PURPOSE && runAttempts(run.runId).length) {
       if (!shortOutlineRetryAttemptId) throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_ALREADY_ATTEMPTED')
       const original = assertShortOutlineRetryAvailable(run, shortOutlineRetryAttemptId)
@@ -568,7 +604,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       requestedOutputTokens: plan.requestedOutputTokens, inputUpperBoundTokens: plan.inputUpperBoundTokens,
       reasoningUpperBoundTokens: plan.reasoningUpperBoundTokens, usagePolicy: plan.usagePolicy, purpose: task.purpose,
       ...(plan.budgetDecision ? { budgetDecision: plan.budgetDecision } : {}),
-      ...(run.binding.sourceManifest.importSlot || materialDecision?.shortOutlinePromptHash ? { replayTask: task } : {}),
+      ...(run.binding.sourceManifest.importSlot || materialDecision?.shortOutlinePromptHash || repository.readPlotOutline(run.runId) ? { replayTask: task } : {}),
       ...(reconciliationInjected ? { reconciliationInjected } : {}),
       ...(agentExecution ? { agentToolNames: (run.binding.sourceManifest.agentContext as AgentGenerationContext).input.tools.map(tool => tool.name) } : {}) })
     if (receipt.failureCode || receipt.unsavedTail) volatileReceipts.set(receipt.attempt.attemptId, receipt)
@@ -588,6 +624,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   }
   const resume = async (handle: MainGenerationRunHandle) => {
     const run = requireRun(handle)
+    repository.assertPlotOutlineWritable(run.runId)
+    if (plotOutlineAlreadyCurrent(run)) return viewOf(run)
     imports.assertMutable(run)
     finalizations.assertMutable(run)
     graphs.assertMutable(run)
@@ -637,8 +675,164 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
       if (!isDeepStrictEqual(current, run.binding)) throw new Error('GENERATION_SOURCE_CHANGED')
     }
+  const plotOutlineTargetCurrent = (run: DurableGenerationRun, outline: PlotOutlineProgress, target: string): boolean => {
+    const raw = deps.database.prepare("SELECT * FROM project_core WHERE id='main'").get() as Record<string, unknown> | undefined
+    if (!raw || raw.synopsis !== target) return false
+    const core = Object.fromEntries(Object.entries(raw).filter(([key]) => !['created_at', 'updated_at', 'character_states', 'plot_tree_snapshot'].includes(key)))
+    const origin = run.binding.sourceManifest.plotOutlineSource as PlotOutlineSource
+    if (!isDeepStrictEqual({ ...core, synopsis: outline.sourceExpected.synopsis }, origin.core)) throw new Error('GENERATION_SOURCE_CHANGED')
+    const current = deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))
+    const refs = (binding: RunBinding) => binding.sourceRefs.filter(ref => ref.sourceId !== 'project-core:main').map(ref => ({ ...ref, epoch: undefined }))
+    const unchangedFingerprint = (binding: RunBinding) => Object.fromEntries(Object.entries(binding.fingerprint)
+      .filter(([key]) => !['authorGuidanceHash', 'contextSnapshotHash'].includes(key)))
+    if (current.projectId !== run.binding.projectId || !isDeepStrictEqual(current.sourceManifest, run.binding.sourceManifest)
+      || !isDeepStrictEqual(refs(current), refs(run.binding)) || !isDeepStrictEqual(unchangedFingerprint(current), unchangedFingerprint(run.binding)))
+      throw new Error('GENERATION_SOURCE_CHANGED')
+    return true
+  }
+  const plotOutlineAlreadyCurrent = (run: DurableGenerationRun): boolean => {
+    const outline = repository.readPlotOutline(run.runId)
+    if (outline?.cursor.kind !== 'complete' || !outline.composition) return false
+    return plotOutlineTargetCurrent(run, outline, renderPlotOutlineRange(outline.composition.text, outline.range, outline.sourceExpected))
+  }
+  const projectGenerationInFlight = () => pending.size > 0 || !!deps.database.prepare(
+    "SELECT 1 FROM generation_attempts WHERE json_extract(attempt_json,'$.status') IN ('reserved','dispatch-marked') LIMIT 1").get()
+  const planningContinuation = (run: DurableGenerationRun): PlanningContinuation | undefined => {
+    if (repository.isPrivatePlanningHistory(run.runId)) return undefined
+    const outline = repository.readPlotOutline(run.runId)
+    const inputs = run.binding.sourceManifest.authorInputs as GenerationAuthorInput[] | undefined
+    const directoryRange = run.binding.sourceManifest.operation === 'chapter-blueprint-directory'
+      ? inputs?.find(input => input.id === 'directory:requested-range') : undefined
+    if (!outline && !directoryRange) return undefined
+    const scope = directoryRange ? JSON.parse(directoryRange.text) as { startChapter: number; endChapter: number } : undefined
+    const saved = outline ? repository.readPlotOutlineAuthorEdit(run.runId) : null
+    const blueprintSaved = scope ? repository.readBlueprintAuthorEdit(run.runId) : null
+    const progress = scope ? repository.listDirectoryProgress().find(item => item.sourceHandle.runId === run.runId) : undefined
+    const remainingRange = outline ? saved ? saved.remainingRange : outline.range
+      : blueprintSaved ? blueprintSaved.remainingRange : progress ? progress.remainingRange ? { from: progress.remainingRange.startChapter, to: progress.remainingRange.endChapter } : null
+        : { from: scope!.startChapter, to: scope!.endChapter }
+    const target = inputs?.find(input => input.id === 'planning:target-units')
+    const base = { sourceHandle: handleOf(run), remainingRange, targetUnits: parsePlanningTargetUnits(target ? Number(target.text) : undefined) }
+    const continued = repository.readPlanningContinuation(run.runId)
+    if (continued) return { ...base, state: 'continued', nextHandle: continued.nextHandle }
+    if (projectGenerationInFlight()) return { ...base, state: 'in-flight' }
+    let current = false
+    try {
+      if (outline && saved) {
+        const synopsis = ProjectCoreRepository.get(deps.database)?.synopsis
+        current = synopsis !== undefined && textHash(synopsis) === saved.synopsisHash && plotOutlineTargetCurrent(run, outline, synopsis)
+      } else if (progress || blueprintSaved) {
+        const committed = [progress?.operationId, blueprintSaved?.operationId].filter((id): id is string => !!id).flatMap(id => {
+          const row = deps.database.prepare('SELECT character_sync_input FROM blueprint_commit_operations WHERE operation_id=?').pluck().get(id)
+          return JSON.parse(String(row)) as import('../repositories/blueprint-repository').BlueprintData[]
+        })
+        const stored = new Map(BlueprintRepository.getAll(deps.database).map(item => [item.chapterNumber, item]))
+        const fields = ['chapterNumber', 'title', 'role', 'purpose', 'keyEvents', 'characters', 'suspenseHook', 'userGuidance'] as const
+        current = committed.every(item => fields.every(key => isDeepStrictEqual(item[key], stored.get(item.chapterNumber)?.[key])))
+        const projection = (binding: RunBinding) => ({ manifest: binding.sourceManifest,
+          fingerprint: Object.fromEntries(Object.entries(binding.fingerprint).filter(([key]) => !['contextSnapshotHash', 'chapterBriefHash'].includes(key))),
+          refs: binding.sourceRefs.filter(ref => !committed.some(item => ref.sourceId === `blueprint:${item.chapterNumber}`)).map(ref => ({ ...ref, epoch: undefined })) })
+        current = current && isDeepStrictEqual(projection(run.binding), projection(deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))))
+      } else current = compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding)))
+    } catch { return { ...base, state: 'source-changed' } }
+    if (!current) return { ...base, state: 'source-changed' }
+    if (!remainingRange) return { ...base, state: 'complete' }
+    if (outline && !saved && (outline.composition?.chapters?.length || outline.cursor.kind === 'accept')) return { ...base, state: 'save-prefix' }
+    return { ...base, state: 'ready' }
+  }
+  const plotOutlineRecovery = (run: DurableGenerationRun, outline: PlotOutlineProgress): PlotOutlineRecovery => {
+    const saved = repository.readPlotOutlineAuthorEdit(run.runId)
+    const latest = viewOf(run).candidates?.at(-1)
+    let draft = plotOutlineRecoveryDraft(outline, latest?.text)
+    let writeState: PlotOutlineRecovery['writeState'] = { kind: 'blocked', reason: 'source-changed' }
+    try {
+      if (saved) {
+        const current = ProjectCoreRepository.get(deps.database)?.synopsis
+        if (current !== undefined && textHash(current) === saved.synopsisHash && plotOutlineTargetCurrent(run, outline, current)) {
+          draft = current
+          writeState = { kind: 'blocked', reason: 'author-saved' }
+        }
+      } else if (!repository.readPlanningContinuation(run.runId) && compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding)))) {
+        writeState = projectGenerationInFlight() ? { kind: 'blocked', reason: 'in-flight' } : { kind: 'ready' }
+      }
+    } catch { /* Frozen proposals remain readable when current sources are unavailable. */ }
+    return { sourceHandle: handleOf(run), leaseEpoch: deps.epoch, draft,
+      completeChapters: [...(outline.composition?.chapters?.map(chapter => chapter.chapterNumber) ?? []),
+        ...(outline.cursor.kind === 'accept' ? [outline.cursor.chapterNumber] : [])],
+      writeState, saved }
+  }
+  const commitPlotOutlineAuthorEdit = (request: ProjectCoreSynopsisCommitRequest): PlotOutlineAuthorEditReceipt => {
+    if (!deps.database.inTransaction) throw new Error('GENERATION_PLOT_OUTLINE_TRANSACTION_REQUIRED')
+    const author = request.authorRecovery
+    if (!author || request.generationRunHandle || typeof request.synopsis !== 'string') throw new Error('GENERATION_PLOT_OUTLINE_AUTHOR_EDIT_INVALID')
+    if (author.leaseEpoch !== deps.epoch) throw new Error('GENERATION_EPOCH_STALE')
+    const run = requireRun(author.sourceHandle), outline = repository.readPlotOutline(run.runId)
+    if (!outline || !isDeepStrictEqual(request.expected, outline.sourceExpected)
+      || !validPlotOutlineAuthorPrefix(request.synopsis, outline, author.committedRange)) throw new Error('GENERATION_PLOT_OUTLINE_AUTHOR_EDIT_INVALID')
+    const receipt = repository.plotOutlineAuthorEditReceipt(run.runId, author.operationId, author.committedRange, textHash(request.synopsis))
+    const saved = repository.readPlotOutlineAuthorEdit(run.runId)
+    if (saved) {
+      if (!isDeepStrictEqual(saved, receipt)) throw new Error('GENERATION_PLOT_OUTLINE_AUTHOR_RECEIPT_CONFLICT')
+      if (!plotOutlineTargetCurrent(run, outline, request.synopsis)) throw new Error('GENERATION_SOURCE_CHANGED')
+      return { ...saved, idempotent: true }
+    }
+    repository.assertPlotOutlineWritable(run.runId)
+    if (projectGenerationInFlight()) throw new Error('GENERATION_PLOT_OUTLINE_AUTHOR_IN_FLIGHT')
+    if (!compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding)))) throw new Error('GENERATION_SOURCE_CHANGED')
+    if (!ProjectCoreRepository.commitSynopsis(request, deps.database)) throw new Error('GENERATION_SOURCE_CHANGED')
+    repository.recordPlotOutlineAuthorEdit(receipt)
+    return receipt
+  }
+  const commitBlueprintAuthorEdit = (request: BlueprintRangeCommitRequest): BlueprintRangeCommitReceipt => {
+    if (!deps.database.inTransaction) throw new Error('GENERATION_DIRECTORY_TRANSACTION_REQUIRED')
+    const author = request.authorRecovery
+    if (!author || request.generationRunHandle || request.mode !== 'replace-range' || author.leaseEpoch !== deps.epoch)
+      throw new Error('GENERATION_BLUEPRINT_AUTHOR_EDIT_INVALID')
+    const run = requireRun(author.sourceHandle), recovery = planningContinuation(run)
+    if (run.binding.sourceManifest.operation !== 'chapter-blueprint-directory' || !recovery
+      || !Number.isSafeInteger(request.startChapter) || !Number.isSafeInteger(request.endChapter) || request.startChapter < 1 || request.endChapter < request.startChapter
+      || request.endChapter - request.startChapter >= 10000
+      || Buffer.byteLength(JSON.stringify(request.blueprints), 'utf8') > 8 * 1024 * 1024) throw new Error('GENERATION_BLUEPRINT_AUTHOR_EDIT_INVALID')
+    const chapters = Array.from({ length: request.endChapter - request.startChapter + 1 }, (_, index) => request.startChapter + index)
+    const blueprints = decodeBlueprintAuthorPayload(request.blueprints, chapters)
+    const saved = repository.readBlueprintAuthorEdit(run.runId)
+    if (saved) {
+      if (saved.operationId !== request.operationId || saved.committedRange.from !== request.startChapter || saved.committedRange.to !== request.endChapter)
+        throw new Error('GENERATION_BLUEPRINT_AUTHOR_RECEIPT_CONFLICT')
+      if (recovery.state === 'source-changed') throw new Error('GENERATION_SOURCE_CHANGED')
+      return { ...BlueprintRepository.commitRange({ ...request, blueprints }, undefined, deps.database), authorEdit: saved }
+    }
+    repository.assertPlotOutlineWritable(run.runId)
+    if (recovery.state !== 'ready' || !recovery.remainingRange || request.startChapter !== recovery.remainingRange.from || request.endChapter > recovery.remainingRange.to)
+      throw new Error(`GENERATION_BLUEPRINT_AUTHOR_${recovery.state.toUpperCase().replaceAll('-', '_')}`)
+    const receipt = BlueprintRepository.commitRange({ ...request, blueprints }, () => {
+      if (planningContinuation(run)?.state !== 'ready') throw new Error('GENERATION_SOURCE_CHANGED')
+    }, deps.database)
+    const input = (run.binding.sourceManifest.authorInputs as GenerationAuthorInput[]).find(item => item.id === 'directory:requested-range')!
+    const range = JSON.parse(input.text) as { startChapter: number; endChapter: number }
+    const authorEdit = { kind: 'blueprint-author-edit' as const, operationId: request.operationId, sourceHandle: handleOf(run),
+      requestedRange: { from: range.startChapter, to: range.endChapter }, committedRange: { from: request.startChapter, to: request.endChapter },
+      remainingRange: request.endChapter < range.endChapter ? { from: request.endChapter + 1, to: range.endChapter } : null, payloadHash: receipt.payloadHash }
+    repository.recordBlueprintAuthorEdit(authorEdit)
+    return { ...receipt, authorEdit }
+  }
+  const assertSynopsisCommit = (handle: MainGenerationRunHandle, synopsis: string, expected: ProjectCoreSynopsisExpected): boolean => {
+    const run = requireRun(handle), outline = repository.readPlotOutline(run.runId)
+    repository.assertPlotOutlineWritable(run.runId)
+    if (outline) {
+      if (outline.cursor.kind !== 'complete' || !outline.composition
+        || synopsis !== renderPlotOutlineRange(outline.composition.text, outline.range, outline.sourceExpected)
+        || !isDeepStrictEqual(expected, outline.sourceExpected)) throw new Error('GENERATION_PLOT_OUTLINE_COMMIT_INVALID')
+      if (plotOutlineAlreadyCurrent(run)) return true
+    }
+    assertSourcesCurrent(handle)
+    return false
+  }
   const readContext = (handle: MainGenerationRunHandle): GenerationRecoveryContext => {
-    const run = requireRun(handle), manifest = run.binding.sourceManifest, composition = repository.readVisibleComposition(run.runId)
+    const run = requireRun(handle), manifest = run.binding.sourceManifest, composition = repository.isPrivatePlanningHistory(run.runId) ? null : repository.readVisibleComposition(run.runId)
+    const plotOutline = repository.readPlotOutline(run.runId)
+    const continuation = planningContinuation(run)
+    const blueprintSaved = manifest.operation === 'chapter-blueprint-directory' ? repository.readBlueprintAuthorEdit(run.runId) : null
     const draftSave = draftEffects.readRecovery(run.runId)
     const materialDecision = manifest.materialDecision as MaterialDecisionReceipt | undefined
     const requiredCandidateDraftIds = new Set((materialDecision?.included ?? [])
@@ -654,6 +848,13 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     const rows = deps.database.prepare('SELECT attempt_id,usage_receipt_json FROM generation_attempts WHERE run_id=? ORDER BY rowid').all(run.runId) as { attempt_id: string; usage_receipt_json: string }[]
     const last = composition ? deps.database.prepare('SELECT attempt_id FROM generation_artifacts WHERE artifact_id=?').pluck().get(composition.artifactIds.at(-1)) as string : undefined
     return { modelId: modelReceipt(run.binding).modelId, handle: handleOf(run), operation: manifest.operation as string, chapterNumber: manifest.chapterNumber as number | undefined,
+      ...(plotOutline ? { plotOutline, plotOutlineRecovery: plotOutlineRecovery(run, plotOutline) } : {}),
+      ...(continuation ? { planningContinuation: continuation } : {}),
+      ...(manifest.operation === 'chapter-blueprint-directory' && continuation ? { blueprintRecovery: {
+        sourceHandle: handleOf(run), leaseEpoch: deps.epoch, draft: viewOf(run).candidates?.at(-1)?.text ?? '',
+        editRange: continuation.remainingRange, saved: blueprintSaved,
+        writeState: blueprintSaved ? 'author-saved' as const : continuation.state === 'save-prefix' ? 'ready' as const : continuation.state,
+      } } : {}),
       authorInputs: structuredClone(manifest.authorInputs as GenerationAuthorInput[] ?? []),
       selectedDraftIds: structuredClone(manifest.selectedDraftIds as number[] ?? []), selectedFinalizedDraftIds: structuredClone(manifest.selectedFinalizedDraftIds as number[] ?? []),
       selectedBlueprintChapterNumbers: structuredClone(manifest.selectedBlueprintChapterNumbers as number[] ?? []), composition,
@@ -1089,12 +1290,15 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         return agents.withChildEffect(request.handle, () => draftEffects.commit(request, () => assertSourcesCurrent(request.handle)))
       }).immediate()
     },
+    assertSynopsisCommit, commitPlotOutlineAuthorEdit, commitBlueprintAuthorEdit,
     withAgentChildEffect: <T>(handle: MainGenerationRunHandle, effect: () => T): T => { requireRun(handle); return agents.withChildEffect(handle, effect) },
     read: (handle: MainGenerationRunHandle) => viewOf(requireRun(handle)),
     listDirectoryProgress: () => { assertCurrent(); return repository.listDirectoryProgress().map(progress => ({ ...progress,
       authorInputs: structuredClone(repository.get(progress.sourceHandle.runId).binding.sourceManifest.authorInputs as GenerationAuthorInput[] | undefined) })) },
     recordDirectoryCommit: (handle: MainGenerationRunHandle, requestedRange: { startChapter: number; endChapter: number }, receipt: BlueprintRangeCommitReceipt) => {
-      requireRun(handle, true)
+      const run = requireRun(handle, true)
+      if (readMainGenerationPolicy(run.binding.sourceManifest.policy).version === 's07-capacity-v2' && receipt.mode !== 'replace-range')
+        throw new Error('GENERATION_DIRECTORY_RANGE_REPLACE_REQUIRED')
       const existing = repository.listDirectoryProgress().find(item => item.operationId === receipt.operationId)
       if (existing) {
         if (existing.payloadHash !== receipt.payloadHash || existing.sourceHandle.runId !== handle.runId || !isDeepStrictEqual(existing.requestedRange, requestedRange)) throw new Error('GENERATION_DIRECTORY_PROGRESS_CONFLICT')
@@ -1133,6 +1337,30 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       if (old.binding.sourceManifest.legacyRosterContext) throw new Error('GENERATION_LEGACY_ADMISSION_REQUIRED')
       if (old.binding.sourceManifest.graphGenerationContext) throw new Error('GENERATION_GRAPH_ADMISSION_REQUIRED')
       if (selection.parentRootActionId || selection.uiActionNonce === repository.budget(old.rootActionId).root.uiActionNonce) throw new Error('GENERATION_RESTART_NEW_NONCE_REQUIRED')
+      const continuation = planningContinuation(old)
+      if (continuation) return deps.database.transaction(() => {
+        const { uiActionNonce: _nonce, ...restartIntent } = selection
+        void _nonce
+        const requestHash = textHash(JSON.stringify(restartIntent))
+        const existing = repository.readPlanningContinuation(old.runId)
+        if (existing) {
+          if (existing.requestHash !== requestHash) throw new Error('GENERATION_PLANNING_CONTINUATION_EXISTS')
+          return viewOf(repository.get(existing.nextHandle.runId))
+        }
+        const current = planningContinuation(old)!
+        if (current.state !== 'ready') throw new Error(`GENERATION_PLANNING_CONTINUATION_${current.state.toUpperCase().replaceAll('-', '_')}`)
+        const scope = planningGenerationScope(selection)
+        const range = scope?.kind === 'architecture' ? scope.intent.synopsisRange
+          : scope?.kind === 'directory' ? { from: scope.requestedRange.startChapter, to: scope.requestedRange.endChapter } : null
+        if (selection.operation !== old.binding.sourceManifest.operation || !isDeepStrictEqual(range, current.remainingRange)
+          || scope?.kind === 'architecture' && scope.intent.priorSteps.length
+          || selection.continueDirectoryOperationId || selection.agentWorkflowRegistrationId)
+          throw new Error('GENERATION_PLANNING_CONTINUATION_RANGE_CHANGED')
+        const next = begin(selection)
+        service.cancel(old.rootActionId)
+        repository.recordPlanningContinuation({ kind: 'planning-continuation', sourceHandle: handleOf(old), nextHandle: next.handle, requestHash })
+        return next
+      }).immediate()
       // Admit the replacement before cancelling; rejected sources must leave the original resumable.
       const next = begin(selection)
       service.cancel(old.rootActionId)

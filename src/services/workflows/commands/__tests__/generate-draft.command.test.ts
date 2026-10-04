@@ -39,6 +39,7 @@ import {
   type GenerateDraftCommandDependencies,
 } from '../generate-draft.command'
 import { assembleChapterMaterials } from '../../chapter-materials'
+import { MATERIAL_DECISION_MAX_INPUT_UNITS } from '../../../../shared/generation-owner-contract'
 
 // 默认原样透传真实装配；只有个别测试用 mockImplementationOnce 改写一次返回值，
 // 用来验证命令层对装配结果的独立复核。
@@ -2059,14 +2060,45 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     )
   })
 
-  it('stops before the provider with a clear message when required material exceeds the context capacity', async () => {
-    // 决定 1B：必需材料也受预算。装不下时命令层给出可执行提示，并把合同的裁决写进日志，
-    // 绝不静默裁掉作者资料后继续生成。
+  it.each([1, 2])('dispatches all five long future plans and global facts above the optional target for chapter %i', async chapterNumber => {
+    const blueprints = Array.from({ length: 5 }, (_, index) => ({
+      chapterNumber: chapterNumber + index + 1,
+      title: `后续计划${index + 1}`,
+      keyEvents: '后续事件说明。'.repeat(260) + `TAIL_TIMING_${index}_只能在第${chapterNumber + index + 1}章交出钥匙。`,
+    }))
+    const worldSetting = 'GLOBAL_FACT_铜钥匙只有一把。'
+    const previousFinalizedContent = '上一章仍在港口。'.repeat(100) + 'PREVIOUS_TAIL_钥匙仍由林舟保管。'
+    const runtime = fakeRuntime(() => outcome('港口发生新的行动。'.repeat(60), 'stop'))
+    const { context, callbacks, command } = setup({
+      runtime, chapterNumber, wordsTarget: 500, blueprints, worldSetting,
+      ...(chapterNumber === 2 ? { previousFinalizedContent } : {}),
+      knowledgeResults: [{ text: 'OPTIONAL_REFERENCE_港口背景。', score: 0.9, fileName: 'port.txt' }],
+    })
+
+    await command.execute({ step: {}, context, callbacks })
+
+    const materialInput = vi.mocked(assembleChapterMaterials).mock.calls.at(-1)?.[0]
+    expect(new TextEncoder().encode(materialInput?.futurePlans).length).toBeGreaterThan(24_000)
+    expect(runtime.complete).toHaveBeenCalledTimes(1)
+    const prompt = runtime.complete.mock.calls[0]?.[0].messages.find(message => message.role === 'user')?.content ?? ''
+    for (const blueprint of blueprints) expect(prompt).toContain(blueprint.keyEvents)
+    expect(prompt).toContain(worldSetting)
+    expect(prompt).not.toContain('OPTIONAL_REFERENCE_')
+    const decision = runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision
+    expect(decision?.included.filter(item => !item.required)).toHaveLength(0)
+    expect(decision?.omitted).toContainEqual(expect.objectContaining({ sourceId: 'reference:0', reason: 'budget', required: false }))
+    if (chapterNumber === 2) {
+      expect(prompt).toContain('PREVIOUS_TAIL_钥匙仍由林舟保管。')
+      expect(decision?.included).toContainEqual(expect.objectContaining({ sourceId: 'finalized:77', required: true }))
+    }
+  })
+
+  it('stops before the provider with a clear message when required material exceeds the receipt safety limit', async () => {
     const runtime = fakeRuntime(() => outcome('不应到达的正文。'.repeat(200), 'stop'))
     const { invoke, context, callbacks, command } = setup({
       runtime,
       wordsTarget: 500,
-      coreOutline: '作者核心资料。'.repeat(3_000),
+      coreOutline: 'a'.repeat(MATERIAL_DECISION_MAX_INPUT_UNITS),
     })
 
     await expect(command.execute({ step: {}, context, callbacks }))
@@ -2093,7 +2125,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     await command.execute({ step: {}, context, callbacks })
 
     const decision = runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision
-    expect(decision?.capacity.maxInputUnits).toBe(24_000)
+    expect(decision?.capacity.maxInputUnits).toBe(MATERIAL_DECISION_MAX_INPUT_UNITS)
     expect(decision?.capacity.admittedUnits).toBeGreaterThan(18_000)
     expect(decision?.capacity.admittedUnits).toBeLessThan(24_000)
     expect(decision?.coverage).toEqual({ required: 2, included: 2, complete: true })
@@ -2158,18 +2190,18 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
       expect(prompt).toContain('finalized#1:budget')
     })
 
-    it('stops before the provider when the ending cannot fit beside the required author material', async () => {
-      const runtime = fakeRuntime(() => outcome('不应到达的正文。'.repeat(125), 'stop'))
-      const { invoke, context, callbacks, command } = predecessorSetup(7_100, runtime)
+    it('dispatches the required ending when author material leaves too little optional room', async () => {
+      const runtime = fakeRuntime(() => outcome('新章正文。'.repeat(125), 'stop'))
+      const { context, callbacks, command } = predecessorSetup(7_100, runtime)
 
-      await expect(command.execute({ step: {}, context, callbacks }))
-        .rejects.toThrow('必需材料（作者资料、角色档案、后续计划）超出上下文容量')
+      await command.execute({ step: {}, context, callbacks })
 
-      expect(runtime.complete).not.toHaveBeenCalled()
-      expect(callbacks.log).toHaveBeenCalledWith(expect.stringContaining(
-        '必需材料超出上下文容量（capacity-conflict）：finalized:41:budget',
-      ))
-      expectNoDraftPersistence(invoke)
+      expect(runtime.complete).toHaveBeenCalledTimes(1)
+      const prompt = runtime.complete.mock.calls[0]?.[0].messages.find(message => message.role === 'user')?.content ?? ''
+      expect(prompt).toContain(endingSentinel)
+      const decision = runtime.createRuntime.mock.calls[0]?.[1]?.selection.materialDecision
+      expect(decision?.capacity.admittedUnits).toBeGreaterThan(24_000)
+      expect(decision?.included).toContainEqual(expect.objectContaining({ sourceId: 'finalized:41', required: true }))
     })
 
     it('independently refuses to start when the direct finalized predecessor did not reach the prompt', async () => {

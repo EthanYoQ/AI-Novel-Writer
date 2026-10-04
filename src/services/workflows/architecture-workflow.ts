@@ -1,3 +1,4 @@
+import { parsePlanningTargetUnits, assertPlanningActionRange, DEFAULT_PLANNING_ACTION_CHAPTERS } from '../../shared/plot-outline-contract'
 import { globalEventBus } from '../../shared/event-bus'
 import type { WorkflowGenerationRuntimeDependencies } from './commands/base-command'
 import type { MainGenerationRunHandle } from '../generation/generation-runtime'
@@ -45,6 +46,8 @@ export interface PartialArchData {
 }
 
 export interface ArchitectureWorkflowParams {
+  restartFrom?: MainGenerationRunHandle
+  targetUnits?: number
   /** 启动工作流时所属的项目路径；后续所有步骤均绑定此项目 */
   projectPath: string
   /** UI 在异步确认前冻结的完整项目会话。 */
@@ -83,10 +86,10 @@ export function createArchitectureWorkflow(
   const text = (zhCNText: string, enUSText: string) => localize(uiLocale, zhCNText, enUSText)
   const resumingSynopsis = params.resumeSynopsis === true
   const resumingWorldBuilding = params.resumeWorldBuilding === true
-  if (resumingSynopsis && resumingWorldBuilding) {
+  if (resumingSynopsis && resumingWorldBuilding || params.restartFrom && (resumingSynopsis || resumingWorldBuilding)) {
     throw new Error(text('一次只能恢复一个故事架构步骤', 'Only one story-architecture step can be resumed at a time.'))
   }
-  const sel = resumingSynopsis
+  const sel = resumingSynopsis || params.restartFrom
     ? ['synopsis' as const]
     : resumingWorldBuilding
       ? ['worldbuilding' as const]
@@ -105,13 +108,16 @@ export function createArchitectureWorkflow(
   // 工厂在捕获配置快照的同一时刻绑定 lease，防止同路径重新打开后复用旧快照。
   const projectSession = Object.freeze({ ...params.projectSession })
   const synopsisRange = sel.includes('synopsis')
-    ? Object.freeze({ ...(params.synopsisRange ?? { from: 1, to: project.novelConfig.totalChapters }) }) : null
+    ? Object.freeze({ ...(params.synopsisRange ?? { from: 1, to: Math.min(project.novelConfig.totalChapters, DEFAULT_PLANNING_ACTION_CHAPTERS) }) }) : null
+  if (synopsisRange && !resumingSynopsis) assertPlanningActionRange(synopsisRange)
+  const targetUnits = parsePlanningTargetUnits(params.targetUnits)
   const planningIntent: ArchitecturePlanningIntent | undefined = resumingSynopsis || resumingWorldBuilding ? undefined : Object.freeze({
     version: 'architecture-action-v1',
     priorSteps: Object.freeze((['premise', 'characters', 'worldbuilding'] as const).filter(step => sel.includes(step))),
     synopsisRange,
   })
   const projectSnapshot: ArchitectureProjectSnapshot = Object.freeze({
+    targetUnits,
     expectedProjectPath,
     novelConfig: Object.freeze({ ...project.novelConfig }),
     ...(planningIntent ? { planningIntent } : {}),
@@ -185,6 +191,7 @@ export function createArchitectureWorkflow(
         const { GeneratePlotArchitectureCommand } = await import('./commands/architecture.command')
         return new GeneratePlotArchitectureCommand(sel, projectSnapshot, undefined, {
           resumeSynopsis: params.resumeSynopsis,
+          restartHandle: params.restartFrom,
           ...(resumingSynopsis ? { resumeHandle: await recoveryHandle(context, 'synopsis') } : {}),
           synopsisRange,
         }).execute({ step, context, callbacks })

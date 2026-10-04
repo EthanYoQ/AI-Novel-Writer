@@ -56,6 +56,7 @@ export interface BlueprintData {
 export type BlueprintRangeCommitMode = 'full' | 'replace-range'
 
 export interface BlueprintRangeCommitRequest {
+    authorRecovery?: { sourceHandle: import('../../src/services/generation/generation-runtime').MainGenerationRunHandle; leaseEpoch: string }
     /** Optional while legacy import consumers await S06D/S12; generated planning supplies it. */
     generationRunHandle?: import('../../src/services/generation/generation-runtime').MainGenerationRunHandle
     generationRequestedRange?: { startChapter: number; endChapter: number }
@@ -67,6 +68,7 @@ export interface BlueprintRangeCommitRequest {
 }
 
 export interface BlueprintRangeCommitReceipt {
+    authorEdit?: import('../../src/shared/generation-owner-contract').BlueprintAuthorEditReceipt
     generationProgress?: import('../../src/shared/generation-owner-contract').DirectoryGenerationProgress
     mode: BlueprintRangeCommitMode
     operationId: string
@@ -533,9 +535,8 @@ export class BlueprintRepository {
     }
 
     /** Pure read-back of the operation ledger and its currently bound range/sync evidence. */
-    static getCommittedRangeOperation(operationId: string): BlueprintRangeCommitReceipt | null {
+    static getCommittedRangeOperation(operationId: string, db = requireProjectDb()): BlueprintRangeCommitReceipt | null {
         if (!operationId.trim()) throw new Error('蓝图提交缺少操作 ID')
-        const db = requireProjectDb()
         ensureBlueprintCommitSchema(db)
         const operation = db.prepare(`
           SELECT operation_id, payload_hash, mode, start_chapter, end_chapter, character_sync_input
@@ -572,9 +573,8 @@ export class BlueprintRepository {
     }
 
     /** 完整逻辑范围只提交一次，并在同一事务内回读验证后返回收据。 */
-    static commitRange(request: BlueprintRangeCommitRequest, assertGenerationSources?: () => void): BlueprintRangeCommitReceipt {
+    static commitRange(request: BlueprintRangeCommitRequest, assertGenerationSources?: () => void, db = requireProjectDb()): BlueprintRangeCommitReceipt {
         assertExactRange(request)
-        const db = requireProjectDb()
         ensureBlueprintCommitSchema(db)
         const payloadHash = commitPayloadHash(request)
         const tx = db.transaction(() => {
@@ -624,7 +624,7 @@ export class BlueprintRepository {
                 ).run(request.startChapter, request.endChapter)
             }
             for (const blueprint of request.blueprints) {
-                BlueprintRepository.upsert(blueprint)
+                BlueprintRepository.upsert(blueprint, db)
             }
 
             const persisted = readExactRange(db, request)

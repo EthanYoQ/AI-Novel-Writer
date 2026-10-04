@@ -42,6 +42,21 @@ export function assertGenerationSourcesCurrent(handle: MainGenerationRunHandle, 
   if (!entry) throw new Error('GENERATION_OWNER_REQUIRED')
   entry.owner.assertSourcesCurrent(handle, blueprintRange)
 }
+export function assertGenerationSynopsisCommit(handle: MainGenerationRunHandle, synopsis: string, expected: import('../repositories/project-core-repository').ProjectCoreSynopsisExpected): boolean {
+  const database = getProjectDb(), entry = database && owners.get(database)
+  if (!entry || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
+  return entry.owner.assertSynopsisCommit(handle, synopsis, expected)
+}
+export function commitGenerationPlotOutlineAuthorEdit(request: import('../repositories/project-core-repository').ProjectCoreSynopsisCommitRequest) {
+  const database = getProjectDb(), entry = database && owners.get(database)
+  if (!entry || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
+  return entry.owner.commitPlotOutlineAuthorEdit(request)
+}
+export function commitGenerationBlueprintAuthorEdit(request: import('../repositories/blueprint-repository').BlueprintRangeCommitRequest) {
+  const database = getProjectDb(), entry = database && owners.get(database)
+  if (!entry || !database?.inTransaction) throw new Error('GENERATION_OWNER_REQUIRED')
+  return entry.owner.commitBlueprintAuthorEdit(request)
+}
 export function recordGenerationDirectoryCommit(handle: MainGenerationRunHandle, requestedRange: { startChapter: number; endChapter: number }, receipt: BlueprintRangeCommitReceipt) {
   const database = getProjectDb(), entry = database && owners.get(database)
   if (!entry || !database?.inTransaction) throw new Error('GENERATION_DIRECTORY_TRANSACTION_REQUIRED')

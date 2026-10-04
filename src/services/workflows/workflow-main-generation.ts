@@ -9,12 +9,15 @@ import { ipc } from '../ipc-client'
 import { projectSessionContextFromProject, sameProjectSessionContext } from '../../shared/project-session-context'
 import { useProjectStore } from '../../stores/project-store'
 import { useWorkflowReasoningStore } from '../../stores/workflow-reasoning-store'
+import { PLOT_OUTLINE_PROTOCOL } from '../../shared/plot-outline-contract'
 
 export interface WorkflowMainGenerationSelection extends Omit<BeginGenerationRequest, 'uiActionNonce' | 'modelId' | 'parentRootActionId' | 'selectedDraftIds' | 'selectedFinalizedDraftIds'> {
   selectedDraftIds?: number[]
   selectedFinalizedDraftIds?: number[]
   /** Exact persisted navigation identity. Never infer a recovery run from recency. */
   resumeHandle?: MainGenerationRunHandle
+  /** Explicit author continuation; main closes the original and admits only its missing range. */
+  restartHandle?: MainGenerationRunHandle
   /** Main-issued lineage of the original review; admission verifies its durable effect. */
   parentRootActionId?: string
   /** Persist navigation metadata before the first physical request. */
@@ -37,7 +40,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
   const projectSession = requireWorkflowProjectSession(context)
   let modelId = context.generationModelId?.trim() || useLLMStore.getState().defaultModelId
   if (!modelId && !request.selection.importSlot && !request.selection.resumeHandle) throw new Error('GENERATION_MODEL_REQUIRED')
-  let closed = false, busy = false
+  let closed = false, busy = false, readOnlyOutline = false
   let inner: Awaited<ReturnType<typeof createMainOwnedGenerationRuntime>> | undefined
   let view: MainGenerationRunView
   let cancelPromise: Promise<unknown> | undefined
@@ -61,13 +64,15 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
   }
   const cancel = () => {
     clearReasoning()
+    if (readOnlyOutline) return Promise.resolve()
     if (!cancelPromise && view) cancelPromise = transport.cancel(view.handle).catch(error => { cancelFailure = error })
     return cancelPromise
   }
   context.requestMainGenerationCancellation = async () => { await cancel(); if (cancelFailure) throw cancelFailure }
   const open = async (selection: WorkflowMainGenerationSelection) => {
     if (closed || context.cancelled) throw new Error('GENERATION_WORKFLOW_CANCELLED')
-    const { resumeHandle, onRunOpened, ...intent } = selection
+    const { resumeHandle, restartHandle, onRunOpened, ...intent } = selection
+    if (resumeHandle && restartHandle) throw new Error('GENERATION_RECOVERY_SELECTION_INVALID')
     operation = selection.operation
     importOrdinal = 0
     importStage = !!intent.importSlot
@@ -85,17 +90,20 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
       view = stored.nonReplayable && !importStage ? await transport.resume(projectSession, resumeHandle) : stored
     } else {
       if (!modelId) throw new Error('GENERATION_MODEL_REQUIRED')
-      const parent = intent.continueDirectoryOperationId ? undefined : context.mainGenerationRootHandle
+      const parent = intent.continueDirectoryOperationId || restartHandle ? undefined : context.mainGenerationRootHandle
       if (intent.parentRootActionId && parent && intent.parentRootActionId !== parent.rootActionId)
         throw new Error('GENERATION_WORKFLOW_ROOT_CHANGED')
       if (parent && (parent.projectId !== projectSession.projectId || !intent.batchId && !intent.importSlot && !context.agentWorkflowRegistrationId && parent.epoch !== projectSession.leaseId))
         throw new Error('GENERATION_WORKFLOW_RESUME_REQUIRED')
-      view = await transport.begin(projectSession, { ...intent, selectedDraftIds: intent.selectedDraftIds ?? [],
+      const beginRequest = { ...intent, selectedDraftIds: intent.selectedDraftIds ?? [],
         selectedFinalizedDraftIds: intent.selectedFinalizedDraftIds ?? [], modelId,
         uiActionNonce: `${context.runId}:${intent.operation}${intent.operation === 'chapter-draft' ? `:${intent.chapterNumber}` : ''}`,
         ...(context.agentWorkflowRegistrationId ? { agentWorkflowRegistrationId: context.agentWorkflowRegistrationId } : {}),
-        ...(parent ? { parentRootActionId: parent.rootActionId } : {}) })
+        ...(parent ? { parentRootActionId: parent.rootActionId } : {}) }
+      view = restartHandle ? await transport.restart(projectSession, restartHandle, beginRequest) : await transport.begin(projectSession, beginRequest)
+      if (restartHandle && view.nonReplayable) view = await transport.resume(projectSession, view.handle)
     }
+    readOnlyOutline = view.nonReplayable && view.plotOutline?.protocol === PLOT_OUTLINE_PROTOCOL && view.plotOutline.cursor.kind === 'complete'
     context.mainGenerationRootHandle = Object.freeze({ ...view.handle })
     context.mainGenerationRunHandle = Object.freeze({ ...view.handle })
     if (intent.importSlot && !importRecovery) {
@@ -105,8 +113,8 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
       context.generationModelId = stored.modelId
     }
     await onRunOpened?.(context.mainGenerationRunHandle)
-    if (context.cancelled) { await transport.cancel(view.handle); throw new Error('GENERATION_WORKFLOW_CANCELLED') }
-    unsubscribeReasoning = transport.subscribeReasoning?.(view.handle, event => {
+    if (context.cancelled) { await cancel(); throw new Error('GENERATION_WORKFLOW_CANCELLED') }
+    unsubscribeReasoning = readOnlyOutline ? undefined : transport.subscribeReasoning?.(view.handle, event => {
       if (closed || context.cancelled || !event.attemptId || !event.text
         || !sameProjectSessionContext(projectSession, projectSessionContextFromProject(useProjectStore.getState().currentProject))) return
       useWorkflowReasoningStore.getState().append(context.runId, event.attemptId, event.text)
@@ -166,7 +174,7 @@ export async function createWorkflowMainGenerationRuntime(request: WorkflowMainG
     async execute(operation) { try { return await operation({ session }) } finally { await close() } },
     close,
     async advance(selection) {
-      if (closed || busy || cancelPromise) throw new Error('GENERATION_WORKFLOW_ADVANCE_REFUSED')
+      if (closed || busy || cancelPromise || readOnlyOutline) throw new Error('GENERATION_WORKFLOW_ADVANCE_REFUSED')
       unsubscribeReasoning?.(); unsubscribeReasoning = undefined; clearReasoning()
       await inner?.close(); inner = undefined
       await open(selection)

@@ -88,6 +88,7 @@ export interface ProjectCoreSynopsisCommitRequest {
     synopsis: string
     expected: ProjectCoreSynopsisExpected
     generationRunHandle?: import('../../src/services/generation/generation-runtime').MainGenerationRunHandle
+    authorRecovery?: import('../../src/shared/plot-outline-contract').PlotOutlineAuthorEdit
 }
 
 /** 数据库行 → 前端数据 */
@@ -208,8 +209,7 @@ export class ProjectCoreRepository {
     `).run(...values)
     }
 
-    static commitSynopsis(request: ProjectCoreSynopsisCommitRequest): boolean {
-        const db = getProjectDb()
+    static commitSynopsis(request: ProjectCoreSynopsisCommitRequest, db = getProjectDb()): boolean {
         if (!db) throw new Error('项目数据库未打开')
         const { expected } = request
         const result = db.prepare(`

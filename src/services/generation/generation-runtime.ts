@@ -96,6 +96,7 @@ export interface MainGenerationReasoningEvent extends MainGenerationRunHandle {
   text: string
 }
 export interface MainGenerationRunView {
+  plotOutline?: import('../../shared/plot-outline-contract').PlotOutlineProgress
   budgetDiagnostics?: readonly import('./task-budget-planner').GenerationBudgetDiagnostic[]
   operation?: string
   candidates?: readonly (MainGenerationSnapshot & { fingerprint: FrozenInputFingerprint; nonReplayable: true })[]

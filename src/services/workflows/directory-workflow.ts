@@ -1,4 +1,5 @@
 import type { DirectoryGenerationProgress } from '../../shared/generation-owner-contract'
+import { DEFAULT_PLANNING_TARGET_UNITS } from '../../shared/plot-outline-contract'
 import type { MainGenerationRunHandle } from '../generation/generation-runtime'
 import { workflowResourceKey, type WorkflowDefinition } from '../../stores/workflow-store'
 import { useProjectStore } from '../../stores/project-store'
@@ -9,6 +10,7 @@ import { globalEventBus } from '../../shared/event-bus'
 import {
   decodeBlueprintSemanticPayload,
   parseBlueprintSemanticResponseText,
+  parseBlueprintAuthorResponseText,
   type BlueprintSemanticItem,
 } from '../../shared/blueprint-semantic-contract'
 import { structuredContractDiagnostic } from '../../shared/structured-contract-diagnostic'
@@ -34,6 +36,8 @@ import { requireWorkflowProjectSession } from './workflow-project-session'
 export type ChapterBlueprint = BlueprintData
 
 export interface DirectoryWorkflowParams {
+  restartFrom?: MainGenerationRunHandle
+  targetUnits?: number
   /** Exact committed progress selected by the author; no inferred latest run. */
   continueDirectoryOperationId?: string
   mode: 'full' | 'append'
@@ -72,7 +76,7 @@ export async function resolveDirectoryContinuation(params: DirectoryWorkflowPara
   if (!pacing || !config) throw new Error('旧目录进度缺少冻结作者输入，不能自动继续；已保存蓝图保持不变。')
   const authorConfig: DirectoryWorkflowProjectSnapshot['novelConfig'] = JSON.parse(config.text)
   if (!authorConfig || !Number.isSafeInteger(authorConfig.totalChapters) || authorConfig.totalChapters < terminal.remainingRange.endChapter) throw new Error('DIRECTORY_FROZEN_CONFIG_INVALID')
-  return { ...params, pacingGuidance: pacing.text, authorConfig, mode: 'append', startChapter: terminal.remainingRange.startChapter,
+  return { ...params, targetUnits: Number(terminal.authorInputs?.find(item => item.id === 'planning:target-units')?.text ?? DEFAULT_PLANNING_TARGET_UNITS), pacingGuidance: pacing.text, authorConfig, mode: 'append', startChapter: terminal.remainingRange.startChapter,
     count: terminal.remainingRange.endChapter - terminal.remainingRange.startChapter + 1,
     continueDirectoryOperationId: terminal.continuationHandle ? undefined : terminal.operationId,
     ...(terminal.continuationHandle ? { resumeHandle: terminal.continuationHandle } : {}) }
@@ -148,8 +152,9 @@ export function parseTextBlueprints(content: string, startNum: number, endNum: n
   return []
 }
 
-export function parseTextBlueprintsStrict(content: string, startNum: number, endNum: number): ChapterBlueprint[] {
+export function parseTextBlueprintsStrict(content: string, startNum: number, endNum: number, source: 'model' | 'author' = 'model'): ChapterBlueprint[] {
   try {
+    if (source === 'author') return parseBlueprintAuthorResponseText(content, chapterRange(startNum, endNum))
     return parseBlueprintSemanticResponseText(
       stripThinkingTags(content),
       chapterRange(startNum, endNum),
@@ -436,7 +441,7 @@ export function createDirectoryWorkflow(
       mode: 'silent',
       message: params.mode === 'append'
         ? text('续写蓝图生成完成', 'Chapter blueprint continuation completed')
-        : text('全书章节蓝图已生成完成。', 'All chapter blueprints have been generated.'),
+        : text('本次章节蓝图已生成完成。', 'The requested chapter blueprints have been generated.'),
     },
   }
 }

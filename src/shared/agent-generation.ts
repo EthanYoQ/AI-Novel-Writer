@@ -1,5 +1,17 @@
 import type { MainGenerationRunHandle, MainGenerationRunView } from '../services/generation/generation-runtime'
 import type { Locale } from '../i18n/types'
+import { assertPlanningActionRange, DEFAULT_PLANNING_ACTION_CHAPTERS, parsePlanningTargetUnits } from './plot-outline-contract'
+
+export function normalizeAgentPlanningArguments(args: Record<string, unknown>, totalChapters: number): Record<string, unknown> {
+  if (!['generate_architecture', 'generate_blueprint'].includes(String(args.workflow))) return args
+  const from = args.start_chapter === undefined ? 1 : args.start_chapter
+  const count = args.chapter_count === undefined ? Math.min(DEFAULT_PLANNING_ACTION_CHAPTERS, totalChapters - Number(from) + 1) : args.chapter_count
+  if (typeof from !== 'number' || typeof count !== 'number' || !Number.isSafeInteger(count) || count < 1) throw new Error('GENERATION_PLANNING_RANGE_INVALID')
+  const to = from + count - 1
+  assertPlanningActionRange({ from, to })
+  if (to > totalChapters) throw new Error('GENERATION_PLANNING_RANGE_INVALID')
+  return { ...args, start_chapter: from, chapter_count: count, target_units: parsePlanningTargetUnits(args.target_units) }
+}
 
 export interface AgentFrozenTool {
   name: string
@@ -50,6 +62,7 @@ export interface AgentDomainToolReceipt {
   current?: boolean
 }
 export interface AgentWorkflowRegistration {
+  planning?: { from: number; to: number; targetUnits: number }
   registrationId: string
   workflow: 'generate_draft' | 'generate_blueprint' | 'generate_architecture'
   chapterNumber?: number

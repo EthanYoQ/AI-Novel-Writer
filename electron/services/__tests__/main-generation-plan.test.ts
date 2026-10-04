@@ -3,7 +3,9 @@ import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationTask } from '../../../src/services/generation/generation-harness'
 import type { GenerationBudgetReceipt } from '../../repositories/generation-run-repository'
 import { createModelExecutionLeaseReceipt } from '../model-execution-lease'
-import { batchRootBudget, buildMainGenerationPlan, MAIN_GENERATION_POLICY } from '../main-generation-plan'
+import { batchRootBudget, buildMainGenerationPlan, MAIN_GENERATION_POLICY, newMainGenerationPolicy } from '../main-generation-plan'
+import { CREATIVE_STRATEGIES } from '../../../src/shared/reasoning-types'
+import type { BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
 import { settleProviderUsage } from '../generation-run-service'
 
 const task: GenerationTask = { purpose: 'chapter:draft', output: 'visible-text', messages: [{ role: 'user', content: '雨夜，铜钥匙落在门前。' }] }
@@ -19,6 +21,75 @@ function plan(profile = model(), input = task, budget = ledger()) {
 }
 const gemini = () => model({ provider: 'gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', modelName: 'gemini-2.5-flash-lite', reasoningOverride: 'medium' })
 const silicon = () => model({ baseUrl: 'https://api.siliconflow.cn/v1', modelName: 'deepseek-ai/DeepSeek-V4-Flash', capabilities: { contextWindowTokens: 65536, maxOutputTokens: 8192, reasoning: false, structuredOutput: false, usage: false } })
+
+describe('new physical root liability', () => {
+  const selection: BeginGenerationRequest = { operation: 'chapter-draft', uiActionNonce: 'new', modelId: '合成模型',
+    selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['first_chapter_draft'], skillStages: [], output: 'visible-text' }
+  const unknown = () => model({ baseUrl: 'https://compatible.example/v1', modelName: 'custom-model', maxTokens: 65536 })
+  const numeric = (contextWindowTokens?: number) => ({ ...unknown(), reasoningOverride: 'high' as const,
+    ...(contextWindowTokens ? { capabilities: { contextWindowTokens, maxOutputTokens: 65536, reasoning: true, structuredOutput: true, usage: false } } : {}),
+    reasoningMapping: { adapter: 'openai-thinking-budget' as const, supportedEfforts: ['off', 'low', 'medium', 'high'] as const,
+      providerValues: { off: 0, low: 8192, medium: 300000, high: contextWindowTokens ? 3_000_000 : 1_500_000 } } })
+  const profiles = [model(), model({ modelName: 'o3', maxTokens: 65536 }),
+    model({ provider: 'deepseek', baseUrl: 'https://api.deepseek.com', modelName: 'deepseek-v4-flash', maxTokens: 65536 }),
+    gemini(), silicon(), unknown(), numeric(), numeric(4_000_000)]
+  it.each(profiles)('covers every stage and strategy reservation for $modelName at $baseUrl', profile => {
+    const policy = newMainGenerationPolicy(selection, profile)
+    const bound = policy.budget.maxTokenLiability / policy.budget.maxPhysicalRequests
+    const receipt = createModelExecutionLeaseReceipt(profile, { leaseId: 'matrix', createdAt: 1, expiresAt: 1000 })
+    for (const stage of ['drafting', 'planning', 'review', 'general'] as const) for (const strategy of CREATIVE_STRATEGIES) {
+      for (const budgetDemand of [undefined, { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 1000, segmentable: false } as const]) {
+        const result = buildMainGenerationPlan(profile, receipt, { ...task, reasoningStage: stage, budgetDemand,
+          messages: [{ role: 'user', content: 'x'.repeat(43699) }] }, { ...ledger(), policy: policy.budget }, strategy, policy)
+        expect(result.reservedTokens).toBeLessThanOrEqual(bound)
+        expect(result.requestedOutputTokens).toBeGreaterThan(0)
+        expect(result.reservedTokens).toBe(result.inputUpperBoundTokens + result.requestedOutputTokens + result.reasoningUpperBoundTokens + 512)
+      }
+    }
+  })
+  it('keeps the unknown first-request compatibility envelope and unknown settlement semantics', () => {
+    const profile = unknown(), policy = newMainGenerationPolicy(selection, profile)
+    expect(policy.budget.maxTokenLiability).toBe(32 * 2_097_152)
+    const receipt = createModelExecutionLeaseReceipt(profile, { leaseId: 'unknown', createdAt: 1, expiresAt: 1000 })
+    for (const bytes of [1, 43_699, 2_000_000]) {
+      const input = { ...task, messages: [{ role: 'user' as const, content: 'x'.repeat(bytes) }] }
+      const old = buildMainGenerationPlan(profile, receipt, input, ledger())
+      const next = buildMainGenerationPlan(profile, receipt, input, { ...ledger(), policy: policy.budget }, 'auto', policy)
+      expect(next.requestedOutputTokens).toBeGreaterThanOrEqual(old.requestedOutputTokens)
+      expect(next.usagePolicy).toMatchObject({ reasoning: 'unknown', canBoundTotalLiability: false })
+      expect(next.reservedTokens).toBeLessThanOrEqual(2_097_152)
+    }
+    const tooLarge = { ...task, messages: [{ role: 'user' as const, content: 'x'.repeat(2_200_000) }] }
+    expect(() => buildMainGenerationPlan(profile, receipt, tooLarge, ledger())).toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
+    expect(() => buildMainGenerationPlan(profile, receipt, tooLarge, { ...ledger(), policy: policy.budget }, 'auto', policy)).toThrow('GENERATION_INPUT_CAPACITY_EXCEEDED')
+  })
+  it('removes the old cumulative early stop without changing total-bounded reservation or unknown liability', () => {
+    const profile = silicon(), receipt = createModelExecutionLeaseReceipt(profile, { leaseId: 'total', createdAt: 1, expiresAt: 1000 })
+    const policy = newMainGenerationPolicy(selection, profile), budget = { ...ledger(), policy: policy.budget }
+    expect(policy.budget.maxTokenLiability).toBe(32 * 1_048_576)
+    for (let index = 0; index < 32; index++) {
+      const next = buildMainGenerationPlan(profile, receipt, task, budget, 'auto', policy)
+      expect(next.reservedTokens).toBe(1_048_576)
+      budget.attempts.push({ attemptId: String(index), reservationId: String(index), rootActionId: '根', status: 'unknown', reservedTokens: next.reservedTokens, requestedOutputTokens: next.requestedOutputTokens })
+      if (index === 1) expect(() => buildMainGenerationPlan(profile, receipt, task, { ...budget, policy: ledger().policy })).toThrow('ROOT_BUDGET_EXHAUSTED')
+    }
+    expect(() => buildMainGenerationPlan(profile, receipt, task, budget, 'auto', policy)).toThrow('ROOT_BUDGET_EXHAUSTED')
+    budget.attempts[0] = { ...budget.attempts[0], status: 'settled', actualTokens: 100 }
+    budget.attempts[1] = { ...budget.attempts[1], status: 'settled', actualTokens: 100 }
+    expect(buildMainGenerationPlan(profile, receipt, task, budget, 'auto', policy).reservedTokens).toBe(1_048_576)
+  })
+  it('lets actual physical capacity decide a 43,699-byte input with a soft target', () => {
+    const profile = model({ baseUrl: 'https://compatible.example/v1', modelName: 'custom', maxTokens: 65536,
+      capabilities: { contextWindowTokens: 65536, maxOutputTokens: 65536, reasoning: false, structuredOutput: true, usage: false } })
+    const policy = newMainGenerationPolicy(selection, profile), receipt = createModelExecutionLeaseReceipt(profile, { leaseId: 'capacity', createdAt: 1, expiresAt: 1000 })
+    const input: GenerationTask = { ...task, messages: [{ role: 'user', content: 'x'.repeat(43699) }],
+      budgetDemand: { kind: 'structured-items', requestedItems: 1, writingLanguage: 'zh-CN' } }
+    expect(buildMainGenerationPlan(profile, receipt, input, { ...ledger(), policy: policy.budget }, 'auto', policy).requestedOutputTokens).toBe(21257)
+    const smaller = { ...profile, capabilities: { ...profile.capabilities!, contextWindowTokens: 32768 } }
+    const smallerPolicy = newMainGenerationPolicy(selection, smaller)
+    expect(() => buildMainGenerationPlan(smaller, receipt, input, { ...ledger(), policy: smallerPolicy.budget }, 'auto', smallerPolicy)).toThrow()
+  })
+})
 
 it.each([task, { ...task, budgetDemand: { kind: 'draft-units', writingLanguage: 'zh-CN', requestedUnits: 1000, segmentable: false } } as GenerationTask])(
   'plans unregistered compatible models as estimates without inventing capability: %j', input => {

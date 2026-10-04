@@ -2,6 +2,8 @@ import { DEFAULT_EMBEDDING_OPTIONS } from './embedding-options'
 import type { ModelProfile } from './ipc-channels'
 import { createProviderCatalog, resolveModelProfileBudgetCapabilities, resolveModelProfileCapabilities, resolveModelProfileReasoningMapping } from './provider-presets'
 
+export const DEFAULT_GENERATION_OUTPUT_TOKENS = 65_536
+
 export function modelCapabilitySource(model: ModelProfile, key: keyof NonNullable<ModelProfile['capabilities']>) {
   const source = model.capabilitySources?.[key]
   if (source) return source
@@ -73,7 +75,7 @@ export function createModelProfileDraft({
     ? preset.embeddingModelCapabilities?.[modelName]
     : modelPreset?.capabilities
   const maxTokens = isEmbedding ? capabilities?.maxOutputTokens ?? 4096
-    : Math.min(modelPreset?.maxTokens ?? 4096, 16384)
+    : Math.min(modelPreset?.budgetCapabilities?.maxOutputTokens ?? capabilities?.maxOutputTokens ?? DEFAULT_GENERATION_OUTPUT_TOKENS, DEFAULT_GENERATION_OUTPUT_TOKENS)
 
   const draft: ModelProfile = {
     id,

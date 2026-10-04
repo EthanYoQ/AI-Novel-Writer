@@ -115,7 +115,7 @@ describe('architecture workflow project context', () => {
       throw new Error(`unexpected IPC ${channel}`)
     })
     vi.stubGlobal('window', { aiNovelAPI: { invoke, on: vi.fn(() => () => {}), once: vi.fn(), send: vi.fn() } })
-    const synopsisRange = { from: 11, to: 110 }
+    const synopsisRange = { from: 11, to: 20 }
     const selectedSteps: Array<'premise' | 'characters' | 'worldbuilding' | 'synopsis'> = ['synopsis', 'characters', 'premise', 'characters', 'worldbuilding']
     const workflow = createArchitectureWorkflow({ projectPath: projectSession.projectPath, projectSession, selectedSteps, synopsisRange })
     selectedSteps.splice(0)
@@ -126,14 +126,18 @@ describe('architecture workflow project context', () => {
     await expect(workflow.steps[0].executor({ id: 'premise', name: '', description: '', status: 'running', logs: [] }, context, callbacks)).rejects.toThrow('captured-first-begin')
     expect(begins[0].operation).toBe('generate-core-seed')
     expect(JSON.parse(begins[0].authorInputs!.find(input => input.id === 'architecture:planning-intent')!.text)).toEqual({
-      version: 'architecture-action-v1', priorSteps: ['premise', 'characters', 'worldbuilding'], synopsisRange: { from: 11, to: 110 },
+      version: 'architecture-action-v1', priorSteps: ['premise', 'characters', 'worldbuilding'], synopsisRange: { from: 11, to: 20 },
     })
     const plot = new GeneratePlotArchitectureCommand(['synopsis'], { expectedProjectPath: projectSession.projectPath, novelConfig }, undefined,
-      { synopsisRange: { from: 151, to: 200 } })
+      { synopsisRange: { from: 151, to: 160 } })
     await expect(plot.execute({ step: {}, context: { ...context, data: {} }, callbacks })).rejects.toThrow('captured-first-begin')
     expect(JSON.parse(begins[1].authorInputs!.find(input => input.id === 'architecture:planning-intent')!.text)).toEqual({
-      version: 'architecture-action-v1', priorSteps: [], synopsisRange: { from: 151, to: 200 },
+      version: 'architecture-action-v1', priorSteps: [], synopsisRange: { from: 151, to: 160 },
     })
+    expect(() => createArchitectureWorkflow({ projectPath: projectSession.projectPath, projectSession,
+      selectedSteps: ['synopsis'], synopsisRange: { from: 151, to: 200 } })).toThrow('GENERATION_PLANNING_RANGE_INVALID')
+    expect(createArchitectureWorkflow({ projectPath: projectSession.projectPath, projectSession,
+      resumeSynopsis: true, synopsisRange: { from: 151, to: 200 } }).steps).toHaveLength(1)
   })
 
   it('creates visible workflow copy in English when the UI locale is English', () => {

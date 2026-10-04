@@ -6,9 +6,13 @@ import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema
 import { getDesktopMigrationRegistry, CURRENT_DESKTOP_SCHEMA_VERSION } from '../../migrations/desktop-registry'
 import { SqliteSchemaAdapter } from '../../migrations/sqlite-schema-adapter'
 import { migrateSchema } from '../../migrations/runner'
-import { createMainGenerationOwner } from '../main-generation-owner'
-import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
-import { MAIN_GENERATION_POLICY } from '../main-generation-plan'
+import { createMainGenerationOwner, safeGenerationModelReceipt } from '../main-generation-owner'
+import { createModelExecutionLeaseReceipt, ModelExecutionLeaseRegistry } from '../model-execution-lease'
+import { MAIN_GENERATION_POLICY, readMainGenerationPolicy, type MainGenerationPlan } from '../main-generation-plan'
+import { GenerationRunRepository, textHash } from '../../repositories/generation-run-repository'
+import type { AgentBeginSelection } from '../agent-generation'
+import type { GenerationTask } from '../../../src/services/generation/generation-harness'
+import { planningTargetInstruction } from '../../../src/shared/plot-outline-contract'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
 import { getProjectDb } from '../../database'
 import { generationOutputContract, type BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
@@ -36,8 +40,8 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   const spy = vi.fn<GenerationRunServiceDependencies['dispatch']>(dispatch ?? (async (_request, options) => { options.onVisible({ kind: 'delta', text: '我会检查。<tool_call>{"name":"read_project_state","arguments":{}}</tool_call>' }); return { finishReason: 'stop', usage: null } }))
   const deps = { db, projectStorageRoot: root, globalDataRoot: root, readBuiltinPrompt: () => JSON.stringify({key:'assistant_writing_identity',content:'冻结的合成提示词',systemRole:'写作助手'}) }
   const makeOwner = (epoch: string) => createMainGenerationOwner({ database: db, projectId: 'project', epoch, assertCurrent: () => {}, leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch: spy,
-    buildBinding: (selection, modelReceipt) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch, modelReceipt, policy: MAIN_GENERATION_POLICY, outputContract: generationOutputContract(selection) }).binding,
-    rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, MAIN_GENERATION_POLICY).binding })
+    buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
+    rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding })
   const owner = makeOwner('epoch-1')
   cleanup.push(() => { owner.suspendForProjectClose(); db.close(); fs.rmSync(root, { recursive: true, force: true }) })
   const reopenStorage = () => { owner.suspendForProjectClose(); db.close(); db = new Database(path.join(root, 'project.db')); deps.db = db; vi.mocked(getProjectDb).mockReturnValue(db); const next=makeOwner('epoch-2'); cleanup.unshift(()=>next.suspendForProjectClose()); return next }
@@ -45,7 +49,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   const request={uiActionNonce:'作者动作',modelId:model.id,input}
   const begin=()=>owner.agents.begin(request)
   const round=async()=>{const start=begin();return owner.agents.executeRound({handle:start.handle,index:0})}
-  return {get db(){return db},owner,spy,request,begin,round,reopenStorage}
+  return {get db(){return db},owner,spy,request,begin,round,reopenStorage,model,deps}
 }
 
 describe('Agent actual owner 与文件 SQLite',()=>{
@@ -149,7 +153,8 @@ it('registered child 同root计账且伪parent/缺registration拒绝',async()=>{
  const f=fixture(async(_r,o)=>{o.onVisible({kind:'delta',text:'<tool_call>{"name":"start_workflow","arguments":{"workflow":"generate_blueprint"}}</tool_call>'});return {finishReason:'stop',usage:null}})
  const result=await f.round(),ref=result.rounds[0]!.actions[0]!.ref
  f.owner.agents.claimTool({ref,confirmed:true});const registration=f.owner.agents.registerWorkflow(ref)
- const selection: BeginGenerationRequest={operation:'chapter-blueprint-directory',uiActionNonce:'子流程',modelId:'synthetic',promptKeys:['directory'],skillStages:[],selectedDraftIds:[],selectedFinalizedDraftIds:[],output:'structured-data',parentRootActionId:result.handle.rootActionId,agentWorkflowRegistrationId:registration.registrationId}
+ const selection: BeginGenerationRequest={operation:'chapter-blueprint-directory',uiActionNonce:'子流程',modelId:'synthetic',promptKeys:['directory'],skillStages:[],selectedDraftIds:[],selectedFinalizedDraftIds:[],output:'structured-data',parentRootActionId:result.handle.rootActionId,agentWorkflowRegistrationId:registration.registrationId,
+   authorInputs:[{id:'directory:author-config',text:'{"totalChapters":80}'},{id:'directory:requested-range',text:'{"mode":"full","startChapter":1,"endChapter":5}'},{id:'planning:target-units',text:'600'}]}
  expect(()=>f.owner.begin({...selection,parentRootActionId:'伪造父动作'})).toThrow('GENERATION_AGENT_CHILD_NOT_AUTHORIZED')
  expect(()=>f.owner.begin({...selection,agentWorkflowRegistrationId:undefined})).toThrow('GENERATION_AGENT_REGISTRATION_REQUIRED')
  const child=f.owner.begin(selection)
@@ -158,6 +163,88 @@ it('registered child 同root计账且伪parent/缺registration拒绝',async()=>{
  await f.owner.execute({handle:child.handle,invocationNonce:'子请求',task:{purpose:'directory',output:'structured-data',messages:[{role:'user',content:'子任务'}]}})
  expect(f.owner.read(child.handle).ledger!.physicalRequests).toBe(2)
  expect(f.owner.agents.read(result.handle).rounds[0]!.actions[0]!.workflow?.childHandles).toEqual([child.handle])
+})
+
+describe('planning authorization before confirmation', () => {
+ const planningDispatch = (args: Record<string, unknown>): GenerationRunServiceDependencies['dispatch'] => async (request, options) => {
+  const input = request as { task: GenerationTask }
+  options.onVisible({ kind: 'delta', text: input.task.purpose === 'agent'
+   ? `<tool_call>${JSON.stringify({name:'start_workflow',arguments:args})}</tool_call>` : '{"blueprints":[]}' })
+  return { finishReason:'stop', usage:null }
+ }
+ const childSelection = (planning: {from:number;to:number;targetUnits:number}): BeginGenerationRequest => ({
+  operation:'chapter-blueprint-directory',uiActionNonce:'planning-child',modelId:'synthetic',promptKeys:['directory'],skillStages:[],
+  selectedDraftIds:[],selectedFinalizedDraftIds:[],output:'structured-data',authorInputs:[
+   {id:'directory:author-config',text:'{"totalChapters":80}'},
+   {id:'directory:requested-range',text:JSON.stringify({mode:'full',startChapter:planning.from,endChapter:planning.to})},
+   {id:'planning:target-units',text:String(planning.targetUnits)},
+  ]
+ })
+ it('persists default five chapters and 600 units before exposing an unconfirmed action', async () => {
+  const f=fixture(planningDispatch({workflow:'generate_blueprint'})), result=await f.round(), action=result.rounds[0].actions[0]
+  expect(action).toMatchObject({status:'pending',arguments:{workflow:'generate_blueprint',start_chapter:1,chapter_count:5,target_units:600}})
+  const raw=JSON.parse(f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE attempt_id=?').pluck().get(action.ref.attemptId) as string)
+  expect(raw.agentActions[action.ref.toolCallId].planningArguments).toEqual(action.arguments)
+  f.db.prepare('UPDATE project_core SET total_chapters=2').run()
+  expect(f.reopenStorage().agents.read(result.handle).rounds[0].actions[0].arguments).toEqual(action.arguments)
+  expect(f.spy).toHaveBeenCalledTimes(1)
+ })
+ it.each([{chapter_count:11},{target_units:1001},{start_chapter:79,chapter_count:5}])('rejects invalid planning arguments before confirmation and creates no child: %j', async invalid => {
+  const f=fixture(planningDispatch({workflow:'generate_blueprint',...invalid}))
+  f.db.prepare('UPDATE project_core SET total_chapters=80').run()
+  await expect(f.round()).rejects.toThrow(/GENERATION_PLANNING_(RANGE|TARGET)_INVALID/)
+  expect(f.db.prepare('SELECT COUNT(*) FROM generation_runs').pluck().get()).toBe(1)
+  expect(f.spy).toHaveBeenCalledTimes(1)
+ })
+ it.each([16384,32768,65536])('uses the same physical %i output cap and frozen English target for ordinary and registered children', async maxTokens => {
+  const f=fixture(planningDispatch({workflow:'generate_blueprint',chapter_count:10,target_units:1000}))
+  Object.assign(f.model,{provider:'deepseek',baseUrl:'https://api.deepseek.com',modelName:'deepseek-v4-flash',maxTokens,
+   capabilities:{contextWindowTokens:262144,maxOutputTokens:maxTokens,reasoning:true,structuredOutput:true,usage:true}})
+  f.db.prepare("UPDATE project_core SET writing_language='en-US'").run()
+  const result=await f.round(),action=result.rounds[0].actions[0]
+  f.owner.agents.claimTool({ref:action.ref,confirmed:true})
+  const registration=f.owner.agents.registerWorkflow(action.ref)
+  expect(registration.planning).toEqual({from:1,to:10,targetUnits:1000})
+  const selection=childSelection(registration.planning!)
+  const child=f.owner.begin({...selection,parentRootActionId:result.handle.rootActionId,agentWorkflowRegistrationId:registration.registrationId})
+  const ordinary=f.owner.begin({...selection,uiActionNonce:'ordinary'})
+  const task:GenerationTask={purpose:'chapter-blueprint-directory',output:'structured-data',reasoningStage:'planning',messages:[{role:'user',content:'Preserve author facts.'}],
+   budgetDemand:{kind:'structured-items',requestedItems:1,writingLanguage:'en-US'}}
+  for (const run of [child,ordinary]) await f.owner.execute({handle:run.handle,invocationNonce:'blueprint',task})
+  const requests=f.spy.mock.calls.map(call=>call[0] as {task:GenerationTask;plan:MainGenerationPlan})
+  expect(requests.map(value=>value.plan.requestedOutputTokens)).toEqual([maxTokens,maxTokens,maxTokens])
+  for(const request of requests.slice(1)) expect(request.task.messages.filter(message=>message.role==='system').map(message=>message.content).join('\n'))
+   .toContain(planningTargetInstruction('blueprint',1000,'en-US'))
+  expect(child.handle.rootActionId).toBe(result.handle.rootActionId)
+  expect(child.ledger!.policy).toEqual(result.run.ledger!.policy)
+  const repository=new GenerationRunRepository(()=>f.db)
+  expect(repository.get(result.handle.runId).binding.sourceManifest.policy).not.toHaveProperty('planning')
+  expect(repository.get(child.handle.runId).binding.sourceManifest.policy).toHaveProperty('planning.kind','directory')
+  expect(f.owner.read(child.handle).ledger!.physicalRequests).toBe(2)
+ })
+ it('keeps a saved old Agent root and its registered planning child at the exact old budget across reopen', async () => {
+  const f=fixture(planningDispatch({workflow:'generate_blueprint'}))
+  Object.assign(f.model,{provider:'deepseek',baseUrl:'https://api.deepseek.com',modelName:'deepseek-v4-flash',maxTokens:65536,
+   capabilities:{contextWindowTokens:262144,maxOutputTokens:65536,reasoning:true,structuredOutput:true,usage:true}})
+  const key=textHash(JSON.stringify(['project',f.request.uiActionNonce]))
+  const selection:AgentBeginSelection={operation:'agent-round',uiActionNonce:`agent:${key}:0`,modelId:f.model.id,promptKeys:['assistant_writing_identity'],
+   skillStages:['planning','drafting','review','refinement'],selectedDraftIds:[],selectedFinalizedDraftIds:[],output:'visible-text',agentInput:f.request.input,agentSession:{key,roundIndex:0}}
+  const binding=buildGenerationSourceBinding(f.deps,{...selection,projectId:'project',epoch:'epoch-1',
+   modelReceipt:safeGenerationModelReceipt(createModelExecutionLeaseReceipt(f.model,{leaseId:'old',createdAt:0,expiresAt:1})),policy:MAIN_GENERATION_POLICY,outputContract:'visible-text'}).binding
+  const repository=new GenerationRunRepository(()=>f.db), old=repository.open({...binding,operation:selection.operation,uiActionNonce:selection.uiActionNonce,
+   frozenInputHash:textHash(JSON.stringify([binding.fingerprint,binding.contextSnapshotId,selection.output])),budget:MAIN_GENERATION_POLICY.budget})
+  repository.pause(old.rootActionId)
+  await f.owner.resume({projectId:'project',epoch:'epoch-1',rootActionId:old.rootActionId,runId:old.runId})
+  const result=await f.round(),action=result.rounds[0].actions[0]
+  f.owner.agents.claimTool({ref:action.ref,confirmed:true});const registration=f.owner.agents.registerWorkflow(action.ref)
+  const child=f.owner.begin({...childSelection(registration.planning!),parentRootActionId:old.rootActionId,agentWorkflowRegistrationId:registration.registrationId})
+  await f.owner.execute({handle:child.handle,invocationNonce:'old-child',task:{purpose:'directory',output:'structured-data',messages:[{role:'user',content:'Old child.'}]}})
+  expect(f.spy.mock.calls.map(call=>(call[0] as {plan:MainGenerationPlan}).plan.requestedOutputTokens)).toEqual([32768,32768])
+  expect(child.ledger!.policy).toEqual(MAIN_GENERATION_POLICY.budget)
+  const resumed=await f.reopenStorage().resume(child.handle)
+  expect(resumed.ledger!.policy).toEqual(MAIN_GENERATION_POLICY.budget)
+  expect(resumed.handle.rootActionId).toBe(old.rootActionId)
+ })
 })
 
 async function configAction() {

@@ -60,6 +60,12 @@ function workflowContext(): WorkflowContext {
   }
 }
 
+function historicalDirectoryContext(): WorkflowContext {
+  const context = workflowContext()
+  context.data.directoryResumeHandle = { projectId: 'project-1', epoch: 'legacy-epoch', rootActionId: 'frozen-legacy-root', runId: 'frozen-legacy-run' }
+  return context
+}
+
 function stepCallbacks(): StepCallbacks {
   return {
     log: vi.fn(),
@@ -485,7 +491,7 @@ describe('GenerateDirectoryCommand', () => {
     expect(system).toContain('You are an experienced chapter architect')
     expect(system).toContain('[Immutable system contract]')
     expect(user).toContain('Build the complete chapter blueprint from only the bounded facts below.')
-    expect(user).toContain('"suspenseHookCharacters":160')
+    expect(user).not.toContain('suspenseHookCharacters')
     expect(user).toContain('"role":"short structural label"')
     expect(user).toContain('code=relationship_endpoint_not_in_characters path=blueprints[0].relationships[0]')
     expect(user).not.toContain('actualCharacters')
@@ -638,7 +644,7 @@ describe('GenerateDirectoryCommand', () => {
     }))
   })
 
-  it('opens one runtime for an eleven-chapter append with the authoritative bounded cost plan', async () => {
+  it('resumes one frozen historical eleven-chapter append with the authoritative bounded cost plan', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
     const observedRanges: Array<[number, number]> = []
     const session = generationSession(async task => {
@@ -662,11 +668,7 @@ describe('GenerateDirectoryCommand', () => {
       { createRuntime },
     )
 
-    const result = await command.execute({
-      step: {},
-      context: workflowContext(),
-      callbacks: stepCallbacks(),
-    })
+    const result = await command.execute({ step: {}, context: historicalDirectoryContext(), callbacks: stepCallbacks() })
 
     expect(result.map(item => item.chapterNumber))
       .toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
@@ -746,7 +748,7 @@ describe('GenerateDirectoryCommand', () => {
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-upsert-many')
   })
 
-  it.each([10, 50, 200])('keeps %s chapters on one selected root boundary without a private 50-chapter gate', async count => {
+  it.each([10, 50, 200])('keeps %s chapters on a frozen historical root without changing its finite budget', async count => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
     const ranges: Array<[number, number]> = []
     const session = generationSession(async task => {
@@ -757,7 +759,7 @@ describe('GenerateDirectoryCommand', () => {
     })
     const createRuntime = vi.fn(async () => testRuntime(session))
     const command = new GenerateDirectoryCommand({ mode: 'full', count }, { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: count } }, { createRuntime })
-    const execution = command.execute({ step: {}, context: workflowContext(), callbacks: stepCallbacks() })
+    const execution = command.execute({ step: {}, context: historicalDirectoryContext(), callbacks: stepCallbacks() })
     if (count === 200) {
       await expect(execution).rejects.toThrow()
       expect(ranges).toHaveLength(33)
@@ -864,12 +866,7 @@ describe('GenerateDirectoryCommand', () => {
         const prompt = task.messages.find(message => message.role === 'user')?.content ?? ''
         expect(prompt).toContain(authorGuidance)
         expect(prompt).toContain('药师陆青必须在场；但前述取药计划已撤销。')
-        expect(task.promptBudget).toMatchObject({
-          limitUtf8Bytes: 32_768,
-          sections: expect.arrayContaining([
-            expect.objectContaining({ sectionName: 'global-guidance', messageIndex: 1 }),
-          ]),
-        })
+        expect(task.promptBudget).toBeUndefined()
       }
       if (attempt <= 2) {
         return {
@@ -918,7 +915,7 @@ describe('GenerateDirectoryCommand', () => {
       .toHaveLength(1)
   })
 
-  it('rejects a compact request enlarged by a writing Skill before main dispatch and preserves source', async () => {
+  it('passes complete author and writing Skill facts above 32 KiB to the physical capacity owner', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
     const physicalDispatch = vi.fn()
     const tail = '药师陆青必须在场；但取药计划已撤销。'
@@ -933,7 +930,10 @@ describe('GenerateDirectoryCommand', () => {
       }) }),
     }
     const session = generationSession(async task => {
-      physicalDispatch(task.purpose)
+      physicalDispatch(task)
+      if (task.purpose.includes(':compact-single:')) {
+        return { status: 'completed', content: blueprintJson([1]), finishReason: 'stop', receipt: generationReceipt(2, 'stop', task.purpose) }
+      }
       return {
         status: 'incomplete', content: '{"blueprints":[', finishReason: 'length',
         receipt: generationReceipt(1, 'length', task.purpose),
@@ -945,19 +945,14 @@ describe('GenerateDirectoryCommand', () => {
       { createRuntime: vi.fn(async () => testRuntime(session)) },
     )
 
-    await expect(command.execute({ step: {}, context, callbacks: stepCallbacks() }))
-      .rejects.toMatchObject({
-        code: 'PROMPT_BUDGET_EXHAUSTED',
-        report: {
-          limitUtf8Bytes: 32_768,
-          sections: expect.arrayContaining([
-            expect.objectContaining({ sectionName: 'architecture', utf8Bytes: new TextEncoder().encode(JSON.stringify({ architecture }).slice(1, -1)).byteLength }),
-            expect.objectContaining({ sectionName: 'writing-skill', utf8Bytes: expect.any(Number) }),
-          ]),
-        },
-      })
-    expect(physicalDispatch).toHaveBeenCalledTimes(1)
-    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
+    expect(await command.execute({ step: {}, context, callbacks: stepCallbacks() })).toHaveLength(1)
+    expect(physicalDispatch).toHaveBeenCalledTimes(2)
+    const compact = physicalDispatch.mock.calls[1][0] as GenerationTask
+    expect(compact.messages.reduce((sum, message) => sum + new TextEncoder().encode(message.content).byteLength, 0)).toBeGreaterThan(32_768)
+    expect(compact.messages.map(message => message.content).join('\n')).toContain(skillContent)
+    expect(compact.messages.map(message => message.content).join('\n')).toContain(tail)
+    expect(compact.promptBudget?.limitUtf8Bytes).toBeGreaterThan(32_768)
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range')).toHaveLength(1)
   })
 
   it('commits no directory facts when the single-item replacement is also length-truncated', async () => {
@@ -998,7 +993,7 @@ describe('GenerateDirectoryCommand', () => {
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-upsert-many')
   })
 
-  it('replays the observed split sequence and recovers chapter 18 with one bounded compact task', async () => {
+  it('replays the frozen historical split sequence and recovers chapter 18 with one compact task', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
     const observed: Array<{ range: [number, number]; purpose: string }> = []
     const lengthAttempts = new Set([1, 3, 6, 8, 10, 11])
@@ -1016,11 +1011,7 @@ describe('GenerateDirectoryCommand', () => {
       }
       if (task.purpose.includes(':compact-single:')) {
         const prompt = task.messages.find(message => message.role === 'user')?.content ?? ''
-        const taskBytes = task.messages.reduce(
-          (total, message) => total + new TextEncoder().encode(message.content).byteLength,
-          0,
-        )
-        expect(taskBytes).toBeLessThanOrEqual(32_768)
+        expect(task.promptBudget).toBeUndefined()
         expect(prompt).not.toContain('不可信截断片段')
       }
       const chapters = Array.from(
@@ -1039,7 +1030,7 @@ describe('GenerateDirectoryCommand', () => {
       { ...projectSnapshot, novelConfig: { ...projectSnapshot.novelConfig, totalChapters: 20 } },
       { createRuntime: vi.fn(async () => testRuntime(session)) },
     )
-    const context = workflowContext()
+    const context = historicalDirectoryContext()
     context.data.architecture = '极长架构事实。'.repeat(20)
 
     const result = await command.execute({ step: {}, context, callbacks: stepCallbacks() })
@@ -1132,7 +1123,7 @@ describe('GenerateDirectoryCommand', () => {
     expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
   })
 
-  it('rebuilds an overlong hook without silently deleting its final cancellation', async () => {
+  it('saves a complete long hook including its final cancellation without an extra model request', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
     const overlongHook = `${'h'.repeat(160)}但上述计划已撤销`
     const complete = vi.fn(async (task: GenerationTask) => ({
@@ -1156,14 +1147,13 @@ describe('GenerateDirectoryCommand', () => {
       callbacks: stepCallbacks(),
     })
 
-    expect(complete).toHaveBeenCalledTimes(2)
-    expect(complete.mock.calls[1]?.[0].purpose).toBe('chapter-blueprint-directory:compact-single:chapter-1')
-    expect(result[0]?.suspenseHook).toBe('上述计划已撤销')
+    expect(complete).toHaveBeenCalledTimes(1)
+    expect(result[0]?.suspenseHook).toBe(overlongHook)
     expect(invoke.mock.calls.find(([channel]) => channel === 'db:blueprint-commit-range')?.[1])
-      .toMatchObject({ blueprints: [expect.objectContaining({ suspenseHook: '上述计划已撤销' })] })
+      .toMatchObject({ blueprints: [expect.objectContaining({ suspenseHook: overlongHook })] })
   })
 
-  it('keeps an overlong key event uncommitted when the original root has no rebuild budget', async () => {
+  it('saves a complete key event beyond the former maximum without consuming rebuild budget', async () => {
     const invoke = stubIpcInvoke(successfulCommitHandler())
     const complete = vi.fn(async (task: GenerationTask) => {
       if (task.purpose.includes(':compact-single:')) throw new Error('ROOT_BUDGET_EXHAUSTED')
@@ -1182,12 +1172,13 @@ describe('GenerateDirectoryCommand', () => {
       { createRuntime: vi.fn(async () => testRuntime(generationSession(complete))) },
     )
 
-    await expect(command.execute({
+    const result = await command.execute({
       step: {}, context: workflowContext(), callbacks: stepCallbacks(),
-    })).rejects.toThrow(/ROOT_BUDGET_EXHAUSTED/u)
+    })
 
-    expect(complete).toHaveBeenCalledTimes(2)
-    expect(invoke.mock.calls.map(([channel]) => channel)).not.toContain('db:blueprint-commit-range')
+    expect(result[0].keyEvents).toBe(`${'事'.repeat(1_200)}但主角已撤销该行动`)
+    expect(complete).toHaveBeenCalledTimes(1)
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range')).toHaveLength(1)
   })
 
   it('keeps an overlong relationship candidate uncommitted when complete rebuilding fails', async () => {
@@ -1355,7 +1346,7 @@ describe('GenerateDirectoryCommand', () => {
     const commitCalls = invoke.mock.calls.filter(([channel]) => channel === 'db:blueprint-commit-range')
     expect(commitCalls).toHaveLength(1)
     expect(commitCalls[0]?.[1]).toMatchObject({
-      mode: 'full',
+      mode: 'replace-range',
       operationId: 'directory-test-run-1-3',
       startChapter: 1,
       endChapter: 3,

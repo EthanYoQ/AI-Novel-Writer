@@ -3,6 +3,7 @@ import { getActiveProjectSessionContext } from '../../shared/project-session-con
 import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import type { BeginGenerationRequest } from '../../shared/generation-owner-contract'
 import type { MainGenerationRunHandle, MainGenerationRunView, MainGenerationTransport } from './generation-runtime'
+import { PLOT_OUTLINE_PROTOCOL } from '../../shared/plot-outline-contract'
 
 const handleKey = (handle: MainGenerationRunHandle) => JSON.stringify([handle.projectId, handle.epoch, handle.rootActionId, handle.runId])
 function freezeSession(session: ProjectSessionContext | null): ProjectSessionContext {
@@ -87,7 +88,9 @@ export function createMainGenerationTransport(captureSession = getActiveProjectS
       assertHandle(session, frozen, true)
       const view = await ipc.invokeWithProjectSession(session, 'generation:resume', frozen)
       if (view.handle.runId !== frozen.runId || view.handle.rootActionId !== frozen.rootActionId) throw new Error('GENERATION_RESPONSE_IDENTITY_MISMATCH')
-      return bindView(view, session)
+      const readOnlyOutline = view.nonReplayable && view.plotOutline?.protocol === PLOT_OUTLINE_PROTOCOL && view.plotOutline.cursor.kind === 'complete'
+      if (readOnlyOutline && view.handle.epoch !== frozen.epoch) throw new Error('GENERATION_RESPONSE_IDENTITY_MISMATCH')
+      return bindView(view, session, readOnlyOutline)
     },
     async restart(sessionInput: ProjectSessionContext, handle: MainGenerationRunHandle, request: BeginGenerationRequest) {
       const session = freezeSession(sessionInput), frozen = { ...handle }, intent = structuredClone(request)

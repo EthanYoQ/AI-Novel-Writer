@@ -141,9 +141,7 @@ describe('chapter materials', () => {
     })
   })
 
-  it('fails explicitly instead of recording a previous-ending dependency that never reached the prompt', async () => {
-    // 旧行为：整块超预算时仍把结尾记进依赖并继续生成，提示词里却没有上一章原文。
-    // 现在直接前驱的结尾是必需连续性材料：连结尾都装不下就显式失败。
+  it('keeps the previous ending in the prompt when it exceeds the optional target', async () => {
     const source = {
       chapterNumber: 1,
       draftId: 11,
@@ -153,7 +151,7 @@ describe('chapter materials', () => {
       includeEnding: true,
       sourceIdentity: { kind: 'finalized' as const, finalizationId: 'finalization-11', contentHash: 'a'.repeat(64) },
     }
-    const error = await assemble({
+    const bundle = await assemble({
       writingLanguage: 'zh-CN',
       authorProjectFacts: [],
       characterProfiles: '',
@@ -163,13 +161,12 @@ describe('chapter materials', () => {
       candidates: [],
       relevanceTerms: ['林岚'],
       budgetChars: 400,
-    }).catch(reason => reason)
-
-    expect(error).toBeInstanceOf(ChapterMaterialCapacityError)
-    expect(error).toMatchObject({
-      code: 'CHAPTER_MATERIAL_CAPACITY_CONFLICT',
-      decision: { decision: 'capacity-conflict', blockingSourceId: 'finalized:11', blockingReason: 'budget' },
     })
+
+    expect(bundle.text).toContain(previousChapterEnding(source.content))
+    expect(bundle.consumedFinalizedSources).toEqual([source])
+    expect(bundle.decision.included).toContainEqual(expect.objectContaining({ sourceId: 'finalized:11', required: true }))
+    expect(bundle.decision.capacity.admittedUnits).toBeGreaterThan(400 * 3)
   })
 
   /** 定稿来源在提示词里的那一块（标题 + 摘取出的段落）。 */
@@ -283,10 +280,10 @@ describe('chapter materials', () => {
       relevanceTerms: ['林岚'], budgetChars: 8_000,
     })
     /** 必需材料块的字节数随作者资料字数线性增长（每个「设」3 字节），据此算出各档的剩余容量。 */
-    const remainingRoom = async (authorFactChars: number) => {
+    const remainingOptionalRoom = async (authorFactChars: number) => {
       const base = await withAuthorFacts(1)
       const baseUnits = base.decision.included.find(item => item.sourceId === 'author:required')!.units
-      return base.decision.capacity.maxInputUnits - baseUnits - (authorFactChars - 1) * 3
+      return 8_000 * 3 - baseUnits - (authorFactChars - 1) * 3
     }
 
     it('keeps the whole block (evidence windows and ending) when it fits, as an optional competitor', async () => {
@@ -305,7 +302,7 @@ describe('chapter materials', () => {
       const ending = previousChapterEnding(content)
       const endingBlock = `${header}\n${ending}`
       const full = finalizedBlock(await withAuthorFacts(0), 11)
-      const room = await remainingRoom(5_600)
+      const room = await remainingOptionalRoom(5_600)
       // 前提：整块装不下，但有上界的结尾装得下。
       expect(bytes(endingBlock)).toBeLessThanOrEqual(room)
       expect(bytes(full)).toBeGreaterThan(room)
@@ -402,7 +399,7 @@ describe('chapter materials', () => {
       // 前提：整块与结尾块逐字相同（三元身份全同）。
       expect(finalizedBlock(roomy, 11)).toBe(endingBlock)
       const authorUnits = roomy.decision.included.find(item => item.sourceId === 'author:required')!.units
-      const capacity = roomy.decision.capacity.maxInputUnits
+      const capacity = base.budgetChars * (scenario.writingLanguage === 'zh-CN' ? 3 : 1)
       const fillerCount = Math.floor((capacity - authorUnits - Math.floor(bytes(endingBlock) / 2) - bytes(scenario.term)) / bytes(scenario.filler))
       const reference = { text: scenario.term, rendered: `${scenario.term}${scenario.filler.repeat(fillerCount)}` }
       // 前提：更相关的参考材料自己装得下，但它先入选后剩余容量放不下整块；让出后结尾放得下。
@@ -443,36 +440,21 @@ describe('chapter materials', () => {
         writingLanguage: 'zh-CN', authorProjectFacts: ['设'.repeat(authorFactChars)], characterProfiles: '', futurePlans: '（无）',
         references: [], finalized: [...earlier, source], candidates: [], relevanceTerms: ['林岚', '钥匙'], budgetChars: 8_000,
       })
-      const endingBytes = bytes(`【定稿原文 · 第4章 · draft 14】\n${previousChapterEnding(source.content)}`)
-      const base = await run(1)
-      const baseUnits = base.decision.included.find(item => item.sourceId === 'author:required')!.units
-
-      const regimes = { plain: 0, degraded: 0, refused: 0 }
+      const regimes = { plain: 0, degraded: 0, beyondOptionalTarget: 0 }
       for (let authorFactChars = 300; authorFactChars <= 7_500; authorFactChars += 150) {
         const label = `authorFactChars=${authorFactChars}`
-        const requiredUnits = baseUnits + (authorFactChars - 1) * 3
-        const endingFits = requiredUnits + endingBytes <= base.decision.capacity.maxInputUnits
-        const outcome = await run(authorFactChars).then(bundle => ({ bundle, error: undefined }), (error: unknown) => ({ bundle: undefined, error }))
-        if (!endingFits) {
-          // 只有必需的作者资料加上结尾装不下时才失败，并且是共享的容量错误。
-          expect(outcome.error, label).toBeInstanceOf(ChapterMaterialCapacityError)
-          expect(outcome.error, label).toMatchObject({ decision: { decision: 'capacity-conflict', blockingSourceId: 'finalized:14' } })
-          regimes.refused += 1
-          continue
-        }
-        expect(outcome.error, label).toBeUndefined()
-        const bundle = outcome.bundle!
+        const bundle = await run(authorFactChars)
         expect(bundle.text, label).toContain(endingSentinel)
         expect(bundle.consumedFinalizedSources.map(item => item.draftId), label).toContain(14)
         expectReceiptSelfConsistent(bundle.decision, label)
         const item = bundle.decision.included.find(entry => entry.sourceId === 'finalized:14')
         if (item?.required) regimes.degraded += 1
         else regimes.plain += 1
+        if (bundle.decision.capacity.admittedUnits > 24_000) regimes.beyondOptionalTarget += 1
       }
-      // 扫描确实覆盖了三种情形：整块入选、降级为必需结尾、结尾也放不下。
       expect(regimes.plain).toBeGreaterThan(0)
       expect(regimes.degraded).toBeGreaterThan(0)
-      expect(regimes.refused).toBeGreaterThan(0)
+      expect(regimes.beyondOptionalTarget).toBeGreaterThan(0)
     })
 
     it('keeps a knowledge-base result that only the omitted evidence window contained', async () => {
@@ -502,19 +484,17 @@ describe('chapter materials', () => {
       expect(bundle.omissions).toContainEqual({ source: 'finalized', chapterNumber: 1, reason: 'budget' })
     })
 
-    it('fails with the shared capacity error when even the ending does not fit, never continuing without it', async () => {
+    it('retains the required ending when it exceeds the remaining optional room', async () => {
       const endingBlock = `${header}\n${previousChapterEnding(content)}`
-      // 前提：必需的作者资料自己装得下，但装不下再加上一章结尾。
-      expect(await remainingRoom(7_100)).toBeGreaterThan(0)
-      expect(await remainingRoom(7_100)).toBeLessThan(bytes(endingBlock))
+      expect(await remainingOptionalRoom(7_100)).toBeGreaterThan(0)
+      expect(await remainingOptionalRoom(7_100)).toBeLessThan(bytes(endingBlock))
 
-      const error = await withAuthorFacts(7_100).catch(reason => reason)
+      const bundle = await withAuthorFacts(7_100)
 
-      expect(error).toBeInstanceOf(ChapterMaterialCapacityError)
-      expect(error).toMatchObject({
-        code: 'CHAPTER_MATERIAL_CAPACITY_CONFLICT',
-        decision: { decision: 'capacity-conflict', blockingSourceId: 'finalized:11', blockingReason: 'budget' },
-      })
+      expect(finalizedBlock(bundle, 11)).toBe(endingBlock)
+      expect(bundle.decision.capacity.admittedUnits).toBeGreaterThan(24_000)
+      expect(bundle.decision.included.every(item => item.required)).toBe(true)
+      expectReceiptSelfConsistent(bundle.decision)
     })
   })
 
@@ -841,13 +821,11 @@ describe('chapter materials', () => {
     const unrelated = await assemble({ ...input, relevanceTerms: ['无关词'] })
     expect(unrelated.selection.included.find(item => item.ref.sourceId === 'candidate:101')?.text)
       .toBe(`【未定稿候选 · 第1章 · draft 101 · v2】\n${ending}`)
-    // A budget that fits the old tail must not silently discard the newly selected early evidence.
     const budgetChars = Math.ceil(unrelated.decision.capacity.admittedUnits / 3)
     await expect(assemble({ ...input, relevanceTerms: ['无关词'], budgetChars })).resolves.toBeDefined()
-    await expect(assemble({ ...input, budgetChars })).rejects.toMatchObject({
-      code: 'CHAPTER_MATERIAL_CAPACITY_CONFLICT',
-      decision: { decision: 'capacity-conflict', blockingSourceId: 'candidate:101', blockingReason: 'budget' },
-    })
+    const beyondOptionalTarget = await assemble({ ...input, budgetChars })
+    expect(beyondOptionalTarget.text).toContain(expected)
+    expect(beyondOptionalTarget.decision.capacity.admittedUnits).toBeGreaterThan(budgetChars * 3)
   })
 
   it('does not duplicate a required ending already contained in relevant predecessor prose', async () => {
@@ -898,10 +876,9 @@ describe('chapter materials', () => {
     const lastTwo = await assemble({ ...requiredOnly, relevanceTerms: lastTwoTerms })
     const budgetChars = Math.ceil(lastTwo.decision.capacity.admittedUnits / 3)
     await expect(assemble({ ...requiredOnly, relevanceTerms: lastTwoTerms, budgetChars })).resolves.toBeDefined()
-    await expect(assemble({ ...requiredOnly, budgetChars })).rejects.toMatchObject({
-      code: 'CHAPTER_MATERIAL_CAPACITY_CONFLICT',
-      decision: { decision: 'capacity-conflict', blockingSourceId: 'candidate:101', blockingReason: 'budget' },
-    })
+    const beyondOptionalTarget = await assemble({ ...requiredOnly, budgetChars })
+    for (const text of [early, middle, late, ending]) expect(beyondOptionalTarget.text).toContain(text)
+    expect(beyondOptionalTarget.decision.capacity.admittedUnits).toBeGreaterThan(budgetChars * 3)
   })
 
   it('fails closed when multiple predecessor candidates have no unique explicit required item', async () => {
@@ -934,14 +911,14 @@ describe('chapter materials', () => {
     }))
   })
 
-  it('returns a capacity conflict instead of omitting an oversized explicit predecessor', async () => {
+  it('returns a capacity conflict when the required predecessor exceeds the receipt safety limit', async () => {
     let error: unknown
     try {
       await assemble({
         writingLanguage: 'zh-CN', authorProjectFacts: [], characterProfiles: '', futurePlans: '（无）',
-        references: [], finalized: [], relevanceTerms: [], budgetChars: 600,
+        references: [], finalized: [], relevanceTerms: ['必需前驱'], budgetChars: 600,
         candidates: [
-          { chapterNumber: 1, draftId: 101, version: 1, content: '必需前驱。'.repeat(2_000), required: true },
+          { chapterNumber: 1, draftId: 101, version: 1, content: '必需前驱。'.repeat(Math.ceil(MATERIAL_DECISION_MAX_INPUT_UNITS / 15)), required: true },
           { chapterNumber: 1, draftId: 102, version: 2, content: '可选候选。' },
         ],
       })
@@ -1116,7 +1093,7 @@ describe('材料准入的脱敏收据（MaterialDecisionReceipt）', () => {
     const receipt = bundle.decision
     expect(receipt.version).toBe(1)
     expect(receipt.verdict).toBe('admitted')
-    expect(receipt.capacity).toEqual({ maxInputUnits: 6_000 * 3, methodVersion: 'utf8-bytes-v1', admittedUnits: receipt.included.reduce((sum, item) => sum + item.units, 0) })
+    expect(receipt.capacity).toEqual({ maxInputUnits: MATERIAL_DECISION_MAX_INPUT_UNITS, methodVersion: 'utf8-bytes-v1', admittedUnits: receipt.included.reduce((sum, item) => sum + item.units, 0) })
     expect(receipt.coverage).toEqual({ required: 2, included: 2, complete: true })
     // 收据是来源级记录，按 (sourceId, revision, contentHash) 的码元全序排列。
     expect(receipt.included.map(item => item.sourceId)).toEqual(['author:required', 'candidate:30', 'finalized:1', 'reference:0'])

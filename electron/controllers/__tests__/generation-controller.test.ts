@@ -1,6 +1,6 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GenerationOwnerChannels, BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
 import type { FinalizedCharacterGenerationChannels } from '../../../src/shared/finalized-character-generation'
@@ -11,7 +11,7 @@ import { ipc } from '../../../src/services/ipc-client'
 import { ReviewRepository } from '../../repositories/review-repository'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
 import { SummaryRepository } from '../../repositories/summary-repository'
-import type { ModelProfile, ProjectSessionContext } from '../../../src/shared/ipc-channels'
+import type { ModelProfile, ProjectSessionContext, NovelConfig } from '../../../src/shared/ipc-channels'
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>
 const mocks = vi.hoisted(() => ({ handlers: new Map<string, Handler>(), globalRoot: '' }))
 vi.mock('electron', () => ({ ipcMain: { handle: (channel: string, handler: Handler) => mocks.handlers.set(channel, handler) } }))
@@ -26,11 +26,21 @@ import { projectAccess } from '../../services/project-access'
 import { createProjectDatabase, initProjectDatabase, closeProjectDatabase, getProjectDb } from '../../database'
 import { textHash } from '../../repositories/generation-run-repository'
 import { knowledgeBaseLoader } from '../../services/knowledge-base-loader'
+import { GeneratePlotArchitectureCommand } from '../../../src/services/workflows/commands/architecture.command'
+import { useProjectStore } from '../../../src/stores/project-store'
+import type { WorkflowContext, StepCallbacks } from '../../../src/stores/workflow-store'
+import type { MainGenerationRunHandle } from '../../../src/services/generation/generation-runtime'
+import { PLOT_OUTLINE_PROTOCOL, renderPlotOutlineSynopsis } from '../../../src/shared/plot-outline-contract'
+import { clearProjectCustomPrompts } from '../../../src/services/prompt-templates'
+import { exportPortableProject } from '../../services/project-archive-service'
+import { restorePortableProject } from '../../services/project-restore-service'
+import { readPortableRuntimeFreeze } from '../../services/portable-runtime-freeze'
 
 const model: ModelProfile = { id: 'fixture', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1',
   baseUrl: 'https://api.openai.com/v1', apiKey: 'synthetic-only', maxTokens: 1024, temperature: 0.7, purposes: ['generation'] }
 const sender = { isDestroyed: () => false, send: vi.fn() }
 let root: string, session: ProjectSessionContext
+let openedProject: ReturnType<typeof projectAccess.createProject>
 const request: BeginGenerationRequest = { operation: 'draft', uiActionNonce: 'click', modelId: 'fixture',
   selectedDraftIds: [], selectedFinalizedDraftIds: [], promptKeys: ['first_chapter_draft'], skillStages: [], output: 'visible-text' }
 const materialDecision = (prompt = '合成初始提示词'): NonNullable<BeginGenerationRequest['materialDecision']> => ({
@@ -45,16 +55,19 @@ beforeAll(() => {
   registerDatabaseController()
 })
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-novel-s05-ipc-'))
+  const cache = path.resolve('.runtime/.cache/t12c')
+  fs.mkdirSync(cache, { recursive: true })
+  root = fs.mkdtempSync(path.join(cache, 'ipc-'))
   mocks.globalRoot = path.join(root, 'global'); fs.mkdirSync(mocks.globalRoot)
   const project = projectAccess.createProject(root, '合成小说')
+  openedProject = project
   createProjectDatabase(project.rootPath); initProjectDatabase(project.rootPath)
   getProjectDb()!.exec("INSERT INTO project_core(id,project_name,global_guidance) VALUES('main','合成小说','保留作者事实')")
   const lease = projectAccess.beginSession(project)
   session = { projectId: project.projectId, projectPath: project.rootPath, leaseId: lease.leaseId }
   sender.send.mockClear()
 })
-afterEach(() => { closeProjectDatabase(); projectAccess.invalidateCurrentSession(); vi.unstubAllGlobals(); vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { closeProjectDatabase(); projectAccess.invalidateCurrentSession(); useProjectStore.setState({ currentProject: null }); clearProjectCustomPrompts(); vi.unstubAllGlobals(); vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }) })
 type TestedChannels = GenerationOwnerChannels & FinalizedCharacterGenerationChannels & ReviewRevisionGenerationInvokeChannels & FinalizationGenerationChannels
 function invoke<C extends keyof TestedChannels>(channel: C, ...args: TestedChannels[C]['args']) {
   return mocks.handlers.get(channel)!({ sender }, ...args, { ...session }) as Promise<TestedChannels[C]['return']>
@@ -515,5 +528,214 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     expect(read.nonReplayable).toBe(true)
     await invoke('generation:discard-candidate', run.handle, read.candidates![0].artifactId)
     expect((await invoke('generation:read', run.handle)).candidates).toHaveLength(0)
+  })
+})
+
+describe('chapter outline command through registered main IPC and formal CAS', () => {
+  type Crash = 'normal-saved' | 'composition-saved' | 'complete-before-cas' | 'cas-reply-lost'
+  function outlineFixture(options: { chapters?: number; crash?: Crash; crashCall?: number; compact?: 'once' | 'fails'; customTemplate?: boolean } = {}) {
+    const chapters = options.chapters ?? 3
+    const premise = `${'前提原文。'.repeat(40)}前提尾部：证据原件必须留在岛上。`
+    const characters = `${'角色原文。'.repeat(40)}角色尾部：林岚左手不能持重物。`
+    const world = `${'世界原文。'.repeat(40)}世界尾部：渡口在日落后关闭。`
+    const guidance = `${'作者指导。'.repeat(40)}指导尾部：结尾必须归还借来的钥匙。`
+    const config: NovelConfig = { genre: '悬疑', subGenre: '', targetAudience: '', totalChapters: chapters, wordsPerChapter: 2000,
+      plotStructure: 'three_act', narrativePOV: 'third_limited', coreOutline: '配置硬事实：受害者始终活着。',
+      worldSetting: '配置背景：调查只在岛内开展。', goldenFinger: '', protagonistProfile: '', globalGuidance: guidance, writingLanguage: 'zh-CN' }
+    getProjectDb()!.prepare('UPDATE project_core SET synopsis=?,premise=?,characters_arch=?,worldbuilding=?,genre=?,total_chapters=?,words_per_chapter=?,global_guidance=?')
+      .run('旧正式大纲', premise, characters, world, config.genre, chapters, config.wordsPerChapter, guidance)
+    const expected = ProjectCoreRepository.get()!
+    if (options.customTemplate) {
+      const dir = path.join(getProjectDataRoot(session.projectPath), 'prompts')
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, 'synopsis.json'), JSON.stringify({ key: 'synopsis', name: '作者自定义', content: '以行动和后果组织当前章。', variables: {} }))
+    }
+    const syncProject = () => useProjectStore.setState({ currentProject: { id: session.projectId, path: session.projectPath,
+      name: '合成小说', sessionLease: session.leaseId, novelConfig: config, characterStates: '', createdAt: '', updatedAt: '' } })
+    syncProject()
+    let fault = options.crash, calls = 0
+    const prompts: string[] = [], accepted = (chapter: number) => `## 第${chapter}章：证词${chapter}\n林岚核对证词${chapter}，保留原件，并约定下一步。`
+    const fetch = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { messages: { role: string; content: string }[] }
+      const prompt = body.messages.find(message => message.role === 'user')!.content
+      prompts.push(prompt)
+      const chapter = Number(/本次只写第 (\d+) 章/u.exec(prompt)![1])
+      const call = calls++
+      const failed = !!options.compact && (call === 0 || options.compact === 'fails')
+      const content = failed ? '## 第1–2章：FAILED-CANDIDATE\n不可采用的章组。' : accepted(chapter)
+      return { ok: true, body: new ReadableStream({ start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: failed ? 'length' : 'stop' }] })}\n\ndata: [DONE]\n\n`))
+        controller.close()
+      } }) }
+    })
+    vi.stubGlobal('fetch', fetch)
+    const bridge = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'prompt:load-global') return { templates: [], diagnostics: [] }
+      if (channel === 'fs:check-exists') return fs.existsSync(String(args[0]))
+      if (channel === 'fs:list-dir') return fs.readdirSync(String(args[0]), { withFileTypes: true }).map(item => ({ name: item.name, path: path.join(String(args[0]), item.name), isDir: item.isDirectory() }))
+      if (channel === 'fs:read-file') return { success: true, content: fs.readFileSync(String(args[0]), 'utf8') }
+      if (channel === 'fs:read-json') return fs.existsSync(String(args[0])) ? { success: true, data: JSON.parse(fs.readFileSync(String(args[0]), 'utf8')) } : { success: false }
+      if (channel === 'fs:write-json') { fs.mkdirSync(path.dirname(String(args[0])), { recursive: true }); fs.writeFileSync(String(args[0]), JSON.stringify(args[1])); return { success: true } }
+      if (channel === 'db:project-core-synopsis-commit' && fault === 'complete-before-cas') { fault = undefined; throw new Error('TEST_TRANSPORT_LOST_BEFORE_CAS') }
+      const handler = mocks.handlers.get(channel)
+      if (!handler) throw new Error(`UNEXPECTED_TEST_TRANSPORT:${channel}`)
+      const result = await handler({ sender }, ...args)
+      if (channel === 'generation:execute' && fault === 'normal-saved' && calls === (options.crashCall ?? 1)
+        || channel === 'generation:compose-visible' && fault === 'composition-saved'
+        || channel === 'db:project-core-synopsis-commit' && fault === 'cas-reply-lost') {
+        fault = undefined
+        throw new Error('TEST_TRANSPORT_REPLY_LOST')
+      }
+      return result
+    })
+    vi.stubGlobal('window', { aiNovelAPI: { invoke: bridge, on: () => () => {} } })
+    const callbacks: StepCallbacks = { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn(), replaceText: vi.fn() }
+    const execute = (resumeHandle?: MainGenerationRunHandle) => {
+      const context: WorkflowContext = { runId: resumeHandle ? 'outline-resumed' : 'outline-original', projectPath: session.projectPath,
+        projectSession: session, generationModelId: model.id, writingLanguage: 'zh-CN', uiLocale: 'zh-CN', cancelled: false,
+        data: { stepGuidance: { synopsis: '步骤尾部：最终章必须归还借来的钥匙。' } } }
+      const command = new GeneratePlotArchitectureCommand(['synopsis'], { expectedProjectPath: session.projectPath, novelConfig: config }, undefined,
+        resumeHandle ? { resumeSynopsis: true, resumeHandle } : { synopsisRange: { from: 1, to: chapters } })
+      return command.execute({ step: {}, context, callbacks })
+    }
+    const reopen = () => {
+      closeProjectDatabase(); projectAccess.invalidateCurrentSession(); initProjectDatabase(session.projectPath)
+      session = { ...session, leaseId: projectAccess.beginSession(openedProject).leaseId }
+      syncProject()
+    }
+    const navigation = () => JSON.parse(fs.readFileSync(path.join(getProjectDataRoot(session.projectPath), 'partial_arch.json'), 'utf8')) as { synopsis_generation_handle: MainGenerationRunHandle; synopsis_incomplete: boolean; synopsis_protocol: string; synopsis_result?: string }
+    const target = renderPlotOutlineSynopsis(Array.from({ length: chapters }, (_, index) => accepted(index + 1)).join('\n\n'), chapters, expected)
+    return { execute, reopen, navigation, target, accepted, fetch, bridge, prompts, expected, facts: [premise, characters, world, guidance, config.coreOutline, config.worldSetting] }
+  }
+
+  it('rebuilds once from complete original facts and accepts six chapters before a single formal CAS', async () => {
+    const f = outlineFixture({ chapters: 6, compact: 'once', customTemplate: true })
+    const original = ProjectCoreRepository.commitSynopsis
+    const commit = vi.spyOn(ProjectCoreRepository, 'commitSynopsis').mockImplementation(input => {
+      expect(getProjectDb()!.inTransaction).toBe(true)
+      expect(ProjectCoreRepository.get()?.synopsis).toBe('旧正式大纲')
+      return original(input)
+    })
+    await f.execute()
+    expect(f.fetch).toHaveBeenCalledTimes(7)
+    expect(commit).toHaveBeenCalledTimes(1)
+    expect(ProjectCoreRepository.get()?.synopsis).toBe(f.target)
+    expect(f.navigation()).toMatchObject({ synopsis_protocol: PLOT_OUTLINE_PROTOCOL, synopsis_incomplete: false })
+    expect(f.prompts[1]).toContain('本次从原始冻结事实和已接受前缀重新构建此章')
+    for (const prompt of f.prompts) {
+      for (const fact of f.facts) expect(prompt.split(fact)).toHaveLength(2)
+      expect(prompt).toContain('步骤尾部：最终章必须归还借来的钥匙。')
+      expect(prompt).not.toContain('FAILED-CANDIDATE')
+    }
+    expect(f.prompts[2]).toContain(f.accepted(1))
+    const view = await invoke('generation:read', f.navigation().synopsis_generation_handle)
+    expect(view.plotOutline?.composition?.artifactIds).toHaveLength(6)
+    expect(view.ledger!.tokenLiability).toBeGreaterThan(7 * model.maxTokens!)
+  })
+
+  it('saves an author recovery prefix under the current lease without model calls or changing the old responsibility', async () => {
+    const f = outlineFixture({ chapters: 3, compact: 'fails' })
+    await expect(f.execute()).rejects.toThrow('attempts-exhausted')
+    const handle = f.navigation().synopsis_generation_handle
+    const attempts = getProjectDb()!.prepare('SELECT attempt_json FROM generation_attempts ORDER BY rowid').all()
+    f.reopen()
+    const roots = getProjectDb()!.prepare('SELECT * FROM generation_roots').all()
+    const context = await invoke('generation:read-context', { handle })
+    expect(context.plotOutlineRecovery).toMatchObject({ sourceHandle: handle, leaseEpoch: session.leaseId,
+      completeChapters: [], writeState: { kind: 'ready' } })
+    expect(context.plotOutlineRecovery!.draft).toContain('FAILED-CANDIDATE')
+    const synopsis = renderPlotOutlineSynopsis('## 第1章：作者补齐\n作者核对证词，归还钥匙。', 1, context.plotOutline!.sourceExpected)
+    const payload = { synopsis, expected: context.plotOutline!.sourceExpected,
+      authorRecovery: { sourceHandle: handle, leaseEpoch: session.leaseId, operationId: 'author-recovery-1', committedRange: { from: 1, to: 1 } } }
+    const commit = mocks.handlers.get('db:project-core-synopsis-commit')!
+    expect(await commit({ sender }, { ...payload, authorRecovery: { ...payload.authorRecovery, leaseEpoch: handle.epoch } }, session.projectPath, session))
+      .toMatchObject({ success: false, error: expect.stringContaining('GENERATION_EPOCH_STALE') })
+    const saved = await commit({ sender }, payload, session.projectPath, session)
+    expect(saved).toMatchObject({ success: true, receipt: { kind: 'author-edit', committedRange: { from: 1, to: 1 }, remainingRange: { from: 2, to: 3 }, idempotent: false } })
+    expect(await commit({ sender }, payload, session.projectPath, session)).toMatchObject({ success: true, receipt: { idempotent: true } })
+    expect(ProjectCoreRepository.get()?.synopsis).toBe(synopsis)
+    expect(getProjectDb()!.prepare('SELECT attempt_json FROM generation_attempts ORDER BY rowid').all()).toEqual(attempts)
+    expect(getProjectDb()!.prepare('SELECT * FROM generation_roots').all()).toEqual(roots)
+    expect(f.fetch).toHaveBeenCalledTimes(2)
+    await expect(invoke('generation:resume', handle)).rejects.toThrow('GENERATION_PLOT_OUTLINE_AUTHOR_SAVED')
+    f.reopen()
+    const recovered = await invoke('generation:read-context', { handle })
+    expect(recovered.plotOutlineRecovery).toMatchObject({ draft: synopsis, writeState: { kind: 'blocked', reason: 'author-saved' }, saved: { operationId: 'author-recovery-1' } })
+    expect(await commit({ sender }, { ...payload, authorRecovery: { ...payload.authorRecovery, leaseEpoch: session.leaseId } }, session.projectPath, session))
+      .toMatchObject({ success: true, receipt: { idempotent: true } })
+    const archivePath = path.join(root, 'outline-author.zip'), restoredRoot = path.join(root, 'restored-author')
+    await exportPortableProject({ sourceProjectRoot: session.projectPath, projectSession: session, targetArchivePath: archivePath,
+      attemptParentPath: root, assertCurrentContext: context => { expect(context).toEqual(session) },
+      assets: { snapshot: () => ({ files: [], verifyUnchanged: () => {} }) } })
+    await restorePortableProject({ archivePath, targetProjectRoot: restoredRoot })
+    const Database = createRequire(import.meta.url)('better-sqlite3') as typeof import('better-sqlite3')
+    const restored = new Database(path.join(restoredRoot, '.ai-novel', 'project.db'), { readonly: true })
+    try {
+      expect(ProjectCoreRepository.get(restored)!.synopsis).toBe(synopsis)
+      expect(restored.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(handle.runId)).toBe('{}')
+      expect(readPortableRuntimeFreeze(restoredRoot).isFrozen('generation_runs', handle.runId)).toBe(true)
+      expect(() => readPortableRuntimeFreeze(restoredRoot).assertMutable('generation_roots', handle.rootActionId)).toThrow('PORTABLE_RUNTIME_FROZEN')
+    } finally { restored.close() }
+    expect(f.fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['normal-saved', 'composition-saved', 'complete-before-cas', 'cas-reply-lost'] as const)('recovers %s through actual command, transport and a new project lease', async crash => {
+    const f = outlineFixture({ crash }), commit = vi.spyOn(ProjectCoreRepository, 'commitSynopsis')
+    await expect(f.execute()).rejects.toThrow('TEST_TRANSPORT_')
+    const handle = f.navigation().synopsis_generation_handle
+    const before = await invoke('generation:read', handle)
+    expect(before.plotOutline!.cursor.kind).toBe(crash === 'normal-saved' ? 'accept' : crash === 'composition-saved' ? 'request' : 'complete')
+    expect(ProjectCoreRepository.get()?.synopsis).toBe(crash === 'cas-reply-lost' ? f.target : '旧正式大纲')
+    const attempts = getProjectDb()!.prepare('SELECT * FROM generation_attempts ORDER BY rowid').all()
+    const binding = getProjectDb()!.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(handle.runId)
+    f.reopen()
+    expect(session.leaseId).not.toBe(handle.epoch)
+    await f.execute(handle)
+    expect(ProjectCoreRepository.get()?.synopsis).toBe(f.target)
+    expect(f.fetch).toHaveBeenCalledTimes(3)
+    expect(commit).toHaveBeenCalledTimes(1)
+    expect(f.navigation().synopsis_incomplete).toBe(false)
+    if (crash === 'cas-reply-lost') {
+      expect(getProjectDb()!.prepare('SELECT * FROM generation_attempts ORDER BY rowid').all()).toEqual(attempts)
+      expect(getProjectDb()!.prepare('SELECT binding_json FROM generation_runs WHERE run_id=?').pluck().get(handle.runId)).toBe(binding)
+      expect(f.bridge.mock.calls.filter(([channel]) => channel === 'generation:cancel')).toHaveLength(0)
+      await expect(invoke('generation:execute', { handle, invocationNonce: 'historical-execution', task: { purpose: 'plot-outline:chapter:1:normal', output: 'visible-text', messages: [] } })).rejects.toThrow()
+    }
+  })
+
+  it('keeps both failed whole-chapter candidates and the formal original after double LENGTH', async () => {
+    const f = outlineFixture({ compact: 'fails' }), commit = vi.spyOn(ProjectCoreRepository, 'commitSynopsis')
+    await expect(f.execute()).rejects.toThrow('attempts-exhausted')
+    expect(ProjectCoreRepository.get()?.synopsis).toBe('旧正式大纲')
+    expect(commit).not.toHaveBeenCalled()
+    const handle = f.navigation().synopsis_generation_handle
+    const view = await invoke('generation:read', handle)
+    expect(view.candidates).toHaveLength(2)
+    expect(view.plotOutline!.composition).toBeNull()
+    f.reopen()
+    await expect(f.execute(handle)).rejects.toThrow('attempts-exhausted')
+    expect(f.fetch).toHaveBeenCalledTimes(2)
+    expect(ProjectCoreRepository.get()?.synopsis).toBe('旧正式大纲')
+  })
+
+  it.each(['third-text', 'other-core', 'prompt', 'model'] as const)('refuses lost-CAS-response recovery when %s changed', async changed => {
+    const f = outlineFixture({ crash: 'cas-reply-lost' })
+    await expect(f.execute()).rejects.toThrow('TEST_TRANSPORT_REPLY_LOST')
+    const handle = f.navigation().synopsis_generation_handle
+    const temperature = model.temperature
+    if (changed === 'third-text') getProjectDb()!.prepare('UPDATE project_core SET synopsis=?').run('作者第三种正文')
+    if (changed === 'other-core') getProjectDb()!.prepare('UPDATE project_core SET worldbuilding=?').run('作者更新世界观')
+    if (changed === 'prompt') {
+      const dir = path.join(getProjectDataRoot(session.projectPath), 'prompts')
+      fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'synopsis.json'), JSON.stringify({ key: 'synopsis', content: '新模板' }))
+    }
+    if (changed === 'model') model.temperature = 0.1
+    const saved = ProjectCoreRepository.get()!
+    try {
+      f.reopen()
+      await expect(f.execute(handle)).rejects.toThrow(/GENERATION_(?:SOURCE_CHANGED|RECOVERY_UNAUTHORIZED|MODEL_CHANGED)/u)
+      expect(ProjectCoreRepository.get()).toEqual(saved)
+      expect(f.fetch).toHaveBeenCalledTimes(3)
+    } finally { model.temperature = temperature }
   })
 })

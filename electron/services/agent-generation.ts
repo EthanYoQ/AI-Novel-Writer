@@ -7,6 +7,7 @@ import type { GenerationTask } from '../../src/services/generation/generation-ha
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding } from '../repositories/generation-run-repository'
 import { validateAgentGenerationInput } from './agent-generation-context'
 import { commitAgentDomainTool, isAgentDomainToolCurrent } from './agent-domain-tool-effect'
+import { normalizeAgentPlanningArguments } from '../../src/shared/agent-generation'
 
 export type AgentBeginSelection = BeginGenerationRequest & { agentInput: AgentGenerationInput; agentSession: { key: string; roundIndex: number } }
 interface AgentHost {
@@ -17,7 +18,7 @@ interface AgentHost {
   current(run: DurableGenerationRun, expected?: RunBinding): boolean
   capture(run: DurableGenerationRun): RunBinding
 }
-type ActionState = Pick<AgentToolAction, 'status' | 'observation' | 'workflow'> & { domainEffect?: AgentDomainToolReceipt }
+type ActionState = Pick<AgentToolAction, 'status' | 'observation' | 'workflow'> & { domainEffect?: AgentDomainToolReceipt; planningArguments?: Record<string, unknown> }
 type StoredUsage = { agentActions?: Record<string, ActionState>; agentAuthorSelections?: Record<string, AgentAuthorBlueprintProposal[]>;
   agentSourceTransition?: { actionId: string; beforeHash: string; afterHash: string; binding: RunBinding }; agentControlEpoch?: string }
 
@@ -93,12 +94,20 @@ export class AgentGeneration {
     if (!complete) return { index, handle: this.handle(run), attemptId: row.attempt_id,
       status: receipt.attempt.status === 'unknown' || receipt.attempt.status === 'dispatch-marked' || receipt.attempt.status === 'reserved' ? 'unknown' : 'incomplete',
       visibleText: receipt.artifact?.text ?? '', protocolText: '', actions: [] }
+    let normalized = false
     const actions = response.toolCalls.map((call, callIndex): AgentToolAction => {
       const toolCallId = this.actionId(row.attempt_id, callIndex)
-      const state = usage.agentActions?.[toolCallId]
-      return { ref: { handle: this.handle(run), attemptId: row.attempt_id, toolCallId }, name: call.name, arguments: structuredClone(call.arguments),
+      let state = usage.agentActions?.[toolCallId]
+      if (call.name === 'start_workflow' && ['generate_architecture', 'generate_blueprint'].includes(String(call.arguments.workflow)) && !state?.planningArguments && !state?.workflow) {
+        const totalChapters = this.db.prepare("SELECT total_chapters FROM project_core WHERE id='main'").pluck().get() as number
+        state = { ...state, status: state?.status ?? 'pending', planningArguments: normalizeAgentPlanningArguments(call.arguments, totalChapters) }
+        usage.agentActions = { ...usage.agentActions, [toolCallId]: state }
+        normalized = true
+      }
+      return { ref: { handle: this.handle(run), attemptId: row.attempt_id, toolCallId }, name: call.name, arguments: structuredClone(state?.planningArguments ?? call.arguments),
         status: state?.status ?? 'pending', ...(state?.observation !== undefined ? { observation: state.observation } : {}), ...(state?.workflow ? { workflow: state.workflow } : {}) }
     })
+    if (normalized) this.db.prepare('UPDATE generation_attempts SET usage_receipt_json=? WHERE attempt_id=?').run(JSON.stringify(usage), row.attempt_id)
     for (let index = 0; index < actions.length; index++) {
       const parent = actions[index]!
       if (parent.name !== 'propose_novel_config' || parent.status !== 'completed' || usage.agentActions?.[parent.ref.toolCallId]?.domainEffect?.kind !== 'config') continue
@@ -266,11 +275,12 @@ export class AgentGeneration {
         || this.runs.budget(run.rootActionId).root.status !== 'active' || !this.sourcesCurrent(run)) throw new Error('GENERATION_AGENT_WORKFLOW_NOT_AUTHORIZED')
       const args = action.arguments, workflow = args.workflow
       if (!['generate_draft', 'generate_blueprint', 'generate_architecture'].includes(String(workflow))
-        || Object.keys(args).some(key => !['workflow', 'chapter_number'].includes(key))) throw new Error('GENERATION_AGENT_WORKFLOW_INVALID')
+        || Object.keys(args).some(key => !['workflow', 'chapter_number', 'start_chapter', 'chapter_count', 'target_units'].includes(key))) throw new Error('GENERATION_AGENT_WORKFLOW_INVALID')
       const chapterNumber = args.chapter_number
       if (workflow === 'generate_draft' && (!Number.isSafeInteger(chapterNumber) || Number(chapterNumber) < 1)) throw new Error('GENERATION_AGENT_WORKFLOW_INVALID')
       const registration: AgentWorkflowRegistration = { registrationId: `agent-workflow:${textHash(ref.toolCallId)}`,
         workflow: workflow as AgentWorkflowRegistration['workflow'], ...(workflow === 'generate_draft' ? { chapterNumber: Number(chapterNumber) } : {}),
+        ...(workflow === 'generate_draft' ? {} : { planning: { from: Number(args.start_chapter), to: Number(args.start_chapter) + Number(args.chapter_count) - 1, targetUnits: Number(args.target_units) } }),
         parentHandle: this.handle(run), modelId: this.modelId(run), state: 'registered', childHandles: [] }
       return { status: action.status, workflow: registration }
     })
@@ -308,6 +318,18 @@ export class AgentGeneration {
     const existing = registration.childHandles.map(handle => this.runs.get(handle.runId)).filter(child =>
       child.binding.sourceManifest.operation === selection.operation && child.binding.sourceManifest.chapterNumber === selection.chapterNumber)
     if (existing.length > 1) throw new Error('GENERATION_AGENT_CHILD_AMBIGUOUS')
+    if (!existing.length && registration.planning) {
+      const input = (id: string) => selection.authorInputs?.find(item => item.id === id)?.text
+      const { from, to, targetUnits } = registration.planning
+      let range: { from: number; to: number } | undefined
+      try {
+        if (registration.workflow === 'generate_blueprint') {
+          const value = JSON.parse(input('directory:requested-range') ?? 'null')
+          range = value && { from: value.startChapter, to: value.endChapter }
+        } else range = JSON.parse(input('architecture:planning-intent') ?? 'null')?.synopsisRange
+      } catch { throw new Error('GENERATION_AGENT_CHILD_NOT_AUTHORIZED') }
+      if (!isDeepStrictEqual(range, { from, to }) || Number(input('planning:target-units')) !== targetUnits) throw new Error('GENERATION_AGENT_CHILD_NOT_AUTHORIZED')
+    }
     if (!existing.length && (this.runs.budget(run.rootActionId).root.epoch !== this.scope.epoch || this.runs.budget(run.rootActionId).root.status === 'cancelled'))
       throw new Error('GENERATION_AGENT_TOOL_STALE')
     if (!existing.length && !this.sourcesCurrent(run)) throw new Error('GENERATION_AGENT_SOURCE_CHANGED')

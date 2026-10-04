@@ -1,3 +1,4 @@
+import { parsePlanningTargetUnits, planningTargetInstruction, assertPlanningActionRange, DEFAULT_PLANNING_ACTION_CHAPTERS } from '../../../shared/plot-outline-contract'
 import type { MainGenerationRunHandle } from '../../generation/generation-runtime'
 import {
   BaseWorkflowCommand,
@@ -8,7 +9,7 @@ import {
 import type { BlueprintRangeCommitReceipt } from '../../../../electron/repositories/blueprint-repository'
 import { composePromptSystemRole, resolvePromptTemplate } from '../../prompt-templates'
 import { DirectoryPromptBuilder } from '../../prompts/prompt-builder'
-import { createPromptBudgetReport, PromptBudgetExceededError, type GenerationTask } from '../../generation/generation-harness'
+import { type GenerationTask } from '../../generation/generation-harness'
 import {
   createStructuredBatchExecutor,
   type StructuredBatchContract,
@@ -22,7 +23,6 @@ import {
   type DirectoryWorkflowProjectSnapshot,
 } from '../directory-workflow'
 import {
-  BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST,
   blueprintSemanticGenerationContract,
   validateBlueprintSemanticItem,
 } from '../../../shared/blueprint-semantic-contract'
@@ -134,7 +134,6 @@ function directoryGenerationFailureSummary(
 
 // Match the existing protected structured-planning input envelope. Main still
 // checks the actual model context before dispatch; no source facts are clipped.
-const COMPACT_BLUEPRINT_PROMPT_MAX_UTF8_BYTES = 32_768
 const COMPACT_RECENT_BLUEPRINTS = 3
 
 function blueprintCapacityGenerationContract(
@@ -152,6 +151,7 @@ function blueprintCapacityGenerationContract(
 
 function buildCompactBlueprintTask(input: {
   chapterNumber: number
+  targetUnits: number
   architecture: string
   previous: readonly ChapterBlueprint[]
   totalChapters: number
@@ -197,39 +197,21 @@ function buildCompactBlueprintTask(input: {
         )]
       : []),
     promptLanguageText(input.writingLanguage, `必须且只能返回 chapterNumber=${input.chapterNumber} 的一项。`, `Return exactly one item whose chapterNumber is ${input.chapterNumber}.`),
-    promptLanguageText(input.writingLanguage, `严格执行字段和列表上限：${JSON.stringify(BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits)}。`, `Enforce these field and list limits exactly: ${JSON.stringify(BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits)}.`),
+
     blueprintCapacityGenerationContract(input.writingLanguage, input.wordsPerChapter),
   ].join('\n')
   const systemRole = composePromptSystemRole({
     systemRole: input.systemRole
       || promptLanguageText(input.writingLanguage, '你是一位经验丰富的章节架构师。', 'You are an experienced chapter architect.'),
   }, input.writingLanguage)
-  const factSection = (sectionName: string, key: keyof typeof facts) => ({
-    sectionName,
-    messageIndex: 1,
-    finalText: JSON.stringify({ [key]: facts[key] }).slice(1, -1),
-  })
   return {
     purpose: `chapter-blueprint-directory:compact-single:chapter-${input.chapterNumber}`,
     output: 'structured-data',
     messages: [
-      { role: 'system', content: systemRole },
+      { role: 'system', content: `${systemRole}\n\n${planningTargetInstruction('blueprint', input.targetUnits, input.writingLanguage)}` },
       { role: 'user', content: prompt },
     ],
-    promptBudget: {
-      limitUtf8Bytes: COMPACT_BLUEPRINT_PROMPT_MAX_UTF8_BYTES,
-      sections: [
-        { sectionName: 'system-instructions', messageIndex: 0, finalText: systemRole },
-        factSection('target-chapter', 'targetChapterNumber'),
-        factSection('project-chapter-count', 'totalChapters'),
-        factSection('chapter-word-target', 'targetWordsPerChapter'),
-        factSection('genre', 'genre'),
-        factSection('architecture', 'architecture'),
-        factSection('previous-blueprints', 'recentBlueprints'),
-        factSection('global-guidance', 'globalGuidance'),
-        factSection('step-guidance', 'pacingGuidance'),
-      ],
-    },
+
   }
 }
 
@@ -272,9 +254,15 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
       writingLanguage,
     )
     let startChapter = 1
-    let endChapter = totalChapters
+    if (!context.data.directoryResumeHandle && this.params.count !== undefined
+      && (!Number.isSafeInteger(this.params.count) || this.params.count < 1)) throw new Error('GENERATION_PLANNING_RANGE_INVALID')
+    if (!context.data.directoryResumeHandle && this.params.count !== undefined)
+      assertPlanningActionRange({ from: 1, to: this.params.count })
+    const targetUnits = parsePlanningTargetUnits(this.params.targetUnits)
+    let endChapter = Math.min(totalChapters, DEFAULT_PLANNING_ACTION_CHAPTERS)
     if (this.params.mode === 'append') {
       startChapter = this.params.startChapter || authoritativeNextChapter
+      endChapter = Math.min(totalChapters, startChapter + DEFAULT_PLANNING_ACTION_CHAPTERS - 1)
       if (this.params.count && this.params.count > 0) {
         endChapter = Math.min(totalChapters, startChapter + this.params.count - 1)
       }
@@ -291,6 +279,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
       throw new Error(`章节范围无效：第 ${startChapter}–${endChapter} 章`)
     }
 
+    if (!context.data.directoryResumeHandle) assertPlanningActionRange({ from: startChapter, to: endChapter })
     this.assertNotCancelled(context)
     callbacks.log(workflowUiText(
       context,
@@ -314,6 +303,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
     ) => (
       buildCompactBlueprintTask({
         chapterNumber: item,
+        targetUnits,
         architecture,
         previous: [...existingBlueprints, ...validatedPrefix],
         totalChapters,
@@ -371,7 +361,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
               role: 'system',
               content: composePromptSystemRole({
                 systemRole: template.systemRole || promptLanguageText(writingLanguage, '你是一位经验丰富的小说架构师。', 'You are an experienced fiction architect.'),
-              }, writingLanguage),
+              }, writingLanguage) + `\n\n${planningTargetInstruction('blueprint', targetUnits, writingLanguage)}`,
             },
             { role: 'user', content: prompt },
           ],
@@ -403,26 +393,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
     try {
       const batchResult = await (async () => {
         const session = this.requireGenerationExecution().session
-        // Check the final request, including any injected Skill, before either
-        // the renderer fallback or the durable main session can dispatch it.
-        const checkedSession = {
-          budget: session.budget,
-          complete: (task: GenerationTask, options?: Parameters<typeof session.complete>[1]) => {
-            if (task.purpose.startsWith('chapter-blueprint-directory:compact-single:')) {
-              if (!task.promptBudget) throw new Error('COMPACT_BLUEPRINT_PROMPT_BUDGET_REQUIRED')
-              const report = createPromptBudgetReport({
-                messages: task.messages,
-                policy: task.promptBudget,
-                contextWindowTokens: null,
-                reservedOutputTokens: 0,
-                modelId: context.generationModelId || 'unresolved',
-              })
-              if (report.errorCode === 'PROMPT_BUDGET_EXHAUSTED') throw new PromptBudgetExceededError(report)
-            }
-            return session.complete(task, options)
-          },
-        }
-        const planningSession = injectWritingSkillIntoSession(checkedSession, context, 'planning')
+        const planningSession = injectWritingSkillIntoSession(session, context, 'planning')
         if (context.writingSkills?.planning) {
           callbacks.log(workflowUiText(
             context,
@@ -490,7 +461,7 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
         generatedBlueprints,
         expectedProjectPath,
         {
-          mode: this.params.mode === 'full' ? 'full' : 'replace-range',
+          mode: 'replace-range',
           startChapter,
           endChapter,
         },
@@ -530,9 +501,10 @@ export class GenerateDirectoryCommand extends BaseWorkflowCommand<ChapterBluepri
     }, {
       continueDirectoryOperationId: this.params.continueDirectoryOperationId,
       resumeHandle: context.data.directoryResumeHandle as MainGenerationRunHandle | undefined,
+      restartHandle: this.params.restartFrom,
       selectedBlueprintChapterNumbers: [...new Set([...chapterNumbers, ...existingBlueprints.map(item => item.chapterNumber)])],
       operation: 'chapter-blueprint-directory', promptKeys: ['chapter_blueprint_chunk'], skillStages: ['planning'], output: 'structured-data',
-      authorInputs: [{ id: 'directory:pacing-guidance', text: typeof context.data.pacingGuidance === 'string' ? context.data.pacingGuidance : '' }, { id: 'directory:author-config', text: JSON.stringify(novelConfig) }, { id: 'directory:requested-range', text: JSON.stringify({ mode: this.params.mode, startChapter, endChapter }) }],
+      authorInputs: [{ id: 'planning:target-units', text: String(targetUnits) }, { id: 'directory:pacing-guidance', text: typeof context.data.pacingGuidance === 'string' ? context.data.pacingGuidance : '' }, { id: 'directory:author-config', text: JSON.stringify(novelConfig) }, { id: 'directory:requested-range', text: JSON.stringify({ mode: this.params.mode, startChapter, endChapter }) }],
     })
   }
 }

@@ -242,15 +242,19 @@ it('cancelled roots cannot become successful when an uncooperative provider reso
 });
 it('rejects corrupted saved text instead of confirming its old digest',()=>{
     const f=fixture(),run=f.repository.open(f.open),receipt=f.repository.reserve(run.runId,'a',textHash('a'),200,100);
+    expect(f.repository.readRunView(run.runId).attempts[0]!.receipt.artifact).toEqual(receipt.artifact);
     const artifact={...receipt.artifact!,text:'tampered'};
     f.db.prepare('UPDATE generation_artifacts SET artifact_json=? WHERE artifact_id=?').run(JSON.stringify(artifact),artifact.artifactId);
     expect(()=>f.repository.receipt(receipt.attempt.attemptId)).toThrow('ARTIFACT_INTEGRITY_FAILED');
+    expect(()=>f.repository.readRunView(run.runId)).toThrow('ARTIFACT_INTEGRITY_FAILED');
 });
 it.each(['artifactId','epoch','fingerprint'])('rejects altered saved artifact identity %s',field=>{
  const f=fixture(),run=f.repository.open(f.open),receipt=f.repository.reserve(run.runId,'a',textHash('a'),200,100);
+ expect(f.repository.readRunView(run.runId).attempts[0]!.receipt.artifact).toEqual(receipt.artifact);
  const artifact={...receipt.artifact!};if(field==='fingerprint')artifact.fingerprint={...artifact.fingerprint,authorGuidanceHash:textHash('wrong')};else artifact[field as 'artifactId'|'epoch']='wrong';
  f.db.prepare('UPDATE generation_artifacts SET artifact_json=? WHERE artifact_id=?').run(JSON.stringify(artifact),receipt.artifact!.artifactId);
  expect(()=>f.repository.receipt(receipt.attempt.attemptId)).toThrow('ARTIFACT_INTEGRITY_FAILED');expect(()=>f.repository.listCandidates()).toThrow('ARTIFACT_INTEGRITY_FAILED');
+ expect(()=>f.repository.readRunView(run.runId)).toThrow('ARTIFACT_INTEGRITY_FAILED');
 });
 it('retains the immutable old artifact epoch after authorized resume in a new epoch',async()=>{
  const f=fixture(),service=createGenerationRunService({repository:f.repository,dispatch:async()=>({usage,finishReason:'stop'}),validateRecovery:async()=>true}),run=service.open(f.open),receipt=await service.execute(f.request(run.runId));

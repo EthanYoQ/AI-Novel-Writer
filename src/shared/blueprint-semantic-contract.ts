@@ -35,14 +35,7 @@ export const BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST = Object.freeze({
     endpointsMustAppearInCharacters: true,
   } as const),
   outputLimits: Object.freeze({
-    titleCharacters: 60,
-    roleCharacters: 120,
-    purposeCharacters: 240,
-    keyEventsCharacters: 1_200,
-    suspenseHookCharacters: 160,
-    characterItems: 12,
     characterNameCharacters: 32,
-    relationshipItems: 8,
     relationshipCharacters: 80,
   } as const),
   exactChapterCoverage: true,
@@ -57,8 +50,7 @@ suspenseHook is always required; even without a mystery, state one concrete unre
 characters must be an array containing at least one unique, non-empty full character name.
 newCharacterCandidates is optional. When present, include only important named characters first introduced by this blueprint and expected to recur. Every item must contain name and role, name must exactly copy one entry from characters, and role must be protagonist, antagonist, supporting, or minor. Omit it or use [] when there are no candidates; never include incidental figures.
 relationships is required and may be []; every item must contain non-empty from, to, and relation fields. from and to must exactly copy full names from the same item's characters array and may not self-reference.
-Keep keyEvents concise; aim for no more than 900 characters and never exceed the hard maximum of 1,200.
-Limits: title ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.titleCharacters} characters; role ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.roleCharacters}; purpose ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.purposeCharacters}; keyEvents ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.keyEventsCharacters}; suspenseHook ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.suspenseHookCharacters}; characters at most ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterItems} items with names at most ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterNameCharacters} characters; relationships at most ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipItems} items with relation at most ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipCharacters} characters.
+Character names are at most ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterNameCharacters} characters and relation labels at most ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipCharacters} characters. Preserve complete narrative content.
 Do not omit required fields, combine chapters, rename fields, explain, or output Markdown or code fences.`
   }
   return `【不可变蓝图 JSON 合同】
@@ -69,8 +61,7 @@ characters 必须是至少含一个唯一非空角色名的字符串数组。
 newCharacterCandidates 可选；提供时只声明由本章首次引入且预计后续复用的重要具名角色，每项必须包含 name、role，name 必须逐字复制 characters 中的一个完整姓名，role 只能是 protagonist、antagonist、supporting、minor。无候选时可省略或传 []，一次性路人不得声明为候选。
 relationships 必须是数组，无关系时传 []；每项必须含非空 from、to、relation，from/to 必须精确出现在同项 characters 中且不能自指。
 from/to 必须逐字复制同一项 characters 中的完整字符串；任一端点不在 characters 时，删除该关系或使用 []，不得发明别名、简称或补写角色。
-keyEvents 保持精炼，目标为 100–150 字符，绝不得超过 1200 字符硬上限。
-每项长度上限：title ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.titleCharacters} 字符、role ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.roleCharacters} 字符、purpose ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.purposeCharacters} 字符、keyEvents ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.keyEventsCharacters} 字符、suspenseHook ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.suspenseHookCharacters} 字符；characters 最多 ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterItems} 项且姓名最多 ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterNameCharacters} 字符；relationships 最多 ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipItems} 项且 relation 最多 ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipCharacters} 字符。
+角色姓名最多 ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterNameCharacters} 字符，关系标签最多 ${BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipCharacters} 字符。叙述内容须保持完整。
 不得省略必填字段、合并章节、输出近义字段、解释、Markdown 或代码围栏。`
 }
 
@@ -88,6 +79,12 @@ export interface BlueprintSemanticItem {
   newCharacterCandidates: BlueprintNewCharacterCandidate[]
   relationshipHints: BlueprintRelationshipFact[]
   suspenseHook: string
+}
+
+export interface BlueprintAuthorItem extends BlueprintSemanticItem {
+  userGuidance: string
+  notes: string
+  notesUpdatedAt: string
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -139,9 +136,6 @@ function normalizedCharacters(value: unknown, path: string): string[] {
   if (value === undefined) throw new StructuredContractDiagnostic('missing_field', path)
   if (!Array.isArray(value)) throw new StructuredContractDiagnostic('invalid_type', path)
   if (value.length === 0) throw new StructuredContractDiagnostic('invalid_value', path)
-  if (value.length > BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterItems) {
-    throw new StructuredContractDiagnostic('invalid_value', path)
-  }
   const characters = value.map((candidate, index) => {
     return requiredText(
       candidate,
@@ -162,9 +156,6 @@ function normalizedRelationships(
 ): BlueprintRelationshipFact[] {
   if (value === undefined) throw new StructuredContractDiagnostic('missing_field', path)
   if (!Array.isArray(value)) throw new StructuredContractDiagnostic('invalid_type', path)
-  if (value.length > BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.relationshipItems) {
-    throw new StructuredContractDiagnostic('invalid_value', path)
-  }
   const characterSet = new Set(characters)
   const seen = new Set<string>()
   return value.map((candidate, index) => {
@@ -199,9 +190,6 @@ function normalizedNewCharacterCandidates(
 ): BlueprintNewCharacterCandidate[] {
   if (value === undefined) return []
   if (!Array.isArray(value)) throw new StructuredContractDiagnostic('invalid_type', path)
-  if (value.length > BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.characterItems) {
-    throw new StructuredContractDiagnostic('invalid_value', path)
-  }
   const characterSet = new Set(characters)
   const seen = new Set<string>()
   return value.map((candidate, index) => {
@@ -250,13 +238,12 @@ export function normalizeBlueprintSemanticItem(value: unknown, path = 'blueprint
   )
   return {
     chapterNumber,
-    title: requiredText(value.title, `${path}.title`, BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.titleCharacters),
-    role: requiredText(value.role, `${path}.role`, BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.roleCharacters),
-    purpose: requiredText(value.purpose, `${path}.purpose`, BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.purposeCharacters),
+    title: requiredText(value.title, `${path}.title`),
+    role: requiredText(value.role, `${path}.role`),
+    purpose: requiredText(value.purpose, `${path}.purpose`),
     keyEvents: requiredText(
       fieldValue(value, 'keyEvents', ['key_events']),
       `${path}.keyEvents`,
-      BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.keyEventsCharacters,
     ),
     characters,
     newCharacterCandidates,
@@ -264,7 +251,6 @@ export function normalizeBlueprintSemanticItem(value: unknown, path = 'blueprint
     suspenseHook: requiredText(
       fieldValue(value, 'suspenseHook', ['suspense_hook']),
       `${path}.suspenseHook`,
-      BLUEPRINT_SEMANTIC_CONTRACT_MANIFEST.outputLimits.suspenseHookCharacters,
     ),
   }
 }
@@ -308,10 +294,7 @@ export function decodeBlueprintSemanticPayload(
  * Accepts exactly one JSON root or one complete Markdown JSON fence. It never
  * searches narrative prose for a nested JSON fragment.
  */
-export function parseBlueprintSemanticResponseText(
-  text: string,
-  expectedChapterNumbers: readonly number[],
-): BlueprintSemanticItem[] {
+function parseBlueprintJsonText(text: string): unknown {
   const trimmed = text.trim()
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(trimmed)
   const candidate = fenced ? fenced[1].trim() : trimmed
@@ -324,5 +307,33 @@ export function parseBlueprintSemanticResponseText(
   } catch {
     throw new StructuredContractDiagnostic('invalid_json', '$')
   }
-  return decodeBlueprintSemanticPayload(parsed, expectedChapterNumbers)
+  return parsed
+}
+
+export function parseBlueprintSemanticResponseText(text: string, expectedChapterNumbers: readonly number[]): BlueprintSemanticItem[] {
+  return decodeBlueprintSemanticPayload(parseBlueprintJsonText(text), expectedChapterNumbers)
+}
+
+export function decodeBlueprintAuthorPayload(payload: unknown, expectedChapterNumbers: readonly number[]): BlueprintAuthorItem[] {
+  const decoded = decodeBlueprintSemanticPayload(payload, expectedChapterNumbers)
+  const candidates = isRecord(payload) && Object.hasOwn(payload, 'blueprints') ? payload.blueprints : payload
+  if (!Array.isArray(candidates)) throw new StructuredContractDiagnostic('invalid_envelope', 'blueprints')
+  const authorFields = new Map(candidates.map((candidate, index) => {
+    const path = `blueprints[${index}]`
+    if (!isRecord(candidate)) throw new StructuredContractDiagnostic('invalid_type', path)
+    const optionalText = (key: 'userGuidance' | 'notes' | 'notesUpdatedAt'): string => {
+      const value = candidate[key]
+      if (value === undefined) return ''
+      if (typeof value !== 'string') throw new StructuredContractDiagnostic('invalid_type', `${path}.${key}`)
+      return value
+    }
+    return [normalizedChapterNumber(candidate, path), {
+      userGuidance: optionalText('userGuidance'), notes: optionalText('notes'), notesUpdatedAt: optionalText('notesUpdatedAt'),
+    }] as const
+  }))
+  return decoded.map(item => ({ ...item, ...authorFields.get(item.chapterNumber)! }))
+}
+
+export function parseBlueprintAuthorResponseText(text: string, expectedChapterNumbers: readonly number[]): BlueprintAuthorItem[] {
+  return decodeBlueprintAuthorPayload(parseBlueprintJsonText(text), expectedChapterNumbers)
 }

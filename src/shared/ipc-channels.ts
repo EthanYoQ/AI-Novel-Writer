@@ -189,6 +189,8 @@ export interface ModelProviderResourceChannels {
 
 export interface GlobalConfig {
   theme: string
+  outlineTargetUnits?: number
+  blueprintTargetUnits?: number
   locale?: Locale
   defaultModelId: string | null
   defaultEmbeddingModelId?: string | null
@@ -889,7 +891,7 @@ export interface DatabaseChannels {
   }
   'db:project-core-synopsis-commit': {
     args: [request: ProjectCoreSynopsisCommitRequest, expectedProjectPath: string]
-    return: { success: boolean; error?: string }
+    return: { success: boolean; receipt?: import('./plot-outline-contract').PlotOutlineAuthorEditReceipt; error?: string }
   }
   'db:import-global-facts-commit': {
     args: [request: ImportGlobalFactsRequest, expectedProjectPath: string]

@@ -76,7 +76,7 @@ export interface TaskBudgetPlannerInput {
     maxOutputPerRequest: number
   }
   liability: TaskBudgetLiabilityBound
-  outputAllocation?: 'semantic-estimate' | 'available-ceiling'
+  outputAllocation?: 'semantic-estimate' | 'available-ceiling' | 'physical-capacity'
   safetyMarginTokens: number
 }
 
@@ -332,7 +332,8 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
       selected: limit.value === availableOutputTokens,
     })
   }
-  const minimumOutputTokens = outputTokensFor(input.stage, input.demand, 1)
+  const physicalCapacity = input.outputAllocation === 'physical-capacity'
+  const minimumOutputTokens = physicalCapacity ? 1 : outputTokensFor(input.stage, input.demand, 1)
   if (availableOutputTokens < minimumOutputTokens) {
     reasons.push({ code: 'required-input-capacity-conflict', valueTokens: Math.max(0, availableOutputTokens), selected: true })
     if (input.demand.kind === 'structured-items' && requestedQuantity === 1) {
@@ -341,9 +342,9 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
     return conflict(input, requestedQuantity, requestedOutputTokens, reasons)
   }
 
-  const selectedQuantity = Math.min(
+  const selectedQuantity = physicalCapacity && input.demand.kind === 'draft-units' ? requestedQuantity : Math.min(
     requestedQuantity,
-    maximumQuantityFor(input.stage, input.demand, availableOutputTokens),
+    Math.max(physicalCapacity ? 1 : 0, maximumQuantityFor(input.stage, input.demand, availableOutputTokens)),
   )
   if (selectedQuantity < requestedQuantity
     && input.demand.kind === 'draft-units'
@@ -357,7 +358,7 @@ export function planTaskBudget(input: TaskBudgetPlannerInput): TaskBudgetDecisio
   }
 
   const decision = selectedQuantity < requestedQuantity ? 'split-required' : 'ready'
-  const useAvailableCeiling = decision === 'ready' && input.outputAllocation === 'available-ceiling'
+  const useAvailableCeiling = decision === 'ready' && (physicalCapacity || input.outputAllocation === 'available-ceiling')
   const reservedOutputTokens = useAvailableCeiling
     ? availableOutputTokens : outputTokensFor(input.stage, input.demand, selectedQuantity)
   if (useAvailableCeiling) reasons.push({ code: 'output-allocation-ceiling', valueTokens: reservedOutputTokens, selected: true })

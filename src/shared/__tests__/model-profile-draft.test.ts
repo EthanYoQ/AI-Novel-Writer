@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest'
 
-import { applyModelProfileSelection, createModelProfileDraft } from '../model-profile-draft'
+import { applyModelProfileSelection, createModelProfileDraft, DEFAULT_GENERATION_OUTPUT_TOKENS } from '../model-profile-draft'
 
 describe('model profile drafts', () => {
+  it('uses the new generation default narrowed only by the initial provider capacity', () => {
+    expect(DEFAULT_GENERATION_OUTPUT_TOKENS).toBe(65536)
+    expect(createModelProfileDraft({id:'new-generation',purposes:['generation']})).toMatchObject({
+      modelName:'gpt-4.1',maxTokens:32768,capabilities:{maxOutputTokens:32768},
+    })
+  })
+  it.each([16384,32768,65536])('leaves an existing explicit %i output limit unchanged', maxTokens => {
+    const profile={...createModelProfileDraft({id:'old-generation',purposes:['generation']}),maxTokens,
+      capabilities:{contextWindowTokens:262144,maxOutputTokens:maxTokens,reasoning:false,structuredOutput:true,usage:true}}
+    expect(applyModelProfileSelection(profile,{modelName:profile.modelName})).toEqual(profile)
+  })
   it('preserves manual fields for the same identity and clears automatic fields on endpoint or protocol changes', () => {
     const initial = createModelProfileDraft({ id: 'sources', purposes: ['generation'] })
     const endpoint = applyModelProfileSelection(initial, { modelName: 'new', baseUrl: 'https://new.test/v1' },

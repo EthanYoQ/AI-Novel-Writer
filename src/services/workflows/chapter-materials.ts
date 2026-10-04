@@ -669,12 +669,11 @@ export async function assembleChapterMaterials(input: {
     }
   }
 
-  // 单位在这里统一：旧遍历按 UTF-16 码元、合同按 UTF-8 字节，容量用码元预算按写作语言
-  // 主要字符集换算出的字节数表示，估算器版本与 context-snapshot 冻结的 utf8-bytes-v1 一致。
   const capacity = {
-    maxInputUnits: (input.budgetChars ?? MATERIAL_BUDGET_CHARS) * BYTES_PER_BUDGET_CHAR[writingLanguage],
+    maxInputUnits: MATERIAL_DECISION_MAX_INPUT_UNITS,
     methodVersion: MATERIAL_DECISION_UNIT_METHOD_VERSION,
   }
+  const optionalMaterialCeiling = (input.budgetChars ?? MATERIAL_BUDGET_CHARS) * BYTES_PER_BUDGET_CHAR[writingLanguage]
 
   // ---- 参考材料族的局部子串去重（决定 2C）----
   // 它是「参考材料」这一族的补充过滤器，**不是**第二套事实来源：它不判定来源是否可用、
@@ -690,6 +689,7 @@ export async function assembleChapterMaterials(input: {
     const probe = selectChapterSources({
       current: input.identity,
       capacity,
+      optionalMaterialCeiling,
       relevanceTerms: input.relevanceTerms,
       candidates,
     })
@@ -710,6 +710,7 @@ export async function assembleChapterMaterials(input: {
       selection: selectChapterSources({
         current: input.identity,
         capacity,
+        optionalMaterialCeiling,
         relevanceTerms: input.relevanceTerms,
         candidates: candidates.filter(item => !droppedReferences.has(item)),
       }),

@@ -226,6 +226,13 @@ describe('parseTextBlueprints', () => {
 })
 
 describe('parseTextBlueprintsStrict', () => {
+  it('preserves author recovery fields exactly while model parsing retains its existing persistence boundary', () => {
+    const fields = { userGuidance: '  作者指导。\r\n', notes: '<think>作者原文</think>', notesUpdatedAt: '2026-10-04T13:00:00.000Z' }
+    const raw = JSON.stringify([{ ...blueprint, ...fields }])
+    expect(parseTextBlueprintsStrict(raw, 1, 1, 'author')[0]).toMatchObject(fields)
+    expect(parseTextBlueprintsStrict(raw, 1, 1)[0]).toMatchObject({ userGuidance: '', notes: '', notesUpdatedAt: '' })
+    expect(() => parseTextBlueprintsStrict(JSON.stringify([{ ...blueprint, notes: 123 }]), 1, 1, 'author')).toThrow('invalid_type')
+  })
   it('returns parsed blueprints for valid array input', () => {
     const result = parseTextBlueprintsStrict(JSON.stringify([{ ...blueprint, relationships: [] }]), 1, 1)
 

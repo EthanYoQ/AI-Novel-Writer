@@ -7,6 +7,10 @@ import type { CharacterProposalChannels } from '../../../src/shared/character-pr
 import type { GenerationOwnerChannels, BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
 import type { ModelProfile, ProjectSessionContext } from '../../../src/shared/ipc-channels'
 import { ipc } from '../../../src/services/ipc-client'
+import { launchCreativeWorkflow } from '../../../src/services/workflows/creative-workflow-launcher'
+import { useProjectStore } from '../../../src/stores/project-store'
+import { useWorkflowStore, type WorkflowDefinition, type WorkflowContext } from '../../../src/stores/workflow-store'
+import type { MainGenerationRunView } from '../../../src/services/generation/generation-runtime'
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>
 const mocks = vi.hoisted(() => ({ handlers: new Map<string, Handler>(), globalRoot: '' }))
@@ -55,6 +59,10 @@ async function workflow() {
   const registration = await invoke('agent-generation:register-workflow', { ref: f.ref })
   const selection: BeginGenerationRequest = { operation: 'generate-core-seed', uiActionNonce: 'child-stage', modelId: model.id,
     promptKeys: ['premise'], skillStages: ['planning'], selectedDraftIds: [], selectedFinalizedDraftIds: [], output: 'visible-text',
+    authorInputs: [{ id: 'planning:target-units', text: String(registration.planning!.targetUnits) },
+      { id: 'architecture:author-config', text: JSON.stringify({ totalChapters: 100 }) },
+      { id: 'architecture:planning-intent', text: JSON.stringify({ version: 'architecture-action-v1',
+        priorSteps: ['premise', 'characters', 'worldbuilding'], synopsisRange: { from: registration.planning!.from, to: registration.planning!.to } }) }],
     parentRootActionId: f.recovery.handle.rootActionId, agentWorkflowRegistrationId: registration.registrationId }
   return { ...f, registration, selection }
 }
@@ -77,11 +85,66 @@ beforeEach(() => {
 })
 afterEach(() => {
   closeProjectDatabase(); projectAccess.invalidateCurrentSession(); vi.unstubAllGlobals(); vi.restoreAllMocks()
+  useProjectStore.setState({ currentProject: null })
+  useWorkflowStore.setState({ activeRuns: [], history: [] })
   if (!path.resolve(root).startsWith(path.resolve(base))) throw new Error('Synthetic cleanup outside owned temp root')
   fs.rmSync(root, { recursive: true, force: true })
 })
 
 describe('Agent registered IPC, actual SQLite and intercepted provider boundary', () => {
+  it.each(['generate_architecture', 'generate_blueprint'] as const)('carries frozen planning through the real %s launcher and factory into main admission', async workflow => {
+    getProjectDb()!.prepare('UPDATE project_core SET premise=?').run('Synthetic established premise. '.repeat(4))
+    getProjectDb()!.exec("INSERT INTO characters(name) VALUES('Mara')")
+    useProjectStore.setState({ currentProject: { id: session.projectId, path: session.projectPath, sessionLease: session.leaseId,
+      name: 'Synthetic Agent IPC', createdAt: '', updatedAt: '', characterStates: '', novelConfig: {
+        genre: 'Original genre', subGenre: '', targetAudience: '', totalChapters: 100, wordsPerChapter: 3000,
+        plotStructure: 'three_act', narrativePOV: 'third_limited', coreOutline: 'A frozen author outline.',
+        worldSetting: '', goldenFinger: '', protagonistProfile: '', globalGuidance: 'Author guidance',
+      } } })
+    const f = await action('start_workflow', { workflow, start_chapter: 11, chapter_count: 10, target_units: 1000 })
+    await invoke('agent-generation:claim-tool', { ref: f.ref, confirmed: true })
+    const definitions: WorkflowDefinition[] = []
+    vi.spyOn(useWorkflowStore.getState(), 'startWorkflow').mockImplementation(async definition => {
+      definitions.push(definition)
+      useWorkflowStore.setState({ history: [{ id: definition.runId!, projectPath: session.projectPath, projectSession: session,
+        type: definition.type, title: definition.title, status: 'waiting', currentStepIndex: 0, createdAt: '', steps: [],
+        writingLanguage: 'zh-CN', uiLocale: 'en-US' }] })
+      return definition.runId!
+    })
+    await launchCreativeWorkflow({ workflow }, session, { agentToolAction: f.ref })
+    const definition = definitions[0], registration = definition.agentWorkflowRegistration!
+    expect(registration.planning).toEqual({ from: 11, to: 20, targetUnits: 1000 })
+    const children: MainGenerationRunView[] = [], selections: BeginGenerationRequest[] = []
+    vi.stubGlobal('window', { aiNovelAPI: { invoke: async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:begin') {
+        selections.push(args[0] as BeginGenerationRequest)
+        children.push(await invoke('generation:begin', selections.at(-1)!))
+        throw new Error('admitted-factory-child')
+      }
+      if (channel === 'fs:check-exists') return false
+      if (channel === 'prompt:load-global' || channel === 'prompt:load-project') return { templates: [], diagnostics: [] }
+      return mocks.handlers.get(channel)!({ sender }, ...args)
+    } } })
+    const context: WorkflowContext = { runId: definition.runId!, projectPath: session.projectPath, projectSession: session,
+      generationModelId: registration.modelId, mainGenerationRootHandle: registration.parentHandle,
+      agentWorkflowRegistrationId: registration.registrationId, writingLanguage: 'zh-CN', uiLocale: 'en-US', data: {}, cancelled: false }
+    const callbacks = { log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() }
+    for (const step of definition.steps) {
+      try { await step.executor({ id: step.name, name: step.name, description: step.description, status: 'running', logs: [] }, context, callbacks) }
+      catch { expect(children).toHaveLength(1); break }
+    }
+    expect(children).toHaveLength(1)
+    expect(selections[0].authorInputs).toContainEqual({ id: 'planning:target-units', text: '1000' })
+    const child = children[0]
+    expect(child.handle.rootActionId).toBe(f.started.handle.rootActionId)
+    const result = await invoke('generation:execute', { handle: child.handle, invocationNonce: 'factory-child-request', task: {
+      purpose: workflow === 'generate_architecture' ? 'generate-core-seed' : 'directory', output: selections[0].output,
+      messages: [{ role: 'user', content: 'Synthetic child.' }] } })
+    expect(result.run.ledger?.physicalRequests).toBe(2)
+    expect(f.fetch).toHaveBeenCalledTimes(2)
+    expect((await invoke('agent-generation:read', { handle: f.recovery.handle })).rounds[0].actions[0].workflow?.childHandles).toEqual([child.handle])
+  })
+
   it('commits only claimed actual domain arguments and separately confirmed author actions through registered IPC', async () => {
     const f = await action('propose_novel_config', { changes: { genre: 'Confirmed genre' } })
     expect(f.recovery.rounds[0].visibleText).toBe('Visible candidate.')
@@ -164,6 +227,7 @@ describe('Agent registered IPC, actual SQLite and intercepted provider boundary'
     const registrations = await Promise.all([invoke('agent-generation:register-workflow', { ref: f.ref }), invoke('agent-generation:register-workflow', { ref: f.ref })])
     expect(registrations).toEqual([f.registration, f.registration])
     await expect(invoke('generation:begin', { ...f.selection, parentRootActionId: 'forged' })).rejects.toThrow('GENERATION_AGENT_CHILD_NOT_AUTHORIZED')
+    await expect(invoke('generation:begin', { ...f.selection, authorInputs: [] })).rejects.toThrow('GENERATION_AGENT_CHILD_NOT_AUTHORIZED')
     const [left, right] = await Promise.all([invoke('generation:begin', f.selection), invoke('generation:begin', { ...f.selection, uiActionNonce: 'second-launch' })])
     expect(left.handle).toEqual(right.handle)
     const result = await invoke('generation:execute', { handle: left.handle, invocationNonce: 'child-request', task: { purpose: 'generate-core-seed', output: 'visible-text', messages: [{ role: 'user', content: 'Synthetic child' }] } })

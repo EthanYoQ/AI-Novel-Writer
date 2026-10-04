@@ -14,6 +14,7 @@ export type ArchitecturePlanningIntent = Readonly<{
 }>
 export type PlanningGenerationScope =
   | Readonly<{ kind: 'architecture'; intent: ArchitecturePlanningIntent; outlineProtocol: 'legacy-range-v1' }>
+  | Readonly<{ kind: 'architecture'; intent: ArchitecturePlanningIntent; outlineProtocol: typeof import('./plot-outline-contract').PLOT_OUTLINE_PROTOCOL; outlineContent: typeof import('./plot-outline-contract').PLOT_OUTLINE_CONTENT }>
   | Readonly<{ kind: 'directory'; requestedRange: Readonly<{ mode: 'full' | 'append'; startChapter: number; endChapter: number }> }>
 export interface DirectoryGenerationProgress {
   operationId: string
@@ -32,9 +33,10 @@ export interface VisibleCompositionReceipt {
   textHash: string
   artifactIds: string[]
   sources: { artifactId: string; revision: number; textHash: string }[]
+  chapters?: { chapterNumber: number; artifactIds: string[]; textHash: string }[]
   authorInputs?: GenerationAuthorInput[]
 }
-export type VisibleCompositionAlgorithm = 'visible-append-v1' | import('./draft-visible-text').DraftVisibleTextVersion
+export type VisibleCompositionAlgorithm = 'visible-append-v1' | typeof import('./plot-outline-contract').PLOT_OUTLINE_PROTOCOL | import('./draft-visible-text').DraftVisibleTextVersion
 /**
  * S10B 章节材料准入裁决的脱敏收据。
  *
@@ -126,6 +128,10 @@ export interface GenerationDraftCommitRequest {
 }
 export type ShortOutlineRetry = { kind: 'available'; failedAttemptId: string } | { kind: 'unavailable' }
 export interface GenerationRecoveryContext {
+  planningContinuation?: PlanningContinuation
+  blueprintRecovery?: BlueprintRecovery
+  plotOutlineRecovery?: import('./plot-outline-contract').PlotOutlineRecovery
+  plotOutline?: import('./plot-outline-contract').PlotOutlineProgress
   modelId: string
   handle: MainGenerationRunHandle
   operation: string
@@ -149,6 +155,36 @@ export interface GenerationRecoveryContext {
   draftShortOutline?: { artifactIds: string[]; completedOutput: string | null; promptHash: string; initialDraftTask?: GenerationTask; retry: ShortOutlineRetry }
   /** Present only when the originally selected drafts still match their frozen source references. */
   selectedDrafts?: PreparedDraftContext['selectedDrafts']
+}
+export interface PlanningContinuationReceipt {
+  kind: 'planning-continuation'
+  sourceHandle: MainGenerationRunHandle
+  nextHandle: MainGenerationRunHandle
+  requestHash: string
+}
+export interface BlueprintAuthorEditReceipt {
+  kind: 'blueprint-author-edit'
+  operationId: string
+  sourceHandle: MainGenerationRunHandle
+  requestedRange: { from: number; to: number }
+  committedRange: { from: number; to: number }
+  remainingRange: { from: number; to: number } | null
+  payloadHash: string
+}
+export interface BlueprintRecovery {
+  sourceHandle: MainGenerationRunHandle
+  leaseEpoch: string
+  draft: string
+  editRange: { from: number; to: number } | null
+  writeState: 'ready' | 'in-flight' | 'source-changed' | 'author-saved' | 'continued' | 'complete'
+  saved: BlueprintAuthorEditReceipt | null
+}
+export interface PlanningContinuation {
+  sourceHandle: MainGenerationRunHandle
+  remainingRange: { from: number; to: number } | null
+  targetUnits: number
+  state: 'ready' | 'in-flight' | 'source-changed' | 'save-prefix' | 'complete' | 'continued'
+  nextHandle?: MainGenerationRunHandle
 }
 export interface PrepareDraftContextRequest {
   chapterNumber: number
