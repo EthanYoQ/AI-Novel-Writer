@@ -583,6 +583,22 @@ test('saved first-review continuation preserves old files, counts the exact hist
     const controlTarget = { ...previousTarget, codeSha: '9'.repeat(40), protocolHash: ref(protocolPath).sha256 }
     const controlOptions = { ...options, protocolHash: controlTarget.protocolHash, savedReviewContinuationPath: controlManifestPath,
       caseId: controlSlot.caseId, nativeAction: 'prepare', approvalPath: undefined }
+    const failedTarget = { ...controlTarget, codeSha: '8'.repeat(40) }
+    let failedCalls = 0, retainedReceiptPath
+    const failedBridge = request => {
+      failedCalls++
+      retainedReceiptPath = write(path.join(request.evidenceRoot, 'prepare-receipt.json'), {
+        status: 'failed', error: 'retained prepare failure', physicalModelRequests: 0, attempts: [], invocations: [] })
+      throw Object.assign(new Error('PRODUCTION_BRIDGE_FAILED'), { receiptPath: retainedReceiptPath })
+    }
+    const failPrepare = () => driver.runProductionPhasePair({ candidate: failedTarget }, controlOptions, failedBridge)
+    assert.throws(failPrepare, /PRODUCTION_BRIDGE_FAILED/)
+    const failedRecordPath = path.join(directory, `saved-c17-a-control.${controlManifest.continuationId}.88888888.execution.json`)
+    const failedBytes = fs.readFileSync(failedRecordPath), failedReceiptBytes = fs.readFileSync(retainedReceiptPath)
+    assert.throws(failPrepare, error => error.message === 'SAVED_NATIVE_PREPARATION_EVIDENCE_RETAINED' && error.receiptPath === retainedReceiptPath)
+    assert.equal(failedCalls, 1)
+    assert.deepEqual(fs.readFileSync(failedRecordPath), failedBytes)
+    assert.deepEqual(fs.readFileSync(retainedReceiptPath), failedReceiptBytes)
     const controlCalls = [], controlBridge = request => {
       controlCalls.push(request.action)
       assert.deepEqual(request.target.roots, controlRuntime.roots)
@@ -593,7 +609,12 @@ test('saved first-review continuation preserves old files, counts the exact hist
     }
     const continueControl = extra => driver.runProductionPhasePair({ candidate: controlTarget }, { ...controlOptions, ...extra }, controlBridge)
     const controlResult = continueControl()
-    assert.equal(path.basename(controlResult.executionRecordPath), `saved-c17-a-control.${controlManifest.continuationId}.execution.json`)
+    assert.equal(path.basename(controlResult.executionRecordPath), `saved-c17-a-control.${controlManifest.continuationId}.99999999.execution.json`)
+    assert.notEqual(controlResult.executionRecordPath, failedRecordPath)
+    assert.deepEqual(fs.readFileSync(failedRecordPath), failedBytes)
+    assert.deepEqual(fs.readFileSync(retainedReceiptPath), failedReceiptBytes)
+    assert.throws(() => driver.runProductionPhasePair({ candidate: { ...controlTarget, codeSha: '99999999' + '0'.repeat(32) } },
+      controlOptions, controlBridge), /SAVED_NATIVE_TARGET_DRIFT/)
     assert.equal(continueControl().status, 'prepared'); assert.deepEqual(controlCalls, ['prepare'])
     const reviewControl = () => continueControl({ nativeAction: 'review', approvalPath: controlClosurePath })
     assert.equal(reviewControl().status, 'pending-independent-oracle-review')

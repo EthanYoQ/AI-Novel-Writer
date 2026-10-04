@@ -351,16 +351,37 @@ test('isolated production commands persist the selected phase operations', async
     const projectFile = path.join(target.isolationRoot, 'physical-project.json')
     let project
     if (request.action === 'prepare') {
-      assert.equal(fs.existsSync(projectFile), false, 'PHYSICAL_FIXTURE_ALREADY_EXISTS')
+      const resumeDonor = fs.existsSync(projectFile) && savedReview?.manifest.controlResume
+      assert.ok(!fs.existsSync(projectFile) || resumeDonor, 'PHYSICAL_FIXTURE_ALREADY_EXISTS')
       if (copiedRun) {
         const donorRoot = path.join(target.roots.project, 'source-donor')
-        fs.mkdirSync(path.join(donorRoot, '.ai-novel'), { recursive: true })
-        for (const item of boundedSource.assets) {
-          fs.mkdirSync(path.dirname(path.join(donorRoot, item.path)), { recursive: true })
-          fs.writeFileSync(path.join(donorRoot, item.path), item.bytes, { flag: 'wx' })
+        if (resumeDonor) {
+          assert.ok(savedRun && candidate && request.caseId === resumeDonor.caseId
+            && request.invocationId === resumeDonor.invocationId, 'SAVED_NATIVE_DONOR_SCOPE_MISMATCH')
+          project = json(projectFile)
+          assert.equal(project.rootPath, path.resolve(donorRoot), 'SAVED_NATIVE_DONOR_ROOT_MISMATCH')
+          assert.deepEqual(projectAccess.probeExistingProject(donorRoot), project, 'SAVED_NATIVE_DONOR_IDENTITY_MISMATCH')
+          for (const file of [path.join(target.isolationRoot, 'fixed-source.ainovel'),
+            path.join(target.roots.project, request.caseId), path.join(target.isolationRoot, 'bounded-source.json')])
+            assert.equal(fs.existsSync(file), false, 'SAVED_NATIVE_DONOR_ALREADY_EXPORTED')
+          const transientFiles = ['.ai-novel/project.db-wal', '.ai-novel/project.db-shm']
+          const assets = boundedSource.assets.filter(item => !transientFiles.includes(item.path))
+          const files = fs.readdirSync(donorRoot, { recursive: true, withFileTypes: true }).filter(item => item.isFile())
+            .map(item => path.relative(donorRoot, path.join(item.parentPath, item.name)).replaceAll('\\', '/'))
+            .filter(file => !transientFiles.includes(file)).sort()
+          assert.deepEqual(files, assets.map(item => item.path).sort(), 'SAVED_NATIVE_DONOR_SOURCE_DRIFT')
+          for (const item of assets) assert.ok(fs.readFileSync(path.join(donorRoot, item.path)).equals(item.bytes), 'SAVED_NATIVE_DONOR_SOURCE_DRIFT')
+          const wal = path.join(donorRoot, '.ai-novel/project.db-wal')
+          assert.ok(!fs.existsSync(wal) || fs.statSync(wal).size === 0, 'SAVED_NATIVE_DONOR_WAL_NOT_EMPTY')
+        } else {
+          fs.mkdirSync(path.join(donorRoot, '.ai-novel'), { recursive: true })
+          for (const item of boundedSource.assets) {
+            fs.mkdirSync(path.dirname(path.join(donorRoot, item.path)), { recursive: true })
+            fs.writeFileSync(path.join(donorRoot, item.path), item.bytes, { flag: 'wx' })
+          }
+          for (const item of boundedSource.packetFiles) fs.writeFileSync(path.join(donorRoot, '.ai-novel', item.name), item.bytes, { flag: 'wx' })
+          project = projectAccess.probeExistingProject(donorRoot)
         }
-        for (const item of boundedSource.packetFiles) fs.writeFileSync(path.join(donorRoot, '.ai-novel', item.name), item.bytes, { flag: 'wx' })
-        project = projectAccess.probeExistingProject(donorRoot)
         assert.equal(project.projectId, copiedPolicy.source.projectId, 'BOUNDED_REVISION_DONOR_IDENTITY')
       } else {
         project = projectAccess.createProject(target.roots.project, scene.title)

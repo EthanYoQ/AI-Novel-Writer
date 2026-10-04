@@ -3146,7 +3146,7 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
     if (!original || targets.baseline || original.protocolHash !== options.protocolHash
       || original.protocolRevision !== options.protocolRevision || options.mode === 'real' && original.developmentOnly)
       throw new Error('SAVED_NATIVE_TARGET_MISMATCH')
-    const recordPath = id => controlResume ? path.join(path.dirname(options.savedReviewContinuationPath), `${controlResume.caseId}.${savedReview.manifest.continuationId}.execution.json`)
+    const recordPath = id => controlResume ? path.join(path.dirname(options.savedReviewContinuationPath), `${controlResume.caseId}.${savedReview.manifest.continuationId}.${original.codeSha.slice(0, 8)}.execution.json`)
       : savedReview ? `${savedReview.manifest.references.execution.path}.${savedReview.manifest.continuationId}.${id}.execution.json`
       : resume ? `${resume.manifest.references.execution.path}.${resume.manifest.continuationId}.execution.json`
       : `${options.diagnosticInputPath}.${options.mode}.${id}.execution.json`
@@ -3196,6 +3196,10 @@ export function runProductionPhasePair(targets, options, bridge = runProductionB
         || record.savedReviewContinuation && stableEvidence(record.savedReviewContinuation) !== stableEvidence(continuation)
         || path.resolve(options.ledgerPath) !== path.resolve(savedReview.manifest.ledger.path))
         throw new Error('SAVED_REVIEW_CONTINUATION_TARGET_DRIFT')
+      if (controlResume && !record.prepared) {
+        const receiptPath = path.join(`${bound.executionRecordPath}.evidence`, 'prepare', 'prepare-receipt.json')
+        if (fs.existsSync(receiptPath)) throw Object.assign(new Error('SAVED_NATIVE_PREPARATION_EVIDENCE_RETAINED'), { receiptPath })
+      }
       if (savedNegative || controlResume) target = expected
       record.savedReviewContinuation = continuation
       record.historicalFirstReview = savedReview.manifest.references.firstReview
