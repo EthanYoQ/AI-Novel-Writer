@@ -624,6 +624,32 @@ test.each([false, true, 'formal'])('AI final manuscript native main owner persis
     assert.equal(validateAiReviewedManuscript(result), null)
     if (!lengthRecovery) assert.equal(validateAiReviewedManuscript({ ...result, phase: 'full', saved: { ...result.saved, status: 'revised' } }), null)
     if (!lengthRecovery) assert.equal(validateAiReviewedManuscript({ ...result, phase: 'full', saved: { ...result.saved, status: 'draft' } }), 'AI_FINAL_DB_MISMATCH')
+    const reordered = structuredClone(result)
+    reordered.aiReviewedDraft.selectedIndexes.reverse()
+    assert.equal(validateAiReviewedManuscript(reordered), 'AI_REVIEW_SELECTION_MISMATCH', 'formal batches retain report order')
+    if (!lengthRecovery) {
+      const firstEvidence = structuredClone(result)
+      firstEvidence.aiReviewedDraft.findings = items.flatMap((item, reviewItemIndex) => item.findingId
+        ? [{ findingId: item.findingId, reviewItemIndex }] : [])
+      const sourceReceipt = save('native-source-receipt.json', JSON.stringify(firstEvidence))
+      for (const phase of ['saved-native-review-diagnostic', 'planning-native-diagnostic']) {
+        const native = structuredClone(reordered)
+        native.phase = phase
+        native.nativeApproval = { receiptPath: sourceReceipt.outputPath, receiptHash: sourceReceipt.contentHash,
+          findingIds: native.aiReviewedDraft.selectedIndexes.map(index => items[index].findingId) }
+        native.aiReviewedDraft.selectedItemsHash = hash([...selection.selected].reverse())
+        assert.equal(validateAiReviewedManuscript(native), null, `${phase} accepts approval order independent of report order`)
+        assert.deepEqual(native.aiReviewedDraft.selectedIndexes, reordered.aiReviewedDraft.selectedIndexes, 'validation preserves approval order')
+        const [firstIndex, lastIndex] = native.aiReviewedDraft.selectedIndexes
+        for (const selectedIndexes of [[firstIndex, firstIndex], [firstIndex], [firstIndex, lastIndex, 0],
+          [firstIndex, -1], [firstIndex, String(lastIndex)]]) {
+          const changed = structuredClone(native); changed.aiReviewedDraft.selectedIndexes = selectedIndexes
+          assert.equal(validateAiReviewedManuscript(changed), 'AI_REVIEW_SELECTION_MISMATCH', JSON.stringify(selectedIndexes))
+        }
+        const wrongHash = structuredClone(native); wrongHash.aiReviewedDraft.selectedItemsHash = result.aiReviewedDraft.selectedItemsHash
+        assert.equal(validateAiReviewedManuscript(wrongHash), 'AI_REVIEW_SELECTION_MISMATCH', 'selected items hash remains bound to approval order')
+      }
+    }
     if (lengthRecovery) {
       const qualificationStart = fixture.indexOf('    const verifiedEmptyDraftAttempts ='),
         qualificationEnd = fixture.indexOf('    if (candidate)', qualificationStart)
