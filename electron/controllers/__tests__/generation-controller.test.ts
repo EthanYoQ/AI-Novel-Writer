@@ -378,8 +378,33 @@ describe('generation public IPC with actual project authority and SQLite', () =>
     session = { projectId: project.projectId, projectPath, leaseId: lease.leaseId }
     getProjectDb()!.exec("UPDATE project_core SET global_guidance='保存后作者修改'")
     expect(await invoke('generation:commit-draft', commit)).toEqual(saved)
-    expect((await invoke('generation:read-context', { handle: run.handle })).savedDraft).toEqual(saved)
+    expect((await invoke('generation:read-context', { handle: run.handle })).draftSave).toEqual({ kind: 'current', receipt: saved })
     expect(getProjectDb()!.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+  it('reads changed saved history but rejects all four generation actions before effects', async () => {
+    const fetch = stream('林岚沿旧城门走向灯塔。')
+    const { selection } = await prepareDraft()
+    const run = await invoke('generation:begin', selection)
+    const execution = { handle: run.handle, invocationNonce: '正文', task: { purpose: 'chapter-draft',
+      output: 'visible-text' as const, messages: [{ role: 'user' as const, content: '合成初始提示词' }] } }
+    const result = await invoke('generation:execute', execution)
+    await invoke('generation:compose-visible', run.handle, [result.run.artifacts[0].artifactId], textHash(result.outcome.content), 'draft-visible-v1')
+    const commit = { handle: run.handle, expectedCompositionHash: textHash(result.outcome.content), chapterNumber: 1, source: 'write' as const }
+    const saved = await invoke('generation:commit-draft', commit)
+    const db = getProjectDb()!
+    db.prepare('UPDATE contents SET body=? WHERE id=(SELECT content_id FROM drafts WHERE id=?)').run('作者修改后的当前正文。', saved.id)
+    const attempts = db.prepare('SELECT * FROM generation_attempts').all()
+    expect((await invoke('generation:read-context', { handle: run.handle })).draftSave).toEqual({ kind: 'changed' })
+    await expect(invoke('generation:execute', { ...execution, invocationNonce: '不得重发' })).rejects.toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+    await expect(invoke('generation:retry-draft-short-outline', { handle: run.handle, failedAttemptId: result.run.artifacts[0].attemptId }))
+      .rejects.toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+    await expect(invoke('generation:commit-draft', commit)).rejects.toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+    await expect(invoke('generation:resume', run.handle)).rejects.toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+    expect(db.prepare('SELECT * FROM generation_attempts').all()).toEqual(attempts)
+    expect(db.prepare('SELECT body FROM contents JOIN drafts ON drafts.content_id=contents.id WHERE drafts.id=?').pluck().get(saved.id))
+      .toBe('作者修改后的当前正文。')
+    expect(db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
     expect(fetch).toHaveBeenCalledTimes(1)
   })
   it('retains generated prose when its knowledge source changes before saving', async () => {

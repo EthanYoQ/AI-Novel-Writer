@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3'
 import { isDeepStrictEqual } from 'node:util'
 import type { MainGenerationRunHandle } from '../../src/services/generation/generation-runtime'
-import { MAX_BATCH_CHAPTERS, type GenerationBatchIntent, type GenerationBatchProgress, type GenerationDraftCommitReceipt, type GenerationDraftCommitRequest } from '../../src/shared/generation-owner-contract'
+import { MAX_BATCH_CHAPTERS, type GenerationBatchIntent, type GenerationBatchProgress, type GenerationDraftCommitReceipt, type GenerationDraftCommitRequest, type GenerationDraftSaveState } from '../../src/shared/generation-owner-contract'
 import type { DraftSourceDependency } from '../../src/shared/draft-source-dependency'
 import { countDraftUnits, draftTargetUnitRange } from '../../src/shared/draft-units'
 import { isDraftVisibleTextVersion } from '../../src/shared/draft-visible-text'
@@ -32,7 +32,7 @@ export class GenerationDraftEffects {
     return (runId ? this.db.prepare('SELECT attempt_id,run_id,usage_receipt_json FROM generation_attempts WHERE run_id=? ORDER BY rowid').all(runId)
       : this.db.prepare('SELECT attempt_id,run_id,usage_receipt_json FROM generation_attempts ORDER BY rowid').all()) as AttemptRow[]
   }
-  private verifiedCommit(row: AttemptRow): StoredDraftCommit | null {
+  private verifiedCommit(row: AttemptRow): { receipt: StoredDraftCommit; matchesBody: boolean } | null {
     const usage = JSON.parse(row.usage_receipt_json), stored = usage.draftCommit as StoredDraftCommit | undefined
     if (!stored) return null
     const run = this.runs.get(row.run_id), composition = this.runs.readVisibleComposition(run.runId)
@@ -40,15 +40,27 @@ export class GenerationDraftEffects {
     if (!draft || !composition || !isDraftVisibleTextVersion(composition.algorithm) || stored.success !== true
       || stored.chapterNumber !== run.binding.sourceManifest.chapterNumber || stored.chapterNumber !== draft.chapter_number
       || stored.version !== draft.version || stored.contentHash !== textHash(stored.content) || stored.contentHash !== composition.textHash
-      || stored.content !== composition.text || stored.content !== draft.body || stored.batchId !== run.binding.sourceManifest.batchId
+      || stored.content !== composition.text || stored.batchId !== run.binding.sourceManifest.batchId
       || !isDeepStrictEqual(stored.handle, { ...handleOf(run), epoch: usage.artifactIdentity?.epoch }))
       throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
-    return stored
+    return { receipt: stored, matchesBody: stored.content === draft.body }
   }
-  readCommit(runId: string): StoredDraftCommit | null {
+  private readSaveState(runId: string) {
     const commits = this.attempts(runId).map(row => this.verifiedCommit(row)).filter(item => item !== null)
     if (commits.length > 1) throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
     return commits[0] ?? null
+  }
+  readCommit(runId: string): StoredDraftCommit | null {
+    const saved = this.readSaveState(runId)
+    if (saved && !saved.matchesBody) throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
+    return saved?.receipt ?? null
+  }
+  readRecovery(runId: string): GenerationDraftSaveState {
+    const saved = this.readSaveState(runId)
+    if (!saved) return { kind: 'absent' }
+    if (!saved.matchesBody) return { kind: 'changed' }
+    const { id, version, content, contentHash } = saved.receipt
+    return { kind: 'current', receipt: { success: true, id, version, content, contentHash } }
   }
   readBatch(batchId: string, projectId: string): GenerationBatchProgress {
     const root = this.runs.get(batchId), intent = root.binding.sourceManifest.batchIntent as GenerationBatchIntent
@@ -57,7 +69,9 @@ export class GenerationDraftEffects {
     const completedChapters: GenerationBatchProgress['completedChapters'] = []
     for (const row of this.attempts()) {
       if (JSON.parse(row.usage_receipt_json).draftCommit?.batchId !== batchId) continue
-      const committed = this.verifiedCommit(row)!
+      const saved = this.verifiedCommit(row)!
+      if (!saved.matchesBody) throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
+      const committed = saved.receipt
       if (committed.handle.rootActionId !== root.rootActionId) throw new Error('GENERATION_BATCH_LINEAGE_INVALID')
       const latest = this.db.prepare('SELECT id FROM drafts WHERE chapter_number=? ORDER BY version DESC,id DESC LIMIT 1').pluck().get(committed.chapterNumber)
       if (latest !== committed.id) throw new Error('GENERATION_BATCH_DRAFT_REPLACED')

@@ -416,14 +416,16 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
     {visibleRuns.map(({ view, recovery }) => {
       const artifacts = withoutDraftReconciliationArtifacts([...new Map([...view.artifacts, ...(view.candidates ?? [])].map(item => [item.artifactId, item])).values()], recovery)
       const picked = selection[view.handle.runId] ?? []
+      const changed = recovery.draftSave.kind === 'changed'
       const outlineOnly = !recovery.composition && recovery.attemptedPurposes.every(purpose => purpose === 'chapter-draft-short-outline')
         && (recovery.draftShortOutline?.completedOutput || recovery.draftShortOutline?.retry?.kind === 'available')
       return <article key={view.handle.runId} className="mb-3">
-        <p>{runText(locale, `第${recovery.chapterNumber}章候选`, `Chapter ${recovery.chapterNumber} candidate`)}</p>
+        <p>{changed ? runText(locale, `第${recovery.chapterNumber}章生成记录`, `Chapter ${recovery.chapterNumber} generation history`)
+          : runText(locale, `第${recovery.chapterNumber}章候选`, `Chapter ${recovery.chapterNumber} candidate`)}</p>
         <GenerationBudgetDiagnostics diagnostics={view.budgetDiagnostics} locale={locale} />
       {view.ledger && <p>{runText(locale, `已用 ${view.ledger.physicalRequests} 次请求`, `${view.ledger.physicalRequests} requests used`)}</p>}
         {artifacts.map(artifact => <label key={artifact.artifactId} className="block">
-          <input type="checkbox" checked={picked.includes(artifact.artifactId)} disabled={busy || artifact.compositionEligible !== true}
+          <input type="checkbox" checked={picked.includes(artifact.artifactId)} disabled={busy || changed || artifact.compositionEligible !== true}
             onChange={event => setSelection(previous => ({ ...previous, [view.handle.runId]: event.target.checked
               ? [...picked, artifact.artifactId] : picked.filter(id => id !== artifact.artifactId) }))} />
           <span className="whitespace-pre-wrap">{artifact.text.slice(0, 180)}</span>
@@ -434,11 +436,13 @@ function MainDraftRecoverySection({ session, locale, refreshKey }: {
           <span className="whitespace-pre-wrap">{tail.text.slice(0, 180)}</span>
           <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} onClick={() => { void act(() => navigator.clipboard.writeText(tail.text)) }}>{runText(locale, '复制', 'Copy')}</button>
         </div>)}
-        <p>{runText(locale, '勾选顺序决定续接顺序；未完成或来源冲突的片段仍可复制。', 'Selection order determines continuation order. Incomplete or conflicted text can still be copied.')}</p>
-        <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} disabled={busy || (!picked.length && !recovery.composition && !outlineOnly)} onClick={() => { void act(async () => {
+        <p>{changed ? runText(locale, '草稿已保存，正文后来已修改。请从草稿箱打开当前正文；原生成文字仍可复制。',
+          'The draft was saved and later edited. Open the current text from Drafts. The original generated text can still be copied.')
+          : runText(locale, '勾选顺序决定续接顺序；未完成或来源冲突的片段仍可复制。', 'Selection order determines continuation order. Incomplete or conflicted text can still be copied.')}</p>
+        <button type="button" className="icon-btn px-2" style={candidateTextButtonStyle} disabled={busy || changed || (!picked.length && !recovery.composition && !outlineOnly)} onClick={() => { void act(async () => {
           const workflow = await createDraftRecoveryWorkflow(session, view.handle, picked.length ? [...picked] : undefined)
           await useWorkflowStore.getState().startWorkflow(workflow)
-        }) }}>{outlineOnly ? recovery.draftShortOutline?.retry?.kind === 'available'
+        }) }}>{changed ? runText(locale, '已保存，正文已修改', 'Saved, then edited') : outlineOnly ? recovery.draftShortOutline?.retry?.kind === 'available'
           ? runText(locale, '重做一次细纲并继续写稿', 'Retry outline once and continue drafting')
           : runText(locale, '沿原细纲继续写稿', 'Continue drafting with the saved outline')
           : runText(locale, '确认继续已选正文', 'Confirm selected draft continuation')}</button>

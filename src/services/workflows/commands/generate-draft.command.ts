@@ -559,8 +559,9 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       { id: 'draft:target-units', text: String(targetChars) }]
     const earlyRecovery = defaultMain && this.resumeHandle
       ? await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: this.resumeHandle }) : null
-    if (earlyRecovery?.savedDraft) {
-      const saved = earlyRecovery.savedDraft
+    if (earlyRecovery?.draftSave.kind === 'changed') throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
+    if (earlyRecovery?.draftSave.kind === 'current') {
+      const saved = earlyRecovery.draftSave.receipt
       if (earlyRecovery.operation !== 'chapter-draft' || earlyRecovery.chapterNumber !== this.chapterInfo.chapterNumber
         || saved.contentHash !== await sha256Hex(saved.content)) throw new Error('GENERATION_DRAFT_RECOVERY_SCOPE_INVALID')
       this.assertNotCancelled(context)
@@ -850,6 +851,10 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
     let alreadySaved = false
     let draftPersisted = false
     let recoverableDraftCandidate = ''
+    const priorSave = this.resumeHandle
+      ? await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: this.resumeHandle })
+      : null
+    if (priorSave?.draftSave.kind === 'changed') throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
     let planning = true
     const workflowStepId = step && typeof step === 'object' && 'id' in step && typeof step.id === 'string'
       ? step.id
@@ -870,16 +875,13 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
       }
       try {
         const generationModelId = workflowGenerationModelId(context)
-        const priorSave = this.resumeHandle
-          ? await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: this.resumeHandle })
-          : null
-        if (priorSave?.savedDraft) {
+        if (priorSave?.draftSave.kind === 'current') {
           if (priorSave.operation !== 'chapter-draft' || priorSave.chapterNumber !== this.chapterInfo.chapterNumber)
             throw new Error('GENERATION_DRAFT_RECOVERY_SCOPE_INVALID')
           mainOwned = true
           alreadySaved = true
           context.mainGenerationRunHandle = this.resumeHandle
-          cleanDraftText = priorSave.savedDraft.content
+          cleanDraftText = priorSave.draftSave.receipt.content
         } else {
         runtime = await this.dependencies.createRuntime({
           budget: DRAFT_GENERATION_BUDGET,
@@ -904,16 +906,17 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
           let recovery = mainOwned && this.resumeHandle
             ? await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: context.mainGenerationRunHandle! })
             : null
+          if (recovery?.draftSave.kind === 'changed') throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
           if (this.resumeHandle && !mainOwned) throw new Error('GENERATION_DRAFT_LEGACY_RESUME_REFUSED')
           let reconciliationArtifactIds = new Set([...(recovery?.draftReconciliation?.artifactIds ?? []), ...(recovery?.draftShortOutline?.artifactIds ?? [])])
           const retryOutline = recovery?.draftShortOutline?.retry?.kind === 'available'
           const outlinedOnly = !!recovery?.draftShortOutline?.completedOutput && !recovery.composition
             && recovery.attemptedPurposes.every(purpose => purpose === DRAFT_SHORT_OUTLINE_PURPOSE)
           // 对账已完成而首稿尚未发出（如进程在两者之间中断）：沿用记录的对账结果直接生成首稿。
-          const reconciledOnly = !!recovery && !recovery.composition && !recovery.savedDraft && recovery.attemptedPurposes.length > 0
+          const reconciledOnly = !!recovery && !recovery.composition && recovery.draftSave.kind === 'absent' && recovery.attemptedPurposes.length > 0
             && recovery.attemptedPurposes.every(purpose => purpose === DRAFT_RECONCILE_PURPOSE)
           const failedBatchView = recovery && this.batchId && recovery.batchId === this.batchId
-            && !recovery.composition && !recovery.savedDraft && recovery.lastCompositionFinishReason === null
+            && !recovery.composition && recovery.draftSave.kind === 'absent' && recovery.lastCompositionFinishReason === null
             && recovery.attemptedPurposes.at(-1) === 'chapter-draft'
             ? await ipc.invokeWithProjectSession(projectSession, 'generation:read', this.resumeHandle!) : null
           const lastAttempt = failedBatchView?.budgetDiagnostics?.at(-1)
@@ -977,6 +980,7 @@ export class GenerateDraftCommand extends BaseWorkflowCommand {
             if (retried.outcome.status !== 'completed' || retried.outcome.finishReason !== 'stop' || !retried.outcome.content.trim())
               throw new Error('GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
             recovery = await ipc.invokeWithProjectSession(projectSession, 'generation:read-context', { handle: context.mainGenerationRunHandle! })
+            if (recovery.draftSave.kind === 'changed') throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
             shortOutline = recovery.draftShortOutline?.completedOutput ?? ''
             if (shortOutline !== retried.outcome.content || !retried.outcome.receipt.visibleArtifact
               || !recovery.draftShortOutline?.artifactIds.includes(retried.outcome.receipt.visibleArtifact.artifactId))

@@ -619,7 +619,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     }
   const readContext = (handle: MainGenerationRunHandle): GenerationRecoveryContext => {
     const run = requireRun(handle), manifest = run.binding.sourceManifest, composition = repository.readVisibleComposition(run.runId)
-    const saved = draftEffects.readCommit(run.runId)
+    const draftSave = draftEffects.readRecovery(run.runId)
     const materialDecision = manifest.materialDecision as MaterialDecisionReceipt | undefined
     const requiredCandidateDraftIds = new Set((materialDecision?.included ?? [])
       .filter(item => item.required && /^candidate:\d+$/u.test(item.sourceId))
@@ -648,7 +648,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
           const firstDraft = rows.find(row => JSON.parse(row.usage_receipt_json).purpose === 'chapter-draft')
           return !firstDraft || JSON.parse(firstDraft.usage_receipt_json).reconciliationInjected === true ? completedReconciliationOutput(run.runId) : null
         })() } } : {}),
-      ...(saved ? { savedDraft: { success: true as const, id: saved.id, version: saved.version, content: saved.content, contentHash: saved.contentHash } } : {}),
+      draftSave,
       ...(manifest.knowledgeSnapshot ? { knowledgeSnapshot: structuredClone(manifest.knowledgeSnapshot) as GenerationKnowledgeSnapshot } : {}),
       ...(selectedDrafts.every(item => item !== null) ? { selectedDrafts } : {}),
       ...(manifest.batchId ? { batchId: manifest.batchId as string } : {}) }

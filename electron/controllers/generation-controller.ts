@@ -124,6 +124,11 @@ export function registerGenerationController(options: {
       return operation()
     })
   }
+  const readActionContext = (owner: Owner, handle: MainGenerationRunHandle) => {
+    const context = owner.readContext(handle)
+    if (context.draftSave.kind === 'changed') throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
+    return context
+  }
   function register<C extends keyof OwnerChannels>(channel: C, arity: number,
     handler: (owner: Owner, ...args: OwnerChannels[C]['args']) => OwnerChannels[C]['return'] | Promise<OwnerChannels[C]['return']>) {
     ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
@@ -207,21 +212,21 @@ export function registerGenerationController(options: {
   register('agent-generation:register-workflow', 1, (owner, request) => owner.agents.registerWorkflow(request.ref))
   register('agent-generation:commit-domain-tool', 1, (owner, request) => owner.agents.commitDomainTool(request.ref))
   register('generation:execute', 1, async (owner, request) => {
-    const context = owner.readContext(request.handle)
+    const context = readActionContext(owner, request.handle)
     // Release the short KB guard after dispatch starts; author edits during generation remain possible.
     const started = await guardKnowledge(owner, context.knowledgeSnapshot, () => ({ result: owner.execute(request) }))
     return started.result
   })
   register('generation:retry-draft-short-outline', 1, async (owner, request) => {
-    const context = owner.readContext(request.handle)
+    const context = readActionContext(owner, request.handle)
     const started = await guardKnowledge(owner, context.knowledgeSnapshot, () => ({ result: owner.retryDraftShortOutline(request) }))
     return started.result
   })
   register('generation:read', 1, (owner, handle) => owner.read(handle))
   register('generation:compose-visible', 4, (owner, handle, ids, hash, algorithm) => owner.composeVisible(handle, ids, hash, algorithm))
   register('generation:commit-draft', 1, (owner, request) => {
-    const context = owner.readContext(request.handle)
-    return guardKnowledge(owner, context.savedDraft ? undefined : context.knowledgeSnapshot, () => owner.commitDraft(request))
+    const context = readActionContext(owner, request.handle)
+    return guardKnowledge(owner, context.draftSave.kind === 'current' ? undefined : context.knowledgeSnapshot, () => owner.commitDraft(request))
   })
   register('generation:read-context', 1, (owner, request) => owner.readContext(request.handle))
   register('generation:begin-batch', 1, (owner, request) => owner.beginBatch(request))
@@ -233,7 +238,7 @@ export function registerGenerationController(options: {
   register('generation:list-directory-progress', 0, owner => owner.listDirectoryProgress())
   register('generation:pause', 1, (owner, handle) => owner.pause(handle))
   register('generation:cancel', 1, (owner, handle) => owner.cancel(handle))
-  register('generation:resume', 1, (owner, handle) => guardKnowledge(owner, owner.readContext(handle).knowledgeSnapshot, () => owner.resume(handle)))
+  register('generation:resume', 1, (owner, handle) => guardKnowledge(owner, readActionContext(owner, handle).knowledgeSnapshot, () => owner.resume(handle)))
   register('generation:restart', 2, (owner, handle, request) => {
     if (request.operation === 'chapter-draft' && !request.preparationId) throw new Error('GENERATION_DRAFT_PREPARATION_REQUIRED')
     if (request.operation === 'chapter-draft' && !request.materialDecision) throw new Error('GENERATION_MATERIAL_DECISION_REQUIRED')

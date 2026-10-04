@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 
 import { useProjectStore } from '../../../../stores/project-store'
+import { useEditorStore } from '../../../../stores/editor-store'
 import { useLocaleStore } from '../../../../stores/locale-store'
 import type { StepCallbacks, WorkflowContext } from '../../../../stores/workflow-store'
 import type {
@@ -361,12 +362,14 @@ const FINALIZED_FACT_PRECEDENCE = {
 
 describe('GenerateDraftCommand generation runtime boundary', () => {
   const projectPath = 'C:\\novels\\generation-runtime'
+  const editorState = useEditorStore.getState()
 
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
     clearProjectCustomPrompts()
     useProjectStore.setState({ currentProject: null })
+    useEditorStore.setState(editorState, true)
   })
 
   function setup(options: {
@@ -803,7 +806,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const original = f.invoke.getMockImplementation()!
     f.invoke.mockImplementation(async (channel, ...args) => {
       if (channel === 'generation:read') return view
-      if (channel === 'generation:read-context') return { handle, operation: 'chapter-draft', chapterNumber: 1,
+      if (channel === 'generation:read-context') return { draftSave: { kind: 'absent' }, handle, operation: 'chapter-draft', chapterNumber: 1,
         authorInputs: [
           { id: 'draft:chapter-info', text: JSON.stringify({ chapterNumber: 1, title: '第一章', role: '开端', purpose: '建立冲突', characters: [], keyEvents: '开端' }) },
           { id: 'draft:author-config', text: JSON.stringify(useProjectStore.getState().currentProject!.novelConfig) },
@@ -812,7 +815,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         knowledgeSnapshot: { version: 1, state: 'empty', storageState: 'absent', query: '第一章 开端', topK: 5, canonicalRevision: null, documentsRevision: null, items: [] },
         composition: { algorithm, text: seed, textHash: hash(seed), artifactIds: ['原片'], sources: [] },
         lastCompositionFinishReason: finishReason, attemptedPurposes: ['chapter-draft'],
-        ...(state === 'saved-ack-lost' ? { savedDraft: { success: true, id: 18, version: 1, content: expected, contentHash: hash(expected) } } : {}) }
+        ...(state === 'saved-ack-lost' ? { draftSave: { kind: 'current', receipt: { success: true, id: 18, version: 1, content: expected, contentHash: hash(expected) } } } : {}) }
       if (channel === 'generation:execute') {
         if ((args[0] as { task: GenerationTask }).task.purpose === 'chapter-draft-short-outline')
           return { outcome: outcome('目标：读信；前驱：信已送到；行动与结果：本章读完信；结尾：保留原约束。', 'stop'), run: view }
@@ -839,6 +842,38 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     }
   })
 
+  it.each([1, 2, 3])('第 %s 次恢复读取发现正文已变化时停止，不发布旧稿或生成新稿', async changedAt => {
+    const openFile = vi.spyOn(useEditorStore.getState(), 'openFile')
+    const handle: MainGenerationRunHandle = { projectId: 'generation-runtime', epoch: 'lease-generation-runtime', rootActionId: '原根', runId: '原正文' }
+    const f = setup({ runtime: fakeOutcomes(), mainDefault: true, resumeHandle: handle, wordsTarget: 900 })
+    f.context.generationModelId = '合成模型'
+    const view: MainGenerationRunView = { handle, status: 'running', nonReplayable: false, artifacts: [],
+      budget: { maxAttempts: 32, maxRequestedOutputTokens: 2000000, maxRequestedOutputTokensPerAttempt: 32768, deadlineAt: Date.now() + 3600000 } }
+    let reads = 0
+    const original = f.invoke.getMockImplementation()!
+    f.invoke.mockImplementation(async (channel, ...args) => {
+      if (channel === 'generation:read' || channel === 'generation:resume') return view
+      if (channel === 'generation:read-context') return { handle, operation: 'chapter-draft', chapterNumber: 1,
+        draftSave: { kind: ++reads === changedAt ? 'changed' : 'absent' },
+        authorInputs: [
+          { id: 'draft:chapter-info', text: JSON.stringify({ chapterNumber: 1, title: '第一章', role: '开端', purpose: '建立冲突', characters: [], keyEvents: '开端' }) },
+          { id: 'draft:author-config', text: JSON.stringify(useProjectStore.getState().currentProject!.novelConfig) },
+          { id: 'draft:target-units', text: '900' },
+        ], selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1, 2, 3, 4, 5, 6],
+        knowledgeSnapshot: { version: 1, state: 'empty', storageState: 'absent', query: '第一章 开端', topK: 5, canonicalRevision: null, documentsRevision: null, items: [] },
+        composition: null, lastCompositionFinishReason: null, attemptedPurposes: [] }
+      return original(channel, ...args)
+    })
+    await expect(f.command.execute({ step: {}, context: f.context, callbacks: f.callbacks })).rejects.toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+    expect(reads).toBe(changedAt)
+    expect(f.callbacks.replaceText).not.toHaveBeenCalled()
+    expect(f.context.data.draft).toBeUndefined()
+    expect(f.context.data.draftContent).toBeUndefined()
+    expect(openFile).not.toHaveBeenCalled()
+    if (changedAt < 3) expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:read' || channel === 'generation:resume')).toBe(false)
+    expect(f.invoke.mock.calls.some(([channel]) => ['generation:begin', 'generation:execute', 'generation:commit-draft', 'db:draft-create'].includes(channel))).toBe(false)
+  })
+
   it.each(['after-draft', 'reconciled-only', 'after-unreconciled-draft', 'reconcile-failed-or-unknown'] as const)('恢复时沿用记录的定稿对账结果而不重发对账：%s', async (state) => {
     const draftPending = state === 'reconciled-only' || state === 'reconcile-failed-or-unknown'
     const withoutBlock = state === 'after-unreconciled-draft' || state === 'reconcile-failed-or-unknown'
@@ -858,7 +893,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const executed: GenerationTask[] = []
     f.invoke.mockImplementation(async (channel, ...args) => {
       if (channel === 'generation:read') return view
-      if (channel === 'generation:read-context') return { handle, operation: 'chapter-draft', chapterNumber: 1,
+      if (channel === 'generation:read-context') return { draftSave: { kind: 'absent' }, handle, operation: 'chapter-draft', chapterNumber: 1,
         authorInputs: [
           { id: 'draft:chapter-info', text: JSON.stringify({ chapterNumber: 1, title: '第一章', role: '开端', purpose: '建立冲突', characters: [], keyEvents: '开端' }) },
           { id: 'draft:author-config', text: JSON.stringify(useProjectStore.getState().currentProject!.novelConfig) },
@@ -913,7 +948,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
     const original = f.invoke.getMockImplementation()!
     f.invoke.mockImplementation(async (channel, ...args) => {
       if (channel === 'generation:read') return view
-      if (channel === 'generation:read-context') return { handle, operation: 'chapter-draft', chapterNumber: 1,
+      if (channel === 'generation:read-context') return { draftSave: { kind: 'absent' }, handle, operation: 'chapter-draft', chapterNumber: 1,
         authorInputs: [
           { id: 'draft:chapter-info', text: JSON.stringify({ chapterNumber: 1, title: '第一章', role: '开端', purpose: '建立冲突', characters: [], keyEvents: '开端' }) },
           { id: 'draft:author-config', text: JSON.stringify(useProjectStore.getState().currentProject!.novelConfig) },
@@ -982,7 +1017,7 @@ describe('GenerateDraftCommand generation runtime boundary', () => {
         deadlineAt: Date.now() + 3600000 } }
     const original = f.invoke.getMockImplementation()!
     f.invoke.mockImplementation(async (channel, ...args) => {
-      if (channel === 'generation:read-context') return { handle, modelId: '合成模型', operation: 'chapter-draft', chapterNumber: 1,
+      if (channel === 'generation:read-context') return { draftSave: { kind: 'absent' }, handle, modelId: '合成模型', operation: 'chapter-draft', chapterNumber: 1,
         batchId: scenario.recoveryBatch, authorInputs: [
           { id: 'draft:chapter-info', text: JSON.stringify({ chapterNumber: 1, title: '第一章', role: '开端', purpose: '建立冲突', characters: [], keyEvents: '开端' }) },
           { id: 'draft:author-config', text: JSON.stringify(useProjectStore.getState().currentProject!.novelConfig) },
@@ -2450,12 +2485,13 @@ ${headingPrefix}第3章：潮门
   })
 
   describe('automatic short outline', () => {
-    it.each(['stop', 'length', 'empty', 'cancelled', 'not-durable', 'outline-as-prose'] as const)(
+    it.each(['stop', 'length', 'empty', 'cancelled', 'not-durable', 'outline-as-prose', 'draft-changed'] as const)(
       'resumes before the one outline retry and checks its durable context before drafting: %s', async finish => {
         const hash = (text: string) => createHash('sha256').update(text).digest('hex')
         const planned = fakeOutcomes(outcome('潮'.repeat(900), 'stop'))
         const initial = setup({ runtime: planned, wordsTarget: 900 })
         await initial.command.execute({ step: {}, context: initial.context, callbacks: initial.callbacks })
+        const openFile = vi.spyOn(useEditorStore.getState(), 'openFile')
         const selection = planned.createRuntime.mock.calls[0]![1]!.selection
         const oldHandle: MainGenerationRunHandle = { projectId: 'generation-runtime', epoch: 'old-epoch', rootActionId: 'outline-root', runId: 'outline-run' }
         const handle = { ...oldHandle, epoch: 'lease-generation-runtime' }
@@ -2471,7 +2507,7 @@ ${headingPrefix}第3章：潮门
         f.invoke.mockImplementation(async (channel, ...args) => {
           if (channel === 'generation:read') return resumed ? view : { ...view, handle: oldHandle, status: 'paused', nonReplayable: true }
           if (channel === 'generation:resume') { resumed = true; return view }
-          if (channel === 'generation:read-context') return { handle: resumed ? handle : oldHandle, operation: 'chapter-draft', chapterNumber: 1,
+          if (channel === 'generation:read-context') return { draftSave: { kind: retried && finish === 'draft-changed' ? 'changed' : 'absent' }, handle: resumed ? handle : oldHandle, operation: 'chapter-draft', chapterNumber: 1,
             authorInputs: selection.authorInputs, selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1, 2, 3, 4, 5, 6],
             knowledgeSnapshot: { version: 1, state: 'empty', storageState: 'absent', query: '第一章 开端', topK: 5, canonicalRevision: null, documentsRevision: null, items: [] },
             composition: null, lastCompositionFinishReason: null, attemptedPurposes: ['chapter-draft-short-outline'],
@@ -2513,9 +2549,16 @@ ${headingPrefix}第3章：潮门
           expect(calls.slice(retryIndex + 1, calls.indexOf('generation:execute'))).toContain('generation:read-context')
           expect(calls.indexOf('generation:compose-visible')).toBeLessThan(calls.indexOf('generation:commit-draft'))
         } else {
-          await expect(execution).rejects.toThrow(finish === 'cancelled' ? '工作流已取消' : finish === 'outline-as-prose' ? 'GENERATION_COMPOSITION_SOURCE_INVALID' : 'GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
+          await expect(execution).rejects.toThrow(finish === 'cancelled' ? '工作流已取消' : finish === 'draft-changed' ? 'GENERATION_DRAFT_RECEIPT_INVALID'
+            : finish === 'outline-as-prose' ? 'GENERATION_COMPOSITION_SOURCE_INVALID' : 'GENERATION_DRAFT_SHORT_OUTLINE_FAILED')
           expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:commit-draft')).toBe(false)
           if (finish !== 'outline-as-prose') expect(f.invoke.mock.calls.some(([channel]) => channel === 'generation:execute')).toBe(false)
+        }
+        if (finish === 'draft-changed') {
+          expect(f.callbacks.replaceText).not.toHaveBeenCalled()
+          expect(f.context.data.draft).toBeUndefined()
+          expect(f.context.data.draftContent).toBeUndefined()
+          expect(openFile).not.toHaveBeenCalled()
         }
         expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:retry-draft-short-outline')).toHaveLength(1)
         if (finish === 'cancelled') expect(f.invoke.mock.calls.filter(([channel]) => channel === 'generation:cancel')).toHaveLength(1)
@@ -2540,7 +2583,7 @@ ${headingPrefix}第3章：潮门
       const executed: GenerationTask[] = []
       f.invoke.mockImplementation(async (channel, ...args) => {
         if (channel === 'generation:read') return view
-        if (channel === 'generation:read-context') return { handle, operation: 'chapter-draft', chapterNumber: 1,
+        if (channel === 'generation:read-context') return { draftSave: { kind: 'absent' }, handle, operation: 'chapter-draft', chapterNumber: 1,
           authorInputs: planningRuntime.createRuntime.mock.calls[0]![1]!.selection.authorInputs,
           selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1, 2, 3, 4, 5, 6],
           knowledgeSnapshot: { version: 1, state: 'empty', storageState: 'absent', query: '第一章 开端', topK: 5, canonicalRevision: null, documentsRevision: null, items: [] },

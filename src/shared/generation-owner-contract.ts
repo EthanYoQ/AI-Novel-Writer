@@ -105,6 +105,10 @@ export interface GenerationDraftCommitReceipt {
   contentHash: string
   content: string
 }
+export type GenerationDraftSaveState =
+  | { kind: 'absent' }
+  | { kind: 'current'; receipt: GenerationDraftCommitReceipt }
+  | { kind: 'changed' }
 export interface GenerationDraftCommitRequest {
   handle: MainGenerationRunHandle
   expectedCompositionHash: string
@@ -125,7 +129,7 @@ export interface GenerationRecoveryContext {
   composition: VisibleCompositionReceipt | null
   lastCompositionFinishReason: string | null
   attemptedPurposes: string[]
-  savedDraft?: GenerationDraftCommitReceipt
+  draftSave: GenerationDraftSaveState
   batchId?: string
   knowledgeSnapshot?: GenerationKnowledgeSnapshot
   /**

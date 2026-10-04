@@ -233,7 +233,7 @@ if (process.argv.includes('--help')) {
       assert.equal(opened.success, true, opened.error)
       const context = { projectId, projectPath, leaseId: opened.project.sessionLease }
       assert.deepEqual(await invoke(session.page, 'generation:commit-draft', firstCommit, context), saved)
-      assert.deepEqual((await invoke(session.page, 'generation:read-context', { handle: firstCommit.handle }, context)).savedDraft, saved)
+      assert.deepEqual((await invoke(session.page, 'generation:read-context', { handle: firstCommit.handle }, context)).draftSave, { kind: 'current', receipt: saved })
       const prepared = await prepare(session.page, context, 2, [saved.id])
       assert.equal(prepared.prepared.selectedDrafts[0].contentHash, saved.contentHash)
       const secondCommit = await generate(session.page, context, await plan(session.page, context, prepared))

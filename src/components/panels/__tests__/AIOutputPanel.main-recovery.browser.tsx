@@ -22,6 +22,46 @@ afterEach(async () => {
   vi.restoreAllMocks()
 })
 
+it.each(['zh-CN', 'en-US'] as const)('合法改稿后的生成记录与审稿同时可读，旧正文只可复制：%s', async locale => {
+  const session = { projectId: '历史海港', leaseId: '新会话', projectPath: 'C:/合成历史海港' }
+  const handle: MainGenerationRunHandle = { projectId: session.projectId, epoch: '旧会话', rootActionId: '原预算', runId: '原正文' }
+  const reviewHandle = { ...handle, rootActionId: '审稿预算', runId: '合法审稿' }
+  const content = '原生成正文：林岚走向城门。'
+  const view = { handle, status: 'running', nonReplayable: false,
+    artifacts: [{ ...handle, artifactId: '原片段', attemptId: '原请求', text: content, textHash: 'a'.repeat(64),
+      revision: 1, durableRevision: 1, status: 'completed', compositionEligible: true }], ledger: { physicalRequests: 1 } }
+  const invoke = vi.fn(async (channel: string, request?: { handle: MainGenerationRunHandle }) => {
+    if (channel === 'generation:list') return [view, { ...view, handle: reviewHandle, artifacts: [] }]
+    if (channel === 'generation:list-batches' || channel === 'db:recovery-candidate-list') return []
+    if (channel === 'generation:read-context') return request?.handle.runId === handle.runId
+      ? { handle, operation: 'chapter-draft', chapterNumber: 1, draftSave: { kind: 'changed' },
+          composition: null, attemptedPurposes: ['chapter-draft'] }
+      : { handle: reviewHandle, operation: 'review-chapter', draftSave: { kind: 'absent' } }
+    if (channel === 'review-revision:read-recovery') return { handle: reviewHandle, modelId: '原模型', sourceStatus: 'current', canResume: true,
+      context: { operation: 'review-chapter', source: { id: 1, chapterNumber: 1, version: 1, status: 'revised', content: '作者当前正文。' } },
+      attemptedPurposes: ['review-chapter'] }
+    throw new Error(`Unexpected action: ${channel}`)
+  })
+  Object.defineProperty(window, 'aiNovelAPI', { configurable: true, value: { invoke, on: () => () => {} } })
+  const startWorkflow = vi.fn(), copy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+  useProjectStore.setState({ currentProject: { id: session.projectId, path: session.projectPath, name: '海港', sessionLease: session.leaseId, novelConfig: {} } as never })
+  useWorkflowStore.setState({ activeRuns: [], history: [], currentRun: null, startWorkflow })
+  useLocaleStore.setState({ locale })
+  container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container)
+  await act(async () => root!.render(<AIOutputPanel />))
+  await vi.waitFor(() => expect(container!.textContent).toContain(locale === 'zh-CN' ? '第1章生成记录' : 'Chapter 1 generation history'))
+  expect(container.querySelector('[role=alert]')).toBeNull()
+  expect(container.querySelector<HTMLInputElement>('input[type=checkbox]')?.disabled).toBe(true)
+  const buttons = [...container.querySelectorAll('button')]
+  const saved = buttons.find(button => button.textContent === (locale === 'zh-CN' ? '已保存，正文已修改' : 'Saved, then edited'))!
+  expect(saved.disabled).toBe(true)
+  expect(buttons.find(button => button.textContent === (locale === 'zh-CN' ? '重新审稿' : 'Review again'))?.disabled).toBe(false)
+  await act(async () => { saved.click(); buttons.find(button => button.textContent === (locale === 'zh-CN' ? '复制' : 'Copy'))!.click() })
+  expect(copy).toHaveBeenCalledWith(content)
+  expect(startWorkflow).not.toHaveBeenCalled()
+  expect(invoke.mock.calls.some(([channel]) => ['generation:resume', 'generation:execute', 'generation:compose-visible', 'generation:commit-draft'].includes(channel))).toBe(false)
+})
+
 it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)('中文面板沿明确的 %s 原任务恢复，源冲突只可复制，已保存结果可直接打开', async operation => {
   const session = { projectId: '审修海港', leaseId: '新会话', projectPath: 'C:/合成审修海港' }
   const handle: MainGenerationRunHandle = { projectId: session.projectId, epoch: '旧会话', rootActionId: '原审稿预算', runId: operation }
@@ -40,7 +80,7 @@ it.each(['review-chapter', 'refine-draft', 'refine-from-review'] as const)('中�
   const invoke = vi.fn(async (channel: string) => {
     if (channel === 'generation:list') return [view]
     if (channel === 'generation:list-batches' || channel === 'db:recovery-candidate-list') return []
-    if (channel === 'generation:read-context') return { handle, operation }
+    if (channel === 'generation:read-context') return { draftSave: { kind: 'absent' }, handle, operation }
     if (channel === 'review-revision:read-recovery') return recovery()
     throw new Error(`Unexpected action: ${channel}`)
   })
@@ -97,7 +137,7 @@ it.each(['zh-CN', 'en-US'] as const)('耗尽或取消的审稿保留复制且不
   const invoke = vi.fn(async (channel: string) => {
     if (channel === 'generation:list') return [view]
     if (channel === 'generation:list-batches' || channel === 'db:recovery-candidate-list') return []
-    if (channel === 'generation:read-context') return { handle, operation: 'review-chapter' }
+    if (channel === 'generation:read-context') return { draftSave: { kind: 'absent' }, handle, operation: 'review-chapter' }
     if (channel === 'review-revision:read-recovery') return recovery
     throw new Error(`Unexpected action: ${channel}`)
   })
@@ -150,7 +190,7 @@ it.each(['completed', 'failed'] as const)('中文恢复面板按明确组合资�
       composition = { algorithm: 'draft-visible-v1', artifactIds: args[1], text: '海潮拍岸。', textHash: args[2], sources: [] }
       return composition
     }
-    if (channel === 'generation:read-context') return { handle, operation: 'chapter-draft', chapterNumber: 1, modelId: '原模型',
+    if (channel === 'generation:read-context') return { draftSave: { kind: 'absent' }, handle, operation: 'chapter-draft', chapterNumber: 1, modelId: '原模型',
       authorInputs: [{ id: 'draft:chapter-info', text: JSON.stringify({ chapterNumber: 1, title: '潮声', role: '开端', purpose: '寻找钟楼', characters: [], keyEvents: '亮灯' }) },
         { id: 'draft:target-units', text: '900' }], selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1],
       composition, lastCompositionFinishReason: status === 'failed' ? 'length' : 'stop', attemptedPurposes: ['chapter-draft'] }
@@ -192,7 +232,7 @@ it.each([true, false])('写稿恢复面板不把生成前定稿对账产物列�
   const invoke = vi.fn(async (channel: string) => {
     if (channel === 'generation:list') return [view]
     if (channel === 'generation:list-batches' || channel === 'db:recovery-candidate-list') return []
-    if (channel === 'generation:read-context') return { handle, operation: 'chapter-draft', chapterNumber: 2, modelId: '原模型',
+    if (channel === 'generation:read-context') return { draftSave: { kind: 'absent' }, handle, operation: 'chapter-draft', chapterNumber: 2, modelId: '原模型',
       authorInputs: [], selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [2], composition: null,
       lastCompositionFinishReason: null, attemptedPurposes: withDraft ? ['chapter-draft-reconcile', 'chapter-draft'] : ['chapter-draft-reconcile'],
       draftReconciliation: { artifactIds: ['片段0'], completedOutput: reconciliationText } }
@@ -219,7 +259,7 @@ it.each(['failed', 'completed'] as const)('无正文时从原恢复列表进入 
   const invoke = vi.fn(async (channel: string) => {
     if (channel === 'generation:list') return [view]
     if (channel === 'generation:list-batches' || channel === 'db:recovery-candidate-list') return []
-    if (channel === 'generation:read-context') return { handle, operation: 'chapter-draft', chapterNumber: 1, modelId: '原模型',
+    if (channel === 'generation:read-context') return { draftSave: { kind: 'absent' }, handle, operation: 'chapter-draft', chapterNumber: 1, modelId: '原模型',
       authorInputs: [{ id: 'draft:chapter-info', text: JSON.stringify(info) }, { id: 'draft:target-units', text: '1000' }],
       selectedDraftIds: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [1], composition: null,
       lastCompositionFinishReason: null, attemptedPurposes: ['chapter-draft-short-outline'],
@@ -261,7 +301,7 @@ it.each(['unknown', 'conflict', 'cancelled'] as const)('助手恢复卡只显示
   const invoke = vi.fn(async (channel: string) => {
     if (channel === 'generation:list') return [view]
     if (channel === 'generation:list-batches' || channel === 'db:recovery-candidate-list') return []
-    if (channel === 'generation:read-context') return { handle, operation: 'agent-round' }
+    if (channel === 'generation:read-context') return { draftSave: { kind: 'absent' }, handle, operation: 'agent-round' }
     if (channel === 'agent-generation:read') return recovery
     throw new Error(`未配置调用：${channel}`)
   })

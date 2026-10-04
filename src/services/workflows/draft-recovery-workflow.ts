@@ -20,8 +20,9 @@ export async function createDraftRecoveryWorkflow(
   const transport = createMainGenerationTransport(() => session)
   let handle = Object.freeze({ ...selectedHandle })
   let recovery = await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle })
+  if (recovery.draftSave.kind === 'changed') throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
   if (recovery.operation !== 'chapter-draft' || recovery.batchId) throw new Error('GENERATION_DRAFT_RECOVERY_SCOPE_INVALID')
-  if (selectedArtifactIds && !recovery.savedDraft) {
+  if (selectedArtifactIds && recovery.draftSave.kind === 'absent') {
     if (!selectedArtifactIds.length || new Set(selectedArtifactIds).size !== selectedArtifactIds.length)
       throw new Error('GENERATION_COMPOSITION_SELECTION_REQUIRED')
     const resumed = await transport.resume(session, handle)
@@ -38,10 +39,11 @@ export async function createDraftRecoveryWorkflow(
     await ipc.invokeWithProjectSession(session, 'generation:compose-visible', handle, [...selectedArtifactIds],
       await hashAuthorText(text), algorithm)
     recovery = await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle })
+    if (recovery.draftSave.kind === 'changed') throw new Error('GENERATION_DRAFT_RECEIPT_INVALID')
   }
   const outlineOnly = !recovery.composition && recovery.attemptedPurposes.every(purpose => purpose === 'chapter-draft-short-outline')
     && (recovery.draftShortOutline?.completedOutput || recovery.draftShortOutline?.retry?.kind === 'available')
-  if (!recovery.savedDraft && !outlineOnly && (!recovery.composition || !isDraftVisibleTextVersion(recovery.composition.algorithm)))
+  if (recovery.draftSave.kind === 'absent' && !outlineOnly && (!recovery.composition || !isDraftVisibleTextVersion(recovery.composition.algorithm)))
     throw new Error('GENERATION_DRAFT_RECOVERY_EVIDENCE_REQUIRED')
   const infoText = recovery.authorInputs.find(input => input.id === 'draft:chapter-info')?.text
   const targetText = recovery.authorInputs.find(input => input.id === 'draft:target-units')?.text
@@ -52,9 +54,9 @@ export async function createDraftRecoveryWorkflow(
     || Number(info.chapterNumber) < 1 || typeof info.title !== 'string' || !Array.isArray(info.characters)
     || !info.characters.every(item => typeof item === 'string') || !Number.isSafeInteger(target) || target < 1)
     throw new Error('GENERATION_DRAFT_RECOVERY_AUTHOR_INPUT_INVALID')
-  if (!recovery.savedDraft && recovery.selectedDraftIds.length && !recovery.selectedDrafts)
+  if (recovery.draftSave.kind === 'absent' && recovery.selectedDraftIds.length && !recovery.selectedDrafts)
     throw new Error('GENERATION_DRAFT_RECOVERY_SOURCE_CHANGED')
-  const selectedCandidateDrafts = recovery.savedDraft ? [] : recovery.selectedDrafts ?? []
+  const selectedCandidateDrafts = recovery.draftSave.kind === 'current' ? [] : recovery.selectedDrafts ?? []
   const command = new GenerateDraftCommand({ ...info, projectPath: session.projectPath, wordsTarget: target } as ChapterInfo,
     { resumeHandle: handle, selectedCandidateDrafts })
   return {

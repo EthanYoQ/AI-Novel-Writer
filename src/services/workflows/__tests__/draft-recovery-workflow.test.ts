@@ -14,7 +14,7 @@ const content = '海潮拍岸，钟楼的灯再次亮起。'
 const originalStore = useProjectStore.getState()
 
 function recoveryFixture(): GenerationRecoveryContext {
-  return { handle, operation: 'chapter-draft', chapterNumber: 2, modelId: 'synthetic-model',
+  return { handle, operation: 'chapter-draft', chapterNumber: 2, modelId: 'synthetic-model', draftSave: { kind: 'absent' },
     authorInputs: [{ id: 'draft:chapter-info', text: JSON.stringify(info) },
       { id: 'draft:author-config', text: '{}' }, { id: 'draft:target-units', text: '900' }],
     selectedDraftIds: [], selectedDrafts: [], selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: [2, 3, 4, 5, 6, 7],
@@ -75,7 +75,7 @@ it.each([false, true])('已保存回执不依赖被删除的前章，显式片�
   recovery.selectedDraftIds = [41]
   delete recovery.selectedDrafts
   recovery.composition = null
-  recovery.savedDraft = { success: true, id: 42, version: 1, content, contentHash: hash(content) }
+  recovery.draftSave = { kind: 'current', receipt: { success: true, id: 42, version: 1, content, contentHash: hash(content) } }
   const invoke = bridge(recovery)
   const workflow = await createDraftRecoveryWorkflow(session, handle, selectArtifacts ? ['original-artifact'] : undefined)
   const execution = execute(workflow)
@@ -83,6 +83,41 @@ it.each([false, true])('已保存回执不依赖被删除的前章，显式片�
   expect(execution.context.data).toMatchObject({ draftId: 42, draftVersion: 1, draftContent: content })
   expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
     'generation:read-context', 'generation:read-context', 'db:draft-list-all',
+  ])
+})
+
+it.each([false, true])('正文已变化时拒绝创建恢复工作流，显式片段选择=%s', async selectArtifacts => {
+  const recovery = recoveryFixture()
+  recovery.draftSave = { kind: 'changed' }
+  const invoke = bridge(recovery)
+  await expect(createDraftRecoveryWorkflow(session, handle, selectArtifacts ? ['original-artifact'] : undefined))
+    .rejects.toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+  expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['generation:read-context'])
+})
+
+it('工作流创建后正文发生变化时拒绝发布旧生成正文', async () => {
+  const recovery = recoveryFixture()
+  const invoke = bridge(recovery)
+  const workflow = await createDraftRecoveryWorkflow(session, handle)
+  recovery.draftSave = { kind: 'changed' }
+  const execution = execute(workflow)
+  await expect(execution.result).rejects.toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+  expect(execution.context.data).toEqual({})
+  expect(invoke.mock.calls.map(([channel]) => channel)).toEqual(['generation:read-context', 'generation:read-context'])
+})
+
+it('重选候选后的读取发现正文已变化时拒绝创建恢复工作流', async () => {
+  const recovery = recoveryFixture()
+  const invoke = bridge(recovery), original = invoke.getMockImplementation()!
+  invoke.mockImplementation(async (channel: string) => {
+    if (channel === 'generation:resume') return { handle: { ...handle, epoch: session.leaseId },
+      artifacts: [{ artifactId: 'original-artifact', text: content, compositionEligible: true }] }
+    if (channel === 'generation:compose-visible') { recovery.draftSave = { kind: 'changed' }; return recovery.composition }
+    return original(channel)
+  })
+  await expect(createDraftRecoveryWorkflow(session, handle, ['original-artifact'])).rejects.toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
+  expect(invoke.mock.calls.map(([channel]) => channel)).toEqual([
+    'generation:read-context', 'generation:resume', 'generation:compose-visible', 'generation:read-context',
   ])
 })
 
