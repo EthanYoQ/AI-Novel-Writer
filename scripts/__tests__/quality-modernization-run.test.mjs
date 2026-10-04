@@ -68,6 +68,66 @@ const protocol = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/research/novel
 const semanticPath = path.join(ROOT, protocol.fixturePath)
 const protocolBinding = currentProtocolBinding()
 
+test.each(['owner', 'physical output'])('fixture accepts registered empty STOP draft after bounded continuation (%s)', check => {
+  const dir = fs.mkdtempSync(path.join(ROOT, '.runtime/.cache/novel-quality-modernization/empty-stop-draft-'))
+  try {
+    const scenario = productionScenario('c16-c18', 'final', CANDIDATE_ONLY_PROTOCOL_REVISION)
+    const operation = continuityCaseOperations('C18-B').find(item => item.kind === 'draft')
+    const request = { ...scenario, ...protocolBinding, protocolRevision: CANDIDATE_ONLY_PROTOCOL_REVISION,
+      mode: 'synthetic', phase: 'c16-c18', milestone: 'final', caseId: 'C18-B', chapterNumber: 2,
+      target: { arm: 'candidate' }, operations: [operation], ledgerPath: path.join(dir, 'physical-ledger.jsonl') }
+    const handle = { projectId: 'restored-project', epoch: 'epoch', runId: 'draft-run', rootActionId: 'draft-root' }
+    const binding = { ...protocolBinding, protocolRevision: request.protocolRevision, mode: request.mode,
+      arm: 'candidate', phase: request.phase, milestone: request.milestone, caseId: request.caseId,
+      invocationId: '11111111-1111-4111-8111-111111111111', operation: operation.id,
+      codeSha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), driverHash: 'c'.repeat(64), parityId: hash('parity') }
+    const finalText = '甲'.repeat(900)
+    const attempts = [['chapter-draft-short-outline', '按作者蓝图完成本章。'], ['chapter-draft', ''],
+      ['chapter-draft-continuation', finalText]].map(([purpose, text], index) => {
+      const actual = { ...handle, attemptId: `draft-${index}`, purpose }
+      const outputPath = path.join(dir, `${index}.txt`)
+      fs.writeFileSync(outputPath, text)
+      return { attemptId: `candidate:${actual.attemptId}`, binding: { ...binding, actual }, outputPath,
+        visibleTextHash: hash(text), finishReason: 'stop' }
+    })
+    const initial = { draftId: 4, chapterNumber: 2, version: 1, contentHash: hash(finalText), outputPath: attempts[2].outputPath }
+    const receipt = { ...binding, status: 'passed', scenarioRevision: request.scenarioRevision,
+      physicalProject: { projectId: handle.projectId, parityHash: binding.parityId }, projectEpoch: handle.epoch,
+      operations: [{ operation: operation.id, kind: 'draft', handle }], attempts,
+      ownerTerminal: attempts.map((attempt, index) => ({ attemptId: attempt.binding.actual.attemptId,
+        status: 'settled', finishReason: 'stop', purpose: attempt.binding.actual.purpose, trustedUsage: true,
+        artifactId: `artifact-${index}`, artifactRevision: index === 1 ? 0 : 1, textHash: attempt.visibleTextHash,
+        hasFormalEffect: index === 2 })),
+      aiReviewedDraft: { initial }, saved: { ...initial, targetUnits: 900, units: 900, persistedBytes: Buffer.byteLength(finalText) },
+      draftObservation: { chapterNumber: 2, targetUnits: 900, units: 900, contentHash: initial.contentHash, persisted: true },
+      physicalModelRequests: 0, syntheticDispatches: attempts.length }
+    assert.equal(fs.statSync(attempts[1].outputPath).size, 0)
+    assert.equal(validatePairedReceipt(receipt, { mode: request.mode, arm: 'candidate', phase: request.phase,
+      scenario: { ...request, evaluationPolicy: null, attemptPolicy: { ...request.attemptPolicy, operationId: null } },
+      protocolRevision: request.protocolRevision, protocolHash: request.protocolHash }), null, 'registered recovery and saved source are valid')
+    fs.writeFileSync(request.ledgerPath, attempts.flatMap(attempt => [
+      { type: 'reserve', attemptId: attempt.attemptId, binding: attempt.binding }, { type: 'dispatch', attemptId: attempt.attemptId },
+      { type: 'settle', attemptId: attempt.attemptId, finishReason: attempt.finishReason },
+    ]).map(row => JSON.stringify(row)).join('\n') + '\n')
+    const fixture = fs.readFileSync(path.join(ROOT, 'scripts/fixtures/quality-modernization-production.fixture.mjs'), 'utf8')
+    const terminalStart = fixture.indexOf('      assert.equal(receipt.ownerTerminal.length')
+    const terminalLoop = fixture.indexOf('      for (const attempt of receipt.attempts)', terminalStart)
+    const terminalEnd = fixture.indexOf('\n    }\n    if (restorationKind)', terminalStart)
+    const physicalStart = fixture.indexOf('    const ledgerEvents =', terminalEnd)
+    const physicalEnd = fixture.indexOf('    assertNoOutboundPreflightFailures(receipt)', physicalStart)
+    assert.ok(terminalStart >= 0 && terminalLoop > terminalStart && terminalEnd > terminalLoop
+      && physicalStart > terminalEnd && physicalEnd > physicalStart)
+    const body = check === 'owner' ? fixture.slice(terminalStart, terminalEnd)
+      : fixture.slice(terminalStart, terminalLoop) + fixture.slice(physicalStart, physicalEnd)
+    const context = { receipt, request, fs, assert, sha: hash, candidate: true, continuityRun: true, copiedRun: false,
+      aiReviewRun: true, structuredRecovery: null, draftRecovery: request.attemptPolicy.draftRecovery,
+      repairPolicy: request.attemptPolicy, condensePolicy: request.attemptPolicy.draftCondense,
+      validatePairedReceipt, validateAiReviewedManuscript, reviewLengthRecoveryFor }
+    assert.doesNotThrow(() => new Function(...Object.keys(context), body)(...Object.values(context)),
+      'completed registered continuation preserves the empty primary artifact')
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('AI final manuscript registers the unchanged seven sources plus four bounded native review chains', () => {
   const scenario = productionScenario('c16-c18', 'final')
   assert.equal(scenario.evaluationPolicy?.revision, 'ai-review-final-manuscript-v1')
