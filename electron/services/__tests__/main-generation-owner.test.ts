@@ -24,6 +24,7 @@ import { DRAFT_RECONCILE_PURPOSE, parseDraftReconciliation, renderDraftReconcili
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock } from '../../../src/shared/draft-short-outline'
 import { FinalizationRepository } from '../../repositories/finalization-repository'
 import { PostProcessRepository } from '../../repositories/post-process-repository'
+import { RevisionRepository } from '../../repositories/revision-repository'
 import type { ModelProfile } from '../../../src/shared/ipc-channels'
 import type { GenerationRunServiceDependencies } from '../generation-run-service'
 import { getProjectDb } from '../../database'
@@ -1194,6 +1195,29 @@ describe('main draft persistence and batch lineage', () => {
     const reopened = f.reopen()
     expect(reopened.commitDraft(generated.request)).toEqual(saved)
     expect(reopened.readContext(generated.run.handle)).toMatchObject({ savedDraft: saved, attemptedPurposes: ['chapter-draft'] })
+    expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
+    expect(f.dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('reads saved generation history after a legitimate revision merge and reopen without changing either draft', async () => {
+    const f = drafting(), generated = await generate(f, { ...f.begin, authorInputs })
+    const saved = f.owner.commitDraft(generated.request)
+    const receipts = f.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE run_id=?').all(generated.run.handle.runId)
+    const artifacts = f.owner.read(generated.run.handle).artifacts
+    const mergedContent = '清晨的街道渐渐苏醒，林岚停在城门前，确认昨日的线索仍藏在信封里。'
+    const revision = RevisionRepository.create({ baseDraftId: saved.id, revisionType: 'refine', content: mergedContent,
+      wordCount: mergedContent.length, expectedSource: { id: saved.id, chapterNumber: 1, version: saved.version,
+        status: 'draft', content: saved.content } })
+    RevisionRepository.mergeIntoDraft({ revisionId: revision.id, targetDraftId: saved.id,
+      expectedDraftContent: saved.content, mergedContent, wordCount: mergedContent.length })
+    expect(RevisionRepository.getFull(revision.id)).toMatchObject({ status: 'merged', mergedToDraftId: saved.id })
+
+    const reopened = f.reopen()
+    expect.soft(() => reopened.readContext(generated.run.handle)).not.toThrow()
+    expect(f.fixture.db.prepare('SELECT usage_receipt_json FROM generation_attempts WHERE run_id=?').all(generated.run.handle.runId))
+      .toEqual(receipts)
+    expect(reopened.read(generated.run.handle).artifacts).toEqual(artifacts)
+    expect(f.fixture.db.prepare('SELECT body FROM contents JOIN drafts ON drafts.content_id=contents.id WHERE drafts.id=?')
+      .pluck().get(saved.id)).toBe(mergedContent)
     expect(f.fixture.db.prepare('SELECT COUNT(*) FROM drafts').pluck().get()).toBe(1)
     expect(f.dispatch).toHaveBeenCalledTimes(1)
   })
