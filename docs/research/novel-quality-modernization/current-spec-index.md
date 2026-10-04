@@ -20,7 +20,7 @@ S06B/C、S07、S09B、S10A/B、S11、S00/S14A/B/C 及 F05 的消费者须应用�
 
 2026-10-03 用户补充：F04 吸收 [#309 的章节定位保真要求](frontend-transition-specs.md#chapter-role-preservation)；F05 补[空项目真实创作旅程](thread10-delivery-plan.md#empty-project-real-journey)，涉及 S06A、S09A/B、S10A/B、S11 的实际串联。审稿问题按线程 10 第 3 节及 S07.M05 分开验运行、恢复和审修质量，不因只修运行器而关闭全部问题。2026-10-04 新测试要求[全流程同一模型配置](thread10-delivery-plan.md#single-model-qualification)，采用配置资格只走[现行最小路线](thread10-delivery-plan.md#native-configuration-route)，不要求所有诊断模型通过。相关出口未满足不能称完整 V3 交付。
 
-S06A、S09B、S10A/B 及 S14A/B 继续应用[2026-09-30 材料澄清](delivery-contract-delta-2026-09-21.md#章节材料与生成行为澄清2026-09-30)中未被取代的前驱、共享证据、时间、地点、计划/禁令、完整蓝图与有界续写要求。“新 run 直接正文”已由自动短细纲取代；旧 reconciliation 的身份与恢复保留。全部新增要求仍待真实接线和验收，历史失败不改判。
+S06A、S09B、S10A/B 及 S14A/B 继续应用[2026-09-30 材料澄清](delivery-contract-delta-2026-09-21.md#章节材料与生成行为澄清2026-09-30)中未被取代的前驱、共享证据、时间、地点、计划/禁令、完整蓝图与有界续写要求。“新 run 直接正文”已由自动短细纲取代；旧 reconciliation 的身份与恢复保留。全部新增要求须有真实接线和验收证据，实际进度读唯一私有当前检查点，历史失败不改判。
 
 | 主题 | 现行解释与精确来源 |
 | --- | --- |
@@ -37,7 +37,7 @@ S06A、S09B、S10A/B 及 S14A/B 继续应用[2026-09-30 材料澄清](delivery-c
 
 | Spec／原合同 | 当前审查重点及适用修订 |
 | --- | --- |
-| [S00 基线、台账与质量协议](../../plans/novel-quality-modernization/specs/S00.md) | C06/C09、v3 覆盖表、线程 10 第 4 节及质量协议。新 candidate-only 冻结、候选自有模板、round/slot、真实生产 driver 与唯一账本待接线；旧双目标只解释旧 revision。完整阶段仍是必交项，历史局部 PASS 不证明新阶段就绪。 |
+| [S00 基线、台账与质量协议](../../plans/novel-quality-modernization/specs/S00.md) | C06/C09、v3 覆盖表、线程 10 第 4 节及质量协议。candidate-only 冻结须绑定候选自有模板、round/slot、真实生产 driver 与唯一账本；旧双目标只解释旧 revision。实际接线与验收状态读唯一私有当前检查点及其证据。完整阶段仍是必交项，历史局部 PASS 不证明新阶段就绪。 |
 | [S01 共享契约与 schema lane](../../plans/novel-quality-modernization/specs/S01.md) | C01–C09、C10/C13/C16/C17、[ADR 0018](../../adr/0018-program-v3-domain-contracts.md)。单一 migration registry、共享 owner、类型到生产消费者的接线；纯契约检查不等于落盘保证。project-storage 按 ADR 0020 解释。 |
 | [S02 规范 API 与 URI](../../plans/novel-quality-modernization/specs/S02.md) | C07/C09 及 v3 覆盖表。实际生产消费者走 canonical facade/资源 URI；V3 donor 不带回旧 API，合法 legacy importer 仍可保留旧格式读取。 |
 | [S03 全局配置与启动](../../plans/novel-quality-modernization/specs/S03.md) | C08 的全局部分、C10/C11、F01。main 全局迁移/skin/mainReady 与 renderer appearance hydration 各有唯一 writer；旧偏好和作者配置保全。ADR 0020 不取消全局启动保护。 |

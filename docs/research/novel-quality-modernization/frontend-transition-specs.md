@@ -105,7 +105,7 @@ U03 模型设置同时应用 [S07.M01–M04 与 S07.A01–A07](../../plans/novel
 
 一次必要全量 unit/browser、静态检查、构建及缺失的关键原生集成；独立审查聚焦跨切片接口、共享入口和未覆盖差异，不重审无新变更关闭项。核心定点通过不冒充最终集成。
 
-版本、默认、package/lock、release、质量/迁移 driver 就绪后，按[线程 10](thread10-delivery-plan.md)冻结实际 subjectSha、产物、candidate 自有模板、全部生成/审稿/修稿配置、操作及采样身份，完成实际 dry-run/来源检查。新 candidate-only revision 尚待接线，命令须由实现后的 CLI/help 支持，不能照抄旧双目标命令。S00 原必交的完整驱动继续复用 runner/bridge、真实生产命令和唯一物理账本；help、early-budget 或局部合成成功不代表新正式阶段可运行。可先独立完成零模型接线检查，修改后按消费者影响更新冻结，旧阶段有效证据保留原 testedSha。
+版本、默认、package/lock、release、质量/迁移 driver 就绪后，按[线程 10](thread10-delivery-plan.md)冻结实际 subjectSha、产物、candidate 自有模板、全部生成/审稿/修稿配置、操作及采样身份，完成实际 dry-run/来源检查。candidate-only revision 的命令须由实际 CLI/help 支持，不能照抄旧双目标命令。实际接线与验收状态读唯一私有当前检查点及其证据。S00 原必交的完整驱动继续复用 runner/bridge、真实生产命令和唯一物理账本；help、early-budget 或局部合成成功不代表新正式阶段可运行。可先独立完成零模型接线检查，修改后按消费者影响更新冻结，旧阶段有效证据保留原 testedSha。
 
 后续按消费者决定资格失效范围，保留 testedSha、变更及沿用理由；新包仍须自身代码/构建/安装/启动/hash 证据。影响不明就扩大对应验证，不能以填完 JSON 代替审查。
 
@@ -113,7 +113,7 @@ U03 模型设置同时应用 [S07.M01–M04 与 S07.A01–A07](../../plans/novel
 
 模型差异与当前审稿缺口按[采用配置的最小资格路线](thread10-delivery-plan.md#native-configuration-route)处理。Flash 桌面运行/恢复仍须验证；GLM 原案复验如实结案，不要求全部兼容模型通过。采用配置必须在原问题场景取得资格，不能仅披露限制或换样本跳过；确定性软件缺陷必须修复。新测试按[同模型要求](thread10-delivery-plan.md#single-model-qualification)前向登记，正式文学批次仍须完成，未完成不能称完整 V3 交付。
 
-**现行合同**：按[线程 10 第 4–6 节](thread10-delivery-plan.md)完成 candidate-only 七案三轮与三个持续项目九章；C16 另算，写作闭环合并裁决，不再要求某一轮七案全绿或强制 baseline。保留[AI 自主发现与作者批准](quality-protocol.md#ai-review-final-manuscript)、最终成文标准及历史失败。新增产品和机器协议待实现，旧登记、旧 CLI 或人工补题诊断不能放行新资格。
+**现行合同**：按[线程 10 第 4–6 节](thread10-delivery-plan.md)完成 candidate-only 七案三轮与三个持续项目九章；C16 另算，写作闭环合并裁决，不再要求某一轮七案全绿或强制 baseline。保留[AI 自主发现与作者批准](quality-protocol.md#ai-review-final-manuscript)、最终成文标准及历史失败。新增产品和机器协议须按现行合同验收，实际状态读唯一私有当前检查点及其证据。旧登记、旧 CLI 或人工补题诊断不能放行新资格。
 
 角色备注与项目世界设定中的独立行 `【第N章必现】正文要求` 是作者显式指定的当章呈现目标。主进程只将当前章标记并入既有冻结目标，审稿完成项须引用可定位的当前正文；遗漏或证据不足不得以背景未矛盾判完成。未标记或别章设定仍只按事实矛盾核查。待核实的必现目标须由作者明确选择后才进入一次修稿；无旧正文引文时，复核仅对绑定目标身份和合并稿的实质新增证据开放，不伪造引文，也不自动判解决。原 S11 的作者确认、一次复核与历史报告兼容规则继续适用。
 
